@@ -35,7 +35,7 @@
  */
 
 /** Terminal `code` for a rebase that failed. */
-export type RefineRebaseFailureCode =
+type RefineRebaseFailureCode =
     /** git reported an actual merge conflict — a human must resolve content. */
     | 'needs_rebase_with_conflicts'
     /** The rebase REFUSED TO START because the worktree had uncommitted changes. */
@@ -45,7 +45,7 @@ export type RefineRebaseFailureCode =
     /** The rebase failed and we will not guess why. */
     | 'rebase_failed';
 
-export interface RefineRebaseFailureClassification {
+interface RefineRebaseFailureClassification {
     code: RefineRebaseFailureCode;
     /**
      * True only when git actually reported conflicting content. Callers that used

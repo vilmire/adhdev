@@ -77,7 +77,7 @@ const BINDING_NAME_RE = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
 
 // ── Materialization error codes (design :278-283) ────────────────────────────
 
-export type MeshMaterializationErrorCode =
+type MeshMaterializationErrorCode =
     | 'input_too_large'
     | 'required_input_missing'
     | 'invalid_binding_spec'
@@ -113,11 +113,11 @@ export class MeshMaterializationError extends Error {
 
 // ── Binding spec (design :204-246) ───────────────────────────────────────────
 
-export type MeshBindingFormat = 'text' | 'json';
-export type MeshBindingOverflow = 'error' | 'truncate';
+type MeshBindingFormat = 'text' | 'json';
+type MeshBindingOverflow = 'error' | 'truncate';
 
 /** One normalized `inputs_from` entry. */
-export interface MeshInputBinding {
+interface MeshInputBinding {
     /** Source node `ref` (design :212 — refs are retained and ride every graph event). */
     from: string;
     /** RFC 6901 JSON Pointer over the normalized completion envelope. */
@@ -236,7 +236,7 @@ function decodePointerToken(token: string): string {
     return token.replace(/~1/g, '/').replace(/~0/g, '~');
 }
 
-export interface MeshSelectorResult {
+interface MeshSelectorResult {
     present: boolean;
     value?: unknown;
 }
@@ -270,7 +270,7 @@ export function evaluateJsonPointer(document: unknown, pointer: string): MeshSel
 
 // ── run_if conditions (design :336-355) ──────────────────────────────────────
 
-export type MeshConditionLeafOp = 'exists' | 'eq' | 'ne' | 'in';
+type MeshConditionLeafOp = 'exists' | 'eq' | 'ne' | 'in';
 
 /**
  * A declarative `run_if` expression. `all`/`any`/`not` combinators over leaf
@@ -278,7 +278,7 @@ export type MeshConditionLeafOp = 'exists' | 'eq' | 'ne' | 'in';
  * is no arbitrary JavaScript, jq, regex, shell, or model-evaluated predicate
  * anywhere in the grammar (design :340-341, :988).
  */
-export type MeshRunIfCondition =
+type MeshRunIfCondition =
     | { all: MeshRunIfCondition[] }
     | { any: MeshRunIfCondition[] }
     | { not: MeshRunIfCondition }
@@ -330,7 +330,7 @@ export function parseRunIfCondition(raw: unknown, path = 'run_if'): MeshRunIfCon
 }
 
 /** Resolves a source `ref` to that node's latest completion envelope (or null when absent). */
-export type MeshEnvelopeResolver = (ref: string) => unknown | null;
+type MeshEnvelopeResolver = (ref: string) => unknown | null;
 
 /**
  * Evaluate a parsed condition against upstream envelopes. Deterministic and total:
@@ -454,7 +454,7 @@ export interface MeshBoundValueReceipt {
     originalBytes?: number;
 }
 
-export interface MeshResolvedBinding {
+interface MeshResolvedBinding {
     binding: MeshInputBinding;
     receipt: MeshBoundValueReceipt;
     /** The redacted, control-stripped, size-policed payload; undefined when absent. */
@@ -642,7 +642,7 @@ export interface MeshMaterializedMessage {
     nonce: string;
 }
 
-export interface MeshRenderContext {
+interface MeshRenderContext {
     graphId: string;
     nodeId: string;
     materializationVersion: number;

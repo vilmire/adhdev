@@ -51,7 +51,7 @@ import { WORKER_OUTBOX_MAX_AGE_MS, type WorkerDeliveryKind, type WorkerReportDel
  * trusted. Here the value is meaningless unless the daemon minted it, so a
  * forged one resolves to nothing.
  */
-export interface WorkerCredentials {
+interface WorkerCredentials {
   bind?: string;
   token?: string;
 }
@@ -199,7 +199,7 @@ export const PEER_CONTEXT_PULL_TOOL = {
 export const ALL_WORKER_TOOLS = annotateAll([REPORT_COMPLETION_TOOL, PROGRESS_UPDATE_TOOL, PEER_CONTEXT_PULL_TOOL]);
 
 /** Shape of a tool definition as worker mode publishes it. */
-export interface WorkerModeTool {
+interface WorkerModeTool {
   name: string;
   description: string;
   inputSchema: { type: 'object'; properties?: Record<string, unknown>; required?: string[] };
@@ -300,7 +300,7 @@ function toDaemonReport(a: Record<string, any>): { report: Record<string, unknow
   return { report, ignoredHandoffKeys };
 }
 
-export interface WorkerToolResult {
+interface WorkerToolResult {
   text: string;
   isError?: boolean;
 }

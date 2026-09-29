@@ -8,13 +8,8 @@ import { LOG } from '../logging/logger.js';
 import { isTaskDispatchInFlight, endTaskDispatchInFlight } from './mesh-task-inflight.js';
 // GRAPH-ORCHESTRATION Phase B: THE single terminal choke point (design :311-334).
 // updateTaskStatus / updateSessionTaskStatus delegate every terminal flip to it.
-import {
-    commitTaskTerminalAndAdvanceGraph,
-    drainMeshGraphOutbox,
-    type MeshTerminalCommitSource,
-    type MeshTerminalCommitStatus,
-    type MeshTerminalCompletionEnvelope,
-} from './mesh-graph-transition-runner.js';
+import { commitTaskTerminalAndAdvanceGraph, type MeshTerminalCommitSource, type MeshTerminalCommitStatus, type MeshTerminalCompletionEnvelope } from './mesh-graph-transition-runner.js';
+import { drainMeshGraphOutbox } from './mesh-graph-outbox.js';
 import {
     resolveOnDependencyFailurePolicy,
 } from './mesh-graph-derived-failure.js';
@@ -217,7 +212,7 @@ export function claimNextTask(
 
 // ─── M1: Dependency Failure Propagation ─────────
 
-export type DependencyFailurePolicy = 'block' | 'cancel';
+type DependencyFailurePolicy = 'block' | 'cancel';
 
 function resolveDependencyFailurePolicy(meshId: string): DependencyFailurePolicy {
     try {

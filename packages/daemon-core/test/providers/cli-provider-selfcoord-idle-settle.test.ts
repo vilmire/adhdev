@@ -48,8 +48,6 @@ function makeTransitionInstance(opts: { settings: Record<string, unknown> }): {
     getStatus: () => ({ status: 'idle' }),
     getPartialResponse: () => '',
     getScriptParsedStatus: () => ({ status: 'idle', messages: [] }),
-    getScreenText: () => '',
-    isWaitingForResponse: false,
   }
 
   // No-op the surrounding machinery so the transition handler runs in isolation.

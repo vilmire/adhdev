@@ -56,7 +56,7 @@ import { resolveSubmoduleDefaultBranch } from './worktree-bootstrap-config.js';
 
 const execFileAsync = promisify(execFile);
 
-export type MeshRefineSubmodulePreflightVerdict =
+type MeshRefineSubmodulePreflightVerdict =
     /** The gitlink commit is an ancestor of the submodule's origin/<default>. */
     | 'reachable'
     /** git ANSWERED "not an ancestor" on a successfully fetched ref — publish required. */
@@ -64,7 +64,7 @@ export type MeshRefineSubmodulePreflightVerdict =
     /** The remote was never successfully consulted (or an operand did not resolve). NOT evidence of "unpublished". */
     | 'undeterminable';
 
-export type MeshRefineSubmodulePreflightEntry = {
+type MeshRefineSubmodulePreflightEntry = {
     path: string;
     commit?: string;
     verdict: MeshRefineSubmodulePreflightVerdict;

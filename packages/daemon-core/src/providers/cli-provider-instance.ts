@@ -19,11 +19,6 @@ import {
 import { SpecCliAdapter } from './spec/cli-adapter.js';
 import { sendMessageEvent } from './cli-provider-send-event.js';
 
-/** The one concrete CLI adapter (legacy ProviderCliAdapter deleted 2026-08-17)
- *  plus the optional turn-scope fields call sites feature-test (never set by
- *  SpecCliAdapter; exercised by suites that drive fake adapters). */
-type CliInstanceAdapter = SpecCliAdapter
-    & { currentTurnTaskId?: string; currentTurnStartedAt?: number };
 import type { CliProviderModule } from '../cli-adapters/provider-cli-shared.js';
 import type { MeshSendKeyItem, MeshSendKeyName } from '../cli-adapters/provider-cli-shared.js';
 import {
@@ -111,7 +106,7 @@ export class CliProviderInstance implements ProviderInstance {
     // cli-provider-*-projection, mesh-assignment, ...). The instance is passed
     // as `this` with NO cast, so the compiler checks structural conformance to
     // every host interface at each call site.
-    adapter: CliInstanceAdapter;
+    adapter: SpecCliAdapter;
     context: InstanceContext | null = null;
     lastStatus: string = 'starting';
     // Idempotency guard for the queue-claim agent:ready event. agent:ready is the
@@ -368,7 +363,7 @@ export class CliProviderInstance implements ProviderInstance {
         this.onProviderSessionResolved = options?.onProviderSessionResolved;
         // FSMLOG-SESSION-ATTRIBUTION (D3): hand the resolved session id (assigned just above) to
         // the adapter so a spec-driven FSM tags its log lines with the owning session.
-        this.adapter = createCliAdapter(provider as CliProviderModule, workingDir, cliArgs, options?.extraEnv || {}, transportFactory, this.instanceId, options?.removeSpawnArgs, options?.resolvedTrustPlan) as CliInstanceAdapter;
+        this.adapter = createCliAdapter(provider as CliProviderModule, workingDir, cliArgs, options?.extraEnv || {}, transportFactory, this.instanceId, options?.removeSpawnArgs, options?.resolvedTrustPlan);
         if (this.providerSessionId) {
             this.adapter.updateRuntimeMeta({ providerSessionId: this.providerSessionId });
         }
@@ -1135,7 +1130,7 @@ export class CliProviderInstance implements ProviderInstance {
     }
  // ─── Adapter access (backward compat) ──────────────────
 
-    getAdapter(): CliInstanceAdapter {
+    getAdapter(): SpecCliAdapter {
         return this.adapter;
     }
 

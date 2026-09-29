@@ -9,8 +9,7 @@
  * plumbing. The per-node refine pipeline and the shared convergence CLASSIFIER
  * (classifyBatchNodeConvergence — also used by the single-node auto-retry) stay in
  * router-refine.ts; this module calls back into them, mirroring how
- * router-refine-resume.ts consumes single-node helpers. router-refine.ts re-exports
- * everything here, so existing import sites are unaffected.
+ * router-refine-resume.ts consumes single-node helpers.
  */
 import type { DaemonCommandRouter, CommandRouterResult } from './router.js';
 import { LOG } from '../logging/logger.js';
@@ -433,7 +432,7 @@ export async function runMeshRefineBatchConvergence(self: DaemonCommandRouter,
         // Skipped when the chain aborted: the base is known-bad, so a retry would spend a
         // full gate set to re-derive the failure the abort already established.
         for (const node of chainAbort ? [] : retryQueue) {
-            const idx = results.findIndex(r => r.nodeId === node.id);
+            const idx = results.findIndex(r => meshNodeIdMatches({ nodeId: r.nodeId }, node.id));
             const retried = await refineOne(node);
             retried.retried = true;
             if (idx >= 0) results[idx] = retried; else results.push(retried);

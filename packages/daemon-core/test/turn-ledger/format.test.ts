@@ -9,7 +9,7 @@
 // instead of two copies quietly drifting apart.
 import { describe, expect, it } from 'vitest';
 import { buildMeshSystemMessage } from '../../src/mesh/mesh-events-utils.js';
-import { buildWorkerProgressNotice } from '../../src/mesh/worker-report.js';
+import { buildWorkerProgressNotice } from '../../src/mesh/worker-report-progress.js';
 import {
     renderTurnNotify,
     type RenderTurnNotifyInput,

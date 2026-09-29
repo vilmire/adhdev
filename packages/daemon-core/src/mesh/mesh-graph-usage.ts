@@ -24,7 +24,7 @@ export const GRAPH_USAGE_CACHE_TTL_MS = 60_000;
 /** mesh_status lists at most this many open gates (expired first, then oldest). */
 export const BLOCKED_GATES_LIST_LIMIT = 10;
 
-export interface MeshGraphUsage {
+interface MeshGraphUsage {
     /** Graphs created in the last 7 days. */
     graphsLast7d: number;
     /** Median node count (tasks + gates) over those graphs; 0 when none. */
@@ -39,7 +39,7 @@ export interface MeshGraphUsage {
     computedAt: string;
 }
 
-export interface MeshBlockedGateRow {
+interface MeshBlockedGateRow {
     gateId: string;
     graphId: string;
     ref?: string;
@@ -52,7 +52,7 @@ export interface MeshBlockedGateRow {
     leaseOwnerSessionId?: string;
 }
 
-export interface MeshBlockedGatesSummary {
+interface MeshBlockedGatesSummary {
     blockedGates: MeshBlockedGateRow[];
     blockedGatesTotal: number;
     expiredGatesTotal: number;

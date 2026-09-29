@@ -1,14 +1,14 @@
 // mesh_read_chat recovery paths: the removed-node recovery payload and the
 // ledger-cached preview served when the owning daemon cannot be read. Split out
-// of mesh-tools-internal.ts; re-exported there.
+// of mesh-tools-internal.ts.
 
 import type { MeshContext } from './mesh-tools-internal.js';
 import { ledgerQuery } from '../ipc/turn-commands.js';
-import { readString } from './mesh-tool-shared.js';
 import { compactChatPayload } from './chat-compact.js';
 import { resolveMeshSurfacedSessionPreview, type LocalMeshNodeEntry, classifyP2pRelayFailure } from '@adhdev/daemon-core';
 import { classifyReadChatTransportCause } from './mesh-tools-internal-core.js';
 import { buildCoordinatorP2pRelayFailure } from './mesh-remote-dispatch.js';
+import { readString } from '@adhdev/mesh-shared';
 
 export async function buildMissingNodeReadChatRecovery(ctx: MeshContext, args: { node_id: string; session_id: string; provider_session_id?: string; tail?: number; compact?: boolean }): Promise<Record<string, unknown>> {
     const { entries } = await ledgerQuery(ctx.transport, { meshId: ctx.mesh.id, tail: 300 });
@@ -108,7 +108,6 @@ export async function buildMissingNodeReadChatRecovery(ctx: MeshContext, args: {
     };
 }
 
-
 /**
  * The coordinator already holds the worker's latest assistant text from the completion /
  * status events it surfaced into the ledger (finalSummary / workerResult.summary — the
@@ -149,7 +148,6 @@ async function resolveCachedMeshSessionPreviewFromLedger(
     }
     return undefined;
 }
-
 
 /**
  * mesh_read_chat fallback for a REMOTE P2P read that failed at the transport layer.

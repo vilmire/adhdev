@@ -2,7 +2,7 @@
 // (wiring-unification C7-4, C-W3). Successor of status-meta-terminal-redrive:
 // the Stage 5a redrive (and its quarantine) is gone — the turn.deliver cursor
 // IS redelivery — so the surface reports the turn cursors' outcome counters.
-// Same key discipline as the sibling seqscribe/beacon keys: always present
+// Same key discipline as the sibling seqscribe key: always present
 // (null = no turn ledger booted, distinguishable from an older build that
 // cannot report at all), integer counters only, never an identifier.
 

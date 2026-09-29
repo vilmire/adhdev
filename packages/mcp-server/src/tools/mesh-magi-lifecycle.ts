@@ -3,15 +3,9 @@
 // mission auto-close and the post-collection session cleanup. Split out of
 // mesh-tools-magi.ts.
 
-import {
-    readString,
-    type MeshContext,
-    findOptionalNodeWithRefresh,
-    commandForNode,
-    unwrapCommandPayload,
-    type MagiTaskKind,
-    type MagiSynthesis,
-} from './mesh-tools-internal.js';
+import { type MeshContext, findOptionalNodeWithRefresh, commandForNode } from './mesh-tools-internal.js';
+import { unwrapCommandPayload } from './mesh-session-helpers.js';
+import type { MagiTaskKind, MagiSynthesis } from '@adhdev/daemon-core';
 import { type RepoMeshMagiSessionCleanupMode, resolveMagiSessionCleanupMode } from '@adhdev/daemon-core';
 import {
     recordLocal,
@@ -20,6 +14,7 @@ import {
     missionUpsert,
 } from '../ipc/turn-commands.js';
 import { normalizeMagiTaskKind, DEFAULT_TASK_KIND } from './mesh-tools-magi-core.js';
+import { readString } from '@adhdev/mesh-shared';
 
 export const MAGI_TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled']);
 

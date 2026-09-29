@@ -84,9 +84,7 @@ export interface CompletionSignalReader {
     busyEpoch(): number;
     /** Raw adapter status sample (allowParse:false). */
     lastOutputAt(): number | undefined;
-    adapterWaitingForResponse(): boolean;
-    adapterTurnScopeActive(): boolean;
-    /** hasAdapterPendingResponse(): waitingForResponse || turnScope || isProcessing. */
+    /** hasAdapterPendingResponse(): the adapter reports a turn still processing. */
     adapterAnyPending(): boolean;
     /** getScriptParsedStatus() — ok:false carries the throw message (parse_error block). */
     parsedStatus(): { ok: true; status: string; modalActive: boolean; messages: unknown } | { ok: false; error: string };
@@ -108,8 +106,6 @@ export interface CompletionSignalReader {
     inApprovalResumeGrace(): boolean;
     /** FALSEIDLE-a: lastResolvedEntrySeq >= approvalEntrySeq (fails open true). */
     hasApprovalResolutionEvidence(): boolean;
-    /** Last 16 screen lines match looksLikeActiveApprovalPromptText. */
-    screenTailShowsApprovalPrompt(): boolean;
     /** ANTIGRAVITY-30S-CAP-PREMATURE: adapter pending OR raw output within quiet dwell. */
     holdClassPtyStillActive(): boolean;
     /** adapter.chatMessagesOwnedExternally === true */
@@ -230,12 +226,6 @@ export function evaluateFinalizationBlock(
     // (FALSEIDLE-a FixA) Adapter pending-response checks run UNCONDITIONALLY; the
     // approval-resolved path only demotes them to non-terminal (bounded by the 30s cap)
     // so a provider that never closes its turn scope force-fires weak instead of wedging.
-    if (reader.adapterWaitingForResponse()) {
-        return { block: { reason: 'adapter_waiting_for_response', terminal: !approvalResolvedIdle }, evidencePatch };
-    }
-    if (reader.adapterTurnScopeActive()) {
-        return { block: { reason: 'adapter_turn_scope_active', terminal: !approvalResolvedIdle }, evidencePatch };
-    }
     if (reader.adapterAnyPending()) {
         return { block: { reason: 'adapter_pending_response', terminal: !approvalResolvedIdle }, evidencePatch };
     }
@@ -399,11 +389,6 @@ export function evaluateFinalizationBlock(
         && allowMissingAssistantTimeout
         && !reader.hasApprovalResolutionEvidence()) {
         return { block: { reason: 'approval_resolution_unconfirmed', terminal: false }, evidencePatch };
-    }
-
-    // Screen still shows an approval/choice prompt → the turn is not complete.
-    if (reader.screenTailShowsApprovalPrompt()) {
-        return { block: { reason: 'screen_shows_approval_prompt', terminal: approvalResolvedIdle }, evidencePatch };
     }
 
     // (FALSE-IDLE-MIDTURN codex/PTY) Quiet-dwell for a PARSED evidence source: an on-screen

@@ -30,7 +30,7 @@ import {
   type WindowsInstallerLayout,
 } from '../../src/commands/windows-atomic-upgrade'
 import { getTrackIdentity } from '../../src/track-identity'
-import { emitUpgradeFailureNotice } from '../../src/commands/upgrade-helper'
+import { emitUpgradeFailureNotice } from '../../src/commands/upgrade-failure-notice.js';
 
 const roots: string[] = []
 

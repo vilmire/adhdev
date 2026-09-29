@@ -76,7 +76,7 @@ export interface DeliverCursorEntry {
     own: boolean;
 }
 
-export interface DeliverLog {
+interface DeliverLog {
     info(message: string): void;
     warn(message: string): void;
 }
@@ -84,7 +84,7 @@ export interface DeliverLog {
 const NOOP_LOG: DeliverLog = { info: () => {}, warn: () => {} };
 
 /** Minimal session-input surface (`SessionInputPort`, sessions/session-input-service.ts). */
-export interface NoticeInputPort {
+interface NoticeInputPort {
     submit(msg: OutboundMessage): Promise<SubmitOutcome>;
 }
 
@@ -159,7 +159,7 @@ export interface CoordinatorNotice {
     worktreeHasQueuedTask?: boolean;
 }
 
-export interface CoordinatorNotifierDeps {
+interface CoordinatorNotifierDeps {
     ledger: Pick<TurnLedger, 'notifyMeshEvent' | 'selfDaemonId'>;
     selfDaemonIds: () => readonly string[];
     /** Append content to `mesh.<id>.handoff`; absent/rejecting → the remote renders a pointer line. */
@@ -250,7 +250,7 @@ export function createCoordinatorNotifier(deps: CoordinatorNotifierDeps): Coordi
 
 // ─── 2. turn.ingest ───────────────────────────────────────────────────────
 
-export interface TurnIngestDeps {
+interface TurnIngestDeps {
     ledger: Pick<TurnLedger, 'observe' | 'notifyMeshEvent' | 'selfDaemonId'>;
     selfDaemonIds: () => readonly string[];
     /** A committed attempt: the local instance holding its ref drops it (C-W5 executor). */
@@ -316,13 +316,13 @@ export function createTurnIngestHandler(deps: TurnIngestDeps): (entry: DeliverCu
 /** Resolve a handoff ref to its payload object (null = not replicated yet / unreadable). */
 export type HandoffResolver = (ref: SummaryRef) => Record<string, unknown> | null;
 
-export interface RenderContext {
+interface RenderContext {
     ledger: Pick<TurnLedger, 'getAttempt' | 'store'>;
     resolveHandoff?: HandoffResolver;
     statusLine?: (meshId: string) => string | null;
 }
 
-export interface RenderedNotice {
+interface RenderedNotice {
     text: string;
     notify: NotifyKind;
     event: string | null;
@@ -485,7 +485,7 @@ export interface DeliverEdgeWaiter {
     wake(meshId?: string): void;
 }
 
-export interface DeliverTimers {
+interface DeliverTimers {
     setTimeout(fn: () => void, ms: number): unknown;
     clearTimeout(handle: unknown): void;
 }
@@ -581,7 +581,7 @@ function sleepUntil(waiter: DeliverEdgeWaiter, meshId: string, untilMs: number, 
     return step();
 }
 
-export interface TurnDeliverHandlerOptions {
+interface TurnDeliverHandlerOptions {
     /**
      * `backlog`: never wait — deliver only to an IDLE coordinator right now, else
      * return `not_now`. Used for notices the cursor already passed while no
@@ -726,7 +726,7 @@ export interface PendingCoordinatorNoticeWire {
     metadataEvent?: Record<string, unknown>;
 }
 
-export interface ReadNoticesDeps extends RenderContext {
+interface ReadNoticesDeps extends RenderContext {
     ledger: Pick<TurnLedger, 'getAttempt' | 'store' | 'claimDelivery' | 'selfDaemonId'>;
     selfDaemonIds: () => readonly string[];
     isControlEvent?: (event: string) => boolean;
@@ -736,7 +736,7 @@ export interface ReadNoticesDeps extends RenderContext {
 }
 
 /** One notice this daemon typed into a coordinator session (composer-residue sweep input). */
-export interface DeliveredNoticeView {
+interface DeliveredNoticeView {
     /** The `delivered:<writer>:<seq>` claim row id (the recovery handle). */
     claimEventId: string;
     meshId: string;
@@ -973,7 +973,7 @@ export interface MeshNoticeRuntime {
     releaseDelivery?(claimEventId: string): boolean;
     /** True when `daemonId` is one of this daemon's id forms. */
     isSelfDaemon(daemonId: string): boolean;
-    /** Another writer's `mesh.<id>.events` entries have not replicated here yet (Beacon `staleness().behind`). */
+    /** Another writer's `mesh.<id>.events` entries have not replicated here yet (seqscribe `staleness().behind` from direct peers). */
     replicationPending(meshId: string): boolean;
     /**
      * The ledger's evidence entry point, for the in-process relay path

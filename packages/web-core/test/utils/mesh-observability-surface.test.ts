@@ -99,10 +99,10 @@ describe('MeshObservabilitySurface', () => {
     const graph = buildMeshGraph(status as any)
     expect(graph.nodes.some(node => node.upstreamStatus === 'stale')).toBe(true)
 
-    const source = fs.readFileSync(
-      path.join(import.meta.dirname, '../../src/components/MeshGraph/MeshGraphView.tsx'),
-      'utf8',
-    )
+    // The node card moved out of MeshGraphView.tsx into MeshNodeCard.tsx; read both.
+    const source = ['MeshGraphView.tsx', 'MeshNodeCard.tsx']
+      .map(file => fs.readFileSync(path.join(import.meta.dirname, '../../src/components/MeshGraph', file), 'utf8'))
+      .join('\n')
     expect(source).toContain("t('mesh.panel.upstreamUnverified')")
     // The callout is the LOCALIZED hint (daemon prose moves to the tooltip).
     expect(source).toContain("localizeMeshGraphHint(node, t)")

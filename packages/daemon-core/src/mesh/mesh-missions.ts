@@ -45,7 +45,7 @@ export const MESH_MISSION_STATUSES: MeshMissionStatus[] = ['active', 'paused', '
  * user-authored mission. Used to bound the accumulation of completed MAGI missions
  * out of the default mesh_mission_list surface — see listMeshMissionSummaries.
  */
-export type MeshMissionSource = 'magi' | 'coordinator';
+type MeshMissionSource = 'magi' | 'coordinator';
 
 export interface MeshMissionRecord {
     id: string;

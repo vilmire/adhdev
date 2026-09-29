@@ -1,16 +1,6 @@
-/**
- * Session / command-payload record helpers for the mesh_* tools.
- *
- * Leaf module: depends on mesh-tool-shared (readString) and daemon-core's pure
- * isTaskReadonly predicate (for isWorkerTaskMode classification). Holds the shared
- * session-record readers/classifiers (id/provider/coordinator/unmanaged/terminal/
- * idle), the node session-id collector, and the command-payload unwrapper.
- * Physically split out of mesh-tools.ts (RF-SURVEY candidate C1) with no behavior
- * change — same function bodies. mesh-tools.ts and the queue/compact cluster files
- * import these back, so there is no runtime import cycle.
- */
-import { readString } from './mesh-tool-shared.js';
+
 import { isTaskReadonly } from '@adhdev/daemon-core';
+import { readString } from '@adhdev/mesh-shared';
 
 export function readSessionRecordId(session: any): string | undefined {
     return readString(session?.id)

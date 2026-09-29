@@ -34,7 +34,7 @@ import type { TurnEvidence } from '@adhdev/mesh-shared';
 import type { TurnLedger } from './ledger.js';
 import type { TurnAttempt } from './types.js';
 
-export interface ReconcileOrphanedPlainAttemptsDeps {
+interface ReconcileOrphanedPlainAttemptsDeps {
     ledger: TurnLedger;
     /** True when the attempt's session is still live on THIS daemon (registry OR instance store — mirrors `resolveProbeLocation`). */
     isSessionLive(sessionId: string): boolean;

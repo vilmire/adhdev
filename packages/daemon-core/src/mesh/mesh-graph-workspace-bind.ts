@@ -34,7 +34,7 @@ export function isTerminalWorkspaceSagaState(state: MeshGraphWorkspaceSagaState 
     return state !== undefined && TERMINAL_SAGA_STATES.includes(state);
 }
 
-export type WorkspaceMaterializeBinding =
+type WorkspaceMaterializeBinding =
     | { kind: 'none' }
     | { kind: 'unresolved'; workspaceRef: string }
     | { kind: 'dead'; workspaceRef: string; sagaState: MeshGraphWorkspaceSagaState; lastError?: string }

@@ -47,8 +47,7 @@ describe('stall-rescue MID-TURN-LIVE-STATE parity vetoes', () => {
     instance.adapter = {
       currentTurnTaskId: undefined as string | undefined,
       currentTurnStartedAt: 3_000,
-      isWaitingForResponse: opts.adapterWaiting ?? false,
-      currentTurnScope: undefined,
+      isProcessing: () => opts.adapterWaiting ?? false,
       getScriptParsedStatus() { return { messages: [] } },
       getPartialResponse() { return '' },
     }
@@ -144,7 +143,6 @@ describe('startup-grace synth MID-TURN-LIVE-STATE parity veto', () => {
     instance.adapter = {
       currentTurnTaskId: 'task-1',
       currentTurnStartedAt: 3_000,
-      isWaitingForResponse: false,
       getScriptParsedStatus() { return { messages: [] } },
       getPartialResponse() { return '' },
     }

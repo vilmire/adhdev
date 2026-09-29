@@ -40,6 +40,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import * as crypto from 'node:crypto';
 import { LOG } from '../logging/logger.js';
+import { realWorkspacePath } from './workspace-trust-shared.js';
 
 const MAX_SLUG_LENGTH = 40;
 
@@ -48,20 +49,6 @@ const MAX_SLUG_LENGTH = 40;
 function kimiHome(env: NodeJS.ProcessEnv = process.env): string {
     const override = env.KIMI_CODE_HOME?.trim();
     return override ? override : path.join(os.homedir(), '.kimi-code');
-}
-
-/**
- * Resolve the canonical, real (symlink-followed) absolute form of the
- * workspace path. kimi hashes the realpath, so matching has to use the same
- * normalization. Falls back to the raw resolved path if the directory can't
- * be stat'd (e.g. it does not exist yet).
- */
-function realWorkspacePath(workingDir: string): string {
-    try {
-        return fs.realpathSync(workingDir);
-    } catch {
-        return path.resolve(workingDir);
-    }
 }
 
 /** kimi's `slugify(basename)`: lowercase, non [a-z0-9._-] chars become `-`,

@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { IpcTransport } from '../src/transports/ipc.js';
 import { meshLaunchSession } from '../src/tools/mesh-tools.js';
-import { readProviderPriority } from '../src/tools/mesh-tools-internal.js';
+import { readProviderPriority } from '../src/tools/mesh-tools-internal-core.js';
 import { evaluateProviderQuotaGate, rankProvidersByQuotaGate } from '@adhdev/daemon-core';
 
 // LAUNCH-SESSION QUOTA GATE.

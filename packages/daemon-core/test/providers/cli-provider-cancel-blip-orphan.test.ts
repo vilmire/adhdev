@@ -76,8 +76,6 @@ function makeHarness(opts: {
     getStatus: () => ({ status: live.status, lastOutputAt: live.lastOutputAt }),
     getPartialResponse: () => '',
     getScriptParsedStatus: () => ({ status: live.status, messages: opts.parsedMessages }),
-    getScreenText: () => '',
-    isWaitingForResponse: false,
   }
 
   instance.shouldAutoApprove = () => false

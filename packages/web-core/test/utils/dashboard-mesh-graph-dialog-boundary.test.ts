@@ -307,7 +307,7 @@ describe('dashboard mesh graph dialog wiring', () => {
     it('keeps the dialog responsive on the shared mobile/desktop observability path', () => {
         const dialogSource = readSource('components/dashboard/DashboardMeshGraphDialog.tsx')
         const surfaceSource = readSource('components/MeshGraph/MeshObservabilitySurface.tsx')
-        const graphViewSource = readSource('components/MeshGraph/MeshGraphView.tsx')
+        const graphViewSource = (readSource('components/MeshGraph/MeshGraphView.tsx') + '\n' + readSource('components/MeshGraph/MeshNodeCard.tsx'))
 
         expect(dialogSource).toContain('meshTheme.dialogBodyClass')
         // i18n wave: the hint strings moved into the locale files; the source must
@@ -343,7 +343,7 @@ describe('dashboard mesh graph dialog wiring', () => {
     // Sessions are a clickable list (opens the chat), not a bare count row.
     expect(surfaceSource).toContain("t('mesh.obs.activeSessions')")
     expect(surfaceSource).toContain("requestOpenSessionChat({ sessionId: entry.session.sessionId")
-    expect(readSource('components/MeshGraph/MeshGraphView.tsx')).toContain('visibleCardSessions')
+    expect((readSource('components/MeshGraph/MeshGraphView.tsx') + '\n' + readSource('components/MeshGraph/MeshNodeCard.tsx'))).toContain('visibleCardSessions')
     expect(surfaceSource).toContain('Close')
     expect(surfaceSource).not.toContain('Open chat')
     expect(surfaceSource).not.toContain('View session')

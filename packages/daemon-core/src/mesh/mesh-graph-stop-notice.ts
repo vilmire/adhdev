@@ -39,7 +39,6 @@ export const GRAPH_STOP_OUTBOX_KINDS = [
     'queue_dependency_blocked',
     'queue_dependency_cancelled',
 ] as const;
-export type MeshGraphStopOutboxKind = typeof GRAPH_STOP_OUTBOX_KINDS[number];
 
 /** A graph node named in a notice — identifiers only. */
 export interface MeshGraphStopNodeRef {
@@ -62,7 +61,7 @@ export interface MeshGraphStopRoot {
     reasonCode: string;
 }
 
-export interface MeshGraphDependencyBlockedNotice {
+interface MeshGraphDependencyBlockedNotice {
     kind: 'graph_dependency_blocked';
     meshId: string;
     graphId: string;
@@ -72,7 +71,7 @@ export interface MeshGraphDependencyBlockedNotice {
     blocked: MeshGraphStopNodeRef[];
 }
 
-export interface MeshGraphDependencyCancelledNotice {
+interface MeshGraphDependencyCancelledNotice {
     kind: 'graph_dependency_cancelled';
     meshId: string;
     graphId: string;
@@ -107,7 +106,7 @@ export interface MeshQueueStopRoot {
 }
 
 /** Queue chain, `block` policy (the default): tasks now wait on a failed/cancelled task. */
-export interface MeshQueueDependencyBlockedNotice {
+interface MeshQueueDependencyBlockedNotice {
     kind: 'queue_dependency_blocked';
     meshId: string;
     generation: number;
@@ -116,7 +115,7 @@ export interface MeshQueueDependencyBlockedNotice {
 }
 
 /** Queue chain, `cancel` policy: the failure cancelled its dependents. */
-export interface MeshQueueDependencyCancelledNotice {
+interface MeshQueueDependencyCancelledNotice {
     kind: 'queue_dependency_cancelled';
     meshId: string;
     generation: number;
@@ -271,7 +270,7 @@ function describeRoot(root: MeshGraphStopRoot): string {
     return `step ${label(root)}${root.taskId ? ` (task ${root.taskId})` : ''} ${root.outcome === 'failed' ? 'failed' : 'was cancelled'} (reason: ${root.reasonCode})`;
 }
 
-export interface RenderedGraphStopNotice {
+interface RenderedGraphStopNotice {
     event: string;
     eventId: string;
     nodeLabel: string;

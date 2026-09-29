@@ -77,7 +77,7 @@ export function missionStatsIds(missions: Record<string, unknown>[]): string[] {
 /** Terminal queue rows older than this count as old historical records (mesh-queue-helpers). */
 export const OLD_HISTORICAL_QUEUE_RECORD_MS = 7 * 24 * 60 * 60_000;
 
-export interface QueueActiveView {
+interface QueueActiveView {
     /** pending + assigned rows (view-projected: no input envelope). */
     activeRows: Record<string, unknown>[];
     /** Row count per status over the WHOLE mesh queue. */

@@ -32,12 +32,8 @@ vi.mock('../../src/config/config.js', () => ({
     getMachineNickname: () => (({ machineId: 'test-machine', machineNickname: 'test-nick' }) as any).machineNickname ?? null,
 }));
 
-import {
-    createMesh,
-    getMesh,
-    addNode,
-    setMeshHostPin,
-} from '../../src/config/mesh-config.js';
+import { createMesh, getMesh, addNode } from '../../src/config/mesh-config.js';
+import { setMeshHostPin } from '../../src/config/mesh-config-host-pairing.js';
 import { resolveMeshHostStatus, requireMeshHostQueueOwner } from '../../src/mesh/mesh-host-ownership.js';
 import { recoverMeshIdByCoordinatorAndNode } from '../../src/mesh/mesh-event-forwarding.js';
 

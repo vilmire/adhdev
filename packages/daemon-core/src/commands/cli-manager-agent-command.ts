@@ -60,16 +60,11 @@ export async function agentCommand(host: CliAgentCommandHost, args: AgentCommand
         if (typeof adapter.clearHistory === 'function') adapter.clearHistory();
         return { success: true, cleared: true };
     }
-    if (action === 'stop') return agentStopTaskScoped(host, args, adapter, key);
+    if (action === 'stop') return agentStopTaskScoped(host, args, key);
     if (action === 'interrupt_capability') return agentInterruptCapability(adapter, agentType);
     if (action === 'interrupt_turn') return agentInterruptTurn(adapter, agentType);
     throw new Error(`Unknown action: ${action}`);
 }
-
-/** CANCEL-STOP-TASK-SCOPE: per-turn task binding, set when the turn was submitted. */
-type CliAdapterWithTurnTaskId = CliAdapter & {
-    currentTurnTaskId?: string;
-};
 
 /**
  * `agent_command send_chat` result from the one `SubmitOutcome` (D2). A refusal
@@ -226,7 +221,7 @@ async function agentSendChat(host: CliAgentCommandHost, args: AgentCommandArgs, 
 }
 
 /** `stop`: a hard session stop, scoped to the cancelled task when one is named. */
-async function agentStopTaskScoped(host: CliAgentCommandHost, args: AgentCommandArgs, adapter: CliAdapter, key: string): Promise<CommandResult> {
+async function agentStopTaskScoped(host: CliAgentCommandHost, args: AgentCommandArgs, key: string): Promise<CommandResult> {
     // CANCEL-STOP-TASK-SCOPE: a stop carrying meshContext.taskId is scoped to
     // THAT task (mesh_queue_cancel's in-flight halt). stopSession is a HARD
     // stop that removes the whole instance, and sessions are reused — so
@@ -241,7 +236,6 @@ async function agentStopTaskScoped(host: CliAgentCommandHost, args: AgentCommand
     })();
     const stopScope = evaluateMeshStopTaskScope({
         requestedTaskId: stopScopeTaskId || undefined,
-        currentTurnTaskId: (adapter as CliAdapterWithTurnTaskId).currentTurnTaskId,
         meshActiveTaskId: (host.deps.getInstanceManager()?.getInstance(key) as
             { getState?: () => { settings?: Record<string, unknown> } } | undefined)
             ?.getState?.()?.settings?.meshActiveTaskId,

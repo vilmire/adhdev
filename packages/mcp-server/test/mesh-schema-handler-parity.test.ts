@@ -4,23 +4,10 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
-import {
-    ALL_MESH_TOOLS,
-    MESH_NOTIFY_WORKER_TOOL,
-    MESH_ENQUEUE_BATCH_TOOL,
-    MESH_ENQUEUE_TASK_TOOL,
-    MESH_CONFIG_TOOL,
-    MESH_GRAPH_GATE_TOOL,
-    MESH_MAGI_COLLECT_TOOL,
-    MESH_MAGI_KIND_PANEL_TOOL,
-    MESH_MAGI_REVIEW_TOOL,
-    MESH_MISSION_LIST_TOOL,
-    MESH_MISSION_UPSERT_TOOL,
-    MESH_NODE_SLOTS_TOOL,
-    MESH_NOTE_TOOL,
-    MESH_QUEUE_CANCEL_TOOL,
-    MESH_QUEUE_REQUEUE_TOOL,
-} from '../src/tools/mesh-tool-schemas.js';
+import { ALL_MESH_TOOLS } from '../src/tools/mesh-tool-schemas.js';
+import { MESH_NOTIFY_WORKER_TOOL, MESH_CONFIG_TOOL, MESH_MAGI_COLLECT_TOOL, MESH_MAGI_KIND_PANEL_TOOL, MESH_MAGI_REVIEW_TOOL, MESH_NODE_SLOTS_TOOL } from '../src/tools/mesh-tool-schemas-refine-config.js';
+import { MESH_MISSION_LIST_TOOL, MESH_MISSION_UPSERT_TOOL, MESH_NOTE_TOOL } from '../src/tools/mesh-tool-schemas-admin.js';
+import { MESH_ENQUEUE_BATCH_TOOL, MESH_ENQUEUE_TASK_TOOL, MESH_GRAPH_GATE_TOOL, MESH_QUEUE_CANCEL_TOOL, MESH_QUEUE_REQUEUE_TOOL } from '../src/tools/mesh-tool-schemas-queue.js';
 import { MESH_TOOL_ACTIONS, rejectUnknownMeshToolArgs, validateMeshToolArgs } from '../src/tools/validate-tool-args.js';
 
 /**
@@ -133,7 +120,11 @@ test('D2#2: task_kind — the declared key — passes on both kind-panel actions
  */
 const magiFullSrc = readFileSync(join(here, '../src/tools/mesh-tools-magi.ts'), 'utf8');
 const missionHandlerSrc = readFileSync(join(here, '../src/tools/mesh-tools-mission.ts'), 'utf8');
-const queueHandlerSrc = readFileSync(join(here, '../src/tools/mesh-tools-queue.ts'), 'utf8');
+// View / cancel / requeue moved out of mesh-tools-queue.ts into mesh-tools-queue-manage.ts;
+// the queue-handler pins read both.
+const queueHandlerSrc = ['mesh-tools-queue.ts', 'mesh-tools-queue-manage.ts']
+    .map((file) => readFileSync(join(here, '../src/tools', file), 'utf8'))
+    .join('\n');
 const slotsHandlerSrc = readFileSync(join(here, '../src/tools/mesh-tools-slots.ts'), 'utf8');
 const slotAutodetectHandlerSrc = readFileSync(join(here, '../src/tools/mesh-tools-slot-autodetect.ts'), 'utf8');
 

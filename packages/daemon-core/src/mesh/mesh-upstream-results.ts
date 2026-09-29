@@ -47,7 +47,7 @@ interface PredecessorResult {
     outputVersion?: number;
 }
 
-export interface UpstreamResultsTask {
+interface UpstreamResultsTask {
     id: string;
     dependsOn?: unknown;
 }

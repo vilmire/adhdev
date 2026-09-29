@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { CANONICAL_MESH_TOOL_NAMES, CANONICAL_MESH_TOOL_COUNT } from '@adhdev/daemon-core';
 import { ALL_MESH_TOOLS, MESH_ADD_NODE_TOOL, MESH_CLEANUP_SESSIONS_TOOL, MESH_CREATE_TOOL, MESH_ENQUEUE_TASK_TOOL, MESH_FAST_FORWARD_NODE_TOOL, MESH_LAUNCH_SESSION_TOOL, MESH_READ_CHAT_TOOL, MESH_READ_DEBUG_TOOL, MESH_REMOVE_NODE_TOOL, MESH_SEND_TASK_TOOL, MESH_STATUS_TOOL, MESH_VIEW_QUEUE_TOOL, MESH_MISSION_UPSERT_TOOL } from '../src/tools/mesh-tools.js';
-import { MESH_ENQUEUE_BATCH_TOOL } from '../src/tools/mesh-tool-schemas.js';
+import { MESH_ENQUEUE_BATCH_TOOL } from '../src/tools/mesh-tool-schemas-queue.js';
 import { MESH_TOOL_ACTIONS } from '../src/tools/validate-tool-args.js';
 
 test('ALL_MESH_TOOLS is exactly the canonical mesh tool registry (6-6 consistency)', () => {

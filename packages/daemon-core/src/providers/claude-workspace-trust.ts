@@ -54,6 +54,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import * as crypto from 'node:crypto';
 import { LOG } from '../logging/logger.js';
+import { isOverBroadTrustRoot, realWorkspacePath } from './workspace-trust-shared.js';
 
 /**
  * Claude Code's config directory. Honors the same `CLAUDE_CONFIG_DIR`
@@ -78,35 +79,6 @@ function claudeConfigDir(env: NodeJS.ProcessEnv = process.env): string {
 /** The store claude-cli reads project trust from — sibling of `.claude/settings.json`'s dir. */
 export function claudeTrustStorePath(env: NodeJS.ProcessEnv = process.env): string {
     return path.join(path.dirname(claudeConfigDir(env)), '.claude.json');
-}
-
-/**
- * Resolve the canonical, real (symlink-followed) absolute form of the
- * workspace path — claude-cli keys `projects` by the real path (matches the
- * live-observed `/Users/vilmire/Work/adhdev` key, not any symlinked alias).
- */
-function realWorkspacePath(workingDir: string): string {
-    try {
-        return fs.realpathSync(workingDir);
-    } catch {
-        return path.resolve(workingDir);
-    }
-}
-
-/** Never record an over-broad root — mirrors codex/grok's guard. */
-function isOverBroadRoot(real: string, env: NodeJS.ProcessEnv = process.env): boolean {
-    if (!path.isAbsolute(real)) return true;
-    const normalized = real.replace(/\/+$/, '') || '/';
-    if (normalized === '/' || path.dirname(normalized) === normalized) return true;
-    const home = (() => {
-        try {
-            return fs.realpathSync(os.homedir());
-        } catch {
-            return os.homedir();
-        }
-    })();
-    if (normalized === home.replace(/\/+$/, '')) return true;
-    return false;
 }
 
 /** Read `~/.claude.json` as a plain object; tolerant of a missing/malformed file. */
@@ -155,7 +127,7 @@ function writeJsonObjectAtomic(storePath: string, data: Record<string, unknown>)
  */
 export function applyClaudeWorkspaceTrust(workingDir: string, env: NodeJS.ProcessEnv = process.env): string | null {
     const real = realWorkspacePath(workingDir);
-    if (isOverBroadRoot(real, env)) {
+    if (isOverBroadTrustRoot(real)) {
         LOG.warn('claude-workspace-trust', `refusing to pre-trust over-broad root ${real}`);
         return null;
     }
@@ -214,4 +186,4 @@ export function applyPreLaunchTrustForClaude(workingDir: string, extraEnv?: Reco
 }
 
 // Exposed for tests only — not part of the module's public contract.
-export const __test__ = { realWorkspacePath, claudeConfigDir, isOverBroadRoot };
+export const __test__ = { realWorkspacePath, claudeConfigDir, isOverBroadRoot: isOverBroadTrustRoot };

@@ -15,23 +15,19 @@
  * (the mesh object may be the daemon's shared inline cache).
  */
 import * as fs from 'fs';
-import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
+import { daemonIdsEquivalent, readText } from '@adhdev/mesh-shared';
 
 export const MEMBERSHIP_ONLY_DROPPED_NODE_KEYS = ['lastGit', 'last_git'] as const;
 
-function readString(value: unknown): string {
-    return typeof value === 'string' ? value.trim() : '';
-}
-
 export function isLocalMembershipNode(node: any, locality: { localMachineId?: string; localDaemonId?: string }): boolean {
-    const daemonId = readString(node?.daemonId);
+    const daemonId = readText(node?.daemonId);
     if (daemonId) {
         return Boolean(
             (locality.localMachineId && daemonIdsEquivalent(daemonId, locality.localMachineId))
             || (locality.localDaemonId && daemonIdsEquivalent(daemonId, locality.localDaemonId)),
         );
     }
-    const workspace = readString(node?.workspace);
+    const workspace = readText(node?.workspace);
     return Boolean(workspace) && fs.existsSync(workspace);
 }
 

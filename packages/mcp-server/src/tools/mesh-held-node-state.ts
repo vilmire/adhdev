@@ -24,8 +24,9 @@ import type { MeshUpgradeFailureSummary } from './mesh-tools-internal-core.js';
 import { isLocalControlPlaneNode } from './mesh-node-identity.js';
 import type { MeshContext } from './mesh-tools-internal.js';
 import { ensureMeshNodeRoutes, meshNodeRouteOf } from './mesh-node-routes.js';
+import { readOptionalRecord } from '@adhdev/mesh-shared';
 
-export interface CoordinatorHeldNodeState {
+interface CoordinatorHeldNodeState {
     /** Daemon-rendered node status, keyed by nodeId. */
     byNodeId: Map<string, Record<string, any>>;
     /** Set when the coordinator daemon could not answer (IPC failure / error result). */
@@ -33,7 +34,7 @@ export interface CoordinatorHeldNodeState {
 }
 
 /** Where a node's runtime came from on this call. */
-export interface HeldNodeRuntimeObservation {
+interface HeldNodeRuntimeObservation {
     /** 'local_read' = the coordinator's own daemon; 'none' = nothing held yet (sessions unknown, not zero). */
     source: 'local_read' | 'member_push' | 'coordinator_probe' | 'none';
     observedAt: number | null;
@@ -41,7 +42,7 @@ export interface HeldNodeRuntimeObservation {
 }
 
 /** A node's runtime as the tools read it. */
-export interface NodeStatusProbe {
+interface NodeStatusProbe {
     sessions: any[];
     daemonId?: string;
     daemonBuild?: { commit: string; commitShort: string; version: string; builtAt?: string; track: 'stable' | 'preview' | 'unknown' };
@@ -52,17 +53,13 @@ export interface NodeStatusProbe {
     observedAt?: number;
 }
 
-export interface NodeRuntimeResult {
+interface NodeRuntimeResult {
     probe: NodeStatusProbe;
     observation: HeldNodeRuntimeObservation;
     /** 'local' = the coordinator's own status; 'held' = a member's pushed runtime. */
     source: 'local' | 'held';
     /** False when the coordinator could not answer (its own status read failed / nothing held). */
     known: boolean;
-}
-
-function readRecord(value: unknown): Record<string, any> | null {
-    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : null;
 }
 
 /**
@@ -92,12 +89,12 @@ export async function readCoordinatorHeldNodeState(
 /** The node section of a coordinator `mesh_status` answer, keyed by node id. */
 export function parseCoordinatorHeldNodeState(raw: unknown): CoordinatorHeldNodeState {
     const byNodeId = new Map<string, Record<string, any>>();
-    const record = readRecord(unwrapCommandPayload(raw)) ?? readRecord(raw);
+    const record = readOptionalRecord(unwrapCommandPayload(raw)) ?? readOptionalRecord(raw);
     if (!record || record.success === false) {
         return { byNodeId, error: typeof record?.error === 'string' ? record.error : 'coordinator mesh_status returned no node state' };
     }
     for (const node of Array.isArray(record.nodes) ? record.nodes : []) {
-        const status = readRecord(node);
+        const status = readOptionalRecord(node);
         const nodeId = typeof status?.nodeId === 'string' ? status.nodeId : '';
         if (status && nodeId) byNodeId.set(nodeId, status);
     }
@@ -117,7 +114,7 @@ export function isCoordinatorServedNode(ctx: MeshContext, node: LocalMeshNodeEnt
 
 /** The coordinator's own status as a node runtime. */
 export function localStatusProbe(localStatus: unknown): NodeStatusProbe | null {
-    if (!readRecord(localStatus) || (localStatus as any).success === false) return null;
+    if (!readOptionalRecord(localStatus) || (localStatus as any).success === false) return null;
     const payload = unwrapCommandPayload(localStatus);
     const daemonId = typeof payload?.status?.instanceId === 'string' ? payload.status.instanceId.trim() : '';
     const daemonBuild = extractDaemonBuildInfo(localStatus);
@@ -139,7 +136,7 @@ export function localStatusProbe(localStatus: unknown): NodeStatusProbe | null {
  * runtime yet returns no sessions and `source: 'none'` (unknown), never a live read.
  */
 export function heldNodeStatusProbe(held: Record<string, any> | undefined): { probe: NodeStatusProbe; observation: HeldNodeRuntimeObservation } {
-    const runtime = readRecord(held?.heldRuntime);
+    const runtime = readOptionalRecord(held?.heldRuntime);
     const numberOrNull = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? value : null;
     const source = runtime?.source === 'member_push' || runtime?.source === 'coordinator_probe' ? runtime.source : 'none';
     const observation: HeldNodeRuntimeObservation = {
@@ -149,7 +146,7 @@ export function heldNodeStatusProbe(held: Record<string, any> | undefined): { pr
     };
     if (!runtime || source === 'none') return { probe: { sessions: [] }, observation };
     const daemonBuild = extractDaemonBuildInfo({ daemonBuild: runtime.daemonBuild });
-    const failure = readRecord(runtime.upgradeFailure);
+    const failure = readOptionalRecord(runtime.upgradeFailure);
     const targetVersion = typeof failure?.targetVersion === 'string' ? failure.targetVersion : undefined;
     const upgradeFailure: MeshUpgradeFailureSummary | undefined = failure
         ? {

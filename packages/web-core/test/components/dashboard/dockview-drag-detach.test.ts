@@ -4,10 +4,11 @@ import { describe, expect, it } from 'vitest'
 
 describe('DashboardDockviewWorkspace Dockview idle drag floating behavior', () => {
   it('wires idle floating only from near-still drag inside the original panel bounds', () => {
-    const source = readFileSync(
-      resolve(process.cwd(), 'src/components/dashboard/DashboardDockviewWorkspace.tsx'),
-      'utf8',
-    )
+    // The Dockview drag wiring moved out of DashboardDockviewWorkspace.tsx into
+    // dockviewIdleDragFloat.ts (attachDockviewIdleDragFloat); read both.
+    const source = ['DashboardDockviewWorkspace.tsx', 'dockviewIdleDragFloat.ts']
+      .map(file => readFileSync(resolve(process.cwd(), 'src/components/dashboard', file), 'utf8'))
+      .join('\n')
 
     expect(source).toContain('createDockviewIdleDragFloatController')
     expect(source).toContain('.onWillShowOverlay')

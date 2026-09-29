@@ -55,6 +55,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { LOG } from '../logging/logger.js';
+import { escapeTomlKey, hasTomlTrustTable, isOverBroadTrustRoot, realWorkspacePath } from './workspace-trust-shared.js';
 
 /**
  * grok's config home. Honors the `GROK_HOME` override the binary itself reads.
@@ -82,54 +83,17 @@ function grokHome(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 /**
- * Resolve the canonical, real (symlink-followed) absolute form of the
- * workspace path. grok canonicalizes before keying the trust store — the
- * entry written on macOS for `/tmp/x` reads `/private/tmp/x` — so matching
- * has to use the same normalization. Falls back to the resolved path if the
- * directory can't be stat'd.
- */
-function realWorkspacePath(workingDir: string): string {
-    try {
-        return fs.realpathSync(workingDir);
-    } catch {
-        return path.resolve(workingDir);
-    }
-}
-
-/**
  * grok refuses to record "an over-broad root (home, filesystem root, or
  * non-absolute path)" — mirrored here so we never write an entry grok itself
  * would reject, and never widen trust beyond a real project directory.
  */
 function isOverBroadRoot(real: string, env: NodeJS.ProcessEnv = process.env): boolean {
-    if (!path.isAbsolute(real)) return true;
-    const normalized = real.replace(/\/+$/, '') || '/';
-    if (normalized === '/' || path.dirname(normalized) === normalized) return true;
-    const home = (() => {
-        try {
-            return fs.realpathSync(os.homedir());
-        } catch {
-            return os.homedir();
-        }
-    })();
-    if (normalized === home.replace(/\/+$/, '')) return true;
-    if (normalized === grokHome(env).replace(/\/+$/, '')) return true;
-    return false;
+    return isOverBroadTrustRoot(real, grokHome(env));
 }
 
-/** TOML basic-string escaping for the path used as the `[folders."…"]` key. */
-function escapeTomlKey(value: string): string {
-    return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-}
-
-/**
- * Does the store already carry a `[folders."<real>"]` table? Matches the
- * header line only — enough to stay idempotent without pulling in a TOML
- * parser, and a false negative merely rewrites an equivalent entry.
- */
+/** Does the store already carry a `[folders."<real>"]` table? (header match — see hasTomlTrustTable) */
 function hasTrustEntry(contents: string, real: string): boolean {
-    const needle = `[folders."${escapeTomlKey(real)}"]`;
-    return contents.split(/\r?\n/).some((line) => line.trim() === needle);
+    return hasTomlTrustTable(contents, 'folders', real);
 }
 
 /** Native grok TOML projection bytes, separated from HOME/store resolution. */

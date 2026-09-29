@@ -1,6 +1,6 @@
 // Minimal, daemon-core-scoped ESLint flat config.
 //
-// Its ONLY job right now is the canon-identity guard for src/mesh/**: mesh node
+// Its ONLY job right now is the canon-identity guard for src/**: mesh node
 // and daemon identifiers flow through several serialization forms (config `id`,
 // wire `nodeId`, DB `node_id`; `mach_` / `daemon_mach_` / `standalone_mach_`), so
 // a raw `a.nodeId === b.nodeId` / `x.daemonId === y.daemonId` comparison only
@@ -12,7 +12,8 @@
 // reintroduce the drift.
 //
 // Deliberately narrow: it does not lint the whole package (no formatting / style
-// opinions), only the identity-comparison syntax under src/mesh/**. Existing
+// opinions), only the identity-comparison syntax under src/** (widened from
+// src/mesh/** on 2026-09-30 — commands/ and config/ compare the same ids). Existing
 // intentional local-pool canonical comparisons are individually opted out with an
 // inline eslint-disable + reason at the site — never bulk --fix'd away.
 //
@@ -41,7 +42,7 @@ const IDENTITY_MESSAGE =
   'comparison, add an inline // eslint-disable-next-line with a reason.';
 
 export default tseslint.config({
-  files: ['src/mesh/**/*.ts'],
+  files: ['src/**/*.ts'],
   linterOptions: {
     // This config runs a single rule; it is not the arbiter of every
     // eslint-disable directive in the files. Pre-existing directives for rules we
@@ -61,7 +62,7 @@ export default tseslint.config({
   plugins: {
     // Registered but with NO rules enabled — this only makes the plugin's rule
     // namespace known so a pre-existing inline `eslint-disable
-    // @typescript-eslint/...` directive elsewhere in src/mesh/** resolves instead
+    // @typescript-eslint/...` directive elsewhere in src/** resolves instead
     // of erroring as an "unknown rule". We deliberately do not turn on any
     // typescript-eslint rule here (this config's sole purpose is the identity guard).
     '@typescript-eslint': tseslint.plugin,

@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { normalizeRepoIdentity } from '../../src/config/mesh-config';
+import { normalizeRepoIdentity } from '../../src/config/mesh-config-store';
 import { planMeshOnboarding } from '../../src/mesh/mesh-onboarding-plan';
 import type { LocalMeshEntry } from '../../src/repo-mesh-types';
 

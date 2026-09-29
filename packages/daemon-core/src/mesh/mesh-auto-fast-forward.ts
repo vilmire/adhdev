@@ -3,8 +3,7 @@ import type { DaemonComponents } from '../boot/daemon-components.js';
 import { LOG } from '../logging/logger.js';
 import { listMeshes } from '../config/mesh-config.js';
 import { fastForwardMeshNode } from './mesh-fast-forward.js';
-import { normalizeMeshWorkspaceForCompare, meshNodeIdMatches, normalizeMeshNodeId } from '@adhdev/mesh-shared';
-import { readNonEmptyString } from './mesh-events-utils.js';
+import { normalizeMeshWorkspaceForCompare, meshNodeIdMatches, normalizeMeshNodeId, readText } from '@adhdev/mesh-shared';
 import { readMeshNodeDaemonId, readObjectRecord } from './mesh-node-identity.js';
 import { meshNoticeRuntime } from './turn-ledger/deliver.js';
 import { isWorktreeBootstrapStaleRunning } from './worktree-bootstrap-config.js';
@@ -212,7 +211,7 @@ function remoteNodeIsConnected(components: DaemonComponents, node: any): boolean
         return !!snapshot && String(snapshot.state) === 'connected';
     }
     // No peer-status getter: fall back to the node's own reported connection state.
-    return readNonEmptyString(node?.connection?.state).toLowerCase() === 'connected';
+    return readText(node?.connection?.state).toLowerCase() === 'connected';
 }
 
 /**
@@ -378,7 +377,7 @@ export async function maybeAutoFastForwardIdleNode(components: DaemonComponents,
 }): Promise<void> {
     const mesh = getMeshWithCache(components, args.meshId);
     const node = mesh?.nodes?.find((candidate: any) => meshNodeIdMatches(candidate, args.nodeId));
-    const workspace = readNonEmptyString(node?.workspace);
+    const workspace = readText(node?.workspace);
     if (!workspace) return;
 
     const policy = resolveAutoFastForwardPolicy(mesh);
@@ -510,7 +509,7 @@ export async function runContinuousAutoFastForwardScan(components: DaemonCompone
     if (!components.dispatchMeshCommand) return; // standalone has no remote nodes to scan
     const policy = resolveAutoFastForwardPolicy(mesh);
     if (!policy.enabled || !policy.remoteNodes || policy.mode !== 'continuous') return;
-    const meshId = readNonEmptyString(mesh?.id);
+    const meshId = readText(mesh?.id);
     if (!meshId) return;
     const nodes = Array.isArray(mesh?.nodes) ? mesh.nodes : [];
     const now = Date.now();
@@ -526,7 +525,7 @@ export async function runContinuousAutoFastForwardScan(components: DaemonCompone
         // Continuous targets non-worktree remote base nodes only.
         if (node?.isLocalWorktree === true) continue;
         if (isLocalAutoLaunchNode(node)) continue; // local is covered by the idle-edge path
-        const workspace = readNonEmptyString(node?.workspace);
+        const workspace = readText(node?.workspace);
         if (!workspace) continue;
         const daemonId = readMeshNodeDaemonId(node ?? {});
         if (!daemonId) continue;
@@ -611,7 +610,7 @@ export function startContinuousAutoFastForwardScheduler(
  * re-queues the marker so a later idle tick retries; a successful/no-op ff consumes it.
  */
 export async function runPendingCoordinatorCatchupScan(components: DaemonComponents, mesh: any): Promise<void> {
-    const meshId = readNonEmptyString(mesh?.id);
+    const meshId = readText(mesh?.id);
     if (!meshId) return;
     // C2 (wiring-unification): the markers are `turn.notify{mesh_event}` rows the
     // Refinery addressed to this daemon (the pending-events table is gone). A
@@ -629,9 +628,9 @@ export async function runPendingCoordinatorCatchupScan(components: DaemonCompone
     if (control.notices.length === 0) return;
     for (const marker of control.notices) {
         const meta = marker.metadataEvent;
-        const nodeId = readNonEmptyString(marker.nodeId) || readNonEmptyString(meta.nodeId as string);
-        const workspace = readNonEmptyString(marker.workspace) || readNonEmptyString(meta.workspace as string);
-        const baseBranch = readNonEmptyString(meta.baseBranch as string);
+        const nodeId = readText(marker.nodeId) || readText(meta.nodeId as string);
+        const workspace = readText(marker.workspace) || readText(meta.workspace as string);
+        const baseBranch = readText(meta.baseBranch as string);
         if (!workspace) {
             control.take(marker);
             continue;

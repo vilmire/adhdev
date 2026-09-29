@@ -5,41 +5,46 @@
 import {
     type MeshContext,
     commandForNode,
-    type MeshTaskInput,
+    buildMissionInactiveWarning,
+    findNodeWithRefresh,
+    hasRecentDuplicateDispatch,
+    resolveMeshDispatchRoute,
+    triggerMeshQueueAndReport,
+    drainCoordinatorPendingEvents,
+} from './mesh-tools-internal.js';
+import { type MeshTaskInput, readTaskInput } from './mesh-tool-shared.js';
+import {
     isIdleSessionRecord,
     isTerminalSessionRecord,
     unwrapCommandPayload,
-    buildMissionInactiveWarning,
-    readString,
-    readTaskInput,
-    normalizeOrchestrationDecision,
-    MESH_UNSANCTIONED_DIRECT_HINT,
-    validateMeshTaskModeRequest,
-    buildMeshTaskModeViolationError,
-    findNodeWithRefresh,
     isWorkerTaskMode,
     readSessionRecordId,
     isMeshCoordinatorSessionRecord,
     isUnmanagedSessionRecord,
-    hasRecentDuplicateDispatch,
-    resolveMeshDispatchRoute,
-    IpcTransport,
+    resolveSessionProviderType,
+} from './mesh-session-helpers.js';
+import {
+    normalizeOrchestrationDecision,
+    MESH_UNSANCTIONED_DIRECT_HINT,
+    validateMeshTaskModeRequest,
+    buildMeshTaskModeViolationError,
+} from '@adhdev/daemon-core';
+import { IpcTransport } from '../transports/ipc.js';
+import {
     getSessionMetadata,
     meshSessionCacheKey,
-    resolveSessionProviderType,
-    randomUUID,
-    resolveCoordinatorDaemonId,
-    ipcDispatchToRemoteAgent,
-    buildDirectTaskPayload,
     meshSessionProviderMetadata,
     SESSION_PROVIDER_METADATA_TTL_MS,
+} from './mesh-session-metadata.js';
+import { randomUUID } from 'node:crypto';
+import { resolveCoordinatorDaemonId } from './mesh-node-identity.js';
+import {
+    ipcDispatchToRemoteAgent,
     checkDirectDispatchQuotaGate,
     buildQuotaExhaustedDispatchFailure,
-    triggerMeshQueueAndReport,
-    drainCoordinatorPendingEvents,
-    buildQueueTriggerGuidance,
     buildCoordinatorP2pRelayFailure,
-} from './mesh-tools-internal.js';
+} from './mesh-remote-dispatch.js';
+import { buildDirectTaskPayload, buildQueueTriggerGuidance } from './mesh-tools-internal-core.js';
 import {
     queueEnqueue,
     missionQuery,
@@ -47,7 +52,7 @@ import {
     directDispatchRecord,
     turnCancel,
 } from '../ipc/turn-commands.js';
-import { isMeshTaskDifficulty, MESH_TASK_DIFFICULTIES, appendWorkerProtocolFooter } from '@adhdev/mesh-shared';
+import { isMeshTaskDifficulty, MESH_TASK_DIFFICULTIES, appendWorkerProtocolFooter, readString } from '@adhdev/mesh-shared';
 import {
     type MeshDeliveryMode,
     type MeshWorkQueueEntry,

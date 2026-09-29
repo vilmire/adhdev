@@ -65,15 +65,10 @@ import {
     type MeshGraphGateAbandonInput,
     type MeshGraphGateAbandonResult,
 } from './mesh-graph-gate-closure.js';
-import {
-    drainMeshGraphOutbox,
-    graphMaterializationBlockReason,
-    isTerminalEquivalent,
-    maybeOpenCoordinatorGate,
-    MESH_NODE_PATCH_KEYS,
-    parseCoordinatorGateBlock,
-    settleDownstreamNode,
-} from './mesh-graph-transition-runner.js';
+import { isTerminalEquivalent, maybeOpenCoordinatorGate, settleDownstreamNode } from './mesh-graph-transition-runner.js';
+import { graphMaterializationBlockReason, parseCoordinatorGateBlock } from './mesh-graph-block-reasons.js';
+import { MESH_NODE_PATCH_KEYS } from './mesh-graph-node-patch.js';
+import { drainMeshGraphOutbox } from './mesh-graph-outbox.js';
 
 // The closure half (abandon core + D3(a) auto-close) lives in
 // mesh-graph-gate-closure.ts — re-exported so existing importers are unaffected.
@@ -649,7 +644,7 @@ export function abandonMeshGraphGate(input: MeshGraphGateAbandonInput): MeshGrap
 /** Upper bound for one extension — a typo must not park a gate for years. */
 export const MESH_GATE_MAX_EXTEND_SECONDS = 30 * 24 * 60 * 60;
 
-export interface MeshGraphGateExtendInput {
+interface MeshGraphGateExtendInput {
     meshId: string;
     gateId: string;
     /** Seconds to push `deadline_at` forward from max(now, current deadline). */
@@ -659,7 +654,7 @@ export interface MeshGraphGateExtendInput {
     nowMs?: number;
 }
 
-export interface MeshGraphGateExtendResult {
+interface MeshGraphGateExtendResult {
     extended: boolean;
     /** gate_not_found / invalid_extend_seconds / gate_not_awaiting / gate_terminal:<state> / gate_extend_race. */
     reason?: string;
@@ -843,4 +838,4 @@ export function sweepMeshGraphGateTimeouts(meshId: string, nowMs?: number): Mesh
 }
 
 /** Re-exported for tests/tools: the block a gate places on downstream rows. */
-export { coordinatorGateBlockReason } from './mesh-graph-transition-runner.js';
+export { coordinatorGateBlockReason } from './mesh-graph-block-reasons.js';

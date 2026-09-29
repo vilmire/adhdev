@@ -19,7 +19,7 @@ vi.mock('child_process', async (importOriginal) => {
   }
 })
 
-vi.mock('../../src/commands/upgrade-helper.js', () => ({
+vi.mock('../../src/commands/upgrade-install-surface.js', () => ({
   execNpmCommandSync: mocks.execNpmCommandSync,
   // The published-version lookup is shared with the CLI + mandatory-update
   // paths. Mirror the real helper's argv/options assembly on top of the
@@ -40,7 +40,12 @@ vi.mock('../../src/commands/upgrade-helper.js', () => ({
     surface,
   )).trim(),
   resolveCurrentGlobalInstallSurface: mocks.resolveCurrentGlobalInstallSurface,
+}))
+vi.mock('../../src/commands/upgrade-helper.js', () => ({
   spawnDetachedDaemonUpgradeHelper: mocks.spawnDetachedDaemonUpgradeHelper,
+}))
+vi.mock('../../src/commands/upgrade-log.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/commands/upgrade-log.js')>()),
   getUpgradeLogPath: mocks.getUpgradeLogPath,
 }))
 

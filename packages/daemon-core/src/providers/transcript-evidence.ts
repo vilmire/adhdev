@@ -23,7 +23,7 @@
 
 import type { ProviderCanonicalHistoryConfig } from './contracts.js';
 import { isPurePtyTranscriptProvider } from '../cli-adapters/provider-cli-shared.js';
-import { isNativeSourceCanonicalHistory } from '../config/chat-history.js';
+import { isNativeSourceCanonicalHistory } from '../config/provider-native-history.js';
 
 /** Where the authoritative transcript for completion evidence lives. */
 export type TranscriptClass = 'native-source' | 'pure-pty' | 'daemon-owned';

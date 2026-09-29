@@ -38,14 +38,7 @@ import type { DaemonComponents } from '../boot/daemon-components.js';
 import { getMachineId } from '../config/config.js';
 import { getMesh, getMeshByRepo, listMeshes } from '../config/mesh-config.js';
 import { LOG } from '../logging/logger.js';
-import {
-    daemonIdsEquivalent,
-    expandDaemonIdForms,
-    isTurnAttemptRef,
-    meshNodeIdMatches,
-    withStatusProbeMarker,
-    type MeshNodeIdentified,
-} from '@adhdev/mesh-shared';
+import { daemonIdsEquivalent, expandDaemonIdForms, isTurnAttemptRef, meshNodeIdMatches, withStatusProbeMarker, type MeshNodeIdentified, readOptionalRecord, readText } from '@adhdev/mesh-shared';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { getQueue } from './mesh-work-queue.js';
 import { resolveWorkerDelegateRouting, recordUnroutableDelegateEvent, isUnroutableDelegateRejection } from './mesh-routing.js';
@@ -53,7 +46,7 @@ import { resolveMeshHostStatus } from './mesh-host-ownership.js';
 import { traceMeshEventStage, traceMeshEventDrop } from '../shared/mesh-event-trace.js';
 import { getLastDisplayMessage } from '../status/snapshot.js';
 import { maybeInjectIdleActiveMissionReminder } from './mesh-idle-reminder.js';
-import { registerMeshGraphQueueWakeHandler, registerMeshGraphGateNotifyHandler, registerMeshGraphStopNotifyHandler } from './mesh-graph-transition-runner.js';
+import { registerMeshGraphQueueWakeHandler, registerMeshGraphGateNotifyHandler, registerMeshGraphStopNotifyHandler } from './mesh-graph-outbox.js';
 import { renderGraphStopNotice } from './mesh-graph-stop-notice.js';
 import { readMeshNodeDaemonId } from './mesh-node-identity.js';
 import {
@@ -64,13 +57,7 @@ import {
     maybeAutoFastForwardIdleNode,
 } from './mesh-queue-assignment.js';
 import { markRemoteSessionGenerating, markRemoteSessionIdle, isAutoLaunchWithinAwaitClaimWindow } from './mesh-autolaunch-integrity.js';
-import {
-    readNonEmptyString,
-    resolveEventSessionId,
-    readWorkerResultMetadata,
-    resolveMeshSurfacedSessionPreview,
-    isFalseIdleCompletion,
-} from './mesh-events-utils.js';
+import { resolveEventSessionId, readWorkerResultMetadata, resolveMeshSurfacedSessionPreview, isFalseIdleCompletion } from './mesh-events-utils.js';
 import { isMeshCoordinatorEvent } from './mesh-event-classify.js';
 import type { CoordinatorSessionView } from './turn-ledger/routing.js';
 import { meshNoticeRuntime, notifyMeshCoordinator, type CoordinatorNotice } from './turn-ledger/deliver.js';
@@ -104,7 +91,7 @@ function recoverMeshIdByNodeId(nodeId: string): string {
     if (!nodeId) return '';
     for (const mesh of listMeshes()) {
         if (Array.isArray(mesh.nodes) && mesh.nodes.some((n: any) => meshNodeIdMatches(n, nodeId))) {
-            return readNonEmptyString(mesh.id);
+            return readText(mesh.id);
         }
     }
     return '';
@@ -127,9 +114,9 @@ export function recoverMeshIdByCoordinatorAndNode(coordinatorDaemonId: string, n
     if (nodeId) {
         const byNode = hosted.find(mesh =>
             Array.isArray(mesh.nodes) && mesh.nodes.some((n: any) => meshNodeIdMatches(n, nodeId)));
-        return byNode ? readNonEmptyString(byNode.id) : '';
+        return byNode ? readText(byNode.id) : '';
     }
-    return hosted.length === 1 ? readNonEmptyString(hosted[0].id) : '';
+    return hosted.length === 1 ? readText(hosted[0].id) : '';
 }
 
 /**
@@ -141,26 +128,26 @@ export function resolveForwardEventMeshId(
     components: DaemonComponents,
     payload: Record<string, unknown>,
 ): string {
-    const direct = readNonEmptyString(payload.meshId);
+    const direct = readText(payload.meshId);
     if (direct) return direct;
-    const workspace = readNonEmptyString(payload.workspace);
-    const byWorkspace = workspace ? readNonEmptyString(getCachedMeshByWorkspace(workspace)?.id) : '';
+    const workspace = readText(payload.workspace);
+    const byWorkspace = workspace ? readText(getCachedMeshByWorkspace(workspace)?.id) : '';
     if (byWorkspace) return byWorkspace;
-    const byNode = recoverMeshIdByNodeId(readNonEmptyString(payload.nodeId));
+    const byNode = recoverMeshIdByNodeId(readText(payload.nodeId));
     if (byNode) return byNode;
-    const sessionId = readNonEmptyString(payload.targetSessionId)
-        || readNonEmptyString(payload.sessionId)
-        || readNonEmptyString(payload.instanceId);
+    const sessionId = readText(payload.targetSessionId)
+        || readText(payload.sessionId)
+        || readText(payload.instanceId);
     if (sessionId) {
         try {
             const state = components.instanceManager?.getInstance?.(sessionId)?.getState?.();
             const settings = (state?.settings as Record<string, unknown>) || {};
-            const meshNodeFor = readNonEmptyString(settings.meshNodeFor);
+            const meshNodeFor = readText(settings.meshNodeFor);
             if (meshNodeFor) return meshNodeFor;
-            const byStamp = recoverMeshIdByNodeId(readNonEmptyString(settings.meshNodeId));
+            const byStamp = recoverMeshIdByNodeId(readText(settings.meshNodeId));
             if (byStamp) return byStamp;
-            const sessionWorkspace = readNonEmptyString(state?.workspace);
-            const bySessionWorkspace = sessionWorkspace ? readNonEmptyString(getCachedMeshByWorkspace(sessionWorkspace)?.id) : '';
+            const sessionWorkspace = readText(state?.workspace);
+            const bySessionWorkspace = sessionWorkspace ? readText(getCachedMeshByWorkspace(sessionWorkspace)?.id) : '';
             if (bySessionWorkspace) return bySessionWorkspace;
         } catch { /* best-effort — unresolved */ }
     }
@@ -181,8 +168,8 @@ export function __resetMeshWorkspaceCacheForTests(): void {
  * stamped with any of them depending on the dispatch path.
  */
 export function resolveCoordinatorDrainDaemonIds(components: Pick<DaemonComponents, 'statusInstanceId'>): string[] {
-    const statusInstanceId = readNonEmptyString(components.statusInstanceId);
-    const machineId = readNonEmptyString(getMachineId());
+    const statusInstanceId = readText(components.statusInstanceId);
+    const machineId = readText(getMachineId());
     return expandDaemonIdForms([statusInstanceId, machineId]);
 }
 
@@ -202,12 +189,12 @@ type InstanceLike = {
 function coordinatorIsIdle(instance: InstanceLike): boolean {
     const drainStatus = typeof instance.getDrainStatus === 'function' ? instance.getDrainStatus() : null;
     if (drainStatus !== null && drainStatus !== undefined) return drainStatus === 'idle';
-    return readNonEmptyString(instance.getState()?.status).toLowerCase() === 'idle';
+    return readText(instance.getState()?.status).toLowerCase() === 'idle';
 }
 
 function coordinatorIsModalParked(instance: InstanceLike): boolean {
     if (typeof instance.isModalParked === 'function') return instance.isModalParked() === true;
-    const status = readNonEmptyString(instance.getState()?.status).toLowerCase();
+    const status = readText(instance.getState()?.status).toLowerCase();
     return status === 'waiting_choice' || status === 'waiting_approval';
 }
 
@@ -217,8 +204,8 @@ export function listLocalCoordinatorSessions(components: Pick<DaemonComponents, 
     for (const inst of components.instanceManager.getByCategory('cli') as unknown as InstanceLike[]) {
         const state = inst.getState();
         const settings = state?.settings && typeof state.settings === 'object' ? state.settings as Record<string, unknown> : {};
-        if (readNonEmptyString(settings.meshCoordinatorFor) !== meshId) continue;
-        const sessionId = readNonEmptyString(state?.instanceId);
+        if (readText(settings.meshCoordinatorFor) !== meshId) continue;
+        const sessionId = readText(state?.instanceId);
         if (!sessionId) continue;
         out.push({ sessionId, idle: coordinatorIsIdle(inst), modalParked: coordinatorIsModalParked(inst) });
     }
@@ -332,11 +319,11 @@ export function stopStaleMeshWorker(
  * still needed by that other consumer.
  */
 export function isHollowCompletion(metadataEvent: Record<string, unknown>): boolean {
-    const diagnostic = readRecord(metadataEvent.completionDiagnostic);
+    const diagnostic = readOptionalRecord(metadataEvent.completionDiagnostic);
     if (diagnostic?.finalAssistantContentLength !== 0) return false;
-    if (readNonEmptyString(metadataEvent.evidenceLevel) !== 'insufficient') return false;
+    if (readText(metadataEvent.evidenceLevel) !== 'insufficient') return false;
     if (readWorkerResultMetadata(metadataEvent)) return false;
-    if (readNonEmptyString(diagnostic.finalSummarySource) === 'tool_report') return false;
+    if (readText(diagnostic.finalSummarySource) === 'tool_report') return false;
     return true;
 }
 
@@ -358,10 +345,6 @@ export function bootstrapQueueTaskCountsAsHandled(
         return isAutoLaunchWithinAwaitClaimWindow(Date.parse(al.updatedAt), nowMs);
     }
     return true;
-}
-
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -438,7 +421,7 @@ function registerIdleWorkerAndClaim(components: DaemonComponents, args: { meshId
 }
 
 function applyQueueEdges(components: DaemonComponents, meshId: string, nodeId: string, eventName: string, event: Record<string, unknown>, sessionId: string): void {
-    const providerType = readNonEmptyString(event.providerType);
+    const providerType = readText(event.providerType);
     if (eventName === 'agent:generating_started' || eventName === 'agent:stopped') {
         if (sessionId && nodeId) {
             try { MeshRuntimeStore.getInstance().deleteRemoteIdleSession(meshId, nodeId, sessionId); } catch { /* best-effort */ }
@@ -482,9 +465,9 @@ function applyQueueEdges(components: DaemonComponents, meshId: string, nodeId: s
  */
 function applyBootstrapTerminal(components: DaemonComponents, meshId: string, nodeId: string, eventName: string, event: Record<string, unknown>): void {
     if (nodeId) {
-        const workspace = readNonEmptyString(event.worktreePath) || readNonEmptyString(event.workspace);
-        const daemonId = readNonEmptyString(event.originDaemonId) || readNonEmptyString(event.daemonId);
-        const machineId = readNonEmptyString(event.originMachineId) || readNonEmptyString(event.machineId);
+        const workspace = readText(event.worktreePath) || readText(event.workspace);
+        const daemonId = readText(event.originDaemonId) || readText(event.daemonId);
+        const machineId = readText(event.originMachineId) || readText(event.machineId);
         components.router.markWorktreeBootstrapTerminalState(
             meshId,
             nodeId,
@@ -505,7 +488,7 @@ function applyBootstrapTerminal(components: DaemonComponents, meshId: string, no
 // The one entry point: a mesh event of a (local or relayed) session
 // ---------------------------------------------------------------------------
 
-export interface MeshEventInput {
+interface MeshEventInput {
     meshId: string;
     eventName: string;
     event: Record<string, unknown>;
@@ -554,7 +537,7 @@ export function processMeshEvent(components: DaemonComponents, input: MeshEventI
                 event: eventName,
                 nodeLabel: input.nodeLabel,
                 ...(nodeId ? { nodeId } : {}),
-                ...(readNonEmptyString(event.workspace) ? { workspace: readNonEmptyString(event.workspace) } : {}),
+                ...(readText(event.workspace) ? { workspace: readText(event.workspace) } : {}),
                 metadataEvent: event,
                 ...(input.coordinatorDaemonId ? { targetCoordinatorDaemonId: input.coordinatorDaemonId } : {}),
                 ...(input.coordinatorSessionId ? { targetCoordinatorSessionId: input.coordinatorSessionId } : {}),
@@ -583,13 +566,13 @@ export function processMeshEvent(components: DaemonComponents, input: MeshEventI
  * mesh's roster.
  */
 export function resolveForwardedEventMeshId(payload: Record<string, unknown>): string {
-    const nodeId = readNonEmptyString(payload.nodeId);
-    const workspace = readNonEmptyString(payload.workspace);
-    return readNonEmptyString(payload.meshId)
-        || (workspace ? readNonEmptyString(getCachedMeshByWorkspace(workspace)?.id) : '')
+    const nodeId = readText(payload.nodeId);
+    const workspace = readText(payload.workspace);
+    return readText(payload.meshId)
+        || (workspace ? readText(getCachedMeshByWorkspace(workspace)?.id) : '')
         || recoverMeshIdByNodeId(nodeId)
         || recoverMeshIdByCoordinatorAndNode(
-            readNonEmptyString(payload.meshCoordinatorDaemonId) || readNonEmptyString(payload.coordinatorDaemonId),
+            readText(payload.meshCoordinatorDaemonId) || readText(payload.coordinatorDaemonId),
             nodeId,
         );
 }
@@ -602,17 +585,17 @@ export function resolveForwardedEventMeshId(payload: Record<string, unknown>): s
  * the flat relay shape (`buildRelayMetadataEvent`).
  */
 export function handleMeshForwardEvent(components: DaemonComponents, payload: Record<string, unknown>): MeshEventResult {
-    const eventName = readNonEmptyString(payload.event);
+    const eventName = readText(payload.event);
     if (!isMeshCoordinatorEvent(eventName)) {
         return { success: false, error: 'unsupported mesh event' };
     }
-    const nodeId = readNonEmptyString(payload.nodeId);
-    const workspace = readNonEmptyString(payload.workspace);
+    const nodeId = readText(payload.nodeId);
+    const workspace = readText(payload.workspace);
     const meshId = resolveForwardedEventMeshId(payload);
     if (!meshId) {
         traceMeshEventDrop('meshId_required', {
             taskId: payload.taskId,
-            sessionId: readNonEmptyString(payload.targetSessionId) || readNonEmptyString(payload.sessionId),
+            sessionId: readText(payload.targetSessionId) || readText(payload.sessionId),
             nodeId,
             event: eventName,
         }, workspace ? `workspace=${workspace} unresolved` : 'no workspace/nodeId');
@@ -626,79 +609,79 @@ export function handleMeshForwardEvent(components: DaemonComponents, payload: Re
         event,
         nodeId,
         nodeLabel: nodeId ? `Node '${nodeId}'` : workspace ? `Agent at ${workspace}` : 'Remote agent',
-        sessionId: readNonEmptyString(event.targetSessionId),
+        sessionId: readText(event.targetSessionId),
         settings: {},
         // The relayed return address (a sessionless producer — an async refine job
         // on the executing daemon — carries it on the payload). Absent = this
         // daemon (it hosts the coordinator and owns the attempt).
-        coordinatorDaemonId: readNonEmptyString(event.targetCoordinatorDaemonId),
-        coordinatorSessionId: readNonEmptyString(event.meshCoordinatorSessionId),
+        coordinatorDaemonId: readText(event.targetCoordinatorDaemonId),
+        coordinatorSessionId: readText(event.meshCoordinatorSessionId),
     });
 }
 
 // Reconstruct the metadata of a flat relayed payload (field allow-list; the
 // in-process path keeps the whole provider event). Unchanged from pre-C.
 export function buildRelayMetadataEvent(payload: Record<string, unknown>): Record<string, unknown> {
-    const relayModalMessage = readNonEmptyString(payload.modalMessage);
+    const relayModalMessage = readText(payload.modalMessage);
     const relayModalButtons = Array.isArray(payload.modalButtons)
         ? (payload.modalButtons as unknown[]).filter((b): b is string => typeof b === 'string' && b.trim().length > 0)
         : null;
-    const inner = readRecord(payload.metadataEvent);
+    const inner = readOptionalRecord(payload.metadataEvent);
     return {
-        taskId: readNonEmptyString(payload.taskId) || readNonEmptyString(payload.meshActiveTaskId),
-        attemptId: readNonEmptyString(payload.attemptId) || readNonEmptyString(payload.meshActiveAttemptId),
+        taskId: readText(payload.taskId) || readText(payload.meshActiveTaskId),
+        attemptId: readText(payload.attemptId) || readText(payload.meshActiveAttemptId),
         ...(isTurnAttemptRef(payload.attemptRef) ? { attemptRef: payload.attemptRef } : {}),
         ...(typeof payload.dispatchNonce === 'number'
             ? { dispatchNonce: payload.dispatchNonce }
             : (typeof payload.meshActiveDispatchNonce === 'number' ? { dispatchNonce: payload.meshActiveDispatchNonce } : {})),
-        targetSessionId: readNonEmptyString(payload.targetSessionId) || readNonEmptyString(payload.sessionId) || readNonEmptyString(payload.instanceId),
-        providerType: readNonEmptyString(payload.providerType),
-        providerSessionId: readNonEmptyString(payload.providerSessionId),
-        meshCoordinatorSessionId: readNonEmptyString(payload.meshCoordinatorSessionId) || readNonEmptyString(payload.targetCoordinatorSessionId),
-        targetCoordinatorDaemonId: readNonEmptyString(payload.targetCoordinatorDaemonId),
-        workspace: readNonEmptyString(payload.workspace) || readNonEmptyString(payload.workspaceName),
-        workspaceName: readNonEmptyString(payload.workspaceName) || readNonEmptyString(payload.workspace),
-        sessionTitle: readNonEmptyString(payload.sessionTitle),
-        sessionStatus: readNonEmptyString(payload.sessionStatus),
-        sessionChatStatus: readNonEmptyString(payload.sessionChatStatus),
-        providerName: readNonEmptyString(payload.providerName),
-        ...(readRecord(payload.sessionSettings) ? { sessionSettings: payload.sessionSettings } : {}),
-        finalSummary: readNonEmptyString(payload.finalSummary) || readNonEmptyString(payload.summary),
-        evidenceLevel: readNonEmptyString(payload.evidenceLevel),
-        lastMessagePreview: readNonEmptyString(payload.lastMessagePreview),
-        lastMessageRole: readNonEmptyString(payload.lastMessageRole),
+        targetSessionId: readText(payload.targetSessionId) || readText(payload.sessionId) || readText(payload.instanceId),
+        providerType: readText(payload.providerType),
+        providerSessionId: readText(payload.providerSessionId),
+        meshCoordinatorSessionId: readText(payload.meshCoordinatorSessionId) || readText(payload.targetCoordinatorSessionId),
+        targetCoordinatorDaemonId: readText(payload.targetCoordinatorDaemonId),
+        workspace: readText(payload.workspace) || readText(payload.workspaceName),
+        workspaceName: readText(payload.workspaceName) || readText(payload.workspace),
+        sessionTitle: readText(payload.sessionTitle),
+        sessionStatus: readText(payload.sessionStatus),
+        sessionChatStatus: readText(payload.sessionChatStatus),
+        providerName: readText(payload.providerName),
+        ...(readOptionalRecord(payload.sessionSettings) ? { sessionSettings: payload.sessionSettings } : {}),
+        finalSummary: readText(payload.finalSummary) || readText(payload.summary),
+        evidenceLevel: readText(payload.evidenceLevel),
+        lastMessagePreview: readText(payload.lastMessagePreview),
+        lastMessageRole: readText(payload.lastMessageRole),
         ...(payload.lastMessageAt !== undefined ? { lastMessageAt: payload.lastMessageAt } : {}),
-        jobId: readNonEmptyString(payload.jobId),
-        interactionId: readNonEmptyString(payload.interactionId),
-        status: readNonEmptyString(payload.status),
-        targetDaemonId: readNonEmptyString(payload.targetDaemonId),
-        originDaemonId: readNonEmptyString(payload.originDaemonId) || readNonEmptyString(payload.daemonId) || readNonEmptyString(inner?.originDaemonId),
-        originMachineId: readNonEmptyString(payload.originMachineId) || readNonEmptyString(payload.machineId) || readNonEmptyString(inner?.originMachineId),
-        startedAt: readNonEmptyString(payload.startedAt),
-        completedAt: readNonEmptyString(payload.completedAt),
-        retryOfJobId: readNonEmptyString(payload.retryOfJobId),
+        jobId: readText(payload.jobId),
+        interactionId: readText(payload.interactionId),
+        status: readText(payload.status),
+        targetDaemonId: readText(payload.targetDaemonId),
+        originDaemonId: readText(payload.originDaemonId) || readText(payload.daemonId) || readText(inner?.originDaemonId),
+        originMachineId: readText(payload.originMachineId) || readText(payload.machineId) || readText(inner?.originMachineId),
+        startedAt: readText(payload.startedAt),
+        completedAt: readText(payload.completedAt),
+        retryOfJobId: readText(payload.retryOfJobId),
         ...(relayModalMessage ? { modalMessage: relayModalMessage } : {}),
         ...(relayModalButtons && relayModalButtons.length > 0 ? { modalButtons: relayModalButtons } : {}),
-        ...(readRecord(payload.interactivePrompt) ? { interactivePrompt: payload.interactivePrompt } : {}),
-        ...(readNonEmptyString(payload.promptId) ? { promptId: readNonEmptyString(payload.promptId) } : {}),
+        ...(readOptionalRecord(payload.interactivePrompt) ? { interactivePrompt: payload.interactivePrompt } : {}),
+        ...(readText(payload.promptId) ? { promptId: readText(payload.promptId) } : {}),
         ...(payload.multiSelect === true ? { multiSelect: true } : {}),
-        ...(readRecord(payload.result) ? { result: payload.result } : {}),
-        ...(readRecord(payload.completionDiagnostic) ? { completionDiagnostic: payload.completionDiagnostic } : {}),
-        ...(readRecord(payload.workerResult) ? { workerResult: payload.workerResult } : {}),
-        ...(readRecord(payload.meshWorkerResult) ? { meshWorkerResult: payload.meshWorkerResult } : {}),
-        ...(readRecord(payload.structuredResult) ? { structuredResult: payload.structuredResult } : {}),
+        ...(readOptionalRecord(payload.result) ? { result: payload.result } : {}),
+        ...(readOptionalRecord(payload.completionDiagnostic) ? { completionDiagnostic: payload.completionDiagnostic } : {}),
+        ...(readOptionalRecord(payload.workerResult) ? { workerResult: payload.workerResult } : {}),
+        ...(readOptionalRecord(payload.meshWorkerResult) ? { meshWorkerResult: payload.meshWorkerResult } : {}),
+        ...(readOptionalRecord(payload.structuredResult) ? { structuredResult: payload.structuredResult } : {}),
         ...(payload.timestamp !== undefined ? { timestamp: payload.timestamp } : {}),
-        ...(readNonEmptyString(payload.worktreePath) ? { worktreePath: readNonEmptyString(payload.worktreePath) } : {}),
+        ...(readText(payload.worktreePath) ? { worktreePath: readText(payload.worktreePath) } : {}),
         ...(typeof payload.durationMs === 'number' ? { durationMs: payload.durationMs } : {}),
-        ...(readNonEmptyString(payload.error) ? { error: readNonEmptyString(payload.error) } : {}),
+        ...(readText(payload.error) ? { error: readText(payload.error) } : {}),
         intentional: payload.intentional === true,
         intentionalStop: payload.intentionalStop === true,
         operatorCleanup: payload.operatorCleanup === true,
-        reason: readNonEmptyString(payload.reason),
-        stopReason: readNonEmptyString(payload.stopReason),
-        cleanupReason: readNonEmptyString(payload.cleanupReason),
-        source: readNonEmptyString(payload.source),
-        resolution: readNonEmptyString(payload.resolution),
+        reason: readText(payload.reason),
+        stopReason: readText(payload.stopReason),
+        cleanupReason: readText(payload.cleanupReason),
+        source: readText(payload.source),
+        resolution: readText(payload.resolution),
     };
 }
 
@@ -719,7 +702,7 @@ function mirrorToDashboard(components: DaemonComponents, meshId: string, nodeId:
             meshId,
             nodeId: nodeId || undefined,
             ...enriched,
-            workspace: readNonEmptyString(event.workspace) || readNonEmptyString(event.workspaceName) || undefined,
+            workspace: readText(event.workspace) || readText(event.workspaceName) || undefined,
             ...(surfaced ? {
                 meshSessionLastMessagePreview: surfaced.preview,
                 meshSessionLastMessageRole: surfaced.role,
@@ -738,7 +721,7 @@ function onCoordinatorIdleEdge(components: DaemonComponents, instanceId: string)
     if (!source || source.category !== 'cli') return false;
     const state = source.getState();
     const settings = state.settings && typeof state.settings === 'object' ? state.settings as Record<string, unknown> : {};
-    const coordinatorMeshId = readNonEmptyString(settings.meshCoordinatorFor);
+    const coordinatorMeshId = readText(settings.meshCoordinatorFor);
     if (!coordinatorMeshId) return false;
     // Notices reach an idle coordinator through the turn.deliver cursor (it waits
     // on this very status edge). Only the idle-mission nudge is left here: when
@@ -841,8 +824,8 @@ export function setupMeshEventForwarding(components: DaemonComponents): () => vo
     });
 
     const onProviderEvent = (event: any) => {
-        const eventName = readNonEmptyString(event?.event);
-        const instanceId = readNonEmptyString(event?.instanceId);
+        const eventName = readText(event?.event);
+        const instanceId = readText(event?.instanceId);
         if (!instanceId) return;
         if (eventName === 'agent:ready' || eventName === 'agent:generating_completed') {
             // A coordinator's own idle edge: not a delegate event unless the
@@ -883,7 +866,7 @@ export function setupMeshEventForwarding(components: DaemonComponents): () => vo
             recordUnroutableDelegateEvent(routing, eventName);
             return;
         }
-        const nodeId = routing.nodeId || readNonEmptyString(event.meshNodeId) || readNonEmptyString(settings.meshNodeId);
+        const nodeId = routing.nodeId || readText(event.meshNodeId) || readText(settings.meshNodeId);
         mirrorToDashboard(components, meshId, nodeId, eventName, event, sourceSession);
         processMeshEvent(components, {
             meshId,
@@ -893,8 +876,8 @@ export function setupMeshEventForwarding(components: DaemonComponents): () => vo
             nodeLabel: routing.nodeLabel || (nodeId ? `Node '${nodeId}'` : 'Worker'),
             sessionId: resolveEventSessionId(event, instanceId),
             settings,
-            coordinatorDaemonId: routing.coordinatorDaemonId || readNonEmptyString(settings.meshCoordinatorDaemonId),
-            coordinatorSessionId: readNonEmptyString(settings.meshCoordinatorSessionId),
+            coordinatorDaemonId: routing.coordinatorDaemonId || readText(settings.meshCoordinatorDaemonId),
+            coordinatorSessionId: readText(settings.meshCoordinatorSessionId),
         });
     };
     if (!components.bus) {

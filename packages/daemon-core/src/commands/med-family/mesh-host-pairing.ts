@@ -45,7 +45,7 @@ export const meshHostPairingHandlers: Record<string, MedFamilyHandler> = {
         if (!meshId) return { success: false, error: 'meshId required' };
         if (!hostAddress || !token) return { success: false, error: 'hostAddress and token required' };
         try {
-            const { configureMeshHostPairing } = await import('../../config/mesh-config.js');
+            const { configureMeshHostPairing } = await import('../../config/mesh-config-host-pairing.js');
             const configured = configureMeshHostPairing(meshId, { hostAddress, token });
             if (!configured) return { success: false, error: 'Mesh not found' };
             ctx.inlineMeshCache.set(meshId, configured.mesh);
@@ -72,7 +72,7 @@ export const meshHostPairingHandlers: Record<string, MedFamilyHandler> = {
         const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
         if (!meshId) return { success: false, error: 'meshId required' };
         try {
-            const { createMeshHostPairingToken } = await import('../../config/mesh-config.js');
+            const { createMeshHostPairingToken } = await import('../../config/mesh-config-host-pairing.js');
             const created = createMeshHostPairingToken(meshId, {
                 token: typeof args?.token === 'string' ? args.token : undefined,
                 expiresAt: typeof args?.expiresAt === 'string' ? args.expiresAt : undefined,
@@ -104,7 +104,7 @@ export const meshHostPairingHandlers: Record<string, MedFamilyHandler> = {
         if (!meshId) return { success: false, error: 'meshId required' };
         if (!token || !memberNode) return { success: false, error: 'token and memberNode required' };
         try {
-            const { applyMeshHostJoinRequest } = await import('../../config/mesh-config.js');
+            const { applyMeshHostJoinRequest } = await import('../../config/mesh-config-host-pairing.js');
             const applied = applyMeshHostJoinRequest(meshId, {
                 token,
                 memberNode: memberNode as any,
@@ -165,7 +165,7 @@ export const meshHostPairingHandlers: Record<string, MedFamilyHandler> = {
             return { success: false, code: 'mesh_host_join_not_member', meshId, meshHost, error: 'join_mesh_host_pairing must run from a member daemon configured with a Mesh Host address/token.' };
         }
         try {
-            const { tokenIdForManualPairing, markMeshHostPairingJoined } = await import('../../config/mesh-config.js');
+            const { tokenIdForManualPairing, markMeshHostPairingJoined } = await import('../../config/mesh-config-host-pairing.js');
             const tokenId = tokenIdForManualPairing(token);
             if (meshHost.pairing?.tokenId && meshHost.pairing.tokenId !== tokenId) {
                 return { success: false, code: 'mesh_host_join_rejected', meshId, tokenId, meshHost, error: 'invalid pairing token' };

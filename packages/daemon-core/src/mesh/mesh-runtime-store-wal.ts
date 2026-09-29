@@ -28,7 +28,7 @@ import { existsSync, statSync } from 'fs';
 import { LOG } from '../logging/logger.js';
 import type { Database as DatabaseHandle } from 'better-sqlite3';
 
-export interface WalCheckpointPolicy {
+interface WalCheckpointPolicy {
     /** Timer period. */
     intervalMs: number;
     /** WAL size above which an idle TRUNCATE is attempted. */
@@ -46,7 +46,7 @@ export const DEFAULT_WAL_CHECKPOINT_POLICY: WalCheckpointPolicy = {
     busyTimeoutMs: 5_000,
 };
 
-export type WalCheckpointAction = 'none' | 'passive' | 'truncate' | 'truncate_busy';
+type WalCheckpointAction = 'none' | 'passive' | 'truncate' | 'truncate_busy';
 
 export class WalCheckpointScheduler {
     /** Writes since the last tick. Read by tests through the store (`walWriteCounter`). */

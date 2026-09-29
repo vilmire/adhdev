@@ -7,7 +7,8 @@ This file is the comment.
 ## Why this exists
 
 The canon-identity guard in `eslint.config.mjs` (`no-restricted-syntax` over
-`src/mesh/**`) landed on **2026-07-04 as `'warn'`** with a note saying the
+`src/mesh/**`, widened to all of `src/**` on 2026-09-30 — the five raw sites that
+surfaced in `commands/` and `config/` were fixed, not frozen) landed on **2026-07-04 as `'warn'`** with a note saying the
 remaining sites would be "flipped to `'error'` in a follow-up". The follow-up did
 not arrive for 50 days, and `npm run lint` was registered in **no** chain — not
 `npm run ci`, not `.adhdev/refine.json` — so the rule was never executed by any

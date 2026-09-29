@@ -10,10 +10,7 @@
  */
 
 import type { InputPart } from '@adhdev/daemon-core';
-
-export function readString(value: unknown): string | undefined {
-    return typeof value === 'string' && value.trim() ? value.trim() : undefined;
-}
+import { readString } from '@adhdev/mesh-shared';
 
 export function readNumeric(value: unknown, fallback = 0): number {
     const parsed = Number(value);
@@ -37,7 +34,7 @@ export interface MeshTaskInput {
  * (`MeshTaskInputEnvelope.parts: InputPart[]`) and the untyped
  * `{ parts: Record<string, unknown>[] }` the remote-dispatch helper still declares.
  */
-export type MeshTaskInputPart = InputPart & Record<string, unknown>;
+type MeshTaskInputPart = InputPart & Record<string, unknown>;
 
 /**
  * MESH-IMAGE-DISPATCH: validate the optional `input` envelope on a task tool call.

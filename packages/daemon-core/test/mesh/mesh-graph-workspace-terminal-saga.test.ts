@@ -60,11 +60,9 @@ vi.mock('../../src/mesh/turn-ledger/deliver.js', async (importOriginal) => {
     };
 });
 
-import {
-    graphMaterializationBlockReason,
-    settleDownstreamNode,
-    __resetMeshGraphTransitionRunnerForTests,
-} from '../../src/mesh/mesh-graph-transition-runner.js';
+import { settleDownstreamNode } from '../../src/mesh/mesh-graph-transition-runner.js';
+import { graphMaterializationBlockReason } from '../../src/mesh/mesh-graph-block-reasons.js';
+import { __resetMeshGraphTransitionRunnerForTests } from '../../src/mesh/mesh-graph-outbox.js';
 import { sweepMeshGraphStaleness } from '../../src/mesh/mesh-graph-staleness.js';
 import {
     declareWorkspaceIntents,

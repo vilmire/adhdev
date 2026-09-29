@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { summarizePendingEventProtocolMetrics } from '../src/tools/mesh-tools-status.js';
+import { summarizePendingEventProtocolMetrics } from '../src/tools/mesh-status-sections.js';
 
 // T7 (B4): mesh_status surfaces mesh-protocol-v2 adoption metrics derived from the
 // pending events drained in that call. summarizePendingEventProtocolMetrics is the

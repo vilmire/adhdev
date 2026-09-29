@@ -26,20 +26,18 @@ import {
     countUncommittedChanges,
     extractSubmodules,
     isGitStatusDirty,
-    readNodeDaemonId,
-} from './mesh-tools-internal.js';
-import type { LocalMeshNodeEntry, MeshContext } from './mesh-tools-internal.js';
+} from './mesh-tools-internal-core.js';
+import { readNodeDaemonId } from './mesh-node-identity.js';
+import type { MeshContext } from './mesh-tools-internal.js';
+import type { LocalMeshNodeEntry } from '@adhdev/daemon-core';
+import { readOptionalRecord } from '@adhdev/mesh-shared';
 
 function nonEmptyString(value: unknown): string | undefined {
     return typeof value === 'string' && value ? value : undefined;
 }
 
-function readRecord(value: unknown): Record<string, any> | null {
-    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : null;
-}
-
 /** Mirror of daemon-core `RepoMeshNodeGitObservation` (wire contract). */
-export interface HeldNodeGitObservation {
+interface HeldNodeGitObservation {
     source: 'self' | 'local' | 'member_push' | 'coordinator_probe' | 'none';
     observedAt: number | null;
     refreshing: boolean;
@@ -48,7 +46,7 @@ export interface HeldNodeGitObservation {
 }
 
 export function readHeldNodeGitObservation(held: Record<string, any> | undefined): HeldNodeGitObservation {
-    const obs = readRecord(held?.gitObservation);
+    const obs = readOptionalRecord(held?.gitObservation);
     const source = obs?.source;
     const numberOrNull = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? value : null;
     return {
@@ -93,7 +91,7 @@ export function deriveDataFreshnessFromObservation(args: {
     now?: number;
 }): Record<string, unknown> {
     const { observation, hasGit, isSelfNode, daemonId } = args;
-    const daemon = readRecord(args.daemonFreshness);
+    const daemon = readOptionalRecord(args.daemonFreshness);
     const now = args.now ?? Date.now();
     const unreachable = observation.unreachableSince !== null;
     let dataSource: string;
@@ -152,10 +150,10 @@ export function applyHeldNodeGitToEntry(entry: Record<string, any>, args: {
 }): void {
     const { node, held } = args;
     const observation = readHeldNodeGitObservation(held);
-    const status = readRecord(held?.git);
+    const status = readOptionalRecord(held?.git);
     const hasGit = !!status && (typeof status.isGitRepo === 'boolean' || typeof status.branch === 'string');
     const daemonHealth = typeof held?.health === 'string' ? held.health : undefined;
-    const daemonBranchConvergence = readRecord(held?.branchConvergence);
+    const daemonBranchConvergence = readOptionalRecord(held?.branchConvergence);
     if (hasGit && status) {
         const uncommittedChanges = countUncommittedChanges(status);
         const dirty = isGitStatusDirty(status);
@@ -165,12 +163,12 @@ export function applyHeldNodeGitToEntry(entry: Record<string, any>, args: {
         entry.isDirty = dirty;
         entry.uncommittedChanges = uncommittedChanges;
         if (daemonBranchConvergence) entry.branchConvergence = daemonBranchConvergence;
-        const buildBehind = readRecord(status.daemonBuildBehind) ?? readRecord(held?.staleDaemonBuild);
+        const buildBehind = readOptionalRecord(status.daemonBuildBehind) ?? readOptionalRecord(held?.staleDaemonBuild);
         // The verdict was computed by the process that pushed this git snapshot. If
         // the daemon has since restarted on another build (held runtime reports the
         // running commit), the verdict describes a process that no longer exists —
         // drop it rather than report a live, up-to-date daemon as stale.
-        const runningCommit = nonEmptyString(readRecord(readRecord(held?.heldRuntime)?.daemonBuild)?.commit);
+        const runningCommit = nonEmptyString(readOptionalRecord(readOptionalRecord(held?.heldRuntime)?.daemonBuild)?.commit);
         const verdictCommit = buildBehind ? nonEmptyString(buildBehind.buildCommit) : undefined;
         const verdictIsForOtherProcess = !!(runningCommit && verdictCommit && runningCommit !== verdictCommit);
         if (buildBehind && !verdictIsForOtherProcess) entry.staleDaemonBuild = buildBehind;
@@ -199,13 +197,13 @@ export function applyHeldNodeGitToEntry(entry: Record<string, any>, args: {
     }
     // Provider quota facts, as last reported by the node that owns the credentials
     // (held on the coordinator's node record — the same bundle quota routing reads).
-    const quota = readRecord(readRecord(held?.nodeFacts)?.quota);
+    const quota = readOptionalRecord(readOptionalRecord(held?.nodeFacts)?.quota);
     if (quota && Object.keys(quota).length > 0) entry.quota = quota;
 
     entry.gitObservation = observation;
     entry.dataFreshness = deriveDataFreshnessFromObservation({
         observation,
-        daemonFreshness: readRecord(held?.dataFreshness),
+        daemonFreshness: readOptionalRecord(held?.dataFreshness),
         hasGit,
         isSelfNode: (entry.machine as any)?.sameMachine === true,
         daemonId: readNodeDaemonId(node),

@@ -32,7 +32,7 @@ export type NotifySuppression =
     | 'candidate_superseded'
     | 'attempt_terminal';
 
-export interface NotifySuppressionInput {
+interface NotifySuppressionInput {
     notify: NotifyKind;
     /** The attempt as the ledger holds it NOW; null when unknown on this daemon. */
     attempt: { state: TurnState; generation: number; suspension: 'approval' | 'choice' | null } | null;

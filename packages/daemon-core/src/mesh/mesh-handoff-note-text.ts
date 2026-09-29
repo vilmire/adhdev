@@ -10,7 +10,7 @@
  */
 
 /** The `better-sqlite3` surface these helpers need, without importing the driver. */
-export interface HandoffNoteTextDb {
+interface HandoffNoteTextDb {
     prepare(sql: string): {
         all(...params: unknown[]): unknown[];
         run(...params: unknown[]): { changes?: number };

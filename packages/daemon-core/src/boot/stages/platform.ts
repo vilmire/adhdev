@@ -10,7 +10,7 @@
 import { LOG, installGlobalInterceptor } from '../../logging/logger.js';
 import { loadConfig } from '../../config/config.js';
 import { applyDaemonEnvOverrides } from '../../config/env-overrides.js';
-import { readUpgradeFailureNotice } from '../../commands/upgrade-helper.js';
+import { readUpgradeFailureNotice } from '../../commands/upgrade-failure-notice.js';
 import { installProviderProcessShim } from '../../providers/sdk/v1/sandbox/require-whitelist.js';
 import { applyProcessHardening } from '../process-hardening.js';
 import type { DaemonBootConfig } from '../daemon-components.js';

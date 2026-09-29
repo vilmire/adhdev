@@ -1,6 +1,7 @@
 import type { MeshLedgerEntry } from './mesh-ledger.js';
 import type { PendingMeshCoordinatorEvent } from './mesh-events.js';
 import type { MeshAsyncJobLifecycle } from '../repo-mesh-types.js';
+import { readString, readOptionalRecord } from '@adhdev/mesh-shared';
 
 export type MeshAsyncRefineJobStatus = 'accepted' | 'running' | 'completed' | 'failed';
 
@@ -20,16 +21,6 @@ export interface MeshAsyncRefineJobSummary extends MeshAsyncJobLifecycle {
     lastLedgerKind?: string;
     lastUpdatedAt?: string;
     instruction: string;
-}
-
-function readString(value: unknown): string | undefined {
-    return typeof value === 'string' && value.trim() ? value.trim() : undefined;
-}
-
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-    return value && typeof value === 'object' && !Array.isArray(value)
-        ? value as Record<string, unknown>
-        : undefined;
 }
 
 function eventStatus(event: string | undefined, fallback?: string): MeshAsyncRefineJobStatus | undefined {
@@ -82,11 +73,11 @@ export function buildMeshAsyncRefineJobs(args: {
     const jobs = new Map<string, MeshAsyncRefineJobSummary>();
 
     for (const entry of args.ledgerEntries || []) {
-        const payload = readRecord(entry.payload);
+        const payload = readOptionalRecord(entry.payload);
         if (payload?.source !== 'refine_mesh_node_async_job') continue;
-        const refineJob = readRecord(payload.refineJob);
-        const result = readRecord(payload.result);
-        const finalState = readRecord(payload.finalBranchConvergenceState) || readRecord(result?.finalBranchConvergenceState);
+        const refineJob = readOptionalRecord(payload.refineJob);
+        const result = readOptionalRecord(payload.result);
+        const finalState = readOptionalRecord(payload.finalBranchConvergenceState) || readOptionalRecord(result?.finalBranchConvergenceState);
         const jobId = readString(refineJob?.jobId);
         if (!jobId) continue;
         const status = ledgerStatus(entry.kind, readString(refineJob?.status));
@@ -110,10 +101,10 @@ export function buildMeshAsyncRefineJobs(args: {
     }
 
     for (const event of args.pendingEvents || []) {
-        const metadata = readRecord(event.metadataEvent);
+        const metadata = readOptionalRecord(event.metadataEvent);
         if (metadata?.source !== 'refine_mesh_node_async_job') continue;
-        const result = readRecord(metadata.result);
-        const finalState = readRecord(result?.finalBranchConvergenceState);
+        const result = readOptionalRecord(metadata.result);
+        const finalState = readOptionalRecord(result?.finalBranchConvergenceState);
         const jobId = readString(metadata.jobId);
         if (!jobId) continue;
         const status = eventStatus(event.event, readString(metadata.status));

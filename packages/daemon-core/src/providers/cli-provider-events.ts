@@ -23,8 +23,7 @@ import type { ChatMessage } from '../types.js';
 import type { ProviderModule } from './contracts.js';
 import { normalizeProviderSessionId } from './provider-session-id.js';
 import { mergeProviderPatchState } from './provider-patch-state.js';
-import { buildPersistedProviderEffectMessage, normalizeProviderEffects } from './control-effects.js';
-import { getEffectDedupKey } from './cli-provider-effect-format.js';
+import { applyProviderEffects } from './control-effects.js';
 import { type PersistableCliHistoryMessage } from './cli-provider-history-dedup.js';
 import { TERMINAL_MESH_EVENTS } from './cli-provider-instance-types.js';
 import type { CompletedDebouncePending } from './cli-provider-instance-types.js';
@@ -237,57 +236,7 @@ export function applyProviderResponse(host: ProviderEventsHost, data: any, optio
     host.controlValues = patchedState.controlValues;
     host.summaryMetadata = patchedState.summaryMetadata;
 
-    const effects = normalizeProviderEffects(data);
-    for (const effect of effects) {
-        const effectWhen = effect.when || 'immediate';
-        if (effectWhen === 'turn_completed' && options.phase !== 'turn_completed') continue;
-        if (effectWhen === 'immediate' && options.phase === 'turn_completed') continue;
-
-        const effectKey = getEffectDedupKey(effect);
-        if (host.appliedEffectKeys.has(effectKey)) continue;
-        host.appliedEffectKeys.add(effectKey);
-
-        if (effect.persist !== false) {
-            const persistedMessage = buildPersistedProviderEffectMessage(effect);
-            if (persistedMessage) host.appendRuntimeMessage(persistedMessage, effectKey);
-        }
-
-        if (effect.type === 'message' && effect.message) {
-            const content = typeof effect.message.content === 'string'
-                ? effect.message.content
-                : JSON.stringify(effect.message.content);
-            host.pushEvent({
-                event: 'provider:message',
-                timestamp: Date.now(),
-                content,
-                role: effect.message.role || 'system',
-                kind: effect.message.kind,
-                senderName: effect.message.senderName,
-            });
-        } else if (effect.type === 'toast' && effect.toast) {
-            host.pushEvent({
-                event: 'provider:toast',
-                effectId: effect.id || effectKey,
-                timestamp: Date.now(),
-                message: effect.toast.message,
-                level: effect.toast.level || 'info',
-            });
-        } else if (effect.type === 'notification' && effect.notification) {
-            host.pushEvent({
-                event: 'provider:notification',
-                effectId: effect.id || effectKey,
-                timestamp: Date.now(),
-                title: effect.notification.title,
-                message: effect.notification.body,
-                content: typeof effect.notification.bubbleContent === 'string'
-                    ? effect.notification.bubbleContent
-                    : effect.notification.body,
-                level: effect.notification.level || 'info',
-                channels: effect.notification.channels || ['toast'],
-                preferenceKey: effect.notification.preferenceKey,
-            });
-        }
-    }
+    applyProviderEffects(data, options.phase, host);
 
     if (host.appliedEffectKeys.size > 200) {
         host.appliedEffectKeys = new Set(Array.from(host.appliedEffectKeys).slice(-100));

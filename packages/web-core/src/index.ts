@@ -70,8 +70,6 @@ export type { ChatMessageListRef as ChatMessageListHandle } from './components/C
 export { CliTerminal } from './components/CliTerminal'
 export type { CliTerminalHandle } from './components/CliTerminal'
 export { default as ConnectionBadge } from './components/ConnectionBadge'
-export { default as BeaconAdvisoryBadge } from './components/BeaconAdvisoryBadge'
-export type { BeaconAdvisoryBadgeProps } from './components/BeaconAdvisoryBadge'
 export { default as StatCard } from './components/StatCard'
 export { default as Card } from './components/Card'
 export type { CardProps, CardPadding, CardRadius } from './components/Card'
@@ -203,7 +201,7 @@ export type { SubscriptionTransport } from './managers/SubscriptionManager'
 export { webDebugStore, createWebDebugStore } from './debug/webDebugStore'
 export type { WebDebugEvent, WebDebugEntry, WebDebugQuery, WebDebugStore } from './debug/webDebugStore'
 // Re-export daemon-core shared types for downstream consumers
-export type { AcpConfigOption, AcpMode, StatusReportPayload, BeaconDiagnosticsSummary } from './types'
+export type { AcpConfigOption, AcpMode, StatusReportPayload } from './types'
 export { cn } from './lib/utils'
 
 // ── UI Components ──

@@ -1,6 +1,6 @@
 // Mesh tool implementations — mission domain.
-// Pure move out of mesh-tools.ts (no behavior change). Shared helpers, types, module
-// state and dependency re-exports live in ./mesh-tools-internal.ts; mesh-tools.ts is a barrel.
+// Pure move out of mesh-tools.ts (no behavior change). Helpers are imported from the
+// modules that define them; mesh-tools.ts is the tool barrel.
 //
 // MIGRATION STATUS (wiring-unification Phase C, workstreams C-W6, C-W9b, C-W9c —
 // docs/design/2026-09-23-wiring-unification.md §5 C2 "MCP server" paragraph):
@@ -29,16 +29,11 @@
 //     the peer. The tool now queries every node's `get_mesh_ledger_slice` (the
 //     local node over its own transport too) and reports the evidence.
 
-import {
-    MESH_MISSION_STATUSES,
-    commandForNode,
-    drainCoordinatorPendingEvents,
-    isLocalControlPlaneNode,
-    readString,
-    refreshMeshFromDaemon,
-    slimLedgerPayload,
-    unwrapCommandPayload,
-} from './mesh-tools-internal.js';
+import { commandForNode, drainCoordinatorPendingEvents, refreshMeshFromDaemon } from './mesh-tools-internal.js';
+import { MESH_MISSION_STATUSES } from '@adhdev/daemon-core';
+import { isLocalControlPlaneNode } from './mesh-node-identity.js';
+import { slimLedgerPayload } from './mesh-tools-internal-core.js';
+import { unwrapCommandPayload } from './mesh-session-helpers.js';
 import type {
     MeshContext,
 } from './mesh-tools-internal.js';
@@ -46,6 +41,7 @@ import { ledgerQuery, missionListQuery, missionUpsert, missionQuery, noteForget,
 import { buildMeshRecordReconciliationEvidence, buildMeshRecordReplicaEvidence } from './mesh-record-reconcile-evidence.js';
 import type { MeshMissionStatusValue, MissionBriefWire } from '@adhdev/mesh-shared';
 import { ensureMeshNodeRoutes } from './mesh-node-routes.js';
+import { readString } from '@adhdev/mesh-shared';
 
 /**
  * Result of {@link coerceBriefArg}: the coerced wire brief (or `undefined`/`null`

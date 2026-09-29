@@ -5,7 +5,11 @@
 
 import {
     type MeshContext,
-    readString,
+    commandForNode,
+    resolveSemanticReplicaTransport,
+    readQueueFromDaemon,
+} from './mesh-tools-internal.js';
+import {
     isWeakCompletionEvidence,
     type MagiReplicaGitRef,
     type MagiTaskKind,
@@ -14,14 +18,9 @@ import {
     type MagiResponseSource,
     MAGI_RAW_ANSWER_CAP,
     meshNodeIdMatches,
-    readSessionRecordId,
-    isIdleSessionRecord,
-    commandForNode,
-    resolveSemanticReplicaTransport,
-    unwrapCommandPayload,
-    annotateQueueStaleness,
-    readQueueFromDaemon,
-} from './mesh-tools-internal.js';
+} from '@adhdev/daemon-core';
+import { readSessionRecordId, isIdleSessionRecord, unwrapCommandPayload } from './mesh-session-helpers.js';
+import { annotateQueueStaleness } from './mesh-queue-helpers.js';
 import { ledgerQuery, recordLocal } from '../ipc/turn-commands.js';
 import { nodeHeadCommit } from './mesh-magi-fanout.js';
 import { MAGI_TERMINAL_STATUSES, sessionSharedWithAnotherReplica, classifyStaleReplicas } from './mesh-magi-lifecycle.js';
@@ -36,6 +35,7 @@ import { readNodeRuntime } from './mesh-held-node-state.js';
 import { magiOutputContractFor } from './mesh-tools-magi-core.js';
 import { ensureMeshNodeRoutes } from './mesh-node-routes.js';
 import { readTranscriptReplicaForSemanticConsumer, type SemanticTranscriptReadRequest } from './mesh-transcript-semantic-read.js';
+import { readString } from '@adhdev/mesh-shared';
 
 /**
  * Fix A re-wait gate: a `completed` replica is NOT yet trustworthy for collection when its

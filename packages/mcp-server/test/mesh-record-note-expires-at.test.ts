@@ -6,7 +6,7 @@ import { meshRecordNote } from '../src/tools/mesh-tools.js';
 import { readOperatingNotes } from '@adhdev/daemon-core';
 import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 import { validateMeshToolArgs } from '../src/tools/validate-tool-args.js';
-import { MESH_NOTE_TOOL } from '../src/tools/mesh-tool-schemas.js';
+import { MESH_NOTE_TOOL } from '../src/tools/mesh-tool-schemas-admin.js';
 import { resolveMeshToolHandler } from '../src/tools/mesh-tool-dispatch.js';
 
 /**

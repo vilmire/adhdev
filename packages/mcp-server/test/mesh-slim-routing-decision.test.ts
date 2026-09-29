@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { slimLedgerPayload, compactRoutingDecision } from '../src/tools/mesh-tools-internal.js';
+import { slimLedgerPayload, compactRoutingDecision } from '../src/tools/mesh-tools-internal-core.js';
 
 // LEDGER-TASK-TRACEABILITY (E1): slimLedgerPayload must preserve the task_dispatched
 // routingDecision sub-object even in compact mode (it is the whole point of the entry),

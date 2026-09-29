@@ -239,26 +239,6 @@ function grokToolCallArguments(toolCalls: unknown[]): string {
 }
 
 /**
- * Re-parse a grok chat_history into the record array `readSession` indexes
- * against. See `readClaudeRecords` for why the expand path re-parses rather
- * than sharing the spec path's jsonl cache.
- */
-export function readGrokRecords(filePath: string): Record<string, unknown>[] {
-  let text: string;
-  try { text = fs.readFileSync(filePath, 'utf8'); } catch { return []; }
-  const out: Record<string, unknown>[] = [];
-  for (const line of text.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    let record: unknown;
-    try { record = JSON.parse(trimmed); } catch { continue; }
-    if (!record || typeof record !== 'object') continue;
-    out.push(record as Record<string, unknown>);
-  }
-  return out;
-}
-
-/**
  * Read one addressed grok tool record at full length. Returns null when the
  * record is not a tool call turn or tool result.
  */
@@ -413,7 +393,7 @@ export function readSession(
   const sourceMtimeMs = statMtimeMs(sourcePath);
 
   // recordIndex tracks the position in the PARSED-RECORD array (what
-  // `readGrokRecords` rebuilds), which is not the same as `parsed.length`:
+  // `readJsonlRecords` rebuilds), which is not the same as `parsed.length`:
   // this loop drops system prompts, synthetic reminders and reasoning records,
   // so the surviving-message index runs ahead of nothing and behind the record
   // index. Stamping the latter is what makes the ref addressable.

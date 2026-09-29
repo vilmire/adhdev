@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { slimSessionLaunchFields } from '../src/tools/mesh-tools-status.js'
+import { slimSessionLaunchFields } from '../src/tools/mesh-status-sections.js';
 
 // Phase E: mesh_status reports each session's model, its source and the
 // thinking level — copied from the daemon's derived session fields; the full

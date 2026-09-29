@@ -195,8 +195,6 @@ export type AuthOkWirePayload = {
     machineNickname: string | null
     seqscribeFleetSecret?: string
     seqscribeFleetSecretVersion?: number
-    /** Beacon board seed for cold start (advisory, may be absent). */
-    beaconSeed?: { reports: unknown[]; truncated: number }
     limits: AuthOkPlanLimits
 }
 
@@ -251,12 +249,6 @@ export type DaemonErrorWirePayload = {
     detail?: unknown
 }
 
-// ─── Beacon (seqscribe vector board, design §7.1) ──────────────────────────
-
-export type BeaconVectorsWirePayload =
-    | { op: 'put'; report: unknown }
-    | { op: 'get'; topics: string[]; requestId: string }
-
 // ─── P2P signaling (dashboard ↔ daemon through the server) ─────────────────
 
 export const P2P_SIGNAL_TYPES = ['p2p_ready', 'p2p_offer', 'p2p_answer', 'p2p_ice'] as const
@@ -308,7 +300,6 @@ export const DAEMON_TO_SERVER_TYPES = [
     'command_result',
     'error',
     'agent_event',
-    'beacon_vectors',
     'daemon_mesh_command',
     'p2p_offer',
     'p2p_ice',
@@ -324,7 +315,6 @@ export type CommandResultMsg = Envelope<'command_result', CommandResultWirePaylo
 export type DaemonErrorMsg = Envelope<'error', DaemonErrorWirePayload>
 /** Agent-level event forwarded verbatim to the `agent:status` webhook (throttled server-side). Dynamic by design. */
 export type AgentEventMsg = Envelope<'agent_event', CommandPayload>
-export type BeaconVectorsMsg = Envelope<'beacon_vectors', BeaconVectorsWirePayload>
 export type DaemonP2POfferMsg = Envelope<'p2p_offer', P2POfferWirePayload>
 export type DaemonP2PIceMsg = Envelope<'p2p_ice', P2PIceWirePayload>
 /**
@@ -349,7 +339,6 @@ export type DaemonToServerMsg =
     | CommandResultMsg
     | DaemonErrorMsg
     | AgentEventMsg
-    | BeaconVectorsMsg
     | DaemonMeshCommandMsg
     | DaemonP2POfferMsg
     | DaemonP2PIceMsg
@@ -398,7 +387,6 @@ export const SERVER_TO_DAEMON_CONTROL_TYPES = [
     'command',
     'agent_command',
     'resolve_action',
-    'beacon_vectors_result',
     'daemon_mesh_result',
     'p2p_ready',
     'p2p_offer',
@@ -428,15 +416,6 @@ export type ServerAgentCommandMsg = Envelope<'agent_command', { action: string }
 export type ServerResolveActionMsg = Envelope<'resolve_action', CommandPayload> & ServerRelayFields
 export type ServerP2PSignalMsg = Envelope<P2PSignalType, RelayedP2PSignalWirePayload> & ServerRelayFields
 export type ServerMeshP2PSignalMsg = Envelope<MeshP2PSignalType, MeshP2PSignalWirePayload> & ServerRelayFields
-/** Reply to a `beacon_vectors` GET, correlated by `requestId` (top-level, no payload). A PUT gets no reply. */
-export type BeaconVectorsResultMsg = {
-    type: 'beacon_vectors_result'
-    requestId: string
-    success: boolean
-    reports?: unknown[]
-    truncated?: number
-    error?: string
-}
 /** Correlated ack/nack of a `daemon_mesh_command` (top-level, no payload). */
 export type DaemonMeshResultMsg = {
     type: 'daemon_mesh_result'
@@ -457,7 +436,6 @@ export type ServerToDaemonControlMsg =
     | ServerCommandMsg
     | ServerAgentCommandMsg
     | ServerResolveActionMsg
-    | BeaconVectorsResultMsg
     | DaemonMeshResultMsg
     | ServerP2PSignalMsg
     | ServerMeshP2PSignalMsg
@@ -491,7 +469,7 @@ export function isServerDirectCommandMsg(msg: ServerToDaemonMsg): msg is ServerD
 }
 
 /** Members of the control set that carry a `payload` object. */
-export type ServerToDaemonPayloadType = Exclude<ServerToDaemonControlMsg, BeaconVectorsResultMsg | DaemonMeshResultMsg>['type']
+export type ServerToDaemonPayloadType = Exclude<ServerToDaemonControlMsg, DaemonMeshResultMsg>['type']
 export type ServerToDaemonPayloadOf<T extends ServerToDaemonPayloadType> = Extract<ServerToDaemonControlMsg, { type: T }>['payload']
 
 /** Command types a daemon must never receive as a direct command: they are daemon→server frames or reserved envelope words. */
@@ -504,7 +482,7 @@ export function isDaemonDirectCommandType(value: unknown): value is DaemonDirect
 /**
  * Parse boundary for the daemon: is `raw` a frame this link accepts from the server?
  * Control members are checked for their discriminant and envelope shape; the
- * two payload-less replies need their `requestId`; any other well-formed
+ * payload-less `daemon_mesh_result` reply needs its `requestId`; any other well-formed
  * command name becomes a `ServerDirectCommandMsg`.
  */
 export function decodeServerToDaemon(raw: unknown): ServerToDaemonMsg | null {
@@ -513,18 +491,9 @@ export function decodeServerToDaemon(raw: unknown): ServerToDaemonMsg | null {
         ...readEnvelopeFields(raw),
         ...(isNonEmptyString(raw.source) ? { source: raw.source } : {}),
     }
-    if (raw.type === 'beacon_vectors_result' || raw.type === 'daemon_mesh_result') {
+    if (raw.type === 'daemon_mesh_result') {
         if (!isNonEmptyString(raw.requestId)) return null
         const base = { requestId: raw.requestId, success: raw.success === true }
-        if (raw.type === 'beacon_vectors_result') {
-            return {
-                type: 'beacon_vectors_result',
-                ...base,
-                ...(Array.isArray(raw.reports) ? { reports: raw.reports } : {}),
-                ...(typeof raw.truncated === 'number' ? { truncated: raw.truncated } : {}),
-                ...(typeof raw.error === 'string' ? { error: raw.error } : {}),
-            }
-        }
         return {
             type: 'daemon_mesh_result',
             ...base,

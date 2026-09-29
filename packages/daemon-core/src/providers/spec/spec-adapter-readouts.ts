@@ -1,7 +1,6 @@
 /**
- * Read-only projections of the spec-path adapter: the two debug bundles
- * (getDebugSnapshot for spec_debug / the chat debug bundle, getDebugState for
- * the dev CLI debugger) and the PTY screen scrapes (assistant bubbles, codex
+ * Read-only projections of the spec-path adapter: the debug bundle
+ * (getDebugSnapshot) and the PTY screen scrapes (assistant bubbles, codex
  * session id). Split out of cli-adapter.ts (file-size gate). Pure functions of
  * the values the adapter hands in — nothing here mutates adapter state.
  */
@@ -12,7 +11,7 @@ import type { InteractivePrompt } from '../types/interactive-prompt.js';
 import { extractAntigravityScreenAssistantMessages } from './antigravity-screen-messages.js';
 import { stripAnsi } from './provider-failure-classifier.js';
 
-/** The adapter values both debug bundles report. */
+/** The adapter values the debug bundle reports. */
 export interface SpecDebugView {
     cliType: string;
     cliName: string;
@@ -31,7 +30,11 @@ export interface SpecDebugView {
     messages: unknown[];
 }
 
-/** spec_debug / chat-debug-bundle shape (see web-core spec-debug-normalize.ts). */
+/**
+ * The one debug bundle: spec_debug, the chat debug bundle (web-core
+ * spec-debug-normalize.ts) and the dev CLI debugger (dev-cli-debug.ts,
+ * web-devconsole) all read this shape.
+ */
 export function buildSpecDebugSnapshot(v: SpecDebugView, driver: ISpecDriver): Record<string, unknown> {
     let screen = '';
     let sections: Record<string, string> | undefined;
@@ -43,14 +46,18 @@ export function buildSpecDebugSnapshot(v: SpecDebugView, driver: ISpecDriver): R
     } catch { /* best-effort */ }
     return {
         cliType: v.cliType,
+        type: v.cliType,
         spec_id: v.specId,
         current_state: v.latestState,
         current_modal: v.latestModal,
+        activeModal: v.latestModal ?? null,
         activeInteractivePrompt: v.activeInteractivePrompt,
         exited: v.exited,
         exitCode: v.exitCode,
         providerFailureKind: v.providerFailureKind,
+        ready: v.spawned,
         screen,
+        screenText: screen,
         sections,
         stateHistory: driver.getStateHistory(),
         idleHoldPending: driver.hasIdleHoldPending(),
@@ -76,44 +83,6 @@ export function buildSpecDebugSnapshot(v: SpecDebugView, driver: ISpecDriver): R
         workingDir: v.workingDir,
         spawnedAtMs: v.spawnedAtMs,
         providerSessionId: v.providerSessionId ?? null,
-        messages: v.messages,
-        committedMessages: v.messages,
-    };
-}
-
-/** dev-cli-debug.ts CliDebugState shape. */
-export function buildSpecDebugState(v: SpecDebugView, driver: ISpecDriver): Record<string, any> {
-    const screen = driver.getScreen?.() ?? '';
-    return {
-        type: v.cliType,
-        name: v.cliName,
-        status: v.status,
-        rawStatus: v.status,
-        projectedStatus: v.status,
-        ready: v.spawned,
-        // Legacy snapshot-style fields for panels that read getDebugSnapshot shape
-        spec_id: v.specId,
-        current_state: v.latestState ?? null,
-        current_modal: v.latestModal ?? null,
-        // Interactive-prompt hold (waiting_choice path) — surfaced so the
-        // spec-verification workflow can observe wire/TUI prompt capture
-        // per session.
-        activeInteractivePrompt: v.activeInteractivePrompt ?? null,
-        exited: v.exited,
-        idleHoldPending: driver.hasIdleHoldPending?.() ?? false,
-        lastBusyAt: driver.getLastBusyAt?.() ?? 0,
-        screen,
-        screenText: screen,
-        workingDir: v.workingDir,
-        spawnedAtMs: v.spawnedAtMs,
-        providerSessionId: v.providerSessionId ?? null,
-        // Same frame as `screen` above — see FsmDriver.getSections.
-        sections: driver.getSections?.(screen) ?? null,
-        stateHistory: driver.getStateHistory(),
-        specPath: driver.getSpecPath?.() ?? null,
-        fsm: driver.getFsmDebug?.() ?? null,
-        fsmHistory: driver.getFsmSnapshotHistory?.() ?? null,
-        eventTimeline: driver.getEventTimeline?.() ?? null,
         messages: v.messages,
         committedMessages: v.messages,
     };

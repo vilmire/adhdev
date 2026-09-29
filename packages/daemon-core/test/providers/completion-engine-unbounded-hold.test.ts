@@ -65,8 +65,6 @@ function makeReader(overrides: ReaderOverrides = {}): CompletionSignalReader {
         visibleStatus: () => value('visibleStatus', 'idle'),
         busyEpoch: () => value('busyEpoch', 3),
         lastOutputAt: () => value('lastOutputAt', T0 - 100),
-        adapterWaitingForResponse: () => value('adapterWaitingForResponse', false),
-        adapterTurnScopeActive: () => value('adapterTurnScopeActive', false),
         adapterAnyPending: () => value('adapterAnyPending', false),
         partialResponsePending: () => value('partialResponsePending', false),
         parsedStatus: () => value('parsedStatus', { ok: true, status: 'idle', modalActive: false, messages: [] }),
@@ -80,7 +78,6 @@ function makeReader(overrides: ReaderOverrides = {}): CompletionSignalReader {
         transcriptAgeMs: () => value('transcriptAgeMs', undefined),
         inApprovalResumeGrace: () => value('inApprovalResumeGrace', false),
         hasApprovalResolutionEvidence: () => value('hasApprovalResolutionEvidence', true),
-        screenTailShowsApprovalPrompt: () => value('screenTailShowsApprovalPrompt', false),
         holdClassPtyStillActive: () => value('holdClassPtyStillActive', false),
         ownsExternalHistory: () => value('ownsExternalHistory', false),
         authorityTiming: () => value('authorityTiming', 'floor'),
@@ -177,11 +174,11 @@ describe('INFINITE-GENERATING: no completion hold may be unbounded', () => {
         for (const { name, timing } of PROVIDERS) {
             const r = runUntilRelease(timing, {
                 ownsExternalHistory: true,
-                adapterTurnScopeActive: true,
+                adapterAnyPending: true,
                 finalAssistantEvidence: MISSING_EXTERNAL,
                 allowMissingAssistantTimeout: true,
             });
-            expect(r.reason, `${name} wedged on adapter_turn_scope_active`).not.toBe('never_released');
+            expect(r.reason, `${name} wedged on adapter_pending_response`).not.toBe('never_released');
         }
     });
 });

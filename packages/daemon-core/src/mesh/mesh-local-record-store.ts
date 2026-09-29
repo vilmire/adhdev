@@ -24,7 +24,7 @@ import type { Database as DatabaseHandle, Statement } from 'better-sqlite3';
 import type { MeshLedgerEntry, MeshLedgerKind } from './mesh-ledger.js';
 
 /** One row to insert. `payload` is stored verbatim as JSON (nested values allowed). */
-export interface LocalRecordInsert {
+interface LocalRecordInsert {
     eventId: string;
     meshId: string;
     kind: string;
@@ -37,7 +37,7 @@ export interface LocalRecordInsert {
 }
 
 /** Filter for {@link LocalRecordStore.query}. Every filter is applied in SQL before `tail`. */
-export interface LocalRecordQuery {
+interface LocalRecordQuery {
     kinds?: readonly string[];
     /** Inclusive lower bound, epoch ms. */
     sinceMs?: number;

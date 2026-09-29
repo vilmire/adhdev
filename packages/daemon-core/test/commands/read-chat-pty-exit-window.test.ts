@@ -15,6 +15,9 @@ const mocks = vi.hoisted(() => ({ readProviderChatHistory: vi.fn() }))
 vi.mock('../../src/config/chat-history.js', async (importOriginal) => ({
   ...(await importOriginal<any>()),
   ChatHistoryWriter: class { appendNewMessages() {} },
+}))
+vi.mock('../../src/config/provider-native-history.js', async (importOriginal) => ({
+  ...(await importOriginal<any>()),
   readProviderChatHistory: mocks.readProviderChatHistory,
   isNativeSourceCanonicalHistory: (h: any) => !!h && h.mode !== 'disabled' && h.mode !== 'materialized-mirror',
 }))

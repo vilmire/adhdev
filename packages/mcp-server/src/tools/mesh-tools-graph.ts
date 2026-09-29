@@ -59,20 +59,17 @@
  * back out into `code` rather than being flattened into prose.
  */
 
-import {
-    requestUsesGraphV2,
-    MESH_NODE_PATCH_KEYS,
-    readString,
-    recordMeshCoordinatorToolCall,
-    refreshMeshFromDaemon,
-} from './mesh-tools-internal.js';
-import type { MeshContext, MeshGraphGatePlanSpec, MeshTaskGraphEntrySpec } from './mesh-tools-internal.js';
+import { recordMeshCoordinatorToolCall, refreshMeshFromDaemon } from './mesh-tools-internal.js';
+import { requestUsesGraphV2, MESH_NODE_PATCH_KEYS } from '@adhdev/daemon-core';
+import type { MeshContext } from './mesh-tools-internal.js';
+import type { MeshGraphGatePlanSpec, MeshTaskGraphEntrySpec } from '@adhdev/daemon-core';
 // C-W9c: the whole graph-gate/patch/view core now runs in the daemon that owns
 // the graph rows — claim/release/abandon/patch/view and the gate's provenance
 // audit record and post-materialization queue nudge all happen there in one
 // round trip. This tool layer is now a thin client + response-shape mapper.
 import { graphGateAbandon, graphGateClaim, graphGateRelease, graphNodePatch, graphViewQuery } from '../ipc/turn-commands.js';
 import { unwrapCommandPayload } from './mesh-session-helpers.js';
+import { readString } from '@adhdev/mesh-shared';
 
 // ── batch v2 request normalization (design :566-592) ─────────────────────────
 //
@@ -118,7 +115,7 @@ export interface GraphWorkspaceDeclarationShape {
     cleanupOnGraphFailure?: boolean;
 }
 
-export interface GraphPlanShape {
+interface GraphPlanShape {
     tasks: Array<MeshTaskGraphEntrySpec & Record<string, unknown>>;
     gates: MeshGraphGatePlanSpec[];
     workspaces: ReturnType<typeof normalizeWorkspaceDeclarations>;

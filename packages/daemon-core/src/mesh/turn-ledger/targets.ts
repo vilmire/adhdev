@@ -41,7 +41,7 @@ export interface ProbeTarget {
     forced: boolean;
 }
 
-export interface SelectProbeTargetsInput {
+interface SelectProbeTargetsInput {
     store: TurnStore;
     selfDaemonId: string;
     nowMs: number;

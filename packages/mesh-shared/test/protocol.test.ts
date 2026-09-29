@@ -115,6 +115,8 @@ describe('decodeDaemonToServer', () => {
             expect(decodeDaemonToServer({ type, timestamp: 1 })).toBeNull()
         }
         expect(decodeDaemonToServer({ type: 'log', payload: {} })).toBeNull()
+        // Retired (seqscribe Beacon removed): an older daemon's frame is not a member.
+        expect(decodeDaemonToServer({ type: 'beacon_vectors', payload: { op: 'put', report: {} } })).toBeNull()
         expect(decodeDaemonToServer({ type: 'auth', payload: {} })).toBeNull()
         expect(decodeDaemonToServer('nope')).toBeNull()
     })
@@ -139,20 +141,17 @@ describe('decodeServerToDaemon', () => {
         expect(direct && isServerDirectCommandMsg(direct)).toBe(true)
         expect(direct).toEqual({ type: 'read_chat', payload: { targetSessionId: 's' }, id: 'msg_1', source: 'api', timestamp: 2 })
         for (const type of SERVER_TO_DAEMON_CONTROL_TYPES) {
-            if (type === 'beacon_vectors_result' || type === 'daemon_mesh_result') continue
+            if (type === 'daemon_mesh_result') continue
             const decoded = decodeServerToDaemon({ type, payload: {} })
             expect(decoded?.type).toBe(type)
             expect(decoded && isServerDirectCommandMsg(decoded)).toBe(false)
         }
     })
 
-    it('requires a requestId on the two payload-less replies', () => {
+    it('requires a requestId on the payload-less daemon_mesh_result reply', () => {
         expect(decodeServerToDaemon({ type: 'daemon_mesh_result', success: false, error: 'x' })).toBeNull()
         expect(decodeServerToDaemon({ type: 'daemon_mesh_result', requestId: 'r', success: true, result: { ok: 1 } })).toEqual({
             type: 'daemon_mesh_result', requestId: 'r', success: true, result: { ok: 1 },
-        })
-        expect(decodeServerToDaemon({ type: 'beacon_vectors_result', requestId: 'b', success: true, reports: [], truncated: 0 })).toEqual({
-            type: 'beacon_vectors_result', requestId: 'b', success: true, reports: [], truncated: 0,
         })
     })
 

@@ -47,7 +47,7 @@ import {
     validateChangeImpactConfig,
     type ChangeImpactConfig,
 } from '../git/change-impact-config.js';
-import { listMagiKindPanelsReadOnly } from '../config/mesh-config.js';
+import { listMagiKindPanelsReadOnly } from '../config/mesh-config-routing.js';
 import type { MagiKindPanelMap } from '@adhdev/mesh-shared';
 import type { CLIInfo } from '../detection/cli-detector.js';
 
@@ -71,7 +71,7 @@ const CANDIDATE_STALE_INPUTS = [
     'requirements.txt',
 ];
 
-export interface MeshInitConfigFileResult {
+interface MeshInitConfigFileResult {
     path: string;
     relativePath: string;
     written: boolean;
@@ -167,7 +167,7 @@ export function suggestNodeProviderPriority(detected: CLIInfo[]): {
     };
 }
 
-export interface RunMeshInitOptions {
+interface RunMeshInitOptions {
     /** When true, persist suggested configs to disk. Defaults to dry-run (false). */
     write?: boolean;
     /** When true, overwrite an existing config file. Defaults to false (never clobber). */
@@ -180,7 +180,7 @@ export interface RunMeshInitOptions {
  * This is READ-ONLY echo — every field is what is on disk / machine-local right now,
  * never a suggestion. Absent domains are reported as `undefined` config.
  */
-export interface MeshInitCurrentConfigEcho {
+interface MeshInitCurrentConfigEcho {
     /** Currently-saved `.adhdev/refine.json` (repo-committed) — undefined when absent/invalid. */
     refine?: RepoMeshRefineConfig;
     /** Currently-saved `.adhdev/worktree_bootstrap.json` (repo-committed). */

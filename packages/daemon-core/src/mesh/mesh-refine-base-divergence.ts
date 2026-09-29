@@ -38,23 +38,15 @@
  * one `merge-base --is-ancestor` per touched scope. No fetch, no checkout, no
  * network. See `refine-accept-base-divergence.test.ts` for the latency assertion.
  */
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { resolve as pathResolve } from 'node:path';
 import { existsSync } from 'node:fs';
-import { resolveWin32Executable } from '../cli-adapters/resolve-executable.js';
 import { analyzeMeshRefineNodeChangeArea } from './mesh-refine-batch.js';
-
-const execFileAsync = promisify(execFile);
-
-// Same win32 resolution rationale as mesh-refine-batch.ts: a bare `git` handed to
-// execFile is resolved by libuv's spawn search (no PATHEXT), which misses git.cmd.
-const GIT = process.platform === 'win32' ? resolveWin32Executable('git') : 'git';
+import { execGitStdout } from '../git/git-executor.js';
 
 /** Per-scope verdict. `unknown` is the fail-closed bucket — never conflated with `clear`. */
-export type RefineBaseDivergenceVerdict = 'clear' | 'diverged' | 'unknown';
+type RefineBaseDivergenceVerdict = 'clear' | 'diverged' | 'unknown';
 
-export type RefineBaseDivergenceScope = {
+type RefineBaseDivergenceScope = {
     /** '.' for the root repo, otherwise the submodule path as declared in .gitmodules. */
     path: string;
     verdict: RefineBaseDivergenceVerdict;
@@ -66,7 +58,7 @@ export type RefineBaseDivergenceScope = {
     error?: string;
 };
 
-export type RefineBaseDivergenceAssessment = {
+type RefineBaseDivergenceAssessment = {
     /**
      * Overall verdict across every checked scope:
      *   diverged — at least one scope diverged
@@ -84,13 +76,7 @@ export type RefineBaseDivergenceAssessment = {
 
 /** Run a git command, returning trimmed stdout; throws on non-zero exit. */
 async function git(cwd: string, args: string[]): Promise<string> {
-    const { stdout } = await execFileAsync(GIT, args, {
-        cwd,
-        encoding: 'utf8',
-        timeout: 15_000,
-        windowsHide: true,
-    });
-    return String(stdout || '').trim();
+    return (await execGitStdout(cwd, args, { timeoutMs: 15_000 })).trim();
 }
 
 /** `merge-base --is-ancestor` as a boolean; a non-zero exit means "not an ancestor". */

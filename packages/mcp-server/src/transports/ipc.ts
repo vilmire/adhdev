@@ -378,7 +378,7 @@ function getOrCreateConnection(
   return conn;
 }
 
-export interface IpcTransportOptions {
+interface IpcTransportOptions {
   port?: number;
   path?: string;
 }

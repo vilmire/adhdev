@@ -35,9 +35,7 @@ function makeInstance(opts: {
   instance.instanceId = 'sess-trailing-tool'
 
   instance.adapter = {
-    isWaitingForResponse: opts.adapterPending === true,
-    currentTurnScope: null,
-    isProcessing: () => false,
+    isProcessing: () => opts.adapterPending === true,
     getPartialResponse: () => '',
   }
   instance.isModalParked = () => opts.modalParked === true

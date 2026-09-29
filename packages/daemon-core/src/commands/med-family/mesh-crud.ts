@@ -194,7 +194,8 @@ const meshRecordHandlers: Record<string, MedFamilyHandler> = {
         if (!meshId) return { success: false, error: 'meshId required' };
         if (!hostDaemonId && !hostNodeId) return { success: false, error: 'hostDaemonId or hostNodeId required' };
         try {
-            const { setMeshHostPin, getMesh } = await import('../../config/mesh-config.js');
+            const { getMesh } = await import('../../config/mesh-config.js');
+            const { setMeshHostPin } = await import('../../config/mesh-config-host-pairing.js');
             const result = setMeshHostPin(meshId, {
                 ...(hostDaemonId ? { hostDaemonId } : {}),
                 ...(hostNodeId ? { hostNodeId } : {}),
@@ -558,7 +559,7 @@ const meshRecordHandlers: Record<string, MedFamilyHandler> = {
     magi_kind_panel_list: async (_ctx: MedFamilyContext, args: any) => {
         const requestedMeshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
         try {
-            const { listMagiKindPanels, resolveScopedMeshId } = await import('../../config/mesh-config.js');
+            const { listMagiKindPanels, resolveScopedMeshId } = await import('../../config/mesh-config-routing.js');
             // Report WHICH mesh the panels were read from. The old flat
             // scope: 'machine_local' hid that these are per-mesh bindings and was the
             // reason the scope read as global.
@@ -586,7 +587,7 @@ const meshRecordHandlers: Record<string, MedFamilyHandler> = {
         if (!kind) return { success: false, error: 'invalid_magi_kind_panel: task_kind is required' };
         const requestedMeshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
         try {
-            const { setMagiKindPanel, resolveScopedMeshId, collectIgnoredMagiSlotFields } = await import('../../config/mesh-config.js');
+            const { setMagiKindPanel, resolveScopedMeshId, collectIgnoredMagiSlotFields } = await import('../../config/mesh-config-routing.js');
             // normalizeMagiTaskKindKey + normalizeMagiSlots (inside setMagiKindPanel)
             // validate the kind and each slot (provider required; model optional;
             // replica counts clamped; nodeId must belong to the target mesh).
@@ -617,7 +618,7 @@ const meshRecordHandlers: Record<string, MedFamilyHandler> = {
         if (!kind) return { success: false, error: 'invalid_magi_kind_panel: task_kind is required' };
         const requestedMeshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
         try {
-            const { removeMagiKindPanel, resolveScopedMeshId } = await import('../../config/mesh-config.js');
+            const { removeMagiKindPanel, resolveScopedMeshId } = await import('../../config/mesh-config-routing.js');
             const removed = removeMagiKindPanel(kind, requestedMeshId || undefined);
             const meshId = requestedMeshId || resolveScopedMeshId();
             return { success: true, removed, meshId: meshId ?? null };
@@ -636,7 +637,7 @@ const meshRecordHandlers: Record<string, MedFamilyHandler> = {
     difficulty_brains_get: async (_ctx: MedFamilyContext, args: any) => {
         const requestedMeshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
         try {
-            const { getDifficultyBrains, resolveScopedMeshId } = await import('../../config/mesh-config.js');
+            const { getDifficultyBrains, resolveScopedMeshId } = await import('../../config/mesh-config-routing.js');
             const meshId = requestedMeshId || resolveScopedMeshId();
             return {
                 success: true,
@@ -659,7 +660,7 @@ const meshRecordHandlers: Record<string, MedFamilyHandler> = {
     difficulty_brains_set: async (_ctx: MedFamilyContext, args: any) => {
         const requestedMeshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
         try {
-            const { setDifficultyBrains, resolveScopedMeshId } = await import('../../config/mesh-config.js');
+            const { setDifficultyBrains, resolveScopedMeshId } = await import('../../config/mesh-config-routing.js');
             // normalizeDifficultyBrainMap (inside setDifficultyBrains) drops unknown
             // keys and empty slots. An empty result clears this mesh's override →
             // defaults, leaving every other mesh untouched.
@@ -681,7 +682,7 @@ const meshRecordHandlers: Record<string, MedFamilyHandler> = {
     mesh_quota_routing_get: async (_ctx: MedFamilyContext, args: any) => {
         const requestedMeshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
         try {
-            const { getMeshQuotaRouting, resolveScopedMeshId } = await import('../../config/mesh-config.js');
+            const { getMeshQuotaRouting, resolveScopedMeshId } = await import('../../config/mesh-config-routing.js');
             const overrides = getMeshQuotaRouting(requestedMeshId || undefined);
             const meshId = requestedMeshId || resolveScopedMeshId();
             return {
@@ -707,7 +708,8 @@ const meshRecordHandlers: Record<string, MedFamilyHandler> = {
     mesh_quota_routing_set: async (ctx: MedFamilyContext, args: any) => {
         const requestedMeshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
         try {
-            const { setMeshQuotaRouting, getMesh, resolveScopedMeshId } = await import('../../config/mesh-config.js');
+            const { getMesh } = await import('../../config/mesh-config.js');
+            const { setMeshQuotaRouting, resolveScopedMeshId } = await import('../../config/mesh-config-routing.js');
             // setMeshQuotaRouting validates STRICTLY (unknown field / non-number /
             // percent outside 0..100 / negative duration → invalid_quota_routing)
             // and replaces the sub-policy wholesale; an all-default or empty input

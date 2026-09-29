@@ -1,10 +1,10 @@
 import { LOG } from '../logging/logger.js';
-import { readNonEmptyString } from './mesh-events-utils.js';
 import { notifyMeshCoordinator } from './turn-ledger/deliver.js';
 import { traceMeshEventDrop } from '../shared/mesh-event-trace.js';
 import { getMachineId } from '../config/config.js';
 import { SPAWN_CAP_PARK_REASON } from './mesh-autolaunch-spawn-cap.js';
 import type { MeshWorkQueueEntry, MeshTaskParking } from './mesh-work-queue.js';
+import { readText } from '@adhdev/mesh-shared';
 
 // ─── target-pin-cleared counter (content-free; moved from the retired legacy
 // reducer module's metrics, C-W8) ───────────────────────────────────────────
@@ -110,7 +110,7 @@ export const PARK_RETENTION_EXPIRED_REASON = 'parked_task_retention_expired';
 
 /** True when the entry is currently parked (awaiting an explicit coordinator decision). */
 export function taskIsParked(task: Pick<MeshWorkQueueEntry, 'parked'> | null | undefined): boolean {
-    return !!readNonEmptyString(task?.parked?.reason);
+    return !!readText(task?.parked?.reason);
 }
 
 /** Build the immutable parking record stamped onto a row at park time. */
@@ -126,14 +126,14 @@ export function buildParkingRecord(
         // (that is what keeps the row unclaimable), but a later re-target
         // overwrites it — this copy is what still answers "who was this delta
         // written for?" after the coordinator has moved it.
-        ...(readNonEmptyString(task.targetSessionId) ? { targetSessionId: task.targetSessionId } : {}),
-        ...(readNonEmptyString(task.targetNodeId) ? { targetNodeId: task.targetNodeId } : {}),
+        ...(readText(task.targetSessionId) ? { targetSessionId: task.targetSessionId } : {}),
+        ...(readText(task.targetNodeId) ? { targetNodeId: task.targetNodeId } : {}),
     };
 }
 
 /** Age of a parked row in ms, or null when it is not parked / has no parse-able stamp. */
 export function parkedAgeMs(task: Pick<MeshWorkQueueEntry, 'parked'>, nowMs: number = Date.now()): number | null {
-    const parkedAt = readNonEmptyString(task.parked?.parkedAt);
+    const parkedAt = readText(task.parked?.parkedAt);
     if (!parkedAt) return null;
     const parsed = Date.parse(parkedAt);
     return Number.isFinite(parsed) ? nowMs - parsed : null;
@@ -159,7 +159,6 @@ export function parkedTaskRetentionExpired(
     return age !== null && age >= retentionMs;
 }
 
-
 /**
  * Tell the coordinator that a parked task was dropped by the retention sweep.
  *
@@ -178,7 +177,7 @@ export function notifyCoordinatorOfParkedTaskDropped(
     task: Pick<MeshWorkQueueEntry, 'id' | 'parked' | 'targetNodeId' | 'sourceCoordinatorSessionId'>,
 ): void {
     const taskId = task.id;
-    const addressee = readNonEmptyString(task.parked?.targetSessionId);
+    const addressee = readText(task.parked?.targetSessionId);
     const hours = Math.round(PARKED_TASK_RETENTION_MS / 3_600_000);
     // AUTOLAUNCH-SPAWN-CAP (P3): the park cause differs, so the drop notice must too —
     // the pin wording ("addressed to session X") is false for a spawn-cap park.
@@ -190,10 +189,10 @@ export function notifyCoordinatorOfParkedTaskDropped(
         + `It was held — claimable by nobody — waiting for you to re-target, rewrite, or cancel it. That never happened, so it is now marked FAILED (${PARK_RETENTION_EXPIRED_REASON}) and any dependent tasks have been unblocked.\n`
         + `The instruction it carried was never delivered to anyone. If it still matters, re-enqueue it (mesh_enqueue_task) against a live session; the failed row remains in the queue as the audit record. `
         + `To avoid this next time, check parkedTasks in mesh_view_queue — parked rows are surfaced there from the moment they park.`;
-    const nodeLabel = readNonEmptyString(task.targetNodeId) || readNonEmptyString(task.parked?.targetNodeId) || meshId;
+    const nodeLabel = readText(task.targetNodeId) || readText(task.parked?.targetNodeId) || meshId;
     try {
-        const targetCoordinatorDaemonId = readNonEmptyString(getMachineId());
-        const targetCoordinatorSessionId = readNonEmptyString(task.sourceCoordinatorSessionId);
+        const targetCoordinatorDaemonId = readText(getMachineId());
+        const targetCoordinatorSessionId = readText(task.sourceCoordinatorSessionId);
         notifyMeshCoordinator({
             event: 'mesh:dispatch_blocked',
             meshId,
@@ -250,8 +249,8 @@ export function parkExpiredTargetPin(
         noteTargetPinCleared(PARK_REASON_PIN_EXPIRED);
         traceMeshEventDrop('target_session_pin_expired', {
             taskId: task.id,
-            sessionId: readNonEmptyString(task.targetSessionId),
-            nodeId: readNonEmptyString(task.targetNodeId),
+            sessionId: readText(task.targetSessionId),
+            nodeId: readText(task.targetNodeId),
             meshId,
             event: 'agent:ready',
         }, `unproductive ${Math.round((verdict.ageMs ?? 0) / 1000)}s ≥ ttl ${Math.round(ttlMs / 1000)}s → task PARKED (held for the coordinator, NOT re-homed)`);

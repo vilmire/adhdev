@@ -106,7 +106,7 @@ export type TranscriptConsumerFallbackReason =
     | 'ipc_unavailable'
     | 'stats_error';
 
-export interface TranscriptConsumerRosterEntry {
+interface TranscriptConsumerRosterEntry {
     /** Where the current (pre-cutover) read lives — file:line, for traceability. */
     readonly currentLocation: string;
     /** One-line description of what this consumer needs and why it is lossless. */

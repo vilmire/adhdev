@@ -22,11 +22,12 @@ import { clearClaimDeferralForNode, noteClaimDeferredForNode, shouldRedriveDefer
 import { waitForRemoteSessionReady } from './mesh-remote-ready-wait.js';
 import { resolveProviderMaxParallel, resolveMaxParallelTasks, resolveMaxReadonlyParallelTasks, resolveQuotaRoutingPolicy, resolveNodeMaxConcurrentSessions } from '../repo-mesh-types.js';
 import type { RepoMeshQuotaRoutingPolicy } from '../repo-mesh-types.js';
-import { meshNodeIdMatches, withStatusProbeMarker, type NodeCapabilitySlot } from '@adhdev/mesh-shared';
+import { meshNodeIdMatches, withStatusProbeMarker, type NodeCapabilitySlot, readText } from '@adhdev/mesh-shared';
 import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
 import { resolveDaemonSiblingNodeIds, effectiveSlotCap } from './mesh-daemon-slot-axis.js';
-import { quotaSpreadBonusByProvider, recordLastQuotaRanking, quotaFactsContextForLiveRouting, ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON, type ProviderQuotaGateBlock, type QuotaFactsContext } from './mesh-quota-routing.js';
-import { readNonEmptyString } from './mesh-events-utils.js';
+import { ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON, type ProviderQuotaGateBlock } from './mesh-quota-routing.js';
+import { quotaSpreadBonusByProvider, recordLastQuotaRanking } from './mesh-quota-ranking-records.js';
+import { quotaFactsContextForLiveRouting, type QuotaFactsContext } from './mesh-quota-sources.js';
 import { readMeshNodeDaemonId, isMeshNodeFreshEnoughToLaunch } from './mesh-node-identity.js';
 import { isModelCompatibleWithProvider } from './model-provider-compat.js';
 import { classifyMeshLaunchAxisSource } from '../sessions/launch-record.js';
@@ -64,9 +65,6 @@ const autoLaunchTaskInProgress = new Set<string>();
 const autoLaunchCooldownUntil = new Map<string, number>();
 const AUTO_LAUNCH_COOLDOWN_MS = 5_000;
 
-
-
-
 // Test hooks: reset / seed the await-claim backoff state between cases.
 export function __resetAutoLaunchAwaitClaimBackoffForTests(): void {
     __clearAwaitClaimBackoffForTests();
@@ -86,7 +84,6 @@ function sweepExpiredCooldowns(): void {
         if (now >= until) autoLaunchCooldownUntil.delete(key);
     }
 }
-
 
 /**
  * Resolve how a pending queue task should be auto-launched onto a node.
@@ -379,6 +376,733 @@ async function resolveUsableProvider(
  *  (dynamic provider priority by quota). */
 export const __resolveUsableProviderForTests = resolveUsableProvider;
 
+/**
+ * AUTOLAUNCH-CLAIM-CHURN: prune await-claim backoff state for tasks of this mesh that are no
+ * longer pending (claimed/completed/cancelled) so the map cannot grow without bound.
+ */
+function pruneAwaitClaimBackoff(meshId: string, pending: ReadonlyArray<{ id: string }>): void {
+    const pendingIds = new Set(pending.map(t => t.id));
+    const prefix = `${meshId}::`;
+    for (const key of [...autoLaunchAwaitClaimBackoff.keys()]) {
+        if (key.startsWith(prefix) && !pendingIds.has(key.slice(prefix.length))) autoLaunchAwaitClaimBackoff.delete(key);
+    }
+}
+
+type QueueTask = ReturnType<typeof getQueue>[number];
+type AutoLaunchSkipMarker = (nodeIdForSkip: string, reason: string, extra?: { providerType?: string }) => void;
+
+/**
+ * The await-claim step: a prior auto-launch for this task may still be on its way to
+ * claiming it. 'progress' = the claim landed (or a fallback dispatched) this pass;
+ * 'skip' = keep waiting; 'proceed' = no launch in flight, go on to a fresh launch.
+ */
+function driveAwaitClaimGuard(components: DaemonComponents, meshId: string, mesh: any, task: QueueTask): 'progress' | 'skip' | 'proceed' {
+    // Per-task await-claim guard. A prior auto-launch already spawned a session for
+    // this task and we are waiting for that session's idle→claim to land (remote
+    // claims arrive via the worker→coordinator agent:ready pull, which can lag well
+    // past the per-node cooldown). Re-launching now would spawn a duplicate orphan
+    // session that never gets work. The task leaves `pending` the instant the claim
+    // succeeds, so this guard only suppresses the in-flight window; if the launched
+    // session never reaches idle within the window, a later tick retries.
+    if (task.autoLaunch?.status === 'completed' && task.autoLaunch.sessionId) {
+        const launchedAtMs = Date.parse(task.autoLaunch.updatedAt);
+        const alSessionId = readText(task.autoLaunch.sessionId);
+        const alNodeId = readText(task.autoLaunch.nodeId);
+        const alProvider = readText(task.autoLaunch.providerType);
+        // CLOCK-LOWER-BOUND: `autoLaunch.updatedAt` is foreign; a future stamp must not
+        // suppress the re-launch forever — see isWithinForeignFreshnessWindow.
+        if (isAutoLaunchWithinAwaitClaimWindow(launchedAtMs)) {
+            // AUTOLAUNCH-DEFERRED-CLAIM: this guard's premise — "a claim is already in
+            // flight, just wait" — is FALSE when the launch's single inline claim was
+            // refused by the ff lease. Re-drive it instead of waiting out the window
+            // (rationale + bounding: mesh-claim-refusal.ts).
+            if (shouldRedriveDeferredClaim(meshId, alNodeId, alSessionId, () => isWorkspaceAutoFastForwardInFlight(readText(
+                (Array.isArray(mesh?.nodes) ? mesh.nodes.find((n: any) => meshNodeIdMatches(n, alNodeId)) : undefined)?.workspace,
+            )))) {
+                if (tryAssignQueueTask(components, meshId, alNodeId, alSessionId, alProvider, undefined, undefined, 'auto_launch')) {
+                    clearClaimDeferralForNode(meshId, alNodeId);
+                    recordAutoLaunchEvent(meshId, { phase: 'completed', taskId: task.id, reason: 'fast_forward_deferred_claim_redriven', nodeId: alNodeId, sessionId: alSessionId });
+                    LOG.info('MeshQueue', `Auto-launch re-drove the auto-fast-forward-deferred claim for task ${task.id} into session ${alSessionId} on node ${alNodeId} (mesh ${meshId})`);
+                    return 'progress';
+                }
+                // Still refused — the ledger now names the gate (recordClaimRefusal).
+                // Spend one unit of the budget; once exhausted this falls through to
+                // the ordinary await-claim window.
+                noteClaimDeferredForNode(meshId, alNodeId);
+            }
+            // Record the skip in the ledger ONLY (dedup'd). Do NOT call markAutoLaunch
+            // here: recordTaskAutoLaunch overwrites task.autoLaunch wholesale, which would
+            // erase the very `completed` record (status + sessionId + updatedAt) this guard
+            // reads on the next tick, reopening the duplicate-launch hole it closes.
+            recordAutoLaunchEvent(meshId, { phase: 'skipped', taskId: task.id, reason: 'awaiting_launched_session_claim', nodeId: alNodeId, sessionId: alSessionId });
+            return 'skip';
+        }
+        // AUTOLAUNCH-CLAIM-CHURN: the initial await-claim window expired. Rather than a blind
+        // respawn (which the local-only respawn guards can't dedup for a remote pending-claim
+        // session → ghost accumulation), re-drive the claim for the EXISTING launched session,
+        // backing off on unknown liveness and direct-dispatching after the cap. Only a
+        // 'respawn' directive falls through to a fresh launch below.
+        if (Number.isFinite(launchedAtMs) && alSessionId && alNodeId) {
+            const outcome = driveExpiredAwaitClaim(components, meshId, task, { sessionId: alSessionId, nodeId: alNodeId, providerType: alProvider }, tryAssignQueueTask);
+            if (outcome === 'claimed' || outcome === 'fallback') return 'progress'; // progress; suppress a duplicate launch
+            if (outcome === 'backoff') return 'skip';                              // window extended; no respawn
+            // outcome === 'respawn' → session provably gone; proceed to a fresh launch below.
+        }
+    }
+    return 'proceed';
+}
+
+/**
+ * Candidate-node step: the nodes this task may auto-launch on (target pin, convergence
+ * base-only rule, requiredTags), ordered by the mesh scheduling strategy. Returns null
+ * after recording the skip when no node qualifies.
+ */
+function selectAutoLaunchCandidateNodes(components: DaemonComponents, meshId: string, mesh: any, task: QueueTask): any[] | null {
+    const candidateNodes = Array.isArray(mesh?.nodes)
+        ? mesh.nodes.filter((node: any) => {
+            // Bug A: match the target pin with the shared 3-form (id / nodeId / node_id)
+            // normalizer, mirroring the remote-idle drain (meshNodeIdMatches at the
+            // getRemoteIdleSessions filter). A strict `readMeshNodeId(node) !== targetNodeId`
+            // dropped a target node whose identity arrived under a different form (a freshly
+            // mesh_clone_node'd worktree), emptying candidateNodes and mislabelling the skip.
+            if (task.targetNodeId && !meshNodeIdMatches(node, task.targetNodeId)) return false;
+            // WTDISPATCH-FANOUT: a convergence task is base-only (it merges/pushes onto
+            // base). Never auto-launch a worktree-clone session for it — that is the very
+            // fan-out the claim guard refuses, so spinning the session up would only waste
+            // a launch that can never claim. Mirrors claimNextQueueTask's convergence gate.
+            if (task.taskMode === 'convergence' && node?.isLocalWorktree === true) return false;
+            // Skip nodes that can never satisfy requiredTags regardless of which provider
+            // is selected. A node satisfies tags if at least one provider it can launch
+            // would produce matching capability tags. Enumerate providers from the node's
+            // capability slots (the single source of truth — a provider that lives only in
+            // slots, e.g. cursor-cli, is otherwise invisible to providerPriority-keyed
+            // enumeration), falling back to the legacy providerPriority.
+            if (task.requiredTags?.length) {
+                const slotProviders = resolveNodeCapabilitySlots(node, meshId).map(s => s.provider).filter(Boolean);
+                const priorities = slotProviders.length ? slotProviders : normalizeProviderPriority(node?.policy);
+                const providerCandidates = priorities.length ? priorities : [undefined as unknown as string];
+                return providerCandidates.some(p =>
+                    nodeSatisfiesRequiredTags(task.requiredTags, buildMeshNodeCapabilityTags(node, p))
+                );
+            }
+            return true;
+        })
+        : [];
+    if (!candidateNodes.length) {
+        // Bug A: distinguish the two ways the candidate set empties. A task pinned to a
+        // targetNodeId whose node is absent from the mesh (or whose id arrived under a
+        // different form) is a ROUTING miss — report it as `target_node_id_unmatched`, not
+        // the hard-coded `no_node_satisfies_required_tags`, which mislabelled a 3-form
+        // node-id mismatch as a capability failure and sent diagnosis down the wrong path.
+        // Only fall back to the tag reason when no target pin is in play, or the pin DID
+        // match a node but its tags excluded it (a genuine capability miss).
+        const targetPinUnmatched = !!task.targetNodeId
+            && !(Array.isArray(mesh?.nodes) && mesh.nodes.some((n: any) => meshNodeIdMatches(n, task.targetNodeId)));
+        // Fix (2): a `convergence` task is base-only — the candidate filter above
+        // (`taskMode === 'convergence' && node.isLocalWorktree`) deliberately drops every
+        // worktree-clone node, so candidateNodes can empty out NOT because the target is
+        // missing or tag-incapable, but because every node the task could land on is a
+        // worktree. Reporting that as `target_node_id_unmatched` / `no_node_satisfies_
+        // required_tags` mislabels the cause and sends diagnosis down the wrong path.
+        // Detect it explicitly and report the same reason mesh_send_task uses for a direct
+        // convergence dispatch onto a worktree, so both surfaces agree.
+        const convergenceOntoWorktree = task.taskMode === 'convergence'
+            && Array.isArray(mesh?.nodes)
+            && (() => {
+                const matched = (mesh.nodes as any[]).filter((n: any) =>
+                    !task.targetNodeId || meshNodeIdMatches(n, task.targetNodeId));
+                return matched.length > 0 && matched.every((n: any) => n?.isLocalWorktree === true);
+            })();
+        // FALSE-BLOCKER-CLONE-QUEUE: an unmatched target pin is only a PERMANENT routing
+        // miss when the node is genuinely absent — a freshly cloned worktree whose
+        // inline-cache entry has not propagated here yet (or whose bootstrap is still
+        // running) is TRANSIENTLY unresolved and auto-claims shortly. Report that as the
+        // transient (non-actionable) reason so the coordinator is not paged with a false
+        // "actionable blocker — will NOT clear on its own". A genuinely dead node is neither
+        // bootstrap-running nor inside the clone grace window → stays 'target_node_id_unmatched'.
+        const targetTransientlyUnresolved = targetPinUnmatched
+            && isTargetNodeTransientlyUnresolved(mesh, task);
+        markAutoLaunch(meshId, task.id, {
+            status: 'skipped',
+            reason: convergenceOntoWorktree
+                ? 'mesh_convergence_target_is_worktree'
+                : targetTransientlyUnresolved
+                    ? TRANSIENT_TARGET_NODE_BOOTSTRAP_PENDING_REASON
+                    : (targetPinUnmatched ? 'target_node_id_unmatched' : 'no_node_satisfies_required_tags'),
+            nodeId: task.targetNodeId,
+        });
+        return null;
+    }
+
+    // PRIORITY → TIE-BREAK: order the eligible (TAG-filtered) candidate nodes by
+    // the mesh scheduling strategy. 'first_eligible' (default) returns them in
+    // config/array order unchanged, so distribution is strictly opt-in. The
+    // per-node MAX-ALLOC capacity gate (nodeHasActiveAssignment, provider cap,
+    // maxConcurrentSessions) is still applied inside the loop below; this only
+    // chooses which eligible node is *tried first*.
+    const strategy = resolveSchedulingStrategy(mesh);
+    const orderedCandidateNodes = strategy === 'first_eligible'
+        ? candidateNodes
+        : orderEligibleNodes(
+            meshId,
+            strategy,
+            candidateNodes
+                .map((node: any, index: number) => ({ nodeId: readMeshNodeId(node), node, index }))
+                .filter((c: RankableNode) => c.nodeId),
+            // Auto-launch drains one task at a time, so the task IS in scope here —
+            // pass it through for the 'fitness' strategy's task→slot ranking. The
+            // mesh's quotaRouting thresholds ride along so the fitness score can
+            // include the quota-headroom spread bonus (fail-open when unset).
+            { bumpCursor: true, task: { difficulty: (task as any).difficulty, requiredTags: task.requiredTags }, quotaRouting: mesh?.policy?.quotaRouting ?? null, quotaFactsContext: quotaFactsContextForLiveRouting(mesh, isLocalAutoLaunchNode, components.providerLoader) },
+        ).map((c: RankableNode) => c.node);
+    return orderedCandidateNodes;
+}
+
+/**
+ * Per-node gate step: cooldown / in-progress lock / health / freshness / reachability /
+ * live pending-claim session / one-active-write-per-node / session cap. Returns the launch
+ * target when the node may take the launch, null after recording why it may not.
+ */
+function screenNodeForAutoLaunch(
+    components: DaemonComponents,
+    meshId: string,
+    task: QueueTask,
+    node: any,
+    nodeId: string,
+    launchKey: string,
+    freshnessGate: Parameters<typeof isMeshNodeFreshEnoughToLaunch>[1],
+    markSkip: AutoLaunchSkipMarker,
+): ReturnType<typeof resolveAutoLaunchTarget> | null {
+    const now = Date.now();
+    const cooldownUntil = autoLaunchCooldownUntil.get(launchKey) || 0;
+    if (cooldownUntil > 0 && now >= cooldownUntil) autoLaunchCooldownUntil.delete(launchKey);
+    if (autoLaunchInProgress.has(launchKey)) {
+        markSkip(nodeId, 'auto_launch_in_progress');
+        return null;
+    }
+    if (now < cooldownUntil) {
+        markSkip(nodeId, 'auto_launch_cooldown');
+        return null;
+    }
+    if (isDirtyNode(node)) {
+        markSkip(nodeId, 'dirty_workspace');
+        return null;
+    }
+    if (!isLaunchableNode(node)) {
+        // Names the HEALTH gate specifically (isMeshNodeHealthLaunchable:
+        // resolved health must be 'online' or 'unknown'). Deliberately NOT
+        // called `node_not_launch_ready`: that read as the negation of the
+        // node status field `launchReady`, which answers an entirely
+        // different question — finalizeMeshNodeStatus computes it from
+        // daemonId + machineStatus/connection + worktree bootstrap, and
+        // never consults health. A node can therefore legitimately report
+        // `launchReady: true` while being skipped here for degraded/dirty/
+        // wrong_branch health, which looked like a contradiction rather
+        // than two independent gates. Matches the self-describing style of
+        // the sibling reasons (dirty_workspace, node_stale_behind_upstream).
+        markSkip(nodeId, 'node_health_not_launchable');
+        return null;
+    }
+    // FRESHNESS gate (distinct from the health gate above): a clean-tree node that
+    // is `behind` its upstream reads as 'online' and passes isLaunchableNode, so
+    // without this it could win fitness routing and run a fresh worker against
+    // stale code. Skip a node whose git telemetry proves it stale (behind >
+    // maxBehind, or a submodule out of sync). Reuse the auto-fast-forward policy's
+    // maxBehind threshold so "how far behind is tolerable" is configured in ONE
+    // place. Telemetry-absent nodes pass (never block on missing data). The 4s
+    // reconcile retries once the node's auto-ff repair path catches it up.
+    if (!isMeshNodeFreshEnoughToLaunch(node, freshnessGate)) {
+        markSkip(nodeId, 'node_stale_behind_upstream');
+        return null;
+    }
+    const launchTarget = resolveAutoLaunchTarget(components, node);
+    if (launchTarget.mode === 'skip') {
+        // Remote node we can't reach (no transport / no coordinator daemonId).
+        // Set a cooldown so the 4s reconcile loop doesn't re-attempt this node
+        // every tick; the de-dup'd skip ledger keeps it diagnosable without flood.
+        markSkip(nodeId, launchTarget.reason || 'auto_launch_unavailable');
+        autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS); sweepExpiredCooldowns();
+        return null;
+    }
+    // DOUBLE-DISPATCH auto-launch gate (see nodeHasLiveSessionPendingClaim): when this
+    // node already has a live session on its way to claim (idle / booting / momentary
+    // non-idle flip), do NOT spawn a second one — that session pulls the pending task
+    // via the normal idle→claim / agent:ready drain. Launching here races it and yields
+    // a duplicate worker that double-stamps the same taskId. Applies to read-only tasks
+    // too: an idle session can claim either kind, while a genuinely BUSY session (holding
+    // its own assigned task) is excluded by the helper, so a read-only launch onto a
+    // busy-but-no-idle node is still allowed. Skip with a transient (non-actionable)
+    // reason so the coordinator is not paged; the 4s reconcile retries, and once the
+    // existing session goes terminal this gate clears and a legitimate launch proceeds.
+    if (nodeHasLiveSessionPendingClaim(components, meshId, nodeId, task, node)) {
+        markSkip(nodeId, 'node_has_live_session_pending_claim');
+        return null;
+    }
+    // Write tasks keep the one-active-per-node invariant (worktree isolation);
+    // read-only diagnoses may auto-launch onto a node that already has an active
+    // assignment. Classified by the shared isTaskReadonly predicate.
+    if (!isTaskReadonly(task) && nodeHasActiveAssignment(meshId, nodeId)) {
+        markSkip(nodeId, 'node_has_active_assignment');
+        return null;
+    }
+    const maxConcurrentSessions = resolveNodeMaxConcurrentSessions(node?.policy?.maxConcurrentSessions);
+    if (liveSessionCountForNode(components, meshId, nodeId) >= maxConcurrentSessions) {
+        markSkip(nodeId, 'max_concurrent_sessions_reached');
+        return null;
+    }
+    return launchTarget;
+}
+
+/**
+ * Slot step of the launch plan: the requested model must be declared by one of this
+ * node's slots for the resolved provider (SLOT MODEL GUARD), with the quota-busy
+ * fallback walking the already-computed clear ranking when the winner is saturated.
+ * Returns the (possibly fallback-moved) provider + executed slot/model, or null after
+ * recording the wait/notify skip.
+ */
+function decideAutoLaunchSlot(
+    meshId: string,
+    mesh: any,
+    task: QueueTask,
+    node: any,
+    nodeId: string,
+    isReadonly: boolean,
+    resolved: Awaited<ReturnType<typeof resolveUsableProvider>> & { providerType: string },
+    requestedModel: string | undefined,
+    markSkip: AutoLaunchSkipMarker,
+): { effectiveProviderType: string; slot: NodeCapabilitySlot | undefined; model: string | undefined; demotionReason: string | undefined } | null {
+    // SLOT MODEL GUARD: the requested model must be one this node's slots
+    // declare, so a difficulty→brain preset (difficult → 'opus') cannot launch
+    // a model the operator never configured. Three outcomes — run / wait
+    // (declared but at cap; stays queued, no page) / notify (never declared;
+    // pages the coordinator) — specified in slot-model-enforcement.ts.
+    //
+    // ★ PROVIDER PAIRING: scoped to resolved.providerType — the provider
+    // actually spawned below (launch_cli cliType). The guard supplies the MODEL
+    // half of the launch while `resolved` supplies the PROVIDER half, so an
+    // unscoped call let a foreign provider's slot answer for the model and broke
+    // the pair. See slot-model-enforcement.ts "PROVIDER PAIRING" for the full
+    // mechanism and the downstream damage (ledger resolvedModel → claim
+    // assignedModel → empty difficulty allowance → dropped per-slot cap).
+    const nodeSlotAvailability = () => resolveNodeCapabilitySlots(node, meshId).map(slot => ({
+        slot,
+        available: slotHasCapacity(meshId, nodeId, node, slot, mesh?.nodes, isReadonly),
+    }));
+    let effectiveProviderType = resolved.providerType;
+    let effectiveRequestedModel = requestedModel;
+    let effectiveWinningSlot = resolved.slot;
+    let slotDecision = decideSlotForModel({
+        requestedModel,
+        providerType: effectiveProviderType,
+        slots: nodeSlotAvailability(),
+    });
+    if (slotDecision.outcome === 'wait') {
+        // QUOTA-BUSY FALLBACK: the winner is quota-CLEAR but saturated.
+        // Ranking is recomputed from scratch every tick with no memory of
+        // "this was busy last tick", so without this the same saturated
+        // provider is re-elected indefinitely while an idle sibling slot on
+        // this very node is never tried. Walk the already-computed clear
+        // ranking instead of re-ranking (re-ranking reproduces the defect).
+        //
+        // Confined to 'wait' by construction: gated providers are absent from
+        // quotaClearOrder, and 'notify' is handled below, untouched. When the
+        // toggle is off — or no later candidate can run — this falls through
+        // to the original markSkip, byte-identical to the previous behaviour.
+        const fallback = resolveQuotaRoutingPolicy(mesh?.policy?.quotaRouting ?? null).quotaBusyFallback
+            ? selectQuotaBusyFallback({
+                clearOrder: resolved.quotaClearOrder ?? [],
+                candidates: resolved.quotaCandidates ?? [],
+                busyProviderType: resolved.providerType,
+                probe: candidate => decideSlotForModel({
+                    // Re-resolve the model against the CANDIDATE's own slot: the
+                    // requested model was derived from the busy winner's slot, and
+                    // carrying it over would ask the fallback provider to honour a
+                    // model it may never declare — the exact (provider, model)
+                    // pair-splitting slot-model-enforcement.ts forbids.
+                    requestedModel: resolveLaunchAxis(
+                        task.model,
+                        (task as any).modelSource,
+                        candidate.slot.model,
+                        slotCoversTaskDifficulty(candidate.slot, (task as any).difficulty),
+                    ),
+                    providerType: candidate.providerType,
+                    slots: nodeSlotAvailability(),
+                }).outcome === 'run',
+            })
+            : { outcome: 'exhausted' as const, skipped: [] };
+        if (fallback.outcome === 'fallback') {
+            const { candidate } = fallback;
+            LOG.info('MeshQueue', `QUOTA-BUSY FALLBACK: provider '${resolved.providerType}' on node ${nodeId} is quota-clear but saturated for model '${requestedModel}' (task ${task.id}); falling through to next quota-clear candidate '${candidate.providerType}'${fallback.skipped.length ? ` (also busy: ${fallback.skipped.join(', ')})` : ''}`);
+            effectiveProviderType = candidate.providerType;
+            effectiveWinningSlot = candidate.slot;
+            effectiveRequestedModel = resolveLaunchAxis(
+                task.model,
+                (task as any).modelSource,
+                candidate.slot.model,
+                slotCoversTaskDifficulty(candidate.slot, (task as any).difficulty),
+            );
+            slotDecision = decideSlotForModel({
+                requestedModel: effectiveRequestedModel,
+                providerType: effectiveProviderType,
+                slots: nodeSlotAvailability(),
+            });
+        }
+    }
+    if (slotDecision.outcome === 'wait') {
+        LOG.info('MeshQueue', `SLOT MODEL GUARD: model '${effectiveRequestedModel}' is declared on node ${nodeId} for provider '${effectiveProviderType}' but every matching slot is at its maxParallel cap (task ${task.id}); leaving the task queued until a slot goes idle`);
+        markSkip(nodeId, slotDecision.reason, { providerType: effectiveProviderType });
+        return null;
+    }
+    if (slotDecision.outcome === 'notify') {
+        LOG.warn('MeshQueue', `SLOT MODEL GUARD: no '${effectiveProviderType}' slot on node ${nodeId} declares model '${effectiveRequestedModel}' (declared: ${slotDecision.declaredModels.join(', ') || 'none'}) for task ${task.id}; not launching — surfacing to the coordinator to re-drive`);
+        markSkip(nodeId, slotDecision.reason, { providerType: effectiveProviderType });
+        return null;
+    }
+    const finalization = finalizeSlotSelection({
+        // The fallback-adjusted winning slot: when the quota-busy fallback
+        // moved the launch to a later candidate, the demotion bookkeeping
+        // must compare against THAT slot, not the abandoned busy one.
+        winningSlot: effectiveWinningSlot,
+        decidedSlot: slotDecision.slot,
+        decidedModel: slotDecision.model,
+        winningSlotHasCapacity: !!effectiveWinningSlot && slotHasCapacity(meshId, nodeId, node, effectiveWinningSlot, mesh?.nodes, isReadonly),
+    });
+    return { effectiveProviderType, slot: slotDecision.slot, model: finalization.model, demotionReason: finalization.demotionReason };
+}
+
+interface AutoLaunchPlan {
+    resolved: Awaited<ReturnType<typeof resolveUsableProvider>>;
+    effectiveProviderType: string;
+    effectiveModel: string | undefined;
+    effectiveThinkingLevel: string | undefined;
+    launchProvenance: Record<string, unknown>;
+    launchSettings: Record<string, unknown>;
+    buildRoutingDecision: () => ReturnType<typeof buildAutoLaunchRoutingDecision>;
+}
+
+/**
+ * Launch-plan step: provider selection (quota gate in-loop), slot/model guard with the
+ * quota-busy fallback, model compatibility, difficulty-floor parity, provider cap, and
+ * the worker launch envelope. Returns null after recording the skip reason.
+ */
+async function resolveAutoLaunchPlan(
+    components: DaemonComponents,
+    meshId: string,
+    mesh: any,
+    task: QueueTask,
+    node: any,
+    nodeId: string,
+    isReadonly: boolean,
+    skippedCandidates: Array<{ nodeId: string; reason: string }>,
+    markSkip: AutoLaunchSkipMarker,
+): Promise<AutoLaunchPlan | null> {
+    const resolved = await resolveUsableProvider(components, nodeId, node, meshId, task.requiredTags, { difficulty: (task as any).difficulty, requiredTags: task.requiredTags }, mesh?.policy?.quotaRouting ?? null, quotaFactsContextForLiveRouting(mesh, isLocalAutoLaunchNode, components.providerLoader), task.id);
+    if (!resolved.providerType) {
+        // The QUOTA GATE now runs INSIDE resolveUsableProvider's selection
+        // loop (a gated first-choice provider falls through to the node's
+        // next provider instead of skipping the whole node), so a quota
+        // refusal arrives here as the reason: the non-actionable
+        // ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON when every usable provider
+        // is gated (WAIT — the window resets, the task stays queued, the
+        // coordinator is not paged), never the actionable
+        // 'provider_priority_unusable' (slot configuration error).
+        markSkip(nodeId, resolved.reason || 'provider_unusable');
+        return null;
+    }
+    // Slot-derived model/thinking precedence (see resolveLaunchAxis):
+    // an EXPLICIT task.model/thinkingLevel always wins; a
+    // PRESET-stamped one yields to the difficulty-covering slot's
+    // own value; otherwise the slot fills what the task left blank.
+    const slotCoversDifficulty = slotCoversTaskDifficulty(resolved.slot, (task as any).difficulty);
+    const requestedModel = resolveLaunchAxis(task.model, (task as any).modelSource, resolved.model, slotCoversDifficulty);
+    const effectiveThinkingLevel = resolveLaunchAxis(task.thinkingLevel, (task as any).thinkingLevelSource, resolved.thinkingLevel, slotCoversDifficulty);
+
+    const slotChoice = decideAutoLaunchSlot(meshId, mesh, task, node, nodeId, isReadonly, resolved as typeof resolved & { providerType: string }, requestedModel, markSkip);
+    if (!slotChoice) return null;
+    const { effectiveProviderType } = slotChoice;
+    const rawEffectiveModel = slotChoice.model;
+    const demotionReason = slotChoice.demotionReason;
+
+    // CODEX-400 GUARD: the difficulty→brain presets (and MAGI slots) carry
+    // provider-agnostic Anthropic model aliases (opus/sonnet/haiku). Now that
+    // resolved.providerType is definitively known, drop the model if it is a
+    // Claude model but the provider is NOT Anthropic-backed (codex-cli /
+    // antigravity-cli / hermes-cli): forwarding `claude-*` as an initialModel
+    // makes those providers convert it to `-c model='claude-...'`, and a
+    // ChatGPT-account codex then rejects the launch with a 400. Stripping it
+    // lets the provider fall back to its own default model; the provider-neutral
+    // thinkingLevel axis is preserved. This is the single authoritative point
+    // that enforces the invariant across every model source (preset, slot,
+    // explicit) because both remote and local launch consume effectiveModel below.
+    const effectiveModel = isModelCompatibleWithProvider(rawEffectiveModel, effectiveProviderType)
+        ? rawEffectiveModel
+        : undefined;
+    // Phase E launch provenance: WHERE the final model / thinking value came
+    // from, forwarded on launch_cli (both the local and the remote leg) so the
+    // launched session's launch record says task_override vs mesh_slot. A
+    // dropped / absent value claims no source — the launching daemon then
+    // records provider_default / unspecified itself.
+    const launchModelSource = classifyMeshLaunchAxisSource({
+        taskValue: task.model,
+        taskSource: (task as any).modelSource,
+        effectiveValue: effectiveModel,
+    });
+    const launchThinkingLevelSource = classifyMeshLaunchAxisSource({
+        taskValue: task.thinkingLevel,
+        taskSource: (task as any).thinkingLevelSource,
+        effectiveValue: effectiveThinkingLevel,
+    });
+    const launchProvenance = {
+        launchedBy: 'mesh' as const,
+        ...(launchModelSource ? { modelSource: launchModelSource } : {}),
+        ...(launchThinkingLevelSource ? { thinkingLevelSource: launchThinkingLevelSource } : {}),
+    };
+    if (rawEffectiveModel && effectiveModel === undefined) {
+        LOG.info('MeshQueue', `CODEX-400 GUARD: dropped incompatible launch model '${rawEffectiveModel}' for non-Anthropic provider '${effectiveProviderType}' on node ${nodeId} (task ${task.id}); provider will use its own default model`);
+    }
+
+    // LAUNCH-SIDE DIFFICULTY FLOOR PARITY (full rationale on the helper in
+    // mesh-difficulty-floor.ts): the FINAL (provider, model) must clear the
+    // claim side's own difficulty predicate before spawning, or the spawn is
+    // refused 'difficulty_floor_unmet' forever — the 2026-09-08 respawn runaway.
+    const floorMiss = launchSideDifficultyFloorMismatch(node, resolveNodeCapabilitySlots(node, meshId), effectiveProviderType, effectiveModel, task, nodeId);
+    if (floorMiss) { markSkip(nodeId, floorMiss, { providerType: effectiveProviderType }); return null; }
+
+    // Don't spawn a session for a (daemon, provider) already at its declared
+    // maxParallel cap — it would launch only to fail the claim. The claim
+    // transaction enforces the cap regardless; this just avoids a doomed launch.
+    // Counted over the daemon machine (sibling worktrees included), matching
+    // the claim-side scope so the two layers cannot disagree.
+    const providerCap = effectiveSlotCap(
+        resolveProviderMaxParallel(resolveNodeCapabilitySlots(node, meshId), effectiveProviderType),
+        isReadonly,
+    );
+    if (
+        providerCap !== undefined
+        && activeProviderAssignedCount(
+            meshId,
+            nodeId,
+            effectiveProviderType,
+            resolveDaemonSiblingNodeIds(nodeId, mesh?.nodes),
+        ) >= providerCap
+    ) {
+        markSkip(nodeId, 'max_provider_parallel_reached', { providerType: effectiveProviderType });
+        return null;
+    }
+
+    // Shared worker-launch envelope. For a local node it spawns directly on this
+    // daemon; for a remote node the identical command is forwarded to the node's
+    // daemon (mirrors mesh_launch_session), with the coordinator daemonId stamped
+    // so the worker's completion events route back to this coordinator.
+    const launchSettings: Record<string, unknown> = {
+        // Worker launch envelope: role + mesh context so worker can route completion events.
+        role: 'worker',
+        meshNodeFor: meshId,
+        meshNodeId: nodeId,
+        spawnedSessionVisibility: mesh?.policy?.spawnedSessionVisibility || 'hidden',
+        // Coordinator-dispatched worker: auto-approve unless mesh/node policy
+        // opts out (default true). Lands in settingsOverride and beats the
+        // global per-provider-type boolean/mode through explicit opposite-key clearing.
+        ...delegatedWorkerAutoApproveSettingsForNode(
+            mesh,
+            node,
+            components.providerLoader?.getMeta(effectiveProviderType),
+            effectiveProviderType,
+        ),
+        launchedByCoordinator: true,
+        autoLaunchedForQueueTaskId: task.id,
+    };
+
+    // Both post-ready paths must claim against the same selected slot/model contract.
+    const requiredTags = Array.isArray(task.requiredTags) ? task.requiredTags.filter((t): t is string => !!t) : [];
+    const buildRoutingDecision = () => buildAutoLaunchRoutingDecision({
+        node,
+        meshId,
+        task: { difficulty: (task as any).difficulty, requiredTags: task.requiredTags },
+        resolved: resolved as ResolvedProviderSelection & { providerType: string; slot: NodeCapabilitySlot },
+        quotaRouting: mesh?.policy?.quotaRouting ?? null,
+        quotaFactsContext: quotaFactsContextForLiveRouting(mesh, isLocalAutoLaunchNode, components.providerLoader),
+        skippedCandidates,
+        requiredTagsResult: {
+            required: requiredTags,
+            satisfied: !requiredTags.length || nodeSatisfiesRequiredTags(requiredTags, buildMeshNodeCapabilityTags(node, effectiveProviderType)),
+            missing: requiredTags.filter(t => !buildMeshNodeCapabilityTags(node, effectiveProviderType).includes(t)),
+        },
+        effectiveModel,
+        effectiveThinkingLevel,
+        executedSlot: slotChoice.slot,
+        demotionReason,
+    });
+    return { resolved, effectiveProviderType, effectiveModel, effectiveThinkingLevel, launchProvenance, launchSettings, buildRoutingDecision };
+}
+
+/** Remote leg: forward launch_cli to the node's daemon, then claim once it reports ready. */
+async function launchQueueTaskOnRemoteNode(
+    components: DaemonComponents,
+    meshId: string,
+    task: QueueTask,
+    node: any,
+    nodeId: string,
+    launchKey: string,
+    launchTarget: ReturnType<typeof resolveAutoLaunchTarget>,
+    plan: AutoLaunchPlan,
+): Promise<boolean> {
+    const { resolved, effectiveProviderType, effectiveModel, effectiveThinkingLevel, launchProvenance, launchSettings, buildRoutingDecision } = plan;
+    // Relay-safe completion routing: stamp the coordinator anchor the same way
+    // mesh_launch_session does so the worker forwards events back to this daemon.
+    const remoteSettings: Record<string, unknown> = {
+        ...launchSettings,
+        meshCoordinatorDaemonId: launchTarget.coordinatorDaemonId,
+        meshCoordinatorNodeId: nodeId,
+    };
+    // SPAWN-CAP-TRANSPORT-AWARE: 'started' is pre-dispatch INTENT and spends
+    // no spawn budget — the charge happens below, once a session is known to
+    // exist. Charging here is precisely what let a 26-minute signalling
+    // outage burn two healthy nodes' entire budgets with zero sessions created.
+    markAutoLaunch(meshId, task.id, { status: 'started', nodeId, providerType: effectiveProviderType, ...(effectiveModel ? { model: effectiveModel } : {}), ...(effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {}) });
+    let launchResult: any;
+    try {
+        // OFFLINE-NODE-BLOCKING: no peer-connected pre-check before this remote
+        // launch_cli meant an OFFLINE target node sank the dispatch into the 90s
+        // connect deadline, stalling the 4s auto-launch loop for a full 90s. Stamp
+        // the status-origin marker so the daemon-cloud relay grants the SHORT
+        // connect-wait budget — an offline node throws in ~2s, the catch below sets
+        // the 25s cooldown (autoLaunchCooldownUntil) that already gates retries, so
+        // the loop moves on. The marker only affects the connect wait and is
+        // stripped before launch_cli executes, so a live node spawns identically.
+        launchResult = await components.dispatchMeshCommand!(launchTarget.daemonId!, 'launch_cli', withStatusProbeMarker({
+            cliType: effectiveProviderType,
+            dir: node.workspace,
+            settings: remoteSettings,
+            // MAGI-KIND-PANEL model axis: forward the task's model override so the
+            // remote worker session launches with it (initialModel). Best-effort.
+            // Slot-aware: task override wins, else the matched slot's model.
+            ...(effectiveModel ? { initialModel: effectiveModel } : {}),
+            // BRAIN-ROUTING thinking axis: forward the effective thinking level (initialThinkingLevel).
+            ...(effectiveThinkingLevel ? { initialThinkingLevel: effectiveThinkingLevel } : {}),
+            // Phase E: launchedBy + modelSource / thinkingLevelSource.
+            ...launchProvenance,
+        }));
+    } catch (e: any) {
+        // SPAWN-CAP-TRANSPORT-AWARE: the dispatch never reached the target
+        // daemon, so NO session exists — spend no spawn budget. Record it on
+        // the dispatch-failure axis instead, which is what lets the park page
+        // point the coordinator at its own ledger rather than at this node.
+        markAutoLaunch(meshId, task.id, { status: 'failed', reason: `remote_launch_dispatch_failed: ${e?.message || String(e)}`, nodeId, providerType: effectiveProviderType, dispatchFailedInTransport: true });
+        autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS); sweepExpiredCooldowns();
+        return false;
+    }
+    const payload = (launchResult && typeof launchResult === 'object' && 'payload' in launchResult && launchResult.payload && typeof launchResult.payload === 'object')
+        ? launchResult.payload
+        : launchResult;
+    if (!payload?.success) {
+        const reason = readText(payload?.error) || 'remote_launch_cli_failed';
+        markAutoLaunch(meshId, task.id, { status: 'failed', reason, nodeId, providerType: effectiveProviderType });
+        autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS); sweepExpiredCooldowns();
+        return false;
+    }
+    // Remote launch is async: the worker session will register and emit agent:ready,
+    // which (forwarded back here) drives the claim via the normal event path / PHASE 1
+    // reconcile. Set a cooldown so the 4s loop doesn't re-launch before that lands.
+    const remoteSessionId = readText(payload.sessionId) || readText(payload.id) || readText(payload.runtimeSessionId);
+    // SPAWN-CAP-TRANSPORT-AWARE: launch_cli reported success, so a remote
+    // session now exists (or is booting). THIS is the event the spawn budget
+    // exists to count — a real session that must go on to claim the task.
+    markAutoLaunch(meshId, task.id, { status: 'completed', nodeId, providerType: effectiveProviderType, sessionId: remoteSessionId || undefined, ...(effectiveModel ? { model: effectiveModel } : {}), ...(effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {}), spendSpawnBudget: true });
+    logAutoLaunchQuotaFallbackSuccess(resolved, task.id, nodeId, remoteSessionId || undefined);
+    autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS); sweepExpiredCooldowns();
+    // REMOTE-READY-WAIT: readiness barrier, symmetric with the local path's
+    // waitForLocalSessionReady below and on the same 15s budget. The remote
+    // worker's agent:ready is ALREADY forwarded here (it lands as a
+    // remote-idle row); this awaits it instead of returning the instant
+    // launch_cli resolves. On timeout we proceed exactly as before, so the
+    // worst case is today's behavior — what it buys is not starting the
+    // 25-40s delivered_not_consumed judgement clock against a session that
+    // is not yet interactive, which for the five emitsPtyTurnEvents:false
+    // providers has no other way to prove it is alive.
+    //
+    // The cooldown is set BEFORE the await on purpose: it must gate the 4s
+    // loop for the whole wait, not only after it. (The per-node and per-task
+    // autoLaunch in-progress locks are released in `finally` blocks that sit
+    // outside this branch, so they cover the whole wait regardless.)
+    //
+    // Swallowed by construction: this branch runs inside the launch try/catch,
+    // whose catch marks the auto-launch FAILED. A readiness barrier must never
+    // be able to turn a launch that genuinely succeeded into a recorded failure.
+    if (remoteSessionId) {
+        await waitForRemoteSessionReady(meshId, nodeId, remoteSessionId, {
+            isReady: remoteSessionReadyProbe(meshId, nodeId, remoteSessionId),
+        }).catch(() => false);
+        // Without the selected model, a remote session was judged against the
+        // provider-slot intersection and could refuse `difficulty_floor_unmet`
+        // despite the preview-selected slot having headroom.
+        const routingDecision = buildRoutingDecision();
+        claimAfterRemoteAutoLaunch(components, meshId, nodeId, remoteSessionId, effectiveProviderType,
+            (c, m, n, s, p) => tryAssignQueueTask(c, m, n, s, p, routingDecision, undefined, 'auto_launch'));
+    }
+    return true;
+}
+
+/** Local leg: spawn on this daemon through the router, await readiness, then claim. */
+async function launchQueueTaskOnLocalNode(
+    components: DaemonComponents,
+    meshId: string,
+    task: QueueTask,
+    node: any,
+    nodeId: string,
+    launchKey: string,
+    plan: AutoLaunchPlan,
+): Promise<boolean> {
+    const { resolved, effectiveProviderType, effectiveModel, effectiveThinkingLevel, launchProvenance, launchSettings, buildRoutingDecision } = plan;
+    // SPAWN-CAP-TRANSPORT-AWARE: pre-dispatch intent — spends no budget (above).
+    markAutoLaunch(meshId, task.id, { status: 'started', nodeId, providerType: effectiveProviderType, ...(effectiveModel ? { model: effectiveModel } : {}), ...(effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {}) });
+    // B4: through the router (src:mesh) — command log, invalidation, launch annotations.
+    const launchResult: any = await components.router.execute('launch_cli', {
+        cliType: effectiveProviderType,
+        dir: node.workspace,
+        settings: launchSettings,
+        // MAGI-KIND-PANEL model axis: local launch forwards the effective model
+        // (task override, else matched slot) as initialModel (CLI → modelLaunchArgs; ACP → setConfigOption).
+        ...(effectiveModel ? { initialModel: effectiveModel } : {}),
+        // BRAIN-ROUTING thinking axis: forward the effective thinking level (initialThinkingLevel).
+        ...(effectiveThinkingLevel ? { initialThinkingLevel: effectiveThinkingLevel } : {}),
+        // Phase E: launchedBy + modelSource / thinkingLevelSource.
+        ...launchProvenance,
+    }, 'mesh', { inProcess: true });
+    if (!launchResult?.success) {
+        const reason = launchResult?.error || 'launch_cli_failed';
+        markAutoLaunch(meshId, task.id, { status: 'failed', reason, nodeId, providerType: effectiveProviderType });
+        autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS); sweepExpiredCooldowns();
+        return false;
+    }
+    const sessionId = readText(launchResult.sessionId) || readText(launchResult.id) || readText(launchResult.runtimeSessionId);
+    if (!sessionId) {
+        // SPAWN-CAP-TRANSPORT-AWARE: launch_cli SUCCEEDED but returned no session
+        // id. A session very likely exists and is simply unidentifiable to us, so
+        // this DOES spend budget — the cap must charge for anything it cannot
+        // prove was never created, or an id-reporting bug becomes a spawn leak.
+        markAutoLaunch(meshId, task.id, { status: 'failed', reason: 'launch_missing_session_id', nodeId, providerType: effectiveProviderType, spendSpawnBudget: true });
+        autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS); sweepExpiredCooldowns();
+        return false;
+    }
+    // SPAWN-CAP-TRANSPORT-AWARE: a local session demonstrably exists — spend one
+    // unit of the spawn budget (the mismatch detector's counted unit).
+    markAutoLaunch(meshId, task.id, { status: 'completed', nodeId, providerType: effectiveProviderType, sessionId, ...(effectiveModel ? { model: effectiveModel } : {}), ...(effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {}), spendSpawnBudget: true });
+    logAutoLaunchQuotaFallbackSuccess(resolved, task.id, nodeId, sessionId);
+    // Readiness barrier: a freshly-spawned local CLI session is NOT yet
+    // interactive — its PTY prints the input prompt (and the adapter flips
+    // isReady()) only ~2-6s after launch. Dispatching the task immediately
+    // pushes the first (often large) message into a not-yet-ready PTY, which
+    // could throw "not ready" and bounce the task through requeue (on win32
+    // this raced the auto-launch cooldown and stranded the worker idle).
+    // Await interactive readiness before claiming/dispatching so the very
+    // first message lands cleanly. The adapter's queue-until-ready path is the
+    // backstop if readiness is reported late; this just avoids the churn.
+    await waitForLocalSessionReady(components, sessionId);
+    const routingDecision = buildRoutingDecision();
+    tryAssignQueueTask(components, meshId, nodeId, sessionId, effectiveProviderType, routingDecision, undefined, 'auto_launch');
+    return true;
+}
 
 export async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, meshId: string, mesh: any): Promise<boolean> {
     const queue = getQueue(meshId);
@@ -393,15 +1117,7 @@ export async function maybeAutoLaunchOneQueueSession(components: DaemonComponent
     const pending = queue
         .filter(task => task.status === 'pending')
         .sort((a, b) => meshTaskPriorityRank(b.priority) - meshTaskPriorityRank(a.priority));
-    // AUTOLAUNCH-CLAIM-CHURN: prune await-claim backoff state for tasks of this mesh that are no
-    // longer pending (claimed/completed/cancelled) so the map cannot grow without bound.
-    {
-        const pendingIds = new Set(pending.map(t => t.id));
-        const prefix = `${meshId}::`;
-        for (const key of [...autoLaunchAwaitClaimBackoff.keys()]) {
-            if (key.startsWith(prefix) && !pendingIds.has(key.slice(prefix.length))) autoLaunchAwaitClaimBackoff.delete(key);
-        }
-    }
+    pruneAwaitClaimBackoff(meshId, pending);
     if (!pending.length) return false;
 
     // Launch-freshness threshold: reuse the auto-fast-forward policy's maxBehind (default
@@ -516,161 +1232,17 @@ export async function maybeAutoLaunchOneQueueSession(components: DaemonComponent
                 continue;
             }
 
-            // Per-task await-claim guard. A prior auto-launch already spawned a session for
-            // this task and we are waiting for that session's idle→claim to land (remote
-            // claims arrive via the worker→coordinator agent:ready pull, which can lag well
-            // past the per-node cooldown). Re-launching now would spawn a duplicate orphan
-            // session that never gets work. The task leaves `pending` the instant the claim
-            // succeeds, so this guard only suppresses the in-flight window; if the launched
-            // session never reaches idle within the window, a later tick retries.
-            if (task.autoLaunch?.status === 'completed' && task.autoLaunch.sessionId) {
-                const launchedAtMs = Date.parse(task.autoLaunch.updatedAt);
-                const alSessionId = readNonEmptyString(task.autoLaunch.sessionId);
-                const alNodeId = readNonEmptyString(task.autoLaunch.nodeId);
-                const alProvider = readNonEmptyString(task.autoLaunch.providerType);
-                // CLOCK-LOWER-BOUND: `autoLaunch.updatedAt` is foreign; a future stamp must not
-                // suppress the re-launch forever — see isWithinForeignFreshnessWindow.
-                if (isAutoLaunchWithinAwaitClaimWindow(launchedAtMs)) {
-                    // AUTOLAUNCH-DEFERRED-CLAIM: this guard's premise — "a claim is already in
-                    // flight, just wait" — is FALSE when the launch's single inline claim was
-                    // refused by the ff lease. Re-drive it instead of waiting out the window
-                    // (rationale + bounding: mesh-claim-refusal.ts).
-                    if (shouldRedriveDeferredClaim(meshId, alNodeId, alSessionId, () => isWorkspaceAutoFastForwardInFlight(readNonEmptyString(
-                        (Array.isArray(mesh?.nodes) ? mesh.nodes.find((n: any) => meshNodeIdMatches(n, alNodeId)) : undefined)?.workspace,
-                    )))) {
-                        if (tryAssignQueueTask(components, meshId, alNodeId, alSessionId, alProvider, undefined, undefined, 'auto_launch')) {
-                            clearClaimDeferralForNode(meshId, alNodeId);
-                            recordAutoLaunchEvent(meshId, { phase: 'completed', taskId: task.id, reason: 'fast_forward_deferred_claim_redriven', nodeId: alNodeId, sessionId: alSessionId });
-                            LOG.info('MeshQueue', `Auto-launch re-drove the auto-fast-forward-deferred claim for task ${task.id} into session ${alSessionId} on node ${alNodeId} (mesh ${meshId})`);
-                            return true;
-                        }
-                        // Still refused — the ledger now names the gate (recordClaimRefusal).
-                        // Spend one unit of the budget; once exhausted this falls through to
-                        // the ordinary await-claim window.
-                        noteClaimDeferredForNode(meshId, alNodeId);
-                    }
-                    // Record the skip in the ledger ONLY (dedup'd). Do NOT call markAutoLaunch
-                    // here: recordTaskAutoLaunch overwrites task.autoLaunch wholesale, which would
-                    // erase the very `completed` record (status + sessionId + updatedAt) this guard
-                    // reads on the next tick, reopening the duplicate-launch hole it closes.
-                    recordAutoLaunchEvent(meshId, { phase: 'skipped', taskId: task.id, reason: 'awaiting_launched_session_claim', nodeId: alNodeId, sessionId: alSessionId });
-                    continue;
-                }
-                // AUTOLAUNCH-CLAIM-CHURN: the initial await-claim window expired. Rather than a blind
-                // respawn (which the local-only respawn guards can't dedup for a remote pending-claim
-                // session → ghost accumulation), re-drive the claim for the EXISTING launched session,
-                // backing off on unknown liveness and direct-dispatching after the cap. Only a
-                // 'respawn' directive falls through to a fresh launch below.
-                if (Number.isFinite(launchedAtMs) && alSessionId && alNodeId) {
-                    const outcome = driveExpiredAwaitClaim(components, meshId, task, { sessionId: alSessionId, nodeId: alNodeId, providerType: alProvider }, tryAssignQueueTask);
-                    if (outcome === 'claimed' || outcome === 'fallback') return true; // progress; suppress a duplicate launch
-                    if (outcome === 'backoff') continue;                              // window extended; no respawn
-                    // outcome === 'respawn' → session provably gone; proceed to a fresh launch below.
-                }
-            }
+            const awaitClaim = driveAwaitClaimGuard(components, meshId, mesh, task);
+            if (awaitClaim === 'progress') return true;
+            if (awaitClaim === 'skip') continue;
 
             // AUTOLAUNCH-SPAWN-CAP (P3): durable per-task launch budget. Deliberately AFTER the
             // await-claim guard (an in-flight claim is never parked mid-wait) and BEFORE node
             // selection — the alternative here is another launch. See mesh-autolaunch-spawn-cap.ts.
             if (maybeParkSpawnCappedTask(meshId, task, parkTaskTargetPin, reason => markAutoLaunch(meshId, task.id, { status: 'skipped', reason }))) continue;
 
-            const candidateNodes = Array.isArray(mesh?.nodes)
-                ? mesh.nodes.filter((node: any) => {
-                    // Bug A: match the target pin with the shared 3-form (id / nodeId / node_id)
-                    // normalizer, mirroring the remote-idle drain (meshNodeIdMatches at the
-                    // getRemoteIdleSessions filter). A strict `readMeshNodeId(node) !== targetNodeId`
-                    // dropped a target node whose identity arrived under a different form (a freshly
-                    // mesh_clone_node'd worktree), emptying candidateNodes and mislabelling the skip.
-                    if (task.targetNodeId && !meshNodeIdMatches(node, task.targetNodeId)) return false;
-                    // WTDISPATCH-FANOUT: a convergence task is base-only (it merges/pushes onto
-                    // base). Never auto-launch a worktree-clone session for it — that is the very
-                    // fan-out the claim guard refuses, so spinning the session up would only waste
-                    // a launch that can never claim. Mirrors claimNextQueueTask's convergence gate.
-                    if (task.taskMode === 'convergence' && node?.isLocalWorktree === true) return false;
-                    // Skip nodes that can never satisfy requiredTags regardless of which provider
-                    // is selected. A node satisfies tags if at least one provider it can launch
-                    // would produce matching capability tags. Enumerate providers from the node's
-                    // capability slots (the single source of truth — a provider that lives only in
-                    // slots, e.g. cursor-cli, is otherwise invisible to providerPriority-keyed
-                    // enumeration), falling back to the legacy providerPriority.
-                    if (task.requiredTags?.length) {
-                        const slotProviders = resolveNodeCapabilitySlots(node, meshId).map(s => s.provider).filter(Boolean);
-                        const priorities = slotProviders.length ? slotProviders : normalizeProviderPriority(node?.policy);
-                        const providerCandidates = priorities.length ? priorities : [undefined as unknown as string];
-                        return providerCandidates.some(p =>
-                            nodeSatisfiesRequiredTags(task.requiredTags, buildMeshNodeCapabilityTags(node, p))
-                        );
-                    }
-                    return true;
-                })
-                : [];
-            if (!candidateNodes.length) {
-                // Bug A: distinguish the two ways the candidate set empties. A task pinned to a
-                // targetNodeId whose node is absent from the mesh (or whose id arrived under a
-                // different form) is a ROUTING miss — report it as `target_node_id_unmatched`, not
-                // the hard-coded `no_node_satisfies_required_tags`, which mislabelled a 3-form
-                // node-id mismatch as a capability failure and sent diagnosis down the wrong path.
-                // Only fall back to the tag reason when no target pin is in play, or the pin DID
-                // match a node but its tags excluded it (a genuine capability miss).
-                const targetPinUnmatched = !!task.targetNodeId
-                    && !(Array.isArray(mesh?.nodes) && mesh.nodes.some((n: any) => meshNodeIdMatches(n, task.targetNodeId)));
-                // Fix (2): a `convergence` task is base-only — the candidate filter above
-                // (`taskMode === 'convergence' && node.isLocalWorktree`) deliberately drops every
-                // worktree-clone node, so candidateNodes can empty out NOT because the target is
-                // missing or tag-incapable, but because every node the task could land on is a
-                // worktree. Reporting that as `target_node_id_unmatched` / `no_node_satisfies_
-                // required_tags` mislabels the cause and sends diagnosis down the wrong path.
-                // Detect it explicitly and report the same reason mesh_send_task uses for a direct
-                // convergence dispatch onto a worktree, so both surfaces agree.
-                const convergenceOntoWorktree = task.taskMode === 'convergence'
-                    && Array.isArray(mesh?.nodes)
-                    && (() => {
-                        const matched = (mesh.nodes as any[]).filter((n: any) =>
-                            !task.targetNodeId || meshNodeIdMatches(n, task.targetNodeId));
-                        return matched.length > 0 && matched.every((n: any) => n?.isLocalWorktree === true);
-                    })();
-                // FALSE-BLOCKER-CLONE-QUEUE: an unmatched target pin is only a PERMANENT routing
-                // miss when the node is genuinely absent — a freshly cloned worktree whose
-                // inline-cache entry has not propagated here yet (or whose bootstrap is still
-                // running) is TRANSIENTLY unresolved and auto-claims shortly. Report that as the
-                // transient (non-actionable) reason so the coordinator is not paged with a false
-                // "actionable blocker — will NOT clear on its own". A genuinely dead node is neither
-                // bootstrap-running nor inside the clone grace window → stays 'target_node_id_unmatched'.
-                const targetTransientlyUnresolved = targetPinUnmatched
-                    && isTargetNodeTransientlyUnresolved(mesh, task);
-                markAutoLaunch(meshId, task.id, {
-                    status: 'skipped',
-                    reason: convergenceOntoWorktree
-                        ? 'mesh_convergence_target_is_worktree'
-                        : targetTransientlyUnresolved
-                            ? TRANSIENT_TARGET_NODE_BOOTSTRAP_PENDING_REASON
-                            : (targetPinUnmatched ? 'target_node_id_unmatched' : 'no_node_satisfies_required_tags'),
-                    nodeId: task.targetNodeId,
-                });
-                continue;
-            }
-
-            // PRIORITY → TIE-BREAK: order the eligible (TAG-filtered) candidate nodes by
-            // the mesh scheduling strategy. 'first_eligible' (default) returns them in
-            // config/array order unchanged, so distribution is strictly opt-in. The
-            // per-node MAX-ALLOC capacity gate (nodeHasActiveAssignment, provider cap,
-            // maxConcurrentSessions) is still applied inside the loop below; this only
-            // chooses which eligible node is *tried first*.
-            const strategy = resolveSchedulingStrategy(mesh);
-            const orderedCandidateNodes = strategy === 'first_eligible'
-                ? candidateNodes
-                : orderEligibleNodes(
-                    meshId,
-                    strategy,
-                    candidateNodes
-                        .map((node: any, index: number) => ({ nodeId: readMeshNodeId(node), node, index }))
-                        .filter((c: RankableNode) => c.nodeId),
-                    // Auto-launch drains one task at a time, so the task IS in scope here —
-                    // pass it through for the 'fitness' strategy's task→slot ranking. The
-                    // mesh's quotaRouting thresholds ride along so the fitness score can
-                    // include the quota-headroom spread bonus (fail-open when unset).
-                    { bumpCursor: true, task: { difficulty: (task as any).difficulty, requiredTags: task.requiredTags }, quotaRouting: mesh?.policy?.quotaRouting ?? null, quotaFactsContext: quotaFactsContextForLiveRouting(mesh, isLocalAutoLaunchNode, components.providerLoader) },
-                ).map((c: RankableNode) => c.node);
+            const orderedCandidateNodes = selectAutoLaunchCandidateNodes(components, meshId, mesh, task);
+            if (!orderedCandidateNodes) continue;
 
             // LEDGER-TASK-TRACEABILITY (A): accumulate the candidate nodes that were
             // considered but skipped before the winning node, so task_dispatched can record
@@ -690,461 +1262,16 @@ export async function maybeAutoLaunchOneQueueSession(components: DaemonComponent
                 const nodeId = readMeshNodeId(node);
                 if (!nodeId) continue;
                 const launchKey = `${meshId}:${nodeId}`;
-                const now = Date.now();
-                const cooldownUntil = autoLaunchCooldownUntil.get(launchKey) || 0;
-                if (cooldownUntil > 0 && now >= cooldownUntil) autoLaunchCooldownUntil.delete(launchKey);
-                if (autoLaunchInProgress.has(launchKey)) {
-                    markSkip(nodeId, 'auto_launch_in_progress');
-                    continue;
-                }
-                if (now < cooldownUntil) {
-                    markSkip(nodeId, 'auto_launch_cooldown');
-                    continue;
-                }
-                if (isDirtyNode(node)) {
-                    markSkip(nodeId, 'dirty_workspace');
-                    continue;
-                }
-                if (!isLaunchableNode(node)) {
-                    // Names the HEALTH gate specifically (isMeshNodeHealthLaunchable:
-                    // resolved health must be 'online' or 'unknown'). Deliberately NOT
-                    // called `node_not_launch_ready`: that read as the negation of the
-                    // node status field `launchReady`, which answers an entirely
-                    // different question — finalizeMeshNodeStatus computes it from
-                    // daemonId + machineStatus/connection + worktree bootstrap, and
-                    // never consults health. A node can therefore legitimately report
-                    // `launchReady: true` while being skipped here for degraded/dirty/
-                    // wrong_branch health, which looked like a contradiction rather
-                    // than two independent gates. Matches the self-describing style of
-                    // the sibling reasons (dirty_workspace, node_stale_behind_upstream).
-                    markSkip(nodeId, 'node_health_not_launchable');
-                    continue;
-                }
-                // FRESHNESS gate (distinct from the health gate above): a clean-tree node that
-                // is `behind` its upstream reads as 'online' and passes isLaunchableNode, so
-                // without this it could win fitness routing and run a fresh worker against
-                // stale code. Skip a node whose git telemetry proves it stale (behind >
-                // maxBehind, or a submodule out of sync). Reuse the auto-fast-forward policy's
-                // maxBehind threshold so "how far behind is tolerable" is configured in ONE
-                // place. Telemetry-absent nodes pass (never block on missing data). The 4s
-                // reconcile retries once the node's auto-ff repair path catches it up.
-                if (!isMeshNodeFreshEnoughToLaunch(node, freshnessGate)) {
-                    markSkip(nodeId, 'node_stale_behind_upstream');
-                    continue;
-                }
-                const launchTarget = resolveAutoLaunchTarget(components, node);
-                if (launchTarget.mode === 'skip') {
-                    // Remote node we can't reach (no transport / no coordinator daemonId).
-                    // Set a cooldown so the 4s reconcile loop doesn't re-attempt this node
-                    // every tick; the de-dup'd skip ledger keeps it diagnosable without flood.
-                    markSkip(nodeId, launchTarget.reason || 'auto_launch_unavailable');
-                    autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS); sweepExpiredCooldowns();
-                    continue;
-                }
-                // DOUBLE-DISPATCH auto-launch gate (see nodeHasLiveSessionPendingClaim): when this
-                // node already has a live session on its way to claim (idle / booting / momentary
-                // non-idle flip), do NOT spawn a second one — that session pulls the pending task
-                // via the normal idle→claim / agent:ready drain. Launching here races it and yields
-                // a duplicate worker that double-stamps the same taskId. Applies to read-only tasks
-                // too: an idle session can claim either kind, while a genuinely BUSY session (holding
-                // its own assigned task) is excluded by the helper, so a read-only launch onto a
-                // busy-but-no-idle node is still allowed. Skip with a transient (non-actionable)
-                // reason so the coordinator is not paged; the 4s reconcile retries, and once the
-                // existing session goes terminal this gate clears and a legitimate launch proceeds.
-                if (nodeHasLiveSessionPendingClaim(components, meshId, nodeId, task, node)) {
-                    markSkip(nodeId, 'node_has_live_session_pending_claim');
-                    continue;
-                }
-                // Write tasks keep the one-active-per-node invariant (worktree isolation);
-                // read-only diagnoses may auto-launch onto a node that already has an active
-                // assignment. Classified by the shared isTaskReadonly predicate.
-                if (!isTaskReadonly(task) && nodeHasActiveAssignment(meshId, nodeId)) {
-                    markSkip(nodeId, 'node_has_active_assignment');
-                    continue;
-                }
-                const maxConcurrentSessions = resolveNodeMaxConcurrentSessions(node?.policy?.maxConcurrentSessions);
-                if (liveSessionCountForNode(components, meshId, nodeId) >= maxConcurrentSessions) {
-                    markSkip(nodeId, 'max_concurrent_sessions_reached');
-                    continue;
-                }
+                const launchTarget = screenNodeForAutoLaunch(components, meshId, task, node, nodeId, launchKey, freshnessGate, markSkip);
+                if (!launchTarget) continue;
 
                 autoLaunchInProgress.add(launchKey);
                 try {
-                    const resolved = await resolveUsableProvider(components, nodeId, node, meshId, task.requiredTags, { difficulty: (task as any).difficulty, requiredTags: task.requiredTags }, mesh?.policy?.quotaRouting ?? null, quotaFactsContextForLiveRouting(mesh, isLocalAutoLaunchNode, components.providerLoader), task.id);
-                    if (!resolved.providerType) {
-                        // The QUOTA GATE now runs INSIDE resolveUsableProvider's selection
-                        // loop (a gated first-choice provider falls through to the node's
-                        // next provider instead of skipping the whole node), so a quota
-                        // refusal arrives here as the reason: the non-actionable
-                        // ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON when every usable provider
-                        // is gated (WAIT — the window resets, the task stays queued, the
-                        // coordinator is not paged), never the actionable
-                        // 'provider_priority_unusable' (slot configuration error).
-                        markSkip(nodeId, resolved.reason || 'provider_unusable');
-                        continue;
-                    }
-                    // Slot-derived model/thinking precedence (see resolveLaunchAxis):
-                    // an EXPLICIT task.model/thinkingLevel always wins; a
-                    // PRESET-stamped one yields to the difficulty-covering slot's
-                    // own value; otherwise the slot fills what the task left blank.
-                    const slotCoversDifficulty = slotCoversTaskDifficulty(resolved.slot, (task as any).difficulty);
-                    const requestedModel = resolveLaunchAxis(task.model, (task as any).modelSource, resolved.model, slotCoversDifficulty);
-                    const effectiveThinkingLevel = resolveLaunchAxis(task.thinkingLevel, (task as any).thinkingLevelSource, resolved.thinkingLevel, slotCoversDifficulty);
-
-                    // SLOT MODEL GUARD: the requested model must be one this node's slots
-                    // declare, so a difficulty→brain preset (difficult → 'opus') cannot launch
-                    // a model the operator never configured. Three outcomes — run / wait
-                    // (declared but at cap; stays queued, no page) / notify (never declared;
-                    // pages the coordinator) — specified in slot-model-enforcement.ts.
-                    //
-                    // ★ PROVIDER PAIRING: scoped to resolved.providerType — the provider
-                    // actually spawned below (launch_cli cliType). The guard supplies the MODEL
-                    // half of the launch while `resolved` supplies the PROVIDER half, so an
-                    // unscoped call let a foreign provider's slot answer for the model and broke
-                    // the pair. See slot-model-enforcement.ts "PROVIDER PAIRING" for the full
-                    // mechanism and the downstream damage (ledger resolvedModel → claim
-                    // assignedModel → empty difficulty allowance → dropped per-slot cap).
-                    const nodeSlotAvailability = () => resolveNodeCapabilitySlots(node, meshId).map(slot => ({
-                        slot,
-                        available: slotHasCapacity(meshId, nodeId, node, slot, mesh?.nodes, isReadonly),
-                    }));
-                    let effectiveProviderType = resolved.providerType;
-                    let effectiveRequestedModel = requestedModel;
-                    let effectiveWinningSlot = resolved.slot;
-                    let slotDecision = decideSlotForModel({
-                        requestedModel,
-                        providerType: effectiveProviderType,
-                        slots: nodeSlotAvailability(),
-                    });
-                    if (slotDecision.outcome === 'wait') {
-                        // QUOTA-BUSY FALLBACK: the winner is quota-CLEAR but saturated.
-                        // Ranking is recomputed from scratch every tick with no memory of
-                        // "this was busy last tick", so without this the same saturated
-                        // provider is re-elected indefinitely while an idle sibling slot on
-                        // this very node is never tried. Walk the already-computed clear
-                        // ranking instead of re-ranking (re-ranking reproduces the defect).
-                        //
-                        // Confined to 'wait' by construction: gated providers are absent from
-                        // quotaClearOrder, and 'notify' is handled below, untouched. When the
-                        // toggle is off — or no later candidate can run — this falls through
-                        // to the original markSkip, byte-identical to the previous behaviour.
-                        const fallback = resolveQuotaRoutingPolicy(mesh?.policy?.quotaRouting ?? null).quotaBusyFallback
-                            ? selectQuotaBusyFallback({
-                                clearOrder: resolved.quotaClearOrder ?? [],
-                                candidates: resolved.quotaCandidates ?? [],
-                                busyProviderType: resolved.providerType,
-                                probe: candidate => decideSlotForModel({
-                                    // Re-resolve the model against the CANDIDATE's own slot: the
-                                    // requested model was derived from the busy winner's slot, and
-                                    // carrying it over would ask the fallback provider to honour a
-                                    // model it may never declare — the exact (provider, model)
-                                    // pair-splitting slot-model-enforcement.ts forbids.
-                                    requestedModel: resolveLaunchAxis(
-                                        task.model,
-                                        (task as any).modelSource,
-                                        candidate.slot.model,
-                                        slotCoversTaskDifficulty(candidate.slot, (task as any).difficulty),
-                                    ),
-                                    providerType: candidate.providerType,
-                                    slots: nodeSlotAvailability(),
-                                }).outcome === 'run',
-                            })
-                            : { outcome: 'exhausted' as const, skipped: [] };
-                        if (fallback.outcome === 'fallback') {
-                            const { candidate } = fallback;
-                            LOG.info('MeshQueue', `QUOTA-BUSY FALLBACK: provider '${resolved.providerType}' on node ${nodeId} is quota-clear but saturated for model '${requestedModel}' (task ${task.id}); falling through to next quota-clear candidate '${candidate.providerType}'${fallback.skipped.length ? ` (also busy: ${fallback.skipped.join(', ')})` : ''}`);
-                            effectiveProviderType = candidate.providerType;
-                            effectiveWinningSlot = candidate.slot;
-                            effectiveRequestedModel = resolveLaunchAxis(
-                                task.model,
-                                (task as any).modelSource,
-                                candidate.slot.model,
-                                slotCoversTaskDifficulty(candidate.slot, (task as any).difficulty),
-                            );
-                            slotDecision = decideSlotForModel({
-                                requestedModel: effectiveRequestedModel,
-                                providerType: effectiveProviderType,
-                                slots: nodeSlotAvailability(),
-                            });
-                        }
-                    }
-                    if (slotDecision.outcome === 'wait') {
-                        LOG.info('MeshQueue', `SLOT MODEL GUARD: model '${effectiveRequestedModel}' is declared on node ${nodeId} for provider '${effectiveProviderType}' but every matching slot is at its maxParallel cap (task ${task.id}); leaving the task queued until a slot goes idle`);
-                        markSkip(nodeId, slotDecision.reason, { providerType: effectiveProviderType });
-                        continue;
-                    }
-                    if (slotDecision.outcome === 'notify') {
-                        LOG.warn('MeshQueue', `SLOT MODEL GUARD: no '${effectiveProviderType}' slot on node ${nodeId} declares model '${effectiveRequestedModel}' (declared: ${slotDecision.declaredModels.join(', ') || 'none'}) for task ${task.id}; not launching — surfacing to the coordinator to re-drive`);
-                        markSkip(nodeId, slotDecision.reason, { providerType: effectiveProviderType });
-                        continue;
-                    }
-                    const finalization = finalizeSlotSelection({
-                        // The fallback-adjusted winning slot: when the quota-busy fallback
-                        // moved the launch to a later candidate, the demotion bookkeeping
-                        // must compare against THAT slot, not the abandoned busy one.
-                        winningSlot: effectiveWinningSlot,
-                        decidedSlot: slotDecision.slot,
-                        decidedModel: slotDecision.model,
-                        winningSlotHasCapacity: !!effectiveWinningSlot && slotHasCapacity(meshId, nodeId, node, effectiveWinningSlot, mesh?.nodes, isReadonly),
-                    });
-                    const rawEffectiveModel = finalization.model;
-                    const demotionReason = finalization.demotionReason;
-
-                    // CODEX-400 GUARD: the difficulty→brain presets (and MAGI slots) carry
-                    // provider-agnostic Anthropic model aliases (opus/sonnet/haiku). Now that
-                    // resolved.providerType is definitively known, drop the model if it is a
-                    // Claude model but the provider is NOT Anthropic-backed (codex-cli /
-                    // antigravity-cli / hermes-cli): forwarding `claude-*` as an initialModel
-                    // makes those providers convert it to `-c model='claude-...'`, and a
-                    // ChatGPT-account codex then rejects the launch with a 400. Stripping it
-                    // lets the provider fall back to its own default model; the provider-neutral
-                    // thinkingLevel axis is preserved. This is the single authoritative point
-                    // that enforces the invariant across every model source (preset, slot,
-                    // explicit) because both remote and local launch consume effectiveModel below.
-                    const effectiveModel = isModelCompatibleWithProvider(rawEffectiveModel, effectiveProviderType)
-                        ? rawEffectiveModel
-                        : undefined;
-                    // Phase E launch provenance: WHERE the final model / thinking value came
-                    // from, forwarded on launch_cli (both the local and the remote leg) so the
-                    // launched session's launch record says task_override vs mesh_slot. A
-                    // dropped / absent value claims no source — the launching daemon then
-                    // records provider_default / unspecified itself.
-                    const launchModelSource = classifyMeshLaunchAxisSource({
-                        taskValue: task.model,
-                        taskSource: (task as any).modelSource,
-                        effectiveValue: effectiveModel,
-                    });
-                    const launchThinkingLevelSource = classifyMeshLaunchAxisSource({
-                        taskValue: task.thinkingLevel,
-                        taskSource: (task as any).thinkingLevelSource,
-                        effectiveValue: effectiveThinkingLevel,
-                    });
-                    const launchProvenance = {
-                        launchedBy: 'mesh' as const,
-                        ...(launchModelSource ? { modelSource: launchModelSource } : {}),
-                        ...(launchThinkingLevelSource ? { thinkingLevelSource: launchThinkingLevelSource } : {}),
-                    };
-                    if (rawEffectiveModel && effectiveModel === undefined) {
-                        LOG.info('MeshQueue', `CODEX-400 GUARD: dropped incompatible launch model '${rawEffectiveModel}' for non-Anthropic provider '${effectiveProviderType}' on node ${nodeId} (task ${task.id}); provider will use its own default model`);
-                    }
-
-                    // LAUNCH-SIDE DIFFICULTY FLOOR PARITY (full rationale on the helper in
-                    // mesh-difficulty-floor.ts): the FINAL (provider, model) must clear the
-                    // claim side's own difficulty predicate before spawning, or the spawn is
-                    // refused 'difficulty_floor_unmet' forever — the 2026-09-08 respawn runaway.
-                    const floorMiss = launchSideDifficultyFloorMismatch(node, resolveNodeCapabilitySlots(node, meshId), effectiveProviderType, effectiveModel, task, nodeId);
-                    if (floorMiss) { markSkip(nodeId, floorMiss, { providerType: effectiveProviderType }); continue; }
-
-                    // Don't spawn a session for a (daemon, provider) already at its declared
-                    // maxParallel cap — it would launch only to fail the claim. The claim
-                    // transaction enforces the cap regardless; this just avoids a doomed launch.
-                    // Counted over the daemon machine (sibling worktrees included), matching
-                    // the claim-side scope so the two layers cannot disagree.
-                    const providerCap = effectiveSlotCap(
-                        resolveProviderMaxParallel(resolveNodeCapabilitySlots(node, meshId), effectiveProviderType),
-                        isReadonly,
-                    );
-                    if (
-                        providerCap !== undefined
-                        && activeProviderAssignedCount(
-                            meshId,
-                            nodeId,
-                            effectiveProviderType,
-                            resolveDaemonSiblingNodeIds(nodeId, mesh?.nodes),
-                        ) >= providerCap
-                    ) {
-                        markSkip(nodeId, 'max_provider_parallel_reached', { providerType: effectiveProviderType });
-                        continue;
-                    }
-
-                    // Shared worker-launch envelope. For a local node it spawns directly on this
-                    // daemon; for a remote node the identical command is forwarded to the node's
-                    // daemon (mirrors mesh_launch_session), with the coordinator daemonId stamped
-                    // so the worker's completion events route back to this coordinator.
-                    const launchSettings: Record<string, unknown> = {
-                        // Worker launch envelope: role + mesh context so worker can route completion events.
-                        role: 'worker',
-                        meshNodeFor: meshId,
-                        meshNodeId: nodeId,
-                        spawnedSessionVisibility: mesh?.policy?.spawnedSessionVisibility || 'hidden',
-                        // Coordinator-dispatched worker: auto-approve unless mesh/node policy
-                        // opts out (default true). Lands in settingsOverride and beats the
-                        // global per-provider-type boolean/mode through explicit opposite-key clearing.
-                        ...delegatedWorkerAutoApproveSettingsForNode(
-                            mesh,
-                            node,
-                            components.providerLoader?.getMeta(effectiveProviderType),
-                            effectiveProviderType,
-                        ),
-                        launchedByCoordinator: true,
-                        autoLaunchedForQueueTaskId: task.id,
-                    };
-
-                    // Both post-ready paths must claim against the same selected slot/model contract.
-                    const requiredTags = Array.isArray(task.requiredTags) ? task.requiredTags.filter((t): t is string => !!t) : [];
-                    const buildRoutingDecision = () => buildAutoLaunchRoutingDecision({
-                        node,
-                        meshId,
-                        task: { difficulty: (task as any).difficulty, requiredTags: task.requiredTags },
-                        resolved: resolved as ResolvedProviderSelection & { providerType: string; slot: NodeCapabilitySlot },
-                        quotaRouting: mesh?.policy?.quotaRouting ?? null,
-                        quotaFactsContext: quotaFactsContextForLiveRouting(mesh, isLocalAutoLaunchNode, components.providerLoader),
-                        skippedCandidates,
-                        requiredTagsResult: {
-                            required: requiredTags,
-                            satisfied: !requiredTags.length || nodeSatisfiesRequiredTags(requiredTags, buildMeshNodeCapabilityTags(node, effectiveProviderType)),
-                            missing: requiredTags.filter(t => !buildMeshNodeCapabilityTags(node, effectiveProviderType).includes(t)),
-                        },
-                        effectiveModel,
-                        effectiveThinkingLevel,
-                        executedSlot: slotDecision.slot,
-                        demotionReason,
-                    });
-
-                    if (launchTarget.mode === 'remote') {
-                        // Relay-safe completion routing: stamp the coordinator anchor the same way
-                        // mesh_launch_session does so the worker forwards events back to this daemon.
-                        const remoteSettings: Record<string, unknown> = {
-                            ...launchSettings,
-                            meshCoordinatorDaemonId: launchTarget.coordinatorDaemonId,
-                            meshCoordinatorNodeId: nodeId,
-                        };
-                        // SPAWN-CAP-TRANSPORT-AWARE: 'started' is pre-dispatch INTENT and spends
-                        // no spawn budget — the charge happens below, once a session is known to
-                        // exist. Charging here is precisely what let a 26-minute signalling
-                        // outage burn two healthy nodes' entire budgets with zero sessions created.
-                        markAutoLaunch(meshId, task.id, { status: 'started', nodeId, providerType: effectiveProviderType, ...(effectiveModel ? { model: effectiveModel } : {}), ...(effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {}) });
-                        let launchResult: any;
-                        try {
-                            // OFFLINE-NODE-BLOCKING: no peer-connected pre-check before this remote
-                            // launch_cli meant an OFFLINE target node sank the dispatch into the 90s
-                            // connect deadline, stalling the 4s auto-launch loop for a full 90s. Stamp
-                            // the status-origin marker so the daemon-cloud relay grants the SHORT
-                            // connect-wait budget — an offline node throws in ~2s, the catch below sets
-                            // the 25s cooldown (autoLaunchCooldownUntil) that already gates retries, so
-                            // the loop moves on. The marker only affects the connect wait and is
-                            // stripped before launch_cli executes, so a live node spawns identically.
-                            launchResult = await components.dispatchMeshCommand!(launchTarget.daemonId!, 'launch_cli', withStatusProbeMarker({
-                                cliType: effectiveProviderType,
-                                dir: node.workspace,
-                                settings: remoteSettings,
-                                // MAGI-KIND-PANEL model axis: forward the task's model override so the
-                                // remote worker session launches with it (initialModel). Best-effort.
-                                // Slot-aware: task override wins, else the matched slot's model.
-                                ...(effectiveModel ? { initialModel: effectiveModel } : {}),
-                                // BRAIN-ROUTING thinking axis: forward the effective thinking level (initialThinkingLevel).
-                                ...(effectiveThinkingLevel ? { initialThinkingLevel: effectiveThinkingLevel } : {}),
-                                // Phase E: launchedBy + modelSource / thinkingLevelSource.
-                                ...launchProvenance,
-                            }));
-                        } catch (e: any) {
-                            // SPAWN-CAP-TRANSPORT-AWARE: the dispatch never reached the target
-                            // daemon, so NO session exists — spend no spawn budget. Record it on
-                            // the dispatch-failure axis instead, which is what lets the park page
-                            // point the coordinator at its own ledger rather than at this node.
-                            markAutoLaunch(meshId, task.id, { status: 'failed', reason: `remote_launch_dispatch_failed: ${e?.message || String(e)}`, nodeId, providerType: effectiveProviderType, dispatchFailedInTransport: true });
-                            autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS); sweepExpiredCooldowns();
-                            return false;
-                        }
-                        const payload = (launchResult && typeof launchResult === 'object' && 'payload' in launchResult && launchResult.payload && typeof launchResult.payload === 'object')
-                            ? launchResult.payload
-                            : launchResult;
-                        if (!payload?.success) {
-                            const reason = readNonEmptyString(payload?.error) || 'remote_launch_cli_failed';
-                            markAutoLaunch(meshId, task.id, { status: 'failed', reason, nodeId, providerType: effectiveProviderType });
-                            autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS); sweepExpiredCooldowns();
-                            return false;
-                        }
-                        // Remote launch is async: the worker session will register and emit agent:ready,
-                        // which (forwarded back here) drives the claim via the normal event path / PHASE 1
-                        // reconcile. Set a cooldown so the 4s loop doesn't re-launch before that lands.
-                        const remoteSessionId = readNonEmptyString(payload.sessionId) || readNonEmptyString(payload.id) || readNonEmptyString(payload.runtimeSessionId);
-                        // SPAWN-CAP-TRANSPORT-AWARE: launch_cli reported success, so a remote
-                        // session now exists (or is booting). THIS is the event the spawn budget
-                        // exists to count — a real session that must go on to claim the task.
-                        markAutoLaunch(meshId, task.id, { status: 'completed', nodeId, providerType: effectiveProviderType, sessionId: remoteSessionId || undefined, ...(effectiveModel ? { model: effectiveModel } : {}), ...(effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {}), spendSpawnBudget: true });
-                        logAutoLaunchQuotaFallbackSuccess(resolved, task.id, nodeId, remoteSessionId || undefined);
-                        autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS); sweepExpiredCooldowns();
-                        // REMOTE-READY-WAIT: readiness barrier, symmetric with the local path's
-                        // waitForLocalSessionReady below and on the same 15s budget. The remote
-                        // worker's agent:ready is ALREADY forwarded here (it lands as a
-                        // remote-idle row); this awaits it instead of returning the instant
-                        // launch_cli resolves. On timeout we proceed exactly as before, so the
-                        // worst case is today's behavior — what it buys is not starting the
-                        // 25-40s delivered_not_consumed judgement clock against a session that
-                        // is not yet interactive, which for the five emitsPtyTurnEvents:false
-                        // providers has no other way to prove it is alive.
-                        //
-                        // The cooldown is set BEFORE the await on purpose: it must gate the 4s
-                        // loop for the whole wait, not only after it. (The per-node and per-task
-                        // autoLaunch in-progress locks are released in `finally` blocks that sit
-                        // outside this branch, so they cover the whole wait regardless.)
-                        //
-                        // Swallowed by construction: this branch runs inside the launch try/catch,
-                        // whose catch marks the auto-launch FAILED. A readiness barrier must never
-                        // be able to turn a launch that genuinely succeeded into a recorded failure.
-                        if (remoteSessionId) {
-                            await waitForRemoteSessionReady(meshId, nodeId, remoteSessionId, {
-                                isReady: remoteSessionReadyProbe(meshId, nodeId, remoteSessionId),
-                            }).catch(() => false);
-                            // Without the selected model, a remote session was judged against the
-                            // provider-slot intersection and could refuse `difficulty_floor_unmet`
-                            // despite the preview-selected slot having headroom.
-                            const routingDecision = buildRoutingDecision();
-                            claimAfterRemoteAutoLaunch(components, meshId, nodeId, remoteSessionId, effectiveProviderType,
-                                (c, m, n, s, p) => tryAssignQueueTask(c, m, n, s, p, routingDecision, undefined, 'auto_launch'));
-                        }
-                        return true;
-                    }
-
-                    // SPAWN-CAP-TRANSPORT-AWARE: pre-dispatch intent — spends no budget (above).
-                    markAutoLaunch(meshId, task.id, { status: 'started', nodeId, providerType: effectiveProviderType, ...(effectiveModel ? { model: effectiveModel } : {}), ...(effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {}) });
-                    // B4: through the router (src:mesh) — command log, invalidation, launch annotations.
-                    const launchResult: any = await components.router.execute('launch_cli', {
-                        cliType: effectiveProviderType,
-                        dir: node.workspace,
-                        settings: launchSettings,
-                        // MAGI-KIND-PANEL model axis: local launch forwards the effective model
-                        // (task override, else matched slot) as initialModel (CLI → modelLaunchArgs; ACP → setConfigOption).
-                        ...(effectiveModel ? { initialModel: effectiveModel } : {}),
-                        // BRAIN-ROUTING thinking axis: forward the effective thinking level (initialThinkingLevel).
-                        ...(effectiveThinkingLevel ? { initialThinkingLevel: effectiveThinkingLevel } : {}),
-                        // Phase E: launchedBy + modelSource / thinkingLevelSource.
-                        ...launchProvenance,
-                    }, 'mesh', { inProcess: true });
-                    if (!launchResult?.success) {
-                        const reason = launchResult?.error || 'launch_cli_failed';
-                        markAutoLaunch(meshId, task.id, { status: 'failed', reason, nodeId, providerType: effectiveProviderType });
-                        autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS); sweepExpiredCooldowns();
-                        return false;
-                    }
-                    const sessionId = readNonEmptyString(launchResult.sessionId) || readNonEmptyString(launchResult.id) || readNonEmptyString(launchResult.runtimeSessionId);
-                    if (!sessionId) {
-                        // SPAWN-CAP-TRANSPORT-AWARE: launch_cli SUCCEEDED but returned no session
-                        // id. A session very likely exists and is simply unidentifiable to us, so
-                        // this DOES spend budget — the cap must charge for anything it cannot
-                        // prove was never created, or an id-reporting bug becomes a spawn leak.
-                        markAutoLaunch(meshId, task.id, { status: 'failed', reason: 'launch_missing_session_id', nodeId, providerType: effectiveProviderType, spendSpawnBudget: true });
-                        autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS); sweepExpiredCooldowns();
-                        return false;
-                    }
-                    // SPAWN-CAP-TRANSPORT-AWARE: a local session demonstrably exists — spend one
-                    // unit of the spawn budget (the mismatch detector's counted unit).
-                    markAutoLaunch(meshId, task.id, { status: 'completed', nodeId, providerType: effectiveProviderType, sessionId, ...(effectiveModel ? { model: effectiveModel } : {}), ...(effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {}), spendSpawnBudget: true });
-                    logAutoLaunchQuotaFallbackSuccess(resolved, task.id, nodeId, sessionId);
-                    // Readiness barrier: a freshly-spawned local CLI session is NOT yet
-                    // interactive — its PTY prints the input prompt (and the adapter flips
-                    // isReady()) only ~2-6s after launch. Dispatching the task immediately
-                    // pushes the first (often large) message into a not-yet-ready PTY, which
-                    // could throw "not ready" and bounce the task through requeue (on win32
-                    // this raced the auto-launch cooldown and stranded the worker idle).
-                    // Await interactive readiness before claiming/dispatching so the very
-                    // first message lands cleanly. The adapter's queue-until-ready path is the
-                    // backstop if readiness is reported late; this just avoids the churn.
-                    await waitForLocalSessionReady(components, sessionId);
-                    const routingDecision = buildRoutingDecision();
-                    tryAssignQueueTask(components, meshId, nodeId, sessionId, effectiveProviderType, routingDecision, undefined, 'auto_launch');
-                    return true;
+                    const plan = await resolveAutoLaunchPlan(components, meshId, mesh, task, node, nodeId, isReadonly, skippedCandidates, markSkip);
+                    if (!plan) continue;
+                    return launchTarget.mode === 'remote'
+                        ? await launchQueueTaskOnRemoteNode(components, meshId, task, node, nodeId, launchKey, launchTarget, plan)
+                        : await launchQueueTaskOnLocalNode(components, meshId, task, node, nodeId, launchKey, plan);
                 } catch (e: any) {
                     markAutoLaunch(meshId, task.id, { status: 'failed', error: e?.message || String(e), nodeId });
                     autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS);

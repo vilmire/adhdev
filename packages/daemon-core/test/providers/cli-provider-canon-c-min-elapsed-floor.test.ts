@@ -37,8 +37,6 @@ function makeInstance(opts: { type: string; block: any; waitedMs: number }): { i
     getScriptParsedStatus: () => ({ messages: [] }),
     getPartialResponse: () => '',
     isProcessing: () => false,
-    isWaitingForResponse: false,
-    currentTurnScope: null,
   }
 
   instance.completedDebouncePending = {
@@ -190,13 +188,10 @@ function codexExternalNativeInstance(opts: { probeLastRole: string; probeContent
   instance.adapter = {
     chatMessagesOwnedExternally: true,
     currentTurnStartedAt: TURN_START,
-    currentTurnScope: null,
-    isWaitingForResponse: false,
     isProcessing: () => false,
     getPartialResponse: () => '',
     getStatus: () => ({ status: 'idle', lastOutputAt: TURN_START + 4_900 }),
     getScriptParsedStatus: () => ({ status: 'idle', messages: [] }),
-    getScreenText: () => '',
   }
   instance.readExternalCompletionMessages = () => [
     { role: 'user', content: 'the investigation task', timestamp: TURN_START + 100 },

@@ -3326,7 +3326,6 @@
                 "offline": "Sin conexión",
                 "failed": "Error de conexión",
                 "connecting": "Conectando…",
-                "attention": "En línea · sincronización retrasada",
                 "online": "En línea"
             },
             "slowLink": "Enlace lento",
@@ -3356,20 +3355,6 @@
             "reconnect": "Reconectar",
             "transportRelay": "Conectado a través de un servidor de retransmisión: más lento que un enlace directo. Suele deberse a un firewall o NAT que bloquea la ruta directa.",
             "transportDirect": "Conexión directa",
-            "beacon": {
-                "lastSyncedBehindPart_other": ", faltan recibir {{count}} registros",
-                "lastSyncedBehindPart_one": ", falta recibir {{count}} registro",
-                "soleCopyTooltip_other": "Hay {{entries}} registros en esta máquina que aún no tienen copia en otra máquina. Mantenla en línea hasta que otra máquina se sincronice.",
-                "soleCopyTooltip_one": "Hay {{entries}} registro en esta máquina que aún no tiene copia en otra máquina. Mantenla en línea hasta que otra máquina se sincronice.",
-                "soleCopyLabel_other": "{{count}} registros sin copia",
-                "soleCopyLabel_one": "{{count}} registro sin copia",
-                "behindTooltip_other": "Esta máquina aún no ha recibido {{count}} registros recientes de tus otras máquinas. Normalmente se pone al día sola.",
-                "behindTooltip_one": "Esta máquina aún no ha recibido {{count}} registro reciente de tus otras máquinas. Normalmente se pone al día sola.",
-                "behindLabel": "Sincronización con retraso",
-                "deferredLabel": "Copia sin confirmar",
-                "deferredTooltip": "No se pudo confirmar que todo en esta máquina tenga copia: solo se pudo comparar con algunas de tus máquinas. No es un error.",
-                "lastSyncedTooltip": "Última sincronización hace {{minutes}} min{{behindPart}}."
-            },
             "noAgentsRunning": "Aún no hay agentes en ejecución",
             "launchCta": "Iniciar →"
         },

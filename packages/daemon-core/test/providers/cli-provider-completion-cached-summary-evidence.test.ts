@@ -33,8 +33,6 @@ describe('buildCompletedFinalizationDiagnostic — cached-summary evidence (Defe
       chatMessagesOwnedExternally: true,
       getScriptParsedStatus: () => ({ status: 'idle', messages: opts.parsedMessages }),
       // No pending response — turn is closed (hasAdapterPendingResponse() false).
-      isWaitingForResponse: false,
-      currentTurnScope: null,
       isProcessing: () => false,
       getPartialResponse: () => '',
     }

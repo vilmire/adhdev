@@ -11,12 +11,8 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import type {
-  ProviderControlDef,
-  ProviderModule,
-  ProviderScripts,
-  ProviderSettingDef,
-} from './contracts.js';
+import type { ProviderModule, ProviderScripts } from './contracts.js';
+import type { ProviderControlDef, ProviderSettingDef } from './provider-control-contracts.js';
 
 /**
  * Adds a provider-script root to the require whitelist. Wrapped in a

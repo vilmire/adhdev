@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { IpcTransport } from '../src/transports/ipc.js';
-import { commandForNode, isLocalControlPlaneNode } from '../src/tools/mesh-tools-internal.js';
+import { commandForNode } from '../src/tools/mesh-tools-internal.js';
+import { isLocalControlPlaneNode } from '../src/tools/mesh-node-identity.js';
 import { ensureMeshNodeRoutes, MESH_NODE_ROUTES_TTL_MS } from '../src/tools/mesh-node-routes.js';
 import { applyMeshStatusViewRoutes, sealMeshStatusViewTransport } from '../src/tools/mesh-status-view.js';
 

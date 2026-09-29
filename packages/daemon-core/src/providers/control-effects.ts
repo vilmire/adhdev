@@ -1,13 +1,8 @@
-import type {
-    ControlInvokeResult,
-    ControlListResult,
-    ControlSetResult,
-    ProviderControlDef,
-    ProviderControlOption,
-    ProviderEffect,
-} from './contracts.js';
+import type { ProviderEffect } from './contracts.js';
+import type { ControlInvokeResult, ControlListResult, ControlSetResult, ProviderControlDef, ProviderControlOption } from './provider-control-contracts.js';
 import { flattenContent } from './contracts.js';
 import type { ChatMessage } from '../types.js';
+import type { ProviderEvent } from './provider-instance.js';
 import { buildChatMessage, buildRuntimeSystemChatMessage } from './chat-message-normalization.js';
 
 export type ProviderControlValue = string | number | boolean;
@@ -259,4 +254,81 @@ function formatNotificationBubbleFallback(title: string | undefined, body: strin
     const cleanBody = String(body || '').trim();
     if (cleanTitle && cleanBody) return `${cleanTitle}\n${cleanBody}`;
     return cleanTitle || cleanBody;
+}
+
+export function getEffectDedupKey(effect: { id?: string; type: string; message?: { content?: unknown }; toast?: { message?: string }; notification?: { title?: string; body?: string } }): string {
+    if (effect.id) return `provider_effect:${effect.id}`;
+    if (effect.type === 'message') {
+        const content = typeof effect.message?.content === 'string'
+            ? effect.message.content
+            : JSON.stringify(effect.message?.content || '');
+        return `provider_effect:message:${content}`;
+    }
+    if (effect.type === 'notification') {
+        return `provider_effect:notification:${effect.notification?.title || ''}:${effect.notification?.body || ''}`;
+    }
+    return `provider_effect:toast:${effect.toast?.message || ''}`;
+}
+
+/** The instance surface provider effects are applied through (IDE, extension and CLI instances). */
+export interface ProviderEffectSink {
+    appliedEffectKeys: Set<string>;
+    appendRuntimeMessage(message: ChatMessage, dedupKey: string): void;
+    pushEvent(event: ProviderEvent): void;
+}
+
+/**
+ * Apply the effects a provider script response carries for this phase: each
+ * effect fires at most once per instance (dedup key), persisted effects become
+ * runtime chat messages, and message / toast / notification effects surface as
+ * provider events.
+ */
+export function applyProviderEffects(data: unknown, phase: 'immediate' | 'turn_completed', sink: ProviderEffectSink): void {
+    for (const effect of normalizeProviderEffects(data)) {
+        const effectWhen = effect.when || 'immediate';
+        if (effectWhen === 'turn_completed' && phase !== 'turn_completed') continue;
+        if (effectWhen === 'immediate' && phase === 'turn_completed') continue;
+
+        const effectKey = getEffectDedupKey(effect);
+        if (sink.appliedEffectKeys.has(effectKey)) continue;
+        sink.appliedEffectKeys.add(effectKey);
+
+        if (effect.persist !== false) {
+            const persistedMessage = buildPersistedProviderEffectMessage(effect);
+            if (persistedMessage) sink.appendRuntimeMessage(persistedMessage, effectKey);
+        }
+
+        if (effect.type === 'message' && effect.message) {
+            sink.pushEvent({
+                event: 'provider:message',
+                timestamp: Date.now(),
+                content: typeof effect.message.content === 'string' ? effect.message.content : JSON.stringify(effect.message.content),
+                role: effect.message.role || 'system',
+                kind: effect.message.kind,
+                senderName: effect.message.senderName,
+            });
+        } else if (effect.type === 'toast' && effect.toast) {
+            sink.pushEvent({
+                event: 'provider:toast',
+                effectId: effect.id || effectKey,
+                timestamp: Date.now(),
+                message: effect.toast.message,
+                level: effect.toast.level || 'info',
+            });
+        } else if (effect.type === 'notification' && effect.notification) {
+            sink.pushEvent({
+                event: 'provider:notification',
+                effectId: effect.id || effectKey,
+                timestamp: Date.now(),
+                title: effect.notification.title,
+                message: effect.notification.body,
+                content: typeof effect.notification.bubbleContent === 'string'
+                    ? effect.notification.bubbleContent
+                    : effect.notification.body,
+                level: effect.notification.level || 'info',
+                channels: effect.notification.channels || ['toast'],
+                preferenceKey: effect.notification.preferenceKey,
+            });
+        }
+    }
 }

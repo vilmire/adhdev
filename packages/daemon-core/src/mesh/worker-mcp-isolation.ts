@@ -95,7 +95,7 @@ export { isWorkerMcpEnabled };
 
 // ─── Token minting ──────────────────────────────────────────────────────
 
-export interface WorkerTaskTokenBinding {
+interface WorkerTaskTokenBinding {
     meshId: string;
     taskId: string;
     /** Retry/redrive generation. A new attempt mints a NEW token (§9.2). */
@@ -104,7 +104,7 @@ export interface WorkerTaskTokenBinding {
     nodeId?: string;
 }
 
-export interface WorkerTaskToken extends WorkerTaskTokenBinding {
+interface WorkerTaskToken extends WorkerTaskTokenBinding {
     /** The opaque secret handed to the worker. Never logged, never sent to the server. */
     token: string;
     mintedAtMs: number;
@@ -344,7 +344,7 @@ export function findWorkerTaskTokenForSession(
 
 // ─── Top-level resolution ───────────────────────────────────────────────
 
-export interface WorkerMcpIsolationInput {
+interface WorkerMcpIsolationInput {
     providerType: string;
     workspace: string;
     sessionKey: string;
@@ -384,7 +384,7 @@ export interface WorkerMcpIsolationInput {
     baseDir?: string;
 }
 
-export interface WorkerMcpConfigOverrideDeliveryInput {
+interface WorkerMcpConfigOverrideDeliveryInput {
     mode: 'config_override';
     flag: string;
     serverName: string;

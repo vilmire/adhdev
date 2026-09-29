@@ -5,7 +5,7 @@ import {
     type ProviderQuotaGateBlock,
 } from './mesh-quota-routing.js';
 
-export interface QuotaClaimGateContext {
+interface QuotaClaimGateContext {
     /** What triggered this claim evaluation — e.g. 'idle_claim_scan', 'auto_launch', 'direct_dispatch'. */
     trigger?: string;
     /** The id of the queued task this session was trying to claim, when known. */
@@ -14,7 +14,7 @@ export interface QuotaClaimGateContext {
     pinOverride?: boolean;
 }
 
-export interface QuotaClaimGateObservation {
+interface QuotaClaimGateObservation {
     nodeId: string;
     sessionId: string;
     providerType: string;
@@ -28,7 +28,7 @@ export interface QuotaClaimDrainTrace {
     clear: number;
 }
 
-export type QuotaClaimGatePhase = 'blocked' | 'cleared' | 'overridden_by_pin';
+type QuotaClaimGatePhase = 'blocked' | 'cleared' | 'overridden_by_pin';
 
 // Claim reconciliation runs every few seconds. Keep the existing per-candidate gate
 // diagnostic, but emit it only when that candidate's gate verdict changes instead of

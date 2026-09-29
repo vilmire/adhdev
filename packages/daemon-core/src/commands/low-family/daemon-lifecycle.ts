@@ -28,7 +28,9 @@
  */
 import { loadConfig, updateConfig, setQuotaShowAccountEmail } from '../../config/config.js';
 import { installClaudeStatusline } from '../../quota/statusline/install.js';
-import { execNpmCommandSync, getUpgradeLogPath, resolveCurrentGlobalInstallSurface, resolveNpmPublishedVersion, spawnDetachedDaemonUpgradeHelper } from '../upgrade-helper.js';
+import { spawnDetachedDaemonUpgradeHelper } from '../upgrade-helper.js';
+import { getUpgradeLogPath } from '../upgrade-log.js';
+import { execNpmCommandSync, resolveCurrentGlobalInstallSurface, resolveNpmPublishedVersion } from '../upgrade-install-surface.js';
 import { LOG } from '../../logging/logger.js';
 import { compareSemver } from '../../version-compare.js';
 import { IDENTITY, TRACK } from '../../track-identity.js';

@@ -7,7 +7,7 @@
  */
 
 import type { ADHDevConfig } from '../../config/config.js';
-import type { readUpgradeFailureNotice } from '../../commands/upgrade-helper.js';
+import type { readUpgradeFailureNotice } from '../../commands/upgrade-failure-notice.js';
 import type { DaemonCdpManager } from '../../cdp/manager.js';
 import type { DaemonCdpInitializer } from '../../cdp/initializer.js';
 import type { DaemonCommandHandler } from '../../commands/handler.js';

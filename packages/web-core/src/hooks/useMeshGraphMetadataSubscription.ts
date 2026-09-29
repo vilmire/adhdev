@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { DaemonMetadataUpdate, RepoMeshStatus } from '@adhdev/daemon-core'
-import { daemonIdsEquivalent, normalizeSessionStatus, type SessionStatus } from '@adhdev/mesh-shared'
+import { daemonIdsEquivalent, normalizeSessionStatus, type SessionStatus, readText, readRecord } from '@adhdev/mesh-shared'
 import { subscriptionManager } from '../managers/SubscriptionManager'
 
 export type MeshGraphLiveSessionStatus = {
@@ -48,18 +48,10 @@ type MeshGraphMetadataSubscriptionArgs = {
 // in AppShell.tsx.
 export const EMPTY_LIVE_SESSIONS: MeshGraphLiveSessionStatus[] = []
 
-function readString(value: unknown): string {
-    return typeof value === 'string' ? value.trim() : ''
-}
-
-function readRecord(value: unknown): Record<string, any> {
-    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {}
-}
-
 export function collectSessionAliases(...values: unknown[]): string[] {
     const aliases = new Set<string>()
     for (const value of values) {
-        const text = readString(value)
+        const text = readText(value)
         if (text) aliases.add(text)
     }
     return [...aliases]
@@ -67,8 +59,8 @@ export function collectSessionAliases(...values: unknown[]): string[] {
 
 function buildLiveSessionStatus(session: any, meshId: string): MeshGraphLiveSessionStatus | null {
     const settings = readRecord(session?.settings)
-    const coordinatorMeshId = readString(session?.coordinator?.meshId) || readString(settings.meshCoordinatorFor)
-    const nodeMeshId = readString(settings.meshNodeFor)
+    const coordinatorMeshId = readText(session?.coordinator?.meshId) || readText(settings.meshCoordinatorFor)
+    const nodeMeshId = readText(settings.meshNodeFor)
     const hasMeshContext = !!coordinatorMeshId || !!nodeMeshId
     const belongsToRequestedMesh = coordinatorMeshId === meshId || nodeMeshId === meshId
     if (hasMeshContext && !belongsToRequestedMesh) return null
@@ -89,24 +81,24 @@ function buildLiveSessionStatus(session: any, meshId: string): MeshGraphLiveSess
     const sessionId = aliases[0] || ''
     if (!sessionId) return null
     const role = coordinatorMeshId === meshId
-        ? readString(session?.coordinator?.role) || 'coordinator'
+        ? readText(session?.coordinator?.role) || 'coordinator'
         : nodeMeshId === meshId
-            ? readString(settings.meshNodeRole) || 'worker'
-            : readString(session?.role) || readString(settings.meshNodeRole) || undefined
+            ? readText(settings.meshNodeRole) || 'worker'
+            : readText(session?.role) || readText(settings.meshNodeRole) || undefined
     return {
         sessionId,
         aliases,
         meshId,
-        nodeId: belongsToRequestedMesh ? readString(settings.meshNodeId) || null : null,
-        providerType: readString(session?.providerType) || undefined,
+        nodeId: belongsToRequestedMesh ? readText(settings.meshNodeId) || null : null,
+        providerType: readText(session?.providerType) || undefined,
         state: normalizeSessionStatus(session?.status) ?? undefined,
-        chatStatus: readString(activeChat.status) || undefined,
-        lifecycle: readString(session?.runtimeLifecycle) || undefined,
-        surfaceKind: readString(session?.runtimeSurfaceKind) || undefined,
-        recoveryState: readString(session?.runtimeRecoveryState) || undefined,
+        chatStatus: readText(activeChat.status) || undefined,
+        lifecycle: readText(session?.runtimeLifecycle) || undefined,
+        surfaceKind: readText(session?.runtimeSurfaceKind) || undefined,
+        recoveryState: readText(session?.runtimeRecoveryState) || undefined,
         ...(role ? { role } : {}),
         ...(belongsToRequestedMesh ? { isSelfCoordinator: coordinatorMeshId === meshId } : {}),
-        workspace: readString(session?.workspace) || null,
+        workspace: readText(session?.workspace) || null,
     }
 }
 
@@ -247,7 +239,7 @@ export function getMeshGraphMetadataSignature(update: DaemonMetadataUpdate, mesh
     const liveSessions = collectMeshGraphLiveSessionStatuses(update, meshId)
     const parts = liveSessions
         .map((session) => {
-            const rawSession = (Array.isArray(update.status?.sessions) ? update.status.sessions : []).find((entry: any) => readString(entry?.id) === session.sessionId)
+            const rawSession = (Array.isArray(update.status?.sessions) ? update.status.sessions : []).find((entry: any) => readText(entry?.id) === session.sessionId)
             const prompt = readRecord(rawSession?.activeInteractivePrompt)
             const meshQueueStats = rawSession?.meshQueueStats && typeof rawSession.meshQueueStats === 'object'
                 ? JSON.stringify(rawSession.meshQueueStats)
@@ -260,7 +252,7 @@ export function getMeshGraphMetadataSignature(update: DaemonMetadataUpdate, mesh
                 session.lifecycle ?? '',
                 session.surfaceKind ?? '',
                 session.recoveryState ?? '',
-                readString(prompt.status) || readString(prompt.kind) || readString(prompt.type),
+                readText(prompt.status) || readText(prompt.kind) || readText(prompt.type),
                 session.nodeId ?? '',
                 session.isSelfCoordinator ? 'coordinator' : 'worker',
                 meshQueueStats,

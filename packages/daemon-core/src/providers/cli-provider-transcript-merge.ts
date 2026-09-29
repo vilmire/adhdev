@@ -4,7 +4,7 @@
 // parameter. `buildExternalTranscriptProbe` used no instance state.
 
 import { flattenContent } from './contracts.js';
-import { normalizeChatMessages, resolveChatMessageKind, isUserFacingChatMessage } from './chat-message-normalization.js';
+import { buildChatMessage, normalizeChatMessages, resolveChatMessageKind, isUserFacingChatMessage } from './chat-message-normalization.js';
 import type { ChatMessage } from '../types.js';
 import type { ExternalTranscriptProbe } from './cli-provider-instance-types.js';
 
@@ -94,6 +94,63 @@ export function mergeConversationMessages(
             return a.index - b.index;
         })
         .map((entry) => entry.message));
+}
+
+/**
+ * The IDE / extension instances' merge: parsed chat messages and runtime messages
+ * interleaved by receive time, stable on ties. (The CLI path uses the richer
+ * mergeConversationMessages above — it must also place untimed parsed turns.)
+ */
+export function mergeRuntimeMessagesByTime(
+    runtimeMessages: Array<{ key: string; message: ChatMessage }>,
+    messages: any[],
+): ChatMessage[] {
+    if (runtimeMessages.length === 0) return normalizeChatMessages(messages);
+    return normalizeChatMessages([...messages, ...runtimeMessages.map((entry) => entry.message)]
+        .map((message, index) => ({ message, index }))
+        .sort((a, b) => {
+            const aTime = a.message.receivedAt || a.message.timestamp || 0;
+            const bTime = b.message.receivedAt || b.message.timestamp || 0;
+            if (aTime !== bTime) return aTime - bTime;
+            return a.index - b.index;
+        })
+        .map((entry) => entry.message));
+}
+
+/**
+ * Normalize a runtime message for an instance's runtime-message list: stamp both
+ * clocks, and refuse an empty message or a dedup key the list already holds.
+ * Returns the normalized message with its trimmed text, and the history row to
+ * persist when that text is non-empty.
+ */
+export function prepareRuntimeMessage(
+    runtimeMessages: ReadonlyArray<{ key: string }>,
+    message: ChatMessage,
+    dedupKey: string,
+): { message: ChatMessage; historyRow: { role: ChatMessage['role']; senderName?: string; kind?: ChatMessage['kind']; content: string; receivedAt?: number; historyDedupKey: string } | null } | null {
+    const normalizedMessage = buildChatMessage({
+        ...message,
+        receivedAt: typeof message.receivedAt === 'number' ? message.receivedAt : (message.timestamp || Date.now()),
+        timestamp: typeof message.timestamp === 'number' ? message.timestamp : (message.receivedAt || Date.now()),
+    } as ChatMessage);
+    const normalizedContent = typeof normalizedMessage.content === 'string'
+        ? normalizedMessage.content.trim()
+        : flattenContent(normalizedMessage.content).trim();
+    if (!normalizedContent && (!Array.isArray(normalizedMessage.content) || normalizedMessage.content.length === 0)) return null;
+    if (runtimeMessages.some((entry) => entry.key === dedupKey)) return null;
+    return {
+        message: normalizedMessage,
+        historyRow: normalizedContent
+            ? {
+                role: normalizedMessage.role,
+                senderName: normalizedMessage.senderName,
+                kind: normalizedMessage.kind,
+                content: normalizedContent,
+                receivedAt: normalizedMessage.receivedAt || normalizedMessage.timestamp,
+                historyDedupKey: dedupKey,
+            }
+            : null,
+    };
 }
 
 export function buildExternalTranscriptProbe(messages: unknown[], sourcePath?: string, sourceMtimeMs?: number): ExternalTranscriptProbe {

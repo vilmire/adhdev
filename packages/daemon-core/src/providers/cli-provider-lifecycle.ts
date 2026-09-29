@@ -102,22 +102,18 @@ export function wireAdapterCallbacks(host: LifecycleWiringHost, context: Instanc
         host.adapter.setOnPtyData(context.onPtyData);
     }
 
-    // Emit event on status change. The cause-carrying hook (B2) replaces the
-    // cause-less one when the adapter has it — registering both would tick twice.
-    if (typeof host.adapter.setOnChange === 'function') {
-        host.adapter.setOnChange((cause) => host.detectStatusTransition(cause));
-    } else {
-        host.adapter.setOnStatusChange(() => host.detectStatusTransition());
-    }
+    // Emit event on status change through the cause-carrying hook (B2). The
+    // cause-less setOnStatusChange must NOT also be registered — it would tick twice.
+    host.adapter.setOnChange((cause) => host.detectStatusTransition(cause));
 
     // PTY death + screen signals → lifecycle port (wiring-unification B4; replaces
     // the shared termination/signal sinks). `exited` routes through
     // registry.terminate(id, 'pty_exit'), so a racing stop/auto-clean still yields
     // exactly one `terminated`; mesh meaning is applied by bus subscribers.
-    host.adapter.setOnExit?.(({ termination, runtimeSettings }) => {
+    host.adapter.setOnExit(({ termination, runtimeSettings }) => {
         host.lifecyclePort?.exited(host.instanceId, termination, runtimeSettings);
     });
-    host.adapter.setOnSignal?.(({ providerType, workspace, runtimeSettings, signal }) => {
+    host.adapter.setOnSignal(({ providerType, workspace, runtimeSettings, signal }) => {
         host.lifecyclePort?.signal(host.instanceId, { providerType, workspace, runtimeSettings, signal });
     });
 
@@ -126,7 +122,7 @@ export function wireAdapterCallbacks(host: LifecycleWiringHost, context: Instanc
     // the normal provider-event pipeline so mesh_approve, dashboard/manual
     // resolution, rejection, and worker auto-approve all emit the same durable
     // task_approval_resolved ledger event. A failed/missing button emits nothing.
-    host.adapter.setOnApprovalResolved?.(({ resolvedAt, buttonLabel }) => {
+    host.adapter.setOnApprovalResolved(({ resolvedAt, buttonLabel }) => {
         const resolution = isNegativeApprovalLabel(String(buttonLabel || '')) ? 'rejected' : 'approved';
         host.pushEvent({
             event: 'agent:approval_resolved',

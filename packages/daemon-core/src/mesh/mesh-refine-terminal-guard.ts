@@ -45,7 +45,7 @@
  */
 
 /** What a previously-written terminal row looked like. */
-export interface ExistingRefineTerminal {
+interface ExistingRefineTerminal {
     /** 'task_completed' | 'task_failed' as written to the ledger. */
     kind: 'task_completed' | 'task_failed';
     /** The EXECUTION identity that wrote it — distinct per run, unlike jobId. */
@@ -54,13 +54,13 @@ export interface ExistingRefineTerminal {
     completedAt?: string;
 }
 
-export interface IncomingRefineTerminal {
+interface IncomingRefineTerminal {
     kind: 'task_completed' | 'task_failed';
     interactionId?: string;
     completedAt?: string;
 }
 
-export type RefineTerminalDecision =
+type RefineTerminalDecision =
     | {
         allow: true;
         /**

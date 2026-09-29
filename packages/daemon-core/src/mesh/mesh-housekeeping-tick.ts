@@ -24,7 +24,6 @@ import { LOG } from '../logging/logger.js';
 import type { LocalMeshEntry } from '../repo-mesh-types.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { triggerMeshQueue } from './mesh-events-coordinator.js';
-import { readNonEmptyString } from './mesh-events-utils.js';
 import { resolveCoordinatorDaemonIds, daemonHostsMesh, resolveCoordinatorSelfIds } from './mesh-reconcile-identity.js';
 import { runDiskRetentionSweep, detectAndSignalOrphanWorktrees } from './mesh-disk-retention.js';
 import { pruneMeshRuntimeRetention } from './mesh-runtime-store.js';
@@ -38,6 +37,7 @@ import { sweepMeshGraphGateTimeouts } from './mesh-graph-gates.js';
 import { sweepMeshGraphStaleness } from './mesh-graph-staleness.js';
 import { sweepMeshGraphStalls } from './mesh-graph-stall.js';
 import { recordGraphGateExpired } from './mesh-graph-provenance.js';
+import { readText } from '@adhdev/mesh-shared';
 
 /** Disk/worktree retention: artifacts age in days and the fs/git walk is heavy — hourly. */
 export const DISK_RETENTION_INTERVAL_MS = 60 * 60 * 1000;
@@ -282,7 +282,7 @@ export function startMeshHousekeeping(components: DaemonComponents, intervalMs: 
             .finally(() => { running = false; });
     }, intervalMs);
     if (typeof timer.unref === 'function') timer.unref();
-    LOG.info('MeshHousekeeping', `Mesh housekeeping started (interval ${intervalMs}ms, local daemon ${readNonEmptyString(getMachineId()) || 'unknown'})`);
+    LOG.info('MeshHousekeeping', `Mesh housekeeping started (interval ${intervalMs}ms, local daemon ${readText(getMachineId()) || 'unknown'})`);
     return {
         stop() {
             clearInterval(timer);

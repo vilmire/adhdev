@@ -165,7 +165,7 @@ export function meshRecordAsEntry(meshId: string, kind: string, scalars: MeshRec
     };
 }
 
-export interface MeshRecordAppendResult {
+interface MeshRecordAppendResult {
     eventId: string;
     /** The entry's append coordinate on `mesh.<meshId>.events`; null when it was not appended (no node / refused / rejected). */
     appended: { topic: string; writer: string; seq: number } | null;

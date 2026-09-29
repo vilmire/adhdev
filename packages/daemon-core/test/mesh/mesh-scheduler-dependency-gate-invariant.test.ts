@@ -312,7 +312,10 @@ describe('SURFACE auto-launch (maybeAutoLaunchOneQueueSession) routes through th
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const SRC_ROOT = path.resolve(TEST_DIR, '../../src');
+// The enqueue tools and the view/cancel/requeue tools (mesh-tools-queue-manage.ts,
+// split out of mesh-tools-queue.ts) are both read.
 const MCP_TOOLS_QUEUE = path.resolve(TEST_DIR, '../../../mcp-server/src/tools/mesh-tools-queue.ts');
+const MCP_TOOLS_QUEUE_MANAGE = path.resolve(TEST_DIR, '../../../mcp-server/src/tools/mesh-tools-queue-manage.ts');
 
 interface SurfacePin {
     name: string;
@@ -326,7 +329,9 @@ interface SurfacePin {
 const SCHEDULER_SURFACES: SurfacePin[] = [
     {
         name: 'queue claim (claimNextQueueTask)',
-        file: path.join(SRC_ROOT, 'mesh/mesh-runtime-store.ts'),
+        // claimNextQueueTask moved out of mesh-runtime-store.ts into mesh-runtime-store-claim.ts
+        // (self-delegate move). Only the path follows it.
+        file: path.join(SRC_ROOT, 'mesh/mesh-runtime-store-claim.ts'),
         gateCalls: ['taskDependenciesSatisfied(candidate, depStatus)'],
         // The runtime store legitimately hosts the phase-B graph store too, so only
         // the gate call + no-inline-fork are pinned here, not token absence.
@@ -396,7 +401,7 @@ describe('structural pins: every scheduler surface gates through the one predica
     }
 
     it('the enqueue tools are NOT a scheduling surface: they never send a task body themselves (rc.37 Finding B)', () => {
-        const src = fs.readFileSync(MCP_TOOLS_QUEUE, 'utf8');
+        const src = [MCP_TOOLS_QUEUE, MCP_TOOLS_QUEUE_MANAGE].map(file => fs.readFileSync(file, 'utf8')).join('\n');
         // Delivery is only through a claim (tryAssignQueueTask opens the attempt,
         // then sends). A direct send from the enqueue tools bypasses the claim
         // gates, the attempt and the dependency predicate all at once.

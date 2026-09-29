@@ -15,7 +15,7 @@ import { CliProviderInstance } from '../../src/providers/cli-provider-instance.j
 // ends (completion/idle valley no longer false-fires), and a per-session refire
 // cooldown throttles repeated stall notifications. A genuine mid-turn wedge still
 // fires — late, at the raised turn bound. The turn-active signal is the adapter's
-// currentTurnScope / isWaitingForResponse (hasAdapterPendingResponse()).
+// isProcessing() (hasAdapterPendingResponse()).
 const STALL_MS = 180_000         // idle threshold (MESH_WORKER_STALL_IDLE_THRESHOLD_MS)
 const TURN_STALL_MS = 360_000    // turn-active threshold (MESH_WORKER_STALL_TURN_THRESHOLD_MS)
 
@@ -48,8 +48,10 @@ describe('CliProviderInstance.checkMeshWorkerStall', () => {
       _lastOutputAt: opts.lastOutputAt,
       _status: opts.status ?? 'idle',
       _alive: opts.alive ?? true,
-      // hasAdapterPendingResponse() reads currentTurnScope for the turn-active edge.
-      currentTurnScope: opts.turnActive ? { id: 'turn-1' } : undefined,
+      // hasAdapterPendingResponse() reads isProcessing() for the turn-active edge.
+      _processing: opts.turnActive === true,
+      isProcessing() { return this._processing },
+      getLastApprovalResolvedAt() { return 0 },
       isAlive() { return this._alive },
       getStatus() { return { lastOutputAt: this._lastOutputAt, status: this._status } },
     }
@@ -191,11 +193,11 @@ describe('CliProviderInstance.checkMeshWorkerStall', () => {
     instance.checkMeshWorkerStall(outputAt + 1_000)
     instance.checkMeshWorkerStall(outputAt + STALL_MS - 1)
     expect(emitted).toHaveLength(0)
-    // The turn ENDS: adapter goes idle, currentTurnScope cleared. lastOutputAt has
+    // The turn ENDS: adapter goes idle, no longer processing. lastOutputAt has
     // NOT advanced (the last bytes were mid-turn). This tick sees active → inactive
     // and force re-arms the anchor to `now`.
     adapter._status = 'idle'
-    adapter.currentTurnScope = undefined
+    adapter._processing = false
     const idleAt = outputAt + STALL_MS - 1
     instance.checkMeshWorkerStall(idleAt)
     expect(emitted).toHaveLength(0)

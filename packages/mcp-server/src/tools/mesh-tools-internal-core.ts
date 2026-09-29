@@ -6,11 +6,10 @@
 // Everything in this file depends only on data shapes (mesh/node entries, command
 // payloads, git status objects, ledger entries) — no MeshContext, no transport,
 // no ledger access, no module-level mutable state. The ctx-bound orchestration
-// (dispatch, drain, refresh, probes) stays in mesh-tools-internal.ts, which
-// re-exports this whole surface so the domain tool files and the mesh-tools.ts
-// barrel keep importing from the hub unchanged.
+// (dispatch, drain, refresh, probes) stays in mesh-tools-internal.ts; consumers
+// import these helpers from here directly.
 
-import { normalizeNodeCapabilitySlots, deriveProviderPriorityFromSlots } from '@adhdev/mesh-shared';
+import { normalizeNodeCapabilitySlots, deriveProviderPriorityFromSlots, readString } from '@adhdev/mesh-shared';
 import type { LocalMeshEntry, LocalMeshNodeEntry, RepoMeshRelatedRepo } from '@adhdev/daemon-core';
 import {
     buildMeshNodeCapabilityTags,
@@ -18,13 +17,7 @@ import {
     meshNodeIdMatches,
 } from '@adhdev/daemon-core';
 import { isCoordinatorVisibleMessage, messageContent } from './chat-compact.js';
-import {
-    LARGE_LEDGER_FIELD_KEYS,
-    elideLargeNestedValue,
-    readNumeric,
-    readString,
-    summarizeLargeLedgerField,
-} from './mesh-tool-shared.js';
+import { LARGE_LEDGER_FIELD_KEYS, elideLargeNestedValue, readNumeric, summarizeLargeLedgerField } from './mesh-tool-shared.js';
 import {
     isIdleSessionRecord,
     isTerminalSessionRecord,
@@ -248,7 +241,6 @@ export function isRelaySafeRemoteDelegateSession(session: any, meshId: string, n
     return isMeshOwnedDelegateSession(session, meshId, nodeId) && hasRemoteRelayMetadata(session);
 }
 
-
 /**
  * Pre-dispatch relay-safety classification for an explicit remote delegate
  * session. The local direct-dispatch path (commandForNode → agent_command) has
@@ -381,7 +373,7 @@ export function extractLaunchPayload(value: any): any {
     return findNestedPayload(value, payload => Boolean(payload?.sessionId || payload?.id || payload?.runtimeSessionId));
 }
 
-export type MeshLaunchFailureClassification = {
+type MeshLaunchFailureClassification = {
     code: string;
     reason: string;
     transport: string;
@@ -604,7 +596,6 @@ export function readNodeSupportedProviders(policy: unknown): string[] {
     for (const type of readProviderPriority(policy)) push(type);
     return out;
 }
-
 
 /**
  * Surface the capability tags a node can match against required_tags routing,
@@ -952,7 +943,6 @@ export function buildBranchConvergence(
         nextStep: `Review and merge branch '${branch}' into ${defaultBranch}; do not report the task as fully complete while it remains off main.`,
     };
 }
-
 
 // In compact mode the per-node followUp rows are capped so this summary can't grow
 // unbounded with node count; the dropped rows are folded into a by-status count and

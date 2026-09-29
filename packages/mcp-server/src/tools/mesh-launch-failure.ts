@@ -1,6 +1,6 @@
 // Recoverable session-launch failures: the typed payload and its ledger record
 // (read back by mesh_status via latestActiveLaunchFailureFromEntries). Split out
-// of mesh-tools-internal.ts; re-exported there.
+// of mesh-tools-internal.ts.
 
 import type { MeshContext } from './mesh-tools-internal.js';
 import type { LocalMeshNodeEntry, MeshLedgerEntry } from '@adhdev/daemon-core';

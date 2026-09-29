@@ -76,7 +76,7 @@ describe('buildDashboardDockviewContextMenuItems', () => {
   })
 
   it('renders tab context-menu action buttons as non-focusing buttons so menu clicks do not jump chat scroll', () => {
-    const dockviewSource = readFileSync(path.resolve(process.cwd(), 'src/components/dashboard/DashboardDockviewWorkspace.tsx'), 'utf8')
+    const dockviewSource = readFileSync(path.resolve(process.cwd(), 'src/components/dashboard/DockviewTabContextMenu.tsx'), 'utf8')
     const paneTabBarSource = readFileSync(path.resolve(process.cwd(), 'src/components/dashboard/PaneGroupTabBar.tsx'), 'utf8')
 
     expect(dockviewSource).toContain('function preventContextMenuButtonFocus')

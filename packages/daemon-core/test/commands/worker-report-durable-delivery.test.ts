@@ -14,16 +14,9 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { workerReportHandlers } from '../../src/commands/low-family/worker-report'
-import {
-  __resetProgressSurfaceForTest,
-  __resetReportedSummariesForTest,
-  __setHandoffNoteSinkForTests,
-  __setWorkerLateReportNoticeSinkForTests,
-  __setWorkerProgressNoticeSinkForTests,
-  WORKER_PROGRESS_EVENT_KIND,
-  WORKER_REPORT_EVENT_KIND,
-  WORKER_REPORT_MAX_DELIVERY_DELAY_MS,
-} from '../../src/mesh/worker-report'
+import { __resetReportedSummariesForTest, __setHandoffNoteSinkForTests, WORKER_PROGRESS_EVENT_KIND, WORKER_REPORT_EVENT_KIND, WORKER_REPORT_MAX_DELIVERY_DELAY_MS } from '../../src/mesh/worker-report';
+import { __resetProgressSurfaceForTest, __setWorkerProgressNoticeSinkForTests } from '../../src/mesh/worker-report-progress.js';
+import { __setWorkerLateReportNoticeSinkForTests } from '../../src/mesh/worker-report-late.js';
 import { __resetWorkerDeliveryReplayForTests } from '../../src/mesh/worker-report-idempotency'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store'
 import {

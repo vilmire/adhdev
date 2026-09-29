@@ -70,7 +70,7 @@ const CLAUDE_FAMILIES = ['opus', 'sonnet', 'haiku'] as const;
  * A non-Claude / unrecognized model has no family; callers fall back to a
  * normalized literal compare for those (e.g. 'kimi-code/k3', 'gpt-5-codex').
  */
-export interface CanonicalModelIdentity {
+interface CanonicalModelIdentity {
     /** Claude family when recognized, else undefined. */
     family?: string;
     /** Dotted version when present, e.g. '4.6'. */
@@ -169,7 +169,7 @@ export const SLOT_MODEL_BUSY_SKIP_REASON = 'slot_for_model_busy';
 /** Skip reason emitted when NO slot on the node can run the requested model. */
 export const SLOT_MODEL_ABSENT_SKIP_REASON = 'no_slot_declares_requested_model';
 
-export interface SlotAvailability {
+interface SlotAvailability {
     /** The slot itself. */
     slot: NodeCapabilitySlot;
     /**
@@ -179,7 +179,7 @@ export interface SlotAvailability {
     available: boolean;
 }
 
-export interface SlotModelDecisionInput {
+interface SlotModelDecisionInput {
     /** Model the task wants to run with (preset-resolved or explicit). */
     requestedModel: string | undefined;
     /**
@@ -205,7 +205,7 @@ export interface SlotModelDecisionInput {
     providerType?: string;
 }
 
-export type SlotModelDecision =
+type SlotModelDecision =
     /** A slot declaring this model has capacity now → launch on it. */
     | { outcome: 'run'; slot: NodeCapabilitySlot; model: string | undefined }
     /**
@@ -292,7 +292,7 @@ export function decideSlotForModel(input: SlotModelDecisionInput): SlotModelDeci
  * the FINALIZED slot (what the guard settled on). Both halves — provider and
  * model — are compared, because either can move independently.
  */
-export interface SlotFinalization {
+interface SlotFinalization {
     /** Slot the guard settled on; both provider and model are launched from it. */
     slot: NodeCapabilitySlot;
     /** The finalized slot's own model, or undefined for a model-less slot. */

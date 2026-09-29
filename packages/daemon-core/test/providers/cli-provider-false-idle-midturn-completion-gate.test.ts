@@ -83,13 +83,10 @@ function makeAntigravityFlush(opts: {
   instance.adapter = {
     chatMessagesOwnedExternally: true,
     currentTurnStartedAt: TURN_START,
-    currentTurnScope: null,
-    isWaitingForResponse: false,
     isProcessing: () => false,
     getPartialResponse: () => '',
     getStatus: () => ({ status: 'idle', lastOutputAt: TURN_START + 4_900 }),
     getScriptParsedStatus: () => ({ status: 'idle', messages: [] }),
-    getScreenText: () => '',
   }
 
   // The native transcript read is stubbed; present/source are computed by the real gate.
@@ -172,13 +169,10 @@ function makeCodexFlush(opts: {
   instance.adapter = {
     chatMessagesOwnedExternally: false, // PTY-parsed provider
     currentTurnStartedAt: TURN_START,
-    currentTurnScope: null,
-    isWaitingForResponse: false,
     isProcessing: () => false,
     getPartialResponse: () => '',
     getStatus: () => ({ status: 'idle', lastOutputAt: opts.lastOutputAt }),
     getScriptParsedStatus: () => ({ status: 'idle', messages: opts.parsedMessages }),
-    getScreenText: () => '',
   }
 
   instance.pushEvent = (e: any) => { emitted.push(e) }

@@ -61,8 +61,6 @@ function makeShortGenInstance(opts: {
     getStatus: () => ({ status: 'idle', lastOutputAt }),
     getPartialResponse: () => '',
     getScriptParsedStatus: () => ({ status: 'idle', messages: [] }),
-    getScreenText: () => '',
-    isWaitingForResponse: false,
     currentTurnStartedAt: Date.now() - 800,
     currentTurnTaskId: typeof opts.settings.meshActiveTaskId === 'string'
       ? opts.settings.meshActiveTaskId

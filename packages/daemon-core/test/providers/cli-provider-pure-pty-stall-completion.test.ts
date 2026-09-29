@@ -40,8 +40,6 @@ describe('CliProviderInstance.tryReconcileTranscriptCompletionForStall', () => {
     const adapter = {
       currentTurnTaskId: undefined as string | undefined,
       currentTurnStartedAt: opts.turnStartedAt,
-      isWaitingForResponse: false,
-      currentTurnScope: undefined,
       getScriptParsedStatus() { return { messages: [] } },
     }
     instance.adapter = adapter

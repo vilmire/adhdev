@@ -24,7 +24,7 @@
  */
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import { daemonIdsEquivalent, meshNodeIdMatches, normalizeMeshNodeId } from '@adhdev/mesh-shared';
+import { daemonIdsEquivalent, meshNodeIdMatches, normalizeMeshNodeId, readText } from '@adhdev/mesh-shared';
 import { getConfigDir } from '../config/config.js';
 import type { MeshNodeStatePushPersistence, MeshNodeStatePushTarget } from './mesh-node-state-pusher.js';
 
@@ -32,18 +32,14 @@ const FILE_NAME = 'mesh-node-push-subscriptions.json';
 /** Upper bound on persisted subscriptions (meshes cap at 10 nodes; a daemon serves a handful of meshes). */
 export const MESH_NODE_PUSH_PERSIST_MAX = 64;
 
-function readString(value: unknown): string {
-    return typeof value === 'string' ? value.trim() : '';
-}
-
 function readTarget(value: unknown): MeshNodeStatePushTarget | null {
     const record = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
     if (!record) return null;
     const target = {
-        coordinatorDaemonId: readString(record.coordinatorDaemonId),
-        meshId: readString(record.meshId),
-        nodeId: readString(record.nodeId),
-        workspace: readString(record.workspace),
+        coordinatorDaemonId: readText(record.coordinatorDaemonId),
+        meshId: readText(record.meshId),
+        nodeId: readText(record.nodeId),
+        workspace: readText(record.workspace),
     };
     return target.coordinatorDaemonId && target.meshId && target.nodeId && target.workspace ? target : null;
 }
@@ -87,24 +83,24 @@ export function deriveMemberPushTargets(args: {
     getMeshNodes: (meshId: string) => unknown[];
     workspaceExists?: (workspace: string) => boolean;
 }): MeshNodeStatePushTarget[] {
-    const self = readString(args.selfDaemonId);
+    const self = readText(args.selfDaemonId);
     if (!self) return [];
     const exists = args.workspaceExists ?? ((workspace: string) => {
         try { return existsSync(workspace); } catch { return false; }
     });
     const out: MeshNodeStatePushTarget[] = [];
     for (const record of args.hostRecords) {
-        const meshId = readString(record?.meshId);
-        const host = readString(record?.hostDaemonId);
+        const meshId = readText(record?.meshId);
+        const host = readText(record?.hostDaemonId);
         if (!meshId || !host || daemonIdsEquivalent(host, self)) continue;
         let nodes: unknown[] = [];
         try { nodes = args.getMeshNodes(meshId) ?? []; } catch { nodes = []; }
         for (const raw of nodes) {
             const node = raw && typeof raw === 'object' ? raw as Record<string, unknown> : null;
             if (!node) continue;
-            const daemonId = readString(node.daemonId);
-            const nodeId = readString(normalizeMeshNodeId(node as any));
-            const workspace = readString(node.workspace);
+            const daemonId = readText(node.daemonId);
+            const nodeId = readText(normalizeMeshNodeId(node as any));
+            const workspace = readText(node.workspace);
             if (!daemonId || !nodeId || !workspace || !daemonIdsEquivalent(daemonId, self)) continue;
             if (!exists(workspace)) continue;
             if (out.some((t) => t.meshId === meshId && meshNodeIdMatches({ id: t.nodeId }, nodeId))) continue;

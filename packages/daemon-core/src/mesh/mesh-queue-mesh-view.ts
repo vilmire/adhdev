@@ -4,8 +4,7 @@
 // router's inline-mesh cache. Split out of mesh-queue-assignment.ts (re-exported
 // there).
 
-import { canonicalDaemonId, meshNodeIdMatches } from '@adhdev/mesh-shared';
-import { readNonEmptyString } from './mesh-events-utils.js';
+import { canonicalDaemonId, meshNodeIdMatches, readText } from '@adhdev/mesh-shared';
 import { getMachineId } from '../config/config.js';
 import { type RepoMeshDeclarativeConfig, loadRepoMeshJsonConfig } from '../config/mesh-json-config.js';
 import { LOG } from '../logging/logger.js';
@@ -26,9 +25,8 @@ import { normalizeMeshNodeId } from '@adhdev/mesh-shared';
  * the read side; this only removes the producer-side skew.
  */
 export function localCoordinatorDaemonId(): string | undefined {
-    return canonicalDaemonId(readNonEmptyString(getMachineId()));
+    return canonicalDaemonId(readText(getMachineId()));
 }
-
 
 /**
  * Why `loadRepoConfigForNode` returned null — distinguishes the ordinary "no repo
@@ -142,7 +140,7 @@ export function __resetRepoConfigWarnStreaksForTests(): void {
 function warnUnreadableRepoConfigForNode(node: any, providerType: string | undefined): void {
     const workspace = typeof node?.workspace === 'string' && node.workspace.trim() ? node.workspace.trim() : '';
     if (!workspace) return;
-    const nodeId = readNonEmptyString(node?.id) || readNonEmptyString(node?.nodeId) || 'unknown-node';
+    const nodeId = readText(node?.id) || readText(node?.nodeId) || 'unknown-node';
     const key = repoConfigStreakKey(nodeId, workspace);
     if (warnedInvalidRepoConfigNodes.has(key)) return;
     warnedInvalidRepoConfigNodes.add(key);
@@ -159,7 +157,7 @@ function warnUnreadableRepoConfigForNode(node: any, providerType: string | undef
 function clearUnreadableRepoConfigStreak(node: any): void {
     const workspace = typeof node?.workspace === 'string' && node.workspace.trim() ? node.workspace.trim() : '';
     if (!workspace) return;
-    const nodeId = readNonEmptyString(node?.id) || readNonEmptyString(node?.nodeId) || 'unknown-node';
+    const nodeId = readText(node?.id) || readText(node?.nodeId) || 'unknown-node';
     warnedInvalidRepoConfigNodes.delete(repoConfigStreakKey(nodeId, workspace));
 }
 
@@ -260,7 +258,7 @@ export function getMeshWithCache(components: DaemonComponents, meshId: string): 
 const BOOTSTRAP_TERMINAL_STATUSES = new Set(['complete', 'failed']);
 
 function bootstrapEpochMs(bootstrap: any): number {
-    const raw = readNonEmptyString(bootstrap?.startedAt) || readNonEmptyString(bootstrap?.completedAt);
+    const raw = readText(bootstrap?.startedAt) || readText(bootstrap?.completedAt);
     if (!raw) return 0;
     const parsed = Date.parse(raw);
     return Number.isFinite(parsed) ? parsed : 0;
@@ -275,9 +273,9 @@ function bootstrapEpochMs(bootstrap: any): number {
  * anti-case), and equal states never trigger a rewrite.
  */
 function inlineBootstrapIsFresher(inlineBootstrap: any, configBootstrap: any): boolean {
-    const inlineStatus = readNonEmptyString(inlineBootstrap?.status);
+    const inlineStatus = readText(inlineBootstrap?.status);
     if (!inlineStatus) return false;
-    const configStatus = readNonEmptyString(configBootstrap?.status);
+    const configStatus = readText(configBootstrap?.status);
     const inlineTerminal = BOOTSTRAP_TERMINAL_STATUSES.has(inlineStatus);
     const configTerminal = !!configStatus && BOOTSTRAP_TERMINAL_STATUSES.has(configStatus);
     // Config already terminal: only a DIFFERENT terminal inline state (e.g. config 'complete'
@@ -341,7 +339,6 @@ function mergeInlineCacheOnlyNodes(localMesh: any, cachedMesh: any): any {
     if (!cacheOnly.length && !overlaid) return localMesh;
     return { ...localMesh, nodes: [...overlaidLocalNodes, ...cacheOnly] };
 }
-
 
 // Canonical mesh node-id normalization. A node may arrive from the local config
 // form (`id`) or the inline-cache form (`nodeId`/`node_id`) — see

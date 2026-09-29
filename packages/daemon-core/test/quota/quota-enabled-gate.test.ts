@@ -24,16 +24,9 @@ vi.mock('../../src/quota/fetchers/grok.js', () => ({ fetchGrokQuota }))
 vi.mock('../../src/quota/fetchers/kimi.js', () => ({ fetchKimiQuota }))
 vi.mock('../../src/quota/fetchers/opencode.js', () => ({ fetchOpencodeUsage, OPENCODE_USAGE_DAYS: 7 }))
 
-const {
-    clearQuotaCache,
-    hydrateQuotaCacheFromDisk,
-    readQuotaCache,
-    refreshQuotaCacheOnBoot,
-    refreshQuotaCacheOnce,
-    startQuotaRefreshLoop,
-    __resetQuotaBootRefreshForTests,
-    __resetQuotaHydrationForTests,
-} = await import('../../src/quota/refresh.js')
+const { clearQuotaCache, hydrateQuotaCacheFromDisk, readQuotaCache, refreshQuotaCacheOnce, __resetQuotaHydrationForTests } = await import('../../src/quota/refresh.js')
+const { refreshQuotaCacheOnBoot, __resetQuotaBootRefreshForTests } = await import('../../src/quota/refresh-triggers.js')
+const { startQuotaRefreshLoop } = await import('../../src/quota/refresh-loop.js')
 const { saveQuotaCache } = await import('../../src/quota/persist.js')
 
 // `updatedAt` must be NOW, not a fixed epoch constant: the idle-gate staleness

@@ -164,7 +164,7 @@ export function getDrainStatus(host: ModalParkHost): 'idle' | 'generating' | 'mo
  */
 export function inApprovalResumeGrace(host: ModalParkHost, now = Date.now()): boolean {
     if (!host.isAutonomousMeshSession() || !host.shouldUsePtyAutoApprove()) return false;
-    const resolvedAt = host.adapter.getLastApprovalResolvedAt?.() ?? 0;
+    const resolvedAt = host.adapter.getLastApprovalResolvedAt();
     if (resolvedAt <= 0) return false;
     return (now - resolvedAt) < APPROVAL_RESUME_GRACE_MS;
 }

@@ -39,14 +39,14 @@ export interface CoordinatorSessionView {
     modalParked: boolean;
 }
 
-export type RouteWait = 'registered' | 'input_ready' | 'modal_cleared';
+type RouteWait = 'registered' | 'input_ready' | 'modal_cleared';
 
 export type NoticeRoute =
     | { kind: 'deliver'; sessionId: string; escalated: boolean }
     | { kind: 'wait'; sessionId: string | null; waitFor: RouteWait }
     | { kind: 'none' };
 
-export interface RouteNoticeInput {
+interface RouteNoticeInput {
     /** `turn.notify.targetSessionId` — a specific coordinator session, when the producer knew it. */
     targetSessionId?: string | null;
     coordinators: readonly CoordinatorSessionView[];

@@ -18,11 +18,8 @@
  * window with no reset stamp keeps the wall-clock staleAfterMs fallback.
  */
 import { describe, expect, it } from 'vitest'
-import {
-    evaluateProviderQuotaGate,
-    quotaSpreadBonusByProvider,
-    rankProvidersByQuotaGate,
-} from '../../src/mesh/mesh-quota-routing.js'
+import { evaluateProviderQuotaGate, rankProvidersByQuotaGate } from '../../src/mesh/mesh-quota-routing.js';
+import { quotaSpreadBonusByProvider } from '../../src/mesh/mesh-quota-ranking-records.js';
 
 const MINUTE = 60_000
 const NOW = 1_800_000_000_000

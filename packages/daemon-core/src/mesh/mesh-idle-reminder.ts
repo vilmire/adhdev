@@ -94,7 +94,7 @@ import type { ProviderState } from '../providers/provider-instance.js';
  * the daemon's ONE send funnel (`cliManager.input`), so the reminder shares the
  * messageId dedupe with every other origin instead of a raw instance event.
  */
-export interface IdleReminderTarget {
+interface IdleReminderTarget {
     sessionId: string;
     input: SessionInputPort;
 }

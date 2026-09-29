@@ -13,11 +13,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { IpcTransport } from '../src/transports/ipc.js';
-import {
-    findNodeWithRefresh,
-    findOptionalNodeWithRefresh,
-    ipcDispatchToRemoteAgent,
-} from '../src/tools/mesh-tools-internal.js';
+import { findNodeWithRefresh, findOptionalNodeWithRefresh } from '../src/tools/mesh-tools-internal.js';
+import { ipcDispatchToRemoteAgent } from '../src/tools/mesh-remote-dispatch.js';
 import {
     meshChangeImpactConfigSchema,
     meshRefineConfig,

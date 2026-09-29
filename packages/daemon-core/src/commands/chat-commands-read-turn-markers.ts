@@ -25,7 +25,7 @@
 // ---------------------------------------------------------------------------
 
 import type { ProviderModule, ProviderScripts } from '../providers/contracts.js';
-import { readProviderChatHistory } from '../config/chat-history.js';
+import { readProviderChatHistory } from '../config/provider-native-history.js';
 
 // The codex live-workspace native probe. Its result feeds the marker selection
 // below (liveSelected) when the machine selects THAT read as the source.

@@ -43,7 +43,7 @@ export interface MeshFastForwardPlannedStep {
   willMutateWorktree: boolean;
 }
 
-export interface MeshFastForwardSubmodulePushResult {
+interface MeshFastForwardSubmodulePushResult {
   path: string;
   commit?: string;
   remote: string;

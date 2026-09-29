@@ -1,7 +1,7 @@
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { MeshOverviewDetailModal } from '../../src/components/MeshGraph/MeshOverviewCards'
+import { MeshOverviewDetailModal } from '../../src/components/MeshGraph/MeshOverviewDetails';
 import { getMeshGraphTheme } from '../../src/components/MeshGraph/meshGraphTheme'
 
 const h = React.createElement

@@ -155,12 +155,6 @@ export interface MeshDependencyFailure {
     reason?: string;
 }
 
-export interface MeshDerivedDependencyState {
-    waitingOn: string[];
-    dependenciesSatisfied: boolean;
-    dependencyFailures: MeshDependencyFailure[];
-}
-
 /**
  * View-time derivation of explanatory failure data. Truth stays in predecessor
  * statuses; this never writes `blockedReason`. A skipped predecessor is
@@ -231,7 +225,7 @@ const CANCELABLE_NODE_STATES: ReadonlySet<MeshGraphNodeState> = new Set([
     'declared', 'blocked', 'materialized',
 ]);
 
-export interface MeshDerivedFailureStore {
+interface MeshDerivedFailureStore {
     findQueueEntryById(meshId: string, taskId: string): {
         id: string;
         status: string;
@@ -242,7 +236,7 @@ export interface MeshDerivedFailureStore {
     } | null;
 }
 
-export interface GraphCancelCascadeResult {
+interface GraphCancelCascadeResult {
     cancelledNodeIds: string[];
     cancelledTaskIds: string[];
 }
@@ -303,7 +297,7 @@ export function applyGraphCancelCascade(
 
 // ── Legacy blockedReason migration (design :561-564) ─────────────────────────
 
-export interface LegacyDependencyFailedClear {
+interface LegacyDependencyFailedClear {
     taskId: string;
     meshId: string;
     predecessorId: string;

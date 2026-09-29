@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { IpcTransport } from '../src/transports/ipc.js';
 import { meshRestartDaemon, meshStatus } from '../src/tools/mesh-tools.js';
-import { extractDaemonBuildInfo } from '../src/tools/mesh-tools-internal.js';
+import { extractDaemonBuildInfo } from '../src/tools/mesh-tools-internal-core.js';
 
 import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 import { heldMeshStatusResponse } from './helpers/held-node-state.js';

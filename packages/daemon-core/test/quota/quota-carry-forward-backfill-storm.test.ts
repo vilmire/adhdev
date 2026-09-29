@@ -36,17 +36,9 @@ const fetchCodexQuota = vi.fn()
 vi.mock('../../src/quota/fetchers/kimi.js', () => ({ fetchKimiQuota }))
 vi.mock('../../src/quota/fetchers/codex.js', () => ({ fetchCodexQuota }))
 
-const {
-    QUOTA_FAILURE_MAX_RETRIES,
-    QUOTA_ROUTABLE_MAX_AGE_MS,
-    clearQuotaCache,
-    isSnapshotStaleForRouting,
-    readQuotaCache,
-    refreshQuotaCacheOnce,
-    startQuotaRefreshLoop,
-    __resetQuotaBootRefreshForTests,
-    __resetQuotaHydrationForTests,
-} = await import('../../src/quota/refresh.js')
+const { QUOTA_FAILURE_MAX_RETRIES, QUOTA_ROUTABLE_MAX_AGE_MS, clearQuotaCache, isSnapshotStaleForRouting, readQuotaCache, refreshQuotaCacheOnce, __resetQuotaHydrationForTests } = await import('../../src/quota/refresh.js')
+const { __resetQuotaBootRefreshForTests } = await import('../../src/quota/refresh-triggers.js')
+const { startQuotaRefreshLoop } = await import('../../src/quota/refresh-loop.js')
 
 const TICK_MS = 15 * 60 * 1000
 const DAY_MS = 24 * 60 * 60 * 1000

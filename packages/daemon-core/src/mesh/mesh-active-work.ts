@@ -2,7 +2,7 @@ import type { MeshLedgerEntry } from './mesh-ledger.js';
 import { meshRecord } from './mesh-record.js';
 import type { MeshWorkQueueEntry, DirectDispatchRecord } from './mesh-work-queue.js';
 import { cancelDirectDispatchAttempts } from './mesh-work-queue.js';
-import { meshNodeIdMatches, machineCoreFromDaemonId, sessionIdsEquivalent } from '@adhdev/mesh-shared';
+import { meshNodeIdMatches, machineCoreFromDaemonId, sessionIdsEquivalent, readString } from '@adhdev/mesh-shared';
 import { resolveTurnAttemptRow, presentationFromAttemptRow, type TurnStage } from './mesh-turn-presentation.js';
 import { isWeakCompletionEvidence } from './mesh-events-utils.js';
 
@@ -108,7 +108,7 @@ export interface MeshStaleDirectWorkSummary {
     note?: string;
 }
 
-export interface BuildMeshActiveWorkOptions {
+interface BuildMeshActiveWorkOptions {
     meshId: string;
     queue?: MeshWorkQueueEntry[];
     ledgerEntries?: MeshLedgerEntry[];
@@ -152,7 +152,7 @@ export interface MeshActiveWorkLedgerSnapshot {
     matchDirectDispatchTerminals(dispatches: MeshLedgerEntry[]): Map<MeshLedgerEntry, MeshLedgerEntry>;
 }
 
-export interface BuildMeshActiveWorkLedgerSnapshotOptions {
+interface BuildMeshActiveWorkLedgerSnapshotOptions {
     /** Test/diagnostic hook counting terminal-vs-dispatch timestamp probes. */
     onTerminalProbe?: () => void;
 }
@@ -310,10 +310,6 @@ export function buildMeshActiveWorkLedgerSnapshot(
             return result;
         },
     };
-}
-
-function readString(value: unknown): string | undefined {
-    return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
 function summarizeMessage(message: string): { title: string; summary: string } {
@@ -750,7 +746,6 @@ export function buildMeshActiveWorkSummary(activeWork: MeshActiveWorkRecord[]): 
         ...(staleDirectCount > 0 ? { staleDirectNote: 'Stale direct records are orphaned ledger entries whose node/session no longer exists. They are historical recovery evidence only — not active or unresolved work. The queue (source: queue) is authoritative for pending/assigned tasks.' } : {}),
     };
 }
-
 
 export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeWork: MeshActiveWorkRecord[]; staleDirectWork: MeshActiveWorkRecord[]; staleDirectWorkNote?: string; terminalDirectWork: MeshActiveWorkRecord[]; summary: MeshActiveWorkSummary } {
     const now = opts.now ?? Date.now();

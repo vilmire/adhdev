@@ -8,7 +8,6 @@
  *   - web-standalone: StandaloneDaemonContext (localhost WS)
  */
 import type { StatusReportPayload, SessionEntry } from '@adhdev/daemon-core'
-import { daemonIdsEquivalent } from '@adhdev/mesh-shared'
 import type { DaemonData } from '../types'
 import { normalizeIncomingSessionStatus } from './session-status-ingest'
 import {
@@ -160,7 +159,6 @@ export function statusPayloadToEntries(
     const { daemonId, existingDaemon, existingEntries, timestamp: tsOverride } = options
     const ts = tsOverride || payload.timestamp || Date.now()
     const sessions = payload.sessions || []
-    const beaconSourceMatches = daemonIdsEquivalent(daemonId, payload.instanceId)
     const { topLevel, childrenByParent } = groupChildSessions(sessions)
     const existingSessionMap = buildExistingSessionMap(existingEntries, daemonId)
     const mergedMachine = payload.machine
@@ -200,16 +198,6 @@ export function statusPayloadToEntries(
         ...(payload.terminalBackend && { terminalBackend: payload.terminalBackend }),
         ...(payload.detectedIdes && { detectedIdes: payload.detectedIdes }),
         ...(payload.availableProviders && { availableProviders: payload.availableProviders }),
-        // seqscribe Beacon staleness / sole-copy (design §7.1). P2P-only by
-        // construction: the server status path never carries this field.
-        //
-        // `beacon` diagnoses the payload PRODUCER, not the transport target the
-        // caller asked us to key this entry under. A routed/misattributed rich
-        // payload must therefore clear an older contaminated value instead of
-        // painting its producer-local finding onto another machine's card.
-        // Sparse metadata payloads omit the field and still preserve an existing
-        // good value through the leading existingDaemon spread.
-        ...(payload.beacon && { beacon: beaconSourceMatches ? payload.beacon : undefined }),
         ...(payload.screenshotUsage !== undefined && { screenshotUsage: payload.screenshotUsage }),
         ...(payload.providerChannelStaleness && { providerChannelStaleness: payload.providerChannelStaleness }),
         _sessionListAuthoritative: Array.isArray(payload.sessions),

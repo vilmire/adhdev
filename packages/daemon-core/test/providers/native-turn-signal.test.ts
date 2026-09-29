@@ -70,38 +70,24 @@ describe('selectTurnTerminalMarker — turn scoping', () => {
         receivedAt: T0, outcome: 'completed', summary: 'done', ...over,
     });
 
-    it('prefers the provider-native turn id over any timestamp heuristic', () => {
-        const markers = [
-            mk({ receivedAt: T0 - 5_000, turnId: 'turn-A', summary: 'prior turn' }),
-            mk({ receivedAt: T0 + 1_000, turnId: 'turn-B', summary: 'this turn' }),
-        ];
-        expect(selectTurnTerminalMarker(markers, { turnId: 'turn-A' })?.summary).toBe('prior turn');
-        expect(selectTurnTerminalMarker(markers, { turnId: 'turn-B' })?.summary).toBe('this turn');
-    });
-
-    it('returns null when the wanted turn id has no marker yet (turn still running)', () => {
-        const markers = [mk({ turnId: 'turn-A' })];
-        expect(selectTurnTerminalMarker(markers, { turnId: 'turn-B' })).toBeNull();
-    });
-
-    it('falls back to the turn-start boundary when no turn id is known', () => {
+    it('accepts a marker at or after the turn start', () => {
         const markers = [mk({ receivedAt: T0 + 500 })];
-        expect(selectTurnTerminalMarker(markers, { turnStartedAt: T0 })).not.toBeNull();
+        expect(selectTurnTerminalMarker(markers, T0)).not.toBeNull();
     });
 
     it('(ANTIGRAVITY-PREMATURE-COMPLETION) rejects a marker predating this turn', () => {
         const markers = [mk({ receivedAt: T0 - 1 })];
-        expect(selectTurnTerminalMarker(markers, { turnStartedAt: T0 })).toBeNull();
+        expect(selectTurnTerminalMarker(markers, T0)).toBeNull();
     });
 
     it('rejects an unscoped marker rather than failing open', () => {
         const markers = [mk({})];
-        expect(selectTurnTerminalMarker(markers, {})).toBeNull();
+        expect(selectTurnTerminalMarker(markers, undefined)).toBeNull();
     });
 
     it('handles empty / missing marker lists', () => {
-        expect(selectTurnTerminalMarker([], { turnStartedAt: T0 })).toBeNull();
-        expect(selectTurnTerminalMarker(null, { turnStartedAt: T0 })).toBeNull();
+        expect(selectTurnTerminalMarker([], T0)).toBeNull();
+        expect(selectTurnTerminalMarker(null, T0)).toBeNull();
     });
 });
 

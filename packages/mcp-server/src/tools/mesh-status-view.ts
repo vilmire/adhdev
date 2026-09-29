@@ -21,16 +21,10 @@ import { applyPendingMeshEvents, toActiveWorkRead, type ActiveWorkRead, type Mes
 import { holdMeshNodeRoutes } from './mesh-node-routes.js';
 import { missionStatsIds, toStatusMissionsCompact, withMissionStats, type StatusMissionsCompact } from './mesh-daemon-reads.js';
 import { decodeTurnIpcAnswer } from '../ipc/turn-commands.js';
-import {
-    decodeActiveWorkQueryResponse,
-    decodeMissionListQueryResponse,
-    decodeRecoveryContextQueryResponse,
-    decodeTaskStatsQueryResponse,
-    decodeToolCallRecordResponse,
-} from '@adhdev/mesh-shared';
+import { decodeActiveWorkQueryResponse, decodeMissionListQueryResponse, decodeRecoveryContextQueryResponse, decodeTaskStatsQueryResponse, decodeToolCallRecordResponse, readOptionalRecord } from '@adhdev/mesh-shared';
 import type { MeshToolCallRateResult } from '@adhdev/daemon-core';
 
-export interface MeshStatusViewRequest {
+interface MeshStatusViewRequest {
     refresh?: boolean;
     compact: boolean;
     includeTerminalDirect?: boolean;
@@ -39,10 +33,6 @@ export interface MeshStatusViewRequest {
 }
 
 export type MeshStatusView = Record<string, any>;
-
-function readRecord(value: unknown): Record<string, any> | null {
-    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : null;
-}
 
 /** The ONE daemon call. Throws when the coordinator cannot answer at all. */
 export async function readMeshStatusView(ctx: MeshContext, request: MeshStatusViewRequest): Promise<MeshStatusView> {
@@ -56,7 +46,7 @@ export async function readMeshStatusView(ctx: MeshContext, request: MeshStatusVi
         // The daemon refuses when it is not the one this process believes it talks to.
         ...(ctx.localDaemonId ? { callerDaemonId: ctx.localDaemonId } : {}),
     });
-    const view = readRecord(readRecord(raw)?.result) ?? readRecord(raw);
+    const view = readOptionalRecord(readOptionalRecord(raw)?.result) ?? readOptionalRecord(raw);
     if (!view || view.success === false) {
         throw new Error(typeof view?.error === 'string' ? view.error : 'coordinator mesh_status_view returned no view');
     }
@@ -122,12 +112,12 @@ export function readViewActiveWork(view: MeshStatusView): ActiveWorkRead {
 
 /** Compact missions (`mission_list_query` meshStatusView=compact). Throws when absent. */
 export function readViewMissionsCompact(view: MeshStatusView): StatusMissionsCompact {
-    return toStatusMissionsCompact(decodeTurnIpcAnswer('mission_list_query', readRecord(view.missions)?.list, decodeMissionListQueryResponse));
+    return toStatusMissionsCompact(decodeTurnIpcAnswer('mission_list_query', readOptionalRecord(view.missions)?.list, decodeMissionListQueryResponse));
 }
 
 /** Verbose missions with their stats rollups (`mission_list_query` + `task_stats_query`). */
 export function readViewMissionsVerbose(view: MeshStatusView): Record<string, unknown>[] {
-    const missionsView = readRecord(view.missions) ?? {};
+    const missionsView = readOptionalRecord(view.missions) ?? {};
     const res = decodeTurnIpcAnswer('mission_list_query', missionsView.list, decodeMissionListQueryResponse);
     const missions = res.missions as unknown as Record<string, unknown>[];
     if (missionStatsIds(missions).length === 0) return missions;
@@ -136,7 +126,7 @@ export function readViewMissionsVerbose(view: MeshStatusView): Record<string, un
 
 /** A local related repo's git_status, as the view carries it (absent → a per-repo error). */
 export function readViewRelatedRepoGit(view: MeshStatusView, workspace: string): unknown {
-    const hit = readRecord(view.relatedRepoGit)?.[workspace];
+    const hit = readOptionalRecord(view.relatedRepoGit)?.[workspace];
     if (hit) return hit;
     throw new MeshStatusViewMiss(`git_status(${workspace})`);
 }

@@ -61,12 +61,6 @@ export interface CliTraceResponse {
     responseBuffer: string
     status: string
     activeModal: { message: string; buttons: string[] } | null
-    currentTurnScope: {
-      prompt: string
-      startedAt: number
-      bufferStart: number
-      rawBufferStart: number
-    } | null
     messages: { role: string; content: string; timestamp?: number }[]
   } | null
   message?: string

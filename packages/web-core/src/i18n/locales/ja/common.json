@@ -3323,7 +3323,6 @@
                 "offline": "オフライン",
                 "failed": "接続に失敗",
                 "connecting": "接続中…",
-                "attention": "オンライン · 同期遅延",
                 "online": "オンライン"
             },
             "slowLink": "低速リンク",
@@ -3353,20 +3352,6 @@
             "reconnect": "再接続",
             "transportRelay": "リレーサーバー経由で接続中 — 直接接続より低速です。多くの場合、ファイアウォールや NAT が直接経路を遮断しています。",
             "transportDirect": "直接接続",
-            "beacon": {
-                "lastSyncedBehindPart_other": "（未受信の記録 {{count}} 件）",
-                "lastSyncedBehindPart_one": "（未受信の記録 {{count}} 件）",
-                "soleCopyTooltip_other": "まだ他のマシンにバックアップされていない記録が {{entries}} 件あります。他のマシンが同期するまで、このマシンをオンラインのままにしてください。",
-                "soleCopyTooltip_one": "まだ他のマシンにバックアップされていない記録が {{entries}} 件あります。他のマシンが同期するまで、このマシンをオンラインのままにしてください。",
-                "soleCopyLabel_other": "未バックアップの記録 {{count}} 件",
-                "soleCopyLabel_one": "未バックアップの記録 {{count}} 件",
-                "behindTooltip_other": "このマシンは他のマシンの最近の記録 {{count}} 件をまだ受け取っていません。通常は自動的に追いつきます。",
-                "behindTooltip_one": "このマシンは他のマシンの最近の記録 {{count}} 件をまだ受け取っていません。通常は自動的に追いつきます。",
-                "behindLabel": "同期の遅れ",
-                "deferredLabel": "バックアップ未確認",
-                "deferredTooltip": "このマシンの記録がすべてバックアップ済みか確認できませんでした。比較できたのは一部のマシンだけです。エラーではありません。",
-                "lastSyncedTooltip": "最終同期は {{minutes}} 分前です{{behindPart}}。"
-            },
             "noAgentsRunning": "実行中のエージェントはまだありません",
             "launchCta": "起動 →"
         },

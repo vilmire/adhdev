@@ -17,12 +17,8 @@ vi.mock('../../src/config/config.js', () => ({
     getMachineNickname: () => (({ machineId: 'test-machine' }) as any).machineNickname ?? null,
 }));
 
-import {
-    createMesh,
-    getMesh,
-    getMeshQuotaRouting,
-    setMeshQuotaRouting,
-} from '../../src/config/mesh-config.js';
+import { createMesh, getMesh } from '../../src/config/mesh-config.js';
+import { getMeshQuotaRouting, setMeshQuotaRouting } from '../../src/config/mesh-config-routing.js';
 import { meshCrudHandlers } from '../../src/commands/med-family/mesh-crud.js';
 import {
     evaluateProviderQuotaGate,

@@ -37,16 +37,9 @@ vi.mock('../../src/quota/fetchers/grok.js', () => ({ fetchGrokQuota }))
 vi.mock('../../src/quota/fetchers/kimi.js', () => ({ fetchKimiQuota }))
 vi.mock('../../src/quota/fetchers/opencode.js', () => ({ fetchOpencodeUsage, OPENCODE_USAGE_DAYS: 7 }))
 
-const {
-    QUOTA_ROUTABLE_MAX_AGE_MS,
-    clearQuotaCache,
-    isSnapshotStaleForRouting,
-    readQuotaCache,
-    refreshQuotaCacheOnce,
-    startQuotaRefreshLoop,
-    __resetQuotaBootRefreshForTests,
-    __resetQuotaHydrationForTests,
-} = await import('../../src/quota/refresh.js')
+const { QUOTA_ROUTABLE_MAX_AGE_MS, clearQuotaCache, isSnapshotStaleForRouting, readQuotaCache, refreshQuotaCacheOnce, __resetQuotaHydrationForTests } = await import('../../src/quota/refresh.js')
+const { __resetQuotaBootRefreshForTests } = await import('../../src/quota/refresh-triggers.js')
+const { startQuotaRefreshLoop } = await import('../../src/quota/refresh-loop.js')
 
 const okQuota = (provider: string, updatedAt: number) => ({
     provider,

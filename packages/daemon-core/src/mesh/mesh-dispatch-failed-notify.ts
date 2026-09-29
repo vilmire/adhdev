@@ -1,6 +1,5 @@
 import { LOG } from '../logging/logger.js';
-import { sessionIdsEquivalent, daemonIdsEquivalent } from '@adhdev/mesh-shared';
-import { readNonEmptyString } from './mesh-events-utils.js';
+import { sessionIdsEquivalent, daemonIdsEquivalent, readText } from '@adhdev/mesh-shared';
 import { notifyMeshCoordinator } from './turn-ledger/deliver.js';
 import { getMachineId } from '../config/config.js';
 import { isTerminalSessionStatus } from './mesh-candidacy-predicates.js';
@@ -37,7 +36,7 @@ const DISPATCH_FAILED_PINNED_REASON = 'pinned_session_dispatch_failed';
 const RECLAIMED_PINNED_REASON = 'pinned_session_reclaimed_stranded';
 
 /** A live session on the pinned task's target node, for the coordinator to judge re-targeting. */
-export interface LiveNodeSession {
+interface LiveNodeSession {
     sessionId: string;
     providerType?: string;
 }
@@ -60,16 +59,16 @@ export function liveSessionsForNode(components: DaemonComponents, meshId: string
             const state = (inst as any).getState?.();
             if (!state) continue;
             const settings = (state.settings as Record<string, unknown>) || {};
-            if (readNonEmptyString(settings.meshNodeFor) !== meshId) continue;
-            const instNodeId = readNonEmptyString(settings.meshNodeId) || readNonEmptyString(settings.nodeId);
+            if (readText(settings.meshNodeFor) !== meshId) continue;
+            const instNodeId = readText(settings.meshNodeId) || readText(settings.nodeId);
             if (!daemonIdsEquivalent(instNodeId, nodeId)) continue;
-            const status = readNonEmptyString(state.status).toLowerCase();
+            const status = readText(state.status).toLowerCase();
             if (isTerminalSessionStatus(status)) continue;
-            const sessionId = readNonEmptyString(state.instanceId);
+            const sessionId = readText(state.instanceId);
             if (!sessionId) continue;
             sessions.push({
                 sessionId,
-                ...(readNonEmptyString(settings.providerType) ? { providerType: String(settings.providerType) } : {}),
+                ...(readText(settings.providerType) ? { providerType: String(settings.providerType) } : {}),
             });
         }
         return sessions;
@@ -123,7 +122,7 @@ export function notifyCoordinatorOfPinnedDispatchFailure(
         sourceCoordinatorDaemonId?: string;
     },
 ): void {
-    const targetSessionId = readNonEmptyString(opts.targetSessionId);
+    const targetSessionId = readText(opts.targetSessionId);
     if (!targetSessionId) return; // unpinned — not this notifier's concern
 
     const liveSessions = liveSessionsForNode(components, opts.meshId, opts.nodeId);
@@ -135,8 +134,8 @@ export function notifyCoordinatorOfPinnedDispatchFailure(
         liveSessions,
     });
 
-    const targetCoordinatorDaemonId = readNonEmptyString(opts.sourceCoordinatorDaemonId) || readNonEmptyString(getMachineId());
-    const targetCoordinatorSessionId = readNonEmptyString(opts.sourceCoordinatorSessionId);
+    const targetCoordinatorDaemonId = readText(opts.sourceCoordinatorDaemonId) || readText(getMachineId());
+    const targetCoordinatorSessionId = readText(opts.sourceCoordinatorSessionId);
 
     LOG.warn('MeshQueue', `COORD-NOTIFY-STUCK: dispatch of pinned task ${opts.taskId} to session ${targetSessionId} (node ${opts.nodeId}, mesh ${opts.meshId}) failed and requeued with pin intact.`);
     try {
@@ -208,7 +207,7 @@ export function notifyCoordinatorOfPinnedReclaim(
         sourceCoordinatorDaemonId?: string;
     },
 ): void {
-    const targetSessionId = readNonEmptyString(opts.targetSessionId);
+    const targetSessionId = readText(opts.targetSessionId);
     if (!targetSessionId) return; // unpinned — not this notifier's concern
 
     const liveSessions = liveSessionsForNode(components, opts.meshId, opts.nodeId);
@@ -221,8 +220,8 @@ export function notifyCoordinatorOfPinnedReclaim(
         liveSessions,
     });
 
-    const targetCoordinatorDaemonId = readNonEmptyString(opts.sourceCoordinatorDaemonId) || readNonEmptyString(getMachineId());
-    const targetCoordinatorSessionId = readNonEmptyString(opts.sourceCoordinatorSessionId);
+    const targetCoordinatorDaemonId = readText(opts.sourceCoordinatorDaemonId) || readText(getMachineId());
+    const targetCoordinatorSessionId = readText(opts.sourceCoordinatorSessionId);
 
     LOG.warn('MeshQueue', `COORD-NOTIFY-STUCK: pinned task ${opts.taskId} reclaimed from session ${targetSessionId} (node ${opts.nodeId}, mesh ${opts.meshId}) after ${Math.round(opts.silentForMs / 60_000)}min silence and requeued with pin intact.`);
     try {

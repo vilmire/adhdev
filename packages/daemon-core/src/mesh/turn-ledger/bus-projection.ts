@@ -18,7 +18,7 @@ import type { CommitStrength, TurnOutcome } from '@adhdev/mesh-shared';
 import type { TurnBusEvent } from './types.js';
 
 export const TURN_WIRE_EVENT_NAMES = ['agent:generating_completed', 'agent:stopped'] as const;
-export type TurnWireEventName = typeof TURN_WIRE_EVENT_NAMES[number];
+type TurnWireEventName = typeof TURN_WIRE_EVENT_NAMES[number];
 
 /** Content-free projection of one committed turn onto the status_event wire name. */
 export interface TurnWireEvent {

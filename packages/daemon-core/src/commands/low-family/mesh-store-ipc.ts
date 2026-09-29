@@ -55,7 +55,7 @@ import type { MeshLedgerEntry } from '../../mesh/mesh-ledger.js';
 import { meshRecord } from '../../mesh/mesh-record.js';
 import { getLocalRecordSummary, getSessionRecoveryContext, readLocalRecords, recoveryContextRecords } from '../../mesh/mesh-local-records.js';
 import { MeshRuntimeStore } from '../../mesh/mesh-runtime-store.js';
-import { getLastQuotaRanking } from '../../mesh/mesh-quota-routing.js';
+import { getLastQuotaRanking } from '../../mesh/mesh-quota-ranking-records.js';
 import {
     cancelTask,
     enqueueTask,

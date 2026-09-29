@@ -66,7 +66,8 @@ import { armMeshTurnConsumer, type MeshTurnConsumer } from '../../seqscribe/mesh
 import { appendMeshHandoff } from '../../seqscribe/mesh-publisher.js';
 import { meshEventsTopic } from '../../seqscribe/topics.js';
 import type { SeqscribeRuntime } from '../../seqscribe/runtime.js';
-import { setupQuotaEventRefresh, setupQuotaRefreshLoop } from '../../quota/refresh.js';
+import { setupQuotaEventRefresh } from '../../quota/refresh-triggers.js';
+import { setupQuotaRefreshLoop } from '../../quota/refresh-loop.js';
 import { getMachineId } from '../../config/config.js';
 import { LOG } from '../../logging/logger.js';
 import { daemonIdsEquivalent, expandDaemonIdForms, type SummaryRef } from '@adhdev/mesh-shared';

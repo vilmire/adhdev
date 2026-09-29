@@ -42,7 +42,7 @@ import type { ProviderModule } from '../providers/contracts.js';
  *      unaffected.
  */
 
-export type DelegatedWorkerModeSource =
+type DelegatedWorkerModeSource =
     /** Session was not launched by a coordinator — nothing to re-resolve. */
     | 'not_delegated'
     /** Coordinator resolved ENABLE=false; mode selection never runs. */
@@ -54,7 +54,7 @@ export type DelegatedWorkerModeSource =
     /** Repo config read from the WORKER filesystem decided the mode. */
     | 'worker_repo_file';
 
-export interface DelegatedWorkerModeResolution {
+interface DelegatedWorkerModeResolution {
     /** The mode the worker should launch with, or undefined when none applies. */
     autoApproveMode: string | undefined;
     /** True when re-resolution changed the mode the coordinator shipped. */
@@ -62,7 +62,7 @@ export interface DelegatedWorkerModeResolution {
     source: DelegatedWorkerModeSource;
 }
 
-export interface DelegatedWorkerModeInput {
+interface DelegatedWorkerModeInput {
     /** The worker's own on-disk workspace (the resolved launch directory). */
     workspace: string | undefined;
     providerType: string | undefined;

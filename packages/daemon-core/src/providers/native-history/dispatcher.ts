@@ -17,7 +17,7 @@ import * as path from 'node:path';
 import type { NativeTurnTerminalMarker } from '../../chat/native-turn-signal.js';
 import type { NativeHistoryToolBlockRef } from '../spec/native-history-types.js';
 import { readSession as readClaudeCliSession } from './claude-cli-transcript.js';
-import { readSession as readCodexCliSession } from './codex-cli-transcript.js';
+import { codexSessionsRoot, readSession as readCodexCliSession } from './codex-cli-transcript.js';
 import { readSession as readAntigravityCliSession } from './antigravity-cli-transcript.js';
 import { readSession as readHermesCliSession } from './hermes-cli-transcript.js';
 import {
@@ -33,6 +33,7 @@ import {
     isAntigravityConversationClaimedByOther,
 } from './antigravity-claim-registry.js';
 import { isSafeFilename } from './fs-utils.js';
+import { isUuidLike } from './transcript-common.js';
 import { type MessageSourceAddress, readMessageSourceAddress } from '../../chat/message-source-address.js';
 
 export type ReaderId = 'claude-cli' | 'codex-cli' | 'antigravity-cli' | 'hermes-cli' | 'grok-cli';
@@ -349,7 +350,7 @@ function resolveCodexPath(workspace: string, sessionId: string, sessionStartedAt
     // named a specific session; resolving some other file for it is precisely the
     // "previous chat shows up before I type anything" defect (round 9 part b), so a
     // requested-but-absent session must stay unresolved.
-    if (sessionId && isUuidLikeSessionId(sessionId)) {
+    if (sessionId && isUuidLike(sessionId)) {
         return findCodexPathBySessionId(root, sessionId);
     }
 
@@ -478,10 +479,10 @@ function extractAntigravityConversationUuid(sourcePath: string): string {
     // conversations/<uuid>.db|.pb — the basename minus extension.
     const base = segments[segments.length - 1] || '';
     const baseMatch = /^([0-9a-f-]+)\.(?:db|pb)$/i.exec(base);
-    if (baseMatch && isUuidLikeSessionId(baseMatch[1])) return baseMatch[1];
+    if (baseMatch && isUuidLike(baseMatch[1])) return baseMatch[1];
     // brain/<uuid>/… — the first uuid-like path segment.
     for (const seg of segments) {
-        if (isUuidLikeSessionId(seg)) return seg;
+        if (isUuidLike(seg)) return seg;
     }
     return '';
 }
@@ -514,7 +515,7 @@ function resolveAntigravityPath(
     //     by mtime, so an already-bound session cannot be hijacked by a newer
     //     .db on a later read. Claim it so a concurrent unbound sibling can never
     //     grab this same conversation.
-    if (sessionId && isUuidLikeSessionId(sessionId)) {
+    if (sessionId && isUuidLike(sessionId)) {
         const dbPath = path.join(agyRoot, 'conversations', `${sessionId}.db`);
         if (fs.existsSync(dbPath)) {
             if (owner) claimAntigravityConversation(sessionId, owner);
@@ -542,12 +543,12 @@ function resolveAntigravityPath(
     const brainRoot = path.join(agyRoot, 'brain');
     if (fs.existsSync(brainRoot)) {
         const cutoff = spawnAwareCutoff(sessionStartedAtMs);
-        const nonEmptyBrain = (uuid: string, p: string): string | null => {
+        const nonEmptyBrain = (p: string): string | null => {
             const t = path.join(p, '.system_generated', 'logs', 'transcript.jsonl');
             return (fs.existsSync(t) && safeSize(t) > 0) ? t : null;
         };
         const all = fs.readdirSync(brainRoot, { withFileTypes: true })
-            .filter(e => e.isDirectory() && isUuidLikeSessionId(e.name))
+            .filter(e => e.isDirectory() && isUuidLike(e.name))
             .filter(e => !isAntigravityConversationClaimedByOther(e.name, owner))
             .map(e => {
                 const p = path.join(brainRoot, e.name);
@@ -572,7 +573,7 @@ function resolveAntigravityPath(
             ordered = [...all].sort((a, b) => b.mtime - a.mtime);
         }
         for (const e of ordered) {
-            const t = nonEmptyBrain(e.uuid, e.p);
+            const t = nonEmptyBrain(e.p);
             if (t) {
                 if (owner) claimAntigravityConversation(e.uuid, owner);
                 return { path: t, ownerConfirmed: brainOwnerConfirmed };
@@ -639,7 +640,7 @@ function pickUnboundConversationDb(
     for (const entry of entries) {
         if (!entry.isFile()) continue;
         const match = /^([0-9a-f-]+)\.db$/i.exec(entry.name);
-        if (!match || !isUuidLikeSessionId(match[1])) continue;
+        if (!match || !isUuidLike(match[1])) continue;
         const uuid = match[1];
         // (isolation) never consider a conversation a different live session owns.
         if (isAntigravityConversationClaimedByOther(uuid, owner)) continue;
@@ -724,14 +725,6 @@ function readByReader(
 function cwdAsDashes(cwd: string): string {
     if (!cwd) return '';
     return cwd.replace(/\//g, '-');
-}
-
-function codexSessionsRoot(): string {
-    return path.join(os.homedir(), '.codex', 'sessions');
-}
-
-function isUuidLikeSessionId(sessionId: string): boolean {
-    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId);
 }
 
 /**

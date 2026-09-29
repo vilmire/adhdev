@@ -30,8 +30,6 @@ const TURN_START = 1_700_000_000_000
 
 type AdapterOverrides = {
   status?: string
-  isWaitingForResponse?: boolean
-  currentTurnScope?: unknown
   isProcessing?: () => boolean
   partial?: string
   parsedMessages?: any[]
@@ -73,9 +71,7 @@ function makeInstance(opts: {
     getStatus: () => ({ status: a.status ?? 'idle', lastOutputAt: a.lastOutputAt, ...(a.seq ?? {}) }),
     getPartialResponse: () => a.partial ?? '',
     getScriptParsedStatus: () => ({ status: 'idle', messages: parsedMessages }),
-    getScreenText: () => '',
-    isWaitingForResponse: a.isWaitingForResponse ?? false,
-    ...(a.currentTurnScope !== undefined ? { currentTurnScope: a.currentTurnScope } : {}),
+    getLastApprovalResolvedAt: () => 0,
     ...(a.isProcessing ? { isProcessing: a.isProcessing } : {}),
   }
 
@@ -112,7 +108,7 @@ describe('COMPLETION-EARLYNOTIFY gate', () => {
       pending: armedPending({ busyEpochAtArm: 7 }),
       busyEpoch: 7,
       adapter: {
-        currentTurnScope: { turnId: 'in-flight' }, // tool call mid-turn
+        isProcessing: () => true, // tool call mid-turn
         parsedMessages: [assistantMsg('first bubble of a still-running turn', TURN_START + 1_000)],
       },
     })
@@ -143,12 +139,12 @@ describe('COMPLETION-EARLYNOTIFY gate', () => {
     const pending = armedPending({ previousStatus: 'waiting_approval' })
     const { instance, emitted, reScheduled } = makeInstance({
       pending,
-      adapter: { isWaitingForResponse: true }, // auto-approve resolved, agent resumed
+      adapter: { isProcessing: () => true }, // auto-approve resolved, agent resumed
     })
 
     // Block is non-terminal so it is bounded (30s force-fire) rather than a permanent wedge...
     const block = (instance as any).getCompletedFinalizationBlock('idle', pending)
-    expect(block).toEqual({ reason: 'adapter_waiting_for_response', terminal: false })
+    expect(block).toEqual({ reason: 'adapter_pending_response', terminal: false })
 
     // ...and the flush holds (no emit) while within the finalization window.
     ;(instance as any).flushCompletedDebounceIfFinalized()
@@ -159,9 +155,9 @@ describe('COMPLETION-EARLYNOTIFY gate', () => {
 
   it('t2-control: a non-approval pending response keeps its terminal hold', () => {
     const pending = armedPending({ previousStatus: 'generating' })
-    const { instance } = makeInstance({ pending, adapter: { isWaitingForResponse: true } })
+    const { instance } = makeInstance({ pending, adapter: { isProcessing: () => true } })
     const block = (instance as any).getCompletedFinalizationBlock('idle', pending)
-    expect(block).toEqual({ reason: 'adapter_waiting_for_response', terminal: true })
+    expect(block).toEqual({ reason: 'adapter_pending_response', terminal: true })
   })
 
   // ── t3: genuine completion still fires exactly once ─────────────────────────
@@ -249,7 +245,7 @@ describe('COMPLETION-EARLYNOTIFY trace hooks', () => {
     const { instance, emitted } = makeInstance({
       pending: armedPending({ busyEpochAtArm: 7 }),
       busyEpoch: 7,
-      adapter: { currentTurnScope: { turnId: 'in-flight' } },
+      adapter: { isProcessing: () => true },
     })
 
     ;(instance as any).flushCompletedDebounceIfFinalized()
@@ -257,7 +253,7 @@ describe('COMPLETION-EARLYNOTIFY trace hooks', () => {
 
     const holds = getRecentDebugTrace({ category: 'completion-gate' }).filter(t => t.stage === 'hold')
     expect(holds.length).toBe(1)
-    expect(holds[0].payload?.blockReason).toBe('adapter_turn_scope_active')
+    expect(holds[0].payload?.blockReason).toBe('adapter_pending_response')
   })
 
   it('t4c: completion-gate is ALWAYS-ON — a fire still records even with debug collection off', () => {

@@ -140,7 +140,7 @@ export function evaluateTerminalAdmission(input: TerminalAdmissionInput): Termin
     //    says. When the FIELD is absent (old daemon / PTY fallback) we fall
     //    through to the legacy rules below — never fabricate marker evidence.
     if (input.providerHasNativeMarker && input.nativeMarkersFieldPresent) {
-        const marker = selectTurnTerminalMarker(input.nativeMarkers, { turnStartedAt: input.turnStartedAtMs });
+        const marker = selectTurnTerminalMarker(input.nativeMarkers, input.turnStartedAtMs);
         if (marker) {
             return {
                 admit: true,

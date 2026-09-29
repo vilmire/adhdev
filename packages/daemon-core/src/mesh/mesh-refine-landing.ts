@@ -44,7 +44,7 @@ export type RefineTerminalKind =
     | 'merge_failed'
     | 'cleanup_failed';
 
-export type RefineTerminalClassification = {
+type RefineTerminalClassification = {
     kind: RefineTerminalKind;
     landing: RefineMergeLanding;
     /** A post-merge failure: the change IS on origin, only a trailing step failed. */

@@ -22,7 +22,6 @@ import type { ProviderModule } from '../contracts.js';
 import { flattenContent } from '../contracts.js';
 import type { ChatMessage } from '../../types.js';
 import { isUserFacingChatMessage } from '../chat-message-normalization.js';
-import { looksLikeActiveApprovalPromptText } from '../approval-utils.js';
 import { isCliGeneratingLikeStatus, hasNonEmptyCliModalButtons } from '../cli-provider-status-helpers.js';
 import { resolveTranscriptAuthorityProfile } from '../transcript-evidence.js';
 import { traceMeshEventDrop } from '../../shared/mesh-event-trace.js';
@@ -80,9 +79,6 @@ export interface CompletionDiagnosticsHost {
 }
 
 export function hasAdapterPendingResponse(host: CompletionDiagnosticsHost): boolean {
-    const adapterAny = host.adapter as any;
-    if (adapterAny?.isWaitingForResponse === true) return true;
-    if (adapterAny?.currentTurnScope) return true;
     try {
         if (typeof host.adapter.isProcessing === 'function' && host.adapter.isProcessing()) return true;
     } catch { /* defensive: status rendering must not fail because of adapter diagnostics */ }
@@ -127,14 +123,6 @@ export function shouldSuppressStaleParsedBusyStatus(
     if (adapterRawStatus !== 'idle') return false;
     if (hasNonEmptyCliModalButtons(parsedStatus?.activeModal ?? parsedStatus?.modal)) return false;
     if (host.hasAdapterPendingResponse()) return false;
-    // Do not suppress when the adapter's raw response buffer is still non-empty.
-    // This catches the case where isWaitingForResponse has already flipped to false
-    // but the provider's native parser still reports generating because it's
-    // parsing buffered content. Suppressing the
-    // finalization block here would emit a false completion event while the provider
-    // session is still actively processing its response stream.
-    const adapterAny = host.adapter as any;
-    if (typeof adapterAny?.responseBuffer === 'string' && adapterAny.responseBuffer.trim()) return false;
     return true;
 }
 
@@ -300,8 +288,6 @@ export function buildCompletionSignalReader(
             const v = adapterStatus()?.lastOutputAt;
             return typeof v === 'number' && Number.isFinite(v) ? v as number : undefined;
         },
-        adapterWaitingForResponse: () => (host.adapter as any)?.isWaitingForResponse === true,
-        adapterTurnScopeActive: () => !!(host.adapter as any)?.currentTurnScope,
         adapterAnyPending: () => host.hasAdapterPendingResponse(),
         parsedStatus: () => once('parsedStatus', () => {
             const rp = rawParsed();
@@ -377,16 +363,6 @@ export function buildCompletionSignalReader(
         },
         inApprovalResumeGrace: () => host.inApprovalResumeGrace(),
         hasApprovalResolutionEvidence: () => hasApprovalResolutionEvidence(host),
-        screenTailShowsApprovalPrompt: () => once('screenTailShowsApprovalPrompt', () => {
-            try {
-                const screenText = typeof (host.adapter as any).getScreenText === 'function'
-                    ? String((host.adapter as any).getScreenText() || '')
-                    : '';
-                if (!screenText) return false;
-                const tailLines = screenText.split(/\r?\n/).slice(-16).join('\n');
-                return looksLikeActiveApprovalPromptText(tailLines);
-            } catch { return false; }
-        }),
         holdClassPtyStillActive: () => antigravityHoldPtyStillActive(host),
         ownsExternalHistory: () => (host.adapter as any)?.chatMessagesOwnedExternally === true,
         authorityTiming: () => resolveTranscriptAuthorityProfile(host.provider).timing,

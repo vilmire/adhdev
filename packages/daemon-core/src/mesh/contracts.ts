@@ -48,7 +48,7 @@ type ProviderType = string;
 export const MESH_PROTOCOL_VERSION_V1 = '1.0' as const;
 export const MESH_PROTOCOL_VERSION_V2 = '2.0' as const;
 
-export type MeshProtocolVersion =
+type MeshProtocolVersion =
   | typeof MESH_PROTOCOL_VERSION_V1
   | typeof MESH_PROTOCOL_VERSION_V2;
 
@@ -121,7 +121,7 @@ export function coordinatorIdentityKey(identity: CoordinatorIdentity): string {
  *   spawned this session. Used for completion event routing.
  * - assignedAt: ms epoch when the session was bound to its current task.
  */
-export interface MeshSessionHandle {
+interface MeshSessionHandle {
   readonly nodeId: string;
   readonly sessionId: string;
   readonly providerType: ProviderType;
@@ -150,7 +150,7 @@ export function meshSessionHandleKey(handle: MeshSessionHandle): string {
  *   (e.g. ledger reconciliation outcomes).
  */
 export const MESH_EVENT_SCOPES = ['unicast', 'broadcast', 'system'] as const;
-export type MeshEventScope = typeof MESH_EVENT_SCOPES[number];
+type MeshEventScope = typeof MESH_EVENT_SCOPES[number];
 
 export function isMeshEventScope(value: unknown): value is MeshEventScope {
   return typeof value === 'string'
@@ -419,7 +419,7 @@ export function defaultScopeForEvent(eventName: string): MeshEventScope {
  * Additive over the v1 shape: every field is consulted by v2-aware drainers
  * only, so a v1 reader that ignores them is unaffected.
  */
-export interface PendingEventEmitStampV2 {
+interface PendingEventEmitStampV2 {
   readonly protocolVersion: typeof MESH_PROTOCOL_VERSION_V2;
   readonly eventId: string;
   readonly scope: MeshEventScope;

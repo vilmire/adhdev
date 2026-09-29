@@ -9,7 +9,7 @@ import {
   findOpenRefineDispatchForNode,
   REFINE_INFLIGHT_FRESHNESS_MS,
 } from '../../src/mesh/mesh-refine-inflight'
-import { refineWorktreeVanishedOutcome } from '../../src/commands/router-refine'
+import { refineWorktreeVanishedOutcome } from '../../src/mesh/mesh-refine-inflight.js';
 
 /**
  * DURABLE-DUPLICATE-DISPATCH regression suite.

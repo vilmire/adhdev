@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { extractInstalledCliProviders, meshNodeSlotsPropose } from '../src/tools/mesh-tools-slot-autodetect.js';
 import { ALL_MESH_TOOLS } from '../src/tools/mesh-tools.js';
-import { MESH_NODE_SLOTS_TOOL } from '../src/tools/mesh-tool-schemas.js';
+import { MESH_NODE_SLOTS_TOOL } from '../src/tools/mesh-tool-schemas-refine-config.js';
 import { resolveMeshToolHandler } from '../src/tools/mesh-tool-dispatch.js';
 import { validateMeshToolArgs } from '../src/tools/validate-tool-args.js';
 

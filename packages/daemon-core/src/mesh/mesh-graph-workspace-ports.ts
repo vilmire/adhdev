@@ -25,7 +25,7 @@ const execFileAsync = promisify(execFile);
 const GIT_TIMEOUT_MS = 30_000;
 const GIT_MAX_BUFFER = 4 * 1024 * 1024;
 
-export interface WorkspaceCloneRequest {
+interface WorkspaceCloneRequest {
     meshId: string;
     graphId: string;
     workspaceRef: string;
@@ -57,7 +57,7 @@ export interface WorkspaceCloneResult {
 }
 
 /** Non-throwing summary of a saga-path worktree bootstrap run. */
-export interface WorkspaceBootstrapOutcome {
+interface WorkspaceBootstrapOutcome {
     /** Mirrors WorktreeBootstrapState.status ('ready' | 'failed' | 'disabled' | 'not_configured' | …). */
     status: string;
     /** `required !== false` in the resolved config — a required failure is fatal to preparation. */
@@ -69,7 +69,7 @@ export interface WorkspaceBootstrapOutcome {
     submodulesInitialized?: boolean;
 }
 
-export interface WorkspaceInspectRequest {
+interface WorkspaceInspectRequest {
     meshId: string;
     graphId: string;
     workspaceRef: string;
@@ -80,14 +80,14 @@ export interface WorkspaceInspectRequest {
     sourceNodeId?: string;
 }
 
-export interface WorkspaceRemoveRequest {
+interface WorkspaceRemoveRequest {
     meshId: string;
     worktreePath: string;
     createdNodeId?: string;
     sourceNodeId?: string;
 }
 
-export interface WorkspaceRemoveResult {
+interface WorkspaceRemoveResult {
     removed: boolean;
     alreadyGone?: boolean;
     error?: string;
@@ -102,14 +102,14 @@ export class WorkspaceSagaPermanentError extends Error {
     }
 }
 
-export interface WorkspaceBaseRevisionRequest {
+interface WorkspaceBaseRevisionRequest {
     meshId: string;
     graphId: string;
     workspaceRef: string;
     sourceNodeId?: string;
 }
 
-export interface WorkspaceNodeRegistrationRequest {
+interface WorkspaceNodeRegistrationRequest {
     meshId: string;
     nodeId: string;
     worktreePath: string;
@@ -119,7 +119,7 @@ export interface WorkspaceNodeRegistrationRequest {
     bootstrapStatus: 'running' | 'complete';
 }
 
-export interface WorkspaceNodeUnregistrationRequest {
+interface WorkspaceNodeUnregistrationRequest {
     meshId: string;
     nodeId: string;
 }
@@ -157,14 +157,14 @@ export interface WorkspaceSagaPorts {
  * while a cache-only write has no durable twin and is lost on daemon restart.
  * This mirrors clone_mesh_node, which writes both for exactly these reasons.
  */
-export interface WorkspaceNodeRegistryDeps {
+interface WorkspaceNodeRegistryDeps {
     getCachedInlineMesh?(meshId: string): any | undefined;
     updateInlineMeshNode?(meshId: string, mesh: any, node: any): void;
     removeInlineMeshNode?(meshId: string, mesh: any, nodeId: string): boolean;
     invalidateAggregateMeshStatus?(meshId: string): void;
 }
 
-export interface DefaultWorkspaceSagaPortOptions {
+interface DefaultWorkspaceSagaPortOptions {
     /**
      * Default true: a prepared worktree is registered as a real mesh node, so a
      * graph-owned worktree is an ordinary dispatch target. It used to be false —
@@ -603,7 +603,7 @@ async function registerWorkspaceNode(
     // removed legacy providerRoles has its cap folded into slots so the clone
     // never re-seeds providerRoles.
     try {
-        const { migrateProviderRolesToSlots } = await import('../config/mesh-config.js');
+        const { migrateProviderRolesToSlots } = await import('../config/mesh-config-store.js');
         migrateProviderRolesToSlots(node.policy as Record<string, unknown>);
     } catch { /* migration helper unavailable (mocked mesh-config in tests) */ }
 

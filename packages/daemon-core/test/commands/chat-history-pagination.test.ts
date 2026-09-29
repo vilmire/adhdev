@@ -5,6 +5,9 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('../../src/config/chat-history.js', () => ({
+}))
+vi.mock('../../src/config/provider-native-history.js', async (importOriginal) => ({
+  ...(await importOriginal<any>()),
   readProviderChatHistory: mocks.readProviderChatHistory,
   isNativeSourceCanonicalHistory: (canonicalHistory: any) => {
     if (!canonicalHistory) return false

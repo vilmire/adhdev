@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 
 import { DaemonCommandRouter } from '../../src/commands/router'
-import { resumePendingRefineJobsOnStartup } from '../../src/commands/router-refine'
+import { resumePendingRefineJobsOnStartup } from '../../src/commands/router-refine-resume.js';
 import { createMesh, addNode } from '../../src/config/mesh-config'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store'
 import { insertLocalRecordRow } from '../helpers/local-records'

@@ -2,10 +2,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import {
-  resolveInstanceDir,
-  resolveCurrentGlobalInstallSurface,
-} from '../../src/commands/upgrade-helper'
+import { resolveInstanceDir } from '../../src/commands/upgrade-log.js';
+import { resolveCurrentGlobalInstallSurface } from '../../src/commands/upgrade-install-surface.js';
 
 // Phase 2: the Windows atomic-upgrade layout is per-instance. The canonical
 // instance is derived from the running daemon's config-dir basename, which

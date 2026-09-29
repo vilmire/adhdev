@@ -5,8 +5,7 @@
  * Pure move out of router-refine.ts to keep that file under the file-size gate; the
  * same three stage functions, in the same order, taking the router instance as `self`.
  * No stage order, gate call, result shape, error message, or `finalBranchConvergenceState`
- * field was changed — only physical location. router-refine.ts re-exports all three, so
- * existing import sites (and their tests) are unaffected.
+ * field was changed — only physical location.
  *
  * These three share one concern: they run AFTER validation and BEFORE the merge, each
  * consuming the `RefineContext` produced by sync_base and either returning a terminal

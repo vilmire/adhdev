@@ -88,7 +88,7 @@ import { getGitRepoStatus } from '../git/git-status.js';
 import { runGit } from '../git/git-executor.js';
 
 /** Which axis made the base unusable. One code per remedy, not per symptom. */
-export type RefineAcceptPreflightCode =
+type RefineAcceptPreflightCode =
     /** Base worktree has staged/modified/deleted/renamed changes, or conflicts. */
     | 'base_worktree_dirty'
     /** Base repo (or a submodule) has stash entries. */
@@ -104,7 +104,7 @@ export type RefineAcceptPreflightCode =
     | 'base_diverged_from_origin';
 
 /** One repository's contribution to the verdict. */
-export interface RefineAcceptPreflightRepoFinding {
+interface RefineAcceptPreflightRepoFinding {
     /** 'root' for the superproject, otherwise the submodule path ('oss', ...). */
     scope: string;
     /** Absolute path to the checkout this finding was measured in. */
@@ -128,7 +128,7 @@ export interface RefineAcceptPreflightRepoFinding {
     remedy: string;
 }
 
-export interface RefineAcceptPreflightVerdict {
+interface RefineAcceptPreflightVerdict {
     /** True when nothing blocks — the refine may proceed. */
     ok: boolean;
     /**
@@ -177,7 +177,7 @@ const PREFLIGHT_TIMEOUT_MS = 20_000;
  * The preflight's job is to make the CHEAP failures cheap, not to duplicate a
  * check that already exists downstream.
  */
-export interface RefineAcceptPreflightOptions {
+interface RefineAcceptPreflightOptions {
     /** The SOURCE repo the merge will land in — not the branch worktree. */
     repoRoot: string;
     timeoutMs?: number;

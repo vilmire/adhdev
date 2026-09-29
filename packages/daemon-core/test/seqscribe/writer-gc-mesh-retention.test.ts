@@ -15,7 +15,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Channel } from 'seqscribe';
 import { afterEach, describe, expect, it } from 'vitest';
-import { noteBeaconAcks } from '../../src/seqscribe/beacon.js';
 import { openSeqscribeNode, type SeqscribeNodeHandle } from '../../src/seqscribe/node.js';
 import { summarizeSeqscribeStats } from '../../src/seqscribe/stats.js';
 import { meshEventsTopic, meshHandoffTopic } from '../../src/seqscribe/topics.js';
@@ -202,8 +201,9 @@ describe('writer-gc §3 — mesh full-sync acknowledged retention', () => {
         expect(b.node.stats().topics[EVENTS]!.retention!.floorsAdopted).toBe(0);
     });
 
-    it('star topology: a member never directly connected pins our stream until its Beacon report acknowledges it', async () => {
-        // a — coordinator — c ; a and c never exchange HAVE directly
+    it('star topology: a member never directly connected pins our stream — pruning pauses, it never deletes unacknowledged rows', async () => {
+        // a — coordinator — c ; a and c never exchange HAVE directly. The only
+        // ack source is a direct session, so c cannot learn what a holds.
         const a = openNode('star-a');
         const coord = openNode('star-coord');
         const c = openNode('star-c');
@@ -218,22 +218,20 @@ describe('writer-gc §3 — mesh full-sync acknowledged retention', () => {
         await sleep(400);
 
         // c holds acks from the coordinator only: a — which has c's rows, but c
-        // cannot know it — pins c's stream at 0
-        const pinned = await runTranscriptWriterGcSweep(c, SWEEP);
-        expect(pinned.meshRowsPruned).toBe(0);
-        expect(transcriptWriterGcCounters().meshStreamsPinned).toBeGreaterThanOrEqual(1);
+        // cannot know it — pins c's stream at 0, sweep after sweep.
+        for (let i = 0; i < 2; i++) {
+            const pinned = await runTranscriptWriterGcSweep(c, SWEEP);
+            expect(pinned.meshRowsPruned).toBe(0);
+            expect(transcriptWriterGcCounters().meshStreamsPinned).toBeGreaterThanOrEqual(1);
+            expect(rows(c, EVENTS)).toBe(16);
+            expect(c.node.retentionFloors(EVENTS)[c.writerId] ?? 0).toBe(0);
+            await sleep(200);
+        }
 
-        // a's Beacon report — its own committed heads — reaches c through the board
-        const report = {
-            node: a.writerId,
-            at: new Date().toISOString(),
-            vectors: { [EVENTS]: a.node.vectors()[EVENTS] as never, 'other.topic': { writers: {} } },
-        };
-        // c's own report is skipped; a's is recorded
-        expect(noteBeaconAcks(c.node, c.writerId, [report, { ...report, node: c.writerId }], Date.now())).toBe(1);
-        const after = await runTranscriptWriterGcSweep(c, SWEEP);
-        expect(after.meshRowsPruned).toBe(14);
-        expect(c.node.retentionFloors(EVENTS)).toEqual({ [c.writerId]: 14 });
+        // The coordinator IS directly connected to both, so it may prune what
+        // both acknowledged — the star center keeps its own retention.
+        const center = await runTranscriptWriterGcSweep(coord, SWEEP);
+        expect(center.meshRowsPruned).toBe(14);
     });
 
     it('never deletes rows a durable cursor has not read (mesh.index / turn cursors)', async () => {

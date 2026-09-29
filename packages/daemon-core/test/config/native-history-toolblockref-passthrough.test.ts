@@ -59,7 +59,7 @@ function readerReturning(messages: unknown[]) {
 const CANONICAL = { format: 'jsonl', scripts: { readSession: 'readNativeHistory' } }
 
 async function readNative(messages: unknown[]) {
-  const { readProviderChatHistory } = await import('../../src/config/chat-history.js')
+  const { readProviderChatHistory } = await import('../../src/config/provider-native-history.js')
   return readProviderChatHistory('claude-cli', {
     canonicalHistory: CANONICAL as never,
     historySessionId: 'sess-1',

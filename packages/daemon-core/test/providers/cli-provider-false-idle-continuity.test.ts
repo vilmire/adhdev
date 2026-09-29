@@ -54,8 +54,6 @@ function makeFlushInstance(opts: {
     getStatus: () => ({ status: 'idle', lastOutputAt: opts.currentLastOutputAt }),
     getPartialResponse: () => '',
     getScriptParsedStatus: () => ({ status: 'idle', messages: opts.parsedMessages }),
-    getScreenText: () => '',
-    isWaitingForResponse: false,
   }
 
   instance.shouldAutoApprove = () => false

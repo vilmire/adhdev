@@ -117,7 +117,9 @@ describe('stall watchdog — causal freshness needs a lower bound on age', () =>
             _lastOutputAt: opts.lastOutputAt,
             _status: 'generating',
             _alive: true,
-            currentTurnScope: opts.turnActive ? { id: 'turn-1' } : undefined,
+            _processing: opts.turnActive === true,
+            isProcessing() { return this._processing },
+            getLastApprovalResolvedAt() { return 0 },
             isAlive() { return this._alive },
             getStatus() { return { lastOutputAt: this._lastOutputAt, status: this._status } },
         }

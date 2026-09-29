@@ -1,20 +1,16 @@
-// Per-process cache of mesh session → provider metadata (providerType /
-// providerSessionId), fed by launches and drained coordinator events, with the
-// daemon ledger as the fallback source. Split out of mesh-tools-internal.ts;
-// re-exported there.
 
-import { readString } from './mesh-tool-shared.js';
 import type { MeshContext } from './mesh-tools-internal.js';
 import { ledgerQuery } from '../ipc/turn-commands.js';
+import { readString } from '@adhdev/mesh-shared';
 
-export type MeshSessionProviderMetadata = {
+type MeshSessionProviderMetadata = {
     providerType: string;
     providerSessionId?: string;
 };
 
 export const SESSION_PROVIDER_METADATA_TTL_MS = 30 * 60_000;
 
-export type TimestampedSessionMetadata = MeshSessionProviderMetadata & { expiresAt: number };
+type TimestampedSessionMetadata = MeshSessionProviderMetadata & { expiresAt: number };
 
 export const meshSessionProviderMetadata = new Map<string, TimestampedSessionMetadata>();
 

@@ -1,8 +1,7 @@
 import { LOG } from '../logging/logger.js';
-import { sessionIdsEquivalent } from '@adhdev/mesh-shared';
+import { sessionIdsEquivalent, readText } from '@adhdev/mesh-shared';
 import { getQueue } from './mesh-work-queue.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
-import { readNonEmptyString } from './mesh-events-utils.js';
 import { notifyMeshCoordinator } from './turn-ledger/deliver.js';
 import { getMachineId } from '../config/config.js';
 
@@ -65,7 +64,7 @@ const MAX_LISTED_ORPHANS = 5;
 
 /** First line of the task message, trimmed to a readable label. */
 function titleForTask(task: MeshWorkQueueEntry): string {
-    const raw = readNonEmptyString((task as { message?: string }).message) || '';
+    const raw = readText((task as { message?: string }).message) || '';
     const firstLine = raw.split('\n').map(s => s.trim()).find(Boolean) || '(no message)';
     return firstLine.length > 80 ? `${firstLine.slice(0, 77)}...` : firstLine;
 }
@@ -89,7 +88,7 @@ export function findTasksOrphanedBySessionStop(
     stoppedSessionId: string,
     opts?: { excludeTaskId?: string },
 ): OrphanedPinnedTask[] {
-    const sessionId = readNonEmptyString(stoppedSessionId);
+    const sessionId = readText(stoppedSessionId);
     if (!sessionId) return [];
     let queue: MeshWorkQueueEntry[];
     try {
@@ -98,18 +97,18 @@ export function findTasksOrphanedBySessionStop(
         LOG.warn('MeshQueue', `Orphan-pin scan failed to read queue for mesh ${meshId}: ${e?.message || e}`);
         return [];
     }
-    const excludeTaskId = readNonEmptyString(opts?.excludeTaskId);
+    const excludeTaskId = readText(opts?.excludeTaskId);
     const orphans: OrphanedPinnedTask[] = [];
     for (const task of queue) {
         if (excludeTaskId && task.id === excludeTaskId) continue;
-        const pin = readNonEmptyString(task.targetSessionId);
+        const pin = readText(task.targetSessionId);
         if (!pin || !sessionIdsEquivalent(pin, sessionId)) continue;
         orphans.push({
             taskId: task.id,
             title: titleForTask(task),
             targetSessionId: pin,
-            ...(readNonEmptyString(task.targetNodeId) ? { targetNodeId: task.targetNodeId } : {}),
-            ...(readNonEmptyString(task.missionId) ? { missionId: task.missionId } : {}),
+            ...(readText(task.targetNodeId) ? { targetNodeId: task.targetNodeId } : {}),
+            ...(readText(task.missionId) ? { missionId: task.missionId } : {}),
         });
     }
     return orphans;
@@ -166,14 +165,14 @@ export function notifyCoordinatorOfOrphanedPins(
     const orphans = findTasksOrphanedBySessionStop(meshId, stoppedSessionId, { excludeTaskId: opts?.excludeTaskId });
     if (orphans.length === 0) return orphans;
 
-    const cause = readNonEmptyString(opts?.cause) || 'A cancellation';
+    const cause = readText(opts?.cause) || 'A cancellation';
     const coordinatorMessage = buildOrphanedPinNotice(orphans, stoppedSessionId, cause);
-    const nodeLabel = readNonEmptyString(opts?.nodeId) || readNonEmptyString(orphans[0]?.targetNodeId) || meshId;
+    const nodeLabel = readText(opts?.nodeId) || readText(orphans[0]?.targetNodeId) || meshId;
     // Address the event to THIS daemon (it owns the queue) and, when known, to the
     // coordinator session that issued the cancel — the same addressing the actionable
     // dispatch-skip notification uses.
-    const targetCoordinatorDaemonId = readNonEmptyString(getMachineId());
-    const targetCoordinatorSessionId = readNonEmptyString(opts?.coordinatorSessionId);
+    const targetCoordinatorDaemonId = readText(getMachineId());
+    const targetCoordinatorSessionId = readText(opts?.coordinatorSessionId);
 
     LOG.warn('MeshQueue', `CANCEL-ORPHANS-PINNED-TASK: stopping session ${stoppedSessionId} (mesh ${meshId}) orphaned ${orphans.length} pinned pending task(s): ${orphans.map(o => o.taskId).join(', ')}`);
     try {
@@ -181,7 +180,7 @@ export function notifyCoordinatorOfOrphanedPins(
             event: 'mesh:dispatch_blocked',
             meshId,
             nodeLabel,
-            ...(readNonEmptyString(opts?.nodeId) ? { nodeId: opts!.nodeId } : {}),
+            ...(readText(opts?.nodeId) ? { nodeId: opts!.nodeId } : {}),
             metadataEvent: {
                 source: 'mesh_session_stop_orphaned_pins',
                 // taskId anchors the pending-event fingerprint (buildPendingEventFingerprint),

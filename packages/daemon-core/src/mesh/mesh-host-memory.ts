@@ -29,9 +29,9 @@ import { existsSync, readFileSync, renameSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { getConfigDir } from '../config/config.js';
 
-export type MeshHostRecordSource = 'pairing' | 'session_stamp' | 'first_dispatch';
+type MeshHostRecordSource = 'pairing' | 'session_stamp' | 'first_dispatch';
 
-export interface MeshHostRecord {
+interface MeshHostRecord {
     meshId: string;
     hostDaemonId: string;
     source: MeshHostRecordSource;

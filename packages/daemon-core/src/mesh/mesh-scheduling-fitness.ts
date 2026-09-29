@@ -5,7 +5,8 @@ import { resolveProviderMaxParallel, resolveSlotMaxParallel, resolveNodeScheduli
 import type { RepoMeshSchedulingStrategy, RepoMeshQuotaRoutingPolicy } from '../repo-mesh-types.js';
 import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, sessionIdsEquivalent, normalizeNodeCapabilitySlots, isMeshTaskDifficulty, type MeshNodeIdentified, type NodeCapabilitySlot, type MeshTaskDifficulty } from '@adhdev/mesh-shared';
 import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
-import { quotaSpreadBonusByProvider, type QuotaFactsContext } from './mesh-quota-routing.js';
+import { quotaSpreadBonusByProvider } from './mesh-quota-ranking-records.js';
+import { type QuotaFactsContext } from './mesh-quota-sources.js';
 import { decideSlotForModel, isModelAllowedBySlot } from './slot-model-enforcement.js';
 import { getMesh } from '../config/mesh-config.js';
 import { resolveDaemonSiblingNodeIds, effectiveSlotCap } from './mesh-daemon-slot-axis.js';
@@ -237,7 +238,7 @@ function slotsMeetingTaskDifficultyFloor(node: any, slots: NodeCapabilitySlot[],
     return slots.filter(slot => slotDifficultyTierForTask(slot, task.difficulty) !== undefined);
 }
 
-export interface SlotFitnessScoreBreakdown {
+interface SlotFitnessScoreBreakdown {
     base: number;
     difficulty: number;
     tags: number;

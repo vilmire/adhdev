@@ -109,7 +109,7 @@ describe('FALSEIDLE-a getCompletedFinalizationBlock integration', () => {
       getPartialResponse: () => '',
       getScriptParsedStatus: () => ({ status: 'idle', messages: [{ role: 'assistant', content: 'done' }] }),
       getStatus: () => ({ status: 'idle', ...seq }),
-      getScreenText: () => '',
+      getLastApprovalResolvedAt: () => 0,
       chatMessagesOwnedExternally: false,
     }
     // Force "final assistant present" so we isolate the approval-resolution gate from the

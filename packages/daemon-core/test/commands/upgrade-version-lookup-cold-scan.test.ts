@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveNpmPublishedVersion } from '../../src/commands/upgrade-helper.js';
+import { resolveNpmPublishedVersion } from '../../src/commands/upgrade-install-surface.js';
 
 /**
  * Regression: the daemon-side upgrade died on the VERSION LOOKUP, before

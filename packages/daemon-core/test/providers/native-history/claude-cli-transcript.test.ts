@@ -313,7 +313,8 @@ describe('claude-cli-transcript — isMeta records (IMAGE-TRIPLE-BUBBLE ③)', (
     // The expand path rebuilds the record array WITHOUT the isMeta skip. The
     // parser must therefore keep counting skipped records, or every ref after
     // an isMeta line would address its NEIGHBOUR's block.
-    const records = mod.readClaudeRecords(filePath);
+    const { readJsonlRecords } = await import('../../../src/providers/native-history/transcript-common.js');
+    const records = readJsonlRecords(filePath);
     const resolved = mod.readClaudeToolBlockAt(
       records[toolBubble!.toolBlockRef!.recordIndex],
       toolBubble!.toolBlockRef!.blockIndex,

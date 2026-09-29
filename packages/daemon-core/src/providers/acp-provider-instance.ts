@@ -17,35 +17,14 @@
 
 import { currentMeshAttemptRef } from './cli-provider-mesh-assignment.js';
 import * as path from 'path';
-import { Readable, Writable } from 'stream';
-import { spawn, type ChildProcess } from 'child_process';
-import {
-    ClientSideConnection,
-    ndJsonStream,
-    RequestError,
-    PROTOCOL_VERSION,
-    type Client,
-    type Agent,
-    type SessionNotification,
-    type RequestPermissionRequest,
-    type RequestPermissionResponse,
-    type WriteTextFileRequest,
-    type WriteTextFileResponse,
-    type ReadTextFileRequest,
-    type ReadTextFileResponse,
-    type CreateTerminalRequest,
-    type CreateTerminalResponse,
-    type TerminalOutputRequest,
-    type TerminalOutputResponse,
-    type ReleaseTerminalRequest,
-    type ReleaseTerminalResponse,
-    type WaitForTerminalExitRequest,
-    type WaitForTerminalExitResponse,
-    type KillTerminalRequest,
-    type KillTerminalResponse,
-    type ToolCallStatus,
-} from '@agentclientprotocol/sdk';
-import type { ProviderModule, ContentBlock, InputEnvelope, ToolCallInfo, ToolCallContent as TCC, ToolKind, ToolCallStatus as TCS } from './contracts.js';
+import { type ChildProcess } from 'child_process';
+import { ClientSideConnection, type SessionNotification } from '@agentclientprotocol/sdk';
+import type {
+    ProviderModule,
+    ContentBlock,
+    InputEnvelope,
+    ToolCallInfo,
+} from './contracts.js';
 import { flattenContent, normalizeInputEnvelope } from './contracts.js';
 import { assertProviderSupportsDeclaredInput, getEffectiveMessageInputSupport } from './provider-input-support.js';
 import type { ProviderInstance, ProviderState, AcpProviderState, ProviderErrorReason, ProviderEvent, InstanceContext, ProviderSendMessageResult } from './provider-instance.js';
@@ -57,9 +36,6 @@ import {
     buildAssistantChatMessage,
     buildChatMessage,
     buildRuntimeSystemChatMessage,
-    buildTerminalChatMessage,
-    buildThoughtChatMessage,
-    buildToolChatMessage,
     buildUserChatMessage,
     normalizeChatMessages,
     extractFinalSummaryFromMessages,
@@ -69,11 +45,20 @@ import type { ChatMessage } from '../types.js';
 import { emitStatusEdge, forwardProviderEvent, type SessionEventPort } from './provider-event-port.js';
 import { emitTurnStarted, emitTurnEnd, emitSuspension, emitProcessExit, type TurnEvidencePort } from './turn-evidence-port.js';
 import type { TurnAttemptRef } from '@adhdev/mesh-shared';
-import { acpSourceAddress } from '../chat/message-source-address.js';
+import {
+    handleSessionUpdate,
+    nextMessageSourceId,
+    turnSourceId,
+    withAcpSource,
+    buildPartialBlocks,
+    buildPartialThoughtMessage,
+    finalizeAssistantMessage,
+} from './acp-session-updates.js';
+import { spawnAgent } from './acp-agent-process.js';
 
 // ─── Internal Display Types (for dashboard) ────────────────────────────
 
-type AcpMessage = ChatMessage & {
+export type AcpMessage = ChatMessage & {
     role: 'user' | 'assistant' | 'system';
     /** Rich content blocks (ACP standard) or plain text (legacy) */
     content: string | ContentBlock[];
@@ -264,34 +249,34 @@ export function buildAcpPromptParts(input: InputEnvelope, agentCapabilities?: Re
 export class AcpProviderInstance implements ProviderInstance {
     readonly type: string;
     readonly category = 'acp' as const;
-    private readonly log = LOG.forComponent('ACP');
+    readonly log = LOG.forComponent('ACP');
 
-    private provider: ProviderModule;
-    private settings: Record<string, any> = {};
+    provider: ProviderModule;
+    settings: Record<string, any> = {};
     /** Lifecycle port (wiring-unification B2); null until boot wires it. */
     private lifecyclePort: SessionEventPort | null = null;
     private turnEvidencePort: TurnEvidencePort | null = null;
     private monitor: StatusMonitor;
 
  // Process
-    private process: ChildProcess | null = null;
-    private connection: ClientSideConnection | null = null;
+    process: ChildProcess | null = null;
+    connection: ClientSideConnection | null = null;
 
  // State
-    private sessionId: string | null = null;
-    private messages: AcpMessage[] = [];
-    private currentStatus: ProviderState['status'] = 'starting';
+    sessionId: string | null = null;
+    messages: AcpMessage[] = [];
+    currentStatus: ProviderState['status'] = 'starting';
     private lastStatus: string = 'starting';
     private generatingStartedAt = 0;
-    private agentCapabilities: Record<string, any> = {};
+    agentCapabilities: Record<string, any> = {};
     private currentSelections: Partial<Record<SelectionCategory, string>> = {};
-    private activeToolCalls: AcpToolCall[] = [];
-    private partialContent = '';
-    private partialThoughtContent = '';
+    activeToolCalls: AcpToolCall[] = [];
+    partialContent = '';
+    partialThoughtContent = '';
     /** Rich content blocks accumulated during streaming */
-    private partialBlocks: ContentBlock[] = [];
+    partialBlocks: ContentBlock[] = [];
     /** Tool calls collected during current turn */
-    private turnToolCalls: ToolCallInfo[] = [];
+    turnToolCalls: ToolCallInfo[] = [];
     /**
      * Local ids for the message identity ledger's `acp` source class (design
      * 2026-09-28 §3.4). Every pushed message gets `m<n>`; a turn's streaming
@@ -299,8 +284,8 @@ export class AcpProviderInstance implements ProviderInstance {
      * finalized messages REUSE those ids, so the ledger keeps one bubble id
      * from first partial to final. Tool bubbles use the protocol toolCallId.
      */
-    private acpMessageSeq = 0;
-    private acpTurnSeq = 0;
+    acpMessageSeq = 0;
+    acpTurnSeq = 0;
     /**
      * When the current turn started. The streaming thought/answer partials are
      * stamped with it rather than `Date.now()`, so re-reading an unchanged
@@ -312,27 +297,27 @@ export class AcpProviderInstance implements ProviderInstance {
     private _sendPromptInFlight = false;
 
  // Error tracking
-    private errorMessage: string | null = null;
-    private errorReason: ProviderErrorReason | null = null;
-    private stderrBuffer: string[] = [];
-    private spawnedAt = 0;
+    errorMessage: string | null = null;
+    errorReason: ProviderErrorReason | null = null;
+    stderrBuffer: string[] = [];
+    spawnedAt = 0;
 
  // ACP ConfigOptions & Modes (from session/new response or static fallback)
-    private configOptions: AcpConfigOption[] = [];
+    configOptions: AcpConfigOption[] = [];
     private availableModes: AcpMode[] = [];
  /** Static config mode — agent doesn't support config/* methods */
-    private useStaticConfig = false;
+    useStaticConfig = false;
  /** Current config selections (for spawnArgBuilder) */
-    private selectedConfig: Record<string, string> = {};
+    selectedConfig: Record<string, string> = {};
 
  // Config
-    private workingDir: string;
+    workingDir: string;
     private instanceId: string;
 
     constructor(
         provider: ProviderModule,
         workingDir: string,
-        private cliArgs: string[] = [],
+        public cliArgs: string[] = [],
     ) {
         this.type = provider.type;
         this.provider = provider;
@@ -497,11 +482,11 @@ export class AcpProviderInstance implements ProviderInstance {
         return this.availableModes.find((mode) => mode.id === modeId)?.name || modeId;
     }
 
-    private getCurrentSelection(category: SelectionCategory): string | undefined {
+    getCurrentSelection(category: SelectionCategory): string | undefined {
         return this.currentSelections[category];
     }
 
-    private setCurrentSelection(category: SelectionCategory, value: string | null | undefined): void {
+    setCurrentSelection(category: SelectionCategory, value: string | null | undefined): void {
         const normalized = typeof value === 'string' ? value.trim() : '';
         if (normalized) {
             this.currentSelections[category] = normalized;
@@ -565,7 +550,7 @@ export class AcpProviderInstance implements ProviderInstance {
 
  // ─── ACP Config Options & Modes ─────────────────────
 
-    private parseConfigOptions(raw: any): void {
+    parseConfigOptions(raw: any): void {
         if (!Array.isArray(raw)) return;
         this.configOptions = [];
         for (const opt of raw) {
@@ -609,7 +594,7 @@ export class AcpProviderInstance implements ProviderInstance {
         }
     }
 
-    private parseModes(raw: any): void {
+    parseModes(raw: any): void {
         if (!raw) return;
  // modes: { currentModeId, availableModes: [{ id, name, description }] }
         this.setCurrentSelection('mode', raw.currentModeId);
@@ -741,334 +726,7 @@ export class AcpProviderInstance implements ProviderInstance {
         this.connection = null;
         this.monitor.reset();
     }
-
- // ─── ACP Process Management ──────────────────────
-
-    private async spawnAgent(): Promise<void> {
-        const spawnConfig = this.provider.spawn;
-        if (!spawnConfig) {
-            throw new Error(`[ACP:${this.type}] No spawn config defined`);
-        }
-
-        const command = typeof this.settings.executablePath === 'string' && this.settings.executablePath.trim()
-            ? this.settings.executablePath.trim()
-            : spawnConfig.command;
- // Static config: create args via spawnArgBuilder (when provider defines it)
-        let baseArgs = spawnConfig.args || [];
-        if (this.provider.spawnArgBuilder && Object.keys(this.selectedConfig).length > 0) {
-            baseArgs = this.provider.spawnArgBuilder(this.selectedConfig);
-        }
-        const args = [...baseArgs, ...this.cliArgs];
-
- // Auth: each CLI/ACP tool manages its own authentication.
- // ADHDev does NOT inject API keys — tools read their own env vars or config files.
-
-        const env = { ...process.env, ...(spawnConfig.env || {}) };
-
-        this.log.info(`[${this.type}] Spawning: ${command} ${args.join(' ')} in ${this.workingDir}`);
-
-        this.spawnedAt = Date.now();
-        this.errorMessage = null;
-        this.errorReason = null;
-        this.stderrBuffer = [];
-
-        this.process = spawn(command, args, {
-            cwd: this.workingDir,
-            env,
-            stdio: ['pipe', 'pipe', 'pipe'],
-            shell: spawnConfig.shell || false,
-            ...(process.platform === 'win32' ? { windowsHide: true } : {}),
-        });
-
- // stderr → log + auth failure detection
-        const AUTH_ERROR_PATTERNS = [
-            /unauthorized|unauthenticated/i,
-            /invalid.*(?:api[_ ]?key|token|credential)/i,
-            /auth(?:entication|orization).*(?:fail|error|denied|invalid|expired)/i,
-            /(?:api[_ ]?key|token).*(?:missing|required|not set|not found|invalid|expired)/i,
-            /ENOENT|command not found|not recognized/i,
-            /permission denied/i,
-            /rate.?limit|quota.?exceeded/i,
-            /login.*required|please.*(?:login|authenticate|sign.?in)/i,
-        ];
-
-        this.process.stderr?.on('data', (data) => {
-            const text = data.toString().trim();
-            if (!text) return;
-            this.log.debug(`[${this.type}:stderr] ${text.slice(0, 300)}`);
-
- // Maintain stderr buffer (recent 20 lines)
-            this.stderrBuffer.push(text);
-            if (this.stderrBuffer.length > 20) this.stderrBuffer.shift();
-
- // Auth failure detection
-            for (const pattern of AUTH_ERROR_PATTERNS) {
-                if (pattern.test(text)) {
-                    if (/ENOENT|command not found|not recognized/i.test(text)) {
-                        this.errorReason = 'not_installed';
-                        this.errorMessage = `Command '${command}' not found. Install: ${this.provider.install || 'check documentation'}`;
-                    } else {
-                        this.errorReason = 'auth_failed';
-                        this.errorMessage = text.slice(0, 300);
-                    }
-                    this.log.warn(`[${this.type}] Error detected (${this.errorReason}): ${this.errorMessage?.slice(0, 100)}`);
-                    break;
-                }
-            }
-        });
-
- // kill process detect
-        this.process.on('exit', (code, signal) => {
-            const elapsed = Date.now() - this.spawnedAt;
-            this.log.info(`[${this.type}] Process exited: code=${code} signal=${signal} elapsed=${elapsed}ms`);
-
- // Exit code analysis
-            if (code !== 0 && code !== null) {
-                if (!this.errorReason) {
-                    if (code === 127) {
-                        this.errorReason = 'not_installed';
-                        this.errorMessage = `Command '${command}' not found (exit code 127). Install: ${this.provider.install || 'check documentation'}`;
-                    } else if (elapsed < 3000) {
- // 3-second crash → likely install/auth issue
-                        this.errorReason = this.stderrBuffer.length > 0 ? 'crash' : 'spawn_error';
-                        this.errorMessage = this.stderrBuffer.length > 0
-                            ? `Agent crashed immediately (exit code ${code}): ${this.stderrBuffer.slice(-3).join(' | ').slice(0, 300)}`
-                            : `Agent exited immediately with code ${code}. The agent may not be installed correctly.`;
-                    } else {
-                        this.errorReason = 'crash';
-                        this.errorMessage = `Agent exited with code ${code}${this.stderrBuffer.length > 0 ? ': ' + this.stderrBuffer.slice(-1)[0]?.slice(0, 200) : ''}`;
-                    }
-                }
-            }
-
-            this.currentStatus = this.errorReason ? 'error' : 'stopped';
-            this.detectStatusTransition();
-        });
-
-        this.process.on('error', (err) => {
-            this.log.error(`[${this.type}] Process spawn error: ${err.message}`);
-            if (err.message.includes('ENOENT')) {
-                this.errorReason = 'not_installed';
-                this.errorMessage = `Command '${command}' not found. Install: ${this.provider.install || 'check documentation'}`;
-            } else {
-                this.errorReason = 'spawn_error';
-                this.errorMessage = err.message;
-            }
-            this.currentStatus = 'error';
-            this.detectStatusTransition();
-        });
-
- // ─── SDK Connection Setup ────────────────────────
- // Convert Node.js streams to Web Streams for ndJsonStream
-        const webStdin = Writable.toWeb(this.process.stdin!) as WritableStream<Uint8Array>;
-        const webStdout = Readable.toWeb(this.process.stdout!) as ReadableStream<Uint8Array>;
-        const stream = ndJsonStream(webStdin, webStdout);
-
- // Create ClientSideConnection with our Client implementation
-        this.connection = new ClientSideConnection((_agent: Agent) => this.createClient(), stream);
-
- // Listen for connection close
-        this.connection.signal.addEventListener('abort', () => {
-            this.log.info(`[${this.type}] ACP connection closed`);
-        });
-
- // ACP initialize handshake
-        await this.initialize();
-    }
-
- // ─── Client Interface Implementation ────────────────────
-
-    private createClient(): Client {
-        return {
-            requestPermission: async (params: RequestPermissionRequest): Promise<RequestPermissionResponse> => {
-                // Update active tool calls from the request
-                const tc = params.toolCall;
-                const existing = this.activeToolCalls.find(t => t.id === tc.toolCallId);
-                if (existing) {
-                    existing.status = 'running';
-                    if (tc.title) existing.name = tc.title;
-                } else {
-                    this.activeToolCalls.push({
-                        id: tc.toolCallId,
-                        name: tc.title || 'unknown',
-                        status: 'running',
-                        input: tc.rawInput ? (typeof tc.rawInput === 'string' ? tc.rawInput : JSON.stringify(tc.rawInput)) : undefined,
-                    });
-                }
-
-                // ─── Auto-approve: skip user confirmation ───
-                // Held while a human is actively attending this session (manual
-                // attendance) so they can decide the permission themselves; falls
-                // through to the waiting_approval manual path below. A background
-                // worker is never attended, so its delegated auto-approve fires
-                // as before.
-                if (this.settings.autoApprove !== false && !this.manualAttendance.isAttended()) {
-                    const toolTitle = tc.title || tc.toolCallId || 'tool call';
-                    this.log.info(`[${this.type}] Auto-approving: ${toolTitle}`);
-                    this.appendSystemMessage(`Auto-approved: ${toolTitle}`);
-                    const allowOption = params.options.find(o => o.kind === 'allow_once') || params.options.find(o => o.kind === 'allow_always');
-                    if (allowOption) {
-                        return { outcome: { outcome: 'selected', optionId: allowOption.optionId } };
-                    }
-                    return { outcome: { outcome: 'selected', optionId: params.options[0]?.optionId || '' } };
-                }
-
-                // Approval request → switch to waiting_approval status
-                this.currentStatus = 'waiting_approval';
-                this.detectStatusTransition();
-
-                // Wait for user approval
-                const approved = await new Promise<boolean>((resolve) => {
-                    this.permissionResolvers.push(resolve);
-                    // 5-minute timeout → auto-reject
-                    setTimeout(() => {
-                        const idx = this.permissionResolvers.indexOf(resolve);
-                        if (idx >= 0) {
-                            this.permissionResolvers.splice(idx, 1);
-                            resolve(false);
-                        }
-                    }, 300_000);
-                });
-
-                if (approved) {
- // Find the "allow" option (allow_once or allow_always)
-                    const allowOption = params.options.find(o => o.kind === 'allow_once') || params.options.find(o => o.kind === 'allow_always');
-                    if (allowOption) {
-                        return { outcome: { outcome: 'selected', optionId: allowOption.optionId } };
-                    }
- // Fallback: use first option
-                    return { outcome: { outcome: 'selected', optionId: params.options[0]?.optionId || '' } };
-                } else {
- // Find the "reject" option
-                    const rejectOption = params.options.find(o => o.kind === 'reject_once') || params.options.find(o => o.kind === 'reject_always');
-                    if (rejectOption) {
-                        return { outcome: { outcome: 'selected', optionId: rejectOption.optionId } };
-                    }
-                    return { outcome: { outcome: 'cancelled' } };
-                }
-            },
-
-            sessionUpdate: async (params: SessionNotification): Promise<void> => {
-                this.handleSessionUpdate(params);
-            },
-
- // File system — not supported
-            readTextFile: async (_params: ReadTextFileRequest): Promise<ReadTextFileResponse> => {
-                throw RequestError.methodNotFound('fs/read_text_file');
-            },
-            writeTextFile: async (_params: WriteTextFileRequest): Promise<WriteTextFileResponse> => {
-                throw RequestError.methodNotFound('fs/write_text_file');
-            },
-
- // Terminal — not supported
-            createTerminal: async (_params: CreateTerminalRequest): Promise<CreateTerminalResponse> => {
-                throw RequestError.methodNotFound('terminal/create');
-            },
-            terminalOutput: async (_params: TerminalOutputRequest): Promise<TerminalOutputResponse> => {
-                throw RequestError.methodNotFound('terminal/output');
-            },
-            releaseTerminal: async (_params: ReleaseTerminalRequest): Promise<ReleaseTerminalResponse> => {
-                throw RequestError.methodNotFound('terminal/release');
-            },
-            waitForTerminalExit: async (_params: WaitForTerminalExitRequest): Promise<WaitForTerminalExitResponse> => {
-                throw RequestError.methodNotFound('terminal/wait_for_exit');
-            },
-            killTerminal: async (_params: KillTerminalRequest): Promise<KillTerminalResponse> => {
-                throw RequestError.methodNotFound('terminal/kill');
-            },
-        };
-    }
-
- // ─── ACP Protocol (via SDK) ────────────────────────────
-
-    private async initialize(): Promise<void> {
-        if (!this.connection) return;
-
-        try {
-            const result = await this.connection.initialize({
-                protocolVersion: PROTOCOL_VERSION,
-                clientCapabilities: {},
-            });
-
-            this.agentCapabilities = result?.agentCapabilities || {};
-            this.log.info(`[${this.type}] Initialized. Agent capabilities: ${JSON.stringify(this.agentCapabilities)}`);
-
- // new session create
-            await this.createSession();
-        } catch (e: any) {
-            this.log.error(`[${this.type}] Initialize failed: ${e?.message}`);
-            if (!this.errorReason) {
-                this.errorReason = 'init_failed';
-                this.errorMessage = `ACP handshake failed: ${e?.message}${this.stderrBuffer.length > 0 ? '\n' + this.stderrBuffer.slice(-2).join('\n').slice(0, 200) : ''}`;
-            }
-            this.currentStatus = 'error';
-        }
-    }
-
-    private async createSession(): Promise<void> {
-        if (!this.connection) return;
-
-        try {
-            const result = await this.connection.newSession({
-                cwd: this.workingDir,
-                mcpServers: [],
-            });
-            this.sessionId = result?.sessionId || null;
-            this.currentStatus = 'idle';
-            this.messages = [];
-
- // DEBUG: session/new response key check
-            this.log.info(`[${this.type}] session/new result keys: ${result ? Object.keys(result).join(', ') : 'null'}`);
-            if (result?.configOptions) this.log.debug(`[${this.type}] configOptions: ${JSON.stringify(result.configOptions).slice(0, 500)}`);
-            if (result?.modes) this.log.debug(`[${this.type}] modes: ${JSON.stringify(result.modes).slice(0, 300)}`);
-
- // ACP configOptions parsing (model, thought_level etc)
-            this.parseConfigOptions(result?.configOptions);
-
- // ACP modes parsing
-            this.parseModes(result?.modes);
-
- // Legacy: models.currentModelId (some agent compat)
-            if (!this.getCurrentSelection('model') && result?.models?.currentModelId) {
-                this.setCurrentSelection('model', result.models.currentModelId);
-            }
-
- // ─── Static config fallback (for agents without config/* support) ───
-            if (this.configOptions.length === 0 && this.provider.staticConfigOptions?.length) {
-                this.useStaticConfig = true;
-                for (const sc of this.provider.staticConfigOptions) {
-                    const defaultVal = this.selectedConfig[sc.configId] || sc.defaultValue || sc.options[0]?.value;
-                    this.configOptions.push({
-                        category: sc.category,
-                        configId: sc.configId,
-                        currentValue: defaultVal,
-                        options: sc.options.map(o => ({ ...o })),
-                    });
-                    if (defaultVal) {
-                        this.selectedConfig[sc.configId] = defaultVal;
-                        if (sc.category === 'model' || sc.category === 'mode') {
-                            this.setCurrentSelection(sc.category, defaultVal);
-                        }
-                    }
-                }
-                this.log.info(`[${this.type}] Using static configOptions (${this.configOptions.length} options)`);
-            }
-
-            const currentModel = this.getCurrentSelection('model');
-            const currentMode = this.getCurrentSelection('mode');
-            this.log.info(`[${this.type}] Session created: ${this.sessionId}${currentModel ? ` (model: ${currentModel})` : ''}${currentMode ? ` (mode: ${currentMode})` : ''}`);
-            if (this.configOptions.length > 0) {
-                this.log.info(`[${this.type}] Config options: ${this.configOptions.map(c => `${c.category}(${c.options.length})`).join(', ')}`);
-            }
-        } catch (e: any) {
-            this.log.warn(`[${this.type}] session/new failed: ${e?.message}`);
-            if (!this.errorReason) {
-                this.errorReason = 'init_failed';
-                this.errorMessage = `ACP session creation failed: ${e?.message}`;
-            }
-            this.currentStatus = 'error';
-        }
-    }
+    private spawnAgent(): Promise<void> { return spawnAgent(this); }
 
     /**
      * SEND-RECORD-SYMMETRY: the two preconditions that mean a prompt will NEVER be
@@ -1212,13 +870,13 @@ export class AcpProviderInstance implements ProviderInstance {
         this.detectStatusTransition();
     }
 
-    private permissionResolvers: ((approved: boolean) => void)[] = [];
+    permissionResolvers: ((approved: boolean) => void)[] = [];
 
     // Provider-common manual-attendance signal: while a human is actively driving
     // this session from the dashboard, auto-approve holds so they can decide on
     // the permission request themselves. Background workers are never attended →
     // delegated auto-approve is unaffected.
-    private readonly manualAttendance = new ManualAttendanceTracker();
+    readonly manualAttendance = new ManualAttendanceTracker();
 
     /** @see ProviderInstance.noteManualInteraction */
     noteManualInteraction(now = Date.now()): void {
@@ -1235,388 +893,17 @@ export class AcpProviderInstance implements ProviderInstance {
             this.detectStatusTransition();
         }
     }
-
- // ─── ACP session/update handle ─────────────────────
-
-    private handleSessionUpdate(params: SessionNotification): void {
-        if (!params) return;
-
-        const update = params.update;
-        this.log.debug(`[${this.type}] sessionUpdate: ${update.sessionUpdate}`);
-
-        switch (update.sessionUpdate) {
-            case 'agent_message_chunk': {
-                const content: any = update.content;
-                if (content.type === 'text') {
-                    this.partialContent += content.text;
-                } else if (content.type === 'image') {
-                    this.partialBlocks.push({
-                        type: 'image',
-                        data: content.data,
-                        mimeType: content.mimeType,
-                        ...(content.uri ? { uri: content.uri } : {}),
-                    });
-                } else if (content.type === 'audio') {
-                    this.partialBlocks.push({
-                        type: 'audio',
-                        data: content.data,
-                        mimeType: content.mimeType,
-                        ...(content.uri ? { uri: content.uri } : {}),
-                        ...(content.transcript ? { transcript: content.transcript } : {}),
-                    });
-                } else if (content.type === 'video') {
-                    this.partialBlocks.push({
-                        type: 'video',
-                        data: content.data,
-                        mimeType: content.mimeType,
-                        ...(content.uri ? { uri: content.uri } : {}),
-                        ...(content.transcript ? { transcript: content.transcript } : {}),
-                        ...(content.posterUri ? { posterUri: content.posterUri } : {}),
-                    });
-                } else if (content.type === 'resource_link') {
-                    this.partialBlocks.push({
-                        type: 'resource_link',
-                        uri: content.uri,
-                        name: content.name || 'resource',
-                        title: content.title ?? undefined,
-                        mimeType: content.mimeType ?? undefined,
-                    });
-                } else if (content.type === 'resource') {
-                    this.partialBlocks.push({
-                        type: 'resource',
-                        resource: content.resource,
-                    });
-                }
-                this.currentStatus = 'generating';
-                break;
-            }
-            case 'agent_thought_chunk': {
-                const content = update.content;
-                if (content?.type === 'text' && typeof content.text === 'string') {
-                    this.partialThoughtContent += content.text;
-                }
-                this.currentStatus = 'generating';
-                break;
-            }
-            case 'user_message_chunk': {
-                break;
-            }
-            case 'tool_call': {
- // New tool call — ACP SDK ToolCall has all fields typed
-                const tcId = update.toolCallId || `tc_${Date.now()}`;
-                const tcTitle = update.title || 'unknown';
-                const tcKind = update.kind as ToolKind | undefined;
-                const tcStatus = this.mapToolCallStatus(update.status);
-                
-                this.activeToolCalls.push({
-                    id: tcId,
-                    name: tcTitle,
-                    status: tcStatus,
-                    input: update.rawInput ? (typeof update.rawInput === 'string' ? update.rawInput : JSON.stringify(update.rawInput)) : undefined,
-                });
-                
-                // Also collect as ToolCallInfo for rich content
-                const acpStatus = update.status || 'in_progress';
-                this.turnToolCalls.push({
-                    toolCallId: tcId,
-                    title: tcTitle,
-                    kind: tcKind,
-                    status: acpStatus as TCS,
-                    rawInput: update.rawInput,
-                    content: this.convertToolCallContent(update.content),
-                    locations: update.locations,
-                });
-                break;
-            }
-            case 'tool_call_update': {
- // Update existing tool call — ACP SDK ToolCallUpdate typed
-                const toolCallId = update.toolCallId;
-                const existing = this.activeToolCalls.find(t => t.id === toolCallId);
-                if (existing) {
-                    if (update.status) existing.status = this.mapToolCallStatus(update.status);
-                    if (update.rawOutput) existing.output = typeof update.rawOutput === 'string' ? update.rawOutput : JSON.stringify(update.rawOutput);
-                }
-                // Update ToolCallInfo too
-                const tcInfo = this.turnToolCalls.find(t => t.toolCallId === toolCallId);
-                if (tcInfo) {
-                    if (update.status) tcInfo.status = update.status as TCS;
-                    if (update.rawOutput) tcInfo.rawOutput = update.rawOutput;
-                    if (update.content) tcInfo.content = this.convertToolCallContent(update.content);
-                    if (update.locations) tcInfo.locations = update.locations;
-                }
-                break;
-            }
-            case 'current_mode_update': {
-                this.setCurrentSelection('mode', update.currentModeId);
-                break;
-            }
-            case 'config_option_update': {
-                if (update.configOptions) {
-                    this.parseConfigOptions(update.configOptions);
-                }
-                break;
-            }
-            case 'plan':
-            case 'available_commands_update':
-            case 'session_info_update':
-            case 'usage_update':
- // Noted but no specific handling needed
-                break;
-            default:
- // Unknown update type — try legacy parsing for backward compatibility
-                this.handleLegacyUpdate(update);
-                break;
-        }
-    }
-
- /** Handle legacy session/update formats (pre-standardization compat) */
-    private handleLegacyUpdate(params: any): void {
- // Legacy: messageDelta format
-        if (params.messageDelta) {
-            const delta = params.messageDelta;
-            if (delta.content) {
-                for (const part of Array.isArray(delta.content) ? delta.content : [delta.content]) {
-                    if (part.type === 'text' && part.text) {
-                        this.partialContent += part.text;
-                    }
-                }
-            }
-            this.currentStatus = 'generating';
-        }
-
- // Legacy: message complete
-        if (params.message) {
-            const m = params.message;
-            let content = '';
-            if (typeof m.content === 'string') {
-                content = m.content;
-            } else if (Array.isArray(m.content)) {
-                content = m.content
-                    .filter((p: any) => p.type === 'text')
-                    .map((p: any) => p.text || '')
-                    .join('\n');
-            }
-
-            if (content.trim()) {
-                this.messages.push(this.withAcpSource(buildChatMessage({
-                    role: m.role || 'assistant',
-                    content: content.trim(),
-                    timestamp: Date.now(),
-                }), this.nextMessageSourceId()));
-                this.partialContent = '';
-            }
-        }
-
- // Legacy: toolCallUpdate
-        if (params.toolCallUpdate) {
-            const tc = params.toolCallUpdate;
-            const existing = this.activeToolCalls.find(t => t.id === tc.id);
-            if (existing) {
-                if (tc.status) existing.status = tc.status;
-                if (tc.output) existing.output = tc.output;
-            } else {
-                this.activeToolCalls.push({
-                    id: tc.id || `tc_${Date.now()}`,
-                    name: tc.name || 'unknown',
-                    status: tc.status || 'running',
-                    input: typeof tc.input === 'string' ? tc.input : JSON.stringify(tc.input),
-                });
-            }
-        }
-
- // Legacy: stopReason
-        if (params.stopReason) {
-            if (params.stopReason !== 'cancelled') {
-                this.currentStatus = 'idle';
-            }
-            this.activeToolCalls = [];
-            this.detectStatusTransition();
-        }
-
- // Legacy: model info
-        if (params.model) {
-            this.setCurrentSelection('model', params.model);
-        }
-    }
-
- /** Map SDK ToolCallStatus to internal status */
-    private mapToolCallStatus(status?: ToolCallStatus | string): 'running' | 'completed' | 'failed' {
-        switch (status) {
-            case 'completed': return 'completed';
-            case 'failed': return 'failed';
-            case 'pending':
-            case 'in_progress':
-            default: return 'running';
-        }
-    }
-
- // ─── Rich Content Helpers ────────────────────────────
-
-    private nextMessageSourceId(): string {
-        this.acpMessageSeq += 1;
-        return `m${this.acpMessageSeq}`;
-    }
-
-    private turnSourceId(slot: string): string {
-        return `t${this.acpTurnSeq}.${slot}`;
-    }
-
-    /** Stamp the identity ledger's `acp` source address (daemon-internal `_src`). */
-    private withAcpSource<T extends object | null>(message: T, localId: string): T {
-        if (!message) return message;
-        const src = acpSourceAddress(localId);
-        return src ? { ...message, _src: src } : message;
-    }
-
-    /** Build ContentBlock[] from current partial state */
-    private buildPartialBlocks(): ContentBlock[] {
-        const blocks: ContentBlock[] = [];
-        if (this.partialContent.trim()) {
-            blocks.push({ type: 'text', text: this.partialContent.trim() + '...' });
-        }
-        blocks.push(...this.partialBlocks);
-        return blocks;
-    }
-
-    private buildPartialThoughtMessage(timestamp = Date.now()): AcpMessage | null {
-        const content = this.partialThoughtContent.trim();
-        if (!content) return null;
-        return buildThoughtChatMessage({
-            content,
-            timestamp,
-            meta: {
-                label: 'Thought',
-                isRunning: this.currentStatus === 'generating',
-            },
-        });
-    }
-
-    private buildToolCallBubbleKind(toolCall: ToolCallInfo): 'thought' | 'tool' | 'terminal' {
-        if (toolCall.kind === 'think') return 'thought';
-        if (toolCall.kind === 'execute') return 'terminal';
-        if (Array.isArray(toolCall.content) && toolCall.content.some((entry) => entry?.type === 'terminal')) return 'terminal';
-        return 'tool';
-    }
-
-    private summarizeToolCallBubbleContent(toolCall: ToolCallInfo): string {
-        const rawOutput = typeof toolCall.rawOutput === 'string'
-            ? toolCall.rawOutput.trim()
-            : (toolCall.rawOutput != null ? JSON.stringify(toolCall.rawOutput) : '');
-        if (rawOutput) return rawOutput;
-
-        const contentText = Array.isArray(toolCall.content)
-            ? toolCall.content
-                .map((entry) => {
-                    if (!entry || typeof entry !== 'object') return '';
-                    if (entry.type === 'content') return flattenContent([entry.content]).trim();
-                    if (entry.type === 'diff') return `${entry.path}\n${entry.newText || ''}`.trim();
-                    if (entry.type === 'terminal') return `Terminal: ${entry.terminalId || ''}`.trim();
-                    return '';
-                })
-                .filter(Boolean)
-                .join('\n\n')
-                .trim()
-            : '';
-        if (contentText) return contentText;
-
-        const rawInput = typeof toolCall.rawInput === 'string'
-            ? toolCall.rawInput.trim()
-            : (toolCall.rawInput != null ? JSON.stringify(toolCall.rawInput) : '');
-        if (rawInput) {
-            return toolCall.title ? `${toolCall.title}\n${rawInput}` : rawInput;
-        }
-
-        return toolCall.title || '';
-    }
-
-    private buildTurnToolCallMessages(timestamp = Date.now()): AcpMessage[] {
-        return this.turnToolCalls
-            .map((toolCall, index) => this.withAcpSource(this.buildTurnToolCallMessage(toolCall, timestamp), this.turnSourceId(`tool.${toolCall.toolCallId || index}`)))
-            .filter(Boolean) as AcpMessage[];
-    }
-
-    private buildTurnToolCallMessage(toolCall: ToolCallInfo, timestamp: number): AcpMessage | null {
-        const content = this.summarizeToolCallBubbleContent(toolCall);
-        if (!content) return null;
-        const isRunning = toolCall.status === 'pending' || toolCall.status === 'in_progress';
-        const label = toolCall.title || undefined;
-        const kind = this.buildToolCallBubbleKind(toolCall);
-        if (kind === 'thought') {
-            return buildThoughtChatMessage({
-                content,
-                timestamp,
-                meta: { label: label || 'Thought', isRunning },
-            });
-        }
-        if (kind === 'terminal') {
-            return buildTerminalChatMessage({
-                content,
-                timestamp,
-                meta: { label: label || 'Ran command', isRunning },
-            });
-        }
-        return buildToolChatMessage({
-            content,
-            timestamp,
-            meta: { label: label || 'Tool call', isRunning },
-        });
-    }
-
-    /** Finalize streaming content into an assistant message */
-    private finalizeAssistantMessage(): void {
-        const timestamp = Date.now();
-        const thoughtMessage = this.buildPartialThoughtMessage(timestamp);
-        if (thoughtMessage) {
-            this.messages.push(this.withAcpSource(thoughtMessage, this.turnSourceId('thought')));
-        }
-
-        const toolCallMessages = this.buildTurnToolCallMessages(timestamp);
-        if (toolCallMessages.length > 0) {
-            this.messages.push(...toolCallMessages);
-        }
-
-        const blocks = this.buildPartialBlocks();
-        // Remove trailing '...' from text blocks for final message
-        const finalBlocks = blocks.map(b => {
-            if (b.type === 'text' && b.text.endsWith('...')) {
-                return { ...b, text: b.text.slice(0, -3) };
-            }
-            return b;
-        }).filter(b => b.type !== 'text' || (b.type === 'text' && b.text.trim()));
-
-        if (finalBlocks.length > 0) {
-            this.messages.push(this.withAcpSource(buildAssistantChatMessage({
-                content: finalBlocks.length === 1 && finalBlocks[0].type === 'text'
-                    ? (finalBlocks[0] as {type: 'text', text: string}).text   // single text → string (backward compat)
-                    : finalBlocks,
-                timestamp: Date.now(),
-                toolCalls: this.turnToolCalls.length > 0 ? [...this.turnToolCalls] : undefined,
-            }), this.turnSourceId('answer')));
-        }
-        this.partialContent = '';
-        this.partialThoughtContent = '';
-        this.partialBlocks = [];
-        this.turnToolCalls = [];
-    }
-
-    /** Convert ACP ToolCallContent[] to our ToolCallContent[] */
-    private convertToolCallContent(acpContent?: any[]): TCC[] | undefined {
-        if (!acpContent || !Array.isArray(acpContent)) return undefined;
-        return acpContent.map((c: any) => {
-            if (c.type === 'diff') {
-                return { type: 'diff' as const, path: c.path || '', oldText: c.oldText, newText: c.newText || '' };
-            }
-            if (c.type === 'terminal') {
-                return { type: 'terminal' as const, terminalId: c.terminalId || '' };
-            }
-            // type: 'content' or unknown
-            return { type: 'content' as const, content: c.content || { type: 'text' as const, text: JSON.stringify(c) } };
-        });
-    }
+    handleSessionUpdate(params: SessionNotification): void { handleSessionUpdate(this, params); }
+    private nextMessageSourceId(): string { return nextMessageSourceId(this); }
+    private turnSourceId(slot: string): string { return turnSourceId(this, slot); }
+    private withAcpSource<T extends object | null>(message: T, localId: string): T { return withAcpSource(this, message, localId); }
+    private buildPartialBlocks(): ContentBlock[] { return buildPartialBlocks(this); }
+    private buildPartialThoughtMessage(timestamp = Date.now()): AcpMessage | null { return buildPartialThoughtMessage(this, timestamp); }
+    private finalizeAssistantMessage(): void { finalizeAssistantMessage(this); }
 
  // ─── status transition detect ────────────────────────────
 
-    private detectStatusTransition(): void {
+    detectStatusTransition(): void {
         const now = Date.now();
         const newStatus = this.currentStatus;
         const dirName = workingDirBasename(this.workingDir);
@@ -1721,7 +1008,7 @@ export class AcpProviderInstance implements ProviderInstance {
         return true;
     }
 
-    private appendSystemMessage(content: string, timestamp = Date.now()): void {
+    appendSystemMessage(content: string, timestamp = Date.now()): void {
         const normalizedContent = String(content || '').trim();
         if (!normalizedContent) return;
         this.messages.push(this.withAcpSource(buildRuntimeSystemChatMessage({
@@ -1732,7 +1019,6 @@ export class AcpProviderInstance implements ProviderInstance {
             this.messages = this.messages.slice(-100);
         }
     }
-
 
  // ─── external access ─────────────────────────────────
 

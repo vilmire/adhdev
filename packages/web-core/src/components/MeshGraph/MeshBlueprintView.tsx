@@ -41,7 +41,8 @@ import MeshBlueprintGraph from './MeshBlueprintGraph'
 import BlueprintViewSwitch from './BlueprintViewSwitch'
 import { snapshotHasStructure } from './blueprintGraphModel'
 import { readBlueprintViewMode, resolveBlueprintViewMode, writeBlueprintViewMode, type BlueprintViewMode } from './blueprintViewMode'
-import { MeshOverviewDetailModal, useDetailStack } from './MeshOverviewCards'
+import { useDetailStack } from './MeshOverviewCards';
+import { MeshOverviewDetailModal } from './MeshOverviewDetails';
 import { InfoTip, Tooltip } from '../ui/InfoTip'
 import {
     BLUEPRINT_GRAPH_INITIAL_LIMIT,

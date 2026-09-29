@@ -78,7 +78,7 @@ export interface TranscriptReplicaTransport {
     command(type: string, args?: Record<string, unknown>): Promise<any>;
 }
 
-export interface TranscriptReplicaReadOutcome {
+interface TranscriptReplicaReadOutcome {
     /** Null when the replica could not answer — the caller falls through. */
     readonly payload: TranscriptReadChatPayload | null;
     /**

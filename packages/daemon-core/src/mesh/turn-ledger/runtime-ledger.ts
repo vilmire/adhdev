@@ -71,7 +71,7 @@ export const meshRuntimePublisher: TurnPublisherPort = {
     },
 };
 
-export interface MeshRuntimeTurnLedgerOptions {
+interface MeshRuntimeTurnLedgerOptions {
     selfDaemonId: string;
     policy?: TurnPolicy;
     /** Host-owned executors (cancel/withdraw, release, redeliver, bus, probe). */

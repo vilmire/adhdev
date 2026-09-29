@@ -56,7 +56,7 @@ import {
  * raw argument bag, return the text the MCP response carries. Tools that ignore
  * their arguments simply do not name the second parameter.
  */
-export type MeshToolHandler = (ctx: MeshContext, args: Record<string, any>) => Promise<string>;
+type MeshToolHandler = (ctx: MeshContext, args: Record<string, any>) => Promise<string>;
 
 /**
  * ★Exhaustive by construction. Do not widen this to `Partial<…>` or to

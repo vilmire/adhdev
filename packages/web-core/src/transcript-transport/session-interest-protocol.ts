@@ -10,11 +10,9 @@
  *
  * ── Why this rides the P2P data lane, never the server ─────────────────────
  * The payload is a list of the user's own sessionIds. Sending it over the
- * server WS would open a NEW identifier path outside the two approved
- * content-boundary exceptions (approval-modal text for push actionability;
- * Beacon's topic-name keys for staleness UX) — and Beacon's default scope is
- * metadata-class topics, which `session.*.chat` explicitly is not. The
- * existing P2P `data` channel already carries far richer per-session data
+ * server WS would open a NEW identifier path outside the one approved
+ * content-boundary exception (approval-modal text for push actionability).
+ * The existing P2P `data` channel already carries far richer per-session data
  * peer-to-peer, so the declaration adds no exposure there and needs no new
  * server endpoint.
  *

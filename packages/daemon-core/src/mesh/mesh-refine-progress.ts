@@ -65,7 +65,7 @@ export const MIN_EVENT_INTERVAL_MS = 15_000;
 /** Phases that must never be throttled or suppressed. */
 const CRITICAL_PHASES: ReadonlySet<string> = new Set(['node_failed', 'chain_abort', 'job_failed']);
 
-export type RefineProgressPhase =
+type RefineProgressPhase =
     | 'node_started'
     | 'node_finished'
     | 'node_failed'

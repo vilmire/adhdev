@@ -22,7 +22,8 @@ import {
     getQueue,
     __resetMeshRuntimeStoreForTests,
 } from '../../src/mesh/mesh-work-queue.js';
-import { createMesh, setDifficultyBrains } from '../../src/config/mesh-config.js';
+import { createMesh } from '../../src/config/mesh-config.js';
+import { setDifficultyBrains } from '../../src/config/mesh-config-routing.js';
 
 afterEach(() => {
     __resetMeshRuntimeStoreForTests();

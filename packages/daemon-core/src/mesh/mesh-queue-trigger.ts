@@ -2,7 +2,7 @@
 // session (local + remote), then the auto-launch scan, reporting before/after
 // counts. Split out of mesh-queue-assignment.ts (re-exported there).
 
-import { meshNodeIdMatches } from '@adhdev/mesh-shared';
+import { meshNodeIdMatches, readText } from '@adhdev/mesh-shared';
 import { getQueueHeads, getQueue } from './mesh-work-queue.js';
 import type { DaemonComponents } from '../boot/daemon-components.js';
 import { getMeshWithCache } from './mesh-queue-mesh-view.js';
@@ -14,7 +14,6 @@ import {
     orderEligibleNodes,
     nodeActiveLoad,
 } from './mesh-scheduling-fitness.js';
-import { readNonEmptyString } from './mesh-events-utils.js';
 import { isIdleSessionState, isTerminalSessionStatus } from './mesh-candidacy-predicates.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { type QuotaClaimDrainTrace, logAllQuotaClaimCandidatesBlocked, clearAllQuotaClaimCandidatesBlockedState } from './mesh-queue-observability.js';
@@ -141,17 +140,17 @@ export async function triggerMeshQueue(components: DaemonComponents, meshId: str
         const state = inst.getState();
         const settings = state.settings as Record<string, unknown> || {};
 
-        const instMeshId = readNonEmptyString(settings.meshNodeFor);
+        const instMeshId = readText(settings.meshNodeFor);
         if (instMeshId !== meshId) continue;
 
-        const nodeId = readNonEmptyString(settings.meshNodeId) || readNonEmptyString(settings.nodeId);
+        const nodeId = readText(settings.meshNodeId) || readText(settings.nodeId);
         if (!nodeId) continue;
 
         if (!isIdleSessionState(state)) {
-            const status = readNonEmptyString(state.status).toLowerCase();
+            const status = readText(state.status).toLowerCase();
             skippedSessions.push({
                 nodeId,
-                sessionId: readNonEmptyString(state.instanceId),
+                sessionId: readText(state.instanceId),
                 reason: isTerminalSessionStatus(status) ? 'terminal_session' : 'session_not_idle',
                 status: status || undefined,
             });
@@ -159,7 +158,7 @@ export async function triggerMeshQueue(components: DaemonComponents, meshId: str
         }
 
         const sessionId = state.instanceId;
-        const providerType = state.type || readNonEmptyString(settings.providerType);
+        const providerType = state.type || readText(settings.providerType);
 
         if (providerType) {
             localIdleSessionsChecked += 1;

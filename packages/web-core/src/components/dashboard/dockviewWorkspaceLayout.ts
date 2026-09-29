@@ -3,6 +3,7 @@ import type { ActiveConversation } from './types'
 import { getPreferredConversationForIde } from './conversation-sort'
 import { getRemotePanelTitle } from './conversation-presenters'
 import { getDockviewTitle, getRemotePanelId, isRemotePanelId } from './dockviewWorkspaceHelpers'
+import type { DashboardStoredHiddenTabLocation } from '../../utils/dashboardLayoutStorage'
 
 export interface DashboardDockviewPanelParams {
     kind: 'conversation'
@@ -134,4 +135,48 @@ export function syncRemotePanels(
             ? { position: { referencePanel: referencePanelId, direction: 'right' as const }, inactive: true }
             : {}),
     })
+}
+
+/**
+ * Where a tab currently lives in the serialized layout — a floating group (with its
+ * position) or a popout — so hiding it can later restore it there. Grid otherwise.
+ */
+export function readHiddenTabLocationFromLayout(api: DockviewApi, tabKey: string): DashboardStoredHiddenTabLocation {
+
+    const serialized = api.toJSON() as {
+        floatingGroups?: Array<{
+            data?: { views?: string[] }
+            position?: {
+                left?: number
+                right?: number
+                top?: number
+                bottom?: number
+                width: number
+                height: number
+            }
+        }>
+        popoutGroups?: Array<{
+            data?: { views?: string[] }
+            position?: { left: number, top: number, width: number, height: number }
+            url?: string
+        }>
+    }
+
+    for (const group of serialized.floatingGroups || []) {
+        if (group.data?.views?.includes(tabKey) && group.position) {
+            return { kind: 'floating', position: group.position }
+        }
+    }
+
+    for (const group of serialized.popoutGroups || []) {
+        if (group.data?.views?.includes(tabKey)) {
+            return {
+                kind: 'popout',
+                position: group.position,
+                popoutUrl: group.url,
+            }
+        }
+    }
+
+    return { kind: 'grid' }
 }

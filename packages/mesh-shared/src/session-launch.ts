@@ -28,6 +28,8 @@
  * only `SessionLaunchRecord.launchedBy` records that the session came back via
  * restore.
  */
+import { readString } from './json'
+
 export const MODEL_AXIS_SOURCES = [
     /** Picked explicitly for this launch (dashboard dropdown, coordinator dialog). */
     'user',
@@ -171,10 +173,6 @@ export function sanitizeModelIdentifier(value: unknown): string | undefined {
     if (typeof value !== 'string') return undefined
     const trimmed = value.trim()
     return MODEL_IDENTIFIER_PATTERN.test(trimmed) ? trimmed : undefined
-}
-
-function readString(value: unknown): string | undefined {
-    return typeof value === 'string' && value.trim() ? value.trim() : undefined
 }
 
 function readFiniteNumber(value: unknown): number | undefined {

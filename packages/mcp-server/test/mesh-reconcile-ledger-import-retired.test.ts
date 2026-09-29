@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { meshReconcileLedger } from '../src/tools/mesh-tools.js';
-import { MESH_RECONCILE_LEDGER_TOOL } from '../src/tools/mesh-tool-schemas.js';
+import { MESH_RECONCILE_LEDGER_TOOL } from '../src/tools/mesh-tool-schemas-admin.js';
 
 /**
  * mesh_reconcile_ledger's `import_entries` schema said "Defaults true", but the

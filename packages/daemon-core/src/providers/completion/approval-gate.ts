@@ -58,6 +58,7 @@ export interface ApprovalGateHost {
     provider: ProviderModule;
     adapter: {
         getStatus(opts: { allowParse: boolean }): unknown;
+        getLastApprovalResolvedAt(): number;
         resolveModalMatched?: (index: number) => boolean;
         resolveModal?: (index: number) => void;
     };
@@ -431,9 +432,7 @@ export function stabilizeFlappingApprovalStatus(host: ApprovalGateHost, adapterS
     if (!host.isAutonomousMeshSession() || !host.shouldUsePtyAutoApprove()) return adapterStatus;
 
     const rawStatus = adapterStatus?.status;
-    const resolvedAt = typeof (host.adapter as any)?.lastApprovalResolvedAt === 'number'
-        ? (host.adapter as any).lastApprovalResolvedAt as number
-        : 0;
+    const resolvedAt = host.adapter.getLastApprovalResolvedAt();
 
     if (rawStatus === 'waiting_approval') {
         // A concrete modal this frame refreshes the sticky anchor; an approval frame

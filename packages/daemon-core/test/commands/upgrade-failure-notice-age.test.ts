@@ -23,11 +23,7 @@ import * as path from 'path'
  * restoring the bare `try { unlink } catch {}`, turns these tests red.
  */
 
-import {
-  clearUpgradeFailureNotice,
-  emitUpgradeFailureNotice,
-  readUpgradeFailureNotice,
-} from '../../src/commands/upgrade-helper'
+import { clearUpgradeFailureNotice, emitUpgradeFailureNotice, readUpgradeFailureNotice } from '../../src/commands/upgrade-failure-notice.js';
 
 let configDir: string
 

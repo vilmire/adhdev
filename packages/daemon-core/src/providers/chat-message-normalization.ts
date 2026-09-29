@@ -681,7 +681,7 @@ function isActivityKind(kind: ChatMessageKind): boolean {
   return kind === 'thought' || kind === 'tool' || kind === 'terminal';
 }
 
-function isOrdinaryVisibleTurn(message: ChatMessage, role: string, kind: ChatMessageKind): boolean {
+function isOrdinaryVisibleTurn(role: string, kind: ChatMessageKind): boolean {
   if (role === 'user' || role === 'human') return kind === 'standard' || kind === '';
   if (role === 'assistant') return kind === 'standard' || kind === '';
   return false;
@@ -797,7 +797,7 @@ export function classifyChatMessageVisibility(message: ChatMessage | null | unde
     };
   }
 
-  const isUserFacing = isOrdinaryVisibleTurn(message, role, kind);
+  const isUserFacing = isOrdinaryVisibleTurn(role, kind);
   return {
     surface: isUserFacing ? 'chat' : 'internal',
     isUserFacing,

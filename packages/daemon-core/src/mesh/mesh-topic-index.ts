@@ -38,7 +38,7 @@ export const MESH_INDEX_CONSUMER = 'mesh.index';
 export const MESH_RECORD_APPEND_KIND = 'adhdev.mesh.ledger';
 
 /** One raw topic entry as the cursor hands it over (structural: no seqscribe import). */
-export interface MeshIndexEntryInput {
+interface MeshIndexEntryInput {
     meshId: string;
     writer: string;
     seq: number;

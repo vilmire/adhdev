@@ -1,37 +1,6 @@
-// ---------------------------------------------------------------------------
-// mesh-retention-config — lifecycle retention tunables + env resolvers
-// ---------------------------------------------------------------------------
-// Lifecycle retention Slice 1 (mesh-runtime.db + mesh-ledger disk gaps). Holds
-// the retention tunables and their env-override resolvers, mirroring the
-// mesh-reconcile-config.ts pattern: each resolver reads a MESH_* env var and
-// clamps the value so a mis-set env cannot make retention pathologically
-// aggressive (delete live data) or effectively disable it forever. Resolvers
-// are called at sweep time (not import time), so an env change takes effect on
-// the next hourly sweep without a restart.
-//
-// Scope (Slice 1): safe SQLite/disk retention only —
-//   1. (retired, C-W8) the legacy session-delivery table terminal-row pruning went with the
-//      table; (1b) turn-ledger mesh attempts replaced it in
-//      pruneMeshRuntimeRetention (mesh-runtime-store-turn-rows.ts).
-//   2. (retired, C-W9a) the per-mesh ledger rotation cap went with the JSONL
-//      mirror; leftover rotations age out through the 30-day JSONL pass.
-//
-// Scope (Slice 2): converged local worktree-node auto-removal —
-//   3. Convergence grace before an eligible worktree node may be removed
-//      (wired into the two-tick retention pass in mesh-worktree-retention.ts).
-//   4. Durable execution lease so two retention passes can never remove the
-//      same node concurrently (same module).
-//
-// Scope (Slice 3): graph control-plane retention —
-//   5. Terminal-graph cascade window over the seven mesh_task_graph* /
-//      mesh_graph_* tables (wired into MeshGraphStore.pruneTerminalGraphs).
-//   6. Delivered/failed outbox-row window, a cross-graph sweep independent of
-//      (5) (MeshGraphStore.pruneTerminalOutbox).
-//   (The former (7) observe/enforce switch was removed 2026-09-29: always enforced.)
-// ---------------------------------------------------------------------------
 
-import { readNonEmptyString } from './mesh-events-utils.js';
 
+import { readText } from '@adhdev/mesh-shared';
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -52,7 +21,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 export const DEFAULT_TURN_ATTEMPT_RETENTION_MS = 30 * DAY_MS;
 
 export function resolveTurnAttemptRetentionMs(): number {
-    const raw = readNonEmptyString(process.env.MESH_TURN_ATTEMPT_RETENTION_MS);
+    const raw = readText(process.env.MESH_TURN_ATTEMPT_RETENTION_MS);
     if (raw) {
         const parsed = Number.parseInt(raw, 10);
         if (Number.isFinite(parsed) && parsed >= 1 * DAY_MS && parsed <= 90 * DAY_MS) return parsed;
@@ -79,7 +48,7 @@ export function resolveTurnAttemptRetentionMs(): number {
 export const DEFAULT_WORKTREE_NODE_RETENTION_GRACE_MS = 48 * HOUR_MS;
 
 export function resolveWorktreeNodeRetentionGraceMs(): number {
-    const raw = readNonEmptyString(process.env.MESH_WORKTREE_NODE_RETENTION_GRACE_MS);
+    const raw = readText(process.env.MESH_WORKTREE_NODE_RETENTION_GRACE_MS);
     if (raw) {
         const parsed = Number.parseInt(raw, 10);
         if (Number.isFinite(parsed)) {
@@ -103,7 +72,7 @@ export function resolveWorktreeNodeRetentionGraceMs(): number {
 export const DEFAULT_WORKTREE_NODE_RETENTION_LEASE_MS = 10 * 60 * 1000;
 
 export function resolveWorktreeNodeRetentionLeaseMs(): number {
-    const raw = readNonEmptyString(process.env.MESH_WORKTREE_NODE_RETENTION_LEASE_MS);
+    const raw = readText(process.env.MESH_WORKTREE_NODE_RETENTION_LEASE_MS);
     if (raw) {
         const parsed = Number.parseInt(raw, 10);
         if (Number.isFinite(parsed) && parsed >= 60 * 1000 && parsed <= 60 * 60 * 1000) return parsed;
@@ -127,7 +96,7 @@ export function resolveWorktreeNodeRetentionLeaseMs(): number {
 export const DEFAULT_GRAPH_RETENTION_MS = 30 * DAY_MS;
 
 export function resolveGraphRetentionMs(): number {
-    const raw = readNonEmptyString(process.env.MESH_GRAPH_RETENTION_MS);
+    const raw = readText(process.env.MESH_GRAPH_RETENTION_MS);
     if (raw) {
         const parsed = Number.parseInt(raw, 10);
         if (Number.isFinite(parsed) && parsed >= 1 * DAY_MS && parsed <= 90 * DAY_MS) return parsed;
@@ -153,7 +122,7 @@ export function resolveGraphRetentionMs(): number {
 export const DEFAULT_GRAPH_OUTBOX_RETENTION_MS = 14 * DAY_MS;
 
 export function resolveGraphOutboxRetentionMs(): number {
-    const raw = readNonEmptyString(process.env.MESH_GRAPH_OUTBOX_RETENTION_MS);
+    const raw = readText(process.env.MESH_GRAPH_OUTBOX_RETENTION_MS);
     if (raw) {
         const parsed = Number.parseInt(raw, 10);
         if (Number.isFinite(parsed) && parsed >= 1 * DAY_MS && parsed <= 90 * DAY_MS) return parsed;

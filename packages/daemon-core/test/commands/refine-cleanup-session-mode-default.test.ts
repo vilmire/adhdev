@@ -11,7 +11,7 @@ import {
     cleanupLocalWorktreeNode,
     precheckLocalWorktreeRemovable,
 } from '../../src/commands/router-worktree-cleanup';
-import { runRefineMergeAndFinalizeLocked } from '../../src/commands/router-refine';
+import { runRefineMergeAndFinalizeLocked } from '../../src/commands/router-refine-merge.js';
 import { createWorktree } from '../../src/git/git-worktree';
 
 const execFileAsync = promisify(execFile);

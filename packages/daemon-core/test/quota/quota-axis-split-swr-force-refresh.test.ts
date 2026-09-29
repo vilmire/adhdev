@@ -43,23 +43,9 @@ vi.mock('../../src/quota/fetchers/grok.js', () => ({ fetchGrokQuota }))
 vi.mock('../../src/quota/fetchers/kimi.js', () => ({ fetchKimiQuota }))
 vi.mock('../../src/quota/fetchers/opencode.js', () => ({ fetchOpencodeUsage, OPENCODE_USAGE_DAYS: 7 }))
 
-const {
-    QUOTA_AXIS,
-    QUOTA_AXIS_TTL_MS,
-    QUOTA_SWR_TTL_MS,
-    QUOTA_ROUTABLE_MAX_AGE_MS,
-    clearQuotaCache,
-    forceRefreshQuota,
-    isDueByAxisTtl,
-    isQuotaRevalidateInFlight,
-    readQuotaCache,
-    readQuotaCacheWithRevalidate,
-    refreshQuotaCacheOnce,
-    startQuotaRefreshLoop,
-    __resetQuotaAmbientEnableGateForTests,
-    __resetQuotaBootRefreshForTests,
-    __resetQuotaHydrationForTests,
-} = await import('../../src/quota/refresh.js')
+const { QUOTA_AXIS, QUOTA_AXIS_TTL_MS, QUOTA_SWR_TTL_MS, QUOTA_ROUTABLE_MAX_AGE_MS, clearQuotaCache, isDueByAxisTtl, readQuotaCache, refreshQuotaCacheOnce, __resetQuotaAmbientEnableGateForTests, __resetQuotaHydrationForTests } = await import('../../src/quota/refresh.js')
+const { forceRefreshQuota, isQuotaRevalidateInFlight, readQuotaCacheWithRevalidate, __resetQuotaBootRefreshForTests } = await import('../../src/quota/refresh-triggers.js')
+const { startQuotaRefreshLoop } = await import('../../src/quota/refresh-loop.js')
 
 const START = 1_800_000_000_000
 

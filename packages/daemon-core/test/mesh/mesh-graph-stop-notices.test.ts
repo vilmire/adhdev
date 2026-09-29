@@ -38,15 +38,13 @@ vi.mock('../../src/config/mesh-config.js', () => ({
     getMesh: vi.fn(() => (meshConfig.policy ? { id: 'm', policy: meshConfig.policy } : undefined)),
     getMeshByRepo: vi.fn(),
     listMeshes: vi.fn(() => [] as any[]),
-    getDifficultyBrains: vi.fn(() => undefined),
 }));
+vi.mock('../../src/config/mesh-config-routing.js', async (importOriginal) => ({
+  ...(await importOriginal<any>()),
+  getDifficultyBrains: vi.fn(() => undefined),
+}))
 
-import {
-    drainMeshGraphOutbox,
-    registerMeshGraphGateNotifyHandler,
-    registerMeshGraphStopNotifyHandler,
-    __resetMeshGraphTransitionRunnerForTests,
-} from '../../src/mesh/mesh-graph-transition-runner.js';
+import { drainMeshGraphOutbox, registerMeshGraphGateNotifyHandler, registerMeshGraphStopNotifyHandler, __resetMeshGraphTransitionRunnerForTests } from '../../src/mesh/mesh-graph-outbox.js';
 import { commitMeshGraphPlan } from '../../src/mesh/mesh-graph-plan.js';
 import {
     __clearMeshQueueForTests,

@@ -5,7 +5,7 @@ import { existsSync, unlinkSync, readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 
 import { meshEnqueueTask } from '../src/tools/mesh-tools.js';
-import { ipcDispatchToRemoteAgent } from '../src/tools/mesh-tools-internal.js';
+import { ipcDispatchToRemoteAgent } from '../src/tools/mesh-remote-dispatch.js';
 import { IpcTransport } from '../src/transports/ipc.js';
 import {
   getLedgerDir,

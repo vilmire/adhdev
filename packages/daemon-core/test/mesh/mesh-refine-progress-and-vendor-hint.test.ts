@@ -9,7 +9,7 @@ import {
   type RefineProgressContext,
 } from '../../src/mesh/mesh-refine-progress'
 import { buildRefineVendorDriftHint } from '../../src/mesh/mesh-refine-gates'
-import { didRefineRebaseBranch } from '../../src/commands/router-refine'
+import { didRefineRebaseBranch } from '../../src/commands/router-refine-sync-stages.js';
 
 // ★B1 progress admission + ★C vendor-drift-after-rebase explanation.
 

@@ -52,7 +52,7 @@ export interface WorkspaceInspectReport {
     ambiguityReason?: string;
 }
 
-export interface WorkspaceSafetyInput {
+interface WorkspaceSafetyInput {
     expectedOwnerTag?: string;
     inspect: WorkspaceInspectReport;
 }

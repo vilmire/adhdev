@@ -122,38 +122,23 @@ export function providerHasNativeTurnSignal(
 }
 
 /**
- * Selects the terminal marker that proves THIS turn ended.
- *
- * Turn scoping prefers the provider's own turn id when the caller knows it
- * (stronger than a timestamp comparison, which is what the shape-inference path
- * has to fall back on). Otherwise it requires the marker to post-date the turn
- * start, mirroring the existing FALSE-IDLE turn-boundary rule so a PRIOR turn's
- * terminal record can never satisfy the gate for a new one — the
+ * Selects the terminal marker that proves THIS turn ended: the newest marker that
+ * post-dates the turn start, mirroring the FALSE-IDLE turn-boundary rule so a PRIOR
+ * turn's terminal record can never satisfy the gate for a new one — the
  * ANTIGRAVITY-PREMATURE-COMPLETION failure mode.
  *
- * A marker with no known boundary at all (no turnId, no turnStartedAt) is
- * REJECTED rather than accepted: an unscoped terminal record is exactly the
- * stale-tail evidence the turn-boundary guards exist to refuse.
+ * With no known turn start the marker is REJECTED rather than accepted: an unscoped
+ * terminal record is exactly the stale-tail evidence the turn-boundary guards exist
+ * to refuse.
  */
 export function selectTurnTerminalMarker(
     markers: readonly NativeTurnTerminalMarker[] | null | undefined,
-    scope: { turnStartedAt?: number; turnId?: string },
+    turnStartedAt: number | undefined,
 ): NativeTurnTerminalMarker | null {
     if (!Array.isArray(markers) || markers.length === 0) return null;
 
-    const wantedTurnId = typeof scope.turnId === 'string' && scope.turnId.trim() ? scope.turnId.trim() : '';
-    if (wantedTurnId) {
-        // Provider-native identity: exact match, no timestamp heuristic needed.
-        for (let i = markers.length - 1; i >= 0; i--) {
-            const m = markers[i];
-            if (m && m.turnId === wantedTurnId) return m;
-        }
-        // A turn id was expected but no marker carries it — the turn has not ended.
-        return null;
-    }
-
-    const startedAt = typeof scope.turnStartedAt === 'number' && Number.isFinite(scope.turnStartedAt) && scope.turnStartedAt > 0
-        ? scope.turnStartedAt
+    const startedAt = typeof turnStartedAt === 'number' && Number.isFinite(turnStartedAt) && turnStartedAt > 0
+        ? turnStartedAt
         : 0;
     if (!startedAt) return null;
 

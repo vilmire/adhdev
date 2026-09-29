@@ -19,7 +19,7 @@ import {
     type ChatSourceTransitionCause,
 } from '../chat/source-resolver.js';
 import type { ChatMessage } from '../types.js';
-import { isNativeSourceCanonicalHistory } from '../config/chat-history.js';
+import { isNativeSourceCanonicalHistory } from '../config/provider-native-history.js';
 // normalizeNativeHistoryMessages now lives in the leaf module
 // chat-commands-read-native-normalize.ts (chat-commands-read.ts re-exports it
 // for its public surface). Importing the leaf directly avoids the cycle this

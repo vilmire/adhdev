@@ -1,30 +1,29 @@
 // Mesh tool implementations — git domain.
-// Pure move out of mesh-tools.ts (no behavior change). Shared helpers, types, module
-// state and dependency re-exports live in ./mesh-tools-internal.ts; mesh-tools.ts is a barrel.
+// Pure move out of mesh-tools.ts (no behavior change). Helpers are imported from the
+// modules that define them; mesh-tools.ts is the tool barrel.
 
 import {
-    IpcTransport,
-    buildCoordinatorP2pRelayFailure,
     buildRemoveNodeArgs,
     collectRelatedRepoStatuses,
     commandForNode,
-    daemonIdsEquivalent,
+    findNodeWithRefresh,
+    isP2pTransportUnavailableError,
+    refreshMeshFromDaemon,
+    syncCoordinatorDaemonMeshCache,
+} from './mesh-tools-internal.js';
+import { IpcTransport } from '../transports/ipc.js';
+import { buildCoordinatorP2pRelayFailure } from './mesh-remote-dispatch.js';
+import { daemonIdsEquivalent, meshNodeIdMatches } from '@adhdev/daemon-core';
+import {
     extractCloneNodePayload,
     extractGitDiff,
     extractGitStatus,
     extractSubmodules,
-    findNodeWithRefresh,
-    isP2pTransportUnavailableError,
-    meshNodeIdMatches,
-    refreshMeshFromDaemon,
-    syncCoordinatorDaemonMeshCache,
-    unwrapCommandPayload,
-} from './mesh-tools-internal.js';
+} from './mesh-tools-internal-core.js';
+import { unwrapCommandPayload } from './mesh-session-helpers.js';
 import { readNodeRuntime } from './mesh-held-node-state.js';
-import type {
-    LocalMeshNodeEntry,
-    MeshContext,
-} from './mesh-tools-internal.js';
+import type { MeshContext } from './mesh-tools-internal.js';
+import type { LocalMeshNodeEntry } from '@adhdev/daemon-core';
 import { recordLocal } from '../ipc/turn-commands.js';
 
 export async function meshGitStatus(

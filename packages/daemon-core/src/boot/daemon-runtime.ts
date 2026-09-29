@@ -20,7 +20,6 @@
  * | "poller declared first so onIdeConnected captures it"   | poller built in S3, passed to the router as a value |
  * | seqscribe node after router → holder                    | S4 opens the node before S5 builds the router |
  * | collector = single drain owner                          | `SeqscribeRuntime.collector` exposes only `snapshot()` |
- * | componentsRef for the host-armed beacon                 | `SeqscribeRuntime.beacon` (BeaconSlot) |
  * | dual-write before parity / topic activation / prune / redrive | S6 fixed arm order; disarm is its exact reverse |
  * | JSONL inbox migration before the reconcile loop         | `setupMeshReconcileLoop(components, MigratedPendingInbox)` |
  * | quota hydration before boot refresh                     | S8 `scheduleQuotaBootRefresh` |

@@ -385,7 +385,8 @@ export const meshNodeLifecycleHandlers: Record<string, MedFamilyHandler> = {
         const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, 'node addition');
         if (ownerFailure) return ownerFailure;
         try {
-            const { addNode, migrateProviderRolesToSlots } = await import('../../config/mesh-config.js');
+            const { addNode } = await import('../../config/mesh-config.js');
+            const { migrateProviderRolesToSlots } = await import('../../config/mesh-config-store.js');
             const providerPriority = Array.isArray(args?.providerPriority)
                 ? args.providerPriority.map((type: any) => typeof type === 'string' ? type.trim() : '').filter(Boolean)
                 : [];
@@ -458,7 +459,8 @@ export const meshNodeLifecycleHandlers: Record<string, MedFamilyHandler> = {
         const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, 'node update');
         if (ownerFailure) return ownerFailure;
         try {
-            const { updateNode, normalizeCapabilityTags, migrateProviderRolesToSlots, getMesh } = await import('../../config/mesh-config.js');
+            const { updateNode, getMesh } = await import('../../config/mesh-config.js');
+            const { normalizeCapabilityTags, migrateProviderRolesToSlots } = await import('../../config/mesh-config-store.js');
             const policy = args?.policy && typeof args.policy === 'object' && !Array.isArray(args.policy)
                 ? { ...(args.policy as Record<string, unknown>) }
                 : {};

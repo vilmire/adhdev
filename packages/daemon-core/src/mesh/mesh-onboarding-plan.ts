@@ -15,10 +15,8 @@ import { gitChildEnv } from '../git/git-locale.js';
 import type { CLIInfo } from '../detection/cli-detector.js';
 import type { LocalMeshEntry, LocalMeshNodeEntry } from '../repo-mesh-types.js';
 import { mergeAndNormalizePolicy } from '../repo-mesh-types.js';
-import {
-    listMeshesReadOnly,
-    normalizeRepoIdentity,
-} from '../config/mesh-config.js';
+import { listMeshesReadOnly } from '../config/mesh-config.js';
+import { normalizeRepoIdentity } from '../config/mesh-config-store.js';
 import { runMeshInit, type RunMeshInitResult } from './mesh-init.js';
 import { listWorktrees, type WorktreeEntry } from '../git/git-worktree.js';
 
@@ -43,7 +41,7 @@ export type MeshOnboardingErrorCode =
     | 'duplicate_workspace'
     | 'duplicate_node';
 
-export interface MeshOnboardingRemote {
+interface MeshOnboardingRemote {
     name: string;
     urls: string[];
     identities: string[];
@@ -74,7 +72,7 @@ export interface MeshOnboardingDiscovery {
     conflictFiles: string[];
 }
 
-export interface MeshMembershipMatch {
+interface MeshMembershipMatch {
     meshId: string;
     meshName: string;
     repoIdentity: string;
@@ -84,7 +82,7 @@ export interface MeshMembershipMatch {
     exactWorkspace?: boolean;
 }
 
-export interface MeshOnboardingPlanStep {
+interface MeshOnboardingPlanStep {
     command: 'create_mesh' | 'add_mesh_node' | 'clone_mesh_node' | 'mesh_init';
     description: string;
     writes: boolean;

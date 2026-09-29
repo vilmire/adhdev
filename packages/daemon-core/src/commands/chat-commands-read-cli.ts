@@ -9,7 +9,8 @@
 import type { CliAdapter } from '../cli-adapter-types.js';
 import type { ChatMessage } from '../types.js';
 import { flattenContent, type ProviderModule } from '../providers/contracts.js';
-import { readChatHistory, isNativeSourceCanonicalHistory } from '../config/chat-history.js';
+import { readChatHistory } from '../config/chat-history.js';
+import { isNativeSourceCanonicalHistory } from '../config/provider-native-history.js';
 import {
     normalizeChatMessages, filterUserFacingChatMessages, hasTrailingToolActivityAfterFinalAssistant,
 } from '../providers/chat-message-normalization.js';

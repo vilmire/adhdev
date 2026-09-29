@@ -143,8 +143,6 @@ function makeFlushHarness(liveParsed: () => any) {
         getStatus: () => ({ status: 'idle' }),
         getPartialResponse: () => '',
         getScriptParsedStatus: liveParsed,
-        getScreenText: () => '',
-        isWaitingForResponse: false,
     };
 
     instance.shouldAutoApprove = () => false;

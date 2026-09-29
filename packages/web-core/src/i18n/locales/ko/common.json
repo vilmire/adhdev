@@ -3323,7 +3323,6 @@
                 "offline": "오프라인",
                 "failed": "연결 실패",
                 "connecting": "연결 중…",
-                "attention": "온라인 · 동기화 지연",
                 "online": "온라인"
             },
             "slowLink": "느린 연결",
@@ -3353,20 +3352,6 @@
             "reconnect": "재연결",
             "transportRelay": "릴레이 서버를 거쳐 연결됨 — 직접 연결보다 느립니다. 보통 방화벽이나 NAT가 직접 경로를 막고 있습니다.",
             "transportDirect": "직접 연결",
-            "beacon": {
-                "lastSyncedBehindPart_other": " (받을 기록 {{count}}건 남음)",
-                "lastSyncedBehindPart_one": " (받을 기록 {{count}}건 남음)",
-                "soleCopyTooltip_other": "아직 다른 머신에 백업되지 않은 기록이 {{entries}}건 있습니다. 다른 머신이 동기화할 때까지 이 머신을 켜 두세요.",
-                "soleCopyTooltip_one": "아직 다른 머신에 백업되지 않은 기록이 {{entries}}건 있습니다. 다른 머신이 동기화할 때까지 이 머신을 켜 두세요.",
-                "soleCopyLabel_other": "백업 안 된 기록 {{count}}건",
-                "soleCopyLabel_one": "백업 안 된 기록 {{count}}건",
-                "behindTooltip_other": "이 머신이 다른 머신의 최근 기록 {{count}}건을 아직 받지 못했습니다. 보통 저절로 따라잡습니다.",
-                "behindTooltip_one": "이 머신이 다른 머신의 최근 기록 {{count}}건을 아직 받지 못했습니다. 보통 저절로 따라잡습니다.",
-                "behindLabel": "동기화 지연",
-                "deferredLabel": "백업 확인 불가",
-                "deferredTooltip": "이 머신의 기록이 모두 백업됐는지 확인하지 못했습니다. 일부 머신과만 비교할 수 있었습니다. 오류는 아닙니다.",
-                "lastSyncedTooltip": "{{minutes}}분 전에 마지막으로 동기화했습니다{{behindPart}}."
-            },
             "noAgentsRunning": "실행 중인 에이전트 없음",
             "launchCta": "실행 →"
         },

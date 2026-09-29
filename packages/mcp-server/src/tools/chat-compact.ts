@@ -1,4 +1,4 @@
-export type CompactChatMessage = Record<string, any>;
+type CompactChatMessage = Record<string, any>;
 
 export function messageContent(message: any): string {
   const content = message?.content;

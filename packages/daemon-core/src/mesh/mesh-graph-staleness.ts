@@ -58,7 +58,7 @@ export function getGraphStaleReminderWindowMs(): number {
     return readStaleDurationEnvMs('ADHDEV_MESH_GRAPH_STALE_REMINDER_MS', DEFAULT_GRAPH_STALE_REMINDER_WINDOW_MS);
 }
 
-export interface MeshGraphStalenessSweepResult {
+interface MeshGraphStalenessSweepResult {
     staleGraphs: number;
     staleGates: number;
     remindersQueued: number;

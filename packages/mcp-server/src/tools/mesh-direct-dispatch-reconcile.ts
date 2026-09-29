@@ -52,20 +52,14 @@
 import { extractFinalAssistantSummaryEvidence, hasTrailingToolActivityAfterFinalAssistant } from '@adhdev/daemon-core';
 import { turnObserve, TurnIpcCommandError } from '../ipc/turn-commands.js';
 import type { TurnEvidence } from '@adhdev/mesh-shared';
-import { readString } from './mesh-tool-shared.js';
 import { readTranscriptReplicaForSemanticConsumer } from './mesh-transcript-semantic-read.js';
 import { ensureMeshNodeRoutes } from './mesh-node-routes.js';
 import type { MeshContext } from './mesh-tools-internal.js';
-import {
-    commandForNode,
-    findNodeSession,
-    findOptionalNodeWithRefresh,
-    isIdleSessionRecord,
-    resolveMeshSessionProviderMetadata,
-    resolveSemanticReplicaTransport,
-    resolveSessionProviderType,
-    unwrapCommandPayload,
-} from './mesh-tools-internal.js';
+import { commandForNode, findOptionalNodeWithRefresh, resolveSemanticReplicaTransport } from './mesh-tools-internal.js';
+import { findNodeSession } from './mesh-tools-internal-core.js';
+import { isIdleSessionRecord, resolveSessionProviderType, unwrapCommandPayload } from './mesh-session-helpers.js';
+import { resolveMeshSessionProviderMetadata } from './mesh-session-metadata.js';
+import { readString } from '@adhdev/mesh-shared';
 
 export function buildDirectDispatchReconciliationCandidates(directDispatches: any[], _ledgerEntries: any[]): any[] {
     // `_ledgerEntries` kept in the signature — every call site passes it, and

@@ -79,7 +79,7 @@ export const TRANSCRIPT_STATUS_PROBE_MAX_AGE_MS = 10_000;
 export const TRANSCRIPT_TERMINAL_EVIDENCE_MAX_AGE_MS = 8_000;
 
 /** What a roster consumer gets back. `view === null` ⇒ run the legacy read. */
-export interface TranscriptConsumerReadOutcome {
+interface TranscriptConsumerReadOutcome {
     readonly view: ReplicatedTranscriptViewV2 | null;
     /** Null exactly when `view` is non-null. */
     readonly fallbackReason: TranscriptConsumerFallbackReason | null;
@@ -118,7 +118,7 @@ function isUsableView(value: unknown): value is ReplicatedTranscriptViewV2 {
     return true;
 }
 
-export interface TranscriptConsumerReadRequest {
+interface TranscriptConsumerReadRequest {
     readonly consumerId: Extract<
         TranscriptConsumerId,
         'daemon_worker_status_probe' | 'daemon_terminal_evidence'

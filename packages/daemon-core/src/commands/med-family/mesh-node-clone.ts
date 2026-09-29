@@ -4,7 +4,7 @@
  * worktree bootstrap. Split out of mesh-crud.ts (merged into meshCrudHandlers
  * there).
  */
-import { daemonIdsEquivalent, meshNodeIdMatches, normalizeMeshNodeId } from '@adhdev/mesh-shared';
+import { daemonIdsEquivalent, meshNodeIdMatches, normalizeMeshNodeId, readText } from '@adhdev/mesh-shared';
 import {
     getRegisteredSubmodulePaths,
     loadMeshWorktreeBootstrapConfig,
@@ -15,7 +15,6 @@ import {
 import { loadRepoSettings } from '../../config/repo-settings.js';
 import { handleMeshForwardEvent, notifyMeshCoordinator } from '../../mesh/mesh-events.js';
 import { noteRecentlyClonedNode } from '../../mesh/mesh-clone-grace.js';
-import { readNonEmptyString } from '../../mesh/mesh-events-utils.js';
 import { getMachineId } from '../../config/config.js';
 import { readMeshNodeMachineId, readMeshNodeDaemonId } from '../router.js';
 import type { CommandRouterResult } from '../router.js';
@@ -263,7 +262,8 @@ async function registerClonedWorktreeNode(
     result: CreatedWorktree,
     identity: { daemonId: string | undefined; machineId: string | undefined },
 ): Promise<any | null> {
-    const { addNode, migrateProviderRolesToSlots } = await import('../../config/mesh-config.js');
+    const { addNode } = await import('../../config/mesh-config.js');
+    const { migrateProviderRolesToSlots } = await import('../../config/mesh-config-store.js');
     const clonedPolicy: Record<string, unknown> = { ...(sourceNode.policy || {}) };
     migrateProviderRolesToSlots(clonedPolicy);
     const fields = {
@@ -339,7 +339,7 @@ function emitCloneBootstrapEvent(
     try {
         const { meshId, node, worktreePath, daemonId, machineId } = target;
         const event = `worktree_${eventStatus}` as const;
-        const hostDaemonId = readNonEmptyString((target.mesh as { meshHost?: { hostDaemonId?: unknown } })?.meshHost?.hostDaemonId);
+        const hostDaemonId = readText((target.mesh as { meshHost?: { hostDaemonId?: unknown } })?.meshHost?.hostDaemonId);
         const metadataEvent = {
             source: 'clone_mesh_node_bootstrap',
             nodeId: node.id,
@@ -485,9 +485,9 @@ export const meshNodeCloneHandlers: Record<string, MedFamilyHandler> = {
             // every remote probe silently no-ops and capability tags fall back to the
             // caller's own platform. Mirror buildMemberJoinNode's fallback here.
             const identity = {
-                daemonId: readMeshNodeDaemonId(sourceNode as any) || readNonEmptyString(ctx.deps.statusInstanceId) || undefined,
+                daemonId: readMeshNodeDaemonId(sourceNode as any) || readText(ctx.deps.statusInstanceId) || undefined,
                 machineId: readMeshNodeMachineId(sourceNode as any)
-                    || (() => { try { return readNonEmptyString(getMachineId()); } catch { return ''; } })()
+                    || (() => { try { return readText(getMachineId()); } catch { return ''; } })()
                     || undefined,
             };
 

@@ -19,7 +19,7 @@ import {
     buildRefineJobHandle,
     buildRefineJobKey,
     queueRefineJobEvent,
-} from './router-refine.js';
+} from './router-refine-jobs.js';
 
 
 // RESUME-DISPATCH-GRACE: an un-terminated `task_dispatched` may still be genuinely
@@ -121,7 +121,7 @@ export async function resumePendingRefineJobsOnStartup(self: DaemonCommandRouter
                     const { nodeId, jobId, ageMs } = decision;
                     const sourceEntry = entries.find(e =>
                         e.kind === 'task_dispatched'
-                        && e.nodeId === nodeId
+                        && meshNodeIdMatches({ nodeId: e.nodeId }, nodeId)
                         && (e.payload as any)?.refineJob?.jobId === jobId);
                     const node = (sourceEntry?.payload as any)?.refineJob;
                     const coordinatorDaemonId = node?.targetCoordinatorDaemonId;

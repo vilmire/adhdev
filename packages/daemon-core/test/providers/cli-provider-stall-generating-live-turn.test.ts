@@ -126,7 +126,9 @@ describe('stall watchdog — a generating attempt with an open adapter turn', ()
             _lastOutputAt: opts.lastOutputAt,
             _status: 'generating',
             _alive: true,
-            currentTurnScope: opts.turnActive ? { id: 'turn-1' } : undefined,
+            _processing: opts.turnActive === true,
+            isProcessing() { return this._processing },
+            getLastApprovalResolvedAt() { return 0 },
             isAlive() { return this._alive },
             getStatus() { return { lastOutputAt: this._lastOutputAt, status: this._status } },
         }
@@ -240,7 +242,7 @@ describe('stall watchdog — a generating attempt with an open adapter turn', ()
 
         // The turn ends and the session wedges WITHOUT producing output. The veto is
         // gone with the open turn, so the worker is caught by the ordinary idle path.
-        adapter.currentTurnScope = undefined
+        adapter._processing = false
         const endedAt = startedAt + QUIET_AT_FINISH
         instance.checkMeshWorkerStall(endedAt)   // turn-end edge re-arms the anchor
         expect(emitted).toHaveLength(0)

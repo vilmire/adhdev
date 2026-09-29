@@ -43,8 +43,8 @@ import { LOG } from '../logging/logger.js';
 import { getMachineId } from '../config/config.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { notifyMeshCoordinator } from './turn-ledger/deliver.js';
-import { readNonEmptyString } from './mesh-events-utils.js';
-import type { WorkerProgressNoticeSink } from './worker-report.js';
+import type { WorkerProgressNoticeSink } from './worker-report-progress.js';
+import { readText } from '@adhdev/mesh-shared';
 
 /** The pending-event name. Registered as a coordinator alert in contracts.ts. */
 export const WORKER_PROGRESS_EVENT_NAME = 'mesh:worker_progress';
@@ -67,14 +67,14 @@ export const queueWorkerProgressNotice: WorkerProgressNoticeSink = (notice) => {
     let targetCoordinatorSessionId = '';
     try {
         const task = MeshRuntimeStore.getInstance().findQueueEntryById(notice.meshId, notice.taskId);
-        if (task) targetCoordinatorSessionId = readNonEmptyString(task.sourceCoordinatorSessionId);
+        if (task) targetCoordinatorSessionId = readText(task.sourceCoordinatorSessionId);
     } catch (e: any) {
         LOG.warn('WorkerProgress', `Could not resolve coordinator for task ${notice.taskId}: ${e?.message || e}`);
     }
     // The queue row carries no daemon id (session id is the only coordinator
     // anchor it stores), so the daemon axis is this machine — matching how
     // mesh-dispatch-failed-notify.ts addresses its own alerts.
-    const targetCoordinatorDaemonId = readNonEmptyString(getMachineId());
+    const targetCoordinatorDaemonId = readText(getMachineId());
 
     const nodeLabel = notice.nodeId || notice.sessionId || notice.taskId;
     try {

@@ -30,6 +30,7 @@ import type { MeshNodeGitRefresher } from '../mesh/mesh-node-git-refresher.js';
 import type { MeshNodeStatePusher } from '../mesh/mesh-node-state-pusher.js';
 import { deriveMemberPushTargets } from '../mesh/mesh-node-state-push-store.js';
 import { collectHeldDaemonNodeTargets } from './high-family/mesh-status-node-state.js';
+import { readText } from '@adhdev/mesh-shared';
 
 export interface MeshNodeStateLifecyclePort {
     selfDaemonId: string | undefined;
@@ -40,10 +41,6 @@ export interface MeshNodeStateLifecyclePort {
     listKnownMeshes(): Promise<any[]>;
     /** Persisted mesh host records (meshId → host daemon). */
     listMeshHostRecords(): Array<{ meshId: string; hostDaemonId: string }>;
-}
-
-function readString(value: unknown): string {
-    return typeof value === 'string' ? value.trim() : '';
 }
 
 /**
@@ -57,14 +54,14 @@ export async function handshakeMeshMemberDaemon(
     daemonId: string,
     reason: MeshNodeHandshakeReason,
 ): Promise<number> {
-    const wanted = readString(daemonId);
+    const wanted = readText(daemonId);
     if (!wanted) return 0;
     let meshes: any[] = [];
     try { meshes = await port.listKnownMeshes(); } catch { meshes = []; }
     const locality = { localMachineId: getMachineId() || '', localDaemonId: port.selfDaemonId };
     let marked = 0;
     for (const mesh of meshes) {
-        const meshId = readString(mesh?.id);
+        const meshId = readText(mesh?.id);
         if (!meshId) continue;
         const targets = collectHeldDaemonNodeTargets({ meshId, mesh, daemonId: wanted, store: port.store, locality });
         if (targets.length === 0) continue;
@@ -87,7 +84,7 @@ export async function restoreMemberNodeStatePush(port: MeshNodeStateLifecyclePor
     try { meshes = await port.listKnownMeshes(); } catch { meshes = []; }
     const byId = new Map<string, any>();
     for (const mesh of meshes) {
-        const id = readString(mesh?.id);
+        const id = readText(mesh?.id);
         if (id && !byId.has(id)) byId.set(id, mesh);
     }
     let hostRecords: Array<{ meshId: string; hostDaemonId: string }> = [];

@@ -25,6 +25,7 @@ import {
     type MeshLedgerOriginatingCoordinatorV2,
 } from './contracts.js';
 import type { LocalRecordProjection } from './mesh-local-record-store.js';
+import { readString } from '@adhdev/mesh-shared';
 
 // ─── Types ──────────────────────────────────────
 
@@ -381,8 +382,8 @@ export function isIntentionalCleanupStopEntry(
             || payload.source === 'mesh_remove_node');
 }
 
-export type MeshWorkerResultStatus = 'completed' | 'failed' | 'blocked' | 'partial' | 'unknown';
-export type MeshProcessArtifactKind = 'process' | 'log' | 'port' | 'window' | 'session' | 'file' | 'url' | 'other';
+type MeshWorkerResultStatus = 'completed' | 'failed' | 'blocked' | 'partial' | 'unknown';
+type MeshProcessArtifactKind = 'process' | 'log' | 'port' | 'window' | 'session' | 'file' | 'url' | 'other';
 
 export interface MeshValidationResultArtifact {
     command?: string;
@@ -458,7 +459,7 @@ export interface MeshTaskCompletionEvidence {
     };
 }
 
-export interface BuildTaskCompletionEvidenceOptions {
+interface BuildTaskCompletionEvidenceOptions {
     event: MeshTaskCompletionEvidence['event'];
     nodeId: string;
     sessionId: string;
@@ -505,7 +506,7 @@ export interface ReadLedgerSliceOptions {
     limit?: number;
 }
 
-export interface MeshLedgerCursor {
+interface MeshLedgerCursor {
     afterId: string | null;
     nextAfterId: string | null;
     limit: number;
@@ -556,15 +557,9 @@ When your task is done, end your final response with a JSON code block in this e
 Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
 }
 
-// ─── Core API ───────────────────────────────────
-
-function readNonEmptyString(value: unknown): string | undefined {
-    return typeof value === 'string' && value.trim() ? value.trim() : undefined;
-}
-
 function readStringArray(value: unknown): string[] {
     if (!Array.isArray(value)) return [];
-    return value.map(item => readNonEmptyString(item)).filter(Boolean) as string[];
+    return value.map(item => readString(item)).filter(Boolean) as string[];
 }
 
 /**
@@ -584,11 +579,11 @@ function normalizeValidationResults(value: unknown): MeshValidationResultArtifac
         .map((item: any) => {
             const status = ['passed', 'failed', 'skipped', 'unknown'].includes(item.status) ? item.status : 'unknown';
             return {
-                ...(readNonEmptyString(item.command) ? { command: readNonEmptyString(item.command) } : {}),
+                ...(readString(item.command) ? { command: readString(item.command) } : {}),
                 status,
                 ...(Number.isFinite(Number(item.durationMs)) ? { durationMs: Number(item.durationMs) } : {}),
-                ...(readNonEmptyString(item.outputPath) ? { outputPath: readNonEmptyString(item.outputPath) } : {}),
-                ...(readNonEmptyString(item.summary) ? { summary: readNonEmptyString(item.summary) } : {}),
+                ...(readString(item.outputPath) ? { outputPath: readString(item.outputPath) } : {}),
+                ...(readString(item.summary) ? { summary: readString(item.summary) } : {}),
             };
         });
 }
@@ -600,14 +595,14 @@ function normalizeProcessArtifacts(value: unknown): MeshProcessArtifact[] {
         .filter(item => item && typeof item === 'object' && !Array.isArray(item))
         .map((item: any) => ({
             kind: kinds.has(item.kind) ? item.kind : 'other',
-            ...(readNonEmptyString(item.id) ? { id: readNonEmptyString(item.id) } : {}),
-            ...(readNonEmptyString(item.label) ? { label: readNonEmptyString(item.label) } : {}),
-            ...(readNonEmptyString(item.locator) ? { locator: readNonEmptyString(item.locator) } : {}),
+            ...(readString(item.id) ? { id: readString(item.id) } : {}),
+            ...(readString(item.label) ? { label: readString(item.label) } : {}),
+            ...(readString(item.locator) ? { locator: readString(item.locator) } : {}),
             ...(Number.isFinite(Number(item.pid)) ? { pid: Number(item.pid) } : {}),
             ...(Number.isFinite(Number(item.port)) ? { port: Number(item.port) } : {}),
-            ...(readNonEmptyString(item.url) ? { url: readNonEmptyString(item.url) } : {}),
-            ...(readNonEmptyString(item.path) ? { path: readNonEmptyString(item.path) } : {}),
-            ...(readNonEmptyString(item.sessionId) ? { sessionId: readNonEmptyString(item.sessionId) } : {}),
+            ...(readString(item.url) ? { url: readString(item.url) } : {}),
+            ...(readString(item.path) ? { path: readString(item.path) } : {}),
+            ...(readString(item.sessionId) ? { sessionId: readString(item.sessionId) } : {}),
             ...(typeof item.keepRunning === 'boolean' ? { keepRunning: item.keepRunning } : {}),
             ...(item.metadata && typeof item.metadata === 'object' && !Array.isArray(item.metadata) ? { metadata: item.metadata as Record<string, unknown> } : {}),
         }));
@@ -623,13 +618,13 @@ export function normalizeMeshWorkerResult(input?: Record<string, unknown>, sourc
         : undefined;
     return {
         status,
-        ...(readNonEmptyString(raw.classification) ? { classification: readNonEmptyString(raw.classification) } : {}),
+        ...(readString(raw.classification) ? { classification: readString(raw.classification) } : {}),
         changedFiles: readStringArray(raw.changedFiles),
         validationResults: normalizeValidationResults(raw.validationResults),
         ...(gitStatus ? { gitStatus } : {}),
         processArtifacts: normalizeProcessArtifacts(raw.processArtifacts),
         errors: readStringArray(raw.errors),
-        ...(readNonEmptyString(raw.nextAction) ? { nextAction: readNonEmptyString(raw.nextAction) } : {}),
+        ...(readString(raw.nextAction) ? { nextAction: readString(raw.nextAction) } : {}),
         requiresUserAction: raw.requiresUserAction === true,
         source,
     };
@@ -646,7 +641,7 @@ export function normalizeMeshWorkerResult(input?: Record<string, unknown>, sourc
  * still resolves to 'default'.
  */
 function summaryHasParseableJsonAnswer(summary?: string): boolean {
-    const text = readNonEmptyString(summary);
+    const text = readString(summary);
     if (!text) return false;
     const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
     const candidates = [fenced?.[1], text].filter(Boolean) as string[];

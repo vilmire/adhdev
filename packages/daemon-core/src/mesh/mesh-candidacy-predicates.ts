@@ -31,8 +31,7 @@ import { isHeldRuntimeLive } from './mesh-node-git-refresher.js';
 import { loadConfig } from '../config/config.js';
 import { buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, getQueue } from './mesh-work-queue.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
-import { daemonIdsEquivalent, sessionIdsEquivalent, isBusyStatus, isIdleSessionState, isTerminalSessionRecordStatus as isTerminalSessionStatus } from '@adhdev/mesh-shared';
-import { readNonEmptyString } from './mesh-events-utils.js';
+import { daemonIdsEquivalent, sessionIdsEquivalent, isBusyStatus, isIdleSessionState, isTerminalSessionRecordStatus as isTerminalSessionStatus, readText } from '@adhdev/mesh-shared';
 import { isMeshNodeHealthLaunchable } from './mesh-node-identity.js';
 import { shouldDeferDispatchForBootstrap } from './worktree-bootstrap-config.js';
 import { inWindowAutoLaunchSessionIdsForNode } from './mesh-autolaunch-integrity.js';
@@ -63,8 +62,8 @@ export function normalizeProviderPriority(policy: unknown): string[] {
 export { isTerminalSessionStatus, isIdleSessionState };
 
 export function sessionStateLooksActive(state: any): boolean {
-    const status = readNonEmptyString(state?.status).toLowerCase();
-    const chatStatus = readNonEmptyString(state?.activeChat?.status).toLowerCase();
+    const status = readText(state?.status).toLowerCase();
+    const chatStatus = readText(state?.activeChat?.status).toLowerCase();
     // Busy = class `working` or `blocked`. `waiting_choice` is active for the same
     // reason as `waiting_approval`: the node still owns a live turn parked on a human
     // decision. Treating it as free makes the active-work gate pass and a SECOND
@@ -82,15 +81,15 @@ export function nodeHasActiveMeshWork(components: DaemonComponents, meshId: stri
     return components.instanceManager.getByCategory('cli').some((inst: any) => {
         const state = inst.getState();
         const settings = state.settings as Record<string, unknown> || {};
-        if (readNonEmptyString(settings.meshNodeFor) !== meshId) return false;
-        const instNodeId = readNonEmptyString(settings.meshNodeId) || readNonEmptyString(settings.nodeId);
+        if (readText(settings.meshNodeFor) !== meshId) return false;
+        const instNodeId = readText(settings.meshNodeId) || readText(settings.nodeId);
         // Match under canonical machine-core form, NOT a raw `!==`: a session's stamped
         // meshNodeId and the candidate nodeId can carry interchangeable daemon-id forms
         // (bare `mach_X` vs `daemon_mach_X`). A raw mismatch makes a BUSY node look idle,
         // so the active-work gate passes and a SECOND session is launched/claimed for a
         // task already running here — the CANON-IDENTITY duplicate dispatch.
         if (!daemonIdsEquivalent(instNodeId, nodeId)) return false;
-        const sessionId = readNonEmptyString(state.instanceId);
+        const sessionId = readText(state.instanceId);
         if (currentSessionId && sessionIdsEquivalent(sessionId, currentSessionId) && isIdleSessionState(state)) return false;
         return sessionStateLooksActive(state);
     });
@@ -123,10 +122,10 @@ export function isLaunchableNode(node: any): boolean {
  *  need the same local-vs-remote node verdict. Not public surface — no consumer outside
  *  src/mesh imports it, and neither re-export barrel lists it. */
 export function isLocalAutoLaunchNode(node: any): boolean {
-    const daemonId = readNonEmptyString(node?.daemonId);
-    const machineId = readNonEmptyString(node?.machineId);
+    const daemonId = readText(node?.daemonId);
+    const machineId = readText(node?.machineId);
     const appConfig = loadConfig();
-    const localMachineId = readNonEmptyString(appConfig.machineId) || readNonEmptyString(appConfig.registeredMachineId);
+    const localMachineId = readText(appConfig.machineId) || readText(appConfig.registeredMachineId);
 
     // Route BOTH the daemonId and the machineId through the canonical machine-core
     // equivalence helper so a node carrying any interchangeable id form (bare `mach_<hex>`
@@ -220,7 +219,7 @@ export function resolveSessionBusyVerdict(components: DaemonComponents, sessionI
     try {
         const instances = components.instanceManager?.getByCategory?.('cli') || [];
         const inst = instances.find((i: any) => {
-            const sid = readNonEmptyString(i?.getState?.().instanceId);
+            const sid = readText(i?.getState?.().instanceId);
             return sid && sessionIdsEquivalent(sid, sessionId);
         });
         if (!inst) return 'UNKNOWN'; // remote / gone / id-form skew not present locally
@@ -236,13 +235,13 @@ export function liveSessionCountForNode(components: DaemonComponents, meshId: st
     const localInstances = components.instanceManager.getByCategory('cli').filter((inst: any) => {
         const state = inst.getState();
         const settings = state.settings as Record<string, unknown> || {};
-        if (readNonEmptyString(settings.meshNodeFor) !== meshId) return false;
-        const instNodeId = readNonEmptyString(settings.meshNodeId) || readNonEmptyString(settings.nodeId);
+        if (readText(settings.meshNodeFor) !== meshId) return false;
+        const instNodeId = readText(settings.meshNodeId) || readText(settings.nodeId);
         // Canonical-form match (see nodeHasActiveMeshWork): a daemon-id form skew between
         // the session's stamped nodeId and the candidate nodeId must not undercount this
         // node's live sessions, which would defeat the maxConcurrentSessions cap.
         if (!daemonIdsEquivalent(instNodeId, nodeId)) return false;
-        const status = readNonEmptyString(state.status).toLowerCase();
+        const status = readText(state.status).toLowerCase();
         return !isTerminalSessionStatus(status);
     });
     let count = localInstances.length;
@@ -252,7 +251,7 @@ export function liveSessionCountForNode(components: DaemonComponents, meshId: st
     // duplicate ghost launch slips through. Exclude any id already represented by a local instance
     // so a co-located launch is not double-counted.
     const localSessionIds = localInstances
-        .map((inst: any) => readNonEmptyString(inst.getState().instanceId))
+        .map((inst: any) => readText(inst.getState().instanceId))
         .filter(Boolean);
     for (const sid of inWindowAutoLaunchSessionIdsForNode(meshId, nodeId)) {
         if (!localSessionIds.some(local => sessionIdsEquivalent(local, sid))) count += 1;
@@ -301,13 +300,13 @@ export function nodeHasLiveSessionPendingClaim(components: DaemonComponents, mes
     const busySessionIds = new Set(
         getQueue(meshId, { status: ['assigned'] as any })
             .filter(task => daemonIdsEquivalent(task.assignedNodeId, nodeId))
-            .map(task => readNonEmptyString(task.assignedSessionId))
+            .map(task => readText(task.assignedSessionId))
             .filter(Boolean),
     );
     return components.instanceManager.getByCategory('cli').some((inst: any) => {
         const state = inst.getState();
         const settings = state.settings as Record<string, unknown> || {};
-        if (readNonEmptyString(settings.meshNodeFor) !== meshId) return false;
+        if (readText(settings.meshNodeFor) !== meshId) return false;
         // DISPATCH-DEADLOCK-COORD-SESSION-SLOT: a coordinator session for THIS mesh
         // (meshCoordinatorFor === meshId) is never a pending-claim worker — the idle→claim
         // drain (drainMeshQueue, isIdleSessionState + worker role) never picks it up, because
@@ -318,15 +317,15 @@ export function nodeHasLiveSessionPendingClaim(components: DaemonComponents, mes
         // with no error/requeue (silent deadlock). The busy-set / non-idle guards below don't
         // help because the coordinator holds no *assigned* queue task, so it is neither busy
         // nor terminal here.
-        if (readNonEmptyString(settings.meshCoordinatorFor) === meshId) return false;
-        const instNodeId = readNonEmptyString(settings.meshNodeId) || readNonEmptyString(settings.nodeId);
+        if (readText(settings.meshCoordinatorFor) === meshId) return false;
+        const instNodeId = readText(settings.meshNodeId) || readText(settings.nodeId);
         // Canonical-form match (see nodeHasActiveMeshWork / liveSessionCountForNode): a
         // daemon-id form skew must not make a present session look absent and reopen the
         // duplicate-launch hole.
         if (!daemonIdsEquivalent(instNodeId, nodeId)) return false;
-        const status = readNonEmptyString(state.status).toLowerCase();
+        const status = readText(state.status).toLowerCase();
         if (isTerminalSessionStatus(status)) return false; // dead → no claimer here, allow launch
-        const sessionId = readNonEmptyString(state.instanceId);
+        const sessionId = readText(state.instanceId);
         if (sessionId && busySessionIds.has(sessionId)) return false; // busy with its own assigned task
         // PROVIDER-MATCH gate (DISPATCH-DEADLOCK-PROVIDER-MISMATCH): only count this session as a
         // pending claimer if its own provider could satisfy THIS task's requiredTags. A session
@@ -335,7 +334,7 @@ export function nodeHasLiveSessionPendingClaim(components: DaemonComponents, mes
         // nodeSatisfiesRequiredTags gate, so it must not suppress the required-provider launch —
         // otherwise the task deadlocks (mismatched session blocks launch, yet cannot claim). Mirror
         // the claim path: pin the session's providerType onto this node and check the tags.
-        const sessionProviderType = state.type || readNonEmptyString(settings.providerType);
+        const sessionProviderType = state.type || readText(settings.providerType);
         if (task.requiredTags?.length) {
             if (sessionProviderType && !nodeSatisfiesRequiredTags(task.requiredTags, buildMeshNodeCapabilityTags(node, sessionProviderType))) {
                 return false; // provider mismatch → this session can't claim this task; not a pending claimer

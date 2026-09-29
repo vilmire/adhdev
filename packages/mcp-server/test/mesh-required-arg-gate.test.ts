@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { ALL_MESH_TOOLS, MESH_NOTIFY_WORKER_TOOL, MESH_SEND_TASK_TOOL } from '../src/tools/mesh-tool-schemas.js';
+import { ALL_MESH_TOOLS } from '../src/tools/mesh-tool-schemas.js';
+import { MESH_NOTIFY_WORKER_TOOL } from '../src/tools/mesh-tool-schemas-refine-config.js';
+import { MESH_SEND_TASK_TOOL } from '../src/tools/mesh-tool-schemas-session.js';
 import {
     MESH_TOOL_ACTIONS,
     missingRequiredToolArgsError,

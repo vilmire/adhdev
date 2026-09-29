@@ -39,9 +39,10 @@
 
 import { MESH_SESSION_CLEANUP_MODES, retiredMeshToolError } from '@adhdev/mesh-shared';
 
-import { ALL_MESH_TOOLS, MESH_CONFIG_TOOL, MESH_NOTIFY_WORKER_TOOL } from './mesh-tool-schemas.js';
+import { ALL_MESH_TOOLS } from './mesh-tool-schemas.js';
+import { MESH_CONFIG_TOOL, MESH_NOTIFY_WORKER_TOOL } from './mesh-tool-schemas-refine-config.js';
 
-export interface ToolSchemaLike {
+interface ToolSchemaLike {
     name: string;
     inputSchema?: { properties?: Record<string, unknown>; required?: readonly string[] };
 }
@@ -589,7 +590,7 @@ export function retiredMeshToolArgsError(name: string, args: Record<string, unkn
 // `defaultAction` is used when the caller omits the discriminator (mesh_init,
 // mesh_create keep their pre-merge default behaviour).
 
-export interface MeshActionSpec {
+interface MeshActionSpec {
     readonly key: string;
     readonly defaultAction?: string;
     readonly actions: Readonly<Record<string, { readonly args: readonly string[]; readonly required?: readonly string[] }>>;

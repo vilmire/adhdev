@@ -26,6 +26,7 @@ import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { getMesh } from '../config/mesh-config.js';
 import type { MeshGraphGateRow } from './mesh-graph-types.js';
 import { resolveRootDefaultBranch } from './mesh-onboarding-plan.js';
+import { readString } from '@adhdev/mesh-shared';
 
 export interface GateCommitEvidence {
     sha: string;
@@ -66,10 +67,6 @@ function isCommitReachable(workspace: string, sha: string, defaultBranch: string
         // (unknown sha, not a repo, timeout, missing origin/<defaultBranch>) is 'unknown'.
         return e && typeof e.status === 'number' && e.status === 1 ? false : 'unknown';
     }
-}
-
-function readString(value: unknown): string | undefined {
-    return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
 }
 
 /** The mesh's base workspace — where origin/main is meaningful for this repo. */

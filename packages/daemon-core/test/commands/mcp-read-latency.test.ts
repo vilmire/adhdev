@@ -33,8 +33,11 @@ vi.mock('../../src/config/mesh-config.js', () => ({
     getMesh: vi.fn(() => undefined),
     getMeshByRepo: vi.fn(),
     listMeshes: vi.fn(() => [] as any[]),
-    getDifficultyBrains: vi.fn(() => undefined),
 }));
+vi.mock('../../src/config/mesh-config-routing.js', async (importOriginal) => ({
+  ...(await importOriginal<any>()),
+  getDifficultyBrains: vi.fn(() => undefined),
+}))
 
 import { turnLedgerIpcHandlers } from '../../src/commands/low-family/turn-ledger-ipc.js';
 import { meshCrudHandlers } from '../../src/commands/med-family/mesh-crud.js';
@@ -45,7 +48,7 @@ import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 import { getMeshStatusMissionSummaries, getMeshStatusMissionsCompact, summarizeMissionTasks, upsertMeshMission } from '../../src/mesh/mesh-missions.js';
 import { computeMeshMissionStats } from '../../src/mesh/mesh-task-stats.js';
 import { getSessionRecoveryContext } from '../../src/mesh/mesh-local-records.js';
-import { recordLastQuotaRanking } from '../../src/mesh/mesh-quota-routing.js';
+import { recordLastQuotaRanking } from '../../src/mesh/mesh-quota-ranking-records.js';
 import { seedLocalRecord } from '../helpers/local-records.js';
 
 const v = 1;

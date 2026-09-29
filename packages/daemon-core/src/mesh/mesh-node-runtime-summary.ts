@@ -20,7 +20,7 @@
  * non-content. It never leaves the daemons: mesh_status travels over P2P only
  * and the server status_report allow-list (RoutingSessionEntry) does not carry it.
  */
-import { normalizeMeshNodeFacts, type MeshNodeFacts } from '@adhdev/mesh-shared';
+import { normalizeMeshNodeFacts, type MeshNodeFacts, readOptionalRecord } from '@adhdev/mesh-shared';
 
 export const MESH_NODE_RUNTIME_SUMMARY_SCHEMA_VERSION = 1;
 /** Upper bound on sessions carried per node (a daemon rarely hosts more than a handful). */
@@ -74,7 +74,7 @@ export interface MeshNodeRuntimeDaemonBuild {
 }
 
 /** One provider-declared auto-approve choice (manifest metadata; launch args are not carried). */
-export interface MeshNodeRuntimeAutoApproveMode {
+interface MeshNodeRuntimeAutoApproveMode {
     id: string;
     label?: string;
     strategy?: string;
@@ -130,10 +130,6 @@ export interface MeshNodeRuntimeSummary {
     providers?: MeshNodeRuntimeProvider[];
 }
 
-function readRecord(value: unknown): Record<string, unknown> | null {
-    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
-}
-
 /** A short identifier-class string (trimmed, bounded, no newlines) — anything else is dropped. */
 function readId(value: unknown): string | undefined {
     if (typeof value !== 'string') return undefined;
@@ -157,14 +153,14 @@ function compact<T extends Record<string, unknown>>(record: T): T | undefined {
 }
 
 export function sanitizeMeshNodeRuntimeSession(raw: unknown): MeshNodeRuntimeSession | null {
-    const s = readRecord(raw);
+    const s = readOptionalRecord(raw);
     if (!s) return null;
     const id = readId(s.instanceId) ?? readId(s.id) ?? readId(s.sessionId);
     if (!id) return null;
-    const activeChat = readRecord(s.activeChat);
-    const turn = readRecord(s.turn);
-    const coordinator = readRecord(s.coordinator);
-    const settings = readRecord(s.settings);
+    const activeChat = readOptionalRecord(s.activeChat);
+    const turn = readOptionalRecord(s.turn);
+    const coordinator = readOptionalRecord(s.coordinator);
+    const settings = readOptionalRecord(s.settings);
     const lastMessageRole = readId(s.lastMessageRole);
     const session: MeshNodeRuntimeSession = {
         id,
@@ -208,11 +204,11 @@ function readLabel(value: unknown): string | undefined {
 }
 
 function sanitizeAutoApproveModes(raw: unknown): MeshNodeRuntimeProvider['autoApproveModes'] | undefined {
-    const config = readRecord(raw);
+    const config = readOptionalRecord(raw);
     if (!config || !Array.isArray(config.modes)) return undefined;
     const modes: MeshNodeRuntimeAutoApproveMode[] = [];
     for (const entry of config.modes) {
-        const mode = readRecord(entry);
+        const mode = readOptionalRecord(entry);
         const id = readId(mode?.id);
         if (!mode || !id) continue;
         if (modes.length >= MAX_AUTO_APPROVE_MODES) break;
@@ -230,7 +226,7 @@ function sanitizeAutoApproveModes(raw: unknown): MeshNodeRuntimeProvider['autoAp
 }
 
 export function sanitizeMeshNodeRuntimeProvider(raw: unknown): MeshNodeRuntimeProvider | null {
-    const p = readRecord(raw);
+    const p = readOptionalRecord(raw);
     const type = readId(p?.type) ?? readId(p?.id);
     if (!p || !type) return null;
     return compact({
@@ -267,7 +263,7 @@ export function buildMeshNodeRuntimeProviders(
 ): MeshNodeRuntimeProvider[] | undefined {
     if (!Array.isArray(rows)) return undefined;
     return sanitizeProviders(rows.map((row) => {
-        const record = readRecord(row);
+        const record = readOptionalRecord(row);
         const type = readId(record?.type);
         const version = type && providerVersions ? readId(providerVersions[type]) : undefined;
         // `version` is ALWAYS the detected binary version, never a same-named manifest field.
@@ -276,7 +272,7 @@ export function buildMeshNodeRuntimeProviders(
 }
 
 function sanitizeDaemonBuild(raw: unknown): MeshNodeRuntimeDaemonBuild | undefined {
-    const build = readRecord(raw);
+    const build = readOptionalRecord(raw);
     const commit = readId(build?.commit);
     if (!build || !commit || commit === 'unknown') return undefined;
     const track = build.track === 'stable' || build.track === 'preview' ? build.track : 'unknown';
@@ -290,7 +286,7 @@ function sanitizeDaemonBuild(raw: unknown): MeshNodeRuntimeDaemonBuild | undefin
 }
 
 function sanitizeUpgradeFailure(raw: unknown): MeshNodeRuntimeUpgradeFailure | undefined {
-    const failure = readRecord(raw);
+    const failure = readOptionalRecord(raw);
     if (!failure) return undefined;
     // Presence of a notice (prose or path) is the fact; the prose itself never travels.
     if (typeof failure.notice !== 'string' && !readId(failure.noticePath) && failure.present !== true
@@ -307,7 +303,7 @@ function sanitizeUpgradeFailure(raw: unknown): MeshNodeRuntimeUpgradeFailure | u
 
 /** The allow-list. Idempotent: sanitizing a sanitized summary returns an equal one. */
 export function sanitizeMeshNodeRuntimeSummary(raw: unknown): MeshNodeRuntimeSummary | null {
-    const record = readRecord(raw);
+    const record = readOptionalRecord(raw);
     if (!record) return null;
     const rawSessions = Array.isArray(record.sessions) ? record.sessions : null;
     if (!rawSessions) return null;
@@ -344,10 +340,10 @@ export function sanitizeMeshNodeRuntimeSummary(raw: unknown): MeshNodeRuntimeSum
  * `{ result }`) plus an optional facts bundle and provider catalog.
  */
 export function buildMeshNodeRuntimeSummary(statusMetadata: unknown, nodeFacts?: unknown, providers?: unknown): MeshNodeRuntimeSummary | null {
-    let payload = readRecord(statusMetadata);
-    if (payload && readRecord(payload.result) && !readRecord(payload.status)) payload = readRecord(payload.result);
+    let payload = readOptionalRecord(statusMetadata);
+    if (payload && readOptionalRecord(payload.result) && !readOptionalRecord(payload.status)) payload = readOptionalRecord(payload.result);
     if (!payload) return null;
-    const status = readRecord(payload.status) ?? payload;
+    const status = readOptionalRecord(payload.status) ?? payload;
     if (!Array.isArray(status.sessions)) return null;
     return sanitizeMeshNodeRuntimeSummary({
         daemonId: status.instanceId,
@@ -369,7 +365,7 @@ export function computeMeshNodeRuntimeSignature(summary: MeshNodeRuntimeSummary 
     if (!summary) return 'none';
     const stripTimes = (value: unknown): unknown => {
         if (Array.isArray(value)) return value.map(stripTimes);
-        const record = readRecord(value);
+        const record = readOptionalRecord(value);
         if (!record) return value;
         const out: Record<string, unknown> = {};
         for (const key of Object.keys(record).sort()) {

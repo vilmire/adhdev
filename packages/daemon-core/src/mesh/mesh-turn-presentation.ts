@@ -51,7 +51,7 @@ export type TurnStage =
     | 'failed'
     | 'cancelled';
 
-export type TurnTerminalOutcome = Extract<TurnStage, 'completed' | 'failed' | 'cancelled'>;
+type TurnTerminalOutcome = Extract<TurnStage, 'completed' | 'failed' | 'cancelled'>;
 
 const TURN_TERMINAL_STAGES: ReadonlySet<string> = new Set(['completed', 'failed', 'cancelled']);
 
@@ -64,7 +64,7 @@ export function isTerminalTurnStage(stage: string): boolean {
  * stage). Built from a ledger `TurnAttempt` + its `updated_at` stamp by
  * {@link presentationRowFromAttempt}.
  */
-export interface TurnPresentationRow {
+interface TurnPresentationRow {
     attemptId: string;
     meshId: string | null;
     taskId: string | null;

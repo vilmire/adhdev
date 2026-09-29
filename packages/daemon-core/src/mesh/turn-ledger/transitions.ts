@@ -43,7 +43,7 @@ import type { HoldOnExpire, TurnBusEvent, TurnState } from './types.js';
 export type RuleLane = 'none' | 'current' | 'stale';
 
 /** `none` is the lane-none pseudo state; `any` includes terminal states. */
-export type RuleFrom = readonly TurnState[] | 'none' | 'nonterminal' | 'terminal' | 'any';
+type RuleFrom = readonly TurnState[] | 'none' | 'nonterminal' | 'terminal' | 'any';
 
 export type GuardId =
     | 'otherwise'

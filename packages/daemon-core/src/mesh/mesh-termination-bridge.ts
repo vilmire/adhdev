@@ -32,7 +32,7 @@ import type { EventOf } from '../sessions/lifecycle-events.js';
  * `terminated` event this module reads (wiring-unification B4 replaced the
  * neutral `shared/session-termination-sink` with the lifecycle bus).
  */
-export interface SessionTerminationObservation {
+interface SessionTerminationObservation {
     sessionId: string;
     providerType?: string;
     workspace?: string;
@@ -49,7 +49,7 @@ export interface SessionTerminationObservation {
  * path), which keeps writing its own entry unchanged. Everything this module
  * emits is a termination the mesh did not itself request.
  */
-export type MeshTerminationStopReason =
+type MeshTerminationStopReason =
     /** Killed by a signal (or an exit code that encodes one) with no stop request on record. */
     | 'external_signal'
     /** Non-zero exit with no stop request on record — the process failed on its own. */
@@ -61,7 +61,7 @@ export type MeshTerminationStopReason =
     /** The session host itself was asked to stop/delete/restart/prune this session. */
     | 'host_requested_stop';
 
-export interface MeshSessionTerminationLedgerInput {
+interface MeshSessionTerminationLedgerInput {
     meshId: string;
     sessionId: string;
     nodeId?: string;

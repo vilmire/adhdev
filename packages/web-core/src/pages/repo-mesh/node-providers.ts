@@ -1,4 +1,4 @@
-import { normalizeNodeCapabilitySlots } from '@adhdev/mesh-shared'
+import { normalizeNodeCapabilitySlots, readRecord } from '@adhdev/mesh-shared'
 import type { RepoMeshNodeStatus } from '@adhdev/daemon-core'
 
 import type { RepoMeshDaemonEntry } from '../../context/RepoMeshContext'
@@ -54,10 +54,6 @@ function memberNodeProviders(
         return [...providersByDaemonId.values()][0]
     }
     return []
-}
-
-function readRecord(value: unknown): Record<string, any> {
-    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {}
 }
 
 /**

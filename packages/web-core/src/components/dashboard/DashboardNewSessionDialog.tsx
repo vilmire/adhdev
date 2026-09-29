@@ -1,25 +1,47 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import type { DaemonData } from '../../types'
 import { useDaemonMetadataLoader } from '../../hooks/useDaemonMetadataLoader'
-import { compareMachineEntries, getMachineDisplayName, getWorkspaceDisplayLabel } from '../../utils/daemon-utils'
+import { compareMachineEntries, getWorkspaceDisplayLabel } from '../../utils/daemon-utils'
 import { IconFolder, IconPlay, IconX } from '../Icons'
 import WorkspaceBrowseDialog from '../machine/WorkspaceBrowseDialog'
-import { collectBrowsePathCandidates, getDefaultBrowseStartPath, type BrowseDirectoryResult } from '../machine/workspaceBrowse'
+import { collectBrowsePathCandidates, getDefaultBrowseStartPath } from '../machine/workspaceBrowse'
 import { getRecentLaunchArgs, pushRecentLaunchArgs } from '../../utils/recentLaunchArgs'
 import { readRememberedChoice, writeRememberedChoice } from '../../utils/remembered-choice'
 import SavedHistoryInlinePanel from './SavedHistoryInlinePanel'
-import { InfoTip } from '../ui/InfoTip'
 import { shouldRefreshSavedHistoryOnModalOpen } from '../../utils/saved-history-load-state'
 import SavedHistoryLaunchSection from '../SavedHistoryLaunchSection'
 import LaunchSectionCard from '../LaunchSectionCard'
 import { isLaunchableMachineProvider } from '../../utils/provider-activation'
 import { modelOptionsForProvider, thinkingOptionsForProvider } from '../../utils/provider-priority'
-import type { LaunchResult, MeshLaunchOption } from '../../hooks/useDashboardCommandActions'
+import type { MeshLaunchOption } from '../../hooks/useDashboardCommandActions'
 import MeshCoordinatorManualSetupPanel from '../MeshCoordinatorManualSetupPanel'
+import {
+    NewSessionAgentPicker,
+    NewSessionMachinePicker,
+    NewSessionMeshPicker,
+    NewSessionModelThinkingFields,
+    NewSessionStartupArgs,
+} from './NewSessionDialogSections'
+import {
+    EMPTY_LAUNCH_VALUE_CHOICE,
+    REMEMBER_SCOPE_DIALOG,
+    REMEMBER_SCOPE_MESH,
+    REMEMBER_SCOPE_WORKSPACE,
+    getDefaultLaunchKind,
+    isLaunchKindAvailable,
+    isRememberedLaunchKind,
+    launchValueSources,
+    normalizePath,
+    toLaunchValueChoice,
+    type LaunchKind,
+    type LaunchValueChoice,
+    type LaunchValueSource,
+    type WorkspaceLaunchMode,
+    type DashboardNewSessionDialogProps,
+    type SavedSessionOption,
+} from './newSessionLaunchState'
 import { buildManualCoordinatorSetup, type MeshCoordinatorManualSetup } from '../../utils/mesh-coordinator-setup'
 import { DialogShell } from '../ui/Dialog'
-import { LAUNCH_CATEGORY_LABELS } from './launch-category-labels'
 import {
     AutoApproveModeSelector,
     DangerousAutoApproveModeDialog,
@@ -32,143 +54,6 @@ import {
 } from '../../utils/auto-approve-modes'
 import type { AutoApproveMode } from '@adhdev/daemon-core'
 
-type LaunchKind = 'ide' | 'cli' | 'acp'
-type WorkspaceLaunchMode = 'workspace' | 'mesh'
-
-interface SavedSessionOption {
-    id: string
-    providerSessionId: string
-    providerType: string
-    providerName: string
-    kind: 'cli' | 'acp'
-    title: string
-    workspace?: string | null
-    summaryMetadata?: DaemonData['summaryMetadata']
-    preview?: string
-    messageCount: number
-    firstMessageAt: number
-    lastMessageAt: number
-    canResume: boolean
-}
-
-interface DashboardNewSessionDialogProps {
-    machines: DaemonData[]
-    ides: DaemonData[]
-    onClose: () => void
-    onBrowseDirectory: (machineId: string, path: string) => Promise<BrowseDirectoryResult>
-    onSaveWorkspace: (machineId: string, path: string) => Promise<{ ok: boolean; error?: string }>
-    onLaunchIde: (machineId: string, ideType: string, opts?: { workspacePath?: string | null }) => Promise<{ ok: boolean; error?: string; code?: string }>
-    onLaunchProvider: (
-        machineId: string,
-        kind: 'cli' | 'acp',
-        providerType: string,
-        opts?: {
-            workspaceId?: string | null
-            workspacePath?: string | null
-            useHome?: boolean
-            resumeSessionId?: string | null
-            cliArgs?: string[]
-            initialModel?: string | null
-            initialThinkingLevel?: string | null
-            /** Phase E: where initialModel came from (sent only with a value). */
-            modelSource?: LaunchValueSource
-            /** Phase E: where initialThinkingLevel came from (sent only with a value). */
-            thinkingLevelSource?: LaunchValueSource
-            settings?: {
-                autoApprove?: boolean
-                autoApproveMode?: string
-            }
-        },
-    ) => Promise<{ ok: boolean; error?: string; code?: string }>
-    onListMeshes: (machineId: string) => Promise<MeshLaunchOption[]>
-    onLaunchMeshCoordinator: (
-        machineId: string,
-        meshId: string,
-        cliType: string,
-        opts?: {
-            initialModel?: string | null
-            initialThinkingLevel?: string | null
-            modelSource?: LaunchValueSource
-            thinkingLevelSource?: LaunchValueSource
-            settings?: { autoApprove?: boolean; autoApproveMode?: string }
-        },
-    ) => Promise<LaunchResult>
-    onListSavedSessions: (machineId: string, providerType: string) => Promise<SavedSessionOption[]>
-    // Preselect target when the dialog is opened from somewhere that already
-    // knows the machine/workspace (e.g. the machine page's workspace list).
-    // The workspace id is applied once, as soon as the machine's workspace rows
-    // are available — manual machine switches afterwards drop it.
-    initialMachineId?: string | null
-    initialWorkspaceId?: string | null
-    // 'mesh' opens the dialog in coordinator mode; initialMeshWorkspacePath is
-    // then matched (once, by normalized path) against the loaded mesh options
-    // to preselect the mesh rooted at that workspace.
-    initialLaunchMode?: WorkspaceLaunchMode | null
-    initialMeshWorkspacePath?: string | null
-}
-
-function isLaunchKindAvailable(machine: DaemonData | undefined, kind: LaunchKind): boolean {
-    if (!machine) return false
-    if (kind === 'ide') return (machine.detectedIdes?.length || 0) > 0
-    return (machine.availableProviders || []).some(provider => isLaunchableMachineProvider(provider, kind))
-}
-
-function getDefaultLaunchKind(machine: DaemonData | undefined) {
-    if (!machine) return null
-    if (isLaunchKindAvailable(machine, 'cli')) return 'cli' as const
-    if (isLaunchKindAvailable(machine, 'ide')) return 'ide' as const
-    if (isLaunchKindAvailable(machine, 'acp')) return 'acp' as const
-    return null
-}
-
-// Remembered-choice scopes (localStorage, see utils/remembered-choice.ts).
-// Written on a successful launch; read once per dialog open and applied only
-// where the stored value still exists in the current option lists (fail-open).
-const REMEMBER_SCOPE_DIALOG = 'new-session-dialog'
-const REMEMBER_SCOPE_WORKSPACE = 'new-session-workspace'
-const REMEMBER_SCOPE_MESH = 'new-session-mesh'
-
-/**
- * Phase E launch provenance for the model / thinking-level fields: where the
- * value in the field came from. Sent to the daemon as `modelSource` /
- * `thinkingLevelSource` (mesh-shared `ModelAxisSource` members), only alongside
- * a non-empty value — an empty field means "provider default", which the daemon
- * resolves and labels itself.
- */
-export type LaunchValueSource = 'user' | 'remembered'
-
-interface LaunchValueChoice {
-    value: string
-    source: LaunchValueSource | null
-}
-
-const EMPTY_LAUNCH_VALUE_CHOICE: LaunchValueChoice = { value: '', source: null }
-
-function toLaunchValueChoice(value: string, source: LaunchValueSource): LaunchValueChoice {
-    return value ? { value, source } : EMPTY_LAUNCH_VALUE_CHOICE
-}
-
-function launchValueSources(
-    model: LaunchValueChoice,
-    thinking: LaunchValueChoice,
-): { modelSource?: LaunchValueSource; thinkingLevelSource?: LaunchValueSource } {
-    return {
-        ...(model.value.trim() && model.source ? { modelSource: model.source } : {}),
-        ...(thinking.value.trim() && thinking.source ? { thinkingLevelSource: thinking.source } : {}),
-    }
-}
-
-function isRememberedLaunchKind(value: string | undefined): value is LaunchKind {
-    return value === 'cli' || value === 'ide' || value === 'acp'
-}
-
-function normalizePath(path: string | null | undefined) {
-    return String(path || '')
-        .trim()
-        .replace(/\\/g, '/')
-        .replace(/\/+$/, '')
-        .toLowerCase()
-}
 
 export default function DashboardNewSessionDialog({
     machines,
@@ -1091,48 +976,14 @@ export default function DashboardNewSessionDialog({
                     <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 sm:px-5 sm:py-4 space-y-4">
                         {/* Machine picker only when more than one machine is connected. */}
                         {sortedMachines.length > 1 && (
-                            <LaunchSectionCard title={t('newSession.machine')}>
-                                {useMachineDropdown ? (
-                                    <select
-                                        aria-label={t('newSession.machine')}
-                                        value={selectedMachine.id}
-                                        onChange={(event) => setSelectedMachineId(event.target.value)}
-                                        onFocus={() => sortedMachines.forEach(machine => prefetchMachineMetadata(machine.id))}
-                                        className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2.5 text-sm"
-                                        disabled={busy}
-                                    >
-                                        {sortedMachines.map(machine => (
-                                            <option key={machine.id} value={machine.id}>
-                                                {getMachineDisplayName(machine, { fallbackId: machine.id })}
-                                            </option>
-                                        ))}
-                                    </select>
-                                ) : (
-                                    <div className="flex flex-wrap gap-2" role="group" aria-label={t('newSession.machine')}>
-                                        {sortedMachines.map(machine => {
-                                            const label = getMachineDisplayName(machine, { fallbackId: machine.id })
-                                            const selected = selectedMachine.id === machine.id
-                                            return (
-                                                <button
-                                                    key={machine.id}
-                                                    type="button"
-                                                    aria-label={t('newSession.selectMachine', { name: label })}
-                                                    aria-pressed={selected}
-                                                    className={`inline-flex min-w-0 items-center gap-2 rounded-full border px-3 py-2 text-sm transition-colors ${selected ? 'border-accent bg-accent/10 text-text-primary' : 'border-border-subtle bg-bg-secondary/60 text-text-secondary hover:bg-bg-secondary hover:text-text-primary'}`}
-                                                    onClick={() => setSelectedMachineId(machine.id)}
-                                                    onMouseEnter={() => prefetchMachineMetadata(machine.id)}
-                                                    onFocus={() => prefetchMachineMetadata(machine.id)}
-                                                    disabled={busy}
-                                                    title={label}
-                                                >
-                                                    <span className={`h-2 w-2 shrink-0 rounded-full ${machine.status === 'offline' ? 'bg-text-muted' : 'bg-emerald-500'}`} />
-                                                    <span className="truncate">{label}</span>
-                                                </button>
-                                            )
-                                        })}
-                                    </div>
-                                )}
-                            </LaunchSectionCard>
+                            <NewSessionMachinePicker
+                                machines={sortedMachines}
+                                selectedMachineId={selectedMachine.id}
+                                useDropdown={useMachineDropdown}
+                                busy={busy}
+                                onSelect={setSelectedMachineId}
+                                onPrefetch={prefetchMachineMetadata}
+                            />
                         )}
 
                         <LaunchSectionCard
@@ -1247,94 +1098,36 @@ export default function DashboardNewSessionDialog({
                                     )}
                                 </>
                             ) : (
-                                <div className="space-y-3">
-                                    {meshLoading && (
-                                        <div className="text-sm text-text-muted">{t('newSession.loadingMeshes')}</div>
-                                    )}
-                                    {!meshLoading && meshError && (
-                                        <div className="rounded-lg border border-status-error/25 bg-status-error/10 px-3 py-2 text-sm text-status-error">
-                                            {meshError}
-                                        </div>
-                                    )}
-                                    {!meshLoading && !meshError && meshOptions.length === 0 && (
-                                        <div className="flex items-center gap-1 rounded-lg border border-border-subtle bg-bg-secondary/40 px-3 py-2 text-sm text-text-muted">
-                                            {t('newSession.noMeshesShort')}
-                                            <InfoTip content={t('newSession.noMeshes')} />
-                                        </div>
-                                    )}
-                                    {meshOptions.length > 0 && (
-                                        <div className="grid grid-cols-1 gap-2" role="radiogroup" aria-label={t('newSession.mesh')}>
-                                            {meshOptions.map(mesh => (
-                                                <button
-                                                    key={mesh.id}
-                                                    type="button"
-                                                    role="radio"
-                                                    aria-checked={selectedMeshId === mesh.id}
-                                                    className={`w-full rounded-xl border px-3.5 py-3 text-left transition-colors ${selectedMeshId === mesh.id ? 'border-accent bg-accent/10' : 'border-border-subtle bg-bg-secondary/40 hover:bg-bg-secondary/70'}`}
-                                                    onClick={() => {
-                                                        // Manual pick wins over any not-yet-applied remembered mesh.
-                                                        pendingRememberedMeshIdRef.current = null
-                                                        setSelectedMeshId(mesh.id)
-                                                    }}
-                                                    disabled={busy}
-                                                >
-                                                    <div className="text-sm font-semibold text-text-primary">{mesh.name}</div>
-                                                    <div className="mt-1 text-xs text-text-secondary">
-                                                        {mesh.repoIdentity || t('newSession.repoMesh')}{typeof mesh.nodesCount === 'number' ? ` · ${t('newSession.nodeCount', { count: mesh.nodesCount })}` : ''}
-                                                    </div>
-                                                    {mesh.workspace && (
-                                                        <div className="mt-1 text-2xs text-text-muted break-all">{t('newSession.coordinatorWorkspace', { path: mesh.workspace })}</div>
-                                                    )}
-                                                </button>
-                                            ))}
-                                        </div>
-                                    )}
-                                </div>
+                                <NewSessionMeshPicker
+                                    loading={meshLoading}
+                                    error={meshError}
+                                    meshes={meshOptions}
+                                    selectedMeshId={selectedMeshId}
+                                    busy={busy}
+                                    onSelect={(meshId) => {
+                                        // Manual pick wins over any not-yet-applied remembered mesh.
+                                        pendingRememberedMeshIdRef.current = null
+                                        setSelectedMeshId(meshId)
+                                    }}
+                                />
                             )}
                         </LaunchSectionCard>
 
-                        <LaunchSectionCard title={t('newSession.agent')}>
-                            <div className="grid grid-cols-1 gap-1.5" role="radiogroup" aria-label={t('newSession.agent')}>
-                                {launchTargets.map(target => {
-                                    const selected = activeKind === target.kind && selectedTarget === target.id
-                                    return (
-                                        <button
-                                            key={`${target.kind}:${target.id}`}
-                                            type="button"
-                                            role="radio"
-                                            aria-checked={selected}
-                                            data-launch-kind={target.kind}
-                                            className={`flex w-full items-center justify-between gap-3 rounded-xl border px-3.5 py-2.5 text-left transition-colors ${selected ? 'border-accent bg-accent/10' : 'border-border-subtle bg-bg-secondary/40 hover:bg-bg-secondary/70'}`}
-                                            onClick={() => {
-                                                // Manual pick wins over any not-yet-applied remembered kind/target.
-                                                pendingRememberedKindRef.current = null
-                                                pendingRememberedTargetRef.current = null
-                                                pendingRememberedMeshCliTypeRef.current = null
-                                                setActiveKind(target.kind)
-                                                setSelectedTarget(target.id)
-                                            }}
-                                            disabled={busy}
-                                        >
-                                            <span className="min-w-0 truncate text-sm font-semibold text-text-primary">{target.label}</span>
-                                            <span className="flex shrink-0 items-center gap-2">
-                                                {target.meta && <span className="text-2xs text-text-muted">{target.meta}</span>}
-                                                {workspaceMode !== 'mesh' && (
-                                                    <span className="rounded-full border border-border-subtle px-1.5 py-px text-3xs font-semibold uppercase tracking-wide text-text-muted">
-                                                        {LAUNCH_CATEGORY_LABELS[target.kind]}
-                                                    </span>
-                                                )}
-                                            </span>
-                                        </button>
-                                    )
-                                })}
-                                {launchTargets.length === 0 && (
-                                    <div className="flex items-center gap-1 text-sm text-text-muted">
-                                        {t('newSession.noProvidersShort')}
-                                        <InfoTip content={t('newSession.noProviders')} />
-                                    </div>
-                                )}
-                            </div>
-                        </LaunchSectionCard>
+                        <NewSessionAgentPicker
+                            targets={launchTargets}
+                            activeKind={activeKind}
+                            selectedTarget={selectedTarget}
+                            showCategory={workspaceMode !== 'mesh'}
+                            busy={busy}
+                            onSelect={(target) => {
+                                // Manual pick wins over any not-yet-applied remembered kind/target.
+                                pendingRememberedKindRef.current = null
+                                pendingRememberedTargetRef.current = null
+                                pendingRememberedMeshCliTypeRef.current = null
+                                setActiveKind(target.kind)
+                                setSelectedTarget(target.id)
+                            }}
+                        />
 
                         {workspaceMode === 'mesh' && visibleMeshManualSetup && (
                             <MeshCoordinatorManualSetupPanel
@@ -1358,32 +1151,7 @@ export default function DashboardNewSessionDialog({
                                 </summary>
                                 <div className="space-y-3 px-3 pb-3">
                         {workspaceMode !== 'mesh' && activeKind !== 'ide' && (
-                            <LaunchSectionCard title={t('newSession.startupArguments')}>
-                                <input
-                                    type="text"
-                                    value={launchArgs}
-                                    onChange={(event) => setLaunchArgs(event.target.value)}
-                                    placeholder={t('newSession.optionalFlags')}
-                                    className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2.5 text-sm"
-                                    disabled={busy}
-                                />
-                                {recentArgsOptions.length > 0 && (
-                                    <div className="mt-2 flex flex-wrap gap-1.5">
-                                        {recentArgsOptions.map(argsOption => (
-                                            <button
-                                                key={argsOption}
-                                                type="button"
-                                                className="btn btn-secondary btn-sm"
-                                                onClick={() => setLaunchArgs(argsOption)}
-                                                disabled={busy}
-                                                title={argsOption}
-                                            >
-                                                {argsOption}
-                                            </button>
-                                        ))}
-                                    </div>
-                                )}
-                            </LaunchSectionCard>
+                            <NewSessionStartupArgs value={launchArgs} recentOptions={recentArgsOptions} busy={busy} onChange={setLaunchArgs} />
                         )}
 
                         {((workspaceMode === 'mesh' && !!selectedTarget) || (workspaceMode !== 'mesh' && activeKind === 'cli')) && (
@@ -1406,76 +1174,17 @@ export default function DashboardNewSessionDialog({
                         )}
 
                         {((workspaceMode === 'mesh' && !!selectedTarget) || (workspaceMode !== 'mesh' && activeKind !== 'ide')) && (
-                            <LaunchSectionCard title={t('newSession.modelAndThinking')}>
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                                    <label className="flex flex-col gap-1">
-                                        <span className="text-2xs text-text-muted">{t('newSession.model')}</span>
-                                        {modelOptionsForTarget.length > 0 && !modelIsCustom ? (
-                                            <>
-                                            <select
-                                                value={modelOptionsForTarget.includes(initialModel) ? initialModel : ''}
-                                                onChange={(event) => {
-                                                    if (event.target.value === '__custom__') {
-                                                        setModelIsCustom(true)
-                                                        setModelWithSource('', 'user')
-                                                    } else {
-                                                        setModelWithSource(event.target.value, 'user')
-                                                    }
-                                                }}
-                                                className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2.5 text-sm"
-                                                disabled={busy}
-                                            >
-                                                <option value="">{t('newSession.providerDefault')}</option>
-                                                {modelOptionsForTarget.map((m: string) => <option key={m} value={m}>{m}</option>)}
-                                                <option value="__custom__">{t('newSession.custom')}</option>
-                                            </select>
-                                            {/* Phase E: what "provider default" resolves to — the daemon records
-                                                the same value (discovery models[0], else the manifest's first
-                                                option), which is exactly this list's head. */}
-                                            {!initialModel.trim() && (
-                                                <span className="text-2xs text-text-muted" data-testid="new-session-default-model">
-                                                    {t('newSession.defaultResolvesTo', { model: modelOptionsForTarget[0], defaultValue: 'Default resolves to {{model}}' })}
-                                                </span>
-                                            )}
-                                            </>
-                                        ) : (
-                                            <>
-                                                <input
-                                                    type="text"
-                                                    value={initialModel}
-                                                    onChange={(event) => setModelWithSource(event.target.value, 'user')}
-                                                    placeholder={t('newSession.typeModelName')}
-                                                    className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2.5 text-sm"
-                                                    disabled={busy}
-                                                    autoFocus={modelIsCustom}
-                                                />
-                                                {modelOptionsForTarget.length > 0 && (
-                                                    <button
-                                                        type="button"
-                                                        className="self-start text-2xs text-accent-primary bg-transparent border-none cursor-pointer p-0"
-                                                        onClick={() => { setModelIsCustom(false); setModelWithSource('', 'user') }}
-                                                        disabled={busy}
-                                                    >
-                                                        {t('newSession.backToModelList')}
-                                                    </button>
-                                                )}
-                                            </>
-                                        )}
-                                    </label>
-                                    <label className="flex flex-col gap-1">
-                                        <span className="text-2xs text-text-muted">{t('newSession.thinkingLevel')}</span>
-                                        <select
-                                            value={initialThinkingLevel}
-                                            onChange={(event) => setThinkingWithSource(event.target.value, 'user')}
-                                            className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2.5 text-sm"
-                                            disabled={busy}
-                                        >
-                                            <option value="">{t('newSession.providerDefault')}</option>
-                                            {thinkingLevelOptionsForTarget.map((l: string) => <option key={l} value={l}>{l}</option>)}
-                                        </select>
-                                    </label>
-                                </div>
-                            </LaunchSectionCard>
+                            <NewSessionModelThinkingFields
+                                modelOptions={modelOptionsForTarget}
+                                thinkingOptions={thinkingLevelOptionsForTarget}
+                                model={initialModel}
+                                thinkingLevel={initialThinkingLevel}
+                                modelIsCustom={modelIsCustom}
+                                busy={busy}
+                                onModelIsCustomChange={setModelIsCustom}
+                                onModelChange={(value) => setModelWithSource(value, 'user')}
+                                onThinkingChange={(value) => setThinkingWithSource(value, 'user')}
+                            />
                         )}
 
                                 </div>

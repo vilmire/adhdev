@@ -226,7 +226,7 @@ export function __resetClaimDeferralForTests(): void {
 // (clearing the record) or records a different reason (overwriting it).
 
 /** A session's most recent store-level claim refusal. */
-export interface RecentSessionClaimRefusal {
+interface RecentSessionClaimRefusal {
     reason: MeshClaimRefusalReason;
     /** The deepest refused candidate, when known (diagnostic only — see below). */
     taskId?: string;

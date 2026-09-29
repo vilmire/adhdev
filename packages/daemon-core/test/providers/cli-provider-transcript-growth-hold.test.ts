@@ -51,8 +51,6 @@ function makeInstance(opts: {
     getScriptParsedStatus: () => ({ messages: [] }),
     getPartialResponse: () => '',
     isProcessing: () => false,
-    isWaitingForResponse: false,
-    currentTurnScope: null,
   }
 
   instance.completedDebouncePending = {

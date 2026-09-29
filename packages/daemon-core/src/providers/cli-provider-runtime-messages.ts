@@ -14,11 +14,10 @@
  */
 
 import type { ChatMessage } from '../types.js';
-import { flattenContent } from './contracts.js';
 import { buildChatMessage, buildRuntimeSystemChatMessage } from './chat-message-normalization.js';
 import { ChatHistoryWriter } from '../config/chat-history.js';
 import { workingDirBasename } from './working-dir.js';
-import { mergeConversationMessages } from './cli-provider-transcript-merge.js';
+import { mergeConversationMessages, prepareRuntimeMessage } from './cli-provider-transcript-merge.js';
 import { ParsedIngestTimestampStamper } from './cli-provider-ingest-times.js';
 import type { PtyRuntimeMetadata } from '../cli-adapters/pty-transport.js';
 import type { InputEnvelope } from './contracts.js';
@@ -90,16 +89,8 @@ export function appendRuntimeMessage(
     message: ChatMessage,
     dedupKey: string,
 ): void {
-    const normalizedMessage = buildChatMessage({
-        ...message,
-        receivedAt: typeof message.receivedAt === 'number' ? message.receivedAt : (message.timestamp || Date.now()),
-        timestamp: typeof message.timestamp === 'number' ? message.timestamp : (message.receivedAt || Date.now()),
-    } as ChatMessage);
-    const normalizedContent = typeof normalizedMessage.content === 'string'
-        ? normalizedMessage.content.trim()
-        : flattenContent(normalizedMessage.content).trim();
-    if (!normalizedContent && (!Array.isArray(normalizedMessage.content) || normalizedMessage.content.length === 0)) return;
-    if (host.runtimeMessages.some((entry) => entry.key === dedupKey)) return;
+    const prepared = prepareRuntimeMessage(host.runtimeMessages, message, dedupKey);
+    if (!prepared) return;
 
     // Runtime rows are addressed by their local dedup key (design 2026-09-28
     // §3.1): the identity ledger mints a `d.*` id for the row once, and hands
@@ -107,20 +98,13 @@ export function appendRuntimeMessage(
     const src = runtimeSourceAddress(dedupKey);
     host.runtimeMessages.push({
         key: dedupKey,
-        message: src ? { ...normalizedMessage, _src: src } : normalizedMessage,
+        message: src ? { ...prepared.message, _src: src } : prepared.message,
     });
 
-    if (normalizedContent) {
+    if (prepared.historyRow) {
         host.historyWriter.appendNewMessages(
             host.type,
-            [{
-                role: normalizedMessage.role,
-                senderName: normalizedMessage.senderName,
-                kind: normalizedMessage.kind,
-                content: normalizedContent,
-                receivedAt: normalizedMessage.receivedAt || normalizedMessage.timestamp,
-                historyDedupKey: dedupKey,
-            }],
+            [prepared.historyRow],
             host.adapter.getScriptParsedStatus?.()?.title || workingDirBasename(host.workingDir),
             host.instanceId,
             host.providerSessionId,

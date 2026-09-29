@@ -28,7 +28,8 @@ vi.mock('../../src/config/config.js', () => ({
 }));
 
 import { enqueueTask, getQueue, __resetMeshRuntimeStoreForTests } from '../../src/mesh/mesh-work-queue.js';
-import { createMesh, setDifficultyBrains } from '../../src/config/mesh-config.js';
+import { createMesh } from '../../src/config/mesh-config.js';
+import { setDifficultyBrains } from '../../src/config/mesh-config-routing.js';
 import { resolveNodeCapabilitySlots } from '../../src/mesh/mesh-node-slots.js';
 import {
     decideSlotForModel,

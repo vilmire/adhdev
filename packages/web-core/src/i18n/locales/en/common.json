@@ -3323,7 +3323,6 @@
                 "offline": "Offline",
                 "failed": "Connection failed",
                 "connecting": "Connecting…",
-                "attention": "Online · sync delayed",
                 "online": "Online"
             },
             "slowLink": "Slow link",
@@ -3353,20 +3352,6 @@
             "reconnect": "Reconnect",
             "transportRelay": "Connected through a relay server — slower than a direct link. Usually a firewall or NAT blocks the direct path.",
             "transportDirect": "Direct connection",
-            "beacon": {
-                "lastSyncedBehindPart_other": ", {{count}} records still to receive",
-                "lastSyncedBehindPart_one": ", {{count}} record still to receive",
-                "soleCopyTooltip_other": "{{entries}} records on this machine are not yet backed up on another machine. Keep it online until another machine has synced.",
-                "soleCopyTooltip_one": "{{entries}} record on this machine is not yet backed up on another machine. Keep it online until another machine has synced.",
-                "soleCopyLabel_other": "{{count}} records not backed up",
-                "soleCopyLabel_one": "{{count}} record not backed up",
-                "behindTooltip_other": "This machine hasn't received {{count}} recent records from your other machines yet. It usually catches up on its own.",
-                "behindTooltip_one": "This machine hasn't received {{count}} recent record from your other machines yet. It usually catches up on its own.",
-                "behindLabel": "Sync delayed",
-                "deferredLabel": "Backup unconfirmed",
-                "deferredTooltip": "Couldn't confirm that everything on this machine is backed up: only some of your machines could be compared. This is not an error.",
-                "lastSyncedTooltip": "Last synced {{minutes}} min ago{{behindPart}}."
-            },
             "noAgentsRunning": "No agents running yet",
             "launchCta": "Launch →"
         },

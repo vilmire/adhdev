@@ -119,7 +119,7 @@ describe('native reader _src stamps', () => {
       { type: 'assistant', sessionId, timestamp: 1_800_000_002_000, message: { role: 'assistant', content: 'hello' } },
     ]);
     const { createNativeHistoryDispatcher } = await import('../../../src/providers/native-history/dispatcher.js');
-    const { readProviderChatHistory } = await import('../../../src/config/chat-history.js');
+    const { readProviderChatHistory } = await import('../../../src/config/provider-native-history.js');
     const { normalizeNativeHistoryMessages } = await import('../../../src/commands/chat-commands-read-native-normalize.js');
     const { buildReadChatCommandResult } = await import('../../../src/commands/read-chat-presentation.js');
     const history = readProviderChatHistory('claude-cli', {

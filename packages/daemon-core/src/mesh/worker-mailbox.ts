@@ -51,7 +51,7 @@
 import { randomUUID } from 'crypto';
 
 /** A single undelivered memo. */
-export interface WorkerMailboxMessage {
+interface WorkerMailboxMessage {
     id: string;
     meshId: string;
     taskId: string;
@@ -75,7 +75,7 @@ function mailboxKey(meshId: string, taskId: string): string {
     return `${meshId} ${taskId}`;
 }
 
-export type MailboxDepositResult =
+type MailboxDepositResult =
     | { ok: true; id: string; pending: number }
     | { ok: false; error: 'invalid_input' | 'text_too_long' | 'mailbox_full'; detail: string };
 

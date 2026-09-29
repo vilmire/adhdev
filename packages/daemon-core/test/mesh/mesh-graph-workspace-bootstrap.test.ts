@@ -56,7 +56,7 @@ import {
 } from '../../src/mesh/mesh-graph-workspace-ports.js';
 import { deriveWorkspaceOwnerTag } from '../../src/mesh/mesh-graph-workspace-identity.js';
 import { declareWorkspaceIntents, runWorkspaceSagaTick } from '../../src/mesh/mesh-graph-workspace-saga.js';
-import { graphMaterializationBlockReason } from '../../src/mesh/mesh-graph-transition-runner.js';
+import { graphMaterializationBlockReason } from '../../src/mesh/mesh-graph-block-reasons.js';
 import {
     __clearMeshQueueForTests,
     __resetMeshRuntimeStoreForTests,

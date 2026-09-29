@@ -23,19 +23,9 @@ vi.mock('../../src/quota/fetchers/grok.js', () => ({ fetchGrokQuota }))
 vi.mock('../../src/quota/fetchers/kimi.js', () => ({ fetchKimiQuota }))
 vi.mock('../../src/quota/fetchers/opencode.js', () => ({ fetchOpencodeUsage, OPENCODE_USAGE_DAYS: 7 }))
 
-const {
-    QUOTA_FAILURE_MAX_RETRIES,
-    clearQuotaCache,
-    hydrateQuotaCacheFromDisk,
-    isFailureRetryDue,
-    readQuotaCache,
-    refreshQuotaCacheOnBoot,
-    refreshQuotaCacheOnce,
-    setupQuotaEventRefresh,
-    startQuotaRefreshLoop,
-    __resetQuotaBootRefreshForTests,
-    __resetQuotaHydrationForTests,
-} = await import('../../src/quota/refresh.js')
+const { QUOTA_FAILURE_MAX_RETRIES, clearQuotaCache, hydrateQuotaCacheFromDisk, isFailureRetryDue, readQuotaCache, refreshQuotaCacheOnce, __resetQuotaHydrationForTests } = await import('../../src/quota/refresh.js')
+const { refreshQuotaCacheOnBoot, setupQuotaEventRefresh, __resetQuotaBootRefreshForTests } = await import('../../src/quota/refresh-triggers.js')
+const { startQuotaRefreshLoop } = await import('../../src/quota/refresh-loop.js')
 const {
     QUOTA_RATE_LIMIT_RETRY_DELAY_MS,
     QUOTA_TRANSIENT_RETRY_DELAY_MS,

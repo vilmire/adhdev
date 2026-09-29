@@ -41,10 +41,8 @@ vi.mock('../../src/config/mesh-config.js', () => ({
     listMeshes: meshConfigMocks.listMeshes,
 }));
 
-import {
-    graphMaterializationBlockReason,
-    __resetMeshGraphTransitionRunnerForTests,
-} from '../../src/mesh/mesh-graph-transition-runner.js';
+import { graphMaterializationBlockReason } from '../../src/mesh/mesh-graph-block-reasons.js';
+import { __resetMeshGraphTransitionRunnerForTests } from '../../src/mesh/mesh-graph-outbox.js';
 import {
     declareWorkspaceIntents,
     runWorkspaceSagaTick,

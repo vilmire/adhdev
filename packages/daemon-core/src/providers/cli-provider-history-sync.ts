@@ -24,13 +24,8 @@
 
 import { LOG } from '../logging/logger.js';
 import type { ProviderModule } from './contracts.js';
-import {
-    ChatHistoryWriter,
-    isNativeSourceCanonicalHistory,
-    materializeProviderNativeHistory,
-    readChatHistory,
-    readProviderChatHistory,
-} from '../config/chat-history.js';
+import { ChatHistoryWriter, readChatHistory } from '../config/chat-history.js';
+import { isNativeSourceCanonicalHistory, materializeProviderNativeHistory, readProviderChatHistory } from '../config/provider-native-history.js';
 import { claimAntigravityConversation } from './native-history/antigravity-claim-registry.js';
 import { type PersistableCliHistoryMessage, projectCliChatMessage } from './cli-provider-history-dedup.js';
 import { STATUS_HYDRATION_TAIL_LIMIT } from './cli-provider-instance-types.js';

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { slimRefineEventResult } from '../../src/commands/router-refine.js';
+import { slimRefineEventResult } from '../../src/commands/router-refine-jobs.js';
 
 // FIX #4 — the terminal refine EVENT must carry only the coordinator's decision-relevant
 // fields, not the full per-command / per-entry detail that overflows the token limit. The

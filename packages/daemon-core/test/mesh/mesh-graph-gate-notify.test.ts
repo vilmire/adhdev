@@ -36,12 +36,7 @@ vi.mock('../../src/config/config.js', () => ({
     getMachineNickname: () => ({ machineId: 'test-machine' } as any).machineNickname ?? null,
 }));
 
-import {
-    drainMeshGraphOutbox,
-    registerMeshGraphGateNotifyHandler,
-    __resetMeshGraphTransitionRunnerForTests,
-    type MeshGraphGateNotification,
-} from '../../src/mesh/mesh-graph-transition-runner.js';
+import { drainMeshGraphOutbox, registerMeshGraphGateNotifyHandler, __resetMeshGraphTransitionRunnerForTests, type MeshGraphGateNotification } from '../../src/mesh/mesh-graph-outbox.js';
 import { __resetMeshRuntimeStoreForTests } from '../../src/mesh/mesh-work-queue.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 import { newMeshGraphOutboxId } from '../../src/mesh/mesh-graph-types.js';

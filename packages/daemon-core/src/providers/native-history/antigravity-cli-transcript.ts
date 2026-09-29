@@ -78,6 +78,7 @@ import * as os from 'os';
 export type { NativeHistoryRole, NativeHistoryKind } from './types.js';
 import type { NativeHistoryRole, NativeHistoryKind } from './types.js';
 import { statMtimeMs } from './fs-utils.js';
+import { extractTimestampValue, isUuidLike } from './transcript-common.js';
 import type { NativeHistoryToolBlockRef } from '../spec/native-history-types.js';
 import { type MessageSourceAddress } from '../../chat/message-source-address.js';
 import { parsePbFile } from './antigravity-proto.js';
@@ -151,21 +152,6 @@ export interface NativeHistorySessionMeta {
 }
 
 // ─── Internal helpers ───────────────────────────────────────────────────────
-
-function extractTimestampValue(value: unknown): number {
-  if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value;
-  if (typeof value === 'string') {
-    const numeric = Number(value);
-    if (Number.isFinite(numeric) && numeric > 0) return numeric;
-    const parsed = Date.parse(value);
-    if (Number.isFinite(parsed) && parsed > 0) return parsed;
-  }
-  return 0;
-}
-
-function isUuidLike(value: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
-}
 
 function antigravityRoot(): string {
   return path.join(os.homedir(), '.gemini', 'antigravity-cli');

@@ -42,7 +42,7 @@ export type ResolveSummaryRef = (ref: SummaryRef) => string | null;
 // ─── scalar input (content-free; mirrors a turn_events row / MeshTopicEntry) ─
 
 /** Refusal reasons that reach the coordinator as `dispatch_failed` text. Kept local until turn-ledger/types.ts exports a shared name (C-W2 in flight). */
-export type FormatDispatchFailureReason = 'worker_absent' | 'transport_error' | 'spawn_failed' | 'rejected_by_worker' | 'timeout';
+type FormatDispatchFailureReason = 'worker_absent' | 'transport_error' | 'spawn_failed' | 'rejected_by_worker' | 'timeout';
 
 /** `agent:stopped` / `session_error` sub-reasons the legacy templates branch on. */
 export type FormatStopReason =
@@ -50,19 +50,19 @@ export type FormatStopReason =
     | 'recovery_context' | 'direct_not_redelivered' | 'plain';
 
 /** Worktree bootstrap outcome. */
-export type FormatWorktreeOutcome = 'complete' | 'failed';
+type FormatWorktreeOutcome = 'complete' | 'failed';
 
 /** Refine async job outcome. */
-export type FormatRefineOutcome = 'accepted' | 'completed' | 'failed';
+type FormatRefineOutcome = 'accepted' | 'completed' | 'failed';
 
 /** One AskUserQuestion option (label/description only — no free-form injection beyond what the legacy builder already embeds inline). */
-export interface FormatChoiceOption {
+interface FormatChoiceOption {
     label: string;
     description?: string;
 }
 
 /** One AskUserQuestion question block. */
-export interface FormatChoiceQuestion {
+interface FormatChoiceQuestion {
     header?: string;
     question: string;
     multiSelect?: boolean;
@@ -73,7 +73,7 @@ export interface FormatChoiceQuestion {
  * Per-node failure row for a batch `refine:failed` notice
  * (`mesh-events-utils.ts:568-580`, "BATCH-PER-NODE").
  */
-export interface FormatRefineNodeFailure {
+interface FormatRefineNodeFailure {
     nodeId?: string;
     convergence?: string;
     code?: string;
@@ -87,7 +87,7 @@ export interface FormatRefineNodeFailure {
  * `lastTaskMessage`, which is content and travels as `refs.prompt` instead of
  * inline text — see `RenderTurnNotifyInput.refs.prompt`.
  */
-export interface FormatRecoveryContext {
+interface FormatRecoveryContext {
     consecutiveNodeFailures: number;
     taskAttemptCount: number;
     advice: string;
@@ -224,7 +224,7 @@ export interface RenderTurnNotifyInput {
     statusLine?: string | null;
 }
 
-export interface RenderTurnNotifyResult {
+interface RenderTurnNotifyResult {
     text: string;
     kind: NotifyKind;
     /** Refs the renderer needed but `resolveRef` returned `null` for — the caller decides whether to defer delivery (≤ `quietWindowMs`) or ship the pointer line. */

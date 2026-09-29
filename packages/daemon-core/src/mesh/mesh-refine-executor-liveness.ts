@@ -44,7 +44,7 @@ import { hostname } from 'node:os';
  * The process that dispatched a refine job, stamped onto the ledger's
  * `task_dispatched` payload.
  */
-export interface RefineExecutorStamp {
+interface RefineExecutorStamp {
     /** os.hostname() — a pid is only meaningful on the machine that minted it. */
     host: string;
     /** process.pid of the daemon that owns the execution. */
@@ -60,7 +60,7 @@ export interface RefineExecutorStamp {
     stampedAt?: string;
 }
 
-export type RefineExecutorLiveness =
+type RefineExecutorLiveness =
     /** The stamping process still exists on this host — do NOT resume. */
     | 'alive'
     /** The stamping process is gone — resuming is safe. */
@@ -90,7 +90,7 @@ export function currentRefineExecutorBootId(): string {
     return BOOT_ID;
 }
 
-export interface RefineExecutorLivenessOptions {
+interface RefineExecutorLivenessOptions {
     /** os.hostname() of the machine evaluating the stamp. Defaults to this host. */
     localHost?: string;
     /** This process's boot id. Defaults to this process's. */

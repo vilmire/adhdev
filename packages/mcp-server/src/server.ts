@@ -84,7 +84,7 @@ import type { WorkerTool } from '@adhdev/mesh-shared';
  */
 const MCP_SERVER_VERSION = '0.0.0-vendored';
 
-export interface AdhdevMcpServerOptions {
+interface AdhdevMcpServerOptions {
   mode: 'local' | 'ipc';
   // local options
   port?: number;

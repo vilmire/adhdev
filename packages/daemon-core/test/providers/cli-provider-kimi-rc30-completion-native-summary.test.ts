@@ -93,8 +93,6 @@ function makeProductionKimiFlush(opts: {
     // PRODUCTION SHAPE (ProviderCliAdapter): no chatMessagesOwnedExternally —
     // that flag exists only on SpecCliAdapter. Everything else is identical.
     currentTurnStartedAt: TURN_START,
-    currentTurnScope: null,
-    isWaitingForResponse: false,
     isProcessing: () => false,
     getPartialResponse: () => '',
     getStatus: () => ({ status: 'idle', lastOutputAt: outAt }),
@@ -105,7 +103,6 @@ function makeProductionKimiFlush(opts: {
         ? { backgroundTaskActive: true, backgroundTaskCount: 1, backgroundTaskIds: ['bash-ykh2h2g6'] }
         : {}),
     }),
-    getScreenText: () => '',
   }
 
   let readCount = 0

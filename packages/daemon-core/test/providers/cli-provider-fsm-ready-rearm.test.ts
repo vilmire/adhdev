@@ -46,7 +46,6 @@ function makeInstance(): { instance: any; events: any[]; setFrame: (frame: { sta
         getStatus: () => ({ ...frame }),
         getPartialResponse: () => '',
         getScriptParsedStatus: () => ({ status: frame.status, messages: [] }),
-        get isWaitingForResponse() { return false; },
         chatMessagesOwnedExternally: true,
     };
 

@@ -174,7 +174,7 @@ describe('chat-history config helpers', () => {
 
   it('invalidates persisted session aggregates when the raw history file is newer than the index', async () => {
     const filePath = writeHistorySession('hermes-cli', '20260417_030305_theta', 2)
-    const { listSavedHistorySessions } = await import('../../src/config/chat-history.js')
+    const { listSavedHistorySessions } = await import('../../src/config/saved-history-index.js')
 
     const first = listSavedHistorySessions('hermes-cli')
     expect(first.sessions[0]).toMatchObject({ historySessionId: '20260417_030305_theta', messageCount: 2 })
@@ -192,7 +192,7 @@ describe('chat-history config helpers', () => {
 
     vi.resetModules()
     const reloaded = await import('../../src/config/chat-history.js')
-    const second = reloaded.listSavedHistorySessions('hermes-cli')
+    const second = (await import('../../src/config/saved-history-index.js')).listSavedHistorySessions('hermes-cli')
     expect(second.sessions[0]).toMatchObject({
       historySessionId: '20260417_030305_theta',
       messageCount: 3,
@@ -201,7 +201,8 @@ describe('chat-history config helpers', () => {
   })
 
   it('drops the persisted index after compaction rewrites history files', async () => {
-    const { ChatHistoryWriter, listSavedHistorySessions } = await import('../../src/config/chat-history.js')
+    const { ChatHistoryWriter } = await import('../../src/config/chat-history.js')
+    const { listSavedHistorySessions } = await import('../../src/config/saved-history-index.js')
     const writer = new ChatHistoryWriter()
     writer.writeSessionStart('hermes-cli', '20260417_030306_lambda', '/workspaces/lambda')
     writer.appendNewMessages(
@@ -224,7 +225,8 @@ describe('chat-history config helpers', () => {
 
   it('uses provider-owned native history scripts without daemon format adapters', async () => {
     const historySessionId = 'provider-owned-session'
-    const { listProviderHistorySessions, materializeProviderNativeHistory, readChatHistory, readProviderChatHistory } = await import('../../src/config/chat-history.js')
+    const { readChatHistory } = await import('../../src/config/chat-history.js')
+    const { listProviderHistorySessions, materializeProviderNativeHistory, readProviderChatHistory } = await import('../../src/config/provider-native-history.js')
     const canonicalHistory = {
       format: 'opaque-provider-native-format',
       mode: 'native-source' as const,
@@ -289,7 +291,7 @@ describe('chat-history config helpers', () => {
   })
 
   it('allows provider-native history reads to resolve by workspace before a session id is known', async () => {
-    const { readProviderChatHistory } = await import('../../src/config/chat-history.js')
+    const { readProviderChatHistory } = await import('../../src/config/provider-native-history.js')
     const canonicalHistory = {
       format: 'opaque-provider-native-format',
       mode: 'native-source' as const,
@@ -354,7 +356,7 @@ describe('chat-history config helpers', () => {
   })
 
   it('exposes a rollup threshold helper for oversized saved-history sessions', async () => {
-    const { shouldScheduleSavedHistoryRollup } = await import('../../src/config/chat-history.js')
+    const { shouldScheduleSavedHistoryRollup } = await import('../../src/config/saved-history-index.js')
     expect(shouldScheduleSavedHistoryRollup(1024)).toBe(false)
     expect(shouldScheduleSavedHistoryRollup(20 * 1024 * 1024)).toBe(true)
   })
@@ -418,7 +420,7 @@ describe('chat-history config helpers', () => {
     fs.chmodSync(filePath, 0o000)
     try {
       const reloaded = await import('../../src/config/chat-history.js')
-      const listed = reloaded.listSavedHistorySessions('hermes-cli')
+      const listed = (await import('../../src/config/saved-history-index.js')).listSavedHistorySessions('hermes-cli')
       expect(listed.sessions[0]).toMatchObject({
         historySessionId: '20260417_040404_delta',
         messageCount: 2,
@@ -432,7 +434,7 @@ describe('chat-history config helpers', () => {
 
   it('persists a saved-history index and reuses it across module reloads', async () => {
     const filePath = writeHistorySession('hermes-cli', '20260417_030303_gamma', 2)
-    const { listSavedHistorySessions } = await import('../../src/config/chat-history.js')
+    const { listSavedHistorySessions } = await import('../../src/config/saved-history-index.js')
 
     const first = listSavedHistorySessions('hermes-cli')
     expect(first.sessions[0]).toMatchObject({ historySessionId: '20260417_030303_gamma', messageCount: 2 })
@@ -442,7 +444,7 @@ describe('chat-history config helpers', () => {
     fs.chmodSync(filePath, 0o000)
     try {
       const reloaded = await import('../../src/config/chat-history.js')
-      const second = reloaded.listSavedHistorySessions('hermes-cli')
+      const second = (await import('../../src/config/saved-history-index.js')).listSavedHistorySessions('hermes-cli')
       expect(second.sessions[0]).toMatchObject({ historySessionId: '20260417_030303_gamma', messageCount: 2 })
     } finally {
       fs.chmodSync(filePath, 0o600)
@@ -451,7 +453,7 @@ describe('chat-history config helpers', () => {
 
   it('reuses cached saved-session summaries until a history file changes', async () => {
     const filePath = writeHistorySession('hermes-cli', '20260417_010101_alpha', 2)
-    const { listSavedHistorySessions } = await import('../../src/config/chat-history.js')
+    const { listSavedHistorySessions } = await import('../../src/config/saved-history-index.js')
 
     const first = listSavedHistorySessions('hermes-cli')
     expect(first.sessions[0]).toMatchObject({ historySessionId: '20260417_010101_alpha', messageCount: 2 })
@@ -478,7 +480,7 @@ describe('chat-history config helpers', () => {
   it('reuses unchanged file summaries when another saved-history file changes', async () => {
     const firstFilePath = writeHistorySession('hermes-cli', '20260417_101010_alpha', 2)
     const secondFilePath = writeHistorySession('hermes-cli', '20260417_202020_beta', 1)
-    const { listSavedHistorySessions } = await import('../../src/config/chat-history.js')
+    const { listSavedHistorySessions } = await import('../../src/config/saved-history-index.js')
 
     const first = listSavedHistorySessions('hermes-cli')
     expect(first.sessions.map(session => session.historySessionId).sort()).toEqual([
@@ -685,7 +687,7 @@ describe('chat-history config helpers', () => {
   it('lists all non-empty saved-history sessions regardless of provider-specific ID format', async () => {
     writeHistorySession('hermes-cli', '20260417_101010_alpha', 1)
     writeHistorySession('hermes-cli', 'vi', 3)
-    const { listSavedHistorySessions } = await import('../../src/config/chat-history.js')
+    const { listSavedHistorySessions } = await import('../../src/config/saved-history-index.js')
 
     const listed = listSavedHistorySessions('hermes-cli')
     // Session ID format validation is the responsibility of the provider's sessionIdPattern,

@@ -28,7 +28,7 @@ import type { LiveTurnPending, TurnEvidenceOf } from '@adhdev/mesh-shared';
 import type { HoldReason } from './types.js';
 import { holdTtlMs, type TurnPolicy } from './policy.js';
 
-export type AdmissionDeclineReason =
+type AdmissionDeclineReason =
     | 'active_modal'
     | 'session_not_idle'
     | 'native_marker_absent'
