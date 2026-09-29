@@ -240,7 +240,7 @@ export function getPlatformVersionCommand(versionCommand?: ProviderModule['versi
   return undefined;
 }
 
-export function getSyntheticSettings(type: string, provider: ProviderModule): Record<string, ProviderSettingDef> {
+export function getSyntheticSettings(provider: ProviderModule): Record<string, ProviderSettingDef> {
   const result: Record<string, ProviderSettingDef> = {};
 
   if (provider.category === 'cli' || provider.category === 'acp') {
@@ -343,4 +343,27 @@ export function compareVersions(a: string, b: string): number {
     if (va !== vb) return va - vb;
   }
   return 0;
+}
+
+/** Shell interpreters a manifest may use as a launch wrapper around the real CLI. */
+const SHELL_WRAPPER_COMMANDS = new Set(['bash', 'sh', 'zsh', 'dash', 'cmd', 'cmd.exe', 'powershell', 'powershell.exe', 'pwsh', 'pwsh.exe']);
+
+/** True when `path` (a command or absolute path) names a shell interpreter. */
+export function isShellWrapperCommand(path: string | null | undefined): boolean {
+  if (!path) return false;
+  const base = path.trim().split(/[\\/]/).pop()?.toLowerCase() ?? '';
+  return SHELL_WRAPPER_COMMANDS.has(base);
+}
+
+/**
+ * The command install detection and model discovery should resolve for a CLI
+ * provider: the manifest's `binary` when `spawn.command` is only a shell wrapper
+ * around it, otherwise undefined (detect the spawn command as before). A
+ * machine-level executable override always wins upstream of this.
+ */
+export function resolveWrappedCliBinary(spawnCommand: string | undefined, binary: unknown): string | undefined {
+  if (typeof binary !== 'string' || !binary.trim() || !spawnCommand) return undefined;
+  if (!isShellWrapperCommand(spawnCommand)) return undefined;
+  if (binary.trim() === spawnCommand.trim()) return undefined;
+  return binary.trim();
 }

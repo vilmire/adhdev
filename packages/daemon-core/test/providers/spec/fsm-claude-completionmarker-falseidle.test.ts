@@ -21,7 +21,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { evaluateFsm, stableRegionKey, type FsmClock } from '../../../src/providers/spec/fsm-evaluator.js';
-import { filterIgnoredLines } from '../../../src/providers/spec/fsm-driver.js';
+import { filterIgnoredLines } from '../../../src/providers/spec/fsm-driver-frame.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '../../../../../..');

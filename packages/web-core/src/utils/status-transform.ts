@@ -28,6 +28,37 @@ export interface StatusTransformOptions {
     timestamp?: number
 }
 
+// Optional session-summary fields copied only when the merged entry defines them.
+const LAST_MESSAGE_KEYS = ['lastMessagePreview', 'lastMessageRole', 'lastMessageAt', 'lastMessageHash'] as const
+const CONTROL_KEYS = ['controlValues', 'providerControls', 'summaryMetadata', 'settings', 'messageInput'] as const
+const RUNTIME_KEYS = [
+    'runtimeKey',
+    'runtimeDisplayName',
+    'runtimeWorkspaceLabel',
+    'runtimeWriteOwner',
+    'runtimeAttachedClients',
+] as const
+
+function pickDefined<T extends object, K extends keyof T>(source: T, keys: readonly K[]): Partial<Pick<T, K>> {
+    const out: Partial<Pick<T, K>> = {}
+    for (const key of keys) {
+        if (source[key] !== undefined) out[key] = source[key]
+    }
+    return out
+}
+
+/**
+ * Mesh delegated sessions a coordinator synthesises into its own snapshot carry
+ * the true owning node's attribution so the dashboard shows the worker machine.
+ */
+function ownerAttribution(session: object): { ownerDaemonId?: string; ownerMachineName?: string } {
+    const { ownerDaemonId, ownerMachineName } = session as { ownerDaemonId?: string; ownerMachineName?: string }
+    return {
+        ...(ownerDaemonId && { ownerDaemonId }),
+        ...(ownerMachineName && { ownerMachineName }),
+    }
+}
+
 function buildExistingSessionMap(entries: DaemonData[] | undefined, daemonId: string) {
     const sessions = new Map<string, ExistingSessionLike>()
     for (const entry of entries || []) {
@@ -217,10 +248,7 @@ export function statusPayloadToEntries(
             ...(mergedSession.activeInteractivePrompt !== undefined && { activeInteractivePrompt: mergedSession.activeInteractivePrompt }),
             chats: [],
             cdpConnected: mergedSession.cdpConnected,
-            ...(mergedSession.lastMessagePreview !== undefined && { lastMessagePreview: mergedSession.lastMessagePreview }),
-            ...(mergedSession.lastMessageRole !== undefined && { lastMessageRole: mergedSession.lastMessageRole }),
-            ...(mergedSession.lastMessageAt !== undefined && { lastMessageAt: mergedSession.lastMessageAt }),
-            ...(mergedSession.lastMessageHash !== undefined && { lastMessageHash: mergedSession.lastMessageHash }),
+            ...pickDefined(mergedSession, LAST_MESSAGE_KEYS),
             lastUpdated: mergedSession.lastUpdated,
             unread: mergedSession.unread,
             lastSeenAt: mergedSession.lastSeenAt,
@@ -229,11 +257,7 @@ export function statusPayloadToEntries(
             seenCompletionMarker: mergedSession.seenCompletionMarker,
             surfaceHidden: mergedSession.surfaceHidden,
             muted: mergedSession.muted,
-            ...(mergedSession.controlValues !== undefined && { controlValues: mergedSession.controlValues }),
-            ...(mergedSession.providerControls !== undefined && { providerControls: mergedSession.providerControls }),
-            ...(mergedSession.summaryMetadata !== undefined && { summaryMetadata: mergedSession.summaryMetadata }),
-            ...(mergedSession.settings !== undefined && { settings: mergedSession.settings }),
-            ...(mergedSession.messageInput !== undefined && { messageInput: mergedSession.messageInput }),
+            ...pickDefined(mergedSession, CONTROL_KEYS),
             timestamp: ts,
         } as DaemonData)
     }
@@ -258,22 +282,12 @@ export function statusPayloadToEntries(
             cliName: mergedSession.providerName || mergedSession.providerType,
             mode: mergedSession.mode || existingEntry?.mode || 'terminal',
             workspace: mergedSession.workspace || '',
-            // Mesh delegated sessions a coordinator synthesises into its own snapshot carry
-            // the true owning node's attribution so the dashboard shows the worker machine.
-            ...((session as { ownerDaemonId?: string }).ownerDaemonId && { ownerDaemonId: (session as { ownerDaemonId?: string }).ownerDaemonId }),
-            ...((session as { ownerMachineName?: string }).ownerMachineName && { ownerMachineName: (session as { ownerMachineName?: string }).ownerMachineName }),
+            ...ownerAttribution(session),
             activeChat: mergedSession.activeChat,
             ...(mergedSession.activeInteractivePrompt !== undefined && { activeInteractivePrompt: mergedSession.activeInteractivePrompt }),
             ...(mergedSession.resume !== undefined && { resume: mergedSession.resume }),
-            ...(mergedSession.runtimeKey !== undefined && { runtimeKey: mergedSession.runtimeKey }),
-            ...(mergedSession.runtimeDisplayName !== undefined && { runtimeDisplayName: mergedSession.runtimeDisplayName }),
-            ...(mergedSession.runtimeWorkspaceLabel !== undefined && { runtimeWorkspaceLabel: mergedSession.runtimeWorkspaceLabel }),
-            ...(mergedSession.runtimeWriteOwner !== undefined && { runtimeWriteOwner: mergedSession.runtimeWriteOwner }),
-            ...(mergedSession.runtimeAttachedClients !== undefined && { runtimeAttachedClients: mergedSession.runtimeAttachedClients }),
-            ...(mergedSession.lastMessagePreview !== undefined && { lastMessagePreview: mergedSession.lastMessagePreview }),
-            ...(mergedSession.lastMessageRole !== undefined && { lastMessageRole: mergedSession.lastMessageRole }),
-            ...(mergedSession.lastMessageAt !== undefined && { lastMessageAt: mergedSession.lastMessageAt }),
-            ...(mergedSession.lastMessageHash !== undefined && { lastMessageHash: mergedSession.lastMessageHash }),
+            ...pickDefined(mergedSession, RUNTIME_KEYS),
+            ...pickDefined(mergedSession, LAST_MESSAGE_KEYS),
             lastUpdated: mergedSession.lastUpdated,
             unread: mergedSession.unread,
             lastSeenAt: mergedSession.lastSeenAt,
@@ -282,11 +296,7 @@ export function statusPayloadToEntries(
             seenCompletionMarker: mergedSession.seenCompletionMarker,
             surfaceHidden: mergedSession.surfaceHidden,
             muted: mergedSession.muted,
-            ...(mergedSession.controlValues !== undefined && { controlValues: mergedSession.controlValues }),
-            ...(mergedSession.providerControls !== undefined && { providerControls: mergedSession.providerControls }),
-            ...(mergedSession.summaryMetadata !== undefined && { summaryMetadata: mergedSession.summaryMetadata }),
-            ...(mergedSession.settings !== undefined && { settings: mergedSession.settings }),
-            ...(mergedSession.messageInput !== undefined && { messageInput: mergedSession.messageInput }),
+            ...pickDefined(mergedSession, CONTROL_KEYS),
             timestamp: ts,
             _isCli: true,
         } as DaemonData)
@@ -312,20 +322,11 @@ export function statusPayloadToEntries(
             cliName: mergedSession.providerName || mergedSession.providerType,
             mode: 'chat',
             workspace: mergedSession.workspace || '',
-            // See CLI block: carry mesh delegated-session owner attribution.
-            ...((session as { ownerDaemonId?: string }).ownerDaemonId && { ownerDaemonId: (session as { ownerDaemonId?: string }).ownerDaemonId }),
-            ...((session as { ownerMachineName?: string }).ownerMachineName && { ownerMachineName: (session as { ownerMachineName?: string }).ownerMachineName }),
+            ...ownerAttribution(session),
             activeChat: mergedSession.activeChat,
             ...(mergedSession.activeInteractivePrompt !== undefined && { activeInteractivePrompt: mergedSession.activeInteractivePrompt }),
-            ...(mergedSession.runtimeKey !== undefined && { runtimeKey: mergedSession.runtimeKey }),
-            ...(mergedSession.runtimeDisplayName !== undefined && { runtimeDisplayName: mergedSession.runtimeDisplayName }),
-            ...(mergedSession.runtimeWorkspaceLabel !== undefined && { runtimeWorkspaceLabel: mergedSession.runtimeWorkspaceLabel }),
-            ...(mergedSession.runtimeWriteOwner !== undefined && { runtimeWriteOwner: mergedSession.runtimeWriteOwner }),
-            ...(mergedSession.runtimeAttachedClients !== undefined && { runtimeAttachedClients: mergedSession.runtimeAttachedClients }),
-            ...(mergedSession.lastMessagePreview !== undefined && { lastMessagePreview: mergedSession.lastMessagePreview }),
-            ...(mergedSession.lastMessageRole !== undefined && { lastMessageRole: mergedSession.lastMessageRole }),
-            ...(mergedSession.lastMessageAt !== undefined && { lastMessageAt: mergedSession.lastMessageAt }),
-            ...(mergedSession.lastMessageHash !== undefined && { lastMessageHash: mergedSession.lastMessageHash }),
+            ...pickDefined(mergedSession, RUNTIME_KEYS),
+            ...pickDefined(mergedSession, LAST_MESSAGE_KEYS),
             lastUpdated: mergedSession.lastUpdated,
             unread: mergedSession.unread,
             lastSeenAt: mergedSession.lastSeenAt,
@@ -334,11 +335,7 @@ export function statusPayloadToEntries(
             seenCompletionMarker: mergedSession.seenCompletionMarker,
             surfaceHidden: mergedSession.surfaceHidden,
             muted: mergedSession.muted,
-            ...(mergedSession.controlValues !== undefined && { controlValues: mergedSession.controlValues }),
-            ...(mergedSession.providerControls !== undefined && { providerControls: mergedSession.providerControls }),
-            ...(mergedSession.summaryMetadata !== undefined && { summaryMetadata: mergedSession.summaryMetadata }),
-            ...(mergedSession.settings !== undefined && { settings: mergedSession.settings }),
-            ...(mergedSession.messageInput !== undefined && { messageInput: mergedSession.messageInput }),
+            ...pickDefined(mergedSession, CONTROL_KEYS),
             timestamp: ts,
             _isAcp: true,
         } as DaemonData)

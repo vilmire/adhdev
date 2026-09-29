@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { applyAutoApproveModeLaunchArgs } from '../../src/commands/cli-manager.js'
+import { applyAutoApproveModeLaunchArgs } from '../../src/commands/cli-session-binding.js'
 import { CliProviderInstance } from '../../src/providers/cli-provider-instance.js'
 import type { ProviderModule } from '../../src/providers/contracts.js'
 import { withMinimalSpec } from '../helpers/minimal-spec.js';

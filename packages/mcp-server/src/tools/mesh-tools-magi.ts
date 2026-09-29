@@ -13,68 +13,28 @@
 // ./mesh-tools-internal.ts; mesh-tools.ts is the barrel.
 
 import {
-    annotateQueueStaleness,
-    buildMeshNodeCapabilityTags,
-    commandForNode,
-    compactChatPayload,
-    findOptionalNodeWithRefresh,
-    isIdleSessionRecord,
-    readSessionRecordId,
-    isWeakCompletionEvidence,
-    isMeshNodeHealthLaunchable,
-    resolveEffectiveMeshNodeHealth,
     getMagiKindPanel,
     listMagiKindPanels,
     setMagiKindPanel,
     normalizeMagiSlots,
     collectIgnoredMagiSlotFields,
-    MAGI_RAW_ANSWER_CAP,
-    meshNodeIdMatches,
-    nodeSatisfiesRequiredTags,
-    normalizeMeshCapabilityTags,
     randomUUID,
-    readProviderPriority,
     readString,
     refreshMeshFromDaemon,
-    resolveCoordinatorNode,
-    resolveSemanticReplicaTransport,
     triggerMeshQueueAndReport,
-    unwrapCommandPayload,
     readQueueFromDaemon,
 } from './mesh-tools-internal.js';
 // C-W9a: MAGI's records (fan-out, synthesis) and replica queue rows are the daemon's — over IPC.
 // C-W9c: MAGI's mission reads/writes (upsert-on-start, close-on-collect) are the daemon's too —
 // the same `mission_upsert`/`mission_query` mesh-tools-mission.ts's write path already uses.
-import { ledgerQuery, missionQuery, missionUpsert, queueEnqueue, recordLocal } from '../ipc/turn-commands.js';
+import { missionUpsert, queueEnqueue, recordLocal } from '../ipc/turn-commands.js';
 import type { MeshWorkQueueEntry } from '@adhdev/daemon-core';
-import { readTranscriptReplicaForSemanticConsumer } from './mesh-transcript-semantic-read.js';
-import { ensureMeshNodeRoutes } from './mesh-node-routes.js';
-import { readNodeRuntime } from './mesh-held-node-state.js';
-import { resolveMagiSessionCleanupMode, type RepoMeshMagiSessionCleanupMode } from '@adhdev/daemon-core';
 import type {
-    LocalMeshEntry,
-    LocalMeshNodeEntry,
-    MagiAgentResponse,
-    MagiClaim,
-    MagiClaimCluster,
-    MagiClusterMember,
-    MagiGitSkew,
     MagiMode,
     MagiTaskKind,
     MagiSlot,
-    MagiReplicaGitRef,
-    MagiResponseSource,
-    MagiSynthesis,
-    MagiSynthesizedResponse,
     MeshContext,
 } from './mesh-tools-internal.js';
-
-// ─── Guards / constants ─────────────────────────
-
-/** Hard cap on total replicas (members × n) per mesh_magi_review invocation. */
-export const MAGI_MAX_REPLICAS = 12;
-/** Minimum distinct (node, provider) targets a panel must resolve to. */
-const MAGI_MIN_TARGETS = 2;
 /**
  * Default wall-clock budget for wait=true replica collection.
  *
@@ -101,7 +61,6 @@ export const MAGI_DEFAULT_WAIT_MS = 480_000;
  * blocking the coordinator at all.
  */
 export const MAGI_MAX_WAIT_MS = 1_200_000;
-const MAGI_POLL_INTERVAL_MS = 5_000;
 
 /**
  * Pure clamp applied to a caller-supplied wait_timeout_ms (mesh_magi_review /
@@ -139,17 +98,22 @@ export type { MagiTaskKind } from './mesh-tools-internal.js';
 // entry). Public symbols are re-exported so the mesh-tools.ts barrel and existing
 // importers/tests are unaffected; the handlers below import what they consume.
 import {
-    collectMagiCandidateTexts,
     DEFAULT_TASK_KIND,
-    magiReadIndicatesApprovalWedge,
     normalizeMagiTaskKind,
-    parseFirstMagiCandidateForKind,
-    parseFirstMagiCandidateWithCompactFallback,
-    parseMagiResponse,
     synthesizeMagiResponses,
     VALID_TASK_KINDS,
-    type MagiKindParseResult,
 } from './mesh-tools-magi-core.js';
+import { MAGI_MAX_REPLICAS, MAGI_MIN_TARGETS, buildMagiFanoutPlan, resolveMagiReferenceCommit, resolveMagiReferenceSubmoduleKey } from './mesh-magi-fanout.js';
+import { findMagiReplicaTasks, resolveMagiAutoCleanupMode, cleanupMagiAutoLaunchedSessions, persistMagiDispatched, recoverMagiDispatchSettings, stripRawAnswers, persistMagiSynthesis, closeMagiMissionIfTerminal } from './mesh-magi-lifecycle.js';
+import { collectMagiResponses } from './mesh-magi-collect.js';
+import type { MagiFanoutPlan } from './mesh-magi-fanout.js';
+import type { RepoMeshMagiSessionCleanupMode } from '@adhdev/daemon-core';
+import { magiOutputContractFor } from './mesh-tools-magi-core.js';
+import { MAGI_POLL_INTERVAL_MS } from './mesh-magi-collect.js';
+export { magiOutputContractFor } from './mesh-tools-magi-core.js';
+export { findMagiReplicaTasks, computeMagiCleanupTargets, resolveMagiAutoCleanupMode, cleanupMagiAutoLaunchedSessions, sessionSharedWithAnotherReplica, classifyStaleReplicas } from './mesh-magi-lifecycle.js';
+export { MAGI_MAX_REPLICAS, buildMagiFanoutPlan } from './mesh-magi-fanout.js';
+export type { MagiReplicaPlan, MagiUnavailableSlot, MagiUnhealthySlot, MagiSlotResolution, MagiFanoutPlan } from './mesh-magi-fanout.js';
 export {
     normalizeMagiTaskKind,
     parseMagiResponse,
@@ -168,453 +132,6 @@ export type {
     MagiFreeformResponse,
     MagiKindParseResult,
 } from './mesh-tools-magi-core.js';
-
-export interface MagiReplicaPlan {
-    slotIndex: number;
-    provider: string;
-    /** Resolved concrete node id (pinned slot), else undefined (tag-routed). */
-    targetNodeId?: string;
-    capabilityTags: string[];
-    /** Tags the enqueued task hard-filters on: ['provider=<p>', ...capabilityTags]. */
-    requiredTags: string[];
-    /** MAGI-KIND-PANEL model axis: model override forwarded to the replica's launch (initialModel). */
-    model?: string;
-}
-
-export interface MagiUnavailableSlot {
-    slotIndex: number;
-    provider: string;
-    nodeId?: string;
-    capabilityTags: string[];
-    reason: string;
-}
-
-/** A slot excluded because every candidate node's health is not launch-ready. */
-export interface MagiUnhealthySlot {
-    slotIndex: number;
-    provider: string;
-    nodeId?: string;
-    capabilityTags: string[];
-    /** The resolved health that made the slot unhealthy (e.g. 'degraded', 'offline'). */
-    health: string;
-    reason: string;
-}
-
-/** Per-slot resolution detail (for the git-stale exclusion + the review response surface). */
-export interface MagiSlotResolution {
-    slotIndex: number;
-    provider: string;
-    nodeId?: string;
-    capabilityTags: string[];
-    /** Resolves to ≥1 live node (pinned present, or a tag match). */
-    available: boolean;
-    /** Representative resolved node HEAD commit (best-effort; absent when unknown). */
-    headCommit?: string;
-    /** True when available AND every candidate node's known HEAD differs from referenceCommit. */
-    gitStale: boolean;
-    /** True when available but NO candidate node's health is launch-ready (degraded/offline). */
-    unhealthy: boolean;
-    /** The resolved health of the (representative) candidate node — surfaced for diagnosis. */
-    health?: string;
-    /** Excluded from the fan-out (unavailable, unhealthy, or git-stale and not include_stale). */
-    excluded: boolean;
-    reason?: string;
-}
-
-export interface MagiFanoutPlan {
-    replicas: MagiReplicaPlan[];
-    totalRequested: number;
-    totalAfterCap: number;
-    droppedReplicas: number;
-    distinctTargets: number;
-    distinctProviders: number;
-    distinctNodeTargets: number;
-    enoughTargets: boolean;
-    coupled: boolean;
-    unavailableSlots: MagiUnavailableSlot[];
-    /** Slots excluded because every candidate node's health is not launch-ready
-     *  (degraded / offline). Without this gate the replica would be assigned to a node
-     *  isLaunchableNode refuses, so it parks in `pending` forever — the infinite-wait defect. */
-    unhealthySlots: MagiUnhealthySlot[];
-    /** The commit the panel is being resolved against (coordinator HEAD); undefined when unknown. */
-    referenceCommit?: string;
-    /** Per-slot resolution detail, aligned to the kind-panel slot order. */
-    slotResolutions: MagiSlotResolution[];
-    /** Slots excluded because they are git-stale (different HEAD) and include_stale was not set. */
-    staleSlots: MagiSlotResolution[];
-    /** Git-stale slots that were nonetheless INCLUDED because include_stale=true (warning surface). */
-    includedStaleSlots: MagiSlotResolution[];
-}
-
-function replicaCountFor(slot: MagiSlot, defaultN: number | undefined, globalN?: number): number {
-    const n = slot.n ?? defaultN ?? globalN ?? 1;
-    return Math.max(1, Math.floor(n));
-}
-
-/** Best-effort HEAD commit sha off a live node's git status (GitRepoStatus.headCommit). */
-function nodeHeadCommit(node: any): string | undefined {
-    const h = node?.git?.headCommit;
-    return typeof h === 'string' && h.trim() ? h.trim() : undefined;
-}
-
-/**
- * Canonical, order-independent key of a node's submodule gitlinks
- * (GitSubmoduleStatus[] on node.git.submodules — path + commit). Two nodes on the
- * same root HEAD but different submodule pointers (the oss/adhdev-providers case,
- * where the submodule carries the actual fix code) must NOT be treated as the same
- * base. Returns undefined when the node carries NO submodule telemetry at all
- * (missing / non-array / empty) — so the caller only compares submodule keys when
- * BOTH sides advertise submodules, and a node without submodule telemetry is never
- * silently excluded (mirrors the missing-HEAD "can't prove → fresh" rule). An empty
- * array is telemetry-absent (no submodules reported), NOT "a repo with zero
- * submodules", so it too yields undefined and falls back to root-HEAD-only compare.
- */
-function nodeSubmoduleKey(node: any): string | undefined {
-    const subs = node?.git?.submodules;
-    if (!Array.isArray(subs) || subs.length === 0) return undefined;
-    const parts = subs
-        .map((s: any) => {
-            const path = typeof s?.path === 'string' ? s.path.trim() : '';
-            const commit = typeof s?.commit === 'string' ? s.commit.trim() : '';
-            return path && commit ? `${path}@${commit}` : undefined;
-        })
-        .filter((p: string | undefined): p is string => !!p)
-        .sort((a: string, b: string) => a.localeCompare(b));
-    return parts.length > 0 ? parts.join(',') : undefined;
-}
-
-/**
- * Whether a candidate node shares the same base as the coordinator reference.
- * Root HEAD must match. Submodule gitlinks are additionally compared ONLY when the
- * reference AND the candidate both carry submodule telemetry — if either side lacks
- * it, we fall back to root-HEAD-only (the pre-fingerprint behavior), so telemetry
- * absence never causes a silent exclusion. A candidate with no known HEAD can't be
- * proven stale and is treated as fresh by the caller (this helper is only consulted
- * once the candidate HEAD is known to match the reference HEAD).
- */
-function candidateMatchesReferenceBase(
-    candidateHead: string,
-    candidateSubKey: string | undefined,
-    referenceCommit: string,
-    referenceSubKey: string | undefined,
-): boolean {
-    if (candidateHead !== referenceCommit) return false;
-    // Only diff submodule gitlinks when BOTH sides advertise them.
-    if (referenceSubKey !== undefined && candidateSubKey !== undefined) {
-        return candidateSubKey === referenceSubKey;
-    }
-    return true;
-}
-
-/**
- * Fix B fallback: a node's drift from its OWN upstream (GitCompactSummary.behind/ahead).
- * Used only when no coordinator reference commit is known — a node that reports it is
- * behind/ahead of its upstream is provably on different code than the panel baseline even
- * though we cannot diff explicit HEADs. Returns {behind:0,ahead:0} when the node carries no
- * drift telemetry, so a node with no counters is never proven stale (mirrors the
- * missing-HEAD "can't prove → fresh" rule).
- */
-function nodeGitDrift(node: any): { behind: number; ahead: number } {
-    const git = node?.git;
-    const behind = git && typeof git.behind === 'number' && Number.isFinite(git.behind) ? Math.max(0, git.behind) : 0;
-    const ahead = git && typeof git.ahead === 'number' && Number.isFinite(git.ahead) ? Math.max(0, git.ahead) : 0;
-    return { behind, ahead };
-}
-function nodeHasGitDrift(node: any): boolean {
-    const { behind, ahead } = nodeGitDrift(node);
-    return behind > 0 || ahead > 0;
-}
-
-/**
- * Resolve a kind-panel's slots against the live mesh nodes into a concrete fan-out
- * plan: expand each available slot to its replica count, clamp the total to the guard
- * cap (drop logged, never silent), assess (node, provider) target diversity, and
- * flag a panel that collapses to a single provider/machine. Pure.
- */
-export function buildMagiFanoutPlan(
-    slots: MagiSlot[],
-    nodes: LocalMeshNodeEntry[],
-    opts: { n?: number; defaultN?: number; maxReplicas?: number; referenceCommit?: string; referenceSubmoduleKey?: string; includeStale?: boolean } = {},
-): MagiFanoutPlan {
-    const cap = Math.max(1, Math.floor(opts.maxReplicas ?? MAGI_MAX_REPLICAS));
-    const slotList = Array.isArray(slots) ? slots : [];
-    const defaultN = opts.defaultN;
-    const referenceCommit = typeof opts.referenceCommit === 'string' && opts.referenceCommit.trim() ? opts.referenceCommit.trim() : undefined;
-    const referenceSubmoduleKey = typeof opts.referenceSubmoduleKey === 'string' && opts.referenceSubmoduleKey.trim() ? opts.referenceSubmoduleKey.trim() : undefined;
-    const includeStale = opts.includeStale === true;
-    const replicas: MagiReplicaPlan[] = [];
-    const unavailableSlots: MagiUnavailableSlot[] = [];
-    const unhealthySlots: MagiUnhealthySlot[] = [];
-    const slotResolutions: MagiSlotResolution[] = [];
-    const targetKeys = new Set<string>();
-    const providerSet = new Set<string>();
-    const nodeTargetSet = new Set<string>();
-    let totalRequested = 0;
-
-    slotList.forEach((slot, slotIndex) => {
-        const provider = slot.provider;
-        const model = typeof slot.model === 'string' && slot.model.trim() ? slot.model.trim() : undefined;
-        const capabilityTags = normalizeMeshCapabilityTags(slot.capabilityTags);
-        const requiredTags = normalizeMeshCapabilityTags([`provider=${provider}`, ...capabilityTags]);
-        const count = replicaCountFor(slot, defaultN, opts.n);
-
-        // Resolve availability against the mesh, and gather the candidate node(s) so we
-        // can assess git staleness against the reference commit.
-        let targetNodeId: string | undefined;
-        let candidateNodes: any[] = [];
-        if (slot.nodeId) {
-            const node = nodes.find(n => meshNodeIdMatches(n as any, slot.nodeId!));
-            if (node) { targetNodeId = (node as any).id; candidateNodes = [node]; }
-        } else {
-            // Match against each node's OWN advertised tags (provider derived from its
-            // policy.providerPriority), NOT a provider we inject — passing `provider`
-            // here would synthesize a provider= tag and make the filter always pass.
-            // Mirrors the queue's availability check (mesh-tools-queue.ts).
-            candidateNodes = nodes.filter(n => nodeSatisfiesRequiredTags(requiredTags, buildMeshNodeCapabilityTags(n)));
-        }
-        const available = candidateNodes.length > 0;
-
-        if (!available) {
-            unavailableSlots.push({
-                slotIndex,
-                provider,
-                nodeId: slot.nodeId,
-                capabilityTags,
-                reason: slot.nodeId
-                    ? `pinned node '${slot.nodeId}' is not a member of this mesh`
-                    : `no mesh node satisfies required tags [${requiredTags.join(', ')}]`,
-            });
-            slotResolutions.push({ slotIndex, provider, nodeId: slot.nodeId, capabilityTags, available: false, gitStale: false, unhealthy: false, excluded: true, reason: 'unavailable' });
-            return;
-        }
-
-        // Health gate (PRIMARY FIX). A slot is available by capability tags, but a node
-        // whose P2P/git health is not launch-ready (degraded / offline) is refused by the
-        // daemon's auto-launch gate (isLaunchableNode → node_health_not_launchable): the replica
-        // task would be assigned yet never launch, parking in `pending` forever with no
-        // re-assignment or cancellation — the MAGI infinite-wait defect. So exclude such a
-        // slot UP FRONT, exactly as the git-stale gate does. Prefer routing to a launch-ready
-        // candidate when the pool is mixed; only exclude when EVERY candidate is unhealthy.
-        // 'unknown'/'online' (and absent health) pass — we never exclude on missing telemetry
-        // (mirrors the missing-HEAD "can't prove → fresh" rule), so a mesh whose nodes carry
-        // no health telemetry behaves exactly as before this gate.
-        const launchableCandidates = candidateNodes.filter(n => isMeshNodeHealthLaunchable(n));
-        if (launchableCandidates.length === 0) {
-            const health = resolveEffectiveMeshNodeHealth(candidateNodes[0]);
-            unhealthySlots.push({
-                slotIndex,
-                provider,
-                nodeId: targetNodeId ?? slot.nodeId,
-                capabilityTags,
-                health,
-                reason: slot.nodeId
-                    ? `pinned node '${slot.nodeId}' health is '${health}' (not launch-ready)`
-                    : `no launch-ready node satisfies required tags [${requiredTags.join(', ')}] — all candidates are '${health}'`,
-            });
-            slotResolutions.push({
-                slotIndex, provider, nodeId: targetNodeId ?? slot.nodeId, capabilityTags,
-                available: true, gitStale: false, unhealthy: true, health, excluded: true,
-                reason: `node_unhealthy: ${health}`,
-            });
-            return;
-        }
-        // Narrow the candidate pool to launch-ready nodes for all downstream resolution
-        // (git-staleness, target pinning) so a mixed pool routes to a healthy node.
-        if (slot.nodeId && launchableCandidates[0]) targetNodeId = (launchableCandidates[0] as any).id;
-        candidateNodes = launchableCandidates;
-
-        // Git staleness vs the reference commit. A slot is git-stale only when a
-        // reference commit is known AND every candidate node with a known HEAD differs
-        // from it (a node with no known HEAD can't be proven stale → treated as fresh,
-        // so we never silently exclude on missing telemetry). Prefer routing to a fresh
-        // candidate when one exists.
-        let headCommit: string | undefined;
-        let gitStale = false;
-        if (referenceCommit) {
-            const freshCandidate = candidateNodes.find(n => {
-                const h = nodeHeadCommit(n);
-                // No known HEAD → can't be proven stale → fresh (never exclude on missing
-                // telemetry). Otherwise same-base iff root HEAD matches AND — when both the
-                // reference and this candidate advertise submodules — the submodule gitlinks
-                // match too. Two nodes on the same root HEAD but different oss/adhdev-providers
-                // pointer are NOT the same base.
-                if (!h) return true;
-                return candidateMatchesReferenceBase(h, nodeSubmoduleKey(n), referenceCommit, referenceSubmoduleKey);
-            });
-            if (freshCandidate) {
-                headCommit = nodeHeadCommit(freshCandidate);
-                if (slot.nodeId) targetNodeId = (freshCandidate as any).id;
-                gitStale = false;
-            } else {
-                headCommit = nodeHeadCommit(candidateNodes[0]);
-                gitStale = true;
-            }
-        } else {
-            // Fix B (stale-gate fallback): the coordinator carries no git HEAD telemetry, so
-            // there is no reference commit to diff against. Previously this passed EVERY
-            // candidate as fresh (gitStale stays false), so a node sitting behind/ahead of its
-            // own upstream silently joined the panel on different code. When drift counters ARE
-            // present, use them: prefer a candidate with zero drift; if none is clean but some
-            // candidate reports drift, mark the slot git-stale (default-excluded like the
-            // HEAD-diff path). A candidate with no drift telemetry at all is still treated as
-            // fresh — we never exclude on missing data.
-            const freshCandidate = candidateNodes.find(n => !nodeHasGitDrift(n));
-            if (freshCandidate && candidateNodes.some(nodeHasGitDrift)) {
-                // Mixed pool: route to the clean candidate, leave the slot fresh.
-                headCommit = nodeHeadCommit(freshCandidate);
-                if (slot.nodeId) targetNodeId = (freshCandidate as any).id;
-                gitStale = false;
-            } else if (!freshCandidate && candidateNodes.some(nodeHasGitDrift)) {
-                // Every candidate reports drift → provably stale relative to its upstream.
-                headCommit = nodeHeadCommit(candidateNodes[0]);
-                gitStale = true;
-            } else {
-                // No drift telemetry on any candidate → cannot prove staleness; treat as fresh.
-                headCommit = nodeHeadCommit(candidateNodes.find(n => nodeHeadCommit(n)) ?? candidateNodes[0]);
-            }
-        }
-
-        const resolution: MagiSlotResolution = {
-            slotIndex,
-            provider,
-            nodeId: targetNodeId ?? slot.nodeId,
-            capabilityTags,
-            available: true,
-            ...(headCommit ? { headCommit } : {}),
-            gitStale,
-            // Candidate pool was already narrowed to launch-ready nodes above, so an
-            // included slot is health-launchable by construction.
-            unhealthy: false,
-            health: resolveEffectiveMeshNodeHealth(candidateNodes[0]),
-            excluded: false,
-        };
-
-        // Default-exclude a git-stale slot (it would investigate different code than
-        // the reference); include_stale=true overrides but the caller surfaces a warning.
-        if (gitStale && !includeStale) {
-            resolution.excluded = true;
-            if (referenceCommit) {
-                // Same root HEAD but a differing submodule gitlink is the extended-fingerprint
-                // case — name the submodule drift so the surface is not misleading.
-                resolution.reason = headCommit && headCommit === referenceCommit
-                    ? `git-stale: node HEAD ${headCommit} matches reference but submodule gitlink(s) differ from reference base`
-                    : `git-stale: node HEAD ${headCommit ?? '(unknown)'} differs from reference ${referenceCommit}`;
-            } else {
-                resolution.reason = `git-stale: node reports drift from its upstream (behind/ahead) and no coordinator reference commit is known`;
-            }
-            slotResolutions.push(resolution);
-            return;
-        }
-
-        totalRequested += count;
-        const targetKey = targetNodeId ? `node:${targetNodeId}` : `tags:${[...requiredTags].sort().join(',')}`;
-        targetKeys.add(`${targetKey}|${provider}`);
-        providerSet.add(provider);
-        nodeTargetSet.add(targetKey);
-        slotResolutions.push(resolution);
-        for (let i = 0; i < count; i++) {
-            replicas.push({ slotIndex, provider, targetNodeId, capabilityTags, requiredTags, ...(model ? { model } : {}) });
-        }
-    });
-
-    // Clamp to the guard cap (drop the tail; the caller logs the drop).
-    const droppedReplicas = Math.max(0, replicas.length - cap);
-    const capped = droppedReplicas > 0 ? replicas.slice(0, cap) : replicas;
-
-    const distinctProviders = providerSet.size;
-    const distinctNodeTargets = nodeTargetSet.size;
-    // enoughTargets / coupled are computed over INCLUDED targets only — i.e. AFTER the
-    // health gate AND the git-stale exclusion (unhealthy/stale slots never add to
-    // targetKeys) — so the ≥2-independent-target guard re-checks post-exclusion and never
-    // silently degrades to N=1.
-    const staleSlots = slotResolutions.filter(m => m.gitStale && m.excluded);
-    const includedStaleSlots = slotResolutions.filter(m => m.gitStale && !m.excluded);
-    return {
-        replicas: capped,
-        totalRequested,
-        totalAfterCap: capped.length,
-        droppedReplicas,
-        distinctTargets: targetKeys.size,
-        distinctProviders,
-        distinctNodeTargets,
-        enoughTargets: targetKeys.size >= MAGI_MIN_TARGETS,
-        coupled: distinctProviders < 2 || distinctNodeTargets < 2,
-        unavailableSlots,
-        unhealthySlots,
-        ...(referenceCommit ? { referenceCommit } : {}),
-        slotResolutions,
-        staleSlots,
-        includedStaleSlots,
-    };
-}
-
-/**
- * The commit the panel is resolved against for git-staleness: the coordinator node's
- * HEAD (the code the investigation question originates from). Members on a different
- * HEAD would investigate different code and are excluded by default. Undefined when the
- * coordinator node carries no git HEAD telemetry → staleness is simply not computed.
- */
-function resolveMagiReferenceCommit(ctx: MeshContext): string | undefined {
-    const node = resolveCoordinatorNode(ctx);
-    return nodeHeadCommit(node);
-}
-
-/**
- * The coordinator node's submodule-gitlink key, paired with the reference commit above
- * to form the base fingerprint (root HEAD + sorted submodule gitlinks). Undefined when
- * the coordinator carries no submodule telemetry → submodule drift is simply not diffed
- * (root-HEAD-only comparison, the pre-fingerprint behavior).
- */
-function resolveMagiReferenceSubmoduleKey(ctx: MeshContext): string | undefined {
-    const node = resolveCoordinatorNode(ctx);
-    return nodeSubmoduleKey(node);
-}
-
-// ─── Task prompt (common-schema contract) ───────
-
-const MAGI_CLAIM_AUDIT_CONTRACT = `When done, respond with ONLY a single JSON object (no prose, no code fence) matching this exact schema:
-{
-  "claims": [ { "claim": "string", "stance": "support | oppose | uncertain", "evidence": ["file:line or external source"], "confidence": 0.0 } ],
-  "top_findings": ["string"],
-  "open_questions": ["string"]
-}
-Each claim MUST carry concrete evidence (file:line or a cited source) — unevidenced claims are flagged for re-verification. "stance" is your stance toward the claim being true. Do not invent agreement; report uncertainty honestly.`;
-
-const MAGI_RCA_CONTRACT = `When done, respond with ONLY a single JSON object (no prose, no code fence) matching this exact schema:
-{
-  "rootCause": "string — the single underlying root cause",
-  "failsAt": "file:line — the precise location the failure manifests",
-  "mechanism": "string — how the root cause produces the observed symptom",
-  "evidence": ["file:line or external source"],
-  "fixDirection": "string — the direction a fix should take (do NOT write the fix)",
-  "confidence": 0.0
-}
-"rootCause" and "mechanism" are REQUIRED. "evidence" MUST be non-empty (concrete file:line or cited source) — an empty evidence array is rejected and re-requested. Report uncertainty honestly.`;
-
-const MAGI_DESIGN_CONTRACT = `When done, respond with ONLY a single JSON object (no prose, no code fence) matching this exact schema:
-{
-  "recommendation": "string — the recommended approach",
-  "rationale": "string — why this approach",
-  "alternatives": ["string — approaches considered and not chosen"],
-  "tradeoffs": ["string"],
-  "risks": ["string"],
-  "evidence": ["file:line or external source backing the recommendation"],
-  "confidence": 0.0
-}
-"recommendation" and "rationale" are REQUIRED. "evidence" MUST be non-empty — an empty evidence array is rejected and re-requested. Report uncertainty honestly.`;
-
-const MAGI_FREEFORM_CONTRACT = `Answer the question in natural language. No JSON schema is required for this task — write your analysis directly. (Note: a freeform answer is cross-verified only weakly, because it is unstructured.)`;
-
-/** The single output contract injected for a kind — ONE schema, never two (B: no schema-on-schema conflict). */
-export function magiOutputContractFor(kind: MagiTaskKind): string {
-    switch (kind) {
-        case 'rca': return MAGI_RCA_CONTRACT;
-        case 'design': return MAGI_DESIGN_CONTRACT;
-        case 'freeform': return MAGI_FREEFORM_CONTRACT;
-        case 'claim_audit':
-        default: return MAGI_CLAIM_AUDIT_CONTRACT;
-    }
-}
 
 /**
  * Detect that the coordinator accidentally embedded an OUTPUT-FORMAT schema inside the
@@ -663,41 +180,6 @@ export function buildMagiTaskPrompt(args: {
     }
     parts.push(`\n## Output\n${magiOutputContractFor(kind)}`);
     return parts.join('\n');
-}
-
-
-/**
- * Fix A re-wait gate: a `completed` replica is NOT yet trustworthy for collection when its
- * terminal completion evidence is WEAK (the same insufficient/reviewRecommended/missing-
- * final-assistant signal the daemon shares across the live + ledger paths) OR a short-
- * generating suppressed completion (the early mid-turn bubble that the premature-collect bug
- * mistakes for the final answer). We look up the latest terminal ledger entry for the task —
- * the queue task row does not carry evidenceLevel/completionDiagnostic, but the ledger does
- * (see mesh-event-forwarding terminal payload). Best-effort: a missing/unreadable ledger
- * returns false so we never block collection on telemetry we cannot read.
- */
-async function replicaCompletionIsWeak(ctx: MeshContext, taskId: string): Promise<boolean> {
-    try {
-        // C-W9a: the daemon answers `task_completed` from the turn ledger's committed
-        // attempts (a weak commit carries evidenceLevel 'weak') plus any local
-        // completion record — the terminal truth since C, which the retired event
-        // ledger no longer saw.
-        const { entries } = await ledgerQuery(ctx.transport, { meshId: ctx.mesh.id, kind: ['task_completed'], tail: 200 });
-        for (let i = entries.length - 1; i >= 0; i -= 1) {
-            const entry = entries[i] as any;
-            const payload = entry?.payload && typeof entry.payload === 'object' ? entry.payload as Record<string, unknown> : undefined;
-            const entryTaskId = readString(payload?.taskId) || readString(entry?.taskId);
-            if (!entryTaskId || entryTaskId !== taskId) continue;
-            if (isWeakCompletionEvidence(payload)) return true;
-            const diag = payload?.completionDiagnostic;
-            if (diag && typeof diag === 'object' && !Array.isArray(diag)
-                && readString((diag as Record<string, unknown>).reason) === 'short_generating_suppressed') {
-                return true;
-            }
-            return false;
-        }
-    } catch { /* ledger unreadable — do not block collection */ }
-    return false;
 }
 
 // ─── Handlers ───────────────────────────────────
@@ -836,6 +318,273 @@ export async function meshMagiKindPanelList(
 // an unconfigured task_kind is a hard error (magi_kind_not_configured). See the panel
 // resolution block in meshMagiReview.
 
+/** freeform contributes no structured claims, so cross-verification is weak — banner it. */
+const MAGI_FREEFORM_BANNER = 'task_kind=freeform: answers are unstructured natural language; cross-verification is WEAK (no claim clustering / independence scoring). Treat the collected answers as parallel opinions, not a verified consensus.';
+
+/**
+ * Resolve the review panel SOLELY from the user's configured kind→slots binding
+ * (magiKindPanels). There is NO named-panel, inline-members, or preset
+ * auto-synthesis path — an unconfigured kind is a hard error so the user must
+ * explicitly bind (machine + provider + model) slots in mesh settings. Returns the
+ * JSON refusal as a string.
+ */
+function resolveMagiReviewPanel(ctx: MeshContext, explicitTaskKind: string): {
+    taskKind: MagiTaskKind; panelName: string; planSlots: MagiSlot[]; danglingSlots: MagiSlot[];
+} | string {
+    const taskKind = normalizeMagiTaskKind(explicitTaskKind);
+    const panelName = `(kind:${taskKind})`;
+    // Panels are per mesh — resolve against THIS coordinator's mesh so a binding never
+    // leaks in from another mesh on the same machine (whose slots name its own nodes).
+    const slots = getMagiKindPanel(taskKind, ctx.mesh.id);
+    if (!slots || slots.length === 0) {
+        return JSON.stringify({
+            success: false,
+            code: 'magi_kind_not_configured',
+            error: `No panel slots are configured for this task_kind in mesh '${ctx.mesh.id}' settings. Add at least one (machine + provider + model) slot in settings — task_kind '${taskKind}' has no configured kind-panel.`,
+            taskKind,
+            meshId: ctx.mesh.id,
+            configuredKinds: Object.keys(listMagiKindPanels(ctx.mesh.id)),
+            hint: 'Configure this kind in mesh settings (MagiKindPanelEditor), or set it with mesh_magi_kind_panel (action "set"), then retry.',
+        }, null, 2);
+    }
+    // Slots are already normalized at write time (setMagiKindPanel → normalizeMagiSlots),
+    // but re-normalize here so a bad stored slot surfaces a clear error before dispatch.
+    // Deliberately WITHOUT the mesh node list: a slot whose node has since left the mesh
+    // must not hard-fail the whole review — it is skipped below with a reason instead.
+    let planSlots: MagiSlot[];
+    try {
+        planSlots = normalizeMagiSlots(slots);
+    } catch (e: any) {
+        return JSON.stringify({
+            success: false,
+            code: 'invalid_magi_kind_panel',
+            error: `configured kind-panel for '${taskKind}' is invalid: ${e?.message || String(e)}`,
+            taskKind,
+            meshId: ctx.mesh.id,
+            hint: 'Re-save the kind-panel slots in mesh settings — each slot needs a provider; nodeId / model are optional.',
+        }, null, 2);
+    }
+    // Drop slots pinned to a node this mesh no longer has (removed between the write
+    // and now, or carried over from a legacy global binding written by another mesh).
+    // Skipped WITH a reason rather than dispatched — a dangling pin would otherwise
+    // park a replica in 'pending' forever. The ≥2-target floor is enforced AFTER
+    // this exclusion, so the panel still never silently degrades to N=1.
+    const meshNodeIds = new Set(ctx.mesh.nodes.map(n => n.id));
+    const danglingSlots = planSlots.filter(s => s.nodeId && !meshNodeIds.has(s.nodeId));
+    if (danglingSlots.length) {
+        planSlots = planSlots.filter(s => !s.nodeId || meshNodeIds.has(s.nodeId));
+        if (planSlots.length === 0) {
+            return JSON.stringify({
+                success: false,
+                code: 'magi_kind_panel_all_slots_dangling',
+                error: `Every slot in kind-panel '${panelName}' is pinned to a node that is not in mesh '${ctx.mesh.id}' (${danglingSlots.map(s => s.nodeId).join(', ')}).`,
+                taskKind,
+                meshId: ctx.mesh.id,
+                danglingSlots,
+                hint: 'Re-bind this kind to nodes of THIS mesh with mesh_magi_kind_panel action "set" (or in mesh settings). Check mesh_status for the current node list.',
+            }, null, 2);
+        }
+    }
+    return { taskKind, panelName, planSlots, danglingSlots };
+}
+
+/**
+ * The plan resolved to fewer than MAGI_MIN_TARGETS independent targets. Health
+ * exclusion is the PRIMARY cause: a degraded/offline node was excluded up front
+ * (it would have parked in `pending` forever). Surfaced as a distinct code so the
+ * coordinator knows the panel is under-quorum because a node is unhealthy — NOT
+ * because the panel is mis-configured — and never silently degrades to N=1.
+ */
+function buildMagiInsufficientTargetsFailure(plan: MagiFanoutPlan, panelName: string, referenceCommit: string | undefined, danglingSlots: MagiSlot[]): string {
+    const droppedByStale = plan.staleSlots.length > 0;
+    const droppedByHealth = plan.unhealthySlots.length > 0;
+    const code = droppedByHealth
+        ? 'magi_insufficient_targets_after_health_exclusion'
+        : droppedByStale
+            ? 'magi_insufficient_targets_after_stale_exclusion'
+            : 'magi_insufficient_targets';
+    const error = droppedByHealth
+        ? `Kind-panel '${panelName}' resolves to only ${plan.distinctTargets} independent (node, provider) target(s) AFTER excluding ${plan.unhealthySlots.length} unhealthy slot(s) (${plan.unhealthySlots.map(s => `${s.nodeId ?? `[${s.provider}]`}=${s.health}`).join(', ')}); MAGI requires ≥${MAGI_MIN_TARGETS} and never silently degrades to N=1. A degraded node would leave its replica parked in 'pending' forever, so it is excluded rather than dispatched.`
+        : droppedByStale
+            ? `Kind-panel '${panelName}' resolves to only ${plan.distinctTargets} independent (node, provider) target(s) AFTER excluding ${plan.staleSlots.length} git-stale slot(s) (HEAD differs from reference ${referenceCommit ?? '(unknown)'}); MAGI requires ≥${MAGI_MIN_TARGETS} and never silently degrades to N=1.`
+            : `Kind-panel '${panelName}' resolves to ${plan.distinctTargets} available (node, provider) target(s); MAGI requires ≥${MAGI_MIN_TARGETS} and never silently degrades to N=1.`;
+    const hint = droppedByHealth
+        ? 'Bring the degraded node(s) back online (check P2P/git health via mesh_status), or configure additional healthy (machine + provider) slots for this kind-panel, then retry.'
+        : droppedByStale
+            ? 'Bring the stale node(s) to the reference commit, or pass include_stale=true to mesh_magi_review to fan out to them anyway (results will be git-skewed).'
+            : 'Fix the kind-panel slots with mesh_magi_kind_panel action "set" (or in mesh settings), and use mesh_status to confirm nodes/providers are online.';
+    return JSON.stringify({
+        success: false,
+        code,
+        error,
+        ...(referenceCommit ? { referenceCommit } : {}),
+        unavailableSlots: plan.unavailableSlots,
+        ...(droppedByHealth ? { unhealthySlots: plan.unhealthySlots } : {}),
+        ...(droppedByStale ? { staleSlots: plan.staleSlots } : {}),
+        // Surface slots dropped for naming a node outside this mesh, so an
+        // under-quorum panel caused by a stale pin is diagnosable rather than
+        // looking like a mis-sized panel.
+        ...(danglingSlots.length ? { danglingSlots } : {}),
+        hint,
+    }, null, 2);
+}
+
+type MagiReplicaRecord = { taskId: string; provider: string; targetNodeId?: string; requiredTags: string[] };
+
+/**
+ * Enqueue one read-only task per replica, all sharing the consensus group id. A
+ * single replica enqueue failure must not abort the quorum — it is recorded and
+ * the rest continue.
+ */
+async function enqueueMagiReplicas(
+    ctx: MeshContext,
+    plan: MagiFanoutPlan,
+    p: { prompt: string; missionId: string; consensusGroupId: string },
+): Promise<MagiReplicaRecord[]> {
+    const { consensusGroupId } = p;
+    const replicaRecords: MagiReplicaRecord[] = [];
+    for (const replica of plan.replicas) {
+        try {
+            // C-W9a: the replica enqueue runs in the daemon (`queue_enqueue`).
+            const replicaOptions = {
+                readonly: true,
+                taskMode: 'live_debug_readonly',
+                // DIFFICULTY-REQUIRED (MAGI decision): a fixed 'freeform' sentinel, NOT an
+                // exemption from the guard. MAGI routes on a different axis entirely — each
+                // replica is already hard-pinned to a (node, provider) slot by the kind-panel
+                // via requiredTags (`provider=<X>`) and often an explicit targetNodeId, and
+                // its model comes from that slot. Difficulty exists to MATCH a task against
+                // node capability slots at assignment time; here the slot is already chosen,
+                // so any difficulty we stamped would be inert at best and would fight the
+                // panel's own slot selection at worst.
+                //
+                // 'freeform' is the correct sentinel rather than a guard bypass: it is a real
+                // member of the axis meaning "no difficulty-based constraint", so the fan-out
+                // satisfies the required-difficulty invariant honestly instead of carving out
+                // a hole that a future non-MAGI caller could slip through. Deliberately NOT
+                // caller-configurable — exposing a difficulty knob on mesh_magi_review would
+                // imply it influences replica placement, which it does not.
+                difficulty: 'freeform',
+                requiredTags: replica.requiredTags,
+                missionId: p.missionId,
+                consensusGroupId,
+                ...(replica.targetNodeId ? { targetNodeId: replica.targetNodeId } : {}),
+                ...(replica.model ? { model: replica.model } : {}),
+                ...(ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}),
+            };
+            const task = (await queueEnqueue(ctx.transport, { meshId: ctx.mesh.id, message: p.prompt, options: replicaOptions })).entry as unknown as MeshWorkQueueEntry;
+            replicaRecords.push({ taskId: task.id, provider: replica.provider, targetNodeId: replica.targetNodeId, requiredTags: replica.requiredTags });
+        } catch (e: any) {
+            try {
+                await recordLocal(ctx.transport, { meshId: ctx.mesh.id,
+                    kind: 'magi_replica_enqueue_failed' as any,
+                    payload: { consensusGroupId, missionId: p.missionId, provider: replica.provider, error: e?.message || String(e) },
+                });
+            } catch { /* ledger write is best-effort */ }
+        }
+    }
+    return replicaRecords;
+}
+
+/** The dispatch half of a mesh_magi_review response (shared by wait / no-wait). */
+function buildMagiReviewDispatchResult(p: {
+    consensusGroupId: string; missionId: string; panelName: string; taskKind: MagiTaskKind; question: string;
+    questionSchemaWarning: unknown; replicaRecords: MagiReplicaRecord[]; plan: MagiFanoutPlan; queueTrigger: unknown;
+}) {
+    const { plan, replicaRecords } = p;
+    return {
+        success: true,
+        consensusGroupId: p.consensusGroupId,
+        missionId: p.missionId,
+        panel: p.panelName,
+        taskKind: p.taskKind,
+        ...(p.questionSchemaWarning ? { questionSchemaWarning: p.questionSchemaWarning } : {}),
+        question: p.question,
+        replicaCount: replicaRecords.length,
+        replicas: replicaRecords.map(r => ({ taskId: r.taskId, provider: r.provider, targetNodeId: r.targetNodeId })),
+        independence: {
+            distinctProviders: plan.distinctProviders,
+            distinctMachines: plan.distinctNodeTargets,
+            coupled: plan.coupled,
+            ...(plan.coupled ? { banner: 'Panel collapsed to a single provider or machine — agreements will be flagged source-coupled.' } : {}),
+        },
+        ...(plan.referenceCommit ? { referenceCommit: plan.referenceCommit } : {}),
+        // Surface health-gate exclusions even when quorum still held: these replicas were
+        // NEVER dispatched (their node is degraded/offline and would park in `pending`
+        // forever), so the coordinator/collect must know not to wait on them.
+        ...(plan.unhealthySlots.length > 0 ? {
+            excludedSlots: plan.unhealthySlots,
+            healthExcludedWarning: `${plan.unhealthySlots.length} slot(s) were excluded from this fan-out because their node health is not launch-ready (${plan.unhealthySlots.map(s => `${s.nodeId ?? `[${s.provider}]`}=${s.health}`).join(', ')}) — those replicas were NOT dispatched. Bring the node(s) online (mesh_status) to include them.`,
+        } : {}),
+        // Surface git-stale handling: which slots were excluded (default), or included
+        // despite being stale (include_stale=true) — the latter makes results git-skewed.
+        ...(plan.staleSlots.length > 0 ? {
+            gitStaleExcluded: plan.staleSlots,
+            gitStaleWarning: `${plan.staleSlots.length} git-stale slot(s) (HEAD ≠ reference ${plan.referenceCommit ?? '(unknown)'}) were excluded from this fan-out; pass include_stale=true to include them.`,
+        } : {}),
+        ...(plan.includedStaleSlots.length > 0 ? {
+            gitStaleIncluded: plan.includedStaleSlots,
+            gitStaleWarning: `include_stale=true: ${plan.includedStaleSlots.length} git-stale slot(s) (HEAD ≠ reference ${plan.referenceCommit ?? '(unknown)'}) were INCLUDED — their evidence compares different code, so synthesis will be git-skewed.`,
+        } : {}),
+        ...(plan.droppedReplicas > 0 ? {
+            cappedReplicas: plan.droppedReplicas,
+            cappedNote: `Total replicas requested (${plan.totalRequested}) exceeded the guard cap (${MAGI_MAX_REPLICAS}); ${plan.droppedReplicas} dropped (logged, not silent).`,
+        } : {}),
+        costNote: `MAGI dispatched ${replicaRecords.length} read-only sessions — token spend scales with the replica count.`,
+        queueTrigger: p.queueTrigger,
+    };
+}
+
+/**
+ * Collect one consensus group's replicas (bounded), synthesize, persist the
+ * synthesis (retrievable by consensusGroupId; folds into mesh_status), auto-close
+ * the group's inline mission once every replica is terminal (FIX#3 — the replica
+ * tasks' OWN missionId), and run the post-collection auto-cleanup, gated terminal
+ * so a partial snapshot never kills still-generating replicas. Shared by
+ * mesh_magi_review (wait=true) and mesh_magi_collect.
+ */
+async function collectAndSynthesizeMagiGroup(ctx: MeshContext, p: {
+    consensusGroupId: string;
+    missionId: string | undefined;
+    panel?: string;
+    question?: string;
+    replicaTaskIds: string[];
+    timeoutMs: number;
+    taskKind: MagiTaskKind;
+    requireIndependentEvidence: boolean;
+    cleanupMode: RepoMeshMagiSessionCleanupMode;
+    /** The replica tasks the cleanup reads their final session ids from. */
+    replicaTasksForCleanup: () => Promise<any[]>;
+}) {
+    const collected = await collectMagiResponses(ctx, { replicaTaskIds: p.replicaTaskIds, timeoutMs: p.timeoutMs, taskKind: p.taskKind });
+    const synthesis = synthesizeMagiResponses(collected.responses, {
+        replicasExpected: p.replicaTaskIds.length,
+        requireIndependentEvidence: p.requireIndependentEvidence,
+    });
+    // rawAnswer gate: always strip from the persisted ledger entry (bounds payload).
+    const synthesisNoRaw = stripRawAnswers(synthesis);
+    await persistMagiSynthesis(ctx, {
+        consensusGroupId: p.consensusGroupId,
+        missionId: p.missionId,
+        ...(p.panel ? { panel: p.panel } : {}),
+        ...(p.question ? { question: p.question } : {}),
+        staleReplicas: collected.staleCount,
+        synthesis: synthesisNoRaw,
+    });
+    await closeMagiMissionIfTerminal(ctx, p.missionId, collected.terminal);
+    const cleanup = await cleanupMagiAutoLaunchedSessions(ctx, {
+        replicaTasks: await p.replicaTasksForCleanup(),
+        terminal: collected.terminal,
+        mode: p.cleanupMode,
+    });
+    return {
+        collected,
+        synthesis,
+        synthesisNoRaw,
+        sessionCleanup: cleanup ? { sessionCleanup: { mode: p.cleanupMode, cleanedSessionCount: cleanup.cleanedSessionCount, perNode: cleanup.perNode } } : {},
+    };
+}
+
 export async function meshMagiReview(
     ctx: MeshContext,
     args: {
@@ -887,114 +636,21 @@ export async function meshMagiReview(
     // Extend the base fingerprint with the coordinator's submodule gitlinks so two nodes
     // on the SAME root HEAD but a different oss/adhdev-providers pointer are not treated
     // as the same base (that submodule carries the actual fix code). Undefined when the
-    // coordinator has no submodule telemetry → root-HEAD-only comparison (pre-fingerprint).
+    // coordinator has no submodule telemetry → root-HEAD-only comparison.
     const referenceSubmoduleKey = resolveMagiReferenceSubmoduleKey(ctx);
 
-    // 1. Resolve the panel SOLELY from the user's configured kind→slots binding
-    // (magiKindPanels). There is NO named-panel, inline-members, or preset auto-synthesis
-    // path — an unconfigured kind is a hard error so the user must explicitly bind
-    // (machine + provider + model) slots in mesh settings. The final output kind is the
-    // task_kind itself (validated above); there is no panel-level defaultKind to fill in.
-    const taskKind = normalizeMagiTaskKind(explicitTaskKind);
-    const panelName = `(kind:${taskKind})`;
-    // Panels are per mesh — resolve against THIS coordinator's mesh so a binding never
-    // leaks in from another mesh on the same machine (whose slots name its own nodes).
-    const slots = getMagiKindPanel(taskKind, ctx.mesh.id);
-    if (!slots || slots.length === 0) {
-        return JSON.stringify({
-            success: false,
-            code: 'magi_kind_not_configured',
-            error: `No panel slots are configured for this task_kind in mesh '${ctx.mesh.id}' settings. Add at least one (machine + provider + model) slot in settings — task_kind '${taskKind}' has no configured kind-panel.`,
-            taskKind,
-            meshId: ctx.mesh.id,
-            configuredKinds: Object.keys(listMagiKindPanels(ctx.mesh.id)),
-            hint: 'Configure this kind in mesh settings (MagiKindPanelEditor), or set it with mesh_magi_kind_panel (action "set"), then retry.',
-        }, null, 2);
-    }
-    // Slots are already normalized at write time (setMagiKindPanel → normalizeMagiSlots),
-    // but re-normalize here so a bad stored slot surfaces a clear error before dispatch.
-    // Deliberately WITHOUT the mesh node list: a slot whose node has since left the mesh
-    // must not hard-fail the whole review — it is skipped below with a reason instead.
-    let planSlots: MagiSlot[];
-    try {
-        planSlots = normalizeMagiSlots(slots);
-    } catch (e: any) {
-        return JSON.stringify({
-            success: false,
-            code: 'invalid_magi_kind_panel',
-            error: `configured kind-panel for '${taskKind}' is invalid: ${e?.message || String(e)}`,
-            taskKind,
-            meshId: ctx.mesh.id,
-            hint: 'Re-save the kind-panel slots in mesh settings — each slot needs a provider; nodeId / model are optional.',
-        }, null, 2);
-    }
-
-    // Drop slots pinned to a node this mesh no longer has (removed between the write
-    // and now, or carried over from a legacy global binding written by another mesh).
-    // Skipped WITH a reason rather than dispatched — a dangling pin would otherwise
-    // park a replica in 'pending' forever. The ≥2-target floor below is enforced AFTER
-    // this exclusion, so the panel still never silently degrades to N=1.
-    const meshNodeIds = new Set(ctx.mesh.nodes.map(n => n.id));
-    const danglingSlots = planSlots.filter(s => s.nodeId && !meshNodeIds.has(s.nodeId));
-    if (danglingSlots.length) {
-        planSlots = planSlots.filter(s => !s.nodeId || meshNodeIds.has(s.nodeId));
-        if (planSlots.length === 0) {
-            return JSON.stringify({
-                success: false,
-                code: 'magi_kind_panel_all_slots_dangling',
-                error: `Every slot in kind-panel '${panelName}' is pinned to a node that is not in mesh '${ctx.mesh.id}' (${danglingSlots.map(s => s.nodeId).join(', ')}).`,
-                taskKind,
-                meshId: ctx.mesh.id,
-                danglingSlots,
-                hint: 'Re-bind this kind to nodes of THIS mesh with mesh_magi_kind_panel action "set" (or in mesh settings). Check mesh_status for the current node list.',
-            }, null, 2);
-        }
-    }
+    // 1. The panel, from the configured kind→slots binding only.
+    const panel = resolveMagiReviewPanel(ctx, explicitTaskKind);
+    if (typeof panel === 'string') return panel;
+    const { taskKind, panelName, planSlots, danglingSlots } = panel;
 
     // 2. Plan the fan-out. Git-stale slots (node HEAD differs from the coordinator's
     // reference commit) are EXCLUDED by default — they would investigate different code;
-    // include_stale=true keeps them (with a warning). The ≥2-target guard below is
-    // re-checked AFTER this exclusion, so it never silently degrades to N=1.
+    // include_stale=true keeps them (with a warning). The ≥2-target guard is re-checked
+    // AFTER this exclusion, so it never silently degrades to N=1.
     const includeStale = (args.include_stale ?? args.includeStale) === true;
     const plan = buildMagiFanoutPlan(planSlots, ctx.mesh.nodes, { n: args.n, referenceCommit, referenceSubmoduleKey, includeStale });
-    if (!plan.enoughTargets) {
-        const droppedByStale = plan.staleSlots.length > 0;
-        const droppedByHealth = plan.unhealthySlots.length > 0;
-        // Health exclusion is the PRIMARY new failure cause: a degraded/offline node was
-        // excluded up front (it would have parked in `pending` forever). Surface it as a
-        // distinct code so the coordinator knows the panel is under-quorum because a node
-        // is unhealthy — NOT because the panel is mis-configured — and never silently
-        // degrades to N=1.
-        const code = droppedByHealth
-            ? 'magi_insufficient_targets_after_health_exclusion'
-            : droppedByStale
-                ? 'magi_insufficient_targets_after_stale_exclusion'
-                : 'magi_insufficient_targets';
-        const error = droppedByHealth
-            ? `Kind-panel '${panelName}' resolves to only ${plan.distinctTargets} independent (node, provider) target(s) AFTER excluding ${plan.unhealthySlots.length} unhealthy slot(s) (${plan.unhealthySlots.map(s => `${s.nodeId ?? `[${s.provider}]`}=${s.health}`).join(', ')}); MAGI requires ≥${MAGI_MIN_TARGETS} and never silently degrades to N=1. A degraded node would leave its replica parked in 'pending' forever, so it is excluded rather than dispatched.`
-            : droppedByStale
-                ? `Kind-panel '${panelName}' resolves to only ${plan.distinctTargets} independent (node, provider) target(s) AFTER excluding ${plan.staleSlots.length} git-stale slot(s) (HEAD differs from reference ${referenceCommit ?? '(unknown)'}); MAGI requires ≥${MAGI_MIN_TARGETS} and never silently degrades to N=1.`
-                : `Kind-panel '${panelName}' resolves to ${plan.distinctTargets} available (node, provider) target(s); MAGI requires ≥${MAGI_MIN_TARGETS} and never silently degrades to N=1.`;
-        const hint = droppedByHealth
-            ? 'Bring the degraded node(s) back online (check P2P/git health via mesh_status), or configure additional healthy (machine + provider) slots for this kind-panel, then retry.'
-            : droppedByStale
-                ? 'Bring the stale node(s) to the reference commit, or pass include_stale=true to mesh_magi_review to fan out to them anyway (results will be git-skewed).'
-                : 'Fix the kind-panel slots with mesh_magi_kind_panel action "set" (or in mesh settings), and use mesh_status to confirm nodes/providers are online.';
-        return JSON.stringify({
-            success: false,
-            code,
-            error,
-            ...(referenceCommit ? { referenceCommit } : {}),
-            unavailableSlots: plan.unavailableSlots,
-            ...(droppedByHealth ? { unhealthySlots: plan.unhealthySlots } : {}),
-            ...(droppedByStale ? { staleSlots: plan.staleSlots } : {}),
-            // Surface slots dropped for naming a node outside this mesh, so an
-            // under-quorum panel caused by a stale pin is diagnosable rather than
-            // looking like a mis-sized panel.
-            ...(danglingSlots.length ? { danglingSlots } : {}),
-            hint,
-        }, null, 2);
-    }
+    if (!plan.enoughTargets) return buildMagiInsufficientTargetsFailure(plan, panelName, referenceCommit, danglingSlots);
 
     const mode = readString(args.mode) as MagiMode | '';
     const requireIndependentEvidence = (args.require_independent_evidence ?? args.requireIndependentEvidence) !== false;
@@ -1005,8 +661,7 @@ export async function meshMagiReview(
     // 3. Mission container + shared consensus group id.
     const consensusGroupId = `magi_${randomUUID().replace(/-/g, '')}`;
     const titleQ = question.length > 80 ? `${question.slice(0, 77)}...` : question;
-    // C-W9c: was in-process `upsertMeshMission`; now the `mission_upsert` IPC
-    // round trip mesh-tools-mission.ts's write path already uses.
+    // C-W9c: the `mission_upsert` IPC round trip mesh-tools-mission.ts's write path uses.
     const { mission } = await missionUpsert(ctx.transport, {
         meshId: ctx.mesh.id,
         title: `MAGI: ${titleQ}`,
@@ -1018,48 +673,7 @@ export async function meshMagiReview(
 
     // 4. Enqueue one read-only task per replica, all sharing the consensus group id.
     const prompt = buildMagiTaskPrompt({ question, target: args.target, artifacts: args.artifacts, mode: (mode || undefined) as MagiMode | undefined, taskKind });
-    const replicaRecords: Array<{ taskId: string; provider: string; targetNodeId?: string; requiredTags: string[] }> = [];
-    for (const replica of plan.replicas) {
-        try {
-            // C-W9a: the replica enqueue runs in the daemon (`queue_enqueue`).
-            const replicaOptions = {
-                readonly: true,
-                taskMode: 'live_debug_readonly',
-                // DIFFICULTY-REQUIRED (MAGI decision): a fixed 'freeform' sentinel, NOT an
-                // exemption from the guard. MAGI routes on a different axis entirely — each
-                // replica is already hard-pinned to a (node, provider) slot by the kind-panel
-                // via requiredTags (`provider=<X>`) and often an explicit targetNodeId, and
-                // its model comes from that slot. Difficulty exists to MATCH a task against
-                // node capability slots at assignment time; here the slot is already chosen,
-                // so any difficulty we stamped would be inert at best and would fight the
-                // panel's own slot selection at worst.
-                //
-                // 'freeform' is the correct sentinel rather than a guard bypass: it is a real
-                // member of the axis meaning "no difficulty-based constraint", so the fan-out
-                // satisfies the required-difficulty invariant honestly instead of carving out
-                // a hole that a future non-MAGI caller could slip through. Deliberately NOT
-                // caller-configurable — exposing a difficulty knob on mesh_magi_review would
-                // imply it influences replica placement, which it does not.
-                difficulty: 'freeform',
-                requiredTags: replica.requiredTags,
-                missionId: mission.id,
-                consensusGroupId,
-                ...(replica.targetNodeId ? { targetNodeId: replica.targetNodeId } : {}),
-                ...(replica.model ? { model: replica.model } : {}),
-                ...(ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}),
-            };
-            const task = (await queueEnqueue(ctx.transport, { meshId: ctx.mesh.id, message: prompt, options: replicaOptions })).entry as unknown as MeshWorkQueueEntry;
-            replicaRecords.push({ taskId: task.id, provider: replica.provider, targetNodeId: replica.targetNodeId, requiredTags: replica.requiredTags });
-        } catch (e: any) {
-            // A single replica enqueue failure must not abort the quorum — record and continue.
-            try {
-                await recordLocal(ctx.transport, { meshId: ctx.mesh.id,
-                    kind: 'magi_replica_enqueue_failed' as any,
-                    payload: { consensusGroupId, missionId: mission.id, provider: replica.provider, error: e?.message || String(e) },
-                });
-            } catch { /* ledger write is best-effort */ }
-        }
-    }
+    const replicaRecords = await enqueueMagiReplicas(ctx, plan, { prompt, missionId: mission.id, consensusGroupId });
     if (replicaRecords.length < MAGI_MIN_TARGETS) {
         return JSON.stringify({ success: false, code: 'magi_enqueue_failed', error: 'fewer than 2 replicas enqueued successfully', consensusGroupId, missionId: mission.id });
     }
@@ -1082,58 +696,16 @@ export async function meshMagiReview(
     });
 
     // 5. Trigger queue pickup. This is the SOLE dispatch path for every replica,
-    // local AND remote. triggerMeshQueue (on the coordinator's local IPC) drains
-    // each pending replica task — including ones pinned to a remote node — to its
-    // target: a remote idle session is claimed and send_chat'd over P2P, and a
-    // pinned remote target with no idle session is auto-launched, then claims on
-    // ready. A previously-eager P2P push to remote replicas (eagerlyDispatchRemote-
-    // Replicas) was a SECOND, redundant send of the same prompt: the queue path
-    // already delivers the task, so both writes raced and each bypassed the
-    // recent-duplicate-send guard — the cross-machine MAGI double-send. Removed so
-    // every replica is dispatched exactly once via the queue.
+    // local AND remote: triggerMeshQueue (on the coordinator's local IPC) drains each
+    // pending replica task — including ones pinned to a remote node — to its target (a
+    // remote idle session is claimed and send_chat'd over P2P; a pinned remote target
+    // with no idle session is auto-launched, then claims on ready). Every replica is
+    // dispatched exactly once via the queue.
     const queueTrigger = await triggerMeshQueueAndReport(ctx);
 
-    const baseResult = {
-        success: true,
-        consensusGroupId,
-        missionId: mission.id,
-        panel: panelName,
-        taskKind,
-        ...(questionSchemaWarning ? { questionSchemaWarning } : {}),
-        question,
-        replicaCount: replicaRecords.length,
-        replicas: replicaRecords.map(r => ({ taskId: r.taskId, provider: r.provider, targetNodeId: r.targetNodeId })),
-        independence: {
-            distinctProviders: plan.distinctProviders,
-            distinctMachines: plan.distinctNodeTargets,
-            coupled: plan.coupled,
-            ...(plan.coupled ? { banner: 'Panel collapsed to a single provider or machine — agreements will be flagged source-coupled.' } : {}),
-        },
-        ...(plan.referenceCommit ? { referenceCommit: plan.referenceCommit } : {}),
-        // Surface health-gate exclusions even when quorum still held: these replicas were
-        // NEVER dispatched (their node is degraded/offline and would park in `pending`
-        // forever), so the coordinator/collect must know not to wait on them.
-        ...(plan.unhealthySlots.length > 0 ? {
-            excludedSlots: plan.unhealthySlots,
-            healthExcludedWarning: `${plan.unhealthySlots.length} slot(s) were excluded from this fan-out because their node health is not launch-ready (${plan.unhealthySlots.map(s => `${s.nodeId ?? `[${s.provider}]`}=${s.health}`).join(', ')}) — those replicas were NOT dispatched. Bring the node(s) online (mesh_status) to include them.`,
-        } : {}),
-        // Surface git-stale handling: which slots were excluded (default), or included
-        // despite being stale (include_stale=true) — the latter makes results git-skewed.
-        ...(plan.staleSlots.length > 0 ? {
-            gitStaleExcluded: plan.staleSlots,
-            gitStaleWarning: `${plan.staleSlots.length} git-stale slot(s) (HEAD ≠ reference ${plan.referenceCommit ?? '(unknown)'}) were excluded from this fan-out; pass include_stale=true to include them.`,
-        } : {}),
-        ...(plan.includedStaleSlots.length > 0 ? {
-            gitStaleIncluded: plan.includedStaleSlots,
-            gitStaleWarning: `include_stale=true: ${plan.includedStaleSlots.length} git-stale slot(s) (HEAD ≠ reference ${plan.referenceCommit ?? '(unknown)'}) were INCLUDED — their evidence compares different code, so synthesis will be git-skewed.`,
-        } : {}),
-        ...(plan.droppedReplicas > 0 ? {
-            cappedReplicas: plan.droppedReplicas,
-            cappedNote: `Total replicas requested (${plan.totalRequested}) exceeded the guard cap (${MAGI_MAX_REPLICAS}); ${plan.droppedReplicas} dropped (logged, not silent).`,
-        } : {}),
-        costNote: `MAGI dispatched ${replicaRecords.length} read-only sessions — token spend scales with the replica count.`,
-        queueTrigger,
-    };
+    const baseResult = buildMagiReviewDispatchResult({
+        consensusGroupId, missionId: mission.id, panelName, taskKind, question, questionSchemaWarning, replicaRecords, plan, queueTrigger,
+    });
 
     if (!wait) {
         return JSON.stringify({
@@ -1153,52 +725,28 @@ export async function meshMagiReview(
         }, null, 2);
     }
 
-    // 6. Collect by consensus group id (bounded), then synthesize.
-    const collected = await collectMagiResponses(ctx, {
-        replicaTaskIds: replicaRecords.map(r => r.taskId),
-        timeoutMs: waitTimeoutMs,
-        taskKind,
-    });
-    const synthesis = synthesizeMagiResponses(collected.responses, {
-        replicasExpected: replicaRecords.length,
-        requireIndependentEvidence,
-    });
-    // mesh_magi_review has no rawAnswer contract — strip the per-replica raw text from
-    // both the persisted ledger entry and the returned synthesis. rawAnswer is surfaced
-    // only via mesh_magi_collect verbose.
-    const synthesisNoRaw = stripRawAnswers(synthesis);
-    // freeform contributes no structured claims, so cross-verification is weak — banner it.
-    const freeformBanner = taskKind === 'freeform'
-        ? 'task_kind=freeform: answers are unstructured natural language; cross-verification is WEAK (no claim clustering / independence scoring). Treat the collected answers as parallel opinions, not a verified consensus.'
-        : null;
-
-    // deltaE: persist the synthesis (retrievable by consensusGroupId; folds into mesh_status).
-    await persistMagiSynthesis(ctx, {
+    // 6. Collect by consensus group id (bounded), then synthesize. mesh_magi_review has
+    // no rawAnswer contract — only the stripped synthesis is returned (rawAnswer is
+    // surfaced only via mesh_magi_collect verbose). The post-review auto-cleanup
+    // (default ON) re-reads the replica tasks from the live queue so it sees their final
+    // assignedSessionId / autoLaunch.sessionId.
+    const { collected, synthesis, synthesisNoRaw, sessionCleanup } = await collectAndSynthesizeMagiGroup(ctx, {
         consensusGroupId,
         missionId: mission.id,
         panel: panelName,
         question,
-        staleReplicas: collected.staleCount,
-        synthesis: synthesisNoRaw,
-    });
-    // FIX#3: this inline review owns `mission` — auto-close it once all replicas are terminal.
-    await closeMagiMissionIfTerminal(ctx, mission.id, collected.terminal);
-
-    // Post-review auto-cleanup (default ON): stop+delete ONLY the worker sessions this
-    // fan-out auto-launched, gated terminal. Re-read the replica tasks from the live queue
-    // so we see their final assignedSessionId / autoLaunch.sessionId. Best-effort.
-    const cleanupMode = resolveMagiAutoCleanupMode(ctx, autoCleanupArg);
-    const cleanupReplicaTasks = findMagiReplicaTasks(await readQueueFromDaemon(ctx), consensusGroupId);
-    const cleanup = await cleanupMagiAutoLaunchedSessions(ctx, {
-        replicaTasks: cleanupReplicaTasks,
-        terminal: collected.terminal,
-        mode: cleanupMode,
+        replicaTaskIds: replicaRecords.map(r => r.taskId),
+        timeoutMs: waitTimeoutMs,
+        taskKind,
+        requireIndependentEvidence,
+        cleanupMode: resolveMagiAutoCleanupMode(ctx, autoCleanupArg),
+        replicaTasksForCleanup: async () => findMagiReplicaTasks(await readQueueFromDaemon(ctx), consensusGroupId),
     });
 
     return JSON.stringify({
         ...baseResult,
         waited: true,
-        ...(cleanup ? { sessionCleanup: { mode: cleanupMode, cleanedSessionCount: cleanup.cleanedSessionCount, perNode: cleanup.perNode } } : {}),
+        ...sessionCleanup,
         collection: {
             terminal: collected.terminal,
             timedOut: collected.timedOut,
@@ -1209,7 +757,7 @@ export async function meshMagiReview(
             ...(collected.retriedCount > 0 ? { retriedReplicas: collected.retriedCount, retryNote: `${collected.retriedCount} replica(s) failed the ${taskKind} schema and were sent one delta re-request for a corrected single-JSON answer.` } : {}),
             ...(synthesis.replicasMissing > 0 ? { missingNote: `Partial synthesis — ${synthesis.replicasMissing} of ${replicaRecords.length} replicas did not return a parseable response (timed out / failed / unparseable / schema-invalid / stale).` } : {}),
         },
-        ...(freeformBanner ? { freeformBanner } : {}),
+        ...(taskKind === 'freeform' ? { freeformBanner: MAGI_FREEFORM_BANNER } : {}),
         synthesis: synthesisNoRaw,
     }, null, 2);
 }
@@ -1218,9 +766,8 @@ export async function meshMagiReview(
  * Poll-by-group collection (featureC). Re-collect + synthesize a previously
  * dispatched MAGI fan-out by its consensus group id — the async companion to a
  * wait=false mesh_magi_review. Rediscovers the replica tasks from the queue, then
- * reuses the SAME collectMagiResponses + synthesizeMagiResponses code paths as the
- * wait=true review (no duplicated collection/synthesis). Tolerates partial/stale
- * replicas: when wait=false it snapshots whatever is terminal right now.
+ * reuses the SAME collection + synthesis path as the wait=true review. Tolerates
+ * partial/stale replicas: when wait=false it snapshots whatever is terminal right now.
  */
 export async function meshMagiCollect(
     ctx: MeshContext,
@@ -1275,44 +822,24 @@ export async function meshMagiCollect(
     const timeoutMs = wait
         ? resolveMagiWaitTimeoutMs(args.wait_timeout_ms ?? args.waitTimeoutMs)
         : 0;
+    const autoCleanupArg = args.auto_cleanup ?? args.autoCleanup;
 
     const replicaTaskIds = replicaTasks.map((t: any) => readString(t.id)).filter(Boolean) as string[];
-    const collected = await collectMagiResponses(ctx, { replicaTaskIds, timeoutMs, taskKind });
-    const synthesis = synthesizeMagiResponses(collected.responses, {
-        replicasExpected: replicaTaskIds.length,
+    // Panel/question are merged from the earlier magi_dispatched entry by
+    // consensusGroupId, so they need not be re-derived here. The inline mission id is
+    // the replica tasks' OWN missionId (MAGI-owned).
+    const { collected, synthesis, synthesisNoRaw, sessionCleanup } = await collectAndSynthesizeMagiGroup(ctx, {
+        consensusGroupId,
+        missionId: readString(replicaTasks[0]?.missionId),
+        replicaTaskIds,
+        timeoutMs,
+        taskKind,
         requireIndependentEvidence,
+        cleanupMode: resolveMagiAutoCleanupMode(ctx, typeof autoCleanupArg === 'boolean' ? autoCleanupArg : dispatchSettings.autoCleanup),
+        replicaTasksForCleanup: async () => replicaTasks,
     });
-    // rawAnswer gate: always strip from the persisted ledger entry (bounds payload).
     // The RETURNED synthesis carries rawAnswer only when verbose=true; default strips it.
     const verbose = args.verbose === true;
-    const synthesisNoRaw = stripRawAnswers(synthesis);
-    const returnedSynthesis = verbose ? synthesis : synthesisNoRaw;
-    const freeformBanner = taskKind === 'freeform'
-        ? 'task_kind=freeform: answers are unstructured natural language; cross-verification is WEAK (no claim clustering / independence scoring). Treat the collected answers as parallel opinions, not a verified consensus.'
-        : null;
-
-    // deltaE: persist the synthesis (panel/question are merged from the earlier
-    // magi_dispatched entry by consensusGroupId, so they need not be re-derived here).
-    const replicaMissionId = readString(replicaTasks[0]?.missionId);
-    await persistMagiSynthesis(ctx, {
-        consensusGroupId,
-        missionId: replicaMissionId,
-        staleReplicas: collected.staleCount,
-        synthesis: synthesisNoRaw,
-    });
-    // FIX#3: the inline mission id comes from the replica tasks' OWN missionId (MAGI-owned,
-    // guard a) — auto-close it once all replicas are terminal.
-    await closeMagiMissionIfTerminal(ctx, replicaMissionId, collected.terminal);
-
-    // Post-collect auto-cleanup (default ON), gated terminal so a partial snapshot never
-    // kills still-generating replicas. Reuse the rediscovered replicaTasks. Best-effort.
-    const autoCleanupArg = args.auto_cleanup ?? args.autoCleanup;
-    const cleanupMode = resolveMagiAutoCleanupMode(ctx, typeof autoCleanupArg === 'boolean' ? autoCleanupArg : dispatchSettings.autoCleanup);
-    const cleanup = await cleanupMagiAutoLaunchedSessions(ctx, {
-        replicaTasks,
-        terminal: collected.terminal,
-        mode: cleanupMode,
-    });
 
     return JSON.stringify({
         success: true,
@@ -1320,7 +847,7 @@ export async function meshMagiCollect(
         taskKind,
         replicaCount: replicaTaskIds.length,
         waited: wait,
-        ...(cleanup ? { sessionCleanup: { mode: cleanupMode, cleanedSessionCount: cleanup.cleanedSessionCount, perNode: cleanup.perNode } } : {}),
+        ...sessionCleanup,
         collection: {
             terminal: collected.terminal,
             timedOut: collected.timedOut,
@@ -1331,832 +858,8 @@ export async function meshMagiCollect(
             ...(collected.retriedCount > 0 ? { retriedReplicas: collected.retriedCount, retryNote: `${collected.retriedCount} replica(s) failed the ${taskKind} schema and were sent one delta re-request for a corrected single-JSON answer.` } : {}),
             ...(!collected.terminal ? { pendingNote: 'Not all replicas are terminal yet — this is a partial snapshot. Re-collect once mission/pendingCoordinatorEvents report more completions.' } : {}),
         },
-        ...(freeformBanner ? { freeformBanner } : {}),
+        ...(taskKind === 'freeform' ? { freeformBanner: MAGI_FREEFORM_BANNER } : {}),
         ...(verbose ? { rawAnswersIncluded: true } : {}),
-        synthesis: returnedSynthesis,
+        synthesis: verbose ? synthesis : synthesisNoRaw,
     }, null, 2);
-}
-
-// ─── Collection (best-effort, bounded) ──────────
-
-const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
-
-const MAGI_TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled']);
-
-/**
- * Discover the replica tasks of a MAGI fan-out by their shared consensus group id.
- * Drives poll-by-group collection (mesh_magi_collect): a wait=false review returns
- * the group id, and a later call rediscovers the replicas straight from the queue —
- * no need to thread the original task-id list back through the caller. Pure given a
- * queue snapshot.
- */
-export function findMagiReplicaTasks(queue: any[], consensusGroupId: string): any[] {
-    const groupId = typeof consensusGroupId === 'string' ? consensusGroupId.trim() : '';
-    if (!groupId) return [];
-    return (Array.isArray(queue) ? queue : []).filter((t: any) => readString(t?.consensusGroupId) === groupId);
-}
-
-// ─── Post-review auto-cleanup of MAGI-launched worker sessions ──────────────
-//
-// MAGI fans a question out to N independent (node × provider) replicas. For a pinned
-// target with no idle session the QUEUE auto-launches a fresh worker session, stamping
-// settings.autoLaunchedForQueueTaskId = task.id onto it (mesh-queue-assignment.ts) which
-// the cli-manager mirrors onto the session-host record meta. Those auto-launched workers
-// stay idle-LIVE after their turn, so repeated reviews pile up idle sessions.
-//
-// SAFETY: we compute the cleanup target set ONLY from the replica queue tasks themselves —
-// each replica contributes ITS OWN session ids (autoLaunch.sessionId once the auto-launch
-// completed, and assignedSessionId once it claimed), paired with the replica's task id as the
-// expected autoLaunchedForQueueTaskId marker. We never enumerate arbitrary sessions. The
-// daemon then double-checks the per-session marker (requireAutoLaunchedForTaskIds) before
-// touching anything: a REUSED idle session carries no marker → preserved; the COORDINATOR
-// session carries no marker → preserved; a session whose marker points at a DIFFERENT task
-// (re-assignment skew) → preserved. So only the sessions THIS fan-out actually spawned are
-// stopped+deleted. assignedSessionId is intentionally included even though it can be a reused
-// session — the marker gate filters reused ones out; an auto-launched-then-claimed session
-// has assignedSessionId === autoLaunch.sessionId and IS the one we want gone.
-
-/**
- * Pure: derive the per-node cleanup target set from the replica queue tasks. Returns a map
- * keyed by nodeId → { sessionIds, requireAutoLaunchedForTaskIds }. Session ids are pulled
- * ONLY from each replica task's own autoLaunch.sessionId (when status 'completed') and
- * assignedSessionId — never from an external session listing — and each id is paired with
- * THAT replica's task id as the expected marker (so a re-assignment skew can't smuggle in a
- * sibling's session). A replica with no resolvable node id or no candidate session is skipped.
- */
-export function computeMagiCleanupTargets(replicaTasks: any[]): Map<string, {
-    sessionIds: string[];
-    requireAutoLaunchedForTaskIds: Record<string, string>;
-}> {
-    const byNode = new Map<string, { sessionIds: Set<string>; requireAutoLaunchedForTaskIds: Record<string, string> }>();
-    for (const task of Array.isArray(replicaTasks) ? replicaTasks : []) {
-        const replicaTaskId = readString(task?.id);
-        if (!replicaTaskId) continue;
-        const nodeId = readString(task?.assignedNodeId)
-            || readString(task?.autoLaunch?.nodeId)
-            || readString(task?.targetNodeId);
-        if (!nodeId) continue;
-        const candidateSessionIds: string[] = [];
-        // The session the queue auto-launched for this replica (authoritative auto-launch id).
-        if (readString(task?.autoLaunch?.status) === 'completed') {
-            const al = readString(task?.autoLaunch?.sessionId);
-            if (al) candidateSessionIds.push(al);
-        }
-        // The session that actually claimed/ran it. May equal the auto-launched id (then it's
-        // the same session) or be a reused idle session (filtered out by the marker gate).
-        const assigned = readString(task?.assignedSessionId);
-        if (assigned) candidateSessionIds.push(assigned);
-        if (candidateSessionIds.length === 0) continue;
-        let entry = byNode.get(nodeId);
-        if (!entry) {
-            entry = { sessionIds: new Set<string>(), requireAutoLaunchedForTaskIds: {} };
-            byNode.set(nodeId, entry);
-        }
-        for (const sid of candidateSessionIds) {
-            entry.sessionIds.add(sid);
-            // Pair each session id with THIS replica's task id. If two replicas somehow named
-            // the same session id (shared-session collision), the marker on the live record can
-            // only equal one task id, so at most one replica legitimately owns it; recording the
-            // first is fine because the daemon re-verifies the marker == expectedTaskId per id.
-            if (!(sid in entry.requireAutoLaunchedForTaskIds)) {
-                entry.requireAutoLaunchedForTaskIds[sid] = replicaTaskId;
-            }
-        }
-    }
-    const out = new Map<string, { sessionIds: string[]; requireAutoLaunchedForTaskIds: Record<string, string> }>();
-    for (const [nodeId, entry] of byNode) {
-        out.set(nodeId, {
-            sessionIds: Array.from(entry.sessionIds),
-            requireAutoLaunchedForTaskIds: entry.requireAutoLaunchedForTaskIds,
-        });
-    }
-    return out;
-}
-
-/**
- * Resolve whether MAGI post-review auto-cleanup is enabled for this call. Per-call
- * auto_cleanup override (boolean) beats the mesh policy (magiSessionCleanup), which
- * defaults ON ('stop_and_delete'). Returns the effective mode.
- */
-export function resolveMagiAutoCleanupMode(
-    ctx: MeshContext,
-    perCallOverride: boolean | undefined,
-): RepoMeshMagiSessionCleanupMode {
-    if (perCallOverride === true) return 'stop_and_delete';
-    if (perCallOverride === false) return 'preserve';
-    return resolveMagiSessionCleanupMode((ctx.mesh as any)?.policy?.magiSessionCleanup);
-}
-
-/**
- * Best-effort post-review cleanup. Stops+deletes ONLY the worker sessions THIS MAGI fan-out
- * auto-launched (marker-verified daemon-side). Only runs when `terminal` is true — a partial
- * collect must NOT kill replicas that are still generating. Never throws: cleanup failure
- * never blocks returning the synthesis. Returns a small summary (or null when skipped/disabled).
- */
-export async function cleanupMagiAutoLaunchedSessions(
-    ctx: MeshContext,
-    args: { replicaTasks: any[]; terminal: boolean; mode: RepoMeshMagiSessionCleanupMode },
-): Promise<{ cleanedSessionCount: number; perNode: Array<Record<string, unknown>> } | null> {
-    if (args.mode === 'preserve') return null;
-    if (!args.terminal) return null; // never cleanup a partial collection — replicas may still be live
-    const targets = computeMagiCleanupTargets(args.replicaTasks);
-    if (targets.size === 0) return null;
-
-    let cleanedSessionCount = 0;
-    const perNode: Array<Record<string, unknown>> = [];
-    // OFFLINE-NODE-BLOCKING: run the per-node cleanup fan-out concurrently with per-node
-    // error isolation (Promise.allSettled) so one offline replica node no longer serializes
-    // the rest. cleanup_mesh_sessions is a MUTATION (not a pure read), but it is idempotent
-    // and safe to skip for an unreachable node — an offline replica has no live sessions we
-    // could reach anyway. Stamp it with the status-origin marker ({ statusProbe: true }): the
-    // marker is used ONLY to grant the daemon-cloud relay's SHORT connect-wait budget (so an
-    // offline node fails fast in ~2s instead of the 90s connect deadline) and is stripped
-    // before the command executes, so the server-side cleanup semantics are unchanged.
-    const cleanupNode = async (
-        nodeId: string,
-        group: { sessionIds: string[]; requireAutoLaunchedForTaskIds?: unknown },
-    ): Promise<{ cleaned: number; entry: Record<string, unknown> }> => {
-        try {
-            const node = await findOptionalNodeWithRefresh(ctx, nodeId);
-            if (!node) {
-                // Node gone from the live mesh — its sessions are unreachable; report, don't fail.
-                return { cleaned: 0, entry: { nodeId, skipped: 'node_not_in_live_mesh', sessionIds: group.sessionIds } };
-            }
-            const result = await commandForNode(ctx, node, 'cleanup_mesh_sessions', {
-                meshId: ctx.mesh.id,
-                nodeId,
-                mode: 'stop_and_delete',
-                sessionIds: group.sessionIds,
-                source: 'magi_session_cleanup',
-                requireAutoLaunchedForTaskIds: group.requireAutoLaunchedForTaskIds,
-                inlineMesh: ctx.mesh,
-            }, { statusProbe: true });
-            const payload = unwrapCommandPayload(result) as any;
-            const deleted = Array.isArray(payload?.deletedSessionIds) ? payload.deletedSessionIds.length : 0;
-            const stopped = Array.isArray(payload?.stoppedSessionIds) ? payload.stoppedSessionIds.length : 0;
-            return {
-                cleaned: deleted + stopped,
-                entry: {
-                    nodeId,
-                    requested: group.sessionIds.length,
-                    deleted,
-                    ...(stopped ? { stopped } : {}),
-                    ...(Array.isArray(payload?.skippedMarkerMismatchSessionIds) && payload.skippedMarkerMismatchSessionIds.length
-                        ? { skippedMarkerMismatch: payload.skippedMarkerMismatchSessionIds }
-                        : {}),
-                    ...(payload?.deleteUnsupported ? { deleteUnsupported: true } : {}),
-                },
-            };
-        } catch (e: any) {
-            return { cleaned: 0, entry: { nodeId, error: e?.message || String(e), sessionIds: group.sessionIds } };
-        }
-    };
-
-    const cleanupTargets = Array.from(targets).filter(([, group]) => group.sessionIds.length > 0);
-    const settled = await Promise.allSettled(
-        cleanupTargets.map(([nodeId, group]) => cleanupNode(nodeId, group)),
-    );
-    settled.forEach((outcome, idx) => {
-        if (outcome.status === 'fulfilled') {
-            cleanedSessionCount += outcome.value.cleaned;
-            perNode.push(outcome.value.entry);
-        } else {
-            // cleanupNode swallows its own errors, so a rejection here is unexpected.
-            const [nodeId, group] = cleanupTargets[idx];
-            perNode.push({ nodeId, error: outcome.reason?.message ?? String(outcome.reason), sessionIds: group.sessionIds });
-        }
-    });
-    return { cleanedSessionCount, perNode };
-}
-
-/**
- * FIX#1 (MAGI tangle): is THIS replica's transcript session also bound to ANOTHER replica of
- * the same fan-out? collect used to resolve a replica's transcript purely by
- * task.assignedSessionId and parse the NEWEST kind-valid JSON across that whole session. But
- * assignedSessionId is NOT unique per replica — it is never cleared on completion, and a
- * provider can reuse one session for >1 replica (sequential idle→claim reuse). When two
- * replicas share a session both resolve to the SAME newest turn → one is dropped as
- * unparseable_output / mis-attributed. There is no per-bubble taskId in the transcript to
- * disambiguate them (the dispatch stamps meshContext.taskId, but bubbles carry only a
- * positional _turnKey, and every MAGI replica is sent the IDENTICAL prompt so the user-bubble
- * text can't separate them either). So we FAIL CLOSED on a detected share: the colliding
- * replica is not attributed the ambiguous turn — it re-waits, and at the deadline finalizes as
- * a `cross_wired_shared_session` error instead of returning another replica's answer.
- *
- * Session ids are node-local, so a match only collides on the SAME node; a coincidental id
- * match across two nodes is not a real share. Pure given a task snapshot.
- */
-export function sessionSharedWithAnotherReplica(task: any, allTasks: any[]): boolean {
-    const sid = readString(task?.assignedSessionId);
-    if (!sid) return false;
-    const nodeId = readString(task?.assignedNodeId);
-    return (Array.isArray(allTasks) ? allTasks : []).some((other: any) => other?.id !== task?.id
-        && readString(other?.assignedSessionId) === sid
-        && (!nodeId || !readString(other?.assignedNodeId) || readString(other?.assignedNodeId) === nodeId));
-}
-
-/**
- * Classify which non-terminal replica tasks are STALE — assigned to a node/session
- * absent from the live mesh (so they will never reach a terminal state). Reuses the
- * shared queue staleness annotation (annotateQueueStaleness) so MAGI and the queue
- * tools agree on what "stale" means. Pure given tasks already annotated. Returns the
- * set of stale (won't-progress) non-terminal task ids and their reasons.
- */
-export function classifyStaleReplicas(
-    annotatedTasks: any[],
-    terminal: Set<string> = MAGI_TERMINAL_STATUSES,
-): { staleTaskIds: Set<string>; staleReasons: Record<string, string> } {
-    const staleTaskIds = new Set<string>();
-    const staleReasons: Record<string, string> = {};
-    for (const t of Array.isArray(annotatedTasks) ? annotatedTasks : []) {
-        if (terminal.has(String(t?.status))) continue;
-        if (t?.staleAssigned === true) {
-            const id = readString(t.id);
-            if (!id) continue;
-            staleTaskIds.add(id);
-            staleReasons[id] = readString(t.staleReason) || 'assigned node/session is not present in the live mesh';
-        }
-    }
-    return { staleTaskIds, staleReasons };
-}
-
-// ─── Persistence (deltaE) ───────────────────────
-
-/**
- * Persist the MAGI fan-out as a `magi_dispatched` ledger entry so the consensus group
- * is visible in mesh_status (status=running) and survives a coordinator restart even
- * before any synthesis is collected. Best-effort — a ledger write failure never aborts
- * the review.
- */
-async function persistMagiDispatched(
-    ctx: MeshContext,
-    args: { consensusGroupId: string; missionId?: string; panel?: string; question?: string; replicaCount: number; taskKind?: MagiTaskKind; autoCleanup?: boolean; requireIndependentEvidence?: boolean },
-): Promise<void> {
-    try {
-        await recordLocal(ctx.transport, { meshId: ctx.mesh.id,
-            kind: 'magi_dispatched',
-            payload: {
-                source: 'magi',
-                consensusGroupId: args.consensusGroupId,
-                ...(args.missionId ? { missionId: args.missionId } : {}),
-                ...(args.panel ? { panel: args.panel } : {}),
-                ...(args.question ? { question: args.question.slice(0, 300) } : {}),
-                replicaCount: args.replicaCount,
-                // MAGI-REDESIGN: persist the task_kind so a later mesh_magi_collect
-                // (which rediscovers replicas from the queue, not the original call)
-                // re-derives the right schema parser for this group.
-                ...(args.taskKind ? { taskKind: args.taskKind } : {}),
-                // The per-call choices mesh_magi_collect must honour for a wait:false review.
-                ...(typeof args.autoCleanup === 'boolean' ? { autoCleanup: args.autoCleanup } : {}),
-                ...(typeof args.requireIndependentEvidence === 'boolean' ? { requireIndependentEvidence: args.requireIndependentEvidence } : {}),
-            },
-        });
-    } catch { /* ledger write is best-effort */ }
-}
-
-/**
- * Recover the settings a MAGI fan-out was dispatched with (task_kind, and the per-call
- * auto_cleanup / require_independent_evidence choices) from its `magi_dispatched`
- * ledger entry (mesh_magi_collect rediscovers replicas from the queue and has no kind in
- * hand). Defaults to claim_audit (the backward-compatible kind) when no entry / no kind
- * is recorded. Best-effort: an unreadable ledger returns the default.
- */
-async function recoverMagiDispatchSettings(
-    ctx: MeshContext,
-    consensusGroupId: string,
-): Promise<{ taskKind: MagiTaskKind; autoCleanup?: boolean; requireIndependentEvidence?: boolean }> {
-    try {
-        const { entries } = await ledgerQuery(ctx.transport, { meshId: ctx.mesh.id, kind: ['magi_dispatched'], tail: 200 });
-        for (let i = entries.length - 1; i >= 0; i -= 1) {
-            const payload = (entries[i] as any)?.payload;
-            if (!payload || typeof payload !== 'object') continue;
-            if (readString(payload.consensusGroupId) !== consensusGroupId) continue;
-            return {
-                taskKind: normalizeMagiTaskKind(payload.taskKind),
-                ...(typeof payload.autoCleanup === 'boolean' ? { autoCleanup: payload.autoCleanup } : {}),
-                ...(typeof payload.requireIndependentEvidence === 'boolean' ? { requireIndependentEvidence: payload.requireIndependentEvidence } : {}),
-            };
-        }
-    } catch { /* unreadable ledger → defaults */ }
-    return { taskKind: DEFAULT_TASK_KIND };
-}
-
-/**
- * Strip per-replica rawAnswer (the captured raw end-user text) from a synthesis's
- * replicas[]. rawAnswer can be up to MAGI_RAW_ANSWER_CAP chars × N replicas, so it is
- * gated: omitted from the persisted ledger entry (bounds ledger payload growth) and from
- * the default mesh_magi_collect response. Returns a shallow copy with rawAnswer/
- * rawAnswerTruncated removed from every replica; the original is never mutated.
- */
-function stripRawAnswers(synthesis: MagiSynthesis): MagiSynthesis {
-    if (!Array.isArray(synthesis.replicas) || synthesis.replicas.length === 0) return synthesis;
-    return {
-        ...synthesis,
-        replicas: synthesis.replicas.map(r => {
-            if (r.rawAnswer === undefined && r.rawAnswerTruncated === undefined) return r;
-            const { rawAnswer: _omitRaw, rawAnswerTruncated: _omitTrunc, ...rest } = r;
-            return rest;
-        }),
-    };
-}
-
-/**
- * Persist the synthesis as a `magi_synthesis` ledger entry, retrievable by
- * consensusGroupId (getMeshMagiActivityByGroup) and foldable into mesh_status. The full
- * synthesis is stored MINUS per-replica rawAnswer (the caller strips it to bound ledger
- * payload growth); mesh_status bounds it further on read. Best-effort.
- */
-async function persistMagiSynthesis(
-    ctx: MeshContext,
-    args: { consensusGroupId: string; missionId?: string; panel?: string; question?: string; staleReplicas?: number; synthesis: MagiSynthesis },
-): Promise<void> {
-    try {
-        await recordLocal(ctx.transport, { meshId: ctx.mesh.id,
-            kind: 'magi_synthesis',
-            payload: {
-                source: 'magi',
-                consensusGroupId: args.consensusGroupId,
-                ...(args.missionId ? { missionId: args.missionId } : {}),
-                ...(args.panel ? { panel: args.panel } : {}),
-                ...(args.question ? { question: args.question.slice(0, 300) } : {}),
-                ...(typeof args.staleReplicas === 'number' ? { staleReplicas: args.staleReplicas } : {}),
-                synthesis: args.synthesis,
-            },
-        });
-    } catch { /* ledger write is best-effort */ }
-}
-
-/**
- * FIX#3 — auto-close the inline MAGI mission once all replicas are terminal.
- *
- * Every mesh_magi_review auto-creates an inline mission (status defaults 'active') for the
- * fan-out; nothing ever closed it, so 'MAGI: …' missions accumulated forever (mission status
- * is, by design, never derived from task status). Call this at the collect-terminal point:
- * when collection is terminal (all replicas reached a terminal verdict) and the synthesis has
- * been persisted, transition the OWNING mission active→completed.
- *
- * Guards:
- *  - (a) MAGI-owned only — the caller MUST pass the replica tasks' OWN missionId (never a
- *    coordinator-supplied id), so we only ever close the inline MAGI mission.
- *  - (b) Never clobber a manual terminal/paused status — upsertMeshMission has NO no-clobber
- *    semantics (it overwrites status), so we read the current status first and ONLY transition
- *    from 'active'. An 'abandoned'/'paused'/'completed' mission is left untouched.
- * Idempotent: a re-collect that finds the mission already 'completed' is a no-op. Best-effort:
- * a missing mission / read failure never breaks collection.
- */
-async function closeMagiMissionIfTerminal(ctx: MeshContext, missionId: string | undefined, terminal: boolean): Promise<void> {
-    if (!terminal) return;
-    const id = readString(missionId);
-    if (!id) return;
-    try {
-        // C-W9c: was in-process `getMeshMission`/`upsertMeshMission`; now the same
-        // `mission_query`/`mission_upsert` IPC round trips mesh-tools-mission.ts's
-        // write path already uses.
-        const { missions } = await missionQuery(ctx.transport, { meshId: ctx.mesh.id, id });
-        const mission = missions[0];
-        // Only close a mission we can see AND that is still active. Skip when missing
-        // (already pruned), or already completed/abandoned/paused (guard b).
-        if (!mission || mission.status !== 'active') return;
-        await missionUpsert(ctx.transport, {
-            meshId: ctx.mesh.id,
-            id,
-            title: mission.title,
-            // Preserve goal: upsert defaults goal to the existing value when omitted.
-            goal: mission.goal,
-            status: 'completed',
-        });
-    } catch { /* mission close is best-effort — never break collection */ }
-}
-
-/**
- * Pull a compact git ref off a live mesh node (its GitCompactSummary, populated by the
- * daemon git monitor) for deltaA git-skew. Returns undefined when the node carries no
- * git summary — refs are best-effort, never fabricated.
- */
-function extractNodeGitRef(node: any): MagiReplicaGitRef | undefined {
-    const git = node?.git;
-    if (!git || typeof git !== 'object') return undefined;
-    const ref: MagiReplicaGitRef = {};
-    if (typeof git.branch === 'string' || git.branch === null) ref.branch = git.branch;
-    const headCommit = nodeHeadCommit(node);
-    if (headCommit) ref.headCommit = headCommit;
-    if (typeof git.ahead === 'number' && Number.isFinite(git.ahead)) ref.ahead = git.ahead;
-    if (typeof git.behind === 'number' && Number.isFinite(git.behind)) ref.behind = git.behind;
-    if (typeof git.dirty === 'boolean') ref.dirty = git.dirty;
-    return Object.keys(ref).length > 0 ? ref : undefined;
-}
-
-async function collectMagiResponses(
-    ctx: MeshContext,
-    args: { replicaTaskIds: string[]; timeoutMs: number; taskKind?: MagiTaskKind },
-): Promise<{ responses: MagiSynthesizedResponse[]; terminal: boolean; timedOut: boolean; staleCount: number; retriedCount: number }> {
-    const ids = new Set(args.replicaTaskIds);
-    const deadline = Date.now() + args.timeoutMs;
-    const TERMINAL = MAGI_TERMINAL_STATUSES;
-    const kind = args.taskKind ?? DEFAULT_TASK_KIND;
-    const emptyResponse = (): MagiAgentResponse => ({ claims: [], top_findings: [], open_questions: [] });
-
-    // E: each replica gets at most ONE delta re-request when its terminal answer fails
-    // the kind schema. We track which task ids have already been re-requested so a second
-    // schema failure drops to unparseable (current behavior) instead of looping.
-    const retried = new Set<string>();
-
-    // Per-replica FINAL verdict, locked once reached: a parseable answer, a stale dead
-    // assignment, a non-readable terminal, or (at deadline) an unparseable confirmation.
-    // `provisional` keeps a parseable-but-WEAK answer as the deadline fallback so a re-wait
-    // never loses a valid answer it already saw.
-    const finalized = new Map<string, MagiSynthesizedResponse>();
-    const provisional = new Map<string, MagiSynthesizedResponse>();
-
-    // FIX C-rawanswer: capture the replica's raw end-user answer (newest readable
-    // candidate text from its transcript), capped to MAGI_RAW_ANSWER_CAP so a long
-    // answer can't bloat the synthesis payload / ledger. Returns undefined when no
-    // readable text was produced. Gated downstream: stripped from the persisted
-    // magi_synthesis ledger entry and the default mesh_magi_collect response; surfaced
-    // only in mesh_magi_collect verbose.
-    const captureRawAnswer = (source: MagiResponseSource, payload: unknown): void => {
-        try {
-            const candidates = collectMagiCandidateTexts(payload);
-            const raw = candidates.find(c => c.trim().length > 0);
-            if (!raw) return;
-            if (raw.length > MAGI_RAW_ANSWER_CAP) {
-                source.rawAnswer = raw.slice(0, MAGI_RAW_ANSWER_CAP);
-                source.rawAnswerTruncated = true;
-            } else {
-                source.rawAnswer = raw;
-            }
-        } catch { /* raw-answer capture is best-effort */ }
-    };
-
-    const buildSource = (task: any): MagiResponseSource => {
-        const sourceNodeId = task.assignedNodeId || task.targetNodeId || undefined;
-        // deltaA: capture the replica node's git ref so synthesis can flag cross-replica
-        // git skew. Best-effort, from the live node's compact git summary.
-        const gitRef = extractNodeGitRef(sourceNodeId ? ctx.mesh.nodes.find(n => meshNodeIdMatches(n as any, sourceNodeId)) : undefined);
-        return {
-            taskId: task.id,
-            nodeId: sourceNodeId,
-            provider: task.assignedProviderType || undefined,
-            ok: false,
-            ...(gitRef ? { git: gitRef } : {}),
-        };
-    };
-
-    // E: send ONE delta re-request to a replica whose terminal answer failed the kind
-    // schema, asking for a single JSON matching exactly that kind's contract. Best-effort —
-    // a send failure leaves the replica to be finalized as unparseable at the deadline. The
-    // replica stays `completed`; the new turn flips it back to generating, so the poll loop
-    // re-reads it naturally. Returns true when the delta was dispatched.
-    const sendKindRetry = async (task: any, failReason: MagiKindParseResult['failReason']): Promise<boolean | 'busy'> => {
-        const node = ctx.mesh.nodes.find(n => meshNodeIdMatches(n as any, task.assignedNodeId));
-        if (!node || !task.assignedSessionId) return false;
-        // Settled check (same axis as the rc.37 busy-session injection): the replica's
-        // session may have moved on (another task claimed it, or it is still finishing a
-        // turn). Only a live IDLE session may take the delta re-request; anything else is
-        // 'busy' — the caller re-waits and retries on a later pass instead of queueing a
-        // retry prompt behind someone else's turn. An unreadable status fails closed.
-        // The session's state is the coordinator's answer (its own status or the
-        // member's pushed runtime) — never a read of the member.
-        const runtime = await readNodeRuntime(ctx, node);
-        if (!runtime.known) return 'busy';
-        const live = runtime.probe.sessions.find(session => readSessionRecordId(session) === task.assignedSessionId);
-        if (!live) return false;
-        if (!isIdleSessionRecord(live)) return 'busy';
-        const why = failReason === 'empty_evidence'
-            ? 'your previous answer had an empty evidence array'
-            : failReason === 'missing_required_fields'
-                ? 'your previous answer was missing required fields'
-                : 'your previous answer did not parse as the required JSON';
-        const message = `Your previous MAGI answer could not be accepted (${why}). Respond NOW with ONLY a single JSON object (no prose, no code fence) matching EXACTLY this schema, with non-empty evidence:\n\n${magiOutputContractFor(kind)}`;
-        try {
-            const coordinatorDaemonId = ctx.localDaemonId;
-            await commandForNode(ctx, node, 'agent_command', {
-                targetSessionId: task.assignedSessionId,
-                providerType: task.assignedProviderType,
-                cliType: task.assignedProviderType,
-                agentType: task.assignedProviderType,
-                action: 'send_chat',
-                message,
-                // DISPATCH-SOURCE-TRACE: call-site tag echoed in the worker daemon log.
-                dispatchSource: 'mesh-tools-magi:sendKindRetry',
-                meshContext: {
-                    meshId: ctx.mesh.id,
-                    nodeId: task.assignedNodeId,
-                    taskId: task.id,
-                    ...(coordinatorDaemonId ? { coordinatorDaemonId } : {}),
-                    ...(ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}),
-                },
-            });
-            try {
-                await recordLocal(ctx.transport, { meshId: ctx.mesh.id,
-                    kind: 'magi_replica_retry' as any,
-                    payload: { taskId: task.id, kind, failReason },
-                });
-            } catch { /* ledger write is best-effort */ }
-            return true;
-        } catch { return false; }
-    };
-
-    // Recover a replica wedged on an approval modal. A MAGI replica is dispatched
-    // readonly:true, so any command-approval prompt it raises (typically the git/read it runs
-    // to gather file:line evidence) is safe to approve — and MUST be, because dispatch-time
-    // auto-approve is not guaranteed (IDE providers with no resolveAction script no-op it;
-    // remote pre-existing sessions never get the autoApprove backfill). Left unresolved, the
-    // replica burns the whole collect deadline and is lost as `replica_waiting_approval`.
-    // Reads the live session; only approves when it is actually in an approval state. Idempotent
-    // — resolve_action reports already_resolved/stale_prompt within its cooldown, so re-calling
-    // on later poll ticks is a no-op. Fully best-effort: any failure just leaves the normal
-    // re-wait/deadline path intact. Emits one ledger breadcrumb per approval attempt.
-    const nudgeWedgedReplica = async (task: any): Promise<void> => {
-        const node = ctx.mesh.nodes.find(n => meshNodeIdMatches(n as any, task.assignedNodeId));
-        if (!node || !task.assignedSessionId) return;
-        try {
-            // ── §8 unit 8: replica hop (design §4 roster id 7) ──────────────
-            // `magi_approval_probe`. Only `status` + `activeModal` are read, and
-            // the SAME magiReadIndicatesApprovalWedge predicate decides — so
-            // approve idempotency is untouched by the source swap.
-            //
-            // ★ Freshness is mandatory here and the reason is not cosmetic: a
-            // stale snapshot describes a modal that may already be gone, and
-            // this consumer's next act is an approve CLICK. Any coverage is
-            // accepted (even `tail`) because the two fields are session-level,
-            // not message-window-derived. resolve_action below stays a live RPC
-            // regardless — the replica decides only WHETHER to act, never
-            // performs the act.
-            await ensureMeshNodeRoutes(ctx);
-            const replicaTransport = resolveSemanticReplicaTransport(ctx, node as any);
-            let payload: any = null;
-            if (replicaTransport) {
-                const replica = await readTranscriptReplicaForSemanticConsumer(replicaTransport, {
-                    consumerId: 'magi_approval_probe',
-                    ownerDaemonId: (node as any).daemonId,
-                    rawSessionId: task.assignedSessionId,
-                    acceptCoverage: ['full', 'tail', 'current-turn'],
-                    requireFresh: true,
-                });
-                if (replica.payload) payload = replica.payload;
-            }
-            if (!payload) {
-                const read = await commandForNode(ctx, node, 'read_chat', {
-                    sessionId: task.assignedSessionId,
-                    targetSessionId: task.assignedSessionId,
-                    workspace: (node as any).workspace,
-                    tailLimit: 1,
-                });
-                payload = unwrapCommandPayload(read) as any;
-            }
-            if (!magiReadIndicatesApprovalWedge(payload)) return;
-            const status = String(payload?.status ?? '');
-            await commandForNode(ctx, node, 'resolve_action', {
-                sessionId: task.assignedSessionId,
-                targetSessionId: task.assignedSessionId,
-                workspace: (node as any).workspace,
-                providerType: task.assignedProviderType,
-                agentType: task.assignedProviderType,
-                cliType: task.assignedProviderType,
-                action: 'approve',
-            });
-            try {
-                await recordLocal(ctx.transport, { meshId: ctx.mesh.id,
-                    kind: 'magi_replica_auto_approved' as any,
-                    payload: { taskId: task.id, nodeId: task.assignedNodeId, status },
-                });
-            } catch { /* ledger write is best-effort */ }
-        } catch { /* nudge is best-effort — fall through to the normal re-wait */ }
-    };
-
-    // Attempt to FINALIZE one replica from its current state. Returns true once a final
-    // verdict is locked. `force` (deadline reached / tasks gone) converts any remaining
-    // re-wait (weak/unparseable/still-running) into a terminal verdict.
-    const tryResolveReplica = async (
-        task: any,
-        staleTaskIds: Set<string>,
-        staleReasons: Record<string, string>,
-        force: boolean,
-        liveTasks: any[],
-    ): Promise<boolean> => {
-        const taskId = task.id;
-        const source = buildSource(task);
-
-        // Not a readable completion yet (failed/cancelled/running, or no session bound).
-        if (task.status !== 'completed' || !task.assignedNodeId || !task.assignedSessionId) {
-            if (staleTaskIds.has(taskId)) {
-                source.stale = true;
-                source.error = `stale: ${staleReasons[taskId]}`;
-                finalized.set(taskId, { source, response: emptyResponse() });
-                return true;
-            }
-            if (TERMINAL.has(String(task.status))) {
-                source.error = task.status === 'completed' ? 'no_session_to_read' : `replica_${task.status || 'incomplete'}`;
-                finalized.set(taskId, { source, response: emptyResponse() });
-                return true;
-            }
-            // Still running and not stale. A replica can WEDGE here forever on an approval
-            // modal: a MAGI task is dispatched read-only, but dispatch-time auto-approve is
-            // conditional (it no-ops for an IDE provider whose auto-approve script is absent,
-            // or a remote pre-existing session that never got the autoApprove backfill), so a
-            // command-approval prompt (e.g. the git-read the replica runs to gather evidence)
-            // is never clicked and the replica is silently lost at the collect deadline as
-            // `replica_waiting_approval`. Because the MAGI task is readonly:true, approving is
-            // exactly the intended semantics — so before re-waiting, detect a bound-session
-            // approval wedge and drive resolve_action(approve) on it. Best-effort and idempotent
-            // (a stale/already-resolved prompt is a no-op); provider-agnostic (recovers both the
-            // IDE-provider and remote-adopt gaps). Skipped under `force` (the deadline pass just
-            // finalizes) and rate-limited to once per replica per poll tick.
-            if (task.assignedNodeId && task.assignedSessionId && !force) {
-                await nudgeWedgedReplica(task);
-            }
-            if (force) {
-                source.error = `replica_${task.status || 'incomplete'}`;
-                finalized.set(taskId, { source, response: emptyResponse() });
-                return true;
-            }
-            return false;
-        }
-
-        // FIX#1: cross-wire guard. This completed replica's session is also bound to another
-        // replica of THIS group → the newest turn cannot be safely attributed to either. Do NOT
-        // grab it (that is exactly the mis-attribution / dropped-as-unparseable bug). Re-wait so a
-        // later poll can find them on distinct sessions; at the deadline finalize as a cross-wire
-        // error (not another replica's answer).
-        if (sessionSharedWithAnotherReplica(task, liveTasks)) {
-            if (force) {
-                source.error = 'cross_wired_shared_session';
-                finalized.set(taskId, { source, response: emptyResponse() });
-                return true;
-            }
-            return false;
-        }
-
-        // A `completed` replica WITH a session: read the transcript and try to parse a MAGI
-        // answer for THIS kind. Fix A: a completed-but-weak completion (early/mid-turn
-        // suppressed) or a not-yet-parseable transcript is treated as NOT terminal — re-poll
-        // until the deadline rather than collecting a premature mid-turn bubble.
-        let kindResult: MagiKindParseResult;
-        try {
-            const node = ctx.mesh.nodes.find(n => meshNodeIdMatches(n as any, task.assignedNodeId));
-            if (!node) throw new Error('assigned node not in mesh');
-            // ── §8 unit 8: replica hop (design §4 roster id 8) ──────────────
-            // `magi_result_collect`. The replica payload is fed to the SAME
-            // captureRawAnswer + parseFirstMagiCandidateForKind below, so the
-            // weak/unparseable/retry/deadline semantics are all unchanged.
-            //
-            // ★ ONLY current-turn coverage is admitted, and that is the whole
-            // FIX#1 guard restated: the live read below asks for
-            // coverage:'current-turn' precisely because a whole-session tail's
-            // newest kind-valid JSON can belong to an EARLIER turn and be
-            // mis-attributed as this replica's answer. A `tail`-covered replica
-            // snapshot is that same hazard arriving by a different road, so it
-            // declines to legacy rather than being parsed. Freshness is
-            // required because this read locks a terminal verdict.
-            await ensureMeshNodeRoutes(ctx);
-            const replicaTransport = resolveSemanticReplicaTransport(ctx, node as any);
-            let payload: any = null;
-            if (replicaTransport) {
-                const replica = await readTranscriptReplicaForSemanticConsumer(replicaTransport, {
-                    consumerId: 'magi_result_collect',
-                    ownerDaemonId: (node as any).daemonId,
-                    rawSessionId: task.assignedSessionId,
-                    acceptCoverage: ['current-turn'],
-                    requireFresh: true,
-                });
-                if (replica.payload) payload = replica.payload;
-            }
-            if (!payload) {
-                const result = await commandForNode(ctx, node, 'read_chat', {
-                    sessionId: task.assignedSessionId,
-                    targetSessionId: task.assignedSessionId,
-                    workspace: (node as any).workspace,
-                    tailLimit: 6,
-                    // FIX#1: scope the read to the CURRENT turn so a provider that supports it returns
-                    // only this turn's bubbles (coverage:'current-turn' / _turnKey), instead of the
-                    // whole-session tail whose newest kind-valid JSON could belong to an earlier turn.
-                    coverage: 'current-turn',
-                });
-                payload = unwrapCommandPayload(result);
-            }
-            // Capture the raw answer onto `source` now, so it rides along whether this
-            // replica finalizes as a parseable answer or a weak/provisional one. (Stripped
-            // for non-verbose consumers downstream.)
-            captureRawAnswer(source, payload);
-            // Fix-A-v2 summary-fallback (kind-aware): parse candidates from BOTH the raw payload
-            // (newest bubble body first, premature-collect guard) AND the compacted payload
-            // (surfaces the lifted `summary` so antigravity's empty-bubble / summary-only answer
-            // is recovered), validating each against the selected kind's schema.
-            kindResult = parseFirstMagiCandidateForKind(payload, kind, {
-                sessionId: task.assignedSessionId,
-            });
-        } catch (e: any) {
-            // A transient read failure re-waits (the node/peer may be momentarily busy);
-            // finalize the failure only once the deadline is hit.
-            if (force) {
-                source.error = `read_failed: ${e?.message || String(e)}`;
-                finalized.set(taskId, { source, response: emptyResponse() });
-                return true;
-            }
-            return false;
-        }
-
-        if (kindResult.ok && kindResult.response) {
-            const weak = await replicaCompletionIsWeak(ctx, taskId);
-            if (weak && !force) {
-                // Parseable but the completion evidence is weak — keep it as the deadline
-                // fallback and re-wait for a stronger/fuller final answer.
-                provisional.set(taskId, { source: { ...source, ok: true }, response: kindResult.response });
-                return false;
-            }
-            finalized.set(taskId, { source: { ...source, ok: true }, response: kindResult.response });
-            return true;
-        }
-
-        // Parsed something but it FAILS the kind schema (missing fields / empty evidence) →
-        // E: fire exactly one delta re-request, then re-wait for the corrected answer. A
-        // second failure (already retried) drops to unparseable below.
-        const isSchemaFailure = kindResult.failReason === 'missing_required_fields'
-            || kindResult.failReason === 'empty_evidence';
-        if (isSchemaFailure && !retried.has(taskId) && !force) {
-            retried.add(taskId);
-            const sent = await sendKindRetry(task, kindResult.failReason);
-            if (sent === 'busy') {
-                // Session not settled yet — keep the one retry for a later pass and re-wait.
-                retried.delete(taskId);
-                return false;
-            }
-            if (sent) return false; // re-wait for the corrected turn
-            // Could not dispatch the retry → fall through to the unparseable handling.
-        }
-
-        // Not parseable / still schema-invalid → the premature-collect guard: re-wait until
-        // the deadline, then finalize (preferring any provisional answer).
-        if (force) {
-            const prov = provisional.get(taskId);
-            if (prov) {
-                finalized.set(taskId, prov);
-                return true;
-            }
-            // MAGI-DEADLINE-MISLABEL: `no_parseable_output` at the force-finalize pass means
-            // "no valid JSON was EVER seen across every poll up to the deadline" — which is
-            // indistinguishable, from inside this function, from "the replica simply hadn't
-            // finished answering yet". A live 3-replica fan-out measured exactly this: kimi's
-            // task was `completed` well before the (then 180s) deadline, every poll up to the
-            // deadline read no parseable JSON in its transcript, and it was labeled
-            // `unparseable_output` — reading as "kimi produced invalid output". 13 minutes
-            // later kimi actually answered with a fully-evidenced rootCause JSON, proving the
-            // label was wrong: it wasn't a bad answer, it just hadn't arrived. The coordinator
-            // then misreported "0 valid replicas" instead of "no answer within the deadline".
-            //
-            // `schema_invalid:*` (isSchemaFailure) is left untouched — that case DID observe
-            // real content (a parsed JSON object) that fails the kind schema after one retry,
-            // which is a genuine content defect, not a timing artifact.
-            source.error = isSchemaFailure ? `schema_invalid: ${kindResult.failReason}` : 'replica_deadline_exceeded';
-            finalized.set(taskId, { source, response: emptyResponse() });
-            return true;
-        }
-        return false;
-    };
-
-    // Poll until every replica reaches a final verdict, every still-outstanding replica is
-    // detected STALE (dead assignment), or the deadline elapses.
-    for (;;) {
-        const tasks = annotateQueueStaleness((await readQueueFromDaemon(ctx)).filter((t: any) => ids.has(t.id)), ctx.mesh);
-        const allPresent = tasks.length === ids.size;
-        const { staleTaskIds, staleReasons } = classifyStaleReplicas(tasks, TERMINAL);
-        const pastDeadline = Date.now() >= deadline;
-
-        for (const task of tasks as any[]) {
-            if (finalized.has(task.id)) continue;
-            await tryResolveReplica(task, staleTaskIds, staleReasons, pastDeadline, tasks);
-        }
-
-        if (allPresent && finalized.size >= ids.size) break;
-        if (pastDeadline) break;
-        // Every still-outstanding replica is stale → stop early (they were just finalized above).
-        const outstanding = tasks.filter((t: any) => !finalized.has(t.id));
-        if (allPresent && outstanding.length > 0 && outstanding.every((t: any) => staleTaskIds.has(t.id))) break;
-
-        await sleep(Math.min(MAGI_POLL_INTERVAL_MS, Math.max(0, deadline - Date.now())));
-    }
-
-    // Final pass: force-finalize anything still outstanding now that the loop has ended.
-    const finalTasks = annotateQueueStaleness((await readQueueFromDaemon(ctx)).filter((t: any) => ids.has(t.id)), ctx.mesh);
-    const { staleTaskIds, staleReasons } = classifyStaleReplicas(finalTasks, TERMINAL);
-    const presentIds = new Set(finalTasks.map((t: any) => t.id));
-    for (const task of finalTasks as any[]) {
-        if (!finalized.has(task.id)) await tryResolveReplica(task, staleTaskIds, staleReasons, true, finalTasks);
-    }
-    // A replica whose queue row vanished entirely (never observed) is recorded as missing.
-    for (const id of ids) {
-        if (finalized.has(id)) continue;
-        if (!presentIds.has(id)) {
-            finalized.set(id, { source: { taskId: id, ok: false, error: 'replica_missing' }, response: emptyResponse() });
-        }
-    }
-
-    // Preserve the caller's replica order.
-    const responses = args.replicaTaskIds
-        .map(id => finalized.get(id))
-        .filter((r): r is MagiSynthesizedResponse => !!r);
-    const terminal = presentIds.size === ids.size && finalTasks.every((t: any) => TERMINAL.has(String(t.status)));
-    const staleCount = responses.filter(r => r.source.stale === true).length;
-    return { responses, terminal, timedOut: !terminal, staleCount, retriedCount: retried.size };
 }

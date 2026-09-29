@@ -17,6 +17,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { SpecCliAdapter } from '../../../src/providers/spec/cli-adapter.js'
+import { assertFocusedClaudeTuiReview } from '../../../src/providers/spec/claude-tui-prompt.js'
 
 type Dispatch = { kind: string; data?: string }
 
@@ -118,13 +119,13 @@ describe('assertFocusedClaudeTuiReview settle-poll', () => {
         // Two stale question frames, then the review page — the exact shape a
         // fixed single-snapshot delay used to reject.
         const { adapter, snapshots } = makeAdapter([QUESTION_SCREEN, QUESTION_SCREEN, REVIEW_SCREEN])
-        await expect(adapter.assertFocusedClaudeTuiReview(prompt, false)).resolves.toBeUndefined()
+        await expect(assertFocusedClaudeTuiReview(adapter.claudeTuiHost, prompt, false)).resolves.toBeUndefined()
         expect(snapshots.n).toBeGreaterThan(1) // proves it re-snapshotted rather than gating on frame 1
     })
 
     it('accepts an already-settled review page without extra polling', async () => {
         const { adapter, snapshots } = makeAdapter([REVIEW_SCREEN])
-        await expect(adapter.assertFocusedClaudeTuiReview(prompt, false)).resolves.toBeUndefined()
+        await expect(assertFocusedClaudeTuiReview(adapter.claudeTuiHost, prompt, false)).resolves.toBeUndefined()
         expect(snapshots.n).toBe(1)
     })
 
@@ -136,14 +137,14 @@ describe('assertFocusedClaudeTuiReview settle-poll', () => {
     // cli-adapter-tui-review-unconfirmed.test.ts.
     it('reports unconfirmed (not a hard failure) when our own question never leaves the screen', async () => {
         const { adapter } = makeAdapter([QUESTION_SCREEN])
-        await expect(adapter.assertFocusedClaudeTuiReview(prompt, false))
+        await expect(assertFocusedClaudeTuiReview(adapter.claudeTuiHost, prompt, false))
             .rejects.toThrow(/delivered but not confirmed/)
     })
 
     it('still fails closed when the review page carries foreign headers', async () => {
         const foreignReview = REVIEW_SCREEN.replace('☒ Approach', '☒ Something Else')
         const { adapter } = makeAdapter([foreignReview])
-        await expect(adapter.assertFocusedClaudeTuiReview(prompt, false))
+        await expect(assertFocusedClaudeTuiReview(adapter.claudeTuiHost, prompt, false))
             .rejects.toThrow(/does not match the active interactive prompt headers/)
     })
 
@@ -151,7 +152,7 @@ describe('assertFocusedClaudeTuiReview settle-poll', () => {
         const { adapter } = makeAdapter([FOREIGN_QUESTION_SCREEN])
         adapter.latestState = { id: 'busy', label: 'Generating', title: null, status: 'generating' }
 
-        await expect(adapter.assertFocusedClaudeTuiReview(prompt, false))
+        await expect(assertFocusedClaudeTuiReview(adapter.claudeTuiHost, prompt, false))
             .rejects.toThrow(/review page is not focused/)
         expect(adapter.activeInteractivePrompt).toBe(prompt)
     })
@@ -318,25 +319,25 @@ describe('assertFocusedClaudeTuiReview settle-poll — freeform (Other) allowsFr
         // reclassification note above): these frames show our own question, and
         // the answer keys have already been delivered.
         const { adapter } = makeAdapter(SLOW_FREEFORM_FRAMES)
-        await expect(adapter.assertFocusedClaudeTuiReview(prompt, false))
+        await expect(assertFocusedClaudeTuiReview(adapter.claudeTuiHost, prompt, false))
             .rejects.toThrow(/delivered but not confirmed/)
     })
 
     it('GREEN: allowsFreeform=true widens the budget enough to observe the late review frame', async () => {
         const { adapter, snapshots } = makeAdapter(SLOW_FREEFORM_FRAMES)
-        await expect(adapter.assertFocusedClaudeTuiReview(prompt, true)).resolves.toBeUndefined()
+        await expect(assertFocusedClaudeTuiReview(adapter.claudeTuiHost, prompt, true)).resolves.toBeUndefined()
         expect(snapshots.n).toBeGreaterThan(6)
     })
 
     it('reports unconfirmed under the widened budget when our own question never leaves', async () => {
         const { adapter } = makeAdapter([QUESTION_SCREEN])
-        await expect(adapter.assertFocusedClaudeTuiReview(prompt, true))
+        await expect(assertFocusedClaudeTuiReview(adapter.claudeTuiHost, prompt, true))
             .rejects.toThrow(/delivered but not confirmed/)
     })
 
     it('still fails closed under the widened budget on a screen we do not own', async () => {
         const { adapter } = makeAdapter([FOREIGN_QUESTION_SCREEN])
-        await expect(adapter.assertFocusedClaudeTuiReview(prompt, true))
+        await expect(assertFocusedClaudeTuiReview(adapter.claudeTuiHost, prompt, true))
             .rejects.toThrow(/review page is not focused/)
     })
 })

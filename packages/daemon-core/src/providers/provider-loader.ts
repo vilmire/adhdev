@@ -11,20 +11,22 @@
  * - Load JS files via require() (CJS compatible)
  * - User custom can override builtin
  * - provider.js files are independent, so load order doesn't matter
+ *
+ * Split: the loaded-map queries, machine provider config and settings API live
+ * in ProviderRegistry (provider-registry.ts, the base class); the verified
+ * channel layer in provider-channel-sync.ts; sibling-checkout detection in
+ * provider-loader-sibling.ts.
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
 import * as chokidar from 'chokidar';
-import { registerIDEDefinition } from '../detection/ide-detector.js';
 import { LOG } from '../logging/logger.js';
 import { VersionArchive } from './version-archive.js';
 import type {
     ProviderModule,
     ProviderCategory,
     ProviderScripts,
-    ProviderSettingDef,
-    ProviderSettingSchema,
     ResolvedProvider,
 } from './contracts.js';
 import {
@@ -45,82 +47,27 @@ import {
   type ProviderChannel,
 } from './channel/contract.js';
 import { resolveBuildTrack } from '../track-identity.js';
-import { configDirChannelMismatch } from '../config/config-dir.js';
 import { ProviderChannelStore, type ActivationPointer } from './channel/store.js';
+import type { ChannelSyncReport } from './channel/runtime.js';
 import {
-  ProviderChannelRuntime,
-  describeFetchError,
-  collectSyncTargetTypes,
-  type ChannelSyncReport,
-} from './channel/runtime.js';
-import {
-  registerProviderScriptRootSafely,
-  buildScriptWrappersFromDir,
-  parseArgsSetting,
-  getPlatformVersionCommand,
-  getSyntheticSettings,
-  matchesVersion,
+    registerProviderScriptRootSafely,
+    buildScriptWrappersFromDir,
+    matchesVersion,
 } from './provider-loader-support.js';
 import {
   loadProviderDir,
   findProviderDirInternal,
 } from './provider-loader-manifest-scan.js';
 import { applySpecNativeHistoryWiring } from './provider-loader-spec-wiring.js';
-// Model-discovery overlay: a synchronous, side-effect-free read of the
-// discovery cache, merged over the manifest's advisory modelOptions. See
-// models/overlay.ts for why discovery outranks the manifest for this one field
-// and why the manifest is never written back to.
-import { buildModelOverlayPatch } from '../models/overlay.js';
-import { readModelCache } from '../models/registry.js';
-import type { CliDetectionEntry, MachineProviderCheckResult, MachineProviderConfig, ProviderAvailabilityState, ProviderChannelStalenessSnapshot, ProviderMachineStatus } from './provider-loader-types.js';
+import { ProviderChannelSync } from './provider-channel-sync.js';
+import { ProviderRegistry } from './provider-registry.js';
+import { detectDefaultUserDir } from './provider-loader-sibling.js';
+import type { ProviderChannelStalenessSnapshot } from './provider-loader-types.js';
 
-export { providerLoaderConfigOptions } from './provider-loader-config.js';
-export type { MachineProviderCheckResult, MachineProviderConfig, ProviderChannelStalenessSnapshot, ProviderMachineStatus };
 
-/**
- * ★STORE-RELOAD debounce: minimum gap between two activation-signature
- * samples in `refreshIfChannelActivationChanged()`.
- *
- * Sized against the burst it exists to absorb. `publish-provider-channels
- * --execute` activates the full provider set (51 types as of 2026-08-10) in a
- * tight loop, and each flip changes the signature; without a floor, launches
- * during that window would each trigger a full `loadAll()` — a re-walk and
- * re-parse of every provider dir on disk — against a pointer set still being
- * written. 5s is far longer than such a burst's per-flip spacing yet far below
- * any human-noticeable staleness: the failure it prevents (a worker launched
- * against a superseded bundle) was measured at over an HOUR of divergence.
- *
- * It bounds staleness, it does not create it: `syncVerifiedChannel()` still
- * reloads immediately for activations this daemon performs itself.
- */
-const CHANNEL_ACTIVATION_RECHECK_MS = 5_000;
 
-/** Shell interpreters a manifest may use as a launch wrapper around the real CLI. */
-const SHELL_WRAPPER_COMMANDS = new Set(['bash', 'sh', 'zsh', 'dash', 'cmd', 'cmd.exe', 'powershell', 'powershell.exe', 'pwsh', 'pwsh.exe']);
 
-/**
- * The command install detection and model discovery should resolve for a CLI
- * provider: the manifest's `binary` when `spawn.command` is only a shell wrapper
- * around it, otherwise undefined (detect the spawn command as before). A
- * machine-level executable override always wins upstream of this.
- */
-/** True when `path` (a command or absolute path) names a shell interpreter. */
-export function isShellWrapperCommand(path: string | null | undefined): boolean {
-  if (!path) return false;
-  const base = path.trim().split(/[\\/]/).pop()?.toLowerCase() ?? '';
-  return SHELL_WRAPPER_COMMANDS.has(base);
-}
-
-export function resolveWrappedCliBinary(spawnCommand: string | undefined, binary: unknown): string | undefined {
-  if (typeof binary !== 'string' || !binary.trim() || !spawnCommand) return undefined;
-  if (!isShellWrapperCommand(spawnCommand)) return undefined;
-  if (binary.trim() === spawnCommand.trim()) return undefined;
-  return binary.trim();
-}
-
-export class ProviderLoader {
-  private providers = new Map<string, ProviderModule>();
-  private providerAvailability = new Map<string, ProviderAvailabilityState>();
+export class ProviderLoader extends ProviderRegistry {
   private defaultProvidersDir: string;
   private explicitProviderDir: string | null = null;
   private userDir: string;
@@ -132,48 +79,12 @@ export class ProviderLoader {
   private versionArchive: VersionArchive | null = null;
   private scriptsCache = new Map<string, Partial<ProviderScripts>>();
 
-  /**
-   * Resolved registry base URL and provider tarball URL. Resolution order:
-   * explicit config field (constructor option) → env var → vendor default.
-   * See `config/registry-resolver.ts`.
-   */
-  private readonly registryBaseUrl: string;
-  private readonly providerTarballUrl: string;
 
   /** Inject VersionArchive so resolve() can auto-detect installed versions */
   setVersionArchive(archive: VersionArchive): void {
     this.versionArchive = archive;
   }
 
-  private static readonly REPO_PROVIDER_DIRNAME = 'adhdev-providers';
-  private static readonly SIBLING_MARKER_FILE = '.adhdev-provider-root';
-  private static readonly SIBLING_ENV_VAR = 'ADHDEV_USE_SIBLING_PROVIDERS';
-  /**
-   * Development-only env opt-in for the legacy unverified `main.tar.gz`
-   * upstream fallback. Even with this set, the fallback is refused whenever
-   * the resolved provider channel is 'stable' (production mode).
-   */
-  /**
-   * Verification-path opt-in that lets a STABLE runtime adopt a sibling
-   * `adhdev-providers` checkout, without switching the provider channel.
-   *
-   * Why this exists as its own switch rather than reusing
-   * `ADHDEV_PROVIDER_CHANNEL=preview`: the channel is not a single-purpose
-   * flag. It also selects which verified-store activations are loaded
-   * (`listActiveActivations(channel)`), which rows the channel sync targets,
-   * whether the registry echo contract is enforced (`channel === 'preview'`
-   * in channel/runtime.ts), and whether the unverified tarball fallback is
-   * permitted. Flipping the channel to make the repo's specs load would drag
-   * all of that along and would no longer be testing the stable code path.
-   * This switch changes exactly one thing: the sibling-adoption refusal.
-   *
-   * Production safety is unchanged. A stable daemon still refuses a sibling
-   * checkout, because the refusal is only lifted when this env var is
-   * explicitly set to '1' AND the pre-existing opt-in (marker file or
-   * ADHDEV_USE_SIBLING_PROVIDERS) already applies. Nothing sets it outside
-   * the test/verification harness.
-   */
-  private static readonly SIBLING_STABLE_OVERRIDE_ENV_VAR = 'ADHDEV_ALLOW_SIBLING_PROVIDERS_ON_STABLE';
 
   /** Resolved provider channel (explicit config/env wins; otherwise derived from the daemon release channel; absent/ambiguous → 'stable'). */
   readonly channel: ProviderChannel;
@@ -184,133 +95,17 @@ export class ProviderLoader {
    * cross-track stamp write — never to change channel resolution itself.
    */
   private readonly channelIsExplicit: boolean;
-  private readonly channelStore: ProviderChannelStore | null;
-  private readonly channelSyncIO?: {
-    fetchJson?: (url: string) => Promise<any>;
-    downloadFile?: (url: string, destPath: string) => Promise<void>;
-    extractTarball?: (tarPath: string, destDir: string) => Promise<void>;
-  };
-  /** Running daemon version (normalized, no leading 'v'); '' when unknown. */
-  private readonly daemonVersion: string = '';
-  /** Last read-only staleness probe result (checkVerifiedChannelStaleness). */
-  private channelStalenessSnapshot: ProviderChannelStalenessSnapshot | null = null;
+  /** Verified provider channel layer (provider-channel-sync.ts). */
+  private readonly channelSync: ProviderChannelSync;
+  /** Resolved registry base URL the verified channel syncs from (config → env → serverUrl → vendor default). */
+  get registryBaseUrl(): string { return this.channelSync.registryBaseUrl; }
 
   private probeStarts: string[] = [];
-  private siblingLogged = false;
-  /** Active verified-channel object dirs, refreshed by loadAll(). */
-  private channelObjectRoots: string[] = [];
-  /**
-   * ★STORE-RELOAD: the channel activation signature observed at the last
-   * loadAll(). `refreshIfChannelActivationChanged()` compares against it to
-   * decide whether this daemon's in-memory provider map still matches the
-   * pointers on disk. `null` = never sampled.
-   */
-  private channelActivationSignature: string | null = null;
-  /** Monotonic timestamp of the last signature sample, for the debounce below. */
-  private channelActivationCheckedAtMs = 0;
+  /** Once-per-loader dedup of the sibling-adoption info line (see provider-loader-sibling.ts). */
+  private readonly siblingState = { siblingLogged: false };
   private userDirSource: ProviderUserDirSource = 'home-default';
 
-  /** Process-level dedup for stderr sibling-adoption notices (shared across all ProviderLoader instances). */
-  private static siblingStderrLogged: Set<string> = new Set();
 
-  /**
-   * Process-level dedup for the stable-channel sibling REFUSAL notice, mirroring
-   * `siblingStderrLogged` on the adoption path. This was previously an instance
-   * field, so every new ProviderLoader re-armed it. Under vitest's per-file module
-   * isolation that meant one line per test file (measured 36–40 repeats), which
-   * flooded the truncated tail of Refinery failure reports and cut off the actual
-   * failing test names and assertions — diagnostic output destroying diagnostics.
-   */
-  private static siblingRefusalLogged: Set<string> = new Set();
-
-  private static looksLikeProviderRoot(candidate: string): boolean {
-    try {
-      if (!fs.existsSync(candidate) || !fs.statSync(candidate).isDirectory()) return false;
-      return ['ide', 'extension', 'cli', 'acp'].some((category) =>
-        fs.existsSync(path.join(candidate, category))
-      );
-    } catch {
-      return false;
-    }
-  }
-
-  private static hasProviderRootMarker(candidate: string): boolean {
-    try {
-      return fs.existsSync(path.join(candidate, ProviderLoader.SIBLING_MARKER_FILE));
-    } catch {
-      return false;
-    }
-  }
-
-  private detectDefaultUserDir(): { path: string; source: 'sibling-env' | 'sibling-marker' | 'home-default' } {
-    const fallback = path.join(getConfigDir(), 'providers');
-    const envOptIn = process.env[ProviderLoader.SIBLING_ENV_VAR] === '1';
-    const visited = new Set<string>();
-
-    for (const start of this.probeStarts) {
-      let current = path.resolve(start);
-      while (!visited.has(current)) {
-        visited.add(current);
-        const siblingCandidate = path.join(path.dirname(current), ProviderLoader.REPO_PROVIDER_DIRNAME);
-        if (ProviderLoader.looksLikeProviderRoot(siblingCandidate)) {
-          const hasMarker = ProviderLoader.hasProviderRootMarker(siblingCandidate);
-          if (envOptIn || hasMarker) {
-            // Stage 2 channel policy: a stable (production) runtime NEVER
-            // adopts a sibling checkout — `.adhdev-provider-root` must not
-            // silently override verified channel activations. Non-stable
-            // development use still requires the explicit opt-in (marker
-            // file or env var).
-            //
-            // Verification-path exception: the test/CI/Refinery harness must
-            // exercise the repo's own provider specs, not whichever published
-            // bundle happens to be installed on the runner. Without this,
-            // editing e.g. adhdev-providers/cli/claude-cli/specs/4.0.json and
-            // watching the gate go green proves nothing — the gate never
-            // loaded the edit. The override is deliberately narrower than a
-            // channel flip: it lifts ONLY this refusal, leaving verified-store
-            // activation, channel sync, the registry echo contract and the
-            // unverified-tarball gate on their stable behavior. Production is
-            // unaffected because nothing sets this env var outside the harness.
-            const stableSiblingOverride =
-              process.env[ProviderLoader.SIBLING_STABLE_OVERRIDE_ENV_VAR] === '1';
-            if (this.channel === 'stable' && !stableSiblingOverride) {
-              if (!ProviderLoader.siblingRefusalLogged.has(siblingCandidate)) {
-                ProviderLoader.siblingRefusalLogged.add(siblingCandidate);
-                this.log(`Refusing sibling provider checkout (channel=stable): ${siblingCandidate}. Set providerChannel=preview (or ${'ADHDEV_PROVIDER_CHANNEL'}=preview) to opt in for development.`);
-                try {
-                  process.stderr.write(
-                    `[adhdev] Ignoring sibling adhdev-providers checkout on stable channel: ${siblingCandidate}\n`,
-                  );
-                } catch { /* ignore */ }
-              }
-            } else {
-            const source: 'sibling-env' | 'sibling-marker' = hasMarker ? 'sibling-marker' : 'sibling-env';
-            if (!this.siblingLogged) {
-              this.log(`Using sibling provider checkout (${source}): ${siblingCandidate}`);
-              this.siblingLogged = true;
-            }
-            // Force-surface adoption to stderr once per sibling path per process, so CLI
-            // entry points that suppress logFn still leave a visible trail.
-            if (!ProviderLoader.siblingStderrLogged.has(siblingCandidate)) {
-              ProviderLoader.siblingStderrLogged.add(siblingCandidate);
-              try {
-                process.stderr.write(
-                  `[adhdev] Using sibling adhdev-providers checkout (${source}): ${siblingCandidate}\n`,
-                );
-              } catch { /* ignore */ }
-            }
-            return { path: siblingCandidate, source };
-            }
-          }
-        }
-        const parent = path.dirname(current);
-        if (parent === current) break;
-        current = parent;
-      }
-    }
-
-    return { path: fallback, source: 'home-default' };
-  }
 
   constructor(options?: {
     userDir?: string;
@@ -386,10 +181,9 @@ export class ProviderLoader {
      */
     daemonVersion?: string;
   }) {
+    super();
     this.logFn = options?.logFn || LOG.forComponent('Provider').asLogFn();
     this.probeStarts = options?.probeStarts ?? [process.cwd(), __dirname];
-    this.registryBaseUrl = resolveRegistryBaseUrl(options?.registryUrl, process.env, options?.serverUrl);
-    this.providerTarballUrl = resolveProviderTarballUrl(options?.providerTarballUrl);
     // Channel resolution MUST happen before detectDefaultUserDir() below:
     // sibling-checkout adoption is gated on the resolved channel. Explicit
     // channel config/env always wins; otherwise the provider channel derives
@@ -406,17 +200,39 @@ export class ProviderLoader {
       || resolveBuildTrack(process.env) === 'preview'
       || isPreviewReleaseChannel(options?.updateChannel),
     );
-    this.channelStore = options?.channelStore === null
-      ? null
-      : (options?.channelStore ?? new ProviderChannelStore(ProviderChannelStore.defaultRoot(), this.logFn));
-    this.channelSyncIO = options?.channelSyncIO;
-    this.daemonVersion = (options?.daemonVersion || '').trim().replace(/^v/, '');
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const self = this;
+    this.channelSync = new ProviderChannelSync(
+      {
+        get upstreamDir() { return self.upstreamDir; },
+        get defaultProvidersDir() { return self.defaultProvidersDir; },
+        log: (msg) => this.log(msg),
+        reload: () => this.loadAll(),
+        loadDir: (dir) => this.loadDir(dir),
+        hasLoadedProvider: (type) => this.providers.has(type),
+        hasUpstream: () => this.hasUpstream(),
+      },
+      options?.channelStore === null
+        ? null
+        : (options?.channelStore ?? new ProviderChannelStore(ProviderChannelStore.defaultRoot(), this.logFn)),
+      {
+        channel: this.channel,
+        channelIsExplicit: this.channelIsExplicit,
+        // Registry base / tarball URL resolution order: explicit config field
+        // (constructor option) → env var → vendor default (registry-resolver.ts).
+        registryBaseUrl: resolveRegistryBaseUrl(options?.registryUrl, process.env, options?.serverUrl),
+        providerTarballUrl: resolveProviderTarballUrl(options?.providerTarballUrl),
+        logFn: this.logFn,
+        channelSyncIO: options?.channelSyncIO,
+        daemonVersion: (options?.daemonVersion || '').trim().replace(/^v/, ''),
+      },
+    );
 
     // Default directory for auto-downloads. Resolved via getConfigDir() so
     // ADHDEV_CONFIG_DIR (preview/stable instance isolation) is honored instead
     // of a hardcoded ~/.adhdev.
     this.defaultProvidersDir = path.join(getConfigDir(), 'providers');
-    const detected = this.detectDefaultUserDir();
+    const detected = detectDefaultUserDir({ probeStarts: this.probeStarts, channel: this.channel, log: (m) => this.log(m), state: this.siblingState });
     this.userDir = detected.path;
     this.userDirSource = detected.source;
     this.upstreamDir = path.join(this.defaultProvidersDir, '.upstream');
@@ -456,7 +272,7 @@ export class ProviderLoader {
     }
   }
 
-  private log(msg: string): void {
+  protected log(msg: string): void {
     this.logFn(`[ProviderLoader] ${msg}`);
   }
 
@@ -493,7 +309,7 @@ export class ProviderLoader {
     // channel roots sit above .upstream so digest-verified bytes win over
     // legacy manifest installs of the same type, mirroring loadAll().
     const externalDir = path.join(getConfigDir(), 'external');
-    return [this.userDir, externalDir, ...this.channelObjectRoots, this.upstreamDir];
+    return [this.userDir, externalDir, ...this.channelSync.objectRoots, this.upstreamDir];
   }
 
   getSourceConfig(): ProviderSourceConfigSnapshot {
@@ -528,7 +344,7 @@ export class ProviderLoader {
       this.userDir = this.explicitProviderDir;
       this.userDirSource = 'explicit';
     } else {
-      const detected = this.detectDefaultUserDir();
+      const detected = detectDefaultUserDir({ probeStarts: this.probeStarts, channel: this.channel, log: (m) => this.log(m), state: this.siblingState });
       this.userDir = detected.path;
       this.userDirSource = detected.source;
     }
@@ -617,7 +433,7 @@ export class ProviderLoader {
  //     Occupies the upstream precedence slot: loaded after .upstream so
  //     digest-verified bytes win over legacy manifest installs of the same
  //     type, while external sources and user customs still outrank it.
-    this.loadVerifiedChannelActivations();
+    this.channelSync.loadVerifiedChannelActivations();
 
  // 2. Load external providers from ~/.adhdev/external/<source-name>/
  //    (3rd-party git sources). Overrides upstream but is itself overridden
@@ -718,498 +534,25 @@ export class ProviderLoader {
     }
   }
 
- // ─── Verified provider channel (Stage 2) ─────────────────
+ // ─── Verified provider channel (Stage 2) — see provider-channel-sync.ts ───
 
- /**
-  * Load digest-verified channel activations from the content-addressed
-  * store. Only objects referenced by an active pointer are read, so a
-  * partially staged or interrupted sync is never observed. Corrupt pointers
-  * / missing objects are logged as typed errors and skipped (fail closed).
-  */
-  private loadVerifiedChannelActivations(): void {
-    this.channelObjectRoots = [];
-    if (!this.channelStore) return;
-    // ★STORE-RELOAD: stamp the signature of the pointer set we are about to
-    // read. Sampled BEFORE the reads so a concurrent activation landing during
-    // this load leaves a signature that no longer matches, and the next check
-    // reloads rather than concluding it is already current.
-    try {
-      this.channelActivationSignature = this.channelStore.activationSignature(this.channel);
-      this.channelActivationCheckedAtMs = Date.now();
-    } catch {
-      // A signature we cannot take must not be cached as "current" — leaving
-      // it null makes the next check re-sample instead of trusting a stale map.
-      this.channelActivationSignature = null;
-    }
-    let result: ReturnType<ProviderChannelStore['listActiveActivations']>;
-    try {
-      result = this.channelStore.listActiveActivations(this.channel);
-    } catch (e: any) {
-      this.log(`⚠ Verified channel store unreadable (${this.channel}): ${e?.message || e}`);
-      return;
-    }
-    for (const err of result.errors) {
-      this.log(`⚠ Verified channel: ${err.code}: ${err.message}`);
-    }
-    let count = 0;
-    for (const { objectDir } of result.activations) {
-      count += this.loadDir(objectDir);
-      this.channelObjectRoots.push(objectDir);
-    }
-    if (count > 0) {
-      this.log(`Loaded ${count} verified channel providers (${this.channel}, content-addressed store)`);
-    }
-  }
-
- /**
-  * ★STORE-RELOAD: reload providers if another process activated a different
-  * bundle since this daemon last loaded.
-  *
-  * ── The gap this closes ────────────────────────────────────────────────
-  * `ProviderChannelStore.activate()` is a pure pointer flip with no callback
-  * into the loader, and the one place that reloads on activation —
-  * `syncVerifiedChannel()` above — only runs for syncs THIS daemon performs.
-  * Any other writer (the `provider publish`/`activate` CLI, a second daemon,
-  * a dashboard-driven activation in another process) changes what is on disk
-  * while this process keeps serving its boot-time map.
-  *
-  * Measured 2026-09-17: a daemon booted at 06:06 loaded cursor-cli v1.0.5
-  * (its own boot sync having failed with CHANNEL_METADATA_UNAVAILABLE); a
-  * separate process activated v1.0.6 at 07:11; a worker launched at 07:19
-  * still got 1.0.5 — whose `meshCoordinator` declares no
-  * `delegatedWorkerIsolation`, so `--approve-mcps` was never applied and the
-  * worker booted with zero MCP tools. Nothing in the system reported the
-  * divergence.
-  *
-  * ── Why polling the store rather than being notified ───────────────────
-  * The alternative — having the publishing CLI signal the daemon over IPC —
-  * was rejected: it couples correctness to the writer cooperating and to a
-  * daemon being alive and addressable at flip time, and on a machine running
-  * both a preview and a stable daemon it is ambiguous which to notify. Reading
-  * the store makes the daemon's own launch path responsible for its own
-  * freshness, which holds no matter who wrote.
-  *
-  * ── Why lazy rather than a timer or fs.watch ───────────────────────────
-  * `fs.watch` needs a watcher lifecycle the loader has no teardown hook for,
-  * and can fire mid-launch — reloading the provider map underneath a spawn
-  * that has already read from it. A timer reloads on a schedule unrelated to
-  * when anyone actually needs the data. Checking at the point of use is both
-  * cheaper at rest (nothing runs when nothing launches) and correctly ordered:
-  * the reload completes before the caller reads the map, never during.
-  *
-  * ── Debounce ───────────────────────────────────────────────────────────
-  * Bounded to one signature sample per CHANNEL_ACTIVATION_RECHECK_MS. Without
-  * it a burst of activations — `publish-provider-channels --execute` flips all
-  * 51 types in a tight loop — would have each subsequent launch re-running a
-  * full `loadAll()` (every provider dir on disk, re-parsed) against a pointer
-  * set still mid-flight. The window also collapses a fan-out of concurrent
-  * worker launches into a single check.
-  *
-  * Returns true when a reload actually happened.
-  */
+  /** ★STORE-RELOAD: reload when another process activated a different bundle. Returns true on reload. */
   refreshIfChannelActivationChanged(options?: { force?: boolean }): boolean {
-    if (!this.channelStore) return false;
-    const now = Date.now();
-    if (
-      !options?.force
-      && this.channelActivationSignature !== null
-      && now - this.channelActivationCheckedAtMs < CHANNEL_ACTIVATION_RECHECK_MS
-    ) {
-      return false;
-    }
-    let signature: string;
-    try {
-      signature = this.channelStore.activationSignature(this.channel);
-    } catch (e: any) {
-      // Fail closed toward the CURRENT map: an unreadable store is not
-      // evidence of a new activation, and reloading on it would turn a
-      // transient fs error into a provider-map rebuild on every launch.
-      this.log(`⚠ Verified channel signature unreadable (${this.channel}): ${e?.message || e}`);
-      this.channelActivationCheckedAtMs = now;
-      return false;
-    }
-    this.channelActivationCheckedAtMs = now;
-    if (this.channelActivationSignature === signature) return false;
-    const previous = this.channelActivationSignature;
-    // First sample (null) establishes the baseline without a reload — the map
-    // was just built by loadAll(), so it is current by construction.
-    if (previous === null) {
-      this.channelActivationSignature = signature;
-      return false;
-    }
-    this.log(
-      `Verified channel activations changed out-of-process on ${this.channel}`
-      + ' — reloading providers so this daemon stops serving the superseded bundle',
-    );
-    // loadAll() re-stamps channelActivationSignature via
-    // loadVerifiedChannelActivations(), so no manual assignment here.
-    this.loadAll();
-    return true;
+    return this.channelSync.refreshIfChannelActivationChanged(options);
   }
-
- /**
-  * Sync verified channel activations for the installed provider set
-  * (providers installed into .upstream via the dashboard install flow, plus
-  * everything already activated on this channel).
-  *
-  * `bootstrapAll: true` (fresh-install bootstrap) instead targets every
-  * activatable entry on the channel — used when a clean machine has an empty
-  * .upstream AND an empty channel store, so there is no installed set to diff
-  * against. Digest verification is unchanged: only verified entries activate.
-  *
-  * Fail-closed / last-known-good: on any metadata or transport failure
-  * nothing new is activated and the previous active objects keep loading.
-  * Reloads providers when at least one activation changed.
-  */
-  async syncVerifiedChannel(options?: {
-    bootstrapAll?: boolean;
-    /**
-     * Extra provider types unioned into the sync target set. This is THE
-     * install path for a channel type this machine has never activated
-     * (kimi class: published after bootstrap → not in pins, not in
-     * .upstream, unreachable by any targeted sync). Once activated the
-     * pointer itself keeps the type in every future target set, so the
-     * intent record needs no .upstream write.
-     */
-    extraTargetTypes?: readonly string[];
-    /**
-     * Restrict the sync to EXACTLY these provider types (the dashboard's
-     * per-provider "Update" button). Replaces the default target set instead
-     * of extending it, so one row's update never moves another provider's
-     * pin. A restricted sync is partial by construction, so it does not write
-     * the channel-activation stamp — the boot-time daemon-update ride-along
-     * (maybeSyncVerifiedChannelOnDaemonUpdate) must still run for the rest.
-     */
-    onlyTargetTypes?: readonly string[];
-  }): Promise<ChannelSyncReport> {
-    if (!this.channelStore) {
-      return {
-        channel: this.channel,
-        status: 'error',
-        activated: [],
-        skipped: [],
-        errors: [{ code: 'STORE_CORRUPT', message: 'verified channel store is disabled' }],
-      };
-    }
-    const runtime = new ProviderChannelRuntime({
-      store: this.channelStore,
-      registryBaseUrl: this.registryBaseUrl,
-      providerTarballUrl: this.providerTarballUrl,
-      logFn: this.logFn,
-      ...this.channelSyncIO,
-    });
-    const onlyTypes = (options?.onlyTargetTypes ?? [])
-      .filter((t): t is string => typeof t === 'string' && t.trim() !== '')
-      .map((t) => t.trim());
-    const restricted = onlyTypes.length > 0;
-    const targetTypes = restricted
-      ? new Set(onlyTypes)
-      : collectSyncTargetTypes(this.upstreamDir, this.channelStore, this.channel);
-    if (!restricted) {
-      for (const extra of options?.extraTargetTypes ?? []) {
-        if (typeof extra === 'string' && extra.trim()) targetTypes.add(extra.trim());
-      }
-    }
-    const report = await runtime.sync({ channel: this.channel, targetTypes, bootstrapAll: options?.bootstrapAll });
-    for (const skip of report.skipped) {
-      this.log(`⚠ Verified channel skip: ${skip.reason}`);
-    }
-    for (const err of report.errors) {
-      this.log(`⚠ Verified channel error: ${err.code}: ${err.message}`);
-    }
-    if (report.activated.length > 0) {
-      this.loadAll();
-      // Self-heal the staleness badge: everything just activated is neither
-      // stale nor new anymore. Pure cache update — no network from here.
-      if (this.channelStalenessSnapshot) {
-        const activatedTypes = new Set(report.activated.map((a) => a.providerType));
-        this.channelStalenessSnapshot = {
-          ...this.channelStalenessSnapshot,
-          staleTypes: this.channelStalenessSnapshot.staleTypes.filter((t) => !activatedTypes.has(t)),
-          newTypes: this.channelStalenessSnapshot.newTypes.filter((t) => !activatedTypes.has(t)),
-        };
-      }
-    }
-    if (report.status !== 'error' && !restricted) {
-      // Record which daemon version last completed a verified sync — the
-      // boot-time daemon-update activation (maybeSyncVerifiedChannelOnDaemonUpdate)
-      // short-circuits on this stamp. Errored syncs write nothing so the next
-      // boot retries.
-      this.writeChannelActivationStamp();
-    }
-    return report;
+  syncVerifiedChannel(options?: Parameters<ProviderChannelSync['syncVerifiedChannel']>[0]): Promise<ChannelSyncReport> {
+    return this.channelSync.syncVerifiedChannel(options);
   }
-
- /**
-  * Number of valid active pointers on the resolved channel (0 = empty or
-  * disabled store). Corrupt pointer files are excluded by the store.
-  */
-  countVerifiedChannelPointers(): number {
-    if (!this.channelStore) return 0;
-    try {
-      return this.channelStore.listPointers(this.channel).pointers.size;
-    } catch {
-      return 0;
-    }
+  countVerifiedChannelPointers(): number { return this.channelSync.countVerifiedChannelPointers(); }
+  maybeFirstSyncVerifiedChannel(): Promise<ChannelSyncReport | null> { return this.channelSync.maybeFirstSyncVerifiedChannel(); }
+  maybeSyncVerifiedChannelOnDaemonUpdate(): Promise<ChannelSyncReport | null> {
+    return this.channelSync.maybeSyncVerifiedChannelOnDaemonUpdate();
   }
-
- /**
-  * Bounded one-shot first sync for an empty verified channel store.
-  *
-  * Two empty-store cases, one gate (channel has no active pointers):
-  *
-  *   1. Providers installed into .upstream (upgrade / channel-switch paths —
-  *      the rc.20 preview activation gap): targeted sync of the installed set.
-  *   2. Fresh install — .upstream empty AND store empty (the "daemon ships
-  *      empty" design left new users at 0 providers and unable to run
-  *      anything): bootstrap sync. The registry channel listing itself is the
-  *      target set, so the daemon self-populates the whole verified channel
-  *      on first boot. Only digest-verified entries activate;
-  *      legacy-unverified rows stay typed skips.
-  *
-  * Runs at most one verified sync per call and ONLY while the resolved
-  * channel has zero pointers — once anything is activated the gate
-  * short-circuits forever (no re-bootstrap, no network). Fail-closed: any
-  * registry/transport failure activates nothing (last-known-good preserved)
-  * and is retried on the next boot or via check_provider_updates. Never
-  * invoked from any status path.
-  *
-  * Returns the sync report, or null when the first-sync gate did not apply.
-  */
-  async maybeFirstSyncVerifiedChannel(): Promise<ChannelSyncReport | null> {
-    if (!this.channelStore) return null;
-    if (this.countVerifiedChannelPointers() > 0) return null;
-    if (this.hasUpstream()) return this.syncVerifiedChannel();
-    // Fresh-install bootstrap: nothing installed, nothing activated. Make
-    // sure the providers dir exists (nothing else creates it on this path —
-    // the store's own mkdirs only cover providers/.store) and pull the whole
-    // verified channel from the registry.
-    try { fs.mkdirSync(this.defaultProvidersDir, { recursive: true }); } catch { /* best-effort */ }
-    return this.syncVerifiedChannel({ bootstrapAll: true });
-  }
-
-  /** Stamp path recording which daemon version last ran a successful verified sync. */
-  private channelActivationStampPath(): string {
-    return path.join(this.defaultProvidersDir, '.channel-activation-stamp.json');
-  }
-
-  private readChannelActivationStamp(): { daemonVersion?: string; channel?: string } | null {
-    try {
-      return JSON.parse(fs.readFileSync(this.channelActivationStampPath(), 'utf-8'));
-    } catch {
-      return null;
-    }
-  }
-
-  /**
-   * CROSS-TRACK CLOBBER GUARD (2026-08-22 incident).
-   *
-   * The stamp lives under `<configDir>/providers/`, and ADHDEV_CONFIG_DIR
-   * overrides that path while feeding NO signal into resolveProviderChannel.
-   * So a process pointed at a preview config dir whose channel merely fell
-   * through to the 'stable' default (a source run under tsx — no
-   * `__ADHDEV_BUILD_CHANNEL__` bundler define — inheriting a coordinator
-   * shell's ADHDEV_CONFIG_DIR=~/.adhdev-preview) would rewrite the LIVE
-   * preview daemon's stamp to channel:'stable'. The next real daemon boot then
-   * read a stamp whose channel no longer matched its own, and the observed
-   * result was 52 providers loading as 0.
-   *
-   * The guard is deliberately narrow — refusing the write outright would be an
-   * over-correction that breaks the stamp's whole purpose (skipping a full
-   * network sync on same-version reboots), making every boot re-sync. We
-   * suppress ONLY the write that would flip an existing stamp onto another
-   * track, and only when this process's channel is a fallback rather than an
-   * explicit signal. Concretely, a write is skipped iff ALL hold:
-   *   - the channel was NOT explicitly signalled (fallback 'stable'), and
-   *   - the config dir's basename implies the OTHER track
-   *     (configDirChannelMismatch — the same predicate daemon-lifecycle.ts
-   *     already warns on), and
-   *   - a stamp already exists whose channel differs from ours.
-   * A normal daemon — explicit channel, or a matching/absent stamp — always
-   * writes, so the network-free-boot contract is untouched.
-   */
-  private writeChannelActivationStamp(): void {
-    if (!this.daemonVersion) return;
-    const stampPath = this.channelActivationStampPath();
-    if (!this.channelIsExplicit) {
-      const mismatch = configDirChannelMismatch(getConfigDir(), this.channel, false);
-      if (mismatch) {
-        const existing = this.readChannelActivationStamp();
-        if (existing && existing.channel && existing.channel !== this.channel) {
-          // Loud and attributable: the 2026-08-21 misdiagnosis cost hours
-          // because the overwrite was silent. Name both sides and the cause.
-          this.log(
-            `⚠ Refusing to overwrite channel activation stamp ${stampPath}: `
-            + `existing stamp is ${existing.daemonVersion ?? 'unknown'}@${existing.channel}, `
-            + `this process resolved channel '${this.channel}' by FALLBACK (no explicit `
-            + `providerChannel/${PROVIDER_CHANNEL_ENV_VAR}/build-track stamp) while the config dir `
-            + `${getConfigDir()} implies the '${mismatch.impliedTrack}' track. `
-            + `This usually means a source/dev process (tsx — no build-track stamp) inherited a live `
-            + `daemon's ADHDEV_CONFIG_DIR. Leaving the live stamp intact; set `
-            + `${PROVIDER_CHANNEL_ENV_VAR}=${mismatch.impliedTrack} for this process if it is meant to `
-            + `manage the '${mismatch.impliedTrack}' channel.`,
-          );
-          return;
-        }
-      }
-    }
-    try {
-      fs.mkdirSync(this.defaultProvidersDir, { recursive: true });
-      fs.writeFileSync(stampPath, JSON.stringify({
-        daemonVersion: this.daemonVersion,
-        channel: this.channel,
-        syncedAt: new Date().toISOString(),
-      }, null, 2));
-    } catch { /* best-effort — a missing stamp only means one extra sync next boot */ }
-  }
-
- /**
-  * DAEMON-UPDATE = PROVIDER ACTIVATION (owner decision 2026-08-10, option C).
-  *
-  * The verified-channel pin deliberately only advances on an explicit
-  * activation ("the user saying now"), which left published provider fixes
-  * invisible on every machine where nobody pressed the button — live 08-10
-  * measurement: every fleet pin still carried the 08-07 bootstrap timestamp
-  * after a publish AND a full fleet restart. The daemon upgrade is the one
-  * update moment the user already trusts, so ride it: on the FIRST boot of a
-  * new daemon version (or after a channel switch), run one full verified
-  * sync. Every other boot stays network-free — the stamp written by the last
-  * successful sync short-circuits same-version boots. Fail-closed: an
-  * errored sync writes no stamp, so the next boot retries; last-known-good
-  * activations are untouched throughout (syncVerifiedChannel semantics).
-  *
-  * Empty stores are excluded — maybeFirstSyncVerifiedChannel owns bootstrap,
-  * and its successful sync writes the same stamp (both paths converge in
-  * syncVerifiedChannel), so a fresh install does not double-sync.
-  *
-  * Note this advances EXISTING targets (active pins + installed set) only. A
-  * provider type first published after bootstrap still needs an explicit
-  * catalog install — surfaced by checkVerifiedChannelStaleness as newTypes.
-  */
-  async maybeSyncVerifiedChannelOnDaemonUpdate(): Promise<ChannelSyncReport | null> {
-    if (!this.channelStore || !this.daemonVersion) return null;
-    if (this.countVerifiedChannelPointers() === 0) return null;
-    const stamp = this.readChannelActivationStamp();
-    if (stamp?.daemonVersion === this.daemonVersion && stamp?.channel === this.channel) return null;
-    this.log(`Daemon version transition detected (stamp=${stamp?.daemonVersion ?? 'none'}@${stamp?.channel ?? '-'} → ${this.daemonVersion}@${this.channel}) — running verified channel sync`);
-    return this.syncVerifiedChannel();
-  }
-
- /**
-  * Read-only staleness probe (owner decision 2026-08-10, option A).
-  *
-  * ONE channel-listing request, no downloads, no pointer writes: compares the
-  * channel's current entries against the local active pins and reports
-  *   - staleTypes: pinned providers whose channel entry moved past the pin
-  *   - newTypes:   activatable channel entries this machine has never
-  *                 activated NOR installed — the class that made kimi
-  *                 invisible (published after bootstrap, unreachable even by
-  *                 activate_provider_updates because the sync target set is
-  *                 pins+installed).
-  * The result is cached on the loader for get_status_metadata so dashboards
-  * can badge without triggering network from a status path. Fail-closed: on
-  * any transport/shape error the previous snapshot is kept and the error is
-  * recorded on it.
-  */
-  async checkVerifiedChannelStaleness(): Promise<ProviderChannelStalenessSnapshot> {
-    const checkedAt = new Date().toISOString();
-    if (!this.channelStore) {
-      return this.channelStalenessSnapshot = { checkedAt, channel: this.channel, staleTypes: [], newTypes: [], error: 'verified channel store is disabled' };
-    }
-    const runtime = new ProviderChannelRuntime({
-      store: this.channelStore,
-      registryBaseUrl: this.registryBaseUrl,
-      providerTarballUrl: this.providerTarballUrl,
-      logFn: this.logFn,
-      ...this.channelSyncIO,
-    });
-    let entries: Awaited<ReturnType<ProviderChannelRuntime['fetchChannelEntries']>>;
-    try {
-      entries = await runtime.fetchChannelEntries(this.channel);
-    } catch (e: any) {
-      const prev = this.channelStalenessSnapshot;
-      return this.channelStalenessSnapshot = {
-        checkedAt,
-        channel: this.channel,
-        staleTypes: prev?.staleTypes ?? [],
-        newTypes: prev?.newTypes ?? [],
-        // Expand AggregateError sub-errors: a bare "AggregateError" string
-        // here is unattributable (see describeFetchError).
-        error: describeFetchError(e),
-      };
-    }
-    const pins = this.listVerifiedChannelPins();
-    const installedTargets = collectSyncTargetTypes(this.upstreamDir, this.channelStore, this.channel);
-    const staleTypes: string[] = [];
-    const newTypes: string[] = [];
-    for (const entry of entries) {
-      if (!entry.bundleDigest) continue; // not activatable — never actionable
-      const pin = pins.get(entry.providerType);
-      if (pin) {
-        if (pin.active?.digest !== entry.bundleDigest) staleTypes.push(entry.providerType);
-      } else if (!installedTargets.has(entry.providerType) && !this.providers.has(entry.providerType)) {
-        // "New" means this machine cannot run the provider today. A type
-        // already LOADED through any layer — user dir, sibling checkout,
-        // external source — is not new, and offering an install would be
-        // actively misleading: those layers OUTRANK the channel store
-        // (getProviderRoots order), so activating the channel bundle would
-        // change nothing the daemon loads. Live catch 2026-08-10: a dev
-        // machine loading opencode/cursor from the sibling checkout showed
-        // both as "감지됨" rows AND as installable new types.
-        newTypes.push(entry.providerType);
-      }
-    }
-    staleTypes.sort();
-    newTypes.sort();
-    return this.channelStalenessSnapshot = { checkedAt, channel: this.channel, staleTypes, newTypes };
-  }
-
-  /** Last probe result (null until the first checkVerifiedChannelStaleness run). Pure read. */
-  getChannelStalenessSnapshot(): ProviderChannelStalenessSnapshot | null {
-    return this.channelStalenessSnapshot;
-  }
-
- /**
-  * The verified-channel PIN for each provider: what this daemon actually
-  * loads, as opposed to what is sitting in `.upstream`.
-  *
-  * Those two diverge by design. The store pin only advances on an explicit
-  * activation (`check_provider_updates` today), so a published fix can be
-  * present in the repo and in ~/.adhdev/providers/.upstream while the daemon
-  * keeps running an older pinned object — which is exactly how a shipped kimi
-  * resume fix stayed invisible on a machine for a full day. Anything that
-  * reports "the installed version" without this is reporting the wrong number.
-  *
-  * Pure read: no network, no pointer writes.
-  */
-  listVerifiedChannelPins(): Map<string, ActivationPointer> {
-    if (!this.channelStore) return new Map();
-    try {
-      return this.channelStore.listPointers(this.channel).pointers;
-    } catch {
-      return new Map();
-    }
-  }
-
- /**
-  * Roll a provider back to its previously activated verified object. Pure
-  * local pointer flip — no network. Returns the new active digest, or null
-  * when there is no rollback target.
-  */
-  rollbackVerifiedChannel(providerType: string): string | null {
-    if (!this.channelStore) return null;
-    const ref = this.channelStore.rollback(this.channel, providerType);
-    if (ref) this.loadAll();
-    return ref?.digest ?? null;
-  }
-
- /** Remove a verified activation (e.g. the provider was uninstalled). */
-  deactivateVerifiedChannel(providerType: string): boolean {
-    if (!this.channelStore) return false;
-    const removed = this.channelStore.removePointer(this.channel, providerType);
-    if (removed) this.loadAll();
-    return removed;
-  }
+  checkVerifiedChannelStaleness(): Promise<ProviderChannelStalenessSnapshot> { return this.channelSync.checkVerifiedChannelStaleness(); }
+  getChannelStalenessSnapshot(): ProviderChannelStalenessSnapshot | null { return this.channelSync.getChannelStalenessSnapshot(); }
+  listVerifiedChannelPins(): Map<string, ActivationPointer> { return this.channelSync.listVerifiedChannelPins(); }
+  rollbackVerifiedChannel(providerType: string): string | null { return this.channelSync.rollbackVerifiedChannel(providerType); }
+  deactivateVerifiedChannel(providerType: string): boolean { return this.channelSync.deactivateVerifiedChannel(providerType); }
 
  /**
   * Check if upstream directory exists and has providers.
@@ -1223,15 +566,6 @@ export class ProviderLoader {
     } catch { return false; }
   }
 
- /**
- * Get raw provider metadata by type (NO scripts loaded).
- * Safe for: category checks, icon, displayName, targetFilter, cdpPorts.
- * NOT safe for: script execution (readChat, listModels, sendMessage).
- * Use resolve() when scripts are needed.
- */
-  getMeta(type: string): ProviderModule | undefined {
-    return this.providers.get(type);
-  }
 
  /**
  * Resolve the on-disk spec path for a provider WITHOUT resolving scripts.
@@ -1257,550 +591,6 @@ export class ProviderLoader {
     return typeof specPath === 'string' && specPath.trim() ? specPath : null;
   }
 
- /**
- * Resolve provider type by alias
- * 'claude' → 'claude-cli', 'codex' → 'codex-cli' etc
- * Returns input as-is if no match found.
- *
- * `categories` narrows resolution to the given provider categories. Without it
- * the resolution order is unchanged (direct type match first, then alias scan)
- * — every existing caller keeps its exact behaviour.
- *
- * The hint exists because provider types and aliases share one namespace across
- * categories, so a direct match can shadow an alias that a category-scoped
- * caller actually wants. Concretely: `extension/codex` declares `type: 'codex'`
- * while `cli/codex-cli` declares `aliases: ['codex']`, so unscoped
- * `resolveAlias('codex')` returns the IDE-webview provider. `adhdev launch`
- * only ever starts a cli/acp session, so it passes `['cli', 'acp']` and gets
- * `codex-cli`. Within a scope the direct-match-first order still holds.
- */
-  resolveAlias(input: string, categories?: readonly ProviderCategory[]): string {
-    const inScope = (p: ProviderModule | undefined): boolean =>
-      !!p && (!categories || categories.includes(p.category));
-
- // 1. directly match
-    const direct = this.providers.get(input);
-    if (inScope(direct)) return input;
- // 2. alias match
-    for (const p of this.providers.values()) {
-      if (p.aliases?.includes(input) && inScope(p)) return p.type;
-    }
-    return input;
-  }
-
- /**
- * Get provider with alias resolution (get + alias fallback)
- * `categories` narrows resolution the same way as `resolveAlias`, and also
- * filters the returned module so an out-of-scope provider is never handed back.
- */
-  getByAlias(input: string, categories?: readonly ProviderCategory[]): ProviderModule | undefined {
-    const resolved = this.providers.get(this.resolveAlias(input, categories));
-    if (resolved && categories && !categories.includes(resolved.category)) return undefined;
-    return resolved;
-  }
-
- /**
- * Build CLI/ACP detection list (replaces cli-detector)
- * Dynamically generated from provider.js spawn.command.
- *
- * By default this only returns providers already enabled for this machine
- * (config.machineProviders[type].enabled === true) — that's the right scope
- * for `launch`, which must not spawn something the user never opted into.
- *
- * `includeDisabled: true` returns every cli/acp provider with a spawn
- * command regardless of the enabled flag, with `enabled` reporting the REAL
- * per-provider state instead of the hardcoded `true` the gated list implies.
- * This exists for first-run setup detection: a fresh machine's
- * machineProviders is `{}` (nothing enabled yet), so the gated list is always
- * empty and setup could never show what it actually found on disk — the
- * wizard needs to see candidates BEFORE anything has been enabled.
- */
-  getCliDetectionList(options?: { includeDisabled?: boolean }): CliDetectionEntry[] {
-    const result: CliDetectionEntry[] = [];
-    for (const p of this.providers.values()) {
-      const enabled = this.isMachineProviderEnabled(p.type);
-      if ((p.category === 'cli' || p.category === 'acp') && p.spawn?.command && (enabled || options?.includeDisabled)) {
-        const versionCommand = this.getPlatformVersionCommand(p.versionCommand);
-        const command = this.getSpawnCommand(p.type, p.spawn.command);
-        const args = this.getSpawnArgs(p.type, p.spawn.args || []);
-        // Only when no machine executable override is set (then `command` IS the override).
-        const wrappedBinary = command === p.spawn.command
-          ? resolveWrappedCliBinary(p.spawn.command, (p as { binary?: unknown }).binary)
-          : undefined;
-        result.push({
-          id: p.type,
-          displayName: p.displayName || p.name,
-          icon: p.icon || '🔧',
-          command,
-          ...(args.length > 0 ? { args } : {}),
-          ...(wrappedBinary ? { detectCommand: wrappedBinary } : {}),
-          category: p.category,
-          enabled,
-          ...(typeof versionCommand === 'string' && versionCommand.trim()
-            ? { versionCommand: versionCommand.trim() }
-            : {}),
-        });
-      }
-    }
-    return result;
-  }
-
- /**
- * List providers by category
- */
-  getByCategory(cat: ProviderCategory): ProviderModule[] {
-    return [...this.providers.values()].filter(p => p.category === cat);
-  }
-
- /**
- * Extension Extension providers with extensionIdPattern only
- * (used by discoverAgentWebviews in daemon-cdp.ts)
- */
-  getExtensionProviders(): ProviderModule[] {
-    return [...this.providers.values()].filter(
-      p => p.category === 'extension' && p.extensionIdPattern
-    );
-  }
-
- /**
- * All loaded providers
- */
-  getAll(): ProviderModule[] {
-    return [...this.providers.values()];
-  }
-
- /**
- * Check if a provider is enabled (per-IDE)
- * Checks ideSettings[ideType].extensions[type].enabled.
- * Default false (disabled) — user must explicitly enable.
- * Always returns true when called without ideType.
- */
-  isEnabled(type: string, ideType?: string): boolean {
-    if (!ideType) return true;
-    try {
-      return this.getIdeExtensionEnabledState(ideType, type);
-    } catch {
-      return false;
-    }
-  }
-
- /**
- * Resolve per-IDE extension enabled state using the same normalization
- * that runtime attach/remove uses.
- */
-  getIdeExtensionEnabledState(ideType: string, extensionType: string): boolean {
-    const config = this.readConfig();
-    if (!config) return false;
-    const baseIdeType = ideType.split('_')[0];
-    const val = config.ideSettings?.[baseIdeType]?.extensions?.[extensionType]?.enabled;
-    return val === true;
-  }
-
- /**
- * Save IDE extension enabled setting
- */
-  setIdeExtensionEnabled(ideType: string, extensionType: string, enabled: boolean): boolean {
-    const config = this.readConfig();
-    if (!config) return false;
-
-    try {
-      const baseIdeType = ideType.split('_')[0];
-      if (!config.ideSettings) config.ideSettings = {};
-      if (!config.ideSettings[baseIdeType]) config.ideSettings[baseIdeType] = {};
-      if (!config.ideSettings[baseIdeType].extensions) config.ideSettings[baseIdeType].extensions = {};
-      config.ideSettings[baseIdeType].extensions[extensionType] = { enabled };
-      this.writeConfig(config);
-      this.log(`IDE extension setting: ${ideType}.${extensionType}.enabled = ${enabled}`);
-      return true;
-    } catch (e) {
-      this.log(`Failed to save IDE extension setting: ${(e as Error).message}`);
-      return false;
-    }
-  }
-
- /**
- * Return only enabled providers by category (per-IDE)
- */
-  getEnabledByCategory(cat: ProviderCategory, ideType?: string): ProviderModule[] {
-    return this.getByCategory(cat).filter(p => this.isEnabled(p.type, ideType));
-  }
-
- /**
- * Extension Enabled extension providers with extensionIdPattern only (per-IDE)
- */
-  getEnabledExtensionProviders(ideType?: string): ProviderModule[] {
-    return this.getExtensionProviders().filter(p => this.isEnabled(p.type, ideType));
-  }
-
- /**
- * Return CDP port map for IDE providers
- * Used by launch.ts, adhdev-daemon.ts
- */
-  getCdpPortMap(): Record<string, [number, number]> {
-    const map: Record<string, [number, number]> = {};
-    for (const p of this.providers.values()) {
-      if (p.category === 'ide' && p.cdpPorts) {
-        map[p.type] = p.cdpPorts as [number, number];
-      }
-    }
-    return map;
-  }
-
- /**
- * Return IDE process name map (macOS)
- */
-  getMacAppIdentifiers(): Record<string, string> {
-    const map: Record<string, string> = {};
-    for (const p of this.providers.values()) {
-      if (p.category === 'ide' && p.processNames?.darwin) {
-        map[p.type] = p.processNames.darwin as string;
-      }
-    }
-    return map;
-  }
-
- /**
- * Return IDE process name map (Windows)
- */
-  getWinProcessNames(): Record<string, string[]> {
-    const map: Record<string, string[]> = {};
-    for (const p of this.providers.values()) {
-      if (p.category === 'ide' && p.processNames?.win32) {
-        map[p.type] = p.processNames.win32 as string[];
-      }
-    }
-    return map;
-  }
-
- /**
- * Available IDE types (only those with cdpPorts)
- */
-  getAvailableIdeTypes(): string[] {
-    return [...this.providers.values()]
-      .filter(p => p.category === 'ide' && p.cdpPorts)
-      .map(p => p.type);
-  }
-
-  getSpawnCommand(type: string, fallback?: string): string {
-    const providerType = this.resolveAlias(type);
-    const machineConfig = this.getMachineProviderConfig(providerType);
-    if (machineConfig.executable) return machineConfig.executable;
-    return fallback || this.providers.get(providerType)?.spawn?.command || providerType;
-  }
-
-  getIdeCliCommand(type: string, fallback?: string | null): string | null {
-    const override = this.getOptionalStringSetting(type, 'cliPathOverride');
-    if (override) return override;
-    return fallback || this.providers.get(type)?.cli || null;
-  }
-
-  getIdePathCandidates(type: string, fallback?: string[]): string[] {
-    const override = this.getOptionalStringSetting(type, 'appPathOverride');
-    if (override) return [override];
-    if (fallback && fallback.length > 0) return fallback;
-    const osPaths = this.providers.get(type)?.paths?.[process.platform];
-    return Array.isArray(osPaths) ? [...osPaths] : [];
-  }
-
-  isMachineProviderEnabled(type: string): boolean {
-    const providerType = this.resolveAlias(type);
-    const config = this.readConfig();
-    return config?.machineProviders?.[providerType]?.enabled === true;
-  }
-
-  /**
-   * Whether this provider's quota is probed on this machine. An INDEPENDENT
-   * axis from isMachineProviderEnabled (which gates launching and mesh
-   * claims): a machine can use a provider and still opt out of quota reads.
-   * Absent = enabled, so configs written before this axis existed keep
-   * probing; only an explicit `false` stops the probe.
-   */
-  isMachineQuotaEnabled(type: string): boolean {
-    const providerType = this.resolveAlias(type);
-    return this.readConfig()?.machineProviders?.[providerType]?.quotaEnabled !== false;
-  }
-
-  getMachineProviderConfig(type: string): MachineProviderConfig {
-    const providerType = this.resolveAlias(type);
-    const raw = this.readConfig()?.machineProviders?.[providerType];
-    if (!raw || typeof raw !== 'object') return {};
-    const executable = typeof raw.executable === 'string' && raw.executable.trim() ? raw.executable.trim() : undefined;
-    return {
-      ...(raw.enabled === true ? { enabled: true } : {}),
-      ...(typeof raw.quotaEnabled === 'boolean' ? { quotaEnabled: raw.quotaEnabled } : {}),
-      ...(executable ? { executable } : {}),
-      ...(Array.isArray(raw.args) ? { args: raw.args.filter((arg: unknown): arg is string => typeof arg === 'string') } : {}),
-      ...(raw.lastDetection && typeof raw.lastDetection === 'object' ? { lastDetection: raw.lastDetection } : {}),
-      ...(raw.lastVerification && typeof raw.lastVerification === 'object' ? { lastVerification: raw.lastVerification } : {}),
-    };
-  }
-
-  setMachineProviderConfig(type: string, patch: Partial<MachineProviderConfig>): boolean {
-    const providerType = this.resolveAlias(type);
-    if (!this.providers.has(providerType)) return false;
-    const config = this.readConfig();
-    if (!config) return false;
-
-    try {
-      if (!config.machineProviders) config.machineProviders = {};
-      const current: MachineProviderConfig = config.machineProviders[providerType] || {};
-      const next: MachineProviderConfig = { ...current };
-      const enabledChanged = 'enabled' in patch && current.enabled !== (patch.enabled === true);
-      const executableChanged = 'executable' in patch;
-      const argsChanged = 'args' in patch;
-      if ('enabled' in patch) next.enabled = patch.enabled === true;
-      if ('executable' in patch) {
-        const executable = typeof patch.executable === 'string' ? patch.executable.trim() : '';
-        if (executable) next.executable = executable;
-        else delete next.executable;
-      }
-      if ('args' in patch) {
-        if (Array.isArray(patch.args)) next.args = patch.args.filter((arg): arg is string => typeof arg === 'string');
-        else delete next.args;
-      }
-      if ('quotaEnabled' in patch) {
-        // Unset IS enabled — storing an explicit `true` would be noise, so
-        // enabling removes the key. This axis changes no launch behaviour, so
-        // lastDetection/lastVerification are deliberately left alone.
-        if (patch.quotaEnabled === false) next.quotaEnabled = false;
-        else delete next.quotaEnabled;
-      }
-      if (enabledChanged || executableChanged || argsChanged) {
-        delete next.lastDetection;
-        delete next.lastVerification;
-      }
-      if ('lastDetection' in patch) {
-        if (patch.lastDetection) next.lastDetection = patch.lastDetection;
-        else delete next.lastDetection;
-      }
-      if ('lastVerification' in patch) {
-        if (patch.lastVerification) next.lastVerification = patch.lastVerification;
-        else delete next.lastVerification;
-      }
-      config.machineProviders[providerType] = next;
-      if (next.enabled !== true) {
-        this.providerAvailability.set(providerType, { installed: false, detectedPath: null });
-      }
-      this.writeConfig(config);
-      this.log(`Machine provider config updated: ${providerType}`);
-      return true;
-    } catch (e) {
-      this.log(`Failed to save machine provider config: ${(e as Error).message}`);
-      return false;
-    }
-  }
-
-  setMachineProviderEnabled(type: string, enabled: boolean): boolean {
-    return this.setMachineProviderConfig(type, { enabled });
-  }
-
-  setMachineQuotaEnabled(type: string, enabled: boolean): boolean {
-    return this.setMachineProviderConfig(type, { quotaEnabled: enabled });
-  }
-
-  private getEffectiveProviderAvailability(type: string): ProviderAvailabilityState | undefined {
-    const providerType = this.resolveAlias(type);
-    const availability = this.providerAvailability.get(providerType);
-    if (availability) return availability;
-
-    const machineConfig = this.getMachineProviderConfig(providerType);
-    const lastDetection = machineConfig.lastDetection;
-    if (!lastDetection) return undefined;
-    return {
-      installed: lastDetection.ok === true,
-      detectedPath: typeof lastDetection.path === 'string' && lastDetection.path.trim()
-        ? lastDetection.path.trim()
-        : null,
-    };
-  }
-
-  getMachineProviderStatus(type: string): ProviderMachineStatus {
-    const providerType = this.resolveAlias(type);
-    if (!this.isMachineProviderEnabled(providerType)) return 'disabled';
-    const availability = this.getEffectiveProviderAvailability(providerType);
-    if (!availability) return 'enabled_unchecked';
-    return availability.installed ? 'detected' : 'not_detected';
-  }
-
-  getSpawnArgs(type: string, fallback: string[] = []): string[] {
-    const machineConfig = this.getMachineProviderConfig(type);
-    if (machineConfig.args) return [...machineConfig.args];
-    return [...fallback];
-  }
-
-  private parseArgsSetting(value: string): string[] {
-    return parseArgsSetting(value);
-  }
-
-  setProviderAvailability(type: string, state: { installed: boolean; detectedPath?: string | null }): void {
-    this.providerAvailability.set(type, {
-      installed: !!state.installed,
-      detectedPath: state.detectedPath ?? null,
-    });
-  }
-
-  setCliDetectionResults(results: Array<{ id: string; installed: boolean; path?: string }>, replace: boolean = true): void {
-    const resultByType = new Map<string, { id: string; installed: boolean; path?: string }>();
-    for (const result of results) {
-      resultByType.set(this.resolveAlias(result.id), result);
-    }
-
-    if (replace) {
-      for (const provider of this.providers.values()) {
-        if (provider.category === 'cli' || provider.category === 'acp') {
-          const result = resultByType.get(provider.type);
-          const installed = !!result?.installed;
-          const detectedPath = result?.path || null;
-          this.providerAvailability.set(provider.type, { installed, detectedPath });
-          if (this.isMachineProviderEnabled(provider.type)) {
-            this.setMachineProviderConfig(provider.type, {
-              lastDetection: {
-                ok: installed,
-                stage: 'detection',
-                checkedAt: new Date().toISOString(),
-                command: this.getSpawnCommand(provider.type, provider.spawn?.command),
-                path: detectedPath,
-                message: installed ? 'Provider command detected' : 'Provider command was not detected',
-              },
-            });
-          }
-        }
-      }
-      return;
-    }
-
-    for (const result of results) {
-      const providerType = this.resolveAlias(result.id);
-      const provider = this.providers.get(providerType);
-      const detectedPath = result.path || null;
-      this.setProviderAvailability(providerType, {
-        installed: !!result.installed,
-        detectedPath,
-      });
-      if (provider && (provider.category === 'cli' || provider.category === 'acp') && this.isMachineProviderEnabled(providerType)) {
-        this.setMachineProviderConfig(providerType, {
-          lastDetection: {
-            ok: !!result.installed,
-            stage: 'detection',
-            checkedAt: new Date().toISOString(),
-            command: this.getSpawnCommand(providerType, provider.spawn?.command),
-            path: detectedPath,
-            message: result.installed ? 'Provider command detected' : 'Provider command was not detected',
-          },
-        });
-      }
-    }
-  }
-
-  setIdeDetectionResults(results: Array<{ id: string; installed: boolean; path?: string | null; cliCommand?: string | null }>, replace: boolean = true): void {
-    if (replace) {
-      for (const provider of this.providers.values()) {
-        if (provider.category === 'ide') {
-          this.providerAvailability.set(provider.type, { installed: false, detectedPath: null });
-        }
-      }
-    }
-    for (const result of results) {
-      this.setProviderAvailability(result.id, {
-        installed: !!result.installed,
-        detectedPath: result.cliCommand || result.path || null,
-      });
-    }
-  }
-
-  getAvailableProviderInfos(): Array<ProviderModule & { installed?: boolean; detectedPath?: string | null; enabled: boolean; machineStatus: ProviderMachineStatus; lastDetection?: MachineProviderCheckResult; lastVerification?: MachineProviderCheckResult }> {
-    return this.getAll().map((provider) => {
-      const availability = this.getEffectiveProviderAvailability(provider.type);
-      const enabled = this.isMachineProviderEnabled(provider.type);
-      const machineConfig = this.getMachineProviderConfig(provider.type);
-      // ★MODEL-DISCOVERY OVERLAY. This is the single merge point: every model
-      // picker (new-session dialog, mesh slot editor, MAGI kind panel) reads
-      // its list from this inventory via modelOptionsForProvider, so applying
-      // the overlay here fixes all three at once and none of them can drift.
-      //
-      // `readModelCache` is a synchronous Map lookup that CANNOT fetch — this
-      // runs on the inventory path, which is hot. Refreshes happen on the
-      // registry's own schedule; see models/registry.ts.
-      //
-      // A non-ok (or absent) snapshot yields an empty patch, so the manifest's
-      // own modelOptions stand. That is the fallback guarantee: a signed-out or
-      // offline CLI can never blank a picker.
-      const modelPatch = buildModelOverlayPatch(readModelCache(provider.type), provider);
-      return {
-        ...provider,
-        enabled,
-        machineStatus: this.getMachineProviderStatus(provider.type),
-        ...(machineConfig.lastDetection ? { lastDetection: machineConfig.lastDetection } : {}),
-        ...(machineConfig.lastVerification ? { lastVerification: machineConfig.lastVerification } : {}),
-        ...(availability
-          ? {
-              installed: availability.installed,
-              detectedPath: availability.detectedPath,
-            }
-          : {}),
-        ...modelPatch,
-      };
-    });
-  }
-
-  /**
-   * Which providers' model lists could not be verified on this machine, and
-   * why — the input to the "cannot verify" badge.
-   *
-   * ★Three states, deliberately distinguished, because collapsing them is how a
-   * UI ends up claiming a list is current when nothing ever checked it:
-   *   - `cannotVerify` — the provider DECLARES it cannot be discovered
-   *     (`kind: 'none'`: claude-cli, hermes-cli). Honest permanent state.
-   *   - `stale`        — discovery is supported but the last attempt FAILED
-   *     (signed out, offline, unparseable). The manifest list is in force and
-   *     may be wrong.
-   *   - neither        — discovered successfully; the list is ground truth.
-   */
-  getModelDiscoveryStaleness(): { cannotVerifyTypes: string[]; staleTypes: string[] } {
-    const cannotVerifyTypes: string[] = [];
-    const staleTypes: string[] = [];
-    for (const provider of this.getAll()) {
-      if (provider.category !== 'cli') continue;
-      const spec = (provider as { modelDiscovery?: { kind?: string } }).modelDiscovery;
-      if (!spec || spec.kind === 'none') {
-        // Undeclared and declared-none both mean "nothing checked this list".
-        cannotVerifyTypes.push(provider.type);
-        continue;
-      }
-      // Only providers this machine can actually run are judged: a CLI that is
-      // not installed here has no list to be stale about, and flagging it would
-      // fill the badge with rows the user cannot act on.
-      if (!this.isMachineProviderEnabled(provider.type)) continue;
-      const snapshot = readModelCache(provider.type);
-      if (!snapshot || snapshot.status !== 'ok') staleTypes.push(provider.type);
-    }
-    cannotVerifyTypes.sort();
-    staleTypes.sort();
-    return { cannotVerifyTypes, staleTypes };
-  }
-
- /**
- * Register IDE providers to core/detector registry
- * → Enables detectIDEs() to detect provider.js-based IDEs
- */
-  registerToDetector(): number {
-    let count = 0;
-    for (const p of this.providers.values()) {
-      if (p.category === 'ide' && p.cli && p.paths) {
-        registerIDEDefinition({
-          id: p.type,
-          name: p.name,
-          displayName: p.displayName || p.name,
-          icon: p.icon || '💻',
-          cli: p.cli,
-          paths: p.paths as { darwin?: string[]; win32?: string[]; linux?: string[] },
-        });
-        count++;
-      }
-    }
-    this.log(`Registered ${count} IDE providers to detector`);
-    return count;
-  }
 
   /**
   * Return final provider with OS/version overrides applied.
@@ -1851,153 +641,10 @@ export class ProviderLoader {
     }
 
  // 2. Apply version-based script selection
-    if (currentVersion) {
-      resolved._resolvedVersion = currentVersion;
-
-      // --- New format: compatibility array ---
-      if (base.compatibility) {
-        const compat = base.compatibility;
-        let matched = false;
-
-        for (const entry of compat) {
-          if (this.matchesVersion(currentVersion, entry.ideVersion)) {
-            // entry.scriptDir is optional now — spec-driven providers (agy,
-            // codex on >=0.137, claude on >=2.1) only ship `spec` here, so
-            // there's nothing to load from the filesystem. SpecCliAdapter
-            // takes over via the `spec` path later in this method.
-            if (entry.scriptDir) {
-              const loaded = this.loadScriptsFromDir(type, entry.scriptDir);
-              if (loaded) {
-                resolved.scripts = loaded;
-                this.debugLog(`  [compatibility] ${type} v${currentVersion} → ${entry.scriptDir}`);
-                resolved._resolvedScriptDir = entry.scriptDir;
-                resolved._resolvedScriptsSource = `compatibility:${entry.ideVersion}`;
-                if (providerDir) {
-                  const fullDir = path.join(providerDir, entry.scriptDir);
-                  resolved._resolvedScriptsPath = fs.existsSync(path.join(fullDir, 'scripts.js'))
-                    ? path.join(fullDir, 'scripts.js')
-                    : fullDir;
-                }
-                matched = true;
-              }
-            } else {
-              // Spec-only entry — still counts as a match so the
-              // defaultScriptDir fallback below doesn't kick in.
-              matched = true;
-            }
-            break; // first match wins
-          }
-        }
-
-        // No compatibility match → defaultScriptDir
-        if (!matched && base.defaultScriptDir) {
-          const loaded = this.loadScriptsFromDir(type, base.defaultScriptDir);
-          if (loaded) {
-            resolved.scripts = loaded;
-            this.debugLog(`  [compatibility] ${type} v${currentVersion} → default: ${base.defaultScriptDir}`);
-            resolved._resolvedScriptDir = base.defaultScriptDir;
-            resolved._resolvedScriptsSource = 'defaultScriptDir:version_miss';
-            if (providerDir) {
-              const fullDir = path.join(providerDir, base.defaultScriptDir);
-              resolved._resolvedScriptsPath = fs.existsSync(path.join(fullDir, 'scripts.js'))
-                ? path.join(fullDir, 'scripts.js')
-                : fullDir;
-            }
-          }
-          resolved._versionWarning = `Version ${currentVersion} not in compatibility matrix. Using default scripts.`;
-        }
-
-      // --- Legacy format: versions field ---
-      } else if (base.versions) {
-        for (const [range, override] of Object.entries(base.versions)) {
-          if (!this.matchesVersion(currentVersion, range)) continue;
-
-          const dirOverride = override.__dir;
-          if (dirOverride) {
-            const loaded = this.loadScriptsFromDir(type, dirOverride);
-            if (loaded) {
-              resolved.scripts = loaded;
-              this.log(`  [version override] ${type} ${range} → ${dirOverride}`);
-              resolved._resolvedScriptDir = dirOverride;
-              resolved._resolvedScriptsSource = `versions:${range}`;
-              if (providerDir) {
-                const fullDir = path.join(providerDir, dirOverride);
-                resolved._resolvedScriptsPath = fs.existsSync(path.join(fullDir, 'scripts.js'))
-                  ? path.join(fullDir, 'scripts.js')
-                  : fullDir;
-              }
-            }
-          } else if (override.scripts) {
-            resolved.scripts = { ...resolved.scripts, ...override.scripts };
-          }
-        }
-      }
-    } else if (base.compatibility && base.defaultScriptDir) {
-      // No version detected but compatibility format → use defaultScriptDir
-      const loaded = this.loadScriptsFromDir(type, base.defaultScriptDir);
-      if (loaded) {
-        resolved.scripts = loaded;
-        this.debugLog(`  [compatibility] ${type} no version detected → default: ${base.defaultScriptDir}`);
-        resolved._resolvedScriptDir = base.defaultScriptDir;
-        resolved._resolvedScriptsSource = 'defaultScriptDir:no_version';
-        if (providerDir) {
-          const fullDir = path.join(providerDir, base.defaultScriptDir);
-          resolved._resolvedScriptsPath = fs.existsSync(path.join(fullDir, 'scripts.js'))
-            ? path.join(fullDir, 'scripts.js')
-            : fullDir;
-        }
-      }
-    }
+    this.applyVersionScripts(resolved, base, type, providerDir, currentVersion);
 
  // 3. Composite override (OS + version)
- //    Legacy shape: base.overrides is an Array<{ when: {os,version}, scripts }>.
- //    v1 manifests (Phase 3-4) repurposed `overrides` as an object map of
- //    capability overrides (e.g. { detectStatus: { path, schema } }), which is
- //    consumed by the SDK builders, not by this resolver. Only iterate when
- //    the field is in the legacy array shape.
-    if (Array.isArray(base.overrides)) {
-      for (const override of base.overrides) {
-        const osMatch = !override.when.os || override.when.os === currentOs;
-        const verMatch = !override.when.version || (currentVersion && this.matchesVersion(currentVersion, override.when.version));
-        if (osMatch && verMatch && override.scripts) {
-          resolved.scripts = { ...resolved.scripts, ...override.scripts };
-        }
-      }
-    } else if (base.overrides && typeof base.overrides === 'object') {
-      // v1 manifest shape: { detectStatus: { path }, parseSession: { path }, ... }
-      // Each script name maps to a path inside the provider directory. We load
-      // the file and merge its export(s) into resolved.scripts. Lets a
-      // provider override a single primitive (e.g. just detectStatus) while
-      // letting the SDK synthesize the rest from the tui block.
-      const providerDir = this.findProviderDirInternal(base.type);
-      if (providerDir) {
-        for (const [scriptName, override] of Object.entries(base.overrides as Record<string, any>)) {
-          if (!override || typeof override.path !== 'string') continue;
-          const fullPath = path.join(providerDir, override.path);
-          if (!fs.existsSync(fullPath)) {
-            this.log(`  [overrides] ${base.type}: ${scriptName} path not found: ${fullPath}`);
-            continue;
-          }
-          try {
-            // Override scripts go through the same whitelist gate as the
-            // main scripts dir. Use the provider parent root so a v1
-            // override can still require ../_shared helpers.
-            registerProviderScriptRootSafely(path.dirname(path.dirname(providerDir)));
-            delete require.cache[require.resolve(fullPath)];
-            const fn = require(fullPath);
-            const target = typeof fn === 'function' ? fn : (fn && fn[scriptName]);
-            if (typeof target === 'function') {
-              resolved.scripts = { ...resolved.scripts, [scriptName]: target } as any;
-              this.log(`  [overrides] ${base.type}: ${scriptName} loaded from ${override.path}`);
-            } else {
-              this.log(`  [overrides] ${base.type}: ${scriptName} export missing in ${override.path}`);
-            }
-          } catch (e: any) {
-            this.log(`  [overrides] ${base.type}: ${scriptName} require failed: ${e?.message || e}`);
-          }
-        }
-      }
-    }
+    this.applyScriptOverrides(resolved, base, currentOs, currentVersion);
 
     if ((resolved.category === 'cli' || resolved.category === 'acp') && resolved.spawn?.command) {
       resolved.spawn = {
@@ -2014,6 +661,148 @@ export class ProviderLoader {
     applySpecNativeHistoryWiring(resolved, base, providerDir, currentVersion);
 
     return resolved;
+  }
+
+  /**
+   * resolve() stage 2 — version-based script selection: the `compatibility`
+   * array (first matching range wins, else `defaultScriptDir`), the legacy
+   * `versions` map, or `defaultScriptDir` when no version is known.
+   */
+  private applyVersionScripts(
+    resolved: ResolvedProvider,
+    base: ProviderModule,
+    type: string,
+    providerDir: string | undefined,
+    currentVersion: string | undefined,
+  ): void {
+    if (currentVersion) {
+      resolved._resolvedVersion = currentVersion;
+
+      // --- New format: compatibility array ---
+      if (base.compatibility) {
+        let matched = false;
+        for (const entry of base.compatibility) {
+          if (!matchesVersion(currentVersion, entry.ideVersion)) continue;
+          // entry.scriptDir is optional now — spec-driven providers (agy,
+          // codex on >=0.137, claude on >=2.1) only ship `spec` here, so
+          // there's nothing to load from the filesystem. SpecCliAdapter
+          // takes over via the `spec` path later in resolve(). A spec-only
+          // entry still counts as a match so the defaultScriptDir fallback
+          // below doesn't kick in.
+          if (!entry.scriptDir) { matched = true; break; }
+          if (this.applyScriptDir(resolved, type, providerDir, entry.scriptDir, `compatibility:${entry.ideVersion}`)) {
+            this.debugLog(`  [compatibility] ${type} v${currentVersion} → ${entry.scriptDir}`);
+            matched = true;
+          }
+          break; // first match wins
+        }
+
+        // No compatibility match → defaultScriptDir
+        if (!matched && base.defaultScriptDir) {
+          if (this.applyScriptDir(resolved, type, providerDir, base.defaultScriptDir, 'defaultScriptDir:version_miss')) {
+            this.debugLog(`  [compatibility] ${type} v${currentVersion} → default: ${base.defaultScriptDir}`);
+          }
+          resolved._versionWarning = `Version ${currentVersion} not in compatibility matrix. Using default scripts.`;
+        }
+
+      // --- Legacy format: versions field ---
+      } else if (base.versions) {
+        for (const [range, override] of Object.entries(base.versions)) {
+          if (!matchesVersion(currentVersion, range)) continue;
+          const dirOverride = override.__dir;
+          if (dirOverride) {
+            if (this.applyScriptDir(resolved, type, providerDir, dirOverride, `versions:${range}`)) {
+              this.log(`  [version override] ${type} ${range} → ${dirOverride}`);
+            }
+          } else if (override.scripts) {
+            resolved.scripts = { ...resolved.scripts, ...override.scripts };
+          }
+        }
+      }
+    } else if (base.compatibility && base.defaultScriptDir) {
+      // No version detected but compatibility format → use defaultScriptDir
+      if (this.applyScriptDir(resolved, type, providerDir, base.defaultScriptDir, 'defaultScriptDir:no_version')) {
+        this.debugLog(`  [compatibility] ${type} no version detected → default: ${base.defaultScriptDir}`);
+      }
+    }
+  }
+
+  /** Load `scriptDir` into `resolved.scripts` and stamp its provenance. False when nothing loaded. */
+  private applyScriptDir(
+    resolved: ResolvedProvider,
+    type: string,
+    providerDir: string | undefined,
+    scriptDir: string,
+    source: string,
+  ): boolean {
+    const loaded = this.loadScriptsFromDir(type, scriptDir);
+    if (!loaded) return false;
+    resolved.scripts = loaded;
+    resolved._resolvedScriptDir = scriptDir;
+    resolved._resolvedScriptsSource = source;
+    if (providerDir) {
+      const fullDir = path.join(providerDir, scriptDir);
+      resolved._resolvedScriptsPath = fs.existsSync(path.join(fullDir, 'scripts.js'))
+        ? path.join(fullDir, 'scripts.js')
+        : fullDir;
+    }
+    return true;
+  }
+
+  /**
+   * resolve() stage 3 — composite overrides.
+   * Legacy shape: base.overrides is an Array<{ when: {os,version}, scripts }>.
+   * v1 manifests (Phase 3-4) repurposed `overrides` as an object map of
+   * capability overrides (e.g. { detectStatus: { path, schema } }): each
+   * script name maps to a path inside the provider directory, whose export is
+   * merged into resolved.scripts. Lets a provider override a single primitive
+   * (e.g. just detectStatus) while letting the SDK synthesize the rest from
+   * the tui block.
+   */
+  private applyScriptOverrides(
+    resolved: ResolvedProvider,
+    base: ProviderModule,
+    currentOs: string,
+    currentVersion: string | undefined,
+  ): void {
+    if (Array.isArray(base.overrides)) {
+      for (const override of base.overrides) {
+        const osMatch = !override.when.os || override.when.os === currentOs;
+        const verMatch = !override.when.version || (currentVersion && matchesVersion(currentVersion, override.when.version));
+        if (osMatch && verMatch && override.scripts) {
+          resolved.scripts = { ...resolved.scripts, ...override.scripts };
+        }
+      }
+      return;
+    }
+    if (!base.overrides || typeof base.overrides !== 'object') return;
+    const providerDir = this.findProviderDirInternal(base.type);
+    if (!providerDir) return;
+    for (const [scriptName, override] of Object.entries(base.overrides as Record<string, any>)) {
+      if (!override || typeof override.path !== 'string') continue;
+      const fullPath = path.join(providerDir, override.path);
+      if (!fs.existsSync(fullPath)) {
+        this.log(`  [overrides] ${base.type}: ${scriptName} path not found: ${fullPath}`);
+        continue;
+      }
+      try {
+        // Override scripts go through the same whitelist gate as the
+        // main scripts dir. Use the provider parent root so a v1
+        // override can still require ../_shared helpers.
+        registerProviderScriptRootSafely(path.dirname(path.dirname(providerDir)));
+        delete require.cache[require.resolve(fullPath)];
+        const fn = require(fullPath);
+        const target = typeof fn === 'function' ? fn : (fn && fn[scriptName]);
+        if (typeof target === 'function') {
+          resolved.scripts = { ...resolved.scripts, [scriptName]: target } as any;
+          this.log(`  [overrides] ${base.type}: ${scriptName} loaded from ${override.path}`);
+        } else {
+          this.log(`  [overrides] ${base.type}: ${scriptName} export missing in ${override.path}`);
+        }
+      } catch (e: any) {
+        this.log(`  [overrides] ${base.type}: ${scriptName} require failed: ${e?.message || e}`);
+      }
+    }
   }
 
  /**
@@ -2063,7 +852,7 @@ export class ProviderLoader {
     }
 
     // Fallback: build from individual .js files
-    const result = this.buildScriptWrappersFromDir(dir);
+    const result = buildScriptWrappersFromDir(dir);
     this.scriptsCache.set(dir, result);
     return result;
   }
@@ -2136,178 +925,6 @@ export class ProviderLoader {
     this.loadAll();
   }
 
- // ─── Provider Settings API ─────────────────────────
-
- /**
- * Get public settings schema for a provider (for dashboard UI rendering)
- */
-  getPublicSettings(type: string): ProviderSettingSchema[] {
-    const settings = this.getSettingsSchema(type);
-    return Object.entries(settings)
-      .filter(([, def]) => def.public === true)
-      .map(([key, def]) => ({ key, ...def }));
-  }
-
- /**
- * Get public settings schema for all providers
- */
-  getAllPublicSettings(): Record<string, ProviderSettingSchema[]> {
-    const result: Record<string, ProviderSettingSchema[]> = {};
-    for (const [type] of this.providers) {
-      const settings = this.getPublicSettings(type);
-      if (settings.length > 0) result[type] = settings;
-    }
-    return result;
-  }
-
- /**
- * Resolved setting value for a provider (default + user override)
- */
-  getSettingValue(type: string, key: string): any {
-    const providerType = this.resolveAlias(type);
-    const machineConfig = this.getMachineProviderConfig(providerType);
-    if (key === 'enabled') {
-      return machineConfig.enabled === true;
-    }
-    if (key === 'executablePath') {
-      return machineConfig.executable || '';
-    }
-    if (key === 'executableArgs') {
-      const args = machineConfig.args;
-      return args ? args.map((arg) => /\s/.test(arg) ? JSON.stringify(arg) : arg).join(' ') : '';
-    }
-    const schemaDef = this.getSettingsSchema(providerType)[key];
-    // (fix) Previously this hard-coded `autoApprove` boolean default to `true`,
-    // overriding whatever schemaDef.default the provider.json declared. That
-    // surfaced as soon as a provider added an `autoApprove` schema entry with
-    // default=false: the user had never opted in but the daemon treated the
-    // session as auto-approve, which then triggered recordAutoApproval every
-    // time the CLI showed an approval modal — producing a flood of system
-    // "Auto-approved: ..." messages and keeping the session pinned to
-    // generating while modals cycled in and out. Trust the schemaDef.default.
-    const defaultVal = schemaDef ? schemaDef.default : undefined;
-
-    const config = this.readConfig();
-    const userVal = config?.providerSettings?.[providerType]?.[key];
-    return userVal !== undefined ? userVal : defaultVal;
-  }
-
- /**
- * All resolved settings for a provider (default + user override)
- */
-  getSettings(type: string): Record<string, any> {
-    const providerType = this.resolveAlias(type);
-    const settings = this.getSettingsSchema(providerType);
-    const result: Record<string, any> = {};
-    for (const [key] of Object.entries(settings)) {
-      result[key] = this.getSettingValue(providerType, key);
-    }
-    return result;
-  }
-
- /**
- * Save provider setting value (writes to config.json)
- */
-  setSetting(type: string, key: string, value: any): boolean {
-    const providerType = this.resolveAlias(type);
-    const schemaDef = this.getSettingsSchema(providerType)[key];
-    if (!schemaDef) return false;
-
- // Non-public settings cannot be modified externally
-    if (!schemaDef.public) return false;
-
- // Type validation
-    if (schemaDef.type === 'boolean' && typeof value !== 'boolean') return false;
-    if (schemaDef.type === 'string' && typeof value !== 'string') return false;
-    if (schemaDef.type === 'number') {
-      if (typeof value !== 'number') return false;
-      if (schemaDef.min !== undefined && value < schemaDef.min) return false;
-      if (schemaDef.max !== undefined && value > schemaDef.max) return false;
-    }
-    if (schemaDef.type === 'select' && schemaDef.options && !schemaDef.options.includes(value)) return false;
-
-    if (key === 'enabled') {
-      return this.setMachineProviderEnabled(providerType, value);
-    }
-    if (key === 'executablePath') {
-      return this.setMachineProviderConfig(providerType, { executable: value });
-    }
-    if (key === 'executableArgs') {
-      return this.setMachineProviderConfig(providerType, {
-        args: value.trim() ? this.parseArgsSetting(value) : undefined,
-      });
-    }
-
-    const config = this.readConfig();
-    if (!config) return false;
-
-    try {
-      if (!config.providerSettings) config.providerSettings = {};
-      if (!config.providerSettings[providerType]) config.providerSettings[providerType] = {};
-      config.providerSettings[providerType][key] = value;
-      this.writeConfig(config);
-      this.log(`Setting updated: ${providerType}.${key} = ${JSON.stringify(value)}`);
-      return true;
-    } catch (e) {
-      this.log(`Failed to save setting: ${(e as Error).message}`);
-      return false;
-    }
-  }
-
-  private getOptionalStringSetting(type: string, key: string): string | null {
-    const value = this.getSettingValue(type, key);
-    if (typeof value !== 'string') return null;
-    const trimmed = value.trim();
-    return trimmed ? trimmed : null;
-  }
-
-  protected readConfig(): any | null {
-    try {
-      const { loadConfig } = require('../config/config.js');
-      return loadConfig();
-    } catch {
-      return null;
-    }
-  }
-
-  protected writeConfig(config: any): void {
-    const { saveConfig } = require('../config/config.js');
-    saveConfig(config);
-  }
-
-  private getPlatformVersionCommand(versionCommand?: ProviderModule['versionCommand']): string | undefined {
-    return getPlatformVersionCommand(versionCommand);
-  }
-
-  private getSettingsSchema(type: string): Record<string, ProviderSettingDef> {
-    const provider = this.providers.get(type);
-    if (!provider) return {};
-    const result = {
-      ...this.getSyntheticSettings(type, provider),
-      ...(provider.settings || {}),
-    };
-    // (fix) Previously this clause forced `autoApprove.default = true` for any
-    // boolean autoApprove schema, even when the provider.json explicitly set
-    // `default: false`. Combined with the synthetic-settings fallback at
-    // getSyntheticSettings (which also defaults autoApprove to true when the
-    // provider doesn't supply one), that meant CLI providers silently turned on
-    // auto-approval, producing a flood of "Auto-approved: ..." system messages
-    // every time an approval modal appeared and pinning the session to
-    // generating while modals cycled. Trust the provider's declared default.
-    if (result.autoApprove?.type === 'boolean') {
-      result.autoApprove = {
-        ...result.autoApprove,
-        public: true,
-        label: result.autoApprove.label || 'Auto Approve',
-        description: result.autoApprove.description || 'Automatically approve actionable prompts without sending approval alerts.',
-      };
-    }
-    return result;
-  }
-
-  private getSyntheticSettings(type: string, provider: ProviderModule): Record<string, ProviderSettingDef> {
-    return getSyntheticSettings(type, provider);
-  }
 
  // ─── Private ───────────────────────────────────
 
@@ -2326,14 +943,6 @@ export class ProviderLoader {
     );
   }
 
-  /**
-   * Build a scripts function map from individual .js files in a directory.
-   * Body lives in provider-loader-support.ts.
-   */
-  private buildScriptWrappersFromDir(dir: string): Partial<ProviderScripts> {
-    return buildScriptWrappersFromDir(dir);
-  }
-
  /**
   * Recursively scan directory to load provider files.
   * Body lives in provider-loader-manifest-scan.ts; this forwards the
@@ -2345,13 +954,5 @@ export class ProviderLoader {
       dir,
       excludeDirs,
     );
-  }
-
- /**
- * Simple semver range matching — delegates to the extracted pure helper.
- * Kept as a private method so existing call sites are untouched.
- */
-  private matchesVersion(current: string, range: string): boolean {
-    return matchesVersion(current, range);
   }
 }

@@ -38,6 +38,7 @@ import {
     CLAUDE_TUI_REVIEW_UNCONFIRMED_PREFIX,
 } from '@adhdev/mesh-shared'
 import { SpecCliAdapter } from '../../../src/providers/spec/cli-adapter.js'
+import { assertFocusedClaudeTuiReview } from '../../../src/providers/spec/claude-tui-prompt.js'
 
 type Dispatch = { kind: string; data?: string }
 
@@ -154,19 +155,19 @@ describe('review gate: delivered-but-unconfirmed vs wrong-screen', () => {
         // This is the assertion that goes RED without the fix: the old code threw
         // the not-focused class here, which the web mapped to "verification
         // failed ... try again".
-        await expect(adapter.assertFocusedClaudeTuiReview(prompt, false))
+        await expect(assertFocusedClaudeTuiReview(adapter.claudeTuiHost, prompt, false))
             .rejects.toThrow(new RegExp(CLAUDE_TUI_REVIEW_UNCONFIRMED_PREFIX))
     })
 
     it('REPRO: the unconfirmed class is distinct from the not-focused class', async () => {
         const { adapter } = makeAdapter([QUESTION_SCREEN])
-        await expect(adapter.assertFocusedClaudeTuiReview(prompt, false))
+        await expect(assertFocusedClaudeTuiReview(adapter.claudeTuiHost, prompt, false))
             .rejects.not.toThrow(new RegExp(CLAUDE_TUI_REVIEW_PAGE_NOT_FOCUSED_PREFIX))
     })
 
     it('REPRO: the unconfirmed error says the answer was delivered, never that it failed', async () => {
         const { adapter } = makeAdapter([QUESTION_SCREEN])
-        const error = await adapter.assertFocusedClaudeTuiReview(prompt, false).catch((e: Error) => e)
+        const error = await assertFocusedClaudeTuiReview(adapter.claudeTuiHost, prompt, false).catch((e: Error) => e)
         expect(error.message).toMatch(/delivered/i)
         expect(error.message).not.toMatch(/\bfailed\b/i)
     })
@@ -193,7 +194,7 @@ describe('review gate: delivered-but-unconfirmed vs wrong-screen', () => {
         const { adapter } = makeAdapter([QUESTION_SCREEN])
         withNativeHistory(adapter, { resolved: false })
 
-        await expect(adapter.assertFocusedClaudeTuiReview(prompt, false))
+        await expect(assertFocusedClaudeTuiReview(adapter.claudeTuiHost, prompt, false))
             .rejects.toThrow(new RegExp(CLAUDE_TUI_REVIEW_UNCONFIRMED_PREFIX))
         // Unconfirmed is NOT resolved: the prompt stays held so the question is
         // not silently lost if the answer really did not take.
@@ -205,7 +206,7 @@ describe('review gate: delivered-but-unconfirmed vs wrong-screen', () => {
 
     it('REAL FAILURE: a foreign focused question still fails closed as not-focused', async () => {
         const { adapter } = makeAdapter([FOREIGN_QUESTION_SCREEN])
-        await expect(adapter.assertFocusedClaudeTuiReview(prompt, false))
+        await expect(assertFocusedClaudeTuiReview(adapter.claudeTuiHost, prompt, false))
             .rejects.toThrow(new RegExp(CLAUDE_TUI_REVIEW_PAGE_NOT_FOCUSED_PREFIX))
         expect(adapter.activeInteractivePrompt).toBe(prompt)
     })
@@ -216,14 +217,14 @@ describe('review gate: delivered-but-unconfirmed vs wrong-screen', () => {
         const { adapter } = makeAdapter([FOREIGN_QUESTION_SCREEN])
         withNativeHistory(adapter, { resolved: true })
 
-        await expect(adapter.assertFocusedClaudeTuiReview(prompt, false))
+        await expect(assertFocusedClaudeTuiReview(adapter.claudeTuiHost, prompt, false))
             .rejects.toThrow(new RegExp(CLAUDE_TUI_REVIEW_PAGE_NOT_FOCUSED_PREFIX))
         expect(adapter.activeInteractivePrompt).toBe(prompt)
     })
 
     it('REAL FAILURE: a non-picker screen we do not own still fails closed', async () => {
         const { adapter } = makeAdapter(['Some unrelated full-screen widget\n\nnothing to select here'])
-        await expect(adapter.assertFocusedClaudeTuiReview(prompt, false))
+        await expect(assertFocusedClaudeTuiReview(adapter.claudeTuiHost, prompt, false))
             .rejects.toThrow(new RegExp(CLAUDE_TUI_REVIEW_PAGE_NOT_FOCUSED_PREFIX))
     })
 })

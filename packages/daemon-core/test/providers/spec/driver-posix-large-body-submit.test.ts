@@ -28,12 +28,12 @@ import { describe, it, expect, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { FsmDriver } from '../../../src/providers/spec/fsm-driver.js';
 import {
-    FsmDriver,
     resolveSubmitDelayMs,
     shouldUseVerifiedSubmit,
     VERIFIED_SUBMIT_MIN_CHARS,
-} from '../../../src/providers/spec/fsm-driver.js';
+} from '../../../src/providers/spec/submit-policy.js';
 import type {
     PtyTransportFactory, PtyRuntimeTransport, PtySpawnOptions,
 } from '../../../src/cli-adapters/pty-transport.js';

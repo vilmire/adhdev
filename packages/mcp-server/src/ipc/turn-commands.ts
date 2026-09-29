@@ -273,6 +273,20 @@ async function dispatch<Req extends { v: typeof TURN_IPC_PROTOCOL_VERSION }, Res
     } catch (error) {
         throw classifyTransportFailure(command, error);
     }
+    return decodeTurnIpcAnswer(command, raw, decodeResponse);
+}
+
+/**
+ * The daemon's answer to one turn-IPC command, unwrapped and decoded — the half of
+ * a command round trip after the transport. Also how a composite answer that
+ * carries several commands' results (mesh_status_view) is read: each part goes
+ * through its own command's decoder. Throws TurnIpcCommandError like a failed call.
+ */
+export function decodeTurnIpcAnswer<Res>(
+    command: TurnIpcCommand,
+    raw: unknown,
+    decodeResponse: (value: unknown) => Res | null,
+): Res {
     const unwrapped = unwrapEnvelope(raw);
     if (!unwrapped.ok) {
         throw new TurnIpcCommandError(unwrapped.code ?? 'turn_ledger_unavailable', command, unwrapped.error);

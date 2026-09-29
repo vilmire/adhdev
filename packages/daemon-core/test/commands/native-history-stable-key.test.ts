@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeNativeHistoryMessages } from '../../src/commands/chat-commands-read.js';
+import { normalizeNativeHistoryMessages } from '../../src/commands/chat-commands-read-native-normalize.js';
 import type { ChatMessage } from '../../src/types.js';
 
 /**

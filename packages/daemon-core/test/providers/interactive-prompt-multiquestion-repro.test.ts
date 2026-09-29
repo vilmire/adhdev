@@ -5,6 +5,7 @@ import {
   readFocusedClaudeTuiQuestion,
 } from '../../src/providers/types/interactive-prompt';
 import { SpecCliAdapter } from '../../src/providers/spec/cli-adapter.js';
+import { captureClaudeTuiPrompt } from '../../src/providers/spec/claude-tui-prompt.js';
 
 // Repro for the reported bug: a 3-question multi-select AskUserQuestion
 // (아침/점심/저녁, each with 3 side-dish options) renders as CHECKBOXES in the
@@ -266,7 +267,7 @@ describe('mixed single/multi prompt — return-pass page identity', () => {
       },
     });
 
-    await adapter.captureClaudeTuiPrompt(q1Page, ['배포 방식', '검증 항목']);
+    await captureClaudeTuiPrompt(adapter.claudeTuiHost, q1Page, ['배포 방식', '검증 항목']);
     return adapter.activeInteractivePrompt;
   }
 

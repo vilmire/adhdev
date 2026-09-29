@@ -17,11 +17,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import {
-    executeNativeHistory,
-    TOOL_CALL_SUMMARY_MAX,
-    TOOL_RESULT_SUMMARY_MAX,
-} from '../../../src/providers/spec/native-history-executor.js';
+import { executeNativeHistory } from '../../../src/providers/spec/native-history-executor.js';
+import { TOOL_CALL_SUMMARY_MAX, TOOL_RESULT_SUMMARY_MAX } from '../../../src/providers/spec/native-history-tool-blocks.js';
 import { expandToolBlock } from '../../../src/providers/spec/tool-block-expand.js';
 
 let tmpDir = '';

@@ -23,11 +23,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import {
-    __clearGlobCacheForTest,
-    getGlobCacheStats,
-    resolveJsonlSourcePath,
-} from '../../../src/providers/spec/native-history-executor.js';
+import { resolveJsonlSourcePath } from '../../../src/providers/spec/native-history-executor.js';
+import { __clearGlobCacheForTest, getGlobCacheStats } from '../../../src/providers/spec/native-history-paths.js';
 
 let root = '';
 

@@ -24,8 +24,10 @@ import { runMeshWorktreeBootstrap } from '../../src/mesh/worktree-bootstrap-conf
  * makes the routing test below fail.
  */
 describe('WORKTREE-BOOTSTRAP-FAILED-EVENT', () => {
+  // clone_mesh_node + retry_mesh_node_bootstrap moved out of mesh-crud.ts into
+  // mesh-node-clone.ts (pure move). Only the path follows them.
   const crudSrc = readFileSync(
-    join(__dirname, '..', '..', 'src', 'commands', 'med-family', 'mesh-crud.ts'),
+    join(__dirname, '..', '..', 'src', 'commands', 'med-family', 'mesh-node-clone.ts'),
     'utf-8',
   )
 

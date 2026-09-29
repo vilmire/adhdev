@@ -19,6 +19,8 @@
  */
 'use strict';
 
+import { toNumber } from '../fetchers/coerce.js';
+
 /** Bump when the on-disk shape changes incompatibly. */
 export const SNAPSHOT_VERSION = 1;
 
@@ -99,26 +101,13 @@ export function shouldWriteSnapshot(
     return changed || age >= MAX_WRITE_INTERVAL_MS;
 }
 
-function toFiniteNumber(value: unknown): number | null {
-    if (typeof value === 'number') {
-        return Number.isFinite(value) ? value : null;
-    }
-    // Percentages arrive as JSON numbers, but a string is cheap to accept and
-    // costs nothing to tolerate if the protocol ever loosens.
-    if (typeof value === 'string' && value.trim() !== '') {
-        const parsed = Number(value);
-        return Number.isFinite(parsed) ? parsed : null;
-    }
-    return null;
-}
-
 /**
  * `resets_at` is Unix *seconds* in the statusline protocol; ADHDev speaks
  * milliseconds. Values already large enough to be milliseconds pass through, so
  * a future protocol change does not produce a reset date in the year 58000.
  */
 function toResetMs(value: unknown): number | null {
-    const seconds = toFiniteNumber(value);
+    const seconds = toNumber(value);
     if (seconds === null || seconds <= 0) {
         return null;
     }
@@ -130,7 +119,7 @@ function parseWindow(raw: unknown): StatuslineWindowRecord | null {
         return null;
     }
     const record = raw as Record<string, unknown>;
-    const usedPercent = toFiniteNumber(record.used_percentage);
+    const usedPercent = toNumber(record.used_percentage);
     if (usedPercent === null) {
         // A window with a reset time but no percentage tells us nothing about
         // consumption, which is the only thing we are here to record.
@@ -188,7 +177,7 @@ export function parseSnapshotFile(raw: string): StatuslineSnapshot | null {
     if (record.version !== SNAPSHOT_VERSION) {
         return null;
     }
-    const capturedAt = toFiniteNumber(record.capturedAt);
+    const capturedAt = toNumber(record.capturedAt);
     if (capturedAt === null) {
         return null;
     }
@@ -220,10 +209,10 @@ function parseRecordedWindow(raw: unknown): StatuslineWindowRecord | null {
         return null;
     }
     const record = raw as Record<string, unknown>;
-    const usedPercent = toFiniteNumber(record.usedPercent);
+    const usedPercent = toNumber(record.usedPercent);
     if (usedPercent === null) {
         return null;
     }
-    const resetsAt = toFiniteNumber(record.resetsAt);
+    const resetsAt = toNumber(record.resetsAt);
     return { usedPercent, resetsAt: resetsAt === null ? null : resetsAt };
 }

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { SpecCliAdapter, detectProviderFailure } from '../../../src/providers/spec/cli-adapter.js'
+import { SpecCliAdapter } from '../../../src/providers/spec/cli-adapter.js'
+import { detectProviderFailure } from '../../../src/providers/spec/provider-failure-classifier.js'
 
 /**
  * Collect signals in the shape the deleted provider-signal sink delivered: the

@@ -51,7 +51,7 @@ import { statMtimeMs } from './fs-utils.js';
 import { readClaudeRecords, readClaudeToolBlockAt } from './claude-cli-transcript.js';
 import { readCodexRecords, readCodexToolBlockAt } from './codex-cli-transcript.js';
 import { readGrokRecords, readGrokToolBlockAt } from './grok-cli-transcript.js';
-import { readAntigravityToolBlockAt } from './antigravity-cli-transcript.js';
+import { readAntigravityToolBlockAt } from './antigravity-conversation-db.js';
 
 /** One addressed block, already read at full length. */
 interface RawToolBlock {

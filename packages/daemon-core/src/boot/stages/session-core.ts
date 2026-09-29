@@ -17,7 +17,7 @@ import { DaemonAgentStreamManager } from '../../agent-stream/manager.js';
 import { AgentStreamPoller } from '../../agent-stream/poller.js';
 import { ProviderInstanceManager } from '../../providers/provider-instance-manager.js';
 import type { IdeProviderInstance } from '../../providers/ide-provider-instance.js';
-import { SUBMIT_DRAIN_SHUTDOWN_MAX_WAIT_MS } from '../../providers/spec/fsm-driver.js';
+import { SUBMIT_DRAIN_SHUTDOWN_MAX_WAIT_MS } from '../../providers/spec/submit-policy.js';
 import { setTranscriptClaimLivenessProbe } from '../../providers/native-history/transcript-claim-registry.js';
 import { createSessionLifecycleBus } from '../../sessions/lifecycle-bus.js';
 import { subscribeLifecycleTrace } from '../../sessions/lifecycle-trace.js';

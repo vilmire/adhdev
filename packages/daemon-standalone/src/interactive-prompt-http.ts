@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 import type { DaemonHostRuntime, InteractivePrompt, InteractivePromptResponse } from '@adhdev/daemon-core';
 import { isLoopbackRequest } from './raw-terminal-http.js';
+import { readJsonBody, writeJson } from './http-body.js';
 
 export interface InteractivePromptHttpService {
   getPrompt(sessionId: string): Promise<InteractivePrompt | null>;
@@ -23,30 +24,6 @@ function parseInteractivePromptPath(pathname: string): { sessionId: string; acti
 
 export function isInteractivePromptApiPath(pathname: string): boolean {
   return parseInteractivePromptPath(pathname) !== null;
-}
-
-async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
-  return await new Promise((resolve, reject) => {
-    let body = '';
-    req.setEncoding('utf8');
-    req.on('data', (chunk: string) => {
-      body += chunk;
-      if (body.length > 64 * 1024) reject(new Error('Request body too large'));
-    });
-    req.on('end', () => {
-      try {
-        resolve(body ? JSON.parse(body) : {});
-      } catch (error) {
-        reject(error);
-      }
-    });
-    req.on('error', reject);
-  });
-}
-
-function writeJson(res: ServerResponse, statusCode: number, value: unknown): void {
-  res.writeHead(statusCode, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify(value));
 }
 
 function errorStatus(error: unknown): number {

@@ -762,3 +762,50 @@ export function parseFirstMagiCandidateWithCompactFallback(
     }
     return null;
 }
+
+
+// ─── Task prompt (common-schema contract) ───────
+
+const MAGI_CLAIM_AUDIT_CONTRACT = `When done, respond with ONLY a single JSON object (no prose, no code fence) matching this exact schema:
+{
+  "claims": [ { "claim": "string", "stance": "support | oppose | uncertain", "evidence": ["file:line or external source"], "confidence": 0.0 } ],
+  "top_findings": ["string"],
+  "open_questions": ["string"]
+}
+Each claim MUST carry concrete evidence (file:line or a cited source) — unevidenced claims are flagged for re-verification. "stance" is your stance toward the claim being true. Do not invent agreement; report uncertainty honestly.`;
+
+const MAGI_RCA_CONTRACT = `When done, respond with ONLY a single JSON object (no prose, no code fence) matching this exact schema:
+{
+  "rootCause": "string — the single underlying root cause",
+  "failsAt": "file:line — the precise location the failure manifests",
+  "mechanism": "string — how the root cause produces the observed symptom",
+  "evidence": ["file:line or external source"],
+  "fixDirection": "string — the direction a fix should take (do NOT write the fix)",
+  "confidence": 0.0
+}
+"rootCause" and "mechanism" are REQUIRED. "evidence" MUST be non-empty (concrete file:line or cited source) — an empty evidence array is rejected and re-requested. Report uncertainty honestly.`;
+
+const MAGI_DESIGN_CONTRACT = `When done, respond with ONLY a single JSON object (no prose, no code fence) matching this exact schema:
+{
+  "recommendation": "string — the recommended approach",
+  "rationale": "string — why this approach",
+  "alternatives": ["string — approaches considered and not chosen"],
+  "tradeoffs": ["string"],
+  "risks": ["string"],
+  "evidence": ["file:line or external source backing the recommendation"],
+  "confidence": 0.0
+}
+"recommendation" and "rationale" are REQUIRED. "evidence" MUST be non-empty — an empty evidence array is rejected and re-requested. Report uncertainty honestly.`;
+
+const MAGI_FREEFORM_CONTRACT = `Answer the question in natural language. No JSON schema is required for this task — write your analysis directly. (Note: a freeform answer is cross-verified only weakly, because it is unstructured.)`;
+
+/** The single output contract injected for a kind — ONE schema, never two (B: no schema-on-schema conflict). */
+export function magiOutputContractFor(kind: MagiTaskKind): string {
+    switch (kind) {
+        case 'rca': return MAGI_RCA_CONTRACT;
+        case 'design': return MAGI_DESIGN_CONTRACT;
+        case 'freeform': return MAGI_FREEFORM_CONTRACT;
+        case 'claim_audit':
+        default: return MAGI_CLAIM_AUDIT_CONTRACT;
+    }
+}

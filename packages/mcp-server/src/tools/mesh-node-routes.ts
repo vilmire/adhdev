@@ -103,8 +103,18 @@ export async function ensureMeshNodeRoutes(ctx: MeshContext, opts: { force?: boo
     }
     const result = unwrap(raw);
     if (!result || result.success === false || !result.routes || typeof result.routes !== 'object') return;
+    holdMeshNodeRoutes(ctx, result.routes, now, key);
+}
+
+/**
+ * Hold a daemon routes answer (`{ [nodeId]: { route, ownerDaemonId?, reason } }`)
+ * on the context for the current node set. mesh_status holds the routes its one
+ * view carries this way.
+ */
+export function holdMeshNodeRoutes(ctx: MeshContext, answer: unknown, now = Date.now(), key = nodeSetKey(ctx)): void {
     const routes = new Map<string, MeshNodeRoute>();
-    for (const [id, value] of Object.entries(result.routes as Record<string, any>)) {
+    const entries = answer && typeof answer === 'object' && !Array.isArray(answer) ? Object.entries(answer as Record<string, any>) : [];
+    for (const [id, value] of entries) {
         const route = value?.route;
         if (route !== 'local' && route !== 'remote' && route !== 'unreachable') continue;
         routes.set(id, {

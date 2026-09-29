@@ -1004,7 +1004,7 @@ export { evaluateFsm } from './providers/spec/fsm-evaluator.js';
 export type { FsmClock } from './providers/spec/fsm-evaluator.js';
 export { validateFsmSpec, collectFsmSpecWarnings } from './providers/spec/fsm-loader.js';
 export { FsmDriver } from './providers/spec/fsm-driver.js';
-export type { DashboardEvent, DashboardCommand, SpecDriverOpts, ISpecDriver } from './providers/spec/fsm-driver.js';
+export type { DashboardEvent, DashboardCommand, SpecDriverOpts, ISpecDriver } from './providers/spec/fsm-driver-types.js';
 export { TerminalAdapter } from './providers/spec/adapter.js';
 export type { TerminalAdapterOpts, TerminalAdapterHandlers } from './providers/spec/adapter.js';
 

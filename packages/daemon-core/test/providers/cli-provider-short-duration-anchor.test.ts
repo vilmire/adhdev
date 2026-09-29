@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { computeTurnAnchoredDurationMs } from '../../src/providers/cli-provider-instance.js'
+import { computeTurnAnchoredDurationMs } from '../../src/providers/cli-provider-status-helpers.js'
 
 // NOTIF Defect-2a: the reported short-generating duration must be measured from the IMMUTABLE
 // turn start (engine.currentTurnStartedAt), not generatingStartedAt — which is reset to 0 on

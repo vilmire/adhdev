@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { detectCLIs } from '../../src/detection/cli-detector.js';
-import { isShellWrapperCommand, resolveWrappedCliBinary, type ProviderLoader } from '../../src/providers/provider-loader.js';
+import type { ProviderLoader } from '../../src/providers/provider-loader.js';
+import { isShellWrapperCommand, resolveWrappedCliBinary } from '../../src/providers/provider-loader-support.js';
 
 /**
  * 2026-09-25: antigravity-cli launches through `bash -c "… exec agy"` (hidden-dir

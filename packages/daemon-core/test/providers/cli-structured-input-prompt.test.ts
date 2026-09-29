@@ -3,7 +3,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { normalizeInputEnvelope } from '../../src/providers/contracts.js'
-import { buildCliStructuredInputPrompt } from '../../src/providers/cli-provider-instance.js'
+import { buildCliStructuredInputPrompt } from '../../src/providers/cli-provider-input-prompt.js'
 
 import { LOG } from '../../src/logging/logger.js'
 

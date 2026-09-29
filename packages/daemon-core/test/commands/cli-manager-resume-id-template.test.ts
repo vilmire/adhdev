@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { resolveCliSessionBinding } from '../../src/commands/cli-manager.js';
+import { resolveCliSessionBinding } from '../../src/commands/cli-session-binding.js';
 
 // KIMI RESUME — the session id a CLI accepts is not always the id we stored.
 //

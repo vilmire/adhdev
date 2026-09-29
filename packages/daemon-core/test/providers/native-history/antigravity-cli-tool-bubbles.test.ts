@@ -205,7 +205,8 @@ describe('antigravity-cli .db — tool bubbles', () => {
   it('caps a long result, stamps a keyed ref, and the ref expands to the full body', async () => {
     const longOutput = `The command exited with code 0.\nOutput:\n${Array.from({ length: 200 }, (_, i) => `src/module-${i}.ts`).join('\n')}`;
     const dbPath = await makeDb(withGenericOutput(fixtureSteps(), 2, longOutput));
-    const { readSession, readAntigravityToolBlockAt } = await loadReader();
+    const { readSession } = await loadReader();
+    const { readAntigravityToolBlockAt } = await import('../../../src/providers/native-history/antigravity-conversation-db.js');
     const { TOOL_RESULT_SUMMARY_MAX } = await import('../../../src/providers/spec/native-history-tool-blocks.js');
     const session = readSession(dbPath, SESSION)!;
 

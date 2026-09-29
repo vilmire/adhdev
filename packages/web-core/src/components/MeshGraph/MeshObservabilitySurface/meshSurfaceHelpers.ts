@@ -72,13 +72,6 @@ export type GitHistoryState = {
     entries: GitLogEntry[]
 }
 
-export type HealPreviewState = {
-    phase: 'dry_run' | 'execute'
-    code?: string
-    error?: string | null
-    executed?: boolean
-}
-
 export type AsyncRefineJob = {
     jobId: string
     status: 'accepted' | 'running' | 'completed' | 'failed'
@@ -284,17 +277,6 @@ export function sessionElapsedLabel(session: MeshGraphSessionDetail): string {
     if (hours < 48) return `${hours}h ${minutes % 60}m`
     const days = Math.floor(hours / 24)
     return `${days}d ${hours % 24}h`
-}
-
-
-
-export function connectionLabel(connection: RepoMeshNodeStatus['connection'] | null | undefined): string {
-    if (!connection) return 'mesh unknown'
-    if (connection.state === 'self') return 'mesh self'
-    if (connection.transport === 'direct' && connection.state === 'connected') return 'mesh direct'
-    if (connection.transport === 'relay' && connection.state === 'connected') return 'mesh relay'
-    if (!connection.reported && connection.source === 'not_reported') return 'mesh unknown / not reported'
-    return `mesh ${connection.state}`
 }
 
 type DriftT = (key: string, opts?: Record<string, unknown>) => string

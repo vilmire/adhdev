@@ -313,7 +313,7 @@ import {
 } from '../types.js';
 import type { QuotaChildProcess, QuotaFetchDeps } from './deps.js';
 import { assertInjectedNetworkFetchInTest, resolveDeps } from './deps.js';
-import { retryAfterMs, toNumber } from './coerce.js';
+import { isCredentialExpired, retryAfterMs, toIsoResetMs as toResetMs, toNumber } from './coerce.js';
 
 /**
  * Default Cloud Code host — the one `agy` itself uses.
@@ -822,12 +822,7 @@ async function readCredentials(deps: Required<QuotaFetchDeps>): Promise<Credenti
 }
 
 function isExpired(credentials: AntigravityCredentials, nowMs: number): boolean {
-    if (credentials.expiresAtMs === null) {
-        // No expiry recorded — let the server be the judge rather than
-        // refusing to ask. A 401 is classified below.
-        return false;
-    }
-    return credentials.expiresAtMs - nowMs <= EXPIRY_SKEW_MS;
+    return isCredentialExpired(credentials.expiresAtMs, nowMs, EXPIRY_SKEW_MS);
 }
 
 // --- response shape -------------------------------------------------------
@@ -838,14 +833,6 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function asArray(value: unknown): unknown[] {
     return Array.isArray(value) ? value : [];
-}
-
-function toResetMs(value: unknown): number | null {
-    if (typeof value !== 'string' || value.trim() === '') {
-        return null;
-    }
-    const ms = new Date(value).getTime();
-    return Number.isNaN(ms) ? null : ms;
 }
 
 /**

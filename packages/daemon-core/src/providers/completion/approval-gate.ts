@@ -20,6 +20,7 @@
  */
 
 import { LOG } from '../../logging/logger.js';
+import type { ProviderModule } from '../contracts.js';
 import {
     pickApprovalButton,
     hasNegativeApprovalOption,
@@ -54,7 +55,7 @@ export function approvalModalSignature(message: unknown, affirmativeAnchor: stri
 export interface ApprovalGateHost {
     type: string;
     workingDir: string;
-    provider: { name?: string } & Record<string, unknown>;
+    provider: ProviderModule;
     adapter: {
         getStatus(opts: { allowParse: boolean }): unknown;
         resolveModalMatched?: (index: number) => boolean;
@@ -117,7 +118,7 @@ export function approvableModalSignature(host: ApprovalGateHost, modal: any): st
     if (!modal || buttons.length === 0) return null;
     const modalKind = typeof modal?.kind === 'string' ? modal.kind : 'approval';
     if (modalKind !== 'approval') return null;
-    const { index: buttonIndex, label: buttonLabel } = pickApprovalButton(buttons, host.provider as any);
+    const { index: buttonIndex, label: buttonLabel } = pickApprovalButton(buttons, host.provider);
     const hasReliableConsentAnchor = hasNegativeApprovalOption(buttons)
         || hasReliableApprovalAffirmative(buttons);
     if (buttonIndex < 0 || !hasReliableConsentAnchor) return null;
@@ -335,7 +336,7 @@ export function maybeAutoApproveStatus(host: ApprovalGateHost, adapterStatus: an
             return autoApproveActive;
         }
     }
-    const { index: buttonIndex, label: buttonLabel } = pickApprovalButton(buttons, host.provider as any);
+    const { index: buttonIndex, label: buttonLabel } = pickApprovalButton(buttons, host.provider);
     // Structural decline anchor (#137): a tall diff can scroll "3. No" off-frame;
     // a scoped grant-affirmative only appears in genuine consent modals and
     // stands in as the second anchor.

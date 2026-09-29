@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-import { buildCoordinatorDelegatedCliLaunchOptions } from '../../src/commands/cli-manager.js';
+import { buildCoordinatorDelegatedCliLaunchOptions } from '../../src/commands/cli-delegated-launch.js';
 import { applyPreLaunchTrust } from '../../src/providers/spec/pre-launch-trust.js';
 import {
     recordWorkerAutoTrustGrant,

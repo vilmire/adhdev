@@ -56,7 +56,7 @@ import {
 import { assignWindows } from './codex-windows.js';
 import type { QuotaFetchDeps } from './deps.js';
 import { resolveDeps } from './deps.js';
-import { toNumber } from './coerce.js';
+import { toEpochResetMs as toResetMs, toNumber } from './coerce.js';
 
 /**
  * How old a rollout reading may be and still count as current.
@@ -107,13 +107,6 @@ export interface RolloutRateLimits {
     planType: string | null;
     /** Unix ms parsed from the record's own `timestamp`. */
     capturedAt: number;
-}
-
-/** `resets_at` is Unix seconds; pass through anything already in ms. */
-function toResetMs(value: unknown): number | null {
-    const seconds = toNumber(value);
-    if (seconds === null || seconds <= 0) return null;
-    return seconds > 1e11 ? seconds : seconds * 1000;
 }
 
 function mapRolloutWindow(raw: unknown, fallbackMinutes: number): QuotaWindow | null {

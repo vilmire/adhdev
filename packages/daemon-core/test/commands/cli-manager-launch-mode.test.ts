@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { resolveCliSessionBinding } from '../../src/commands/cli-manager.js'
+import { resolveCliSessionBinding } from '../../src/commands/cli-session-binding.js'
 import type { ProviderModule } from '../../src/providers/contracts.js'
 
 describe('resolveCliSessionBinding', () => {

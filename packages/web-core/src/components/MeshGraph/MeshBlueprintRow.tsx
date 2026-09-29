@@ -25,9 +25,6 @@ import { queueTaskDisplayText } from '../../utils/queue-task-label'
 import { elapsedMsSince, formatBlueprintAge } from './blueprintViewModel'
 import type { BlueprintGateRow, BlueprintTaskRow } from './useBlueprintGroups'
 
-/** The three D5 gate verbs a Blocked-section gate row can send. */
-export type GateActionKind = 'release' | 'abandon' | 'extend'
-
 export interface GateActionHandlers {
     onRelease: (outcome: 'passed' | 'failed', evidence: string) => Promise<void>
     onAbandon: (reason: string) => Promise<void>
