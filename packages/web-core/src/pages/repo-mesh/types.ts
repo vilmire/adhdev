@@ -1,13 +1,6 @@
-import type { MeshCoordinatorMetadata } from '../../utils/mesh-coordinator-setup'
 import type { MeshSessionCleanupMode, MeshTaskStatus, NodeCapabilitySlot } from '@adhdev/mesh-shared'
 
 export type { NodeCapabilitySlot }
-
-export interface AvailableCliAgent {
-    id: string
-    name: string
-    meshCoordinator?: MeshCoordinatorMetadata
-}
 
 export interface MeshNode {
     id: string
@@ -61,8 +54,6 @@ export interface MeshQueueEntry {
     dependsOn?: string[]
     /** M1: unmet dependency ids computed at view time. */
     waitingOn?: string[]
-    /** M1: system hold reason, e.g. "dependency_failed:<taskId>". */
-    blockedReason?: string
     missionId?: string
     /** M7: when the task was dispatched (assigned) — used for duration display. */
     dispatchTimestamp?: string
@@ -169,7 +160,6 @@ export interface MeshNodeListFeatures {
 export interface MeshDetailViewFeatures {
     coordinatorPrompt: boolean
     meshHostDaemonSection: boolean
-    hermesMcpConfig: boolean
     addNodeDaemonPicker: boolean
     nodeInstruction: boolean
 }

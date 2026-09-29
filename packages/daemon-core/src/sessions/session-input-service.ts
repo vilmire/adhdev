@@ -2,7 +2,7 @@
  * SessionInputService — the ONE path from any origin into a session's input.
  *
  * Wiring-unification Phase D2/D3 (docs/design/2026-09-23-wiring-unification.md
- * §6, §1 RC2). Before this module a message reached a CLI/ACP session through
+ * §6, §1 RC2). Before this module a message reached a CLI session through
  * two funnels (dashboard `handleSendChat`, mesh `agent_command`) plus four mesh
  * drains, each with its own input normalisation, image branch, `force`-as-
  * interrupt, "queued" reporting and dedupe — five dedupe layers (1.2 s handler
@@ -77,8 +77,6 @@ export interface SessionInputTarget {
      * envelope's `textFallback` is the body and any non-text part is refused.
      */
     buildBody?(input: OutboundMessage['input']): SessionInputBody | null;
-    /** Settle hook run once before a fresh write (hermes-cli first-send wait). */
-    beforeWrite?(): Promise<void>;
     /** Ordinary write: now when the driver can take it, else park under `messageId`. */
     sendMessage(
         text: string,
@@ -97,8 +95,6 @@ export interface SessionInputTarget {
     /** SEND-NOW-WRONG-ITEM: hold the driver's autonomous FIFO drain while an interrupt owns the next write. */
     reserveDrain?(ttlMs: number): void;
     releaseDrain?(): void;
-    /** ACP transport: hand the whole envelope to the agent (it owns its own busy refusal). */
-    sendAcp?(input: OutboundMessage['input']): Promise<{ success: boolean; error?: string; status?: string }>;
     /** TASKBUBBLE-DUP ack; `sourceMessageId` lands on the ack's `meta.sourceMessageId`. */
     recordAcknowledgedUserInput?(input: OutboundMessage['input'], sourceMessageId?: string): void;
 }
@@ -452,20 +448,6 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
         if (!target) return refuse('no_target');
 
         const cls = classify(target);
-        // ACP: the agent owns its own busy refusal and has no composer FIFO.
-        if (typeof target.sendAcp === 'function') {
-            if (cls === 'dead') return refuse('session_exited');
-            if (msg.policy.mode === 'interrupt') return refuse('interrupt_not_implemented');
-            const checked = freshBody(target, msg);
-            if ('kind' in checked) return checked;
-            const outcome = await target.sendAcp(msg.input);
-            if (!outcome?.success) {
-                return refuse('not_ready', { message: outcome?.error || 'ACP send was not acknowledged' });
-            }
-            log('info', `submit(${msg.messageId}) ${msg.origin} → acp delivered (session ${msg.sessionId})`);
-            return { kind: 'delivered', route: 'acp' };
-        }
-
         const parked = target.hasQueuedSend?.(msg.messageId) === true;
         const prior = settledKind(msg.messageId);
         if (msg.policy.mode === 'queue') {
@@ -495,7 +477,6 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
         }
         const body = freshBody(target, msg);
         if ('kind' in body) return body;
-        await target.beforeWrite?.();
         return writeAndReport(target, msg, body, { fresh: true, route: 'pty' });
     }
 

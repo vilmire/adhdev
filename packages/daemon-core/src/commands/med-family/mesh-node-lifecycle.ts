@@ -582,15 +582,6 @@ export const meshNodeLifecycleHandlers: Record<string, MedFamilyHandler> = {
             const sessionIds = Array.isArray(args?.sessionIds)
                 ? args.sessionIds.map((id: any) => typeof id === 'string' ? id.trim() : '').filter(Boolean)
                 : undefined;
-            // MAGI post-review auto-cleanup routes through this same command with
-            // source:'magi_session_cleanup' and a per-session autoLaunchedForQueueTaskId
-            // map, which gates cleanup to sessions THIS fan-out actually auto-launched.
-            const source = args?.source === 'magi_session_cleanup' ? 'magi_session_cleanup' : 'mesh_cleanup_sessions';
-            const requireAutoLaunchedForTaskIds = (args?.requireAutoLaunchedForTaskIds
-                && typeof args.requireAutoLaunchedForTaskIds === 'object'
-                && !Array.isArray(args.requireAutoLaunchedForTaskIds))
-                ? args.requireAutoLaunchedForTaskIds as Record<string, string>
-                : undefined;
             // Opt-in orphan reclaim (SESSION-ACCUMULATION-LEAK). The live-node id set
             // is the CURRENT mesh membership; a matched live session bound to a node
             // still in this set is an active sibling and is never reclaimed. Only when
@@ -607,8 +598,7 @@ export const meshNodeLifecycleHandlers: Record<string, MedFamilyHandler> = {
                 mode,
                 sessionIds,
                 dryRun: args?.dryRun === true,
-                source,
-                requireAutoLaunchedForTaskIds,
+                source: 'mesh_cleanup_sessions',
                 reclaimOrphans,
                 liveMeshNodeIds,
             });

@@ -261,8 +261,6 @@ export interface NodeCapabilityTag {
  * buildMeshNodeCapabilityTags (mesh-work-queue.ts) for the operator-facing subset:
  * custom `capabilities`, `os=`, `arch=`, `provider=`, and `worktree=<branch>`.
  *
- * The daemon's internal `converge=refine|fast_forward` routing tag is intentionally
- * omitted — it is scheduler plumbing, not something an operator targets by hand.
  * Precedence for os/arch matches the daemon: userOverrides → reported → (unknown).
  *
  * `provider=` mirrors the daemon exactly (readNodeProviderTypes: slots first, then

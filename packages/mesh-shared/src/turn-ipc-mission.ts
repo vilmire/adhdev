@@ -44,10 +44,6 @@ export const MESH_MISSION_STATUSES = ['active', 'paused', 'completed', 'abandone
 export type MeshMissionStatusValue = typeof MESH_MISSION_STATUSES[number]
 export const isMeshMissionStatusValue = makeGuard(MESH_MISSION_STATUSES)
 
-export const MESH_MISSION_SOURCES = ['magi', 'coordinator'] as const
-export type MeshMissionSourceValue = typeof MESH_MISSION_SOURCES[number]
-const isMeshMissionSourceValue = makeGuard(MESH_MISSION_SOURCES)
-
 // H2 (mission brief, wiring-unification Phase H — docs/design/2026-09-23-wiring-
 // unification.md §7c): free text, same "local IPC is inside the boundary" rationale
 // as `goal` above (section note). `MissionBriefWire` is a structural mirror of
@@ -82,7 +78,6 @@ export interface MissionUpsertRequest {
     /** Free text — see file-header note on why this is fine over local IPC. */
     goal?: string
     status?: MeshMissionStatusValue
-    source?: MeshMissionSourceValue
     /**
      * H2: `undefined` = do not touch the stored brief. `null` = explicitly clear it.
      * A present object with no usable `goal` is treated by the daemon's own
@@ -98,7 +93,6 @@ export interface MeshMissionRecordWire {
     title: string
     goal: string
     status: MeshMissionStatusValue
-    source?: MeshMissionSourceValue
     /** H2: absent = no brief attached to this mission. */
     brief?: MissionBriefWire
 }
@@ -108,24 +102,22 @@ export interface MissionUpsertResponse {
 }
 
 function isMeshMissionRecordWire(value: unknown): value is MeshMissionRecordWire {
-    if (!isRecord(value) || !hasOnlyKeys(value, ['id', 'meshId', 'title', 'goal', 'status', 'source', 'brief'])) return false
+    if (!isRecord(value) || !hasOnlyKeys(value, ['id', 'meshId', 'title', 'goal', 'status', 'brief'])) return false
     if (!isEvidenceIdentifier(value.id) || !isEvidenceIdentifier(value.meshId)) return false
     if (typeof value.title !== 'string' || typeof value.goal !== 'string') return false
     if (!isMeshMissionStatusValue(value.status)) return false
-    if (value.source !== undefined && !isMeshMissionSourceValue(value.source)) return false
     if (value.brief !== undefined && !isMissionBriefWire(value.brief)) return false
     return true
 }
 
 function isMissionUpsertRequest(value: unknown): value is MissionUpsertRequest {
-    if (!isRecord(value) || !hasOnlyKeys(value, ['v', 'meshId', 'id', 'title', 'goal', 'status', 'source', 'brief'])) return false
+    if (!isRecord(value) || !hasOnlyKeys(value, ['v', 'meshId', 'id', 'title', 'goal', 'status', 'brief'])) return false
     if (value.v !== TURN_IPC_PROTOCOL_VERSION) return false
     if (!isEvidenceIdentifier(value.meshId)) return false
     if (value.id !== undefined && !isEvidenceIdentifier(value.id)) return false
     if (typeof value.title !== 'string' || value.title.trim().length === 0) return false
     if (value.goal !== undefined && typeof value.goal !== 'string') return false
     if (value.status !== undefined && !isMeshMissionStatusValue(value.status)) return false
-    if (value.source !== undefined && !isMeshMissionSourceValue(value.source)) return false
     if (value.brief !== undefined && value.brief !== null && !isMissionBriefWire(value.brief)) return false
     return true
 }
@@ -186,7 +178,7 @@ export function decodeMissionQueryResponse(value: unknown): MissionQueryResponse
 //
 // `mesh-tools-mission.ts`'s own file-header note (2026-09-24, C-W6) flagged
 // this exact gap: `mission_query`'s landed response is `{missions:
-// MeshMissionRecordWire[]}` only — no `verbose`/`includeMagi`/`withStats`/
+// MeshMissionRecordWire[]}` only — no `verbose`/`withStats`/
 // `limit`/`truncated`/`overflowIds`/`historyFold`, all of which
 // `listMeshMissionsForTool` (daemon-core `mesh-missions.ts`) computes for the
 // `mesh_mission_list` tool. Rather than widen `mission_query` itself (an
@@ -202,7 +194,6 @@ export interface MissionListQueryRequest {
     meshId: string
     statuses?: readonly MeshMissionStatusValue[]
     verbose?: boolean
-    includeMagi?: boolean
     withStats?: boolean
     limit?: number
     historyIdLimit?: number
@@ -247,7 +238,6 @@ export interface MissionListSummaryVerboseWire {
     title: string
     goal: string
     status: MeshMissionStatusValue
-    source?: MeshMissionSourceValue
     tasks: MeshMissionTaskAggregateWire
     stats?: MeshMissionStatsWire
     /** H2: absent = no brief attached. */
@@ -266,7 +256,6 @@ export interface MissionListSummarySlimWire {
     goalPreview: string
     goalTruncated: boolean
     status: MeshMissionStatusValue
-    source?: MeshMissionSourceValue
     tasks: MeshMissionTaskAggregateWire
     stats?: MeshMissionStatsWire
     /** H2: absent = no brief attached. */
@@ -295,7 +284,7 @@ export interface MissionListQueryResponse {
 }
 
 function isMissionListQueryRequest(value: unknown): value is MissionListQueryRequest {
-    if (!isRecord(value) || !hasOnlyKeys(value, ['v', 'meshId', 'statuses', 'verbose', 'includeMagi', 'withStats', 'limit', 'historyIdLimit', 'meshStatusView'])) return false
+    if (!isRecord(value) || !hasOnlyKeys(value, ['v', 'meshId', 'statuses', 'verbose', 'withStats', 'limit', 'historyIdLimit', 'meshStatusView'])) return false
     if (value.meshStatusView !== undefined && value.meshStatusView !== 'compact' && value.meshStatusView !== 'verbose') return false
     if (value.v !== TURN_IPC_PROTOCOL_VERSION) return false
     if (!isEvidenceIdentifier(value.meshId)) return false
@@ -304,7 +293,6 @@ function isMissionListQueryRequest(value: unknown): value is MissionListQueryReq
         if (!value.statuses.every(isMeshMissionStatusValue)) return false
     }
     if (value.verbose !== undefined && typeof value.verbose !== 'boolean') return false
-    if (value.includeMagi !== undefined && typeof value.includeMagi !== 'boolean') return false
     if (value.withStats !== undefined && typeof value.withStats !== 'boolean') return false
     if (value.limit !== undefined && !isNonNegativeInt(value.limit)) return false
     if (value.historyIdLimit !== undefined && !isNonNegativeInt(value.historyIdLimit)) return false
@@ -341,13 +329,12 @@ function isMissionListSummaryWire(value: unknown): value is MissionListSummaryWi
     const hasGoal = 'goal' in value
     const hasPreview = 'goalPreview' in value && 'goalTruncated' in value
     if (hasGoal === hasPreview) return false // exactly one of the two shapes
-    const baseKeys = ['id', 'meshId', 'title', 'status', 'source', 'tasks', 'stats', 'brief', 'createdAt', 'updatedAt', 'closeCandidateEmittedAt'] as const
+    const baseKeys = ['id', 'meshId', 'title', 'status', 'tasks', 'stats', 'brief', 'createdAt', 'updatedAt', 'closeCandidateEmittedAt'] as const
     const allowed = hasGoal ? [...baseKeys, 'goal'] : [...baseKeys, 'goalPreview', 'goalTruncated']
     if (!hasOnlyKeys(value, allowed)) return false
     if (!isEvidenceIdentifier(value.id) || !isEvidenceIdentifier(value.meshId)) return false
     if (typeof value.title !== 'string') return false
     if (!isMeshMissionStatusValue(value.status)) return false
-    if (value.source !== undefined && !isMeshMissionSourceValue(value.source)) return false
     if (!isMeshMissionTaskAggregateWire(value.tasks)) return false
     if (value.stats !== undefined && !isMeshMissionStatsWire(value.stats)) return false
     if (value.brief !== undefined && !isMissionBriefWire(value.brief)) return false
@@ -553,11 +540,10 @@ export function decodeToolCallRecordResponse(value: unknown): ToolCallRecordResp
 // scoped to the turn-ledger's own attempt/event rows; `ledger_query` is the
 // general record browse surface (C-W9a: the daemon's `mesh_local_records` plus
 // the turn ledger's task outcomes, `readLocalRecords`) `meshTaskHistory` /
-// `meshLedgerQuery` / the MAGI ledger-scan helpers need.
+// `meshLedgerQuery` need.
 //
 // CONTENT BOUNDARY: `MeshLedgerEntry.payload` (daemon-core `mesh-ledger.ts`)
-// is `Record<string, unknown>` — genuinely unbounded JSON (a MAGI synthesis
-// object, a graph plan, a free-text checkpoint message), NOT constrained to
+// is `Record<string, unknown>` — genuinely unbounded JSON (a graph plan, a free-text checkpoint message), NOT constrained to
 // `mesh_record`'s scalar allow-list. This is fine for the SAME reason
 // `mission_upsert`'s `goal` and `note_upsert`'s `text` are fine (see that
 // section's note above): this is local IPC between mcp-server and the

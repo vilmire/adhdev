@@ -28,24 +28,6 @@ export const MESH_SEND_TASK_TOOL = {
                     + "'interrupt' ABORTS the in-flight turn via the provider's own stop control (Ctrl-C, or ESC on antigravity-cli), then delivers once settled — THE WORK IN PROGRESS IS DISCARDED, including partial edits. Use only when the running turn is going wrong and finishing it is worse than losing it. "
                     + "If the provider cannot interrupt (no stop control declared), the dispatch is REJECTED rather than silently falling back to when_idle. Has no effect on an idle session (delivered immediately either way).",
             },
-            // GRAPH-MEASUREMENT-DIRECT — the decision record for the DIRECT surface.
-            //
-            // ★ WHY IT IS HERE AT ALL. This tool is the MAJORITY dispatch surface (~67%
-            // of dispatches in the graph-adoption investigation) and it carried no
-            // decision field, so two thirds of all routing judgements were structurally
-            // unmeasurable. `decision_missing` on mesh_enqueue_task described only the
-            // enqueue minority and was silent — not negative — about the rest.
-            //
-            // ★ OPTIONAL, exactly like mesh_enqueue_task's (see the note there): phase E
-            // measures and does not enforce, and a required field would reject every
-            // existing caller. Omission degrades to decision_missing, never an error.
-            orchestration_decision: {
-                type: 'object',
-                description: 'Record of your dispatch decision, for adoption measurement: {decision, direct_reason, ready_worker_tasks, known_graph_steps, capability_blockers}. '
-                    + 'On this DIRECT surface, direct_reason says why dispatching into an existing session beat queueing a task — one of same_subject_continuation, investigation_handoff, idle_session_reuse, queue_bypass_urgent, new_subject, legacy_client, operator_override. '
-                    + 'new_subject is the case the operating rules do NOT endorse — a genuinely new topic should get its own task even when a session sits idle — and reporting it returns an unsanctioned_direct_dispatch advisory. Report it honestly anyway: it is recorded, never refused. '
-                    + 'Optional and never rejected: omitting it is recorded as decision_missing. Provenance only — it never changes execution.',
-            },
             allow_stale_node: { type: 'boolean', description: "GIT-GATE: a non-readonly direct dispatch is refused (dirty_workspace / node_stale_behind_upstream) when the target node's git telemetry shows an uncommitted working tree or a branch behind its upstream beyond the mesh's autoFastForward.maxBehind — same predicates as the claim-time/auto-launch gates. Set true to dispatch anyway (e.g. a task whose job IS to fix the dirty/stale tree). No effect on a readonly dispatch. Default: false." },
             allow_quota_exhausted: { type: 'boolean', description: "QUOTA-GATE: a direct dispatch NAMING a session_id is refused when that session's provider is measurably quota-exhausted on the target node — same predicate the queue claim path applies before pulling a pending task onto an idle session. A stale/missing/unmarked snapshot fails OPEN (dispatch proceeds); only a fresh measured block refuses. Set true to dispatch anyway (e.g. testing the provider's own quota error). Default: false. No effect on a sessionless dispatch that ends up in the queue — the claim-time gate covers that." },
         },
@@ -136,12 +118,12 @@ export const MESH_SEND_KEYS_TOOL = {
 
 export const MESH_LAUNCH_SESSION_TOOL = {
     name: 'mesh_launch_session',
-    description: 'Launch a new agent session on a mesh node. Returns the session ID for subsequent send_task/read_chat calls. If the user names a provider, preserve it exactly: Hermes = hermes-cli, Claude Code/Claude = claude-cli, Codex = codex-cli, Gemini = gemini-cli. If type is omitted, resolve strictly from the node policy providerPriority and provider detection; fail closed when no configured provider is usable. Do not default to claude-cli.',
+    description: 'Launch a new agent session on a mesh node. Returns the session ID for subsequent send_task/read_chat calls. If the user names a provider, preserve it exactly: Claude Code/Claude = claude-cli, Codex = codex-cli, Gemini = gemini-cli. If type is omitted, resolve strictly from the node policy providerPriority and provider detection; fail closed when no configured provider is usable. Do not default to claude-cli.',
     inputSchema: {
         type: 'object' as const,
         properties: {
             node_id: { type: 'string', description: 'Target node ID.' },
-            type: { type: 'string', description: 'Optional provider type to launch. Use hermes-cli for Hermes, claude-cli for Claude Code, codex-cli for Codex, gemini-cli for Gemini. When omitted, node.policy.providerPriority is probed in order.' },
+            type: { type: 'string', description: 'Optional provider type to launch. Use claude-cli for Claude Code, codex-cli for Codex, gemini-cli for Gemini. When omitted, node.policy.providerPriority is probed in order.' },
             force: { type: 'boolean', description: 'Set true to launch an ADDITIONAL session even when this node already has a live mesh-owned worker session. Default false: if a live worker session for this mesh+node already exists (e.g. an enqueue auto-launch just spawned one), the existing session is returned idempotently instead of creating an empty duplicate. Only pass force when you intentionally want a second concurrent provider/session on the node.' },
         },
         required: ['node_id'],

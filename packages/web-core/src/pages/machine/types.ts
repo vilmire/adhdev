@@ -29,14 +29,6 @@ export interface CliSessionEntry {
     lastMessageAt?: number
 }
 
-export interface AcpSessionEntry {
-    id: string; sessionId?: string; type: string; acpName: string; status: string
-    workspace: string; activeChat: any; daemonId: string
-    providerSessionId?: string
-    summaryMetadata?: DaemonData['summaryMetadata']
-    lastMessageAt?: number
-}
-
 export interface WorkspaceRow { id: string; path: string; label?: string; addedAt: number }
 
 export interface MachineData {
@@ -80,7 +72,7 @@ export interface ProviderSettingsEntry {
  *  from the shared ProviderCategory so it cannot drift from daemon-core. */
 export type WorkspaceLaunchKind = Exclude<ProviderCategory, 'extension'>
 
-export type TabId = 'workspace' | 'overview' | 'session-host' | 'providers' | 'logs' | 'ides' | 'clis' | 'acps'
+export type TabId = 'workspace' | 'overview' | 'session-host' | 'providers' | 'logs' | 'ides' | 'clis'
 
 export type ProviderInfo = AvailableProviderInfo
 

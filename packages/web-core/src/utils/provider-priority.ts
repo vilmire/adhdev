@@ -38,8 +38,8 @@ function providerType(provider: ProviderPrioritySnapshot): string {
 //
 // The single source of truth for "which models / thinking levels does this
 // provider advertise" across every UI that offers a provider-scoped Model or
-// Thinking picker: the mesh node slot editor, the New-session dialog, and the
-// MAGI kind-panel editor. Each provider's manifest declares its own lists
+// Thinking picker: the mesh node slot editor and the New-session dialog.
+// Each provider's manifest declares its own lists
 // (codex → gpt-*, minimal/…/xhigh; claude → opus/sonnet/haiku, low/…/max), so a
 // consumer must never hardcode a cross-provider list. These read that advisory
 // list off the resolved `availableProviders` inventory and never invent values.
@@ -177,13 +177,12 @@ export function moveProviderPriorityItem(priority: string[], type: string, direc
 }
 
 const CANONICAL_REPO_MESH_PROVIDER_TYPES = new Set([
-  'hermes-cli',
   'claude-cli',
   'codex-cli',
   'antigravity-cli',
 ])
 
-export const DEFAULT_REPO_MESH_PROVIDER_PRIORITY = 'hermes-cli, claude-cli, codex-cli, antigravity-cli'
+export const DEFAULT_REPO_MESH_PROVIDER_PRIORITY = 'claude-cli, codex-cli, antigravity-cli'
 
 function normalizeProviderPriorityToken(type: string): string | undefined {
   const trimmed = type.trim()

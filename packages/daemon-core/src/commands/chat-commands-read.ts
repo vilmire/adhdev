@@ -297,8 +297,8 @@ async function readChatHistoryPage(h: CommandHelpers, args: any): Promise<Comman
 
 /**
  * read_chat — dispatch on the target's transport:
- *   CLI/ACP with a live adapter → chat-commands-read-cli.ts
- *   CLI/ACP without one         → chat-commands-read-history-only.ts
+ *   CLI with a live adapter → chat-commands-read-cli.ts
+ *   CLI without one         → chat-commands-read-history-only.ts
  *   extension / IDE DOM scripts → chat-commands-read-dom.ts
  */
 export async function handleReadChat(h: CommandHelpers, args: any): Promise<CommandResult> {

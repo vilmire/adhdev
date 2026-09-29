@@ -33,7 +33,7 @@ import { CliProviderInstance } from '../../../src/providers/cli-provider-instanc
 import { ManualAttendanceTracker } from '../../../src/providers/manual-attendance.js';
 
 const REPO_ROOT = path.resolve(__dirname, '../../../../../..');
-const CLI_PROVIDERS = ['claude-cli', 'codex-cli', 'hermes-cli', 'antigravity-cli'] as const;
+const CLI_PROVIDERS = ['claude-cli', 'codex-cli', 'antigravity-cli'] as const;
 
 function loadLiveSpec(provider: string): CliSpecV4 {
   const dir = path.join(REPO_ROOT, 'adhdev-providers/cli', provider);

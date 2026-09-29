@@ -35,8 +35,8 @@ export interface ScaffoldResult {
 export function generateFiles(type: string, name: string, category: string, opts: ScaffoldOptions = {}): ScaffoldResult {
   const { cdpPorts, cli, processName, installPath, binary, extensionId, version = '0.1' } = opts;
 
-  // ─── CLI / ACP: provider.json only ───
-  if (category === 'cli' || category === 'acp') {
+  // ─── CLI: provider.json only ───
+  if (category === 'cli') {
     const bin = binary || type;
     const meta: Record<string, any> = {
       type,

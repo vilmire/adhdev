@@ -1,24 +1,14 @@
 /**
  * blueprintGraphModel — the pure view model behind the Blueprint GRAPH view
- * (MeshBlueprintGraph). One node/edge vocabulary for BOTH dependency systems
- * the mesh runs:
- *
- *  - queue `depends_on` chains (mesh_status queue.tasks carry dependsOn /
- *    missionId — no persistent graph rows exist for them), and
- *  - persistent orchestration graphs from mesh_graph_overview (worker nodes,
- *    coordinator gates, `requires` / `gate` / `conditional` edges).
- *
- * A worker node that materialized a queue row and that queue row are the SAME
- * node (`task:<taskId>`), so a graph whose edges were also projected into the
- * queue's dependsOn draws each edge once. Unmaterialized worker nodes become
- * `plan:` placeholders; gates are `gate:` nodes.
+ * (MeshBlueprintGraph): queue tasks as nodes, their `depends_on` as edges
+ * (mesh_status queue.tasks carry dependsOn / missionId).
  *
  * Three pure stages, so every rule is unit-testable without React Flow or ELK:
  *   buildBlueprintGraphModel  — everything, no viewer preferences
  *   applyBlueprintGraphView   — active-only filter, lane collapse, completed fold
  *   blueprintGraphStructureKey — the re-layout key (ids + shape, never status)
  */
-import type { MeshGraphGateView, MeshGraphNodeView, MeshGraphView, RepoMeshQueueTask, RepoMeshStatus } from '@adhdev/daemon-core'
+import type { RepoMeshQueueTask, RepoMeshStatus } from '@adhdev/daemon-core'
 import { buildTaskDag } from './taskDagViewModel'
 import { buildQueueChainIndex, deriveSessionActivity } from './useBlueprintGroups'
 import { queueTaskDisplayText } from '../../utils/queue-task-label'
@@ -28,38 +18,30 @@ import { queueTaskDisplayText } from '../../utils/queue-task-label'
 /**
  * Task tone — the node colour. `dead` = pending but can never start on its own
  * because a dependency (directly or transitively) failed/was cancelled.
- * `plan` = a graph worker node that has not materialized a queue row yet.
  */
-export type BlueprintGraphTaskTone = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'dead' | 'plan'
+export type BlueprintGraphTaskTone = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'dead'
 
-/** Gate tone. `abandoned` is the gate state `cancelled` (the abandon verb). */
-export type BlueprintGraphGateTone = 'declared' | 'awaiting' | 'claimed' | 'expired' | 'released' | 'abandoned'
-
-export type BlueprintGraphEdgeKind = 'depends' | 'gate'
-/** satisfied: source done · waiting: source in flight · dead: target can never start · inactive: omitted by skip. */
-export type BlueprintGraphEdgeState = 'satisfied' | 'waiting' | 'dead' | 'inactive'
+/** satisfied: source done · waiting: source in flight · dead: target can never start. */
+export type BlueprintGraphEdgeState = 'satisfied' | 'waiting' | 'dead'
 
 export interface BlueprintGraphTaskNode {
     kind: 'task'
     id: string
     groupKey: string
-    /** Backing queue row id (absent for `plan:` placeholders). */
-    taskId?: string
+    /** Backing queue row id. */
+    taskId: string
     /** First line of the task text, trimmed to BLUEPRINT_GRAPH_TITLE_MAX. */
     title: string
     /** Whole display text — the hover tooltip. */
     fullTitle: string
     tone: BlueprintGraphTaskTone
-    /** Raw queue status / graph node state, for the tooltip. */
+    /** Raw queue status, for the tooltip. */
     rawStatus: string
     /** Claiming session is live-generating (assigned only). */
     generating: boolean
     provider?: string
     assignedNodeId?: string
     missionId?: string
-    graphId?: string
-    graphNodeId?: string
-    ref?: string
     createdAt?: string
     updatedAt?: string
     dispatchedAt?: string
@@ -69,23 +51,6 @@ export interface BlueprintGraphTaskNode {
     deadReason?: 'direct' | 'transitive'
     /** Dependency ids referenced but absent from the snapshot. */
     missingDeps: string[]
-}
-
-export interface BlueprintGraphGateNode {
-    kind: 'gate'
-    id: string
-    groupKey: string
-    graphId: string
-    gateNodeId: string
-    gate?: MeshGraphGateView
-    ref: string
-    tone: BlueprintGraphGateTone
-    state: string
-    /** Blocking state (awaiting / claimed / expired) — needs a human. */
-    blocking: boolean
-    missionId?: string
-    /** Owning graph's creation time (gates carry none of their own). */
-    createdAt?: string
 }
 
 /** Folded completed tasks of one lane ("✓ N done"). Only exists in views. */
@@ -98,19 +63,18 @@ export interface BlueprintGraphFoldNode {
     memberIds: string[]
 }
 
-export type BlueprintGraphNode = BlueprintGraphTaskNode | BlueprintGraphGateNode | BlueprintGraphFoldNode
+export type BlueprintGraphNode = BlueprintGraphTaskNode | BlueprintGraphFoldNode
 
 export interface BlueprintGraphEdge {
     id: string
     source: string
     target: string
-    kind: BlueprintGraphEdgeKind
     state: BlueprintGraphEdgeState
     /** Target is running — the one edge that moves. */
     animated: boolean
 }
 
-export type BlueprintGraphGroupKind = 'mission' | 'graph' | 'chain' | 'adhoc'
+export type BlueprintGraphGroupKind = 'mission' | 'chain' | 'adhoc'
 
 export interface BlueprintGraphGroupCounts {
     total: number
@@ -120,8 +84,6 @@ export interface BlueprintGraphGroupCounts {
     completed: number
     failed: number
     cancelled: number
-    /** Gates in a blocking state. */
-    gatesBlocking: number
 }
 
 export interface BlueprintGraphGroup {
@@ -130,7 +92,6 @@ export interface BlueprintGraphGroup {
     /** Mission title, chain anchor title, or null (caller labels it). */
     title: string | null
     missionId?: string
-    graphId?: string
     anchorTaskId?: string
     nodeIds: string[]
     counts: BlueprintGraphGroupCounts
@@ -146,7 +107,7 @@ export interface BlueprintGraphModel {
     nodes: BlueprintGraphNode[]
     edges: BlueprintGraphEdge[]
     groups: BlueprintGraphGroup[]
-    /** True when the snapshot holds at least one dependency edge or gate. */
+    /** True when the snapshot holds at least one dependency edge. */
     hasStructure: boolean
 }
 
@@ -170,47 +131,21 @@ export function queueStatusTone(status: string): BlueprintGraphTaskTone {
     }
 }
 
-/** Graph worker node state → tone, for nodes with no queue row. */
-function graphNodeTone(state: string): BlueprintGraphTaskTone {
-    switch (state) {
-        case 'completed': return 'completed'
-        case 'failed': return 'failed'
-        case 'cancelled':
-        case 'skipped': return 'cancelled'
-        case 'materialized': return 'pending'
-        default: return 'plan'
-    }
-}
-
-export function gateStateTone(state: string): BlueprintGraphGateTone {
-    switch (state) {
-        case 'awaiting_coordinator': return 'awaiting'
-        case 'claimed': return 'claimed'
-        case 'expired': return 'expired'
-        case 'released': return 'released'
-        case 'cancelled': return 'abandoned'
-        default: return 'declared'
-    }
-}
-
 /** A node that will not advance again on its own. */
 export function isTerminalGraphNode(node: BlueprintGraphNode): boolean {
     if (node.kind === 'fold') return true
-    if (node.kind === 'gate') return node.tone === 'released' || node.tone === 'abandoned'
     return node.tone === 'completed' || node.tone === 'failed' || node.tone === 'cancelled'
 }
 
 /** Source is finished successfully — the edge out of it is satisfied. */
 function isSatisfiedSource(node: BlueprintGraphNode): boolean {
     if (node.kind === 'fold') return true
-    if (node.kind === 'gate') return node.tone === 'released' && node.gate?.releaseOutcome !== 'failed'
     return node.tone === 'completed'
 }
 
 /** Source ended in a way that can never satisfy a dependent. */
 function isDeadSource(node: BlueprintGraphNode): boolean {
     if (node.kind === 'fold') return false
-    if (node.kind === 'gate') return node.tone === 'abandoned' || (node.tone === 'released' && node.gate?.releaseOutcome === 'failed')
     return node.tone === 'failed' || node.tone === 'cancelled' || node.tone === 'dead'
 }
 
@@ -222,19 +157,13 @@ function taskNodeId(taskId: string): string {
 
 export function buildBlueprintGraphModel(
     tasks: ReadonlyArray<RepoMeshQueueTask> | null | undefined,
-    graphs: ReadonlyArray<MeshGraphView> | null | undefined,
     status?: Pick<RepoMeshStatus, 'nodes'> | null,
     missionTitles?: Readonly<Record<string, string>>,
 ): BlueprintGraphModel {
     const dag = buildTaskDag(tasks ? [...tasks] : [])
     const chainByTaskId = buildQueueChainIndex(dag)
-    const nodeById = new Map<string, BlueprintGraphNode>()
-    /** Unified id → graph that owns it (worker/gate nodes of a persistent graph). */
-    const graphOfNode = new Map<string, MeshGraphView>()
-    /** Explicit graph-level dependency failures (C3) per unified id. */
-    const graphDepFailures = new Set<string>()
+    const nodeById = new Map<string, BlueprintGraphTaskNode>()
 
-    // Queue rows first: they carry the live status.
     for (const dagNode of dag.nodes) {
         const task = dagNode.task
         const text = queueTaskDisplayText(task.message)
@@ -261,110 +190,25 @@ export function buildBlueprintGraphModel(
         nodeById.set(node.id, node)
     }
 
-    // Persistent graphs: merge worker nodes into their queue rows, add plan
-    // placeholders and gates.
-    const graphNodeUnifiedId = new Map<string, Map<string, string>>() // graphId → endpoint → unified id
-    for (const graph of graphs ?? []) {
-        const endpoints = new Map<string, string>()
-        const gateByNodeId = new Map((graph.gates ?? []).map(gate => [gate.nodeId, gate]))
-        for (const gNode of graph.nodes ?? []) {
-            const unifiedId = unifiedIdForGraphNode(graph, gNode)
-            endpoints.set(gNode.nodeId, unifiedId)
-            if (gNode.ref) endpoints.set(gNode.ref, unifiedId)
-            graphOfNode.set(unifiedId, graph)
-            if ((gNode.dependencyFailures?.length ?? 0) > 0) graphDepFailures.add(unifiedId)
-            if (gNode.kind === 'coordinator_gate') {
-                const gate = gateByNodeId.get(gNode.nodeId)
-                const state = gate?.state ?? gNode.state
-                const tone = gateStateTone(state)
-                nodeById.set(unifiedId, {
-                    kind: 'gate',
-                    id: unifiedId,
-                    groupKey: '',
-                    graphId: graph.graphId,
-                    gateNodeId: gNode.nodeId,
-                    ...(gate ? { gate } : {}),
-                    ref: gNode.ref || gate?.ref || gNode.nodeId.slice(0, 8),
-                    tone,
-                    state,
-                    blocking: tone === 'awaiting' || tone === 'claimed' || tone === 'expired',
-                    ...(graph.missionId ? { missionId: graph.missionId } : {}),
-                    ...(graph.createdAt ? { createdAt: graph.createdAt } : {}),
-                })
-                continue
-            }
-            const existing = nodeById.get(unifiedId)
-            if (existing && existing.kind === 'task') {
-                existing.graphId = graph.graphId
-                existing.graphNodeId = gNode.nodeId
-                if (gNode.ref) existing.ref = gNode.ref
-                if (!existing.missionId && graph.missionId) existing.missionId = graph.missionId
-                continue
-            }
-            // Worker node without a queue row in this snapshot.
-            const tone = gNode.taskStatus ? queueStatusTone(gNode.taskStatus) : graphNodeTone(gNode.state)
-            const label = gNode.ref || gNode.nodeId.slice(0, 8)
-            nodeById.set(unifiedId, {
-                kind: 'task',
-                id: unifiedId,
-                groupKey: '',
-                ...(gNode.taskId ? { taskId: gNode.taskId } : {}),
-                title: firstLineTitle(label),
-                fullTitle: label,
-                tone,
-                rawStatus: gNode.taskStatus ?? gNode.state,
-                generating: false,
-                ...(graph.missionId ? { missionId: graph.missionId } : {}),
-                graphId: graph.graphId,
-                graphNodeId: gNode.nodeId,
-                ...(gNode.ref ? { ref: gNode.ref } : {}),
-                createdAt: graph.createdAt,
-                missingDeps: [],
-            })
-        }
-        graphNodeUnifiedId.set(graph.graphId, endpoints)
-    }
-
-    // Edges: queue dependsOn, then graph edges; one edge per (source, target).
-    const edgeByPair = new Map<string, { source: string; target: string; kind: BlueprintGraphEdgeKind; active: boolean }>()
+    // Edges: queue dependsOn, one edge per (source, target).
+    const edgeByPair = new Map<string, { source: string; target: string }>()
     for (const edge of dag.edges) {
         const source = taskNodeId(edge.source)
         const target = taskNodeId(edge.target)
-        edgeByPair.set(`${source}->${target}`, { source, target, kind: 'depends', active: true })
+        edgeByPair.set(`${source}->${target}`, { source, target })
     }
-    for (const graph of graphs ?? []) {
-        const endpoints = graphNodeUnifiedId.get(graph.graphId)!
-        for (const edge of graph.edges ?? []) {
-            const source = endpoints.get(edge.from)
-            const target = endpoints.get(edge.to)
-            if (!source || !target || source === target) continue
-            const touchesGate = nodeById.get(source)?.kind === 'gate' || nodeById.get(target)?.kind === 'gate'
-            const kind: BlueprintGraphEdgeKind = edge.kind === 'gate' || touchesGate ? 'gate' : 'depends'
-            const pair = `${source}->${target}`
-            const prior = edgeByPair.get(pair)
-            edgeByPair.set(pair, {
-                source,
-                target,
-                // A gate reading wins over a plain queue dependency — it is the more specific fact.
-                kind: prior?.kind === 'gate' || kind === 'gate' ? 'gate' : 'depends',
-                active: edge.active !== false && (prior?.active ?? true),
-            })
-        }
-    }
-
     // Dead-dependency propagation to a fixpoint: a not-yet-started task with
-    // any live-edge dependency that failed/cancelled (or is itself dead) can
-    // never start on its own under the default `block` policy.
+    // any dependency that failed/cancelled (or is itself dead) can never start
+    // on its own under the default `block` policy.
     const incoming = new Map<string, string[]>()
     for (const edge of edgeByPair.values()) {
-        if (!edge.active) continue
         incoming.set(edge.target, [...(incoming.get(edge.target) ?? []), edge.source])
     }
     const taskById = new Map(dag.nodes.map(dagNode => [dagNode.id, dagNode.task]))
     for (const node of nodeById.values()) {
-        if (node.kind !== 'task' || (node.tone !== 'pending' && node.tone !== 'plan')) continue
-        const task = node.taskId ? taskById.get(node.taskId) : undefined
-        if ((task?.dependencyFailures?.length ?? 0) > 0 || graphDepFailures.has(node.id)) {
+        if (node.tone !== 'pending') continue
+        const task = taskById.get(node.taskId)
+        if ((task?.dependencyFailures?.length ?? 0) > 0) {
             node.tone = 'dead'
             node.deadReason = 'direct'
         }
@@ -374,12 +218,12 @@ export function buildBlueprintGraphModel(
     while (changed && guard-- > 0) {
         changed = false
         for (const node of nodeById.values()) {
-            if (node.kind !== 'task' || (node.tone !== 'pending' && node.tone !== 'plan')) continue
-            const sources = (incoming.get(node.id) ?? []).map(id => nodeById.get(id)).filter((n): n is BlueprintGraphNode => Boolean(n))
+            if (node.tone !== 'pending') continue
+            const sources = (incoming.get(node.id) ?? []).map(id => nodeById.get(id)).filter((n): n is BlueprintGraphTaskNode => Boolean(n))
             const deadSources = sources.filter(isDeadSource)
             if (deadSources.length === 0) continue
             node.tone = 'dead'
-            node.deadReason = deadSources.some(source => !(source.kind === 'task' && source.tone === 'dead')) ? 'direct' : 'transitive'
+            node.deadReason = deadSources.some(source => source.tone !== 'dead') ? 'direct' : 'transitive'
             changed = true
         }
     }
@@ -389,35 +233,27 @@ export function buildBlueprintGraphModel(
         const source = nodeById.get(edge.source)
         const target = nodeById.get(edge.target)
         if (!source || !target) continue
-        const targetDead = target.kind === 'task' && target.tone === 'dead'
-        const state: BlueprintGraphEdgeState = !edge.active
-            ? 'inactive'
-            : targetDead
-                ? 'dead'
-                : isSatisfiedSource(source) ? 'satisfied' : 'waiting'
+        const state: BlueprintGraphEdgeState = target.tone === 'dead'
+            ? 'dead'
+            : isSatisfiedSource(source) ? 'satisfied' : 'waiting'
         edges.push({
             id: `e:${pair}`,
             source: edge.source,
             target: edge.target,
-            kind: edge.kind,
             state,
-            animated: state !== 'inactive' && target.kind === 'task' && target.tone === 'running',
+            animated: target.tone === 'running',
         })
     }
     edges.sort((a, b) => a.id.localeCompare(b.id))
 
-    // Grouping: own mission → graph mission → graph → chain mission → chain → ad-hoc.
+    // Grouping: own mission → chain mission → chain → ad-hoc.
     const groupHeads = new Map<string, Omit<BlueprintGraphGroup, 'nodeIds' | 'counts' | 'live' | 'lastActivityAt' | 'newestCreatedAt'>>()
     for (const node of nodeById.values()) {
-        if (node.kind === 'fold') continue
-        const graph = graphOfNode.get(node.id)
-        const chain = node.kind === 'task' && node.taskId ? chainByTaskId.get(node.taskId) : undefined
-        const missionId = node.missionId || graph?.missionId || chain?.inheritedMissionId
+        const chain = chainByTaskId.get(node.taskId)
+        const missionId = node.missionId || chain?.inheritedMissionId
         let head: Omit<BlueprintGraphGroup, 'nodeIds' | 'counts' | 'live' | 'lastActivityAt' | 'newestCreatedAt'>
         if (missionId) {
             head = { key: `mission:${missionId}`, kind: 'mission', title: missionTitles?.[missionId] ?? null, missionId }
-        } else if (graph) {
-            head = { key: `graph:${graph.graphId}`, kind: 'graph', title: null, graphId: graph.graphId }
         } else if (chain) {
             head = { key: chain.key, kind: 'chain', title: chain.anchorTitle, anchorTaskId: chain.anchorTaskId }
         } else {
@@ -437,24 +273,20 @@ export function buildBlueprintGraphModel(
     const groups: BlueprintGraphGroup[] = []
     for (const head of groupHeads.values()) {
         const members = nodes.filter(node => node.groupKey === head.key)
-        const counts: BlueprintGraphGroupCounts = { total: members.length, running: 0, pending: 0, dead: 0, completed: 0, failed: 0, cancelled: 0, gatesBlocking: 0 }
+        const counts: BlueprintGraphGroupCounts = { total: members.length, running: 0, pending: 0, dead: 0, completed: 0, failed: 0, cancelled: 0 }
         let lastActivityAt = ''
         let newestCreatedAt = ''
         for (const node of members) {
             const created = nodeTime(node)
             if (created > newestCreatedAt) newestCreatedAt = created
-            if (node.kind === 'gate') {
-                if (node.blocking) counts.gatesBlocking += 1
-            } else if (node.kind === 'task') {
-                if (node.tone === 'running') counts.running += 1
-                else if (node.tone === 'pending' || node.tone === 'plan') counts.pending += 1
-                else if (node.tone === 'dead') counts.dead += 1
-                else if (node.tone === 'completed') counts.completed += 1
-                else if (node.tone === 'failed') counts.failed += 1
-                else if (node.tone === 'cancelled') counts.cancelled += 1
-                const at = node.updatedAt || node.createdAt || ''
-                if (at > lastActivityAt) lastActivityAt = at
-            }
+            if (node.tone === 'running') counts.running += 1
+            else if (node.tone === 'pending') counts.pending += 1
+            else if (node.tone === 'dead') counts.dead += 1
+            else if (node.tone === 'completed') counts.completed += 1
+            else if (node.tone === 'failed') counts.failed += 1
+            else if (node.tone === 'cancelled') counts.cancelled += 1
+            const at = node.updatedAt || node.createdAt || ''
+            if (at > lastActivityAt) lastActivityAt = at
         }
         groups.push({
             ...head,
@@ -473,34 +305,23 @@ export function buildBlueprintGraphModel(
         || b.newestCreatedAt.localeCompare(a.newestCreatedAt)
         || a.key.localeCompare(b.key))
 
-    const hasStructure = edges.length > 0 || nodes.some(node => node.kind === 'gate')
-    return { nodes, edges, groups, hasStructure }
-}
-
-function unifiedIdForGraphNode(graph: MeshGraphView, node: MeshGraphNodeView): string {
-    if (node.kind === 'coordinator_gate') return `gate:${graph.graphId}:${node.nodeId}`
-    if (node.taskId) return taskNodeId(node.taskId)
-    return `plan:${graph.graphId}:${node.nodeId}`
+    return { nodes, edges, groups, hasStructure: edges.length > 0 }
 }
 
 function nodeTime(node: BlueprintGraphNode): string {
-    if (node.kind === 'task') return node.createdAt || ''
-    if (node.kind === 'gate') return node.createdAt || ''
-    return ''
+    return node.kind === 'task' ? node.createdAt || '' : ''
 }
 
 /**
  * Default for the List / Graph switch when the viewer has no stored choice:
- * Graph as soon as there is structure to draw (a dependency edge or a gate),
- * List for a flat pile of independent tasks — boxes with no lines explain
- * nothing a row doesn't.
+ * Graph as soon as there is structure to draw (a dependency edge), List for a
+ * flat pile of independent tasks — boxes with no lines explain nothing a row
+ * doesn't.
  */
 export function snapshotHasStructure(
     tasks: ReadonlyArray<Pick<RepoMeshQueueTask, 'dependsOn'>> | null | undefined,
-    graphs: ReadonlyArray<Pick<MeshGraphView, 'edges' | 'gates'>> | null | undefined,
 ): boolean {
-    if ((tasks ?? []).some(task => Array.isArray(task.dependsOn) && task.dependsOn.length > 0)) return true
-    return (graphs ?? []).some(graph => (graph.gates?.length ?? 0) > 0 || (graph.edges?.length ?? 0) > 0)
+    return (tasks ?? []).some(task => Array.isArray(task.dependsOn) && task.dependsOn.length > 0)
 }
 
 /* ── Stage 2: viewer preferences → the visible graph ────────────────────── */
@@ -638,23 +459,6 @@ export function taskNodeTimeReading(
     const parsed = Date.parse(at)
     if (!Number.isFinite(parsed)) return undefined
     return { kind, at, elapsedMs: Math.max(0, nowMs - parsed) }
-}
-
-/**
- * Deadline countdown for a gate that is still holding (declared / awaiting /
- * claimed / expired). Terminal gates have no countdown — their deadline is
- * history. `overdue` with `ms` = how long past the deadline.
- */
-export function gateDeadlineReading(
-    node: Pick<BlueprintGraphGateNode, 'tone' | 'gate'>,
-    nowMs: number,
-): { overdue: boolean; ms: number } | undefined {
-    if (node.tone === 'released' || node.tone === 'abandoned') return undefined
-    const raw = node.gate?.deadlineAt
-    if (!raw) return undefined
-    const deadline = Date.parse(raw)
-    if (!Number.isFinite(deadline)) return undefined
-    return deadline >= nowMs ? { overdue: false, ms: deadline - nowMs } : { overdue: true, ms: nowMs - deadline }
 }
 
 /**

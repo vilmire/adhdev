@@ -12,7 +12,7 @@ export interface SessionRuntimeTarget {
     cdpManagerKey?: string;
     adapterKey?: string;
     instanceKey?: string;
-    /** Working directory for CLI/ACP sessions. Used by read_chat to resolve
+    /** Working directory for CLI sessions. Used by read_chat to resolve
      *  native history when there is no live adapter (e.g. subscription path). */
     workspace?: string;
     /** Wall clock at register time. native-history readers use it as a
@@ -49,7 +49,7 @@ export interface TerminateDetail {
 /**
  * Legacy origin for `register()` callers that do not pass one yet (B2..B5 make
  * every caller explicit): CDP pages come from an attach, webviews from discovery,
- * PTY/ACP sessions from a launch.
+ * PTY sessions from a launch.
  */
 function inferLegacyOrigin(target: SessionRuntimeTarget): RegisterOrigin {
     if (target.transport === 'cdp-page') return 'attach';

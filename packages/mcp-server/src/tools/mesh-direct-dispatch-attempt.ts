@@ -42,7 +42,7 @@ export function computeIdleDispatchAckRisk(
  * direct dispatch, mirroring what `recordDirectDispatchTask`'s in-process
  * `openTurnAttempt`/`recordTurnAck` used to do for the LEGACY ledger
  * (`mesh-turn-ledger.ts`). Both ledgers are bookkeeping-only here — neither
- * call touches the actual transport delivery (`ipcDispatchToRemoteAgent` /
+ * call touches the actual transport delivery (`sendDirectAgentTask`'s
  * `agent_command`), which happens independently around this helper.
  *
  * Returns the `attemptRef` on success (embed in `meshContext` so worker
@@ -87,7 +87,7 @@ export async function openDirectDispatchAttempt(
  * refusal the worker DID answer with. Used to decide `dispatch_failed.workerAbsent`
  * for a direct dispatch the same way the queue-claim path's message-text sniff
  * does (mesh-queue-dispatch.ts `handleDispatchFailure`), but on the STRUCTURED
- * code `ipcDispatchToRemoteAgent` already classifies rather than re-parsing prose.
+ * code `sendDirectAgentTask` already classifies rather than re-parsing prose.
  */
 export const P2P_TRANSPORT_ABSENCE_CODES: ReadonlySet<string> = new Set([
     'p2p_unavailable', 'p2p_timeout', 'p2p_not_connected', 'p2p_datachannel_closed', 'p2p_no_route', 'p2p_daemon_offline',

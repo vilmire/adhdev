@@ -113,7 +113,7 @@ const PaneGroupContent = memo(function PaneGroupContent({
         <>
             <ApprovalBanner activeConv={activeConv} onModalButton={handleModalButton} />
 
-            {(activeConv.transport !== 'pty' && activeConv.transport !== 'acp' && activeConv.cdpConnected === false) ? (
+            {(activeConv.transport !== 'pty' && activeConv.cdpConnected === false) ? (
                 <div className="desktop-only px-3 pt-1 pb-2">
                     <div className="flex items-center gap-2.5 px-3.5 py-2 bg-yellow-500/[0.08] border border-yellow-500/20 rounded-lg text-xs text-text-secondary">
                         <span className="text-sm"><IconWarning size={14} /></span>

@@ -64,7 +64,7 @@ export interface DispatchableTask {
  *
  *   1. `task.message` — the coordinator's authored text, verbatim;
  *   2. the "Upstream results" appendix (D4, mesh-upstream-results.ts), when
- *      the task has predecessors (queue `dependsOn` or graph `requires`) —
+ *      the task has predecessors (queue `dependsOn`) —
  *      their accepted completion summaries in untrusted-evidence envelopes;
  *   3. the handoff-note block, when the worker-MCP gate is on and any earlier
  *      work is relevant (see worker-handoff-notes.ts);

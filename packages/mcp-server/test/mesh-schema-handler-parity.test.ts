@@ -5,9 +5,9 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 import { ALL_MESH_TOOLS } from '../src/tools/mesh-tool-schemas.js';
-import { MESH_NOTIFY_WORKER_TOOL, MESH_CONFIG_TOOL, MESH_MAGI_COLLECT_TOOL, MESH_MAGI_KIND_PANEL_TOOL, MESH_MAGI_REVIEW_TOOL, MESH_NODE_SLOTS_TOOL } from '../src/tools/mesh-tool-schemas-refine-config.js';
+import { MESH_NOTIFY_WORKER_TOOL, MESH_CONFIG_TOOL, MESH_NODE_SLOTS_TOOL } from '../src/tools/mesh-tool-schemas-refine-config.js';
 import { MESH_MISSION_LIST_TOOL, MESH_MISSION_UPSERT_TOOL, MESH_NOTE_TOOL } from '../src/tools/mesh-tool-schemas-admin.js';
-import { MESH_ENQUEUE_BATCH_TOOL, MESH_ENQUEUE_TASK_TOOL, MESH_GRAPH_GATE_TOOL, MESH_QUEUE_CANCEL_TOOL, MESH_QUEUE_REQUEUE_TOOL } from '../src/tools/mesh-tool-schemas-queue.js';
+import { MESH_ENQUEUE_BATCH_TOOL, MESH_ENQUEUE_TASK_TOOL, MESH_QUEUE_CANCEL_TOOL, MESH_QUEUE_REQUEUE_TOOL } from '../src/tools/mesh-tool-schemas-queue.js';
 import { MESH_TOOL_ACTIONS, rejectUnknownMeshToolArgs, validateMeshToolArgs } from '../src/tools/validate-tool-args.js';
 
 /**
@@ -17,7 +17,7 @@ import { MESH_TOOL_ACTIONS, rejectUnknownMeshToolArgs, validateMeshToolArgs } fr
  * BEFORE dispatch. That makes the schema, not the handler signature, the real contract:
  * a key a handler reads but the schema does not declare is unreachable dead code, and
  * the caller gets a confusing "Unknown parameter" instead of the behavior the handler
- * documents. Two such divergences were found and fixed:
+ * documents. One such divergence was found and fixed:
  *
  *   D2#1 mesh_write_mesh_json_config (now mesh_config kind=mesh_json) — the handler routes on args.node_id
  *        (resolveRefineConfigNode(ctx, args.node_id)) but the schema declared only
@@ -25,19 +25,9 @@ import { MESH_TOOL_ACTIONS, rejectUnknownMeshToolArgs, validateMeshToolArgs } fr
  *        repo-committed write could only target the coordinator's default node. Its
  *        read-only sibling mesh_refine_config declared node_id all along — the
  *        asymmetry is what made the omission easy to miss. Fixed by declaring node_id.
- *
- *   D2#2 mesh_magi_kind_panel_set / _list (now mesh_magi_kind_panel) — the handlers read
- *        `readString(args.task_kind) || readString(args.kind)`, but the schemas declare
- *        only task_kind, so the `kind` half could never execute. Fixed by DELETING the
- *        dead fallback rather than declaring `kind`: the repo's alias convention is
- *        camelCase↔snake_case pairs of the SAME word (task_mode/taskMode, gate_id/gateId,
- *        mission_id/missionId), and `kind` is a different, shorter word — declaring it
- *        would mint a second name for the panel key, and collide with the unrelated
- *        `kind` field these very handlers return in their scope descriptor.
  */
 
 const here = dirname(fileURLToPath(import.meta.url));
-const magiHandlerSrc = readFileSync(join(here, '../src/tools/mesh-tools-magi.ts'), 'utf8');
 const refineHandlerSrc = readFileSync(join(here, '../src/tools/mesh-tools-refine.ts'), 'utf8');
 
 test('D2#1: mesh_config kind=mesh_json accepts node_id through the unknown-arg gate', () => {
@@ -70,55 +60,17 @@ test('D2#1: an undeclared key is still rejected (the gate was not widened wholes
     assert.match(error, /did you mean "node_id"\?/);
 });
 
-test('D2#2: the dead `kind` fallback is gone from both kind-panel handlers', () => {
-    // The gate rejects `kind`, so a handler reading it is unreachable. Assert the
-    // source no longer pretends to accept it. Comments are stripped first — the
-    // fix's own explanatory comments quote the removed expression, and matching
-    // those would make this assertion trivially unfalsifiable.
-    const code = magiHandlerSrc
-        .replace(/\/\*[\s\S]*?\*\//g, '')
-        .split('\n')
-        .filter(line => !line.trim().startsWith('//'))
-        .join('\n');
-    assert.doesNotMatch(code, /readString\(args\.kind\)/);
-    assert.doesNotMatch(code, /args\.task_kind\s*\?\?\s*args\.kind\b/);
-    // Guard the strip itself: the declared key must still be read, so a regex that
-    // accidentally blanked the file cannot pass this test vacuously.
-    assert.match(code, /readString\(args\.task_kind\)/);
-});
-
-test('D2#2: `kind` stays rejected on both kind-panel actions', () => {
-    for (const action of ['set', 'list']) {
-        const name = 'mesh_magi_kind_panel';
-        const error = rejectUnknownMeshToolArgs(name, { action, kind: 'rca' });
-        assert.ok(error, `${name} must reject the undeclared alias`);
-        assert.match(error, /Unknown parameter\(s\) for /);
-        assert.match(error, /"kind"/);
-        // No "did you mean" here by design: kind→task_kind is edit distance 5, past
-        // MAX_SUGGESTION_DISTANCE (2). The allowed-parameter list is what points the
-        // caller at the right key.
-        assert.match(error, /Allowed parameters: .*task_kind/);
-    }
-});
-
-test('D2#2: task_kind — the declared key — passes on both kind-panel actions', () => {
-    assert.equal(rejectUnknownMeshToolArgs('mesh_magi_kind_panel', { action: 'set', task_kind: 'rca', slots: [], write: false }), null);
-    assert.equal(rejectUnknownMeshToolArgs('mesh_magi_kind_panel', { action: 'list', task_kind: 'rca' }), null);
-    assert.ok('task_kind' in (MESH_MAGI_KIND_PANEL_TOOL.inputSchema.properties as object));
-});
-
 /**
  * D2#4 (this fix) — a follow-up sweep of the SAME class of bug found by D2#1/#2, this
  * time for genuine camelCase↔snake_case ALIAS pairs (task_kind/taskKind, mission_id/
- * missionId, etc — same word, not a different one like D2#2's `kind`). Each handler
+ * missionId, etc — same word, not a different word). Each handler
  * below already reads BOTH spellings (readString(args.x) || readString(args.xCamel), or
  * args.x ?? args.xCamel), but the schema declared only the snake_case half, so the
  * camelCase half was unreachable dead code exactly like D2#1's node_id. Fixed by
  * declaring the missing camelCase alias, following the repo's established "CamelCase
  * alias for x_y" convention (never by deleting the handler's read, since these ARE the
- * same-word alias pairs D2#2 said the convention covers).
+ * same-word alias pairs the convention covers).
  */
-const magiFullSrc = readFileSync(join(here, '../src/tools/mesh-tools-magi.ts'), 'utf8');
 const missionHandlerSrc = readFileSync(join(here, '../src/tools/mesh-tools-mission.ts'), 'utf8');
 // View / cancel / requeue moved out of mesh-tools-queue.ts into mesh-tools-queue-manage.ts;
 // the queue-handler pins read both.
@@ -137,39 +89,6 @@ const slotAutodetectHandlerSrc = readFileSync(join(here, '../src/tools/mesh-tool
 // null for the alias spelling) is unchanged; only the "and it's a published
 // property" half of each assertion flips to "and it's NOT a published property".
 
-test('D2#4: mesh_magi_review accepts every camelCase alias its handler reads (unpublished)', () => {
-    assert.equal(rejectUnknownMeshToolArgs('mesh_magi_review', {
-        question: 'q',
-        taskKind: 'rca',
-        includeStale: true,
-        requireIndependentEvidence: false,
-        waitTimeoutMs: 60000,
-        autoCleanup: false,
-    }), null);
-    const props = MESH_MAGI_REVIEW_TOOL.inputSchema.properties as Record<string, unknown>;
-    for (const key of ['taskKind', 'includeStale', 'requireIndependentEvidence', 'waitTimeoutMs', 'autoCleanup']) {
-        assert.equal(key in props, false, `mesh_magi_review schema must not publish ${key}`);
-    }
-    assert.match(magiFullSrc, /args\.task_kind\s*\?\?\s*args\.taskKind/);
-    assert.match(magiFullSrc, /args\.include_stale\s*\?\?\s*args\.includeStale/);
-});
-
-test('D2#4: mesh_magi_collect accepts every camelCase alias its handler reads (unpublished)', () => {
-    assert.equal(rejectUnknownMeshToolArgs('mesh_magi_collect', {
-        consensusGroupId: 'magi_x',
-        taskKind: 'rca',
-        requireIndependentEvidence: false,
-        waitTimeoutMs: 60000,
-        autoCleanup: false,
-        verbose: true,
-    }), null);
-    const props = MESH_MAGI_COLLECT_TOOL.inputSchema.properties as Record<string, unknown>;
-    for (const key of ['consensusGroupId', 'taskKind', 'requireIndependentEvidence', 'waitTimeoutMs', 'autoCleanup']) {
-        assert.equal(key in props, false, `mesh_magi_collect schema must not publish ${key}`);
-    }
-    assert.match(magiFullSrc, /readString\(args\.consensus_group_id\)\s*\|\|\s*readString\(args\.consensusGroupId\)/);
-});
-
 test('D2#4: mesh_mission_upsert accepts missionId and missionIds (unpublished)', () => {
     assert.equal(rejectUnknownMeshToolArgs('mesh_mission_upsert', { missionId: 'm_x', title: 't' }), null);
     assert.equal(rejectUnknownMeshToolArgs('mesh_mission_upsert', { missionIds: ['a', 'b'], status: 'completed' }), null);
@@ -180,12 +99,10 @@ test('D2#4: mesh_mission_upsert accepts missionId and missionIds (unpublished)',
     assert.match(missionHandlerSrc, /readString\(args\.mission_id\)\s*\|\|\s*readString\(args\.missionId\)/);
 });
 
-test('D2#4: mesh_mission_list accepts includeMagi and includeStats (unpublished)', () => {
-    assert.equal(rejectUnknownMeshToolArgs('mesh_mission_list', { includeMagi: true, includeStats: true }), null);
+test('D2#4: mesh_mission_list accepts includeStats (unpublished)', () => {
+    assert.equal(rejectUnknownMeshToolArgs('mesh_mission_list', { includeStats: true }), null);
     const props = MESH_MISSION_LIST_TOOL.inputSchema.properties as Record<string, unknown>;
-    assert.equal('includeMagi' in props, false);
     assert.equal('includeStats' in props, false);
-    assert.match(missionHandlerSrc, /args\.include_magi\s*\?\?\s*args\.includeMagi/);
     assert.match(missionHandlerSrc, /args\.include_stats\s*\?\?\s*args\.includeStats/);
 });
 
@@ -216,13 +133,12 @@ test('D2#4: mesh_queue_requeue accepts every camelCase alias its handler reads (
     assert.match(queueHandlerSrc, /args\.target_node_id\s*\|\|\s*args\.targetNodeId/);
 });
 
-test('D2#4: mesh_node_slots set / list / propose accept nodeId (and propose accepts includeMagi), unpublished', () => {
+test('D2#4: mesh_node_slots set / list / propose accept nodeId, unpublished', () => {
     assert.equal(rejectUnknownMeshToolArgs('mesh_node_slots', { action: 'set', nodeId: 'n_x', slots: [{ provider: 'claude-cli' }] }), null);
     assert.equal(rejectUnknownMeshToolArgs('mesh_node_slots', { action: 'list', nodeId: 'n_x' }), null);
-    assert.equal(rejectUnknownMeshToolArgs('mesh_node_slots', { action: 'propose', nodeId: 'n_x', includeMagi: true }), null);
+    assert.equal(rejectUnknownMeshToolArgs('mesh_node_slots', { action: 'propose', nodeId: 'n_x' }), null);
     const proposeProps = MESH_NODE_SLOTS_TOOL.inputSchema.properties as Record<string, unknown>;
     assert.equal('nodeId' in proposeProps, false);
-    assert.equal('includeMagi' in proposeProps, false);
     assert.match(slotsHandlerSrc, /String\(args\.node_id\s*\|\|\s*args\.nodeId\s*\|\|\s*''\)/);
     assert.match(slotAutodetectHandlerSrc, /String\(args\.node_id\s*\|\|\s*args\.nodeId\s*\|\|\s*''\)/);
 });
@@ -311,9 +227,7 @@ function handlerNeed(argType: string, key: string): Need {
  * MESH_TOOL_ACTIONS — the same two directions A3 checks for a plain tool.
  */
 const MERGED_ACTION_HANDLERS: Record<string, Record<string, string>> = {
-    mesh_graph_gate: { claim: 'meshGraphGateClaim', release: 'meshGraphGateRelease', abandon: 'meshGraphGateAbandon', extend: 'meshGraphGateExtend' },
     mesh_node_slots: { list: 'meshNodeSlotsList', propose: 'meshNodeSlotsPropose', set: 'meshNodeSlotsSet' },
-    mesh_magi_kind_panel: { list: 'meshMagiKindPanelList', set: 'meshMagiKindPanelSet' },
     mesh_coordinator_prompt_append: { get: 'meshCoordinatorPromptAppendGet', set: 'meshCoordinatorPromptAppendSet' },
     mesh_note: { record: 'meshRecordNote', forget: 'meshForgetNote' },
     mesh_config: { refine: 'meshRefineConfig', change_impact: 'meshChangeImpactConfig', mesh_json: 'meshWriteMeshJsonConfig' },
@@ -408,8 +322,7 @@ test('A3: mesh_notify_worker (flag-gated, not in ALL_MESH_TOOLS) declares node_i
  *
  *   1. `mesh_enqueue_batch` per-task `owned_paths`/`ownedPaths` was normalized by
  *      the shared `normalizeEnqueueTaskArgs` but never copied onto the `specs.push`
- *      object (compat path AND graph path both read off that one `specs` array),
- *      so a batch entry's declaration never reached the daemon on either path.
+ *      object, so a batch entry's declaration never reached the daemon.
  *   2. `mesh_enqueue_task` top-level `not_before` was REJECTED by the pre-dispatch
  *      unknown-key gate — the schema declared only `notBefore`, so the snake_case
  *      form the tool's own description and `max_retries`' wording tell callers to
@@ -418,12 +331,10 @@ test('A3: mesh_notify_worker (flag-gated, not in ALL_MESH_TOOLS) declares node_i
  *   3. `notBefore`/`not_before` were declared `type:'number'` though the
  *      description and `resolveNotBefore` accept an ISO string too.
  *   4. The unknown-key gate only checked TOP-LEVEL keys, so a typo'd key inside a
- *      batch `tasks[]` item (or `workspaces[]`/`gates[]`) was silently dropped —
+ *      batch `tasks[]` item was silently dropped —
  *      exactly how the owned_paths class recurred *inside* batch in the first
  *      place. Extended to validate nested array-of-object items.
  */
-
-const graphHandlerSrc = readFileSync(join(here, '../src/tools/mesh-tools-graph.ts'), 'utf8');
 
 test('rc.37#2: mesh_enqueue_task accepts not_before and thinking_level snake_case (previously unreachable)', () => {
     assert.equal(rejectUnknownMeshToolArgs('mesh_enqueue_task', {
@@ -468,11 +379,11 @@ test('rc.37#1: mesh_enqueue_batch schema declares owned_paths on tasks[] and sti
     // The BREAK-ONCE proof that the handler really copies v.ownedPaths onto the
     // pushed spec (not just that the schema accepts the key) lives in
     // mesh-enqueue-owned-paths-batch.test.ts, which reads the persisted queue row
-    // back out of the real daemon-core store for both the compat and graph paths.
+    // back out of the real daemon-core store.
     assert.match(queueHandlerSrc, /\.\.\.\(v\.ownedPaths \? \{ ownedPaths: v\.ownedPaths \} : \{\}\)/);
 });
 
-test('rc.37#4: nested-array-item gate rejects a typo inside tasks[]/workspaces[]/gates[] with a did-you-mean hint', () => {
+test('rc.37#4: nested-array-item gate rejects a typo inside tasks[] with a did-you-mean hint', () => {
     const badTask = validateMeshToolArgs('mesh_enqueue_batch', { tasks: [{ target_node: 'x', bogus: 1, difficulty: 'medium', message: 'm' }] });
     assert.ok(badTask, 'an unknown key inside tasks[] must be rejected');
     assert.match(badTask!, /Unknown parameter\(s\) for mesh_enqueue_batch tasks\[0\]/);
@@ -480,26 +391,6 @@ test('rc.37#4: nested-array-item gate rejects a typo inside tasks[]/workspaces[]
 
     const goodTask = validateMeshToolArgs('mesh_enqueue_batch', { tasks: [{ target_node: 'x', difficulty: 'medium', message: 'm' }] });
     assert.equal(goodTask, null, 'target_node (documented alias) must be accepted inside tasks[]');
-
-    const badWorkspace = validateMeshToolArgs('mesh_enqueue_batch', {
-        tasks: [{ message: 'm', difficulty: 'medium' }],
-        workspaces: [{ ref: 'w1', sourceNodeId: 'node_x', typo_field: true }],
-    });
-    assert.ok(badWorkspace, 'an unknown key inside workspaces[] must be rejected');
-    assert.match(badWorkspace!, /workspaces\[0\]/);
-
-    const goodWorkspace = validateMeshToolArgs('mesh_enqueue_batch', {
-        tasks: [{ message: 'm', difficulty: 'medium' }],
-        workspaces: [{ ref: 'w1', sourceNodeId: 'node_x', baseRevision: 'HEAD', desiredPath: '/tmp/x', cleanupOnGraphFailure: true }],
-    });
-    assert.equal(goodWorkspace, null, 'documented camelCase workspace aliases must be accepted');
-
-    const badGate = validateMeshToolArgs('mesh_enqueue_batch', {
-        tasks: [{ message: 'm', difficulty: 'medium' }],
-        gates: [{ ref: 'g1', action: 'approval', typo_field: true }],
-    });
-    assert.ok(badGate, 'an unknown key inside gates[] must be rejected');
-    assert.match(badGate!, /gates\[0\]/);
 });
 
 test('rc.37#4: target_node / targetNode (read aliases of target_node_id) stay accepted on tasks[] by the nested gate', () => {
@@ -508,17 +399,6 @@ test('rc.37#4: target_node / targetNode (read aliases of target_node_id) stay ac
         assert.equal(validateMeshToolArgs('mesh_enqueue_batch', { tasks: [{ message: 'm', difficulty: 'medium', [key]: 'node_x' }] }), null, key);
     }
     assert.match(queueHandlerSrc, /readString\(args\.targetNode\)\s*\|\|\s*readString\(args\.target_node\)/);
-});
-
-test('rc.37#4: workspaces[] camelCase aliases (sourceNodeId/baseRevision/desiredPath/cleanupOnGraphFailure) stay accepted by the nested gate', () => {
-    const workspaceItemProps = (MESH_ENQUEUE_BATCH_TOOL.inputSchema.properties as any).workspaces.items.properties as Record<string, unknown>;
-    for (const key of ['sourceNodeId', 'baseRevision', 'desiredPath', 'cleanupOnGraphFailure']) {
-        assert.equal(key in workspaceItemProps, false, `D2: workspaces[] schema publishes only the snake_case form of ${key}`);
-    }
-    assert.match(graphHandlerSrc, /w\?\.source_node_id\s*\?\?\s*w\?\.sourceNodeId/);
-    assert.match(graphHandlerSrc, /w\?\.base_revision\s*\?\?\s*w\?\.baseRevision/);
-    assert.match(graphHandlerSrc, /w\?\.desired_path\s*\?\?\s*w\?\.desiredPath/);
-    assert.match(graphHandlerSrc, /w\?\.cleanup_on_graph_failure\s*\?\?\s*w\?\.cleanupOnGraphFailure/);
 });
 
 test('rc.37: every mesh_enqueue_task schema property is read by the handler (no dead schema keys)', () => {
@@ -531,70 +411,25 @@ test('rc.37: every mesh_enqueue_task schema property is read by the handler (no 
     assert.deepEqual(missing, [], `mesh_enqueue_task schema properties never read by the handler: ${missing.join(', ')}`);
 });
 
-/**
- * rc.37 audit item 2 — mesh_graph_gate action=release patches[].node aliases.
- *
- * The handler read ONLY p.node and silently dropped any patch item given as
- * node_id/nodeId/ref (the sibling mesh_graph_node_patch has always accepted all
- * four), committing the release with the UNPATCHED spec — irreversible, since a
- * released gate can never be re-released. Fixed by accepting the same aliases and
- * REJECTING (not silently dropping) a patch entry that resolves to no node.
- */
-// 2026-09-27 tools/list schema diet: nodeId (camelCase) is now accepted via
-// MESH_ACCEPTED_ARG_ALIASES (mesh_graph_gate.patches scope) instead of being
-// its own published property — node/node_id/ref stay published as genuinely
-// distinct aliases (see the tool's own property descriptions).
-test('rc.37#2: mesh_graph_gate action=release patches[] accepts node_id/nodeId/ref aliases (nodeId unpublished)', () => {
-    const patchItemProps = (MESH_GRAPH_GATE_TOOL.inputSchema.properties as any).patches.items.properties as Record<string, unknown>;
-    for (const key of ['node', 'node_id', 'ref']) {
-        assert.ok(key in patchItemProps, `mesh_graph_gate patches[] schema must declare ${key}`);
-    }
-    assert.equal('nodeId' in patchItemProps, false, 'nodeId must not be published');
-    for (const key of ['node_id', 'nodeId', 'ref']) {
-        assert.equal(rejectUnknownMeshToolArgs('mesh_graph_gate', {
-            action: 'release', gate_id: 'g', fencing_token: 'f', lease_generation: 1, idempotency_key: 'k', outcome: 'passed',
-            patches: [{ [key]: 'n1', base_spec_patch: { run_if: {} } }],
-        }), null, `patches[].${key} must pass the unknown-arg gate`);
-    }
-});
-
-test('rc.37#2: the handler resolves node_id/nodeId/ref, not only node', () => {
-    assert.match(graphHandlerSrc, /readString\(p\?\.node\)\s*\|\|\s*readString\(p\?\.node_id\)\s*\|\|\s*readString\(p\?\.nodeId\)\s*\|\|\s*readString\(p\?\.ref\)/);
-    assert.match(graphHandlerSrc, /unresolvable_patch_node/, 'an unresolvable patch entry must be a typed refusal, not a silent drop');
-});
-
 test('rc.37: every mesh_enqueue_batch tasks[] schema property is read by the handler (no dead schema keys)', () => {
     const itemProps = Object.keys((MESH_ENQUEUE_BATCH_TOOL.inputSchema.properties as any).tasks.items.properties as Record<string, unknown>);
     const missing: string[] = [];
     for (const key of itemProps) {
         if (key === 'ref') continue; // read via a destructure (`entry.ref`), not args.ref — see normalizeEnqueueTaskArgs callers.
         const reQueue = new RegExp(`\\b(entry|args)\\.${key}\\b`);
-        const reGraph = new RegExp(`\\bentry\\.${key}\\b`);
-        if (!reQueue.test(queueHandlerSrc) && !reGraph.test(graphHandlerSrc)) missing.push(key);
+        if (!reQueue.test(queueHandlerSrc)) missing.push(key);
     }
-    assert.deepEqual(missing, [], `mesh_enqueue_batch tasks[] schema properties never read by either handler: ${missing.join(', ')}`);
+    assert.deepEqual(missing, [], `mesh_enqueue_batch tasks[] schema properties never read by the handler: ${missing.join(', ')}`);
 });
 
 /**
  * Parity audit item 8 — extend the nested-object schema↔handler completeness
- * sweep (the `tasks[]` test just above) to the two other nested-object schema
- * shapes in the mesh tool surface: `mesh_graph_gate` action=release's `patches[]`
- * (array-of-objects, like tasks[]) and `mesh_mission_upsert`'s `brief`
- * (a single nested object, not an array). Both are read through a local `p`/
- * `raw` destructure rather than `args.<key>` directly, so the regex looks for
- * the destructured read, mirroring how the tasks[] test above looks for
- * `entry.<key>` instead of `args.<key>`.
+ * sweep (the `tasks[]` test just above) to the other nested-object schema shape
+ * in the mesh tool surface: `mesh_mission_upsert`'s `brief` (a single nested
+ * object, not an array). It is read through a local `raw` destructure rather
+ * than `args.<key>` directly, so the regex looks for the destructured read,
+ * mirroring how the tasks[] test above looks for `entry.<key>`.
  */
-test('mesh_graph_gate action=release: every patches[] schema property is read by the handler (no dead schema keys)', () => {
-    const patchItemProps = Object.keys((MESH_GRAPH_GATE_TOOL.inputSchema.properties as any).patches.items.properties as Record<string, unknown>);
-    const missing: string[] = [];
-    for (const key of patchItemProps) {
-        const re = new RegExp(`\\bp\\??\\.${key}\\b`);
-        if (!re.test(graphHandlerSrc)) missing.push(key);
-    }
-    assert.deepEqual(missing, [], `mesh_graph_gate patches[] schema properties never read by the handler: ${missing.join(', ')}`);
-});
-
 test('mesh_mission_upsert: every brief schema property is read by the handler (no dead schema keys)', () => {
     const briefProps = Object.keys((MESH_MISSION_UPSERT_TOOL.inputSchema.properties as any).brief.properties as Record<string, unknown>);
     const missing: string[] = [];

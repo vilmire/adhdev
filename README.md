@@ -56,7 +56,7 @@ A mesh is bound to one git repository and owns the moving parts you'd otherwise 
 | **Operating notes** | Lessons recorded at runtime (a provider quirk, a recovery procedure) are injected into every future coordinator prompt, so knowledge outlives the session that learned it. |
 | **Live-state prompt** | The coordinator's system prompt isn't static text — at launch it's a render of live mesh state (node health, active mission, recent failures, accumulated notes), and at runtime events are injected into its session instead of it polling. |
 | **Difficulty routing** | Map easy work to cheap models and hard work to expensive ones with deep thinking, per node capability — the token bill scales with difficulty, not with task count. |
-| **Graph orchestration** | Plan it as a graph, not a to-do list: submit a whole dependency graph at once — outputs flow between steps, `run_if` conditions decide branches, coordinator gates hold a stage until explicitly released. One atomic submission instead of the coordinator wiring up each `mesh_enqueue_task` call by hand. |
+| **Task chaining** | Chain tasks with `depends_on`: a dependent waits until its predecessors complete, then receives their completion summaries as an "Upstream results" appendix. A failed or cancelled predecessor holds (or, by mesh policy, cancels) the downstream chain and notifies the coordinator. `mesh_enqueue_batch` enqueues several already-confirmed tasks in one atomic call. |
 
 <p align="center">
   <img src="docs/assets/readme/landing-mesh-observability.jpg" alt="ADHDev mesh observability board showing the ledger, task queue, active sessions, nodes, and refine jobs for a repo" width="100%" />
@@ -75,20 +75,8 @@ Parallel worktrees and unattended merges get fragile the moment git submodules e
 - **Patch-equivalence detection** — when a submodule commit is rebased or squashed and its SHA changes, the Refinery still determines whether the *content* already landed, so it won't double-merge or falsely flag a divergence.
 - **Atomic pointer bumps** — the submodule pointer bump converges together with the root change, so an unattended merge never leaves the root pointing at a broken or dangling submodule commit.
 
-### 🔺 MAGI — cross-verified results
-MAGI — Multi-Agent Ground-truth Insight, and yes, the Evangelion reference came first and the backronym took a while — runs a read-only investigation (a bug RCA, a design review, an audit) through several independent agents at once, then you read where they *disagree*.
-
-The premise is that **high agreement is not the same as being right**: the same model, given the same prompt and the same context, produces the same hallucination. So MAGI fans the question out across different machines *and* different providers, and weighs consensus by how independent the sources actually were:
-
-- Answers come back sorted into **agreed / contested / dissent / singleton / source-coupled** — and agreement between replicas sharing a provider or machine is *discounted* as a likely shared hallucination rather than counted twice.
-- The headline output isn't a verdict, it's a **`needs_verification` list** — the friction is the product.
-- Independence is enforced, not hoped for: fewer than two genuinely independent targets is an error, not a silent downgrade. Replicas are read-only, so cross-checking can never write to your repo.
-
-Real case from this project: a single confident RCA concluded "no code change needed." Independent cross-verification overturned it as a two-layer compound bug.
-
-<p align="center">
-  <img src="docs/assets/readme/landing-magi-synthesis.jpg" alt="ADHDev MAGI synthesis view — a coordinator reconciles three independent agent replicas, showing what they agreed on, what was contested, and which claims still need verification" width="100%" />
-</p>
+### 🔺 Cross-verification
+For a read-only investigation that matters — a bug RCA, a design review, an audit — ask the coordinator for a second opinion: it sends the same question to 2–3 workers on different providers, waits for their reports, and lays out where they agree, where they disagree, and which claims only one of them made. High agreement is not the same as being right — the same model with the same context repeats the same mistake — so the disagreements are the part worth reading.
 
 ### 🔐 P2P transport (trust, not a paywall)
 Chat, commands, screenshots, and remote input travel over an encrypted WebRTC data channel directly between your dashboard and your daemon. The server only handles signaling and lightweight metadata — your working data doesn't sit on someone else's box. It's a trust property of the design, not an upsell.
@@ -113,14 +101,14 @@ ADHDev doesn't replace your agents or spawn its own — it **attaches to the one
    │               │        CDP          ├──────────────────────┤
    │  · providers  │────────────────────▶│ Cursor, VS Code,     │
    │  · sessions   │                     │ Antigravity, …       │
-   │  · mesh + queue│       stdio (ACP)  ├──────────────────────┤
-   │  · Refinery   │────────────────────▶│ Goose, Qwen, …       │
-   └───────────────┘                     └──────────────────────┘
+   │  · mesh + queue│                    └──────────────────────┘
+   │  · Refinery   │
+   └───────────────┘
          │
          └── git worktrees ── one isolated checkout per parallel task
 ```
 
-- **The daemon owns the integrations.** Four provider categories: `cli` (PTY), `ide` (Chrome DevTools Protocol), `extension` (CDP webview), `acp` (Agent Client Protocol over stdio).
+- **The daemon owns the integrations.** Three provider categories: `cli` (PTY), `ide` (Chrome DevTools Protocol), `extension` (CDP webview).
 - **Long-lived runtimes are a separate process.** `adhdev-sessiond` owns the PTYs, so your CLI sessions survive a daemon restart or upgrade.
 - **Self-hosted talks straight to the daemon** over HTTP + WebSocket on `localhost:3847`. In the cloud edition the same data rides a WebRTC data channel browser↔daemon, with the server only doing signaling.
 
@@ -174,7 +162,7 @@ adhdev standalone --host 0.0.0.0  # allow other devices on the same LAN
 adhdev standalone --port 8080     # custom port
 adhdev standalone --token mysecret # token auth for scripts / operator access
 adhdev standalone --no-open       # don't auto-open the browser
-adhdev standalone --dev           # enable DevConsole to debug and test providers
+adhdev standalone --dev           # enable the DevServer API (:19280) to debug and test providers
 adhdev standalone --public <dir>  # serve a custom web dashboard build
 ```
 
@@ -202,7 +190,7 @@ Stuck? The [self-hosted setup guide](docs/self-hosted/setup.md) covers ports, LA
 
 ## Supported Agents
 
-ADHDev talks to coding agents through four provider categories — `ide` (CDP), `extension` (CDP webview), `cli` (PTY), and `acp` (Agent Client Protocol over stdio).
+ADHDev talks to coding agents through three provider categories — `ide` (CDP), `extension` (CDP webview), and `cli` (PTY).
 
 **CLI agents** (PTY-driven, launched and controlled from the dashboard):
 
@@ -213,15 +201,12 @@ ADHDev talks to coding agents through four provider categories — `ide` (CDP), 
 | Cursor Agent | `cli/cursor-cli` |
 | Google Antigravity CLI | `cli/antigravity-cli` |
 | Grok CLI | `cli/grok-cli` |
-| Hermes Agent | `cli/hermes-cli` |
 | Kimi Code | `cli/kimi` |
 | Opencode | `cli/opencode` |
 
 **IDEs** (via Chrome DevTools Protocol): Cursor, Google Antigravity, VS Code, VSCodium, Kiro, Windsurf, Trae, PearAI.
 
 **IDE extensions** (CDP webview): Claude Code (VS Code), Codex, Cline, Roo Code.
-
-**ACP agents** (stdio, Agent Client Protocol): 32 built-in adapters, including Gemini CLI, Qwen Code, Goose, GitHub Copilot, Cursor (ACP), Claude Agent, Codex CLI, Kimi CLI, Cline, Kilo, Junie, OpenHands, and more.
 
 > **Built-in ≠ verified.** ADHDev ships a broad inventory; presence in the catalog means the integration exists, not that every one has been validated end-to-end. Support levels vary. See the live policy:
 >
@@ -235,7 +220,6 @@ ADHDev does **not** manage API keys for your agents — each tool handles its ow
 
 Providers are data, not code you have to fork. A provider is a versioned manifest (`provider.v1.json`) plus scripts describing how to detect the tool, launch it, parse its output into chat turns, and recognise its approval prompts. Drop one in `~/.adhdev/providers/` and the dashboard picks it up — your override wins over the built-in of the same name, so you can fix a broken parser locally without waiting for a release.
 
-- `web-devconsole` (in this repo) is a Monaco-based editor for writing and testing provider scripts against a live session.
 - Verification tiers are explicit: **Verified / Partial / Unverified**. "Built-in" only means the integration exists.
 - Guides: [Supported Providers](https://docs.adhf.dev/reference/supported-providers) · [Custom providers guide](https://docs.adhf.dev/guide/custom-providers)
 
@@ -263,7 +247,7 @@ If you get an agent working that isn't in the catalog, that's the single most us
 This is the open-source, self-hosted edition (AGPL-3.0). Hosted cloud operations are not part of this repository. Self-hosted is built around three local layers:
 
 1. `daemon-standalone` exposes a local HTTP/WebSocket server and serves the web UI.
-2. `daemon-core` manages IDE, CLI, extension, and ACP integrations.
+2. `daemon-core` manages IDE, CLI, and extension integrations.
 3. `session-host-daemon` (`adhdev-sessiond`) owns long-lived PTY runtimes so CLI sessions survive daemon restarts.
 
 | Path | Purpose |
@@ -272,7 +256,6 @@ This is the open-source, self-hosted edition (AGPL-3.0). Hosted cloud operations
 | `packages/daemon-standalone` | Local HTTP/WS server and bundled standalone UI |
 | `packages/web-core` | Shared React pages, components, hooks, and transport abstractions |
 | `packages/web-standalone` | Standalone dashboard app |
-| `packages/web-devconsole` | Provider/dev diagnostics UI |
 | `packages/session-host-core` | Session-host protocol, client, registry, ring buffer, labels |
 | `packages/session-host-daemon` | Long-lived PTY runtime owner process |
 | `packages/terminal-mux-*` | Local terminal mux stack |
@@ -308,7 +291,6 @@ Useful workspace scripts:
 ```bash
 npm run dev:daemon
 npm run dev:web
-npm run dev -w packages/web-devconsole
 ```
 
 ---
@@ -323,8 +305,8 @@ The engine is open source. What the cloud adds is a **reach layer**: accounts, m
 | Account required | ❌ no auth | OAuth (GitHub / Google) |
 | Machines | **1** | 1 / 2 / 5 by plan |
 | Reach | localhost, or your LAN with `--host` | **anywhere** (P2P WebRTC + TURN for locked-down networks) |
-| Every provider (CLI / IDE / extension / ACP) | ✅ | ✅ |
-| Repo Mesh, Refinery, MAGI, worktree nodes | ✅ **single-machine mesh runs fully local** | ✅ |
+| Every provider (CLI / IDE / extension) | ✅ | ✅ |
+| Repo Mesh, Refinery, worktree nodes | ✅ **single-machine mesh runs fully local** | ✅ |
 | Mesh **across machines** | ❌ (no cross-machine relay) | ✅ |
 | Push notifications (approval / completion / error) | ❌ | ✅ |
 | Hosted REST API + API keys | ❌ (local API only) | ✅ |

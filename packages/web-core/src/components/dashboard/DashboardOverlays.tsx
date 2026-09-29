@@ -5,7 +5,7 @@ import OnboardingModal from '../OnboardingModal'
 import ConnectionBanner from './ConnectionBanner'
 import DashboardRemoteDialog from './DashboardRemoteDialog'
 import type { ActiveConversation } from './types'
-import { isAcpConv, isCliConv } from './types'
+import { isCliConv } from './types'
 import HistoryModal, { type SavedSessionHistoryEntry } from './HistoryModal'
 import type { SavedHistoryFilterState } from '../../utils/saved-history-filter-state'
 import CliStopDialog from './CliStopDialog'
@@ -140,10 +140,10 @@ export default function DashboardOverlays({
                 />
             )}
 
-            {cliStopDialog.open && cliStopDialog.targetConv && (isCliConv(cliStopDialog.targetConv) || isAcpConv(cliStopDialog.targetConv)) && (
+            {cliStopDialog.open && cliStopDialog.targetConv && isCliConv(cliStopDialog.targetConv) && (
                 <CliStopDialog
                     activeConv={cliStopDialog.targetConv}
-                    canSaveAndStop={isCliConv(cliStopDialog.targetConv) && !isAcpConv(cliStopDialog.targetConv) && !!cliStopDialog.targetConv.resume?.supported}
+                    canSaveAndStop={isCliConv(cliStopDialog.targetConv) && !!cliStopDialog.targetConv.resume?.supported}
                     onCancel={cliStopDialog.onCancel}
                     onStopNow={cliStopDialog.onStopNow}
                     onSaveAndStop={cliStopDialog.onSaveAndStop}

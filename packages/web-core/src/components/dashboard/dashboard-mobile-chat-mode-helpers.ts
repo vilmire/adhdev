@@ -1,6 +1,6 @@
 import type { DaemonData } from '../../types'
 import type { MachineRecentLaunch } from '../../pages/machine/types'
-import { getDaemonEntryActivityAt, getMachineDisplayName, getProviderSummaryLine, isAcpEntry, isCliEntry } from '../../utils/daemon-utils'
+import { getDaemonEntryActivityAt, getMachineDisplayName, getProviderSummaryLine, isCliEntry } from '../../utils/daemon-utils'
 import type { MobileConversationListItem, MobileMachineCard } from './DashboardMobileChatShared'
 import { isConversationGenerating } from './DashboardMobileChatShared'
 import type { ActiveConversation } from './types'
@@ -134,22 +134,17 @@ export function buildSelectedMachineRecentLaunches(
     return ides
         .filter(entry => entry.type !== 'adhdev-daemon' && entry.daemonId === selectedMachineEntry.id)
         .map(entry => {
-            const kind: MachineRecentLaunch['kind'] = isCliEntry(entry) ? 'cli' : isAcpEntry(entry) ? 'acp' : 'ide'
-            const summaryLine = getProviderSummaryLine(entry.summaryMetadata)
+            const kind: MachineRecentLaunch['kind'] = isCliEntry(entry) ? 'cli' : 'ide'
             return {
                 id: `${kind}:${entry.type}:${entry.workspace || ''}`,
                 label: entry.activeChat?.title
                     || (isCliEntry(entry)
                         ? (entry.cliName || entry.type)
-                        : isAcpEntry(entry)
-                            ? (entry.cliName || entry.type)
-                            : entry.type),
+                        : entry.type),
                 kind,
                 providerType: entry.type,
                 providerSessionId: entry.providerSessionId,
-                subtitle: isAcpEntry(entry)
-                    ? (summaryLine || entry.workspace || undefined)
-                    : (entry.workspace || undefined),
+                subtitle: entry.workspace || undefined,
                 workspace: entry.workspace || undefined,
                 timestamp: entry.lastMessageAt || 0,
             }
@@ -218,7 +213,7 @@ export function buildMobileMachineCards(
                     latestConversation,
                     getSessionChatSnapshotForConversation(latestConversation),
                 )
-                : 'No active conversations yet. Open the machine, choose a workspace, then launch an IDE, CLI, or ACP session.',
+                : 'No active conversations yet. Open the machine, choose a workspace, then launch an IDE or CLI session.',
         }
     }).sort((a, b) => {
         const aTs = a.latestTimestamp || a.fallbackActivityAt || 0

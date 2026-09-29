@@ -133,8 +133,8 @@ export const ideHandlers: Record<string, MedFamilyHandler> = {
         const normalizedType = ctx.deps.providerLoader.resolveAlias(providerType);
         const provider = ctx.deps.providerLoader.getByAlias(providerType);
         if (!provider) return { success: false, error: `Provider not found: ${providerType}` };
-        if (provider.category !== 'cli' && provider.category !== 'acp') {
-            return { success: false, error: `Provider detection is only supported for CLI/ACP providers: ${providerType}` };
+        if (provider.category !== 'cli') {
+            return { success: false, error: `Provider detection is only supported for CLI providers: ${providerType}` };
         }
         if (!ctx.deps.providerLoader.isMachineProviderEnabled(normalizedType)) {
             return { success: false, error: `Provider is disabled on this machine: ${providerType}` };

@@ -6,13 +6,10 @@ export type { MeshQueueHead } from './mesh-runtime-store-queue-reads.js';
 import { getMesh } from '../config/mesh-config.js';
 import { LOG } from '../logging/logger.js';
 import { isTaskDispatchInFlight, endTaskDispatchInFlight } from './mesh-task-inflight.js';
-// GRAPH-ORCHESTRATION Phase B: THE single terminal choke point (design :311-334).
-// updateTaskStatus / updateSessionTaskStatus delegate every terminal flip to it.
-import { commitTaskTerminalAndAdvanceGraph, type MeshTerminalCommitSource, type MeshTerminalCommitStatus, type MeshTerminalCompletionEnvelope } from './mesh-graph-transition-runner.js';
-import { drainMeshGraphOutbox } from './mesh-graph-outbox.js';
-import {
-    resolveOnDependencyFailurePolicy,
-} from './mesh-graph-derived-failure.js';
+// THE single terminal choke point: updateTaskStatus / updateSessionTaskStatus /
+// cancelTask and the queue policy terminals delegate every terminal flip to it.
+import { commitTaskTerminal, type MeshTerminalCommitSource, type MeshTerminalCommitStatus, type MeshTerminalCompletionEnvelope } from './mesh-task-terminal.js';
+import { resolveOnDependencyFailurePolicy } from './mesh-dependency-failure.js';
 import {
     sessionIdsEquivalent,
     MESH_TERMINAL_TASK_STATUSES as TERMINAL_TASK_STATUS_LIST,
@@ -58,7 +55,7 @@ import {
     summarizeQueueEntryInputForView,
     taskDependenciesSatisfied,
     describeTaskDependencyState,
-    MESH_TASK_GRAPH_MAX_TASKS,
+    MESH_TASK_BATCH_MAX_TASKS,
     meshTaskPriorityRank,
     normalizeMeshTaskPriority,
     resolveNotBefore,
@@ -66,7 +63,7 @@ import {
     NOT_BEFORE_RELATIVE_THRESHOLD_MS,
 } from './mesh-task-predicates.js';
 export {
-    MESH_TASK_GRAPH_MAX_TASKS,
+    MESH_TASK_BATCH_MAX_TASKS,
     meshTaskPriorityRank,
     normalizeMeshTaskPriority,
     resolveNotBefore,
@@ -112,7 +109,6 @@ import {
     buildMeshNodeCapabilityTags,
     normalizeMeshCapabilityTags,
     nodeSatisfiesRequiredTags,
-    resolveConvergeRequiredTags,
     providerPinsFromRequiredTags,
     filterProvidersByRequiredTags,
 } from './mesh-node-capability-tags.js';
@@ -120,7 +116,6 @@ export {
     buildMeshNodeCapabilityTags,
     normalizeMeshCapabilityTags,
     nodeSatisfiesRequiredTags,
-    resolveConvergeRequiredTags,
     providerPinsFromRequiredTags,
     filterProvidersByRequiredTags,
 };
@@ -129,10 +124,10 @@ export {
 // with the rest of the direct-dispatch surface at the bottom of this file.
 import { terminalizeSiblingDispatch } from './mesh-direct-dispatch.js';
 export { terminalizeSiblingDispatch };
-import { insertQueueDependencyNoticeInTxn } from './mesh-queue-dependency-notice.js';
+import { notifyQueueDependencyStopped } from './mesh-queue-dependency-notice.js';
 import { type MeshWorkQueueEntry, type MeshQueueMutationOptions, type MeshWorkQueueStats } from './mesh-work-queue-types.js';
-export { assertNoDependencyCycle, enqueueTask, enqueueTaskGraph, recordDirectDispatchTask } from './mesh-work-queue-enqueue.js';
-export type { MeshActiveTaskStatus, MeshHistoricalTaskStatus, MeshTaskInputEnvelope, MeshTaskParking, MeshWorkQueueEntry, MeshQueueMutationOptions, MeshEnqueueTaskOptions, MeshTaskGraphEntrySpec, MeshWorkQueueStats } from './mesh-work-queue-types.js';
+export { assertNoDependencyCycle, enqueueTask, enqueueTaskBatch, recordDirectDispatchTask } from './mesh-work-queue-enqueue.js';
+export type { MeshActiveTaskStatus, MeshHistoricalTaskStatus, MeshTaskInputEnvelope, MeshTaskParking, MeshWorkQueueEntry, MeshQueueMutationOptions, MeshEnqueueTaskOptions, MeshTaskBatchEntrySpec, MeshWorkQueueStats } from './mesh-work-queue-types.js';
 
 export function withQueueLock<T>(_meshId: string, fn: () => T): T {
     return MeshRuntimeStore.getInstance().transaction(fn);
@@ -228,7 +223,7 @@ function resolveDependencyFailurePolicy(meshId: string): DependencyFailurePolicy
  * that just reached a failed/cancelled terminal state (design :522-538).
  *
  * - 'block' (default): derive the hold from current predecessor statuses.
- *   Do NOT write `blockedReason`. The unchanged predicate stays false until
+ *   Nothing is written onto dependents. The unchanged predicate stays false until
  *   every dependsOn id is `completed`. Predecessor retry unblocks automatically.
  * - 'cancel': explicit transactional cancellation cascade. Terminal; not
  *   revived by predecessor retry.
@@ -244,9 +239,8 @@ function resolveDependencyFailurePolicy(meshId: string): DependencyFailurePolicy
  */
 function propagateDependencyFailure(meshId: string, failedTaskId: string, machineReason?: string): MeshWorkQueueEntry[] {
     const policy = resolveDependencyFailurePolicy(meshId);
-    // C3 (design :522-529): `block` is derived. Do not mutate dependents — but
-    // TELL the coordinator (queue chains have no graph notice): which task
-    // ended, which tasks now wait on it, what to do. Once per root terminal.
+    // `block` is derived. Do not mutate dependents — but TELL the coordinator:
+    // which task ended, which tasks now wait on it, what to do. Once per root terminal.
     if (policy !== 'cancel') {
         tellCoordinatorQueueDependency(meshId, failedTaskId, 'block', [], machineReason);
         return [];
@@ -265,9 +259,7 @@ function propagateDependencyFailure(meshId: string, failedTaskId: string, machin
             dependent.cancelledAt = new Date().toISOString();
             dependent.cancelReason = `dependency_failed:${currentId}`;
             store.updateQueueEntry(dependent);
-            // F1: through the runner, so a graph-backed dependent's node goes
-            // terminal with its row (it used to stay `blocked` under a cancelled row).
-            const committed = commitQueueTerminalThroughRunner(meshId, dependent.id, 'cancelled', 'cancellation', dependent.cancelReason);
+            const committed = commitQueueTerminal(meshId, dependent.id, 'cancelled', 'cancellation', dependent.cancelReason);
             cancelled.push(committed ?? dependent);
             frontier.push(dependent.id); // cascade to transitive dependents
         }
@@ -277,10 +269,8 @@ function propagateDependencyFailure(meshId: string, failedTaskId: string, machin
 }
 
 /**
- * Queue-chain stopped-work notice (mesh-queue-dependency-notice.ts): the row
- * joins this queue transaction, then the graph outbox is drained so it pages
- * now rather than on the next graph event. Best-effort — a notice failure must
- * never undo the terminal it describes.
+ * Queue-chain stopped-work notice (mesh-queue-dependency-notice.ts). Best-effort
+ * — a notice failure must never undo the terminal it describes.
  */
 function tellCoordinatorQueueDependency(
     meshId: string,
@@ -290,37 +280,30 @@ function tellCoordinatorQueueDependency(
     machineReason?: string,
 ): void {
     try {
-        if (insertQueueDependencyNoticeInTxn(meshId, rootId, policy, cancelled, machineReason)) {
-            drainMeshGraphOutbox(meshId);
-        }
+        notifyQueueDependencyStopped(meshId, rootId, policy, cancelled, machineReason);
     } catch (e: any) {
         LOG.warn('MeshQueue', `Queue dependency notice for ${rootId} failed (mesh ${meshId}): ${e?.message || e}`);
     }
 }
 
 /**
- * F1 — the ONE way a queue-side writer puts a row terminal: through the graph
- * runner's terminal transition (commitTaskTerminalAndAdvanceGraph), exactly like
- * the ledger path. The row flip, the graph node transition, the failure policy
- * (graph cancel cascade + dead-upstream gate closure), the runner-end gate
- * auto-close and the stopped-downstream notice all commit together — before
- * this, retry-cap / dispatch-failure / park-retention failures and the queue
- * dependency cascade flipped only the row, leaving the graph node live and the
- * graph `active` forever.
+ * The ONE way a queue-side writer puts a row terminal: through the terminal
+ * choke point (commitTaskTerminal), exactly like the ledger path, so the output
+ * version, the row flip and the post-commit token/mailbox cleanup stay together.
  *
- * MUST run inside the caller's queue lock (the runner nests as a savepoint). The
- * caller persists its own bookkeeping (cancelReason, counters) BEFORE calling:
- * the runner re-reads the row. `reason` should lead with a machine code — it is
- * the node's failureReason and the notice's reason code.
+ * MUST run inside the caller's queue lock (the choke point nests as a
+ * savepoint). The caller persists its own bookkeeping (cancelReason, counters)
+ * BEFORE calling: the choke point re-reads the row. `reason` should lead with a
+ * machine code — it is the notice's reason code.
  */
-function commitQueueTerminalThroughRunner(
+function commitQueueTerminal(
     meshId: string,
     taskId: string,
     status: 'failed' | 'cancelled',
     source: MeshTerminalCommitSource,
     reason: string,
 ): MeshWorkQueueEntry | null {
-    const commit = commitTaskTerminalAndAdvanceGraph({ meshId, taskId, status, source, reason });
+    const commit = commitTaskTerminal({ meshId, taskId, status, source, reason });
     return commit.entry ?? MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
 }
 
@@ -385,13 +368,10 @@ export function updateTaskStatus(
          */
         force?: boolean;
         /**
-         * GRAPH-ORCHESTRATION Phase C1: the normalized completion envelope this
-         * terminal carries, persisted as the task's next immutable output version
-         * and read by downstream `inputs_from` bindings / `run_if` conditions
-         * (design :145-171, :192-370). Symmetrical with updateSessionTaskStatus —
-         * a completion path that resolves the task by ID rather than by session
-         * (redrive, reconcile, native-signal reconciliation) must be able to carry
-         * its result too, or a graph consumer would bind against an empty envelope.
+         * The normalized completion envelope this terminal carries, persisted as
+         * the task's next immutable output version (read by the "Upstream
+         * results" appendix of `depends_on` dependents and the task detail view).
+         * Symmetrical with updateSessionTaskStatus.
          */
         envelope?: MeshTerminalCompletionEnvelope;
     } & MeshQueueMutationOptions,
@@ -404,9 +384,9 @@ export function updateTaskStatus(
 }
 
 /**
- * @internal Test fixtures only: drive a queue row terminal through the graph
- * choke point without a ledger (the legacy commit path the runner tests
- * exercise). Production code must submit evidence; `updateTaskStatus` throws.
+ * @internal Test fixtures only: drive a queue row terminal through the terminal
+ * choke point without a ledger. Production code must submit evidence;
+ * `updateTaskStatus` throws.
  */
 export function __writeTaskStatusForTests(
     meshId: string,
@@ -439,19 +419,11 @@ function writeTaskStatusUnchecked(
             LOG.debug('MeshQueue', `Refusing updateTaskStatus(${taskId} → ${status}) on mesh ${meshId}: row is terminal (${entry.status}). A late writer (e.g. dispatch-failure requeue) must not resurrect a cancelled/completed/failed task. Pass force to override.`);
             return { entry, cascaded: [] as MeshWorkQueueEntry[] };
         }
-        // GRAPH-ORCHESTRATION Phase B (design :311-334): EVERY terminal acceptance routes
-        // through the single transactional choke point. commitTaskTerminalAndAdvanceGraph
-        // owns, inside the one queue transaction: the attempt fence+settle, the normalized
-        // output version, the row flip, graph advancement, and the wake outbox.
-        //
-        // SETTLE OWNERSHIP (supersedes the d18e9838 inline block that used to live here):
-        // the proposeTurnCompletion settle is now performed INSIDE the runner as step 1 —
-        // exactly once per terminal transition, never twice. This function neither settles
-        // before delegating nor after; the runner's proposal is the same idempotent reducer
-        // call (an identical repeat returns committed+duplicate without mutating), so the
-        // call sites that pre-propose before invoking us (markSessionTerminal) are unaffected.
+        // EVERY terminal acceptance routes through the single transactional choke
+        // point (mesh-task-terminal.ts): the output version and the row flip commit
+        // in the one queue transaction.
         if (TERMINAL_TASK_STATUSES.has(status)) {
-            const commit = commitTaskTerminalAndAdvanceGraph({
+            const commit = commitTaskTerminal({
                 meshId,
                 taskId,
                 status: status as MeshTerminalCommitStatus,
@@ -529,10 +501,10 @@ export function cancelTask(
         entry.dispatchNonce = (entry.dispatchNonce || 0) + 1;
         delete entry.attemptId;
         // Persist the cancel-specific bookkeeping ABOVE (cancelledAt/cancelReason, the
-        // cleared assignment, the bumped nonce) BEFORE the choke point runs: the runner
+        // cleared assignment, the bumped nonce) BEFORE the choke point runs: it
         // re-reads the row inside its own transaction, so anything not yet written would
         // be clobbered by its flip. The row is still non-terminal at this point, which is
-        // exactly what the runner's replay fence expects for a first terminal.
+        // exactly what the replay fence expects for a first terminal.
         MeshRuntimeStore.getInstance().updateQueueEntry(entry);
         // SIBLING-DISPATCH-ORPHAN: a direct-dispatched task carries a second row in
         // the legacy direct-dispatch table. Clearing the assignment above drops this task from every
@@ -540,27 +512,10 @@ export function cancelTask(
         // buildMeshActiveWork renders as `generating`, so the cancelled task would keep
         // showing up as live work with no sweeper to ever collect it.
         terminalizeSiblingDispatch(meshId, taskId, 'queue_task_cancelled');
-        // GRAPH-ORCHESTRATION Phase B: a cancel is a terminal acceptance like any other,
-        // so it routes through the SAME choke point as completion/failure rather than
-        // writing `status = 'cancelled'` inline. Before this, a cancelled task left its
-        // graph node stuck in `declared`/`materialized` and the graph itself `active`
-        // forever: `classifyGraphRollup` never saw a settled node, so the graph could
-        // reach no terminal state, and `cleanupOnGraphFailure` (which keys on
-        // `graph.status === 'cancelled'`) was structurally unreachable — the workspace of
-        // a cancelled branch was never collected.
-        //
-        // Routing here also SUBSUMES the standalone proposeTurnCompletion this function
-        // used to make: the runner's step-1 settle issues the identical `cancellation`
-        // proposal inside the transaction, so the attempt fence and the row can no longer
-        // disagree, and a cancel racing a late worker completion still commits exactly one
-        // terminal outcome. It is one settle, not two — the reducer is idempotent, but the
-        // point is that the row flip and the settle are now the same transaction.
-        //
-        // Downstream policy is UNCHANGED by design: the runner applies the graph-side
-        // cancel cascade only under `on_dependency_failure: 'cancel'`, and under the
-        // default `block` it merely records a derived-failure outbox row — dependents stay
-        // pending and a retry of the cancelled task still recovers them.
-        const commit = commitTaskTerminalAndAdvanceGraph({
+        // A cancel is a terminal acceptance like any other, so it routes through the
+        // SAME choke point as completion/failure rather than writing
+        // `status = 'cancelled'` inline (output version + row flip in one transaction).
+        const commit = commitTaskTerminal({
             meshId,
             taskId,
             status: 'cancelled',
@@ -568,14 +523,9 @@ export function cancelTask(
             source: 'cancellation',
             reason: opts?.reason ?? 'operator_cancel',
         });
-        // The queue-side dependent cascade is the pre-graph sibling of the runner's
-        // graph-node cascade and is still required: it terminalizes dependents that have
-        // NO backing graph node (the legacy/ad-hoc enqueue path). Like the graph cascade
-        // it is a no-op unless the policy is `cancel`.
+        // The dependent cascade: cancels dependents under `on_dependency_failure:
+        // cancel`, otherwise only pages the coordinator (block is derived).
         const cascaded = propagateDependencyFailure(meshId, taskId);
-        // D3(a) gate auto-close (a gate whose downstream this cancel left all
-        // terminal) runs INSIDE the choke point above — the runner owns it for
-        // every terminal writer, and its post-commit drain delivers the rows.
         return { entry: commit.entry ?? entry, cascaded, priorAssignment };
     });
     if (result) scheduleMissionCloseCandidateCheck(meshId, [result.entry, ...result.cascaded]);
@@ -720,9 +670,6 @@ export function requeueTask(
         // STALE assigned row (dead session, dispatch never confirmed) is NOT in-flight
         // — its mark was cleared on the dispatch failure — so it still requeues as
         // before. An explicit operator override (`force`) bypasses this guard.
-        // MAGI-NOTE: the future consensus group fan-out (separate mission) intentionally
-        // re-dispatches a group-tagged task into multiple sessions and must be exempted
-        // from this single-flight guard; the exemption hook (group-id check) belongs here.
         if (!opts?.force && isTaskDispatchInFlight(meshId, taskId)) {
             LOG.warn('MeshQueue', `Refusing to requeue task ${taskId} on mesh ${meshId}: it is actively dispatched/generating (single-flight in-flight). Requeueing now would open a duplicate second dispatch into another session. Pass force to override.`);
             // No status change → no mission aggregate change; nothing to re-check.
@@ -754,12 +701,11 @@ export function requeueTask(
                 entry.dispatchFailureCount = dispatchFailures;
                 entry.updatedAt = new Date().toISOString();
                 MeshRuntimeStore.getInstance().updateQueueEntry(entry);
-                const failed = commitQueueTerminalThroughRunner(meshId, taskId, 'failed', 'queue_policy', entry.cancelReason);
+                const failed = commitQueueTerminal(meshId, taskId, 'failed', 'queue_policy', entry.cancelReason);
                 const cascaded = propagateDependencyFailure(meshId, taskId);
                 return { entry: failed ?? entry, cascaded, missionAffected: true };
             }
             entry.status = 'pending';
-            delete entry.blockedReason;
             delete entry.assignedNodeId;
             delete entry.assignedSessionId;
             delete entry.cancelledAt;
@@ -801,15 +747,12 @@ export function requeueTask(
             entry.cancelReason = `max_retries_exceeded: requeued ${currentCount} time(s), limit is ${maxRetries}`;
             entry.updatedAt = new Date().toISOString();
             MeshRuntimeStore.getInstance().updateQueueEntry(entry);
-            const failed = commitQueueTerminalThroughRunner(meshId, taskId, 'failed', 'queue_policy', entry.cancelReason);
+            const failed = commitQueueTerminal(meshId, taskId, 'failed', 'queue_policy', entry.cancelReason);
             const cascaded = propagateDependencyFailure(meshId, taskId);
             // Terminal (failed) → mission may now be all-terminal.
             return { entry: failed ?? entry, cascaded, missionAffected: true };
         }
         entry.status = 'pending';
-        // Operator requeue clears a dependency-failure block — the operator is
-        // explicitly overriding the held-back state.
-        delete entry.blockedReason;
         delete entry.assignedNodeId;
         delete entry.assignedSessionId;
         delete entry.cancelledAt;
@@ -932,7 +875,7 @@ export function failRetentionExpiredParkedTask(
             + `(addressed to session ${entry.parked?.targetSessionId || 'unknown'}) with no coordinator decision`;
         entry.updatedAt = new Date().toISOString();
         MeshRuntimeStore.getInstance().updateQueueEntry(entry);
-        const failed = commitQueueTerminalThroughRunner(meshId, taskId, 'failed', 'queue_policy', entry.cancelReason);
+        const failed = commitQueueTerminal(meshId, taskId, 'failed', 'queue_policy', entry.cancelReason);
         const cascaded = propagateDependencyFailure(meshId, taskId);
         LOG.warn('MeshQueue', `PIN-PARKING retention: task ${taskId} (mesh ${meshId}) stayed parked past ${hours}h with no coordinator decision; failed it (dependents unblocked). This is reported to the coordinator, never a silent drop.`);
         return { entry: failed ?? entry, cascaded, missionAffected: true };
@@ -973,13 +916,10 @@ export function updateSessionTaskStatus(
             }
             return null;
         }
-        // GRAPH-ORCHESTRATION Phase B (design :311-334): the terminal branch delegates to
-        // the single choke point, exactly like updateTaskStatus. markSessionTerminal
-        // pre-proposes to the turn reducer BEFORE calling us as its accept/reject gate;
-        // the runner's step-1 settle is the idempotent duplicate of that proposal — one
-        // logical settle, never a double mutation.
+        // The terminal branch delegates to the single choke point, exactly like
+        // updateTaskStatus.
         if (TERMINAL_TASK_STATUSES.has(status)) {
-            const commit = commitTaskTerminalAndAdvanceGraph({
+            const commit = commitTaskTerminal({
                 meshId,
                 taskId: entry.id,
                 status: status as MeshTerminalCommitStatus,
@@ -1072,7 +1012,7 @@ export type { DirectDispatchRecord, SiblingDispatchTerminalizeReason, MeshToolCa
 // terminal status (design C3 "updateTaskStatus throws TerminalStatusIsLedgerEffect
 // on terminal statuses"). ARMED 2026-09-23 (C-W4): the reconcile/stranded-dispatch
 // writers and the queue-claim terminal skip are deleted; a terminal queue status
-// is written only by a ledger commit (meshRuntimeTxnHost.graphAdvance) or by the
+// is written only by a ledger commit (meshRuntimeTxnHost.taskTerminal) or by the
 // explicit cancel/session paths that own their own commit.
 
 /** Refusal: a terminal queue status can only be written by a turn-ledger commit. */

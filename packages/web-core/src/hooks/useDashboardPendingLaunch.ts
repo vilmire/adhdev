@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ActiveConversation } from '../components/dashboard/types'
 import { eventManager, type StatusEventPayload } from '../managers/EventManager'
 import type { DaemonData } from '../types'
-import { isAcpEntry, isCliEntry } from '../utils/daemon-utils'
+import { isCliEntry } from '../utils/daemon-utils'
 import { resolveDashboardSessionTargetFromEntry } from '../utils/dashboard-route-paths'
 import type { WorkspaceLaunchKind } from '../pages/machine/types'
 
@@ -129,11 +129,7 @@ export function useDashboardPendingLaunch({
             const entryMachineId = getRouteMachineId(entry.daemonId || entry.id)
             if (entryMachineId !== pendingDashboardLaunch.machineId) return false
 
-            const entryKind: WorkspaceLaunchKind = isCliEntry(entry)
-                ? 'cli'
-                : isAcpEntry(entry)
-                    ? 'acp'
-                    : 'ide'
+            const entryKind: WorkspaceLaunchKind = isCliEntry(entry) ? 'cli' : 'ide'
             if (entryKind !== pendingDashboardLaunch.kind) return false
 
             const entryProviderType = String(entry.agentType || entry.type || '')

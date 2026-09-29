@@ -35,7 +35,7 @@ export async function meshViewQueue(
             ? activeView.activeRows as unknown as MeshWorkQueueEntry[]
             : await readQueueFromDaemon(ctx);
         // M1: annotate dependency state (waitingOn, dependenciesSatisfied) at view time.
-        const dependencyRows: Array<{ id: string; status: string; blockedReason?: string; cancelReason?: string }> = activeView
+        const dependencyRows: Array<{ id: string; status: string; cancelReason?: string }> = activeView
             ? [...rawQueue, ...activeView.dependencyHeads]
             : rawQueue;
         const statusById = new Map(dependencyRows.map(task => [task.id, task.status]));

@@ -468,8 +468,8 @@ export function coordinatorIdentityFromEmitFields(fields: {
  *   - Terminal task events (completion / stop / refine outcome) MUST NOT be
  *     broadcast to every coordinator — a completion belongs to the coordinator
  *     that dispatched the task, and broadcasting it makes non-owner coordinators
- *     (e.g. sibling MAGI coordinators that never dispatched this replica's task)
- *     act on a completion that is not theirs (MAGI-REPLICA-COMPLETION-EVENT-LEAK).
+ *     (e.g. sibling coordinators that never dispatched this task)
+ *     act on a completion that is not theirs.
  *     For these we address the event to `dispatchedBy` (the dispatching
  *     coordinator) and KEEP it unicast, so the stamp stays contract-valid and the
  *     event reaches only its originating coordinator.

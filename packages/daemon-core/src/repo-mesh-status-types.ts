@@ -10,7 +10,6 @@ import type {
     LocalMeshNodeEntry,
 } from './repo-mesh-types.js';
 import type { MeshMissionSummary, MeshMissionSlimSummary } from './mesh/mesh-missions.js';
-import type { MeshMagiActivitySummary } from './mesh/mesh-magi-status.js';
 import type { GitRepoStatus } from './git/git-types.js';
 import type {
     RepoMeshSessionStatus,
@@ -104,18 +103,7 @@ export interface RepoMeshStatus {
      */
     previewFreshness?: Record<string, unknown>;
     /**
-     * MAGI cross-verification activity, reconstructed from the mesh ledger
-     * (magi_dispatched / magi_synthesis entries) and folded in so the dashboard's
-     * MAGI surface can read synthesis output — needs_verification counts, the
-     * independence banner, git skew, and a bounded needs_verification preview —
-     * without re-running collection. Running groups are always included; synthesized
-     * groups are bounded to recent ones (see summarizeMeshMagiActivity). Omitted by
-     * daemons predating the exposure and when no MAGI run is present; treat as
-     * optional. Mirrors the MCP `mesh_status` tool's `magiActivity` field.
-     */
-    magiActivity?: MeshMagiActivitySummary[];
-    /**
-     * T7 (visibility 7-2b): provider CLI/ACP version skew across nodes. Each entry
+     * T7 (visibility 7-2b): provider CLI version skew across nodes. Each entry
      * names a provider running ≥2 distinct versions across the nodes that reported
      * it, with the node ids per version. Observational only — never a dispatch
      * blocker. Omitted when every reported provider is uniform (or none reported).
@@ -286,7 +274,7 @@ export interface RepoMeshNodeStatus {
     gitProbePending?: boolean;
     providers: string[];
     /**
-     * Detected provider CLI/ACP versions on this node, keyed by provider id. Mirrors
+     * Detected provider CLI versions on this node, keyed by provider id. Mirrors
      * RepoMeshNodeCapabilities.providerVersions onto the status snapshot so the mesh
      * UI / coordinator prompt can render per-provider versions and flag a version
      * skew across nodes. Optional — omitted by daemons predating the exposure or when
@@ -426,13 +414,7 @@ export interface RepoMeshQueueTask {
     /** G6 task-level scheduling priority (MESH_TASK_PRIORITIES); absent = normal. */
     priority?: MeshTaskPriority;
     /**
-     * Independent system hold. C3 derived failure does not write
-     * `dependency_failed:*` here; views expose `dependencyFailures` instead.
-     */
-    blockedReason?: string;
-    /**
-     * C3 public projection (design :524-527): failed/cancelled predecessor ids
-     * derived from current statuses. Skipped placeholders are excluded.
+     * Failed/cancelled predecessor ids derived from current statuses.
      */
     dependencyFailures?: Array<{ taskId: string; status: 'failed' | 'cancelled'; reason?: string }>;
     /** Task-mode contract (code_change | validation | live_debug_readonly | launch_app | convergence). */

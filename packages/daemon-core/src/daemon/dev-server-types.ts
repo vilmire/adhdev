@@ -1,7 +1,7 @@
 /**
  * Shared types & context interface for DevServer handler modules.
  *
- * Each handler module (cdp, cli-debug, auto-implement) imports DevServerContext
+ * Each handler module (cdp, cli-debug) imports DevServerContext
  * to access shared state and utilities without circular references.
  */
 import type * as http from 'http';
@@ -32,19 +32,12 @@ export interface DevServerContext {
   readBody(req: http.IncomingMessage): Promise<any>;
   log(msg: string): void;
 
-  // SSE utilities
-  autoImplSSEClients: http.ServerResponse[];
-    sendAutoImplSSE(msg: { event: string; data: any }): void;
-  autoImplStatus: { running: boolean; type: string | null; progress: any[] };
-  autoImplProcess: import('child_process').ChildProcess | null;
-
   // CLI SSE
   sendCliSSE(data: any): void;
 
   // Provider directory resolution
   handleRunScript(type: string, req: http.IncomingMessage, res: http.ServerResponse, parsedBody?: any): Promise<void>;
   findProviderDir(type: string): string | null;
-  getLatestScriptVersionDir(scriptsDir: string): string | null;
 }
 
 /** Re-export for convenience */

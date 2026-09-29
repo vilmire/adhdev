@@ -14,7 +14,6 @@ describe('machine recent launch presenters', () => {
   it('formats kind labels', () => {
     expect(getMachineRecentLaunchKindLabel('ide')).toBe('IDE')
     expect(getMachineRecentLaunchKindLabel('cli')).toBe('CLI')
-    expect(getMachineRecentLaunchKindLabel('acp')).toBe('ACP')
   })
 
   it('adds a saved-history hint when the launch can resume provider history', () => {

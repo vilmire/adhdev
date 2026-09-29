@@ -21,7 +21,7 @@ export function isLaunchableMachineProvider(
   if (provider.category !== category) return false
   if (category === 'ide') return true
 
-  // CLI/ACP providers are passive catalog entries until the user explicitly enables
+  // CLI providers are passive catalog entries until the user explicitly enables
   // them on this machine. Once enabled, keep them visible so the user can attempt
   // launch and see the daemon/CLI error directly instead of having stale detection
   // state hide the provider from the launcher entirely.

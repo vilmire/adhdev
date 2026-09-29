@@ -16,7 +16,7 @@
 // (which may not import this file — the boot stage wires the handlers in):
 //
 //   1. `createCoordinatorNotifier` — the producer API for NON-turn notices
-//      (refine terminals, worktree bootstrap, dispatch-blocked, graph gates …):
+//      (refine terminals, worktree bootstrap, dispatch-blocked, dependency stops …):
 //      `ledger.notifyMeshEvent` with the text kept LOCAL (`payload_json.local`)
 //      and, for a notice addressed to another daemon, the text appended to the
 //      content-class `mesh.<id>.handoff` topic and linked by `ref`.

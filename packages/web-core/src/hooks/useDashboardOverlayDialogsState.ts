@@ -4,7 +4,7 @@ import type { NavigateFunction, Location } from 'react-router-dom'
 import type { DaemonData } from '../types'
 import type { ActiveConversation } from '../components/dashboard/types'
 import { getConversationProviderType, getCoordinatorRoutingHint } from '../components/dashboard/conversation-selectors'
-import { isAcpConv, isCliConv } from '../components/dashboard/types'
+import { isCliConv } from '../components/dashboard/types'
 import { useDashboardRemoteDialogState } from './useDashboardRemoteDialogState'
 
 interface UseDashboardOverlayDialogsStateOptions {
@@ -55,7 +55,7 @@ export function useDashboardOverlayDialogsState({
 
   const requestCliStop = useCallback(async (conversation?: ActiveConversation) => {
     const targetConv = conversation || activeConv
-    if (!targetConv || (!isCliConv(targetConv) && !isAcpConv(targetConv))) return
+    if (!targetConv || (!isCliConv(targetConv))) return
     setCliStopTargetConv(targetConv)
     setCliStopDialogOpen(true)
   }, [activeConv])
@@ -67,7 +67,7 @@ export function useDashboardOverlayDialogsState({
 
   const confirmCliStop = useCallback(async (mode: 'hard' | 'save') => {
     const targetConv = cliStopTargetConv || activeConv
-    if (!targetConv || (!isCliConv(targetConv) && !isAcpConv(targetConv))) {
+    if (!targetConv || (!isCliConv(targetConv))) {
       cancelCliStop()
       return
     }

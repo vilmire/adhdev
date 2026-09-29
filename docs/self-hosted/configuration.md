@@ -69,9 +69,9 @@ Relevant standalone-facing fields:
 | Field | Meaning |
 |-------|---------|
 | `machineNickname` | Friendly name shown in the dashboard |
-| `workspaces` | Saved launch targets for IDE, CLI, and ACP launches |
+| `workspaces` | Saved launch targets for IDE and CLI launches |
 | `defaultWorkspaceId` | Default saved workspace selection |
-| `providerSettings` | Per-provider user settings, including machine-local CLI/ACP activation and executable overrides |
+| `providerSettings` | Per-provider user settings, including machine-local CLI activation and executable overrides |
 | `ideSettings` | Per-IDE extension enablement settings |
 | `providerSourceMode` | Provider source policy: `normal` (upstream cache + overrides) or `no-upstream` (skip upstream fetch/load) |
 | `providerDir` | Optional explicit override root. Set this if you want a local `adhdev-providers` checkout to shadow upstream providers. Apply/reload provider source config after changing it. |
@@ -92,7 +92,7 @@ If you only care about the settings that most affect day-to-day standalone behav
 
 - `machineNickname` so the dashboard shows a meaningful machine label
 - `workspaces` and `defaultWorkspaceId` so launch flows start in the right places
-- `providerSettings` for per-provider behavior, machine-local CLI/ACP activation, executable paths, and auth-related settings
+- `providerSettings` for per-provider behavior, machine-local CLI activation, executable paths, and auth-related settings
 - `providerSourceMode` if you want to keep local user overrides but disable upstream fetch/load on this machine
 - `providerDir` if you want ADHDev to use an explicit local provider override root instead of the default `~/.adhdev/providers`; use the dashboard's Providers tab **Apply + Reload** flow after changing provider source settings
 - `terminalSizingMode` if terminal rendering behaves poorly in your environment
@@ -221,7 +221,7 @@ If you are operating self-hosted seriously, these other local state areas are wo
 
 The dashboard's machine **Providers** tab shows the effective user root, upstream root, and provider root order. Its **Apply + Reload** action refreshes provider resolution for fix/verify flows and new launches. Existing running sessions may still need a restart to use changed provider scripts.
 
-CLI and ACP providers are machine-scoped: enable the provider, run detection, and set custom executable path/args if needed before expecting it to appear as launchable.
+CLI providers are machine-scoped: enable the provider, run detection, and set custom executable path/args if needed before expecting it to appear as launchable.
 
 Provider roots use a category-based layout:
 
@@ -252,32 +252,6 @@ Repositories that intentionally use submodule gitlinks as part of the same deliv
 Save that as `.adhdev/refine.json`, `.adhdev/repo-mesh-refine.json`, or another supported repo mesh/refine config path. Mesh policy can also set `allowAutoPublishSubmoduleMainCommits: true`.
 
 The opt-in is narrow: Refinery only considers submodule commits already referenced by the root gitlinks being refined, only after validation and patch-equivalence pass, and only pushes a non-force `<commit>:refs/heads/main` refspec to the submodule `origin`. It then fetches and verifies that the commit is an ancestor of `origin/main`. Refinery does not push root `main`, force push, rewrite history, or publish arbitrary submodule commits. If publishing or verification fails, the refine result stays `blocked_review` with the submodule path, commit, remote, branch, refspec, and error evidence.
-
-## Repo Mesh With Hermes Agent
-
-Hermes Agent can use self-hosted Repo Mesh tools through ADHDev's MCP server, but Hermes does not auto-import repo-local `.mcp.json`. For Hermes, add a YAML entry to the Hermes config under `mcp_servers`, then start a fresh Hermes session.
-
-Find the Hermes config path:
-
-```bash
-hermes config path
-```
-
-Add the selected mesh id from the standalone Repo Mesh page:
-
-```yaml
-mcp_servers:
-  adhdev-mesh:
-    command: adhdev-mcp
-    args:
-      - --repo-mesh
-      - mesh_abc123
-    enabled: true
-```
-
-After saving the config, exit and relaunch Hermes. MCP servers are discovered at Hermes session startup, so an already-running session may not see the new `adhdev-mesh` tools.
-
-In the standalone dashboard, the Repo Mesh detail page shows this Hermes-specific YAML only when the Hermes provider declares manual MCP setup. It does not show Claude-style `.mcp.json` config there because Claude-style clients can use their own auto-import/config flow.
 
 ## Related Pages
 

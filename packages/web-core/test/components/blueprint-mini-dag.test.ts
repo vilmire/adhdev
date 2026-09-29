@@ -3,11 +3,9 @@
  * ported from the retired full canvas.
  *
  * Properties pinned:
- *  - only a graph WITH edges yields a mini-DAG model (builders return null
- *    otherwise) — the twin of the list's plan-affordance rule
- *  - a gate node reads its GATE state; a fused task node reads the LIVE
- *    queue status over the plan-side state
- *  - the queue builder extracts exactly the task's connected component
+ *  - the queue builder extracts exactly the task's connected component, and
+ *    returns null for a task no edge touches — the twin of the list's
+ *    plan-affordance rule
  *  - layout advances x by dependency depth, stacks same-depth nodes in y,
  *    and terminates on a dependency cycle
  *  - (source-shape, carried over from blueprint-legend-matches-canvas) the
@@ -18,70 +16,16 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
-    buildGraphMiniDag,
     buildQueueMiniDag,
     layoutMiniDag,
     MINI_DAG_LAYOUT,
 } from '../../src/components/MeshGraph/miniDagViewModel'
 import { buildTaskDag } from '../../src/components/MeshGraph/taskDagViewModel'
 
-const graphNode = (nodeId: string, over: Record<string, unknown> = {}) => ({
-    nodeId, ref: nodeId, kind: 'worker_task', state: 'materialized', materializationVersion: 1, ...over,
-})
-
-const makeGraph = (over: Record<string, unknown> = {}) => ({
-    graphId: 'g1',
-    status: 'running',
-    nodes: [],
-    gates: [],
-    edges: [],
-    createdAt: '2026-09-16T09:00:00Z',
-    ...over,
-}) as any
-
 const queueTask = (id: string, status: string, dependsOn?: string[]) => ({
     id, meshId: 'm', message: `task ${id}`, status, dependsOn,
     createdAt: '2026-09-16T10:00:00Z', updatedAt: '2026-09-16T10:00:00Z',
 }) as any
-
-describe('buildGraphMiniDag', () => {
-    it('returns null for a graph without edges — no plan to draw', () => {
-        expect(buildGraphMiniDag(makeGraph({ nodes: [graphNode('n1')] }))).toBeNull()
-    })
-
-    it('maps gates to gate nodes (gate state, blocking flag) and wires edge state', () => {
-        const graph = makeGraph({
-            nodes: [
-                graphNode('step', { taskId: 't1', state: 'completed' }),
-                graphNode('review', { kind: 'coordinator_gate', state: 'declared' }),
-            ],
-            gates: [{ gateId: 'g', nodeId: 'review', state: 'awaiting_coordinator', action: 'approval', onTimeout: 'hold', leaseGeneration: 0 }],
-            edges: [{ from: 'step', to: 'review', active: true }],
-        })
-        const model = buildGraphMiniDag(graph)!
-        expect(model).not.toBeNull()
-        const gate = model.nodes.find(node => node.id === 'review')!
-        expect(gate.kind).toBe('gate')
-        expect(gate.state).toBe('awaiting_coordinator')
-        expect(gate.blocking).toBe(true)
-        expect(model.edges).toHaveLength(1)
-        expect(model.edges[0].state).toBe('satisfied')
-        expect(model.graphId).toBe('g1')
-    })
-
-    it('a fused task node reads the LIVE queue status over the plan-side state', () => {
-        const graph = makeGraph({
-            nodes: [graphNode('a', { taskId: 't1', state: 'materialized' }), graphNode('b')],
-            edges: [{ from: 'a', to: 'b', active: true }],
-        })
-        const model = buildGraphMiniDag(graph, new Map([['t1', queueTask('t1', 'failed')]]))!
-        const fused = model.nodes.find(node => node.id === 'a')!
-        expect(fused.kind).toBe('task')
-        expect(fused.state).toBe('failed')
-        // No queue row → ghost 'plan' node keeping the graph-side state.
-        expect(model.nodes.find(node => node.id === 'b')!.kind).toBe('plan')
-    })
-})
 
 describe('buildQueueMiniDag', () => {
     const dag = buildTaskDag([
@@ -127,7 +71,7 @@ describe('layoutMiniDag', () => {
 
     it('a chain deepens one column per hop', () => {
         const positions = layoutMiniDag({
-            nodes: ['a', 'b', 'c'].map(id => ({ id, kind: 'task' as const, label: '', state: 'pending' })),
+            nodes: ['a', 'b', 'c'].map(id => ({ id, taskId: id, label: '', state: 'pending' })),
             edges: [
                 { id: 'e1', source: 'a', target: 'b', state: 'waiting' },
                 { id: 'e2', source: 'b', target: 'c', state: 'waiting' },
@@ -140,7 +84,7 @@ describe('layoutMiniDag', () => {
 
     it('terminates on a dependency cycle instead of recursing forever', () => {
         const positions = layoutMiniDag({
-            nodes: ['a', 'b'].map(id => ({ id, kind: 'task' as const, label: '', state: 'pending' })),
+            nodes: ['a', 'b'].map(id => ({ id, taskId: id, label: '', state: 'pending' })),
             edges: [
                 { id: 'e1', source: 'a', target: 'b', state: 'waiting' },
                 { id: 'e2', source: 'b', target: 'a', state: 'waiting' },

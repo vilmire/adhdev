@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { IpcTransport } from '../src/transports/ipc.js';
 import { meshListPendingApprovals, meshStatus, meshViewQueue } from '../src/tools/mesh-tools.js';
 import { meshNodeSlotsPropose } from '../src/tools/mesh-tools-slot-autodetect.js';
-import { ipcDispatchToRemoteAgent } from '../src/tools/mesh-remote-dispatch.js';
+import { dispatchToRemoteNode } from './helpers/remote-dispatch.js';
 import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 
 const TOOLS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'tools');
@@ -106,7 +106,7 @@ test('mesh_status / mesh_view_queue / mesh_list_pending_approvals / slots propos
     const unknown = JSON.parse(await meshNodeSlotsPropose(ctx, { node_id: 'node-b' }));
     assert.equal(unknown.code, 'detection_unavailable');
 
-    const picked = await ipcDispatchToRemoteAgent(ctx, ctx.mesh.nodes[1], { message: 'x', meshContext: { meshId: MESH_ID, coordinatorDaemonId: COORD } } as any);
+    const picked = await dispatchToRemoteNode(ctx, ctx.mesh.nodes[1], { message: 'x', meshContext: { meshId: MESH_ID, coordinatorDaemonId: COORD } } as any);
     assert.equal(picked.success, true, JSON.stringify(picked));
 
     assert.deepEqual(memberReads, [], 'no member status read, in any tool');

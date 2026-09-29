@@ -3,14 +3,14 @@ import type { CommandTransport } from '../transports/mode.js';
 export const LAUNCH_SESSION_TOOL = {
   name: 'launch_session',
   description:
-    'Launch a new agent session on the daemon. Supports CLI agents (e.g. kimi, hermes-cli, claude-cli, gemini-cli), ACP agents (e.g. claude-acp), and IDEs (e.g. cursor, vscode).',
+    'Launch a new agent session on the daemon. Supports CLI agents (e.g. kimi, claude-cli, codex-cli) and IDEs (e.g. cursor, vscode).',
   inputSchema: {
     type: 'object' as const,
     properties: {
       type: {
         type: 'string',
         description:
-          'Provider type to launch. CLI examples: kimi, hermes-cli, claude-cli, gemini-cli. ACP examples: claude-acp. IDE examples: cursor, vscode. Manifest aliases (e.g. codex → codex-cli) resolve to the canonical provider type.',
+          'Provider type to launch. CLI examples: kimi, claude-cli, codex-cli. IDE examples: cursor, vscode. Manifest aliases (e.g. codex → codex-cli) resolve to the canonical provider type.',
       },
       workspace: {
         type: 'string',
@@ -18,7 +18,7 @@ export const LAUNCH_SESSION_TOOL = {
       },
       model: {
         type: 'string',
-        description: 'Model override for ACP agents (e.g. claude-opus-4-7).',
+        description: 'Model override (e.g. claude-opus-4-7).',
       },
     },
     required: ['type'],
@@ -70,7 +70,7 @@ async function resolveProviderRoute(
       error: `Unknown provider type '${type}'. Known provider types: ${known.join(', ')}`,
     };
   }
-  const route = hit.category === 'cli' || hit.category === 'acp' ? 'cli' : 'ide';
+  const route = hit.category === 'cli' ? 'cli' : 'ide';
   return { route, canonicalType: hit.type };
 }
 
@@ -86,7 +86,7 @@ export async function launchSession(
       ? {
         cliType: resolved.canonicalType,
         dir: args.workspace ?? '~',
-        // The daemon's CLI/ACP launch (cli-manager.ts startSession) reads
+        // The daemon's CLI launch (cli-manager.ts startSession) reads
         // `args.initialModel`, not `args.model` — a plain `model` key was
         // silently ignored. `model` is kept alongside it for now since it is
         // harmless and this is the wire shape workers/tools may already know.

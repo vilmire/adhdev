@@ -1,7 +1,7 @@
 /**
  * Provider ↔ model compatibility guard for brain/slot-derived launch models.
  *
- * WHY THIS EXISTS: the difficulty→brain presets (and MAGI slots) carry
+ * WHY THIS EXISTS: the difficulty→brain presets carry
  * provider-agnostic model strings like `opus`/`sonnet`/`haiku`, which are
  * Anthropic (Claude) model names. When a task lands on a node whose provider is
  * NOT Anthropic-backed — `codex-cli` (ChatGPT), `antigravity-cli`, `hermes-cli`

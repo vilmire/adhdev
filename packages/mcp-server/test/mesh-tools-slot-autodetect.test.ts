@@ -30,11 +30,10 @@ test('extracts installed cli providers from a status payload', () => {
   ]);
 });
 
-test('excludes non-cli categories — ide/acp/extension are out of scope', () => {
+test('excludes non-cli categories — ide/extension are out of scope', () => {
   const detected = extractInstalledCliProviders(statusPayload([
     cli('claude-cli'),
     { type: 'cursor', category: 'ide', installed: true },
-    { type: 'some-acp', category: 'acp', installed: true },
     { type: 'some-ext', category: 'extension', installed: true },
   ]));
   assert.deepEqual(detected.map(d => d.type), ['claude-cli']);
@@ -86,7 +85,7 @@ test('mesh_node_slots (action=propose) is published in the tool registry', () =>
   const props = MESH_NODE_SLOTS_TOOL.inputSchema.properties as any;
   assert.deepEqual(props.action.enum, ['list', 'propose', 'set']);
   assert.equal(props.node_id.type, 'string');
-  assert.equal(props.include_magi.type, 'boolean');
+  assert.equal(props.include_magi, undefined);
   assert.deepEqual(MESH_NODE_SLOTS_TOOL.inputSchema.required, ['action', 'node_id']);
 });
 
@@ -169,18 +168,11 @@ test('warns about unrecognized and provisional providers', async () => {
   assert.ok(out.rationale.some((r: any) => r.provisional === true));
 });
 
-test('omits the MAGI draft unless include_magi is set', async () => {
+test('never drafts a review panel — the response carries only the slot proposal', async () => {
   const ctx = ctxWith(nodeWith(), statusPayload([cli('claude-cli'), cli('codex-cli')]));
-
-  const without = JSON.parse(await meshNodeSlotsPropose(ctx, { node_id: 'node_1' }));
-  assert.equal(without.magiPanelProposal, undefined);
-
-  const withMagi = JSON.parse(await meshNodeSlotsPropose(ctx, { node_id: 'node_1', include_magi: true }));
-  assert.equal(withMagi.magiPanelProposal.slots.length, 2);
-  // One slot per distinct provider, pinned to the node, models unpinned.
-  assert.deepEqual(withMagi.magiPanelProposal.slots.map((s: any) => s.provider), ['claude-cli', 'codex-cli']);
-  assert.ok(withMagi.magiPanelProposal.slots.every((s: any) => s.nodeId === 'node_1'));
-  assert.ok(withMagi.magiPanelProposal.slots.every((s: any) => s.model === undefined));
+  const out = JSON.parse(await meshNodeSlotsPropose(ctx, { node_id: 'node_1' }));
+  assert.equal(out.magiPanelProposal, undefined);
+  assert.ok(Array.isArray(out.proposedSlots));
 });
 
 test('reports detection_unavailable when the coordinator holds no catalog for a remote node', async () => {
@@ -230,7 +222,7 @@ test('mesh_node_slots through dispatch: action=propose drafts, action=list reads
   const ctx = ctxWith(nodeWith(existing), statusPayload([cli('claude-cli')]));
   const handler = resolveMeshToolHandler('mesh_node_slots')!;
 
-  assert.equal(validateMeshToolArgs('mesh_node_slots', { action: 'propose', node_id: 'node_1', include_magi: true }), null);
+  assert.equal(validateMeshToolArgs('mesh_node_slots', { action: 'propose', node_id: 'node_1' }), null);
   const proposed = JSON.parse(await handler(ctx, { action: 'propose', node_id: 'node_1' }));
   assert.equal(proposed.success, true);
   assert.equal(proposed.dryRun, true);

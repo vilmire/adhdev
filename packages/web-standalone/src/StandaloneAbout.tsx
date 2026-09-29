@@ -37,7 +37,7 @@ const SELFHOST_FEATURES = [
     { icon: <IconEye size={16} />, key: 'screenshots' },
     { icon: <IconMonitor size={16} />, key: 'remoteControl' },
     { icon: <IconPlug size={16} />, key: 'multiIde' },
-    { icon: <IconBook size={16} />, key: 'cliAcp' },
+    { icon: <IconBook size={16} />, key: 'cli' },
 ]
 
 const CLOUD_EXTRAS = [

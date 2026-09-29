@@ -17,7 +17,7 @@ import { fakeCoordinatorTransport } from './helpers/fake-coordinator-tool-answer
 // queueTrigger `pending_no_idle_mesh_session`, auto-launch `node_has_active_assignment`
 // — but the mcp-server's IpcTransport "enqueue-and-push" then P2P-sent 5470f2e1's body
 // straight to db6935bd (worker log: `dispatchSource=mesh-tools-internal:
-// ipcDispatchToRemoteAgent`, no messageId/policy/attempt). It re-stamped the busy
+// the remote agent_command relay`, no messageId/policy/attempt). It re-stamped the busy
 // session's mesh assignment to 5470f2e1 (so BOTH of the worker's forwarded reports
 // claimed 5470f2e1 and were refused — Finding A's live trigger), queued behind the
 // running turn, and then executed — while the queue row stayed `pending` and no

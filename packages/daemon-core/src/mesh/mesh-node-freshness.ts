@@ -79,8 +79,8 @@ export function deriveMeshNodeHealthFromGit(git: Record<string, unknown> | null 
  *   4. else 'unknown' (no telemetry — cannot prove unhealthy).
  *
  * This is the SINGLE source of truth for "what is this node's health right now" shared by
- * the auto-launch gate (isMeshNodeHealthLaunchable → isLaunchableNode) and the MAGI fan-out
- * planner, so the two never disagree about whether a degraded node is a viable target.
+ * the auto-launch gate (isMeshNodeHealthLaunchable → isLaunchableNode) and every other
+ * launch-readiness reader, so they never disagree about whether a degraded node is a viable target.
  * Returns a lowercased string (empty string is normalized to 'unknown').
  */
 export function resolveEffectiveMeshNodeHealth(node: any): string {
@@ -103,8 +103,8 @@ export function resolveEffectiveMeshNodeHealth(node: any): string {
  * missing telemetry; every other resolved health ('degraded', 'offline', 'dirty',
  * 'wrong_branch') is NOT launchable. A task assigned to a non-launchable node parks in
  * `pending` forever (isLaunchableNode skips it → node_health_not_launchable) with no
- * re-assignment, so the MAGI planner must exclude such nodes UP FRONT rather than emit a
- * replica that can never run.
+ * re-assignment, so a planner must exclude such nodes UP FRONT rather than emit a
+ * task that can never run.
  */
 export function isMeshNodeHealthLaunchable(node: any): boolean {
     const health = resolveEffectiveMeshNodeHealth(node);
@@ -130,7 +130,7 @@ function resolveEffectiveNodeGit(node: any): Record<string, any> {
  * node — one whose branch is N commits behind its upstream — win auto-launch fitness
  * routing and run a fresh worker against out-of-date code. `behind` is deliberately
  * NOT folded into deriveMeshNodeHealthFromGit because "behind" is not universally
- * unhealthy (the MAGI planner and other callers share that resolver); it is only
+ * unhealthy (other callers share that resolver); it is only
  * unhealthy for *spawning new work*. This gate encodes exactly that launch-time axis.
  *
  * Returns false (NOT fresh → skip / de-rank) only when git telemetry is PRESENT and

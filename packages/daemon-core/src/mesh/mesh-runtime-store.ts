@@ -4,7 +4,7 @@ import { LOG } from '../logging/logger.js';
 import { loadBetterSqlite3 } from '../system/load-better-sqlite3.js';
 import { getConfigDir } from '../config/config.js';
 import { getLedgerDir } from './mesh-ledger-paths.js';
-import { MeshGraphStore } from './mesh-graph-store.js';
+import { getLatestTaskOutput, insertTaskOutput, type MeshTaskOutputRow } from './mesh-task-outputs.js';
 import { TurnStore } from './turn-ledger/store.js';
 import { migrateTurnLedgerV1, turnLedgerExportPath, type TurnLedgerMigrationOptions, type TurnLedgerMigrationReport } from './turn-ledger/migrate-v1.js';
 import { migrateTurnLedgerV2, type TurnLedgerMigrationV2Report } from './turn-ledger/migrate-v2.js';
@@ -218,12 +218,14 @@ export class MeshRuntimeStore {
         return this.db.transaction(fn).immediate();
     }
 
-    /** GRAPH-ORCHESTRATION Phase A: row-CRUD over the additive graph tables, bound to
-     * THIS handle so phase-B graph writes can join the one queue transaction. */
-    private graphStoreInstance: MeshGraphStore | undefined;
-    graphStore(): MeshGraphStore {
-        if (!this.graphStoreInstance) this.graphStoreInstance = new MeshGraphStore(this.db);
-        return this.graphStoreInstance;
+    /** Append one immutable completion envelope version (mesh-task-outputs.ts) on THIS handle. */
+    insertTaskOutput(row: MeshTaskOutputRow): void {
+        insertTaskOutput(this.db, row);
+    }
+
+    /** The latest completion envelope version for a queue task, or null. */
+    getLatestTaskOutput(taskId: string): MeshTaskOutputRow | null {
+        return getLatestTaskOutput(this.db, taskId);
     }
 
     /** Wiring-unification C3: turn-ledger row CRUD on THIS handle (one txn with mesh_queue). */
@@ -722,8 +724,8 @@ export class MeshRuntimeStore {
         return getQueueStatusCountsImpl(this, meshId, olderThanIso);
     }
 
-    /** id/status/blockedReason/cancelReason for the given row ids. */
-    getQueueDependencyHeads(meshId: string, ids: readonly string[]): Array<{ id: string; status: MeshTaskStatus; blockedReason?: string; cancelReason?: string }> {
+    /** id/status/cancelReason for the given row ids. */
+    getQueueDependencyHeads(meshId: string, ids: readonly string[]): Array<{ id: string; status: MeshTaskStatus; cancelReason?: string }> {
         return getQueueDependencyHeadsImpl(this, meshId, ids);
     }
 
@@ -893,7 +895,7 @@ export class MeshRuntimeStore {
     }
 
     /**
-     * Same prune, also reporting the non-graph `mesh_task_outputs` rows removed in the
+     * Same prune, also reporting the `mesh_task_outputs` rows removed in the
      * same transaction (their retention IS the queue's — see the impl's header).
      */
     pruneTerminalQueue(olderThanMs: number): { queue: number; taskOutputs: number } {
@@ -908,34 +910,27 @@ export class MeshRuntimeStore {
         title: string;
         goal?: string;
         status?: string;
-        source?: string;
         /** H2: JSON-encoded MissionBrief, or `null` to explicitly clear it. `undefined`
-         *  (the field omitted) preserves whatever brief the mission already had — same
-         *  write-once-unless-supplied convention as `source`, but via COALESCE on the
-         *  RAW incoming value (null is a legitimate "clear" input, unlike source). */
+         *  (the field omitted) preserves whatever brief the mission already had
+         *  (null is a legitimate "clear" input). */
         briefJson?: string | null;
     }): void {
         const now = new Date().toISOString();
-        // `source` is a write-once provenance tag: on conflict we only overwrite it
-        // with a non-null incoming value (COALESCE(excluded, existing)), so a later
-        // status/goal upsert that omits source never clears a previously-stamped
-        // 'magi'/'coordinator' tag.
         // close_candidate_emitted_at is deliberately NOT in the UPDATE set: the G3
         // idempotency marker is owned solely by setMissionCloseCandidateEmittedAt, so a
         // title/goal/status upsert here never clears or overwrites it.
         // brief_json: `undefined` means "caller did not touch the brief" (preserve
         // existing), so it binds SQL NULL for the bind param and the UPDATE SET
-        // COALESCEs against the existing column — same idea as `source` but the
-        // caller signals "preserve" with `undefined` specifically (not with `null`,
-        // which is a real "clear the brief" input) via the ternary below.
+        // keeps the existing column — the caller signals "preserve" with `undefined`
+        // specifically (not with `null`, which is a real "clear the brief" input) via
+        // the ternary below.
         this.db.prepare(
-            `INSERT INTO mesh_missions (id, mesh_id, title, goal, status, source, brief_json, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `INSERT INTO mesh_missions (id, mesh_id, title, goal, status, brief_json, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET
                  title = excluded.title,
                  goal = excluded.goal,
                  status = excluded.status,
-                 source = COALESCE(excluded.source, mesh_missions.source),
                  brief_json = CASE WHEN ? THEN mesh_missions.brief_json ELSE excluded.brief_json END,
                  updated_at = excluded.updated_at`
         ).run(
@@ -944,7 +939,6 @@ export class MeshRuntimeStore {
             mission.title,
             mission.goal ?? '',
             mission.status ?? 'active',
-            mission.source ?? null,
             mission.briefJson === undefined ? null : mission.briefJson,
             now,
             now,
@@ -953,15 +947,15 @@ export class MeshRuntimeStore {
         this.maybeCheckpointWal();
     }
 
-    getMission(meshId: string, missionId: string): { id: string; meshId: string; title: string; goal: string; status: string; source?: string; closeCandidateEmittedAt?: string; briefJson?: string; createdAt: string; updatedAt: string } | null {
+    getMission(meshId: string, missionId: string): { id: string; meshId: string; title: string; goal: string; status: string; closeCandidateEmittedAt?: string; briefJson?: string; createdAt: string; updatedAt: string } | null {
         const row = this.db.prepare(
             'SELECT * FROM mesh_missions WHERE mesh_id = ? AND id = ?'
         ).get(meshId, missionId) as Record<string, string> | undefined;
         if (!row) return null;
-        return { id: row.id, meshId: row.mesh_id, title: row.title, goal: row.goal, status: row.status, source: row.source ?? undefined, closeCandidateEmittedAt: row.close_candidate_emitted_at ?? undefined, briefJson: row.brief_json ?? undefined, createdAt: row.created_at, updatedAt: row.updated_at };
+        return { id: row.id, meshId: row.mesh_id, title: row.title, goal: row.goal, status: row.status, closeCandidateEmittedAt: row.close_candidate_emitted_at ?? undefined, briefJson: row.brief_json ?? undefined, createdAt: row.created_at, updatedAt: row.updated_at };
     }
 
-    getMissions(meshId: string, statuses?: string[]): Array<{ id: string; meshId: string; title: string; goal: string; status: string; source?: string; closeCandidateEmittedAt?: string; briefJson?: string; createdAt: string; updatedAt: string }> {
+    getMissions(meshId: string, statuses?: string[]): Array<{ id: string; meshId: string; title: string; goal: string; status: string; closeCandidateEmittedAt?: string; briefJson?: string; createdAt: string; updatedAt: string }> {
         let rows: Array<Record<string, string>>;
         if (statuses?.length) {
             const placeholders = statuses.map(() => '?').join(', ');
@@ -973,7 +967,7 @@ export class MeshRuntimeStore {
                 'SELECT * FROM mesh_missions WHERE mesh_id = ? ORDER BY updated_at DESC'
             ).all(meshId) as Array<Record<string, string>>;
         }
-        return rows.map(row => ({ id: row.id, meshId: row.mesh_id, title: row.title, goal: row.goal, status: row.status, source: row.source ?? undefined, closeCandidateEmittedAt: row.close_candidate_emitted_at ?? undefined, briefJson: row.brief_json ?? undefined, createdAt: row.created_at, updatedAt: row.updated_at }));
+        return rows.map(row => ({ id: row.id, meshId: row.mesh_id, title: row.title, goal: row.goal, status: row.status, closeCandidateEmittedAt: row.close_candidate_emitted_at ?? undefined, briefJson: row.brief_json ?? undefined, createdAt: row.created_at, updatedAt: row.updated_at }));
     }
 
     /**

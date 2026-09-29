@@ -10,7 +10,7 @@ import * as path from 'path';
 import type * as http from 'http';
 import type { DevServerContext } from './dev-server-types.js';
 import type { CliAdapter } from '../cli-adapter-types.js';
-import type { AcpProviderState, CliProviderState, ProviderInstance, ProviderState } from '../providers/provider-instance.js';
+import type { CliProviderState, ProviderInstance, ProviderState } from '../providers/provider-instance.js';
 
 // ─── Helpers ──────────────────────────────────────
 
@@ -58,7 +58,7 @@ type CliExerciseFixture = {
   notes?: string;
 };
 
-type CliTargetState = CliProviderState | AcpProviderState;
+type CliTargetState = CliProviderState;
 type CliDebugState = {
   status?: string;
   activeModal?: { message?: string; buttons?: string[] } | null;
@@ -254,7 +254,7 @@ export function validateCliFixtureResult(result: any, assertions: CliFixtureAsse
 }
 
 function isCliTargetState(state: ProviderState): state is CliTargetState {
-  return state.category === 'cli' || state.category === 'acp';
+  return state.category === 'cli';
 }
 
 function getCliAdapterFromInstance(instance: ProviderInstance | undefined): CliDebugAdapter | null {
@@ -374,7 +374,7 @@ export async function runCliExerciseInternal(ctx: DevServerContext, body: CliExe
   if (freshSession) {
     const staleTargets = ctx.instanceManager
       .collectAllStates()
-      .filter((state) => (state.category === 'cli' || state.category === 'acp') && state.type === type)
+      .filter((state) => (state.category === 'cli') && state.type === type)
       .map((state) => state.instanceId);
     for (const staleId of staleTargets) {
       ctx.instanceManager.removeInstance(staleId);
@@ -601,146 +601,14 @@ export async function runCliExerciseInternal(ctx: DevServerContext, body: CliExe
   return payload;
 }
 
-export async function runCliAutoImplVerification(
-  ctx: DevServerContext,
-  type: string,
-  verification?: {
-    request?: Record<string, any>;
-    mustContainAny?: string[];
-    mustNotContainAny?: string[];
-    mustMatchAny?: string[];
-    mustNotMatchAny?: string[];
-    lastAssistantMustContainAny?: string[];
-    lastAssistantMustNotContainAny?: string[];
-    lastAssistantMustMatchAny?: string[];
-    lastAssistantMustNotMatchAny?: string[];
-    fixtureName?: string;
-    fixtureNames?: string[];
-  },
-): Promise<{
-  mode: 'fixture_replay' | 'fixture_replay_suite' | 'exercise';
-  pass: boolean;
-  failures: string[];
-  result: Record<string, any>;
-  assertions: CliFixtureAssertions;
-  fixture?: CliExerciseFixture;
-  results?: Array<{
-    fixtureName: string;
-    pass: boolean;
-    failures: string[];
-    result: Record<string, any>;
-    assertions: CliFixtureAssertions;
-    fixture: CliExerciseFixture;
-  }>;
-}> {
-  const assertions: CliFixtureAssertions = {
-    mustContainAny: verification?.mustContainAny || [],
-    mustNotContainAny: verification?.mustNotContainAny || [],
-    mustMatchAny: verification?.mustMatchAny || [],
-    mustNotMatchAny: verification?.mustNotMatchAny || [],
-    lastAssistantMustContainAny: verification?.lastAssistantMustContainAny || [],
-    lastAssistantMustNotContainAny: verification?.lastAssistantMustNotContainAny || [],
-    lastAssistantMustMatchAny: verification?.lastAssistantMustMatchAny || [],
-    lastAssistantMustNotMatchAny: verification?.lastAssistantMustNotMatchAny || [],
-    requireNotTimedOut: true,
-  };
-
-  const rawFixtureNames = Array.isArray(verification?.fixtureNames)
-    ? verification!.fixtureNames.map((value) => String(value || '').trim()).filter(Boolean)
-    : [];
-  if (rawFixtureNames.length > 0) {
-    const results: Array<{
-      fixtureName: string;
-      pass: boolean;
-      failures: string[];
-      result: Record<string, any>;
-      assertions: CliFixtureAssertions;
-      fixture: CliExerciseFixture;
-    }> = [];
-    for (const rawFixtureName of rawFixtureNames) {
-      const name = slugifyFixtureName(rawFixtureName);
-      const fixture = readCliFixture(ctx, type, name);
-      const mergedAssertions: CliFixtureAssertions = {
-        ...fixture.assertions,
-        ...assertions,
-      };
-      const result = await runCliExerciseInternal(ctx, {
-        ...fixture.request,
-        type,
-      });
-      const failures = validateCliFixtureResult(result, mergedAssertions);
-      results.push({
-        fixtureName: name,
-        pass: failures.length === 0,
-        failures,
-        result,
-        assertions: mergedAssertions,
-        fixture,
-      });
-    }
-    const firstFailure = results.find((item) => !item.pass) || results[results.length - 1];
-    return {
-      mode: 'fixture_replay_suite',
-      pass: results.every((item) => item.pass),
-      failures: results.flatMap((item) => item.failures.map((failure) => `${item.fixtureName}: ${failure}`)),
-      result: firstFailure.result,
-      assertions: firstFailure.assertions,
-      fixture: firstFailure.fixture,
-      results,
-    };
-  }
-
-  const rawFixtureName = String(verification?.fixtureName || '').trim();
-  if (rawFixtureName) {
-    const name = slugifyFixtureName(rawFixtureName);
-    try {
-      const fixture = readCliFixture(ctx, type, name);
-      const mergedAssertions: CliFixtureAssertions = {
-        ...fixture.assertions,
-        ...assertions,
-      };
-      const result = await runCliExerciseInternal(ctx, {
-        ...fixture.request,
-        type,
-      });
-      const failures = validateCliFixtureResult(result, mergedAssertions);
-      return {
-        mode: 'fixture_replay',
-        pass: failures.length === 0,
-        failures,
-        result,
-        assertions: mergedAssertions,
-        fixture,
-      };
-    } catch {
-      // Fall through to direct exercise verification if the named fixture is absent.
-    }
-  }
-
-  const result = await runCliExerciseInternal(ctx, {
-    ...(verification?.request || {}),
-    type,
-  });
-  const failures = validateCliFixtureResult(result, assertions);
-  return {
-    mode: 'exercise',
-    pass: failures.length === 0,
-    failures,
-    result,
-    assertions,
-  };
-}
-
-// ─── Handlers ─────────────────────────────────────
-
-/** GET /api/cli/status — list all running CLI/ACP instances with state */
+/** GET /api/cli/status — list all running CLI instances with state */
 export async function handleCliStatus(ctx: DevServerContext, _req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   if (!ctx.instanceManager) {
     ctx.json(res, 503, { error: 'InstanceManager not available (daemon not fully initialized)' });
     return;
   }
   const allStates = ctx.instanceManager.collectAllStates();
-  const cliStates = allStates.filter(s => s.category === 'cli' || s.category === 'acp');
+  const cliStates = allStates.filter(s => s.category === 'cli');
   const result = cliStates.map(s => ({
     instanceId: s.instanceId,
     type: s.type,
@@ -878,7 +746,7 @@ export function handleCliSSE(ctx: DevServerContext, cliSSEClients: http.ServerRe
   // Send current state snapshot immediately
   if (ctx.instanceManager) {
     const allStates = ctx.instanceManager.collectAllStates();
-    const cliStates = allStates.filter(s => s.category === 'cli' || s.category === 'acp');
+    const cliStates = allStates.filter(s => s.category === 'cli');
     for (const s of cliStates) {
       ctx.sendCliSSE({ event: 'snapshot', providerType: s.type, status: s.status, instanceId: s.instanceId });
     }
@@ -906,7 +774,7 @@ export async function handleCliDebug(ctx: DevServerContext, type: string, _req: 
   const target = findCliTarget(ctx, type, instanceId);
   if (!target) {
     const allStates = ctx.instanceManager.collectAllStates();
-    ctx.json(res, 404, { error: `No running instance for: ${type}`, available: allStates.filter(s => s.category === 'cli' || s.category === 'acp').map(s => s.type) });
+    ctx.json(res, 404, { error: `No running instance for: ${type}`, available: allStates.filter(s => s.category === 'cli').map(s => s.type) });
     return;
   }
 
@@ -959,7 +827,7 @@ export async function handleCliTrace(ctx: DevServerContext, type: string, req: h
     const allStates = ctx.instanceManager.collectAllStates();
     ctx.json(res, 404, {
       error: `No running instance for: ${type}`,
-      available: allStates.filter(s => s.category === 'cli' || s.category === 'acp').map(s => s.type),
+      available: allStates.filter(s => s.category === 'cli').map(s => s.type),
     });
     return;
   }

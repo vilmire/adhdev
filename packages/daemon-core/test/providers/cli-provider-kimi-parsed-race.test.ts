@@ -190,45 +190,6 @@ describe('CliProviderInstance — kimi parsed-scrape/native-transcript race (TX-
     expect(reScheduled.length).toBeGreaterThan(0)
   })
 
-  it('(3) true final answer + transcript quiet emits despite a recent cosmetic PTY redraw', () => {
-    const { instance, evidence } = makeKimiFlush({
-      parsedMessages: [assistantMsg('Both commands have now run successfully.', TURN_START + 12_000)],
-      externalMessages: [assistantMsg('Both commands have now run successfully.', TURN_START + 12_000)],
-      lastOutputAt: Date.now(),
-      transcriptAgeMs: PTY_PARSED_FINAL_ASSISTANT_QUIET_DWELL_MS + 1,
-    })
-
-    ;(instance as any).flushCompletedDebounceIfFinalized()
-
-    expect(completedEvents(evidence)).toHaveLength(1)
-    expect(instance.completedDebouncePending).toBeNull()
-  })
-
-  it('(3b) a finalization hold survives cosmetic PTY redraws and releases when the transcript becomes quiet', () => {
-    const h = makeKimiFlush({
-      parsedMessages: [assistantMsg('Both commands have now run successfully.', TURN_START + 12_000)],
-      externalMessages: [assistantMsg('Both commands have now run successfully.', TURN_START + 12_000)],
-      lastOutputAt: TURN_START + 4_900,
-      transcriptAgeMs: 0,
-    })
-
-    ;(h.instance as any).flushCompletedDebounceIfFinalized()
-
-    expect(completedEvents(h.evidence)).toHaveLength(0)
-    expect(h.instance.completedDebouncePending?.loggedBlockReason)
-      .toBe('native_source_final_assistant_quiet_dwell')
-    expect(h.reScheduled.length).toBeGreaterThan(0)
-
-    // Kimi repaints its settled prompt after the final answer. The redraw must not delete
-    // a pending completion already owned by the bounded transcript-dwell hold.
-    h.setLastOutputAt(TURN_START + 8_000)
-    h.setTranscriptAgeMs(PTY_PARSED_FINAL_ASSISTANT_QUIET_DWELL_MS + 1)
-    ;(h.instance as any).flushCompletedDebounceIfFinalized()
-
-    expect(completedEvents(h.evidence)).toHaveLength(1)
-    expect(h.instance.completedDebouncePending).toBeNull()
-  })
-
   it('(4) native transcript unresolved but the legacy parsed scrape has the final answer: fails OPEN and EMITS', () => {
     // Signal-absence fail-open: the native transcript is simply not resolvable yet (no
     // session pinned / file not written). The provider's own (pre-Stage-2.1) parsed evidence

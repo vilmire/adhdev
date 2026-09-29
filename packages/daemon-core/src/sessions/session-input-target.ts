@@ -3,8 +3,7 @@
  *
  * Wiring-unification D2. A session's input surface is split across two objects
  * the daemon already holds: the CLI adapter (driver FIFO, split write, stop key,
- * drain reservation) and the provider instance (transcript ack; the ACP
- * transport). This module projects the pair into the one structural target
+ * drain reservation) and the provider instance (transcript ack). This module projects the pair into the one structural target
  * `SessionInputService.submit()` drives, so the service never imports a
  * concrete adapter/instance class and every origin gets the same projection.
  *
@@ -23,7 +22,7 @@ import { buildCliStructuredInputPrompt } from '../providers/cli-provider-input-p
 import { shouldUseBracketedPasteForEnvelope } from '../providers/cli-provider-bracketed-paste.js';
 import type { ClaimedSessionInput, SessionInputBody, SessionInputTarget } from './session-input-service.js';
 
-/** The adapter surface the projection reads (the spec adapter satisfies it; so does the ACP shim). */
+/** The adapter surface the projection reads (the spec adapter satisfies it). */
 export interface SessionInputAdapterLike {
     cliType: string;
     getStatus?(options?: { allowParse?: boolean }): { status?: string } | undefined;
@@ -35,18 +34,12 @@ export interface SessionInputAdapterLike {
     restoreQueuedSend?(claimed: ClaimedSessionInput): void;
     reserveDrain?(ttlMs: number): void;
     releaseDrain?(): void;
-    _acpInstance?: unknown;
 }
 
 /** The instance surface the projection reads. */
 export interface SessionInputInstanceLike {
-    category?: string;
-    onEvent?(event: string, data?: unknown): unknown;
     recordAcknowledgedUserInput?(input: InputEnvelope | string, sourceMessageId?: string): void;
 }
-
-/** hermes-cli can paint a prompt before it accepts input; its first send waits this long while `starting`. */
-export const HERMES_CLI_STARTING_SEND_SETTLE_MS = 2_000;
 
 export function toInputEnvelope(input: OutboundMessage['input']): InputEnvelope {
     return normalizeInputEnvelope({ input });
@@ -75,48 +68,19 @@ export function buildCliInputBody(
 
 /**
  * Project an adapter/instance pair into a `SessionInputTarget`. `null` when the
- * pair has no input surface at all. An ACP instance (or the ACP adapter shim)
- * becomes an ACP target — the agent owns its own busy refusal.
+ * pair has no input surface at all.
  */
 export function buildSessionInputTarget(args: {
     adapter?: SessionInputAdapterLike | null;
     instance?: SessionInputInstanceLike | null;
     provider?: Pick<ProviderModule, 'name' | 'type' | 'capabilities' | 'category'> | null;
-    sleep?: (ms: number) => Promise<void>;
 }): SessionInputTarget | null {
     const { adapter, instance, provider } = args;
-    const acpInstance = (instance?.category === 'acp' ? instance : (adapter?._acpInstance as SessionInputInstanceLike | undefined)) ?? null;
-    if (acpInstance && typeof acpInstance.onEvent === 'function') {
-        return {
-            label: adapter?.cliType || provider?.type,
-            getStatus: adapter?.getStatus ? (o) => adapter.getStatus!(o) : undefined,
-            // Never reached: the service routes an ACP target through sendAcp.
-            sendMessage: async () => ({ status: 'delivered' as const }),
-            // Validation only (declared input support); the envelope itself goes to sendAcp.
-            buildBody(input) {
-                const envelope = toInputEnvelope(input);
-                assertProviderSupportsDeclaredInput(provider, envelope);
-                return envelope.parts.length > 0 || envelope.textFallback.trim() ? { text: envelope.textFallback || ' ' } : null;
-            },
-            async sendAcp(input) {
-                const outcome = await acpInstance.onEvent!('send_message', { input: toInputEnvelope(input) }) as
-                    { success?: boolean; error?: string; status?: string } | undefined;
-                return { success: outcome?.success === true, ...(outcome?.error ? { error: outcome.error } : {}), ...(outcome?.status ? { status: outcome.status } : {}) };
-            },
-        };
-    }
     if (!adapter) return null;
-    const sleep = args.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
     const target: SessionInputTarget = {
         label: adapter.cliType,
         getStatus: (o) => adapter.getStatus?.(o),
         buildBody: (input) => buildCliInputBody(provider, input),
-        async beforeWrite() {
-            if (adapter.cliType !== 'hermes-cli') return;
-            let status: string | undefined;
-            try { status = adapter.getStatus?.()?.status; } catch { status = undefined; }
-            if (status === 'starting') await sleep(HERMES_CLI_STARTING_SEND_SETTLE_MS);
-        },
         sendMessage: (text, options) => adapter.sendMessage(text, options),
     };
     if (typeof adapter.sendMessageDuringGeneration === 'function') target.sendMessageDuringGeneration = (t, b) => adapter.sendMessageDuringGeneration!(t, b);

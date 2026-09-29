@@ -47,8 +47,6 @@ import {
     validateChangeImpactConfig,
     type ChangeImpactConfig,
 } from '../git/change-impact-config.js';
-import { listMagiKindPanelsReadOnly } from '../config/mesh-config-routing.js';
-import type { MagiKindPanelMap } from '@adhdev/mesh-shared';
 import type { CLIInfo } from '../detection/cli-detector.js';
 
 /** Canonical write targets — the first/preferred location for each config family. */
@@ -177,7 +175,7 @@ interface RunMeshInitOptions {
 /**
  * A snapshot of the currently-saved config for each domain, so the coordinator can
  * render a current-vs-suggested diff to the user before an init/reinit overwrite.
- * This is READ-ONLY echo — every field is what is on disk / machine-local right now,
+ * This is READ-ONLY echo — every field is what is on disk right now,
  * never a suggestion. Absent domains are reported as `undefined` config.
  */
 interface MeshInitCurrentConfigEcho {
@@ -193,12 +191,6 @@ interface MeshInitCurrentConfigEcho {
         worktreeBootstrap: string;
         changeImpact: string;
     };
-    /**
-     * Currently-configured MAGI kind→panel slot bindings (machine-local
-     * ~/.adhdev/meshes.json). Empty object when none configured. This is a
-     * machine-local echo — the coordinator labels it as such vs. the repo files.
-     */
-    magiKindPanels: MagiKindPanelMap;
 }
 
 export interface RunMeshInitResult {
@@ -213,8 +205,8 @@ export interface RunMeshInitResult {
         installedProviders: Array<{ id: string; displayName: string; version?: string }>;
     };
     /**
-     * Read-only snapshot of the currently-saved config per domain (repo files +
-     * machine-local kind panels). Lets the coordinator present a current-vs-suggested
+     * Read-only snapshot of the currently-saved config per domain (repo files).
+     * Lets the coordinator present a current-vs-suggested
      * diff to the user before any overwrite. Always populated (dry-run and write).
      */
     currentConfig: MeshInitCurrentConfigEcho;
@@ -278,19 +270,9 @@ export function runMeshInit(
 
     // Read-only echo of the currently-saved config per domain so the coordinator can
     // present a current-vs-suggested diff before any overwrite (init vs reinit). This
-    // never suggests — it reports what is on disk / machine-local right now.
+    // never suggests — it reports what is on disk right now.
     const refineLoaded = loadMeshRefineConfig(mesh, workspace);
     const bootstrapLoaded = loadMeshWorktreeBootstrapConfig(mesh, workspace);
-    let magiKindPanels: MagiKindPanelMap = {};
-    try {
-        // Scoped to the mesh being onboarded — panels live per mesh, so echoing the
-        // whole machine's bindings would show another mesh's node pins as if they
-        // were this one's.
-        magiKindPanels = listMagiKindPanelsReadOnly(typeof mesh?.id === 'string' ? mesh.id : undefined);
-    } catch {
-        // Machine-local config unreadable — echo an empty binding rather than failing init.
-        magiKindPanels = {};
-    }
     const currentConfig: MeshInitCurrentConfigEcho = {
         refine: refineLoaded.config,
         worktreeBootstrap: bootstrapLoaded.config,
@@ -300,7 +282,6 @@ export function runMeshInit(
             worktreeBootstrap: bootstrapLoaded.sourceType,
             changeImpact: changeImpactLoaded.sourceType,
         },
-        magiKindPanels,
     };
 
     return {

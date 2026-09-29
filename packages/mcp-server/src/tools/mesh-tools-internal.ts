@@ -505,8 +505,7 @@ export async function triggerMeshQueueAndReport(
 // Lowered 32000 -> 11000 (2026-09-12): the 9000->32000 raise (and the paired
 // 11500->40000 total-node raise below) was sized ONLY against node-array cost on
 // a synthetic 23-node mesh, targeting zero folding. It did not account for the
-// FIXED top-level sections added since (daemonQuotas, magiActivity +
-// needsVerification claim text, asyncRefineJobs, pendingCoordinatorEvents,
+// FIXED top-level sections added since (daemonQuotas, asyncRefineJobs, pendingCoordinatorEvents,
 // missions, branchConvergenceSummary) which all add to the SAME serialized
 // string these node budgets bound. Live measurement (2026-09-12, owner's mesh):
 // a compact mesh_status of just 9 nodes reached ~59KB and was rejected by the
@@ -536,7 +535,7 @@ export const COMPACT_DETAILED_NODES_BYTE_BUDGET = 11000;
 // Lowered 40000 -> 14500 (2026-09-12), paired with the detail budget 32000 ->
 // 11000 above — see that comment for why the prior raise (aimed at zero-folding
 // a synthetic 23-node worst case) left no real headroom once the FIXED top-level
-// sections (daemonQuotas/magiActivity/asyncRefineJobs/pendingCoordinatorEvents/
+// sections (daemonQuotas/asyncRefineJobs/pendingCoordinatorEvents/
 // missions/branchConvergenceSummary/etc.) are included in the same payload.
 // Folding a node is still more expensive than the bytes it saves — a folded node
 // loses its daemonId — but correctness now means "the MCP host accepts the

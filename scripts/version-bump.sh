@@ -352,7 +352,6 @@ PACKAGES=(
     "packages/terminal-render-web/package.json"
     "packages/web-core/package.json"
     "packages/web-standalone/package.json"
-    "packages/web-devconsole/package.json"
 )
 
 if [ "$GHOSTTY_CHANGED" -eq 1 ]; then

@@ -79,7 +79,6 @@ export const MANUAL_ATTENDANCE_COMMANDS: ReadonlySet<string> = new Set([
     'invoke_provider_script',
     'set_mode',
     'change_model',
-    'set_thought_level',
     'resolve_action',
     'pty_input',
 ]);

@@ -11,7 +11,7 @@
  *                    address (see `message-source-address.ts`).
  *   `d.<E>.<n>`      daemon-issued — for bubbles with no strong address (PTY
  *                    parse, IDE DOM, best-effort fallbacks) and for local
- *                    runtime/ACP rows. `E` is this ledger's epoch token.
+ *                    runtime rows. `E` is this ledger's epoch token.
  *
  * ── Assignment, per observation (one "frame") ──────────────────────────────
  *   1. Strong address first: a `_src` already bound in `bySrc` keeps its id.

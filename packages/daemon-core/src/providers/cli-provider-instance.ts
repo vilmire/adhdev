@@ -53,7 +53,6 @@ import { evaluateFinalizationBlock, type CompletionArmPatch, type CompletionFlus
 import { createSqliteProbeCache, probeSessionIdFromConfig } from './completion/transcript-probe.js';
 import * as approvalGate from './completion/approval-gate.js';
 import * as evidence from './completion/evidence.js';
-import * as stallRescue from './completion/stall-rescue.js';
 import { runStatusTransitionTick } from './completion/status-transition.js';
 import type { SessionEventPort } from './provider-event-port.js';
 import type { TurnEvidencePort } from './turn-evidence-port.js';
@@ -82,8 +81,8 @@ import * as providerEvents from './cli-provider-events.js';
 import * as completionFlush from './completion/completion-flush.js';
 import * as meshAssignment from './cli-provider-mesh-assignment.js';
 import {
-    checkMeshWorkerStall, completingTurnTaskId, getTerminalScreenSnapshot, injectedTaskHasStartedGenerating, injectKeys,
-    isAutonomousMeshSession, isMeshWorkerSession, markCurrentTurnStartupGraceCollapseSatisfied, meshTraceCtx,
+    checkMeshWorkerStall, completingTurnTaskId, getTerminalScreenSnapshot, injectKeys,
+    isAutonomousMeshSession, isMeshWorkerSession, meshTraceCtx,
 } from './cli-provider-mesh-session.js';
 import {
     approvalRecentlyResolvedLocally, autoApproveEffectivelyActive, getDrainStatus, getHotChatSessionState, inApprovalResumeGrace,
@@ -94,7 +93,7 @@ import {
 } from './cli-provider-lifecycle.js';
 import {
     finalSummaryProvenanceDiagnostic, hasEmittedGenuineCompletionForCurrentEpoch, nativeTurnTerminalMarker, nativeTurnTerminalSummary, probeNativeTranscriptSignals,
-    publishTranscriptSignalObservation, shouldSuppressCompletionReEmit, spawnedEnvOverrides,
+    publishTranscriptSignalObservation, spawnedEnvOverrides,
 } from './cli-provider-transcript-signals.js';
 
 export class CliProviderInstance implements ProviderInstance {
@@ -163,31 +162,9 @@ export class CliProviderInstance implements ProviderInstance {
     // opened AND closed within the settle window; the epoch can. See
     // flushCompletedDebounceIfFinalized.
     busyEpoch: number = 0;
-    // GENERATING-BOUNDARY (R4b): the per-turn taskId for which a startup-grace
-    // started+completed pair was already synthesized. Both fast-collapse callers
-    // (starting→idle transition AND the idle-stayed no-status-change poll) route
-    // through maybeSynthesizeStartupGraceCollapse; the idle-stayed caller re-polls
-    // steadily while the session sits idle, so this guard makes the synthesis fire
-    // AT MOST ONCE per collapsed turn.
-    fastCollapseSynthesizedTaskId: string | null = null;
-    // GENERATING-BOUNDARY (R4c): the wall-clock moment the FSM's starting→idle
-    // startup-grace collapse was observed (set ONCE, on the first starting→idle
-    // transition this boot). The idle-stayed collapse window is anchored on THIS,
-    // not on instance/boot time (this.startedAt): the FSM spends the full 8s
-    // startup-grace sitting in 'starting' before collapsing, and a turn can be
-    // dispatched a few seconds AFTER the collapse — measuring the window from boot
-    // would have it already closed by the time that turn lands+completes (the live
-    // R4b miss: collapse at boot+8s, dispatch at boot+12.4s > the 12s boot window).
-    // Anchoring on the collapse moment makes the window cover dispatch-delay+turn.
-    startupGraceCollapseAt: number | null = null;
-    // ANTIGRAVITY-PREMATURE-COMPLETION gate: wall-clock when the CURRENT mesh task
-    // was injected/attached (attachMeshAssignment). The injected task counts as having
-    // genuinely entered generating only once a turn STARTS after this moment
-    // (currentTurnStartedAt > meshTaskInjectedAt) — because currentTurnStartedAt
-    // persists from the PRIOR turn and the mesh inject path pre-binds currentTurnTaskId
-    // at inject time, so neither alone distinguishes "injected but not yet generating"
-    // from "genuinely generating". This timestamp is that discriminator. 0 = no task
-    // injected since boot (ad-hoc/non-mesh turns fall back to the plain turn-started check).
+    // Wall-clock when the CURRENT mesh task was injected/attached (attachMeshAssignment):
+    // the fallback turn-start anchor for turn-scoped transcript reads. 0 = no task
+    // injected since boot.
     meshTaskInjectedAt = 0;
     meshTaskAttachmentHistory: MeshTaskAttachment[] = []; // WORKER-MCP T2 precursor — mesh-task-attachment.ts, flag-gated, byte-identical off. Always read via meshTaskAttachments(this.meshTaskAttachmentHistory), never raw — see that module's "Constructor-bypassed instances".
     settings: Record<string, any> = {};
@@ -617,8 +594,7 @@ export class CliProviderInstance implements ProviderInstance {
      * idle` and "waiting to emit completed until transcript finalizes" 12s AFTER
      * stop_cli — it was one transcript condition away from reporting a killed turn
      * as `agent:generating_completed`. A removed instance may report exactly one
-     * thing: its own death. (flushMeshCompletionBeforeCleanup runs BEFORE
-     * removeInstance, so the legitimate pre-cleanup completion is unaffected.)
+     * thing: its own death. 
      */
     disposed = false;
     dispose(): void { dispose(this); }
@@ -671,13 +647,10 @@ export class CliProviderInstance implements ProviderInstance {
      */
     lastFinalSummaryProvenance: evidence.FinalSummaryProvenance | null = null;
 
-    // KIMI-MESH-COMPLETION-EMIT (axis 2, double-emit guard): the (taskId, wall-clock)
-    // of the most recent agent:generating_completed this instance emitted, stamped by
-    // emitGeneratingCompleted. The pre-cleanup completion flush
-    // (flushMeshCompletionBeforeCleanup, driven by cli-manager's exit monitor) reads
-    // this to refuse a SECOND completion for a turn whose completion already fired —
-    // so a worker that finished cleanly and is simply being auto-cleaned never emits a
-    // duplicate. taskId '' covers an ad-hoc (no-task) turn. null = none emitted yet.
+    // Double-emit guard: the (taskId, wall-clock) of the most recent
+    // agent:generating_completed this instance emitted, stamped by
+    // emitGeneratingCompleted. taskId '' covers an ad-hoc (no-task) turn. null = none
+    // emitted yet.
     //
     // COMPLETION-WEAK-REARM (fix1): the latch now carries the EVIDENCE STRENGTH of the
     // recorded emit. `weak` mirrors isWeakCompletionEvidence() over the exact event that
@@ -856,30 +829,9 @@ export class CliProviderInstance implements ProviderInstance {
     }
     nativeTurnTerminalMarker(turnStartedAt?: number): NativeTurnTerminalMarker | null { return nativeTurnTerminalMarker(this, turnStartedAt); }
 
-    /**
-     * See completion/stall-rescue.ts — pre-cleanup mesh completion flush
-     * (verbatim move; KIMI-MESH-COMPLETION-EMIT axis 2 provenance lives with
-     * the module). Turn state stays instance-owned.
-     */
-    flushMeshCompletionBeforeCleanup(): boolean {
-        return stallRescue.flushMeshCompletionBeforeCleanup(this);
-    }
-
-    /**
-     * See completion/stall-rescue.ts — TRANSCRIPT-COMPLETION-STALL-RESCUE
-     * (verbatim move; the TX-FSM Stage 1 probe-delegation provenance lives
-     * with the module). Consulted by the mesh stall watchdog via MeshStallHost.
-     */
-    tryReconcileTranscriptCompletionForStall(
-        observedStatus: string,
-        transcriptSignals?: { snapshot: SignalSnapshot | null; messages: unknown[] | null } | null,
-    ): boolean {
-        return stallRescue.tryReconcileTranscriptCompletionForStall(this, observedStatus, transcriptSignals);
-    }
     isAutonomousMeshSession(): boolean { return isAutonomousMeshSession(this); }
     inApprovalResumeGrace(now = Date.now()): boolean { return inApprovalResumeGrace(this, now); }
     completingTurnTaskId(): string | undefined { return completingTurnTaskId(this); }
-    injectedTaskHasStartedGenerating(): boolean { return injectedTaskHasStartedGenerating(this); }
     meshTraceCtx(event = 'agent:generating_completed'): Record<string, unknown> { return meshTraceCtx(this, event); }
 
     // COMPLETION-EARLYNOTIFY instrumentation. A session-keyed FSM-transition +
@@ -974,7 +926,6 @@ export class CliProviderInstance implements ProviderInstance {
     flushCompletedDebounceIfFinalized(): void {
         completionFlush.flushCompletedDebounceIfFinalized(this);
     }
-    markCurrentTurnStartupGraceCollapseSatisfied(): void { markCurrentTurnStartupGraceCollapseSatisfied(this); }
 
     /** See completion/evidence.ts — EMPTY-FINAL-CONTENT TOCTOU snapshot preference. */
     cleanCompletionFinalSummary(pending: CompletedDebouncePending): string | undefined {
@@ -1013,7 +964,6 @@ export class CliProviderInstance implements ProviderInstance {
     }): void {
         completionFlush.emitGeneratingCompleted(this, opts);
     }
-    shouldSuppressCompletionReEmit(taskId: string | undefined): boolean { return shouldSuppressCompletionReEmit(this, taskId); }
     hasEmittedGenuineCompletionForCurrentEpoch(): boolean { return hasEmittedGenuineCompletionForCurrentEpoch(this); }
 
     /**
@@ -1059,22 +1009,6 @@ export class CliProviderInstance implements ProviderInstance {
         if (this.agentReadyEmitted) return;
         this.agentReadyEmitted = true;
         this.pushEvent({ event: 'agent:ready', chatTitle, timestamp: now });
-    }
-
-    /**
-     * See completion/stall-rescue.ts — startup-grace fast-collapse synth
-     * (verbatim move; GENERATING-BOUNDARY R4b/R4c, AGY-BOOT-PHANTOM hold-class
-     * and EARLYNOTIFY-GATEBYPASS (c) provenance live with the module). The
-     * once-per-turn guard state (fastCollapseSynthesizedTaskId) stays
-     * instance-owned, incl. the markCurrentTurnStartupGraceCollapseSatisfied
-     * stamp below.
-     */
-    maybeSynthesizeStartupGraceCollapse(
-        chatTitle: string,
-        now: number,
-        reason: 'startup_grace_fast_collapse' | 'startup_grace_idle_turn_collapse',
-    ): boolean {
-        return stallRescue.maybeSynthesizeStartupGraceCollapse(this, chatTitle, now, reason);
     }
 
     detectStatusTransition(cause?: AdapterChangeCause): void {

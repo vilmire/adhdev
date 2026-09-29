@@ -33,7 +33,7 @@ export interface SpecDebugView {
 /**
  * The one debug bundle: spec_debug, the chat debug bundle (web-core
  * spec-debug-normalize.ts) and the dev CLI debugger (dev-cli-debug.ts,
- * web-devconsole) all read this shape.
+ * dashboards) all read this shape.
  */
 export function buildSpecDebugSnapshot(v: SpecDebugView, driver: ISpecDriver): Record<string, unknown> {
     let screen = '';

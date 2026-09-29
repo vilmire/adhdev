@@ -135,7 +135,7 @@ const DISPATCH: ToolBehaviorAnnotations = {
 
 /**
  * Acts on a live remote session but converges on one end state (approve a
- * pending prompt, answer a question, release a gate): repeating it does not
+ * pending prompt, answer a question): repeating it does not
  * add a second effect.
  */
 const CONTROL_REMOTE_IDEMPOTENT: ToolBehaviorAnnotations = {
@@ -161,7 +161,7 @@ export const TOOL_ANNOTATIONS: Record<string, ToolBehaviorAnnotations> = {
   screenshot: READ_REMOTE,
 
   // ── Standard mode: session control ───────────────────────────────────
-  // Spawns a CLI/ACP agent process — the canonical open-world action.
+  // Spawns a CLI agent process — the canonical open-world action.
   launch_session: DISPATCH,
   // Terminates a running agent process: destructive (in-flight work is lost),
   // idempotent (stopping an already-stopped session converges).
@@ -192,7 +192,6 @@ export const TOOL_ANNOTATIONS: Record<string, ToolBehaviorAnnotations> = {
   // Explicitly documented as read-only and fetch-free — a pure scoring preview.
   mesh_route_preview: READ_LOCAL,
   mesh_view_queue: READ_LOCAL,
-  mesh_graph_view: READ_LOCAL,
   mesh_task_history: READ_LOCAL,
   mesh_ledger_query: READ_LOCAL,
   mesh_mission_list: READ_LOCAL,
@@ -212,12 +211,6 @@ export const TOOL_ANNOTATIONS: Record<string, ToolBehaviorAnnotations> = {
   mesh_enqueue_batch: DISPATCH,
   mesh_send_task: DISPATCH,
   mesh_launch_session: DISPATCH,
-  // Fans a read-only investigation out to a PANEL of agents on other machines.
-  // The investigation is read-only; dispatching it is not.
-  mesh_magi_review: DISPATCH,
-  // Collects an already-dispatched fan-out. Re-collecting re-synthesizes the
-  // same replicas rather than dispatching more.
-  mesh_magi_collect: CONTROL_REMOTE_IDEMPOTENT,
   // Delivers a memo to a worker's next tool call — one more memo per call.
   mesh_notify_worker: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
 
@@ -236,20 +229,10 @@ export const TOOL_ANNOTATIONS: Record<string, ToolBehaviorAnnotations> = {
   mesh_queue_requeue: DESTRUCTIVE_LOCAL,
   // Restores held events back to pending. Explicitly documented as lossless.
 
-  // ── Mesh: graph gates ────────────────────────────────────────────────
   // ★MERGED TOOLS ARE CLASSIFIED BY THEIR MOST CAPABLE ACTION (2026-09-26
   // consolidation). One tool carries one annotation block, and a client deciding
   // "may I auto-run this?" must see what the tool CAN do (rule 1), so a merged
   // tool whose read-only action sits beside a destructive one is destructive.
-  // claim / release / extend are lease-guarded and convergent; abandon gives up
-  // on a gate so the graph reaches a TERMINAL state — the work behind it is
-  // abandoned, which is not recoverable by releasing it later.
-  mesh_graph_gate: DESTRUCTIVE_LOCAL,
-  // Overwrites keys on a node's otherwise-IMMUTABLE base spec: the replaced
-  // run_if/inputs_from is not recoverable, so it is destructive in the same
-  // sense as mesh_queue_requeue's instruction overwrite — even though its
-  // purpose is repair. Not idempotent: it re-settles and bumps the generation.
-  mesh_graph_node_patch: DESTRUCTIVE_LOCAL,
 
   // ── Mesh: lifecycle / bootstrap ──────────────────────────────────────
   // Creates new mesh/node records. Additive; a repeat creates another.
@@ -289,7 +272,6 @@ export const TOOL_ANNOTATIONS: Record<string, ToolBehaviorAnnotations> = {
   // `.adhdev/mesh.json` from the machine-local entry — overwrites the committed file.
   mesh_config: DESTRUCTIVE_LOCAL,
   // Sets one named value, replacing only that value (action=set); list/get read.
-  mesh_magi_kind_panel: WRITE_LOCAL_SAFE,
   mesh_coordinator_prompt_append: WRITE_LOCAL_SAFE,
   // action=set replaces one node's slot list; action=propose probes the node's
   // installed CLIs (open-world read), so the merged tool is open-world.

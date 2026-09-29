@@ -55,7 +55,7 @@ describe('buildTaskDag', () => {
             task({ id: 'a', status: 'completed', missionId: 'm1' }),
             task({ id: 'b', status: 'assigned', missionId: 'm1' }),
             task({ id: 'c', dependsOn: ['b'], missionId: 'm2' }),
-            task({ id: 'd', status: 'cancelled', blockedReason: 'dependency_failed:x' }),
+            task({ id: 'd', status: 'cancelled', dependencyFailures: [{ taskId: 'x', status: 'failed' }] }),
         ])
         expect(dag.stats).toMatchObject({
             total: 4,

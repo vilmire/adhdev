@@ -92,7 +92,7 @@ export default function NodeSlotEditor({ slots, availableProviders, saving, onSa
     // manifest), so a slot's Model dropdown only offers models that provider
     // actually supports (e.g. codex has no 'haiku'). Falls back to free text when
     // the provider declares no model list. Shared lookup — same source the
-    // New-session dialog and MAGI editor read.
+    // New-session dialog reads.
     const optionsByProvider = useMemo(() => buildProviderOptionMap(availableProviders), [availableProviders])
 
     const dirty = useMemo(() => {

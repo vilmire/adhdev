@@ -30,7 +30,7 @@ function readCustomTags(node: MeshNode): string[] {
 // Reserved auto-tag prefixes an operator shouldn't hand-author as a custom tag
 // (they're derived). Guard the input so a custom "os=win32" doesn't shadow the
 // real derived one.
-const RESERVED_PREFIXES = ['os=', 'arch=', 'provider=', 'worktree=', 'converge=']
+const RESERVED_PREFIXES = ['os=', 'arch=', 'provider=', 'worktree=']
 
 export default function NodeTagEditor({ node, saving, onSave }: Props) {
     const { t } = useTranslation('common')

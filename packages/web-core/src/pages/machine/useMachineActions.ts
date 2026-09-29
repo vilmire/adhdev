@@ -54,7 +54,7 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
     const [editingNickname, setEditingNickname] = useState(false)
     const [nicknameInput, setNicknameInput] = useState('')
 
-    // Callbacks for cross-tab state (e.g. setting CLI/ACP launch dirs).
+    // Callbacks for cross-tab state (e.g. setting CLI launch dirs).
     // Tabs register these via setOnDefaultWorkspaceChanged.
     const onDefaultWorkspaceChangedRef = useRef<((path: string) => void) | null>(null)
     const setOnDefaultWorkspaceChanged = useCallback((fn: ((path: string) => void) | null) => {

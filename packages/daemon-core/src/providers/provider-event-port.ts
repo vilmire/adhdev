@@ -2,16 +2,15 @@
  * provider-event-port — the provider-side half of the SessionEventPort.
  *
  * Wiring-unification Phase B2 (docs/design/2026-09-23-wiring-unification.md §4 B1
- * "Emit sites — the four detection points").
+ * "Emit sites — the three detection points").
  *
  * Provider instances never see the lifecycle bus; they hold a nullable
- * `SessionEventPort` (B1, `sessions/session-port.ts`) and call it at the four
+ * `SessionEventPort` (B1, `sessions/session-port.ts`) and call it at the three
  * detection points:
  *
  *   - CLI FSM         completion/status-transition.ts  status/modal/prompt
  *   - IDE poll        ide-provider-instance.ts         status + immediate provider events
  *   - Extension poll  extension-provider-instance.ts   status + immediate provider events
- *   - ACP update      acp-provider-instance.ts         status + immediate provider events
  *
  * The port stays null until boot wires it (B4/B5), so every helper here is a
  * no-op without one. The per-instance `pendingEvents` buffer these helpers

@@ -101,7 +101,6 @@
             "guideShort": "Guide",
             "openGitStatus": "Open git status",
             "meshGraph": "Mesh graph",
-            "stopAcpSession": "Stop ACP session",
             "stopCliProcess": "Stop CLI process",
             "chatHistory": "Chat History",
             "remoteControl": "Remote Control",
@@ -164,7 +163,7 @@
                 "whatLivesWhere": {
                     "title": "What lives where",
                     "tabsLabel": "Tabs:",
-                    "tabsText": "active sessions across IDE, CLI, and ACP agents.",
+                    "tabsText": "active sessions across IDE and CLI agents.",
                     "hiddenLabel": "Hidden tabs:",
                     "hiddenText": "stash sessions you do not want in the main strip but still want to keep around.",
                     "inboxLabel": "Activity inbox:",
@@ -193,7 +192,7 @@
             "quickstart": {
                 "desktop": {
                     "title": "Desktop quick start",
-                    "step1": "Start from the machine or workspace flow first. Pick or save a workspace before launching CLI or ACP sessions.",
+                    "step1": "Start from the machine or workspace flow first. Pick or save a workspace before launching CLI sessions.",
                     "step2": "Keep the main strip focused on active work and push overflow into Hidden tabs.",
                     "step3": "Use the inbox for approval-required or completed sessions instead of scanning every tab.",
                     "step4": "Split only when you need parallel reading; float or pop out a tab when you want to detach it without losing the main layout."
@@ -201,7 +200,7 @@
                 "mobile": {
                     "title": "Mobile quick start",
                     "step1": "Stay in chat mode for review and replies; use workspace mode mainly to launch or reopen sessions.",
-                    "step2": "Start from the machine screen, choose a workspace, then launch IDE, CLI, or ACP from there.",
+                    "step2": "Start from the machine screen, choose a workspace, then launch IDE or CLI from there.",
                     "step3": "Treat mobile as the simpler control surface: no split workflow, fewer tab mechanics, faster session switching."
                 }
             },
@@ -421,8 +420,6 @@
         "startingCoordinator": "Starting coordinator…",
         "startIde": "Start IDE",
         "startingIde": "Starting IDE…",
-        "startAcpSession": "Start ACP session",
-        "startingAcpSession": "Starting ACP session…",
         "startFresh": "Start fresh",
         "startingFresh": "Starting fresh…",
         "resumeSavedHistory": "Resume saved history",
@@ -677,25 +674,6 @@
                         "Because it is persisted to the queue, completion signals are never lost."
                     ]
                 },
-                "magi": {
-                    "term": "MAGI",
-                    "summary": "Cross-verification: several independent AI agents answer the same question in parallel.",
-                    "details": [
-                        "Confidence comes from independence — different AIs on different machines fail in different ways.",
-                        "When the agents disagree, the disagreement itself flags what to double-check.",
-                        "The synthesis weighs agreement against source coupling."
-                    ]
-                },
-                "magiPanel": {
-                    "term": "MAGI panel",
-                    "summary": "A saved, reusable team of (machine × AI) members you invoke by name across investigations.",
-                    "details": [
-                        "Each member is one provider (AI) optionally pinned to a node (machine), with a replica count.",
-                        "independent — spans ≥2 providers AND ≥2 machines, so agreement adds real confidence.",
-                        "coupled — collapses to one AI or one machine; repeated members repeat the same mistakes.",
-                        "Managed machine-locally from the Panels tab; defined in ~/.adhdev/meshes.json."
-                    ]
-                },
                 "convergence": {
                     "term": "Branch convergence states",
                     "summary": "After worktree work, each branch is classified into exactly one final state.",
@@ -707,39 +685,13 @@
                         "not_mergeable — cannot be merged."
                     ]
                 },
-                "graph": {
-                    "term": "Orchestration graph",
-                    "summary": "A batch of tasks enqueued together with declared dependencies, conditions and gates.",
-                    "details": [
-                        "Created by mesh_enqueue_batch; each graph is one executable plan inside a mission.",
-                        "Settled graphs collapse to a single chip on the blueprint — click to expand in place."
-                    ]
-                },
-                "gate": {
-                    "term": "Coordinator gate",
-                    "summary": "A step that holds the graph until a human-directed coordinator acts.",
-                    "details": [
-                        "States: declared → awaiting_coordinator → claimed → released (or expired).",
-                        "The blueprint draws a waiting gate at full card width with its instructions and deadline.",
-                        "Acting on a gate is done by instructing the coordinator; the dashboard is read-only here."
-                    ]
-                },
-                "condition": {
-                    "term": "Condition (run_if)",
-                    "summary": "A declarative predicate deciding whether a planned step runs at all.",
-                    "details": [
-                        "Grammar is a closed set: all / any / not over exists, ==, != and in.",
-                        "The blueprint renders it as a card wired into the edge, e.g. review.outcome == rejected.",
-                        "A step whose condition never holds is skipped, not failed."
-                    ]
-                },
                 "blueprint": {
                     "term": "Blueprint",
-                    "summary": "The plan view: live queue work, graph gates and planned steps on one canvas.",
+                    "summary": "The plan view: live queue work and its task dependencies on one canvas.",
                     "details": [
                         "One axis — dependency depth, left to right. Root tasks are ordered newest first.",
                         "Cards carry their own time, so position never has to encode it.",
-                        "Finished graphs sit below the live work as a collapsed archive."
+                        "Finished dependency chains fold away so live work stays in view."
                     ]
                 },
                 "routingPreview": {
@@ -773,50 +725,6 @@
             "medium": "Medium",
             "difficult": "Difficult",
             "freeform": "Freeform"
-        },
-        "magiKind": {
-            "refresh": "Refresh",
-            "loading": "Loading…",
-            "connectPrompt": "Connect to a coordinator daemon to manage kind → panel bindings.",
-            "errorLoad": "Failed to load kind panels",
-            "errorSave": "Failed to save kind binding",
-            "errorRemove": "Failed to remove kind binding",
-            "errorSlotProvider": "Slot {{slot}}: provider is required",
-            "errorSlotReplica": "Slot {{slot}}: replica count must be ≥ 1",
-            "errorNoSlot": "A kind binding needs at least one slot",
-            "removeConfirm": "Remove the MAGI panel binding for \"{{kind}}\"?",
-            "kindRca": "Root-cause analysis",
-            "kindDesign": "Design / approach review",
-            "kindClaimAudit": "Verify specific claims",
-            "kindFreeform": "Freeform review",
-            "agentCount_one": "{{count}} agent",
-            "agentCount_other": "{{count}} agents",
-            "off": "off",
-            "noAgents": "No agents yet — add one to enable this review type.",
-            "machine": "Machine",
-            "machineTitle": "Which machine runs this agent. Leave on \"any\" to let the coordinator route by tags.",
-            "anyMachine": "Any machine",
-            "offlineSuffix": "{{label}} (offline)",
-            "worktreeSuffix": "{{label}} — worktree ({{branch}})",
-            "worktreeUnknownBranch": "unknown branch",
-            "worktreeDisabledTitle": "Ephemeral worktree nodes can't be newly assigned to a MAGI slot — they can disappear on cleanup. An existing assignment stays visible here so it can be reviewed or cleared.",
-            "provider": "Provider",
-            "providerTitle": "The AI agent this slot runs.",
-            "selectProvider": "Select provider…",
-            "model": "Model",
-            "modelTitle": "Optional model override (best-effort). Blank uses the provider default.",
-            "modelDefault": "default",
-            "modelCustom": "Custom…",
-            "backToModelList": "← Back to model list",
-            "copies": "Copies",
-            "copiesTitle": "How many parallel copies of this agent to run. Blank = 1.",
-            "removeAgent": "Remove agent",
-            "addAgent": "+ Add agent",
-            "save": "Save",
-            "saving": "Saving…",
-            "removeBinding": "Remove binding",
-            "removeBindingTitle": "Clear this kind binding",
-            "removeBindingDisabledTitle": "Nothing to remove — this kind is unconfigured"
         },
         "panel": {
             "outOfSyncBadge": "Out of sync",
@@ -893,12 +801,6 @@
                 "depsFailed_one": "{{count}} upstream failed",
                 "depsFailed_other": "{{count}} upstream failed"
             },
-            "gate": {
-                "holding_one": "holding {{count}} step",
-                "holding_other": "holding {{count}} steps",
-                "deadline": "due {{time}} · then {{onTimeout}}",
-                "needsYou": "Needs you"
-            },
             "time": {
                 "now": "just now",
                 "minutes_one": "{{count}}m ago",
@@ -911,7 +813,6 @@
             "empty": "No tasks yet",
             "waitsOn_one": "waits on {{count}}",
             "waitsOn_other": "waits on {{count}}",
-            "blocked": "blocked",
             "missingDeps_one": "{{count}} unknown dep",
             "missingDeps_other": "{{count}} unknown deps",
             "legend": {
@@ -1049,16 +950,12 @@
         },
         "blueprint": {
             "schedPrediction": "Prediction",
-            "gateActsViaCoordinatorHint": "The coordinator claims and releases this gate — ask it in the coordinator chat.",
-            "gateFallback": "gate",
             "readonlyBadge": "read-only",
             "schedObservedAt": "as of {{time}}",
             "schedNoNodes": "No routable nodes.",
             "schedQuotaButton": "Quota",
             "schedQuotaButtonTitle": "Per-machine plan quota at a glance",
             "schedNoWinner": "no eligible slot",
-            "leaseExpired": "lease expired",
-            "gateActsViaCoordinator": "Coordinator-managed",
             "schedNext": "Next up",
             "schedWaiting": "Ready",
             "schedFull": "At capacity",
@@ -1076,21 +973,6 @@
             "schedUnpinnedTitle": "Hypothetical dispatch with no target pin — tasks pinned to a node show their own forecast on their cards",
             "schedPointInTime": "Point-in-time prediction, not a settled assignment: slot capacity can go stale as soon as a slot is claimed or released",
             "schedulingShort": "Scheduling",
-            "gate": {
-                "release": "Release",
-                "abandon": "Abandon",
-                "extend24h": "Extend 24h",
-                "outcomePassed": "Passed",
-                "outcomeFailed": "Failed",
-                "evidencePlaceholder": "Evidence (optional)",
-                "reasonPlaceholder": "Reason for abandoning this gate",
-                "abandonReasonRequired": "A reason is required to abandon a gate.",
-                "submitRelease": "Submit release",
-                "submitAbandon": "Submit abandon",
-                "extendConfirmTitle": "Extend \"{{ref}}\" by 24 hours?",
-                "expiredBadge": "Expired · {{age}} ago",
-                "commandUnavailable": "No daemon connection to send this command."
-            },
             "list": {
                 "barActive": "Active {{count}}",
                 "barBlocked": "Blocked {{count}}",
@@ -1111,7 +993,6 @@
                 "loadMore_one": "Show {{count}} more",
                 "loadMore_other": "Show {{count}} more",
                 "emptyActive": "Nothing running",
-                "blockedByGate": "blocked by: {{ref}}, {{age}}",
                 "waitingOn": "waiting on:",
                 "waitingOnMore": "+{{count}} more",
                 "blockedByDeadDependency": "blocked by failed/cancelled dependency:",
@@ -1128,7 +1009,6 @@
                 "emptyActive": "Nothing running",
                 "showFinished": "Show finished lanes",
                 "layoutFailed": "Graph layout failed: {{error}}",
-                "laneGraph": "Graph {{id}}",
                 "laneAdhoc": "Independent tasks",
                 "laneCollapse": "Collapse",
                 "laneExpand": "Expand",
@@ -1138,8 +1018,6 @@
                 "foldNode_other": "{{count}} completed",
                 "countRunning_one": "{{count}} running",
                 "countRunning_other": "{{count}} running",
-                "countGates_one": "{{count}} gate waiting",
-                "countGates_other": "{{count}} gates waiting",
                 "countDead_one": "{{count}} stuck",
                 "countDead_other": "{{count}} stuck",
                 "countWaiting_one": "{{count}} waiting",
@@ -1151,21 +1029,15 @@
                 "timeRunning": "running {{age}}",
                 "timeFinished": "ended {{time}}",
                 "timeQueued": "queued {{age}}",
-                "deadlineIn": "due in {{age}}",
-                "deadlineOverdue": "overdue {{age}}",
                 "tooltipTask": "Task: {{id}}",
                 "tooltipMission": "Mission: {{id}}",
-                "tooltipGraph": "Graph: {{id}} · {{ref}}",
-                "tooltipGate": "Gate: {{id}}",
                 "tooltipStatus": "Status: {{status}}",
                 "deadDirect": "A dependency failed or was cancelled — this task will not start on its own.",
                 "deadTransitive": "Something upstream failed or was cancelled — this task will not start on its own.",
                 "legendDepends": "depends on",
-                "legendGate": "gate",
                 "legendRunning": "running",
                 "legendDead": "can never start",
                 "heldUntil": "until {{time}}",
-                "gateDetails": "Open gate details",
                 "tone": {
                     "pending": "pending",
                     "running": "running",
@@ -1175,14 +1047,6 @@
                     "dead": "stuck",
                     "plan": "planned",
                     "held": "held"
-                },
-                "gateTone": {
-                    "declared": "declared",
-                    "awaiting": "awaiting",
-                    "claimed": "claimed",
-                    "expired": "expired",
-                    "released": "released",
-                    "abandoned": "abandoned"
                 }
             }
         },
@@ -1250,8 +1114,6 @@
             "visibilityHint": "Hidden = keep the inbox quiet and mute their notifications; you interact through the coordinator session. Visible = show every spawned worker as its own conversation.",
             "visibilityHidden": "Hidden",
             "visibilityVisible": "Visible",
-            "magiTitle": "Cross-check reviewers",
-            "magiDescription": "MAGI (Multi-Agent Ground-truth Insight) runs a panel of AI agents that cross-check each other's work to surface the ground truth. Choose which agents handle each review type.",
             "coordinatorPromptTitle": "Coordinator prompt",
             "thisMeshHint": "Applies only to coordinator sessions for {{name}}. Leave empty to keep the daemon default.",
             "overrideLabel": "Override (replaces default)",
@@ -1435,11 +1297,6 @@
             "info": "This is what a coordinator session gets when Override is empty.",
             "launchScopeNote": "Mission, recent activity and operating notes are added at launch and are not shown here."
         },
-        "hermesMcp": {
-            "title": "Hermes MCP Config",
-            "description": "Hermes does not auto-import repo-local .mcp.json. Add this YAML under mcp_servers in Hermes config, then start a fresh Hermes session.",
-            "fallbackProvider": "Hermes CLI"
-        },
         "providerAutoApprove": {
             "partialInventoryChip_other": "{{count}} nodes pending",
             "partialInventoryChip_one": "{{count}} node pending",
@@ -1491,15 +1348,6 @@
             "saved": "Saved to .adhdev/mesh.json",
             "saveError": "Failed to save provider defaults."
         },
-        "graphs": {
-            "shown_one": "{{count}} graph shown",
-            "shown_other": "{{count}} graphs shown",
-            "loadMore_one": "Load {{count}} more graph",
-            "loadMore_other": "Load {{count}} more graphs",
-            "serverLimitHidden_one": "{{count}} older graph hidden · maximum 100",
-            "serverLimitHidden_other": "{{count}} older graphs hidden · maximum 100",
-            "serverLimitReached": "The daemon returns at most 100 graphs."
-        },
         "status": {
             "healthErrorChip": "Error",
             "offlineMachinesTitle": "Not reporting: {{machines}}",
@@ -1548,7 +1396,6 @@
             "tasksCount_one": "{{count}} task",
             "sessionCount_other": "{{count}} sessions",
             "sessionCount_one": "{{count}} session",
-            "leaseExpired": "lease expired",
             "providerUnknown": "provider unknown",
             "truncated": "(truncated)",
             "missionCard": "Missions",
@@ -1595,10 +1442,6 @@
             "detailKickerLedger": "Ledger entry",
             "detailKickerQueue": "Queue task",
             "detailKickerSession": "Session",
-            "detailKickerGate": "Gate",
-            "detailLabelGraph": "Graph",
-            "detailLabelRef": "Step",
-            "detailLabelOutcome": "Outcome",
             "detailLabelMissionId": "Mission id",
             "detailLabelCreated": "Created",
             "detailLabelUpdated": "Updated",
@@ -1641,8 +1484,6 @@
             "routingSkippedMore": "+{{count}} more",
             "pausedMissions": "Paused missions",
             "ledgerAllTime": "all-time totals",
-            "detailLabelGateAfter": "After",
-            "detailLabelGateUnlocks": "Unlocks",
             "sessionTasksHeading": "Tasks in this session",
             "showOnCanvas": "Show on canvas"
         }
@@ -1781,8 +1622,6 @@
         "startingFresh": "Starting fresh…",
         "startIde": "Start IDE",
         "startingIde": "Starting IDE…",
-        "startAcpSession": "Start ACP session",
-        "startingAcpSession": "Starting ACP session…",
         "recoverHostedRuntime": "Recover hosted runtime",
         "hostedRuntimeRecoveryDescription": "Fallback recovery for hosted runtimes after interruptions. For normal continuity, open saved history instead.",
         "openSavedHistory": "Open saved history",
@@ -1882,7 +1721,7 @@
             "installing": "Installing…",
             "done": "Done",
             "installCount": "Install {{count}}",
-            "intro": "Pick the providers you want to use. Defaults to the four officially supported CLI providers; you can install IDE, ACP, or extension providers from the tabs below or later from Machines → Providers.",
+            "intro": "Pick the providers you want to use. Defaults to the three officially supported CLI providers; you can install IDE or extension providers from the tabs below or later from Machines → Providers.",
             "loadingRegistry": "Loading registry…",
             "loadError": "Failed to load registry: {{error}}",
             "noProviders": "No providers in this category.",
@@ -1934,9 +1773,9 @@
                     "title": "Multi-IDE support",
                     "desc": "Monitor VS Code, Cursor, Windsurf, and extension-based agents in one place."
                 },
-                "cliAcp": {
-                    "title": "CLI and ACP coverage",
-                    "desc": "Track standalone CLI agents and ACP-backed workflows alongside IDE sessions."
+                "cli": {
+                    "title": "CLI coverage",
+                    "desc": "Track standalone CLI agents alongside IDE sessions."
                 }
             },
             "extras": {
@@ -3331,7 +3170,6 @@
             "onMachine": "on {{machine}}",
             "sectionIDEs": "IDEs",
             "sectionCLIs": "CLIs",
-            "sectionACPAgents": "ACP Agents",
             "cpu": "CPU",
             "mem": "MEM",
             "loading": "Loading your machines…",
@@ -3510,7 +3348,7 @@
             "stopFailed": "Couldn't stop",
             "restartInitiated": "{{name}} restart initiated",
             "restartFailed": "Couldn't restart",
-            "selectProviderFirst": "Select a CLI or ACP provider first",
+            "selectProviderFirst": "Select a CLI provider first",
             "selectProvider": "Select a provider",
             "workspaceRemoved": "Workspace removed",
             "workspaceLabelUpdated": "Workspace name updated",
@@ -3879,8 +3717,8 @@
             "monoDesc": "Real production repos nest submodules — exactly where naive auto-merge breaks. ADHDev handles them safely: it makes sure submodule changes are published and pointed at correctly before it touches main. This project is itself a repo with two submodules, merged this way every day.",
             "crossHighlight": "Second opinion",
             "crossTitle": "Consensus over a single opinion",
-            "crossSubtitle": "MAGI — Multi-Agent Ground-truth Insight",
-            "crossDesc": "Ask the same read-only question to several machines and models at once, then see where they agree and disagree (MAGI) — more trustworthy than one agent's answer.",
+            "crossSubtitle": "One question, several independent agents",
+            "crossDesc": "Have the coordinator ask the same read-only question to several machines and models at once, then compare where they agree and disagree — more trustworthy than one agent's answer.",
             "tryMesh": "Try Repo Mesh →",
             "seePlans": "See plans",
             "availableOn": "Connect a machine and open the <strong>Repo Mesh</strong> page to get started.",
@@ -3927,7 +3765,7 @@
             "rowCrossCheck": "Cross-check the answer",
             "rowCrossCheckLocalCli": "One agent's take, no second opinion",
             "rowCrossCheckDesktop": "Parallel work, single verdict",
-            "rowCrossCheckAdhdev": "MAGI fans the same read-only question to independent machine × provider agents and surfaces where they diverge",
+            "rowCrossCheckAdhdev": "The coordinator sends the same read-only question to agents on different machines and providers and compares where they diverge",
             "footnote": "For a single machine, a single branch, a one-shot task — a local CLI with subagents is lighter and works great, and a native desktop orchestrator is a nicer place to sit. Repo Mesh earns its keep when work fans out across machines and branches, needs to survive restarts, and should land on main automatically — controlled from wherever you are."
         },
         "what": {
@@ -3935,7 +3773,7 @@
             "sectionSubtitle": "Vendor-neutral by design. Run Claude Code on the Mac, Codex on the Windows GPU box, Cursor CLI for review passes — in the same mesh, under the same policies. Switch vendors without switching platforms.",
             "cliHighlight": "CLI agents",
             "cliTitle": "Drive any terminal agent from the web",
-            "cliDesc": "Claude Code, Codex CLI, Cursor CLI, Antigravity CLI, Grok, Hermes, Kimi, and OpenCode — attached on your machine through a PTY adapter with proper resume and reconnect, driven from your browser. Send prompts and provide visual context instantly (paste, drag & drop, or upload multiple images at once, up to 5 images / 10MB each). Aider, Goose, and other ACP agents connect over stdio.",
+            "cliDesc": "Claude Code, Codex CLI, Cursor CLI, Antigravity CLI, Grok, Kimi, and OpenCode — attached on your machine through a PTY adapter with proper resume and reconnect, driven from your browser. Send prompts and provide visual context instantly (paste, drag & drop, or upload multiple images at once, up to 5 images / 10MB each).",
             "uiHighlight": "One UI",
             "uiTitle": "Same dashboard, any device",
             "uiDesc": "Cloud-hosted at adhf.dev — drive every agent from a laptop or phone, whether you're at your desk or away from it.",
@@ -3954,7 +3792,7 @@
         },
         "agents": {
             "sectionTitle": "Supported agents",
-            "sectionSubtitle": "{{ides}} built-in IDE integrations, {{clis}} built-in CLI agents, {{extensions}} IDE-resident extension agents, and {{acp}}+ ACP (stdio MCP) agents. Provider scripts live in <code>adhdev-providers/</code> — add your own under <code>~/.adhdev/providers/</code>.",
+            "sectionSubtitle": "{{ides}} built-in IDE integrations, {{clis}} built-in CLI agents, and {{extensions}} IDE-resident extension agents. Provider scripts live in <code>adhdev-providers/</code> — add your own under <code>~/.adhdev/providers/</code>.",
             "tierTested": "Tested",
             "tierTestedDesc": "validated against a real app + version",
             "tierCommunity": "Community",
@@ -3964,8 +3802,7 @@
             "groupCli": "CLI agents",
             "hintCli": "Driven through a PTY adapter with resume and reconnect.",
             "groupExtensions": "In-IDE extension agents",
-            "hintExtensions": "CDP webview attachment for agents that live inside another IDE.",
-            "acpFootnote": "Plus {{count}}+ ACP agents over stdio (Agent Client Protocol): Codex, Claude Agent, Goose, Cline, OpenHands, and more."
+            "hintExtensions": "CDP webview attachment for agents that live inside another IDE."
         },
         "pricing": {
             "sectionTitle": "Simple pricing as your agents grow",
@@ -3981,7 +3818,7 @@
                     "features": {
                         "machine": "One machine, paired in a single command",
                         "p2p": "P2P chat, commands, screenshots, remote input",
-                        "providers": "Every provider — CLI, IDE, and ACP agents",
+                        "providers": "Every provider — CLI and IDE agents",
                         "push": "Push notifications for approvals & completions",
                         "share": "One shared session link"
                     }
@@ -4034,7 +3871,7 @@
                 },
                 "step3": {
                     "title": "Drive your agents",
-                    "desc": "Launch Claude Code, Codex CLI, Cursor CLI, Antigravity CLI, Hermes, Kimi, and other agents from the dashboard. Read chat, send prompts, provide visual context (paste, drag & drop, or upload multiple images at once), approve actions, and switch sessions."
+                    "desc": "Launch Claude Code, Codex CLI, Cursor CLI, Antigravity CLI, Kimi, and other agents from the dashboard. Read chat, send prompts, provide visual context (paste, drag & drop, or upload multiple images at once), approve actions, and switch sessions."
                 }
             }
         },

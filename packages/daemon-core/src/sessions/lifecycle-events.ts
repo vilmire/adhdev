@@ -25,7 +25,7 @@ import type { TurnBusEvent } from '../mesh/turn-ledger/types.js';
 
 /** Which code path put a session into the registry. */
 export type RegisterOrigin =
-    | 'launch'     // fresh CLI/ACP spawn (cli-manager launch path)
+    | 'launch'     // fresh CLI spawn (cli-manager launch path)
     | 'restore'    // re-attach to a hosted runtime that survived a daemon restart (attachExisting)
     | 'attach'     // CDP attach of an IDE page and its enabled extensions (cdp/setup.ts)
     | 'discover'   // agent-stream poller found a newly enabled extension (agent-stream/poller.ts)
@@ -39,7 +39,6 @@ export type StatusCause =
     | 'auto_approve_mask'  // status-transition autoApproveActive / autoApproveHoldIdle
     | 'question_picker'    // status-transition question picker -> waiting_choice
     | 'ide_poll'           // ide-provider-instance / extension-provider-instance poll
-    | 'acp_update'         // acp-provider-instance session update
     | 'launch'             // initial status of a freshly launched session
     | 'restore';           // initial status of a session re-attached after a daemon restart
 

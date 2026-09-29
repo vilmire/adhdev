@@ -7,8 +7,8 @@
  *
  *  - a generating task renders inside the Running section with its live label
  *  - terminal queue rows are NOT in the default view (Running+Blocked only)
- *  - a blocking gate renders as a Blocked row
- *  - the plan affordance appears only for rows whose graph has edges
+ *  - a task behind a failed dependency renders as a Blocked row
+ *  - the plan affordance appears only for rows with dependency edges
  *
  * MeshMiniDag is stubbed at the module seam (same convention as the
  *  MeshGraphView stub in mesh-observability-surface.test.ts): @xyflow/react
@@ -41,10 +41,8 @@ function renderList(over: Partial<React.ComponentProps<typeof MeshBlueprintList>
         <MeshBlueprintList
             tasks={[]}
             status={{ meshId: 'mesh-1', meshName: 'Mesh', repoIdentity: 'repo', refreshedAt: '2026-09-16T10:00:00Z', nodes: [] } as any}
-            graphs={[]}
             meshTheme={meshTheme}
             onTaskOpen={() => { }}
-            onGateOpen={() => { }}
             {...over}
         />,
     )
@@ -77,42 +75,25 @@ describe('MeshBlueprintList — default view', () => {
         expect(html).toContain('Recent 1')
     })
 
-    it('renders a blocking gate as a Blocked row', () => {
+    it('renders a task behind a failed dependency as a Blocked row', () => {
         const html = renderList({
-            graphs: [{
-                graphId: 'g1', status: 'waiting_gate', edges: [], createdAt: '2026-09-16T09:00:00Z',
-                nodes: [{ nodeId: 'review_land', ref: 'review_land', kind: 'coordinator_gate', state: 'awaiting_coordinator', materializationVersion: 1 }],
-                gates: [{ gateId: 'g', nodeId: 'review_land', state: 'awaiting_coordinator', action: 'approval', onTimeout: 'hold', leaseGeneration: 0, instructions: 'Review and land the branch' }],
-            } as any],
+            tasks: [
+                task({ id: 't-root', status: 'failed', message: 'root work row' }),
+                task({ id: 't-held', status: 'pending', dependsOn: ['t-root'], dependencyFailures: [{ taskId: 't-root', status: 'failed' }], message: 'held work row' }),
+            ],
         })
         expect(html).toContain('Blocked')
-        expect(html).toContain('review_land')
-        expect(html).toContain('Needs you')
+        expect(html).toContain('held work row')
     })
 
-    it('offers the plan disclosure only when the graph HAS edges', () => {
-        const graphTask = task({ id: 't1', status: 'assigned', message: 'graph member row' })
+    it('offers the plan disclosure only when the task has dependency edges', () => {
         const withEdges = renderList({
-            tasks: [graphTask],
-            graphs: [{
-                graphId: 'g-edges', status: 'running', createdAt: '2026-09-16T09:00:00Z',
-                nodes: [
-                    { nodeId: 'n1', ref: 'n1', kind: 'worker_task', state: 'materialized', taskId: 't1', materializationVersion: 1 },
-                    { nodeId: 'n2', ref: 'n2', kind: 'worker_task', state: 'declared', materializationVersion: 1 },
-                ],
-                gates: [],
-                edges: [{ from: 'n1', to: 'n2', active: true }],
-            } as any],
+            tasks: [
+                task({ id: 't1', status: 'assigned', message: 'chain head row' }),
+                task({ id: 't2', status: 'pending', dependsOn: ['t1'], message: 'chain tail row' }),
+            ],
         })
-        const withoutEdges = renderList({
-            tasks: [graphTask],
-            graphs: [{
-                graphId: 'g-bare', status: 'running', createdAt: '2026-09-16T09:00:00Z',
-                nodes: [{ nodeId: 'n1', ref: 'n1', kind: 'worker_task', state: 'materialized', taskId: 't1', materializationVersion: 1 }],
-                gates: [],
-                edges: [],
-            } as any],
-        })
+        const withoutEdges = renderList({ tasks: [task({ id: 't1', status: 'assigned', message: 'loose row' })] })
         expect(withEdges).toContain('aria-expanded')
         expect(withoutEdges).not.toContain('aria-expanded')
     })

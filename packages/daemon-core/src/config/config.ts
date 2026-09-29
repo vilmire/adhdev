@@ -124,7 +124,7 @@ export interface ADHDevConfig {
  // Daemon: which IDEs to connect (empty = all)
     enabledIdes: string[];
 
- /** Saved workspaces for IDE/CLI/ACP launch (daemon-local) */
+ /** Saved workspaces for IDE/CLI launch (daemon-local) */
     workspaces?: WorkspaceEntry[];
  /** Default workspace id (from workspaces[]) — never used implicitly for launch */
     defaultWorkspaceId?: string | null;

@@ -28,7 +28,6 @@ const EXPECTED_CLASSES: Record<string, string> = {
     resolve_action: 'session_coordinator',
     set_mode: 'session_coordinator',
     change_model: 'session_coordinator',
-    set_thought_level: 'session_coordinator',
     invoke_provider_script: 'session_coordinator',
     cancel_queued_chat: 'session_coordinator',
     interactive_prompt_response: 'session_coordinator',

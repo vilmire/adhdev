@@ -6,8 +6,8 @@
  * localStorage.adhdev_onboarding_done is unset. The user can also dismiss
  * to come back later via Machines > Providers > Add provider.
  *
- * Default selection: the 4 officially supported CLI providers — Claude Code,
- * Codex, Antigravity, Hermes. Everything else stays unchecked.
+ * Default selection: the 3 officially supported CLI providers — Claude Code,
+ * Codex, Antigravity. Everything else stays unchecked.
  *
  * Install uses the daemon's install_provider_manifest command (POSTed
  * through the localhost HTTP API, same path /api/v1/providers/install
@@ -18,7 +18,7 @@ import { useTranslation } from 'react-i18next'
 import { AlertBanner, Button, Dialog } from '@adhdev/web-core'
 import { ProviderLogo } from '@adhdev/web-core'
 
-const DEFAULTS = ['claude-cli', 'codex-cli', 'antigravity-cli', 'hermes-cli']
+const DEFAULTS = ['claude-cli', 'codex-cli', 'antigravity-cli']
 
 interface RegistryProvider {
     type: string
@@ -40,21 +40,19 @@ interface StandaloneOnboardingProps {
 
 const STORAGE_KEY = 'adhdev_onboarding_done'
 
-type CategoryFilter = 'all' | 'cli' | 'ide' | 'extension' | 'acp'
+type CategoryFilter = 'all' | 'cli' | 'ide' | 'extension'
 
 const CATEGORY_TABS: { key: CategoryFilter; label: string }[] = [
     { key: 'all', label: 'All' },
     { key: 'cli', label: 'CLI' },
     { key: 'ide', label: 'IDE' },
     { key: 'extension', label: 'Extension' },
-    { key: 'acp', label: 'ACP' },
 ]
 
 const CATEGORY_GROUP_LABEL: Record<string, string> = {
     cli: 'CLI providers',
     ide: 'IDE providers',
     extension: 'Editor extensions',
-    acp: 'ACP providers',
 }
 
 export default function StandaloneOnboarding({ onDone }: StandaloneOnboardingProps) {
@@ -68,7 +66,7 @@ export default function StandaloneOnboarding({ onDone }: StandaloneOnboardingPro
     const [filter, setFilter] = useState<CategoryFilter>('all')
 
     // Load the full registry catalog (all categories). Defaults stay CLI-only
-    // (claude/codex/antigravity/hermes); IDE / ACP / extension entries are
+    // (claude/codex/antigravity); IDE / extension entries are
     // off by default and the user opts in.
     useEffect(() => {
         let cancelled = false
@@ -100,7 +98,7 @@ export default function StandaloneOnboarding({ onDone }: StandaloneOnboardingPro
 
     // Filtered + grouped view of the catalog.
     const visible = providers.filter(p => filter === 'all' || p.category === filter)
-    const groups = (['cli', 'ide', 'extension', 'acp'] as const)
+    const groups = (['cli', 'ide', 'extension'] as const)
         .map(cat => ({ category: cat, items: visible.filter(p => p.category === cat) }))
         .filter(g => g.items.length > 0)
 

@@ -91,7 +91,7 @@ describe('runMeshInit', () => {
   })
 
   it('dry-run echoes the currently-saved config per domain (current-vs-suggested diff source)', async () => {
-    // Isolate machine-local config so the magiKindPanels echo is deterministic (not the real user's).
+    // Isolate machine-local config so the echo is deterministic (not the real user's).
     const prevConfigDir = process.env.ADHDEV_CONFIG_DIR
     process.env.ADHDEV_CONFIG_DIR = await mkdtemp(join(tmpdir(), 'mesh-init-echo-cfg-'))
     try {
@@ -103,7 +103,7 @@ describe('runMeshInit', () => {
       expect(fresh.currentConfig.changeImpact).toBeUndefined()
       expect(fresh.currentConfig.sourceTypes.refine).toBe('unavailable')
       expect(fresh.currentConfig.sourceTypes.changeImpact).toBe('unavailable')
-      expect(fresh.currentConfig.magiKindPanels).toEqual({})
+      expect(fresh.currentConfig).not.toHaveProperty('magiKindPanels')
 
       // Once a refine config is on disk, the echo reflects the saved value.
       const existing = { version: 1, validation: { required: true, commands: [{ command: 'npm', args: ['run', 'lint'] }] } }

@@ -2,7 +2,7 @@
  * Unified recent activity — launcher-facing "pick up where you launched".
  *
  * Unlike live session state, this is launch oriented:
- * - one normalized row shape for IDE / CLI / ACP
+ * - one normalized row shape for IDE / CLI
  * - deduped by provider session when available, else by kind + providerType + workspace
  * - used only for quick-launch shortcuts
  */

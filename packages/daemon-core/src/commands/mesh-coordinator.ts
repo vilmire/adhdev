@@ -1,9 +1,8 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import * as os from 'node:os'
 import { DEFAULT_SESSION_HOST_COLS, DEFAULT_SESSION_HOST_ROWS } from '@adhdev/session-host-core'
-import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join } from 'node:path'
 import { LOG } from '../logging/logger.js'
-import { shortHash } from '../system/hash.js'
 import { IDENTITY } from '../track-identity.js'
 import { inspectEmbeddedPath, type EmbeddedPathHealth, type EmbeddedPathState } from '../config/embedded-path-health.js'
 import type { ProviderModule } from '../providers/contracts.js';
@@ -64,61 +63,6 @@ const DEFAULT_SERVER_NAME = 'adhdev-mesh'
 // launches the STABLE binary, which then connects to the stable daemon's IPC —
 // so preview coordinators either failed to start or drove the wrong daemon.
 const DEFAULT_ADHDEV_MCP_COMMAND = IDENTITY.binaryName
-const HERMES_CLI_TYPE = 'hermes-cli'
-const HERMES_MCP_CONFIG_PATH = '~/.hermes/config.yaml'
-
-function isHermesProvider(provider: ProviderModule | null | undefined, cliType?: string): boolean {
-  const type = cliType?.trim() || provider?.type?.trim() || ''
-  return type === HERMES_CLI_TYPE
-}
-
-function resolveHermesMeshCoordinatorSetup(options: ResolveMeshCoordinatorSetupOptions): MeshCoordinatorSetup {
-  const mcpServer = resolveAdhdevMcpServerLaunch({
-    meshId: options.meshId,
-    adhdevMcpCommand: options.adhdevMcpCommand,
-    adhdevMcpEntryPath: options.adhdevMcpEntryPath,
-    nodeExecutable: options.nodeExecutable,
-    adhdevMcpTransport: options.adhdevMcpTransport,
-    adhdevMcpPort: options.adhdevMcpPort,
-  })
-  if (!mcpServer) {
-    return {
-      kind: 'unsupported',
-      reason: 'Could not resolve the ADHDev MCP server entrypoint and a Node runtime with WebSocket support for daemon IPC mode',
-    }
-  }
-  const configPath = join(resolveHermesCoordinatorHome(options.meshId, options.workspace), 'config.yaml')
-  if (!configPath.trim()) {
-    return createHermesManualMeshCoordinatorSetup(options.meshId, options.workspace)
-  }
-  return {
-    kind: 'auto_import',
-    serverName: DEFAULT_SERVER_NAME,
-    configPath,
-    configFormat: 'hermes_config_yaml',
-    mcpServer,
-  }
-}
-
-export function createHermesManualMeshCoordinatorSetup(meshId: string, workspace: string): MeshCoordinatorSetup {
-  return {
-    kind: 'manual',
-    serverName: DEFAULT_SERVER_NAME,
-    configFormat: 'hermes_config_yaml',
-    configPathCommand: HERMES_MCP_CONFIG_PATH,
-    requiresRestart: true,
-    instructions: 'Hermes CLI does not auto-import repo-local .mcp.json. Add this MCP server to Hermes config under mcp_servers, then start a fresh Hermes session.',
-    template: renderMeshCoordinatorTemplate(
-      'mcp_servers:\n  {{serverName}}:\n    command: {{adhdevMcpCommand}}\n    args:\n      - mcp\n      - --mode\n      - ipc\n      - --repo-mesh\n      - {{meshId}}\n    enabled: true\n',
-      {
-        meshId,
-        workspace,
-        serverName: DEFAULT_SERVER_NAME,
-        adhdevMcpCommand: DEFAULT_ADHDEV_MCP_COMMAND,
-      },
-    ),
-  }
-}
 
 export function resolveMeshCoordinatorSetup(options: ResolveMeshCoordinatorSetupOptions): MeshCoordinatorSetup {
   const { provider, meshId, workspace } = options
@@ -128,10 +72,6 @@ export function resolveMeshCoordinatorSetup(options: ResolveMeshCoordinatorSetup
       kind: 'unsupported',
       reason: config?.reason || 'Provider does not declare Repo Mesh coordinator support',
     }
-  }
-
-  if (isHermesProvider(provider, options.cliType)) {
-    return resolveHermesMeshCoordinatorSetup(options)
   }
 
   const mcpConfig = config.mcpConfig
@@ -242,12 +182,6 @@ function replaceLegacyCliCommandMcpArgs(command: string, args: string[]): string
   )
 }
 
-function resolveHermesCoordinatorHome(meshId: string, workspace: string): string {
-  const key = `${meshId || 'mesh'}\n${resolve(workspace || os.tmpdir())}`
-  const hash = shortHash(key)
-  return join(os.tmpdir(), `adhdev-hermes-mesh-coordinator-${hash}`)
-}
-
 function resolveMcpConfigPath(configPath: string, workspace: string): string {
   const trimmed = configPath.trim()
   if (trimmed === '~') return os.homedir()
@@ -349,7 +283,7 @@ export interface MeshCoordinatorMcpServerPathHealth {
 /**
  * Health of the absolute paths a coordinator MCP setup embeds into a config
  * file the provider CLI owns (`.mcp.json` / `.cursor/mcp.json` /
- * `opencode.json` / hermes `config.yaml` / — via `codex mcp add` —
+ * `opencode.json` / — via `codex mcp add` —
  * `~/.codex/config.toml`).
  *
  * Detection-only counterpart of the statusline fix

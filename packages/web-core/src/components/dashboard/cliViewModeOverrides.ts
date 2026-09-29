@@ -3,7 +3,7 @@ import type { Dispatch, SetStateAction } from 'react'
 import type { DaemonData } from '../../types'
 import { getConversationMachineId, getConversationProviderType } from './conversation-selectors'
 import type { ActiveConversation, CliConversationViewMode } from './types'
-import { getCliConversationViewMode, isAcpConv, isCliConv } from './types'
+import { getCliConversationViewMode, isCliConv } from './types'
 
 export type CliViewModeOverrideMap = Record<string, CliConversationViewMode>
 
@@ -43,7 +43,7 @@ export async function switchCliConversationViewModeOptimistically({
   sendDaemonCommand,
   setCliViewModeOverrides,
 }: SwitchCliConversationViewModeOptions): Promise<void> {
-  if (!conversation || !isCliConv(conversation) || isAcpConv(conversation)) return
+  if (!conversation || !isCliConv(conversation)) return
 
   const currentMode = getCliConversationViewMode(conversation)
   if (currentMode === mode) return

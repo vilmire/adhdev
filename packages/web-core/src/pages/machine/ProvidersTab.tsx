@@ -87,7 +87,7 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
     const [loading, setLoading] = useState(false)
     const [loadError, setLoadError] = useState<string | null>(null)
     const [savingKey, setSavingKey] = useState<string | null>(null)
-    const [filter, setFilter] = useState<'all' | 'acp' | 'cli' | 'ide' | 'extension'>('cli')
+    const [filter, setFilter] = useState<'all' | 'cli' | 'ide' | 'extension'>('cli')
     // Provider type whose install-options modal is open, or null. Set when a
     // provider is switched ON; nothing is persisted until it is confirmed.
     const [installOptionsFor, setInstallOptionsFor] = useState<string | null>(null)
@@ -516,7 +516,7 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
             <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex gap-1 items-center">
                     <span className="text-2xs text-text-muted font-semibold uppercase tracking-wider mr-2">{t('machine.providers.filter')}</span>
-                    {(['cli', 'ide', 'acp', 'extension', 'all'] as const).map(cat => (
+                    {(['cli', 'ide', 'extension', 'all'] as const).map(cat => (
                         <button
                             key={cat}
                             onClick={() => setFilter(cat)}

@@ -36,7 +36,7 @@ export default function ConversationMetaChips({
     const machineLabel = meshOnly ? null : getConversationMachineLabel(conversation)
     const showIdeChip = !meshOnly && (conversation.transport === 'cdp-page' || conversation.transport === 'cdp-webview')
     const showExtensionChip = !meshOnly && conversation.streamSource === 'agent-stream' && !!conversation.agentName
-    const showProviderChip = !meshOnly && !showExtensionChip && (conversation.transport === 'pty' || conversation.transport === 'acp')
+    const showProviderChip = !meshOnly && !showExtensionChip && conversation.transport === 'pty'
     const providerChipLabel = getConversationProviderLabel(conversation)
     const ideChipLabel = getConversationIdeChipLabel(conversation)
     const meshRole = getConversationMeshRole(conversation).role;

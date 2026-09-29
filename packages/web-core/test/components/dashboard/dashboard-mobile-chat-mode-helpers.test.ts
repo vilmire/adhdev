@@ -198,40 +198,6 @@ describe('dashboard mobile chat mode helpers', () => {
         expect(cards[0]).toMatchObject({ total: 1, generatingCount: 1 })
     })
 
-    it('uses live summary metadata for ACP fallback recent-launch subtitles', () => {
-        const machine = createMachine({ recentLaunches: [] })
-        const sessions = [
-            {
-                id: 'machine-1:acp:acp-1',
-                daemonId: 'machine-1',
-                type: 'claude-code',
-                transport: 'acp',
-                status: 'running',
-                cliName: 'Claude Code',
-                workspace: '/repo',
-                activeChat: { messages: [] },
-                summaryMetadata: {
-                    items: [
-                        { id: 'profile', label: 'Profile', value: 'Reasoning', order: 10 },
-                        { id: 'model', label: 'Model', value: 'Sonnet', order: 20 },
-                    ],
-                },
-            },
-        ] as DaemonData[]
-
-        expect(buildSelectedMachineRecentLaunches(machine, sessions)).toEqual([
-            {
-                id: 'acp:claude-code:/repo',
-                label: 'Claude Code',
-                kind: 'acp',
-                providerType: 'claude-code',
-                providerSessionId: undefined,
-                subtitle: 'Reasoning · Sonnet',
-                workspace: '/repo',
-            },
-        ])
-    })
-
     describe('groupMobileInboxItems bucketing', () => {
         it('places muted requiresAction items in attentionItems and no other bucket', () => {
             const mutedAttention = createItem('muted-attention', 100, {

@@ -8,11 +8,11 @@
 //   1. `turn_events` rows written inside the ledger txn — the audit trail and,
 //      for mesh scopes, the durable PUBLISH QUEUE (`publish_state='pending'`
 //      rows carrying a content-free `MeshTopicEntry` in `payload_json.entry`);
-//   2. `mesh_queue` / graph writes through a `TurnTxnHost` inside the SAME txn
-//      (`queue_status`, `graph_advance`);
+//   2. `mesh_queue` writes through a `TurnTxnHost` inside the SAME txn
+//      (`queue_status`, `task_terminal`);
 //   3. post-commit executors (`TurnLedgerPorts`) for everything that cannot be
 //      transactional: bus emit, dispatch cancel + worker-bind revoke, attempt
-//      ref release, redeliver, probe, and the graph's post-commit drain.
+//      ref release, redeliver, probe, and the task-terminal post-commit cleanup.
 //
 // Effect → store mapping (brief §4):
 //   commit              → `committed` row (UNIQUE per attempt+generation: a
@@ -26,8 +26,8 @@
 //   record              → notes on the evidence row (no extra row)
 //   release_attempt_ref → executor only
 //   queue_status        → host: 'pending' = reclaim requeue; terminal = carried
-//                         by graph_advance's step 3 (one runner call per commit)
-//   graph_advance       → host: runner steps 2–8 in-txn, drain post-commit
+//                         by task_terminal (one choke-point call per commit)
+//   task_terminal       → host: output version + row flip in-txn, cleanup post-commit
 //   bus                 → executor only
 //   probe / reevaluate  → executor (probe port) / ledger re-observe
 //
@@ -50,7 +50,7 @@ type NotifyEffect = Extract<TurnEffect, { kind: 'notify_coordinator' }>;
 type CancelDispatchEffect = Extract<TurnEffect, { kind: 'cancel_dispatch' }>;
 type RedeliverEffect = Extract<TurnEffect, { kind: 'redeliver' }>;
 type QueueStatusEffect = Extract<TurnEffect, { kind: 'queue_status' }>;
-type GraphAdvanceEffect = Extract<TurnEffect, { kind: 'graph_advance' }>;
+type TaskTerminalEffect = Extract<TurnEffect, { kind: 'task_terminal' }>;
 
 /** Local-only completion envelope a producer may attach (never published). */
 export interface TurnCompletionEnvelope {
@@ -69,12 +69,12 @@ export interface TurnCompletionEnvelope {
     notice?: Record<string, unknown>;
 }
 
-/** In-txn writes outside the turn tables (mesh_queue, graph). */
+/** In-txn writes outside the turn tables (mesh_queue, mesh_task_outputs). */
 export interface TurnTxnHost {
-    /** `queue_status: 'pending'` (reclaim requeue). Terminal statuses arrive via graphAdvance. */
+    /** `queue_status: 'pending'` (reclaim requeue). Terminal statuses arrive via taskTerminal. */
     requeue(e: QueueStatusEffect & { status: 'pending' }, ctx: TxnEffectContext): void;
-    /** Runner steps 2–8 (output version, row flip, graph advance). Returns whether the row transitioned. */
-    graphAdvance(e: GraphAdvanceEffect, ctx: TxnEffectContext): { transitioned: boolean };
+    /** The terminal choke point (output version, row flip). Returns whether the row transitioned. */
+    taskTerminal(e: TaskTerminalEffect, ctx: TxnEffectContext): { transitioned: boolean };
 }
 
 interface TxnEffectContext {
@@ -110,7 +110,7 @@ export interface TurnLedgerPorts {
     redeliver?(e: RedeliverEffect & { meshId: string | null; taskId: string | null; nodeId: string | null }): void | Promise<void>;
     /** Scheduler probe now (C-W4 probeDue). */
     probe?(e: { attemptId: string; sessionId: string; meshId: string | null; taskId: string | null }): void;
-    /** Graph post-commit: token expiry, mailbox discard, outbox drain. */
+    /** Task-terminal post-commit: token expiry, mailbox discard. */
     afterTaskTerminal?(meshId: string, taskId: string): void;
 }
 
@@ -300,8 +300,8 @@ export function applyHostEffects(host: TurnTxnHost | null, effects: readonly Tur
     for (const effect of effects) {
         if (effect.kind === 'queue_status' && effect.status === 'pending') {
             host.requeue(effect as QueueStatusEffect & { status: 'pending' }, ctx);
-        } else if (effect.kind === 'graph_advance') {
-            const { transitioned } = host.graphAdvance(effect, ctx);
+        } else if (effect.kind === 'task_terminal') {
+            const { transitioned } = host.taskTerminal(effect, ctx);
             if (transitioned) terminalTasks.push({ meshId: effect.meshId, taskId: effect.taskId });
         }
     }
@@ -414,7 +414,7 @@ export function runPostCommitEffects(ports: TurnLedgerPorts, effects: readonly T
         }
     }
     for (const task of ctx.terminalTasks) {
-        run('graph_advance', ports.afterTaskTerminal ? () => ports.afterTaskTerminal!(task.meshId, task.taskId) : undefined);
+        run('task_terminal', ports.afterTaskTerminal ? () => ports.afterTaskTerminal!(task.meshId, task.taskId) : undefined);
     }
     return counters;
 }

@@ -5,7 +5,7 @@ import type { LaunchResult, MeshLaunchOption } from '../../hooks/useDashboardCom
 import type { BrowseDirectoryResult } from '../machine/workspaceBrowse'
 import { isLaunchableMachineProvider } from '../../utils/provider-activation'
 
-export type LaunchKind = 'ide' | 'cli' | 'acp'
+export type LaunchKind = 'ide' | 'cli'
 export type WorkspaceLaunchMode = 'workspace' | 'mesh'
 
 export function isLaunchKindAvailable(machine: DaemonData | undefined, kind: LaunchKind): boolean {
@@ -18,7 +18,6 @@ export function getDefaultLaunchKind(machine: DaemonData | undefined) {
     if (!machine) return null
     if (isLaunchKindAvailable(machine, 'cli')) return 'cli' as const
     if (isLaunchKindAvailable(machine, 'ide')) return 'ide' as const
-    if (isLaunchKindAvailable(machine, 'acp')) return 'acp' as const
     return null
 }
 
@@ -60,7 +59,7 @@ export function launchValueSources(
 }
 
 export function isRememberedLaunchKind(value: string | undefined): value is LaunchKind {
-    return value === 'cli' || value === 'ide' || value === 'acp'
+    return value === 'cli' || value === 'ide'
 }
 
 export function normalizePath(path: string | null | undefined) {
@@ -76,7 +75,7 @@ export interface SavedSessionOption {
     providerSessionId: string
     providerType: string
     providerName: string
-    kind: 'cli' | 'acp'
+    kind: 'cli'
     title: string
     workspace?: string | null
     summaryMetadata?: DaemonData['summaryMetadata']
@@ -96,7 +95,7 @@ export interface DashboardNewSessionDialogProps {
     onLaunchIde: (machineId: string, ideType: string, opts?: { workspacePath?: string | null }) => Promise<{ ok: boolean; error?: string; code?: string }>
     onLaunchProvider: (
         machineId: string,
-        kind: 'cli' | 'acp',
+        kind: 'cli',
         providerType: string,
         opts?: {
             workspaceId?: string | null

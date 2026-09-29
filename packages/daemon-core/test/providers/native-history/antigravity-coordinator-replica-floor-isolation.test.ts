@@ -1,8 +1,8 @@
 /**
- * Regression: antigravity mesh coordinator + MAGI replica birth-floor isolation
+ * Regression: antigravity mesh coordinator + co-located worker birth-floor isolation
  * (D3 — the FINAL root of "coordinator chat shows only the user message").
  *
- * The mesh coordinator and its MAGI replicas run as session-host HOSTED RUNTIMES
+ * The mesh coordinator and its co-located workers run as session-host HOSTED RUNTIMES
  * sharing ONE workspace, each attached with attachExisting=true. The attach used
  * to collapse the session-registry spawnedAtMs to 0 for ALL of them. With
  * spawnedAtMs=0, resolveAntigravityPath takes the FLOOR-LESS newest-by-mtime
@@ -144,7 +144,7 @@ function turn(prompt: string, answer: string) {
 
 const WORKSPACE = '/workspaces/magi';
 
-describe('antigravity coordinator + MAGI replica birth-floor isolation (D3)', () => {
+describe('antigravity coordinator + co-located worker birth-floor isolation (D3)', () => {
   beforeEach(async () => {
     tmpDir = fs.mkdtempSync(path.join(process.cwd(), 'tmp-agy-coord-replica-'));
     vi.resetModules();

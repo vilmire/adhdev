@@ -21,7 +21,7 @@ import { extractJsonObjectFromSummary } from '../../src/shared/worker-result-par
 /** A worker's trailing report block, as the report format asks for it. */
 const WORKER_REPORT = {
     status: 'completed',
-    changedFiles: ['src/mesh/mesh-graph-workspace-saga.ts'],
+    changedFiles: ['src/mesh/mesh-task-terminal.ts'],
     gitStatus: 'committed',
     validationResults: 'typecheck clean; 10 tests passed',
     errors: [],

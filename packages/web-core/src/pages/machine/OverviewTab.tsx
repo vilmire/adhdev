@@ -10,7 +10,7 @@ import { formatUptime, formatBytes, PLATFORM_LABELS } from '../../utils/daemon-u
 import ProgressBar from '../../components/ProgressBar'
 import StatCard from '../../components/StatCard'
 import Card from '../../components/Card'
-import { IconClock, IconMonitor, IconTerminal, IconBot } from '../../components/Icons'
+import { IconClock, IconMonitor, IconTerminal } from '../../components/Icons'
 import {
     bindQuotaDisplayModel,
     createQuotaTextFormatter,
@@ -19,7 +19,7 @@ import {
     quotaProviderLabel,
     type QuotaChipHint,
 } from '../../utils/quota-format'
-import type { MachineData, IdeSessionEntry, CliSessionEntry, AcpSessionEntry } from './types'
+import type { MachineData, IdeSessionEntry, CliSessionEntry } from './types'
 
 /** Badge tone → the page's existing colour vocabulary. */
 const QUOTA_TONE_CLASS: Record<string, string> = {
@@ -119,7 +119,6 @@ interface OverviewTabProps {
     machine: MachineData
     ideSessions: IdeSessionEntry[]
     cliSessions: CliSessionEntry[]
-    acpSessions: AcpSessionEntry[]
     daemonVersion?: string
     /** Hosted runtimes panel — mounted only once its disclosure opens. */
     renderHostedRuntimes?: () => ReactNode
@@ -163,7 +162,7 @@ function LazyDisclosure({ title, defaultOpen = false, testId, children }: {
 }
 
 export default function OverviewTab({
-    machine, ideSessions, cliSessions, acpSessions, daemonVersion,
+    machine, ideSessions, cliSessions, daemonVersion,
     renderHostedRuntimes, renderLogs, initialDiagnostics = null,
 }: OverviewTabProps) {
     const { t } = useTranslation('common')
@@ -183,7 +182,6 @@ export default function OverviewTab({
                 <StatCard icon={<IconClock size={16} />} label={t('machine.overview.uptime')} value={typeof machine.uptime === 'number' ? formatUptime(machine.uptime) : t('machine.overview.waiting')} />
                 <StatCard icon={<IconMonitor size={16} />} label="IDEs" value={`${ideSessions.length}`} />
                 <StatCard icon={<IconTerminal size={16} />} label="CLIs" value={`${cliSessions.length}`} />
-                <StatCard icon={<IconBot size={16} />} label="ACPs" value={`${acpSessions.length}`} />
             </div>
 
             {/* Resource Usage */}

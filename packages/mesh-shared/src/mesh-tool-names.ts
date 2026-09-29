@@ -22,14 +22,10 @@ export const CANONICAL_MESH_TOOL_NAMES = [
     'mesh_status',
     'mesh_route_preview',
     'mesh_list_nodes',
-    // GRAPH-ORCHESTRATION Phase F — batch before task, mirroring ALL_MESH_TOOLS.
+    // Batch before task, mirroring ALL_MESH_TOOLS.
     'mesh_enqueue_batch',
     'mesh_enqueue_task',
     'mesh_view_queue',
-    // GRAPH-ORCHESTRATION Phase E — the coordinator gate + graph view surface.
-    'mesh_graph_view',
-    'mesh_graph_gate',
-    'mesh_graph_node_patch',
     'mesh_queue_cancel',
     'mesh_queue_requeue',
     'mesh_send_task',
@@ -64,9 +60,6 @@ export const CANONICAL_MESH_TOOL_NAMES = [
     'mesh_mission_upsert',
     'mesh_mission_list',
     'mesh_review_inbox',
-    'mesh_magi_review',
-    'mesh_magi_collect',
-    'mesh_magi_kind_panel',
     'mesh_node_slots',
     'mesh_coordinator_prompt_append',
 ] as const;
@@ -87,29 +80,16 @@ export const CANONICAL_MESH_TOOL_COUNT = CANONICAL_MESH_TOOL_NAMES.length;
  * test asserts none of these names is advertised anywhere in the prompt.
  *
  * `args` is the discriminator to add; every other argument keeps its name.
- * `note` covers the one rename where an argument moved (the old
- * `mesh_graph_gate_claim({ extend_seconds })` extend-only mode).
+ * `note` carries any extra guidance when an argument moved in a rename.
  */
 export const RETIRED_MESH_TOOLS: Readonly<Record<string, {
     readonly tool: CanonicalMeshToolName;
     readonly args: Readonly<Record<string, string>>;
     readonly note?: string;
 }>> = {
-    mesh_graph_gate_claim: {
-        tool: 'mesh_graph_gate',
-        args: { action: 'claim' },
-        note: 'The extend-only form (claim with extend_seconds) is now action: "extend" with the same extend_seconds.',
-    },
-    mesh_graph_gate_release: { tool: 'mesh_graph_gate', args: { action: 'release' } },
-    mesh_graph_gate_abandon: { tool: 'mesh_graph_gate', args: { action: 'abandon' } },
-    // Never a published tool (it is the daemon command behind the extend verb),
-    // but an older gate-expiry notice told coordinators to call it by this name.
-    mesh_graph_gate_extend: { tool: 'mesh_graph_gate', args: { action: 'extend' } },
     mesh_node_slots_set: { tool: 'mesh_node_slots', args: { action: 'set' } },
     mesh_node_slots_list: { tool: 'mesh_node_slots', args: { action: 'list' } },
     mesh_node_slots_propose: { tool: 'mesh_node_slots', args: { action: 'propose' } },
-    mesh_magi_kind_panel_set: { tool: 'mesh_magi_kind_panel', args: { action: 'set' } },
-    mesh_magi_kind_panel_list: { tool: 'mesh_magi_kind_panel', args: { action: 'list' } },
     mesh_coordinator_prompt_append_get: { tool: 'mesh_coordinator_prompt_append', args: { action: 'get' } },
     mesh_coordinator_prompt_append_set: { tool: 'mesh_coordinator_prompt_append', args: { action: 'set' } },
     mesh_record_note: { tool: 'mesh_note', args: { action: 'record' } },
@@ -123,11 +103,26 @@ export const RETIRED_MESH_TOOLS: Readonly<Record<string, {
 };
 
 /**
- * The error text for a call to a retired tool name, or null when `name` is not
- * retired. One wording shared by every MCP mode so the redirect reads the same
- * wherever an old prompt calls it.
+ * Tool names removed outright (no merged replacement), mapped to the guidance a
+ * coordinator on an old prompt needs to do the same job with the remaining tools.
+ */
+export const REMOVED_MESH_TOOLS: Readonly<Record<string, string>> = {
+    mesh_magi_review: 'For a multi-perspective review, send the same question to 2-3 workers on different providers with mesh_send_task, wait for their report_completion, then synthesize the answers yourself.',
+    mesh_magi_collect: 'Worker answers arrive as report_completion events; synthesize them yourself.',
+    mesh_magi_kind_panel: 'There are no review panels any more; pick the workers per review with mesh_send_task.',
+    mesh_magi_kind_panel_set: 'There are no review panels any more; pick the workers per review with mesh_send_task.',
+    mesh_magi_kind_panel_list: 'There are no review panels any more; pick the workers per review with mesh_send_task.',
+};
+
+/**
+ * The error text for a call to a retired or removed tool name, or null when
+ * `name` is neither. One wording shared by every MCP mode so the redirect reads
+ * the same wherever an old prompt calls it.
  */
 export function retiredMeshToolError(name: string): string | null {
+    if (Object.prototype.hasOwnProperty.call(REMOVED_MESH_TOOLS, name)) {
+        return `Tool "${name}" was removed. ${REMOVED_MESH_TOOLS[name]}`;
+    }
     const entry = Object.prototype.hasOwnProperty.call(RETIRED_MESH_TOOLS, name) ? RETIRED_MESH_TOOLS[name] : undefined;
     if (!entry) return null;
     const discriminator = Object.entries(entry.args).map(([k, v]) => `${k}: "${v}"`).join(', ');

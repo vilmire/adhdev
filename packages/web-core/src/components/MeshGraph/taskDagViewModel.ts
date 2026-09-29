@@ -28,7 +28,7 @@ export interface TaskDagNode {
     missingDeps: string[]
     /** Unmet dependency ids — same predicate as the scheduler: dep status !== 'completed'. */
     waitingOn: string[]
-    /** True when the daemon stamped a system block (e.g. "dependency_failed:<id>"). */
+    /** True when a dependency failed or was cancelled (the task can never start on its own). */
     blocked: boolean
 }
 
@@ -51,7 +51,7 @@ export interface TaskDagStats {
     cancelled: number
     /** Tasks currently gated behind at least one unmet dependency. */
     waiting: number
-    /** Tasks carrying a blockedReason (dependency-failure block policy). */
+    /** Tasks blocked by a failed/cancelled dependency. */
     blocked: number
     /** Distinct missions represented in the task set. */
     missions: number
@@ -180,7 +180,7 @@ export function buildTaskDag(tasks: RepoMeshQueueTask[] | null | undefined): Tas
             })
             if (task.status === 'pending' && statusById.get(dep) !== 'completed') waitingOn.push(dep)
         }
-        const blocked = typeof task.blockedReason === 'string' && task.blockedReason.length > 0
+        const blocked = (task.dependencyFailures?.length ?? 0) > 0
         if (blocked) blockedCount += 1
         if (waitingOn.length > 0) waitingCount += 1
         if (typeof task.missionId === 'string' && task.missionId) missionIds.add(task.missionId)

@@ -60,7 +60,7 @@ import { MeshRuntimeStore } from './mesh-runtime-store.js';
 // ordering dependency the staged boot no longer has. Both are only called at
 // report time, so the worker-handoff-notes ↔ worker-report cycle is safe.
 import { storeHandoffNote } from './worker-handoff-notes.js';
-import { commitTaskTerminalAndAdvanceGraph } from './mesh-graph-transition-runner.js';
+import { commitTaskTerminal } from './mesh-task-terminal.js';
 import { isTaskReadonly } from './mesh-work-queue.js';
 import { meshRecord } from './mesh-record.js';
 import { getActiveTurnLedger } from './turn-ledger/active-ledger.js';
@@ -462,7 +462,7 @@ export function checkReportAgainstTaskMode(
  *      report is impossible if the report itself left no trace.
  *   3. handoff note — stored before the terminal flip, because the flip expires
  *      the token and can trigger downstream dispatch that WANTS this note.
- *   4. terminal — through the chokepoint, which fences and advances the graph.
+ *   4. terminal — through the chokepoint, which fences and flips the row.
  */
 export function acceptWorkerCompletionReport(
     credential: { token?: unknown; bind?: unknown },
@@ -672,12 +672,12 @@ export function acceptWorkerCompletionReportForIdentity(
 
     // (4) Terminal. 'blocked' is NOT a terminal outcome the ledger knows — it
     // maps to 'failed' with a reason, because a blocked task genuinely did not
-    // succeed and must not advance the graph as though it had. The blockers list
+    // succeed and must not unblock its dependents as though it had. The blockers list
     // carries the why, and the coordinator reads it from the envelope.
     if (fence !== 'ok') return { accepted: false, refusal: 'rejected_by_reducer', detail: fence };
-    let commit: ReturnType<typeof commitTaskTerminalAndAdvanceGraph>;
+    let commit: ReturnType<typeof commitTaskTerminal>;
     try {
-        commit = commitTaskTerminalAndAdvanceGraph({
+        commit = commitTaskTerminal({
             meshId: identity.meshId,
             taskId: identity.taskId,
             status: terminalStatus,
@@ -720,7 +720,7 @@ export function acceptWorkerCompletionReportForIdentity(
     // ledger reduces it (R17 commit after the idle edge; R17g record + await_end
     // while still generating). AFTER the queue commit above, so that commit's
     // output version (report envelope) is the one persisted; the ledger's own
-    // graph_advance then hits the replay fence. Best-effort: the report is
+    // task_terminal then hits the replay fence. Best-effort: the report is
     // already accepted, and without a ledger the idle end still commits.
     const ledger = getActiveTurnLedger();
     if (ledger) {

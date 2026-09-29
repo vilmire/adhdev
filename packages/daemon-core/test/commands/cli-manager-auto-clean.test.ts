@@ -13,19 +13,18 @@ describe('DaemonCliManager.scheduleAutoClean', () => {
   const make = () => {
     const removeInstance = vi.fn();
     const terminateByInstanceKey = vi.fn();
-    const flush = vi.fn(() => true);
     const deps = {
-      getInstanceManager: () => ({ getInstance: () => ({ flushMeshCompletionBeforeCleanup: flush }), removeInstance }),
+      getInstanceManager: () => ({ getInstance: () => ({}), removeInstance }),
       getSessionRegistry: () => ({ terminateByInstanceKey }),
     };
     const manager = Object.create(DaemonCliManager.prototype) as any;
     manager.deps = deps;
     manager.adapters = new Map();
-    return { manager, deps, removeInstance, terminateByInstanceKey, flush };
+    return { manager, deps, removeInstance, terminateByInstanceKey };
   };
 
-  it('reclaims the session fully after the grace window, flushing a pending mesh completion first', () => {
-    const { manager, deps, removeInstance, terminateByInstanceKey, flush } = make();
+  it('reclaims the session fully after the grace window', () => {
+    const { manager, deps, removeInstance, terminateByInstanceKey } = make();
     const adapter = { cliType: 'claude-cli' };
     manager.adapters.set('sess', adapter);
 
@@ -35,10 +34,8 @@ describe('DaemonCliManager.scheduleAutoClean', () => {
 
     vi.advanceTimersByTime(1);
     expect(manager.adapters.has('sess')).toBe(false);
-    expect(flush).toHaveBeenCalledTimes(1);
     expect(terminateByInstanceKey).toHaveBeenCalledWith('sess', 'auto_clean');
     expect(removeInstance).toHaveBeenCalledWith('sess');
-    expect(flush.mock.invocationCallOrder[0]).toBeLessThan(removeInstance.mock.invocationCallOrder[0]);
     // No onStatusChange poke any more: the session registry's own
     // `terminateByInstanceKey` emits the bus `terminated` event that both
     // hosts subscribe to (wiring-unification B4/B5 residue cleanup).

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { CANONICAL_MESH_TOOL_NAMES, CANONICAL_MESH_TOOL_COUNT, RETIRED_MESH_TOOLS, WORKER_TOOLS, renderCoordinatorWorkerSection } from '@adhdev/mesh-shared'
-import { buildCoordinatorSystemPrompt, buildMagiKindPanelsSection } from '../../src/mesh/coordinator-prompt.js'
+import { buildCoordinatorSystemPrompt } from '../../src/mesh/coordinator-prompt.js'
 
 describe('Repo Mesh coordinator prompt', () => {
   it('uses default policy for cloud inline meshes that omit policy/coordinator fields', () => {
@@ -28,7 +28,7 @@ describe('Repo Mesh coordinator prompt', () => {
     // rendered value to MESH_MAX_PARALLEL_TASKS_MAX (64). The cap is de-emphasized
     // now that real limits live per capability slot (node capability slots design, 2026-07-09).
     expect(prompt).toContain('Maximum **64** concurrent WRITE tasks')
-    expect(prompt).toContain('Hermes → `hermes-cli`')
+    expect(prompt).toContain('Claude/Claude Code → `claude-cli`')
     expect(prompt).toContain('Never substitute the coordinator')
     expect(prompt).toContain('Coordinator runtime is not a delegation default')
   })
@@ -855,7 +855,6 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(prompt).toContain('repo-file (commit target)')
     expect(prompt).toContain('machine-local')
     // Machine-local + repo write tools called out.
-    expect(prompt).toContain('`mesh_magi_kind_panel` with `action="set"`')
     expect(prompt).toContain('`mesh_config` with `kind="mesh_json"`')
     // reinit must diff-then-approve before overwriting hand-edits.
     expect(prompt).toContain('current-vs-suggested diff')
@@ -1028,7 +1027,7 @@ describe('Repo Mesh coordinator prompt', () => {
   // ── 6-6: schema ↔ coordinator-prompt ↔ barrel-comment tool-exposure consistency ──
   //
   // The coordinator-prompt "## Available Tools" table once drifted 14 tools behind the
-  // MCP schema (mesh_mission_list, mesh_reconcile_ledger, the refine/magi/change-impact
+  // MCP schema (mesh_mission_list, mesh_reconcile_ledger, the refine/change-impact
   // families, …), silently hiding capabilities from the coordinator — including
   // mesh_mission_list, which the "remaining work = enumerate missions" operating rule
   // depends on. This regression gate pins the table to the canonical registry so any new
@@ -1087,7 +1086,6 @@ describe('Repo Mesh coordinator prompt', () => {
       mesh: baseMesh() as any,
       coordinatorCliType: 'claude-cli',
       operatingNotes: [{ text: 'a note', category: 'recovery_lesson' }],
-      magiKindPanels: { rca: [{ provider: 'codex-cli' }] },
     })
     const leaked = Object.keys(RETIRED_MESH_TOOLS).filter(name => new RegExp(`\\b${name}\\b`).test(prompt))
     expect(leaked, `retired tool names still in the prompt: ${leaked.join(', ')}`).toEqual([])
@@ -1095,10 +1093,10 @@ describe('Repo Mesh coordinator prompt', () => {
 
   // Owner finding (2026-09-26): rarely used tools sat in the table as one line with
   // no "when to use" trigger, so a coordinator never reached for them. Every merged
-  // tool's row (and the graph repair tool) must open with a bold **When …** trigger.
+  // tool's row must open with a bold **When …** trigger.
   it('every merged tool row in the tool table opens with a concrete **When…** trigger', () => {
     const prompt = buildCoordinatorSystemPrompt({ mesh: baseMesh() as any })
-    const merged = ['mesh_graph_gate', 'mesh_graph_node_patch', 'mesh_node_slots', 'mesh_magi_kind_panel', 'mesh_coordinator_prompt_append', 'mesh_note', 'mesh_config', 'mesh_init', 'mesh_create', 'mesh_cleanup_sessions']
+    const merged = ['mesh_node_slots', 'mesh_coordinator_prompt_append', 'mesh_note', 'mesh_config', 'mesh_init', 'mesh_create', 'mesh_cleanup_sessions']
     for (const tool of merged) {
       const row = prompt.split('\n').find(line => line.startsWith(`| \`${tool}\` |`))
       expect(row, `${tool} has no tool-table row`).toBeTruthy()
@@ -1160,69 +1158,13 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(exposed).not.toContain('mesh_requeue_held_events')
   })
 
-  // ── Configured MAGI panels section ──
-
-  describe('buildMagiKindPanelsSection', () => {
-    it('returns null when panels is undefined, null, or all-empty', () => {
-      expect(buildMagiKindPanelsSection(undefined)).toBeNull()
-      expect(buildMagiKindPanelsSection(null)).toBeNull()
-      expect(buildMagiKindPanelsSection({})).toBeNull()
-      // A kind bound to an empty slot list contributes nothing → still omitted.
-      expect(buildMagiKindPanelsSection({ rca: [], design: undefined })).toBeNull()
-    })
-
-    it('renders a section with kind headers and slot providers when panels are present', () => {
-      const section = buildMagiKindPanelsSection({
-        rca: [
-          { provider: 'codex-cli', nodeId: 'node_f1f8' },
-          { provider: 'antigravity-cli', nodeId: 'node_8440' },
-        ],
-        design: [
-          { provider: 'hermes-cli', model: 'opus', capabilityTags: ['reasoning'], n: 2 },
-        ],
-      })
-      expect(section).not.toBeNull()
-      const text = section as string
-      expect(text).toContain('## Configured MAGI panels')
-      // Per-kind headers.
-      expect(text).toContain('**rca**')
-      expect(text).toContain('**design**')
-      // Slot providers + node pins.
-      expect(text).toContain('codex-cli@node_f1f8')
-      expect(text).toContain('antigravity-cli@node_8440')
-      // Model / tags / replica-count rendering for the design slot.
-      expect(text).toContain('hermes-cli')
-      expect(text).toContain('model: opus')
-      expect(text).toContain('tags: reasoning')
-      expect(text).toContain('×2')
-      // Guidance line — required task_kind + read-only replicas.
-      expect(text).toContain('mesh_magi_review')
-      expect(text).toContain('`mesh_magi_kind_panel` (action "list")')
-      expect(text).toContain('read-only')
-    })
-
-    it('counts replicas from per-slot n when computing the kind label', () => {
-      const section = buildMagiKindPanelsSection({
-        rca: [
-          { provider: 'codex-cli', n: 2 },
-          { provider: 'hermes-cli', n: 2 },
-        ],
-      }) as string
-      // 2 slots but 4 total replicas → "4 replicas".
-      expect(section).toContain('**rca** (4 replicas)')
-    })
-  })
-
-  it('full prompt includes the Configured MAGI panels section only when panels are passed', () => {
-    const withoutPanels = buildCoordinatorSystemPrompt({ mesh: baseMesh() as any })
-    expect(withoutPanels).not.toContain('## Configured MAGI panels')
-
-    const withPanels = buildCoordinatorSystemPrompt({
-      mesh: baseMesh() as any,
-      magiKindPanels: { rca: [{ provider: 'codex-cli', nodeId: 'node_f1f8' }] },
-    })
-    expect(withPanels).toContain('## Configured MAGI panels')
-    expect(withPanels).toContain('codex-cli@node_f1f8')
+  // ── Multi-perspective review recipe (replaced the MAGI engine) ──
+  it('always renders the multi-perspective review recipe and advertises no MAGI tool', () => {
+    const prompt = buildCoordinatorSystemPrompt({ mesh: baseMesh() as any })
+    expect(prompt).toContain('## Multi-perspective review')
+    expect(prompt).toContain('send the same question to 2–3 workers via `mesh_send_task`')
+    expect(prompt).toContain('wait for their `report_completion`, then synthesize yourself')
+    expect(prompt).not.toMatch(/mesh_magi_|MAGI/)
   })
 
   // ─── Difficulty is a routing hint, not a model selector ───
@@ -1306,23 +1248,11 @@ describe('Repo Mesh coordinator prompt', () => {
   })
 })
 
-describe('Repo Mesh coordinator prompt — incremental enqueue is the default (D1)', () => {
-  // GRAPH-ORCHESTRATION D1 (the 2026-09-25 graph orchestration simplification).
-  // Measured 2026-09-02..09-24: 71% of graphs had 1-2 nodes, queue-level depends_on was
-  // used in only 1.2% of tasks, and coordinators had generated zero graphs in the prior
-  // 40h — the batch-first push (P4, below) never produced the batch-shaped usage it was
-  // meant to. Root cause per the design doc: work is discovered incrementally as results
-  // come back, but the batch-first interface demanded declaring the whole plan up front,
-  // and the old prompt spent ten rebuttal bullets trying to argue coordinators out of
-  // the natural incremental shape instead of just supporting it.
-  //
-  // D1 flips the default: mesh_enqueue_task + depends_on chaining is now the everyday
-  // path, with an automatic "Upstream results" appendix replacing most inputs_from use.
-  // mesh_enqueue_batch is reserved for a settled 3+-step plan that needs a gate or a
-  // deferred worktree. All ten rebuttal sub-bullets from the old "Batch-first rule" are
-  // gone; orchestration_decision is optional; gates get a default 24h deadline and
-  // auto-close when every dependent goes terminal, so "if you cancel the tasks behind a
-  // gate, close the gate too" is retired along with it.
+describe('Repo Mesh coordinator prompt — queue tasks with depends_on (graph orchestration retired)', () => {
+  // Graph orchestration (gates, deferred workspaces, inputs_from, run_if, the graph
+  // store) was retired 2026-09-30 in favour of plain queue tasks ordered with
+  // depends_on. The prompt must describe exactly that surface and nothing of the
+  // retired one.
   const meshFixture = () => ({
     id: 'mesh_1',
     name: 'ADHDev',
@@ -1333,110 +1263,54 @@ describe('Repo Mesh coordinator prompt — incremental enqueue is the default (D
   })
   const prompt = () => buildCoordinatorSystemPrompt({ mesh: meshFixture() as any, coordinatorCliType: 'claude-cli' })
 
-  it('D1: states the new default — mesh_enqueue_task, chained via depends_on, batch reserved for settled 3+-step plans', () => {
+  it('states the default — mesh_enqueue_task chained via depends_on, with the Upstream results appendix', () => {
     const p = prompt()
-
     expect(p).toContain('**Incremental enqueue rule.** Default to `mesh_enqueue_task`')
     expect(p).toContain('chain the new task to it with `depends_on`')
-    expect(p).toContain('the graph grows append-only')
-    expect(p).toContain('Use `mesh_enqueue_batch` only when three or more steps are already settled AND the plan needs a coordinator gate or a deferred worktree (`workspace_ref`)')
-    expect(p).toContain('Never invent speculative steps just to reach that threshold')
-  })
-
-  it('D1: documents the automatic Upstream results appendix as the reason inputs_from is now rarely needed', () => {
-    const p = prompt()
     expect(p).toContain('automatically receives an "Upstream results" appendix summarizing its predecessors\' completions')
-    expect(p).toContain('so you rarely need `inputs_from` as well')
-    expect(p).toContain('reach for `inputs_from` only when a specific field must be bound exactly')
-  })
-
-  it('D1: orchestration_decision is optional, not a violation to omit', () => {
-    const p = prompt()
-    expect(p).toContain('`orchestration_decision` is optional')
-    expect(p).toContain('omitting it is not a violation')
-    // The old mandatory-declaration language must be gone.
-    expect(p).not.toContain('Omitting it is recorded as `decision_missing`')
-  })
-
-  it('D1: gates get a default 24h deadline and auto-close, so manual gate-closing on cancel is retired', () => {
-    const p = prompt()
-    expect(p).toContain('Gates get a default 24-hour deadline')
-    expect(p).toContain('closed automatically once every task behind them reaches a terminal state')
-    expect(p).toContain('you no longer need to close a gate by hand after cancelling its dependents')
-    expect(p).toContain('an `expired` gate notice still means the coordinator must act: release it, abandon it, or extend it')
-  })
-
-  it('D1: the retired batch-first rebuttal passages are gone from the prompt', () => {
-    const p = prompt()
-    const retired = [
-      'Batch-first',
-      'A mesh with idle nodes or a short plan does not remove this requirement',
-      'That feeling is about your confidence, not about how many steps are settled',
-      'states that the next step EXISTS',
-      'A gate or a batch is not overhead when something follows it',
-      'close the gate too',
-      'omitting it is a violation',
-      'The line between the two failures',
-    ]
-    for (const phrase of retired) expect(p).not.toContain(phrase)
-
-    const present = [
-      'Incremental enqueue rule',
-      'Default to `mesh_enqueue_task`',
-      'the graph grows append-only',
-      '`orchestration_decision` is optional',
-      'closed automatically once every task behind them reaches a terminal state',
-    ]
-    for (const phrase of present) expect(p).toContain(phrase)
-  })
-
-  it('D1: the tool table reflects the new default/exception roles', () => {
-    const p = prompt()
     expect(p).toContain('**DEFAULT enqueue surface.**')
-    expect(p).toContain('For a **settled plan of three or more steps** that needs a coordinator gate or a deferred worktree')
-    expect(p).not.toContain('**DEFAULT enqueue surface** for a plan with two or more known graph steps')
-    expect(p).not.toContain('SINGLE-TASK FALLBACK')
   })
 
-  it('D1: the Rules-section sub-agent and front-load bullets no longer name mesh_enqueue_batch as the default', () => {
+  it('describes mesh_enqueue_batch as a plain atomic multi-enqueue', () => {
     const p = prompt()
-
-    expect(p).toContain('must be delegated through `mesh_enqueue_task` (the default — see Workflow 3.a)')
-    expect(p).toContain('escalating to `mesh_enqueue_batch` only for a settled multi-step plan needing gates or deferred worktrees')
-    expect(p).toContain('mesh_enqueue_task` by default, chained with `depends_on`; `mesh_enqueue_batch` for a settled multi-step plan')
-
-    // The original subjects survive — this is a rewording, not a deletion.
-    expect(p).toContain('**Never use local sub-agents.**')
-    expect(p).toContain('**Front-load immutable task instructions.**')
-    expect(p).toContain('`mesh_magi_review`')
-    expect(p).toContain('`inputs_from` bindings')
-
-    // The old batch-first phrasing must be gone.
-    expect(p).not.toContain('must be delegated through `mesh_enqueue_batch` (the default — see Workflow 3.a), falling back to `mesh_enqueue_task` only for a terminal single step')
-    expect(p).not.toContain('- **Batch is the default enqueue surface.**')
+    const row = p.split('\n').find(line => line.startsWith('| `mesh_enqueue_batch` |'))
+    expect(row).toBeTruthy()
+    expect(row!).toContain('atomically')
+    expect(row!).toContain('never invent steps to fill a batch')
   })
 
-  it('D1: the Tool Exposure Preflight no longer mandates loading mesh_enqueue_batch by exact name', () => {
+  it('tells the coordinator how a failed dependency is surfaced and resolved', () => {
+    const p = prompt()
+    expect(p).toContain('queue_dependency_blocked')
+    expect(p).toContain('mesh_queue_requeue(task_id, force=true)')
+    expect(p).toContain('queue_dependency_cancelled')
+  })
+
+  it('names none of the retired graph surface', () => {
+    const p = prompt()
+    for (const retired of [
+      'mesh_graph_view', 'mesh_graph_gate', 'mesh_graph_node_patch', 'gated_by', 'inputs_from',
+      'workspace_ref', 'run_if', 'graph_dependency_blocked', 'graph_stalled', 'queue_chain_stalled',
+      'coordinator gate', 'orchestration_decision', 'settled plan of three or more steps',
+    ]) {
+      expect(p, retired).not.toContain(retired)
+    }
+  })
+
+  it('the Tool Exposure Preflight keeps only the tool-availability check', () => {
     const p = prompt()
     const preflight = p.slice(p.indexOf('## Tool Exposure Preflight'), p.indexOf('## Tool Exposure Preflight') + 2000)
-
-    // The batch-discovery mandate is gone.
     expect(preflight).not.toContain('include `mesh_enqueue_batch` by exact name')
-    expect(preflight).not.toContain('never search for or load only `mesh_enqueue_task`')
-    expect(preflight).not.toContain('classify the whole currently known work frontier')
-
-    // The tool-availability check survives.
     expect(preflight).toContain('confirm that the actual callable tool list includes `mesh_status`')
     expect(preflight).toContain('MCP server/tool manifest is stale or not injected yet')
   })
 
-  it('D1: the difficulty guidance names mesh_enqueue_task as the default, mesh_enqueue_batch for settled multi-step plans', () => {
+  it('the difficulty guidance names mesh_enqueue_task as the default', () => {
     const p = prompt()
-    expect(p).toContain('Pass `difficulty` on `mesh_enqueue_task` (the default), or on every worker entry in `mesh_enqueue_batch` for a settled multi-step plan')
+    expect(p).toContain('Pass `difficulty` on `mesh_enqueue_task` (the default), or on every entry of `mesh_enqueue_batch`')
   })
 
-  it('D1: stays provider-neutral — no rule is written for one CLI', () => {
-    // The prompt is shared by claude / codex / hermes / antigravity coordinators.
+  it('stays provider-neutral — no rule is written for one CLI', () => {
     const p = prompt()
     const rules = p.slice(p.indexOf('## Rules'))
     const enqueueBullet = rules.split('\n').find(l => l.includes('is the default enqueue surface'))!

@@ -83,7 +83,7 @@ const LIFECYCLE_KEYS: Record<string, string> = {
 }
 
 function isMachineRuntimeProvider(category: string): boolean {
-    return category === 'cli' || category === 'acp'
+    return category === 'cli'
 }
 
 /**

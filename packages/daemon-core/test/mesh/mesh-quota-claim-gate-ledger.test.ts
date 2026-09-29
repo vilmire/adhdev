@@ -6,9 +6,8 @@ import { tmpdir } from 'os'
 
 // QUOTA-CLAIM-GATE-LEDGER: the quota claim gate (tryAssignQueueTask → evaluateProviderQuotaGate)
 // previously only logged a block (LOG.info) with no ledger trace at all. This matters
-// specifically for MAGI: a kind-panel replica is pinned to ONE (node, provider) via
-// requiredTags, so a quota-exhausted pinned provider has no fallback candidate to escape to —
-// the replica just parks pending indefinitely with nothing in the ledger to diagnose why.
+// for a task pinned to ONE (node, provider) via requiredTags: a quota-exhausted pinned
+// provider has no fallback candidate to escape to — the task just parks pending indefinitely with nothing in the ledger to diagnose why.
 //
 // These tests drive the same LOCAL idle drain path (triggerMeshQueue) as
 // mesh-quota-claim-gate.test.ts and assert on the ledger side effect: a 'quota_claim_gate'

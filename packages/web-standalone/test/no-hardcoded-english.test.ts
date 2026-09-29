@@ -33,7 +33,7 @@ const ALLOWED: Record<string, string[]> = {
     // the same live-preview card, shown verbatim to demonstrate font
     // rendering — same treatment as InstallCommand.tsx's literal commands.
     'StandaloneFontSettingsSection.tsx': [
-        'Hermes',
+        'Claude',
         "const message = 'standalone custom fonts'",
         '$ npm run dev:standalone\\nready on http://localhost:3847',
     ],

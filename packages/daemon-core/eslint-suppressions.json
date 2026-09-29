@@ -1,19 +1,4 @@
 {
-  "src/mesh/mesh-graph-gates.ts": {
-    "no-restricted-syntax": {
-      "count": 3
-    }
-  },
-  "src/mesh/mesh-graph-view.ts": {
-    "no-restricted-syntax": {
-      "count": 1
-    }
-  },
-  "src/mesh/mesh-graph-workspace-ports.ts": {
-    "no-restricted-syntax": {
-      "count": 1
-    }
-  },
   "src/mesh/mesh-onboarding-plan.ts": {
     "no-restricted-syntax": {
       "count": 1

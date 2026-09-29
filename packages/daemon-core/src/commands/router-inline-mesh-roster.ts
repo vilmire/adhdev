@@ -195,9 +195,8 @@ export async function getMeshForCommand(host: InlineMeshRosterHost, meshId: stri
     return warmedInline ? { mesh: warmedInline, inline: true, source: 'inline_bootstrap' } : null;
 }
 
-// Public alongside removeInlineMeshNode: the graph workspace saga registers
-// its prepared worktree through the same inline-cache seam the retention
-// sweep already uses for removal (mesh-graph-workspace-ports.ts).
+// Public alongside removeInlineMeshNode: clone/lifecycle handlers register a
+// node through the same inline-cache seam removal uses.
 export function updateInlineMeshNode(host: InlineMeshRosterHost, meshId: string, mesh: any, node: any): void {
     const incomingId = normalizeMeshNodeId(node);
     if (!mesh || !Array.isArray(mesh.nodes) || !incomingId) return;

@@ -8,17 +8,15 @@
  * failures were invisible: the task enqueued "successfully" and then routed as though the
  * coordinator had never expressed a preference.
  *
- * Four things are pinned here, matching the four implementation stages:
+ * Three things are pinned here, matching the implementation stages:
  *
  *  1. CONDUIT — the difficulty a caller supplies actually reaches the stored task, on BOTH
  *     insertion paths.
- *  2. MAGI — the fan-out stamps a fixed 'freeform' sentinel rather than being exempted
- *     from the guard (see the rationale comment at that call site).
- *  3. RELAUNCH INHERITANCE — failure recovery re-enqueues with the difficulty the failed
+ *  2. RELAUNCH INHERITANCE — failure recovery re-enqueues with the difficulty the failed
  *     task ran with, recovered from the ledger; and, critically, still relaunches when no
  *     difficulty can be inherited. This path only runs because something already broke, so
  *     losing the relaunch would be strictly worse than losing the hint.
- *  4. GUARD — both enqueueTask AND recordDirectDispatchTask reject a missing difficulty.
+ *  3. GUARD — both enqueueTask AND recordDirectDispatchTask reject a missing difficulty.
  *     recordDirectDispatchTask writes to the store WITHOUT going through enqueueTask, so a
  *     guard in only one of them would be trivially bypassable via mesh_send_task.
  *

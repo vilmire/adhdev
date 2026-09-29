@@ -14,7 +14,6 @@ import type { SessionEntry, SessionCapability } from '../shared-types.js';
 import type {
     IdeProviderState,
     CliProviderState,
-    AcpProviderState,
     ExtensionProviderState,
     ProviderState,
 } from '../providers/provider-instance.js';
@@ -284,16 +283,6 @@ const CLI_CHAT_SESSION_CAPABILITIES: SessionCapability[] = [
     'resolve_action',
 ];
 
-const ACP_SESSION_CAPABILITIES: SessionCapability[] = [
-    'read_chat',
-    'send_message',
-    'new_session',
-    'resolve_action',
-    'change_model',
-    'set_mode',
-    'set_thought_level',
-];
-
 function buildWorkspaceSession(
     state: IdeProviderState,
     cdpManagers: Map<string, DaemonCdpManager>,
@@ -520,56 +509,6 @@ function buildCliSession(state: CliProviderState, options: SessionEntryBuildOpti
     };
 }
 
-function buildAcpSession(state: AcpProviderState, options: SessionEntryBuildOptions): SessionEntry {
-    const profile = options.profile || 'full';
-    const activeChat = normalizeActiveChatData(state.activeChat, getActiveChatOptions(profile));
-    const summaryMetadata = normalizeProviderSummaryMetadata(state.summaryMetadata);
-    const controlValues = normalizeProviderStateControlValues(state.controlValues);
-    const includeSessionMetadata = shouldIncludeSessionMetadata(profile);
-    const includeSessionControls = shouldIncludeSessionControls(profile);
-    const workspace = state.workspace || null;
-    const git = getGitSummaryForWorkspace(workspace, options);
-    const meshCoordinatorFor = state.settings?.meshCoordinatorFor as string | undefined;
-    const registryEntry = state.instanceId ? getCoordinatorForSession(state.instanceId) : undefined;
-    const effectiveMeshId = meshCoordinatorFor || registryEntry?.meshId;
-    const coordinator = effectiveMeshId ? { meshId: effectiveMeshId, role: 'coordinator' as const } : undefined;
-    const meshQueueStats = effectiveMeshId ? getMeshQueueStats(effectiveMeshId) : undefined;
-    const resolved = resolveSessionStatusUnified({ sessionId: state.instanceId, providerType: state.type, activeChat, providerStatus: state.status });
-    const resolvedStatus = resolved.status;
-    return {
-        id: state.instanceId,
-        parentId: null,
-        providerType: state.type,
-        providerName: state.name,
-        kind: 'agent',
-        transport: 'acp',
-        status: resolvedStatus,
-        ...(resolved.turn.authority === 'turn_reducer' ? { turn: resolved.turn } : {}),
-        title: activeChat?.title || state.name,
-        workspace,
-        ...(git && { git }),
-        activeChat,
-        ...(summaryMetadata && { summaryMetadata }),
-        ...buildSessionLaunchFields(readStateLaunch(state)),
-        ...(includeSessionMetadata && { capabilities: ACP_SESSION_CAPABILITIES, messageInput: state.messageInput || TEXT_ONLY_MESSAGE_INPUT_SUPPORT }),
-        ...(includeSessionControls && {
-            ...(controlValues && { controlValues }),
-            providerControls: state.providerControls,
-        }),
-        errorMessage: state.errorMessage,
-        errorReason: state.errorReason,
-        lastUpdated: state.lastUpdated,
-        settings: state.settings,
-        ...(coordinator && { coordinator }),
-        ...(meshQueueStats && { meshQueueStats }),
-        // Emit explicitly (including false) so un-hide/un-mute clears a prior true downstream —
-        // see buildCliSession above and session-entry-merge.ts.
-        surfaceHidden: resolveSurfaceHidden(state.settings),
-        // status-gated one-shot silent-idle arm — see buildCliSession above.
-        muted: resolveMuted(state.settings, resolvedStatus),
-    };
-}
-
 export function buildSessionEntries(
     allStates: ProviderState[],
     cdpManagers: Map<string, DaemonCdpManager>,
@@ -579,7 +518,6 @@ export function buildSessionEntries(
 
     const ideStates = allStates.filter((s): s is IdeProviderState => s.category === 'ide');
     const cliStates = allStates.filter((s): s is CliProviderState => s.category === 'cli');
-    const acpStates = allStates.filter((s): s is AcpProviderState => s.category === 'acp');
 
     for (const state of ideStates) {
         sessions.push(buildWorkspaceSession(state, cdpManagers, options));
@@ -591,10 +529,6 @@ export function buildSessionEntries(
 
     for (const state of cliStates) {
         sessions.push(buildCliSession(state, options));
-    }
-
-    for (const state of acpStates) {
-        sessions.push(buildAcpSession(state, options));
     }
 
     // Hide native IDE parent rows from inbox/recent surfaces when extension tabs exist.

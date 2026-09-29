@@ -160,10 +160,10 @@ describe('validateProviderDefinition', () => {
 
   it('accepts omitted input capabilities as text-only default and validates input strategy descriptors', () => {
     const result = validateProviderDefinition({
-      type: 'future-acp',
-      name: 'Future ACP',
-      category: 'acp',
-      spawn: { command: 'future-acp' },
+      type: 'future-cli',
+      name: 'Future CLI',
+      category: 'cli',
+      spawn: { command: 'future-cli' },
       capabilities: {
         output: { richContent: false, mediaTypes: ['text'] },
         controls: { typedResults: true },
@@ -173,16 +173,16 @@ describe('validateProviderDefinition', () => {
     expect(result.errors).not.toContain('capabilities.input is required')
 
     const strategyResult = validateProviderDefinition({
-      type: 'future-acp',
-      name: 'Future ACP',
-      category: 'acp',
-      spawn: { command: 'future-acp' },
+      type: 'future-cli',
+      name: 'Future CLI',
+      category: 'cli',
+      spawn: { command: 'future-cli' },
       capabilities: {
         input: {
           multipart: true,
           mediaTypes: ['text', 'image'],
           strategies: [
-            { mediaType: 'image', strategies: ['native_acp'], native: true, degradation: ['resource_link', 'text_fallback'] },
+            { mediaType: 'image', strategies: ['native'], native: true, degradation: ['resource_link', 'text_fallback'] },
           ],
         },
         output: { richContent: false, mediaTypes: ['text'] },
@@ -368,10 +368,10 @@ describe('validateProviderDefinition', () => {
 
   it('accepts provider-owned transcript manifest fields without unknown field warnings', () => {
     const result = validateProviderDefinition({
-      type: 'hermes-cli',
-      name: 'Hermes CLI',
+      type: 'manual-mcp-cli',
+      name: 'Manual MCP CLI',
       category: 'cli',
-      spawn: { command: 'hermes' },
+      spawn: { command: 'manual-mcp' },
       capabilities: baseCapabilities,
       contractVersion: 2,
       transcriptAuthority: 'provider',
@@ -537,19 +537,19 @@ describe('validateProviderDefinition', () => {
 
   it('accepts mesh coordinator manual MCP metadata with actionable instructions', () => {
     const result = validateProviderDefinition({
-      type: 'hermes-cli',
-      name: 'Hermes CLI',
+      type: 'manual-mcp-cli',
+      name: 'Manual MCP CLI',
       category: 'cli',
-      spawn: { command: 'hermes' },
+      spawn: { command: 'manual-mcp' },
       capabilities: baseCapabilities,
       contractVersion: 2,
       meshCoordinator: {
         supported: true,
         mcpConfig: {
           mode: 'manual',
-          format: 'hermes_config_yaml',
-          instructions: 'Add this server to Hermes config under mcp_servers.',
-          template: 'mcp_servers:\n  adhdev-mesh:\n    command: {{adhdevMcpCommand}}\n',
+          format: 'claude_mcp_json',
+          instructions: 'Add this server to the CLI config under mcpServers.',
+          template: '{"mcpServers":{"adhdev-mesh":{"command":"{{adhdevMcpCommand}}"}}}',
           requiresRestart: true,
         },
       },
@@ -571,7 +571,7 @@ describe('validateProviderDefinition', () => {
         supported: true,
         mcpConfig: {
           mode: 'manual',
-          format: 'hermes_config_yaml',
+          format: 'claude_mcp_json',
         },
       },
     })

@@ -224,7 +224,7 @@ export function isControlVisibleForState(
 ): boolean {
     const gate = ctrl.visibleWhenState;
     // No gating declared → always visible (regression-safe for codex/antigravity/
-    // hermes controls and any provider that omits the field).
+    // runtime-control providers and any provider that omits the field).
     if (!gate || gate.length === 0) return true;
     const stateIds = fsmStateIdsForStatus(currentStatus);
     // Current state unknown → show conservatively (avoid hiding a usable control

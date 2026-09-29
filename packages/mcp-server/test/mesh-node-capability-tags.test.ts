@@ -72,7 +72,6 @@ test('mesh_list_nodes surfaces computed capabilityTags + per-provider sets + ope
   // capabilityTags must equal what the routing matcher itself computes.
   assert.deepEqual(main.capabilityTags, buildMeshNodeCapabilityTags(mesh.nodes[0]));
   assert.ok(main.capabilityTags.includes('provider=claude-cli'), 'first provider tag present');
-  assert.ok(main.capabilityTags.includes('converge=fast_forward'), 'non-worktree converge tag');
   assert.ok(main.capabilityTags.includes('gpu') && main.capabilityTags.includes('staging'), 'operator labels folded in');
 
   // per-provider tag sets cover every providerPriority entry.
@@ -83,8 +82,7 @@ test('mesh_list_nodes surfaces computed capabilityTags + per-provider sets + ope
   // raw operator-defined capabilities surfaced separately.
   assert.deepEqual(main.capabilities, ['gpu', 'staging']);
 
-  // worktree node advertises converge=refine + worktree=<branch>.
-  assert.ok(worktree.capabilityTags.includes('converge=refine'));
+  // worktree node advertises worktree=<branch>.
   assert.ok(worktree.capabilityTags.includes('worktree=feat/x'));
   // no operator labels → no capabilities field.
   assert.equal(worktree.capabilities, undefined);
@@ -117,5 +115,5 @@ test('mesh_status compact mode (default) still surfaces capabilityTags per node'
   // copy of that list: compact keeps providerPriority and drops the repeat.
   assert.ok(main.providerPriority.includes('claude-cli'), 'providerPriority carries the provider');
   assert.ok(!main.capabilityTags.includes('provider=claude-cli'), 'compact drops the provider tag repeating providerPriority');
-  assert.ok(main.capabilityTags.includes('converge=fast_forward'), 'non-provider tags survive');
+  assert.ok(main.capabilityTags.includes('gpu') && main.capabilityTags.some((t) => t.startsWith('os=')), 'non-provider tags survive');
 });

@@ -1,7 +1,7 @@
 /**
  * @adhdev/daemon-core — Public API
  *
- * Core logic for daemon: CDP, Provider, IDE detection, CLI/ACP adapters and more.
+ * Core logic for daemon: CDP, Provider, IDE detection, CLI adapters and more.
  */
 
 // ── Types ──
@@ -59,8 +59,6 @@ export type {
   SubscribeRequest,
   UnsubscribeRequest,
   AvailableProviderInfo,
-  AcpConfigOption,
-  AcpMode,
   ProviderControlSchema,
   StatusReportPayload,
   MachineInfo,
@@ -82,7 +80,6 @@ export type {
   ActiveChatData,
   IdeProviderState,
   CliProviderState,
-  AcpProviderState,
   ExtensionProviderState,
   MessageInputSupport,
   InputMediaStrategyDescriptor,
@@ -116,7 +113,6 @@ export type {
   RepoMeshNodeHealth,
   RepoMeshPolicy,
   RepoMeshQuotaRoutingPolicy,
-  RepoMeshMagiSessionCleanupMode,
   RepoMeshNodePolicy,
   RepoMeshRelatedRepo,
   RepoMeshNodeCapabilities,
@@ -158,8 +154,6 @@ export {
   delegatedWorkerAutoApproveSettings,
   resolveDelegatedWorkerDangerousModeAllow,
   resolveAllowSendKeysDestructive,
-  resolveMagiSessionCleanupMode,
-  magiAutoLaunchedSessionCleanupDecision,
   MESH_SCHEDULING_STRATEGIES,
   DEFAULT_MESH_SCHEDULING_STRATEGY,
   normalizeMeshSchedulingStrategy,
@@ -170,9 +164,6 @@ export {
   resolveMaxParallelTasks,
   MESH_MAX_PARALLEL_TASKS_MIN,
   MESH_MAX_PARALLEL_TASKS_MAX,
-  MESH_CONVERGE_REFINE_TAG,
-  MESH_CONVERGE_FAST_FORWARD_TAG,
-  resolveAutoConvergeCodeChange,
 } from './repo-mesh-types.js';
 
 // ── Repo-shared declarative mesh config (.adhdev/mesh.json) ──
@@ -457,7 +448,6 @@ export { SessionRegistry } from './sessions/registry.js';
 export type { SessionRuntimeTarget, TerminateDetail } from './sessions/registry.js';
 export { IdeProviderInstance } from './providers/ide-provider-instance.js';
 export { CliProviderInstance } from './providers/cli-provider-instance.js';
-export { AcpProviderInstance } from './providers/acp-provider-instance.js';
 export type { ProviderModule, AutoApproveMode, AutoApproveModesConfig, AutoApproveModeRisk, AutoApproveModeStrategy, CdpTargetFilter, ProviderResumeCapability, InputEnvelope, InputPart, MessagePart, ReadChatTurnStatus } from './providers/contracts.js';
 export type { ControlListResult, ControlSetResult, ControlInvokeResult } from './providers/provider-control-contracts.js';
 export type { ProviderSourceConfigSnapshot, ProviderSourceConfigUpdate } from './config/provider-source-config.js';
@@ -572,7 +562,7 @@ export { createNativeHistoryDispatcher } from './providers/native-history/index.
 export type { ReaderId } from './providers/native-history/index.js';
 export {
     readClaudeCliSession, readCodexCliSession,
-    readAntigravityCliSession, readHermesCliSession,
+    readAntigravityCliSession,
 } from './providers/native-history/index.js';
 export type {
     ControlAction, Control,
@@ -587,12 +577,11 @@ export type { DashboardEvent, DashboardCommand, SpecDriverOpts, ISpecDriver } fr
 export { TerminalAdapter } from './providers/spec/adapter.js';
 export type { TerminalAdapterOpts, TerminalAdapterHandlers } from './providers/spec/adapter.js';
 
-// v1-contract provider scaffolding (cli/acp) — shared by `adhdev provider
+// v1-contract provider scaffolding (cli) — shared by `adhdev provider
 // init`/`create` (daemon-cloud CLI) and the DevServer /api/scaffold route
-// (daemon/dev-server.ts, used by web-devconsole). See scaffold-v1.ts header.
+// (daemon/dev-server.ts). See scaffold-v1.ts header.
 export {
   buildCliProviderV1Scaffold,
-  buildAcpProviderV1Scaffold,
   resolveCliSpecPath,
   CUSTOM_PROVIDERS_DOCS_URL,
   INIT_SCAFFOLDABLE_CATEGORIES,
@@ -600,8 +589,6 @@ export {
 export type {
   CliProviderScaffoldOptions,
   CliProviderScaffoldResult,
-  AcpProviderScaffoldOptions,
-  AcpProviderScaffoldResult,
 } from './providers/scaffold-v1.js';
 
 // ── Provider SDK (v1) — selective re-exports for external tooling ──
@@ -612,7 +599,6 @@ export type {
 // sdk/v1 subpath.
 export {
   validateCliProviderManifest,
-  validateAcpProviderManifest,
   formatManifestValidationIssues,
   type ManifestValidationIssue,
   type ManifestValidationResult,

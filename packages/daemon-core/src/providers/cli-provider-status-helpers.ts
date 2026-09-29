@@ -5,7 +5,7 @@
  * side-effect-free status predicates, the turn-anchored duration computation,
  * the forced-new-session script resolver, the adapter-ready poll, and the lazy
  * node:sqlite DatabaseSync loader. cli-provider-instance re-exports the
- * public symbols (computeTurnAnchoredDurationMs, getForcedNewSessionScriptName,
+ * public symbols (getForcedNewSessionScriptName,
  * waitForCliAdapterReady) so existing importers/tests keep their path.
  */
 
@@ -39,28 +39,6 @@ export function hasNonEmptyCliModalButtons(activeModal: unknown): boolean {
  */
 export function isCliGeneratingLikeStatus(status: unknown): boolean {
     return isWorkingStatus(status);
-}
-
-/**
- * NOTIF Defect-2a: the REPORTED short-generating duration, anchored on the IMMUTABLE turn
- * start. generatingStartedAt is reset to 0 on every mid-turn waiting_approval/idle blip and
- * re-armed on the next →generating, so a long turn that blips would otherwise measure only the
- * final 1.5-2.5s sliver. engine.currentTurnStartedAt (set once at onTurnStarted, surviving
- * mid-turn blips until the next turn starts) is preferred; generatingStartedAt is the fallback
- * for turns that never recorded an engine turn start. Returns 0 when neither anchor is set.
- * Pure / unit-testable.
- */
-export function computeTurnAnchoredDurationMs(
-    engineTurnStartedAt: number | undefined,
-    generatingStartedAt: number,
-    now: number,
-): { durationMs: number; anchor: 'turn-start' | 'generatingStartedAt' | 'none' } {
-    const engineStart = typeof engineTurnStartedAt === 'number' && Number.isFinite(engineTurnStartedAt)
-        ? engineTurnStartedAt
-        : 0;
-    if (engineStart > 0) return { durationMs: now - engineStart, anchor: 'turn-start' };
-    if (generatingStartedAt > 0) return { durationMs: now - generatingStartedAt, anchor: 'generatingStartedAt' };
-    return { durationMs: 0, anchor: 'none' };
 }
 
 let CachedDatabaseSync: (new (path: string, options?: { readOnly?: boolean }) => {

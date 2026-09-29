@@ -226,7 +226,7 @@ describe('WORKTREE-BOOTSTRAP-SERIAL-QUEUE', () => {
   // Constraint (2), the REJECTION half. The test above covers a failed COMMAND, which
   // the runner reports by RESOLVING with status:'failed' — that path never exercises
   // the chain's rejection handling. A run can still reject outright on an
-  // infrastructure fault (mesh-graph-workspace-ports catches exactly that), and if the
+  // infrastructure fault (a caller that only awaits the run sees exactly that), and if the
   // chain were advanced with a bare `.then(onFulfilled)` the rejection would propagate
   // into the tail and every subsequent bootstrap would be dead on arrival. Drive a real
   // rejection through the queue and prove the next run still executes.

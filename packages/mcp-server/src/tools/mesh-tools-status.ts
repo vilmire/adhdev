@@ -51,33 +51,6 @@ import {
     statusPolicyForResponse,
 } from './mesh-status-sections.js';
 
-/**
- * graph-orchestration-simplification D6 — `graphUsage` is COMPUTED IN THE DAEMON
- * (graphsLast7d, nodesPerGraphP50, gatesExpired, gatesAutoAbandoned,
- * depsChainedViaEnqueueTask); this surface only passes the first block it finds
- * through, verbatim. Sources are tried in the caller's order — mesh_status passes
- * `activeWork.summary` first (where daemon-core's active_work_query folds it: both
- * are JSON-passthrough records, the wire slots a daemon can extend without a
- * turn-ipc schema change), then the record summary, the response itself and the
- * refreshed mesh snapshot. Anything
- * that is not a plain object is ignored — never synthesized, never defaulted.
- */
-export function pickDaemonGraphUsage(...sources: unknown[]): Record<string, unknown> | undefined {
-    for (const source of sources) {
-        if (!source || typeof source !== 'object') continue;
-        const block = (source as { graphUsage?: unknown }).graphUsage;
-        if (block && typeof block === 'object' && !Array.isArray(block)) return block as Record<string, unknown>;
-    }
-    return undefined;
-}
-
-/** Shallow copy of a summary record without its `graphUsage` key (same object when absent). */
-function withoutGraphUsage<T>(summary: T): T {
-    if (!summary || typeof summary !== 'object' || !('graphUsage' in (summary as object))) return summary;
-    const { graphUsage: _hoisted, ...rest } = summary as unknown as Record<string, unknown>;
-    return rest as unknown as T;
-}
-
 // ─── Tool Implementations ───────────────────────
 
 export async function meshStatus(outerCtx: MeshContext, args: { includeStaleDirectWorkDetails?: boolean; includeTerminalDirectWork?: boolean; includeSessions?: boolean; includeUsage?: boolean; compact?: boolean; verbose?: boolean; refresh?: boolean } = {}): Promise<string> {
@@ -174,16 +147,11 @@ export async function meshStatus(outerCtx: MeshContext, args: { includeStaleDire
         });
     }
     const activeWorkEvidence = activeWorkView.activeWork!;
-    // The record tail the refine-job and MAGI folds below read (the same window as before).
+    // The record tail the refine-job fold below reads (the same window as before).
     const ledgerEntries = activeWorkView.records;
 
     const pollingGuidance = buildActiveWorkPollingGuidance(activeWorkEvidence.summary);
-    // D6 graphUsage: daemon-computed (active_work_query folds it into
-    // activeWork.summary), passed through untouched — verbose only, as its own
-    // top-level block. Hoisted OUT of activeWorkSummary in both modes so the
-    // compact poll does not carry it and verbose does not carry it twice.
-    const graphUsage = pickDaemonGraphUsage(activeWorkEvidence.summary, activeWorkView.summary, activeWorkView, ctx.mesh);
-    const activeWorkSummaryForResponse = withoutGraphUsage(activeWorkEvidence.summary);
+    const activeWorkSummaryForResponse = activeWorkEvidence.summary;
     const staleDirectWorkSummary = buildCompactStaleDirectWorkSummary(activeWorkEvidence.staleDirectWork, {
         note: activeWorkEvidence.staleDirectWorkNote,
         detailHint: 'Full stale direct entries are omitted from mesh_status by default. Call mesh_status with includeStaleDirectWorkDetails=true or inspect mesh_task_history for ledger detail.',
@@ -265,11 +233,11 @@ export async function meshStatus(outerCtx: MeshContext, args: { includeStaleDire
                 webOnlyStaleBuildNote: 'One or more live daemons are behind workspace HEAD, but only web packages changed in that range. The daemon does NOT need a rebuild/restart — redeploy the web app to reflect those changes. This is informational, not a "fix not live" condition.',
             }
             : {}),
-        // T7: provider CLI/ACP version skew across nodes (observational only).
+        // T7: provider CLI version skew across nodes (observational only).
         ...(providerVersionSkew.length > 0
             ? {
                 providerVersionSkew,
-                providerVersionSkewWarning: 'One or more provider CLIs/ACP agents are running different versions across mesh nodes (see providerVersionSkew). This is informational, not a dispatch blocker — but a task that assumes a uniform toolchain (e.g. a version-specific flag or output format) may behave differently per node. Consider aligning versions or pinning the task to a node with the expected version.',
+                providerVersionSkewWarning: 'One or more provider CLIs are running different versions across mesh nodes (see providerVersionSkew). This is informational, not a dispatch blocker — but a task that assumes a uniform toolchain (e.g. a version-specific flag or output format) may behave differently per node. Consider aligning versions or pinning the task to a node with the expected version.',
             }
             : {}),
         activeWork: activeWorkForResponse.records,
@@ -299,11 +267,9 @@ export async function meshStatus(outerCtx: MeshContext, args: { includeStaleDire
             : {}),
     };
 
-    if (!compact && graphUsage) response.graphUsage = graphUsage;
-
     // Include task ledger summary for coordinator context
     try {
-        response.ledgerSummary = withoutGraphUsage(ledgerSummary);
+        response.ledgerSummary = ledgerSummary;
     } catch { /* ledger read is best-effort */ }
 
     // Token/cost usage rollup. OPT-IN (includeUsage) rather than default-on:

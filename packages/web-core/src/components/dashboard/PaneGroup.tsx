@@ -11,7 +11,7 @@ import { useDevRenderTrace } from '../../hooks/useDevRenderTrace'
 import { usePaneGroupDropZone } from '../../hooks/usePaneGroupDropZone'
 import { usePaneGroupTabs } from '../../hooks/usePaneGroupTabs'
 import { isConversationTaskCompleteUnread, type LiveSessionInboxState } from './DashboardMobileChatShared'
-import { getCliConversationViewMode, isAcpConv } from './types'
+import { getCliConversationViewMode } from './types'
 import type { ActiveConversation } from './types'
 import type { DaemonData } from '../../types'
 import type { CliTerminalHandle } from '../CliTerminal'
@@ -131,7 +131,7 @@ export default function PaneGroup({
     })
 
     const isCliTerminal = activeConv
-        && !isAcpConv(activeConv)
+       
         && getCliConversationViewMode(activeConv) === 'terminal'
     const activeIdeEntry = useMemo(
         () => activeConv ? ides.find(ide => ide.id === activeConv.routeId) : undefined,

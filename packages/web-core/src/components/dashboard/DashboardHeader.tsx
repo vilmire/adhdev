@@ -8,7 +8,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ActiveConversation, CliConversationViewMode } from './types';
-import { isCliConv, isCliTerminalConv, isAcpConv } from './types';
+import { isCliConv, isCliTerminalConv } from './types';
 import { IconBell, IconChat, IconEyeOff, IconX, IconPlus } from '../Icons';
 import { useBaseDaemons } from '../../context/BaseDaemonContext';
 import CliViewModeToggle from './CliViewModeToggle';
@@ -263,8 +263,7 @@ export default function DashboardHeader({
 }: DashboardHeaderProps) {
     const { t } = useTranslation();
     const { ides, p2pStates = {}, usesP2P = true } = useBaseDaemons();
-    const isCliActive = !!activeConv && isCliConv(activeConv) && !isAcpConv(activeConv);
-    const isAcpActive = !!activeConv && isAcpConv(activeConv);
+    const isCliActive = !!activeConv && isCliConv(activeConv);
     const effectiveCliViewMode = activeCliViewMode || (activeConv ? (isCliTerminalConv(activeConv) ? 'terminal' : 'chat') : null);
     const [isHiddenDropTarget, setIsHiddenDropTarget] = useState(false);
     const [hiddenSpawnAnim, setHiddenSpawnAnim] = useState(false);
@@ -452,13 +451,13 @@ export default function DashboardHeader({
                         {isCliActive && onSetCliViewMode && effectiveCliViewMode && (
                             <CliViewModeToggle mode={effectiveCliViewMode} onChange={onSetCliViewMode} compact />
                         )}
-                        {(isCliActive || isAcpActive) && onStopCli && (
+                        {isCliActive && onStopCli && (
                             <button
                                 type="button"
                                 onClick={() => onStopCli(activeConv)}
                                 className="btn btn-secondary btn-sm"
-                                title={isAcpActive ? t('dashboard.header.stopAcpSession') : t('dashboard.header.stopCliProcess')}
-                                aria-label={isAcpActive ? t('dashboard.header.stopAcpSession') : t('dashboard.header.stopCliProcess')}
+                                title={t('dashboard.header.stopCliProcess')}
+                                aria-label={t('dashboard.header.stopCliProcess')}
                                 data-testid="dashboard-pane-stop"
                                 style={{
                                     color: 'var(--status-error, #ef4444)',

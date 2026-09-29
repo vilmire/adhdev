@@ -2,7 +2,7 @@
  * CLI AI Agent Detector
  * 
  * Dynamic CLI detection based on Provider.
- * Reads spawn.command from cli/acp categories via ProviderLoader to check installation.
+ * Reads spawn.command from cli categories via ProviderLoader to check installation.
  * 
  * Uses parallel execution for fast detection across many providers.
  */
@@ -138,7 +138,7 @@ async function resolveVersion(candidates: string[]): Promise<string | undefined>
 const DETECT_CLIS_CONCURRENCY = 8;
 
 /**
- * Detect all CLI/ACP agents (parallel)
+ * Detect all CLI agents (parallel)
  * @param providerLoader ProviderLoader instance (dynamic list creation)
  */
 export async function detectCLIs(

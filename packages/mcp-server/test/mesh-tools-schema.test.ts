@@ -47,7 +47,6 @@ test('mesh_enqueue_task schema exposes optional capability tag requirements', ()
 test('mesh_launch_session schema maps providers, keeps type optional, and has no claude default', () => {
   const description = `${MESH_LAUNCH_SESSION_TOOL.description} ${MESH_LAUNCH_SESSION_TOOL.inputSchema.properties.type.description}`;
 
-  assert.match(description, /Hermes\s*=\s*hermes-cli|Hermes.*hermes-cli/);
   assert.deepEqual(MESH_LAUNCH_SESSION_TOOL.inputSchema.required, ['node_id']);
   assert.match(description, /Do not default to claude-cli/);
   assert.doesNotMatch(description, /default to claude-cli unless/i);

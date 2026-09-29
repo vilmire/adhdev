@@ -1,21 +1,18 @@
 /**
- * mcp-server SEMANTIC transcript replica reads — design §4 (roster ids 6, 7, 8),
+ * mcp-server SEMANTIC transcript replica reads — design §4 (roster id 6),
  * §8 unit 8 ("mcp semantic transcript consumers").
  *
- * Roster ids 6-8 are the three mcp-server reads that do NOT merely display a
- * transcript but derive an IRREVERSIBLE decision from it:
+ * Roster id 6 is the mcp-server read that does NOT merely display a
+ * transcript but derives an IRREVERSIBLE decision from it:
  *
  *   6 `mcp_mesh_status_reconciliation` — synthesizes a task COMPLETION
- *   7 `magi_approval_probe`            — clicks APPROVE on a live modal
- *   8 `magi_result_collect`            — locks a replica's final MAGI verdict
  *
  * That is the whole reason this module exists separately from §8 unit 6's
  * `mesh-transcript-replica-read.ts` instead of reusing it verbatim. Unit 6's
  * consumer is a DISPLAY surface: if its snapshot is a little stale or covers
  * the wrong window, the user sees a slightly old transcript and asks again.
- * These three consumers cannot be wrong that way — a stale snapshot approves a
- * modal that is no longer on screen, or promotes a previous turn's assistant
- * bubble into "the task completed". Design §5.5's semantic-consumer clause says
+ * This consumer cannot be wrong that way — a stale snapshot promotes a
+ * previous turn's assistant bubble into "the task completed". Design §5.5's semantic-consumer clause says
  * exactly this: an active session's commit age must be inside a freshness
  * budget, and "stale idle UI는 표시할 수 있지만 ... irreversible 판단에는
  * 쓰지 않는다".
@@ -25,13 +22,11 @@
  * the process-boundary rule (§4 "별도 프로세스 경계": mcp-server never opens
  * `seqscribe.db`; the coordinator daemon owns it), and the payload shape
  * (`mapTranscriptViewToReadChatPayload`). Producing the SAME `read_chat`-
- * shaped payload is what lets all three call sites keep their existing parsers
+ * shaped payload is what lets the call site keep its existing parsers
  * — `readFinalAssistantTranscriptEvidence`, `hasTrailingToolActivityAfter
- * FinalAssistant`, `magiReadIndicatesApprovalWedge`,
- * `parseFirstMagiCandidateForKind` — completely untouched. The design's
- * acceptance item for each of these rows is "기존 evidence parser를 그대로
- * 적용" / "기존 kind parser 실행" / "approve idempotency 불변"; running the
- * replica through a second, parallel parser would violate all three at once.
+ * FinalAssistant` — completely untouched. The design's acceptance item for this
+ * row is "기존 evidence parser를 그대로 적용"; running the replica through a
+ * second, parallel parser would violate it.
  *
  * ── What is ADDED over unit 6: the admission gate ──────────────────────────
  * Per-consumer `coverage` and `freshness` requirements from §4's roster table,
@@ -50,7 +45,7 @@
  * this unit, not a defect: wiring the peer resolver belongs to the transport
  * packages that own the peer map (`daemon-cloud` / `daemon-standalone`). What
  * unit 8 owns is that the admission gate and the fallback ORDER are correct, so
- * that when the resolver lands these three consumers start serving with no edit
+ * that when the resolver lands this consumer starts serving with no edit
  * here. The `fallbackReason` is how an operator sees it flip.
  */
 
@@ -181,7 +176,7 @@ function isUsableSnapshot(value: any): value is ReplicatedTranscriptViewV2 {
     if (typeof value.frame !== 'number') return false;
     if (typeof value.observedAt !== 'string' || !value.observedAt) return false;
     // `activeModal` is optional but, when present, must be the allow-listed
-    // shape — `magi_approval_probe` decides an approve click from it.
+    // shape (the view contract; a malformed modal marks the snapshot unusable).
     const modal = value.activeModal;
     if (modal !== null && modal !== undefined) {
         if (typeof modal !== 'object') return false;
@@ -240,10 +235,9 @@ export async function readTranscriptReplicaForSemanticConsumer(
     const snapshot = read.view;
 
     // ── Coverage admission (§4 roster rows 6/8) ─────────────────────────────
-    // `magi_result_collect` must read the CURRENT turn: the whole FIX#1
-    // cross-turn mis-attribution guard at its call site exists because a
-    // whole-session tail's newest kind-valid JSON can belong to an EARLIER turn.
-    // A replica that only covers a tail is exactly that hazard, so it declines.
+    // A consumer that must read the CURRENT turn declines a replica that only
+    // covers a tail: a whole-session tail's newest answer can belong to an
+    // EARLIER turn.
     if (!request.acceptCoverage.includes(snapshot.coverage.mode)) {
         return { payload: null, fallbackReason: 'coverage_insufficient' };
     }

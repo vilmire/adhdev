@@ -239,7 +239,7 @@ export function getPlatformVersionCommand(versionCommand?: ProviderModule['versi
 export function getSyntheticSettings(provider: ProviderModule): Record<string, ProviderSettingDef> {
   const result: Record<string, ProviderSettingDef> = {};
 
-  if (provider.category === 'cli' || provider.category === 'acp') {
+  if (provider.category === 'cli') {
     result.enabled = {
       type: 'boolean',
       default: false,
@@ -262,7 +262,7 @@ export function getSyntheticSettings(provider: ProviderModule): Record<string, P
     };
   }
 
-  if ((provider.category === 'cli' || provider.category === 'acp') && provider.spawn?.command && !provider.settings?.executablePath) {
+  if ((provider.category === 'cli') && provider.spawn?.command && !provider.settings?.executablePath) {
     result.executablePath = {
       type: 'string',
       default: '',
@@ -272,7 +272,7 @@ export function getSyntheticSettings(provider: ProviderModule): Record<string, P
     };
   }
 
-  if ((provider.category === 'cli' || provider.category === 'acp') && provider.spawn?.command && !provider.settings?.executableArgs) {
+  if ((provider.category === 'cli') && provider.spawn?.command && !provider.settings?.executableArgs) {
     result.executableArgs = {
       type: 'string',
       default: '',

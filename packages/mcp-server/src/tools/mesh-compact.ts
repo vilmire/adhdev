@@ -312,7 +312,7 @@ export function compactMeshStatusNode(entry: any): any {
         next.branchConvergence = rest;
     }
 
-    // capabilityTagsByProvider repeats the os=/arch=/converge= base set once per
+    // capabilityTagsByProvider repeats the os=/arch= base set once per
     // provider — heavy and O(nodes × providers). The representative capabilityTags
     // (kept) already conveys what a node can match; the per-provider breakdown is a
     // verbose/dashboard concern. Drop it from the compact LLM-facing copy.
@@ -467,39 +467,6 @@ export function summarizeNodeSessions(sessions: any[]): Record<string, unknown> 
         summary.selfCoordinatorSessionIds = selfCoordinatorSessionIds;
     }
     return summary;
-}
-
-// Max chars kept per needs_verification claim / open question in compact mode.
-// These strings are LLM-authored MAGI synthesis prose (not a bounded enum), so
-// unlike every other compact fold above there is no natural short form — only a
-// length cap. 160 chars keeps the category-defining sentence while dropping the
-// elaboration; the full claim is always available via verbose=true.
-const MAGI_COMPACT_CLAIM_MAX_CHARS = 160;
-
-function elideMagiText(value: string): string {
-    return value.length > MAGI_COMPACT_CLAIM_MAX_CHARS
-        ? `${value.slice(0, MAGI_COMPACT_CLAIM_MAX_CHARS)}…`
-        : value;
-}
-
-// Compact-mode fold for one magiActivity group: needsVerification claims and
-// openQuestions are free-text LLM synthesis output (unbounded per item, already
-// capped in COUNT via MAGI_NEEDS_VERIFICATION_PREVIEW_CAP / the openQuestions
-// slice), so on a mesh with several active MAGI consensus groups this is the
-// single largest source of prose in the compact payload. Truncate the text here;
-// every other field (counts, banner, gitSkew) is small and stays intact. Verbose
-// callers get the untouched group via buildMeshMagiActivity's full-detail path.
-export function compactMagiActivityGroup(group: any): any {
-    if (!group || typeof group !== 'object') return group;
-    const next: any = { ...group };
-    if (Array.isArray(next.needsVerification)) {
-        next.needsVerification = next.needsVerification.map((item: any) =>
-            item && typeof item.claim === 'string' ? { ...item, claim: elideMagiText(item.claim) } : item);
-    }
-    if (Array.isArray(next.openQuestions)) {
-        next.openQuestions = next.openQuestions.map((q: any) => (typeof q === 'string' ? elideMagiText(q) : q));
-    }
-    return next;
 }
 
 // ── Compact de-duplication (read-latency pass, 2026-09-27) ──────────────────

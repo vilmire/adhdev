@@ -320,7 +320,6 @@ export function expandCompactDaemons(
         const sessions = daemonOnly ? [] : (d.sessions || [])
         const topLevelIdeSessions = sessions.filter(s => !s.parentId && s.kind === 'workspace' && s.transport === 'cdp-page')
         const topLevelCliSessions = sessions.filter(s => !s.parentId && s.kind === 'agent' && s.transport === 'pty')
-        const topLevelAcpSessions = sessions.filter(s => !s.parentId && s.kind === 'agent' && s.transport === 'acp')
 
         entries.push({
             id: d.id,
@@ -433,58 +432,6 @@ export function expandCompactDaemons(
                 ...launchFieldsOf(cli),
                 timestamp: ts,
                 _isCli: true,
-            })
-        }
-
-        for (const acp of topLevelAcpSessions) {
-            const acpFullId = `${d.id}:acp:${acp.id}`
-            entries.push({
-                id: acpFullId,
-                sessionId: acp.id,
-                ...(acp.providerSessionId !== undefined && { providerSessionId: acp.providerSessionId }),
-                parentSessionId: acp.parentId ?? null,
-                sessionKind: acp.kind,
-                transport: acp.transport,
-                type: acp.providerType,
-                agentType: acp.providerType,
-                // Ingestion-point normalization (wiring-unification A1 follow-up):
-                // see normalizeCompactSession — same fleet-compat reasoning applies
-                // to top-level ACP session entries, which bypass that helper.
-                status: normalizeIncomingSessionStatus(acp.status) || 'online',
-                daemonId: d.id,
-                ...(acp.ownerDaemonId && { ownerDaemonId: acp.ownerDaemonId }),
-                ...(acp.ownerMachineName && { ownerMachineName: acp.ownerMachineName }),
-                ...(acp.settings && { settings: acp.settings }),
-                instanceId: acp.id,
-                cliName: acp.providerName,
-                title: acp.title,
-                mode: 'chat',
-                workspace: acp.workspace || '',
-                activeChat: mergeActiveChatData(acp.activeChat, null),
-                ...(acp.activeInteractivePrompt !== undefined && { activeInteractivePrompt: acp.activeInteractivePrompt }),
-                ...(acp.runtimeKey !== undefined && { runtimeKey: acp.runtimeKey }),
-                ...(acp.runtimeDisplayName !== undefined && { runtimeDisplayName: acp.runtimeDisplayName }),
-                ...(acp.runtimeWorkspaceLabel !== undefined && { runtimeWorkspaceLabel: acp.runtimeWorkspaceLabel }),
-                ...(acp.runtimeWriteOwner !== undefined && { runtimeWriteOwner: acp.runtimeWriteOwner }),
-                ...(acp.runtimeAttachedClients !== undefined && { runtimeAttachedClients: acp.runtimeAttachedClients }),
-                ...(acp.lastMessagePreview !== undefined && { lastMessagePreview: acp.lastMessagePreview }),
-                ...(acp.lastMessageRole !== undefined && { lastMessageRole: acp.lastMessageRole }),
-                ...(acp.lastMessageAt !== undefined && { lastMessageAt: acp.lastMessageAt }),
-                ...(acp.lastMessageHash !== undefined && { lastMessageHash: acp.lastMessageHash }),
-                ...(acp.lastUpdated !== undefined && { lastUpdated: acp.lastUpdated }),
-                ...(acp.unread !== undefined && { unread: acp.unread }),
-                ...(acp.lastSeenAt !== undefined && { lastSeenAt: acp.lastSeenAt }),
-                ...(acp.inboxBucket !== undefined && { inboxBucket: acp.inboxBucket }),
-                ...(acp.completionMarker !== undefined && { completionMarker: acp.completionMarker }),
-                ...(acp.seenCompletionMarker !== undefined && { seenCompletionMarker: acp.seenCompletionMarker }),
-                ...(acp.surfaceHidden !== undefined && { surfaceHidden: acp.surfaceHidden }),
-                ...(acp.muted !== undefined && { muted: acp.muted }),
-                ...(acp.controlValues !== undefined && { controlValues: acp.controlValues }),
-                ...(acp.providerControls !== undefined && { providerControls: acp.providerControls }),
-                summaryMetadata: acp.summaryMetadata,
-                ...launchFieldsOf(acp),
-                timestamp: ts,
-                _isAcp: true,
             })
         }
     }

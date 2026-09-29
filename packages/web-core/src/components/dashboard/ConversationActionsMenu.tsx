@@ -7,7 +7,7 @@
  * else a user occasionally needs — history, remote control, mute, session
  * info, git status — lives here, in one place, on desktop and on the mobile
  * chat header alike. Items that do not apply to the conversation (no git,
- * CLI/ACP without a remote view) are simply not listed, so the menu never
+ * CLI without a remote view) are simply not listed, so the menu never
  * offers a dead action.
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
@@ -20,13 +20,13 @@ import { IconBell, IconBellOff, IconGitBranch, IconInfo, IconMonitor, IconMoreHo
 import SessionInfoDialog from './SessionInfoDialog'
 import { resolveConversationTargetEntry } from './conversation-selectors'
 import type { ActiveConversation } from './types'
-import { isAcpConv, isCliConv } from './types'
+import { isCliConv } from './types'
 import { useConversationMute } from './useConversationMute'
 
 export interface ConversationActionsMenuProps {
     conversation: ActiveConversation
     onOpenHistory?: (conversation: ActiveConversation) => void
-    /** Remote control view — only offered for IDE (non CLI/ACP) conversations. */
+    /** Remote control view — only offered for IDE (non CLI) conversations. */
     onOpenRemote?: (conversation: ActiveConversation) => void
     onOpenGit?: (daemonId: string, workspace: string) => void
     /** Button classes (the host toolbar's button style). */
@@ -64,8 +64,7 @@ export default function ConversationActionsMenu({
     const buttonRef = useRef<HTMLButtonElement | null>(null)
     const menuRef = useRef<HTMLDivElement | null>(null)
 
-    const isCli = isCliConv(conversation) && !isAcpConv(conversation)
-    const isAcp = isAcpConv(conversation)
+    const isCli = isCliConv(conversation)
     const targetEntry = useMemo(() => {
         const ideEntry = ides.find(ide => ide.id === conversation.routeId)
         return resolveConversationTargetEntry(conversation, ideEntry)
@@ -78,10 +77,10 @@ export default function ConversationActionsMenu({
     })
 
     const items: MenuItem[] = []
-    if (onOpenHistory && !isAcp) {
+    if (onOpenHistory) {
         items.push({ key: 'history', label: t('dashboard.header.chatHistory'), icon: <IconScroll size={15} />, onSelect: () => onOpenHistory(conversation) })
     }
-    if (onOpenRemote && !isCli && !isAcp) {
+    if (onOpenRemote && !isCli) {
         items.push({ key: 'remote', label: t('dashboard.header.remoteControl'), icon: <IconMonitor size={15} />, onSelect: () => onOpenRemote(conversation) })
     }
     if (onOpenGit && conversation.git && conversation.daemonId && conversation.workspacePath) {

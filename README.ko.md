@@ -74,20 +74,8 @@ ADHDev는 그렇게 만들어집니다. ADHDev를 개발하는 비공개 모노�
 - **패치 동등성 감지** — 서브모듈 커밋이 리베이스되거나 스쿼시되어 SHA가 바뀐 경우에도, Refinery는 *내용*이 이미 착지했는지 판단하여 이중 머지나 잘못된 다이버전스 플래그를 방지합니다.
 - **원자적 포인터 범프** — 서브모듈 포인터 범프는 루트 변경과 함께 수렴하여, 무인 머지 중 루트가 깨지거나 댕글링 서브모듈 커밋을 가리키는 일이 없습니다.
 
-### 🔺 MAGI — 교차 검증 결과
-MAGI — Multi-Agent Ground-truth Insight. 네, 에반게리온 레퍼런스가 먼저였고 약자는 나중에 열심히 껴맞췄습니다. 읽기 전용 조사(버그 RCA, 설계 리뷰, 감사)를 여러 독립 에이전트에 동시에 던지고, 그들이 **어디서 갈리는지**를 읽습니다.
-
-전제는 **높은 합의가 곧 정답은 아니라는 것**입니다. 같은 모델에 같은 프롬프트와 같은 컨텍스트를 주면 같은 환각이 나옵니다. 그래서 MAGI는 질문을 서로 다른 머신 *그리고* 서로 다른 provider에 fan-out하고, 출처가 실제로 얼마나 독립적이었는지로 합의에 가중을 둡니다:
-
-- 답변은 **agreed / contested / dissent / singleton / source-coupled**로 분류됩니다 — 같은 provider나 같은 머신을 공유하는 리플리카끼리의 합의는 공유 환각 의심으로 **할인**되며, 두 번 세지 않습니다.
-- 주 출력은 판정이 아니라 **`needs_verification` 목록**입니다 — 마찰이 곧 결과물입니다.
-- 독립성은 희망이 아니라 강제입니다: 진짜 독립적인 타깃이 2개 미만이면 조용히 격하되지 않고 에러가 납니다. 리플리카는 읽기 전용이라 교차검증이 레포에 쓰기를 할 수 없습니다.
-
-이 프로젝트의 실제 사례: 단일 RCA가 자신 있게 "코드 변경 불필요"로 결론냈던 것을, 독립 교차검증이 2층 복합 버그로 뒤집었습니다.
-
-<p align="center">
-  <img src="docs/assets/readme/landing-magi-synthesis.jpg" alt="ADHDev MAGI 종합 뷰 — 코디네이터가 독립적인 3개 에이전트 리플리카를 조정하여 합의된 것·이견이 있는 것·검증이 필요한 주장을 표시" width="100%" />
-</p>
+### 🔺 교차 검증
+중요한 읽기 전용 조사 — 버그 RCA, 설계 리뷰, 감사 — 라면 코디네이터에게 두 번째 의견을 요청하세요: 같은 질문을 서로 다른 provider의 워커 2~3개에 보내고, 보고를 기다린 뒤, 어디서 일치하고 어디서 갈리는지, 한 워커만 주장한 내용은 무엇인지 정리합니다. 높은 합의가 곧 정답은 아닙니다 — 같은 모델에 같은 컨텍스트를 주면 같은 실수를 반복합니다 — 그러니 읽을 가치가 있는 건 갈리는 부분입니다.
 
 ### 🔐 P2P 전송 (신뢰, 페이월 아님)
 채팅·명령·스크린샷·원격 입력은 암호화된 WebRTC 데이터 채널을 통해 대시보드와 데몬 사이에서 직접 이동합니다. 서버는 시그널링과 경량 메타데이터만 처리합니다 — 작업 데이터는 다른 사람의 서버에 저장되지 않습니다. 이것은 설계의 신뢰 속성이며, 업셀이 아닙니다.
@@ -112,14 +100,14 @@ ADHDev는 에이전트를 대체하거나 직접 spawn하지 않습니다 — **
    │               │        CDP          ├──────────────────────┤
    │  · providers  │────────────────────▶│ Cursor, VS Code,     │
    │  · 세션       │                     │ Antigravity, …       │
-   │  · 메시 + 큐  │       stdio (ACP)   ├──────────────────────┤
-   │  · Refinery   │────────────────────▶│ Goose, Qwen, …       │
-   └───────────────┘                     └──────────────────────┘
+   │  · 메시 + 큐  │                     └──────────────────────┘
+   │  · Refinery   │
+   └───────────────┘
          │
          └── git 워크트리 ── 병렬 태스크당 격리된 체크아웃 1개
 ```
 
-- **데몬이 통합을 소유합니다.** provider 4종 카테고리: `cli`(PTY), `ide`(Chrome DevTools Protocol), `extension`(CDP webview), `acp`(stdio 기반 Agent Client Protocol).
+- **데몬이 통합을 소유합니다.** provider 3종 카테고리: `cli`(PTY), `ide`(Chrome DevTools Protocol), `extension`(CDP webview).
 - **장수 런타임은 별도 프로세스입니다.** `adhdev-sessiond`가 PTY를 소유하므로 CLI 세션이 데몬 재시작·업그레이드를 견딥니다.
 - **셀프호스트는 데몬과 직결**됩니다 — `localhost:3847`의 HTTP + WebSocket. 클라우드 에디션에서는 같은 데이터가 브라우저↔데몬 WebRTC 데이터채널을 타고, 서버는 시그널링만 합니다.
 
@@ -173,7 +161,7 @@ adhdev standalone --host 0.0.0.0  # 동일 LAN의 다른 기기 접근 허용
 adhdev standalone --port 8080     # 커스텀 포트
 adhdev standalone --token mysecret # 스크립트/운영자 접근을 위한 토큰 인증
 adhdev standalone --no-open       # 브라우저 자동 열기 비활성화
-adhdev standalone --dev           # 프로바이더 디버그·테스트용 DevConsole 활성화
+adhdev standalone --dev           # 프로바이더 디버그·테스트용 DevServer API(:19280) 활성화
 adhdev standalone --public <dir>  # 커스텀 웹 대시보드 빌드 서빙
 ```
 
@@ -201,7 +189,7 @@ Standalone은 기본적으로 localhost 전용입니다. LAN 접근을 위해 `0
 
 ## 지원 에이전트
 
-ADHDev는 네 가지 프로바이더 카테고리를 통해 코딩 에이전트와 통신합니다 — `ide` (CDP), `extension` (CDP 웹뷰), `cli` (PTY), `acp` (stdio를 통한 Agent Client Protocol).
+ADHDev는 세 가지 프로바이더 카테고리를 통해 코딩 에이전트와 통신합니다 — `ide` (CDP), `extension` (CDP 웹뷰), `cli` (PTY).
 
 **CLI 에이전트** (PTY 구동, 대시보드에서 실행·제어):
 
@@ -212,15 +200,12 @@ ADHDev는 네 가지 프로바이더 카테고리를 통해 코딩 에이전트�
 | Cursor Agent | `cli/cursor-cli` |
 | Google Antigravity CLI | `cli/antigravity-cli` |
 | Grok CLI | `cli/grok-cli` |
-| Hermes Agent | `cli/hermes-cli` |
 | Kimi Code | `cli/kimi` |
 | Opencode | `cli/opencode` |
 
 **IDE** (Chrome DevTools Protocol 경유): Cursor, Google Antigravity, VS Code, VSCodium, Kiro, Windsurf, Trae, PearAI.
 
 **IDE 익스텐션** (CDP 웹뷰): Claude Code (VS Code), Codex, Cline, Roo Code.
-
-**ACP 에이전트** (stdio, Agent Client Protocol): 32개 내장 어댑터 — Gemini CLI, Qwen Code, Goose, GitHub Copilot, Cursor (ACP), Claude Agent, Codex CLI, Kimi CLI, Cline, Kilo, Junie, OpenHands 등.
 
 > **내장 ≠ 검증됨.** ADHDev는 광범위한 인벤토리를 제공합니다. 카탈로그에 있다는 것은 통합이 존재한다는 의미이지, 엔드-투-엔드로 검증되었다는 의미가 아닙니다. 지원 수준은 다양합니다. 라이브 정책을 참조하세요:
 >
@@ -234,7 +219,6 @@ ADHDev는 에이전트의 API 키를 **관리하지 않습니다** — 각 도�
 
 provider는 포크해야 하는 코드가 아니라 데이터입니다. provider는 버전이 있는 매니페스트(`provider.v1.json`)와, 도구를 감지하고·실행하고·출력을 채팅 턴으로 파싱하고·승인 프롬프트를 인식하는 방법을 기술한 스크립트로 구성됩니다. `~/.adhdev/providers/`에 넣으면 대시보드가 집어갑니다 — 같은 이름의 내장 provider보다 사용자 오버라이드가 우선하므로, 릴리스를 기다리지 않고 깨진 파서를 로컬에서 고칠 수 있습니다.
 
-- 이 레포의 `web-devconsole`은 라이브 세션에 대고 provider 스크립트를 작성·테스트하는 Monaco 기반 에디터입니다.
 - 검증 티어는 명시적입니다: **Verified / Partial / Unverified**. "내장"은 통합이 존재한다는 뜻일 뿐입니다.
 - 가이드: [지원 프로바이더](https://docs.adhf.dev/reference/supported-providers) · [커스텀 프로바이더 가이드](https://docs.adhf.dev/guide/custom-providers)
 
@@ -262,7 +246,7 @@ provider는 포크해야 하는 코드가 아니라 데이터입니다. provider
 이것은 오픈소스 셀프호스트 에디션(AGPL-3.0)입니다. 호스팅 클라우드 운영은 이 레포에 포함되지 않습니다. 셀프호스트는 세 가지 로컬 레이어로 구성됩니다:
 
 1. `daemon-standalone`은 로컬 HTTP/WebSocket 서버를 제공하고 웹 UI를 서빙합니다.
-2. `daemon-core`는 IDE, CLI, 익스텐션, ACP 통합을 관리합니다.
+2. `daemon-core`는 IDE, CLI, 익스텐션 통합을 관리합니다.
 3. `session-host-daemon` (`adhdev-sessiond`)은 데몬 재시작 후에도 CLI 세션이 살아남을 수 있도록 장기 PTY 런타임을 소유합니다.
 
 | 경로 | 목적 |
@@ -271,7 +255,6 @@ provider는 포크해야 하는 코드가 아니라 데이터입니다. provider
 | `packages/daemon-standalone` | 로컬 HTTP/WS 서버 및 번들 standalone UI |
 | `packages/web-core` | 공유 React 페이지, 컴포넌트, 훅, 전송 추상화 |
 | `packages/web-standalone` | Standalone 대시보드 앱 |
-| `packages/web-devconsole` | 프로바이더/개발 진단 UI |
 | `packages/session-host-core` | 세션 호스트 프로토콜, 클라이언트, 레지스트리, 링 버퍼, 레이블 |
 | `packages/session-host-daemon` | 장기 PTY 런타임 소유 프로세스 |
 | `packages/terminal-mux-*` | 로컬 터미널 멀티플렉서 스택 |
@@ -307,7 +290,6 @@ npm run dev
 ```bash
 npm run dev:daemon
 npm run dev:web
-npm run dev -w packages/web-devconsole
 ```
 
 ---
@@ -322,8 +304,8 @@ npm run dev -w packages/web-devconsole
 | 계정 필요 | ❌ 인증 없음 | OAuth (GitHub / Google) |
 | 머신 수 | **1대** | 플랜별 1 / 2 / 5대 |
 | 도달 범위 | localhost, `--host`로 LAN까지 | **어디서든** (P2P WebRTC + 막힌 네트워크용 TURN) |
-| 모든 provider (CLI / IDE / extension / ACP) | ✅ | ✅ |
-| Repo Mesh·Refinery·MAGI·워크트리 노드 | ✅ **단일 머신 메시는 완전히 로컬 동작** | ✅ |
+| 모든 provider (CLI / IDE / extension) | ✅ | ✅ |
+| Repo Mesh·Refinery·워크트리 노드 | ✅ **단일 머신 메시는 완전히 로컬 동작** | ✅ |
 | **머신 간** 메시 | ❌ (머신 간 릴레이 없음) | ✅ |
 | 푸시 알림 (승인 / 완료 / 에러) | ❌ | ✅ |
 | 호스팅 REST API + API 키 | ❌ (로컬 API만) | ✅ |

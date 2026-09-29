@@ -22,9 +22,4 @@ export {
   listSessions as listAntigravityCliSessions,
 } from './antigravity-cli-transcript.js';
 
-export {
-  readSession as readHermesCliSession,
-  listSessions as listHermesCliSessions,
-} from './hermes-cli-transcript.js';
-
 export { createNativeHistoryDispatcher, type ReaderId } from './dispatcher.js';

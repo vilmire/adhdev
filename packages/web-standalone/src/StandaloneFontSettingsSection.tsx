@@ -160,7 +160,7 @@ export default function StandaloneFontSettingsSection({
             <div className="self-start max-w-[88%] min-w-0 flex flex-col gap-1">
               <div className="chat-bubble chat-bubble-assistant">
                 <div className="chat-bubble-header mb-1.5">
-                  <span className="chat-sender">Hermes</span>
+                  <span className="chat-sender">Claude</span>
                   <span className="chat-time">{t('standalone.fonts.previewNow')}</span>
                 </div>
                 <div className="chat-markdown">

@@ -6,7 +6,7 @@
 
 import type { DaemonData } from '../../types';
 import { IconCandle, IconRefresh, IconX } from '../Icons';
-import { isAcpConv, isCliConv, type ActiveConversation } from './types';
+import { isCliConv, type ActiveConversation } from './types';
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { DialogShell } from '../ui/Dialog';
@@ -27,7 +27,7 @@ export interface SavedSessionHistoryEntry {
     providerSessionId: string;
     providerType: string;
     providerName: string;
-    kind: 'cli' | 'acp';
+    kind: 'cli';
     title: string;
     workspace?: string | null;
     summaryMetadata?: DaemonData['summaryMetadata'];
@@ -85,7 +85,7 @@ export default function HistoryModal({
     const ideEntry = ides.find(i => i.id === activeConv.routeId);
     const chats = ideEntry?.chats || [];
     const activeChatId = ideEntry?.activeChat?.id;
-    const isSavedSessionMode = isCliConv(activeConv) && !isAcpConv(activeConv);
+    const isSavedSessionMode = isCliConv(activeConv);
     const [localFilters, setLocalFilters] = useState<SavedHistoryFilterState>(() => createSavedHistoryFilterState());
     const [pendingSwitch, setPendingSwitch] = useState<PendingSwitchTarget | null>(null);
     const filters = savedHistoryFilters || localFilters;

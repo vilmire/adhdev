@@ -172,7 +172,7 @@ test('slimTurnPresentation returns null for non-object / empty turns', () => {
   assert.equal(slimTurnPresentation([1, 2]), null);
 });
 
-test('compactChatPayload without preserveTurn keeps the legacy shape (magi/review paths unchanged)', () => {
+test('compactChatPayload without preserveTurn keeps the legacy shape (review paths unchanged)', () => {
   const compact = compactChatPayload(REDUCER_READ_CHAT, { sessionId: 'sess-local', limit: 10 });
   assert.equal(compact.turn, undefined);
   assert.equal(compact.attemptId, undefined);

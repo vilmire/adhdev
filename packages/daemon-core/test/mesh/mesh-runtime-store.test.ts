@@ -1143,9 +1143,9 @@ describe('mesh-runtime-store', () => {
             const meshId = `mesh-caller-${randomUUID()}`;
             const sessionId = `sess-${randomUUID()}`;
 
-            db.recordMeshToolCall({ meshId, tool: 'mesh_graph_view', sessionId, callerRole: 'coordinator' });
-            db.recordMeshToolCall({ meshId, tool: 'mesh_graph_view', sessionId: null, callerRole: 'unknown' });
-            db.recordMeshToolCall({ meshId, tool: 'mesh_graph_view', sessionId, callerRole: 'coordinator' });
+            db.recordMeshToolCall({ meshId, tool: 'mesh_view_queue', sessionId, callerRole: 'coordinator' });
+            db.recordMeshToolCall({ meshId, tool: 'mesh_view_queue', sessionId: null, callerRole: 'unknown' });
+            db.recordMeshToolCall({ meshId, tool: 'mesh_view_queue', sessionId, callerRole: 'coordinator' });
 
             const rows = db.getRecentToolCalls(meshId, 10);
             expect(rows).toHaveLength(3);

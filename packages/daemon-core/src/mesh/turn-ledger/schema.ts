@@ -3,7 +3,7 @@
 // ---------------------------------------------------------------------------
 // Wiring-unification Phase C3 + the C-W3 audit corrections. These tables live
 // in `mesh-runtime.db` next to `mesh_queue` so a turn commit, its queue row
-// flip and its graph advance are ONE better-sqlite3 transaction (C2).
+// flip and its output version are ONE better-sqlite3 transaction (C2).
 //
 // Creation is additive and idempotent (`CREATE … IF NOT EXISTS`), run on every
 // store open, exactly like the rest of mesh-runtime-store-schema.ts. What is
@@ -26,7 +26,7 @@
 //     (OPERATING_NOTE_CATEGORY_TTL_DAYS) needs it; it was payload.category.
 //   mesh_local_records (C-W9a) — the LOCAL-ONLY half of `meshRecord(...,
 //     {local})`: the full nested payload of a non-turn mesh record (refine
-//     job results, MAGI synthesis, dispatch failure errors, diagnostics) that
+//     job results, dispatch failure errors, diagnostics) that
 //     the content-free `mesh.<id>.events` projection drops. Its own table,
 //     not `turn_events` rows: a record has no attempt / generation / verdict /
 //     publish state, often no session (turn_events.session_id is NOT NULL),

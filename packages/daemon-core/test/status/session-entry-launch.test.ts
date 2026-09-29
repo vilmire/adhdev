@@ -1,8 +1,7 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { buildSessionEntries, buildSessionLaunchFields } from '../../src/status/builders.js'
 import { buildSessionLaunchRecord } from '../../src/sessions/launch-record.js'
 import { nativeHistoryObservedModel } from '../../src/providers/native-history/observed-model.js'
-import { AcpProviderInstance } from '../../src/providers/acp-provider-instance.js'
 
 // Phase E surfaces: SessionEntry carries the full launch record over P2P plus
 // the derived model / modelSource / thinkingLevel scalars.
@@ -41,19 +40,19 @@ describe('buildSessionLaunchFields', () => {
   })
 })
 
-describe('buildSessionEntries — launch record on CLI / ACP entries', () => {
+describe('buildSessionEntries — launch record on CLI entries', () => {
   const base = { status: 'idle', workspace: '/repo', activeChat: null, settings: {}, lastUpdated: 1, pendingEvents: [] }
 
-  it('copies a state-carried launch record into CLI and ACP entries, and never into IDE entries', () => {
+  it('copies a state-carried launch record into CLI entries, and never into IDE entries', () => {
     const sessions = buildSessionEntries([
       { ...base, category: 'cli', type: 'claude-cli', name: 'Claude', instanceId: 'cli-1', mode: 'chat', launch } as any,
-      { ...base, category: 'acp', type: 'x-acp', name: 'X', instanceId: 'acp-1', mode: 'chat', launch: { ...launch, sessionId: 'acp-1' } } as any,
+      { ...base, category: 'cli', type: 'codex-cli', name: 'X', instanceId: 'cli-2', mode: 'chat', launch: { ...launch, sessionId: 'cli-2' } } as any,
       { ...base, category: 'ide', type: 'cursor', name: 'Cursor', instanceId: 'ide-1', cdpConnected: true, extensions: [] } as any,
     ], new Map(), { profile: 'full' })
 
     const byId = new Map(sessions.map((s) => [s.id, s]))
     expect(byId.get('cli-1')).toMatchObject({ model: 'sonnet', modelSource: 'remembered', thinkingLevel: 'high', launch: { launchedBy: 'dashboard' } })
-    expect(byId.get('acp-1')).toMatchObject({ model: 'sonnet', launch: { sessionId: 'acp-1' } })
+    expect(byId.get('cli-2')).toMatchObject({ model: 'sonnet', launch: { sessionId: 'cli-2' } })
     expect(byId.get('ide-1')).not.toHaveProperty('launch')
     expect(byId.get('ide-1')).not.toHaveProperty('model')
   })
@@ -77,19 +76,5 @@ describe('nativeHistoryObservedModel', () => {
     expect(nativeHistoryObservedModel({ usage: { lastUsageAt: 5 } })).toBeNull()
     expect(nativeHistoryObservedModel({ usage: { model: 'm' } })).toBeNull()
     expect(nativeHistoryObservedModel(null)).toBeNull()
-  })
-})
-
-describe('AcpProviderInstance model observer', () => {
-  it('reports the current selection when installed and every later agent-reported model', () => {
-    const instance = new AcpProviderInstance({ type: 'x-acp', name: 'X', category: 'acp', spawn: { command: 'x' } } as any, '/repo')
-    ;(instance as any).setCurrentSelection('model', 'sonnet')
-    const observer = vi.fn()
-    instance.setModelObserver(observer)
-    expect(observer).toHaveBeenCalledWith('sonnet', expect.any(Number))
-    ;(instance as any).setCurrentSelection('model', 'opus')
-    expect(observer).toHaveBeenLastCalledWith('opus', expect.any(Number))
-    ;(instance as any).setCurrentSelection('mode', 'plan')
-    expect(observer).toHaveBeenCalledTimes(2)
   })
 })

@@ -14,22 +14,13 @@
 
 import type { CommandTransport } from '../transports/mode.js';
 import type { MeshContext } from './mesh-tools-internal.js';
-import { recordMeshCoordinatorToolCall } from './mesh-tools-internal.js';
-import {
-    meshGraphGateAbandon,
-    meshGraphGateClaim,
-    meshGraphGateExtend,
-    meshGraphGateRelease,
-} from './mesh-tools-graph.js';
 import { meshNodeSlotsList, meshNodeSlotsSet } from './mesh-tools-slots.js';
 import { meshNodeSlotsPropose } from './mesh-tools-slot-autodetect.js';
-import { meshMagiKindPanelList, meshMagiKindPanelSet } from './mesh-tools-magi.js';
 import { meshCoordinatorPromptAppendGet, meshCoordinatorPromptAppendSet } from './mesh-tools-coordinator-prompt.js';
 import { meshForgetNote, meshRecordNote } from './mesh-tools-mission.js';
 import { meshChangeImpactConfig, meshInit, meshRefineConfig, meshReinit, meshWriteMeshJsonConfig } from './mesh-tools-refine.js';
 import { meshCreate, meshPlanOnboarding } from './mesh-tools-crud.js';
 import { meshCleanupSessions, meshPruneStaleDirect } from './mesh-tools-session.js';
-import { readString } from '@adhdev/mesh-shared';
 
 type Args = Record<string, any>;
 
@@ -48,33 +39,6 @@ function without(args: Args, key: string): Args {
     return rest;
 }
 
-/** `mesh_graph_gate` — claim / release / abandon / extend a coordinator gate. */
-export async function meshGraphGate(ctx: MeshContext, args: Args = {}): Promise<string> {
-    const rest = without(args, 'action');
-    switch (args.action) {
-        case 'claim':
-            return meshGraphGateClaim(ctx, rest);
-        case 'release':
-            return meshGraphGateRelease(ctx, rest);
-        case 'abandon':
-            return meshGraphGateAbandon(ctx, rest);
-        case 'extend': {
-            await recordMeshCoordinatorToolCall(ctx, 'mesh_graph_gate');
-            const gateId = readString(rest.gate_id) || readString(rest.gateId);
-            if (!gateId) {
-                return JSON.stringify({
-                    success: false,
-                    code: 'missing_gate_id',
-                    error: 'mesh_graph_gate action=extend requires gate_id. Use mesh_graph_view to list gates.',
-                });
-            }
-            return meshGraphGateExtend(ctx, gateId, rest);
-        }
-        default:
-            return invalidDiscriminator('mesh_graph_gate', 'action', args.action, ['claim', 'release', 'abandon', 'extend']);
-    }
-}
-
 /** `mesh_node_slots` — list / propose / set a node's capability slots. */
 export async function meshNodeSlots(ctx: MeshContext, args: Args = {}): Promise<string> {
     const rest = without(args, 'action');
@@ -87,19 +51,6 @@ export async function meshNodeSlots(ctx: MeshContext, args: Args = {}): Promise<
             return meshNodeSlotsSet(ctx, rest);
         default:
             return invalidDiscriminator('mesh_node_slots', 'action', args.action, ['list', 'propose', 'set']);
-    }
-}
-
-/** `mesh_magi_kind_panel` — list / set MAGI task_kind → panel bindings. */
-export async function meshMagiKindPanel(ctx: MeshContext, args: Args = {}): Promise<string> {
-    const rest = without(args, 'action');
-    switch (args.action) {
-        case 'list':
-            return meshMagiKindPanelList(ctx, rest);
-        case 'set':
-            return meshMagiKindPanelSet(ctx, rest);
-        default:
-            return invalidDiscriminator('mesh_magi_kind_panel', 'action', args.action, ['list', 'set']);
     }
 }
 

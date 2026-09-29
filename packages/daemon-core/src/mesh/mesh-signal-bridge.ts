@@ -6,12 +6,12 @@
  * screen-signal rule matched, without knowing what a mesh is; this module
  * applies the mesh meaning — resolve the binding, drop non-mesh sessions, and
  * page the coordinator through the SAME pendingCoordinatorEvents channel task
- * completions and graph-gate notifications already use.
+ * completions and queue dependency notices already use.
  *
  * Nothing new is invented for delivery: `notifyMeshCoordinator` gives
  * durable queueing, dedup, the v2 envelope, and idle-edge injection for free.
  * The event name is `mesh:provider_signal`, matching the `mesh:*` convention the
- * graph-gate notifications established for informational coordinator pages.
+ * dependency notices use for informational coordinator pages.
  *
  * ── Deliberately NOT force-injected ─────────────────────────────────────────
  * The event is not added to MESH_FORCE_INJECT_EVENTS. Force-injection exists to
@@ -78,7 +78,7 @@ import { resolveMeshTerminationBinding } from './mesh-termination-bridge.js';
 import { notifyMeshCoordinator } from './turn-ledger/deliver.js';
 
 /** The coordinator-facing event name. `mesh:*` = informational page, matching
- *  the graph-gate notification convention. */
+ *  the queue dependency notice convention. */
 export const PROVIDER_SIGNAL_EVENT = 'mesh:provider_signal';
 
 /** Cap the rendered param list so an over-capturing rule cannot flood the

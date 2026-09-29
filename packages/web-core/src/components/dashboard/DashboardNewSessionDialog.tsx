@@ -223,10 +223,6 @@ export default function DashboardNewSessionDialog({
         () => ((selectedMachine?.availableProviders || []).filter(provider => isLaunchableMachineProvider(provider, 'cli'))),
         [selectedMachine],
     )
-    const acpProviders = useMemo(
-        () => ((selectedMachine?.availableProviders || []).filter(provider => isLaunchableMachineProvider(provider, 'acp'))),
-        [selectedMachine],
-    )
     const ideTargets = useMemo(
         () => (selectedMachine?.detectedIdes || []).map(ide => ({
             id: ide.type,
@@ -242,25 +238,18 @@ export default function DashboardNewSessionDialog({
                 label: provider.displayName || provider.type,
                 meta: '',
             }))
-            : activeKind === 'acp'
-                ? acpProviders.map(provider => ({
-                    id: provider.type,
-                    label: provider.displayName || provider.type,
-                    meta: '',
-                }))
-                : ideTargets,
-        [acpProviders, activeKind, cliProviders, ideTargets],
+            : ideTargets,
+        [activeKind, cliProviders, ideTargets],
     )
-    // One grouped provider list (CLI, then ACP, then IDE) instead of a category
+    // One grouped provider list (CLI, then IDE) instead of a category
     // chip row + a per-category list: picking a row sets kind and target together,
     // and the protocol is only a small hint on the row. Mesh coordinators are CLI-only.
     const launchTargets = useMemo(() => {
         const cli = cliProviders.map(provider => ({ kind: 'cli' as const, id: provider.type, label: provider.displayName || provider.type, meta: '' }))
         if (workspaceMode === 'mesh') return cli
-        const acp = acpProviders.map(provider => ({ kind: 'acp' as const, id: provider.type, label: provider.displayName || provider.type, meta: '' }))
         const ide = ideTargets.map(target => ({ kind: 'ide' as const, ...target }))
-        return [...cli, ...acp, ...ide]
-    }, [acpProviders, cliProviders, ideTargets, workspaceMode])
+        return [...cli, ...ide]
+    }, [cliProviders, ideTargets, workspaceMode])
 
     const selectedMesh = useMemo(
         () => meshOptions.find(mesh => mesh.id === selectedMeshId) || null,
@@ -270,19 +259,19 @@ export default function DashboardNewSessionDialog({
         () => cliProviders.find(provider => provider.type === selectedTarget) || null,
         [cliProviders, selectedTarget],
     )
-    // Model + thinking dropdown options for the currently-selected provider (cli or
-    // acp). Advisory lists from the provider manifest; model still accepts free text.
+    // Model + thinking dropdown options for the currently-selected CLI provider.
+    // Advisory lists from the provider manifest; model still accepts free text.
     const activeLaunchProvider = useMemo(
-        () => [...cliProviders, ...acpProviders].find(p => p.type === selectedTarget) as any,
-        [cliProviders, acpProviders, selectedTarget],
+        () => cliProviders.find(p => p.type === selectedTarget) as any,
+        [cliProviders, selectedTarget],
     )
     const autoApproveModes = activeKind === 'cli'
         ? activeLaunchProvider?.autoApproveModes
         : undefined
     const autoApproveModesFingerprint = JSON.stringify(autoApproveModes || null)
     const initialAutoApproveModeId = resolveInitialAutoApproveModeId(autoApproveModes)
-    // Shared provider-option lookup — same source the slot editor and MAGI editor
-    // read, so a provider's model/thinking lists come from one place.
+    // Shared provider-option lookup — same source the slot editor
+    // reads, so a provider's model/thinking lists come from one place.
     const modelOptionsForTarget = useMemo(
         () => modelOptionsForProvider(activeLaunchProvider ? [activeLaunchProvider] : [], activeLaunchProvider?.type),
         [activeLaunchProvider],
@@ -434,11 +423,10 @@ export default function DashboardNewSessionDialog({
             setActiveKind(prev => {
                 if (prev === 'ide' && ideTargets.length > 0) return prev
                 if (prev === 'cli' && cliProviders.length > 0) return prev
-                if (prev === 'acp' && acpProviders.length > 0) return prev
                 return getDefaultLaunchKind(selectedMachine)
             })
         }
-    }, [acpProviders.length, cliProviders.length, defaultWorkspaceId, ideTargets.length, remembered, selectedMachine, workspaceRows])
+    }, [cliProviders.length, defaultWorkspaceId, ideTargets.length, remembered, selectedMachine, workspaceRows])
 
     useEffect(() => {
         if (!selectedMachine || workspaceMode !== 'mesh') return
@@ -923,18 +911,14 @@ export default function DashboardNewSessionDialog({
             ? (isCliResume ? t('newSession.resumeSavedHistory') : t('newSession.startFresh'))
             : activeKind === 'ide'
                 ? t('newSession.startIde')
-                : activeKind === 'acp'
-                    ? t('newSession.startAcpSession')
-                    : t('newSession.start')
+                : t('newSession.start')
     const primaryBusyLabel = workspaceMode === 'mesh'
         ? t('newSession.startingCoordinator')
         : activeKind === 'cli'
             ? (isCliResume ? t('newSession.resumingSavedHistory') : t('newSession.startingFresh'))
             : activeKind === 'ide'
                 ? t('newSession.startingIde')
-                : activeKind === 'acp'
-                    ? t('newSession.startingAcpSession')
-                    : t('newSession.starting')
+                : t('newSession.starting')
     const useMachineDropdown = sortedMachines.length > 5
 
     if (!selectedMachine) {

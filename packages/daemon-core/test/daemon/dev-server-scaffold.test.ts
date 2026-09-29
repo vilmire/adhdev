@@ -5,12 +5,12 @@ import os from 'node:os'
 import http from 'node:http'
 import { DevServer } from '../../src/daemon/dev-server.js'
 import { ProviderLoader } from '../../src/providers/provider-loader.js'
-import { validateCliProviderManifest, validateAcpProviderManifest } from '../../src/providers/sdk/v1/index.js'
+import { validateCliProviderManifest } from '../../src/providers/sdk/v1/index.js'
 import { validateFsmSpec } from '../../src/providers/spec/fsm-loader.js'
 
 // These tests drive the REAL `/api/scaffold` HTTP route (handleScaffold ->
-// genScaffoldFiles / buildCliProviderV1Scaffold / buildAcpProviderV1Scaffold)
-// exactly as web-devconsole and the online-first path of `adhdev provider
+// genScaffoldFiles / buildCliProviderV1Scaffold)
+// exactly as the online-first path of `adhdev provider
 // create` (packages/daemon-cloud/src/cli/provider-commands.ts) call it, then
 // run the output through the same daemon-core validators the daemon uses at
 // install/load time and at launch time — a green run here means the
@@ -108,25 +108,6 @@ describe('DevServer /api/scaffold', () => {
     const spec = JSON.parse(readFileSync(specPath, 'utf-8'))
     const specErrors = validateFsmSpec(spec as any)
     expect(specErrors).toEqual([])
-  })
-
-  it('category=acp writes a single provider.v1.json that passes validateAcpProviderManifest', async () => {
-    tempRoot = mkdtempSync(path.join(os.tmpdir(), 'adhdev-devserver-scaffold-'))
-    const started = await startServer(tempRoot)
-    server = started.server
-
-    const res = await postScaffold(started.port, { type: 'my-acp', name: 'My ACP', category: 'acp' })
-    expect(res.status).toBe(201)
-    expect(res.json.files).toEqual(['provider.v1.json'])
-
-    const targetDir = res.json.path as string
-    const manifestPath = path.join(targetDir, 'provider.v1.json')
-    expect(existsSync(manifestPath)).toBe(true)
-    expect(existsSync(path.join(targetDir, 'specs'))).toBe(false)
-
-    const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'))
-    const result = validateAcpProviderManifest(manifest)
-    expect(result.ok, JSON.stringify((result as any).issues)).toBe(true)
   })
 
   it('category=ide still produces the legacy provider.json + scripts/<version>/*.js layout (engine still live)', async () => {

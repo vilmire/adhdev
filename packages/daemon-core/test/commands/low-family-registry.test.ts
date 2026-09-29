@@ -99,17 +99,16 @@ const TURN_LEDGER_IPC_CMDS = [
   'mesh_index_query', 'mission_upsert', 'mission_query', 'note_upsert', 'note_forget',
   // C-W9b / C-W9a store commands (mesh-store-ipc.ts, merged into the same map).
   'tool_call_record', 'ledger_query', 'mission_list_query', 'record_local', 'queue_query',
-  'queue_enqueue', 'queue_enqueue_graph', 'queue_cancel', 'queue_requeue', 'direct_dispatch_record',
-  'graph_audit_record', 'active_work_query', 'recovery_context_query',
-  // C-W9c store commands (mesh-graph-ipc.ts, merged into the same map): the last
-  // mcp-server in-process daemon-core paths — graph gates/plan/patch, task/mission
-  // stats, one prune audit, orphaned-pin notify.
-  'graph_gate_claim', 'graph_gate_release', 'graph_gate_abandon', 'graph_node_patch',
-  'graph_view_query', 'task_stats_query', 'prune_stale_direct', 'orphaned_pin_notify',
+  'queue_enqueue', 'queue_enqueue_batch', 'queue_cancel', 'queue_requeue', 'direct_dispatch_record',
+  'active_work_query', 'recovery_context_query',
+  // C-W9c store commands (mesh-stats-ipc.ts, merged into the same map): the last
+  // mcp-server in-process daemon-core paths — task/mission stats, one prune
+  // audit, orphaned-pin notify.
+  'task_stats_query', 'prune_stale_direct', 'orphaned_pin_notify',
 ]
 
 describe('low-family registry', () => {
-  it('registers all 92 LOW family commands once, no overlap', () => {
+  it('registers all 86 LOW family commands once, no overlap', () => {
     const all = [
       ...SESSION_HOST_CMDS, ...SPEC_CMDS, ...REFINE_CMDS,
       ...DIAGNOSTICS_CMDS, ...STATUS_META_CMDS, ...COORDINATOR_PROMPT_CMDS,
@@ -122,8 +121,10 @@ describe('low-family registry', () => {
     // orphaned-pin commands + 1 worker_report_forwarded (F7, 2026-09-25) + 1
     // worker_progress_forwarded (F7 progress axis) + 1 request_transcript_base
     // (keyed chat resync, 2026-09-28) − report_transcript_transport (removed
-    // with the legacy chat push lane, 2026-09-29) = 92.
-    expect(all).toHaveLength(92)
+    // with the legacy chat push lane, 2026-09-29) − 6 graph commands
+    // (graph_audit_record + graph_gate_claim/release/abandon + graph_node_patch
+    // + graph_view_query, retired with graph orchestration 2026-09-30) = 86.
+    expect(all).toHaveLength(86)
     // no duplicate command names across families
     expect(new Set(all).size).toBe(all.length)
     expect(lowFamilyNames()).toHaveLength(all.length)

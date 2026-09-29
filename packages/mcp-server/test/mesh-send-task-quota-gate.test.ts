@@ -20,7 +20,7 @@ import { closeOpenTestAttempts, isTurnIpcCommand, answerTurnIpc } from './helper
 // ledger's mesh_direct attempt ed31090f… spent ~10 minutes talking to a MainPC
 // claude-cli worker whose own chat already showed "You've hit your session
 // limit · resets 10:10pm (Asia/Seoul)". This suite pins the tool-boundary
-// refusal added to meshSendTask (mesh-tools-session.ts) + ipcDispatchToRemoteAgent
+// refusal added to meshSendTask (mesh-tools-session.ts) + resolveRemoteDispatchTarget
 // (mesh-tools-internal.ts), reusing evaluateProviderQuotaGate — the SAME
 // predicate the claim gate and the manual-launch path already call.
 

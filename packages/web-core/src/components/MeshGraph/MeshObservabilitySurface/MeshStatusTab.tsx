@@ -329,7 +329,7 @@ export function MeshNodeRuntimeChips({ node, previewVersion, machineVersions, hi
     const isWorktree = node.isLocalWorktree === true
     const bootstrap = node.worktreeBootstrap as { status?: string } | undefined
     const staleBuild = node.staleDaemonBuild
-    // T7: detected provider CLI/ACP versions on this node. Machine ⊃ nodes:
+    // T7: detected provider CLI versions on this node. Machine ⊃ nodes:
     // versions are a machine property rendered once on the machine card; a node
     // row only surfaces SKEW — a provider whose reported version differs from
     // the machine consensus (stale report / partial env).

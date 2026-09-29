@@ -164,11 +164,6 @@ export function isCliEntry(entry: { transport?: string }): boolean {
     return entry.transport === 'pty'
 }
 
-/** Determine if entry is an ACP session */
-export function isAcpEntry(entry: { transport?: string }): boolean {
-    return entry.transport === 'acp'
-}
-
 /** Per-platform icon — now rendered as SVG at component level, kept for compat */
 export const PLATFORM_ICONS: Record<string, string> = {}
 
@@ -327,7 +322,6 @@ export interface MachineGroup {
     daemonIde: DaemonData
     ideSessions: IdeSessionSummary[]
     cliSessions: CliSessionSummary[]
-    acpSessions: AcpSessionSummary[]
     detectedIdes: DetectedIdeInfo[]
     p2p?: { available: boolean; state: string; peers: number }
 }
@@ -381,7 +375,6 @@ function getMachineGroupActivityAt(group: MachineGroup): number {
         getDaemonEntryActivityAt(group.daemonIde),
         ...group.ideSessions.map((session) => session.lastActivityAt),
         ...group.cliSessions.map((session) => session.lastActivityAt),
-        ...group.acpSessions.map((session) => session.lastActivityAt),
     )
 }
 
@@ -423,19 +416,6 @@ export interface CliSessionSummary {
     runtimeDisplayName?: string
     runtimeWorkspaceLabel?: string
     runtimeWriteOwner?: RuntimeWriteOwner | null
-    lastActivityAt: number
-    surfaceHidden?: boolean
-}
-
-/** ACP session summary for machine detail/overview display */
-export interface AcpSessionSummary {
-    id: string
-    sessionId?: string
-    acpType: string
-    acpName: string
-    status: string
-    workspace: string
-    model?: string
     lastActivityAt: number
     surfaceHidden?: boolean
 }
@@ -493,7 +473,6 @@ export function groupByMachine(daemons: DaemonData[], providerLabels: Record<str
                 daemonIde: daemon,
                 ideSessions: [],
                 cliSessions: [],
-                acpSessions: [],
                 detectedIdes: daemon.detectedIdes || [],
                 p2p: daemon.p2p,
             })
@@ -519,30 +498,7 @@ export function groupByMachine(daemons: DaemonData[], providerLabels: Record<str
         if (!parent) continue
 
         const dedupeKey = getMachineSessionDedupeKey(daemon)
-        if (isAcpEntry(daemon)) {
-            const existing = parent.acpSessions.find(a => getMachineSessionDedupeKey(a) === dedupeKey)
-            if (existing) {
-                const incomingName = daemon.cliName || daemon.type
-                if (isDisplayNameLabel(incomingName, daemon.type) && !isDisplayNameLabel(existing.acpName, existing.acpType)) {
-                    existing.acpName = incomingName
-                }
-                existing.status = pickLiveSessionStatus(existing.status, daemon.status || 'online')
-                existing.lastActivityAt = Math.max(existing.lastActivityAt, getDaemonEntryActivityAt(daemon))
-                if (!existing.workspace && daemon.workspace) existing.workspace = daemon.workspace
-                if (daemon.surfaceHidden !== undefined) existing.surfaceHidden = existing.surfaceHidden || daemon.surfaceHidden
-            } else {
-                parent.acpSessions.push({
-                    id: daemon.id,
-                    sessionId: daemon.sessionId,
-                    acpType: daemon.type,
-                    acpName: daemon.cliName || daemon.type,
-                    status: daemon.status || 'online',
-                    workspace: daemon.workspace || '',
-                    lastActivityAt: getDaemonEntryActivityAt(daemon),
-                    surfaceHidden: daemon.surfaceHidden,
-                })
-            }
-        } else if (isCliEntry(daemon)) {
+        if (isCliEntry(daemon)) {
             const existing = parent.cliSessions.find(c => getMachineSessionDedupeKey(c) === dedupeKey)
             if (existing) {
                 const incomingName = daemon.cliName || daemon.type
@@ -608,14 +564,6 @@ export function groupByMachine(daemons: DaemonData[], providerLabels: Record<str
             right.lastActivityAt,
             left.cliName,
             right.cliName,
-            left.id,
-            right.id,
-        ))
-        machine.acpSessions.sort((left, right) => compareActivityThenLabel(
-            left.lastActivityAt,
-            right.lastActivityAt,
-            left.acpName,
-            right.acpName,
             left.id,
             right.id,
         ))

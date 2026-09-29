@@ -119,15 +119,13 @@ export function getQueueHeads(self: MeshRuntimeStore, meshId: string, statuses?:
  * computed by SQLite's json_each instead of parsing every live payload in JS, and the
  * status + updated_at filters are served by idx_mesh_queue_status_updated.
  *
- * ★The queue task's NON-GRAPH `mesh_task_outputs` rows (graph_id IS NULL — plain
- * `report_completion` envelopes, keyed by the queue task id) go in the SAME
- * transaction, BEFORE the queue rows: an output has no retention of its own, so
- * the queue window is its window (measured 2026-09-29: 2,046 such rows / 13 MB,
- * oldest 2026-08-18, 755 already orphaned by an earlier queue prune). An output
- * survives while its task still has a queue row that is not yet prunable or is a
- * live `dependsOn` anchor (`mesh-upstream-results` reads it), and is never
- * younger than the window. Graph-owned outputs (graph_id set) belong to the
- * graph cascade (MeshGraphStore.pruneTerminalGraphs) and are never touched here.
+ * ★The queue task's `mesh_task_outputs` rows (completion envelopes, keyed by the
+ * queue task id) go in the SAME transaction, BEFORE the queue rows: an output has
+ * no retention of its own, so the queue window is its window (measured
+ * 2026-09-29: 2,046 such rows / 13 MB, oldest 2026-08-18, 755 already orphaned by
+ * an earlier queue prune). An output survives while its task still has a queue
+ * row that is not yet prunable or is a live `dependsOn` anchor
+ * (`mesh-upstream-results` reads it), and is never younger than the window.
  */
 export function pruneTerminalQueueEntriesDetailed(
     self: MeshRuntimeStore,
@@ -147,7 +145,7 @@ export function pruneTerminalQueueEntriesDetailed(
         const taskOutputs = self.db.prepare(
             `WITH ${protectedCte}
              DELETE FROM mesh_task_outputs
-             WHERE graph_id IS NULL AND created_at < ?
+             WHERE created_at < ?
                AND task_id NOT IN (SELECT id FROM protected)
                AND task_id NOT IN (
                    SELECT id FROM mesh_queue
@@ -252,14 +250,13 @@ export interface MeshQueueFacts {
     status: MeshTaskStatus;
     missionId?: string;
     dependsOn?: string[];
-    blockedReason?: string;
     cancelReason?: string;
     updatedAt?: string;
     dispatchTimestamp?: string;
     requeueCount?: number;
 }
 
-const FACT_PATHS = "'$.missionId', '$.dependsOn', '$.blockedReason', '$.cancelReason', '$.updatedAt', '$.dispatchTimestamp', '$.requeueCount'";
+const FACT_PATHS = "'$.missionId', '$.dependsOn', '$.cancelReason', '$.updatedAt', '$.dispatchTimestamp', '$.requeueCount'";
 
 function readFactsRow(row: { id: string; status: MeshTaskStatus; f: string | null }): MeshQueueFacts {
     const facts: MeshQueueFacts = { id: row.id, status: row.status };
@@ -267,10 +264,9 @@ function readFactsRow(row: { id: string; status: MeshTaskStatus; f: string | nul
     let parts: unknown;
     try { parts = JSON.parse(row.f); } catch { return facts; }
     if (!Array.isArray(parts)) return facts;
-    const [missionId, dependsOn, blockedReason, cancelReason, updatedAt, dispatchTimestamp, requeueCount] = parts;
+    const [missionId, dependsOn, cancelReason, updatedAt, dispatchTimestamp, requeueCount] = parts;
     if (typeof missionId === 'string') facts.missionId = missionId;
     if (Array.isArray(dependsOn)) facts.dependsOn = dependsOn.filter((d): d is string => typeof d === 'string');
-    if (typeof blockedReason === 'string') facts.blockedReason = blockedReason;
     if (typeof cancelReason === 'string') facts.cancelReason = cancelReason;
     if (typeof updatedAt === 'string') facts.updatedAt = updatedAt;
     if (typeof dispatchTimestamp === 'string') facts.dispatchTimestamp = dispatchTimestamp;
@@ -313,30 +309,28 @@ export function getQueueStatusCounts(
     return { counts, oldHistoricalCount };
 }
 
-/** id / status / blockedReason / cancelReason for the given row ids (missing ids are absent). */
+/** id / status / cancelReason for the given row ids (missing ids are absent). */
 export function getQueueDependencyHeads(
     self: MeshRuntimeStore,
     meshId: string,
     ids: readonly string[],
-): Array<{ id: string; status: MeshTaskStatus; blockedReason?: string; cancelReason?: string }> {
+): Array<{ id: string; status: MeshTaskStatus; cancelReason?: string }> {
     const unique = [...new Set(ids.filter(id => typeof id === 'string' && id))];
     if (unique.length === 0) return [];
     self.ensureLegacyQueueMigrated(meshId);
-    const out: Array<{ id: string; status: MeshTaskStatus; blockedReason?: string; cancelReason?: string }> = [];
+    const out: Array<{ id: string; status: MeshTaskStatus; cancelReason?: string }> = [];
     // Chunked: SQLite's bound-parameter limit.
     for (let i = 0; i < unique.length; i += 500) {
         const chunk = unique.slice(i, i + 500);
         const rows = self.db.prepare(
             `SELECT id, status,
-                    CASE WHEN json_valid(payload) THEN json_extract(payload, '$.blockedReason') END AS blocked,
                     CASE WHEN json_valid(payload) THEN json_extract(payload, '$.cancelReason') END AS cancel
              FROM mesh_queue WHERE mesh_id = ? AND id IN (${chunk.map(() => '?').join(', ')})`
-        ).all(meshId, ...chunk) as Array<{ id: string; status: MeshTaskStatus; blocked: unknown; cancel: unknown }>;
+        ).all(meshId, ...chunk) as Array<{ id: string; status: MeshTaskStatus; cancel: unknown }>;
         for (const row of rows) {
             out.push({
                 id: row.id,
                 status: row.status,
-                ...(typeof row.blocked === 'string' ? { blockedReason: row.blocked } : {}),
                 ...(typeof row.cancel === 'string' ? { cancelReason: row.cancel } : {}),
             });
         }

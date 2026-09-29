@@ -17,23 +17,15 @@
 
 export { triggerMeshQueueAndReport } from './mesh-tools-internal.js';
 export { ALL_MESH_TOOLS, MESH_LIST_NODES_TOOL, MESH_STATUS_TOOL, MESH_ROUTE_PREVIEW_TOOL } from './mesh-tool-schemas.js';
-export { MESH_INIT_TOOL, MESH_CONFIG_TOOL, MESH_MAGI_KIND_PANEL_TOOL, MESH_NODE_SLOTS_TOOL, MESH_COORDINATOR_PROMPT_APPEND_TOOL, MESH_REFINE_BATCH_TOOL, MESH_REFINE_NODE_TOOL, MESH_REFINE_PLAN_TOOL, MESH_REVIEW_INBOX_TOOL, MESH_NOTIFY_WORKER_TOOL } from './mesh-tool-schemas-refine-config.js';
+export { MESH_INIT_TOOL, MESH_CONFIG_TOOL, MESH_NODE_SLOTS_TOOL, MESH_COORDINATOR_PROMPT_APPEND_TOOL, MESH_REFINE_BATCH_TOOL, MESH_REFINE_NODE_TOOL, MESH_REFINE_PLAN_TOOL, MESH_REVIEW_INBOX_TOOL, MESH_NOTIFY_WORKER_TOOL } from './mesh-tool-schemas-refine-config.js';
 export { MESH_APPROVE_TOOL, MESH_ANSWER_QUESTION_TOOL, MESH_CLEANUP_SESSIONS_TOOL, MESH_CLEANUP_WORKTREE_NODES_TOOL, MESH_CREATE_TOOL, MESH_ADD_NODE_TOOL, MESH_CLONE_NODE_TOOL, MESH_LIST_PENDING_APPROVALS_TOOL, MESH_MISSION_LIST_TOOL, MESH_MISSION_UPSERT_TOOL, MESH_RECONCILE_LEDGER_TOOL, MESH_NOTE_TOOL, MESH_REMOVE_NODE_TOOL, MESH_TASK_HISTORY_TOOL } from './mesh-tool-schemas-admin.js';
 export { MESH_CHECKPOINT_TOOL, MESH_FAST_FORWARD_NODE_TOOL, MESH_GIT_STATUS_TOOL, MESH_LAUNCH_SESSION_TOOL, MESH_READ_CHAT_TOOL, MESH_READ_DEBUG_TOOL, MESH_READ_NODE_LOGS_TOOL, MESH_RESTART_DAEMON_TOOL, MESH_SEND_TASK_TOOL } from './mesh-tool-schemas-session.js';
-export { MESH_ENQUEUE_TASK_TOOL, MESH_GRAPH_VIEW_TOOL, MESH_GRAPH_GATE_TOOL, MESH_GRAPH_NODE_PATCH_TOOL, MESH_QUEUE_CANCEL_TOOL, MESH_QUEUE_REQUEUE_TOOL, MESH_VIEW_QUEUE_TOOL } from './mesh-tool-schemas-queue.js';
+export { MESH_ENQUEUE_TASK_TOOL, MESH_QUEUE_CANCEL_TOOL, MESH_QUEUE_REQUEUE_TOOL, MESH_VIEW_QUEUE_TOOL } from './mesh-tool-schemas-queue.js';
 export { chooseDispatchableSession, classifyRemoteDelegateRelaySafety, isMeshOwnedDelegateSession } from './mesh-tools-internal-core.js';
 export { resolveCoordinatorDaemonId } from './mesh-node-identity.js';
 export type {
     MeshContext,
 } from './mesh-tools-internal.js';
-
-export type {
-    MagiTaskKind,
-    MagiRcaResponse,
-    MagiDesignResponse,
-    MagiFreeformResponse,
-    MagiKindParseResult,
-} from './mesh-tools-magi.js';
 
 export {
     meshListNodes,
@@ -47,16 +39,6 @@ export {
 export { meshEnqueueTask, meshEnqueueBatch } from './mesh-tools-queue.js';
 export { meshQueueCancel, meshQueueRequeue, meshViewQueue } from './mesh-tools-queue-manage.js';
 
-// GRAPH-ORCHESTRATION Phase E — coordinator gate verbs + the graph view.
-export {
-    meshGraphGateClaim,
-    meshGraphGateRelease,
-    meshGraphGateAbandon,
-    meshGraphGateExtend,
-    meshGraphNodePatch,
-    meshGraphView,
-} from './mesh-tools-graph.js';
-
 export {
     meshMissionList,
     meshMissionUpsert,
@@ -67,36 +49,6 @@ export {
     meshTaskHistory,
     meshLedgerQuery,
 } from './mesh-tools-mission.js';
-
-export {
-    MAGI_MAX_REPLICAS,
-    MAGI_DEFAULT_WAIT_MS,
-    MAGI_MAX_WAIT_MS,
-    resolveMagiWaitTimeoutMs,
-    buildMagiFanoutPlan,
-    buildMagiTaskPrompt,
-    classifyStaleReplicas,
-    cleanupMagiAutoLaunchedSessions,
-    collectMagiCandidateTexts,
-    computeMagiCleanupTargets,
-    detectQuestionOutputSchemaConflict,
-    findMagiReplicaTasks,
-    magiOutputContractFor,
-    magiReadIndicatesApprovalWedge,
-    meshMagiCollect,
-    resolveMagiAutoCleanupMode,
-    meshMagiKindPanelList,
-    meshMagiKindPanelSet,
-    meshMagiReview,
-    normalizeMagiTaskKind,
-    parseFirstMagiCandidate,
-    parseFirstMagiCandidateForKind,
-    parseFirstMagiCandidateWithCompactFallback,
-    parseMagiResponse,
-    parseMagiResponseForKind,
-    sessionSharedWithAnotherReplica,
-    synthesizeMagiResponses,
-} from './mesh-tools-magi.js';
 
 export {
     meshNodeSlotsSet,
@@ -148,9 +100,7 @@ export {
 
 // 2026-09-26 tool consolidation — the merged-tool dispatchers.
 export {
-    meshGraphGate,
     meshNodeSlots,
-    meshMagiKindPanel,
     meshCoordinatorPromptAppend,
     meshNote,
     meshConfig,

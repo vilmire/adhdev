@@ -71,7 +71,7 @@ export function openOrResumeQueueAttempt(ledger: Pick<TurnLedger, 'store' | 'obs
         sessionId: args.sessionId,
         attemptRef: ref,
         // The attempt's task binding: R1's open_dispatch reads the envelope taskId
-        // (the queue_status / graph_advance effects key on it).
+        // (the queue_status / task_terminal effects key on it).
         taskId: args.task.id,
         observedBy: coordinatorDaemonId || 'local',
         kind: 'dispatch_accepted',

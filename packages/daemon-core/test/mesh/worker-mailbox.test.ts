@@ -19,7 +19,7 @@ import {
 } from '../../src/mesh/worker-mcp-isolation'
 import { workerMailboxHandlers } from '../../src/commands/low-family/worker-mailbox'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store'
-import { commitTaskTerminalAndAdvanceGraph } from '../../src/mesh/mesh-graph-transition-runner'
+import { commitTaskTerminal } from '../../src/mesh/mesh-task-terminal'
 
 beforeEach(() => {
   __resetWorkerMailboxForTest()
@@ -238,7 +238,7 @@ describe('mailbox lifecycle at the terminal chokepoint', () => {
     depositWorkerMailboxMessage({ meshId, taskId, text: 'never delivered — task finished first' })
     expect(peekWorkerMailboxCount(meshId, taskId)).toBe(1)
 
-    const result = commitTaskTerminalAndAdvanceGraph({ meshId, taskId, status: 'completed', source: 'stall_reconcile' })
+    const result = commitTaskTerminal({ meshId, taskId, status: 'completed', source: 'stall_reconcile' })
     expect(result.committed).toBe(true)
 
     expect(peekWorkerMailboxCount(meshId, taskId)).toBe(0)
@@ -249,7 +249,7 @@ describe('mailbox lifecycle at the terminal chokepoint', () => {
     const meshId = `mesh-${taskId}`
     seedQueueEntry(meshId, taskId)
 
-    const first = commitTaskTerminalAndAdvanceGraph({ meshId, taskId, status: 'completed', source: 'stall_reconcile' })
+    const first = commitTaskTerminal({ meshId, taskId, status: 'completed', source: 'stall_reconcile' })
     expect(first.committed).toBe(true)
     expect(first.duplicate).toBe(false)
 
@@ -259,7 +259,7 @@ describe('mailbox lifecycle at the terminal chokepoint', () => {
     // replay) — and must tolerate that without throwing, sweeping whatever is
     // pending at that moment even if it was deposited between the two calls.
     depositWorkerMailboxMessage({ meshId, taskId, text: 'deposited after terminal — should never be deliverable' })
-    const replay = commitTaskTerminalAndAdvanceGraph({ meshId, taskId, status: 'completed', source: 'stall_reconcile' })
+    const replay = commitTaskTerminal({ meshId, taskId, status: 'completed', source: 'stall_reconcile' })
     expect(replay.committed).toBe(true)
     expect(replay.duplicate).toBe(true)
     expect(peekWorkerMailboxCount(meshId, taskId)).toBe(0)

@@ -10,9 +10,8 @@
  *   Running  — assigned (incl. live "generating" sessions) and dispatchable
  *              pending tasks. Full colour, pinned to the top.
  *   Blocked  — anything a human or an unmet dependency is holding: sessions
- *              awaiting approval/choice, system-blocked rows (blockedReason /
- *              dependencyFailures), pending rows waiting on unmet deps, and
- *              coordinator GATES in a blocking state (their own row kind).
+ *              awaiting approval/choice, rows behind a failed dependency
+ *              (dependencyFailures), and pending rows waiting on unmet deps.
  *   Recent   — the newest {@link BLUEPRINT_RECENT_TERMINAL_LIMIT} terminal
  *              rows, rendered muted/compact.
  *   History  — every older terminal row, behind an incremental load-more.
@@ -22,7 +21,7 @@
  * without React Flow, ELK or a DOM.
  */
 import { useMemo } from 'react'
-import type { MeshGraphGateView, MeshGraphView, RepoMeshQueueTask, RepoMeshStatus } from '@adhdev/daemon-core'
+import type { RepoMeshQueueTask, RepoMeshStatus } from '@adhdev/daemon-core'
 import { isMeshTerminalTaskStatus, type MeshTaskStatus } from '@adhdev/mesh-shared'
 import { buildTaskDag, type TaskDagData, type TaskDagNode } from './taskDagViewModel'
 import { queueTaskDisplayText } from '../../utils/queue-task-label'
@@ -32,16 +31,6 @@ import { queueTaskDisplayText } from '../../utils/queue-task-label'
 export const BLUEPRINT_RECENT_TERMINAL_LIMIT = 10
 /** How many additional History rows each load-more click reveals. */
 export const BLUEPRINT_HISTORY_LOAD_STEP = 30
-
-/**
- * True for a gate that is holding its graph and needs a human to act — the
- * one node class the blueprint exists to surface. Same vocabulary as the
- * daemon's gate lifecycle: declared/awaiting_coordinator/claimed/released/
- * cancelled/expired.
- */
-export function isBlockingGateState(state: string): boolean {
-    return state === 'awaiting_coordinator' || state === 'claimed' || state === 'expired'
-}
 
 /** What the assigned session is live-doing, joined via assignedSessionId. */
 export interface BlueprintSessionActivity {
@@ -83,11 +72,10 @@ export function deriveSessionActivity(
 export type BlueprintSection = 'running' | 'blocked' | 'recent' | 'history'
 
 /* ── Queue dependency chains (W24) ─────────────────────────────────────────
- * `mesh_enqueue_task` + `depends_on` is the default way coordinators chain
- * work (design 2026-09-25 D1), and such chains create NO persistent graph
- * rows. Their dependsOn/missionId already ride the mesh_status queue
- * snapshot, so the Blueprint names each unmet dependency and groups a chain
- * as a view-time derivation — nothing is synthesized daemon-side. */
+ * `mesh_enqueue_task` + `depends_on` is how coordinators chain work. The
+ * dependsOn/missionId ride the mesh_status queue snapshot, so the Blueprint
+ * names each unmet dependency and groups a chain as a view-time derivation —
+ * nothing is synthesized daemon-side. */
 
 /** One named dependency for the "waiting on:" line. */
 export interface BlueprintDepRef {
@@ -209,52 +197,25 @@ export interface BlueprintTaskRow {
     blockedByDeadDependency: boolean
     /** Referenced deps absent from the snapshot (warning badge). */
     missingDeps: string[]
-    /** System hold text, when the daemon stamped one. */
-    blockedReason?: string
-    /** Count of failed/cancelled predecessors (C3 projection). */
+    /** Count of failed/cancelled predecessors. */
     dependencyFailureCount: number
     awaitingApproval: boolean
     awaitingChoice: boolean
     /** Session note backing the approval/choice badge, when known. */
     sessionNote?: string
     /**
-     * Where a "plan" mini-DAG can come from: a persistent graph WITH edges
-     * that contains this task, or the task's own dependency edges in the
-     * queue. Absent → the row renders no plan affordance at all.
+     * True when the task has queue dependency edges, so a "plan" mini-DAG
+     * can be drawn. False → the row renders no plan affordance at all.
      */
-    planSource?: 'graph' | 'queue'
-    /** The owning graph, when planSource === 'graph'. */
-    planGraphId?: string
-    /**
-     * Set when this task's graph node is held by a coordinator gate
-     * (`MeshGraphNodeView.blockedByGateId`) — the "blocked by" one-liner
-     * names the gate's ref/action and how long it has been holding.
-     */
-    blockedByGate?: { graph: MeshGraphView; gate: MeshGraphGateView; ref: string }
+    hasPlan: boolean
     /** Sort key: updatedAt || createdAt (ISO, lexicographic-safe). */
     timeKey: string
 }
 
-/** One blocking coordinator gate, presented as its own Blocked row. */
-export interface BlueprintGateRow {
-    kind: 'gate'
-    section: 'blocked'
-    graph: MeshGraphView
-    nodeId: string
-    gate?: MeshGraphGateView
-    ref: string
-    state: string
-    /** Gates always belong to a graph; edges decide whether plan renders. */
-    planSource?: 'graph'
-    planGraphId?: string
-    timeKey: string
-}
-
-export type BlueprintRow = BlueprintTaskRow | BlueprintGateRow
+export type BlueprintRow = BlueprintTaskRow
 
 export interface BlueprintGroupCounts {
     running: number
-    /** Task rows + gate rows in the Blocked section. */
     blocked: number
     recent: number
     history: number
@@ -279,58 +240,17 @@ function taskTimeKey(task: Pick<RepoMeshQueueTask, 'updatedAt' | 'createdAt'>): 
     return String(task.updatedAt || task.createdAt || '')
 }
 
-/** taskId → owning graph, for graphs that actually HAVE edges. A graph with
- *  no edges has no plan to draw — the mini-DAG affordance must not appear. */
-export function buildPlanGraphIndex(graphs: ReadonlyArray<MeshGraphView> | null | undefined): Map<string, MeshGraphView> {
-    const index = new Map<string, MeshGraphView>()
-    for (const graph of graphs ?? []) {
-        if (!Array.isArray(graph.edges) || graph.edges.length === 0) continue
-        for (const node of graph.nodes) {
-            if (node.taskId && !index.has(node.taskId)) index.set(node.taskId, graph)
-        }
-    }
-    return index
-}
-
-/**
- * taskId → the coordinator gate currently holding it, via the graph node's
- * `blockedByGateId` (set server-side when a `worker_task` node sits behind an
- * unreleased gate — mesh-graph-view.ts). Used for the Blocked-section
- * "blocked by: <gate>, <elapsed>" one-liner (D5).
- */
-export function buildTaskBlockedByGateIndex(
-    graphs: ReadonlyArray<MeshGraphView> | null | undefined,
-): Map<string, { graph: MeshGraphView; gate: MeshGraphGateView; ref: string }> {
-    const index = new Map<string, { graph: MeshGraphView; gate: MeshGraphGateView; ref: string }>()
-    for (const graph of graphs ?? []) {
-        const gatesByNodeId = new Map(graph.gates?.map(gate => [gate.nodeId, gate]) ?? [])
-        for (const node of graph.nodes) {
-            if (!node.taskId || !node.blockedByGateId) continue
-            const gate = graph.gates?.find(candidate => candidate.gateId === node.blockedByGateId)
-                ?? gatesByNodeId.get(node.blockedByGateId)
-            if (!gate) continue
-            const gateNode = graph.nodes.find(candidate => candidate.nodeId === gate.nodeId)
-            index.set(node.taskId, { graph, gate, ref: gateNode?.ref || gate.ref || gate.nodeId.slice(0, 8) })
-        }
-    }
-    return index
-}
-
 export function buildBlueprintGroups(
     tasks: RepoMeshQueueTask[] | null | undefined,
     status: Pick<RepoMeshStatus, 'nodes'> | null | undefined,
-    graphs: ReadonlyArray<MeshGraphView> | null | undefined,
     historyLimit: number = BLUEPRINT_HISTORY_LOAD_STEP,
 ): BlueprintGroups {
     // The DAG projection is reused for its dependency derivations only
     // (waitingOn / missingDeps / blocked) — no layout, no edges rendered here.
     const dag = buildTaskDag(tasks)
-    const planGraphByTaskId = buildPlanGraphIndex(graphs)
-    const blockedByGateByTaskId = buildTaskBlockedByGateIndex(graphs)
     const taskById = new Map(dag.nodes.map(node => [node.id, node.task]))
     const chainByTaskId = buildQueueChainIndex(dag)
-    // Tasks touched by at least one renderable dependency edge can draw a
-    // queue-scoped plan even without a persistent graph.
+    // Tasks touched by at least one renderable dependency edge can draw a plan.
     const edgeTouched = new Set<string>()
     for (const edge of dag.edges) {
         edgeTouched.add(edge.source)
@@ -346,21 +266,15 @@ export function buildBlueprintGroups(
         const task = node.task
         if (typeof task.missionId === 'string' && task.missionId) missionIds.add(task.missionId)
         const activity = task.status === 'assigned' ? deriveSessionActivity(status, task) : undefined
-        const planGraph = planGraphByTaskId.get(task.id)
-        const planSource: BlueprintTaskRow['planSource'] = planGraph ? 'graph' : edgeTouched.has(task.id) ? 'queue' : undefined
         const isTerminal = isMeshTerminalTaskStatus(task.status)
-        const blockedReason = typeof task.blockedReason === 'string' && task.blockedReason ? task.blockedReason : undefined
         const awaitingApproval = Boolean(activity?.awaitingApproval)
         const awaitingChoice = Boolean(activity?.awaitingChoice && !activity?.awaitingApproval)
-        const blockedByGate = blockedByGateByTaskId.get(task.id)
         // Blocked means "will not advance without a human or an upstream
-        // change": a live approval/choice hold, a system block, failed
-        // upstream, unmet deps, or a coordinator gate holding this node.
+        // change": a live approval/choice hold, failed upstream, or unmet deps.
         // Terminal rows are never blocked — whatever held them is history now.
         const isBlocked = !isTerminal && (
-            awaitingApproval || awaitingChoice || Boolean(blockedReason)
+            awaitingApproval || awaitingChoice
             || node.waitingOn.length > 0 || (task.dependencyFailures?.length ?? 0) > 0
-            || Boolean(blockedByGate)
         )
         const row: BlueprintTaskRow = {
             kind: 'task',
@@ -374,14 +288,11 @@ export function buildBlueprintGroups(
                 return dep?.status === 'failed' || dep?.status === 'cancelled'
             }),
             missingDeps: node.missingDeps,
-            ...(blockedReason ? { blockedReason } : {}),
             dependencyFailureCount: task.dependencyFailures?.length ?? 0,
             awaitingApproval,
             awaitingChoice,
             ...(activity?.note ? { sessionNote: activity.note } : {}),
-            ...(planSource ? { planSource } : {}),
-            ...(planGraph ? { planGraphId: planGraph.graphId } : {}),
-            ...(blockedByGate ? { blockedByGate } : {}),
+            hasPlan: edgeTouched.has(task.id),
             timeKey: taskTimeKey(task),
         }
         if (isTerminal) terminal.push(row)
@@ -400,35 +311,13 @@ export function buildBlueprintGroups(
     })
 
     // Blocked: human-holds (approval/choice) outrank dependency waits — they
-    // are the ones a person can actually clear right now. Gates lead the
-    // section for the same reason.
+    // are the ones a person can actually clear right now.
     const blockedRank = (row: BlueprintRow): number => {
-        if (row.kind === 'gate') return 0
         if (row.awaitingApproval || row.awaitingChoice) return 1
-        if (row.blockedReason || row.dependencyFailureCount > 0) return 2
+        if (row.dependencyFailureCount > 0) return 2
         return 3
     }
-    const gateRows: BlueprintGateRow[] = []
-    for (const graph of graphs ?? []) {
-        const hasEdges = Array.isArray(graph.edges) && graph.edges.length > 0
-        for (const gate of graph.gates ?? []) {
-            if (!isBlockingGateState(gate.state)) continue
-            const graphNode = graph.nodes.find(candidate => candidate.nodeId === gate.nodeId)
-            gateRows.push({
-                kind: 'gate',
-                section: 'blocked',
-                graph,
-                nodeId: gate.nodeId,
-                gate,
-                ref: graphNode?.ref || gate.nodeId.slice(0, 8),
-                state: gate.state,
-                ...(hasEdges ? { planSource: 'graph' as const, planGraphId: graph.graphId } : {}),
-                timeKey: String(graph.terminalAt || graph.createdAt || ''),
-            })
-        }
-        if (typeof graph.missionId === 'string' && graph.missionId) missionIds.add(graph.missionId)
-    }
-    const blocked: BlueprintRow[] = [...gateRows, ...blockedTasks]
+    const blocked: BlueprintRow[] = [...blockedTasks]
     blocked.sort((a, b) => {
         const rank = blockedRank(a) - blockedRank(b)
         if (rank !== 0) return rank
@@ -501,9 +390,9 @@ export function buildBlueprintMissionGroups(
         key: missionId, kind: 'mission', missionId, title: missionTitles?.[missionId] ?? null,
     })
     const headOf = (row: BlueprintRow): GroupHead => {
-        const ownMission = row.kind === 'task' ? row.task.missionId : row.graph.missionId
+        const ownMission = row.task.missionId
         if (typeof ownMission === 'string' && ownMission) return missionHead(ownMission)
-        const chain = row.kind === 'task' ? chainByTaskId?.get(row.task.id) : undefined
+        const chain = chainByTaskId?.get(row.task.id)
         if (chain?.inheritedMissionId) return missionHead(chain.inheritedMissionId)
         if (chain) return { key: chain.key, kind: 'chain', missionId: null, title: chain.anchorTitle, anchorTaskId: chain.anchorTaskId }
         return { key: ADHOC_GROUP_KEY, kind: 'adhoc', missionId: null, title: null }
@@ -549,11 +438,10 @@ export function buildBlueprintMissionGroups(
 export function useBlueprintGroups(
     tasks: RepoMeshQueueTask[],
     status: Pick<RepoMeshStatus, 'nodes'> | null | undefined,
-    graphs: ReadonlyArray<MeshGraphView> | null | undefined,
     historyLimit: number,
 ): BlueprintGroups {
     return useMemo(
-        () => buildBlueprintGroups(tasks, status, graphs, historyLimit),
-        [tasks, status, graphs, historyLimit],
+        () => buildBlueprintGroups(tasks, status, historyLimit),
+        [tasks, status, historyLimit],
     )
 }

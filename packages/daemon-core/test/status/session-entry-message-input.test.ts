@@ -24,13 +24,13 @@ describe('buildSessionEntries message input support', () => {
     })
   })
 
-  it('exposes effective ACP message input without native video', () => {
+  it('passes through a CLI provider\'s declared message input without native video', () => {
     const sessions = buildSessionEntries([
       {
-        category: 'acp',
-        type: 'acp-test',
-        name: 'ACP Test',
-        instanceId: 'acp-1',
+        category: 'cli',
+        type: 'cli-test',
+        name: 'CLI Test',
+        instanceId: 'cli-2',
         status: 'idle',
         workspace: '/repo',
         mode: 'chat',
@@ -40,8 +40,8 @@ describe('buildSessionEntries message input support', () => {
           multipart: true,
           mediaTypes: ['text', 'image', 'audio', 'resource', 'video'],
           strategies: [
-            { mediaType: 'image', strategies: ['native_acp', 'resource_link', 'text_fallback'], native: true, degradation: ['resource_link', 'text_fallback'] },
-            { mediaType: 'audio', strategies: ['native_acp', 'resource_link', 'text_fallback'], native: true, degradation: ['resource_link', 'text_fallback'] },
+            { mediaType: 'image', strategies: ['native', 'resource_link', 'text_fallback'], native: true, degradation: ['resource_link', 'text_fallback'] },
+            { mediaType: 'audio', strategies: ['native', 'resource_link', 'text_fallback'], native: true, degradation: ['resource_link', 'text_fallback'] },
             { mediaType: 'video', strategies: ['resource_link', 'text_fallback'], native: false, degradation: ['resource_link', 'text_fallback'] },
           ],
         },
@@ -49,6 +49,6 @@ describe('buildSessionEntries message input support', () => {
     ], new Map(), { profile: 'full' })
 
     expect(sessions[0]?.messageInput?.strategies.find((entry) => entry.mediaType === 'video')?.strategies)
-      .not.toContain('native_acp')
+      .not.toContain('native')
   })
 })

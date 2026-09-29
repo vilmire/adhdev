@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 import {
     CLI_SLOT_RECIPES,
     UNKNOWN_CLI_SLOT_RECIPE,
-    buildMagiPanelProposal,
     buildSlotProposal,
     type DetectedCliProvider,
     type NodeCapabilitySlot,
@@ -166,40 +165,6 @@ describe('buildSlotProposal — destructive diff against existing slots', () => 
         expect(p.destructive).toBe(false)
         expect(p.droppedSlots).toEqual([])
         expect(p.proposedSlots.length).toBeGreaterThan(0)
-    })
-})
-
-describe('buildMagiPanelProposal', () => {
-    it('proposes one slot per detected provider, models unpinned', () => {
-        const panel = buildMagiPanelProposal(det('claude-cli', 'codex-cli', 'kimi'))
-        expect(panel).toHaveLength(3)
-        expect(panel.every(s => s.model === undefined)).toBe(true)
-        expect(panel.every(s => s.nodeId === undefined)).toBe(true)
-    })
-
-    it('pins nodeId when given', () => {
-        const panel = buildMagiPanelProposal(det('claude-cli'), { nodeId: 'node_abc' })
-        expect(panel[0]).toEqual({ nodeId: 'node_abc', provider: 'claude-cli' })
-    })
-
-    it('orders table-known providers ahead of unknown ones', () => {
-        const panel = buildMagiPanelProposal(det('zzz-unknown-cli', 'claude-cli'))
-        expect(panel.map(s => s.provider)).toEqual(['claude-cli', 'zzz-unknown-cli'])
-    })
-
-    it('respects maxSlots', () => {
-        const panel = buildMagiPanelProposal(det('claude-cli', 'codex-cli', 'kimi'), { maxSlots: 2 })
-        expect(panel).toHaveLength(2)
-    })
-
-    it('returns an empty panel for no detections', () => {
-        expect(buildMagiPanelProposal([])).toEqual([])
-    })
-
-    it('dedupes providers so a panel never double-counts one source', () => {
-        // Independence is the whole point of MAGI — duplicate providers would inflate it.
-        const panel = buildMagiPanelProposal(det('kimi', 'kimi'))
-        expect(panel).toHaveLength(1)
     })
 })
 

@@ -1,18 +1,15 @@
 /**
  * MeshBlueprintGraph — the Blueprint tab's GRAPH view (owner request
  * 2026-09-26: "I want to see Blueprint as a graph"). The List view stays the
- * 0.1-second read; this view answers "what unlocks what" for both dependency
- * systems at once — queue `depends_on` chains and persistent orchestration
- * graphs with their coordinator gates (blueprintGraphModel).
+ * 0.1-second read; this view answers "what unlocks what" over the queue's
+ * `depends_on` chains (blueprintGraphModel).
  *
- *  - lanes: one per mission (else graph, else chain anchor, else ad-hoc),
+ *  - lanes: one per mission (else chain anchor, else ad-hoc),
  *    each laid out with ELK layered left → right (blueprintGraphLayout)
  *  - "Active only" hides lanes with nothing left to do; finished lanes that
  *    stay visible start collapsed; live lanes fold ≥ 3 completed tasks into
  *    one "N completed" chip (both toggleable per lane)
- *  - task click → the same detail modal the list rows open; gate click →
- *    a panel with the SAME Release / Abandon / Extend 24h actions
- *    (useBlueprintGateCommands + GateActionsPanel)
+ *  - task click → the same detail modal the list rows open
  *  - no polling of its own: it redraws from the props Blueprint already
  *    refreshes. ELK re-runs only when the structure key changes; the view
  *    fits once per lane-set change, never on a status poll.
@@ -28,56 +25,46 @@ import {
     type Edge,
 } from '@xyflow/react'
 import './meshGraph.css'
-import type { MeshGraphGateView, MeshGraphView, RepoMeshQueueTask, RepoMeshStatus } from '@adhdev/daemon-core'
+import type { RepoMeshQueueTask, RepoMeshStatus } from '@adhdev/daemon-core'
 import { meshToggleChipClass, type MeshGraphTheme } from './meshGraphTheme'
 import {
     applyBlueprintGraphView,
     blueprintGraphLaneKey,
     blueprintGraphStructureKey,
     buildBlueprintGraphModel,
-    gateDeadlineReading,
     type BlueprintGraphEdge,
-    type BlueprintGraphGateNode,
     type BlueprintGraphLane,
     type BlueprintGraphTaskNode,
 } from './blueprintGraphModel'
 import { BLUEPRINT_GRAPH_NARROW_PANE, BLUEPRINT_GRAPH_SIZES, layoutBlueprintGraph, narrowPaneViewport, type BlueprintGraphLaneRect, type BlueprintGraphLayout } from './blueprintGraphLayout'
-import { blueprintGraphNodeTypes, GATE_TONE_STYLE, type BlueprintFlowNode, type GateNodeData, type TaskNodeData } from './BlueprintGraphNodes'
-import { GateActionsPanel } from './MeshBlueprintRow'
-import { useBlueprintGateCommands } from './useBlueprintGateCommands'
-import { formatBlueprintAge } from './blueprintViewModel'
+import { blueprintGraphNodeTypes, type BlueprintFlowNode, type TaskNodeData } from './BlueprintGraphNodes'
 
-/** Edge stroke per reading; dashes carry the KIND (gate) independent of colour.
- *  Neutral by default (theme tokens — SVG style strokes resolve CSS vars):
+/** Edge stroke per reading. Neutral by default (theme tokens — SVG style strokes resolve CSS vars):
  *  only a live edge takes the accent and only a dead edge the semantic red. */
 const EDGE_COLORS = {
     satisfied: 'var(--text-muted)',
     waiting: 'var(--text-muted)',
     running: 'var(--accent-primary)',
     dead: 'var(--status-error)',
-    inactive: 'var(--border-default)',
 } as const
 
 type EdgeTone = keyof typeof EDGE_COLORS
 
 function edgeTone(edge: BlueprintGraphEdge): EdgeTone {
     if (edge.state === 'dead') return 'dead'
-    if (edge.state === 'inactive') return 'inactive'
     if (edge.animated) return 'running'
     return edge.state === 'satisfied' ? 'satisfied' : 'waiting'
 }
 
 /**
  * Zoom / fit controls. Top-right on a wide pane (bottom-left sat on the first
- * lane column, and the gate panel owns the bottom edge). On a narrow (phone)
- * pane every lane is fitted to the full width, so top-right landed on the first
- * lane's Collapse button — there the controls move to the bottom-right corner
- * and step aside while the gate panel (which spans the bottom) is open.
+ * lane column). On a narrow (phone) pane every lane is fitted to the full
+ * width, so top-right landed on the first lane's Collapse button — there the
+ * controls move to the bottom-right corner.
  */
-function BlueprintControls({ gatePanelOpen }: { gatePanelOpen: boolean }) {
+function BlueprintControls() {
     const paneWidth = useStore(state => state.width)
     const narrow = paneWidth > 0 && paneWidth < BLUEPRINT_GRAPH_NARROW_PANE
-    if (narrow && gatePanelOpen) return null
     return <Controls position={narrow ? 'bottom-right' : 'top-right'} showZoom showFitView showInteractive={false} />
 }
 
@@ -103,7 +90,7 @@ function ViewportFitter({ fitKey, focusNodeIds, laneRects }: { fitKey: string | 
         lastKey.current = fitKey
         // Two passes for ONE lane-set change: the first frame fits what is
         // measured; the settle pass re-fits once nodes added in the same
-        // commit (e.g. graph lanes arriving after the queue) have dimensions.
+        // commit have dimensions.
         // Nothing else ever calls fitView, so status polls never move the view.
         // Focus the TOP lanes (live, newest first) instead of shrinking a tall
         // board to unreadable text; the rest is one pan away.
@@ -122,29 +109,21 @@ function ViewportFitter({ fitKey, focusNodeIds, laneRects }: { fitKey: string | 
     return null
 }
 
-export default function MeshBlueprintGraph({ tasks, status, graphs, meshTheme, nodeLabels, missionTitles, emptyMessage, onTaskOpen, onGateOpen, onMissionOpen, headerExtras, daemonId, meshId, sendDaemonCommand, onGatesChanged }: {
+export default function MeshBlueprintGraph({ tasks, status, meshTheme, nodeLabels, missionTitles, emptyMessage, onTaskOpen, onMissionOpen, headerExtras }: {
     tasks: RepoMeshQueueTask[]
     status: RepoMeshStatus
-    graphs: MeshGraphView[]
     meshTheme: MeshGraphTheme
     nodeLabels?: Record<string, string>
     missionTitles?: Record<string, string>
     emptyMessage?: string
     onTaskOpen: (task: RepoMeshQueueTask) => void
-    onGateOpen: (graph: MeshGraphView, nodeId: string, gate?: MeshGraphGateView) => void
     onMissionOpen?: (missionId: string) => void
     headerExtras?: React.ReactNode
-    daemonId?: string | null
-    meshId?: string
-    sendDaemonCommand?: ((id: string, type: string, data?: Record<string, unknown>) => Promise<any>) | null
-    onGatesChanged?: () => void
 }) {
     const { t } = useTranslation('common')
     const [activeOnly, setActiveOnly] = useState(true)
     const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
     const [folded, setFolded] = useState<Record<string, boolean>>({})
-    const [selectedGateId, setSelectedGateId] = useState<string | null>(null)
-    const gateCommands = useBlueprintGateCommands({ daemonId, meshId, sendDaemonCommand, onGatesChanged })
 
     const [nowMs, setNowMs] = useState(() => Date.now())
     useEffect(() => {
@@ -152,7 +131,7 @@ export default function MeshBlueprintGraph({ tasks, status, graphs, meshTheme, n
         return () => window.clearInterval(timer)
     }, [])
 
-    const model = useMemo(() => buildBlueprintGraphModel(tasks, graphs, status, missionTitles), [tasks, graphs, status, missionTitles])
+    const model = useMemo(() => buildBlueprintGraphModel(tasks, status, missionTitles), [tasks, status, missionTitles])
     const view = useMemo(() => applyBlueprintGraphView(model, { activeOnly, collapsed, folded }), [model, activeOnly, collapsed, folded])
     const structureKey = useMemo(() => blueprintGraphStructureKey(view), [view])
     const laneKey = useMemo(() => blueprintGraphLaneKey(view), [view])
@@ -183,7 +162,6 @@ export default function MeshBlueprintGraph({ tasks, status, graphs, meshTheme, n
     }, [layout])
 
     const taskById = useMemo(() => new Map(tasks.map(task => [task.id, task])), [tasks])
-    const graphById = useMemo(() => new Map(graphs.map(graph => [graph.graphId, graph])), [graphs])
 
     const toggleCollapsed = useCallback((lane: BlueprintGraphLane) => {
         setCollapsed(current => ({ ...current, [lane.group.key]: !lane.collapsed }))
@@ -210,28 +188,16 @@ export default function MeshBlueprintGraph({ tasks, status, graphs, meshTheme, n
                 ...(anchor ? { open: () => onTaskOpen(anchor) } : {}),
             }
         }
-        if (group.kind === 'graph' && group.graphId) {
-            return { title: t('mesh.blueprint.graph.laneGraph', { id: group.graphId.slice(0, 8) }), tooltip: group.graphId }
-        }
         return { title: t('mesh.blueprint.graph.laneAdhoc') }
     }, [onMissionOpen, onTaskOpen, t, taskById])
 
     const taskTooltip = useCallback((node: BlueprintGraphTaskNode): string => {
         const lines = [node.fullTitle, '']
-        if (node.taskId) lines.push(t('mesh.blueprint.graph.tooltipTask', { id: node.taskId }))
+        lines.push(t('mesh.blueprint.graph.tooltipTask', { id: node.taskId }))
         if (node.missionId) lines.push(t('mesh.blueprint.graph.tooltipMission', { id: node.missionId }))
-        if (node.graphId) lines.push(t('mesh.blueprint.graph.tooltipGraph', { id: node.graphId, ref: node.ref ?? node.graphNodeId ?? '' }))
         lines.push(t('mesh.blueprint.graph.tooltipStatus', { status: node.rawStatus }))
         if (node.deadReason) lines.push(t(node.deadReason === 'direct' ? 'mesh.blueprint.graph.deadDirect' : 'mesh.blueprint.graph.deadTransitive'))
         if (node.missingDeps.length > 0) lines.push(`${t('mesh.taskDag.missingDeps', { count: node.missingDeps.length })}: ${node.missingDeps.join(', ')}`)
-        return lines.join('\n')
-    }, [t])
-    const gateTooltip = useCallback((node: BlueprintGraphGateNode): string => {
-        const lines = [node.ref, '']
-        if (node.gate?.gateId) lines.push(t('mesh.blueprint.graph.tooltipGate', { id: node.gate.gateId }))
-        lines.push(t('mesh.blueprint.graph.tooltipGraph', { id: node.graphId, ref: node.gateNodeId }))
-        lines.push(t('mesh.blueprint.graph.tooltipStatus', { status: node.state }))
-        if (node.gate?.instructions) lines.push('', node.gate.instructions)
         return lines.join('\n')
     }, [t])
 
@@ -275,14 +241,12 @@ export default function MeshBlueprintGraph({ tasks, status, graphs, meshTheme, n
             if (node.kind === 'task') {
                 const label = node.assignedNodeId ? nodeLabels?.[node.assignedNodeId] ?? node.assignedNodeId.slice(0, 12) : undefined
                 out.push({ id: node.id, type: 'bpTask', position, ...BLUEPRINT_GRAPH_SIZES.task, draggable: false, data: { node, theme: meshTheme, nowMs, ...(label ? { nodeLabel: label } : {}), tooltip: taskTooltip(node) } })
-            } else if (node.kind === 'gate') {
-                out.push({ id: node.id, type: 'bpGate', position, ...BLUEPRINT_GRAPH_SIZES.gate, draggable: false, data: { node, theme: meshTheme, nowMs, selected: selectedGateId === node.id, tooltip: gateTooltip(node) } })
             } else {
                 out.push({ id: node.id, type: 'bpFold', position, ...BLUEPRINT_GRAPH_SIZES.fold, draggable: false, data: { node, theme: meshTheme } })
             }
         }
         return out
-    }, [layout, view, meshTheme, nowMs, nodeLabels, selectedGateId, laneTitle, taskTooltip, gateTooltip, toggleCollapsed, toggleFolded])
+    }, [layout, view, meshTheme, nowMs, nodeLabels, laneTitle, taskTooltip, toggleCollapsed, toggleFolded])
 
     const flowEdges = useMemo<Edge[]>(() => view.edges.map(edge => {
         const tone = edgeTone(edge)
@@ -297,7 +261,6 @@ export default function MeshBlueprintGraph({ tasks, status, graphs, meshTheme, n
             style: {
                 stroke,
                 strokeWidth: 1.25,
-                ...(edge.kind === 'gate' ? { strokeDasharray: '7 5' } : {}),
                 ...(tone === 'dead' ? { opacity: 0.7 } : {}),
             },
             markerEnd: { type: MarkerType.ArrowClosed, color: stroke, width: 12, height: 12 },
@@ -308,86 +271,24 @@ export default function MeshBlueprintGraph({ tasks, status, graphs, meshTheme, n
     const legend = useMemo(() => {
         const items: Array<{ key: string; label: string; color: string; dash?: string }> = []
         const color = (tone: EdgeTone) => EDGE_COLORS[tone]
-        if (view.edges.some(edge => edge.kind === 'depends')) items.push({ key: 'depends', label: t('mesh.blueprint.graph.legendDepends'), color: color('waiting') })
-        if (view.edges.some(edge => edge.kind === 'gate')) items.push({ key: 'gate', label: t('mesh.blueprint.graph.legendGate'), color: color('waiting'), dash: '4 3' })
+        if (view.edges.length > 0) items.push({ key: 'depends', label: t('mesh.blueprint.graph.legendDepends'), color: color('waiting') })
         if (view.edges.some(edge => edge.animated)) items.push({ key: 'running', label: t('mesh.blueprint.graph.legendRunning'), color: color('running') })
         if (view.edges.some(edge => edge.state === 'dead')) items.push({ key: 'dead', label: t('mesh.blueprint.graph.legendDead'), color: color('dead') })
         return items
     }, [view.edges, t])
 
-    const selectedGate = useMemo(() => {
-        if (!selectedGateId) return null
-        const node = model.nodes.find(candidate => candidate.id === selectedGateId)
-        return node && node.kind === 'gate' ? node : null
-    }, [model, selectedGateId])
-    useEffect(() => {
-        if (selectedGateId && !selectedGate) setSelectedGateId(null)
-    }, [selectedGate, selectedGateId])
-
     const onNodeClick = useCallback((_event: unknown, flowNode: BlueprintFlowNode) => {
         if (flowNode.type === 'bpTask') {
-            const taskId = (flowNode.data as TaskNodeData).node.taskId
-            const task = taskId ? taskById.get(taskId) : undefined
+            const task = taskById.get((flowNode.data as TaskNodeData).node.taskId)
             if (task) onTaskOpen(task)
-            return
-        }
-        if (flowNode.type === 'bpGate') {
-            const id = (flowNode.data as GateNodeData).node.id
-            setSelectedGateId(current => (current === id ? null : id))
         }
     }, [onTaskOpen, taskById])
-
-    const gatePanel = selectedGate ? (() => {
-        const graph = graphById.get(selectedGate.graphId)
-        const handlers = selectedGate.blocking
-            ? gateCommands.handlersFor(selectedGate.id, selectedGate.gate?.gateId, selectedGate.ref)
-            : undefined
-        const deadline = gateDeadlineReading(selectedGate, nowMs)
-        const tone = GATE_TONE_STYLE[selectedGate.tone]
-        return (
-            <div
-                data-testid="bp-graph-gate-panel"
-                className={`absolute bottom-2 left-2 right-2 z-20 flex max-h-[55%] flex-col gap-1.5 overflow-y-auto rounded-xl border border-border-default bg-surface-primary p-2.5 text-2xs text-text-primary shadow-md md:left-auto md:w-[380px]`}
-            >
-                <div className="flex min-w-0 items-center gap-2">
-                    <span className={`h-2 w-2 shrink-0 rounded-full ${tone.dot}`} aria-hidden />
-                    <span className="min-w-0 flex-1 truncate font-semibold" title={selectedGate.ref}>{selectedGate.ref}</span>
-                    <span className="shrink-0 text-4xs text-text-muted">{t(`mesh.blueprint.graph.gateTone.${selectedGate.tone}`)}</span>
-                    <button type="button" className="shrink-0 rounded px-1 text-text-muted hover:text-text-primary" aria-label={t('common.close')} onClick={() => setSelectedGateId(null)}>✕</button>
-                </div>
-                <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-4xs text-text-muted">
-                    {selectedGate.gate?.action && <span>{selectedGate.gate.action}</span>}
-                    {deadline && (
-                        <span className={deadline.overdue ? 'text-status-error' : ''} title={selectedGate.gate?.deadlineAt}>
-                            {deadline.overdue
-                                ? t('mesh.blueprint.graph.deadlineOverdue', { age: formatBlueprintAge(deadline.ms) })
-                                : t('mesh.blueprint.graph.deadlineIn', { age: formatBlueprintAge(deadline.ms) })}
-                        </span>
-                    )}
-                    {selectedGate.gate?.blocking?.length ? <span>{t('mesh.taskDag.gate.holding', { count: selectedGate.gate.blocking.length })}</span> : null}
-                    {selectedGate.gate?.leaseExpired && <span>{t('mesh.blueprint.leaseExpired')}</span>}
-                </div>
-                {selectedGate.gate?.instructions && <div className="whitespace-pre-wrap text-3xs leading-4 opacity-90">{selectedGate.gate.instructions}</div>}
-                {handlers && (
-                    <div className="-ml-4">
-                        <GateActionsPanel radioGroupId={selectedGate.id} actions={handlers} meshTheme={meshTheme} busy={gateCommands.busyGateKey === selectedGate.id} />
-                    </div>
-                )}
-                {graph && (
-                    <button type="button" className="self-start text-4xs text-text-muted underline decoration-dotted underline-offset-2 hover:text-text-primary" onClick={() => onGateOpen(graph, selectedGate.gateNodeId, selectedGate.gate)}>
-                        {t('mesh.blueprint.graph.gateDetails')}
-                    </button>
-                )}
-            </div>
-        )
-    })() : null
 
     const nothingAtAll = model.nodes.length === 0
     const allHidden = !nothingAtAll && view.lanes.length === 0
 
     return (
         <div className="flex min-h-0 flex-1 flex-col gap-1.5" data-testid="bp-graph">
-            {gateCommands.confirmDialog}
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                 <button
                     type="button"
@@ -433,7 +334,6 @@ export default function MeshBlueprintGraph({ tasks, status, graphs, meshTheme, n
                         edges={flowEdges}
                         nodeTypes={blueprintGraphNodeTypes}
                         onNodeClick={onNodeClick}
-                        onPaneClick={() => setSelectedGateId(null)}
                         minZoom={0.15}
                         maxZoom={1.4}
                         nodesDraggable={false}
@@ -450,10 +350,9 @@ export default function MeshBlueprintGraph({ tasks, status, graphs, meshTheme, n
                         colorMode={meshTheme.flowColorMode}
                     >
                         <ViewportFitter fitKey={layoutReady ? laneKey : null} focusNodeIds={fitFocusNodeIds} laneRects={layout?.value.lanes ?? EMPTY_LANE_RECTS} />
-                        <BlueprintControls gatePanelOpen={selectedGate !== null} />
+                        <BlueprintControls />
                     </ReactFlow>
                 )}
-                {gatePanel}
             </div>
         </div>
     )

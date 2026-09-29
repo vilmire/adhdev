@@ -23,37 +23,28 @@ belongs in its own reviewed commit) and rather than left as warnings.
 this is a suppressions file and not a lowered severity. It matches the pattern
 already used by `check:file-sizes` and `check:boundaries` in this repo.
 
-## What is frozen (15 sites, 7 files)
+## What is frozen (3 sites, 3 files)
+
+The task-graph-id sites (`mesh-graph-*`, 12) and one cross-form site
+(`mesh-graph-workspace-ports.ts`) left with graph orchestration on 2026-09-30.
 
 | File | Count | Class |
 |---|---|---|
-| `mesh-graph-transition-runner.ts` | 7 | task-graph ids |
-| `mesh-graph-gates.ts` | 3 | task-graph ids |
-| `mesh-graph-view.ts` | 1 | task-graph ids |
-| `mesh-graph-workspace-ports.ts` | 1 | cross-form (`n.id === req.nodeId`) |
 | `mesh-onboarding-plan.ts` | 1 | cross-form (`node.id === duplicate.nodeId`) |
 | `mesh-refine-inflight.ts` | 1 | same-source ledger id |
 | `mesh-refine-terminal-guard.ts` | 1 | same-source ledger id |
 
-The three classes are not equally urgent, and a future cleanup should treat them
+The two classes are not equally urgent, and a future cleanup should treat them
 differently:
 
-- **task-graph ids (12)** — `mesh-graph-*` compares `edge.fromNodeId` /
-  `edge.toNodeId` against `node.nodeId` within a single task graph. These are
-  graph-internal row ids, a *different namespace* from mesh network node ids;
-  they never carry the `mach_` / `daemon_mach_` / `standalone_mach_` prefixes the
-  rule guards against. The rule matches on property *name* alone, so it cannot
-  tell the two namespaces apart. Lowest risk — arguably the rule's selector, not
-  the call sites, is what should change here.
 - **same-source ledger ids (2)** — `mesh-refine-*` compares real mesh node ids,
   but both sides provably come from the same ledger spelling, and each site
   already carries a comment saying so. These are the "verified same-source
   canonical comparison" case the rule's own message points at; converting them to
   an inline `eslint-disable` + reason would be a faithful cleanup.
-- **cross-form (2)** — `node.id === duplicate.nodeId` and
-  `n?.id === req.nodeId` compare an `id` field against a `nodeId` field. This is
-  exactly the drift shape the rule exists to catch, and these two are the real
-  candidates for `meshNodeIdMatches()`.
+- **cross-form (1)** — `node.id === duplicate.nodeId` compares an `id` field
+  against a `nodeId` field. This is exactly the drift shape the rule exists to
+  catch, and it is the real candidate for `meshNodeIdMatches()`.
 
 ## Working with the baseline
 

@@ -77,7 +77,7 @@ describe('model ↔ provider compatibility guard (codex 400 root)', () => {
         // difficulty is a routing hint and the slot owns the model), so the list is
         // written out literally rather than read from that map, which would now make
         // the loop vacuous. The guard still matters: an operator may configure these
-        // presets explicitly, and MAGI slots carry the same aliases.
+        // presets explicitly.
         it('every Claude-family preset alias is blocked on codex-cli', () => {
             const presetModels = ['haiku', 'sonnet', 'opus'];
             // Any alias an operator could still configure must be covered.

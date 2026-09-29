@@ -14,7 +14,7 @@
 // state reports "not held yet" instead of reaching the member.
 //
 // This module depends only on leaf helpers so mesh-tools-internal.ts
-// (ipcDispatchToRemoteAgent's session pick) can import it without a cycle.
+// (resolveRemoteDispatchTarget's session pick) can import it without a cycle.
 
 import { meshNodeIdMatches } from '@adhdev/daemon-core';
 import type { LocalMeshNodeEntry } from '@adhdev/daemon-core';

@@ -7,7 +7,7 @@
 import type { DaemonData } from '../../types';
 import type { GitCompactSummary, MessageInputSupport, RecentSessionBucket } from '@adhdev/daemon-core';
 import { deriveNativeConversationStatus, deriveStreamConversationStatus, formatIdeType, getAgentDisplayName, getMachineDisplayName, isGenericAgentTitle } from '../../utils/daemon-utils';
-import { isCliConv, isAcpConv } from './types';
+import { isCliConv } from './types';
 import type { ActiveConversation, DashboardMessage } from './types';
 import { getConversationTabKey, resolveOwnerMachineName } from './conversation-identity';
 
@@ -27,7 +27,6 @@ interface SharedConversationBuildContextOptions {
 /** Conversation-first IDE: CLI or IDE category → native tab */
 export const isConversationFirstIde = (ide: DaemonData) => {
     if (ide.transport === 'pty') return true;
-    if (ide.transport === 'acp') return true;
     if (ide.transport === 'cdp-page') return true;
     if (ide.daemonId === ide.id) return false;
     return true;
@@ -165,7 +164,7 @@ export function buildIdeConversations(
     const workspaceName = getWorkspaceName(ide);
     const workspacePath = ide.workspace || '';
     const providerLabel = getAgentDisplayName(ide.type, { agentName: ide.cliName });
-    const ideLabel = (isCliConv(ide) || isAcpConv(ide)) ? providerLabel : formatIdeType(ide.type);
+    const ideLabel = isCliConv(ide) ? providerLabel : formatIdeType(ide.type);
     // Owner UX: tab title = workspace/folder name, subtitle = model name for ALL
     // providers. modelSubtitle falls back to the provider label when no model is
     // reliably reported, so the subtitle is never blank.
@@ -256,16 +255,16 @@ export function buildIdeConversations(
             const matched = chats.find((c: { id: string; title?: string }) => c.id === activeId || (c.id && String(c.id) === String(activeId)));
             if (matched?.title && String(matched.title).trim()) title = String(matched.title).trim();
         }
-        const nativeProviderType = (isCliConv(ide) || isAcpConv(ide))
+        const nativeProviderType = isCliConv(ide)
             ? ide.type
             : ide.type;
-        const effectiveNativeTitle = (isCliConv(ide) || isAcpConv(ide))
+        const effectiveNativeTitle = isCliConv(ide)
             && isGenericAgentTitle(title, agentName, nativeProviderType)
             ? ''
             : title;
         const nativeServerMsgs = chat.messages || [];
         const normalizedActiveId = typeof activeId === 'string' ? activeId.trim() : '';
-        const genericCliActiveId = (isCliConv(ide) || isAcpConv(ide))
+        const genericCliActiveId = isCliConv(ide)
             && normalizedActiveId === String(ide.type || '').trim();
         const nativeHistorySessionId = normalizedActiveId && !genericCliActiveId
             ? normalizedActiveId
@@ -293,7 +292,7 @@ export function buildIdeConversations(
             title: effectiveNativeTitle,
             messages: nativeServerMsgs,
             resume: ide.resume,
-            hostIdeType: !isCliConv(ide) && !isAcpConv(ide) ? ide.type : undefined,
+            hostIdeType: !isCliConv(ide) ? ide.type : undefined,
             workspaceName,
             workspacePath,
             git: ide.git,
@@ -328,7 +327,7 @@ export function buildIdeConversations(
     }
 
     // 2) Per-agent-stream tabs
-    if (useConversationFirst && (isCliConv(ide) || isAcpConv(ide))) {
+    if (useConversationFirst && isCliConv(ide)) {
         return results;
     }
     for (const stream of streams) {

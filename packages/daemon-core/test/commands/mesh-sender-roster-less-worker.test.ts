@@ -92,7 +92,7 @@ const launchArgs = (coordinator: string) => ({
 
 const sessionlessDispatch = (coordinator: string) => ({
     agentType: 'claude-cli', cliType: 'claude-cli', action: 'send_chat', message: 'task', dir: '/w/mainpc',
-    dispatchSource: 'mesh-tools-internal:ipcDispatchToRemoteAgent',
+    dispatchSource: 'mesh_send_task:direct',
     meshContext: { meshId: MESH, nodeId: 'node-mainpc', taskId: 'task-1', coordinatorDaemonId: coordinator },
 });
 

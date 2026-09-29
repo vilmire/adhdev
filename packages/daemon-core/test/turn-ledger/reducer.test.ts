@@ -192,7 +192,7 @@ describe('reclaim', () => {
         expect(opened.attempt?.scope).toBe('plain');
         const r = step(opened.attempt, ev('process_exit', { exitCode: 9 }, { attemptRef: undefined }), opened.holds);
         expect(r.attempt?.state).toBe('failed');
-        expect(r.effects.some((e) => e.kind === 'notify_coordinator' || e.kind === 'queue_status' || e.kind === 'graph_advance')).toBe(false);
+        expect(r.effects.some((e) => e.kind === 'notify_coordinator' || e.kind === 'queue_status' || e.kind === 'task_terminal')).toBe(false);
     });
 });
 
@@ -230,7 +230,7 @@ describe('mesh_direct reclaim → failed at once (nothing redelivers a direct di
             expect(r.holds).toEqual([]);
             expect(r.effects).toContainEqual({ kind: 'release_hold', attemptId: 'a1', reasons: '*' });
             expect(r.effects.filter((e) => e.kind === 'queue_status')).toEqual([{ kind: 'queue_status', meshId: 'm1', taskId: 't1', status: 'failed', reason: t.cause }]);
-            expect(r.effects.filter((e) => e.kind === 'graph_advance')).toEqual([{ kind: 'graph_advance', meshId: 'm1', taskId: 't1', outcome: 'failed' }]);
+            expect(r.effects.filter((e) => e.kind === 'task_terminal')).toEqual([{ kind: 'task_terminal', meshId: 'm1', taskId: 't1', outcome: 'failed' }]);
             expect(r.effects.filter((e) => e.kind === 'notify_coordinator')).toEqual([
                 { kind: 'notify_coordinator', attemptId: 'a1', generation: 1, notify: 'failed', taskId: 't1', coordinatorDaemonId: 'dc', coordinatorSessionId: 'coord' },
             ]);

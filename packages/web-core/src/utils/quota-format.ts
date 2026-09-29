@@ -111,7 +111,6 @@ const QUOTA_PROVIDER_LABELS: Record<string, string> = {
     'codex-cli': 'Codex CLI',
     'cursor-cli': 'Cursor CLI',
     'grok-cli': 'Grok CLI',
-    'hermes-cli': 'Hermes CLI',
     kimi: 'Kimi Code',
     opencode: 'opencode', // the project's own lowercase brand spelling
 }

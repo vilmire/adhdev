@@ -45,7 +45,6 @@ const handlerCommands: Record<string, HandlerRun> = {
     switch_chat: run((h, a) => Chat.handleSwitchChat(h, a)),
     set_mode: run((h, a) => Chat.handleSetMode(h, a)),
     change_model: run((h, a) => Chat.handleChangeModel(h, a)),
-    set_thought_level: run((h, a) => Chat.handleSetThoughtLevel(h, a)),
     resolve_action: run((h, a) => Chat.handleResolveAction(h, a)),
 
     // ─── CDP commands (cdp-commands.ts) ───────────────
@@ -114,9 +113,6 @@ const handlerCommands: Record<string, HandlerRun> = {
     invoke_provider_script: run((h, a) => Stream.handleProviderScript(h, a)),
 
     // ─── Provider auto-fix / clone (DevServer proxy) ──────────
-    provider_auto_fix: run((h, a) => h.proxyDevServerPost(a, 'auto-implement')),
-    provider_auto_fix_cancel: run((h, a) => h.proxyDevServerPost(a, 'auto-implement/cancel')),
-    provider_auto_fix_status: run((h, a) => h.proxyDevServerGet(a, 'auto-implement/status')),
     provider_clone: run((h, a) => h.proxyDevServerScaffold(a)),
 };
 
@@ -157,7 +153,6 @@ export const handlerSpecs: CommandSpec<'handler'>[] = defineCommandSpecs('handle
     switch_chat: { session: REQUIRED_ROUTED, postChat: true },
     set_mode: { session: REQUIRED_ROUTED, postChat: true, forwardToOwner: true, meshSender: 'session_coordinator' },
     change_model: { session: REQUIRED_ROUTED, postChat: true, forwardToOwner: true, meshSender: 'session_coordinator' },
-    set_thought_level: { session: REQUIRED_ROUTED, forwardToOwner: true, meshSender: 'session_coordinator' },
     // Approve / reject a modal prompt.
     resolve_action: {
         session: { ...REQUIRED_ROUTED, aliasSessionId: true },

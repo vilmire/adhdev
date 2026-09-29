@@ -18,7 +18,7 @@ import {
  * Two contracts are pinned here:
  *
  *  1. RETIRED NAMES NEVER FAIL SILENTLY. A coordinator running an old prompt
- *     calls e.g. `mesh_graph_gate_claim`. It must get an error that names the
+ *     calls e.g. `mesh_node_slots_set`. It must get an error that names the
  *     replacement tool AND the discriminator value, so the very next call is
  *     correct — not a bare "Unknown tool", and not a silent alias that keeps the
  *     old spelling alive forever.
@@ -33,9 +33,12 @@ import {
 
 const published = new Set(ALL_MESH_TOOLS.map(tool => tool.name));
 
-test('the published surface is 48 tools and contains no retired name', () => {
-    assert.equal(ALL_MESH_TOOLS.length, 48);
-    assert.equal(CANONICAL_MESH_TOOL_NAMES.length, 48);
+// 48 after the consolidation; the three graph tools (mesh_graph_view /
+// mesh_graph_gate / mesh_graph_node_patch) left with graph orchestration and the
+// MAGI tools left with MAGI (2026-09-30).
+test('the published surface is 42 tools and contains no retired name', () => {
+    assert.equal(ALL_MESH_TOOLS.length, 42);
+    assert.equal(CANONICAL_MESH_TOOL_NAMES.length, 42);
     for (const name of Object.keys(RETIRED_MESH_TOOLS)) {
         assert.equal(published.has(name), false, `${name} is retired but still published`);
         assert.equal(resolveMeshToolHandler(name), undefined, `${name} is retired but still silently dispatchable`);
@@ -63,10 +66,6 @@ test('calling a retired name returns an error naming the new tool + discriminato
             assert.ok(error.includes(`Call ${entry.tool} with ${key}: "${value}"`), `${oldName}: ${error}`);
         }
     }
-    // The gate-expiry notice used to name the non-tool mesh_graph_gate_extend.
-    assert.match(validateMeshToolArgs('mesh_graph_gate_extend', {}) ?? '', /Call mesh_graph_gate with action: "extend"/);
-    // The claim redirect also explains where the old extend-only flag went.
-    assert.match(validateMeshToolArgs('mesh_graph_gate_claim', {}) ?? '', /extend_seconds/);
 });
 
 test('an unrelated unknown tool name still falls through to the dispatcher (null)', () => {
@@ -77,12 +76,7 @@ test('an unrelated unknown tool name still falls through to the dispatcher (null
 // ── per-action argument sets ─────────────────────────────────────────────────
 
 const STRAY_CASES: Array<{ tool: string; args: Record<string, unknown>; stray: string; owner: string }> = [
-    { tool: 'mesh_graph_gate', args: { action: 'claim', gate_id: 'g', outcome: 'passed' }, stray: 'outcome', owner: 'action=release' },
-    { tool: 'mesh_graph_gate', args: { action: 'release', gate_id: 'g', fencing_token: 'f', lease_generation: 1, idempotency_key: 'k', outcome: 'passed', reason: 'x' }, stray: 'reason', owner: 'action=abandon' },
-    { tool: 'mesh_graph_gate', args: { action: 'abandon', gate_id: 'g', reason: 'r', extend_seconds: 5 }, stray: 'extend_seconds', owner: 'action=extend' },
     { tool: 'mesh_node_slots', args: { action: 'list', node_id: 'n', slots: [] }, stray: 'slots', owner: 'action=set' },
-    { tool: 'mesh_node_slots', args: { action: 'set', node_id: 'n', slots: [], include_magi: true }, stray: 'include_magi', owner: 'action=propose' },
-    { tool: 'mesh_magi_kind_panel', args: { action: 'list', write: true }, stray: 'write', owner: 'action=set' },
     { tool: 'mesh_coordinator_prompt_append', args: { action: 'get', content: 'x' }, stray: 'content', owner: 'action=set' },
     { tool: 'mesh_note', args: { action: 'forget', note_id: 'n', pinned: true }, stray: 'pinned', owner: 'action=record' },
     { tool: 'mesh_note', args: { action: 'record', text: 't', note_id: 'n' }, stray: 'note_id', owner: 'action=forget' },
@@ -106,10 +100,7 @@ test('an argument that belongs to a different action is refused, naming the acti
 
 test('each action enforces its own required arguments', () => {
     const cases: Array<[string, Record<string, unknown>, RegExp]> = [
-        ['mesh_graph_gate', { action: 'release', gate_id: 'g' }, /mesh_graph_gate action="release": "fencing_token", "lease_generation", "idempotency_key", "outcome"/],
-        ['mesh_graph_gate', { action: 'abandon', gate_id: 'g' }, /mesh_graph_gate action="abandon": "reason"/],
         ['mesh_node_slots', { action: 'set', node_id: 'n' }, /mesh_node_slots action="set": "slots"/],
-        ['mesh_magi_kind_panel', { action: 'set', slots: [] }, /mesh_magi_kind_panel action="set": "task_kind"/],
         ['mesh_note', { action: 'record' }, /mesh_note action="record": "text"/],
         ['mesh_config', { kind: 'change_impact' }, /mesh_config kind="change_impact": "mode"/],
         ['mesh_cleanup_sessions', { mode: 'delete_stopped' }, /mesh_cleanup_sessions mode="delete_stopped": "node_id"/],
@@ -118,21 +109,15 @@ test('each action enforces its own required arguments', () => {
         assert.match(validateMeshToolArgs(tool, args) ?? '', expected, `${tool} ${JSON.stringify(args)}`);
     }
     // A missing discriminator is named by the schema's own required check.
-    assert.match(validateMeshToolArgs('mesh_graph_gate', { gate_id: 'g' }) ?? '', /"action"/);
     assert.match(validateMeshToolArgs('mesh_note', { text: 't' }) ?? '', /"action"/);
     // An unknown discriminator value is an enum error, not a per-action one.
-    assert.match(validateMeshToolArgs('mesh_graph_gate', { action: 'force_release', gate_id: 'g' }) ?? '', /force_release/);
+    assert.match(validateMeshToolArgs('mesh_note', { action: 'force_forget', text: 't' }) ?? '', /force_forget/);
 });
 
 test('well-formed calls for every action pass validation (camelCase aliases included)', () => {
     const ok: Array<[string, Record<string, unknown>]> = [
-        ['mesh_graph_gate', { action: 'claim', gateId: 'g', leaseSeconds: 60, extend_deadline_seconds: 10 }],
-        ['mesh_graph_gate', { action: 'release', gate_id: 'g', fencingToken: 'f', leaseGeneration: 1, idempotencyKey: 'k', outcome: 'passed', patches: [{ ref: 'deploy', base_spec_patch: {} }] }],
-        ['mesh_graph_gate', { action: 'abandon', gate_id: 'g', reason: 'obsolete', force: true }],
-        ['mesh_graph_gate', { action: 'extend', gate_id: 'g', extend_seconds: 86400 }],
-        ['mesh_node_slots', { action: 'propose', nodeId: 'n', includeMagi: true }],
+        ['mesh_node_slots', { action: 'propose', nodeId: 'n' }],
         ['mesh_node_slots', { action: 'set', node_id: 'n', slots: [{ provider: 'claude-cli' }], write: false, reason: 'r' }],
-        ['mesh_magi_kind_panel', { action: 'list' }],
         ['mesh_coordinator_prompt_append', { action: 'set', cli_type: 'claude-cli', content: '' }],
         ['mesh_note', { action: 'forget', text: 'stale' }],
         ['mesh_config', { kind: 'refine', mode: 'schema' }],

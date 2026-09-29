@@ -33,7 +33,7 @@ export type MeshClaimRefusalReason =
     /** The node's capability tags don't cover the task's requiredTags. Permanent until the
      *  task is retagged or a node advertising those tags joins the mesh. */
     | 'required_tags_unsatisfied'
-    /** A `dependsOn` entry is not yet completed, or a system blockedReason is stamped. */
+    /** A `dependsOn` entry is not yet completed. */
     | 'dependencies_unsatisfied'
     /** The task's `notBefore` gate has not elapsed. */
     | 'not_before_delayed'

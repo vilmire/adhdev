@@ -160,8 +160,8 @@ export function hasSafeNativeHistoryMapping(args: {
  * with no targetSessionId → the floor collapses to undefined (→0) and the
  * antigravity claim-owner token collapses to '' → pickUnboundConversationDb
  * drops out of its spawn-floor branch into newest-by-mtime and binds whichever
- * conversation .db was written most recently. For an antigravity MAGI
- * coordinator that is exactly a co-located replica's .db (the replica finished
+ * conversation .db was written most recently. For an antigravity
+ * coordinator that is exactly a co-located worker's .db (the worker finished
  * its turn last), so the coordinator's read cross-wires onto the replica's
  * conversation instead of its own (ANTIGRAVITY coordinator↔replica crosswire).
  */

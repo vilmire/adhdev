@@ -22,7 +22,6 @@ describe('opencode_json coordinator MCP config format', () => {
     it('nests servers under the opencode `mcp` key', () => {
         expect(getMcpServersKey('opencode_json')).toBe('mcp');
         expect(getMcpServersKey('claude_mcp_json')).toBe('mcpServers');
-        expect(getMcpServersKey('hermes_config_yaml')).toBe('mcp_servers');
     });
 
     it('builds a local-server entry with command+args as ONE array', () => {
@@ -68,7 +67,7 @@ describe('opencode_json coordinator MCP config format', () => {
     // this shared list — every format the helpers support must be in it.
     it('the shared auto-import format list covers every format the helpers support', () => {
         expect([...MESH_COORDINATOR_AUTO_IMPORT_FORMATS].sort())
-            .toEqual(['claude_mcp_json', 'hermes_config_yaml', 'opencode_json']);
+            .toEqual(['claude_mcp_json', 'opencode_json']);
         for (const format of MESH_COORDINATOR_AUTO_IMPORT_FORMATS) {
             expect(isSupportedMeshCoordinatorConfigFormat(format)).toBe(true);
             // parse/serialize/build must all accept it — the list and the helpers move together.

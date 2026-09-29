@@ -129,38 +129,6 @@ describe('CliProviderInstance — WORKER-MCP T2 precursor: turn-aware task attac
       expect(instance.settings.meshNodeFor).toBe('mesh-1') // session membership still preserved (launched member)
     })
 
-    it('injectedTaskHasStartedGenerating uses the FIRST attachment\'s inject time, not the bumped scalar', () => {
-      vi.useFakeTimers()
-      try {
-        vi.setSystemTime(1_000)
-        const instance = makeInstance({ launchedByCoordinator: true })
-        // task-A attaches at t=1000 and its turn genuinely starts at t=1050.
-        instance.attachMeshAssignment({ meshId: 'mesh-1', taskId: 'task-A' })
-        const taskAInjectedAt = instance.meshTaskAttachmentHistory[0].injectedAt
-        expect(taskAInjectedAt).toBe(1_000)
-        instance.adapter.currentTurnStartedAt = 1_050 // task-A's turn started
-
-        // Before task-B attaches, the gate correctly sees task-A's turn as started.
-        expect(instance.injectedTaskHasStartedGenerating()).toBe(true)
-
-        // task-B attaches at t=2000, while task-A is still generating
-        // (busy-injection). The bare scalar meshTaskInjectedAt is bumped
-        // forward by this attach — the exact mechanism that would make
-        // task-A's real completion (turnStartedAt=1050) look premature
-        // (1050 is NOT > 2000) if the gate still read the bare scalar.
-        vi.setSystemTime(2_000)
-        instance.attachMeshAssignment({ meshId: 'mesh-1', taskId: 'task-B' })
-        expect(instance.meshTaskInjectedAt).toBe(2_000)
-
-        // The turn-aware history still anchors on task-A's own inject time
-        // (1000, its turn hasn't been popped yet), so task-A's already-started
-        // turn (1050 > 1000) is NOT reclassified as premature.
-        expect(instance.injectedTaskHasStartedGenerating()).toBe(true)
-      } finally {
-        vi.useRealTimers()
-      }
-    })
-
     it('caps the attachment history so a stuck detach cannot grow it unbounded', () => {
       const instance = makeInstance({ launchedByCoordinator: true })
       for (let i = 0; i < 12; i++) {
@@ -227,11 +195,6 @@ describe('CliProviderInstance — WORKER-MCP T2 precursor: turn-aware task attac
       expect(instance.completingTurnTaskId()).toBeUndefined()
       instance.settings.meshActiveTaskId = 'task-scalar'
       expect(instance.completingTurnTaskId()).toBe('task-scalar')
-    })
-
-    it('injectedTaskHasStartedGenerating() reads the bare scalar instead of throwing', () => {
-      const instance = bareStub()
-      expect(() => instance.injectedTaskHasStartedGenerating()).not.toThrow()
     })
 
     it('detachMeshAssignment() on a bare stub does not throw', () => {

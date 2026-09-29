@@ -31,12 +31,11 @@ import { useMeshNodeActions } from './repo-mesh/useMeshNodeActions'
 import { useMeshQueue } from './repo-mesh/useMeshQueue'
 import { useMeshGraph } from './repo-mesh/useMeshGraph'
 import { resolveFirstSetupSeedDaemonId, readAuthoritativeMeshHostPin } from './repo-mesh/host-seed'
-import type { MeshNode, MeshQueueEntry, AvailableCliAgent } from './repo-mesh/types'
+import type { MeshNode, MeshQueueEntry } from './repo-mesh/types'
 import { useConfirmDialog } from '../hooks/useConfirmDialog'
 
 // Re-export types that cloud/standalone wrappers may reference
-export type { MeshNode, MeshQueueEntry, AvailableCliAgent }
-export { RepoMeshHermesMcpConfig } from './repo-mesh/MeshHermesMcpConfig'
+export type { MeshNode, MeshQueueEntry }
 export { getNodeActiveAssignments, describeNodeActiveAssignmentLabel } from './repo-mesh/MeshNodeList'
 
 
@@ -79,14 +78,7 @@ export default function RepoMesh() {
     const primaryDaemon = daemons[0] as RepoMeshDaemonEntry | undefined
     const primaryDaemonId = primaryDaemon?.id || ''
 
-    // Extract available CLI agents + providers from the primary daemon
-    const availableCliAgents: AvailableCliAgent[] = useMemo(() => {
-        const providers = (primaryDaemon as any)?.availableProviders || []
-        return providers
-            .filter((p: any) => p.category === 'cli')
-            .map((p: any) => ({ id: p.type || p.id, name: p.displayName || p.name || p.type, meshCoordinator: p.meshCoordinator }))
-    }, [primaryDaemon])
-
+    // Available CLI providers from the primary daemon
     const availableCliProviders: AvailableCliProviderOption[] = useMemo(
         () => normalizeAvailableCliProviders((primaryDaemon as any)?.availableProviders || []),
         [primaryDaemon],
@@ -623,11 +615,9 @@ export default function RepoMesh() {
             attachableDaemons={attachableDaemons}
             onAddNode={handleAddNode}
             onRemoveNode={handleRemoveNode}
-            availableCliAgents={availableCliAgents}
             features={{
                 coordinatorPrompt: features.coordinatorPrompt,
                 meshHostDaemonSection: features.meshHostDaemonSection,
-                hermesMcpConfig: features.hermesMcpConfig,
                 addNodeDaemonPicker: features.addNodeDaemonPicker,
                 nodeInstruction: features.nodeInstruction,
             }}

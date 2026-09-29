@@ -47,10 +47,6 @@ function shouldPreserveNativeIdentity(providerType: string, sessionId: string, m
     }
     // v1 identity always required both keys to be present.
     if (!turnKey) return false;
-    if (providerType === 'hermes-cli' && sessionId) {
-        return providerUnitKey.startsWith(`${providerType}:native:${sessionId}:`)
-            && turnKey.startsWith(`${providerType}:native-turn:${sessionId}:`);
-    }
     return true;
 }
 

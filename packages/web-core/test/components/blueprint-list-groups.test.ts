@@ -7,12 +7,11 @@
  *
  *  - a generating/assigned/pending task appears in the Running section
  *  - a session awaiting approval/choice moves its task to Blocked
- *  - a system-blocked or dependency-waiting task is Blocked, not Running
+ *  - a dependency-waiting or dependency-failed task is Blocked, not Running
  *  - terminal statuses never appear in Running/Blocked; the newest 10 are
  *    Recent, older ones History behind the caller's limit
- *  - a blocking coordinator gate is its own Blocked row; a settled gate is not
- *  - the plan (mini-DAG) affordance exists ONLY where a plan exists: a graph
- *    WITH edges, or queue dependency edges — an edgeless graph offers none
+ *  - the plan (mini-DAG) affordance exists ONLY where a plan exists: queue
+ *    dependency edges — a lone task offers none
  *
  * Red-when-reverted: each block names the classification branch that breaks it.
  */
@@ -22,7 +21,6 @@ import {
     BLUEPRINT_RECENT_TERMINAL_LIMIT,
     buildBlueprintGroups,
     buildBlueprintMissionGroups,
-    buildPlanGraphIndex,
     deriveSessionActivity,
 } from '../../src/components/MeshGraph/useBlueprintGroups'
 
@@ -42,26 +40,11 @@ const statusWithSession = (sessionId: string, state: string) => ({
     }],
 }) as any
 
-const graphNode = (nodeId: string, over: Record<string, unknown> = {}) => ({
-    nodeId, ref: nodeId, kind: 'worker_task', state: 'materialized', materializationVersion: 1, ...over,
-})
-
-const makeGraph = (graphId: string, over: Record<string, unknown> = {}) => ({
-    graphId,
-    status: 'running',
-    nodes: [],
-    gates: [],
-    edges: [],
-    createdAt: '2026-09-16T09:00:00Z',
-    ...over,
-}) as any
-
 describe('Running section', () => {
     it('a generating task appears in Running, labelled generating', () => {
         const groups = buildBlueprintGroups(
             [task({ id: 't-gen', status: 'assigned', assignedSessionId: 's1', assignedNodeId: 'node-1' })],
             statusWithSession('s1', 'generating'),
-            [],
         )
         expect(groups.running.map(row => row.task.id)).toEqual(['t-gen'])
         expect(groups.running[0].statusToken).toBe('generating')
@@ -75,7 +58,6 @@ describe('Running section', () => {
                 task({ id: 't-assigned', status: 'assigned', updatedAt: '2026-09-16T10:00:00Z' }),
             ],
             { nodes: [] } as any,
-            [],
         )
         expect(groups.running.map(row => row.task.id)).toEqual(['t-assigned', 't-pending'])
         expect(groups.counts.running).toBe(2)
@@ -87,7 +69,6 @@ describe('Blocked section', () => {
         const groups = buildBlueprintGroups(
             [task({ id: 't-appr', status: 'assigned', assignedSessionId: 's1', assignedNodeId: 'node-1' })],
             statusWithSession('s1', 'waiting_approval'),
-            [],
         )
         expect(groups.running).toEqual([])
         expect(groups.blocked).toHaveLength(1)
@@ -100,7 +81,6 @@ describe('Blocked section', () => {
         const groups = buildBlueprintGroups(
             [task({ id: 't-choice', status: 'assigned', assignedSessionId: 's1', assignedNodeId: 'node-1' })],
             statusWithSession('s1', 'waiting_choice'),
-            [],
         )
         const row = groups.blocked[0]
         expect(row.kind === 'task' && row.awaitingChoice).toBe(true)
@@ -114,7 +94,6 @@ describe('Blocked section', () => {
                 task({ id: 't-waits', status: 'pending', dependsOn: ['t-dep'] }),
             ],
             { nodes: [] } as any,
-            [],
         )
         expect(blocked.blocked.map(row => row.kind === 'task' ? row.task.id : '')).toEqual(['t-waits'])
         expect(blocked.blocked[0].kind === 'task' && blocked.blocked[0].waitingOn).toEqual(['t-dep'])
@@ -125,38 +104,17 @@ describe('Blocked section', () => {
                 task({ id: 't-waits', status: 'pending', dependsOn: ['t-dep'] }),
             ],
             { nodes: [] } as any,
-            [],
         )
         expect(released.running.map(row => row.task.id)).toEqual(['t-waits'])
     })
 
-    it('a system-blocked task (blockedReason) is Blocked', () => {
+    it('a task behind a failed dependency is Blocked', () => {
         const groups = buildBlueprintGroups(
-            [task({ id: 't-held', status: 'pending', blockedReason: 'dependency_failed:t0' })],
+            [task({ id: 't-held', status: 'pending', dependencyFailures: [{ taskId: 't0', status: 'failed' }] })],
             { nodes: [] } as any,
-            [],
         )
         expect(groups.blocked).toHaveLength(1)
-        expect(groups.blocked[0].kind === 'task' && groups.blocked[0].blockedReason).toBe('dependency_failed:t0')
-    })
-
-    it('a blocking coordinator gate is its own Blocked row; a released gate is not', () => {
-        const graph = makeGraph('g1', {
-            nodes: [
-                graphNode('gate-open', { kind: 'coordinator_gate', state: 'awaiting_coordinator' }),
-                graphNode('gate-done', { kind: 'coordinator_gate', state: 'released' }),
-            ],
-            gates: [
-                { gateId: 'ga', nodeId: 'gate-open', state: 'awaiting_coordinator', action: 'approval', onTimeout: 'hold', leaseGeneration: 0 },
-                { gateId: 'gb', nodeId: 'gate-done', state: 'released', action: 'approval', onTimeout: 'hold', leaseGeneration: 0 },
-            ],
-        })
-        const groups = buildBlueprintGroups([], { nodes: [] } as any, [graph])
-        expect(groups.blocked).toHaveLength(1)
-        const row = groups.blocked[0]
-        expect(row.kind).toBe('gate')
-        expect(row.kind === 'gate' && row.nodeId).toBe('gate-open')
-        expect(groups.counts.blocked).toBe(1)
+        expect(groups.blocked[0].dependencyFailureCount).toBe(1)
     })
 })
 
@@ -169,13 +127,13 @@ describe('terminal sections', () => {
     }))
 
     it('terminal queue statuses never appear in Running or Blocked', () => {
-        const groups = buildBlueprintGroups(terminal, { nodes: [] } as any, [])
+        const groups = buildBlueprintGroups(terminal, { nodes: [] } as any)
         expect(groups.running).toEqual([])
         expect(groups.blocked).toEqual([])
     })
 
     it(`the newest ${BLUEPRINT_RECENT_TERMINAL_LIMIT} terminal rows are Recent, older ones History behind the limit`, () => {
-        const groups = buildBlueprintGroups(terminal, { nodes: [] } as any, [], 2)
+        const groups = buildBlueprintGroups(terminal, { nodes: [] } as any, 2)
         expect(groups.recent).toHaveLength(BLUEPRINT_RECENT_TERMINAL_LIMIT)
         expect(groups.recent[0].task.id).toBe('t-done-0')
         expect(groups.recent.every(row => row.section === 'recent')).toBe(true)
@@ -186,44 +144,17 @@ describe('terminal sections', () => {
 })
 
 describe('plan (mini-DAG) availability', () => {
-    it('a graph WITH edges gives its tasks planSource graph', () => {
-        const graph = makeGraph('g-edges', {
-            nodes: [graphNode('n1', { taskId: 't1' }), graphNode('n2', { taskId: 't2' })],
-            edges: [{ from: 'n1', to: 'n2', active: true }],
-        })
-        const groups = buildBlueprintGroups(
-            [task({ id: 't1', status: 'assigned' })],
-            { nodes: [] } as any,
-            [graph],
-        )
-        expect(groups.running[0].planSource).toBe('graph')
-        expect(groups.running[0].planGraphId).toBe('g-edges')
-    })
-
-    it('an EDGELESS graph offers no plan affordance at all', () => {
-        const graph = makeGraph('g-bare', { nodes: [graphNode('n1', { taskId: 't1' })] })
-        const groups = buildBlueprintGroups(
-            [task({ id: 't1', status: 'assigned' })],
-            { nodes: [] } as any,
-            [graph],
-        )
-        expect(groups.running[0].planSource).toBeUndefined()
-        expect(buildPlanGraphIndex([graph]).size).toBe(0)
-    })
-
-    it('queue dependency edges give planSource queue without any persistent graph', () => {
+    it('queue dependency edges give the row a plan; a loose task has none', () => {
         const groups = buildBlueprintGroups(
             [
                 task({ id: 't-dep', status: 'completed' }),
                 task({ id: 't-next', status: 'pending', dependsOn: ['t-dep'] }),
             ],
             { nodes: [] } as any,
-            [],
         )
-        expect(groups.running[0].planSource).toBe('queue')
-        // A loose task with no edges anywhere has none.
-        const loose = buildBlueprintGroups([task({ id: 't-solo' })], { nodes: [] } as any, [])
-        expect(loose.running[0].planSource).toBeUndefined()
+        expect(groups.running[0].hasPlan).toBe(true)
+        const loose = buildBlueprintGroups([task({ id: 't-solo' })], { nodes: [] } as any)
+        expect(loose.running[0].hasPlan).toBe(false)
     })
 })
 
@@ -245,7 +176,6 @@ describe('by-mission regrouping', () => {
                 task({ id: 't-adhoc', status: 'pending', updatedAt: '2026-09-16T11:00:00Z' }),
             ],
             { nodes: [] } as any,
-            [],
         )
         const rows = [...groups.running, ...groups.blocked, ...groups.recent, ...groups.history]
         const missionGroups = buildBlueprintMissionGroups(rows, { m1: 'Mission One' })

@@ -6,7 +6,7 @@
  */
 
 export type MeshCoordinatorMcpConfigMode = 'auto_import' | 'manual' | 'none';
-export type MeshCoordinatorMcpConfigFormat = 'claude_mcp_json' | 'hermes_config_yaml';
+export type MeshCoordinatorMcpConfigFormat = 'claude_mcp_json' | 'opencode_json';
 
 export interface ProviderMeshCoordinatorConfig {
   /** Whether ADHDev may select this provider for Repo Mesh coordinator sessions. */
@@ -21,7 +21,7 @@ export interface ProviderMeshCoordinatorConfig {
     path?: string;
     /** MCP server name to materialize or display. Defaults to 'adhdev-mesh'. */
     serverName?: string;
-    /** Manual setup target path/help command, e.g. 'hermes config path'. */
+    /** Manual setup target path/help command, e.g. 'codex mcp list'. */
     configPathCommand?: string;
     /** Whether users need a fresh CLI session after config changes. */
     requiresRestart?: boolean;

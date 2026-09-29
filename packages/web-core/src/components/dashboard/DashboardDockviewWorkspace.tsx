@@ -35,7 +35,7 @@ import {
 } from '../../utils/dashboardLayoutStorage'
 import type { LiveSessionInboxState } from './DashboardMobileChatShared'
 import { getPreferredConversationForIde } from './conversation-sort'
-import { getCliConversationViewMode, isAcpConv } from './types'
+import { getCliConversationViewMode } from './types'
 import { useTransport } from '../../context/TransportContext'
 import { useTheme } from '../../hooks/useTheme'
 import { useTabShortcuts } from '../../hooks/useTabShortcuts';
@@ -200,8 +200,7 @@ export function DashboardDockviewPanel({ params, api }: IDockviewPanelProps<Dash
         )
     }
 
-    const isCliTerminal = !isAcpConv(activeConv)
-        && getCliConversationViewMode(activeConv) === 'terminal'
+    const isCliTerminal = getCliConversationViewMode(activeConv) === 'terminal'
 
     return (
         <div className="h-full min-h-0 min-w-0 flex flex-col overflow-hidden">

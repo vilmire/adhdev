@@ -148,18 +148,18 @@ describe('(b) retention sweeps', () => {
     expect(ids).toContain('old-assigned')
   })
 
-  it('non-graph mesh_task_outputs leave WITH their terminal queue row, orphans past the window go too, and live/dependency/young outputs stay', () => {
+  it('mesh_task_outputs leave WITH their terminal queue row, orphans past the window go too, and live/dependency/young outputs stay', () => {
     const store = MeshRuntimeStore.getInstance()
     const oldIso = isoAgo(40 * DAY_MS)
-    const out = (taskId: string, opts: { graphId?: string; createdAt: string }) =>
+    const out = (taskId: string, opts: { createdAt: string }) =>
       (store as any).db.prepare(
-        `INSERT INTO mesh_task_outputs (task_id, version, mesh_id, graph_id, node_id, attempt, status, envelope_json, digest, created_at)
-         VALUES (?, 1, ?, ?, NULL, 1, 'completed', '{}', 'd', ?)`,
-      ).run(taskId, MESH, opts.graphId ?? null, opts.createdAt)
+        `INSERT INTO mesh_task_outputs (task_id, version, mesh_id, attempt, status, envelope_json, digest, created_at)
+         VALUES (?, 1, ?, 1, 'completed', '{}', 'd', ?)`,
+      ).run(taskId, MESH, opts.createdAt)
     const outputIds = (): string[] =>
       ((store as any).db.prepare('SELECT task_id FROM mesh_task_outputs ORDER BY task_id').all() as Array<{ task_id: string }>).map(r => r.task_id)
 
-    // Terminal + aged queue row → its non-graph output goes with it.
+    // Terminal + aged queue row → its output goes with it.
     store.insertQueueEntry(queueEntry({ id: 'old-done', status: 'completed', createdAt: oldIso, updatedAt: oldIso }))
     out('old-done', { createdAt: oldIso })
     // Orphan (queue row already pruned) and older than the window → goes.
@@ -176,14 +176,11 @@ describe('(b) retention sweeps', () => {
     store.insertQueueEntry(queueEntry({ id: 'dep-anchor', status: 'completed', createdAt: oldIso, updatedAt: oldIso }))
     store.insertQueueEntry(queueEntry({ id: 'dependent-pending', status: 'pending', dependsOn: ['dep-anchor'] }))
     out('dep-anchor', { createdAt: oldIso })
-    // GRAPH-owned output: never touched by the queue prune, even for an aged terminal queue row.
-    store.insertQueueEntry(queueEntry({ id: 'graph-task', status: 'completed', createdAt: oldIso, updatedAt: oldIso }))
-    out('graph-task', { createdAt: oldIso, graphId: 'graph_x' })
 
-    expect(outputIds()).toHaveLength(7)
+    expect(outputIds()).toHaveLength(6)
     const detail = store.pruneTerminalQueue(MESH_TERMINAL_QUEUE_RETENTION_MS)
-    expect(detail).toEqual({ queue: 2, taskOutputs: 2 })
-    expect(outputIds()).toEqual(['dep-anchor', 'graph-task', 'live-assigned', 'orphan-young', 'recent-done'])
+    expect(detail).toEqual({ queue: 1, taskOutputs: 2 })
+    expect(outputIds()).toEqual(['dep-anchor', 'live-assigned', 'orphan-young', 'recent-done'])
     // Idempotent.
     expect(store.pruneTerminalQueue(MESH_TERMINAL_QUEUE_RETENTION_MS)).toEqual({ queue: 0, taskOutputs: 0 })
   })

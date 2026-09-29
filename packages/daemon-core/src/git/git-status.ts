@@ -325,7 +325,7 @@ async function collectGitRepoStatus(
 /**
  * Package names that, when changed, mean the daemon runtime is stale and must be
  * rebuilt/redeployed + restarted. Everything NOT in this set (web-core,
- * web-standalone, web-devconsole, terminal-render-web) is web-only — a daemon
+ * web-standalone, terminal-render-web) is web-only — a daemon
  * restart is not required for those, only a web redeploy. mcp-server runs in the
  * same process surface as the daemon tooling, so it is classified as
  * daemon-affecting (conservative). Unknown package → daemon-affecting.
@@ -345,7 +345,6 @@ const DEFAULT_DAEMON_RUNTIME_PACKAGES = [
 const DEFAULT_WEB_ONLY_PACKAGES = [
   'web-core',
   'web-standalone',
-  'web-devconsole',
   'terminal-render-web',
 ];
 

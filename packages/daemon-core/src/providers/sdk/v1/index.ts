@@ -38,14 +38,6 @@ export {
   type SynthesizedSession,
 } from './builders/cli/parse-session.js';
 
-// ACP builders — declarative stdio session-status detection.
-export {
-  buildDetectStatusFromAcp,
-  type AcpSessionSpec,
-  type AcpStatusInput,
-  type AcpDetectedStatus,
-} from './builders/acp/detect-status.js';
-
 // Fixture tooling — record/replay for provider regression suites.
 export {
   loadFixtureExpected,
@@ -69,7 +61,6 @@ export {
   type TaintFinding,
   type TaintResult,
   validateCliProviderManifest,
-  validateAcpProviderManifest,
   formatManifestValidationIssues,
   type ManifestValidationIssue,
   type ManifestValidationResult,
@@ -78,9 +69,6 @@ export {
 // Primitive identifiers — the canonical list.
 // Implementations live under ./primitives/ and are wired in by builders.
 export const V1_PRIMITIVE_CATALOG = Object.freeze({
-  acp: [
-    'adhdev:acp/session-protocol@1',
-  ],
   tui: [
     'adhdev:tui/prompt-marker@1',
     'adhdev:tui/spinner@1',
@@ -108,7 +96,6 @@ export const V1_PRIMITIVE_CATALOG = Object.freeze({
     'adhdev:native-history/codex-rollout@1',
     'adhdev:native-history/claude-jsonl@1',
     'adhdev:native-history/anthropic-cli-transcript@1',
-    'adhdev:native-history/hermes-session@1',
   ],
   cliCapability: [
     'adhdev:cli/capability-list@1',

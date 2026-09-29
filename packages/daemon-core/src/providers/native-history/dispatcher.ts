@@ -1,7 +1,7 @@
 /**
  * Spec-aware dispatcher for native conversation history.
  *
- * The four existing readers (claude/codex/antigravity/hermes) already know
+ * The existing readers (claude/codex/antigravity/grok) already know
  * how to parse each agent's on-disk format. This dispatcher just resolves
  * the right file given a workspace + sessionId hint, then hands it off.
  *
@@ -19,7 +19,6 @@ import type { NativeHistoryToolBlockRef } from '../spec/native-history-types.js'
 import { readSession as readClaudeCliSession } from './claude-cli-transcript.js';
 import { codexSessionsRoot, readSession as readCodexCliSession } from './codex-cli-transcript.js';
 import { readSession as readAntigravityCliSession } from './antigravity-cli-transcript.js';
-import { readSession as readHermesCliSession } from './hermes-cli-transcript.js';
 import {
     readSession as readGrokCliSession,
     listSessions as listGrokCliSessions,
@@ -36,7 +35,7 @@ import { isSafeFilename } from './fs-utils.js';
 import { isUuidLike } from './transcript-common.js';
 import { type MessageSourceAddress, readMessageSourceAddress } from '../../chat/message-source-address.js';
 
-export type ReaderId = 'claude-cli' | 'codex-cli' | 'antigravity-cli' | 'hermes-cli' | 'grok-cli';
+export type ReaderId = 'claude-cli' | 'codex-cli' | 'antigravity-cli' | 'grok-cli';
 
 export interface NativeHistoryInput {
     agentType?: string;
@@ -144,7 +143,7 @@ function toNativeHistoryMessage(m: any, workspace: string): NativeHistoryResult[
         // spread: a malformed ref reaching the dashboard would render an
         // expand button that can only ever fail.
         ...(isToolBlockRef(m.toolBlockRef) ? { toolBlockRef: m.toolBlockRef } : {}),
-        // Every native-history reader (claude/codex/antigravity/hermes/grok) may
+        // Every native-history reader (claude/codex/antigravity/grok) may
         // stamp senderName (display label for tool/terminal bubbles — see
         // chat-commands-read-native-normalize.ts's meta.label derivation) and,
         // for readers that resolve a specific tool call (currently antigravity),
@@ -197,7 +196,7 @@ export function createNativeHistoryDispatcher(reader: ReaderId): (input: NativeH
             try { fs.statSync(sourcePath); } catch { /* best-effort metadata refresh */ }
         }
 
-        const session = readByReader(reader, sourcePath, sessionId, workspace, requestedProviderSid);
+        const session = readByReader(reader, sourcePath, sessionId, workspace);
         if (!session) return null;
 
         if (requestedProviderSid && session.providerSessionId && session.providerSessionId !== requestedProviderSid) {
@@ -253,7 +252,6 @@ function resolveSourcePath(reader: ReaderId, workspace: string, sessionId: strin
         case 'claude-cli':   { const p = resolveClaudePath(workspace, sessionId); return p ? { path: p } : null; }
         case 'codex-cli':    { const p = resolveCodexPath(workspace, sessionId, sessionStartedAtMs); return p ? { path: p } : null; }
         case 'antigravity-cli': return resolveAntigravityPath(workspace, sessionId, sessionStartedAtMs, instanceId);
-        case 'hermes-cli':   { const p = resolveHermesPath(workspace, sessionId); return p ? { path: p } : null; }
         // grok stores per-cwd like claude, but keyed by the url-encoded cwd and
         // with the uuid as a DIRECTORY (…/<uuid>/chat_history.jsonl) rather than
         // the filename, so resolution lives in the reader module.
@@ -534,8 +532,8 @@ function resolveAntigravityPath(
     //     floor is known, a brain dir born at/after the floor is THIS session's own,
     //     and among those the OLDEST-created wins (the store created first after the
     //     session started). The previous newest-by-mtime sort silently mis-bound: in
-    //     a MAGI panel every co-located antigravity session (coordinator + replicas)
-    //     has a non-empty brain transcript, and the replica that finished its turn
+    //     a mesh with several co-located antigravity sessions (coordinator + workers)
+    //     every one has a non-empty brain transcript, and the worker that finished its turn
     //     last has the newest mtime — so a coordinator's read grabbed the replica's
     //     transcript here, BEFORE step 3's floor-aware pick could run. That is the
     //     antigravity coordinator↔replica crosswire, and it lives in THIS step, not
@@ -680,19 +678,6 @@ function spawnAwareCutoff(sessionStartedAtMs: number): number {
     return recency;
 }
 
-function resolveHermesPath(workspace: string, sessionId: string): string | null {
-    void workspace; void sessionId;
-    // Hermes ≥ 0.14 persists all chat to ~/.hermes/state.db (SQLite). The
-    // db file is the "path" we hand to the reader — it pulls the newest
-    // source='cli' session inside readSession.
-    const dbPath = path.join(os.homedir(), '.hermes', 'state.db');
-    if (fs.existsSync(dbPath)) return dbPath;
-    // Legacy fallback: pre-db hermes wrote per-session JSON dumps.
-    const dir = path.join(os.homedir(), '.hermes', 'sessions');
-    if (!fs.existsSync(dir)) return null;
-    return newestRecentFile(dir, /^session_.*\.json$/);
-}
-
 // ────────────────────────────────────────────────────────────────────────────
 // Reader dispatch
 // ────────────────────────────────────────────────────────────────────────────
@@ -702,18 +687,11 @@ function readByReader(
     sourcePath: string,
     sessionId: string,
     workspace: string,
-    requestedProviderSid: string,
 ): any | null {
     switch (reader) {
         case 'claude-cli':      return readClaudeCliSession(sourcePath);
         case 'codex-cli':       return readCodexCliSession(sourcePath);
         case 'antigravity-cli': return readAntigravityCliSession(sourcePath, sessionId || undefined, workspace || undefined);
-        // hermes reads a *shared* state.db and would otherwise pick the newest
-        // source='cli' session, which drifts every read (hermes ≥0.14 writes a
-        // fresh row per internal sub-session). Pass the bound id so it reads
-        // THAT session directly instead of newest-wins. claude/codex resolve a
-        // per-session file upstream, so they need no equivalent pin here.
-        case 'hermes-cli':      return readHermesCliSession(sourcePath, requestedProviderSid || undefined);
         case 'grok-cli':        return readGrokCliSession(sourcePath, sessionId, workspace || undefined);
     }
 }
@@ -727,25 +705,8 @@ function cwdAsDashes(cwd: string): string {
     return cwd.replace(/\//g, '-');
 }
 
-/**
- * Like newestFile but only returns a candidate when its mtime is within
- * the recent activity window. Prevents the dashboard from surfacing a
- * prior session's transcript when the daemon's sessionId doesn't match
- * any file on disk (e.g. claude allocates its own uuid; daemon and
- * agent disagree about what the "current" session is).
- */
+/** Recent-activity window used by the antigravity/codex resolvers (see their headers). */
 const RECENT_WINDOW_MS = 5 * 60 * 1000;
-function newestRecentFile(dir: string, pattern: RegExp): string | null {
-    try {
-        const cutoff = Date.now() - RECENT_WINDOW_MS;
-        const entries = fs.readdirSync(dir, { withFileTypes: true })
-            .filter(e => e.isFile() && pattern.test(e.name))
-            .map(e => ({ p: path.join(dir, e.name), mtime: safeMtime(path.join(dir, e.name)) }))
-            .filter(e => e.mtime >= cutoff)
-            .sort((a, b) => b.mtime - a.mtime);
-        return entries[0]?.p ?? null;
-    } catch { return null; }
-}
 
 function safeMtime(p: string): number {
     try { return Math.floor(fs.statSync(p).mtimeMs); } catch { return 0; }

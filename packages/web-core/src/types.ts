@@ -42,8 +42,6 @@ export type {
     AgentSessionStream,
     ReadChatCursor,
     ReadChatSyncResult,
-    AcpConfigOption,
-    AcpMode,
     StatusReportPayload,
     MachineInfo,
     DetectedIdeInfo,
@@ -122,7 +120,7 @@ export interface BaseDaemonData {
     providerSessionId?: string;
     parentSessionId?: string | null;
     type: string;
-    /** Provider type alias used for CLI/ACP sessions */
+    /** Provider type alias used for CLI sessions */
     agentType?: string;
     sessionKind?: 'workspace' | 'agent';
     transport?: SessionTransport;
@@ -236,8 +234,6 @@ export interface BaseDaemonData {
     // ── Discriminator flags (set by status-transform) ──
     /** @internal CLI session marker */
     _isCli?: boolean;
-    /** @internal ACP session marker */
-    _isAcp?: boolean;
     /** @internal Status payload included an explicit sessions list, even if empty. */
     _sessionListAuthoritative?: boolean;
     settings?: Record<string, any>;

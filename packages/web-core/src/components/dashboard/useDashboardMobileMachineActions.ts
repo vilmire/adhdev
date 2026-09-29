@@ -10,7 +10,7 @@ import { getDashboardActiveTabHref, resolveDashboardSessionTargetFromEntry } fro
 
 interface PendingWorkspaceLaunch {
     machineId: string
-    kind: 'cli' | 'acp'
+    kind: 'cli'
     providerType: string
     workspaceId?: string | null
     workspacePath?: string | null
@@ -119,7 +119,7 @@ export function useDashboardMobileMachineActions({
 
     const handleLaunchWorkspaceProvider = useCallback(async (
         machineId: string,
-        kind: 'cli' | 'acp',
+        kind: 'cli',
         providerType: string,
         opts?: {
             workspaceId?: string | null
@@ -213,11 +213,7 @@ export function useDashboardMobileMachineActions({
             const entryMachineId = getRouteMachineId(entry.daemonId || entry.id)
             if (entryMachineId !== pendingWorkspaceLaunch.machineId) return false
 
-            const entryKind = entry.transport === 'acp'
-                ? 'acp'
-                : entry.transport === 'pty'
-                    ? 'cli'
-                    : null
+            const entryKind = entry.transport === 'pty' ? 'cli' : null
             if (entryKind !== pendingWorkspaceLaunch.kind) return false
 
             const entryProviderType = String(entry.agentType || entry.type || '')
@@ -281,7 +277,7 @@ export function useDashboardMobileMachineActions({
             })
             return
         }
-        if ((session.kind === 'cli' || session.kind === 'acp') && session.providerType) {
+        if (session.kind === 'cli' && session.providerType) {
             const recentWorkspace = session.workspace?.trim() || ''
             await handleLaunchWorkspaceProvider(machineId, session.kind, session.providerType, {
                 workspacePath: recentWorkspace || null,

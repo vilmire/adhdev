@@ -112,29 +112,12 @@ export interface CliAdapterStatus {
      * Whether this provider's background-tool lifecycle is authoritatively
      * tracked from its native transcript. 'tracked' = claude-cli / kimi (the
      * detector understands the record shape); 'unknown' = every other provider
-     * (PTY-only FSM adapters, ACP providers — no transcript tool-lifecycle
+     * (PTY-only FSM adapters — no transcript tool-lifecycle
      * authority exists). 'unknown' is an EXPLICIT contract: the completion
      * path is not gated on background work for these providers, which is
      * documented here rather than silently treated as "no background work".
      */
     backgroundTaskSupport?: 'tracked' | 'unknown';
-}
-
-export interface AcpAdapterHandle {
-    onEvent(event: string, data?: unknown): void;
-    getState(): {
-        status: string;
-        activeChat?: {
-            messages?: ChatMessage[];
-            activeModal?: {
-                message: string;
-                buttons: string[];
-            } | null;
-        } | null;
-    };
-    setMode?(mode: string): Promise<void>;
-    setConfigOption?(configId: string, value: string): Promise<void>;
-    resolvePermission?(approved: boolean): Promise<void>;
 }
 
 /**
@@ -164,7 +147,6 @@ export interface CliAdapter {
     cliType: string;
     cliName: string;
     workingDir: string;
-    _acpInstance?: AcpAdapterHandle;
     spawn(): Promise<void>;
     /**
      * `bracketedPaste` routes an image-bearing body through the provider's

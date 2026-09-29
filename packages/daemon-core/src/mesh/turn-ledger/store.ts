@@ -5,7 +5,7 @@
 // publish, no clock of its own (every write takes `nowMs`). Bound to one
 // better-sqlite3 handle — `mesh-runtime.db` in production, `:memory:` in
 // tests — so the ledger's transaction covers these rows AND `mesh_queue` /
-// graph rows on the same handle.
+// mesh_task_outputs rows on the same handle.
 //
 // Only this file, migrate-v1.ts and schema.ts write the turn tables
 // (gate `check:turn-single-emitter`, rule 1).

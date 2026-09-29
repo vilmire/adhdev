@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { ALL_MESH_TOOLS } from '../src/tools/mesh-tool-schemas.js';
-import { MESH_ENQUEUE_BATCH_TOOL, MESH_ENQUEUE_TASK_TOOL, MESH_GRAPH_GATE_TOOL } from '../src/tools/mesh-tool-schemas-queue.js';
+import { MESH_ENQUEUE_BATCH_TOOL, MESH_ENQUEUE_TASK_TOOL } from '../src/tools/mesh-tool-schemas-queue.js';
 import {
     MESH_ACCEPTED_ARG_ALIASES,
     MESH_RETIRED_ARGS,
@@ -10,27 +10,16 @@ import {
     canonicalizeMeshToolArgs,
     validateMeshToolArgs,
 } from '../src/tools/validate-tool-args.js';
-import { MESH_GRAPH_GATE_EXTEND_COMMAND } from '../src/tools/mesh-tools-graph.js';
-import { resolveMeshToolHandler } from '../src/tools/mesh-tool-dispatch.js';
-import { meshStatus, pickDaemonGraphUsage } from '../src/tools/mesh-tools-status.js';
-
-import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
-import { fakeCoordinatorTransport } from './helpers/fake-coordinator-tool-answers.js';
-
 /**
- * graph-orchestration-simplification D2 + the MCP half of D3(c)/D6
- * (the 2026-09-25 graph orchestration simplification).
+ * The enqueue schema diet + the retired graph-orchestration surface.
  *
  *  1. Schema diet — the enqueue schemas publish ONE canonical snake_case name per
- *     field and stay under a byte ceiling (the 18 KB batch schema was the measured
- *     reason coordinators never reached for it). The old aliases are still ACCEPTED
- *     by the validator, silently, so existing coordinators keep working.
- *  2. run_if / on_false / on_upstream_skip are retired at the surface: rejected with
- *     a message that names depends_on + on_dependency_failure.
- *  3. The gate EXTEND verb (since the 2026-09-26 tool consolidation: mesh_graph_gate
- *     action=extend; before it, an extend_seconds flag on the claim tool) dispatches the
- *     daemon command `mesh_graph_gate_extend`.
- *  4. mesh_status verbose passes the daemon's graphUsage through untouched.
+ *     field and stay under a byte ceiling. The old aliases are still ACCEPTED by
+ *     the validator, silently, so existing coordinators keep working.
+ *  2. Graph orchestration is retired: gates / workspaces / inputs_from / run_if /
+ *     batch_id / on_dependency_failure / orchestration_decision are rejected with
+ *     a message that names the replacement (depends_on, the mesh policy).
+ *  3. The graph tools are gone from the published list.
  */
 
 const TASK_SCHEMA_MAX_BYTES = 4000;
@@ -40,8 +29,6 @@ type Props = Record<string, unknown>;
 const taskProps = MESH_ENQUEUE_TASK_TOOL.inputSchema.properties as Props;
 const batchProps = MESH_ENQUEUE_BATCH_TOOL.inputSchema.properties as Props;
 const batchTaskProps = (batchProps.tasks as any).items.properties as Props;
-const batchWorkspaceProps = (batchProps.workspaces as any).items.properties as Props;
-const batchGateProps = (batchProps.gates as any).items.properties as Props;
 
 // ── 1. size ceilings ─────────────────────────────────────────────────────────
 
@@ -55,9 +42,10 @@ test('D2: mesh_enqueue_batch schema JSON stays within 6 KB', () => {
     assert.ok(bytes <= BATCH_SCHEMA_MAX_BYTES, `mesh_enqueue_batch schema is ${bytes} bytes (ceiling ${BATCH_SCHEMA_MAX_BYTES}) — compress prose instead of raising the ceiling`);
 });
 
-test('the gate extend verb is an action of mesh_graph_gate, not a tool of its own', () => {
-    assert.equal(ALL_MESH_TOOLS.some(t => t.name === 'mesh_graph_gate_extend'), false, 'extend is an action, not a tool');
-    assert.ok(((MESH_GRAPH_GATE_TOOL.inputSchema.properties as any).action.enum as string[]).includes('extend'));
+test('the graph tools are no longer published', () => {
+    for (const name of ['mesh_graph_view', 'mesh_graph_gate', 'mesh_graph_node_patch', 'mesh_graph_gate_extend']) {
+        assert.equal(ALL_MESH_TOOLS.some(t => t.name === name), false, `${name} must not be published`);
+    }
 });
 
 // ── 2. one canonical name per field ─────────────────────────────────────────
@@ -67,8 +55,6 @@ test('D2: the enqueue schemas publish no camelCase / alternate alias keys', () =
         ['mesh_enqueue_task', taskProps],
         ['mesh_enqueue_batch', batchProps],
         ['mesh_enqueue_batch tasks[]', batchTaskProps],
-        ['mesh_enqueue_batch workspaces[]', batchWorkspaceProps],
-        ['mesh_enqueue_batch gates[]', batchGateProps],
     ];
     const offenders: string[] = [];
     for (const [label, props] of scopes) {
@@ -79,24 +65,28 @@ test('D2: the enqueue schemas publish no camelCase / alternate alias keys', () =
     assert.deepEqual(offenders, []);
 });
 
-test('D2: run_if / on_false / on_upstream_skip are gone from the batch per-task schema', () => {
-    for (const key of ['run_if', 'runIf', 'on_false', 'onFalse', 'on_upstream_skip', 'onUpstreamSkip']) {
+test('the graph fields are gone from every enqueue schema', () => {
+    for (const key of ['run_if', 'on_false', 'on_upstream_skip', 'inputs_from', 'gated_by', 'workspace_ref']) {
         assert.equal(key in batchTaskProps, false, `tasks[].${key} must not be published`);
+        assert.equal(key in taskProps, false, `mesh_enqueue_task.${key} must not be published`);
     }
+    for (const key of ['gates', 'workspaces', 'batch_id', 'on_dependency_failure', 'orchestration_decision']) {
+        assert.equal(key in batchProps, false, `mesh_enqueue_batch.${key} must not be published`);
+    }
+    assert.equal('orchestration_decision' in taskProps, false);
 });
 
 test('D2: the kept surface is still published', () => {
-    for (const key of ['message', 'difficulty', 'depends_on', 'owned_paths', 'mission_id', 'required_tags', 'target_node_id', 'prefer_worktree', 'priority', 'model', 'thinking_level', 'not_before', 'max_retries', 'block_duplicate', 'allow_duplicate', 'orchestration_decision', 'task_mode', 'readonly', 'input']) {
+    for (const key of ['message', 'difficulty', 'depends_on', 'owned_paths', 'mission_id', 'required_tags', 'target_node_id', 'prefer_worktree', 'priority', 'model', 'thinking_level', 'not_before', 'max_retries', 'block_duplicate', 'allow_duplicate', 'task_mode', 'readonly', 'input']) {
         assert.ok(key in taskProps, `mesh_enqueue_task.${key}`);
     }
-    for (const key of ['message', 'difficulty', 'depends_on', 'owned_paths', 'mission_id', 'required_tags', 'target_node_id', 'prefer_worktree', 'priority', 'model', 'thinking_level', 'not_before', 'max_retries', 'inputs_from', 'gated_by', 'workspace_ref', 'ref']) {
+    for (const key of ['message', 'difficulty', 'depends_on', 'owned_paths', 'mission_id', 'required_tags', 'target_node_id', 'prefer_worktree', 'priority', 'model', 'thinking_level', 'not_before', 'max_retries', 'ref']) {
         assert.ok(key in batchTaskProps, `mesh_enqueue_batch tasks[].${key}`);
     }
-    for (const key of ['tasks', 'gates', 'workspaces', 'batch_id', 'mission_id', 'block_duplicate', 'allow_duplicate', 'on_dependency_failure', 'orchestration_decision']) {
+    for (const key of ['tasks', 'mission_id', 'block_duplicate', 'allow_duplicate']) {
         assert.ok(key in batchProps, `mesh_enqueue_batch.${key}`);
     }
     assert.deepEqual((taskProps.difficulty as any).enum, ['easy', 'medium', 'difficult', 'freeform']);
-    assert.deepEqual((batchProps.on_dependency_failure as any).enum, ['block', 'cancel']);
 });
 
 /**
@@ -113,8 +103,8 @@ function resolveScopeProps(toolName: string, scope: string): Props | undefined {
     if (!topProps) return undefined;
     if (scope === TOP_LEVEL_SCOPE) return topProps;
     const scopeProp = topProps[scope] as { type?: string; items?: { type?: string; properties?: Props }; properties?: Props } | undefined;
-    // `brief` (mesh_mission_upsert) is a single nested object; `tasks`/`workspaces`/
-    // `patches` are arrays-of-objects whose ITEMS carry the aliased properties.
+    // `brief` (mesh_mission_upsert) is a single nested object; `tasks` is an
+    // array-of-objects whose ITEMS carry the aliased properties.
     return scopeProp?.items?.properties ?? scopeProp?.properties;
 }
 
@@ -148,16 +138,6 @@ const SAMPLE_VALUE: Record<string, unknown> = {
     max_retries: 1,
     block_duplicate: false,
     allow_duplicate: true,
-    orchestration_decision: {},
-    batch_id: 'b1',
-    on_dependency_failure: 'cancel',
-    inputs_from: [],
-    workspace_ref: 'w1',
-    gated_by: ['g1'],
-    source_node_id: 'node_x',
-    base_revision: 'HEAD',
-    desired_path: '/tmp/x',
-    cleanup_on_graph_failure: true,
 };
 
 test('D2: every legacy alias on mesh_enqueue_task still validates clean', () => {
@@ -170,13 +150,13 @@ test('D2: every legacy alias on mesh_enqueue_task still validates clean', () => 
     assert.equal(validateMeshToolArgs('mesh_enqueue_task', {
         message: 'm', difficulty: 'medium', dependsOn: ['t_1'], missionId: 'm_1', requiredTags: ['os=darwin'], ownedPaths: ['src/a.ts'],
         targetNodeId: 'n', preferWorktree: true, notBefore: 5, maxRetries: 2, thinkingLevel: 'low', blockDuplicate: true,
-        allowDuplicate: false, orchestrationDecision: {}, taskMode: 'validation', read_only: true,
+        allowDuplicate: false, taskMode: 'validation', read_only: true,
     }), null);
     assert.equal(validateMeshToolArgs('mesh_enqueue_task', { message: 'm', difficulty: 'medium', target_node: 'n' }), null);
     assert.equal(validateMeshToolArgs('mesh_enqueue_task', { message: 'm', difficulty: 'medium', targetNode: 'n' }), null);
 });
 
-test('D2: every legacy alias on mesh_enqueue_batch (top level, tasks[], workspaces[]) still validates clean', () => {
+test('D2: every legacy alias on mesh_enqueue_batch (top level, tasks[]) still validates clean', () => {
     const table = MESH_ACCEPTED_ARG_ALIASES.mesh_enqueue_batch;
     for (const [alias, canonical] of Object.entries(table[TOP_LEVEL_SCOPE])) {
         const err = validateMeshToolArgs('mesh_enqueue_batch', { tasks: [{ message: 'm', difficulty: 'medium' }], [alias]: SAMPLE_VALUE[canonical] });
@@ -186,13 +166,9 @@ test('D2: every legacy alias on mesh_enqueue_batch (top level, tasks[], workspac
         const err = validateMeshToolArgs('mesh_enqueue_batch', { tasks: [{ message: 'm', difficulty: 'medium', [alias]: SAMPLE_VALUE[canonical] }] });
         assert.equal(err, null, `tasks[] alias ${alias} was rejected: ${err}`);
     }
-    for (const [alias, canonical] of Object.entries(table.workspaces)) {
-        const err = validateMeshToolArgs('mesh_enqueue_batch', { tasks: [{ message: 'm', difficulty: 'medium' }], workspaces: [{ ref: 'w1', [alias]: SAMPLE_VALUE[canonical] }] });
-        assert.equal(err, null, `workspaces[] alias ${alias} was rejected: ${err}`);
-    }
     assert.equal(validateMeshToolArgs('mesh_enqueue_batch', {
-        tasks: [{ ref: 'a', message: 'm', difficulty: 'medium', dependsOn: [], inputsFrom: [], workspaceRef: 'w', gatedBy: ['g'] }],
-        missionId: 'm_1', batchId: 'b', onDependencyFailure: 'block',
+        tasks: [{ ref: 'a', message: 'm', difficulty: 'medium', dependsOn: [] }],
+        missionId: 'm_1',
     }), null);
 });
 
@@ -203,9 +179,6 @@ test('D2: an alias is enum-checked exactly like its canonical key', () => {
     const nested = validateMeshToolArgs('mesh_enqueue_batch', { tasks: [{ message: 'm', difficulty: 'medium', thinkingLevel: 'ultra' }] });
     assert.ok(nested);
     assert.match(nested!, /Invalid value for "thinking_level"/);
-    const top = validateMeshToolArgs('mesh_enqueue_batch', { tasks: [{ message: 'm', difficulty: 'medium' }], onDependencyFailure: 'explode' });
-    assert.ok(top);
-    assert.match(top!, /on_dependency_failure/);
 });
 
 test('D2: canonicalization is pure and the canonical spelling wins a collision', () => {
@@ -237,157 +210,45 @@ test('D2: the Unknown-parameter message lists canonical keys only — never an a
     assert.match(typo!, /did you mean "depends_on"/);
 });
 
-// ── 4. retired conditional keys (break-once: drop MESH_RETIRED_ARGS → generic "Unknown") ──
+// ── 4. retired graph keys (break-once: drop MESH_RETIRED_ARGS → generic "Unknown") ──
 
-test('D2: run_if & co. inside batch tasks[] are rejected with a pointer at depends_on + on_dependency_failure', () => {
+test('graph fields inside batch tasks[] are rejected with a pointer at depends_on', () => {
     for (const key of MESH_RETIRED_ARGS.mesh_enqueue_batch.tasks.keys) {
         const err = validateMeshToolArgs('mesh_enqueue_batch', {
-            tasks: [{ ref: 'deploy', message: 'm', difficulty: 'medium', [key]: key.toLowerCase().includes('if') ? { from: 'x', select: '/ok' } : 'skip' }],
+            tasks: [{ ref: 'deploy', message: 'm', difficulty: 'medium', [key]: 'x' }],
         });
         assert.ok(err, `${key} must be rejected`);
         assert.match(err!, new RegExp(`Retired parameter\\(s\\) for mesh_enqueue_batch tasks\\[0\\] \\(ref 'deploy'\\): "${key}"`));
         assert.match(err!, /depends_on/);
-        assert.match(err!, /on_dependency_failure/);
         assert.doesNotMatch(err!, /Unknown parameter/);
     }
 });
 
-test('D2: run_if on mesh_enqueue_task is rejected with the same replacement message', () => {
-    const err = validateMeshToolArgs('mesh_enqueue_task', { message: 'm', difficulty: 'medium', run_if: { always: true } });
-    assert.ok(err);
-    assert.match(err!, /Retired parameter\(s\) for mesh_enqueue_task: "run_if"/);
-    assert.match(err!, /depends_on/);
-    assert.match(err!, /on_dependency_failure/);
+test('batch-level graph fields are rejected, naming the mesh policy for on_dependency_failure', () => {
+    for (const key of ['gates', 'workspaces', 'batch_id', 'on_dependency_failure', 'orchestration_decision']) {
+        const err = validateMeshToolArgs('mesh_enqueue_batch', { tasks: [{ message: 'm', difficulty: 'medium' }], [key]: [] });
+        assert.ok(err, `${key} must be rejected`);
+        assert.match(err!, new RegExp(`Retired parameter\\(s\\) for mesh_enqueue_batch: "${key}"`));
+    }
+    assert.match(validateMeshToolArgs('mesh_enqueue_batch', { tasks: [{ message: 'm', difficulty: 'medium' }], on_dependency_failure: 'cancel' }) ?? '', /mesh policy onDependencyFailure/);
 });
 
-test('D2: the retirement is scoped — graph node patch keeps its own run_if key', () => {
-    // mesh_graph_node_patch / gate release patches repair already-persisted specs;
-    // their schema still declares run_if and is not part of this surface cut.
-    assert.equal(validateMeshToolArgs('mesh_graph_node_patch', { node: 'n1', base_spec_patch: { run_if: { always: true } } }), null);
+test('run_if / inputs_from on mesh_enqueue_task are rejected with the same replacement message', () => {
+    for (const key of ['run_if', 'inputs_from', 'orchestration_decision']) {
+        const err = validateMeshToolArgs('mesh_enqueue_task', { message: 'm', difficulty: 'medium', [key]: {} });
+        assert.ok(err);
+        assert.match(err!, new RegExp(`Retired parameter\\(s\\) for mesh_enqueue_task: "${key}"`));
+        assert.match(err!, /depends_on/);
+    }
 });
 
-// ── 5. gate extend (D3(c)) ───────────────────────────────────────────────────
-
-function recordingCtx(reply: (command: string, args: Record<string, unknown>) => unknown) {
-    const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
-    const transport = {
-        command: async (command: string, args: Record<string, unknown> = {}) => {
-            calls.push({ command, args });
-            return reply(command, args);
-        },
-    };
-    const ctx = { mesh: { id: 'mesh_ext', nodes: [] }, transport, coordinatorSessionId: 'coord_1' } as any;
-    return { ctx, calls };
-}
-
-const gate = (ctx: any, args: Record<string, unknown>) => resolveMeshToolHandler('mesh_graph_gate')!(ctx, args);
-
-test('D3(c): mesh_graph_gate action=extend dispatches mesh_graph_gate_extend {mesh_id, gate_id, extend_seconds} and takes no lease', async () => {
-    assert.equal(MESH_GRAPH_GATE_EXTEND_COMMAND, 'mesh_graph_gate_extend');
-    const { ctx, calls } = recordingCtx(command => {
-        if (command === 'mesh_graph_gate_extend') {
-            return { success: true, extended: true, gateId: 'gate_1', gateState: 'awaiting_coordinator', deadlineAt: '2026-09-26T00:00:00.000Z', previousDeadlineAt: '2026-09-25T00:00:00.000Z' };
-        }
-        return { success: true };
-    });
-    const res = JSON.parse(await gate(ctx, { action: 'extend', gate_id: 'gate_1', extend_seconds: 86400 }));
-    const dispatched = calls.filter(c => c.command !== 'tool_call_record' && c.command !== 'mesh_record');
-    assert.deepEqual(dispatched.map(c => c.command), ['mesh_graph_gate_extend'], 'extend must not claim (no graph_gate_claim call)');
-    assert.deepEqual(dispatched[0].args, { mesh_id: 'mesh_ext', gate_id: 'gate_1', extend_seconds: 86400 });
-    assert.equal(res.success, true);
-    assert.equal(res.extended, true);
-    assert.equal(res.deadlineAt, '2026-09-26T00:00:00.000Z', 'the daemon\'s deadline is passed through, not recomputed');
-    assert.equal(res.previousDeadlineAt, '2026-09-25T00:00:00.000Z');
-    assert.equal(res.fencingToken, undefined, 'no lease → no fencing token');
-});
-
-test('D3(c): a daemon refusal comes back as a typed failure', async () => {
-    const { ctx } = recordingCtx(command => command === 'mesh_graph_gate_extend'
-        ? { success: false, code: 'gate_terminal:released', error: 'gate not extendable (gate_terminal:released)', extended: false, gateState: 'released' }
-        : { success: true });
-    const res = JSON.parse(await gate(ctx, { action: 'extend', gate_id: 'gate_1', extend_seconds: 3600 }));
-    assert.equal(res.success, false);
-    assert.equal(res.extended, false);
-    assert.equal(res.code, 'gate_terminal:released');
-    assert.equal(res.gateState, 'released');
-});
-
-test('D3(c): extend is refused (without a daemon call) when mixed with claim args or non-positive', async () => {
-    const { ctx, calls } = recordingCtx(() => ({ success: true }));
-    // The MCP gate refuses the mix before dispatch; the handler refuses it again
-    // for a direct caller that bypasses validation.
-    assert.match(validateMeshToolArgs('mesh_graph_gate', { action: 'extend', gate_id: 'g', extend_seconds: 60, lease_seconds: 600 }) ?? '',
-        /"lease_seconds" \(belongs to action=claim\)/);
-    const mixed = JSON.parse(await gate(ctx, { action: 'extend', gate_id: 'gate_1', extend_seconds: 60, lease_seconds: 600 }));
-    assert.equal(mixed.success, false);
-    assert.equal(mixed.code, 'extend_with_claim_args');
-    assert.deepEqual(mixed.conflicting, ['lease_seconds']);
-    const zero = JSON.parse(await gate(ctx, { action: 'extend', gate_id: 'gate_1', extend_seconds: 0 }));
-    assert.equal(zero.code, 'invalid_extend_seconds');
-    assert.equal(calls.some(c => c.command === 'mesh_graph_gate_extend' || c.command === 'graph_gate_claim'), false);
-});
-
-test('D3(c): the gate schema declares extend_seconds; the validator accepts it on extend and refuses it on claim', () => {
-    const props = MESH_GRAPH_GATE_TOOL.inputSchema.properties as Props;
-    assert.ok('extend_seconds' in props);
-    assert.match(MESH_GRAPH_GATE_TOOL.description, /extend_seconds/);
-    assert.equal(validateMeshToolArgs('mesh_graph_gate', { action: 'extend', gate_id: 'g', extend_seconds: 86400 }), null);
-    assert.match(validateMeshToolArgs('mesh_graph_gate', { action: 'claim', gate_id: 'g', extend_seconds: 86400 }) ?? '',
-        /"extend_seconds" \(belongs to action=extend\)/);
-    assert.match(validateMeshToolArgs('mesh_graph_gate', { action: 'extend', gate_id: 'g' }) ?? '',
-        /Missing required parameter\(s\) for mesh_graph_gate action="extend": "extend_seconds"/);
-});
-
-// ── 6. mesh_status verbose graphUsage passthrough (D6) ───────────────────────
-
-test('D6: pickDaemonGraphUsage returns the first object block and never synthesizes one', () => {
-    const block = { graphsLast7d: 3, nodesPerGraphP50: 2, gatesExpired: 0, gatesAutoAbandoned: 1, depsChainedViaEnqueueTask: 4 };
-    assert.equal(pickDaemonGraphUsage(undefined, { graphUsage: block }), block);
-    assert.equal(pickDaemonGraphUsage({ graphUsage: [1] }, { graphUsage: 'x' }, null), undefined);
-    assert.equal(pickDaemonGraphUsage({}), undefined);
-});
-
-function statusCtx(graphUsage: Record<string, unknown> | undefined) {
-    const mesh = {
-        id: 'mesh-graphusage', name: 'Mesh', repoIdentity: 'vilmire/adhdev',
-        policy: {}, coordinator: {},
-        defaultBranch: 'main', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-        nodes: [{ id: 'node-a', workspace: '/a', repoRoot: '/a', daemonId: 'daemon-A', machineId: 'machine-A', userOverrides: {}, policy: {} }],
-    };
-    const cleanGit = { isGitRepo: true, isDirty: false, branch: 'main', headCommit: 'abc', ahead: 0, behind: 0, submodules: [] };
-    const responder = (command: string) => {
-        if (command === 'get_mesh') return { success: true, mesh };
-        if (command === 'get_pending_mesh_events') return { events: [] };
-        if (command === 'get_status_metadata') return { success: true, status: { sessions: [] } };
-        if (command === 'git_status') return { success: true, status: cleanGit };
-        return { success: true };
-    };
-    const transport: any = fakeCoordinatorTransport();
-    transport.command = async (c: string, a?: any) => {
-        if (!isTurnIpcCommand(c)) return responder(c);
-        const result = await answerTurnIpc(c, a ?? {});
-        if (c === 'active_work_query' && result?.activeWork && typeof result.activeWork === 'object') {
-            const summary = { ...(result.activeWork.summary ?? {}) };
-            delete summary.graphUsage; // make the fixture independent of the daemon-core dist in use
-            if (graphUsage) summary.graphUsage = graphUsage;
-            result.activeWork = { ...result.activeWork, summary };
-        }
-        return result;
-    };
-    transport.meshCommand = async (_d: string, c: string) => responder(c);
-    return { mesh, transport, localDaemonId: 'daemon-A', localMachineId: 'machine-A', coordinatorHostname: 'h' } as any;
-}
-
-test('D6: mesh_status verbose carries the daemon graphUsage block verbatim; compact does not', async () => {
-    const block = { graphsLast7d: 5, nodesPerGraphP50: 2, gatesExpired: 1, gatesAutoAbandoned: 2, depsChainedViaEnqueueTask: 7 };
-    const verbose = JSON.parse(await meshStatus(statusCtx(block), { verbose: true }));
-    assert.deepEqual(verbose.graphUsage, block);
-    assert.equal(verbose.activeWorkSummary?.graphUsage, undefined, 'hoisted, not duplicated under activeWorkSummary');
-
-    const compact = JSON.parse(await meshStatus(statusCtx(block)));
-    assert.equal(compact.graphUsage, undefined, 'graphUsage is a verbose-only block');
-    assert.equal(compact.activeWorkSummary?.graphUsage, undefined, 'and must not ride along in the compact activeWorkSummary');
-
-    const absent = JSON.parse(await meshStatus(statusCtx(undefined), { verbose: true }));
-    assert.equal('graphUsage' in absent, false, 'no daemon block → no field (never synthesized)');
+test('orchestration_decision on mesh_send_task is rejected as a retired key, and no longer published', () => {
+    for (const key of ['orchestration_decision', 'orchestrationDecision']) {
+        const err = validateMeshToolArgs('mesh_send_task', { node_id: 'n', message: 'm', difficulty: 'medium', [key]: { decision: 'direct' } });
+        assert.ok(err, `${key} must be rejected`);
+        assert.match(err!, /Retired parameter\(s\) for mesh_send_task: "orchestration_decision"|Retired parameter\(s\) for mesh_send_task: "orchestrationDecision"/);
+        assert.doesNotMatch(err!, /Unknown parameter/);
+    }
+    const sendTool = ALL_MESH_TOOLS.find(t => t.name === 'mesh_send_task') as any;
+    assert.equal('orchestration_decision' in sendTool.inputSchema.properties, false);
 });

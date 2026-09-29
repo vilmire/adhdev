@@ -130,7 +130,6 @@ describe('status tick eager-work budget', () => {
         expect(summary).toBeDefined();
         expect(summary).toContain('IDE: 0 []');
         expect(summary).toContain('CLI: 3 [claude-cli(idle), claude-cli(idle), claude-cli(idle)]');
-        expect(summary).toContain('ACP: 0 []');
         infoSpy.mockRestore();
     });
 });

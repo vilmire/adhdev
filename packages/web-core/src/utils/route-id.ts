@@ -7,7 +7,7 @@ export interface ParsedDaemonRouteId {
 
 export function parseDaemonRouteId(routeId: string): ParsedDaemonRouteId {
     const parts = routeId.split(':')
-    if (parts.length >= 3 && (parts[1] === 'ide' || parts[1] === 'cli' || parts[1] === 'acp')) {
+    if (parts.length >= 3 && (parts[1] === 'ide' || parts[1] === 'cli')) {
         return {
             daemonId: parts[0],
             targetSessionId: parts.slice(2).join(':') || undefined,

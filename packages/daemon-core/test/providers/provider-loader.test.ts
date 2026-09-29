@@ -390,7 +390,7 @@ describe('ProviderLoader settings schema', () => {
     expect(loader.getSettingValue('bar-cli', 'autoApprove')).toBe(false);
   });
 
-  it('adds executablePath synthetic setting for CLI and ACP providers with spawn commands', () => {
+  it('adds executablePath synthetic setting for CLI providers with spawn commands', () => {
     writeProvider(userDir, 'cli', 'foo-cli', {
       type: 'foo-cli',
       name: 'Foo CLI',
@@ -398,27 +398,13 @@ describe('ProviderLoader settings schema', () => {
       category: 'cli',
       spawn: { command: 'foo' },
     });
-    writeProvider(userDir, 'acp', 'foo-acp', {
-      type: 'foo-acp',
-      name: 'Foo ACP',
-      displayName: 'Foo ACP',
-      category: 'acp',
-      spawn: { command: 'foo-acp' },
-    });
 
     const loader = new TestProviderLoader(userDir, testConfig);
     loader.loadAll();
 
     const cliSettings = byKey(loader.getPublicSettings('foo-cli'));
-    const acpSettings = byKey(loader.getPublicSettings('foo-acp'));
 
     expect(cliSettings.executablePath).toMatchObject({
-      type: 'string',
-      default: '',
-      public: true,
-      label: 'Executable path',
-    });
-    expect(acpSettings.executablePath).toMatchObject({
       type: 'string',
       default: '',
       public: true,
@@ -529,7 +515,7 @@ describe('ProviderLoader settings schema', () => {
     });
   });
 
-  it('keeps CLI and ACP providers out of active detection until they are machine-enabled', () => {
+  it('keeps CLI providers out of active detection until they are machine-enabled', () => {
     writeProvider(userDir, 'cli', 'codex-cli', {
       type: 'codex-cli',
       name: 'Codex CLI',
@@ -543,14 +529,6 @@ describe('ProviderLoader settings schema', () => {
         linux: 'codex version',
       },
     });
-    writeProvider(userDir, 'acp', 'agent-acp', {
-      type: 'agent-acp',
-      name: 'Agent ACP',
-      displayName: 'Agent ACP',
-      category: 'acp',
-      spawn: { command: 'agent-acp' },
-    });
-
     testConfig.machineProviders = {
       'codex-cli': {
         executable: '/custom/bin/codex',
@@ -612,7 +590,7 @@ describe('ProviderLoader settings schema', () => {
   // on first run. That starved setup's first-run detection step, which used
   // this same gated list: it could never show what was actually installed on
   // disk, only what had ALREADY been enabled (impossible on a fresh machine).
-  // includeDisabled surfaces every cli/acp provider with a spawn command
+  // includeDisabled surfaces every cli provider with a spawn command
   // regardless of the enabled flag, and reports each entry's REAL enabled
   // state instead of the gated list's implied-always-true.
   it('includeDisabled surfaces not-yet-enabled providers with their real enabled state', () => {
@@ -686,11 +664,11 @@ describe('ProviderLoader settings schema', () => {
 
     // Launch-scoped resolution skips the out-of-category direct match and
     // follows the alias to the CLI provider.
-    expect(loader.resolveAlias('codex', ['cli', 'acp'])).toBe('codex-cli');
-    expect(loader.getByAlias('codex', ['cli', 'acp'])?.type).toBe('codex-cli');
+    expect(loader.resolveAlias('codex', ['cli'])).toBe('codex-cli');
+    expect(loader.getByAlias('codex', ['cli'])?.type).toBe('codex-cli');
 
     // A direct type match is still honoured when it is inside the scope.
-    expect(loader.resolveAlias('codex-cli', ['cli', 'acp'])).toBe('codex-cli');
+    expect(loader.resolveAlias('codex-cli', ['cli'])).toBe('codex-cli');
     expect(loader.resolveAlias('codex', ['extension'])).toBe('codex');
 
     // Nothing in scope → input returned as-is, and getByAlias hands back
@@ -1234,7 +1212,6 @@ describe('CLI provider.schema.json — modelDiscovery coverage', () => {
     'codex-cli',
     'cursor-cli',
     'grok-cli',
-    'hermes-cli',
     'kimi',
     'opencode',
   ];

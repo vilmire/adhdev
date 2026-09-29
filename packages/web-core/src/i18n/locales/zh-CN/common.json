@@ -101,7 +101,6 @@
             "guideShort": "指南",
             "openGitStatus": "打开 git 状态",
             "meshGraph": "Mesh 图",
-            "stopAcpSession": "停止 ACP 会话",
             "stopCliProcess": "停止 CLI 进程",
             "chatHistory": "聊天记录",
             "remoteControl": "远程控制",
@@ -164,7 +163,7 @@
                 "whatLivesWhere": {
                     "title": "各部分位置",
                     "tabsLabel": "标签页:",
-                    "tabsText": "跨 IDE、CLI 和 ACP 代理的活动会话。",
+                    "tabsText": "跨 IDE 和 CLI 代理的活动会话。",
                     "hiddenLabel": "隐藏标签页:",
                     "hiddenText": "存放你不想放在主栏但仍想保留的会话。",
                     "inboxLabel": "活动收件箱:",
@@ -193,7 +192,7 @@
             "quickstart": {
                 "desktop": {
                     "title": "桌面快速开始",
-                    "step1": "先从机器或工作区流程开始。在启动 CLI 或 ACP 会话之前选择或保存工作区。",
+                    "step1": "先从机器或工作区流程开始。在启动 CLI 会话之前选择或保存工作区。",
                     "step2": "让主栏专注于活动工作，将多余的内容推入隐藏标签页。",
                     "step3": "对需要审批或已完成的会话使用收件箱，而不是逐个扫描每个标签页。",
                     "step4": "仅在需要并行阅读时才拆分；想要分离标签页而不打乱主布局时可将其浮动或弹出。"
@@ -201,7 +200,7 @@
                 "mobile": {
                     "title": "移动端快速开始",
                     "step1": "查看和回复时保持在聊天模式；工作区模式主要用于启动或重新打开会话。",
-                    "step2": "从机器屏幕开始，选择一个工作区，然后从那里启动 IDE、CLI 或 ACP。",
+                    "step2": "从机器屏幕开始，选择一个工作区，然后从那里启动 IDE 或 CLI。",
                     "step3": "将移动端视为更简单的控制界面:没有拆分工作流，标签页操作更少，会话切换更快。"
                 }
             },
@@ -421,8 +420,6 @@
         "startingCoordinator": "正在启动协调器…",
         "startIde": "启动 IDE",
         "startingIde": "正在启动 IDE…",
-        "startAcpSession": "启动 ACP 会话",
-        "startingAcpSession": "正在启动 ACP 会话…",
         "startFresh": "全新开始",
         "startingFresh": "正在全新开始…",
         "resumeSavedHistory": "恢复已保存的历史",
@@ -677,25 +674,6 @@
                         "由于持久化到队列，完成信号绝不会丢失。"
                     ]
                 },
-                "magi": {
-                    "term": "MAGI",
-                    "summary": "交叉验证：多个独立的 AI 智能体并行回答同一个问题。",
-                    "details": [
-                        "可信度源于独立性 — 不同机器上的不同 AI 会以不同方式出错。",
-                        "当各智能体意见不一致时，分歧本身就标示出需要复核之处。",
-                        "综合结果会权衡一致程度与来源耦合度。"
-                    ]
-                },
-                "magiPanel": {
-                    "term": "MAGI 面板",
-                    "summary": "一支可保存、可复用的（机器 × AI）成员团队，你可以在各项调查中按名称调用。",
-                    "details": [
-                        "每个成员是一个提供方（AI），可选择固定到某个节点（机器），并带有副本数量。",
-                        "independent — 跨越 ≥2 个提供方且 ≥2 台机器，因此一致能真正提升可信度。",
-                        "coupled — 收缩为单个 AI 或单台机器；重复的成员会重复同样的错误。",
-                        "在“Panels”标签页中按机器本地管理；在 ~/.adhdev/meshes.json 中定义。"
-                    ]
-                },
                 "convergence": {
                     "term": "分支收敛状态",
                     "summary": "worktree 工作完成后，每个分支会被归类为恰好一个最终状态。",
@@ -707,39 +685,13 @@
                         "not_mergeable — 无法合并。"
                     ]
                 },
-                "graph": {
-                    "term": "编排图",
-                    "summary": "声明依赖、条件与关卡后一并入队的任务批次。",
-                    "details": [
-                        "由 mesh_enqueue_batch 创建，是任务中的一个可执行计划。",
-                        "已结束的图在蓝图中折叠为一个卡片，点击可原地展开。"
-                    ]
-                },
-                "gate": {
-                    "term": "协调者关卡",
-                    "summary": "在人工指派的协调者处理之前挂起整个图的步骤。",
-                    "details": [
-                        "状态：declared → awaiting_coordinator → claimed → released（或 expired）。",
-                        "等待中的关卡在蓝图中以整卡宽度显示，并附带说明与截止时间。",
-                        "处理关卡需通过指示协调者完成；此处仪表板为只读。"
-                    ]
-                },
-                "condition": {
-                    "term": "条件 (run_if)",
-                    "summary": "决定计划步骤是否执行的声明式谓词。",
-                    "details": [
-                        "语法是封闭集合：exists、==、!= 和 in，配合 all / any / not。",
-                        "蓝图将其渲染为接在连线上的卡片，例如 review.outcome == rejected。",
-                        "条件始终不成立的步骤会被跳过，而非失败。"
-                    ]
-                },
                 "blueprint": {
                     "term": "蓝图",
-                    "summary": "计划视图：实时队列、图关卡与计划步骤同处一块画布。",
+                    "summary": "计划视图：实时队列及其任务依赖同处一块画布。",
                     "details": [
                         "只有一个轴 —— 从左到右的依赖深度。根任务按最新优先排序。",
                         "卡片自带时间，因此位置无需再表达时间。",
-                        "已完成的图作为折叠归档位于实时工作下方。"
+                        "已完成的依赖链会折叠，让实时工作保持可见。"
                     ]
                 },
                 "routingPreview": {
@@ -773,50 +725,6 @@
             "medium": "中等",
             "difficult": "困难",
             "freeform": "自由形式"
-        },
-        "magiKind": {
-            "refresh": "刷新",
-            "loading": "加载中…",
-            "connectPrompt": "连接到协调器守护进程以管理 kind → 面板绑定。",
-            "errorLoad": "加载 kind 面板失败",
-            "errorSave": "保存 kind 绑定失败",
-            "errorRemove": "移除 kind 绑定失败",
-            "errorSlotProvider": "槽位 {{slot}}：必须指定提供方",
-            "errorSlotReplica": "槽位 {{slot}}：副本数量必须 ≥ 1",
-            "errorNoSlot": "kind 绑定至少需要一个槽位",
-            "removeConfirm": "移除 \"{{kind}}\" 的 MAGI 面板绑定吗？",
-            "kindRca": "根因分析",
-            "kindDesign": "设计 / 方案审查",
-            "kindClaimAudit": "验证特定主张",
-            "kindFreeform": "自由形式审查",
-            "agentCount_one": "{{count}} 个代理",
-            "agentCount_other": "{{count}} 个代理",
-            "off": "关闭",
-            "noAgents": "还没有代理 — 添加一个以启用此审查类型。",
-            "machine": "机器",
-            "machineTitle": "运行此代理的机器。保持为 \"any\" 可让协调器按标签路由。",
-            "anyMachine": "任意机器",
-            "offlineSuffix": "{{label}}（离线）",
-            "worktreeSuffix": "{{label}} — 工作树（{{branch}}）",
-            "worktreeUnknownBranch": "未知分支",
-            "worktreeDisabledTitle": "临时 worktree 节点无法新分配到 MAGI 插槽——清理时可能会消失。已有的分配仍会显示在此处，以便查看或清除。",
-            "provider": "提供方",
-            "providerTitle": "此槽位运行的 AI 代理。",
-            "selectProvider": "选择提供方…",
-            "model": "模型",
-            "modelTitle": "可选的模型覆盖（尽力而为）。留空则使用提供方默认值。",
-            "modelDefault": "默认",
-            "modelCustom": "自定义…",
-            "backToModelList": "← 返回模型列表",
-            "copies": "副本数",
-            "copiesTitle": "并行运行此代理的副本数量。留空 = 1。",
-            "removeAgent": "移除代理",
-            "addAgent": "+ 添加代理",
-            "save": "保存",
-            "saving": "保存中…",
-            "removeBinding": "移除绑定",
-            "removeBindingTitle": "清除此 kind 绑定",
-            "removeBindingDisabledTitle": "无可移除 — 此 kind 尚未配置"
         },
         "panel": {
             "outOfSyncBadge": "未同步",
@@ -893,12 +801,6 @@
                 "depsFailed_one": "{{count}} 个上游失败",
                 "depsFailed_other": "{{count}} 个上游失败"
             },
-            "gate": {
-                "holding_one": "阻塞 {{count}} 个步骤",
-                "holding_other": "阻塞 {{count}} 个步骤",
-                "deadline": "{{time}} 截止 · 之后 {{onTimeout}}",
-                "needsYou": "需要你处理"
-            },
             "time": {
                 "now": "刚刚",
                 "minutes_one": "{{count}}分钟前",
@@ -911,7 +813,6 @@
             "empty": "暂无任务",
             "waitsOn_one": "等待 {{count}} 项",
             "waitsOn_other": "等待 {{count}} 项",
-            "blocked": "已阻塞",
             "missingDeps_one": "{{count}} 个未知依赖",
             "missingDeps_other": "{{count}} 个未知依赖",
             "legend": {
@@ -1049,16 +950,12 @@
         },
         "blueprint": {
             "schedPrediction": "预测",
-            "gateActsViaCoordinatorHint": "此闸门由协调器处理——请在协调器聊天中提出请求。",
-            "gateFallback": "关卡",
             "readonlyBadge": "只读",
             "schedObservedAt": "截至 {{time}}",
             "schedNoNodes": "没有可路由的节点。",
             "schedQuotaButton": "配额",
             "schedQuotaButtonTitle": "按机器一览套餐配额",
             "schedNoWinner": "无合适槽位",
-            "leaseExpired": "租约已过期",
-            "gateActsViaCoordinator": "由协调器管理",
             "schedNext": "下一个分配",
             "schedWaiting": "待命",
             "schedFull": "容量已满",
@@ -1076,21 +973,6 @@
             "schedUnpinnedTitle": "未固定节点时的假设性预测 — 固定到节点的任务会在卡片上显示各自的预测",
             "schedPointInTime": "这是当前时点的预测，而非已确定的分配 — 槽位被占用或释放后，容量信息可能立即过时",
             "schedulingShort": "调度",
-            "gate": {
-                "release": "释放",
-                "abandon": "放弃",
-                "extend24h": "延长24小时",
-                "outcomePassed": "通过",
-                "outcomeFailed": "失败",
-                "evidencePlaceholder": "证据（可选）",
-                "reasonPlaceholder": "放弃此闸门的原因",
-                "abandonReasonRequired": "放弃闸门需要填写原因。",
-                "submitRelease": "提交释放",
-                "submitAbandon": "提交放弃",
-                "extendConfirmTitle": "将「{{ref}}」延长24小时？",
-                "expiredBadge": "已过期 · {{age}}前",
-                "commandUnavailable": "没有可发送此命令的守护进程连接。"
-            },
             "list": {
                 "barActive": "运行 {{count}}",
                 "barBlocked": "阻塞 {{count}}",
@@ -1111,7 +993,6 @@
                 "loadMore_one": "再显示 {{count}} 条",
                 "loadMore_other": "再显示 {{count}} 条",
                 "emptyActive": "没有正在运行的工作",
-                "blockedByGate": "阻塞原因：{{ref}}，{{age}}",
                 "waitingOn": "等待：",
                 "waitingOnMore": "另外 {{count}} 个",
                 "blockedByDeadDependency": "被失败/已取消的依赖阻塞：",
@@ -1128,7 +1009,6 @@
                 "emptyActive": "没有正在运行的工作",
                 "showFinished": "显示已结束泳道",
                 "layoutFailed": "图布局失败：{{error}}",
-                "laneGraph": "图 {{id}}",
                 "laneAdhoc": "独立任务",
                 "laneCollapse": "收起",
                 "laneExpand": "展开",
@@ -1138,8 +1018,6 @@
                 "foldNode_other": "已完成 {{count}} 个",
                 "countRunning_one": "运行中 {{count}}",
                 "countRunning_other": "运行中 {{count}}",
-                "countGates_one": "闸门等待 {{count}}",
-                "countGates_other": "闸门等待 {{count}}",
                 "countDead_one": "卡住 {{count}}",
                 "countDead_other": "卡住 {{count}}",
                 "countWaiting_one": "等待 {{count}}",
@@ -1151,21 +1029,15 @@
                 "timeRunning": "已运行 {{age}}",
                 "timeFinished": "结束于 {{time}}",
                 "timeQueued": "已排队 {{age}}",
-                "deadlineIn": "{{age}} 后截止",
-                "deadlineOverdue": "已超时 {{age}}",
                 "tooltipTask": "任务：{{id}}",
                 "tooltipMission": "任务组：{{id}}",
-                "tooltipGraph": "图：{{id}} · {{ref}}",
-                "tooltipGate": "闸门：{{id}}",
                 "tooltipStatus": "状态：{{status}}",
                 "deadDirect": "某个依赖失败或已取消 — 此任务不会自行开始。",
                 "deadTransitive": "上游有任务失败或已取消 — 此任务不会自行开始。",
                 "legendDepends": "依赖",
-                "legendGate": "闸门",
                 "legendRunning": "运行中",
                 "legendDead": "永远无法开始",
                 "heldUntil": "至 {{time}}",
-                "gateDetails": "打开闸门详情",
                 "tone": {
                     "pending": "等待",
                     "running": "运行中",
@@ -1175,14 +1047,6 @@
                     "dead": "卡住",
                     "plan": "已计划",
                     "held": "暂缓"
-                },
-                "gateTone": {
-                    "declared": "已声明",
-                    "awaiting": "等待中",
-                    "claimed": "处理中",
-                    "expired": "已过期",
-                    "released": "已放行",
-                    "abandoned": "已放弃"
                 }
             }
         },
@@ -1250,8 +1114,6 @@
             "visibilityHint": "隐藏 = 保持收件箱安静并静音其通知；你通过协调器会话进行交互。显示 = 将每个生成的工作会话显示为独立的对话。",
             "visibilityHidden": "隐藏",
             "visibilityVisible": "显示",
-            "magiTitle": "交叉审查",
-            "magiDescription": "MAGI（Multi-Agent Ground-truth Insight）运行一组 AI 智能体，彼此交叉核查工作以揭示真实情况。请选择由哪些智能体处理每种审阅类型。",
             "coordinatorPromptTitle": "协调器提示词",
             "thisMeshHint": "仅适用于 {{name}} 的协调器会话。留空以保留 daemon 默认值。",
             "overrideLabel": "覆盖（替换默认值）",
@@ -1435,11 +1297,6 @@
             "info": "这是 Override 为空时协调器会话所获得的内容。",
             "launchScopeNote": "任务、近期活动和运行注记会在启动时追加，此处不显示。"
         },
-        "hermesMcp": {
-            "title": "Hermes MCP 配置",
-            "description": "Hermes 不会自动导入仓库本地的 .mcp.json。请将此 YAML 添加到 Hermes 配置的 mcp_servers 下，然后启动一个全新的 Hermes 会话。",
-            "fallbackProvider": "Hermes CLI"
-        },
         "providerAutoApprove": {
             "partialInventoryChip_other": "{{count}} 个节点待报告",
             "partialInventoryChip_one": "{{count}} 个节点待报告",
@@ -1491,15 +1348,6 @@
             "saved": "已保存到 .adhdev/mesh.json",
             "saveError": "无法保存提供方默认值。"
         },
-        "graphs": {
-            "shown_one": "正在显示 {{count}} 个图",
-            "shown_other": "正在显示 {{count}} 个图",
-            "loadMore_one": "再加载 {{count}} 个图",
-            "loadMore_other": "再加载 {{count}} 个图",
-            "serverLimitHidden_one": "隐藏了 {{count}} 个更早的图 · 最多 100 个",
-            "serverLimitHidden_other": "隐藏了 {{count}} 个更早的图 · 最多 100 个",
-            "serverLimitReached": "守护进程最多返回 100 个图。"
-        },
         "status": {
             "healthErrorChip": "错误",
             "offlineMachinesTitle": "未报告：{{machines}}",
@@ -1548,7 +1396,6 @@
             "tasksCount_one": "{{count}} 个任务",
             "sessionCount_other": "{{count}} 个会话",
             "sessionCount_one": "{{count}} 个会话",
-            "leaseExpired": "租约已过期",
             "providerUnknown": "提供方未知",
             "truncated": "（已截断）",
             "missionCard": "任务",
@@ -1595,10 +1442,6 @@
             "detailKickerLedger": "台账条目",
             "detailKickerQueue": "队列任务",
             "detailKickerSession": "会话",
-            "detailKickerGate": "闸门",
-            "detailLabelGraph": "图",
-            "detailLabelRef": "步骤",
-            "detailLabelOutcome": "结果",
             "detailLabelMissionId": "任务 ID",
             "detailLabelCreated": "创建时间",
             "detailLabelUpdated": "更新时间",
@@ -1641,8 +1484,6 @@
             "routingSkippedMore": "另有 {{count}} 个",
             "pausedMissions": "已暂停的任务组",
             "ledgerAllTime": "历史累计",
-            "detailLabelGateAfter": "前置",
-            "detailLabelGateUnlocks": "解锁",
             "sessionTasksHeading": "本会话的任务",
             "showOnCanvas": "在画布中查看"
         }
@@ -1781,8 +1622,6 @@
         "startingFresh": "正在全新开始…",
         "startIde": "启动 IDE",
         "startingIde": "正在启动 IDE…",
-        "startAcpSession": "启动 ACP 会话",
-        "startingAcpSession": "正在启动 ACP 会话…",
         "recoverHostedRuntime": "恢复托管运行时",
         "hostedRuntimeRecoveryDescription": "用于中断后托管运行时的后备恢复。如需正常延续，请改为打开已保存的历史记录。",
         "openSavedHistory": "打开已保存的历史记录",
@@ -1882,7 +1721,7 @@
             "installing": "正在安装…",
             "done": "完成",
             "installCount": "安装 {{count}} 个",
-            "intro": "选择你想使用的提供方。默认选中四个官方支持的 CLI 提供方；你可以从下方的选项卡安装 IDE、ACP 或扩展提供方，也可以稍后通过 Machines → Providers 安装。",
+            "intro": "选择你想使用的提供方。默认选中三个官方支持的 CLI 提供方；你可以从下方的选项卡安装 IDE 或扩展提供方，也可以稍后通过 Machines → Providers 安装。",
             "loadingRegistry": "正在加载注册表…",
             "loadError": "加载注册表失败：{{error}}",
             "noProviders": "此类别下没有提供方。",
@@ -1934,9 +1773,9 @@
                     "title": "多 IDE 支持",
                     "desc": "在一处监控 VS Code、Cursor、Windsurf 及扩展型代理。"
                 },
-                "cliAcp": {
-                    "title": "CLI 与 ACP 覆盖",
-                    "desc": "与 IDE 会话一起跟踪独立 CLI 代理和 ACP 工作流。"
+                "cli": {
+                    "title": "CLI 覆盖",
+                    "desc": "与 IDE 会话一起跟踪独立 CLI 代理。"
                 }
             },
             "extras": {
@@ -3331,7 +3170,6 @@
             "onMachine": "在 {{machine}} 上",
             "sectionIDEs": "IDE",
             "sectionCLIs": "CLI",
-            "sectionACPAgents": "ACP 代理",
             "cpu": "CPU",
             "mem": "MEM",
             "loading": "正在加载你的机器…",
@@ -3510,7 +3348,7 @@
             "stopFailed": "无法停止",
             "restartInitiated": "已开始重启 {{name}}",
             "restartFailed": "无法重启",
-            "selectProviderFirst": "请先选择 CLI 或 ACP 提供方",
+            "selectProviderFirst": "请先选择 CLI 提供方",
             "selectProvider": "请选择提供方",
             "workspaceRemoved": "已移除工作区",
             "workspaceLabelUpdated": "已更新工作区名称",
@@ -3879,8 +3717,8 @@
             "monoDesc": "真实的生产仓库会嵌套子模块 —— 而这恰恰是幼稚的自动合并崩溃之处。Refinery 具备子模块感知能力：它以子模块提交的可达性为门禁，判断补丁等价性，并原子地更新指针。本项目本身就是一个根 + 两个子模块的 monorepo，每天都以这种方式收敛。",
             "crossHighlight": "交叉核查",
             "crossTitle": "共识胜过单一意见",
-            "crossSubtitle": "MAGI — Multi-Agent Ground-truth Insight",
-            "crossDesc": "将同一个只读调查扇出到多个机器 × 提供方副本，并综合它们一致与分歧之处（MAGI）。比单个智能体的看法更可靠。",
+            "crossSubtitle": "一个问题，多个独立智能体",
+            "crossDesc": "由协调者将同一个只读问题同时发给多台机器和多个模型，并比较它们一致与分歧之处。比单个智能体的看法更可靠。",
             "tryMesh": "试用 Repo Mesh →",
             "seePlans": "查看方案",
             "availableOn": "连接机器后，在 <strong>Repo Mesh</strong> 页面即可开始使用。",
@@ -3927,7 +3765,7 @@
             "rowCrossCheck": "交叉核查答案",
             "rowCrossCheckLocalCli": "单个智能体的看法，没有第二意见",
             "rowCrossCheckDesktop": "并行工作，单一裁定",
-            "rowCrossCheckAdhdev": "MAGI 将同一个只读问题扇出到独立的机器 × 提供方智能体，并呈现它们的分歧之处",
+            "rowCrossCheckAdhdev": "协调者将同一个只读问题发给不同机器 × 提供方的智能体，并比较它们的分歧之处",
             "footnote": "对于单台机器、单个分支、一次性任务 —— 带子智能体的本地 CLI 更轻量且效果很好，原生桌面编排器坐起来也更舒适。当工作跨机器和分支扇出、需要挺过重启并应自动落地到 main 时，Repo Mesh 才真正显出价值 —— 无论你身在何处都能掌控。"
         },
         "what": {
@@ -3935,7 +3773,7 @@
             "sectionSubtitle": "设计上厂商中立。在 Mac 上运行 Claude Code，在 Windows GPU 机器上运行 Codex，用 Cursor CLI 做审阅 —— 都在同一个网格中、同一套策略之下。切换厂商无需切换平台。",
             "cliHighlight": "CLI 智能体",
             "cliTitle": "从 Web 驱动任何终端智能体",
-            "cliDesc": "Claude Code、Codex CLI、Cursor CLI、Antigravity CLI、Grok、Hermes、Kimi 和 OpenCode —— 通过 PTY 适配器在你的机器上接入，具备完善的恢复与重连，由你的浏览器驱动。即时发送提示并提供视觉上下文（粘贴、拖放，或一次上传多张图片，最多 5 张 / 每张 10MB）。Aider、Goose 及其他 ACP 智能体通过 stdio 连接。",
+            "cliDesc": "Claude Code、Codex CLI、Cursor CLI、Antigravity CLI、Grok、Kimi 和 OpenCode —— 通过 PTY 适配器在你的机器上接入，具备完善的恢复与重连，由你的浏览器驱动。即时发送提示并提供视觉上下文（粘贴、拖放，或一次上传多张图片，最多 5 张 / 每张 10MB）。",
             "uiHighlight": "一个 UI",
             "uiTitle": "同一个仪表盘，任意设备",
             "uiDesc": "在 adhf.dev 云端托管 —— 无论你在办公桌前还是外出，都可从笔记本或手机驱动每个智能体。",
@@ -3954,7 +3792,7 @@
         },
         "agents": {
             "sectionTitle": "支持的智能体",
-            "sectionSubtitle": "{{ides}} 个内置 IDE 集成、{{clis}} 个内置 CLI 智能体、{{extensions}} 个 IDE 常驻扩展智能体，以及 {{acp}}+ 个 ACP（stdio MCP）智能体。提供方脚本位于 <code>adhdev-providers/</code> —— 在 <code>~/.adhdev/providers/</code> 下添加你自己的脚本。",
+            "sectionSubtitle": "{{ides}} 个内置 IDE 集成、{{clis}} 个内置 CLI 智能体，以及 {{extensions}} 个 IDE 常驻扩展智能体。提供方脚本位于 <code>adhdev-providers/</code> —— 在 <code>~/.adhdev/providers/</code> 下添加你自己的脚本。",
             "tierTested": "已测试",
             "tierTestedDesc": "针对真实应用 + 版本验证过",
             "tierCommunity": "社区",
@@ -3964,8 +3802,7 @@
             "groupCli": "CLI 代理",
             "hintCli": "通过 PTY 适配器驱动，支持恢复与重连。",
             "groupExtensions": "IDE 内扩展代理",
-            "hintExtensions": "为运行在其他 IDE 内的代理提供 CDP webview 接入。",
-            "acpFootnote": "外加 {{count}}+ 个通过 stdio 的 ACP 代理（Agent Client Protocol）：Codex、Claude Agent、Goose、Cline、OpenHands 等。"
+            "hintExtensions": "为运行在其他 IDE 内的代理提供 CDP webview 接入。"
         },
         "pricing": {
             "sectionTitle": "随代理规模增长的简单定价",
@@ -3981,7 +3818,7 @@
                     "features": {
                         "machine": "一台机器，单条命令即可配对",
                         "p2p": "P2P 聊天、命令、截图、远程输入",
-                        "providers": "全部提供方 — CLI、IDE 和 ACP 代理",
+                        "providers": "全部提供方 — CLI 和 IDE 代理",
                         "push": "审批和完成的推送通知",
                         "share": "一个共享会话链接"
                     }
@@ -4034,7 +3871,7 @@
                 },
                 "step3": {
                     "title": "操控你的代理",
-                    "desc": "从仪表盘启动 Claude Code、Codex CLI、Cursor CLI、Antigravity CLI、Hermes、Kimi 等代理。读取聊天、发送提示词、提供视觉上下文（粘贴、拖放或一次上传多张图片）、审批操作并切换会话。"
+                    "desc": "从仪表盘启动 Claude Code、Codex CLI、Cursor CLI、Antigravity CLI、Kimi 等代理。读取聊天、发送提示词、提供视觉上下文（粘贴、拖放或一次上传多张图片）、审批操作并切换会话。"
                 }
             }
         },

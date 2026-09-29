@@ -7,7 +7,7 @@ import { useBaseDaemonActions } from '../context/BaseDaemonContext'
 import { useDaemonMetadataLoader } from '../hooks/useDaemonMetadataLoader'
 import { useDaemonMachineRuntimeLoader } from '../hooks/useDaemonMachineRuntimeLoader'
 import type { DaemonData } from '../types'
-import { isCliConv, isAcpConv, getCliConversationViewMode } from '../components/dashboard/types'
+import { isCliConv, getCliConversationViewMode } from '../components/dashboard/types'
 import {
     applyCliViewModeOverrides,
 } from '../components/dashboard/cliViewModeOverrides'
@@ -426,7 +426,7 @@ export default function Dashboard({ suppressConnectionBanner = false }: Dashboar
     })
 
     const activeCliViewMode = useMemo(() => {
-        if (!activeConv || !isCliConv(activeConv) || isAcpConv(activeConv)) return null
+        if (!activeConv || !isCliConv(activeConv)) return null
         return getCliConversationViewMode(activeConv)
     }, [activeConv])
 

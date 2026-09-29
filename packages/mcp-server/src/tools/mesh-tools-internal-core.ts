@@ -1,7 +1,7 @@
 // ─── Internal pure core ───────────────────────────
 // The pure helper layer of ./mesh-tools-internal.ts, physically moved here as a
 // pure move (`check:file-sizes` decomposition — mesh-tools-internal.ts is a
-// frozen baseline entry; same split as mesh-tools-magi.ts → mesh-tools-magi-core.ts).
+// frozen baseline entry).
 //
 // Everything in this file depends only on data shapes (mesh/node entries, command
 // payloads, git status objects, ledger entries) — no MeshContext, no transport,
@@ -603,7 +603,7 @@ export function readNodeSupportedProviders(policy: unknown): string[] {
  * buildMeshNodeCapabilityTags the queue/dispatch matcher uses, so what the
  * coordinator sees is exactly what routing will match.
  *
- *   - capabilityTags: the representative tag set (os=/arch=/converge= plus the
+ *   - capabilityTags: the representative tag set (os=/arch= plus the
  *     first declared provider's provider= tag and any worktree= tag). This is
  *     what nodeSatisfiesRequiredTags compares against when no provider is pinned.
  *   - capabilityTagsByProvider: per-provider tag sets, one per entry in the

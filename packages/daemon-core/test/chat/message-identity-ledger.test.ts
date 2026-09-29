@@ -20,7 +20,6 @@ import {
     isValidOrderKey,
 } from '../../src/chat/fractional-index.js';
 import {
-    acpSourceAddress,
     lineageToken,
     nativeSourceAddress,
     recordBlockAddress,
@@ -264,18 +263,18 @@ describe('MessageIdentityLedger', () => {
         expect(ids(f2)).toEqual(ids(f1));
     });
 
-    it('ACP partial → final: the finalized message keeps the partial bubble id', () => {
+    it('runtime-keyed partial → final: the finalized message keeps the partial bubble id', () => {
         const ledger = new MessageIdentityLedger();
         const f1 = ledger.observe([
-            user('do it', acpSourceAddress('m1')),
-            msg('assistant', 'thinking about', { kind: 'thought', src: acpSourceAddress('t1.thought') }),
-            bot('Here is the ans...', acpSourceAddress('t1.answer')),
+            user('do it', runtimeSourceAddress('m1')),
+            msg('assistant', 'thinking about', { kind: 'thought', src: runtimeSourceAddress('t1.thought') }),
+            bot('Here is the ans...', runtimeSourceAddress('t1.answer')),
         ]);
         const f2 = ledger.observe([
-            user('do it', acpSourceAddress('m1')),
-            msg('assistant', 'thinking about it', { kind: 'thought', src: acpSourceAddress('t1.thought') }),
-            tool('Edit(file.ts)', acpSourceAddress('t1.tool.call-1')),
-            bot('Here is the answer', acpSourceAddress('t1.answer')),
+            user('do it', runtimeSourceAddress('m1')),
+            msg('assistant', 'thinking about it', { kind: 'thought', src: runtimeSourceAddress('t1.thought') }),
+            tool('Edit(file.ts)', runtimeSourceAddress('t1.tool.call-1')),
+            bot('Here is the answer', runtimeSourceAddress('t1.answer')),
         ]);
         expect([ids(f2)[0], ids(f2)[1], ids(f2)[3]]).toEqual(ids(f1));
         expect(f2.deletes).toEqual([]);
@@ -284,7 +283,7 @@ describe('MessageIdentityLedger', () => {
 
     it('ACP front trim tombstones only the trimmed bubbles', () => {
         const ledger = new MessageIdentityLedger();
-        const all = Array.from({ length: 6 }, (_, i) => bot(`m${i}`, acpSourceAddress(`m${i}`)));
+        const all = Array.from({ length: 6 }, (_, i) => bot(`m${i}`, runtimeSourceAddress(`m${i}`)));
         const f1 = ledger.observe(all);
         const f2 = ledger.observe(all.slice(3));
         expect(ids(f2)).toEqual(ids(f1).slice(3));

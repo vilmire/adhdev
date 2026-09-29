@@ -2,7 +2,6 @@ import { useTranslation } from 'react-i18next'
 import ManagedWorkspacesSection from './ManagedWorkspacesSection'
 import type { useMachineActions } from './useMachineActions'
 import type {
-    AcpSessionEntry,
     CliSessionEntry,
     IdeSessionEntry,
     MachineData,
@@ -13,7 +12,6 @@ interface MachineWorkspaceTabProps {
     machineId: string
     ideSessions: IdeSessionEntry[]
     cliSessions: CliSessionEntry[]
-    acpSessions: AcpSessionEntry[]
     actions: ReturnType<typeof useMachineActions>
     sendDaemonCommand?: (id: string, type: string, data?: Record<string, unknown>) => Promise<any>
 }
@@ -23,7 +21,6 @@ export default function MachineWorkspaceTab({
     machineId,
     ideSessions,
     cliSessions,
-    acpSessions,
     actions,
     sendDaemonCommand,
 }: MachineWorkspaceTabProps) {
@@ -40,7 +37,6 @@ export default function MachineWorkspaceTab({
                     machine={machine}
                     ideSessions={ideSessions}
                     cliSessions={cliSessions}
-                    acpSessions={acpSessions}
                     actions={actions}
                     sendDaemonCommand={sendDaemonCommand}
                 />

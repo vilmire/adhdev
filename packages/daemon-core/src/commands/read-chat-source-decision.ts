@@ -32,7 +32,7 @@ import { normalizeNativeHistoryMessages } from './chat-commands-read-native-norm
 // warn so the dependency on this set is visible. A2 deletes the set entirely
 // and routes solely through canonicalHistory.contractVersion +
 // isNativeSourceCanonicalHistory().
-const CLI_NATIVE_TRANSCRIPT_PROVIDERS = new Set(['codex-cli', 'claude-cli', 'hermes-cli', 'antigravity-cli']);
+const CLI_NATIVE_TRANSCRIPT_PROVIDERS = new Set(['codex-cli', 'claude-cli', 'antigravity-cli']);
 
 const warnedLegacyNativeAllowlistHits = new Set<string>();
 function warnLegacyNativeAllowlistHit(providerType: string): void {

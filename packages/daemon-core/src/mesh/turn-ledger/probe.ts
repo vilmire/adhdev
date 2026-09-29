@@ -77,7 +77,7 @@ function localInstanceStatus(
     key: string,
     transport: string | undefined,
 ): string | undefined {
-    if (transport !== 'pty' && transport !== 'acp') return undefined;
+    if (transport !== 'pty') return undefined;
     try {
         const state = components.instanceManager.getInstance(key)?.getState?.();
         return str((state as { status?: unknown } | undefined)?.status).toLowerCase() || undefined;

@@ -1,11 +1,11 @@
 /**
- * RF-ROUTER MED family — CLI/ACP agent + saved-session + restart commands.
+ * RF-ROUTER MED family — CLI agent + saved-session + restart commands.
  *
  * launch_cli, stop_cli / set_cli_view_mode / record_provider_pty, agent_command,
  * list_saved_sessions and restart_session. launch_cli and agent_command stamp
  * mesh-worker relay metadata and surface worktree-bootstrap-pending hints around a
  * delegation to cliManager. restart_session dispatches IDE restarts (via ctx.stopIde
- * + ctx.launchIde — no executeDaemonCommand recursion) or CLI/ACP restarts.
+ * + ctx.launchIde — no executeDaemonCommand recursion) or CLI restarts.
  * Extracted verbatim from executeDaemonCommand.
  */
 import { meshNodeIdMatches, daemonIdsEquivalent, readText } from '@adhdev/mesh-shared';
@@ -334,7 +334,7 @@ export const cliAgentHandlers: Record<string, MedFamilyHandler> = {
             : typeof args?.agentType === 'string'
                 ? args.agentType.trim()
                 : '';
-        const kind = args?.kind === 'acp' ? 'acp' : 'cli';
+        const kind = 'cli' as const;
         if (!providerType) {
             return { success: false, error: 'providerType required' };
         }
@@ -397,7 +397,7 @@ export const cliAgentHandlers: Record<string, MedFamilyHandler> = {
         };
     },
 
-    // ─── restart_session: IDE / CLI / ACP unified ───
+    // ─── restart_session: IDE / CLI unified ───
     restart_session: async (ctx: MedFamilyContext, args: any) => {
         const targetType = args?.cliType || args?.agentType || args?.ideType;
         if (!targetType) throw new Error('cliType or ideType required');
@@ -413,7 +413,7 @@ export const cliAgentHandlers: Record<string, MedFamilyHandler> = {
             return { success: true, restarted: true, ideType: targetType, launch: launchResult };
         }
 
-        // CLI/ACP restart: delegate to CliManager
+        // CLI restart: delegate to CliManager
         return ctx.deps.cliManager.restartSession(args);
     },
 };
