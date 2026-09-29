@@ -27,7 +27,7 @@ import type {
  */
 type MeshMissionDisplay = MeshMissionSummary | MeshMissionSlimSummary
 import { useTheme } from '../../hooks/useTheme'
-import { getMeshGraphTheme, type MeshGraphTheme } from './meshGraphTheme'
+import { getMeshGraphTheme, MESH_CHIP_BASE, meshChipTone, type MeshGraphTheme } from './meshGraphTheme'
 import type { MeshGraphSessionDetail } from '../../utils/mesh-visualization'
 import PendingApprovalsInbox, { type PendingApprovalAction } from './PendingApprovalsInbox'
 import { nodeDisplayName, nodeHealthText, sessionElapsedLabel, sessionRoleText, sessionStatusLabel, sessionStatusText } from './MeshObservabilitySurface/meshSurfaceHelpers'
@@ -55,6 +55,30 @@ import { requestOpenSessionChat } from '../../utils/session-nav'
  */
 
 type Tone = 'rose' | 'sky' | 'amber' | 'emerald' | 'muted' | 'default'
+
+/** Tone → chip text + thin border (theme tokens). `sky` marks live/in-flight
+ *  work, which the app signals with its single accent. */
+function toneChipClass(tone: Tone): string {
+    switch (tone) {
+        case 'rose': return meshChipTone('danger')
+        case 'amber': return meshChipTone('warn')
+        case 'emerald': return meshChipTone('good')
+        case 'sky': return 'border-accent/40 text-accent'
+        default: return meshChipTone('neutral')
+    }
+}
+
+/** Tone → text colour only (stat values, inline status words). */
+function toneTextClass(tone: Tone | undefined, meshTheme: MeshGraphTheme): string {
+    switch (tone) {
+        case 'rose': return 'text-status-error'
+        case 'amber': return 'text-status-warning'
+        case 'emerald': return 'text-status-online'
+        case 'sky': return 'text-accent'
+        case 'muted': return meshTheme.textMuted
+        default: return meshTheme.textPrimary
+    }
+}
 
 /** How many rows each overview card shows before the "+N more" toggle. */
 const RECENT_LIMIT = 5
@@ -166,18 +190,12 @@ export function queueTaskStatusLabel(status: RepoMeshQueueTask['status'], t: (ke
 }
 
 /**
- * SHOW-TASK-DIFFICULTY: reuses the same severity vocabulary as StatusBadge's
- * other Tone mappings (emerald=cheap/safe → rose=expensive/hard) so a task's
- * cost/effort tier reads consistently with the rest of the overview cards.
- * 'freeform' isn't a severity level (no fixed shape), so it stays neutral.
+ * SHOW-TASK-DIFFICULTY: difficulty is a routing attribute, not a state, so it
+ * renders as a neutral chip (the label carries the level) — same as the Map
+ * cards. Semantic colour stays reserved for failure / attention.
  */
-function difficultyTone(difficulty: string): Tone {
-    switch (difficulty) {
-        case 'easy': return 'emerald'
-        case 'medium': return 'amber'
-        case 'difficult': return 'rose'
-        default: return 'muted'
-    }
+function difficultyTone(): Tone {
+    return 'default'
 }
 
 /** Label for a task's difficulty badge — falls back to the raw value for forward-compat with an unrecognized future difficulty. */
@@ -441,14 +459,13 @@ function Card({ meshTheme, title, count, children, action }: {
     children: React.ReactNode
     action?: React.ReactNode
 }) {
-    const dk = meshTheme.isDark
     // min-w-0 + overflow-hidden so this card can shrink inside a flex/grid parent
     // on narrow (~360px) viewports instead of forcing its track wider than the
     // viewport — the root cause of the mobile horizontal scroll.
     return (
-        <div className={`flex min-w-0 flex-col overflow-hidden rounded-2xl border p-4 ${dk ? 'border-white/8 bg-white/[0.03]' : 'border-slate-200 bg-white/80'}`}>
+        <div className="flex min-w-0 flex-col overflow-hidden rounded-xl border border-border-subtle bg-bg-card p-4">
             <div className="mb-3 flex items-center gap-2">
-                <span className={`text-2xs font-semibold uppercase tracking-[0.14em] ${meshTheme.textSecondary}`}>{title}</span>
+                <span className={`text-xs font-semibold ${meshTheme.textPrimary}`}>{title}</span>
                 {count !== undefined && (
                     <span className={`tabular-nums text-2xs ${meshTheme.textMuted}`}>{count}</span>
                 )}
@@ -459,31 +476,17 @@ function Card({ meshTheme, title, count, children, action }: {
     )
 }
 
-function StatusBadge({ meshTheme, label, tone }: { meshTheme: MeshGraphTheme; label: string; tone: Tone }) {
-    const dk = meshTheme.isDark
-    const cls = tone === 'rose' ? (dk ? 'border-rose-400/30 bg-rose-500/12 text-rose-200' : 'border-rose-300 bg-rose-50 text-rose-700')
-        : tone === 'sky' ? (dk ? 'border-sky-400/25 bg-sky-500/10 text-sky-200' : 'border-sky-300 bg-sky-50 text-sky-700')
-        : tone === 'amber' ? (dk ? 'border-amber-400/25 bg-amber-500/10 text-amber-200' : 'border-amber-300 bg-amber-50 text-amber-700')
-        : tone === 'emerald' ? (dk ? 'border-emerald-400/25 bg-emerald-500/10 text-emerald-200' : 'border-emerald-300 bg-emerald-50 text-emerald-700')
-        : (dk ? 'border-white/10 bg-white/[0.04] text-slate-300' : 'border-slate-200 bg-slate-50 text-slate-600')
-    // leading-none + align-middle + tracking-compensated right padding — same rationale as
-    // Badge in meshSurfacePrimitives.tsx (arbitrary text-3xs carries no line-height, so
-    // the chip inherited the row's and its border drifted against neighbouring text).
-    return <span className={`shrink-0 rounded-full border pl-2 pr-[calc(0.5rem-0.14em)] py-0.5 text-3xs leading-none align-middle font-semibold uppercase tracking-[0.14em] ${cls}`}>{label}</span>
+function StatusBadge({ label, tone }: { meshTheme: MeshGraphTheme; label: string; tone: Tone }) {
+    // The shared mesh chip (same geometry as the Map / Tasks chips and Badge):
+    // sentence case, fixed height, tone on text + thin border only.
+    return <span className={`${MESH_CHIP_BASE} align-middle ${toneChipClass(tone)}`}>{label}</span>
 }
 
 function StatTile({ meshTheme, label, value, tone }: { meshTheme: MeshGraphTheme; label: string; value: number | string; tone?: Tone }) {
-    const dk = meshTheme.isDark
-    const valClass = tone === 'rose' ? (dk ? 'text-rose-300' : 'text-rose-600')
-        : tone === 'sky' ? (dk ? 'text-sky-300' : 'text-sky-600')
-        : tone === 'amber' ? (dk ? 'text-amber-300' : 'text-amber-600')
-        : tone === 'emerald' ? (dk ? 'text-emerald-300' : 'text-emerald-600')
-        : tone === 'muted' ? meshTheme.textMuted
-        : meshTheme.textPrimary
     return (
-        <div className={`flex flex-col items-center rounded-lg border px-2 py-2 ${dk ? 'border-white/8 bg-white/[0.03]' : 'border-slate-200 bg-white/70'}`}>
-            <span className={`tabular-nums text-base font-semibold leading-none ${valClass}`}>{value}</span>
-            <span className={`mt-1 text-4xs uppercase tracking-wide ${meshTheme.textMuted}`}>{label}</span>
+        <div className="flex flex-col items-center rounded-lg border border-border-subtle bg-bg-glass px-2 py-2">
+            <span className={`tabular-nums text-base font-semibold leading-none ${toneTextClass(tone, meshTheme)}`}>{value}</span>
+            <span className={`mt-1 text-3xs ${meshTheme.textMuted}`}>{label}</span>
         </div>
     )
 }
@@ -497,15 +500,14 @@ function EmptyHint({ meshTheme, children }: { meshTheme: MeshGraphTheme; childre
  * button so the click target opens the shared detail modal — consistent across
  * Mission / Ledger / Queue / Session cards.
  */
-function ListRow({ meshTheme, onClick, dimmed, children }: {
+function ListRow({ onClick, dimmed, children }: {
     meshTheme: MeshGraphTheme
     onClick?: () => void
     /** Visually mute the whole row (e.g. a mission with no tasks attached). */
     dimmed?: boolean
     children: React.ReactNode
 }) {
-    const dk = meshTheme.isDark
-    const hover = onClick ? (dk ? 'hover:bg-white/[0.05]' : 'hover:bg-slate-100/70') : ''
+    const hover = onClick ? 'hover:bg-bg-glass-hover' : ''
     return (
         <button
             type="button"
@@ -600,10 +602,8 @@ export function MeshOverviewDetailModal({ meshTheme, detail, onClose, onBack, da
 
     const dk = meshTheme.isDark
     const { kicker, title } = detailTitle(detail, t)
-    const overlayClass = dk ? 'bg-[#030617]/[0.92]' : 'bg-[rgba(15,23,42,0.82)]'
-    const shellClass = dk
-        ? 'border-white/10 bg-slate-950 md:bg-slate-950/98 shadow-[0_28px_120px_rgba(2,6,23,0.5)]'
-        : 'border-slate-200 bg-white md:bg-white/98 shadow-[0_28px_120px_rgba(148,163,184,0.3)]'
+    const overlayClass = dk ? 'bg-[rgba(0,0,0,0.72)]' : 'bg-[rgba(15,23,42,0.55)]'
+    const shellClass = 'border-border-default bg-bg-primary shadow-lg'
 
     return (
         <ModalPortal>
@@ -624,7 +624,7 @@ export function MeshOverviewDetailModal({ meshTheme, detail, onClose, onBack, da
                     the status bar, so the header must pad below
                     env(safe-area-inset-top) or the close control lands inside the
                     system clock/battery area and becomes untappable. */}
-                <div className={`sticky top-0 z-10 flex shrink-0 items-start justify-between gap-3 border-b px-4 pb-3 pt-[calc(12px+env(safe-area-inset-top,0px))] ${dk ? 'border-white/8' : 'border-slate-200'}`}>
+                <div className={`sticky top-0 z-10 flex shrink-0 items-start justify-between gap-3 border-b px-4 pb-3 pt-[calc(12px+env(safe-area-inset-top,0px))] border-border-subtle`}>
                     <div className="flex min-w-0 items-start gap-2">
                         {onBack && (
                             <button
@@ -633,13 +633,13 @@ export function MeshOverviewDetailModal({ meshTheme, detail, onClose, onBack, da
                                 aria-label={t('common.back')}
                                 className="-m-1.5 inline-flex h-11 w-11 shrink-0 items-center justify-center"
                             >
-                                <span className={dk ? 'inline-flex h-8 w-8 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-slate-300 transition hover:bg-white/[0.08] hover:text-white' : 'inline-flex h-8 w-8 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50 hover:text-slate-900'}>
+                                <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-border-default bg-bg-glass text-text-secondary transition hover:bg-bg-glass-hover hover:text-text-primary">
                                     ‹
                                 </span>
                             </button>
                         )}
                         <div className="min-w-0">
-                            <div className={`text-3xs font-semibold uppercase tracking-[0.16em] ${meshTheme.textMuted}`}>{kicker}</div>
+                            <div className={`text-3xs font-medium ${meshTheme.textMuted}`}>{kicker}</div>
                             <div className={`mt-0.5 break-words text-sm font-semibold ${meshTheme.textPrimary}`}>{title}</div>
                         </div>
                     </div>
@@ -653,7 +653,7 @@ export function MeshOverviewDetailModal({ meshTheme, detail, onClose, onBack, da
                         aria-label={t('mesh.overview.closeDetail')}
                         className="-m-1.5 inline-flex h-11 w-11 shrink-0 items-center justify-center"
                     >
-                        <span className={dk ? 'inline-flex h-8 w-8 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-slate-300 transition hover:bg-white/[0.08] hover:text-white' : 'inline-flex h-8 w-8 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50 hover:text-slate-900'}>
+                        <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-border-default bg-bg-glass text-text-secondary transition hover:bg-bg-glass-hover hover:text-text-primary">
                             ✕
                         </span>
                     </button>
@@ -778,7 +778,7 @@ function MissionDetail({ meshTheme, mission, daemonId, meshId, sendDaemonCommand
                     {showTruncatedLabel && !canFetchGoal && <span className={meshTheme.textMuted}> … {t('mesh.overview.truncated')}</span>}
                 </div>
             )}
-            {fetchError && <div className="text-2xs text-amber-400">{fetchError}</div>}
+            {fetchError && <div className="text-2xs text-status-warning">{fetchError}</div>}
             {canFetchGoal && (
                 <button
                     type="button"
@@ -808,9 +808,7 @@ function MissionDetail({ meshTheme, mission, daemonId, meshId, sendDaemonCommand
                 <div>
                     <button
                         type="button"
-                        className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${meshTheme.isDark
-                            ? 'border-indigo-400/30 bg-indigo-500/10 text-indigo-200 hover:bg-indigo-500/20'
-                            : 'border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100'}`}
+                        className="rounded-lg border border-accent/50 bg-accent/10 px-3 py-1.5 text-xs font-medium text-accent transition-colors hover:bg-accent/20"
                         onClick={onShowOnCanvas}
                     >
                         {t('mesh.overview.showOnCanvas')}
@@ -819,12 +817,12 @@ function MissionDetail({ meshTheme, mission, daemonId, meshId, sendDaemonCommand
             )}
             {missionTasks.length > 0 && (
                 <div>
-                    <div className={`mb-1 text-3xs uppercase tracking-wide ${meshTheme.textMuted}`}>{t('mesh.overview.missionTasksHeading')}</div>
+                    <div className={`mb-1 text-3xs font-medium ${meshTheme.textMuted}`}>{t('mesh.overview.missionTasksHeading')}</div>
                     <div className="flex flex-col gap-0.5">
                         {taskList.visible.map(task => (
                             <ListRow key={task.id} meshTheme={meshTheme} onClick={onOpenTask ? () => onOpenTask(task) : undefined}>
                                 <StatusBadge meshTheme={meshTheme} label={queueTaskStatusLabel(task.status, t)} tone={queueTaskTone(task.status)} />
-                                {task.difficulty && <StatusBadge meshTheme={meshTheme} label={difficultyLabel(task.difficulty, t)} tone={difficultyTone(task.difficulty)} />}
+                                {task.difficulty && <StatusBadge meshTheme={meshTheme} label={difficultyLabel(task.difficulty, t)} tone={difficultyTone()} />}
                                 <span className={`min-w-0 flex-1 truncate ${meshTheme.textSecondary}`} title={task.message || undefined}>{queueTaskDisplayText(task.message) || task.id}</span>
                                 <span className={`shrink-0 text-3xs ${meshTheme.textMuted}`}>{relativeTime(task.updatedAt) ?? ''}</span>
                             </ListRow>
@@ -904,7 +902,7 @@ function RoutingDecisionDetail({ meshTheme, routing, resolveNodeLabel }: { meshT
     const tags = routing.requiredTagsResult
     return (
         <div className="flex flex-col gap-1.5">
-            <div className={`text-3xs uppercase tracking-wide ${meshTheme.textMuted}`}>{t('mesh.overview.routingHeading')}</div>
+            <div className={`text-3xs font-medium ${meshTheme.textMuted}`}>{t('mesh.overview.routingHeading')}</div>
             <div className="grid gap-1.5 text-xs">
                 {routing.selectedNodeId && <ModalRow meshTheme={meshTheme} label={t('mesh.overview.routingDevice')} value={resolveNodeLabel(routing.selectedNodeId)} />}
                 {routing.daemonId && <ModalRow meshTheme={meshTheme} label={t('mesh.overview.routingDaemon')} value={routing.daemonId} />}
@@ -925,7 +923,7 @@ function RoutingDecisionDetail({ meshTheme, routing, resolveNodeLabel }: { meshT
             </div>
             {Array.isArray(routing.skippedCandidates) && routing.skippedCandidates.length > 0 && (
                 <div className="flex flex-col gap-1">
-                    <div className={`text-3xs uppercase tracking-wide ${meshTheme.textMuted}`}>{t('mesh.overview.routingSkipped')}</div>
+                    <div className={`text-3xs font-medium ${meshTheme.textMuted}`}>{t('mesh.overview.routingSkipped')}</div>
                     <div className={`flex flex-col gap-0.5 text-2xs leading-4 ${meshTheme.textSecondary}`}>
                         {routing.skippedCandidates.map((c, i) => (
                             <div key={`${c.nodeId ?? 'node'}-${i}`}>
@@ -995,8 +993,8 @@ function LedgerDetail({ meshTheme, entry, resolveNodeLabel }: { meshTheme: MeshG
                 {routing && <RoutingDecisionDetail meshTheme={meshTheme} routing={routing} resolveNodeLabel={resolveNodeLabel} />}
                 {payloadJson && payloadJson !== '{}' && (
                     <details data-raw-payload="">
-                        <summary className={`cursor-pointer select-none text-3xs uppercase tracking-wide ${meshTheme.textMuted}`}>{t('mesh.overview.detailLabelPayload')}</summary>
-                        <pre className={`mt-1 max-h-60 max-w-full overflow-auto rounded-lg border p-2 text-3xs leading-4 ${meshTheme.isDark ? 'border-white/8 bg-black/30 text-slate-300' : 'border-slate-200 bg-slate-50 text-slate-700'}`}>{payloadJson}</pre>
+                        <summary className={`cursor-pointer select-none text-3xs font-medium ${meshTheme.textMuted}`}>{t('mesh.overview.detailLabelPayload')}</summary>
+                        <pre className={`mt-1 max-h-60 max-w-full overflow-auto rounded-lg border p-2 text-3xs leading-4 border-border-subtle bg-bg-secondary text-text-secondary`}>{payloadJson}</pre>
                     </details>
                 )}
             </TechnicalDetails>
@@ -1081,7 +1079,7 @@ function QueueDetail({ meshTheme, task, resolveNodeLabel, missionTitles, onOpenM
         <div className="flex flex-col gap-3">
             <div className="flex flex-wrap items-center gap-1.5">
                 <StatusBadge meshTheme={meshTheme} label={queueTaskStatusLabel(task.status, t)} tone={queueTaskTone(task.status)} />
-                {task.difficulty && <StatusBadge meshTheme={meshTheme} label={difficultyLabel(task.difficulty, t)} tone={difficultyTone(task.difficulty)} />}
+                {task.difficulty && <StatusBadge meshTheme={meshTheme} label={difficultyLabel(task.difficulty, t)} tone={difficultyTone()} />}
                 {completingProvider && <StatusBadge meshTheme={meshTheme} label={completingProvider} tone="muted" />}
                 {(task.requeueCount ?? 0) > 0 && <StatusBadge meshTheme={meshTheme} label={t('mesh.overview.detailLabelRequeued', { count: task.requeueCount })} tone="amber" />}
             </div>
@@ -1102,10 +1100,10 @@ function QueueDetail({ meshTheme, task, resolveNodeLabel, missionTitles, onOpenM
                     <div className={`whitespace-pre-wrap text-xs leading-5 ${meshTheme.textSecondary}`}>{taskMessageParts.lead}</div>
                     {taskMessageParts.rest && (
                         <details>
-                            <summary className={`cursor-pointer select-none text-3xs uppercase tracking-wide ${meshTheme.textMuted}`}>
+                            <summary className={`cursor-pointer select-none text-3xs font-medium ${meshTheme.textMuted}`}>
                                 {t('mesh.overview.detailLabelFullInstruction')}
                             </summary>
-                            <div className={`mt-1 max-h-72 overflow-y-auto whitespace-pre-wrap rounded-lg border px-2.5 py-2 text-xs leading-5 ${meshTheme.isDark ? 'border-white/8 bg-black/20 text-slate-300' : 'border-slate-200 bg-slate-50 text-slate-700'}`}>
+                            <div className={`mt-1 max-h-72 overflow-y-auto whitespace-pre-wrap rounded-lg border px-2.5 py-2 text-xs leading-5 border-border-subtle bg-bg-secondary text-text-secondary`}>
                                 {taskMessageParts.rest}
                             </div>
                         </details>
@@ -1115,13 +1113,13 @@ function QueueDetail({ meshTheme, task, resolveNodeLabel, missionTitles, onOpenM
             {/* Why it stopped — the one thing a failed task is opened for. It
                 used to sit far below the full instruction dump. */}
             {task.blockedReason && (
-                <div className={`rounded-lg border px-2.5 py-2 text-xs leading-5 ${meshTheme.isDark ? 'border-rose-400/25 bg-rose-500/10 text-rose-200' : 'border-rose-300 bg-rose-50 text-rose-700'}`}>
+                <div className={`rounded-lg border px-2.5 py-2 text-xs leading-5 border-status-error/35 text-status-error`}>
                     {task.blockedReason}
                 </div>
             )}
             {isTerminal && (
                 <div>
-                    <div className={`mb-1 text-3xs uppercase tracking-wide ${meshTheme.textMuted}`}>{t('mesh.overview.detailLabelFinalSummary')}</div>
+                    <div className={`mb-1 text-3xs font-medium ${meshTheme.textMuted}`}>{t('mesh.overview.detailLabelFinalSummary')}</div>
                     {/* ── Summary FIRST, report folded — the other half of the
                         same defect `babbc4ad` fixed for the instruction block.
                         A worker's final summary is its whole report, usually a
@@ -1137,10 +1135,10 @@ function QueueDetail({ meshTheme, task, resolveNodeLabel, missionTitles, onOpenM
                                 <div className={`whitespace-pre-wrap text-xs leading-5 ${meshTheme.textSecondary}`}>{finalSummaryParts.lead}</div>
                                 {finalSummaryParts.rest && (
                                     <details>
-                                        <summary className={`cursor-pointer select-none text-3xs uppercase tracking-wide ${meshTheme.textMuted}`}>
+                                        <summary className={`cursor-pointer select-none text-3xs font-medium ${meshTheme.textMuted}`}>
                                             {t('mesh.overview.detailLabelFullFinalSummary')}
                                         </summary>
-                                        <div className={`mt-1 max-h-72 overflow-y-auto whitespace-pre-wrap rounded-lg border px-2.5 py-2 text-xs leading-5 ${meshTheme.isDark ? 'border-white/8 bg-black/20 text-slate-200' : 'border-slate-200 bg-slate-50 text-slate-700'}`}>
+                                        <div className={`mt-1 max-h-72 overflow-y-auto whitespace-pre-wrap rounded-lg border px-2.5 py-2 text-xs leading-5 border-border-subtle bg-bg-secondary text-text-primary`}>
                                             {finalSummaryParts.rest}
                                         </div>
                                     </details>
@@ -1236,7 +1234,7 @@ function SessionDetail({ meshTheme, node, session, queueTasks, onOpenTask }: {
             <div className="flex flex-wrap items-center gap-1.5">
                 <StatusBadge meshTheme={meshTheme} label={statusText} tone={sessionStatusTone(label)} />
                 <StatusBadge meshTheme={meshTheme} label={session.providerType || t('mesh.overview.providerUnknown')} tone="muted" />
-                {session.difficulty && <StatusBadge meshTheme={meshTheme} label={difficultyLabel(session.difficulty, t)} tone={difficultyTone(session.difficulty)} />}
+                {session.difficulty && <StatusBadge meshTheme={meshTheme} label={difficultyLabel(session.difficulty, t)} tone={difficultyTone()} />}
             </div>
             {session.statusNote && <div className={`whitespace-pre-wrap text-xs leading-5 ${meshTheme.textSecondary}`}>{session.statusNote}</div>}
             <div className="grid gap-1.5 text-xs">
@@ -1252,7 +1250,7 @@ function SessionDetail({ meshTheme, node, session, queueTasks, onOpenTask }: {
             </div>
             {sessionTasks.length > 0 && (
                 <div>
-                    <div className={`mb-1 text-3xs uppercase tracking-wide ${meshTheme.textMuted}`}>{t('mesh.overview.sessionTasksHeading')}</div>
+                    <div className={`mb-1 text-3xs font-medium ${meshTheme.textMuted}`}>{t('mesh.overview.sessionTasksHeading')}</div>
                     <div className="flex flex-col gap-0.5">
                         {sessionTasks.map(task => (
                             <ListRow key={task.id} meshTheme={meshTheme} onClick={onOpenTask ? () => onOpenTask(task) : undefined}>
@@ -1270,9 +1268,7 @@ function SessionDetail({ meshTheme, node, session, queueTasks, onOpenTask }: {
             <div>
                 <button
                     type="button"
-                    className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${meshTheme.isDark
-                        ? 'border-white/15 bg-white/[0.05] text-slate-200 hover:bg-white/[0.1]'
-                        : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'}`}
+                    className="rounded-lg border border-border-default bg-bg-glass px-3 py-1.5 text-xs font-medium text-text-primary transition-colors hover:bg-bg-glass-hover"
                     onClick={() => requestOpenSessionChat({ sessionId: session.sessionId, source: 'mesh-overview-session-modal' })}
                 >
                     {t('sessionNav.openChat')}
@@ -1340,7 +1336,7 @@ function GateDetail({ meshTheme, graph, nodeId, gate, queueTasks, onOpenTask }: 
                 )}
             </div>
             {gate?.instructions && (
-                <div className={`whitespace-pre-wrap rounded-lg border px-2.5 py-2 text-xs leading-5 ${meshTheme.isDark ? 'border-white/10 bg-white/[0.03] text-slate-300' : 'border-slate-200 bg-slate-50 text-slate-600'}`}>
+                <div className={`whitespace-pre-wrap rounded-lg border px-2.5 py-2 text-xs leading-5 border-border-subtle bg-bg-glass text-text-secondary`}>
                     {gate.instructions}
                 </div>
             )}
@@ -1389,7 +1385,6 @@ function MissionsCard({ meshTheme, liveMissions, historyMissions, hasMissionFiel
     const { t } = useTranslation('common')
     const [showHistory, setShowHistory] = useState(false)
     const [showPaused, setShowPaused] = useState(false)
-    const dk = meshTheme.isDark
     // Active missions are the working set; paused ones fold behind a disclosure
     // (mirroring the completed/abandoned history) so a long paused backlog does
     // not bury the live work. When NOTHING is active, paused missions show
@@ -1419,7 +1414,7 @@ function MissionsCard({ meshTheme, liveMissions, historyMissions, hasMissionFiel
             )}
 
             {foldedPaused.length > 0 && (
-                <div className={`mt-3 border-t pt-2 ${dk ? 'border-white/8' : 'border-slate-200'}`}>
+                <div className="mt-3 border-t border-border-subtle pt-2">
                     <button
                         type="button"
                         onClick={() => setShowPaused(v => !v)}
@@ -1438,7 +1433,7 @@ function MissionsCard({ meshTheme, liveMissions, historyMissions, hasMissionFiel
             )}
 
             {historyMissions.length > 0 && (
-                <div className={`mt-3 border-t pt-2 ${dk ? 'border-white/8' : 'border-slate-200'}`}>
+                <div className="mt-3 border-t border-border-subtle pt-2">
                     <button
                         type="button"
                         onClick={() => setShowHistory(v => !v)}
@@ -1494,9 +1489,9 @@ function LedgerCard({ meshTheme, ledgerSummary, entries, resolveNodeLabel, onSel
                 <StatTile meshTheme={meshTheme} label={t('mesh.overview.statCheckpoints')} value={ledgerSummary.checkpointCreated} />
             </div>
             {allRecent.length > 0 && (
-                <div className={`mt-3 border-t pt-2 ${meshTheme.isDark ? 'border-white/8' : 'border-slate-200'}`}>
+                <div className="mt-3 border-t border-border-subtle pt-2">
                     <div className="mb-1 flex items-center justify-between gap-2">
-                        <span className={`text-3xs uppercase tracking-wide ${meshTheme.textMuted}`}>{t('mesh.overview.recentActivity')}</span>
+                        <span className={`text-3xs font-medium ${meshTheme.textMuted}`}>{t('mesh.overview.recentActivity')}</span>
                         {hasHiddenKinds && (
                             <button type="button" onClick={() => setShowAll(v => !v)} className={`text-3xs font-medium hover:underline ${meshTheme.textSecondary}`}>
                                 {showAll ? t('mesh.activity.showKey') : t('mesh.activity.showAll')}
@@ -1522,7 +1517,7 @@ function LedgerCard({ meshTheme, ledgerSummary, entries, resolveNodeLabel, onSel
             {(ledgerSummary.recentFailures > 0 || (lastActivity && recent.length === 0)) && (
                 <div className={`mt-2 flex items-center justify-between text-2xs ${meshTheme.textMuted}`}>
                     {ledgerSummary.recentFailures > 0
-                        ? <span className={meshTheme.isDark ? 'text-amber-300' : 'text-amber-600'}>{t('mesh.overview.recentFailures', { count: ledgerSummary.recentFailures })}</span>
+                        ? <span className="text-status-warning">{t('mesh.overview.recentFailures', { count: ledgerSummary.recentFailures })}</span>
                         : <span />}
                     {lastActivity && recent.length === 0 && <span>{lastActivity}</span>}
                 </div>
@@ -1568,13 +1563,13 @@ function QueueCard({ meshTheme, queueSummary, tasks, onSelect }: {
                 <StatTile meshTheme={meshTheme} label={t('mesh.overview.statCancelled')} value={queueSummary.cancelled} tone="muted" />
             </div>
             {recent.length > 0 && (
-                <div className={`mt-3 border-t pt-2 ${meshTheme.isDark ? 'border-white/8' : 'border-slate-200'}`}>
-                    <div className={`mb-1 text-3xs uppercase tracking-wide ${meshTheme.textMuted}`}>{t('mesh.overview.recentTasks')}</div>
+                <div className="mt-3 border-t border-border-subtle pt-2">
+                    <div className={`mb-1 text-3xs font-medium ${meshTheme.textMuted}`}>{t('mesh.overview.recentTasks')}</div>
                     <div className="flex flex-col gap-0.5">
                         {list.visible.map(task => (
                             <ListRow key={task.id} meshTheme={meshTheme} onClick={() => onSelect(task)}>
                                 <StatusBadge meshTheme={meshTheme} label={queueTaskStatusLabel(task.status, t)} tone={queueTaskTone(task.status)} />
-                                {task.difficulty && <StatusBadge meshTheme={meshTheme} label={difficultyLabel(task.difficulty, t)} tone={difficultyTone(task.difficulty)} />}
+                                {task.difficulty && <StatusBadge meshTheme={meshTheme} label={difficultyLabel(task.difficulty, t)} tone={difficultyTone()} />}
                                 <span className={`min-w-0 flex-1 truncate ${meshTheme.textSecondary}`} title={task.message || undefined}>{queueTaskDisplayText(task.message) || task.id}</span>
                                 <span className={`shrink-0 text-3xs ${meshTheme.textMuted}`}>{relativeTime(task.updatedAt) ?? ''}</span>
                             </ListRow>
@@ -1597,7 +1592,6 @@ function convergenceBadge(node: RepoMeshNodeStatus, t: (key: string) => string):
 
 function NodesCard({ meshTheme, nodes }: { meshTheme: MeshGraphTheme; nodes: RepoMeshNodeStatus[] }) {
     const { t } = useTranslation('common')
-    const dk = meshTheme.isDark
     return (
         <Card meshTheme={meshTheme} title={t('mesh.overview.nodesCard')} count={nodes.length}>
             {nodes.length === 0 ? (
@@ -1610,7 +1604,7 @@ function NodesCard({ meshTheme, nodes }: { meshTheme: MeshGraphTheme; nodes: Rep
                         const drift = nodeDriftSummary(node)
                         const branch = node.git?.branch ?? node.worktreeBranch ?? null
                         return (
-                            <div key={node.nodeId} className={`flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 overflow-hidden rounded-xl border px-3 py-2 ${dk ? 'border-white/8 bg-white/[0.02]' : 'border-slate-200 bg-slate-50/60'}`}>
+                            <div key={node.nodeId} className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 overflow-hidden rounded-lg border border-border-subtle bg-bg-glass px-3 py-2">
                                 <StatusBadge meshTheme={meshTheme} label={nodeHealthText(node.health, t)} tone={healthTone(node.health)} />
                                 <span className={`min-w-0 max-w-full flex-1 truncate text-sm font-medium ${meshTheme.textPrimary}`} title={node.workspace}>{nodeDisplayName(node)}</span>
                                 {branch && <span className={`max-w-full truncate font-mono text-2xs ${meshTheme.textSecondary}`} title={branch}>{branch}</span>}
@@ -1678,7 +1672,6 @@ function SessionsCard({ meshTheme, entries, onSelect }: {
 
 function RefineJobsCard({ meshTheme, jobs }: { meshTheme: MeshGraphTheme; jobs: AsyncRefineJob[] }) {
     const { t } = useTranslation('common')
-    const dk = meshTheme.isDark
     const failed = jobs.filter(j => j.status === 'failed').length
     return (
         <Card
@@ -1703,13 +1696,13 @@ function RefineJobsCard({ meshTheme, jobs }: { meshTheme: MeshGraphTheme; jobs: 
                                         {job.branch ?? job.jobId.slice(0, 14)}{job.into ? ` → ${job.into}` : ''}
                                     </span>
                                     <span className={`shrink-0 text-3xs font-semibold ${
-                                        job.status === 'failed' ? (dk ? 'text-rose-300' : 'text-rose-600')
-                                        : job.status === 'running' || job.status === 'accepted' ? (dk ? 'text-sky-300' : 'text-sky-600')
-                                        : (dk ? 'text-emerald-300' : 'text-emerald-600')
+                                        job.status === 'failed' ? 'text-status-error'
+                                        : job.status === 'running' || job.status === 'accepted' ? 'text-accent'
+                                        : 'text-status-online'
                                     }`}>{job.status}</span>
                                 </div>
                                 {failureReason && (
-                                    <div className={`truncate pl-1 text-3xs ${dk ? 'text-rose-200/80' : 'text-rose-600/90'}`} title={failureReason}>
+                                    <div className="truncate pl-1 text-3xs text-status-error" title={failureReason}>
                                         {failureReason}
                                     </div>
                                 )}

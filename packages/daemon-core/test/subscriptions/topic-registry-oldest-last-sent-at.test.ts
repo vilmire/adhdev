@@ -26,11 +26,6 @@ function makeRegistry(now: () => number, sinkOverrides: Partial<TopicSink> = {})
             daemonMetadataBody: () => ({ daemonId: 'd1', status: {} as any }),
             sessionModalState: () => null,
         },
-        chatTail: {
-            isCliSession: () => true,
-            scheduleGate: () => true,
-            onDebouncedFlush: () => {},
-        },
     });
 }
 
@@ -61,10 +56,13 @@ describe('TopicSubscriptionRegistry.oldestLastSentAt', () => {
         registry.subscribe('conn-2', { type: 'subscribe', topic: 'daemon.metadata', key: 'k2', params: {} } as any);
         expect(registry.oldestLastSentAt('daemon.metadata')).toBe(0);
 
-        // daemon.metadata is throttle-free (always builds + sends on a flush
-        // pass), so this flush catches BOTH subscribers up to the same instant.
+        // daemon.metadata is throttle-free but keyed: this pass SENDS conn-2
+        // its snapshot, while conn-1's state is unchanged so it is sent
+        // nothing (audit P0-3) — its lastSentAt stays put, and the flush PASS
+        // (what reconciliation reads) still reaches both.
         await registry.flushNow('daemon.metadata');
-        expect(registry.oldestLastSentAt('daemon.metadata')).toBe(5_000);
+        expect(registry.oldestLastSentAt('daemon.metadata')).toBe(1_000);
+        expect(registry.oldestLastFlushedAt('daemon.metadata')).toBe(5_000);
     });
 
     it('drops an entry once its connection is no longer alive (lazy prune on flush)', async () => {
@@ -123,7 +121,6 @@ describe('TopicSubscriptionRegistry.oldestLastFlushedAt (reconciliation reads th
                 daemonMetadataBody: () => ({ daemonId: 'd1', status: {} as any }),
                 sessionModalState: () => modalState as never,
             },
-            chatTail: { isCliSession: () => true, scheduleGate: () => true, onDebouncedFlush: () => {} },
         });
         registry.subscribe('conn-1', { type: 'subscribe', topic: 'session.modal', key: 'modal:1', params: { targetSessionId: 'session-1' } } as any);
         expect(registry.oldestLastFlushedAt('session.modal')).toBe(0);

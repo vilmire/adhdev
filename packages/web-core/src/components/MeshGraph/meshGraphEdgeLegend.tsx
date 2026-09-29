@@ -7,23 +7,19 @@ import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { MeshGraphEdge } from './types'
 
+/**
+ * Edge stroke. Every mesh edge is a neutral line (theme token, resolved as a
+ * CSS var in SVG `style`); the dash pattern tells kinds apart. The only
+ * coloured edge is the needs-follow-up (orphan) link, in the semantic
+ * attention colour — per-kind hues made the map read as a rainbow.
+ */
 export function edgeColor(edge: MeshGraphEdge): string {
-    switch (edge.type) {
-        case 'parentBranch':
-            return '#38bdf8'
-        case 'worktreeLink':
-            return '#a78bfa'
-        case 'sessionLink':
-            return '#34d399'
-        case 'orphanLink':
-            return '#f97316'
-        case 'submoduleLink':
-            return '#c084fc'
-        case 'cloneLink':
-            return '#2dd4bf'
-        default:
-            return '#64748b'
-    }
+    return edge.type === 'orphanLink' ? 'var(--status-warning)' : 'var(--text-muted)'
+}
+
+/** Dash pattern per edge kind — shared by the canvas and the legend. */
+export function edgeDash(type: MeshGraphEdge['type']): string | undefined {
+    return LEGEND_EDGE_DASH[type]
 }
 
 /** Legend rows in display order — only the types present in the graph render. */
@@ -46,9 +42,12 @@ const LEGEND_EDGE_LABEL_KEY: Record<MeshGraphEdge['type'], string> = {
 }
 
 const LEGEND_EDGE_DASH: Partial<Record<MeshGraphEdge['type'], string>> = {
-    orphanLink: '5 4',
-    submoduleLink: '4 3',
+    // parentBranch: solid
     cloneLink: '6 3',
+    worktreeLink: '2 3',
+    submoduleLink: '8 3 2 3',
+    sessionLink: '1 4',
+    orphanLink: '5 4',
 }
 
 /**
@@ -71,8 +70,8 @@ export function MeshGraphEdgeLegend({ edges }: { edges: MeshGraphEdge[] }) {
                     <svg width="18" height="4" aria-hidden>
                         <line
                             x1="0" y1="2" x2="18" y2="2"
-                            stroke={edgeColor({ type } as MeshGraphEdge)}
-                            strokeWidth="2"
+                            style={{ stroke: edgeColor({ type } as MeshGraphEdge) }}
+                            strokeWidth="1.5"
                             strokeDasharray={LEGEND_EDGE_DASH[type]}
                         />
                     </svg>

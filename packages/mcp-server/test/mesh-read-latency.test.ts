@@ -5,6 +5,7 @@ import { meshStatus, meshViewQueue } from '../src/tools/mesh-tools.js';
 import { refreshMeshFromDaemon } from '../src/tools/mesh-tools-internal.js';
 import { __writeTaskStatusForTests, enqueueTask, turnLedgerIpcHandlers, upsertMeshMission } from '@adhdev/daemon-core';
 import { heldMeshStatusResponse } from './helpers/held-node-state.js';
+import { fakeCoordinatorTransport } from './helpers/fake-coordinator-tool-answers.js';
 
 // MCP read-latency pass (2026-09-27). The coordinator's read tools must ask the
 // daemon for exactly what they read, in as few IPC calls as possible, and must
@@ -37,7 +38,7 @@ function buildHarness(opts: { oldDaemon?: boolean; missionSentinel?: boolean; qu
         || (command === 'queue_query' && (args.withCounts !== undefined || args.withDependencyHeads !== undefined))
         || (command === 'active_work_query' && args.includeSchedulingRuntime === true && !args.mesh)
     );
-    const transport: any = {
+    const transport: any = fakeCoordinatorTransport({
         async command(command: string, args: any = {}) {
             const wire = JSON.parse(JSON.stringify(args ?? {}));
             calls.push({ command, args: wire });
@@ -71,7 +72,7 @@ function buildHarness(opts: { oldDaemon?: boolean; missionSentinel?: boolean; qu
         },
         async meshCommand(_daemonId: string, command: string, args: any) { return transport.command(command, args); },
         async ping() { return true; },
-    };
+    });
     const ctx: any = { mesh: JSON.parse(JSON.stringify(mesh)), transport, localDaemonId: 'daemon-coord', localMachineId: 'machine-coord', coordinatorHostname: 'h' };
     const of = (command: string) => calls.filter(c => c.command === command);
     return { meshId, ctx, calls, of };
@@ -162,18 +163,13 @@ test('mesh_view_queue compact: active rows + daemon counts only; the queue never
     assert.equal(filtered.visibleHistoricalCount, 3);
 });
 
-test('an older daemon (rejects the new request keys) still gets complete answers', async () => {
+test('an older daemon (rejects the new request keys) still gets complete mesh_view_queue answers', async () => {
+    // mesh_status is ONE mesh_status_view the coordinator composes itself (P1-6) —
+    // no MCP-side request-shape fallbacks remain for it.
     const h = buildHarness({ oldDaemon: true });
-    upsertMeshMission(h.meshId, { title: 'live mission', goal: 'g', status: 'active' });
     enqueueTask(h.meshId, 'pending task', { difficulty: 'medium' } as any);
     const t = enqueueTask(h.meshId, 'done', { difficulty: 'medium' } as any);
     __writeTaskStatusForTests(h.meshId, t.id, 'completed');
-
-    const status = JSON.parse(await meshStatus(h.ctx));
-    assert.equal(status.missions?.[0]?.title, 'live mission');
-    assert.ok(status.nodes.every((n: any) => n.scheduling), 'scheduling via the mesh-carrying retry');
-    const verbose = JSON.parse(await meshStatus(h.ctx, { verbose: true }));
-    assert.ok(verbose.missions?.[0]?.stats, 'per-mission stats fallback');
 
     const queue = JSON.parse(await meshViewQueue(h.ctx, {}));
     assert.equal(queue.success, true);

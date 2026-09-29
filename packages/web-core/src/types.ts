@@ -5,7 +5,6 @@
 import type {
     AgentSessionStream,
     BeaconDiagnosticsSummary,
-    FleetStatusPeerView,
     MachineInfo,
     DetectedIdeInfo,
     WorkspaceEntry,
@@ -19,6 +18,7 @@ import type {
     RuntimeAttachedClient,
     TerminalBackendStatus,
     MessageInputSupport,
+    StatusReportPayload,
 } from '@adhdev/daemon-core';
 import type { InteractivePrompt } from '@adhdev/daemon-core';
 
@@ -47,8 +47,6 @@ export type {
     AcpMode,
     StatusReportPayload,
     BeaconDiagnosticsSummary,
-    FleetStatusPeerEntry,
-    FleetStatusPeerView,
     MachineInfo,
     DetectedIdeInfo,
     WorkspaceEntry,
@@ -197,8 +195,8 @@ export interface BaseDaemonData {
      * routing metadata, and the cloud is not supposed to know it.
      */
     beacon?: BeaconDiagnosticsSummary;
-    /** Latest fixed-key fleet.status entries observed by this daemon over SUB. */
-    fleetStatusPeerView?: FleetStatusPeerView;
+    /** Cloud daemon screenshot budget (remote view toolbar). */
+    screenshotUsage?: StatusReportPayload['screenshotUsage'];
     machineNickname?: string | null;
     machineId?: string | null;
     sessionCapabilities?: string[];

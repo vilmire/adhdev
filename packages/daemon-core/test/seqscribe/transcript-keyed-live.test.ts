@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Channel, LogEntry, Row, TailSource } from 'seqscribe';
-import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { openSeqscribeNode, type SeqscribeNodeHandle } from '../../src/seqscribe/node.js';
 import { sessionChatTopic } from '../../src/seqscribe/topics.js';
 import { CHAT_COMMIT_KIND, CHAT_MSG_KIND } from '../../src/seqscribe/transcript-keyed-codec.js';
@@ -13,7 +13,6 @@ import {
     readPersistedChatTopic,
     transcriptChatRuntimeCounters,
 } from '../../src/seqscribe/transcript-keyed-publish-runtime.js';
-import { __resetTranscriptParityForTests, transcriptParityCounters } from '../../src/seqscribe/transcript-parity.js';
 import { TranscriptProjectionService } from '../../src/seqscribe/transcript-publisher.js';
 import { TranscriptReplicaStore } from '../../src/seqscribe/transcript-replica-store.js';
 import { selectChatTailSnapshot } from '../../src/seqscribe/transcript-tail-snapshot.js';
@@ -36,10 +35,6 @@ const handles: SeqscribeNodeHandle[] = [];
 afterAll(async () => {
     for (const h of handles) await h.close().catch(() => {});
     for (const d of tmpDirs) rmSync(d, { recursive: true, force: true });
-});
-
-afterEach(() => {
-    delete process.env.ADHDEV_TRANSCRIPT_PARITY_SAMPLE_MS;
 });
 
 function freshDir(name: string): string {
@@ -84,7 +79,6 @@ function service(node: SeqscribeNodeHandle, epoch: string): TranscriptProjection
         appendChatFrame: (sessionId, frame, obs) => chat.appendChatFrame(sessionId, frame, obs),
         readPersistedChat: (sessionId) => chat.readPersistedChat(sessionId),
     });
-    vi.spyOn(svc, 'mode').mockReturnValue('primary');
     return svc;
 }
 
@@ -104,9 +98,7 @@ function transcript(n: number, last = ''): BubbleSpec[] {
 const TOPIC = sessionChatTopic(SESSION);
 
 describe('keyed chat lane over real nodes', () => {
-    it('publishes keyed frames; a subscriber folds SNAP + DELTA into the same view; parity is clean', async () => {
-        __resetTranscriptParityForTests();
-        process.env.ADHDEV_TRANSCRIPT_PARITY_SAMPLE_MS = '0';
+    it('publishes keyed frames; a subscriber folds SNAP + DELTA into the same view', async () => {
         const server = openNode(freshDir('srv'));
         const client = openNode(freshDir('cli'));
         const svc = service(server, 'epoch-live');
@@ -116,8 +108,6 @@ describe('keyed chat lane over real nodes', () => {
         expect(svc.getCounters().published).toBe(21);
         // Every streaming tick after the first wrote one head + commit.
         expect(svc.getCounters().chatRowsWritten).toBe(32 + 20 * 2);
-        expect(transcriptParityCounters()).toMatchObject({ mismatches: 0, persistentMismatches: 0 });
-        expect(transcriptParityCounters().runs).toBeGreaterThanOrEqual(21);
 
         const [sChan, cChan] = channelPair();
         server.node.attach(sChan, { peerId: 'cli', peerClass: 'content', grants: { [TOPIC]: 'serve' } });

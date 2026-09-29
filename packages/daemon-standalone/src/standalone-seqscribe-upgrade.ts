@@ -26,13 +26,6 @@ import type { IncomingMessage } from 'http';
 /** The JSON dashboard lane. The replica lane's path comes from daemon-core (`STANDALONE_SEQSCRIBE_WS_PATH`). */
 export const STANDALONE_DASHBOARD_WS_PATH = '/ws';
 
-/** Kill switch: `ADHDEV_STANDALONE_TRANSCRIPT_LANE=off` refuses the replica lane (dashboard stays on legacy chat-tail). */
-export const STANDALONE_TRANSCRIPT_LANE_ENV = 'ADHDEV_STANDALONE_TRANSCRIPT_LANE';
-
-export function isStandaloneTranscriptLaneDisabled(env: NodeJS.ProcessEnv): boolean {
-  return env[STANDALONE_TRANSCRIPT_LANE_ENV]?.trim().toLowerCase() === 'off';
-}
-
 export interface StandaloneUpgradeGate {
   isAllowedOrigin(req: IncomingMessage): boolean;
   isRequestAuthenticated(req: IncomingMessage, rawUrl: string): boolean;

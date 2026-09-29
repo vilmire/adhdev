@@ -180,7 +180,7 @@ function assertNoLegacyTableAndReadersWork(store: MeshRuntimeStore): void {
 
     // Stage 6 over whatever open mesh attempt the DB holds.
     const open = store.turnStore().listOpenAttempts().find((a) => a.scope !== 'plain');
-    const p = resolveSessionTurnPresentation({ sessionId: open?.sessionId ?? `sess-${randomUUID().slice(0, 6)}`, legacyStatus: 'idle', surface: 'session_status' });
+    const p = resolveSessionTurnPresentation({ sessionId: open?.sessionId ?? `sess-${randomUUID().slice(0, 6)}`, providerStatus: 'idle', surface: 'session_status' });
     expect(p.authority).toBe(open ? 'turn_reducer' : 'provider_fsm_fallback');
 
     const meshIds = new Set<string>([

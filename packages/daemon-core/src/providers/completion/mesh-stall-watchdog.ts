@@ -199,7 +199,7 @@ export function runMeshStallTick(host: MeshStallHost, now: number): void {
     // (TURN-PRESENTATION Stage 6) Causal attempt evidence outranks the PTY quiet clock.
     const turnPresentation = resolveSessionTurnPresentation({
         sessionId: host.instanceId,
-        legacyStatus: observedStatus,
+        providerStatus: observedStatus,
         providerType: host.type,
         surface: 'stall_watchdog',
         nowMs: now,

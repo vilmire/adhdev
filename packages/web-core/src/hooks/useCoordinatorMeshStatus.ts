@@ -3,15 +3,14 @@
  * (utils/coordinator-mesh-status-store.ts).
  *
  * `useCoordinatorMeshStatusSnapshot` only reads. `useCoordinatorMeshStatus`
- * also drives reads, with exactly these triggers:
- *   - mount / mesh or coordinator change → refresh:false
- *   - the coordinator's mesh revision advancing → refresh:false
- *   - a slow backstop tick (visible tab only) → refresh:false
- *   - `refresh()` (an explicit user click) → refresh:true
- * No retry loops: node freshness is reported by the coordinator itself
- * (gitObservation / heldRuntime age + refreshing), not chased from the browser.
+ * also keeps the store current, with exactly these writers:
+ *   - the coordinator's `mesh.status` push (snapshot on subscribe, keyed
+ *     deltas after — useMeshStatusSubscription);
+ *   - `refresh()` / `reload()` — an explicit user action only.
+ * No polls, no backstop ticks, no retry loops: node freshness is reported by
+ * the coordinator itself (gitObservation / heldRuntime age + refreshing).
  */
-import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
+import { useCallback, useRef, useSyncExternalStore } from 'react'
 import type { RepoMeshStatus } from '@adhdev/daemon-core'
 import {
     getCoordinatorMeshStatusSnapshot,
@@ -20,7 +19,7 @@ import {
     type CoordinatorMeshStatusLoader,
     type CoordinatorMeshStatusSnapshot,
 } from '../utils/coordinator-mesh-status-store'
-import { useMeshStateRevisionRefresh } from './useMeshStateRevisionRefresh'
+import { useMeshStatusSubscription } from './useMeshStatusSubscription'
 
 const noopSubscribe = () => () => {}
 
@@ -33,9 +32,6 @@ export function useCoordinatorMeshStatusSnapshot(meshId: string | null | undefin
     return useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
 }
 
-/** Default slow backstop for surfaces that also receive revision pushes. */
-export const COORDINATOR_MESH_STATUS_BACKSTOP_MS = 60_000
-
 export interface UseCoordinatorMeshStatusArgs {
     meshId: string | null
     /** The mesh's coordinator daemon; nothing is read without one. */
@@ -43,7 +39,6 @@ export interface UseCoordinatorMeshStatusArgs {
     load: CoordinatorMeshStatusLoader | null
     extract?: (response: unknown) => RepoMeshStatus | null
     sendData?: (daemonId: string, data: any) => boolean
-    backstopMs?: number
 }
 
 export function useCoordinatorMeshStatus({
@@ -52,7 +47,6 @@ export function useCoordinatorMeshStatus({
     load,
     extract,
     sendData,
-    backstopMs = COORDINATOR_MESH_STATUS_BACKSTOP_MS,
 }: UseCoordinatorMeshStatusArgs) {
     const snapshot = useCoordinatorMeshStatusSnapshot(meshId)
     const loadRef = useRef(load)
@@ -66,28 +60,7 @@ export function useCoordinatorMeshStatus({
         return loadCoordinatorMeshStatus({ meshId, daemonId, refresh, load: loader, extract: extractRef.current })
     }, [meshId, daemonId])
 
-    useEffect(() => {
-        void read(false)
-    }, [read])
-
-    useMeshStateRevisionRefresh({
-        daemonIds: useMemo(() => (daemonId ? [daemonId] : []), [daemonId]),
-        meshId,
-        sendData,
-        onRevisionAdvance: () => {
-            if (typeof document !== 'undefined' && document.hidden) return
-            void read(false)
-        },
-    })
-
-    useEffect(() => {
-        if (!meshId || !daemonId || backstopMs <= 0) return
-        const timer = setInterval(() => {
-            if (typeof document !== 'undefined' && document.hidden) return
-            void read(false)
-        }, backstopMs)
-        return () => clearInterval(timer)
-    }, [meshId, daemonId, backstopMs, read])
+    useMeshStatusSubscription({ meshId, daemonId, sendData })
 
     const refresh = useCallback(() => read(true), [read])
     const reload = useCallback(() => read(false), [read])

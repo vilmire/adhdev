@@ -11,11 +11,11 @@ import { LOG } from '../logging/logger.js';
 import type { MeshGraphRetentionCounts } from './mesh-graph-store.js';
 import {
     resolveGraphOutboxRetentionMs,
-    resolveGraphRetentionEnforce,
     resolveGraphRetentionMs,
     resolveTurnAttemptRetentionMs,
 } from './mesh-retention-config.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
+import { meshTopicIndexFor } from './mesh-topic-index.js';
 
 // ─── Mesh runtime retention windows (SoT 1-11 (b) / gap I-10) ────────────────
 // mesh-runtime.db had lifecycle GC only for the legacy pending-event inbox and
@@ -41,17 +41,21 @@ import { MeshRuntimeStore } from './mesh-runtime-store.js';
 //   - Terminal graphs 30 days (lifecycle retention Slice 3), cascading across all
 //     seven graph control-plane tables, plus a separate 14-day sweep over
 //     delivered/failed outbox rows. The graph tables previously had no GC at all.
-//     Both windows are env-tunable and both default to OBSERVE mode: they report
-//     the rows they WOULD delete and delete nothing until
-//     MESH_GRAPH_RETENTION_ENFORCE is set, because the graph schema carries no
-//     foreign keys, so a missed table would orphan rows silently. Selection rules
-//     and the workspace/outbox exceptions live in
-//     MeshGraphStore.pruneTerminalGraphs / pruneTerminalOutbox.
+//     Both windows are env-tunable and always ENFORCED (the former observe-only
+//     MESH_GRAPH_RETENTION_ENFORCE switch was removed 2026-09-29 — preview owner
+//     rule: one behavior, no transition switches). Selection rules and the
+//     workspace/outbox exceptions live in MeshGraphStore.pruneTerminalGraphs /
+//     pruneTerminalOutbox.
+//   - Mesh topic index (`mesh_topic_index`, the SQL read model of the
+//     `mesh.<id>.events` topic) 30 days by `at_ms` — see MeshTopicIndex.pruneOlderThan.
+//   - Non-graph `mesh_task_outputs` ride the terminal-queue prune (same window,
+//     same transaction) — see pruneTerminalQueueEntriesDetailed.
 // No VACUUM here by design: reclaiming file pages is not worth stalling the daemon's
 // single writer; freed pages are reused by future inserts.
 export const MESH_LOCAL_RECORD_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;   // 30 days
 export const MESH_TOOL_CALL_LOG_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;  // 14 days
 export const MESH_TERMINAL_QUEUE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+export const MESH_TOPIC_INDEX_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;     // 30 days
 
 /**
  * Periodic retention sweep for the mesh-runtime.db tables that previously had no
@@ -67,6 +71,8 @@ export function pruneMeshRuntimeRetention(): {
     localRecords: number;
     toolCalls: number;
     terminalQueue: number;
+    taskOutputs: number;
+    topicIndex: number;
     turnAttempts: number;
     graph: MeshGraphRetentionCounts;
 } {
@@ -74,10 +80,11 @@ export function pruneMeshRuntimeRetention(): {
         const store = MeshRuntimeStore.getInstance();
         const localRecords = store.localRecordStore().prune(MESH_LOCAL_RECORD_RETENTION_MS);
         const toolCalls = store.pruneToolCallLog(MESH_TOOL_CALL_LOG_RETENTION_MS);
-        const terminalQueue = store.pruneTerminalQueueEntries(MESH_TERMINAL_QUEUE_RETENTION_MS);
+        const { queue: terminalQueue, taskOutputs } = store.pruneTerminalQueue(MESH_TERMINAL_QUEUE_RETENTION_MS);
+        const topicIndex = meshTopicIndexFor(store.db).pruneOlderThan(Date.now() - MESH_TOPIC_INDEX_RETENTION_MS);
         const turn = store.transaction(() => store.turnStore().pruneTerminalMeshAttempts(resolveTurnAttemptRetentionMs(), Date.now()));
-        if (localRecords + toolCalls + terminalQueue + turn.attempts > 0) {
-            LOG.info('MeshRuntimeStore', `Retention prune removed ${localRecords} local-record / ${toolCalls} tool-call / ${terminalQueue} terminal-queue / ${turn.attempts} mesh turn-attempt (+${turn.events} turn-event, +${turn.holds} hold) row(s)`);
+        if (localRecords + toolCalls + terminalQueue + taskOutputs + topicIndex + turn.attempts > 0) {
+            LOG.info('MeshRuntimeStore', `Retention prune removed ${localRecords} local-record / ${toolCalls} tool-call / ${terminalQueue} terminal-queue (+${taskOutputs} task-output) / ${topicIndex} topic-index / ${turn.attempts} mesh turn-attempt (+${turn.events} turn-event, +${turn.holds} hold) row(s)`);
         }
         // Slice 3 — graph control-plane retention. Deliberately its own try/catch
         // and its own log line: it is the newest and by far the widest-blast-radius
@@ -89,13 +96,15 @@ export function pruneMeshRuntimeRetention(): {
             localRecords,
             toolCalls,
             terminalQueue,
+            taskOutputs,
+            topicIndex,
             turnAttempts: turn.attempts,
             graph,
         };
     } catch (e: any) {
         LOG.warn('MeshRuntimeStore', `Runtime retention prune failed: ${e?.message || e}`);
         return {
-            localRecords: 0, toolCalls: 0, terminalQueue: 0, turnAttempts: 0,
+            localRecords: 0, toolCalls: 0, terminalQueue: 0, taskOutputs: 0, topicIndex: 0, turnAttempts: 0,
             graph: emptyGraphRetentionCounts(),
         };
     }
@@ -105,35 +114,27 @@ function emptyGraphRetentionCounts(): MeshGraphRetentionCounts {
     return {
         graphs: 0, nodes: 0, edges: 0, outputs: 0, gates: 0,
         workspaceIntents: 0, outbox: 0, skippedGraphs: 0,
-        enforced: false,
     };
 }
 
 /**
  * Graph-side half of the retention sweep (lifecycle Slice 3): the terminal-graph
  * seven-table cascade plus the independent delivered/failed outbox window.
- *
- * Both calls honour MESH_GRAPH_RETENTION_ENFORCE, which is OFF by default — so
- * what this normally does is COUNT and log, deleting nothing. The log line names
- * the mode explicitly ('observe' vs 'enforce') so a live operator reading it can
- * never mistake a would-delete count for rows that actually went away; those
- * observed counts are the evidence for the later, separate commit that flips the
- * default. Counts are row counts only — content-free.
+ * Always enforced. The log line reports row counts only — content-free.
  */
 function pruneMeshGraphRetention(store: MeshRuntimeStore): MeshGraphRetentionCounts {
     try {
-        const enforce = resolveGraphRetentionEnforce();
         const graphStore = store.graphStore();
-        const counts = graphStore.pruneTerminalGraphs(resolveGraphRetentionMs(), { enforce });
+        const counts = graphStore.pruneTerminalGraphs(resolveGraphRetentionMs());
         // Cross-graph sweep: folded into the same `outbox` tally because both
         // reach the one table, and the cascade has already removed the rows
-        // belonging to pruned graphs by this point (in enforce mode), so the two
-        // numbers cannot double-count the same row.
-        counts.outbox += graphStore.pruneTerminalOutbox(resolveGraphOutboxRetentionMs(), { enforce });
+        // belonging to pruned graphs by this point, so the two numbers cannot
+        // double-count the same row.
+        counts.outbox += graphStore.pruneTerminalOutbox(resolveGraphOutboxRetentionMs());
         const total = counts.graphs + counts.nodes + counts.edges + counts.outputs
             + counts.gates + counts.workspaceIntents + counts.outbox;
         if (total > 0 || counts.skippedGraphs > 0) {
-            LOG.info('MeshRuntimeStore', `Graph retention ${enforce ? 'enforce' : 'observe'}: ${counts.graphs} graph / ${counts.nodes} node / ${counts.edges} edge / ${counts.outputs} output / ${counts.gates} gate / ${counts.workspaceIntents} workspace-intent / ${counts.outbox} outbox row(s)${enforce ? ' removed' : ' would be removed'}, ${counts.skippedGraphs} graph(s) held back`);
+            LOG.info('MeshRuntimeStore', `Graph retention: ${counts.graphs} graph / ${counts.nodes} node / ${counts.edges} edge / ${counts.outputs} output / ${counts.gates} gate / ${counts.workspaceIntents} workspace-intent / ${counts.outbox} outbox row(s) removed, ${counts.skippedGraphs} graph(s) held back`);
         }
         return counts;
     } catch (e: any) {

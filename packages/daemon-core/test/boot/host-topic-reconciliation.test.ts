@@ -233,26 +233,20 @@ describe('subscribeHostTopicReconciliation', () => {
         off();
     });
 
-    it('(c\') a mesh_state edge with no daemon.metadata flush WARNs for daemon.metadata only', () => {
+    it('(c\') a mesh_state edge is not judged — it flushes only the named mesh\'s mesh.status, never daemon.metadata', () => {
         const bus = createSessionLifecycleBus();
         const warn = vi.spyOn(LOG, 'warn').mockImplementation(() => {});
-        const edgeAt = now;
         const { topics } = fakeTopics({
             subscribed: new Set(['daemon.metadata', 'session.modal']),
             lastSentAt: new Map([['daemon.metadata', 0]]),
         });
 
         const off = subscribeHostTopicReconciliation(bus, topics as any, { now: nowFn, setIntervalFn: fakeSetInterval, clearIntervalFn: fakeClearInterval });
-        bus.emit({ kind: 'mesh_state', at: edgeAt, meshId: 'mesh_a' });
+        bus.emit({ kind: 'mesh_state', at: now, meshId: 'mesh_a' });
         now += DEFAULT_HOST_RECONCILE_INTERVAL_MS;
         tick();
 
-        expect(warn).toHaveBeenCalledTimes(1);
-        const [category, message] = warn.mock.calls[0]!;
-        expect(category).toBe('HostRuntime');
-        expect(message).toContain('daemon.metadata');
-        expect(message).not.toContain('session.modal has subscribers');
-        expect(message).toMatch(/newest daemon\.metadata edge \(mesh_state\)/);
+        expect(warn).not.toHaveBeenCalled();
         off();
     });
 

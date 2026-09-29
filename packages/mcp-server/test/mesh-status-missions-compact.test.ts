@@ -11,6 +11,7 @@ import { __clearMeshPendingEventsForTests } from './helpers/pending-notices.js';
 import { MeshRuntimeStore } from '../../daemon-core/src/mesh/mesh-runtime-store.js';
 
 import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
+import { fakeCoordinatorTransport } from './helpers/fake-coordinator-tool-answers.js';
 // Compact mesh_status used to inline every live mission PLUS up to 10 history
 // missions in full (goalPreview + tasks + a per-mission stats rollup) on every
 // poll, which dominated the payload and pushed mesh_status past the MCP token
@@ -45,7 +46,7 @@ function buildCtx(meshId: string) {
     if (command === 'get_status_metadata') return { success: true, status: { sessions: [] } };
     return { success: true };
   };
-  const transport: any = {};
+  const transport: any = fakeCoordinatorTransport();
   transport.command = async (c: string, __ipcArgs?: Record<string, unknown>) => { if (isTurnIpcCommand(c)) return answerTurnIpc(c, __ipcArgs ?? {}); return responder(c); };
   transport.meshCommand = async (_d: string, c: string) => responder(c);
   return { ctx: { mesh, transport, localDaemonId: 'daemon-A', localMachineId: 'machine-A', coordinatorHostname: 'h' } };

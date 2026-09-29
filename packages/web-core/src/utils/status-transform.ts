@@ -179,10 +179,7 @@ export function statusPayloadToEntries(
         // Sparse metadata payloads omit the field and still preserve an existing
         // good value through the leading existingDaemon spread.
         ...(payload.beacon && { beacon: beaconSourceMatches ? payload.beacon : undefined }),
-        // Phase 4 Stage 2 receive-side cross-check. Also P2P-only by
-        // construction; an empty view is meaningful and must overwrite an
-        // older non-empty view after the last SUB peer disconnects.
-        ...(payload.fleetStatusPeerView && { fleetStatusPeerView: payload.fleetStatusPeerView }),
+        ...(payload.screenshotUsage !== undefined && { screenshotUsage: payload.screenshotUsage }),
         _sessionListAuthoritative: Array.isArray(payload.sessions),
         cdpConnected: ideSessions.some((session) => !!session.cdpConnected),
     } as DaemonData)

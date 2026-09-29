@@ -6,11 +6,11 @@
  * (same rule the old canvas's stat chips followed).
  */
 import { useTranslation } from 'react-i18next'
-import type { MeshGraphTheme } from './meshGraphTheme'
+import { meshToggleChipClass, type MeshGraphTheme } from './meshGraphTheme'
 import type { BlueprintGroupCounts } from './useBlueprintGroups'
 import type { BlueprintScope } from './BlueprintScopeChips'
 
-export default function BlueprintStatusBar({ counts, scope, onToggle, meshTheme }: {
+export default function BlueprintStatusBar({ counts, scope, onToggle }: {
     counts: BlueprintGroupCounts
     scope: BlueprintScope
     onToggle: (key: keyof BlueprintScope) => void
@@ -22,11 +22,9 @@ export default function BlueprintStatusBar({ counts, scope, onToggle, meshTheme 
             type="button"
             aria-pressed={active}
             onClick={onClick}
-            className={`shrink-0 whitespace-nowrap rounded-full border px-2 py-0.5 text-3xs font-medium transition-colors ${urgent
-                ? (meshTheme.isDark ? 'border-amber-400/30 bg-amber-500/10 text-amber-200 hover:bg-amber-500/20' : 'border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100')
-                : active
-                    ? (meshTheme.isDark ? 'border-white/15 bg-white/[0.07] text-slate-200 hover:bg-white/[0.12]' : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50')
-                    : (meshTheme.isDark ? 'border-white/8 bg-transparent text-slate-500 hover:bg-white/[0.05]' : 'border-slate-200 bg-transparent text-slate-400 hover:bg-slate-50')}`}
+            className={urgent
+                ? `inline-flex h-6 shrink-0 items-center whitespace-nowrap rounded-full border border-status-warning/40 px-2.5 text-3xs font-medium leading-none text-status-warning transition-colors hover:bg-bg-glass-hover ${active ? '' : 'opacity-70'}`
+                : meshToggleChipClass(active)}
         >
             {label}
         </button>

@@ -17,14 +17,13 @@ import { useDaemons } from '../../compat';
 import { unwrapCommandResult } from '../../hooks/useDashboardConversationCommands';
 import { buildChatDebugBundleClipboardText, buildChatDebugBundleToastMessage, buildChatFrontendDebugSnapshot, copyChatDebugBundleTextToClipboard, recordControlsToggleDebugGesture, type ControlsToggleDebugGestureState } from './chat-debug-bundle';
 import { eventManager } from '../../managers/EventManager';
-import { getConversationViewStates } from './DashboardMobileChatShared';
+import { getChatPaneFirstViewState, getConversationViewStates } from './DashboardMobileChatShared';
 import type { ToolExpandFailureReason, ToolExpandState } from '../ChatMessageList/chatMessageBubbles';
 import type { ActiveConversation, DashboardMessage } from './types';
 import type { DaemonData } from '../../types';
 import { useDaemonMetadataLoader } from '../../hooks/useDaemonMetadataLoader';
 import { useDevRenderTrace } from '../../hooks/useDevRenderTrace';
 import { IconChat, IconEye, IconFolder, IconPlug, IconSpinner } from '../Icons';
-import { InfoTip } from '../ui/InfoTip';
 import {
     getMessageTimestamp,
 } from './message-utils';
@@ -36,11 +35,9 @@ import {
     getCoordinatorRoutingHint,
 } from './conversation-selectors';
 import { getConversationSendBlockMessage, getConversationSendBlockedPlaceholder } from '../../hooks/dashboardCommandUtils'
-import { getDefaultChatTailHydrateLimit, getDefaultVisibleLiveMessages, getRememberedVisibleLiveCount, rememberVisibleLiveCount } from './chat-visibility';
-import { useSessionChatTailController } from './session-chat-tail-controller';
-import { useReplicaDegradedBannerVisible } from './replica-degraded-banner';
-import { buildTranscriptReadSourceAttributes } from './transcript-chat-pane-adapter';
-import { getInstallBaseForHost, PREVIEW_INSTALL_BASE } from '../../utils/install-base';
+import { getDefaultVisibleLiveMessages, getRememberedVisibleLiveCount, rememberVisibleLiveCount } from './chat-visibility';
+import { useSessionChatController } from './session-chat-controller';
+import { buildTranscriptPaneAttributes } from './transcript-chat-pane-adapter';
 import { buildVisibleConversationMessages, getConversationLiveMessages, withPendingLocalMessages, type PendingLocalMessage } from './conversation-message-snapshot';
 import { shouldShowOpenPanelAction } from './dashboardSessionCapabilities';
 import { publishChatTyping } from './chat-typing-indicator-store';
@@ -106,31 +103,21 @@ const LIVE_MESSAGE_PAGE_SIZE = 60;
 const PENDING_QUEUE_STALE_SWEEP_INTERVAL_MS = 30_000;
 
 /**
- * (CHAT-TAB-SWITCH-STALE-FALLBACK ①) Build the chat-tail controller options for
- * a pane, splitting SUBSCRIPTION lifetime from REFRESH gating.
- *
- * `isVisible` is dockview PANEL visibility — it flips on every session-tab
- * switch, not only when the browser tab is backgrounded. Gating `enabled` on it
- * tore the controller down, which emptied the live snapshot
- * (`hasLiveSnapshot: false`) and made `getConversationLiveMessages` fall back to
- * the stale status-meta `conversation.messages` list for a beat before the
- * re-pull caught up. The subscription therefore stays up while hidden (it is
- * refcounted and shared through the module-level controller registry, so a
- * hidden pane normally rides an instance the warm-controller pass already
- * retains) and only the authoritative re-pull is gated on visibility.
+ * (CHAT-TAB-SWITCH-STALE-FALLBACK ①) Build the chat controller options for a
+ * pane. `isVisible` is dockview PANEL visibility — it flips on every
+ * session-tab switch — and deliberately does NOT gate `enabled`: tearing the
+ * controller down while a pane is merely hidden would empty the live snapshot
+ * and flash the stale status-meta `conversation.messages` list on return. The
+ * controller is refcounted and shared through the module-level registry, so a
+ * hidden pane keeps its keyed view.
  *
  * Exported for the regression test: this is the whole of the decision.
  */
-export function buildChatPaneTailControllerOptions(options: {
+export function buildChatPaneControllerOptions(options: {
     sessionId?: string;
     isVisible: boolean;
-    tailLimit: number;
-}): { enabled: boolean; refreshEnabled: boolean; tailLimit: number } {
-    return {
-        enabled: !!options.sessionId,
-        refreshEnabled: options.isVisible,
-        tailLimit: options.tailLimit,
-    };
+}): { enabled: boolean } {
+    return { enabled: !!options.sessionId };
 }
 
 export function buildBusyChatInputStatusMessage(
@@ -149,13 +136,6 @@ export function buildBusyChatInputStatusMessage(
     return null
 }
 
-/**
- * (dev/preview diagnostics) True only on surfaces where internal diagnostic
- * detail may be shown: a dev build, or any preview host. Uses web-core's
- * canonical preview-surface classifier (every host that is not a production
- * web host), so the degraded-replica banner's reason suffix can never leak
- * into the production wording.
- */
 /**
  * (TOOL-EXPAND) The five refusal reasons the daemon may return, as an
  * allow-list.
@@ -177,27 +157,6 @@ const TOOL_EXPAND_FAILURE_REASONS: readonly ToolExpandFailureReason[] = [
 /** Narrow a daemon-supplied reason to the known taxonomy; undefined otherwise. */
 export function toExpandFailureReason(value: unknown): ToolExpandFailureReason | undefined {
     return TOOL_EXPAND_FAILURE_REASONS.find(reason => reason === value);
-}
-
-function isDevOrPreviewSurface(): boolean {
-    if ((import.meta as any).env?.DEV) return true
-    if (typeof window === 'undefined') return false
-    return getInstallBaseForHost(window.location.hostname) === PREVIEW_INSTALL_BASE
-}
-
-/**
- * (dev/preview diagnostics) The reason suffix appended to the degraded-replica
- * banner — `' (no_node)'` — or `''` whenever the surface is production or the
- * controller has no reason. Pure so the production-suppression rule is
- * directly testable; the reason is a closed-union label from the controller
- * snapshot, never content.
- */
-export function buildReplicaDegradedReasonSuffix(
-    reason: string | undefined,
-    devOrPreviewSurface: boolean,
-): string {
-    if (!devOrPreviewSurface || !reason) return ''
-    return ` (${reason})`
 }
 
 export default function ChatPane({
@@ -288,31 +247,12 @@ export default function ChatPane({
     const defaultVisibleLiveMessages = getDefaultVisibleLiveMessages({
         isCliLike: controlsContext.isCli || controlsContext.isAcp,
     })
-    const defaultChatTailHydrateLimit = getDefaultChatTailHydrateLimit({
-        isCliLike: controlsContext.isCli || controlsContext.isAcp,
-    })
-    // (CHAT-TAB-SWITCH-STALE-FALLBACK) `isVisible` here is DOCKVIEW PANEL
-    // visibility, not browser-tab visibility — it flips on every session-tab
-    // switch. It must not gate `enabled`: dropping the controller empties the
-    // live snapshot, and the pane then renders the stale status-meta
-    // `conversation.messages` fallback for a beat before the re-pull catches up
-    // (the reported "old messages, then it catches up, feels jumpy"). Keep the
-    // subscription — it is refcounted and shared through the module-level
-    // controller registry, so a hidden pane usually rides an instance
-    // `useWarmSessionChatTailControllers` already retains — and gate only the
-    // per-visibility authoritative re-pull.
-    const chatTailState = useSessionChatTailController(activeConv, buildChatPaneTailControllerOptions({
+    // The keyed chat lane is the pane's only live source; see
+    // `buildChatPaneControllerOptions` for why panel visibility does not gate it.
+    const chatState = useSessionChatController(activeConv, buildChatPaneControllerOptions({
         sessionId: activeConv.sessionId,
         isVisible,
-        tailLimit: defaultChatTailHydrateLimit,
     }))
-    // Display-only: the controller flag still flips immediately. The banner
-    // waits out a short grace so a replica that re-attaches after a transport
-    // bounce never flashes the notice. See `replica-degraded-banner.ts`.
-    const showReplicaDegradedBanner = useReplicaDegradedBannerVisible(
-        chatTailState.transcriptReplicaDegraded,
-        activeConv.tabKey,
-    )
 
     const [visibleLiveCount, setVisibleLiveCount] = useState(
         () => getRememberedVisibleLiveCount(activeConv.tabKey, defaultVisibleLiveMessages),
@@ -320,9 +260,9 @@ export default function ChatPane({
     const [showActivityMessages, setShowActivityMessages] = useState(() => readChatActivityVisiblePreference());
 
     const tabKey = activeConv.tabKey;
-    const historyMessages = chatTailState.historyMessages;
-    const hasMoreHistory = chatTailState.hasMoreHistory;
-    const loadError = chatTailState.historyError;
+    const historyMessages = chatState.historyMessages;
+    const hasMoreHistory = chatState.hasMoreHistory;
+    const loadError = chatState.historyError;
     // (OPTIMISTIC-USER-BUBBLE) Layer the owner's just-sent message on top of the
     // live tail so it appears immediately instead of after the daemon round trip
     // (which, on a busy agent, waits for the send queue to drain). It is retired
@@ -330,11 +270,9 @@ export default function ChatPane({
     // `withPendingLocalMessage` for the dedup contract.
     //
     // ★ Applied HERE rather than inside the controller deliberately: the
-    // controller's window is a single-authority, last-writer-wins projection of
-    // the daemon's transcript, and injecting a client-authored row into it would
-    // be wiped by the next update AND would corrupt the shrink-defense/dedup
-    // signatures computed over it. This is a render-time overlay, so the
-    // controller's contract is untouched.
+    // controller's window is the daemon's committed keyed view, and injecting a
+    // client-authored row into it would be wiped by the next frame. This is a
+    // render-time overlay, so the controller's contract is untouched.
     //
     // (QUEUE-PINNED-COMPOSER) PARKED bodies are excluded here and rendered by
     // `PendingQueueStrip` above the composer instead. Appending them to the tail
@@ -350,7 +288,16 @@ export default function ChatPane({
     // overlaid, is kept separate because it — and only it — is valid evidence that
     // a body was delivered. Matching echoes against the overlaid list would let a
     // pending entry match ITSELF and retire on the frame it was created.
-    const daemonLiveMessages = getConversationLiveMessages(activeConv, chatTailState);
+    const daemonLiveMessages = getConversationLiveMessages(activeConv, chatState);
+    // Before the keyed lane's first committed view: a neutral loading state,
+    // and the typing bubble only when the status source really says
+    // `generating` (see `getChatPaneFirstViewState`).
+    const firstViewState = getChatPaneFirstViewState({
+        status: activeConv.status,
+        connectionState: activeConv.connectionState,
+        hasLiveSnapshot: chatState.hasLiveSnapshot,
+        visibleMessageCount: daemonLiveMessages.length,
+    });
     const liveMessages = withPendingLocalMessages(
         daemonLiveMessages,
         // MULTI-QUEUE: prefer the full list; fall back to the single-entry prop
@@ -448,11 +395,11 @@ export default function ChatPane({
         }
         setIsLoadingMore(true);
         try {
-            await chatTailState.loadHistoryPage()
+            await chatState.loadHistoryPage()
         } finally {
             setIsLoadingMore(false);
         }
-    }, [chatTailState, isLoadingMore, liveMessages.length, tabKey, visibleLiveCount]);
+    }, [chatState, isLoadingMore, liveMessages.length, tabKey, visibleLiveCount]);
 
     const { allMessages, receivedAtMap } = useMemo(() => {
         const visibleMessages = buildVisibleConversationMessages({
@@ -589,9 +536,9 @@ export default function ChatPane({
             controls: controlsContext.targetEntry?.providerControls,
             controlValues: controlsContext.targetEntry?.controlValues,
             visibleBarControlCount: visibleBarControls.length,
-            chatTailState: {
-                liveMessages: chatTailState.liveMessages,
-                hasLiveSnapshot: chatTailState.hasLiveSnapshot,
+            chatState: {
+                liveMessages: chatState.liveMessages,
+                hasLiveSnapshot: chatState.hasLiveSnapshot,
                 hasMoreHistory,
                 historyError: loadError,
                 historyMessages,
@@ -628,8 +575,8 @@ export default function ChatPane({
         activityToggleCount,
         allMessages,
         areControlsVisible,
-        chatTailState.hasLiveSnapshot,
-        chatTailState.liveMessages,
+        chatState.hasLiveSnapshot,
+        chatState.liveMessages,
         controlsContext.providerType,
         controlsContext.targetEntry?.controlValues,
         controlsContext.targetEntry?.providerControls,
@@ -716,6 +663,16 @@ export default function ChatPane({
                 </div>
             );
         }
+        if (firstViewState.awaitingFirstView) {
+            // The chat lane has not delivered this session's first committed
+            // view yet — say so neutrally, whatever the status lane claims.
+            return (
+                <div className="text-center mt-16 flex flex-col items-center gap-3" data-chat-pane-state="awaiting-first-view">
+                    <div className="opacity-40 animate-pulse"><IconChat size={26} /></div>
+                    <div className="text-xxs opacity-40">{t('chatPane.loadingChat')}</div>
+                </div>
+            );
+        }
         if (activeConv.status === 'idle' && !isLoadingMore) {
             // Chat tail connected and confirmed no more history — session is genuinely empty
             if (!hasMoreHistory && historyMessages.length === 0) {
@@ -734,15 +691,14 @@ export default function ChatPane({
             );
         }
         return undefined;
-    }, [activeConv.connectionState, activeConv.status, canOpenPanel, handleFocusAgent, hasMoreHistory, historyMessages.length, isFocusingAgent, isLoadingMore, liveMessages.length, panelLabel, viewStates.isGenerating]);
+    }, [activeConv.connectionState, activeConv.status, canOpenPanel, firstViewState.awaitingFirstView, handleFocusAgent, hasMoreHistory, historyMessages.length, isFocusingAgent, isLoadingMore, liveMessages.length, panelLabel, viewStates.isGenerating]);
 
     return (
-        /* (§8 unit 4c, design §5.6) Makes the replica/legacy decision
-           observable without devtools — see `buildTranscriptReadSourceAttributes`
-           for why it is a data attribute rather than visible UI or a log. */
+        /* Keyed-view coverage readout — see `buildTranscriptPaneAttributes`
+           for why it is a data attribute rather than visible UI. */
         <div
             className="flex-1 min-h-0 w-full flex flex-col relative"
-            {...buildTranscriptReadSourceAttributes(chatTailState)}
+            {...buildTranscriptPaneAttributes(chatState)}
         >
             {/* Message Stream */}
 {/* Compact chat header. The Activity toggle was dropped once as noise, which
@@ -775,65 +731,17 @@ export default function ChatPane({
                     />
                 </div>
             </div>
-            {/* (§8 unit 5, design §3.7) A transcript-replica SNAP reset discards the
-                ring's in-flight/older rows; the live tail restarts from whatever the
-                next verified-complete revision carries. This is a UI cache-reset
-                signal, not data loss (provider-native/ADHDev JSONL history is
-                untouched) — "Load older" still reaches it via chat_history.
-
-                That is exactly why it no longer renders a banner here: the
-                "Load older messages" button below is gated independently of
-                `omittedBefore`, so the banner named a control the user could
-                already see and framed a recoverable cache reset as loss. The
-                signal now rides the pane's `data-transcript-omitted-before`
-                attribute instead — see `buildTranscriptReadSourceAttributes`. */}
-            {/* (§8 unit 9) ★ The replica lane REGRESSED — the one transcript
-                condition that is worth a visible notice.
-
-                Read the contrast with the retired `omittedBefore` banner
-                directly above, because it is the whole design constraint. That
-                banner fired when nothing was wrong, was twice reported as a
-                defect, and had to be removed. This one is gated on
-                `transcriptReplicaDegraded`, which the controller sets ONLY when
-                a session that HAD a working replica lost it — never on a
-                session that was legacy all along, which is the normal state on
-                a `shadow`-mode daemon and is not a fault. So if this is on
-                screen, something genuinely broke.
-
-                Without it, unit 9's auto-re-arm would be a silent-failure
-                machine: the pane keeps working, the replica stays broken, and
-                nobody finds out — which would defeat running the replica on
-                preview to learn whether it works. It clears itself when the
-                replica recovers.
-
-                Display is delayed by `REPLICA_DEGRADED_BANNER_GRACE_MS` so a
-                replica that recovers after a short rebind (`no_node`) never
-                flashes this. The controller flag, lease expiry, and legacy
-                re-arm still happen immediately. */}
-            {showReplicaDegradedBanner && (
-                <div
-                    className="flex items-center gap-1 px-3 py-1 text-2xs text-amber-400/90 bg-amber-500/10 border-b border-amber-500/20"
-                    role="status"
-                    data-testid="transcript-replica-degraded-notice"
-                >
-                    <span className="font-semibold">{t('chatPane.replicaDegradedShort')}</span>
-                    <InfoTip content={t('chatPane.replicaDegraded')} size={12} />
-                    {/* (dev/preview diagnostics) Append the controller's
-                        `transcriptFallbackReason` (a closed-union label like
-                        `no_node`, already on the snapshot — never content) so a
-                        regression can be attributed without reproducing it. The
-                        production wording above is unchanged: this suffix never
-                        renders on production hosts. */}
-                    {buildReplicaDegradedReasonSuffix(chatTailState.transcriptFallbackReason, isDevOrPreviewSurface())}
-                </div>
-            )}
+            {/* When the keyed view does not reach the start of the conversation
+                (`omittedBefore`), "Load older messages" below is the affordance —
+                an explicit chat_history page. No banner: see
+                `buildTranscriptPaneAttributes`. */}
             <ChatMessageList
                 messages={allMessages}
                 actionLogs={visibleActionLogs}
                 agentName={getConversationProviderLabel(activeConv) || panelLabel || 'Agent'}
                 userName={userName}
                 isCliMode={controlsContext.isCli || controlsContext.isAcp}
-                isWorking={viewStates.isGenerating}
+                isWorking={firstViewState.showWorkingIndicator}
                 contextKey={activeConv.tabKey}
                 receivedAtMap={receivedAtMap}
                 lastMessageHash={activeConv.lastMessageHash}

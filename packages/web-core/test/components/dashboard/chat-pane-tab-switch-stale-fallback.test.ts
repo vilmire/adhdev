@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import type { SessionChatTailUpdate } from '@adhdev/daemon-core'
-import { SubscriptionManager } from '../../../src/managers/SubscriptionManager'
-import { buildChatPaneTailControllerOptions } from '../../../src/components/dashboard/ChatPane'
+import type { ReplicatedTranscriptViewV2 } from '@adhdev/daemon-core'
+import { buildChatPaneControllerOptions } from '../../../src/components/dashboard/ChatPane'
 import {
     getDefaultVisibleLiveMessages,
     getRememberedVisibleLiveCount,
@@ -10,9 +9,10 @@ import {
 } from '../../../src/components/dashboard/chat-visibility'
 import { getConversationLiveMessages } from '../../../src/components/dashboard/conversation-message-snapshot'
 import {
-    getOrCreateSessionChatTailController,
-    resetSessionChatTailControllersForTest,
-} from '../../../src/components/dashboard/session-chat-tail-controller'
+    applyTranscriptViewToControllers,
+    getOrCreateSessionChatController,
+    resetSessionChatControllersForTest,
+} from '../../../src/components/dashboard/session-chat-controller'
 import type { ActiveConversation, DashboardMessage } from '../../../src/components/dashboard/types'
 
 function createConversation(overrides: Partial<ActiveConversation> = {}): ActiveConversation {
@@ -41,89 +41,56 @@ function message(id: string, role: 'user' | 'assistant', content: string): Dashb
     return { id, role, content, timestamp: 1 } as unknown as DashboardMessage
 }
 
-function createUpdate(overrides: Partial<SessionChatTailUpdate> = {}): SessionChatTailUpdate {
-    return {
-        topic: 'session.chat_tail',
-        key: 'daemon:machine-1:session:session-1',
-        sessionId: 'session-1',
-        seq: 1,
-        timestamp: 1,
-        messages: [],
-        status: 'idle',
-        syncMode: 'full',
-        replaceFrom: 0,
-        totalMessages: 0,
-        lastMessageSignature: 'sig',
-        ...overrides,
-    } as SessionChatTailUpdate
+/** Deliver one committed keyed view with plain bubbles. */
+function deliver(sessionId: string, bubbles: Array<[string, 'user' | 'assistant', string]>): void {
+    const view = {
+        schemaVersion: 2, sessionId, historySessionId: null, providerType: 'hermes-cli', providerSessionId: null,
+        producerDaemonId: 'machine-1', producerWriterId: 'w', epoch: 'e', frame: 1, observedAt: '2026-09-29T00:00:00.000Z',
+        status: 'idle', providerObservedStatus: null, title: null, activeModal: null, activeInteractivePrompt: null, turn: null,
+        provenance: { messageSource: null, transcriptProvenance: null }, terminalMarkers: [],
+        coverage: { mode: 'full', totalMessageCount: bubbles.length, returnedMessageCount: bubbles.length, omittedBefore: false },
+        messages: bubbles.map(([id, role, content], i) => ({
+            role, kind: 'standard', content, receivedAt: 1, timestamp: 1, turnKey: 't', bubbleState: 'final',
+            senderName: null, toolName: null, streaming: null, messageId: id, ord: `a${i}`, rev: 1, expandable: false, srcId: null,
+        })),
+    } as unknown as ReplicatedTranscriptViewV2
+    applyTranscriptViewToControllers('machine-1', sessionId, view)
 }
 
-/**
- * Drive a real controller through the real SubscriptionManager so the assertions
- * below are about the shipped apply path, not a hand-rolled stand-in.
- */
 function createLiveController(sessionId: string) {
-    const manager = new SubscriptionManager()
-    const controller = getOrCreateSessionChatTailController({
-        manager,
+    const controller = getOrCreateSessionChatController({
         daemonId: 'machine-1',
         sessionId,
         historySessionId: 'provider-1',
-        subscriptionKey: `daemon:machine-1:session:${sessionId}`,
         sendData: () => true,
-        tailLimit: 60,
         fallbackRecentCount: 0,
     })
-    return { controller, manager }
+    return { controller }
 }
 
 beforeEach(() => {
-    resetSessionChatTailControllersForTest()
+    resetSessionChatControllersForTest()
     resetVisibleLiveCountMemoryForTest()
 })
 
-describe('① panel visibility must not tear down the chat-tail subscription', () => {
-    it('keeps the controller enabled while the pane is hidden, gating only the re-pull', () => {
-        const hidden = buildChatPaneTailControllerOptions({
-            sessionId: 'session-1',
-            isVisible: false,
-            tailLimit: 60,
-        })
-
+describe('① panel visibility must not tear down the chat controller', () => {
+    it('keeps the controller enabled while the pane is hidden', () => {
         // TARGET: reverting ① (enabled: isVisible && !!sessionId) makes this false,
         // which drops the controller and hands the pane the stale fallback below.
-        expect(hidden.enabled).toBe(true)
-        // The visibility-scoped part is the authoritative re-pull, not the
-        // subscription — it is the only piece that costs a round trip.
-        expect(hidden.refreshEnabled).toBe(false)
+        expect(buildChatPaneControllerOptions({ sessionId: 'session-1', isVisible: false }).enabled).toBe(true)
     })
 
-    it('still refreshes when the pane is visible, and stays disabled without a session', () => {
-        expect(buildChatPaneTailControllerOptions({
-            sessionId: 'session-1',
-            isVisible: true,
-            tailLimit: 60,
-        })).toEqual({ enabled: true, refreshEnabled: true, tailLimit: 60 })
-
-        expect(buildChatPaneTailControllerOptions({
-            sessionId: undefined,
-            isVisible: true,
-            tailLimit: 60,
-        }).enabled).toBe(false)
+    it('is enabled whenever a session exists, and disabled without one', () => {
+        expect(buildChatPaneControllerOptions({ sessionId: 'session-1', isVisible: true })).toEqual({ enabled: true })
+        expect(buildChatPaneControllerOptions({ sessionId: undefined, isVisible: true }).enabled).toBe(false)
     })
 
     it('renders the LIVE window rather than the stale status-meta fallback across a hide/show cycle', () => {
-        const { controller, manager } = createLiveController('session-1')
+        const { controller } = createLiveController('session-1')
         controller.retain()
 
-        // The daemon's live tail: the current, correct transcript.
-        manager.publish(createUpdate({
-            messages: [
-                message('m1', 'user', 'ask'),
-                message('m2', 'assistant', 'fresh live answer'),
-            ],
-            totalMessages: 2,
-        }))
+        // The committed keyed view: the current, correct transcript.
+        deliver('session-1', [['m1', 'user', 'ask'], ['m2', 'assistant', 'fresh live answer']])
 
         // status-meta carries an OLDER list — this is what the pane fell back to
         // when the controller was torn down on hide.
@@ -148,10 +115,7 @@ describe('② control group — a real session switch must not leak the previous
     it('gives each session its own controller and live window', () => {
         const first = createLiveController('session-1')
         first.controller.retain()
-        first.manager.publish(createUpdate({
-            messages: [message('a1', 'assistant', 'session one answer')],
-            totalMessages: 1,
-        }))
+        deliver('session-1', [['a1', 'assistant', 'session one answer']])
 
         const second = createLiveController('session-2')
         second.controller.retain()

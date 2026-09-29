@@ -15,6 +15,7 @@ import { MESH_TOOL_ACTIONS } from '../src/tools/validate-tool-args.js';
 import { getQueue, __writeTaskStatusForTests, readLocalRecords } from '@adhdev/daemon-core';
 
 import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
+import { fakeCoordinatorTransport } from './helpers/fake-coordinator-tool-answers.js';
 // GRAPH-ORCHESTRATION Phase E — the MCP exposure of the phase-C2 gate contract
 // and the batch v2 plan surface.
 //
@@ -40,12 +41,12 @@ function nextMeshId(): string {
 
 function recordingLocalTransport() {
     const commands: Array<{ cmd: string; args: any }> = [];
-    return {
+    return fakeCoordinatorTransport({
         commands,
         command: async (cmd: string, args: any) => {
     if (isTurnIpcCommand(cmd)) return answerTurnIpc(cmd, args ?? {} as Record<string, unknown>); commands.push({ cmd, args }); return { success: true }; },
         getStatus: async () => ({ sessions: [] }),
-    } as any;
+    } as any);
 }
 
 function recordingIpcTransport() {
@@ -63,7 +64,7 @@ function recordingIpcTransport() {
         getStatus: async () => ({ sessions: [] }),
     } as any;
     Object.setPrototypeOf(t, IpcTransport.prototype);
-    return t;
+    return fakeCoordinatorTransport(t);
 }
 
 function makeCtx(meshId: string, transport: any, coordinatorSessionId = 'sess-coord') {

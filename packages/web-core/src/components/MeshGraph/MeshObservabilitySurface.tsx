@@ -497,18 +497,15 @@ export default function MeshObservabilitySurface({
      * what that fallback wanted anyway. */
     const [directionPref, setDirectionPref] = useState<'LR' | 'TB'>('TB')
 
+    // Theme-token chrome: pressed = the app accent, idle = neutral outline.
     const directionToggleButtonClass = (active: boolean) =>
         active
-            ? meshTheme.isDark
-                ? 'rounded-md border border-cyan-400/40 bg-cyan-500/15 px-2 py-0.5 text-cyan-100'
-                : 'rounded-md border border-sky-400 bg-sky-100 px-2 py-0.5 text-sky-800'
-            : meshTheme.isDark
-                ? 'rounded-md border border-white/10 bg-white/[0.03] px-2 py-0.5 text-slate-400 hover:text-slate-200'
-                : 'rounded-md border border-slate-300 bg-white/80 px-2 py-0.5 text-slate-500 hover:text-slate-800'
-    const headerButtonClass = `inline-flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium transition ${meshTheme.isDark ? 'border-white/10 bg-white/[0.03] text-slate-300 hover:bg-white/[0.07]' : 'border-slate-200 bg-slate-50 text-slate-600 hover:bg-white'}`
-    const panelClass = `absolute inset-x-3 bottom-3 top-3 z-20 overflow-y-auto rounded-2xl border p-4 shadow-2xl sm:relative sm:inset-auto sm:z-auto sm:shrink-0 sm:rounded-none sm:border-0 sm:border-l sm:shadow-none ${meshTheme.isDark ? 'border-white/10 bg-slate-950 sm:bg-transparent' : 'border-slate-200 bg-white sm:bg-transparent'}`
-    const closeButtonClass = meshTheme.isDark ? 'shrink-0 rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-xs text-slate-200 transition hover:bg-white/[0.08]' : 'shrink-0 rounded-full border border-slate-200 bg-white px-2 py-0.5 text-xs text-slate-600 transition hover:bg-slate-50'
-    const sectionLabelClass = `mb-1.5 text-3xs uppercase tracking-wide ${meshTheme.textMuted}`
+            ? 'rounded-md border border-accent/50 bg-accent/10 px-2 py-0.5 text-accent'
+            : 'rounded-md border border-border-default bg-transparent px-2 py-0.5 text-text-muted hover:text-text-primary'
+    const headerButtonClass = 'inline-flex h-7 items-center gap-1.5 rounded-lg border border-border-default bg-bg-glass px-2.5 text-xs font-medium text-text-secondary transition hover:bg-bg-glass-hover hover:text-text-primary'
+    const panelClass = 'absolute inset-x-3 bottom-3 top-3 z-20 overflow-y-auto rounded-xl border border-border-default bg-surface-primary p-4 shadow-lg sm:relative sm:inset-auto sm:z-auto sm:shrink-0 sm:rounded-none sm:border-0 sm:border-l sm:border-border-subtle sm:bg-transparent sm:shadow-none'
+    const closeButtonClass = 'shrink-0 rounded-full border border-border-default bg-bg-glass px-2 py-0.5 text-xs text-text-secondary transition hover:bg-bg-glass-hover hover:text-text-primary'
+    const sectionLabelClass = `mb-1.5 text-3xs font-medium ${meshTheme.textMuted}`
 
     const legendContent = (
         <div className="flex w-64 max-w-full flex-col gap-3 text-xs">
@@ -585,7 +582,7 @@ export default function MeshObservabilitySurface({
                             />
                         </div>
                     ) : (
-                        <div className="flex h-full min-h-[320px] items-center justify-center px-6 text-center text-sm text-slate-400">{t('mesh.obs.loadingGraph')}</div>
+                        <div className="flex h-full min-h-[320px] items-center justify-center px-6 text-center text-sm text-text-muted">{t('mesh.obs.loadingGraph')}</div>
                     )}
                 </div>
             </div>
@@ -631,7 +628,7 @@ export default function MeshObservabilitySurface({
                             type="button"
                             onClick={openDiagnostics}
                             aria-pressed={diagnosticsOpen}
-                            className={`${headerButtonClass} ${diagnosticsOpen ? (meshTheme.isDark ? 'border-sky-400/40 text-sky-100' : 'border-sky-400 text-sky-800') : ''}`}
+                            className={`${headerButtonClass} ${diagnosticsOpen ? '!border-accent/50 !text-accent' : ''}`}
                         >
                             <IconWrench size={12} />
                             {t('common.diagnostics')}
@@ -648,7 +645,7 @@ export default function MeshObservabilitySurface({
                     {/* Graph */}
                     <div className="flex-1 min-w-0">
                         {!graphMounted ? (
-                            <div className="flex h-full min-h-[320px] items-center justify-center px-6 text-center text-sm text-slate-400">{t('mesh.obs.loadingGraph')}</div>
+                            <div className="flex h-full min-h-[320px] items-center justify-center px-6 text-center text-sm text-text-muted">{t('mesh.obs.loadingGraph')}</div>
                         ) : canonicalGraph.nodes.length > 0 ? (
                             <MeshGraphView
                                 data={canonicalGraph}
@@ -678,7 +675,7 @@ export default function MeshObservabilitySurface({
                                 }}
                             />
                         ) : (
-                            <div className="flex h-full min-h-[320px] items-center justify-center px-6 text-center text-sm text-slate-400">{resolvedEmptyMessage}</div>
+                            <div className="flex h-full min-h-[320px] items-center justify-center px-6 text-center text-sm text-text-muted">{resolvedEmptyMessage}</div>
                         )}
                     </div>
 
@@ -719,7 +716,7 @@ export default function MeshObservabilitySurface({
                                                 type="button"
                                                 onClick={() => { void handleHealSelectedNode() }}
                                                 disabled={!canHealSelectedNode || healingNodeId === selectedGraphNode.id}
-                                                className={meshTheme.isDark ? 'rounded-full border border-emerald-400/25 bg-emerald-500/10 px-2 py-0.5 text-xs font-semibold text-emerald-100 transition hover:bg-emerald-500/18 disabled:cursor-not-allowed disabled:opacity-45' : 'rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-45'}
+                                                className="rounded-full border border-accent/50 bg-accent/10 px-2 py-0.5 text-xs font-semibold text-accent transition hover:bg-accent/20 disabled:cursor-not-allowed disabled:opacity-45"
                                             >
                                                 {healingNodeId === selectedGraphNode.id ? t('mesh.obs.checking') : t('mesh.obs.heal')}
                                             </button>
@@ -772,7 +769,7 @@ export default function MeshObservabilitySurface({
                                                     key={entry.session.sessionId}
                                                     onClick={() => requestOpenSessionChat({ sessionId: entry.session.sessionId, source: 'mesh-topology-panel' })}
                                                     title={t('sessionNav.openChatHint')}
-                                                    className={`w-full rounded-lg border px-2.5 py-1.5 text-left text-2xs transition ${meshTheme.isDark ? 'border-white/8 bg-white/[0.03] hover:bg-white/[0.07]' : 'border-slate-200 bg-slate-50/80 hover:bg-white'}`}
+                                                    className="w-full rounded-lg border border-border-subtle bg-bg-glass px-2.5 py-1.5 text-left text-2xs transition hover:bg-bg-glass-hover"
                                                 >
                                                     <div className="flex items-center justify-between gap-2">
                                                         <span className={`min-w-0 truncate ${meshTheme.textPrimary}`}>{entry.session.providerType || t('mesh.obs.providerUnknown')}</span>
@@ -798,7 +795,7 @@ export default function MeshObservabilitySurface({
                                     <div className={sectionLabelClass}>{t('mesh.obs.queueTasks')}</div>
                                     <div className="flex flex-col gap-1.5">
                                         {nodeTasks.map(task => (
-                                            <div key={task.id} className={`rounded-lg border px-2.5 py-1.5 text-2xs ${meshTheme.isDark ? 'border-white/8 bg-white/[0.03]' : 'border-slate-200 bg-slate-50/80'}`}>
+                                            <div key={task.id} className="rounded-lg border border-border-subtle bg-bg-glass px-2.5 py-1.5 text-2xs">
                                                 <div className="flex items-center justify-between gap-2">
                                                     <span className={`min-w-0 truncate ${meshTheme.textSecondary}`} title={task.message || undefined}>{queueTaskDisplayText(task.message) || task.id.slice(0, 12)}</span>
                                                     <Badge label={task.status ? queueTaskStatusLabel(task.status, t) : t('sessionStatus.unknown')} tone={sessionTone(task.status)} />
@@ -815,19 +812,19 @@ export default function MeshObservabilitySurface({
                                 </div>
                             )}
                             {selectedGraphNode.snapshotWarnings.length > 0 && (
-                                <div className={meshTheme.isDark ? 'mt-3 rounded-xl border border-amber-400/20 bg-amber-500/10 p-3 text-xs text-amber-100' : 'mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800'}>
-                                    <div className="font-medium">{t('mesh.obs.keyWarning')}</div>
+                                <div className="mt-3 rounded-lg border border-status-warning/35 p-3 text-xs text-text-primary">
+                                    <div className="font-medium text-status-warning">{t('mesh.obs.keyWarning')}</div>
                                     <div className="mt-1">{selectedGraphNode.snapshotWarnings[0]}</div>
                                 </div>
                             )}
                             {selectedGraphNode.branchConvergence && (selectedGraphNode.branchConvergence.reason || selectedGraphNode.branchConvergence.nextStep) && (
-                                <div className={meshTheme.isDark ? 'mt-3 rounded-xl border border-sky-400/20 bg-sky-500/10 p-3 text-xs text-sky-100' : 'mt-3 rounded-xl border border-sky-300 bg-sky-50 p-3 text-xs text-sky-800'}>
+                                <div className="mt-3 rounded-lg border border-border-default bg-bg-glass p-3 text-xs text-text-primary">
                                     <div className="font-medium">{t('mesh.obs.followUpLabel', { status: branchConvergenceLabel[selectedGraphNode.branchConvergence.status] ?? selectedGraphNode.branchConvergence.status })}</div>
                                     {selectedGraphNode.branchConvergence.reason && (
                                         <div className="mt-1">{selectedGraphNode.branchConvergence.reason}</div>
                                     )}
                                     {selectedGraphNode.branchConvergence.nextStep && (
-                                        <div className={`${selectedGraphNode.branchConvergence.reason ? 'mt-1.5 pt-1.5 border-t border-sky-400/20' : 'mt-1'}`}>{selectedGraphNode.branchConvergence.nextStep}</div>
+                                        <div className={`${selectedGraphNode.branchConvergence.reason ? 'mt-1.5 pt-1.5 border-t border-border-subtle' : 'mt-1'}`}>{selectedGraphNode.branchConvergence.nextStep}</div>
                                     )}
                                 </div>
                             )}
@@ -853,7 +850,7 @@ export default function MeshObservabilitySurface({
                         old hover preview; click is the primary drill-down path). */}
                     {selectedGraphEdge && detailSelection?.kind === 'edge' && (
                         <div role="dialog" aria-label={t('mesh.obs.selectedEdge')} className={`${panelClass} sm:w-72`}>
-                            <div className={`mb-2 text-3xs font-semibold uppercase tracking-wide ${meshTheme.textMuted}`}>{t('mesh.obs.selectedEdge')}</div>
+                            <div className={`mb-2 text-3xs font-medium ${meshTheme.textMuted}`}>{t('mesh.obs.selectedEdge')}</div>
                             <div className="mb-3 flex items-start justify-between gap-2">
                                 <div className={`min-w-0 truncate text-sm font-semibold ${meshTheme.textPrimary}`}>{t(`mesh.legendEdge.${selectedGraphEdge.type}`)}</div>
                                 <button

@@ -1827,7 +1827,6 @@
     },
     "chatPane": {
         "debugBundleFailed": "无法收集调试信息",
-        "replicaDegradedShort": "同步异常",
         "connectingToMachine": "正在连接到你的机器",
         "establishingP2P": "正在建立 P2P 连接",
         "agentNotMonitored": "代理未受监控",
@@ -1839,7 +1838,6 @@
         "openPanel": "打开 {{label}} 面板",
         "switchingPanel": "正在切换...",
         "openingPanel": "正在打开...",
-        "replicaDegraded": "实时同步出现问题，正在以先前的方式显示消息",
         "busyNoProgress": "代理没有进展。",
         "busyGenerating": "代理正在生成回复。",
         "busyWaitingApproval": "等待批准",

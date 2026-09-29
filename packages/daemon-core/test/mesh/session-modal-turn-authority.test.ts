@@ -88,28 +88,18 @@ describe('session.modal lane turn authority', () => {
         expect(modalLaneStatus({ sessionId, rawFsmStatus: 'idle' })).toBe('starting');
     });
 
-    // DIVERGENCE-GONE: the whole point of the fix. The modal lane now feeds the
-    // SAME projection the other surfaces use, so legacy==projected and the
-    // comparator records agreement instead of `legacy_idle_turn_active`.
-    it('emits no shadow divergence once the lane consumes the projection', () => {
+    // Feeding the published value back in is idempotent: the projection is the
+    // only source, so the lane's own output resolves to the same status.
+    it('re-resolving the published status is stable', () => {
         const taskId = `task-${randomUUID().slice(0, 8)}`;
         const sessionId = `sess-${randomUUID().slice(0, 8)}`;
         const attempt = openAttempt({ taskId, sessionId });
         advanceSeededAttempt(attempt.attemptId, 'delivered');
 
-        // First pass: the raw FSM sample is what the lane used to publish.
         const projected = modalLaneStatus({ sessionId, rawFsmStatus: 'idle' });
         __resetTurnPresentationMetricsForTests();
-
-        // Second pass: the published value is fed back as the legacy input,
-        // which is what the lane now does downstream — it must agree.
-        modalLaneStatus({ sessionId, rawFsmStatus: projected });
-
-        const metrics = getTurnPresentationMetrics();
-        expect(metrics.shadowAgreements).toBe(1);
-        expect(metrics.shadowDivergenceTotal).toBe(0);
-        const divergenceKeys = Object.keys(metrics.shadowDivergences);
-        expect(divergenceKeys.filter((k) => k.includes('legacy_idle_turn_active'))).toEqual([]);
+        expect(modalLaneStatus({ sessionId, rawFsmStatus: projected })).toBe(projected);
+        expect(getTurnPresentationMetrics().projectionSource.turn_reducer).toBe(1);
     });
 
     // NEGATIVE ASSERTION (opposite direction): a genuinely idle session must
@@ -138,7 +128,7 @@ describe('session.modal lane turn authority', () => {
             const sessionId = `sess-${randomUUID().slice(0, 8)}`;
             const p = resolveSessionTurnPresentation({
                 sessionId,
-                legacyStatus: raw,
+                providerStatus: raw,
                 providerType: 'kimi-cli',
                 surface: 'session_modal',
             });
@@ -160,8 +150,8 @@ describe('session.modal lane turn authority', () => {
 
         expect(method).toMatch(/resolveSessionTurnPresentation\(/);
         expect(method).toMatch(/surface: 'session_modal'/);
-        // The raw sample must be handed over as the shadow/legacy input, not published directly.
-        expect(method).toMatch(/legacyStatus: visibleStatus/);
+        // The raw sample is handed over as the provider input, not published directly.
+        expect(method).toMatch(/providerStatus: visibleStatus/);
         expect(method).toMatch(/status: presentedStatus/);
         expect(method).not.toMatch(/status: visibleStatus/);
     });

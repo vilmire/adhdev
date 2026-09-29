@@ -1,8 +1,7 @@
 /**
  * S6 armSeqscribeProjections — fixed arm order, exact-reverse disarm, one slot
- * (wiring-unification B4, plan §4.1 / §4.4). Replaces the source-text guard in
- * fleet-status-parity.test.ts ("arms after the shadow and detaches before it in
- * daemon lifecycle") with an order spy over the real stage function.
+ * (wiring-unification B4, plan §4.1 / §4.4) — an order spy over the real stage
+ * function.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -24,8 +23,6 @@ vi.mock('../../src/seqscribe/mesh-publisher.js', () => ({
 vi.mock('../../src/seqscribe/mesh-turn-consumer.js', () => ({
   pruneRetiredMeshConsumers: () => { calls.push('prune'); return 0 },
 }))
-vi.mock('../../src/seqscribe/fleet-status-shadow.js', () => ({ configureFleetStatusShadow: rec('fleetShadow') }))
-vi.mock('../../src/seqscribe/fleet-status-parity.js', () => ({ configureFleetStatusParity: rec('fleetParity') }))
 vi.mock('../../src/seqscribe/transcript-publisher.js', () => ({
   configureTranscriptProjection: (deps: any) => { calls.push(`transcript(${deps ? 'deps' : 'null'})`); return deps ? { fake: 'service' } : null },
 }))
@@ -52,7 +49,7 @@ function stage() {
   }
   const s5: any = {
     seqscribe: rt,
-    sessionRegistry: { setTranscriptTopicRelease: vi.fn(), get: () => undefined },
+    sessionRegistry: { setTranscriptTopicRelease: vi.fn(), get: () => undefined, list: () => [] },
     providerLoader: { getMeta: () => undefined },
     commandHandler: { handle: vi.fn() },
     bus: {},
@@ -68,16 +65,16 @@ describe('armSeqscribeProjections', () => {
     const steps: string[] = []
     const s6 = armSeqscribeProjections(s5, { onStep: s => steps.push(s) })
     expect(steps).toEqual([
-      'arm:slot', 'arm:publisher', 'arm:fleet-shadow', 'arm:fleet-parity',
+      'arm:slot', 'arm:publisher',
       'arm:transcript', 'arm:transcript-writer-gc', 'arm:activate-topics', 'arm:prune-consumers',
     ])
-    // Publisher before topic activation / prune; shadow before parity. No read
+    // Publisher before topic activation / prune. No read
     // model (C7-2), no redrive (the S7 turn.deliver cursor is redelivery), no
     // mesh parity loop (C7-6). The retired cursors are pruned BEFORE S7 arms
     // the turn cursors. Writer-gc (G2b) arms right after the transcript
     // projection it depends on.
     expect(calls).toEqual([
-      'publisher(node)', 'fleetShadow(node)', 'fleetParity(node)',
+      'publisher(node)',
       'transcript(deps)', 'transcriptBus', 'writerGc(node)', 'activateTopics', 'prune',
     ])
     expect(seqscribeSlot.current()).toBe(rt)
@@ -94,19 +91,19 @@ describe('armSeqscribeProjections', () => {
     s6.disarmProjections()
     expect(steps).toEqual([
       'disarm:attach', 'disarm:transcript-writer-gc', 'disarm:transcript',
-      'disarm:fleet-parity', 'disarm:fleet-shadow', 'disarm:publisher', 'disarm:slot',
+      'disarm:publisher', 'disarm:slot',
     ])
-    // fleet parity detaches before its shadow; the publisher detaches last but the slot.
+    // The publisher detaches last but the slot.
     // Writer-gc disarms before the transcript projection it depends on.
     expect(calls).toEqual([
       'writerGc(null)', 'transcriptBus.off', 'transcript(null)',
-      'fleetParity(null)', 'fleetShadow(null)', 'publisher(null)',
+      'publisher(null)',
     ])
     expect(seqscribeSlot.current()).toBeNull()
     expect(rt.projections()).toBeNull()
     // Idempotent.
     s6.disarmProjections()
-    expect(steps).toHaveLength(7)
+    expect(steps).toHaveLength(5)
   })
 
   it('a known mesh whose events topic cannot be defined fails the stage (C7-1) and unwinds what it armed', () => {

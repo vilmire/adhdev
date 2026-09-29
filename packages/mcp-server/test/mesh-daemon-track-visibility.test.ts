@@ -6,6 +6,7 @@ import { meshRestartDaemon, meshStatus } from '../src/tools/mesh-tools.js';
 import { extractDaemonBuildInfo } from '../src/tools/mesh-tools-internal.js';
 
 import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
+import { heldMeshStatusResponse } from './helpers/held-node-state.js';
 const cleanGit = {
   isGitRepo: true,
   isDirty: false,
@@ -56,8 +57,18 @@ function makeIpcCtx(responder: (daemonId: string, command: string) => unknown) {
 }
 
 test('mesh_status exposes the release track explicitly under daemonBuilds', async () => {
+  // The remote node's build comes from the coordinator-held runtime (member push).
   const ctx = makeIpcCtx((_daemonId, command) => {
     if (command === 'get_mesh') return { success: true, mesh: buildMesh() };
+    if (command === 'mesh_status') {
+      return heldMeshStatusResponse(buildMesh(), () => cleanGit, {
+        localDaemonId: 'daemon-coordinator-preview',
+        runtimeFor: () => ({
+          source: 'member_push', observedAt: Date.now(), refreshing: false, daemonId: 'daemon_mainpc_stable', sessions: [],
+          daemonBuild: { commit: 'abc1234abc1234', commitShort: 'abc1234', version: '1.0.49-rc.2', track: 'stable' },
+        }),
+      });
+    }
     if (command === 'get_pending_mesh_events') return { events: [] };
     if (command === 'git_status') return { success: true, status: cleanGit };
     if (command === 'get_status_metadata') {

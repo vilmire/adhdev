@@ -92,6 +92,21 @@ async function fetchLocalStatusVersion(port: number): Promise<string | undefined
   }
 }
 
+/**
+ * One health/version probe of the daemon on a loopback IPC port: GET /health
+ * for liveness + pid identity, then GET /api/v1/status for status.version
+ * (only when alive — /health carries no version). The same two endpoints the
+ * Windows gate below polls; exported so the POSIX in-place upgrade gate
+ * (posix-upgrade-health-gate.ts) judges a replacement daemon by exactly the
+ * same signal instead of growing a second, drifting definition of "healthy".
+ */
+export async function probeLocalDaemonHealth(port: number): Promise<{ alive: boolean; pid: number | null; version: string | null }> {
+  const liveness = await fetchLocalHealth(port);
+  if (!liveness.ok) return { alive: false, pid: null, version: null };
+  const version = await fetchLocalStatusVersion(port);
+  return { alive: true, pid: liveness.pid ?? null, version: version ?? null };
+}
+
 // Markers that identify a Node process as ADHDev-owned when its command line
 // also lives under a versioned install prefix. This deliberately excludes
 // arbitrary user scripts that happen to be located under ~/.adhdev.

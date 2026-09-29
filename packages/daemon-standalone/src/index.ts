@@ -48,6 +48,7 @@ import {
   DAEMON_WS_PATH,
   DEFAULT_STANDALONE_PORT,
   StandaloneTranscriptLane,
+  transcriptTopicsAvailableFrame,
   STANDALONE_SEQSCRIBE_WS_PATH,
   type DaemonHostRuntime,
   type DaemonRuntime,
@@ -71,20 +72,14 @@ import { SessionHostClient } from '@adhdev/session-host-core';
 import type { RawTerminalHttpService } from './raw-terminal-http.js';
 import { createRouterInteractivePromptService } from './interactive-prompt-http.js';
 import { StandaloneHttpApi } from './standalone-http.js';
-import { StandaloneChatTailFanout } from './standalone-chat-tail.js';
 import { normalizeCommandEnvelope } from './standalone-command-envelope.js';
 import {
-  isStandaloneTranscriptLaneDisabled,
   rejectStandaloneUpgrade,
   routeStandaloneUpgrade,
 } from './standalone-seqscribe-upgrade.js';
 import { standaloneIpcEnabled, startStandaloneIpcCompatServer } from './standalone-ipc-compat.js';
-import { broadcastToOpenClients, createStandaloneHostTransport } from './standalone-host-transport.js';
-import {
-  buildStandaloneStatusResponse,
-  buildStandaloneWsStatus,
-  buildStandaloneWsStatusSignature,
-} from './standalone-status-payload.js';
+import { broadcastToOpenClients, createStandaloneHostTransport, standaloneHelloFrame } from './standalone-host-transport.js';
+import { buildStandaloneStatusResponse } from './standalone-status-payload.js';
 
 // ─── Constants ───
 const DEFAULT_PORT = DEFAULT_STANDALONE_PORT;
@@ -164,9 +159,14 @@ class StandaloneServer {
   private wsConnectionIds = new WeakMap<WebSocket, string>();
   private wsByConnectionId = new Map<string, WebSocket>();
   private wsConnectionSeq = 0;
-  private lastStatusBroadcastAt = 0;
-  private statusBroadcastPending = false;
-  private lastWsStatusSignature: string | null = null;
+  /** Canonical status instance id (`standalone_<mid>`), set at start. */
+  private statusInstanceId = 'standalone';
+  /**
+   * `session.runtime_output` subscriptions per WS client (key → sessionId).
+   * Terminal bytes go only to a client that subscribed to that session
+   * (audit P1-10) — the same contract cloud's P2P peers follow.
+   */
+  private runtimeOutputSubscriptions = new Map<WebSocket, Map<string, string>>();
   private running = false;
   /** The staged boot (daemon-core `bootDaemonRuntime`). */
   private runtime: DaemonRuntime | null = null;
@@ -182,14 +182,10 @@ class StandaloneServer {
   private offBus: Array<() => void> = [];
   /**
    * The dashboard's seqscribe transcript replica lane (`/ws/seqscribe`,
-   * wiring-unification G6 prerequisite). Null when the node did not open or
-   * the lane is switched off — the dashboard then stays on legacy chat-tail.
+   * the dashboard's ONLY chat delivery path). Null only when the seqscribe
+   * node did not open.
    */
   private transcriptLane: StandaloneTranscriptLane | null = null;
-  private readonly chatTail = new StandaloneChatTailFanout({
-    clients: () => this.clients,
-    host: () => this.host,
-  });
   private readonly http = new StandaloneHttpApi({
     isReady: () => !!this.host,
     getStatus: () => buildStandaloneStatusResponse(this.host!.buildSnapshot('full')),
@@ -283,6 +279,7 @@ class StandaloneServer {
     const host = options.host || persistedStandaloneBindHost;
     this.http.listenHost = host;
     const statusInstanceId = `standalone_${cfg.machineId || 'mach_unknown'}`;
+    this.statusInstanceId = statusInstanceId;
     // One session-host bring-up for both hosts (D7): a persistent controller
     // with host events, and a stable write-owner id that survives restarts.
     this.sessionHost = await bootSessionHost({
@@ -315,16 +312,20 @@ class StandaloneServer {
       version: pkgVersion,
       clients: this.clients,
       wsByConnectionId: this.wsByConnectionId,
-      chatTail: this.chatTail,
       getRuntime: () => this.runtime,
       getSessionHostControl: () => this.sessionHost?.control ?? null,
-      scheduleBroadcastStatus: () => this.scheduleBroadcastStatus(),
+      runtimeOutputTargets: (sessionId) => this.runtimeOutputTargets(sessionId),
+      flushTopic: (topic) => this.flushTopic(topic),
     }));
-    this.offBus.push(this.runtime.bus.on('terminated', (e) => this.chatTail.forgetSession(e.sessionId), {
-      name: 'standalone.chat-tail-forget',
-    }));
-    if (this.runtime.seqscribe && !isStandaloneTranscriptLaneDisabled(process.env)) {
+    if (this.runtime.seqscribe) {
       this.transcriptLane = new StandaloneTranscriptLane(this.runtime.seqscribe.node);
+      // A session's chat topic just became SUB-able on the replica lane: tell
+      // every dashboard NOW (over /ws — the lane socket carries seqscribe
+      // frames only) so its worker re-SUBs immediately instead of waiting for
+      // its retry backoff. Topic names only; see TRANSCRIPT_TOPICS_AVAILABLE_TYPE.
+      this.transcriptLane.onTopicsAvailable((topics) => {
+        this.broadcastToClients(transcriptTopicsAvailableFrame(topics));
+      });
     }
 
     // DevServer (optional) — shared with cloud, with provider hot reload.
@@ -368,8 +369,8 @@ class StandaloneServer {
     });
 
     // 7. (was: a 2s "status broadcast timer" safety net.) Every facts / status
-    // edge already pushes through the bus subscribers (host.status-facts →
-    // scheduleBroadcastStatus, host.chat-tail → chatTail.flush, host.modal /
+    // edge already pushes through the bus subscribers (host.metadata-pump →
+    // the keyed daemon.metadata flush, host.modal /
     // host.mesh-state / host.topics → the push-topic flushes above) — see
     // boot/host-runtime.ts's DaemonHostRuntime wiring. The interval is gone;
     // a 60s WARN-only reconciliation tick (host-subscribers.ts
@@ -486,17 +487,15 @@ class StandaloneServer {
       }
     }
     this.clients.add(ws);
-    this.chatTail.addClient(ws);
     this.registerWsConnection(ws);
     LOG.debug('WS', `Client connected (total: ${this.clients.size})`);
 
-    // Send initial status immediately. Runtime terminal snapshots stay pull-based
-    // (runtime snapshot / events routes) so standalone matches cloud and does not
-    // seed hidden panes with unsolicited stale buffers on WS connect.
+    // Identity only: the dashboard learns which daemon this is and subscribes
+    // daemon.metadata (the ONE state lane — its first frame is the snapshot).
+    // Runtime terminal snapshots stay pull-based (runtime snapshot / events
+    // routes) so standalone does not seed hidden panes with stale buffers.
     if (this.host) {
-      const status = buildStandaloneWsStatus(this.host.buildSnapshot('live'), this.runtime?.components.providerLoader);
-      this.lastWsStatusSignature = buildStandaloneWsStatusSignature(status);
-      ws.send(JSON.stringify({ type: 'status', data: status }));
+      ws.send(JSON.stringify(standaloneHelloFrame(this.statusInstanceId)));
     }
 
     ws.on('message', async (raw) => {
@@ -530,14 +529,12 @@ class StandaloneServer {
 
     ws.on('close', () => {
       this.clients.delete(ws);
-      this.chatTail.removeClient(ws);
       this.releaseWsConnection(ws);
       LOG.debug('WS', `Client disconnected (total: ${this.clients.size})`);
     });
 
     ws.on('error', () => {
       this.clients.delete(ws);
-      this.chatTail.removeClient(ws);
       this.releaseWsConnection(ws);
     });
   }
@@ -572,6 +569,7 @@ class StandaloneServer {
 
   /** Dispose registry-owned subscriptions (workspace.git, push topics) for a closed client. */
   private releaseWsConnection(ws: WebSocket): void {
+    this.runtimeOutputSubscriptions.delete(ws);
     const id = this.wsConnectionIds.get(ws);
     if (!id) return;
     this.host?.topics.dropConnection(id);
@@ -580,8 +578,12 @@ class StandaloneServer {
   }
 
   private async handleWsSubscribe(ws: WebSocket, msg: SubscribeRequest): Promise<void> {
-    if (msg.topic === 'session.chat_tail') {
-      await this.chatTail.subscribe(ws, msg);
+    if (msg.topic === 'session.runtime_output') {
+      const targetSessionId = typeof msg.params?.targetSessionId === 'string' ? msg.params.targetSessionId.trim() : '';
+      if (!targetSessionId || !msg.key) return;
+      const subs = this.runtimeOutputSubscriptions.get(ws) ?? new Map<string, string>();
+      subs.set(msg.key, targetSessionId);
+      this.runtimeOutputSubscriptions.set(ws, subs);
       return;
     }
     const topics = this.host?.topics;
@@ -590,13 +592,15 @@ class StandaloneServer {
       // core-owned; standalone keeps only the WS sink and the targeted first flush.
       const connectionId = this.registerWsConnection(ws);
       if (!topics.subscribe(connectionId, msg)) return;
-      await topics.flushNow(msg.topic, connectionId);
+      await topics.flushNow(msg.topic, connectionId, msg.key);
     }
   }
 
   private handleWsUnsubscribe(ws: WebSocket, msg: UnsubscribeRequest): void {
-    if (msg.topic === 'session.chat_tail') {
-      this.chatTail.unsubscribe(ws, msg.key);
+    if (msg.topic === 'session.runtime_output') {
+      const subs = this.runtimeOutputSubscriptions.get(ws);
+      subs?.delete(msg.key);
+      if (subs && subs.size === 0) this.runtimeOutputSubscriptions.delete(ws);
       return;
     }
     const topics = this.host?.topics;
@@ -623,37 +627,16 @@ class StandaloneServer {
     return this.host.execute(type, args, 'standalone');
   }
 
-  private scheduleBroadcastStatus(): void {
-    const now = Date.now();
-    const elapsed = now - this.lastStatusBroadcastAt;
-    const minInterval = 500;
-    if (elapsed >= minInterval) {
-      this.broadcastStatus();
-      return;
+  /** OPEN clients subscribed to this session's terminal output. */
+  private *runtimeOutputTargets(sessionId: string): Iterable<WebSocket> {
+    for (const [ws, subs] of this.runtimeOutputSubscriptions) {
+      for (const target of subs.values()) {
+        if (target === sessionId) {
+          yield ws;
+          break;
+        }
+      }
     }
-    if (this.statusBroadcastPending) return;
-    this.statusBroadcastPending = true;
-    setTimeout(() => {
-      this.statusBroadcastPending = false;
-      this.broadcastStatus();
-    }, minInterval - elapsed);
-  }
-
-  private broadcastStatus(): void {
-    if (this.clients.size === 0 || !this.host) return;
-    const status = buildStandaloneWsStatus(this.host.buildSnapshot('live'), this.runtime?.components.providerLoader);
-    const signature = buildStandaloneWsStatusSignature(status);
-    if (signature === this.lastWsStatusSignature) return;
-    this.lastWsStatusSignature = signature;
-    this.lastStatusBroadcastAt = Date.now();
-    const cdpCount = [...(this.runtime?.components.cdpManagers.values() ?? [])].filter(m => m.isConnected).length;
-    LOG.debug('Broadcast', `status → ${this.clients.size} client(s), ${(status as any).sessions?.length || 0} session(s), ${cdpCount} CDP`);
-    this.broadcastToClients({ type: 'status', data: status });
-    // (status flicker fix) The dashboard consumes session status from both the
-    // legacy `type: 'status'` push above and the `daemon.metadata` topic; every
-    // status change pushes BOTH so the tab badge, the chat bubble's "Agent
-    // generating..." indicator and the chat input hint see one transition.
-    this.flushTopic('daemon.metadata');
   }
 
   // ─── Network ───
@@ -686,11 +669,10 @@ class StandaloneServer {
       try { ws.close(); } catch { /* noop */ }
     }
     this.clients.clear();
-    this.chatTail.clear();
     // Replica lanes detach BEFORE the node closes (runtime.shutdown below).
     this.transcriptLane?.close();
     this.transcriptLane = null;
-    this.lastWsStatusSignature = null;
+    this.runtimeOutputSubscriptions.clear();
 
     // Close WSS
     if (this.wss) {

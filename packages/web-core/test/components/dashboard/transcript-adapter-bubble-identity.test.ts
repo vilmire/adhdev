@@ -26,11 +26,10 @@
  */
 import { describe, expect, it } from 'vitest'
 import type { ReplicatedTranscriptViewV2 } from '@adhdev/daemon-core/seqscribe/transcript-keyed-codec'
-import { mapTranscriptViewToChatTailUpdate } from '../../../src/components/dashboard/transcript-chat-pane-adapter'
+import { mapTranscriptViewToChatView } from '../../../src/components/dashboard/transcript-chat-pane-adapter'
 import { getChatMessageStableKey } from '../../../src/components/ChatMessageList/chatMessageHelpers'
 import type { ChatMessage } from '../../../src/types'
 
-const MAP_OPTIONS = { subscriptionKey: 'sub-1', stale: false }
 
 const SHARED_TURN_KEY = 'claude-code:native-turn:sess-1:7'
 
@@ -101,7 +100,7 @@ function snapshotWithMultiBubbleTurn(): ReplicatedTranscriptViewV2 {
 
 describe('replica adapter — per-bubble React key identity', () => {
     it('gives every bubble of one multi-bubble turn a DISTINCT stable key', () => {
-        const update = mapTranscriptViewToChatTailUpdate(snapshotWithMultiBubbleTurn(), MAP_OPTIONS)
+        const update = mapTranscriptViewToChatView(snapshotWithMultiBubbleTurn())
         expect(update).not.toBeNull()
 
         const messages = (update?.messages ?? []) as unknown as ChatMessage[]
@@ -130,9 +129,9 @@ describe('replica adapter — per-bubble React key identity', () => {
             messages: snapshot.messages.map(message => ({ ...message, content: `${message.content} …more`, rev: 2 })),
         } as unknown as ReplicatedTranscriptViewV2
 
-        const before = (mapTranscriptViewToChatTailUpdate(snapshot, MAP_OPTIONS).messages as unknown as ChatMessage[])
+        const before = (mapTranscriptViewToChatView(snapshot).messages as unknown as ChatMessage[])
             .map((message, index) => getChatMessageStableKey(message, index))
-        const after = (mapTranscriptViewToChatTailUpdate(grown, MAP_OPTIONS).messages as unknown as ChatMessage[])
+        const after = (mapTranscriptViewToChatView(grown).messages as unknown as ChatMessage[])
             .map((message, index) => getChatMessageStableKey(message, index))
 
         expect(before).toEqual(snapshot.messages.map(message => `mid:${message.messageId}`))
@@ -140,7 +139,7 @@ describe('replica adapter — per-bubble React key identity', () => {
     })
 
     it('does not let a turn-grained value masquerade as per-bubble identity', () => {
-        const update = mapTranscriptViewToChatTailUpdate(snapshotWithMultiBubbleTurn(), MAP_OPTIONS)
+        const update = mapTranscriptViewToChatView(snapshotWithMultiBubbleTurn())
         const messages = (update?.messages ?? []) as unknown as (ChatMessage & {
             _turnKey?: string
         })[]

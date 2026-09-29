@@ -332,15 +332,6 @@ describe('cloud status seqscribe boundary', () => {
         fgenAgeBucket: 1,
         quarantined: false,
         authority: true,
-        dualWrite: false,
-        dualWriteFailedBucket: 0,
-        dualWriteDroppedBucket: 0,
-        dualWriteBackfilledBucket: 0,
-        parityMismatchBucket: 0,
-        parityRan: false,
-        parityMissingInShadowBucket: 0,
-        parityExtraInShadowBucket: 0,
-        parityFieldMismatchBucket: 0,
         transcriptPublish: false,
         transcriptPublishedBucket: 0,
         transcriptPublishFailedBucket: 0,
@@ -438,17 +429,6 @@ describe('cloud status seqscribe boundary', () => {
             // boolean says the fleet secret is configured.
             quarantined: false,
             authority: false,
-            // Absent Stage 2+3 input coerces to inactive/zero, same discipline
-            // as the malformed counters above.
-            dualWrite: false,
-            dualWriteFailedBucket: 0,
-            dualWriteDroppedBucket: 0,
-            dualWriteBackfilledBucket: 0,
-            parityMismatchBucket: 0,
-            parityRan: false,
-            parityMissingInShadowBucket: 0,
-            parityExtraInShadowBucket: 0,
-            parityFieldMismatchBucket: 0,
             transcriptPublish: false,
             transcriptPublishedBucket: 0,
             transcriptPublishFailedBucket: 0,
@@ -525,8 +505,6 @@ describe('cloud status seqscribe boundary', () => {
                     stat_poll: { triggered: 12, admitted: 12, coalesced: 0, published: 3 },
                     status_event: { triggered: 8, admitted: 8, coalesced: 0, published: 6 },
                     post_chat: { triggered: 4, admitted: 4, coalesced: 0, published: 4 },
-                    watchdog: { triggered: 0, admitted: 0, coalesced: 0, published: 0 },
-                    lease_expiry: { triggered: 0, admitted: 0, coalesced: 0, published: 0 },
                     seed: { triggered: 2, admitted: 2, coalesced: 0, published: 2 },
                     unspecified: { triggered: 5, admitted: 5, coalesced: 0, published: 1 },
                 },
@@ -545,16 +523,9 @@ describe('cloud status seqscribe boundary', () => {
                 since: 1_700_000_555_000,
                 uptimeMs: 7_200_000,
             },
-            // G2 transcript-transport selection + zombie-recovery counters
-            // (RCA `scratchpad/transcript-handshake-rca.md` finding #5).
-            // Local-only for the dedup reason (raw monotonic counters) AND,
-            // per `stats.ts`'s doc comment, because `replicaSelected`/
-            // `legacySelected` are session-transport-routing counts that have
-            // not had the explicit content-boundary review a bucketed backlog
-            // size gets — this test IS that review, and it says: still local.
-            transcriptTransportSelection: {
-                replicaSelected: 42,
-                legacySelected: 5,
+            // Transcript-lane zombie-recovery counter — local-only for the
+            // dedup reason (raw monotonic counter).
+            transcriptLane: {
                 zombieRecovered: 2,
             },
             // Vendor SubHub serving counters (2026-09-27 resync storm):
@@ -586,7 +557,7 @@ describe('cloud status seqscribe boundary', () => {
             'readRouting',
             'transcriptParityDetail',
             'transcriptLatencyDetail',
-            'transcriptTransportSelection',
+            'transcriptLane',
             'subDelivery',
         ]) {
             expect(payload.seqscribe).not.toHaveProperty(local);
@@ -644,9 +615,6 @@ describe('★beacon diagnostics never reach the server status frame', () => {
     const healthy = {
         topics: 4, peers: 2, peersReady: 2, pendingBucket: 0, consumerLagBucket: 0,
         queueBucket: 0, fgenAgeBucket: 0, quarantined: false, authority: true,
-        dualWrite: false, dualWriteFailedBucket: 0, dualWriteDroppedBucket: 0,
-        dualWriteBackfilledBucket: 0, parityMismatchBucket: 0, parityRan: false,
-        parityMissingInShadowBucket: 0, parityExtraInShadowBucket: 0, parityFieldMismatchBucket: 0,
         transcriptPublish: false, transcriptPublishedBucket: 0, transcriptPublishFailedBucket: 0,
         transcriptDedupedBucket: 0, transcriptOversizedBucket: 0, transcriptDroppedBucket: 0,
         transcriptParityRan: false, transcriptParityMismatchBucket: 0,

@@ -115,14 +115,26 @@ export function getQueueHeads(self: MeshRuntimeStore, meshId: string, statuses?:
 
 /**
  * Retention prune for TERMINAL queue rows (contract on MeshRuntimeStore.pruneTerminalQueueEntries).
- * One statement: the dependency guard (ids a pending/assigned row lists in `dependsOn`) is
+ * The dependency guard (ids a pending/assigned row lists in `dependsOn`) is
  * computed by SQLite's json_each instead of parsing every live payload in JS, and the
  * status + updated_at filters are served by idx_mesh_queue_status_updated.
+ *
+ * ★The queue task's NON-GRAPH `mesh_task_outputs` rows (graph_id IS NULL — plain
+ * `report_completion` envelopes, keyed by the queue task id) go in the SAME
+ * transaction, BEFORE the queue rows: an output has no retention of its own, so
+ * the queue window is its window (measured 2026-09-29: 2,046 such rows / 13 MB,
+ * oldest 2026-08-18, 755 already orphaned by an earlier queue prune). An output
+ * survives while its task still has a queue row that is not yet prunable or is a
+ * live `dependsOn` anchor (`mesh-upstream-results` reads it), and is never
+ * younger than the window. Graph-owned outputs (graph_id set) belong to the
+ * graph cascade (MeshGraphStore.pruneTerminalGraphs) and are never touched here.
  */
-export function pruneTerminalQueueEntries(self: MeshRuntimeStore, olderThanMs: number): number {
+export function pruneTerminalQueueEntriesDetailed(
+    self: MeshRuntimeStore,
+    olderThanMs: number,
+): { queue: number; taskOutputs: number } {
     const cutoffIso = new Date(Date.now() - Math.max(0, olderThanMs)).toISOString();
-    return self.db.prepare(
-        `WITH live AS (
+    const protectedCte = `live AS (
              SELECT CASE WHEN json_valid(payload) THEN payload ELSE '{}' END AS p
              FROM mesh_queue WHERE status IN ('pending', 'assigned')
          ),
@@ -130,11 +142,30 @@ export function pruneTerminalQueueEntries(self: MeshRuntimeStore, olderThanMs: n
              SELECT dep.value AS id
              FROM live, json_each(live.p, '$.dependsOn') AS dep
              WHERE json_type(live.p, '$.dependsOn') = 'array' AND dep.type = 'text' AND dep.value <> ''
-         )
-         DELETE FROM mesh_queue
-         WHERE status IN ('completed', 'cancelled', 'failed') AND updated_at < ?
-           AND id NOT IN (SELECT id FROM protected)`
-    ).run(cutoffIso).changes;
+         )`;
+    return self.db.transaction(() => {
+        const taskOutputs = self.db.prepare(
+            `WITH ${protectedCte}
+             DELETE FROM mesh_task_outputs
+             WHERE graph_id IS NULL AND created_at < ?
+               AND task_id NOT IN (SELECT id FROM protected)
+               AND task_id NOT IN (
+                   SELECT id FROM mesh_queue
+                   WHERE NOT (status IN ('completed', 'cancelled', 'failed') AND updated_at < ?)
+               )`
+        ).run(cutoffIso, cutoffIso).changes;
+        const queue = self.db.prepare(
+            `WITH ${protectedCte}
+             DELETE FROM mesh_queue
+             WHERE status IN ('completed', 'cancelled', 'failed') AND updated_at < ?
+               AND id NOT IN (SELECT id FROM protected)`
+        ).run(cutoffIso).changes;
+        return { queue, taskOutputs };
+    })();
+}
+
+export function pruneTerminalQueueEntries(self: MeshRuntimeStore, olderThanMs: number): number {
+    return pruneTerminalQueueEntriesDetailed(self, olderThanMs).queue;
 }
 
 /**

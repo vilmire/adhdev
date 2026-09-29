@@ -14,7 +14,6 @@ import type { SeqscribeStatusSummary } from '../shared-types.js';
 import type { SeqscribeRuntime } from './runtime.js';
 import { summarizeSeqscribeStats } from './stats.js';
 import { transcriptParityCounters } from './transcript-parity.js';
-import { transcriptTransportSelectionCounters } from './transcript-transport-selection.js';
 import { transcriptChatRuntimeCounters } from './transcript-keyed-publish-runtime.js';
 
 export interface LocalSeqscribeStatsInputs {
@@ -35,8 +34,7 @@ export interface LocalSeqscribeStatsInputs {
      * outside daemon-core, and this module may not value-import it
      * (Key Conventions, CLAUDE.md: "Core never imports cloud/standalone").
      * Null/absent (e.g. standalone, which has no P2P dial loop to zombie) →
-     * reported as 0, matching `replicaSelected`/`legacySelected`'s own
-     * zero-when-nothing-reported default rather than omitting the block.
+     * reported as 0 rather than omitting the block.
      */
     zombieRecovered?: () => number | null;
 }
@@ -92,7 +90,6 @@ export function buildLocalSeqscribeStats(
                     chatPrunedRows: chatRuntime.prunedRows,
                     chatPrunePasses: chatRuntime.prunePasses,
                     chatPruneErrors: chatRuntime.pruneErrors,
-                    chatParityReadBacks: chatRuntime.parityReadBacks,
                     chatLedgerSeeds: chatRuntime.ledgerSeeds,
                     chatDigestMismatch: replica.digestMismatches,
                     chatReplicaResubscribes: replica.resubscribes,
@@ -130,14 +127,9 @@ export function buildLocalSeqscribeStats(
             // comparison). Only three bucketed fields survive into the cloud
             // frame; the rest land on the local-only transcriptParityDetail.
             transcriptParity,
-            // G2 transport-selection + zombie-recovery — local-only, see
-            // `stats.ts`'s doc comment on `transcriptTransportSelection` for
-            // why. `replicaSelected`/`legacySelected` are this process's own
-            // counters (transcript-transport-selection.ts, fed by the
-            // `report_transcript_transport` low-family command);
-            // `zombieRecovered` is injected from daemon-cloud, see above.
-            transcriptTransportSelection: {
-                ...transcriptTransportSelectionCounters(),
+            // Zombie recovery — local-only, see `stats.ts`'s doc comment on
+            // `transcriptLane` for why. Injected from daemon-cloud, see above.
+            transcriptLane: {
                 zombieRecovered: inputs.zombieRecovered?.() ?? 0,
             },
         });

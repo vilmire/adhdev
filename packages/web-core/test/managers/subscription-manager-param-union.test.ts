@@ -107,16 +107,16 @@ describe('SubscriptionManager param union on shared keys (D1#1)', () => {
      * Identity params must NOT merge. Re-pointing one is the entire purpose of a
      * re-subscribe (a Codex runtime session resolving its real provider history
      * id), so freezing the first writer's value would silently pin the subscriber
-     * to a stale session forever — see the chat_tail controller's re-subscribe.
+     * to a stale session forever.
      */
     it('takes the newest value for identity params instead of freezing the first', () => {
         const manager = new SubscriptionManager()
         const sendData = vi.fn().mockReturnValue(true)
         const request = (historySessionId: string): SubscribeRequest => ({
             type: 'subscribe',
-            topic: 'session.chat_tail',
+            topic: 'session.modal',
             key: 'daemon:daemon-1:session:runtime-session-1',
-            params: { targetSessionId: 'runtime-session-1', historySessionId, tailLimit: 60 },
+            params: { targetSessionId: 'runtime-session-1', historySessionId },
         } as SubscribeRequest)
 
         manager.subscribe({ sendData }, 'daemon-1', request('runtime-session-1'), vi.fn())

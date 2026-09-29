@@ -203,15 +203,6 @@ const LEGACY_LOW_FAMILY_COMMANDS = [
     // NOT a legacy-table migration: the keyed chat transcript's resync path
     // (design 2026-09-28 §5.2) — a reader asks the owner for one base frame.
     'request_transcript_base',
-    // NOT a legacy-table migration: G2 transcript-transport selection
-    // reporting (wiring-unification G2b, 2026-09-24,
-    // commands/low-family/transcript-transport-report.ts). The dashboard
-    // reports which transport (replica vs legacy) it actually used, once per
-    // subscription health transition, over the same P2P `type:'command'`
-    // frame every other low-family command uses — see
-    // `seqscribe/transcript-transport-selection.ts`'s header. Listed here so
-    // this test's exhaustive low-family enumeration stays accurate.
-    'report_transcript_transport',
     // NOT a legacy-table migration: `get_runtime_snapshot` and `get_command_history`
     // never lived in daemon-core's low-family tables — they were a cloud-only P2P
     // special case in packages/daemon-cloud/src/cloud-command-transports.ts
@@ -291,6 +282,10 @@ const LEGACY_HIGH_FAMILY_COMMANDS = [
     // a legacy-table migration. mesh_node_state_nudge: the coordinator's
     // explicit-refresh "push now" request to a subscribed member.
     'mesh_node_git_report', 'mesh_node_git_log', 'mesh_node_state_nudge',
+    // Tool answers composed by the coordinator (high-family/mesh-status-view.ts):
+    // the MCP mesh_status tool's ONE call, the direct-dispatch route decision,
+    // and the same decision for every node a tool reasons over (mesh_node_route).
+    'mesh_status_view', 'mesh_dispatch_route', 'mesh_node_route',
 ];
 
 // ─── Helpers ───────────────────────────────────────────────────────────────

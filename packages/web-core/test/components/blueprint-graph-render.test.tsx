@@ -266,7 +266,9 @@ describe('Blueprint graph — edges and re-layout discipline', () => {
             task('ship', 'pending'),
         ], [gateGraph()])
         const edge = (id: string) => graph.container.querySelector(`[data-edge-id="${id}"]`)!
-        expect(edge('e:task:root->task:child').getAttribute('data-stroke')).toBe('#f87171')
+        // Dead = the theme's semantic red token; every other reading stays neutral.
+        expect(edge('e:task:root->task:child').getAttribute('data-stroke')).toBe('var(--status-error)')
+        expect(edge('e:gate:G1:n-review->task:ship').getAttribute('data-stroke')).not.toBe('var(--status-error)')
         expect(edge('e:task:done->task:run').getAttribute('data-animated')).toBe('true')
         expect(edge('e:task:root->task:child').getAttribute('data-animated')).toBe('false')
         expect(edge('e:gate:G1:n-review->task:ship').getAttribute('data-dash')).toBe('7 5')

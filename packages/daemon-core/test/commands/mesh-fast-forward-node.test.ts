@@ -1,10 +1,19 @@
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
+const recorded = vi.hoisted(() => ({ calls: [] as Array<{ meshId: string; kind: string; outcome: unknown }> }))
+vi.mock('../../src/mesh/mesh-record.js', () => ({
+  meshRecord: (meshId: string, kind: string, entry: { payload?: { outcome?: unknown } }) => {
+    recorded.calls.push({ meshId, kind, outcome: entry?.payload?.outcome })
+  },
+}))
+
 import { fastForwardMeshNode } from '../../src/mesh/mesh-fast-forward'
+
+beforeEach(() => { recorded.calls.length = 0 })
 
 function git(cwd: string, args: string[]): string {
   return execFileSync('git', args, { cwd, encoding: 'utf-8' }).trim()
@@ -439,4 +448,44 @@ describe('fast_forward_mesh_node', () => {
       }
     }, 60000)
   })
+})
+
+describe('fast_forward_mesh_node ledger — noop checks are not events', () => {
+  it('records NOTHING for an already-up-to-date check (63.8% of preview mesh.events rows were these)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-mesh-ff-noop-ledger-'))
+    try {
+      const { work } = createRemoteBackedRepo(root)
+      const result: any = await fastForwardMeshNode({ workspace: work, execute: true, nodeId: 'n-even', meshId: 'mesh_noop', trigger: 'auto' } as any)
+      expect(result.code).toBe('already_up_to_date')
+      expect(recorded.calls).toEqual([])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 60000)
+
+  it('records NOTHING for a push-mode nothing_to_push check either', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-mesh-ff-noop-push-ledger-'))
+    try {
+      const { work } = createRemoteBackedRepo(root)
+      const result: any = await fastForwardMeshNode({ workspace: work, mode: 'push', execute: true, nodeId: 'n-push', meshId: 'mesh_noop' } as any)
+      expect(result.code).toBe('nothing_to_push')
+      expect(recorded.calls).toEqual([])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 60000)
+
+  it('still records the events that ARE state changes or decisions (blocked / executed)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-mesh-ff-real-ledger-'))
+    try {
+      const { seed, work } = createRemoteBackedRepo(root)
+      pushRemoteCommit(seed)
+      writeFileSync(join(work, 'LOCAL.txt'), 'local\n', 'utf-8')
+      const blocked: any = await fastForwardMeshNode({ workspace: work, execute: true, nodeId: 'n-dirty', meshId: 'mesh_real' } as any)
+      expect(blocked.code).toBe('dirty_worktree')
+      expect(recorded.calls).toEqual([{ meshId: 'mesh_real', kind: 'direct_fast_forward', outcome: 'blocked' }])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 60000)
 })

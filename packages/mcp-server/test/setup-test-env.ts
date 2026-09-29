@@ -38,3 +38,25 @@ process.on('exit', () => {
         /* best-effort cleanup */
     }
 });
+
+// The suite's fake coordinator daemons answer mesh_status_view / mesh_dispatch_route
+// with daemon-core's real composer / routing rule (helpers/fake-coordinator-tool-answers.ts):
+// `transport.command = fn` on an IpcTransport / LocalTransport installs `fn` wrapped.
+{
+    // require (not import): loaded AFTER the config-dir pin above; this file compiles to CJS.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { IpcTransport } = require('../src/transports/ipc.js');
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { LocalTransport } = require('../src/transports/local.js');
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { withFakeCoordinatorToolAnswers } = require('./helpers/fake-coordinator-tool-answers.js');
+    for (const Transport of [IpcTransport, LocalTransport] as any[]) {
+        const original = Transport.prototype.command;
+        const slot = Symbol('fakeCoordinatorCommand');
+        Object.defineProperty(Transport.prototype, 'command', {
+            configurable: true,
+            get() { return this[slot] ?? original; },
+            set(fn: any) { this[slot] = typeof fn === 'function' ? withFakeCoordinatorToolAnswers(fn, this) : fn; },
+        });
+    }
+}

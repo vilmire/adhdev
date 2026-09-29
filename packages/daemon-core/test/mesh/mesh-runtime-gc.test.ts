@@ -40,6 +40,7 @@ import {
 import { __resetMeshRuntimeStoreForTests, getQueue } from '../../src/mesh/mesh-work-queue.js'
 import type { MeshWorkQueueEntry } from '../../src/mesh/mesh-work-queue.js'
 import { insertLocalRecordRow } from '../helpers/local-records.js'
+import { meshTopicIndexFor, MESH_RECORD_APPEND_KIND } from '../../src/mesh/mesh-topic-index.js'
 
 const MESH = 'mesh_gc_test'
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -145,6 +146,62 @@ describe('(b) retention sweeps', () => {
     expect(ids).toContain('dependent-pending')
     expect(ids).toContain('recent-done')
     expect(ids).toContain('old-assigned')
+  })
+
+  it('non-graph mesh_task_outputs leave WITH their terminal queue row, orphans past the window go too, and live/dependency/young outputs stay', () => {
+    const store = MeshRuntimeStore.getInstance()
+    const oldIso = isoAgo(40 * DAY_MS)
+    const out = (taskId: string, opts: { graphId?: string; createdAt: string }) =>
+      (store as any).db.prepare(
+        `INSERT INTO mesh_task_outputs (task_id, version, mesh_id, graph_id, node_id, attempt, status, envelope_json, digest, created_at)
+         VALUES (?, 1, ?, ?, NULL, 1, 'completed', '{}', 'd', ?)`,
+      ).run(taskId, MESH, opts.graphId ?? null, opts.createdAt)
+    const outputIds = (): string[] =>
+      ((store as any).db.prepare('SELECT task_id FROM mesh_task_outputs ORDER BY task_id').all() as Array<{ task_id: string }>).map(r => r.task_id)
+
+    // Terminal + aged queue row → its non-graph output goes with it.
+    store.insertQueueEntry(queueEntry({ id: 'old-done', status: 'completed', createdAt: oldIso, updatedAt: oldIso }))
+    out('old-done', { createdAt: oldIso })
+    // Orphan (queue row already pruned) and older than the window → goes.
+    out('orphan-old', { createdAt: oldIso })
+    // Orphan but YOUNG (queue row not materialized yet) → stays.
+    out('orphan-young', { createdAt: new Date().toISOString() })
+    // Terminal queue row that is still inside the window → stays.
+    store.insertQueueEntry(queueEntry({ id: 'recent-done', status: 'completed' }))
+    out('recent-done', { createdAt: oldIso })
+    // Live (assigned) task → stays regardless of age.
+    store.insertQueueEntry(queueEntry({ id: 'live-assigned', status: 'assigned', createdAt: oldIso, updatedAt: oldIso }))
+    out('live-assigned', { createdAt: oldIso })
+    // A dependency anchor a LIVE row lists in dependsOn → stays (mesh-upstream-results reads it).
+    store.insertQueueEntry(queueEntry({ id: 'dep-anchor', status: 'completed', createdAt: oldIso, updatedAt: oldIso }))
+    store.insertQueueEntry(queueEntry({ id: 'dependent-pending', status: 'pending', dependsOn: ['dep-anchor'] }))
+    out('dep-anchor', { createdAt: oldIso })
+    // GRAPH-owned output: never touched by the queue prune, even for an aged terminal queue row.
+    store.insertQueueEntry(queueEntry({ id: 'graph-task', status: 'completed', createdAt: oldIso, updatedAt: oldIso }))
+    out('graph-task', { createdAt: oldIso, graphId: 'graph_x' })
+
+    expect(outputIds()).toHaveLength(7)
+    const detail = store.pruneTerminalQueue(MESH_TERMINAL_QUEUE_RETENTION_MS)
+    expect(detail).toEqual({ queue: 2, taskOutputs: 2 })
+    expect(outputIds()).toEqual(['dep-anchor', 'graph-task', 'live-assigned', 'orphan-young', 'recent-done'])
+    // Idempotent.
+    expect(store.pruneTerminalQueue(MESH_TERMINAL_QUEUE_RETENTION_MS)).toEqual({ queue: 0, taskOutputs: 0 })
+  })
+
+  it('pruneMeshRuntimeRetention also sweeps mesh_topic_index (30d) and reports it with the task-output count', () => {
+    const store = MeshRuntimeStore.getInstance()
+    const ingest = (seq: number, at: number) =>
+      meshTopicIndexFor(store.db).ingest({
+        meshId: MESH, writer: 'w1', seq, kind: MESH_RECORD_APPEND_KIND,
+        payload: { id: `e${seq}`, eventId: `e${seq}`, timestamp: new Date(at).toISOString(), ledgerKind: 'task_dispatched', at, payload: {} },
+      })
+    ingest(1, Date.now() - 45 * DAY_MS)
+    ingest(2, Date.now() - 31 * DAY_MS)
+    ingest(3, Date.now() - 2 * DAY_MS)
+    const result = pruneMeshRuntimeRetention()
+    expect(result.topicIndex).toBe(2)
+    expect(result.taskOutputs).toBe(0)
+    expect((store.db.prepare('SELECT COUNT(*) AS n FROM mesh_topic_index').get() as { n: number }).n).toBe(1)
   })
 
   it('pruneMeshRuntimeRetention runs all three sweeps and reports counts (no VACUUM, best-effort)', () => {

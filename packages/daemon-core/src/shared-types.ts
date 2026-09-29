@@ -26,7 +26,7 @@ import type {
 } from '@adhdev/session-host-core';
 // Dependency-free leaf (mesh-shared never imports daemon-core) — type-only,
 // same convention as mesh/node-facts.ts.
-import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared';
+import type { KeyedDocDelta, MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared';
 
 export type {
     StatusResponse,
@@ -216,18 +216,11 @@ export type SessionHostDiagnosticsSnapshot = Omit<
     recentTransitions: SessionHostRuntimeTransition[];
 };
 
-export type TransportTopic = 'session.chat_tail' | 'session.runtime_output' | 'machine.runtime' | 'session_host.diagnostics' | 'session.modal' | 'daemon.metadata' | 'workspace.git';
+export type TransportTopic = 'session.runtime_output' | 'machine.runtime' | 'session_host.diagnostics' | 'session.modal' | 'daemon.metadata' | 'workspace.git' | 'mesh.status';
 
-export interface SessionChatTailSubscriptionParams extends ReadChatCursor {
-    targetSessionId: string;
-    historySessionId?: string;
-    /**
-     * Opt-in: the daemon-side chat_tail read passes `includeActivity` to
-     * read_chat, so pushed tails carry tool/terminal/thought rows inline.
-     * Set by the dashboard when its activity toggle is on; absent → the
-     * push keeps read_chat's prose-only default.
-     */
-    includeActivity?: boolean;
+/** `mesh.status`: the coordinator's held mesh_status view of ONE mesh (the dashboard mesh view's only lane). */
+export interface MeshStatusSubscriptionParams {
+    meshId: string;
 }
 
 export interface SessionRuntimeOutputSubscriptionParams {
@@ -250,17 +243,6 @@ export interface SessionHostDiagnosticsSubscriptionParams {
     includeSessions?: boolean;
     limit?: number;
     intervalMs?: number;
-}
-
-export interface SessionChatTailUpdate extends ReadChatSyncResult {
-    topic: 'session.chat_tail';
-    key: string;
-    sessionId: string;
-    historySessionId?: string;
-    interactionId?: string;
-    seq: number;
-    timestamp: number;
-    error?: string;
 }
 
 export interface SessionRuntimeOutputUpdate {
@@ -300,48 +282,114 @@ export interface SessionModalUpdate {
     timestamp: number;
 }
 
+/**
+ * `daemon.metadata` — the ONE dashboard lane for daemon + session state
+ * (cloud P2P and standalone WS alike; data-path audit 2026-09-29 P0-3).
+ *
+ * Wire protocol: the first frame after a (re)subscribe is a `snapshot`
+ * (the full state); every later frame is a `delta` carrying only what changed
+ * since the last frame DELIVERED to that subscription — changed daemon-level
+ * fields, changed session fields keyed by session id, explicit removals. An
+ * unchanged daemon sends nothing at all. A failed send drops the baseline, so
+ * the next frame is a snapshot again (no gap can go unnoticed).
+ *
+ * Consumers never see a delta: web-core's SubscriptionManager folds each delta
+ * into the held snapshot and hands handlers the materialized
+ * {@link DaemonMetadataUpdate}.
+ */
 export interface DaemonMetadataUpdate {
     topic: 'daemon.metadata';
     key: string;
+    mode: 'snapshot';
     daemonId: string;
     status: StatusReportPayload;
     userName?: string;
     seq: number;
     timestamp: number;
-    /**
-     * Per-mesh state-change revision counters (meshId → monotonically increasing
-     * integer), bumped whenever the daemon's mesh graph/queue/mission state for that
-     * mesh changes (onMeshStateChange). Lets the dashboard replace its client-side
-     * mesh_status polling with an event-driven background refresh: when the revision
-     * for the mesh it is viewing advances, it re-fetches the aggregate mesh_status
-     * (SWR, keeping the current graph on screen). This is a lightweight nudge — the
-     * full aggregate snapshot is fetched on demand, not embedded here, so the
-     * daemon.metadata payload stays small. Optional/absent for daemons/builds that
-     * don't emit it (the client then keeps its polling fallback).
-     */
-    meshStateRevisions?: Record<string, number>;
 }
 
+/** One changed session inside a {@link DaemonMetadataDelta}: `id` + only the changed fields (a new session carries all of them). */
+export type DaemonMetadataSessionChange = { id: string } & Partial<SessionEntry>;
+
+export interface DaemonMetadataDelta {
+    topic: 'daemon.metadata';
+    key: string;
+    mode: 'delta';
+    daemonId: string;
+    seq: number;
+    timestamp: number;
+    /** Changed top-level fields of the snapshot envelope (userName, …). */
+    set?: Record<string, unknown>;
+    /** Top-level envelope fields that disappeared. */
+    unset?: string[];
+    /** Changed daemon-level `status` fields (never `sessions` / `timestamp`). */
+    statusSet?: Partial<Omit<StatusReportPayload, 'sessions' | 'timestamp'>>;
+    /** Daemon-level `status` fields that disappeared. */
+    statusUnset?: string[];
+    /** Added or changed sessions, keyed by id, changed fields only. */
+    sessions?: DaemonMetadataSessionChange[];
+    /** Per-session fields that disappeared (sessionId → field names). */
+    sessionUnset?: Record<string, string[]>;
+    /** Sessions that no longer exist. */
+    removedSessionIds?: string[];
+    /** The full session id order — present only when it changed (add / remove / reorder). */
+    sessionOrder?: string[];
+}
+
+export type DaemonMetadataWireUpdate = DaemonMetadataUpdate | DaemonMetadataDelta;
+
+/**
+ * `mesh.status` first frame: the coordinator's `mesh_status` result for the
+ * subscribed mesh — the same body the `mesh_status` command returns.
+ */
+export interface MeshStatusSnapshotUpdate {
+    topic: 'mesh.status';
+    key: string;
+    mode: 'snapshot';
+    meshId: string;
+    status: Record<string, unknown>;
+    seq: number;
+    timestamp: number;
+}
+
+/**
+ * `mesh.status` later frames: only what changed since the last frame delivered
+ * to this subscription — keyed per node (`nodes`), per queue task
+ * (`queue.tasks`) and per mission (`missions`); see mesh-shared
+ * keyed-doc-delta.ts (MESH_STATUS_DOC_SPEC). An unchanged mesh sends nothing.
+ */
+export interface MeshStatusDeltaUpdate {
+    topic: 'mesh.status';
+    key: string;
+    mode: 'delta';
+    meshId: string;
+    delta: KeyedDocDelta;
+    seq: number;
+    timestamp: number;
+}
+
+export type MeshStatusWireUpdate = MeshStatusSnapshotUpdate | MeshStatusDeltaUpdate;
+
 export interface TopicUpdateEnvelopeMap {
-    'session.chat_tail': SessionChatTailUpdate;
     'session.runtime_output': SessionRuntimeOutputUpdate;
     'machine.runtime': MachineRuntimeUpdate;
     'session_host.diagnostics': SessionHostDiagnosticsUpdate;
     'session.modal': SessionModalUpdate;
-    'daemon.metadata': DaemonMetadataUpdate;
+    'daemon.metadata': DaemonMetadataWireUpdate;
     'workspace.git': GitWorkspaceUpdate;
+    'mesh.status': MeshStatusWireUpdate;
 }
 
 export type TopicUpdateEnvelope = TopicUpdateEnvelopeMap[TransportTopic];
 
 export interface SubscribeRequestMap {
-    'session.chat_tail': SessionChatTailSubscriptionParams;
     'session.runtime_output': SessionRuntimeOutputSubscriptionParams;
     'machine.runtime': MachineRuntimeSubscriptionParams;
     'session_host.diagnostics': SessionHostDiagnosticsSubscriptionParams;
     'session.modal': SessionModalSubscriptionParams;
     'daemon.metadata': DaemonMetadataSubscriptionParams;
     'workspace.git': WorkspaceGitSubscriptionParams;
+    'mesh.status': MeshStatusSubscriptionParams;
 }
 
 export type SubscribeRequest =
@@ -349,8 +397,6 @@ export type SubscribeRequest =
 
 export type UnsubscribeRequest =
     { [K in TransportTopic]: { type: 'unsubscribe'; topic: K; key: string } }[TransportTopic];
-
-export type StandaloneWsStatusPayload = StatusReportPayload;
 
 export type SessionTransport = 'cdp-page' | 'cdp-webview' | 'pty' | 'acp';
 
@@ -1101,33 +1147,11 @@ export interface SeqscribeStatusSummary {
     /** Whether a fleet secret is configured and certificates can be verified. */
     authority: boolean;
 
-    // ── Phase 2 Stage 2+3: mesh dual-write shadow + parity ──────────────────
-    // Same bucket/boolean discipline as the fields above. See
-    // seqscribe/stats.ts SeqscribeStatusSummary for the full field docs.
-    /** Whether the mesh dual-write shadow leg is armed. */
-    dualWrite?: boolean;
-    /** Bucketed count of shadow appends that failed (0 = none). */
-    dualWriteFailedBucket?: number;
-    /** Bucketed count of shadow records dropped by load-shedding (0 = none). */
-    dualWriteDroppedBucket?: number;
-    /** Bucketed count of records mirrored late by the parity backfill (0 = none). */
-    dualWriteBackfilledBucket?: number;
-    /** Bucketed count of parity mismatches observed since boot (0 = none). */
-    parityMismatchBucket?: number;
-    /** Whether at least one parity comparison has run. */
-    parityRan?: boolean;
-    /** Bucketed count of `missing_in_shadow` mismatches (0 = none). */
-    parityMissingInShadowBucket?: number;
-    /** Bucketed count of `extra_in_shadow` mismatches (0 = none). */
-    parityExtraInShadowBucket?: number;
-    /** Bucketed count of `field_mismatch` mismatches (0 = none). */
-    parityFieldMismatchBucket?: number;
-
     // ── §8 unit 2: transcript single-observation publisher + parity ────────
     // Same bucket/boolean discipline as the fields above. See
     // seqscribe/stats.ts SeqscribeStatusSummary for the full field docs.
     // transcriptParityPersistentMismatchBucket is deliberately absent here —
-    // LOCAL-ONLY, same asymmetry as parityPersistentMismatchBucket's absence.
+    // LOCAL-ONLY.
     /** Whether the transcript publisher is configured (mode != off). */
     transcriptPublish?: boolean;
     /** Bucketed count of complete revisions handed to the publish sink (0 = none). */
@@ -1242,63 +1266,6 @@ export interface BeaconDiagnosticsSummary {
     }>;
 }
 
-/**
- * One peer-authored `fleet.status` ring entry after the receiving daemon has
- * re-applied the fixed-key content boundary.
- *
- * Structurally mirrors `FleetStatusEntry` in status/reporter.ts. It is repeated
- * here because `StatusReportPayload` is the shared wire-type module and must not
- * import its producer. Keep the two in lock-step: identifiers, enums, booleans
- * and counters only — never machine nicknames, session arrays, dynamic maps or
- * any other free text.
- */
-export interface FleetStatusPeerEntry {
-    daemonId: string;
-    at: string;
-    onlineState: 'online' | 'reconnecting' | 'offline';
-    p2pActive: boolean;
-    sessionCounts: {
-        ideCount: number;
-        cliCount: number;
-        acpCount: number;
-        idleCount: number;
-        generatingCount: number;
-        waitingApprovalCount: number;
-        erroredCount: number;
-    };
-    seqscribe?: SeqscribeStatusSummary;
-}
-
-/** Content-free receive-side validation counters for the SUB consumer. */
-export interface FleetStatusPeerViewDiagnostics {
-    /** Live peer subscriptions currently feeding the view. */
-    subscribedPeers: number;
-    /** Tail rows observed before schema or peer-identity validation. */
-    receivedEntries: number;
-    /** Schema-valid rows whose daemonId was compared with the serving peer. */
-    comparedEntries: number;
-    /** Compared rows whose daemon identity matched the serving peer. */
-    matchedEntries: number;
-    /** Compared rows rejected because the serving peer claimed another daemon. */
-    mismatchedEntries: number;
-    /** Rows rejected by the fixed-key schema projection. */
-    invalidEntries: number;
-    /** Times a peer's latest-only local snapshot was installed or replaced. */
-    viewReplacements: number;
-}
-
-/**
- * Phase 4 Stage 2 receive surface: latest `fleet.status` entry per SUB peer.
- *
- * ★ LOCAL AND P2P ONLY. This is received peer state, not server routing state.
- * It may appear on the rich P2P StatusReportPayload and get_status_metadata,
- * but never on CloudStatusReportPayload or its fixed-key builder.
- */
-export interface FleetStatusPeerView {
-    peers: FleetStatusPeerEntry[];
-    diagnostics: FleetStatusPeerViewDiagnostics;
-}
-
 /** Minimal daemon->cloud status payload used for routing, fallback, and server APIs. */
 export interface CloudStatusReportPayload {
     sessions: RoutingSessionEntry[];
@@ -1353,11 +1320,8 @@ export interface StatusReportPayload {
      */
     beacon?: BeaconDiagnosticsSummary;
     /**
-     * Latest fixed-key fleet.status entry received from each seqscribe SUB peer.
-     *
-     * ★ P2P ONLY, alongside `beacon`. `buildCloudStatusReportPayload` does not
-     * accept or forward this field, so the always-on server routing/push path is
-     * unchanged and cannot acquire peer-received state by accidental spread.
+     * Cloud daemon's screenshot budget (remote view toolbar). Dashboard lane
+     * only (`daemon.metadata`); never on the server frame.
      */
-    fleetStatusPeerView?: FleetStatusPeerView;
+    screenshotUsage?: { dailyUsedMinutes: number; dailyBudgetMinutes: number; budgetExhausted: boolean } | null;
 }

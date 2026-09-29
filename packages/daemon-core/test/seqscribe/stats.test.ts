@@ -50,19 +50,9 @@ describe('summarizeSeqscribeStats', () => {
             fgenAgeBucket: 0,
             quarantined: false,
             authority: false,
-            // Stage 3 parity fields with no `parity` supplied report never-run
-            // and zero buckets rather than omitting the keys. (C-W3: the
-            // `dualWrite*` shadow buckets are gone — the publisher is the one
-            // write path; see the dedicated test below.)
-            parityMismatchBucket: 0,
-            parityPersistentMismatchBucket: 0,
-            parityRan: false,
-            parityMissingInShadowBucket: 0,
-            parityExtraInShadowBucket: 0,
-            parityFieldMismatchBucket: 0,
             // §8 unit 2: transcript single-observation publisher + parity —
-            // same "report inactive/zero, never omit" discipline as the
-            // parity block above.
+            // report inactive/zero, never omit. (The mesh `dualWrite*` /
+            // `parity*` fields are gone — see the dedicated test below.)
             transcriptPublish: false,
             transcriptPublishedBucket: 0,
             transcriptPublishFailedBucket: 0,
@@ -75,35 +65,12 @@ describe('summarizeSeqscribeStats', () => {
         });
     });
 
-    it('buckets the parity counters instead of passing them through', () => {
-        const summary = summarizeSeqscribeStats(
-            { topics: { 'assistant.journal': topic() }, peers: [] },
-            {
-                authorityEnabled: true,
-                parity: {
-                    runs: 3,
-                    mismatches: 24,
-                    persistentMismatches: 2,
-                    missingInShadow: 9,
-                    extraInShadow: 15,
-                    fieldMismatch: 0,
-                },
-            },
-        );
-
-        expect(summary.parityRan).toBe(true);
-        // BACKLOG_BUCKETS = [1, 10, 100, 1000] → ordinals, never the raw count.
-        expect(summary.parityMismatchBucket).toBe(3); // 24 → [10,100)
-        expect(summary.parityMismatchBucket).not.toBe(24);
-        expect(summary.parityPersistentMismatchBucket).toBe(2); // 2 → [1,10)
-        expect(summary.parityMissingInShadowBucket).toBe(2); // 9 → [1,10)
-        expect(summary.parityExtraInShadowBucket).toBe(3); // 15 → [10,100)
-        expect(summary.parityFieldMismatchBucket).toBe(0); // 0 → none
-    });
-
-    it('carries no dual-write shadow fields any more (C-W3: one write path)', () => {
+    it('carries no mesh dual-write / parity fields any more (C-W3: one write path; audit P1-4)', () => {
         const summary = summarizeSeqscribeStats({ topics: { t: topic() }, peers: [] }, { authorityEnabled: true, includeLocalDiagnostics: true });
-        for (const key of Object.keys(summary)) expect(key.startsWith('dualWrite')).toBe(false);
+        for (const key of Object.keys(summary)) {
+            expect(key.startsWith('dualWrite')).toBe(false);
+            expect(key.startsWith('parity')).toBe(false);
+        }
         expect(summary).not.toHaveProperty('readRouting');
         expect(summary).not.toHaveProperty('terminalRedrive');
     });
@@ -229,29 +196,26 @@ describe('summarizeSeqscribeStats', () => {
     /**
      * G2 handshake RCA (design §7e, `scratchpad/transcript-handshake-rca.md`
      * finding #5): before this field there was no daemon-side counter for how
-     * often a dashboard peer's session used the seqscribe replica transport
-     * versus the legacy chat-tail fallback, or how often a zombie peer
-     * connection was recovered — see `packages/daemon-cloud/src/daemon-p2p/
+     * often a dashboard peer's seqscribe connection was judged zombie and
+     * recovered — see `packages/daemon-cloud/src/daemon-p2p/
      * data-channel-router.ts` `getZombiePeerRecoveryCount`. Same
      * local-only/dedup-safe discipline as `readRouting` above: this test file
      * pins that this field follows the identical opt-in and copy-on-read
      * contract as every other local-only counter here.
      */
-    describe('transcript-transport selection + zombie-recovery counters (G2)', () => {
+    describe('transcript-lane zombie-recovery counter', () => {
         const selection = {
-            replicaSelected: 205,
-            legacySelected: 3,
             zombieRecovered: 1,
         };
 
         it('surfaces the counters when local diagnostics are requested', () => {
             const summary = summarizeSeqscribeStats(
                 { topics: { t: topic() }, peers: [] },
-                { authorityEnabled: true, includeLocalDiagnostics: true, transcriptTransportSelection: selection },
+                { authorityEnabled: true, includeLocalDiagnostics: true, transcriptLane: selection },
             );
 
-            expect(summary.transcriptTransportSelection).toEqual(selection);
-            expect(summary.transcriptTransportSelection?.zombieRecovered).toBe(1);
+            expect(summary.transcriptLane).toEqual(selection);
+            expect(summary.transcriptLane?.zombieRecovered).toBe(1);
         });
 
         it('omits the counters unless local diagnostics are requested', () => {
@@ -262,23 +226,21 @@ describe('summarizeSeqscribeStats', () => {
             // is a fixed-key allow-list that does not name this key either way.
             const summary = summarizeSeqscribeStats(
                 { topics: { t: topic() }, peers: [] },
-                { authorityEnabled: true, transcriptTransportSelection: selection },
+                { authorityEnabled: true, transcriptLane: selection },
             );
-            expect(summary).not.toHaveProperty('transcriptTransportSelection');
+            expect(summary).not.toHaveProperty('transcriptLane');
         });
 
         it('copies the counters so a later read cannot mutate a held snapshot', () => {
-            const live = { replicaSelected: 1, legacySelected: 0, zombieRecovered: 0 };
+            const live = { zombieRecovered: 0 };
             const summary = summarizeSeqscribeStats(
                 { topics: { t: topic() }, peers: [] },
-                { authorityEnabled: true, includeLocalDiagnostics: true, transcriptTransportSelection: live },
+                { authorityEnabled: true, includeLocalDiagnostics: true, transcriptLane: live },
             );
 
-            live.replicaSelected = 99;
             live.zombieRecovered = 99;
 
-            expect(summary.transcriptTransportSelection?.replicaSelected).toBe(1);
-            expect(summary.transcriptTransportSelection?.zombieRecovered).toBe(0);
+            expect(summary.transcriptLane?.zombieRecovered).toBe(0);
         });
     });
 

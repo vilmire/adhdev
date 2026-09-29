@@ -1909,8 +1909,13 @@ test('mesh_launch_session routes local worktree cloned from local source through
     relayCalls.push({ daemonId, command, args });
     throw new Error(`unexpected P2P relay for local worktree command: ${command}`);
   };
-  transport.command = async (command, args = {}) => {
+  const command = async (command: string, args: Record<string, unknown> = {}) => {
     if (isTurnIpcCommand(command)) return answerTurnIpc(command, args ?? {} as Record<string, unknown>);
+    // The coordinator daemon decides locality (mesh_node_route): this daemon's
+    // machine holds the source checkout and its worktrees — all served in-process.
+    if (command === 'mesh_node_route') {
+      return { success: true, routes: Object.fromEntries(ctx.mesh.nodes.map((n: any) => [n.id, { route: 'local', reason: 'checkout_on_this_machine' }])) };
+    }
     directCalls.push({ command, args });
     if (command === 'launch_cli') {
       return { success: true, sessionId: (args as any).dir === '/repo-parent/.adhdev-worktrees/mesh/feat-a' ? 'session-a' : 'session-b' };
@@ -1918,6 +1923,8 @@ test('mesh_launch_session routes local worktree cloned from local source through
     if (command === 'trigger_mesh_queue') return { success: true };
     throw new Error(`unexpected direct command: ${command}`);
   };
+  (command as any).answersMeshNodeRoute = true;
+  transport.command = command;
 
   const launchAText = await meshLaunchSession(ctx, { node_id: 'node-worktree-a', type: 'hermes-cli' });
   const launchBText = await meshLaunchSession(ctx, { node_id: 'node-worktree-b', type: 'hermes-cli' });
@@ -3575,8 +3582,10 @@ test('mesh status and git status include explicitly configured related repo fres
   transport.command = async (command, args = {}) => {
     if (isTurnIpcCommand(command)) return answerTurnIpc(command, args ?? {} as Record<string, unknown>);
     calls.push({ command, workspace: args.workspace });
+    // The coordinator daemon composes mesh_status from ITS roster (it reads the
+    // related repos of the nodes it serves), so its get_mesh answers.
     if (command === 'get_mesh') {
-      return { success: false };
+      return { success: true, mesh };
     }
     if (command === 'git_status') {
       const workspace = String(args.workspace);
@@ -3752,8 +3761,11 @@ test('local IPC mesh_send_task with explicit session resolves providerType from 
   // observeDirectDispatchOutcome's contract that a null attemptRef is a no-op.
   // Filter to agent_command specifically rather than index into the raw list,
   // so a future turn_observe addition doesn't reshuffle indices.
-  assert.equal(directCalls.length, 3);
-  assert.equal(directCalls[0].command, 'get_status_metadata');
+  // (The route question — mesh_dispatch_route, answered by the fake daemon from its roster — is not a dispatch step.)
+  const dispatchSteps = directCalls.filter(c => c.command !== 'mesh_dispatch_route' && c.command !== 'get_mesh');
+  assert.equal(directCalls.filter(c => c.command === 'mesh_dispatch_route').length, 1);
+  assert.equal(dispatchSteps.length, 3);
+  assert.equal(dispatchSteps[0].command, 'get_status_metadata');
   assert.equal(directCalls.filter(c => c.command === 'turn_observe').length, 1);
   const agentCommandCall = directCalls.find(c => c.command === 'agent_command');
   assert.ok(agentCommandCall, 'agent_command was dispatched');

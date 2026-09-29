@@ -72,8 +72,6 @@ export type { CliTerminalHandle } from './components/CliTerminal'
 export { default as ConnectionBadge } from './components/ConnectionBadge'
 export { default as BeaconAdvisoryBadge } from './components/BeaconAdvisoryBadge'
 export type { BeaconAdvisoryBadgeProps } from './components/BeaconAdvisoryBadge'
-export { default as FleetStatusPeerViewBadge, FLEET_STATUS_PEER_FRESH_MS } from './components/FleetStatusPeerViewBadge'
-export type { FleetStatusPeerViewBadgeProps } from './components/FleetStatusPeerViewBadge'
 export { default as StatCard } from './components/StatCard'
 export { default as Card } from './components/Card'
 export type { CardProps, CardPadding, CardRadius } from './components/Card'
@@ -116,28 +114,24 @@ export { default as DashboardHeader } from './components/dashboard/DashboardHead
 export { default as HistoryModal } from './components/dashboard/HistoryModal'
 export { default as ToastContainer } from './components/dashboard/ToastContainer'
 export { buildConversations } from './components/dashboard/buildConversations'
-// (§8 unit 4b) Transcript replica delivery into the chat pane. Exported so the
-// cloud assembly — which owns the P2P/worker transport — can route a verified
-// view to whichever controllers are warm, without reaching into the module,
-// and ask the owner for a keyed base frame when the worker's folder keeps
-// rejecting a session's commits.
-// (§8 unit 4c) …and the reverse direction: the cloud assembly reads which
-// sessions are actually being displayed, so it can declare exactly those as
-// transcript interest. Derived from the same registry the delivery above
-// targets, so the grant and the delivery cannot drift apart.
-// (D1) …and the status lane, for the same reason in the opposite failure mode:
-// when the replica lane wedges, the sibling status handler on the same
-// DataChannel is the only thing still reporting, so it is what tells the frozen
-// pane to re-pull.
+// Keyed chat lane delivery into the chat pane (design 2026-09-28 §5.4, §6.4).
+// Exported so the cloud / standalone assemblies — which own the worker
+// transport — can route a verified view to whichever controllers are warm, ask
+// the owner for a keyed base frame, read which sessions are being displayed
+// (transcript interest, derived from the same registry the delivery targets),
+// and hand terminal status-lane events to the controllers.
 export {
-    applyTranscriptReplicaViewToControllers,
+    applyTranscriptViewToControllers,
     collectRetainedTranscriptSessionInterest,
-    isTerminalChatTailStatusEvent,
+    isTerminalChatStatusEvent,
     noteTerminalStatusEventForControllers,
-    reportTranscriptReplicaFallbackForSession,
     requestTranscriptBaseForSession,
     subscribeTranscriptSessionInterest,
-} from './components/dashboard/session-chat-tail-controller'
+} from './components/dashboard/session-chat-controller'
+// The share-link viewer (web-cloud SessionShare) renders one session's keyed
+// chat lane and daemon.metadata without the owner dashboard's controllers.
+export { isMappableTranscriptView, mapTranscriptViewToChatView, TranscriptBubbleCache } from './components/dashboard/transcript-chat-pane-adapter'
+export { materializeDaemonMetadataUpdate } from './utils/daemon-metadata-fold'
 export type { ActiveConversation } from './components/dashboard/types'
 export { isCliConv, isAcpConv } from './components/dashboard/types'
 
@@ -145,7 +139,7 @@ export { isCliConv, isAcpConv } from './components/dashboard/types'
 export {
     formatIdeType, formatUptime, formatBytes, getAgentDisplayName,
     isCliEntry, dedupeAgents, isAgentActive,
-    buildProviderMaps, PLATFORM_ICONS, groupByMachine, countDaemonFleetSessions,
+    buildProviderMaps, PLATFORM_ICONS, groupByMachine,
     getMachineNickname, getMachineHostnameLabel, getMachineDisplayName,
 } from './utils/daemon-utils'
 export type { IdeSessionSummary, CliSessionSummary, AcpSessionSummary } from './utils/daemon-utils'

@@ -159,11 +159,16 @@ export function startTurnLoops(components: TurnWiredComponents, env: NodeJS.Proc
         const selfDaemonId = ledger.selfDaemonId;
         const reader = createComponentsProbeReader(components, {
             analyzer: analyzeProbeTranscript,
-            // Remote presence / status from the coordinator-held runtime (member push)
-            // when live; the per-daemon get_status_metadata stays the fallback.
+            // Remote presence / status ONLY from the coordinator-held runtime (member
+            // push). Nothing live held → ask the member to push (a rate-limited nudge),
+            // never a per-daemon get_status_metadata read.
             readHeldSessions: (attempt, daemonId) => {
                 const held = readLiveHeldRuntime(components.router?.meshNodeGitState, { meshId: attempt.meshId, nodeId: attempt.nodeId, daemonId });
                 return held ? { sessions: held.runtime.sessions, observedAt: held.observedAt, ...(held.runtime.sessionsTruncated ? { truncated: true } : {}) } : null;
+            },
+            requestHeldPush: (attempt, daemonId, workspace) => {
+                if (!attempt.meshId || !attempt.nodeId || !workspace) return;
+                components.router?.meshNodeGitRefresher?.nudge({ meshId: attempt.meshId, nodeId: attempt.nodeId, daemonId, workspace });
             },
         });
         components.turnScheduler = startTurnScheduler({
@@ -269,6 +274,7 @@ export async function startLoops(s7: MeshRuntimeStage): Promise<Disposer> {
         s7.cdpInitializer.stop();
         stopTurnLoops(components as TurnWiredComponents);
         try { s7.router.meshNodeStatePusher.stop(); } catch { /* noop */ }
+        try { s7.router.localMeshNodeGitWatch.stop(); } catch { /* noop */ }
         try { components.composerResidueSweep?.stop(); } catch { /* noop */ }
         try { components.eventLoopMonitor?.stop(); } catch { /* noop */ }
     };

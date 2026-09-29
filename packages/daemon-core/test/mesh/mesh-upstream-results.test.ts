@@ -22,7 +22,7 @@ import {
   UPSTREAM_RESULTS_MAX_BYTES,
 } from '../../src/mesh/mesh-upstream-results'
 import { MESH_UPSTREAM_DATA_PREAMBLE } from '../../src/mesh/mesh-graph-input-binding'
-import { __resetHandoffNotesForTest, storeHandoffNote } from '../../src/mesh/worker-handoff-notes'
+import { storeHandoffNote } from '../../src/mesh/worker-handoff-notes'
 import { WORKER_HANDOFF_EVENT_KIND } from '../../src/mesh/worker-report'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store'
 import { seedWorkerEvent } from '../helpers/turn-attempt-seed'
@@ -50,13 +50,11 @@ function appendixOf(body: string): string {
 const savedGate = process.env.ADHDEV_WORKER_MCP
 
 beforeEach(() => {
-  __resetHandoffNotesForTest()
   seq += 1
   MESH = `mesh_upstream_${seq}_${randomUUID().slice(0, 6)}`
   delete process.env.ADHDEV_WORKER_MCP
 })
 afterEach(() => {
-  __resetHandoffNotesForTest()
   if (savedGate === undefined) delete process.env.ADHDEV_WORKER_MCP
   else process.env.ADHDEV_WORKER_MCP = savedGate
 })

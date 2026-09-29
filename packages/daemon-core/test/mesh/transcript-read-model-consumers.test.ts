@@ -177,7 +177,6 @@ describe('transcript-read-model-consumers roster', () => {
         // TranscriptConsumerFallbackReason and nothing else. A member added or
         // removed from the union without updating this list fails to compile.
         const reasons: readonly TranscriptConsumerFallbackReason[] = [
-            'mode_not_primary',
             'consumer_not_enabled',
             'no_node',
             'authority_unavailable',
@@ -195,6 +194,6 @@ describe('transcript-read-model-consumers roster', () => {
             'stats_error',
         ];
         expect(new Set(reasons).size).toBe(reasons.length);
-        expect(reasons.length).toBe(16);
+        expect(reasons.length).toBe(15);
     });
 });

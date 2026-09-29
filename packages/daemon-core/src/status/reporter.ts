@@ -1,22 +1,22 @@
 /**
- * DaemonStatusReporter — status collect & transmit (StatusReport / P2P / StatusEvent)
+ * DaemonStatusReporter — the SERVER `status_report` (routing metadata only).
  *
- * Collect status from ProviderInstanceManager → assemble payload → transmit
- * Each Instance manages its own status/transition. This module only assembles + transmits.
+ * Collect status from ProviderInstanceManager → project to the allow-listed
+ * routing payload → transmit over the server WS. The dashboard's state lane is
+ * the keyed `daemon.metadata` topic (subscriptions/topic-registry.ts); the old
+ * P2P `status_report` full-snapshot push is gone (data-path audit 2026-09-29
+ * P0-3), as is the `fleet.status` shadow ring this reporter used to feed (P0-4).
  */
 
-import { LOG, getLogLevel } from '../logging/logger.js';
+import { LOG } from '../logging/logger.js';
 import {
     DEFAULT_STATUS_INITIAL_REPORT_DELAY_MS,
     DEFAULT_STATUS_P2P_REPORT_INTERVAL_MS,
     DEFAULT_STATUS_SERVER_REPORT_INTERVAL_MS,
 } from '../runtime-defaults.js';
 import type { DaemonCdpManager } from '../cdp/manager.js';
-import type { MachineInfo } from '../shared-types.js';
-import type { BeaconDiagnosticsSummary, CloudStatusReportPayload, DaemonStatusEventPayload, FleetStatusPeerView, P2PStatusSummary, RoutingSessionEntry, SeqscribeStatusSummary, StatusReportPayload } from '../shared-types.js';
+import type { CloudStatusReportPayload, P2PStatusSummary, RoutingSessionEntry, SeqscribeStatusSummary, StatusReportPayload } from '../shared-types.js';
 import { buildStatusSnapshot } from './snapshot.js';
-import type { FleetStatusProducer } from '../seqscribe/runtime.js';
-import { seqscribeSlot } from '../seqscribe/runtime-slot.js';
 // Shared WS message-type union (mesh-shared/ws-protocol) — this sink was typed
 // `type: string`, leaving the primary status_report producer outside the only
 // typed protocol surface (which lived in the proprietary consumer package).
@@ -111,17 +111,7 @@ function buildCloudSeqscribeSummary(
         fgenAgeBucket: count(seqscribe.fgenAgeBucket),
         quarantined: seqscribe.quarantined === true,
         authority: seqscribe.authority === true,
-        dualWrite: seqscribe.dualWrite === true,
-        dualWriteFailedBucket: count(seqscribe.dualWriteFailedBucket),
-        dualWriteDroppedBucket: count(seqscribe.dualWriteDroppedBucket),
-        dualWriteBackfilledBucket: count(seqscribe.dualWriteBackfilledBucket),
-        parityMismatchBucket: count(seqscribe.parityMismatchBucket),
-        parityRan: seqscribe.parityRan === true,
-        parityMissingInShadowBucket: count(seqscribe.parityMissingInShadowBucket),
-        parityExtraInShadowBucket: count(seqscribe.parityExtraInShadowBucket),
-        parityFieldMismatchBucket: count(seqscribe.parityFieldMismatchBucket),
-        // §8 unit 2. transcriptParityPersistentMismatchBucket stays LOCAL-ONLY,
-        // absent here — same asymmetry as parityPersistentMismatchBucket above.
+        // §8 unit 2. transcriptParityPersistentMismatchBucket stays LOCAL-ONLY.
         transcriptPublish: seqscribe.transcriptPublish === true,
         transcriptPublishedBucket: count(seqscribe.transcriptPublishedBucket),
         transcriptPublishFailedBucket: count(seqscribe.transcriptPublishFailedBucket),
@@ -173,242 +163,6 @@ export function buildCloudStatusReportPayload(
     };
 }
 
-// ─── fleet.status entry (Phase 4 Stage 1) ─────────────
-
-/**
- * Daemon reachability, as the producer itself sees it.
- *
- * Deliberately NOT the server's notion of online: this entry is written by the
- * daemon into a replicated ring that peers read, so the honest value is what
- * this process can observe about its own links — not a status another party
- * would infer from the absence of a heartbeat (a peer reading a stale ring
- * entry draws that conclusion itself, from `at`).
- */
-export type FleetOnlineState = 'online' | 'reconnecting' | 'offline';
-
-/**
- * Session tallies carried on a fleet.status entry.
- *
- * ★ These are computed HERE, in the daemon, and are not a reuse of anything
- * server-side. `countTopLevelSessions` (packages/server/src/durable-objects/
- * daemon-status.ts) counts three category buckets and nothing else — it never
- * looks at `status`, so the four state buckets below have no existing
- * implementation anywhere in the codebase. Reusing the server function was
- * considered and rejected twice over: it is in the proprietary package that
- * daemon-core must not import, and it does not compute what is needed.
- *
- * Every field is a `number`. No `Record<string, number>` keyed by provider,
- * session id or status: a dynamic key map is how a content boundary leaks by
- * accident, because the KEYS then carry data that no allow-list reviewed.
- */
-export interface FleetSessionCounts {
-    /** Category buckets — same predicate the server uses, computed locally. */
-    ideCount: number;
-    cliCount: number;
-    acpCount: number;
-    /** State buckets — new here; nothing upstream computes these. */
-    idleCount: number;
-    generatingCount: number;
-    waitingApprovalCount: number;
-    erroredCount: number;
-}
-
-/**
- * One `fleet.status` ring entry.
- *
- * ── The shape is a CLOSED set of fixed keys, on purpose ────────────────────
- * `fleet.status` is an `access: 'metadata'` topic (seqscribe/topics.ts) that
- * replicates to every peer in the fleet, so it is governed by the same content
- * boundary as the server WS status path: identifiers, enums, booleans and
- * counters only — never text authored by a user or an agent.
- *
- * Explicitly excluded, each for a reason rather than by oversight:
- *   · per-session arrays — session ids and workspaces are routing detail that
- *     belongs on the P2P payload; a fleet tail needs tallies, not a roster.
- *   · topic names, peer ids, writer ids — replication internals, and exactly
- *     what the seqscribe summary's own allow-list already strips upstream.
- *   · `machineNickname` — USER FREE TEXT. It is a `PATCH /machines/:id` body
- *     field (packages/server/src/routes/machines.ts:45-51) that the user types
- *     and the server stores in D1 `machines.nickname`, handed back to the
- *     daemon at daemon-auth.ts:175. A consumer that wants a human label
- *     resolves it from `daemonId` on its own side.
- */
-export interface FleetStatusEntry {
-    daemonId: string;
-    /** ISO-8601. A string, not epoch ms, so a ring tail is readable as-is. */
-    at: string;
-    onlineState: FleetOnlineState;
-    p2pActive: boolean;
-    sessionCounts: FleetSessionCounts;
-    /**
-     * Replication health. Reuses `buildCloudSeqscribeSummary` verbatim — the
-     * same projection the server WS path already carries, already boundary
-     * tested (test/status/cloud-status-content-boundary.test.ts). Absent, not
-     * zeroed, when no node is running, so "no seqscribe" stays distinguishable
-     * from "a healthy idle node".
-     */
-    seqscribe?: SeqscribeStatusSummary;
-}
-
-/**
- * Count sessions into the seven buckets, from the daemon's own snapshot.
- *
- * The category predicate mirrors the server's (`kind`+`transport`, top-level
- * only) so the two agree on the axis they share. The state predicate is new.
- *
- * `status` is a `SessionStatus` union of 11 values and the four buckets do not
- * partition it — `finalizing`, `stopped`, `starting`, `disconnected`,
- * `panel_hidden` and `not_monitored` intentionally fall into no bucket. The
- * buckets answer "what needs attention", not "where is every session", so the
- * four are NOT expected to sum to the category totals, and a consumer must not
- * derive one from the other.
- *
- * ★ State buckets count ALL sessions, including children, while the category
- * buckets count top-level ones only. That asymmetry is deliberate: an agent
- * waiting on approval matters whether or not it is nested under a workspace,
- * and the category counts exist to describe the machine's shape.
- */
-export function countFleetSessions(sessions: unknown): FleetSessionCounts {
-    const list = Array.isArray(sessions) ? sessions : [];
-    const counts: FleetSessionCounts = {
-        ideCount: 0,
-        cliCount: 0,
-        acpCount: 0,
-        idleCount: 0,
-        generatingCount: 0,
-        waitingApprovalCount: 0,
-        erroredCount: 0,
-    };
-
-    for (const raw of list) {
-        const session = (raw || {}) as Record<string, any>;
-
-        if (!session.parentId) {
-            if (session.kind === 'workspace' && session.transport === 'cdp-page') counts.ideCount++;
-            else if (session.kind === 'agent' && session.transport === 'pty') counts.cliCount++;
-            else if (session.kind === 'agent' && session.transport === 'acp') counts.acpCount++;
-        }
-
-        switch (session.status) {
-            case 'idle':
-                counts.idleCount++;
-                break;
-            case 'generating':
-                counts.generatingCount++;
-                break;
-            // Both approval-shaped states land in one bucket: from a fleet tail's
-            // point of view "a human must answer something" is the signal, and
-            // splitting it would invite a consumer to watch only one of the two.
-            case 'waiting_approval':
-            case 'waiting_choice':
-                counts.waitingApprovalCount++;
-                break;
-            case 'error':
-                counts.erroredCount++;
-                break;
-            default:
-                break;
-        }
-    }
-
-    return counts;
-}
-
-/**
- * Build one `fleet.status` entry.
- *
- * Pure and total: it never reads module state, never throws on a malformed
- * input (numbers are coerced, unknown session shapes simply fall into no
- * bucket), so the shadow write path can call it without a guard of its own.
- */
-export function fleetStatusEntry(input: {
-    daemonId: string;
-    sessions: unknown;
-    onlineState: FleetOnlineState;
-    p2pActive: boolean;
-    timestamp: number;
-    seqscribe?: SeqscribeStatusSummary | undefined;
-}): FleetStatusEntry {
-    const seqscribeSummary = buildCloudSeqscribeSummary(input.seqscribe);
-    const at = Number.isFinite(input.timestamp)
-        ? new Date(input.timestamp).toISOString()
-        : new Date().toISOString();
-
-    return {
-        daemonId: input.daemonId,
-        at,
-        onlineState: input.onlineState,
-        p2pActive: input.p2pActive === true,
-        sessionCounts: countFleetSessions(input.sessions),
-        ...(seqscribeSummary ? { seqscribe: seqscribeSummary } : {}),
-    };
-}
-
-// ─── Daemon dependency interface ──────────────────────
-
-const FLEET_DAEMON_ID_RE = /^[A-Za-z0-9._:-]{1,160}$/;
-
-function fleetCount(value: unknown): number | null {
-    return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
-}
-
-/**
- * Re-apply the complete `fleet.status` allow-list on the receiving side.
- *
- * Metadata peers are still inputs at a package boundary. Copying every
- * permitted key by name ensures an injected nickname, session array, dynamic
- * map, or future producer field cannot enter the local peer view merely because
- * it arrived in a valid ring row. Invalid required fields reject the whole row;
- * unknown fields are dropped.
- */
-export function projectFleetStatusEntry(raw: unknown): FleetStatusEntry | null {
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
-    const value = raw as Record<string, unknown>;
-    if (typeof value.daemonId !== 'string' || !FLEET_DAEMON_ID_RE.test(value.daemonId)) return null;
-    if (typeof value.at !== 'string' || Number.isNaN(Date.parse(value.at))) return null;
-    if (!['online', 'reconnecting', 'offline'].includes(String(value.onlineState))) return null;
-    if (typeof value.p2pActive !== 'boolean') return null;
-    if (!value.sessionCounts || typeof value.sessionCounts !== 'object' || Array.isArray(value.sessionCounts)) {
-        return null;
-    }
-
-    const rawCounts = value.sessionCounts as Record<string, unknown>;
-    const ideCount = fleetCount(rawCounts.ideCount);
-    const cliCount = fleetCount(rawCounts.cliCount);
-    const acpCount = fleetCount(rawCounts.acpCount);
-    const idleCount = fleetCount(rawCounts.idleCount);
-    const generatingCount = fleetCount(rawCounts.generatingCount);
-    const waitingApprovalCount = fleetCount(rawCounts.waitingApprovalCount);
-    const erroredCount = fleetCount(rawCounts.erroredCount);
-    if (
-        ideCount === null || cliCount === null || acpCount === null || idleCount === null ||
-        generatingCount === null || waitingApprovalCount === null || erroredCount === null
-    ) {
-        return null;
-    }
-
-    const seqscribe = value.seqscribe && typeof value.seqscribe === 'object' && !Array.isArray(value.seqscribe)
-        ? buildCloudSeqscribeSummary(value.seqscribe as SeqscribeStatusSummary)
-        : undefined;
-
-    return {
-        daemonId: value.daemonId,
-        at: new Date(value.at).toISOString(),
-        onlineState: value.onlineState as FleetOnlineState,
-        p2pActive: value.p2pActive,
-        sessionCounts: {
-            ideCount,
-            cliCount,
-            acpCount,
-            idleCount,
-            generatingCount,
-            waitingApprovalCount,
-            erroredCount,
-        },
-        ...(seqscribe ? { seqscribe } : {}),
-    };
-}
-
 export interface StatusReporterDeps {
     // sendMessage reports delivery by return value: the cloud ServerConnection
     // returns false when the socket is not in a sendable state (mid-reconnect) or
@@ -417,6 +171,7 @@ export interface StatusReporterDeps {
     // `void | boolean` so implementations that return nothing still satisfy it.
     serverConn: { isConnected(): boolean; sendMessage(type: DaemonToServerWsMsg, data: any): void | boolean; getUserPlan(): string } | null;
     cdpManagers: Map<string, DaemonCdpManager>;
+    /** P2P link state, projected into the server frame's allow-listed `p2p` summary. */
     p2p: {
         isConnected: boolean;
         isAvailable: boolean;
@@ -435,15 +190,6 @@ export interface StatusReporterDeps {
             directTotal: number;
             relayTotal: number;
         };
-        sendStatus(data: any): void;
-        /**
-         * @deprecated Unread by this reporter — the status_event projection
-         * moved to status/status-event.ts's createStatusEventEmitter
-         * (wiring-unification B5). Kept optional so existing test doubles that
-         * still populate it (outside this workstream's file ownership) do not
-         * need editing; a new caller should not add a reader here.
-         */
-        sendStatusEvent?(event: DaemonStatusEventPayload): void;
     } | null;
     providerLoader: { resolve(type: string): any; getAll(): any[] };
     detectedIdes: any[];
@@ -452,16 +198,7 @@ export interface StatusReporterDeps {
     instanceManager: {
         collectAllStates(): ProviderState[];
         collectStatesByCategory(cat: string): ProviderState[];
-        /**
-         * Optional: live instance lookup used to stamp `surfaceHidden`/`muted` onto
-         * outgoing status events (see buildServerStatusEvent). Optional so existing
-         * test doubles and any alternate manager still satisfy the interface — when
-         * absent the event simply omits the flags and the server falls back to its
-         * snapshot join, i.e. exactly the pre-existing behavior.
-         */
-        getInstance?(sessionId: string): { getState?(): ProviderState | undefined } | undefined;
     };
-    getScreenshotUsage?: () => { dailyUsedMinutes: number; dailyBudgetMinutes: number; budgetExhausted: boolean } | null;
     /**
      * seqscribe replication health, if a node is running (design §1.5).
      *
@@ -471,30 +208,20 @@ export interface StatusReporterDeps {
      * aggregates — see seqscribe/stats.ts for why the values are coarse.
      */
     getSeqscribeStats?: () => SeqscribeStatusSummary | null;
-    /**
-     * Beacon staleness / sole-copy advisory (design §7.1, mission b60d70b8).
-     *
-     * ★ Read ONLY into the P2P payload below — never into
-     * `buildCloudStatusReportPayload`. Unlike `getSeqscribeStats`, this value
-     * carries topic names and peer writer ids: that is the feature, and it is
-     * why it stays on the P2P/local side of the boundary. The Beacon content
-     * exception (CLAUDE.md) covers the beacon BOARD path, not the status path.
-     */
-    getBeaconDiagnostics?: () => BeaconDiagnosticsSummary | null;
-    /**
-     * Latest fleet.status entries received from seqscribe SUB peers.
-     *
-     * ★ Rich P2P/local only. The server frame is independently projected by
-     * buildCloudStatusReportPayload and never reads this getter.
-     */
-    getFleetStatusPeerView?: () => FleetStatusPeerView | null;
-    /**
-     * The seqscribe runtime's fleet.status producer (wiring-unification B4):
-     * the shadow append + parity expectation legs this reporter feeds each
-     * tick. `null` = explicitly none. Omitted (hosts not yet migrated, B5) =
-     * read the process's armed runtime from `seqscribeSlot`.
-     */
-    seqscribe?: { fleetStatus: FleetStatusProducer } | null;
+}
+
+/** The P2P link summary as the reporter observes it (the server frame's `p2p` input). */
+export function observeP2PStatusSummary(p2p: StatusReporterDeps['p2p']): P2PStatusSummary {
+    return {
+        available: p2p?.isAvailable || false,
+        state: p2p?.connectionState || 'unavailable',
+        peers: p2p?.connectedPeerCount || 0,
+        screenshotActive: p2p?.screenshotActive || false,
+        // Direct vs TURN-relay tallies. Spread so that a P2P impl without
+        // candidate-pair observability contributes no keys at all rather
+        // than a misleading run of zeros.
+        ...(p2p?.transportStats ?? {}),
+    };
 }
 
 /**
@@ -521,9 +248,6 @@ export class DaemonStatusReporter {
 
     private lastStatusSentAt = 0;
     private statusPendingThrottle = false;
-    private lastP2PStatusHash = '';
-    private lastP2PStatusSentAt: number = 0;
-    private p2pDebounceTimer: ReturnType<typeof setTimeout> | null = null;
     private lastServerStatusHash = '';
     private lastStatusSummary = '';
     /**
@@ -533,7 +257,6 @@ export class DaemonStatusReporter {
     private serverDedupSkipCount = 0;
 
     private statusTimer: NodeJS.Timeout | null = null;
-    private p2pTimer: NodeJS.Timeout | null = null;
 
     constructor(deps: StatusReporterDeps, opts?: { logFn?: (msg: string) => void }) {
         this.deps = deps;
@@ -556,25 +279,14 @@ export class DaemonStatusReporter {
             }, DEFAULT_STATUS_SERVER_REPORT_INTERVAL_MS);
         };
         scheduleServerReport();
-
-        this.p2pTimer = setInterval(() => {
-            if (this.deps.p2p?.isConnected) {
-                this.sendUnifiedStatusReport({ p2pOnly: true }).catch(e => LOG.warn('Status', `P2P status send failed: ${e?.message}`));
-            }
-        }, DEFAULT_STATUS_P2P_REPORT_INTERVAL_MS);
     }
 
     stopReporting(): void {
         if (this.statusTimer) { clearTimeout(this.statusTimer); this.statusTimer = null; }
-        if (this.p2pTimer) { clearInterval(this.p2pTimer); this.p2pTimer = null; }
     }
 
+    /** A status fact changed — report to the server, throttled. */
     onStatusChange(): void {
-        if (this.deps.p2p?.isConnected) {
-            this.resetP2PHash();
-            this.sendUnifiedStatusReport({ p2pOnly: true, reason: 'status-change' })
-                .catch(e => LOG.warn('Status', `Immediate P2P status send failed: ${e?.message}`));
-        }
         this.throttledReport();
     }
 
@@ -595,73 +307,21 @@ export class DaemonStatusReporter {
     // toDaemonStatusEventName / resolveEventHideMute / buildServerStatusEvent /
     // buildP2PStatusEvent / emitStatusEvent moved to status/status-event.ts as
     // projectServerStatusEvent / projectP2PStatusEvent / createStatusEventEmitter
-    // (wiring-unification B5, shared by both hosts). removeAgentTracking and
-    // updateAgentStreams were dead no-ops with no caller; deleted with them
-    // (wiring-unification B residue cleanup).
-
-    /** Reset P2P dedup hash — forces next send to transmit even if content unchanged */
-    resetP2PHash(): void {
-        this.lastP2PStatusHash = '';
-    }
+    // (wiring-unification B5, shared by both hosts).
 
  // ─── Core ────────────────────────────────────────
 
-    private ts(): string {
-        return new Date().toISOString().slice(11, 23); // HH:mm:ss.SSS
-    }
-
-    private summarizeLargePayloadSessions(payload: Record<string, any>): string {
-        const sessions = Array.isArray(payload.sessions) ? payload.sessions : [];
-        return sessions
-            .map((session: any) => ({
-                id: String(session?.id || ''),
-                providerType: String(session?.providerType || ''),
-                bytes: (() => {
-                    try {
-                        return JSON.stringify(session).length;
-                    } catch {
-                        return 0;
-                    }
-                })(),
-            }))
-            .sort((a, b) => b.bytes - a.bytes)
-            .slice(0, 3)
-            .map((session) => `${session.providerType || 'unknown'}:${session.id}=${session.bytes}b`)
-            .join(', ');
-    }
-
-    async sendUnifiedStatusReport(opts?: { p2pOnly?: boolean; forceServer?: boolean; reason?: string }): Promise<void> {
+    async sendUnifiedStatusReport(opts?: { forceServer?: boolean; reason?: string }): Promise<void> {
         const { serverConn, p2p } = this.deps;
-        const serverConnected = !!serverConn?.isConnected();
-        const p2pConnected = !!p2p?.isConnected;
-        if (!serverConnected && !p2pConnected) return;
+        if (!serverConn?.isConnected()) return;
         this.lastStatusSentAt = Date.now();
         const now = this.lastStatusSentAt;
-        const target = opts?.p2pOnly ? 'P2P' : (serverConnected ? 'P2P+Server' : 'P2P');
 
         const allStates = this.deps.instanceManager.collectAllStates();
 
- // P2P-only = 5s heartbeat → DEBUG, P2P+Server = 30s interval → INFO
-        const logLevel = opts?.p2pOnly ? 'debug' : 'info';
-        // ★ The per-category summary below exists ONLY to build one log line. It
-        // used to run three full `allStates.filter(...)` passes plus three
-        // `.map().join()` string builds on EVERY tick — including the 5s P2P
-        // heartbeat, whose line is DEBUG and therefore discarded outright on a
-        // default (info) daemon. That is O(N) array + string allocation per tick
-        // to produce a string nobody reads.
-        //
-        // Two changes, neither of which alters what is logged when the line IS
-        // emitted:
-        //   1. skip the whole block when the target level is suppressed, and
-        //   2. build the three category summaries in ONE pass over allStates
-        //      instead of three filters plus three maps.
-        //
-        // `lastStatusSummary` is still updated whenever the summary is computed,
-        // so the "skip identical repeats" dedup is unchanged for the levels that
-        // do log. When the level is suppressed the summary is not computed at
-        // all, so the memo is simply not advanced — which is correct: it only
-        // ever gates a log line, never a transmission.
-        if (logLevel !== 'debug' || getLogLevel() === 'debug') {
+        // The per-category summary exists ONLY to build one INFO log line;
+        // identical repeats are skipped. Built in one pass over allStates.
+        {
             let ideCount = 0;
             let cliCount = 0;
             let acpCount = 0;
@@ -684,155 +344,30 @@ export class DaemonStatusReporter {
                 }
             }
             const baseSummary = `IDE: ${ideCount} [${ideParts.join(', ')}] CLI: ${cliCount} [${cliParts.join(', ')}] ACP: ${acpCount} [${acpParts.join(', ')}]`;
- // Skip identical repeats at any level to reduce log noise
             if (baseSummary !== this.lastStatusSummary) {
                 this.lastStatusSummary = baseSummary;
-                if (logLevel === 'debug') {
-                    LOG.debug('StatusReport', `→${target} ${baseSummary}`);
-                } else {
-                    LOG.info('StatusReport', `→${target} ${baseSummary}`);
-                }
+                LOG.info('StatusReport', `→Server ${baseSummary}`);
             }
         }
 
-// ═══ Assemble payload (P2P — required data only) ═══
-        // Read once per report. A throwing diagnostics getter must never take
-        // the status report with it: this whole path is advisory (§7.1.0).
-        let beaconDiagnostics: BeaconDiagnosticsSummary | null = null;
-        try {
-            beaconDiagnostics = this.deps.getBeaconDiagnostics?.() ?? null;
-        } catch {
-            beaconDiagnostics = null;
-        }
-        let fleetStatusPeerView: FleetStatusPeerView | null = null;
-        try {
-            fleetStatusPeerView = this.deps.getFleetStatusPeerView?.() ?? null;
-        } catch {
-            fleetStatusPeerView = null;
-        }
-        const payload: Record<string, any> = {
-            ...buildStatusSnapshot({
-                allStates,
-                cdpManagers: this.deps.cdpManagers,
-                providerLoader: this.deps.providerLoader,
-                detectedIdes: this.deps.detectedIdes || [],
-                instanceId: this.deps.instanceId,
-                version: this.deps.daemonVersion || 'unknown',
-                timestamp: now,
-                p2p: {
-                    available: p2p?.isAvailable || false,
-                    state: p2p?.connectionState || 'unavailable',
-                    peers: p2p?.connectedPeerCount || 0,
-                    screenshotActive: p2p?.screenshotActive || false,
-                    // Direct vs TURN-relay tallies. Spread so that a P2P impl without
-                    // candidate-pair observability contributes no keys at all rather
-                    // than a misleading run of zeros.
-                    ...(p2p?.transportStats ?? {}),
-                },
-                profile: 'live',
-            }),
-            screenshotUsage: this.deps.getScreenshotUsage?.() || null,
-            // ★ Beacon staleness/sole-copy rides the P2P payload ONLY (mission
-            // b60d70b8). It carries topic names and peer writer ids, which the
-            // server status path forbids — and it cannot leak there, because the
-            // server frame is built separately by
-            // `buildCloudStatusReportPayload` from `allStates`, never from this
-            // object. Omitted entirely when no beacon is armed, so "absent"
-            // stays distinguishable from "armed but empty".
-            ...(beaconDiagnostics ? { beacon: beaconDiagnostics } : {}),
-            // Phase 4 Stage 2: latest fixed-key status received from each
-            // seqscribe SUB peer. This is a cross-check beside the WS routing
-            // view, not a replacement. The server frame below has no field for
-            // it and continues to be built from its existing allow-list.
-            ...(fleetStatusPeerView ? { fleetStatusPeerView } : {}),
-        };
-
-// ═══ P2P transmit ═══
-        const p2pSent = this.sendP2PPayload(payload);
-        if (p2pSent) {
-            const payloadBytes = JSON.stringify(payload).length;
-            LOG.debug('P2P', `sent (${payloadBytes} bytes)`);
-            if (payloadBytes > 256 * 1024) {
-                LOG.warn(
-                    'P2P',
-                    `large status payload (${payloadBytes} bytes) top sessions: ${this.summarizeLargePayloadSessions(payload) || 'n/a'}`,
-                );
-            }
-        }
-
-// ═══ fleet.status ring append (Phase 4 Stage 1 — shadow, additive) ═══
-        // ★ Placed BEFORE the `p2pOnly` early return below on purpose: a
-        // P2P-only tick is still a real status observation, and the ring is a
-        // peer-facing tail that must not go stale merely because the cloud WS
-        // leg is the one being skipped this tick.
-        //
-        // ★ This does NOT replace, gate or modify the server transmit that
-        // follows. The `status_report` frame stays exactly as it was — it is a
-        // live routing/push path, not a P2P-down fallback (see the header of
-        // seqscribe/fleet-status-shadow.ts). This is a second, parallel record.
-        //
-        // Off by default and non-throwing by construction, so on a daemon that
-        // has not opted in this is one boolean check per tick.
-        const fleetOnlineState: FleetOnlineState = serverConnected
-            ? 'online'
-            : (p2pConnected ? 'reconnecting' : 'offline');
-
-        // Stage 3 parity expectation. Re-project through the actual WS builder
-        // before counting, so this side does not simply reuse the ring entry it
-        // is meant to verify. The thunk is never evaluated in the default/off
-        // mode, and only fixed counts/state are retained locally.
-        const fleetStatus = this.deps.seqscribe === undefined
-            ? seqscribeSlot.current()?.fleetStatus
-            : this.deps.seqscribe?.fleetStatus;
-        fleetStatus?.observeWsProjection(() => {
-            const wsProjection = buildCloudStatusReportPayload(payload.sessions, payload.p2p, now);
-            return {
-                at: new Date(now).toISOString(),
-                sessionCounts: countFleetSessions(wsProjection.sessions),
-                onlineState: fleetOnlineState,
-            };
+        // Server relay only needs compact session metadata for routing, compact
+        // status, initial_state fallback, and lightweight API/session
+        // inspection. seqscribe health rides this existing frame; its values are
+        // bucketed upstream precisely so they participate in the dedup hash
+        // below without defeating it.
+        const snapshot = buildStatusSnapshot({
+            allStates,
+            cdpManagers: this.deps.cdpManagers,
+            providerLoader: this.deps.providerLoader,
+            detectedIdes: this.deps.detectedIdes || [],
+            instanceId: this.deps.instanceId,
+            version: this.deps.daemonVersion || 'unknown',
+            timestamp: now,
+            profile: 'live',
         });
-
-        // ★ Gate the ENTRY CONSTRUCTION, not just the append. `fleetStatusEntry`
-        // runs countFleetSessions over every session and calls the seqscribe
-        // stats getter, but `recordFleetStatusShadow` discards the result
-        // outright when no shadow node is armed — which is the DEFAULT for every
-        // daemon. So the unmodified path paid a full O(N) session walk plus a
-        // stats read on every 5s P2P tick to build an object that was then
-        // thrown away. `isFleetStatusShadowActive()` is the same activeNode +
-        // mode check recordFleetStatusShadow performs first, so gating here is
-        // behavior-identical: when the shadow IS armed the entry is built and
-        // recorded exactly as before.
-        if (fleetStatus?.isShadowActive()) {
-            fleetStatus.record(fleetStatusEntry({
-                daemonId: this.deps.instanceId,
-                sessions: payload.sessions,
-                // Derived from what this process can actually observe: a live server
-                // socket is `online`; no socket while P2P still carries traffic is a
-                // daemon mid-reconnect rather than a dead one. `offline` is
-                // effectively unreachable from here — `sendUnifiedStatusReport`
-                // returns early when neither transport is up — and is kept in the
-                // enum for a consumer that infers it from a stale `at`.
-                onlineState: fleetOnlineState,
-                p2pActive: p2pConnected,
-                timestamp: now,
-                seqscribe: this.deps.getSeqscribeStats?.() || undefined,
-            }));
-        }
-
- // ═══ Server transmit (minimal routing meta only) ═══
-        if (opts?.p2pOnly) return;
-        if (!serverConnected || !serverConn) return;
-        // Server relay only needs compact session metadata for routing, compact status,
-        // initial_state fallback, and lightweight API/session inspection.
-        // seqscribe health rides this existing frame — no new endpoint, no new
-        // periodic transmission. Its values are bucketed upstream precisely so
-        // they participate in the dedup hash below without defeating it: an
-        // idle node keeps reporting the same buckets, so identical reports stay
-        // identical and only a real state change forces a send.
         const wsPayload = buildCloudStatusReportPayload(
-            payload.sessions,
-            payload.p2p,
+            snapshot.sessions,
+            observeP2PStatusSummary(p2p),
             now,
             this.deps.getSeqscribeStats?.() || undefined,
         );
@@ -840,7 +375,6 @@ export class DaemonStatusReporter {
             ...wsPayload,
             timestamp: undefined,
         }));
-        if (!serverConnected || !serverConn) return;
         if (!opts?.forceServer && wsHash === this.lastServerStatusHash) {
             // Unchanged payload. Suppress it, but never indefinitely — after
             // SERVER_DEDUP_KEEPALIVE_REPORTS consecutive skips send one anyway so the
@@ -858,8 +392,7 @@ export class DaemonStatusReporter {
         // send throws; storing the hash first would mark a dropped frame as
         // delivered, and every later report with the same payload would then be
         // deduped away — leaving the server on a stale status until the payload
-        // changes again or keepalive expires. Before periodic reports respected
-        // the dedup hash this was masked by an unconditional resend every 30s.
+        // changes again or keepalive expires.
         const delivered = serverConn.sendMessage('status_report', wsPayload);
         if (delivered === false) {
             LOG.debug('Server', `status_report not delivered — keeping previous dedup hash for retry${opts?.reason ? ` (${opts.reason})` : ''}`);
@@ -868,45 +401,6 @@ export class DaemonStatusReporter {
         this.serverDedupSkipCount = 0;
         this.lastServerStatusHash = wsHash;
         LOG.debug('Server', `sent status_report (${wsPayloadBytes} bytes)${opts?.reason ? ` [${opts.reason}]` : ''}`);
-    }
-
- // ─── P2P ─────────────────────────────────────────
-
-    private sendP2PPayload(payload: { timestamp?: number; system?: unknown; machine?: MachineInfo; [key: string]: unknown }): boolean {
-        const { timestamp: _ts, system: _sys, ...hashTarget } = payload;
-        const sessions = Array.isArray(hashTarget.sessions)
-            ? hashTarget.sessions.map((session) => {
-                if (!session || typeof session !== 'object') return session;
-                const { lastUpdated: _lu, ...stableSession } = session as Record<string, unknown>;
-                return stableSession;
-            })
-            : hashTarget.sessions;
-        const hashPayload = hashTarget.machine
-            ? (() => {
-                const { freeMem: _f, availableMem: _a, loadavg: _l, uptime: _u, ...stableMachine } = hashTarget.machine;
-                return { ...hashTarget, sessions, machine: stableMachine };
-            })()
-            : { ...hashTarget, sessions };
-        const h = this.simpleHash(JSON.stringify(hashPayload));
-        if (h !== this.lastP2PStatusHash) {
-            const now = Date.now();
-            // Rate limit: max 1 per 500ms
-            if (this.lastP2PStatusSentAt && now - this.lastP2PStatusSentAt < 500) {
-                if (!this.p2pDebounceTimer) {
-                    this.p2pDebounceTimer = setTimeout(() => {
-                        this.p2pDebounceTimer = null;
-                        this.sendUnifiedStatusReport({ reason: 'p2p_debounce' });
-                    }, 500);
-                }
-                return false; // Dropped for now, but will trigger later
-            }
-            
-            this.lastP2PStatusHash = h;
-            this.lastP2PStatusSentAt = now;
-            this.deps.p2p?.sendStatus(payload);
-            return true;
-        }
-        return false;
     }
 
     private simpleHash(s: string): string {

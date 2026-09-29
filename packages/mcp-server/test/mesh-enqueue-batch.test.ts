@@ -7,6 +7,7 @@ import { IpcTransport } from '../src/transports/ipc.js';
 import { getQueue, upsertMeshMission } from '@adhdev/daemon-core';
 
 import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
+import { fakeCoordinatorTransport } from './helpers/fake-coordinator-tool-answers.js';
 // G5 — mesh_enqueue_batch: atomic multi-task graph submission.
 //   The tool must (a) insert ALL tasks or NONE (a mid-batch cycle / unknown ref /
 //   invalid difficulty rolls the batch back), (b) resolve batch-local refs to the
@@ -37,18 +38,18 @@ function recordingIpcTransport() {
     getStatus: async () => ({ sessions: [] }),
   } as any;
   Object.setPrototypeOf(t, IpcTransport.prototype);
-  return t;
+  return fakeCoordinatorTransport(t);
 }
 
 // A local (non-IPC) transport: only the queue trigger runs.
 function recordingLocalTransport() {
   const commands: Array<{ cmd: string; args: any }> = [];
-  return {
+  return fakeCoordinatorTransport({
     commands,
     command: async (cmd: string, args: any) => {
     if (isTurnIpcCommand(cmd)) return answerTurnIpc(cmd, args ?? {} as Record<string, unknown>); commands.push({ cmd, args }); return { success: true }; },
     getStatus: async () => ({ sessions: [] }),
-  } as any;
+  } as any);
 }
 
 function makeCtx(meshId: string, transport: any) {

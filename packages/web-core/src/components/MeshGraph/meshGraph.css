@@ -20,3 +20,40 @@
         animation: none;
     }
 }
+
+/* Mesh canvases follow the app theme, not @xyflow's stock palette.
+ *
+ * @xyflow's dark colorMode paints the pane #141414 (a neutral charcoal that
+ * reads brown next to the app's navy surfaces) and gives the minimap / controls
+ * their own greys. Every mesh <ReactFlow> sits inside a `mesh-flow` host;
+ * the NON-default `--xy-*` variables set there inherit into the canvas and win
+ * over the `*-default` ones @xyflow defines on `.react-flow` in both colour
+ * modes, so the canvas, minimap and zoom controls resolve through the
+ * same design tokens as the rest of the dashboard (index.css :root / light). */
+.mesh-flow {
+    --xy-background-color: transparent;
+    --xy-edge-stroke: var(--text-muted);
+    --xy-minimap-background-color: var(--surface-primary);
+    --xy-minimap-mask-background-color: color-mix(in srgb, var(--bg-primary) 55%, transparent);
+    --xy-minimap-mask-stroke-color: var(--border-default);
+    --xy-minimap-mask-stroke-width: 1;
+    --xy-minimap-node-background-color: var(--text-muted);
+    --xy-controls-button-background-color: var(--surface-primary);
+    --xy-controls-button-background-color-hover: var(--surface-secondary);
+    --xy-controls-button-color: var(--text-secondary);
+    --xy-controls-button-color-hover: var(--text-primary);
+    --xy-controls-button-border-color: var(--border-subtle);
+    --xy-controls-box-shadow: none;
+}
+
+.mesh-flow .react-flow__controls {
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+}
+
+.mesh-flow .react-flow__minimap {
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+}

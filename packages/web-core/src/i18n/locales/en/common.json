@@ -1827,7 +1827,6 @@
     },
     "chatPane": {
         "debugBundleFailed": "Couldn't collect debug info",
-        "replicaDegradedShort": "Sync degraded",
         "connectingToMachine": "Connecting to your machine",
         "establishingP2P": "Establishing P2P connection",
         "agentNotMonitored": "Agent not monitored",
@@ -1839,7 +1838,6 @@
         "openPanel": "Open {{label}} Panel",
         "switchingPanel": "Switching...",
         "openingPanel": "Opening...",
-        "replicaDegraded": "Live sync is having trouble — showing messages the previous way",
         "busyNoProgress": "Agent shows no progress.",
         "busyGenerating": "Agent is generating.",
         "busyWaitingApproval": "Waiting for approval",

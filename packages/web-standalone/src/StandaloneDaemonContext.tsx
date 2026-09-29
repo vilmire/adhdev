@@ -16,10 +16,11 @@ import {
     noteTerminalStatusEventForControllers,
 } from '@adhdev/web-core'
 import type { ConnectionStatus } from '@adhdev/web-core'
-import type { StandaloneWsStatusPayload, SubscribeRequest, TopicUpdateEnvelope, UnsubscribeRequest } from '@adhdev/daemon-core'
+import type { DaemonMetadataUpdate, SubscribeRequest, TopicUpdateEnvelope, UnsubscribeRequest } from '@adhdev/daemon-core'
 import { standaloneConnectionManager } from './connection-manager'
 import { routeStandaloneStatusEvent } from './standalone-status-event'
-import { isStandaloneWsDataFrame } from './standalone-transcript-lane'
+import { isStandaloneWsDataFrame, publishStandaloneTranscriptTopicsAvailable } from './standalone-transcript-lane'
+import { parseTranscriptTopicsAvailable } from '@adhdev/web-core/transcript-transport'
 import { startStandaloneTranscriptLane } from './standalone-transcript-lane-wiring'
 
 import { getStandaloneToken } from './standalone-auth-client'
@@ -43,8 +44,10 @@ let _reqCounter = 0
 const _pendingRequests = new Map<string, { resolve: (v: any) => void; reject: (e: any) => void }>()
 let _screenshotTimer: any = null
 let _wsStatusChangeCallback: ((status: ConnectionStatus, daemonId?: string) => void) | null = null
-/** The daemon id the last `status` frame named — stamped onto `status_event` payloads. */
+/** The daemon id the `standalone_hello` frame named — stamped onto `status_event` payloads. */
 let _lastStatusDaemonId: string | null = null
+/** Identity frame the daemon sends on connect (daemon-standalone STANDALONE_HELLO_TYPE). */
+const STANDALONE_HELLO_TYPE = 'standalone_hello'
 
 function logStandaloneStatusDebug(event: string, payload: Record<string, unknown>) {
     if (typeof window === 'undefined') return
@@ -109,8 +112,8 @@ export async function sendCommandViaWs(
 export function sendDataViaWs(_daemonId: string, data: SubscribeRequest | UnsubscribeRequest | Record<string, unknown>): boolean {
     const ws = _wsInstance
     if (!ws || ws.readyState !== WebSocket.OPEN) return false
-    // Topic subscribe/unsubscribe, plus the chat-tail controller's
-    // `report_transcript_transport` telemetry command (see isStandaloneWsDataFrame).
+    // Topic subscribe/unsubscribe, plus the session chat controller's
+    // `request_transcript_base` command (see isStandaloneWsDataFrame).
     if (!isStandaloneWsDataFrame(data)) return false
     try {
         ws.send(JSON.stringify(data))
@@ -138,6 +141,7 @@ export function sendPtyInputViaWs(daemonId: string, sessionId: string, data: str
     }
 }
 standaloneConnectionManager.registerPtyInputSender(sendPtyInputViaWs)
+standaloneConnectionManager.registerDataSender((daemonId, data) => sendDataViaWs(daemonId, data))
 
 /**
  * WS-based connection adapter — implements the same interface as
@@ -317,6 +321,14 @@ function StandaloneWSConnector({ children }: { children: ReactNode }) {
                         return
                     }
 
+                    // A session's chat topic just became SUB-able on the
+                    // /ws/seqscribe lane — hand it to the lane so it re-SUBs now.
+                    const availableTopics = parseTranscriptTopicsAvailable(msg)
+                    if (availableTopics) {
+                        publishStandaloneTranscriptTopicsAvailable(availableTopics)
+                        return
+                    }
+
                     // Toasts / approval modals (B5): same projection web-cloud gets over P2P.
                     if (routeStandaloneStatusEvent(msg, _lastStatusDaemonId, eventManager, noteTerminalStatusEventForControllers)) return
 
@@ -326,71 +338,16 @@ function StandaloneWSConnector({ children }: { children: ReactNode }) {
                         return
                     }
 
-                    if (msg.type === 'status' || msg.type === 'initial_state') {
-                        const statusData = msg.data as StandaloneWsStatusPayload
-                        if (!statusData) return
-
-                        const { injectEntries, markLoaded, getIdes } = actionsRef.current
-                        const daemonId = statusData.instanceId || 'standalone'
+                    // Identity only — daemon state arrives on the daemon.metadata
+                    // lane (snapshot on subscribe, then keyed deltas).
+                    if (msg.type === STANDALONE_HELLO_TYPE && typeof msg.daemonId === 'string' && msg.daemonId) {
+                        const daemonId = msg.daemonId as string
                         _lastStatusDaemonId = daemonId
-                        const existingDaemon = getIdes().find(entry => entry.id === daemonId)
-
                         const adapter = getOrCreateWsAdapter(daemonId)
                         standaloneConnectionManager.register(daemonId, adapter)
                         standaloneConnectionManager.setState(daemonId, 'connected')
                         // Notify parent with daemonId so connectionStates can be updated
                         updateWsStatus('connected', daemonId)
-                        standaloneConnectionManager.emitStatus(daemonId, statusData)
-
-                        // Convert StatusResponse → DaemonData[] using shared utility
-                        const entries = statusPayloadToEntries(statusData, {
-                            daemonId,
-                            existingDaemon,
-                            existingEntries: getIdes(),
-                        })
-
-                        logStandaloneStatusDebug('ws_status', {
-                            type: msg.type,
-                            daemonId,
-                            sessions: (statusData.sessions || []).map(session => ({
-                                id: session.id,
-                                parentId: session.parentId,
-                                providerType: session.providerType,
-                                kind: session.kind,
-                                transport: session.transport,
-                                unread: session.unread,
-                                inboxBucket: session.inboxBucket,
-                                lastSeenAt: session.lastSeenAt,
-                                lastUpdated: session.lastUpdated,
-                                title: session.title,
-                            })),
-                            recentLaunches: (((statusData as any).recentLaunches || []) as any[]).map(launch => ({
-                                id: launch.id,
-                                providerType: launch.providerType,
-                                kind: launch.kind,
-                                workspace: launch.workspace,
-                                lastLaunchedAt: launch.lastLaunchedAt,
-                            })),
-                        })
-                        logStandaloneStatusDebug('entries', {
-                            daemonId,
-                            entries: entries
-                                .filter(entry => entry.type !== 'adhdev-daemon')
-                                .map(entry => ({
-                                    id: entry.id,
-                                    type: entry.type,
-                                    unread: entry.unread,
-                                    inboxBucket: entry.inboxBucket,
-                                    lastSeenAt: entry.lastSeenAt,
-                                    lastUpdated: (entry as any).lastUpdated,
-                                    sessionId: entry.sessionId,
-                                })),
-                        })
-
-                        if (entries.length > 0) {
-                            injectEntries(entries, { authoritativeDaemonIds: [daemonId] })
-                        }
-                        markLoaded()
 
                         if (subscribedMetadataDaemonIdRef.current !== daemonId) {
                             daemonMetadataUnsubscribeRef.current?.()
@@ -406,8 +363,7 @@ function StandaloneWSConnector({ children }: { children: ReactNode }) {
                                         includeSessions: true,
                                     },
                                 },
-                                (update) => {
-                                    if (update.topic !== 'daemon.metadata') return
+                                (update: DaemonMetadataUpdate) => {
                                     const currentEntries = actionsRef.current.getIdes()
                                     const currentDaemon = currentEntries.find(entry => entry.id === daemonId)
                                     const metadataEntries = statusPayloadToEntries(update.status, {
@@ -416,9 +372,21 @@ function StandaloneWSConnector({ children }: { children: ReactNode }) {
                                         existingEntries: currentEntries,
                                         timestamp: update.timestamp,
                                     })
+                                    logStandaloneStatusDebug('metadata', {
+                                        daemonId,
+                                        seq: update.seq,
+                                        sessions: (update.status.sessions || []).map(session => ({
+                                            id: session.id,
+                                            providerType: session.providerType,
+                                            status: session.status,
+                                            unread: session.unread,
+                                            inboxBucket: session.inboxBucket,
+                                        })),
+                                    })
                                     if (metadataEntries.length > 0) {
                                         actionsRef.current.injectEntries(metadataEntries, { authoritativeDaemonIds: [daemonId] })
                                     }
+                                    actionsRef.current.markLoaded()
                                     if (update.userName && setUserNameRef.current) {
                                         setUserNameRef.current(update.userName)
                                     }
@@ -477,9 +445,8 @@ function StandaloneWSConnector({ children }: { children: ReactNode }) {
         }
 
         connect()
-        // Transcript replica lane (/ws/seqscribe) — independent socket with its
-        // own backoff; legacy chat-tail on /ws keeps running until the
-        // controller sees a verified replica snapshot.
+        // Keyed chat lane (/ws/seqscribe) — independent socket with its own
+        // backoff; the chat pane's only live source.
         const stopTranscriptLane = startStandaloneTranscriptLane()
 
         return () => {

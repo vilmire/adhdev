@@ -36,39 +36,37 @@ export interface GateActionHandlers {
 
 /** Status word → dot tone + text tone, per section emphasis. */
 const ROW_DOT: Record<string, { dot: string; pulse?: boolean }> = {
-    generating: { dot: 'bg-sky-400', pulse: true },
-    assigned: { dot: 'bg-sky-400', pulse: true },
-    pending: { dot: 'bg-slate-400' },
-    completed: { dot: 'bg-emerald-400' },
-    failed: { dot: 'bg-rose-400' },
-    cancelled: { dot: 'bg-slate-500' },
+    generating: { dot: 'bg-accent', pulse: true },
+    assigned: { dot: 'bg-accent', pulse: true },
+    pending: { dot: 'bg-text-muted' },
+    completed: { dot: 'bg-status-online' },
+    failed: { dot: 'bg-status-error' },
+    cancelled: { dot: 'bg-status-offline' },
 }
 
 const GATE_DOT: Record<string, { dot: string; pulse?: boolean }> = {
-    awaiting_coordinator: { dot: 'bg-amber-400', pulse: true },
-    claimed: { dot: 'bg-sky-400', pulse: true },
-    expired: { dot: 'bg-rose-400', pulse: true },
+    awaiting_coordinator: { dot: 'bg-status-warning', pulse: true },
+    claimed: { dot: 'bg-accent', pulse: true },
+    expired: { dot: 'bg-status-error' },
 }
 
-function amberChip(isDark: boolean): string {
-    return isDark
-        ? 'rounded-full border border-amber-400/25 bg-amber-500/10 px-1.5 py-px text-4xs text-amber-200'
-        : 'rounded-full border border-amber-300 bg-amber-50 px-1.5 py-px text-4xs text-amber-700'
+// Row chips share one geometry (h-5, centred) so a mixed row stays on one
+// centre line; tone colours only the text and the thin border.
+const ROW_CHIP = 'inline-flex h-5 shrink-0 items-center whitespace-nowrap rounded-full border px-1.5 text-4xs leading-none'
+
+function amberChip(): string {
+    return `${ROW_CHIP} border-status-warning/35 text-status-warning`
 }
 
-function roseChip(isDark: boolean): string {
-    return isDark
-        ? 'rounded-full border border-rose-400/25 bg-rose-500/10 px-1.5 py-px text-4xs text-rose-200'
-        : 'rounded-full border border-rose-300 bg-rose-50 px-1.5 py-px text-4xs text-rose-700'
+function roseChip(): string {
+    return `${ROW_CHIP} border-status-error/35 text-status-error`
 }
 
-function neutralChip(isDark: boolean): string {
-    return isDark
-        ? 'rounded-full border border-white/10 bg-white/[0.06] px-1.5 py-px text-4xs text-slate-300'
-        : 'rounded-full border border-slate-200 bg-white/80 px-1.5 py-px text-4xs text-slate-500'
+function neutralChip(): string {
+    return `${ROW_CHIP} border-border-default text-text-secondary`
 }
 
-function PlanToggle({ expanded, onToggle, meshTheme }: { expanded: boolean; onToggle: () => void; meshTheme: MeshGraphTheme }) {
+function PlanToggle({ expanded, onToggle }: { expanded: boolean; onToggle: () => void; meshTheme: MeshGraphTheme }) {
     const { t } = useTranslation('common')
     return (
         <button
@@ -76,9 +74,7 @@ function PlanToggle({ expanded, onToggle, meshTheme }: { expanded: boolean; onTo
             onClick={event => { event.stopPropagation(); onToggle() }}
             aria-expanded={expanded}
             title={t('mesh.blueprint.list.planTitle')}
-            className={`shrink-0 rounded-md border px-1.5 py-0.5 text-4xs font-medium transition-colors ${meshTheme.isDark
-                ? 'border-white/10 bg-white/[0.04] text-slate-300 hover:bg-white/[0.09]'
-                : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50'}`}
+            className="inline-flex h-5 shrink-0 items-center rounded-md border border-border-default px-1.5 text-4xs font-medium leading-none text-text-secondary transition-colors hover:bg-bg-glass-hover hover:text-text-primary"
         >
             {expanded ? t('mesh.blueprint.list.planHide') : t('mesh.blueprint.list.planShow')} {expanded ? '▲' : '▼'}
         </button>
@@ -117,10 +113,10 @@ export function MeshBlueprintTaskRowView({ row, meshTheme, nowMs, nodeLabel, pin
             ? 'opacity-50 grayscale hover:opacity-90 hover:grayscale-0'
             : ''
     const statusTone = row.statusToken === 'failed'
-        ? (meshTheme.isDark ? 'text-rose-300' : 'text-rose-600')
+        ? 'text-status-error'
         : row.statusToken === 'generating' || row.statusToken === 'assigned'
-            ? (meshTheme.isDark ? 'text-sky-300' : 'text-sky-600')
-            : ''
+            ? 'text-accent'
+            : 'text-text-muted'
     const provider = task.assignedProviderType || task.autoLaunch?.providerType
     return (
         <div
@@ -128,21 +124,19 @@ export function MeshBlueprintTaskRowView({ row, meshTheme, nowMs, nodeLabel, pin
             tabIndex={0}
             onClick={onOpen}
             onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onOpen() } }}
-            className={`group flex w-full cursor-pointer flex-col gap-1 rounded-xl border px-3 py-2 text-left transition-colors ${meshTheme.isDark
-                ? 'border-white/8 bg-white/[0.03] hover:bg-white/[0.06]'
-                : 'border-slate-200 bg-white/85 hover:bg-white'} ${emphasis}`}
+            className={`group flex w-full cursor-pointer flex-col gap-1 rounded-lg border border-border-subtle bg-bg-card px-3 py-2 text-left transition-colors hover:border-border-default hover:bg-bg-glass-hover ${emphasis}`}
         >
             <div className="flex min-w-0 items-center gap-2">
                 {/* motion-safe: the pulse is a never-ending CSS animation. */}
                 <span className={`h-2 w-2 shrink-0 rounded-full ${dot.dot} ${dot.pulse ? 'motion-safe:animate-pulse' : ''}`} aria-hidden />
-                <span className={`shrink-0 text-3xs font-semibold uppercase tracking-wide ${statusTone || 'opacity-80'}`}>
+                <span className={`shrink-0 text-3xs font-medium ${statusTone}`}>
                     {row.statusToken === 'generating' ? t('mesh.blueprint.list.generating') : task.status}
                 </span>
-                <span className={`min-w-0 flex-1 truncate text-2xs ${meshTheme.isDark ? 'text-slate-200' : 'text-slate-700'}`} title={queueTaskDisplayText(task.message)}>
+                <span className="min-w-0 flex-1 truncate text-2xs text-text-primary" title={queueTaskDisplayText(task.message)}>
                     {queueTaskDisplayText(task.message)}
                 </span>
                 {time && (
-                    <span className={`shrink-0 font-mono text-4xs tabular-nums ${meshTheme.isDark ? 'text-slate-400' : 'text-slate-500'}`} title={`${time.iso}\n${task.id}`}>
+                    <span className="shrink-0 font-mono text-4xs tabular-nums text-text-muted" title={`${time.iso}\n${task.id}`}>
                         {time.absolute} <span className="opacity-70">({time.relative})</span>
                     </span>
                 )}
@@ -155,63 +149,59 @@ export function MeshBlueprintTaskRowView({ row, meshTheme, nowMs, nodeLabel, pin
                 || missionTitle || provider || nodeLabel) && (
                 <div className="flex min-w-0 flex-wrap items-center gap-1 pl-4">
                     {row.awaitingApproval && (
-                        <span className={amberChip(meshTheme.isDark)} title={row.sessionNote ?? undefined}>
+                        <span className={amberChip()} title={row.sessionNote ?? undefined}>
                             {t('mesh.blueprint.list.approvalNeeded')}
                         </span>
                     )}
                     {row.awaitingChoice && (
-                        <span className={amberChip(meshTheme.isDark)} title={row.sessionNote ?? undefined}>
+                        <span className={amberChip()} title={row.sessionNote ?? undefined}>
                             {t('mesh.blueprint.list.choiceNeeded')}
                         </span>
                     )}
                     {row.blockedReason && (
-                        <span className={roseChip(meshTheme.isDark)} title={row.blockedReason}>
+                        <span className={roseChip()} title={row.blockedReason}>
                             {t('mesh.taskDag.blocked')}
                         </span>
                     )}
                     {row.dependencyFailureCount > 0 && (
-                        <span className={roseChip(meshTheme.isDark)}>
+                        <span className={roseChip()}>
                             {t('mesh.taskDag.plan.depsFailed', { count: row.dependencyFailureCount })}
                         </span>
                     )}
                     {row.waitingOn.length > 0 && (
-                        <span className={amberChip(meshTheme.isDark)} title={row.waitingOn.join(', ')}>
+                        <span className={amberChip()} title={row.waitingOn.join(', ')}>
                             {t('mesh.taskDag.waitsOn', { count: row.waitingOn.length })}
                         </span>
                     )}
                     {row.missingDeps.length > 0 && (
-                        <span className={neutralChip(meshTheme.isDark)} title={row.missingDeps.join(', ')}>
+                        <span className={neutralChip()} title={row.missingDeps.join(', ')}>
                             {t('mesh.taskDag.missingDeps', { count: row.missingDeps.length })}
                         </span>
                     )}
                     {/* Pinned-route forecast ONLY — never the generic one. */}
                     {pinnedSlot && task.status === 'pending' && (
                         <span
-                            className={meshTheme.isDark
-                                ? 'rounded-full border border-sky-400/25 bg-sky-500/10 px-1.5 py-px text-4xs text-sky-200'
-                                : 'rounded-full border border-sky-300 bg-sky-50 px-1.5 py-px text-4xs text-sky-700'}
+                            className={neutralChip()}
                             title={t('mesh.taskDag.predictedSlotPinned')}
                         >
                             📌 {pinnedSlot}
                         </span>
                     )}
-                    {task.difficulty && <span className={neutralChip(meshTheme.isDark)}>{task.difficulty}</span>}
-                    {task.priority && task.priority !== 'normal' && <span className={neutralChip(meshTheme.isDark)}>{task.priority}</span>}
-                    {(task.taskMode === 'live_debug_readonly' || task.readonly) && <span className={neutralChip(meshTheme.isDark)}>{t('mesh.blueprint.readonlyBadge')}</span>}
+                    {task.difficulty && <span className={neutralChip()}>{task.difficulty}</span>}
+                    {task.priority && task.priority !== 'normal' && <span className={neutralChip()}>{task.priority}</span>}
+                    {(task.taskMode === 'live_debug_readonly' || task.readonly) && <span className={neutralChip()}>{t('mesh.blueprint.readonlyBadge')}</span>}
                     {missionTitle && task.missionId && (
                         <button
                             type="button"
                             onClick={event => { event.stopPropagation(); onMissionOpen?.(task.missionId!) }}
-                            className={meshTheme.isDark
-                                ? 'max-w-[180px] truncate rounded-full border border-indigo-400/25 bg-indigo-500/10 px-1.5 py-px text-4xs text-indigo-200 hover:bg-indigo-500/20'
-                                : 'max-w-[180px] truncate rounded-full border border-indigo-200 bg-indigo-50/80 px-1.5 py-px text-4xs text-indigo-700 hover:bg-indigo-100'}
+                            className={`${neutralChip()} max-w-[180px] truncate hover:bg-bg-glass-hover hover:text-text-primary`}
                             title={`${missionTitle} (${task.missionId})`}
                         >
                             ⚑ {missionTitle}
                         </button>
                     )}
                     {(provider || nodeLabel) && (
-                        <span className={`flex min-w-0 items-center gap-1 text-4xs ${meshTheme.isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                        <span className="flex min-w-0 items-center gap-1 text-4xs text-text-muted">
                             <span className="shrink-0 opacity-70">▶</span>
                             {provider && <span className="shrink-0 font-medium">{provider}</span>}
                             {nodeLabel && <span className="min-w-0 truncate" title={nodeLabel}>{provider ? '@ ' : ''}{nodeLabel}</span>}
@@ -229,9 +219,7 @@ export function MeshBlueprintTaskRowView({ row, meshTheme, nowMs, nodeLabel, pin
                 // A failed/cancelled dependency is not "waiting" — the task will
                 // not start on its own (block policy), so say so, in red.
                 const dead = row.blockedByDeadDependency
-                const tone = dead
-                    ? (meshTheme.isDark ? 'text-red-300/90' : 'text-red-700')
-                    : (meshTheme.isDark ? 'text-amber-300/90' : 'text-amber-700')
+                const tone = dead ? 'text-status-error' : 'text-status-warning'
                 return (
                     <div
                         data-testid="blueprint-waiting-on"
@@ -269,7 +257,7 @@ export function MeshBlueprintTaskRowView({ row, meshTheme, nowMs, nodeLabel, pin
             {row.blockedByGate && (() => {
                 const age = elapsedMsSince(row.blockedByGate.graph.createdAt, nowMs)
                 return (
-                    <div className={`truncate pl-4 text-4xs ${meshTheme.isDark ? 'text-amber-300/90' : 'text-amber-700'}`} title={row.blockedByGate.gate.instructions ?? undefined}>
+                    <div className="truncate pl-4 text-4xs text-status-warning" title={row.blockedByGate.gate.instructions ?? undefined}>
                         {t('mesh.blueprint.list.blockedByGate', {
                             ref: row.blockedByGate.ref,
                             age: age != null ? formatBlueprintAge(age) : '—',
@@ -283,18 +271,19 @@ export function MeshBlueprintTaskRowView({ row, meshTheme, nowMs, nodeLabel, pin
 
 /** Small pill button shared by the three gate actions — same visual weight,
  *  distinguished by tone (release=neutral/primary, abandon=danger, extend=info). */
-function GateActionButton({ label, tone, onClick, disabled, meshTheme }: {
+function GateActionButton({ label, tone, onClick, disabled }: {
     label: string
     tone: 'primary' | 'danger' | 'info'
     onClick: () => void
     disabled?: boolean
     meshTheme: MeshGraphTheme
 }) {
+    // Primary = the app accent; danger = semantic red outline; info = neutral.
     const toneClass = tone === 'danger'
-        ? (meshTheme.isDark ? 'border-rose-400/30 bg-rose-500/10 text-rose-200 hover:bg-rose-500/20' : 'border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-100')
+        ? 'border-status-error/40 bg-transparent text-status-error hover:bg-status-error/10'
         : tone === 'info'
-            ? (meshTheme.isDark ? 'border-sky-400/30 bg-sky-500/10 text-sky-200 hover:bg-sky-500/20' : 'border-sky-300 bg-sky-50 text-sky-700 hover:bg-sky-100')
-            : (meshTheme.isDark ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/20' : 'border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100')
+            ? 'border-border-default bg-bg-glass text-text-primary hover:bg-bg-glass-hover'
+            : 'border-accent/50 bg-accent/10 text-accent hover:bg-accent/20'
     return (
         <button
             type="button"
@@ -390,7 +379,7 @@ export function GateActionsPanel({ radioGroupId, actions, meshTheme, busy }: {
                 />
             </div>
             {openForm === 'release' && (
-                <div className={`flex flex-col gap-1.5 rounded-lg border p-2 ${meshTheme.isDark ? 'border-white/10 bg-black/20' : 'border-slate-200 bg-white'}`}>
+                <div className="flex flex-col gap-1.5 rounded-lg border border-border-default bg-bg-secondary p-2">
                     <div className="flex items-center gap-2 text-4xs">
                         <label className="flex items-center gap-1">
                             <input type="radio" name={`release-outcome-${radioGroupId}`} checked={outcome === 'passed'} onChange={() => setOutcome('passed')} />
@@ -406,7 +395,7 @@ export function GateActionsPanel({ radioGroupId, actions, meshTheme, busy }: {
                         value={evidence}
                         onChange={event => setEvidence(event.target.value)}
                         placeholder={t('mesh.blueprint.gate.evidencePlaceholder')}
-                        className={`w-full rounded-md border px-2 py-1 text-4xs ${meshTheme.isDark ? 'border-white/10 bg-black/30 text-slate-200 placeholder:text-slate-500' : 'border-slate-200 bg-white text-slate-800 placeholder:text-slate-400'}`}
+                        className="w-full rounded-md border border-border-default bg-surface-primary px-2 py-1 text-4xs text-text-primary placeholder:text-text-muted"
                     />
                     <div className="flex items-center justify-end gap-1.5">
                         <button type="button" className="rounded-full px-2 py-0.5 text-4xs text-text-muted hover:underline" onClick={() => setOpenForm(null)} disabled={busy}>
@@ -417,13 +406,13 @@ export function GateActionsPanel({ radioGroupId, actions, meshTheme, busy }: {
                 </div>
             )}
             {openForm === 'abandon' && (
-                <div className={`flex flex-col gap-1.5 rounded-lg border p-2 ${meshTheme.isDark ? 'border-white/10 bg-black/20' : 'border-slate-200 bg-white'}`}>
+                <div className="flex flex-col gap-1.5 rounded-lg border border-border-default bg-bg-secondary p-2">
                     <input
                         type="text"
                         value={reason}
                         onChange={event => setReason(event.target.value)}
                         placeholder={t('mesh.blueprint.gate.reasonPlaceholder')}
-                        className={`w-full rounded-md border px-2 py-1 text-4xs ${meshTheme.isDark ? 'border-white/10 bg-black/30 text-slate-200 placeholder:text-slate-500' : 'border-slate-200 bg-white text-slate-800 placeholder:text-slate-400'}`}
+                        className="w-full rounded-md border border-border-default bg-surface-primary px-2 py-1 text-4xs text-text-primary placeholder:text-text-muted"
                     />
                     <div className="flex items-center justify-end gap-1.5">
                         <button type="button" className="rounded-full px-2 py-0.5 text-4xs text-text-muted hover:underline" onClick={() => setOpenForm(null)} disabled={busy}>
@@ -434,7 +423,7 @@ export function GateActionsPanel({ radioGroupId, actions, meshTheme, busy }: {
                 </div>
             )}
             {error && (
-                <div className={`truncate text-4xs ${meshTheme.isDark ? 'text-rose-300' : 'text-rose-600'}`} title={error}>
+                <div className="truncate text-4xs text-status-error" title={error}>
                     {error}
                 </div>
             )}
@@ -456,7 +445,7 @@ export function MeshBlueprintGateRowView({ row, meshTheme, nowMs, onOpen, planEx
     actionsBusy?: boolean
 }) {
     const { t } = useTranslation('common')
-    const dot = GATE_DOT[row.state] ?? { dot: 'bg-amber-400', pulse: true }
+    const dot = GATE_DOT[row.state] ?? { dot: 'bg-status-warning', pulse: true }
     const isExpired = row.state === 'expired'
     const expiredAgeMs = isExpired ? elapsedMsSince(row.gate?.deadlineAt, nowMs) : undefined
     return (
@@ -465,16 +454,14 @@ export function MeshBlueprintGateRowView({ row, meshTheme, nowMs, onOpen, planEx
             tabIndex={0}
             onClick={onOpen}
             onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onOpen() } }}
-            className={`group flex w-full cursor-pointer flex-col gap-1 rounded-xl border px-3 py-2 text-left transition-colors ${meshTheme.isDark
-                ? 'border-amber-400/25 bg-amber-500/[0.06] hover:bg-amber-500/[0.12]'
-                : 'border-amber-300 bg-amber-50/70 hover:bg-amber-50'}`}
+            className={`group flex w-full cursor-pointer flex-col gap-1 rounded-lg border bg-bg-card px-3 py-2 text-left transition-colors hover:bg-bg-glass-hover ${isExpired ? 'border-status-error/40' : 'border-status-warning/40'}`}
         >
             <div className="flex min-w-0 items-center gap-2">
                 <span className={`h-2 w-2 shrink-0 rounded-full ${dot.dot} ${dot.pulse ? 'motion-safe:animate-pulse' : ''}`} aria-hidden />
-                <span className={`shrink-0 text-3xs font-semibold uppercase tracking-wide ${meshTheme.isDark ? 'text-amber-200' : 'text-amber-700'}`}>
+                <span className={`shrink-0 text-3xs font-medium ${isExpired ? 'text-status-error' : 'text-status-warning'}`}>
                     ⛩ {row.gate?.action ?? t('mesh.blueprint.gateFallback')} · {row.state}{row.gate?.leaseExpired ? ` · ${t('mesh.blueprint.leaseExpired')}` : ''}
                 </span>
-                <span className={`min-w-0 flex-1 truncate text-2xs ${meshTheme.isDark ? 'text-slate-200' : 'text-slate-700'}`} title={row.ref}>
+                <span className="min-w-0 flex-1 truncate text-2xs text-text-primary" title={row.ref}>
                     {row.ref}
                 </span>
                 {onTogglePlan && <PlanToggle expanded={planExpanded} onToggle={onTogglePlan} meshTheme={meshTheme} />}
@@ -485,17 +472,17 @@ export function MeshBlueprintGateRowView({ row, meshTheme, nowMs, onOpen, planEx
                     its deadline is a different, more urgent state than one
                     still comfortably inside it. */}
                 {isExpired ? (
-                    <span className={roseChip(meshTheme.isDark)} title={row.gate?.deadlineAt}>
+                    <span className={roseChip()} title={row.gate?.deadlineAt}>
                         {t('mesh.blueprint.gate.expiredBadge', { age: expiredAgeMs != null ? formatBlueprintAge(expiredAgeMs) : '—' })}
                     </span>
                 ) : (
-                    <span className={amberChip(meshTheme.isDark)}>{t('mesh.taskDag.gate.needsYou')}</span>
+                    <span className={amberChip()}>{t('mesh.taskDag.gate.needsYou')}</span>
                 )}
                 {row.gate?.blocking?.length ? (
-                    <span className={amberChip(meshTheme.isDark)}>{t('mesh.taskDag.gate.holding', { count: row.gate.blocking.length })}</span>
+                    <span className={amberChip()}>{t('mesh.taskDag.gate.holding', { count: row.gate.blocking.length })}</span>
                 ) : null}
                 {row.gate?.deadlineAt && (
-                    <span className={neutralChip(meshTheme.isDark)} title={row.gate.deadlineAt}>
+                    <span className={neutralChip()} title={row.gate.deadlineAt}>
                         {t('mesh.taskDag.gate.deadline', {
                             time: new Date(row.gate.deadlineAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
                             onTimeout: row.gate.onTimeout,
@@ -503,7 +490,7 @@ export function MeshBlueprintGateRowView({ row, meshTheme, nowMs, onOpen, planEx
                     </span>
                 )}
                 {row.gate?.instructions && (
-                    <span className={`min-w-0 truncate text-4xs opacity-80 ${meshTheme.isDark ? 'text-slate-300' : 'text-slate-600'}`} title={row.gate.instructions}>
+                    <span className="min-w-0 truncate text-4xs text-text-secondary" title={row.gate.instructions}>
                         {row.gate.instructions}
                     </span>
                 )}

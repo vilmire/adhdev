@@ -247,14 +247,15 @@ describe('MEMBER-WORKTREE-RECONCILE — member pusher reports its worktree nodes
     const pusher = new MeshNodeStatePusher({
       dispatch: async (_daemonId, _cmd, args) => {
         sent.push(args)
-        return { success: true, accepted: true, coordinatorBootId: bootId }
+        // A coordinator that holds what it was sent confirms a signature-only git report.
+        return { success: true, accepted: true, coordinatorBootId: bootId, ...(args.gitSignature ? { gitHeld: true } : {}) }
       },
       readGit: async () => ({ isGitRepo: true, branch: 'main', headCommit: 'abc', lastCheckedAt: Date.now() }),
       readWorktreeNodes: async () => [remoteWorktreeNode(), { id: 'not-a-worktree', workspace: '/x', daemonId: REMOTE }],
       startTimer: () => ({ stop() {} }),
       heartbeatMs: 0,
     })
-    pusher.register({ coordinatorDaemonId: COORD, meshId: 'mesh_a', nodeId: 'node_base', workspace: '/nonexistent/remote/main' })
+    pusher.selfRegister({ coordinatorDaemonId: COORD, meshId: 'mesh_a', nodeId: 'node_base', workspace: '/nonexistent/remote/main' })
 
     await pusher.tick()
     expect(sent).toHaveLength(1)

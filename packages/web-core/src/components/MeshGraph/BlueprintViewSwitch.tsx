@@ -6,7 +6,7 @@ import { useTranslation } from 'react-i18next'
 import type { MeshGraphTheme } from './meshGraphTheme'
 import type { BlueprintViewMode } from './blueprintViewMode'
 
-export default function BlueprintViewSwitch({ mode, onChange, meshTheme }: {
+export default function BlueprintViewSwitch({ mode, onChange }: {
     mode: BlueprintViewMode
     onChange: (mode: BlueprintViewMode) => void
     meshTheme: MeshGraphTheme
@@ -22,9 +22,9 @@ export default function BlueprintViewSwitch({ mode, onChange, meshTheme }: {
                 aria-checked={active}
                 data-testid={`blueprint-view-${value}`}
                 onClick={() => { if (!active) onChange(value) }}
-                className={`rounded-full px-2 py-0.5 text-3xs font-semibold transition-colors ${active
-                    ? (meshTheme.isDark ? 'bg-sky-500/20 text-sky-100' : 'bg-sky-100 text-sky-800')
-                    : (meshTheme.isDark ? 'text-slate-400 hover:text-slate-200' : 'text-slate-500 hover:text-slate-800')}`}
+                className={`inline-flex h-5 items-center rounded-full px-2 text-3xs font-medium leading-none transition-colors ${active
+                    ? 'bg-accent/15 text-accent'
+                    : 'text-text-muted hover:text-text-primary'}`}
             >
                 {label}
             </button>
@@ -34,7 +34,7 @@ export default function BlueprintViewSwitch({ mode, onChange, meshTheme }: {
         <div
             role="radiogroup"
             aria-label={t('mesh.blueprint.graph.viewSwitchLabel')}
-            className={`flex shrink-0 items-center gap-0.5 rounded-full border p-0.5 ${meshTheme.isDark ? 'border-white/10 bg-slate-950/60' : 'border-slate-200 bg-white/90'}`}
+            className="flex h-6 shrink-0 items-center gap-0.5 rounded-full border border-border-default p-0.5"
         >
             {option('list', t('mesh.blueprint.graph.viewList'))}
             {option('graph', t('mesh.blueprint.graph.viewGraph'))}

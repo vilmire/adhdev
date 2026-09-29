@@ -1,26 +1,13 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
 import { DaemonStatusReporter } from '../../src/status/reporter.js';
-import * as fleetShadow from '../../src/seqscribe/fleet-status-shadow.js';
 
 /**
- * Per-tick eager-work budget on the status heartbeat (perf regression gate).
+ * Server status_report tick budget + dedup (perf regression gate).
  *
- * `sendUnifiedStatusReport` runs every 5s on a P2P-connected daemon. Two pieces
- * of unconditional O(N) work on that path produced results that were, in the
- * default configuration, thrown away:
- *
- *   1. the fleet.status ring entry — `fleetStatusEntry(...)` walks every session
- *      via countFleetSessions and reads the seqscribe stats getter, but
- *      `recordFleetStatusShadow` discards it outright unless a shadow node is
- *      armed (off by default on every daemon);
- *   2. the per-category log summary — three `allStates.filter()` passes plus
- *      three `.map().join()` string builds, feeding one log line that is DEBUG
- *      on the 5s P2P tick and therefore suppressed on a default (info) daemon.
- *
- * Both are now gated. These tests pin the budget AND — more importantly — that
- * gating them changed nothing about what is transmitted or deduped: a status
- * report is a delivery path, and a perf fix that suppressed a real change would
- * be far worse than the cost it saved.
+ * The fleet.status shadow entry and the 5s P2P tick are gone (data-path audit
+ * 2026-09-29 P0-3/P0-4); what remains must still transmit a real change at
+ * once and suppress an unchanged report, and the per-category log summary is
+ * built in one pass.
  */
 
 describe('status tick eager-work budget', () => {
@@ -67,26 +54,13 @@ describe('status tick eager-work budget', () => {
                     opts.onSeqscribeStats?.();
                     return null;
                 },
-                // B4: the fleet.status producer is passed explicitly
-                // (StatusReporterDeps.seqscribe); route it through the module
-                // functions so the spies below still observe the gate.
-                seqscribe: {
-                    fleetStatus: {
-                        isShadowActive: () => fleetShadow.isFleetStatusShadowActive(),
-                        record: (entry: any) => fleetShadow.recordFleetStatusShadow(entry),
-                        observeWsProjection: () => false,
-                    },
-                },
             } as any,
             { logFn: () => {} },
         );
         return { reporter, statusReports: () => sent.filter((m) => m.type === 'status_report') };
     }
 
-    it('does not build a fleet.status entry when no shadow node is armed', async () => {
-        // Default configuration: the shadow is off, so the entry — and the
-        // session walk + stats read it needs — must never be constructed.
-        const spy = vi.spyOn(fleetShadow, 'recordFleetStatusShadow');
+    it('reads the seqscribe stats once per report (server frame only)', async () => {
         let statsReads = 0;
         const { reporter } = makeReporter({
             status: { value: 'idle' },
@@ -97,30 +71,7 @@ describe('status tick eager-work budget', () => {
         await reporter.sendUnifiedStatusReport({ reason: 'periodic' });
         await reporter.sendUnifiedStatusReport({ reason: 'periodic' });
 
-        // ★ The regression assertion: reverting the gate calls the recorder (and
-        // builds the entry) on every tick.
-        expect(spy).not.toHaveBeenCalled();
-        // The fleet entry's stats read is likewise skipped. The SERVER frame has
-        // its own stats read, so this asserts the count stayed at the one-per-
-        // send the transmit path needs, not that it dropped to zero.
-        expect(statsReads).toBeLessThanOrEqual(3);
-    });
-
-    it('still records a fleet.status entry when the shadow IS armed', async () => {
-        // The gate must be a pure no-op elision, not a feature removal: with the
-        // shadow active the entry is built and recorded exactly as before.
-        vi.spyOn(fleetShadow, 'isFleetStatusShadowActive').mockReturnValue(true);
-        const spy = vi.spyOn(fleetShadow, 'recordFleetStatusShadow').mockReturnValue(true);
-        const { reporter } = makeReporter({ status: { value: 'idle' } });
-
-        await reporter.sendUnifiedStatusReport({ reason: 'periodic' });
-
-        expect(spy).toHaveBeenCalledTimes(1);
-        const entry = spy.mock.calls[0][0];
-        expect(entry.daemonId).toBe('inst-1');
-        // The session walk really ran — the counts are populated, not zeroed.
-        expect(entry.sessionCounts.cliCount).toBe(3);
-        expect(entry.sessionCounts.idleCount).toBe(3);
+        expect(statsReads).toBe(3);
     });
 
     // ── Dedup correctness must be untouched by the perf gating ───────────────
@@ -172,7 +123,7 @@ describe('status tick eager-work budget', () => {
         const infoSpy = vi.spyOn((await import('../../src/logging/logger.js')).LOG, 'info')
             .mockImplementation((_c: string, msg: string) => { lines.push(msg); });
 
-        // A non-p2pOnly tick logs at INFO, which is not suppressed by default.
+        // Every report logs at INFO, which is not suppressed by default.
         await reporter.sendUnifiedStatusReport({ reason: 'periodic' });
 
         const summary = lines.find((l) => l.includes('IDE:'));

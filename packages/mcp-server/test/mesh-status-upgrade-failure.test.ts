@@ -6,6 +6,7 @@ import { IpcTransport } from '../src/transports/ipc.js';
 import { meshStatus } from '../src/tools/mesh-tools.js';
 
 import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
+import { fakeCoordinatorTransport } from './helpers/fake-coordinator-tool-answers.js';
 /**
  * mesh_status must surface a failed/rolled-back daemon upgrade.
  *
@@ -192,7 +193,7 @@ function buildStatusCtx(upgradeFailure: unknown) {
     if (command === 'git_status') return { success: true, status: cleanGit };
     return { success: true };
   };
-  const transport: any = {};
+  const transport: any = fakeCoordinatorTransport();
   transport.command = async (c: string, __ipcArgs?: Record<string, unknown>) => { if (isTurnIpcCommand(c)) return answerTurnIpc(c, __ipcArgs ?? {}); return responder(c); };
   transport.meshCommand = async (_d: string, c: string) => responder(c);
   return { mesh, transport, localDaemonId: 'daemon-A', localMachineId: 'machine-A', coordinatorHostname: 'h' };

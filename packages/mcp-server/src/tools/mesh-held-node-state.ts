@@ -20,6 +20,7 @@ import { classifyRemoteDelegateRelaySafety, extractDaemonBuildInfo } from './mes
 import type { MeshUpgradeFailureSummary } from './mesh-tools-internal-core.js';
 import { isLocalControlPlaneNode } from './mesh-node-identity.js';
 import type { MeshContext } from './mesh-tools-internal.js';
+import { ensureMeshNodeRoutes } from './mesh-node-routes.js';
 
 export interface CoordinatorHeldNodeState {
     /** Daemon-rendered node status, keyed by nodeId. */
@@ -224,6 +225,7 @@ export interface HeldDispatchSessions {
  * Never calls a member.
  */
 export async function readHeldDispatchSessions(ctx: MeshContext, node: LocalMeshNodeEntry): Promise<HeldDispatchSessions | null> {
+    await ensureMeshNodeRoutes(ctx);
     if (!(ctx.transport instanceof IpcTransport) || !node.daemonId || isLocalControlPlaneNode(ctx, node)) return null;
     const state = await cachedHeldNodeState(ctx);
     if (state.error || !usesHeldNodeRuntime(ctx, node, state)) return null;

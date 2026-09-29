@@ -12,30 +12,29 @@
  * SharedArrayBuffer.
  */
 import {
-    applyTranscriptReplicaViewToControllers,
+    applyTranscriptViewToControllers,
     collectRetainedTranscriptSessionInterest,
-    reportTranscriptReplicaFallbackForSession,
     requestTranscriptBaseForSession,
     subscribeTranscriptSessionInterest,
 } from '@adhdev/web-core'
-import { startTranscriptWorkerHost } from '@adhdev/web-core/transcript-transport'
+import { sessionsToResubscribeOnAvailable, startTranscriptWorkerHost } from '@adhdev/web-core/transcript-transport'
 import { getStandaloneToken } from './standalone-auth-client'
 import {
     STANDALONE_TRANSCRIPT_WRITER_ID,
     StandaloneTranscriptLaneClient,
     buildStandaloneSeqscribeWsUrl,
-    isStandaloneTranscriptLaneEnabled,
+    subscribeStandaloneTranscriptTopicsAvailable,
 } from './standalone-transcript-lane'
 
 /**
- * Start the lane for this page. Returns a stop function (idempotent), or a
- * no-op when the lane is switched off or the browser cannot run the worker.
+ * Start the lane for this page — always on; it is the only live chat path.
+ * Returns a stop function (idempotent), or a no-op when the browser cannot
+ * run the worker at all.
  */
 export function startStandaloneTranscriptLane(): () => void {
     if (typeof window === 'undefined' || typeof Worker === 'undefined' || typeof WebSocket === 'undefined') {
         return () => undefined
     }
-    if (!isStandaloneTranscriptLaneEnabled(import.meta.env as Record<string, unknown>)) return () => undefined
 
     const url = buildStandaloneSeqscribeWsUrl(window.location, getStandaloneToken())
     const client = new StandaloneTranscriptLaneClient({
@@ -57,9 +56,10 @@ export function startStandaloneTranscriptLane(): () => void {
             }),
         collectInterest: collectRetainedTranscriptSessionInterest,
         subscribeInterest: subscribeTranscriptSessionInterest,
-        applyView: (daemonId, sessionId, view) => applyTranscriptReplicaViewToControllers(daemonId, sessionId, view),
+        applyView: (daemonId, sessionId, view) => applyTranscriptViewToControllers(daemonId, sessionId, view),
         requestBase: requestTranscriptBaseForSession,
-        reportFallback: reportTranscriptReplicaFallbackForSession,
+        subscribeTopicsAvailable: subscribeStandaloneTranscriptTopicsAvailable,
+        selectResubscribe: sessionsToResubscribeOnAvailable,
         setTimer: (cb, ms) => setTimeout(cb, ms),
         clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
         now: () => Date.now(),

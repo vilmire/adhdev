@@ -1,27 +1,20 @@
 /**
- * The standalone replica lane wired to the REAL web-core chat-tail controller
- * registry (not fakes): a verified keyed view arriving on the lane must flip the
- * controller to `replica`, and the resulting `report_transcript_transport`
- * frame must pass standalone's `/ws` data filter — that frame is what the
- * daemon's `transcriptTransportSelection.replicaSelected` counts, i.e. the
- * acceptance signal for the live check.
- *
- * Before this unit both halves were broken on standalone: nothing fed the
- * controller, and `sendDataViaWs` dropped every non-subscribe frame, so even a
- * fed controller could not have reported.
+ * The standalone keyed chat lane wired to the REAL web-core session chat
+ * controller registry (not fakes): a verified keyed view arriving on the lane
+ * must become the pane's live window, a lane close must keep the last committed
+ * view (there is no second lane to fall back to), and the controller's
+ * `request_transcript_base` must pass standalone's `/ws` data filter.
  */
 import { afterEach, describe, it } from 'node:test'
 import * as assert from 'node:assert/strict'
 import {
-    applyTranscriptReplicaViewToControllers,
+    applyTranscriptViewToControllers,
     collectRetainedTranscriptSessionInterest,
-    getOrCreateSessionChatTailController,
-    reportTranscriptReplicaFallbackForSession,
+    getOrCreateSessionChatController,
     requestTranscriptBaseForSession,
-    resetSessionChatTailControllersForTest,
+    resetSessionChatControllersForTest,
     subscribeTranscriptSessionInterest,
-} from '../../web-core/src/components/dashboard/session-chat-tail-controller.ts'
-import { SubscriptionManager } from '../../web-core/src/managers/SubscriptionManager.ts'
+} from '../../web-core/src/components/dashboard/session-chat-controller.ts'
 import {
     StandaloneTranscriptLaneClient,
     isStandaloneWsDataFrame,
@@ -31,7 +24,7 @@ import {
 const DAEMON = 'standalone_mach_1'
 const SESSION = 'sess-1'
 
-afterEach(() => resetSessionChatTailControllersForTest())
+afterEach(() => resetSessionChatControllersForTest())
 
 function healthyView(frame: number) {
     return {
@@ -81,13 +74,10 @@ function setup() {
         wire.push(data)
         return true
     }
-    const controller = getOrCreateSessionChatTailController({
-        manager: new SubscriptionManager(),
+    const controller = getOrCreateSessionChatController({
         sendData,
         daemonId: DAEMON,
         sessionId: SESSION,
-        subscriptionKey: `daemon:${DAEMON}:session:${SESSION}`,
-        tailLimit: 60,
     })
     controller.retain()
 
@@ -104,9 +94,8 @@ function setup() {
         },
         collectInterest: collectRetainedTranscriptSessionInterest,
         subscribeInterest: subscribeTranscriptSessionInterest,
-        applyView: (daemonId, sessionId, view) => applyTranscriptReplicaViewToControllers(daemonId, sessionId, view),
+        applyView: (daemonId, sessionId, view) => applyTranscriptViewToControllers(daemonId, sessionId, view),
         requestBase: requestTranscriptBaseForSession,
-        reportFallback: reportTranscriptReplicaFallbackForSession,
         setTimer: () => null,
         clearTimer: () => {},
         now: () => 0,
@@ -118,10 +107,7 @@ function setup() {
     }
 }
 
-const reports = (wire: any[]) =>
-    wire.filter((f) => f.type === 'command' && f.commandType === 'report_transcript_transport').map((f) => f.data.selection)
-
-describe('standalone replica lane → real chat-tail controller → /ws report', () => {
+describe('standalone keyed chat lane → real session chat controller', () => {
     it('derives interest from the retained controller and activates it on the worker host', () => {
         const h = setup()
         h.client.start()
@@ -130,27 +116,25 @@ describe('standalone replica lane → real chat-tail controller → /ws report',
         h.client.stop()
     })
 
-    it('a verified view on the lane flips the controller to replica and the report reaches /ws', () => {
+    it('a verified view on the lane becomes the live window, with no transport report on /ws', () => {
         const h = setup()
         h.client.start()
         h.sockets[0]!.fire('open')
-        assert.deepEqual(reports(h.wire), ['legacy'])
-
         h.deliver({ sessionId: SESSION, view: healthyView(2), reset: true })
-
-        assert.deepEqual(reports(h.wire), ['legacy', 'replica'])
         const messages = h.controller.getSnapshot().liveMessages as Array<{ content?: unknown }>
         assert.ok(messages.some((m) => m.content === 'replica answer'))
+        assert.equal(h.wire.filter((f) => f.commandType === 'report_transcript_transport').length, 0)
         h.client.stop()
     })
 
-    it('a lane close falls the controller back to legacy (and reports it)', () => {
+    it('a lane close keeps the last committed view (no fallback lane)', () => {
         const h = setup()
         h.client.start()
         h.sockets[0]!.fire('open')
         h.deliver({ sessionId: SESSION, view: healthyView(2), reset: true })
         h.sockets[0]!.fire('close')
-        assert.deepEqual(reports(h.wire), ['legacy', 'replica', 'legacy'])
+        const messages = h.controller.getSnapshot().liveMessages as Array<{ content?: unknown }>
+        assert.ok(messages.some((m) => m.content === 'replica answer'))
         h.client.stop()
     })
 

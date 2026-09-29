@@ -11,12 +11,9 @@ import {
 } from '../../src/seqscribe/fleet-secret.js';
 import { openSeqscribeNode, type SeqscribeNodeHandle } from '../../src/seqscribe/node.js';
 import {
-    assistantJournalPolicy,
     configSettingsPolicy,
-    fleetStatusPolicy,
     meshEventsPolicy,
     sessionChatPolicy,
-    ASSISTANT_JOURNAL_TOPIC,
     CONFIG_SETTINGS_TOPIC,
     meshEventsTopic,
 } from '../../src/seqscribe/topics.js';
@@ -135,7 +132,7 @@ describe('fleet secret store', () => {
 
 describe('topic policies and finalityAuthority', () => {
     it('stamps the fleet authority on every content policy', () => {
-        for (const policy of [assistantJournalPolicy(), sessionChatPolicy(), configSettingsPolicy()]) {
+        for (const policy of [sessionChatPolicy(), configSettingsPolicy()]) {
             expect(policy.finalityAuthority).toBe(ADHDEV_AUTHORITY_ID);
             expect(policy.access).toBe('content');
         }
@@ -144,7 +141,6 @@ describe('topic policies and finalityAuthority', () => {
 
     it('leaves metadata policies without an authority (Phase 6 cloud promotion)', () => {
         expect(meshEventsPolicy().finalityAuthority).toBeUndefined();
-        expect(fleetStatusPolicy().finalityAuthority).toBeUndefined();
     });
 });
 
@@ -165,7 +161,6 @@ describe('openSeqscribeNode provisional degradation', () => {
         handles.push(handle);
 
         const topics = handle.topics.map((d) => d.topic);
-        expect(topics).not.toContain(ASSISTANT_JOURNAL_TOPIC);
         expect(topics).not.toContain(CONFIG_SETTINGS_TOPIC);
         expect(topics).toContain(meshEventsTopic('mesh_abc'));
         expect(handle.authorityEnabled).toBe(false);
@@ -184,7 +179,6 @@ describe('openSeqscribeNode provisional degradation', () => {
         const topics = handle.topics.map((d) => d.topic);
         expect(topics).toEqual(
             expect.arrayContaining([
-                ASSISTANT_JOURNAL_TOPIC,
                 CONFIG_SETTINGS_TOPIC,
                 meshEventsTopic('mesh_abc'),
             ]),
@@ -204,7 +198,7 @@ describe('openSeqscribeNode provisional degradation', () => {
         handles.push(handle);
 
         const topics = handle.topics.map((d) => d.topic);
-        expect(topics).toContain(ASSISTANT_JOURNAL_TOPIC);
+        expect(topics).toContain(CONFIG_SETTINGS_TOPIC);
         expect(handle.authorityEnabled).toBe(true);
     });
 });
@@ -228,7 +222,7 @@ describe('daemon lifecycle seqscribe boot', () => {
         expect(handle!.writerId).toMatch(/^adhdev-[0-9a-f]{16}$/);
         expect(handle!.daemonId).toBe('daemon_machine-1');
         expect(handle!.authorityEnabled).toBe(true);
-        expect(handle!.topics.map((definition) => definition.topic)).toContain(ASSISTANT_JOURNAL_TOPIC);
+        expect(handle!.topics.map((definition) => definition.topic)).toContain(CONFIG_SETTINGS_TOPIC);
     });
 
     it('returns no handle instead of throwing when the node cannot open', () => {

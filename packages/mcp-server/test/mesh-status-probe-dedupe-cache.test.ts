@@ -9,6 +9,7 @@ import {
 import { meshStatus } from '../src/tools/mesh-tools.js';
 
 import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
+import { fakeCoordinatorTransport } from './helpers/fake-coordinator-tool-answers.js';
 // AUDIT #7 / P7 (IPC load audit, 2026-09-23): mesh_status / mesh_view_queue /
 // mesh_list_pending_approvals each iterated every MESH NODE and probed
 // get_status_metadata per node, even though the probe is a DAEMON-WIDE
@@ -52,7 +53,7 @@ function buildTransport(onGetStatusMetadata: () => void) {
     }
     return { success: true };
   };
-  const transport: any = {
+  const transport: any = fakeCoordinatorTransport({
     command: async (command: string, _args?: any) => {
     if (isTurnIpcCommand(command)) return answerTurnIpc(command, _args ?? {} as Record<string, unknown>);
       calls.push({ kind: 'command', command });
@@ -62,7 +63,7 @@ function buildTransport(onGetStatusMetadata: () => void) {
       calls.push({ kind: 'meshCommand', command, daemonId });
       return respond(command);
     },
-  };
+  });
   return { transport, calls };
 }
 
@@ -143,7 +144,7 @@ test('probeStatusMetadataForNode: a rejected probe is not cached — the next ca
   assert.equal((result as any)?.success, true);
 });
 
-test('end-to-end mesh_status: N nodes sharing one daemon → exactly one get_status_metadata call', async () => {
+test('end-to-end mesh_status: N remote nodes sharing one daemon are never probed — one local status read per call', async () => {
   __resetStatusMetadataProbeCacheForTests();
   let probeCount = 0;
   const mesh = buildMesh([
@@ -167,18 +168,15 @@ test('end-to-end mesh_status: N nodes sharing one daemon → exactly one get_sta
   };
   const ctx: any = { mesh, transport, localDaemonId: 'daemon_mach_coordinator', localMachineId: 'machine-coordinator' };
 
+  // Since the data-path audit (P1-6) mesh_status is ONE mesh_status_view: the
+  // coordinator reads ITS OWN status once per call; the 3 remote nodes sharing a
+  // daemon render from held state and are never probed (no per-node, no per-daemon read).
   const first = JSON.parse(await meshStatus(ctx));
   assert.equal(first.nodes.length, 3);
-  assert.equal(probeCount, 1, 'one get_status_metadata for 3 nodes sharing a daemon, not 3');
-
-  // A second call within the TTL: still zero NEW probes (cache hit).
+  assert.equal(probeCount, 1, 'one (local) get_status_metadata per call, never one per remote node/daemon');
   await meshStatus(ctx);
-  assert.equal(probeCount, 1, 'second mesh_status within the TTL reuses the cached probe');
-
-  // refresh:true bypasses the PRE-EXISTING cache entry (forcing one fresh
-  // probe), but the 3 nodes still share ONE daemon and the freshly-issued
-  // probe is itself shared across them within this same call — so this is
-  // one more probe (2 total), not three more.
+  assert.equal(probeCount, 2);
   await meshStatus(ctx, { refresh: true } as any);
-  assert.equal(probeCount, 2, 'refresh:true forces exactly one fresh probe for the 3 nodes sharing a daemon');
+  assert.equal(probeCount, 3, 'refresh:true does not add remote probes either');
+  for (const node of first.nodes) assert.notEqual(node.runtimeObservation?.source, 'local_read', `${node.nodeId} is remote: held only`);
 });

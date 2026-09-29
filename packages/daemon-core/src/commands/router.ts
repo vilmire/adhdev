@@ -44,7 +44,6 @@ import { workerReportSpecs } from './low-family/worker-report.js';
 import { workerMailboxSpecs } from './low-family/worker-mailbox.js';
 import { workerPeerContextSpecs } from './low-family/worker-peer-context.js';
 import { transcriptReplicaSpecs } from './low-family/transcript-replica.js';
-import { transcriptTransportReportSpecs } from './low-family/transcript-transport-report.js';
 import { cliAgentSpecs } from './med-family/cli-agent.js';
 import { ideSpecs } from './med-family/ide.js';
 import { meshCrudSpecs } from './med-family/mesh-crud.js';
@@ -60,9 +59,12 @@ import { meshEventsSpecs } from './high-family/mesh-events.js';
 import { meshCoordinatorLaunchSpecs } from './high-family/mesh-coordinator-launch.js';
 import { meshStatusSpecs } from './high-family/mesh-status.js';
 import { meshNodeStateSpecs } from './high-family/mesh-node-state.js';
+import { meshStatusViewSpecs } from './high-family/mesh-status-view.js';
 import { MeshNodeGitStateStore } from '../mesh/mesh-node-git-state.js';
 import { MeshNodeGitRefresher } from '../mesh/mesh-node-git-refresher.js';
-import { MeshNodeStatePusher, readMeshStateSubscription } from '../mesh/mesh-node-state-pusher.js';
+import { MeshNodeStatePusher } from '../mesh/mesh-node-state-pusher.js';
+import { watchWorkspaceGit } from '../mesh/workspace-git-watcher.js';
+import { LocalMeshNodeGitWatch } from '../mesh/local-mesh-node-git-watch.js';
 import { createFileMeshNodeStatePushPersistence } from '../mesh/mesh-node-state-push-store.js';
 import { handshakeMeshMemberDaemon, restoreMemberNodeStatePush, type MeshNodeStateLifecyclePort } from './mesh-node-state-lifecycle.js';
 import {
@@ -74,7 +76,7 @@ import {
     type PersistRemoteWorktreeNodeOutcome,
 } from '../mesh/mesh-remote-worktree-membership.js';
 import { randomUUID } from 'crypto';
-import { MESH_NODE_STATE_NUDGE_TIMEOUT_MS, nudgeMeshNodeStatePush, probeRemoteMeshNodeRuntime, readLocalMeshNodeRuntime, subscribeMeshNodeRuntimePush } from './mesh-node-runtime-io.js';
+import { MESH_NODE_STATE_NUDGE_TIMEOUT_MS, nudgeMeshNodeStatePush, readLocalMeshNodeRuntime, subscribeMeshNodeRuntimePush } from './mesh-node-runtime-io.js';
 import { getGitRepoStatus } from '../git/git-status.js';
 import { DaemonCliManager } from './cli-manager.js';
 import type { ProviderLoader } from '../providers/provider-loader.js';
@@ -96,7 +98,7 @@ import { analyzeMeshRefineNodeChangeArea, orderMeshRefineBatchNodes } from '../m
 import type { WorktreeBootstrapState } from '../mesh/worktree-bootstrap-config.js';
 import { getMeshQueueRevision } from '../mesh/mesh-work-queue.js';
 import type { RepoMeshSessionCleanupMode, RepoMeshSpawnedSessionVisibility } from '../repo-mesh-types.js';
-import type { BeaconDiagnosticsSummary, FleetStatusPeerView, SeqscribeStatusSummary } from '../shared-types.js';
+import type { BeaconDiagnosticsSummary, SeqscribeStatusSummary } from '../shared-types.js';
 import { DEFAULT_MESH_POLICY, magiAutoLaunchedSessionCleanupDecision, mergeAndNormalizePolicy } from '../repo-mesh-types.js';
 import { readMeshConfigFromDisk, statMeshConfigFile } from '../config/mesh-config.js';
 import { resolve as pathResolve } from 'path';
@@ -108,13 +110,9 @@ import {
     foldMeshNodeIdentityToCanonical,
     inlineMeshCarriesTransientNodeTruth,
     MESH_DIRECT_PROBE_REUSE_MS,
-    MESH_DIRECT_PROBE_TIMEOUT_MS,
-    MESH_DIRECT_PROBE_RETRY_TIMEOUT_MS,
     MeshGitProbeCache,
     normalizeInlineMeshNodeIdentity,
     persistNodeReporterPlatform,
-    probeRemoteMeshGitStatusWithRetry,
-    recordInlineMeshDirectGitTruth,
     recordReportedNodeFacts,
     readInlineMeshNodeId,
     readObjectRecord,
@@ -172,7 +170,7 @@ import {
 // ─── Remote mesh-session owner resolution (bodies extracted from this file) ───
 import { resolveRemoteMeshSessionOwnerDaemonId } from './router-mesh-session-owner.js';
 import { readMeshDirectDispatchFlag, withMeshDirectDispatch } from './command-args.js';
-import { evaluateMeshSender, meshSenderRefusalResult, MESH_SENDER_DAEMON_ID_ARG, readMeshSender, type MeshSenderGateDeps } from './mesh-sender.js';
+import { evaluateMeshSender, meshSenderRefusalResult, MESH_SENDER_DAEMON_ID_ARG, type MeshSenderGateDeps } from './mesh-sender.js';
 import { listMeshHostRecords, readMeshHostRecord, writeMeshHostRecord } from '../mesh/mesh-host-memory.js';
 import { unwrapMeshRelayResult } from './mesh-relay-result.js';
 import { resolveForwardedEventMeshId } from '../mesh/mesh-event-forwarding.js';
@@ -305,11 +303,6 @@ export interface CommandRouterDeps {
      */
     getBeaconDiagnostics?: () => BeaconDiagnosticsSummary | null;
     /**
-     * Latest fixed-key status entries received through per-peer seqscribe SUBs.
-     * Local/P2P only; null when the node/consumer is unavailable.
-     */
-    getFleetStatusPeerView?: () => FleetStatusPeerView | null;
-    /**
      * §8 unit 3 ("dynamic transcript activation + daemon replica store") — the
      * `ensure_transcript_subscription`/`read_transcript_replica` daemon-local
      * commands' data source (low-family/transcript-replica.ts). A getter for
@@ -362,7 +355,6 @@ export function getDaemonCommandRegistry(): CommandRegistry {
             ...workerMailboxSpecs,
             ...workerPeerContextSpecs,
             ...transcriptReplicaSpecs,
-            ...transcriptTransportReportSpecs,
             ...cliAgentSpecs,
             ...ideSpecs,
             ...meshCrudSpecs,
@@ -378,6 +370,7 @@ export function getDaemonCommandRegistry(): CommandRegistry {
             ...meshCoordinatorLaunchSpecs,
             ...meshStatusSpecs,
             ...meshNodeStateSpecs,
+            ...meshStatusViewSpecs,
             ...handlerSpecs,
             ...gitSpecs,
         ], COMMAND_PREFIX_DEFAULTS);
@@ -557,6 +550,8 @@ export class DaemonCommandRouter {
     readonly meshNodeGitRefresher: MeshNodeGitRefresher;
     /** Member side: pushes this daemon's node git state to the coordinators that probed it. */
     readonly meshNodeStatePusher: MeshNodeStatePusher;
+    /** Coordinator side: a terminal commit in a checkout this daemon reads itself flushes that mesh's view. */
+    readonly localMeshNodeGitWatch: LocalMeshNodeGitWatch;
     /**
      * Per-process id of this daemon. Returned on every member push ack (a member
      * that sees it change knows the coordinator restarted and re-reports the
@@ -572,22 +567,8 @@ export class DaemonCommandRouter {
         this.meshNodeGitState = deps.meshNodeGitStateStore ?? new MeshNodeGitStateStore();
         this.meshNodeGitRefresher = new MeshNodeGitRefresher({
             store: this.meshNodeGitState,
-            probe: (target) => probeRemoteMeshGitStatusWithRetry({
-                dispatchMeshCommand: this.deps.dispatchMeshCommand,
-                daemonId: target.daemonId,
-                workspace: target.workspace,
-                timeoutMs: MESH_DIRECT_PROBE_TIMEOUT_MS,
-                retryTimeoutMs: MESH_DIRECT_PROBE_RETRY_TIMEOUT_MS,
-                getConnection: this.deps.getMeshPeerConnectionStatus,
-                // Answering this probe subscribes the member to push its state here.
-                extraArgs: { meshStateSubscription: { meshId: target.meshId, nodeId: target.nodeId } },
-            }),
             onSettled: (meshId) => this.invalidateAggregateMeshStatus(meshId),
-            // Legacy members (no runtime push) still self-report platform / versions on the probe envelope.
-            onObserved: (target, git) => { void this.selfHealNodeFromProbe(target.meshId, target.nodeId, git); },
-            // Runtime (sessions / build) of a member that does not push it yet — background only.
-            probeRuntime: (daemonId) => probeRemoteMeshNodeRuntime(this.deps.dispatchMeshCommand, daemonId, MESH_DIRECT_PROBE_TIMEOUT_MS) as Promise<Record<string, unknown> | null>,
-            // Explicit refresh: ask a subscribed member to push now (never a forced probe).
+            // The ONLY coordinator→member node-state message: "push now" (subscribing when needed).
             nudge: (target) => nudgeMeshNodeStatePush(this.deps.dispatchMeshCommand, target, MESH_NODE_STATE_NUDGE_TIMEOUT_MS),
         });
         this.meshNodeStatePusher = new MeshNodeStatePusher({
@@ -596,6 +577,9 @@ export class DaemonCommandRouter {
             readRuntime: async () => readLocalMeshNodeRuntime(this.deps, this.meshCoordinatorBootId),
             // The subscription set survives a restart, so the new process pushes at once.
             persistence: createFileMeshNodeStatePushPersistence(),
+            // A commit / checkout / `git add` from a terminal is pushed within ~1 s
+            // (git-dir change detector; no git spawned on the tick when nothing moved).
+            watchGit: (workspace, onChange, onError) => watchWorkspaceGit(workspace, onChange, { onError }),
             // Worktree nodes this daemon owns on the mesh (inline view ∪ config), reported
             // once per coordinator boot so the coordinator can adopt any it lost.
             readWorktreeNodes: async (meshId) => {
@@ -612,17 +596,10 @@ export class DaemonCommandRouter {
         });
         // Session lifecycle facts wake the (debounced) runtime push to subscribed coordinators.
         subscribeMeshNodeRuntimePush(deps.bus, this.meshNodeStatePusher);
-    }
-
-    /** Platform / versions / facts self-heal from a background probe (was the blocking refresh path's side effect). */
-    private async selfHealNodeFromProbe(meshId: string, nodeId: string, git: Record<string, unknown>): Promise<void> {
-        try {
-            const record = await this.getMeshForCommand(meshId, undefined, { preferInline: true });
-            const node = record?.mesh?.nodes?.find((n: any) => meshNodeIdMatches(n, nodeId));
-            if (!record || !node) return;
-            const reporter = recordInlineMeshDirectGitTruth(node, git, 'selected_coordinator_mesh_p2p_git');
-            persistNodeReporterPlatform(record.source, record.mesh, nodeId, reporter);
-        } catch { /* best-effort */ }
+        this.localMeshNodeGitWatch = new LocalMeshNodeGitWatch({
+            watch: (workspace, onChange, onError) => watchWorkspaceGit(workspace, onChange, { onError }),
+            onChange: (meshId) => this.invalidateAggregateMeshStatus(meshId),
+        });
     }
 
     /** Config self-heal (platform / nickname / versions / facts) from a member-pushed facts bundle. */
@@ -930,6 +907,7 @@ export class DaemonCommandRouter {
             meshNodeGitState: this.meshNodeGitState,
             meshNodeGitRefresher: this.meshNodeGitRefresher,
             meshNodeStatePusher: this.meshNodeStatePusher,
+            localMeshNodeGitWatch: this.localMeshNodeGitWatch,
             meshCoordinatorBootId: this.meshCoordinatorBootId,
             adoptMemberWorktreeNodes: this.adoptMemberWorktreeNodes.bind(this),
             selfHealNodeFromFacts: (meshId, nodeId, nodeFacts) => { void this.selfHealNodeFromFacts(meshId, nodeId, nodeFacts); },
@@ -1469,21 +1447,6 @@ export class DaemonCommandRouter {
                 } else {
                     result = await this.runSpec(spec, normalizedArgs);
                     ranLocally = true;
-                }
-            }
-            // Member side of the coordinator-held node state: a coordinator's
-            // background git_status probe that asks for it subscribes this daemon
-            // to push the node's git state back on change (mesh-node-state-pusher.ts).
-            if (ranLocally && meshRelayed && cmd === 'git_status' && result.success === true) {
-                const subscription = readMeshStateSubscription(normalizedArgs);
-                if (subscription) {
-                    this.meshNodeStatePusher.register({
-                        coordinatorDaemonId: readMeshSender(normalizedArgs),
-                        meshId: subscription.meshId,
-                        nodeId: subscription.nodeId,
-                        workspace: typeof normalizedArgs.workspace === 'string' ? normalizedArgs.workspace : '',
-                        git: (result as Record<string, unknown>).status,
-                    });
                 }
             }
             logCommand({ ts: new Date().toISOString(), cmd, source: logSource, peerId, interactionId, args: normalizedArgs, success: result.success, durationMs: Date.now() - cmdStart });

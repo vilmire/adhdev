@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { connectionManager } from '../compat'
+import { connectionManager, useDaemons } from '../compat'
 
 interface UseIdeRemoteStreamOptions {
     doId: string
@@ -15,11 +15,9 @@ export function useIdeRemoteStream({
     viewMode,
 }: UseIdeRemoteStreamOptions) {
     const [connScreenshot, setConnScreenshot] = useState<string | null>(null)
-    const [screenshotUsage, setScreenshotUsage] = useState<{
-        dailyUsedMinutes: number
-        dailyBudgetMinutes: number
-        budgetExhausted: boolean
-    } | null>(null)
+    // The screenshot budget rides the daemon's own entry (daemon.metadata lane).
+    const { ides } = useDaemons()
+    const screenshotUsage = ides.find((entry) => entry.id === doId && entry.type === 'adhdev-daemon')?.screenshotUsage ?? null
 
     useEffect(() => {
         if (!doId) return
@@ -37,17 +35,6 @@ export function useIdeRemoteStream({
             setConnScreenshot(null)
         }
     }, [connState])
-
-    useEffect(() => {
-        if (!doId) return
-        const unsub = connectionManager.onStatus?.((sourceDaemonId: string, payload: any) => {
-            if (sourceDaemonId !== doId) return
-            if (payload?.screenshotUsage) {
-                setScreenshotUsage(payload.screenshotUsage)
-            }
-        })
-        return unsub || (() => {})
-    }, [doId])
 
     useEffect(() => {
         setConnScreenshot(null)

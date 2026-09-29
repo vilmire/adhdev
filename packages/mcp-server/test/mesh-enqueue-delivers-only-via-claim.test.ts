@@ -7,6 +7,7 @@ import { IpcTransport } from '../src/transports/ipc.js';
 import { getActiveTurnLedger, getQueue, recordDirectDispatchTask } from '@adhdev/daemon-core';
 
 import { answerTurnIpc, armTestTurnLedger, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
+import { fakeCoordinatorTransport } from './helpers/fake-coordinator-tool-answers.js';
 
 // rc.37 Finding B — a task the claim gates leave `pending` must never reach a session.
 //
@@ -71,7 +72,7 @@ function recordingIpcTransport(sessionStatus: 'generating' | 'idle' = 'generatin
     getStatus: async () => ({ sessions: [] }),
   } as any;
   Object.setPrototypeOf(t, IpcTransport.prototype);
-  return t;
+  return fakeCoordinatorTransport(t);
 }
 
 function makeCtx(meshId: string, transport: any) {

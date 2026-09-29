@@ -72,4 +72,5 @@ export const GIT_HEAVY_SUITES: string[] = [
   'test/mesh/preview-freshness.test.ts',
   'test/mesh/submodule-default-branch.test.ts',
   'test/mesh/worktree-bootstrap-stale-running.test.ts',
+  'test/mesh/workspace-git-watcher.test.ts',
 ];

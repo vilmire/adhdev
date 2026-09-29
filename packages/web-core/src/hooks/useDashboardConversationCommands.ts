@@ -89,7 +89,7 @@ export interface DashboardConversationCommands {
      *
      * ★ Why the TAIL is pushed in rather than the hook reading it.
      *
-     * The transcript authority is the per-pane chat-tail controller, which lives
+     * The transcript authority is the per-pane session chat controller, which lives
      * BELOW this hook (ChatPane owns it; this hook is called by the workspace
      * above). The hook owns the queue state and its persisted copy. Rather than
      * duplicate a tail subscription up here — a second subscription to the same

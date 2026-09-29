@@ -1,18 +1,17 @@
-import type { SessionChatTailSnapshot } from './session-chat-tail-controller'
+import type { SessionChatSnapshot } from './session-chat-controller'
 import type { ActiveConversation, DashboardMessage } from './types'
 import { getMessageTimestamp } from './message-utils'
 import { PENDING_QUEUED_MESSAGE_STALE_AFTER_MS } from '../../utils/pendingQueuedMessages'
 
 export function getConversationLiveMessages(
     conversation: ActiveConversation,
-    snapshot?: Pick<SessionChatTailSnapshot, 'liveMessages' | 'hasLiveSnapshot'> | null,
+    snapshot?: Pick<SessionChatSnapshot, 'liveMessages' | 'hasLiveSnapshot'> | null,
 ): DashboardMessage[] {
     if (snapshot?.hasLiveSnapshot) {
-        // Once the session.chat_tail subscription has produced any snapshot, it is the
+        // Once the keyed chat lane has delivered a committed view, it is the
         // transcript authority for the pane. Do not fall back to conversation.messages
-        // based on length: long CLI sessions intentionally send a bounded recent tail,
-        // and the fallback can be stale/empty relative to the daemon parser. Older rows
-        // are recovered through explicit history paging instead.
+        // based on length: the status-meta list can be stale/empty relative to the
+        // daemon parser. Older rows are recovered through explicit history paging.
         return snapshot.liveMessages || []
     }
     return Array.isArray(conversation.messages) ? conversation.messages : []

@@ -197,14 +197,16 @@ describe('B4 locality — 0 get_status_metadata for the local node; 1 cached pro
         expect(handle.mock.calls.filter((c) => c[0] === 'get_status_metadata')).toHaveLength(0);
     });
 
-    it('two attempts on one remote daemon cost ONE get_status_metadata inside the 5 s cache', async () => {
+    it('a remote daemon with nothing held costs ZERO get_status_metadata: unknown + a push request', async () => {
         const { comps, dispatchMeshCommand } = components();
-        const reader = createComponentsProbeReader(comps, { analyzer: () => obs(), now: () => T0 });
-        const loc = { kind: 'remote' as const, daemonId: 'daemon_mach_remote' };
-        expect(await reader.read(attempt({ sessionId: 's-r1' }), loc, ['liveness'])).toMatchObject({ presence: 'present', status: 'generating' });
-        expect(await reader.read(attempt({ sessionId: 's-r2' }), loc, ['liveness'])).toMatchObject({ presence: 'present', status: 'generating' });
-        expect(await reader.read(attempt({ sessionId: 's-r3' }), loc, ['liveness'])).toEqual({ presence: 'absent' });
-        expect(dispatchMeshCommand.mock.calls.filter((c) => c[1] === 'get_status_metadata')).toHaveLength(1);
+        const requestHeldPush = vi.fn();
+        const reader = createComponentsProbeReader(comps, { analyzer: () => obs(), requestHeldPush });
+        const loc = { kind: 'remote' as const, daemonId: 'daemon_mach_remote', workspace: '/w' };
+        expect(await reader.read(attempt({ sessionId: 's-r1' }), loc, ['liveness'])).toEqual({ presence: 'unknown' });
+        expect(await reader.read(attempt({ sessionId: 's-r2' }), loc, ['liveness'])).toEqual({ presence: 'unknown' });
+        expect(dispatchMeshCommand).not.toHaveBeenCalled();
+        expect(requestHeldPush).toHaveBeenCalledTimes(2);
+        expect(requestHeldPush).toHaveBeenLastCalledWith(expect.objectContaining({ sessionId: 's-r2' }), 'daemon_mach_remote', '/w');
     });
 
     it('a disconnected peer is `unknown` without dialing', async () => {
@@ -218,9 +220,9 @@ describe('B4 locality — 0 get_status_metadata for the local node; 1 cached pro
 
 // Coordinator-held node state (mesh-node-git-state.ts): a remote session's
 // presence / status comes from the member-PUSHED runtime summary the coordinator
-// holds, not a per-tick get_status_metadata round trip. The live probe remains
-// the fallback for members that do not push (older builds) or a stale hold, and
-// transcript content still comes from the replica / read_chat.
+// holds — the ONLY source: there is no get_status_metadata pull at all (data-path
+// audit 2026-09-29). With nothing live held the probe answers `unknown` and asks
+// the member to push; transcript content still comes from the replica / read_chat.
 describe('remote presence from the coordinator-held runtime', () => {
     function components() {
         const dispatchMeshCommand = vi.fn(async (_daemon: string, cmd: string) => (cmd === 'get_status_metadata'
@@ -244,7 +246,7 @@ describe('remote presence from the coordinator-held runtime', () => {
     it('a live held list answers presence + status with ZERO get_status_metadata', async () => {
         const { comps, dispatchMeshCommand } = components();
         const readHeldSessions = vi.fn(() => ({ sessions: [{ id: 's1', status: 'generating' }], observedAt: T0 + 50_000 }));
-        const reader = createComponentsProbeReader(comps, { analyzer: () => obs(), now: () => NOW, readHeldSessions });
+        const reader = createComponentsProbeReader(comps, { analyzer: () => obs(), readHeldSessions });
         expect(await reader.read(attempt(), loc, ['liveness'])).toEqual({ presence: 'present', status: 'generating' });
         expect(readHeldSessions).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 's1', meshId: 'm1', nodeId: 'n1' }), 'daemon_mach_remote');
         expect(statusCalls(dispatchMeshCommand)).toHaveLength(0);
@@ -254,7 +256,6 @@ describe('remote presence from the coordinator-held runtime', () => {
         const { comps, dispatchMeshCommand } = components();
         const reader = createComponentsProbeReader(comps, {
             analyzer: () => obs({ finalAssistantAt: T0 + 40_000 }),
-            now: () => NOW,
             readHeldSessions: () => ({ sessions: [{ id: 's1', status: 'idle' }], observedAt: T0 + 50_000 }),
         });
         const read = await reader.read(attempt(), loc, []);
@@ -267,30 +268,43 @@ describe('remote presence from the coordinator-held runtime', () => {
         const { comps, dispatchMeshCommand } = components();
         const reader = createComponentsProbeReader(comps, {
             analyzer: () => obs(),
-            now: () => NOW,
             readHeldSessions: () => ({ sessions: [{ id: 's-other', status: 'idle' }], observedAt: T0 + 50_000 }),
         });
         expect(await reader.read(attempt(), loc, [])).toEqual({ presence: 'absent' });
         expect(statusCalls(dispatchMeshCommand)).toHaveLength(0);
     });
 
-    it('absent from a held list that predates the turn (a just-launched session may not be pushed yet) → live fallback', async () => {
+    it('absent from a held list that predates the turn (a just-launched session may not be pushed yet) → unknown, no live call', async () => {
         const { comps, dispatchMeshCommand } = components();
         const reader = createComponentsProbeReader(comps, {
             analyzer: () => obs(),
-            now: () => NOW,
             // Observed only 1 s after consumedAt — inside the skew / push-debounce margin.
             readHeldSessions: () => ({ sessions: [{ id: 's-other', status: 'idle' }], observedAt: T0 + 1_200 }),
         });
-        expect(await reader.read(attempt({ sessionId: 's-live' }), loc, ['liveness'])).toEqual({ presence: 'present', status: 'generating' });
-        expect(statusCalls(dispatchMeshCommand)).toHaveLength(1);
+        expect(await reader.read(attempt({ sessionId: 's-live' }), loc, ['liveness'])).toEqual({ presence: 'unknown' });
+        expect(dispatchMeshCommand).not.toHaveBeenCalled();
     });
 
-    it('no live hold (older member / stale / probe-only snapshot) → the live get_status_metadata answers', async () => {
+    it('an empty or truncated held list never proves absence → unknown, no live call', async () => {
         const { comps, dispatchMeshCommand } = components();
-        const reader = createComponentsProbeReader(comps, { analyzer: () => obs(), now: () => NOW, readHeldSessions: () => null });
-        expect(await reader.read(attempt({ sessionId: 's-live' }), loc, ['liveness'])).toEqual({ presence: 'present', status: 'generating' });
-        expect(statusCalls(dispatchMeshCommand)).toHaveLength(1);
+        for (const held of [
+            { sessions: [], observedAt: T0 + 50_000 },
+            { sessions: [{ id: 's-other', status: 'idle' }], observedAt: T0 + 50_000, truncated: true },
+        ]) {
+            const reader = createComponentsProbeReader(comps, { analyzer: () => obs(), readHeldSessions: () => held });
+            expect(await reader.read(attempt(), loc, [])).toEqual({ presence: 'unknown' });
+        }
+        expect(dispatchMeshCommand).not.toHaveBeenCalled();
+    });
+
+    it('no live hold (not pushing yet / stale / handshake pending) → unknown and a push request, ZERO get_status_metadata', async () => {
+        const { comps, dispatchMeshCommand } = components();
+        const requestHeldPush = vi.fn();
+        const reader = createComponentsProbeReader(comps, { analyzer: () => obs(), readHeldSessions: () => null, requestHeldPush });
+        expect(await reader.read(attempt({ sessionId: 's-live' }), { ...loc, workspace: '/w' }, ['liveness'])).toEqual({ presence: 'unknown' });
+        expect(statusCalls(dispatchMeshCommand)).toHaveLength(0);
+        expect(dispatchMeshCommand).not.toHaveBeenCalled();
+        expect(requestHeldPush).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 's-live', meshId: 'm1', nodeId: 'n1' }), 'daemon_mach_remote', '/w');
     });
 
     it('a disconnected peer stays `unknown` even when a hold exists (the R32u grace hold is unchanged)', async () => {
@@ -298,7 +312,6 @@ describe('remote presence from the coordinator-held runtime', () => {
         (comps as { getMeshPeerConnectionStatus: () => unknown }).getMeshPeerConnectionStatus = () => null;
         const reader = createComponentsProbeReader(comps, {
             analyzer: () => obs(),
-            now: () => NOW,
             readHeldSessions: () => ({ sessions: [{ id: 's1', status: 'generating' }], observedAt: T0 + 50_000 }),
         });
         expect(await reader.read(attempt(), loc, [])).toEqual({ presence: 'unknown' });

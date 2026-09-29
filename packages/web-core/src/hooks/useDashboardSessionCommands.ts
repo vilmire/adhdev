@@ -1,7 +1,7 @@
 import { useCallback, useState, type Dispatch, type SetStateAction } from 'react'
 import type { ActiveConversation } from '../components/dashboard/types'
 import { getConversationHistoryLookupIds } from '../components/dashboard/conversation-identity'
-import { clearSessionChatTailControllerSnapshot } from '../components/dashboard/session-chat-tail-controller'
+import { clearSessionChatControllerSnapshot } from '../components/dashboard/session-chat-controller'
 import type { DaemonData } from '../types'
 import { appendWarningToast, type DashboardToastSetter, getProviderArgs, getRouteTarget } from './dashboardCommandUtils'
 
@@ -87,7 +87,7 @@ export function useDashboardSessionCommands({
             await sendDaemonCommand(routeTarget, 'new_chat', {
                 ...getProviderArgs(activeConv),
             })
-            clearSessionChatTailControllerSnapshot(
+            clearSessionChatControllerSnapshot(
                 routeTarget,
                 activeConv.sessionId,
                 getConversationHistoryLookupIds(activeConv)[0],

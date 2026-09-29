@@ -263,14 +263,14 @@ export function buildReadChatCommandResult(
             ? args.sessionId.trim()
             : typeof (h?.currentSession as any)?.sessionId === 'string' ? String((h!.currentSession as any).sessionId) : '';
     const providerHint = resolveReadChatProviderHint(payload, args, h, presentationSessionIdHint);
-    const legacyStatus = normalizeReadChatCommandStatus(payload?.status, payload?.activeModal);
+    const providerStatus = normalizeReadChatCommandStatus(payload?.status, payload?.activeModal);
     const turnPresentation = resolveSessionTurnPresentation({
         sessionId: presentationSessionIdHint || undefined,
-        legacyStatus,
+        providerStatus,
         providerType: providerHint || undefined,
         surface: 'read_chat',
     });
-    let effectiveStatus = legacyStatus;
+    let effectiveStatus = providerStatus;
     if (turnPresentation.authority === 'turn_reducer') {
         // The reducer projection is the status AUTHORITY, but not a contract
         // bypass: its raw vocabulary ('stopped', …) must pass through the same
@@ -398,7 +398,7 @@ export function buildReadChatCommandResult(
             providerType: providerHint || turnPresentation.providerType || '',
             providerSessionId: typeof validatedPayload.providerSessionId === 'string' ? validatedPayload.providerSessionId : null,
             status: effectiveStatus,
-            providerObservedStatus: legacyStatus,
+            providerObservedStatus: providerStatus,
             title: typeof validatedPayload.title === 'string' ? validatedPayload.title : null,
             activeModal: validatedPayload.activeModal ?? null,
             activeInteractivePrompt: validatedPayload.activeInteractivePrompt ?? null,
@@ -457,7 +457,7 @@ export function buildReadChatCommandResult(
         // idle mid-turn, which is exactly why Stage 6 exists. It is safe only
         // behind the poll's structural turn-end guards (post-dispatch final
         // assistant, no trailing tool activity, settle window).
-        providerObservedStatus: legacyStatus,
+        providerObservedStatus: providerStatus,
         // Stage 6: the authoritative turn presentation rides the read_chat
         // payload for mesh-owned sessions (identity + stage + evidence
         // timestamps; the `status` field above already reflects it).

@@ -124,15 +124,6 @@ export type SeqscribeStatusWireSummary = {
     fgenAgeBucket: number
     quarantined: boolean
     authority: boolean
-    dualWrite?: boolean
-    dualWriteFailedBucket?: number
-    dualWriteDroppedBucket?: number
-    dualWriteBackfilledBucket?: number
-    parityMismatchBucket?: number
-    parityRan?: boolean
-    parityMissingInShadowBucket?: number
-    parityExtraInShadowBucket?: number
-    parityFieldMismatchBucket?: number
     transcriptPublish?: boolean
     transcriptPublishedBucket?: number
     transcriptPublishFailedBucket?: number
@@ -286,7 +277,8 @@ export type P2PIceWirePayload = { candidate: string; mid: string; peerId: string
 
 /**
  * A dashboard-originated signal as relayed to the daemon. `peerId` is stamped
- * by UserSession/SharedSession, `sharePermission` only by SharedSession (server
+ * by UserSession/SharedSession, `sharePermission` and `shareTargetSessionId`
+ * (the one session a share link may see) only by SharedSession (server
  * authority, never the client). Field names follow the browser/node-datachannel
  * spellings both ends already read.
  */
@@ -294,6 +286,7 @@ export type RelayedP2PSignalWirePayload = {
     peerId?: string
     daemonId?: string
     sharePermission?: string
+    shareTargetSessionId?: string
     sdp?: string
     type?: string
     candidate?: string

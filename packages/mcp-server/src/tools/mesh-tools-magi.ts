@@ -49,6 +49,7 @@ import {
 import { ledgerQuery, missionQuery, missionUpsert, queueEnqueue, recordLocal } from '../ipc/turn-commands.js';
 import type { MeshWorkQueueEntry } from '@adhdev/daemon-core';
 import { readTranscriptReplicaForSemanticConsumer } from './mesh-transcript-semantic-read.js';
+import { ensureMeshNodeRoutes } from './mesh-node-routes.js';
 import { resolveMagiSessionCleanupMode, type RepoMeshMagiSessionCleanupMode } from '@adhdev/daemon-core';
 import type {
     LocalMeshEntry,
@@ -1881,6 +1882,7 @@ async function collectMagiResponses(
             // not message-window-derived. resolve_action below stays a live RPC
             // regardless — the replica decides only WHETHER to act, never
             // performs the act.
+            await ensureMeshNodeRoutes(ctx);
             const replicaTransport = resolveSemanticReplicaTransport(ctx, node as any);
             let payload: any = null;
             if (replicaTransport) {
@@ -2006,6 +2008,7 @@ async function collectMagiResponses(
             // snapshot is that same hazard arriving by a different road, so it
             // declines to legacy rather than being parsed. Freshness is
             // required because this read locks a terminal verdict.
+            await ensureMeshNodeRoutes(ctx);
             const replicaTransport = resolveSemanticReplicaTransport(ctx, node as any);
             let payload: any = null;
             if (replicaTransport) {

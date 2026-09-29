@@ -32,9 +32,6 @@ export type {
   P2PStatusSummary,
   SeqscribeStatusSummary,
   BeaconDiagnosticsSummary,
-  FleetStatusPeerEntry,
-  FleetStatusPeerViewDiagnostics,
-  FleetStatusPeerView,
   DaemonStatusEventPayload,
   DashboardStatusEventPayload,
   SessionTransport,
@@ -44,22 +41,26 @@ export type {
   ReadChatCursor,
   ReadChatSyncResult,
   TransportTopic,
-  SessionChatTailSubscriptionParams,
   SessionRuntimeOutputSubscriptionParams,
   MachineRuntimeSubscriptionParams,
   SessionHostDiagnosticsSubscriptionParams,
   SessionModalSubscriptionParams,
   DaemonMetadataSubscriptionParams,
   WorkspaceGitSubscriptionParams,
-  SessionChatTailUpdate,
   MachineRuntimeUpdate,
   SessionHostDiagnosticsUpdate,
   SessionModalUpdate,
   DaemonMetadataUpdate,
+  DaemonMetadataDelta,
+  DaemonMetadataWireUpdate,
+  DaemonMetadataSessionChange,
+  MeshStatusSubscriptionParams,
+  MeshStatusSnapshotUpdate,
+  MeshStatusDeltaUpdate,
+  MeshStatusWireUpdate,
   TopicUpdateEnvelope,
   SubscribeRequest,
   UnsubscribeRequest,
-  StandaloneWsStatusPayload,
   AvailableProviderInfo,
   AcpConfigOption,
   AcpMode,
@@ -609,8 +610,8 @@ export {
 // detected on the worker side). See mesh-orphaned-pin-notify.ts.
 export { findTasksOrphanedBySessionStop, notifyCoordinatorOfOrphanedPins, buildOrphanedPinNotice } from './mesh/mesh-orphaned-pin-notify.js';
 export type { OrphanedPinnedTask } from './mesh/mesh-orphaned-pin-notify.js';
-export { resolveSessionTurnPresentation, resolveTurnAttemptRow, presentationFromAttemptRow, turnStageToSurfaceStatus, isRestartBlockingPresentation, classifyShadowDivergence, getTurnPresentationMetrics } from './mesh/mesh-turn-presentation.js';
-export type { SessionTurnPresentation, TurnPresentationAuthority, TurnPresentationSurface, TurnAuthorityLookup, ResolveTurnPresentationArgs, TurnPresentationMetrics, ShadowDivergenceReason } from './mesh/mesh-turn-presentation.js';
+export { resolveSessionTurnPresentation, resolveTurnAttemptRow, presentationFromAttemptRow, turnStageToSurfaceStatus, isRestartBlockingPresentation, getTurnPresentationMetrics } from './mesh/mesh-turn-presentation.js';
+export type { SessionTurnPresentation, TurnPresentationAuthority, TurnPresentationSurface, TurnAuthorityLookup, ResolveTurnPresentationArgs, TurnPresentationMetrics } from './mesh/mesh-turn-presentation.js';
 // COORD-EVENT-MISROUTE: coordinator-identity helper so the mcp-server drain path can build a
 // session-scoped drainer identity (identityDeliversTo sibling-session filter) with the same
 // canonical builder daemon-core uses internally, instead of hand-rolling the identity shape.
@@ -671,12 +672,6 @@ export type { IDEInfo } from './detection/ide-detector.js';
 export { detectCLIs, detectCLI } from './detection/cli-detector.js';
 export { getHostMemorySnapshot } from './system/host-memory.js';
 export type { HostMemorySnapshot } from './system/host-memory.js';
-export {
-  classifyHotChatSessionsForSubscriptionFlush,
-  detectNewlySettledCompletedSessions,
-  DEFAULT_ACTIVE_CHAT_POLL_STATUSES,
-  DEFAULT_CHAT_TAIL_RECENT_MESSAGE_GRACE_MS,
-} from './status/chat-tail-hot-sessions.js';
 
 // ── CDP ──
 export { DaemonCdpManager } from './cdp/manager.js';
@@ -699,13 +694,12 @@ export { MESH_SENDER_DAEMON_ID_ARG, isMeshSenderRefusalResult, readMeshSender } 
 export type { MeshSenderClass, MeshSenderRefusal } from './commands/mesh-sender.js';
 
 // ── Dashboard subscription topic engine (shared cloud/standalone) ──
-export { TopicSubscriptionRegistry, DEFAULT_GIT_REFRESH_CONCURRENCY, DEFAULT_CHAT_TAIL_FLUSH_DEBOUNCE_MS } from './subscriptions/topic-registry.js';
+export { TopicSubscriptionRegistry, DEFAULT_GIT_REFRESH_CONCURRENCY } from './subscriptions/topic-registry.js';
 export type {
     TopicSink,
     TopicEngineOptions,
     TopicEngineSources,
-    ChatTailEngineOptions,
-    ChatTailEngineState,
+    DaemonMetadataScope,
     DaemonMetadataUpdateBody,
 } from './subscriptions/topic-registry.js';
 export {
@@ -726,7 +720,7 @@ export type {
 } from './commands/upgrade-helper.js';
 
 // ── Status ──
-export { DaemonStatusReporter, buildCloudStatusReportPayload, projectFleetStatusEntry } from './status/reporter.js';
+export { DaemonStatusReporter, buildCloudStatusReportPayload, observeP2PStatusSummary } from './status/reporter.js';
 export { buildSessionEntries, findCdpManager, hasCdpManager, isCdpConnected, isCoordinatorSpawnedHiddenWorker, resolveSurfaceHidden, resolveMuted, resolveSpawnedSessionHideMute } from './status/builders.js';
 export { buildStatusSnapshot, buildMachineInfo, buildAvailableProviders, getLastDisplayMessage } from './status/snapshot.js';
 export { getDaemonBuildInfo } from './build-info.js';
@@ -839,42 +833,21 @@ export { readChatHistory } from './config/chat-history.js';
 export {
   hashSignatureParts,
   buildChatMessageSignature,
-  buildChatTailDeliverySignature,
   buildSessionModalDeliverySignature,
 } from './chat/chat-signatures.js';
 export type {
   ChatMessageSignatureInput,
-  ChatTailDeliverySignatureInput,
   SessionModalDeliverySignatureInput,
 } from './chat/chat-signatures.js';
 export {
-  normalizeChatTailActiveModal,
   normalizeSessionModalFields,
-  prepareSessionChatTailUpdate,
   prepareSessionModalUpdate,
 } from './chat/subscription-updates.js';
 export { runAsyncBatch } from './chat/async-batch.js';
 export type { AsyncBatchOptions } from './chat/async-batch.js';
-export {
-    DEFAULT_CHAT_TAIL_MISSING_SESSION_POLICY,
-    decideMissingSessionAttempt,
-    isMissingLiveSessionResult,
-    recordMissingSessionAttempt,
-    resolveBackoffMs,
-    shouldWarnForMissingSession,
-} from './chat/chat-tail-missing-session-backoff.js';
 export type {
-    ChatTailMissingSessionDecision,
-    ChatTailMissingSessionPolicy,
-    ChatTailMissingSessionState,
-} from './chat/chat-tail-missing-session-backoff.js';
-export type {
-  ChatTailSubscriptionCursor,
-  PrepareSessionChatTailUpdateInput,
-  PreparedSessionChatTailUpdate,
   PrepareSessionModalUpdateInput,
   PreparedSessionModalUpdate,
-  SessionChatTailCommandResult,
 } from './chat/subscription-updates.js';
 
 // ── Agent Stream ──
@@ -1136,8 +1109,7 @@ export {
 
 // seqscribe integration (the 2026-08-26 seqscribe integration plan).
 // Phase 0 surface: node lifecycle, the topic table, the authority wiring and
-// the status projection. Phase 1 adds the fleet-secret store (auth_ok delivery)
-// and the assistant.journal producer/consumer API.
+// the status projection. Phase 1 adds the fleet-secret store (auth_ok delivery).
 export {
   openSeqscribeNode,
   getSeqscribeDbPath,
@@ -1151,13 +1123,10 @@ export {
 // daemon injects the WS legs, standalone never arms it.
 export {
   armBeacon,
-  resolveBeaconMode,
   projectBeaconReport,
   assertNoPlaintextHintTopics,
   defaultBeaconTopicScope,
-  BEACON_ENV,
   MAX_BEACON_GET_QUERIES,
-  type BeaconMode,
   type BeaconCounters,
   type BeaconHostTransport,
   type BeaconGetResponse,
@@ -1194,15 +1163,10 @@ export {
   sessionChatPolicy,
   sessionSegmentFromChatTopic,
   CHAT_TOMBSTONE_KIND,
-  assistantJournalPolicy,
-  fleetStatusPolicy,
   configSettingsPolicy,
   baseTopicDefinitions,
   contentTopicsFor,
-  ASSISTANT_JOURNAL_TOPIC,
-  FLEET_STATUS_TOPIC,
   CONFIG_SETTINGS_TOPIC,
-  FLEET_STATUS_RING,
   type TopicDefinition,
 } from './seqscribe/topics.js';
 export {
@@ -1220,19 +1184,7 @@ export {
   FLEET_SECRET_FILE,
   type StoredFleetSecret,
 } from './seqscribe/fleet-secret.js';
-export { appendAssistantJournal, consumeAssistantJournal } from './seqscribe/journal.js';
 export { summarizeSeqscribeStats } from './seqscribe/stats.js';
-// Phase 2 Stage 1: the convergence probe that makes live replication
-// observable (a producer + consumer pair existed nowhere before it).
-export {
-  startConvergenceProbe,
-  PROBE_ENTRY_KIND,
-  PROBE_CONSUMER,
-  PROBE_INTERVAL_MS,
-  type ProbeHandle,
-  type ProbeOptions,
-  type ProbePayload,
-} from './seqscribe/probe.js';
 // Wiring-unification C7-1: the mesh PUBLISHER — the one writer of
 // `mesh.<id>.events` (turn entries awaited through bounded slots, never shed;
 // `mesh.record` for non-turn records). Replaces the Phase 2 dual-write shadow:
@@ -1355,8 +1307,7 @@ export {
   type ProjectedMeshEvent,
 } from './seqscribe/mesh-event-projection.js';
 // §8 unit 2: transcript publisher + parity counters. Exported so the cloud
-// daemon's status projection can pass them to `summarizeSeqscribeStats` the
-// same way it already passes the mesh-axis `dualWrite`/`parity` counters.
+// daemon's status projection can pass them to `summarizeSeqscribeStats`.
 export {
   transcriptParityCounters,
   __resetTranscriptParityForTests,
@@ -1370,34 +1321,6 @@ export {
   transcriptChatRuntimeCounters,
   type TranscriptChatRuntimeCounters,
 } from './seqscribe/transcript-keyed-publish-runtime.js';
-// Phase 4 Stage 3: fleet.status parity evidence + future-consumer readiness.
-export {
-  configureFleetStatusParity,
-  observeFleetStatusWsProjection,
-  fleetStatusParityCounters,
-  __resetFleetStatusParityForTests,
-  FLEET_STATUS_PARITY_INTERVAL_MS,
-  FLEET_STATUS_PARITY_SUMMARY_INTERVAL_MS,
-  FLEET_STATUS_APPEND_SETTLE_MS,
-  type FleetStatusParityBuckets,
-  type FleetStatusParityCounters,
-  type FleetStatusParityExpectation,
-  type FleetStatusParityHandle,
-  type FleetStatusParityMismatchKind,
-  type FleetStatusParityOptions,
-  type FleetStatusParityRunResult,
-} from './seqscribe/fleet-status-parity.js';
-export {
-  evaluateFleetStatusReadiness,
-  type FleetStatusReadiness,
-  type FleetStatusReadinessInput,
-  type FleetStatusReadinessReason,
-} from './seqscribe/fleet-status-readiness.js';
-export {
-  createFleetStatusPeerViewConsumer,
-  FLEET_STATUS_SUB_VIEW,
-  type FleetStatusPeerViewConsumer,
-} from './seqscribe/fleet-status-peer-view.js';
 // §8 unit 6 ("mesh_read_chat remote display cutover"): the `mesh_read_chat_
 // display` roster adapter. A VALUE export (unlike the type-only block below) —
 // mcp-server is a node process, not a browser bundle, so the root-barrel
@@ -1456,7 +1379,6 @@ export type {
   SeqscribeProjectionsView,
   BeaconSlot,
   BeaconHandleLike,
-  FleetStatusProducer,
 } from './seqscribe/runtime.js';
 export { bindSeqscribeRuntime, seqscribeSlot } from './seqscribe/runtime-slot.js';
 export { buildLocalSeqscribeStats } from './seqscribe/local-stats.js';
@@ -1469,8 +1391,10 @@ export {
   MAX_STANDALONE_SEQSCRIBE_LANES,
   deriveStandaloneTranscriptGrants,
   transcriptTopicSessionSegment,
+  TRANSCRIPT_TOPICS_AVAILABLE_TYPE,
+  transcriptTopicsAvailableFrame,
 } from './seqscribe/standalone-transcript-lane.js';
-export type { StandaloneTranscriptLaneOptions } from './seqscribe/standalone-transcript-lane.js';
+export type { StandaloneTranscriptLaneOptions, TranscriptTopicsAvailableFrame } from './seqscribe/standalone-transcript-lane.js';
 // ─── Session launch provenance (wiring-unification Phase E) ───
 export {
   buildSessionLaunchRecord,
@@ -1519,14 +1443,13 @@ export type {
 } from './boot/host-runtime.js';
 export {
   isTurnCompletionEdge,
-  subscribeHostChatTail,
   subscribeHostCommandTopics,
   subscribeHostMeshState,
   subscribeHostModal,
   subscribeHostStatusFacts,
   subscribeHostTurnSnapshots,
 } from './boot/host-subscribers.js';
-export type { StatusFactsEvent, ChatTailHooks, TurnSnapshotDeps } from './boot/host-subscribers.js';
+export type { StatusFactsEvent, TurnSnapshotDeps } from './boot/host-subscribers.js';
 export { SessionOutputFanout } from './boot/session-output-fanout.js';
 export type { SessionOutputSink } from './boot/session-output-fanout.js';
 export { bootSessionHost } from './session-host/host-bootstrap.js';
@@ -1551,3 +1474,7 @@ export type { MeshDirectDispatchArgs } from './commands/command-args.js';
 // Wiring-unification D2 — the one send funnel (`DaemonCliManager.input`).
 export { createSessionInputService, BUSY_DECISION } from './sessions/session-input-service.js';
 export type { SessionInputService, SessionInputTarget } from './sessions/session-input-service.js';
+
+// ── Tool answers composed by the coordinator daemon (mesh_status_view / mesh_dispatch_route) ──
+export { composeMeshStatusView, decideDispatchRoute, decideNodeRoutes, type MeshNodeRouteDecision } from './commands/high-family/mesh-status-view.js';
+export type { MeshStatusViewArgs } from './commands/high-family/mesh-status-view.js';

@@ -12,6 +12,7 @@ import {
 import { __writeTaskStatusForTests, readLocalRecords } from '@adhdev/daemon-core';
 
 import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
+import { fakeCoordinatorTransport } from './helpers/fake-coordinator-tool-answers.js';
 // GRAPH-ADOPTION signals — P2 (single-surface orchestration_decision) and
 // P3 (the materializedCount: 0 advisory).
 //
@@ -40,10 +41,10 @@ function nextMeshId(): string {
 }
 
 function recordingLocalTransport() {
-    return {
+    return fakeCoordinatorTransport({
         command: async (__ipcCmd: string, __ipcArgs?: Record<string, unknown>) => { if (isTurnIpcCommand(__ipcCmd)) return answerTurnIpc(__ipcCmd, __ipcArgs ?? {}); return ({ success: true }); },
         getStatus: async () => ({ sessions: [] }),
-    } as any;
+    } as any);
 }
 
 function makeCtx(meshId: string, coordinatorSessionId = 'sess-coord') {

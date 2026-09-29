@@ -11,12 +11,9 @@ import {
     TRANSCRIPT_STAT_POLL_INTERVAL_MS,
     __resetTranscriptProjectionForTests,
     configureTranscriptProjection,
+    markTranscriptPtyOutputActivity,
     markTranscriptSessionDirty,
 } from '../../src/seqscribe/transcript-publisher.js';
-import {
-    TopicSubscriptionRegistry,
-    type TopicSink,
-} from '../../src/subscriptions/topic-registry.js';
 import { SessionRegistry } from '../../src/sessions/registry.js';
 import { createSessionLifecycleBus } from '../../src/sessions/lifecycle-bus.js';
 import { subscribeTranscriptProjection } from '../../src/seqscribe/transcript-bus-subscriber.js';
@@ -25,21 +22,6 @@ async function flushProjection(): Promise<void> {
     await Promise.resolve();
     await Promise.resolve();
     await Promise.resolve();
-}
-
-function makeRegistry(): TopicSubscriptionRegistry {
-    const sink: TopicSink = {
-        send: () => true,
-        isDeliverable: () => true,
-        isAlive: () => true,
-    };
-    return new TopicSubscriptionRegistry(sink, {
-        chatTail: {
-            isCliSession: () => true,
-            scheduleGate: () => true,
-            onDebouncedFlush: () => {},
-        },
-    });
 }
 
 describe('Transcript stat polling instead of PTY', () => {
@@ -72,7 +54,6 @@ describe('Transcript stat polling instead of PTY', () => {
                 return null;
             },
         });
-        const topicRegistry = makeRegistry();
         // B4: stat polling starts/stops from the bus (`registered`/`terminated`), not from the registry.
         const bus = createSessionLifecycleBus({ log: () => {} });
         const sessionRegistry = new SessionRegistry(bus);
@@ -86,19 +67,26 @@ describe('Transcript stat polling instead of PTY', () => {
             transport: { type: 'pipe' } as any,
         });
 
+        // Registration warms the session once (first paint: define its chat
+        // topic + one seed pull — `warmSession`); that is the only pull here.
+        vi.advanceTimersByTime(0);
+        await flushProjection();
+        expect(collectorCalls).toBe(1);
+        collectorCalls = 0;
+
         // Advance timer before path is known: should do nothing (quietly skip).
         vi.advanceTimersByTime(TRANSCRIPT_STAT_POLL_INTERVAL_MS);
         await flushProjection();
         expect(collectorCalls).toBe(0);
 
-        // 6. PTY output drives the dirty trigger (§8 unit 9 retired the legacy
-        // chat_tail push that used to carry the fast path), but THROTTLED: a
+        // 6. PTY output drives the dirty trigger (the chat lane's only
+        // streaming-rate trigger), but THROTTLED: a
         // burst inside one window collapses to the leading pull plus one
         // trailing pull. Not 20 — a raw pull per chunk re-encodes the whole
         // snapshot each time. See topic-registry-transcript-pty-dirty-trigger.ts.
         const outputEvents = 20;
         for (let i = 0; i < outputEvents; i += 1) {
-            topicRegistry.markChatOutputActivity(sessionId);
+            markTranscriptPtyOutputActivity(sessionId);
             await flushProjection();
         }
         expect(collectorCalls).toBe(1); // leading edge only, window still open

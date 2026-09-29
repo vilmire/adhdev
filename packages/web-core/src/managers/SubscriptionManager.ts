@@ -1,5 +1,7 @@
-import type { SubscribeRequest, TopicUpdateEnvelope, TransportTopic, UnsubscribeRequest } from '@adhdev/daemon-core'
+import type { DaemonMetadataUpdate, MeshStatusSnapshotUpdate, SubscribeRequest, TopicUpdateEnvelope, TransportTopic, UnsubscribeRequest } from '@adhdev/daemon-core'
 import { webDebugStore } from '../debug/webDebugStore'
+import { materializeDaemonMetadataUpdate } from '../utils/daemon-metadata-fold'
+import { materializeMeshStatusUpdate } from '../utils/mesh-status-fold'
 
 export interface SubscriptionTransport {
     sendData?: (daemonId: string, data: SubscribeRequest | UnsubscribeRequest) => boolean
@@ -27,6 +29,8 @@ interface ActiveSubscription {
      */
     handlerParams: Map<TopicHandler, Record<string, unknown>>
     lastUpdate?: TopicUpdateEnvelope
+    /** The transport the request last went out on — used to re-request a snapshot after a delta gap. */
+    transport?: SubscriptionTransport
 }
 
 function buildSubscriptionId(topic: TransportTopic, key: string): string {
@@ -133,6 +137,7 @@ export class SubscriptionManager {
         const existing = this.active.get(id)
         let initialSendAccepted = true
         if (existing) {
+            existing.transport = transport
             existing.handlers.add(handler as TopicHandler)
             existing.handlerParams.set(handler as TopicHandler, readRequestParams(request))
             // Send the union of every sharing subscriber's params, not just this
@@ -167,6 +172,7 @@ export class SubscriptionManager {
                 request,
                 handlers: new Set([handler as TopicHandler]),
                 handlerParams: new Map([[handler as TopicHandler, readRequestParams(request)]]),
+                transport,
             }
             this.active.set(id, next)
             logSubscriptionDebug('subscribe', {
@@ -230,12 +236,37 @@ export class SubscriptionManager {
         return unsubscribe
     }
 
-    publish(update: TopicUpdateEnvelope): void {
-        const id = buildSubscriptionId(update.topic, update.key)
+    publish(incoming: TopicUpdateEnvelope): void {
+        const id = buildSubscriptionId(incoming.topic, incoming.key)
         const subscription = this.active.get(id)
         if (!subscription) return
         // An update arriving means the subscription is live — cancel any pending initial retry.
         this.clearRetry(id)
+        let update: TopicUpdateEnvelope = incoming
+        if (incoming.topic === 'daemon.metadata') {
+            // Keyed lane: fold the delta into the held snapshot; handlers only
+            // ever see the materialized state. An unappliable delta (no base,
+            // seq gap) re-requests the subscription — the daemon answers with
+            // a fresh snapshot.
+            const materialized = materializeDaemonMetadataUpdate(subscription.lastUpdate as DaemonMetadataUpdate | undefined, incoming)
+            if (!materialized) {
+                logSubscriptionDebug('metadata_resync', { daemonId: subscription.daemonId, key: incoming.key, seq: incoming.seq })
+                subscription.lastUpdate = undefined
+                subscription.transport?.sendData?.(subscription.daemonId, subscription.request)
+                return
+            }
+            update = materialized
+        } else if (incoming.topic === 'mesh.status') {
+            // Same keyed contract for the mesh view (nodes / tasks / missions).
+            const materialized = materializeMeshStatusUpdate(subscription.lastUpdate as MeshStatusSnapshotUpdate | undefined, incoming)
+            if (!materialized) {
+                logSubscriptionDebug('mesh_status_resync', { daemonId: subscription.daemonId, key: incoming.key, seq: incoming.seq })
+                subscription.lastUpdate = undefined
+                subscription.transport?.sendData?.(subscription.daemonId, subscription.request)
+                return
+            }
+            update = materialized
+        }
         subscription.lastUpdate = update
         webDebugStore.record({
             interactionId: typeof (update as { interactionId?: unknown }).interactionId === 'string' ? (update as { interactionId?: string }).interactionId : undefined,
@@ -277,6 +308,7 @@ export class SubscriptionManager {
             })),
         })
         for (const subscription of this.active.values()) {
+            subscription.transport = transport
             transport.sendData?.(subscription.daemonId, subscription.request)
         }
     }
@@ -292,6 +324,7 @@ export class SubscriptionManager {
             })),
         })
         for (const subscription of subscriptions) {
+            subscription.transport = transport
             transport.sendData?.(subscription.daemonId, subscription.request)
         }
     }

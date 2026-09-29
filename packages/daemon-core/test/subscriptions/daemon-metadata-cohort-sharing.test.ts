@@ -27,6 +27,8 @@ import { TopicSubscriptionRegistry } from '../../src/subscriptions/topic-registr
  *      that could serve a stale snapshot.
  */
 
+const byKeyCohort = new Map<string, boolean>();
+
 interface Sent {
     connectionId: string;
     key: string;
@@ -39,18 +41,22 @@ function createHarness() {
     const sent: Sent[] = [];
     const sink: TopicSink = {
         send: (connectionId, _topic, update) => {
+            // A snapshot carries `status`; a later keyed delta carries only
+            // the changed `statusSet` fields (the marker changes every build).
             const u = update as unknown as {
                 key: string;
                 seq: number;
                 daemonId: string;
-                status: { marker: string; withSessions: boolean };
+                status?: { marker: string; withSessions: boolean };
+                statusSet?: { marker?: string; withSessions?: boolean };
             };
+            const status = u.status ?? u.statusSet ?? {};
             sent.push({
                 connectionId,
                 key: u.key,
                 seq: u.seq,
-                marker: u.status.marker,
-                withSessions: u.status.withSessions,
+                marker: String(status.marker),
+                withSessions: status.withSessions ?? byKeyCohort.get(u.key) ?? false,
             });
             return true;
         },
@@ -71,13 +77,14 @@ function createHarness() {
                 buildsByCohort.push(withSessions);
                 return {
                     daemonId: 'daemon_test',
-                    status: { marker: `build-${builds}`, withSessions },
+                    status: { marker: `build-${builds}`, withSessions, sessions: [] },
                 } as unknown as DaemonMetadataUpdateBody;
             },
         },
     });
 
     const subscribe = (connectionId: string, key: string, includeSessions?: boolean) => {
+        byKeyCohort.set(key, includeSessions === true);
         registry.subscribe(connectionId, {
             type: 'subscribe',
             topic: 'daemon.metadata',

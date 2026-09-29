@@ -3,7 +3,7 @@
  * ★ Keyed replica lane, end to end on the main thread (design 2026-09-28
  * message-keyed storage §5.4, §9.1 "리마운트 0"):
  *
- *   worker frame → TranscriptViewMirror → applyTranscriptReplicaViewToControllers
+ *   worker frame → TranscriptViewMirror → applyTranscriptViewToControllers
  *   → controller snapshot → ChatMessageList DOM
  *
  * A streaming tick that changes ONE bubble must
@@ -20,11 +20,11 @@ import type { ReplicatedTranscriptMessageV2 } from '@adhdev/daemon-core/seqscrib
 import MemoizedChatMessageList from '../../../src/components/ChatMessageList'
 import { SubscriptionManager } from '../../../src/managers/SubscriptionManager'
 import {
-  applyTranscriptReplicaViewToControllers,
-  getOrCreateSessionChatTailController,
+  applyTranscriptViewToControllers,
+  getOrCreateSessionChatController,
   requestTranscriptBaseForSession,
-  resetSessionChatTailControllersForTest,
-} from '../../../src/components/dashboard/session-chat-tail-controller'
+  resetSessionChatControllersForTest,
+} from '../../../src/components/dashboard/session-chat-controller'
 import type { TranscriptBridgeFrameMessage, TranscriptViewMeta } from '../../../src/transcript-transport/bridge-protocol'
 import { TranscriptViewMirror } from '../../../src/transcript-transport/transcript-view-mirror'
 
@@ -56,7 +56,7 @@ describe('★ keyed replica: a one-bubble frame re-renders one bubble', () => {
   let root: Root
 
   beforeEach(() => {
-    resetSessionChatTailControllersForTest()
+    resetSessionChatControllersForTest()
     vi.stubGlobal('ResizeObserver', class {
       observe() {}
       unobserve() {}
@@ -71,24 +71,21 @@ describe('★ keyed replica: a one-bubble frame re-renders one bubble', () => {
     act(() => root.unmount())
     container.remove()
     vi.unstubAllGlobals()
-    resetSessionChatTailControllersForTest()
+    resetSessionChatControllersForTest()
   })
 
   it('keeps unchanged bubbles by identity and by DOM node, and updates a changed EARLIER bubble', () => {
     const sendData = vi.fn().mockReturnValue(true)
-    const controller = getOrCreateSessionChatTailController({
-      manager: new SubscriptionManager(),
+    const controller = getOrCreateSessionChatController({
       sendData,
       daemonId: DAEMON,
       sessionId: SESSION,
-      subscriptionKey: `daemon:${DAEMON}:session:${SESSION}`,
-      tailLimit: 60,
     })
     controller.retain()
     const mirror = new TranscriptViewMirror()
     const deliver = (f: TranscriptBridgeFrameMessage) => {
       const update = mirror.apply(f)
-      if (update) applyTranscriptReplicaViewToControllers(DAEMON, SESSION, update.view)
+      if (update) applyTranscriptViewToControllers(DAEMON, SESSION, update.view)
     }
     const render = () => act(() => {
       root.render(createElement(MemoizedChatMessageList as any, {
@@ -138,12 +135,10 @@ describe('★ keyed replica: a one-bubble frame re-renders one bubble', () => {
 
   it('requestTranscriptBaseForSession sends request_transcript_base on the controller command lane', () => {
     const sendData = vi.fn().mockReturnValue(true)
-    getOrCreateSessionChatTailController({
-      manager: new SubscriptionManager(),
+    getOrCreateSessionChatController({
       sendData,
       daemonId: DAEMON,
       sessionId: SESSION,
-      subscriptionKey: `daemon:${DAEMON}:session:${SESSION}`,
     })
     expect(requestTranscriptBaseForSession(DAEMON, SESSION)).toBe(true)
     expect(sendData).toHaveBeenCalledWith(DAEMON, {

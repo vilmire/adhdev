@@ -1,4 +1,6 @@
 import fs from 'node:fs'
+import http from 'node:http'
+import type { AddressInfo } from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -27,7 +29,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   execFileSync: vi.fn(),
-  spawn: vi.fn(() => ({ unref: vi.fn(), pid: 4242 })),
+  // A pid above every OS's pid_max: the boot health gate may try to stop the
+  // spawned pid, and a test must never be able to signal a real process.
+  spawn: vi.fn(() => ({ unref: vi.fn(), pid: 2_000_000_001 })),
 }))
 vi.mock('child_process', () => mocks)
 
@@ -142,7 +146,7 @@ function runHelper(payload: Record<string, unknown>, configDir: string): Promise
 beforeEach(() => {
   mocks.execFileSync.mockReset()
   mocks.spawn.mockReset()
-  mocks.spawn.mockImplementation(() => ({ unref: vi.fn(), pid: 4242 }))
+  mocks.spawn.mockImplementation(() => ({ unref: vi.fn(), pid: 2_000_000_001 }))
   exitCodes = []
   for (const key of ['ADHDEV_CONFIG_DIR', 'HOME', 'USERPROFILE', UPGRADE_HELPER_ENV]) {
     savedEnv[key] = process.env[key]
@@ -287,14 +291,29 @@ describe('POSIX in-place upgrade — pre-flight gate + rollback', () => {
     // A previous failure notice must be cleared by the successful run.
     fs.writeFileSync(path.join(configDir, 'daemon-upgrade-last-error.txt'), '[2026-08-26T00:00:00.000Z]\nold failure\n', 'utf8')
     mockNpmWithPackage('working')
+    // The POSIX boot health gate probes the restarted daemon's IPC port. Serve
+    // a healthy 2.0.0 daemon on an ephemeral loopback port and point the
+    // restart argv at it — the gate must never probe a real 19222/19223.
+    const daemon = http.createServer((req, res) => {
+      res.setHeader('content-type', 'application/json')
+      if (req.url === '/health') res.end(JSON.stringify({ ok: true, pid: 2_000_000_002 }))
+      else res.end(JSON.stringify({ ok: true, pid: 2_000_000_002, status: { version: '2.0.0' } }))
+    })
+    await new Promise<void>((resolve) => daemon.listen(0, '127.0.0.1', resolve))
+    const port = (daemon.address() as AddressInfo).port
 
-    await runHelper({
-      packageName: 'adhdev',
-      targetVersion: '2.0.0',
-      parentPid: 0,
-      restartArgv: [path.join(live.packageRoot, 'cli.js'), 'daemon'],
-      sessionHostAppName: 'adhdev',
-    }, configDir)
+    try {
+      await runHelper({
+        packageName: 'adhdev',
+        targetVersion: '2.0.0',
+        parentPid: 0,
+        restartArgv: [path.join(live.packageRoot, 'cli.js'), 'daemon', '-p', String(port)],
+        sessionHostAppName: 'adhdev',
+        healthTimeoutMs: 5_000,
+      }, configDir)
+    } finally {
+      await new Promise<void>((resolve) => daemon.close(() => resolve()))
+    }
 
     // The live install was upgraded to 2.0.0 and the daemon re-spawned.
     expect(installedVersion(live.packageRoot)).toBe('2.0.0')

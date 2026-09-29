@@ -3,17 +3,17 @@ import { formatIdeType } from '../../utils/daemon-utils'
 import { normalizeTextContent } from '../../utils/text'
 import { classifyChatMessageForDisplay } from './chat-activity-visibility'
 import { getConversationLiveMessages } from './conversation-message-snapshot'
-import type { SessionChatTailSnapshot } from './session-chat-tail-controller'
+import type { SessionChatSnapshot } from './session-chat-controller'
 import { isAcpConv, isCliConv, isCliTerminalConv, type ActiveConversation, type DashboardMessage } from './types'
 
 /**
- * (B2) The live chat_tail snapshot the warm controller already holds for a
+ * (B2) The live keyed-chat snapshot the warm controller already holds for a
  * conversation, passed through the preview selectors so the inbox/card previews
  * derive their last message from the SAME transcript authority ChatPane renders
  * (getConversationLiveMessages). Optional everywhere — omitted (or without a live
  * snapshot) the selectors fall back to conversation.messages exactly as before.
  */
-export type ConversationPreviewSnapshot = Pick<SessionChatTailSnapshot, 'liveMessages' | 'hasLiveSnapshot'>
+export type ConversationPreviewSnapshot = Pick<SessionChatSnapshot, 'liveMessages' | 'hasLiveSnapshot'>
 
 export const DASHBOARD_NOTIFICATION_PREVIEW_MAX_CHARS = 180
 
@@ -91,14 +91,13 @@ function getConversationLastMessage(
     conversation: ActiveConversation,
     snapshot?: ConversationPreviewSnapshot | null,
 ): DashboardMessage | undefined {
-    // (B2) When the warm chat_tail snapshot is available, derive the last message
+    // (B2) When the warm keyed-chat snapshot is available, derive the last message
     // from the SAME authority ChatPane uses (getConversationLiveMessages), so the
     // inbox/card preview and the opened chat body agree on the latest bubble. Falls
     // back to conversation.messages when no live snapshot has arrived yet.
     //
-    // The tail may now carry tool/terminal/thought ACTIVITY rows inline
-    // (activity-toggle wiring: replica snapshots always do; the legacy lane
-    // does when the toggle is on). Previews are prose surfaces — a turn that
+    // The keyed view always carries tool/terminal/thought ACTIVITY rows
+    // inline (rendering filters them by the activity toggle). Previews are prose surfaces — a turn that
     // ends in a tool call must preview its last prose bubble, not the tool
     // payload — so skip non-user-facing rows first and fall back to the old
     // pick only when the tail has no prose at all.

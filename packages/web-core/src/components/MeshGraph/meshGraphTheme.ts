@@ -3,6 +3,20 @@ import type { Theme } from '../../hooks/useTheme'
 export type MeshGraphBadgeTone = 'default' | 'good' | 'warn' | 'danger' | 'info'
 export type MeshGraphActionTone = 'default' | 'info' | 'success'
 
+/**
+ * Mesh surface theme.
+ *
+ * Every colour here resolves through the app's design tokens (index.css
+ * `--bg-*`, `--surface-*`, `--border-*`, `--text-*`, `--status-*`,
+ * `--accent-primary`), so the mesh surfaces read as the same product as the
+ * Machines / Settings / chat pages in both themes. Deliberately absent:
+ * gradients, glows/halos, drafting-grid canvases and tinted decorative
+ * fills — state is carried by a dot or text colour on a neutral chip, and
+ * semantic red/amber only ever colours text, a dot or a thin border.
+ *
+ * The light/dark split survives only for the few values that are not tokens
+ * (React Flow's `colorMode`, overlay scrims, modal elevation).
+ */
 export interface MeshGraphTheme {
     theme: Theme
     isDark: boolean
@@ -15,12 +29,9 @@ export interface MeshGraphTheme {
     graphHintChipClass: string
     graphControlsClass: string
     graphBackgroundDotColor: string
-    /** Blueprint (설계도면) canvas: drafting-paper shell + two-tier grid. A
-     *  deliberate identity apart from the topology canvas — the plan reads as
-     *  a technical drawing, not a status board. */
+    /** Blueprint (Tasks tab) canvas shell — the same plain surface as the Map
+     *  canvas; no drafting-paper grid. */
     blueprintShellClass: string
-    blueprintGridFineColor: string
-    blueprintGridAccentColor: string
     edgeLabelTextColor: string
     edgeLabelBackgroundColor: string
     edgeLabelBorderColor: string
@@ -53,129 +64,119 @@ export interface MeshGraphTheme {
     actionButton(tone: MeshGraphActionTone): string
 }
 
-const darkBadgeTones: Record<MeshGraphBadgeTone, string> = {
-    default: 'border-white/10 bg-white/[0.04] text-slate-200',
-    good: 'border-emerald-400/20 bg-emerald-500/10 text-emerald-200',
-    warn: 'border-amber-400/20 bg-amber-500/10 text-amber-100',
-    danger: 'border-rose-400/20 bg-rose-500/10 text-rose-100',
-    info: 'border-sky-400/20 bg-sky-500/10 text-sky-100',
+/**
+ * The one chip geometry for every mesh chip/badge: fixed height, centred
+ * content, no wrapping inside the chip. Rows of chips must be a
+ * `flex flex-wrap items-center gap-1` container so mixed chips share one
+ * centre line (mixing inline-block chips of different font sizes is what put
+ * "Stale" and "main" at different heights on the Map cards).
+ */
+export const MESH_CHIP_BASE = 'inline-flex h-5 min-w-0 max-w-full shrink-0 items-center gap-1 whitespace-nowrap rounded-full border px-2 text-3xs font-medium leading-none'
+
+/**
+ * Toolbar toggle / segmented-control state. Pressed = the app's single accent
+ * (the orange used for the active nav item and primary buttons); idle =
+ * neutral outline. Same height as MESH_CHIP_BASE so a toolbar row aligns.
+ */
+export function meshToggleChipClass(active: boolean): string {
+    return `inline-flex h-6 shrink-0 items-center gap-1 whitespace-nowrap rounded-full border px-2.5 text-3xs font-medium leading-none transition-colors ${active
+        ? 'border-accent/50 bg-accent/10 text-accent'
+        : 'border-border-default bg-transparent text-text-secondary hover:bg-bg-glass-hover hover:text-text-primary'}`
 }
 
-const lightBadgeTones: Record<MeshGraphBadgeTone, string> = {
-    default: 'border-slate-300 bg-white/95 text-slate-700',
-    good: 'border-emerald-300 bg-emerald-50 text-emerald-700',
-    warn: 'border-amber-300 bg-amber-50 text-amber-700',
-    danger: 'border-rose-300 bg-rose-50 text-rose-700',
-    info: 'border-sky-300 bg-sky-50 text-sky-700',
+export type MeshChipTone = 'neutral' | 'good' | 'warn' | 'danger'
+
+/** Chip tone → text + thin border only; the chip surface stays transparent. */
+export function meshChipTone(tone: MeshChipTone): string {
+    switch (tone) {
+        case 'good': return 'border-status-online/30 text-status-online'
+        case 'warn': return 'border-status-warning/35 text-status-warning'
+        case 'danger': return 'border-status-error/35 text-status-error'
+        case 'neutral':
+        default: return 'border-border-default text-text-secondary'
+    }
 }
 
-const darkActionTones: Record<MeshGraphActionTone, string> = {
-    default: 'border-white/10 bg-white/[0.04] text-slate-200 hover:bg-white/[0.08]',
-    info: 'border-sky-400/25 bg-sky-500/10 text-sky-100 hover:bg-sky-500/16',
-    success: 'border-emerald-400/25 bg-emerald-500/10 text-emerald-100 hover:bg-emerald-500/16',
+/** Map edge label: a neutral chip on the canvas surface. */
+export const MESH_EDGE_LABEL_BASE = 'rounded-md border border-border-default bg-surface-primary px-1.5 py-0.5 text-3xs font-medium'
+
+/** Tone = text + thin border colour only; the chip surface stays neutral. */
+const TOKEN_BADGE_TONES: Record<MeshGraphBadgeTone, string> = {
+    default: 'border-border-default bg-transparent text-text-secondary',
+    good: 'border-status-online/30 bg-transparent text-status-online',
+    warn: 'border-status-warning/35 bg-transparent text-status-warning',
+    danger: 'border-status-error/35 bg-transparent text-status-error',
+    info: 'border-border-default bg-transparent text-text-secondary',
 }
 
-const lightActionTones: Record<MeshGraphActionTone, string> = {
-    default: 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50',
-    info: 'border-sky-300 bg-sky-50 text-sky-700 hover:bg-sky-100',
-    success: 'border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100',
+const TOKEN_ACTION_TONES: Record<MeshGraphActionTone, string> = {
+    default: 'border-border-default bg-bg-glass text-text-primary hover:bg-bg-glass-hover',
+    info: 'border-accent/40 bg-transparent text-accent hover:bg-accent/10',
+    success: 'border-status-online/35 bg-transparent text-status-online hover:bg-status-online/10',
 }
+
+/** Tokenised classes shared by both themes. */
+const SHARED = {
+    textPrimary: 'text-text-primary',
+    textSecondary: 'text-text-secondary',
+    textMuted: 'text-text-muted',
+    graphShellClass: 'relative flex min-h-0 flex-1 flex-col w-full min-w-0 overflow-hidden rounded-xl border border-border-subtle bg-bg-secondary',
+    graphStatChipClass: 'rounded-full border border-border-default bg-surface-primary px-3 py-1 text-text-secondary',
+    graphHintChipClass: 'rounded-full border border-border-default bg-surface-primary px-3 py-1 text-3xs text-text-muted',
+    graphControlsClass: '!bottom-3 !left-3 !shadow-sm',
+    blueprintShellClass: 'relative flex min-h-0 flex-1 flex-col w-full min-w-0 overflow-hidden rounded-xl border border-border-subtle bg-bg-secondary',
+    // SVG `fill`/`stroke` in a style object resolve CSS variables.
+    edgeLabelTextColor: 'var(--text-secondary)',
+    edgeLabelBackgroundColor: 'var(--surface-primary)',
+    edgeLabelBorderColor: 'var(--border-default)',
+    dialogHeaderClass: 'sticky top-0 z-10 flex shrink-0 flex-col gap-2 border-b border-border-subtle bg-bg-primary px-4 pb-0 pt-4 md:px-5',
+    dialogTitleClass: 'truncate text-lg font-semibold text-text-primary md:text-xl',
+    dialogKickerClass: 'rounded-full border border-border-default px-2.5 py-1 text-2xs text-text-secondary',
+    dialogSubtitleClass: 'mt-1 truncate text-sm text-text-muted',
+    dialogRefreshedChipClass: 'rounded-full border border-border-default px-3 py-1.5 text-xs text-text-secondary',
+    dialogCloseButtonClass: 'inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border-default bg-bg-glass text-text-secondary transition hover:bg-bg-glass-hover hover:text-text-primary',
+    dialogBodyClass: 'min-h-0 flex-1 flex flex-col overflow-y-auto bg-bg-primary px-4 py-4 md:px-5 md:py-5',
+    dialogEmptyClass: 'flex h-full min-h-[320px] items-center justify-center rounded-xl border border-dashed border-border-default px-6 text-center text-sm text-text-muted',
+    cardClass: 'rounded-xl border border-border-subtle bg-bg-card',
+    cardHeaderClass: 'border-b border-border-subtle px-4 py-3',
+    cardTitleClass: 'text-sm font-semibold text-text-primary',
+    cardSubtitleClass: 'mt-1 text-xs text-text-muted',
+    rowClass: 'flex min-w-0 items-start justify-between gap-3 border-b border-border-subtle py-1.5 text-xs last:border-b-0 last:pb-0 first:pt-0',
+    rowLabelClass: 'shrink-0 text-text-muted',
+    rowValueClass: 'min-w-0 flex-1 break-all text-right text-text-primary',
+    panelShellClass: 'flex w-full max-w-full flex-col gap-2 rounded-xl border border-border-default bg-surface-primary p-4 shadow-md md:w-64',
+    panelEmptyClass: 'w-full max-w-full rounded-xl border border-border-subtle bg-surface-primary p-4 text-xs text-text-muted md:w-64',
+    panelTitleClass: 'truncate text-xs font-semibold text-text-primary',
+    panelCloseButtonClass: 'text-xs text-text-muted hover:text-text-primary',
+    panelFieldRowClass: 'flex min-w-0 justify-between gap-3 border-b border-border-subtle py-0.5 text-2xs',
+    panelFieldLabelClass: 'shrink-0 text-text-muted',
+    panelFieldValueClass: 'min-w-0 flex-1 break-all text-right font-medium text-text-primary',
+    infoCalloutClass: 'mt-1 rounded-md border border-border-default bg-bg-glass px-2 py-1.5 text-3xs text-text-secondary',
+    badge: (tone: MeshGraphBadgeTone) => darkless(TOKEN_BADGE_TONES[tone]),
+    actionButton: (tone: MeshGraphActionTone) => darkless(TOKEN_ACTION_TONES[tone]),
+} as const
 
 export function getMeshGraphTheme(theme: Theme): MeshGraphTheme {
     if (theme === 'light') {
         return {
+            ...SHARED,
             theme,
             isDark: false,
             flowColorMode: 'light',
-            textPrimary: 'text-slate-900',
-            textSecondary: 'text-slate-700',
-            textMuted: 'text-slate-500',
-            graphShellClass: 'relative flex min-h-0 flex-1 flex-col w-full min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-[radial-gradient(circle_at_top,_rgba(14,165,233,0.16),_rgba(248,250,252,0.98)_42%,_rgba(255,255,255,1))]',
-            graphStatChipClass: 'rounded-full border border-slate-300 bg-white/95 px-3 py-1 text-slate-700 shadow-sm',
-            graphHintChipClass: 'rounded-full border border-slate-300 bg-white/95 px-3 py-1 text-3xs text-slate-500 shadow-sm',
-            graphControlsClass: '!bottom-4 !left-4 !shadow-md',
-            graphBackgroundDotColor: 'rgba(148, 163, 184, 0.34)',
-            blueprintShellClass: 'relative flex min-h-0 flex-1 flex-col w-full min-w-0 overflow-hidden rounded-2xl border border-sky-200 bg-[radial-gradient(circle_at_top,_rgba(14,116,233,0.10),_rgba(240,247,255,0.98)_46%,_rgba(248,251,255,1))]',
-            blueprintGridFineColor: 'rgba(59, 130, 246, 0.10)',
-            blueprintGridAccentColor: 'rgba(59, 130, 246, 0.20)',
-            edgeLabelTextColor: '#334155',
-            edgeLabelBackgroundColor: 'rgba(255, 255, 255, 0.96)',
-            edgeLabelBorderColor: 'rgba(148, 163, 184, 0.45)',
-            dialogOverlayClass: 'fixed inset-0 z-[var(--z-modal-backdrop)] flex items-center justify-center bg-[rgba(15,23,42,0.82)] px-4 pb-[calc(16px+env(safe-area-inset-bottom,0px))] pt-[calc(16px+env(safe-area-inset-top,0px))]',
-            dialogShellClass: 'flex shrink-0 h-[calc(100dvh-32px)] max-h-[calc(100dvh-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px)-2rem)] w-full flex-col overflow-hidden rounded-[20px] border border-slate-200 bg-white shadow-[0_18px_60px_rgba(15,23,42,0.35)] md:h-[calc(100dvh-32px)] md:max-w-[min(1480px,calc(100vw-32px))] md:rounded-[24px] md:border md:border-slate-200 md:bg-white/98 md:shadow-[0_28px_120px_rgba(148,163,184,0.28)]',
-            dialogHeaderClass: 'sticky top-0 z-10 flex shrink-0 flex-col gap-2 border-b border-slate-200 bg-white/96 px-4 pb-0 pt-4 backdrop-blur md:px-5',
-            dialogTitleClass: 'truncate text-lg font-semibold text-slate-900 md:text-xl',
-            dialogKickerClass: 'rounded-full border border-slate-300 bg-slate-50 px-2.5 py-1 text-2xs uppercase tracking-[0.18em] text-slate-600',
-            dialogSubtitleClass: 'mt-1 truncate text-sm text-slate-500',
-            dialogRefreshedChipClass: 'rounded-full border border-slate-300 bg-white/95 px-3 py-1.5 text-xs text-slate-600',
-            dialogCloseButtonClass: 'inline-flex h-9 w-9 items-center justify-center rounded-xl border border-slate-300 bg-white text-slate-500 transition hover:bg-slate-50 hover:text-slate-900',
-            dialogBodyClass: 'min-h-0 flex-1 flex flex-col overflow-y-auto bg-[linear-gradient(180deg,rgba(248,250,252,0.98),rgba(241,245,249,0.96))] px-4 py-4 md:px-5 md:py-5',
-            dialogEmptyClass: 'flex h-full min-h-[320px] items-center justify-center rounded-[28px] border border-dashed border-slate-300 bg-white/90 px-6 text-center text-sm text-slate-500',
-            cardClass: 'rounded-2xl border border-slate-200 bg-white/95 shadow-sm',
-            cardHeaderClass: 'border-b border-slate-200 px-4 py-3',
-            cardTitleClass: 'text-sm font-semibold text-slate-900',
-            cardSubtitleClass: 'mt-1 text-xs text-slate-500',
-            rowClass: 'flex min-w-0 items-start justify-between gap-3 border-b border-slate-200/80 py-1.5 text-xs last:border-b-0 last:pb-0 first:pt-0',
-            rowLabelClass: 'shrink-0 text-slate-500',
-            rowValueClass: 'min-w-0 flex-1 break-all text-right text-slate-800',
-            panelShellClass: 'flex w-full max-w-full flex-col gap-2 rounded-xl border border-slate-200 bg-white/95 p-4 shadow-md md:w-64',
-            panelEmptyClass: 'w-full max-w-full rounded-xl border border-slate-200 bg-white/95 p-4 text-xs text-slate-500 shadow-sm md:w-64',
-            panelTitleClass: 'truncate text-xs font-semibold text-slate-900',
-            panelCloseButtonClass: 'text-xs text-slate-500 hover:text-slate-900',
-            panelFieldRowClass: 'flex min-w-0 justify-between gap-3 border-b border-slate-200/80 py-0.5 text-2xs',
-            panelFieldLabelClass: 'shrink-0 text-slate-500',
-            panelFieldValueClass: 'min-w-0 flex-1 break-all text-right font-medium text-slate-700',
-            infoCalloutClass: 'mt-1 rounded border border-sky-300 bg-sky-50 px-2 py-1.5 text-3xs text-sky-700',
-            badge: tone => darkless(lightBadgeTones[tone]),
-            actionButton: tone => darkless(lightActionTones[tone]),
+            graphBackgroundDotColor: 'rgba(15, 23, 42, 0.10)',
+            dialogOverlayClass: 'fixed inset-0 z-[var(--z-modal-backdrop)] flex items-center justify-center bg-[rgba(15,23,42,0.55)] px-4 pb-[calc(16px+env(safe-area-inset-bottom,0px))] pt-[calc(16px+env(safe-area-inset-top,0px))]',
+            dialogShellClass: 'flex shrink-0 h-[calc(100dvh-32px)] max-h-[calc(100dvh-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px)-2rem)] w-full flex-col overflow-hidden rounded-xl border border-border-default bg-bg-primary shadow-lg md:h-[calc(100dvh-32px)] md:max-w-[min(1480px,calc(100vw-32px))] md:rounded-2xl',
         }
     }
 
     return {
+        ...SHARED,
         theme,
         isDark: true,
         flowColorMode: 'dark',
-        textPrimary: 'text-slate-100',
-        textSecondary: 'text-slate-300',
-        textMuted: 'text-slate-400',
-        graphShellClass: 'relative flex min-h-0 flex-1 flex-col w-full min-w-0 overflow-hidden rounded-2xl border border-white/10 bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.12),_rgba(15,23,42,0.98)_42%,_rgba(2,6,23,1))]',
-        graphStatChipClass: 'rounded-full border border-white/10 bg-slate-950/60 px-3 py-1 text-slate-200',
-        graphHintChipClass: 'rounded-full border border-white/10 bg-slate-950/60 px-3 py-1 text-3xs text-slate-300',
-        graphControlsClass: '!bottom-4 !left-4 !shadow-lg',
-        graphBackgroundDotColor: 'rgba(148, 163, 184, 0.22)',
-        blueprintShellClass: 'relative flex min-h-0 flex-1 flex-col w-full min-w-0 overflow-hidden rounded-2xl border border-sky-400/15 bg-[radial-gradient(circle_at_top,_rgba(30,84,164,0.22),_rgba(6,17,38,0.99)_46%,_rgba(3,10,26,1))]',
-        blueprintGridFineColor: 'rgba(96, 165, 250, 0.10)',
-        blueprintGridAccentColor: 'rgba(96, 165, 250, 0.22)',
-        edgeLabelTextColor: '#cbd5e1',
-        edgeLabelBackgroundColor: 'rgba(2, 6, 23, 0.86)',
-        edgeLabelBorderColor: 'rgba(148, 163, 184, 0.2)',
-        dialogOverlayClass: 'fixed inset-0 z-[var(--z-modal-backdrop)] flex items-center justify-center bg-[#030617]/[0.92] px-4 pb-[calc(16px+env(safe-area-inset-bottom,0px))] pt-[calc(16px+env(safe-area-inset-top,0px))]',
-        dialogShellClass: 'flex shrink-0 h-[calc(100dvh-32px)] max-h-[calc(100dvh-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px)-2rem)] w-full flex-col overflow-hidden rounded-[20px] border border-white/10 bg-slate-950 shadow-[0_18px_60px_rgba(2,6,23,0.6)] md:h-[calc(100dvh-32px)] md:max-w-[min(1480px,calc(100vw-32px))] md:rounded-[24px] md:border md:border-white/10 md:bg-slate-950/96 md:shadow-[0_28px_120px_rgba(2,6,23,0.46)]',
-        dialogHeaderClass: 'sticky top-0 z-10 flex shrink-0 flex-col gap-2 border-b border-white/10 bg-slate-950/92 px-4 pb-0 pt-4 backdrop-blur md:px-5',
-        dialogTitleClass: 'truncate text-lg font-semibold text-white md:text-xl',
-        dialogKickerClass: 'rounded-full border border-white/10 bg-white/6 px-2.5 py-1 text-2xs uppercase tracking-[0.18em] text-slate-300',
-        dialogSubtitleClass: 'mt-1 truncate text-sm text-slate-400',
-        dialogRefreshedChipClass: 'rounded-full border border-white/10 bg-white/6 px-3 py-1.5 text-xs text-slate-300',
-        dialogCloseButtonClass: 'inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/10 bg-white/6 text-slate-300 transition hover:bg-white/10 hover:text-white',
-        dialogBodyClass: 'min-h-0 flex-1 flex flex-col overflow-y-auto bg-[linear-gradient(180deg,rgba(2,6,23,0.95),rgba(15,23,42,0.98))] px-4 py-4 md:px-5 md:py-5',
-        dialogEmptyClass: 'flex h-full min-h-[320px] items-center justify-center rounded-[28px] border border-dashed border-white/10 bg-white/[0.03] px-6 text-center text-sm text-slate-400',
-        cardClass: 'rounded-2xl border border-white/10 bg-white/[0.04]',
-        cardHeaderClass: 'border-b border-white/10 px-4 py-3',
-        cardTitleClass: 'text-sm font-semibold text-white',
-        cardSubtitleClass: 'mt-1 text-xs text-slate-400',
-        rowClass: 'flex min-w-0 items-start justify-between gap-3 border-b border-white/5 py-1.5 text-xs last:border-b-0 last:pb-0 first:pt-0',
-        rowLabelClass: 'shrink-0 text-slate-400',
-        rowValueClass: 'min-w-0 flex-1 break-all text-right text-slate-100',
-        panelShellClass: 'flex w-full max-w-full flex-col gap-2 rounded-xl border border-white/10 bg-white/[0.04] p-4 shadow-lg md:w-64',
-        panelEmptyClass: 'w-full max-w-full rounded-xl border border-white/10 bg-white/[0.04] p-4 text-xs text-slate-400 md:w-64',
-        panelTitleClass: 'truncate text-xs font-semibold text-slate-100',
-        panelCloseButtonClass: 'text-xs text-slate-400 hover:text-slate-100',
-        panelFieldRowClass: 'flex min-w-0 justify-between gap-3 border-b border-white/6 py-0.5 text-2xs',
-        panelFieldLabelClass: 'shrink-0 text-slate-400',
-        panelFieldValueClass: 'min-w-0 flex-1 break-all text-right font-medium text-slate-200',
-        infoCalloutClass: 'mt-1 rounded bg-blue-500/10 border border-blue-500/20 px-2 py-1.5 text-3xs text-blue-300',
-        badge: tone => darkless(darkBadgeTones[tone]),
-        actionButton: tone => darkless(darkActionTones[tone]),
+        graphBackgroundDotColor: 'rgba(255, 255, 255, 0.06)',
+        dialogOverlayClass: 'fixed inset-0 z-[var(--z-modal-backdrop)] flex items-center justify-center bg-[rgba(0,0,0,0.72)] px-4 pb-[calc(16px+env(safe-area-inset-bottom,0px))] pt-[calc(16px+env(safe-area-inset-top,0px))]',
+        dialogShellClass: 'flex shrink-0 h-[calc(100dvh-32px)] max-h-[calc(100dvh-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px)-2rem)] w-full flex-col overflow-hidden rounded-xl border border-border-default bg-bg-primary shadow-lg md:h-[calc(100dvh-32px)] md:max-w-[min(1480px,calc(100vw-32px))] md:rounded-2xl',
     }
 }
 

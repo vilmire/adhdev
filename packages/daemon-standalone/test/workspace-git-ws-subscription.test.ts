@@ -28,8 +28,8 @@ test('standalone websocket serves workspace.git through the host runtime topic r
   assert.doesNotMatch(text, /createGitWorkspaceMonitor\(/)
   assert.match(text, /if \(topics\?\.handlesTopic\(msg\.topic\)\)/)
   assert.match(text, /topics\.subscribe\(connectionId, msg\)/)
-  // Targeted first flush right after subscribe, scoped to the new connection.
-  assert.match(text, /await topics\.flushNow\(msg\.topic, connectionId\)/)
+  // Targeted first flush right after subscribe, scoped to the new subscription.
+  assert.match(text, /await topics\.flushNow\(msg\.topic, connectionId, msg\.key\)/)
   // The WS transport framing stays standalone's.
   assert.match(transportSource(), /ws\.send\(JSON\.stringify\(\{ type: 'topic_update', update \}\)\)/)
   // The old daemon-local engine must stay deleted.
@@ -66,12 +66,15 @@ test('standalone command invalidation rides the router command_executed event, n
   // Which commands invalidate which topics is the command spec's `invalidates`
   // (daemon-core command registry); the router emits `command_executed` for
   // EVERY caller and the host runtime runs the topic invalidation. Standalone
-  // adds only its legacy `type:'status'` push.
+  // adds only the fast-flush daemon.metadata push (the legacy `type:'status'`
+  // push is gone — data-path audit 2026-09-29 P0-3).
   assert.doesNotMatch(text, /commandInvalidations/)
   assert.doesNotMatch(text, /SESSION_TARGET_COMMANDS/)
   assert.doesNotMatch(text, /ensureInteractionContext/)
   assert.doesNotMatch(text, /recentInteractionIdsBySession/)
-  assert.match(transportSource(), /onCommandExecuted: \(e\) => \{[\s\S]*?e\.invalidates\.has\('daemon\.metadata'\)[\s\S]*?deps\.scheduleBroadcastStatus\(\)/)
+  assert.match(transportSource(), /onCommandExecuted: \(e\) => \{[\s\S]*?e\.fastFlush && e\.success[\s\S]*?deps\.flushTopic\('daemon\.metadata'\)/)
+  assert.doesNotMatch(transportSource(), /scheduleBroadcastStatus/)
+  assert.doesNotMatch(text, /type: 'status', data/)
   assert.match(text, /return this\.host\.execute\(type, args, 'standalone'\)/)
   // The old local predicate must stay deleted (it diverged from cloud once already).
   assert.doesNotMatch(text, /function commandMayAffectMeshGraphStatus/)

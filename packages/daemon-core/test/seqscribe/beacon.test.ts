@@ -17,8 +17,8 @@
  *  (c) TRANSPORT ROUND TRIP. put→get is driven through an injected fake, which
  *      is the whole point of the transport-agnostic split: daemon-core has no
  *      WS and `check:boundaries` keeps it that way.
- *  (d) ENV GATE. `ADHDEV_SEQSCRIBE_BEACON=off` means NOTHING happens — not a
- *      quieter beacon, not a beacon with a no-op transport. No arm, no push.
+ *  (d) (removed 2026-09-29) the `ADHDEV_SEQSCRIBE_BEACON` env gate — Beacon
+ *      is unconditional, armBeacon always arms.
  *  (e) RE-ARM. Stopping and re-arming (what a WS reconnect does) works and
  *      pushes again, and a double-arm without a stop is the library error the
  *      cloud wiring is written to avoid.
@@ -47,24 +47,28 @@ import { LOG } from '../../src/logging/logger.js';
 import {
     armBeacon,
     assertNoPlaintextHintTopics,
-    BEACON_ENV,
     defaultBeaconTopicScope,
     MAX_BEACON_GET_QUERIES,
     projectBeaconReport,
-    resolveBeaconMode,
     type BeaconGetResponse,
     type BeaconHostTransport,
     type ProjectedBeaconReport,
 } from '../../src/seqscribe/beacon.js';
 import { openSeqscribeNode, type SeqscribeNodeHandle } from '../../src/seqscribe/node.js';
 import {
-    ASSISTANT_JOURNAL_TOPIC,
+    meshHandoffTopic,
     baseTopicDefinitions,
     CONFIG_SETTINGS_TOPIC,
-    FLEET_STATUS_TOPIC,
     meshEventsTopic,
     sessionChatTopic,
 } from '../../src/seqscribe/topics.js';
+
+/**
+ * The metadata-class topic the real-node tests append to / query (the node
+ * opens with meshIds ['mesh_abc123']). Was `fleet.status` until that ring was
+ * deleted (data-path audit 2026-09-29 P0-4).
+ */
+const RING_TOPIC = meshEventsTopic('mesh_abc123');
 
 /** A valid 64-hex chain hash, the only shape the projection accepts. */
 const CHAIN_A = 'a'.repeat(64);
@@ -277,33 +281,19 @@ describe('hints are hash-only and register-scoped', () => {
 });
 
 describe('defaultBeaconTopicScope — metadata class only (§7.1.2)', () => {
-    it('includes fleet.status and mesh events, excludes content-class topics', () => {
+    it('includes mesh events, excludes content-class topics', () => {
         const scope = defaultBeaconTopicScope({
-            [FLEET_STATUS_TOPIC]: {},
             [meshEventsTopic('mesh_abc123')]: {},
-            [ASSISTANT_JOURNAL_TOPIC]: {},
+            [meshHandoffTopic('mesh_abc123')]: {},
             [sessionChatTopic('sess-1')]: {},
             'config.settings': {},
         });
 
-        expect(scope.sort()).toEqual([FLEET_STATUS_TOPIC, meshEventsTopic('mesh_abc123')].sort());
+        expect(scope).toEqual([meshEventsTopic('mesh_abc123')]);
         // The content-class chat transcript topic name is the one §7.1.4 calls
         // a case-by-case decision — it must not ride the DEFAULT scope
         // (design 2026-09-28 I1: `.chat` is structurally excluded).
         expect(scope).not.toContain(sessionChatTopic('sess-1'));
-    });
-});
-
-describe('resolveBeaconMode', () => {
-    it('defaults on, respects an explicit off, and treats a typo as on', () => {
-        expect(resolveBeaconMode({})).toBe('on');
-        expect(resolveBeaconMode({ [BEACON_ENV]: '' })).toBe('on');
-        expect(resolveBeaconMode({ [BEACON_ENV]: 'off' })).toBe('off');
-        expect(resolveBeaconMode({ [BEACON_ENV]: ' OFF ' })).toBe('off');
-        expect(resolveBeaconMode({ [BEACON_ENV]: 'on' })).toBe('on');
-        // Advisory, content-free, no read path: an unrecognized value keeps the
-        // feature alive rather than silently killing it. See the doc comment.
-        expect(resolveBeaconMode({ [BEACON_ENV]: 'shadow' })).toBe('on');
     });
 });
 
@@ -354,7 +344,7 @@ describe('armBeacon — lifecycle against a real node', () => {
         const node = open();
         const fake = makeFakeTransport({ failGet: true });
 
-        const beacon = armBeacon(node, fake.transport, { env: {} });
+        const beacon = armBeacon(node, fake.transport);
         expect(beacon).not.toBeNull();
         await settle();
 
@@ -368,7 +358,7 @@ describe('armBeacon — lifecycle against a real node', () => {
         const node = open();
         const fake = makeFakeTransport();
 
-        const beacon = armBeacon(node, fake.transport, { env: {} });
+        const beacon = armBeacon(node, fake.transport);
         expect(beacon).not.toBeNull();
         await settle();
 
@@ -381,7 +371,7 @@ describe('armBeacon — lifecycle against a real node', () => {
         // GET rode the same push and asked only about metadata-class topics.
         expect(fake.gets.length).toBeGreaterThanOrEqual(1);
         for (const topic of fake.gets[0]!) {
-            expect(topic === FLEET_STATUS_TOPIC || topic.startsWith('mesh.')).toBe(true);
+            expect(topic === RING_TOPIC || topic.startsWith('mesh.')).toBe(true);
         }
 
         expect(beacon!.counters().put).toBeGreaterThanOrEqual(1);
@@ -393,7 +383,7 @@ describe('armBeacon — lifecycle against a real node', () => {
         const rawKey = 'ui.theme';
         const fake = makeFakeTransport();
 
-        const beacon = armBeacon(node, fake.transport, { env: {} });
+        const beacon = armBeacon(node, fake.transport);
         await settle();
         const entryId = await node.node.register(CONFIG_SETTINGS_TOPIC).set(rawKey, 'dark');
         await new Promise((resolve) => setTimeout(resolve, 25));
@@ -409,18 +399,6 @@ describe('armBeacon — lifecycle against a real node', () => {
         beacon!.stop();
     });
 
-    it('★env gate off = complete inaction: no arm, no push', async () => {
-        const node = open();
-        const fake = makeFakeTransport();
-
-        const beacon = armBeacon(node, fake.transport, { env: { [BEACON_ENV]: 'off' } });
-        await settle();
-
-        expect(beacon).toBeNull();
-        expect(fake.puts).toEqual([]);
-        expect(fake.gets).toEqual([]);
-    });
-
     it('★UPSTREAM P28 PIN: stop → start restores the initial and append-triggered pushes', async () => {
         // P28 made stop() a reusable pause. Pin both the fresh initial push and
         // the append debounce: merely clearing the old latch for start() would
@@ -428,16 +406,16 @@ describe('armBeacon — lifecycle against a real node', () => {
         const node = open({ BEACON_DEBOUNCE_MS: 10 });
         const fake = makeFakeTransport();
 
-        const first = armBeacon(node, fake.transport, { env: {} });
+        const first = armBeacon(node, fake.transport);
         await settle();
         const afterFirst = fake.puts.length;
         expect(afterFirst).toBeGreaterThanOrEqual(1);
 
         // A double arm without stopping is a library `misuse` throw.
-        expect(() => armBeacon(node, fake.transport, { env: {} })).toThrow();
+        expect(() => armBeacon(node, fake.transport)).toThrow();
 
         first!.stop();
-        const second = armBeacon(node, fake.transport, { env: {} });
+        const second = armBeacon(node, fake.transport);
         await settle();
 
         expect(second).not.toBeNull();
@@ -445,7 +423,7 @@ describe('armBeacon — lifecycle against a real node', () => {
 
         const afterRearm = fake.puts.length;
         await node.node
-            .log(FLEET_STATUS_TOPIC)
+            .log(RING_TOPIC)
             .append('adhdev.p28.rearm', { generation: 2 });
         await new Promise((r) => setTimeout(r, 25));
         await settle();
@@ -458,7 +436,7 @@ describe('armBeacon — lifecycle against a real node', () => {
         const node = open();
         const fake = makeFakeTransport();
 
-        const beacon = armBeacon(node, fake.transport, { env: {} });
+        const beacon = armBeacon(node, fake.transport);
         await settle();
         const afterArm = fake.puts.length;
         const getsAfterArm = fake.gets.length;
@@ -488,7 +466,7 @@ describe('armBeacon — lifecycle against a real node', () => {
         const infoSpy = vi.spyOn(LOG, 'info');
         const debugSpy = vi.spyOn(LOG, 'debug');
         try {
-            const beacon = armBeacon(node, fake.transport, { env: {} });
+            const beacon = armBeacon(node, fake.transport);
             await settle();
             infoSpy.mockClear();
             debugSpy.mockClear();
@@ -513,7 +491,7 @@ describe('armBeacon — lifecycle against a real node', () => {
                     node: 'adhdev-peershapechange01',
                     at: '2026-09-23T00:00:00.000Z',
                     vectors: {
-                        [FLEET_STATUS_TOPIC]: {
+                        [RING_TOPIC]: {
                             writers: { 'adhdev-peershapechange01': { contig: 1, chain: CHAIN_A } },
                         },
                     },
@@ -545,7 +523,7 @@ describe('armBeacon — lifecycle against a real node', () => {
     it('pushNow() after stop is a no-op, and a failing transport does not throw out of it', async () => {
         const node = open();
         const failing = makeFakeTransport({ failPut: true });
-        const beacon = armBeacon(node, failing.transport, { env: {} });
+        const beacon = armBeacon(node, failing.transport);
         await settle();
 
         // Rejection is swallowed like the library's own push().catch().
@@ -568,7 +546,7 @@ describe('armBeacon — lifecycle against a real node', () => {
                     at: '2026-08-28T00:00:00.000Z',
                     lastAgentMessage: SECRET,
                     vectors: {
-                        [FLEET_STATUS_TOPIC]: {
+                        [RING_TOPIC]: {
                             writers: { 'adhdev-peerpeerpeer01': { contig: 42, chain: CHAIN_A } },
                         },
                     },
@@ -577,11 +555,11 @@ describe('armBeacon — lifecycle against a real node', () => {
             ],
         });
 
-        const beacon = armBeacon(node, fake.transport, { env: {} });
+        const beacon = armBeacon(node, fake.transport);
         await settle();
 
         // The peer's position landed — staleness() sees a writer 42 ahead of our 0.
-        const staleness = node.node.staleness(FLEET_STATUS_TOPIC);
+        const staleness = node.node.staleness(RING_TOPIC);
         expect(staleness.behind['adhdev-peerpeerpeer01']).toBe(42);
         // …and nothing the peer smuggled came with it.
         expect(JSON.stringify(staleness)).not.toContain(SECRET);
@@ -593,7 +571,7 @@ describe('armBeacon — lifecycle against a real node', () => {
 
     it('seeds auth_ok reports through Stage D projection and preserves truncated', async () => {
         const node = open();
-        const beacon = armBeacon(node, makeFakeTransport().transport, { env: {} });
+        const beacon = armBeacon(node, makeFakeTransport().transport);
         await settle();
 
         const SECRET = 'auth_ok canary prose must never reach known vectors';
@@ -603,7 +581,7 @@ describe('armBeacon — lifecycle against a real node', () => {
                 at: '2026-08-28T00:00:00.000Z',
                 lastAgentMessage: SECRET,
                 vectors: {
-                    [FLEET_STATUS_TOPIC]: {
+                    [RING_TOPIC]: {
                         preview: SECRET,
                         writers: {
                             'adhdev-peerpeerpeer01': {
@@ -619,7 +597,7 @@ describe('armBeacon — lifecycle against a real node', () => {
             truncated: 2,
         });
 
-        const staleness = node.node.staleness(FLEET_STATUS_TOPIC);
+        const staleness = node.node.staleness(RING_TOPIC);
         expect(staleness.behind['adhdev-peerpeerpeer01']).toBe(42);
         expect(JSON.stringify(staleness)).not.toContain(SECRET);
         expect(staleness.keyStale).toBeUndefined();
@@ -647,7 +625,7 @@ describe('armBeacon — lifecycle against a real node', () => {
             }],
         });
 
-        const beacon = armBeacon(node, fake.transport, { env: {} });
+        const beacon = armBeacon(node, fake.transport);
         await settle();
 
         expect(fake.gets[0]).toContain(CONFIG_SETTINGS_TOPIC);
@@ -673,7 +651,7 @@ describe('armBeacon — lifecycle against a real node', () => {
             },
         };
 
-        const beacon = armBeacon(node, transport, { env: {} });
+        const beacon = armBeacon(node, transport);
         await settle();
 
         expect(beacon!.counters().truncated).toBe(3);
@@ -685,7 +663,7 @@ describe('armBeacon — lifecycle against a real node', () => {
         const node = open();
         const failing = makeFakeTransport({ failPut: true });
 
-        const beacon = armBeacon(node, failing.transport, { env: {} });
+        const beacon = armBeacon(node, failing.transport);
         // The library's push() chains get() off put(), so a failing put means
         // get() is never reached — and nothing escapes into the daemon.
         await expect(settle()).resolves.toBeUndefined();
@@ -698,7 +676,7 @@ describe('armBeacon — lifecycle against a real node', () => {
     it('node.close() stops an armed beacon even when nobody holds its handle', async () => {
         const node = open();
         const fake = makeFakeTransport();
-        armBeacon(node, fake.transport, { env: {} });
+        armBeacon(node, fake.transport);
         await settle();
         const before = fake.puts.length;
 
@@ -718,7 +696,7 @@ describe('armBeacon — lifecycle against a real node', () => {
     // transport keyed by the exact topic slice it was called with drives the
     // split/merge logic without needing a real oversized board.
     describe('GET topic-split retry', () => {
-        const TOPICS4 = ['fleet.status', 'mesh.a.events', 'mesh.b.events', 'mesh.c.events'];
+        const TOPICS4 = [RING_TOPIC, 'mesh.a.events', 'mesh.b.events', 'mesh.c.events'];
 
         /** A transport whose `get()` behavior is scripted per exact topic slice. */
         function makeScriptedTransport(
@@ -748,7 +726,7 @@ describe('armBeacon — lifecycle against a real node', () => {
             return {
                 node,
                 at,
-                vectors: { 'fleet.status': { writers: { [node]: { contig, chain: CHAIN_A } } } },
+                vectors: { [RING_TOPIC]: { writers: { [node]: { contig, chain: CHAIN_A } } } },
             };
         }
 
@@ -762,7 +740,7 @@ describe('armBeacon — lifecycle against a real node', () => {
             ]);
             const { transport, calls } = makeScriptedTransport(script);
 
-            const beacon = armBeacon(n, transport, { env: {}, topicScope: () => TOPICS4 });
+            const beacon = armBeacon(n, transport, { topicScope: () => TOPICS4 });
             await settle();
 
             expect(calls.length).toBe(1);
@@ -775,7 +753,7 @@ describe('armBeacon — lifecycle against a real node', () => {
 
         it('truncated>0 on a multi-topic scope bisects and merges peer reports by node', async () => {
             const n = open();
-            const left = ['fleet.status', 'mesh.a.events'];
+            const left = [RING_TOPIC, 'mesh.a.events'];
             const right = ['mesh.b.events', 'mesh.c.events'];
             const script = new Map<string, BeaconGetResponse>([
                 [
@@ -793,7 +771,7 @@ describe('armBeacon — lifecycle against a real node', () => {
             ]);
             const { transport, calls } = makeScriptedTransport(script);
 
-            const beacon = armBeacon(n, transport, { env: {}, topicScope: () => TOPICS4 });
+            const beacon = armBeacon(n, transport, { topicScope: () => TOPICS4 });
             await settle();
 
             // 1 initial + 2 split halves.
@@ -805,7 +783,7 @@ describe('armBeacon — lifecycle against a real node', () => {
 
             // Both peers landed — one from each split half — proving the merge
             // unions across halves rather than keeping only one side.
-            const staleness = n.node.staleness('fleet.status');
+            const staleness = n.node.staleness(RING_TOPIC);
             expect(staleness.behind['adhdev-peerA']).toBe(7);
             expect(staleness.behind['adhdev-peerB']).toBe(12);
             beacon!.stop();
@@ -813,13 +791,13 @@ describe('armBeacon — lifecycle against a real node', () => {
 
         it('single-topic residual truncation surfaces as the last-resort backstop', async () => {
             const n = open();
-            const SOLO = ['fleet.status'];
+            const SOLO = [RING_TOPIC];
             const script = new Map<string, BeaconGetResponse>([
                 [SOLO.join(','), { reports: [], truncated: 5 }],
             ]);
             const { transport, calls } = makeScriptedTransport(script);
 
-            const beacon = armBeacon(n, transport, { env: {}, topicScope: () => SOLO });
+            const beacon = armBeacon(n, transport, { topicScope: () => SOLO });
             await settle();
 
             // topics.length <= 1 — no split attempted, even though truncated>0.
@@ -831,7 +809,7 @@ describe('armBeacon — lifecycle against a real node', () => {
 
         it('duplicate node across split halves keeps the report with the newer `at`', async () => {
             const n = open();
-            const left = ['fleet.status', 'mesh.a.events'];
+            const left = [RING_TOPIC, 'mesh.a.events'];
             const right = ['mesh.b.events', 'mesh.c.events'];
             // Same peer node on both halves, distinguishable by `contig` so the
             // survivor is unambiguous: if the merge kept the OLDER (left) report,
@@ -841,12 +819,12 @@ describe('armBeacon — lifecycle against a real node', () => {
             const older = {
                 node: 'adhdev-same00000000',
                 at: '2026-08-28T00:00:00.000Z',
-                vectors: { 'fleet.status': { writers: { 'adhdev-same00000000': { contig: 1, chain: CHAIN_A } } } },
+                vectors: { [RING_TOPIC]: { writers: { 'adhdev-same00000000': { contig: 1, chain: CHAIN_A } } } },
             };
             const newer = {
                 node: 'adhdev-same00000000',
                 at: '2026-08-28T00:00:05.000Z',
-                vectors: { 'fleet.status': { writers: { 'adhdev-same00000000': { contig: 99, chain: CHAIN_B } } } },
+                vectors: { [RING_TOPIC]: { writers: { 'adhdev-same00000000': { contig: 99, chain: CHAIN_B } } } },
             };
             const script = new Map<string, BeaconGetResponse>([
                 [[...TOPICS4].sort().join(','), { reports: [], truncated: 1 }],
@@ -855,11 +833,11 @@ describe('armBeacon — lifecycle against a real node', () => {
             ]);
             const { transport } = makeScriptedTransport(script);
 
-            const beacon = armBeacon(n, transport, { env: {}, topicScope: () => TOPICS4 });
+            const beacon = armBeacon(n, transport, { topicScope: () => TOPICS4 });
             await settle();
 
             expect(beacon!.counters().truncated).toBe(0);
-            const staleness = n.node.staleness('fleet.status');
+            const staleness = n.node.staleness(RING_TOPIC);
             expect(staleness.behind['adhdev-same00000000']).toBe(99);
             beacon!.stop();
         });
@@ -879,7 +857,7 @@ describe('armBeacon — lifecycle against a real node', () => {
             };
 
             const manyTopics = Array.from({ length: 64 }, (_, i) => `mesh.t${i}.events`);
-            const beacon = armBeacon(n, alwaysTruncated, { env: {}, topicScope: () => manyTopics });
+            const beacon = armBeacon(n, alwaysTruncated, { topicScope: () => manyTopics });
             await settle();
 
             expect(calls.length).toBeLessThanOrEqual(MAX_BEACON_GET_QUERIES);

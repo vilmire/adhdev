@@ -21,9 +21,6 @@ import { useCoordinatorMeshStatus } from '../../hooks/useCoordinatorMeshStatus'
 import type { CoordinatorMeshStatusLoader } from '../../utils/coordinator-mesh-status-store'
 import { classifyDashboardMeshLoadFailure } from './dashboard-mesh-load-failure'
 
-/** Slow backstop re-read (refresh:false) in case a revision push was missed. */
-const DASHBOARD_MESH_STATUS_BACKSTOP_MS = 60_000
-
 export {
     collectMeshGraphLiveSessionStatuses as collectDashboardLiveMeshSessionStatuses,
     getMeshGraphMetadataSignature as getDashboardMeshMetadataSignature,
@@ -90,8 +87,8 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
 
     // ONE shared coordinator status per mesh (utils/coordinator-mesh-status-store):
     // the /mesh page, this dialog and the session info dialog read the same held
-    // answer. Triggers: open → refresh:false, coordinator revision advance →
-    // refresh:false, slow backstop → refresh:false, the Refresh button → refresh:true.
+    // answer, kept current by the coordinator's mesh.status push (snapshot on
+    // open, keyed deltas after); the Refresh button → refresh:true is the only read.
     // No pending-git retry loop — each node reports its own freshness
     // (gitObservation / heldRuntime: age, refreshing, unreachable).
     const loadStatus = useCallback<CoordinatorMeshStatusLoader>((targetDaemonId, targetMeshId, options) => (
@@ -111,7 +108,6 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
         daemonId,
         load: daemonId && meshId ? loadStatus : null,
         sendData,
-        backstopMs: DASHBOARD_MESH_STATUS_BACKSTOP_MS,
     })
     const loading = storeLoading && !meshStatus
     // A read the user explicitly asked for (Refresh) that fails is the page-level
@@ -232,7 +228,7 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                     </div>
                     <div className="min-w-0 flex-1 pr-36 sm:pr-52 md:pr-56">
                         <div className="flex items-center gap-3">
-                            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-sky-400/20 bg-sky-500/12 text-sky-200 shadow-[0_12px_30px_rgba(14,165,233,0.18)]">
+                            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-border-default bg-bg-glass text-text-secondary">
                                 <IconMesh size={18} />
                             </span>
                             <div className="min-w-0">
@@ -257,7 +253,7 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                 </div>
 
                 {error && (
-                    <div className={meshTheme.isDark ? 'shrink-0 border-b border-rose-400/20 bg-rose-500/12 px-4 py-2 text-sm text-rose-200 md:px-5' : 'shrink-0 border-b border-rose-300 bg-rose-50 px-4 py-2 text-sm text-rose-700 md:px-5'}>
+                    <div className="shrink-0 border-b border-status-error/30 px-4 py-2 text-sm text-status-error md:px-5">
                         {error}
                     </div>
                 )}

@@ -11,7 +11,7 @@ import { isCliConv, isAcpConv, getCliConversationViewMode } from '../components/
 import {
     applyCliViewModeOverrides,
 } from '../components/dashboard/cliViewModeOverrides'
-import { useWarmSessionChatTailControllers } from '../components/dashboard/session-chat-tail-controller'
+import { useWarmSessionChatControllers } from '../components/dashboard/session-chat-controller'
 import { useDashboardConversationMeta } from '../hooks/useDashboardConversationMeta'
 import { useDashboardConversations } from '../hooks/useDashboardConversations'
 import { useDashboardActiveTabRequests } from '../hooks/useDashboardActiveTabRequests'
@@ -38,7 +38,7 @@ import DashboardVersionBanner from '../components/dashboard/DashboardVersionBann
 import type { Toast } from '../components/dashboard/ToastContainer'
 import type { DashboardMobileSection } from '../components/dashboard/DashboardMobileBottomNav'
 import { getMobileDashboardMode, subscribeMobileDashboardMode } from '../components/settings/MobileDashboardModeSection'
-import { getDashboardWarmChatTailOptions } from '../utils/dashboard-warm-chat-tail'
+import { getDashboardWarmChatOptions } from '../utils/dashboard-warm-chat'
 import { buildLiveSessionInboxStateMap, getConversationLiveInboxState, resolveSurfaceHidden } from '../components/dashboard/DashboardMobileChatShared'
 import { useConversationPrefs } from '../hooks/useConversationPrefs'
 import { appendWarningToast } from '../hooks/dashboardCommandUtils'
@@ -111,8 +111,8 @@ export default function Dashboard({ suppressConnectionBanner = false }: Dashboar
 
     const [mobileViewMode, setMobileViewMode] = useState<'chat' | 'workspace'>(() => getMobileDashboardMode())
     useEffect(() => subscribeMobileDashboardMode(setMobileViewMode), [])
-    const warmChatTailOptions = useMemo(
-        () => getDashboardWarmChatTailOptions({ isMobile, mobileViewMode }),
+    const warmChatOptions = useMemo(
+        () => getDashboardWarmChatOptions({ isMobile, mobileViewMode }),
         [isMobile, mobileViewMode],
     )
     const [actionLogs, setActionLogs] = useState<{ routeId: string; text: string; timestamp: number }[]>([])
@@ -172,7 +172,7 @@ export default function Dashboard({ suppressConnectionBanner = false }: Dashboar
         () => new Map(conversations.map(conversation => [conversation.tabKey, conversation])),
         [conversations],
     )
-    useWarmSessionChatTailControllers(visibleConversations, warmChatTailOptions)
+    useWarmSessionChatControllers(visibleConversations, warmChatOptions)
     // NOTE: A user's explicit CLI view-mode choice (cliViewModeOverrides) is kept
     // sticky on purpose — it is NOT reconciled away when an incoming status_report
     // happens to echo the chosen mode. Dashboard `ides` updates arrive async from

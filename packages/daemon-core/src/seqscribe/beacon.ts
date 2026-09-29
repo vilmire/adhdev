@@ -18,9 +18,9 @@
  * WS client lives in the proprietary `packages/daemon-cloud`, and `check:boundaries`
  * keeps `seqscribe/**` producer-neutral besides. So the host supplies the two
  * callbacks and this module owns everything transport-independent — the content
- * boundary, the env gate, the counters, the arming lifecycle. OSS standalone
- * simply never injects one, and `armBeacon` returns null (§7.1.6: "transport
- * absent → not started", standalone unaffected).
+ * boundary, the counters, the arming lifecycle. OSS standalone simply never
+ * injects one and never calls `armBeacon` (§7.1.6: "transport absent → not
+ * started", standalone unaffected).
  *
  * ── What this module adds over calling `node.beacon(t)` directly ───────────
  *  1. The daemon-side content projection (`projectBeaconReport`). CLAUDE.md's
@@ -28,9 +28,7 @@
  *     counters — nothing else. The server sanitizes too (beacon-board.ts), but
  *     the boundary rule is defence in depth at every layer that can enforce it,
  *     and this is the last one that sees the report before it leaves the machine.
- *  2. The `ADHDEV_SEQSCRIBE_BEACON` gate, so a fleet can turn the path off
- *     without a redeploy.
- *  3. Content-free counters for the daemon log (§7.1.6 observability: ids and
+ *  2. Content-free counters for the daemon log (§7.1.6 observability: ids and
  *     counts, never values).
  */
 
@@ -43,57 +41,7 @@ import {
     type BeaconTopicPolicyMap,
 } from './beacon-diagnostics.js';
 import type { SeqscribeNodeHandle } from './node.js';
-import { FLEET_STATUS_TOPIC, meshIdFromEventsTopic } from './topics.js';
-
-/** Env flag name. Mirrors FLEET_STATUS_ENV / MESH_DUAL_WRITE_ENV in role. */
-export const BEACON_ENV = 'ADHDEV_SEQSCRIBE_BEACON';
-
-export type BeaconMode = 'on' | 'off';
-
-/**
- * Resolve the mode.
- *
- * ★ Defaults ON, and an UNRECOGNIZED value also resolves to `on`. That is the
- * opposite of the fail-closed posture the dual-write legs use, and the
- * difference is deliberate:
- *
- *   - The dual-write/read legs are a WRITE-then-READ substitution — an
- *     unrecognized value there could silently promote a shadow leg to serving
- *     reads, so ambiguity must resolve to the safe side.
- *   - Beacon neither writes to a consumer nor serves a read. It uploads
- *     content-free counters and feeds `staleness()`, which is advisory output no
- *     code path acts on automatically. The worst case of wrongly resolving to
- *     `on` is a debounced frame on an already-open WS; the worst case of wrongly
- *     resolving to `off` is a silently dead feature that looks alive — the same
- *     failure `resolveFleetStatusMode` cites when it stopped defaulting to off.
- *
- * So the asymmetry is not an oversight: `off` is an explicit, fully respected
- * opt-out, and every other value keeps the advisory path alive and logs the typo
- * once so it stays visible rather than being masked by the fallback.
- */
-export function resolveBeaconMode(env: NodeJS.ProcessEnv = process.env): BeaconMode {
-    const raw = env[BEACON_ENV]?.trim().toLowerCase();
-    if (!raw) return 'on';
-    if (raw === 'off') return 'off';
-    if (raw === 'on') return 'on';
-    warnOnce(
-        `unrecognized ${BEACON_ENV}=${raw}; treating as 'on'. ` +
-            "Valid values are 'on' (default) and 'off'.",
-    );
-    return 'on';
-}
-
-let warnedUnrecognized = false;
-function warnOnce(message: string): void {
-    if (warnedUnrecognized) return;
-    warnedUnrecognized = true;
-    LOG.warn('Seqscribe', message);
-}
-
-/** Test-only: reset the once-per-process typo warning. */
-export function __resetBeaconWarnOnceForTest(): void {
-    warnedUnrecognized = false;
-}
+import { meshIdFromEventsTopic } from './topics.js';
 
 // ─── Content boundary ───────────────────────────────────────────────────────
 
@@ -340,7 +288,7 @@ export function buildTopicPolicyMap(
  */
 export function defaultBeaconTopicScope(vectors: Readonly<Record<string, unknown>>): string[] {
     return Object.keys(vectors).filter(
-        (topic) => topic === FLEET_STATUS_TOPIC || meshIdFromEventsTopic(topic) !== null,
+        (topic) => meshIdFromEventsTopic(topic) !== null,
     );
 }
 
@@ -374,6 +322,11 @@ export interface BeaconCounters {
      * board outgrew one frame and needed a second round trip.
      */
     splitRetries: number;
+    /**
+     * Peer mesh-events vectors recorded as acknowledgments (seqscribe
+     * `noteAcks`, host-guide §4.8) — see `noteBeaconAcks`.
+     */
+    acksNoted: number;
 }
 
 function emptyCounters(): BeaconCounters {
@@ -385,7 +338,56 @@ function emptyCounters(): BeaconCounters {
         truncated: 0,
         rejected: 0,
         splitRetries: 0,
+        acksNoted: 0,
     };
+}
+
+/**
+ * Feed a board's peer reports into the library's acknowledged-retention ack
+ * table (seqscribe `noteAcks`, host-guide §4.8) — `mesh.<id>.events` only.
+ *
+ * Why: a node learns a peer's acknowledgment from that peer's HAVE rounds,
+ * which exist only on a DIRECT session. Mesh daemons are not necessarily fully
+ * meshed (a member may only ever talk to the coordinator), and without another
+ * source such a member would never see its fellow members acknowledge
+ * anything, so `writer-gc.ts` §3 could never prune there. A Beacon report is
+ * the same statement a HAVE makes — the reporting node's own committed heads —
+ * published for exactly the nodes that are not continuously connected.
+ *
+ * Trust: the board is server-held, so a forged report could claim a node
+ * holds rows it lacks. The damage is bounded by the retention window: acked
+ * retention deletes nothing younger than 30 days whatever the acks say, and a
+ * node below a floor recovers with TRUNCATED, so a forgery can at worst make a
+ * node skip history its own consumers have already aged out. `handoff` (content
+ * class) is outside Beacon's scope and relies on direct HAVE rounds alone.
+ *
+ * `at` is clamped to now (a future stamp must not extend a member's liveness).
+ * Returns how many reports were recorded.
+ */
+export function noteBeaconAcks(
+    node: Pick<SeqscribeNodeHandle['node'], 'noteAcks'>,
+    selfWriter: string,
+    reports: readonly ProjectedBeaconReport[],
+    now: number,
+): number {
+    let noted = 0;
+    for (const report of reports) {
+        if (report.node === selfWriter) continue;
+        const vectors: ProjectedBeaconReport['vectors'] = {};
+        for (const [topic, v] of Object.entries(report.vectors)) {
+            if (meshIdFromEventsTopic(topic) !== null) vectors[topic] = v;
+        }
+        if (Object.keys(vectors).length === 0) continue;
+        const at = Date.parse(report.at);
+        if (!Number.isFinite(at)) continue;
+        try {
+            node.noteAcks(report.node, vectors, { at: Math.min(at, now) });
+            noted++;
+        } catch {
+            // advisory input (charter-invalid node id, closing node) — skip it
+        }
+    }
+    return noted;
 }
 
 // ─── Host transport contract ────────────────────────────────────────────────
@@ -427,7 +429,6 @@ export interface BeaconHostTransport {
 }
 
 export interface ArmBeaconOptions {
-    env?: NodeJS.ProcessEnv;
     /**
      * Override the GET topic scope. Defaults to metadata-class topics present
      * in the node's own vectors plus topics this node actually defined with
@@ -531,9 +532,10 @@ function mergeBeaconReportsByNode(left: unknown[], right: unknown[]): unknown[] 
 /**
  * Arm the beacon on an open seqscribe node.
  *
- * Returns null — a no-op, not an error — when the env gate is off. A host with
- * no transport simply does not call this (standalone), which is why there is no
- * "transport absent" branch here: absence is expressed by not arming.
+ * Always arms (the `ADHDEV_SEQSCRIBE_BEACON` kill switch was removed
+ * 2026-09-29 — Beacon is unconditional). A host with no transport simply does
+ * not call this (standalone), which is why there is no "transport absent"
+ * branch here: absence is expressed by not arming.
  *
  * ★ NO PERIODIC TIMER IS CREATED HERE, deliberately. The library owns the
  * cadence: it pushes once on `start()` and then on a 5 s debounce after each
@@ -565,13 +567,7 @@ export function armBeacon(
     handle: SeqscribeNodeHandle,
     transport: BeaconHostTransport,
     opts: ArmBeaconOptions = {},
-): BeaconHandle | null {
-    const mode = resolveBeaconMode(opts.env ?? process.env);
-    if (mode === 'off') {
-        LOG.info('Seqscribe', `beacon disabled (${BEACON_ENV}=off)`);
-        return null;
-    }
-
+): BeaconHandle {
     // Fail fast if the topic table ever opts a topic into plaintext hints.
     // Cheap, and it runs on the boot path where a throw is visible.
     assertNoPlaintextHintTopics(handle.topics);
@@ -760,6 +756,7 @@ export function armBeacon(
         // it, not discarded: it is what forces every sole-copy verdict to
         // `'unknown'` (§7.1.2.1), so dropping it here would silently convert a
         // deferred judgement into a confident wrong one.
+        counters.acksNoted += noteBeaconAcks(handle.node, handle.writerId, clean, Date.now());
         lastBoard = {
             reports: clean,
             truncated,

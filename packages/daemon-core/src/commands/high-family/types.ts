@@ -27,6 +27,7 @@ import type { MeshNodeGitStateStore } from '../../mesh/mesh-node-git-state.js';
 import type { MeshNodeStatePusher } from '../../mesh/mesh-node-state-pusher.js';
 import type { MeshNodeGitRefresher } from '../../mesh/mesh-node-git-refresher.js';
 import type { MemberWorktreeAdoptionResult } from '../../mesh/mesh-remote-worktree-membership.js';
+import type { LocalMeshNodeGitWatch } from '../../mesh/local-mesh-node-git-watch.js';
 
 /**
  * Router-private collaborators injected at dispatch. Each is a bound method or
@@ -121,6 +122,9 @@ export interface HighFamilyContext {
 
     /** Member side: this daemon's push subscriptions to coordinators (answers a coordinator's nudge). */
     meshNodeStatePusher?: MeshNodeStatePusher;
+
+    /** Git change detector for the checkouts this daemon reads itself (mesh/local-mesh-node-git-watch.ts). */
+    localMeshNodeGitWatch?: LocalMeshNodeGitWatch;
 
     /** Per-process coordinator boot id returned on member push acks (member worktree reconciliation). */
     meshCoordinatorBootId?: string;

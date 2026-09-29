@@ -6,9 +6,8 @@
  * The standalone daemon already runs the same seqscribe node, defines the same
  * `session.<safeSessionId>.chat` topics (`transcript-activation.ts`) and
  * holds a machine-local finality authority (`local-authority.ts`). What it
- * lacked was a transport that serves those topics to its own dashboard, so the
- * shared chat-tail controller never received a replica snapshot and stayed on
- * legacy `session.chat_tail` forever (`transcriptTransportSelection = {0,0}`).
+ * lacked was a transport that serves those topics to its own dashboard. This
+ * lane is now the standalone dashboard's ONLY chat delivery path.
  *
  * This module is that transport's daemon half: it takes an ALREADY
  * AUTHENTICATED socket (the standalone HTTP server's `/ws/seqscribe` upgrade
@@ -30,10 +29,10 @@
  *  - Per-session interest narrowing (design §9 item 4): see
  *    `deriveStandaloneTranscriptGrants` — the principal holding this socket
  *    already reads every session's chat over `/ws` (`read_chat`,
- *    `session.chat_tail`), so narrowing the replica lane below that would not
+ *    `chat_history`), so narrowing the replica lane below that would not
  *    reduce what the principal can read. The grant map is still
  *    least-privilege in the dimension that matters here: transcript topics
- *    ONLY (never `mesh.*`, `fleet.status`, `assistant.journal`,
+ *    ONLY (never `mesh.*`, `assistant.journal`,
  *    `config.settings`), and `serve` ONLY (the peer can SUB; it can never
  *    write, because nothing is granted `full`).
  *
@@ -64,6 +63,25 @@ export const STANDALONE_SEQSCRIBE_PEER_CLASS = 'content' as const;
  * tab reconnects with backoff, exactly as after any other lane close.
  */
 export const MAX_STANDALONE_SEQSCRIBE_LANES = 8;
+
+/**
+ * `/ws` JSON frame type announcing transcript topics that just became
+ * SUB-able (`{ type, topics: string[] }`). Mirrored by web-core's
+ * `TRANSCRIPT_TOPICS_AVAILABLE_TYPE` and by the cloud P2P frame of the same
+ * name (mesh-shared `P2PTranscriptTopicsAvailableMsg`).
+ *
+ * ★ Why a separate announcement is needed at all: a seqscribe SUB for a
+ * topic the lane does not grant yet is refused ONCE (`SUB_ERR ERR_ACL_DENIED`)
+ * and the library never retries it — the refusal is not even surfaced to the
+ * subscriber's callbacks. The grant re-advertisement (P15 HELLO) is not
+ * observable through the browser node's public API either. So without this
+ * frame the browser can only guess when to re-SUB (the retry backoff), which
+ * is what left a pane blank for ~10 s after its topic appeared.
+ *
+ * Content-free on a local socket: topic names only (sanitized session ids,
+ * which the status payload already carries raw).
+ */
+export const TRANSCRIPT_TOPICS_AVAILABLE_TYPE = 'transcript_topics_available';
 
 /**
  * `session.<segment>.chat` → segment, else null (the keyed chat topic, design
@@ -114,6 +132,7 @@ export interface StandaloneTranscriptLaneOptions {
  */
 export class StandaloneTranscriptLane {
     private readonly lanes = new Map<string, LaneEntry>();
+    private readonly availabilityListeners = new Set<(topics: readonly string[]) => void>();
     private readonly unsubscribeTopicActivation: () => void;
     private readonly maxLanes: number;
     private laneSeq = 0;
@@ -124,18 +143,36 @@ export class StandaloneTranscriptLane {
         options: StandaloneTranscriptLaneOptions = {},
     ) {
         this.maxLanes = Math.max(1, options.maxLanes ?? MAX_STANDALONE_SEQSCRIBE_LANES);
-        // A transcript topic is defined lazily, on its session's first publish
-        // (`transcript-activation.ts`), usually long after a dashboard attached.
-        // Re-advertise so that session becomes SUB-able on the live lane.
+        // A transcript topic is defined when its session registers (launch /
+        // restore — `TranscriptProjectionService.warmSession`) or, at the latest,
+        // on its first publish (`transcript-activation.ts`) — often after a
+        // dashboard attached. Re-advertise so that session becomes SUB-able on
+        // the live lane, THEN announce it: a listener (the standalone `/ws`
+        // broadcast) tells the browser to re-SUB now, and the grant it needs is
+        // already in place by the time that SUB can arrive.
         this.unsubscribeTopicActivation = onTopicActivated(seqscribe, (topic) => {
             if (transcriptTopicSessionSegment(topic) === null) return;
             this.readvertiseAll(topic);
+            this.announceAvailable([topic]);
         });
     }
 
     /** Current grant map every lane is advertised (tests / diagnostics). */
     grants(): Record<string, 'serve'> {
         return deriveStandaloneTranscriptGrants(this.seqscribe.topics);
+    }
+
+    /**
+     * Listen for transcript topics that just became SUB-able on every lane.
+     * The listener receives only the NEWLY available topics (the grant map is
+     * uniform across standalone lanes, so "new for one lane" is "new for all").
+     * Returns the unsubscribe.
+     */
+    onTopicsAvailable(listener: (topics: readonly string[]) => void): () => void {
+        this.availabilityListeners.add(listener);
+        return () => {
+            this.availabilityListeners.delete(listener);
+        };
     }
 
     /** Live lane count (tests / diagnostics). */
@@ -215,7 +252,23 @@ export class StandaloneTranscriptLane {
         if (this.closed) return;
         this.closed = true;
         this.unsubscribeTopicActivation();
+        this.availabilityListeners.clear();
         for (const peerId of [...this.lanes.keys()]) this.detach(peerId);
+    }
+
+    /** Never throws — runs inside a transcript publish / session registration. */
+    private announceAvailable(topics: readonly string[]): void {
+        if (this.closed || this.availabilityListeners.size === 0) return;
+        for (const listener of [...this.availabilityListeners]) {
+            try {
+                listener(topics);
+            } catch (error) {
+                LOG.warn(
+                    'Seqscribe',
+                    `standalone transcript availability listener failed: ${error instanceof Error ? error.message : String(error)}`,
+                );
+            }
+        }
     }
 
     /** Never throws — runs inside a transcript publish (via the activation announcement). */
@@ -235,6 +288,15 @@ export class StandaloneTranscriptLane {
             }
         }
     }
+}
+
+export interface TranscriptTopicsAvailableFrame {
+    readonly type: typeof TRANSCRIPT_TOPICS_AVAILABLE_TYPE;
+    readonly topics: readonly string[];
+}
+
+export function transcriptTopicsAvailableFrame(topics: readonly string[]): TranscriptTopicsAvailableFrame {
+    return { type: TRANSCRIPT_TOPICS_AVAILABLE_TYPE, topics: [...topics] };
 }
 
 function safeClose(socket: WebSocketLike): void {

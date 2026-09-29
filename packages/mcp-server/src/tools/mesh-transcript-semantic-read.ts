@@ -141,7 +141,7 @@ function unwrap(result: any): any {
 }
 
 const FALLBACK_REASONS = new Set<string>([
-    'mode_not_primary', 'consumer_not_enabled', 'no_node', 'authority_unavailable',
+    'consumer_not_enabled', 'no_node', 'authority_unavailable',
     'topic_undefined', 'topic_not_granted', 'owner_mismatch', 'no_complete_revision',
     'revision_invalid', 'projection_oversize', 'coverage_insufficient',
     'stale_active_session', 'quarantined', 'parity_mismatch', 'ipc_unavailable',

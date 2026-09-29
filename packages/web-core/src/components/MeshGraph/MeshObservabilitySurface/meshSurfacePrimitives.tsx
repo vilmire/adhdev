@@ -4,16 +4,12 @@ import { Tooltip } from '../../ui/InfoTip'
 
 export function Badge({ label, tone = 'default', className, title }: { label: string; tone?: 'default' | 'good' | 'warn' | 'danger' | 'info'; className?: string; title?: string }) {
     const meshTheme = useContext(MeshGraphThemeContext)
-    // `leading-none` is deliberate: `text-[10px]` is an arbitrary Tailwind value, which
-    // sets font-size ONLY — the chip would otherwise inherit whatever line-height its
-    // container has (text-xs=1rem in Overview rows, leading-5=1.25rem in Tasks rows), so
-    // the same chip rendered at different heights per context and its pill border drifted
-    // against sibling text and the row border. Pinning line-height makes chip height a
-    // function of padding alone. `align-middle` centers the inline box on the parent's
-    // text instead of sitting on the baseline (which left a descender gap below).
-    // `pr` > `pl` compensates for tracking, which also applies after the last glyph and
-    // otherwise makes the label look shifted left inside its own border.
-    const chip = <span className={`rounded-full border pl-2 pr-[calc(0.5rem-0.16em)] py-0.5 text-[10px] leading-none align-middle uppercase tracking-[0.16em] ${meshTheme.badge(tone)}${className ? ` ${className}` : ''}`}>{label}</span>
+    // The app's chip: sentence case, fixed h-5 height with centred content
+    // (`inline-flex items-center leading-none`), so a Badge lines up with its
+    // neighbours in any row regardless of the container's line-height. Tone
+    // colours the text + thin border only (meshTheme.badge); no uppercase
+    // tracking, no tinted fill.
+    const chip = <span className={`inline-flex h-5 shrink-0 items-center whitespace-nowrap rounded-full border px-2 align-middle text-3xs font-medium leading-none ${meshTheme.badge(tone)}${className ? ` ${className}` : ''}`}>{label}</span>
     // A hint rides in the shared Tooltip (hover, focus AND tap) instead of a
     // mouse-only native title.
     return title ? <Tooltip content={title}>{chip}</Tooltip> : chip

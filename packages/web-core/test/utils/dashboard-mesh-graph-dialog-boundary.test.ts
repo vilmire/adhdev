@@ -38,9 +38,12 @@ describe('dashboard mesh graph dialog wiring', () => {
     expect(dialogSource).not.toContain('retryProfile')
     expect(dialogSource).toContain('meshOverrides?.loadMeshStatus')
     expect(dialogSource).toContain("sendDaemonCommand(targetDaemonId, 'mesh_status', { meshId: targetMeshId, refresh: options.refresh })")
-    // Automatic reads are refresh:false (mount / coordinator revision / backstop);
-    // refresh:true is the explicit button only.
-    expect(statusHookSource).toContain('void read(false)')
+    // The graph is PUSHED (mesh.status subscription): no automatic read at all —
+    // no mount read, no revision refetch, no backstop timer. refresh:true is the
+    // explicit button only.
+    expect(statusHookSource).toContain('useMeshStatusSubscription({ meshId, daemonId, sendData })')
+    expect(statusHookSource).not.toContain('void read(false)')
+    expect(statusHookSource).not.toContain('setInterval(')
     expect(statusHookSource).toContain('const refresh = useCallback(() => read(true), [read])')
     expect(statusHookSource).not.toContain('read(true)\n')
     // The metadata subscription is on the coordinator daemon only.

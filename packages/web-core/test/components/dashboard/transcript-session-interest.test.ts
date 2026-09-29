@@ -19,26 +19,24 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SubscriptionManager } from '../../../src/managers/SubscriptionManager'
 import {
   collectRetainedTranscriptSessionInterest,
-  getOrCreateSessionChatTailController,
-  resetSessionChatTailControllersForTest,
+  getOrCreateSessionChatController,
+  resetSessionChatControllersForTest,
   subscribeTranscriptSessionInterest,
-} from '../../../src/components/dashboard/session-chat-tail-controller'
+} from '../../../src/components/dashboard/session-chat-controller'
 
 function createController(options: {
   daemonId: string
   sessionId: string
   historySessionId?: string
 }) {
-  return getOrCreateSessionChatTailController({
-    manager: new SubscriptionManager(),
+  return getOrCreateSessionChatController({
     sendData: vi.fn(() => true),
-    subscriptionKey: `daemon:${options.daemonId}:session:${options.sessionId}`,
     ...options,
   })
 }
 
 afterEach(() => {
-  resetSessionChatTailControllersForTest()
+  resetSessionChatControllersForTest()
 })
 
 describe('collectRetainedTranscriptSessionInterest (unit 4c)', () => {

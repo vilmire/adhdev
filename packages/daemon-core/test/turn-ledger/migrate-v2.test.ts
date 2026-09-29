@@ -137,7 +137,7 @@ function assertMigratedAndReadable(store: MeshRuntimeStore): void {
     // governs when there is none — either way the read must succeed).
     const open = store.turnStore().listOpenAttempts().find((a) => a.scope !== 'plain');
     const sessionId = open?.sessionId ?? `sess-${randomUUID().slice(0, 6)}`;
-    const p = resolveSessionTurnPresentation({ sessionId, legacyStatus: 'idle', surface: 'session_status' });
+    const p = resolveSessionTurnPresentation({ sessionId, providerStatus: 'idle', surface: 'session_status' });
     expect(p.authority).toBe(open ? 'turn_reducer' : 'provider_fsm_fallback');
     for (const meshId of new Set(store.turnStore().listOpenAttempts().map((a) => a.meshId).filter((m): m is string => !!m))) {
         expect(Array.isArray(getActiveDirectDispatches(meshId))).toBe(true);

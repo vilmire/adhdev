@@ -11,7 +11,13 @@ import {
 } from '../../src/seqscribe/standalone-transcript-lane.js';
 import { ensureSessionChatTopic } from '../../src/seqscribe/transcript-activation.js';
 import { TranscriptTopicClaimRegistry } from '../../src/seqscribe/transcript-topic-claim.js';
-import { fleetStatusPolicy, sessionChatPolicy, sessionChatTopic } from '../../src/seqscribe/topics.js';
+import { sessionChatPolicy, sessionChatTopic } from '../../src/seqscribe/topics.js';
+
+/** A subscribe-only metadata ring that is NOT a transcript topic (fixture). */
+const RING_TOPIC = 'test.status.ring';
+function ringPolicy() {
+    return { kind: 'append', retention: { mode: 'ring', size: 50 }, replication: 'subscribe-only', access: 'metadata' } as const;
+}
 
 /**
  * G6 prerequisite — the standalone dashboard replica lane, driven over a fake
@@ -155,7 +161,7 @@ describe('deriveStandaloneTranscriptGrants', () => {
     it('grants serve on subscribe-only session transcript topics and nothing else', () => {
         const grants = deriveStandaloneTranscriptGrants([
             { topic: TOPIC, policy: sessionChatPolicy() },
-            { topic: 'fleet.status', policy: fleetStatusPolicy() },
+            { topic: RING_TOPIC, policy: ringPolicy() },
             { topic: 'mesh.m1.events', policy: { kind: 'append', retention: { mode: 'full' }, replication: 'full-sync', access: 'content' } },
             // A full-sync topic that happens to look like a transcript must not be granted `serve`-as-`full` or at all.
             { topic: 'session.odd.chat', policy: { kind: 'append', retention: { mode: 'full' }, replication: 'full-sync', access: 'content' } },
@@ -169,7 +175,7 @@ describe('deriveStandaloneTranscriptGrants', () => {
         expect(transcriptTopicSessionSegment(TOPIC)).not.toBeNull();
         expect(transcriptTopicSessionSegment('session..chat')).toBeNull();
         expect(transcriptTopicSessionSegment('session.a.b.chat')).toBeNull();
-        expect(transcriptTopicSessionSegment('session.a.chat_tail')).toBeNull();
+        expect(transcriptTopicSessionSegment('session.a.chatx')).toBeNull();
     });
 });
 
@@ -252,18 +258,18 @@ describe('StandaloneTranscriptLane over a WebSocket pair (real nodes)', () => {
         const daemon = openNode('daemon-deny');
         const browser = openNode('browser-deny');
         defineTranscript(daemon, SESSION_ID);
-        // fleet.status is subscribe-only too — the lane must still not serve it.
-        daemon.node.defineTopic('fleet.status', fleetStatusPolicy());
-        daemon.topics.push({ topic: 'fleet.status', policy: fleetStatusPolicy() });
-        await daemon.node.log('fleet.status').append('fleet.status', { ok: true });
+        // Another subscribe-only topic — the lane must still not serve it.
+        daemon.node.defineTopic(RING_TOPIC, ringPolicy());
+        daemon.topics.push({ topic: RING_TOPIC, policy: ringPolicy() });
+        await daemon.node.log(RING_TOPIC).append('test.ring', { ok: true });
 
         const lane = newLane(daemon);
         const [serverSock, browserSock] = socketPair();
         lane.accept(serverSock);
         const peer = attachBrowser(browser, browserSock);
         await waitReady(peer);
-        browser.node.defineTopic('fleet.status', fleetStatusPolicy());
-        const denied = subscribeTail(browser, peer, 'fleet.status');
+        browser.node.defineTopic(RING_TOPIC, ringPolicy());
+        const denied = subscribeTail(browser, peer, RING_TOPIC);
         await new Promise((r) => setTimeout(r, 400));
         expect(denied.snaps).toEqual([]);
     });

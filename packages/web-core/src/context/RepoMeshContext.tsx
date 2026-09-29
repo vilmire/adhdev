@@ -68,14 +68,6 @@ export interface RepoMeshFeatures {
     hermesMcpConfig: boolean
     /** Show "Review Inbox" section — merge candidates + Refinery-blocked nodes (M4.0, standalone) */
     reviewInbox?: boolean
-    /**
-     * The mesh's daemon(s) push per-mesh state-change revisions in daemon.metadata
-     * (cloud daemon). When true, the graph refreshes event-driven on revision
-     * advance and the fixed-interval poll drops to a slow safety-net cadence.
-     * Standalone leaves this false — its daemon doesn't emit the counter, so it
-     * keeps the original fast poll.
-     */
-    meshStatePushRefresh?: boolean
 }
 
 // ─── Context value ───────────────────────────────────────────────
@@ -92,9 +84,9 @@ export interface RepoMeshContextValue {
     userName?: string
 
     /**
-     * Load live mesh status for the graph.
-     * Cloud implementation uses loadCloudMeshStatusWithRetry(); standalone
-     * calls mesh_status directly.
+     * One command read of the coordinator's mesh_status — for explicit user
+     * actions only (Refresh, after a mesh write). The graph itself is pushed
+     * (`mesh.status` subscription, hooks/useMeshStatusSubscription.ts).
      */
     loadMeshStatus: (
         daemonId: string,
@@ -186,9 +178,6 @@ export const CLOUD_FEATURES: RepoMeshFeatures = {
     nodeInstruction: true,
     hermesMcpConfig: true,
     reviewInbox: true,
-    // Cloud daemon pushes per-mesh revision counters in daemon.metadata, so the
-    // graph refreshes on push and the poll becomes a slow safety net.
-    meshStatePushRefresh: true,
 }
 
 // ─── Context ─────────────────────────────────────────────────────

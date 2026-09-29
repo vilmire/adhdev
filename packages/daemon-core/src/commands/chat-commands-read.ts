@@ -1705,7 +1705,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
             });
 
             if (supportsNative && !decision.nativeSelected) {
-                // Native-only content preservation (hermes chat_tail gap).
+                // Native-only content preservation (hermes native-only gap).
                 // The history-only path has NO PTY transcript (native-only
                 // providers suppress PTY bodies), so args.ptyMessages is empty
                 // and the machine's pty-parser selection returns NOTHING. But a
@@ -1714,7 +1714,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                 // because coverage came back 'partial' (missing sessionStartedAtMs
                 // → Booting→Recovering→pty-parser) or a transient shrink looked
                 // like a regression. Dropping those rows deletes the assistant
-                // answer from chat_tail / read_chat entirely. When the native
+                // answer from read_chat (and the keyed chat lane it feeds). When the native
                 // read actually resolved rows for THIS session identity
                 // (safeMapping proves ownership: matching historySessionId /
                 // providerSessionId + workspace), return them instead of an empty

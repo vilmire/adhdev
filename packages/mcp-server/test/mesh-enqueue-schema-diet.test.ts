@@ -19,6 +19,7 @@ import { resolveMeshToolHandler } from '../src/tools/mesh-tool-dispatch.js';
 import { meshStatus, pickDaemonGraphUsage } from '../src/tools/mesh-tools-status.js';
 
 import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
+import { fakeCoordinatorTransport } from './helpers/fake-coordinator-tool-answers.js';
 
 /**
  * graph-orchestration-simplification D2 + the MCP half of D3(c)/D6
@@ -365,7 +366,7 @@ function statusCtx(graphUsage: Record<string, unknown> | undefined) {
         if (command === 'git_status') return { success: true, status: cleanGit };
         return { success: true };
     };
-    const transport: any = {};
+    const transport: any = fakeCoordinatorTransport();
     transport.command = async (c: string, a?: any) => {
         if (!isTurnIpcCommand(c)) return responder(c);
         const result = await answerTurnIpc(c, a ?? {});

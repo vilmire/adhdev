@@ -16,7 +16,7 @@ import {
 } from '@adhdev/mesh-shared'
 
 import { resolveDispatchMessage } from '../../src/mesh/worker-handoff-dispatch'
-import { __resetHandoffNotesForTest, storeHandoffNote } from '../../src/mesh/worker-handoff-notes'
+import { storeHandoffNote } from '../../src/mesh/worker-handoff-notes'
 import { WORKER_HANDOFF_EVENT_KIND } from '../../src/mesh/worker-report'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store'
 import { seedWorkerEvent } from '../helpers/turn-attempt-seed'
@@ -53,13 +53,11 @@ function countMarkers(body: string): number {
 const savedGate = process.env.ADHDEV_WORKER_MCP
 
 beforeEach(() => {
-  __resetHandoffNotesForTest()
   meshSeq += 1
   MESH = `mesh_dispatch_footer_${meshSeq}`
   delete process.env.ADHDEV_WORKER_MCP
 })
 afterEach(() => {
-  __resetHandoffNotesForTest()
   if (savedGate === undefined) delete process.env.ADHDEV_WORKER_MCP
   else process.env.ADHDEV_WORKER_MCP = savedGate
 })

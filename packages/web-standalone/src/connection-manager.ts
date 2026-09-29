@@ -1,4 +1,6 @@
 import type { ConnectionStatus, WebConnectionRuntimeEvent } from '@adhdev/web-core'
+import { subscriptionManager } from '@adhdev/web-core'
+import type { SubscribeRequest, UnsubscribeRequest } from '@adhdev/daemon-core'
 import { standaloneFetch } from './standalone-auth-client'
 
 export interface StandaloneConnectionAdapter {
@@ -11,7 +13,6 @@ export interface StandaloneConnectionAdapter {
 }
 
 type ScreenshotCallback = (sourceDaemonId: string, blob: Blob) => void
-type StatusCallback = (sourceDaemonId: string, payload: any) => void
 // Shared with web-core's WebConnectionManager contract — the local copy this
 // replaced had a twin in cloud's p2p-manager, the drift class the typed seam kills.
 type RuntimeEvent = WebConnectionRuntimeEvent
@@ -21,9 +22,9 @@ class StandaloneConnectionManager {
     private states = new Map<string, string>()
     private runtimeListeners = new Map<string, Set<(event: RuntimeEvent) => void>>()
     private screenshotCallbacks = new Map<string, ScreenshotCallback>()
-    private statusCallbacks = new Set<StatusCallback>()
     private stateChangeCallbacks = new Set<(daemonId: string, state: string) => void>()
     private ptyInputSender: ((daemonId: string, sessionId: string, data: string) => boolean) | null = null
+    private dataSender: ((daemonId: string, data: SubscribeRequest | UnsubscribeRequest) => boolean) | null = null
 
     private resolveDaemonId(id: string): string | null {
         if (this.adapters.has(id)) return id
@@ -72,6 +73,11 @@ class StandaloneConnectionManager {
         this.ptyInputSender = fn
     }
 
+    /** The /ws subscribe sender (StandaloneDaemonContext) — terminal output is subscription-scoped. */
+    registerDataSender(fn: (daemonId: string, data: SubscribeRequest | UnsubscribeRequest) => boolean): void {
+        this.dataSender = fn
+    }
+
     sendData(_daemonId: string, _data: any): boolean { return false }
     sendPtyInput(daemonId: string, sessionId: string, data: string): boolean {
         return this.ptyInputSender ? this.ptyInputSender(daemonId, sessionId, data) : false
@@ -84,15 +90,6 @@ class StandaloneConnectionManager {
 
     emitScreenshot(daemonId: string, blob: Blob): void {
         this.screenshotCallbacks.forEach((callback) => callback(daemonId, blob))
-    }
-
-    onStatus(callback: StatusCallback): () => void {
-        this.statusCallbacks.add(callback)
-        return () => { this.statusCallbacks.delete(callback) }
-    }
-
-    emitStatus(daemonId: string, payload: any): void {
-        this.statusCallbacks.forEach((callback) => callback(daemonId, payload))
     }
 
     emitRuntimeSnapshot(
@@ -124,11 +121,28 @@ class StandaloneConnectionManager {
         })
     }
 
-    onRuntimeEvent(sessionId: string, callback: (event: RuntimeEvent) => void): () => void {
+    onRuntimeEvent(sessionId: string, callback: (event: RuntimeEvent) => void, daemonId?: string): () => void {
         const listeners = this.runtimeListeners.get(sessionId) || new Set<(event: RuntimeEvent) => void>()
         listeners.add(callback)
         this.runtimeListeners.set(sessionId, listeners)
+        // The daemon sends a session's terminal bytes only to clients that
+        // subscribed to it (same contract as cloud's P2P peers).
+        const sender = this.dataSender
+        const unsubscribeRuntimeOutput = sender && sessionId
+            ? subscriptionManager.subscribe(
+                { sendData: (id, data) => sender(id, data) },
+                daemonId || this.resolveDaemonId('standalone') || 'standalone',
+                {
+                    type: 'subscribe',
+                    topic: 'session.runtime_output',
+                    key: `runtime:${sessionId}`,
+                    params: { targetSessionId: sessionId },
+                },
+                () => {},
+            )
+            : undefined
         return () => {
+            unsubscribeRuntimeOutput?.()
             const current = this.runtimeListeners.get(sessionId)
             if (!current) return
             current.delete(callback)

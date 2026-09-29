@@ -8,9 +8,13 @@
  * New standalone behaviour this transport carries (D8):
  *  - `status_event` frames (tool approval / completion toasts) — the same
  *    allow-listed projection cloud sends over P2P (status/status-event.ts);
- *  - a `type:'status'` push on every command that invalidates daemon.metadata,
- *    from ANY entry (WS, HTTP, IPC compat, provider REST — C11);
  *  - a daemon.metadata flush on `mesh_state`.
+ *
+ * Dashboard state reaches the page on ONE lane: the keyed `daemon.metadata`
+ * topic (snapshot, then deltas). The old `type:'status'` full-snapshot push is
+ * gone (data-path audit 2026-09-29 P0-3); a connecting client gets only a
+ * `standalone_hello` identity frame. Terminal bytes go only to clients that
+ * subscribed `session.runtime_output` for that session (P1-10).
  */
 
 import { WebSocket } from 'ws';
@@ -23,9 +27,6 @@ import {
   type SessionHostController,
   type SessionHostDiagnosticsSnapshot,
 } from '@adhdev/daemon-core';
-import type { StandaloneChatTailFanout } from './standalone-chat-tail.js';
-
-const CHAT_OUTPUT_FLUSH_DEBOUNCE_MS = 700;
 
 /** Send one JSON frame to every OPEN dashboard socket. */
 export function broadcastToOpenClients(clients: Iterable<WebSocket>, message: unknown): void {
@@ -37,16 +38,23 @@ export function broadcastToOpenClients(clients: Iterable<WebSocket>, message: un
   }
 }
 
+/** Identity frame sent on connect: which daemon this socket talks to (no state). */
+export const STANDALONE_HELLO_TYPE = 'standalone_hello';
+export function standaloneHelloFrame(daemonId: string): { type: typeof STANDALONE_HELLO_TYPE; daemonId: string } {
+  return { type: STANDALONE_HELLO_TYPE, daemonId };
+}
+
 export interface StandaloneHostTransportDeps {
   statusInstanceId: string;
   version: string;
   clients: Set<WebSocket>;
   wsByConnectionId: Map<string, WebSocket>;
-  chatTail: Pick<StandaloneChatTailFanout, 'flush' | 'onPrepared'>;
   getRuntime(): DaemonRuntime | null;
   getSessionHostControl(): Pick<SessionHostController, 'getDiagnostics'> | null;
-  /** The legacy `type:'status'` push (throttled 500 ms, signature-deduped). */
-  scheduleBroadcastStatus(): void;
+  /** OPEN-or-not clients subscribed to a session's `session.runtime_output`. */
+  runtimeOutputTargets(sessionId: string): Iterable<WebSocket>;
+  /** Flush one registry topic now (no-op without subscribers). */
+  flushTopic(topic: 'daemon.metadata'): void;
 }
 
 export function createStandaloneHostTransport(deps: StandaloneHostTransportDeps): DaemonHostTransport {
@@ -67,26 +75,6 @@ export function createStandaloneHostTransport(deps: StandaloneHostTransportDeps)
       },
       isAlive: (connectionId) => deps.wsByConnectionId.has(connectionId),
     },
-    chatTail: {
-      // Union decision #5: the debounce stays a per-daemon constant.
-      flushDebounceMs: CHAT_OUTPUT_FLUSH_DEBOUNCE_MS,
-      scheduleGate: () => deps.clients.size > 0,
-      flushActive: () => { void deps.chatTail.flush(undefined, { onlyActive: true }); },
-      // Guarantee the just-finalized session's completion tail reaches the
-      // browser once, even if its native tail lands outside the hot window.
-      flushCompleted: (sessionIds) => { void deps.chatTail.flush(undefined, { forceSessionIds: sessionIds }); },
-      readSource: 'standalone',
-      onMissingSession: ({ sessionId, consecutiveMisses, warnNow }) => {
-        // One warn per streak; later misses stay at debug.
-        const message = `[chat_tail] session ${sessionId} is not in the live registry`;
-        if (warnNow) {
-          LOG.warn('Standalone', `${message} — backing off, and dropping the subscription if it stays absent`);
-        } else {
-          LOG.debug('Standalone', `${message} (miss #${consecutiveMisses})`);
-        }
-      },
-      onPrepared: deps.chatTail.onPrepared,
-    },
     onFlushError: (topic, error, ctx) => {
       LOG.warn('Standalone', `[${topic}] skipped workspace=${ctx.detail || ''} key=${ctx.key} error=${(error as any)?.message || error}`);
     },
@@ -95,7 +83,7 @@ export function createStandaloneHostTransport(deps: StandaloneHostTransportDeps)
       return control ? control.getDiagnostics(opts) as Promise<SessionHostDiagnosticsSnapshot> : null;
     },
     broadcastSessionOutput: (sessionId, data) => {
-      broadcastToOpenClients(deps.clients, { type: 'session_output', sessionId, data });
+      broadcastToOpenClients(deps.runtimeOutputTargets(sessionId), { type: 'session_output', sessionId, data });
     },
     // Checklist item 3: tool-approval / completion toasts reach the
     // standalone dashboard as `status_event`, same projection as cloud's
@@ -103,13 +91,10 @@ export function createStandaloneHostTransport(deps: StandaloneHostTransportDeps)
     sendStatusEvent: (payload) => {
       broadcastToOpenClients(deps.clients, { type: 'status_event', payload, timestamp: Date.now() });
     },
-    onStatusFacts: () => deps.scheduleBroadcastStatus(),
     onCommandExecuted: (e) => {
-      // Legacy `type:'status'` snapshot push — throttled (500ms) and
-      // signature-deduped, so eager triggering is cheap. The topic flush
-      // itself rides the host runtime's invalidate. A fast-flush command
-      // (launch, interactive prompt answer) pushes immediately too.
-      if (e.invalidates.has('daemon.metadata') || (e.fastFlush && e.success)) deps.scheduleBroadcastStatus();
+      // A fast-flush command (launch, interactive prompt answer) pushes
+      // daemon.metadata now — the runtime's invalidation skips it for those.
+      if (e.fastFlush && e.success) deps.flushTopic('daemon.metadata');
     },
     metadataExtras: (status, params) => {
       const runtime = deps.getRuntime();

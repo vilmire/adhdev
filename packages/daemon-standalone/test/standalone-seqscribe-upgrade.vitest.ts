@@ -168,10 +168,7 @@ describe('/ws/seqscribe upgrade gate', () => {
     expect((await dial(`${h.base}/ws/other`)).outcome).toBe('destroyed');
   });
 
-  it('kill switch parses only the explicit off spelling', () => {
-    expect(upgrade.isStandaloneTranscriptLaneDisabled({ ADHDEV_STANDALONE_TRANSCRIPT_LANE: 'off' })).toBe(true);
-    expect(upgrade.isStandaloneTranscriptLaneDisabled({ ADHDEV_STANDALONE_TRANSCRIPT_LANE: ' OFF ' })).toBe(true);
-    expect(upgrade.isStandaloneTranscriptLaneDisabled({ ADHDEV_STANDALONE_TRANSCRIPT_LANE: '0' })).toBe(false);
-    expect(upgrade.isStandaloneTranscriptLaneDisabled({})).toBe(false);
+  it('has no kill switch — the replica lane is the only chat path', () => {
+    expect(upgrade).not.toHaveProperty('isStandaloneTranscriptLaneDisabled');
   });
 });

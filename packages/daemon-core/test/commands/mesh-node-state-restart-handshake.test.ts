@@ -9,8 +9,8 @@
  *   - member: the push subscription set survives a restart and is pushed as soon
  *     as the mesh transport / the link to the coordinator is up;
  *   - coordinator: a member's link (re)opening handshakes its held nodes now
- *     (nudge, falling back to the probe for a member that is not subscribed or
- *     too old to know the nudge);
+ *     (a nudge — which also re-subscribes a member that lost its subscription;
+ *     the coordinator never probes);
  *   - coordinator: restart_daemon_node forwarded to a member marks its held build
  *     pending, so the new process's first report is taken even with an older
  *     timestamp, and the replaced build is not served as live meanwhile.
@@ -164,15 +164,14 @@ describe('member restart → coordinator reflects the new daemonBuild promptly',
       routers.push(coordinator)
       await coordinator.execute('mesh_status', { meshId: MESH_ID, inlineMesh: meshWith(memberRepo.repoRoot, coordRepo.repoRoot) })
 
-      // rc.60 member process: the coordinator's handshake probe subscribed it.
+      // rc.60 member process: the coordinator's first-contact nudge subscribed it.
       const member60 = createRouter({ dispatchMeshCommand: memberDispatch, statusInstanceId: MEMBER_DAEMON })
       routers.push(member60)
-      await member60.execute('git_status', {
-        workspace: memberRepo.repoRoot,
-        meshStateSubscription: { meshId: MESH_ID, nodeId: MEMBER_NODE },
+      await member60.execute('mesh_node_state_nudge', {
+        meshId: MESH_ID, nodeId: MEMBER_NODE, workspace: memberRepo.repoRoot,
         [MESH_SENDER_DAEMON_ID_ARG]: COORD_DAEMON,
       }, 'mesh')
-      await member60.meshNodeStatePusher.pushRuntimeChanges()
+      await waitFor(() => store.get(MESH_ID, MEMBER_NODE)?.runtime?.daemonBuild?.version === RC60.version, 5_000)
       expect(store.get(MESH_ID, MEMBER_NODE)?.runtime?.daemonBuild?.version).toBe(RC60.version)
       const heldBefore = store.get(MESH_ID, MEMBER_NODE)!.runtimeObservedAt!
 
@@ -193,9 +192,8 @@ describe('member restart → coordinator reflects the new daemonBuild promptly',
       const status: any = await coordinator.execute('mesh_status', { meshId: MESH_ID }, 'p2p')
       const node = status.nodes.find((n: any) => n.nodeId === MEMBER_NODE)
       expect(node.heldRuntime.daemonBuild).toMatchObject({ version: RC61.version, commit: RC61.commit })
-      // The coordinator did not have to probe anything for it.
-      expect(coordDispatch.mock.calls.some((call: any) => call[1] === 'git_status' && call[0] === MEMBER_DAEMON
-        && call[2]?.meshStateSubscription)).toBe(false)
+      // The coordinator never read the member.
+      expect(coordDispatch.mock.calls.some((call: any) => call[1] === 'git_status' || call[1] === 'get_status_metadata')).toBe(false)
     } finally {
       for (const r of routers) r.meshNodeStatePusher.stop()
       await cleanupTempDir(coordRepo.dir)
@@ -205,36 +203,29 @@ describe('member restart → coordinator reflects the new daemonBuild promptly',
 })
 
 describe('coordinator — reconnect-triggered handshake', () => {
-  async function setup(nudgeAnswer: Record<string, unknown>) {
+  async function setup(memberTakesNudge: boolean) {
     const store = new MeshNodeGitStateStore()
     const now = Date.now()
-    // Held: a live member push from the rc.60 process, observed just now — far
-    // below the 600 s stale threshold, so the old rule would never re-probe it.
+    // Held: a live member push from the rc.60 process, observed just now.
     store.recordObservation({ meshId: MESH_ID, nodeId: MEMBER_NODE, workspace: REMOTE_WORKSPACE, git: remoteGit(), source: 'member_push', observedAt: now })
     store.recordRuntimeObservation({ meshId: MESH_ID, nodeId: MEMBER_NODE, workspace: REMOTE_WORKSPACE, runtime: runtimeOf(RC60, 'boot-60'), source: 'member_push', observedAt: now, daemonId: MEMBER_DAEMON })
     let coordinator!: DaemonCommandRouter
     const calls: string[] = []
-    // A restarted member: no push subscription any more. Answering the handshake
-    // probe (re-)subscribes it, and it pushes its rc.61 state right away.
-    const dispatch = vi.fn(async (daemonId: string, cmd: string, args: Record<string, unknown>) => {
+    // A restarted member: the nudge (re)subscribes it and it pushes its rc.61 state right away.
+    const dispatch = vi.fn(async (daemonId: string, cmd: string) => {
       calls.push(cmd)
       if (daemonId !== MEMBER_DAEMON) throw new Error('unexpected daemon')
-      if (cmd === 'mesh_node_state_nudge') return nudgeAnswer
-      if (cmd === 'git_status') {
-        if (args.meshStateSubscription) {
-          setTimeout(() => {
-            void coordinator.execute('mesh_node_git_report', {
-              meshId: MESH_ID, nodeId: MEMBER_NODE, workspace: REMOTE_WORKSPACE,
-              git: remoteGit(), observedAt: Date.now(),
-              runtime: runtimeOf(RC61, 'boot-61'), runtimeObservedAt: Date.now(),
-              [MESH_SENDER_DAEMON_ID_ARG]: MEMBER_DAEMON,
-            }, 'mesh')
-          }, 0)
-        }
-        return { success: true, status: remoteGit({ lastCheckedAt: Date.now() }) }
-      }
-      if (cmd === 'get_status_metadata') {
-        return { success: true, status: { instanceId: MEMBER_DAEMON, sessions: [] }, daemonBuild: { ...RC61, track: 'preview' } }
+      if (cmd === 'mesh_node_state_nudge') {
+        if (!memberTakesNudge) return { success: true, subscribed: false }
+        setTimeout(() => {
+          void coordinator.execute('mesh_node_git_report', {
+            meshId: MESH_ID, nodeId: MEMBER_NODE, workspace: REMOTE_WORKSPACE,
+            git: remoteGit(), observedAt: Date.now(),
+            runtime: runtimeOf(RC61, 'boot-61'), runtimeObservedAt: Date.now(),
+            [MESH_SENDER_DAEMON_ID_ARG]: MEMBER_DAEMON,
+          }, 'mesh')
+        }, 0)
+        return { success: true, subscribed: true }
       }
       return { success: false, error: `Unknown command: ${cmd}` }
     })
@@ -246,15 +237,15 @@ describe('coordinator — reconnect-triggered handshake', () => {
     return { store, coordinator, calls, onMeshStateChange }
   }
 
-  it('a member link opening handshakes its held nodes now — nudge, then the probe when the member is no longer subscribed', async () => {
-    const { store, coordinator, calls, onMeshStateChange } = await setup({ success: true, subscribed: false })
+  it('a member link opening handshakes its held nodes now — the nudge re-subscribes it and its push lands the new build', async () => {
+    const { store, coordinator, calls, onMeshStateChange } = await setup(true)
     try {
       ;(coordinator as any).noteMeshPeerOpened?.(MEMBER_DAEMON)
       const reflected = await waitFor(() => store.get(MESH_ID, MEMBER_NODE)?.runtime?.daemonBuild?.version === RC61.version, 5_000)
       expect(reflected).toBe(true)
       await coordinator.meshNodeGitRefresher.whenIdle()
-      expect(calls[0]).toBe('mesh_node_state_nudge')
-      expect(calls).toContain('git_status')
+      // The nudge is the ONLY thing the coordinator sent — no probe, no runtime read.
+      expect(calls).toEqual(['mesh_node_state_nudge'])
       // The new build is news for every viewer.
       expect(onMeshStateChange).toHaveBeenCalledWith(MESH_ID)
       expect(store.get(MESH_ID, MEMBER_NODE)?.handshakePendingSince ?? null).toBeNull()
@@ -263,26 +254,15 @@ describe('coordinator — reconnect-triggered handshake', () => {
     }
   })
 
-  it('an older member that does not know the nudge is covered by the handshake probe (mixed-version fleet)', async () => {
-    const { store, coordinator, calls } = await setup({ success: false, error: 'Unknown command: mesh_node_state_nudge' })
-    try {
-      ;(coordinator as any).noteMeshPeerOpened?.(MEMBER_DAEMON)
-      const reflected = await waitFor(() => store.get(MESH_ID, MEMBER_NODE)?.runtime?.daemonBuild?.version === RC61.version, 5_000)
-      expect(reflected).toBe(true)
-      await coordinator.meshNodeGitRefresher.whenIdle()
-      expect(calls).toContain('git_status')
-    } finally {
-      coordinator.meshNodeStatePusher.stop()
-    }
-  })
-
-  it('a still-subscribed member only gets the nudge (no probe)', async () => {
-    const { coordinator, calls } = await setup({ success: true, subscribed: true })
+  it('a member that refuses the nudge is recorded unreachable and its held build is not live — never probed', async () => {
+    const { store, coordinator, calls } = await setup(false)
     try {
       ;(coordinator as any).noteMeshPeerOpened?.(MEMBER_DAEMON)
       await waitFor(() => calls.includes('mesh_node_state_nudge'), 5_000)
       await coordinator.meshNodeGitRefresher.whenIdle()
       expect(calls).toEqual(['mesh_node_state_nudge'])
+      expect(typeof store.get(MESH_ID, MEMBER_NODE)?.unreachableSince).toBe('number')
+      expect(isHeldRuntimeLive(store.get(MESH_ID, MEMBER_NODE))).toBe(false)
     } finally {
       coordinator.meshNodeStatePusher.stop()
     }
@@ -352,8 +332,8 @@ describe('member push — restart survival', () => {
     const dispatch = vi.fn(async () => ({ success: true, accepted: true }))
     const readGit = async () => remoteGit({ lastCheckedAt: Date.now() })
     const before = new MeshNodeStatePusher({ dispatch, readGit, persistence, startTimer: () => ({ stop() {} }) })
-    before.register({ coordinatorDaemonId: 'coord_a', meshId: MESH_ID, nodeId: MEMBER_NODE, workspace: REMOTE_WORKSPACE, git: remoteGit() })
-    before.register({ coordinatorDaemonId: 'coord_b', meshId: 'mesh_b', nodeId: 'node_b', workspace: REMOTE_WORKSPACE, git: remoteGit() })
+    before.selfRegister({ coordinatorDaemonId: 'coord_a', meshId: MESH_ID, nodeId: MEMBER_NODE, workspace: REMOTE_WORKSPACE })
+    before.selfRegister({ coordinatorDaemonId: 'coord_b', meshId: 'mesh_b', nodeId: 'node_b', workspace: REMOTE_WORKSPACE })
     expect(saved[saved.length - 1]).toHaveLength(2)
     before.stop()
 
@@ -379,9 +359,8 @@ describe('member push — restart survival', () => {
     const repo = await createTempGitRepo('restart-persist-')
     const router = createRouter({ dispatchMeshCommand: vi.fn(async () => ({ success: true, accepted: true })), statusInstanceId: MEMBER_DAEMON })
     try {
-      await router.execute('git_status', {
-        workspace: repo.repoRoot,
-        meshStateSubscription: { meshId: MESH_ID, nodeId: MEMBER_NODE },
+      await router.execute('mesh_node_state_nudge', {
+        meshId: MESH_ID, nodeId: MEMBER_NODE, workspace: repo.repoRoot,
         [MESH_SENDER_DAEMON_ID_ARG]: COORD_DAEMON,
       }, 'mesh')
       const file = join(configDir, 'mesh-node-push-subscriptions.json')
@@ -396,20 +375,18 @@ describe('member push — restart survival', () => {
 })
 
 describe('no periodic probing', () => {
-  it('after a reconnect handshake lands, mesh_status reads never re-probe a pushing member inside the stale window, and no timer is started', async () => {
+  it('after a reconnect handshake lands, mesh_status reads never contact a pushing member again, and no timer is started', async () => {
     let now = 5_000_000
     const store = new MeshNodeGitStateStore(null, () => now)
-    const probe = vi.fn(async () => remoteGit({ lastCheckedAt: now }))
     const nudge = vi.fn(async () => true)
     const setIntervalSpy = vi.spyOn(globalThis, 'setInterval')
-    const refresher = new MeshNodeGitRefresher({ store, probe, nudge, onSettled: () => {}, now: () => now })
+    const refresher = new MeshNodeGitRefresher({ store, nudge, onSettled: () => {}, now: () => now })
     const target = { meshId: MESH_ID, nodeId: MEMBER_NODE, daemonId: MEMBER_DAEMON, workspace: REMOTE_WORKSPACE }
     store.recordObservation({ ...target, git: remoteGit(), source: 'member_push', observedAt: now })
     store.markHandshakePending(MESH_ID, MEMBER_NODE, 'reconnect')
-    expect(refresher.handshakeDaemon(MESH_ID, MEMBER_DAEMON, [target])).toBe(true)
+    expect(refresher.handshakeDaemon(MESH_ID, MEMBER_DAEMON, [target])).toBe(1)
     await refresher.whenIdle()
     expect(nudge).toHaveBeenCalledTimes(1)
-    expect(probe).not.toHaveBeenCalled() // subscribed member: the nudge suffices
     // The member pushes; the handshake is over.
     store.recordObservation({ ...target, git: remoteGit(), source: 'member_push', observedAt: now })
     const mesh = meshWith(REMOTE_WORKSPACE, '/nonexistent/coord')
@@ -418,7 +395,6 @@ describe('no periodic probing', () => {
       kickMeshNodeGitRefreshes({ meshId: MESH_ID, mesh, store, refresher, locality: { localDaemonId: COORD_DAEMON }, refresh: false, now })
       await refresher.whenIdle()
     }
-    expect(probe).not.toHaveBeenCalled()
     expect(nudge).toHaveBeenCalledTimes(1)
     expect(setIntervalSpy).not.toHaveBeenCalled()
     setIntervalSpy.mockRestore()

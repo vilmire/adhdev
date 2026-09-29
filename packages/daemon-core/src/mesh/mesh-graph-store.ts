@@ -666,13 +666,13 @@ export class MeshGraphStore {
      * persistOutputVersion writes an output for every terminal commit including
      * the legacy no-node path, where graph_id is NULL; those rows are by
      * definition unreachable from any graph, so a graph cascade must not use them
-     * as a starting point. Their own retention is a separate slice.
+     * as a starting point. Their retention rides the terminal queue prune
+     * (`pruneTerminalQueueEntriesDetailed`).
      *
-     * When `enforce` is false (the shipped default) this performs the complete
-     * selection and returns the counts it WOULD delete, issuing no DELETE.
+     * Always deletes (the observe-only mode was removed 2026-09-29). Returns
+     * the per-table counts removed.
      */
-    pruneTerminalGraphs(olderThanMs: number, opts?: { enforce?: boolean }): MeshGraphRetentionCounts {
-        const enforce = opts?.enforce === true;
+    pruneTerminalGraphs(olderThanMs: number): MeshGraphRetentionCounts {
         const cutoffIso = new Date(Date.now() - Math.max(0, olderThanMs)).toISOString();
         const nowIso = new Date().toISOString();
         return this.db.transaction((): MeshGraphRetentionCounts => {
@@ -693,7 +693,7 @@ export class MeshGraphStore {
             const counts: MeshGraphRetentionCounts = {
                 graphs: 0, nodes: 0, edges: 0, outputs: 0,
                 gates: 0, workspaceIntents: 0, outbox: 0,
-                skippedGraphs: skipped, enforced: enforce,
+                skippedGraphs: skipped,
             };
 
             // Chunked to stay well under SQLite's bind-parameter limit, same as
@@ -701,18 +701,7 @@ export class MeshGraphStore {
             for (let i = 0; i < deletable.length; i += 500) {
                 const chunk = deletable.slice(i, i + 500);
                 const marks = chunk.map(() => '?').join(',');
-                if (!enforce) {
-                    // OBSERVE: count exactly what the DELETEs below would remove.
-                    counts.outbox += this.countIn(`mesh_graph_outbox`, 'graph_id', marks, chunk);
-                    counts.workspaceIntents += this.countIn(`mesh_graph_workspace_intents`, 'graph_id', marks, chunk);
-                    counts.gates += this.countIn(`mesh_graph_gates`, 'graph_id', marks, chunk);
-                    counts.edges += this.countIn(`mesh_task_graph_edges`, 'graph_id', marks, chunk);
-                    counts.outputs += this.countIn(`mesh_task_outputs`, 'graph_id', marks, chunk, true);
-                    counts.nodes += this.countIn(`mesh_task_graph_nodes`, 'graph_id', marks, chunk);
-                    counts.graphs += this.countIn(`mesh_task_graphs`, 'graph_id', marks, chunk);
-                    continue;
-                }
-                // ENFORCE: children before parents. Order is documentation only
+                // Children before parents. Order is documentation only
                 // (no FKs enforce it), but it keeps the invariant legible and
                 // leaves a partial failure with the parent still present.
                 counts.outbox += this.db.prepare(
@@ -762,14 +751,6 @@ export class MeshGraphStore {
     }
 
     /** OBSERVE-mode counterpart of one cascade DELETE. */
-    private countIn(table: string, column: string, marks: string, chunk: string[], notNull = false): number {
-        const guard = notNull ? `${column} IS NOT NULL AND ` : '';
-        const r = this.db.prepare(
-            `SELECT COUNT(*) AS n FROM ${table} WHERE ${guard}${column} IN (${marks})`
-        ).get(...chunk) as { n: number };
-        return r.n;
-    }
-
     /**
      * Retention prune for DELIVERED/FAILED mesh_graph_outbox rows — a cross-graph
      * sweep independent of the graph cascade, because an outbox row may carry a
@@ -783,18 +764,13 @@ export class MeshGraphStore {
      * attempt_count/next_attempt_at_ms with it), so the age gate is what makes it
      * safe to collect: a row still under retry has a recent updated_at.
      *
-     * Returns the rows deleted, or in observe mode the rows that would be.
+     * Returns the rows deleted.
      */
-    pruneTerminalOutbox(olderThanMs: number, opts?: { enforce?: boolean }): number {
+    pruneTerminalOutbox(olderThanMs: number): number {
         const cutoffIso = new Date(Date.now() - Math.max(0, olderThanMs)).toISOString();
-        const where = `status IN ('delivered', 'failed') AND updated_at < ?`;
-        if (opts?.enforce !== true) {
-            const r = this.db.prepare(
-                `SELECT COUNT(*) AS n FROM mesh_graph_outbox WHERE ${where}`
-            ).get(cutoffIso) as { n: number };
-            return r.n;
-        }
-        return this.db.prepare(`DELETE FROM mesh_graph_outbox WHERE ${where}`).run(cutoffIso).changes;
+        return this.db.prepare(
+            `DELETE FROM mesh_graph_outbox WHERE status IN ('delivered', 'failed') AND updated_at < ?`,
+        ).run(cutoffIso).changes;
     }
 }
 
@@ -809,8 +785,6 @@ export interface MeshGraphRetentionCounts {
     outbox: number;
     /** Terminal graphs held back by a workspace/outbox exception. */
     skippedGraphs: number;
-    /** false = observe mode; the counts are what WOULD have been deleted. */
-    enforced: boolean;
 }
 
 // ── Row mappers (snake_case columns → camelCase rows) ────────────────────────

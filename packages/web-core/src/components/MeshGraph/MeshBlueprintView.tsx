@@ -33,7 +33,7 @@ import type { MeshGraphGateView, MeshGraphView, RepoMeshQueueTask, RepoMeshStatu
 import { unwrapDaemonCommandBody } from '../../utils/daemon-command-envelope'
 import { IconRefresh } from '../Icons'
 import { useTheme } from '../../hooks/useTheme'
-import { getMeshGraphTheme } from './meshGraphTheme'
+import { getMeshGraphTheme, meshToggleChipClass } from './meshGraphTheme'
 import { collectMachineQuotaGroups, machineKeyForMeshNode, resolveMachineLabel } from './MeshObservabilitySurface/meshSurfaceHelpers'
 import { MeshMachineQuotaCard } from './MeshObservabilitySurface/MeshStatusTab'
 import MeshBlueprintList from './MeshBlueprintList'
@@ -339,13 +339,11 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                         setSchedDetailDifficulty(ROUTE_PREVIEW_COMPACT_DIFFICULTY)
                         setSchedDetailOpen(open => !open)
                     }}
-                    className={`flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-3xs transition-colors ${meshTheme.isDark
-                        ? 'border-white/10 bg-slate-950/70 text-slate-300 hover:bg-slate-900'
-                        : 'border-slate-200 bg-white/95 text-slate-600 hover:bg-slate-50'}`}
+                    className={meshToggleChipClass(schedDetailOpen)}
                     title={t('mesh.blueprint.schedUnpinnedTitle')}
                 >
-                    <span className="uppercase tracking-wide text-4xs opacity-75">{t('mesh.blueprint.schedulingShort')}</span>
-                    <span className="text-green-500">→ {compactPredictedSlot ?? t('mesh.blueprint.schedNoWinner')}</span>
+                    <span className="text-text-muted">{t('mesh.blueprint.schedulingShort')}</span>
+                    <span className="text-text-primary">→ {compactPredictedSlot ?? t('mesh.blueprint.schedNoWinner')}</span>
                 </button>
             )}
             {!graphsLoading && (
@@ -361,9 +359,7 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                         <button
                             type="button"
                             onClick={() => setGraphLimit(nextBlueprintGraphLimit)}
-                            className={`shrink-0 whitespace-nowrap rounded-full border px-2 py-0.5 font-medium transition-colors ${meshTheme.isDark
-                                ? 'border-sky-400/25 bg-sky-500/10 text-sky-200 hover:bg-sky-500/20'
-                                : 'border-sky-300 bg-sky-50 text-sky-700 hover:bg-sky-100'}`}
+                            className={meshToggleChipClass(false)}
                         >
                             {t('mesh.graphs.loadMore', {
                                 count: Math.min(BLUEPRINT_GRAPH_LOAD_MORE_STEP, graphPagination.hiddenCount),
@@ -377,7 +373,7 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
 
     return (
         <div className="flex min-h-0 flex-1 flex-col gap-1.5 p-1.5">
-            {graphsError && <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-400">{graphsError}</div>}
+            {graphsError && <div className="rounded-lg border border-status-error/35 px-3 py-2 text-xs text-status-error">{graphsError}</div>}
 
             {/* ── Body — the drafting-paper shell keeps the blueprint identity;
                 the LIST inside scrolls vertically (no pan/zoom canvas left at
@@ -430,12 +426,12 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                     Point-in-time premise stated in flow (no hover-only caveats
                     — phones have no hover). ── */}
                 {schedDetailOpen && schedMatrix && (
-                    <div className={`absolute right-2 top-9 z-20 max-h-[45dvh] w-[min(620px,calc(100%-16px))] overflow-y-auto rounded-lg border p-2.5 text-2xs shadow-md ${meshTheme.isDark ? 'border-white/10 bg-slate-950/98' : 'border-slate-300 bg-white'}`}>
+                    <div className="absolute right-2 top-9 z-20 max-h-[45dvh] w-[min(620px,calc(100%-16px))] overflow-y-auto rounded-lg border border-border-default bg-surface-primary p-2.5 text-2xs shadow-md">
                         <div className="mb-2 flex flex-wrap items-center gap-1.5">
                             {(['easy', 'medium', 'difficult', 'freeform'] as const).map(difficulty => (
                                 <button key={difficulty} type="button"
                                     className={`rounded-md px-2 py-0.5 text-3xs font-semibold uppercase tracking-wide ${schedDetailDifficulty === difficulty
-                                        ? (meshTheme.isDark ? 'bg-white/10 text-slate-100' : 'bg-slate-200 text-slate-800')
+                                        ? 'bg-bg-glass-hover text-text-primary'
                                         : 'text-text-muted hover:bg-bg-glass'}`}
                                     onClick={() => { setSchedDetailDifficulty(difficulty); setSchedQuotaOpen(false) }}>
                                     {difficulty}
@@ -443,7 +439,7 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                             ))}
                             <button type="button"
                                 className={`rounded-md px-2 py-0.5 text-3xs font-semibold uppercase tracking-wide ${schedQuotaOpen
-                                    ? (meshTheme.isDark ? 'bg-white/10 text-slate-100' : 'bg-slate-200 text-slate-800')
+                                    ? 'bg-bg-glass-hover text-text-primary'
                                     : 'text-text-muted hover:bg-bg-glass'}`}
                                 title={t('mesh.blueprint.schedQuotaButtonTitle')}
                                 onClick={() => setSchedQuotaOpen(open => !open)}>
@@ -583,7 +579,7 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                                             return (
                                                 <Fragment key={rowKey}>
                                                     <tr
-                                                        className={`cursor-pointer border-t ${meshTheme.isDark ? 'border-white/5' : 'border-slate-100'} ${row.status === 'next' ? 'bg-green-500/5' : row.status === 'floor' ? 'opacity-55' : ''}`}
+                                                        className={`cursor-pointer border-t border-border-subtle ${row.status === 'next' ? 'bg-green-500/5' : row.status === 'floor' ? 'opacity-55' : ''}`}
                                                         title={scoreSummary(row)}
                                                         onClick={() => setSchedExpandedRow(expanded ? null : rowKey)}
                                                     >
@@ -599,7 +595,7 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
                                                         </td>
                                                     </tr>
                                                     {expanded && (
-                                                        <tr className={meshTheme.isDark ? 'border-t border-white/5' : 'border-t border-slate-100'}>
+                                                        <tr className="border-t border-border-subtle">
                                                             <td colSpan={showNodeCol ? 4 : 3} className="py-1 pl-2 text-3xs text-text-muted">
                                                                 {scoreSummary(row)}
                                                             </td>

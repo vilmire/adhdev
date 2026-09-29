@@ -1,8 +1,8 @@
 /**
  * Coordinator-held node state (mesh/mesh-node-git-state.ts): the dashboard's
  * mesh_status is answered from the coordinator's last-known per-node git state
- * immediately; remote freshness happens in the background (member pushes + the
- * coordinator's own stale-state probe), never on the request path.
+ * immediately; remote freshness comes from member pushes only — the coordinator
+ * never reads a member, it only asks one to push (nudge), never on the request path.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdtemp, writeFile } from 'node:fs/promises'
@@ -19,7 +19,8 @@ import {
   ensureMeshNodeGitStateSchema,
 } from '../../src/mesh/mesh-node-git-state'
 import { MeshNodeStatePusher } from '../../src/mesh/mesh-node-state-pusher'
-import { MeshNodeGitRefresher } from '../../src/mesh/mesh-node-git-refresher'
+import { MeshNodeGitRefresher, MESH_NODE_STATE_STALE_MS } from '../../src/mesh/mesh-node-git-refresher'
+import { kickMeshNodeGitRefreshes } from '../../src/commands/high-family/mesh-status-node-state'
 import { applyInlineMeshBranchConvergence } from '../../src/mesh/mesh-branch-convergence'
 import { MESH_SENDER_DAEMON_ID_ARG } from '../../src/commands/mesh-sender'
 import { createDefaultGitCommandServices } from '../../src/git/git-commands'
@@ -140,11 +141,10 @@ async function withinMs<T>(promise: Promise<T>, ms: number): Promise<T> {
 afterEach(resetMeshRuntimeStore)
 
 describe('mesh_status — coordinator-held node state', () => {
-  it('answers an explicit refresh immediately while the remote probe is still in flight (no request-path wait)', async () => {
+  it('answers an explicit refresh immediately while the first-contact nudge is still in flight (no request-path wait)', async () => {
     const { dir, repoRoot } = await createTempGitRepo('node-state-no-wait-')
     try {
-      // A peer that never answers (TURN-relayed / dead): the old refresh path
-      // waited on it past the dashboard's 30s P2P command deadline.
+      // A peer that never answers (TURN-relayed / dead).
       const dispatchMeshCommand = vi.fn(() => new Promise<unknown>(() => {}))
       const router = createRouter({ dispatchMeshCommand })
 
@@ -159,17 +159,10 @@ describe('mesh_status — coordinator-held node state', () => {
       const remote = remoteNodeOf(result)
       expect(remote.gitProbePending).toBe(true)
       expect(remote.gitObservation).toMatchObject({ source: 'none', observedAt: null, refreshing: true })
-      // Kicked exactly once, in the background, carrying the push subscription.
-      const gitProbes = dispatchMeshCommand.mock.calls.filter((call: any) => call[1] === 'git_status') as any[]
-      expect(gitProbes).toHaveLength(1)
-      expect(gitProbes[0][2]).toMatchObject({
-        workspace: REMOTE_WORKSPACE,
-        meshStateSubscription: { meshId: MESH_ID, nodeId: REMOTE_NODE },
-      })
-      // Nothing held for the node's runtime either: ONE background runtime probe of its daemon.
-      expect(dispatchMeshCommand.mock.calls.filter((call: any) => call[1] === 'get_status_metadata').map((call: any) => call[0])).toEqual([REMOTE_DAEMON])
       expect(remote.heldRuntime).toMatchObject({ source: 'none', refreshing: true, sessions: [] })
-      expect(dispatchMeshCommand).toHaveBeenCalledTimes(2)
+      // ONE message to the member — the nudge (with the workspace it subscribes) — never a read.
+      expect(dispatchMeshCommand).toHaveBeenCalledTimes(1)
+      expect(dispatchMeshCommand.mock.calls[0]).toEqual([REMOTE_DAEMON, 'mesh_node_state_nudge', { meshId: MESH_ID, nodeId: REMOTE_NODE, workspace: REMOTE_WORKSPACE }])
     } finally {
       await cleanupTempDir(dir)
     }
@@ -203,31 +196,36 @@ describe('mesh_status — coordinator-held node state', () => {
     }
   })
 
-  it('background refresh result lands in the store and publishes a mesh-state revision; the next read shows it', async () => {
+  it("the member's push (answering the first-contact nudge) lands in the store and publishes a revision; the next read shows it", async () => {
     const { dir, repoRoot } = await createTempGitRepo('node-state-bg-')
     try {
-      let answer: (value: unknown) => void = () => {}
-      const dispatchMeshCommand = vi.fn((_daemonId: string, cmd: string) => cmd === 'git_status'
-        ? new Promise<unknown>((resolve) => { answer = resolve })
-        : Promise.resolve({ success: true, status: { instanceId: REMOTE_DAEMON, sessions: [] } }))
+      const dispatchMeshCommand = vi.fn(async (_daemonId: string, cmd: string) => cmd === 'mesh_node_state_nudge'
+        ? { success: true, subscribed: true }
+        : { success: false })
       const onMeshStateChange = vi.fn()
       const router = createRouter({ dispatchMeshCommand, onMeshStateChange })
 
       const first: any = await router.execute('mesh_status', { meshId: MESH_ID, inlineMesh: inlineMesh(repoRoot) })
-      expect(remoteNodeOf(first).gitObservation.refreshing).toBe(true)
+      expect(remoteNodeOf(first).gitProbePending).toBe(true)
+      await router.meshNodeGitRefresher.whenIdle()
       expect(onMeshStateChange).not.toHaveBeenCalled()
 
-      answer({ success: true, status: remoteGit({ lastCheckedAt: Date.now() }) })
-      await router.meshNodeGitRefresher.whenIdle()
+      const pushed: any = await router.execute('mesh_node_git_report', {
+        meshId: MESH_ID, nodeId: REMOTE_NODE, workspace: REMOTE_WORKSPACE,
+        git: remoteGit({ lastCheckedAt: Date.now() }), observedAt: Date.now(),
+        runtime: { sessions: [] }, runtimeObservedAt: Date.now(),
+        [MESH_SENDER_DAEMON_ID_ARG]: REMOTE_DAEMON,
+      }, 'mesh')
+      expect(pushed).toMatchObject({ success: true, accepted: true, changed: true })
       expect(onMeshStateChange).toHaveBeenCalledWith(MESH_ID)
 
       const second: any = await router.execute('mesh_status', { meshId: MESH_ID, inlineMesh: inlineMesh(repoRoot) })
       const remote = remoteNodeOf(second)
-      expect(remote.gitObservation).toMatchObject({ source: 'coordinator_probe', refreshing: false })
+      expect(remote.gitObservation).toMatchObject({ source: 'member_push', refreshing: false })
       expect(remote.git.submodules.map((s: any) => s.path)).toEqual(['adhdev-providers', 'oss'])
-      expect(remote.heldRuntime).toMatchObject({ source: 'coordinator_probe', sessions: [] })
-      // Fresh → no second probe (one git probe + one runtime probe, both in the background).
-      expect(dispatchMeshCommand.mock.calls.map((call: any) => call[1]).sort()).toEqual(['get_status_metadata', 'git_status'])
+      expect(remote.heldRuntime).toMatchObject({ source: 'member_push', sessions: [] })
+      // Held → no second message; the only thing ever sent was the nudge.
+      expect(dispatchMeshCommand.mock.calls.map((call: any) => call[1])).toEqual(['mesh_node_state_nudge'])
     } finally {
       await cleanupTempDir(dir)
     }
@@ -238,11 +236,12 @@ describe('mesh_status — coordinator-held node state', () => {
     try {
       const dispatchMeshCommand = vi.fn(async () => { throw new Error('P2P timeout') })
       const store = new MeshNodeGitStateStore()
-      const observedAt = Date.now() - 3_600_000 // an hour old → stale → background probe
+      const observedAt = Date.now() - 3_600_000 // an hour old
       store.recordObservation({ meshId: MESH_ID, nodeId: REMOTE_NODE, workspace: REMOTE_WORKSPACE, git: remoteGit(), source: 'member_push', observedAt })
       const router = createRouter({ dispatchMeshCommand, store })
 
-      const first: any = await router.execute('mesh_status', { meshId: MESH_ID, inlineMesh: inlineMesh(repoRoot) })
+      // An explicit refresh nudges the member; it is unreachable.
+      const first: any = await router.execute('mesh_status', { meshId: MESH_ID, inlineMesh: inlineMesh(repoRoot), refresh: true })
       expect(first.success).toBe(true)
       await router.meshNodeGitRefresher.whenIdle()
 
@@ -252,9 +251,8 @@ describe('mesh_status — coordinator-held node state', () => {
       expect(remote.git.submodules).toHaveLength(2)
       expect(remote.gitObservation.observedAt).toBe(observedAt)
       expect(typeof remote.gitObservation.unreachableSince).toBe('number')
-      // The failure backoff holds: no immediate re-probe storm.
-      expect(dispatchMeshCommand.mock.calls.filter((call: any) => call[1] === 'git_status').length).toBeLessThanOrEqual(3)
-      expect(dispatchMeshCommand.mock.calls.filter((call: any) => call[1] === 'get_status_metadata').length).toBeLessThanOrEqual(1)
+      // A default read never nudges a node it already holds state for; nothing is ever read from it.
+      expect(dispatchMeshCommand.mock.calls.map((call: any) => call[1])).toEqual(['mesh_node_state_nudge'])
     } finally {
       await cleanupTempDir(dir)
     }
@@ -323,15 +321,15 @@ describe('store-served remote node — dashboard and MCP agree (rc.56 live regre
       now: () => now,
       startTimer: () => ({ stop() {} }),
     })
-    pusher.register({ coordinatorDaemonId: 'coord', meshId: MESH_ID, nodeId: REMOTE_NODE, workspace: REMOTE_WORKSPACE, git: remoteGit({ upstreamFetchedAt: now }) })
-    now += 60_000
-    await pusher.tick() // HEAD moved, no upstream refresh this tick
-    expect(refreshed).toEqual([false])
+    pusher.selfRegister({ coordinatorDaemonId: 'coord', meshId: MESH_ID, nodeId: REMOTE_NODE, workspace: REMOTE_WORKSPACE })
+    await pusher.tick() // first push verifies the upstream
+    expect(refreshed).toEqual([true])
     expect(dispatch).toHaveBeenCalledTimes(1)
     expect((dispatch.mock.calls[0] as any)[2].git).toMatchObject({ headCommit: 'h2', upstreamStatus: 'fresh' })
     now += 60_000
-    await pusher.tick()
-    expect(dispatch).toHaveBeenCalledTimes(1) // unchanged → quiet (no churn)
+    await pusher.tick() // no upstream refresh this tick: the read says 'unchecked'
+    expect(refreshed).toEqual([true, false])
+    expect(dispatch).toHaveBeenCalledTimes(1) // verified freshness carried → unchanged → quiet (no churn)
   })
 })
 
@@ -477,18 +475,17 @@ describe('mesh_node_git_report — held runtime (sessions / build / quota)', () 
     try {
       const dispatch = vi.fn(async () => ({ success: true, accepted: true }))
       const router = createRouter({ dispatchMeshCommand: dispatch })
-      await router.execute('git_status', {
-        workspace: repoRoot,
-        meshStateSubscription: { meshId: MESH_ID, nodeId: 'node_member' },
+      const nudged: any = await router.execute('mesh_node_state_nudge', {
+        meshId: MESH_ID, nodeId: 'node_member', workspace: repoRoot,
         [MESH_SENDER_DAEMON_ID_ARG]: 'daemon_coordinator',
       }, 'mesh')
-      await router.meshNodeStatePusher.pushRuntimeChanges()
+      expect(nudged).toMatchObject({ success: true, subscribed: true })
+      await vi.waitFor(() => expect(dispatch.mock.calls.some((call: any) => call[1] === 'mesh_node_git_report')).toBe(true))
       router.meshNodeStatePusher.stop()
       const report = dispatch.mock.calls.find((call: any) => call[1] === 'mesh_node_git_report') as any
-      expect(report).toBeTruthy()
       expect(report[0]).toBe('daemon_coordinator')
       expect(report[2]).toMatchObject({ meshId: MESH_ID, nodeId: 'node_member', runtime: { daemonId: 'daemon_local', sessions: [] } })
-      expect(report[2].git).toBeUndefined()
+      expect(report[2].git).toMatchObject({ isGitRepo: true })
     } finally {
       await cleanupTempDir(dir)
     }
@@ -512,12 +509,12 @@ describe('held runtime — member daemon → coordinator daemon, end to end', ()
       mesh.nodes[1] = { ...mesh.nodes[1], workspace: memberRepo.repoRoot, repoRoot: memberRepo.repoRoot }
       await coordinator.execute('mesh_status', { meshId: MESH_ID, inlineMesh: mesh })
 
-      // The coordinator's background git probe reaches the member → push subscription.
-      await member.execute('git_status', {
-        workspace: memberRepo.repoRoot,
-        meshStateSubscription: { meshId: MESH_ID, nodeId: REMOTE_NODE },
+      // The coordinator's first-contact nudge reaches the member → push subscription + first push.
+      await member.execute('mesh_node_state_nudge', {
+        meshId: MESH_ID, nodeId: REMOTE_NODE, workspace: memberRepo.repoRoot,
         [MESH_SENDER_DAEMON_ID_ARG]: 'daemon_local',
       }, 'mesh')
+      await vi.waitFor(() => expect(memberDispatch).toHaveBeenCalled())
       await member.meshNodeStatePusher.pushRuntimeChanges()
 
       // A worker session starts generating on the member (a lifecycle fact).
@@ -533,8 +530,8 @@ describe('held runtime — member daemon → coordinator daemon, end to end', ()
       expect(remote.heldRuntime).toMatchObject({ source: 'member_push', daemonId: REMOTE_DAEMON })
       expect(remote.heldRuntime.sessions.map((s: any) => [s.id, s.status])).toEqual([['sess-worker-1', 'generating']])
       expect(JSON.stringify(status)).not.toContain('PRIVATE WORK')
-      // Nothing the coordinator sent to the member was awaited for this answer.
-      expect(coordDispatch.mock.calls.every((call: any) => call[1] === 'git_status' || call[1] === 'get_status_metadata')).toBe(true)
+      // The coordinator only ever NUDGED the member (never read it), and awaited nothing for this answer.
+      expect(coordDispatch.mock.calls.every((call: any) => call[1] === 'mesh_node_state_nudge')).toBe(true)
     } finally {
       await cleanupTempDir(coordRepo.dir)
       await cleanupTempDir(memberRepo.dir)
@@ -543,24 +540,30 @@ describe('held runtime — member daemon → coordinator daemon, end to end', ()
 })
 
 describe('member push subscription', () => {
-  it('a coordinator git_status probe carrying meshStateSubscription registers a push subscription', async () => {
+  it("a coordinator's nudge carrying the workspace registers a push subscription; a git_status never does", async () => {
     const { dir, repoRoot } = await createTempGitRepo('node-state-subscribe-')
     try {
       const router = createRouter({ dispatchMeshCommand: vi.fn(async () => ({ success: true, accepted: true })) })
-      const result: any = await router.execute('git_status', {
-        workspace: repoRoot,
-        meshStateSubscription: { meshId: MESH_ID, nodeId: 'node_member' },
+      const result: any = await router.execute('mesh_node_state_nudge', {
+        meshId: MESH_ID, nodeId: 'node_member', workspace: repoRoot,
         [MESH_SENDER_DAEMON_ID_ARG]: 'daemon_coordinator',
       }, 'mesh')
-      expect(result.success).toBe(true)
+      expect(result).toMatchObject({ success: true, subscribed: true })
       expect(router.meshNodeStatePusher.list()).toEqual([
         expect.objectContaining({ coordinatorDaemonId: 'daemon_coordinator', meshId: MESH_ID, nodeId: 'node_member', workspace: repoRoot }),
       ])
       router.meshNodeStatePusher.stop()
 
-      // A dashboard / local git_status never subscribes anyone.
+      // A workspace that is not on this machine is refused (never subscribed).
+      const refused: any = await router.execute('mesh_node_state_nudge', {
+        meshId: MESH_ID, nodeId: 'node_elsewhere', workspace: '/definitely/not/here',
+        [MESH_SENDER_DAEMON_ID_ARG]: 'daemon_coordinator',
+      }, 'mesh')
+      expect(refused).toMatchObject({ success: true, subscribed: false })
+
+      // A (mesh-relayed) git_status never subscribes anyone — the probe path is gone.
       const plain = createRouter({ dispatchMeshCommand: vi.fn(async () => ({})) })
-      await plain.execute('git_status', { workspace: repoRoot, meshStateSubscription: { meshId: MESH_ID, nodeId: 'x' } }, 'p2p')
+      await plain.execute('git_status', { workspace: repoRoot, meshStateSubscription: { meshId: MESH_ID, nodeId: 'x' }, [MESH_SENDER_DAEMON_ID_ARG]: 'daemon_coordinator' }, 'mesh')
       expect(plain.meshNodeStatePusher.list()).toEqual([])
     } finally {
       await cleanupTempDir(dir)
@@ -570,7 +573,8 @@ describe('member push subscription', () => {
   it('pushes on change, stays quiet while unchanged, heartbeats, and drops on refusal', async () => {
     let now = 1_000_000
     let git: Record<string, unknown> = remoteGit()
-    const dispatch = vi.fn(async () => ({ success: true, accepted: true }))
+    // A coordinator that holds what it was sent confirms a signature-only git report.
+    const dispatch = vi.fn(async (_d: string, _c: string, args: any) => ({ success: true, accepted: true, ...(args?.gitSignature ? { gitHeld: true } : {}) }))
     const pusher = new MeshNodeStatePusher({
       dispatch,
       readGit: async () => ({ ...git, lastCheckedAt: now }),
@@ -579,12 +583,11 @@ describe('member push subscription', () => {
       ttlMs: 1_800_000,
       startTimer: () => ({ stop() {} }),
     })
-    pusher.register({ coordinatorDaemonId: 'coord', meshId: MESH_ID, nodeId: REMOTE_NODE, workspace: REMOTE_WORKSPACE, git })
+    pusher.selfRegister({ coordinatorDaemonId: 'coord', meshId: MESH_ID, nodeId: REMOTE_NODE, workspace: REMOTE_WORKSPACE })
 
     now += 60_000
     await pusher.tick()
-    // The first tick after registering confirms the subscription with one push
-    // (the coordinator's held state becomes member-pushed and it stops probing).
+    // The first tick after registering pushes the full state once.
     expect(dispatch).toHaveBeenCalledTimes(1)
     now += 60_000
     await pusher.tick()
@@ -600,7 +603,9 @@ describe('member push subscription', () => {
 
     now += 300_000
     await pusher.tick()
-    expect(dispatch).toHaveBeenCalledTimes(3) // heartbeat
+    expect(dispatch).toHaveBeenCalledTimes(3) // heartbeat — the unchanged git as its signature only
+    expect(dispatch.mock.calls[2]![2]).not.toHaveProperty('git')
+    expect(dispatch.mock.calls[2]![2]).toMatchObject({ gitSignature: expect.any(String) })
 
     dispatch.mockResolvedValueOnce({ success: false, code: 'mesh_sender_not_node_owner' } as any)
     git = remoteGit({ headCommit: 'again' })
@@ -618,7 +623,7 @@ describe('member push subscription', () => {
       ttlMs: 600_000,
       startTimer: () => ({ stop() {} }),
     })
-    pusher.register({ coordinatorDaemonId: 'coord', meshId: MESH_ID, nodeId: REMOTE_NODE, workspace: REMOTE_WORKSPACE })
+    pusher.selfRegister({ coordinatorDaemonId: 'coord', meshId: MESH_ID, nodeId: REMOTE_NODE, workspace: REMOTE_WORKSPACE })
     now = 300_000
     await pusher.tick()
     expect(pusher.list()).toHaveLength(1)
@@ -647,100 +652,71 @@ describe('node state persistence', () => {
   })
 })
 
-// ★Regression (audit item 1): the member's push heartbeat (300 s) used to be
-// LONGER than the coordinator's stale threshold (180 s), and every coordinator
-// probe re-registered the subscription and reset the member's lastPushedAt — so
-// a quiet node was re-probed (git_status + upstream fetch + get_status_metadata)
-// on every mesh_status, forever, and each probe republished a revision.
+// ★Regression (audit item 1 / data-path audit P1-2): a quiet subscribed member is
+// never read by the coordinator — its heartbeat keeps the held observation live,
+// and nothing on the coordinator side re-probes on a cadence.
 describe('held-state freshness — a quiet subscribed member is never re-probed', () => {
-  it('member heartbeats keep the held observation under the stale threshold across 20 minutes of silence', async () => {
+  it('member heartbeats keep the held observation live across 20 minutes of silence, with zero coordinator messages', async () => {
     let now = 1_000_000
     const store = new MeshNodeGitStateStore(null, () => now)
-    const refresher = new MeshNodeGitRefresher({ store, probe: vi.fn(), onSettled: vi.fn(), now: () => now })
+    const nudge = vi.fn(async () => true)
+    const refresher = new MeshNodeGitRefresher({ store, nudge, onSettled: vi.fn(), now: () => now })
     const pusher = new MeshNodeStatePusher({
       // The coordinator side of mesh_node_git_report, reduced to the store write.
       dispatch: async (_coordinator, _cmd, args: any) => {
         if (args.git) store.recordObservation({ meshId: args.meshId, nodeId: args.nodeId, workspace: args.workspace, git: args.git, source: 'member_push', observedAt: args.observedAt })
-        return { success: true, accepted: true }
+        const gitHeld = args.gitSignature
+          ? store.confirmObservation({ meshId: args.meshId, nodeId: args.nodeId, signature: args.gitSignature, observedAt: args.observedAt, upstreamFetchedAt: args.upstreamFetchedAt }).held
+          : undefined
+        return { success: true, accepted: true, ...(gitHeld !== undefined ? { gitHeld } : {}) }
       },
       readGit: async () => ({ ...remoteGit(), lastCheckedAt: now }),
       now: () => now,
       startTimer: () => ({ stop() {} }),
     })
-    // The handshake: the coordinator's probe answer is held, the member registers.
-    store.recordObservation({ meshId: MESH_ID, nodeId: REMOTE_NODE, workspace: REMOTE_WORKSPACE, git: remoteGit(), source: 'coordinator_probe', observedAt: now })
-    pusher.register({ coordinatorDaemonId: 'coord', meshId: MESH_ID, nodeId: REMOTE_NODE, workspace: REMOTE_WORKSPACE, git: remoteGit() })
+    pusher.selfRegister({ coordinatorDaemonId: 'coord', meshId: MESH_ID, nodeId: REMOTE_NODE, workspace: REMOTE_WORKSPACE })
+    const mesh = { nodes: [{ id: REMOTE_NODE, daemonId: REMOTE_DAEMON, workspace: REMOTE_WORKSPACE }] }
     for (let minute = 1; minute <= 20; minute += 1) {
       now += 60_000
       await pusher.tick()
-      expect(refresher.shouldRefresh(MESH_ID, REMOTE_NODE), `minute ${minute}`).toBe(false)
+      const entry = store.get(MESH_ID, REMOTE_NODE)!
+      expect(now - (entry.observedAt ?? 0), `minute ${minute}`).toBeLessThan(MESH_NODE_STATE_STALE_MS)
+      kickMeshNodeGitRefreshes({ meshId: MESH_ID, mesh, store, refresher, locality: { localDaemonId: 'daemon_local' }, refresh: false, now })
     }
+    expect(nudge).not.toHaveBeenCalled()
     expect(store.get(MESH_ID, REMOTE_NODE)?.source).toBe('member_push')
     pusher.stop()
   })
 
-  it('a repeated coordinator probe (re-registration) never postpones the member heartbeat', async () => {
-    let now = 1_000_000
-    const dispatch = vi.fn(async () => ({ success: true, accepted: true }))
-    const pusher = new MeshNodeStatePusher({ dispatch, readGit: async () => remoteGit(), now: () => now, startTimer: () => ({ stop() {} }) })
-    pusher.register({ coordinatorDaemonId: 'coord', meshId: MESH_ID, nodeId: REMOTE_NODE, workspace: REMOTE_WORKSPACE, git: remoteGit() })
-    now += 60_000
-    await pusher.tick()
-    expect(dispatch).toHaveBeenCalledTimes(1)
-    // 4 minutes later the coordinator probes again (e.g. it restarted): the next
-    // tick confirms with a push instead of treating the probe as "just pushed".
-    now += 240_000
-    pusher.register({ coordinatorDaemonId: 'coord', meshId: MESH_ID, nodeId: REMOTE_NODE, workspace: REMOTE_WORKSPACE, git: remoteGit() })
-    now += 60_000
-    await pusher.tick()
-    expect(dispatch).toHaveBeenCalledTimes(2)
-    pusher.stop()
-  })
-
-  it('a member-pushed observation older than the legacy 180 s is not stale; a probe-only one is', () => {
-    const now = 5_000_000
-    const store = new MeshNodeGitStateStore(null, () => now)
-    const refresher = new MeshNodeGitRefresher({ store, probe: vi.fn(), onSettled: vi.fn(), now: () => now })
-    store.recordObservation({ meshId: MESH_ID, nodeId: 'pushed', workspace: '/a', git: remoteGit(), source: 'member_push', observedAt: now - 200_000 })
-    store.recordObservation({ meshId: MESH_ID, nodeId: 'legacy', workspace: '/b', git: remoteGit(), source: 'coordinator_probe', observedAt: now - 200_000 })
-    expect(refresher.shouldRefresh(MESH_ID, 'pushed')).toBe(false)
-    expect(refresher.shouldRefresh(MESH_ID, 'legacy')).toBe(true)
-  })
-
-  it('a probe that re-confirms the same state publishes no revision; content changes and unreachable transitions do', async () => {
+  it('a nudge outcome publishes a revision only on the transition into unreachable', async () => {
     let now = 9_000_000
     const store = new MeshNodeGitStateStore(null, () => now)
     const onSettled = vi.fn()
-    let answer: Record<string, unknown> | null = remoteGit()
+    let reachable = true
     const refresher = new MeshNodeGitRefresher({
       store,
-      probe: async () => (answer ? { ...answer, lastCheckedAt: now } : null),
+      nudge: async () => { if (!reachable) throw new Error('unreachable'); return true },
       onSettled,
       now: () => now,
     })
     const target = { meshId: MESH_ID, nodeId: REMOTE_NODE, daemonId: REMOTE_DAEMON, workspace: REMOTE_WORKSPACE }
-    store.recordObservation({ ...target, git: remoteGit(), source: 'coordinator_probe', observedAt: now - 3_600_000 })
+    store.recordObservation({ ...target, git: remoteGit(), source: 'member_push', observedAt: now - 3_600_000 })
 
-    expect(refresher.kick(target)).toBe(true)
+    expect(refresher.nudge(target)).toBe(true)
     await refresher.whenIdle()
-    expect(onSettled).not.toHaveBeenCalled() // same content — only the age moved
-    expect(store.get(MESH_ID, REMOTE_NODE)?.observedAt).toBe(now)
+    expect(onSettled).not.toHaveBeenCalled() // the member's push settles what changed
 
-    now += 3_600_000
-    answer = remoteGit({ headCommit: 'moved' })
-    refresher.kick(target)
+    now += 60_000
+    reachable = false
+    refresher.nudge(target)
     await refresher.whenIdle()
-    expect(onSettled).toHaveBeenCalledTimes(1)
-
-    now += 3_600_000
-    answer = null
-    refresher.kick(target)
+    expect(onSettled).toHaveBeenCalledTimes(1) // into unreachable
+    now += 60_000
+    refresher.nudge(target)
     await refresher.whenIdle()
-    expect(onSettled).toHaveBeenCalledTimes(2) // into unreachable
-    now += 3_600_000
-    refresher.kick(target)
-    await refresher.whenIdle()
-    expect(onSettled).toHaveBeenCalledTimes(2) // still unreachable — no news
+    expect(onSettled).toHaveBeenCalledTimes(1) // still unreachable — no news
+    // A nudge within the minimum interval is never sent twice.
+    expect(refresher.nudge(target)).toBe(false)
   })
 })
 

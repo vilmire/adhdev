@@ -1,16 +1,16 @@
 // @vitest-environment jsdom
 /**
- * One shared loader, coordinator-only subscriptions, refresh:false on every
- * automatic trigger.
+ * The mesh view is PUSHED: coordinator-only subscriptions, no automatic reads.
  *
- *  - useCoordinatorMeshStatus reads refresh:false on mount and on a coordinator
- *    revision advance; refresh:true only via its explicit `refresh()`.
- *  - Two surfaces mounted on the same mesh share one request (store dedupe).
+ *  - useCoordinatorMeshStatus subscribes to the coordinator's `mesh.status`
+ *    topic; the snapshot and the keyed deltas land in the shared store. It
+ *    never reads on mount / on a timer; `refresh()` (refresh:true) is the only read.
+ *  - Two surfaces mounted on the same mesh share ONE subscription.
  *  - useMeshGraphMetadataSubscription subscribes to the COORDINATOR daemon only,
  *    never to the member daemons that serve the mesh's other nodes.
  *
- * Break-once: re-add `extraDaemonIds` member subscriptions (or pass `refresh`
- * true from the revision handler) and the matching case goes red.
+ * Break-once: re-add a mount / revision / backstop read (or member-daemon
+ * subscriptions) and the matching case goes red.
  */
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
@@ -54,50 +54,74 @@ afterEach(() => {
     container.remove()
 })
 
-describe('useCoordinatorMeshStatus triggers', () => {
-    it('mount and coordinator revision advance read refresh:false; only refresh() reads refresh:true', async () => {
+describe('useCoordinatorMeshStatus — pushed, never polled', () => {
+    it('the mesh.status snapshot and a one-node delta land in the store; no automatic read; refresh() is the only read', async () => {
         const daemonId = 'coord-trigger-1'
         const meshId = 'mesh-trigger-1'
         const load = vi.fn(async (_d: string, m: string, _o: { refresh: boolean }) => statusResponse(m))
-        const sendData = vi.fn(() => true)
+        const sendData = vi.fn((_d: string, _data: any) => true)
         let api: ReturnType<typeof useCoordinatorMeshStatus> | null = null
         function Harness() {
-            api = useCoordinatorMeshStatus({ meshId, daemonId, load, sendData, backstopMs: 0 })
+            api = useCoordinatorMeshStatus({ meshId, daemonId, load, sendData })
             return null
         }
-        await act(async () => { root.render(<Harness />) })
-        await act(async () => { await flush() })
-        expect(load.mock.calls.map(call => call[2])).toEqual([{ refresh: false }])
+        vi.useFakeTimers()
+        try {
+            await act(async () => { root.render(<Harness />) })
+            // ONE subscribe to the coordinator, no command read.
+            expect(sendData.mock.calls.map(call => [call[0], call[1].topic, call[1].params])).toEqual([[daemonId, 'mesh.status', { meshId }]])
+            expect(load).not.toHaveBeenCalled()
+            expect(api!.loading).toBe(true)
 
-        const publish = (seq: number, rev: number) => subscriptionManager.publish({
-            topic: 'daemon.metadata',
-            key: `daemon:metadata:${daemonId}`,
-            daemonId,
-            seq,
-            timestamp: seq,
-            status: { sessions: [] },
-            meshStateRevisions: { [meshId]: rev },
-        } as any)
-        await act(async () => { publish(1, 1); await flush() }) // seeds baseline
-        await act(async () => { publish(2, 2); await flush() }) // advance
-        expect(load.mock.calls.map(call => call[2])).toEqual([{ refresh: false }, { refresh: false }])
+            const key = `mesh:status:${meshId}`
+            await act(async () => {
+                subscriptionManager.publish({ topic: 'mesh.status', key, mode: 'snapshot', meshId, status: statusResponse(meshId), seq: 1, timestamp: 1 } as any)
+            })
+            expect(api!.status?.nodes.map(n => n.health)).toEqual(['online', 'online'])
+            expect(api!.loading).toBe(false)
+            await act(async () => {
+                subscriptionManager.publish({
+                    topic: 'mesh.status', key, mode: 'delta', meshId, seq: 2, timestamp: 2,
+                    delta: { collections: { nodes: { upsert: [{ nodeId: 'node_member', health: 'offline' }] } } },
+                } as any)
+            })
+            expect(api!.status?.nodes.map(n => [n.nodeId, n.health])).toEqual([['node_coord', 'online'], ['node_member', 'offline']])
 
+            // Minutes of silence: nothing is read (no backstop, no poll).
+            await act(async () => { vi.advanceTimersByTime(10 * 60_000) })
+            expect(load).not.toHaveBeenCalled()
+        } finally {
+            vi.useRealTimers()
+        }
         await act(async () => { await api!.refresh(); await flush() })
-        expect(load.mock.calls.map(call => call[2])).toEqual([{ refresh: false }, { refresh: false }, { refresh: true }])
-        expect(api!.status?.meshId).toBe(meshId)
+        expect(load.mock.calls.map(call => call[2])).toEqual([{ refresh: true }])
     })
 
-    it('two surfaces on the same mesh share ONE coordinator request', async () => {
+    it('a delta with a seq gap re-subscribes for a fresh snapshot instead of folding blindly', async () => {
+        const daemonId = 'coord-gap'
+        const meshId = 'mesh-gap'
+        const sendData = vi.fn((_d: string, _data: any) => true)
+        function Harness() { useCoordinatorMeshStatus({ meshId, daemonId, load: null, sendData }); return null }
+        await act(async () => { root.render(<Harness />) })
+        const key = `mesh:status:${meshId}`
+        await act(async () => {
+            subscriptionManager.publish({ topic: 'mesh.status', key, mode: 'snapshot', meshId, status: statusResponse(meshId), seq: 1, timestamp: 1 } as any)
+            subscriptionManager.publish({ topic: 'mesh.status', key, mode: 'delta', meshId, seq: 3, timestamp: 3, delta: { set: { meshName: 'X' } } } as any)
+        })
+        expect(sendData.mock.calls.filter(call => call[1].type === 'subscribe')).toHaveLength(2)
+    })
+
+    it('two surfaces on the same mesh share ONE subscription', async () => {
         const daemonId = 'coord-shared'
         const meshId = 'mesh-shared'
-        let release!: () => void
-        const gate = new Promise<void>(resolve => { release = resolve })
-        const load = vi.fn(async (_d: string, m: string) => { await gate; return statusResponse(m) })
-        function A() { useCoordinatorMeshStatus({ meshId, daemonId, load, backstopMs: 0 }); return null }
-        function B() { useCoordinatorMeshStatus({ meshId, daemonId, load, backstopMs: 0 }); return null }
+        const sendData = vi.fn((_d: string, _data: any) => true)
+        const load = vi.fn(async (_d: string, m: string) => statusResponse(m))
+        function A() { useCoordinatorMeshStatus({ meshId, daemonId, load, sendData }); return null }
+        function B() { useCoordinatorMeshStatus({ meshId, daemonId, load, sendData }); return null }
         await act(async () => { root.render(<><A /><B /></>) })
-        await act(async () => { release(); await flush() })
-        expect(load).toHaveBeenCalledTimes(1)
+        await act(async () => { await flush() })
+        expect(sendData.mock.calls.filter(call => call[1].topic === 'mesh.status')).toHaveLength(1)
+        expect(load).not.toHaveBeenCalled()
     })
 })
 

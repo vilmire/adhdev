@@ -9,8 +9,8 @@
 // "Agent generating…" until unmount, which is exactly the symptom the owner
 // observed after a coordinator had already finished replying.
 //
-// The transcript lane next door (session-chat-tail-controller) already had all
-// of these recovery edges. This asserts the status lane now has them too.
+// The keyed chat lane next door recovers within itself (worker resync,
+// base-frame requests, re-SUB). This asserts the status lane has recovery edges too.
 //
 // ★ The assertions are deliberately about RE-SUBSCRIBING, not about polling.
 // Recovery must ride the existing SubscriptionManager contract (the daemon

@@ -13,13 +13,15 @@ import type { TopicPolicy } from 'seqscribe';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import { ADHDEV_AUTHORITY_ID } from '../../src/seqscribe/authority-id.js';
 import { openSeqscribeNode, type SeqscribeNodeHandle } from '../../src/seqscribe/node.js';
-import { ASSISTANT_JOURNAL_TOPIC, sessionChatPolicy, sessionChatTopic } from '../../src/seqscribe/topics.js';
+import { meshEventsPolicy, meshEventsTopic, sessionChatPolicy, sessionChatTopic } from '../../src/seqscribe/topics.js';
 import { CHAT_COMMIT_KEY } from '../../src/seqscribe/transcript-keyed-codec.js';
 import { readPersistedChatTopic } from '../../src/seqscribe/transcript-keyed-publish-runtime.js';
 import {
     __resetTranscriptWriterGcForTests,
     configureTranscriptWriterGc,
     isLegacyTranscriptTopic,
+    isRetiredSweepTopic,
+    RETIRED_ASSISTANT_JOURNAL_TOPIC,
     runTranscriptWriterGcSweep,
     transcriptWriterGcCounters,
 } from '../../src/seqscribe/writer-gc.js';
@@ -126,12 +128,78 @@ describe('writer-gc — v1 `.transcript` rows are removed (§6.2)', () => {
         expect(handle.node.stats().topics[legacy]!.logRows).toBe(0);
     });
 
-    it('never touches other topics', async () => {
+    it('never touches other topics (mesh events are full-sync and never pruned by this sweep)', async () => {
         const dbPath = freshDbPath('legacy-other');
-        const handle = openAt(dbPath);
-        await appendMany(handle, ASSISTANT_JOURNAL_TOPIC, 10);
+        const handle = openSeqscribeNode({ dbPath, env: ENV, storedFleetSecret: null, meshIds: ['mesh_keep'] });
+        handles.push(handle);
+        const events = meshEventsTopic('mesh_keep');
+        await appendMany(handle, events, 10);
         await runTranscriptWriterGcSweep(handle);
-        expect(handle.node.stats().topics[ASSISTANT_JOURNAL_TOPIC]!.logRows).toBe(10);
+        expect(handle.node.stats().topics[events]!.logRows).toBe(10);
+    });
+});
+
+/** The retired journal policy, as the old daemon defined it (full-sync, content). */
+function retiredJournalPolicy(): TopicPolicy {
+    return { kind: 'append', retention: { mode: 'full' }, replication: 'full-sync', access: 'content', finalityAuthority: ADHDEV_AUTHORITY_ID };
+}
+
+describe('writer-gc — retired `assistant.journal` rows are removed (2026-09-29)', () => {
+    it('recognizes exactly the journal topic and the v1 transcript pattern', () => {
+        expect(RETIRED_ASSISTANT_JOURNAL_TOPIC).toBe('assistant.journal');
+        expect(isRetiredSweepTopic('assistant.journal')).toBe(true);
+        expect(isRetiredSweepTopic('session.abc.transcript')).toBe(true);
+        expect(isRetiredSweepTopic('assistant.journal.x')).toBe(false);
+        expect(isRetiredSweepTopic('config.settings')).toBe(false);
+        expect(isRetiredSweepTopic('mesh.m1.events')).toBe(false);
+    });
+
+    it('the first sweep after the upgrade deletes every heartbeat row, drops the probe cursor, and leaves live topics alone', async () => {
+        const dbPath = freshDbPath('journal');
+        const events = meshEventsTopic('mesh_keep');
+        await withPreviousProcess(dbPath, async (prev) => {
+            prev.node.defineTopic('assistant.journal', retiredJournalPolicy());
+            prev.node.defineTopic(events, meshEventsPolicy());
+            await appendMany(prev, 'assistant.journal', 700);
+            await appendMany(prev, events, 25);
+            // The removed probe's durable consumer, parked at the head.
+            const off = prev.node.onEntry('assistant.journal', 'stage1-convergence-probe', () => {});
+            await prev.node.consumerCaughtUp('assistant.journal', 'stage1-convergence-probe');
+            off();
+        });
+        const handle = openSeqscribeNode({ dbPath, env: ENV, storedFleetSecret: null, meshIds: ['mesh_keep'] });
+        handles.push(handle);
+        // A daemon of this version never defines the journal at boot.
+        expect(handle.topics.some((d) => d.topic === 'assistant.journal')).toBe(false);
+
+        const result = await runTranscriptWriterGcSweep(handle, { stepRows: 250 });
+        expect(result.discovered).toContain('assistant.journal');
+        expect(result.legacyCleared).toContain('assistant.journal');
+        expect(handle.node.stats().topics['assistant.journal']!.logRows).toBe(0);
+        expect(handle.node.listConsumers('assistant.journal')).toEqual([]);
+        expect(transcriptWriterGcCounters().legacyRowsPruned).toBe(700);
+        // Bounded, and the live full-sync topic is untouched.
+        expect(handle.node.stats().topics[events]!.logRows).toBe(25);
+        // The housekeeping define never enters the granted set.
+        expect(handle.topics.some((d) => d.topic === 'assistant.journal')).toBe(false);
+
+        // Idempotent: nothing left to discover on the next sweep.
+        const second = await runTranscriptWriterGcSweep(handle);
+        expect(second.legacyCleared).toEqual([]);
+    });
+
+    it('the sweep is bounded by its row budget and resumes on the next pass', async () => {
+        const dbPath = freshDbPath('journal-budget');
+        await withPreviousProcess(dbPath, async (prev) => {
+            prev.node.defineTopic('assistant.journal', retiredJournalPolicy());
+            await appendMany(prev, 'assistant.journal', 600);
+        });
+        const handle = openAt(dbPath);
+        const first = await runTranscriptWriterGcSweep(handle, { stepRows: 100, sweepRowBudget: 250 });
+        expect(first.budgetExhausted).toBe(true);
+        expect(handle.node.stats().topics['assistant.journal']!.logRows).toBe(350);
+        await runTranscriptWriterGcSweep(handle, { stepRows: 100 });
+        expect(handle.node.stats().topics['assistant.journal']!.logRows).toBe(0);
     });
 });
 
@@ -204,6 +272,6 @@ describe('writer-gc — `.chat` safety net (§4.8)', () => {
         await gc!.runOnce();
         expect(transcriptWriterGcCounters().runs).toBe(1);
         configureTranscriptWriterGc(null);
-        expect(await gc!.runOnce()).toEqual({ legacyCleared: [], discovered: [], budgetExhausted: false, vacuumedPages: 0 });
+        expect(await gc!.runOnce()).toEqual({ legacyCleared: [], discovered: [], budgetExhausted: false, meshRowsPruned: 0, vacuumedPages: 0 });
     });
 });

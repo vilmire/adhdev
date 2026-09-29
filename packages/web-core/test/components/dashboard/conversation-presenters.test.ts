@@ -103,9 +103,9 @@ describe('conversation presenters', () => {
         expect(getConversationPreviewText(conversation)).toBe('Latest transcript bubble')
     })
 
-    it('(B2) derives the preview from the live chat_tail snapshot when one is provided', () => {
+    it('(B2) derives the preview from the live keyed-chat snapshot when one is provided', () => {
         // The conversation.messages tail still ends on the user dispatch echo (the
-        // inbox status snapshot), but the warm chat_tail snapshot already holds the
+        // inbox status snapshot), but the warm keyed-chat snapshot already holds the
         // assistant answer ChatPane renders. Passing the snapshot must surface that
         // answer so the inbox row and the opened chat body agree.
         const conversation = createConversation({

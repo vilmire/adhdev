@@ -43,7 +43,7 @@ export function selectChatTailSnapshot(src: TailSource): LogEntry[] | null {
 
 /**
  * Install the chat selector on the daemon's node. Every other tail topic
- * (`fleet.status`, …) keeps the vendor default.
+ * keeps the vendor default.
  */
 export function installTranscriptTailSnapshotSelector(node: Pick<SeqscribeNodeExt, 'setTailSnapshotSelector'>): void {
     node.setTailSnapshotSelector((src) => (isSessionChatTopic(src.topic) ? selectChatTailSnapshot(src) : null));

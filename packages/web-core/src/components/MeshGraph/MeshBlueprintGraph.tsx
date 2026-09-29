@@ -20,8 +20,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
-    Background,
-    BackgroundVariant,
     Controls,
     MarkerType,
     ReactFlow,
@@ -31,7 +29,7 @@ import {
 } from '@xyflow/react'
 import './meshGraph.css'
 import type { MeshGraphGateView, MeshGraphView, RepoMeshQueueTask, RepoMeshStatus } from '@adhdev/daemon-core'
-import type { MeshGraphTheme } from './meshGraphTheme'
+import { meshToggleChipClass, type MeshGraphTheme } from './meshGraphTheme'
 import {
     applyBlueprintGraphView,
     blueprintGraphLaneKey,
@@ -43,19 +41,21 @@ import {
     type BlueprintGraphLane,
     type BlueprintGraphTaskNode,
 } from './blueprintGraphModel'
-import { BLUEPRINT_GRAPH_SIZES, layoutBlueprintGraph, narrowPaneViewport, type BlueprintGraphLaneRect, type BlueprintGraphLayout } from './blueprintGraphLayout'
+import { BLUEPRINT_GRAPH_NARROW_PANE, BLUEPRINT_GRAPH_SIZES, layoutBlueprintGraph, narrowPaneViewport, type BlueprintGraphLaneRect, type BlueprintGraphLayout } from './blueprintGraphLayout'
 import { blueprintGraphNodeTypes, GATE_TONE_STYLE, type BlueprintFlowNode, type GateNodeData, type TaskNodeData } from './BlueprintGraphNodes'
 import { GateActionsPanel } from './MeshBlueprintRow'
 import { useBlueprintGateCommands } from './useBlueprintGateCommands'
 import { formatBlueprintAge } from './blueprintViewModel'
 
-/** Edge stroke per reading; dashes carry the KIND (gate) independent of colour. */
+/** Edge stroke per reading; dashes carry the KIND (gate) independent of colour.
+ *  Neutral by default (theme tokens — SVG style strokes resolve CSS vars):
+ *  only a live edge takes the accent and only a dead edge the semantic red. */
 const EDGE_COLORS = {
-    satisfied: { dark: '#34d399', light: '#059669' },
-    waiting: { dark: '#94a3b8', light: '#64748b' },
-    running: { dark: '#38bdf8', light: '#0284c7' },
-    dead: { dark: '#f87171', light: '#dc2626' },
-    inactive: { dark: '#475569', light: '#cbd5e1' },
+    satisfied: 'var(--text-muted)',
+    waiting: 'var(--text-muted)',
+    running: 'var(--accent-primary)',
+    dead: 'var(--status-error)',
+    inactive: 'var(--border-default)',
 } as const
 
 type EdgeTone = keyof typeof EDGE_COLORS
@@ -65,6 +65,20 @@ function edgeTone(edge: BlueprintGraphEdge): EdgeTone {
     if (edge.state === 'inactive') return 'inactive'
     if (edge.animated) return 'running'
     return edge.state === 'satisfied' ? 'satisfied' : 'waiting'
+}
+
+/**
+ * Zoom / fit controls. Top-right on a wide pane (bottom-left sat on the first
+ * lane column, and the gate panel owns the bottom edge). On a narrow (phone)
+ * pane every lane is fitted to the full width, so top-right landed on the first
+ * lane's Collapse button — there the controls move to the bottom-right corner
+ * and step aside while the gate panel (which spans the bottom) is open.
+ */
+function BlueprintControls({ gatePanelOpen }: { gatePanelOpen: boolean }) {
+    const paneWidth = useStore(state => state.width)
+    const narrow = paneWidth > 0 && paneWidth < BLUEPRINT_GRAPH_NARROW_PANE
+    if (narrow && gatePanelOpen) return null
+    return <Controls position={narrow ? 'bottom-right' : 'top-right'} showZoom showFitView showInteractive={false} />
 }
 
 const EMPTY_LANE_RECTS: BlueprintGraphLaneRect[] = []
@@ -272,7 +286,7 @@ export default function MeshBlueprintGraph({ tasks, status, graphs, meshTheme, n
 
     const flowEdges = useMemo<Edge[]>(() => view.edges.map(edge => {
         const tone = edgeTone(edge)
-        const stroke = meshTheme.isDark ? EDGE_COLORS[tone].dark : EDGE_COLORS[tone].light
+        const stroke = EDGE_COLORS[tone]
         return {
             id: edge.id,
             source: edge.source,
@@ -282,24 +296,24 @@ export default function MeshBlueprintGraph({ tasks, status, graphs, meshTheme, n
             animated: edge.animated,
             style: {
                 stroke,
-                strokeWidth: tone === 'dead' ? 2.2 : 1.5,
+                strokeWidth: 1.25,
                 ...(edge.kind === 'gate' ? { strokeDasharray: '7 5' } : {}),
-                ...(tone === 'inactive' ? { opacity: 0.55 } : {}),
+                ...(tone === 'dead' ? { opacity: 0.7 } : {}),
             },
-            markerEnd: { type: MarkerType.ArrowClosed, color: stroke, width: 14, height: 14 },
+            markerEnd: { type: MarkerType.ArrowClosed, color: stroke, width: 12, height: 12 },
         }
-    }), [view.edges, meshTheme])
+    }), [view.edges])
 
     /* Honest legend — only what is on screen. */
     const legend = useMemo(() => {
         const items: Array<{ key: string; label: string; color: string; dash?: string }> = []
-        const color = (tone: EdgeTone) => (meshTheme.isDark ? EDGE_COLORS[tone].dark : EDGE_COLORS[tone].light)
+        const color = (tone: EdgeTone) => EDGE_COLORS[tone]
         if (view.edges.some(edge => edge.kind === 'depends')) items.push({ key: 'depends', label: t('mesh.blueprint.graph.legendDepends'), color: color('waiting') })
         if (view.edges.some(edge => edge.kind === 'gate')) items.push({ key: 'gate', label: t('mesh.blueprint.graph.legendGate'), color: color('waiting'), dash: '4 3' })
         if (view.edges.some(edge => edge.animated)) items.push({ key: 'running', label: t('mesh.blueprint.graph.legendRunning'), color: color('running') })
         if (view.edges.some(edge => edge.state === 'dead')) items.push({ key: 'dead', label: t('mesh.blueprint.graph.legendDead'), color: color('dead') })
         return items
-    }, [view.edges, meshTheme, t])
+    }, [view.edges, t])
 
     const selectedGate = useMemo(() => {
         if (!selectedGateId) return null
@@ -333,18 +347,18 @@ export default function MeshBlueprintGraph({ tasks, status, graphs, meshTheme, n
         return (
             <div
                 data-testid="bp-graph-gate-panel"
-                className={`absolute bottom-2 left-2 right-2 z-20 flex max-h-[55%] flex-col gap-1.5 overflow-y-auto rounded-xl border p-2.5 text-2xs shadow-lg md:left-auto md:w-[380px] ${meshTheme.isDark ? 'border-white/10 bg-slate-950/95 text-slate-200' : 'border-slate-200 bg-white text-slate-700'}`}
+                className={`absolute bottom-2 left-2 right-2 z-20 flex max-h-[55%] flex-col gap-1.5 overflow-y-auto rounded-xl border border-border-default bg-surface-primary p-2.5 text-2xs text-text-primary shadow-md md:left-auto md:w-[380px]`}
             >
                 <div className="flex min-w-0 items-center gap-2">
                     <span className={`h-2 w-2 shrink-0 rounded-full ${tone.dot}`} aria-hidden />
                     <span className="min-w-0 flex-1 truncate font-semibold" title={selectedGate.ref}>{selectedGate.ref}</span>
-                    <span className="shrink-0 text-4xs uppercase tracking-wide opacity-80">{t(`mesh.blueprint.graph.gateTone.${selectedGate.tone}`)}</span>
+                    <span className="shrink-0 text-4xs text-text-muted">{t(`mesh.blueprint.graph.gateTone.${selectedGate.tone}`)}</span>
                     <button type="button" className="shrink-0 rounded px-1 text-text-muted hover:text-text-primary" aria-label={t('common.close')} onClick={() => setSelectedGateId(null)}>✕</button>
                 </div>
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-4xs text-text-muted">
                     {selectedGate.gate?.action && <span>{selectedGate.gate.action}</span>}
                     {deadline && (
-                        <span className={deadline.overdue ? (meshTheme.isDark ? 'text-rose-300' : 'text-rose-700') : ''} title={selectedGate.gate?.deadlineAt}>
+                        <span className={deadline.overdue ? 'text-status-error' : ''} title={selectedGate.gate?.deadlineAt}>
                             {deadline.overdue
                                 ? t('mesh.blueprint.graph.deadlineOverdue', { age: formatBlueprintAge(deadline.ms) })
                                 : t('mesh.blueprint.graph.deadlineIn', { age: formatBlueprintAge(deadline.ms) })}
@@ -380,9 +394,7 @@ export default function MeshBlueprintGraph({ tasks, status, graphs, meshTheme, n
                     aria-pressed={activeOnly}
                     onClick={() => setActiveOnly(value => !value)}
                     title={t('mesh.blueprint.graph.activeOnlyTitle')}
-                    className={`shrink-0 rounded-full border px-2 py-0.5 text-3xs font-medium transition-colors ${activeOnly
-                        ? (meshTheme.isDark ? 'border-sky-400/40 bg-sky-500/15 text-sky-100' : 'border-sky-300 bg-sky-50 text-sky-700')
-                        : (meshTheme.isDark ? 'border-white/10 bg-white/[0.03] text-slate-300' : 'border-slate-200 bg-white text-slate-600')}`}
+                    className={meshToggleChipClass(activeOnly)}
                 >
                     {activeOnly ? '● ' : '○ '}{t('mesh.blueprint.graph.activeOnly')}
                 </button>
@@ -394,7 +406,7 @@ export default function MeshBlueprintGraph({ tasks, status, graphs, meshTheme, n
                         {legend.map(item => (
                             <span key={item.key} className="flex items-center gap-1">
                                 <svg width="16" height="4" aria-hidden>
-                                    <line x1="0" y1="2" x2="16" y2="2" stroke={item.color} strokeWidth="2" strokeDasharray={item.dash} />
+                                    <line x1="0" y1="2" x2="16" y2="2" style={{ stroke: item.color }} strokeWidth="1.5" strokeDasharray={item.dash} />
                                 </svg>
                                 {item.label}
                             </span>
@@ -403,14 +415,14 @@ export default function MeshBlueprintGraph({ tasks, status, graphs, meshTheme, n
                 )}
                 {headerExtras && <div className="ml-auto flex min-w-0 flex-wrap items-center gap-1.5">{headerExtras}</div>}
             </div>
-            {layoutError && <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-1.5 text-3xs text-red-400">{t('mesh.blueprint.graph.layoutFailed', { error: layoutError })}</div>}
-            <div className="relative min-h-[320px] w-full min-w-0 flex-1 overflow-hidden">
+            {layoutError && <div className="rounded-lg border border-status-error/35 px-3 py-1.5 text-3xs text-status-error">{t('mesh.blueprint.graph.layoutFailed', { error: layoutError })}</div>}
+            <div className="mesh-flow relative min-h-[320px] w-full min-w-0 flex-1 overflow-hidden">
                 {nothingAtAll ? (
-                    <div className="flex h-full min-h-[200px] items-center justify-center px-6 text-center text-sm text-slate-400">
+                    <div className="flex h-full min-h-[200px] items-center justify-center px-6 text-center text-sm text-text-muted">
                         {emptyMessage ?? t('mesh.taskDag.empty')}
                     </div>
                 ) : allHidden ? (
-                    <div className="flex h-full min-h-[200px] flex-col items-center justify-center gap-2 px-6 text-center text-sm text-slate-400">
+                    <div className="flex h-full min-h-[200px] flex-col items-center justify-center gap-2 px-6 text-center text-sm text-text-muted">
                         <span>{t('mesh.blueprint.graph.emptyActive')}</span>
                         <button type="button" className="btn btn-sm btn-secondary" onClick={() => setActiveOnly(false)}>{t('mesh.blueprint.graph.showFinished')}</button>
                     </div>
@@ -438,9 +450,7 @@ export default function MeshBlueprintGraph({ tasks, status, graphs, meshTheme, n
                         colorMode={meshTheme.flowColorMode}
                     >
                         <ViewportFitter fitKey={layoutReady ? laneKey : null} focusNodeIds={fitFocusNodeIds} laneRects={layout?.value.lanes ?? EMPTY_LANE_RECTS} />
-                        {/* Top-right: bottom-left sat on the first lane column, and the gate panel owns the bottom edge. */}
-                        <Controls position="top-right" showZoom showFitView showInteractive={false} />
-                        <Background variant={BackgroundVariant.Lines} gap={24} color={meshTheme.blueprintGridFineColor} />
+                        <BlueprintControls gatePanelOpen={selectedGate !== null} />
                     </ReactFlow>
                 )}
                 {gatePanel}

@@ -37,6 +37,7 @@ import {
     recordMeshCoordinatorToolCall,
     isIdleSessionRecord,
     isLocalControlPlaneNode,
+    resolveMeshDispatchRoute,
     isMeshCoordinatorSessionRecord,
     isMeshOwnedDelegateSession,
     isP2pRelayTransportFailure,
@@ -103,6 +104,7 @@ import { isDirtyNode, isMeshNodeFreshEnoughToLaunch, resolveAutoFastForwardPolic
 // paragraph and the C-W6c report's "direct dispatch end to end" deliverable.
 import { directDispatchRecord, missionQuery, pruneStaleDirect, queueEnqueue, recordLocal, turnCancel, turnObserve, TurnIpcCommandError } from '../ipc/turn-commands.js';
 import type { MeshWorkQueueEntry } from '@adhdev/daemon-core';
+import { ensureMeshNodeRoutes } from './mesh-node-routes.js';
 
 
 /**
@@ -876,15 +878,28 @@ export async function meshSendTask(
     }
 
     try {
-        // ── IpcTransport + remote node: direct P2P agent_command dispatch ──────
+        // ── The coordinator daemon decides the route (MCP asks, daemon decides) ─
         //
-        // The local queue (the daemon's runtime store) is stored on THIS
-        // machine and is inaccessible to the remote daemon.  Sending
-        // trigger_mesh_queue to the remote daemon would always be a no-op
-        // because it cannot read the queue.  Instead we relay agent_command
-        // directly over P2P so the remote daemon forwards it to its agent.
-        const isLocalNode = isLocalControlPlaneNode(ctx, node);
-        if (ctx.transport instanceof IpcTransport && node.daemonId && !isLocalNode) {
+        // `mesh_dispatch_route` (daemon-core mesh-status-view.ts) answers from the
+        // coordinator's roster and its own identity: `remote` = another daemon owns
+        // the node's checkout → relay agent_command over the mesh channel (the
+        // local queue lives on THIS machine and is inaccessible to the remote
+        // daemon, so trigger_mesh_queue there would be a no-op); `local` = this
+        // daemon serves it; `unreachable` = owned elsewhere with no mesh channel.
+        const route = await resolveMeshDispatchRoute(ctx, args.node_id);
+        if (route.route === 'unreachable' || route.route === 'error') {
+            return JSON.stringify({
+                success: false,
+                code: route.route === 'unreachable' ? 'mesh_node_unreachable' : 'mesh_dispatch_route_unavailable',
+                nodeId: args.node_id,
+                ...(args.session_id ? { sessionId: args.session_id } : {}),
+                taskMode: taskMode || 'unspecified',
+                error: route.route === 'unreachable'
+                    ? `Node '${args.node_id}' is served by another daemon and the coordinator daemon has no mesh channel to it (${route.reason}).`
+                    : `The coordinator daemon could not decide how to reach node '${args.node_id}': ${route.reason}`,
+            });
+        }
+        if (route.route === 'remote' && ctx.transport instanceof IpcTransport) {
             const cached = getSessionMetadata(meshSessionCacheKey(args.node_id, args.session_id || ''));
             // BUSY-SESSION GATE (remote parity, preview rc.37): an explicit target session that
             // is live and busy gets the SAME admission decision the local branch applies —
@@ -1556,6 +1571,8 @@ export async function meshReadChat(
     const providerSessionId = typeof args.provider_session_id === 'string' && args.provider_session_id.trim()
         ? args.provider_session_id.trim()
         : cached?.providerSessionId;
+    // Local vs remote (the replica hop below) is the coordinator daemon's answer.
+    await ensureMeshNodeRoutes(ctx);
     const isLocalNode = isLocalControlPlaneNode(ctx, node);
 
     // ── §8 unit 6: replica hop (design §4 roster id 3) ──────────────────────
@@ -2073,6 +2090,7 @@ export async function meshLaunchSession(
                 }
             } catch { /* graceful: no repo config → daemon uses provider default */ }
         }
+        await ensureMeshNodeRoutes(ctx);
         const isLocalNode = isLocalControlPlaneNode(ctx, node);
         if (node.daemonId && !isLocalNode && !coordinatorDaemonId) {
             return JSON.stringify(buildMissingCoordinatorDaemonIdFailure(ctx, node, resolvedProviderType), null, 2);

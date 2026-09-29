@@ -33,7 +33,6 @@ import {
   __resetProgressSurfaceForTest,
   __setWorkerProgressNoticeSinkForTests,
 } from '../../src/mesh/worker-report'
-import { __resetHandoffNotesForTest } from '../../src/mesh/worker-handoff-notes'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store'
 import {
   __resetWorkerSessionBindsForTest,
@@ -165,7 +164,6 @@ let lateNotices: Array<{ taskId: string; attemptId: string; coordinatorMessage: 
 
 beforeEach(() => {
   __resetReportedSummariesForTest()
-  __resetHandoffNotesForTest()
   __resetWorkerTaskTokensForTest()
   __resetWorkerSessionBindsForTest()
   sinkCalls = []

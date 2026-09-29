@@ -57,7 +57,6 @@ export interface WebConnectionManager {
     onScreenshot(key: string, callback: (sourceDaemonId: string, blob: Blob) => void): () => void
     /** Cloud sends over the DataChannel; standalone has no equivalent (hardcoded false today). */
     sendData?(daemonId: string, data: unknown): boolean
-    onStatus?(callback: (sourceDaemonId: string, payload: unknown) => void): () => void
     onStateChange?(callback: (daemonId: string, state: string) => void): () => void
     /** Cloud threads `daemonId` for its subscription manager; standalone ignores it. */
     onRuntimeEvent?(sessionId: string, callback: (event: WebConnectionRuntimeEvent) => void, daemonId?: string): () => void

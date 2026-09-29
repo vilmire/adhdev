@@ -640,34 +640,19 @@ describe('DaemonCommandRouter direct Repo Mesh truth', () => {
     })
   })
 
-  it('the background handshake probe retries a slow-but-connected peer and lands its answer in the store', async () => {
-    // First probe fails (slow peer), the retry succeeds. The peer stays
-    // 'connected' throughout so the bounded retry budget is spent.
-    let calls = 0
-    const dispatchMeshCommand = vi.fn(async () => {
-      calls += 1
-      if (calls === 1) throw new Error('timeout')
-      return { status: REMOTE_GIT_STATUS }
-    })
-    const getMeshPeerConnectionStatus = vi.fn(() => ({ state: 'connected', reported: true }))
-    const router = createRouter(dispatchMeshCommand, getMeshPeerConnectionStatus)
-
-    expect(router.meshNodeGitRefresher.kick({ meshId: 'mesh_retry', nodeId: 'node_slow', daemonId: 'daemon-slow', workspace: REMOTE_GIT_STATUS.workspace })).toBe(true)
+  it('first contact only nudges the member (with its workspace) — the coordinator never reads its git', async () => {
+    const dispatchMeshCommand = vi.fn(async (_daemonId: string, cmd: string) => (
+      cmd === 'mesh_node_state_nudge' ? { success: true, subscribed: true } : { status: REMOTE_GIT_STATUS }
+    ))
+    const router = createRouter(dispatchMeshCommand, vi.fn(() => ({ state: 'connected', reported: true })))
+    const target = { meshId: 'mesh_first', nodeId: 'node_new', daemonId: 'daemon-new', workspace: REMOTE_GIT_STATUS.workspace }
+    expect(router.meshNodeGitRefresher.firstContact(target)).toBe(true)
     await router.meshNodeGitRefresher.whenIdle()
-
-    // More than one git_status dispatch proves the retry actually fired.
-    expect(gitStatusCalls(dispatchMeshCommand).length).toBeGreaterThan(1)
-    // A status-origin probe carries the _statusProbe marker (short connect-wait)
-    // and the push subscription the member registers on answering.
-    expect(gitStatusCalls(dispatchMeshCommand)[0][2]).toMatchObject({
-      ...withStatusProbeMarker({ workspace: REMOTE_GIT_STATUS.workspace, refreshUpstream: true }),
-      meshStateSubscription: { meshId: 'mesh_retry', nodeId: 'node_slow' },
-    })
-    expect(router.meshNodeGitState.get('mesh_retry', 'node_slow')).toMatchObject({
-      source: 'coordinator_probe',
-      git: expect.objectContaining({ headCommit: 'cafe1234' }),
-      unreachableSince: null,
-    })
+    expect(gitStatusCalls(dispatchMeshCommand)).toEqual([])
+    expect(dispatchMeshCommand.mock.calls.map((call: any[]) => call[1])).toEqual(['mesh_node_state_nudge'])
+    expect(dispatchMeshCommand.mock.calls[0][2]).toEqual({ meshId: 'mesh_first', nodeId: 'node_new', workspace: REMOTE_GIT_STATUS.workspace })
+    // Nothing held until the member pushes.
+    expect(router.meshNodeGitState.get('mesh_first', 'node_new')?.git ?? null).toBeNull()
   })
 
   it('a refresh burst sends at most one nudge per node and never a git_status to a member that is pushing', async () => {
@@ -703,29 +688,31 @@ describe('DaemonCommandRouter direct Repo Mesh truth', () => {
 
     expect(gitStatusCalls(dispatchMeshCommand)).toEqual([])
     expect(dispatchMeshCommand.mock.calls.filter((call: any[]) => call[1] === 'get_status_metadata' && call[0] === 'daemon-slow')).toEqual([])
-    const nudges = dispatchMeshCommand.mock.calls.filter((call: any[]) => call[1] === 'mesh_node_state_nudge')
+    // (node_local is served by another daemon on this machine: it gets its own first-contact nudge.)
+    const nudges = dispatchMeshCommand.mock.calls.filter((call: any[]) => call[1] === 'mesh_node_state_nudge' && call[0] === 'daemon-slow')
     expect(nudges).toHaveLength(1)
-    expect(nudges[0]).toEqual(['daemon-slow', 'mesh_node_state_nudge', { meshId: 'mesh_reuse', nodeId: 'node_slow' }])
+    expect(nudges[0]).toEqual(['daemon-slow', 'mesh_node_state_nudge', { meshId: 'mesh_reuse', nodeId: 'node_slow', workspace: REMOTE_GIT_STATUS.workspace }])
   })
 
-  it('a member that does not know the nudge (older build) gets the handshake probe instead', async () => {
+  it('a member that refuses the nudge is recorded unreachable — never probed', async () => {
     const dispatchMeshCommand = vi.fn(async (_daemonId: string, cmd: string) => (
-      cmd === 'mesh_node_state_nudge' ? { success: false, error: 'Unknown command' } : { status: REMOTE_GIT_STATUS }
+      cmd === 'mesh_node_state_nudge' ? { success: true, subscribed: false } : { status: REMOTE_GIT_STATUS }
     ))
     const router = createRouter(dispatchMeshCommand, () => ({ state: 'connected', reported: true }))
     seedHeldGit(router, 'mesh_old', 'node_old', { ...REMOTE_GIT_STATUS }, Date.now() - 60_000)
     const target = { meshId: 'mesh_old', nodeId: 'node_old', daemonId: 'daemon-old', workspace: REMOTE_GIT_STATUS.workspace }
     expect(router.meshNodeGitRefresher.nudge(target)).toBe(true)
     await router.meshNodeGitRefresher.whenIdle()
-    expect(gitStatusCalls(dispatchMeshCommand)).toHaveLength(1)
-    expect(router.meshNodeGitState.get('mesh_old', 'node_old')?.source).toBe('coordinator_probe')
+    expect(gitStatusCalls(dispatchMeshCommand)).toEqual([])
+    expect(router.meshNodeGitState.get('mesh_old', 'node_old')?.source).toBe('member_push')
+    expect(typeof router.meshNodeGitState.get('mesh_old', 'node_old')?.unreachableSince).toBe('number')
   })
 
   for (const [label, connection] of [
     ['a peer that is definitively down', { state: 'disconnected', reported: true }],
     ['an offline peer with no live connection entry', null],
   ] as const) {
-    it(`the handshake probe never dispatches to ${label}, records it unreachable, and mesh_status still answers`, async () => {
+    it(`first contact with ${label} records it unreachable, and mesh_status still answers`, async () => {
       const root = mkdtempSync(join(tmpdir(), 'adhdev-router-probe-down-'))
       roots.push(root)
       const localRepo = join(root, 'local')

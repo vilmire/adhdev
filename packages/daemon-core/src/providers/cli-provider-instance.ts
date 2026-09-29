@@ -616,7 +616,7 @@ export class CliProviderInstance implements ProviderInstance {
         // and ordinary non-mesh CLI chat behaves exactly as before.
         const presentedStatus = resolveSessionTurnPresentation({
             sessionId: sessionId ?? this.instanceId,
-            legacyStatus: visibleStatus,
+            providerStatus: visibleStatus,
             providerType: this.type,
             surface: 'session_modal',
         }).status;

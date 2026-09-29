@@ -13,6 +13,7 @@ import {
   MESH_NODE_RUNTIME_MAX_SESSIONS,
 } from '../../src/mesh/mesh-node-runtime-summary'
 import {
+  digestMeshNodeStateSignature,
   MeshNodeGitStateStore,
   createDbMeshNodeGitStatePersistence,
   ensureMeshNodeGitStateSchema,
@@ -114,10 +115,11 @@ describe('member push — runtime half', () => {
     return { isGitRepo: true, branch: 'main', headCommit: head, upstream: 'origin/main', upstreamStatus: 'fresh', upstreamFetchedAt: 1, ahead: 0, behind: 0 }
   }
 
-  it('carries the runtime on the check tick, stays quiet while unchanged, and pushes a debounced runtime-only report on a lifecycle change', async () => {
+  it('carries the runtime only when it changed; a heartbeat carries its signature, and a coordinator that lost it gets it again', async () => {
     let now = 1_000_000
     let runtime: any = buildMeshNodeRuntimeSummary(statusMetadata(), FACTS)
-    const dispatch = vi.fn(async () => ({ success: true, accepted: true }))
+    // A coordinator that holds what it was sent confirms a signature-only git report.
+    const dispatch = vi.fn(async (..._args: any[]): Promise<any> => ({ success: true, accepted: true, ...(_args[2]?.gitSignature ? { gitHeld: true } : {}) }))
     const debounced: Array<() => void> = []
     const pusher = new MeshNodeStatePusher({
       dispatch,
@@ -127,26 +129,19 @@ describe('member push — runtime half', () => {
       startTimer: () => ({ stop() {} }),
       startDebounce: (fn) => { debounced.push(fn); return { stop() {} } },
     })
-    pusher.register({ coordinatorDaemonId: 'coord', meshId: MESH, nodeId: NODE, workspace: WS, git: gitStatus() })
-    // A new subscription schedules the runtime push right away (not on the next tick).
-    expect(debounced).toHaveLength(1)
-    debounced.shift()!()
-    await pusher.pushRuntimeChanges()
+    pusher.selfRegister({ coordinatorDaemonId: 'coord', meshId: MESH, nodeId: NODE, workspace: WS })
+    // The first push of a new subscription carries git AND the runtime summary.
+    await pusher.tick()
     expect(dispatch).toHaveBeenCalledTimes(1)
     const first = (dispatch.mock.calls[0] as any)[2]
-    expect(first.git).toBeUndefined()
+    expect(first.git).toMatchObject({ headCommit: 'h1' })
     expect(first.runtime.sessions[0]).toMatchObject({ id: 'sess-1', status: 'generating' })
+    expect(first.runtimeSignature).toBeUndefined()
     expect(JSON.stringify(first)).not.toContain('secret key rotation')
 
-    // The first tick after a (re-)registration pushes once — the coordinator's
-    // held state becomes member-pushed, so it stops probing this node.
     now += 60_000
     await pusher.tick()
-    expect(dispatch).toHaveBeenCalledTimes(2)
-    expect((dispatch.mock.calls[1] as any)[2].git).toMatchObject({ headCommit: 'h1' })
-    now += 60_000
-    await pusher.tick()
-    expect(dispatch).toHaveBeenCalledTimes(2) // git and runtime unchanged since the last push
+    expect(dispatch).toHaveBeenCalledTimes(1) // git and runtime unchanged since the last push
 
     // A lifecycle change: one debounced runtime-only push.
     runtime = buildMeshNodeRuntimeSummary(statusMetadata({ sessions: [{ id: 'sess-1', providerType: 'claude-cli', status: 'idle' }] }), FACTS)
@@ -155,17 +150,39 @@ describe('member push — runtime half', () => {
     expect(debounced).toHaveLength(1)
     debounced.shift()!()
     await pusher.pushRuntimeChanges()
-    expect(dispatch).toHaveBeenCalledTimes(3)
-    expect((dispatch.mock.calls[2] as any)[2].runtime.sessions[0].status).toBe('idle')
+    expect(dispatch).toHaveBeenCalledTimes(2)
+    expect((dispatch.mock.calls[1] as any)[2].git).toBeUndefined()
+    expect((dispatch.mock.calls[1] as any)[2].runtime.sessions[0].status).toBe('idle')
 
     // Quota moved (picked up by the next check tick, alongside git).
     runtime = buildMeshNodeRuntimeSummary(statusMetadata({ sessions: [{ id: 'sess-1', providerType: 'claude-cli', status: 'idle' }] }), { ...FACTS, quota: { 'claude-cli': { status: 'ok', windows: [{ usedPercent: 90 }] } } })
     now += 60_000
     await pusher.tick()
-    expect(dispatch).toHaveBeenCalledTimes(4)
-    const third = (dispatch.mock.calls[3] as any)[2]
-    expect(third.git).toMatchObject({ headCommit: 'h1' })
+    expect(dispatch).toHaveBeenCalledTimes(3)
+    const third = (dispatch.mock.calls[2] as any)[2]
+    // Git did not change since the coordinator acked it: only its signature travels.
+    expect(third.git).toBeUndefined()
+    expect(third.gitSignature).toEqual(expect.any(String))
     expect(third.runtime.nodeFacts.quota['claude-cli'].windows[0].usedPercent).toBe(90)
+
+    // Heartbeat with nothing changed: the runtime travels as its signature only.
+    // This coordinator answers runtimeHeld:false (it lost the row) — the summary is re-sent.
+    dispatch.mockImplementationOnce(async () => ({ success: true, accepted: true, runtimeHeld: false, gitHeld: true }))
+    now += 300_000
+    await pusher.tick()
+    expect(dispatch).toHaveBeenCalledTimes(4)
+    const heartbeat = (dispatch.mock.calls[3] as any)[2]
+    // Git unchanged too: it travels as its signature only.
+    expect(heartbeat.git).toBeUndefined()
+    expect(heartbeat.gitSignature).toEqual(expect.any(String))
+    expect(heartbeat.runtime).toBeUndefined()
+    expect(heartbeat.runtimeSignature).toBe(digestMeshNodeStateSignature(computeMeshNodeRuntimeSignature(runtime)))
+    expect(JSON.stringify(heartbeat).length).toBeLessThan(JSON.stringify(third).length)
+    expect(debounced).toHaveLength(1)
+    debounced.shift()!()
+    await pusher.pushRuntimeChanges()
+    expect(dispatch).toHaveBeenCalledTimes(5)
+    expect((dispatch.mock.calls[4] as any)[2].runtime.nodeFacts.quota['claude-cli'].windows[0].usedPercent).toBe(90)
     pusher.stop()
   })
 })
@@ -173,7 +190,7 @@ describe('member push — runtime half', () => {
 describe('coordinator store + overlay', () => {
   it('holds the runtime, stamps heldRuntime on foreign-daemon nodes only, and serves the newer facts bundle (quota)', () => {
     const store = new MeshNodeGitStateStore()
-    const refresher = new MeshNodeGitRefresher({ store, probe: async () => null, onSettled: () => {} })
+    const refresher = new MeshNodeGitRefresher({ store, nudge: async () => true, onSettled: () => {} })
     const runtime = buildMeshNodeRuntimeSummary(statusMetadata(), FACTS)
     const first = store.recordRuntimeObservation({ meshId: MESH, nodeId: NODE, workspace: WS, runtime, source: 'member_push', observedAt: 7_000 })
     expect(first).toMatchObject({ changed: true, factsChanged: true })
@@ -201,32 +218,44 @@ describe('coordinator store + overlay', () => {
     expect(snapshot.nodes[2].heldRuntime).toEqual({ source: 'none', observedAt: null, refreshing: false, sessions: [] })
   })
 
-  it('an older member that never pushes runtime gets ONE background get_status_metadata per daemon, never awaited', async () => {
+  it('the coordinator never reads a member: first contact nudges each node it holds nothing for, once', async () => {
     const store = new MeshNodeGitStateStore()
-    let release!: (value: unknown) => void
-    const probeRuntime = vi.fn(() => new Promise<Record<string, unknown> | null>((resolve) => { release = resolve as any }))
+    let release!: (value: boolean) => void
+    const nudge = vi.fn(() => new Promise<boolean>((resolve) => { release = resolve }))
     const onSettled = vi.fn()
-    const refresher = new MeshNodeGitRefresher({ store, probe: async () => null, onSettled, probeRuntime })
+    const refresher = new MeshNodeGitRefresher({ store, nudge, onSettled })
     const mesh = {
       nodes: [
-        { id: 'n1', daemonId: 'daemon_old', workspace: '/remote/a' },
-        { id: 'n2', daemonId: 'daemon_old', workspace: '/remote/b' },
+        { id: 'n1', daemonId: 'daemon_remote', workspace: '/remote/a' },
         { id: 'n3', daemonId: 'daemon_local', workspace: '/remote/c' },
       ],
     }
     kickMeshNodeGitRefreshes({ meshId: MESH, mesh, store, refresher, locality: { localDaemonId: 'daemon_local' }, refresh: false })
-    expect(probeRuntime).toHaveBeenCalledTimes(1)
-    expect(probeRuntime).toHaveBeenCalledWith('daemon_old')
-    expect(refresher.isRuntimeRefreshing(MESH, 'daemon_old')).toBe(true)
+    expect(nudge).toHaveBeenCalledTimes(1)
+    expect(nudge).toHaveBeenCalledWith({ meshId: MESH, nodeId: 'n1', daemonId: 'daemon_remote', workspace: '/remote/a' })
+    expect(refresher.isRuntimeRefreshing(MESH, 'daemon_remote')).toBe(true)
     // A second call while in flight starts nothing.
     kickMeshNodeGitRefreshes({ meshId: MESH, mesh, store, refresher, locality: { localDaemonId: 'daemon_local' }, refresh: true })
-    expect(probeRuntime).toHaveBeenCalledTimes(1)
-
-    release(buildMeshNodeRuntimeSummary(statusMetadata()))
+    expect(nudge).toHaveBeenCalledTimes(1)
+    release(true)
     await refresher.whenIdle()
-    expect(store.get(MESH, 'n1')!.runtimeSource).toBe('coordinator_probe')
-    expect(store.get(MESH, 'n2')!.runtime!.sessions[0].id).toBe('sess-1')
-    expect(store.get(MESH, 'n3')?.runtime ?? null).toBeNull()
+    // The member's push (not the nudge) is what lands state.
+    expect(store.get(MESH, 'n1')!.runtime).toBeNull()
+    expect(onSettled).not.toHaveBeenCalled()
+  })
+
+  it('a heartbeat that only confirms the runtime signature renews its age without resending it', () => {
+    let now = 10_000
+    const store = new MeshNodeGitStateStore(null, () => now)
+    const runtime = buildMeshNodeRuntimeSummary(statusMetadata(), FACTS)!
+    store.recordRuntimeObservation({ meshId: MESH, nodeId: NODE, workspace: WS, runtime, source: 'member_push', observedAt: now })
+    now += 400_000
+    expect(store.confirmRuntime(MESH, NODE, computeMeshNodeRuntimeSignature(runtime), now)).toBe(true)
+    expect(store.get(MESH, NODE)!.runtimeObservedAt).toBe(now)
+    expect(store.confirmRuntime(MESH, NODE, 'other-signature', now)).toBe(false)
+    expect(store.confirmRuntime(MESH, 'node_unknown', computeMeshNodeRuntimeSignature(runtime), now)).toBe(false)
+    store.markHandshakePending(MESH, NODE, 'restart', now)
+    expect(store.confirmRuntime(MESH, NODE, computeMeshNodeRuntimeSignature(runtime), now)).toBe(false)
   })
 })
 

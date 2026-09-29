@@ -86,14 +86,42 @@ function createRouter(overrides: Record<string, unknown> = {}) {
 }
 
 /**
- * Remote git reaches mesh_status only through the coordinator-held store: the
- * first call kicks the background handshake probe (never awaited); once it has
- * settled, a held-state rebuild renders what it recorded. No request path ever
- * probes a member.
+ * Remote git reaches mesh_status only through the coordinator-held store, and
+ * only by the member PUSHING it: the first call nudges each node the coordinator
+ * holds nothing for (never a read); the test then plays the member — its git
+ * fixture (the dispatch mock's `git_status` answer) is pushed back with
+ * `mesh_node_git_report` — and a held-state rebuild renders what landed.
  */
+async function deliverMemberPushes(router: any) {
+  const dispatch = router.deps?.dispatchMeshCommand
+  const calls: any[][] = dispatch?.mock?.calls ?? []
+  const seen = new Set<string>()
+  for (const [daemonId, cmd, nudgeArgs] of [...calls]) {
+    if (cmd !== 'mesh_node_state_nudge') continue
+    const key = `${daemonId}\u0000${nudgeArgs?.nodeId}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    // Read the member's fixture WITHOUT recording a call: the coordinator itself never sends git_status.
+    const impl = dispatch.getMockImplementation?.() ?? dispatch
+    let answer: any
+    try { answer = await impl(daemonId, 'git_status', { workspace: nudgeArgs.workspace }) } catch { continue }
+    const git = answer?.status ?? answer?.result?.status
+    if (!git || typeof git !== 'object') continue
+    await router.execute('mesh_node_git_report', {
+      meshId: nudgeArgs.meshId,
+      nodeId: nudgeArgs.nodeId,
+      workspace: nudgeArgs.workspace,
+      git,
+      ...(typeof git.lastCheckedAt === 'number' ? { observedAt: git.lastCheckedAt } : {}),
+      [MESH_SENDER_DAEMON_ID_ARG]: daemonId,
+    }, 'mesh')
+  }
+}
+
 async function meshStatusAfterHeldProbe(router: any, args: Record<string, unknown>) {
   const first = await router.execute('mesh_status', args)
   await router.meshNodeGitRefresher.whenIdle()
+  await deliverMemberPushes(router)
   const settled = await router.execute('mesh_status', { ...args, refresh: false, rebuildFromHeld: true })
   return { first, settled }
 }
@@ -621,7 +649,7 @@ describe('mesh_status', () => {
     }
   })
 
-  it('renders a remote node from the coordinator-held probe result as held (cached), never live, with the member\'s own check time', async () => {
+  it('renders a remote node from the member-pushed held state as held (cached), never live, with the member\'s own check time', async () => {
     const { dir, repoRoot } = await createTempGitRepo('mesh-status-live-marker-')
     try {
       const dispatchMeshCommand = vi.fn(async () => ({
@@ -678,7 +706,7 @@ describe('mesh_status', () => {
         reachable: true,
         lastProbeAt: '2026-06-20T07:02:58.779Z',
       }))
-      expect(remote.gitObservation).toMatchObject({ source: 'coordinator_probe' })
+      expect(remote.gitObservation).toMatchObject({ source: 'member_push' })
       expect(remote.git).toMatchObject({ branch: 'main' })
     } finally {
       await cleanupTempDir(dir)
@@ -1156,165 +1184,6 @@ describe('mesh_status', () => {
     }
   })
 
-  it('retries remote git probe after peer telemetry flips to connected and surfaces live remote git truth', async () => {
-    const { dir, repoRoot } = await createTempGitRepo('mesh-status-retry-')
-    try {
-      let gitStatusCallCount = 0
-      const dispatchMeshCommand = vi.fn(async (_daemonId: string, command: string) => {
-        if (command !== 'git_status') return { success: false, error: 'not handled' }
-        gitStatusCallCount += 1
-        if (gitStatusCallCount === 1) {
-          throw new Error('timeout')
-        }
-        return {
-          status: {
-            workspace: '/missing/remote',
-            repoRoot: '/missing/remote',
-            isGitRepo: true,
-            branch: 'main',
-            head: '710e11de',
-            upstream: 'origin/main',
-            upstreamStatus: 'fresh',
-            ahead: 0,
-            behind: 5,
-            dirty: false,
-            staged: 0,
-            modified: 0,
-            untracked: 0,
-            deleted: 0,
-            renamed: 0,
-            hasConflicts: false,
-            conflictFiles: [],
-            stashCount: 0,
-            branchConvergence: {
-              status: 'blocked_review',
-              reason: 'default_branch_not_even_with_upstream',
-            },
-            lastCheckedAt: Date.parse('2026-05-20T07:02:58.779Z'),
-            submodules: [
-              {
-                path: 'oss',
-                commit: 'c3c722f858bd0a01652ed7d9d5de25b27d233b8a',
-                repoPath: '/missing/remote/oss',
-                dirty: false,
-                outOfSync: false,
-                lastCheckedAt: Date.parse('2026-05-20T07:02:58.779Z'),
-              },
-            ],
-          },
-        }
-      })
-      const getMeshPeerConnectionStatus = vi.fn((daemonId: string) => daemonId === 'machine-remote'
-        ? {
-            perspective: 'selected_coordinator',
-            source: 'mesh_peer_status',
-            state: getMeshPeerConnectionStatus.mock.calls.length >= 2 ? 'connected' : 'connecting',
-            transport: 'direct',
-            reported: true,
-            reason: getMeshPeerConnectionStatus.mock.calls.length >= 2
-              ? 'Connected directly peer-to-peer.'
-              : 'Waiting for mesh DataChannel to open.',
-            lastStateChangeAt: '2026-05-20T07:00:06.000Z',
-            lastConnectedAt: '2026-05-20T07:00:06.000Z',
-            lastCommandAt: '2026-05-20T07:00:23.000Z',
-          }
-        : null)
-
-      const { router } = createRouter({
-        dispatchMeshCommand,
-        getMeshPeerConnectionStatus,
-      })
-
-      const { settled: result } = await meshStatusAfterHeldProbe(router, {
-        meshId: 'mesh-retry',
-        // The coordinator's background handshake probe (bounded retry) lands the
-        // remote git in the held store; the request path never waits on it.
-        refresh: true,
-        inlineMesh: {
-          id: 'mesh-retry',
-          name: 'Mesh Retry',
-          repoIdentity: 'repo',
-          policy: {},
-          nodes: [
-            {
-              id: 'node-local',
-              daemonId: 'machine-local',
-              machineLabel: 'Local',
-              workspace: repoRoot,
-              providers: ['hermes-cli'],
-              policy: { providerPriority: ['hermes-cli'] },
-            },
-            {
-              id: 'node-remote',
-              daemonId: 'machine-remote',
-              machineLabel: 'Remote',
-              workspace: '/missing/remote',
-              providers: ['hermes-cli'],
-              policy: { providerPriority: ['hermes-cli'] },
-              cachedStatus: {
-                machineStatus: 'online',
-                lastSeenAt: '2026-05-20T06:59:00.000Z',
-                updatedAt: '2026-05-20T06:59:00.000Z',
-              },
-            },
-          ],
-        },
-      }) as any
-
-      expect(result.success).toBe(true)
-      expect(gitStatusCallCount).toBe(2)
-      // The bounded retry re-reads the peer connection across attempts: a pre-attempt
-      // liveness gate fast-fails offline/dropped peers, the between-attempt gate decides
-      // whether to retry, and the warmup deadline samples it while a cold channel opens.
-      // The EXACT read count is therefore an implementation detail that varies with
-      // dispatch/timer ordering (observed 3–5 across platforms) — pinning it made this a
-      // cross-platform flake. Assert the invariant the retry actually depends on instead:
-      // the connection is consulted more than once (so the between-attempt re-check ran),
-      // always scoped to the remote peer, and the surfaced connection/git truth below
-      // proves the probe recovered after the telemetry flipped to `connected`.
-      expect(getMeshPeerConnectionStatus.mock.calls.length).toBeGreaterThanOrEqual(2)
-      expect(getMeshPeerConnectionStatus).toHaveBeenCalledWith('machine-remote')
-      const remoteNode = result.nodes.find((node: any) => node.nodeId === 'node-remote')
-      expect(remoteNode?.gitProbePending).toBeUndefined()
-      // The echoed cachedStatus (machineStatus / lastSeenAt) is not truth for a
-      // node another daemon serves: freshness comes from the held git + telemetry.
-      expect(remoteNode).toEqual(expect.objectContaining({
-        health: 'online',
-        launchReady: true,
-        providers: ['hermes-cli'],
-        lastSeenAt: '2026-05-20T07:00:23.000Z',
-        updatedAt: '2026-05-20T07:02:58.779Z',
-        autoFastForwardEligible: true,
-        suggestedAction: 'auto_fast_forward',
-      }))
-      expect(remoteNode?.connection).toEqual(expect.objectContaining({
-        source: 'mesh_peer_status',
-        state: 'connected',
-        transport: 'direct',
-        reported: true,
-        reason: 'Connected directly peer-to-peer.',
-        lastConnectedAt: '2026-05-20T07:00:06.000Z',
-        lastCommandAt: '2026-05-20T07:00:23.000Z',
-      }))
-      // Held git renders through the shared transit normalizer (the raw
-      // member-side extras such as `head` / an embedded verdict are not carried);
-      // the node-level convergence verdict is recomputed from it.
-      expect(remoteNode?.git).toEqual(expect.objectContaining({
-        workspace: '/missing/remote',
-        repoRoot: '/missing/remote',
-        isGitRepo: true,
-        branch: 'main',
-        upstream: 'origin/main',
-        upstreamStatus: 'fresh',
-        ahead: 0,
-        behind: 5,
-        submodules: [expect.objectContaining({ path: 'oss' })],
-      }))
-    } finally {
-      await cleanupTempDir(dir)
-    }
-  })
-
   it('returns cached coordinator-owned aggregate mesh_status without refreshing peer git on default requests', async () => {
     const { dir, repoRoot } = await createTempGitRepo('mesh-status-cache-')
     try {
@@ -1402,7 +1271,12 @@ describe('mesh_status', () => {
         lastProbeAt: '2026-05-21T14:10:00.000Z',
         staleness: 'stale',
       }))
-      expect(dispatchMeshCommand.mock.calls.filter((call: any[]) => call[1] === 'git_status')).toHaveLength(1)
+      // The coordinator never reads the member: one first-contact nudge, no git_status.
+      expect(dispatchMeshCommand.mock.calls.filter((call: any[]) => call[1] === 'git_status')).toHaveLength(0)
+      // (one per foreign-daemon node the coordinator held nothing for)
+      const nudgedNodes = dispatchMeshCommand.mock.calls.filter((call: any[]) => call[1] === 'mesh_node_state_nudge').map((call: any[]) => call[2].nodeId)
+      expect(nudgedNodes).toContain('node_303a1ded96a859540d7bf608448d1fcc')
+      expect(new Set(nudgedNodes).size).toBe(nudgedNodes.length)
       expect(sessionHostControl.listSessions).toHaveBeenCalledTimes(2) // the kicking read + the held-state rebuild
 
       dispatchMeshCommand.mockClear()
@@ -2098,8 +1972,8 @@ describe('mesh_status', () => {
         git: expect.objectContaining({ isGitRepo: true, branch: expect.any(String) }),
       })
       // Local workspaces are read here; the only mesh traffic allowed is the
-      // background runtime read of the (foreign) daemons serving them.
-      expect(dispatchMeshCommand.mock.calls.filter((call: any[]) => call[1] !== 'get_status_metadata')).toEqual([])
+      // first-contact nudge asking the (foreign) daemons serving them to push their runtime.
+      expect(dispatchMeshCommand.mock.calls.filter((call: any[]) => call[1] !== 'mesh_node_state_nudge')).toEqual([])
     } finally {
       await cleanupTempDir(primary.dir)
       await cleanupTempDir(sibling.dir)
@@ -2360,19 +2234,13 @@ describe('mesh_status', () => {
       // Graph renders: success, the local node carries live git, and the slow
       // peer is simply pending (setup inventory) rather than fatal.
       expect(result.success).toBe(true)
-      // The request itself never fans out: at most one BACKGROUND freshness probe
-      // is kicked for the never-observed peer (its failure cannot reach this
-      // already-returned response), carrying the push-subscription marker.
-      const gitProbes = (dispatchMeshCommand.mock.calls as any[]).filter((call) => call[1] === 'git_status')
-      expect(gitProbes.length).toBeLessThanOrEqual(1)
-      for (const call of gitProbes) {
-        expect(call[2]).toMatchObject({ meshStateSubscription: { meshId: 'mesh_standing_default', nodeId: 'node_slow' } })
-      }
-      // Everything else is the background runtime probe (sessions / build) of a
-      // daemon whose runtime is not held yet — at most one per daemon, never awaited.
-      const runtimeProbes = (dispatchMeshCommand.mock.calls as any[]).filter((call) => call[1] !== 'git_status')
-      expect(runtimeProbes.every((call) => call[1] === 'get_status_metadata')).toBe(true)
-      expect(new Set(runtimeProbes.map((call) => call[0])).size).toBe(runtimeProbes.length)
+      // The request itself never fans out and never reads a member: the only
+      // traffic is at most one BACKGROUND first-contact nudge per never-observed
+      // node (its outcome cannot reach this already-returned response).
+      const calls = dispatchMeshCommand.mock.calls as any[]
+      expect(calls.every((call) => call[1] === 'mesh_node_state_nudge')).toBe(true)
+      expect(new Set(calls.map((call) => call[2].nodeId)).size).toBe(calls.length)
+      expect(calls.some((call) => call[2].nodeId === 'node_slow')).toBe(true)
       expect(result.sourceOfTruth.coordinatorOwnsLiveTruth).toBe(true)
       const localNode = result.nodes.find((node: any) => node.nodeId === 'node_7')
       expect(localNode.git).toMatchObject({ isGitRepo: true })
@@ -2595,7 +2463,7 @@ describe('mesh_status dead local worktree exclusion', () => {
     }
   })
 
-  it('a dead local worktree is never probed, and a remote peer without held truth is pending (no request-path probe)', async () => {
+  it('a dead local worktree is never contacted, and a remote peer without held truth is pending (no request-path read)', async () => {
     const { dir, repoRoot } = await createTempGitRepo('mesh-status-dead-worktree-remote-')
     try {
       const dispatchMeshCommand = vi.fn(async (daemonId: string, _command: string) => {
@@ -2662,9 +2530,10 @@ describe('mesh_status dead local worktree exclusion', () => {
       const remoteNode = result.nodes.find((node: any) => node.nodeId === 'node_remote')
       expect(remoteNode.gitProbePending).toBe(true)
       await router.meshNodeGitRefresher.whenIdle()
-      // Only the genuine remote peer gets the BACKGROUND handshake probe; the dead
-      // worktree (this daemon's own) is never probed.
-      expect(dispatchMeshCommand).toHaveBeenCalledWith('daemon_remote', 'git_status', expect.anything())
+      // Only the genuine remote peer gets the BACKGROUND first-contact nudge; the dead
+      // worktree (this daemon's own) is never contacted, and nothing is read.
+      expect(dispatchMeshCommand).toHaveBeenCalledWith('daemon_remote', 'mesh_node_state_nudge', expect.objectContaining({ nodeId: 'node_remote' }))
+      expect(dispatchMeshCommand.mock.calls.some((call: any[]) => call[1] === 'git_status')).toBe(false)
       for (const call of dispatchMeshCommand.mock.calls) {
         expect(call[0]).not.toBe('daemon_self')
       }
