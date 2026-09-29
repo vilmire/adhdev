@@ -16,7 +16,7 @@
  * adhdev launch --workspace /path — Open specific workspace
  */
 
-import { exec, spawn, spawnSync } from 'child_process';
+import { exec, spawn } from 'child_process';
 
 async function execQuiet(command: string, options: any = {}): Promise<string> {
     return new Promise((resolve) => {

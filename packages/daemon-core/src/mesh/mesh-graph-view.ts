@@ -266,7 +266,6 @@ export function buildMeshGraphViews(meshId: string, opts: BuildMeshGraphViewOpti
             }
         }
 
-        const gateByNodeId = new Map(gates.map(g => [g.nodeId, g]));
         const nodeViews: MeshGraphNodeView[] = nodes.map(node => {
             const queue = node.queueTaskId ? queueByTaskId.get(node.queueTaskId) : undefined;
             const gateBlock = parseCoordinatorGateBlock(queue?.blockedReason);

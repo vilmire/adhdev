@@ -5,7 +5,8 @@
 //   1. node resolution (findNodeWithRefresh / findOptionalNodeWithRefresh) —
 //      coordinator-only, member daemons are never asked;
 //   2. remote dispatch session pick/verify (ipcDispatchToRemoteAgent) — answered
-//      from the coordinator-held runtime; only `agent_command` itself goes live;
+//      from the coordinator-held runtime ONLY (no live confirm, ever); only
+//      `agent_command` itself goes to the member;
 //   3. mesh_review_inbox — the coordinator's own ledger;
 //   4. refine / change-impact config schema reads and default validate/suggest.
 import test from 'node:test';
@@ -52,12 +53,8 @@ function makeCtx(opts: {
     nodes?: any[];
     /** Coordinator get_mesh nodes; `null` = the membership read fails. */
     coordinatorMeshNodes?: any[] | null;
-    /** Held runtime sessions for node-remote; undefined = daemon holds no runtime. */
+    /** Held runtime sessions for node-remote; undefined = nothing pushed yet. */
     heldSessions?: any[];
-    /** Routing-stamp version the held summary carries (absent = an older member). */
-    heldStampVersion?: number;
-    /** Live get_status_metadata sessions on the member. */
-    liveSessions?: any[];
     memberMeshNodes?: any[];
     calls: Call[];
 }) {
@@ -73,7 +70,6 @@ function makeCtx(opts: {
             return {
                 success: true,
                 meshId: MESH_ID,
-                ...(opts.heldSessions ? { nodeRuntimeHeld: true } : {}),
                 nodes: nodes.map((node: any) => ({
                     nodeId: node.id,
                     ...(opts.heldSessions && node.daemonId !== COORD
@@ -81,7 +77,6 @@ function makeCtx(opts: {
                             source: 'member_push',
                             observedAt: Date.now(),
                             sessions: opts.heldSessions,
-                            ...(opts.heldStampVersion ? { sessionStampVersion: opts.heldStampVersion } : {}),
                         } }
                         : {}),
                 })),
@@ -91,7 +86,7 @@ function makeCtx(opts: {
     };
     transport.meshCommand = async (daemonId: string, verb: string, args: any) => {
         opts.calls.push({ kind: 'meshCommand', verb, daemonId, args });
-        if (verb === 'get_status_metadata') return { success: true, status: { sessions: opts.liveSessions ?? [] } };
+        if (verb === 'get_status_metadata') throw new Error('a member status probe must never happen');
         if (verb === 'get_mesh') return { success: true, mesh: { nodes: opts.memberMeshNodes ?? [] } };
         if (verb === 'agent_command') return { success: true };
         return { success: true, verb };
@@ -184,69 +179,46 @@ test('2: an explicit session_id is verified from the held runtime with zero memb
     assert.equal(memberCalls(calls).filter(c => c.verb === 'agent_command')[0].args.targetSessionId, 'sess-remote-1');
 });
 
-test('2: an explicit session missing from the held list is confirmed by ONE live read', async () => {
+test('2: an explicit session missing from the held list is refused as not found — no live confirm', async () => {
     const calls: Call[] = [];
-    const ctx = makeCtx({ calls, heldSessions: [], liveSessions: [heldSession({ id: 'sess-new', instanceId: 'sess-new' })] });
+    const ctx = makeCtx({ calls, heldSessions: [] });
     const result = await ipcDispatchToRemoteAgent(ctx, ctx.mesh.nodes[1], { ...dispatchArgs, session_id: 'sess-new' });
-    assert.equal(result.success, true, JSON.stringify(result));
-    assert.equal(memberReads(calls).length, 1);
-    assert.equal(memberReads(calls)[0].verb, 'get_status_metadata');
+    assert.equal(result.success, false);
+    assert.equal((result as any).code, 'mesh_target_session_not_found');
+    assert.equal((result as any).retryRecommended, true);
+    assert.deepEqual(memberCalls(calls), [], 'neither a status read nor a send');
 });
 
-test('2: a detached held pick (no meshNodeFor — sticky marker not held) is confirmed live', async () => {
-    const detached = heldSession({ settings: { launchedByCoordinator: true } });
-    const calls: Call[] = [];
-    const ctx = makeCtx({
-        calls,
-        heldSessions: [detached],
-        liveSessions: [{ ...detached, settings: { launchedByCoordinator: true, meshCoordinatorDaemonId: COORD, meshLastNodeId: 'node-base-other' } }],
-    });
-    const result = await ipcDispatchToRemoteAgent(ctx, ctx.mesh.nodes[1], dispatchArgs);
-    assert.equal(result.success, true, JSON.stringify(result));
-    assert.equal(memberReads(calls).length, 1, 'held fidelity is insufficient → one live read');
-    const send = memberCalls(calls).find(c => c.verb === 'agent_command')!;
-    assert.equal(send.args.targetSessionId, undefined, 'live sticky marker names another node → sessionless dispatch');
-});
-
-// Routing-stamp v2 (daemon-core MESH_NODE_RUNTIME_SESSION_STAMP_VERSION): the held
-// summary carries meshLastNodeId / meshCoordinatorDaemonId, so the held pick is the
-// decision a live read would make — decisive, zero member reads.
-test('2: v2 stamps — a detached held session whose sticky marker names another node is decided with zero member reads', async () => {
+// The held summary carries meshLastNodeId / meshCoordinatorDaemonId, so the held
+// pick is the decision a live read would make — decisive, zero member reads.
+test('2: a detached held session whose sticky marker names another node is decided with zero member reads', async () => {
     const detached = heldSession({ settings: { launchedByCoordinator: true, meshCoordinatorDaemonId: COORD, meshLastNodeId: 'node-base-other' } });
     const calls: Call[] = [];
-    const ctx = makeCtx({ calls, heldSessions: [detached], heldStampVersion: 2, liveSessions: [detached] });
+    const ctx = makeCtx({ calls, heldSessions: [detached] });
     const result = await ipcDispatchToRemoteAgent(ctx, ctx.mesh.nodes[1], dispatchArgs);
     assert.equal(result.success, true, JSON.stringify(result));
-    assert.deepEqual(memberReads(calls), [], 'held stamps are complete → no get_status_metadata relay');
+    assert.deepEqual(memberReads(calls), [], 'no get_status_metadata relay');
     const send = memberCalls(calls).find(c => c.verb === 'agent_command')!;
     assert.equal(send.args.targetSessionId, undefined, 'held sticky marker names another node → sessionless dispatch');
 });
 
-test('2: v2 stamps — a detached held session sticky to THIS node is picked with zero member reads', async () => {
+test('2: a detached held session sticky to THIS node is picked with zero member reads', async () => {
     const detached = heldSession({ settings: { launchedByCoordinator: true, meshCoordinatorDaemonId: COORD, meshLastNodeId: 'node-remote' } });
     const calls: Call[] = [];
-    const ctx = makeCtx({ calls, heldSessions: [detached], heldStampVersion: 2 });
+    const ctx = makeCtx({ calls, heldSessions: [detached] });
     const result = await ipcDispatchToRemoteAgent(ctx, ctx.mesh.nodes[1], dispatchArgs);
     assert.equal(result.success, true, JSON.stringify(result));
     assert.deepEqual(memberReads(calls), []);
     assert.equal(memberCalls(calls).find(c => c.verb === 'agent_command')!.args.targetSessionId, 'sess-remote-1');
 });
 
-test('2: v2 stamps — an explicit session missing from the held list is still confirmed by ONE live read', async () => {
+test('2: nothing held for the node yet → sessionless dispatch (the worker picks), zero member reads', async () => {
     const calls: Call[] = [];
-    const ctx = makeCtx({ calls, heldSessions: [], heldStampVersion: 2, liveSessions: [heldSession({ id: 'sess-new', instanceId: 'sess-new' })] });
-    const result = await ipcDispatchToRemoteAgent(ctx, ctx.mesh.nodes[1], { ...dispatchArgs, session_id: 'sess-new' });
-    assert.equal(result.success, true, JSON.stringify(result));
-    assert.equal(memberReads(calls).length, 1);
-    assert.equal(memberReads(calls)[0].verb, 'get_status_metadata');
-});
-
-test('2: a coordinator without held runtime keeps the legacy live read', async () => {
-    const calls: Call[] = [];
-    const ctx = makeCtx({ calls, liveSessions: [heldSession()] });
+    const ctx = makeCtx({ calls });
     const result = await ipcDispatchToRemoteAgent(ctx, ctx.mesh.nodes[1], dispatchArgs);
     assert.equal(result.success, true, JSON.stringify(result));
-    assert.equal(memberReads(calls).length, 1);
+    assert.deepEqual(memberReads(calls), []);
+    assert.equal(memberCalls(calls).find(c => c.verb === 'agent_command')!.args.targetSessionId, undefined);
 });
 
 // ─── 3. mesh_review_inbox ───────────────────────────────────────────────────

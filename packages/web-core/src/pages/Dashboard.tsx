@@ -636,7 +636,7 @@ export default function Dashboard({ suppressConnectionBanner = false }: Dashboar
                     open: showOnboarding,
                     standalone: isStandalone,
                     onClose: () => {
-                        try { localStorage.setItem('adhdev_onboarding_v1', 'done') } catch {}
+                        try { localStorage.setItem('adhdev_onboarding_v1', 'done') } catch { /* storage unavailable — onboarding flag is best-effort */ }
                         setShowOnboarding(false)
                     },
                 }}

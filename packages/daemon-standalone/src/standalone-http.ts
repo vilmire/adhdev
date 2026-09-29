@@ -9,7 +9,7 @@
  * REST routes gain the same topic invalidation as the WS / command paths (C11).
  */
 
-import type { IncomingMessage, ServerResponse } from 'http';
+import type { IncomingMessage } from 'http';
 import * as path from 'path';
 import * as fs from 'fs';
 import type { StatusResponse } from '@adhdev/daemon-core';

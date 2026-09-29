@@ -3,13 +3,10 @@
  * `settings.meshLastNodeId` (the sticky node marker of a detached session) and
  * `settings.meshCoordinatorDaemonId` (the relay anchor) are identifiers the
  * coordinator needs to make a remote dispatch pick without a live member read.
- * The allow-list must carry them — and still drop every content field — and the
- * stamp version must be preserved (never defaulted) so an older member's summary
- * stays recognizable after the coordinator re-sanitizes it.
+ * The allow-list must carry them — and still drop every content field.
  */
 import { describe, expect, it } from 'vitest'
 import {
-  MESH_NODE_RUNTIME_SESSION_STAMP_VERSION,
   buildMeshNodeRuntimeSummary,
   sanitizeMeshNodeRuntimeSummary,
 } from '../../src/mesh/mesh-node-runtime-summary'
@@ -32,9 +29,8 @@ const rawSession = {
 }
 
 describe('runtime summary routing stamps', () => {
-  it('member build carries meshLastNodeId / meshCoordinatorDaemonId and the stamp version, and drops content', () => {
+  it('member build carries meshLastNodeId / meshCoordinatorDaemonId and drops content', () => {
     const summary = buildMeshNodeRuntimeSummary({ status: { instanceId: 'daemon_member', sessions: [rawSession] } })!
-    expect(summary.sessionStampVersion).toBe(MESH_NODE_RUNTIME_SESSION_STAMP_VERSION)
     expect(summary.sessions[0].settings).toEqual({
       launchedByCoordinator: true,
       meshLastNodeId: 'node_worktree_a',
@@ -54,12 +50,6 @@ describe('runtime summary routing stamps', () => {
     const ingested = sanitizeMeshNodeRuntimeSummary(tampered)!
     expect(ingested).toEqual(member)
     expect(JSON.stringify(ingested)).not.toContain('PRIVATE')
-  })
-
-  it('an older member summary (no stamp version) stays without one after the coordinator re-sanitizes it', () => {
-    const olderMember = { schemaVersion: 1, daemonId: 'daemon_old', sessions: [{ id: 'sess-old', settings: { meshNodeFor: 'mesh_a' } }] }
-    const ingested = sanitizeMeshNodeRuntimeSummary(olderMember)!
-    expect(ingested.sessionStampVersion).toBeUndefined()
   })
 
   it('a routing stamp that is not identifier-shaped (multi-line / oversized) is dropped', () => {

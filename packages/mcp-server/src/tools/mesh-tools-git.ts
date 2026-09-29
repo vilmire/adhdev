@@ -6,7 +6,6 @@ import {
     IpcTransport,
     buildCoordinatorP2pRelayFailure,
     buildRemoveNodeArgs,
-    collectLiveStatusProbe,
     collectRelatedRepoStatuses,
     commandForNode,
     daemonIdsEquivalent,
@@ -21,6 +20,7 @@ import {
     syncCoordinatorDaemonMeshCache,
     unwrapCommandPayload,
 } from './mesh-tools-internal.js';
+import { readNodeRuntime } from './mesh-held-node-state.js';
 import type {
     LocalMeshNodeEntry,
     MeshContext,
@@ -196,8 +196,8 @@ export async function meshRestartDaemon(
     // the lifecycle command. The restart responder separately reports the
     // daemon that actually accepted the operation; comparing the two exposes
     // a routing/track split without blocking the operator's recovery action.
-    // A legacy/unreachable responder remains explicitly unknown.
-    const observedProbe = await collectLiveStatusProbe(ctx, node);
+    // Read from the coordinator's answer (never the member); nothing held = unknown.
+    const { probe: observedProbe } = await readNodeRuntime(ctx, node);
     const meshAttachedTrack = observedProbe.daemonBuild?.track ?? 'unknown';
     const configuredDaemonId = typeof node.daemonId === 'string' && node.daemonId.trim()
         ? node.daemonId.trim()

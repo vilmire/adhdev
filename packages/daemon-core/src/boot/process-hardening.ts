@@ -1,7 +1,7 @@
 /**
  * Process-level hardening — boot-time mitigations against provider scripts.
  *
- * Provider scripts run in-process (see providers/sdk/v1/sandbox/README-design.ts).
+ * Provider scripts run in-process (no isolated-vm sandbox).
  * The require() whitelist (sandbox/require-whitelist.ts) blocks the obvious
  * attack surfaces (no `child_process.exec`, no `fs.writeFile`, no `net`, etc.)
  * but a malicious or buggy script can still:

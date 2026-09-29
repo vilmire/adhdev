@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { CliProviderInstance } from '../../src/providers/cli-provider-instance.js'
+import * as instanceConstants from '../../src/providers/cli-provider-instance-constants.js'
 import { ManualAttendanceTracker } from '../../src/providers/manual-attendance.js'
 
 // AUTOAPPROVE-FLAP-RECUR — a delegated worker whose Bash-approval FSM cycles the
@@ -220,16 +221,16 @@ describe('cli-provider auto-approve — AUTOAPPROVE-FLAP-RECUR', () => {
 
 describe('cli-provider auto-approve — FLAP-RECUR constants', () => {
   it('flap-continuity window sits between the tight hysteresis and the mask-stall bound', () => {
-    const flap = (CliProviderInstance as any).AUTO_APPROVE_FLAP_CONTINUITY_MS
-    const hyst = (CliProviderInstance as any).AUTO_APPROVE_GATE_HYSTERESIS_MS
-    const mask = (CliProviderInstance as any).AUTO_APPROVE_MASK_STALL_MS
+    const flap = instanceConstants.AUTO_APPROVE_FLAP_CONTINUITY_MS
+    const hyst = instanceConstants.AUTO_APPROVE_GATE_HYSTERESIS_MS
+    const mask = instanceConstants.AUTO_APPROVE_MASK_STALL_MS
     expect(flap).toBe(FLAP_CONTINUITY_MS)
     expect(flap).toBeGreaterThan(hyst)
     expect(flap).toBeLessThan(mask)
   })
 
   it('mask-stall bound satisfies invariant for coordinator busy phase (2.85s): CONTINUITY + busy + SETTLE < MASK_STALL', () => {
-    const mask = (CliProviderInstance as any).AUTO_APPROVE_MASK_STALL_MS
+    const mask = instanceConstants.AUTO_APPROVE_MASK_STALL_MS
     const coordinatorBusyMs = 2850
     expect(FLAP_CONTINUITY_MS + coordinatorBusyMs + 600).toBeLessThan(mask)
   })

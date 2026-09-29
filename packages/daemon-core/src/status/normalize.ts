@@ -56,12 +56,6 @@ function truncateString(value: string, maxChars: number): string {
     return `${value.slice(0, maxChars - 12)}...[truncated]`;
 }
 
-function truncateStringTail(value: string, maxChars: number): string {
-    if (value.length <= maxChars) return value;
-    if (maxChars <= 12) return value.slice(value.length - Math.max(0, maxChars));
-    return `...[truncated]${value.slice(value.length - (maxChars - 12))}`;
-}
-
 function trimStructuredStrings(value: unknown, maxChars: number): unknown {
     if (typeof value === 'string') return truncateString(value, maxChars);
     if (Array.isArray(value)) return value.map((item) => trimStructuredStrings(item, maxChars));

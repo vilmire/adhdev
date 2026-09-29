@@ -99,7 +99,7 @@ export default function CliTerminalPane({
         if (!pendingFrame) return;
         try {
             pendingFrame.ownerWindow.cancelAnimationFrame(pendingFrame.frameId);
-        } catch {}
+        } catch { /* owner window already torn down */ }
         flushFrameRef.current = null;
     };
     const clearCopyStatusTimeout = () => {
@@ -107,7 +107,7 @@ export default function CliTerminalPane({
         if (!pendingTimeout) return;
         try {
             pendingTimeout.ownerWindow.clearTimeout(pendingTimeout.timeoutId);
-        } catch {}
+        } catch { /* owner window already torn down */ }
         copyStatusTimeoutRef.current = null;
     };
     const clearScrollbackStatusTimeout = () => {
@@ -115,7 +115,7 @@ export default function CliTerminalPane({
         if (!pendingTimeout) return;
         try {
             pendingTimeout.ownerWindow.clearTimeout(pendingTimeout.timeoutId);
-        } catch {}
+        } catch { /* owner window already torn down */ }
         scrollbackStatusTimeoutRef.current = null;
     };
     const scheduleFlushPendingLiveOutput = () => {
@@ -362,7 +362,7 @@ export default function CliTerminalPane({
             try {
                 await clipboard.writeText(text);
                 return true;
-            } catch {}
+            } catch { /* clipboard API refused — fall through to the legacy copy path */ }
         }
         let textarea: HTMLTextAreaElement | null = null;
         try {

@@ -77,12 +77,16 @@ function createRemoteCtx(meshId: string, opts: {
         if (command === 'get_mesh') return { success: true, mesh };
         if (command === 'get_pending_mesh_events') return { events: [] };
         if (command === 'trigger_mesh_queue') return { success: true };
+        // The worker's session state is what it pushed to the coordinator (held runtime).
+        if (command === 'mesh_status') {
+            return { success: true, nodes: [{ nodeId: NODE, heldRuntime: { source: 'member_push', observedAt: Date.now(), refreshing: false, sessions: [session] } }] };
+        }
         throw new Error(`unexpected LOCAL command on a remote-node dispatch: ${command}`);
     };
     transport.meshCommand = async (daemonId: string, command: string, args: Record<string, unknown> = {}) => {
         assert.equal(daemonId, REMOTE);
         remoteCommands.push({ command, args });
-        if (command === 'get_status_metadata') return { success: true, status: { sessions: [session] } };
+        if (command === 'get_status_metadata') throw new Error('a member status probe must never happen');
         if (command === 'agent_command') {
             if (args.action === 'interrupt_capability') return { success: true, supported: opts.interruptSupported === true, confidence: 'declared' };
             if (args.action === 'interrupt_turn') return opts.interruptSucceeds === false

@@ -16,7 +16,7 @@ import { CdpDomHandlers } from '../cdp/devtools.js';
 import { findCdpManager } from '../status/builders.js';
 import { ProviderLoader } from '../providers/provider-loader.js';
 import type { ProviderInstanceManager } from '../providers/provider-instance-manager.js';
-import type { ProviderModule, ProviderScripts } from '../providers/contracts.js';
+import type { ProviderModule } from '../providers/contracts.js';
 import type { DaemonAgentStreamManager } from '../agent-stream/index.js';
 import type { CliAdapter } from '../cli-adapter-types.js';
 import type { SessionInputService } from '../sessions/session-input-service.js';
@@ -27,10 +27,8 @@ import type { SessionRegistry, SessionRuntimeTarget } from '../sessions/registry
 import { reconcileIdeRuntimeSessions } from '../sessions/reconcile.js';
 import { LOG } from '../logging/logger.js';
 import { resolveLegacyProviderScript, type LegacyStringScript } from './provider-script-resolver.js';
-import { sha256Hex } from '../system/hash.js';
 import { MANUAL_ATTENDANCE_COMMANDS, MANUAL_ATTENDANCE_PASSIVE_VIEW_COMMANDS } from '../providers/manual-attendance.js';
 
-import { getWorkspaceState } from '../config/workspaces.js';
 import type { GitCommandServices } from '../git/git-commands.js';
 import type { CommandSpec } from './command-registry.js';
 import { gitSpecs, handlerSpecs } from './handler-specs.js';

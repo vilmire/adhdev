@@ -40157,6 +40157,7 @@ var require_dist3 = __commonJS({
       COMMIT_STRENGTHS: () => COMMIT_STRENGTHS2,
       CONSUME_PROFILES: () => CONSUME_PROFILES2,
       COORDINATOR_ACK_OUTCOMES: () => COORDINATOR_ACK_OUTCOMES2,
+      DAEMON_METADATA_DOC_SPEC: () => DAEMON_METADATA_DOC_SPEC,
       DAEMON_P2P_SIGNAL_TYPES: () => DAEMON_P2P_SIGNAL_TYPES2,
       DAEMON_STATUS_EVENT_NAMES: () => DAEMON_STATUS_EVENT_NAMES2,
       DAEMON_TO_DASHBOARD_P2P_TYPES: () => DAEMON_TO_DASHBOARD_P2P_TYPES2,
@@ -40167,6 +40168,7 @@ var require_dist3 = __commonJS({
       DASHBOARD_STATUS_EVENT_NAMES: () => DASHBOARD_STATUS_EVENT_NAMES2,
       DASHBOARD_TO_DAEMON_P2P_TYPES: () => DASHBOARD_TO_DAEMON_P2P_TYPES2,
       DASHBOARD_TO_USER_SESSION_TYPES: () => DASHBOARD_TO_USER_SESSION_TYPES2,
+      DASHBOARD_WIRE_VERSION: () => DASHBOARD_WIRE_VERSION,
       DEFAULT_DIFFICULTY_BRAINS: () => DEFAULT_DIFFICULTY_BRAINS,
       DELIVERY_OUTCOMES: () => DELIVERY_OUTCOMES2,
       DELIVERY_VIAS: () => DELIVERY_VIAS2,
@@ -40199,7 +40201,7 @@ var require_dist3 = __commonJS({
       MESH_TASK_STATUSES: () => MESH_TASK_STATUSES2,
       MESH_TERMINAL_TASK_STATUSES: () => MESH_TERMINAL_TASK_STATUSES2,
       MESH_THINKING_LEVELS: () => MESH_THINKING_LEVELS2,
-      MESH_TOPIC_ENTRY_KINDS: () => MESH_TOPIC_ENTRY_KINDS2,
+      MESH_TOPIC_ENTRY_KINDS: () => MESH_TOPIC_ENTRY_KINDS,
       MESH_TOPIC_PROTOCOL_VERSION: () => MESH_TOPIC_PROTOCOL_VERSION,
       MISSION_BRIEF_RENDER_MAX_CHARS: () => MISSION_BRIEF_RENDER_MAX_CHARS2,
       MODEL_AXIS_SOURCES: () => MODEL_AXIS_SOURCES,
@@ -40240,6 +40242,7 @@ var require_dist3 = __commonJS({
       SUSPENSION_RESOLUTION_VIAS: () => SUSPENSION_RESOLUTION_VIAS2,
       SYSTEM_ANNOUNCEMENT_TYPES: () => SYSTEM_ANNOUNCEMENT_TYPES,
       TERMINAL_CLASS_EVIDENCE_KINDS: () => TERMINAL_CLASS_EVIDENCE_KINDS,
+      TERMINAL_SESSION_RECORD_STATUSES: () => TERMINAL_SESSION_RECORD_STATUSES,
       TOOL_CALLER_ROLES: () => TOOL_CALLER_ROLES2,
       TURN_END_BLOCK_REASONS: () => TURN_END_BLOCK_REASONS2,
       TURN_END_STRENGTHS: () => TURN_END_STRENGTHS2,
@@ -40267,6 +40270,7 @@ var require_dist3 = __commonJS({
       buildSlotProposal: () => buildSlotProposal2,
       canonicalDaemonId: () => canonicalDaemonId3,
       classifySessionStatus: () => classifySessionStatus,
+      compareDashboardWireVersion: () => compareDashboardWireVersion,
       compareSemver: () => compareSemver,
       daemonIdsEquivalent: () => daemonIdsEquivalent4,
       decodeActiveWorkQueryRequest: () => decodeActiveWorkQueryRequest,
@@ -40344,19 +40348,15 @@ var require_dist3 = __commonJS({
       deriveSlotsFromLegacy: () => deriveSlotsFromLegacy,
       describeModelSelection: () => describeModelSelection,
       diffKeyedDoc: () => diffKeyedDoc,
-      diffKeyedStatus: () => diffKeyedStatus,
       digestKeyedDoc: () => digestKeyedDoc,
-      digestKeyedStatus: () => digestKeyedStatus,
       effectiveModelSelectionValue: () => effectiveModelSelectionValue,
       enumOf: () => enumOf2,
       expandDaemonIdForms: () => expandDaemonIdForms,
       findOwnershipConflicts: () => findOwnershipConflicts,
       foldKeyedDoc: () => foldKeyedDoc,
-      foldKeyedStatus: () => foldKeyedStatus,
       formatQuotaAccount: () => formatQuotaAccount,
       hasGitStatusEvidence: () => hasGitStatusEvidence,
       hasWorkerProtocolFooter: () => hasWorkerProtocolFooter2,
-      interpolateArgs: () => interpolateArgs,
       interpolateString: () => interpolateString,
       isActiveWorkQueryRequest: () => isActiveWorkQueryRequest,
       isActiveWorkQueryResponse: () => isActiveWorkQueryResponse2,
@@ -40369,7 +40369,6 @@ var require_dist3 = __commonJS({
       isDaemonStatusEventName: () => isDaemonStatusEventName2,
       isDaemonToDashboardP2PType: () => isDaemonToDashboardP2PType2,
       isDaemonToServerType: () => isDaemonToServerType2,
-      isDaemonToServerWsMsg: () => isDaemonToServerWsMsg,
       isDashboardP2PSignalType: () => isDashboardP2PSignalType2,
       isDashboardStatusEventName: () => isDashboardStatusEventName2,
       isDashboardToDaemonChunkType: () => isDashboardToDaemonChunkType,
@@ -40380,7 +40379,6 @@ var require_dist3 = __commonJS({
       isDirectDispatchRecordResponse: () => isDirectDispatchRecordResponse2,
       isDowngrade: () => isDowngrade,
       isEvidenceIdentifier: () => isEvidenceIdentifier2,
-      isEvidenceSourceId: () => isEvidenceSourceId2,
       isFiniteNumber: () => isFiniteNumber,
       isGraphAuditEvent: () => isGraphAuditEvent2,
       isGraphAuditRecordRequest: () => isGraphAuditRecordRequest,
@@ -40395,7 +40393,7 @@ var require_dist3 = __commonJS({
       isGraphNodePatchResponse: () => isGraphNodePatchResponse2,
       isGraphViewQueryRequest: () => isGraphViewQueryRequest,
       isGraphViewQueryResponse: () => isGraphViewQueryResponse2,
-      isHoldReason: () => isHoldReason2,
+      isIdleSessionState: () => isIdleSessionState,
       isInputEnvelopeWire: () => isInputEnvelopeWire,
       isLedgerQueryRequest: () => isLedgerQueryRequest,
       isLedgerQueryResponse: () => isLedgerQueryResponse2,
@@ -40409,15 +40407,12 @@ var require_dist3 = __commonJS({
       isMeshRecordPayload: () => isMeshRecordPayload,
       isMeshRecordRequest: () => isMeshRecordRequest,
       isMeshRecordResponse: () => isMeshRecordResponse,
-      isMeshSessionCleanupMode: () => isMeshSessionCleanupMode2,
       isMeshTaskDifficulty: () => isMeshTaskDifficulty2,
       isMeshTaskMode: () => isMeshTaskMode2,
       isMeshTaskPriority: () => isMeshTaskPriority2,
       isMeshTaskStatus: () => isMeshTaskStatus2,
       isMeshTerminalTaskStatus: () => isMeshTerminalTaskStatus2,
-      isMeshThinkingLevel: () => isMeshThinkingLevel2,
       isMeshTopicEntry: () => isMeshTopicEntry,
-      isMeshTopicEntryKind: () => isMeshTopicEntryKind2,
       isMessageId: () => isMessageId,
       isMissionListQueryRequest: () => isMissionListQueryRequest,
       isMissionListQueryResponse: () => isMissionListQueryResponse2,
@@ -40467,7 +40462,6 @@ var require_dist3 = __commonJS({
       isSendRefusal: () => isSendRefusal,
       isServerDirectCommandMsg: () => isServerDirectCommandMsg,
       isServerToDaemonControlType: () => isServerToDaemonControlType2,
-      isServerToDaemonWsMsg: () => isServerToDaemonWsMsg,
       isSessionLaunchedBy: () => isSessionLaunchedBy,
       isSessionStatus: () => isSessionStatus,
       isSharedSessionToViewerType: () => isSharedSessionToViewerType2,
@@ -40475,7 +40469,7 @@ var require_dist3 = __commonJS({
       isSummaryRef: () => isSummaryRef,
       isTaskStatsQueryRequest: () => isTaskStatsQueryRequest,
       isTaskStatsQueryResponse: () => isTaskStatsQueryResponse2,
-      isTerminalClassEvidenceKind: () => isTerminalClassEvidenceKind,
+      isTerminalSessionRecordStatus: () => isTerminalSessionRecordStatus,
       isToolCallRecordRequest: () => isToolCallRecordRequest,
       isToolCallRecordResponse: () => isToolCallRecordResponse2,
       isToolCallerRole: () => isToolCallerRole2,
@@ -40496,7 +40490,6 @@ var require_dist3 = __commonJS({
       isTurnReason: () => isTurnReason2,
       isUserSessionToDashboardType: () => isUserSessionToDashboardType2,
       isViewerToSharedSessionType: () => isViewerToSharedSessionType2,
-      isWorkerBranchState: () => isWorkerBranchState2,
       isWorkerReportOutcome: () => isWorkerReportOutcome2,
       isWorkerTool: () => isWorkerTool,
       isWorkingStatus: () => isWorkingStatus,
@@ -40506,7 +40499,7 @@ var require_dist3 = __commonJS({
       makeTypeGuard: () => makeTypeGuard2,
       measureWorstCaseChunkEnvelopeBytes: () => measureWorstCaseChunkEnvelopeBytes,
       meshFrameNeedsChunking: () => meshFrameNeedsChunking,
-      meshNodeIdMatches: () => meshNodeIdMatches7,
+      meshNodeIdMatches: () => meshNodeIdMatches6,
       meshUtf8ByteLength: () => meshUtf8ByteLength,
       meshWorkspacesEquivalent: () => meshWorkspacesEquivalent,
       mintMessageId: () => mintMessageId2,
@@ -40786,7 +40779,7 @@ var require_dist3 = __commonJS({
       const record22 = node && typeof node === "object" ? node : {};
       return readString22(record22.id, record22.nodeId, record22.node_id);
     }
-    function meshNodeIdMatches7(node, candidateId) {
+    function meshNodeIdMatches6(node, candidateId) {
       if (!candidateId) return false;
       const trimmed2 = candidateId.trim();
       if (!trimmed2) return false;
@@ -41092,13 +41085,6 @@ var require_dist3 = __commonJS({
         // to this table's cost assumptions rather than to review quality.
       }));
     }
-    function interpolateArgs(args, context) {
-      const result = {};
-      for (const [k, v] of Object.entries(args)) {
-        result[k] = typeof v === "string" ? interpolateString(v, context) : v;
-      }
-      return result;
-    }
     function interpolateString(template, ctx) {
       return template.replace(/\{\{(\w+)\}\}/g, (_, key2) => {
         const val = ctx[key2];
@@ -41353,9 +41339,6 @@ var require_dist3 = __commonJS({
     }
     function decodeDaemonToDashboardP2P(raw) {
       if (!isRecord2(raw)) return null;
-      if (raw.type === void 0 && isNonEmptyString(raw.id) && typeof raw.success === "boolean") {
-        return { ...raw, type: "response" };
-      }
       if (!isDaemonToDashboardP2PType2(raw.type)) return null;
       switch (raw.type) {
         case "ping":
@@ -41386,6 +41369,11 @@ var require_dist3 = __commonJS({
         case "transcript_topics_available":
           return Array.isArray(raw.topics) && raw.topics.every((topic) => typeof topic === "string") ? { type: raw.type, topics: raw.topics } : null;
       }
+    }
+    function compareDashboardWireVersion(pageVersion, daemonVersion) {
+      const daemon = typeof daemonVersion === "number" && Number.isFinite(daemonVersion) ? daemonVersion : 1;
+      if (daemon === pageVersion) return "ok";
+      return daemon > pageVersion ? "reload_required" : "daemon_update_required";
     }
     function normalizeAuthOkLimits(raw) {
       if (!raw || typeof raw !== "object") return null;
@@ -41432,6 +41420,15 @@ var require_dist3 = __commonJS({
     }
     function statusesOfClass(cls) {
       return SESSION_STATUSES2.filter((status) => SESSION_STATUS_CLASS[status] === cls);
+    }
+    function isTerminalSessionRecordStatus(raw) {
+      return typeof raw === "string" && TERMINAL_SESSION_RECORD_STATUSES.includes(raw.trim().toLowerCase());
+    }
+    function isIdleSessionState(state) {
+      const record22 = state && typeof state === "object" ? state : {};
+      const status = typeof record22.status === "string" ? record22.status.trim().toLowerCase() : "";
+      if (isTerminalSessionRecordStatus(status) || isDeadStatus(status)) return false;
+      return isReadyStatus(status) || record22.activeChat?.status === "waiting_input";
     }
     function makeGuard4(values) {
       const set3 = new Set(values);
@@ -41708,9 +41705,6 @@ ${renderWorkerProtocolFooter2(input)}`;
         if (!fieldMatches(spec, value[key2])) return false;
       }
       return true;
-    }
-    function isTerminalClassEvidenceKind(kind) {
-      return TERMINAL_CLASS_EVIDENCE_KINDS.includes(kind);
     }
     function isOptionalId(value) {
       return value === void 0 || isEvidenceIdentifier2(value);
@@ -42774,151 +42768,6 @@ ${renderWorkerProtocolFooter2(input)}`;
         return void 0;
       }
     }
-    function digestFields(source, ignore) {
-      const sigs = /* @__PURE__ */ new Map();
-      const values = {};
-      for (const [key2, value] of Object.entries(source)) {
-        if (ignore.has(key2)) continue;
-        const s2 = sig(value);
-        if (s2 === void 0) continue;
-        sigs.set(key2, s2);
-        values[key2] = value;
-      }
-      return { sigs, values };
-    }
-    function sessionSignature(session, volatile) {
-      if (volatile.size === 0) return sig(session) ?? "";
-      const stable = {};
-      for (const [key2, value] of Object.entries(session)) {
-        if (!volatile.has(key2)) stable[key2] = value;
-      }
-      return sig(stable) ?? "";
-    }
-    function fieldSigsOf(digest) {
-      if (!digest.fieldSigs) {
-        const sigs = /* @__PURE__ */ new Map();
-        for (const [key2, value] of Object.entries(digest.value)) {
-          const s2 = sig(value);
-          if (s2 !== void 0) sigs.set(key2, s2);
-        }
-        digest.fieldSigs = sigs;
-      }
-      return digest.fieldSigs;
-    }
-    function digestKeyedStatus(body, options = {}) {
-      const volatile = new Set(options.volatileSessionFields ?? []);
-      const top = digestFields(body, /* @__PURE__ */ new Set(["status", ...options.ignoreTopLevel ?? []]));
-      const status = digestFields(body.status, /* @__PURE__ */ new Set(["sessions", ...options.ignoreStatus ?? []]));
-      const sessions = /* @__PURE__ */ new Map();
-      const order = [];
-      for (const session of Array.isArray(body.status?.sessions) ? body.status.sessions : []) {
-        if (!session || typeof session.id !== "string" || !session.id) continue;
-        if (sessions.has(session.id)) continue;
-        sessions.set(session.id, { value: session, sig: sessionSignature(session, volatile) });
-        order.push(session.id);
-      }
-      return { top: top.sigs, topValues: top.values, status: status.sigs, statusValues: status.values, sessions, order, volatile };
-    }
-    function diffFieldMaps(prev, next, nextValues) {
-      let set3;
-      let unset;
-      for (const [key2, s2] of next) {
-        if (prev.get(key2) === s2) continue;
-        (set3 ??= {})[key2] = nextValues[key2];
-      }
-      for (const key2 of prev.keys()) {
-        if (!next.has(key2)) (unset ??= []).push(key2);
-      }
-      return { ...set3 ? { set: set3 } : {}, ...unset ? { unset } : {} };
-    }
-    function sameOrder(a, b) {
-      if (a.length !== b.length) return false;
-      for (let i = 0; i < a.length; i += 1) if (a[i] !== b[i]) return false;
-      return true;
-    }
-    function diffKeyedStatus(prev, next) {
-      const delta = {};
-      const top = diffFieldMaps(prev.top, next.top, next.topValues);
-      if (top.set) delta.set = top.set;
-      if (top.unset) delta.unset = top.unset;
-      const status = diffFieldMaps(prev.status, next.status, next.statusValues);
-      if (status.set) delta.statusSet = status.set;
-      if (status.unset) delta.statusUnset = status.unset;
-      for (const [id22, nextSession] of next.sessions) {
-        const prevSession = prev.sessions.get(id22);
-        if (!prevSession) {
-          ;
-          (delta.sessions ??= []).push(nextSession.value);
-          continue;
-        }
-        if (prevSession.sig === nextSession.sig) continue;
-        const prevSigs = fieldSigsOf(prevSession);
-        const nextSigs = fieldSigsOf(nextSession);
-        const change = { id: id22 };
-        let changed = false;
-        for (const [key2, s2] of nextSigs) {
-          if (key2 === "id" || prevSigs.get(key2) === s2) continue;
-          change[key2] = nextSession.value[key2];
-          changed = true;
-        }
-        const gone = [];
-        for (const key2 of prevSigs.keys()) {
-          if (!nextSigs.has(key2)) gone.push(key2);
-        }
-        if (changed) (delta.sessions ??= []).push(change);
-        if (gone.length > 0) (delta.sessionUnset ??= {})[id22] = gone;
-      }
-      for (const id22 of prev.sessions.keys()) {
-        if (!next.sessions.has(id22)) (delta.removedSessionIds ??= []).push(id22);
-      }
-      if (!sameOrder(prev.order, next.order)) delta.sessionOrder = [...next.order];
-      return Object.keys(delta).length > 0 ? delta : null;
-    }
-    function foldKeyedStatus(held, delta) {
-      const next = { ...held };
-      for (const key2 of delta.unset ?? []) delete next[key2];
-      Object.assign(next, delta.set ?? {});
-      const status = { ...held.status };
-      for (const key2 of delta.statusUnset ?? []) delete status[key2];
-      Object.assign(status, delta.statusSet ?? {});
-      const byId = /* @__PURE__ */ new Map();
-      for (const session of held.status.sessions ?? []) byId.set(session.id, session);
-      for (const id22 of delta.removedSessionIds ?? []) byId.delete(id22);
-      for (const change of delta.sessions ?? []) {
-        const base = byId.get(change.id);
-        byId.set(change.id, base ? { ...base, ...change } : { ...change });
-      }
-      for (const [id22, keys] of Object.entries(delta.sessionUnset ?? {})) {
-        const base = byId.get(id22);
-        if (!base) continue;
-        const trimmed2 = { ...base };
-        for (const key2 of keys) delete trimmed2[key2];
-        byId.set(id22, trimmed2);
-      }
-      const order = delta.sessionOrder ?? (held.status.sessions ?? []).map((session) => session.id);
-      const sessions = [];
-      const placed = /* @__PURE__ */ new Set();
-      for (const id22 of order) {
-        const session = byId.get(id22);
-        if (!session || placed.has(id22)) continue;
-        sessions.push(session);
-        placed.add(id22);
-      }
-      for (const [id22, session] of byId) {
-        if (!placed.has(id22)) sessions.push(session);
-      }
-      status.sessions = sessions;
-      next.status = status;
-      return next;
-    }
-    function sig2(value) {
-      if (value === void 0) return void 0;
-      try {
-        return JSON.stringify(value);
-      } catch {
-        return void 0;
-      }
-    }
     function isRecord3(value) {
       return !!value && typeof value === "object" && !Array.isArray(value);
     }
@@ -42948,11 +42797,11 @@ ${renderWorkerProtocolFooter2(input)}`;
       }
       return out;
     }
-    function fieldSigsOf2(digest) {
+    function fieldSigsOf(digest) {
       if (!digest.fieldSigs) {
         const sigs = /* @__PURE__ */ new Map();
         for (const [key2, value] of Object.entries(digest.stable)) {
-          const s2 = sig2(value);
+          const s2 = sig(value);
           if (s2 !== void 0) sigs.set(key2, s2);
         }
         digest.fieldSigs = sigs;
@@ -42962,11 +42811,21 @@ ${renderWorkerProtocolFooter2(input)}`;
     function digestKeyedDoc(doc, spec) {
       const top = /* @__PURE__ */ new Map();
       const topValues = {};
+      const ignore = new Set(spec.ignore ?? []);
+      const split = new Set(spec.splitObjects ?? []);
+      const add = (path77, value) => {
+        if (ignore.has(path77)) return;
+        const s2 = sig(value);
+        if (s2 === void 0) return;
+        top.set(path77, s2);
+        topValues[path77] = value;
+      };
       for (const [key2, value] of Object.entries(stripCollections(doc, spec))) {
-        const s2 = sig2(value);
-        if (s2 === void 0) continue;
-        top.set(key2, s2);
-        topValues[key2] = value;
+        if (split.has(key2) && isRecord3(value)) {
+          for (const [field2, fieldValue] of Object.entries(value)) add(`${key2}.${field2}`, fieldValue);
+          continue;
+        }
+        add(key2, value);
       }
       const collections = /* @__PURE__ */ new Map();
       for (const [path77, idField] of Object.entries(spec.collections)) {
@@ -42979,14 +42838,14 @@ ${renderWorkerProtocolFooter2(input)}`;
           const id22 = row[idField];
           if (typeof id22 !== "string" || !id22 || rows.has(id22)) continue;
           const stable = spec.stableRow ? spec.stableRow(path77, row) : row;
-          rows.set(id22, { value: row, stable, sig: sig2(stable) ?? "" });
+          rows.set(id22, { value: row, stable, sig: sig(stable) ?? "" });
           order.push(id22);
         }
         collections.set(path77, { rows, order });
       }
       return { top, topValues, collections, volatile: new Set(spec.volatileTopLevel ?? []) };
     }
-    function sameOrder2(a, b) {
+    function sameOrder(a, b) {
       if (a.length !== b.length) return false;
       for (let i = 0; i < a.length; i += 1) if (a[i] !== b[i]) return false;
       return true;
@@ -43004,14 +42863,20 @@ ${renderWorkerProtocolFooter2(input)}`;
           continue;
         }
         if (prevRow.sig === nextRow.sig) continue;
-        const prevSigs = fieldSigsOf2(prevRow);
-        const nextSigs = fieldSigsOf2(nextRow);
+        const prevSigs = fieldSigsOf(prevRow);
+        const nextSigs = fieldSigsOf(nextRow);
         const change = { [idField]: id22 };
         let changed = false;
         for (const [key2, s2] of nextSigs) {
           if (key2 === idField || prevSigs.get(key2) === s2) continue;
           change[key2] = nextRow.value[key2];
           changed = true;
+        }
+        if (changed) {
+          for (const [key2, value] of Object.entries(nextRow.value)) {
+            if (key2 in nextRow.stable || key2 in change) continue;
+            if (sig(prevRow.value[key2]) !== sig(value)) change[key2] = value;
+          }
         }
         const gone = [];
         for (const key2 of prevSigs.keys()) if (!nextSigs.has(key2) && !(key2 in nextRow.value)) gone.push(key2);
@@ -43021,7 +42886,7 @@ ${renderWorkerProtocolFooter2(input)}`;
       for (const id22 of prevRows.keys()) {
         if (!nextRows.has(id22)) (delta.removed ??= []).push(id22);
       }
-      if (!sameOrder2(prev?.order ?? [], next?.order ?? [])) delta.order = [...next?.order ?? []];
+      if (!sameOrder(prev?.order ?? [], next?.order ?? [])) delta.order = [...next?.order ?? []];
       return Object.keys(delta).length > 0 ? delta : null;
     }
     function diffKeyedDoc(prev, next, spec) {
@@ -43029,15 +42894,27 @@ ${renderWorkerProtocolFooter2(input)}`;
       let meaningful = false;
       let set3;
       let unset;
-      for (const [key2, s2] of next.top) {
-        if (prev.top.get(key2) === s2) continue;
-        (set3 ??= {})[key2] = next.topValues[key2];
-        if (!next.volatile.has(key2)) meaningful = true;
+      const split = spec.splitObjects ?? [];
+      const objectOf = (path77) => {
+        for (const object2 of split) {
+          if (path77.startsWith(`${object2}.`)) return [object2, path77.slice(object2.length + 1)];
+        }
+        return null;
+      };
+      const objects = {};
+      for (const [path77, s2] of next.top) {
+        if (prev.top.get(path77) === s2) continue;
+        const inObject = objectOf(path77);
+        if (inObject) ((objects[inObject[0]] ??= {}).set ??= {})[inObject[1]] = next.topValues[path77];
+        else (set3 ??= {})[path77] = next.topValues[path77];
+        if (!next.volatile.has(path77)) meaningful = true;
       }
-      for (const key2 of prev.top.keys()) {
-        if (next.top.has(key2)) continue;
-        (unset ??= []).push(key2);
-        if (!next.volatile.has(key2)) meaningful = true;
+      for (const path77 of prev.top.keys()) {
+        if (next.top.has(path77)) continue;
+        const inObject = objectOf(path77);
+        if (inObject) ((objects[inObject[0]] ??= {}).unset ??= []).push(inObject[1]);
+        else (unset ??= []).push(path77);
+        if (!next.volatile.has(path77)) meaningful = true;
       }
       for (const [path77, idField] of Object.entries(spec.collections)) {
         const change = diffCollection(prev.collections.get(path77), next.collections.get(path77), idField);
@@ -43048,6 +42925,7 @@ ${renderWorkerProtocolFooter2(input)}`;
       if (!meaningful) return null;
       if (set3) delta.set = set3;
       if (unset) delta.unset = unset;
+      if (Object.keys(objects).length > 0) delta.objects = objects;
       return delta;
     }
     function foldCollection(held, change, idField) {
@@ -43090,6 +42968,12 @@ ${renderWorkerProtocolFooter2(input)}`;
       const next = stripCollections(held, spec);
       for (const key2 of delta.unset ?? []) delete next[key2];
       Object.assign(next, delta.set ?? {});
+      for (const [object2, change] of Object.entries(delta.objects ?? {})) {
+        const folded = isRecord3(next[object2]) ? { ...next[object2] } : {};
+        for (const key2 of change.unset ?? []) delete folded[key2];
+        Object.assign(folded, change.set ?? {});
+        next[object2] = folded;
+      }
       for (const [path77, idField] of Object.entries(spec.collections)) {
         const change = delta.collections?.[path77];
         const heldList = heldCollections.get(path77);
@@ -43193,10 +43077,9 @@ ${renderWorkerProtocolFooter2(input)}`;
     var DAEMON_TO_DASHBOARD_P2P_TYPES2;
     var isDaemonToDashboardP2PType2;
     var DASHBOARD_P2P_MESSAGE_KINDS2;
+    var DASHBOARD_WIRE_VERSION;
     var DAEMON_TO_SERVER_WS_MSGS;
     var SERVER_TO_DAEMON_WS_MSGS;
-    var isDaemonToServerWsMsg;
-    var isServerToDaemonWsMsg;
     var CLAUDE_TUI_REVIEW_PAGE_NOT_FOCUSED_PREFIX;
     var CLAUDE_TUI_REVIEW_UNCONFIRMED_PREFIX;
     var SESSION_STATUSES2;
@@ -43204,6 +43087,7 @@ ${renderWorkerProtocolFooter2(input)}`;
     var SESSION_STATUS_CLASS;
     var SESSION_STATUS_ALIASES;
     var SESSION_STATUS_SET2;
+    var TERMINAL_SESSION_RECORD_STATUSES;
     var MESH_TASK_STATUSES2;
     var MESH_TERMINAL_TASK_STATUSES2;
     var MESH_TASK_MODES2;
@@ -43217,11 +43101,8 @@ ${renderWorkerProtocolFooter2(input)}`;
     var isMeshTerminalTaskStatus2;
     var isMeshTaskMode2;
     var isMeshTaskPriority2;
-    var isMeshThinkingLevel2;
     var isMeshDeliveryMode2;
-    var isMeshSessionCleanupMode2;
     var isWorkerReportOutcome2;
-    var isWorkerBranchState2;
     var outboundMessageIdCounter2;
     var MESSAGE_ID_PREFIX;
     var OUTBOUND_MESSAGE_ORIGINS;
@@ -43277,16 +43158,13 @@ ${renderWorkerProtocolFooter2(input)}`;
     var TURN_EVIDENCE_KINDS2;
     var TERMINAL_CLASS_EVIDENCE_KINDS;
     var IDENTIFIER_RE2;
-    var isEvidenceSourceId2;
     var isTurnEvidenceKind2;
     var isTurnReason2;
     var isNotifyKind2;
-    var isHoldReason2;
     var isTurnOutcome2;
     var isCommitStrength2;
     var TURN_EVIDENCE_FLAGS;
-    var MESH_TOPIC_ENTRY_KINDS2;
-    var isMeshTopicEntryKind2;
+    var MESH_TOPIC_ENTRY_KINDS;
     var MODEL_AXIS_SOURCES;
     var SESSION_LAUNCHED_BY;
     var MODEL_SELECTION_HISTORY_LIMIT;
@@ -43324,6 +43202,7 @@ ${renderWorkerProtocolFooter2(input)}`;
     var TURN_IPC_COMMANDS2;
     var isTurnIpcCommand2;
     var MAX_OWNED_PATHS;
+    var DAEMON_METADATA_DOC_SPEC;
     var MESH_STATUS_DOC_SPEC;
     var init_dist = __esm2({
       "../mesh-shared/dist/index.mjs"() {
@@ -43611,9 +43490,7 @@ ${renderWorkerProtocolFooter2(input)}`;
           "agent:waiting_choice",
           "agent:generating_completed",
           "agent:stopped",
-          "monitor:no_progress",
-          /** Legacy alias for `monitor:no_progress`, still emitted by older daemons. */
-          "monitor:long_generating"
+          "monitor:no_progress"
         ];
         isDaemonStatusEventName2 = makeTypeGuard2(DAEMON_STATUS_EVENT_NAMES2);
         RELEASE_CHANNELS = ["stable", "preview"];
@@ -43738,10 +43615,9 @@ ${renderWorkerProtocolFooter2(input)}`;
         DASHBOARD_P2P_MESSAGE_KINDS2 = [
           .../* @__PURE__ */ new Set([...DASHBOARD_TO_DAEMON_P2P_TYPES2, ...DAEMON_TO_DASHBOARD_P2P_TYPES2])
         ];
+        DASHBOARD_WIRE_VERSION = 2;
         DAEMON_TO_SERVER_WS_MSGS = DAEMON_TO_SERVER_TYPES2;
         SERVER_TO_DAEMON_WS_MSGS = SERVER_TO_DAEMON_CONTROL_TYPES2;
-        isDaemonToServerWsMsg = isDaemonToServerType2;
-        isServerToDaemonWsMsg = isServerToDaemonControlType2;
         CLAUDE_TUI_REVIEW_PAGE_NOT_FOCUSED_PREFIX = "Claude TUI review page is not focused";
         CLAUDE_TUI_REVIEW_UNCONFIRMED_PREFIX = "Claude TUI answer delivered but not confirmed";
         SESSION_STATUSES2 = [
@@ -43787,6 +43663,7 @@ ${renderWorkerProtocolFooter2(input)}`;
           waiting: "waiting_approval"
         };
         SESSION_STATUS_SET2 = new Set(SESSION_STATUSES2);
+        TERMINAL_SESSION_RECORD_STATUSES = ["stopped", "failed", "terminated", "exited", "closed"];
         MESH_TASK_STATUSES2 = ["pending", "assigned", "completed", "failed", "cancelled"];
         MESH_TERMINAL_TASK_STATUSES2 = ["completed", "failed", "cancelled"];
         MESH_TASK_MODES2 = ["code_change", "validation", "live_debug_readonly", "launch_app", "convergence"];
@@ -43806,11 +43683,8 @@ ${renderWorkerProtocolFooter2(input)}`;
         isMeshTerminalTaskStatus2 = makeGuard4(MESH_TERMINAL_TASK_STATUSES2);
         isMeshTaskMode2 = makeGuard4(MESH_TASK_MODES2);
         isMeshTaskPriority2 = makeGuard4(MESH_TASK_PRIORITIES2);
-        isMeshThinkingLevel2 = makeGuard4(MESH_THINKING_LEVELS2);
         isMeshDeliveryMode2 = makeGuard4(MESH_DELIVERY_MODES2);
-        isMeshSessionCleanupMode2 = makeGuard4(MESH_SESSION_CLEANUP_MODES2);
         isWorkerReportOutcome2 = makeGuard4(WORKER_REPORT_OUTCOMES2);
-        isWorkerBranchState2 = makeGuard4(WORKER_BRANCH_STATES2);
         outboundMessageIdCounter2 = 0;
         MESSAGE_ID_PREFIX = "msg_";
         OUTBOUND_MESSAGE_ORIGINS = ["dashboard", "mcp", "mesh", "api", "cli"];
@@ -44064,16 +43938,13 @@ ${renderWorkerProtocolFooter2(input)}`;
           "operator_status"
         ];
         IDENTIFIER_RE2 = /^[^\s\u0000-\u001f\u007f]{1,256}$/;
-        isEvidenceSourceId2 = makeGuard22(EVIDENCE_SOURCE_IDS2);
         isTurnEvidenceKind2 = makeGuard22(TURN_EVIDENCE_KINDS2);
         isTurnReason2 = makeGuard22(TURN_REASONS2);
         isNotifyKind2 = makeGuard22(NOTIFY_KINDS2);
-        isHoldReason2 = makeGuard22(HOLD_REASONS2);
         isTurnOutcome2 = makeGuard22(TURN_OUTCOMES2);
         isCommitStrength2 = makeGuard22(COMMIT_STRENGTHS2);
         TURN_EVIDENCE_FLAGS = ["hollow", "afterFinalizationTimeout", "nativeMarker", "selfAttributing"];
-        MESH_TOPIC_ENTRY_KINDS2 = ["turn.evidence", "turn.committed", "turn.notify", "mesh.record"];
-        isMeshTopicEntryKind2 = makeGuard22(MESH_TOPIC_ENTRY_KINDS2);
+        MESH_TOPIC_ENTRY_KINDS = ["turn.evidence", "turn.committed", "turn.notify", "mesh.record"];
         MODEL_AXIS_SOURCES = [
           /** Picked explicitly for this launch (dashboard dropdown, coordinator dialog). */
           "user",
@@ -44226,6 +44097,16 @@ ${renderWorkerProtocolFooter2(input)}`;
         ];
         isTurnIpcCommand2 = makeGuard32(TURN_IPC_COMMANDS2);
         MAX_OWNED_PATHS = 64;
+        DAEMON_METADATA_DOC_SPEC = {
+          collections: { "status.sessions": "id" },
+          splitObjects: ["status"],
+          ignore: ["daemonId", "status.timestamp"],
+          stableRow: (_collection, row) => {
+            if (!("lastUpdated" in row)) return row;
+            const { lastUpdated: _stamp, ...stable } = row;
+            return stable;
+          }
+        };
         MESH_STATUS_DOC_SPEC = {
           collections: { nodes: "nodeId", "queue.tasks": "id", missions: "id" },
           volatileTopLevel: [
@@ -44678,7 +44559,6 @@ ${renderWorkerProtocolFooter2(input)}`;
     __export2(mesh_json_config_exports, {
       MESH_JSON_CONFIG_LOCATIONS: () => MESH_JSON_CONFIG_LOCATIONS,
       MESH_JSON_CONFIG_SCHEMA: () => MESH_JSON_CONFIG_SCHEMA,
-      MESH_JSON_PROVIDER_DEFAULTS_EXAMPLE: () => MESH_JSON_PROVIDER_DEFAULTS_EXAMPLE,
       applyRepoMeshConfig: () => applyRepoMeshConfig,
       buildMeshJsonConfigScaffold: () => buildMeshJsonConfigScaffold,
       loadRepoMeshJsonConfig: () => loadRepoMeshJsonConfig3,
@@ -44782,18 +44662,18 @@ ${renderWorkerProtocolFooter2(input)}`;
       }
       if (cwd && cwd !== ws) bases.push(cwd);
       for (const base of bases) {
-        for (const relative9 of MESH_JSON_CONFIG_LOCATIONS) {
-          const configPath = (0, import_path.join)(base, relative9);
+        for (const relative8 of MESH_JSON_CONFIG_LOCATIONS) {
+          const configPath = (0, import_path.join)(base, relative8);
           if (!(0, import_fs.existsSync)(configPath)) continue;
           try {
             const parsed = parseConfigText(configPath, (0, import_fs.readFileSync)(configPath, "utf-8"));
             const result = normalizeRepoMeshDeclarativeConfig(parsed);
             if (!result.valid || !result.config) {
-              return { source: relative9, sourceType: "invalid", path: configPath, error: result.errors.join("; ") };
+              return { source: relative8, sourceType: "invalid", path: configPath, error: result.errors.join("; ") };
             }
-            return { config: result.config, source: relative9, sourceType: "repo_file", path: configPath };
+            return { config: result.config, source: relative8, sourceType: "repo_file", path: configPath };
           } catch (error48) {
-            return { source: relative9, sourceType: "invalid", path: configPath, error: error48?.message || String(error48) };
+            return { source: relative8, sourceType: "invalid", path: configPath, error: error48?.message || String(error48) };
           }
         }
       }
@@ -44857,7 +44737,6 @@ ${renderWorkerProtocolFooter2(input)}`;
     var import_path;
     var MESH_JSON_CONFIG_LOCATIONS;
     var MESH_JSON_CONFIG_SCHEMA;
-    var MESH_JSON_PROVIDER_DEFAULTS_EXAMPLE;
     var init_mesh_json_config = __esm2({
       "src/config/mesh-json-config.ts"() {
         "use strict";
@@ -44934,12 +44813,6 @@ ${renderWorkerProtocolFooter2(input)}`;
                 }
               }
             }
-          }
-        };
-        MESH_JSON_PROVIDER_DEFAULTS_EXAMPLE = {
-          autoApproveModes: {
-            "claude-cli": "accept-edits",
-            "codex-cli": "auto"
           }
         };
       }
@@ -45041,8 +44914,8 @@ ${renderWorkerProtocolFooter2(input)}`;
       return String(value).replace(/\r\n/g, "\n");
     }
     function isPathInside(parent, child) {
-      const relative9 = path2.relative(path2.resolve(parent), path2.resolve(child));
-      return relative9 === "" || !relative9.startsWith("..") && !path2.isAbsolute(relative9);
+      const relative8 = path2.relative(path2.resolve(parent), path2.resolve(child));
+      return relative8 === "" || !relative8.startsWith("..") && !path2.isAbsolute(relative8);
     }
     async function validateWorkspace(workspace) {
       if (typeof workspace !== "string" || workspace.length === 0 || workspace.includes("\0")) {
@@ -45288,8 +45161,8 @@ ${renderWorkerProtocolFooter2(input)}`;
       return { valid: errors.length === 0, errors, config: errors.length === 0 ? config2 : void 0 };
     }
     function loadChangeImpactConfig(repoRoot) {
-      for (const relative9 of CHANGE_IMPACT_CONFIG_LOCATIONS) {
-        const configPath = (0, import_path2.join)(repoRoot, relative9);
+      for (const relative8 of CHANGE_IMPACT_CONFIG_LOCATIONS) {
+        const configPath = (0, import_path2.join)(repoRoot, relative8);
         if (!(0, import_fs2.existsSync)(configPath)) continue;
         try {
           const text = (0, import_fs2.readFileSync)(configPath, "utf-8");
@@ -45300,10 +45173,10 @@ ${renderWorkerProtocolFooter2(input)}`;
             mtimeMs = text.length;
           }
           const parsed = parseConfigText(configPath, text);
-          const validation = validateChangeImpactConfig(parsed, relative9);
+          const validation = validateChangeImpactConfig(parsed, relative8);
           if (!validation.valid) {
             return {
-              source: relative9,
+              source: relative8,
               sourceType: "invalid",
               path: configPath,
               error: validation.errors.join("; "),
@@ -45312,14 +45185,14 @@ ${renderWorkerProtocolFooter2(input)}`;
           }
           return {
             config: validation.config,
-            source: relative9,
+            source: relative8,
             sourceType: "repo_file",
             path: configPath,
             sourceKey: `file:${configPath}:${mtimeMs}`
           };
         } catch (error48) {
           return {
-            source: relative9,
+            source: relative8,
             sourceType: "invalid",
             path: configPath,
             error: error48?.message || String(error48),
@@ -47694,7 +47567,7 @@ ${renderWorkerProtocolFooter2(input)}`;
       return `Antigravity quota is only supported on macOS, Windows, and Linux (this machine reports platform "${platform11}").`;
     }
     function runCredStoreCommand(deps, command, args) {
-      return new Promise((resolve39, reject) => {
+      return new Promise((resolve38, reject) => {
         let child;
         try {
           child = deps.spawn(command, args, { env: deps.env });
@@ -47731,7 +47604,7 @@ ${renderWorkerProtocolFooter2(input)}`;
         });
         child.on("error", (err) => finish(() => reject(err)));
         child.on("exit", (code) => {
-          finish(() => resolve39({ code, stdout: stdout.trim(), stderr: stderr.trim() }));
+          finish(() => resolve38({ code, stdout: stdout.trim(), stderr: stderr.trim() }));
         });
         child.stdin.end();
       });
@@ -49303,7 +49176,7 @@ child.on('exit', () => process.exit(0));
     }
     async function fetchCodexQuotaFromAppServer(overrides = {}) {
       const deps = resolveDeps(overrides);
-      return new Promise((resolve39) => {
+      return new Promise((resolve38) => {
         let child;
         try {
           child = deps.spawn(
@@ -49313,7 +49186,7 @@ child.on('exit', () => process.exit(0));
           );
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          resolve39(
+          resolve38(
             quotaFailure("codex-cli", "unavailable", `Codex CLI could not be started: ${message}`, {
               source: "app-server",
               failureKind: "cli-unavailable"
@@ -49348,7 +49221,7 @@ child.on('exit', () => process.exit(0));
           } catch {
           }
           void killHandle;
-          resolve39(quota);
+          resolve38(quota);
         };
         const handleLine = (line) => {
           let message;
@@ -49608,7 +49481,7 @@ child.on('exit', () => process.exit(0));
       }
     }
     function runKeychainRead(deps, service) {
-      return new Promise((resolve39) => {
+      return new Promise((resolve38) => {
         let child;
         try {
           child = deps.spawn(
@@ -49617,7 +49490,7 @@ child.on('exit', () => process.exit(0));
             { env: deps.env }
           );
         } catch {
-          resolve39(null);
+          resolve38(null);
           return;
         }
         let settled = false;
@@ -49626,7 +49499,7 @@ child.on('exit', () => process.exit(0));
           if (settled) return;
           settled = true;
           deps.clearTimeout(timer);
-          resolve39(value);
+          resolve38(value);
         };
         const timer = deps.setTimeout(() => {
           try {
@@ -50438,7 +50311,7 @@ child.on('exit', () => process.exit(0));
     }
     async function fetchOpencodeUsage(overrides = {}) {
       const deps = resolveDeps(overrides);
-      return new Promise((resolve39) => {
+      return new Promise((resolve38) => {
         let child;
         try {
           child = deps.spawn(
@@ -50448,7 +50321,7 @@ child.on('exit', () => process.exit(0));
           );
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          resolve39(quotaFailure("opencode", "unavailable", `opencode could not be started: ${message}`, {
+          resolve38(quotaFailure("opencode", "unavailable", `opencode could not be started: ${message}`, {
             source: SOURCE3,
             failureKind: "cli-unavailable"
           }));
@@ -50465,7 +50338,7 @@ child.on('exit', () => process.exit(0));
             child.kill();
           } catch {
           }
-          resolve39(quota);
+          resolve38(quota);
         };
         const timeoutHandle = deps.setTimeout(() => {
           finish(quotaFailure("opencode", "error", `opencode stats timed out after ${TIMEOUT_MS}ms`, {
@@ -51560,19 +51433,19 @@ child.on('exit', () => process.exit(0));
       return null;
     }
     function execAsync(cmd, timeoutMs = 5e3) {
-      return new Promise((resolve39) => {
+      return new Promise((resolve38) => {
         const child = (0, import_child_process2.exec)(cmd, {
           encoding: "utf-8",
           timeout: timeoutMs,
           ...process.platform === "win32" ? { windowsHide: true } : {}
         }, (err, stdout) => {
           if (err || !stdout?.trim()) {
-            resolve39(null);
+            resolve38(null);
           } else {
-            resolve39(stdout.trim());
+            resolve38(stdout.trim());
           }
         });
-        child.on("error", () => resolve39(null));
+        child.on("error", () => resolve38(null));
       });
     }
     async function resolveVersion(candidates) {
@@ -53304,9 +53177,6 @@ ${error48.message || ""}`;
       }
       return normalized;
     }
-    function isMeshHostOwner(mesh) {
-      return resolveMeshHostStatus(mesh).role === "host";
-    }
     function buildMeshHostRequiredFailure(mesh, operation) {
       const meshHost = resolveMeshHostStatus(mesh);
       return {
@@ -53335,8 +53205,6 @@ ${error48.message || ""}`;
     });
     var mesh_config_exports = {};
     __export2(mesh_config_exports, {
-      __getListMeshesDiskReadCountForTests: () => __getListMeshesDiskReadCountForTests,
-      __resetListMeshesDiskReadCountForTests: () => __resetListMeshesDiskReadCountForTests,
       addNode: () => addNode,
       applyMeshHostJoinRequest: () => applyMeshHostJoinRequest,
       collectIgnoredMagiSlotFields: () => collectIgnoredMagiSlotFields2,
@@ -53566,12 +53434,6 @@ ${error48.message || ""}`;
         if (host && repoPath) return `${host}/${repoPath}`;
       }
       return identity.replace(/\.git$/i, "");
-    }
-    function __getListMeshesDiskReadCountForTests() {
-      return listMeshesDiskReadCount;
-    }
-    function __resetListMeshesDiskReadCountForTests() {
-      listMeshesDiskReadCount = 0;
     }
     function listMeshes() {
       listMeshesDiskReadCount++;
@@ -54715,11 +54577,11 @@ ${error48.message || ""}`;
       }
       return { from, select, op, value: node.value };
     }
-    function evaluateRunIfCondition(condition, resolve39) {
-      if ("all" in condition) return condition.all.every((c) => evaluateRunIfCondition(c, resolve39));
-      if ("any" in condition) return condition.any.some((c) => evaluateRunIfCondition(c, resolve39));
-      if ("not" in condition) return !evaluateRunIfCondition(condition.not, resolve39);
-      const envelope = resolve39(condition.from);
+    function evaluateRunIfCondition(condition, resolve38) {
+      if ("all" in condition) return condition.all.every((c) => evaluateRunIfCondition(c, resolve38));
+      if ("any" in condition) return condition.any.some((c) => evaluateRunIfCondition(c, resolve38));
+      if ("not" in condition) return !evaluateRunIfCondition(condition.not, resolve38);
+      const envelope = resolve38(condition.from);
       if (envelope === null || envelope === void 0) {
         return false;
       }
@@ -56691,7 +56553,6 @@ ${lines.join("\n")}
       const seen = new Set(frontier);
       const cancelledNodeIds = [];
       const cancelledTaskIds = [];
-      const sourceTaskId = origin.queueTaskId ?? origin.nodeId;
       const sourceRef = origin.ref ?? origin.nodeId;
       while (frontier.length > 0) {
         const currentId = frontier.pop();
@@ -57322,11 +57183,11 @@ ${lines.join("\n")}
     function parseGraphMaterializationBlock(reason) {
       if (!reason || !reason.startsWith(GRAPH_BLOCK_PREFIX)) return null;
       const rest = reason.slice(GRAPH_BLOCK_PREFIX.length);
-      const sep17 = rest.lastIndexOf(":");
-      if (sep17 <= 0) return null;
-      const version2 = Number(rest.slice(sep17 + 1));
+      const sep14 = rest.lastIndexOf(":");
+      if (sep14 <= 0) return null;
+      const version2 = Number(rest.slice(sep14 + 1));
       if (!Number.isInteger(version2) || version2 < 0) return null;
-      return { nodeId: rest.slice(0, sep17), version: version2 };
+      return { nodeId: rest.slice(0, sep14), version: version2 };
     }
     function workspaceTerminalBlockReason(workspaceRef, sagaState) {
       return `${WORKSPACE_DEAD_PREFIX}${workspaceRef}:${sagaState}`;
@@ -60891,7 +60752,7 @@ ${summary}`;
       };
     }
     function createTurnIngestHandler(deps) {
-      const counters5 = deps.counters ?? createTurnDeliverCounters();
+      const counters4 = deps.counters ?? createTurnDeliverCounters();
       const log = deps.log ?? NOOP_LOG;
       return (entry) => {
         if (entry.own || !isRecord6(entry.payload)) return;
@@ -60905,14 +60766,14 @@ ${summary}`;
               return;
             }
             const result = deps.ledger.observe(evidence, { src: { writer: entry.writer, seq: entry.seq } });
-            if (result.verdict !== "duplicate") counters5.ingested++;
+            if (result.verdict !== "duplicate") counters4.ingested++;
             return;
           }
           case "turn.committed": {
             const attemptId = str22(p.attemptId);
             if (!attemptId || typeof p.generation !== "number") return;
             deps.releaseAttemptRef?.({ attemptId, generation: p.generation });
-            counters5.released++;
+            counters4.released++;
             return;
           }
           case "turn.notify": {
@@ -60932,7 +60793,7 @@ ${summary}`;
               ...entry.ref && isSummaryRef(entry.ref) ? { ref: entry.ref } : {},
               payload: { relayedFrom: entry.writer, relayedSeq: entry.seq }
             });
-            if (inserted) counters5.relayed++;
+            if (inserted) counters4.relayed++;
             return;
           }
           default:
@@ -61065,7 +60926,7 @@ ${line}`;
       const waiters = /* @__PURE__ */ new Set();
       return {
         wait(meshId, untilMs, signal) {
-          return new Promise((resolve39, reject) => {
+          return new Promise((resolve38, reject) => {
             if (signal.aborted) {
               reject(signal.reason ?? new Error("aborted"));
               return;
@@ -61080,7 +60941,7 @@ ${line}`;
                 waiters.delete(waiter);
                 timers.clearTimeout(handle);
                 signal.removeEventListener("abort", onAbort);
-                resolve39(v);
+                resolve38(v);
               }
             };
             const onAbort = () => {
@@ -61114,7 +60975,7 @@ ${line}`;
       const backlog = handlerOpts.mode === "backlog";
       const policy = deps.policy ?? DEFAULT_TURN_POLICY;
       const now = deps.now ?? (() => Date.now());
-      const counters5 = deps.counters ?? createTurnDeliverCounters();
+      const counters4 = deps.counters ?? createTurnDeliverCounters();
       const log = deps.log ?? NOOP_LOG;
       return async (entry, signal) => {
         if (entry.kind !== "turn.notify" || !isRecord6(entry.payload)) return { outcome: "skipped", why: "not_notify" };
@@ -61135,7 +60996,7 @@ ${line}`;
         const suppression = evaluateNotifySuppression({ notify: notify2, attempt, generation: row?.generation ?? null });
         if (suppression) {
           deps.ledger.claimDelivery({ writer: entry.writer, seq: entry.seq, meshId: entry.meshId, sessionId: sessionForClaim, outcome: `suppressed:${suppression}` });
-          counters5.suppressed++;
+          counters4.suppressed++;
           log.info(`deliver mesh=${entry.meshId} entry=${entry.writer}:${entry.seq} notify=${notify2} outcome=suppressed:${suppression}`);
           return { outcome: "suppressed", why: suppression };
         }
@@ -61156,7 +61017,7 @@ ${line}`;
         const refusedSessions = /* @__PURE__ */ new Set();
         for (; ; ) {
           if (store2.hasEvent(key2)) {
-            counters5.ackedElsewhere++;
+            counters4.ackedElsewhere++;
             log.info(`deliver mesh=${entry.meshId} entry=${entry.writer}:${entry.seq} notify=${notify2} outcome=acked_elsewhere waitedMs=${now() - startedAt}`);
             return { outcome: "acked_elsewhere" };
           }
@@ -61164,13 +61025,13 @@ ${line}`;
           const route = routeNotice({ targetSessionId: str22(p.targetSessionId) ?? null, coordinators, pastCeiling: !backlog && now() >= deadline });
           if (backlog && route.kind !== "deliver") return { outcome: "not_now" };
           if (route.kind === "none") {
-            counters5.noCoordinator++;
+            counters4.noCoordinator++;
             return { outcome: "no_coordinator" };
           }
           if (route.kind === "wait") {
             if (!deferredOnce) {
               deferredOnce = true;
-              counters5.deferred++;
+              counters4.deferred++;
             }
             await deps.waiter.wait(entry.meshId, deadline, signal);
             continue;
@@ -61187,7 +61048,7 @@ ${line}`;
               createdAt: now()
             });
           } catch (error48) {
-            counters5.submitFailures++;
+            counters4.submitFailures++;
             throw error48;
           }
           if (outcome.kind === "refused") {
@@ -61197,20 +61058,20 @@ ${line}`;
               continue;
             }
             if (RETRYABLE_REFUSALS2.has(outcome.reason)) {
-              counters5.submitFailures++;
+              counters4.submitFailures++;
               throw new Error(`notice ${messageId} refused (${outcome.reason}) by every coordinator of mesh ${entry.meshId}`);
             }
             deps.ledger.claimDelivery({ writer: entry.writer, seq: entry.seq, meshId: entry.meshId, sessionId: route.sessionId, outcome: `refused:${outcome.reason}` });
-            counters5.refused++;
+            counters4.refused++;
             log.warn(`deliver mesh=${entry.meshId} entry=${entry.writer}:${entry.seq} notify=${notify2} outcome=refused:${outcome.reason} session=${route.sessionId}`);
             return { outcome: "refused", reason: outcome.reason };
           }
           const claimed = deps.ledger.claimDelivery({ writer: entry.writer, seq: entry.seq, meshId: entry.meshId, sessionId: route.sessionId, outcome: outcome.kind });
-          if (!claimed) counters5.duplicates++;
-          if (outcome.kind === "delivered") counters5.delivered++;
-          else if (outcome.kind === "queued") counters5.queued++;
-          else counters5.duplicates++;
-          if (route.escalated) counters5.escalated++;
+          if (!claimed) counters4.duplicates++;
+          if (outcome.kind === "delivered") counters4.delivered++;
+          else if (outcome.kind === "queued") counters4.queued++;
+          else counters4.duplicates++;
+          if (route.escalated) counters4.escalated++;
           const waitedMs = now() - startedAt;
           log.info(`deliver mesh=${entry.meshId} entry=${entry.writer}:${entry.seq} notify=${notify2}${rendered.event ? ` event=${rendered.event}` : ""} outcome=${outcome.kind}${route.escalated ? " escalated=true" : ""} session=${route.sessionId} waitedMs=${waitedMs}`);
           return { outcome: outcome.kind, sessionId: route.sessionId, escalated: route.escalated, waitedMs };
@@ -61254,7 +61115,7 @@ ${line}`;
     }
     function readCoordinatorNotices(deps, meshId, opts = {}) {
       const ack = opts.ack !== false;
-      const counters5 = deps.counters ?? createTurnDeliverCounters();
+      const counters4 = deps.counters ?? createTurnDeliverCounters();
       const out = [];
       for (const row of pendingNoticeRows(deps, meshId, opts.limit ?? 200)) {
         const writer = row.srcWriter;
@@ -61290,7 +61151,7 @@ ${line}`;
           ...str22(entry.targetSessionId) ? { targetCoordinatorSessionId: str22(entry.targetSessionId) } : {},
           ...isRecord6(local.metadataEvent) ? { metadataEvent: local.metadataEvent } : {}
         });
-        counters5.mcpRead++;
+        counters4.mcpRead++;
       }
       if (ack && out.length > 0) deps.waiter?.wake(meshId);
       return out;
@@ -61304,8 +61165,8 @@ ${line}`;
         if (result.outcome === "delivered" || result.outcome === "queued") delivered++;
         if (result.outcome === "not_now" || result.outcome === "no_coordinator") break;
       }
-      const counters5 = deps.counters;
-      if (counters5) counters5.backlogDelivered += delivered;
+      const counters4 = deps.counters;
+      if (counters4) counters4.backlogDelivered += delivered;
       return delivered;
     }
     function listControlNotices(deps, meshId, event) {
@@ -61556,10 +61417,6 @@ ${line}`;
       if (!taskIsParked(task)) return false;
       const age = parkedAgeMs(task, nowMs2);
       return age !== null && age >= retentionMs;
-    }
-    function buildParkedTaskNotice(taskId, targetSessionId, reason) {
-      const addressee = readNonEmptyString(targetSessionId);
-      return `The delta was addressed to session '${addressee || "(unknown)"}' and that pin went stale (${reason || PARK_REASON_PIN_EXPIRED}), so the task is now PARKED \u2014 held for you, deliberately NOT re-homed onto another session. A message written for one session's context becomes a context-free instruction anywhere else, so the daemon will not choose a new addressee for you. The task is claimable by nobody until you act on it, and it is dropped (as a terminal failure, with another notification) if left parked for ${Math.round(PARKED_TASK_RETENTION_MS / 36e5)}h. Four ways out \u2014 inspect it with mesh_view_queue (parked rows are listed under parkedTasks with their original addressee), then either re-target it with mesh_queue_requeue(task_id='${taskId}', target_session_id='<live session>') \u2014 or clear_target_session to let any compatible session take it; REWRITE it first with mesh_queue_requeue(task_id='${taskId}', message='<updated instruction>') if the situation moved on while it waited (the common case: the worker already did the part your delta was about); or cancel it with mesh_queue_cancel(task_id='${taskId}') if it is no longer wanted. Any requeue unparks the task.`;
     }
     function notifyCoordinatorOfParkedTaskDropped(meshId, task) {
       const taskId = task.id;
@@ -61857,8 +61714,8 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       return {
         acquire() {
           if (held < max && waiters.length === 0) return Promise.resolve(grant());
-          return new Promise((resolve39) => {
-            waiters.push(resolve39);
+          return new Promise((resolve38) => {
+            waiters.push(resolve38);
           });
         },
         inflight: () => held,
@@ -63331,16 +63188,16 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     });
     function hmacAuthority(opts) {
       const key2 = utf82.encode(opts.secret);
-      const sig3 = (v) => bytesToHex(hmac(sha2562, key2, utf82.encode(jcs(v))));
+      const sig2 = (v) => bytesToHex(hmac(sha2562, key2, utf82.encode(jcs(v))));
       const governs = opts.governs ?? (() => true);
       const signFinality = (proposal) => {
         if (proposal.authority !== opts.authorityId)
           throw misuse(`proposal authority ${proposal.authority} != ${opts.authorityId}`);
-        return { ...proposal, sig: sig3(proposal) };
+        return { ...proposal, sig: sig2(proposal) };
       };
       const signDirective = (unsigned) => {
         const withAuthority = { ...unsigned, authority: opts.authorityId };
-        return { ...withAuthority, sig: sig3(withAuthority) };
+        return { ...withAuthority, sig: sig2(withAuthority) };
       };
       return {
         signFinality,
@@ -63349,7 +63206,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
           if (cert.authority !== opts.authorityId)
             return false;
           const { sig: got, ...unsigned } = cert;
-          return got === sig3(unsigned);
+          return got === sig2(unsigned);
         },
         verifyWriterDirective(d) {
           if (d.authority !== opts.authorityId)
@@ -63357,17 +63214,17 @@ The instruction it carried was never delivered to anyone. If it still matters, r
           if (!governs(d.topic, d.writer))
             return false;
           const { sig: got, ...unsigned } = d;
-          return got === sig3(unsigned);
+          return got === sig2(unsigned);
         },
         issueWriterDirective: async (unsigned) => signDirective(unsigned),
         verifyTakeover(evt) {
           const p = evt.payload;
           if (!p || typeof p.newOwner !== "string" || typeof p.hostSig !== "string")
             return false;
-          return p.hostSig === sig3({ topic: evt.topic, key: evt.key ?? "", newOwner: p.newOwner });
+          return p.hostSig === sig2({ topic: evt.topic, key: evt.key ?? "", newOwner: p.newOwner });
         },
         issueTakeover: async (unsigned) => ({
-          hostSig: sig3({ topic: unsigned.topic, key: unsigned.key, newOwner: unsigned.newOwner })
+          hostSig: sig2({ topic: unsigned.topic, key: unsigned.key, newOwner: unsigned.newOwner })
         })
       };
     }
@@ -63608,7 +63465,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
               const through = this.deps.store.maxRowid(topic);
               if (this.deps.store.cursorGet(name, topic) >= through)
                 return Promise.resolve({ throughRowid: through });
-              return new Promise((resolve39, reject) => c.waiters.push({ through, resolve: resolve39, reject }));
+              return new Promise((resolve38, reject) => c.waiters.push({ through, resolve: resolve38, reject }));
             } catch (e) {
               return Promise.reject(e);
             }
@@ -64973,7 +64830,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
             } catch (e) {
               return Promise.reject(e);
             }
-            return new Promise((resolve39, reject) => {
+            return new Promise((resolve38, reject) => {
               this.push({
                 t: "append",
                 topic,
@@ -64983,7 +64840,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
                 causal: o?.causal,
                 causalProvider: o?.causalProvider,
                 ref: o?.ref,
-                resolve: resolve39,
+                resolve: resolve38,
                 reject
               });
             });
@@ -64993,8 +64850,8 @@ The instruction it carried was never delivered to anyone. If it still matters, r
               throw new SeqscribeError("ERR_MISUSE", "node is closed");
             validateEntry(entry, this.constants);
             this.topics.get(entry.topic);
-            return new Promise((resolve39, reject) => {
-              this.push({ t: "external", entry, via, resolve: resolve39, reject });
+            return new Promise((resolve38, reject) => {
+              this.push({ t: "external", entry, via, resolve: resolve38, reject });
             });
           }
           // §6.4 fork path ② (HAVE contradiction) is detected outside the queue but the
@@ -65002,8 +64859,8 @@ The instruction it carried was never delivered to anyone. If it still matters, r
           sealStream(topic, writer) {
             if (this.closed)
               throw new SeqscribeError("ERR_MISUSE", "node is closed");
-            return new Promise((resolve39, reject) => {
-              this.push({ t: "seal", topic, writer, resolve: resolve39, reject });
+            return new Promise((resolve38, reject) => {
+              this.push({ t: "seal", topic, writer, resolve: resolve38, reject });
             });
           }
           setOnApplied(hook) {
@@ -65026,15 +64883,15 @@ The instruction it carried was never delivered to anyone. If it still matters, r
           applyCert(cert) {
             if (this.closed)
               throw new SeqscribeError("ERR_MISUSE", "node is closed");
-            return new Promise((resolve39, reject) => {
-              this.push({ t: "cert", cert, resolve: resolve39, reject });
+            return new Promise((resolve38, reject) => {
+              this.push({ t: "cert", cert, resolve: resolve38, reject });
             });
           }
           applyDirective(directive) {
             if (this.closed)
               throw new SeqscribeError("ERR_MISUSE", "node is closed");
-            return new Promise((resolve39, reject) => {
-              this.push({ t: "directive", directive, resolve: resolve39, reject });
+            return new Promise((resolve38, reject) => {
+              this.push({ t: "directive", directive, resolve: resolve38, reject });
             });
           }
           // §7.8 snapshot adoption: stream heads jump to the cut (chains continue from
@@ -65042,8 +64899,8 @@ The instruction it carried was never delivered to anyone. If it still matters, r
           adoptSnapshotCut(topic, cut) {
             if (this.closed)
               throw new SeqscribeError("ERR_MISUSE", "node is closed");
-            return new Promise((resolve39, reject) => {
-              this.push({ t: "adopt", topic, cut, resolve: resolve39, reject });
+            return new Promise((resolve38, reject) => {
+              this.push({ t: "adopt", topic, cut, resolve: resolve38, reject });
             });
           }
           // C7-7 writer-row GC. Local housekeeping only — no signed authority, no
@@ -65062,8 +64919,8 @@ The instruction it carried was never delivered to anyone. If it still matters, r
             if (entry.policy.replication === "full-sync") {
               return Promise.reject(misuse(`retireTopic: full-sync topics are not GC-eligible (${topic})`));
             }
-            return new Promise((resolve39, reject) => {
-              this.push({ t: "retireTopic", topic, resolve: resolve39, reject });
+            return new Promise((resolve38, reject) => {
+              this.push({ t: "retireTopic", topic, resolve: resolve38, reject });
             });
           }
           // Local entry prune (host-guide `pruneTopic`, REQUESTED EDIT). Unlike
@@ -65097,13 +64954,13 @@ The instruction it carried was never delivered to anyone. If it still matters, r
             if (o.olderThanMs === void 0 && o.keepNewest === void 0) {
               return Promise.reject(misuse(`pruneTopic: at least one of olderThanMs/keepNewest is required`));
             }
-            return new Promise((resolve39, reject) => {
+            return new Promise((resolve38, reject) => {
               this.push({
                 t: "pruneTopic",
                 topic,
                 olderThanMs: o.olderThanMs,
                 keepNewest: o.keepNewest,
-                resolve: resolve39,
+                resolve: resolve38,
                 reject
               });
             });
@@ -65139,14 +64996,14 @@ The instruction it carried was never delivered to anyone. If it still matters, r
             } catch (e) {
               return Promise.reject(e);
             }
-            return new Promise((resolve39, reject) => {
+            return new Promise((resolve38, reject) => {
               this.push({
                 t: "pruneSuperseded",
                 topic,
                 uptoRowid: o.uptoRowid,
                 maxRows: Math.min(o.maxRows ?? PRUNE_SUPERSEDED_DEFAULT_MAX_ROWS, PRUNE_SUPERSEDED_MAX_ROWS_CAP),
                 supersedeOtherWriters: o.supersedeOtherWriters === true,
-                resolve: resolve39,
+                resolve: resolve38,
                 reject
               });
             });
@@ -65175,13 +65032,13 @@ The instruction it carried was never delivered to anyone. If it still matters, r
             } catch (e) {
               return Promise.reject(e);
             }
-            return new Promise((resolve39, reject) => {
+            return new Promise((resolve38, reject) => {
               this.push({
                 t: "pruneAcked",
                 topic,
                 o,
                 maxRows: Math.min(o.maxRows ?? ACKED_PRUNE_DEFAULT_MAX_ROWS, ACKED_PRUNE_MAX_ROWS_CAP),
-                resolve: resolve39,
+                resolve: resolve38,
                 reject
               });
             });
@@ -65189,8 +65046,8 @@ The instruction it carried was never delivered to anyone. If it still matters, r
           adoptFloor(topic, writer, seq2, chain) {
             if (this.closed)
               return Promise.reject(new SeqscribeError("ERR_MISUSE", "node is closed"));
-            return new Promise((resolve39, reject) => {
-              this.push({ t: "adoptFloor", topic, writer, seq: seq2, chain, resolve: resolve39, reject });
+            return new Promise((resolve38, reject) => {
+              this.push({ t: "adoptFloor", topic, writer, seq: seq2, chain, resolve: resolve38, reject });
             });
           }
           // This node's retention floor for a stream (rows ≤ seq are not held), or null.
@@ -66808,10 +66665,10 @@ The instruction it carried was never delivered to anyone. If it still matters, r
             const frontier = member === void 0 ? ks.frontier : ks.members.get(member)?.frontier ?? [];
             if (frontier.length < 2)
               return;
-            const sig3 = `${topic}\0${key2}\0${member ?? ""}\0${jcs(frontier)}`;
-            if (this.surfacedConflicts.has(sig3))
+            const sig2 = `${topic}\0${key2}\0${member ?? ""}\0${jcs(frontier)}`;
+            if (this.surfacedConflicts.has(sig2))
               return;
-            this.surfacedConflicts.add(sig3);
+            this.surfacedConflicts.add(sig2);
             capSet(this.surfacedConflicts);
             const entries = frontier.map((h) => this.deps.store.getEntry(topic, h[1], h[2])).filter((x) => x !== void 0);
             const winnerId = member === void 0 ? ks.winner : ks.members.get(member)?.entry;
@@ -66834,10 +66691,10 @@ The instruction it carried was never delivered to anyone. If it still matters, r
           async maybeAskOwner(topic, key2, ks, req) {
             if (ks.owner !== this.deps.writerId)
               return;
-            const sig3 = `${topic}\0${jcs(req.entry)}`;
-            if (this.handledRequests.has(sig3))
+            const sig2 = `${topic}\0${jcs(req.entry)}`;
+            if (this.handledRequests.has(sig2))
               return;
-            this.handledRequests.add(sig3);
+            this.handledRequests.add(sig2);
             capSet(this.handledRequests);
             const reg = this.handle(topic);
             for (const cb of this.requestCbs.get(topic) ?? []) {
@@ -71625,7 +71482,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         const dispatch2 = dispatches.get(taskId);
         const terminal = terminals.get(taskId);
         const status = queueEntry?.status ?? (terminal ? terminal.kind === "task_completed" ? "completed" : "failed" : "unknown");
-        const isTerminalStatus = status === "completed" || status === "failed" || status === "cancelled";
+        const isTerminalStatus = isMeshTerminalTaskStatus2(status);
         const dispatchTime = parseTime(dispatch2?.first ?? queueEntry?.dispatchTimestamp);
         const terminalTime = parseTime(terminal?.at);
         const stats = {
@@ -71702,6 +71559,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     var init_mesh_task_stats = __esm2({
       "src/mesh/mesh-task-stats.ts"() {
         "use strict";
+        init_dist();
         init_mesh_topic_index();
         init_mesh_runtime_store();
         init_mesh_publisher();
@@ -71709,7 +71567,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     });
     var mesh_missions_exports = {};
     __export2(mesh_missions_exports, {
-      COMPACT_STATUS_GOAL_PREVIEW_MAX: () => COMPACT_STATUS_GOAL_PREVIEW_MAX2,
+      COMPACT_STATUS_GOAL_PREVIEW_MAX: () => COMPACT_STATUS_GOAL_PREVIEW_MAX,
       GOAL_PREVIEW_MAX: () => GOAL_PREVIEW_MAX,
       MESH_MISSION_LIST_HISTORY_ID_LIMIT: () => MESH_MISSION_LIST_HISTORY_ID_LIMIT,
       MESH_MISSION_LIST_STATUS_LIMIT: () => MESH_MISSION_LIST_STATUS_LIMIT,
@@ -71974,7 +71832,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       return options?.verbose ? full : full.map((summary) => slimMissionSummary(summary));
     }
     function getMeshStatusMissionsCompact3(meshId, options) {
-      const previewMax = Math.max(0, options?.previewMax ?? COMPACT_STATUS_GOAL_PREVIEW_MAX2);
+      const previewMax = Math.max(0, options?.previewMax ?? COMPACT_STATUS_GOAL_PREVIEW_MAX);
       const historyIdLimit = Math.max(0, options?.historyIdLimit ?? 20);
       const all = getMeshMissions(meshId);
       const live = summarizeMeshMissions(meshId, all.filter((m) => m.status === "active" || m.status === "paused")).map((summary) => slimMissionSummary(summary, previewMax));
@@ -72071,7 +71929,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     var LEDGER_GOAL_SUMMARY_MAX;
     var MESH_MISSION_STATUSES22;
     var GOAL_PREVIEW_MAX;
-    var COMPACT_STATUS_GOAL_PREVIEW_MAX2;
+    var COMPACT_STATUS_GOAL_PREVIEW_MAX;
     var MESH_MISSION_LIST_HISTORY_ID_LIMIT;
     var MESH_MISSION_LIST_STATUS_LIMIT;
     var init_mesh_missions = __esm2({
@@ -72088,7 +71946,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         LEDGER_GOAL_SUMMARY_MAX = 200;
         MESH_MISSION_STATUSES22 = ["active", "paused", "completed", "abandoned"];
         GOAL_PREVIEW_MAX = 120;
-        COMPACT_STATUS_GOAL_PREVIEW_MAX2 = 80;
+        COMPACT_STATUS_GOAL_PREVIEW_MAX = 80;
         MESH_MISSION_LIST_HISTORY_ID_LIMIT = 30;
         MESH_MISSION_LIST_STATUS_LIMIT = 50;
       }
@@ -72132,7 +71990,6 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       isMeshTaskStatus: () => isMeshTaskStatus2,
       isMeshTerminalTaskStatus: () => isMeshTerminalTaskStatus2,
       isTaskReadonly: () => isTaskReadonly3,
-      isTerminalQueueStatus: () => isTerminalQueueStatus,
       meshTaskNotBeforeReady: () => meshTaskNotBeforeReady,
       meshTaskPriorityRank: () => meshTaskPriorityRank2,
       nodeSatisfiesRequiredTags: () => nodeSatisfiesRequiredTags3,
@@ -72741,9 +72598,6 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     function __resetMeshRuntimeStoreForTests() {
       MeshRuntimeStore.resetForTests();
     }
-    function isTerminalQueueStatus(status) {
-      return TERMINAL_TASK_STATUSES.has(status);
-    }
     function propagateLedgerDependencyFailure(meshId, taskId, status, reason) {
       return DEPENDENCY_FAILURE_TERMINALS.has(status) ? withQueueLock(meshId, () => propagateDependencyFailure(meshId, taskId, reason)) : [];
     }
@@ -72815,7 +72669,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         init_mesh_autolaunch_spawn_budget();
         init_mesh_direct_dispatch();
         DEPENDENCY_FAILURE_TERMINALS = /* @__PURE__ */ new Set(["failed", "cancelled"]);
-        TERMINAL_TASK_STATUSES = /* @__PURE__ */ new Set(["completed", "failed", "cancelled"]);
+        TERMINAL_TASK_STATUSES = new Set(MESH_TERMINAL_TASK_STATUSES2);
         lastCancelledTaskAssignment = /* @__PURE__ */ new Map();
         MAX_DISPATCH_FAILURES = 5;
         DISPATCH_RETRY_BACKOFF_BASE_MS = 3e3;
@@ -75893,7 +75747,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     });
     function awaitWithWarmupDeadline(work, opts) {
       const pollMs = Math.max(1, Math.min(opts.pollIntervalMs ?? 200, opts.connectTimeoutMs));
-      return new Promise((resolve39, reject) => {
+      return new Promise((resolve38, reject) => {
         let done = false;
         let poll;
         let responseTimer;
@@ -75943,7 +75797,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           if (typeof poll.unref === "function") poll.unref();
         }
         work.then(
-          (val) => settle2(() => resolve39(val)),
+          (val) => settle2(() => resolve38(val)),
           (err) => settle2(() => reject(err))
         );
       });
@@ -76199,16 +76053,16 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         if (!validation.valid) return { source: "mesh.policy.refineConfig", sourceType: "invalid", error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
         return { config: inline, source: "mesh.policy.refineConfig", sourceType: "mesh_policy" };
       }
-      for (const relative9 of MESH_REFINE_CONFIG_LOCATIONS) {
-        const configPath = (0, import_path11.join)(workspace, relative9);
+      for (const relative8 of MESH_REFINE_CONFIG_LOCATIONS) {
+        const configPath = (0, import_path11.join)(workspace, relative8);
         if (!(0, import_fs12.existsSync)(configPath)) continue;
         try {
           const parsed = parseConfigText(configPath, (0, import_fs12.readFileSync)(configPath, "utf-8"));
-          const validation = validateMeshRefineConfig(parsed, relative9);
-          if (!validation.valid) return { source: relative9, sourceType: "invalid", path: configPath, error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
-          return { config: parsed, source: relative9, sourceType: "repo_file", path: configPath };
+          const validation = validateMeshRefineConfig(parsed, relative8);
+          if (!validation.valid) return { source: relative8, sourceType: "invalid", path: configPath, error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
+          return { config: parsed, source: relative8, sourceType: "repo_file", path: configPath };
         } catch (error48) {
-          return { source: relative9, sourceType: "invalid", path: configPath, error: error48?.message || String(error48) };
+          return { source: relative8, sourceType: "invalid", path: configPath, error: error48?.message || String(error48) };
         }
       }
       return {
@@ -76623,28 +76477,28 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         if (!validation.valid) return { source: "mesh.policy.worktreeBootstrapConfig", sourceType: "invalid", error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
         return { config: inline, source: "mesh.policy.worktreeBootstrapConfig", sourceType: "mesh_policy" };
       }
-      for (const relative9 of MESH_WORKTREE_BOOTSTRAP_CONFIG_LOCATIONS) {
-        const configPath = (0, import_path12.join)(workspace, relative9);
+      for (const relative8 of MESH_WORKTREE_BOOTSTRAP_CONFIG_LOCATIONS) {
+        const configPath = (0, import_path12.join)(workspace, relative8);
         if (!(0, import_fs13.existsSync)(configPath)) continue;
         try {
           const parsed = parseConfigText(configPath, (0, import_fs13.readFileSync)(configPath, "utf-8"));
-          const validation = validateMeshWorktreeBootstrapConfig(parsed, relative9);
-          if (!validation.valid) return { source: relative9, sourceType: "invalid", path: configPath, error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
-          return { config: parsed, source: relative9, sourceType: "repo_file", path: configPath };
+          const validation = validateMeshWorktreeBootstrapConfig(parsed, relative8);
+          if (!validation.valid) return { source: relative8, sourceType: "invalid", path: configPath, error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
+          return { config: parsed, source: relative8, sourceType: "repo_file", path: configPath };
         } catch (error48) {
-          return { source: relative9, sourceType: "invalid", path: configPath, error: error48?.message || String(error48) };
+          return { source: relative8, sourceType: "invalid", path: configPath, error: error48?.message || String(error48) };
         }
       }
       return { source: "unavailable", sourceType: "unavailable", error: `No worktree bootstrap config found. Checked: ${MESH_WORKTREE_BOOTSTRAP_CONFIG_LOCATIONS.join(", ")}` };
     }
     function computeStaleInputsDigest(workspace, staleInputs) {
       const digest = {};
-      for (const relative9 of staleInputs ?? []) {
-        const filePath2 = (0, import_path12.join)(workspace, relative9);
+      for (const relative8 of staleInputs ?? []) {
+        const filePath2 = (0, import_path12.join)(workspace, relative8);
         try {
-          digest[relative9] = (0, import_node_crypto22.createHash)("sha256").update((0, import_fs13.readFileSync)(filePath2)).digest("hex");
+          digest[relative8] = (0, import_node_crypto22.createHash)("sha256").update((0, import_fs13.readFileSync)(filePath2)).digest("hex");
         } catch {
-          digest[relative9] = "absent";
+          digest[relative8] = "absent";
         }
       }
       return digest;
@@ -77228,8 +77082,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       const branch = readStringValue(node.worktreeBranch, node.worktree_branch);
       if (branch) return `\u2387 ${branch}`;
       const workspace = readStringValue(node.workspace, node.repoRoot, node.repo_root);
-      const basename23 = workspace ? workingDirBasename(workspace) : void 0;
-      return basename23 || (nodeId ? nodeId.slice(0, 8) : "node");
+      const basename22 = workspace ? workingDirBasename(workspace) : void 0;
+      return basename22 || (nodeId ? nodeId.slice(0, 8) : "node");
     }
     function buildMeshNodeDisplayLabel(node, nodeId, _providerPriority) {
       return buildMeshNodeMachineLabel(node, nodeId);
@@ -78138,7 +77992,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           const connection = args.getConnection?.(args.daemonId);
           if (args.getConnection && readMeshConnectionState(connection) !== "connected") break;
           if (connection) args.onConnection?.(connection);
-          await new Promise((resolve39) => setTimeout(resolve39, 250 * 2 ** (attempt - 1)));
+          await new Promise((resolve38) => setTimeout(resolve38, 250 * 2 ** (attempt - 1)));
         }
         try {
           const remoteGit = await probeRemoteMeshGitStatus({
@@ -78540,7 +78394,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         if (!sourceKey || seen.has(sourceKey)) break;
         seen.add(sourceKey);
         const source = allNodes.find(
-          (candidate) => candidate !== current2 && candidate && typeof candidate === "object" && meshNodeIdMatches7(candidate, sourceId)
+          (candidate) => candidate !== current2 && candidate && typeof candidate === "object" && meshNodeIdMatches6(candidate, sourceId)
         );
         if (!source) break;
         const sourceDaemon = directDaemonKey(source);
@@ -78554,7 +78408,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       const list = Array.isArray(nodes) ? nodes : [];
       if (!self || list.length === 0) return self ? [self] : [];
       const selfNode = list.find(
-        (candidate) => candidate && typeof candidate === "object" && meshNodeIdMatches7(candidate, self)
+        (candidate) => candidate && typeof candidate === "object" && meshNodeIdMatches6(candidate, self)
       );
       if (!selfNode) return [self];
       const selfKey = resolveNodeDaemonKey(selfNode, list);
@@ -79370,7 +79224,6 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       const daemonBootId = readId(record22.daemonBootId);
       const truncated = rawSessions.length > sessions.length && sessions.length >= MESH_NODE_RUNTIME_MAX_SESSIONS;
       const providers = sanitizeProviders(record22.providers);
-      const sessionStampVersion = typeof record22.sessionStampVersion === "number" && Number.isInteger(record22.sessionStampVersion) && record22.sessionStampVersion > 0 && record22.sessionStampVersion < 1e3 ? record22.sessionStampVersion : void 0;
       return {
         schemaVersion: MESH_NODE_RUNTIME_SUMMARY_SCHEMA_VERSION,
         ...daemonId ? { daemonId } : {},
@@ -79380,8 +79233,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         sessions,
         ...nodeFacts ? { nodeFacts } : {},
         ...truncated ? { sessionsTruncated: true } : {},
-        ...providers ? { providers } : {},
-        ...sessionStampVersion ? { sessionStampVersion } : {}
+        ...providers ? { providers } : {}
       };
     }
     function buildMeshNodeRuntimeSummary(statusMetadata, nodeFacts, providers) {
@@ -79390,7 +79242,6 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       if (!payload) return null;
       const status = readRecord42(payload.status) ?? payload;
       if (!Array.isArray(status.sessions)) return null;
-      const catalog = providers ?? (Array.isArray(status.availableProviders) ? buildMeshNodeRuntimeProviders(status.availableProviders) : void 0);
       return sanitizeMeshNodeRuntimeSummary({
         daemonId: status.instanceId,
         daemonBootId: payload.daemonBootId ?? status.daemonBootId,
@@ -79398,9 +79249,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         upgradeFailure: payload.upgradeFailure,
         sessions: status.sessions,
         nodeFacts: nodeFacts ?? void 0,
-        ...catalog ? { providers: catalog } : {},
-        // Built from RAW session records here, so the v2 stamps are present when set.
-        sessionStampVersion: MESH_NODE_RUNTIME_SESSION_STAMP_VERSION
+        ...providers ? { providers } : {}
       });
     }
     function computeMeshNodeRuntimeSignature(summary) {
@@ -79423,8 +79272,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         summary.upgradeFailure ? stripTimes(summary.upgradeFailure) : null,
         summary.sessions.map((s2) => stripTimes(s2)),
         summary.nodeFacts ? stripTimes(summary.nodeFacts) : null,
-        summary.providers ?? null,
-        summary.sessionStampVersion ?? null
+        summary.providers ?? null
       ]);
     }
     function computeMeshNodeFactsSignature(summary) {
@@ -79437,7 +79285,6 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       });
     }
     var MESH_NODE_RUNTIME_SUMMARY_SCHEMA_VERSION;
-    var MESH_NODE_RUNTIME_SESSION_STAMP_VERSION;
     var MESH_NODE_RUNTIME_MAX_SESSIONS;
     var MESH_NODE_RUNTIME_MAX_PROVIDERS;
     var MAX_AUTO_APPROVE_MODES;
@@ -79448,7 +79295,6 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         "use strict";
         init_dist();
         MESH_NODE_RUNTIME_SUMMARY_SCHEMA_VERSION = 1;
-        MESH_NODE_RUNTIME_SESSION_STAMP_VERSION = 2;
         MESH_NODE_RUNTIME_MAX_SESSIONS = 64;
         MESH_NODE_RUNTIME_MAX_PROVIDERS = 96;
         MAX_AUTO_APPROVE_MODES = 16;
@@ -79496,7 +79342,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     }
     function meshNodeStateSignatureMatches(held, reported) {
       if (!held || !reported) return false;
-      return reported === held || reported === digestMeshNodeStateSignature(held);
+      return reported === digestMeshNodeStateSignature(held);
     }
     function carryUpstreamFreshness(prev, next, now, maxAgeMs = UPSTREAM_FRESHNESS_CARRY_MAX_AGE_MS) {
       if (next.upstreamStatus !== "unchecked" || !prev || !next.upstream) return next;
@@ -80480,15 +80326,6 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           migrate() {
             migrate(this);
           }
-          tableColumns(table) {
-            return tableColumns(this, table);
-          }
-          // Only called by migrate() in production, but kept as a class member because a
-          // regression test re-invokes it through `(db as any)` to assert the migration is
-          // idempotent across boots (mesh-runtime-store.test.ts, Part 8-1).
-          migrateMeshIsolationColumns() {
-            migrateMeshIsolationColumns(this);
-          }
           /**
            * Public (not private) so the extracted ./mesh-runtime-store-*.ts delegates can reach it
            * via `self`. O(1): records the write for the timer-driven checkpoint (never checkpoints here).
@@ -80882,7 +80719,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
               const convergenceAllows = (candidate) => candidate.taskMode !== "convergence" || !nodeIsWorktree;
               const targetMatches = (candidate) => {
                 if (candidate.targetSessionId && !sessionIdsEquivalent(candidate.targetSessionId, sessionId)) return false;
-                if (candidate.targetNodeId && !daemonIdsEquivalent4(candidate.targetNodeId, nodeId) && !meshNodeIdMatches7({ id: candidate.targetNodeId }, nodeId)) {
+                if (candidate.targetNodeId && !daemonIdsEquivalent4(candidate.targetNodeId, nodeId) && !meshNodeIdMatches6({ id: candidate.targetNodeId }, nodeId)) {
                   return false;
                 }
                 return true;
@@ -82358,7 +82195,7 @@ When the user asks to **set up / configure / onboard** this repo for Repo Mesh (
           hasNpmLock ? { command: "npm", args: ["ci"] } : { command: "npm", args: ["install"] }
         );
       }
-      const staleInputs = CANDIDATE_STALE_INPUTS.filter((relative9) => (0, import_fs16.existsSync)((0, import_path14.join)(workspace, relative9)));
+      const staleInputs = CANDIDATE_STALE_INPUTS.filter((relative8) => (0, import_fs16.existsSync)((0, import_path14.join)(workspace, relative8)));
       if (!commands.length) {
         return { commands, staleInputs };
       }
@@ -84448,7 +84285,6 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       findPriorWorkerReport: () => findPriorWorkerReport,
       hasLocalWorkerIdentity: () => hasLocalWorkerIdentity,
       normalizeWorkerReportedAtMs: () => normalizeWorkerReportedAtMs,
-      pruneReportedSummaries: () => pruneReportedSummaries,
       resolveForwardedWorkerIdentity: () => resolveForwardedWorkerIdentity,
       resolveLateWorkerIdentity: () => resolveLateWorkerIdentity,
       resolveRemoteWorkerIdentity: () => resolveRemoteWorkerIdentity,
@@ -84608,16 +84444,6 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
     }
     function readReportedSummary(meshId, taskId) {
       return REPORTED_SUMMARY_STORE.get(summaryKey(meshId, taskId))?.summary;
-    }
-    function pruneReportedSummaries(maxAgeMs, nowMs2 = Date.now()) {
-      let removed = 0;
-      for (const [key2, entry] of REPORTED_SUMMARY_STORE) {
-        if (nowMs2 - entry.recordedAtMs > maxAgeMs) {
-          REPORTED_SUMMARY_STORE.delete(key2);
-          removed += 1;
-        }
-      }
-      return removed;
     }
     function __resetReportedSummariesForTest() {
       REPORTED_SUMMARY_STORE.clear();
@@ -88407,7 +88233,7 @@ ${upstream}`;
             signature: refreshedIndexSignature,
             summaries: computed.summaries || []
           });
-          for (const [file2, entry] of Array.from(computed.persistedEntries.entries())) {
+          for (const entry of Array.from(computed.persistedEntries.values())) {
             if (!entry?.summary || !shouldScheduleSavedHistoryRollupForSignature(entry.signature)) continue;
             scheduleSavedHistoryRollup(agentType, entry.summary.historySessionId);
           }
@@ -88486,7 +88312,7 @@ ${upstream}`;
       }
       return 0;
     }
-    function findCollapsedIndexByIdentity2(collapsed, cursor) {
+    function findCollapsedIndexByIdentity(collapsed, cursor) {
       if (!cursor) return -1;
       for (let i = collapsed.length - 1; i >= 0; i -= 1) {
         if (buildHistoryMessageIdentity(collapsed[i]) === cursor) return i;
@@ -88510,7 +88336,7 @@ ${upstream}`;
       const collapsed = collapseReplayAssistantTurns(chronological, historyBehavior);
       const boundedLimit = normalizePaginationNumber(limit, 30, 1);
       const boundedOffset = normalizePaginationNumber(offset, 0, 0);
-      const cursorIndex = excludeFromIdentity ? findCollapsedIndexByIdentity2(collapsed, excludeFromIdentity) : -1;
+      const cursorIndex = excludeFromIdentity ? findCollapsedIndexByIdentity(collapsed, excludeFromIdentity) : -1;
       const boundedExclude = cursorIndex >= 0 ? collapsed.length - cursorIndex : Math.min(normalizePaginationNumber(excludeRecentCount, 0, 0), collapsed.length);
       const endExclusive = Math.max(0, collapsed.length - boundedExclude - boundedOffset);
       const startInclusive = Math.max(0, endExclusive - boundedLimit);
@@ -89380,7 +89206,7 @@ ${upstream}`;
     function cloneSourceNodeFor(node, context) {
       const sourceNodeId = typeof node?.clonedFromNodeId === "string" ? node.clonedFromNodeId.trim() : "";
       if (!sourceNodeId || !Array.isArray(context?.nodes)) return void 0;
-      return context.nodes.find((candidate) => candidate !== node && meshNodeIdMatches7(candidate, sourceNodeId));
+      return context.nodes.find((candidate) => candidate !== node && meshNodeIdMatches6(candidate, sourceNodeId));
     }
     function quotaSnapshotAgeMs2(facts, quota, now = Date.now()) {
       const updatedAt = Number(quota.updatedAt);
@@ -90061,7 +89887,7 @@ ${upstream}`;
           plan.rejected.push({ nodeId: node.id, reason: "coordinator_owned" });
           continue;
         }
-        const existing = meshNodes.find((entry) => meshNodeIdMatches7(entry, node.id));
+        const existing = meshNodes.find((entry) => meshNodeIdMatches6(entry, node.id));
         if (existing) {
           const heldStatus = readRecord8(existing.worktreeBootstrap)?.status;
           const reportedStatus = node.worktreeBootstrap?.status;
@@ -90096,7 +89922,7 @@ ${upstream}`;
         const { getMesh: getMesh2, addNode: addNode2 } = await Promise.resolve().then(() => (init_mesh_config(), mesh_config_exports));
         const mesh = getMesh2(meshId);
         if (!mesh) return "no_config_mesh";
-        if (mesh.nodes.some((entry) => meshNodeIdMatches7(entry, node.id))) return "already_present";
+        if (mesh.nodes.some((entry) => meshNodeIdMatches6(entry, node.id))) return "already_present";
         const added = addNode2(meshId, {
           id: node.id,
           workspace: node.workspace,
@@ -90856,7 +90682,7 @@ ${upstream}`;
       }));
       const uniqueNodes = [...new Set(pool.map((c) => c.nodeId))].map((nodeId, index) => ({
         nodeId,
-        node: pool.find((c) => meshNodeIdMatches7({ id: c.nodeId }, nodeId))?.node,
+        node: pool.find((c) => meshNodeIdMatches6({ id: c.nodeId }, nodeId))?.node,
         index
       }));
       return { pool, uniqueNodes };
@@ -91057,11 +90883,6 @@ ${upstream}`;
     }
     function localCoordinatorDaemonId() {
       return canonicalDaemonId3(readNonEmptyString(getMachineId()));
-    }
-    function isIdleSessionState(state) {
-      const status = readNonEmptyString(state?.status).toLowerCase();
-      if (TERMINAL_SESSION_STATUSES.includes(status)) return false;
-      return status === "idle" || state?.activeChat?.status === "waiting_input";
     }
     function describeOrphanReclaim(idleTtlMinutes) {
       const ttl = idleTtlMinutes ?? DEFAULT_DELEGATED_SESSION_IDLE_TTL_MINUTES;
@@ -91283,7 +91104,6 @@ ${upstream}`;
     var AUTO_LAUNCH_AWAIT_CLAIM_BACKOFF_CAP_CYCLES;
     var FOREIGN_TIMESTAMP_FUTURE_SKEW_TOLERANCE_MS;
     var AUTO_LAUNCH_REMOTE_IDLE_TTL_MS;
-    var TERMINAL_SESSION_STATUSES;
     var autoLaunchOrphanNotified;
     var autoLaunchOrphanFirstSeenAtMs;
     var AUTO_LAUNCH_ORPHAN_GRACE_MS;
@@ -91307,7 +91127,6 @@ ${upstream}`;
         AUTO_LAUNCH_AWAIT_CLAIM_BACKOFF_CAP_CYCLES = 2;
         FOREIGN_TIMESTAMP_FUTURE_SKEW_TOLERANCE_MS = 2e3;
         AUTO_LAUNCH_REMOTE_IDLE_TTL_MS = 5 * 60 * 1e3;
-        TERMINAL_SESSION_STATUSES = ["stopped", "failed", "terminated", "exited", "closed"];
         autoLaunchOrphanNotified = /* @__PURE__ */ new Set();
         autoLaunchOrphanFirstSeenAtMs = /* @__PURE__ */ new Map();
         AUTO_LAUNCH_ORPHAN_GRACE_MS = 3e4;
@@ -91463,11 +91282,11 @@ ${upstream}`;
     var mesh_candidacy_predicates_exports = {};
     __export2(mesh_candidacy_predicates_exports, {
       isHeldRemoteSessionGenerating: () => isHeldRemoteSessionGenerating,
-      isIdleSessionState: () => isIdleSessionState2,
+      isIdleSessionState: () => isIdleSessionState,
       isLaunchableNode: () => isLaunchableNode,
       isLocalAutoLaunchNode: () => isLocalAutoLaunchNode,
       isSessionActivelyGenerating: () => isSessionActivelyGenerating,
-      isTerminalSessionStatus: () => isTerminalSessionStatus,
+      isTerminalSessionStatus: () => isTerminalSessionRecordStatus,
       liveSessionCountForNode: () => liveSessionCountForNode,
       nodeHasActiveMeshWork: () => nodeHasActiveMeshWork,
       nodeHasLiveSessionPendingClaim: () => nodeHasLiveSessionPendingClaim,
@@ -91485,14 +91304,6 @@ ${upstream}`;
         return true;
       });
     }
-    function isTerminalSessionStatus(status) {
-      return ["stopped", "failed", "terminated", "exited", "closed"].includes(status);
-    }
-    function isIdleSessionState2(state) {
-      const status = readNonEmptyString(state?.status).toLowerCase();
-      if (isTerminalSessionStatus(status) || isDeadStatus(status)) return false;
-      return isReadyStatus(status) || state?.activeChat?.status === "waiting_input";
-    }
     function sessionStateLooksActive(state) {
       const status = readNonEmptyString(state?.status).toLowerCase();
       const chatStatus = readNonEmptyString(state?.activeChat?.status).toLowerCase();
@@ -91507,7 +91318,7 @@ ${upstream}`;
         const instNodeId = readNonEmptyString(settings.meshNodeId) || readNonEmptyString(settings.nodeId);
         if (!daemonIdsEquivalent4(instNodeId, nodeId)) return false;
         const sessionId = readNonEmptyString(state.instanceId);
-        if (currentSessionId && sessionIdsEquivalent(sessionId, currentSessionId) && isIdleSessionState2(state)) return false;
+        if (currentSessionId && sessionIdsEquivalent(sessionId, currentSessionId) && isIdleSessionState(state)) return false;
         return sessionStateLooksActive(state);
       });
     }
@@ -91572,7 +91383,7 @@ ${upstream}`;
         const instNodeId = readNonEmptyString(settings.meshNodeId) || readNonEmptyString(settings.nodeId);
         if (!daemonIdsEquivalent4(instNodeId, nodeId)) return false;
         const status = readNonEmptyString(state.status).toLowerCase();
-        return !isTerminalSessionStatus(status);
+        return !isTerminalSessionRecordStatus(status);
       });
       let count2 = localInstances.length;
       const localSessionIds = localInstances.map((inst) => readNonEmptyString(inst.getState().instanceId)).filter(Boolean);
@@ -91594,7 +91405,7 @@ ${upstream}`;
         const instNodeId = readNonEmptyString(settings.meshNodeId) || readNonEmptyString(settings.nodeId);
         if (!daemonIdsEquivalent4(instNodeId, nodeId)) return false;
         const status = readNonEmptyString(state.status).toLowerCase();
-        if (isTerminalSessionStatus(status)) return false;
+        if (isTerminalSessionRecordStatus(status)) return false;
         const sessionId = readNonEmptyString(state.instanceId);
         if (sessionId && busySessionIds.has(sessionId)) return false;
         const sessionProviderType = state.type || readNonEmptyString(settings.providerType);
@@ -92068,7 +91879,7 @@ ${upstream}`;
     }
     async function maybeAutoFastForwardIdleNode(components, args) {
       const mesh = getMeshWithCache(components, args.meshId);
-      const node = mesh?.nodes?.find((candidate) => meshNodeIdMatches7(candidate, args.nodeId));
+      const node = mesh?.nodes?.find((candidate) => meshNodeIdMatches6(candidate, args.nodeId));
       const workspace = readNonEmptyString(node?.workspace);
       if (!workspace) return;
       const policy = resolveAutoFastForwardPolicy2(mesh);
@@ -92343,7 +92154,7 @@ ${upstream}`;
     function isTargetNodeTransientlyUnresolved(mesh, task) {
       const targetNodeId = readNonEmptyString(task.targetNodeId);
       if (!targetNodeId) return false;
-      const node = Array.isArray(mesh?.nodes) ? mesh.nodes.find((n) => meshNodeIdMatches7(n, targetNodeId)) : void 0;
+      const node = Array.isArray(mesh?.nodes) ? mesh.nodes.find((n) => meshNodeIdMatches6(n, targetNodeId)) : void 0;
       if (node && node.worktreeBootstrap?.status === "running" && !isWorktreeBootstrapStaleRunning(node)) {
         return true;
       }
@@ -92403,14 +92214,14 @@ ${upstream}`;
       if (isWithinForeignFreshnessWindow(lastUpdateMs, Date.now(), DEAD_TARGET_GRACE_MS)) return NOT_DEAD;
       const nodes = Array.isArray(mesh?.nodes) ? mesh.nodes : [];
       if (targetNodeId) {
-        const nodePresent = nodes.some((n) => meshNodeIdMatches7(n, targetNodeId));
+        const nodePresent = nodes.some((n) => meshNodeIdMatches6(n, targetNodeId));
         if (!nodePresent) {
           if (isTargetNodeTransientlyUnresolved(mesh, task)) return NOT_DEAD;
           return { dead: true, nodeDead: true, reason: "dead_target_node_absent" };
         }
       }
       if (targetSessionId) {
-        const node = targetNodeId ? nodes.find((n) => meshNodeIdMatches7(n, targetNodeId)) : void 0;
+        const node = targetNodeId ? nodes.find((n) => meshNodeIdMatches6(n, targetNodeId)) : void 0;
         const nodeIsLocal = node ? isLocalAutoLaunchNode(node) : true;
         if (nodeIsLocal) {
           const verdict = resolveSessionBusyVerdict(components, targetSessionId);
@@ -92673,7 +92484,7 @@ ${upstream}`;
           const instNodeId = readNonEmptyString(settings.meshNodeId) || readNonEmptyString(settings.nodeId);
           if (!daemonIdsEquivalent4(instNodeId, nodeId)) continue;
           const status = readNonEmptyString(state.status).toLowerCase();
-          if (isTerminalSessionStatus(status)) continue;
+          if (isTerminalSessionRecordStatus(status)) continue;
           const sessionId = readNonEmptyString(state.instanceId);
           if (!sessionId) continue;
           sessions.push({
@@ -92751,7 +92562,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       const timeoutMs = opts.timeoutMs ?? REMOTE_LAUNCH_READY_TIMEOUT_MS;
       const pollMs = opts.pollMs ?? REMOTE_LAUNCH_READY_POLL_MS;
       const now = opts.now ?? (() => Date.now());
-      const sleep3 = opts.sleep ?? ((ms3) => new Promise((resolve39) => setTimeout(resolve39, ms3)));
+      const sleep3 = opts.sleep ?? ((ms3) => new Promise((resolve38) => setTimeout(resolve38, ms3)));
       const deadline = now() + timeoutMs;
       for (; ; ) {
         let ready2 = false;
@@ -93498,7 +93309,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
             const alProvider = readNonEmptyString(task.autoLaunch.providerType);
             if (isAutoLaunchWithinAwaitClaimWindow(launchedAtMs)) {
               if (shouldRedriveDeferredClaim(meshId, alNodeId, alSessionId, () => isWorkspaceAutoFastForwardInFlight(readNonEmptyString(
-                (Array.isArray(mesh?.nodes) ? mesh.nodes.find((n) => meshNodeIdMatches7(n, alNodeId)) : void 0)?.workspace
+                (Array.isArray(mesh?.nodes) ? mesh.nodes.find((n) => meshNodeIdMatches6(n, alNodeId)) : void 0)?.workspace
               )))) {
                 if (tryAssignQueueTask(components, meshId, alNodeId, alSessionId, alProvider, void 0, void 0, "auto_launch")) {
                   clearClaimDeferralForNode(meshId, alNodeId);
@@ -93519,7 +93330,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
           }
           if (maybeParkSpawnCappedTask(meshId, task, parkTaskTargetPin, (reason) => markAutoLaunch(meshId, task.id, { status: "skipped", reason }))) continue;
           const candidateNodes = Array.isArray(mesh?.nodes) ? mesh.nodes.filter((node) => {
-            if (task.targetNodeId && !meshNodeIdMatches7(node, task.targetNodeId)) return false;
+            if (task.targetNodeId && !meshNodeIdMatches6(node, task.targetNodeId)) return false;
             if (task.taskMode === "convergence" && node?.isLocalWorktree === true) return false;
             if (task.requiredTags?.length) {
               const slotProviders = resolveNodeCapabilitySlots(node, meshId).map((s2) => s2.provider).filter(Boolean);
@@ -93532,9 +93343,9 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
             return true;
           }) : [];
           if (!candidateNodes.length) {
-            const targetPinUnmatched = !!task.targetNodeId && !(Array.isArray(mesh?.nodes) && mesh.nodes.some((n) => meshNodeIdMatches7(n, task.targetNodeId)));
+            const targetPinUnmatched = !!task.targetNodeId && !(Array.isArray(mesh?.nodes) && mesh.nodes.some((n) => meshNodeIdMatches6(n, task.targetNodeId)));
             const convergenceOntoWorktree = task.taskMode === "convergence" && Array.isArray(mesh?.nodes) && (() => {
-              const matched = mesh.nodes.filter((n) => !task.targetNodeId || meshNodeIdMatches7(n, task.targetNodeId));
+              const matched = mesh.nodes.filter((n) => !task.targetNodeId || meshNodeIdMatches6(n, task.targetNodeId));
               return matched.length > 0 && matched.every((n) => n?.isLocalWorktree === true);
             })();
             const targetTransientlyUnresolved = targetPinUnmatched && isTargetNodeTransientlyUnresolved(mesh, task);
@@ -94001,7 +93812,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       const cacheOnly = cachedNodes.filter((cachedNode) => {
         const cachedId = readMeshNodeId(cachedNode);
         if (!cachedId) return false;
-        return !localNodes.some((localNode) => meshNodeIdMatches7(localNode, cachedId));
+        return !localNodes.some((localNode) => meshNodeIdMatches6(localNode, cachedId));
       });
       let overlaidLocalNodes = localNodes;
       let overlaid = false;
@@ -94009,7 +93820,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         const localNode = localNodes[i];
         const localId = readMeshNodeId(localNode);
         if (!localId) continue;
-        const inlineMatch = cachedNodes.find((cachedNode) => meshNodeIdMatches7(cachedNode, localId));
+        const inlineMatch = cachedNodes.find((cachedNode) => meshNodeIdMatches6(cachedNode, localId));
         if (!inlineMatch) continue;
         const bootstrapFresher = inlineBootstrapIsFresher(inlineMatch.worktreeBootstrap, localNode.worktreeBootstrap);
         const inlineGit = inlineMatch.lastGit ?? inlineMatch.last_git;
@@ -94065,12 +93876,12 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       const deadline = Date.now() + LOCAL_LAUNCH_READY_TIMEOUT_MS;
       while (Date.now() < deadline) {
         if (adapter.isReady() || adapter.currentStatus === "idle") return;
-        await new Promise((resolve39) => setTimeout(resolve39, LOCAL_LAUNCH_READY_POLL_MS));
+        await new Promise((resolve38) => setTimeout(resolve38, LOCAL_LAUNCH_READY_POLL_MS));
       }
       LOG.warn("MeshQueue", `Auto-launched session ${sessionId} not interactive after ${LOCAL_LAUNCH_READY_TIMEOUT_MS}ms; dispatching anyway (adapter queue-until-ready will buffer)`);
     }
     function remoteSessionReadyProbe(meshId, nodeId, sessionId) {
-      return () => MeshRuntimeStore.getInstance().getRemoteIdleSessions(meshId).some((s2) => sessionIdsEquivalent(s2.sessionId, sessionId) && meshNodeIdMatches7({ nodeId: s2.nodeId }, nodeId));
+      return () => MeshRuntimeStore.getInstance().getRemoteIdleSessions(meshId).some((s2) => sessionIdsEquivalent(s2.sessionId, sessionId) && meshNodeIdMatches6({ nodeId: s2.nodeId }, nodeId));
     }
     function recordTaskDispatchedLedger(ctx, deliveryId) {
       const task = ctx.task;
@@ -94368,7 +94179,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         return false;
       }
       const mesh = getMeshWithCache(components, meshId);
-      const node = mesh?.nodes.find((n) => meshNodeIdMatches7(n, nodeId));
+      const node = mesh?.nodes.find((n) => meshNodeIdMatches6(n, nodeId));
       if (routingDecision?.source !== "autoLaunch") {
         recordLastQuotaRanking(nodeId, { decidedAt: Date.now(), winner: providerType, adopted: true });
       }
@@ -94383,7 +94194,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       const inlineBootstrapNode = (() => {
         try {
           const inlineMesh = components.router?.getCachedInlineMesh?.(meshId);
-          const inlineNode = Array.isArray(inlineMesh?.nodes) ? inlineMesh.nodes.find((n) => meshNodeIdMatches7(n, nodeId)) : void 0;
+          const inlineNode = Array.isArray(inlineMesh?.nodes) ? inlineMesh.nodes.find((n) => meshNodeIdMatches6(n, nodeId)) : void 0;
           return readNonEmptyString(inlineNode?.worktreeBootstrap?.status) ? inlineNode : void 0;
         } catch {
           return void 0;
@@ -94418,7 +94229,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       const nodeWorkspaceRaw = readNonEmptyString(node?.workspace);
       const sessionWorkspaceRaw = readNonEmptyString(localClaimAdapter?.workingDir) || claimInstanceWorkspace;
       if (claimStampedNodeId && nodeId) {
-        if (!meshNodeIdMatches7({ id: claimStampedNodeId }, nodeId)) {
+        if (!meshNodeIdMatches6({ id: claimStampedNodeId }, nodeId)) {
           LOG.info("MeshQueue", `WTDISPATCH: refusing claim for node ${nodeId} (${sessionId}) \u2014 session is bound to node "${claimStampedNodeId}" (cross-node claim blocked)`);
           return false;
         }
@@ -94755,12 +94566,12 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         if (instMeshId !== meshId) continue;
         const nodeId = readNonEmptyString(settings.meshNodeId) || readNonEmptyString(settings.nodeId);
         if (!nodeId) continue;
-        if (!isIdleSessionState2(state)) {
+        if (!isIdleSessionState(state)) {
           const status = readNonEmptyString(state.status).toLowerCase();
           skippedSessions.push({
             nodeId,
             sessionId: readNonEmptyString(state.instanceId),
-            reason: isTerminalSessionStatus(status) ? "terminal_session" : "session_not_idle",
+            reason: isTerminalSessionRecordStatus(status) ? "terminal_session" : "session_not_idle",
             status: status || void 0
           });
           continue;
@@ -94769,7 +94580,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         const providerType = state.type || readNonEmptyString(settings.providerType);
         if (providerType) {
           localIdleSessionsChecked += 1;
-          localCandidates.push({ nodeId, sessionId, providerType, origin: "local", node: mesh.nodes.find((n) => meshNodeIdMatches7(n, nodeId)) });
+          localCandidates.push({ nodeId, sessionId, providerType, origin: "local", node: mesh.nodes.find((n) => meshNodeIdMatches6(n, nodeId)) });
         } else {
           skippedSessions.push({
             nodeId,
@@ -94785,7 +94596,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       }
       const remoteCandidates = [];
       for (const idle of remoteSessions) {
-        const node = mesh.nodes.find((n) => meshNodeIdMatches7(n, idle.nodeId));
+        const node = mesh.nodes.find((n) => meshNodeIdMatches6(n, idle.nodeId));
         if (node) {
           remoteIdleSessionsChecked += 1;
           remoteCandidates.push({ nodeId: idle.nodeId, sessionId: idle.sessionId, providerType: idle.providerType, origin: "remote", node });
@@ -94834,7 +94645,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       trackInFlightAutoLaunch(meshId, autoLaunchPromise);
       autoLaunchStarted = await Promise.race([
         autoLaunchPromise,
-        new Promise((resolve39) => setImmediate(() => resolve39(false)))
+        new Promise((resolve38) => setImmediate(() => resolve38(false)))
       ]);
       sweepAutoLaunchOrphanSessions(components, meshId, {
         idleTtlMinutes: resolveDelegatedSessionIdleTtlMinutes(mesh.policy?.delegatedSessionIdleTtlMinutes)
@@ -95005,7 +94816,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       const mesh = meshIdFromRuntime ? deps.getMeshById(meshIdFromRuntime) : deps.getMeshByWorkspace(workspace);
       const meshId = meshIdFromRuntime || readNonEmptyString(mesh?.id);
       if (!meshId) return reject("mesh_unresolved");
-      const stampedNode = runtimeNodeId ? mesh?.nodes?.find((n) => meshNodeIdMatches7(n, runtimeNodeId)) : void 0;
+      const stampedNode = runtimeNodeId ? mesh?.nodes?.find((n) => meshNodeIdMatches6(n, runtimeNodeId)) : void 0;
       const targetNode = stampedNode || mesh?.nodes?.find((n) => n.workspace === workspace);
       const nodeId = runtimeNodeId || readNonEmptyString(targetNode?.id);
       const nodeLabel = nodeId ? `Node '${nodeId}'` : `Agent at ${workspace}`;
@@ -96063,14 +95874,6 @@ ${cleanBody}`;
       if (matches.length === 1) return matches[0][1];
       return null;
     }
-    function hasCdpManager(cdpManagers, key2) {
-      if (cdpManagers.has(key2)) return true;
-      const prefix = key2 + "_";
-      for (const k of cdpManagers.keys()) {
-        if (k.startsWith(prefix)) return true;
-      }
-      return false;
-    }
     function isCdpConnected(cdpManagers, key2) {
       const exact = cdpManagers.get(key2);
       if (exact?.isConnected) return true;
@@ -96888,7 +96691,7 @@ ${cleanBody}`;
           }
           const realByDispatch = /* @__PURE__ */ new Map();
           const approvalByDispatch = /* @__PURE__ */ new Map();
-          const resolve39 = (queries, buckets, bucketKind, output) => {
+          const resolve38 = (queries, buckets, bucketKind, output) => {
             for (const [key2, bucketQueries] of queries) {
               const terminals = buckets.get(key2)?.[bucketKind];
               if (!terminals?.length) continue;
@@ -96904,9 +96707,9 @@ ${cleanBody}`;
               }
             }
           };
-          resolve39(taskQueries, taskBuckets, "real", realByDispatch);
-          resolve39(sessionQueries, sessionBuckets, "real", realByDispatch);
-          resolve39(nodeQueries, nodeBuckets, "real", realByDispatch);
+          resolve38(taskQueries, taskBuckets, "real", realByDispatch);
+          resolve38(sessionQueries, sessionBuckets, "real", realByDispatch);
+          resolve38(nodeQueries, nodeBuckets, "real", realByDispatch);
           const resolveLatestApproval = (queries, buckets) => {
             for (const [key2, bucketQueries] of queries) {
               const transitions = buckets.get(key2)?.approval;
@@ -96947,7 +96750,7 @@ ${cleanBody}`;
     function sessionStatusFromNodes(nodes, nodeId, sessionId) {
       if (!Array.isArray(nodes)) return {};
       if (!nodeId) return { staleReason: "direct task has no node id" };
-      const node = nodes.find((item) => meshNodeIdMatches7(item, nodeId));
+      const node = nodes.find((item) => meshNodeIdMatches6(item, nodeId));
       if (!node) return { staleReason: "direct task node is no longer in the live mesh" };
       if (!sessionId) return {};
       const candidates = [];
@@ -97566,7 +97369,7 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
     function recoverMeshIdByNodeId(nodeId) {
       if (!nodeId) return "";
       for (const mesh of listMeshes()) {
-        if (Array.isArray(mesh.nodes) && mesh.nodes.some((n) => meshNodeIdMatches7(n, nodeId))) {
+        if (Array.isArray(mesh.nodes) && mesh.nodes.some((n) => meshNodeIdMatches6(n, nodeId))) {
           return readNonEmptyString(mesh.id);
         }
       }
@@ -97580,7 +97383,7 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
       });
       if (hosted.length === 0) return "";
       if (nodeId) {
-        const byNode = hosted.find((mesh) => Array.isArray(mesh.nodes) && mesh.nodes.some((n) => meshNodeIdMatches7(n, nodeId)));
+        const byNode = hosted.find((mesh) => Array.isArray(mesh.nodes) && mesh.nodes.some((n) => meshNodeIdMatches6(n, nodeId)));
         return byNode ? readNonEmptyString(byNode.id) : "";
       }
       return hosted.length === 1 ? readNonEmptyString(hosted[0].id) : "";
@@ -97681,7 +97484,7 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
           if (!daemonId && args.nodeId) {
             try {
               const mesh = getMeshWithCache(components, meshId);
-              const node = mesh?.nodes?.find((n) => meshNodeIdMatches7(n, args.nodeId));
+              const node = mesh?.nodes?.find((n) => meshNodeIdMatches6(n, args.nodeId));
               daemonId = node ? readMeshNodeDaemonId(node) || void 0 : void 0;
             } catch {
             }
@@ -97697,7 +97500,7 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
       });
     }
     function bootstrapQueueTaskCountsAsHandled(task, bootstrapNodeId, nowMs2) {
-      if (!meshNodeIdMatches7({ id: task.targetNodeId }, bootstrapNodeId)) return false;
+      if (!meshNodeIdMatches6({ id: task.targetNodeId }, bootstrapNodeId)) return false;
       if (task.status === "assigned") return true;
       const al = task.autoLaunch;
       if (!al) return true;
@@ -97763,7 +97566,7 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
         let worktreeBootstrapPending = false;
         try {
           const mesh = getMeshWithCache(components, meshId);
-          const node = mesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId));
+          const node = mesh?.nodes?.find((n) => meshNodeIdMatches6(n, nodeId));
           worktreeBootstrapPending = node?.worktreeBootstrap?.status === "running";
         } catch {
         }
@@ -98274,7 +98077,7 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
           * Returns multiple entries if multiple IDE windows are open on same port
           */
           static listAllTargets(port) {
-            return new Promise((resolve39) => {
+            return new Promise((resolve38) => {
               const req = http.get(`http://127.0.0.1:${port}/json`, (res) => {
                 let data = "";
                 res.on("data", (chunk) => data += chunk.toString());
@@ -98290,16 +98093,16 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
                       (t) => !isNonMain(t.title || "") && t.url?.includes("workbench.html") && !t.url?.includes("agent")
                     );
                     const fallbackPages = pages.filter((t) => !isNonMain(t.title || ""));
-                    resolve39(mainPages.length > 0 ? mainPages : fallbackPages);
+                    resolve38(mainPages.length > 0 ? mainPages : fallbackPages);
                   } catch {
-                    resolve39([]);
+                    resolve38([]);
                   }
                 });
               });
-              req.on("error", () => resolve39([]));
+              req.on("error", () => resolve38([]));
               req.setTimeout(2e3, () => {
                 req.destroy();
-                resolve39([]);
+                resolve38([]);
               });
             });
           }
@@ -98339,7 +98142,7 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
             }
           }
           findTargetOnPort(port) {
-            return new Promise((resolve39) => {
+            return new Promise((resolve38) => {
               const req = http.get(`http://127.0.0.1:${port}/json`, (res) => {
                 let data = "";
                 res.on("data", (chunk) => data += chunk.toString());
@@ -98350,7 +98153,7 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
                       (t) => (t.type === "page" || t.type === "browser" || t.type === "Page") && t.webSocketDebuggerUrl
                     );
                     if (pages.length === 0) {
-                      resolve39(targets.find((t) => t.webSocketDebuggerUrl) || null);
+                      resolve38(targets.find((t) => t.webSocketDebuggerUrl) || null);
                       return;
                     }
                     const titleFilteredPages = pages.filter((t) => !this.isNonMainTitle(t.title || ""));
@@ -98369,25 +98172,25 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
                         this._targetId = selected.target.id;
                       }
                       this._pageTitle = selected.target.title || "";
-                      resolve39(selected.target);
+                      resolve38(selected.target);
                       return;
                     }
                     if (previousTargetId) {
                       this.log(`[CDP] Target ${previousTargetId} not found in page list`);
-                      resolve39(null);
+                      resolve38(null);
                       return;
                     }
                     this._pageTitle = list[0]?.title || "";
-                    resolve39(list[0]);
+                    resolve38(list[0]);
                   } catch {
-                    resolve39(null);
+                    resolve38(null);
                   }
                 });
               });
-              req.on("error", () => resolve39(null));
+              req.on("error", () => resolve38(null));
               req.setTimeout(2e3, () => {
                 req.destroy();
-                resolve39(null);
+                resolve38(null);
               });
             });
           }
@@ -98398,7 +98201,7 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
             this.extensionProviders = providers;
           }
           connectToTarget(wsUrl) {
-            return new Promise((resolve39) => {
+            return new Promise((resolve38) => {
               this.ws = new import_ws2.default(wsUrl);
               this.ws.on("open", async () => {
                 this._connected = true;
@@ -98408,17 +98211,17 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
                 }
                 this.connectBrowserWs().catch(() => {
                 });
-                resolve39(true);
+                resolve38(true);
               });
               this.ws.on("message", (data) => {
                 try {
                   const msg = JSON.parse(data.toString());
                   if (msg.id && this.pending.has(msg.id)) {
-                    const { resolve: resolve40, reject } = this.pending.get(msg.id);
+                    const { resolve: resolve39, reject } = this.pending.get(msg.id);
                     this.pending.delete(msg.id);
                     this.failureCount = 0;
                     if (msg.error) reject(new Error(msg.error.message));
-                    else resolve40(msg.result);
+                    else resolve39(msg.result);
                   } else if (msg.method === "Runtime.executionContextCreated") {
                     this.contexts.add(msg.params.context.id);
                   } else if (msg.method === "Runtime.executionContextDestroyed") {
@@ -98441,7 +98244,7 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
               this.ws.on("error", (err) => {
                 this.log(`[CDP] WebSocket error: ${err.message}`);
                 this._connected = false;
-                resolve39(false);
+                resolve38(false);
               });
             });
           }
@@ -98455,7 +98258,7 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
                 return;
               }
               this.log(`[CDP] Connecting browser WS for target discovery...`);
-              await new Promise((resolve39, reject) => {
+              await new Promise((resolve38, reject) => {
                 this.browserWs = new import_ws2.default(browserWsUrl);
                 this.browserWs.on("open", async () => {
                   this._browserConnected = true;
@@ -98465,16 +98268,16 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
                   } catch (e) {
                     this.log(`[CDP] setDiscoverTargets failed: ${e.message}`);
                   }
-                  resolve39();
+                  resolve38();
                 });
                 this.browserWs.on("message", (data) => {
                   try {
                     const msg = JSON.parse(data.toString());
                     if (msg.id && this.browserPending.has(msg.id)) {
-                      const { resolve: resolve40, reject: reject2 } = this.browserPending.get(msg.id);
+                      const { resolve: resolve39, reject: reject2 } = this.browserPending.get(msg.id);
                       this.browserPending.delete(msg.id);
                       if (msg.error) reject2(new Error(msg.error.message));
-                      else resolve40(msg.result);
+                      else resolve39(msg.result);
                     }
                   } catch {
                   }
@@ -98494,31 +98297,31 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
             }
           }
           getBrowserWsUrl() {
-            return new Promise((resolve39) => {
+            return new Promise((resolve38) => {
               const req = http.get(`http://127.0.0.1:${this.port}/json/version`, (res) => {
                 let data = "";
                 res.on("data", (chunk) => data += chunk.toString());
                 res.on("end", () => {
                   try {
                     const info = JSON.parse(data);
-                    resolve39(info.webSocketDebuggerUrl || null);
+                    resolve38(info.webSocketDebuggerUrl || null);
                   } catch {
-                    resolve39(null);
+                    resolve38(null);
                   }
                 });
               });
-              req.on("error", () => resolve39(null));
+              req.on("error", () => resolve38(null));
               req.setTimeout(3e3, () => {
                 req.destroy();
-                resolve39(null);
+                resolve38(null);
               });
             });
           }
           sendBrowser(method, params = {}, timeoutMs = 15e3) {
-            return new Promise((resolve39, reject) => {
+            return new Promise((resolve38, reject) => {
               if (!this.browserWs || !this._browserConnected) return reject(new Error("Browser WS not connected"));
               const id22 = this.browserMsgId++;
-              this.browserPending.set(id22, { resolve: resolve39, reject });
+              this.browserPending.set(id22, { resolve: resolve38, reject });
               this.browserWs.send(JSON.stringify({ id: id22, method, params }));
               setTimeout(() => {
                 if (this.browserPending.has(id22)) {
@@ -98558,11 +98361,11 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
           }
           // ─── CDP Protocol ────────────────────────────────────────
           sendInternal(method, params = {}, timeoutMs = 15e3) {
-            return new Promise((resolve39, reject) => {
+            return new Promise((resolve38, reject) => {
               if (!this.ws || !this._connected) return reject(new Error("CDP not connected"));
               if (this.ws.readyState !== import_ws2.default.OPEN) return reject(new Error("WebSocket not open"));
               const id22 = this.msgId++;
-              this.pending.set(id22, { resolve: resolve39, reject });
+              this.pending.set(id22, { resolve: resolve38, reject });
               this.ws.send(JSON.stringify({ id: id22, method, params }));
               setTimeout(() => {
                 if (this.pending.has(id22)) {
@@ -98811,7 +98614,7 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
             const browserWs = this.browserWs;
             let msgId = this.browserMsgId;
             const sendWs = (method, params = {}, sessionId) => {
-              return new Promise((resolve39, reject) => {
+              return new Promise((resolve38, reject) => {
                 const mid = msgId++;
                 this.browserMsgId = msgId;
                 const handler = (raw) => {
@@ -98820,7 +98623,7 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
                     if (msg.id === mid) {
                       browserWs.removeListener("message", handler);
                       if (msg.error) reject(new Error(msg.error.message || JSON.stringify(msg.error)));
-                      else resolve39(msg.result);
+                      else resolve38(msg.result);
                     }
                   } catch {
                   }
@@ -98938,9 +98741,9 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
                 typeMap.set(t.type, (typeMap.get(t.type) || 0) + 1);
               }
               const typeSummary = [...typeMap.entries()].map(([k, v]) => `${k}:${v}`).join(",");
-              const sig3 = `${allTargets.length}:${iframes.length}:${typeSummary}`;
-              if (sig3 !== this._lastDiscoverSig) {
-                this._lastDiscoverSig = sig3;
+              const sig2 = `${allTargets.length}:${iframes.length}:${typeSummary}`;
+              if (sig2 !== this._lastDiscoverSig) {
+                this._lastDiscoverSig = sig2;
                 this.log(`[CDP] discoverAgentWebviews: ${allTargets.length} total [${typeSummary}], ${iframes.length} iframes (browser=${this._browserConnected})`);
                 for (const t of allTargets) {
                   if (t.type !== "page" && t.type !== "worker" && t.type !== "service_worker") {
@@ -99021,14 +98824,14 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
             if (!ws || ws.readyState !== import_ws2.default.OPEN) {
               throw new Error("CDP not connected");
             }
-            return new Promise((resolve39, reject) => {
+            return new Promise((resolve38, reject) => {
               const id22 = getNextId();
               pendingMap.set(id22, {
                 resolve: (result) => {
                   if (result?.result?.subtype === "error") {
                     reject(new Error(result.result.description));
                   } else {
-                    resolve39(result?.result?.value);
+                    resolve38(result?.result?.value);
                   }
                 },
                 reject
@@ -99060,10 +98863,10 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
               throw new Error("CDP not connected");
             }
             const sendViaSession = (method, params = {}) => {
-              return new Promise((resolve39, reject) => {
+              return new Promise((resolve38, reject) => {
                 const pendingMap = this._browserConnected ? this.browserPending : this.pending;
                 const id22 = this._browserConnected ? this.browserMsgId++ : this.msgId++;
-                pendingMap.set(id22, { resolve: resolve39, reject });
+                pendingMap.set(id22, { resolve: resolve38, reject });
                 ws.send(JSON.stringify({ id: id22, sessionId, method, params }));
                 setTimeout(() => {
                   if (pendingMap.has(id22)) {
@@ -99855,13 +99658,6 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
               }
             }
           }
-          appendRuntimeSystemMessage(content, dedupKey, receivedAt = Date.now()) {
-            this.appendRuntimeMessage(buildRuntimeSystemChatMessage({
-              content,
-              receivedAt,
-              timestamp: receivedAt
-            }), dedupKey);
-          }
           appendRuntimeMessage(message, dedupKey) {
             const normalizedMessage = buildChatMessage({
               ...message,
@@ -99936,23 +99732,6 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
               return a.index - b.index;
             }).map((entry) => entry.message));
           }
-          getPersistedEffectContent(effect) {
-            if (effect.type === "message") {
-              return typeof effect.message?.content === "string" ? effect.message.content : JSON.stringify(effect.message?.content || "");
-            }
-            if (effect.type === "toast") {
-              return effect.toast?.message || null;
-            }
-            if (effect.type === "notification") {
-              if (typeof effect.notification?.bubbleContent === "string") return effect.notification.bubbleContent;
-              if (typeof effect.notification?.title === "string" && effect.notification.title.trim()) {
-                return `${effect.notification.title}
-${effect.notification.body || ""}`.trim();
-              }
-              return effect.notification?.body || null;
-            }
-            return null;
-          }
           getEffectDedupKey(effect) {
             if (effect.id) return `provider_effect:${effect.id}`;
             if (effect.type === "message") {
@@ -99992,13 +99771,6 @@ ${effect.notification.body || ""}`.trim();
             this.monitor.reset();
           }
         };
-      }
-    });
-    var CHAT_CONTRACT_VERSION_V1;
-    var init_transcript_v2 = __esm2({
-      "src/providers/transcript-v2.ts"() {
-        "use strict";
-        CHAT_CONTRACT_VERSION_V1 = "1.0";
       }
     });
     function isValidReadChatStatus(status) {
@@ -100193,7 +99965,6 @@ ${effect.notification.body || ""}`.trim();
         "use strict";
         init_contracts2();
         init_message_source_address();
-        init_transcript_v2();
         VALID_STATUSES = ["idle", "generating", "waiting_approval", "waiting_choice", "finalizing", "error", "panel_hidden", "starting", "streaming", "no_progress", "long_generating"];
         VALID_ROLES = ["user", "assistant", "system", "human"];
         VALID_BUBBLE_STATES = ["draft", "streaming", "final", "removed"];
@@ -100349,8 +100120,6 @@ ${effect.notification.body || ""}`.trim();
           autoApproveBusy = false;
           appliedEffectKeys = /* @__PURE__ */ new Set();
           runtimeMessages = [];
-          // IDE meta
-          ideVersion = "";
           instanceId;
           workspace = "";
           // ─── Child Extension Instances ────────────────────
@@ -100872,23 +100641,6 @@ ${effect.notification.body || ""}`.trim();
               return a.index - b.index;
             }).map((entry) => entry.message));
           }
-          getPersistedEffectContent(effect) {
-            if (effect.type === "message") {
-              return typeof effect.message?.content === "string" ? effect.message.content : JSON.stringify(effect.message?.content || "");
-            }
-            if (effect.type === "toast") {
-              return effect.toast?.message || null;
-            }
-            if (effect.type === "notification") {
-              if (typeof effect.notification?.bubbleContent === "string") return effect.notification.bubbleContent;
-              if (typeof effect.notification?.title === "string" && effect.notification.title.trim()) {
-                return `${effect.notification.title}
-${effect.notification.body || ""}`.trim();
-              }
-              return effect.notification?.body || null;
-            }
-            return null;
-          }
           getEffectDedupKey(effect) {
             if (effect.id) return `provider_effect:${effect.id}`;
             if (effect.type === "message") {
@@ -101008,17 +100760,6 @@ ${effect.notification.body || ""}`.trim();
       }
       return ideInstance;
     }
-    async function connectCdpManager(port, ideType, logFn, providerLoader, targetId) {
-      const provider = providerLoader.getMeta(ideType);
-      const manager = new DaemonCdpManager(
-        port,
-        logFn,
-        targetId,
-        provider?.targetFilter
-      );
-      const connected = await manager.connect();
-      return connected ? manager : null;
-    }
     async function probeCdpPort(port, timeoutMs = 1e3) {
       try {
         const probe = await fetch(`http://localhost:${port}/json/version`, {
@@ -101032,7 +100773,6 @@ ${effect.notification.body || ""}`.trim();
     var init_setup = __esm2({
       "src/cdp/setup.ts"() {
         "use strict";
-        init_manager();
         init_ide_provider_instance();
       }
     });
@@ -101915,7 +101655,7 @@ ${effect.notification.body || ""}`.trim();
       return e?.message || String(e);
     }
     function delay(ms3) {
-      return new Promise((resolve39) => setTimeout(resolve39, ms3));
+      return new Promise((resolve38) => setTimeout(resolve38, ms3));
     }
     function toSyncError(e, fallbackCode, providerType) {
       if (e instanceof ProviderChannelError) {
@@ -101997,7 +101737,7 @@ ${effect.notification.body || ""}`.trim();
     }
     function defaultFetchJson(url2) {
       const https = require("https");
-      return new Promise((resolve39, reject) => {
+      return new Promise((resolve38, reject) => {
         const req = https.get(url2, { headers: { "User-Agent": "adhdev-daemon", Accept: "application/json" }, timeout: 15e3 }, (res) => {
           if (res.statusCode !== 200) {
             reject(new Error(`HTTP ${res.statusCode}`));
@@ -102007,7 +101747,7 @@ ${effect.notification.body || ""}`.trim();
           res.on("data", (c) => chunks.push(c));
           res.on("end", () => {
             try {
-              resolve39(JSON.parse(Buffer.concat(chunks).toString("utf-8")));
+              resolve38(JSON.parse(Buffer.concat(chunks).toString("utf-8")));
             } catch (e) {
               reject(e);
             }
@@ -102023,7 +101763,7 @@ ${effect.notification.body || ""}`.trim();
     function defaultDownloadFile(url2, destPath) {
       const https = require("https");
       const http4 = require("http");
-      return new Promise((resolve39, reject) => {
+      return new Promise((resolve38, reject) => {
         const doRequest = (reqUrl, redirectCount = 0) => {
           if (redirectCount > 5) {
             reject(new Error("Too many redirects"));
@@ -102043,7 +101783,7 @@ ${effect.notification.body || ""}`.trim();
             res.pipe(ws);
             ws.on("finish", () => {
               ws.close();
-              resolve39();
+              resolve38();
             });
             ws.on("error", reject);
           });
@@ -102292,9 +102032,7 @@ ${effect.notification.body || ""}`.trim();
               };
             }
             const objStaging = this.store.createStagingDir(`obj-${entry.providerType}`);
-            let relDir;
             try {
-              relDir = path30.relative(repoRoot, artifactDir).split(path30.sep).join("/");
               fs24.mkdirSync(path30.join(objStaging, entry.category), { recursive: true });
               fs24.renameSync(artifactDir, path30.join(objStaging, entry.category, path30.basename(artifactDir)));
             } catch (e) {
@@ -102331,9 +102069,7 @@ ${effect.notification.body || ""}`.trim();
     var require_whitelist_exports = {};
     __export2(require_whitelist_exports, {
       PROVIDER_REQUIRE_POLICY: () => PROVIDER_REQUIRE_POLICY,
-      _getRegisteredRoots: () => _getRegisteredRoots,
       _resetProviderScriptRoots: () => _resetProviderScriptRoots,
-      _uninstallProviderProcessShimForTest: () => _uninstallProviderProcessShimForTest,
       installProviderProcessShim: () => installProviderProcessShim,
       registerProviderScriptRoot: () => registerProviderScriptRoot,
       unregisterProviderScriptRoot: () => unregisterProviderScriptRoot
@@ -102417,21 +102153,6 @@ ${effect.notification.body || ""}`.trim();
         }
       }
     }
-    function _uninstallProviderProcessShimForTest() {
-      if (!_originalProcessMethods) {
-        _processGloballyHardened = false;
-        return;
-      }
-      const proc = globalThis.process;
-      for (const [name, original] of _originalProcessMethods) {
-        try {
-          proc[name] = original;
-        } catch {
-        }
-      }
-      _originalProcessMethods = null;
-      _processGloballyHardened = false;
-    }
     function buildProcessShim() {
       const real = globalThis.process;
       const shim = /* @__PURE__ */ Object.create(null);
@@ -102469,9 +102190,6 @@ ${effect.notification.body || ""}`.trim();
     }
     function _resetProviderScriptRoots() {
       _gatedRoots.length = 0;
-    }
-    function _getRegisteredRoots() {
-      return _gatedRoots.map((g3) => g3.rootPath);
     }
     function canonicalize(p) {
       try {
@@ -107438,17 +107156,17 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
     }
     function readSession(sessionPath) {
       if (!sessionPath || !path35.isAbsolute(sessionPath)) return null;
-      const basename23 = path35.basename(sessionPath, ".jsonl");
-      if (!isSafeSessionId(basename23)) return null;
+      const basename22 = path35.basename(sessionPath, ".jsonl");
+      if (!isSafeSessionId(basename22)) return null;
       if (!fs30.existsSync(sessionPath)) return null;
       const sourceMtimeMs = statMtimeMs(sessionPath);
-      const { messages, usageRecords } = parseTranscriptFile(sessionPath, basename23, void 0, sourceMtimeMs);
+      const { messages, usageRecords } = parseTranscriptFile(sessionPath, basename22, void 0, sourceMtimeMs);
       if (messages.length === 0) return null;
       const firstSystem = messages.find((m) => m.kind === "session_start");
       const workspace = firstSystem?.workspace || firstSystem?.content || void 0;
       const session = {
         messages,
-        providerSessionId: basename23,
+        providerSessionId: basename22,
         source: "provider-native",
         sourcePath: sessionPath,
         sourceMtimeMs,
@@ -107457,7 +107175,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       };
       if (usageRecords.length > 0) {
         session.usage = foldUsageRecords(usageRecords, {
-          providerSessionId: basename23,
+          providerSessionId: basename22,
           agent: "claude-cli"
         });
       }
@@ -107889,8 +107607,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       if (!fs31.existsSync(sessionPath)) return null;
       const meta3 = readSessionMeta(sessionPath);
       const metaId = String(meta3?.id ?? "").trim();
-      const basename23 = path36.basename(sessionPath, ".jsonl");
-      const uuidMatch = basename23.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
+      const basename22 = path36.basename(sessionPath, ".jsonl");
+      const uuidMatch = basename22.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
       const filenameUuid2 = uuidMatch ? uuidMatch[1] : "";
       if (metaId && filenameUuid2 && metaId !== filenameUuid2) return null;
       const sessionId = metaId || filenameUuid2;
@@ -108854,8 +108572,8 @@ ${output}` : "";
       const sourceMtimeMs = statMtimeMs(sessionPath);
       const brainRootPath = brainRoot();
       if (sessionPath.startsWith(brainRootPath + path37.sep) && sessionPath.endsWith(".jsonl")) {
-        const relative9 = sessionPath.slice(brainRootPath.length + 1);
-        const uuidFromPath = relative9.split(path37.sep)[0];
+        const relative8 = sessionPath.slice(brainRootPath.length + 1);
+        const uuidFromPath = relative8.split(path37.sep)[0];
         const resolvedSessionId = sessionId || (isUuidLike(uuidFromPath) ? uuidFromPath : "");
         if (!resolvedSessionId) return null;
         const messages = parseBrainTranscript(sessionPath, resolvedSessionId, workspace);
@@ -110380,7 +110098,7 @@ ${output}` : "";
     async function discoverByCommand(provider, binary2, spec, deps) {
       const timeoutMs = spec.timeoutMs ?? MODEL_DISCOVERY_TIMEOUT_MS;
       const started = deps.now();
-      const result = await new Promise((resolve39) => {
+      const result = await new Promise((resolve38) => {
         let stdout = "";
         let stderr = "";
         let settled = false;
@@ -110389,7 +110107,7 @@ ${output}` : "";
           if (settled) return;
           settled = true;
           if (timer) clearTimeout(timer);
-          resolve39(value);
+          resolve38(value);
         };
         let child;
         try {
@@ -112310,24 +112028,6 @@ ${result.stderr}`, result.code);
             }
             this.loadAll();
           }
-          /** Count provider files (provider.v1.json or provider.json — at most one per dir). */
-          countProviders(dir) {
-            if (!fs37.existsSync(dir)) return 0;
-            let count2 = 0;
-            const scan = (d) => {
-              try {
-                const entries = fs37.readdirSync(d, { withFileTypes: true });
-                const hasManifest = entries.some((e) => e.name === "provider.v1.json" || e.name === "provider.json");
-                if (hasManifest) count2++;
-                for (const entry of entries) {
-                  if (entry.isDirectory()) scan(path43.join(d, entry.name));
-                }
-              } catch {
-              }
-            };
-            scan(dir);
-            return count2;
-          }
           // ─── Provider Settings API ─────────────────────────
           /**
           * Get public settings schema for a provider (for dashboard UI rendering)
@@ -112543,10 +112243,10 @@ ${result.stderr}`, result.code);
       }
     });
     async function execQuiet(command, options = {}) {
-      return new Promise((resolve39) => {
+      return new Promise((resolve38) => {
         (0, import_child_process5.exec)(command, { windowsHide: true, ...options }, (error48, stdout) => {
-          if (error48) return resolve39("");
-          resolve39(stdout.toString());
+          if (error48) return resolve38("");
+          resolve38(stdout.toString());
         });
       });
     }
@@ -112631,17 +112331,17 @@ ${result.stderr}`, result.code);
       throw new Error("No free port found");
     }
     function checkPortFree(port) {
-      return new Promise((resolve39) => {
+      return new Promise((resolve38) => {
         const server = net.createServer();
         server.unref();
-        server.on("error", () => resolve39(false));
+        server.on("error", () => resolve38(false));
         server.listen(port, "127.0.0.1", () => {
-          server.close(() => resolve39(true));
+          server.close(() => resolve38(true));
         });
       });
     }
     async function isCdpActive(port) {
-      return new Promise((resolve39) => {
+      return new Promise((resolve38) => {
         const req = require("http").get(`http://127.0.0.1:${port}/json/version`, {
           timeout: 2e3
         }, (res) => {
@@ -112650,16 +112350,16 @@ ${result.stderr}`, result.code);
           res.on("end", () => {
             try {
               const info = JSON.parse(data);
-              resolve39(!!info["WebKit-Version"] || !!info["Browser"]);
+              resolve38(!!info["WebKit-Version"] || !!info["Browser"]);
             } catch {
-              resolve39(false);
+              resolve38(false);
             }
           });
         });
-        req.on("error", () => resolve39(false));
+        req.on("error", () => resolve38(false));
         req.on("timeout", () => {
           req.destroy();
-          resolve39(false);
+          resolve38(false);
         });
       });
     }
@@ -113426,7 +113126,7 @@ ${result.stderr}`, result.code);
       if (nodes.length === 0) return refuse(sender, "mesh_sender_not_on_roster", `roster_unknown: this daemon holds no roster for mesh ${meshId}`);
       const nodeId = str6(args.nodeId);
       const workspace = str6(args.workspace);
-      const node = nodeId ? nodes.find((n) => meshNodeIdMatches7(n, nodeId)) : workspace ? nodes.find((n) => str6(n.workspace) === workspace) : void 0;
+      const node = nodeId ? nodes.find((n) => meshNodeIdMatches6(n, nodeId)) : workspace ? nodes.find((n) => str6(n.workspace) === workspace) : void 0;
       if (nodeId && !node) return refuse(sender, "mesh_sender_not_node_owner", `node ${nodeId} is not on the roster of mesh ${meshId}`);
       if (node) {
         const owner = readMeshNodeDaemonId(node);
@@ -113731,7 +113431,7 @@ ${result.stderr}`, result.code);
       while (Date.now() - start < timeoutMs) {
         try {
           process.kill(pid, 0);
-          await new Promise((resolve39) => setTimeout(resolve39, 250));
+          await new Promise((resolve38) => setTimeout(resolve38, 250));
         } catch {
           return true;
         }
@@ -113840,17 +113540,17 @@ ${result.stderr}`, result.code);
       return getTrackIdentity(resolveBuildTrack(env2)).defaultPort;
     }
     function fetchLocalJson(port, pathname) {
-      return new Promise((resolve39) => {
+      return new Promise((resolve38) => {
         const req = http2.get(`http://127.0.0.1:${port}${pathname}`, { timeout: 1500 }, (res) => {
           let body = "";
           res.setEncoding("utf8");
           res.on("data", (chunk) => {
             body += chunk;
           });
-          res.on("end", () => resolve39({ ok: res.statusCode === 200, body }));
+          res.on("end", () => resolve38({ ok: res.statusCode === 200, body }));
         });
         req.on("timeout", () => req.destroy());
-        req.on("error", () => resolve39({ ok: false, body: "" }));
+        req.on("error", () => resolve38({ ok: false, body: "" }));
       });
     }
     async function fetchLocalHealth(port) {
@@ -114295,7 +113995,7 @@ exec "${portableNode}" "${cliEntry}" "$@"
               loggedVersionPending = true;
               options.log(`Health gate: replacement reports version ${version2} (want ${targetVersion}) at ${elapsedMs}ms`);
             }
-            await new Promise((resolve39) => setTimeout(resolve39, 500));
+            await new Promise((resolve38) => setTimeout(resolve38, 500));
           }
           options.log(`Health gate timed out after ${Date.now() - startedAt}ms (${attempt} probe(s), budget ${healthTimeoutMs}ms) waiting for pid ${pid} to report ${targetVersion}`);
           return false;
@@ -115249,7 +114949,7 @@ ${marker}`,
           });
           return "reinstall";
         },
-        sleep: (ms3) => new Promise((resolve39) => setTimeout(resolve39, ms3)),
+        sleep: (ms3) => new Promise((resolve38) => setTimeout(resolve38, ms3)),
         now: () => Date.now(),
         log
       };
@@ -115327,7 +115027,7 @@ ${marker}`,
       const armSignals = () => {
         if (signalsArmed) return;
         signalsArmed = true;
-        for (const sig3 of signals) process.on(sig3, onSignal);
+        for (const sig2 of signals) process.on(sig2, onSignal);
       };
       try {
         try {
@@ -115487,7 +115187,7 @@ ${marker}`,
         );
       } finally {
         if (signalsArmed) {
-          for (const sig3 of signals) process.removeListener(sig3, onSignal);
+          for (const sig2 of signals) process.removeListener(sig2, onSignal);
         }
         clearPosixUpgradeJournal(configDir);
       }
@@ -115643,7 +115343,7 @@ ${marker}`,
             appendUpgradeLog(`Install attempt ${attempt} hit a file lock (${error48?.code || "lock"}); clearing holders + staging and retrying after backoff`);
             await stopForeignNativeAddonHolders(installCommand.surface.packageRoot, { parentPid: payload.parentPid });
             cleanupStaleGlobalInstallDirs(payload.packageName, installCommand.surface);
-            await new Promise((resolve39) => setTimeout(resolve39, attempt * 1500));
+            await new Promise((resolve38) => setTimeout(resolve38, attempt * 1500));
             continue;
           }
           if (isRetriableInstallLockError(error48)) {
@@ -115686,7 +115386,7 @@ ${marker}`,
         }
       }
       if (process.platform === "win32") {
-        await new Promise((resolve39) => setTimeout(resolve39, 500));
+        await new Promise((resolve38) => setTimeout(resolve38, 500));
         cleanupStaleGlobalInstallDirs(payload.packageName, installCommand.surface);
         appendUpgradeLog("Post-install staging cleanup complete");
       }
@@ -116319,7 +116019,7 @@ ${marker}`,
             if (meshId && nodeId) {
               const meshRecord2 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
               resolvedMesh = meshRecord2?.mesh;
-              const node = meshRecord2?.mesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId));
+              const node = meshRecord2?.mesh?.nodes?.find((n) => meshNodeIdMatches6(n, nodeId));
               nodeDaemonId = typeof node?.daemonId === "string" ? node.daemonId.trim() : void 0;
             }
             const selfDaemonId = ctx.deps.statusInstanceId;
@@ -116762,6 +116462,13 @@ ${marker}`,
         init_coordinator_registry();
         init_logger();
         init_chat_message_normalization();
+      }
+    });
+    var CHAT_CONTRACT_VERSION_V1;
+    var init_transcript_v2 = __esm2({
+      "src/providers/transcript-v2.ts"() {
+        "use strict";
+        CHAT_CONTRACT_VERSION_V1 = "1.0";
       }
     });
     function transitionChatSourceState(prev, observation, at, lockedSince) {
@@ -118435,6 +118142,9 @@ ${marker}`,
         init_contracts2();
       }
     });
+    function redactSessionId(id22) {
+      return id22.length <= 8 ? id22 : `${id22.slice(0, 8)}\u2026(${id22.length})`;
+    }
     function chatMessageKey(messageId) {
       return `m:${messageId}`;
     }
@@ -118444,11 +118154,11 @@ ${marker}`,
     function parseChatKey(key2) {
       if (key2.startsWith("m:") && key2.length > 2) return { id: key2.slice(2), k: null };
       if (key2.startsWith("p:")) {
-        const sep17 = key2.lastIndexOf(":");
-        if (sep17 <= 2) return null;
-        const k = Number(key2.slice(sep17 + 1));
+        const sep14 = key2.lastIndexOf(":");
+        if (sep14 <= 2) return null;
+        const k = Number(key2.slice(sep14 + 1));
         if (!Number.isSafeInteger(k) || k < 0) return null;
-        return { id: key2.slice(2, sep17), k };
+        return { id: key2.slice(2, sep14), k };
       }
       return null;
     }
@@ -119195,19 +118905,6 @@ ${marker}`,
               capped: capped.size > 0,
               tripwire,
               baseRateExceeded,
-              live,
-              expectedMessages: () => observed.filter((b) => live.has(b.id)).map((b) => {
-                const head = encodeChatMessageHead(b.message, {
-                  id: b.id,
-                  ord: b.ord,
-                  rev: live.get(b.id),
-                  epoch,
-                  frame: frameNo,
-                  srcId: typeof b.message.srcId === "string" ? b.message.srcId : null,
-                  body: { text: b.text }
-                });
-                return chatMessageFromWire(head, b.text);
-              }),
               [STAGED]: staging
             };
             return { status: "frame", frame: frame2 };
@@ -119410,51 +119107,6 @@ ${marker}`,
     });
     function freshCounters() {
       return {
-        compared: 0,
-        missingCompleteRevision: 0,
-        fieldMismatch: 0,
-        missingMessage: 0,
-        extraMessage: 0,
-        revRegression: 0,
-        wrongSession: 0,
-        wrongOwner: 0,
-        digestMismatch: 0,
-        mismatches: 0,
-        persistentMismatches: 0,
-        runs: 0,
-        sessionsObserved: 0,
-        sessionsRepeated: 0,
-        pendingMissingRevisits: 0,
-        pendingMissingOpen: 0,
-        since: Date.now()
-      };
-    }
-    function redactSessionId(id22) {
-      return id22.length <= 8 ? id22 : `${id22.slice(0, 8)}\u2026(${id22.length})`;
-    }
-    function transcriptParityCounters() {
-      return { ...counters3, pendingMissingOpen: pendingMissing.size };
-    }
-    function __resetTranscriptParityForTests() {
-      counters3 = freshCounters();
-      pendingMissing.clear();
-      observedSessions.clear();
-    }
-    var counters3;
-    var observedSessions;
-    var pendingMissing;
-    var init_transcript_parity = __esm2({
-      "src/seqscribe/transcript-parity.ts"() {
-        "use strict";
-        init_dist();
-        init_logger();
-        counters3 = freshCounters();
-        observedSessions = /* @__PURE__ */ new Map();
-        pendingMissing = /* @__PURE__ */ new Set();
-      }
-    });
-    function freshCounters2() {
-      return {
         published: 0,
         publishFailed: 0,
         deduped: 0,
@@ -119512,17 +119164,17 @@ ${marker}`,
         import_node_crypto4 = require("crypto");
         init_logger();
         init_message_identity_ledger();
+        init_transcript_keyed_codec();
         init_transcript_keyed_frame();
         init_transcript_observation();
         init_transcript_latency();
-        init_transcript_parity();
         MAX_TRACKED_SESSIONS = 512;
         TRANSCRIPT_PTY_DIRTY_THROTTLE_MS = 350;
         TRANSCRIPT_STAT_POLL_INTERVAL_MS = 3e3;
         TranscriptProjectionService = class {
           deps;
           epoch;
-          counters = freshCounters2();
+          counters = freshCounters();
           /** Per-session published state (LRU order: most recently published last). */
           sessionState = /* @__PURE__ */ new Map();
           // Per-session coalescing bookkeeping. `inFlight` gates concurrent work for
@@ -119700,10 +119352,10 @@ ${marker}`,
               if (!path77) continue;
               try {
                 const st = fs41.statSync(path77);
-                const sig3 = `${st.dev}:${st.ino}:${st.size}:${st.mtimeMs}:${st.ctimeMs}`;
+                const sig2 = `${st.dev}:${st.ino}:${st.size}:${st.mtimeMs}:${st.ctimeMs}`;
                 const lastSig = this.lastSignatures.get(sessionId);
-                if (sig3 !== lastSig) {
-                  this.lastSignatures.set(sessionId, sig3);
+                if (sig2 !== lastSig) {
+                  this.lastSignatures.set(sessionId, sig2);
                   if (lastSig !== void 0) {
                     this.markDirty(sessionId, "stat_poll");
                   }
@@ -122031,7 +121683,7 @@ ${marker}`,
       }
     }
     function sleep2(ms3) {
-      return new Promise((resolve39) => setTimeout(resolve39, ms3));
+      return new Promise((resolve38) => setTimeout(resolve38, ms3));
     }
     async function waitForIdleAfterInterrupt(target, timeoutMs = INTERRUPT_IDLE_TIMEOUT_MS, pollMs = INTERRUPT_IDLE_POLL_MS, options) {
       const startedAt = Date.now();
@@ -122619,7 +122271,7 @@ ${marker}`,
         };
       }
       if (!adapter) return null;
-      const sleep3 = args.sleep ?? ((ms3) => new Promise((resolve39) => setTimeout(resolve39, ms3)));
+      const sleep3 = args.sleep ?? ((ms3) => new Promise((resolve38) => setTimeout(resolve38, ms3)));
       const target = {
         label: adapter.cliType,
         getStatus: (o) => adapter.getStatus?.(o),
@@ -122698,7 +122350,7 @@ ${marker}`,
     async function getStableExtensionBaseline(h) {
       const first = await readExtensionChatState(h);
       if (getStateMessageCount(first) > 0 || getStateLastSignature(first)) return first;
-      await new Promise((resolve39) => setTimeout(resolve39, 150));
+      await new Promise((resolve38) => setTimeout(resolve38, 150));
       const second = await readExtensionChatState(h);
       return getStateMessageCount(second) >= getStateMessageCount(first) ? second : first;
     }
@@ -122706,7 +122358,7 @@ ${marker}`,
       const beforeCount = getStateMessageCount(before);
       const beforeSignature = getStateLastSignature(before);
       for (let attempt = 0; attempt < 12; attempt += 1) {
-        await new Promise((resolve39) => setTimeout(resolve39, 250));
+        await new Promise((resolve38) => setTimeout(resolve38, 250));
         const state = await readExtensionChatState(h);
         if (state?.status === "waiting_approval") return true;
         const afterCount = getStateMessageCount(state);
@@ -124464,7 +124116,7 @@ ${marker}`,
             const enterCount = cliCommand.enterCount || 1;
             await adapter.writeRaw(cliCommand.text + "\r");
             for (let i = 1; i < enterCount; i += 1) {
-              await new Promise((resolve39) => setTimeout(resolve39, 50));
+              await new Promise((resolve38) => setTimeout(resolve38, 50));
               await adapter.writeRaw("\r");
             }
           }
@@ -124649,7 +124301,6 @@ ${marker}`,
       if (!id22) return { success: false, error: "id required" };
       const config2 = loadWorkspaceConfig();
       if ("error" in config2) return { success: false, error: config2.error };
-      const removed = (config2.workspaces || []).find((w) => w.id === id22);
       const result = removeWorkspaceEntry(config2, id22);
       if ("error" in result) return { success: false, error: result.error };
       const saveResult = persistWorkspaceConfig(result.config);
@@ -129160,7 +128811,6 @@ ${marker}`,
     }
     var import_crypto20;
     var MESH_GATE_DEFAULT_LEASE_SECONDS;
-    var MESH_GATE_NAMED_OUTCOMES;
     var MESH_GATE_RELEASE_PATCH_KEYS;
     var MESH_GATE_MAX_EXTEND_SECONDS;
     var init_mesh_graph_gates = __esm2({
@@ -129178,7 +128828,6 @@ ${marker}`,
         init_mesh_graph_gate_defaults();
         init_mesh_graph_transition_runner();
         MESH_GATE_DEFAULT_LEASE_SECONDS = 900;
-        MESH_GATE_NAMED_OUTCOMES = ["passed", "failed", "rejected"];
         MESH_GATE_RELEASE_PATCH_KEYS = MESH_NODE_PATCH_KEYS3;
         MESH_GATE_MAX_EXTEND_SECONDS = 30 * 24 * 60 * 60;
       }
@@ -129344,7 +128993,6 @@ ${marker}`,
             });
           }
         }
-        const gateByNodeId = new Map(gates.map((g3) => [g3.nodeId, g3]));
         const nodeViews = nodes.map((node) => {
           const queue = node.queueTaskId ? queueByTaskId.get(node.queueTaskId) : void 0;
           const gateBlock = parseCoordinatorGateBlock(queue?.blockedReason);
@@ -130803,7 +130451,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
             if (meshId && nodeId && ctx.getMeshForCommand) {
               const meshRecord2 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
               resolvedMesh = meshRecord2?.mesh;
-              const node = meshRecord2?.mesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId));
+              const node = meshRecord2?.mesh?.nodes?.find((n) => meshNodeIdMatches6(n, nodeId));
               nodeDaemonId = typeof node?.daemonId === "string" ? node.daemonId.trim() : void 0;
             }
             const selfDaemonId = ctx.deps.statusInstanceId;
@@ -131145,7 +130793,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         nodes = [];
       }
       return (nodeId) => {
-        const node = nodes.find((n) => meshNodeIdMatches7(n, nodeId));
+        const node = nodes.find((n) => meshNodeIdMatches6(n, nodeId));
         return node ? readMeshNodeDaemonId(node) : void 0;
       };
     }
@@ -132766,14 +132414,14 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           whenSubmitDrained(timeoutMs) {
             if (!this.hasInFlightSubmit()) return Promise.resolve(true);
             const deadline = Date.now() + Math.max(0, timeoutMs);
-            return new Promise((resolve39) => {
+            return new Promise((resolve38) => {
               const poll = () => {
                 if (!this.hasInFlightSubmit()) {
-                  resolve39(true);
+                  resolve38(true);
                   return;
                 }
                 if (Date.now() >= deadline) {
-                  resolve39(false);
+                  resolve38(false);
                   return;
                 }
                 setTimeout(poll, 100);
@@ -133819,7 +133467,6 @@ trust_level = "trusted"
           currentStateId = "";
           stateEnteredAt = 0;
           // ── Clock bookkeeping for time conditions.
-          startedAtMs = 0;
           prevScreenLines = [];
           /** Per stable region → last time that region's content changed. Drives
            *  stable_ms conditions. Key = stableRegionKey(cond): numeric cursor_above
@@ -133935,7 +133582,6 @@ trust_level = "trusted"
           }
           start() {
             const now = Date.now();
-            this.startedAtMs = now;
             const init = initialState(this.spec);
             this.currentStateId = init.id;
             this.stateEnteredAt = now;
@@ -135177,7 +134823,7 @@ trust_level = "trusted"
       }
     });
     function delay2(ms3) {
-      return new Promise((resolve39) => setTimeout(resolve39, ms3));
+      return new Promise((resolve38) => setTimeout(resolve38, ms3));
     }
     async function openPickerAndListChoices(driver, ctl, action) {
       driver.dispatch({ kind: "click_control", control_id: ctl.id });
@@ -136697,7 +136343,6 @@ ${text}` : text;
            *  mirrored here so the PTY exit seam can attribute a host tombstone before
            *  the owning provider instance is disposed. */
           runtimeSettings = {};
-          lastEvent = null;
           latestState = null;
           latestModal = null;
           statusCallback = null;
@@ -137336,7 +136981,7 @@ ${text}` : text;
               const steps = prompt.promptId.startsWith(KIMI_TUI_SELECTOR_PROMPT_PREFIX) ? buildKimiSelectorAnswerSteps(prompt, response, this.driver.snapshot()) : buildKimiInteractiveTuiAnswerSteps(prompt, response);
               for (const step of steps) {
                 this.driver.dispatch({ kind: "pty_write", data: step });
-                await new Promise((resolve39) => setTimeout(resolve39, 180));
+                await new Promise((resolve38) => setTimeout(resolve38, 180));
               }
               this.activeInteractivePrompt = null;
               this.notifyChange("prompt_cleared");
@@ -137360,7 +137005,7 @@ ${text}` : text;
                     break questionLoop;
                   }
                   this.driver.dispatch({ kind: "pty_write", data: step });
-                  await new Promise((resolve39) => setTimeout(resolve39, 180));
+                  await new Promise((resolve38) => setTimeout(resolve38, 180));
                 }
                 const answer = response.answers[question.questionId];
                 const singleSelectDigitOnly = !question.multiSelect && (answer?.selectedLabels.length ?? 0) === 1 && !answer?.freeformText?.trim();
@@ -137371,7 +137016,7 @@ ${text}` : text;
                     previewLayoutAnswer = true;
                     LOG.info("SpecAdapter", `[${this.cliType}] preview panel layout detected on screen after digit \u2014 sending commit Enter (question "${question.questionId}")`);
                     this.driver.dispatch({ kind: "pty_write", data: "\r" });
-                    await new Promise((resolve39) => setTimeout(resolve39, 180));
+                    await new Promise((resolve38) => setTimeout(resolve38, 180));
                   }
                 }
               }
@@ -137387,7 +137032,7 @@ ${text}` : text;
                   throw new Error("Claude TUI active interactive prompt changed before review submission");
                 }
                 this.driver.dispatch({ kind: "pty_write", data: "\r" });
-                await new Promise((resolve39) => setTimeout(resolve39, 180));
+                await new Promise((resolve38) => setTimeout(resolve38, 180));
               }
             } else {
               this.driver.dispatch({ kind: "pty_write", data: `${buildClaudeInteractiveToolResult(response)}
@@ -137581,7 +137226,6 @@ ${text}` : text;
             }
           }
           handleEvent(ev) {
-            this.lastEvent = ev;
             switch (ev.kind) {
               case "state_changed":
                 this.latestState = ev.state;
@@ -138068,7 +137712,7 @@ ${text}` : text;
             let screenText = this.readClaudeTuiSnapshotForAnswer();
             let focused = readFocusedClaudeTuiQuestion(screenText);
             while (Date.now() < deadline && !(focused && claudeTuiQuestionMatches(expected, focused))) {
-              await new Promise((resolve39) => setTimeout(resolve39, _SpecCliAdapter.CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
+              await new Promise((resolve38) => setTimeout(resolve38, _SpecCliAdapter.CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
               screenText = this.readClaudeTuiSnapshotForAnswer();
               focused = readFocusedClaudeTuiQuestion(screenText);
             }
@@ -138142,7 +137786,7 @@ ${text}` : text;
               if (review) return screenText;
               if (directSubmitted) return null;
               if (Date.now() >= deadline) return screenText;
-              await new Promise((resolve39) => setTimeout(resolve39, _SpecCliAdapter.CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
+              await new Promise((resolve38) => setTimeout(resolve38, _SpecCliAdapter.CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
               screenText = this.readClaudeTuiSnapshotForAnswer();
             }
           }
@@ -138207,7 +137851,7 @@ ${text}` : text;
             let screenText = this.driver.snapshot();
             const deadline = Date.now() + _SpecCliAdapter.CLAUDE_TUI_PAGE_SETTLE_TIMEOUT_MS;
             while (!detectClaudeTuiMultiSelect(screenText) && Date.now() < deadline) {
-              await new Promise((resolve39) => setTimeout(resolve39, _SpecCliAdapter.CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
+              await new Promise((resolve38) => setTimeout(resolve38, _SpecCliAdapter.CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
               screenText = this.driver.snapshot();
             }
             return screenText;
@@ -138218,13 +137862,13 @@ ${text}` : text;
             for (let index = 1; index < headers.length; index += 1) {
               if (this.claudeTuiCaptureSuppressed) return;
               this.driver.dispatch({ kind: "pty_write", data: "	" });
-              await new Promise((resolve39) => setTimeout(resolve39, _SpecCliAdapter.CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
+              await new Promise((resolve38) => setTimeout(resolve38, _SpecCliAdapter.CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
               pages.push({ screenText: await this.snapshotSettledClaudeTuiPage(), header: headers[index] });
             }
             for (let index = headers.length - 1; index > 0; index -= 1) {
               if (this.claudeTuiCaptureSuppressed) return;
               this.driver.dispatch({ kind: "pty_write", data: "\x1B[Z" });
-              await new Promise((resolve39) => setTimeout(resolve39, _SpecCliAdapter.CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
+              await new Promise((resolve38) => setTimeout(resolve38, _SpecCliAdapter.CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
               const reread = await this.snapshotSettledClaudeTuiPage();
               const landed = pages[index - 1];
               if (landed && !detectClaudeTuiMultiSelect(landed.screenText) && detectClaudeTuiMultiSelect(reread) && claudeTuiPagesLookLikeSameQuestion(landed, reread)) {
@@ -138679,7 +138323,7 @@ ${text}` : text;
         if (status === "stopped") {
           throw new Error("CLI runtime stopped before it became ready");
         }
-        await new Promise((resolve39) => setTimeout(resolve39, pollMs));
+        await new Promise((resolve38) => setTimeout(resolve38, pollMs));
       }
       throw new Error(`CLI runtime did not become ready within ${timeoutMs}ms`);
     }
@@ -138953,30 +138597,14 @@ ${buttons.join("\n")}`;
         APPROVAL_STICKY_FLAP_MS = 4e3;
       }
     });
-    var AUTO_APPROVE_SETTLE_MS;
     var APPROVAL_LOCAL_RESOLUTION_COOLDOWN_MS;
-    var AUTO_APPROVE_GATE_HYSTERESIS_MS;
-    var AUTO_APPROVE_FLAP_CONTINUITY_MS;
-    var AUTO_APPROVE_MASK_STALL_MS;
-    var APPROVAL_STICKY_FLAP_MS2;
     var APPROVAL_RESUME_GRACE_MS;
-    var MESH_WORKER_STALL_IDLE_THRESHOLD_MS;
-    var MESH_WORKER_STALL_TURN_THRESHOLD_MS;
-    var MESH_WORKER_STALL_REFIRE_COOLDOWN_MS;
     var init_cli_provider_instance_constants = __esm2({
       "src/providers/cli-provider-instance-constants.ts"() {
         "use strict";
         init_approval_gate();
-        AUTO_APPROVE_SETTLE_MS = APPROVAL_SETTLE_MS;
         APPROVAL_LOCAL_RESOLUTION_COOLDOWN_MS = 8e3;
-        AUTO_APPROVE_GATE_HYSTERESIS_MS = APPROVAL_GATE_HYSTERESIS_MS;
-        AUTO_APPROVE_FLAP_CONTINUITY_MS = APPROVAL_FLAP_CONTINUITY_MS;
-        AUTO_APPROVE_MASK_STALL_MS = APPROVAL_AUTO_MASK_STALL_MS;
-        APPROVAL_STICKY_FLAP_MS2 = APPROVAL_STICKY_FLAP_MS;
         APPROVAL_RESUME_GRACE_MS = 18e3;
-        MESH_WORKER_STALL_IDLE_THRESHOLD_MS = 18e4;
-        MESH_WORKER_STALL_TURN_THRESHOLD_MS = 36e4;
-        MESH_WORKER_STALL_REFIRE_COOLDOWN_MS = 6e5;
       }
     });
     function resolveBusyLeaseGate(providerType, env2 = process.env) {
@@ -139633,7 +139261,7 @@ ${buttons.join("\n")}`;
         return;
       }
       if (host.meshStallEmittedForAnchor) return;
-      const threshold = turnActive ? MESH_WORKER_STALL_TURN_THRESHOLD_MS2 : MESH_WORKER_STALL_IDLE_THRESHOLD_MS2;
+      const threshold = turnActive ? MESH_WORKER_STALL_TURN_THRESHOLD_MS : MESH_WORKER_STALL_IDLE_THRESHOLD_MS;
       const stalledMs = now - host.meshStallAnchorAt;
       if (stalledMs < threshold) return;
       let staleResolvedApprovalLatch = false;
@@ -139706,7 +139334,7 @@ ${buttons.join("\n")}`;
         return;
       }
       host.meshStallEmittedForAnchor = true;
-      if (host.meshStallLastFiredAt >= 0 && now - host.meshStallLastFiredAt < MESH_WORKER_STALL_REFIRE_COOLDOWN_MS2) {
+      if (host.meshStallLastFiredAt >= 0 && now - host.meshStallLastFiredAt < MESH_WORKER_STALL_REFIRE_COOLDOWN_MS) {
         return;
       }
       host.meshStallLastFiredAt = now;
@@ -139749,9 +139377,9 @@ ${buttons.join("\n")}`;
         });
       }
     }
-    var MESH_WORKER_STALL_IDLE_THRESHOLD_MS2;
-    var MESH_WORKER_STALL_TURN_THRESHOLD_MS2;
-    var MESH_WORKER_STALL_REFIRE_COOLDOWN_MS2;
+    var MESH_WORKER_STALL_IDLE_THRESHOLD_MS;
+    var MESH_WORKER_STALL_TURN_THRESHOLD_MS;
+    var MESH_WORKER_STALL_REFIRE_COOLDOWN_MS;
     var init_mesh_stall_watchdog = __esm2({
       "src/providers/completion/mesh-stall-watchdog.ts"() {
         "use strict";
@@ -139759,9 +139387,9 @@ ${buttons.join("\n")}`;
         init_mesh_event_trace();
         init_turn_evidence_port();
         init_dist();
-        MESH_WORKER_STALL_IDLE_THRESHOLD_MS2 = 18e4;
-        MESH_WORKER_STALL_TURN_THRESHOLD_MS2 = 36e4;
-        MESH_WORKER_STALL_REFIRE_COOLDOWN_MS2 = 6e5;
+        MESH_WORKER_STALL_IDLE_THRESHOLD_MS = 18e4;
+        MESH_WORKER_STALL_TURN_THRESHOLD_MS = 36e4;
+        MESH_WORKER_STALL_REFIRE_COOLDOWN_MS = 6e5;
       }
     });
     function mergeConversationMessages(runtimeMessages, parsedMessages) {
@@ -141167,13 +140795,6 @@ ${buttons.join("\n")}`;
         return true;
       }
     }
-    function approvalResolutionFinalizationBlock(host, pending) {
-      if (pending.previousStatus !== "waiting_approval") return null;
-      const meshContext = !!(host.settings.meshNodeFor || host.settings.meshActiveTaskId || host.settings.launchedByCoordinator);
-      if (!meshContext) return null;
-      if (hasApprovalResolutionEvidence(host)) return null;
-      return { reason: "approval_resolution_unconfirmed", terminal: false };
-    }
     function buildCompletedFinalizationDiagnostic(host, args) {
       let parsed = null;
       let parseError;
@@ -142182,7 +141803,6 @@ ${buttons.join("\n")}`;
           constructor(provider, workingDir, cliArgs = [], instanceId, transportFactory, options) {
             this.provider = provider;
             this.workingDir = workingDir;
-            this.cliArgs = cliArgs;
             this.type = provider.type;
             this.instanceId = instanceId || crypto10.randomUUID();
             this.presentationMode = "chat";
@@ -142199,23 +141819,12 @@ ${buttons.join("\n")}`;
           }
           type;
           category = "cli";
-          // ── Approval-gate + mesh-stall tuning constants ────────────────────────────
-          // Values, and the full derivation for each, live in
-          // cli-provider-instance-constants.ts (pure move, file-size gate
-          // decomposition). They stay declared as class statics here because tests read
-          // them off the class — `(CliProviderInstance as any).AUTO_APPROVE_SETTLE_MS`
-          // in cli-provider-auto-approve-{settle,mask-stall,flap-recur}.test.ts — so
-          // these aliases are load-bearing. Read the constants module for the why.
-          static AUTO_APPROVE_SETTLE_MS = AUTO_APPROVE_SETTLE_MS;
           static APPROVAL_LOCAL_RESOLUTION_COOLDOWN_MS = APPROVAL_LOCAL_RESOLUTION_COOLDOWN_MS;
-          static AUTO_APPROVE_GATE_HYSTERESIS_MS = AUTO_APPROVE_GATE_HYSTERESIS_MS;
-          static AUTO_APPROVE_FLAP_CONTINUITY_MS = AUTO_APPROVE_FLAP_CONTINUITY_MS;
-          static AUTO_APPROVE_MASK_STALL_MS = AUTO_APPROVE_MASK_STALL_MS;
-          static APPROVAL_STICKY_FLAP_MS = APPROVAL_STICKY_FLAP_MS2;
           static APPROVAL_RESUME_GRACE_MS = APPROVAL_RESUME_GRACE_MS;
-          static MESH_WORKER_STALL_IDLE_THRESHOLD_MS = MESH_WORKER_STALL_IDLE_THRESHOLD_MS;
-          static MESH_WORKER_STALL_TURN_THRESHOLD_MS = MESH_WORKER_STALL_TURN_THRESHOLD_MS;
-          static MESH_WORKER_STALL_REFIRE_COOLDOWN_MS = MESH_WORKER_STALL_REFIRE_COOLDOWN_MS;
+          // Members without `private` below are read through a host facade
+          // (`this as unknown as <X>Host` — completion/, cli-provider-*-projection,
+          // mesh-assignment, ...). They are not private because the type checker
+          // cannot see reads through that cast, and `noUnusedLocals` would flag them.
           adapter;
           context = null;
           lastStatus = "starting";
@@ -142804,10 +142413,6 @@ ${buttons.join("\n")}`;
           recordAcknowledgedUserInput(input, sourceMessageId) {
             recordAcknowledgedUserInput(this, input, sourceMessageId);
           }
-          /** Drop user-input ack entries older than the dedup window so the map can't grow unbounded. */
-          pruneRecentUserInputAcks(now) {
-            pruneRecentUserInputAcks(this, now);
-          }
           /**
            * Owner token for this session in the antigravity conversation-claim
            * registry. Keyed on the daemon instance id — the SAME value the session
@@ -142952,7 +142557,7 @@ ${buttons.join("\n")}`;
               const enterCount = cliCommand.enterCount || 1;
               await this.adapter.writeRaw(cliCommand.text + "\r");
               for (let i = 1; i < enterCount; i += 1) {
-                await new Promise((resolve39) => setTimeout(resolve39, 50));
+                await new Promise((resolve38) => setTimeout(resolve38, 50));
                 await this.adapter.writeRaw("\r");
               }
             }
@@ -143104,15 +142709,6 @@ ${buttons.join("\n")}`;
             } catch {
             }
           }
-          /**
-           * The content of the LAST visible assistant bubble in a message list, or ''
-           * when the tail is not an assistant reply. Skips trailing system/tool/activity
-           * bubbles; stops (returns '') at the first user/human message. Used only for
-           * the dashboard tail-repair cache — a display value, not a completion decision.
-           */
-          lastVisibleAssistantSummary(messages) {
-            return this.lastVisibleAssistantSummaryDetail(messages).content;
-          }
           // Like lastVisibleAssistantSummary but also returns the source bubble's own
           // timestamp (ms), so a cached summary can later be turn-scoped: the display
           // cache is populated from an UNSCOPED tail read (it must show the answer as
@@ -143135,25 +142731,6 @@ ${buttons.join("\n")}`;
               return { content: "" };
             }
             return { content: "" };
-          }
-          /**
-           * NOTIF Defect-B: the final assistant summary this instance ALREADY parsed and
-           * cached for the current turn (lastCompletionSummary), if any. The evidence
-           * probe (completionFinalAssistantEvidence) is a POINT-SAMPLE: on a native-source
-           * provider (antigravity) the parsed screen and the native transcript can both
-           * momentarily yield no in-turn final assistant at the exact instant the
-           * completion gate fires — source='unavailable', missingEvidence=true — even
-           * though a prior poll already read the real answer off native-history and cached
-           * it here (the same value mesh_read_chat.summary shows). Consulting the cache at
-           * emit time lets that already-secured summary count as evidence, so the completion
-           * notification carries the answer instead of completion_diagnostic=missing_final_assistant
-           * with an empty summary. Returns '' when the cache is empty or was reset by the
-           * next turn (see lastCompletionSummary = null on onTurnStarted).
-           */
-          cachedCompletionSummaryContent() {
-            const cached5 = this.lastCompletionSummary;
-            const content = typeof cached5?.content === "string" ? cached5.content.trim() : "";
-            return content;
           }
           /** See completion/evidence.ts — FALSE-IDLE Defect 1c turn-scoped cache view. */
           cachedInTurnCompletionSummaryContent(turnStartedAt) {
@@ -143185,9 +142762,6 @@ ${buttons.join("\n")}`;
           hasAdapterPendingResponse() {
             return hasAdapterPendingResponse(this);
           }
-          antigravityHoldPtyStillActive() {
-            return antigravityHoldPtyStillActive(this);
-          }
           shouldSuppressStaleParsedBusyStatus(parsedStatus, adapterStatus) {
             return shouldSuppressStaleParsedBusyStatus(
               this,
@@ -143208,15 +142782,6 @@ ${buttons.join("\n")}`;
             const { block: block2, evidencePatch } = evaluateFinalizationBlock(pending, reader, this.completionEnginePolicy());
             this.applyCompletionArmPatch(pending, evidencePatch);
             return block2;
-          }
-          hasApprovalResolutionEvidence() {
-            return hasApprovalResolutionEvidence(this);
-          }
-          approvalResolutionFinalizationBlock(pending) {
-            return approvalResolutionFinalizationBlock(
-              this,
-              pending
-            );
           }
           scheduleCompletedDebounceFlush(delayMs) {
             if (this.completedDebounceTimer) clearTimeout(this.completedDebounceTimer);
@@ -143312,10 +142877,6 @@ ${buttons.join("\n")}`;
            */
           checkMeshWorkerStall(now = Date.now()) {
             runMeshStallTick(this, now);
-          }
-          /** See completion/mesh-stall-watchdog.ts — episode state stays instance-owned. */
-          resetMeshStallEpisode() {
-            resetMeshStallEpisode(this);
           }
           /** The result of one native-transcript signal probe: the normalized
            *  snapshot the shared TranscriptSignalSource produced from the read, and
@@ -144093,7 +143654,6 @@ ${buttons.join("\n")}`;
           category = "acp";
           log = LOG.forComponent("ACP");
           provider;
-          context = null;
           settings = {};
           /** Lifecycle port (wiring-unification B2); null until boot wires it. */
           lifecyclePort = null;
@@ -144111,7 +143671,6 @@ ${buttons.join("\n")}`;
           agentCapabilities = {};
           currentSelections = {};
           activeToolCalls = [];
-          stopReason = null;
           partialContent = "";
           partialThoughtContent = "";
           /** Rich content blocks accumulated during streaming */
@@ -144153,7 +143712,6 @@ ${buttons.join("\n")}`;
           instanceId;
           // ─── Lifecycle ─────────────────────────────────
           async init(context) {
-            this.context = context;
             this.settings = context.settings || {};
             if (!this.lifecyclePort && context.lifecycle) this.lifecyclePort = context.lifecycle;
             if (!this.turnEvidencePort && context.turnEvidence) this.turnEvidencePort = context.turnEvidence;
@@ -144626,13 +144184,13 @@ ${buttons.join("\n")}`;
                 }
                 this.currentStatus = "waiting_approval";
                 this.detectStatusTransition();
-                const approved = await new Promise((resolve39) => {
-                  this.permissionResolvers.push(resolve39);
+                const approved = await new Promise((resolve38) => {
+                  this.permissionResolvers.push(resolve38);
                   setTimeout(() => {
-                    const idx = this.permissionResolvers.indexOf(resolve39);
+                    const idx = this.permissionResolvers.indexOf(resolve38);
                     if (idx >= 0) {
                       this.permissionResolvers.splice(idx, 1);
-                      resolve39(false);
+                      resolve38(false);
                     }
                   }, 3e5);
                 });
@@ -144844,7 +144402,6 @@ ${buttons.join("\n")}`;
                 prompt: promptParts
               });
               if (result?.stopReason) {
-                this.stopReason = result.stopReason;
               }
               this.log.info(`[${this.type}] Prompt completed: stopReason=${result?.stopReason} partialContent=${this.partialContent.length} chars partialBlocks=${this.partialBlocks.length}`);
               this.finalizeAssistantMessage();
@@ -145054,7 +144611,6 @@ ${buttons.join("\n")}`;
               }
             }
             if (params.stopReason) {
-              this.stopReason = params.stopReason;
               if (params.stopReason !== "cancelled") {
                 this.currentStatus = "idle";
               }
@@ -147503,7 +147059,7 @@ Run 'adhdev doctor' for detailed diagnostics.`
               try {
                 const { getMesh: getMesh2 } = await Promise.resolve().then(() => (init_mesh_config(), mesh_config_exports));
                 const meshObj = getMesh2(meshId) ?? ctx.getCachedInlineMesh(meshId);
-                const nodeObj = Array.isArray(meshObj?.nodes) ? meshObj.nodes.find((n) => meshNodeIdMatches7(n, meshNodeId)) : void 0;
+                const nodeObj = Array.isArray(meshObj?.nodes) ? meshObj.nodes.find((n) => meshNodeIdMatches6(n, meshNodeId)) : void 0;
                 const bootstrapStatus = readStringValue(nodeObj?.worktreeBootstrap?.status);
                 if (bootstrapStatus === "running") {
                   return { ...launchResult, success: launchResult.success ?? true, bootstrapPending: true };
@@ -147591,11 +147147,11 @@ Run 'adhdev doctor' for detailed diagnostics.`
               try {
                 const { getMesh: getMesh2 } = await Promise.resolve().then(() => (init_mesh_config(), mesh_config_exports));
                 const meshObj = ctx.getCachedInlineMesh(dispatchMeshId) ?? getMesh2(dispatchMeshId);
-                const nodeObj = Array.isArray(meshObj?.nodes) ? meshObj.nodes.find((n) => meshNodeIdMatches7(n, dispatchNodeId)) : void 0;
+                const nodeObj = Array.isArray(meshObj?.nodes) ? meshObj.nodes.find((n) => meshNodeIdMatches6(n, dispatchNodeId)) : void 0;
                 const { shouldDeferDispatchForBootstrap: shouldDeferDispatchForBootstrap2 } = await Promise.resolve().then(() => (init_worktree_bootstrap_config(), worktree_bootstrap_config_exports));
                 if (shouldDeferDispatchForBootstrap2(nodeObj)) {
                   const dispatchSessionState = dispatchSessionId ? ctx.deps.instanceManager?.getInstance?.(dispatchSessionId)?.getState?.() : void 0;
-                  const sessionConfirmedReady = !!dispatchSessionState && isIdleSessionState2(dispatchSessionState);
+                  const sessionConfirmedReady = !!dispatchSessionState && isIdleSessionState(dispatchSessionState);
                   if (!sessionConfirmedReady) {
                     return {
                       success: false,
@@ -148043,14 +147599,14 @@ Run 'adhdev doctor' for detailed diagnostics.`
         let daemonId;
         if (nodeId) {
           try {
-            const [{ getMesh: getMesh2 }, { meshNodeIdMatches: meshNodeIdMatches22 }, { readMeshNodeDaemonId: readMeshNodeDaemonId3 }] = await Promise.all([
+            const [{ getMesh: getMesh2 }, { meshNodeIdMatches: meshNodeIdMatches22 }, { readMeshNodeDaemonId: readMeshNodeDaemonId2 }] = await Promise.all([
               Promise.resolve().then(() => (init_mesh_config(), mesh_config_exports)),
               Promise.resolve().then(() => (init_dist(), dist_exports)),
               Promise.resolve().then(() => (init_mesh_node_identity(), mesh_node_identity_exports))
             ]);
             const mesh = getMesh2(meshId);
             const node = mesh?.nodes?.find((n) => meshNodeIdMatches22(n, nodeId));
-            daemonId = node ? readMeshNodeDaemonId3(node) || void 0 : void 0;
+            daemonId = node ? readMeshNodeDaemonId2(node) || void 0 : void 0;
           } catch {
           }
         }
@@ -150479,7 +150035,7 @@ ${mergeTreeErr?.stderr || ""}`;
       const workspace = typeof node?.workspace === "string" ? node.workspace : "";
       if (!workspace) return void 0;
       const allNodes = Array.isArray(mesh?.nodes) ? mesh.nodes : [];
-      const sourceNode = node.clonedFromNodeId ? allNodes.find((n) => meshNodeIdMatches7(n, node.clonedFromNodeId)) : allNodes.find((n) => !n.isLocalWorktree);
+      const sourceNode = node.clonedFromNodeId ? allNodes.find((n) => meshNodeIdMatches6(n, node.clonedFromNodeId)) : allNodes.find((n) => !n.isLocalWorktree);
       const repoRoot = sourceNode?.repoRoot || sourceNode?.workspace;
       if (!repoRoot) return void 0;
       let branch = typeof node.worktreeBranch === "string" ? node.worktreeBranch : "";
@@ -150607,7 +150163,7 @@ ${mergeTreeErr?.stderr || ""}`;
             if (!meshId || !nodeId) return { success: false, error: "meshId and nodeId required" };
             const meshRecord2 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
             const mesh = meshRecord2?.mesh;
-            const node = mesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId));
+            const node = mesh?.nodes?.find((n) => meshNodeIdMatches6(n, nodeId));
             if (!node?.workspace) return { success: false, error: `Node '${nodeId}' workspace not found` };
             const submoduleReachabilityPreflight = await planMeshRefineNodeSubmodulePreflight({ mesh, node }).catch(() => void 0);
             return {
@@ -150637,7 +150193,7 @@ ${mergeTreeErr?.stderr || ""}`;
                 const meshRecord2 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
                 const mesh = meshRecord2?.mesh;
                 resolvedMesh = mesh;
-                const node = mesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId));
+                const node = mesh?.nodes?.find((n) => meshNodeIdMatches6(n, nodeId));
                 if (!workspace) {
                   workspace = typeof node?.workspace === "string" ? node.workspace.trim() : "";
                 }
@@ -150693,7 +150249,7 @@ ${mergeTreeErr?.stderr || ""}`;
             if (!meshId || !nodeId) return { success: false, error: "meshId and nodeId required" };
             {
               const meshRecordForForward = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
-              const forwardNode = meshRecordForForward?.mesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId));
+              const forwardNode = meshRecordForForward?.mesh?.nodes?.find((n) => meshNodeIdMatches6(n, nodeId));
               const nodeDaemonId = typeof forwardNode?.daemonId === "string" ? forwardNode.daemonId.trim() : void 0;
               const selfDaemonId = ctx.deps.statusInstanceId;
               const isRemote = nodeDaemonId && selfDaemonId && !daemonIdsEquivalent4(nodeDaemonId, selfDaemonId);
@@ -150724,7 +150280,7 @@ ${mergeTreeErr?.stderr || ""}`;
             if (dryRunVeto.isDryRun) {
               const meshRecord2 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
               const mesh = meshRecord2?.mesh;
-              const node = mesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId));
+              const node = mesh?.nodes?.find((n) => meshNodeIdMatches6(n, nodeId));
               if (!node?.workspace) return { success: false, error: `Node '${nodeId}' workspace not found` };
               const submoduleReachabilityPreflight = await planMeshRefineNodeSubmodulePreflight({ mesh, node }).catch(() => void 0);
               return {
@@ -150895,7 +150451,7 @@ ${mergeTreeErr?.stderr || ""}`;
       return false;
     }
     function resolveSourceRepoRoot(mesh, node) {
-      const sourceNode = node?.clonedFromNodeId ? mesh?.nodes?.find((n) => meshNodeIdMatches7(n, node.clonedFromNodeId)) : mesh?.nodes?.find((n) => !n.isLocalWorktree);
+      const sourceNode = node?.clonedFromNodeId ? mesh?.nodes?.find((n) => meshNodeIdMatches6(n, node.clonedFromNodeId)) : mesh?.nodes?.find((n) => !n.isLocalWorktree);
       return typeof sourceNode?.repoRoot === "string" && sourceNode.repoRoot.trim() ? sourceNode.repoRoot.trim() : typeof sourceNode?.workspace === "string" && sourceNode.workspace.trim() ? sourceNode.workspace.trim() : "";
     }
     async function evaluateNode(deps, opts, ctx, node) {
@@ -151045,7 +150601,7 @@ ${mergeTreeErr?.stderr || ""}`;
         graceMs
       };
       const nodes = Array.isArray(mesh?.nodes) ? mesh.nodes : [];
-      const selected = opts.onlyNodeId ? nodes.filter((n) => meshNodeIdMatches7(n, opts.onlyNodeId)) : nodes;
+      const selected = opts.onlyNodeId ? nodes.filter((n) => meshNodeIdMatches6(n, opts.onlyNodeId)) : nodes;
       const entries = [];
       for (const node of selected) {
         try {
@@ -151065,7 +150621,7 @@ ${mergeTreeErr?.stderr || ""}`;
       const mesh = opts.mesh;
       const meshId = String(mesh?.id || mesh?.name || "");
       const nodeId = entry.nodeId;
-      const node = (Array.isArray(mesh?.nodes) ? mesh.nodes : []).find((n) => meshNodeIdMatches7(n, nodeId));
+      const node = (Array.isArray(mesh?.nodes) ? mesh.nodes : []).find((n) => meshNodeIdMatches6(n, nodeId));
       const fail = (code, error48) => {
         entry.execution = { attempted: true, success: false, code, error: error48 };
         metrics.removalFailures++;
@@ -151558,7 +151114,7 @@ ${mergeTreeErr?.stderr || ""}`;
       const task = { difficulty: args.difficulty, requiredTags };
       const quotaFactsContext = { nodes: meshNodes, suppressObservabilityLogs: true };
       const candidateNodes = meshNodes.filter((node) => {
-        if (targetNodeId && !meshNodeIdMatches7(node, targetNodeId)) return false;
+        if (targetNodeId && !meshNodeIdMatches6(node, targetNodeId)) return false;
         if (!requiredTags.length) return true;
         const providers = resolveNodeCapabilitySlots(node, meshId).map((slot) => slot.provider).filter(Boolean);
         return providers.some((provider) => nodeSatisfiesRequiredTags3(
@@ -151594,12 +151150,11 @@ ${mergeTreeErr?.stderr || ""}`;
       }));
       const predicted = nodePreviews.find((nodePreview, index) => {
         if (!nodePreview.predictedWinner) return false;
-        const node = orderedNodes[index];
         if (args.readonly !== true && nodeHasActiveAssignment(meshId, nodePreview.nodeId)) return false;
         const winnerScore = nodePreview.stages.fitness.find((score) => score.providerType === nodePreview.predictedWinner.providerType && score.model === nodePreview.predictedWinner.model);
         return winnerScore?.capacity.available !== false;
       });
-      const targetMatched = !targetNodeId || meshNodes.some((node) => meshNodeIdMatches7(node, targetNodeId));
+      const targetMatched = !targetNodeId || meshNodes.some((node) => meshNodeIdMatches6(node, targetNodeId));
       return {
         success: true,
         tool: "mesh_route_preview",
@@ -153063,7 +152618,7 @@ ${ptyResult.output.slice(-2e3)}`);
     function heldSessionBelongsToNode(session, meshId, nodeId, isCoordinatorNode) {
       const settings = session.settings ?? {};
       const sessionMesh = settings.meshNodeFor;
-      if (settings.meshNodeId && (!sessionMesh || sessionMesh === meshId) && (daemonIdsEquivalent4(settings.meshNodeId, nodeId) || meshNodeIdMatches7({ id: nodeId }, settings.meshNodeId))) {
+      if (settings.meshNodeId && (!sessionMesh || sessionMesh === meshId) && (daemonIdsEquivalent4(settings.meshNodeId, nodeId) || meshNodeIdMatches6({ id: nodeId }, settings.meshNodeId))) {
         return true;
       }
       return isCoordinatorNode && (settings.meshCoordinatorFor === meshId || session.coordinator?.meshId === meshId);
@@ -153109,8 +152664,7 @@ ${ptyResult.output.slice(-2e3)}`);
         ...runtime?.daemonBuild ? { daemonBuild: runtime.daemonBuild } : {},
         ...runtime?.upgradeFailure ? { upgradeFailure: runtime.upgradeFailure } : {},
         ...runtime?.sessionsTruncated ? { sessionsTruncated: true } : {},
-        ...runtime?.providers ? { providers: runtime.providers } : {},
-        ...runtime?.sessionStampVersion ? { sessionStampVersion: runtime.sessionStampVersion } : {}
+        ...runtime?.providers ? { providers: runtime.providers } : {}
       };
       status.heldRuntime = held;
       if (runtime?.nodeFacts && factsReportedAt(runtime.nodeFacts) > factsReportedAt(status.nodeFacts)) {
@@ -153785,7 +153339,7 @@ ${ptyResult.output.slice(-2e3)}`);
               );
               const nodeStatuses = settledNodeStatuses.map((settled, i) => {
                 if (settled.status === "fulfilled") return settled.value;
-                const [nodeIndex, node] = meshNodeEntries[i];
+                const [, node] = meshNodeEntries[i];
                 const nodeId = normalizeMeshNodeId(node) ?? "";
                 const daemonId = readStringValue(node.daemonId);
                 const fallback = {
@@ -154020,7 +153574,7 @@ ${ptyResult.output.slice(-2e3)}`);
       const record22 = await ctx.getMeshForCommand(meshId, void 0, { preferInline: true });
       const mesh = record22?.mesh;
       if (!mesh) return { ok: false, result: { success: false, code: "mesh_not_found", error: "Mesh not found", accepted: false } };
-      const node = Array.isArray(mesh.nodes) ? mesh.nodes.find((n) => meshNodeIdMatches7(n, nodeId)) : void 0;
+      const node = Array.isArray(mesh.nodes) ? mesh.nodes.find((n) => meshNodeIdMatches6(n, nodeId)) : void 0;
       if (!node) return { ok: false, result: { success: false, code: "mesh_node_unknown", error: `Node ${nodeId} is not on mesh ${meshId}`, accepted: false } };
       return { ok: true, mesh, node };
     }
@@ -154095,7 +153649,7 @@ ${ptyResult.output.slice(-2e3)}`);
               };
               if (recorded.factsChanged && recorded.entry?.runtime?.nodeFacts) heal(nodeId, recorded.entry.runtime.nodeFacts);
               for (const sibling of Array.isArray(resolved.mesh.nodes) ? resolved.mesh.nodes : []) {
-                if (!sibling || sibling === resolved.node || meshNodeIdMatches7(sibling, nodeId)) continue;
+                if (!sibling || sibling === resolved.node || meshNodeIdMatches6(sibling, nodeId)) continue;
                 const siblingDaemonId = readMeshNodeDaemonId(sibling) ?? "";
                 const siblingId = readString13(sibling.id);
                 if (!ownerDaemonId || !siblingId || !siblingDaemonId || !daemonIdsEquivalent4(siblingDaemonId, ownerDaemonId)) continue;
@@ -154121,7 +153675,7 @@ ${ptyResult.output.slice(-2e3)}`);
               const ownerDaemonId = readMeshNodeDaemonId(resolved.node) ?? "";
               if (runtimeHeld && ownerDaemonId) {
                 for (const sibling of Array.isArray(resolved.mesh.nodes) ? resolved.mesh.nodes : []) {
-                  if (!sibling || sibling === resolved.node || meshNodeIdMatches7(sibling, nodeId)) continue;
+                  if (!sibling || sibling === resolved.node || meshNodeIdMatches6(sibling, nodeId)) continue;
                   const siblingDaemonId = readMeshNodeDaemonId(sibling) ?? "";
                   const siblingId = readString13(sibling.id);
                   if (!siblingId || !siblingDaemonId || !daemonIdsEquivalent4(siblingDaemonId, ownerDaemonId)) continue;
@@ -154300,7 +153854,7 @@ ${ptyResult.output.slice(-2e3)}`);
       for (const node of [...roster, ...described]) {
         const id22 = readString14(node?.id);
         if (!id22 || routes[id22] || wanted && !wanted.has(id22)) continue;
-        if (!roster.includes(node) && roster.some((n) => meshNodeIdMatches7(n, id22))) continue;
+        if (!roster.includes(node) && roster.some((n) => meshNodeIdMatches6(n, id22))) continue;
         routes[id22] = decideDispatchRoute(node, self);
       }
       return routes;
@@ -154372,9 +153926,9 @@ ${ptyResult.output.slice(-2e3)}`);
             const nodeId = readString14(args?.nodeId);
             if (!meshId || !nodeId) return { success: false, error: "meshId and nodeId required" };
             const record22 = await ctx.getMeshForCommand(meshId, void 0, { preferInline: true });
-            const rostered = Array.isArray(record22?.mesh?.nodes) ? record22.mesh.nodes.find((n) => meshNodeIdMatches7(n, nodeId)) : void 0;
+            const rostered = Array.isArray(record22?.mesh?.nodes) ? record22.mesh.nodes.find((n) => meshNodeIdMatches6(n, nodeId)) : void 0;
             const described = readRecord15(args?.node);
-            const node = rostered ?? (described && meshNodeIdMatches7(described, nodeId) ? described : void 0);
+            const node = rostered ?? (described && meshNodeIdMatches6(described, nodeId) ? described : void 0);
             if (!node) return { success: false, code: "mesh_node_unknown", error: `Node ${nodeId} is not on mesh ${meshId}` };
             const callerDaemonId = readString14(args?.callerDaemonId);
             const selfId = readString14(ctx.deps.statusInstanceId);
@@ -154687,7 +154241,7 @@ ${ptyResult.output.slice(-2e3)}`);
           const workspace = readString15(node.workspace);
           if (!daemonId || !nodeId || !workspace || !daemonIdsEquivalent4(daemonId, self)) continue;
           if (!exists(workspace)) continue;
-          if (out.some((t) => t.meshId === meshId && meshNodeIdMatches7({ id: t.nodeId }, nodeId))) continue;
+          if (out.some((t) => t.meshId === meshId && meshNodeIdMatches6({ id: t.nodeId }, nodeId))) continue;
           out.push({ coordinatorDaemonId: host, meshId, nodeId, workspace });
         }
       }
@@ -155992,8 +155546,8 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
       const limit = resolveRefineMaxConcurrentJobs();
       if (activeExecutions >= limit) {
         LOG.info("Mesh", `[Refinery] ${label2} QUEUED \u2014 ${activeExecutions} refine job(s) already executing (limit ${limit}), ${waitQueue.length + 1} waiting. It starts automatically; do not re-invoke.`);
-        await new Promise((resolve39) => {
-          waitQueue.push(resolve39);
+        await new Promise((resolve38) => {
+          waitQueue.push(resolve38);
         });
         LOG.info("Mesh", `[Refinery] ${label2} dequeued \u2014 starting now (${activeExecutions} other job(s) still executing).`);
       }
@@ -156289,7 +155843,7 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
               return [];
             }
           })();
-          const nodeExists = (nodeId) => meshNodes.length === 0 || meshNodes.some((n) => meshNodeIdMatches7(n, nodeId));
+          const nodeExists = (nodeId) => meshNodes.length === 0 || meshNodes.some((n) => meshNodeIdMatches6(n, nodeId));
           const openDispatches = selectOpenRefineDispatches2(entries);
           for (const record22 of openDispatches) {
             const decision = classifyRefineDispatch2(record22, {
@@ -156730,7 +156284,7 @@ ${hintLines.join("\n")}` : "",
         const missing = [];
         const nonWorktree = [];
         for (const nodeId of requestedNodeIds) {
-          const node = allNodes.find((n) => meshNodeIdMatches7(n, nodeId));
+          const node = allNodes.find((n) => meshNodeIdMatches6(n, nodeId));
           if (!node) {
             missing.push(nodeId);
             continue;
@@ -156759,7 +156313,7 @@ ${hintLines.join("\n")}` : "",
       const { promisify: promisify12 } = await import("util");
       const execFileAsync8 = promisify12(execFile10);
       const resolveRepoRootFor = (node) => {
-        const sourceNode = node.clonedFromNodeId ? allNodes.find((n) => meshNodeIdMatches7(n, node.clonedFromNodeId)) : allNodes.find((n) => !n.isLocalWorktree);
+        const sourceNode = node.clonedFromNodeId ? allNodes.find((n) => meshNodeIdMatches6(n, node.clonedFromNodeId)) : allNodes.find((n) => !n.isLocalWorktree);
         return sourceNode?.repoRoot || sourceNode?.workspace;
       };
       const repoRootBaseRef = /* @__PURE__ */ new Map();
@@ -156861,7 +156415,7 @@ ${hintLines.join("\n")}` : "",
         })
       );
       const ordering = orderMeshRefineBatchNodes(changeAreas);
-      const orderedNodes = ordering.order.map((nodeId) => targetNodes.find((n) => meshNodeIdMatches7(n, nodeId))).filter((n) => !!n);
+      const orderedNodes = ordering.order.map((nodeId) => targetNodes.find((n) => meshNodeIdMatches6(n, nodeId))).filter((n) => !!n);
       const dryRunVeto = resolveDryRunVeto(args);
       if (dryRunVeto.refused) {
         return {
@@ -157234,7 +156788,7 @@ ${hintLines.join("\n")}` : "",
       const meshRecord2 = await self.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
       const mesh = meshRecord2?.mesh;
       const allNodes = Array.isArray(mesh?.nodes) ? mesh.nodes : [];
-      const orderedNodes = nodeIds.map((id22) => allNodes.find((n) => meshNodeIdMatches7(n, id22))).filter((n) => !!n);
+      const orderedNodes = nodeIds.map((id22) => allNodes.find((n) => meshNodeIdMatches6(n, id22))).filter((n) => !!n);
       if (nodeIds.length === 0 || orderedNodes.length === 0) {
         const completedAt = (/* @__PURE__ */ new Date()).toISOString();
         const terminalHandle = buildRefineBatchJobHandle(self, {
@@ -157297,9 +156851,9 @@ ${hintLines.join("\n")}` : "",
     async function resolveBatchBaseRepoRoot(self, meshId, requestedNodeIds, args) {
       const mesh = (await self.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true }))?.mesh;
       const allNodes = Array.isArray(mesh?.nodes) ? mesh.nodes : [];
-      const candidates = Array.isArray(requestedNodeIds) && requestedNodeIds.length > 0 ? requestedNodeIds.map((id22) => allNodes.find((n) => meshNodeIdMatches7(n, id22))).filter(Boolean) : allNodes.filter((n) => n?.isLocalWorktree && typeof n.workspace === "string" && n.workspace);
+      const candidates = Array.isArray(requestedNodeIds) && requestedNodeIds.length > 0 ? requestedNodeIds.map((id22) => allNodes.find((n) => meshNodeIdMatches6(n, id22))).filter(Boolean) : allNodes.filter((n) => n?.isLocalWorktree && typeof n.workspace === "string" && n.workspace);
       for (const node of candidates) {
-        const repoRoot = resolveRefineBaseRepoRoot({ node, nodes: allNodes, nodeIdMatches: meshNodeIdMatches7 });
+        const repoRoot = resolveRefineBaseRepoRoot({ node, nodes: allNodes, nodeIdMatches: meshNodeIdMatches6 });
         if (repoRoot) return repoRoot;
       }
       return void 0;
@@ -157491,7 +157045,7 @@ ${hintLines.join("\n")}` : "",
     async function refineResolveRefsStage(self, meshId, nodeId, args, refineStages) {
       const meshRecord2 = await self.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
       const mesh = meshRecord2?.mesh;
-      const node = mesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId));
+      const node = mesh?.nodes?.find((n) => meshNodeIdMatches6(n, nodeId));
       if (!node) return { kind: "terminal", result: { success: false, error: `Node '${nodeId}' not found in mesh`, refineStages } };
       if (!node.isLocalWorktree || !node.workspace) {
         return { kind: "terminal", result: { success: false, error: `Refinery requires a local worktree node`, refineStages } };
@@ -157503,7 +157057,7 @@ ${hintLines.join("\n")}` : "",
         });
         return { kind: "terminal", result: buildRefineWorktreeMissingResult(nodeId, node.workspace, refineStages) };
       }
-      const sourceNode = node.clonedFromNodeId ? mesh?.nodes.find((n) => meshNodeIdMatches7(n, node.clonedFromNodeId)) : mesh?.nodes.find((n) => !n.isLocalWorktree);
+      const sourceNode = node.clonedFromNodeId ? mesh?.nodes.find((n) => meshNodeIdMatches6(n, node.clonedFromNodeId)) : mesh?.nodes.find((n) => !n.isLocalWorktree);
       const repoRoot = sourceNode?.repoRoot || sourceNode?.workspace;
       if (!repoRoot) return { kind: "terminal", result: { success: false, error: "Source node repoRoot not found", refineStages } };
       const { execFile: execFile10 } = await import("child_process");
@@ -157996,7 +157550,7 @@ ${tail}` : ""
       }
     }
     async function refineMergeAndFinalizeStage(self, ctx) {
-      const { meshId, nodeId, args, repoRoot, baseHead, node, branch, baseBranch, sourceNode, validationSummary, patchEquivalence, submoduleReachability, mesh, refineStages, execFileAsync: execFileAsync8 } = ctx;
+      const { meshId, nodeId, repoRoot, branch, baseBranch, validationSummary, patchEquivalence, submoduleReachability, refineStages } = ctx;
       const leaseKey = `${repoRoot}::${baseBranch}`;
       const leaseHolder = buildRefineJobKey(self, meshId, nodeId);
       const alreadyHeld = self.refineBaseLeases.get(leaseKey) === leaseHolder;
@@ -158478,7 +158032,7 @@ ${e?.stderr || ""}`;
     async function recordRefineAcceptBaseDivergence(self, handle, node) {
       try {
         const mesh = (await self.getMeshForCommand(handle.meshId, void 0, { preferInline: true }))?.mesh;
-        const sourceNode = node?.clonedFromNodeId ? mesh?.nodes?.find((n) => meshNodeIdMatches7(n, node.clonedFromNodeId)) : mesh?.nodes?.find((n) => !n.isLocalWorktree);
+        const sourceNode = node?.clonedFromNodeId ? mesh?.nodes?.find((n) => meshNodeIdMatches6(n, node.clonedFromNodeId)) : mesh?.nodes?.find((n) => !n.isLocalWorktree);
         const repoRoot = sourceNode?.repoRoot || sourceNode?.workspace;
         const workspace = readStringValue(node?.workspace);
         if (!repoRoot || !workspace) return;
@@ -158565,7 +158119,7 @@ ${e?.stderr || ""}`;
       self.runningRefineJobs.set(key2, placeholder);
       const meshRecord2 = await self.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
       const mesh = meshRecord2?.mesh;
-      const node = mesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId));
+      const node = mesh?.nodes?.find((n) => meshNodeIdMatches6(n, nodeId));
       if (!node) {
         self.runningRefineJobs.delete(key2);
         return { success: false, error: `Node '${nodeId}' not found in mesh` };
@@ -158740,7 +158294,7 @@ ${e?.stderr || ""}`;
     }
     async function bestEffortRemoveWorktreeDir(self, dir) {
       if (!dir || !fs73.existsSync(dir)) return { removed: true, residue: false };
-      const sleep3 = (ms3) => new Promise((resolve39) => setTimeout(resolve39, ms3));
+      const sleep3 = (ms3) => new Promise((resolve38) => setTimeout(resolve38, ms3));
       const ABSORB = /* @__PURE__ */ new Set(["EINVAL", "EPERM", "EBUSY", "ENOTEMPTY", "EACCES", "EMFILE", "ENFILE"]);
       let lastErr;
       for (let attempt = 0; attempt < 4; attempt++) {
@@ -158771,7 +158325,7 @@ ${e?.stderr || ""}`;
         };
       }
       if (!fs73.existsSync(workspace)) return { ok: true };
-      const sourceNode = args.node?.clonedFromNodeId ? args.mesh?.nodes?.find((n) => meshNodeIdMatches7(n, args.node.clonedFromNodeId)) : args.mesh?.nodes?.find((n) => !n.isLocalWorktree);
+      const sourceNode = args.node?.clonedFromNodeId ? args.mesh?.nodes?.find((n) => meshNodeIdMatches6(n, args.node.clonedFromNodeId)) : args.mesh?.nodes?.find((n) => !n.isLocalWorktree);
       const repoRoot = typeof sourceNode?.repoRoot === "string" && sourceNode.repoRoot.trim() ? sourceNode.repoRoot.trim() : typeof sourceNode?.workspace === "string" && sourceNode.workspace.trim() ? sourceNode.workspace.trim() : "";
       if (!repoRoot || !fs73.existsSync(repoRoot)) {
         return {
@@ -158895,7 +158449,7 @@ ${e?.stderr || ""}`;
         };
       }
       const worktreeExists = fs73.existsSync(workspace);
-      const sourceNode = args.node?.clonedFromNodeId ? args.mesh?.nodes?.find((n) => meshNodeIdMatches7(n, args.node.clonedFromNodeId)) : args.mesh?.nodes?.find((n) => !n.isLocalWorktree);
+      const sourceNode = args.node?.clonedFromNodeId ? args.mesh?.nodes?.find((n) => meshNodeIdMatches6(n, args.node.clonedFromNodeId)) : args.mesh?.nodes?.find((n) => !n.isLocalWorktree);
       const repoRoot = typeof sourceNode?.repoRoot === "string" && sourceNode.repoRoot.trim() ? sourceNode.repoRoot.trim() : typeof sourceNode?.workspace === "string" && sourceNode.workspace.trim() ? sourceNode.workspace.trim() : "";
       if (!worktreeExists) {
         return { success: true, skipped: true, removedPath: workspace, repoRoot: repoRoot || void 0, reason: "worktree_path_missing" };
@@ -159242,7 +158796,7 @@ ${e?.stderr || ""}`;
       const liveMeshNodeIds = Array.isArray(args.liveMeshNodeIds) ? args.liveMeshNodeIds.map((id22) => typeof id22 === "string" ? id22.trim() : "").filter(Boolean) : [];
       const isNodeStillLive = (candidateNodeId) => {
         if (!candidateNodeId) return false;
-        return liveMeshNodeIds.some((liveId) => liveId === candidateNodeId || meshNodeIdMatches7({ id: liveId }, candidateNodeId) || daemonIdsEquivalent4(liveId, candidateNodeId));
+        return liveMeshNodeIds.some((liveId) => liveId === candidateNodeId || meshNodeIdMatches6({ id: liveId }, candidateNodeId) || daemonIdsEquivalent4(liveId, candidateNodeId));
       };
       const reclaimedOrphanSessionIds = [];
       const sessions = await self.deps.sessionHostControl.listSessions();
@@ -159607,7 +159161,7 @@ ${e?.stderr || ""}`;
       }
       if (trimmed2) {
         for (const match of self.meshNodeGitState?.findRuntimeSessions(trimmed2) ?? []) {
-          const rosterNode = candidates.find((node) => meshNodeIdMatches7(node, match.nodeId));
+          const rosterNode = candidates.find((node) => meshNodeIdMatches6(node, match.nodeId));
           const nodeDaemonId = (rosterNode ? readMeshNodeDaemonId(readObjectRecord(rosterNode)) : void 0) ?? match.daemonId ?? void 0;
           if (!nodeDaemonId) continue;
           if (selfDaemonId && daemonIdsEquivalent4(nodeDaemonId, selfDaemonId)) return void 0;
@@ -159616,7 +159170,7 @@ ${e?.stderr || ""}`;
       }
       if (nodeHint) {
         for (const node of candidates) {
-          if (!meshNodeIdMatches7(node, nodeHint)) continue;
+          if (!meshNodeIdMatches6(node, nodeHint)) continue;
           const nodeDaemonId = readMeshNodeDaemonId(readObjectRecord(node));
           if (!nodeDaemonId) continue;
           if (selfDaemonId && daemonIdsEquivalent4(nodeDaemonId, selfDaemonId)) return void 0;
@@ -159718,7 +159272,7 @@ ${e?.stderr || ""}`;
     function buildMemberJoinNode(mesh, args, fallbackDaemonId) {
       const requestedNodeId = typeof args?.memberNodeId === "string" ? args.memberNodeId.trim() : "";
       const explicit = args?.memberNode && typeof args.memberNode === "object" && !Array.isArray(args.memberNode) ? args.memberNode : null;
-      const configured = Array.isArray(mesh?.nodes) ? requestedNodeId ? mesh.nodes.find((node) => meshNodeIdMatches7(node, requestedNodeId)) : mesh.nodes[0] : null;
+      const configured = Array.isArray(mesh?.nodes) ? requestedNodeId ? mesh.nodes.find((node) => meshNodeIdMatches6(node, requestedNodeId)) : mesh.nodes[0] : null;
       const source = explicit || configured;
       const workspace = typeof source?.workspace === "string" && source.workspace.trim() ? source.workspace.trim() : typeof args?.workspace === "string" && args.workspace.trim() ? args.workspace.trim() : process.cwd();
       if (!workspace) return null;
@@ -159940,7 +159494,7 @@ ${e?.stderr || ""}`;
           async selfHealNodeFromFacts(meshId, nodeId, nodeFacts) {
             try {
               const record22 = await this.getMeshForCommand(meshId, void 0, { preferInline: true });
-              const node = record22?.mesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId));
+              const node = record22?.mesh?.nodes?.find((n) => meshNodeIdMatches6(n, nodeId));
               if (!record22 || !node) return;
               const reporter = recordReportedNodeFacts(node, nodeFacts);
               if (reporter) persistNodeReporterPlatform(record22.source, record22.mesh, nodeId, reporter);
@@ -159972,9 +159526,6 @@ ${e?.stderr || ""}`;
           // code move). Kept here as thin delegators: getCachedAggregateMeshStatus /
           // rememberAggregateMeshStatus are bound into HighFamilyContext, so callers
           // reach these via `self.` for correct instance dispatch.
-          hydrateCachedAggregateMeshStatusFromInline(snapshot, mesh, options) {
-            return hydrateCachedAggregateMeshStatusFromInline(this, snapshot, mesh, options);
-          }
           getCachedAggregateMeshStatus(meshId, mesh, options) {
             return getCachedAggregateMeshStatus(this, meshId, mesh, options);
           }
@@ -160236,7 +159787,7 @@ ${e?.stderr || ""}`;
               LOG.info("Mesh", `[NodeMembershipMerge] mesh=${meshId} droppedNodeId=${incomingId} reason=tombstoned_removal source=updateInlineMeshNode`);
               return;
             }
-            const idx = mesh.nodes.findIndex((entry) => meshNodeIdMatches7(entry, incomingId));
+            const idx = mesh.nodes.findIndex((entry) => meshNodeIdMatches6(entry, incomingId));
             if (idx >= 0) mesh.nodes[idx] = node;
             else mesh.nodes.push(node);
             mesh.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
@@ -160246,7 +159797,7 @@ ${e?.stderr || ""}`;
           }
           removeInlineMeshNode(meshId, mesh, nodeId) {
             if (!mesh || !Array.isArray(mesh.nodes)) return false;
-            const idx = mesh.nodes.findIndex((entry) => meshNodeIdMatches7(entry, nodeId));
+            const idx = mesh.nodes.findIndex((entry) => meshNodeIdMatches6(entry, nodeId));
             if (idx === -1) return false;
             const canonicalNodeId = readInlineMeshNodeId(mesh.nodes[idx]) || nodeId;
             mesh.nodes.splice(idx, 1);
@@ -160288,7 +159839,7 @@ ${e?.stderr || ""}`;
             });
             const stamp2 = (mesh) => {
               if (!mesh || !Array.isArray(mesh.nodes)) return false;
-              const node = mesh.nodes.find((entry) => meshNodeIdMatches7(entry, nodeId));
+              const node = mesh.nodes.find((entry) => meshNodeIdMatches6(entry, nodeId));
               if (!node) return false;
               const prev = node.worktreeBootstrap && typeof node.worktreeBootstrap === "object" ? node.worktreeBootstrap : {};
               if (prev.status === status) return false;
@@ -160302,7 +159853,7 @@ ${e?.stderr || ""}`;
                 cached5.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
                 this.inlineMeshCache.set(meshId, cached5);
                 changed = true;
-              } else if (!cached5 || !(Array.isArray(cached5.nodes) && cached5.nodes.some((entry) => meshNodeIdMatches7(entry, nodeId)))) {
+              } else if (!cached5 || !(Array.isArray(cached5.nodes) && cached5.nodes.some((entry) => meshNodeIdMatches6(entry, nodeId)))) {
                 const shell = cached5 && typeof cached5 === "object" ? cached5 : { id: meshId, nodes: [], updatedAt: (/* @__PURE__ */ new Date()).toISOString() };
                 if (!Array.isArray(shell.nodes)) shell.nodes = [];
                 const hydratedNode = {
@@ -160326,7 +159877,7 @@ ${e?.stderr || ""}`;
             void Promise.resolve().then(() => (init_mesh_config(), mesh_config_exports)).then(({ getMesh: getMesh2, updateNode: updateNode2 }) => {
               const local = getMesh2(meshId);
               if (local && stamp2(local)) {
-                const node = local.nodes.find((entry) => meshNodeIdMatches7(entry, nodeId));
+                const node = local.nodes.find((entry) => meshNodeIdMatches6(entry, nodeId));
                 if (node) updateNode2(meshId, node.id, { worktreeBootstrap: node.worktreeBootstrap });
                 this.invalidateAggregateMeshStatus(meshId);
               }
@@ -160380,7 +159931,7 @@ ${e?.stderr || ""}`;
               const cached5 = this.getCachedInlineMesh(meshId);
               const shell = cached5 && typeof cached5 === "object" ? cached5 : { id: meshId, nodes: [], updatedAt: (/* @__PURE__ */ new Date()).toISOString() };
               if (!Array.isArray(shell.nodes)) shell.nodes = [];
-              const existing = shell.nodes.find((entry) => meshNodeIdMatches7(entry, nodeId));
+              const existing = shell.nodes.find((entry) => meshNodeIdMatches6(entry, nodeId));
               const merged = { ...existing && typeof existing === "object" ? existing : {}, ...node };
               const existingBootstrapStatus = readStringValue(existing?.worktreeBootstrap?.status);
               if (existingBootstrapStatus === "complete" || existingBootstrapStatus === "failed") {
@@ -161406,7 +160957,6 @@ ${e?.stderr || ""}`;
             }
             try {
               const {
-                loadRepoMeshJsonConfig: loadRepoMeshJsonConfig22,
                 normalizeRepoMeshDeclarativeConfig: normalizeRepoMeshDeclarativeConfig2,
                 MESH_JSON_CONFIG_LOCATIONS: MESH_JSON_CONFIG_LOCATIONS2
               } = await Promise.resolve().then(() => (init_mesh_json_config(), mesh_json_config_exports));
@@ -161417,8 +160967,8 @@ ${e?.stderr || ""}`;
               let baseDoc = { version: 1 };
               let existingPath = join89(workspace, relativePath);
               let existedAsYaml = false;
-              for (const relative9 of MESH_JSON_CONFIG_LOCATIONS2) {
-                const candidate = join89(workspace, relative9);
+              for (const relative8 of MESH_JSON_CONFIG_LOCATIONS2) {
+                const candidate = join89(workspace, relative8);
                 if (!existsSync89(candidate)) continue;
                 try {
                   const text = readFileSync72(candidate, "utf-8");
@@ -161429,7 +160979,7 @@ ${e?.stderr || ""}`;
                     existedAsYaml = !/\.json$/i.test(candidate);
                   }
                 } catch (e) {
-                  return { success: false, error: `existing ${relative9} is unparseable, refusing to overwrite: ${e?.message || e}` };
+                  return { success: false, error: `existing ${relative8} is unparseable, refusing to overwrite: ${e?.message || e}` };
                 }
                 break;
               }
@@ -161756,7 +161306,7 @@ ${e?.stderr || ""}`;
               const meshRecord2 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
               const mesh = meshRecord2?.mesh;
               if (!mesh) return { success: false, error: "Mesh not found" };
-              const inlineNode = Array.isArray(mesh.nodes) ? mesh.nodes.find((n) => meshNodeIdMatches7(n, nodeId)) : void 0;
+              const inlineNode = Array.isArray(mesh.nodes) ? mesh.nodes.find((n) => meshNodeIdMatches6(n, nodeId)) : void 0;
               if (!inlineNode) return { success: false, error: "Mesh node not found" };
               inlineNode.policy = {
                 ...inlineNode.policy && typeof inlineNode.policy === "object" && !Array.isArray(inlineNode.policy) ? inlineNode.policy : {},
@@ -161789,7 +161339,7 @@ ${e?.stderr || ""}`;
               const meshRecord2 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
               const mesh = meshRecord2?.mesh;
               if (!mesh) return { success: false, error: "Mesh not found" };
-              const node = mesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId));
+              const node = mesh?.nodes?.find((n) => meshNodeIdMatches6(n, nodeId));
               if (!node) return { success: false, error: `Node '${nodeId}' not found in mesh` };
               const mode = ctx.normalizeMeshSessionCleanupMode(args?.mode ?? mesh?.policy?.sessionCleanupOnNodeRemove);
               const sessionIds = Array.isArray(args?.sessionIds) ? args.sessionIds.map((id22) => typeof id22 === "string" ? id22.trim() : "").filter(Boolean) : void 0;
@@ -161821,7 +161371,7 @@ ${e?.stderr || ""}`;
             try {
               const meshRecord2 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
               const mesh = meshRecord2?.mesh;
-              const node = mesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId));
+              const node = mesh?.nodes?.find((n) => meshNodeIdMatches6(n, nodeId));
               if (node && !readMeshDirectDispatchFlag(args) && node.isLocalWorktree !== true && args?.force !== true) {
                 const nodeDaemonId = typeof node.daemonId === "string" ? node.daemonId.trim() : "";
                 const nodeMachineId = readMeshNodeMachineId(node) || "";
@@ -161915,7 +161465,7 @@ ${e?.stderr || ""}`;
                 try {
                   const { getMesh: getMesh2, removeNode: removeNode2 } = await Promise.resolve().then(() => (init_mesh_config(), mesh_config_exports));
                   const fileMesh = getMesh2(meshId);
-                  const fileNode = fileMesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId));
+                  const fileNode = fileMesh?.nodes?.find((n) => meshNodeIdMatches6(n, nodeId));
                   if (fileNode?.id) {
                     const fileRemoved = removeNode2(meshId, fileNode.id);
                     if (fileRemoved) {
@@ -162040,7 +161590,7 @@ ${e?.stderr || ""}`;
               const meshRecord2 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
               const mesh = meshRecord2?.mesh;
               if (!mesh) return { success: false, error: "Mesh not found" };
-              const sourceNode = mesh.nodes?.find((n) => meshNodeIdMatches7(n, sourceNodeId));
+              const sourceNode = mesh.nodes?.find((n) => meshNodeIdMatches6(n, sourceNodeId));
               if (!sourceNode) return { success: false, error: `Source node '${sourceNodeId}' not found in mesh` };
               const sourceDaemonId = typeof sourceNode.daemonId === "string" ? sourceNode.daemonId.trim() : void 0;
               if (sourceDaemonId && !daemonIdsEquivalent4(sourceDaemonId, ctx.deps.statusInstanceId) && ctx.deps.dispatchMeshCommand && !readMeshDirectDispatchFlag(args)) {
@@ -162218,7 +161768,7 @@ ${e?.stderr || ""}`;
               const setupPromise = finishWorktreeSetup();
               const setupResult = await Promise.race([
                 setupPromise.then((value) => ({ completed: true, value })),
-                new Promise((resolve39) => setTimeout(() => resolve39({ completed: false }), setupWaitMs))
+                new Promise((resolve38) => setTimeout(() => resolve38({ completed: false }), setupWaitMs))
               ]);
               const emitBootstrapEvent = (eventStatus2, bootstrapState2, startedAtMs, extraPayload) => {
                 try {
@@ -162332,7 +161882,7 @@ ${e?.stderr || ""}`;
               const meshRecord2 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
               const mesh = meshRecord2?.mesh;
               if (!mesh) return { success: false, error: "Mesh not found" };
-              const node = mesh.nodes?.find((n) => meshNodeIdMatches7(n, nodeId));
+              const node = mesh.nodes?.find((n) => meshNodeIdMatches6(n, nodeId));
               if (!node) return { success: false, error: `Node '${nodeId}' not found in mesh` };
               if (!node.isLocalWorktree) return { success: false, error: "Node is not a local worktree node" };
               const nodeDaemonId = typeof node.daemonId === "string" ? node.daemonId.trim() : void 0;
@@ -163512,7 +163062,7 @@ ${e?.stderr || ""}`;
       CHAT_MESSAGE_VISIBILITIES: () => CHAT_MESSAGE_VISIBILITIES,
       CHAT_TOMBSTONE_KIND: () => CHAT_TOMBSTONE_KIND,
       COMMAND_PREFIX_DEFAULTS: () => COMMAND_PREFIX_DEFAULTS,
-      COMPACT_STATUS_GOAL_PREVIEW_MAX: () => COMPACT_STATUS_GOAL_PREVIEW_MAX2,
+      COMPACT_STATUS_GOAL_PREVIEW_MAX: () => COMPACT_STATUS_GOAL_PREVIEW_MAX,
       CONFIG_SETTINGS_TOPIC: () => CONFIG_SETTINGS_TOPIC,
       CTRL_C: () => CTRL_C,
       CUSTOM_PROVIDERS_DOCS_URL: () => CUSTOM_PROVIDERS_DOCS_URL,
@@ -163521,6 +163071,7 @@ ${e?.stderr || ""}`;
       CommandRegistry: () => CommandRegistry,
       DAEMON_CAPTURE_LOG_NAME: () => DAEMON_CAPTURE_LOG_NAME,
       DAEMON_WS_PATH: () => DAEMON_WS_PATH,
+      DASHBOARD_WIRE_VERSION: () => DASHBOARD_WIRE_VERSION,
       DEFAULT_CDP_DISCOVERY_INTERVAL_MS: () => DEFAULT_CDP_DISCOVERY_INTERVAL_MS,
       DEFAULT_CDP_SCAN_INTERVAL_MS: () => DEFAULT_CDP_SCAN_INTERVAL_MS,
       DEFAULT_DAEMON_BOOT_STAGES: () => DEFAULT_DAEMON_BOOT_STAGES,
@@ -163599,12 +163150,10 @@ ${e?.stderr || ""}`;
       MESH_DIRECT_REASONS: () => MESH_DIRECT_REASONS,
       MESH_EVENT_ENTRY_KIND: () => MESH_EVENT_ENTRY_KIND,
       MESH_GATE_DEFAULT_LEASE_SECONDS: () => MESH_GATE_DEFAULT_LEASE_SECONDS,
-      MESH_GATE_NAMED_OUTCOMES: () => MESH_GATE_NAMED_OUTCOMES,
       MESH_GATE_RELEASE_PATCH_KEYS: () => MESH_GATE_RELEASE_PATCH_KEYS,
       MESH_INDEX_CONSUMER: () => MESH_INDEX_CONSUMER,
       MESH_JSON_CONFIG_LOCATIONS: () => MESH_JSON_CONFIG_LOCATIONS,
       MESH_JSON_CONFIG_SCHEMA: () => MESH_JSON_CONFIG_SCHEMA,
-      MESH_JSON_PROVIDER_DEFAULTS_EXAMPLE: () => MESH_JSON_PROVIDER_DEFAULTS_EXAMPLE,
       MESH_MAX_PARALLEL_TASKS_MAX: () => MESH_MAX_PARALLEL_TASKS_MAX,
       MESH_MAX_PARALLEL_TASKS_MIN: () => MESH_MAX_PARALLEL_TASKS_MIN,
       MESH_MISSION_LIST_HISTORY_ID_LIMIT: () => MESH_MISSION_LIST_HISTORY_ID_LIMIT,
@@ -163694,8 +163243,6 @@ ${e?.stderr || ""}`;
       TurnSnapshotTracker: () => TurnSnapshotTracker,
       TurnStore: () => TurnStore,
       USAGE_MAX_AGE_MS: () => USAGE_MAX_AGE_MS,
-      V1_ALL_PRIMITIVES: () => V1_ALL_PRIMITIVES,
-      V1_CONTRACT_VERSION: () => V1_CONTRACT_VERSION,
       V1_PRIMITIVE_CATALOG: () => V1_PRIMITIVE_CATALOG,
       V2_RETIRED_TABLES: () => V2_RETIRED_TABLES,
       V3_RETIRED_TABLE: () => V3_RETIRED_TABLE,
@@ -163707,7 +163254,6 @@ ${e?.stderr || ""}`;
       WorkspaceSagaPermanentError: () => WorkspaceSagaPermanentError,
       __clearLocalRecordsForTests: () => __clearLocalRecordsForTests,
       __resetMeshPublisherForTests: () => __resetMeshPublisherForTests,
-      __resetTranscriptParityForTests: () => __resetTranscriptParityForTests,
       __writeTaskStatusForTests: () => __writeTaskStatusForTests,
       abandonMeshGraphGate: () => abandonMeshGraphGate,
       activateKnownMeshTopics: () => activateKnownMeshTopics,
@@ -163719,9 +163265,9 @@ ${e?.stderr || ""}`;
       appendRecentActivity: () => appendRecentActivity,
       applyBoundedRetention: () => applyBoundedRetention,
       applyDaemonEnvOverrides: () => applyDaemonEnvOverrides,
+      applyInlineMeshBranchConvergence: () => applyInlineMeshBranchConvergence,
       armBeacon: () => armBeacon,
       armMeshTurnConsumer: () => armMeshTurnConsumer,
-      assertNeverBusEvent: () => assertNeverBusEvent,
       assertNoDependencyCycle: () => assertNoDependencyCycle,
       assertNoPlaintextHintTopics: () => assertNoPlaintextHintTopics,
       baseTopicDefinitions: () => baseTopicDefinitions,
@@ -163762,7 +163308,6 @@ ${e?.stderr || ""}`;
       buildNodeRoutePreview: () => buildNodeRoutePreview,
       buildOrphanedPinNotice: () => buildOrphanedPinNotice2,
       buildP2pRelayFailurePayload: () => buildP2pRelayFailurePayload3,
-      buildParkedTaskNotice: () => buildParkedTaskNotice,
       buildPinnedGlobalInstallCommand: () => buildPinnedGlobalInstallCommand,
       buildRestoredLaunchRecord: () => buildRestoredLaunchRecord,
       buildRuntimeSystemChatMessage: () => buildRuntimeSystemChatMessage,
@@ -163812,7 +163357,6 @@ ${e?.stderr || ""}`;
       configSettingsPolicy: () => configSettingsPolicy,
       configureDebugTraceStore: () => configureDebugTraceStore,
       configureMeshPublisher: () => configureMeshPublisher,
-      connectCdpManager: () => connectCdpManager,
       consoleSymbols: () => consoleSymbols,
       contentTopicsFor: () => contentTopicsFor,
       coordinatorGateAbandonedReason: () => coordinatorGateAbandonedReason,
@@ -163915,7 +163459,6 @@ ${e?.stderr || ""}`;
       formatTurnLedgerMigrationV2Line: () => formatTurnLedgerMigrationV2Line,
       formatTurnLedgerMigrationV3Line: () => formatTurnLedgerMigrationV3Line,
       forwardAgentStreamsToIdeInstance: () => forwardAgentStreamsToIdeInstance,
-      getAIExtensions: () => getAIExtensions,
       getActiveDirectDispatches: () => getActiveDirectDispatches,
       getActiveMeshMissionSummaries: () => getActiveMeshMissionSummaries3,
       getActiveTurnLedger: () => getActiveTurnLedger,
@@ -163971,7 +163514,6 @@ ${e?.stderr || ""}`;
       getWorktreeBootstrapQueueDepth: () => getWorktreeBootstrapQueueDepth,
       globToRegExp: () => globToRegExp,
       handleGitCommand: () => handleGitCommand,
-      hasCdpManager: () => hasCdpManager,
       hasDispatchAfterTerminal: () => hasDispatchAfterTerminal,
       hasPendingDependents: () => hasPendingDependents,
       hasTrailingToolActivityAfterFinalAssistant: () => hasTrailingToolActivityAfterFinalAssistant3,
@@ -163989,7 +163531,6 @@ ${e?.stderr || ""}`;
       isActivityChatMessage: () => isActivityChatMessage,
       isAdvancedGraphTask: () => isAdvancedGraphTask,
       isAlwaysOnTraceCategory: () => isAlwaysOnTraceCategory,
-      isAttemptTerminal: () => isAttemptTerminal,
       isBuiltinChatMessageKind: () => isBuiltinChatMessageKind,
       isCdpConnected: () => isCdpConnected,
       isCommandSource: () => isCommandSource,
@@ -164004,7 +163545,6 @@ ${e?.stderr || ""}`;
       isInternalChatMessage: () => isInternalChatMessage,
       isManagedStatusWaiting: () => isManagedStatusWaiting,
       isManagedStatusWorking: () => isManagedStatusWorking,
-      isMeshHostOwner: () => isMeshHostOwner,
       isMeshNodeFreshEnoughToLaunch: () => isMeshNodeFreshEnoughToLaunch2,
       isMeshNodeHealthLaunchable: () => isMeshNodeHealthLaunchable3,
       isMeshPublisherArmed: () => isMeshPublisherArmed,
@@ -164025,7 +163565,6 @@ ${e?.stderr || ""}`;
       isSyntheticTestCoordinatorSession: () => isSyntheticTestCoordinatorSession,
       isSyntheticTestMeshId: () => isSyntheticTestMeshId,
       isTaskReadonly: () => isTaskReadonly3,
-      isTurnCompletionEdge: () => isTurnCompletionEdge,
       isUserFacingChatMessage: () => isUserFacingChatMessage,
       isWeakCompletionEvidence: () => isWeakCompletionEvidence2,
       isWorkerMcpEnabled: () => isWorkerMcpEnabled,
@@ -164066,7 +163605,7 @@ ${e?.stderr || ""}`;
       mergeAndNormalizePolicy: () => mergeAndNormalizePolicy,
       meshEventsPolicy: () => meshEventsPolicy,
       meshEventsTopic: () => meshEventsTopic,
-      meshNodeIdMatches: () => meshNodeIdMatches7,
+      meshNodeIdMatches: () => meshNodeIdMatches6,
       meshNoticeRuntime: () => meshNoticeRuntime,
       meshPublisherCounters: () => meshPublisherCounters,
       meshPublisherInflight: () => meshPublisherInflight,
@@ -164211,7 +163750,6 @@ ${e?.stderr || ""}`;
       requeueTask: () => requeueTask,
       requireMeshHostQueueOwner: () => requireMeshHostQueueOwner,
       resetConfig: () => resetConfig,
-      resetConsoleSymbolsCache: () => resetConsoleSymbolsCache,
       resetDebugRuntimeConfig: () => resetDebugRuntimeConfig,
       resetProcessInstanceContextForTests: () => resetProcessInstanceContextForTests,
       resetState: () => resetState,
@@ -164328,7 +163866,6 @@ ${e?.stderr || ""}`;
       toJsonValue: () => toJsonValue,
       totalTokens: () => totalTokens,
       transcriptChatRuntimeCounters: () => transcriptChatRuntimeCounters,
-      transcriptParityCounters: () => transcriptParityCounters,
       transcriptTopicSessionSegment: () => transcriptTopicSessionSegment,
       transcriptTopicsAvailableFrame: () => transcriptTopicsAvailableFrame,
       triggerMeshQueue: () => triggerMeshQueue,
@@ -164592,6 +164129,7 @@ ${e?.stderr || ""}`;
     init_dist();
     init_dist();
     init_dist();
+    init_dist();
     init_coordinator_prompt();
     init_mesh_missions();
     init_mesh_task_stats();
@@ -164840,6 +164378,7 @@ ${e?.stderr || ""}`;
     init_mesh_graph_provenance();
     init_mesh_orchestration_decision();
     init_mesh_node_identity();
+    init_mesh_branch_convergence();
     init_mesh_auto_fast_forward();
     init_mesh_active_work();
     init_mesh_idle_reminder();
@@ -164990,7 +164529,6 @@ ${e?.stderr || ""}`;
     }
     function classifyP2pRelayFailure4(error48, _context = {}) {
       const message = messageFromError(error48);
-      const lower = message.toLowerCase();
       const structured = readStructuredFailure(error48);
       if (structured.code && structured.code !== "mesh_logic_or_provider_failure" && structured.transport === "p2p") {
         return {
@@ -165148,7 +164686,6 @@ ${e?.stderr || ""}`;
         const depth = args?.depth || 10;
         const maxLength = args?.maxLength || 2e5;
         const format = args?.format || "html";
-        const attrs = args?.attrs !== false;
         const sessionId = args?.sessionId;
         try {
           let expression;
@@ -165564,7 +165101,7 @@ ${e?.stderr || ""}`;
       startPeriodicScan(intervalMs = DEFAULT_CDP_SCAN_INTERVAL_MS) {
         if (this.scanTimer) return;
         this.scanTimer = setInterval(async () => {
-          const { providerLoader, cdpManagers } = this.config;
+          const { providerLoader } = this.config;
           const portMap = providerLoader.getCdpPortMap();
           for (const [ide, ports] of Object.entries(portMap)) {
             const primaryPort = ports[0];
@@ -166338,7 +165875,7 @@ ${e?.stderr || ""}`;
         const channel = this._ctx.providerLoader?.channel ?? "stable";
         const url2 = `${REGISTRY}/providers?sort=${encodeURIComponent(sort)}&limit=${limit}&channel=${encodeURIComponent(channel)}`;
         try {
-          const data = await new Promise((resolve39, reject) => {
+          const data = await new Promise((resolve38, reject) => {
             const req = https.get(url2, { headers: { "User-Agent": "adhdev-daemon", "Accept": "application/json" }, timeout: 1e4 }, (res) => {
               if (res.statusCode !== 200) {
                 reject(new Error(`HTTP ${res.statusCode}`));
@@ -166348,7 +165885,7 @@ ${e?.stderr || ""}`;
               res.on("data", (c) => chunks.push(c));
               res.on("end", () => {
                 try {
-                  resolve39(JSON.parse(Buffer.concat(chunks).toString("utf-8")));
+                  resolve38(JSON.parse(Buffer.concat(chunks).toString("utf-8")));
                 } catch (e) {
                   reject(e);
                 }
@@ -166372,7 +165909,7 @@ ${e?.stderr || ""}`;
         const cfg = loadConfig();
         const REGISTRY = resolveRegistryBaseUrl(cfg.registryUrl, process.env, cfg.serverUrl);
         function fetchJson(url2) {
-          return new Promise((resolve39, reject) => {
+          return new Promise((resolve38, reject) => {
             const req = https.get(url2, { headers: { "User-Agent": "adhdev-daemon", "Accept": "application/json" }, timeout: 1e4 }, (res) => {
               if (res.statusCode !== 200) {
                 reject(new Error(`HTTP ${res.statusCode}`));
@@ -166382,7 +165919,7 @@ ${e?.stderr || ""}`;
               res.on("data", (c) => chunks.push(c));
               res.on("end", () => {
                 try {
-                  resolve39(JSON.parse(Buffer.concat(chunks).toString("utf-8")));
+                  resolve38(JSON.parse(Buffer.concat(chunks).toString("utf-8")));
                 } catch (e) {
                   reject(e);
                 }
@@ -166727,7 +166264,7 @@ ${e?.stderr || ""}`;
         try {
           const http4 = await import("http");
           const postData = JSON.stringify(body);
-          const result = await new Promise((resolve39, reject) => {
+          const result = await new Promise((resolve38, reject) => {
             const req = http4.request({
               hostname: "127.0.0.1",
               port: 19280,
@@ -166739,9 +166276,9 @@ ${e?.stderr || ""}`;
               res.on("data", (chunk) => data += chunk);
               res.on("end", () => {
                 try {
-                  resolve39(JSON.parse(data));
+                  resolve38(JSON.parse(data));
                 } catch {
-                  resolve39({ raw: data });
+                  resolve38({ raw: data });
                 }
               });
             });
@@ -166759,15 +166296,15 @@ ${e?.stderr || ""}`;
         if (!providerType) return { success: false, error: "providerType required" };
         try {
           const http4 = await import("http");
-          const result = await new Promise((resolve39, reject) => {
+          const result = await new Promise((resolve38, reject) => {
             http4.get(`http://127.0.0.1:19280/api/providers/${providerType}/${endpoint}`, (res) => {
               let data = "";
               res.on("data", (chunk) => data += chunk);
               res.on("end", () => {
                 try {
-                  resolve39(JSON.parse(data));
+                  resolve38(JSON.parse(data));
                 } catch {
-                  resolve39({ raw: data });
+                  resolve38({ raw: data });
                 }
               });
             }).on("error", reject);
@@ -166781,7 +166318,7 @@ ${e?.stderr || ""}`;
         try {
           const http4 = await import("http");
           const postData = JSON.stringify(args || {});
-          const result = await new Promise((resolve39, reject) => {
+          const result = await new Promise((resolve38, reject) => {
             const req = http4.request({
               hostname: "127.0.0.1",
               port: 19280,
@@ -166793,9 +166330,9 @@ ${e?.stderr || ""}`;
               res.on("data", (chunk) => data += chunk);
               res.on("end", () => {
                 try {
-                  resolve39(JSON.parse(data));
+                  resolve38(JSON.parse(data));
                 } catch {
-                  resolve39({ raw: data });
+                  resolve38({ raw: data });
                 }
               });
             });
@@ -166873,11 +166410,6 @@ ${e?.stderr || ""}`;
     init_snapshot3();
     init_runtime_defaults();
     var DEFAULT_GIT_REFRESH_CONCURRENCY = 2;
-    var METADATA_DIGEST_OPTIONS = {
-      ignoreTopLevel: ["daemonId"],
-      ignoreStatus: ["timestamp"],
-      volatileSessionFields: ["lastUpdated"]
-    };
     function signatureOf(value) {
       try {
         return JSON.stringify(value) ?? "";
@@ -166959,6 +166491,18 @@ ${e?.stderr || ""}`;
        */
       subscribe(connectionId, request) {
         if (!request.key) return false;
+        if (request.wireVersion !== DASHBOARD_WIRE_VERSION) {
+          this.sink.send(connectionId, request.topic, {
+            topic: request.topic,
+            key: request.key,
+            mode: "protocol_mismatch",
+            daemonWireVersion: DASHBOARD_WIRE_VERSION,
+            pageWireVersion: typeof request.wireVersion === "number" ? request.wireVersion : null,
+            seq: 0,
+            timestamp: this.now()
+          });
+          return false;
+        }
         if (request.topic === "workspace.git") {
           const rawParams = request.params;
           const workspace = typeof rawParams?.workspace === "string" ? rawParams.workspace.trim() : "";
@@ -167007,8 +166551,7 @@ ${e?.stderr || ""}`;
           lastSentAt: 0,
           lastFlushedAt: 0,
           lastDeliveredSignature: "",
-          metadataBaseline: null,
-          meshBaseline: null
+          keyedBaseline: null
         });
         return true;
       }
@@ -167339,39 +166882,42 @@ ${e?.stderr || ""}`;
             bodies.set(includeSessions, full);
           }
           const body = scope ? scope.project(full) : full;
-          const built = {
-            body,
-            digest: digestKeyedStatus(body, METADATA_DIGEST_OPTIONS)
-          };
+          const built = { body, digest: digestKeyedDoc(body, DAEMON_METADATA_DOC_SPEC) };
           cohorts.set(cohortKey, built);
           return built;
         };
         for (const entry of entries) {
-          const now = this.now();
-          entry.lastFlushedAt = now;
           const scope = this.opts.metadataScope?.(entry.connectionId) ?? null;
           const { body, digest } = cohortFor(entry.params?.includeSessions === true, scope);
-          let update;
-          if (!entry.metadataBaseline) {
-            update = { topic: "daemon.metadata", key: entry.key, mode: "snapshot", ...body, seq: entry.seq + 1, timestamp: now };
-          } else {
-            const delta = diffKeyedStatus(entry.metadataBaseline, digest);
-            if (!delta) continue;
-            update = {
-              topic: "daemon.metadata",
-              key: entry.key,
-              mode: "delta",
-              daemonId: body.daemonId,
-              ...delta,
-              seq: entry.seq + 1,
-              timestamp: now
-            };
-          }
-          entry.seq += 1;
-          entry.lastSentAt = now;
-          const delivered = this.sink.send(entry.connectionId, "daemon.metadata", update);
-          entry.metadataBaseline = delivered === false ? null : digest;
+          this.deliverKeyed(entry, "daemon.metadata", digest, DAEMON_METADATA_DOC_SPEC, {
+            snapshot: (seq2, timestamp2) => ({ topic: "daemon.metadata", key: entry.key, mode: "snapshot", wireVersion: DASHBOARD_WIRE_VERSION, ...body, seq: seq2, timestamp: timestamp2 }),
+            delta: (delta, seq2, timestamp2) => ({ topic: "daemon.metadata", key: entry.key, mode: "delta", daemonId: body.daemonId, delta, seq: seq2, timestamp: timestamp2 })
+          });
         }
+      }
+      /**
+       * THE keyed delivery step for both keyed lanes (daemon.metadata /
+       * mesh.status — one engine, mesh-shared keyed-doc-delta.ts): a subscription
+       * with no delivered baseline gets a snapshot, a baselined one the delta
+       * against it — or nothing when nothing it can observe changed (no seq bump).
+       * A failed send clears the baseline, so a gap is never papered over by a
+       * later delta.
+       */
+      deliverKeyed(entry, topic, digest, spec, frame2) {
+        const now = this.now();
+        entry.lastFlushedAt = now;
+        let update;
+        if (!entry.keyedBaseline) {
+          update = frame2.snapshot(entry.seq + 1, now);
+        } else {
+          const delta = diffKeyedDoc(entry.keyedBaseline, digest, spec);
+          if (!delta) return;
+          update = frame2.delta(delta, entry.seq + 1, now);
+        }
+        entry.seq += 1;
+        entry.lastSentAt = now;
+        const delivered = this.sink.send(entry.connectionId, topic, update);
+        entry.keyedBaseline = delivered === false ? null : digest;
       }
       /**
        * mesh.status: flush every subscriber of `meshId` (or of every mesh). The
@@ -167428,20 +166974,10 @@ ${e?.stderr || ""}`;
         return run2;
       }
       deliverMeshStatus(entry, meshId, status, digest) {
-        const now = this.now();
-        entry.lastFlushedAt = now;
-        let update;
-        if (!entry.meshBaseline) {
-          update = { topic: "mesh.status", key: entry.key, mode: "snapshot", meshId, status, seq: entry.seq + 1, timestamp: now };
-        } else {
-          const delta = diffKeyedDoc(entry.meshBaseline, digest, MESH_STATUS_DOC_SPEC);
-          if (!delta) return;
-          update = { topic: "mesh.status", key: entry.key, mode: "delta", meshId, delta, seq: entry.seq + 1, timestamp: now };
-        }
-        entry.seq += 1;
-        entry.lastSentAt = now;
-        const delivered = this.sink.send(entry.connectionId, "mesh.status", update);
-        entry.meshBaseline = delivered === false ? null : digest;
+        this.deliverKeyed(entry, "mesh.status", digest, MESH_STATUS_DOC_SPEC, {
+          snapshot: (seq2, timestamp2) => ({ topic: "mesh.status", key: entry.key, mode: "snapshot", wireVersion: DASHBOARD_WIRE_VERSION, meshId, status, seq: seq2, timestamp: timestamp2 }),
+          delta: (delta, seq2, timestamp2) => ({ topic: "mesh.status", key: entry.key, mode: "delta", meshId, delta, seq: seq2, timestamp: timestamp2 })
+        });
       }
       /**
        * workspace.git engine — runs git only while a subscription watches the
@@ -167561,15 +167097,13 @@ ${e?.stderr || ""}`;
         fgenAgeBucket: count2(seqscribe.fgenAgeBucket),
         quarantined: seqscribe.quarantined === true,
         authority: seqscribe.authority === true,
-        // §8 unit 2. transcriptParityPersistentMismatchBucket stays LOCAL-ONLY.
+        // §8 unit 2.
         transcriptPublish: seqscribe.transcriptPublish === true,
         transcriptPublishedBucket: count2(seqscribe.transcriptPublishedBucket),
         transcriptPublishFailedBucket: count2(seqscribe.transcriptPublishFailedBucket),
         transcriptDedupedBucket: count2(seqscribe.transcriptDedupedBucket),
         transcriptOversizedBucket: count2(seqscribe.transcriptOversizedBucket),
-        transcriptDroppedBucket: count2(seqscribe.transcriptDroppedBucket),
-        transcriptParityRan: seqscribe.transcriptParityRan === true,
-        transcriptParityMismatchBucket: count2(seqscribe.transcriptParityMismatchBucket)
+        transcriptDroppedBucket: count2(seqscribe.transcriptDroppedBucket)
       };
     }
     function buildCloudStatusReportPayload(sessions, p2p, timestamp2, seqscribe) {
@@ -167621,7 +167155,6 @@ ${e?.stderr || ""}`;
     var SERVER_DEDUP_KEEPALIVE_REPORTS = 10;
     var DaemonStatusReporter = class {
       deps;
-      log;
       lastStatusSentAt = 0;
       statusPendingThrottle = false;
       lastServerStatusHash = "";
@@ -167634,7 +167167,7 @@ ${e?.stderr || ""}`;
       statusTimer = null;
       constructor(deps, opts) {
         this.deps = deps;
-        this.log = opts?.logFn || LOG.forComponent("Status").asLogFn();
+        opts?.logFn || LOG.forComponent("Status").asLogFn();
       }
       // ─── Lifecycle ───────────────────────────────────
       startReporting() {
@@ -167892,9 +167425,6 @@ ${e?.stderr || ""}`;
       }
       return cached4;
     }
-    function resetConsoleSymbolsCache() {
-      cached4 = null;
-    }
     var SYM = {
       get ok() {
         return consoleSymbols().ok;
@@ -167941,9 +167471,6 @@ ${e?.stderr || ""}`;
         const fn = this.provider.scripts?.[name];
         if (typeof fn !== "function") return null;
         return fn(...args) || null;
-      }
-      hasScript(name) {
-        return typeof this.provider.scripts?.[name] === "function";
       }
       getStateTitle(state) {
         return typeof state.title === "string" ? state.title : "";
@@ -168058,7 +167585,7 @@ ${e?.stderr || ""}`;
         const beforeCount = this.messageCount(before);
         const beforeSignature = this.lastMessageSignature(before);
         for (let attempt = 0; attempt < 12; attempt += 1) {
-          await new Promise((resolve39) => setTimeout(resolve39, 250));
+          await new Promise((resolve38) => setTimeout(resolve38, 250));
           let state;
           try {
             state = await this.readChat(evaluate);
@@ -168080,7 +167607,7 @@ ${e?.stderr || ""}`;
         if (this.messageCount(first) > 0 || this.lastMessageSignature(first)) {
           return first;
         }
-        await new Promise((resolve39) => setTimeout(resolve39, 150));
+        await new Promise((resolve38) => setTimeout(resolve38, 150));
         const second = await this.readChat(evaluate);
         return this.messageCount(second) >= this.messageCount(first) ? second : first;
       }
@@ -168231,7 +167758,7 @@ ${e?.stderr || ""}`;
           if (typeof data.error === "string" && data.error.trim()) return false;
         }
         for (let attempt = 0; attempt < 6; attempt += 1) {
-          await new Promise((resolve39) => setTimeout(resolve39, 250));
+          await new Promise((resolve38) => setTimeout(resolve38, 250));
           const state = await this.readChat(evaluate);
           const title = this.getStateTitle(state);
           if (this.titlesMatch(title, sessionId)) return true;
@@ -169221,7 +168748,7 @@ ${e?.stderr || ""}`;
       */
       disposeAll() {
         this.stopTicking();
-        for (const [id22, instance] of this.instances) {
+        for (const instance of this.instances.values()) {
           try {
             instance.dispose();
           } catch {
@@ -169246,9 +168773,6 @@ ${e?.stderr || ""}`;
       "mesh_state",
       "command_executed"
     ];
-    function assertNeverBusEvent(event) {
-      throw new Error(`Unhandled bus event: ${JSON.stringify(event)}`);
-    }
     var DEFAULT_MAX_PENDING = 256;
     var DEFAULT_ERROR_LOG_INTERVAL_MS = 6e4;
     function zeroByKind() {
@@ -169802,13 +169326,13 @@ ${e?.stderr || ""}`;
       }
     };
     async function runCommand(cmd, timeout = 1e4) {
-      return new Promise((resolve39) => {
+      return new Promise((resolve38) => {
         hiddenExec(cmd, {
           encoding: "utf-8",
           timeout
         }, (error48, stdout) => {
-          if (error48) return resolve39(null);
-          resolve39(stdout.trim());
+          if (error48) return resolve38(null);
+          resolve38(stdout.trim());
         });
       });
     }
@@ -170568,7 +170092,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     }
     async function handleScriptsRun(ctx, req, res) {
       const body = await ctx.readBody(req);
-      const { type: type2, script: scriptName, params } = body;
+      const { type: type2, script: scriptName } = body;
       if (!type2 || !scriptName) {
         ctx.json(res, 400, { error: "type and script required" });
         return;
@@ -171640,7 +171164,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       return { target, instance, adapter };
     }
     function sleep22(ms3) {
-      return new Promise((resolve39) => setTimeout(resolve39, ms3));
+      return new Promise((resolve38) => setTimeout(resolve38, ms3));
     }
     async function waitForCliReady(ctx, type2, instanceId, timeoutMs) {
       const startedAt = Date.now();
@@ -173902,15 +173426,15 @@ data: ${JSON.stringify(msg.data)}
             this.json(res, 500, { error: e.message });
           }
         });
-        return new Promise((resolve39, reject) => {
+        return new Promise((resolve38, reject) => {
           this.server.listen(port, "127.0.0.1", () => {
             this.log(`Dev server listening on http://127.0.0.1:${port}`);
-            resolve39();
+            resolve38();
           });
           this.server.on("error", (e) => {
             if (e.code === "EADDRINUSE") {
               this.log(`Port ${port} in use, skipping dev server`);
-              resolve39();
+              resolve38();
             } else {
               reject(e);
             }
@@ -173994,20 +173518,20 @@ data: ${JSON.stringify(msg.data)}
           child.stderr?.on("data", (d) => {
             stderr += d.toString().slice(0, 2e3);
           });
-          await new Promise((resolve39) => {
+          await new Promise((resolve38) => {
             const timer = setTimeout(() => {
               child.kill();
-              resolve39();
+              resolve38();
             }, 3e3);
             child.on("exit", () => {
               clearTimeout(timer);
-              resolve39();
+              resolve38();
             });
             child.stdout?.once("data", () => {
               setTimeout(() => {
                 child.kill();
                 clearTimeout(timer);
-                resolve39();
+                resolve38();
               }, 500);
             });
           });
@@ -174511,14 +174035,14 @@ data: ${JSON.stringify(msg.data)}
           child.stderr?.on("data", (d) => {
             stderr += d.toString();
           });
-          await new Promise((resolve39) => {
+          await new Promise((resolve38) => {
             const timer = setTimeout(() => {
               child.kill();
-              resolve39();
+              resolve38();
             }, timeout);
             child.on("exit", () => {
               clearTimeout(timer);
-              resolve39();
+              resolve38();
             });
           });
           const elapsed = Date.now() - start;
@@ -174549,7 +174073,6 @@ data: ${JSON.stringify(msg.data)}
           type: type2,
           name,
           category = "ide",
-          location = "user",
           cdpPorts,
           cli,
           processName,
@@ -174613,7 +174136,6 @@ data: ${JSON.stringify(msg.data)}
           const archive = new VersionArchive();
           const results = await detectAllVersions(this.providerLoader, archive);
           const installed = results.filter((r) => r.installed);
-          const notInstalled = results.filter((r) => !r.installed);
           this.json(res, 200, {
             total: results.length,
             installed: installed.length,
@@ -174656,31 +174178,6 @@ data: ${JSON.stringify(msg.data)}
         }).sort((a, b) => b.localeCompare(a, void 0, { numeric: true, sensitivity: "base" }));
         if (versions.length === 0) return null;
         return path75.join(scriptsDir, versions[0]);
-      }
-      resolveAutoImplWritableProviderDir(category, type2, requestedDir) {
-        const canonicalUserDir = path75.resolve(this.providerLoader.getUserProviderDir(category, type2));
-        const desiredDir = requestedDir ? path75.resolve(requestedDir) : canonicalUserDir;
-        const upstreamRoot = path75.resolve(this.providerLoader.getUpstreamDir());
-        if (desiredDir === upstreamRoot || desiredDir.startsWith(`${upstreamRoot}${path75.sep}`)) {
-          return { dir: null, reason: `Refusing to write into upstream provider directory: ${desiredDir}` };
-        }
-        if (path75.basename(desiredDir) !== type2) {
-          return { dir: null, reason: `Requested writable provider directory must end with '${type2}': ${desiredDir}` };
-        }
-        const sourceDir = this.findProviderDir(type2);
-        if (!sourceDir) {
-          return { dir: null, reason: `Provider source directory not found for '${type2}'` };
-        }
-        if (!fs82.existsSync(desiredDir)) {
-          fs82.mkdirSync(path75.dirname(desiredDir), { recursive: true });
-          fs82.cpSync(sourceDir, desiredDir, { recursive: true });
-          this.log(`Auto-implement writable copy created: ${desiredDir}`);
-        }
-        const providerJson = path75.join(desiredDir, "provider.json");
-        if (!fs82.existsSync(providerJson)) {
-          return { dir: null, reason: `provider.json not found in writable provider directory: ${desiredDir}` };
-        }
-        return { dir: desiredDir };
       }
       async handleAutoImplement(type2, req, res) {
         return handleAutoImplement(this, type2, req, res);
@@ -174734,14 +174231,14 @@ data: ${JSON.stringify(msg.data)}
         res.end(JSON.stringify(data, null, 2));
       }
       async readBody(req) {
-        return new Promise((resolve39) => {
+        return new Promise((resolve38) => {
           let body = "";
           req.on("data", (chunk) => body += chunk);
           req.on("end", () => {
             try {
-              resolve39(JSON.parse(body));
+              resolve38(JSON.parse(body));
             } catch {
-              resolve39({});
+              resolve38({});
             }
           });
         });
@@ -175440,7 +174937,7 @@ data: ${JSON.stringify(msg.data)}
       const deadline = Date.now() + timeoutMs;
       while (Date.now() < deadline) {
         if (await canConnect(endpoint, requiredRequestTypes)) return;
-        await new Promise((resolve39) => setTimeout(resolve39, STARTUP_POLL_MS));
+        await new Promise((resolve38) => setTimeout(resolve38, STARTUP_POLL_MS));
       }
       throw new Error(`Session host did not become ready within ${timeoutMs}ms`);
     }
@@ -175802,92 +175299,6 @@ data: ${JSON.stringify(msg.data)}
     init_hidden_spawn();
     var import_util22 = require("util");
     var import_child_process13 = require("child_process");
-    var EXTENSION_CATALOG = [
-      // AI Agent extensions
-      {
-        id: "roo-code",
-        name: "Roo Code",
-        displayName: "Roo Code (Roo Cline)",
-        marketplaceId: "rooveterinaryinc.roo-cline",
-        description: "Open-source AI coding assistant with multiple modes",
-        category: "ai-agent",
-        icon: "\u{1F998}",
-        recommended: true,
-        website: "https://roocode.com"
-      },
-      {
-        id: "github-copilot",
-        name: "GitHub Copilot",
-        displayName: "GitHub Copilot",
-        marketplaceId: "github.copilot",
-        description: "AI pair programmer by GitHub",
-        category: "ai-agent",
-        icon: "\u{1F916}",
-        recommended: true,
-        requiresApiKey: true,
-        apiKeyName: "GitHub account",
-        website: "https://github.com/features/copilot"
-      },
-      {
-        id: "copilot-chat",
-        name: "GitHub Copilot Chat",
-        displayName: "GitHub Copilot Chat",
-        marketplaceId: "github.copilot-chat",
-        description: "Chat interface for GitHub Copilot",
-        category: "ai-agent",
-        icon: "\u{1F4AC}",
-        recommended: true,
-        requiresApiKey: true,
-        apiKeyName: "GitHub account"
-      },
-      {
-        id: "cline",
-        name: "Cline",
-        displayName: "Cline",
-        marketplaceId: "saoudrizwan.claude-dev",
-        description: "Autonomous AI coding agent in your IDE",
-        category: "ai-agent",
-        icon: "\u{1F9E0}",
-        recommended: false,
-        requiresApiKey: true,
-        apiKeyName: "Anthropic/OpenAI API key"
-      },
-      {
-        id: "claude-code-vscode",
-        name: "Claude Code",
-        displayName: "Claude Code (Anthropic)",
-        marketplaceId: "anthropic.claude-code",
-        description: "Anthropic Claude Code agent in VS Code\u2013compatible editors",
-        category: "ai-agent",
-        icon: "\u{1F7E0}",
-        recommended: true,
-        requiresApiKey: true,
-        apiKeyName: "Anthropic account",
-        website: "https://www.anthropic.com/claude-code"
-      },
-      {
-        id: "continue",
-        name: "Continue",
-        displayName: "Continue",
-        marketplaceId: "continue.continue",
-        description: "Open-source AI code assistant with custom models",
-        category: "ai-agent",
-        icon: "\u25B6\uFE0F",
-        recommended: false
-      },
-      {
-        id: "aider",
-        name: "Aider",
-        displayName: "Aider",
-        marketplaceId: "aider.aider",
-        description: "AI pair programming in your terminal",
-        category: "ai-agent",
-        icon: "\u{1F527}",
-        recommended: false,
-        requiresApiKey: true,
-        apiKeyName: "OpenAI/Anthropic API key"
-      }
-    ];
     var execAsync3 = (0, import_util22.promisify)(import_child_process13.exec);
     async function isExtensionInstalled(ide, marketplaceId) {
       if (!ide.cliCommand) return false;
@@ -175931,10 +175342,10 @@ data: ${JSON.stringify(msg.data)}
             const buffer = Buffer.from(await res.arrayBuffer());
             const fs85 = await import("fs");
             fs85.writeFileSync(vsixPath, buffer);
-            return new Promise((resolve39) => {
+            return new Promise((resolve38) => {
               const cmd = `"${ide.cliCommand}" --install-extension "${vsixPath}" --force`;
               hiddenExec(cmd, { timeout: 6e4 }, (error48, _stdout, stderr) => {
-                resolve39({
+                resolve38({
                   extensionId: extension.id,
                   marketplaceId: extension.marketplaceId,
                   success: !error48,
@@ -175947,11 +175358,11 @@ data: ${JSON.stringify(msg.data)}
         } catch (e) {
         }
       }
-      return new Promise((resolve39) => {
+      return new Promise((resolve38) => {
         const cmd = `"${ide.cliCommand}" --install-extension ${extension.marketplaceId} --force`;
         hiddenExec(cmd, { timeout: 6e4 }, (error48, stdout, stderr) => {
           if (error48) {
-            resolve39({
+            resolve38({
               extensionId: extension.id,
               marketplaceId: extension.marketplaceId,
               success: false,
@@ -175959,7 +175370,7 @@ data: ${JSON.stringify(msg.data)}
               error: stderr || error48.message
             });
           } else {
-            resolve39({
+            resolve38({
               extensionId: extension.id,
               marketplaceId: extension.marketplaceId,
               success: true,
@@ -175978,9 +175389,6 @@ data: ${JSON.stringify(msg.data)}
         onProgress?.(i + 1, extensions.length, ext, result);
       }
       return results;
-    }
-    function getAIExtensions() {
-      return EXTENSION_CATALOG.filter((e) => e.category === "ai-agent");
     }
     function launchIDE(ide, workspacePath) {
       if (!ide.cliCommand) return false;
@@ -176212,7 +175620,7 @@ data: ${JSON.stringify(msg.data)}
           LOG.warn(logCategory, `response write under backpressure: command='${command}' requestId=${requestId} handlerMs=${handlerMs} payloadBytes=${body.length} bufferedBefore=${bufferedBefore}`);
         }
       }
-      await new Promise((resolve39, reject) => {
+      await new Promise((resolve38, reject) => {
         const onError = (error48) => {
           httpServer?.off("listening", onListening);
           reject(error48);
@@ -176220,7 +175628,7 @@ data: ${JSON.stringify(msg.data)}
         const onListening = () => {
           httpServer?.off("error", onError);
           listening = true;
-          resolve39();
+          resolve38();
         };
         httpServer.once("error", onError);
         httpServer.once("listening", onListening);
@@ -176247,12 +175655,12 @@ data: ${JSON.stringify(msg.data)}
             }
           }
           clients.clear();
-          await new Promise((resolve39) => {
+          await new Promise((resolve38) => {
             if (!httpServer) {
-              resolve39();
+              resolve38();
               return;
             }
-            httpServer.close(() => resolve39());
+            httpServer.close(() => resolve38());
           });
           httpServer = null;
           wss = null;
@@ -176344,10 +175752,6 @@ data: ${JSON.stringify(msg.data)}
         "adhdev:override/cli-capability-handler@1"
       ]
     });
-    var V1_ALL_PRIMITIVES = Object.freeze(
-      Object.values(V1_PRIMITIVE_CATALOG).flat()
-    );
-    var V1_CONTRACT_VERSION = "1.0.0";
     init_quota();
     var fs84 = __toESM2(require("fs"));
     var import_chalk2 = __toESM2((init_source(), __toCommonJS(source_exports)));
@@ -177520,7 +176924,7 @@ data: ${JSON.stringify(msg.data)}
     }
     function armBeacon(handle, transport, opts = {}) {
       assertNoPlaintextHintTopics(handle.topics);
-      const counters5 = emptyCounters();
+      const counters4 = emptyCounters();
       const scopeOf = opts.topicScope ?? ((vectors) => [
         .../* @__PURE__ */ new Set([
           ...defaultBeaconTopicScope(vectors),
@@ -177534,16 +176938,16 @@ data: ${JSON.stringify(msg.data)}
       const doPut = async (rawReport) => {
         const projected = projectBeaconReport(rawReport);
         if (!projected) {
-          counters5.rejected++;
+          counters4.rejected++;
           LOG.warn("Seqscribe", "beacon report failed the content projection; not sent");
           return;
         }
         lastScope = scopeOf(projected.vectors);
         try {
           await transport.put(projected);
-          counters5.put++;
+          counters4.put++;
         } catch (err) {
-          counters5.putFailed++;
+          counters4.putFailed++;
           LOG.info(
             "Seqscribe",
             `beacon put failed (advisory, ignored): ${err instanceof Error ? err.message : String(err)}`
@@ -177554,10 +176958,10 @@ data: ${JSON.stringify(msg.data)}
       const rawQuery = async (topics) => {
         try {
           const res = await transport.get(topics);
-          counters5.get++;
+          counters4.get++;
           return res;
         } catch (err) {
-          counters5.getFailed++;
+          counters4.getFailed++;
           LOG.debug(
             "Seqscribe",
             `beacon get failed (advisory, ignored): ${err instanceof Error ? err.message : String(err)}`
@@ -177582,7 +176986,7 @@ data: ${JSON.stringify(msg.data)}
         const mid = Math.ceil(topics.length / 2);
         const left = topics.slice(0, mid);
         const right = topics.slice(mid);
-        counters5.splitRetries++;
+        counters4.splitRetries++;
         const [leftRes, rightRes] = await Promise.all([
           queryWithSplitRetry(left, queriesUsed),
           queryWithSplitRetry(right, queriesUsed)
@@ -177604,14 +177008,14 @@ data: ${JSON.stringify(msg.data)}
           throw err;
         }
         if (truncated > 0) {
-          counters5.truncated += truncated;
+          counters4.truncated += truncated;
           LOG.info(
             "Seqscribe",
             `beacon get: ${truncated} peer report(s) remained truncated after split-retry (${queriesUsed.count} quer${queriesUsed.count === 1 ? "y" : "ies"})`
           );
         }
         const clean2 = reports.map((r) => projectBeaconReport(r)).filter((r) => r !== null);
-        counters5.acksNoted += noteBeaconAcks(handle.node, handle.writerId, clean2, Date.now());
+        counters4.acksNoted += noteBeaconAcks(handle.node, handle.writerId, clean2, Date.now());
         lastBoard = {
           reports: clean2,
           truncated,
@@ -177653,10 +177057,10 @@ data: ${JSON.stringify(msg.data)}
           }
           LOG.info(
             "Seqscribe",
-            `beacon stopped writer=${handle.writerId} put=${counters5.put}/${counters5.put + counters5.putFailed} get=${counters5.get}/${counters5.get + counters5.getFailed} splitRetries=${counters5.splitRetries} truncated=${counters5.truncated} rejected=${counters5.rejected}`
+            `beacon stopped writer=${handle.writerId} put=${counters4.put}/${counters4.put + counters4.putFailed} get=${counters4.get}/${counters4.get + counters4.getFailed} splitRetries=${counters4.splitRetries} truncated=${counters4.truncated} rejected=${counters4.rejected}`
           );
         },
-        counters: () => ({ ...counters5 }),
+        counters: () => ({ ...counters4 }),
         seedKnownBoard(seed) {
           if (stopped || !Array.isArray(seed?.reports)) return;
           const clean2 = seed.reports.map((report) => projectBeaconReport(report)).filter((report) => report !== null);
@@ -177673,7 +177077,7 @@ data: ${JSON.stringify(msg.data)}
               topicScope,
               capturedAt: Date.now()
             };
-            if (truncated > 0) counters5.truncated += truncated;
+            if (truncated > 0) counters4.truncated += truncated;
             LOG.info(
               "Seqscribe",
               `beacon auth seed writer=${handle.writerId} peers=${clean2.length} topics=${topicScope.length} truncated=${truncated}`
@@ -177801,15 +177205,15 @@ data: ${JSON.stringify(msg.data)}
         errors: 0
       };
     }
-    var counters4 = zeroCounters();
+    var counters3 = zeroCounters();
     function transcriptWriterGcCounters() {
-      return { ...counters4 };
+      return { ...counters3 };
     }
     function emptyResult() {
       return { legacyCleared: [], discovered: [], budgetExhausted: false, meshRowsPruned: 0, vacuumedPages: 0 };
     }
     function yieldToEventLoop() {
-      return new Promise((resolve39) => setImmediate(resolve39));
+      return new Promise((resolve38) => setImmediate(resolve38));
     }
     function errText2(error48) {
       return error48 instanceof Error ? error48.message : String(error48);
@@ -177825,9 +177229,9 @@ data: ${JSON.stringify(msg.data)}
         try {
           handle.node.defineTopic(topic, policy());
           discovered.push(topic);
-          counters4.topicsDiscovered++;
+          counters3.topicsDiscovered++;
         } catch (error48) {
-          counters4.errors++;
+          counters3.errors++;
           LOG.warn("Seqscribe", `transcript writer-gc could not define stored topic=${topic}: ${errText2(error48)}`);
         }
       }
@@ -177846,7 +177250,7 @@ data: ${JSON.stringify(msg.data)}
       }
       if (freed > 0) {
         maintenance.checkpoint("TRUNCATE");
-        counters4.vacuumedPages += freed;
+        counters3.vacuumedPages += freed;
         LOG.info("Seqscribe", `transcript writer-gc incremental vacuum freed ${freed} page(s)`);
       }
       return freed;
@@ -177859,7 +177263,7 @@ data: ${JSON.stringify(msg.data)}
       const maxDiscovered = opts.maxDiscoveredTopics ?? TRANSCRIPT_DISCOVERY_MAX_TOPICS_PER_SWEEP;
       let budget = Math.max(1, opts.sweepRowBudget ?? TRANSCRIPT_PRUNE_SWEEP_ROW_BUDGET);
       const result = emptyResult();
-      counters4.runs++;
+      counters3.runs++;
       try {
         const definedTopics2 = new Set(Object.keys(handle.node.stats().topics));
         result.discovered.push(
@@ -177885,9 +177289,9 @@ data: ${JSON.stringify(msg.data)}
             try {
               pruned = (await handle.node.pruneTopic(topic, { keepNewest: rows - step })).prunedRows;
             } catch (error48) {
-              if (isActiveTailSubscriberRefusal(error48)) counters4.skippedActive++;
+              if (isActiveTailSubscriberRefusal(error48)) counters3.skippedActive++;
               else {
-                counters4.errors++;
+                counters3.errors++;
                 LOG.warn("Seqscribe", `transcript writer-gc legacy prune failed topic=${topic}: ${errText2(error48)}`);
               }
               break;
@@ -177895,24 +177299,24 @@ data: ${JSON.stringify(msg.data)}
             if (pruned === 0) break;
             rows -= pruned;
             budget -= pruned;
-            counters4.legacyRowsPruned += pruned;
+            counters3.legacyRowsPruned += pruned;
             await yieldToEventLoop();
           }
           if (rows <= 0) {
             result.legacyCleared.push(topic);
-            counters4.legacyTopicsCleared++;
+            counters3.legacyTopicsCleared++;
             LOG.info("Seqscribe", `transcript writer-gc removed legacy topic rows topic=${topic}`);
           }
         }
         for (const topic of Object.keys(topics)) {
           if (sessionSegmentFromChatTopic(topic) === null) continue;
           if (!shouldContinue() || budget <= 0) break;
-          counters4.topicsInspected++;
+          counters3.topicsInspected++;
           let head;
           try {
             head = handle.node.keyHead(topic, CHAT_COMMIT_KEY);
           } catch (error48) {
-            counters4.errors++;
+            counters3.errors++;
             LOG.warn("Seqscribe", `transcript writer-gc keyHead failed topic=${topic}: ${errText2(error48)}`);
             continue;
           }
@@ -177922,14 +177326,14 @@ data: ${JSON.stringify(msg.data)}
             try {
               const { prunedRows } = await handle.node.pruneTopic(topic, { keepNewest: 0 });
               budget -= prunedRows;
-              counters4.rowsPruned += prunedRows;
+              counters3.rowsPruned += prunedRows;
               if (prunedRows > 0) {
-                counters4.deadTopicsRemoved++;
+                counters3.deadTopicsRemoved++;
                 LOG.info("Seqscribe", `transcript writer-gc removed dead chat topic=${topic} rows=${prunedRows}`);
               }
             } catch (error48) {
-              if (isActiveTailSubscriberRefusal(error48)) counters4.skippedActive++;
-              else counters4.errors++;
+              if (isActiveTailSubscriberRefusal(error48)) counters3.skippedActive++;
+              else counters3.errors++;
             }
             continue;
           }
@@ -177939,12 +177343,12 @@ data: ${JSON.stringify(msg.data)}
             try {
               pruned = (await handle.node.pruneSuperseded(topic, { uptoRowid: head.rowid, maxRows })).prunedRows;
             } catch (error48) {
-              counters4.errors++;
+              counters3.errors++;
               LOG.warn("Seqscribe", `transcript writer-gc pruneSuperseded failed topic=${topic}: ${errText2(error48)}`);
               break;
             }
             budget -= pruned;
-            counters4.rowsPruned += pruned;
+            counters3.rowsPruned += pruned;
             if (pruned < maxRows) break;
             await yieldToEventLoop();
           }
@@ -177960,7 +177364,7 @@ data: ${JSON.stringify(msg.data)}
         result.meshRowsPruned = mesh.pruned;
         if (budget <= 0 || mesh.more) {
           result.budgetExhausted = true;
-          counters4.budgetExhausted++;
+          counters3.budgetExhausted++;
         }
         result.vacuumedPages = await reclaimFreePages(
           handle,
@@ -177969,7 +177373,7 @@ data: ${JSON.stringify(msg.data)}
           shouldContinue
         );
       } catch (error48) {
-        counters4.errors++;
+        counters3.errors++;
         LOG.warn("Seqscribe", `transcript writer-gc sweep failed: ${errText2(error48)}`);
       }
       return result;
@@ -177987,7 +177391,7 @@ data: ${JSON.stringify(msg.data)}
           more = true;
           break;
         }
-        counters4.meshTopicsInspected++;
+        counters3.meshTopicsInspected++;
         let first = true;
         for (; ; ) {
           let r;
@@ -177998,8 +177402,8 @@ data: ${JSON.stringify(msg.data)}
               maxRows: Math.min(o.stepRows, budget)
             });
           } catch (error48) {
-            counters4.meshPruneErrors++;
-            counters4.errors++;
+            counters3.meshPruneErrors++;
+            counters3.errors++;
             LOG.warn("Seqscribe", `mesh full-sync retention failed topic=${topic}: ${errText2(error48)}`);
             break;
           }
@@ -178010,7 +177414,7 @@ data: ${JSON.stringify(msg.data)}
           }
           budget -= r.prunedRows;
           pruned += r.prunedRows;
-          counters4.meshRowsPruned += r.prunedRows;
+          counters3.meshRowsPruned += r.prunedRows;
           if (!r.more) break;
           if (budget <= 0 || !o.shouldContinue()) {
             more = true;
@@ -178019,8 +177423,8 @@ data: ${JSON.stringify(msg.data)}
           await yieldToEventLoop();
         }
       }
-      counters4.meshStreamsPinned = pinned;
-      counters4.meshLaggingMembers = lagging;
+      counters3.meshStreamsPinned = pinned;
+      counters3.meshLaggingMembers = lagging;
       if (pruned > 0) LOG.info("Seqscribe", `mesh full-sync retention pruned ${pruned} row(s) below the acknowledged floor`);
       return { pruned, more };
     }
@@ -178166,9 +177570,6 @@ data: ${JSON.stringify(msg.data)}
           }
         }
         const snap = opts.throughput;
-        const tp = opts.transcriptParity;
-        const now = Date.now();
-        const tpSince = tp?.since ?? now;
         localDiagnostics = {
           applyRejects,
           stalledStreams,
@@ -178180,28 +177581,6 @@ data: ${JSON.stringify(msg.data)}
           // raw counter here, which is what keeps it off the status frame.
           projectionCarry: projectionCarryCounters(),
           fullSyncRetentionDetail: fullSyncRetentionDetail(stats),
-          ...tp ? {
-            transcriptParityDetail: {
-              runs: tp.runs,
-              compared: tp.compared ?? 0,
-              mismatches: tp.mismatches,
-              persistentMismatches: tp.persistentMismatches ?? 0,
-              missingCompleteRevision: tp.missingCompleteRevision ?? 0,
-              fieldMismatch: tp.fieldMismatch ?? 0,
-              missingMessage: tp.missingMessage ?? 0,
-              extraMessage: tp.extraMessage ?? 0,
-              revRegression: tp.revRegression ?? 0,
-              wrongSession: tp.wrongSession ?? 0,
-              wrongOwner: tp.wrongOwner ?? 0,
-              digestMismatch: tp.digestMismatch ?? 0,
-              sessionsObserved: tp.sessionsObserved ?? 0,
-              sessionsRepeated: tp.sessionsRepeated ?? 0,
-              pendingMissingRevisits: tp.pendingMissingRevisits ?? 0,
-              pendingMissingOpen: tp.pendingMissingOpen ?? 0,
-              since: tpSince,
-              uptimeMs: Math.max(0, now - tpSince)
-            }
-          } : {},
           // Deep-copied by the recorder's own `detail()`, so a caller holding
           // this cannot see it mutate on the next trigger.
           ...opts.transcriptLatency ? { transcriptLatencyDetail: opts.transcriptLatency } : {},
@@ -178258,12 +177637,6 @@ data: ${JSON.stringify(msg.data)}
         transcriptDedupedBucket: bucket(opts.transcript?.deduped ?? 0, BACKLOG_BUCKETS),
         transcriptOversizedBucket: bucket(opts.transcript?.oversized ?? 0, BACKLOG_BUCKETS),
         transcriptDroppedBucket: bucket(opts.transcript?.dropped ?? 0, BACKLOG_BUCKETS),
-        transcriptParityRan: (opts.transcriptParity?.runs ?? 0) > 0,
-        transcriptParityMismatchBucket: bucket(opts.transcriptParity?.mismatches ?? 0, BACKLOG_BUCKETS),
-        transcriptParityPersistentMismatchBucket: bucket(
-          opts.transcriptParity?.persistentMismatches ?? 0,
-          BACKLOG_BUCKETS
-        ),
         ...localDiagnostics
       };
     }
@@ -178447,23 +177820,23 @@ data: ${JSON.stringify(msg.data)}
       };
     }
     function runPostCommitEffects(ports, effects, ctx) {
-      const counters5 = { executed: 0, missingPort: 0, failed: 0 };
+      const counters4 = { executed: 0, missingPort: 0, failed: 0 };
       const run2 = (kind, fn) => {
         if (!fn) {
-          counters5.missingPort++;
+          counters4.missingPort++;
           return;
         }
         try {
           const result = fn();
           if (result && typeof result.then === "function") {
             result.then(void 0, (error48) => {
-              counters5.failed++;
+              counters4.failed++;
               ctx.onError(kind, error48);
             });
           }
-          counters5.executed++;
+          counters4.executed++;
         } catch (error48) {
-          counters5.failed++;
+          counters4.failed++;
           ctx.onError(kind, error48);
         }
       };
@@ -178499,9 +177872,8 @@ data: ${JSON.stringify(msg.data)}
       for (const task of ctx.terminalTasks) {
         run2("graph_advance", ports.afterTaskTerminal ? () => ports.afterTaskTerminal(task.meshId, task.taskId) : void 0);
       }
-      return counters5;
+      return counters4;
     }
-    init_types2();
     var REPORT_GATE_RULES = /* @__PURE__ */ new Set(["R9r", "R12r", "R13r", "R17g", "R9t", "R13t"]);
     var DEFAULT_LOG = { info: () => {
     }, warn: () => {
@@ -178525,7 +177897,7 @@ data: ${JSON.stringify(msg.data)}
       const log = deps.log ?? DEFAULT_LOG;
       const ports = deps.ports ?? {};
       const autoFlush = deps.autoFlush !== false;
-      const counters5 = {
+      const counters4 = {
         observed: 0,
         applied: 0,
         recorded: 0,
@@ -178660,24 +178032,24 @@ data: ${JSON.stringify(msg.data)}
         const ref = evidence.attemptRef;
         if (!ref) {
           txn(() => store2.insertEvent(evidenceRow(evidence, { verdict: "rejected", rejection: "no_attempt", fromState: null, toState: null, attempt: null, notes: ["forward_without_attempt_ref"] }, nowMs2, opts)));
-          counters5.rejected++;
+          counters4.rejected++;
           return { verdict: "rejected", rejection: "no_attempt", attempt: null, effects: [] };
         }
         const entry = buildForwardedEvidenceEntry(evidence, { attemptId: ref.attemptId, generation: ref.generation, ownerDaemonId: owner.daemonId });
         txn(() => store2.insertEvent(evidenceRow(evidence, { verdict: "forwarded", fromState: null, toState: null, attempt: null, notes: [] }, nowMs2, opts, { meshId: owner.meshId, entry })));
-        counters5.forwarded++;
+        counters4.forwarded++;
         if (autoFlush) void flushPublish();
         return { verdict: "forwarded", attempt: null, effects: [] };
       }
       function observe(evidence, opts = {}) {
-        counters5.observed++;
+        counters4.observed++;
         if (!isTurnEvidence(evidence)) {
-          counters5.rejected++;
+          counters4.rejected++;
           log.error(`turn-ledger: refused malformed evidence (${String(evidence?.kind)}) \u2014 fails the mesh-shared content guard`);
           return { verdict: "rejected", rejection: "invalid_evidence", attempt: null, effects: [] };
         }
         if (store2.hasEvent(evidence.eventId)) {
-          counters5.duplicates++;
+          counters4.duplicates++;
           return { verdict: "duplicate", attempt: null, effects: [] };
         }
         const nowMs2 = now();
@@ -178692,15 +178064,15 @@ data: ${JSON.stringify(msg.data)}
           steps = txn(() => applyStep(evidence, attempt, opts, nowMs2));
         } catch (error48) {
           if (error48 instanceof DuplicateEvidence) {
-            counters5.duplicates++;
+            counters4.duplicates++;
             return { verdict: "duplicate", attempt: null, effects: [] };
           }
           throw error48;
         }
         const { result } = steps[steps.length - 1];
-        if (result.verdict === "applied") counters5.applied++;
-        else if (result.verdict === "recorded") counters5.recorded++;
-        else counters5.rejected++;
+        if (result.verdict === "applied") counters4.applied++;
+        else if (result.verdict === "recorded") counters4.recorded++;
+        else counters4.rejected++;
         let publish = false;
         for (const step of steps) {
           if (step.result.verdict === "rejected") continue;
@@ -178710,14 +178082,14 @@ data: ${JSON.stringify(msg.data)}
             nowMs: nowMs2,
             terminalTasks: step.host.terminalTasks,
             onError: (kind, error48) => {
-              counters5.postCommitFailed++;
+              counters4.postCommitFailed++;
               log.error(`turn-ledger: post-commit ${kind} failed for ${step.evidence.eventId}: ${error48 instanceof Error ? error48.message : String(error48)}`);
             },
             onSkip: (kind, detail) => {
               log.info(`turn-ledger: post-commit ${kind} skipped for ${step.evidence.eventId}: ${detail}`);
             }
           });
-          counters5.missingPorts += post.missingPort;
+          counters4.missingPorts += post.missingPort;
           if (isPublishableAttempt(step.result.attempt)) publish = true;
           for (const effect of step.result.effects) {
             if (effect.kind !== "reevaluate" || !effect.evidenceId) continue;
@@ -178827,12 +178199,12 @@ data: ${JSON.stringify(msg.data)}
               const id22 = await publisher.publish(target.meshId, target.entry, target.ref ? { ref: target.ref } : void 0);
               store2.markPublished(row.eventId, id22.writer, id22.seq);
               report.published++;
-              counters5.published++;
+              counters4.published++;
               progressed++;
             } catch (error48) {
               blocked.add(target.meshId);
               report.failed++;
-              counters5.publishFailed++;
+              counters4.publishFailed++;
               log.error(`turn-ledger: publish failed mesh=${target.meshId} eventId=${row.eventId}: ${error48 instanceof Error ? error48.message : String(error48)} \u2014 stays pending`);
             }
           }
@@ -178882,7 +178254,7 @@ data: ${JSON.stringify(msg.data)}
         flushPublish,
         republishPending: flushPublish,
         pendingPublishCount: (olderThanMs) => store2.countPendingPublish(olderThanMs),
-        counters: () => ({ ...counters5 })
+        counters: () => ({ ...counters4 })
       };
     }
     var DuplicateEvidence = class extends Error {
@@ -178890,9 +178262,6 @@ data: ${JSON.stringify(msg.data)}
         super(`duplicate evidence ${eventId}`);
       }
     };
-    function isAttemptTerminal(attempt) {
-      return !!attempt && isTerminalTurnState(attempt.state);
-    }
     init_store2();
     init_migrate_v1();
     init_schema2();
@@ -179400,7 +178769,7 @@ data: ${JSON.stringify(msg.data)}
       }
       if (!attempt.meshId || !attempt.nodeId) return { kind: "local" };
       const mesh = components.resolveMesh?.(attempt.meshId);
-      const node = mesh?.nodes?.find((n) => meshNodeIdMatches7(n, attempt.nodeId));
+      const node = mesh?.nodes?.find((n) => meshNodeIdMatches6(n, attempt.nodeId));
       if (!node) return { kind: "unknown" };
       const daemonId = readMeshNodeDaemonId(node);
       if (!daemonId || daemonIdsEquivalent4(daemonId, selfDaemonId)) return { kind: "local" };
@@ -179762,7 +179131,7 @@ data: ${JSON.stringify(msg.data)}
       const registrations = /* @__PURE__ */ new Map();
       const abort = new AbortController();
       let disposed = false;
-      const counters5 = {
+      const counters4 = {
         meshes: 0,
         ingestEntries: 0,
         ingestFailures: 0,
@@ -179774,7 +179143,7 @@ data: ${JSON.stringify(msg.data)}
         registerFailures: 0
       };
       const ownWriter = node.writerId;
-      if (!opts.skipRetiredPrune) counters5.retiredCursorsPruned = pruneRetiredMeshConsumers(node);
+      if (!opts.skipRetiredPrune) counters4.retiredCursorsPruned = pruneRetiredMeshConsumers(node);
       function ensureMesh(meshId) {
         if (disposed) return false;
         const topic = node.topics.find((d) => meshIdFromEventsTopic(d.topic) === meshId)?.topic;
@@ -179784,39 +179153,39 @@ data: ${JSON.stringify(msg.data)}
         try {
           if (cursors.has("index")) {
             unsubs.push(node.node.onEntry(topic, MESH_INDEX_CONSUMER2, (entry) => {
-              counters5.indexEntries++;
+              counters4.indexEntries++;
               try {
                 handlers.index(toCursorEntry(meshId, topic, entry, ownWriter));
               } catch (error48) {
-                counters5.indexFailures++;
+                counters4.indexFailures++;
                 throw error48;
               }
             }));
           }
           if (cursors.has("ingest")) {
             unsubs.push(node.node.onEntry(topic, TURN_INGEST_CONSUMER, async (entry) => {
-              counters5.ingestEntries++;
+              counters4.ingestEntries++;
               try {
                 await handlers.ingest(toCursorEntry(meshId, topic, entry, ownWriter));
               } catch (error48) {
-                counters5.ingestFailures++;
+                counters4.ingestFailures++;
                 throw error48;
               }
             }));
           }
           if (cursors.has("deliver")) {
             unsubs.push(node.node.onEntry(topic, TURN_DELIVER_CONSUMER, async (entry) => {
-              counters5.deliverEntries++;
+              counters4.deliverEntries++;
               try {
                 await handlers.deliver(toCursorEntry(meshId, topic, entry, ownWriter), abort.signal);
               } catch (error48) {
-                counters5.deliverFailures++;
+                counters4.deliverFailures++;
                 throw error48;
               }
             }));
           }
         } catch (error48) {
-          counters5.registerFailures++;
+          counters4.registerFailures++;
           for (const off of unsubs) {
             try {
               off();
@@ -179827,7 +179196,7 @@ data: ${JSON.stringify(msg.data)}
           return false;
         }
         registrations.set(topic, unsubs);
-        counters5.meshes = registrations.size;
+        counters4.meshes = registrations.size;
         return true;
       }
       function ensureKnownMeshes() {
@@ -179848,7 +179217,7 @@ data: ${JSON.stringify(msg.data)}
         ensureMesh,
         ensureKnownMeshes,
         meshIds: () => [...registrations.keys()].map((t) => meshIdFromEventsTopic(t) ?? t).sort(),
-        counters: () => ({ ...counters5 }),
+        counters: () => ({ ...counters4 }),
         dispose() {
           if (disposed) return;
           disposed = true;
@@ -179866,12 +179235,11 @@ data: ${JSON.stringify(msg.data)}
             }
           }
           registrations.clear();
-          counters5.meshes = 0;
+          counters4.meshes = 0;
         }
       };
     }
     init_mesh_event_projection();
-    init_transcript_parity();
     init_transcript_publisher();
     init_logger();
     init_message_identity_ledger();
@@ -179931,442 +179299,21 @@ data: ${JSON.stringify(msg.data)}
       claims.release(sessionChatTopic(rawSessionId));
     }
     init_transcript_keyed_codec();
-    init_topics2();
-    init_transcript_keyed_codec();
-    init_dist();
-    init_transcript_keyed_codec();
-    function parseChatSubRow(row) {
-      if (typeof row.writer !== "string" || typeof row.kind !== "string" || typeof row.payload !== "string") return null;
-      if (typeof row.seq !== "number" || !Number.isSafeInteger(row.seq) || row.seq < 0) return null;
-      try {
-        return { writer: row.writer, seq: row.seq, kind: row.kind, payload: JSON.parse(row.payload) };
-      } catch {
-        return null;
-      }
+    init_transcript_publisher();
+    var CHAT_PRUNE_TRIGGER_ROWS = 64;
+    var CHAT_PRUNE_TRIGGER_BYTES = 1024 * 1024;
+    var CHAT_PRUNE_STEP_ROWS = 250;
+    var CHAT_PRUNE_MAX_STEPS = 200;
+    var runtimeCounters = freshRuntimeCounters();
+    function freshRuntimeCounters() {
+      return { prunePasses: 0, prunedRows: 0, pruneErrors: 0, ledgerSeeds: 0 };
     }
-    function emptyState() {
-      return { heads: /* @__PURE__ */ new Map(), parts: /* @__PURE__ */ new Map(), meta: null, commit: null };
+    function transcriptChatRuntimeCounters() {
+      return { ...runtimeCounters };
     }
-    var PENDING_FRAMES_MAX = 8;
-    var PENDING_ROWS_MAX = 5e4;
-    function frameKey(epoch, frame2) {
-      return `${epoch}\0${frame2}`;
+    function yieldToEventLoop2() {
+      return new Promise((resolve38) => setImmediate(resolve38));
     }
-    function frameOf(payload) {
-      if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
-      const raw = payload;
-      if (typeof raw.epoch !== "string" || typeof raw.frame !== "number" || !Number.isSafeInteger(raw.frame)) return null;
-      return { epoch: raw.epoch, frame: raw.frame };
-    }
-    var KeyedTranscriptFolder = class {
-      constructor(options = {}) {
-        this.options = options;
-      }
-      state = emptyState();
-      pending = /* @__PURE__ */ new Map();
-      pendingRows = 0;
-      cachedView = null;
-      resync = null;
-      counters = {
-        commitsApplied: 0,
-        rejectedRows: 0,
-        digestMismatches: 0,
-        tornFramesDropped: 0,
-        lastRejectReason: null
-      };
-      /** The committed view, or null before the first verified commit. */
-      view() {
-        if (!this.state.commit || !this.state.meta) return null;
-        if (!this.cachedView) this.cachedView = this.materialize();
-        return this.cachedView;
-      }
-      /** The last applied commit (identity/diagnostics). */
-      lastCommit() {
-        return this.state.commit;
-      }
-      /** Set when a frame failed verification — restart the subscription (SNAP reset). */
-      get needsResync() {
-        return this.resync;
-      }
-      stats() {
-        return { ...this.counters };
-      }
-      /**
-       * A SNAP: rebuild from scratch. Rows up to and including the LAST commit are
-       * the committed baseline (verified against that commit); rows after it are
-       * pending. A SNAP that fails verification leaves the previous view in place
-       * and flags a resync.
-       */
-      ingestSnapshot(rows) {
-        let lastCommitAt = -1;
-        let commit2 = null;
-        for (let i = rows.length - 1; i >= 0; i -= 1) {
-          if (rows[i].kind !== CHAT_COMMIT_KIND) continue;
-          const parsed = readChatCommit(rows[i].payload);
-          if (parsed && parsed.writer === rows[i].writer) {
-            lastCommitAt = i;
-            commit2 = parsed;
-            break;
-          }
-        }
-        this.pending.clear();
-        this.pendingRows = 0;
-        if (!commit2) {
-          if (rows.length === 0) {
-            this.state = emptyState();
-            this.cachedView = null;
-            this.resync = null;
-          }
-          for (const row of rows) this.stash(row);
-          return null;
-        }
-        const rejected = this.checkCommitIdentity(commit2);
-        if (rejected) {
-          this.reject(rejected, true);
-          return null;
-        }
-        const next = emptyState();
-        for (let i = 0; i < lastCommitAt; i += 1) {
-          const row = rows[i];
-          if (row.writer !== commit2.writer) continue;
-          this.applyRow(next, row, null);
-        }
-        const verdict = this.verify(next, commit2);
-        if (verdict) {
-          this.counters.digestMismatches += verdict === "digest_mismatch" ? 1 : 0;
-          this.reject(verdict, true);
-          return null;
-        }
-        next.commit = commit2;
-        this.state = next;
-        this.cachedView = null;
-        this.resync = null;
-        this.counters.commitsApplied++;
-        for (let i = lastCommitAt + 1; i < rows.length; i += 1) this.stash(rows[i]);
-        const view = this.view();
-        const delta = {
-          sessionId: commit2.sessionId,
-          epoch: commit2.epoch,
-          frame: commit2.frame,
-          reset: true,
-          upserts: view ? view.messages : [],
-          deletes: [],
-          meta: view ? this.materializeMeta() : null
-        };
-        this.options.onFrame?.(delta);
-        return delta;
-      }
-      /** DELTA rows. Returns the delta of every commit applied by this batch. */
-      ingestRows(rows) {
-        const out = [];
-        for (const row of rows) {
-          if (row.kind === CHAT_COMMIT_KIND) {
-            const delta = this.ingestCommit(row);
-            if (delta) out.push(delta);
-          } else {
-            this.stash(row);
-          }
-        }
-        return out;
-      }
-      // ── internals ───────────────────────────────────────────────────────────
-      stash(row) {
-        if (row.kind === CHAT_COMMIT_KIND) return;
-        const at = frameOf(row.payload);
-        if (!at) {
-          this.reject("malformed_row", false);
-          return;
-        }
-        const key2 = frameKey(at.epoch, at.frame);
-        let list = this.pending.get(key2);
-        if (!list) {
-          list = [];
-          this.pending.set(key2, list);
-          while (this.pending.size > PENDING_FRAMES_MAX) {
-            const oldest = this.pending.keys().next().value;
-            this.pendingRows -= this.pending.get(oldest).length;
-            this.pending.delete(oldest);
-            this.counters.tornFramesDropped++;
-          }
-        }
-        list.push(row);
-        this.pendingRows += 1;
-        if (this.pendingRows > PENDING_ROWS_MAX) {
-          this.pending.clear();
-          this.pendingRows = 0;
-          this.reject("pending_overflow", true);
-        }
-      }
-      checkCommitIdentity(commit2) {
-        if (this.options.expectedSessionId !== void 0 && commit2.sessionId !== this.options.expectedSessionId) {
-          return "session_mismatch";
-        }
-        if (this.options.expectedOwnerDaemonId !== void 0 && !daemonIdsEquivalent4(commit2.producerDaemonId, this.options.expectedOwnerDaemonId)) {
-          return "owner_mismatch";
-        }
-        return null;
-      }
-      ingestCommit(row) {
-        const commit2 = readChatCommit(row.payload);
-        if (!commit2 || commit2.writer !== row.writer) {
-          this.reject("malformed_row", false);
-          return null;
-        }
-        const rejected = this.checkCommitIdentity(commit2);
-        if (rejected) {
-          this.reject(rejected, false);
-          return null;
-        }
-        const key2 = frameKey(commit2.epoch, commit2.frame);
-        const rows = (this.pending.get(key2) ?? []).filter((r) => r.writer === commit2.writer);
-        for (const [k, list] of Array.from(this.pending)) {
-          const [epoch, frameText] = k.split("\0");
-          if (epoch !== commit2.epoch || Number(frameText) <= commit2.frame) {
-            if (k !== key2) this.counters.tornFramesDropped++;
-            this.pendingRows -= list.length;
-            this.pending.delete(k);
-          }
-        }
-        const writerChanged = this.state.commit !== null && this.state.commit.writer !== commit2.writer;
-        if (writerChanged) {
-          const next = emptyState();
-          for (const r of rows) this.applyRow(next, r, null);
-          const verdict2 = this.verify(next, commit2);
-          if (verdict2) {
-            this.counters.digestMismatches += verdict2 === "digest_mismatch" ? 1 : 0;
-            this.reject(verdict2, true);
-            return null;
-          }
-          next.commit = commit2;
-          this.state = next;
-          this.cachedView = null;
-          this.resync = null;
-          this.counters.commitsApplied++;
-          const view2 = this.view();
-          const delta2 = {
-            sessionId: commit2.sessionId,
-            epoch: commit2.epoch,
-            frame: commit2.frame,
-            reset: true,
-            upserts: view2 ? view2.messages : [],
-            deletes: [],
-            meta: view2 ? this.materializeMeta() : null
-          };
-          this.options.onFrame?.(delta2);
-          return delta2;
-        }
-        const undo = [];
-        const touched = /* @__PURE__ */ new Set();
-        let metaChanged = false;
-        for (const r of rows) {
-          const effect = this.applyRow(this.state, r, undo);
-          if (effect === "meta") metaChanged = true;
-          else if (effect) touched.add(effect);
-        }
-        const verdict = this.verify(this.state, commit2);
-        if (verdict) {
-          this.rollback(undo);
-          this.counters.digestMismatches += verdict === "digest_mismatch" ? 1 : 0;
-          this.reject(verdict, true);
-          return null;
-        }
-        undo.push({ t: "commit", prev: this.state.commit });
-        const first = this.state.commit === null;
-        this.state.commit = commit2;
-        this.cachedView = null;
-        this.resync = null;
-        this.counters.commitsApplied++;
-        const upserts = [];
-        const deletes = [];
-        for (const id22 of touched) {
-          const message = this.materializeMessage(id22);
-          if (message) upserts.push(message);
-          else deletes.push(id22);
-        }
-        upserts.sort(compareChatOrd);
-        const view = first ? this.view() : null;
-        const delta = {
-          sessionId: commit2.sessionId,
-          epoch: commit2.epoch,
-          frame: commit2.frame,
-          reset: first,
-          upserts: first && view ? view.messages : upserts,
-          deletes: first ? [] : deletes,
-          meta: first || metaChanged ? this.materializeMeta() : null
-        };
-        this.options.onFrame?.(delta);
-        return delta;
-      }
-      /**
-       * Apply one non-commit row to `state`. Returns the bubble id it touched,
-       * `'meta'`, or null. Rows of an unknown kind are ignored (forward
-       * compatibility), malformed ones are counted.
-       */
-      applyRow(state, row, undo) {
-        switch (row.kind) {
-          case CHAT_MSG_KIND: {
-            const head = readChatMsg(row.payload);
-            if (!head) return this.malformed();
-            undo?.push({ t: "head", id: head.id, prev: state.heads.get(head.id) });
-            state.heads.set(head.id, head);
-            if ("text" in head.body) this.dropParts(state, head.id, 0, undo);
-            else this.dropParts(state, head.id, head.body.parts, undo);
-            return head.id;
-          }
-          case CHAT_PART_KIND: {
-            const part = readChatPart(row.payload);
-            if (!part) return this.malformed();
-            let map3 = state.parts.get(part.id);
-            if (!map3) {
-              map3 = /* @__PURE__ */ new Map();
-              state.parts.set(part.id, map3);
-            }
-            undo?.push({ t: "part", id: part.id, k: part.k, prev: map3.get(part.k) });
-            map3.set(part.k, part);
-            return part.id;
-          }
-          case CHAT_DEL_KIND: {
-            const del = readChatDel(row.payload);
-            if (!del) return this.malformed();
-            if (del.k === null) {
-              undo?.push({ t: "head", id: del.id, prev: state.heads.get(del.id) });
-              state.heads.delete(del.id);
-              this.dropParts(state, del.id, 0, undo);
-            } else {
-              const map3 = state.parts.get(del.id);
-              if (map3?.has(del.k)) {
-                undo?.push({ t: "part", id: del.id, k: del.k, prev: map3.get(del.k) });
-                map3.delete(del.k);
-              }
-            }
-            return del.id;
-          }
-          case CHAT_META_KIND: {
-            const meta3 = readChatMeta(row.payload);
-            if (!meta3) return this.malformed();
-            if (this.options.expectedSessionId !== void 0 && meta3.sessionId !== this.options.expectedSessionId) {
-              this.reject("session_mismatch", false);
-              return null;
-            }
-            undo?.push({ t: "meta", prev: state.meta });
-            state.meta = meta3;
-            return "meta";
-          }
-          default:
-            return null;
-        }
-      }
-      malformed() {
-        this.reject("malformed_row", false);
-        return null;
-      }
-      /** Drop part slots `k >= from` of a bubble (fewer parts, inline body, or deletion). */
-      dropParts(state, id22, from, undo) {
-        const map3 = state.parts.get(id22);
-        if (!map3) return;
-        for (const k of Array.from(map3.keys())) {
-          if (k < from) continue;
-          undo?.push({ t: "part", id: id22, k, prev: map3.get(k) });
-          map3.delete(k);
-        }
-        if (map3.size === 0) state.parts.delete(id22);
-      }
-      rollback(undo) {
-        for (let i = undo.length - 1; i >= 0; i -= 1) {
-          const op = undo[i];
-          if (op.t === "head") {
-            if (op.prev) this.state.heads.set(op.id, op.prev);
-            else this.state.heads.delete(op.id);
-          } else if (op.t === "part") {
-            let map3 = this.state.parts.get(op.id);
-            if (op.prev) {
-              if (!map3) {
-                map3 = /* @__PURE__ */ new Map();
-                this.state.parts.set(op.id, map3);
-              }
-              map3.set(op.k, op.prev);
-            } else if (map3) {
-              map3.delete(op.k);
-              if (map3.size === 0) this.state.parts.delete(op.id);
-            }
-          } else if (op.t === "meta") {
-            this.state.meta = op.prev;
-          } else {
-            this.state.commit = op.prev;
-          }
-        }
-      }
-      /** Commit verification (§4.5): displayable bubbles, live count, digest. */
-      verify(state, commit2) {
-        for (const head of state.heads.values()) {
-          if ("text" in head.body) continue;
-          const map3 = state.parts.get(head.id);
-          for (let k = 0; k < head.body.parts; k += 1) {
-            if (map3?.get(k)?.rev !== head.body.partRevs[k]) return "incomplete_bubble";
-          }
-        }
-        const metaRev = state.meta?.rev ?? 0;
-        if (state.heads.size !== commit2.liveCount || metaRev !== commit2.metaRev) return "digest_mismatch";
-        const digest = computeChatCommitDigest(
-          Array.from(state.heads.values(), (h) => [h.id, h.rev]),
-          metaRev
-        );
-        return digest === commit2.digest ? null : "digest_mismatch";
-      }
-      reject(reason, needsResync) {
-        this.counters.rejectedRows++;
-        this.counters.lastRejectReason = reason;
-        if (needsResync) this.resync = reason;
-      }
-      bodyOf(head) {
-        if ("text" in head.body) return head.body.text;
-        const map3 = this.state.parts.get(head.id);
-        let text = "";
-        for (let k = 0; k < head.body.parts; k += 1) text += map3?.get(k)?.text ?? "";
-        return text;
-      }
-      materializeMessage(id22) {
-        const head = this.state.heads.get(id22);
-        return head ? chatMessageFromWire(head, this.bodyOf(head)) : null;
-      }
-      materialize() {
-        const messages = Array.from(this.state.heads.values(), (head) => chatMessageFromWire(head, this.bodyOf(head)));
-        messages.sort(compareChatOrd);
-        return { ...this.materializeMeta(), messages };
-      }
-      /** The view without `messages` — O(1) in the transcript size. */
-      materializeMeta() {
-        const commit2 = this.state.commit;
-        const meta3 = this.state.meta;
-        const live = this.state.heads.size;
-        return {
-          schemaVersion: 2,
-          sessionId: meta3.sessionId,
-          historySessionId: meta3.historySessionId,
-          providerType: meta3.providerType,
-          providerSessionId: meta3.providerSessionId,
-          producerDaemonId: commit2.producerDaemonId,
-          producerWriterId: commit2.writer,
-          epoch: commit2.epoch,
-          frame: commit2.frame,
-          observedAt: commit2.observedAt,
-          status: meta3.status,
-          providerObservedStatus: meta3.providerObservedStatus,
-          title: meta3.title,
-          activeModal: meta3.activeModal,
-          activeInteractivePrompt: meta3.activeInteractivePrompt,
-          turn: meta3.turn,
-          provenance: meta3.provenance,
-          terminalMarkers: meta3.terminalMarkers,
-          coverage: {
-            mode: meta3.coverage.mode,
-            omittedBefore: meta3.coverage.omittedBefore,
-            totalMessageCount: live,
-            returnedMessageCount: live
-          }
-        };
-      }
-    };
     var CHAT_SCAN_PAGE_ROWS = 2e3;
     function scanAllLatestPerKey(node, topic, options = {}) {
       const out = [];
@@ -180382,22 +179329,6 @@ data: ${JSON.stringify(msg.data)}
         after = page.nextAfterRowid;
       }
       return out;
-    }
-    init_transcript_parity();
-    init_transcript_publisher();
-    var CHAT_PRUNE_TRIGGER_ROWS = 64;
-    var CHAT_PRUNE_TRIGGER_BYTES = 1024 * 1024;
-    var CHAT_PRUNE_STEP_ROWS = 250;
-    var CHAT_PRUNE_MAX_STEPS = 200;
-    var runtimeCounters = freshRuntimeCounters();
-    function freshRuntimeCounters() {
-      return { prunePasses: 0, prunedRows: 0, pruneErrors: 0, ledgerSeeds: 0 };
-    }
-    function transcriptChatRuntimeCounters() {
-      return { ...runtimeCounters };
-    }
-    function yieldToEventLoop2() {
-      return new Promise((resolve39) => setImmediate(resolve39));
     }
     function persistedRow(entry) {
       return typeof entry.key === "string" ? { key: entry.key, kind: entry.kind, writer: entry.writer, payload: entry.payload } : null;
@@ -181089,6 +180020,440 @@ ${notice.notice}${supersededHint}`;
       };
     }
     init_logger();
+    init_dist();
+    init_transcript_keyed_codec();
+    function parseChatSubRow(row) {
+      if (typeof row.writer !== "string" || typeof row.kind !== "string" || typeof row.payload !== "string") return null;
+      if (typeof row.seq !== "number" || !Number.isSafeInteger(row.seq) || row.seq < 0) return null;
+      try {
+        return { writer: row.writer, seq: row.seq, kind: row.kind, payload: JSON.parse(row.payload) };
+      } catch {
+        return null;
+      }
+    }
+    function emptyState() {
+      return { heads: /* @__PURE__ */ new Map(), parts: /* @__PURE__ */ new Map(), meta: null, commit: null };
+    }
+    var PENDING_FRAMES_MAX = 8;
+    var PENDING_ROWS_MAX = 5e4;
+    function frameKey(epoch, frame2) {
+      return `${epoch}\0${frame2}`;
+    }
+    function frameOf(payload) {
+      if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+      const raw = payload;
+      if (typeof raw.epoch !== "string" || typeof raw.frame !== "number" || !Number.isSafeInteger(raw.frame)) return null;
+      return { epoch: raw.epoch, frame: raw.frame };
+    }
+    var KeyedTranscriptFolder = class {
+      constructor(options = {}) {
+        this.options = options;
+      }
+      state = emptyState();
+      pending = /* @__PURE__ */ new Map();
+      pendingRows = 0;
+      cachedView = null;
+      resync = null;
+      counters = {
+        commitsApplied: 0,
+        rejectedRows: 0,
+        digestMismatches: 0,
+        tornFramesDropped: 0,
+        lastRejectReason: null
+      };
+      /** The committed view, or null before the first verified commit. */
+      view() {
+        if (!this.state.commit || !this.state.meta) return null;
+        if (!this.cachedView) this.cachedView = this.materialize();
+        return this.cachedView;
+      }
+      /** The last applied commit (identity/diagnostics). */
+      lastCommit() {
+        return this.state.commit;
+      }
+      /** Set when a frame failed verification — restart the subscription (SNAP reset). */
+      get needsResync() {
+        return this.resync;
+      }
+      stats() {
+        return { ...this.counters };
+      }
+      /**
+       * A SNAP: rebuild from scratch. Rows up to and including the LAST commit are
+       * the committed baseline (verified against that commit); rows after it are
+       * pending. A SNAP that fails verification leaves the previous view in place
+       * and flags a resync.
+       */
+      ingestSnapshot(rows) {
+        let lastCommitAt = -1;
+        let commit2 = null;
+        for (let i = rows.length - 1; i >= 0; i -= 1) {
+          if (rows[i].kind !== CHAT_COMMIT_KIND) continue;
+          const parsed = readChatCommit(rows[i].payload);
+          if (parsed && parsed.writer === rows[i].writer) {
+            lastCommitAt = i;
+            commit2 = parsed;
+            break;
+          }
+        }
+        this.pending.clear();
+        this.pendingRows = 0;
+        if (!commit2) {
+          if (rows.length === 0) {
+            this.state = emptyState();
+            this.cachedView = null;
+            this.resync = null;
+          }
+          for (const row of rows) this.stash(row);
+          return null;
+        }
+        const rejected = this.checkCommitIdentity(commit2);
+        if (rejected) {
+          this.reject(rejected, true);
+          return null;
+        }
+        const next = emptyState();
+        for (let i = 0; i < lastCommitAt; i += 1) {
+          const row = rows[i];
+          if (row.writer !== commit2.writer) continue;
+          this.applyRow(next, row, null);
+        }
+        const verdict = this.verify(next, commit2);
+        if (verdict) {
+          this.counters.digestMismatches += verdict === "digest_mismatch" ? 1 : 0;
+          this.reject(verdict, true);
+          return null;
+        }
+        next.commit = commit2;
+        this.state = next;
+        this.cachedView = null;
+        this.resync = null;
+        this.counters.commitsApplied++;
+        for (let i = lastCommitAt + 1; i < rows.length; i += 1) this.stash(rows[i]);
+        const view = this.view();
+        const delta = {
+          sessionId: commit2.sessionId,
+          epoch: commit2.epoch,
+          frame: commit2.frame,
+          reset: true,
+          upserts: view ? view.messages : [],
+          deletes: [],
+          meta: view ? this.materializeMeta() : null
+        };
+        this.options.onFrame?.(delta);
+        return delta;
+      }
+      /** DELTA rows. Returns the delta of every commit applied by this batch. */
+      ingestRows(rows) {
+        const out = [];
+        for (const row of rows) {
+          if (row.kind === CHAT_COMMIT_KIND) {
+            const delta = this.ingestCommit(row);
+            if (delta) out.push(delta);
+          } else {
+            this.stash(row);
+          }
+        }
+        return out;
+      }
+      // ── internals ───────────────────────────────────────────────────────────
+      stash(row) {
+        if (row.kind === CHAT_COMMIT_KIND) return;
+        const at = frameOf(row.payload);
+        if (!at) {
+          this.reject("malformed_row", false);
+          return;
+        }
+        const key2 = frameKey(at.epoch, at.frame);
+        let list = this.pending.get(key2);
+        if (!list) {
+          list = [];
+          this.pending.set(key2, list);
+          while (this.pending.size > PENDING_FRAMES_MAX) {
+            const oldest = this.pending.keys().next().value;
+            this.pendingRows -= this.pending.get(oldest).length;
+            this.pending.delete(oldest);
+            this.counters.tornFramesDropped++;
+          }
+        }
+        list.push(row);
+        this.pendingRows += 1;
+        if (this.pendingRows > PENDING_ROWS_MAX) {
+          this.pending.clear();
+          this.pendingRows = 0;
+          this.reject("pending_overflow", true);
+        }
+      }
+      checkCommitIdentity(commit2) {
+        if (this.options.expectedSessionId !== void 0 && commit2.sessionId !== this.options.expectedSessionId) {
+          return "session_mismatch";
+        }
+        if (this.options.expectedOwnerDaemonId !== void 0 && !daemonIdsEquivalent4(commit2.producerDaemonId, this.options.expectedOwnerDaemonId)) {
+          return "owner_mismatch";
+        }
+        return null;
+      }
+      ingestCommit(row) {
+        const commit2 = readChatCommit(row.payload);
+        if (!commit2 || commit2.writer !== row.writer) {
+          this.reject("malformed_row", false);
+          return null;
+        }
+        const rejected = this.checkCommitIdentity(commit2);
+        if (rejected) {
+          this.reject(rejected, false);
+          return null;
+        }
+        const key2 = frameKey(commit2.epoch, commit2.frame);
+        const rows = (this.pending.get(key2) ?? []).filter((r) => r.writer === commit2.writer);
+        for (const [k, list] of Array.from(this.pending)) {
+          const [epoch, frameText] = k.split("\0");
+          if (epoch !== commit2.epoch || Number(frameText) <= commit2.frame) {
+            if (k !== key2) this.counters.tornFramesDropped++;
+            this.pendingRows -= list.length;
+            this.pending.delete(k);
+          }
+        }
+        const writerChanged = this.state.commit !== null && this.state.commit.writer !== commit2.writer;
+        if (writerChanged) {
+          const next = emptyState();
+          for (const r of rows) this.applyRow(next, r, null);
+          const verdict2 = this.verify(next, commit2);
+          if (verdict2) {
+            this.counters.digestMismatches += verdict2 === "digest_mismatch" ? 1 : 0;
+            this.reject(verdict2, true);
+            return null;
+          }
+          next.commit = commit2;
+          this.state = next;
+          this.cachedView = null;
+          this.resync = null;
+          this.counters.commitsApplied++;
+          const view2 = this.view();
+          const delta2 = {
+            sessionId: commit2.sessionId,
+            epoch: commit2.epoch,
+            frame: commit2.frame,
+            reset: true,
+            upserts: view2 ? view2.messages : [],
+            deletes: [],
+            meta: view2 ? this.materializeMeta() : null
+          };
+          this.options.onFrame?.(delta2);
+          return delta2;
+        }
+        const undo = [];
+        const touched = /* @__PURE__ */ new Set();
+        let metaChanged = false;
+        for (const r of rows) {
+          const effect = this.applyRow(this.state, r, undo);
+          if (effect === "meta") metaChanged = true;
+          else if (effect) touched.add(effect);
+        }
+        const verdict = this.verify(this.state, commit2);
+        if (verdict) {
+          this.rollback(undo);
+          this.counters.digestMismatches += verdict === "digest_mismatch" ? 1 : 0;
+          this.reject(verdict, true);
+          return null;
+        }
+        undo.push({ t: "commit", prev: this.state.commit });
+        const first = this.state.commit === null;
+        this.state.commit = commit2;
+        this.cachedView = null;
+        this.resync = null;
+        this.counters.commitsApplied++;
+        const upserts = [];
+        const deletes = [];
+        for (const id22 of touched) {
+          const message = this.materializeMessage(id22);
+          if (message) upserts.push(message);
+          else deletes.push(id22);
+        }
+        upserts.sort(compareChatOrd);
+        const view = first ? this.view() : null;
+        const delta = {
+          sessionId: commit2.sessionId,
+          epoch: commit2.epoch,
+          frame: commit2.frame,
+          reset: first,
+          upserts: first && view ? view.messages : upserts,
+          deletes: first ? [] : deletes,
+          meta: first || metaChanged ? this.materializeMeta() : null
+        };
+        this.options.onFrame?.(delta);
+        return delta;
+      }
+      /**
+       * Apply one non-commit row to `state`. Returns the bubble id it touched,
+       * `'meta'`, or null. Rows of an unknown kind are ignored (forward
+       * compatibility), malformed ones are counted.
+       */
+      applyRow(state, row, undo) {
+        switch (row.kind) {
+          case CHAT_MSG_KIND: {
+            const head = readChatMsg(row.payload);
+            if (!head) return this.malformed();
+            undo?.push({ t: "head", id: head.id, prev: state.heads.get(head.id) });
+            state.heads.set(head.id, head);
+            if ("text" in head.body) this.dropParts(state, head.id, 0, undo);
+            else this.dropParts(state, head.id, head.body.parts, undo);
+            return head.id;
+          }
+          case CHAT_PART_KIND: {
+            const part = readChatPart(row.payload);
+            if (!part) return this.malformed();
+            let map3 = state.parts.get(part.id);
+            if (!map3) {
+              map3 = /* @__PURE__ */ new Map();
+              state.parts.set(part.id, map3);
+            }
+            undo?.push({ t: "part", id: part.id, k: part.k, prev: map3.get(part.k) });
+            map3.set(part.k, part);
+            return part.id;
+          }
+          case CHAT_DEL_KIND: {
+            const del = readChatDel(row.payload);
+            if (!del) return this.malformed();
+            if (del.k === null) {
+              undo?.push({ t: "head", id: del.id, prev: state.heads.get(del.id) });
+              state.heads.delete(del.id);
+              this.dropParts(state, del.id, 0, undo);
+            } else {
+              const map3 = state.parts.get(del.id);
+              if (map3?.has(del.k)) {
+                undo?.push({ t: "part", id: del.id, k: del.k, prev: map3.get(del.k) });
+                map3.delete(del.k);
+              }
+            }
+            return del.id;
+          }
+          case CHAT_META_KIND: {
+            const meta3 = readChatMeta(row.payload);
+            if (!meta3) return this.malformed();
+            if (this.options.expectedSessionId !== void 0 && meta3.sessionId !== this.options.expectedSessionId) {
+              this.reject("session_mismatch", false);
+              return null;
+            }
+            undo?.push({ t: "meta", prev: state.meta });
+            state.meta = meta3;
+            return "meta";
+          }
+          default:
+            return null;
+        }
+      }
+      malformed() {
+        this.reject("malformed_row", false);
+        return null;
+      }
+      /** Drop part slots `k >= from` of a bubble (fewer parts, inline body, or deletion). */
+      dropParts(state, id22, from, undo) {
+        const map3 = state.parts.get(id22);
+        if (!map3) return;
+        for (const k of Array.from(map3.keys())) {
+          if (k < from) continue;
+          undo?.push({ t: "part", id: id22, k, prev: map3.get(k) });
+          map3.delete(k);
+        }
+        if (map3.size === 0) state.parts.delete(id22);
+      }
+      rollback(undo) {
+        for (let i = undo.length - 1; i >= 0; i -= 1) {
+          const op = undo[i];
+          if (op.t === "head") {
+            if (op.prev) this.state.heads.set(op.id, op.prev);
+            else this.state.heads.delete(op.id);
+          } else if (op.t === "part") {
+            let map3 = this.state.parts.get(op.id);
+            if (op.prev) {
+              if (!map3) {
+                map3 = /* @__PURE__ */ new Map();
+                this.state.parts.set(op.id, map3);
+              }
+              map3.set(op.k, op.prev);
+            } else if (map3) {
+              map3.delete(op.k);
+              if (map3.size === 0) this.state.parts.delete(op.id);
+            }
+          } else if (op.t === "meta") {
+            this.state.meta = op.prev;
+          } else {
+            this.state.commit = op.prev;
+          }
+        }
+      }
+      /** Commit verification (§4.5): displayable bubbles, live count, digest. */
+      verify(state, commit2) {
+        for (const head of state.heads.values()) {
+          if ("text" in head.body) continue;
+          const map3 = state.parts.get(head.id);
+          for (let k = 0; k < head.body.parts; k += 1) {
+            if (map3?.get(k)?.rev !== head.body.partRevs[k]) return "incomplete_bubble";
+          }
+        }
+        const metaRev = state.meta?.rev ?? 0;
+        if (state.heads.size !== commit2.liveCount || metaRev !== commit2.metaRev) return "digest_mismatch";
+        const digest = computeChatCommitDigest(
+          Array.from(state.heads.values(), (h) => [h.id, h.rev]),
+          metaRev
+        );
+        return digest === commit2.digest ? null : "digest_mismatch";
+      }
+      reject(reason, needsResync) {
+        this.counters.rejectedRows++;
+        this.counters.lastRejectReason = reason;
+        if (needsResync) this.resync = reason;
+      }
+      bodyOf(head) {
+        if ("text" in head.body) return head.body.text;
+        const map3 = this.state.parts.get(head.id);
+        let text = "";
+        for (let k = 0; k < head.body.parts; k += 1) text += map3?.get(k)?.text ?? "";
+        return text;
+      }
+      materializeMessage(id22) {
+        const head = this.state.heads.get(id22);
+        return head ? chatMessageFromWire(head, this.bodyOf(head)) : null;
+      }
+      materialize() {
+        const messages = Array.from(this.state.heads.values(), (head) => chatMessageFromWire(head, this.bodyOf(head)));
+        messages.sort(compareChatOrd);
+        return { ...this.materializeMeta(), messages };
+      }
+      /** The view without `messages` — O(1) in the transcript size. */
+      materializeMeta() {
+        const commit2 = this.state.commit;
+        const meta3 = this.state.meta;
+        const live = this.state.heads.size;
+        return {
+          schemaVersion: 2,
+          sessionId: meta3.sessionId,
+          historySessionId: meta3.historySessionId,
+          providerType: meta3.providerType,
+          providerSessionId: meta3.providerSessionId,
+          producerDaemonId: commit2.producerDaemonId,
+          producerWriterId: commit2.writer,
+          epoch: commit2.epoch,
+          frame: commit2.frame,
+          observedAt: commit2.observedAt,
+          status: meta3.status,
+          providerObservedStatus: meta3.providerObservedStatus,
+          title: meta3.title,
+          activeModal: meta3.activeModal,
+          activeInteractivePrompt: meta3.activeInteractivePrompt,
+          turn: meta3.turn,
+          provenance: meta3.provenance,
+          terminalMarkers: meta3.terminalMarkers,
+          coverage: {
+            mode: meta3.coverage.mode,
+            omittedBefore: meta3.coverage.omittedBefore,
+            totalMessageCount: live,
+            returnedMessageCount: live
+          }
+        };
+      }
+    };
     var TRANSCRIPT_REPLICA_SUB_VIEW = "tail";
     var TRANSCRIPT_REPLICA_BASE_REQUEST_AFTER = 3;
     function replicaKeyString(key2) {
@@ -181415,13 +180780,11 @@ ${notice.notice}${supersededHint}`;
     init_git_commands();
     init_cli_detector();
     init_logger();
-    init_transcript_parity();
     function buildLocalSeqscribeStats(rt, inputs) {
       if (!rt) return null;
       try {
         const transcriptService = rt.projections()?.transcript ?? null;
         const transcriptCounters = transcriptService?.getCounters() ?? null;
-        const transcriptParity = transcriptParityCounters();
         const snapshot = rt.collector?.snapshot() ?? null;
         if (!snapshot) return null;
         return summarizeSeqscribeStats(snapshot.stats, {
@@ -181485,13 +180848,6 @@ ${notice.notice}${supersededHint}`;
               collectFailed: transcriptCounters.collectFailed
             }
           } : {},
-          // ★ The WHOLE parity counter object, never a narrowed slice: §5.6's
-          // `persistent mismatch 0` condition is undecidable from
-          // {runs, mismatches, persistentMismatches} alone (a missing revision
-          // is promoted to persistent only on a session key's SECOND
-          // comparison). Only three bucketed fields survive into the cloud
-          // frame; the rest land on the local-only transcriptParityDetail.
-          transcriptParity,
           // Zombie recovery — local-only, see `stats.ts`'s doc comment on
           // `transcriptLane` for why. Injected from daemon-cloud, see above.
           transcriptLane: {
@@ -181510,8 +180866,8 @@ ${notice.notice}${supersededHint}`;
     init_mesh_runtime_store();
     init_mesh_node_git_state();
     function readMeshDeliveryCounters() {
-      const counters5 = meshNoticeRuntime.current()?.counters();
-      return counters5 ? { ...counters5 } : null;
+      const counters4 = meshNoticeRuntime.current()?.counters();
+      return counters4 ? { ...counters4 } : null;
     }
     function bootCommandPlane(s4) {
       const { cfg, providerLoader, seqscribe, bus } = s4;
@@ -182271,7 +181627,7 @@ ${notice.notice}${supersededHint}`;
       const ledger = createMeshRuntimeTurnLedger({ selfDaemonId, ports });
       const appendHandoff = rt ? (meshId, kind, payload) => appendMeshHandoff(meshId, kind, payload) : void 0;
       const offEvidencePort = wireTurnEvidencePort(components, ledger, { appendHandoff });
-      const counters5 = createTurnDeliverCounters();
+      const counters4 = createTurnDeliverCounters();
       const waiter = createDeliverEdgeWaiter({ now: () => Date.now() });
       const resolveHandoff = resolveHandoffOn(rt);
       const inputPort = components.cliManager.input;
@@ -182285,7 +181641,7 @@ ${notice.notice}${supersededHint}`;
         resolveHandoff,
         statusLine: (meshId) => buildMeshStatusLineForNotification(meshId),
         isControlEvent: (event) => event === "coordinator_catchup",
-        counters: counters5,
+        counters: counters4,
         log: deliverLog
       };
       const notifier = createCoordinatorNotifier({ ledger, selfDaemonIds, ...appendHandoff ? { appendHandoff } : {}, log: deliverLog });
@@ -182315,7 +181671,7 @@ ${notice.notice}${supersededHint}`;
         evidence: ledger,
         ...appendHandoff ? { appendHandoff } : {},
         // Deliver outcomes + the cursors' own counters (the consumer arms below).
-        counters: () => ({ ...counters5, ...consumer?.counters() ?? {} })
+        counters: () => ({ ...counters4, ...consumer?.counters() ?? {} })
       };
       bindMeshNoticeRuntime(notices);
       const index = new MeshTopicIndex(store2.db);
@@ -182325,7 +181681,7 @@ ${notice.notice}${supersededHint}`;
         replicationPending: (meshId) => notices.replicationPending(meshId)
       });
       const abort = new AbortController();
-      const ingest = createTurnIngestHandler({ ledger, selfDaemonIds, releaseAttemptRef: ({ attemptId }) => releaseLocalAttemptRef(components, attemptId), counters: counters5, log: deliverLog });
+      const ingest = createTurnIngestHandler({ ledger, selfDaemonIds, releaseAttemptRef: ({ attemptId }) => releaseLocalAttemptRef(components, attemptId), counters: counters4, log: deliverLog });
       const deliver = createTurnDeliverHandler(deliverDeps);
       let consumer = null;
       if (rt) {
@@ -184586,10 +183942,6 @@ ${notice.notice}${supersededHint}`;
       if (!topics.hasSubscriptions(topic)) return;
       void topics.flushNow(topic).catch(swallow(`${topic} flush`));
     }
-    function isTurnCompletionEdge(prev, next) {
-      const from = classifySessionStatus(prev);
-      return (from === "working" || from === "blocked") && classifySessionStatus(next) === "ready";
-    }
     function subscribeHostStatusFacts(bus, onFacts) {
       return bus.on(["status", "daemon_facts", "registered", "terminated", "launch_updated"], (e) => onFacts(e), {
         name: "host.status-facts"
@@ -184771,6 +184123,10 @@ ${notice.notice}${supersededHint}`;
       });
       const buildDaemonMetadataBody = (params) => {
         const status = buildSnapshot("metadata");
+        const staleness = components.providerLoader.getChannelStalenessSnapshot?.();
+        if (staleness && !staleness.error) {
+          status.providerChannelStaleness = { staleTypes: [...staleness.staleTypes], newTypes: [...staleness.newTypes] };
+        }
         const extras = transport.metadataExtras?.(status, params) ?? {};
         return { daemonId: transport.instanceId(), status, ...extras };
       };
@@ -185503,9 +184859,7 @@ var DAEMON_STATUS_EVENT_NAMES = [
   "agent:waiting_choice",
   "agent:generating_completed",
   "agent:stopped",
-  "monitor:no_progress",
-  /** Legacy alias for `monitor:no_progress`, still emitted by older daemons. */
-  "monitor:long_generating"
+  "monitor:no_progress"
 ];
 var isDaemonStatusEventName = makeTypeGuard(DAEMON_STATUS_EVENT_NAMES);
 var P2P_SIGNAL_TYPES = ["p2p_ready", "p2p_offer", "p2p_answer", "p2p_ice"];
@@ -185661,11 +185015,8 @@ var isMeshTaskStatus = makeGuard(MESH_TASK_STATUSES);
 var isMeshTerminalTaskStatus = makeGuard(MESH_TERMINAL_TASK_STATUSES);
 var isMeshTaskMode = makeGuard(MESH_TASK_MODES);
 var isMeshTaskPriority = makeGuard(MESH_TASK_PRIORITIES);
-var isMeshThinkingLevel = makeGuard(MESH_THINKING_LEVELS);
 var isMeshDeliveryMode = makeGuard(MESH_DELIVERY_MODES);
-var isMeshSessionCleanupMode = makeGuard(MESH_SESSION_CLEANUP_MODES);
 var isWorkerReportOutcome = makeGuard(WORKER_REPORT_OUTCOMES);
-var isWorkerBranchState = makeGuard(WORKER_BRANCH_STATES);
 function enumOf(values, description) {
   return {
     type: "string",
@@ -186002,18 +185353,14 @@ function makeGuard2(values) {
   const set3 = new Set(values);
   return (value) => typeof value === "string" && set3.has(value);
 }
-var isEvidenceSourceId = makeGuard2(EVIDENCE_SOURCE_IDS);
 var isTurnEvidenceKind = makeGuard2(TURN_EVIDENCE_KINDS);
 var isTurnReason = makeGuard2(TURN_REASONS);
 var isNotifyKind = makeGuard2(NOTIFY_KINDS);
-var isHoldReason = makeGuard2(HOLD_REASONS);
 var isTurnOutcome = makeGuard2(TURN_OUTCOMES);
 var isCommitStrength = makeGuard2(COMMIT_STRENGTHS);
 function isEvidenceIdentifier(value) {
   return typeof value === "string" && IDENTIFIER_RE.test(value);
 }
-var MESH_TOPIC_ENTRY_KINDS = ["turn.evidence", "turn.committed", "turn.notify", "mesh.record"];
-var isMeshTopicEntryKind = makeGuard2(MESH_TOPIC_ENTRY_KINDS);
 var TURN_IPC_PROTOCOL_VERSION = 1;
 function isNonNegativeInt(value) {
   return Number.isSafeInteger(value) && value >= 0;
@@ -186956,10 +186303,6 @@ var import_daemon_core10 = __toESM(require_dist3());
 function readString(value) {
   return typeof value === "string" && value.trim() ? value.trim() : void 0;
 }
-function readNumeric(value, fallback = 0) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
 function readTaskInput(value) {
   if (value === void 0 || value === null) return void 0;
   if (typeof value !== "object" || Array.isArray(value)) {
@@ -187355,67 +186698,25 @@ function slimNodesForActiveWork(nodes) {
   });
 }
 async function activeWorkQueryWithRuntime(ctx, args) {
-  const base = { meshId: ctx.mesh.id, ...args };
-  if (!args.includeSchedulingRuntime) return activeWorkQuery(ctx.transport, base);
-  try {
-    const res = await activeWorkQuery(ctx.transport, base);
-    if (res.schedulingRuntime) return res;
-  } catch {
-  }
-  return activeWorkQuery(ctx.transport, { ...base, mesh: ctx.mesh });
+  return activeWorkQuery(ctx.transport, { meshId: ctx.mesh.id, ...args });
 }
 async function readRecoveryContexts(ctx, nodeIds) {
   const out = /* @__PURE__ */ new Map();
   const ids = [...new Set(nodeIds.filter(Boolean))];
   if (ids.length === 0) return out;
-  try {
-    const res = await recoveryContextQuery(ctx.transport, { meshId: ctx.mesh.id, nodeIds: ids });
-    if (res.contexts) {
-      for (const [nodeId, context] of Object.entries(res.contexts)) out.set(nodeId, context);
-      return out;
-    }
-  } catch {
-  }
-  await Promise.all(ids.map(async (nodeId) => {
-    try {
-      const res = await recoveryContextQuery(ctx.transport, { meshId: ctx.mesh.id, nodeId });
-      if (res.context) out.set(nodeId, res.context);
-    } catch {
-    }
-  }));
+  const res = await recoveryContextQuery(ctx.transport, { meshId: ctx.mesh.id, nodeIds: ids });
+  for (const [nodeId, context] of Object.entries(res.contexts ?? {})) out.set(nodeId, context);
   return out;
 }
-var COMPACT_STATUS_GOAL_PREVIEW_MAX = 80;
-var LIVE_STATUSES = ["active", "paused"];
 async function readStatusMissionsCompact(ctx) {
-  try {
-    const res2 = await missionListQuery(ctx.transport, { meshId: ctx.mesh.id, meshStatusView: "compact" });
-    return { live: res2.missions, historyFold: res2.historyFold };
-  } catch {
-  }
-  const res = await missionListQuery(ctx.transport, { meshId: ctx.mesh.id, includeMagi: true, limit: 1e3 });
-  const live = res.missions.map((m) => {
-    const preview = typeof m.goalPreview === "string" ? m.goalPreview : "";
-    if (preview.length <= COMPACT_STATUS_GOAL_PREVIEW_MAX) return m;
-    return { ...m, goalPreview: preview.slice(0, COMPACT_STATUS_GOAL_PREVIEW_MAX), goalTruncated: true };
-  }).filter((m) => LIVE_STATUSES.includes(String(m.status)));
-  return { live, historyFold: res.historyFold };
+  const res = await missionListQuery(ctx.transport, { meshId: ctx.mesh.id, meshStatusView: "compact" });
+  return { live: res.missions, historyFold: res.historyFold };
 }
 async function readStatusMissionsVerbose(ctx) {
-  let missions;
-  try {
-    const res = await missionListQuery(ctx.transport, { meshId: ctx.mesh.id, meshStatusView: "verbose" });
-    missions = res.missions;
-  } catch {
-    const [live, history] = await Promise.all([
-      missionListQuery(ctx.transport, { meshId: ctx.mesh.id, statuses: [...LIVE_STATUSES], verbose: true, includeMagi: true, withStats: true, limit: 1e3 }),
-      missionListQuery(ctx.transport, { meshId: ctx.mesh.id, statuses: ["completed", "abandoned"], verbose: true, includeMagi: true, withStats: true, limit: 10 })
-    ]);
-    return [...live.missions, ...history.missions];
-  }
+  const res = await missionListQuery(ctx.transport, { meshId: ctx.mesh.id, meshStatusView: "verbose" });
+  const missions = res.missions;
   if (missions.length === 0) return missions;
-  const ids = missions.map((m) => String(m.id));
-  const rollups = await readMissionStatsBatch(ctx, ids);
+  const rollups = await readMissionStatsBatch(ctx, missions.map((m) => String(m.id)));
   return missions.map((m) => {
     const stats = rollups.get(String(m.id));
     return stats ? { ...m, stats } : m;
@@ -187425,44 +186726,26 @@ async function readMissionStatsBatch(ctx, missionIds) {
   const out = /* @__PURE__ */ new Map();
   const ids = [...new Set(missionIds.filter(Boolean))];
   if (ids.length === 0) return out;
-  try {
-    const res = await taskStatsQuery(ctx.transport, { meshId: ctx.mesh.id, missionIds: ids });
-    if (res.missions) {
-      for (const [id2, rollup] of Object.entries(res.missions)) out.set(id2, rollup);
-      return out;
-    }
-  } catch {
-  }
-  await Promise.all(ids.map(async (missionId) => {
-    try {
-      const { mission } = await taskStatsQuery(ctx.transport, { meshId: ctx.mesh.id, missionId, rollup: true });
-      if (mission) out.set(missionId, mission);
-    } catch {
-    }
-  }));
+  const res = await taskStatsQuery(ctx.transport, { meshId: ctx.mesh.id, missionIds: ids });
+  for (const [id2, rollup] of Object.entries(res.missions ?? {})) out.set(id2, rollup);
   return out;
 }
 var OLD_HISTORICAL_QUEUE_RECORD_MS = 7 * 24 * 60 * 6e4;
 async function readQueueActiveView(ctx) {
-  try {
-    const res = await queueQuery(ctx.transport, {
-      meshId: ctx.mesh.id,
-      statuses: ["pending", "assigned"],
-      view: true,
-      withCounts: true,
-      historicalOlderThanMs: OLD_HISTORICAL_QUEUE_RECORD_MS,
-      withDependencyHeads: true
-    });
-    if (!res.counts) return null;
-    return {
-      activeRows: res.entries,
-      counts: res.counts,
-      oldHistoricalCount: res.oldHistoricalCount ?? 0,
-      dependencyHeads: [...res.dependencyHeads ?? []]
-    };
-  } catch {
-    return null;
-  }
+  const res = await queueQuery(ctx.transport, {
+    meshId: ctx.mesh.id,
+    statuses: ["pending", "assigned"],
+    view: true,
+    withCounts: true,
+    historicalOlderThanMs: OLD_HISTORICAL_QUEUE_RECORD_MS,
+    withDependencyHeads: true
+  });
+  return {
+    activeRows: res.entries,
+    counts: res.counts ?? {},
+    oldHistoricalCount: res.oldHistoricalCount ?? 0,
+    dependencyHeads: [...res.dependencyHeads ?? []]
+  };
 }
 
 // src/tools/mesh-node-identity.ts
@@ -188111,113 +187394,6 @@ function extractDaemonBuildInfo(value) {
     track
   };
 }
-function buildBranchConvergence(mesh, node, status, dirty, uncommittedChanges) {
-  const defaultBranch = readString(mesh.defaultBranch) ?? "main";
-  const branch = readString(status?.branch) ?? readString(node.worktreeBranch) ?? null;
-  const ahead = readNumeric(status?.ahead);
-  const behind = readNumeric(status?.behind);
-  const upstream = readString(status?.upstream) ?? null;
-  const upstreamStatus = readString(status?.upstreamStatus) ?? (upstream ? "unchecked" : "no_upstream");
-  const hasConflicts = status?.hasConflicts === true || Array.isArray(status?.conflictFiles) && status.conflictFiles.length > 0;
-  const base = {
-    defaultBranch,
-    branch,
-    upstream,
-    upstreamStatus,
-    ahead,
-    behind,
-    isWorktree: node.isLocalWorktree === true,
-    isDefaultBranch: branch === defaultBranch
-  };
-  if (status?.isGitRepo !== true) {
-    return {
-      ...base,
-      status: "blocked_review",
-      needsConvergence: true,
-      reason: "git_status_unavailable",
-      nextStep: `Resolve git status for node '${node.id}' before marking the task complete.`
-    };
-  }
-  if (!branch) {
-    return {
-      ...base,
-      status: "blocked_review",
-      needsConvergence: true,
-      reason: "branch_unknown",
-      nextStep: `Inspect node '${node.id}' git branch before deciding whether it is merged to ${defaultBranch}.`
-    };
-  }
-  if (hasConflicts || dirty || uncommittedChanges > 0) {
-    return {
-      ...base,
-      status: "not_mergeable",
-      needsConvergence: true,
-      reason: hasConflicts ? "conflicts_present" : "dirty_workspace",
-      nextStep: `Commit, checkpoint, or resolve node '${node.id}' before any main convergence step.`
-    };
-  }
-  if (branch === defaultBranch) {
-    if (upstream && upstreamStatus !== "fresh") {
-      return {
-        ...base,
-        status: "blocked_review",
-        needsConvergence: true,
-        reason: "default_branch_upstream_unverified",
-        nextStep: `Refresh ${defaultBranch}'s upstream refs or resolve the fetch failure before declaring convergence complete for node '${node.id}'.`
-      };
-    }
-    if (ahead > 0 || behind > 0) {
-      return {
-        ...base,
-        status: "blocked_review",
-        needsConvergence: true,
-        reason: "default_branch_not_even_with_upstream",
-        nextStep: `Bring ${defaultBranch} even with its upstream before declaring convergence complete.`
-      };
-    }
-    return {
-      ...base,
-      status: "merged_to_main",
-      needsConvergence: false,
-      reason: "clean_default_branch",
-      nextStep: null
-    };
-  }
-  if (node.isLocalWorktree) {
-    return {
-      ...base,
-      status: "cleanup_candidate",
-      needsConvergence: true,
-      reason: "clean_non_default_worktree_branch",
-      nextStep: `Run mesh_refine_node(node_id: "${node.id}") or explicitly classify this worktree as blocked_review/not_mergeable before ending the task.`
-    };
-  }
-  if (upstream && upstreamStatus !== "fresh") {
-    return {
-      ...base,
-      status: "blocked_review",
-      needsConvergence: true,
-      reason: "feature_branch_upstream_unverified",
-      nextStep: `Refresh branch '${branch}' upstream refs or resolve the fetch failure before deciding whether it is ready to merge into ${defaultBranch}.`
-    };
-  }
-  if (!upstream || ahead > 0 || behind > 0) {
-    return {
-      ...base,
-      status: "blocked_review",
-      needsConvergence: true,
-      reason: !upstream ? "feature_branch_missing_upstream" : "feature_branch_not_even_with_upstream",
-      nextStep: `Push or reconcile branch '${branch}', then merge it into ${defaultBranch} or mark it not_mergeable with a reason.`
-    };
-  }
-  return {
-    ...base,
-    status: "pushed_feature_branch_needs_merge",
-    needsConvergence: true,
-    reason: "clean_non_default_branch",
-    nextStep: `Review and merge branch '${branch}' into ${defaultBranch}; do not report the task as fully complete while it remains off main.`
-  };
-}
 var COMPACT_MAX_CONVERGENCE_FOLLOWUPS = 12;
 function summarizeBranchConvergence(nodes, compact = false) {
   const allFollowUps = nodes.filter((node) => node?.branchConvergence?.needsConvergence === true).map((node) => ({
@@ -188307,33 +187483,48 @@ async function readCoordinatorHeldNodeState(ctx, opts = {}) {
   try {
     raw = await ctx.transport.command("mesh_status", {
       meshId: ctx.mesh.id,
-      // Only the node section is read here. Without it the daemon answers its
-      // whole dashboard payload — 97% queue rows (5.05 of 5.18 MB measured on
-      // the preview daemon) — and deep-clones it on every cache hit. An older
-      // daemon ignores the key; the node read below is the same either way.
+      // Only the node section: the whole dashboard payload is ~97% queue rows.
       sections: ["nodes"],
       ...opts.refresh === true ? { refresh: true } : {}
     });
   } catch (error48) {
     return { byNodeId, error: error48?.message || "coordinator mesh_status read failed" };
   }
-  const payload = unwrapCommandPayload(raw);
-  const record2 = readRecord(payload) ?? readRecord(raw);
+  return parseCoordinatorHeldNodeState(raw);
+}
+function parseCoordinatorHeldNodeState(raw) {
+  const byNodeId = /* @__PURE__ */ new Map();
+  const record2 = readRecord(unwrapCommandPayload(raw)) ?? readRecord(raw);
   if (!record2 || record2.success === false) {
     return { byNodeId, error: typeof record2?.error === "string" ? record2.error : "coordinator mesh_status returned no node state" };
   }
-  const nodes = Array.isArray(record2.nodes) ? record2.nodes : [];
-  for (const node of nodes) {
+  for (const node of Array.isArray(record2.nodes) ? record2.nodes : []) {
     const status = readRecord(node);
     const nodeId = typeof status?.nodeId === "string" ? status.nodeId : "";
     if (status && nodeId) byNodeId.set(nodeId, status);
   }
-  return { byNodeId, ...record2.nodeRuntimeHeld === true ? { runtimeHeld: true } : {} };
+  return { byNodeId };
 }
-function usesHeldNodeRuntime(ctx, node, state) {
-  if (state.runtimeHeld !== true) return false;
-  if (!(ctx.transport instanceof IpcTransport) || !node.daemonId) return false;
-  return !isLocalControlPlaneNode(ctx, node);
+function isCoordinatorServedNode(ctx, node) {
+  if (!isLocalControlPlaneNode(ctx, node)) return false;
+  return meshNodeRouteOf(ctx, node)?.reason !== "checkout_on_this_machine";
+}
+function localStatusProbe(localStatus) {
+  if (!readRecord(localStatus) || localStatus.success === false) return null;
+  const payload = unwrapCommandPayload(localStatus);
+  const daemonId = typeof payload?.status?.instanceId === "string" ? payload.status.instanceId.trim() : "";
+  const daemonBuild = extractDaemonBuildInfo(localStatus);
+  const upgradeFailure = extractUpgradeFailureSummary(localStatus);
+  const providers = payload?.status?.availableProviders ?? payload?.availableProviders;
+  const observedAt = payload?.status?.timestamp;
+  return {
+    sessions: extractStatusMetadataSessions(localStatus),
+    ...typeof observedAt === "number" && Number.isFinite(observedAt) ? { observedAt } : {},
+    ...daemonId ? { daemonId } : {},
+    ...daemonBuild ? { daemonBuild } : {},
+    ...upgradeFailure ? { upgradeFailure } : {},
+    ...Array.isArray(providers) ? { providers } : {}
+  };
 }
 function heldNodeStatusProbe(held) {
   const runtime = readRecord(held?.heldRuntime);
@@ -188361,7 +187552,8 @@ function heldNodeStatusProbe(held) {
       sessions: Array.isArray(runtime.sessions) ? runtime.sessions : [],
       ...typeof runtime.daemonId === "string" && runtime.daemonId ? { daemonId: runtime.daemonId } : {},
       ...daemonBuild ? { daemonBuild } : {},
-      ...upgradeFailure ? { upgradeFailure } : {}
+      ...upgradeFailure ? { upgradeFailure } : {},
+      ...Array.isArray(runtime.providers) ? { providers: runtime.providers } : {}
     },
     observation
   };
@@ -188374,42 +187566,55 @@ function findHeldNodeStatus(state, node) {
   }
   return void 0;
 }
-var holdStateCacheForCall = /* @__PURE__ */ new WeakMap();
-function cachedHeldNodeState(ctx) {
-  const cached2 = holdStateCacheForCall.get(ctx);
+function resolveNodeRuntime(ctx, node, answers) {
+  if (isCoordinatorServedNode(ctx, node)) {
+    return {
+      probe: answers.local ?? { sessions: [] },
+      observation: { source: "local_read", observedAt: answers.local?.observedAt ?? null, refreshing: false },
+      source: "local",
+      known: !!answers.local
+    };
+  }
+  const held = heldNodeStatusProbe(answers.held ? findHeldNodeStatus(answers.held, node) : void 0);
+  return { probe: held.probe, observation: held.observation, source: "held", known: held.observation.source !== "none" };
+}
+var heldStateForCall = /* @__PURE__ */ new WeakMap();
+var localStatusForCall = /* @__PURE__ */ new WeakMap();
+function sharedForCall(cache, ctx, read) {
+  const cached2 = cache.get(ctx);
   if (cached2) return cached2;
-  const promise2 = readCoordinatorHeldNodeState(ctx);
-  holdStateCacheForCall.set(ctx, promise2);
+  const promise2 = read();
+  cache.set(ctx, promise2);
   promise2.finally(() => {
-    if (holdStateCacheForCall.get(ctx) === promise2) holdStateCacheForCall.delete(ctx);
+    if (cache.get(ctx) === promise2) cache.delete(ctx);
+  }).catch(() => {
   });
   return promise2;
 }
-var HELD_DISPATCH_MIN_SESSION_STAMP_VERSION = 2;
-async function readHeldDispatchSessions(ctx, node) {
+function cachedHeldNodeState(ctx, opts = {}) {
+  return sharedForCall(heldStateForCall, ctx, () => readCoordinatorHeldNodeState(ctx, opts));
+}
+function cachedLocalStatus(ctx) {
+  return sharedForCall(localStatusForCall, ctx, async () => {
+    try {
+      return localStatusProbe(await ctx.transport.command("get_status_metadata", {}));
+    } catch {
+      return null;
+    }
+  });
+}
+async function readNodeRuntime(ctx, node, opts = {}) {
   await ensureMeshNodeRoutes(ctx);
-  if (!(ctx.transport instanceof IpcTransport) || !node.daemonId || isLocalControlPlaneNode(ctx, node)) return null;
-  const state = await cachedHeldNodeState(ctx);
-  if (state.error || !usesHeldNodeRuntime(ctx, node, state)) return null;
-  const heldStatus = findHeldNodeStatus(state, node);
-  const held = heldNodeStatusProbe(heldStatus);
-  if (held.observation.source === "none") return null;
-  const stampVersion = readRecord(heldStatus?.heldRuntime)?.sessionStampVersion;
-  return {
-    sessions: held.probe.sessions,
-    stampsComplete: typeof stampVersion === "number" && stampVersion >= HELD_DISPATCH_MIN_SESSION_STAMP_VERSION
-  };
+  if (isCoordinatorServedNode(ctx, node)) {
+    return resolveNodeRuntime(ctx, node, { local: await cachedLocalStatus(ctx), held: null });
+  }
+  return resolveNodeRuntime(ctx, node, { local: null, held: await cachedHeldNodeState(ctx, opts) });
 }
-function hasNodeOwnershipStamp(session) {
-  const meshNodeFor = session?.settings?.meshNodeFor;
-  return typeof meshNodeFor === "string" && meshNodeFor.trim().length > 0;
-}
-function isHeldDispatchPickDecisive(picked, args) {
-  if (!picked) return !args.explicit;
-  if (args.stampsComplete === true) return true;
-  if (!hasNodeOwnershipStamp(picked)) return false;
-  const safety = classifyRemoteDelegateRelaySafety(picked, args.meshId, args.nodeId, args.coordinatorDaemonId);
-  return safety === "safe" || safety === "self_heal";
+async function collectMeshNodesWithRuntime(ctx, opts) {
+  return Promise.all(ctx.mesh.nodes.map(async (node) => {
+    const result = await readNodeRuntime(ctx, node, opts);
+    return result.known ? { ...node, sessions: result.probe.sessions, __liveProbeVerified: true } : { ...node, __liveProbeVerified: false };
+  }));
 }
 
 // src/tools/tool-annotations.ts
@@ -188940,7 +188145,7 @@ var MESH_VIEW_QUEUE_TOOL = {
   inputSchema: {
     type: "object",
     properties: {
-      refresh: { type: "boolean", description: "Bypass the shared get_status_metadata probe cache (one probe per daemon, 5 s TTL \u2014 mesh-tools-internal.ts probeStatusMetadataForNode) and force a fresh probe. Default false." },
+      refresh: { type: "boolean", description: "Ask the coordinator to nudge members whose held runtime is old to push now (never a read of a member; the answer is still the held state). Default false." },
       status: {
         type: "array",
         items: { type: "string" },
@@ -189657,7 +188862,7 @@ var MESH_MAGI_KIND_PANEL_TOOL = {
 };
 var MESH_NODE_SLOTS_TOOL = {
   name: "mesh_node_slots",
-  description: "Read, draft, or change a mesh node's capability slots (policy.slots) \u2014 the provider/model/thinking + difficulty + capability-tag profile that task\u2192node fitness routing and MAGI fan-out match against. Use it when routing keeps landing work on a poor-fit node, when a node has no slots, or after CLI agents were installed on a node. Select with `action` (REQUIRED):\n\u2022 list \u2014 read-only: the node's current slots.\n\u2022 propose \u2014 read-only AUTO-DETECT: probes the node's installed CLI agents (get_status_metadata \u2192 availableProviders, category=cli + installed=true), maps each through a seeded provider\u2192(model/thinkingLevel/difficulty/maxParallel) table, and returns `proposedSlots` with per-slot rationale plus `droppedSlots` / `droppedProviders` / `destructive` (hand-tuned slots, tuned maxParallel, providers not on PATH are NOT preserved by the draft \u2014 present those before approving). Detects nothing \u2192 proposes nothing. Never writes.\n\u2022 set \u2014 PROPOSE (dry-run, default) or APPLY (write=true) a slot list. WHOLESALE REPLACEMENT: the `slots` you pass become the COMPLETE new list; any prior slot not in it is dropped. The dry-run returns `currentSlots` vs `proposedSlots` \u2014 present the diff and get EXPLICIT user approval before write=true. Apply goes through update_mesh_node (machine-local node policy).",
+  description: "Read, draft, or change a mesh node's capability slots (policy.slots) \u2014 the provider/model/thinking + difficulty + capability-tag profile that task\u2192node fitness routing and MAGI fan-out match against. Use it when routing keeps landing work on a poor-fit node, when a node has no slots, or after CLI agents were installed on a node. Select with `action` (REQUIRED):\n\u2022 list \u2014 read-only: the node's current slots.\n\u2022 propose \u2014 read-only AUTO-DETECT: reads the node's installed CLI agents from the coordinator (its own provider catalog, or the one the node pushed \u2014 category=cli + installed=true), maps each through a seeded provider\u2192(model/thinkingLevel/difficulty/maxParallel) table, and returns `proposedSlots` with per-slot rationale plus `droppedSlots` / `droppedProviders` / `destructive` (hand-tuned slots, tuned maxParallel, providers not on PATH are NOT preserved by the draft \u2014 present those before approving). Detects nothing \u2192 proposes nothing. Never writes.\n\u2022 set \u2014 PROPOSE (dry-run, default) or APPLY (write=true) a slot list. WHOLESALE REPLACEMENT: the `slots` you pass become the COMPLETE new list; any prior slot not in it is dropped. The dry-run returns `currentSlots` vs `proposedSlots` \u2014 present the diff and get EXPLICIT user approval before write=true. Apply goes through update_mesh_node (machine-local node policy).",
   inputSchema: {
     type: "object",
     properties: {
@@ -191117,17 +190322,8 @@ async function ipcDispatchToRemoteAgent(ctx, node, args) {
         if (!sessionProviderType) return true;
         return !checkDirectDispatchQuotaGate(node, sessionProviderType, ctx.mesh.policy?.quotaRouting ?? null);
       }), sessionProviderFilter, ctx.mesh.id, node.id, dispatchCoordinatorDaemonId);
-      const held = await readHeldDispatchSessions(ctx, node);
-      let picked = held ? pickSession(held.sessions) : void 0;
-      if (!held || !isHeldDispatchPickDecisive(picked, {
-        explicit: !!sessionId,
-        meshId: ctx.mesh.id,
-        nodeId: node.id,
-        coordinatorDaemonId: dispatchCoordinatorDaemonId,
-        stampsComplete: held.stampsComplete
-      })) {
-        picked = pickSession(extractStatusMetadataSessions(await transport.meshCommand(daemonId, "get_status_metadata", {})));
-      }
+      const runtime = await readNodeRuntime(ctx, node);
+      const picked = pickSession(runtime.probe.sessions);
       if (sessionId) {
         const explicitSession = picked;
         if (!explicitSession) {
@@ -191144,7 +190340,7 @@ async function ipcDispatchToRemoteAgent(ctx, node, args) {
             workspace: node.workspace,
             sessionId,
             ...resolvedProviderType ? { resolvedProviderType } : {},
-            error: `Remote session '${sessionId}' is not present in the live status for node '${node.id}'.`,
+            error: `Remote session '${sessionId}' is not in the coordinator's held runtime for node '${node.id}'${runtime.known ? "" : " (nothing held for this node yet)"}.`,
             nextAction: `Launch a fresh session with mesh_launch_session(node_id: '${node.id}'${resolvedProviderType ? `, type: '${resolvedProviderType}'` : ""}) or retry without session_id so Repo Mesh can target a live delegate session.`
           };
         }
@@ -191180,7 +190376,7 @@ async function ipcDispatchToRemoteAgent(ctx, node, args) {
       if (sessionId) {
         return {
           ...buildCoordinatorP2pRelayFailure(e, {
-            command: "get_status_metadata",
+            command: "mesh_status",
             targetDaemonId: daemonId,
             nodeId: node.id,
             sessionId
@@ -191359,66 +190555,6 @@ async function collectRelatedRepoStatuses(ctx, node, opts) {
     }
   }
   return results;
-}
-var PROBE_CACHE_TTL_MS = 5e3;
-var statusMetadataProbeCacheByCtx = /* @__PURE__ */ new WeakMap();
-function statusMetadataProbeCacheForCtx(ctx) {
-  let cache = statusMetadataProbeCacheByCtx.get(ctx);
-  if (!cache) {
-    cache = /* @__PURE__ */ new Map();
-    statusMetadataProbeCacheByCtx.set(ctx, cache);
-  }
-  return cache;
-}
-function statusMetadataProbeCacheKey(ctx, node) {
-  const canonical = (0, import_daemon_core10.canonicalDaemonId)(readNodeDaemonId(node)) || (0, import_daemon_core10.canonicalDaemonId)(ctx.localDaemonId);
-  return canonical || `node:${node.id}`;
-}
-function probeStatusMetadataForNode(ctx, node, opts) {
-  const cache = statusMetadataProbeCacheForCtx(ctx);
-  const key = statusMetadataProbeCacheKey(ctx, node);
-  const now = Date.now();
-  const cached2 = cache.get(key);
-  if (cached2 && cached2.expiresAt > now) {
-    if (!opts?.refresh || cached2.refreshedAt) return cached2.result;
-  }
-  const resultPromise = commandForNode(ctx, node, "get_status_metadata", {}, { statusProbe: true });
-  resultPromise.catch(() => {
-    const entry = cache.get(key);
-    if (entry && entry.result === resultPromise) cache.delete(key);
-  });
-  cache.set(key, {
-    expiresAt: now + PROBE_CACHE_TTL_MS,
-    result: resultPromise,
-    // Marks this entry as having been (re)issued under refresh:true, so a
-    // second node hitting the SAME key later in this call shares it instead
-    // of issuing its own "fresh" probe — refresh forces at least one live
-    // probe per daemon per call, not one per node.
-    ...opts?.refresh ? { refreshedAt: now } : {}
-  });
-  return resultPromise;
-}
-async function collectLiveStatusSessionsVerified(ctx, node, opts) {
-  try {
-    const statusResult = await probeStatusMetadataForNode(ctx, node, opts);
-    return { sessions: extractStatusMetadataSessions(statusResult), verified: true };
-  } catch {
-    return { sessions: [], verified: false };
-  }
-}
-async function collectLiveStatusProbe(ctx, node, opts) {
-  try {
-    const statusResult = await probeStatusMetadataForNode(ctx, node, opts);
-    const payload = unwrapCommandPayload(statusResult);
-    return {
-      sessions: extractStatusMetadataSessions(statusResult),
-      ...readString(payload?.status?.instanceId) ? { daemonId: readString(payload.status.instanceId) } : {},
-      daemonBuild: extractDaemonBuildInfo(statusResult),
-      upgradeFailure: extractUpgradeFailureSummary(statusResult)
-    };
-  } catch {
-    return { sessions: [] };
-  }
 }
 async function resolveMeshDispatchRoute(ctx, nodeId) {
   const node = ctx.mesh.nodes.find((n) => (0, import_daemon_core10.meshNodeIdMatches)(n, nodeId));
@@ -191658,7 +190794,7 @@ function deriveDataFreshnessFromObservation(args) {
   };
 }
 function applyHeldNodeGitToEntry(entry, args) {
-  const { mesh, node, held } = args;
+  const { node, held } = args;
   const observation = readHeldNodeGitObservation(held);
   const status = readRecord2(held?.git);
   const hasGit = !!status && (typeof status.isGitRepo === "boolean" || typeof status.branch === "string");
@@ -191667,12 +190803,12 @@ function applyHeldNodeGitToEntry(entry, args) {
   if (hasGit && status) {
     const uncommittedChanges = countUncommittedChanges(status);
     const dirty = isGitStatusDirty(status);
-    entry.health = daemonHealth ?? (status.isGitRepo ? dirty ? "dirty" : "online" : "degraded");
+    entry.health = daemonHealth ?? "unknown";
     assignFullGitSnapshot(entry, status);
     entry.branch = status.branch;
     entry.isDirty = dirty;
     entry.uncommittedChanges = uncommittedChanges;
-    entry.branchConvergence = daemonBranchConvergence ?? buildBranchConvergence(mesh, node, status, dirty, uncommittedChanges);
+    if (daemonBranchConvergence) entry.branchConvergence = daemonBranchConvergence;
     const buildBehind = readRecord2(status.daemonBuildBehind) ?? readRecord2(held?.staleDaemonBuild);
     const runningCommit = nonEmptyString(readRecord2(readRecord2(held?.heldRuntime)?.daemonBuild)?.commit);
     const verdictCommit = buildBehind ? nonEmptyString(buildBehind.buildCommit) : void 0;
@@ -191721,38 +190857,6 @@ function buildNodeGitStateSummary(entries, error48, refreshRequested) {
     }
   };
 }
-async function readNodeRuntime(ctx, node, opts = {}) {
-  await ensureMeshNodeRoutes(ctx);
-  const canUseHeld = !opts.allowLive && ctx.transport instanceof IpcTransport && !!node.daemonId && !isLocalControlPlaneNode(ctx, node);
-  if (canUseHeld) {
-    const heldState = await cachedHeldNodeState(ctx);
-    if (usesHeldNodeRuntime(ctx, node, heldState)) {
-      const heldNode = findHeldNodeStatus(heldState, node);
-      const held = heldNodeStatusProbe(heldNode);
-      if (held.observation.source !== "none") {
-        return { probe: held.probe, observation: held.observation, source: "held" };
-      }
-    }
-  }
-  const probe = await collectLiveStatusProbe(ctx, node, opts.refresh ? { refresh: true } : void 0);
-  return { probe, source: "live" };
-}
-async function collectPendingApprovalNodesHeldOrLive(ctx, opts) {
-  return Promise.all(ctx.mesh.nodes.map(async (node) => {
-    const result = await readNodeRuntime(ctx, node, opts);
-    return result.probe.sessions.length > 0 ? { ...node, sessions: result.probe.sessions } : node;
-  }));
-}
-async function collectMeshViewQueueNodesHeldOrLive(ctx, opts) {
-  return Promise.all(ctx.mesh.nodes.map(async (node) => {
-    const result = await readNodeRuntime(ctx, node, opts);
-    if (result.source === "held") {
-      return { ...node, sessions: result.probe.sessions, __liveProbeVerified: true };
-    }
-    const { sessions, verified } = await collectLiveStatusSessionsVerified(ctx, node, opts);
-    return verified ? { ...node, sessions, __liveProbeVerified: true } : { ...node, __liveProbeVerified: false };
-  }));
-}
 
 // src/tools/mesh-status-view.ts
 function readRecord3(value) {
@@ -191785,12 +190889,8 @@ function createMeshStatusViewTransport(base, view) {
   const missions = readRecord3(view.missions) ?? {};
   const command = async (command2, args = {}) => {
     switch (command2) {
-      case "mesh_status":
-        return view.status;
       case "get_mesh":
         return view.membership;
-      case "get_status_metadata":
-        return view.localStatus;
       case "recovery_context_query":
         return view.recovery ?? { success: true, contexts: {} };
       case "active_work_query":
@@ -191823,6 +190923,19 @@ function createMeshStatusViewTransport(base, view) {
   Object.defineProperty(replay, "command", { value: command });
   Object.defineProperty(replay, "meshCommand", { value: meshCommand });
   return replay;
+}
+function applyMeshStatusViewRoutes(ctx, view) {
+  const routes = /* @__PURE__ */ new Map();
+  for (const [id2, value] of Object.entries(readRecord3(view.routes) ?? {})) {
+    const route = value?.route;
+    if (route !== "local" && route !== "remote" && route !== "unreachable") continue;
+    routes.set(id2, {
+      route,
+      ...typeof value.ownerDaemonId === "string" && value.ownerDaemonId ? { ownerDaemonId: value.ownerDaemonId } : {},
+      reason: typeof value.reason === "string" ? value.reason : ""
+    });
+  }
+  ctx.nodeRoutes = { at: Date.now(), key: nodeSetKey(ctx), routes };
 }
 
 // src/tools/mesh-tools-status.ts
@@ -191861,19 +190974,6 @@ function withoutGraphUsage(summary) {
   const { graphUsage: _hoisted, ...rest } = summary;
   return rest;
 }
-function localStatusProbe(localStatus) {
-  if (!localStatus || typeof localStatus !== "object" || localStatus.success === false) return { sessions: [] };
-  const payload = unwrapCommandPayload(localStatus);
-  const daemonId = typeof payload?.status?.instanceId === "string" ? payload.status.instanceId.trim() : "";
-  const daemonBuild = extractDaemonBuildInfo(localStatus);
-  const upgradeFailure = extractUpgradeFailureSummary(localStatus);
-  return {
-    sessions: extractStatusMetadataSessions(localStatus),
-    ...daemonId ? { daemonId } : {},
-    ...daemonBuild ? { daemonBuild } : {},
-    ...upgradeFailure ? { upgradeFailure } : {}
-  };
-}
 async function meshStatus(outerCtx, args = {}) {
   const compact = args.verbose === true ? false : args.compact ?? true;
   let view;
@@ -191896,13 +190996,11 @@ async function meshStatus(outerCtx, args = {}) {
   const ctx = { ...outerCtx, transport: createMeshStatusViewTransport(outerCtx.transport, view) };
   const rateResult = await recordMeshCoordinatorToolCall(ctx, "mesh_status");
   await refreshMeshFromDaemon(ctx);
-  await ensureMeshNodeRoutes(ctx, { force: true });
+  applyMeshStatusViewRoutes(ctx, view);
   const { mesh } = ctx;
-  const [heldNodeState, recoveryByNode] = await Promise.all([
-    readCoordinatorHeldNodeState(ctx, { refresh: args.refresh === true }),
-    readRecoveryContexts(ctx, mesh.nodes.map((n) => n.id)).catch(() => /* @__PURE__ */ new Map())
-  ]);
-  const localProbe = localStatusProbe(view.localStatus);
+  const heldNodeState = parseCoordinatorHeldNodeState(view.status);
+  const recoveryByNode = await readRecoveryContexts(ctx, mesh.nodes.map((n) => n.id)).catch(() => /* @__PURE__ */ new Map());
+  const runtimeAnswers = { local: localStatusProbe(view.localStatus), held: heldNodeState };
   const results = await Promise.all(mesh.nodes.map(async (node) => {
     const entry = {
       nodeId: node.id,
@@ -191926,15 +191024,9 @@ async function meshStatus(outerCtx, args = {}) {
     });
     const relatedRepos = await collectRelatedRepoStatuses(ctx, node, { localOnly: true });
     if (relatedRepos.length) entry.relatedRepos = relatedRepos;
-    let statusProbe;
-    if (node.daemonId && !isLocalControlPlaneNode(ctx, node)) {
-      const held = heldNodeStatusProbe(heldNode);
-      statusProbe = held.probe;
-      entry.runtimeObservation = held.observation;
-    } else {
-      statusProbe = localProbe;
-      if (heldNodeState.runtimeHeld) entry.runtimeObservation = { source: "local_read", observedAt: Date.now(), refreshing: false };
-    }
+    const runtime = resolveNodeRuntime(ctx, node, runtimeAnswers);
+    const statusProbe = runtime.probe;
+    entry.runtimeObservation = runtime.observation;
     const liveSessions = statusProbe.sessions;
     if (statusProbe.daemonBuild) entry.daemonBuild = statusProbe.daemonBuild;
     if (statusProbe.upgradeFailure) entry.upgradeFailure = statusProbe.upgradeFailure;
@@ -193992,7 +193084,7 @@ async function meshViewQueue(ctx, args) {
       const depState = (0, import_daemon_core11.describeTaskDependencyState)(task, statusById, depMetaById);
       return { ...task, ...depState };
     });
-    const liveNodes = await collectMeshViewQueueNodesHeldOrLive(ctx, probeOpts);
+    const liveNodes = await collectMeshNodesWithRuntime(ctx, probeOpts);
     const fullQueue = prioritizeActiveQueueRows(annotateQueueStaleness(withDependencies, ctx.mesh, liveNodes));
     const queue = filterQueueForView(fullQueue, view, statusFilter);
     const viewStatuses = queueViewStatusSet(view, statusFilter);
@@ -196223,14 +195315,11 @@ async function collectMagiResponses(ctx, args) {
   const sendKindRetry = async (task, failReason) => {
     const node = ctx.mesh.nodes.find((n) => (0, import_daemon_core11.meshNodeIdMatches)(n, task.assignedNodeId));
     if (!node || !task.assignedSessionId) return false;
-    try {
-      const sessions = extractStatusMetadataSessions(await commandForNode(ctx, node, "get_status_metadata", {}));
-      const live = sessions.find((session) => readSessionRecordId(session) === task.assignedSessionId);
-      if (!live) return false;
-      if (!isIdleSessionRecord(live)) return "busy";
-    } catch {
-      return "busy";
-    }
+    const runtime = await readNodeRuntime(ctx, node);
+    if (!runtime.known) return "busy";
+    const live = runtime.probe.sessions.find((session) => readSessionRecordId(session) === task.assignedSessionId);
+    if (!live) return false;
+    if (!isIdleSessionRecord(live)) return "busy";
     const why = failReason === "empty_evidence" ? "your previous answer had an empty evidence array" : failReason === "missing_required_fields" ? "your previous answer was missing required fields" : "your previous answer did not parse as the required JSON";
     const message = `Your previous MAGI answer could not be accepted (${why}). Respond NOW with ONLY a single JSON object (no prose, no code fence) matching EXACTLY this schema, with non-empty evidence:
 
@@ -196550,19 +195639,17 @@ async function meshNodeSlotsPropose(ctx, args = {}) {
   const includeMagi = args.include_magi === true || args.includeMagi === true;
   try {
     const node = await findNodeWithRefresh(ctx, nodeId);
-    let statusResult;
-    try {
-      statusResult = await commandForNode(ctx, node, "get_status_metadata", {}, { statusProbe: true });
-    } catch (e) {
+    const runtime = await readNodeRuntime(ctx, node);
+    if (!runtime.known) {
       return JSON.stringify({
         success: false,
         nodeId: node.id,
         code: "detection_unavailable",
-        error: `Could not probe node for installed providers: ${e?.message || String(e)}`,
+        error: "The coordinator holds no provider catalog for this node yet (the member has not pushed its runtime).",
         nextAction: 'Node may be offline. Retry when it is online, or set slots manually with mesh_node_slots (action "set").'
       }, null, 2);
     }
-    const detected = extractInstalledCliProviders(statusResult);
+    const detected = extractInstalledCliProviders({ availableProviders: runtime.probe.providers ?? [] });
     const currentSlots = normalizeNodeCapabilitySlots(node?.policy?.slots);
     if (detected.length === 0) {
       return JSON.stringify({
@@ -196572,7 +195659,7 @@ async function meshNodeSlotsPropose(ctx, args = {}) {
         currentSlots,
         proposedSlots: [],
         note: "No installed CLI providers detected on this node \u2014 nothing to propose. This is NOT a proposal to clear the node's slots: applying an empty slot list would wipe the existing profile. Left unchanged.",
-        nextAction: currentSlots.length ? "Node keeps its current slots. If detection is wrong, check the daemon's provider list (older daemons may not report `installed`)." : 'Install a CLI agent on the node, or configure slots manually with mesh_node_slots (action "set").'
+        nextAction: currentSlots.length ? "Node keeps its current slots. If detection is wrong, check the node daemon's provider list." : 'Install a CLI agent on the node, or configure slots manually with mesh_node_slots (action "set").'
       }, null, 2);
     }
     const proposal = buildSlotProposal(detected, currentSlots);
@@ -196597,7 +195684,7 @@ async function meshNodeSlotsPropose(ctx, args = {}) {
       success: true,
       dryRun: true,
       nodeId: node.id,
-      detectionSource: "get_status_metadata \u2192 status.availableProviders (category=cli, installed=true)",
+      detectionSource: "coordinator node runtime \u2192 provider catalog (category=cli, installed=true)",
       detectedCliProviders: detected,
       currentSlots,
       proposedSlots: proposal.proposedSlots,
@@ -198127,7 +197214,7 @@ async function meshListPendingApprovals(ctx, _args = {}) {
   await recordMeshCoordinatorToolCall(ctx, "mesh_list_pending_approvals");
   await refreshMeshFromDaemon(ctx);
   const probeOpts = _args?.refresh === true ? { refresh: true } : void 0;
-  const liveNodes = await collectPendingApprovalNodesHeldOrLive(ctx, probeOpts);
+  const liveNodes = await collectMeshNodesWithRuntime(ctx, probeOpts);
   const activeWorkView = await readActiveWorkFromDaemon(ctx, { nodes: liveNodes, recordTail: 200, includeInputs: true });
   scheduleBackgroundDirectReconcile(ctx, liveNodes, activeWorkView.directDispatches, activeWorkView.records);
   const activeWorkEvidence = activeWorkView.activeWork;
@@ -198278,7 +197365,7 @@ async function meshFastForwardNode(ctx, args) {
 async function meshRestartDaemon(ctx, args) {
   await refreshMeshFromDaemon(ctx);
   const node = await findNodeWithRefresh(ctx, args.node_id);
-  const observedProbe = await collectLiveStatusProbe(ctx, node);
+  const { probe: observedProbe } = await readNodeRuntime(ctx, node);
   const meshAttachedTrack = observedProbe.daemonBuild?.track ?? "unknown";
   const configuredDaemonId = typeof node.daemonId === "string" && node.daemonId.trim() ? node.daemonId.trim() : "unknown";
   const meshAttachedDaemonId = observedProbe.daemonId ?? "unknown";
@@ -200140,22 +199227,18 @@ var LAUNCH_SESSION_TOOL = {
     required: ["type"]
   }
 };
-function legacyHeuristicRoute(type2) {
-  const isCliOrAcp = type2.includes("-cli") || type2.includes("-acp") || type2 === "codex";
-  return { route: isCliOrAcp ? "cli" : "ide", canonicalType: type2 };
-}
 async function resolveProviderRoute(transport, requestedType) {
   const type2 = requestedType.trim();
   if (!type2) return { error: "type is required" };
   let catalog;
   try {
     catalog = await transport.command("list_provider_availability", {});
-  } catch {
-    catalog = null;
+  } catch (error48) {
+    return { error: `Could not read the daemon's provider catalog: ${error48?.message || error48}` };
   }
   const providers = Array.isArray(catalog?.providers) ? catalog.providers : null;
   if (!catalog || catalog.success === false || !providers) {
-    return legacyHeuristicRoute(type2);
+    return { error: `The daemon's provider catalog is unavailable${typeof catalog?.error === "string" ? `: ${catalog.error}` : ""}` };
   }
   const query = type2.toLowerCase();
   const hit = providers.find((p) => {

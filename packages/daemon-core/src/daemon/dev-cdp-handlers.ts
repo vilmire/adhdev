@@ -145,7 +145,7 @@ export async function handleScreenshot(ctx: DevServerContext, req: http.Incoming
 
 export async function handleScriptsRun(ctx: DevServerContext, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   const body = await ctx.readBody(req);
-  const { type, script: scriptName, params } = body;
+  const { type, script: scriptName } = body;
   if (!type || !scriptName) {
     ctx.json(res, 400, { error: 'type and script required' });
     return;

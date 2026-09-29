@@ -95,8 +95,6 @@ export {
 /** design :384 — the spec's own example lease; used when the gate spec omits `lease_seconds`. */
 export const MESH_GATE_DEFAULT_LEASE_SECONDS = 900;
 
-/** design :413 — the named outcomes; an action-specific structured label is also accepted. */
-export const MESH_GATE_NAMED_OUTCOMES = ['passed', 'failed', 'rejected'] as const;
 
 /**
  * The pending-task patch surface a release may touch (design :415, :418).

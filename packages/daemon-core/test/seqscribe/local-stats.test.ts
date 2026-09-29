@@ -4,19 +4,11 @@
  * `daemon-lifecycle.ts` `getSeqscribeStats` closure into
  * `seqscribe/local-stats.ts`, so this is now a behavioural test instead of a
  * source-text guard).
- *
- * The defect class this pins: the publisher and its parity self-check were live
- * in production while `transcriptParityRan` read a permanent `false`, because
- * the call site computed nothing / passed a narrowed slice. A false NEGATIVE on
- * the Phase 4 promotion gate's evidence field.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const summarize = vi.fn((_stats: unknown, opts: unknown) => ({ opts }))
 vi.mock('../../src/seqscribe/stats.js', () => ({ summarizeSeqscribeStats: (stats: unknown, opts: unknown) => summarize(stats, opts) }))
-
-const parityCounters = { runs: 2, compared: 2, mismatches: 0, persistentMismatches: 0, sessionsRepeated: 0, pendingMissingRevisits: 1, since: '2026-09-23T00:00:00.000Z' }
-vi.mock('../../src/seqscribe/transcript-parity.js', () => ({ transcriptParityCounters: () => parityCounters }))
 
 import { buildLocalSeqscribeStats } from '../../src/seqscribe/local-stats.js'
 import type { SeqscribeRuntime } from '../../src/seqscribe/runtime.js'
@@ -73,17 +65,16 @@ describe('buildLocalSeqscribeStats — transcript counter wiring (§8 unit 2)', 
     expect(opts.transcriptChat.chatBaseFrames.epoch_start).toBe(1)
   })
 
-  it('★passes the WHOLE parity counter object, never a narrowed subset, with local diagnostics on', () => {
+  it('asks for local diagnostics and never forwards the retired parity counters', () => {
     buildLocalSeqscribeStats(runtime(true), { meshDelivery })
     const opts = summarize.mock.calls[0][1] as any
-    expect(opts.transcriptParity).toBe(parityCounters)
     expect(opts.includeLocalDiagnostics).toBe(true)
+    expect(opts.transcriptParity).toBeUndefined()
   })
 
   it('omits the transcript block (not active:false) when no publisher is armed', () => {
     buildLocalSeqscribeStats(runtime(false), { meshDelivery })
     const opts = summarize.mock.calls[0][1] as any
     expect(opts.transcript).toBeUndefined()
-    expect(opts.transcriptParity).toBe(parityCounters)
   })
 })

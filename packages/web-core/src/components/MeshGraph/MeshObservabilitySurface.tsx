@@ -227,9 +227,9 @@ export default function MeshObservabilitySurface({
         if (activeTab === 'tasks') setTaskDagMounted(true)
     }, [activeTab])
     // Queue rows for the task DAG — the status snapshot carries raw queue entries
-    // (dependsOn included) under queue.tasks; legacy payloads used queue.items.
+    // (dependsOn included) under queue.tasks.
     const queueTasks = useMemo<RepoMeshQueueTask[]>(() => {
-        const raw = (canonicalStatus.queue as any)?.tasks ?? (canonicalStatus.queue as any)?.items ?? null
+        const raw = (canonicalStatus.queue as any)?.tasks ?? null
         return Array.isArray(raw) ? (raw as RepoMeshQueueTask[]) : []
     }, [canonicalStatus.queue])
     const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)

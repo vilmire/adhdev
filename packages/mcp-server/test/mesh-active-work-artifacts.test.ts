@@ -21,6 +21,7 @@ import { __clearLocalRecordsForTests } from '@adhdev/daemon-core';
 import { __clearMeshPendingEventsForTests } from './helpers/pending-notices.js';
 
 import { seedLocalRecord } from './helpers/local-records.js';
+import { holdMemberStatusOnCoordinator } from './helpers/held-node-state.js';
 // C-W8: a real in-process turn ledger answers the direct-dispatch turn IPC (the
 // attempt IS the pre-recorded dispatch; Stage 6 reads it). Armed once per file.
 armTestTurnLedger();
@@ -124,6 +125,7 @@ function createRemoteCtx(meshId: string, opts: { initialStatus?: 'idle' | 'gener
     throw new Error(`unexpected mesh command: ${command}`);
   };
 
+  holdMemberStatusOnCoordinator(transport, mesh, 'daemon-coordinator');
   return { ctx: { mesh, transport, localDaemonId: 'daemon-coordinator', localMachineId: 'machine-coordinator' }, calls };
 }
 
@@ -215,6 +217,7 @@ function createIdleTranscriptCtx(meshId: string, finalSummary: string) {
     throw new Error(`unexpected mesh command: ${command}`);
   };
 
+  holdMemberStatusOnCoordinator(transport, mesh, 'daemon-coordinator');
   return { ctx: { mesh, transport, localDaemonId: 'daemon-coordinator', localMachineId: 'machine-coordinator' }, calls };
 }
 

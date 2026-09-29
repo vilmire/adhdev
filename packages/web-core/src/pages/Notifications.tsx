@@ -378,7 +378,7 @@ function SoundToggle() {
 
     const handleToggle = (v: boolean) => {
         setSoundEnabled(v)
-        try { localStorage.setItem('adhdev_sound', v ? '1' : '0') } catch {}
+        try { localStorage.setItem('adhdev_sound', v ? '1' : '0') } catch { /* storage unavailable — preference is best-effort */ }
     }
 
     return (

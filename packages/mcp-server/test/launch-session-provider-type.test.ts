@@ -115,12 +115,11 @@ test('unknown provider type fails closed — no launch verb issued', async () =>
   assert.equal(calls.some((c) => c.command === 'launch_cli' || c.command === 'launch_ide'), false);
 });
 
-test('catalog unavailable → legacy suffix heuristic still routes -cli types (older daemons)', async () => {
+test('catalog unavailable → no launch (never a guessed route)', async () => {
   const { transport, calls } = makeTransport({ catalogThrows: true });
-  await launchSession(transport, { type: 'claude-cli' });
-  const launch = calls.find((c) => c.command === 'launch_cli');
-  assert.ok(launch, 'launch_cli was issued via legacy fallback');
-  assert.equal(launch!.args.cliType, 'claude-cli');
+  const out = await launchSession(transport, { type: 'claude-cli' });
+  assert.match(out, /^Error: Could not read the daemon's provider catalog/);
+  assert.equal(calls.some((c) => c.command === 'launch_cli' || c.command === 'launch_ide'), false);
 });
 
 test('daemon-reported launch failure surfaces the daemon error', async () => {

@@ -17,7 +17,6 @@ import {
     buildMeshNodeCapabilityTags,
     commandForNode,
     compactChatPayload,
-    extractStatusMetadataSessions,
     findOptionalNodeWithRefresh,
     isIdleSessionRecord,
     readSessionRecordId,
@@ -50,6 +49,7 @@ import { ledgerQuery, missionQuery, missionUpsert, queueEnqueue, recordLocal } f
 import type { MeshWorkQueueEntry } from '@adhdev/daemon-core';
 import { readTranscriptReplicaForSemanticConsumer } from './mesh-transcript-semantic-read.js';
 import { ensureMeshNodeRoutes } from './mesh-node-routes.js';
+import { readNodeRuntime } from './mesh-held-node-state.js';
 import { resolveMagiSessionCleanupMode, type RepoMeshMagiSessionCleanupMode } from '@adhdev/daemon-core';
 import type {
     LocalMeshEntry,
@@ -1815,12 +1815,13 @@ async function collectMagiResponses(
         // turn). Only a live IDLE session may take the delta re-request; anything else is
         // 'busy' — the caller re-waits and retries on a later pass instead of queueing a
         // retry prompt behind someone else's turn. An unreadable status fails closed.
-        try {
-            const sessions = extractStatusMetadataSessions(await commandForNode(ctx, node, 'get_status_metadata', {}));
-            const live = sessions.find(session => readSessionRecordId(session) === task.assignedSessionId);
-            if (!live) return false;
-            if (!isIdleSessionRecord(live)) return 'busy';
-        } catch { return 'busy'; }
+        // The session's state is the coordinator's answer (its own status or the
+        // member's pushed runtime) — never a read of the member.
+        const runtime = await readNodeRuntime(ctx, node);
+        if (!runtime.known) return 'busy';
+        const live = runtime.probe.sessions.find(session => readSessionRecordId(session) === task.assignedSessionId);
+        if (!live) return false;
+        if (!isIdleSessionRecord(live)) return 'busy';
         const why = failReason === 'empty_evidence'
             ? 'your previous answer had an empty evidence array'
             : failReason === 'missing_required_fields'

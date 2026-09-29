@@ -43,12 +43,10 @@ import {
     type WaitForTerminalExitResponse,
     type KillTerminalRequest,
     type KillTerminalResponse,
-    type SessionUpdate,
     type ToolCallStatus,
-    type SessionConfigOption,
 } from '@agentclientprotocol/sdk';
 import type { ProviderModule, ContentBlock, InputEnvelope, ToolCallInfo, ToolCallContent as TCC, ToolKind, ToolCallStatus as TCS } from './contracts.js';
-import { normalizeContent, flattenContent, normalizeInputEnvelope } from './contracts.js';
+import { flattenContent, normalizeInputEnvelope } from './contracts.js';
 import { assertProviderSupportsDeclaredInput, getEffectiveMessageInputSupport } from './provider-input-support.js';
 import type { ProviderInstance, ProviderState, AcpProviderState, ProviderErrorReason, ProviderEvent, InstanceContext, SessionModalState, ProviderSendMessageResult } from './provider-instance.js';
 import { StatusMonitor } from './status-monitor.js';
@@ -269,7 +267,6 @@ export class AcpProviderInstance implements ProviderInstance {
     private readonly log = LOG.forComponent('ACP');
 
     private provider: ProviderModule;
-    private context: InstanceContext | null = null;
     private settings: Record<string, any> = {};
     /** Lifecycle port (wiring-unification B2); null until boot wires it. */
     private lifecyclePort: SessionEventPort | null = null;
@@ -289,7 +286,6 @@ export class AcpProviderInstance implements ProviderInstance {
     private agentCapabilities: Record<string, any> = {};
     private currentSelections: Partial<Record<SelectionCategory, string>> = {};
     private activeToolCalls: AcpToolCall[] = [];
-    private stopReason: string | null = null;
     private partialContent = '';
     private partialThoughtContent = '';
     /** Rich content blocks accumulated during streaming */
@@ -349,7 +345,6 @@ export class AcpProviderInstance implements ProviderInstance {
  // ─── Lifecycle ─────────────────────────────────
 
     async init(context: InstanceContext): Promise<void> {
-        this.context = context;
         this.settings = context.settings || {};
         if (!this.lifecyclePort && context.lifecycle) this.lifecyclePort = context.lifecycle;
         if (!this.turnEvidencePort && context.turnEvidence) this.turnEvidencePort = context.turnEvidence;
@@ -1202,7 +1197,6 @@ export class AcpProviderInstance implements ProviderInstance {
 
  // Prompt complete → reflect final message
             if (result?.stopReason) {
-                this.stopReason = result.stopReason;
             }
             this.log.info(`[${this.type}] Prompt completed: stopReason=${result?.stopReason} partialContent=${this.partialContent.length} chars partialBlocks=${this.partialBlocks.length}`);
 
@@ -1445,7 +1439,6 @@ export class AcpProviderInstance implements ProviderInstance {
 
  // Legacy: stopReason
         if (params.stopReason) {
-            this.stopReason = params.stopReason;
             if (params.stopReason !== 'cancelled') {
                 this.currentStatus = 'idle';
             }

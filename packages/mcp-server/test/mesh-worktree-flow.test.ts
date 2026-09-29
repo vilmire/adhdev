@@ -13,7 +13,7 @@ import { makeFakeTurnIpcTransport } from './fake-turn-ipc-transport.js';
 
 import { answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 import { seedLocalRecord } from './helpers/local-records.js';
-import { heldMeshStatusResponse } from './helpers/held-node-state.js';
+import { heldMeshStatusResponse, holdMemberStatusOnCoordinator } from './helpers/held-node-state.js';
 // meshQueueRequeue delegates the requeue to the mesh-host daemon in IpcTransport mode so
 // the single-flight guard is co-located with dispatch (requeue_mesh_queue_task). This stub
 // emulates the daemon handler's contract with the same requeueTask call the real handler
@@ -782,6 +782,8 @@ test('mesh_launch_session returns the existing mesh-owned worker session instead
     transport,
   };
 
+  holdMemberStatusOnCoordinator(ctx.transport, ctx.mesh, (ctx as any).localDaemonId);
+
   const launch = JSON.parse(await meshLaunchSession(ctx as any, { node_id: 'node-dup', type: 'hermes-cli' }));
 
   // Existing session returned idempotently; NO duplicate launch.
@@ -1343,6 +1345,8 @@ test('mesh_send_task preserves P2P relay recovery payload for coordinator feedba
     throw new Error(`unexpected mesh command: ${command}`);
   };
 
+  holdMemberStatusOnCoordinator(ctx.transport, ctx.mesh, (ctx as any).localDaemonId);
+
   const sendText = await meshSendTask(ctx, { node_id: 'node-remote-worker', session_id: 'session-remote', message: 'do work',
     difficulty: 'medium',
 });
@@ -1415,6 +1419,8 @@ test('mesh_send_task does not reuse a remote live session that lacks mesh delega
     }
     throw new Error(`unexpected mesh command: ${command}`);
   };
+
+  holdMemberStatusOnCoordinator(ctx.transport, ctx.mesh, (ctx as any).localDaemonId);
 
   const send = JSON.parse(await meshSendTask(ctx as any, { node_id: 'node-remote-worker', message: 'do work',
     difficulty: 'medium',
@@ -1498,6 +1504,8 @@ test('mesh_send_task self-heals a mesh-owned remote session missing the relay an
     throw new Error(`unexpected mesh command: ${command}`);
   };
 
+  holdMemberStatusOnCoordinator(ctx.transport, ctx.mesh, (ctx as any).localDaemonId);
+
   const send = JSON.parse(await meshSendTask(ctx as any, {
     node_id: 'node-remote-worker',
     session_id: 'session-legacy-live',
@@ -1578,6 +1586,8 @@ test('mesh_send_task blocks a mesh-owned remote session missing the relay anchor
     throw new Error(`unexpected mesh command: ${command}`);
   };
 
+  holdMemberStatusOnCoordinator(ctx.transport, ctx.mesh, (ctx as any).localDaemonId);
+
   const send = JSON.parse(await meshSendTask(ctx as any, {
     node_id: 'node-remote-worker',
     session_id: 'session-legacy-live',
@@ -1654,6 +1664,8 @@ test('mesh_send_task fails closed when explicitly targeting a remote session own
     throw new Error(`unexpected mesh command: ${command}`);
   };
 
+  holdMemberStatusOnCoordinator(ctx.transport, ctx.mesh, (ctx as any).localDaemonId);
+
   const send = JSON.parse(await meshSendTask(ctx as any, {
     node_id: 'node-remote-worker',
     session_id: 'session-other-mesh',
@@ -1726,6 +1738,8 @@ test('mesh_send_task rejects remote coordinator session before worker relay disp
     }
     throw new Error(`unexpected mesh command: ${command}`);
   };
+
+  holdMemberStatusOnCoordinator(ctx.transport, ctx.mesh, (ctx as any).localDaemonId);
 
   const send = JSON.parse(await meshSendTask(ctx as any, {
     node_id: 'node-remote-worker',
@@ -2860,6 +2874,8 @@ test('mesh_send_task dedupes rapid identical node/session/message dispatch retri
     },
     transport,
   };
+
+  holdMemberStatusOnCoordinator(ctx.transport, ctx.mesh, (ctx as any).localDaemonId);
 
   const first = JSON.parse(await meshSendTask(ctx as any, { node_id: 'node-remote', session_id: 'session-a', message: 'same task',
     difficulty: 'medium',

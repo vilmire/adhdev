@@ -442,15 +442,7 @@ const mergeMeshPolicy = mergeAndNormalizePolicy;
  */
 let listMeshesDiskReadCount = 0;
 
-/** Test-only: read the disk-read counter above. */
-export function __getListMeshesDiskReadCountForTests(): number {
-    return listMeshesDiskReadCount;
-}
 
-/** Test-only: reset the disk-read counter above. */
-export function __resetListMeshesDiskReadCountForTests(): void {
-    listMeshesDiskReadCount = 0;
-}
 
 export function listMeshes(): LocalMeshEntry[] {
     listMeshesDiskReadCount++;

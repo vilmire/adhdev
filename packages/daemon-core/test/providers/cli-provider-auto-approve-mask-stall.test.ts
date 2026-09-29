@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { CliProviderInstance } from '../../src/providers/cli-provider-instance.js'
+import * as instanceConstants from '../../src/providers/cli-provider-instance-constants.js'
 import { ManualAttendanceTracker } from '../../src/providers/manual-attendance.js'
 
 // STATUS-MISMATCH — bound the auto-approve → `generating` SURFACE mask.
@@ -20,8 +21,8 @@ import { ManualAttendanceTracker } from '../../src/providers/manual-attendance.j
 // Derive from the source constants so a deliberate timing retune (e.g. the
 // AUTOAPPROVE-FLAP-RECUR invariant bump 9000→10500) can't silently regress these
 // expectations — the test tracks whatever the production bound currently is.
-const SETTLE_MS = (CliProviderInstance as any).AUTO_APPROVE_SETTLE_MS
-const MASK_STALL_MS = (CliProviderInstance as any).AUTO_APPROVE_MASK_STALL_MS
+const SETTLE_MS = instanceConstants.AUTO_APPROVE_SETTLE_MS
+const MASK_STALL_MS = instanceConstants.AUTO_APPROVE_MASK_STALL_MS
 
 const liveInstances: any[] = []
 
@@ -129,11 +130,11 @@ describe('STATUS-MISMATCH: auto-approve mask-stall bound', () => {
   })
 
   it('constant: AUTO_APPROVE_MASK_STALL_MS is generously larger than settle + hysteresis', () => {
-    const cap = (CliProviderInstance as any).AUTO_APPROVE_MASK_STALL_MS
+    const cap = instanceConstants.AUTO_APPROVE_MASK_STALL_MS
     expect(cap).toBe(MASK_STALL_MS)
     expect(cap).toBeGreaterThan(
-      (CliProviderInstance as any).AUTO_APPROVE_SETTLE_MS
-      + (CliProviderInstance as any).AUTO_APPROVE_GATE_HYSTERESIS_MS,
+      instanceConstants.AUTO_APPROVE_SETTLE_MS
+      + instanceConstants.AUTO_APPROVE_GATE_HYSTERESIS_MS,
     )
   })
 })

@@ -18,8 +18,6 @@
 import {
     DAEMON_TO_SERVER_TYPES,
     SERVER_TO_DAEMON_CONTROL_TYPES,
-    isDaemonToServerType,
-    isServerToDaemonControlType,
     type DaemonToServerType,
     type ServerToDaemonControlType,
     type P2PSignalType,
@@ -48,9 +46,7 @@ export const DAEMON_TO_SERVER_WS_MSGS: readonly DaemonToServerWsMsg[] = DAEMON_T
 
 export const SERVER_TO_DAEMON_WS_MSGS: readonly ServerToDaemonWsMsg[] = SERVER_TO_DAEMON_CONTROL_TYPES;
 
-export const isDaemonToServerWsMsg: (value: unknown) => value is DaemonToServerWsMsg = isDaemonToServerType;
 
-export const isServerToDaemonWsMsg: (value: unknown) => value is ServerToDaemonWsMsg = isServerToDaemonControlType;
 
 /**
  * `auth_ok.payload.limits` — the plan-limit contract the server sends DOWN to

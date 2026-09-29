@@ -734,16 +734,6 @@ function isUuidLikeSessionId(sessionId: string): boolean {
     return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId);
 }
 
-function newestFile(dir: string, pattern: RegExp): string | null {
-    try {
-        const entries = fs.readdirSync(dir, { withFileTypes: true })
-            .filter(e => e.isFile() && pattern.test(e.name))
-            .map(e => ({ p: path.join(dir, e.name), mtime: safeMtime(path.join(dir, e.name)) }))
-            .sort((a, b) => b.mtime - a.mtime);
-        return entries[0]?.p ?? null;
-    } catch { return null; }
-}
-
 /**
  * Like newestFile but only returns a candidate when its mtime is within
  * the recent activity window. Prevents the dashboard from surfacing a

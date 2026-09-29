@@ -67,9 +67,8 @@ export interface ReadChatResult {
 
 import type { ChatMessage } from '../types.js';
 import {
-  flattenMessageParts,
-  normalizeInputEnvelope,
-  normalizeMessageParts,
+    flattenMessageParts,
+    normalizeMessageParts,
 } from './io-contracts.js';
 export {
   flattenMessageParts,
@@ -250,10 +249,6 @@ export interface ToolCallLocation {
 
 // ─── Content Helpers ────────────────────────────────────
 
-/** Normalize content into canonical message parts */
-export function normalizeContent(content: string | MessagePart[] | ContentBlock[]): MessagePart[] {
-  return normalizeMessageParts(content);
-}
 
 /** Flatten canonical/legacy content into a plain-text fallback string */
 export function flattenContent(content: string | MessagePart[] | ContentBlock[]): string {

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { CliProviderInstance } from '../../src/providers/cli-provider-instance.js'
+import * as instanceConstants from '../../src/providers/cli-provider-instance-constants.js'
 import { ManualAttendanceTracker } from '../../src/providers/manual-attendance.js'
 
 // fixB ②③ — settle-gate stabilization for claude-cli auto-approve.
@@ -173,7 +174,7 @@ describe('cli-provider auto-approve settle gate — fixB ② generating-flip hys
 // Sanity floors so the constants the tests encode match the implementation.
 describe('cli-provider auto-approve settle gate — constants', () => {
   it('uses the documented settle + hysteresis windows', () => {
-    expect((CliProviderInstance as any).AUTO_APPROVE_SETTLE_MS).toBe(SETTLE_MS)
-    expect((CliProviderInstance as any).AUTO_APPROVE_GATE_HYSTERESIS_MS).toBe(HYSTERESIS_MS)
+    expect(instanceConstants.AUTO_APPROVE_SETTLE_MS).toBe(SETTLE_MS)
+    expect(instanceConstants.AUTO_APPROVE_GATE_HYSTERESIS_MS).toBe(HYSTERESIS_MS)
   })
 })

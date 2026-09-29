@@ -8,13 +8,10 @@
 import * as os from 'os';
 import * as path from 'path';
 import * as crypto from 'crypto';
-import { existsSync } from 'fs';
-import { execFileSync } from 'child_process';
 import chalk from 'chalk';
 import { createCliAdapter } from '../providers/spec/route.js';
 import type { LaunchableProviderCategory } from '../providers/contracts.js';
 import type { CliProviderModule } from '../cli-adapters/provider-cli-shared.js';
-import { stripRemovedSpawnArgs } from '../cli-adapters/provider-cli-runtime.js';
 import { detectCLI } from '../detection/cli-detector.js';
 import { loadConfig } from '../config/config.js';
 import { loadState, saveState } from '../config/state-store.js';
@@ -31,7 +28,7 @@ import { CliProviderInstance } from '../providers/cli-provider-instance.js';
 import { AcpProviderInstance } from '../providers/acp-provider-instance.js';
 import type { ProviderInstanceManager } from '../providers/provider-instance-manager.js';
 import { ProviderLoader } from '../providers/provider-loader.js';
-import { normalizeInputEnvelope, type ProviderModule, type ProviderResumeCapability } from '../providers/contracts.js';
+import { normalizeInputEnvelope, type ProviderModule } from '../providers/contracts.js';
 import type { CliAdapter } from '../cli-adapter-types.js';
 import { drainInFlightSubmits, type SubmitDrainResult } from './cli-manager-submit-drain.js';
 import type { PtyTransportFactory } from '../cli-adapters/pty-transport.js';
@@ -40,14 +37,11 @@ import type { ProviderInstance } from '../providers/provider-instance.js';
 import { LOG } from '../logging/logger.js';
 import { shouldRestoreHostedRuntime } from './hosted-runtime-restore.js';
 import { evaluateMeshStopTaskScope } from './mesh-stop-task-scope.js';
-import { mintLegacyMessageId, readMeshContext, readMessageId, readOutboundOrigin, readSendPolicy, type AgentCommandArgs, type MeshCommandContext } from './command-args.js';
+import { mintLegacyMessageId, readMeshContext, readMessageId, readOutboundOrigin, readSendPolicy, type AgentCommandArgs } from './command-args.js';
 import { createSessionInputService, type SessionInputService, type SessionInputTarget } from '../sessions/session-input-service.js';
 import { buildSessionInputTarget, type SessionInputAdapterLike, type SessionInputInstanceLike } from '../sessions/session-input-target.js';
 import { dispatchMessageId } from '../mesh/mesh-queue-dispatch-evidence.js';
 import type { SubmitOutcome } from '@adhdev/mesh-shared';
-// MESH-IMAGE-DISPATCH: shared with the dashboard send path so a multipart dispatch is
-// deduplicated by the SAME signature on both routes rather than by two divergent rules.
-import { findProviderAutoApproveMode, resolveProviderAutoApproveMode } from '../providers/auto-approve-modes.js';
 import { expandModelLaunchArgs, resolveModelLaunchValue } from './model-launch-args.js';
 import { readModelCache } from '../models/registry.js';
 import {

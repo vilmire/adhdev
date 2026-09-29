@@ -3,8 +3,7 @@
  *
  * Provider scripts (detect_status.js, parse_session.js, the override layer
  * the v1 contract exposes, plus their _shared helpers) execute in the
- * daemon process with full Node access — see sandbox/README-design.ts for
- * the long story. Full isolation via isolated-vm has a real perf cost and
+ * daemon process with full Node access. Full isolation via isolated-vm has a real perf cost and
  * a real marshalling-complexity cost, so we instead constrain the most
  * dangerous attack surface: what a provider script can `require()`.
  *
@@ -257,19 +256,6 @@ export function installProviderProcessShim(): void {
     }
 }
 
-/** For tests — restore the original process.* methods. */
-export function _uninstallProviderProcessShimForTest(): void {
-    if (!_originalProcessMethods) {
-        _processGloballyHardened = false;
-        return;
-    }
-    const proc = globalThis.process as unknown as Record<string, unknown>;
-    for (const [name, original] of _originalProcessMethods) {
-        try { proc[name] = original; } catch { /* noop */ }
-    }
-    _originalProcessMethods = null;
-    _processGloballyHardened = false;
-}
 
 /**
  * Build the `process` shim returned to provider scripts that do
@@ -337,10 +323,6 @@ export function _resetProviderScriptRoots(): void {
     _gatedRoots.length = 0;
 }
 
-/** For tests — peek at the gated root list. */
-export function _getRegisteredRoots(): readonly string[] {
-    return _gatedRoots.map((g) => g.rootPath);
-}
 
 function canonicalize(p: string): string | null {
     try {

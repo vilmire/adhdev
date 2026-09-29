@@ -23,16 +23,10 @@
  */
 import { useMemo } from 'react'
 import type { MeshGraphGateView, MeshGraphView, RepoMeshQueueTask, RepoMeshStatus } from '@adhdev/daemon-core'
-import type { MeshTaskStatus } from '@adhdev/mesh-shared'
+import { isMeshTerminalTaskStatus, type MeshTaskStatus } from '@adhdev/mesh-shared'
 import { buildTaskDag, type TaskDagData, type TaskDagNode } from './taskDagViewModel'
 import { queueTaskDisplayText } from '../../utils/queue-task-label'
 
-/** Terminal queue statuses — nothing in them will advance again on its own. */
-const TERMINAL_TASK_STATUSES = new Set(['completed', 'failed', 'cancelled'])
-
-export function isTerminalTaskStatus(status: string): boolean {
-    return TERMINAL_TASK_STATUSES.has(status)
-}
 
 /** The recent window: how many terminal rows render outside the History fold. */
 export const BLUEPRINT_RECENT_TERMINAL_LIMIT = 10
@@ -354,7 +348,7 @@ export function buildBlueprintGroups(
         const activity = task.status === 'assigned' ? deriveSessionActivity(status, task) : undefined
         const planGraph = planGraphByTaskId.get(task.id)
         const planSource: BlueprintTaskRow['planSource'] = planGraph ? 'graph' : edgeTouched.has(task.id) ? 'queue' : undefined
-        const isTerminal = isTerminalTaskStatus(task.status)
+        const isTerminal = isMeshTerminalTaskStatus(task.status)
         const blockedReason = typeof task.blockedReason === 'string' && task.blockedReason ? task.blockedReason : undefined
         const awaitingApproval = Boolean(activity?.awaitingApproval)
         const awaitingChoice = Boolean(activity?.awaitingChoice && !activity?.awaitingApproval)

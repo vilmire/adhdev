@@ -9,8 +9,7 @@
  * (web-cloud `p2p.ts`, daemon-cloud `data-channel-router.ts`), the shared
  * `DashboardP2PMessageKind` listed 12 of them and was imported by nothing, and
  * the daemon's file-operation replies carried no `type` at all — the browser
- * matched them by `id` as a fallthrough. They are now `response` frames; the
- * browser decoder still accepts the typeless legacy shape from older daemons.
+ * matched them by `id` as a fallthrough. They are now `response` frames.
  *
  * Chunking: any request frame may be split by the sender into
  * `<kind>_chunk` frames (`id`, `chunkId`, `index`, `total`, `data`) when it
@@ -98,8 +97,11 @@ export type P2PPtyInputMsg = { type: 'pty_input'; sessionId?: string; targetSess
 export type P2PPtyResizeMsg = { type: 'pty_resize'; sessionId: string; cols: number; rows: number }
 export type P2PScreenshotStartMsg = { type: 'screenshot_start'; targetSessionId: string }
 export type P2PScreenshotStopMsg = { type: 'screenshot_stop'; targetSessionId?: string }
-/** Topic subscription. `params` is topic-specific (daemon-core `SubscribeRequestMap`); `object` keeps every topic's interface assignable. */
-export type P2PSubscribeMsg = { type: 'subscribe'; topic: string; key: string; params: object }
+/**
+ * Topic subscription. `params` is topic-specific (daemon-core `SubscribeRequestMap`); `object` keeps every topic's interface assignable.
+ * `wireVersion` is the dashboard wire version the page speaks (./dashboard-wire-version.ts).
+ */
+export type P2PSubscribeMsg = { type: 'subscribe'; topic: string; key: string; params: object; wireVersion?: number }
 export type P2PUnsubscribeMsg = { type: 'unsubscribe'; topic: string; key: string }
 /** Which sessions this peer wants replicated over the seqscribe lane; also the peer's responder proof. */
 export type P2PSessionInterestMsg = { type: 'seqscribe_session_interest'; sessionIds: readonly string[] }
@@ -228,18 +230,9 @@ export type DaemonToDashboardP2PMsg =
 const _daemonToDashboardNamesCoverUnion: AssertSameMembers<typeof DAEMON_TO_DASHBOARD_P2P_TYPES, DaemonToDashboardP2PMsg['type']> = true
 void _daemonToDashboardNamesCoverUnion
 
-/**
- * Parse boundary for the dashboard (after chunk reassembly).
- *
- * A typeless `{ id, success }` frame is a file/input reply from a daemon that
- * predates the `response` kind; it is promoted here so the union stays
- * exhaustive while the fleet rolls forward.
- */
+/** Parse boundary for the dashboard (after chunk reassembly). */
 export function decodeDaemonToDashboardP2P(raw: unknown): DaemonToDashboardP2PMsg | null {
     if (!isRecord(raw)) return null
-    if (raw.type === undefined && isNonEmptyString(raw.id) && typeof raw.success === 'boolean') {
-        return { ...raw, type: 'response' } as P2PResponseMsg
-    }
     if (!isDaemonToDashboardP2PType(raw.type)) return null
     switch (raw.type) {
         case 'ping':

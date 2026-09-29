@@ -12,7 +12,6 @@
 
 import WebSocket from 'ws';
 import * as http from 'http';
-import * as fs from 'fs';
 import { LOG } from '../logging/logger.js';
 import type { CdpTargetFilter } from '../providers/contracts.js';
 

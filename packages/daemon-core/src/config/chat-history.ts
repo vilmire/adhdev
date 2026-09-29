@@ -14,7 +14,7 @@ import * as path from 'path';
 import { getConfigDir } from './config.js';
 import { buildRuntimeSystemChatMessage, isActivityChatMessage } from '../providers/chat-message-normalization.js';
 import { carryBubbleIdentity } from '../providers/cli-provider-history-dedup.js';
-import type { ProviderCanonicalHistoryConfig, ProviderHistoryBehavior } from '../providers/contracts.js';
+import type { ProviderHistoryBehavior } from '../providers/contracts.js';
 
 // Lazy per call: history lives under the instance config dir
 // (<configDir>/history/{agentType}/YYYY-MM-DD.jsonl), and this module can be
@@ -527,17 +527,6 @@ function invalidatePersistedSavedHistoryIndex(agentType: string, dir: string): v
     savedHistorySessionCache.delete(agentType.replace(/[^a-zA-Z0-9_-]/g, '_'));
 }
 
-function getSavedHistoryFileSummaryCacheEntry(dir: string, file: string): SavedHistoryFileSummaryCacheEntry | null {
-    const filePath = path.join(dir, file);
-    const cached = savedHistoryFileSummaryCache.get(filePath);
-    if (cached) return cached;
-    const persisted = loadPersistedSavedHistoryIndex(dir).get(file) || null;
-    if (persisted) {
-        savedHistoryFileSummaryCache.set(filePath, persisted);
-    }
-    return persisted;
-}
-
 function buildSavedHistoryIndexFileSignature(dir: string): string {
     try {
         const stat = fs.statSync(getSavedHistoryIndexFilePath(dir));
@@ -734,7 +723,7 @@ function scheduleSavedHistoryBackgroundRefresh(agentType: string, dir: string): 
                 signature: refreshedIndexSignature,
                 summaries: computed.summaries || [],
             });
-            for (const [file, entry] of Array.from(computed.persistedEntries.entries())) {
+            for (const entry of Array.from(computed.persistedEntries.values())) {
                 if (!entry?.summary || !shouldScheduleSavedHistoryRollupForSignature(entry.signature)) continue;
                 scheduleSavedHistoryRollup(agentType, entry.summary.historySessionId);
             }

@@ -5,13 +5,12 @@
  * collectCliData() + status transition logic from daemon-status.ts moved here.
  */
 
-import * as path from 'path';
 import * as crypto from 'crypto';
 import { shouldUseBracketedPasteForEnvelope, buildAdapterSendOpts } from './cli-provider-bracketed-paste.js';
 import { normalizeInputEnvelope, type ProviderModule, flattenContent, type InputEnvelope } from './contracts.js';
 import { assertProviderSupportsDeclaredInput } from './provider-input-support.js';
 import type { ProviderSendMessageResult, ProviderInstance, ProviderState, ProviderEvent, InstanceContext, ProviderErrorReason, HotChatSessionState, SessionModalState } from './provider-instance.js';
-import { normalizeInteractivePrompt, normalizeInteractivePromptResponse, resolveInteractivePromptResponse, type InteractivePrompt } from './types/interactive-prompt.js';
+import { normalizeInteractivePrompt, type InteractivePrompt } from './types/interactive-prompt.js';
 import {
     applyInteractivePromptAnswer,
     applyInteractivePromptAnswerFireAndForget,
@@ -33,7 +32,6 @@ import type { CliProviderModule } from '../cli-adapters/provider-cli-shared.js';
 import type { MeshSendKeyItem, MeshSendKeyName } from '../cli-adapters/provider-cli-shared.js';
 import { resolveTranscriptAuthorityProfile } from './transcript-evidence.js';
 import {
-    resolveNativeCompletionSignalSpec,
     selectTurnTerminalMarker,
     type NativeTurnTerminalMarker,
 } from '../chat/native-turn-signal.js';
@@ -47,12 +45,11 @@ import { ChatHistoryWriter } from '../config/chat-history.js';
 import { LOG } from '../logging/logger.js';
 import { recordDebugTrace } from '../logging/debug-trace.js';
 import { shouldCollectTraceCategory } from '../logging/debug-config.js';
-import { isWeakCompletionEvidence } from '../mesh/mesh-events-utils.js';
-import { resolveSessionTurnPresentation, isTerminalTurnStage } from '../mesh/mesh-turn-presentation.js';
+import { resolveSessionTurnPresentation } from '../mesh/mesh-turn-presentation.js';
 import { isWorkerMcpEnabled } from '../runtime-defaults.js'; // layer-neutral — see runtime-defaults.ts for why this isn't imported from mesh/worker-mcp-isolation.js
 import { meshTaskAttachments, resolveCompletingTaskId, resolvePendingInjectedAt, type MeshTaskAttachment } from './mesh-task-attachment.js';
 import type { ChatMessage } from '../types.js';
-import { formatAutoApprovalMessage, pickApprovalButton, hasNegativeApprovalOption, hasReliableApprovalAffirmative, normalizeApprovalLabel, isNegativeApprovalLabel } from './approval-utils.js';
+import { formatAutoApprovalMessage, isNegativeApprovalLabel } from './approval-utils.js';
 import { getCliScriptCommand, parseCliScriptResult } from './cli-script-results.js';
 import {
     antigravityOwnerToken,
@@ -67,15 +64,13 @@ import {
 // before the B1 decomposition — left in place deliberately, since removing them is a
 // cleanup, not part of this pure move. `buildChatMessage` WAS dropped: it became dead
 // only because recordAcknowledgedUserInput moved to cli-provider-runtime-messages.ts.
-import { buildRuntimeSystemChatMessage, normalizeChatMessages, resolveChatMessageKind, extractFinalSummaryFromMessages, readChatMessageTimestampMs } from './chat-message-normalization.js';
+import { readChatMessageTimestampMs } from './chat-message-normalization.js';
 import { workingDirBasename } from './working-dir.js';
 import { ManualAttendanceTracker } from './manual-attendance.js';
 import { buildCliStructuredInputPrompt } from './cli-provider-input-prompt.js';
 import { type PersistableCliHistoryMessage } from './cli-provider-history-dedup.js';
 import {
     isCliGeneratingLikeStatus,
-    computeTurnAnchoredDurationMs,
-    getDatabaseSync,
     getForcedNewSessionScriptName,
     waitForCliAdapterReady,
 } from './cli-provider-status-helpers.js';
@@ -84,16 +79,14 @@ import {
     COMPLETED_FINALIZATION_MAX_WAIT_MS,
     CANON_C_MISSING_ASSISTANT_MIN_ELAPSED_MS,
     MISSING_ASSISTANT_TRANSCRIPT_GROWTH_QUIET_MS,
-    NATIVE_HISTORY_MESH_IDLE_SETTLE_MS,
     PTY_PARSED_FINAL_ASSISTANT_QUIET_DWELL_MS,
     ANTIGRAVITY_HOLD_HARD_CAP_MS,
     TERMINAL_BLOCK_HARD_CAP_MS,
     BACKGROUND_TASK_HOLD_MAX_MS,
-    STARTUP_GRACE_IDLE_COLLAPSE_WINDOW_MS,
 } from './cli-provider-instance-types.js';
 import { evaluateFinalizationBlock, type CompletionArmPatch, type CompletionFlushDecision, type CompletionPolicy, type CompletionSignalReader } from './completion/completion-engine.js';
 import { closeSqliteProbeCache, createSqliteProbeCache, probeSessionIdFromConfig, type SessionIdProbeHost } from './completion/transcript-probe.js';
-import { resetMeshStallEpisode, runMeshStallTick, type MeshStallHost } from './completion/mesh-stall-watchdog.js';
+import { runMeshStallTick, type MeshStallHost } from './completion/mesh-stall-watchdog.js';
 import * as approvalGate from './completion/approval-gate.js';
 import type { ApprovalGateHost } from './completion/approval-gate.js';
 import * as evidence from './completion/evidence.js';
@@ -119,7 +112,7 @@ import type {
     ExternalTranscriptProbe,
 } from './cli-provider-instance-types.js';
 import { ParsedIngestTimestampStamper } from './cli-provider-ingest-times.js';
-import { formatApprovalRequestMessage, formatMarkerTimestamp } from './cli-provider-effect-format.js';
+import { formatMarkerTimestamp } from './cli-provider-effect-format.js';
 import { resolveProviderAutoApproveMode, type ResolvedAutoApproveMode } from './auto-approve-modes.js';
 import * as historySync from './cli-provider-history-sync.js';
 import * as completionDiagnostics from './completion/completion-diagnostics.js';
@@ -144,28 +137,16 @@ export class CliProviderInstance implements ProviderInstance {
     readonly type: string;
     readonly category = 'cli' as const;
 
-    // ── Approval-gate + mesh-stall tuning constants ────────────────────────────
-    // Values, and the full derivation for each, live in
-    // cli-provider-instance-constants.ts (pure move, file-size gate
-    // decomposition). They stay declared as class statics here because tests read
-    // them off the class — `(CliProviderInstance as any).AUTO_APPROVE_SETTLE_MS`
-    // in cli-provider-auto-approve-{settle,mask-stall,flap-recur}.test.ts — so
-    // these aliases are load-bearing. Read the constants module for the why.
-    private static readonly AUTO_APPROVE_SETTLE_MS = instanceConstants.AUTO_APPROVE_SETTLE_MS;
     private static readonly APPROVAL_LOCAL_RESOLUTION_COOLDOWN_MS = instanceConstants.APPROVAL_LOCAL_RESOLUTION_COOLDOWN_MS;
-    private static readonly AUTO_APPROVE_GATE_HYSTERESIS_MS = instanceConstants.AUTO_APPROVE_GATE_HYSTERESIS_MS;
-    private static readonly AUTO_APPROVE_FLAP_CONTINUITY_MS = instanceConstants.AUTO_APPROVE_FLAP_CONTINUITY_MS;
-    private static readonly AUTO_APPROVE_MASK_STALL_MS = instanceConstants.AUTO_APPROVE_MASK_STALL_MS;
-    private static readonly APPROVAL_STICKY_FLAP_MS = instanceConstants.APPROVAL_STICKY_FLAP_MS;
     private static readonly APPROVAL_RESUME_GRACE_MS = instanceConstants.APPROVAL_RESUME_GRACE_MS;
-    private static readonly MESH_WORKER_STALL_IDLE_THRESHOLD_MS = instanceConstants.MESH_WORKER_STALL_IDLE_THRESHOLD_MS;
-    private static readonly MESH_WORKER_STALL_TURN_THRESHOLD_MS = instanceConstants.MESH_WORKER_STALL_TURN_THRESHOLD_MS;
-    private static readonly MESH_WORKER_STALL_REFIRE_COOLDOWN_MS = instanceConstants.MESH_WORKER_STALL_REFIRE_COOLDOWN_MS;
 
-
+    // Members without `private` below are read through a host facade
+    // (`this as unknown as <X>Host` — completion/, cli-provider-*-projection,
+    // mesh-assignment, ...). They are not private because the type checker
+    // cannot see reads through that cast, and `noUnusedLocals` would flag them.
     private adapter: CliInstanceAdapter;
-    private context: InstanceContext | null = null;
-    private lastStatus: string = 'starting';
+    context: InstanceContext | null = null;
+    lastStatus: string = 'starting';
     // Idempotency guard for the queue-claim agent:ready event. agent:ready is the
     // sole signal the mesh coordinator's tryAssignQueueTask waits on to hand a
     // queued task to this worker. It is emitted in two places: the boot-time
@@ -174,7 +155,7 @@ export class CliProviderInstance implements ProviderInstance {
     // queued task is never double-dispatched/double-injected. Whichever path fires
     // first sets it; the other becomes a no-op.
     private agentReadyEmitted = false;
-    private generatingStartedAt: number = 0;
+    generatingStartedAt: number = 0;
     // MESH-STALL-WATCH (feature 1): the lastOutputAt value the stall episode is
     // currently armed against. A stall episode is "the raw PTY output has not
     // advanced past this anchor". When the adapter has never emitted output
@@ -183,20 +164,20 @@ export class CliProviderInstance implements ProviderInstance {
     // re-arms to the fresh lastOutputAt and meshStallEmittedForAnchor resets, so a
     // single continuous stall fires AT MOST ONCE and a later stall re-arms cleanly.
     // -1 = not yet initialised for this session.
-    private meshStallAnchorAt = -1;
-    private meshStallEmittedForAnchor = false;
+    meshStallAnchorAt = -1;
+    meshStallEmittedForAnchor = false;
     // FALSE-STALL-WATCHDOG-OVERFIRE (fix B): the turn-active state observed on the
     // PREVIOUS stall tick. When a turn ends (active → inactive: the completion/idle
     // transition), the anchor is force re-armed to `now` so the completed→idle valley
     // does not fire against the pre-completion output clock. The turn-end edge is the
     // signal; updateStatus's own idle transition does not touch the stall anchor, so
     // this watchdog-local edge detector owns the re-arm. undefined = no prior tick.
-    private meshStallTurnActiveLast: boolean | undefined = undefined;
+    meshStallTurnActiveLast: boolean | undefined = undefined;
     // FALSE-STALL-WATCHDOG-OVERFIRE (fix E): wall-clock of the most recent stall
     // emission for this session, or -1 if none. Enforces
     // MESH_WORKER_STALL_REFIRE_COOLDOWN_MS between successive emissions across
     // anchor re-arms (the per-anchor guard only covers a single continuous stall).
-    private meshStallLastFiredAt = -1;
+    meshStallLastFiredAt = -1;
     // KIMI-MESH-COMPLETION-EMIT (axis 1) — TX-FSM Stage 1: whether the stall
     // watchdog has consumed a usable native-transcript SIGNAL SNAPSHOT for the
     // current stall episode. A pure-PTY native-source worker running a long,
@@ -210,7 +191,7 @@ export class CliProviderInstance implements ProviderInstance {
     // never emitted). The FIRST usable sample of an episode still re-arms
     // unconditionally (no episode-scoped baseline exists yet to prove stasis
     // against) — the historical `!prev → advanced` semantics, preserved.
-    private meshStallTranscriptSignalSampled = false;
+    meshStallTranscriptSignalSampled = false;
     // FALSE-IDLE continuity epoch: monotonically bumped on EVERY entry into a busy
     // phase (→generating or →waiting_approval). The completedDebouncePending snapshots
     // this value at arm time (busyEpochAtArm); the flush guard requires it UNCHANGED
@@ -226,7 +207,7 @@ export class CliProviderInstance implements ProviderInstance {
     // through maybeSynthesizeStartupGraceCollapse; the idle-stayed caller re-polls
     // steadily while the session sits idle, so this guard makes the synthesis fire
     // AT MOST ONCE per collapsed turn.
-    private fastCollapseSynthesizedTaskId: string | null = null;
+    fastCollapseSynthesizedTaskId: string | null = null;
     // GENERATING-BOUNDARY (R4c): the wall-clock moment the FSM's starting→idle
     // startup-grace collapse was observed (set ONCE, on the first starting→idle
     // transition this boot). The idle-stayed collapse window is anchored on THIS,
@@ -236,7 +217,7 @@ export class CliProviderInstance implements ProviderInstance {
     // would have it already closed by the time that turn lands+completes (the live
     // R4b miss: collapse at boot+8s, dispatch at boot+12.4s > the 12s boot window).
     // Anchoring on the collapse moment makes the window cover dispatch-delay+turn.
-    private startupGraceCollapseAt: number | null = null;
+    startupGraceCollapseAt: number | null = null;
     // ANTIGRAVITY-PREMATURE-COMPLETION gate: wall-clock when the CURRENT mesh task
     // was injected/attached (attachMeshAssignment). The injected task counts as having
     // genuinely entered generating only once a turn STARTS after this moment
@@ -249,9 +230,9 @@ export class CliProviderInstance implements ProviderInstance {
     private meshTaskAttachmentHistory: MeshTaskAttachment[] = []; // WORKER-MCP T2 precursor — mesh-task-attachment.ts, flag-gated, byte-identical off. Always read via meshTaskAttachments(this.meshTaskAttachmentHistory), never raw — see that module's "Constructor-bypassed instances".
     private settings: Record<string, any> = {};
     private monitor: StatusMonitor;
-    private generatingDebounceTimer: NodeJS.Timeout | null = null;
-    private generatingDebouncePending: { chatTitle: string; timestamp: number } | null = null;
-    private lastApprovalEventFingerprint = '';
+    generatingDebounceTimer: NodeJS.Timeout | null = null;
+    generatingDebouncePending: { chatTitle: string; timestamp: number } | null = null;
+    lastApprovalEventFingerprint = '';
     // INTERACTIVE-PROMPT-PUSH: edge-trigger key for the AskUserQuestion / waiting_choice
     // notification. An AskUserQuestion prompt is surfaced only as a display-only
     // `waiting_choice` overlay in getState(); the raw adapter status stays idle/generating,
@@ -263,31 +244,31 @@ export class CliProviderInstance implements ProviderInstance {
     // FULL InteractivePrompt payload, and dedupe on this key so repeated status ticks
     // with the same prompt do not re-fire. '' means no prompt is currently active
     // (cleared when the prompt is answered/gone).
-    private lastInteractivePromptEventKey = '';
+    lastInteractivePromptEventKey = '';
     // Lifecycle port (wiring-unification B2) + the tick's diff state for it.
     private lifecyclePort: SessionEventPort | null = null;
     // Turn-evidence port (wiring-unification C5/C-W5). Null until boot wires
     // it (setTurnEvidencePort); every producer site below guards on it the
     // same way the lifecycle port is guarded.
     private turnEvidencePort: TurnEvidencePort | null = null;
-    private lastPromptFingerprint = '';
-    private lastModalFingerprint = '';
+    lastPromptFingerprint = '';
+    lastModalFingerprint = '';
     private autoApproveBusy = false;
     private autoApproveBusyTimer: NodeJS.Timeout | null = null;
-    private lastAutoApprovalSignature = '';
+    lastAutoApprovalSignature = '';
     // Settle gate: the approval modal's signature + the wall-clock when this
     // exact signature was first observed. Auto-approve only fires once the
     // SAME signature has been stable for AUTO_APPROVE_SETTLE_MS, so a prompt
     // still streaming into the PTY (its buttons/message changing frame to
     // frame) keeps resetting the timer and is never approved half-rendered.
-    private pendingAutoApprovalSignature = '';
-    private pendingAutoApprovalSince = 0;
+    pendingAutoApprovalSignature = '';
+    pendingAutoApprovalSince = 0;
     private autoApproveSettleTimer: NodeJS.Timeout | null = null;
     // Wall-clock when auto-approve first observed status!=waiting_approval while
     // a settle gate was in progress. Drives AUTO_APPROVE_GATE_HYSTERESIS_MS (or,
     // for a delegated-worker flap episode, AUTO_APPROVE_FLAP_CONTINUITY_MS) so a
     // brief generating flip does not immediately wipe the settle clock.
-    private autoApproveInactiveSince = 0;
+    autoApproveInactiveSince = 0;
     // AUTOAPPROVE-FLAP-RECUR (Fix A): wall-clock when the CURRENT waiting_approval
     // episode last presented a concrete, captured modal (buttons.length > 0). The
     // Claude TUI momentarily reports status=waiting_approval with activeModal=null
@@ -299,7 +280,7 @@ export class CliProviderInstance implements ProviderInstance {
     // scroll-out blip is absorbed (settle keeps running against the last captured
     // signature) while a genuinely closed modal — buttons empty continuously past
     // the continuity window — is still recognised and resets the gate.
-    private autoApproveLastModalSeenAt = 0;
+    autoApproveLastModalSeenAt = 0;
     // APPROVAL-INBOX-BLINDSPOT (Fix A): wall-clock of the last time this session actually
     // FIRED a local auto-approve resolveModal (the settle gate passed → resolveModal
     // dispatched). The mesh event forwarder keys its agent:waiting_approval suppression on
@@ -315,9 +296,9 @@ export class CliProviderInstance implements ProviderInstance {
     // a CONCRETE modal (buttons present), the cached modal to re-present across a busy blip,
     // and the approvalEntrySeq at that frame (so a stabilized frame carries the right seq to
     // the emission-dedup fingerprint). All zero/null when no recent concrete approval.
-    private approvalStickyLastConcreteAt = 0;
-    private approvalStickyModal: { message?: string; buttons?: unknown[]; kind?: string | null } | null = null;
-    private approvalStickyEntrySeq = 0;
+    approvalStickyLastConcreteAt = 0;
+    approvalStickyModal: { message?: string; buttons?: unknown[]; kind?: string | null } | null = null;
+    approvalStickyEntrySeq = 0;
     // STATUS-MISMATCH: wall-clock when the CURRENT auto-approve episode (waiting_approval
     // + shouldAutoApprove) first began wanting to mask. Unlike pendingAutoApprovalSince it
     // is NOT reset when the modal signature changes (a still-streaming/flapping prompt) and
@@ -325,31 +306,31 @@ export class CliProviderInstance implements ProviderInstance {
     // of an unresolved auto-approve. Once it exceeds AUTO_APPROVE_MASK_STALL_MS the surface
     // mask is dropped so the real waiting_approval surfaces. Cleared when the episode ends
     // (modal genuinely gone, manual attendance takes over, or auto-approve fires).
-    private autoApproveMaskSince = 0;
+    autoApproveMaskSince = 0;
     // NOTIF-APPROVAL-MASKED (Q1b): the autoApproveMaskSince episode value for which a
     // stalled-approval coordinator nudge has already been emitted, so the nudge fires
     // exactly once per stalled auto-approve episode (0 = none emitted). Reusing the
     // per-episode mask-clock value as the key makes it provider-agnostic (no reliance on
     // approvalEntrySeq) and self-resetting: each new episode gets a fresh
     // autoApproveMaskSince timestamp, and the episode-end reset zeroes it.
-    private stalledApprovalNudgeEpisode = 0;
+    stalledApprovalNudgeEpisode = 0;
     // Provider-common manual-attendance signal: while a human is actively driving
     // this session from the dashboard, auto-approve holds so they can take manual
     // control. Background mesh workers are never attended → delegated auto-approve
     // is unaffected.
     private readonly manualAttendance = new ManualAttendanceTracker();
-    private controlValues: Record<string, string | number | boolean> = {};
-    private summaryMetadata: unknown = undefined;
+    controlValues: Record<string, string | number | boolean> = {};
+    summaryMetadata: unknown = undefined;
     private appliedEffectKeys = new Set<string>();
     private historyWriter: ChatHistoryWriter;
-    private runtimeMessages: Array<{ key: string; message: ChatMessage }> = [];
+    runtimeMessages: Array<{ key: string; message: ChatMessage }> = [];
     // INGEST-TIMESTAMP: stamps untimed provider-parsed messages with their
     // first-observed time so mergeConversationMessages can interleave the
     // timestamped runtime user-input ack by clock instead of pinning it after
     // every parsed message (the "user bubble stuck at the bottom" defect).
-    private readonly parsedIngestTimestamps = new ParsedIngestTimestampStamper();
-    private lastPersistedHistoryMessages: PersistableCliHistoryMessage[] = [];
-    private lastAcknowledgedUserInputAt = 0;
+    readonly parsedIngestTimestamps = new ParsedIngestTimestampStamper();
+    lastPersistedHistoryMessages: PersistableCliHistoryMessage[] = [];
+    lastAcknowledgedUserInputAt = 0;
     // TASKBUBBLE-DUP: per-content last-ack timestamps so the same dispatched
     // prompt acked twice in quick succession (the worker buffers the first
     // send during bootstrap/busy, then a redelivery — dispatch-confirm-timeout
@@ -357,15 +338,15 @@ export class CliProviderInstance implements ProviderInstance {
     // outbound queue drains) collapses to ONE user bubble. Keyed on the trimmed
     // content; an entry older than USER_INPUT_ACK_DEDUP_WINDOW_MS is treated as
     // a fresh, intentional resend and is NOT suppressed.
-    private recentUserInputAcks = new Map<string, number>();
-    private lastNativeSourceCanonicalCheckAt = 0;
-    private lastNativeSourceCanonicalCacheKey: string | undefined = undefined;
+    recentUserInputAcks = new Map<string, number>();
+    lastNativeSourceCanonicalCheckAt = 0;
+    lastNativeSourceCanonicalCacheKey: string | undefined = undefined;
     // Session-id SQLite probe state (see completion/transcript-probe.ts).
     private readonly sqliteProbeCache = createSqliteProbeCache();
     readonly instanceId: string;
-    private suppressIdleHistoryReplay = false;
-    private errorMessage: string | undefined = undefined;
-    private errorReason: ProviderErrorReason | undefined = undefined;
+    suppressIdleHistoryReplay = false;
+    errorMessage: string | undefined = undefined;
+    errorReason: ProviderErrorReason | undefined = undefined;
     private activeInteractivePrompt: InteractivePrompt | null = null;
 
     private presentationMode: 'terminal' | 'chat';
@@ -373,7 +354,7 @@ export class CliProviderInstance implements ProviderInstance {
     private launchMode: 'new' | 'resume' | 'manual';
     private initialThinkingLevel?: string;
     private readonly startedAt = Date.now();
-    private onProviderSessionResolved?: (info: {
+    onProviderSessionResolved?: (info: {
         instanceId: string;
         providerType: string;
         providerName: string;
@@ -385,7 +366,7 @@ export class CliProviderInstance implements ProviderInstance {
     constructor(
         private provider: ProviderModule,
         private workingDir: string,
-        private cliArgs: string[] = [],
+        cliArgs: string[] = [],
         instanceId?: string,
         transportFactory?: PtyTransportFactory,
         options?: {
@@ -958,10 +939,6 @@ export class CliProviderInstance implements ProviderInstance {
         runtimeMessages.recordAcknowledgedUserInput(this as unknown as runtimeMessages.RuntimeMessagesHost, input, sourceMessageId);
     }
 
-    /** Drop user-input ack entries older than the dedup window so the map can't grow unbounded. */
-    private pruneRecentUserInputAcks(now: number): void {
-        runtimeMessages.pruneRecentUserInputAcks(this as unknown as runtimeMessages.RuntimeMessagesHost, now);
-    }
 
     /**
      * Owner token for this session in the antigravity conversation-claim
@@ -1032,15 +1009,15 @@ export class CliProviderInstance implements ProviderInstance {
     }
 
     private completedDebounceTimer: NodeJS.Timeout | null = null;
-    private completedDebouncePending: CompletedDebouncePending | null = null;
+    completedDebouncePending: CompletedDebouncePending | null = null;
     /**
      * (CANCEL-BLIP-ORPHAN) Re-verification watch for an arm the continuity cancel just
      * deleted — the cancelled arm's snapshot plus a bounded recheck budget, so a
      * sub-second PTY blip cannot permanently orphan the completion. Full rationale:
      * completion/cancel-recheck.ts.
      */
-    private cancelledCompletionRecheck: CancelledCompletionRecheck | null = null;
-    private cancelledCompletionRecheckTimer: NodeJS.Timeout | null = null;
+    cancelledCompletionRecheck: CancelledCompletionRecheck | null = null;
+    cancelledCompletionRecheckTimer: NodeJS.Timeout | null = null;
     private lastExternalCompletionProbe: ExternalTranscriptProbe | null = null;
     // (NATIVE-TURN-SIGNAL) Terminal markers from the last native transcript read. Refreshed
     // on every completion probe; null when the provider surfaces none.
@@ -1067,7 +1044,7 @@ export class CliProviderInstance implements ProviderInstance {
      * real last answer with ZERO per-tick native reads (the native read already ran
      * once at completion). Reset on the next turn's start.
      */
-    private lastCompletionSummary: { content: string; receivedAt: number; sourceTimestampMs?: number } | null = null;
+    lastCompletionSummary: { content: string; receivedAt: number; sourceTimestampMs?: number } | null = null;
 
     /**
      * (SUMMARY-SCRAPE-FALLBACK, part B) Provenance of the finalSummary the completion
@@ -1210,7 +1187,7 @@ export class CliProviderInstance implements ProviderInstance {
     }
 
     /** See completion/evidence.ts — probe state stays instance-owned. */
-    private recordPendingTranscriptProbe(pending: CompletedDebouncePending): ExternalTranscriptProbe | null {
+    recordPendingTranscriptProbe(pending: CompletedDebouncePending): ExternalTranscriptProbe | null {
         return evidence.recordPendingTranscriptProbe(this as unknown as EvidenceHost, pending);
     }
 
@@ -1222,7 +1199,7 @@ export class CliProviderInstance implements ProviderInstance {
      * gate reads ~/.hermes, finds no coordinator-session transcript, and
      * false-fires missing_final_assistant on every coordinator turn.
      */
-    private spawnedEnvOverrides(): Record<string, string> | undefined {
+    spawnedEnvOverrides(): Record<string, string> | undefined {
         const meta = typeof (this.adapter as any)?.getRuntimeMetadata === 'function'
             ? (this.adapter as any).getRuntimeMetadata()
             : undefined;
@@ -1254,7 +1231,7 @@ export class CliProviderInstance implements ProviderInstance {
      * unresolved transcript or any throw degrades to "no observation", never
      * to a wedge.
      */
-    private publishTranscriptSignalObservation(messages: unknown[] | null, error = false): void {
+    publishTranscriptSignalObservation(messages: unknown[] | null, error = false): void {
         try {
             if (!this.transcriptSignalSource) {
                 this.transcriptSignalSource = new TranscriptSignalSource({
@@ -1294,15 +1271,6 @@ export class CliProviderInstance implements ProviderInstance {
         } catch { /* signal collection must never break the read path */ }
     }
 
-    /**
-     * The content of the LAST visible assistant bubble in a message list, or ''
-     * when the tail is not an assistant reply. Skips trailing system/tool/activity
-     * bubbles; stops (returns '') at the first user/human message. Used only for
-     * the dashboard tail-repair cache — a display value, not a completion decision.
-     */
-    private lastVisibleAssistantSummary(messages: unknown): string {
-        return this.lastVisibleAssistantSummaryDetail(messages).content;
-    }
 
     // Like lastVisibleAssistantSummary but also returns the source bubble's own
     // timestamp (ms), so a cached summary can later be turn-scoped: the display
@@ -1311,7 +1279,7 @@ export class CliProviderInstance implements ProviderInstance {
     // current turn. Recording the bubble's timestamp lets the weak-completion
     // fallback reject a turn-stale cached summary instead of re-leaking the exact
     // stale bubble the turn-boundary gate already rejected (FALSE-IDLE Defect 1c).
-    private lastVisibleAssistantSummaryDetail(messages: unknown): { content: string; timestampMs?: number } {
+    lastVisibleAssistantSummaryDetail(messages: unknown): { content: string; timestampMs?: number } {
         if (!Array.isArray(messages)) return { content: '' };
         for (let i = messages.length - 1; i >= 0; i -= 1) {
             const m = messages[i] as { role?: string; kind?: string; content?: unknown };
@@ -1328,28 +1296,9 @@ export class CliProviderInstance implements ProviderInstance {
         return { content: '' };
     }
 
-    /**
-     * NOTIF Defect-B: the final assistant summary this instance ALREADY parsed and
-     * cached for the current turn (lastCompletionSummary), if any. The evidence
-     * probe (completionFinalAssistantEvidence) is a POINT-SAMPLE: on a native-source
-     * provider (antigravity) the parsed screen and the native transcript can both
-     * momentarily yield no in-turn final assistant at the exact instant the
-     * completion gate fires — source='unavailable', missingEvidence=true — even
-     * though a prior poll already read the real answer off native-history and cached
-     * it here (the same value mesh_read_chat.summary shows). Consulting the cache at
-     * emit time lets that already-secured summary count as evidence, so the completion
-     * notification carries the answer instead of completion_diagnostic=missing_final_assistant
-     * with an empty summary. Returns '' when the cache is empty or was reset by the
-     * next turn (see lastCompletionSummary = null on onTurnStarted).
-     */
-    private cachedCompletionSummaryContent(): string {
-        const cached = this.lastCompletionSummary;
-        const content = typeof cached?.content === 'string' ? cached.content.trim() : '';
-        return content;
-    }
 
     /** See completion/evidence.ts — FALSE-IDLE Defect 1c turn-scoped cache view. */
-    private cachedInTurnCompletionSummaryContent(turnStartedAt?: number): string {
+    cachedInTurnCompletionSummaryContent(turnStartedAt?: number): string {
         return evidence.cachedInTurnCompletionSummaryContent(this as unknown as EvidenceHost, turnStartedAt);
     }
 
@@ -1359,7 +1308,7 @@ export class CliProviderInstance implements ProviderInstance {
      * KIMI-PARSED-RACE, ANTIGRAVITY-PREMATURE-COMPLETION provenance live with
      * the module).
      */
-    private completionFinalAssistantEvidence(parsedMessages: unknown, turnStartedAt?: number): CompletionFinalAssistantEvidence {
+    completionFinalAssistantEvidence(parsedMessages: unknown, turnStartedAt?: number): CompletionFinalAssistantEvidence {
         return evidence.completionFinalAssistantEvidence(this as unknown as EvidenceHost, parsedMessages, turnStartedAt);
     }
 
@@ -1368,11 +1317,11 @@ export class CliProviderInstance implements ProviderInstance {
      * move; native transcript > parsed screen, NOTIF Defect-B / FALSE-IDLE
      * Defect 1b turn-scoping, KIMI-RC30 manifest native-source preference).
      */
-    private completionFinalSummary(parsedMessages: unknown, turnStartedAt?: number): string | undefined {
+    completionFinalSummary(parsedMessages: unknown, turnStartedAt?: number): string | undefined {
         return evidence.completionFinalSummary(this as unknown as EvidenceHost, parsedMessages, turnStartedAt);
     }
 
-    private buildCompletedFinalizationDiagnostic(args: {
+    buildCompletedFinalizationDiagnostic(args: {
         blockReason: string;
         latestStatus?: any;
         latestVisibleStatus: string;
@@ -1390,11 +1339,8 @@ export class CliProviderInstance implements ProviderInstance {
         return completionDiagnostics.hasAdapterPendingResponse(this as unknown as completionDiagnostics.CompletionDiagnosticsHost);
     }
 
-    private antigravityHoldPtyStillActive(): boolean {
-        return completionDiagnostics.antigravityHoldPtyStillActive(this as unknown as completionDiagnostics.CompletionDiagnosticsHost);
-    }
 
-    private shouldSuppressStaleParsedBusyStatus(parsedStatus: any, adapterStatus: any): boolean {
+    shouldSuppressStaleParsedBusyStatus(parsedStatus: any, adapterStatus: any): boolean {
         return completionDiagnostics.shouldSuppressStaleParsedBusyStatus(
             this as unknown as completionDiagnostics.CompletionDiagnosticsHost,
             parsedStatus,
@@ -1410,25 +1356,16 @@ export class CliProviderInstance implements ProviderInstance {
      * evidence-stash side effect on `pending` (resolvedFinal*: the TOCTOU-free
      * finalSummary snapshot).
      */
-    private getCompletedFinalizationBlock(latestVisibleStatus: string, pending: CompletedDebouncePending): CompletedFinalizationBlock | null {
+    getCompletedFinalizationBlock(latestVisibleStatus: string, pending: CompletedDebouncePending): CompletedFinalizationBlock | null {
         const reader = this.buildCompletionSignalReader(pending, latestVisibleStatus);
         const { block, evidencePatch } = evaluateFinalizationBlock(pending, reader, this.completionEnginePolicy());
         this.applyCompletionArmPatch(pending, evidencePatch);
         return block as CompletedFinalizationBlock | null;
     }
 
-    private hasApprovalResolutionEvidence(): boolean {
-        return completionDiagnostics.hasApprovalResolutionEvidence(this as unknown as completionDiagnostics.CompletionDiagnosticsHost);
-    }
 
-    private approvalResolutionFinalizationBlock(pending: CompletedDebouncePending): CompletedFinalizationBlock | null {
-        return completionDiagnostics.approvalResolutionFinalizationBlock(
-            this as unknown as completionDiagnostics.CompletionDiagnosticsHost,
-            pending,
-        );
-    }
 
-    private scheduleCompletedDebounceFlush(delayMs: number): void {
+    scheduleCompletedDebounceFlush(delayMs: number): void {
         if (this.completedDebounceTimer) clearTimeout(this.completedDebounceTimer);
         this.completedDebounceTimer = setTimeout(() => this.flushCompletedDebounceIfFinalized(), delayMs);
     }
@@ -1438,7 +1375,7 @@ export class CliProviderInstance implements ProviderInstance {
      * full rationale live in completion/cancel-recheck.ts; these are the host-dispatched
      * seams, matching the status-transition / evidence / stall-rescue moves.
      */
-    private armCancelledCompletionRecheck(
+    armCancelledCompletionRecheck(
         pending: CompletedDebouncePending,
         reason: CancelledCompletionReason,
     ): void {
@@ -1561,10 +1498,6 @@ export class CliProviderInstance implements ProviderInstance {
         runMeshStallTick(this as unknown as MeshStallHost, now);
     }
 
-    /** See completion/mesh-stall-watchdog.ts — episode state stays instance-owned. */
-    private resetMeshStallEpisode(): void {
-        resetMeshStallEpisode(this as unknown as MeshStallHost);
-    }
 
     /** The result of one native-transcript signal probe: the normalized
      *  snapshot the shared TranscriptSignalSource produced from the read, and
@@ -1594,7 +1527,7 @@ export class CliProviderInstance implements ProviderInstance {
      * only at the stall threshold (≥180s of PTY stasis) or during an armed
      * completion-debounce retry, never on the routine 5s tick.
      */
-    private probeNativeTranscriptSignals(): { snapshot: SignalSnapshot | null; messages: unknown[] | null } | null {
+    probeNativeTranscriptSignals(): { snapshot: SignalSnapshot | null; messages: unknown[] | null } | null {
         if (resolveTranscriptAuthorityProfile(this.provider).class !== 'native-source') return null;
         // readExternalCompletionMessages resolves this session's OWN native-source
         // conversation (providerSessionId / persisted pin / floor claim) and, as a
@@ -1618,7 +1551,7 @@ export class CliProviderInstance implements ProviderInstance {
      * env-driven rollout change takes effect without rebuilding the instance;
      * any resolver error fails closed (lease disabled → pre-Stage-2 behavior).
      */
-    private busyLeaseGateEnabled(): boolean {
+    busyLeaseGateEnabled(): boolean {
         try { return resolveBusyLeaseGate(this.type).enabled; } catch { return false; }
     }
 
@@ -1661,7 +1594,7 @@ export class CliProviderInstance implements ProviderInstance {
      * (verbatim move; the TX-FSM Stage 1 probe-delegation provenance lives
      * with the module). Consulted by the mesh stall watchdog via MeshStallHost.
      */
-    private tryReconcileTranscriptCompletionForStall(
+    tryReconcileTranscriptCompletionForStall(
         observedStatus: string,
         transcriptSignals?: { snapshot: SignalSnapshot | null; messages: unknown[] | null } | null,
     ): boolean {
@@ -1756,7 +1689,7 @@ export class CliProviderInstance implements ProviderInstance {
      * Fails CLOSED for the injected-but-not-started window; open once the injected turn is
      * genuinely underway (preserving the rc.480/481 completion-fires win).
      */
-    private injectedTaskHasStartedGenerating(): boolean { // WORKER-MCP T2 precursor (mesh-task-attachment.ts): flag-on, a pending entry's own injectedAt wins over the bare scalar.
+    injectedTaskHasStartedGenerating(): boolean { // WORKER-MCP T2 precursor (mesh-task-attachment.ts): flag-on, a pending entry's own injectedAt wins over the bare scalar.
         const turnStartedAt = typeof (this.adapter as any)?.currentTurnStartedAt === 'number'
             ? (this.adapter as any).currentTurnStartedAt as number
             : 0;
@@ -1772,7 +1705,7 @@ export class CliProviderInstance implements ProviderInstance {
 
     // EVTTRACE correlation context for this session's completion lifecycle. taskId is
     // the primary grep anchor; instanceId is the session fallback.
-    private meshTraceCtx(event = 'agent:generating_completed'): Record<string, unknown> {
+    meshTraceCtx(event = 'agent:generating_completed'): Record<string, unknown> {
         return {
             // ARCH-REFACTOR R1: trace the per-turn taskId (falling back to the scalar) so
             // EvtTrace anchors on the same id the completion event actually carries.
@@ -1791,13 +1724,13 @@ export class CliProviderInstance implements ProviderInstance {
     // no-op unless collectDebugTrace is on AND the category is selected, so the
     // hot-path guards below (completionTraceOn / fsmTraceOn) keep production cost
     // at a single boolean check.
-    private completionTraceOn(): boolean {
+    completionTraceOn(): boolean {
         return shouldCollectTraceCategory('completion-gate');
     }
-    private fsmTraceOn(): boolean {
+    fsmTraceOn(): boolean {
         return shouldCollectTraceCategory('fsm-transition');
     }
-    private recordCompletionGateTrace(stage: string, payload: Record<string, unknown>): void {
+    recordCompletionGateTrace(stage: string, payload: Record<string, unknown>): void {
         recordDebugTrace({
             category: 'completion-gate',
             stage,
@@ -1807,7 +1740,7 @@ export class CliProviderInstance implements ProviderInstance {
             payload,
         });
     }
-    private recordFsmTransitionTrace(payload: Record<string, unknown>): void {
+    recordFsmTransitionTrace(payload: Record<string, unknown>): void {
         recordDebugTrace({
             category: 'fsm-transition',
             stage: 'transition',
@@ -1859,7 +1792,7 @@ export class CliProviderInstance implements ProviderInstance {
     }
 
     /** Human log + mesh trace for a hold decision — messages preserved verbatim per hold id. */
-    private logCompletionHold(decision: Extract<CompletionFlushDecision, { kind: 'hold' }>): void {
+    logCompletionHold(decision: Extract<CompletionFlushDecision, { kind: 'hold' }>): void {
         completionDiagnostics.logCompletionHold(this as unknown as completionDiagnostics.CompletionDiagnosticsHost, decision);
     }
 
@@ -1893,7 +1826,7 @@ export class CliProviderInstance implements ProviderInstance {
      * intact for a turn that truly completed WITHOUT ever arming generating —
      * that turn's currentTurnTaskId differs, so its synth still fires.
      */
-    private markCurrentTurnStartupGraceCollapseSatisfied(): void {
+    markCurrentTurnStartupGraceCollapseSatisfied(): void {
         const turnTaskId = typeof (this.adapter as any)?.currentTurnTaskId === 'string'
             && (this.adapter as any).currentTurnTaskId.trim()
             ? (this.adapter as any).currentTurnTaskId as string
@@ -1902,7 +1835,7 @@ export class CliProviderInstance implements ProviderInstance {
     }
 
     /** See completion/evidence.ts — EMPTY-FINAL-CONTENT TOCTOU snapshot preference. */
-    private cleanCompletionFinalSummary(pending: CompletedDebouncePending): string | undefined {
+    cleanCompletionFinalSummary(pending: CompletedDebouncePending): string | undefined {
         return evidence.cleanCompletionFinalSummary(this as unknown as EvidenceHost, pending);
     }
 
@@ -1924,7 +1857,7 @@ export class CliProviderInstance implements ProviderInstance {
      * completion would add a field to every event to say nothing, and downstream readers
      * already treat absent as "no truncation asserted".
      */
-    private finalSummaryProvenanceDiagnostic(emittedSummary: string | undefined): Record<string, unknown> {
+    finalSummaryProvenanceDiagnostic(emittedSummary: string | undefined): Record<string, unknown> {
         const provenance = this.lastFinalSummaryProvenance;
         if (!provenance) return {};
         const emitted = typeof emittedSummary === 'string' ? emittedSummary : '';
@@ -1945,14 +1878,14 @@ export class CliProviderInstance implements ProviderInstance {
      * so a tool-terminated turn falls through to the existing chain rather than forcing an
      * empty summary onto a completion that might legitimately have one from elsewhere.
      */
-    private nativeTurnTerminalSummary(turnStartedAt?: number): string | undefined {
+    nativeTurnTerminalSummary(turnStartedAt?: number): string | undefined {
         const marker = this.nativeTurnTerminalMarker(turnStartedAt);
         const text = typeof marker?.summary === 'string' ? marker.summary.trim() : '';
         return text || undefined;
     }
 
     /** See completion/evidence.ts — KIMI-RC30 forced-emit native snapshot seed. */
-    private snapshotExternalNativeCompletionSummary(pending: CompletedDebouncePending): string | undefined {
+    snapshotExternalNativeCompletionSummary(pending: CompletedDebouncePending): string | undefined {
         return evidence.snapshotExternalNativeCompletionSummary(pending);
     }
 
@@ -1970,7 +1903,7 @@ export class CliProviderInstance implements ProviderInstance {
      * values they have already computed; omitted optionals are simply absent from
      * the emitted event, exactly as each inline builder produced before.
      */
-    private emitGeneratingCompleted(opts: {
+    emitGeneratingCompleted(opts: {
         chatTitle: string;
         duration: number | undefined;
         timestamp: number;
@@ -2005,7 +1938,7 @@ export class CliProviderInstance implements ProviderInstance {
      *     evidenceLevel:'reported' (non-weak), overwriting the latch → any subsequent idle
      *     tick hits the now-genuine latch and is suppressed. Never a third emit.
      */
-    private shouldSuppressCompletionReEmit(taskId: string | undefined): boolean {
+    shouldSuppressCompletionReEmit(taskId: string | undefined): boolean {
         const latch = this.lastEmittedCompletion;
         if (!latch || latch.taskId !== (taskId ?? '')) return false;
         // Prior emit was genuine → single-shot, never re-emit.
@@ -2027,7 +1960,7 @@ export class CliProviderInstance implements ProviderInstance {
      * genuinely still be in flight), and any new busy phase (busyEpoch advanced past the
      * emit) re-enables approval surfacing for the new turn.
      */
-    private hasEmittedGenuineCompletionForCurrentEpoch(): boolean {
+    hasEmittedGenuineCompletionForCurrentEpoch(): boolean {
         const latch = this.lastEmittedCompletion;
         if (!latch || latch.weak) return false;
         return this.busyEpoch <= latch.emittedAtEpoch;
@@ -2038,7 +1971,7 @@ export class CliProviderInstance implements ProviderInstance {
      * completion/approval-gate.ts (verbatim move; sticky state stays
      * instance-owned for the suites).
      */
-    private stabilizeFlappingApprovalStatus(adapterStatus: any, now = Date.now()): any {
+    stabilizeFlappingApprovalStatus(adapterStatus: any, now = Date.now()): any {
         return approvalGate.stabilizeFlappingApprovalStatus(this as unknown as ApprovalGateHost, adapterStatus, now);
     }
 
@@ -2059,7 +1992,7 @@ export class CliProviderInstance implements ProviderInstance {
      * approvals. Stays on the instance (not the gate module) so the timer path
      * dispatches through instance-level overrides, exactly as before the move.
      */
-    private recheckAutoApproveSettled(): void {
+    recheckAutoApproveSettled(): void {
         try {
             const adapterStatus = this.adapter.getStatus({ allowParse: true });
             this.maybeAutoApproveStatus(adapterStatus, Date.now());
@@ -2072,7 +2005,7 @@ export class CliProviderInstance implements ProviderInstance {
      * agentReadyEmitted guard ensures the second caller is a no-op so a worker is
      * never claimed twice and a queued task is never double-dispatched.
      */
-    private emitAgentReadyOnce(chatTitle: string, now: number): void {
+    emitAgentReadyOnce(chatTitle: string, now: number): void {
         if (this.agentReadyEmitted) return;
         this.agentReadyEmitted = true;
         this.pushEvent({ event: 'agent:ready', chatTitle, timestamp: now });
@@ -2086,7 +2019,7 @@ export class CliProviderInstance implements ProviderInstance {
      * instance-owned, incl. the markCurrentTurnStartupGraceCollapseSatisfied
      * stamp below.
      */
-    private maybeSynthesizeStartupGraceCollapse(
+    maybeSynthesizeStartupGraceCollapse(
         chatTitle: string,
         now: number,
         reason: 'startup_grace_fast_collapse' | 'startup_grace_idle_turn_collapse',
@@ -2125,7 +2058,7 @@ export class CliProviderInstance implements ProviderInstance {
      * own `resolveAttempt` treats an absent/0
      * generation as "resolve centrally" when it has better information.
      */
-    private currentAttemptRef(): TurnAttemptRef | null {
+    currentAttemptRef(): TurnAttemptRef | null {
         return meshAssignment.currentMeshAttemptRef(this.settings);
     }
 
@@ -2208,7 +2141,7 @@ export class CliProviderInstance implements ProviderInstance {
     }
 
 
-    private recordAutoApproval(modalMessage?: string, buttonLabel?: string, now = Date.now()): void {
+    recordAutoApproval(modalMessage?: string, buttonLabel?: string, now = Date.now()): void {
         this.appendRuntimeSystemMessage(
             formatAutoApprovalMessage(modalMessage, buttonLabel),
             `auto_approval:${now}:${buttonLabel || 'approve'}`,
@@ -2235,7 +2168,7 @@ export class CliProviderInstance implements ProviderInstance {
         runtimeMessages.appendRuntimeSystemMessage(this as unknown as runtimeMessages.RuntimeMessagesHost, content, dedupKey, receivedAt);
     }
 
-    private appendRuntimeMessage(message: ChatMessage, dedupKey: string): void {
+    appendRuntimeMessage(message: ChatMessage, dedupKey: string): void {
         runtimeMessages.appendRuntimeMessage(this as unknown as runtimeMessages.RuntimeMessagesHost, message, dedupKey);
     }
 
@@ -2251,7 +2184,7 @@ export class CliProviderInstance implements ProviderInstance {
         return historySync.shouldHydrateExistingProviderHistory(this as unknown as historySync.HistorySyncHost);
     }
 
-    private shouldSuppressFreshLaunchStartupReplay(parsedMessages: unknown[], parsedStatus: any, adapterStatus: any, parsedProviderSessionId = ''): boolean {
+    shouldSuppressFreshLaunchStartupReplay(parsedMessages: unknown[], parsedStatus: any, adapterStatus: any, parsedProviderSessionId = ''): boolean {
         return historySync.shouldSuppressFreshLaunchStartupReplay(
             this as unknown as historySync.HistorySyncHost,
             parsedMessages,
@@ -2261,7 +2194,7 @@ export class CliProviderInstance implements ProviderInstance {
         );
     }
 
-    private syncCanonicalSavedHistoryIfNeeded(options: { full?: boolean } = {}): boolean {
+    syncCanonicalSavedHistoryIfNeeded(options: { full?: boolean } = {}): boolean {
         return historySync.syncCanonicalSavedHistoryIfNeeded(this as unknown as historySync.HistorySyncHost, options);
     }
 

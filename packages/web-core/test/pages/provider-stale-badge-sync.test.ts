@@ -32,8 +32,10 @@ describe('providers tab update hint', () => {
         expect(detailSource).not.toContain('machine.detail.providerStaleBadgeHint')
     })
 
-    it('the tab keeps the dot current from the Providers tab own read', () => {
-        expect(detailSource).toContain('onChannelStaleness={setProviderStaleness}')
+    it('the dot rides the daemon.metadata lane — no status pull, no second source', () => {
+        expect(detailSource).toContain('machineEntry?.providerChannelStaleness')
+        expect(detailSource).not.toContain("'get_status_metadata'")
+        expect(detailSource).not.toContain('onChannelStaleness')
     })
 })
 

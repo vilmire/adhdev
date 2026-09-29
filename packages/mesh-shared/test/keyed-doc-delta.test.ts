@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { diffKeyedDoc, digestKeyedDoc, foldKeyedDoc, type KeyedDocSpec } from '../src/keyed-doc-delta'
+import { DAEMON_METADATA_DOC_SPEC, diffKeyedDoc, digestKeyedDoc, foldKeyedDoc, MESH_STATUS_DOC_SPEC, type KeyedDocSpec } from '../src/keyed-doc-delta'
 
 const SPEC: KeyedDocSpec = {
     collections: { nodes: 'nodeId', 'queue.tasks': 'id', missions: 'id' },
@@ -73,5 +73,77 @@ describe('keyed document delta', () => {
         const delta = diffKeyedDoc(digestKeyedDoc(held, SPEC), digestKeyedDoc(next, SPEC), SPEC)!
         foldKeyedDoc(held, delta, SPEC)
         expect(JSON.stringify(held)).toBe(frozen)
+    })
+})
+
+// The SAME engine serves the daemon.metadata lane (DAEMON_METADATA_DOC_SPEC):
+// `status` split field by field, sessions keyed by id, envelope identity and
+// the build clock never diffed, a session's lastUpdated stamp not a change.
+describe('keyed document delta — daemon.metadata spec', () => {
+    const M = DAEMON_METADATA_DOC_SPEC
+    function body(sessions: Array<Record<string, unknown>>, extra: Record<string, unknown> = {}) {
+        return {
+            daemonId: 'd1',
+            userName: 'u',
+            ...extra,
+            status: {
+                instanceId: 'd1',
+                timestamp: Math.random(),
+                machine: { hostname: 'h', platform: 'darwin' },
+                sessions,
+            },
+        } as Record<string, unknown>
+    }
+    const a = { id: 'a', status: 'idle', title: 'A', lastUpdated: 1 }
+    const b = { id: 'b', status: 'generating', title: 'B', lastUpdated: 1 }
+    const diff = (p: Record<string, unknown>, n: Record<string, unknown>) => diffKeyedDoc(digestKeyedDoc(p, M), digestKeyedDoc(n, M), M)
+
+    it('an unchanged state (clock / lastUpdated only) diffs to null', () => {
+        expect(diff(body([a, b]), body([{ ...a, lastUpdated: 99 }, { ...b, lastUpdated: 99 }]))).toBeNull()
+    })
+
+    it('sends only the changed session, its changed fields, and lets the stamp ride along', () => {
+        expect(diff(body([a, b]), body([a, { ...b, status: 'idle', lastUpdated: 5 }]))).toEqual({
+            collections: { 'status.sessions': { upsert: [{ id: 'b', status: 'idle', lastUpdated: 5 }] } },
+        })
+    })
+
+    it('a daemon-level status field travels alone (the rest of status is not re-sent)', () => {
+        const next = body([a, b])
+        ;(next.status as any).machine = { hostname: 'h2', platform: 'darwin' }
+        expect(diff(body([a, b]), next)).toEqual({ objects: { status: { set: { machine: { hostname: 'h2', platform: 'darwin' } } } } })
+    })
+
+    it('removals, field unsets, additions and reorders fold back to the latest body', () => {
+        const states = [
+            body([a, b]),
+            body([a, { ...b, status: 'idle' }], { meshStateRevisions: { m: 1 } }),
+            body([{ ...a, title: 'A2', extra: { n: 1 } }], { meshStateRevisions: { m: 2 } }),
+            body([{ id: 'c', status: 'error' }, { id: 'a', status: 'idle', lastUpdated: 1 }], { userName: 'v' }),
+        ]
+        let held = states[0]
+        for (let i = 1; i < states.length; i += 1) {
+            const delta = diff(states[i - 1], states[i])
+            if (delta) held = foldKeyedDoc(held, delta, M)
+            const strip = (x: Record<string, unknown>) => ({ ...x, status: { ...(x.status as any), timestamp: 0 } })
+            expect(strip(held), `step ${i}`).toEqual(strip(states[i]))
+        }
+    })
+})
+
+describe('keyed document delta — both lanes round-trip through one engine', () => {
+    it('mesh.status and daemon.metadata docs fold to the latest snapshot', () => {
+        const meshSteps = [
+            { meshId: 'm', refreshedAt: 't0', nodes: [{ nodeId: 'n1', health: 'online', lastSeenAt: 1 }], queue: { tasks: [{ id: 't1', status: 'pending' }] }, missions: [] },
+            { meshId: 'm', refreshedAt: 't1', nodes: [{ nodeId: 'n1', health: 'dirty', lastSeenAt: 2 }], queue: { tasks: [] }, missions: [{ id: 'mi', status: 'active' }] },
+        ]
+        const md = foldKeyedDoc(meshSteps[0], diffKeyedDoc(digestKeyedDoc(meshSteps[0], MESH_STATUS_DOC_SPEC), digestKeyedDoc(meshSteps[1], MESH_STATUS_DOC_SPEC), MESH_STATUS_DOC_SPEC)!, MESH_STATUS_DOC_SPEC)
+        expect(md).toEqual(meshSteps[1])
+        const metaSteps = [
+            { daemonId: 'd', status: { timestamp: 1, sessions: [{ id: 's', status: 'idle' }] } },
+            { daemonId: 'd', status: { timestamp: 1, sessions: [{ id: 's', status: 'generating' }], machine: { cpus: 8 } } },
+        ]
+        const dd = foldKeyedDoc(metaSteps[0], diffKeyedDoc(digestKeyedDoc(metaSteps[0], DAEMON_METADATA_DOC_SPEC), digestKeyedDoc(metaSteps[1], DAEMON_METADATA_DOC_SPEC), DAEMON_METADATA_DOC_SPEC)!, DAEMON_METADATA_DOC_SPEC)
+        expect(dd).toEqual(metaSteps[1])
     })
 })

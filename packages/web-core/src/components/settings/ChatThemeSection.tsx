@@ -266,7 +266,7 @@ export function setChatTheme(themeId: string) {
 /** Call on app init to restore persisted theme */
 export function initChatTheme() {
     // Clear legacy accent color to prevent theme override issues
-    try { localStorage.removeItem('adhdev-accent-color') } catch {}
+    try { localStorage.removeItem('adhdev-accent-color') } catch { /* storage unavailable — preference is best-effort */ }
     
     const theme = getChatTheme()
     document.documentElement.setAttribute('data-chat-theme', theme)

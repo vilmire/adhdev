@@ -56,7 +56,8 @@ function describeNode(node: LocalMeshNodeEntry): Record<string, unknown> | null 
     };
 }
 
-function nodeSetKey(ctx: MeshContext): string {
+/** The node set a routes answer is for (a changed set re-asks). */
+export function nodeSetKey(ctx: MeshContext): string {
     const nodes = Array.isArray(ctx.mesh?.nodes) ? ctx.mesh.nodes : [];
     return nodes
         .map((node) => {

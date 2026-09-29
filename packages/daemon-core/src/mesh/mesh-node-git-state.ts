@@ -172,10 +172,10 @@ export function digestMeshNodeStateSignature(signature: string): string {
     return createHash('sha256').update(signature).digest('hex').slice(0, 32);
 }
 
-/** Whether a reported (digest, or an older member's raw) signature names the held one. */
+/** Whether a reported signature digest names the held one. */
 export function meshNodeStateSignatureMatches(held: string | null | undefined, reported: string): boolean {
     if (!held || !reported) return false;
-    return reported === held || reported === digestMeshNodeStateSignature(held);
+    return reported === digestMeshNodeStateSignature(held);
 }
 
 /**

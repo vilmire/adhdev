@@ -3,13 +3,6 @@ import { normalizeMessageParts } from './contracts.js'
 import type { NativeTurnTerminalMarker } from '../chat/native-turn-signal.js'
 import { readMessageSourceAddress } from '../chat/message-source-address.js'
 import type { ChatBubbleState, ChatMessage } from '../types.js'
-import {
-  CHAT_CONTRACT_VERSION_V1,
-  assertReadChatResultV2Payload,
-  isSupportedChatContractVersion,
-  type ChatContractVersion,
-  type ReadChatResultV2,
-} from './transcript-v2.js'
 
 const VALID_STATUSES = ['idle', 'generating', 'waiting_approval', 'waiting_choice', 'finalizing', 'error', 'panel_hidden', 'starting', 'streaming', 'no_progress', 'long_generating'] as const
 
@@ -196,33 +189,7 @@ function validateControlValues(controlValues: unknown, source: string): Record<s
   return normalized
 }
 
-/**
- * Read the producer-declared contract version from a raw read_chat payload.
- * Returns v1 when absent or unrecognised, so legacy producers keep working
- * through A1. A2 will tighten this to throw when an unsupported version is
- * declared.
- */
-export function readPayloadContractVersion(raw: unknown): ChatContractVersion {
-  if (!isPlainObject(raw)) return CHAT_CONTRACT_VERSION_V1
-  const declared = (raw as Record<string, unknown>).contractVersion
-  if (isSupportedChatContractVersion(declared)) return declared
-  return CHAT_CONTRACT_VERSION_V1
-}
 
-/**
- * Validate a v2 payload. Thin wrapper around assertReadChatResultV2Payload
- * that prefixes the contract violation with the caller's source label.
- */
-export function validateReadChatResultV2Payload(raw: unknown, source = 'read_chat'): ReadChatResultV2 {
-  try {
-    return assertReadChatResultV2Payload(raw)
-  } catch (err) {
-    if (err instanceof Error) {
-      err.message = `${source}: ${err.message}`
-    }
-    throw err
-  }
-}
 
 export function validateReadChatResultPayload(raw: unknown, source = 'read_chat'): ReadChatResult & Record<string, unknown> {
   if (!isPlainObject(raw)) {

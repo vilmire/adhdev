@@ -13,9 +13,8 @@ import type { RepoMeshContextValue } from '../../context/RepoMeshContext'
 import {
     getCoordinatorMeshStatusSnapshot,
     loadCoordinatorMeshStatus,
-    peekCoordinatorMeshStatus,
     primeCoordinatorMeshStatus,
-} from '../../utils/coordinator-mesh-status-store'
+} from '../../utils/coordinator-mesh-status-store';
 import { useCoordinatorMeshStatusSnapshot } from '../../hooks/useCoordinatorMeshStatus'
 
 interface UseMeshGraphOptions {
@@ -30,10 +29,6 @@ function readBootstrapFallback(response: unknown): boolean {
     return (response as Record<string, unknown>)._bootstrapFallback === true
 }
 
-/** Last-good status for a mesh from the shared store (survives route re-entry). */
-export function getCachedMeshGraphStatus(meshId: string | null): RepoMeshStatus | null {
-    return peekCoordinatorMeshStatus(meshId)
-}
 
 export function useMeshGraph({
     selectedMeshId,

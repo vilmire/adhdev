@@ -18,7 +18,6 @@ import type { DevServerContext } from './dev-server-types.js';
 import * as http from 'http';
 import * as fs from 'fs';
 import * as path from 'path';
-import * as os from 'os';
 import type { ProviderLoader } from '../providers/provider-loader.js';
 import type { ProviderCategory, ProviderModule, ProviderScripts, ProviderSettingDef } from '../providers/contracts.js';
 import { validateProviderDefinition } from '../providers/provider-schema.js';
@@ -29,7 +28,7 @@ import type { DaemonCdpManager } from '../cdp/manager.js';
 import type { ProviderInstanceManager } from '../providers/provider-instance-manager.js';
 import type { DaemonCliManager } from '../commands/cli-manager.js';
 import type { SessionLifecycleBus } from '../sessions/lifecycle-bus.js';
-import { generateTemplate as genScaffoldTemplate, generateFiles as genScaffoldFiles } from './scaffold-template.js';
+import { generateFiles as genScaffoldFiles } from './scaffold-template.js';
 import { buildCliProviderV1Scaffold, buildAcpProviderV1Scaffold } from '../providers/scaffold-v1.js';
 import { VersionArchive, detectAllVersions } from '../providers/version-archive.js';
 import { LOG } from '../logging/logger.js';
@@ -915,7 +914,7 @@ export class DevServer implements DevServerContext {
 
   private async handleScaffold(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const body = await this.readBody(req);
-    const { type, name, category = 'ide', location = 'user',
+    const { type, name, category = 'ide',
       cdpPorts, cli, processName, installPath, binary, extensionId, version, osPaths, processNames } = body;
     if (!type || !name) {
       this.json(res, 400, { error: 'type and name required' });
@@ -988,7 +987,6 @@ export class DevServer implements DevServerContext {
       const archive = new VersionArchive();
       const results = await detectAllVersions(this.providerLoader, archive);
       const installed = results.filter(r => r.installed);
-      const notInstalled = results.filter(r => !r.installed);
       this.json(res, 200, {
         total: results.length,
         installed: installed.length,
@@ -1045,40 +1043,6 @@ export class DevServer implements DevServerContext {
     return path.join(scriptsDir, versions[0]);
   }
 
-  private resolveAutoImplWritableProviderDir(
-    category: ProviderCategory,
-    type: string,
-    requestedDir?: string,
-  ): { dir: string | null; reason?: string } {
-    const canonicalUserDir = path.resolve(this.providerLoader.getUserProviderDir(category, type));
-    const desiredDir = requestedDir ? path.resolve(requestedDir) : canonicalUserDir;
-    const upstreamRoot = path.resolve(this.providerLoader.getUpstreamDir());
-    if (desiredDir === upstreamRoot || desiredDir.startsWith(`${upstreamRoot}${path.sep}`)) {
-      return { dir: null, reason: `Refusing to write into upstream provider directory: ${desiredDir}` };
-    }
-
-    if (path.basename(desiredDir) !== type) {
-      return { dir: null, reason: `Requested writable provider directory must end with '${type}': ${desiredDir}` };
-    }
-
-    const sourceDir = this.findProviderDir(type);
-    if (!sourceDir) {
-      return { dir: null, reason: `Provider source directory not found for '${type}'` };
-    }
-
-    if (!fs.existsSync(desiredDir)) {
-      fs.mkdirSync(path.dirname(desiredDir), { recursive: true });
-      fs.cpSync(sourceDir, desiredDir, { recursive: true });
-      this.log(`Auto-implement writable copy created: ${desiredDir}`);
-    }
-
-  const providerJson = path.join(desiredDir, 'provider.json');
-  if (!fs.existsSync(providerJson)) {
-    return { dir: null, reason: `provider.json not found in writable provider directory: ${desiredDir}` };
-  }
-
-  return { dir: desiredDir };
-}
 
 
   private async handleAutoImplement(type: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {

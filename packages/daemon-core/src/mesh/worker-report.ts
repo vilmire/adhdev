@@ -385,17 +385,6 @@ function readReportedSummary(meshId: string, taskId: string): string | undefined
     return REPORTED_SUMMARY_STORE.get(summaryKey(meshId, taskId))?.summary;
 }
 
-/** Drop reported summaries older than `maxAgeMs`. Mirrors the handoff sweep. */
-export function pruneReportedSummaries(maxAgeMs: number, nowMs = Date.now()): number {
-    let removed = 0;
-    for (const [key, entry] of REPORTED_SUMMARY_STORE) {
-        if (nowMs - entry.recordedAtMs > maxAgeMs) {
-            REPORTED_SUMMARY_STORE.delete(key);
-            removed += 1;
-        }
-    }
-    return removed;
-}
 
 /** Test-only reset. */
 export function __resetReportedSummariesForTest(): void {

@@ -338,8 +338,6 @@ describe('cloud status seqscribe boundary', () => {
         transcriptDedupedBucket: 0,
         transcriptOversizedBucket: 0,
         transcriptDroppedBucket: 0,
-        transcriptParityRan: false,
-        transcriptParityMismatchBucket: 0,
     };
 
     it('omits the field entirely when no seqscribe node is running', () => {
@@ -435,8 +433,6 @@ describe('cloud status seqscribe boundary', () => {
             transcriptDedupedBucket: 0,
             transcriptOversizedBucket: 0,
             transcriptDroppedBucket: 0,
-            transcriptParityRan: false,
-            transcriptParityMismatchBucket: 0,
         });
     });
 
@@ -480,19 +476,6 @@ describe('cloud status seqscribe boundary', () => {
                 fromReplica: 412,
                 fromLedger: 9,
                 fallbacks: { consumer_lag: 7, parity_mismatch: 2 },
-            },
-            // §5.6 gate instrumentation: the RAW, undecimated transcript parity
-            // counters `get_status_metadata` serves so an observer can tell a
-            // clean `persistentMismatches: 0` from an UNDECIDED one. Local-only
-            // for the dedup reason (raw monotonic counters) — the bucketed
-            // `transcriptParity*Bucket` fields remain the cloud-facing surface.
-            transcriptParityDetail: {
-                runs: 9, compared: 9, mismatches: 3, persistentMismatches: 1,
-                missingCompleteRevision: 2, fieldMismatch: 1, extraMessage: 0,
-                wrongSession: 0, wrongOwner: 0, digestMismatch: 0,
-                sessionsObserved: 4, sessionsRepeated: 3,
-                pendingMissingRevisits: 2, pendingMissingOpen: 1,
-                since: 1_700_000_000_000, uptimeMs: 3_600_000,
             },
             // Transcript trigger attribution + daemon-side stage latencies.
             // Local-only for the dedup reason: per-source raw counters and raw
@@ -555,7 +538,6 @@ describe('cloud status seqscribe boundary', () => {
             'throughput',
             'syncHotspots',
             'readRouting',
-            'transcriptParityDetail',
             'transcriptLatencyDetail',
             'transcriptLane',
             'subDelivery',
@@ -617,7 +599,6 @@ describe('★beacon diagnostics never reach the server status frame', () => {
         queueBucket: 0, fgenAgeBucket: 0, quarantined: false, authority: true,
         transcriptPublish: false, transcriptPublishedBucket: 0, transcriptPublishFailedBucket: 0,
         transcriptDedupedBucket: 0, transcriptOversizedBucket: 0, transcriptDroppedBucket: 0,
-        transcriptParityRan: false, transcriptParityMismatchBucket: 0,
     };
 
     /** A realistic diagnostics object, carrying every identifier class it legitimately holds. */

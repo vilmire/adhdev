@@ -43,11 +43,6 @@ interface ProvidersTabProps {
     sendDaemonCommand: (id: string, type: string, data?: Record<string, unknown>) => Promise<any>
     /** Machine plan quota (MachineInfo.quota) — rendered per provider row. */
     quota?: Record<string, MeshNodeFactsProviderQuota>
-    /**
-     * Channel staleness as read by this tab's own check_provider_updates, so
-     * the machine page's tab dot stays current without an extra command.
-     */
-    onChannelStaleness?: (snap: { staleTypes: string[]; newTypes: string[] }) => void
 }
 
 /**
@@ -62,7 +57,7 @@ interface ProvidersTabProps {
  *   - The Refresh button is the only thing that shows a spinner. Background
  *     reconciles never touch `loading`.
  */
-export default function ProvidersTab({ machineId, providers, sendDaemonCommand, quota, onChannelStaleness }: ProvidersTabProps) {
+export default function ProvidersTab({ machineId, providers, sendDaemonCommand, quota }: ProvidersTabProps) {
     const { t } = useTranslation('common')
     // Raw daemon payload; the rows are DERIVED from it + `providers` below.
     const [settingsPayload, setSettingsPayload] = useState<ProviderSettingsPayload | null>(null)
@@ -252,20 +247,13 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
             // the kimi class: without this list there is NO dashboard path to
             // install a type first published after bootstrap.
             setChannelNewTypes(Array.isArray(body?.channelStaleness?.newTypes) ? body.channelStaleness.newTypes : [])
-            const staleness = body?.channelStaleness
-            if (onChannelStaleness && staleness && !staleness.error) {
-                onChannelStaleness({
-                    staleTypes: Array.isArray(staleness.staleTypes) ? staleness.staleTypes : [],
-                    newTypes: Array.isArray(staleness.newTypes) ? staleness.newTypes : [],
-                })
-            }
             // Model-list axis: only "discovery is supported but the last read
             // FAILED" is shown. Providers that cannot be enumerated at all
             // (daemon `cannotVerifyTypes`) are deliberately not rendered —
             // owner decision 2026-09-25; an outdated list surfaces as an issue.
             setModelStaleTypes(Array.isArray(body?.modelStaleness?.staleTypes) ? body.modelStaleness.staleTypes : [])
         } catch { /* leave empty — rows then show no pin rather than a wrong one */ }
-    }, [machineId, sendDaemonCommand, onChannelStaleness])
+    }, [machineId, sendDaemonCommand])
 
     const handleInstallNewType = useCallback(async (providerType: string) => {
         if (!machineId) return

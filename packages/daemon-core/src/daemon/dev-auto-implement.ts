@@ -14,7 +14,6 @@ import type * as http from 'http';
 import type { ChildProcess } from 'child_process';
 import type { DevServerContext, ProviderCategory } from './dev-server-types.js';
 import { DEV_SERVER_PORT } from './dev-server.js';
-import { LOG } from '../logging/logger.js';
 import { runCliAutoImplVerification } from './dev-cli-debug.js';
 import { isPidAlive } from '../system/process-utils.js';
 

@@ -12,6 +12,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { DaemonMetadataUpdateBody, TopicSink } from '../../src/subscriptions/topic-registry.js';
 import { TopicSubscriptionRegistry, machineRuntimeSignature } from '../../src/subscriptions/topic-registry.js';
+import { DASHBOARD_WIRE_VERSION } from '@adhdev/mesh-shared';
 
 function session(id: string, status: string, stamp: number) {
     return {
@@ -60,7 +61,7 @@ function harness() {
             }) as unknown as DaemonMetadataUpdateBody,
         },
     });
-    registry.subscribe('c1', { type: 'subscribe', topic: 'daemon.metadata', key: 'm', params: { includeSessions: true } });
+    registry.subscribe('c1', { type: 'subscribe', wireVersion: DASHBOARD_WIRE_VERSION, topic: 'daemon.metadata', key: 'm', params: { includeSessions: true } });
     return {
         registry,
         frames,
@@ -93,7 +94,7 @@ describe('daemon.metadata keyed delta — bytes per tick', () => {
             key: 'm',
             mode: 'delta',
             daemonId: 'daemon_1',
-            sessions: [{ id: 'b', status: 'generating', lastUpdated: 6_000 }],
+            delta: { collections: { 'status.sessions': { upsert: [{ id: 'b', status: 'generating', lastUpdated: 6_000 }] } } },
             seq: 2,
             timestamp: 6_000,
         });
@@ -105,7 +106,7 @@ describe('daemon.metadata keyed delta — bytes per tick', () => {
         await h.registry.flushNow('daemon.metadata', 'c1', 'm');
         delete h.statuses.c;
         await h.tick();
-        expect(h.frames[1]!.update).toMatchObject({ mode: 'delta', removedSessionIds: ['c'], sessionOrder: ['a', 'b'] });
+        expect(h.frames[1]!.update).toMatchObject({ mode: 'delta', delta: { collections: { 'status.sessions': { removed: ['c'], order: ['a', 'b'] } } } });
 
         h.setDeliver(false);
         h.statuses.a = 'error';

@@ -91,19 +91,12 @@ import type { PeerHandle } from 'seqscribe';
 import type { TranscriptReplicaStore } from '../seqscribe/transcript-replica-store.js';
 import { logCommand } from '../logging/command-log.js';
 import { createInteractionId, recordDebugTrace } from '../logging/debug-trace.js';
-import { getSessionHostSurfaceKind } from '../session-host/runtime-surface.js';
-import { handleMeshForwardEvent } from '../mesh/mesh-events.js';
 import { buildMeshHostRequiredFailure, resolveMeshHostStatus } from '../mesh/mesh-host-ownership.js';
-import { analyzeMeshRefineNodeChangeArea, orderMeshRefineBatchNodes } from '../mesh/mesh-refine-batch.js';
-import type { WorktreeBootstrapState } from '../mesh/worktree-bootstrap-config.js';
-import { getMeshQueueRevision } from '../mesh/mesh-work-queue.js';
 import type { RepoMeshSessionCleanupMode, RepoMeshSpawnedSessionVisibility } from '../repo-mesh-types.js';
 import type { BeaconDiagnosticsSummary, SeqscribeStatusSummary } from '../shared-types.js';
-import { DEFAULT_MESH_POLICY, magiAutoLaunchedSessionCleanupDecision, mergeAndNormalizePolicy } from '../repo-mesh-types.js';
+import { mergeAndNormalizePolicy } from '../repo-mesh-types.js';
 import { readMeshConfigFromDisk, statMeshConfigFile } from '../config/mesh-config.js';
-import { resolve as pathResolve } from 'path';
 import * as fs from 'fs';
-import { execFileSync } from 'node:child_process';
 
 // ─── Extracted-module imports (symbols the dispatch class consumes) ───
 import {
@@ -121,27 +114,10 @@ import {
     sanitizeInlineMesh,
 } from '../mesh/mesh-node-identity.js';
 import {
-    alignRefinerySubmodulesAfterMerge,
-    buildMeshRefineValidationPlan,
-    buildSubmodulePublishRequiredNextStep,
-    checkWorktreeChangesPatchEquivalentInRef,
-    MeshRefineAsyncJobStatus,
     MeshRefineBatchJobHandle,
-    MeshRefineBatchJobStatus,
     MeshRefineBatchTerminalJob,
     MeshRefineJobHandle,
     MeshRefineTerminalJob,
-    MeshWorktreePatchContainmentSummary,
-    recordMeshRefineStage,
-    RefineContext,
-    RefineExecFileAsync,
-    RefineStageOutcome,
-    resolveRefineryAutoPublishSubmoduleMainCommits,
-    runMeshRefineEffectiveDiffGate,
-    runMeshRefinePatchEquivalenceGate,
-    runMeshRefineSubmoduleReachabilityGate,
-    runMeshRefineValidationGate,
-    truncateValidationOutput,
 } from '../mesh/mesh-refine-gates.js';
 // ─── Refinery job orchestration (bodies extracted from this file) ───
 import {
@@ -164,7 +140,6 @@ import {
 // ─── Aggregate mesh-status cache (bodies extracted from this file) ───
 import {
     getCachedAggregateMeshStatus,
-    hydrateCachedAggregateMeshStatusFromInline,
     rememberAggregateMeshStatus,
 } from './router-aggregate-status.js';
 // ─── Remote mesh-session owner resolution (bodies extracted from this file) ───
@@ -642,9 +617,6 @@ export class DaemonCommandRouter {
     // rememberAggregateMeshStatus are bound into HighFamilyContext, so callers
     // reach these via `self.` for correct instance dispatch.
 
-    private hydrateCachedAggregateMeshStatusFromInline(snapshot: any, mesh: any, options?: { requireDirectPeerTruth?: boolean }): any {
-        return hydrateCachedAggregateMeshStatusFromInline(this, snapshot, mesh, options);
-    }
 
     private getCachedAggregateMeshStatus(
         meshId: string,

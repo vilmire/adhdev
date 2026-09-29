@@ -180,6 +180,7 @@ export function statusPayloadToEntries(
         // good value through the leading existingDaemon spread.
         ...(payload.beacon && { beacon: beaconSourceMatches ? payload.beacon : undefined }),
         ...(payload.screenshotUsage !== undefined && { screenshotUsage: payload.screenshotUsage }),
+        ...(payload.providerChannelStaleness && { providerChannelStaleness: payload.providerChannelStaleness }),
         _sessionListAuthoritative: Array.isArray(payload.sessions),
         cdpConnected: ideSessions.some((session) => !!session.cdpConnected),
     } as DaemonData)

@@ -97,6 +97,9 @@ export { default as CliTerminalPane } from './components/dashboard/CliTerminalPa
 export { default as SpecDebugPanel } from './components/dashboard/SpecDebugPanel'
 export { default as ConnectionBanner } from './components/dashboard/ConnectionBanner'
 export { default as ShellFreshnessBanner } from './components/ShellFreshnessBanner'
+export { default as DashboardWireCompatOverlay } from './components/DashboardWireCompatOverlay'
+export { noteDaemonWireVersion, getDashboardWireCompat, subscribeDashboardWireCompat } from './managers/dashboard-wire-compat'
+export type { DashboardWireCompatState } from './managers/dashboard-wire-compat'
 export type { ShellFreshnessBannerProps } from './components/ShellFreshnessBanner'
 export {
     useShellFreshness,
@@ -131,7 +134,7 @@ export {
 // The share-link viewer (web-cloud SessionShare) renders one session's keyed
 // chat lane and daemon.metadata without the owner dashboard's controllers.
 export { isMappableTranscriptView, mapTranscriptViewToChatView, TranscriptBubbleCache } from './components/dashboard/transcript-chat-pane-adapter'
-export { materializeDaemonMetadataUpdate } from './utils/daemon-metadata-fold'
+export { materializeDaemonMetadataUpdate } from './utils/keyed-topic-fold'
 export type { ActiveConversation } from './components/dashboard/types'
 export { isCliConv, isAcpConv } from './components/dashboard/types'
 
@@ -278,10 +281,10 @@ export {
     IconChat, IconMonitor, IconEye, IconEyeOff, IconRefresh, IconSearch, IconPlug, IconMesh,
     IconBarChart, IconScroll, IconFolder, IconWarning, IconClock,
     IconTerminal, IconSplitView, IconPlay, IconX, IconRocket, IconBot, IconThought,
-    IconWrench, IconCandle, IconApple, IconLinux, IconWindows, IconBell, IconBuilding,
+    IconWrench, IconCandle, IconApple, IconLinux, IconWindows, IconBell,
     IconCheckCircle, IconZap, IconVolume, IconDiscord, IconGlobe,
-    IconSpinner, IconLightbulb, IconLink, IconShuffle, IconMousePointer, IconHand,
-    IconPackage, IconSmartphone, IconFlag, IconGitBranch, IconMaximize, IconMinimize, IconCheck
+    IconSpinner, IconShuffle, IconMousePointer, IconHand,
+    IconPackage, IconSmartphone, IconGitBranch, IconMaximize, IconMinimize, IconCheck
 } from './components/Icons'
 
 export { ProviderLogo } from './components/ProviderLogo'
@@ -316,7 +319,7 @@ export { useDaemonMachineRuntimeLoader } from './hooks/useDaemonMachineRuntimeLo
 export { useDaemonMachineRuntimeSubscription } from './hooks/useDaemonMachineRuntimeSubscription'
 export { useSessionHostDiagnosticsSubscription } from './hooks/useSessionHostDiagnosticsSubscription'
 export { useSessionModalSubscription } from './hooks/useSessionModalSubscription'
-export { useNotificationPrefs, shouldNotify, getNotificationPrefs, setNotificationPrefs } from './hooks/useNotificationPrefs'
+export { useNotificationPrefs, shouldNotify, setNotificationPrefs } from './hooks/useNotificationPrefs'
 export type { NotificationPrefs } from './hooks/useNotificationPrefs'
 export { useBrowserNotifications, requestNotificationPermission } from './hooks/useBrowserNotifications'
 export { useInteractivePrompt } from './hooks/useInteractivePrompt'
@@ -331,7 +334,7 @@ export { default as MachineDetail } from './pages/MachineDetail'
 export { default as MachinesPage } from './pages/Machines'
 export { default as NotificationsPage } from './pages/Notifications'
 export { default as RepoMesh } from './pages/RepoMesh'
-// The mesh graph surfaces (MeshGraphView / MeshGraphPanel / MeshObservabilitySurface)
+// The mesh graph surfaces (MeshGraphView / MeshObservabilitySurface)
 // are deliberately NOT re-exported from this barrel: they pull @xyflow/react and
 // elkjs (~1.5 MB raw), and any barrel edge to them puts that stack on the eager
 // critical path of every consumer route. Mount them through the lazy boundary
@@ -349,7 +352,6 @@ export type { MeshGraph, MeshGraphNode as MeshGraphNodeType, MeshGraphEdge as Me
 export { canonicalizeRepoMeshStatus, extractRepoMeshStatus, repoMeshNodeHasLiveGitEvidence, summarizeRepoMeshCanonicalNodeDebug } from './utils/repo-mesh-status'
 export { extractMagiActivity, MAGI_SYNTHESIS_WIRING_GAP } from './utils/magi-activity'
 export type { MagiActivitySummary, MagiGroupActivity, MagiReplicaActivity, MagiReplicaCounts, MagiLedgerEvent } from './utils/magi-activity'
-export { default as MagiSynthesisViewer } from './components/MeshGraph/MagiSynthesisViewer'
 export { useMeshGraphMetadataSubscription } from './hooks/useMeshGraphMetadataSubscription'
 export { RepoMeshContext, useRepoMeshContext, STANDALONE_FEATURES, CLOUD_FEATURES } from './context/RepoMeshContext'
 export type { RepoMeshContextValue, RepoMeshDaemonEntry, RepoMeshFeatures, LoadMeshStatusOptions, LaunchCoordinatorParams, LaunchCoordinatorResult } from './context/RepoMeshContext'

@@ -55,7 +55,6 @@ import {
     CHAT_PART_MAX_JCS_BYTES,
     chatJcsTextBytes,
     chatCoverageModeField,
-    chatMessageFromWire,
     chatMessageKey,
     chatPartKey,
     computeChatCommitDigest,
@@ -74,7 +73,6 @@ import {
     type ChatCommitV2,
     type ChatMetaV2,
     type ChatMsgV2,
-    type ReplicatedTranscriptMessageV2,
 } from './transcript-keyed-codec.js';
 import type { TranscriptObservation, TranscriptObservationMessage } from './transcript-observation.js';
 
@@ -112,10 +110,6 @@ export interface KeyedChatFrame {
     readonly tripwire: boolean;
     /** A base frame arrived within 10 minutes of the previous one (§4.10). */
     readonly baseRateExceeded: boolean;
-    /** The live `(id, rev)` set this frame commits — parity's expected side. */
-    readonly live: ReadonlyMap<string, number>;
-    /** The observation's bubbles as a reader will materialize them (parity). */
-    expectedMessages(): ReplicatedTranscriptMessageV2[];
 }
 
 /** One persisted row as `scanLatestPerKey`/`rowsAfter` returns it. */
@@ -654,22 +648,6 @@ export class KeyedChatSessionState {
             capped: capped.size > 0,
             tripwire,
             baseRateExceeded,
-            live,
-            expectedMessages: () =>
-                observed
-                    .filter((b) => live.has(b.id))
-                    .map((b) => {
-                        const head = encodeChatMessageHead(b.message, {
-                            id: b.id,
-                            ord: b.ord,
-                            rev: live.get(b.id)!,
-                            epoch,
-                            frame: frameNo,
-                            srcId: typeof b.message.srcId === 'string' ? b.message.srcId : null,
-                            body: { text: b.text },
-                        });
-                        return chatMessageFromWire(head, b.text);
-                    }),
             [STAGED]: staging,
         };
         return { status: 'frame', frame };

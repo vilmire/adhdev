@@ -9,7 +9,6 @@
  * Daemon collects all via a single IDE Instance.getState() call.
  */
 
-import * as os from 'os';
 import * as crypto from 'crypto';
 import { flattenContent, type ProviderModule } from './contracts.js';
 import type { ProviderInstance, ProviderState, ProviderEvent, InstanceContext, SessionModalState } from './provider-instance.js';
@@ -83,8 +82,6 @@ export class IdeProviderInstance implements ProviderInstance {
     private appliedEffectKeys = new Set<string>();
     private runtimeMessages: Array<{ key: string; message: ChatMessage }> = [];
 
- // IDE meta
-    private ideVersion: string = '';
     private instanceId: string;
     private workspace: string = '';
 
@@ -704,25 +701,6 @@ export class IdeProviderInstance implements ProviderInstance {
                 return a.index - b.index;
             })
             .map((entry) => entry.message));
-    }
-
-    private getPersistedEffectContent(effect: { type: string; message?: { content?: unknown }; toast?: { message?: string }; notification?: { title?: string; body?: string; bubbleContent?: unknown } }): string | null {
-        if (effect.type === 'message') {
-            return typeof effect.message?.content === 'string'
-                ? effect.message.content
-                : JSON.stringify(effect.message?.content || '');
-        }
-        if (effect.type === 'toast') {
-            return effect.toast?.message || null;
-        }
-        if (effect.type === 'notification') {
-            if (typeof effect.notification?.bubbleContent === 'string') return effect.notification.bubbleContent;
-            if (typeof effect.notification?.title === 'string' && effect.notification.title.trim()) {
-                return `${effect.notification.title}\n${effect.notification.body || ''}`.trim();
-            }
-            return effect.notification?.body || null;
-        }
-        return null;
     }
 
     private getEffectDedupKey(effect: { id?: string; type: string; message?: { content?: unknown }; toast?: { message?: string }; notification?: { title?: string; body?: string } }): string {

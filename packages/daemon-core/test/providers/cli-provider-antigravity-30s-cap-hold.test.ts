@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { CliProviderInstance } from '../../src/providers/cli-provider-instance.js'
+import { antigravityHoldPtyStillActive } from '../../src/providers/completion/completion-diagnostics.js'
 import {
   COMPLETED_FINALIZATION_MAX_WAIT_MS,
   ANTIGRAVITY_HOLD_QUIET_DWELL_MS,
@@ -284,7 +285,7 @@ describe('CliProviderInstance — antigravityHoldPtyStillActive discriminator', 
     const realNow = Date.now
     Date.now = () => NOW
     try {
-      expect((CliProviderInstance.prototype as any).antigravityHoldPtyStillActive.call(inst)).toBe(true)
+      expect(antigravityHoldPtyStillActive(inst as any)).toBe(true)
     } finally { Date.now = realNow }
   })
 
@@ -293,7 +294,7 @@ describe('CliProviderInstance — antigravityHoldPtyStillActive discriminator', 
     const realNow = Date.now
     Date.now = () => NOW
     try {
-      expect((CliProviderInstance.prototype as any).antigravityHoldPtyStillActive.call(inst)).toBe(false)
+      expect(antigravityHoldPtyStillActive(inst as any)).toBe(false)
     } finally { Date.now = realNow }
   })
 
@@ -302,7 +303,7 @@ describe('CliProviderInstance — antigravityHoldPtyStillActive discriminator', 
     const realNow = Date.now
     Date.now = () => NOW
     try {
-      expect((CliProviderInstance.prototype as any).antigravityHoldPtyStillActive.call(inst)).toBe(true)
+      expect(antigravityHoldPtyStillActive(inst as any)).toBe(true)
     } finally { Date.now = realNow }
   })
 })

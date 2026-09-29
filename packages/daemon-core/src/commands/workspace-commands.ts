@@ -60,7 +60,6 @@ export function handleWorkspaceRemove(args: any): WorkspaceCommandResult {
 
     const config = loadWorkspaceConfig();
     if ('error' in config) return { success: false, error: config.error };
-    const removed = (config.workspaces || []).find(w => w.id === id);
     const result = W.removeWorkspaceEntry(config, id);
     if ('error' in result) return { success: false, error: result.error };
 

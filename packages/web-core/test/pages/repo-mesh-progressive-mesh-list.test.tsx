@@ -153,4 +153,21 @@ describe('useMeshList progressive load', () => {
         expect(state.current!.loading).toBe(false)
         expect(state.current!.meshes).toEqual([])
     })
+
+    it('stays on the loading state (never "no meshes") before any daemon can answer, and loads once one appears', async () => {
+        const calls: string[] = []
+        const state = mount([], id => { calls.push(id); return Promise.resolve({ success: true, meshes: [] }) })
+        expect(state.current!.loading).toBe(true)
+        await act(async () => { await state.current!.loadMeshes() })
+        // Nobody was asked, so nothing loaded: still loading, no empty list rendered as truth.
+        expect(calls).toEqual([])
+        expect(state.current!.loading).toBe(true)
+
+        // A daemon connects: the first real answer ends the loading state.
+        const later = mount(['daemon_late'], id => { calls.push(id); return Promise.resolve({ success: true, meshes: [hostPinned('late', 'mesh_late')] }) })
+        await act(async () => { await later.current!.loadMeshes(true) })
+        expect(calls).toEqual(['daemon_late'])
+        expect(later.current!.loading).toBe(false)
+        expect(later.current!.meshes.map(m => m.id)).toEqual(['mesh_late'])
+    })
 })

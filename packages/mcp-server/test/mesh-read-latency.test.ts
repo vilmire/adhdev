@@ -15,7 +15,7 @@ import { fakeCoordinatorTransport } from './helpers/fake-coordinator-tool-answer
 
 type Call = { command: string; args: any };
 
-function buildHarness(opts: { oldDaemon?: boolean; missionSentinel?: boolean; quotaRanking?: boolean } = {}) {
+function buildHarness(opts: { missionSentinel?: boolean; quotaRanking?: boolean } = {}) {
     const meshId = `mesh-read-latency-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const mesh = {
         id: meshId, name: 'Latency Mesh', repoIdentity: 'example/repo', defaultBranch: 'main', policy: {}, coordinator: {},
@@ -30,19 +30,10 @@ function buildHarness(opts: { oldDaemon?: boolean; missionSentinel?: boolean; qu
         deps: { statusInstanceId: 'daemon-coord' },
         getMeshForCommand: async () => ({ mesh, inline: true, source: 'inline_cache' }),
     };
-    // An older daemon's strict decoders reject every request key this pass added.
-    const rejectsNewShape = (command: string, args: any) => opts.oldDaemon && (
-        (command === 'mission_list_query' && args.meshStatusView !== undefined)
-        || (command === 'recovery_context_query' && args.nodeIds !== undefined)
-        || (command === 'task_stats_query' && args.missionIds !== undefined)
-        || (command === 'queue_query' && (args.withCounts !== undefined || args.withDependencyHeads !== undefined))
-        || (command === 'active_work_query' && args.includeSchedulingRuntime === true && !args.mesh)
-    );
     const transport: any = fakeCoordinatorTransport({
         async command(command: string, args: any = {}) {
             const wire = JSON.parse(JSON.stringify(args ?? {}));
             calls.push({ command, args: wire });
-            if (rejectsNewShape(command, wire)) return { success: false, error: `${command}: request failed decode (bad shape)` };
             if (command === 'mission_list_query' && opts.missionSentinel && wire.meshStatusView === 'compact') {
                 return {
                     success: true, truncated: false, matched: 1, historyFold: null,
@@ -161,18 +152,4 @@ test('mesh_view_queue compact: active rows + daemon counts only; the queue never
     const filtered = JSON.parse(await meshViewQueue(h.ctx, { status: ['completed'] }));
     assert.equal(filtered.visibleSummary.totalCount, 3);
     assert.equal(filtered.visibleHistoricalCount, 3);
-});
-
-test('an older daemon (rejects the new request keys) still gets complete mesh_view_queue answers', async () => {
-    // mesh_status is ONE mesh_status_view the coordinator composes itself (P1-6) —
-    // no MCP-side request-shape fallbacks remain for it.
-    const h = buildHarness({ oldDaemon: true });
-    enqueueTask(h.meshId, 'pending task', { difficulty: 'medium' } as any);
-    const t = enqueueTask(h.meshId, 'done', { difficulty: 'medium' } as any);
-    __writeTaskStatusForTests(h.meshId, t.id, 'completed');
-
-    const queue = JSON.parse(await meshViewQueue(h.ctx, {}));
-    assert.equal(queue.success, true);
-    assert.equal(queue.summary.totalCount, 2);
-    assert.equal(queue.historicalCount, 1);
 });

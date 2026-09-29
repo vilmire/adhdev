@@ -16,7 +16,7 @@
  * stamper as `normalizeMessageIdentity` for reuse.
  */
 
-import { buildDetectStatusFromTui, type DetectStatusTuiSpec } from './detect-status.js'
+import { buildDetectStatusFromTui } from './detect-status.js'
 import { buildParseApprovalFromTui, type ModalTuiSpec } from './parse-approval.js'
 import * as crypto from 'node:crypto'
 

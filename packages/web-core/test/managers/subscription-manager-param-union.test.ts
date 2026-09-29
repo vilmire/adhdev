@@ -16,6 +16,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { SubscriptionManager } from '../../src/managers/SubscriptionManager'
 import type { SubscribeRequest, UnsubscribeRequest } from '@adhdev/daemon-core'
+import { DASHBOARD_WIRE_VERSION } from '@adhdev/mesh-shared'
 
 const KEY = 'daemon:metadata:daemon-1'
 
@@ -139,7 +140,7 @@ describe('SubscriptionManager param union on shared keys (D1#1)', () => {
         manager.subscribe({ sendData }, 'daemon-1', metadataRequest({ includeSessions: true }), first)
         manager.subscribe({ sendData }, 'daemon-1', metadataRequest({ includeSessions: false }), second)
 
-        manager.publish({ topic: 'daemon.metadata', key: KEY, seq: 1, timestamp: 1 } as any)
+        manager.publish({ topic: 'daemon.metadata', key: KEY, wireVersion: DASHBOARD_WIRE_VERSION, seq: 1, timestamp: 1 } as any)
 
         expect(first).toHaveBeenCalledOnce()
         expect(second).toHaveBeenCalledOnce()

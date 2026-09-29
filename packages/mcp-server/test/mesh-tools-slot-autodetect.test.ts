@@ -92,12 +92,16 @@ test('mesh_node_slots (action=propose) is published in the tool registry', () =>
 
 // ─── tool behavior (stubbed transport) ───────────────────────────────────────
 
-/** A MeshContext stub whose node lookup and command transport are controlled. */
+/**
+ * A MeshContext stub: the node is served by the coordinator daemon itself, so its
+ * provider catalog is the coordinator's own status. A member is never read.
+ */
 const ctxWith = (node: any, commandResult: unknown) => ({
   mesh: { id: 'mesh_1', name: 'ADHDev', nodes: [node] },
+  localDaemonId: 'daemon_1',
   transport: {
-    command: async () => commandResult,
-    meshCommand: async () => commandResult,
+    command: async (command: string) => (command === 'get_status_metadata' ? commandResult : { success: true }),
+    meshCommand: async () => { throw new Error('a member must never be read'); },
   },
 } as any);
 
@@ -179,19 +183,44 @@ test('omits the MAGI draft unless include_magi is set', async () => {
   assert.ok(withMagi.magiPanelProposal.slots.every((s: any) => s.model === undefined));
 });
 
-test('reports detection_unavailable when the node probe fails', async () => {
+test('reports detection_unavailable when the coordinator holds no catalog for a remote node', async () => {
   const ctx = {
     mesh: { id: 'mesh_1', name: 'ADHDev', nodes: [nodeWith()] },
+    localDaemonId: 'daemon_coordinator',
     transport: {
-      command: async () => { throw new Error('node offline'); },
-      meshCommand: async () => { throw new Error('node offline'); },
+      // The coordinator's held view has the node, but nothing pushed yet.
+      command: async (command: string) => (command === 'mesh_status'
+        ? { success: true, nodes: [{ nodeId: 'node_1', heldRuntime: { source: 'none', observedAt: null, refreshing: true, sessions: [] } }] }
+        : { success: true }),
+      meshCommand: async () => { throw new Error('a member must never be read'); },
     },
   } as any;
   const out = JSON.parse(await meshNodeSlotsPropose(ctx, { node_id: 'node_1' }));
 
   assert.equal(out.success, false);
   assert.equal(out.code, 'detection_unavailable');
-  assert.match(out.error, /node offline/);
+  assert.match(out.error, /no provider catalog/);
+});
+
+test('a remote node proposes from the catalog its member pushed (held by the coordinator)', async () => {
+  const commands: string[] = [];
+  const ctx = {
+    mesh: { id: 'mesh_1', name: 'ADHDev', nodes: [nodeWith()] },
+    localDaemonId: 'daemon_coordinator',
+    transport: {
+      command: async (command: string) => {
+        commands.push(command);
+        return command === 'mesh_status'
+          ? { success: true, nodes: [{ nodeId: 'node_1', heldRuntime: { source: 'member_push', observedAt: 1, refreshing: false, sessions: [], providers: [cli('kimi', { providerVersion: '1.2' })] } }] }
+          : { success: true };
+      },
+      meshCommand: async () => { throw new Error('a member must never be read'); },
+    },
+  } as any;
+  const out = JSON.parse(await meshNodeSlotsPropose(ctx, { node_id: 'node_1' }));
+  assert.equal(out.success, true);
+  assert.deepEqual(out.detectedCliProviders, [{ type: 'kimi', version: '1.2' }]);
+  assert.equal(commands.includes('get_status_metadata'), false, 'a remote node is never probed');
 });
 
 // 2026-09-26 tool consolidation: list / propose / set are one published tool.

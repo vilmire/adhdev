@@ -1,11 +1,9 @@
 import { randomUUID } from 'crypto';
 import { requireMeshHostQueueOwner } from './mesh-host-ownership.js';
 import type { RepoMeshDaemonRole } from '../repo-mesh-types.js';
-import { MESH_CONVERGE_REFINE_TAG, resolveAutoConvergeCodeChange } from '../repo-mesh-types.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import type { MeshClaimRefusal } from './mesh-runtime-store.js';
 import type { MeshQueueHead } from './mesh-runtime-store-queue-reads.js';
-import type { DirectDispatchRecord } from './mesh-direct-dispatch.js';
 export type { MeshQueueHead } from './mesh-runtime-store-queue-reads.js';
 import { getMesh, getDifficultyBrains } from '../config/mesh-config.js';
 import { LOG } from '../logging/logger.js';
@@ -20,16 +18,13 @@ import {
     type MeshTerminalCompletionEnvelope,
 } from './mesh-graph-transition-runner.js';
 import {
-    deriveDependencyFailures,
     resolveOnDependencyFailurePolicy,
-    type MeshDependencyFailure,
 } from './mesh-graph-derived-failure.js';
 import {
     sessionIdsEquivalent,
     isMeshTaskDifficulty,
-    isMeshTaskPriority,
     MESH_TASK_DIFFICULTIES,
-    normalizeNodeCapabilitySlots,
+    MESH_TERMINAL_TASK_STATUSES as TERMINAL_TASK_STATUS_LIST,
     normalizeOwnedPaths,
     type MeshTaskDifficulty,
     type MeshTaskMode,
@@ -485,9 +480,6 @@ function readQueue(meshId: string): MeshWorkQueueEntry[] {
     return MeshRuntimeStore.getInstance().getQueueEntries(meshId);
 }
 
-function writeQueue(meshId: string, queue: MeshWorkQueueEntry[]): void {
-    MeshRuntimeStore.getInstance().replaceQueue(meshId, queue);
-}
 
 function normalizeDependsOn(value: unknown): string[] {
     if (!Array.isArray(value)) return [];
@@ -1178,7 +1170,8 @@ const DEPENDENCY_FAILURE_TERMINALS = new Set<MeshTaskStatus>(['failed', 'cancell
  * {@link updateTaskStatus}) applies the same terminal-row protection
  * {@link reclaimStrandedAssignedTask} already enforces to EVERY status writer at once.
  */
-const TERMINAL_TASK_STATUSES = new Set<MeshTaskStatus>(['completed', 'failed', 'cancelled']);
+/** Terminal queue statuses — mesh-shared's one list (MESH_TERMINAL_TASK_STATUSES). */
+const TERMINAL_TASK_STATUSES = new Set<MeshTaskStatus>(TERMINAL_TASK_STATUS_LIST);
 
 /**
  * G3 (step ①) — fire-and-forget mission_close_candidate detection for the missions of
@@ -1950,9 +1943,6 @@ export class TerminalStatusIsLedgerEffect extends Error {
     }
 }
 
-export function isTerminalQueueStatus(status: MeshTaskStatus): boolean {
-    return TERMINAL_TASK_STATUSES.has(status);
-}
 
 /** Dependency cascade for a ledger-committed failed/cancelled task (same policy as updateTaskStatus). */
 export function propagateLedgerDependencyFailure(meshId: string, taskId: string, status: MeshTaskStatus, reason?: string): MeshWorkQueueEntry[] {

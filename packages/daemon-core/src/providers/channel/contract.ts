@@ -33,7 +33,6 @@ import { resolveBuildTrack } from '../../track-identity.js';
 /** Explicit provider channels. */
 export type ProviderChannel = 'stable' | 'preview';
 
-export const PROVIDER_CHANNELS: readonly ProviderChannel[] = ['stable', 'preview'];
 
 /** Default channel when configuration is absent or ambiguous. */
 export const DEFAULT_PROVIDER_CHANNEL: ProviderChannel = 'stable';

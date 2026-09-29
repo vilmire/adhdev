@@ -1,7 +1,8 @@
-import type { DaemonMetadataUpdate, MeshStatusSnapshotUpdate, SubscribeRequest, TopicUpdateEnvelope, TransportTopic, UnsubscribeRequest } from '@adhdev/daemon-core'
+import type { DaemonMetadataUpdate, MeshStatusSnapshotUpdate, SubscribeRequest, TopicProtocolMismatchUpdate, TopicUpdateEnvelope, TransportTopic, UnsubscribeRequest } from '@adhdev/daemon-core'
 import { webDebugStore } from '../debug/webDebugStore'
-import { materializeDaemonMetadataUpdate } from '../utils/daemon-metadata-fold'
-import { materializeMeshStatusUpdate } from '../utils/mesh-status-fold'
+import { materializeDaemonMetadataUpdate, materializeMeshStatusUpdate } from '../utils/keyed-topic-fold'
+import { DASHBOARD_WIRE_VERSION } from '@adhdev/mesh-shared'
+import { daemonWireCompat, noteDaemonWireVersion } from './dashboard-wire-compat'
 
 export interface SubscriptionTransport {
     sendData?: (daemonId: string, data: SubscribeRequest | UnsubscribeRequest) => boolean
@@ -133,6 +134,9 @@ export class SubscriptionManager {
         handler: TopicHandler<T>,
         options?: SubscriptionOptions,
     ): SubscriptionHandle {
+        // Every subscribe states the wire version this page speaks; a daemon that
+        // speaks another answers `protocol_mismatch` instead of state.
+        request = { ...request, wireVersion: DASHBOARD_WIRE_VERSION } as SubscribeRequest
         const id = buildSubscriptionId(request.topic, request.key)
         const existing = this.active.get(id)
         let initialSendAccepted = true
@@ -236,12 +240,25 @@ export class SubscriptionManager {
         return unsubscribe
     }
 
-    publish(incoming: TopicUpdateEnvelope): void {
+    publish(frame: TopicUpdateEnvelope): void {
+        const incoming = frame as Exclude<TopicUpdateEnvelope, TopicProtocolMismatchUpdate>
         const id = buildSubscriptionId(incoming.topic, incoming.key)
         const subscription = this.active.get(id)
         if (!subscription) return
         // An update arriving means the subscription is live — cancel any pending initial retry.
         this.clearRetry(id)
+        // Wire-version gate (no dual-format serving): a daemon that speaks another
+        // version is never rendered — the page reloads, or the daemon needs updating.
+        const mode = (incoming as { mode?: unknown }).mode
+        if (mode === 'protocol_mismatch') {
+            noteDaemonWireVersion(subscription.daemonId, (frame as TopicProtocolMismatchUpdate).daemonWireVersion)
+            return
+        }
+        if ((incoming.topic === 'daemon.metadata' || incoming.topic === 'mesh.status') && mode !== 'delta') {
+            if (noteDaemonWireVersion(subscription.daemonId, (incoming as { wireVersion?: number }).wireVersion) !== 'ok') return
+        } else if (daemonWireCompat(subscription.daemonId) !== 'ok') {
+            return
+        }
         let update: TopicUpdateEnvelope = incoming
         if (incoming.topic === 'daemon.metadata') {
             // Keyed lane: fold the delta into the held snapshot; handlers only

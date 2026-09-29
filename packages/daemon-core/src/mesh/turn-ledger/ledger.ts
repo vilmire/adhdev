@@ -51,7 +51,7 @@ import {
     type TurnTxnHost,
     type TxnHostResult,
 } from './effects.js';
-import { isTerminalTurnState, type TurnAttempt, type TurnEffect } from './types.js';
+import { type TurnAttempt, type TurnEffect } from './types.js';
 
 /** Appends one entry; resolves with the appended coordinates. */
 export interface TurnPublisherPort {
@@ -608,7 +608,3 @@ class DuplicateEvidence extends Error {
     }
 }
 
-/** True when an attempt is terminal (the replacement for hasTerminalAuthorityFor{Task,Session}). */
-export function isAttemptTerminal(attempt: TurnAttempt | null): boolean {
-    return !!attempt && isTerminalTurnState(attempt.state);
-}

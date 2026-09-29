@@ -51,11 +51,6 @@ function flushTopic(topics: Topics, topic: 'session.modal' | 'daemon.metadata'):
     void topics.flushNow(topic).catch(swallow(`${topic} flush`));
 }
 
-/** A turn ended: the agent owned the turn (or was blocked on a human) and is now ready for input. */
-export function isTurnCompletionEdge(prev: unknown, next: unknown): boolean {
-    const from = classifySessionStatus(prev);
-    return (from === 'working' || from === 'blocked') && classifySessionStatus(next) === 'ready';
-}
 
 export function subscribeHostStatusFacts(bus: Bus, onFacts: (e: StatusFactsEvent) => void): Unsubscribe {
     return bus.on(['status', 'daemon_facts', 'registered', 'terminated', 'launch_updated'], (e) => onFacts(e), {

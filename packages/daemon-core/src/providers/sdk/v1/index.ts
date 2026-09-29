@@ -144,10 +144,4 @@ export const V1_PRIMITIVE_CATALOG = Object.freeze({
   ],
 } as const);
 
-/** Aggregate flat list — for provider catalog endpoints. */
-export const V1_ALL_PRIMITIVES: ReadonlyArray<string> = Object.freeze(
-  Object.values(V1_PRIMITIVE_CATALOG).flat(),
-);
 
-/** Catalog version label exposed at `registry.adhf.dev/primitives`. */
-export const V1_CONTRACT_VERSION = '1.0.0' as const;

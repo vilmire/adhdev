@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { SubscriptionManager } from '../../src/managers/SubscriptionManager'
 import type { SubscribeRequest } from '@adhdev/daemon-core'
+import { DASHBOARD_WIRE_VERSION } from '@adhdev/mesh-shared'
 
 function createSubscribeRequest(): SubscribeRequest {
     return {
@@ -57,6 +58,6 @@ describe('SubscriptionManager', () => {
         manager.subscribe({ sendData }, 'daemon-1', second, vi.fn())
 
         expect(sendData).toHaveBeenCalledTimes(2)
-        expect(sendData.mock.calls[1]?.[1]).toEqual(second)
+        expect(sendData.mock.calls[1]?.[1]).toEqual({ ...second, wireVersion: DASHBOARD_WIRE_VERSION })
     })
 })

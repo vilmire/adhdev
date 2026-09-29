@@ -11,7 +11,7 @@ import type {
 import { canonicalDaemonId } from '@adhdev/mesh-shared'
 import { normalizeSessionStatus } from '@adhdev/mesh-shared'
 import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared'
-import type { MeshGraphData, MeshGraphEdge, MeshGraphNode } from '../types'
+import type { MeshGraphData, MeshGraphNode } from '../types'
 import type { MeshGraphSessionDetail } from '../../../utils/mesh-visualization'
 // Presentation-tier quota helpers moved to utils/quota-format.ts (pure move —
 // they depend only on @adhdev/mesh-shared types, not on anything MeshGraph-
@@ -266,11 +266,6 @@ export function sessionRoleText(
     return role
 }
 
-export function sessionRoleLabel(session: MeshGraphSessionDetail): string {
-    if (session.isSelfCoordinator) return 'coordinator'
-    const role = typeof session.role === 'string' ? session.role.trim() : ''
-    return role || 'worker'
-}
 
 export function sessionStartedAt(session: MeshGraphSessionDetail): string | null {
     return session.startedAt || session.createdAt || null
@@ -291,29 +286,7 @@ export function sessionElapsedLabel(session: MeshGraphSessionDetail): string {
     return `${days}d ${hours % 24}h`
 }
 
-export function shortSessionId(sessionId: string): string {
-    if (sessionId.length <= 18) return sessionId
-    return `${sessionId.slice(0, 10)}...${sessionId.slice(-4)}`
-}
 
-export function connectionTone(connection: RepoMeshNodeStatus['connection'] | null | undefined): 'default' | 'good' | 'warn' | 'danger' | 'info' {
-    if (!connection) return 'default'
-    if (connection.state === 'self') return 'info'
-    if (connection.transport === 'direct' && connection.state === 'connected') return 'good'
-    if (connection.transport === 'relay' && connection.state === 'connected') return 'info'
-    switch (connection.state) {
-        case 'connected':
-            return 'good'
-        case 'connecting':
-            return 'warn'
-        case 'disconnected':
-        case 'failed':
-        case 'closed':
-            return 'danger'
-        default:
-            return 'default'
-    }
-}
 
 export function connectionLabel(connection: RepoMeshNodeStatus['connection'] | null | undefined): string {
     if (!connection) return 'mesh unknown'
@@ -666,10 +639,6 @@ export function describeProviders(node: RepoMeshNodeStatus): string {
     return 'not reported yet'
 }
 
-export function describeConnection(node: RepoMeshNodeStatus): string {
-    if (node.gitProbePending && (!node.connection || node.connection.state === 'unknown')) return 'mesh pending'
-    return connectionLabel(node.connection)
-}
 
 export function describeGraphNodeSource(node: MeshGraphNode): string {
     const source = node.source as { kind?: string; connection?: RepoMeshNodeStatus['connection'] } | null | undefined
@@ -677,28 +646,7 @@ export function describeGraphNodeSource(node: MeshGraphNode): string {
     return source?.connection?.source ?? 'mesh_status'
 }
 
-export function edgeTypeLabel(edge: MeshGraphEdge): string {
-    switch (edge.type) {
-        case 'parentBranch':
-            return 'default branch link'
-        case 'worktreeLink':
-            return 'worktree relationship'
-        case 'sessionLink':
-            return 'session relationship'
-        case 'orphanLink':
-            return 'orphan relationship'
-        case 'submoduleLink':
-            return 'submodule relationship'
-        case 'cloneLink':
-            return 'clone relationship'
-        default:
-            return edge.type
-    }
-}
 
-export function edgeDirectionLabel(edge: MeshGraphEdge): string {
-    return edge.direction === 'directed' ? 'directed' : 'undirected'
-}
 
 export function resolveSelectedGraphNodeForDetail(graph: MeshGraphData, selectedNodeId: string | null | undefined): MeshGraphNode | null {
     if (!selectedNodeId) return null

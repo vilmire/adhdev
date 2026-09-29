@@ -134,9 +134,6 @@ export function resolveMeshHostStatus(mesh: unknown, opts?: ResolveMeshHostOptio
     return normalized;
 }
 
-export function isMeshHostOwner(mesh: unknown): boolean {
-    return resolveMeshHostStatus(mesh).role === 'host';
-}
 
 export function buildMeshHostRequiredFailure(mesh: unknown, operation: string): Record<string, unknown> {
     const meshHost = resolveMeshHostStatus(mesh);

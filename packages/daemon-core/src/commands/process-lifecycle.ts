@@ -1,5 +1,4 @@
-import { execFileSync, type ExecFileSyncOptions } from 'child_process';
-import * as path from 'path';
+import { execFileSync } from 'child_process';
 import { LOG } from '../logging/logger.js';
 
 function errorText(error: unknown): string {
@@ -138,15 +137,6 @@ export function parseNodeScriptPath(commandLine: string | null): string | null {
 
 function normalizeWindowsPath(value: string): string {
     return value.toLowerCase().replace(/\//g, '\\').replace(/\\+$/, '');
-}
-
-function isCommandLineUnderPrefix(commandLine: string | null, prefix: string): boolean {
-    if (!commandLine) return false;
-    const needle = normalizeWindowsPath(prefix);
-    // Command-line paths may quote Windows separators as either single or
-    // doubled backslashes; collapse doubles before matching.
-    const haystack = commandLine.split('\\\\').join('\\').toLowerCase();
-    return haystack.includes(needle);
 }
 
 export function killProcess(pid: number, options: ProcessLifecycleOptions = {}): boolean {

@@ -1,4 +1,4 @@
-import { getQueue, isTaskReadonly, buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags } from './mesh-work-queue.js';
+import { getQueue, isTaskReadonly } from './mesh-work-queue.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { getActiveDirectDispatches } from './mesh-work-queue.js';
 import { resolveProviderMaxParallel, resolveSlotMaxParallel, resolveNodeSchedulingPriority, normalizeMeshSchedulingStrategy } from '../repo-mesh-types.js';
@@ -7,7 +7,6 @@ import { normalizeMeshNodeId, meshNodeIdMatches, daemonIdsEquivalent, sessionIds
 import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
 import { quotaSpreadBonusByProvider, type QuotaFactsContext } from './mesh-quota-routing.js';
 import { decideSlotForModel, isModelAllowedBySlot } from './slot-model-enforcement.js';
-import { loadRepoMeshJsonConfig } from '../config/mesh-json-config.js';
 import { getMesh } from '../config/mesh-config.js';
 import { resolveDaemonSiblingNodeIds, effectiveSlotCap } from './mesh-daemon-slot-axis.js';
 
@@ -26,9 +25,6 @@ function nodesForMesh(meshId: string): readonly unknown[] | undefined {
 }
 
 
-export function activeAssignedCount(meshId: string): number {
-    return getQueue(meshId, { status: ['assigned'] as any }).length;
-}
 
 /** Active assignments that hold the one-active-per-node / global-parallel invariant
  *  (everything except read-only diagnoses, which run unbounded by the write cap). */

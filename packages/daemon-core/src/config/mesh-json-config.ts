@@ -472,20 +472,6 @@ export function buildMeshJsonConfigScaffold(
     return scaffold;
 }
 
-/**
- * A copy-paste example of the `providerDefaults` zone for operators hand-authoring
- * a repo `.adhdev/mesh.json`. Returned by the export/write commands as a separate
- * hint field (never merged into the serialized scaffold) so the repo file stays
- * clean. The mode IDs shown are illustrative — a repo should use IDs that exist in
- * its own providers' specs; an unknown ID is ignored at resolve time and the
- * provider's own default is used.
- */
-export const MESH_JSON_PROVIDER_DEFAULTS_EXAMPLE: RepoMeshDeclarativeProviderDefaults = {
-    autoApproveModes: {
-        'claude-cli': 'accept-edits',
-        'codex-cli': 'auto',
-    },
-};
 
 /** Serialize a scaffold to the canonical 2-space JSON draft text. */
 export function serializeMeshJsonConfigScaffold(config: RepoMeshDeclarativeConfig): string {

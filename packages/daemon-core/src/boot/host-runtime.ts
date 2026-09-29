@@ -168,6 +168,11 @@ export function createDaemonHostRuntime(runtime: DaemonRuntime, transport: Daemo
 
     const buildDaemonMetadataBody = (params?: DaemonMetadataSubscriptionParams): DaemonMetadataUpdateBody => {
         const status = buildSnapshot('metadata');
+        // The machine-detail staleness badge rides this lane (never a pull of the whole status).
+        const staleness = components.providerLoader.getChannelStalenessSnapshot?.();
+        if (staleness && !staleness.error) {
+            status.providerChannelStaleness = { staleTypes: [...staleness.staleTypes], newTypes: [...staleness.newTypes] };
+        }
         const extras = transport.metadataExtras?.(status, params) ?? {};
         return { daemonId: transport.instanceId(), status, ...extras } as DaemonMetadataUpdateBody;
     };

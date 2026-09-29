@@ -27,13 +27,12 @@ type QueueLivenessIndex = {
     verifiedLiveNodeIds: Set<string>;
 };
 
-// liveVerifiedNodes is OPT-IN evidence from collectMeshViewQueueNodesWithLiveSessionsVerified
-// (each node stamped with `__liveProbeVerified`). Callers that don't pass it (e.g. MAGI,
-// which only has the persisted mesh snapshot in hand) get byte-identical behavior to before —
-// staleness is judged purely from `mesh.nodes`. This matters because a live probe can fail
-// for reasons that say nothing about the session (relay hiccup, transient offline peer); only
-// a *verified* absence should ever be allowed to override/strengthen the snapshot-based read,
-// and only for a caller that explicitly asked for that stronger check.
+// liveVerifiedNodes is OPT-IN evidence from collectMeshNodesWithRuntime (each node stamped
+// with `__liveProbeVerified` when the coordinator KNOWS its runtime). Callers that don't pass
+// it (e.g. MAGI, which only has the persisted mesh snapshot in hand) get byte-identical
+// behavior to before — staleness is judged purely from `mesh.nodes`. "Nothing held yet" says
+// nothing about the session; only a *known* absence may override/strengthen the
+// snapshot-based read, and only for a caller that explicitly asked for that stronger check.
 function buildQueueLivenessIndex(mesh?: LocalMeshEntry, liveVerifiedNodes?: any[]): QueueLivenessIndex {
     const nodeIds = new Set<string>();
     const nodeSessionIds = new Map<string, Set<string>>();

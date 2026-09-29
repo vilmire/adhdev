@@ -31,11 +31,11 @@
 //     actually got the work, instead of whichever racer wrote last.
 // Split out of mesh-queue-assignment (a frozen file-size baseline entry) rather than grown
 // inside it. It must NOT import back from mesh-queue-assignment — that module calls into this
-// one, so the pair would cycle; see the local isIdleSessionState copy below.
+// one, so the pair would cycle. Its idle predicate is mesh-shared's (the same one the drain uses).
 import type { DaemonComponents } from '../boot/daemon-components.js';
 import { getMachineId } from '../config/config.js';
 import { LOG } from '../logging/logger.js';
-import { canonicalDaemonId, daemonIdsEquivalent, sessionIdsEquivalent } from '@adhdev/mesh-shared';
+import { canonicalDaemonId, daemonIdsEquivalent, isIdleSessionState, sessionIdsEquivalent } from '@adhdev/mesh-shared';
 import { getQueue, getQueueEntryById } from './mesh-work-queue.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
 import { readNonEmptyString } from './mesh-events-utils.js';
@@ -122,19 +122,6 @@ export const AUTO_LAUNCH_REMOTE_IDLE_TTL_MS = 5 * 60 * 1000;
 
 function localCoordinatorDaemonId(): string | undefined {
     return canonicalDaemonId(readNonEmptyString(getMachineId()));
-}
-
-// Local copy of mesh-queue-assignment's isIdleSessionState. Deliberately NOT imported: this
-// module is called BY mesh-queue-assignment, and importing back would make the pair a cycle.
-// It is a pure two-field predicate over session state with no dependencies of its own, so the
-// duplication is a few lines rather than a shared-module round trip. Keep the two in step —
-// they must agree on what "idle" means or the sweep and the launch gate disagree about which
-// sessions are candidates.
-const TERMINAL_SESSION_STATUSES = ['stopped', 'failed', 'terminated', 'exited', 'closed'];
-function isIdleSessionState(state: any): boolean {
-    const status = readNonEmptyString(state?.status).toLowerCase();
-    if (TERMINAL_SESSION_STATUSES.includes(status)) return false;
-    return status === 'idle' || state?.activeChat?.status === 'waiting_input';
 }
 
 // AUTOLAUNCH-ORPHAN-SWEEP. Per-(mesh,session) de-dup so a still-unclaimed orphan is reported

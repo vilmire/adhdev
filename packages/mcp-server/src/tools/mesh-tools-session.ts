@@ -21,7 +21,6 @@ import {
     buildMissingNodeReadChatRecovery,
     buildMissionInactiveWarning,
     buildQueueTriggerGuidance,
-    collectLiveStatusProbe,
     commandForNode,
     compactChatPayload,
     drainCoordinatorPendingEvents,
@@ -73,10 +72,9 @@ import type {
     MeshContext,
 } from './mesh-tools-internal.js';
 import type { MeshDeliveryMode } from '@adhdev/daemon-core';
-// COORDINATOR-HELD NODE STATE (audit fix): mesh_list_pending_approvals'
-// node/session decoration answers from the coordinator daemon's held runtime
-// first (see mesh-status-held-git.ts / mesh-status-background.ts headers).
-import { collectPendingApprovalNodesHeldOrLive, readNodeRuntime } from './mesh-status-held-git.js';
+// Node runtime is the coordinator daemon's answer only — its own status or a
+// member's pushed runtime it holds (mesh-held-node-state.ts); no member is read.
+import { collectMeshNodesWithRuntime, readNodeRuntime } from './mesh-held-node-state.js';
 import { scheduleBackgroundDirectReconcile } from './mesh-status-background.js';
 // §8 unit 6 ("mesh_read_chat remote display cutover") — the FIRST hop of the
 // fixed `replica → live P2P read_chat → cached summary` order.
@@ -807,8 +805,7 @@ export async function meshSendTask(
     let explicitTargetSession: any | undefined;
     if (args.session_id && isWorkerTaskMode(taskMode, readonly)) {
         try {
-            // COORDINATOR-HELD NODE STATE: held-first session lookup (readNodeRuntime)
-            // instead of an unconditional live get_status_metadata probe.
+            // The node's runtime, as the coordinator daemon answers it (readNodeRuntime).
             const { probe: sessionLookupProbe } = await readNodeRuntime(ctx, node);
             const sessions = sessionLookupProbe.sessions;
             explicitTargetSession = sessions.find(session => readSessionRecordId(session) === args.session_id);
@@ -1133,7 +1130,6 @@ export async function meshSendTask(
             if (!resolvedProviderType) {
                 let explicitSession = explicitTargetSession;
                 if (!explicitSession) {
-                    // COORDINATOR-HELD NODE STATE: held-first (readNodeRuntime).
                     const { probe: providerLookupProbe } = await readNodeRuntime(ctx, node);
                     explicitSession = providerLookupProbe.sessions.find(session => readSessionRecordId(session) === args.session_id);
                 }
@@ -1622,8 +1618,7 @@ export async function meshReadChat(
     } catch (e: any) {
         // Local read_chat and non-transport (provider/logic) failures keep the existing
         // throw so genuine errors still surface. The cache fallback covers ONLY a remote
-        // P2P transport failure (saturated/unreachable peer): mesh_status already degrades
-        // its P2P probe gracefully (collectLiveStatusProbe) — read_chat had no catch and
+        // P2P transport failure (saturated/unreachable peer) — read_chat had no catch and
         // hard-failed at the 30s timeout instead of surfacing the coordinator's cached
         // summary. See buildMeshReadChatCacheFallback.
         if (isLocalNode || !isP2pRelayTransportFailure(e)) throw e;
@@ -1761,8 +1756,8 @@ export async function meshReadTerminal(
     const node = await findNodeWithRefresh(ctx, args.node_id);
 
     // OWNERSHIP DOUBLE-CHECK (MCP side): the session must be a mesh-owned delegate
-    // of THIS mesh + node. Resolve it from the node's runtime (held first, live
-    // fallback — readNodeRuntime); a miss or a non-owned/cross-mesh record is
+    // of THIS mesh + node. Resolve it from the node's runtime as the coordinator
+    // answers it (readNodeRuntime); a miss or a non-owned/cross-mesh record is
     // refused before any command is issued.
     const { probe: ownershipProbe } = await readNodeRuntime(ctx, node);
     const record = ownershipProbe.sessions.find((s) => readSessionRecordId(s) === args.session_id);
@@ -1828,7 +1823,7 @@ export async function meshSendKeys(
     }
 
     // OWNERSHIP DOUBLE-CHECK (MCP side): resolve the session from the node's
-    // runtime (held first, live fallback — readNodeRuntime); refuse a non-owned /
+    // runtime as the coordinator answers it (readNodeRuntime); refuse a non-owned /
     // cross-mesh record before writing anything.
     const { probe: sendKeysProbe } = await readNodeRuntime(ctx, node);
     const record = sendKeysProbe.sessions.find((s) => readSessionRecordId(s) === args.session_id);
@@ -2107,11 +2102,8 @@ export async function meshLaunchSession(
         // never burns a status relay (and the relay-blocked invariant holds).
         if (args.force !== true) {
             try {
-                // COORDINATOR-HELD NODE STATE: held-first (readNodeRuntime) — for a
-                // node served by ANOTHER daemon this answers from the coordinator's
-                // held runtime; a LOCAL node (the common case this dup-guard test
-                // suite covers) still resolves via the live get_status_metadata path,
-                // since usesHeldNodeRuntime is false for the coordinator's own nodes.
+                // The coordinator's answer (readNodeRuntime): its own status for its
+                // nodes, the member's pushed runtime for another daemon's.
                 const { probe: dupGuardProbe } = await readNodeRuntime(ctx, node);
                 const sessions = dupGuardProbe.sessions;
                 // PROVIDER-MISMATCH-REUSE: only reuse a live session whose provider matches the
@@ -2330,14 +2322,12 @@ export async function meshListPendingApprovals(
     await recordMeshCoordinatorToolCall(ctx, 'mesh_list_pending_approvals');
     await refreshMeshFromDaemon(ctx);
 
-    // COORDINATOR-HELD NODE STATE (audit fix): node/session decoration answers
-    // from the coordinator daemon's held runtime first — no per-daemon
-    // get_status_metadata round trip for a node another daemon owns. The
-    // direct-dispatch transcript reconcile is a WRITE-side nudge the response
+    // Node/session decoration is the coordinator daemon's answer (its own status
+    // + members' pushed runtime) — no member is read. The direct-dispatch transcript reconcile is a WRITE-side nudge the response
     // does not need (mesh-status-background.ts) — kicked in the background,
     // same as mesh_status/mesh_view_queue, instead of blocking this read.
     const probeOpts = _args?.refresh === true ? { refresh: true } : undefined;
-    const liveNodes = await collectPendingApprovalNodesHeldOrLive(ctx, probeOpts);
+    const liveNodes = await collectMeshNodesWithRuntime(ctx, probeOpts);
     // C-W9a: active work computed in the daemon.
     const activeWorkView = await readActiveWorkFromDaemon(ctx, { nodes: liveNodes, recordTail: 200, includeInputs: true });
     scheduleBackgroundDirectReconcile(ctx, liveNodes, activeWorkView.directDispatches, activeWorkView.records);

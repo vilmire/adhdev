@@ -1987,8 +1987,6 @@ export interface RepoMeshNodeHeldRuntime {
     sessionsTruncated?: boolean;
     /** The node's provider catalog (installed / enabled / versions / autoApproveModes); absent from older members. */
     providers?: import('./mesh/mesh-node-runtime-summary.js').MeshNodeRuntimeProvider[];
-    /** Routing-stamp version of the held sessions (MESH_NODE_RUNTIME_SESSION_STAMP_VERSION); absent from older members. */
-    sessionStampVersion?: number;
 }
 
 /** Coordinator-held git observation metadata for one mesh node. */

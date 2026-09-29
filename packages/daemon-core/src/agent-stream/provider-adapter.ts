@@ -11,7 +11,7 @@ import type {
     AgentChatListItem,
     AgentEvaluateFn,
 } from './types.js';
-import type { ProviderModule, ProviderScripts, FocusEditorResult, OpenPanelResult } from '../providers/contracts.js';
+import type { ProviderModule, FocusEditorResult, OpenPanelResult } from '../providers/contracts.js';
 import { extractProviderControlValues, normalizeProviderEffects } from '../providers/control-effects.js';
 import { validateReadChatResultPayload } from '../providers/read-chat-contract.js';
 import { resolveProviderStateSurface } from '../providers/provider-patch-state.js';
@@ -38,10 +38,6 @@ export class ProviderStreamAdapter implements IAgentStreamAdapter {
         const fn = this.provider.scripts?.[name];
         if (typeof fn !== 'function') return null;
         return fn(...args) || null;
-    }
-
-    private hasScript(name: string): boolean {
-        return typeof this.provider.scripts?.[name] === 'function';
     }
 
     private getStateTitle(state: AgentStreamState): string {

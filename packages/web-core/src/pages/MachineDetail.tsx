@@ -59,7 +59,6 @@ import {
 } from '../utils/dashboard-launch-copy'
 import { DEFAULT_MACHINE_RUNTIME_REFRESH_MS } from '../utils/daemon-timing'
 import { buildDaemonUpgradePayload } from '../utils/daemon-update-policy'
-import { unwrapDaemonCommandBody } from '../utils/provider-channel-sync'
 
 // ─── Component ───────────────────────────────────────
 interface MachineDetailProps {
@@ -95,7 +94,6 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
     // ★Rendered as a small non-clickable DOT, not a count (owner feedback
     // 2026-09-25: a number looked strange). The action lives next to each
     // provider as an inline "Update" button inside the tab.
-    const [providerStaleness, setProviderStaleness] = useState<{ staleTypes: string[]; newTypes: string[] } | null>(null)
     const [gitDialogTarget, setGitDialogTarget] = useState<{ daemonId: string; workspace: string } | null>(null)
     const [, setWorkspaceCategoryHint] = useState<'ide' | 'cli' | 'acp'>('ide')
     const recentLaunchActionRef = useRef<(() => Promise<void>) | null>(null)
@@ -121,31 +119,6 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
         if (!needsMetadata) return
         void loadDaemonMetadata(machineId, { minFreshMs: 30_000 }).catch(() => {})
     }, [loadDaemonMetadata, machineEntry, machineId])
-
-    const applyProviderStalenessSnapshot = useCallback((raw: unknown) => {
-        const body = unwrapDaemonCommandBody<{
-            providerChannelStaleness?: { staleTypes?: string[]; newTypes?: string[]; error?: string }
-        }>(raw)
-        const snap = body?.providerChannelStaleness
-        if (snap && !snap.error) {
-            setProviderStaleness({
-                staleTypes: Array.isArray(snap.staleTypes) ? snap.staleTypes : [],
-                newTypes: Array.isArray(snap.newTypes) ? snap.newTypes : [],
-            })
-        }
-    }, [])
-
-    useEffect(() => {
-        if (!machineId || !machineEntry) return
-        let cancelled = false
-        void (async () => {
-            try {
-                const res = await sendDaemonCommand(machineId, 'get_status_metadata')
-                if (!cancelled) applyProviderStalenessSnapshot(res)
-            } catch { /* badge is best-effort — absence of data shows no badge */ }
-        })()
-        return () => { cancelled = true }
-    }, [applyProviderStalenessSnapshot, machineId, machineEntry?.id, sendDaemonCommand])
 
     useEffect(() => {
         // Providers included (owner catch 2026-08-10): the per-row quota chips
@@ -517,6 +490,8 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
         )
     }
 
+    // The badge rides the daemon.metadata lane (never a pull of the whole status).
+    const providerStaleness = machineEntry?.providerChannelStaleness ?? null
     const providerUpdatesAvailable = !!providerStaleness
         && (providerStaleness.staleTypes.length + providerStaleness.newTypes.length) > 0
     const sessionCount = ideSessions.length + cliSessions.length + acpSessions.length
@@ -661,7 +636,6 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                                 providers={providers}
                                 sendDaemonCommand={sendDaemonCommand}
                                 quota={machine.quota}
-                                onChannelStaleness={setProviderStaleness}
                             />
                         )}
 

@@ -11,6 +11,7 @@
 // C3 `own` read (wiring-unification C-W3): the coordinator owns every attempt
 // it dispatched, so task lifecycle comes from this daemon's own writer on the
 // topic index (task_dispatched records) plus the turn tables (terminals).
+import { isMeshTerminalTaskStatus } from '@adhdev/mesh-shared';
 import { meshTopicIndexFor, readOwnTaskLifecycle, type MeshIndexView } from './mesh-topic-index.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { meshPublisherWriterId } from '../seqscribe/mesh-publisher.js';
@@ -125,7 +126,7 @@ function taskStatsFromFacts(queue: readonly MeshQueueFacts[], entries: readonly 
             ?? (terminal
                 ? (terminal.kind === 'task_completed' ? 'completed' : 'failed')
                 : 'unknown');
-        const isTerminalStatus = status === 'completed' || status === 'failed' || status === 'cancelled';
+        const isTerminalStatus = isMeshTerminalTaskStatus(status);
         const dispatchTime = parseTime(dispatch?.first ?? queueEntry?.dispatchTimestamp);
         const terminalTime = parseTime(terminal?.at);
         const stats: MeshTaskStats = {

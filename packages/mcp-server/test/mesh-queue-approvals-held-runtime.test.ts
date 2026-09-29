@@ -14,9 +14,8 @@ import { __clearMeshQueueForTests } from '../../daemon-core/src/mesh/mesh-work-q
 // daemon's held runtime (mesh-status-held-runtime.test.ts). This file pins the
 // SAME contract for mesh_view_queue and mesh_list_pending_approvals — their
 // node/session decoration must answer from held state with ZERO per-daemon
-// get_status_metadata / meshCommand call when the coordinator daemon holds
-// runtime for the remote node, and must fall back to the legacy live probe for
-// an older daemon that predates the `nodeRuntimeHeld` marker.
+// get_status_metadata / meshCommand call — and when nothing is held for a node
+// yet, it is reported as unknown (never probed).
 
 armTestTurnLedger('daemon-coord');
 
@@ -107,12 +106,12 @@ test('mesh_view_queue answers remote node sessions from held runtime — no mesh
     }
 });
 
-test('mesh_view_queue falls back to a live probe when the coordinator daemon does not hold runtime (older daemon)', async () => {
-    const meshId = `mesh-view-queue-live-fallback-${Date.now()}`;
+test('mesh_view_queue never probes a member even when nothing is held for it yet', async () => {
+    const meshId = `mesh-view-queue-nothing-held-${Date.now()}`;
     const { ctx, meshCommands } = buildCtx(meshId, { held: false });
     try {
         await meshViewQueue(ctx as any, { view: 'active', verbose: true });
-        assert.equal(meshCommands.some((c) => c.command === 'get_status_metadata' && c.daemonId === 'daemon-peer-a'), true, 'legacy live probe still runs for an older daemon');
+        assert.deepEqual(meshCommands, [], 'nothing held = unknown, not a live probe');
     } finally {
         cleanup(meshId);
     }
@@ -130,12 +129,12 @@ test('mesh_list_pending_approvals answers from held runtime — no meshCommand c
     }
 });
 
-test('mesh_list_pending_approvals falls back to a live probe when the coordinator daemon does not hold runtime', async () => {
-    const meshId = `mesh-pending-approvals-live-fallback-${Date.now()}`;
+test('mesh_list_pending_approvals never probes a member even when nothing is held for it yet', async () => {
+    const meshId = `mesh-pending-approvals-nothing-held-${Date.now()}`;
     const { ctx, meshCommands } = buildCtx(meshId, { held: false });
     try {
         await meshListPendingApprovals(ctx as any, {});
-        assert.equal(meshCommands.some((c) => c.command === 'get_status_metadata' && c.daemonId === 'daemon-peer-a'), true, 'legacy live probe still runs for an older daemon');
+        assert.deepEqual(meshCommands, [], 'nothing held = unknown, not a live probe');
     } finally {
         cleanup(meshId);
     }

@@ -59,10 +59,6 @@ function notifyListeners() {
     _listeners.forEach(fn => fn())
 }
 
-/** Get current prefs (non-reactive, for one-off checks) */
-export function getNotificationPrefs(): NotificationPrefs {
-    return { ..._prefs }
-}
 
 /** Update prefs (non-reactive, for external usage) */
 export function setNotificationPrefs(partial: Partial<NotificationPrefs>): void {

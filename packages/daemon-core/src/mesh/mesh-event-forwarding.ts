@@ -43,7 +43,6 @@ import {
     expandDaemonIdForms,
     isTurnAttemptRef,
     meshNodeIdMatches,
-    sessionIdsEquivalent,
     withStatusProbeMarker,
     type MeshNodeIdentified,
 } from '@adhdev/mesh-shared';

@@ -5,7 +5,6 @@
  * Supports installing user-selected AI extensions.
  */
 
-import { execSync } from 'child_process';
 // win32 console-flash follow-up (2026-09-25): these calls are currently dead
 // code (installExtensions/launchIDE have no callers outside the index.ts
 // barrel re-export — grepped 0 hits in daemon-cloud/daemon-standalone/web-*),
@@ -268,12 +267,6 @@ export async function installExtensions(
     return results;
 }
 
-/**
- * Get AI agent extensions
- */
-export function getAIExtensions(): ExtensionInfo[] {
-    return EXTENSION_CATALOG.filter((e) => e.category === 'ai-agent');
-}
 
 
 

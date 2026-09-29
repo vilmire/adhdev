@@ -332,19 +332,6 @@ describe('dashboard mesh graph dialog wiring', () => {
     expect(surfaceSource).not.toContain('<MeshGraphPanel')
   })
 
-  it('keeps node drill-down panels on the shared mesh-theme helper', () => {
-    const panelSource = readSource('components/MeshGraph/MeshGraphPanel.tsx')
-
-    expect(panelSource).toContain('getMeshGraphTheme(theme)')
-    expect(panelSource).toContain('meshTheme.panelShellClass')
-    expect(panelSource).toContain('meshTheme.panelFieldRowClass')
-    expect(panelSource).toContain("Field label={t('mesh.panel.fieldHead')} value={headSummary} rowClass={meshTheme.panelFieldRowClass}")
-    expect(panelSource).not.toContain('bg-bg-panel')
-    expect(panelSource).not.toContain('text-text-primary')
-    expect(panelSource).not.toContain('text-text-secondary')
-    expect(panelSource).not.toContain('text-text-muted')
-  })
-
   it('adds direct session/chat affordances and on-demand git history to the observability detail flow', () => {
     const surfaceSource = readSource('components/MeshGraph/MeshObservabilitySurface.tsx')
 

@@ -14,10 +14,9 @@
 //   - mission stats: one batched task_stats_query;
 //   - queue view: active rows + whole-queue counts + dependency heads.
 //
-// OLDER DAEMONS: every new request field is rejected by an older daemon's strict
-// wire decoder (`request failed decode`), so each helper falls back to the
-// request shape that daemon understands. No helper ever reads the daemon store
-// in-process.
+// One request shape per read: the coordinator daemon ships with this MCP server
+// (same release), so there is no older-daemon request fallback. No helper ever
+// reads the daemon store in-process.
 
 import type { MeshContext } from './mesh-tools-internal.js';
 import {
@@ -52,116 +51,53 @@ export function slimNodesForActiveWork(nodes: readonly unknown[]): Record<string
     });
 }
 
-/**
- * `active_work_query` with the scheduling runtime computed from the daemon's own
- * mesh record. An older daemon requires the caller's mesh for that (it rejects
- * `includeSchedulingRuntime` without `mesh`), and a daemon that cannot resolve
- * the mesh answers without the runtime: resend with the snapshot in both cases.
- */
+/** `active_work_query`; the scheduling runtime is computed from the daemon's own mesh record. */
 export async function activeWorkQueryWithRuntime(
     ctx: MeshContext,
     args: Omit<Parameters<typeof activeWorkQuery>[1], 'v' | 'meshId' | 'mesh'>,
 ): Promise<ActiveWorkQueryResponse> {
-    const base = { meshId: ctx.mesh.id, ...args };
-    if (!args.includeSchedulingRuntime) return activeWorkQuery(ctx.transport, base);
-    try {
-        const res = await activeWorkQuery(ctx.transport, base);
-        // A daemon that could not resolve its own mesh record answers without it.
-        if (res.schedulingRuntime) return res;
-    } catch { /* older daemon: rejects includeSchedulingRuntime without mesh */ }
-    return activeWorkQuery(ctx.transport, { ...base, mesh: ctx.mesh as unknown as Record<string, unknown> });
+    return activeWorkQuery(ctx.transport, { meshId: ctx.mesh.id, ...args });
 }
 
-/** Recovery context per node id — ONE batched call; per-node calls on an older daemon. */
+/** Recovery context per node id — ONE batched call. */
 export async function readRecoveryContexts(ctx: MeshContext, nodeIds: readonly string[]): Promise<Map<string, Record<string, unknown>>> {
     const out = new Map<string, Record<string, unknown>>();
     const ids = [...new Set(nodeIds.filter(Boolean))];
     if (ids.length === 0) return out;
-    try {
-        const res = await recoveryContextQuery(ctx.transport, { meshId: ctx.mesh.id, nodeIds: ids });
-        if (res.contexts) {
-            for (const [nodeId, context] of Object.entries(res.contexts)) out.set(nodeId, context);
-            return out;
-        }
-    } catch { /* older daemon: per-node below */ }
-    await Promise.all(ids.map(async (nodeId) => {
-        try {
-            const res = await recoveryContextQuery(ctx.transport, { meshId: ctx.mesh.id, nodeId });
-            if (res.context) out.set(nodeId, res.context);
-        } catch { /* best-effort — a node without context reads as zero failures */ }
-    }));
+    const res = await recoveryContextQuery(ctx.transport, { meshId: ctx.mesh.id, nodeIds: ids });
+    for (const [nodeId, context] of Object.entries(res.contexts ?? {})) out.set(nodeId, context);
     return out;
 }
 
-/** Goal preview length the compact mesh_status mission rows use (daemon-core COMPACT_STATUS_GOAL_PREVIEW_MAX). */
-const COMPACT_STATUS_GOAL_PREVIEW_MAX = 80;
-const LIVE_STATUSES = ['active', 'paused'] as const;
-
-/**
- * mesh_status COMPACT missions: live rows (goal-elided) + folded history,
- * computed in the daemon. An older daemon gets the closest equivalent from the
- * plain mesh_mission_list projection (live detail + folded history; the goal
- * preview is re-trimmed to the compact length).
- */
+/** mesh_status COMPACT missions: live rows (goal-elided) + folded history, computed in the daemon. */
 export async function readStatusMissionsCompact(ctx: MeshContext): Promise<{ live: Record<string, unknown>[]; historyFold: Record<string, unknown> | null }> {
-    try {
-        const res = await missionListQuery(ctx.transport, { meshId: ctx.mesh.id, meshStatusView: 'compact' });
-        return { live: res.missions as unknown as Record<string, unknown>[], historyFold: res.historyFold as unknown as Record<string, unknown> | null };
-    } catch { /* older daemon */ }
-    const res = await missionListQuery(ctx.transport, { meshId: ctx.mesh.id, includeMagi: true, limit: 1000 });
-    const live = (res.missions as unknown as Record<string, unknown>[]).map((m) => {
-        const preview = typeof m.goalPreview === 'string' ? m.goalPreview : '';
-        if (preview.length <= COMPACT_STATUS_GOAL_PREVIEW_MAX) return m;
-        return { ...m, goalPreview: preview.slice(0, COMPACT_STATUS_GOAL_PREVIEW_MAX), goalTruncated: true };
-    }).filter((m) => (LIVE_STATUSES as readonly string[]).includes(String(m.status)));
-    return { live, historyFold: res.historyFold as unknown as Record<string, unknown> | null };
+    const res = await missionListQuery(ctx.transport, { meshId: ctx.mesh.id, meshStatusView: 'compact' });
+    return { live: res.missions as unknown as Record<string, unknown>[], historyFold: res.historyFold as unknown as Record<string, unknown> | null };
 }
 
 /**
  * mesh_status VERBOSE missions: live + capped history with full goals, each with
  * its stats rollup — the rows from the daemon's projection and every rollup from
- * ONE batched task_stats_query. Older daemon: the plain list (live + 10 newest
- * history, verbose, with the daemon's own per-mission stats).
+ * ONE batched task_stats_query.
  */
 export async function readStatusMissionsVerbose(ctx: MeshContext): Promise<Record<string, unknown>[]> {
-    let missions: Record<string, unknown>[];
-    try {
-        const res = await missionListQuery(ctx.transport, { meshId: ctx.mesh.id, meshStatusView: 'verbose' });
-        missions = res.missions as unknown as Record<string, unknown>[];
-    } catch {
-        const [live, history] = await Promise.all([
-            missionListQuery(ctx.transport, { meshId: ctx.mesh.id, statuses: [...LIVE_STATUSES], verbose: true, includeMagi: true, withStats: true, limit: 1000 }),
-            missionListQuery(ctx.transport, { meshId: ctx.mesh.id, statuses: ['completed', 'abandoned'], verbose: true, includeMagi: true, withStats: true, limit: 10 }),
-        ]);
-        return [...live.missions, ...history.missions] as unknown as Record<string, unknown>[];
-    }
+    const res = await missionListQuery(ctx.transport, { meshId: ctx.mesh.id, meshStatusView: 'verbose' });
+    const missions = res.missions as unknown as Record<string, unknown>[];
     if (missions.length === 0) return missions;
-    const ids = missions.map((m) => String(m.id));
-    const rollups = await readMissionStatsBatch(ctx, ids);
+    const rollups = await readMissionStatsBatch(ctx, missions.map((m) => String(m.id)));
     return missions.map((m) => {
         const stats = rollups.get(String(m.id));
         return stats ? { ...m, stats } : m;
     });
 }
 
-/** Mission rollups — ONE batched task_stats_query; one call per mission on an older daemon. */
+/** Mission rollups — ONE batched task_stats_query. */
 export async function readMissionStatsBatch(ctx: MeshContext, missionIds: readonly string[]): Promise<Map<string, Record<string, unknown>>> {
     const out = new Map<string, Record<string, unknown>>();
     const ids = [...new Set(missionIds.filter(Boolean))];
     if (ids.length === 0) return out;
-    try {
-        const res = await taskStatsQuery(ctx.transport, { meshId: ctx.mesh.id, missionIds: ids });
-        if (res.missions) {
-            for (const [id, rollup] of Object.entries(res.missions)) out.set(id, rollup);
-            return out;
-        }
-    } catch { /* older daemon: per-mission below */ }
-    await Promise.all(ids.map(async (missionId) => {
-        try {
-            const { mission } = await taskStatsQuery(ctx.transport, { meshId: ctx.mesh.id, missionId, rollup: true });
-            if (mission) out.set(missionId, mission);
-        } catch { /* stats optional */ }
-    }));
+    const res = await taskStatsQuery(ctx.transport, { meshId: ctx.mesh.id, missionIds: ids });
+    for (const [id, rollup] of Object.entries(res.missions ?? {})) out.set(id, rollup);
     return out;
 }
 
@@ -182,27 +118,21 @@ export interface QueueActiveView {
 /**
  * The compact mesh_view_queue read: active rows only, plus whole-queue counts and
  * the dependency heads the active rows reference — the historical rows (most of
- * the queue's bytes) never leave the daemon. Null on an older daemon (caller
- * falls back to the full-queue read).
+ * the queue's bytes) never leave the daemon.
  */
-export async function readQueueActiveView(ctx: MeshContext): Promise<QueueActiveView | null> {
-    try {
-        const res = await queueQuery(ctx.transport, {
-            meshId: ctx.mesh.id,
-            statuses: ['pending', 'assigned'],
-            view: true,
-            withCounts: true,
-            historicalOlderThanMs: OLD_HISTORICAL_QUEUE_RECORD_MS,
-            withDependencyHeads: true,
-        });
-        if (!res.counts) return null;
-        return {
-            activeRows: res.entries as unknown as Record<string, unknown>[],
-            counts: res.counts,
-            oldHistoricalCount: res.oldHistoricalCount ?? 0,
-            dependencyHeads: [...(res.dependencyHeads ?? [])],
-        };
-    } catch {
-        return null;
-    }
+export async function readQueueActiveView(ctx: MeshContext): Promise<QueueActiveView> {
+    const res = await queueQuery(ctx.transport, {
+        meshId: ctx.mesh.id,
+        statuses: ['pending', 'assigned'],
+        view: true,
+        withCounts: true,
+        historicalOlderThanMs: OLD_HISTORICAL_QUEUE_RECORD_MS,
+        withDependencyHeads: true,
+    });
+    return {
+        activeRows: res.entries as unknown as Record<string, unknown>[],
+        counts: res.counts ?? {},
+        oldHistoricalCount: res.oldHistoricalCount ?? 0,
+        dependencyHeads: [...(res.dependencyHeads ?? [])],
+    };
 }

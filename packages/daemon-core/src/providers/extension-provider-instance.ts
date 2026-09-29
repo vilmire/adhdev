@@ -12,7 +12,7 @@ import { buildPersistedProviderEffectMessage, normalizeProviderEffects } from '.
 import { ChatHistoryWriter } from '../config/chat-history.js';
 import type { ChatMessage } from '../types.js';
 import { mergeProviderPatchState, resolveProviderStateSurface } from './provider-patch-state.js';
-import { buildChatMessage, buildRuntimeSystemChatMessage, normalizeChatMessages, extractFinalSummaryFromMessages } from './chat-message-normalization.js';
+import { buildChatMessage, normalizeChatMessages, extractFinalSummaryFromMessages } from './chat-message-normalization.js';
 import { getProviderSessionCapabilities, EXTENSION_PROVIDER_SESSION_CAPABILITIES_BASE } from './open-panel-support.js';
 import { emitStatusEdge, forwardProviderEvent, type SessionEventPort } from './provider-event-port.js';
 import { emitTurnStarted, emitTurnEnd, emitSuspension, type TurnEvidencePort } from './turn-evidence-port.js';
@@ -373,14 +373,6 @@ export class ExtensionProviderInstance implements ProviderInstance {
         }
     }
 
-    private appendRuntimeSystemMessage(content: string, dedupKey: string, receivedAt = Date.now()): void {
-        this.appendRuntimeMessage(buildRuntimeSystemChatMessage({
-            content,
-            receivedAt,
-            timestamp: receivedAt,
-        }), dedupKey);
-    }
-
     private appendRuntimeMessage(message: ChatMessage, dedupKey: string): void {
         const normalizedMessage = buildChatMessage({
             ...message,
@@ -476,25 +468,6 @@ export class ExtensionProviderInstance implements ProviderInstance {
                 return a.index - b.index;
             })
             .map((entry) => entry.message));
-    }
-
-    private getPersistedEffectContent(effect: { type: string; message?: { content?: unknown }; toast?: { message?: string }; notification?: { title?: string; body?: string; bubbleContent?: unknown } }): string | null {
-        if (effect.type === 'message') {
-            return typeof effect.message?.content === 'string'
-                ? effect.message.content
-                : JSON.stringify(effect.message?.content || '');
-        }
-        if (effect.type === 'toast') {
-            return effect.toast?.message || null;
-        }
-        if (effect.type === 'notification') {
-            if (typeof effect.notification?.bubbleContent === 'string') return effect.notification.bubbleContent;
-            if (typeof effect.notification?.title === 'string' && effect.notification.title.trim()) {
-                return `${effect.notification.title}\n${effect.notification.body || ''}`.trim();
-            }
-            return effect.notification?.body || null;
-        }
-        return null;
     }
 
     private getEffectDedupKey(effect: { id?: string; type: string; message?: { content?: unknown }; toast?: { message?: string }; notification?: { title?: string; body?: string } }): string {

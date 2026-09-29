@@ -50,6 +50,11 @@ export const CHAT_COMMIT_KIND = 'chat.commit.v2';
 export const CHAT_META_KEY = 'meta';
 export const CHAT_COMMIT_KEY = 'commit';
 
+/** Log-safe session id: the first 8 chars plus the length, never the whole id. */
+export function redactSessionId(id: string): string {
+    return id.length <= 8 ? id : `${id.slice(0, 8)}…(${id.length})`;
+}
+
 export function chatMessageKey(messageId: string): string {
     return `m:${messageId}`;
 }

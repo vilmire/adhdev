@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { DaemonMetadataUpdateBody, TopicSink } from '../../src/subscriptions/topic-registry.js';
 import { TopicSubscriptionRegistry } from '../../src/subscriptions/topic-registry.js';
+import { DASHBOARD_WIRE_VERSION } from '@adhdev/mesh-shared';
 
 /**
  * daemon.metadata per-pass cohort sharing (perf regression gate).
@@ -42,15 +43,15 @@ function createHarness() {
     const sink: TopicSink = {
         send: (connectionId, _topic, update) => {
             // A snapshot carries `status`; a later keyed delta carries only
-            // the changed `statusSet` fields (the marker changes every build).
+            // the changed `status` fields (the marker changes every build).
             const u = update as unknown as {
                 key: string;
                 seq: number;
                 daemonId: string;
                 status?: { marker: string; withSessions: boolean };
-                statusSet?: { marker?: string; withSessions?: boolean };
+                delta?: { objects?: { status?: { set?: { marker?: string; withSessions?: boolean } } } };
             };
-            const status = u.status ?? u.statusSet ?? {};
+            const status = u.status ?? u.delta?.objects?.status?.set ?? {};
             sent.push({
                 connectionId,
                 key: u.key,
@@ -86,7 +87,7 @@ function createHarness() {
     const subscribe = (connectionId: string, key: string, includeSessions?: boolean) => {
         byKeyCohort.set(key, includeSessions === true);
         registry.subscribe(connectionId, {
-            type: 'subscribe',
+            type: 'subscribe', wireVersion: DASHBOARD_WIRE_VERSION,
             topic: 'daemon.metadata',
             key,
             ...(includeSessions === undefined ? {} : { params: { includeSessions } }),

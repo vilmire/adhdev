@@ -26,14 +26,6 @@ export function normalizeMeshCapabilityTags(value: unknown): string[] {
         });
 }
 
-function firstProviderPriority(policy: unknown): string | undefined {
-    const raw = policy && typeof policy === 'object' && !Array.isArray(policy)
-        ? (policy as Record<string, unknown>).providerPriority
-        : undefined;
-    if (!Array.isArray(raw)) return undefined;
-    return raw.find(type => typeof type === 'string' && type.trim())?.trim();
-}
-
 /**
  * Ordered, de-duplicated provider types a node can launch, resolved from
  * `policy.slots` (the single source of truth — node capability slots design, 2026-07-09) with a

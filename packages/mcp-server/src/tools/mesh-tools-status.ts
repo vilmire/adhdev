@@ -50,19 +50,10 @@ import { readRecoveryContexts, readStatusMissionsCompact, readStatusMissionsVerb
 import { compactDaemonMachine, compactDaemonQuotaSnapshots, dedupeCompactNodeGitFields, dedupeProviderCapabilityTags } from './mesh-compact.js';
 import { DEFAULT_MESH_POLICY } from '@adhdev/daemon-core';
 import type { LocalMeshNodeEntry } from '@adhdev/daemon-core';
-import {
-    applyHeldNodeGitToEntry,
-    buildNodeGitStateSummary,
-    findHeldNodeStatus,
-    heldNodeStatusProbe,
-    readCoordinatorHeldNodeState,
-    type NodeStatusProbe,
-} from './mesh-status-held-git.js';
-import { createMeshStatusViewTransport, readMeshStatusView, type MeshStatusView } from './mesh-status-view.js';
-import { isLocalControlPlaneNode } from './mesh-node-identity.js';
+import { applyHeldNodeGitToEntry, buildNodeGitStateSummary } from './mesh-status-held-git.js';
+import { findHeldNodeStatus, localStatusProbe, parseCoordinatorHeldNodeState, resolveNodeRuntime } from './mesh-held-node-state.js';
 import { ensureMeshNodeRoutes } from './mesh-node-routes.js';
-import { extractStatusMetadataSessions, unwrapCommandPayload } from './mesh-session-helpers.js';
-import { extractDaemonBuildInfo, extractUpgradeFailureSummary } from './mesh-tools-internal-core.js';
+import { applyMeshStatusViewRoutes, createMeshStatusViewTransport, readMeshStatusView, type MeshStatusView } from './mesh-status-view.js';
 
 // The v2 protocol version literal (mirrors MESH_PROTOCOL_VERSION_V2 in
 // daemon-core mesh/contracts.ts). Kept as a local literal so this MCP-side
@@ -130,21 +121,6 @@ function withoutGraphUsage<T>(summary: T): T {
     return rest as unknown as T;
 }
 
-/** This daemon's own status (the view's `get_status_metadata`) as a node status probe. */
-function localStatusProbe(localStatus: unknown): NodeStatusProbe {
-    if (!localStatus || typeof localStatus !== 'object' || (localStatus as any).success === false) return { sessions: [] };
-    const payload = unwrapCommandPayload(localStatus);
-    const daemonId = typeof payload?.status?.instanceId === 'string' ? payload.status.instanceId.trim() : '';
-    const daemonBuild = extractDaemonBuildInfo(localStatus);
-    const upgradeFailure = extractUpgradeFailureSummary(localStatus);
-    return {
-        sessions: extractStatusMetadataSessions(localStatus),
-        ...(daemonId ? { daemonId } : {}),
-        ...(daemonBuild ? { daemonBuild } : {}),
-        ...(upgradeFailure ? { upgradeFailure } : {}),
-    };
-}
-
 // ─── Tool Implementations ───────────────────────
 
 export async function meshStatus(outerCtx: MeshContext, args: { includeStaleDirectWorkDetails?: boolean; includeTerminalDirectWork?: boolean; includeSessions?: boolean; includeUsage?: boolean; compact?: boolean; verbose?: boolean; refresh?: boolean } = {}): Promise<string> {
@@ -180,16 +156,14 @@ export async function meshStatus(outerCtx: MeshContext, args: { includeStaleDire
     const rateResult = await recordMeshCoordinatorToolCall(ctx, 'mesh_status');
 
     await refreshMeshFromDaemon(ctx);
-    // Every node's locality is the coordinator's answer, carried in the view.
-    await ensureMeshNodeRoutes(ctx, { force: true });
+    // Every node's locality, its held state and the coordinator's own status are
+    // read straight from the view.
+    applyMeshStatusViewRoutes(ctx, view);
     const { mesh } = ctx;
 
-    const [heldNodeState, recoveryByNode] = await Promise.all([
-        readCoordinatorHeldNodeState(ctx, { refresh: args.refresh === true }),
-        readRecoveryContexts(ctx, mesh.nodes.map(n => n.id)).catch(() => new Map<string, Record<string, unknown>>()),
-    ]);
-    // This daemon's own nodes read its status from the view (a local read in the daemon).
-    const localProbe = localStatusProbe(view.localStatus);
+    const heldNodeState = parseCoordinatorHeldNodeState(view.status);
+    const recoveryByNode = await readRecoveryContexts(ctx, mesh.nodes.map(n => n.id)).catch(() => new Map<string, Record<string, unknown>>());
+    const runtimeAnswers = { local: localStatusProbe(view.localStatus), held: heldNodeState };
 
     // Assemble all nodes in parallel — held git (above) + session collection per node.
     //
@@ -248,15 +222,9 @@ export async function meshStatus(outerCtx: MeshContext, args: { includeStaleDire
         // answers ONLY from the coordinator-held runtime (member push, content-free;
         // `source: 'none'` = nothing held yet — never a live read of the member).
         // The coordinator's own nodes read its own status from the view.
-        let statusProbe: NodeStatusProbe;
-        if (node.daemonId && !isLocalControlPlaneNode(ctx, node)) {
-            const held = heldNodeStatusProbe(heldNode);
-            statusProbe = held.probe;
-            entry.runtimeObservation = held.observation;
-        } else {
-            statusProbe = localProbe;
-            if (heldNodeState.runtimeHeld) entry.runtimeObservation = { source: 'local_read', observedAt: Date.now(), refreshing: false };
-        }
+        const runtime = resolveNodeRuntime(ctx, node, runtimeAnswers);
+        const statusProbe = runtime.probe;
+        entry.runtimeObservation = runtime.observation;
         const liveSessions = statusProbe.sessions;
         // Per-node daemon build stamp (commit/version of the running daemon).
         // Compact mode folds these per-daemonId at the response level, but the

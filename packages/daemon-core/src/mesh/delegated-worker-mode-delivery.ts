@@ -2,7 +2,6 @@ import { loadRepoMeshJsonConfig } from '../config/mesh-json-config.js';
 import { LOG } from '../logging/logger.js';
 import {
     resolveDelegatedWorkerAutoApprove,
-    resolveDelegatedWorkerDangerousModeAllow,
 } from '../repo-mesh-types.js';
 import type { ProviderModule } from '../providers/contracts.js';
 

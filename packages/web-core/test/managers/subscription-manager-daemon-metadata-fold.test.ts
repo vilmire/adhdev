@@ -8,6 +8,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { SubscriptionManager } from '../../src/managers/SubscriptionManager'
 import type { DaemonMetadataUpdate, SubscribeRequest } from '@adhdev/daemon-core'
+import { DASHBOARD_WIRE_VERSION } from '@adhdev/mesh-shared'
 
 const request: SubscribeRequest = { type: 'subscribe', topic: 'daemon.metadata', key: 'daemon:metadata:d1', params: { includeSessions: true } }
 
@@ -16,6 +17,7 @@ function snapshot(): any {
         topic: 'daemon.metadata',
         key: 'daemon:metadata:d1',
         mode: 'snapshot',
+        wireVersion: DASHBOARD_WIRE_VERSION,
         daemonId: 'd1',
         userName: 'u',
         seq: 1,
@@ -40,10 +42,7 @@ describe('SubscriptionManager — daemon.metadata delta fold', () => {
         manager.publish(snapshot())
         manager.publish({
             topic: 'daemon.metadata', key: 'daemon:metadata:d1', mode: 'delta', daemonId: 'd1', seq: 2, timestamp: 200,
-            sessions: [{ id: 'b', status: 'generating' }],
-            removedSessionIds: ['a'],
-            sessionOrder: ['b'],
-            set: { meshStateRevisions: { m: 3 } },
+            delta: { set: { meshStateRevisions: { m: 3 } }, collections: { 'status.sessions': { upsert: [{ id: 'b', status: 'generating' }], removed: ['a'], order: ['b'] } } },
         } as any)
         expect(seen).toHaveLength(2)
         expect(seen[1]).toMatchObject({
@@ -67,14 +66,14 @@ describe('SubscriptionManager — daemon.metadata delta fold', () => {
         manager.subscribe({ sendData }, 'd1', request, handler)
         expect(sendData).toHaveBeenCalledTimes(1)
 
-        manager.publish({ topic: 'daemon.metadata', key: 'daemon:metadata:d1', mode: 'delta', daemonId: 'd1', seq: 5, timestamp: 1 } as any)
+        manager.publish({ topic: 'daemon.metadata', key: 'daemon:metadata:d1', mode: 'delta', daemonId: 'd1', seq: 5, timestamp: 1, delta: {} } as any)
         expect(handler).not.toHaveBeenCalled()
         expect(sendData).toHaveBeenCalledTimes(2)
 
         manager.publish(snapshot())
-        manager.publish({ topic: 'daemon.metadata', key: 'daemon:metadata:d1', mode: 'delta', daemonId: 'd1', seq: 3, timestamp: 1, statusSet: { version: 'x' } } as any)
+        manager.publish({ topic: 'daemon.metadata', key: 'daemon:metadata:d1', mode: 'delta', daemonId: 'd1', seq: 3, timestamp: 1, delta: { objects: { status: { set: { version: 'x' } } } } } as any)
         expect(handler).toHaveBeenCalledTimes(1)
         expect(sendData).toHaveBeenCalledTimes(3)
-        expect(sendData.mock.calls[2]?.[1]).toEqual(request)
+        expect(sendData.mock.calls[2]?.[1]).toEqual({ ...request, wireVersion: DASHBOARD_WIRE_VERSION })
     })
 })

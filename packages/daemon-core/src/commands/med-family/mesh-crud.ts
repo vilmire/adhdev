@@ -586,7 +586,6 @@ export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
         }
         try {
             const {
-                loadRepoMeshJsonConfig,
                 normalizeRepoMeshDeclarativeConfig,
                 MESH_JSON_CONFIG_LOCATIONS,
             } = await import('../../config/mesh-json-config.js');

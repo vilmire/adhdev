@@ -32,24 +32,20 @@ import {
     type DetectedCliProvider,
 } from '@adhdev/mesh-shared';
 import {
-    commandForNode,
     findNodeWithRefresh,
     unwrapCommandPayload,
     type MeshContext,
 } from './mesh-tools-internal.js';
+import { readNodeRuntime } from './mesh-held-node-state.js';
 
 /**
- * Pull installed CLI providers out of a `get_status_metadata` response.
- *
- * Reuses the EXISTING detection signal rather than adding a daemon command: the
- * metadata-profile status snapshot already carries `availableProviders`, built
- * from the same provider-loader availability data the dashboard's provider list
- * reads. (`detectAllVersions()` was the other candidate, but its results are
- * logged at boot and discarded — there is nothing to query.)
+ * Pull installed CLI providers out of a provider catalog (`availableProviders`,
+ * the same provider-loader availability data the dashboard's provider list
+ * reads — the coordinator's own, or the catalog a member pushed).
  *
  * Filters to `category === 'cli'` and `installed === true`. IDE/ACP are out of
  * scope, and `extension` reports `installed: false` unconditionally, so neither
- * can leak in. `installed === undefined` (an older daemon payload) is treated as
+ * can leak in. `installed === undefined` is treated as
  * NOT installed — under-proposing is recoverable, over-proposing puts a slot on
  * a node that cannot run it.
  */
@@ -94,22 +90,20 @@ export async function meshNodeSlotsPropose(
     try {
         const node = await findNodeWithRefresh(ctx, nodeId);
 
-        // Status-origin probe: a short connect budget so an offline node fails in
-        // seconds instead of blocking on the long relay deadline.
-        let statusResult: unknown;
-        try {
-            statusResult = await commandForNode(ctx, node, 'get_status_metadata', {}, { statusProbe: true });
-        } catch (e: any) {
+        // The node's provider catalog as the coordinator daemon answers it (its own
+        // status, or the catalog the member pushed) — the member is never read.
+        const runtime = await readNodeRuntime(ctx, node);
+        if (!runtime.known) {
             return JSON.stringify({
                 success: false,
                 nodeId: node.id,
                 code: 'detection_unavailable',
-                error: `Could not probe node for installed providers: ${e?.message || String(e)}`,
+                error: 'The coordinator holds no provider catalog for this node yet (the member has not pushed its runtime).',
                 nextAction: 'Node may be offline. Retry when it is online, or set slots manually with mesh_node_slots (action "set").',
             }, null, 2);
         }
 
-        const detected = extractInstalledCliProviders(statusResult);
+        const detected = extractInstalledCliProviders({ availableProviders: runtime.probe.providers ?? [] });
         const currentSlots = normalizeNodeCapabilitySlots((node as any)?.policy?.slots);
 
         if (detected.length === 0) {
@@ -125,7 +119,7 @@ export async function meshNodeSlotsPropose(
                     + 'This is NOT a proposal to clear the node\'s slots: applying an empty slot list would '
                     + 'wipe the existing profile. Left unchanged.',
                 nextAction: currentSlots.length
-                    ? 'Node keeps its current slots. If detection is wrong, check the daemon\'s provider list (older daemons may not report `installed`).'
+                    ? 'Node keeps its current slots. If detection is wrong, check the node daemon\'s provider list.'
                     : 'Install a CLI agent on the node, or configure slots manually with mesh_node_slots (action "set").',
             }, null, 2);
         }
@@ -159,7 +153,7 @@ export async function meshNodeSlotsPropose(
             success: true,
             dryRun: true,
             nodeId: node.id,
-            detectionSource: 'get_status_metadata → status.availableProviders (category=cli, installed=true)',
+            detectionSource: 'coordinator node runtime → provider catalog (category=cli, installed=true)',
             detectedCliProviders: detected,
             currentSlots,
             proposedSlots: proposal.proposedSlots,

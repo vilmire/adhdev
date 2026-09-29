@@ -304,7 +304,6 @@ export function buildMeshRoutePreview(args: {
     }));
     const predicted = nodePreviews.find((nodePreview, index) => {
         if (!nodePreview.predictedWinner) return false;
-        const node = orderedNodes[index];
         if (args.readonly !== true && nodeHasActiveAssignment(meshId, nodePreview.nodeId)) return false;
         const winnerScore = nodePreview.stages.fitness.find(score =>
             score.providerType === nodePreview.predictedWinner!.providerType

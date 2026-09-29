@@ -39,7 +39,7 @@ import { detectBackgroundTaskActive } from './background-task-detector.js';
 import { extractAntigravityScreenAssistantMessages } from './antigravity-screen-messages.js';
 import * as fs from 'node:fs';
 import { createHash } from 'node:crypto';
-import type { NativeHistoryConfig, Control, ControlAction } from './types.js';
+import type { NativeHistoryConfig, Control } from './types.js';
 import {
     resolveInterruptCapability,
     type InterruptCapability,
@@ -66,7 +66,6 @@ import {
     detectClaudeAskUserQuestionPromptFromTuiPages,
     detectClaudeTuiMultiSelect,
     isClaudeTuiReviewScreen,
-    readFocusedClaudeTuiPickerRegion,
     readFocusedClaudeTuiQuestion,
     stableClaudeTuiPromptId,
     type ClaudeInteractiveTuiPage,
@@ -127,7 +126,6 @@ export class SpecCliAdapter implements CliAdapter {
      *  mirrored here so the PTY exit seam can attribute a host tombstone before
      *  the owning provider instance is disposed. */
     private runtimeSettings: Record<string, unknown> = {};
-    private lastEvent: DashboardEvent | null = null;
     private latestState: { id: string; label: string; title: string | null; status: FsmStatus } | null = null;
     private latestModal: { title: string | null; buttons: { index: number; label: string }[]; kind?: 'approval' | 'picker' | 'confirm' | null } | null = null;
     private statusCallback: (() => void) | null = null;
@@ -1276,7 +1274,6 @@ export class SpecCliAdapter implements CliAdapter {
     }
 
     private handleEvent(ev: DashboardEvent): void {
-        this.lastEvent = ev;
         switch (ev.kind) {
             case 'state_changed':
                 this.latestState = ev.state;

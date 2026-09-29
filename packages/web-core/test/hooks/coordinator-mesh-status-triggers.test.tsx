@@ -19,6 +19,7 @@ import { useCoordinatorMeshStatus } from '../../src/hooks/useCoordinatorMeshStat
 import { useMeshGraphMetadataSubscription } from '../../src/hooks/useMeshGraphMetadataSubscription'
 import { subscriptionManager } from '../../src/managers/SubscriptionManager'
 import { resetCoordinatorMeshStatusStore } from '../../src/utils/coordinator-mesh-status-store'
+import { DASHBOARD_WIRE_VERSION } from '@adhdev/mesh-shared'
 
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -75,7 +76,7 @@ describe('useCoordinatorMeshStatus — pushed, never polled', () => {
 
             const key = `mesh:status:${meshId}`
             await act(async () => {
-                subscriptionManager.publish({ topic: 'mesh.status', key, mode: 'snapshot', meshId, status: statusResponse(meshId), seq: 1, timestamp: 1 } as any)
+                subscriptionManager.publish({ topic: 'mesh.status', key, mode: 'snapshot', wireVersion: DASHBOARD_WIRE_VERSION, meshId, status: statusResponse(meshId), seq: 1, timestamp: 1 } as any)
             })
             expect(api!.status?.nodes.map(n => n.health)).toEqual(['online', 'online'])
             expect(api!.loading).toBe(false)
@@ -105,7 +106,7 @@ describe('useCoordinatorMeshStatus — pushed, never polled', () => {
         await act(async () => { root.render(<Harness />) })
         const key = `mesh:status:${meshId}`
         await act(async () => {
-            subscriptionManager.publish({ topic: 'mesh.status', key, mode: 'snapshot', meshId, status: statusResponse(meshId), seq: 1, timestamp: 1 } as any)
+            subscriptionManager.publish({ topic: 'mesh.status', key, mode: 'snapshot', wireVersion: DASHBOARD_WIRE_VERSION, meshId, status: statusResponse(meshId), seq: 1, timestamp: 1 } as any)
             subscriptionManager.publish({ topic: 'mesh.status', key, mode: 'delta', meshId, seq: 3, timestamp: 3, delta: { set: { meshName: 'X' } } } as any)
         })
         expect(sendData.mock.calls.filter(call => call[1].type === 'subscribe')).toHaveLength(2)
@@ -156,6 +157,7 @@ describe('useMeshGraphMetadataSubscription — coordinator only', () => {
         await act(async () => {
             subscriptionManager.publish({
                 topic: 'daemon.metadata',
+                wireVersion: DASHBOARD_WIRE_VERSION,
                 key: 'daemon:metadata:coord-sub-2',
                 daemonId: 'coord-sub-2',
                 seq: 1,

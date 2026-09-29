@@ -45,12 +45,8 @@ function MeshSchedulingCard({ scheduling }: { scheduling?: RepoMeshSchedulingSta
             </div>
         )
     }
-    // Global write/readonly cap numbers are legacy: current daemons deliberately
-    // emit `scheduling: { strategy }` only (mesh-status.ts — real concurrency is
-    // governed per-node/per-slot, shown on the node rows below). Render the cap
-    // badges ONLY when an older daemon actually reports the numbers; otherwise
-    // they showed as "write undefined/undefined".
-    const hasGlobalCaps = typeof scheduling.activeWriteAssigned === 'number' && typeof scheduling.maxParallelTasks === 'number'
+    // Concurrency is governed per-node/per-slot (shown on the node rows below);
+    // the mesh-level block carries the strategy only.
     return (
         <div className={`${meshTheme.cardClass} rounded-2xl p-4`}>
             <div className="flex flex-wrap items-center gap-2">
@@ -59,20 +55,6 @@ function MeshSchedulingCard({ scheduling }: { scheduling?: RepoMeshSchedulingSta
                     <InfoTip content={t('mesh.status.distributionTitle')} />
                 </span>
                 <Badge label={SCHEDULING_STRATEGY_LABELS[scheduling.strategy] ?? scheduling.strategy} tone="info" />
-                {hasGlobalCaps && (
-                    <Badge
-                        label={t('mesh.statusTab.writeCap', { active: scheduling.activeWriteAssigned, max: scheduling.maxParallelTasks })}
-                        tone={scheduling.globalWriteCapReached ? 'warn' : 'good'}
-                        title={t('mesh.statusTab.writeCapHint')}
-                    />
-                )}
-                {hasGlobalCaps && typeof scheduling.activeReadonlyAssigned === 'number' && typeof scheduling.maxReadonlyParallelTasks === 'number' && (
-                    <Badge
-                        label={t('mesh.statusTab.readonlyCap', { active: scheduling.activeReadonlyAssigned, max: scheduling.maxReadonlyParallelTasks })}
-                        tone={scheduling.globalReadonlyCapReached ? 'warn' : 'default'}
-                        title={t('mesh.statusTab.readonlyCapHint')}
-                    />
-                )}
             </div>
         </div>
     )

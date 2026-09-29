@@ -250,12 +250,15 @@ describe('coordinator store + overlay', () => {
     const runtime = buildMeshNodeRuntimeSummary(statusMetadata(), FACTS)!
     store.recordRuntimeObservation({ meshId: MESH, nodeId: NODE, workspace: WS, runtime, source: 'member_push', observedAt: now })
     now += 400_000
-    expect(store.confirmRuntime(MESH, NODE, computeMeshNodeRuntimeSignature(runtime), now)).toBe(true)
+    const digest = digestMeshNodeStateSignature(computeMeshNodeRuntimeSignature(runtime))
+    expect(store.confirmRuntime(MESH, NODE, digest, now)).toBe(true)
     expect(store.get(MESH, NODE)!.runtimeObservedAt).toBe(now)
     expect(store.confirmRuntime(MESH, NODE, 'other-signature', now)).toBe(false)
-    expect(store.confirmRuntime(MESH, 'node_unknown', computeMeshNodeRuntimeSignature(runtime), now)).toBe(false)
-    store.markHandshakePending(MESH, NODE, 'restart', now)
+    // Only the digest names the held summary (the raw signature form is not accepted).
     expect(store.confirmRuntime(MESH, NODE, computeMeshNodeRuntimeSignature(runtime), now)).toBe(false)
+    expect(store.confirmRuntime(MESH, 'node_unknown', digest, now)).toBe(false)
+    store.markHandshakePending(MESH, NODE, 'restart', now)
+    expect(store.confirmRuntime(MESH, NODE, digest, now)).toBe(false)
   })
 })
 

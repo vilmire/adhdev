@@ -94,10 +94,6 @@ export function isTranscriptGrowing(newestActivityAtMs: number | undefined, obse
         && observedAtMs - newestActivityAtMs < quietWindowMs;
 }
 
-/** Live state says the turn is still running (modal parked, adapter busy, tool trailing). */
-export function isLivePending(live: LiveTurnPending | undefined): boolean {
-    return !!live && (live.modal || live.adapterPending || live.trailingTool);
-}
 
 /** Which hold (if any) a decline maps to. Null = record only (re-evaluating the same read cannot change it). */
 export function holdReasonForDecline(reason: AdmissionDeclineReason): Extract<HoldReason, 'live_pending' | 'transcript_quiet'> | null {
@@ -160,14 +156,7 @@ export function admitTurnEnd(ev: TurnEvidenceOf<'turn_end'>, policy: TurnPolicy)
     return { kind: ev.strength === 'genuine' ? 'strong' : 'weak' };
 }
 
-/** Strong or weak admit (i.e. the observation may move the turn toward terminal). */
-export function isTerminalAdmissible(admission: EvidenceAdmission): boolean {
-    return admission.kind === 'strong' || admission.kind === 'weak';
-}
 
-export function isWeakEnd(admission: EvidenceAdmission): boolean {
-    return admission.kind === 'weak';
-}
 
 /**
  * Hold deadline for a declined observation, relative to the ledger clock:

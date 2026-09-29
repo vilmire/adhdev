@@ -9,12 +9,10 @@
  */
 
 import * as fs from 'fs';
-import * as path from 'path';
 import type { ProviderCanonicalHistoryConfig, ProviderHistoryBehavior } from '../providers/contracts.js';
 import {
     type HistoryMessage,
     type SavedHistorySessionSummary,
-    findCollapsedIndexByIdentity,
     listSavedHistorySessions,
     normalizeSavedHistorySessionId,
     pageHistoryRecords,
