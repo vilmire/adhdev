@@ -127,7 +127,6 @@ export const handlerSpecs: CommandSpec<'handler'>[] = defineCommandSpecs('handle
     read_chat: {
         // Serves historical transcript data when the live session is gone.
         session: { ...REQUIRED_ROUTED, aliasSessionId: true, allowInactiveHistory: true },
-        invalidates: ['session.modal'],
     },
     get_chat_debug_bundle: {
         session: { scope: 'required', aliasSessionId: true, allowInactiveHistory: true },
@@ -139,7 +138,8 @@ export const handlerSpecs: CommandSpec<'handler'>[] = defineCommandSpecs('handle
     chat_history: { session: { scope: 'optional', aliasSessionId: true } },
     send_chat: {
         session: { ...REQUIRED_ROUTED, aliasSessionId: true },
-        invalidates: ['session.modal'],
+        // The session row (status, approval modal) moves: push it now.
+        invalidates: ['daemon.metadata'],
         postChat: true,
         meshSender: 'session_coordinator',
     },
@@ -161,7 +161,8 @@ export const handlerSpecs: CommandSpec<'handler'>[] = defineCommandSpecs('handle
     // Approve / reject a modal prompt.
     resolve_action: {
         session: { ...REQUIRED_ROUTED, aliasSessionId: true },
-        invalidates: ['session.modal'],
+        // The session row (status, approval modal) moves: push it now.
+        invalidates: ['daemon.metadata'],
         forwardToOwner: true,
         meshSender: 'session_coordinator',
     },

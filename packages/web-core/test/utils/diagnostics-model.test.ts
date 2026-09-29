@@ -14,7 +14,7 @@ describe('diagnostics model', () => {
       { id: 'trace-1', ts: 3000, category: 'session_host', stage: 'write', level: 'error', interactionId: 'ix-1', payload: { reason: 'EPIPE' } },
     ]
     const webEvents: LogsSurfaceWebEntry[] = [
-      { id: 'web-1', ts: 2000, kind: 'subscription.publish', topic: 'session.modal', interactionId: 'ix-1', payload: { key: 'session:1' } },
+      { id: 'web-1', ts: 2000, kind: 'subscription.publish', topic: 'workspace.git', interactionId: 'ix-1', payload: { key: 'session:1' } },
     ]
 
     const events = buildDiagnosticEvents({

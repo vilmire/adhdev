@@ -25,7 +25,6 @@ function makeRegistry(now: () => number, sinkOverrides: Partial<TopicSink> = {})
         now,
         sources: {
             daemonMetadataBody: () => ({ daemonId: 'd1', status: {} as any }),
-            sessionModalState: () => null,
         },
     });
 }
@@ -97,44 +96,42 @@ describe('TopicSubscriptionRegistry.oldestLastSentAt', () => {
 
     it('is read-only: calling it does not change hasSubscriptions or any entry state', () => {
         const registry = makeRegistry(() => 1_000);
-        registry.subscribe('conn-1', { type: 'subscribe', wireVersion: DASHBOARD_WIRE_VERSION, topic: 'session.modal', key: 'k1', params: { targetSessionId: 's1' } } as any);
-        const before = registry.hasSubscriptions('session.modal');
-        registry.oldestLastSentAt('session.modal');
-        registry.oldestLastSentAt('session.modal');
-        expect(registry.hasSubscriptions('session.modal')).toBe(before);
-        expect(registry.oldestLastSentAt('session.modal')).toBe(0);
+        registry.subscribe('conn-1', { type: 'subscribe', wireVersion: DASHBOARD_WIRE_VERSION, topic: 'daemon.metadata', key: 'k1', params: {} } as any);
+        const before = registry.hasSubscriptions('daemon.metadata');
+        registry.oldestLastSentAt('daemon.metadata');
+        registry.oldestLastSentAt('daemon.metadata');
+        expect(registry.hasSubscriptions('daemon.metadata')).toBe(before);
+        expect(registry.oldestLastSentAt('daemon.metadata')).toBe(0);
+    });
+
+    it('refuses the retired session.modal topic (status + modal ride daemon.metadata)', () => {
+        const registry = makeRegistry(() => 1_000);
+        const accepted = registry.subscribe('conn-1', { type: 'subscribe', wireVersion: DASHBOARD_WIRE_VERSION, topic: 'session.modal', key: 'k1', params: { targetSessionId: 's1' } } as any);
+        expect(accepted).toBe(false);
+        expect(registry.hasSubscriptions('session.modal' as any)).toBe(false);
     });
 });
 
 describe('TopicSubscriptionRegistry.oldestLastFlushedAt (reconciliation reads this, not lastSentAt)', () => {
-    it('advances on a session.modal flush that dedups to no-op, while oldestLastSentAt stays at the last real send', async () => {
-        // Live false positive (2026-09-25 standalone pass): `session.modal`'s
-        // flush only stamped `lastSentAt` when it SENT; a healthy subscriber
-        // whose state had not changed since its last send looked stale to the
-        // WARN-only reconciliation forever. `lastFlushedAt` records every
-        // throttle-cleared pass, sent or deduped.
+    it('advances on a daemon.metadata flush that dedups to no-op, while oldestLastSentAt stays at the last real send', async () => {
+        // Live false positive (2026-09-25 standalone pass): a flush that only
+        // stamped `lastSentAt` when it SENT made a healthy subscriber whose
+        // state had not changed look stale to the WARN-only reconciliation
+        // forever. `lastFlushedAt` records every pass, sent or deduped.
         let clock = 1_000;
-        const modalState = { status: 'idle', title: 'Session One' };
-        const sink: TopicSink = { send: () => true, isDeliverable: () => true, isAlive: () => true };
-        const registry = new TopicSubscriptionRegistry(sink, {
-            now: () => clock,
-            sources: {
-                daemonMetadataBody: () => ({ daemonId: 'd1', status: {} as any }),
-                sessionModalState: () => modalState as never,
-            },
-        });
-        registry.subscribe('conn-1', { type: 'subscribe', wireVersion: DASHBOARD_WIRE_VERSION, topic: 'session.modal', key: 'modal:1', params: { targetSessionId: 'session-1' } } as any);
-        expect(registry.oldestLastFlushedAt('session.modal')).toBe(0);
+        const registry = makeRegistry(() => clock);
+        registry.subscribe('conn-1', { type: 'subscribe', wireVersion: DASHBOARD_WIRE_VERSION, topic: 'daemon.metadata', key: 'meta:1', params: {} } as any);
+        expect(registry.oldestLastFlushedAt('daemon.metadata')).toBe(0);
 
-        await registry.flushNow('session.modal');
-        expect(registry.oldestLastSentAt('session.modal')).toBe(1_000);
-        expect(registry.oldestLastFlushedAt('session.modal')).toBe(1_000);
+        await registry.flushNow('daemon.metadata');
+        expect(registry.oldestLastSentAt('daemon.metadata')).toBe(1_000);
+        expect(registry.oldestLastFlushedAt('daemon.metadata')).toBe(1_000);
 
-        // Same state again: the flush pass runs, dedups, sends nothing.
+        // Same body again: the flush pass runs, diffs to nothing, sends nothing.
         clock = 61_000;
-        await registry.flushNow('session.modal');
-        expect(registry.oldestLastSentAt('session.modal')).toBe(1_000);
-        expect(registry.oldestLastFlushedAt('session.modal')).toBe(61_000);
+        await registry.flushNow('daemon.metadata');
+        expect(registry.oldestLastSentAt('daemon.metadata')).toBe(1_000);
+        expect(registry.oldestLastFlushedAt('daemon.metadata')).toBe(61_000);
     });
 
     it('returns null with no subscribers and 0 before the first flush pass', () => {

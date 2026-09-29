@@ -48,7 +48,7 @@ import {
 import type { ProviderModule, ContentBlock, InputEnvelope, ToolCallInfo, ToolCallContent as TCC, ToolKind, ToolCallStatus as TCS } from './contracts.js';
 import { flattenContent, normalizeInputEnvelope } from './contracts.js';
 import { assertProviderSupportsDeclaredInput, getEffectiveMessageInputSupport } from './provider-input-support.js';
-import type { ProviderInstance, ProviderState, AcpProviderState, ProviderErrorReason, ProviderEvent, InstanceContext, SessionModalState, ProviderSendMessageResult } from './provider-instance.js';
+import type { ProviderInstance, ProviderState, AcpProviderState, ProviderErrorReason, ProviderEvent, InstanceContext, ProviderSendMessageResult } from './provider-instance.js';
 import { StatusMonitor } from './status-monitor.js';
 import { ManualAttendanceTracker } from './manual-attendance.js';
 import { buildLegacyModelModeSummaryMetadata } from './summary-metadata.js';
@@ -364,19 +364,6 @@ export class AcpProviderInstance implements ProviderInstance {
             this.currentStatus = 'stopped';
             this.detectStatusTransition();
         }
-    }
-
-    getSessionModalState(): SessionModalState {
-        const dirName = workingDirBasename(this.workingDir);
-        return {
-            id: this.instanceId,
-            status: this.currentStatus,
-            title: `${this.provider.name} · ${dirName}`,
-            activeModal: this.currentStatus === 'waiting_approval' ? {
-                message: this.activeToolCalls.find(t => t.status === 'running')?.name || 'Permission requested',
-                buttons: ['Approve', 'Reject'],
-            } : null,
-        };
     }
 
     getState(): AcpProviderState {

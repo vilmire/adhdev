@@ -137,7 +137,7 @@ describe('standalone transcript lane — wire constants', () => {
     })
 
     it('lets the controller base-request frames onto /ws, and nothing else beyond subscribe/unsubscribe', () => {
-        assert.equal(isStandaloneWsDataFrame({ type: 'subscribe', topic: 'session.modal' }), true)
+        assert.equal(isStandaloneWsDataFrame({ type: 'subscribe', topic: 'workspace.git' }), true)
         assert.equal(isStandaloneWsDataFrame({ type: 'unsubscribe', topic: 'x', key: 'k' }), true)
         // The transport-selection report was removed with the second chat lane.
         assert.equal(isStandaloneWsDataFrame({ type: 'command', commandType: 'report_transcript_transport', data: { selection: 'replica' } }), false)

@@ -9,7 +9,6 @@ import CliTerminalPane from './CliTerminalPane'
 import ChatPane from './ChatPane'
 import { IconWarning } from '../Icons'
 import { InfoTip } from '../ui/InfoTip'
-import { useSessionModalSubscription } from '../../hooks/useSessionModalSubscription'
 import type { DashboardConversationCommands } from '../../hooks/useDashboardConversationCommands'
 
 interface PaneGroupContentProps {
@@ -72,18 +71,7 @@ const PaneGroupContent = memo(function PaneGroupContent({
     const terminalPaneVisible = getPaneGroupContentChildVisibility(isVisible, showTerminalPane)
     const chatPaneVisible = getPaneGroupContentChildVisibility(isVisible, showChatPane)
     const paneVisible = getPaneGroupContentChildVisibility(isVisible)
-    const modalState = useSessionModalSubscription(activeConv)
     const { t } = useTranslation('common')
-    const effectiveConv: ActiveConversation = (
-        modalState.status || modalState.modalMessage || modalState.modalButtons
-            ? {
-                ...activeConv,
-                ...(modalState.status ? { status: modalState.status } : {}),
-                ...(modalState.modalMessage !== undefined ? { modalMessage: modalState.modalMessage } : {}),
-                ...(modalState.modalButtons !== undefined ? { modalButtons: modalState.modalButtons } : {}),
-            }
-            : activeConv
-    )
     // Shared between the pty layout's chat sub-pane (toggled against the
     // terminal sub-pane via `chatPaneVisible`) and the non-pty layout (always
     // locally visible, `paneVisible`) — the only real difference between the
@@ -96,7 +84,7 @@ const PaneGroupContent = memo(function PaneGroupContent({
     // can neither arrive unwired nor reach only one of the two panes.
     const renderChatPane = (visible: boolean) => (
         <ChatPane
-            activeConv={effectiveConv}
+            activeConv={activeConv}
             ideEntry={ideEntry}
             handleSendChat={handleSendChat}
             handleSendNowQueued={handleSendNowQueued}
@@ -115,11 +103,17 @@ const PaneGroupContent = memo(function PaneGroupContent({
             isVisible={visible}
         />
     )
+    // ONE lane: status, the approval modal and the interactive prompt are all
+    // fields of the session row in daemon.metadata (flushed on status facts,
+    // immediately on modal / prompt edges), so `activeConv` is rendered as is.
+    // A second, modal-only lane (`session.modal`) used to be laid over it; it
+    // was never pushed on plain status transitions and pinned a new session at
+    // `starting` ("Agent generating…") after it had gone idle.
     return (
         <>
-            <ApprovalBanner activeConv={effectiveConv} onModalButton={handleModalButton} />
+            <ApprovalBanner activeConv={activeConv} onModalButton={handleModalButton} />
 
-            {(effectiveConv.transport !== 'pty' && effectiveConv.transport !== 'acp' && effectiveConv.cdpConnected === false) ? (
+            {(activeConv.transport !== 'pty' && activeConv.transport !== 'acp' && activeConv.cdpConnected === false) ? (
                 <div className="desktop-only px-3 pt-1 pb-2">
                     <div className="flex items-center gap-2.5 px-3.5 py-2 bg-yellow-500/[0.08] border border-yellow-500/20 rounded-lg text-xs text-text-secondary">
                         <span className="text-sm"><IconWarning size={14} /></span>
@@ -135,7 +129,7 @@ const PaneGroupContent = memo(function PaneGroupContent({
                 </div>
             ) : null}
 
-            {effectiveConv.transport === 'pty' ? (
+            {activeConv.transport === 'pty' ? (
                 <div style={{ position: 'relative', minHeight: 0, flex: '1 1 0%', width: '100%', overflow: 'hidden' }}>
                     <div
                         aria-hidden={!isCliTerminal}
@@ -151,7 +145,7 @@ const PaneGroupContent = memo(function PaneGroupContent({
                         }}
                     >
                         <CliTerminalPane
-                            activeConv={effectiveConv}
+                            activeConv={activeConv}
                             clearToken={clearToken}
                             terminalRef={terminalRef}
                             handleSendChat={handleSendChat}

@@ -44,12 +44,10 @@ export type {
   SessionRuntimeOutputSubscriptionParams,
   MachineRuntimeSubscriptionParams,
   SessionHostDiagnosticsSubscriptionParams,
-  SessionModalSubscriptionParams,
   DaemonMetadataSubscriptionParams,
   WorkspaceGitSubscriptionParams,
   MachineRuntimeUpdate,
   SessionHostDiagnosticsUpdate,
-  SessionModalUpdate,
   DaemonMetadataUpdate,
   DaemonMetadataDelta,
   DaemonMetadataWireUpdate,
@@ -832,22 +830,12 @@ export { readChatHistory } from './config/chat-history.js';
 export {
   hashSignatureParts,
   buildChatMessageSignature,
-  buildSessionModalDeliverySignature,
 } from './chat/chat-signatures.js';
 export type {
   ChatMessageSignatureInput,
-  SessionModalDeliverySignatureInput,
 } from './chat/chat-signatures.js';
-export {
-  normalizeSessionModalFields,
-  prepareSessionModalUpdate,
-} from './chat/subscription-updates.js';
 export { runAsyncBatch } from './chat/async-batch.js';
 export type { AsyncBatchOptions } from './chat/async-batch.js';
-export type {
-  PrepareSessionModalUpdateInput,
-  PreparedSessionModalUpdate,
-} from './chat/subscription-updates.js';
 
 // ── Agent Stream ──
 export { DaemonAgentStreamManager } from './agent-stream/index.js';
@@ -1435,7 +1423,6 @@ export type {
 export {
   subscribeHostCommandTopics,
   subscribeHostMeshState,
-  subscribeHostModal,
   subscribeHostStatusFacts,
   subscribeHostTurnSnapshots,
 } from './boot/host-subscribers.js';

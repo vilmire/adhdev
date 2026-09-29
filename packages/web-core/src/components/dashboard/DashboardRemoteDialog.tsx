@@ -11,7 +11,6 @@ import { useDashboardConversationCommands } from '../../hooks/useDashboardConver
 import ModalPortal from '../ui/ModalPortal'
 import { useIdeRemoteStream } from '../../hooks/useIdeRemoteStream'
 import { useIdeConversations } from '../../hooks/useIdeConversations'
-import { useSessionModalSubscription } from '../../hooks/useSessionModalSubscription'
 import { getPreferredConversationForIde } from './conversation-sort'
 import { IconMonitor, IconScroll, IconSplitView } from '../Icons'
 import { formatIdeType } from '../../utils/daemon-utils'
@@ -137,36 +136,25 @@ export default function DashboardRemoteDialog({
         return conversations.find(conversation => conversation.tabKey === dialogChatTab)
             || activeConv
     }, [activeConv, conversations, dialogChatTab])
-    const modalState = useSessionModalSubscription(effectiveConv)
-    const modalAwareConv = useMemo(() => (
-        modalState.status || modalState.modalMessage || modalState.modalButtons
-            ? {
-                ...effectiveConv,
-                ...(modalState.status ? { status: modalState.status } : {}),
-                ...(modalState.modalMessage !== undefined ? { modalMessage: modalState.modalMessage } : {}),
-                ...(modalState.modalButtons !== undefined ? { modalButtons: modalState.modalButtons } : {}),
-            }
-            : effectiveConv
-    ), [effectiveConv, modalState])
 
-    const daemonRouteId = getConversationDaemonRouteId(modalAwareConv)
+    const daemonRouteId = getConversationDaemonRouteId(effectiveConv)
     const cmds = useDashboardConversationCommands({
         sendDaemonCommand,
-        activeConv: modalAwareConv,
+        activeConv: effectiveConv,
         setActionLogs,
         isStandalone,
     })
     const { connScreenshot, screenshotUsage, handleRemoteAction } = useIdeRemoteStream({
         doId: daemonRouteId,
-        targetSessionId: getConversationNativeTargetSessionId(modalAwareConv),
-        connState: modalAwareConv.connectionState || 'new',
+        targetSessionId: getConversationNativeTargetSessionId(effectiveConv),
+        connState: effectiveConv.connectionState || 'new',
         viewMode,
     })
     const visibleActionLogs = useMemo(
-        () => actionLogs.filter(log => log.routeId === modalAwareConv.tabKey),
-        [actionLogs, modalAwareConv.tabKey],
+        () => actionLogs.filter(log => log.routeId === effectiveConv.tabKey),
+        [actionLogs, effectiveConv.tabKey],
     )
-    const remoteTabKey = modalAwareConv.tabKey
+    const remoteTabKey = effectiveConv.tabKey
     const handleRemoteLog = useCallback((text: string) => {
         setActionLogs(prev => [...prev, { routeId: remoteTabKey, text, timestamp: Date.now() }])
     }, [remoteTabKey, setActionLogs])
@@ -177,8 +165,8 @@ export default function DashboardRemoteDialog({
     }, [onRetryConnection, remoteMachineId])
 
     useEffect(() => {
-        onConversationChange?.(modalAwareConv)
-    }, [modalAwareConv, onConversationChange])
+        onConversationChange?.(effectiveConv)
+    }, [effectiveConv, onConversationChange])
 
     useEffect(() => {
         const handleKeyDown = (event: KeyboardEvent) => {
@@ -265,9 +253,9 @@ export default function DashboardRemoteDialog({
                                 extensionTabs={extensionTabs}
                                 onSelectTab={setDialogChatTab}
                             />
-                            <ApprovalBanner activeConv={modalAwareConv} onModalButton={cmds.handleModalButton} />
+                            <ApprovalBanner activeConv={effectiveConv} onModalButton={cmds.handleModalButton} />
                             <ChatPane
-                                activeConv={modalAwareConv}
+                                activeConv={effectiveConv}
                                 ideEntry={activeIdeEntry}
                                 showMetaChips={false}
                                 handleSendChat={cmds.handleSendChat}
@@ -289,10 +277,10 @@ export default function DashboardRemoteDialog({
                     <div className={`flex flex-col min-w-0 min-h-0 bg-bg-primary ${viewMode === 'split' ? 'order-1 md:order-2' : ''}`}>
                         <RemoteView
                             addLog={handleRemoteLog}
-                            connState={(modalAwareConv.connectionState || 'new') as 'new' | 'connecting' | 'connected' | 'disconnected' | 'failed'}
+                            connState={(effectiveConv.connectionState || 'new') as 'new' | 'connecting' | 'connected' | 'disconnected' | 'failed'}
                             connScreenshot={connScreenshot}
                             screenshotUsage={screenshotUsage}
-                            transportType={modalAwareConv.transport}
+                            transportType={effectiveConv.transport}
                             onAction={handleRemoteAction}
                             onRetry={handleRemoteRetry}
                         />

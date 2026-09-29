@@ -9,7 +9,7 @@ import * as crypto from 'crypto';
 import { shouldUseBracketedPasteForEnvelope, buildAdapterSendOpts } from './cli-provider-bracketed-paste.js';
 import { normalizeInputEnvelope, type ProviderModule, flattenContent, type InputEnvelope } from './contracts.js';
 import { assertProviderSupportsDeclaredInput } from './provider-input-support.js';
-import type { ProviderSendMessageResult, ProviderInstance, ProviderState, ProviderEvent, InstanceContext, ProviderErrorReason, HotChatSessionState, SessionModalState } from './provider-instance.js';
+import type { ProviderSendMessageResult, ProviderInstance, ProviderState, ProviderEvent, InstanceContext, ProviderErrorReason, HotChatSessionState } from './provider-instance.js';
 import { normalizeInteractivePrompt, type InteractivePrompt } from './types/interactive-prompt.js';
 import {
     applyInteractivePromptAnswer,
@@ -45,7 +45,6 @@ import { ChatHistoryWriter } from '../config/chat-history.js';
 import { LOG } from '../logging/logger.js';
 import { recordDebugTrace } from '../logging/debug-trace.js';
 import { shouldCollectTraceCategory } from '../logging/debug-config.js';
-import { resolveSessionTurnPresentation } from '../mesh/mesh-turn-presentation.js';
 import { isWorkerMcpEnabled } from '../runtime-defaults.js'; // layer-neutral — see runtime-defaults.ts for why this isn't imported from mesh/worker-mcp-isolation.js
 import { meshTaskAttachments, resolveCompletingTaskId, resolvePendingInjectedAt, type MeshTaskAttachment } from './mesh-task-attachment.js';
 import type { ChatMessage } from '../types.js';
@@ -65,7 +64,6 @@ import {
 // cleanup, not part of this pure move. `buildChatMessage` WAS dropped: it became dead
 // only because recordAcknowledgedUserInput moved to cli-provider-runtime-messages.ts.
 import { readChatMessageTimestampMs } from './chat-message-normalization.js';
-import { workingDirBasename } from './working-dir.js';
 import { ManualAttendanceTracker } from './manual-attendance.js';
 import { buildCliStructuredInputPrompt } from './cli-provider-input-prompt.js';
 import { type PersistableCliHistoryMessage } from './cli-provider-history-dedup.js';
@@ -565,51 +563,6 @@ export class CliProviderInstance implements ProviderInstance {
             runtimeSurfaceKind: runtime?.surfaceKind,
             runtimeRestoredFromStorage: runtime?.restoredFromStorage === true,
             runtimeRecoveryState: runtime?.recoveryState ?? null,
-        };
-    }
-
-    getSessionModalState(sessionId?: string): SessionModalState {
-        const adapterStatus = this.adapter.getStatus({ allowParse: true });
-        const nowMs = Date.now();
-        // STATUS-MISMATCH: drop the mask once the auto-approve episode has stalled (see getState).
-        const autoApproveActive = this.autoApproveEffectivelyActive(adapterStatus.status, nowMs)
-            && !this.autoApproveMaskStalled(nowMs);
-        const autoApproveHoldIdle = this.autoApproveBusy && adapterStatus.status === 'idle';
-        const visibleStatus = autoApproveActive || autoApproveHoldIdle ? 'generating' : adapterStatus.status;
-        const dirName = workingDirBasename(this.workingDir);
-        // TURN-PRESENTATION (Stage 6): the session.modal lane is the LAST status
-        // surface that still published the raw provider FSM. PaneGroupContent
-        // overlays this status on top of ActiveConversation.status — which was
-        // already reducer-authoritative via status/builders.ts
-        // resolveSessionStatusUnified — so a projection-blind value here wins in
-        // the UI and re-introduces exactly the disagreement Stage 6 removed
-        // everywhere else (observed as the `legacy_idle_turn_active` shadow
-        // divergence: reducer `starting`, this lane `idle`).
-        //
-        // The overlay itself is correct and stays: it exists for FRESHNESS (the
-        // status lane is push-only and self-heals on resubscribe — see the
-        // useSessionModalSubscription header). Freshness and authority are
-        // different axes; this makes the fresh value also the authoritative one
-        // rather than deleting the freshness path.
-        //
-        // `visibleStatus` (incl. the auto-approve mask) remains the legacy/shadow
-        // input, so with no mesh attempt the resolver passes it through unchanged
-        // and ordinary non-mesh CLI chat behaves exactly as before.
-        const presentedStatus = resolveSessionTurnPresentation({
-            sessionId: sessionId ?? this.instanceId,
-            providerStatus: visibleStatus,
-            providerType: this.type,
-            surface: 'session_modal',
-        }).status;
-        return {
-            // Honor the caller-supplied sessionId — InstanceMgr rejects the
-            // projection when projected.id !== requested sessionId, and
-            // this.instanceId is the manager's internal key, not the public
-            // sessionId the dashboard subscribes by.
-            id: sessionId ?? this.instanceId,
-            status: presentedStatus,
-            title: dirName,
-            activeModal: (autoApproveActive || autoApproveHoldIdle) ? null : adapterStatus.activeModal,
         };
     }
 

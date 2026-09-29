@@ -37,9 +37,6 @@ vi.mock('../../../src/components/dashboard/CliTerminalPane', () => ({
     },
 }))
 
-vi.mock('../../../src/hooks/useSessionModalSubscription', () => ({
-    useSessionModalSubscription: () => ({}),
-}))
 
 const { default: PaneGroupContent } = await import('../../../src/components/dashboard/PaneGroupContent')
 

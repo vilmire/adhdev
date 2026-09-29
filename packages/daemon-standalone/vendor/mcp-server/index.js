@@ -99440,15 +99440,6 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
               settings: this.settings
             };
           }
-          getSessionModalState(sessionId) {
-            if (sessionId && sessionId !== this.instanceId) return null;
-            return {
-              id: this.instanceId,
-              status: this.currentStatus,
-              title: this.chatTitle || this.agentName || this.provider.name,
-              activeModal: this.activeModal
-            };
-          }
           onEvent(event, data) {
             if (event === "stream_update") {
               if (data?.streams) this.agentStreams = data.streams;
@@ -100200,23 +100191,6 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
               instanceId: this.instanceId,
               lastUpdated: Date.now(),
               settings: this.settings
-            };
-          }
-          getSessionModalState(sessionId) {
-            if (sessionId && sessionId !== this.instanceId) {
-              for (const ext of this.extensions.values()) {
-                const projected = ext.getSessionModalState?.(sessionId);
-                if (projected?.id === sessionId) return projected;
-              }
-              return null;
-            }
-            const autoApproveActive = (this.currentStatus === "waiting_approval" || this.cachedChat?.status === "waiting_approval") && this.canAutoApprove();
-            const visibleStatus = autoApproveActive ? "generating" : this.currentStatus;
-            return {
-              id: this.instanceId,
-              status: autoApproveActive && this.cachedChat?.status === "waiting_approval" ? "generating" : this.cachedChat?.status || visibleStatus,
-              title: this.cachedChat?.title || this.type,
-              activeModal: autoApproveActive ? null : this.cachedChat?.activeModal || null
             };
           }
           onEvent(event, data) {
@@ -116181,15 +116155,6 @@ ${marker}`,
         stringifySignatureContent(message.content)
       ]);
     }
-    function buildSessionModalDeliverySignature(payload) {
-      return hashSignatureParts([
-        payload.sessionId,
-        payload.status,
-        payload.title || "",
-        payload.modalMessage || "",
-        Array.isArray(payload.modalButtons) ? payload.modalButtons.join("") : ""
-      ]);
-    }
     var init_chat_signatures = __esm2({
       "src/chat/chat-signatures.ts"() {
         "use strict";
@@ -124476,8 +124441,7 @@ ${marker}`,
         handlerSpecs = defineCommandSpecs("handler", handlerCommands, {
           read_chat: {
             // Serves historical transcript data when the live session is gone.
-            session: { ...REQUIRED_ROUTED, aliasSessionId: true, allowInactiveHistory: true },
-            invalidates: ["session.modal"]
+            session: { ...REQUIRED_ROUTED, aliasSessionId: true, allowInactiveHistory: true }
           },
           get_chat_debug_bundle: {
             session: { scope: "required", aliasSessionId: true, allowInactiveHistory: true }
@@ -124489,7 +124453,8 @@ ${marker}`,
           chat_history: { session: { scope: "optional", aliasSessionId: true } },
           send_chat: {
             session: { ...REQUIRED_ROUTED, aliasSessionId: true },
-            invalidates: ["session.modal"],
+            // The session row (status, approval modal) moves: push it now.
+            invalidates: ["daemon.metadata"],
             postChat: true,
             meshSender: "session_coordinator"
           },
@@ -124511,7 +124476,8 @@ ${marker}`,
           // Approve / reject a modal prompt.
           resolve_action: {
             session: { ...REQUIRED_ROUTED, aliasSessionId: true },
-            invalidates: ["session.modal"],
+            // The session row (status, approval modal) moves: push it now.
+            invalidates: ["daemon.metadata"],
             forwardToOwner: true,
             meshSender: "session_coordinator"
           },
@@ -141765,7 +141731,6 @@ ${buttons.join("\n")}`;
         init_logger();
         init_debug_trace();
         init_debug_config();
-        init_mesh_turn_presentation();
         init_runtime_defaults();
         init_mesh_task_attachment();
         init_approval_utils();
@@ -141773,7 +141738,6 @@ ${buttons.join("\n")}`;
         init_antigravity_claim_registry();
         init_transcript_claim_registry();
         init_chat_message_normalization();
-        init_working_dir();
         init_manual_attendance();
         init_cli_provider_input_prompt();
         init_cli_provider_status_helpers();
@@ -142149,30 +142113,6 @@ ${buttons.join("\n")}`;
               runtimeSurfaceKind: runtime?.surfaceKind,
               runtimeRestoredFromStorage: runtime?.restoredFromStorage === true,
               runtimeRecoveryState: runtime?.recoveryState ?? null
-            };
-          }
-          getSessionModalState(sessionId) {
-            const adapterStatus = this.adapter.getStatus({ allowParse: true });
-            const nowMs2 = Date.now();
-            const autoApproveActive = this.autoApproveEffectivelyActive(adapterStatus.status, nowMs2) && !this.autoApproveMaskStalled(nowMs2);
-            const autoApproveHoldIdle = this.autoApproveBusy && adapterStatus.status === "idle";
-            const visibleStatus = autoApproveActive || autoApproveHoldIdle ? "generating" : adapterStatus.status;
-            const dirName = workingDirBasename(this.workingDir);
-            const presentedStatus = resolveSessionTurnPresentation({
-              sessionId: sessionId ?? this.instanceId,
-              providerStatus: visibleStatus,
-              providerType: this.type,
-              surface: "session_modal"
-            }).status;
-            return {
-              // Honor the caller-supplied sessionId — InstanceMgr rejects the
-              // projection when projected.id !== requested sessionId, and
-              // this.instanceId is the manager's internal key, not the public
-              // sessionId the dashboard subscribes by.
-              id: sessionId ?? this.instanceId,
-              status: presentedStatus,
-              title: dirName,
-              activeModal: autoApproveActive || autoApproveHoldIdle ? null : adapterStatus.activeModal
             };
           }
           updateSettings(newSettings) {
@@ -143727,18 +143667,6 @@ ${buttons.join("\n")}`;
               this.currentStatus = "stopped";
               this.detectStatusTransition();
             }
-          }
-          getSessionModalState() {
-            const dirName = workingDirBasename(this.workingDir);
-            return {
-              id: this.instanceId,
-              status: this.currentStatus,
-              title: `${this.provider.name} \xB7 ${dirName}`,
-              activeModal: this.currentStatus === "waiting_approval" ? {
-                message: this.activeToolCalls.find((t) => t.status === "running")?.name || "Permission requested",
-                buttons: ["Approve", "Reject"]
-              } : null
-            };
           }
           getState() {
             const dirName = workingDirBasename(this.workingDir);
@@ -163314,7 +163242,6 @@ ${e?.stderr || ""}`;
       buildSessionEntries: () => buildSessionEntries,
       buildSessionLaunchFields: () => buildSessionLaunchFields,
       buildSessionLaunchRecord: () => buildSessionLaunchRecord,
-      buildSessionModalDeliverySignature: () => buildSessionModalDeliverySignature,
       buildStatusSnapshot: () => buildStatusSnapshot,
       buildSystemChatMessage: () => buildSystemChatMessage,
       buildTaskCompletionEvidence: () => buildTaskCompletionEvidence,
@@ -163648,7 +163575,6 @@ ${e?.stderr || ""}`;
       normalizeOrchestrationDecision: () => normalizeOrchestrationDecision3,
       normalizeRepoIdentity: () => normalizeRepoIdentity,
       normalizeRepoMeshDeclarativeConfig: () => normalizeRepoMeshDeclarativeConfig,
-      normalizeSessionModalFields: () => normalizeSessionModalFields,
       notifyCoordinatorOfOrphanedPins: () => notifyCoordinatorOfOrphanedPins,
       notifyCoordinatorOfParkedTaskDropped: () => notifyCoordinatorOfParkedTaskDropped,
       notifyMeshCoordinator: () => notifyMeshCoordinator,
@@ -163673,7 +163599,6 @@ ${e?.stderr || ""}`;
       patchGraphNodeAndRetry: () => patchGraphNodeAndRetry,
       planMeshOnboarding: () => planMeshOnboarding,
       preflightDiskSpace: () => preflightDiskSpace,
-      prepareSessionModalUpdate: () => prepareSessionModalUpdate,
       presentationFromAttemptRow: () => presentationFromAttemptRow,
       printClaudeInstallResult: () => printClaudeInstallResult,
       printClaudeStatuslineStatus: () => printClaudeStatuslineStatus,
@@ -163838,7 +163763,6 @@ ${e?.stderr || ""}`;
       storeFleetSecret: () => storeFleetSecret,
       subscribeHostCommandTopics: () => subscribeHostCommandTopics,
       subscribeHostMeshState: () => subscribeHostMeshState,
-      subscribeHostModal: () => subscribeHostModal,
       subscribeHostStatusFacts: () => subscribeHostStatusFacts,
       subscribeHostTurnSnapshots: () => subscribeHostTurnSnapshots,
       subscribeLifecycleTrace: () => subscribeLifecycleTrace,
@@ -166353,60 +166277,6 @@ ${e?.stderr || ""}`;
     init_mesh_sender();
     init_dist();
     init_async_batch();
-    init_chat_signatures();
-    init_normalize();
-    function normalizeModalButtons(value) {
-      return Array.isArray(value) ? value.filter((button) => typeof button === "string") : [];
-    }
-    function normalizeModalMessage(value) {
-      return typeof value === "string" ? value : void 0;
-    }
-    function normalizeSessionModalFields(activeModal) {
-      if (!activeModal || typeof activeModal !== "object") {
-        return { modalButtons: [] };
-      }
-      return {
-        modalMessage: normalizeModalMessage(activeModal.message),
-        modalButtons: normalizeModalButtons(activeModal.buttons)
-      };
-    }
-    function prepareSessionModalUpdate(input) {
-      const { modalMessage, modalButtons } = normalizeSessionModalFields(input.activeModal);
-      const status = normalizeManagedStatus(input.status, {
-        activeModal: modalButtons.length > 0 ? { buttons: modalButtons } : null
-      });
-      const deliverySignature = buildSessionModalDeliverySignature({
-        sessionId: input.sessionId,
-        status,
-        ...input.title ? { title: input.title } : {},
-        ...modalMessage ? { modalMessage } : {},
-        ...modalButtons.length > 0 ? { modalButtons } : {}
-      });
-      if (deliverySignature === input.lastDeliveredSignature) {
-        return {
-          seq: input.seq,
-          lastDeliveredSignature: input.lastDeliveredSignature,
-          update: null
-        };
-      }
-      const seq2 = input.seq + 1;
-      return {
-        seq: seq2,
-        lastDeliveredSignature: deliverySignature,
-        update: {
-          topic: "session.modal",
-          key: input.key,
-          sessionId: input.sessionId,
-          status,
-          ...input.title ? { title: input.title } : {},
-          ...modalMessage ? { modalMessage } : {},
-          ...modalButtons.length > 0 ? { modalButtons } : {},
-          ...input.interactionId ? { interactionId: input.interactionId } : {},
-          seq: seq2,
-          timestamp: input.timestamp
-        }
-      };
-    }
     init_snapshot3();
     init_runtime_defaults();
     var DEFAULT_GIT_REFRESH_CONCURRENCY = 2;
@@ -166436,7 +166306,7 @@ ${e?.stderr || ""}`;
       const { lastCheckedAt: _checked, ...status } = update.status ?? {};
       return signatureOf({ status, diffSummary: update.diffSummary ?? null });
     }
-    var PUSH_TOPICS = ["machine.runtime", "session_host.diagnostics", "session.modal", "daemon.metadata", "mesh.status"];
+    var PUSH_TOPICS = ["machine.runtime", "session_host.diagnostics", "daemon.metadata", "mesh.status"];
     var MIGRATED_TOPICS = /* @__PURE__ */ new Set([
       "workspace.git",
       ...PUSH_TOPICS
@@ -166444,7 +166314,6 @@ ${e?.stderr || ""}`;
     var INVALIDATABLE_TOPICS = [
       "daemon.metadata",
       "session_host.diagnostics",
-      "session.modal",
       "workspace.git"
     ];
     var TopicSubscriptionRegistry = class {
@@ -166530,10 +166399,6 @@ ${e?.stderr || ""}`;
         }
         if (!this.isPushTopic(request.topic)) return false;
         const params = request.params && typeof request.params === "object" ? request.params : {};
-        if (request.topic === "session.modal") {
-          const targetSessionId = typeof params.targetSessionId === "string" ? params.targetSessionId.trim() : "";
-          if (!targetSessionId) return false;
-        }
         if (request.topic === "mesh.status") {
           const meshId = typeof params.meshId === "string" ? params.meshId.trim() : "";
           if (!meshId) return false;
@@ -166696,8 +166561,6 @@ ${e?.stderr || ""}`;
             return this.flushMachineRuntime(connectionId, key2);
           case "session_host.diagnostics":
             return this.flushSessionHostDiagnostics(connectionId, key2);
-          case "session.modal":
-            return this.flushSessionModal(connectionId, key2);
           case "daemon.metadata":
             return this.flushDaemonMetadata(connectionId, key2);
           case "mesh.status":
@@ -166799,56 +166662,6 @@ ${e?.stderr || ""}`;
             timestamp: now
           });
           entry.lastDeliveredSignature = delivered === false ? "" : signature;
-        }
-      }
-      /**
-       * session.modal engine — event-driven (no interval throttle), deduped via
-       * prepareSessionModalUpdate's delivery signature. interactionId stamping +
-       * debug-trace recording ride the optional hooks (cloud-only until S4).
-       */
-      async flushSessionModal(connectionId, key2) {
-        const source = this.opts.sources?.sessionModalState;
-        if (!source) return;
-        for (const entry of this.collectPushEntries("session.modal", connectionId, key2)) {
-          const params = entry.params;
-          const sessionId = params.targetSessionId;
-          const state = source(sessionId);
-          if (!state) continue;
-          const now = this.now();
-          const activeModal = state.activeModal;
-          const status = String(state.status || "idle");
-          const title = typeof state.title === "string" ? state.title : void 0;
-          const interactionId = this.opts.interactionId?.(sessionId);
-          const prepared = prepareSessionModalUpdate({
-            key: entry.key,
-            sessionId,
-            status,
-            title,
-            activeModal,
-            seq: entry.seq,
-            timestamp: now,
-            ...interactionId ? { interactionId } : {},
-            lastDeliveredSignature: entry.lastDeliveredSignature
-          });
-          entry.seq = prepared.seq;
-          entry.lastDeliveredSignature = prepared.lastDeliveredSignature;
-          entry.lastFlushedAt = now;
-          if (!prepared.update) continue;
-          entry.lastSentAt = now;
-          this.opts.recordTrace?.({
-            interactionId,
-            category: "topic",
-            stage: "session.modal_published",
-            level: "info",
-            sessionId,
-            payload: {
-              status,
-              hasTitle: !!prepared.update.title,
-              modalMessage: prepared.update.modalMessage ? prepared.update.modalMessage.slice(0, 140) : void 0,
-              modalButtonCount: prepared.update.modalButtons?.length || 0
-            }
-          });
-          this.sink.send(entry.connectionId, "session.modal", prepared.update);
         }
       }
       /**
@@ -168487,29 +168300,6 @@ ${e?.stderr || ""}`;
           }
         }
         return sessions;
-      }
-      getSessionModalState(sessionId, options = {}) {
-        if (!sessionId) return null;
-        const candidates = [sessionId];
-        if (options.instanceKey && options.instanceKey !== sessionId) {
-          candidates.push(options.instanceKey);
-        }
-        for (const id22 of candidates) {
-          const instance = this.instances.get(id22);
-          if (!instance?.getSessionModalState) continue;
-          try {
-            const projected = instance.getSessionModalState(sessionId);
-            if (!projected?.id) continue;
-            if (projected.id !== sessionId) {
-              LOG.warn("InstanceMgr", `[InstanceManager] Ignoring mismatched session modal projection from ${id22}: requested=${sessionId} projected=${projected.id}`);
-              continue;
-            }
-            return projected;
-          } catch (e) {
-            LOG.warn("InstanceMgr", `[InstanceManager] Failed to project session modal metadata from ${id22}: ${e.message}`);
-          }
-        }
-        return null;
       }
       /**
       * Per-category status collect
@@ -183977,6 +183767,9 @@ ${notice.notice}${supersededHint}`;
           flushMetadata();
         }, throttleMs - elapsed);
       }, { name: "host.metadata-pump" });
+      const offModal = bus.on(["modal", "prompt"], () => {
+        flushTopic(topics, "daemon.metadata");
+      }, { name: "host.metadata-pump-modal" });
       const timer = setIntervalFn(() => {
         for (const topic of ["daemon.metadata", "machine.runtime", "session_host.diagnostics", "workspace.git"]) {
           if (!topics.hasSubscriptions(topic)) continue;
@@ -183988,13 +183781,11 @@ ${notice.notice}${supersededHint}`;
       }
       return () => {
         offFacts();
+        offModal();
         clearIntervalFn(timer);
         if (pending) clearTimeoutFn(pending);
         pending = null;
       };
-    }
-    function subscribeHostModal(bus, topics) {
-      return bus.on(["modal", "prompt"], () => flushTopic(topics, "session.modal"), { name: "host.modal" });
     }
     function subscribeHostCommandTopics(bus, topics, onCommandExecuted) {
       return bus.on("command_executed", (e) => {
@@ -184029,7 +183820,6 @@ ${notice.notice}${supersededHint}`;
     var RECONCILE_TOPICS = [
       "machine.runtime",
       "session_host.diagnostics",
-      "session.modal",
       "workspace.git",
       "daemon.metadata"
     ];
@@ -184039,14 +183829,14 @@ ${notice.notice}${supersededHint}`;
       "command_executed"
     ];
     var FIXED_EDGE_TOPIC = {
-      modal: "session.modal",
-      prompt: "session.modal"
+      modal: "daemon.metadata",
+      prompt: "daemon.metadata"
     };
     function edgeLabel(e) {
       return e.kind === "command_executed" ? `command_executed:${e.command}` : e.kind;
     }
     function isCommandInvalidationTopic(topic) {
-      return topic === "daemon.metadata" || topic === "session_host.diagnostics" || topic === "session.modal" || topic === "workspace.git";
+      return topic === "daemon.metadata" || topic === "session_host.diagnostics" || topic === "workspace.git";
     }
     function edgeInvalidatesTopic(e, topic) {
       if (e.kind === "command_executed") return isCommandInvalidationTopic(topic) && e.invalidates.has(topic);
@@ -184106,11 +183896,6 @@ ${notice.notice}${supersededHint}`;
         return mode === "chat" || mode === "terminal" ? mode : null;
       };
       const isCliSession = (sessionId) => getCliPresentationMode(sessionId) !== null;
-      const findSessionModalState = (sessionId) => {
-        if (!sessionId) return null;
-        const target = components.sessionRegistry.get(sessionId);
-        return components.instanceManager.getSessionModalState(sessionId, { instanceKey: target?.instanceKey });
-      };
       const buildSnapshot = (profile) => buildStatusSnapshot({
         allStates: components.instanceManager.collectAllStates(),
         cdpManagers: components.cdpManagers,
@@ -184149,13 +183934,8 @@ ${notice.notice}${supersededHint}`;
       };
       const topics = new TopicSubscriptionRegistry(transport.topicSink, {
         gitMonitor,
-        interactionId: (sessionId) => components.router.interactionContext.get(sessionId),
-        recordTrace: (event) => {
-          recordDebugTrace(event);
-        },
         sources: {
           daemonMetadataBody: (params) => buildDaemonMetadataBody(params),
-          sessionModalState: (sessionId) => findSessionModalState(sessionId),
           sessionHostDiagnostics: (opts) => transport.sessionHostDiagnostics?.(opts) ?? null,
           // The mesh view's lane: the SAME body the `mesh_status` command returns
           // (coordinator-held state; never a remote read on this path).
@@ -184177,7 +183957,6 @@ ${notice.notice}${supersededHint}`;
       const offs = [
         subscribeHostStatusFacts(bus, (e) => transport.onStatusFacts?.(e)),
         subscribeHostTopicPump(bus, topics),
-        subscribeHostModal(bus, topics),
         subscribeHostCommandTopics(bus, topics, transport.onCommandExecuted?.bind(transport)),
         subscribeHostMeshState(bus, topics, transport.onMeshState?.bind(transport)),
         subscribeHostTurnSnapshots(bus, {
@@ -184229,7 +184008,6 @@ ${notice.notice}${supersededHint}`;
         interactionId: (sessionId) => components.router.interactionContext.get(sessionId),
         getCliPresentationMode,
         isCliSession,
-        findSessionModalState,
         buildSnapshot,
         buildDaemonMetadataBody,
         startDevSupport,

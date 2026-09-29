@@ -48,12 +48,9 @@ vi.mock('react-i18next', () => ({
 
 // Keep the mobile composition real through PaneGroupContent, ApprovalBanner,
 // useInteractivePrompt and InteractivePromptModal. Only the heavyweight pane
-// bodies and their live modal subscription are irrelevant to this regression.
+// bodies are irrelevant to this regression.
 vi.mock('../../src/components/dashboard/ChatPane', () => ({ default: () => null }))
 vi.mock('../../src/components/dashboard/CliTerminalPane', () => ({ default: () => null }))
-vi.mock('../../src/hooks/useSessionModalSubscription', () => ({
-    useSessionModalSubscription: () => ({}),
-}))
 
 function promptFor(promptId: string) {
     return {
