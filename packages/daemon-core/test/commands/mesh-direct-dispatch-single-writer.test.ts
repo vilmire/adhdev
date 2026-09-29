@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { readFileSync, readdirSync, statSync } from 'fs'
+import { existsSync, readFileSync, readdirSync, statSync } from 'fs'
 import { dirname, join, relative } from 'path'
 import { fileURLToPath } from 'url'
 import { readMeshDirectDispatchFlag, withMeshDirectDispatch } from '../../src/commands/command-args.js'
@@ -12,6 +12,8 @@ import { readMeshDirectDispatchFlag, withMeshDirectDispatch } from '../../src/co
 
 const here = dirname(fileURLToPath(import.meta.url))
 const daemonCoreSrc = join(here, '../../src')
+// The proprietary cloud package exists only in the monorepo checkout; the public
+// OSS repo runs this test without it, so it is scanned only when present.
 const cloudSrc = join(here, '../../../../../packages/daemon-cloud/src')
 
 function tsFiles(dir: string): string[] {
@@ -37,7 +39,7 @@ describe('_meshDirectDispatch — one reader, one writer', () => {
     })
 
     it('no source outside command-args.ts writes the literal or reads the field inline (daemon-core + cloud)', () => {
-        const files = [...tsFiles(daemonCoreSrc), ...tsFiles(cloudSrc)]
+        const files = [...tsFiles(daemonCoreSrc), ...(existsSync(cloudSrc) ? tsFiles(cloudSrc) : [])]
         expect(files.length).toBeGreaterThan(500)
         const offenders: string[] = []
         for (const file of files) {
