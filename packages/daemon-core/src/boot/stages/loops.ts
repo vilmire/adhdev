@@ -12,7 +12,7 @@ import {
     refreshQuotaCacheOnBoot,
 } from '../../quota/refresh.js';
 import { hydrateModelCache, refreshDueModelDiscovery } from '../../models/registry.js';
-import { isShellWrapperCommand, resolveWrappedCliBinary } from '../../providers/provider-loader.js';
+import { isShellWrapperCommand, resolveWrappedCliBinary } from '../../providers/provider-loader-support.js';
 import { scheduleComposerResidueSweep } from '../composer-residue-sweep.js';
 import { startEventLoopMonitor } from '../event-loop-monitor.js';
 import type { Disposer } from '../daemon-components.js';

@@ -33,13 +33,7 @@ vi.mock('node:os', async (importOriginal) => {
     return { ...actual, default: actual, homedir: () => WIN_HOME };
 });
 
-import {
-    expandTemplateRootForEnumeration,
-    splitTemplateDirLeaf,
-    splitTemplateRoot,
-    staticTemplateBase,
-    toPosixPath,
-} from '../../../src/providers/spec/native-history-executor.js';
+import { expandTemplateRootForEnumeration, splitTemplateDirLeaf, splitTemplateRoot, staticTemplateBase, toPosixPath } from '../../../src/providers/spec/native-history-paths.js';
 
 describe('toPosixPath', () => {
     it('converts win32 separators to posix', () => {

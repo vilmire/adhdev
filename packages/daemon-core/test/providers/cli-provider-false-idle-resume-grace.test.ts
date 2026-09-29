@@ -68,6 +68,7 @@ function makeFlushInstance(opts: {
     getScreenText: () => '',
     isWaitingForResponse: false,
     lastApprovalResolvedAt: resolvedAt,
+    getLastApprovalResolvedAt: () => resolvedAt,
   }
 
   instance.shouldAutoApprove = () => opts.autoApprove

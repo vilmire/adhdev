@@ -3,8 +3,7 @@
  *
  * Pure move out of cli-provider-instance.ts (no behavior change): the input
  * envelope → CLI prompt string construction and its image-materialization
- * support. cli-provider-instance re-exports buildCliStructuredInputPrompt so
- * existing importers/tests keep their path.
+ * support.
  */
 
 import * as os from 'os';

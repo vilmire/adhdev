@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { expandThinkingLaunchArgs, expandModelLaunchArgs } from '../../src/commands/cli-manager.js';
+import { expandThinkingLaunchArgs } from '../../src/commands/cli-session-binding.js';
+import { expandModelLaunchArgs } from '../../src/commands/model-launch-args.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ANTIGRAVITY_MANIFEST = resolve(HERE, '../../../../../adhdev-providers/cli/antigravity-cli/provider.v1.json');

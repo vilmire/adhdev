@@ -32,7 +32,7 @@ import type {
     PtySpawnOptions,
     PtyTransportFactory,
 } from '../../src/cli-adapters/pty-transport.js';
-import { applyAutoApproveModeLaunchArgs } from '../../src/commands/cli-manager.js';
+import { applyAutoApproveModeLaunchArgs } from '../../src/commands/cli-session-binding.js';
 import { createCliAdapter } from '../../src/providers/spec/route.js';
 import type { CliProviderModule } from '../../src/cli-adapters/provider-cli-shared.js';
 import type { ProviderModule } from '../../src/providers/contracts.js';

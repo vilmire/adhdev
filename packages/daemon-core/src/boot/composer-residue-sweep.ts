@@ -52,7 +52,7 @@
 'use strict';
 
 import { LOG } from '../logging/logger.js';
-import { normalizeForEcho } from '../providers/spec/fsm-driver.js';
+import { normalizeForEcho } from '../providers/spec/submit-policy.js';
 import type { MeshNoticeRuntime } from '../mesh/turn-ledger/deliver.js';
 import type { CliAdapter } from '../cli-adapter-types.js';
 

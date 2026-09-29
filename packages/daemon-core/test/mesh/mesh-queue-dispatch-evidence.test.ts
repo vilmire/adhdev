@@ -70,7 +70,13 @@ describe('openOrResumeQueueAttempt', () => {
 });
 
 describe('claim/dispatch path source shape (C-W4 retirements)', () => {
-    const src = readFileSync(join(import.meta.dirname, '../../src/mesh/mesh-queue-assignment.ts'), 'utf8');
+    // The dispatch delivery lifecycle (deliverTaskToSession / handleDispatchFailure —
+    // where the transport-outcome evidence is reported) moved out of
+    // mesh-queue-assignment.ts into mesh-queue-dispatch.ts. Only the path follows it —
+    // the claim/dispatch path is read as both files; every assertion is unchanged.
+    const src = ['mesh-queue-assignment.ts', 'mesh-queue-dispatch.ts']
+        .map((f) => readFileSync(join(import.meta.dirname, '../../src/mesh', f), 'utf8'))
+        .join('\n');
 
     it('no legacy attempt writer is called any more', () => {
         expect(src).not.toMatch(/\b(openTurnAttempt|recordTurnAck|closeAttemptForReassignment|rebindAttemptToLiveHolder|recordDuplicateDispatchConsumption|recordAckedHoldDispatchOutcome|assertPromptInjectionAllowed)\(/);

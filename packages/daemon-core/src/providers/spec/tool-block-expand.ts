@@ -29,13 +29,9 @@
  * location rather than a re-derived ordinal.
  */
 
-import {
-    compileRecordShapes,
-    executeNativeHistory,
-    jsonPathGet,
-    stringifyContent,
-    type NativeHistoryInput,
-} from './native-history-executor.js';
+import { executeNativeHistory } from './native-history-executor.js';
+import { compileRecordShapes, jsonPathGet, stringifyContent } from './native-history-projection.js';
+import type { NativeHistoryInput } from './native-history-types.js';
 import {
     DEFAULT_TOOL_CALL_TYPES,
     DEFAULT_TOOL_RESULT_TYPES,

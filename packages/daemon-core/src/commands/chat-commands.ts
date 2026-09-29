@@ -12,7 +12,8 @@
 export { READ_CHAT_PROVIDER_EVAL_TIMEOUT_MS, buildSendInputSignature } from './chat-commands-shared.js';
 export { evaluateReadChatNodeWorkspaceScope } from './chat-commands-scope.js';
 export { sanitizeDebugBundleValue, handleGetChatDebugBundle } from './chat-commands-debug-bundle.js';
-export { handleChatHistory, handleReadChat, __resetProviderSessionPinsForTest, __getProviderSessionPinForTest } from './chat-commands-read.js';
+export { handleChatHistory, handleReadChat } from './chat-commands-read.js';
+export { __resetProviderSessionPinsForTest, __getProviderSessionPinForTest } from './chat-commands-read-session-id.js';
 export { handleExpandToolBlock, resolveToolBlockRefByMessageId } from './chat-commands-expand-tool.js';
 export {
     handleSendChat,

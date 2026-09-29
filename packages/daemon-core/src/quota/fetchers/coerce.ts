@@ -34,3 +34,36 @@ export function retryAfterMs(header: string | null, nowMs: number): number | und
     const at = new Date(header).getTime();
     return Number.isNaN(at) ? undefined : at;
 }
+
+/** Parse an ISO-8601 timestamp string to epoch ms, or `null` when absent/invalid. */
+export function toIsoResetMs(value: unknown): number | null {
+    if (typeof value !== 'string' || value.trim() === '') {
+        return null;
+    }
+    const ms = new Date(value).getTime();
+    return Number.isNaN(ms) ? null : ms;
+}
+
+/**
+ * Convert a Unix-seconds reset timestamp to epoch ms. Values already large
+ * enough to be milliseconds pass through, so a future protocol change to ms
+ * does not yield a reset date in the year 58000.
+ */
+export function toEpochResetMs(value: unknown): number | null {
+    const seconds = toNumber(value);
+    if (seconds === null || seconds <= 0) {
+        return null;
+    }
+    return seconds > 1e11 ? seconds : seconds * 1000;
+}
+
+/**
+ * Whether stored credentials are expired (or within `skewMs` of expiring).
+ * A missing expiry is treated as "not expired" so the server can be the judge.
+ */
+export function isCredentialExpired(expiresAtMs: number | null, nowMs: number, skewMs: number): boolean {
+    if (expiresAtMs === null) {
+        return false;
+    }
+    return expiresAtMs - nowMs <= skewMs;
+}

@@ -237,12 +237,6 @@ function cachedLocalStatus(ctx: MeshContext): Promise<NodeStatusProbe | null> {
     });
 }
 
-/** Clears the per-call caches — test-only (mirrors a fresh MCP call). */
-export function __resetNodeRuntimeCacheForTest(ctx: MeshContext): void {
-    heldStateForCall.delete(ctx);
-    localStatusForCall.delete(ctx);
-}
-
 /**
  * THE entry point for a node's runtime. Asks only the coordinator daemon; never
  * throws (a failed read resolves to `known: false` with no sessions).

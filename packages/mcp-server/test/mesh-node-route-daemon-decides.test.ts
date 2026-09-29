@@ -4,7 +4,7 @@ import test from 'node:test';
 import { IpcTransport } from '../src/transports/ipc.js';
 import { commandForNode, isLocalControlPlaneNode } from '../src/tools/mesh-tools-internal.js';
 import { ensureMeshNodeRoutes, MESH_NODE_ROUTES_TTL_MS } from '../src/tools/mesh-node-routes.js';
-import { createMeshStatusViewTransport } from '../src/tools/mesh-status-view.js';
+import { applyMeshStatusViewRoutes, sealMeshStatusViewTransport } from '../src/tools/mesh-status-view.js';
 
 // Data-path audit 2026-09-29 (owner principle ④): a tool never decides node
 // locality itself — the coordinator daemon answers `mesh_node_route` for every
@@ -94,7 +94,10 @@ test('locality follows the daemon answer, not the tool’s identity guess', asyn
 test('mesh_status takes every route from the ONE view it already fetched (no second call)', async () => {
     const view = { meshId: 'mesh-route', routes: { 'node-self': { route: 'local', reason: 'served_by_this_daemon' }, 'node-peer-here': { route: 'remote', ownerDaemonId: 'daemon-peer', reason: 'owned_by_another_daemon' } } };
     const { transport, calls } = daemon({});
-    const ctx: any = { mesh: mesh(), transport: createMeshStatusViewTransport(transport, view), localDaemonId: 'daemon-self' };
+    // mesh_status holds the view's routes on a context whose transport is sealed:
+    // even a forced re-ask reaches no daemon and keeps the held answer.
+    const ctx: any = { mesh: mesh(), transport: sealMeshStatusViewTransport(transport), localDaemonId: 'daemon-self' };
+    applyMeshStatusViewRoutes(ctx, view);
     await ensureMeshNodeRoutes(ctx, { force: true });
     assert.equal(calls.length, 0);
     assert.equal(isLocalControlPlaneNode(ctx, ctx.mesh.nodes[0]), true);

@@ -22,7 +22,6 @@ import {
     compactNodeSeverity,
     buildMeshCoordinatorToolCallArgs,
     buildPendingMeshEventsDrainArgs,
-    drainCoordinatorPendingEvents,
     latestActiveLaunchFailureFromEntries,
     summarizeMeshUsage,
     getNodeLaunchReadiness,
@@ -32,9 +31,8 @@ import {
     readNodeDaemonId,
     readNodeMachineId,
     readRelatedRepos,
-    readActiveWorkFromDaemon,
-    recordMeshCoordinatorToolCall,
     refreshMeshFromDaemon,
+    applyMeshMembership,
     summarizeBranchConvergence,
     summarizeMeshAsyncRefineJobs,
     summarizeNodeSessions,
@@ -46,14 +44,25 @@ import type {
 // mesh-tools-internal.ts, imported directly from the package like the other
 // daemon-core symbols mesh-tools-internal.ts itself imports.
 import type { MeshLedgerSummary as MeshLedgerSummaryView, MeshSchedulingRuntime, SessionRecoveryContext } from '@adhdev/daemon-core';
-import { readRecoveryContexts, readStatusMissionsCompact, readStatusMissionsVerbose } from './mesh-daemon-reads.js';
 import { compactDaemonMachine, compactDaemonQuotaSnapshots, dedupeCompactNodeGitFields, dedupeProviderCapabilityTags } from './mesh-compact.js';
 import { DEFAULT_MESH_POLICY } from '@adhdev/daemon-core';
 import type { LocalMeshNodeEntry } from '@adhdev/daemon-core';
 import { applyHeldNodeGitToEntry, buildNodeGitStateSummary } from './mesh-status-held-git.js';
 import { findHeldNodeStatus, localStatusProbe, parseCoordinatorHeldNodeState, resolveNodeRuntime } from './mesh-held-node-state.js';
 import { ensureMeshNodeRoutes } from './mesh-node-routes.js';
-import { applyMeshStatusViewRoutes, createMeshStatusViewTransport, readMeshStatusView, type MeshStatusView } from './mesh-status-view.js';
+import {
+    applyMeshStatusViewRoutes,
+    drainViewPendingEvents,
+    readMeshStatusView,
+    readViewActiveWork,
+    readViewMissionsCompact,
+    readViewMissionsVerbose,
+    readViewRecovery,
+    readViewRelatedRepoGit,
+    readViewToolCall,
+    sealMeshStatusViewTransport,
+    type MeshStatusView,
+} from './mesh-status-view.js';
 
 // The v2 protocol version literal (mirrors MESH_PROTOCOL_VERSION_V2 in
 // daemon-core mesh/contracts.ts). Kept as a local literal so this MCP-side
@@ -150,19 +159,22 @@ export async function meshStatus(outerCtx: MeshContext, args: { includeStaleDire
             error: `The coordinator daemon could not answer mesh_status: ${error?.message || error}`,
         });
     }
-    // The renderer's shared helpers read through a transport: this one answers
-    // from the view and refuses anything else (no member is ever read).
-    const ctx: MeshContext = { ...outerCtx, transport: createMeshStatusViewTransport(outerCtx.transport, view) } as MeshContext;
-    const rateResult = await recordMeshCoordinatorToolCall(ctx, 'mesh_status');
+    // Everything below renders the view. The renderer's context carries a sealed
+    // transport: a read the view does not carry throws instead of reaching a daemon
+    // (no member is ever read).
+    const ctx: MeshContext = { ...outerCtx, transport: sealMeshStatusViewTransport(outerCtx.transport) } as MeshContext;
+    const rateResult = readViewToolCall(view);
 
-    await refreshMeshFromDaemon(ctx);
-    // Every node's locality, its held state and the coordinator's own status are
-    // read straight from the view.
+    // Membership, then every node's locality, its held state and the coordinator's
+    // own status — all straight from the view. The routes are held for the node set
+    // before AND after the membership merge, so no step re-asks for them.
+    applyMeshStatusViewRoutes(ctx, view);
+    await applyMeshMembership(ctx, view.membership);
     applyMeshStatusViewRoutes(ctx, view);
     const { mesh } = ctx;
 
     const heldNodeState = parseCoordinatorHeldNodeState(view.status);
-    const recoveryByNode = await readRecoveryContexts(ctx, mesh.nodes.map(n => n.id)).catch(() => new Map<string, Record<string, unknown>>());
+    const recoveryByNode = readViewRecovery(view, mesh.nodes.map(n => n.id));
     const runtimeAnswers = { local: localStatusProbe(view.localStatus), held: heldNodeState };
 
     // Assemble all nodes in parallel — held git (above) + session collection per node.
@@ -215,7 +227,10 @@ export async function meshStatus(outerCtx: MeshContext, args: { includeStaleDire
 
         // Related repos are not part of the coordinator-held state: a remote node's
         // related repo is listed without a live probe (mesh_git_status reads it live).
-        const relatedRepos = await collectRelatedRepoStatuses(ctx, node, { localOnly: true });
+        const relatedRepos = await collectRelatedRepoStatuses(ctx, node, {
+            localOnly: true,
+            readGitStatus: (workspace) => readViewRelatedRepoGit(view, workspace),
+        });
         if (relatedRepos.length) entry.relatedRepos = relatedRepos;
 
         // Sessions / daemon build / upgrade marker: a node served by ANOTHER daemon
@@ -302,13 +317,7 @@ export async function meshStatus(outerCtx: MeshContext, args: { includeStaleDire
     // dispatches and records (+ turn outcomes); the inputs come back only for the
     // transcript-reconcile pass below. buildMeshActiveWork never reads `task.input`
     // (MESH-IMAGE-DISPATCH), and no queue row reaches this response from here.
-    const activeWorkView = await readActiveWorkFromDaemon(ctx, {
-        nodes: results,
-        recordTail: 200,
-        includeInputs: true,
-        includeSummary: true,
-        includeSchedulingRuntime: true,
-    });
+    const activeWorkView = readViewActiveWork(view);
     const ledgerSummary = activeWorkView.summary as unknown as MeshLedgerSummaryView;
     // Scheduling-runtime projection (load-balancer's live view): tie-break strategy,
     // global parallel caps + consumption, and per-node load / priority / provider caps
@@ -833,7 +842,7 @@ export async function meshStatus(outerCtx: MeshContext, args: { includeStaleDire
             // Computed in the daemon (mission_list_query meshStatusView) — this
             // process no longer opens the daemon's store to re-read the whole queue
             // once per live mission.
-            const { live, historyFold } = await readStatusMissionsCompact(ctx);
+            const { live, historyFold } = readViewMissionsCompact(view);
             // Bound the live-mission detail by byte budget, newest-active first.
             // Overflow folds into foldedMissions so every live id stays addressable.
             const ranked = [...live].sort((a, b) =>
@@ -866,13 +875,13 @@ export async function meshStatus(outerCtx: MeshContext, args: { includeStaleDire
             // Rows from the daemon's projection; every stats rollup from ONE batched
             // task_stats_query (was one IPC round trip — and one full queue + record
             // pass in the daemon — per mission).
-            const missions = await readStatusMissionsVerbose(ctx);
+            const missions = readViewMissionsVerbose(view);
             if (missions.length > 0) response.missions = missions;
         }
     } catch { /* mission read is best-effort */ }
 
     try {
-        const pendingEvents = await drainCoordinatorPendingEvents(ctx);
+        const pendingEvents = drainViewPendingEvents(ctx, view);
         const asyncRefineJobs = buildMeshAsyncRefineJobs({
             meshId: mesh.id,
             ledgerEntries,

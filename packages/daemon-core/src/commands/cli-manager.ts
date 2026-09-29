@@ -1,102 +1,51 @@
 /**
  * DaemonCliManager — CLI session creation, management, and command handling
  *
- * Separated from adhdev-daemon.ts.
- * CLI cases of createAdapter, startCliSession, stopCliSession, executeDaemonCommand extracted to independent module extract.
+ * Separated from adhdev-daemon.ts. Launch (startSession / launch_cli) lives in
+ * cli-manager-launch.ts, hosted-runtime restore in cli-manager-restore.ts and
+ * the agent_command command in cli-manager-agent-command.ts; each takes the
+ * manager through a compiler-checked Pick<DaemonCliManager, …> host view.
  */
 
-import * as os from 'os';
-import * as path from 'path';
-import * as crypto from 'crypto';
-import chalk from 'chalk';
 import { createCliAdapter } from '../providers/spec/route.js';
 import type { LaunchableProviderCategory } from '../providers/contracts.js';
 import type { CliProviderModule } from '../cli-adapters/provider-cli-shared.js';
-import { detectCLI } from '../detection/cli-detector.js';
 import { loadConfig } from '../config/config.js';
 import { loadState, saveState } from '../config/state-store.js';
 import { getWorkspaceState, resolveLaunchDirectory } from '../config/workspaces.js';
 import { appendRecentActivity } from '../config/recent-activity.js';
-import { getCoordinatorForSession, listCoordinatorsForWorkspace, pruneDeadMeshCoordinators } from '../mesh/coordinator-registry.js';
-import { DuplicateMeshDispatchError } from '../mesh/mesh-duplicate-dispatch.js';
-import { SessionBusyWithTaskError } from '../mesh/mesh-session-busy-dispatch.js';
-import { meshRecord } from '../mesh/mesh-record.js';
-import { resolveDelegatedWorkerAutoApproveModeForLaunch, logDelegatedWorkerModeDelivery } from '../mesh/delegated-worker-mode-delivery.js';
 import { upsertSavedProviderSession } from '../config/saved-sessions.js';
-import { buildLegacyModelModeSummaryMetadata, normalizeProviderSummaryMetadata } from '../providers/summary-metadata.js';
+import { normalizeProviderSummaryMetadata } from '../providers/summary-metadata.js';
 import { CliProviderInstance } from '../providers/cli-provider-instance.js';
-import { AcpProviderInstance } from '../providers/acp-provider-instance.js';
 import type { ProviderInstanceManager } from '../providers/provider-instance-manager.js';
 import { ProviderLoader } from '../providers/provider-loader.js';
-import { normalizeInputEnvelope, type ProviderModule } from '../providers/contracts.js';
 import type { CliAdapter } from '../cli-adapter-types.js';
 import { drainInFlightSubmits, type SubmitDrainResult } from './cli-manager-submit-drain.js';
 import type { PtyTransportFactory } from '../cli-adapters/pty-transport.js';
 import type { SessionRegistry } from '../sessions/registry.js';
 import type { ProviderInstance } from '../providers/provider-instance.js';
 import { LOG } from '../logging/logger.js';
-import { shouldRestoreHostedRuntime } from './hosted-runtime-restore.js';
-import { evaluateMeshStopTaskScope } from './mesh-stop-task-scope.js';
-import { mintLegacyMessageId, readMeshContext, readMessageId, readOutboundOrigin, readSendPolicy, type AgentCommandArgs } from './command-args.js';
+import { type AgentCommandArgs } from './command-args.js';
 import { createSessionInputService, type SessionInputService, type SessionInputTarget } from '../sessions/session-input-service.js';
 import { buildSessionInputTarget, type SessionInputAdapterLike, type SessionInputInstanceLike } from '../sessions/session-input-target.js';
-import { dispatchMessageId } from '../mesh/mesh-queue-dispatch-evidence.js';
-import type { SubmitOutcome } from '@adhdev/mesh-shared';
-import { expandModelLaunchArgs, resolveModelLaunchValue } from './model-launch-args.js';
-import { readModelCache } from '../models/registry.js';
 import {
-    buildRestoredLaunchRecord,
-    buildSessionLaunchRecord,
-    inferLaunchedBy,
-    readLaunchProvenanceArgs,
-    resolveProviderDefaultModel,
-    type LaunchProvenanceArgs,
     type SessionLaunchRecord,
-    type SessionLaunchedBy,
 } from '../sessions/launch-record.js';
 import {
-    loadPreLaunchTrustFromSpecPath,
-    resolveLaunchTrustPlan,
     type ResolvedTrustPlan,
 } from '../providers/trust-provenance-ledger.js';
-import {
-    type CoordinatorDelegatedCliLaunchOptionsInput,
-    type CoordinatorDelegatedCliLaunchOptions,
-    buildCoordinatorDelegatedCliLaunchOptions,
-    resolveHostedSpawnedAtMs,
-} from './cli-delegated-launch.js';
-export {
-    type CoordinatorDelegatedCliLaunchOptionsInput,
-    type CoordinatorDelegatedCliLaunchOptions,
-    buildCoordinatorDelegatedCliLaunchOptions,
-    resolveHostedSpawnedAtMs,
-};
-
-export { expandModelLaunchArgs } from './model-launch-args.js';
-
-import { deriveWorkerMcpDeliveryStatus, type WorkerMcpDeliveryStatus } from '../mesh/worker-mcp-isolation.js';
+import { resolveHostedSpawnedAtMs } from './cli-delegated-launch.js';
 
 import {
-    commandExists,
     normalizeDirForCompare,
 } from './cli-manager-agent-status.js';
 import {
     type CliLaunchMode,
-    type CliSessionBinding,
-    applyAutoApproveModeLaunchArgs,
-    expandThinkingLaunchArgs,
-    resolveCliSessionBinding,
-    supportsExplicitSessionResume,
 } from './cli-session-binding.js';
-export {
-    type CliLaunchMode,
-    type CliSessionBinding,
-    applyAutoApproveModeLaunchArgs,
-    expandThinkingLaunchArgs,
-    resolveCliSessionBinding,
-    supportsExplicitSessionResume,
-};
-
+import { startSession, launchCli } from './cli-manager-launch.js';
+import { restoreHostedSessions } from './cli-manager-restore.js';
+import { agentCommand } from './cli-manager-agent-command.js';
+import { colorize, resolveLaunchProvenance, type CommandResult, type CliStartOptions } from './cli-manager-launch.js';
 
 export interface CliManagerDeps {
  /** P2P — PTY output transmit */
@@ -108,9 +57,6 @@ export interface CliManagerDeps {
     listHostedCliRuntimes?: () => Promise<HostedCliRuntimeDescriptor[]>;
     hostedRuntimeManagerTag?: string;
 }
-
-type CommandResult = { success: boolean;[key: string]: unknown };
-
 
 export interface CliTransportFactoryParams {
     runtimeId: string;
@@ -174,133 +120,20 @@ export interface HostedCliRuntimeDescriptor {
     launchRecord?: unknown;
 }
 
-type CliPresentationInstance = ProviderInstance & {
-    getPresentationMode?(): 'terminal' | 'chat';
-};
-
-type ChalkColorFn = (text: string) => string;
-type ChalkLike = Partial<Record<'red' | 'green' | 'yellow' | 'cyan', ChalkColorFn>>;
-
-const chalkModule = chalk as unknown as ChalkLike & { default?: ChalkLike };
-const chalkApi: ChalkLike | null = typeof chalkModule.yellow === 'function'
-    ? chalkModule
-    : chalkModule.default || null;
-
-function colorize(color: 'red' | 'green' | 'yellow' | 'cyan', text: string): string {
-    const fn = chalkApi?.[color];
-    return typeof fn === 'function' ? fn(text) : text;
-}
-
 type CliAdapterWithExtraArgs = CliAdapter & {
     extraArgs?: string[];
 };
-
-/** CANCEL-STOP-TASK-SCOPE: per-turn task binding, set when the turn was submitted. */
-type CliAdapterWithTurnTaskId = CliAdapter & {
-    currentTurnTaskId?: string;
-};
-
-type CliStartOptions = {
-    resumeSessionId?: string;
-    settingsOverride?: Record<string, any>;
-    extraEnv?: Record<string, string>;
-    /** Launch-planning result. Null explicitly suppresses unresolved array trust. */
-    resolvedTrustPlan?: ResolvedTrustPlan | null;
-    /**
-     * WORKER-MCP: pre-generated runtime session id.
-     *
-     * startSession normally mints its own `key`, but a delegated worker launch
-     * must write its MCP config — which carries a bind naming this session —
-     * BEFORE the process spawns, and the config write happens in the caller.
-     * Passing the id in is what lets both agree on one value; without it the
-     * bind would name a session id that does not exist yet, and the exchange
-     * would never resolve. Ignored (and a fresh uuid minted) when absent, so
-     * every other caller is unaffected.
-     */
-    presetSessionKey?: string;
-    /** BRAIN-ROUTING thinking axis: standard level ('low'|'medium'|'high') applied
-     *  at launch via the provider's thinkingLaunchArgs (CLI) or setConfigOption
-     *  ('thought_level', ACP). Best-effort — ignored by providers with no support. */
-    initialThinkingLevel?: string;
-    /**
-     * Phase E launch provenance: who launched the session and where the model /
-     * thinking values came from. Absent → `api` launcher, `unspecified` sources.
-     */
-    launchProvenance?: LaunchProvenanceArgs & { launchedBy?: SessionLaunchedBy };
-};
-
-/**
- * `agent_command send_chat` result from the one `SubmitOutcome` (D2). A refusal
- * THROWS — the mesh dispatch lifecycle (deliverTaskToSession) treats a resolved
- * command as a delivery receipt and a rejection as a dispatch failure, and the
- * router reports a throw as `{success:false, error}`. `status:'queued'` is the
- * driver's authoritative "parked, not yet written" (never a pre-send guess).
- */
-function meshSubmitResult(outcome: SubmitOutcome, sessionKey: string): CommandResult {
-    switch (outcome.kind) {
-        case 'delivered':
-            return {
-                success: true,
-                status: 'generating',
-                submitted: outcome.route !== 'agent_queue',
-                ...(outcome.route ? { route: outcome.route } : {}),
-                ...(outcome.interrupt ? { interrupted: true, interruptKey: outcome.interrupt.keyName, interruptConfidence: outcome.interrupt.confidence } : {}),
-            };
-        case 'queued':
-            return {
-                success: true,
-                status: 'queued',
-                queued: true,
-                queuedReason: 'driver_fifo_parked',
-                position: outcome.position,
-                sent: false,
-                submitted: false,
-                ...(outcome.interrupt ? { interrupted: true, interruptKey: outcome.interrupt.keyName, interruptConfidence: outcome.interrupt.confidence } : {}),
-            };
-        case 'duplicate':
-            LOG.warn('MeshDispatch', `Suppressed duplicate submission on session ${sessionKey}: messageId ${outcome.of} was already submitted — not re-injecting`);
-            return { success: true, status: 'generating', duplicateSuppressed: true, messageId: outcome.of };
-        case 'refused': {
-            const error = new Error(outcome.message || `send refused: ${outcome.reason}`) as Error & { reason?: string; restored?: boolean };
-            error.reason = outcome.reason;
-            if (outcome.restored !== undefined) error.restored = outcome.restored;
-            throw error;
-        }
-    }
-}
 
 /** Grace between a session reporting stopped/error and its reclamation — long
  *  enough for the final status/mesh events to flush, see scheduleAutoClean. */
 const AUTO_CLEAN_DELAY_MS = 5_000;
 
-/**
- * Phase E: `launch_cli` provenance. An explicit, validated `launchedBy` wins;
- * otherwise mesh settings mean a mesh launch and anything else is an API caller.
- */
-function resolveLaunchProvenance(
-    args: unknown,
-    settings: Record<string, unknown> | undefined,
-): LaunchProvenanceArgs & { launchedBy: SessionLaunchedBy } {
-    const declared = readLaunchProvenanceArgs(args);
-    return { ...declared, launchedBy: declared.launchedBy ?? inferLaunchedBy(settings) };
-}
-
-/**
- * Recent-activity / saved-session summary, derived from the launch record
- * rather than from the raw launch argument. It carries the REQUESTED model only:
- * a resume re-requests it, and a provider default must not turn into an
- * explicit pick on resume.
- */
-function launchSummaryMetadata(record: SessionLaunchRecord) {
-    return buildLegacyModelModeSummaryMetadata({ model: record.model.requested });
-}
-
 // ─── DaemonCliManager ────────────────────────────
 
 export class DaemonCliManager {
     readonly adapters = new Map<string, CliAdapter>();
-    private deps: CliManagerDeps;
-    private providerLoader: ProviderLoader;
+    deps: CliManagerDeps;
+    providerLoader: ProviderLoader;
     /**
      * The ONE send funnel (wiring-unification D2): every input into a session
      * this manager hosts — mesh `agent_command`, dashboard `send_chat` (via the
@@ -337,33 +170,13 @@ export class DaemonCliManager {
         });
     }
 
- // ─── Key create ─────────────────────────────────
-
-    getCliKey(cliType: string, dir: string): string {
-        const hash = require('crypto').createHash('md5').update(require('path').resolve(dir)).digest('hex').slice(0, 8);
-        return `${cliType}_${hash}`;
-    }
-
-    getSessionPresentationMode(sessionId: string): 'terminal' | 'chat' | null {
-        if (!sessionId) return null;
-        const instance = this.deps.getInstanceManager()?.getInstance(sessionId) as CliPresentationInstance | undefined;
-        const mode = instance?.category === 'cli'
-            ? instance.getPresentationMode?.()
-            : null;
-        return mode === 'chat' || mode === 'terminal' ? mode : null;
-    }
-
-    isTerminalSession(sessionId: string): boolean {
-        return this.getSessionPresentationMode(sessionId) === 'terminal';
-    }
-
     /** The provider loader's resolved channel, when it exposes one (test doubles may not). */
-    private readProviderChannel(): string | undefined {
+    readProviderChannel(): string | undefined {
         const channel = (this.providerLoader as { channel?: unknown }).channel;
         return typeof channel === 'string' ? channel : undefined;
     }
 
-    private persistRecentActivity(entry: {
+    persistRecentActivity(entry: {
         kind: LaunchableProviderCategory;
         providerType: string;
         providerName: string;
@@ -416,7 +229,7 @@ export class DaemonCliManager {
         }) || undefined;
     }
 
-    private createAdapter(
+    createAdapter(
         cliType: string,
         workingDir: string,
         cliArgs: string[] | undefined,
@@ -471,7 +284,7 @@ export class DaemonCliManager {
      * inside the delay window must not be reclaimed by its predecessor's timer
      * (the old `has(key)` form would have removed the new session).
      */
-    private scheduleAutoClean(key: string, adapter: CliAdapter, terminalStatus: string): void {
+    scheduleAutoClean(key: string, adapter: CliAdapter, terminalStatus: string): void {
         setTimeout(() => {
             if (this.adapters.get(key) !== adapter) return;
             const instanceManager = this.deps.getInstanceManager();
@@ -514,7 +327,7 @@ export class DaemonCliManager {
         }, 3000);
     }
 
-    private async registerCliInstance(
+    async registerCliInstance(
         key: string,
         normalizedType: string,
         cliType: string,
@@ -679,418 +492,7 @@ export class DaemonCliManager {
 
         this.startCliExitMonitor(key);
     }
-
- // ─── Session start/management ──────────────────────────────
-
-    async startSession(
-        cliType: string,
-        workingDir: string,
-        cliArgs?: string[],
-        initialModel?: string,
-        options?: CliStartOptions,
-    ): Promise<{ runtimeSessionId: string; providerSessionId?: string }> {
-        const trimmed = (workingDir || '').trim();
-        if (!trimmed) throw new Error('working directory required');
-        const resolvedDir = trimmed.startsWith('~')
-            ? trimmed.replace(/^~/, os.homedir())
-            : path.resolve(trimmed);
-
- // cliType normalize (Resolve alias)
-        const normalizedType = this.providerLoader.resolveAlias(cliType);
-        const rawProvider = this.providerLoader.getByAlias(cliType);
-        const provider = rawProvider ? (this.providerLoader.resolve(normalizedType) || rawProvider) : undefined;
-        if (provider && (provider.category === 'cli' || provider.category === 'acp') && !this.providerLoader.isMachineProviderEnabled(normalizedType)) {
-            const displayName = provider.displayName || provider.name || normalizedType;
-            throw new Error(
-                `${displayName} is disabled on this machine.\n` +
-                `Enable and detect this provider from the Machine Providers page before starting a runtime.`
-            );
-        }
-
- // Create UUID-based key (allows separate instances even for same type+dir).
- // A delegated worker launch supplies this id up front so the MCP config it
- // already wrote can name this session (see CliStartOptions.presetSessionKey).
-        const key = options?.presetSessionKey?.trim() || crypto.randomUUID();
-
-        // TRUST-PROVENANCE C: user launches retain the existing real-HOME
-        // behavior, but the path is resolved here in launch planning. A
-        // delegated launch must provide its worker-private plan explicitly;
-        // absence is represented as null so no daemon-HOME fallback is possible.
-        if (provider && provider.category === 'cli' && options?.resolvedTrustPlan === undefined) {
-            const declaredTrust = loadPreLaunchTrustFromSpecPath(
-                (provider as unknown as { _resolvedSpecPath?: string })._resolvedSpecPath,
-            );
-            const delegated = options?.settingsOverride?.launchedByCoordinator === true;
-            const resolvedTrustPlan = !delegated && declaredTrust
-                ? resolveLaunchTrustPlan({
-                    provider: normalizedType,
-                    workspace: resolvedDir,
-                    trust: declaredTrust,
-                    storeHome: os.homedir(),
-                    scope: 'user',
-                    origin: 'user_confirmed',
-                    sessionKey: key,
-                    lifecycle: { kind: 'persistent', expiresAt: null },
-                })
-                : null;
-            options = { ...options, resolvedTrustPlan };
-        }
-
-        // (3) Session-anchored mesh routing: when launching a mesh COORDINATOR session
-        // (settings.meshCoordinatorFor set), expose this session's OWN runtime id to its MCP
-        // server via env. The MCP server is spawned by the CLI as a child and inherits this
-        // env, so the MCP layer can stamp ADHDEV_COORDINATOR_SESSION_ID as the originating
-        // coordinator on every dispatch (→ MeshContext.coordinatorSessionId → worker
-        // meshCoordinatorSessionId → completion targetCoordinatorSessionId → strict route).
-        // `key` IS the instance id findLiveCoordinators matches on, so the stamp and the live
-        // session agree. Re-applied on every (re)launch, so it always reflects the current id;
-        // a stale value only survives if the CLI process outlives a daemon restart, in which
-        // case routing falls back to the daemon level (no wedge — see mesh-reconcile-loop).
-        {
-            const coordinatorMeshId = (options?.settingsOverride as Record<string, unknown> | undefined)?.meshCoordinatorFor;
-            if (typeof coordinatorMeshId === 'string' && coordinatorMeshId.trim()) {
-                options = { ...options, extraEnv: { ...(options?.extraEnv || {}), ADHDEV_COORDINATOR_SESSION_ID: key } };
-            }
-        }
-
-        const sessionRegistry = this.deps.getSessionRegistry?.() || null;
-
- // ─── ACP category handle ───
-        if (provider && provider.category === 'acp') {
-            const instanceManager = this.deps.getInstanceManager();
-            if (!instanceManager) throw new Error('InstanceManager not available');
-            const resolvedProvider = this.providerLoader.resolve(normalizedType) || provider;
-
- // Check if command is installed
-            const spawnCmd = resolvedProvider.spawn?.command;
-            if (spawnCmd && !commandExists(spawnCmd)) {
-                const installInfo = provider.install || `Install: check ${provider.displayName || provider.name} documentation`;
-                throw new Error(
-                    `${provider.displayName || provider.name} is not installed.\n` +
-                    `Command '${spawnCmd}' not found.\n\n` +
-                    `${installInfo}`
-                );
-            }
-
-            console.log(colorize('cyan', `  🔌 Starting ACP agent: ${provider.name} (${provider.type}) in ${resolvedDir}`));
-
-            const acpInstance = new AcpProviderInstance(resolvedProvider, resolvedDir, cliArgs);
-            await instanceManager.addInstance(key, acpInstance, {
-                settings: this.providerLoader.getSettings(normalizedType),
-            });
-            const sessionId = acpInstance.getInstanceId();
-            sessionRegistry?.register({
-                sessionId,
-                parentSessionId: null,
-                providerType: normalizedType,
-                transport: 'acp',
-                adapterKey: key,
-                instanceKey: key,
-                workspace: resolvedDir,
-            }, 'launch');
-
- // Register ACP entry in adapter map (getStatus queries from acpInstance in real-time)
-            this.adapters.set(key, {
-                cliType: normalizedType,
-                cliName: provider.name,
-                workingDir: resolvedDir,
-                _acpInstance: acpInstance,
-                spawn: async () => {},
-                shutdown: () => { instanceManager.removeInstance(key); },
-                sendMessage: async (text: string) => {
-                    const input = normalizeInputEnvelope(text);
-                    // SEND-RECORD-SYMMETRY: this shim is how the mesh funnel reaches an
-                    // ACP provider (it is awaited as an adapter). Swallowing the
-                    // acknowledgement here would reintroduce the false success the
-                    // instance-level contract now reports — a refused send (no live
-                    // session, or a prompt already in flight) must reach the caller.
-                    const outcome = await acpInstance.onEvent('send_message', { input });
-                    if (outcome && !outcome.success) {
-                        throw new Error(outcome.error || 'ACP send was not acknowledged');
-                    }
-                },
-                getStatus: () => {
-                    const state = acpInstance.getState();
-                    return {
-                        status: state.status,
-                        messages: state.activeChat?.messages || [],
-                        activeModal: state.activeChat?.activeModal || null,
-                    };
-                },
-                cancel: () => { instanceManager.removeInstance(key); },
-                isProcessing: () => false,
-                isReady: () => true,
-                setOnStatusChange: () => {},
-                setOnPtyData: () => {},
-            });
-
-            console.log(colorize('green', `  ✓ ACP agent started: ${provider.name} in ${resolvedDir}`));
-
- // If initialModel exists, change model after session start
-            let acpModelApplied = false;
-            if (initialModel) {
-                try {
-                    await acpInstance.setConfigOption('model', initialModel);
-                    acpModelApplied = true;
-                    console.log(colorize('green', `  🤖 Initial model set: ${initialModel}`));
-                } catch (e: any) {
-                    LOG.warn('CLI', `[ACP] Initial model set failed: ${e?.message}`);
-                }
-            }
-
- // Brain routing thinking axis for ACP: route the standard level through the
- // agent's thought_level config option. Best-effort — throws if the agent declares
- // no thought_level category (see setConfigOption), so we swallow and warn.
-            let acpThinkingApplied = false;
-            if (options?.initialThinkingLevel) {
-                const lvl = options.initialThinkingLevel;
-                try {
-                    await acpInstance.setConfigOption('thought_level', lvl);
-                    acpThinkingApplied = true;
-                    console.log(colorize('green', `  🧠 Initial thinking level set: ${lvl}`));
-                } catch (e: any) {
-                    LOG.warn('CLI', `[ACP] Initial thinking level set failed (provider may not support thought_level): ${e?.message}`);
-                }
-            }
-
-            // Phase E: the launch record. ACP applies values through
-            // setConfigOption, so `launchValue` is the requested value when the
-            // call succeeded and absent when it failed.
-            const acpLaunchRecord = buildSessionLaunchRecord({
-                sessionId,
-                providerType: normalizedType,
-                providerVersion: (resolvedProvider as { providerVersion?: string }).providerVersion,
-                providerChannel: this.readProviderChannel(),
-                launchedBy: options?.launchProvenance?.launchedBy ?? 'api',
-                launchedAt: Date.now(),
-                workspace: resolvedDir,
-                model: {
-                    requested: initialModel,
-                    declaredSource: options?.launchProvenance?.modelSource,
-                    launchValue: acpModelApplied ? initialModel : undefined,
-                    providerDefault: resolveProviderDefaultModel(
-                        readModelCache(normalizedType),
-                        resolvedProvider.modelOptions,
-                        resolvedProvider.modelLaunchValueMap,
-                    ),
-                },
-                thinkingLevel: {
-                    requested: options?.initialThinkingLevel,
-                    declaredSource: options?.launchProvenance?.thinkingLevelSource,
-                    launchValue: acpThinkingApplied ? options?.initialThinkingLevel : undefined,
-                },
-            });
-            sessionRegistry?.setLaunchRecord?.(sessionId, acpLaunchRecord, 'launch');
-            acpInstance.setModelObserver((model, observedAt) => {
-                sessionRegistry?.observeLaunchAxis?.(sessionId, 'model', model, observedAt);
-            });
-
-            this.persistRecentActivity({
-                kind: 'acp',
-                providerType: normalizedType,
-                providerName: provider.displayName || provider.name || normalizedType,
-                workspace: resolvedDir,
-                summaryMetadata: launchSummaryMetadata(acpLaunchRecord),
-                sessionId,
-                title: provider.displayName || provider.name || normalizedType,
-            });
-            return { runtimeSessionId: sessionId };
-        }
-
- // ─── CLI category handling (existing) ───
-        const cliInfo = await detectCLI(cliType, this.providerLoader);
-        if (!cliInfo) {
-            const installHint = provider?.install || '';
-            const displayName = provider?.displayName || provider?.name || cliType;
-            const spawnCmd = this.providerLoader.getSpawnCommand(normalizedType, provider?.spawn?.command || cliType);
-            throw new Error(
-                `${displayName} is not installed.\n` +
-                `Command '${spawnCmd}' is not available.\n` +
-                (installHint ? `\n${installHint}\n` : '') +
-                `\nRun 'adhdev doctor' for detailed diagnostics.`
-            );
-        }
-
-        console.log(colorize('yellow', `  ⚡ Starting CLI ${cliType} in ${resolvedDir}...`));
-        if (provider) {
-            console.log(colorize('cyan', `  📦 Using provider: ${provider.name} (${provider.type})`));
-        }
-
-        const launchSettings = {
-            ...this.providerLoader.getSettings(normalizedType),
-            ...(options?.settingsOverride || {}),
-        };
-        const versionResolvedProvider = provider
-            ? (this.providerLoader.resolve(cliType, { version: cliInfo.version }) || provider)
-            : undefined;
-        const autoApproveLaunch = applyAutoApproveModeLaunchArgs(versionResolvedProvider, cliArgs, launchSettings);
-        const launchProvider = autoApproveLaunch.provider || provider;
-        const cliArgsWithAutoApprove = autoApproveLaunch.cliArgs;
-
- // ─── Model axis (MAGI kind-panel): expand initialModel → launch args ───
- // For a plain CLI provider the model is selected at spawn time via the manifest's
- // modelLaunchArgs template ('{{model}}' → the requested model). ACP providers took
- // the setConfigOption path above and never reach here. A provider with no template,
- // or no requested model, is a no-op — model selection is best-effort and must never
- // fail a launch. The model args are prepended so a caller's explicit cliArgs (e.g. a
- // resume flag) still win positionally where order matters.
-        const modelLaunchArgs = expandModelLaunchArgs(
-            launchProvider?.modelLaunchArgs,
-            initialModel,
-            launchProvider?.modelLaunchValueMap,
-        );
-        const cliArgsWithModel = modelLaunchArgs
-            ? [...modelLaunchArgs, ...(cliArgsWithAutoApprove || [])]
-            : cliArgsWithAutoApprove;
-        if (initialModel && !modelLaunchArgs) {
-            LOG.warn('CLI', `[${normalizedType}] initialModel='${initialModel}' requested but provider declares no modelLaunchArgs template — launching without model selection.`);
-        }
-
- // ─── Thinking axis (brain routing): expand initialThinkingLevel → launch args ───
- // Parallel to the model axis: a plain CLI provider selects reasoning effort at spawn
- // via the manifest's thinkingLaunchArgs template ('{{level}}' → the mapped level).
- // Best-effort; a provider with no template (or no requested level) is a no-op. ACP
- // providers route thinking through setConfigOption('thought_level') above.
-        const initialThinkingLevel = options?.initialThinkingLevel;
-        const thinkingLaunchArgs = expandThinkingLaunchArgs(launchProvider?.thinkingLaunchArgs, initialThinkingLevel, launchProvider?.thinkingLevelMap);
-        const cliArgsWithBrain = thinkingLaunchArgs
-            ? [...thinkingLaunchArgs, ...(cliArgsWithModel || [])]
-            : cliArgsWithModel;
-        if (initialThinkingLevel && !thinkingLaunchArgs) {
-            LOG.warn('CLI', `[${normalizedType}] initialThinkingLevel='${initialThinkingLevel}' requested but provider declares no thinkingLaunchArgs template — launching without thinking-level selection.`);
-        }
-
- // ─── Resolve launch options → provider session binding ───
-        const sessionBinding = resolveCliSessionBinding(launchProvider, normalizedType, cliArgsWithBrain, options?.resumeSessionId);
-        const resolvedCliArgs = sessionBinding.cliArgs;
-
-        // ─── Phase E: launch record ───
-        // `launchValue` is what the argv actually carries: the mapped value when
-        // a template consumed the request, absent when no template did (the
-        // warnings above). A runtime-control thinking level (hermes) is applied
-        // after spawn, so it stays requested-only here.
-        const cliLaunchRecord = buildSessionLaunchRecord({
-            sessionId: key,
-            providerType: normalizedType,
-            providerVersion: (launchProvider as { providerVersion?: string } | undefined)?.providerVersion,
-            providerChannel: this.readProviderChannel(),
-            launchedBy: options?.launchProvenance?.launchedBy ?? 'api',
-            launchedAt: Date.now(),
-            workspace: resolvedDir,
-            model: {
-                requested: initialModel,
-                declaredSource: options?.launchProvenance?.modelSource,
-                launchValue: modelLaunchArgs
-                    ? resolveModelLaunchValue(initialModel, launchProvider?.modelLaunchValueMap)
-                    : undefined,
-                providerDefault: resolveProviderDefaultModel(
-                    readModelCache(normalizedType),
-                    launchProvider?.modelOptions,
-                    launchProvider?.modelLaunchValueMap,
-                ),
-            },
-            thinkingLevel: {
-                requested: initialThinkingLevel,
-                declaredSource: options?.launchProvenance?.thinkingLevelSource,
-                launchValue: thinkingLaunchArgs
-                    ? resolveModelLaunchValue(initialThinkingLevel, launchProvider?.thinkingLevelMap)
-                    : undefined,
-            },
-            autoApproveModeId: typeof launchSettings?.autoApproveMode === 'string' ? launchSettings.autoApproveMode : undefined,
-        });
-
- // If InstanceManager exists, manage as CliProviderInstance unified
-        const instanceManager = this.deps.getInstanceManager();
-        if (launchProvider && instanceManager) {
-            const resolvedProvider = launchProvider;
-            await this.registerCliInstance(
-                key,
-                normalizedType,
-                cliType,
-                resolvedDir,
-                resolvedCliArgs,
-                resolvedProvider,
-                launchSettings,
-                false,
-                {
-                    providerSessionId: sessionBinding.providerSessionId,
-                    launchMode: sessionBinding.launchMode,
-                    extraEnv: options?.extraEnv,
-                    resolvedTrustPlan: options?.resolvedTrustPlan,
-                    // PERMISSION-MODE-DUPLICATE: the mode's launchArgs are already in
-                    // resolvedCliArgs; the spec's own base args still need stripping.
-                    ...(autoApproveLaunch.removeArgs?.length ? { removeSpawnArgs: autoApproveLaunch.removeArgs } : {}),
-                    // BRAIN-ROUTING: for a provider with no thinkingLaunchArgs but a
-                    // runtime reasoning control (hermes), apply the level post-launch.
-                    // The launch-arg providers (claude/codex) already consumed it at spawn.
-                    ...(options?.initialThinkingLevel && !provider?.thinkingLaunchArgs ? { initialThinkingLevel: options.initialThinkingLevel } : {}),
-                    launchRecord: cliLaunchRecord,
-                    onProviderSessionResolved: ({ providerSessionId, providerName, providerType, workspace }) => {
-                        this.persistRecentActivity({
-                            kind: 'cli',
-                            providerType,
-                            providerName,
-                            providerSessionId,
-                            workspace,
-                            title: providerName,
-                        });
-                    },
-                },
-            );
-            console.log(colorize('green', `  ✓ CLI started: ${cliInfo.displayName} v${cliInfo.version || 'unknown'} in ${resolvedDir}`));
-        } else {
- // Fallback: InstanceManager without directly adapter manage
-            const adapter = this.createAdapter(
-                cliType,
-                resolvedDir,
-                resolvedCliArgs,
-                key,
-                sessionBinding.providerSessionId,
-                false,
-                options?.extraEnv,
-                autoApproveLaunch.removeArgs,
-                options?.resolvedTrustPlan,
-            );
-            try {
-                await adapter.spawn();
-            } catch (spawnErr: any) {
-                LOG.error('CLI', `[${cliType}] Spawn failed: ${spawnErr?.message}`);
-                throw new Error(`Failed to start ${cliInfo.displayName}: ${spawnErr?.message}`);
-            }
-
-            adapter.setOnStatusChange(() => {
-                const status = adapter.getStatus?.();
-                if (status?.status === 'stopped' || status?.status === 'error') {
-                    this.scheduleAutoClean(key, adapter, status.status);
-                }
-            });
-
-            if (typeof adapter.setOnPtyData === 'function') {
-                adapter.setOnPtyData((data: string) => {
-                    this.deps.getP2p()?.broadcastSessionOutput(key, data);
-                });
-            }
-
-            this.adapters.set(key, adapter);
-            console.log(colorize('green', `  ✓ CLI started: ${cliInfo.displayName} v${cliInfo.version || 'unknown'} in ${resolvedDir}`));
-        }
-
-        this.persistRecentActivity({
-            kind: 'cli',
-            providerType: normalizedType,
-            providerName: provider?.displayName || provider?.name || normalizedType,
-            providerSessionId: sessionBinding.providerSessionId,
-            workspace: resolvedDir,
-            summaryMetadata: launchSummaryMetadata(cliLaunchRecord),
-            sessionId: key,
-            title: provider?.displayName || provider?.name || normalizedType,
-        });
-
-        return {
-            runtimeSessionId: key,
-            providerSessionId: sessionBinding.providerSessionId,
-        };
-    }
+    startSession(cliType: string, workingDir: string, cliArgs?: string[], initialModel?: string, options?: CliStartOptions): Promise<{ runtimeSessionId: string; providerSessionId?: string }> { return startSession(this, cliType, workingDir, cliArgs, initialModel, options); }
 
     async stopSession(key: string): Promise<void> {
         return this.stopSessionWithMode(key, 'hard');
@@ -1124,11 +526,6 @@ export class DaemonCliManager {
         }
     }
 
-    shutdownAll(): void {
-        for (const adapter of this.adapters.values()) adapter.shutdown();
-        this.adapters.clear();
-    }
-
     /** ENTER-LOSS layer ① — shutdown drain gate for in-flight submits (the
      *  2026-09-10 stranded-composer incident). Awaited by
      *  shutdownDaemonComponents BEFORE detachAll(); immediate no-op when nothing
@@ -1144,250 +541,7 @@ export class DaemonCliManager {
         }
         this.adapters.clear();
     }
-
-    async restoreHostedSessions(records?: HostedCliRuntimeDescriptor[]): Promise<number> {
-        const instanceManager = this.deps.getInstanceManager();
-        if (!instanceManager) return 0;
-        const sessions = records || await this.deps.listHostedCliRuntimes?.() || [];
-        let restored = 0;
-        const restoredBindings = new Set<string>();
-        const managerTag = this.deps.hostedRuntimeManagerTag;
-
-        // CORDBADGE worker-overbind guard pre-pass: the workspace-scoped coordinator
-        // rebind fallback (below) recovers a coordinator's mark when its runtimeId
-        // changed across restart. But a delegated WORKER session that shares the
-        // coordinator's workspace+cliType ALSO misses the exact by-id lookup, so the
-        // fallback would wrongly stamp it with the lone registered coordinator's mesh
-        // mark (the reported bug: a worker shown with role:coordinator after restart).
-        // Two batch-level signals let the fallback refuse to mark a worker:
-        //   - restoredRuntimeIds: every runtimeId in this restore batch. If a
-        //     registered coordinator's own sessionId appears here, that coordinator is
-        //     being restored under its known id (the exact match binds it), so ANY
-        //     other same-workspace session is a worker — not the renamed coordinator.
-        //   - workspaceTypeCounts: how many sessions in the batch share a
-        //     workspace+cliType. >1 means we cannot tell the coordinator from a worker
-        //     even if the coordinator's id changed, so we stay unbound (ambiguous).
-        const restoredRuntimeIds = new Set<string>();
-        const workspaceTypeCounts = new Map<string, number>();
-        for (const r of sessions) {
-            if (!r?.runtimeId || !r?.cliType || !r?.workspace) continue;
-            restoredRuntimeIds.add(r.runtimeId);
-            const key = `${r.workspace}::${r.cliType}`;
-            workspaceTypeCounts.set(key, (workspaceTypeCounts.get(key) || 0) + 1);
-        }
-        // STALE-COORDINATOR-PRUNE: registry entries adopted through the workspace
-        // rebind fallback below. Such an entry belongs to a LIVE coordinator whose
-        // runtimeId changed across restart, so its registered sessionId is (by
-        // definition) absent from the live-runtime list — the post-loop prune must
-        // exempt it, or the fix would delete the very entry the fallback just used
-        // and reintroduce the badge loss on the NEXT restart.
-        const rebindAdoptedSessionIds = new Set<string>();
-
-        for (const record of sessions) {
-            if (!record?.runtimeId || !record?.cliType || !record?.workspace) continue;
-            if (!shouldRestoreHostedRuntime(record, managerTag)) {
-                LOG.info(
-                    'CLI',
-                    `↷ Skipping hosted runtime restore owned by ${record.managedBy}: ${record.runtimeKey || record.runtimeId}`
-                );
-                continue;
-            }
-            if (this.adapters.has(record.runtimeId) || instanceManager.getInstance(record.runtimeId)) continue;
-            const normalizedType = this.providerLoader.resolveAlias(record.cliType);
-            const providerMeta = this.providerLoader.getMeta(normalizedType);
-            if (!providerMeta || providerMeta.category !== 'cli') continue;
-
-            const resolvedProvider = this.providerLoader.resolve(normalizedType) || providerMeta;
-            const sessionBinding = resolveCliSessionBinding(
-                resolvedProvider,
-                normalizedType,
-                record.cliArgs,
-                record.providerSessionId,
-            );
-            const bindingKey = [
-                normalizedType,
-                record.workspace,
-                sessionBinding.providerSessionId || record.runtimeId,
-            ].join('::');
-            if (restoredBindings.has(bindingKey)) {
-                LOG.info(
-                    'CLI',
-                    `↷ Skipping duplicate hosted runtime restore: ${record.runtimeKey || record.runtimeId} (${normalizedType} @ ${record.workspace}) binding=${sessionBinding.providerSessionId || 'runtime'}`
-                );
-                continue;
-            }
-            // Re-establish the launch-time settings a fresh launch applies. startSession
-            // seeds every new instance with { ...providerLoader.getSettings(type), ...override };
-            // passing a bare {} here on restart silently dropped TWO launch settings, so a
-            // restored session diverged from a freshly-launched one:
-            //   - autoApprove (a provider/machine setting from getSettings) → a restored
-            //     coordinator self-session lost auto-approve and re-prompted on every tool call.
-            //   - meshCoordinatorFor (the coordinator launch's settingsOverride) → the restored
-            //     session was no longer recognized as this daemon's live CLI coordinator by
-            //     findLiveCoordinators (so pending mesh events stopped draining into its PTY) nor
-            //     surfaced with the coordinator badge via settings. The persisted coordinator
-            //     registry (loaded on boot) is the source of truth to rebuild that mark.
-            // Both restores are provider-agnostic — getSettings is keyed by provider type and the
-            // registry mark is type-independent.
-            const restoredSettings: Record<string, any> = { ...this.providerLoader.getSettings(normalizedType) };
-            // Primary rebind: exact persisted-registry match by runtimeId (stable across
-            // restart, see session-host runtimeId = runtimeRecord.sessionId).
-            let coordinatorEntry = getCoordinatorForSession(record.runtimeId);
-            // CORDBADGE fallback: the by-id match misses when a coordinator's runtime
-            // re-attaches under a different runtimeId than the one it was registered with
-            // (the registry survived, but its key no longer lines up). Without a rebind the
-            // restored session silently loses meshCoordinatorFor → the coordinator badge and
-            // selfIdentification block vanish and pending mesh events stop draining into its
-            // PTY, and the only recovery is a manual coordinator restart. Recover the mark
-            // from the persisted registry scoped to this exact workspace, but ONLY when it is
-            // UNAMBIGUOUS: exactly one registered coordinator for this workspace AND its
-            // cliType matches the restored session's type.
-            //
-            // WORKER-OVERBIND guard: "exactly one registered coordinator" is NOT enough —
-            // a delegated worker session sharing the coordinator's workspace+cliType also
-            // misses the by-id lookup, and the registry holding only the (single) real
-            // coordinator does NOT stop the fallback from projecting that coordinator's
-            // mark onto the worker record. So before adopting the mark we positively rule
-            // the worker out:
-            //   (a) coordinatorPresentById — the registered coordinator's own sessionId is
-            //       in this restore batch, i.e. it is being restored under its known id and
-            //       the exact match already binds it. Then THIS record (which missed) is a
-            //       worker, not the renamed coordinator → do not rebind.
-            //   (b) siblingCount > 1 — more than one session shares this workspace+cliType,
-            //       so even if the coordinator's id changed we cannot tell it from a worker
-            //       → stay unbound (ambiguous).
-            // Anything ambiguous stays unbound (we would rather miss a badge than
-            // mis-attribute one).
-            if (!coordinatorEntry?.meshId && record.workspace) {
-                const workspaceCoordinators = listCoordinatorsForWorkspace(record.workspace)
-                    .filter(e => e.meshId && (!e.cliType || e.cliType === record.cliType));
-                if (workspaceCoordinators.length === 1) {
-                    const candidate = workspaceCoordinators[0];
-                    const coordinatorPresentById = !!candidate.sessionId && restoredRuntimeIds.has(candidate.sessionId);
-                    const siblingCount = workspaceTypeCounts.get(`${record.workspace}::${record.cliType}`) || 1;
-                    if (!coordinatorPresentById && siblingCount === 1) {
-                        coordinatorEntry = candidate;
-                        if (candidate.sessionId) rebindAdoptedSessionIds.add(candidate.sessionId);
-                        LOG.info(
-                            'CLI',
-                            `↻ Rebound coordinator mark by workspace for ${record.runtimeKey || record.runtimeId} (mesh ${candidate.meshId} @ ${record.workspace}); registry key did not match runtimeId`
-                        );
-                    } else {
-                        LOG.info(
-                            'CLI',
-                            `↷ Skipping workspace coordinator rebind for ${record.runtimeKey || record.runtimeId} (${record.cliType} @ ${record.workspace}): ${coordinatorPresentById
-                                ? 'registered coordinator is restoring under its own id — this is a delegated worker'
-                                : `ambiguous (${siblingCount} sessions share this workspace+cliType)`}`
-                        );
-                    }
-                } else if (workspaceCoordinators.length === 0) {
-                    // CORDBADGE-DIAG: the by-id lookup missed AND the workspace fallback has
-                    // NOTHING to rebind to — the registry holds no coordinator for this
-                    // workspace at all (evicted registry, or the coordinator registered under
-                    // a different workspace). Both other branches log; this one was silent,
-                    // which sent the 2026-08-21 badge-loss investigation down the wrong path
-                    // (no 'Rebound' and no 'Skipping' line at all).
-                    LOG.debug(
-                        'CLI',
-                        `No registered coordinator for workspace ${record.workspace} — workspace rebind fallback empty for ${record.runtimeKey || record.runtimeId} (${record.cliType}); the session stays unmarked`
-                    );
-                }
-            }
-            if (coordinatorEntry?.meshId) {
-                restoredSettings.meshCoordinatorFor = coordinatorEntry.meshId;
-            }
-            // RESTART-REBOUND RELAY ENVELOPE (rc.20): re-apply the session-level mesh
-            // membership the launch/dispatch path persisted into the session-host
-            // record meta. A rebuilt instance otherwise carries NONE of it (settings
-            // are in-memory), so a rebound LOCAL mesh worker failed
-            // resolveWorkerDelegateRouting (no_worker_envelope) on its very first
-            // post-restart event, mesh_read_terminal / mesh_send_keys refused it as
-            // non-worker, and the post-completion detach did a FULL clear
-            // (launchedByCoordinator falsy) — stripping the membership a launched
-            // member is supposed to KEEP. This restores membership ONLY; the
-            // task-level envelope (meshActiveTaskId / attemptId / dispatchNonce /
-            // coordinator ids) is re-derived separately with causal guards by
-            // restampReboundMeshWorkerAssignment, so no terminal/stale/
-            // session-mismatched attempt is ever resurrected here.
-            const recordMeshNodeFor = typeof record.meshNodeFor === 'string' && record.meshNodeFor.trim()
-                ? record.meshNodeFor.trim() : '';
-            const recordMeshNodeId = typeof record.meshNodeId === 'string' && record.meshNodeId.trim()
-                ? record.meshNodeId.trim() : '';
-            if (recordMeshNodeFor) restoredSettings.meshNodeFor = recordMeshNodeFor;
-            if (recordMeshNodeId) {
-                restoredSettings.meshNodeId = recordMeshNodeId;
-                // Keep the sticky last-node marker consistent with the active binding
-                // (attachMeshAssignment maintains the same pair at dispatch time).
-                restoredSettings.meshLastNodeId = recordMeshNodeId;
-            }
-            if (record.launchedByCoordinator === true) restoredSettings.launchedByCoordinator = true;
-            try {
-                await this.registerCliInstance(
-                    record.runtimeId,
-                    normalizedType,
-                    record.cliType,
-                    record.workspace,
-                    record.cliArgs,
-                    resolvedProvider,
-                    restoredSettings,
-                    true,
-                    {
-                        providerSessionId: sessionBinding.providerSessionId,
-                        launchMode: 'manual',
-                        // Thread the runtime's REAL past spawn time so the attach restores
-                        // the per-session native-history birth-floor instead of collapsing
-                        // to spawnedAtMs:0 (which disabled the antigravity per-session floor
-                        // and let MAGI replicas claim the coordinator's own conversation).
-                        // Undefined → registerCliInstance keeps the 0 fallback.
-                        attachStartedAtMs: record.startedAtMs,
-                        // Phase E: the provenance stored at spawn, launchedBy → 'restore'
-                        // with the axis sources preserved (see buildRestoredLaunchRecord).
-                        launchRecord: buildRestoredLaunchRecord(record.launchRecord, {
-                            sessionId: record.runtimeId,
-                            providerType: normalizedType,
-                            workspace: record.workspace,
-                            launchedAt: record.startedAtMs ?? Date.now(),
-                        }),
-                    },
-                );
-                restoredBindings.add(bindingKey);
-                restored += 1;
-                LOG.info('CLI', `♻ Restored hosted runtime: ${record.runtimeKey || record.runtimeId} (${record.displayName || record.workspace})`);
-            } catch (error: any) {
-                LOG.warn('CLI', `Failed to restore hosted runtime ${record.runtimeId}: ${error?.message || error}`);
-            }
-        }
-
-        // STALE-COORDINATOR-PRUNE (boot path only): when this is the full boot-time
-        // restore (no explicit records — an ad-hoc single-record restore must NEVER
-        // prune), the fetched list IS the set of live hosted runtimes, so any
-        // persisted coordinator entry whose sessionId is absent is a leftover from
-        // a previous daemon generation: unregisterMeshCoordinator only runs on
-        // explicit stop/exit paths, and an upgrade/restart takes none of them.
-        // Those stale entries accumulate in mesh-coordinators.json and permanently
-        // break the workspace rebind fallback's "exactly one registered
-        // coordinator" unambiguity condition above (the lost-coordinator-badge
-        // bug). Runs AFTER the restore loop so a live coordinator whose runtimeId
-        // changed (adopted via the rebind fallback) is exempted through
-        // rebindAdoptedSessionIds. The live-id set deliberately includes runtimes
-        // owned by OTHER manager tags (shouldRestoreHostedRuntime skips them, but
-        // they are live sessions whose entries must survive).
-        if (!records && typeof this.deps.listHostedCliRuntimes === 'function') {
-            const liveSessionIds = new Set<string>(restoredRuntimeIds);
-            for (const r of sessions) {
-                if (r?.runtimeId) liveSessionIds.add(r.runtimeId);
-            }
-            for (const sessionId of rebindAdoptedSessionIds) liveSessionIds.add(sessionId);
-            for (const entry of pruneDeadMeshCoordinators(liveSessionIds)) {
-                LOG.info(
-                    'CLI',
-                    `🧹 Pruned stale mesh coordinator entry ${entry.sessionId} (mesh ${entry.meshId}${entry.workspace ? ` @ ${entry.workspace}` : ''}, started ${new Date(entry.startedAt || 0).toISOString()}): session is not among the ${liveSessionIds.size} live hosted runtime(s) after daemon restart`
-                );
-            }
-        }
-
-        return restored;
-    }
+    restoreHostedSessions(records?: HostedCliRuntimeDescriptor[]): Promise<number> { return restoreHostedSessions(this, records); }
 
  // ─── Adapter search ─────────────────────────────
 
@@ -1399,14 +553,8 @@ export class DaemonCliManager {
  */
     findAdapter(agentType: string, opts?: { dir?: string; instanceKey?: string }): { adapter: CliAdapter; key: string } | null {
  // 0. UUID direct match (most accurate)
-        if (opts?.instanceKey) {
-            let ik = opts.instanceKey;
- // Strip composite prefix: 'doId:cli:uuid' → 'uuid' or 'doId:uuid' → 'uuid'
-            const colonIdx = ik.lastIndexOf(':');
-            if (colonIdx >= 0) ik = ik.substring(colonIdx + 1);
-            const adapter = this.adapters.get(ik);
-            if (adapter) return { adapter, key: ik };
-        }
+        const direct = this.findAdapterBySessionId(opts?.instanceKey);
+        if (direct) return direct;
  // 1. agentType + dir match.
  //    FAIL-CLOSED when an explicit instanceKey/targetSessionId was named (step 0) but
  //    did not resolve: the caller pinned a SPECIFIC session, so healing by workspace must
@@ -1442,6 +590,7 @@ export class DaemonCliManager {
         return null;
     }
 
+    /** Exact session lookup. Strips a composite prefix: 'doId:cli:uuid' → 'uuid' or 'doId:uuid' → 'uuid'. */
     private findAdapterBySessionId(instanceKey?: string): { adapter: CliAdapter; key: string } | null {
         if (!instanceKey) return null;
         let ik = instanceKey;
@@ -1463,7 +612,7 @@ export class DaemonCliManager {
      * worktree-targeted task on the base session. Returns null when no session
      * is bound to this node so the caller fails closed.
      */
-    private findMeshNodeAdapter(agentType: string, nodeId: string, dir?: string): { adapter: CliAdapter; key: string } | null {
+    findMeshNodeAdapter(agentType: string, nodeId: string, dir?: string): { adapter: CliAdapter; key: string } | null {
         const instanceManager = this.deps.getInstanceManager();
         const targetDir = normalizeDirForCompare(dir);
         let workspaceMatch: { adapter: CliAdapter; key: string } | null = null;
@@ -1484,290 +633,7 @@ export class DaemonCliManager {
         }
         return workspaceMatch;
     }
-
- // ─── CLI command handling ────────────────────────────
-
-    /** `launch_cli`: resolve the launch directory and start (or reuse) a CLI/ACP session. */
-    async launchCli(args: any): Promise<CommandResult> {
-        const cliType = args?.cliType;
-        const config = loadConfig();
-        const resolved = resolveLaunchDirectory(
-            {
-                dir: args?.dir,
-                workspaceId: args?.workspaceId,
-                useDefaultWorkspace: args?.useDefaultWorkspace === true,
-                useHome: args?.useHome === true,
-            },
-            config,
-        );
-        if (!resolved.ok) {
-            const ws = getWorkspaceState(config);
-            return {
-                success: false,
-                error: resolved.message,
-                code: resolved.code,
-                workspaces: ws.workspaces,
-                defaultWorkspacePath: ws.defaultWorkspacePath,
-            };
-        }
-        const dir = resolved.path;
-        const launchSource = resolved.source;
-        if (!cliType) throw new Error('cliType required');
-
-        // ★STORE-RELOAD: check provider-map freshness here — right before
-        // the map is read for a launch, never during a spawn in flight.
-        // Debounced inside the loader (see refreshIfChannelActivationChanged
-        // for the out-of-process activation gap this closes).
-        //
-        // Guarded twice: optional-called (embedders/tests inject duck-typed
-        // loaders with only resolveAlias/getMeta/getResolvedSpecPath) and
-        // wrapped. A stale map is a degradation; a failed spawn is an outage.
-        try {
-            this.providerLoader.refreshIfChannelActivationChanged?.();
-        } catch (e: any) {
-            LOG.warn('ProviderStore', `channel activation refresh failed: ${e?.message || e}`);
-        }
-        const providerType = this.providerLoader.resolveAlias(cliType);
-        const provLookup = this.providerLoader.getMeta(providerType) as ProviderModule | undefined;
-        let settingsOverride = args?.settings && typeof args.settings === 'object' ? args.settings : undefined;
-        // REMOTE-NODE-AUTO-APPROVE-MODE-DELIVERY: the coordinator picks the
-        // delegated-worker auto-approve MODE from `.adhdev/mesh.json`, but it reads
-        // `node.workspace` on ITS OWN filesystem — impossible for a remote node, so a
-        // repo-requested mode was silently replaced by the provider spec default. This
-        // daemon IS the worker machine and `dir` is the real checkout, so re-resolve
-        // the MODE here. ENABLE and the DANGEROUS opt-in stay coordinator-owned; a
-        // workspace with no readable repo config keeps the coordinator's value.
-        if (settingsOverride?.launchedByCoordinator === true) {
-            const envelopeMode = typeof settingsOverride.autoApproveMode === 'string'
-                ? settingsOverride.autoApproveMode
-                : undefined;
-            const modeResolution = resolveDelegatedWorkerAutoApproveModeForLaunch({
-                workspace: dir,
-                providerType,
-                provider: provLookup,
-                settings: settingsOverride,
-            });
-            logDelegatedWorkerModeDelivery(modeResolution, {
-                workspace: dir,
-                providerType,
-                meshNodeId: typeof settingsOverride.meshNodeId === 'string' ? settingsOverride.meshNodeId : undefined,
-                envelopeMode,
-            });
-            if (modeResolution.changed && modeResolution.autoApproveMode) {
-                // Mirror delegatedWorkerAutoApproveSettings' opposite-key clearing so the
-                // mode cannot be bypassed by a stale global boolean.
-                settingsOverride = {
-                    ...settingsOverride,
-                    autoApproveMode: modeResolution.autoApproveMode,
-                    autoApprove: undefined,
-                };
-            }
-        }
-        // WORKER-MCP (design §12.1a): the runtime session id is minted HERE
-        // rather than inside startSession, because the worker's MCP config —
-        // written just below — carries a bind that names this session, and the
-        // config must exist before the CLI process reads it. Passing the id
-        // down via presetSessionKey is what keeps the bind and the live session
-        // agreeing on one value. Only for a delegated launch; every other path
-        // keeps startSession's own uuid.
-        const delegatedSessionKey = settingsOverride?.launchedByCoordinator === true
-            ? crypto.randomUUID()
-            : undefined;
-        const delegatedMeshId = typeof settingsOverride?.meshNodeFor === 'string'
-            ? settingsOverride.meshNodeFor.trim()
-            : '';
-        const delegatedLaunch = settingsOverride?.launchedByCoordinator === true
-            ? buildCoordinatorDelegatedCliLaunchOptions({
-                cliType,
-                workspace: dir,
-                cliArgs: args?.cliArgs,
-                env: args?.env,
-                isolation: provLookup?.meshCoordinator?.delegatedWorkerIsolation,
-                // ★ISOLATION-OBSERVABILITY: the bundle version THIS DAEMON
-                // holds in memory (provLookup is the live map entry) — the
-                // value that diverges from the channel pointer after an
-                // out-of-process activation.
-                providerVersion: provLookup?.providerVersion,
-                // WORKER-MCP: the declared config path is what lets the
-                // daemon write a worker config for the 6 providers that
-                // declare no isolation rules of their own.
-                mcpConfig: provLookup?.meshCoordinator?.mcpConfig,
-                // `provLookup` comes from getMeta(), which returns the
-                // raw map entry — and `_resolvedSpecPath` is only ever
-                // set on resolve()'s deep CLONE, so reading the hidden
-                // field off it yielded undefined for every provider.
-                // That silently disabled pre_launch_trust on the worker
-                // path (no trust plan → no ledgered grant → agy stalled
-                // on its folder-trust prompt in every fresh worktree).
-                resolvedSpecPath: this.providerLoader.getResolvedSpecPath(providerType) ?? undefined,
-                // The runtime session id is the stable launch identity:
-                // two workers on one workspace therefore receive distinct
-                // private HOMEs and distinct provenance usage records.
-                sessionKey: delegatedSessionKey || dir,
-                trustContext: {
-                    ...(delegatedMeshId ? { meshId: delegatedMeshId } : {}),
-                    ...(typeof settingsOverride?.meshNodeId === 'string' && settingsOverride.meshNodeId.trim()
-                        ? { nodeId: settingsOverride.meshNodeId.trim() } : {}),
-                    ...(typeof settingsOverride?.autoLaunchedForQueueTaskId === 'string'
-                        && settingsOverride.autoLaunchedForQueueTaskId.trim()
-                        ? { taskId: settingsOverride.autoLaunchedForQueueTaskId.trim() } : {}),
-                },
-                // Present ⇒ the worker gets a reporting surface (Phase B).
-                // Absent (a delegated launch with no mesh context) ⇒ the
-                // Phase A shape: isolation only, no worker server.
-                ...(delegatedMeshId && delegatedSessionKey
-                    ? {
-                        bindContext: {
-                            meshId: delegatedMeshId,
-                            sessionId: delegatedSessionKey,
-                            ...(typeof settingsOverride?.meshNodeId === 'string' && settingsOverride.meshNodeId.trim()
-                                ? { nodeId: settingsOverride.meshNodeId.trim() }
-                                : {}),
-                            ...(typeof settingsOverride?.autoLaunchedForQueueTaskId === 'string'
-                                && settingsOverride.autoLaunchedForQueueTaskId.trim()
-                                ? { spawnedForTaskId: settingsOverride.autoLaunchedForQueueTaskId.trim() }
-                                : {}),
-                        },
-                    }
-                    : {}),
-            })
-            : null;
-        // ★WORKER-MCP DELIVERY VISIBILITY: classify what the isolation gate above
-        // actually produced into the coordinator-visible {delivered, reason?} shape
-        // (see worker-mcp-isolation.ts doc). `hadBindContext` mirrors the exact
-        // condition used to build `bindContext` above — a delegated launch with no
-        // mesh identity was never going to deliver a worker server, so that reads
-        // as `not_applicable`, not a failure. Stamped into `settingsOverride` so it
-        // rides into session meta the same way every other launch-settings field
-        // does (`launchSettings` below), which is what `summarizeMeshSessionRecord`
-        // reads for mesh_status / mesh_list_nodes; also returned from this call so
-        // the dispatch/claim response that triggered this launch sees it immediately.
-        const workerMcpDelivery: WorkerMcpDeliveryStatus | undefined = delegatedMeshId
-            ? deriveWorkerMcpDeliveryStatus(delegatedLaunch?.workerIsolation ?? null, Boolean(delegatedMeshId && delegatedSessionKey))
-            : undefined;
-        if (workerMcpDelivery && settingsOverride) {
-            settingsOverride = {
-                ...settingsOverride,
-                workerMcpDelivered: workerMcpDelivery.delivered,
-                ...(workerMcpDelivery.reason ? { workerMcpDeliveryReason: workerMcpDelivery.reason } : {}),
-            };
-        }
-        if (workerMcpDelivery && !workerMcpDelivery.delivered && workerMcpDelivery.reason !== 'not_applicable') {
-            LOG.warn('WorkerMcp', `[${cliType}] worker MCP not delivered for this launch (${workerMcpDelivery.reason}) — see WorkerMcp notes above for detail`);
-        }
-        // ★ISOLATION-OBSERVABILITY: stamp the resolved bundle version on
-        // every delegated-launch diagnostic, so a stale in-memory provider
-        // is legible from the log line itself.
-        const delegatedProviderLabel = provLookup?.providerVersion
-            ? `${cliType}@${provLookup.providerVersion}`
-            : `${cliType}@unknown-version`;
-        // Logged independently of the worker-MCP gate: this note describes
-        // the provider's DECLARATION, which exists (or not) regardless of
-        // the gate. Routing it through workerIsolation.notes would drop it
-        // whenever the gate is off — the very case it explains.
-        if (delegatedLaunch?.isolationNotes?.length) {
-            LOG.info('WorkerIsolation', `[${delegatedProviderLabel}] ${delegatedLaunch.isolationNotes.join('; ')}`);
-        }
-        if (delegatedLaunch?.workerIsolation?.notes.length) {
-            LOG.info('WorkerMcp', `[${delegatedProviderLabel}] ${delegatedLaunch.workerIsolation.notes.join('; ')}`);
-        }
-        // Trust-axis notes only appear separately when the worker-MCP
-        // gate is off; with it on they are already inside the notes
-        // logged just above, so this never double-reports.
-        if (delegatedLaunch?.trustNotes?.length) {
-            LOG.info('WorkerTrust', `[${cliType}] ${delegatedLaunch.trustNotes.join('; ')}`);
-        }
-        // Untrusted-provider gate: an external source that ships JS
-        // hooks needs explicit user confirmation before its first
-        // launch. Dashboards add `confirmExternalUntrusted: true` to
-        // the launch args after showing the trust modal. Without
-        // that ack we refuse to spawn and tell the caller why.
-        const provMeta = provLookup as any;
-        const provTrust = provMeta?._sourceTrust;
-        if (provTrust === 'external-untrusted' && args?.confirmExternalUntrusted !== true) {
-            return {
-                success: false,
-                error: 'untrusted_external_provider',
-                provider: {
-                    type: provLookup?.type ?? cliType,
-                    sourceName: provMeta?._sourceName ?? null,
-                    trust: provTrust,
-                },
-                hint: 'Resend launch_cli with confirmExternalUntrusted=true after the user explicitly approves running JavaScript from this 3rd-party source.',
-            };
-        }
-        const started = await this.startSession(
-            cliType,
-            dir,
-            delegatedLaunch ? delegatedLaunch.cliArgs : args?.cliArgs,
-            args?.initialModel,
-            {
-                resumeSessionId: args?.resumeSessionId,
-                settingsOverride,
-                extraEnv: delegatedLaunch ? delegatedLaunch.env : args?.env,
-                ...(delegatedLaunch && 'resolvedTrustPlan' in delegatedLaunch
-                    ? { resolvedTrustPlan: delegatedLaunch.resolvedTrustPlan }
-                    : {}),
-                ...(delegatedSessionKey ? { presetSessionKey: delegatedSessionKey } : {}),
-                ...(typeof args?.initialThinkingLevel === 'string' && args.initialThinkingLevel.trim() ? { initialThinkingLevel: args.initialThinkingLevel.trim() } : {}),
-                launchProvenance: resolveLaunchProvenance(args, settingsOverride),
-            },
-        );
-
-        // LAUNCH-ACCOUNTING funnel: every mesh WORKER spawn — mesh_launch_session,
-        // queue auto-launch (local AND remote: the remote leg forwards launch_cli to
-        // this daemon), and the recovery relaunch — passes through this case with
-        // `meshNodeFor` stamped, so the audit `session_launched` entry is written
-        // HERE, on the daemon that actually spawned the session. Before this, only
-        // the mesh_launch_session MCP tool recorded one (the 2026-09-08 runaway
-        // spawned 60 sessions that were invisible to the ledger). Coordinator
-        // sessions stamp `meshCoordinatorFor`, not `meshNodeFor`, and stay excluded.
-        // `ledgerLaunchRecorded` in the result tells a caller that also records
-        // launches (mcp-server mesh_launch_session) to skip its own append.
-        let ledgerLaunchRecorded = false;
-        if (delegatedMeshId) {
-            try {
-                const autoLaunchTaskId = typeof settingsOverride?.autoLaunchedForQueueTaskId === 'string'
-                    ? settingsOverride.autoLaunchedForQueueTaskId.trim() : '';
-                // NB: distinct from this case's `launchSource` local (workspace-resolution
-                // origin) — `meshLaunchSource` is the mesh-envelope path discriminator.
-                const declaredSource = typeof settingsOverride?.meshLaunchSource === 'string'
-                    ? settingsOverride.meshLaunchSource.trim() : '';
-                const meshNodeId = typeof settingsOverride?.meshNodeId === 'string'
-                    ? settingsOverride.meshNodeId.trim() : '';
-                meshRecord(delegatedMeshId, 'session_launched', {
-                    ...(meshNodeId ? { nodeId: meshNodeId } : {}),
-                    sessionId: started.runtimeSessionId,
-                    providerType,
-                    ...(autoLaunchTaskId ? { taskId: autoLaunchTaskId } : {}),
-                    payload: {
-                        ...(started.providerSessionId ? { providerSessionId: started.providerSessionId } : {}),
-                        // Path discriminator: explicit launchSource from the initiator wins;
-                        // the queue auto-launch is derived from its task marker (its envelope
-                        // predates launchSource and lives in a line-frozen file); anything
-                        // else (legacy caller / version skew) is labeled as such.
-                        source: declaredSource || (autoLaunchTaskId ? 'auto_launch' : 'unlabeled_delegated_launch'),
-                    },
-                }, { local: true });
-                ledgerLaunchRecorded = true;
-            } catch { /* accounting is best-effort — never fail the launch */ }
-        }
-
-        return {
-            success: true,
-            cliType,
-            dir,
-            id: started.runtimeSessionId,
-            sessionId: started.runtimeSessionId,
-            providerSessionId: started.providerSessionId,
-            launchSource,
-            ...(ledgerLaunchRecorded ? { ledgerLaunchRecorded: true } : {}),
-            // ★See workerMcpDelivery comment above: only present for a delegated
-            // (mesh-identified) launch, so an ordinary user-initiated launch_cli
-            // response is unchanged.
-            ...(workerMcpDelivery ? { workerMcp: workerMcpDelivery } : {}),
-        };
-    }
+    launchCli(args: any): Promise<CommandResult> { return launchCli(this, args); }
 
     /** `stop_cli`: stop the addressed CLI session (hard or save mode). */
     async stopCli(args: any): Promise<CommandResult> {
@@ -1894,240 +760,5 @@ export class DaemonCliManager {
         });
         return { success: true, restarted: true };
     }
-
-    /** `agent_command`: send_chat / clear_history / stop against a CLI session. */
-    async agentCommand(args: AgentCommandArgs): Promise<CommandResult> {
-        const agentType = args?.agentType || args?.cliType;
-        const action = args?.action;
-        if (!agentType || !action) throw new Error('agentType and action required');
-
-        // WTCLAIM (B): a mesh dispatch that named a node (meshContext.nodeId)
-        // but resolved no explicit session must be scoped to THAT node's
-        // session — never routed by findAdapter's provider-only fuzzy fallback,
-        // which on a daemon hosting both a base node and a cloned worktree node
-        // (same daemonId) could land a worktree task on the base session. Fail
-        // closed when no session is bound to the node so the coordinator
-        // launches/retries instead of mis-landing the work.
-        const meshScopeNodeId = (() => {
-            const mc = readMeshContext(args);
-            return typeof mc?.nodeId === 'string' ? mc.nodeId.trim() : '';
-        })();
-        let found: { adapter: CliAdapter; key: string } | null;
-        if (meshScopeNodeId && !args?.targetSessionId) {
-            found = this.findMeshNodeAdapter(agentType, meshScopeNodeId, args?.dir);
-            if (!found) {
-                throw new Error(`No mesh worker session bound to node '${meshScopeNodeId}' for agent '${agentType}' on this daemon; refusing provider-only fuzzy match to avoid cross-node dispatch`);
-            }
-        } else {
-            found = this.findAdapter(agentType, {
-                dir: args?.dir,
-                instanceKey: args?.targetSessionId,
-            });
-        }
-        if (!found) throw new Error(`CLI agent not running: ${agentType}`);
-        const { adapter, key } = found;
-
-        if (action === 'send_chat') {
-            // Stamp mesh direct-dispatch assignment on the target
-            // instance BEFORE sending the prompt so the completion
-            // event has a routing marker by the time it fires.
-            // mesh_send_task --direct ships meshContext for plain CLI
-            // sessions that were never launched as mesh delegates.
-            const meshContext = readMeshContext(args);
-            if (meshContext && typeof meshContext === 'object' && typeof meshContext.meshId === 'string' && meshContext.meshId) {
-                const targetInstanceId = key;
-                let stampResult: { stamped: boolean; reason?: string; holderSessionId?: string; currentTaskId?: string; currentAttemptId?: string } | undefined;
-                try {
-                    stampResult = this.deps.getInstanceManager()?.attachMeshAssignmentToInstance(targetInstanceId, {
-                        meshId: meshContext.meshId,
-                        ...(typeof meshContext.nodeId === 'string' && meshContext.nodeId ? { nodeId: meshContext.nodeId } : {}),
-                        ...(typeof meshContext.taskId === 'string' && meshContext.taskId ? { taskId: meshContext.taskId } : {}),
-                        // REDRIVE-DUP: carry the dispatch nonce onto the worker session so
-                        // its generating_started event echoes it back for the coordinator's
-                        // stale-nonce guard.
-                        ...(typeof meshContext.dispatchNonce === 'number' ? { dispatchNonce: meshContext.dispatchNonce } : {}),
-                        // TURN-LEDGER (Stage 5): carry the attempt identity onto the
-                        // worker session so its lifecycle events echo it back for the
-                        // coordinator's reducer.
-                        ...(typeof meshContext.attemptId === 'string' && meshContext.attemptId ? { attemptId: meshContext.attemptId } : {}),
-                        ...(typeof meshContext.attemptGeneration === 'number' && Number.isInteger(meshContext.attemptGeneration) && meshContext.attemptGeneration >= 0 ? { attemptGeneration: meshContext.attemptGeneration } : {}),
-                        ...(typeof meshContext.coordinatorDaemonId === 'string' && meshContext.coordinatorDaemonId ? { coordinatorDaemonId: meshContext.coordinatorDaemonId } : {}),
-                        // SESSION-ISOLATION: the originating coordinator SESSION, so this
-                        // worker's completion routes back to the exact dispatching session
-                        // rather than being consumed first-come by any coordinator idle on
-                        // this daemon (see attachMeshAssignment's coordinatorSessionId).
-                        ...(typeof meshContext.coordinatorSessionId === 'string' && meshContext.coordinatorSessionId ? { coordinatorSessionId: meshContext.coordinatorSessionId } : {}),
-                    });
-                } catch { /* best-effort — stamping is a routing aid, not a hard requirement */ }
-                // DOUBLE-DISPATCH stamp guard: the instance manager refused this stamp because
-                // the SAME task is already running on another live session on this daemon.
-                // Sending the prompt anyway would double-execute the task — fail closed so the
-                // coordinator does not duplicate the work onto a second session.
-                if (stampResult && stampResult.stamped === false && stampResult.reason === 'task_already_stamped_on_live_instance') {
-                    // DUP-CLAIM-REBIND: this refusal is an APPLICATION-LEVEL answer, not a
-                    // transport failure — the work IS running here, on the session named
-                    // below. Throw the typed error so the coordinator can rebind its turn
-                    // ledger onto the real holder instead of cancelling the attempt (which
-                    // made the holder's genuine completion get rejected as session_mismatch
-                    // and lost a finished task). The guard already resolved the holder, so
-                    // it rides along as a field — never something the caller has to parse
-                    // back out of this message.
-                    throw new DuplicateMeshDispatchError(
-                        `Refusing duplicate mesh dispatch: task ${meshContext.taskId} is already being worked by a live session on this daemon`,
-                        { holderSessionId: stampResult.holderSessionId },
-                    );
-                }
-                // SESSION-BUSY stamp guard (preview rc.37): the target session is still
-                // working a DIFFERENT task. Submitting now would park this body behind the
-                // running turn (executed later as an unaccounted turn 2) and the stamp would
-                // have re-pointed the running task's reports at this one — so neither
-                // happens: nothing was stamped, nothing is submitted, and the typed refusal
-                // makes the dispatcher book a dispatch FAILURE (queue claim → requeue;
-                // direct dispatch → dispatch_failed), never a delivery.
-                if (stampResult && stampResult.stamped === false && stampResult.reason === 'session_busy_with_task' && stampResult.currentTaskId) {
-                    throw new SessionBusyWithTaskError({
-                        currentTaskId: stampResult.currentTaskId,
-                        ...(stampResult.currentAttemptId ? { currentAttemptId: stampResult.currentAttemptId } : {}),
-                        ...(typeof meshContext.taskId === 'string' && meshContext.taskId ? { incomingTaskId: meshContext.taskId } : {}),
-                        sessionId: targetInstanceId,
-                    });
-                }
-                // COORDINATOR-SILENT-IDLE (opt-in): the coordinator's mesh policy is
-                // 'auto_silent_on_dispatch', so arm a ONE-SHOT transient mute on THIS
-                // worker session for the single completion that follows this dispatch.
-                // resolveMuted honors it only for an idle snapshot within
-                // SILENT_IDLE_PUSH_TTL_MS, so the routine completion push is suppressed
-                // while approval/failure/long-running notifications (non-idle status) and
-                // a worker that never completes (TTL expiry) are unaffected. Re-armed on
-                // every dispatch (fresh armedAt) and one-shot-cleared at the completion
-                // emission (emitGeneratingCompleted) so subsequent turns notify normally.
-                if (meshContext.silentIdlePush === true) {
-                    try {
-                        const workerInst = this.deps.getInstanceManager()?.getInstance(targetInstanceId);
-                        if (workerInst && typeof workerInst.updateSettings === 'function') {
-                            workerInst.updateSettings({
-                                silentNextIdlePush: true,
-                                silentNextIdlePushArmedAt: Date.now(),
-                            });
-                        }
-                    } catch { /* best-effort — silent-idle is a notification nicety, never fail the dispatch */ }
-                }
-            }
-            // Wiring-unification D2: ONE submit through the shared SessionInputService.
-            // It owns input normalisation, the capability check, the image body
-            // build, the busy decision, the messageId dedupe (which replaced the
-            // 300 s (session, taskId, content) submission guard) and the ack.
-            const meshTaskId = typeof meshContext?.taskId === 'string' && meshContext.taskId.trim() ? meshContext.taskId.trim() : undefined;
-            // DISPATCH-SOURCE-TRACE: every agent_command send_chat issuer tags its
-            // call site so a duplicate/unexpected inject is attributable from the log.
-            const dispatchSource = typeof args?.dispatchSource === 'string' && args.dispatchSource.trim()
-                ? args.dispatchSource.trim() : 'untagged';
-            const input = normalizeInputEnvelope(args?.input ? { input: args.input } : args);
-            const policy = readSendPolicy(args, (flag) => LOG.debug('MeshDispatch', `agent_command send_chat: legacy '${flag}' flag mapped to policy (session ${key})`));
-            const messageId = readMessageId(args)
-                ?? (meshTaskId ? dispatchMessageId({ id: meshTaskId, ...(typeof meshContext?.dispatchNonce === 'number' ? { dispatchNonce: meshContext.dispatchNonce } : {}) }) : undefined)
-                ?? mintLegacyMessageId();
-            LOG.info('MeshDispatch', `agent_command send_chat on session ${key}${meshTaskId ? ` task=${meshTaskId}` : ''} messageId=${messageId} policy=${policy.mode} dispatchSource=${dispatchSource}`);
-            const outcome = await this.input.submit({
-                messageId,
-                sessionId: key,
-                input,
-                origin: readOutboundOrigin(args, meshContext ? 'mesh' : 'api'),
-                policy,
-                createdAt: Date.now(),
-                ...(typeof meshContext?.attemptId === 'string' && meshContext.attemptId ? { meshAttemptRef: meshContext.attemptId } : {}),
-            });
-            return meshSubmitResult(outcome, key);
-        } else if (action === 'clear_history') {
-            if (typeof adapter.clearHistory === 'function') adapter.clearHistory();
-            return { success: true, cleared: true };
-        } else if (action === 'stop') {
-            // CANCEL-STOP-TASK-SCOPE: a stop carrying meshContext.taskId is scoped to
-            // THAT task (mesh_queue_cancel's in-flight halt). stopSession is a HARD
-            // stop that removes the whole instance, and sessions are reused — so
-            // before killing, confirm this session is actually running the cancelled
-            // task. A stale 'assigned' queue row previously let a cancel of task1 kill
-            // a session that had since moved on to task2, destroying unrelated work.
-            // Unscoped stops (no taskId) and sessions with no resolvable task identity
-            // are unaffected; see mesh-stop-task-scope.ts for why those fail open.
-            const stopScopeTaskId = (() => {
-                const mc = readMeshContext(args);
-                return mc && typeof mc === 'object' && typeof mc.taskId === 'string' ? mc.taskId.trim() : '';
-            })();
-            const stopScope = evaluateMeshStopTaskScope({
-                requestedTaskId: stopScopeTaskId || undefined,
-                currentTurnTaskId: (adapter as CliAdapterWithTurnTaskId).currentTurnTaskId,
-                meshActiveTaskId: (this.deps.getInstanceManager()?.getInstance(key) as
-                    { getState?: () => { settings?: Record<string, unknown> } } | undefined)
-                    ?.getState?.()?.settings?.meshActiveTaskId,
-            });
-            if (!stopScope.allowed) {
-                LOG.warn('MeshDispatch', `Refusing task-scoped stop on session ${key}: cancel targets task ${stopScopeTaskId} but the session is running task ${stopScope.sessionTaskId} — not killing unrelated work`);
-                return {
-                    success: false,
-                    stopped: false,
-                    reason: 'stop_task_mismatch',
-                    requestedTaskId: stopScopeTaskId,
-                    sessionTaskId: stopScope.sessionTaskId,
-                    error: `Session '${key}' is running task ${stopScope.sessionTaskId}, not the cancelled task ${stopScopeTaskId} — stop refused to avoid killing unrelated work`,
-                };
-            }
-            await this.stopSession(key);
-            return { success: true, stopped: true, ...(stopScopeTaskId ? { stoppedTaskId: stopScopeTaskId, stopScope: stopScope.reason } : {}) };
-        } else if (action === 'interrupt_capability') {
-            // Read-only probe: can this session's turn be interrupted? Resolved
-            // from the provider's OWN loaded spec, so the answer tracks whichever
-            // spec version this session actually booted with. Writes nothing.
-            const probe = adapter as unknown as {
-                getInterruptCapability?: () => { supported: boolean; keyName?: string; confidence?: string; message?: string; reason?: string };
-            };
-            if (typeof probe.getInterruptCapability !== 'function') {
-                return {
-                    success: true,
-                    supported: false,
-                    reason: 'interrupt_not_implemented',
-                    message: `Provider '${agentType}' runs on an adapter with no interrupt support.`,
-                };
-            }
-            const cap = probe.getInterruptCapability();
-            return { success: true, ...cap };
-        } else if (action === 'interrupt_turn') {
-            // Abort the TURN in flight — deliberately distinct from action 'stop'
-            // above, which terminates the whole session. Delivery mode 'interrupt'
-            // uses this to clear the way for a re-dispatch: the running turn is
-            // cancelled and lost, the session survives and returns to idle, and the
-            // ordinary queued-send drain then delivers the new prompt as a real turn.
-            //
-            // Capability is validated inside interruptTurn() against the provider's
-            // OWN resolved spec before any byte is written, so a provider with no
-            // stop key (or an empty one, e.g. hermes-cli specs/4.0.json) returns
-            // ok:false instead of writing nothing and reporting success.
-            const interruptible = adapter as unknown as {
-                interruptTurn?: () => Promise<
-                    | { ok: true; keyName: string; bytes: number; confidence: string }
-                    | { ok: false; reason: string; message: string }
-                >;
-            };
-            if (typeof interruptible.interruptTurn !== 'function') {
-                return {
-                    success: false,
-                    interrupted: false,
-                    reason: 'interrupt_not_implemented',
-                    error: `Provider '${agentType}' runs on an adapter that cannot interrupt a turn.`,
-                };
-            }
-            const outcome = await interruptible.interruptTurn();
-            if (!outcome.ok) {
-                return { success: false, interrupted: false, reason: outcome.reason, error: outcome.message };
-            }
-            return {
-                success: true,
-                interrupted: true,
-                keyName: outcome.keyName,
-                bytes: outcome.bytes,
-                confidence: outcome.confidence,
-            };
-        }
-        throw new Error(`Unknown action: ${action}`);
-    }
+    agentCommand(args: AgentCommandArgs): Promise<CommandResult> { return agentCommand(this, args); }
 }

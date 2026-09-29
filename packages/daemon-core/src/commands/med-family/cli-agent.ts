@@ -9,7 +9,7 @@
  * Extracted verbatim from executeDaemonCommand.
  */
 import { meshNodeIdMatches, daemonIdsEquivalent } from '@adhdev/mesh-shared';
-import { supportsExplicitSessionResume } from '../cli-manager.js';
+import { supportsExplicitSessionResume } from '../cli-session-binding.js';
 import { loadState } from '../../config/state-store.js';
 import { getRecentActivity } from '../../config/recent-activity.js';
 import { getSavedProviderSessions } from '../../config/saved-sessions.js';

@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { validateFsmSpec } from '../../../src/providers/spec/fsm-loader.js';
 import { evaluateFsm, stableRegionKey, type FsmClock } from '../../../src/providers/spec/fsm-evaluator.js';
 import { resolveSections, sectionText, extractButtonsFromRule, extractTitle } from '../../../src/providers/spec/evaluator.js';
-import { filterIgnoredLines } from '../../../src/providers/spec/fsm-driver.js';
+import { filterIgnoredLines } from '../../../src/providers/spec/fsm-driver-frame.js';
 import { modalKindForState, statusForState, type CliSpecV4 } from '../../../src/providers/spec/fsm-types.js';
 
 function resolveSpecPath(): string {

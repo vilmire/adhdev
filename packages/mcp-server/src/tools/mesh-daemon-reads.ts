@@ -19,14 +19,8 @@
 // reads the daemon store in-process.
 
 import type { MeshContext } from './mesh-tools-internal.js';
-import {
-    activeWorkQuery,
-    missionListQuery,
-    queueQuery,
-    recoveryContextQuery,
-    taskStatsQuery,
-} from '../ipc/turn-commands.js';
-import type { ActiveWorkQueryResponse, QueueDependencyHeadWire } from '@adhdev/mesh-shared';
+import { activeWorkQuery, queueQuery } from '../ipc/turn-commands.js';
+import type { ActiveWorkQueryResponse, MissionListQueryResponse, QueueDependencyHeadWire, TaskStatsQueryResponse } from '@adhdev/mesh-shared';
 
 /**
  * The node fields `buildMeshActiveWork` (daemon-core sessionStatusFromNodes)
@@ -59,46 +53,25 @@ export async function activeWorkQueryWithRuntime(
     return activeWorkQuery(ctx.transport, { meshId: ctx.mesh.id, ...args });
 }
 
-/** Recovery context per node id — ONE batched call. */
-export async function readRecoveryContexts(ctx: MeshContext, nodeIds: readonly string[]): Promise<Map<string, Record<string, unknown>>> {
-    const out = new Map<string, Record<string, unknown>>();
-    const ids = [...new Set(nodeIds.filter(Boolean))];
-    if (ids.length === 0) return out;
-    const res = await recoveryContextQuery(ctx.transport, { meshId: ctx.mesh.id, nodeIds: ids });
-    for (const [nodeId, context] of Object.entries(res.contexts ?? {})) out.set(nodeId, context);
-    return out;
-}
+export type StatusMissionsCompact = { live: Record<string, unknown>[]; historyFold: Record<string, unknown> | null };
 
-/** mesh_status COMPACT missions: live rows (goal-elided) + folded history, computed in the daemon. */
-export async function readStatusMissionsCompact(ctx: MeshContext): Promise<{ live: Record<string, unknown>[]; historyFold: Record<string, unknown> | null }> {
-    const res = await missionListQuery(ctx.transport, { meshId: ctx.mesh.id, meshStatusView: 'compact' });
+/** The compact mesh_status missions of a `mission_list_query` answer. */
+export function toStatusMissionsCompact(res: MissionListQueryResponse): StatusMissionsCompact {
     return { live: res.missions as unknown as Record<string, unknown>[], historyFold: res.historyFold as unknown as Record<string, unknown> | null };
 }
 
-/**
- * mesh_status VERBOSE missions: live + capped history with full goals, each with
- * its stats rollup — the rows from the daemon's projection and every rollup from
- * ONE batched task_stats_query.
- */
-export async function readStatusMissionsVerbose(ctx: MeshContext): Promise<Record<string, unknown>[]> {
-    const res = await missionListQuery(ctx.transport, { meshId: ctx.mesh.id, meshStatusView: 'verbose' });
-    const missions = res.missions as unknown as Record<string, unknown>[];
-    if (missions.length === 0) return missions;
-    const rollups = await readMissionStatsBatch(ctx, missions.map((m) => String(m.id)));
+/** Attach each mission's stats rollup (a `task_stats_query` answer) to its row. */
+export function withMissionStats(missions: Record<string, unknown>[], stats: TaskStatsQueryResponse): Record<string, unknown>[] {
+    const rollups = new Map(Object.entries(stats.missions ?? {}));
     return missions.map((m) => {
-        const stats = rollups.get(String(m.id));
-        return stats ? { ...m, stats } : m;
+        const rollup = rollups.get(String(m.id));
+        return rollup ? { ...m, stats: rollup } : m;
     });
 }
 
-/** Mission rollups — ONE batched task_stats_query. */
-export async function readMissionStatsBatch(ctx: MeshContext, missionIds: readonly string[]): Promise<Map<string, Record<string, unknown>>> {
-    const out = new Map<string, Record<string, unknown>>();
-    const ids = [...new Set(missionIds.filter(Boolean))];
-    if (ids.length === 0) return out;
-    const res = await taskStatsQuery(ctx.transport, { meshId: ctx.mesh.id, missionIds: ids });
-    for (const [id, rollup] of Object.entries(res.missions ?? {})) out.set(id, rollup);
-    return out;
+/** The mission ids a stats rollup is asked for (none → no task_stats_query). */
+export function missionStatsIds(missions: Record<string, unknown>[]): string[] {
+    return [...new Set(missions.map((m) => String(m.id)).filter(Boolean))];
 }
 
 /** Terminal queue rows older than this count as old historical records (mesh-queue-helpers). */

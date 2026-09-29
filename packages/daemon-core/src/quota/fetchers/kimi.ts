@@ -30,7 +30,7 @@ import {
 } from '../types.js';
 import type { QuotaFetchDeps } from './deps.js';
 import { assertInjectedNetworkFetchInTest, credentialFileMtimeMs, resolveDeps } from './deps.js';
-import { retryAfterMs, toNumber } from './coerce.js';
+import { retryAfterMs, toIsoResetMs as toResetMs, toNumber } from './coerce.js';
 
 const DEFAULT_BASE_URL = 'https://api.kimi.com/coding/v1';
 const REQUEST_TIMEOUT_MS = 10_000;
@@ -206,14 +206,6 @@ function isExpired(credentials: KimiCredentials, nowMs: number): boolean {
 // --- response shape -------------------------------------------------------
 // `usage` is the long (weekly) quota; `limits[]` carries shorter rolling
 // windows, of which the ~5h one is the session view.
-
-function toResetMs(value: unknown): number | null {
-    if (typeof value !== 'string' || value.trim() === '') {
-        return null;
-    }
-    const ms = new Date(value).getTime();
-    return Number.isNaN(ms) ? null : ms;
-}
 
 function windowMinutes(window: unknown): number | null {
     if (typeof window !== 'object' || window === null) {

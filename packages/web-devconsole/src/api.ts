@@ -178,14 +178,8 @@ export const api = {
   inspect: (opts: { x?: number; y?: number; selector?: string; ideType?: string }) =>
     request<InspectResult>('/cdp/dom/inspect', 'POST', opts),
 
-  children: (selector: string, ideType?: string) =>
-    request<any>('/cdp/dom/children', 'POST', { selector, ideType }),
-
   analyze: (opts: { selector?: string; x?: number; y?: number; ideType?: string }) =>
     request<any>('/cdp/dom/analyze', 'POST', opts),
-
-  findByText: (text: string, ideType?: string, containerSelector?: string) =>
-    request<any>('/cdp/dom/find-text', 'POST', { text, ideType, containerSelector }),
 
   findCommon: (include: string[], exclude: string[], ideType?: string) =>
     request<any>('/cdp/dom/find-common', 'POST', { include, exclude, ideType }),
@@ -206,18 +200,10 @@ export const api = {
   saveSource: (type: string, source: string) =>
     request<{ saved: boolean; path: string }>(`/providers/${type}/save`, 'POST', { source }),
 
-  saveScript: (type: string, script: string, code: string) =>
-    request<{ saved: boolean; script: string; path: string }>(`/providers/${type}/script-save`, 'POST', { script, code }),
-
   reload: () => request<{ reloaded: boolean; providers: unknown[] }>('/providers/reload', 'POST'),
 
   scaffold: (opts: { type: string; name: string; category: string; [k: string]: unknown }) =>
     request<{ created: boolean; path: string }>('/scaffold', 'POST', opts),
-
-  watchStart: (type: string, script: string, interval = 2000) =>
-    request<{ watching: boolean }>('/watch/start', 'POST', { type, script, interval }),
-
-  watchStop: () => request<{ watching: boolean }>('/watch/stop', 'POST'),
 
   getConfig: (type: string) =>
     request<{ type: string; config: any }>(`/providers/${type}/config`),
@@ -303,24 +289,6 @@ export const api = {
   versions: () =>
     request<{ total: number; installed: number; providers: { type: string; name: string; category: string; installed: boolean; version: string | null; path: string | null; binary: string | null; warning?: string }[]; history: Record<string, { version: string; detectedAt: string; os: string }[]> }>('/providers/versions'),
 
-  // Phase 1: DOM Context API
-  domContext: (type: string, ideType?: string) =>
-    request<{
-      screenshot: string | null
-      domSnapshot: {
-        contentEditables: { selector: string; tag: string; contenteditable: string | null; role: string | null; ariaLabel: string | null; placeholder: string | null; rect: any; visible: boolean }[]
-        chatContainers: { selector: string; childCount: number; rect: any; hasScrollable: boolean }[]
-        buttons: { text: string; ariaLabel: string | null; selector: string; rect: any; disabled: boolean }[]
-        sidebars: { selector: string; position: string; rect: any; childCount: number }[]
-        dropdowns: { selector: string; tag: string; role: string | null; visible: boolean; rect: any }[]
-      }
-      pageTitle: string
-      pageUrl: string
-      providerType: string
-      timestamp: string
-    }>(`/providers/${type}/dom-context`, 'POST', { ideType }),
-
-  // Phase 2: Auto-Implement
   autoImplement: (type: string, opts: { agent?: string; functions: string[]; reference?: string }) =>
     request<{ started: boolean; type: string; agent: string; functions: string[]; providerDir: string; message: string; sseUrl: string }>(`/providers/${type}/auto-implement`, 'POST', opts),
 

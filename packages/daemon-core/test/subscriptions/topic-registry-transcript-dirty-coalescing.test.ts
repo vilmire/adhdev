@@ -2,10 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import {
-    __getParsedJsonlCacheStatsForTests,
-    __resetParsedJsonlCacheForTests,
-} from '../../src/providers/spec/native-history-executor.js';
+import { __getParsedJsonlCacheStatsForTests, __resetParsedJsonlCacheForTests } from '../../src/providers/spec/native-history-jsonl-cache.js';
 import {
     TRANSCRIPT_PTY_DIRTY_THROTTLE_MS,
     TRANSCRIPT_STAT_POLL_INTERVAL_MS,

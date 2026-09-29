@@ -96,10 +96,8 @@
 'use strict';
 
 import { LOG } from '../logging/logger.js';
-import {
-    resolveJsonlSourcePath,
-    type NativeHistoryInput,
-} from './spec/native-history-executor.js';
+import { resolveJsonlSourcePath } from './spec/native-history-executor.js';
+import type { NativeHistoryInput } from './spec/native-history-types.js';
 import { readTailJsonlLines } from './spec/background-task-detector.js';
 import type { NativeHistoryConfig } from './spec/types.js';
 import {

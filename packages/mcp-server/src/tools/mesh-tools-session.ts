@@ -6,53 +6,33 @@ import {
     IpcTransport,
     SESSION_PROVIDER_METADATA_TTL_MS,
     annotateRapidReadChatAdvisory,
-    buildCoordinatorP2pRelayFailure,
-    buildDirectTaskPayload,
-    // QUOTA GATE (direct dispatch, preview rc.43 run 10) — see checkDirectDispatchQuotaGate's
-    // doc comment (mesh-tools-internal.ts).
-    checkDirectDispatchQuotaGate,
-    buildQuotaExhaustedDispatchFailure,
-    // GRAPH-MEASUREMENT-DIRECT — the direct dispatch decision record.
-    normalizeOrchestrationDecision,
-    MESH_UNSANCTIONED_DIRECT_HINT,
     collectPendingApprovals,
     buildMeshReadChatCacheFallback,
     buildMissingCoordinatorDaemonIdFailure,
     buildMissingNodeReadChatRecovery,
-    buildMissionInactiveWarning,
     buildQueueTriggerGuidance,
     commandForNode,
     compactChatPayload,
     drainCoordinatorPendingEvents,
     extractLaunchPayload,
-    extractStatusMetadataSessions,
     findNodeWithRefresh,
     findOptionalNodeWithRefresh,
     getSessionMetadata,
     getWorktreeBootstrapLaunchBlock,
-    hasRecentDuplicateDispatch,
-    ipcDispatchToRemoteAgent,
     readActiveWorkFromDaemon,
     recordMeshCoordinatorToolCall,
     isIdleSessionRecord,
     isLocalControlPlaneNode,
-    resolveMeshDispatchRoute,
-    isMeshCoordinatorSessionRecord,
     isMeshOwnedDelegateSession,
     isP2pRelayTransportFailure,
     isTerminalSessionRecord,
-    isUnmanagedSessionRecord,
-    isWorkerTaskMode,
     meshSessionCacheKey,
     meshSessionProviderMetadata,
     missingProviderPriorityMessage,
-    randomUUID,
     readProviderPriority,
     readSessionRecordId,
     readSpawnedSessionVisibility,
     readString,
-    readTaskInput,
-    type MeshTaskInput,
     recordRecoverableLaunchFailure,
     refreshMeshFromDaemon,
     resolveCoordinatorDaemonId,
@@ -65,13 +45,10 @@ import {
     resolveSessionProviderType,
     triggerMeshQueueAndReport,
     unwrapCommandPayload,
-    validateMeshTaskModeRequest,
-    buildMeshTaskModeViolationError,
 } from './mesh-tools-internal.js';
 import type {
     MeshContext,
 } from './mesh-tools-internal.js';
-import type { MeshDeliveryMode } from '@adhdev/daemon-core';
 // Node runtime is the coordinator daemon's answer only — its own status or a
 // member's pushed runtime it holds (mesh-held-node-state.ts); no member is read.
 import { collectMeshNodesWithRuntime, readNodeRuntime } from './mesh-held-node-state.js';
@@ -79,31 +56,27 @@ import { scheduleBackgroundDirectReconcile } from './mesh-status-background.js';
 // §8 unit 6 ("mesh_read_chat remote display cutover") — the FIRST hop of the
 // fixed `replica → live P2P read_chat → cached summary` order.
 import { readTranscriptReplicaForDisplay } from './mesh-transcript-replica-read.js';
-import { normalizeNodeCapabilitySlots, isMeshTaskDifficulty, MESH_TASK_DIFFICULTIES, appendWorkerProtocolFooter, sanitizeRefusalCode } from '@adhdev/mesh-shared';
+import { normalizeNodeCapabilitySlots } from '@adhdev/mesh-shared';
 // QUOTA GATE for the manual launch path. Same judgement module the auto-launch /
 // queue-drain path uses (daemon-core resolveUsableProvider) — deliberately shared
 // rather than reimplemented, so the two dispatch paths can never disagree about
 // what "out of quota" means, and so the fail-open contract has exactly one
 // definition. See mesh-quota-routing.ts.
-import { evaluateProviderQuotaGate, rankProvidersByQuotaGate } from '@adhdev/daemon-core';
+import { evaluateProviderQuotaGate, rankProvidersByQuotaGate, type LocalMeshNodeEntry } from '@adhdev/daemon-core';
 // F1: worker-protocol footer materialization on the direct-dispatch path — not
 // (yet) re-exported through mesh-tools-internal.ts, imported directly like the
 // quota-gate symbols above.
-import { resolveDispatchMessage } from '@adhdev/daemon-core';
 // GIT-GATE (owner-requested follow-up to H1): the SAME dirty/stale predicates the
 // claim-time gate (mesh-queue-assignment.ts, daemon-side) and the auto-launch spawn gate
 // (mesh-queue-autolaunch.ts) apply — imported rather than reimplemented so a direct
 // dispatch from this MCP tool can never drift onto separate dirty/stale logic. See the
 // re-export note on mesh-auto-fast-forward.ts in daemon-core's index.ts.
-import { isDirtyNode, isMeshNodeFreshEnoughToLaunch, resolveAutoFastForwardPolicy, isTaskReadonly } from '@adhdev/daemon-core';
 // C-W6c: direct-dispatch bookkeeping now drives the NEW turn ledger (C1 reducer)
 // via IPC, instead of the legacy openTurnAttempt/recordTurnAck pair that
 // recordDirectDispatchTask used to trigger in-process. See the design's C2
 // paragraph and the C-W6c report's "direct dispatch end to end" deliverable.
-import { directDispatchRecord, missionQuery, pruneStaleDirect, queueEnqueue, recordLocal, turnCancel, turnObserve, TurnIpcCommandError } from '../ipc/turn-commands.js';
-import type { MeshWorkQueueEntry } from '@adhdev/daemon-core';
+import { pruneStaleDirect, recordLocal } from '../ipc/turn-commands.js';
 import { ensureMeshNodeRoutes } from './mesh-node-routes.js';
-
 
 /**
  * Prune orphaned staleDirect dispatch records — direct dispatches whose original node/session is
@@ -120,176 +93,6 @@ import { ensureMeshNodeRoutes } from './mesh-node-routes.js';
  *    (audit history) is left intact, and a direct_dispatch_pruned ledger entry is appended on
  *    execute so the prune itself is auditable.
  */
-/**
- * DISPATCH-ACK-RISK-STALE — compute the dispatch-acknowledgement risk fields for a
- * direct (mesh_send_task --session_id) dispatch to an idle session.
- *
- * Before the NOTIF-DROP / CANON-A fix, ANY dispatch to an idle session was flagged
- * `dispatchAcknowledgementRisk:true` because a fast completion could race ahead of the
- * dispatch row and be swallowed by the prior-terminal providerSessionId dedup gate
- * (mesh-event-forwarding.ts). Now that the dispatch row is atomically pre-recorded BEFORE
- * inject, a successful pre-record makes sessionHasActiveAssignment=TRUE at completion time,
- * so the dedup gate is skipped and the completion is delivered — there is NO residual loss
- * risk. The stale warning made coordinators do needless verification polling.
- *
- * Risk is therefore true ONLY when the session was idle AND the dispatch row did not
- * persist (pre-record failed / was rolled back) — the one case where the dedup gate can
- * still swallow the completion. Returns the fields to spread into the success response, or
- * an empty object when there is no risk to surface.
- */
-export function computeIdleDispatchAckRisk(
-    sessionWasIdle: boolean,
-    dispatchPreRecorded: boolean,
-    sessionId: string,
-): Record<string, unknown> {
-    if (!sessionWasIdle || dispatchPreRecorded) return {};
-    return {
-        dispatchAcknowledgementRisk: true,
-        dispatchAcknowledgementRiskReason: 'idle_dispatch_prerecord_failed',
-        dispatchAcknowledgementNote: `Session '${sessionId}' was idle at dispatch time and the dispatch row could not be pre-recorded, so its completion may be deduplicated as a prior turn and lost. Use mesh_status to verify; if the session remains idle or the completion never lands, launch a fresh session and retry.`,
-    };
-}
-
-/**
- * C-W6c: open a `mesh_direct` attempt in the NEW turn ledger (C1 reducer) for a
- * direct dispatch, mirroring what `recordDirectDispatchTask`'s in-process
- * `openTurnAttempt`/`recordTurnAck` used to do for the LEGACY ledger
- * (`mesh-turn-ledger.ts`). Both ledgers are bookkeeping-only here — neither
- * call touches the actual transport delivery (`ipcDispatchToRemoteAgent` /
- * `agent_command`), which happens independently around this helper.
- *
- * Returns the `attemptRef` on success (embed in `meshContext` so worker
- * evidence — a remote daemon's forwarded completion, or this daemon's own
- * transcript reconcile — carries a resolvable attempt reference), or `null`
- * on any turn-ledger failure (best-effort: a direct dispatch must not be
- * blocked by the new ledger being mid-boot/unavailable — see the C-W6c
- * report's "Runnable?" section, this path is additive, not load-bearing yet).
- */
-async function openDirectDispatchAttempt(
-    ctx: MeshContext,
-    opts: { taskId: string; nodeId?: string; sessionId: string; providerType?: string },
-): Promise<{ attemptId: string; generation: number } | null> {
-    try {
-        const accepted = await turnObserve(ctx.transport, {
-            evidence: {
-                eventId: opts.taskId,
-                at: Date.now(),
-                source: 'dispatch',
-                sessionId: opts.sessionId,
-                taskId: opts.taskId,
-                observedBy: ctx.localDaemonId ?? 'mcp-server',
-                kind: 'dispatch_accepted',
-                scope: 'mesh_direct',
-                messageId: opts.taskId,
-                meshId: ctx.mesh.id,
-                ...(opts.nodeId ? { nodeId: opts.nodeId } : {}),
-                ...(opts.providerType ? { providerType: opts.providerType } : {}),
-            },
-        });
-        return accepted.attemptRef;
-    } catch (e) {
-        LOG_DIRECT_DISPATCH_TURN_OBSERVE_FAILURE(e, 'dispatch_accepted');
-        return null;
-    }
-}
-
-/**
- * P2pRelayFailureCode values (`p2p-relay-failure.ts`) that mean the worker was
- * never reached at all — as opposed to a `mesh_logic_or_provider_failure`-class
- * code, which (despite the transport-shaped name) covers an application-level
- * refusal the worker DID answer with. Used to decide `dispatch_failed.workerAbsent`
- * for a direct dispatch the same way the queue-claim path's message-text sniff
- * does (mesh-queue-assignment.ts `handleDispatchFailure`), but on the STRUCTURED
- * code `ipcDispatchToRemoteAgent` already classifies rather than re-parsing prose.
- */
-const P2P_TRANSPORT_ABSENCE_CODES: ReadonlySet<string> = new Set([
-    'p2p_unavailable', 'p2p_timeout', 'p2p_not_connected', 'p2p_datachannel_closed', 'p2p_no_route', 'p2p_daemon_offline',
-]);
-
-/**
- * C-W6c: record a `delivered` or `dispatch_failed` evidence for a direct
- * dispatch's attempt (best-effort — see openDirectDispatchAttempt's note).
- * Called AFTER the transport actually confirmed/refused the send, exactly
- * the causal stage the legacy `recordTurnAck({kind:'delivered'})` used to
- * attest to.
- */
-async function observeDirectDispatchOutcome(
-    ctx: MeshContext,
-    attemptRef: { attemptId: string; generation: number } | null,
-    opts: { taskId: string; sessionId: string }
-        & ({ outcome: 'delivered'; via: 'local' | 'p2p' }
-            | {
-                outcome: 'dispatch_failed'; workerAbsent: boolean;
-                /**
-                 * Live-gap fix (2026-09-25): a worker refusal (`{success:false, code, error}`,
-                 * unwrapped via `unwrapMeshRelayResult` at the call site) previously collapsed
-                 * to `{workerAbsent:false, reason:'rejected_by_worker'}` with nothing else — the
-                 * coordinator could see THAT the worker refused but never WHY. `refusalCode` is
-                 * the worker's own short code (sanitized — see `sanitizeRefusalCode`); `nodeId`
-                 * + `refusalDetail` are for the LOCAL WARN line only (never sent as evidence —
-                 * evidence is content-free by construction, see turn-evidence.ts).
-                 */
-                refusalCode?: string; refusalDetail?: string; nodeId?: string;
-            }),
-): Promise<void> {
-    if (!attemptRef) return;
-    try {
-        if (opts.outcome === 'delivered') {
-            await turnObserve(ctx.transport, {
-                evidence: {
-                    eventId: `${opts.taskId}:delivered`,
-                    at: Date.now(),
-                    source: 'dispatch',
-                    sessionId: opts.sessionId,
-                    attemptRef,
-                    observedBy: ctx.localDaemonId ?? 'mcp-server',
-                    kind: 'delivered',
-                    messageId: opts.taskId,
-                    outcome: 'delivered',
-                    via: opts.via,
-                },
-            });
-        } else {
-            const refusalCode = opts.workerAbsent ? undefined : sanitizeRefusalCode(opts.refusalCode);
-            await turnObserve(ctx.transport, {
-                evidence: {
-                    eventId: `${opts.taskId}:dispatch_failed`,
-                    at: Date.now(),
-                    source: 'dispatch',
-                    sessionId: opts.sessionId,
-                    attemptRef,
-                    observedBy: ctx.localDaemonId ?? 'mcp-server',
-                    kind: 'dispatch_failed',
-                    workerAbsent: opts.workerAbsent,
-                    reason: 'rejected_by_worker',
-                    ...(refusalCode ? { refusalCode } : {}),
-                },
-            });
-            // (4) one WARN line on the owner, local-only — never in the replicated
-            // evidence above. Detail text is exactly what the transport/worker
-            // answer already carried into the JSON response returned to the
-            // coordinator (see the call site); logging it here just makes it
-            // visible in the owner daemon's own operator-facing log too.
-            if (!opts.workerAbsent) {
-                process.stderr.write(
-                    `[adhdev-mesh] dispatch to ${opts.nodeId ?? 'unknown-node'} refused by worker: `
-                    + `${refusalCode ?? opts.refusalCode ?? 'unknown'}`
-                    + (opts.refusalDetail ? ` — ${opts.refusalDetail}` : '')
-                    + '\n',
-                );
-            }
-        }
-    } catch (e) {
-        LOG_DIRECT_DISPATCH_TURN_OBSERVE_FAILURE(e, opts.outcome);
-    }
-}
-
-/** Best-effort diagnostic — never thrown, matches the file's existing `/* best-effort *\/` convention. */
-function LOG_DIRECT_DISPATCH_TURN_OBSERVE_FAILURE(e: unknown, stage: string): void {
-    const detail = e instanceof TurnIpcCommandError ? `${e.code}: ${e.message}` : String((e as Error)?.message ?? e);
-    process.stderr.write(`[adhdev-mesh] direct-dispatch turnObserve(${stage}) failed (best-effort, dispatch continues): ${detail}\n`);
-}
-
 export async function meshPruneStaleDirect(
     ctx: MeshContext,
     args: { execute?: boolean; dry_run?: boolean; include_terminal?: boolean } = {},
@@ -359,1144 +162,9 @@ export async function meshPruneStaleDirect(
 }
 
 /**
- * The ONE admission gate for a `mesh_send_task` that names an explicit session
- * (`session_id`) — shared by the LOCAL and the REMOTE (P2P) branch so the two cannot
- * drift (preview rc.37: the remote branch had no gate at all and sent
- * `agent_command send_chat policy:queue` into a generating worker, where the body ran as
- * an unaccounted turn 2 and the worker's mesh stamp was overwritten).
- *
- * Only runs when the session is live and NOT idle and NOT terminal. Returns the JSON
- * response for a refused / queued / interrupted-and-queued delivery, or null when the
- * caller should go on to dispatch directly (the decision was `immediate`, or the
- * status is unrecognised — the historical local fall-through, kept identical here).
- * Nothing is sent to the session's input on any non-null outcome: a busy session only
- * ever receives the task through the pinned queue row's claim, which opens the
- * turn-ledger attempt before the body is written.
- */
-async function admitExplicitSessionDelivery(
-    ctx: MeshContext,
-    node: Parameters<typeof commandForNode>[1],
-    args: { node_id: string; session_id?: string },
-    p: {
-        session: any;
-        providerType: string;
-        delivery: { mode: MeshDeliveryMode; unrecognized?: string };
-        message: string;
-        taskMode: string | undefined;
-        difficulty: string;
-        taskInput: MeshTaskInput | undefined;
-        readonly: boolean;
-        missionId: string | undefined;
-        ownedPaths: unknown[] | undefined;
-        queueDecision: Record<string, unknown>;
-        orchestrationWarning: Record<string, unknown>;
-    },
-): Promise<string | null> {
-    if (!p.session || isIdleSessionRecord(p.session) || isTerminalSessionRecord(p.session)) return null;
-    const { providerType, message, taskMode, difficulty, taskInput, readonly, missionId, ownedPaths } = p;
-    const sessionStatus = typeof p.session?.status === 'string' ? p.session.status : 'unknown';
-    const { resolveDeliveryDecision } = await import('@adhdev/daemon-core');
-    const { mode: deliveryMode, unrecognized: unrecognizedDeliveryMode } = p.delivery;
-    // Probe the target provider's interrupt capability from its live spec.
-    // Only needed when the caller actually asked to interrupt.
-    let interruptSupported = false;
-    let interruptUnsupportedMessage: string | undefined;
-    let interruptConfidence: string | undefined;
-    if (deliveryMode === 'interrupt') {
-        try {
-            const probe = unwrapCommandPayload(await commandForNode(ctx, node, 'agent_command', {
-                targetSessionId: args.session_id,
-                agentType: providerType,
-                cliType: providerType,
-                providerType: providerType,
-                action: 'interrupt_capability',
-            }));
-            interruptSupported = probe?.supported === true;
-            interruptUnsupportedMessage = typeof probe?.message === 'string' ? probe.message : undefined;
-            interruptConfidence = typeof probe?.confidence === 'string' ? probe.confidence : undefined;
-        } catch (e: any) {
-            // Probe failure is NOT treated as "supported" — fail closed, and say why.
-            interruptSupported = false;
-            interruptUnsupportedMessage = `Could not determine interrupt capability for provider '${providerType}' on node '${args.node_id}': ${e?.message || e}. `
-                + 'Refusing to interrupt on an unverified capability.';
-        }
-    }
-    const policyResult = resolveDeliveryDecision(sessionStatus, {
-        kind: 'task',
-        deliveryMode,
-        interruptSupported,
-        ...(interruptUnsupportedMessage ? { interruptUnsupportedMessage } : {}),
-    });
-    // ── interrupt requested but the provider cannot ──────────────────
-    // Reported as an explicit failure. We do NOT fall through to the queued
-    // branch: the caller asked to change a running session's trajectory, and
-    // silently delivering after the current turn completes is a materially
-    // different outcome that must not be reported as success.
-    if (policyResult.decision === 'rejected' && policyResult.reason === 'interrupt_unsupported_for_provider') {
-        return JSON.stringify({
-            success: false,
-            dispatched: false,
-            decision: 'interrupt_unsupported',
-            reason: policyResult.reason,
-            nodeId: args.node_id,
-            sessionId: args.session_id,
-            sessionStatus,
-            providerType: providerType,
-            requestedDeliveryMode: deliveryMode,
-            message: policyResult.message,
-            nextAction: `Re-send this task with delivery_mode 'when_idle' to have it delivered when session '${args.session_id}' finishes on its own, `
-                + 'or stop the session and launch a fresh one if the in-flight work must not complete.',
-        });
-    }
-    // ── interrupt: abort the running turn, then let the queued-delivery
-    //    funnel deliver the task on the session's idle transition ──────
-    if (policyResult.decision === 'interrupt') {
-        const interruptResult = unwrapCommandPayload(await commandForNode(ctx, node, 'agent_command', {
-            targetSessionId: args.session_id,
-            agentType: providerType,
-            cliType: providerType,
-            providerType: providerType,
-            action: 'interrupt_turn',
-            dispatchSource: 'mesh-tools-session:mesh_send_task:interrupt',
-        }));
-        if (interruptResult?.success !== true || interruptResult?.interrupted !== true) {
-            // The stop key did not go out. Report the failure — do NOT queue
-            // behind a turn the caller explicitly wanted cancelled.
-            return JSON.stringify({
-                success: false,
-                dispatched: false,
-                decision: 'interrupt_failed',
-                reason: interruptResult?.reason || 'interrupt_rejected',
-                nodeId: args.node_id,
-                sessionId: args.session_id,
-                sessionStatus,
-                providerType: providerType,
-                error: interruptResult?.error || 'The provider did not accept the interrupt.',
-                nextAction: `Nothing was cancelled and nothing was delivered. Re-send with delivery_mode 'when_idle', `
-                    + 'or inspect the session with mesh_read_terminal before retrying.',
-            });
-        }
-        // The turn is cancelled. Deliver via the SAME pinned-queue funnel the
-        // when_idle path uses (enqueueTask + the existing idle-transition
-        // claim), rather than writing the prompt now: the TUI needs a moment
-        // to unwind the aborted turn and repaint an idle prompt, and only the
-        // FSM knows when that has actually happened. Reusing the funnel means
-        // no new injection path and no bypass of the PTY send gate.
-        const interruptedTask = ((await queueEnqueue(ctx.transport, { meshId: ctx.mesh.id, message: message, options: {
-            targetNodeId: args.node_id,
-            targetSessionId: args.session_id,
-            taskMode,
-            difficulty,
-            // MESH-IMAGE-DISPATCH: the queued task carries the same envelope the
-            // direct dispatch below forwards — the claim dispatch delivers it.
-            ...(taskInput ? { input: taskInput } : {}),
-            ...(readonly ? { readonly: true } : {}),
-            ...(missionId ? { missionId } : {}),
-            ...(ownedPaths ? { ownedPaths } : {}),
-            ...(ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}),
-        }, decision: p.queueDecision })).entry as unknown as MeshWorkQueueEntry);
-        return JSON.stringify({
-            success: true,
-            dispatched: false,
-            decision: 'interrupted_and_queued',
-            taskId: interruptedTask.id,
-            reason: policyResult.reason,
-            nodeId: args.node_id,
-            sessionId: args.session_id,
-            sessionStatus,
-            providerType: providerType,
-            taskMode: taskMode || undefined,
-            interrupt: {
-                sent: true,
-                key: interruptResult?.keyName,
-                // 'declared' means the stop key is declared by the spec but the
-                // busy->idle effect was not measured live for this provider.
-                confidence: interruptResult?.confidence || interruptConfidence || 'declared',
-            },
-            turnDiscarded: true,
-            message: `Interrupted the in-flight turn on session '${args.session_id}' via ${interruptResult?.keyName || 'the stop control'}. `
-                + 'That turn was cancelled and its unfinished work is lost. '
-                + `Task '${interruptedTask.id}' is pinned to this session and delivers as soon as it reports idle.`,
-            nextAction: interruptResult?.confidence === 'proven'
-                ? `Track with mesh_status; no manual resend needed.`
-                : `Interrupt support for '${providerType}' is DECLARED by its spec but not live-verified. `
-                    + 'Confirm with mesh_status that the session returned to idle and picked up the task; if it did not, use mesh_read_terminal to inspect.',
-            ...(unrecognizedDeliveryMode ? { deliveryModeWarning: `Unrecognized delivery_mode '${unrecognizedDeliveryMode}' ignored.` } : {}),
-            ...((await buildMissionInactiveWarning(ctx, missionId)) ?? {}),
-            // Orchestration-decision advisories ride every mesh_send_task outcome (the
-            // decision itself is recorded on the enqueue above).
-            ...p.orchestrationWarning,
-        });
-    }
-    if (policyResult.decision === 'queued') {
-        // RC17-QUEUED-DELIVERY-STRANDED: this branch used to create a standalone
-        // SessionDelivery row (status:'queued') and hand the caller a deliveryId to
-        // poll. Nothing in the codebase ever reads getActiveSessionDeliveries() to
-        // re-drive that row — the queue-claim funnel (tryAssignQueueTask, wired to
-        // fire automatically on the session's idle transition in
-        // mesh-event-forwarding.ts) only claims rows created via enqueueTask/
-        // claimNextTask. The record was a dead end: a busy session that went idle
-        // left the delivery permanently stuck at 'queued' with no consumer ever
-        // flushing it (live repro: a Codex session that went generating→idle ~10s
-        // after launch never saw its queued delivery deliver).
-        //
-        // Fix: route through enqueueTask with targetNodeId/targetSessionId pinned to
-        // this exact node+session, the same call the untargeted branch below already
-        // uses. claimNextTask's candidate query (mesh-runtime-store.ts) filters
-        // strictly on targetSessionId equivalence, so only this session can claim it,
-        // and the existing agent:generating_completed / agent:ready handlers already
-        // call tryAssignQueueTask the moment this session goes idle — no new dispatch
-        // path, no new idle-transition wiring, just reusing the funnel that already
-        // auto-flushes reliably.
-        const queuedTask = ((await queueEnqueue(ctx.transport, { meshId: ctx.mesh.id, message: message, options: {
-            targetNodeId: args.node_id,
-            targetSessionId: args.session_id,
-            taskMode,
-            difficulty,
-            // MESH-IMAGE-DISPATCH: the queued task carries the same envelope the
-            // direct dispatch below forwards — the claim dispatch delivers it.
-            ...(taskInput ? { input: taskInput } : {}),
-            ...(readonly ? { readonly: true } : {}),
-            ...(missionId ? { missionId } : {}),
-            ...(ownedPaths ? { ownedPaths } : {}),
-            ...(ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}),
-        }, decision: p.queueDecision })).entry as unknown as MeshWorkQueueEntry);
-        return JSON.stringify({
-            success: true,
-            dispatched: false,
-            decision: 'queued_delivery',
-            taskId: queuedTask.id,
-            reason: policyResult.reason,
-            nodeId: args.node_id,
-            sessionId: args.session_id,
-            sessionStatus,
-            taskMode: taskMode || undefined,
-            message: policyResult.message,
-            nextAction: `Task '${queuedTask.id}' is queued and pinned to session '${args.session_id}' — it auto-delivers the moment the session goes idle. Use mesh_status or mesh_task_history to track it; no manual resend needed.`,
-            // A misspelled delivery_mode silently became when_idle. Say so — a
-            // caller who meant to interrupt must not read this queued result as
-            // "my steering landed".
-            ...(unrecognizedDeliveryMode
-                ? {
-                    deliveryModeWarning: `Unrecognized delivery_mode '${unrecognizedDeliveryMode}' was ignored; this task was queued (when_idle) and the running turn was NOT interrupted. `
-                        + "Valid values are 'when_idle' and 'interrupt'.",
-                }
-                : {}),
-            ...((await buildMissionInactiveWarning(ctx, missionId)) ?? {}),
-            // Orchestration-decision advisories ride every mesh_send_task outcome (the
-            // decision itself is recorded on the enqueue above).
-            ...p.orchestrationWarning,
-        });
-    }
-    return null;
-}
-
-export async function meshSendTask(
-    ctx: MeshContext,
-    args: {
-        node_id: string; session_id?: string; message: string;
-        /** MESH-IMAGE-DISPATCH: optional multipart attachment delivered with `message`. */
-        input?: unknown;
-        task_mode?: string; taskMode?: string;
-        readonly?: boolean; read_only?: boolean;
-        mission_id?: string; missionId?: string;
-        /** H1 (path ownership) — see mesh-work-queue.ts MeshEnqueueTaskOptions.ownedPaths doc. */
-        owned_paths?: unknown; ownedPaths?: unknown;
-        difficulty?: string;
-        delivery_mode?: string; deliveryMode?: string;
-        /** GRAPH-MEASUREMENT-DIRECT — optional dispatch-decision record (provenance only). */
-        orchestration_decision?: unknown; orchestrationDecision?: unknown;
-        /** GIT-GATE: opt out of the dirty/stale-behind refusal for a non-readonly direct dispatch. */
-        allow_stale_node?: boolean; allowStaleNode?: boolean;
-        /** QUOTA-GATE: opt out of the quota-exhausted refusal for a direct dispatch. */
-        allow_quota_exhausted?: boolean; allowQuotaExhausted?: boolean;
-    },
-): Promise<string> {
-    // DELIVERY-MSG-GUARD: make the schema's nominal `required: ['message']` real. The
-    // tool dispatcher forwards raw args without runtime schema validation, so a caller
-    // omitting message (or passing a non-string) would hand undefined down the direct-
-    // dispatch path — buildDirectTaskPayload / recordDirectDispatchTask — and crash the
-    // queue row's NOT NULL. Reject at the tool boundary.
-    const message = readString(args.message);
-    if (!message) {
-        return JSON.stringify({
-            success: false,
-            code: 'invalid_message',
-            error: 'mesh_send_task requires a non-empty string `message`.',
-        });
-    }
-    // MESH-IMAGE-DISPATCH: optional structured attachment (e.g. a screenshot). Validated
-    // at the tool boundary for the same reason `message` is — the dispatcher performs no
-    // runtime schema validation, so a malformed envelope would otherwise surface deep in
-    // the worker daemon or be dropped without a word.
-    let taskInput: MeshTaskInput | undefined;
-    try {
-        taskInput = readTaskInput((args as { input?: unknown }).input);
-    } catch (e: any) {
-        return JSON.stringify({
-            success: false,
-            code: 'invalid_input',
-            error: `mesh_send_task received an unusable \`input\`: ${e?.message || e}`,
-        });
-    }
-    const requestedTaskMode = readString(args.task_mode) || readString(args.taskMode);
-    const readonly = args.readonly === true || args.read_only === true;
-    // Optional mission attribution. When set, the direct-dispatched task is also
-    // materialised as an assigned queue entry so it counts toward the mission's
-    // task aggregates — see recordDirectDispatchTask. Absent → unattributed
-    // direct dispatch as before (backward compatible).
-    const missionId = readString(args.missionId) || readString(args.mission_id) || undefined;
-    // H1 (path ownership): raw passthrough — normalizeOwnedPaths (daemon-side, inside
-    // recordDirectDispatchTask) does the real validation/normalization; here we only
-    // avoid forwarding a non-array value.
-    const rawOwnedPaths = args.ownedPaths ?? args.owned_paths;
-    const ownedPaths = Array.isArray(rawOwnedPaths) ? rawOwnedPaths : undefined;
-    // MISSION-UPSERT-SILENT-CREATE: an unresolvable mission_id previously dispatched fine
-    // and only produced silence — buildMissionInactiveWarning (used further below) warns
-    // solely for a KNOWN-but-inactive mission and returns undefined for an unknown id (see
-    // its own doc comment), so the task landed unattributed with zero feedback. Reject at
-    // the tool boundary, same convention as invalid_message/missing_difficulty above.
-    // C-W9c: was in-process `getMeshMission`; now the `mission_query` IPC round
-    // trip mesh-tools-mission.ts's read path already uses.
-    if (missionId && !(await missionQuery(ctx.transport, { meshId: ctx.mesh.id, id: missionId })).missions[0]) {
-        return JSON.stringify({
-            success: false,
-            code: 'mission_not_found',
-            error: `mission '${missionId}' does not exist on this mesh — refusing to dispatch a task with an unresolvable mission_id. Omit mission_id, or use mesh_mission_list to get a valid full id.`,
-            missionId,
-        });
-    }
-    // DIFFICULTY-REQUIRED: like `message` above, the schema's `required` is nominal —
-    // the dispatcher forwards raw args without runtime validation. Reject at the tool
-    // boundary so the caller gets a teaching error naming the field and its allowed
-    // values, rather than the bare throw the daemon-core guard would raise.
-    const difficultyRaw = readString(args.difficulty);
-    if (!difficultyRaw || !isMeshTaskDifficulty(difficultyRaw)) {
-        return JSON.stringify({
-            success: false,
-            code: difficultyRaw ? 'invalid_difficulty' : 'missing_difficulty',
-            error: difficultyRaw
-                ? `mesh_send_task received an unrecognized \`difficulty\` value '${difficultyRaw}'. Allowed: ${MESH_TASK_DIFFICULTIES.join(' | ')}.`
-                : `mesh_send_task requires a \`difficulty\`. Allowed: ${MESH_TASK_DIFFICULTIES.join(' | ')}. Classify the task by how hard the work actually is.`,
-            allowedDifficulties: MESH_TASK_DIFFICULTIES,
-        });
-    }
-    const difficulty = difficultyRaw;
-    // ── GRAPH-MEASUREMENT-DIRECT — the direct surface's dispatch-decision record ──
-    //
-    // ★ WHY THIS IS COMPUTED HERE, ABOVE THE THREE EXIT PATHS. meshSendTask has three
-    // outcomes: a remote `p2p_direct` dispatch, a local `local_direct` dispatch, and an
-    // untargeted fall-through that ENQUEUES a queue task instead. Only the first two are
-    // direct dispatches, so the record is normalized once here and written by each of the
-    // two direct paths — never by the fall-through, which would otherwise count a queue
-    // entry as a direct dispatch and corrupt the exact ratio this measures.
-    //
-    // Optional and never fatal, exactly like the mesh_enqueue_task record: an omitted
-    // decision is the `decisionMissing` datapoint, not a rejection. Nothing below can
-    // fail or alter the dispatch — this is provenance only.
-    const rawDecision = args.orchestration_decision ?? args.orchestrationDecision;
-    const decisionMissing = rawDecision === undefined || rawDecision === null;
-    const orchestration = normalizeOrchestrationDecision(rawDecision, 'direct');
-    const orchestrationWarning = {
-        ...(orchestration.unsanctionedDirect
-            ? {
-                unsanctionedDirect: orchestration.unsanctionedDirect,
-                unsanctionedDirectHint: MESH_UNSANCTIONED_DIRECT_HINT,
-            }
-            : {}),
-        ...(decisionMissing ? { orchestrationDecisionMissing: true } : {}),
-    };
-    // DELIVERY-MODE (both branches): normalized ONCE here so the local and the remote
-    // (P2P) dispatch read the same mode, and a typo is reported on every outcome instead
-    // of only on the local busy path. An unrecognized value falls back to when_idle.
-    const { normalizeDeliveryMode } = await import('@adhdev/daemon-core');
-    const delivery = normalizeDeliveryMode(args.delivery_mode ?? args.deliveryMode) as { mode: MeshDeliveryMode; unrecognized?: string };
-    const deliveryModeWarning = delivery.unrecognized
-        ? { deliveryModeWarning: `Unrecognized delivery_mode '${delivery.unrecognized}' was ignored (treated as when_idle). Valid values are 'when_idle' and 'interrupt'.` }
-        : {};
-    // ORCHESTRATION-DECISION on the queue exits: a mesh_send_task that ends up as a queue
-    // row (busy session → queued / interrupted-and-queued, or the untargeted pull) records
-    // the caller's decision on that enqueue exactly like mesh_enqueue_task does, instead of
-    // dropping it. (Recorded as the single-enqueue record, not the direct one — a queue row
-    // is not a direct dispatch; see recordDirectDispatchDecision's note.)
-    const queueDecision: Record<string, unknown> = {
-        ...(missionId ? { missionId } : {}),
-        ...(ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}),
-        decision: orchestration.decision,
-        ...(decisionMissing ? { decisionMissing: true } : {}),
-    };
-    const modeValidation = validateMeshTaskModeRequest(requestedTaskMode, message, readonly);
-    if (!modeValidation.valid) {
-        return JSON.stringify({
-            success: false,
-            code: 'live_debug_readonly_guardrail_violation',
-            taskMode: modeValidation.taskMode || requestedTaskMode,
-            violations: modeValidation.violations,
-            // GUARDRAIL-TEACHING-ERROR: match location per violation, so the caller
-            // can see what tripped the guard instead of rewording blind.
-            ...(modeValidation.violationDetails ? { violationDetails: modeValidation.violationDetails } : {}),
-            allowedOperations: modeValidation.allowedOperations,
-            error: buildMeshTaskModeViolationError(modeValidation),
-        });
-    }
-    const taskMode = modeValidation.taskMode;
-    const node = await findNodeWithRefresh(ctx, args.node_id);
-
-    // Policy check: read-only node cannot receive tasks
-    if (node.policy?.readOnly) {
-        return JSON.stringify({ error: `Node '${args.node_id}' is read-only` });
-    }
-
-    // WTDISPATCH-FANOUT: a `convergence` task lands its work onto base (merge → push →
-    // cleanup) and is base-only. Refuse a direct dispatch that targets a worktree-clone
-    // node, fail-closed — co-located sibling worktree sessions racing a convergence
-    // push/production-deploy is exactly the 4-way fan-out the live repro hit. Mirrors the
-    // queue claim guard (claimNextQueueTask) and the auto-launch eligibility filter so the
-    // base-only invariant holds across every dispatch entry point.
-    if (taskMode === 'convergence' && node.isLocalWorktree === true) {
-        return JSON.stringify({
-            success: false,
-            recoverable: true,
-            code: 'mesh_convergence_target_is_worktree',
-            reason: 'mesh_convergence_target_is_worktree',
-            nodeId: args.node_id,
-            sessionId: args.session_id,
-            taskMode,
-            error: `Node '${args.node_id}' is a worktree clone; a convergence task is base-only (it merges/pushes onto base). Dispatching it to a worktree session risks a multi-worktree push/deploy race.`,
-            nextAction: `Dispatch the convergence task to the base node for this mesh, or run the deterministic fast-forward convergence path (mesh_fast_forward_node / mesh_refine_node) instead of mesh_send_task.`,
-        });
-    }
-
-    // GIT-GATE (owner-requested follow-up to H1, wiring-unification): the claim path
-    // (mesh-queue-assignment.ts, daemon-side) already refuses a write claim onto a
-    // dirty/stale-behind node for an ALREADY-idle session, and the auto-launch spawn
-    // gate refuses it before even launching one — but a direct dispatch via
-    // mesh_send_task bypassed both, since it targets a node/session explicitly and
-    // never goes through either gate. Apply the SAME predicates here, fail-closed
-    // unless the caller explicitly opts out with allow_stale_node (e.g. a deliberate
-    // "fix the dirty tree" task). Readonly dispatches are exempt — same write-only
-    // scope as the claim-path gate.
-    const allowStaleNode = args.allow_stale_node === true || args.allowStaleNode === true;
-    // QUOTA-GATE opt-out (preview rc.43 run 10) — see checkDirectDispatchQuotaGate's
-    // doc comment (mesh-tools-internal.ts) for what this gates and why.
-    const allowQuotaExhausted = args.allow_quota_exhausted === true || args.allowQuotaExhausted === true;
-    if (!allowStaleNode && !isTaskReadonly({ readonly, taskMode })) {
-        const dirty = isDirtyNode(node);
-        const maxBehind = resolveAutoFastForwardPolicy(ctx.mesh).maxBehind;
-        const staleBehind = !isMeshNodeFreshEnoughToLaunch(node, { maxBehind });
-        if (dirty || staleBehind) {
-            const behind = typeof (node as any)?.git?.behind === 'number' ? (node as any).git.behind : undefined;
-            return JSON.stringify({
-                success: false,
-                recoverable: true,
-                code: dirty ? 'dirty_workspace' : 'node_stale_behind_upstream',
-                reason: dirty ? 'dirty_workspace' : 'node_stale_behind_upstream',
-                nodeId: args.node_id,
-                sessionId: args.session_id,
-                taskMode: taskMode || 'unspecified',
-                error: dirty
-                    ? `Node '${args.node_id}' has a dirty workspace (uncommitted changes) — refusing a non-readonly direct dispatch that could race a concurrent edit.`
-                    : `Node '${args.node_id}' is behind its upstream${behind !== undefined ? ` (${behind} commit(s), max ${maxBehind ?? 0})` : ''} — refusing a non-readonly direct dispatch against stale code.`,
-                nextAction: `Let the node's auto fast-forward / clean-up run first, retry with a readonly task_mode, or pass allow_stale_node: true to dispatch anyway (e.g. a task whose job IS to fix the dirty/stale tree).`,
-            });
-        }
-    }
-
-    let explicitTargetSession: any | undefined;
-    if (args.session_id && isWorkerTaskMode(taskMode, readonly)) {
-        try {
-            // The node's runtime, as the coordinator daemon answers it (readNodeRuntime).
-            const { probe: sessionLookupProbe } = await readNodeRuntime(ctx, node);
-            const sessions = sessionLookupProbe.sessions;
-            explicitTargetSession = sessions.find(session => readSessionRecordId(session) === args.session_id);
-            if (explicitTargetSession && isMeshCoordinatorSessionRecord(explicitTargetSession)) {
-                return JSON.stringify({
-                    success: false,
-                    recoverable: true,
-                    code: 'mesh_target_session_is_coordinator',
-                    reason: 'mesh_target_session_is_coordinator',
-                    nodeId: args.node_id,
-                    sessionId: args.session_id,
-                    taskMode: taskMode || 'unspecified',
-                    error: `Session '${args.session_id}' is a Repo Mesh coordinator session, not a visible worker session. Launch or use a visible worker session before dispatching this task.`,
-                    nextAction: `Call mesh_launch_session for node '${args.node_id}' and then retry mesh_send_task with that worker session_id, or use mesh_enqueue_task for queue-based worker assignment.`,
-                });
-            }
-            if (explicitTargetSession && isUnmanagedSessionRecord(explicitTargetSession)) {
-                // Session exists but lacks mesh delegation metadata (no meshNodeFor,
-                // meshCoordinatorFor, or launchedByCoordinator). It could be:
-                //   - The coordinator's own session → self-send risk
-                //   - A manually launched session not associated with this mesh
-                // Completion events from this session would not reach the coordinator
-                // ledger. Surface a hard warning but still record the dispatch attempt
-                // in the result so the coordinator can decide whether to proceed.
-                //
-                // Note: if the session happens to have meshCoordinatorFor set, the check
-                // above would have already returned mesh_target_session_is_coordinator.
-                // This warning fires only for truly unmanaged sessions.
-                return JSON.stringify({
-                    success: false,
-                    recoverable: true,
-                    code: 'mesh_target_session_unmanaged',
-                    reason: 'mesh_target_session_unmanaged',
-                    nodeId: args.node_id,
-                    sessionId: args.session_id,
-                    taskMode: taskMode || 'unspecified',
-                    unsafeTranscriptAlias: true,
-                    error: `Session '${args.session_id}' on node '${args.node_id}' has no Repo Mesh delegation metadata (missing meshNodeFor/meshCoordinatorFor/launchedByCoordinator). It may be the coordinator's own session or an unrelated session — dispatching risks self-send and orphaned completion events that never reach the coordinator ledger.`,
-                    nextAction: `Call mesh_launch_session for node '${args.node_id}' to start a fresh managed worker session, then retry mesh_send_task with the returned session_id. Alternatively use mesh_enqueue_task for queue-based assignment without specifying session_id.`,
-                });
-            }
-        } catch {
-            explicitTargetSession = undefined;
-        }
-    }
-
-    // Avoid duplicate side effects when an MCP/tool call is interrupted after
-    // the daemon already accepted the send and the coordinator retries the
-    // exact same node/session/message immediately.
-    const duplicate = await hasRecentDuplicateDispatch(ctx, args);
-    if (duplicate.duplicate) {
-        return JSON.stringify({
-            success: true,
-            duplicate: true,
-            dispatched: false,
-            warning: 'Duplicate mesh_send_task suppressed: the same node/session/message was dispatched recently.',
-            nodeId: args.node_id,
-            sessionId: args.session_id,
-            source: duplicate.source,
-            previousDispatch: duplicate.entry ? {
-                id: duplicate.entry.id,
-                timestamp: duplicate.entry.timestamp || duplicate.entry.updatedAt || duplicate.entry.createdAt,
-                nodeId: duplicate.entry.nodeId || duplicate.entry.targetNodeId || duplicate.entry.assignedNodeId,
-                sessionId: duplicate.entry.sessionId || duplicate.entry.targetSessionId || duplicate.entry.assignedSessionId,
-            } : undefined,
-        });
-    }
-
-    try {
-        // ── The coordinator daemon decides the route (MCP asks, daemon decides) ─
-        //
-        // `mesh_dispatch_route` (daemon-core mesh-status-view.ts) answers from the
-        // coordinator's roster and its own identity: `remote` = another daemon owns
-        // the node's checkout → relay agent_command over the mesh channel (the
-        // local queue lives on THIS machine and is inaccessible to the remote
-        // daemon, so trigger_mesh_queue there would be a no-op); `local` = this
-        // daemon serves it; `unreachable` = owned elsewhere with no mesh channel.
-        const route = await resolveMeshDispatchRoute(ctx, args.node_id);
-        if (route.route === 'unreachable' || route.route === 'error') {
-            return JSON.stringify({
-                success: false,
-                code: route.route === 'unreachable' ? 'mesh_node_unreachable' : 'mesh_dispatch_route_unavailable',
-                nodeId: args.node_id,
-                ...(args.session_id ? { sessionId: args.session_id } : {}),
-                taskMode: taskMode || 'unspecified',
-                error: route.route === 'unreachable'
-                    ? `Node '${args.node_id}' is served by another daemon and the coordinator daemon has no mesh channel to it (${route.reason}).`
-                    : `The coordinator daemon could not decide how to reach node '${args.node_id}': ${route.reason}`,
-            });
-        }
-        if (route.route === 'remote' && ctx.transport instanceof IpcTransport) {
-            const cached = getSessionMetadata(meshSessionCacheKey(args.node_id, args.session_id || ''));
-            // BUSY-SESSION GATE (remote parity, preview rc.37): an explicit target session that
-            // is live and busy gets the SAME admission decision the local branch applies —
-            // queued_delivery / interrupted_and_queued / interrupt_unsupported / interrupt_failed —
-            // BEFORE any direct-dispatch attempt is opened and before anything is sent. Without it
-            // this branch sent `agent_command send_chat` into a generating worker.
-            if (args.session_id && explicitTargetSession) {
-                const remoteAdmission = await admitExplicitSessionDelivery(ctx, node, args, {
-                    session: explicitTargetSession,
-                    providerType: cached?.providerType || resolveSessionProviderType(explicitTargetSession) || '',
-                    delivery,
-                    message, taskMode, difficulty, taskInput, readonly, missionId, ownedPaths,
-                    queueDecision,
-                    orchestrationWarning,
-                });
-                if (remoteAdmission !== null) return remoteAdmission;
-            }
-            const taskId = randomUUID();
-            const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
-            // F1: materialize the worker-protocol footer (and any relevant handoff
-            // notes) onto the DISPATCHED body only — the ledger/dispatch rows below
-            // keep the authored `message`.
-            const dispatchBody = resolveDispatchMessage(
-                {
-                    id: taskId, message, taskMode, difficulty,
-                    ...(readonly ? { readonly: true } : {}),
-                    ...(missionId ? { missionId } : {}),
-                },
-                ctx.mesh.id,
-                node,
-            );
-            // MULTIPART-FOOTER-PARITY: when the attachment envelope carries its own text
-            // part, the provider may render the parts and never look at `message` — the
-            // footer must land there too, or the worker never learns the protocol on an
-            // image-attached dispatch. appendWorkerProtocolFooter is idempotent, so this
-            // is safe even if the text part already carries the marker for some reason.
-            const dispatchInput = taskInput && Array.isArray(taskInput.parts)
-                ? {
-                    ...taskInput,
-                    parts: taskInput.parts.map(part =>
-                        part && typeof part === 'object' && part.type === 'text' && typeof (part as any).text === 'string'
-                            ? { ...part, text: appendWorkerProtocolFooter((part as any).text, { taskId, taskMode, difficulty, readonly }) }
-                            : part,
-                    ),
-                }
-                : taskInput;
-            // C-W6c: open the attempt in the NEW turn ledger (C1 reducer) BEFORE the
-            // send, so its attemptRef can be embedded in meshContext — the remote
-            // daemon's cli-manager.ts already reads meshContext.attemptId/
-            // attemptGeneration and echoes them onto the worker's turn evidence
-            // (command-args.ts MeshCommandContext). Without this, a remote worker's
-            // forwarded evidence carries no attempt reference and the new ledger
-            // never resolves it. sessionId is unknown before the send for a
-            // sessionless dispatch, so fall back to taskId (same fallback the
-            // legacy ledger's session-scalar heuristic already uses elsewhere in
-            // this file) — the reducer keys dispatch_accepted's attempt off
-          // `${scope}:${eventId}`, not off sessionId, so this is only an
-            // envelope-required placeholder.
-            const p2pAttemptRef = await openDirectDispatchAttempt(ctx, {
-                taskId,
-                nodeId: args.node_id,
-                sessionId: args.session_id || taskId,
-                providerType: cached?.providerType,
-            });
-            const result = await ipcDispatchToRemoteAgent(ctx, node, {
-                session_id: args.session_id,
-                message: dispatchBody,
-                // MESH-IMAGE-DISPATCH: the remote P2P path carries the attachment too —
-                // this is the leg that needs the transport chunking.
-                ...(dispatchInput ? { input: dispatchInput } : {}),
-                providerType: cached?.providerType,
-                verifiedSession: explicitTargetSession,
-                // D2: the task id IS this dispatch's message identity (the mesh_direct
-                // attempt records the same), so a retried send is ONE message to the
-                // worker's funnel; an idle-target direct dispatch is plain `queue`. The admission
-                // gate above already routed every busy-session outcome (interrupt included)
-                // through the pinned queue, so what reaches here is an idle target or a
-                // sessionless auto-pick (idle sessions only).
-                messageId: taskId,
-                policy: { mode: 'queue' },
-                origin: 'mcp',
-                allowQuotaExhausted,
-                meshContext: {
-                    meshId: ctx.mesh.id,
-                    nodeId: args.node_id,
-                    taskId,
-                    ...(coordinatorDaemonId ? { coordinatorDaemonId } : {}),
-                    // (3) Stamp the originating coordinator session so the worker's completion
-                    // routes back to THIS coordinator session (multi-coordinator). Survives the
-                    // P2P dispatch to the remote worker, which echoes it on its completion event.
-                    ...(ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}),
-                    // C-W6c: thread the new-ledger attempt ref through so the worker's
-                    // evidence (forwarded completion, session_error, etc.) resolves to
-                    // THIS attempt instead of arriving attempt-less.
-                    ...(p2pAttemptRef ? { attemptId: p2pAttemptRef.attemptId, attemptGeneration: p2pAttemptRef.generation } : {}),
-                },
-            });
-            if (result.success) {
-                // Record dispatch in ledger so task_history is accurate.
-                // Defensive guard: a sessionless dispatch must not record the
-                // provider type as a session id (an older ipcDispatch fallback
-                // returned resolvedProviderType in result.sessionId). If the
-                // returned sessionId equals the provider type, treat it as
-                // sessionless so completion matching falls back to taskId.
-                const resultSessionId = result.sessionId
-                    && result.providerType
-                    && result.sessionId === result.providerType
-                    ? ''
-                    : result.sessionId;
-                const dispatchedSessionId = args.session_id || resultSessionId;
-                const dispatchedAt = new Date().toISOString();
-                // C-W6c: record the delivery outcome against the attempt opened before
-                // the send (C-W8: the ONLY attempt — recordDirectDispatchTask below just
-                // materialises the queue row; the worker-MCP token was minted daemon-side
-                // when the ledger opened the attempt). Best-effort: see the helper's doc comment.
-                await observeDirectDispatchOutcome(ctx, p2pAttemptRef, {
-                    taskId, sessionId: dispatchedSessionId || taskId, outcome: 'delivered', via: 'p2p',
-                });
-                try {
-                    const providerType = result.providerType || cached?.providerType;
-                    await recordLocal(ctx.transport, { meshId: ctx.mesh.id,
-                        kind: 'task_dispatched',
-                        nodeId: args.node_id,
-                        sessionId: dispatchedSessionId,
-                        providerType,
-                        payload: buildDirectTaskPayload(message, 'p2p_direct', {
-                            taskId,
-                            taskMode,
-                            providerType,
-                            targetSessionId: dispatchedSessionId,
-                            ...(args.node_id ? { selectedNodeId: args.node_id } : {}),
-                            ...(ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}),
-                            // COORD-EVENT-MISROUTE: persist the dispatching coordinator daemon anchor
-                            // (same value stamped into meshContext above) so a transcript-reconcile
-                            // synth recovers it instead of the worker's own self-daemon.
-                            ...(coordinatorDaemonId ? { coordinatorDaemonId } : {}),
-                        }),
-                    });
-                    // MISSIONLESS-DIRECT-DISPATCH-NO-ATTEMPT: called unconditionally —
-                    // the materialised row carries the turn-ledger attempt opened above
-                    // (C-W8: the attempt, not this call, is what makes the completion
-                    // reducer-authoritative). missionId only affects mission attribution.
-                    // C-W9a: the task row and the decision record are written by the
-                    // daemon (`direct_dispatch_record`), each best-effort. GRAPH-MEASUREMENT-
-                    // DIRECT: written AFTER the dispatch is known to have succeeded, mirroring
-                    // the single-enqueue decision written after the insert — a failed dispatch
-                    // must leave no decision row, or the adoption ratio counts dispatches that
-                    // never happened.
-                    await directDispatchRecord(ctx.transport, {
-                        meshId: ctx.mesh.id,
-                        taskId,
-                        message,
-                        task: {
-                            ...(missionId ? { missionId } : {}),
-                            ...(ownedPaths ? { ownedPaths } : {}),
-                            assignedNodeId: args.node_id,
-                            assignedSessionId: dispatchedSessionId,
-                            taskMode,
-                            difficulty,
-                            ...(readonly ? { readonly: true } : {}),
-                            dispatchedAt,
-                            ...(p2pAttemptRef ? { attemptId: p2pAttemptRef.attemptId } : {}),
-                        },
-                        decision: {
-                            via: 'p2p_direct',
-                            nodeId: args.node_id,
-                            ...(dispatchedSessionId ? { sessionId: dispatchedSessionId } : {}),
-                            ...(missionId ? { missionId } : {}),
-                            ...(ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}),
-                            decision: orchestration.decision,
-                            ...(decisionMissing ? { decisionMissing: true } : {}),
-                            ...(orchestration.unsanctionedDirect
-                                ? { unsanctionedDirect: orchestration.unsanctionedDirect.reportedReason }
-                                : {}),
-                        } as Record<string, unknown>,
-                    });
-                } catch { /* best-effort */ }
-            } else {
-                // C-W6c: the transport refused/failed the P2P relay — record
-                // dispatch_failed against the attempt opened before the send so the
-                // new ledger reclaims it (R24) instead of leaving an orphaned 'A' state.
-                //
-                // Live-gap fix (2026-09-25): `result` here is the SAME RemoteAgentDispatchResult
-                // returned to the coordinator below — ipcDispatchToRemoteAgent already spreads the
-                // worker's own `{success:false, code, error, ...}` answer onto it (after unwrapping
-                // through unwrapMeshRelayResult), so result.code carries the worker's actual refusal
-                // (e.g. session_busy_with_task, mesh_sender_not_on_roster, mesh_node_bootstrap_pending,
-                // provider_quota_exhausted) whenever the worker WAS reached and answered. Only the
-                // P2pRelayFailure transport-absence codes mean the worker was never reached at all.
-                const failureCode = readString((result as { code?: unknown }).code);
-                const workerAbsent = !!failureCode && P2P_TRANSPORT_ABSENCE_CODES.has(failureCode);
-                const failureDetail = readString((result as { error?: unknown }).error);
-                await observeDirectDispatchOutcome(ctx, p2pAttemptRef, {
-                    taskId, sessionId: args.session_id || taskId, outcome: 'dispatch_failed', workerAbsent,
-                    ...(!workerAbsent && failureCode ? { refusalCode: failureCode } : {}),
-                    // Local-only (never sent as ledger evidence — see observeDirectDispatchOutcome):
-                    // capped so a verbose transport/provider error message cannot grow the owner's
-                    // WARN log unboundedly.
-                    ...(failureDetail ? { refusalDetail: failureDetail.slice(0, 200) } : {}),
-                    nodeId: args.node_id,
-                });
-            }
-            const returnedSessionId = result.sessionId
-                && result.providerType
-                && result.sessionId === result.providerType
-                ? ''
-                : result.sessionId;
-            return JSON.stringify({
-                ...result,
-                nodeId: args.node_id,
-                sessionId: result.success ? (args.session_id || returnedSessionId) : args.session_id,
-                ...(result.success ? { source: 'direct', taskId } : {}),
-                taskMode,
-                ...(result.success && result.providerType ? { providerType: result.providerType } : {}),
-                dispatched: result.success === true,
-                ...(result.success ? ((await buildMissionInactiveWarning(ctx, missionId)) ?? {}) : {}),
-                // GRAPH-MEASUREMENT-DIRECT: advisory only, and only on a dispatch that
-                // actually happened — a failed dispatch made no routing decision to report on.
-                ...(result.success ? orchestrationWarning : {}),
-                ...deliveryModeWarning,
-            });
-        }
-
-        // ── LocalTransport or local IpcTransport node ────────────────────────
-        // If the coordinator explicitly targets a runtime session, push directly
-        // and surface route failures immediately instead of creating a queue item
-        // that can remain pending forever when the session was already stopped.
-        if (args.session_id) {
-            const cached = getSessionMetadata(meshSessionCacheKey(args.node_id, args.session_id));
-            let resolvedProviderType = cached?.providerType || '';
-            if (!resolvedProviderType) {
-                let explicitSession = explicitTargetSession;
-                if (!explicitSession) {
-                    const { probe: providerLookupProbe } = await readNodeRuntime(ctx, node);
-                    explicitSession = providerLookupProbe.sessions.find(session => readSessionRecordId(session) === args.session_id);
-                }
-                if (!explicitSession) {
-                    return JSON.stringify({
-                        success: false,
-                        recoverable: true,
-                        code: 'mesh_target_session_not_found',
-                        reason: 'mesh_target_session_not_found',
-                        transport: 'local_ipc',
-                        retryRecommended: true,
-                        nodeId: args.node_id,
-                        sessionId: args.session_id,
-                        error: `Local session '${args.session_id}' is not present in live status for node '${args.node_id}'.`,
-                        nextAction: `Launch a fresh session with mesh_launch_session(node_id: '${args.node_id}') or retry without session_id so Repo Mesh can target a live delegate session.`,
-                    });
-                }
-                // The early validation block only runs for isWorkerTaskMode (excludes
-                // live_debug_readonly). Apply the same coordinator/unmanaged checks here
-                // for sessions resolved in this path so no task mode bypasses them.
-                if (isMeshCoordinatorSessionRecord(explicitSession)) {
-                    return JSON.stringify({
-                        success: false,
-                        recoverable: true,
-                        code: 'mesh_target_session_is_coordinator',
-                        reason: 'mesh_target_session_is_coordinator',
-                        nodeId: args.node_id,
-                        sessionId: args.session_id,
-                        taskMode: taskMode || 'unspecified',
-                        error: `Session '${args.session_id}' is a Repo Mesh coordinator session, not a visible worker session. Launch or use a visible worker session before dispatching this task.`,
-                        nextAction: `Call mesh_launch_session for node '${args.node_id}' and then retry mesh_send_task with that worker session_id, or use mesh_enqueue_task for queue-based worker assignment.`,
-                    });
-                }
-                if (isUnmanagedSessionRecord(explicitSession)) {
-                    return JSON.stringify({
-                        success: false,
-                        recoverable: true,
-                        code: 'mesh_target_session_unmanaged',
-                        reason: 'mesh_target_session_unmanaged',
-                        nodeId: args.node_id,
-                        sessionId: args.session_id,
-                        taskMode: taskMode || 'unspecified',
-                        unsafeTranscriptAlias: true,
-                        unsafeDelegateTarget: true,
-                        error: `Session '${args.session_id}' on node '${args.node_id}' has no Repo Mesh delegation metadata (missing meshNodeFor/meshCoordinatorFor/launchedByCoordinator). It may be the coordinator's own session or an unrelated session — dispatching risks self-send and orphaned completion events that never reach the coordinator ledger.`,
-                        nextAction: `Call mesh_launch_session for node '${args.node_id}' to start a fresh managed worker session, then retry mesh_send_task with the returned session_id. Alternatively use mesh_enqueue_task for queue-based assignment without specifying session_id.`,
-                    });
-                }
-                resolvedProviderType = resolveSessionProviderType(explicitSession);
-                if (resolvedProviderType) {
-                    meshSessionProviderMetadata.set(meshSessionCacheKey(args.node_id, args.session_id), {
-                        providerType: resolvedProviderType,
-                        providerSessionId: readString(explicitSession?.providerSessionId) || undefined,
-                        expiresAt: Date.now() + SESSION_PROVIDER_METADATA_TTL_MS,
-                    });
-                }
-            }
-            if (!resolvedProviderType) {
-                return JSON.stringify({
-                    success: false,
-                    recoverable: true,
-                    code: 'mesh_target_session_provider_unknown',
-                    reason: 'mesh_target_session_provider_unknown',
-                    transport: 'local_ipc',
-                    retryRecommended: false,
-                    nodeId: args.node_id,
-                    sessionId: args.session_id,
-                    error: `Local session '${args.session_id}' is live but does not expose providerType/cliType, so agent_command cannot be routed safely.`,
-                    nextAction: `Relaunch the target session on node '${args.node_id}' or retry without session_id so Repo Mesh can pick a session with provider metadata.`,
-                });
-            }
-            // QUOTA GATE (direct dispatch, local session) — preview rc.43 run 10: see
-            // checkDirectDispatchQuotaGate's doc comment (mesh-tools-internal.ts). This is
-            // the exact case that motivated the fix — a LOCAL explicit session_id dispatch
-            // to a MainPC worker whose provider had already reported "session limit" — so
-            // it is checked as early as resolvedProviderType is known, before the delivery
-            // admission gate and before anything is sent.
-            if (!allowQuotaExhausted) {
-                const quotaGate = checkDirectDispatchQuotaGate(node, resolvedProviderType, ctx.mesh.policy?.quotaRouting ?? null);
-                if (quotaGate) {
-                    return JSON.stringify(buildQuotaExhaustedDispatchFailure(node, resolvedProviderType, args.session_id, quotaGate));
-                }
-            }
-            // Apply delivery policy: check session status and decide immediate vs queued vs rejected.
-            // Busy/generating sessions must not receive immediate send_chat injection. The gate
-            // is shared with the remote branch above (admitExplicitSessionDelivery).
-            const localAdmission = await admitExplicitSessionDelivery(ctx, node, args, {
-                session: explicitTargetSession,
-                providerType: resolvedProviderType,
-                delivery,
-                message, taskMode, difficulty, taskInput, readonly, missionId, ownedPaths,
-                queueDecision,
-                orchestrationWarning,
-            });
-            if (localAdmission !== null) return localAdmission;
-
-            // Detect whether the session was idle at dispatch time. An idle session that
-            // receives agent_command/send_chat should transition to generating. If it stays
-            // idle, the dispatch was not acknowledged. Record this for stale detection and
-            // surface it as a dispatchAcknowledgementRisk warning in the success response.
-            const sessionWasIdle = explicitTargetSession
-                ? isIdleSessionRecord(explicitTargetSession)
-                : false;
-            const taskId = randomUUID();
-            const dispatchedAt = new Date().toISOString();
-            const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
-            // CANON-A (direct-dispatch completion race — root fix): record the dispatch row
-            // (task_dispatched ledger + the mesh_direct attempt, C-W8) ★BEFORE the agent_command inject,
-            // exactly as the enqueue→claim path does (tryAssignQueueTask atomically claims the
-            // queue row 'assigned' before deliverTaskToSession injects). A FAST direct dispatch to
-            // an already-idle, reused session could otherwise have its genuine completion reach the
-            // coordinator forwarder BEFORE this row existed → sessionHasActiveAssignment=false → the
-            // prior-terminal providerSessionId dedup (mesh-event-forwarding.ts:551,603) swallowed the
-            // new task's completion as a duplicate of the prior turn. Pre-recording makes
-            // sessionHasActiveAssignment=true at completion time, so the dedup gate is skipped
-            // symmetrically with enqueue. On a dispatch failure below we roll the row back.
-            try {
-                await recordLocal(ctx.transport, { meshId: ctx.mesh.id,
-                    kind: 'task_dispatched',
-                    nodeId: args.node_id,
-                    sessionId: args.session_id,
-                    providerType: resolvedProviderType,
-                    payload: buildDirectTaskPayload(message, 'local_direct', {
-                        taskId,
-                        taskMode,
-                        providerType: resolvedProviderType,
-                        targetSessionId: args.session_id,
-                        dispatchedToIdleSession: sessionWasIdle,
-                        ...(args.node_id ? { selectedNodeId: args.node_id } : {}),
-                        ...(ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}),
-                        // COORD-EVENT-MISROUTE: persist the dispatching coordinator daemon anchor so a
-                        // transcript-reconcile synth recovers it from the ledger rather than stamping
-                        // the reconcile-runner's own self-daemon.
-                        ...(coordinatorDaemonId ? { coordinatorDaemonId } : {}),
-                    }),
-                });
-            } catch { /* best-effort */ }
-            // Stamp the mesh assignment via meshContext so the daemon can
-            // attach it to the target instance BEFORE prompt injection.
-            // setupMeshEventForwarding reads state.settings.meshNodeFor +
-            // meshActiveTaskId to route completion events back. Without
-            // this, plain CLI sessions targeted by mesh_send_task --direct
-            // would silently drop generating_completed and the coordinator
-            // would never observe task_completed.
-            // coordinatorDaemonId is required so the completion event is
-            // routed to the correct coordinator pendingCoordinatorEvents queue.
-            // F1: materialize the worker-protocol footer (and any relevant handoff
-            // notes) onto the DISPATCHED body only — the ledger/dispatch rows keep
-            // the authored `message` (see recordDirectDispatchTask(message, ...) below).
-            const localDispatchBody = resolveDispatchMessage(
-                {
-                    id: taskId, message, taskMode, difficulty,
-                    ...(readonly ? { readonly: true } : {}),
-                    ...(missionId ? { missionId } : {}),
-                },
-                ctx.mesh.id,
-                node,
-            );
-            // MULTIPART-FOOTER-PARITY: see the identical note on the remote-dispatch
-            // arm above — when the attachment envelope carries its own text part, the
-            // footer must also land there or a provider that renders parts (skipping
-            // `message`) never learns the protocol.
-            const localDispatchInput = taskInput && Array.isArray(taskInput.parts)
-                ? {
-                    ...taskInput,
-                    parts: taskInput.parts.map(part =>
-                        part && typeof part === 'object' && part.type === 'text' && typeof (part as any).text === 'string'
-                            ? { ...part, text: appendWorkerProtocolFooter((part as any).text, { taskId, taskMode, difficulty, readonly }) }
-                            : part,
-                    ),
-                }
-                : taskInput;
-            // C-W6c: open the attempt in the NEW turn ledger (C1 reducer) BEFORE the
-            // inject, mirroring the "pre-record before agent_command" ordering this
-            // whole block already uses for CANON-A — the new ledger needs the same
-            // ordering guarantee for the same reason (a fast completion racing ahead
-            // of the attempt row). Threaded into meshContext below so cli-manager.ts
-            // echoes it onto this worker's own turn evidence (plain-session lane).
-            const localAttemptRef = await openDirectDispatchAttempt(ctx, {
-                taskId,
-                nodeId: args.node_id,
-                sessionId: args.session_id || taskId,
-                providerType: resolvedProviderType,
-            });
-            // DISPATCH-ACK-RISK-STALE (C-W8): the open mesh_direct attempt IS the
-            // pre-recorded dispatch row (the retired insertDirectDispatch) — it is what
-            // sessionHasActiveAssignment keys on at completion time, so the prior-terminal
-            // dedup gate is skipped. A genuine residual risk remains only if it did not open.
-            let dispatchPreRecorded = localAttemptRef !== null;
-            const dispatchResult = await commandForNode(ctx, node, 'agent_command', {
-                targetSessionId: args.session_id,
-                agentType: resolvedProviderType,
-                cliType: resolvedProviderType,
-                providerType: resolvedProviderType,
-                action: 'send_chat',
-                message: localDispatchBody,
-                // MESH-IMAGE-DISPATCH: forward the multipart envelope so the worker's
-                // provider instance receives structured parts instead of text-only. Spread
-                // conditionally so a text-only dispatch sends the byte-identical payload it
-                // sent before this change.
-                ...(localDispatchInput ? { input: localDispatchInput } : {}),
-                // D2: same message identity + policy as the p2p arm.
-                messageId: taskId,
-                policy: { mode: 'queue' },
-                origin: 'mcp',
-                // DISPATCH-SOURCE-TRACE: call-site tag echoed in the worker daemon log.
-                dispatchSource: 'mesh-tools-session:mesh_send_task:direct',
-                meshContext: {
-                    meshId: ctx.mesh.id,
-                    nodeId: args.node_id,
-                    taskId,
-                    ...(coordinatorDaemonId ? { coordinatorDaemonId } : {}),
-                    // (3) Originating coordinator session anchor — see the remote-dispatch path above.
-                    ...(ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}),
-                    // C-W6c: see the identical note on the remote-dispatch arm above.
-                    ...(localAttemptRef ? { attemptId: localAttemptRef.attemptId, attemptGeneration: localAttemptRef.generation } : {}),
-                },
-            });
-            const dispatchPayload = unwrapCommandPayload(dispatchResult);
-            if (dispatchPayload?.success === false || dispatchResult?.success === false) {
-                // Roll back the pre-recorded dispatch: the inject was rejected, so there is no
-                // active assignment to gate. The task_dispatched ledger entry stays (append-only),
-                // but the open attempt is the discriminator sessionHasActiveAssignment keys on —
-                // leaving it would mask a genuinely-unrelated later idle as an active assignment.
-                dispatchPreRecorded = false;
-                // C-W6c: reclaim the new-ledger attempt too (R24) — the inject was
-                // refused, so there is no worker to eventually deliver/complete it.
-                await observeDirectDispatchOutcome(ctx, localAttemptRef, {
-                    taskId, sessionId: args.session_id || taskId, outcome: 'dispatch_failed', workerAbsent: false,
-                });
-                // C-W8: a mesh_direct attempt has no dispatcher to re-deliver its reclaimed
-                // generation, so close it (intentional_cleanup: bookkeeping only, no session
-                // side effect) — the retired row delete's successor.
-                if (localAttemptRef) {
-                    try { await turnCancel(ctx.transport, { attemptId: localAttemptRef.attemptId, reason: 'intentional_cleanup' }); } catch { /* best-effort */ }
-                }
-                const source = dispatchPayload?.success === false ? dispatchPayload : dispatchResult;
-                return JSON.stringify({
-                    ...(source && typeof source === 'object' ? source : {}),
-                    success: false,
-                    nodeId: args.node_id,
-                    sessionId: args.session_id,
-                    error: dispatchPayload?.error || dispatchResult?.error || 'agent_command rejected the task',
-                });
-            }
-            // C-W6c: the inject was accepted — record the delivery against the
-            // attempt opened before the send.
-            await observeDirectDispatchOutcome(ctx, localAttemptRef, {
-                taskId, sessionId: args.session_id || taskId, outcome: 'delivered', via: 'local',
-            });
-            // MISSIONLESS-DIRECT-DISPATCH-NO-ATTEMPT: unconditional — see the note at
-            // the sibling call site above. The turn attempt and the confirmed delivery
-            // record must not depend on whether a mission was supplied.
-            try {
-                // GRAPH-MEASUREMENT-DIRECT: after the inject was accepted — see the sibling
-                // call site on the p2p_direct path. The rejection branch above returns before
-                // reaching here, so a refused dispatch leaves no decision row.
-                await directDispatchRecord(ctx.transport, {
-                    meshId: ctx.mesh.id,
-                    taskId,
-                    message,
-                    task: {
-                        ...(missionId ? { missionId } : {}),
-                        ...(ownedPaths ? { ownedPaths } : {}),
-                        assignedNodeId: args.node_id,
-                        assignedSessionId: args.session_id,
-                        taskMode,
-                        difficulty,
-                        ...(readonly ? { readonly: true } : {}),
-                        dispatchedAt,
-                        ...(localAttemptRef ? { attemptId: localAttemptRef.attemptId } : {}),
-                    },
-                    decision: {
-                        via: 'local_direct',
-                        nodeId: args.node_id,
-                        sessionId: args.session_id,
-                        ...(missionId ? { missionId } : {}),
-                        ...(ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}),
-                        decision: orchestration.decision,
-                        ...(decisionMissing ? { decisionMissing: true } : {}),
-                        ...(orchestration.unsanctionedDirect
-                            ? { unsanctionedDirect: orchestration.unsanctionedDirect.reportedReason }
-                            : {}),
-                    } as Record<string, unknown>,
-                });
-            } catch { /* best-effort */ }
-            return JSON.stringify({
-                success: true,
-                dispatched: true,
-                decision: 'immediate',
-                source: 'direct',
-                taskId,
-                // C-W8: the trackable delivery handle is the turn-ledger attempt (the
-                // retired legacy session-delivery table row's id is gone with its table).
-                ...(localAttemptRef ? { attemptId: localAttemptRef.attemptId } : {}),
-                taskMode,
-                providerType: resolvedProviderType,
-                nodeId: args.node_id,
-                sessionId: args.session_id,
-                // DISPATCH-ACK-RISK-STALE: only warn on a GENUINE residual loss risk — an idle
-                // session whose dispatch row did NOT survive pre-record. A successfully
-                // pre-recorded idle dispatch (the NOTIF-DROP / CANON-A path) is not at risk.
-                ...computeIdleDispatchAckRisk(sessionWasIdle, dispatchPreRecorded, args.session_id),
-                ...((await buildMissionInactiveWarning(ctx, missionId)) ?? {}),
-                // GRAPH-MEASUREMENT-DIRECT: advisory only — never blocks, never re-routes.
-                ...orchestrationWarning,
-                ...deliveryModeWarning,
-            });
-        }
-
-        // ── Untargeted local task: use queue pull ─────────────────────────────
-        // COORD-EVENT-MISROUTE (anchor preservation): stamp the originating coordinator
-        // SESSION anchor exactly as the sibling meshEnqueueTask does (mesh-tools-queue.ts).
-        // Without it the queued task carries no sourceCoordinatorSessionId, so at claim time
-        // targetCoordinatorSessionId is empty (mesh-queue-assignment.ts) and the completion
-        // loses its session anchor — falling back to daemon-level fan-out across every local
-        // coordinator instead of routing back to the coordinator session that issued the task.
-        const task = ((await queueEnqueue(ctx.transport, { meshId: ctx.mesh.id, message: message, options: {
-            targetNodeId: args.node_id,
-            targetSessionId: args.session_id,
-            taskMode,
-            difficulty,
-            // MESH-IMAGE-DISPATCH: see the pinned-queue branches above.
-            ...(taskInput ? { input: taskInput } : {}),
-            ...(readonly ? { readonly: true } : {}),
-            ...(missionId ? { missionId } : {}),
-            ...(ownedPaths ? { ownedPaths } : {}),
-            ...(ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}),
-        }, decision: queueDecision })).entry as unknown as MeshWorkQueueEntry);
-
-        const queueTrigger = await triggerMeshQueueAndReport(ctx);
-
-        // Also drain any pending coordinator events so the caller sees them inline
-        const pendingEvents = await drainCoordinatorPendingEvents(ctx);
-
-        const result: Record<string, unknown> = {
-            success: true,
-            source: 'queue',
-            nodeId: args.node_id,
-            taskId: task.id,
-            status: task.status,
-            taskMode: task.taskMode,
-            queueTrigger,
-            ...buildQueueTriggerGuidance(queueTrigger),
-            ...((await buildMissionInactiveWarning(ctx, missionId)) ?? {}),
-            ...orchestrationWarning,
-            ...deliveryModeWarning,
-        };
-        if (pendingEvents.length > 0) {
-            result.pendingCoordinatorEvents = pendingEvents;
-        }
-        return JSON.stringify(result);
-    } catch (e: any) {
-        const failure = buildCoordinatorP2pRelayFailure(e, {
-            command: 'mesh_send_task',
-            targetDaemonId: node.daemonId,
-            nodeId: args.node_id,
-            sessionId: args.session_id,
-        });
-        return JSON.stringify(failure);
-    }
-}
-
-/**
  * E-T0 (design §7.1) — deposit an urgent memo into a delegated worker's
  * mailbox. Routed to whichever daemon owns `node_id` via `findNodeWithRefresh`
- * + `commandForNode` — the SAME resolution `meshSendTask` above uses, because
+ * + `commandForNode` — the SAME resolution `meshSendTask` (mesh-tools-send-task.ts) uses, because
  * a worker's owning daemon is not necessarily this coordinator's own (a mesh
  * spans machines). The receiving daemon's `deposit_worker_mailbox` low-family
  * handler is the actual gate (flag check + "does this daemon know this task");
@@ -1894,6 +562,279 @@ export async function meshSendKeys(
     return JSON.stringify(payload, null, 2);
 }
 
+/**
+ * PROVIDER-TYPE-HONORED + QUOTA GATE for an explicitly requested launch type.
+ *
+ * An explicit type is validated ONLY against the node's capability slots
+ * (policy.slots) — the single authoritative capability list (node capability
+ * slots design, 2026-07-09). When the node declares slots and none names the
+ * requested provider, fail closed instead of proceeding: silently resolving to
+ * providerPriority[0] was the exact bug (mesh_launch_session(type:"cursor-cli")
+ * spawned claude-cli). providerPriority is deliberately NOT consulted — it is an
+ * ordered PREFERENCE hint, not a capability whitelist, so a node that declares
+ * only providerPriority (no slots) keeps the contract that an explicit type may
+ * name any provider (the daemon-side launch is the real gate). Provider names are
+ * compared raw — slots store canonical provider types.
+ *
+ * An explicitly requested provider is an operator OVERRIDE, so a measured quota
+ * block does not fail the launch closed — it is surfaced as a WARNING on an
+ * otherwise normal launch. Fail-closing here would contradict the contract above
+ * and would leave an operator no way to run a provider whose snapshot is wrong.
+ * But launching SILENTLY is what produced the 403: the caller could not tell an
+ * exhausted provider from a healthy one. Fail-open is inherited unchanged — only
+ * a fresh measured block warns at all.
+ */
+function checkRequestedLaunchType(
+    ctx: MeshContext,
+    node: LocalMeshNodeEntry,
+    nodeId: string,
+    requestedType: string,
+): { quotaWarning: Record<string, unknown> | null } | string {
+    const slotProviders = normalizeNodeCapabilitySlots((node.policy as any)?.slots).map(s => s.provider);
+    if (slotProviders.length && !slotProviders.includes(requestedType)) {
+        return JSON.stringify({
+            success: false,
+            code: 'mesh_provider_type_unsupported',
+            error: `Node '${nodeId}' does not support provider '${requestedType}'. Its capability slots (policy.slots) declare: ${slotProviders.join(', ')}. Configure a slot for '${requestedType}' via mesh_node_slots (action "set"), or launch with one of the supported types.`,
+            nodeId,
+            requestedType,
+            supportedProviders: slotProviders,
+        }, null, 2);
+    }
+    const explicitBlock = evaluateProviderQuotaGate(node, requestedType, ctx.mesh.policy?.quotaRouting ?? null);
+    if (!explicitBlock) return { quotaWarning: null };
+    return {
+        quotaWarning: {
+            quotaWarning: `Provider '${requestedType}' on node '${nodeId}' is quota-gated (${explicitBlock.reason}; ${explicitBlock.window} window at ${explicitBlock.remainingPercent}% remaining, threshold ${explicitBlock.thresholdPercent}%). Launching anyway because the type was requested explicitly — the session may fail immediately if the provider rejects on quota.`,
+            quotaBlock: {
+                providerType: requestedType,
+                reason: explicitBlock.reason,
+                window: explicitBlock.window,
+                remainingPercent: explicitBlock.remainingPercent,
+                thresholdPercent: explicitBlock.thresholdPercent,
+            },
+        },
+    };
+}
+
+/**
+ * No explicit type: probe the node's providerPriority and pick the first detected
+ * provider the quota gate clears.
+ *
+ * OFFLINE-NODE-BLOCKING: probe each candidate provider until one is detected. Two
+ * guards keep an OFFLINE target node from serializing a ~90s × providers stall
+ * (~270s for a 3-provider priority list):
+ *   (a) `detect_provider` is read-only, so stamp it with the status-origin marker
+ *       ({ statusProbe: true }) — the daemon-cloud relay then grants the SHORT
+ *       connect-wait budget so a probe to an unconnected peer gives up in ~2s
+ *       instead of the 90s connect deadline.
+ *   (b) short-circuit on the FIRST transport-level failure. A per-provider
+ *       "not detected" comes back as a RESOLVED { detected: false } payload (try
+ *       the next provider); a THROW means the node itself is unreachable (peer not
+ *       connected / offline / relay timeout) — every remaining provider would fail
+ *       identically, so break immediately and fail fast with a node-unreachable error.
+ *
+ * QUOTA GATE (manual-launch path). The auto-launch/queue-drain path
+ * (daemon-core resolveUsableProvider) has always run the gate; this path used to
+ * consult detect_provider (PATH/install probe) alone and never read nodeFacts, so
+ * a provider whose account was measurably out of quota was launched anyway and
+ * died immediately (kimi at 1% weekly → 403). Structured exactly like the
+ * auto-launch loop: enumerate EVERY detected candidate first, then let the gate
+ * split and rank them, so a gated first choice falls THROUGH to the node's next
+ * provider instead of failing the launch.
+ *
+ * FAIL-OPEN is inherited from evaluateProviderQuotaGate unchanged: a missing
+ * snapshot, a stale one, quota tracking switched off, 'expired-token' and every
+ * other transient failure kind are NEVER blocked — they merely sort into the
+ * unknown group and stay launchable. Only a FRESH measured block diverts. That is
+ * what keeps a single-provider node off the self-healing deadlock: a CLI owning
+ * its own token refresh must still launch when its token has expired, or the
+ * token can never be refreshed. See mesh-quota-routing.ts's module header.
+ */
+async function detectLaunchProviderType(ctx: MeshContext, node: LocalMeshNodeEntry, nodeId: string): Promise<{ providerType: string } | string> {
+    const providerPriority = readProviderPriority(node.policy);
+    if (!providerPriority.length) {
+        return JSON.stringify({ success: false, error: missingProviderPriorityMessage(nodeId) });
+    }
+    const failed: string[] = [];
+    const detectedCandidates: string[] = [];
+    let unreachableError: string | null = null;
+    for (const providerType of providerPriority) {
+        let detectedPayload: any;
+        try {
+            const detectedResult = await commandForNode(ctx, node, 'detect_provider', { providerType }, { statusProbe: true });
+            detectedPayload = unwrapCommandPayload(detectedResult);
+        } catch (e: any) {
+            // Transport/connection failure: the node is unreachable, not the provider
+            // missing. Stop probing the rest of the priority list.
+            unreachableError = e?.message || String(e);
+            break;
+        }
+        if (detectedPayload?.success && detectedPayload?.detected) {
+            if (!detectedCandidates.includes(providerType)) detectedCandidates.push(providerType);
+            continue;
+        }
+        failed.push(`${providerType}: ${detectedPayload?.error || 'not detected'}`);
+    }
+    if (detectedCandidates.length) {
+        const ranked = rankProvidersByQuotaGate(node, detectedCandidates, ctx.mesh.policy?.quotaRouting ?? null);
+        if (ranked.clear.length) return { providerType: ranked.clear[0] };
+        // Every detected provider is measurably out of quota. This is a WAIT,
+        // not a configuration error: the windows reset on their own, so the
+        // response says so rather than presenting the node as broken. Reported
+        // distinctly from "not detected" so a coordinator can tell "no quota
+        // right now" from "nothing installed".
+        const detail = ranked.gated.map(g => `${g.providerType}: ${g.block.reason}`).join('; ');
+        return JSON.stringify({
+            success: false,
+            code: 'mesh_all_providers_quota_gated',
+            error: `Every detected provider on node '${nodeId}' is quota-gated (${detail}). This is a WAIT, not a misconfiguration — the quota windows reset on their own.`,
+            nodeId,
+            gated: ranked.gated.map(g => ({
+                providerType: g.providerType,
+                reason: g.block.reason,
+                window: g.block.window,
+                remainingPercent: g.block.remainingPercent,
+                thresholdPercent: g.block.thresholdPercent,
+            })),
+            nextAction: `Enqueue the work (mesh_enqueue_task) so the drain claims it when a window resets, or launch on a node whose providers still have quota. Retrying mesh_launch_session immediately will hit the same gate.`,
+        }, null, 2);
+    }
+    if (unreachableError) {
+        return JSON.stringify({ success: false, error: `Node '${nodeId}' is unreachable — cannot detect a provider (${unreachableError}). The node's daemon may be offline; retry once it reconnects.` });
+    }
+    return JSON.stringify({ success: false, error: `No usable provider detected for node '${nodeId}' from providerPriority: ${failed.join('; ')}` });
+}
+
+/**
+ * Worker sessions are coordinator-dispatched; a human shouldn't have to approve
+ * each one. Resolve the auto-approve policy (node override → mesh policy →
+ * default true) for the launch settings envelope, where it wins over the global
+ * per-provider-type autoApprove config via the settingsOverride merge. The
+ * ENABLE decision stays 100% machine-local (no repoConfig influence).
+ *
+ * MODE alignment with the auto-launch path: the MCP process has NO provider
+ * loader, so it cannot validate a repo-requested mode ID against the live
+ * provider spec. The requested mode ID is stamped as `autoApproveMode` with
+ * `delegatedWorkerDangerousModeAllow`; the DAEMON-side adapter
+ * (cli-provider-instance.shouldAutoApprove → resolveProviderAutoApproveMode)
+ * validates it against the real spec, fails closed on an unknown ID and
+ * downgrades a dangerous mode when the machine has not opted in. The repo config
+ * is consulted only when the ENABLE gate resolved to on.
+ */
+function resolveLaunchAutoApprove(ctx: MeshContext, node: LocalMeshNodeEntry, providerType: string) {
+    const autoApprove = resolveDelegatedWorkerAutoApprove(ctx.mesh.policy, node.policy);
+    const dangerousModeAllow = resolveDelegatedWorkerDangerousModeAllow(ctx.mesh.policy, node.policy);
+    let autoApproveMode: string | undefined;
+    if (autoApprove !== false) {
+        try {
+            const ws = typeof node.workspace === 'string' && node.workspace.trim() ? node.workspace.trim() : '';
+            if (ws) {
+                const repo = loadRepoMeshJsonConfig(ws);
+                const repoMode = repo.sourceType === 'repo_file'
+                    ? repo.config?.providerDefaults?.autoApproveModes?.[providerType]
+                    : undefined;
+                if (typeof repoMode === 'string' && repoMode.trim()) autoApproveMode = repoMode.trim();
+            }
+        } catch { /* graceful: no repo config → daemon uses provider default */ }
+    }
+    return { autoApprove, autoApproveMode, dangerousModeAllow };
+}
+
+/**
+ * MESH-LAUNCH-DUP-GUARD: an enqueue auto-launch (queue task → daemon spawns a
+ * worker) races a manual mesh_launch_session for the same node/worktree. Without
+ * this guard the manual call unconditionally issues a second launch_cli, leaving
+ * an empty duplicate worker session alongside the one doing the work. If a
+ * non-terminal mesh-owned worker session for THIS mesh+node already exists (idle
+ * OR still booting/generating), it is returned idempotently instead.
+ *
+ * PROVIDER-MISMATCH-REUSE: only a live session whose provider matches the
+ * resolved request is reused — otherwise mesh_launch_session(type:"claude-cli")
+ * against a node with an idle antigravity worker handed back the antigravity
+ * session. A definite mismatch (both sides known and unequal) falls through to a
+ * fresh launch.
+ *
+ * A failed status read fails open (launch rather than block): a duplicate is
+ * recoverable (mesh_cleanup_sessions); a blocked launch on a transient error is
+ * worse for the coordinator flow.
+ */
+async function findReusableWorkerSession(ctx: MeshContext, node: LocalMeshNodeEntry, nodeId: string, providerType: string): Promise<string | null> {
+    try {
+        // The coordinator's answer (readNodeRuntime): its own status for its
+        // nodes, the member's pushed runtime for another daemon's.
+        const { probe } = await readNodeRuntime(ctx, node);
+        const existing = probe.sessions.find(session => {
+            if (isTerminalSessionRecord(session)) return false;
+            if (!isMeshOwnedDelegateSession(session, ctx.mesh.id, nodeId)) return false;
+            if (providerType) {
+                const sessionProviderType = resolveSessionProviderType(session);
+                if (sessionProviderType && sessionProviderType !== providerType) return false;
+            }
+            return true;
+        });
+        const existingSessionId = existing ? readSessionRecordId(existing) : '';
+        if (!existingSessionId) return null;
+        const existingProviderType = resolveSessionProviderType(existing) || providerType || undefined;
+        const existingStatus = typeof existing?.status === 'string' ? existing.status : 'unknown';
+        return JSON.stringify({
+            success: true,
+            duplicate: true,
+            launched: false,
+            reused: true,
+            sessionId: existingSessionId,
+            nodeId,
+            ...(existingProviderType ? { resolvedProviderType: existingProviderType, providerType: existingProviderType } : {}),
+            sessionStatus: existingStatus,
+            idle: isIdleSessionRecord(existing),
+            reason: 'mesh_launch_session_duplicate_guard',
+            warning: `Node '${nodeId}' already has a live mesh-owned worker session ('${existingSessionId}', status '${existingStatus}'). Returning it instead of launching an empty duplicate (likely an enqueue auto-launch already spawned it).`,
+            nextAction: `Use session '${existingSessionId}' for mesh_send_task/mesh_read_chat. If you intentionally need a second concurrent session on this node, retry mesh_launch_session with force=true.`,
+        }, null, 2);
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Cache the launched session's provider metadata and record the launch in the
+ * ledger — SKIPPED when the daemon already recorded it (LAUNCH-ACCOUNTING single
+ * writer: the daemon appends session_launched in its launch_cli funnel and
+ * answers `ledgerLaunchRecorded: true`; appending here too would double-count).
+ * The append here covers a daemon whose own best-effort record failed.
+ */
+async function recordLaunchedSession(ctx: MeshContext, nodeId: string, providerType: string, launchPayload: any): Promise<string | undefined> {
+    const runtimeSessionId = typeof launchPayload?.sessionId === 'string'
+        ? launchPayload.sessionId
+        : typeof launchPayload?.id === 'string'
+            ? launchPayload.id
+            : typeof launchPayload?.runtimeSessionId === 'string'
+                ? launchPayload.runtimeSessionId
+                : '';
+    const providerSessionId = typeof launchPayload?.providerSessionId === 'string' && launchPayload.providerSessionId.trim()
+        ? launchPayload.providerSessionId.trim() as string
+        : undefined;
+    if (runtimeSessionId) {
+        meshSessionProviderMetadata.set(meshSessionCacheKey(nodeId, runtimeSessionId), {
+            providerType,
+            ...(providerSessionId ? { providerSessionId } : {}),
+            expiresAt: Date.now() + SESSION_PROVIDER_METADATA_TTL_MS,
+        });
+    }
+    if (launchPayload?.ledgerLaunchRecorded !== true) {
+        try {
+            await recordLocal(ctx.transport, { meshId: ctx.mesh.id,
+                kind: 'session_launched',
+                nodeId,
+                sessionId: runtimeSessionId || undefined,
+                providerType,
+                payload: { providerSessionId, source: 'mesh_launch_session_coordinator_fallback' },
+            });
+        } catch { /* ledger append is best-effort */ }
+    }
+    return providerSessionId;
+}
+
 export async function meshLaunchSession(
     ctx: MeshContext,
     args: { node_id: string; type?: string; force?: boolean },
@@ -1902,348 +843,94 @@ export async function meshLaunchSession(
     const bootstrapBlock = getWorktreeBootstrapLaunchBlock(node, ctx.mesh.policy);
     if (bootstrapBlock) return JSON.stringify(bootstrapBlock, null, 2);
 
-    {
-        const requestedType = typeof args.type === 'string' && args.type.trim() ? args.type.trim() : '';
-        let resolvedProviderType = requestedType;
-        // Set when an EXPLICITLY requested provider is quota-blocked: the launch still
-        // proceeds (operator override) but the response carries the warning.
-        let explicitTypeQuotaWarning: Record<string, unknown> | null = null;
-        if (requestedType) {
-            // PROVIDER-TYPE-HONORED: an explicit type is validated ONLY against the node's
-            // capability slots (policy.slots) — the single authoritative capability list
-            // (node capability slots design, 2026-07-09). When the node declares slots and none names the
-            // requested provider, fail closed instead of proceeding: silently resolving to
-            // providerPriority[0] was the exact bug (mesh_launch_session(type:"cursor-cli")
-            // spawned claude-cli). providerPriority is deliberately NOT consulted here — it is
-            // an ordered PREFERENCE hint, not a capability whitelist, so a legacy node that
-            // declares only providerPriority (no slots) keeps the pre-existing contract that an
-            // explicit type may name any provider (the daemon-side launch is the real gate).
-            // Provider names are compared raw — slots store canonical provider types.
-            const slotProviders = normalizeNodeCapabilitySlots((node.policy as any)?.slots).map(s => s.provider);
-            if (slotProviders.length && !slotProviders.includes(requestedType)) {
-                return JSON.stringify({
-                    success: false,
-                    code: 'mesh_provider_type_unsupported',
-                    error: `Node '${args.node_id}' does not support provider '${requestedType}'. Its capability slots (policy.slots) declare: ${slotProviders.join(', ')}. Configure a slot for '${requestedType}' via mesh_node_slots (action "set"), or launch with one of the supported types.`,
-                    nodeId: args.node_id,
-                    requestedType,
-                    supportedProviders: slotProviders,
-                }, null, 2);
-            }
-            // QUOTA GATE (explicit type). An explicitly requested provider is an
-            // operator OVERRIDE, so a measured block does not fail the launch closed —
-            // it is surfaced as a WARNING on an otherwise normal launch. Fail-closing
-            // here would contradict the contract directly above (an explicit type may
-            // name any provider on a slots-less node; the daemon-side launch is the
-            // real gate) and would leave an operator no way to run a provider whose
-            // snapshot is wrong. But launching SILENTLY is what produced the 403: the
-            // caller could not tell an exhausted provider from a healthy one. Fail-open
-            // is inherited unchanged — only a fresh measured block warns at all.
-            const explicitBlock = evaluateProviderQuotaGate(node, requestedType, ctx.mesh.policy?.quotaRouting ?? null);
-            if (explicitBlock) {
-                explicitTypeQuotaWarning = {
-                    quotaWarning: `Provider '${requestedType}' on node '${args.node_id}' is quota-gated (${explicitBlock.reason}; ${explicitBlock.window} window at ${explicitBlock.remainingPercent}% remaining, threshold ${explicitBlock.thresholdPercent}%). Launching anyway because the type was requested explicitly — the session may fail immediately if the provider rejects on quota.`,
-                    quotaBlock: {
-                        providerType: requestedType,
-                        reason: explicitBlock.reason,
-                        window: explicitBlock.window,
-                        remainingPercent: explicitBlock.remainingPercent,
-                        thresholdPercent: explicitBlock.thresholdPercent,
-                    },
-                };
-            }
-        }
-        if (!resolvedProviderType) {
-            const providerPriority = readProviderPriority(node.policy);
-            if (!providerPriority.length) {
-                return JSON.stringify({ success: false, error: missingProviderPriorityMessage(args.node_id) });
-            }
-
-            // OFFLINE-NODE-BLOCKING: probe each candidate provider until one is detected. Two
-            // guards keep an OFFLINE target node from serializing a ~90s × providers stall
-            // (~270s for a 3-provider priority list):
-            //   (a) `detect_provider` is read-only, so stamp it with the status-origin marker
-            //       ({ statusProbe: true }) — the daemon-cloud relay then grants the SHORT
-            //       connect-wait budget so a probe to an unconnected peer gives up in ~2s
-            //       instead of the 90s connect deadline.
-            //   (b) short-circuit on the FIRST transport-level failure. A per-provider
-            //       "not detected" comes back as a RESOLVED { detected: false } payload (try
-            //       the next provider); a THROW means the node itself is unreachable (peer not
-            //       connected / offline / relay timeout) — every remaining provider would fail
-            //       identically, so break immediately and fail fast with a node-unreachable error.
-            // QUOTA GATE (manual-launch path). The auto-launch/queue-drain path
-            // (daemon-core resolveUsableProvider) has always run the gate; THIS path
-            // never did — it consulted detect_provider (PATH/install probe) alone and
-            // never read nodeFacts, so a provider whose account was measurably out of
-            // quota was launched anyway and died immediately (kimi at 1% weekly → 403).
-            // The same node reached through the queue drain was correctly diverted, so
-            // which path dispatched decided whether the quota was honoured.
-            //
-            // Structured exactly like the auto-launch loop: enumerate EVERY detected
-            // candidate first, then let the gate split and rank them, so a gated first
-            // choice falls THROUGH to the node's next provider instead of failing the
-            // launch (the "dynamic provider priority by quota" behaviour).
-            //
-            // FAIL-OPEN is inherited from evaluateProviderQuotaGate unchanged: a missing
-            // snapshot, a stale one, quota tracking switched off, 'expired-token' and
-            // every other transient failure kind are NEVER blocked — they merely sort
-            // into the unknown group and stay launchable. Only a FRESH measured block
-            // (an 'ok' snapshot under a window threshold, or the provider's own
-            // 'quota-exhausted' verdict) diverts. That is what keeps a single-provider
-            // node off the self-healing deadlock: a CLI owning its own token refresh
-            // must still launch when its token has expired, or the token can never be
-            // refreshed. See mesh-quota-routing.ts's module header.
-            const failed: string[] = [];
-            const detectedCandidates: string[] = [];
-            let unreachableError: string | null = null;
-            for (const providerType of providerPriority) {
-                let detectedPayload: any;
-                try {
-                    const detectedResult = await commandForNode(ctx, node, 'detect_provider', { providerType }, { statusProbe: true });
-                    detectedPayload = unwrapCommandPayload(detectedResult);
-                } catch (e: any) {
-                    // Transport/connection failure: the node is unreachable, not the provider
-                    // missing. Stop probing the rest of the priority list.
-                    unreachableError = e?.message || String(e);
-                    break;
-                }
-                if (detectedPayload?.success && detectedPayload?.detected) {
-                    if (!detectedCandidates.includes(providerType)) detectedCandidates.push(providerType);
-                    continue;
-                }
-                failed.push(`${providerType}: ${detectedPayload?.error || 'not detected'}`);
-            }
-            if (detectedCandidates.length) {
-                const ranked = rankProvidersByQuotaGate(node, detectedCandidates, ctx.mesh.policy?.quotaRouting ?? null);
-                if (ranked.clear.length) {
-                    resolvedProviderType = ranked.clear[0];
-                } else {
-                    // Every detected provider is measurably out of quota. This is a WAIT,
-                    // not a configuration error: the windows reset on their own, so the
-                    // response says so rather than presenting the node as broken. Reported
-                    // distinctly from "not detected" so a coordinator can tell "no quota
-                    // right now" from "nothing installed" — conflating them would send a
-                    // coordinator chasing an install problem that does not exist.
-                    const detail = ranked.gated.map(g => `${g.providerType}: ${g.block.reason}`).join('; ');
-                    return JSON.stringify({
-                        success: false,
-                        code: 'mesh_all_providers_quota_gated',
-                        error: `Every detected provider on node '${args.node_id}' is quota-gated (${detail}). This is a WAIT, not a misconfiguration — the quota windows reset on their own.`,
-                        nodeId: args.node_id,
-                        gated: ranked.gated.map(g => ({
-                            providerType: g.providerType,
-                            reason: g.block.reason,
-                            window: g.block.window,
-                            remainingPercent: g.block.remainingPercent,
-                            thresholdPercent: g.block.thresholdPercent,
-                        })),
-                        nextAction: `Enqueue the work (mesh_enqueue_task) so the drain claims it when a window resets, or launch on a node whose providers still have quota. Retrying mesh_launch_session immediately will hit the same gate.`,
-                    }, null, 2);
-                }
-            }
-            if (!resolvedProviderType) {
-                if (unreachableError) {
-                    return JSON.stringify({ success: false, error: `Node '${args.node_id}' is unreachable — cannot detect a provider (${unreachableError}). The node's daemon may be offline; retry once it reconnects.` });
-                }
-                return JSON.stringify({ success: false, error: `No usable provider detected for node '${args.node_id}' from providerPriority: ${failed.join('; ')}` });
-            }
-        }
-
-        const coordinatorNode = resolveCoordinatorNode(ctx);
-        const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
-        const spawnedSessionVisibility = readSpawnedSessionVisibility(ctx.mesh.policy);
-        // Worker sessions are coordinator-dispatched; a human shouldn't have to approve
-        // each one. Resolve the auto-approve policy (node override → mesh policy → default
-        // true) and stamp it into the launch settings envelope so it wins over the global
-        // per-provider-type autoApprove config via the settingsOverride merge.
-        //
-        // ENABLE decision stays 100% machine-local here (no repoConfig influence):
-        // resolveDelegatedWorkerAutoApprove with no provider spec returns the raw boolean.
-        const delegatedWorkerAutoApprove = resolveDelegatedWorkerAutoApprove(ctx.mesh.policy, node.policy);
-        // MODE alignment with the auto-launch path: the MCP process has NO provider
-        // loader, so it cannot validate a repo-requested mode ID against the live
-        // provider spec. Instead we stamp the requested mode ID as `autoApproveMode`
-        // and forward `delegatedWorkerDangerousModeAllow`; the DAEMON-side adapter
-        // (cli-provider-instance.shouldAutoApprove → resolveProviderAutoApproveMode)
-        // validates it against the real spec and fails closed on an unknown ID
-        // (→ inactive, falls back to the provider default via the legacy path) and
-        // downgrades a dangerous mode when the machine has not opted in. This keeps
-        // manual mesh_launch_session consistent with the coordinator auto-launch
-        // without duplicating the provider registry into the MCP process.
-        // Only consult the repo config when the ENABLE gate resolved to on.
-        let requestedAutoApproveMode: string | undefined;
-        const delegatedWorkerDangerousModeAllow = resolveDelegatedWorkerDangerousModeAllow(ctx.mesh.policy, node.policy);
-        if (delegatedWorkerAutoApprove !== false) {
-            try {
-                const ws = typeof node.workspace === 'string' && node.workspace.trim() ? node.workspace.trim() : '';
-                if (ws) {
-                    const repo = loadRepoMeshJsonConfig(ws);
-                    const repoMode = repo.sourceType === 'repo_file'
-                        ? repo.config?.providerDefaults?.autoApproveModes?.[resolvedProviderType]
-                        : undefined;
-                    if (typeof repoMode === 'string' && repoMode.trim()) requestedAutoApproveMode = repoMode.trim();
-                }
-            } catch { /* graceful: no repo config → daemon uses provider default */ }
-        }
-        await ensureMeshNodeRoutes(ctx);
-        const isLocalNode = isLocalControlPlaneNode(ctx, node);
-        if (node.daemonId && !isLocalNode && !coordinatorDaemonId) {
-            return JSON.stringify(buildMissingCoordinatorDaemonIdFailure(ctx, node, resolvedProviderType), null, 2);
-        }
-
-        // MESH-LAUNCH-DUP-GUARD: an enqueue auto-launch (queue task → daemon spawns a worker)
-        // races a manual mesh_launch_session for the same node/worktree. Without this guard the
-        // manual call unconditionally issues a second launch_cli, leaving an empty duplicate
-        // worker session alongside the one doing the work ("채팅 2개"). Right before launch, probe
-        // live status and, if a non-terminal mesh-owned worker session for THIS mesh+node already
-        // exists (idle OR still booting/generating), return it idempotently instead of spawning a
-        // duplicate. force=true bypasses the guard for a deliberate additional session. Placed
-        // AFTER provider resolution + the coordinator-id fail-closed check so an unlaunchable node
-        // never burns a status relay (and the relay-blocked invariant holds).
-        if (args.force !== true) {
-            try {
-                // The coordinator's answer (readNodeRuntime): its own status for its
-                // nodes, the member's pushed runtime for another daemon's.
-                const { probe: dupGuardProbe } = await readNodeRuntime(ctx, node);
-                const sessions = dupGuardProbe.sessions;
-                // PROVIDER-MISMATCH-REUSE: only reuse a live session whose provider matches the
-                // resolved request. Without this the guard returned ANY non-terminal mesh-owned
-                // session — so mesh_launch_session(type:"claude-cli", force=false) against a node
-                // with an idle antigravity worker handed back the antigravity session (and the
-                // subsequent mesh_send_task ran the task on the wrong provider). Only enforce when
-                // a concrete provider was requested/resolved (resolvedProviderType truthy); an
-                // unconstrained launch keeps the original "reuse any idle worker" behaviour, and a
-                // definite mismatch (both sides known and unequal) falls through to a fresh launch.
-                // force=true still bypasses the whole guard above.
-                const existing = sessions.find(session => {
-                    if (isTerminalSessionRecord(session)) return false;
-                    if (!isMeshOwnedDelegateSession(session, ctx.mesh.id, args.node_id)) return false;
-                    if (resolvedProviderType) {
-                        const sessionProviderType = resolveSessionProviderType(session);
-                        if (sessionProviderType && sessionProviderType !== resolvedProviderType) return false;
-                    }
-                    return true;
-                });
-                if (existing) {
-                    const existingSessionId = readSessionRecordId(existing);
-                    if (existingSessionId) {
-                        const existingProviderType = resolveSessionProviderType(existing) || resolvedProviderType || undefined;
-                        const existingStatus = typeof existing?.status === 'string' ? existing.status : 'unknown';
-                        return JSON.stringify({
-                            success: true,
-                            duplicate: true,
-                            launched: false,
-                            reused: true,
-                            sessionId: existingSessionId,
-                            nodeId: args.node_id,
-                            ...(existingProviderType ? { resolvedProviderType: existingProviderType, providerType: existingProviderType } : {}),
-                            sessionStatus: existingStatus,
-                            idle: isIdleSessionRecord(existing),
-                            reason: 'mesh_launch_session_duplicate_guard',
-                            warning: `Node '${args.node_id}' already has a live mesh-owned worker session ('${existingSessionId}', status '${existingStatus}'). Returning it instead of launching an empty duplicate (likely an enqueue auto-launch already spawned it).`,
-                            nextAction: `Use session '${existingSessionId}' for mesh_send_task/mesh_read_chat. If you intentionally need a second concurrent session on this node, retry mesh_launch_session with force=true.`,
-                        }, null, 2);
-                    }
-                }
-            } catch {
-                // Status probe failed (transport/timeout). Fail open — proceed to launch rather
-                // than blocking a legitimate launch on an unreachable status probe. A duplicate is
-                // recoverable (mesh_cleanup_sessions); a blocked launch on a transient probe error
-                // is worse for the coordinator flow.
-            }
-        }
-
-        let result: any;
-        try {
-            result = await commandForNode(ctx, node, 'launch_cli', {
-                cliType: resolvedProviderType,
-                dir: node.workspace,
-                settings: {
-                    // Worker launch envelope (A5): structured metadata so worker sessions
-                    // know their role and can route completion events back correctly.
-                    role: 'worker',
-                    meshNodeFor: ctx.mesh.id,
-                    meshNodeId: args.node_id,
-                    // LAUNCH-ACCOUNTING: path discriminator for the daemon-side
-                    // session_launched funnel (cli-manager launch_cli).
-                    meshLaunchSource: 'mesh_launch_session',
-                    spawnedSessionVisibility,
-                    // Delegated worker auto-approval (see resolveDelegatedWorkerAutoApprove).
-                    // Lands in settingsOverride and beats the global per-provider autoApprove.
-                    // When a repo-requested mode ID is present AND auto-approve is enabled,
-                    // stamp the mode ID (validated daemon-side) alongside the boolean; the
-                    // adapter's resolveProviderAutoApproveMode prefers the mode and fails
-                    // closed on an unknown ID. delegatedWorkerDangerousModeAllow rides along
-                    // so the adapter can honor/deny a dangerous requested mode.
-                    autoApprove: delegatedWorkerAutoApprove,
-                    ...(requestedAutoApproveMode ? { autoApproveMode: requestedAutoApproveMode } : {}),
-                    delegatedWorkerDangerousModeAllow,
-                    ...(coordinatorDaemonId ? { meshCoordinatorDaemonId: coordinatorDaemonId } : {}),
-                    // (3) Stamp the originating coordinator SESSION at launch too, so a worker
-                    // launched via mesh_launch_session routes its completions back to the exact
-                    // coordinator session (multi-coordinator). Absent → daemon-level fallback.
-                    ...(ctx.coordinatorSessionId ? { meshCoordinatorSessionId: ctx.coordinatorSessionId } : {}),
-                    ...(coordinatorNode?.id ? { meshCoordinatorNodeId: coordinatorNode.id } : {}),
-                    launchedByCoordinator: true,
-                }
-            });
-        } catch (e: any) {
-            return JSON.stringify(await recordRecoverableLaunchFailure(ctx, node, resolvedProviderType, e), null, 2);
-        }
-        const launchPayload = extractLaunchPayload(result);
-        if (launchPayload?.success === false || result?.success === false) {
-            const launchError = new Error(launchPayload?.error || result?.error || 'launch_cli rejected the session launch');
-            return JSON.stringify(await recordRecoverableLaunchFailure(ctx, node, resolvedProviderType, launchError), null, 2);
-        }
-        const runtimeSessionId = typeof launchPayload?.sessionId === 'string'
-            ? launchPayload.sessionId
-            : typeof launchPayload?.id === 'string'
-                ? launchPayload.id
-                : typeof launchPayload?.runtimeSessionId === 'string'
-                    ? launchPayload.runtimeSessionId
-                    : '';
-        const providerSessionId = typeof launchPayload?.providerSessionId === 'string' && launchPayload.providerSessionId.trim()
-            ? launchPayload.providerSessionId.trim()
-            : undefined;
-        if (runtimeSessionId) {
-            meshSessionProviderMetadata.set(meshSessionCacheKey(args.node_id, runtimeSessionId), {
-                providerType: resolvedProviderType,
-                ...(providerSessionId ? { providerSessionId } : {}),
-                expiresAt: Date.now() + SESSION_PROVIDER_METADATA_TTL_MS,
-            });
-        }
-        // Record session launch in ledger — SKIPPED when the daemon already recorded it.
-        // LAUNCH-ACCOUNTING single-writer: a current daemon appends session_launched in its
-        // launch_cli funnel (cli-manager) and answers `ledgerLaunchRecorded: true`; appending
-        // here too would double-count the launch (locally for a co-located node, after
-        // replication for a remote one). Kept as a FALLBACK for a version-skewed older
-        // daemon that neither appends nor sets the flag, so no launch goes unrecorded.
-        if (launchPayload?.ledgerLaunchRecorded !== true) {
-            try {
-                await recordLocal(ctx.transport, { meshId: ctx.mesh.id,
-                    kind: 'session_launched',
-                    nodeId: args.node_id,
-                    sessionId: runtimeSessionId || undefined,
-                    providerType: resolvedProviderType,
-                    payload: { providerSessionId, source: 'mesh_launch_session_coordinator_fallback' },
-                });
-            } catch { /* ledger append is best-effort */ }
-        }
-
-        // Tell daemon to trigger queue processing so the new session immediately picks up pending tasks.
-        // Surface the trigger result so coordinators can distinguish "session launched"
-        // from "queued work actually claimed by that session".
-        const queueTrigger = await triggerMeshQueueAndReport(ctx);
-
-        return JSON.stringify({
-            ...launchPayload,
-            resolvedProviderType,
-            ...(providerSessionId ? { providerSessionId } : {}),
-            ...(explicitTypeQuotaWarning ?? {}),
-            queueTrigger,
-            ...buildQueueTriggerGuidance(queueTrigger),
-        }, null, 2);
+    const requestedType = typeof args.type === 'string' && args.type.trim() ? args.type.trim() : '';
+    // Set when an EXPLICITLY requested provider is quota-blocked: the launch still
+    // proceeds (operator override) but the response carries the warning.
+    let explicitTypeQuotaWarning: Record<string, unknown> | null = null;
+    let resolvedProviderType: string;
+    if (requestedType) {
+        const checked = checkRequestedLaunchType(ctx, node, args.node_id, requestedType);
+        if (typeof checked === 'string') return checked;
+        explicitTypeQuotaWarning = checked.quotaWarning;
+        resolvedProviderType = requestedType;
+    } else {
+        const detected = await detectLaunchProviderType(ctx, node, args.node_id);
+        if (typeof detected === 'string') return detected;
+        resolvedProviderType = detected.providerType;
     }
+
+    const coordinatorNode = resolveCoordinatorNode(ctx);
+    const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
+    const spawnedSessionVisibility = readSpawnedSessionVisibility(ctx.mesh.policy);
+    const approval = resolveLaunchAutoApprove(ctx, node, resolvedProviderType);
+    await ensureMeshNodeRoutes(ctx);
+    const isLocalNode = isLocalControlPlaneNode(ctx, node);
+    if (node.daemonId && !isLocalNode && !coordinatorDaemonId) {
+        return JSON.stringify(buildMissingCoordinatorDaemonIdFailure(ctx, node, resolvedProviderType), null, 2);
+    }
+
+    // Placed AFTER provider resolution + the coordinator-id fail-closed check so an
+    // unlaunchable node never burns a status relay. force=true bypasses the guard
+    // for a deliberate additional session.
+    if (args.force !== true) {
+        const reused = await findReusableWorkerSession(ctx, node, args.node_id, resolvedProviderType);
+        if (reused) return reused;
+    }
+
+    let result: any;
+    try {
+        result = await commandForNode(ctx, node, 'launch_cli', {
+            cliType: resolvedProviderType,
+            dir: node.workspace,
+            settings: {
+                // Worker launch envelope (A5): structured metadata so worker sessions
+                // know their role and can route completion events back correctly.
+                role: 'worker',
+                meshNodeFor: ctx.mesh.id,
+                meshNodeId: args.node_id,
+                // LAUNCH-ACCOUNTING: path discriminator for the daemon-side
+                // session_launched funnel (cli-manager launch_cli).
+                meshLaunchSource: 'mesh_launch_session',
+                spawnedSessionVisibility,
+                // Delegated worker auto-approval (see resolveLaunchAutoApprove). Lands in
+                // settingsOverride and beats the global per-provider autoApprove; the
+                // adapter prefers a stamped mode ID (validated daemon-side) and fails
+                // closed on an unknown one.
+                autoApprove: approval.autoApprove,
+                ...(approval.autoApproveMode ? { autoApproveMode: approval.autoApproveMode } : {}),
+                delegatedWorkerDangerousModeAllow: approval.dangerousModeAllow,
+                ...(coordinatorDaemonId ? { meshCoordinatorDaemonId: coordinatorDaemonId } : {}),
+                // (3) Stamp the originating coordinator SESSION at launch too, so a worker
+                // launched via mesh_launch_session routes its completions back to the exact
+                // coordinator session (multi-coordinator). Absent → daemon-level fallback.
+                ...(ctx.coordinatorSessionId ? { meshCoordinatorSessionId: ctx.coordinatorSessionId } : {}),
+                ...(coordinatorNode?.id ? { meshCoordinatorNodeId: coordinatorNode.id } : {}),
+                launchedByCoordinator: true,
+            }
+        });
+    } catch (e: any) {
+        return JSON.stringify(await recordRecoverableLaunchFailure(ctx, node, resolvedProviderType, e), null, 2);
+    }
+    const launchPayload = extractLaunchPayload(result);
+    if (launchPayload?.success === false || result?.success === false) {
+        const launchError = new Error(launchPayload?.error || result?.error || 'launch_cli rejected the session launch');
+        return JSON.stringify(await recordRecoverableLaunchFailure(ctx, node, resolvedProviderType, launchError), null, 2);
+    }
+    const providerSessionId = await recordLaunchedSession(ctx, args.node_id, resolvedProviderType, launchPayload);
+
+    // Tell daemon to trigger queue processing so the new session immediately picks up pending tasks.
+    // Surface the trigger result so coordinators can distinguish "session launched"
+    // from "queued work actually claimed by that session".
+    const queueTrigger = await triggerMeshQueueAndReport(ctx);
+
+    return JSON.stringify({
+        ...launchPayload,
+        resolvedProviderType,
+        ...(providerSessionId ? { providerSessionId } : {}),
+        ...(explicitTypeQuotaWarning ?? {}),
+        queueTrigger,
+        ...buildQueueTriggerGuidance(queueTrigger),
+    }, null, 2);
 }
 
 export async function meshApprove(

@@ -15,131 +15,20 @@
 // domain files (mesh-tools-{status,queue,mission,session,git,refine}.ts). Split out of
 // mesh-tools.ts as a pure move — no behavior change. mesh-tools.ts is now a re-export barrel.
 
-import { randomUUID } from 'node:crypto';
 import { IpcTransport } from '../transports/ipc.js';
 import type { CommandTransport } from '../transports/mode.js';
-import { compactChatPayload } from './chat-compact.js';
-import { annotateRapidReadChatAdvisory } from './read-chat-polling-advisory.js';
-import { withStatusProbeMarker } from '@adhdev/mesh-shared';
-import type { LocalMeshEntry, LocalMeshNodeEntry, MeshActiveWorkSummary, MeshToolCallRateResult, RepoMeshPolicy, RepoMeshRelatedRepo } from '@adhdev/daemon-core';
-import {
-    canonicalDaemonId,
-    daemonIdsEquivalent,
-    meshNodeIdMatches,
-    buildCompactStaleDirectWorkSummary,
-    buildMeshActiveWork,
-    collectPendingApprovals,
-    buildMeshAsyncRefineJobs,
-    summarizeMeshAsyncRefineJobs,
-    buildMeshMagiActivity,
-    summarizeMeshMagiActivity,
-    getMeshMagiActivityByGroup,
-    MAGI_RAW_ANSWER_CAP,
-    buildMeshNodeProbeFreshness,
-    buildMeshSchedulingRuntime,
-    getLastQuotaRanking,
-    buildP2pRelayFailurePayload,
-    classifyP2pRelayFailure,
-    describeTaskDependencyState,
-    parseOnDependencyFailurePolicy,
-    MeshGraphPolicyError,
-    // GRAPH-ORCHESTRATION Phase E — pure request-shape classifier only; the graph
-    // gate/plan/patch/view CORES moved to the daemon in C-W9c (mesh-tools-graph.ts
-    // calls them over IPC — see that file's header).
-    MESH_NODE_PATCH_KEYS,
-    requestUsesGraphV2,
-    normalizeOrchestrationDecision,
-    MESH_DECLARED_ELIGIBLE_SINGLE_HINT,
-    // GRAPH-MEASUREMENT-DIRECT — consumed by mesh-tools-session.ts (meshSendTask).
-    MESH_UNSANCTIONED_DIRECT_HINT,
-    MESH_VALID_DIRECT_REASONS,
-    taskDependenciesSatisfied,
-    getActiveMeshMissionSummaries,
-    getMeshStatusMissionSummaries,
-    getMeshStatusMissionsCompact,
-    listMeshMissionSummaries,
-    listMeshMissionsForTool,
-    MESH_MISSION_STATUSES,
-    summarizeMeshUsage,
-    hasTrailingToolActivityAfterFinalAssistant,
-    isP2pRelayTransportFailure,
-    nodeSatisfiesRequiredTags,
-    normalizeMeshCapabilityTags,
-    filterProvidersByRequiredTags,
-    providerPinsFromRequiredTags,
-    isMeshNodeHealthLaunchable,
-    resolveEffectiveMeshNodeHealth,
-    coordinatorIdentityFromEmitFields,
-    resolveMeshSurfacedSessionPreview,
-    resolveDelegatedWorkerAutoApprove,
-    resolveDelegatedWorkerDangerousModeAllow,
-    loadRepoMeshJsonConfig,
-    resolveAllowSendKeysDestructive,
-    validateMeshTaskModeRequest,
-    buildMeshTaskModeViolationError,
-    classifySessionBusyWithTask,
-    SESSION_BUSY_WITH_TASK_CODE,
-    // QUOTA GATE (direct-dispatch path, preview rc.43 run 10): the SAME judgement
-    // module the manual-launch path (mesh_launch_session, below) and the daemon-side
-    // claim/auto-launch paths use — see checkDirectDispatchQuotaGate's doc comment.
-    evaluateProviderQuotaGate,
-    type ProviderQuotaGateBlock,
-} from '@adhdev/daemon-core';
-import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared';
+import { withStatusProbeMarker, type ActiveWorkQueryResponse } from '@adhdev/mesh-shared';
+import type { LocalMeshEntry, LocalMeshNodeEntry, MeshActiveWorkSummary, MeshToolCallRateResult } from '@adhdev/daemon-core';
+import { daemonIdsEquivalent, meshNodeIdMatches, isP2pRelayTransportFailure } from '@adhdev/daemon-core';
 import { readString } from './mesh-tool-shared.js';
-import type { MeshTaskInput } from './mesh-tool-shared.js';
-import {
-    readSessionRecordId,
-    extractStatusMetadataSessions,
-    resolveSessionProviderType,
-    isMeshCoordinatorSessionRecord,
-    isUnmanagedSessionRecord,
-    isWorkerTaskMode,
-    collectNodeSessionIds,
-    unwrapCommandPayload,
-} from './mesh-session-helpers.js';
-import { ledgerQuery, missionQuery, queueQuery, recordLocal, toolCallRecord } from '../ipc/turn-commands.js';
+import { unwrapCommandPayload } from './mesh-session-helpers.js';
+import { ledgerQuery, missionQuery, queueQuery, toolCallRecord } from '../ipc/turn-commands.js';
 import { activeWorkQueryWithRuntime, slimNodesForActiveWork } from './mesh-daemon-reads.js';
 import type { buildMeshActiveWork as BuildMeshActiveWorkFn, DirectDispatchRecord, MeshLedgerEntry, MeshLedgerSummary, MeshWorkQueueEntry } from '@adhdev/daemon-core';
-import {
-    ACTIVE_QUEUE_STATUSES,
-    HISTORICAL_QUEUE_STATUSES,
-    COMPACT_MAX_ACTIVE_QUEUE_ROWS,
-    COMPACT_MAX_ACTIVE_WORK_ROWS,
-    buildQueueStatusSummary,
-    normalizeQueueViewMode,
-    sanitizeQueueStatusFilter,
-    filterQueueForView,
-    prioritizeActiveQueueRows,
-    buildQueueMaintenanceReport,
-    buildCompactQueueMaintenanceReport,
-    compactQueueRow,
-    compactQueueRows,
-    compactActiveWorkRecords,
-    annotateQueueStaleness,
-} from './mesh-queue-helpers.js';
-import type { QueueViewMode } from './mesh-queue-helpers.js';
-import {
-    compactMagiActivityGroup,
-    compactMeshStatusNode,
-    compactNodeSeverity,
-    isNoteworthyCompactNode,
-    minimalCompactNode,
-    summarizeNodeSessions,
-} from './mesh-compact.js';
 
 // Node identity / locality helpers were physically moved to ./mesh-node-identity.ts
 // (pure move, no behavior change). Imported back for internal use here.
-import {
-    resolveCoordinatorNode,
-    resolveCoordinatorDaemonId,
-    readNodeMachineId,
-    readNodeDaemonId,
-    buildNodeMachineIdentity,
-    resolvePreferredWorktreeNodeId,
-    isLocalControlPlaneNode,
-} from './mesh-node-identity.js';
-import { readNodeRuntime } from './mesh-held-node-state.js';
+import { readNodeMachineId, readNodeDaemonId, isLocalControlPlaneNode } from './mesh-node-identity.js';
 import type { MeshNodeRoutesCache } from './mesh-node-routes.js';
 import { ensureMeshNodeRoutes } from './mesh-node-routes.js';
 
@@ -385,21 +274,19 @@ export {
 // imports what it consumes.
 import {
     buildMeshForwardPayloadFromPendingEvent,
-    buildWorktreeCleanupHint,
-    chooseDispatchableSession,
-    classifyMeshLaunchFailure,
-    classifyReadChatTransportCause,
-    classifyRemoteDelegateRelaySafety,
-    extractDaemonBuildInfo,
     extractGitStatus,
-    extractUpgradeFailureSummary,
     findNode,
     normalizePendingMeshCoordinatorEvents,
-    readProviderPriority,
     readRelatedRepos,
     summarizeRelatedRepoStatus,
-    type MeshUpgradeFailureSummary,
 } from './mesh-tools-internal-core.js';
+import { rememberMeshSessionProviderMetadataFromEvent } from './mesh-session-metadata.js';
+export { buildMissingNodeReadChatRecovery, buildMeshReadChatCacheFallback } from './mesh-read-chat-fallback.js';
+export { SESSION_PROVIDER_METADATA_TTL_MS, meshSessionProviderMetadata, getSessionMetadata, meshSessionCacheKey, resolveMeshSessionProviderMetadata } from './mesh-session-metadata.js';
+export type { MeshSessionProviderMetadata, TimestampedSessionMetadata } from './mesh-session-metadata.js';
+export { recordRecoverableLaunchFailure, latestActiveLaunchFailureFromEntries } from './mesh-launch-failure.js';
+export { buildMissingCoordinatorDaemonIdFailure, buildCoordinatorP2pRelayFailure, checkDirectDispatchQuotaGate, buildQuotaExhaustedDispatchFailure, ipcDispatchToRemoteAgent } from './mesh-remote-dispatch.js';
+export type { RemoteAgentDispatchResult } from './mesh-remote-dispatch.js';
 export {
     COMPACT_MAX_CONVERGENCE_FOLLOWUPS,
     assignFullGitSnapshot,
@@ -530,28 +417,7 @@ export async function recordMeshCoordinatorToolCall(ctx: MeshContext, tool: stri
     }
 }
 
-export type MeshSessionProviderMetadata = {
-    providerType: string;
-    providerSessionId?: string;
-};
-
-export const SESSION_PROVIDER_METADATA_TTL_MS = 30 * 60_000;
-
-export type TimestampedSessionMetadata = MeshSessionProviderMetadata & { expiresAt: number };
-
-export const meshSessionProviderMetadata = new Map<string, TimestampedSessionMetadata>();
-
-export function getSessionMetadata(key: string): MeshSessionProviderMetadata | undefined {
-    const entry = meshSessionProviderMetadata.get(key);
-    if (!entry) return undefined;
-    if (entry.expiresAt <= Date.now()) {
-        meshSessionProviderMetadata.delete(key);
-        return undefined;
-    }
-    return entry;
-}
-
-export const ACTIVE_WORK_POLLING_BACKOFF_MS = 60_000;
+const ACTIVE_WORK_POLLING_BACKOFF_MS = 60_000;
 
 export interface MeshPollingGuidance {
     activeGeneratingWork: true;
@@ -629,15 +495,27 @@ function hasDefinitivelyRemoteIdentity(ctx: MeshContext, node: LocalMeshNodeEntr
 }
 
 export async function refreshMeshFromDaemon(ctx: MeshContext): Promise<{ settledNodeIds: Set<string>; ok: boolean }> {
-    // Node ids the local daemon is authoritative about and did NOT report — their
-    // removal is settled, so callers must not escalate to the owning daemon.
-    const settledNodeIds = new Set<string>();
+    let result: any;
     try {
         // membershipOnly: this refresh reads membership (ids / workspaces / identity /
         // policy / facts) — git truth comes from the coordinator-held state. The
         // daemon then skips its per-call local git hydration (~300 ms cold) and the
         // duplicated lastGit/last_git blobs.
-        const result = await ctx.transport.command('get_mesh', { meshId: ctx.mesh.id, membershipOnly: true }) as any;
+        result = await ctx.transport.command('get_mesh', { meshId: ctx.mesh.id, membershipOnly: true });
+    } catch { return { settledNodeIds: new Set<string>(), ok: false }; /* best-effort; callers keep their original status/errors */ }
+    return applyMeshMembership(ctx, result);
+}
+
+/**
+ * Merge the coordinator daemon's `get_mesh` membership answer into ctx.mesh (see
+ * refreshMeshFromDaemon). Shared with mesh_status, whose one view carries the
+ * same answer.
+ */
+export async function applyMeshMembership(ctx: MeshContext, result: any): Promise<{ settledNodeIds: Set<string>; ok: boolean }> {
+    // Node ids the local daemon is authoritative about and did NOT report — their
+    // removal is settled, so callers must not escalate to the owning daemon.
+    const settledNodeIds = new Set<string>();
+    try {
         if (!result?.success || !Array.isArray(result.mesh?.nodes)) return { settledNodeIds, ok: false };
         const refreshedNodes = result.mesh.nodes
             .filter((n: any) => n?.id)
@@ -771,7 +649,7 @@ export async function readActiveWorkFromDaemon(ctx: MeshContext, opts: {
     includeSummary?: boolean;
     /** Also the scheduling runtime, from the daemon's own mesh record (see activeWorkQueryWithRuntime). */
     includeSchedulingRuntime?: boolean;
-}): Promise<{ activeWork?: MeshActiveWorkEvidence; records: MeshLedgerEntry[]; directDispatches: DirectDispatchRecord[]; summary?: MeshLedgerSummary; schedulingRuntime?: Record<string, unknown> }> {
+}): Promise<ActiveWorkRead> {
     // Read-latency pass: nodes are slimmed to the session lists active work reads
     // (a full node is ~9 KB of policy/facts/git), and callers no longer pass
     // `queue` — the daemon reads its own (they used to ship the whole 5 MB queue).
@@ -785,6 +663,13 @@ export async function readActiveWorkFromDaemon(ctx: MeshContext, opts: {
         ...(opts.includeSummary ? { includeSummary: true } : {}),
         ...(opts.includeSchedulingRuntime ? { includeSchedulingRuntime: true } : {}),
     });
+    return toActiveWorkRead(res);
+}
+
+export type ActiveWorkRead = { activeWork?: MeshActiveWorkEvidence; records: MeshLedgerEntry[]; directDispatches: DirectDispatchRecord[]; summary?: MeshLedgerSummary; schedulingRuntime?: Record<string, unknown> };
+
+/** The typed view of an `active_work_query` answer (also carried by mesh_status's view). */
+export function toActiveWorkRead(res: ActiveWorkQueryResponse): ActiveWorkRead {
     return {
         ...(res.activeWork ? { activeWork: res.activeWork as unknown as MeshActiveWorkEvidence } : {}),
         records: (res.records ?? []) as unknown as MeshLedgerEntry[],
@@ -873,104 +758,6 @@ export async function buildMissionInactiveWarning(
     };
 }
 
-export async function buildMissingNodeReadChatRecovery(ctx: MeshContext, args: { node_id: string; session_id: string; provider_session_id?: string; tail?: number; compact?: boolean }): Promise<Record<string, unknown>> {
-    const { entries } = await ledgerQuery(ctx.transport, { meshId: ctx.mesh.id, tail: 300 });
-    const relatedEntries = entries.filter(entry => entry.nodeId === args.node_id || entry.sessionId === args.session_id);
-    const completedEntries = relatedEntries.filter(entry => entry.kind === 'task_completed');
-    const lastDispatch = [...relatedEntries].reverse().find(entry => entry.kind === 'task_dispatched');
-    const lastTerminal = [...relatedEntries].reverse().find(entry => entry.kind === 'task_completed' || entry.kind === 'task_failed' || entry.kind === 'task_stalled');
-    const lastRemoved = [...relatedEntries].reverse().find(entry => entry.kind === 'node_removed');
-    const lastLaunch = [...relatedEntries].reverse().find(entry => entry.kind === 'session_launched');
-    const providerSessionId = args.provider_session_id
-        || readString(lastTerminal?.payload?.providerSessionId)
-        || readString(lastLaunch?.payload?.providerSessionId)
-        || readString(lastDispatch?.payload?.providerSessionId);
-    const finalSummary = readString(lastTerminal?.payload?.finalSummary)
-        || readString(lastTerminal?.payload?.compactSummary)
-        || readString(lastTerminal?.payload?.summary);
-    const ledger = {
-        taskCompletedFound: completedEntries.length > 0,
-        nodeRemovedFound: !!lastRemoved,
-        providerType: lastTerminal?.providerType || lastLaunch?.providerType || lastDispatch?.providerType,
-        providerSessionId,
-        nodeRemovedAt: lastRemoved?.timestamp,
-        sessionCleanupMode: readString(lastRemoved?.payload?.sessionCleanupMode),
-        readDebugLocator: readString(lastTerminal?.payload?.readDebugLocator) || readString(lastTerminal?.payload?.debugBundlePath),
-    };
-
-    if (finalSummary) {
-        if (args.compact === true) {
-            return {
-                ...compactChatPayload({
-                    success: true,
-                    status: 'idle',
-                    providerSessionId,
-                    summary: finalSummary,
-                    messages: [{ role: 'assistant', content: finalSummary, isHistorical: true }],
-                }, {
-                    nodeId: args.node_id,
-                    sessionId: args.session_id,
-                    limit: args.tail ?? 10,
-                }),
-                recoveredFromLedger: true,
-                ledger,
-            };
-        }
-        return {
-            success: true,
-            compact: false,
-            recoveredFromLedger: true,
-            nodeId: args.node_id,
-            sessionId: args.session_id,
-            summary: finalSummary,
-            ledger,
-            messages: [{ role: 'assistant', content: finalSummary, isHistorical: true }],
-        };
-    }
-
-    return {
-        success: false,
-        recoverable: true,
-        code: 'mesh_removed_node_transcript_unavailable',
-        error: `Node '${args.node_id}' is not a current member of mesh '${ctx.mesh.name}'.`,
-        nodeId: args.node_id,
-        sessionId: args.session_id,
-        providerSessionId,
-        reason: 'node_not_in_current_mesh_snapshot',
-        ledger,
-        completedSessionSeenInLedger: ledger.taskCompletedFound,
-        lastDispatch: lastDispatch ? {
-            timestamp: lastDispatch.timestamp,
-            sessionId: lastDispatch.sessionId,
-            providerType: lastDispatch.providerType,
-            taskId: typeof lastDispatch.payload?.taskId === 'string' ? lastDispatch.payload.taskId : undefined,
-            messagePreview: typeof lastDispatch.payload?.message === 'string' ? lastDispatch.payload.message.slice(0, 500) : undefined,
-        } : null,
-        lastTerminalEvent: lastTerminal ? {
-            kind: lastTerminal.kind,
-            timestamp: lastTerminal.timestamp,
-            sessionId: lastTerminal.sessionId,
-            providerType: lastTerminal.providerType,
-            taskId: typeof lastTerminal.payload?.taskId === 'string' ? lastTerminal.payload.taskId : undefined,
-            payload: lastTerminal.payload,
-        } : null,
-        nextSteps: [
-            providerSessionId
-                ? `Retry mesh_read_chat with provider_session_id='${providerSessionId}' on a current live node for the same daemon if one exists.`
-                : 'If the node UI shows a provider transcript id, retry mesh_read_chat/mesh_read_debug with provider_session_id.',
-            'Use mesh_read_debug with the provider_session_id or daemon-side debug bundle locator if available.',
-            'Check mesh_task_history for task_completed and node_removed entries before redispatching; do not resend solely because transcript recovery failed.',
-            'If this node was removed with stop_and_delete, the runtime transcript may be gone; rely on the ledger summary/locator or ask the operator for the saved UI output.',
-        ],
-        recoveryHints: [
-            'The worktree/node may have been removed or the mesh snapshot may be stale after task completion.',
-            'If you have a provider_session_id, retry mesh_read_chat with that value while targeting a live node for the same daemon if available.',
-            'Use mesh_read_debug with provider_session_id, or inspect the daemon/session-host history locator if the transcript has already been archived.',
-            'Avoid redispatching the same task solely because read_chat could not recover the transcript; check task_history and git status first.',
-        ],
-    };
-}
-
 
 // (queue helpers moved to ./mesh-queue-helpers.ts)
 
@@ -1008,52 +795,6 @@ export async function triggerMeshQueueAndReport(
         };
     }
 }
-
-
-
-// (moved to ./mesh-session-helpers.ts — session/payload record helpers)
-
-
-export function buildRelayUnsafeRemoteSessionFailure(ctx: MeshContext, node: LocalMeshNodeEntry, sessionId: string, providerType?: string): ({ success: false; error: string } & Record<string, unknown>) {
-    return {
-        success: false,
-        recoverable: true,
-        code: 'mesh_delegate_session_missing_relay_metadata',
-        reason: 'mesh_delegate_session_missing_relay_metadata',
-        transport: 'mesh_transport',
-        retryRecommended: true,
-        meshId: ctx.mesh.id,
-        nodeId: node.id,
-        daemonId: node.daemonId,
-        workspace: node.workspace,
-        sessionId,
-        unsafeTranscriptAlias: true,
-        ...(providerType ? { resolvedProviderType: providerType } : {}),
-        error: `Remote session '${sessionId}' is not relay-safe for mesh '${ctx.mesh.id}': missing meshNodeFor/meshCoordinatorDaemonId metadata, so completion events would not reach the coordinator ledger. This session may be the coordinator itself or an unrelated session (unsafe_transcript_alias risk).`,
-        nextAction: `Launch a fresh relay-safe session with mesh_launch_session(node_id: '${node.id}'${providerType ? `, type: '${providerType}'` : ''}) or dispatch without session_id so Repo Mesh can choose a valid delegate session.`,
-        noFallbackReason: 'Blindly reusing a remote session without mesh relay metadata would silently drop task_completed / generating_completed events.',
-    };
-}
-
-export function buildMissingCoordinatorDaemonIdFailure(ctx: MeshContext, node: LocalMeshNodeEntry, providerType?: string): ({ success: false; error: string } & Record<string, unknown>) {
-    return {
-        success: false,
-        recoverable: true,
-        code: 'mesh_coordinator_daemon_unknown',
-        reason: 'mesh_coordinator_daemon_unknown',
-        transport: 'mesh_transport',
-        retryRecommended: true,
-        meshId: ctx.mesh.id,
-        nodeId: node.id,
-        daemonId: node.daemonId,
-        workspace: node.workspace,
-        ...(providerType ? { resolvedProviderType: providerType } : {}),
-        error: `Cannot launch a remote mesh delegate for node '${node.id}': coordinator daemon identity is unavailable, so the worker would be unable to relay completion events back to the coordinator.`,
-        nextAction: 'Retry after the coordinator daemon identity is available (for example from an attached daemon-backed MCP session) so meshCoordinatorDaemonId can be stamped on the worker session.',
-        noFallbackReason: 'Launching without meshCoordinatorDaemonId would create a worker session that can finish work but cannot emit task_completed / generating_completed back to the coordinator.',
-    };
-}
-
 
 
 // (compact git-snapshot helpers moved to ./mesh-compact.ts)
@@ -1132,688 +873,14 @@ export const COMPACT_NODES_TOTAL_BYTE_BUDGET = 14500;
 export const COMPACT_MISSIONS_BYTE_BUDGET = 4000;
 
 
-// (compact node-fold helpers moved to ./mesh-compact.ts)
-
-
-export function buildRecoverableLaunchFailure(
-    ctx: MeshContext,
-    node: LocalMeshNodeEntry,
-    providerType: string | undefined,
-    error: unknown,
-): Record<string, unknown> {
-    const message = error instanceof Error ? error.message : String(error || 'launch failed');
-    const classified = classifyMeshLaunchFailure(error);
-    const cleanup = buildWorktreeCleanupHint(node);
-    return {
-        success: false,
-        recoverable: classified.recoverable,
-        code: classified.code,
-        reason: classified.reason,
-        transport: classified.transport,
-        retryRecommended: classified.retryRecommended,
-        nextAction: classified.nextAction,
-        ...(classified.noFallbackReason ? { noFallbackReason: classified.noFallbackReason } : {}),
-        error: message,
-        meshId: ctx.mesh.id,
-        nodeId: node.id,
-        daemonId: node.daemonId,
-        workspace: node.workspace,
-        isLocalWorktree: node.isLocalWorktree === true,
-        worktreeBranch: node.worktreeBranch,
-        clonedFromNodeId: node.clonedFromNodeId,
-        ...(providerType ? { resolvedProviderType: providerType } : {}),
-        retryHint: `Retry mesh_launch_session(node_id: "${node.id}"${providerType ? `, type: "${providerType}"` : ''}) after daemon mesh transport/P2P is healthy.`,
-        ...(cleanup ? { cleanup } : {}),
-        nextStepHints: [
-            `Retry mesh_launch_session(node_id: "${node.id}"${providerType ? `, type: "${providerType}"` : ''}) after checking daemon/P2P health.`,
-            ...(cleanup ? [`Cleanup orphan worktree node with mesh_remove_node(node_id: "${node.id}") if retry is not desired.`] : []),
-            'Run mesh_status to see the degraded reason and recovery hints before redispatching work.',
-        ],
-    };
-}
-
-export async function recordRecoverableLaunchFailure(
-    ctx: MeshContext,
-    node: LocalMeshNodeEntry,
-    providerType: string | undefined,
-    error: unknown,
-): Promise<Record<string, unknown>> {
-    const failure = buildRecoverableLaunchFailure(ctx, node, providerType, error);
-    try {
-        await recordLocal(ctx.transport, {
-            meshId: ctx.mesh.id,
-            kind: 'recovery_attempted',
-            nodeId: node.id,
-            providerType,
-            payload: {
-                event: 'session_launch_failed',
-                ...failure,
-            },
-        });
-    } catch { /* ledger append is best-effort */ }
-    return failure;
-}
-
-export function latestActiveLaunchFailureFromEntries(entries: MeshLedgerEntry[], nodeId: string): Record<string, unknown> | null {
-    for (let i = entries.length - 1; i >= 0; i -= 1) {
-        const entry = entries[i];
-        if (entry.nodeId !== nodeId) continue;
-        if (entry.kind === 'session_launched' || entry.kind === 'node_removed') return null;
-        if (entry.kind === 'recovery_attempted' && entry.payload?.event === 'session_launch_failed') {
-            return { timestamp: entry.timestamp, ...entry.payload };
-        }
-    }
-    return null;
-}
-
-/**
- * MESH-STATUS-LOCAL-CHATTER dedup: mesh_status calls this ONCE PER NODE inside
- * its `Promise.all(mesh.nodes.map(...))` assembly, and every call asked for the
- * exact same `ledgerQuery(tail: 200)` window — an N-node mesh made N identical
- * IPC round trips to answer N different `nodeId` filters over the SAME tail
- * slice. `getLatestActiveLaunchFailureBatch` issues that one query and indexes
- * it by nodeId so every node in the call shares it; `getLatestActiveLaunchFailure`
- * stays as a single-node convenience wrapper for callers outside that per-node
- * loop (unchanged: still one query per call, since it has no batch to join).
- */
-export async function getLatestActiveLaunchFailureBatch(ctx: MeshContext, nodeIds: string[]): Promise<Map<string, Record<string, unknown> | null>> {
-    const { entries } = await ledgerQuery(ctx.transport, { meshId: ctx.mesh.id, tail: 200 });
-    const byNode = new Map<string, Record<string, unknown> | null>();
-    for (const nodeId of nodeIds) {
-        if (!byNode.has(nodeId)) byNode.set(nodeId, latestActiveLaunchFailureFromEntries(entries as unknown as MeshLedgerEntry[], nodeId));
-    }
-    return byNode;
-}
-
-export async function getLatestActiveLaunchFailure(ctx: MeshContext, nodeId: string): Promise<Record<string, unknown> | null> {
-    const { entries } = await ledgerQuery(ctx.transport, { meshId: ctx.mesh.id, tail: 200 });
-    return latestActiveLaunchFailureFromEntries(entries as unknown as MeshLedgerEntry[], nodeId);
-}
-
-export type RemoteAgentDispatchResult =
-    | { success: true; dispatched: true; sessionId: string; providerType?: string }
-    | ({ success: false; error: string } & Record<string, unknown>);
-
-export function buildCoordinatorP2pRelayFailure(
-    error: unknown,
-    context: { command: string; targetDaemonId?: string; nodeId?: string; sessionId?: string },
-): { success: false; error: string } & Record<string, unknown> {
-    const payload = buildP2pRelayFailurePayload(error, {
-        command: context.command,
-        targetDaemonId: context.targetDaemonId,
-    });
-    return {
-        ...payload,
-        ...(context.nodeId ? { nodeId: context.nodeId } : {}),
-        ...(context.sessionId ? { sessionId: context.sessionId } : {}),
-        retryHint: payload.retryRecommended ? payload.nextAction : 'Do not retry as a P2P transport recovery; inspect the command/provider error first.',
-    };
-}
-
-
-/**
- * ★PROVIDER-PIN-BYPASS — refusal returned when a dispatch cannot honor the task's
- * `required_tags: ["provider=X"]` pin on this node.
- *
- * ★WHY THIS REFUSES RATHER THAN FALLING BACK. The alternative — dispatch to some
- * other provider and note it somewhere — is the exact defect this closes: the work
- * silently ran on the wrong agent while both the ledger and the enqueue response
- * reported the pin as satisfied. A pin is a hard constraint (the claim path has
- * always treated it as one), so the accelerator must decline when it cannot meet it.
- *
- * ★WHY DECLINING DOES NOT STRAND THE TASK. This is the enqueue-and-push
- * ACCELERATOR, not the scheduler — its own contract (selectEagerPushReceiver) is
- * "if the chosen node cannot take the task, the row stays `pending` and the
- * queue-claim path hands it to whichever node claims it". The row is already
- * inserted before any push is attempted, and the claim path enforces the pin
- * per-session via buildMeshNodeCapabilityTags(node, providerType). So a refusal
- * here costs a delay and returns the task to the path that routes it correctly —
- * it is `recoverable: true` for exactly that reason. This is why the design choice
- * is "stay pending", not "fail the task": a pinned task whose provider is merely
- * BUSY must wait, and only a coordinator can tell a busy pin from an impossible one.
- */
-function buildProviderPinUnsatisfiableFailure(
-    node: LocalMeshNodeEntry,
-    providerPins: string[],
-    nodeProviders: string[],
-    resolvedProviderType?: string,
-): { success: false; error: string } & Record<string, unknown> {
-    const pinList = providerPins.join(', ');
-    return {
-        success: false,
-        recoverable: true,
-        code: 'mesh_provider_pin_unsatisfiable',
-        reason: 'mesh_provider_pin_unsatisfiable',
-        nodeId: node.id,
-        requiredProviders: providerPins,
-        nodeProviders,
-        ...(resolvedProviderType ? { resolvedProviderType } : {}),
-        error: `Node '${node.id}' cannot honor the task's provider pin [${pinList}]`
-            + (resolvedProviderType
-                ? `: dispatch resolved to '${resolvedProviderType}', which is not pinned.`
-                : `: the node declares [${nodeProviders.join(', ') || 'none'}].`)
-            + ' Refusing to dispatch onto a different provider — the task stays pending for the queue-claim path.',
-        nextAction: `Leave the task queued (the claim path enforces the pin per session), or launch a '${providerPins[0]}' session on this node with mesh_launch_session, or re-enqueue without the provider pin if any provider is acceptable.`,
-    };
-}
-
-/**
- * QUOTA GATE (direct-dispatch path, preview rc.43 run 10). The queue CLAIM
- * path (mesh-queue-assignment.ts's `evaluateQuotaClaimGateForAssignment`,
- * daemon-side) already refuses to pull a pending task onto an idle session
- * whose provider is measurably quota-exhausted — but `mesh_send_task`'s
- * DIRECT dispatch (this file, naming a node/session_id explicitly) went
- * straight to `agent_command`/local inject with no such check. Live evidence:
- * the owner ledger's mesh_direct attempt `ed31090f…` spent ~10 minutes
- * talking to a MainPC claude-cli worker session whose own chat already showed
- * "You've hit your session limit · resets 10:10pm (Asia/Seoul)" — the claim
- * path would have diverted this candidate; the direct path had nothing to
- * divert it.
- *
- * Reuses `evaluateProviderQuotaGate` — the SAME predicate the claim gate and
- * the manual-launch path (`meshLaunchSession` below) already call — so this
- * path can never independently decide what "out of quota" means. Called with
- * no `QuotaFactsContext` (mirrors the manual-launch call site): a direct
- * dispatch reads only the node's reported `nodeFacts.quota` snapshot, never
- * triggers a fetch. Fail-open is therefore inherited unchanged: a missing,
- * stale, or unmarked-fresh snapshot never blocks — only a FRESH measured
- * block (an 'ok' window under threshold, or the provider's own
- * 'quota-exhausted' verdict) does.
- *
- * Returns `null` when the dispatch may proceed (unknown/healthy). Returns the
- * block plus, when resolvable, the offending window's own `resetsAt` (read
- * directly off `node.nodeFacts.quota[providerType]` — the same bundle
- * `evaluateProviderQuotaGate` itself reads) so a refusal names WHEN the
- * window resets instead of just that it is closed. Antigravity's per-pool
- * bucket decomposition and the exhausted-with-no-named-window case are not
- * resolvable this way (the exact window is internal to mesh-quota-routing.ts)
- * — `resetsAt` is omitted rather than guessed.
- */
-export function checkDirectDispatchQuotaGate(
-    node: LocalMeshNodeEntry,
-    providerType: string,
-    quotaRoutingPolicy: unknown,
-): { block: ProviderQuotaGateBlock; resetsAt: number | null } | null {
-    if (!providerType) return null;
-    const block = evaluateProviderQuotaGate(node, providerType, (quotaRoutingPolicy as never) ?? null);
-    if (!block) return null;
-    const quota = (node as any)?.nodeFacts?.quota?.[providerType] as MeshNodeFactsProviderQuota | undefined;
-    const window = block.window === 'session' ? quota?.session : block.window === 'weekly' ? quota?.weekly : null;
-    const resetsAt = typeof window?.resetsAt === 'number' && Number.isFinite(window.resetsAt) ? window.resetsAt : null;
-    return { block, resetsAt };
-}
-
-/** Shared refusal payload for `checkDirectDispatchQuotaGate` — same shape from every call site. */
-export function buildQuotaExhaustedDispatchFailure(
-    node: LocalMeshNodeEntry,
-    providerType: string,
-    sessionId: string | undefined,
-    gate: { block: ProviderQuotaGateBlock; resetsAt: number | null },
-): Record<string, unknown> {
-    const { block, resetsAt } = gate;
-    return {
-        success: false,
-        recoverable: true,
-        code: 'provider_quota_exhausted',
-        reason: 'provider_quota_exhausted',
-        nodeId: node.id,
-        ...(sessionId ? { sessionId } : {}),
-        providerType,
-        quotaBlock: {
-            reason: block.reason,
-            window: block.window,
-            remainingPercent: block.remainingPercent,
-            thresholdPercent: block.thresholdPercent,
-            ...(resetsAt !== null ? { resetsAt } : {}),
-        },
-        error: `Provider '${providerType}' on node '${node.id}' is quota-gated (${block.reason}; ${block.window} window at ${block.remainingPercent}% remaining, threshold ${block.thresholdPercent}%)`
-            + (resetsAt !== null ? ` — resets at ${new Date(resetsAt).toISOString()}.` : '.')
-            + ' Refusing this direct dispatch rather than spending a turn on a session that cannot work right now.',
-        nextAction: 'Wait for the quota window to reset, target a different node/session, or pass allow_quota_exhausted: true to dispatch anyway (e.g. deliberately testing the provider\'s own quota error).',
-    };
-}
-
-/**
- * For IpcTransport + remote node: resolve an active session on the node and
- * dispatch an agent_command directly via P2P relay (mesh_relay_command).
- *
- * This bypasses the local queue (which remote daemons cannot read) and sends
- * the message directly to the session running on the remote daemon.
- *
- * Returns { success, sessionId } or throws.
- */
-export async function ipcDispatchToRemoteAgent(
-    ctx: MeshContext,
-    node: LocalMeshNodeEntry,
-    args: {
-        session_id?: string;
-        message: string;
-        /** MESH-IMAGE-DISPATCH: optional multipart envelope forwarded to the remote agent. */
-        input?: MeshTaskInput;
-        providerType?: string;
-        verifiedSession?: any;
-        /**
-         * ★PROVIDER-PIN-BYPASS — the task's required_tags, when this dispatch carries a
-         * queue task. Only the `provider=` axis is consumed here (see the pin block
-         * below); the other axes are node properties already enforced by the caller's
-         * node filter. Absent/empty → no provider constraint, i.e. exactly the previous
-         * behavior for every unpinned dispatch.
-         */
-        requiredTags?: string[];
-        meshContext?: {
-            meshId: string; nodeId?: string; taskId?: string; coordinatorDaemonId?: string;
-            coordinatorSessionId?: string;
-            /** C-W6c: the turn-ledger attempt this dispatch opened — stamped onto the worker session. */
-            attemptId?: string; attemptGeneration?: number;
-        };
-        /**
-         * D2 (applied in C-W8): the message identity + admission policy the worker's
-         * one send funnel (SessionInputService) dedupes on. Absent → the worker mints
-         * a legacy id (never deduplicated), exactly the pre-D2 behaviour.
-         */
-        messageId?: string;
-        policy?: { mode: 'queue' | 'send_now' | 'interrupt' };
-        origin?: 'mcp' | 'mesh';
-        /** QUOTA GATE opt-out — see checkDirectDispatchQuotaGate's doc comment. */
-        allowQuotaExhausted?: boolean;
-    },
-): Promise<RemoteAgentDispatchResult> {
-    const transport = ctx.transport as IpcTransport;
-    const daemonId = node.daemonId!;
-
-    // The coordinator anchor the remote router will stamp onto the worker session
-    // at dispatch time (router.ts buildMeshWorkerRelayStamp). When present, a
-    // mesh-owned session that was never launch-stamped can still self-heal to
-    // relay-safe — exactly like the local direct-dispatch path.
-    const dispatchCoordinatorDaemonId = readString(args.meshContext?.coordinatorDaemonId) || '';
-
-    let sessionId = args.session_id?.trim() || '';
-    // ── ★PROVIDER-PIN-BYPASS (D2) — the pin must survive provider resolution ──────
-    //
-    // Resolve provider type: caller arg > node policy providerPriority (slots-derived
-    // when unset — readProviderPriority applies the fallback) > empty (fuzzy fallback).
-    //
-    // ★The providerPriority[0] fallback is what silently broke required_tags. The
-    // caller's node filter asks "could SOME provider here satisfy the pin?" and a node
-    // declaring several slots answers yes — then this line picked priority[0] with no
-    // idea a pin existed. Live: required_tags ["provider=antigravity-cli"] resolved to
-    // `claude-cli` (Jupiter's priority[0]) and the ledger recorded the pin as honored.
-    // Whichever provider names reach `resolvedProviderType`, they are now intersected
-    // with the pin first, so an unpinnable candidate can never be selected.
-    const providerPins = providerPinsFromRequiredTags(args.requiredTags);
-    const providerPriorityList: string[] = filterProvidersByRequiredTags(
-        readProviderPriority(node.policy),
-        args.requiredTags,
-    );
-    // An explicit caller-supplied providerType is honored ONLY when it satisfies the
-    // pin. It normally comes from a cached session record, so a stale cache must not
-    // become a second bypass of the same constraint.
-    const callerProviderType = args.providerType?.trim() || '';
-    const callerProviderAllowed = !callerProviderType
-        || providerPins.length === 0
-        || providerPins.includes(callerProviderType);
-    if (providerPins.length && !callerProviderAllowed && !providerPriorityList.length) {
-        // The node advertises no provider satisfying the pin (and the caller's hint does
-        // not either). Fail-closed rather than dispatch onto some other provider — the
-        // task stays pending for the claim path, which enforces the pin per-session.
-        return buildProviderPinUnsatisfiableFailure(node, providerPins, readProviderPriority(node.policy));
-    }
-    let resolvedProviderType = (callerProviderAllowed ? callerProviderType : '') || providerPriorityList[0] || '';
-    // ★PROVIDER-PIN-BYPASS — the three `resolvedProviderType ||= <session's provider>`
-    // fills below are the other way a non-pinned provider used to enter: when the
-    // priority list gave nothing, the provider was adopted from whatever session was
-    // found. Route every such adoption through this predicate so a session running the
-    // wrong provider leaves resolvedProviderType empty (→ the explicit
-    // `providerType unknown` refusal) instead of silently becoming the dispatch target.
-    const adoptSessionProviderType = (session: any): string => {
-        const type = resolveSessionProviderType(session);
-        if (!type) return '';
-        return providerPins.length === 0 || providerPins.includes(type) ? type : '';
-    };
-
-    // Ask the remote daemon for live session truth when we need to auto-pick a
-    // delegate session, or when an explicit session_id must be verified as a
-    // relay-safe mesh-owned worker before we dispatch into it.
-    if (sessionId && args.verifiedSession) {
-        const explicitSession = args.verifiedSession;
-        const relaySafety = classifyRemoteDelegateRelaySafety(explicitSession, ctx.mesh.id, node.id, dispatchCoordinatorDaemonId);
-        if (relaySafety === 'unsafe_alias') {
-            return buildRelayUnsafeRemoteSessionFailure(
-                ctx,
-                node,
-                sessionId,
-                resolvedProviderType || resolveSessionProviderType(explicitSession) || undefined,
-            );
-        }
-        if (relaySafety === 'missing_anchor') {
-            return buildMissingCoordinatorDaemonIdFailure(
-                ctx,
-                node,
-                resolvedProviderType || resolveSessionProviderType(explicitSession) || undefined,
-            );
-        }
-        // 'safe' or 'self_heal' → dispatch; the remote router stamps the relay
-        // anchor from meshContext.coordinatorDaemonId when self-healing.
-        if (!resolvedProviderType) {
-            resolvedProviderType = adoptSessionProviderType(explicitSession);
-        }
-    } else if (!sessionId || args.session_id) {
-        try {
-            // ★PROVIDER-PIN-BYPASS — chooseDispatchableSession treats an EMPTY
-            // providerType as "any provider will do" (its matchingProvider is
-            // `!providerType || ...`). With a pin in play that is precisely the
-            // wrong default, so pass the single pinned provider as the filter when
-            // the node resolution left the type blank. Unpinned dispatches still
-            // pass '' and keep the any-session behavior.
-            const sessionProviderFilter = resolvedProviderType || (providerPins.length === 1 ? providerPins[0] : '');
-            // QUOTA GATE (sessionless auto-pick): mirror the claim path's candidate
-            // filtering — never auto-pick an idle session whose provider is
-            // measurably quota-exhausted, the same predicate checkDirectDispatchQuotaGate
-            // applies to an explicit session_id below. A pre-filter here (rather than
-            // gating only the final pick) lets chooseDispatchableSession fall through
-            // to the NEXT idle session on this node when one exists, instead of
-            // treating "the first idle session happens to be gated" as "no session
-            // available". allowQuotaExhausted also disables this pre-filter, so the
-            // opt-out has one consistent meaning across both call sites.
-            // Prefer live idle sessions launched for this mesh node. Never route
-            // a new task into restored/stopped session records; that produces the
-            // coordinator-visible "pending only, chat never received it" failure.
-            const pickSession = (list: any[]) => sessionId
-                ? list.find(session => readSessionRecordId(session) === sessionId)
-                : chooseDispatchableSession(args.allowQuotaExhausted ? list : list.filter((session: any) => {
-                    const sessionProviderType = resolveSessionProviderType(session);
-                    if (!sessionProviderType) return true;
-                    return !checkDirectDispatchQuotaGate(node, sessionProviderType, ctx.mesh.policy?.quotaRouting ?? null);
-                }), sessionProviderFilter, ctx.mesh.id, node.id, dispatchCoordinatorDaemonId);
-            // The member's pushed runtime, held by the coordinator (owner principle ④):
-            // the pick is made from it alone — the member is never read. A node with
-            // nothing held yet auto-picks nothing (the dispatch goes sessionless and the
-            // worker picks / creates the session); a named session not in the held list
-            // is refused as not found (retryable once the member's next push lands).
-            const runtime = await readNodeRuntime(ctx, node);
-            const picked = pickSession(runtime.probe.sessions);
-
-            if (sessionId) {
-                const explicitSession = picked;
-                if (!explicitSession) {
-                    return {
-                        success: false,
-                        recoverable: true,
-                        code: 'mesh_target_session_not_found',
-                        reason: 'mesh_target_session_not_found',
-                        transport: 'mesh_transport',
-                        retryRecommended: true,
-                        meshId: ctx.mesh.id,
-                        nodeId: node.id,
-                        daemonId,
-                        workspace: node.workspace,
-                        sessionId,
-                        ...(resolvedProviderType ? { resolvedProviderType } : {}),
-                        error: `Remote session '${sessionId}' is not in the coordinator's held runtime for node '${node.id}'${runtime.known ? '' : ' (nothing held for this node yet)'}.`,
-                        nextAction: `Launch a fresh session with mesh_launch_session(node_id: '${node.id}'${resolvedProviderType ? `, type: '${resolvedProviderType}'` : ''}) or retry without session_id so Repo Mesh can target a live delegate session.`,
-                    };
-                }
-                const relaySafety = classifyRemoteDelegateRelaySafety(explicitSession, ctx.mesh.id, node.id, dispatchCoordinatorDaemonId);
-                if (relaySafety === 'unsafe_alias') {
-                    return buildRelayUnsafeRemoteSessionFailure(
-                        ctx,
-                        node,
-                        sessionId,
-                        resolvedProviderType || resolveSessionProviderType(explicitSession) || undefined,
-                    );
-                }
-                if (relaySafety === 'missing_anchor') {
-                    return buildMissingCoordinatorDaemonIdFailure(
-                        ctx,
-                        node,
-                        resolvedProviderType || resolveSessionProviderType(explicitSession) || undefined,
-                    );
-                }
-                // 'safe' or 'self_heal' → dispatch; the remote router stamps the
-                // relay anchor from meshContext.coordinatorDaemonId when self-healing.
-                if (!resolvedProviderType) {
-                    resolvedProviderType = adoptSessionProviderType(explicitSession);
-                }
-            } else {
-                const targetSession = picked;
-
-                if (targetSession?.id || targetSession?.sessionId) {
-                    sessionId = targetSession.id || targetSession.sessionId;
-                    if (!resolvedProviderType) {
-                        resolvedProviderType = adoptSessionProviderType(targetSession);
-                    }
-                }
-            }
-        } catch (e: any) {
-            if (sessionId) {
-                return {
-                    ...buildCoordinatorP2pRelayFailure(e, {
-                        command: 'mesh_status',
-                        targetDaemonId: daemonId,
-                        nodeId: node.id,
-                        sessionId,
-                    }),
-                    success: false,
-                    error: `Cannot verify remote session '${sessionId}' before dispatch: ${e?.message || String(e)}`,
-                };
-            }
-            // fall through — will attempt dispatch with just providerType (fuzzy)
-        }
-    }
-
-    // agent_command requires agentType — fail if we cannot determine provider type
-    if (!resolvedProviderType) {
-        return { success: false, error: `Cannot dispatch to remote node '${node.id}': providerType unknown. Set providerPriority on the node policy or call mesh_launch_session first.` };
-    }
-    // ★PROVIDER-PIN-BYPASS — single fail-closed assert over EVERY route that can reach
-    // here (caller hint / priority list / any of the three session adoptions / the
-    // catch-block fall-through). The individual guards above each narrow one route;
-    // this one makes it structurally impossible for a future edit to open a new one,
-    // because the pin is re-checked on the value actually about to be sent as
-    // agentType. Deliberately placed BELOW the unknown-provider refusal so the more
-    // specific message wins when nothing resolved at all.
-    if (providerPins.length && !providerPins.includes(resolvedProviderType)) {
-        return buildProviderPinUnsatisfiableFailure(node, providerPins, readProviderPriority(node.policy), resolvedProviderType);
-    }
-    // QUOTA GATE (direct dispatch) — see checkDirectDispatchQuotaGate's doc comment.
-    // Placed after pin resolution (a pin refusal is more specific and should win) and
-    // before the actual send. The sessionless auto-pick above already pre-filtered
-    // candidate sessions, but this still catches an EXPLICIT session_id (the run-10
-    // case) and the sessionless-fallback-to-priority-list route, where no session
-    // filtering ran at all.
-    if (!args.allowQuotaExhausted) {
-        const quotaGate = checkDirectDispatchQuotaGate(node, resolvedProviderType, ctx.mesh.policy?.quotaRouting ?? null);
-        if (quotaGate) {
-            return buildQuotaExhaustedDispatchFailure(node, resolvedProviderType, sessionId || undefined, quotaGate) as RemoteAgentDispatchResult;
-        }
-    }
-
-    try {
-        const dispatchResult = await transport.meshCommand(daemonId, 'agent_command', {
-            ...(sessionId ? { targetSessionId: sessionId } : {}),
-            agentType: resolvedProviderType,
-            cliType: resolvedProviderType,
-            action: 'send_chat',
-            message: args.message,
-            // MESH-IMAGE-DISPATCH: forward the attachment over P2P. Oversized payloads are
-            // split by the mesh transport's frame chunking (daemon-mesh-manager
-            // writeEnvelope) and reassembled on the worker before the command is handled.
-            ...(args.input ? { input: args.input } : {}),
-            ...(args.messageId ? { messageId: args.messageId } : {}),
-            ...(args.policy ? { policy: args.policy } : {}),
-            ...(args.origin ? { origin: args.origin } : {}),
-            // DISPATCH-SOURCE-TRACE: call-site tag echoed in the worker daemon log.
-            dispatchSource: 'mesh-tools-internal:ipcDispatchToRemoteAgent',
-            // WTCLAIM (B): carry the node workspace so a sessionless dispatch can be
-            // scoped to THIS node's session on the worker (findAdapter dir match /
-            // findMeshNodeAdapter). Without it, a worker hosting both a base node and a
-            // cloned worktree node (same daemonId) would fall through to a provider-only
-            // fuzzy match and could land worktree work on the base session.
-            ...(node.workspace ? { dir: node.workspace } : {}),
-            ...(args.meshContext ? { meshContext: args.meshContext } : {}),
-        });
-        const dispatchPayload = unwrapCommandPayload(dispatchResult);
-        if (dispatchPayload?.success === false || dispatchResult?.success === false) {
-            const source = dispatchPayload?.success === false ? dispatchPayload : dispatchResult;
-            const errorMessage = dispatchPayload?.error || dispatchResult?.error || 'agent_command rejected the task';
-            const busyRefusal = sessionBusyRefusalFields(errorMessage, sessionId);
-            if (busyRefusal) return { success: false, error: `P2P dispatch refused: ${errorMessage}`, nodeId: node.id, targetDaemonId: daemonId, ...busyRefusal };
-            return {
-                ...buildCoordinatorP2pRelayFailure(source?.error || errorMessage, {
-                    command: 'agent_command',
-                    targetDaemonId: daemonId,
-                    nodeId: node.id,
-                    sessionId,
-                }),
-                ...(source && typeof source === 'object' ? source : {}),
-                success: false,
-                error: `P2P dispatch failed: ${errorMessage}`,
-            };
-        }
-        // Do NOT fall back to resolvedProviderType for sessionId: a sessionless
-        // dispatch (no targetSessionId above) lets the worker pick/create the real
-        // session, so the provider type ('claude-cli', …) is NOT a session id.
-        // Returning it here used to poison assigned_session_id downstream, breaking
-        // findAssignedBySession (provider type vs real session id) and orphaning the
-        // task_completed match. Leave it empty so completion matching falls back to
-        // taskId via the meshContext.taskId carried in the dispatch.
-        return { success: true, dispatched: true, sessionId: sessionId || '', providerType: resolvedProviderType };
-    } catch (e: any) {
-        const errorMessage = e?.message || String(e);
-        const busyRefusal = sessionBusyRefusalFields(e, sessionId);
-        if (busyRefusal) return { success: false, error: `P2P dispatch refused: ${errorMessage}`, nodeId: node.id, targetDaemonId: daemonId, ...busyRefusal };
-        return {
-            ...buildCoordinatorP2pRelayFailure(e, {
-                command: 'agent_command',
-                targetDaemonId: daemonId,
-                nodeId: node.id,
-                sessionId,
-            }),
-            error: `P2P dispatch failed: ${errorMessage}`,
-        };
-    }
-}
-
-/**
- * SESSION-BUSY (preview rc.37): the worker refused the dispatch because the target session
- * is still working a DIFFERENT task (provider-instance-manager's stamp guard). That is an
- * application answer, not a P2P transport failure — report it as the typed
- * `session_busy_with_task` refusal with the task the session is running, and never as a
- * retryable relay outage. Only the error message crosses the P2P + IPC hops, so the
- * worker's machine token is read back via daemon-core's classifier.
- */
-function sessionBusyRefusalFields(error: unknown, sessionId: string): Record<string, unknown> | null {
-    const busy = classifySessionBusyWithTask(error);
-    if (!busy) return null;
-    return {
-        code: SESSION_BUSY_WITH_TASK_CODE,
-        reason: SESSION_BUSY_WITH_TASK_CODE,
-        recoverable: true,
-        retryRecommended: false,
-        ...(sessionId ? { sessionId } : {}),
-        currentTaskId: busy.currentTaskId,
-        ...(busy.currentAttemptId ? { currentAttemptId: busy.currentAttemptId } : {}),
-        nextAction: `Session${sessionId ? ` '${sessionId}'` : ''} is still running task '${busy.currentTaskId}'. Nothing was delivered. `
-            + 'Use mesh_enqueue_task (the queue delivers when the session goes idle), target another idle session, or retry after the current task completes.',
-    };
-}
-
-export function meshSessionCacheKey(nodeId: string, runtimeSessionId: string): string {
-    return `${nodeId}:${runtimeSessionId}`;
-}
-
-export function rememberMeshSessionProviderMetadata(
-    nodeId: string | undefined,
-    runtimeSessionId: string | undefined,
-    metadata: MeshSessionProviderMetadata,
-): void {
-    const keyNodeId = readString(nodeId);
-    const keySessionId = readString(runtimeSessionId);
-    if (!keyNodeId || !keySessionId) return;
-    const providerType = readString(metadata.providerType);
-    const providerSessionId = readString(metadata.providerSessionId);
-    if (!providerType && !providerSessionId) return;
-    const existing = getSessionMetadata(meshSessionCacheKey(keyNodeId, keySessionId)) || { providerType: '' };
-    meshSessionProviderMetadata.set(meshSessionCacheKey(keyNodeId, keySessionId), {
-        providerType: providerType || existing.providerType,
-        providerSessionId: providerSessionId || existing.providerSessionId,
-        expiresAt: Date.now() + SESSION_PROVIDER_METADATA_TTL_MS,
-    });
-}
-
-export function rememberMeshSessionProviderMetadataFromEvent(event: any): void {
-    const metadataEvent = event?.metadataEvent && typeof event.metadataEvent === 'object'
-        ? event.metadataEvent as Record<string, unknown>
-        : event && typeof event === 'object'
-            ? event as Record<string, unknown>
-            : {};
-    const nodeId = readString(event?.nodeId) || readString(metadataEvent.nodeId) || readString(metadataEvent.meshNodeId);
-    const sessionId = readString(metadataEvent.targetSessionId)
-        || readString(metadataEvent.sessionId)
-        || readString(metadataEvent.instanceId)
-        || readString(event?.sessionId);
-    rememberMeshSessionProviderMetadata(nodeId, sessionId, {
-        providerType: readString(metadataEvent.providerType) || readString(event?.providerType) || '',
-        providerSessionId: readString(metadataEvent.providerSessionId) || readString(event?.providerSessionId),
-    });
-}
-
-export async function resolveMeshSessionProviderMetadataFromLedger(
-    ctx: MeshContext,
-    nodeId: string,
-    runtimeSessionId: string,
-): Promise<MeshSessionProviderMetadata | undefined> {
-    let entries: Awaited<ReturnType<typeof ledgerQuery>>['entries'] = [];
-    try { entries = (await ledgerQuery(ctx.transport, { meshId: ctx.mesh.id, tail: 50 })).entries; } catch { return undefined; }
-    for (let i = entries.length - 1; i >= 0; i -= 1) {
-        const entry = entries[i];
-        const payload = entry.payload && typeof entry.payload === 'object' && !Array.isArray(entry.payload)
-            ? entry.payload as Record<string, unknown>
-            : {};
-        const entryNodeId = readString(entry.nodeId) || readString(payload.nodeId) || readString(payload.meshNodeId);
-        if (entryNodeId && entryNodeId !== nodeId) continue;
-        const entrySessionId = readString(entry.sessionId)
-            || readString(payload.targetSessionId)
-            || readString(payload.sessionId)
-            || readString(payload.instanceId);
-        if (entrySessionId !== runtimeSessionId) continue;
-        const providerType = readString(entry.providerType) || readString(payload.providerType);
-        const completionDiagnostic = payload.completionDiagnostic && typeof payload.completionDiagnostic === 'object' && !Array.isArray(payload.completionDiagnostic)
-            ? payload.completionDiagnostic as Record<string, unknown>
-            : {};
-        const metadataEvent = payload.metadataEvent && typeof payload.metadataEvent === 'object' && !Array.isArray(payload.metadataEvent)
-            ? payload.metadataEvent as Record<string, unknown>
-            : {};
-        const providerSessionId = readString(payload.providerSessionId)
-            || readString(completionDiagnostic.providerSessionId)
-            || readString(metadataEvent.providerSessionId);
-        if (providerType || providerSessionId) {
-            return { providerType: providerType || '', providerSessionId };
-        }
-    }
-    return undefined;
-}
-
-export async function resolveMeshSessionProviderMetadata(
-    ctx: MeshContext,
-    nodeId: string,
-    runtimeSessionId: string,
-): Promise<MeshSessionProviderMetadata | undefined> {
-    const cached = getSessionMetadata(meshSessionCacheKey(nodeId, runtimeSessionId));
-    if (cached?.providerType || cached?.providerSessionId) return cached;
-    const fromLedger = await resolveMeshSessionProviderMetadataFromLedger(ctx, nodeId, runtimeSessionId);
-    if (fromLedger) rememberMeshSessionProviderMetadata(nodeId, runtimeSessionId, fromLedger);
-    return fromLedger;
-}
-
-
-
-
-
 export async function collectRelatedRepoStatuses(
     ctx: MeshContext,
     node: LocalMeshNodeEntry,
-    opts?: { localOnly?: boolean },
+    opts?: {
+        localOnly?: boolean;
+        /** Where a local repo's git_status comes from instead of a read (mesh_status: its one view). */
+        readGitStatus?: (workspace: string) => unknown;
+    },
 ): Promise<Array<Record<string, unknown>>> {
     const relatedRepos = readRelatedRepos(node);
     if (!relatedRepos.length) return [];
@@ -1835,7 +902,9 @@ export async function collectRelatedRepoStatuses(
         try {
             // OFFLINE-NODE-STATUS-REFRESH: related-repo status is part of the mesh_status
             // per-node assembly — mark it status-origin for the SHORT connect-wait budget.
-            const statusResult = await commandForNode(ctx, node, 'git_status', { workspace: repo.workspace, refreshUpstream: true }, { statusProbe: true });
+            const statusResult = opts?.readGitStatus
+                ? opts.readGitStatus(repo.workspace)
+                : await commandForNode(ctx, node, 'git_status', { workspace: repo.workspace, refreshUpstream: true }, { statusProbe: true });
             const status = extractGitStatus(statusResult);
             results.push(summarizeRelatedRepoStatus(repo, status));
         } catch (e: any) {
@@ -1848,7 +917,6 @@ export async function collectRelatedRepoStatuses(
     }
     return results;
 }
-
 
 
 /** The coordinator daemon's routing decision for a direct dispatch (`mesh_dispatch_route`). */
@@ -1985,7 +1053,6 @@ export async function drainCoordinatorPendingEvents(
     ctx: MeshContext,
     _opts?: { nodeIds?: string[] },
 ): Promise<any[]> {
-    const matchesCurrentMesh = (event: any) => readString(event?.meshId) === ctx.mesh.id;
     const args = { meshId: ctx.mesh.id, ...buildPendingMeshEventsDrainArgs(ctx) };
     ctx.noticeDrainCount = (ctx.noticeDrainCount ?? 0) + 1;
     let raw: any;
@@ -1994,6 +1061,16 @@ export async function drainCoordinatorPendingEvents(
     } catch {
         return []; // Non-fatal: the notices stay undelivered rows; the next read / the cursor gets them.
     }
+    return applyPendingMeshEvents(ctx, raw);
+}
+
+/**
+ * Read a `get_pending_mesh_events` answer: the replication-pending flag, this
+ * mesh's events, and the session provider metadata they carry. Shared with
+ * mesh_status, whose one view carries the drain.
+ */
+export function applyPendingMeshEvents(ctx: MeshContext, raw: any): any[] {
+    const matchesCurrentMesh = (event: any) => readString(event?.meshId) === ctx.mesh.id;
     const payload = unwrapCommandPayload(raw);
     const replication = payload?.replication ?? raw?.replication;
     ctx.lastNoticeReplication = replication === 'pending' ? 'pending' : undefined;
@@ -2016,124 +1093,6 @@ export function buildRemoveNodeArgs(ctx: MeshContext, nodeId: string, sessionCle
         ...(force === true ? { force: true } : {}),
         inlineMesh: ctx.mesh,
     };
-}
-
-
-
-
-/**
- * The coordinator already holds the worker's latest assistant text from the completion /
- * status events it surfaced into the ledger (finalSummary / workerResult.summary — the
- * same fields resolveMeshSurfacedSessionPreview reads off a live event, and the same
- * data the mobile inbox is fed). When the live P2P read_chat path is unavailable this
- * resolves that cached preview so mesh_read_chat can degrade to a stale-but-present
- * summary instead of a hard 30s timeout. Scans the most recent matching ledger entry for
- * the node+session.
- */
-export async function resolveCachedMeshSessionPreviewFromLedger(
-    ctx: MeshContext,
-    nodeId: string,
-    sessionId: string,
-): Promise<{ preview: string; role: 'assistant'; receivedAt: number; ledgerKind: string; timestamp: string } | undefined> {
-    let entries: Awaited<ReturnType<typeof ledgerQuery>>['entries'] = [];
-    try { entries = (await ledgerQuery(ctx.transport, { meshId: ctx.mesh.id, tail: 200 })).entries; } catch { return undefined; }
-    for (let i = entries.length - 1; i >= 0; i -= 1) {
-        const entry = entries[i];
-        const payload = entry.payload && typeof entry.payload === 'object' && !Array.isArray(entry.payload)
-            ? entry.payload as Record<string, unknown>
-            : {};
-        const entryNodeId = readString(entry.nodeId) || readString(payload.nodeId) || readString(payload.meshNodeId);
-        if (entryNodeId && entryNodeId !== nodeId) continue;
-        const entrySessionId = readString(entry.sessionId)
-            || readString(payload.targetSessionId)
-            || readString(payload.sessionId)
-            || readString(payload.instanceId);
-        if (entrySessionId !== sessionId) continue;
-        // Prefer a nested metadataEvent when present, else read the entry payload itself
-        // (task_completed / task_failed entries carry finalSummary + workerResult inline).
-        const metadataEvent = payload.metadataEvent && typeof payload.metadataEvent === 'object' && !Array.isArray(payload.metadataEvent)
-            ? payload.metadataEvent as Record<string, unknown>
-            : payload;
-        const preview = resolveMeshSurfacedSessionPreview(metadataEvent);
-        if (preview) {
-            return { ...preview, ledgerKind: entry.kind, timestamp: entry.timestamp };
-        }
-    }
-    return undefined;
-}
-
-
-/**
- * mesh_read_chat fallback for a REMOTE P2P read that failed at the transport layer.
- *
- * Rather than hard-failing on a 30s P2P timeout to a saturated/unreachable worker, surface the
- * cached coordinator-side summary (the same finalSummary/lastMessagePreview the mobile
- * dashboard renders). This is a READ/meta-plane degrade — status & preview already flow
- * over the WS/event plane — NOT a data-plane command WS fallback (which stays P2P-only
- * by policy). The full transcript still requires a live P2P read_chat; the fallback is
- * explicitly a stale point-in-time summary only.
- */
-export async function buildMeshReadChatCacheFallback(
-    ctx: MeshContext,
-    args: { node_id: string; session_id: string },
-    node: LocalMeshNodeEntry,
-    error: unknown,
-): Promise<string> {
-    const classification = classifyP2pRelayFailure(error, { command: 'read_chat', targetDaemonId: node.daemonId });
-    const cause = classifyReadChatTransportCause(error);
-    const errorMessage = error instanceof Error ? error.message : String(error ?? '');
-    const causeNote = cause === 'not_connected'
-        ? 'the worker daemon is not currently connected over P2P (no live channel)'
-        : 'the worker daemon is connected but saturated — it acknowledged the request but did not return the transcript within the deadline';
-
-    const cached = await resolveCachedMeshSessionPreviewFromLedger(ctx, args.node_id, args.session_id);
-    if (cached) {
-        return JSON.stringify({
-            success: true,
-            source: 'coordinator_cache_fallback',
-            fallback: true,
-            nodeId: args.node_id,
-            sessionId: args.session_id,
-            transport: 'p2p',
-            transportFailure: {
-                code: classification.code,
-                reason: classification.reason,
-                cause,
-                error: errorMessage,
-            },
-            advisory: `Live transcript unavailable (${causeNote}). Showing the cached coordinator-side summary surfaced from the worker's last completion/status event — a stale point-in-time summary, NOT the live transcript. The full transcript requires a live P2P read_chat once the peer is reachable.`,
-            fullTranscriptRequiresP2p: true,
-            summary: cached.preview,
-            messages: [{
-                role: cached.role,
-                content: cached.preview,
-                cached: true,
-                ...(cached.receivedAt ? { receivedAt: cached.receivedAt } : {}),
-            }],
-            cachedPreview: {
-                role: cached.role,
-                ledgerKind: cached.ledgerKind,
-                ledgerTimestamp: cached.timestamp,
-                ...(cached.receivedAt ? { receivedAt: cached.receivedAt } : {}),
-            },
-        }, null, 2);
-    }
-
-    // No cached summary either — return the structured relay failure with a clear reason,
-    // and make explicit that even a fallback summary is unavailable.
-    const failure = buildCoordinatorP2pRelayFailure(error, {
-        command: 'read_chat',
-        targetDaemonId: node.daemonId,
-        nodeId: args.node_id,
-        sessionId: args.session_id,
-    });
-    return JSON.stringify({
-        ...failure,
-        cause,
-        cachedSummaryAvailable: false,
-        fullTranscriptRequiresP2p: true,
-        advisory: `Live transcript unavailable (${causeNote}) and no cached coordinator-side summary exists for this session yet (no completion/status event has been surfaced). The full transcript requires a live P2P read_chat once the peer is reachable.`,
-    }, null, 2);
 }
 
 /**

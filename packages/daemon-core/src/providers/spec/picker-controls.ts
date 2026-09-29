@@ -14,7 +14,7 @@
 'use strict';
 
 import { lastContiguousNumberedBlock } from './evaluator.js';
-import type { ISpecDriver } from './fsm-driver.js';
+import type { ISpecDriver } from './fsm-driver-types.js';
 import type { Control, ControlAction } from './types.js';
 
 export function delay(ms: number): Promise<void> {
@@ -213,4 +213,74 @@ export function readScreenSectionText(driver: ISpecDriver, sectionId?: string): 
     } catch {
         return '';
     }
+}
+
+/**
+ * Map an adapter invokeScript(name, args) call onto a control_bar entry.
+ *
+ * scriptName is matched against control.id. The control's action.type
+ * drives the dispatch:
+ *
+ *   send_keys     → click_control                   (e.g. stop)
+ *   open_picker   → two roles, driven by the screen, not a hardcoded list:
+ *                   - LIST  (no choice arg): open the picker, wait for it
+ *                     to render, parse the on-screen options via
+ *                     `extract_choices`, and return them as
+ *                     `controlResult.options` (+ `currentValue`). This is
+ *                     how the dashboard's Model/Mode controls learn what is
+ *                     actually selectable in this CLI right now.
+ *                   - SELECT (args.choiceIndex / args.choiceLabel): drive
+ *                     the picker to that option using `submit_key`.
+ *   attach_image  → attach_image dispatch; expects args.blob (data url
+ *                   or base64) and args.mime
+ *
+ * Callers that pass an unknown control id get a { not_found } response.
+ * No control matched, no driver call — keeps the surface honest.
+ */
+export function invokeSpecControl(
+    driver: ISpecDriver,
+    controls: Control[],
+    scriptName: string,
+    args?: Record<string, unknown>,
+): Promise<unknown> {
+    const ctl = controls.find(c => c.id === scriptName);
+    if (!ctl) {
+        return Promise.resolve({ ok: false, error: `unknown control: ${scriptName}` });
+    }
+    // Args may arrive as either { blob, mime } (direct invocation) or
+    // { params: { blob, mime } } (when the dashboard wraps script args
+    // in a params bag). Look at both.
+    const flat: Record<string, unknown> = { ...(args || {}) };
+    if (args && typeof args.params === 'object' && args.params) {
+        Object.assign(flat, args.params as Record<string, unknown>);
+    }
+    const action = ctl.action;
+    if (action.type === 'attach_image') {
+        const blob = typeof flat.blob === 'string' ? flat.blob : '';
+        const mime = typeof flat.mime === 'string' ? flat.mime : 'image/png';
+        if (!blob) return Promise.resolve({ ok: false, error: 'attach_image requires args.blob (base64 or data URL)' });
+        driver.dispatch({ kind: 'attach_image', blob, mime });
+        return Promise.resolve({ ok: true, effects: [{ type: 'attached_image', controlId: ctl.id }] });
+    }
+    if (action.type === 'open_picker') {
+        const choiceIndex = typeof flat.choiceIndex === 'number' ? flat.choiceIndex
+            : typeof flat.choiceIndex === 'string' && flat.choiceIndex.trim() ? Number(flat.choiceIndex)
+            : undefined;
+        // `value` is the arg the dashboard's generic value-control set path
+        // sends ({ value: <chosen option> }). control_bar pickers are
+        // surfaced to the dashboard as dynamic `select` controls whose
+        // option values are the screen-parsed labels, so a bare `value`
+        // is just a label to match against the live choices.
+        const choiceLabel = typeof flat.choiceLabel === 'string' ? flat.choiceLabel
+            : typeof flat.choice === 'string' ? flat.choice
+            : typeof flat.value === 'string' ? flat.value
+            : undefined;
+        if ((typeof choiceIndex === 'number' && Number.isFinite(choiceIndex)) || (choiceLabel && choiceLabel.trim())) {
+            return selectPickerChoice(driver, ctl, action, choiceIndex, choiceLabel);
+        }
+        return openPickerAndListChoices(driver, ctl, action);
+    }
+    // send_keys routes through click_control.
+    driver.dispatch({ kind: 'click_control', control_id: ctl.id, payload: flat });
+    return Promise.resolve({ ok: true, effects: [{ type: 'sent_keys', controlId: ctl.id }] });
 }

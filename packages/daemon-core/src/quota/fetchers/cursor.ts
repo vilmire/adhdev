@@ -25,7 +25,7 @@ import {
     type QuotaMetadata,
     type QuotaWindow,
 } from '../types.js';
-import { toNumber } from './coerce.js';
+import { retryAfterMs, toNumber } from './coerce.js';
 import type { QuotaChildProcess, QuotaFetchDeps, QuotaFetchResponse } from './deps.js';
 import { assertInjectedNetworkFetchInTest, resolveDeps } from './deps.js';
 
@@ -258,15 +258,6 @@ function toBoolean(value: unknown): boolean | undefined {
     return typeof value === 'boolean' ? value : undefined;
 }
 
-function retryAfterMs(response: QuotaFetchResponse, nowMs: number): number | undefined {
-    const raw = response.headers?.get?.('retry-after') ?? null;
-    if (!raw) return undefined;
-    const seconds = Number(raw);
-    if (Number.isFinite(seconds)) return nowMs + seconds * 1000;
-    const at = new Date(raw).getTime();
-    return Number.isNaN(at) ? undefined : at;
-}
-
 /** Mirrors cursor-agent's usage-data.ts on-demand kind calculation. */
 function mapCursorUsage(current: Record<string, unknown>, hard: Record<string, unknown> | null): CursorUsage {
     const spend = asRecord(field(current, 'spend_limit_usage', 'spendLimitUsage'));
@@ -450,7 +441,7 @@ export async function fetchCursorQuota(overrides: QuotaFetchDeps = {}): Promise<
             return quotaFailure('cursor-cli', 'error', 'Cursor usage request was rate limited', {
                 source: 'oauth',
                 failureKind: 'rate-limited',
-                retryAtMs: retryAfterMs(currentResponse, deps.now()),
+                retryAtMs: retryAfterMs(currentResponse.headers?.get?.('retry-after') ?? null, deps.now()),
             });
         }
         if (!currentResponse.ok) {

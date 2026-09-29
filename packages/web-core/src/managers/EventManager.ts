@@ -72,7 +72,6 @@ export function describeToastError(error: unknown): string | undefined {
 
 export type ToastCallback = (toast: ToastConfig) => void
 export type StatusEventCallback = (payload: StatusEventPayload) => void
-export type DesktopNotificationCallback = (title: string, body: string, tag: string) => void
 export type ResolveActionFn = (routeId: string, action: string, payload: Record<string, any>) => void
 export type ViewRequestRespondFn = (orgId: string, requestId: string, action: 'approve' | 'reject') => Promise<any>
 /**

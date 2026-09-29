@@ -11,7 +11,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { resolveHostedSpawnedAtMs } from '../../src/commands/cli-manager';
+import { resolveHostedSpawnedAtMs } from '../../src/commands/cli-delegated-launch';
 
 describe('resolveHostedSpawnedAtMs (hosted-runtime attach floor)', () => {
   const NOW = 2_000_000_000_000;

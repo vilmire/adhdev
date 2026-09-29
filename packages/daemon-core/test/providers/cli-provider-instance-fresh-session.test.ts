@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import { CliProviderInstance, getForcedNewSessionScriptName, waitForCliAdapterReady } from '../../src/providers/cli-provider-instance.js'
+import { CliProviderInstance } from '../../src/providers/cli-provider-instance.js'
+import { getForcedNewSessionScriptName, waitForCliAdapterReady } from '../../src/providers/cli-provider-status-helpers.js'
 import { createTurnEvidencePort } from '../../src/providers/turn-evidence-port.js'
 import { minimalSpecPath } from '../helpers/minimal-spec.js';
 

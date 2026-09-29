@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 
-import { buildCoordinatorDelegatedCliLaunchOptions } from '../../src/commands/cli-manager'
+import { buildCoordinatorDelegatedCliLaunchOptions } from '../../src/commands/cli-delegated-launch'
 import { applyPreLaunchTrust } from '../../src/providers/spec/pre-launch-trust'
 
 // Every it() below creates its own mkdtempSync workspace inline (no shared

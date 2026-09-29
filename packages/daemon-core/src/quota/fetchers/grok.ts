@@ -52,7 +52,7 @@ import {
 } from '../types.js';
 import type { QuotaFetchDeps } from './deps.js';
 import { assertInjectedNetworkFetchInTest, credentialFileMtimeMs, resolveDeps } from './deps.js';
-import { retryAfterMs, toNumber } from './coerce.js';
+import { isCredentialExpired, retryAfterMs, toIsoResetMs as toResetMs, toNumber } from './coerce.js';
 
 const DEFAULT_BASE_URL = 'https://cli-chat-proxy.grok.com/v1';
 const REQUEST_TIMEOUT_MS = 10_000;
@@ -190,25 +190,12 @@ export async function readGrokCredentialMtimeMs(
 }
 
 function isExpired(credentials: GrokCredentials, nowMs: number): boolean {
-    if (credentials.expiresAtMs === null) {
-        // No expiry recorded — let the server be the judge rather than
-        // refusing to ask. A 401 is classified below.
-        return false;
-    }
-    return credentials.expiresAtMs - nowMs <= EXPIRY_SKEW_MS;
+    return isCredentialExpired(credentials.expiresAtMs, nowMs, EXPIRY_SKEW_MS);
 }
 
 // --- response shape -------------------------------------------------------
 // { config: { creditUsagePercent, currentPeriod: { type, start, end },
 //             billingPeriodEnd, ... }, subscription_tier? }
-
-function toResetMs(value: unknown): number | null {
-    if (typeof value !== 'string' || value.trim() === '') {
-        return null;
-    }
-    const ms = new Date(value).getTime();
-    return Number.isNaN(ms) ? null : ms;
-}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
     return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : null;

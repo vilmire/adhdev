@@ -20,7 +20,7 @@ import { describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { workspaceFromInputIfSlugMatches } from '../../../src/providers/spec/native-history-executor.js';
+import { workspaceFromInputIfSlugMatches } from '../../../src/providers/spec/native-history-paths.js';
 
 // Build a workspace path whose slug contains consecutive dashes pre-collapse.
 // (mkdtemp under tmpdir so realpathSync works; the dashes come from the

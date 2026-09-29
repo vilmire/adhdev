@@ -18,6 +18,7 @@
  */
 
 import { LOG } from '../../logging/logger.js';
+import type { ProviderModule } from '../contracts.js';
 import { flattenContent } from '../contracts.js';
 import type { ChatMessage } from '../../types.js';
 import { isUserFacingChatMessage } from '../chat-message-normalization.js';
@@ -52,7 +53,7 @@ export interface CompletionDiagnosticsHost {
     type: string;
     workingDir: string;
     instanceId: string;
-    provider: Record<string, unknown> & { name?: string };
+    provider: ProviderModule;
     providerSessionId?: string;
     settings: Record<string, any>;
     adapter: Record<string, any> & {
@@ -388,7 +389,7 @@ export function buildCompletionSignalReader(
         }),
         holdClassPtyStillActive: () => antigravityHoldPtyStillActive(host),
         ownsExternalHistory: () => (host.adapter as any)?.chatMessagesOwnedExternally === true,
-        authorityTiming: () => resolveTranscriptAuthorityProfile(host.provider as any).timing,
+        authorityTiming: () => resolveTranscriptAuthorityProfile(host.provider).timing,
         allowMissingAssistantTimeout: () => !!(host.settings.meshNodeFor || host.settings.meshActiveTaskId || host.settings.launchedByCoordinator),
         // (SUMMARY-SCRAPE-FALLBACK, part A) Is this turn's COMPLETE text on disk yet?
         //

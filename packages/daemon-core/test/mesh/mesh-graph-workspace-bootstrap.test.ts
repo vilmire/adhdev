@@ -286,8 +286,10 @@ describe('required bootstrap failure is surfaced, not swallowed', () => {
 
 describe('clone path is unchanged (regression guard)', () => {
     it('clone_mesh_node still owns its own bootstrap call — the saga fix did not move or duplicate it', async () => {
+        // clone_mesh_node + retry_mesh_node_bootstrap moved out of mesh-crud.ts into
+        // mesh-node-clone.ts (pure move). Only the path follows them.
         const crudSrc = fs.readFileSync(
-            path.join(__dirname, '..', '..', 'src', 'commands', 'med-family', 'mesh-crud.ts'),
+            path.join(__dirname, '..', '..', 'src', 'commands', 'med-family', 'mesh-node-clone.ts'),
             'utf-8',
         );
         // Exactly one invocation site inside finishWorktreeSetup for the clone,

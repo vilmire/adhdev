@@ -47,7 +47,7 @@
  *   canceled with result:`) or a manage_task status-check result
  *   (`Task: <id>` + `Status: DONE`; RUNNING is not terminal). Record
  *   extraction lives with the other .db schema knowledge in
- *   native-history/antigravity-cli-transcript.ts (readTaskLifecycleSteps);
+ *   native-history/antigravity-conversation-db.ts (readTaskLifecycleSteps);
  *   path resolution reuses the read path's claim-exclusion + spawn-floor
  *   binding (resolveAntigravityConversationPath) so the detector only ever
  *   scans THIS session's own conversation.
@@ -76,10 +76,11 @@ import * as fs from 'node:fs';
 import { LOG } from '../../logging/logger.js';
 import { resolveJsonlSourcePath } from './native-history-executor.js';
 import type { NativeHistoryConfig } from './types.js';
-import type { NativeHistoryInput } from './native-history-executor.js';
+
+import type { NativeHistoryInput } from './native-history-types.js';
 import { resolveAntigravityConversationPath } from '../native-history/dispatcher.js';
-import { readTaskLifecycleSteps } from '../native-history/antigravity-cli-transcript.js';
-import type { AgyTaskLifecycleStep } from '../native-history/antigravity-cli-transcript.js';
+import { readTaskLifecycleSteps } from '../native-history/antigravity-conversation-db.js';
+import type { AgyTaskLifecycleStep } from '../native-history/antigravity-conversation-db.js';
 
 export type BackgroundTaskSupport = 'tracked' | 'unknown';
 

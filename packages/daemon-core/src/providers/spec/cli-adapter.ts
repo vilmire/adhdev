@@ -17,58 +17,39 @@
  * without pretending to implement anything.
  */
 'use strict';
-
-import {
-    normalizeClaudeTuiIdentity,
-    claudeTuiQuestionMatches,
-    claudeTuiQuestionTextAppears,
-    claudeTuiPagesLookLikeSameQuestion,
-    readClaudeTuiHeaders,
-    claudeAskUserQuestionPromptsMatch,
-    readClaudeToolResultIds,
-} from './claude-tui-helpers.js';
-import { FsmDriver, type ClaimedQueuedSend, type DashboardEvent, type ISpecDriver, type QueuedWriteOutcome } from './fsm-driver.js';
-import {
-    openPickerAndListChoices,
-    selectPickerChoice,
-} from './picker-controls.js';
+import { FsmDriver } from './fsm-driver.js';
+import type { DashboardEvent, ISpecDriver } from './fsm-driver-types.js';
+import type { ClaimedQueuedSend } from './send-submit-engine.js';
+import type { QueuedWriteOutcome } from './submit-policy.js';
+import { invokeSpecControl } from './picker-controls.js';
 import { executeNativeHistory } from './native-history-executor.js';
+import type { NativeHistoryInput } from './native-history-types.js';
 import { expandToolBlock, type ToolBlockExpandResult } from './tool-block-expand.js';
-import { readJsonlLines } from './native-history-jsonl-cache.js';
 import { detectBackgroundTaskActive } from './background-task-detector.js';
-import { extractAntigravityScreenAssistantMessages } from './antigravity-screen-messages.js';
-import * as fs from 'node:fs';
-import { createHash } from 'node:crypto';
-import type { NativeHistoryConfig, Control } from './types.js';
 import {
-    resolveInterruptCapability,
-    type InterruptCapability,
-    type InterruptUnsupportedReason,
-} from './interrupt-capability.js';
+    buildSpecDebugSnapshot, buildSpecDebugState, extractCodexSessionIdFromScreen,
+    scrapeScreenAssistantMessages, screenScrapeSupported, type SpecDebugView,
+} from './spec-adapter-readouts.js';
+import * as fs from 'node:fs';
+import type { NativeHistoryConfig, Control } from './types.js';
+import { resolveInterruptCapability, type InterruptCapability } from './interrupt-capability.js';
 import type { AdapterChangeCause, CliAdapter, CliAdapterStatus } from '../../cli-adapter-types.js';
 import type { ChatMessage } from '../../types.js';
 import type { PtyTransportFactory } from '../../cli-adapters/pty-transport.js';
 import type { SessionTermination } from '@adhdev/session-host-core';
 import type { ResolvedTrustPlan } from '../trust-provenance-ledger.js';
+import type { MeshSendKeyItem } from '../../cli-adapters/provider-cli-shared.js';
 import {
-    encodeMeshSendKeys,
-    truncateToByteTailByLine,
-    type MeshSendKeyItem,
-    type MeshSendKeyName,
-} from '../../cli-adapters/provider-cli-shared.js';
+    injectSpecKeys,
+    interruptSpecTurn,
+    readTerminalScreenSnapshot,
+    type SpecTerminalHost,
+    type TerminalScreenSnapshot,
+} from './spec-adapter-terminal.js';
 import { LOG } from '../../logging/logger.js';
 import type { SignalDetection } from './signal-rules.js';
 import {
-    buildClaudeInteractiveTuiAnswerSteps,
-    buildClaudeInteractiveToolResult,
-    claudeTuiPreviewPanelVisible,
     detectClaudeAskUserQuestionPromptFromJson,
-    detectClaudeAskUserQuestionPromptFromTuiPages,
-    detectClaudeTuiMultiSelect,
-    isClaudeTuiReviewScreen,
-    readFocusedClaudeTuiQuestion,
-    stableClaudeTuiPromptId,
-    type ClaudeInteractiveTuiPage,
     type InteractivePrompt,
     type InteractivePromptResponse,
 } from '../types/interactive-prompt.js';
@@ -77,19 +58,21 @@ import {
     detectKimiPendingQuestion, detectKimiIdleSelectorPrompt,
     buildKimiSelectorAnswerSteps, KIMI_TUI_SELECTOR_PROMPT_PREFIX,
 } from '../kimi-pending-question.js';
-import { detectClaudePendingQuestion } from '../claude-pending-question.js';
 import type { FsmStatus, InteractivePrompts } from './fsm-types.js';
 import { projectAdapterStatus } from './adapter-status-projection.js';
 import {
-    CLAUDE_TUI_REVIEW_PAGE_NOT_FOCUSED_PREFIX,
-    CLAUDE_TUI_REVIEW_UNCONFIRMED_PREFIX,
-} from '@adhdev/mesh-shared';
+    answerClaudeInteractivePrompt,
+    detectClaudeNativePendingQuestion,
+    hasBoundClaudeAskUserQuestionToolResult,
+    maybeCaptureClaudeTuiPrompt,
+    maybeClearResolvedClaudeTuiPrompt,
+    maybeUpgradeClaudeTuiMultiSelect,
+    type ClaudeTuiPromptHost,
+} from './claude-tui-prompt.js';
 
-import { detectProviderFailure, stripAnsi, type ProviderFailure } from './provider-failure-classifier.js';
+import type { ProviderFailure } from './provider-failure-classifier.js';
 import { authBillingLatchLogLine, classifyAuthBillingOutput, createLiveAuthState, exitClassificationAllowed, noteLiveAuthMatch, resolveLiveAuthSuspect, TAIL_BYTES, type LiveAuthContext, type LiveAuthState } from './live-auth-advisory.js';
 import { RawTail } from './raw-tail.js';
-
-export { detectProviderFailure, type ProviderFailure };
 
 /** What the adapter reports on PTY death (replaces the deleted shared/session-termination-sink). */
 export interface SpecAdapterExitReport { termination?: SessionTermination; runtimeSettings: Readonly<Record<string, unknown>> }
@@ -173,8 +156,6 @@ export class SpecCliAdapter implements CliAdapter {
      * path already uses.
      */
     private claudeTuiCaptureFooterAbsentAt: number | null = null;
-    /** Max capture attempts per prompt identity before giving up (one retry). */
-    private static readonly CLAUDE_TUI_CAPTURE_MAX_ATTEMPTS = 2;
     /**
      * Wall clock of the first frame on which a held interactive prompt was
      * observed to have left the screen. Mirrors the approval FSM's
@@ -456,9 +437,6 @@ export class SpecCliAdapter implements CliAdapter {
         // before the extraction: these ran only after those early returns).
         if (!this.providerFailure && !this.exited && this.spawned) {
             this.refreshWirePendingQuestion();
-            // Refresh native history lazily — the watch_path is cheap to stat,
-            // but parsing a full session.jsonl every call would be wasteful.
-            this.maybeRefreshNativeHistory();
         }
         return projectAdapterStatus({
             providerSessionId: this.providerSessionId,
@@ -505,12 +483,6 @@ export class SpecCliAdapter implements CliAdapter {
         return !!this.latestModal && (this.latestModal.buttons?.length ?? 0) > 0;
     }
 
-    private maybeRefreshNativeHistory(): void {
-        // Native history is now sourced by daemon's chat-history pipeline
-        // (which calls provider.scripts.readNativeHistory wired by
-        // provider-loader). SpecCliAdapter no longer polls or caches.
-    }
-
     getScriptParsedStatus(): { status?: string; messages: unknown[]; title?: string } & Record<string, unknown> {
         const providerSessionId = this.extractProviderSessionIdFromScreen();
         if (providerSessionId) this.providerSessionId = providerSessionId;
@@ -547,14 +519,7 @@ export class SpecCliAdapter implements CliAdapter {
             // an async run_command still running projected completed).
             if (this.cliType === 'antigravity-cli') {
                 try {
-                    return detectBackgroundTaskActive(undefined, {
-                        agentType: this.cliType,
-                        providerSessionId: this.providerSessionId,
-                        sessionStartedAtMs: this.spawnedAtMs,
-                        envOverrides: this.spawnedEnv,
-                        workspace: this.workingDir,
-                        instanceId: this.owningSessionId,
-                    });
+                    return detectBackgroundTaskActive(undefined, this.nativeHistoryInput({ withOwner: true }));
                 } catch {
                     return { active: false, count: 0, ids: [], support: 'unknown' };
                 }
@@ -564,13 +529,7 @@ export class SpecCliAdapter implements CliAdapter {
             return { active: false, count: 0, ids: [], support: this.cliType === 'claude-cli' || this.cliType === 'kimi' ? 'tracked' : 'unknown' };
         }
         try {
-            return detectBackgroundTaskActive(this.spec.native_history, {
-                agentType: this.cliType,
-                providerSessionId: this.providerSessionId,
-                sessionStartedAtMs: this.spawnedAtMs,
-                envOverrides: this.spawnedEnv,
-                workspace: this.workingDir,
-            });
+            return detectBackgroundTaskActive(this.spec.native_history, this.nativeHistoryInput({ withOwner: false }));
         } catch {
             return { active: false, count: 0, ids: [], support: 'unknown' };
         }
@@ -602,67 +561,15 @@ export class SpecCliAdapter implements CliAdapter {
         return this.spawned && !this.exited;
     }
 
-    // MESH-READ-TERMINAL / MESH-SEND-KEYS byte caps — same envelope as
-    // ProviderCliAdapter (32KiB default view, 64KiB absolute hard cap). Bytes,
-    // not chars: a multi-byte-glyph screen can exceed an MCP payload cap while
-    // the char count still looks safe.
-    private static readonly TERMINAL_SNAPSHOT_DEFAULT_MAX_BYTES = 32 * 1024;
-    private static readonly TERMINAL_SNAPSHOT_ABSOLUTE_MAX_BYTES = 64 * 1024;
     /** Window during which isApprovalRecentlyResolved() reports a just-resolved
      *  approval. Matches CliProviderInstance.APPROVAL_LOCAL_RESOLUTION_COOLDOWN_MS
      *  (8000) — the same auto-approve suppression window signal1 uses — so a modal
      *  re-emitted within the approval↔busy flap is suppressed by signal2 too. */
     private static readonly APPROVAL_RESOLVED_COOLDOWN_MS = 8000;
 
-    /**
-     * MESH-READ-TERMINAL (feature 2: RAW terminal read). Least-privilege read
-     * of the CURRENT rendered viewport for mesh_read_terminal on the spec path
-     * (claude-cli / antigravity / codex-cli — the native-source providers that
-     * route through SpecCliAdapter). Mirrors ProviderCliAdapter.getTerminalScreenSnapshot:
-     *  - returns ONLY the driver's current viewport snapshot, the cursor
-     *    position and the terminal geometry — NO scrollback, NO parser/FSM
-     *    state, NO debug buffers;
-     *  - the payload is byte-bounded (UTF-8) with bottom-tail preservation so a
-     *    screen of multi-byte glyphs can never exceed the MCP payload cap;
-     *  - `hash` is over the FULL untruncated viewport so a caller can detect a
-     *    screen change across polls even when the returned text was truncated.
-     *
-     * SECURITY: the raw viewport can carry tokens / command args / env / user
-     * data. Callers MUST gate this on mesh ownership and MUST NOT log the text.
-     */
-    getTerminalScreenSnapshot(maxBytes = SpecCliAdapter.TERMINAL_SNAPSHOT_DEFAULT_MAX_BYTES): {
-        text: string;
-        cursor: { col: number; row: number };
-        cols: number;
-        rows: number;
-        truncated: boolean;
-        originalBytes: number;
-        returnedBytes: number;
-        hash: string;
-    } {
-        const cap = Math.min(
-            SpecCliAdapter.TERMINAL_SNAPSHOT_ABSOLUTE_MAX_BYTES,
-            Math.max(1024, Math.floor(maxBytes) || SpecCliAdapter.TERMINAL_SNAPSHOT_DEFAULT_MAX_BYTES),
-        );
-        let rawViewport = '';
-        try { rawViewport = this.driver.snapshot() || ''; } catch { rawViewport = ''; }
-        let cursor = { row: 0, col: 0 };
-        try { cursor = this.driver.getCursorPosition(); } catch { /* keep 0,0 */ }
-        // getScreenSize is optional on ISpecDriver; a test double may omit it.
-        let size = { cols: 0, rows: 0 };
-        try { size = this.driver.getScreenSize?.() ?? size; } catch { /* keep 0,0 */ }
-        const truncation = truncateToByteTailByLine(rawViewport, cap);
-        const hash = createHash('sha256').update(rawViewport, 'utf8').digest('hex').slice(0, 16);
-        return {
-            text: truncation.text,
-            cursor: { col: cursor.col, row: cursor.row },
-            cols: size.cols,
-            rows: size.rows,
-            truncated: truncation.truncated,
-            originalBytes: truncation.originalBytes,
-            returnedBytes: truncation.returnedBytes,
-            hash,
-        };
+    /** MESH-READ-TERMINAL raw viewport read — see readTerminalScreenSnapshot (SECURITY: never log the text). */
+    getTerminalScreenSnapshot(maxBytes?: number): TerminalScreenSnapshot {
+        return readTerminalScreenSnapshot(this.driver, maxBytes);
     }
 
     /**
@@ -675,147 +582,24 @@ export class SpecCliAdapter implements CliAdapter {
         return resolveInterruptCapability(this.cliType, this.spec.control_bar);
     }
 
-    /**
-     * Abort the turn currently in flight by writing the provider's own stop
-     * key to the PTY. Used by delivery mode 'interrupt': the caller then waits
-     * for the FSM to report idle and lets the ordinary queued-send drain
-     * deliver the new prompt as a genuine new turn.
-     *
-     * ★ Deliberately NOT routed through invokeScript('stop'). That path calls
-     * FsmDriver.handleClickControl, which silently returns when the control's
-     * `visible_when_state` does not include the current state, and calls
-     * send_keys("") for a provider whose stop key is empty — while
-     * invokeScript unconditionally returns `{ ok: true, effects:[sent_keys] }`
-     * either way. Reporting a successful interrupt that wrote nothing is
-     * exactly the failure this feature exists to remove, so capability is
-     * validated HERE, before any write, and the outcome is reported honestly.
-     */
-    async interruptTurn(): Promise<
-        | { ok: true; keyName: string; bytes: number; confidence: 'proven' | 'declared' }
-        | { ok: false; reason: InterruptUnsupportedReason | 'not_running' | 'not_busy'; message: string }
-    > {
-        if (!this.spawned || this.exited) {
-            return { ok: false, reason: 'not_running', message: `${this.cliName} is not running.` };
-        }
-        const cap = this.getInterruptCapability();
-        if (!cap.supported) {
-            LOG.warn('SpecAdapter', `[${this.cliType}] interrupt refused: ${cap.reason}`);
-            return { ok: false, reason: cap.reason, message: cap.message };
-        }
-        // Interrupting a session that is not generating would write a stray
-        // Ctrl-C/ESC at an idle prompt. Report it instead of writing blindly.
-        const status = this.latestState?.status;
-        if (status !== 'generating') {
-            return {
-                ok: false,
-                reason: 'not_busy',
-                message: `Session is '${status ?? 'unknown'}', not generating — nothing to interrupt.`,
-            };
-        }
-        this.driver.dispatch({ kind: 'pty_write', data: cap.keys });
-        const bytes = Buffer.byteLength(cap.keys, 'utf8');
-        LOG.info('SpecAdapter', `[${this.cliType}] turn interrupted via ${cap.keyName} (bytes=${bytes}, confidence=${cap.confidence})`);
-        return { ok: true, keyName: cap.keyName, bytes, confidence: cap.confidence };
+    /** Abort the in-flight turn with the provider's own stop key — see interruptSpecTurn. */
+    interruptTurn(): ReturnType<typeof interruptSpecTurn> {
+        return interruptSpecTurn(this.terminalHost, this.getInterruptCapability());
     }
 
-    /**
-     * MESH-SEND-KEYS (feature 3: key injection). Inject a STRUCTURED key
-     * sequence into the spec-driven PTY for mesh_send_keys. Mirrors
-     * ProviderCliAdapter.injectKeys' modal fail-closed guard, then writes the
-     * whole encoded sequence in ONE pty_write dispatch (text+ENTER is a single
-     * contiguous string, so a submit key can never be separated from the text
-     * it submits).
-     *
-     * The spec path drives the child through the FsmDriver, not a directly-held
-     * ptyProcess — there is no adapter-level echo-gate/submit-retry FIFO to race
-     * against here (the driver serializes its own writes). A send_keys call is
-     * refused while the session is generating: input can otherwise sit in the
-     * PTY buffer while the active turn continues, and CTRL_C/ESC would bypass the
-     * interrupt capability gate. Use mesh_send_task with delivery_mode:'interrupt'
-     * to steer an active turn. The modal fail-closed guard remains: a
-     * NON-destructive injection into an actionable approval modal is refused (use
-     * mesh_approve) unless explicitly overridden.
-     * A destructive ESC/CTRL_C dismisses rather than confirms, so it is allowed
-     * past this gate (the tool layer owns the destructive double-gate + audit).
-     * This method NEVER logs the literal text — only key enums / byte length.
-     */
-    async injectKeys(
-        items: MeshSendKeyItem[],
-        opts: { allowModalOverride?: boolean } = {},
-    ): Promise<
-        | { ok: true; keys: MeshSendKeyName[]; hasDestructive: boolean; submits: boolean; bytes: number }
-        | { ok: false; refused: 'submit_race' | 'actionable_modal' | 'generating'; keys: MeshSendKeyName[]; hasDestructive: boolean; message?: string }
-    > {
-        if (!this.spawned || this.exited) throw new Error(`${this.cliName} is not running`);
-        const encoded = encodeMeshSendKeys(items);
+    /** MESH-SEND-KEYS structured key injection — see injectSpecKeys. */
+    injectKeys(items: MeshSendKeyItem[], opts: { allowModalOverride?: boolean } = {}): ReturnType<typeof injectSpecKeys> {
+        return injectSpecKeys(this.terminalHost, items, opts);
+    }
 
-        // Modal fail-closed — a NON-destructive injection while parked on an
-        // ACTIONABLE approval modal is refused so a modal choice can't be
-        // confirmed via send_keys and bypass the approval policy.
-        //
-        // APPROVAL-DEADLOCK (live 2026-09-20, grok-cli trust + antigravity-cli
-        // permission prompt): the guard used to arm on `status === 'approval'`
-        // alone. That status comes from statusForState(), which reports
-        // 'approval' for ANY `modal: true` state — INDEPENDENT of whether the
-        // spec's button rule actually parsed any buttons. mesh_approve, on the
-        // other hand, can only press a button that parsed (deriveModal returns
-        // null when the rule is missing or matches nothing). So a modal the spec
-        // could not parse armed the send_keys guard while disarming approve, and
-        // the session had ZERO ways to answer the prompt on screen:
-        //     mesh_approve   → "the modal could not be actioned"
-        //     mesh_send_keys → "refused: actionable_modal"
-        // Both observed cases were spec-side (grok's `trust` state declared no
-        // extract.buttons at all; antigravity's cursor_marker omitted the `>` the
-        // screen paints), and both specs are fixed alongside this change — but a
-        // spec gap must never again be able to wedge a session with no way out.
-        //
-        // So the guard now arms on what its own name claims: an actionable modal
-        // = a modal state WITH parsed buttons, which is exactly the condition
-        // under which mesh_approve has something to press. When no buttons
-        // parsed, approve cannot act, so send_keys is the only remaining path
-        // and is allowed through (the caller still owns its own audit trail).
-        // This narrows the guard ONLY in the case where the path it redirects to
-        // is provably unavailable, so the approval-policy bypass it exists to
-        // prevent stays closed for every modal that can actually be approved.
-        const modalActive = this.latestState?.status === 'approval';
-        const parsedButtonCount = this.latestModal?.buttons?.length ?? 0;
-        if (modalActive && parsedButtonCount > 0 && !encoded.hasDestructive && !opts.allowModalOverride) {
-            LOG.warn('SpecAdapter', `[${this.cliType}] send_keys refused (actionable_modal): keys=${encoded.keys.join(',')} buttons=${parsedButtonCount} — use mesh_approve`);
-            return { ok: false, refused: 'actionable_modal', keys: encoded.keys, hasDestructive: encoded.hasDestructive };
-        }
-        if (modalActive && parsedButtonCount === 0) {
-            // Loud on purpose: this is the escape hatch firing, and it means the
-            // loaded spec could not parse the modal on screen. Surfacing it here
-            // is what turns a silent deadlock into a diagnosable spec bug.
-            LOG.warn('SpecAdapter', `[${this.cliType}] send_keys ALLOWED past the modal guard — state '${this.latestState?.id ?? '?'}' is modal but the loaded spec parsed 0 buttons, so mesh_approve cannot act on it. Fix the spec's extract.buttons rule for this screen; send_keys is the only path until then.`);
-        }
-
-        // Fail closed while an active turn owns the PTY. Blindly writing here can
-        // leave bytes buffered until after the turn.
-        //
-        // A DESTRUCTIVE key (ESC / CTRL_C) is exempt, matching the modal guard
-        // 8 lines up and the contract stated in this method's doc comment. It
-        // dismisses rather than confirms, so it cannot commit anything a policy
-        // gate would have refused, and the tool layer owns its double-gate +
-        // audit. Without the exemption a session wedged on an unanswerable
-        // screen — a first-run onboarding TUI reported as `generating` — has no
-        // manual escape hatch at all: mesh_send_task's interrupt path needs a
-        // real turn to interrupt, which is exactly what such a session lacks.
-        if (this.latestState?.status === 'generating' && !encoded.hasDestructive) {
-            const message = "session is generating; mesh_send_keys cannot write during an active turn. Use mesh_send_task with delivery_mode: 'interrupt' to interrupt it.";
-            LOG.warn('SpecAdapter', `[${this.cliType}] send_keys refused (generating): keys=${encoded.keys.join(',')} — use mesh_send_task delivery_mode=interrupt`);
-            return { ok: false, refused: 'generating', keys: encoded.keys, hasDestructive: encoded.hasDestructive, message };
-        }
-
-        // Atomic write: the full encoded sequence goes out in ONE pty_write.
-        this.driver.dispatch({ kind: 'pty_write', data: encoded.sequence });
-        LOG.info('SpecAdapter', `[${this.cliType}] send_keys injected keys=${encoded.keys.join(',') || '(text-only)'} bytes=${Buffer.byteLength(encoded.sequence, 'utf8')} destructive=${encoded.hasDestructive}`);
+    private get terminalHost(): SpecTerminalHost {
         return {
-            ok: true,
-            keys: encoded.keys,
-            hasDestructive: encoded.hasDestructive,
-            submits: encoded.submits,
-            bytes: Buffer.byteLength(encoded.sequence, 'utf8'),
+            cliType: this.cliType,
+            cliName: this.cliName,
+            driver: this.driver,
+            running: this.spawned && !this.exited,
+            latestState: this.latestState,
+            latestModal: this.latestModal,
         };
     }
 
@@ -980,97 +764,7 @@ export class SpecCliAdapter implements CliAdapter {
         if (scheme !== 'claude_tui') {
             throw new Error(`Provider "${this.spec.id}" declares no answerable interactive-prompt scheme${scheme ? ` (scheme: ${scheme})` : ''} — the question was NOT answered.`);
         }
-        if (this.interactivePromptTransport === 'tui') {
-            // A claude terminal can render another picker above the held
-            // AskUserQuestion. promptId only binds the dashboard response to
-            // our held slot; it says nothing about which terminal widget owns
-            // focus. Bind every key to the live focused question before it is
-            // written, then require the matching review page for final Enter.
-            // A mismatch fails closed and deliberately leaves the held prompt
-            // intact so a stale response cannot operate another picker.
-            const allowsFreeform = prompt.questions.some(q => q.allowFreeform);
-            let completedWithoutReview = false;
-            // PREVIEW (side-by-side) LAYOUT (measured live against claude-cli
-            // v2.1.220, 2026-09-11): with `preview` options a digit key only
-            // highlights — the commit key is one explicit Enter. When the
-            // captured options still carry preview metadata (native JSONL
-            // capture) the keystroke builder already appends that Enter; this
-            // flag additionally covers the TUI-scrape capture below and widens
-            // the review settle budget: a single-question preview prompt shows
-            // NO review page, so its confirmation can only arrive via native
-            // tool_result / busy-advance / the 1500ms lost-grace clear, which
-            // structurally exceeds the 600ms page budget.
-            let previewLayoutAnswer = prompt.questions.some(q => q.options.some(o => o.preview));
-            questionLoop: for (const question of prompt.questions) {
-                const questionSteps = buildClaudeInteractiveTuiAnswerSteps({
-                    ...prompt,
-                    questions: [question],
-                }, response).slice(0, -1); // final Enter belongs to the review page below
-                for (const step of questionSteps) {
-                    if (await this.assertFocusedClaudeTuiQuestion(question, prompt) === 'completed') {
-                        completedWithoutReview = true;
-                        break questionLoop;
-                    }
-                    this.driver.dispatch({ kind: 'pty_write', data: step });
-                    await new Promise(resolve => setTimeout(resolve, 180));
-                }
-                // Screen fallback for the preview layout: a TUI-scrape-captured
-                // prompt has no preview metadata (the scrape strips the panel),
-                // so its single-select steps end with a bare digit that only
-                // highlighted the option. If our own bound question is STILL the
-                // focused picker after that digit AND the frame shows the
-                // side-by-side preview panel, commit it with the one Enter the
-                // layout requires. Both conditions are read off the live frame,
-                // so the digit-auto-advances non-preview flow (question already
-                // gone or panel-less) never receives this Enter.
-                const answer = response.answers[question.questionId];
-                const singleSelectDigitOnly = !question.multiSelect
-                    && (answer?.selectedLabels.length ?? 0) === 1
-                    && !answer?.freeformText?.trim();
-                if (singleSelectDigitOnly && !question.options.some(o => o.preview)) {
-                    const screenText = this.readClaudeTuiSnapshotForAnswer();
-                    const focused = readFocusedClaudeTuiQuestion(screenText);
-                    if (focused
-                        && claudeTuiQuestionMatches(question, focused)
-                        && claudeTuiPreviewPanelVisible(screenText)) {
-                        previewLayoutAnswer = true;
-                        LOG.info('SpecAdapter', `[${this.cliType}] preview panel layout detected on screen after digit — sending commit Enter (question "${question.questionId}")`);
-                        this.driver.dispatch({ kind: 'pty_write', data: '\r' });
-                        await new Promise(resolve => setTimeout(resolve, 180));
-                    }
-                }
-            }
-            if (!completedWithoutReview) {
-                try {
-                    await this.assertFocusedClaudeTuiReview(prompt, allowsFreeform || previewLayoutAnswer);
-                } catch (error) {
-                    // The review gate proved (via native tool_result) that the
-                    // answer already landed with no review page to confirm. It has
-                    // already released the held prompt; return success WITHOUT the
-                    // final Enter, which would now go to whatever the provider
-                    // rendered next. Every other error propagates unchanged.
-                    if (error instanceof SpecCliAdapter.ClaudeTuiAnswerDeliveredSignal) return;
-                    throw error;
-                }
-                // Claude Code >=2.1.220 completes AskUserQuestion immediately after
-                // the final choice. In that direct-submit path the settle poll
-                // clears the bound prompt and there is no review page to confirm.
-                // Never send a second Enter after that completion signal: focus now
-                // belongs to the provider's busy screen (or whatever it renders
-                // next), not to the question we answered.
-                if (!this.activeInteractivePrompt) return;
-                if (this.activeInteractivePrompt.promptId !== prompt.promptId) {
-                    throw new Error('Claude TUI active interactive prompt changed before review submission');
-                }
-                this.driver.dispatch({ kind: 'pty_write', data: '\r' });
-                await new Promise(resolve => setTimeout(resolve, 180));
-            }
-        } else {
-            this.driver.dispatch({ kind: 'pty_write', data: `${buildClaudeInteractiveToolResult(response)}\n` });
-        }
-        this.activeInteractivePrompt = null;
-        this.interactivePromptTransport = null;
-        this.notifyChange('prompt_cleared');
+        await answerClaudeInteractivePrompt(this.claudeTuiHost, prompt, response);
     }
 
     isApprovalRecentlyResolved(): boolean {
@@ -1082,140 +776,32 @@ export class SpecCliAdapter implements CliAdapter {
         this.runtimeSettings = { ...(settings ?? {}) };
     }
     setServerConn(_conn?: unknown): void { /* server conn unused by SpecDriver */ }
-    /**
-     * Map an invokeScript(name, args) call onto a control_bar entry.
-     *
-     * scriptName is matched against control.id. The control's action.type
-     * drives the dispatch:
-     *
-     *   send_keys     → click_control                   (e.g. stop)
-     *   open_picker   → two roles, driven by the screen, not a hardcoded list:
-     *                   - LIST  (no choice arg): open the picker, wait for it
-     *                     to render, parse the on-screen options via
-     *                     `extract_choices`, and return them as
-     *                     `controlResult.options` (+ `currentValue`). This is
-     *                     how the dashboard's Model/Mode controls learn what is
-     *                     actually selectable in this CLI right now.
-     *                   - SELECT (args.choiceIndex / args.choiceLabel): drive
-     *                     the picker to that option using `submit_key`.
-     *   attach_image  → attach_image dispatch; expects args.blob (data url
-     *                   or base64) and args.mime
-     *
-     * Callers that pass an unknown control id get a { not_found } response.
-     * No control matched, no driver call — keeps the surface honest.
-     */
+    /** Map an invokeScript(name, args) call onto a control_bar entry — see invokeSpecControl. */
     invokeScript(scriptName: string, args?: Record<string, unknown>): Promise<unknown> {
-        const controls = this.spec.control_bar ?? [];
-        const ctl = controls.find(c => c.id === scriptName);
-        if (!ctl) {
-            return Promise.resolve({ ok: false, error: `unknown control: ${scriptName}` });
-        }
-        // Args may arrive as either { blob, mime } (direct invocation) or
-        // { params: { blob, mime } } (when the dashboard wraps script args
-        // in a params bag). Look at both.
-        const flat: Record<string, unknown> = { ...(args || {}) };
-        if (args && typeof args.params === 'object' && args.params) {
-            Object.assign(flat, args.params as Record<string, unknown>);
-        }
-        const action = ctl.action;
-        if (action.type === 'attach_image') {
-            const blob = typeof flat.blob === 'string' ? flat.blob : '';
-            const mime = typeof flat.mime === 'string' ? flat.mime : 'image/png';
-            if (!blob) return Promise.resolve({ ok: false, error: 'attach_image requires args.blob (base64 or data URL)' });
-            this.driver.dispatch({ kind: 'attach_image', blob, mime });
-            return Promise.resolve({ ok: true, effects: [{ type: 'attached_image', controlId: ctl.id }] });
-        }
-        if (action.type === 'open_picker') {
-            const choiceIndex = typeof flat.choiceIndex === 'number' ? flat.choiceIndex
-                : typeof flat.choiceIndex === 'string' && flat.choiceIndex.trim() ? Number(flat.choiceIndex)
-                : undefined;
-            // `value` is the arg the dashboard's generic value-control set path
-            // sends ({ value: <chosen option> }). control_bar pickers are
-            // surfaced to the dashboard as dynamic `select` controls whose
-            // option values are the screen-parsed labels, so a bare `value`
-            // is just a label to match against the live choices.
-            const choiceLabel = typeof flat.choiceLabel === 'string' ? flat.choiceLabel
-                : typeof flat.choice === 'string' ? flat.choice
-                : typeof flat.value === 'string' ? flat.value
-                : undefined;
-            if ((typeof choiceIndex === 'number' && Number.isFinite(choiceIndex)) || (choiceLabel && choiceLabel.trim())) {
-                return selectPickerChoice(this.driver, ctl, action, choiceIndex, choiceLabel);
-            }
-            return openPickerAndListChoices(this.driver, ctl, action);
-        }
-        // send_keys routes through click_control.
-        this.driver.dispatch({ kind: 'click_control', control_id: ctl.id, payload: flat });
-        return Promise.resolve({ ok: true, effects: [{ type: 'sent_keys', controlId: ctl.id }] });
+        return invokeSpecControl(this.driver, this.spec.control_bar ?? [], scriptName, args);
     }
 
     getDebugSnapshot(): unknown {
-        let screen = '';
-        let sections: Record<string, string> | undefined;
-        try {
-            screen = this.driver.snapshot();
-            // Pass `screen` so the sections describe the frame we just captured
-            // (see FsmDriver.getSections) rather than a later repaint.
-            const driverSections = this.driver.getSections?.(screen);
-            if (driverSections) {
-                sections = Object.fromEntries(driverSections.map(s => [s.id, s.text]));
-            } else {
-                sections = this.readCurrentScreenSections(screen);
-            }
-        } catch { /* best-effort */ }
-        // Read native transcript messages for the debug snapshot
-        let messages: any[] = [];
-        if (this.spec.native_history?.source) {
-            try {
-                const nhResult = executeNativeHistory(this.spec.native_history, {
-                    agentType: this.cliType,
-                    providerSessionId: this.providerSessionId,
-                    sessionStartedAtMs: this.spawnedAtMs,
-                    envOverrides: this.spawnedEnv,
-                    workspace: this.workingDir,
-                });
-                if (nhResult && Array.isArray(nhResult.messages)) messages = nhResult.messages;
-            } catch { /* best-effort */ }
-        } else {
-            messages = this.readScreenAssistantMessages();
-        }
+        return buildSpecDebugSnapshot(this.debugView(), this.driver);
+    }
+
+    private debugView(): SpecDebugView {
         return {
             cliType: this.cliType,
-            spec_id: this.spec.id,
-            current_state: this.latestState,
-            current_modal: this.latestModal,
-            activeInteractivePrompt: this.activeInteractivePrompt,
+            cliName: this.cliName,
+            specId: this.spec.id,
+            workingDir: this.workingDir,
+            spawned: this.spawned,
             exited: this.exited,
             exitCode: this.lastExitCode,
             providerFailureKind: this.providerFailure?.failureKind ?? null,
-            screen,
-            sections,
-            stateHistory: this.driver.getStateHistory(),
-            idleHoldPending: this.driver.hasIdleHoldPending(),
-            lastBusyAt: this.driver.getLastBusyAt(),
-            specPath: this.driver.getSpecPath(),
-            cursorPosition: this.driver.getCursorPosition(),
-            completionIdleDebounce: this.driver.getCompletionIdleDebounceState(),
-            // v4 FSM live transition table (null for v3 specs). Every outgoing
-            // transition from the current state with its per-condition match
-            // result + countdown — the canonical "why isn't it moving" answer.
-            fsm: this.driver.getFsmDebug?.() ?? null,
-            // v4 FSM transition snapshot history (null for v3 specs). The full
-            // pre-transition evaluation table captured at each transition —
-            // answers "why did this rule fire" after the fact, unlike the live
-            // `fsm` field which only reflects the current instant.
-            fsmHistory: this.driver.getFsmSnapshotHistory?.() ?? null,
-            // PTY input/output/resize/cursor event timeline (debug-only) so the
-            // snapshot shows what we typed / what the PTY printed around each
-            // status transition. Null for drivers without the timeline.
-            eventTimeline: this.driver.getEventTimeline?.() ?? null,
-            // Extended fields
-            name: this.cliName,
-            status: this.getStatus().status,
-            workingDir: this.workingDir,
             spawnedAtMs: this.spawnedAtMs,
-            providerSessionId: this.providerSessionId ?? null,
-            messages,
-            committedMessages: messages,
+            providerSessionId: this.providerSessionId,
+            latestState: this.latestState,
+            latestModal: this.latestModal,
+            activeInteractivePrompt: this.activeInteractivePrompt,
+            status: this.getStatus().status,
+            messages: this.readDebugMessages(),
         };
     }
     getRuntimeMetadata(): import('../../cli-adapters/pty-transport.js').PtyRuntimeMetadata & Record<string, unknown> {
@@ -1253,14 +839,7 @@ export class SpecCliAdapter implements CliAdapter {
      * a different session's file than the bubble came from.
      */
     expandToolBlock(ref: unknown): ToolBlockExpandResult {
-        return expandToolBlock(this.spec.native_history, {
-            agentType: this.cliType,
-            providerSessionId: this.providerSessionId,
-            sessionStartedAtMs: this.spawnedAtMs,
-            envOverrides: this.spawnedEnv,
-            workspace: this.workingDir,
-            instanceId: this.owningSessionId,
-        }, ref);
+        return expandToolBlock(this.spec.native_history, this.nativeHistoryInput({ withOwner: true }), ref);
     }
 
     /**
@@ -1423,16 +1002,7 @@ export class SpecCliAdapter implements CliAdapter {
         try {
             let prompt: InteractivePrompt | null = null;
             if (this.spec.native_history?.source) {
-                prompt = detectKimiPendingQuestion(this.spec.native_history, {
-                    agentType: this.cliType,
-                    providerSessionId: this.providerSessionId || undefined,
-                    sessionStartedAtMs: this.spawnedAtMs,
-                    envOverrides: this.spawnedEnv,
-                    workspace: this.workingDir,
-                    // Sidecar-claim owner token — without it resolution fails
-                    // closed on ambiguity (see the legacy call site's note).
-                    instanceId: this.owningSessionId || undefined,
-                });
+                prompt = detectKimiPendingQuestion(this.spec.native_history, this.nativeHistoryInput({ withOwner: true }));
             }
             if (!prompt && this.latestState?.status !== 'generating') {
                 // Built-in idle/cache-expired selector: TUI-only, never on the
@@ -1489,836 +1059,99 @@ export class SpecCliAdapter implements CliAdapter {
         } catch {
             return this.providerSessionId;
         }
-        const clean = stripAnsi(screenText);
-        const match = clean.match(/(?:gpt-|o\d|codex-)[^\n·]*·[^\n·]*·\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
-        return match?.[1] || this.providerSessionId;
+        return extractCodexSessionIdFromScreen(screenText) || this.providerSessionId;
     }
 
-    /**
-     * PTY-scrape assistant bubbles for the live parse / spec-debug snapshot.
-     *
-     * Native-history remains the completion-path authority
-     * (`chatMessagesOwnedExternally`). This scrape is the fail-closed
-     * fallback the gate already consults via getScriptParsedStatus().messages
-     * when the on-disk transcript has no final standard assistant — which is
-     * the antigravity layout where the JSON report is on screen under
-     * `● Bash(...)` but never lands as a step_type-15 field-20 answer.
-     */
+    /** PTY-scrape assistant bubbles — see scrapeScreenAssistantMessages. */
     private readScreenAssistantMessages(): ChatMessage[] {
-        if (this.cliType === 'claude-cli') return this.readClaudeScreenAssistantMessages();
-        if (this.cliType === 'antigravity-cli') {
-            let screenText = '';
-            try {
-                screenText = this.driver.snapshot();
-            } catch {
-                return [];
-            }
-            return extractAntigravityScreenAssistantMessages(screenText);
-        }
-        return [];
-    }
-
-    private readClaudeScreenAssistantMessages(): ChatMessage[] {
-        if (this.cliType !== 'claude-cli') return [];
+        if (!screenScrapeSupported(this.cliType)) return [];
         let screenText = '';
         try {
             screenText = this.driver.snapshot();
         } catch {
             return [];
         }
-        const sections = this.readCurrentScreenSections(screenText);
-        const body = sections.body || screenText;
-        const messages: ChatMessage[] = [];
-        const seen = new Set<string>();
-        for (const line of body.split(/\r?\n/)) {
-            const match = line.match(/^\s*⏺\s+(.+?)\s*$/);
-            const content = match?.[1]?.trim();
-            if (!content || seen.has(content)) continue;
-            seen.add(content);
-            messages.push({
-                role: 'assistant',
-                kind: 'standard',
-                content,
-                source: 'assistant_text',
-                userFacing: true,
-                bubbleState: 'final',
-            });
-        }
-        return messages;
+        const body = this.cliType === 'claude-cli' ? this.readCurrentScreenSections(screenText).body : undefined;
+        return scrapeScreenAssistantMessages(this.cliType, screenText, body);
     }
 
     /**
-     * Grace window a held interactive prompt must be absent from the screen
-     * before we treat it as resolved-in-terminal and clear it. claude-cli
-     * repaints the picker across multiple PTY chunks, so a single
-     * footer-less frame is not proof the prompt is gone. Sized in the same
-     * spirit as the approval FSM's `approvalCooldown` modal-lost hysteresis.
+     * The explicit view claude-tui-prompt.ts reads and writes this adapter's
+     * interactive-prompt state through. Built per call from live accessors, so
+     * it always reflects the current fields (including adapters assembled
+     * without the constructor in tests).
      */
-    private static readonly INTERACTIVE_PROMPT_LOST_GRACE_MS = 1500;
+    private get claudeTuiHost(): ClaudeTuiPromptHost {
+        // eslint-disable-next-line @typescript-eslint/no-this-alias
+        const self = this;
+        return {
+            get cliType() { return self.cliType; },
+            get driver() { return self.driver; },
+            get latestState() { return self.latestState; },
+            get activeInteractivePrompt() { return self.activeInteractivePrompt; },
+            set activeInteractivePrompt(v) { self.activeInteractivePrompt = v; },
+            get interactivePromptTransport() { return self.interactivePromptTransport; },
+            set interactivePromptTransport(v) { self.interactivePromptTransport = v; },
+            get interactivePromptLostAt() { return self.interactivePromptLostAt; },
+            set interactivePromptLostAt(v) { self.interactivePromptLostAt = v; },
+            get claudeTuiPromptCaptureInFlight() { return self.claudeTuiPromptCaptureInFlight; },
+            set claudeTuiPromptCaptureInFlight(v) { self.claudeTuiPromptCaptureInFlight = v; },
+            get claudeTuiCaptureSuppressed() { return self.claudeTuiCaptureSuppressed; },
+            set claudeTuiCaptureSuppressed(v) { self.claudeTuiCaptureSuppressed = v; },
+            get claudeTuiCaptureFailures() { return self.claudeTuiCaptureFailures; },
+            set claudeTuiCaptureFailures(v) { self.claudeTuiCaptureFailures = v; },
+            get claudeTuiCaptureFooterAbsentAt() { return self.claudeTuiCaptureFooterAbsentAt; },
+            set claudeTuiCaptureFooterAbsentAt(v) { self.claudeTuiCaptureFooterAbsentAt = v; },
+            isClaudeTuiScheme: () => self.interactivePromptScheme() === 'claude_tui',
+            notifyChange: (cause) => self.notifyChange(cause),
+            detectNativePendingQuestion: () => detectClaudeNativePendingQuestion(
+                self.spec.native_history, self.nativeHistoryInput({ withOwner: true })),
+            hasBoundToolResult: (prompt) => hasBoundClaudeAskUserQuestionToolResult(
+                self.cliType, self.spec.native_history, self.nativeHistoryInput({ withOwner: true }), prompt),
+        };
+    }
 
     /**
-     * Multi-question TUI capture: after Tabbing to a page, re-snapshot at this
-     * interval until its checkbox glyph column has settled, up to the timeout.
-     * The interval matches the legacy single fixed wait (120ms); the timeout
-     * bounds total capture time so a single-select page (which never shows
-     * glyphs) doesn't stall the capture indefinitely.
+     * The session→transcript binding every native-history read of this
+     * session uses. `withOwner` adds the sidecar-claim owner token — without it
+     * resolution fails closed on ambiguity (debug/background reads omit it).
      */
-    private static readonly CLAUDE_TUI_PAGE_POLL_INTERVAL_MS = 120;
-    private static readonly CLAUDE_TUI_PAGE_SETTLE_TIMEOUT_MS = 600;
+    private nativeHistoryInput(opts: { withOwner: boolean }): NativeHistoryInput {
+        return {
+            agentType: this.cliType,
+            providerSessionId: this.providerSessionId || undefined,
+            sessionStartedAtMs: this.spawnedAtMs,
+            envOverrides: this.spawnedEnv,
+            workspace: this.workingDir,
+            ...(opts.withOwner ? { instanceId: this.owningSessionId || undefined } : {}),
+        };
+    }
 
-    /**
-     * Review-page settle budget for a FREEFORM ("Other" / "Type something.")
-     * answer specifically (residual gap after rc.34's settle-poll fix, live
-     * defect 2026-08-29). CLAUDE_TUI_PAGE_SETTLE_TIMEOUT_MS was tuned against a
-     * plain option-select transition — a single digit keypress that flips
-     * straight to the review page with no reflow. A freeform confirm keystroke
-     * instead commits a typed (possibly multi-byte/CJK, possibly wrapped)
-     * string that the TUI must additionally lay out into the review echo
-     * before the picker settles, which measurably exceeds the 600ms/5-sample
-     * budget on a slower or higher-latency (remote CDP) link — the settle poll
-     * exhausts on a still-question-shaped frame and assertFocusedClaudeTuiReview
-     * fails closed with "Claude TUI review page is not focused for the active
-     * interactive prompt" even though the review page was only moments away.
-     * A short-lived retry from the caller then succeeds once real time has
-     * passed, which is why the daemon log shows no repeated failures for a
-     * question that visibly took over a minute to answer end-to-end.
-     */
-    private static readonly CLAUDE_TUI_REVIEW_SETTLE_TIMEOUT_MS = 1800;
-
-    /**
-     * Clear a held interactive prompt once the user has resolved it directly
-     * in the terminal (the choice picker leaves the screen without going
-     * through setInteractivePromptResponse). The approval path already does
-     * this via the FSM's modal-lost hysteresis; the interactive-prompt path
-     * had no equivalent, so a terminal-side answer left activeInteractivePrompt
-     * set and getStatus() re-emitted the same choice modal forever.
-     *
-     * Detection is question-specific. "Enter to select" is shared by every
-     * claude picker, so another picker must not keep this held question alive.
-     * When the held question text is absent for
-     * INTERACTIVE_PROMPT_LOST_GRACE_MS the prompt is genuinely resolved.
-     */
+    // Thin delegators into claude-tui-prompt.ts. Kept as adapter methods because
+    // handleEvent calls them per frame and suites stub / drive them directly.
     private maybeClearResolvedClaudeTuiPrompt(options: {
         screenText?: string;
         resolveImmediatelyWhenBusy?: boolean;
         resolvedByBoundToolResult?: boolean;
     } = {}): 'held' | 'missing' | 'cleared' | 'unavailable' {
-        if (this.interactivePromptScheme() !== 'claude_tui' || !this.activeInteractivePrompt) return 'unavailable';
-        // stream-json prompts are tracked by their tool-call lifecycle, not by
-        // screen footer, but claude renders the same TUI picker for both
-        // transports while awaiting an answer — so screen presence is a valid
-        // resolved-signal for either. (If the screen read fails, keep holding.)
-        let screenText = options.screenText;
-        if (screenText === undefined) {
-            try {
-                screenText = this.driver.snapshot();
-            } catch {
-                return 'unavailable';
-            }
-        }
-        const identifiableQuestions = this.activeInteractivePrompt.questions.filter(q => !!q.question?.trim());
-        // Empty questions are not emitted by a real capture, but retaining the
-        // footer fallback keeps defensive/manual prompt fixtures compatible.
-        const stillOnScreen = identifiableQuestions.length > 0
-            ? identifiableQuestions.some(q => claudeTuiQuestionTextAppears(q, screenText))
-            : screenText.includes('Enter to select');
-        if (stillOnScreen) {
-            // Prompt reappeared / never left — reset the hysteresis timer.
-            this.interactivePromptLostAt = null;
-            return 'held';
-        }
-        // During a dashboard answer, a provider transition to busy is causal
-        // confirmation that the final choice was submitted. Combined with the
-        // bound question text being absent, it is stronger than the ordinary
-        // terminal-side stale cleanup and does not need its repaint grace.
-        // The review poll only enables this after ruling out a focused foreign
-        // question, preserving the wrong-picker fail-closed guard.
-        const resolvedByBusyAdvance = options.resolveImmediatelyWhenBusy === true
-            && this.latestState?.status === 'generating';
-        const resolvedByBoundToolResult = options.resolvedByBoundToolResult === true;
-        const lostAt = this.interactivePromptLostAt ?? Date.now();
-        if (this.interactivePromptLostAt == null) this.interactivePromptLostAt = lostAt;
-        if (!resolvedByBusyAdvance && !resolvedByBoundToolResult
-            && Date.now() - lostAt < SpecCliAdapter.INTERACTIVE_PROMPT_LOST_GRACE_MS) return 'missing';
-        // Resolved in the terminal — drop the held prompt so getStatus() stops
-        // re-emitting it.
-        this.activeInteractivePrompt = null;
-        this.interactivePromptTransport = null;
-        this.interactivePromptLostAt = null;
-        this.notifyChange('prompt_cleared');
-        return 'cleared';
+        return maybeClearResolvedClaudeTuiPrompt(this.claudeTuiHost, options);
     }
+    private maybeCaptureClaudeTuiPrompt(): void { maybeCaptureClaudeTuiPrompt(this.claudeTuiHost); }
+    private maybeUpgradeClaudeTuiMultiSelect(): void { maybeUpgradeClaudeTuiMultiSelect(this.claudeTuiHost); }
 
-    /**
-     * True only when the native Claude JSONL contains a tool_result for the
-     * AskUserQuestion bound to `prompt`. TUI-captured prompts use a stable
-     * content-derived id rather than Claude's tool_use id, so bind the native
-     * call by its exact question/header/option identity first (ignoring only
-     * Claude's synthetic freeform/chat rows) and only then accept its matching
-     * tool_use_id. A later identical unresolved call resets the result, keeping
-     * latest-call-wins semantics.
-     */
-    private hasBoundClaudeAskUserQuestionToolResult(prompt: InteractivePrompt): boolean {
-        if (this.cliType !== 'claude-cli' || this.spec.native_history?.source?.kind !== 'jsonl') return false;
+    /** Transcript messages for the debug snapshot/state bundles: native
+     *  history when the spec declares a source, else the screen scrape. */
+    private readDebugMessages(): unknown[] {
+        if (!this.spec.native_history?.source) return this.readScreenAssistantMessages();
         try {
-            const history = executeNativeHistory(this.spec.native_history, {
-                agentType: this.cliType,
-                providerSessionId: this.providerSessionId,
-                sessionStartedAtMs: this.spawnedAtMs,
-                envOverrides: this.spawnedEnv,
-                workspace: this.workingDir,
-                instanceId: this.owningSessionId,
-            });
-            if (!history?.sourcePath) return false;
-
-            let boundToolUseId: string | null = null;
-            let resolved = false;
-            for (const record of readJsonlLines(history.sourcePath)) {
-                const observedPrompt = detectClaudeAskUserQuestionPromptFromJson(record, this.cliType);
-                if (observedPrompt
-                    && (observedPrompt.promptId === prompt.promptId
-                        || claudeAskUserQuestionPromptsMatch(prompt, observedPrompt))) {
-                    boundToolUseId = observedPrompt.promptId;
-                    resolved = false;
-                }
-                if (!boundToolUseId) continue;
-                if (readClaudeToolResultIds(record).includes(boundToolUseId)) resolved = true;
-            }
-            return resolved;
-        } catch {
-            // Native history is corroborating evidence only. If it cannot be
-            // read or bound, retain the screen/state fail-closed path.
-            return false;
-        }
-    }
-
-
-
-    /**
-     * Read the pending AskUserQuestion off claude's native JSONL transcript, or
-     * null when there is none / it cannot be read.
-     *
-     * `ADHDEV_DISABLE_CLAUDE_JSONL_PROMPT=1` forces the legacy screen-scrape
-     * path. It exists so the fallback stays exercisable — both in the injection
-     * test that proves the scrape still produces the (broken) split labels, and
-     * on a live machine where a transcript-format change would otherwise need a
-     * downgrade to diagnose.
-     */
-    private detectClaudeNativePendingQuestion(): InteractivePrompt | null {
-        if (process.env.ADHDEV_DISABLE_CLAUDE_JSONL_PROMPT === '1') return null;
-        if (!this.spec.native_history?.source) return null;
-        try {
-            return detectClaudePendingQuestion(this.spec.native_history, {
-                agentType: this.cliType,
-                providerSessionId: this.providerSessionId || undefined,
-                sessionStartedAtMs: this.spawnedAtMs,
-                envOverrides: this.spawnedEnv,
-                workspace: this.workingDir,
-                // Sidecar-claim owner token — without it resolution fails closed
-                // on ambiguity, same as the kimi wire call site.
-                instanceId: this.owningSessionId || undefined,
-            });
-        } catch {
-            // Fail open: the caller falls back to the screen scrape.
-            return null;
-        }
-    }
-
-    private maybeCaptureClaudeTuiPrompt(): void {
-        if (this.interactivePromptScheme() !== 'claude_tui'
-            || this.activeInteractivePrompt
-            || this.claudeTuiPromptCaptureInFlight) return;
-        // QUOTED-MARKER DEFENCE (2026-08-28): the capture below is pure screen
-        // scraping, so a session that merely PRINTS the picker's marker strings
-        // ("Enter to select", "✔ Submit", "❐ 1. …" — e.g. quoting a TUI layout
-        // in its own output) used to parse as a live picker and publish a phony
-        // waiting_choice prompt while the agent was still generating.
-        //
-        // The FSM already distinguishes the two: the claude spec has a dedicated
-        // `picker` state (status falls through to idle) and its `busy` state
-        // transitions explicitly NOT-match the picker footer, so a real picker is
-        // never reported as generating. Gating on that is the same cheap
-        // cross-check the kimi built-in selector already applies for the exact
-        // same failure mode (refreshWirePendingQuestion: "a quoted snapshot in
-        // scrolling output must never parse as the picker").
-        if (this.latestState?.status === 'generating') return;
-        const screenText = this.driver.snapshot();
-        if (!screenText.includes('Enter to select')) {
-            // Picker gone — re-arm capture for the next prompt, but only once
-            // the footer has STAYED absent across the repaint-grace window.
-            // A single footer-less frame is claude mid-repaint (chunked
-            // redraw), not a closed picker: clearing the latch here on one
-            // frame is how capture re-armed and restarted key injection
-            // while the owner was mid-answer.
-            const now = Date.now();
-            if (this.claudeTuiCaptureFooterAbsentAt === null) this.claudeTuiCaptureFooterAbsentAt = now;
-            if (now - this.claudeTuiCaptureFooterAbsentAt >= SpecCliAdapter.INTERACTIVE_PROMPT_LOST_GRACE_MS) {
-                this.claudeTuiCaptureSuppressed = false;
-                this.claudeTuiCaptureFailures = null;
-            }
-            return;
-        }
-        this.claudeTuiCaptureFooterAbsentAt = null;
-
-        // NATIVE-JSONL FIRST (structured source of truth). The picker IS on
-        // screen (footer present, not generating) — so if claude's own
-        // transcript shows an unanswered AskUserQuestion, take its verbatim
-        // labels/descriptions/previews instead of scraping them back off the
-        // terminal, where a wrapped label is indistinguishable from a
-        // description. Screen presence stays the liveness gate; the transcript
-        // supplies only the CONTENT.
-        //
-        // Deliberately non-exclusive: on any miss (transcript not yet written,
-        // unresolvable path, read error) this falls through to the scrape below
-        // unchanged. That fallback is why a JSONL write lagging the repaint
-        // degrades to the old behaviour rather than to no prompt at all.
-        const nativePrompt = this.detectClaudeNativePendingQuestion();
-        if (nativePrompt) {
-            this.activeInteractivePrompt = nativePrompt;
-            this.interactivePromptTransport = 'tui';
-            this.interactivePromptLostAt = null;
-            this.notifyChange('prompt_captured');
-            return;
-        }
-
-        const headers = readClaudeTuiHeaders(screenText);
-        if (headers.length === 0) {
-            // Headerless (single-question) capture parses the CURRENT screen
-            // only and injects no keys — always safe, even while the owner is
-            // driving the picker from the terminal.
-            const prompt = detectClaudeAskUserQuestionPromptFromTuiPages([{ screenText }], {
-                // REBIND OPTION FIDELITY (rc.20): provisional id — replaced with the
-                // content-addressed stable id below, so the SAME picker re-captured
-                // after a daemon restart keeps the SAME promptId and pre-restart
-                // answers still bind to the options they were issued against.
-                promptId: 'ask-user-tui-pending',
-                providerType: this.cliType,
-            });
-            if (!prompt) return;
-            prompt.promptId = stableClaudeTuiPromptId(prompt.questions);
-            this.activeInteractivePrompt = prompt;
-            this.interactivePromptTransport = 'tui';
-            this.interactivePromptLostAt = null;
-            this.notifyChange('prompt_captured');
-            return;
-        }
-        // Owner is driving this picker from the terminal — stay hands-off. The
-        // multi-question capture injects Tab/Shift-Tab into the same input
-        // stream the owner's keystrokes are in.
-        if (this.claudeTuiCaptureSuppressed) return;
-        // The review/submit page ("Ready to submit your answers?") still shows
-        // the nav line + footer, so it looks capturable — but it parses to null
-        // BY DESIGN, which used to leave activeInteractivePrompt null and
-        // re-arm this whole capture on the very next frame: a Tab/Shift-Tab
-        // injection loop running at the exact moment the owner presses Enter
-        // on the pre-selected Submit row. Never capture from the review page.
-        if (isClaudeTuiReviewScreen(screenText)) return;
-        // Bound retries per prompt identity so an unparsable picker cannot
-        // become a key-injection storm (see claudeTuiCaptureFailures).
-        const navKey = headers.join('\u0001');
-        if (this.claudeTuiCaptureFailures?.key === navKey
-            && this.claudeTuiCaptureFailures.count >= SpecCliAdapter.CLAUDE_TUI_CAPTURE_MAX_ATTEMPTS) return;
-        this.claudeTuiPromptCaptureInFlight = true;
-        void this.captureClaudeTuiPrompt(screenText, headers).finally(() => {
-            this.claudeTuiPromptCaptureInFlight = false;
-        });
-    }
-
-    /**
-     * The TUI prompt is captured on the FIRST frame that renders the
-     * "Enter to select" footer. At that instant the option rows' checkbox
-     * column may not have drawn yet, so `detectClaudeTuiMultiSelect` returns
-     * false and the prompt is frozen as single-select — the dashboard then
-     * renders radio buttons even though the picker is multi-select.
-     *
-     * While the same TUI prompt is still on screen, re-check the live snapshot:
-     * if checkbox glyphs have since appeared, promote any single-select
-     * question to multi-select and re-emit status. Promotion is one-way
-     * (false→true only) — once a question is known multi-select we never demote
-     * it, since the glyph column can scroll out of view on later frames.
-     *
-     * For MULTI-question prompts the per-page Tab capture is the actual source
-     * of the bug: pages 2..N are snapshotted ~120ms after the Tab keypress,
-     * before their option-row glyph column has redrawn, so those questions
-     * freeze as single-select while page 1 (already settled) is correct. We
-     * cannot upgrade blindly — the live snapshot shows only ONE focused page —
-     * but we CAN read that page's question text/header and upgrade the matching
-     * question. As the user navigates the picker (or it settles), each page is
-     * eventually re-read and repaired.
-     */
-    private maybeUpgradeClaudeTuiMultiSelect(): void {
-        if (this.interactivePromptScheme() !== 'claude_tui'
-            || this.interactivePromptTransport !== 'tui'
-            || !this.activeInteractivePrompt) return;
-        const questions = this.activeInteractivePrompt.questions;
-        if (questions.every(q => q.multiSelect)) return;
-        let screenText = '';
-        try {
-            screenText = this.driver.snapshot();
-        } catch {
-            return;
-        }
-        if (!screenText.includes('Enter to select')) return;
-
-        if (questions.length === 1) {
-            if (questions[0].multiSelect) return;
-            const focused = readFocusedClaudeTuiQuestion(screenText);
-            if (!focused || !claudeTuiQuestionMatches(questions[0], focused) || !focused.multiSelect) return;
-            questions[0].multiSelect = true;
-            this.notifyChange('prompt_updated');
-            return;
-        }
-
-        // Multi-question: attribute the focused page's glyphs to its question by
-        // matching header (preferred) or question text, then upgrade just that
-        // one. Never demote — a settled non-multi page is left as captured.
-        const focused = readFocusedClaudeTuiQuestion(screenText);
-        if (!focused || !focused.multiSelect) return;
-        const match = questions.find(q => claudeTuiQuestionMatches(q, focused));
-        if (!match || match.multiSelect) return;
-        match.multiSelect = true;
-        this.notifyChange('prompt_updated');
-    }
-
-
-
-
-    private readClaudeTuiSnapshotForAnswer(): string {
-        try {
-            return this.driver.snapshot();
-        } catch (error: any) {
-            throw new Error(`Cannot verify the focused Claude TUI question before answering: ${error?.message || error}`);
-        }
-    }
-
-    private async assertFocusedClaudeTuiQuestion(
-        expected: InteractivePrompt['questions'][number],
-        prompt: InteractivePrompt,
-    ): Promise<'focused' | 'completed'> {
-        // MULTI-QUESTION PAGE REPAINT RACE (live defect, 2026-09-02).
-        //
-        // This used to gate on a SINGLE snapshot. In a multi-question prompt the
-        // keystroke that answers question N is also what navigates the picker
-        // onto question N+1, and that repaint is not instantaneous: the fixed
-        // 180ms inter-key delay in setInteractivePromptResponse races it. On a
-        // slow frame the next iteration's snapshot still showed the PREVIOUS
-        // page, so the assertion fired with expected = the question we were
-        // about to answer and focused = the one still on screen — the observed
-        // "expected <question 2>; focused question is <question 1>" failure.
-        // Because the picker never moves, every retry reproduced it identically:
-        // a permanent deadlock on any 2+ question prompt.
-        //
-        // Single-question prompts never hit this (one iteration, no page
-        // transition), which is why the defect looked multi-question-specific.
-        //
-        // The fix is the same bounded settle-poll assertFocusedClaudeTuiReview
-        // already applies to the review page for this exact class of race: keep
-        // re-snapshotting until the expected page lands, then fall through to
-        // the last frame so a genuinely WRONG screen still fails closed with its
-        // real content. A foreign picker that never becomes the expected page
-        // costs only the bounded budget before it is rejected.
-        const settleTimeoutMs = expected.allowFreeform
-            ? SpecCliAdapter.CLAUDE_TUI_REVIEW_SETTLE_TIMEOUT_MS
-            : SpecCliAdapter.CLAUDE_TUI_PAGE_SETTLE_TIMEOUT_MS;
-        const deadline = Date.now() + settleTimeoutMs;
-        let screenText = this.readClaudeTuiSnapshotForAnswer();
-        let focused = readFocusedClaudeTuiQuestion(screenText);
-        while (Date.now() < deadline && !(focused && claudeTuiQuestionMatches(expected, focused))) {
-            // Either a stale/foreign page or no picker at all. Both can be
-            // mid-repaint, and the no-picker case is separately resolved as
-            // 'completed' below — so keep sampling rather than deciding on a
-            // single transient frame.
-            await new Promise(resolve => setTimeout(resolve, SpecCliAdapter.CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
-            screenText = this.readClaudeTuiSnapshotForAnswer();
-            focused = readFocusedClaudeTuiQuestion(screenText);
-        }
-        if (focused) {
-            if (claudeTuiQuestionMatches(expected, focused)) return 'focused';
-            throw new Error(`Claude TUI focused question does not match the active interactive prompt (expected "${expected.question}"; focused question is "${focused.question}")`);
-        }
-
-        // A direct-submit Claude TUI can resolve the question after an early
-        // keystep (for example, the first digit of a previously multi-step
-        // answer). Once the picker is gone, corroborate completion before
-        // stopping the key loop so no remaining answer keys leak into the next
-        // widget. A visible foreign picker is handled above and always fails
-        // closed, even if the provider concurrently reports busy.
-        const resolvedByBoundToolResult = this.hasBoundClaudeAskUserQuestionToolResult(prompt);
-        const resolvedByBusyAdvance = this.latestState?.status === 'generating';
-        if (resolvedByBoundToolResult || resolvedByBusyAdvance) return 'completed';
-
-        throw new Error(`Claude TUI focused question does not match the active interactive prompt (expected "${expected.question}")`);
-    }
-
-    /**
-     * Wait for the review page to actually be on screen before the final Enter.
-     *
-     * The last answer keystroke is what navigates the picker onto its review
-     * page, and the TUI repaint is not instantaneous. Gating on a single
-     * snapshot taken a fixed delay after that keypress races the repaint: on a
-     * slow frame the assertion still sees the previous question page and fails
-     * closed, refusing an answer that was in fact correct (live defect
-     * 2026-08-28). Poll on the same bounded budget the capture path already
-     * uses (snapshotSettledClaudeTuiPage) and accept the first frame that reads
-     * as the review page; on timeout fall through to the last frame so a
-     * genuinely wrong screen still fails closed with its real content.
-     *
-     * `widenSettleBudget` widens the budget to
-     * CLAUDE_TUI_REVIEW_SETTLE_TIMEOUT_MS in two measured cases:
-     *   - freeform-capable pickers ("Type something." / Other) carry a heavier
-     *     layout burden even when a standard option is selected (residual gap,
-     *     live defect 2026-08-29);
-     *   - preview-layout answers (2026-09-11): a single-question preview
-     *     prompt submits directly with NO review page, so its resolution
-     *     signal is native tool_result / busy-advance / the 1500ms lost-grace
-     *     clear — the 600ms page budget can never observe that last one.
-     */
-    private async snapshotSettledClaudeTuiReview(prompt: InteractivePrompt, widenSettleBudget: boolean): Promise<string | null> {
-        let screenText = this.readClaudeTuiSnapshotForAnswer();
-        const budgetMs = widenSettleBudget
-            ? SpecCliAdapter.CLAUDE_TUI_REVIEW_SETTLE_TIMEOUT_MS
-            : SpecCliAdapter.CLAUDE_TUI_PAGE_SETTLE_TIMEOUT_MS;
-        const deadline = Date.now() + budgetMs;
-        let poll = 0;
-        while (true) {
-            poll += 1;
-            const focused = readFocusedClaudeTuiQuestion(screenText);
-            const review = !focused && isClaudeTuiReviewScreen(screenText);
-            let classification: string;
-            let directSubmitted = false;
-
-            if (focused) {
-                const boundQuestion = prompt.questions.some(question => claudeTuiQuestionMatches(question, focused));
-                classification = boundQuestion ? 'bound_question' : 'foreign_question';
-            } else if (review) {
-                classification = 'review';
-            } else if (!this.activeInteractivePrompt) {
-                // The ordinary stale cleanup or a future native tool-result
-                // observer may have cleared the prompt between poll samples.
-                classification = 'direct_submit_already_cleared';
-                directSubmitted = true;
-            } else if (this.activeInteractivePrompt.promptId !== prompt.promptId) {
-                classification = 'active_prompt_changed';
-            } else {
-                const resolvedByBoundToolResult = this.hasBoundClaudeAskUserQuestionToolResult(prompt);
-                const resolution = this.maybeClearResolvedClaudeTuiPrompt({
-                    screenText,
-                    resolveImmediatelyWhenBusy: true,
-                    resolvedByBoundToolResult,
-                });
-                classification = resolution === 'cleared'
-                    ? resolvedByBoundToolResult
-                        ? 'direct_submit_tool_result'
-                        : 'direct_submit_busy'
-                    : resolution === 'held'
-                        ? 'bound_question_unparsed'
-                        : resolution === 'missing'
-                            ? 'bound_question_missing'
-                            : 'snapshot_unavailable';
-                directSubmitted = resolution === 'cleared';
-            }
-
-            // Screen text can contain source, secrets, or user input. Keep the
-            // answer-settle diagnostic deliberately structural: classification,
-            // UTF-8 byte count, poll index, and spec-defined provider state.
-            LOG.debug(
-                'SpecAdapter',
-                `[${this.cliType}] Claude TUI answer poll=${poll} classification=${classification} screenBytes=${Buffer.byteLength(screenText, 'utf8')} providerState=${this.latestState?.id ?? 'unknown'} providerStatus=${this.latestState?.status ?? 'unknown'} widenSettleBudget=${widenSettleBudget}`,
-            );
-
-            if (review) return screenText;
-            if (directSubmitted) return null;
-            if (Date.now() >= deadline) return screenText;
-            await new Promise(resolve => setTimeout(resolve, SpecCliAdapter.CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
-            screenText = this.readClaudeTuiSnapshotForAnswer();
-        }
-    }
-
-    /**
-     * Internal control-flow signal, never surfaced to a caller.
-     *
-     * assertFocusedClaudeTuiReview can discover — via the native tool_result —
-     * that the answer already completed even though no review page rendered. It
-     * must then stop setInteractivePromptResponse from writing the final Enter,
-     * because focus no longer belongs to our question. Throwing this instead of
-     * returning normally keeps that "do not press Enter" decision in one place;
-     * setInteractivePromptResponse catches it and returns success.
-     */
-    private static readonly ClaudeTuiAnswerDeliveredSignal = class extends Error {
-        constructor() {
-            super('claude-tui answer already delivered');
-            this.name = 'ClaudeTuiAnswerDeliveredSignal';
-        }
-    };
-
-    private async assertFocusedClaudeTuiReview(prompt: InteractivePrompt, widenSettleBudget: boolean): Promise<void> {
-        const screenText = await this.snapshotSettledClaudeTuiReview(prompt, widenSettleBudget);
-        if (screenText === null) return;
-        const focused = readFocusedClaudeTuiQuestion(screenText);
-        if (focused || !isClaudeTuiReviewScreen(screenText)) {
-            const observed = focused?.question ? `; focused question is "${focused.question}"` : '';
-
-            // DELIVERED-BUT-UNCONFIRMED vs WRONG-SCREEN (live defect 2026-09-06,
-            // sixth recurrence of this class: f1720f8e, 6db3527e, 50bfe16d,
-            // d476f356, 60bd7614, and the 2026-09-02 per-keystroke poll).
-            //
-            // By the time this gate runs, every answer keystroke has ALREADY been
-            // written to the PTY by setInteractivePromptResponse's key loop — only
-            // the final review Enter is outstanding. A timeout here therefore
-            // means "the keys arrived but the picker did not visibly advance".
-            // That is NOT proof the answer was submitted: in the preview
-            // (side-by-side) layout a digit only highlights, so pre-2026-09-11
-            // this very state was reached with NOTHING submitted (the 09-10
-            // incident). The preview protocol fix above (commit Enter) removes
-            // the known cause, but this branch must still describe both
-            // possibilities honestly instead of claiming delivery.
-            //
-            // Two outcomes have to be told apart, and the previous code collapsed
-            // them into one hard failure:
-            //
-            //   WRONG SCREEN — a FOREIGN question is focused, or the screen is some
-            //     other widget entirely. We must not press Enter into something we
-            //     do not own. Keep failing closed; this is the guard that stops a
-            //     stale response from operating another picker.
-            //
-            //   UNCONFIRMED — our OWN bound question is still the focused page. The
-            //     picker simply has not advanced within the settle budget. The
-            //     input is delivered and the screen is ours, so reporting "failed"
-            //     is a false negative, and inviting a retry is actively harmful:
-            //     replaying the keystroke sequence double-submits into a picker
-            //     that may have advanced in the meantime.
-            //
-            // Every prior fix in this class widened a timeout, and the race
-            // resurfaced on the next slower link. Widening cannot terminate:
-            // no finite budget bounds an arbitrarily slow remote repaint. This
-            // instead makes the OUTCOME correct at whatever budget we have.
-            const boundQuestionStillFocused = !!focused
-                && prompt.questions.some(question => claudeTuiQuestionMatches(question, focused));
-
-            if (boundQuestionStillFocused) {
-                // Authoritative delivery oracle: if Claude's native JSONL already
-                // carries a tool_result for this AskUserQuestion, the answer landed
-                // and the terminal completed it — the missing review page is purely
-                // a rendering lag. Treat that as success and release the prompt the
-                // same way the direct-submit path does.
-                if (this.hasBoundClaudeAskUserQuestionToolResult(prompt)) {
-                    LOG.info('SpecAdapter', `[${this.cliType}] review page unsettled but native tool_result confirms delivery — accepting (widenSettleBudget=${widenSettleBudget})`);
-                    this.activeInteractivePrompt = null;
-                    this.interactivePromptTransport = null;
-                    this.interactivePromptLostAt = null;
-                    this.notifyChange('prompt_cleared');
-                    throw new SpecCliAdapter.ClaudeTuiAnswerDeliveredSignal();
-                }
-                // Keys written, submission unconfirmed. Distinct error class so
-                // the UI can say "could not confirm" instead of "failed", and
-                // suppress retry. Do NOT claim delivery: with the question
-                // still on screen the answer may equally well not have been
-                // submitted at all (the pre-fix preview layout produced exactly
-                // this state with nothing submitted — 09-10 incident).
-                LOG.warn('SpecAdapter', `[${this.cliType}] picker still shows our bound question after the settle budget — answer keys were written but submission is unconfirmed and may not have happened (widenSettleBudget=${widenSettleBudget})${observed}`);
-                throw new Error(`${CLAUDE_TUI_REVIEW_UNCONFIRMED_PREFIX} — the answer keys were written to the terminal, but the question is still on screen, so the answer may not have been submitted; check the terminal before answering again${observed}`);
-            }
-
-            // Log here, not just throw: the caller (mesh-events.ts
-            // interactive_prompt_response handler) returns this over the P2P
-            // command response as a plain { success: false } object with no
-            // LOG.* call of its own, so without a line here this failure class
-            // leaves NO trace in the daemon log — confirmed live 2026-08-29,
-            // where a dashboard-visible "review page is not focused" error had
-            // zero matching log output.
-            LOG.warn('SpecAdapter', `[${this.cliType}] assertFocusedClaudeTuiReview failed closed (widenSettleBudget=${widenSettleBudget})${observed}`);
-            throw new Error(`${CLAUDE_TUI_REVIEW_PAGE_NOT_FOCUSED_PREFIX} for the active interactive prompt${observed}`);
-        }
-
-        // Review pages retain the per-question nav headers. When the captured
-        // prompt has headers, require the focused review nav to carry them so
-        // a second AskUserQuestion review page cannot borrow the final Enter.
-        const expectedHeaders = prompt.questions
-            .map(q => q.header && normalizeClaudeTuiIdentity(q.header))
-            .filter((header): header is string => !!header);
-        if (expectedHeaders.length === 0) return;
-        const reviewHeaders = readClaudeTuiHeaders(screenText)
-            .map(header => normalizeClaudeTuiIdentity(header));
-        if (expectedHeaders.every(header => reviewHeaders.includes(header))) return;
-        throw new Error('Claude TUI review page does not match the active interactive prompt headers');
-    }
-
-
-    /**
-     * Snapshot the currently-focused claude TUI page, polling until its
-     * option-row checkbox glyph column has settled (or a bounded timeout).
-     *
-     * Why poll: right after a Tab keypress the newly-focused page's glyph
-     * column has not redrawn yet, so an immediate snapshot shows the question +
-     * option labels but NO per-option checkbox markers — freezing that page as
-     * single-select. A fixed delay either races (too short) or is wasteful (too
-     * long). Instead we re-snapshot at a fixed interval and stop as soon as the
-     * frame shows multi-select glyphs, falling back to the last frame at the
-     * timeout. Single-select pages never show glyphs, so they always poll to the
-     * timeout — bounded small to keep capture snappy.
-     */
-    private async snapshotSettledClaudeTuiPage(): Promise<string> {
-        let screenText = this.driver.snapshot();
-        const deadline = Date.now() + SpecCliAdapter.CLAUDE_TUI_PAGE_SETTLE_TIMEOUT_MS;
-        while (!detectClaudeTuiMultiSelect(screenText) && Date.now() < deadline) {
-            await new Promise(resolve => setTimeout(resolve, SpecCliAdapter.CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
-            screenText = this.driver.snapshot();
-        }
-        return screenText;
-    }
-
-
-    private async captureClaudeTuiPrompt(firstScreen: string, headers: string[]): Promise<void> {
-        // Owner typed between detection and capture start — bail before any
-        // key is injected (owner input wins over dashboard capture fidelity).
-        if (this.claudeTuiCaptureSuppressed) return;
-        const pages: ClaudeInteractiveTuiPage[] = [{ screenText: firstScreen, header: headers[0] }];
-        // Forward pass: Tab to each page 2..N and snapshot once its glyph column
-        // has settled, so pages 2+ capture their checkbox markers (not a racy
-        // pre-redraw frame).
-        for (let index = 1; index < headers.length; index += 1) {
-            // Abort before injecting the NEXT key if the owner started typing
-            // mid-capture — the keys below land in the owner's input stream.
-            if (this.claudeTuiCaptureSuppressed) return;
-            this.driver.dispatch({ kind: 'pty_write', data: '\t' });
-            await new Promise(resolve => setTimeout(resolve, SpecCliAdapter.CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
-            pages.push({ screenText: await this.snapshotSettledClaudeTuiPage(), header: headers[index] });
-        }
-        // Return pass: Shift-Tab back through pages N..2. As we land on each page
-        // again re-read it and OR-in any now-visible multi-select glyphs — a
-        // second chance to repair a page whose forward-pass frame was still racy.
-        for (let index = headers.length - 1; index > 0; index -= 1) {
-            if (this.claudeTuiCaptureSuppressed) return;
-            this.driver.dispatch({ kind: 'pty_write', data: '\x1b[Z' });
-            await new Promise(resolve => setTimeout(resolve, SpecCliAdapter.CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
-            const reread = await this.snapshotSettledClaudeTuiPage();
-            // The page we just Shift-Tab'd ONTO is index-1 (we move backwards).
-            const landed = pages[index - 1];
-            if (landed
-                && !detectClaudeTuiMultiSelect(landed.screenText)
-                && detectClaudeTuiMultiSelect(reread)
-                // PAGE IDENTITY GUARD: the swap below replaces this page's WHOLE
-                // raw screen, so it is only sound if `reread` is the same page we
-                // captured going forward. The glyph signal alone cannot tell us
-                // that: if the Shift-Tab keypress was swallowed (or the picker had
-                // not moved yet when the frame settled) the re-read is still the
-                // NEXT page, and we would overwrite this question with that one's
-                // text + options + checkboxes. Because `header` is carried
-                // separately (by nav-line index) it stays correct, producing the
-                // observed symptom — question N-1 rendered with its own header but
-                // question N's title, body and checkboxes.
-                && claudeTuiPagesLookLikeSameQuestion(landed, reread)) {
-                landed.screenText = reread;
-            }
-        }
-
-        const prompt = detectClaudeAskUserQuestionPromptFromTuiPages(pages, {
-            // REBIND OPTION FIDELITY (rc.20): provisional id — replaced with the
-            // content-addressed stable id below (same rationale as the
-            // headerless capture in maybeCaptureClaudeTuiPrompt).
-            promptId: 'ask-user-tui-pending',
-            providerType: this.cliType,
-        });
-        if (!prompt) {
-            // Parse failure: the picker stays un-held, so maybeCapture would
-            // re-run this whole injection pass on the next frame. Count the
-            // failure against this prompt's nav identity so retries are
-            // bounded (CLAUDE_TUI_CAPTURE_MAX_ATTEMPTS).
-            this.noteClaudeTuiCaptureFailure(headers);
-            return;
-        }
-        this.claudeTuiCaptureFailures = null;
-        prompt.promptId = stableClaudeTuiPromptId(prompt.questions);
-        this.activeInteractivePrompt = prompt;
-        this.interactivePromptTransport = 'tui';
-        this.interactivePromptLostAt = null;
-        this.notifyChange('prompt_captured');
-    }
-
-    /** Record a failed multi-question capture against the prompt's nav-line
-     *  identity so maybeCaptureClaudeTuiPrompt can bound retries. */
-    private noteClaudeTuiCaptureFailure(headers: string[]): void {
-        const navKey = headers.join('\u0001');
-        if (this.claudeTuiCaptureFailures?.key === navKey) {
-            this.claudeTuiCaptureFailures.count += 1;
-        } else {
-            this.claudeTuiCaptureFailures = { key: navKey, count: 1 };
-        }
-        const { count } = this.claudeTuiCaptureFailures;
-        LOG.warn(
-            'SpecAdapter',
-            `[${this.cliType}] TUI prompt capture failed to parse (attempt ${count}/${SpecCliAdapter.CLAUDE_TUI_CAPTURE_MAX_ATTEMPTS}) — ${count >= SpecCliAdapter.CLAUDE_TUI_CAPTURE_MAX_ATTEMPTS ? 'giving up until the picker leaves the screen' : 'one retry remains'}`,
-        );
+            const result = executeNativeHistory(this.spec.native_history, this.nativeHistoryInput({ withOwner: false }));
+            if (result && Array.isArray(result.messages)) return result.messages;
+        } catch { /* best-effort */ }
+        return [];
     }
 
     getDebugState(): Record<string, any> {
-        const screen = this.driver.getScreen?.() ?? '';
-        const history = this.driver.getStateHistory();
-        const status = this.getStatus();
-        
-        let messages: any[] = [];
-        if (this.spec.native_history?.source) {
-            try {
-                const result = executeNativeHistory(this.spec.native_history, {
-                    agentType: this.cliType,
-                    providerSessionId: this.providerSessionId,
-                    sessionStartedAtMs: this.spawnedAtMs,
-                    envOverrides: this.spawnedEnv,
-                    workspace: this.workingDir,
-                });
-                if (result && Array.isArray(result.messages)) {
-                    messages = result.messages;
-                }
-            } catch (e) {
-                // Ignore native history read errors in debug state
-            }
-        } else {
-            messages = this.readScreenAssistantMessages();
-        }
-
-        const latestState = this.latestState;
-        const latestModal = this.latestModal;
-        return {
-            type: this.cliType,
-            name: this.cliName,
-            status: status.status,
-            rawStatus: status.status,
-            projectedStatus: status.status,
-            ready: this.spawned,
-            // Legacy snapshot-style fields for panels that read getDebugSnapshot shape
-            spec_id: this.spec.id,
-            current_state: latestState ?? null,
-            current_modal: latestModal ?? null,
-            // Interactive-prompt hold (waiting_choice path) — surfaced so the
-            // spec-verification workflow can observe wire/TUI prompt capture
-            // per session (it was previously invisible in this bundle).
-            activeInteractivePrompt: this.activeInteractivePrompt ?? null,
-            exited: this.exited,
-            idleHoldPending: this.driver.hasIdleHoldPending?.() ?? false,
-            lastBusyAt: this.driver.getLastBusyAt?.() ?? 0,
-            screen: screen,
-            screenText: screen,
-            workingDir: this.workingDir,
-            spawnedAtMs: this.spawnedAtMs,
-            providerSessionId: this.providerSessionId ?? null,
-            // Same frame as `screen` above — see FsmDriver.getSections.
-            sections: this.driver.getSections?.(screen) ?? null,
-            stateHistory: history,
-            specPath: this.driver.getSpecPath?.() ?? null,
-            // v4 FSM live transition table — present only for FsmDriver. Lets
-            // the panel (and the daemon API) show, for the current instant,
-            // every outgoing transition with its per-condition match result
-            // and countdown. This is the canonical "why isn't it transitioning"
-            // answer — no screenshots needed.
-            fsm: this.driver.getFsmDebug?.() ?? null,
-            // v4 FSM transition snapshot history — the captured pre-transition
-            // evaluation table at each transition (null for v3 specs).
-            fsmHistory: this.driver.getFsmSnapshotHistory?.() ?? null,
-            // PTY input/output/resize/cursor event timeline (debug-only).
-            eventTimeline: this.driver.getEventTimeline?.() ?? null,
-            messages,
-            committedMessages: messages,
-        };
+        return buildSpecDebugState(this.debugView(), this.driver);
     }
 
     getTraceState(limit = 120): Record<string, any> {

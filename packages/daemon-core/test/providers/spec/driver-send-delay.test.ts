@@ -6,7 +6,7 @@ import {
     resolveEchoConfirmPolicy,
     shouldUseVerifiedSubmit,
     VERIFIED_SUBMIT_MIN_CHARS,
-} from '../../../src/providers/spec/fsm-driver.js';
+} from '../../../src/providers/spec/submit-policy.js';
 import { loadFsmSpec } from '../../../src/providers/spec/fsm-loader.js';
 
 const REPO_ROOT = path.resolve(__dirname, '../../../../../..');

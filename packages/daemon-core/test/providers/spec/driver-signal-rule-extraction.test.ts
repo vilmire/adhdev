@@ -21,7 +21,8 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { FsmDriver, type DashboardEvent } from '../../../src/providers/spec/fsm-driver.js';
+import { FsmDriver } from '../../../src/providers/spec/fsm-driver.js';
+import type { DashboardEvent } from '../../../src/providers/spec/fsm-driver-types.js';
 import {
     compileSignalRules, matchSignalRule, sanitizeSignalParamValue,
     SignalEmissionGate, EXAMPLE_USAGE_LIMIT_RULE,

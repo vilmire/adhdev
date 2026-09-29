@@ -4,10 +4,13 @@
  * Split out of `native-history-executor.ts` so the tool-block modules
  * (`native-history-tool-blocks.ts`, `tool-block-expand.ts`) can name these
  * types without importing the executor itself, which would close an import
- * cycle. Types only — no runtime code belongs here.
+ * cycle. Also holds the executor's input/result contract. Types only — no
+ * runtime code belongs here.
  */
 
 import type { MessageSourceAddress } from '../../chat/message-source-address.js';
+import type { SessionUsageTotals } from '../../shared/usage-normalize.js';
+import type { NativeTurnTerminalMarker } from '../../chat/native-turn-signal.js';
 
 /**
  * Content-free address of one tool block inside its native-history source.
@@ -67,4 +70,82 @@ export interface NativeHistoryMessage {
      * leaves the daemon.
      */
     _src?: MessageSourceAddress;
+}
+
+/** Who is reading, and which session the read must bind to. */
+export interface NativeHistoryInput {
+    agentType?: string;
+    sessionId?: string;
+    providerSessionId?: string;
+    historySessionId?: string;
+    /** Daemon instance id of the reading session (== the session registry
+     *  sessionId == the read path's targetSessionId). Sidecar-workspace stores
+     *  (kimi) derive the transcript-claim owner token from it so two concurrent
+     *  same-cwd sessions never bind the same wire.jsonl. Empty → claiming is
+     *  skipped (legacy single-session behaviour). */
+    instanceId?: string;
+    workspace?: string;
+    /** Daemon-side wall clock at the moment the session was registered.
+     *  Native-history file lookups use this as the lower bound: any file
+     *  whose mtime is before the current session started can't be from
+     *  this session, so it's excluded from newest-recent matching. The
+     *  caller (chat-history pipeline) populates this from the session
+     *  registry; specs/executor never need to know how it's sourced. */
+    sessionStartedAtMs?: number;
+    /** Env overrides the daemon set on the spawned CLI. The mesh
+     *  coordinator points hermes at a per-coordinator HERMES_HOME so
+     *  the hermes process writes its state.db into a tmp directory
+     *  instead of ~/.hermes. expandPath consults this map before
+     *  process.env so the native-history reader follows the spawned
+     *  child's view of HERMES_HOME / similar overrides; without it
+     *  the reader would always look at ~/.hermes and miss every
+     *  coordinator-session transcript. */
+    envOverrides?: Record<string, string>;
+    /** Bypass parsed JSONL reuse for completion-contract evidence reads. */
+    forceRefresh?: boolean;
+    args?: Record<string, unknown>;
+}
+
+
+export interface NativeHistoryResult {
+    messages: NativeHistoryMessage[];
+    providerSessionId?: string;
+    sourcePath: string;
+    sourceMtimeMs: number;
+    nativeHistoryCoverage?: 'full' | 'partial' | 'best-effort';
+    workspace?: string;
+    /**
+     * Sidecar-workspace stores (kimi): how the resolved transcript was
+     * attributed to this reading session.
+     *   'pinned'          — exact bind by a previously pinned/claimed session id
+     *   'claimed'         — exclusive claim on the single viable candidate
+     *   'stale_reclaimed' — claim taken over from a demonstrably dead owner
+     *   'spawn_evidence'  — unique spawn-proximity evidence (no claim identity)
+     *   'legacy'          — single-candidate bind with no claim identity
+     *   'ambiguous'       — FAIL CLOSED: ≥2 viable same-workspace candidates
+     *   'already_claimed' — FAIL CLOSED: every viable candidate is owned by a
+     *                       DIFFERENT live session
+     * Undefined for non-sidecar sources (their resolution is unchanged).
+     */
+    attribution?: 'pinned' | 'claimed' | 'stale_reclaimed' | 'spawn_evidence' | 'legacy' | 'ambiguous' | 'already_claimed';
+    /** True only when the bind rests on strong evidence (exact pin, an
+     *  exclusive claim, or unique spawn-proximity evidence) — never on a
+     *  newest-mtime guess. Read-path callers may persist a pin only then. */
+    ownerConfirmed?: boolean;
+    /** Typed fail-closed reason. 'attribution_unknown' means two or more viable
+     *  same-workspace candidates could not be uniquely attributed (or all are
+     *  owned by other live sessions); NO messages and NO providerSessionId are
+     *  returned so no durable pin can be written from the ambiguity. */
+    unavailableReason?: string;
+    /** Token totals, present only when the spec declares `usage_records` and
+     *  the transcript actually carried at least one matching record. */
+    usage?: SessionUsageTotals;
+    /**
+     * (NATIVE-TURN-SIGNAL) The provider's own turn-terminal records (codex
+     * task_complete / turn_aborted), when the reader for this agentType knows
+     * how to find them. Undefined for every source this executor has no
+     * built-in signal extraction for — those keep the message-shape inference
+     * path unchanged.
+     */
+    turnTerminalMarkers?: NativeTurnTerminalMarker[];
 }

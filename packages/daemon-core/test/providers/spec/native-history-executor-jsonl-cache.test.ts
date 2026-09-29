@@ -3,12 +3,8 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { readProviderChatHistory } from '../../../src/config/chat-history.js';
-import {
-    __getParsedJsonlCacheStatsForTests,
-    __resetParsedJsonlCacheForTests,
-    executeNativeHistory,
-} from '../../../src/providers/spec/native-history-executor.js';
-
+import { executeNativeHistory } from '../../../src/providers/spec/native-history-executor.js';
+import { __getParsedJsonlCacheStatsForTests, __resetParsedJsonlCacheForTests } from '../../../src/providers/spec/native-history-jsonl-cache.js';
 const SESSION_ID = '8c6cf338-ef5c-4df5-91a5-66c1e2ed4339';
 
 describe('native JSONL parsed-result cache', () => {

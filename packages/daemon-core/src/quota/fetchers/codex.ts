@@ -47,7 +47,7 @@ import { assignWindows } from './codex-windows.js';
 import { codexRolloutMissingFailure, fetchCodexQuotaFromRollout } from './codex-rollout.js';
 import type { QuotaChildProcess, QuotaFetchDeps } from './deps.js';
 import { resolveDeps } from './deps.js';
-import { toNumber } from './coerce.js';
+import { toEpochResetMs as toResetMs, toNumber } from './coerce.js';
 
 /** Whole-operation budget: spawn, handshake and reply. */
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -193,20 +193,6 @@ interface JsonRpcMessage {
     id?: number | string;
     result?: unknown;
     error?: { code?: number; message?: string };
-}
-
-/**
- * `resetsAt` is Unix *seconds* in the app-server protocol; the rest of ADHDev
- * speaks milliseconds. Values already large enough to be milliseconds are
- * passed through, so a future protocol change to ms does not yield a reset
- * date in the year 58000.
- */
-function toResetMs(value: unknown): number | null {
-    const seconds = toNumber(value);
-    if (seconds === null || seconds <= 0) {
-        return null;
-    }
-    return seconds > 1e11 ? seconds : seconds * 1000;
 }
 
 /** One `RateLimitWindow`, or null when it carries no usable percentage. */

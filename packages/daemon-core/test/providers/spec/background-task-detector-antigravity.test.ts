@@ -59,7 +59,7 @@ import type {
     CompletionPolicy,
     CompletionSignalReader,
 } from '../../../src/providers/completion/completion-engine.js';
-import type { AgyTaskLifecycleStep } from '../../../src/providers/native-history/antigravity-cli-transcript.js';
+import type { AgyTaskLifecycleStep } from '../../../src/providers/native-history/antigravity-conversation-db.js';
 
 // Isolated fake HOME.
 //

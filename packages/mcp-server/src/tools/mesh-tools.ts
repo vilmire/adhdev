@@ -155,8 +155,10 @@ export {
     meshNodeSlotsPropose,
 } from './mesh-tools-slot-autodetect.js';
 
+export { computeIdleDispatchAckRisk } from './mesh-direct-dispatch-attempt.js';
+export { meshSendTask } from './mesh-tools-send-task.js';
+
 export {
-    computeIdleDispatchAckRisk,
     meshApprove,
     meshAnswerQuestion,
     meshListPendingApprovals,
@@ -168,7 +170,6 @@ export {
     meshReadDebug,
     meshReadTerminal,
     meshSendKeys,
-    meshSendTask,
 } from './mesh-tools-session.js';
 
 export {
