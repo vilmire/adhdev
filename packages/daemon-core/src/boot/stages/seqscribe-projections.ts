@@ -33,7 +33,6 @@
 
 import { LOG } from '../../logging/logger.js';
 import { listMeshesReadOnly } from '../../config/mesh-config.js';
-import { resolveJsonlSourcePath } from '../../providers/spec/native-history-executor.js';
 import { activateMeshTopicsAtBoot, configureMeshPublisher } from '../../seqscribe/mesh-publisher.js';
 import { configureTranscriptProjection } from '../../seqscribe/transcript-publisher.js';
 import { createLiveChatPublisher } from '../../seqscribe/transcript-keyed-publish-runtime.js';
@@ -99,18 +98,6 @@ function armProjections(rt: SeqscribeRuntime, s5: CommandPlaneStage, hooks: ArmS
             appendChatFrame: (sessionId, frame, observation) => chat.appendChatFrame(sessionId, frame, observation),
             readPersistedChat: (sessionId) => chat.readPersistedChat(sessionId),
             activateSession: (sessionId) => chat.activateSession(sessionId),
-            resolveSourcePath: (sessionId: string) => {
-                const session = s5.sessionRegistry.get(sessionId);
-                if (!session) return null;
-                const provider = s5.providerLoader.getMeta(session.providerType);
-                const nh = provider?.nativeHistory as any;
-                if (!nh?.source) return null;
-                return resolveJsonlSourcePath(nh.source, {
-                    workspace: session.workspace,
-                    providerSessionId: session.providerSessionId,
-                    sessionStartedAtMs: session.spawnedAtMs,
-                });
-            },
             // PULL collector: re-enters the SAME internal read_chat pipeline whose
             // choke point pushes the observation nested — TranscriptProjectionService's
             // in-flight guard queues that nested observe() and settle() publishes

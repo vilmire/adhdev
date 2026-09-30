@@ -131,7 +131,6 @@ export interface TranscriptProjectionDeps {
      * defined. Omit for "no node" (tests); `warmSession` then only seeds.
      */
     activateSession?(sessionId: string): boolean;
-    resolveSourcePath?: (sessionId: string) => string | null;
     /**
      * Pull a fresh observation for `markDirty`-triggered publishes. Omit to
      * make `markDirty` an inert no-op.
@@ -266,6 +265,16 @@ export class TranscriptProjectionService {
     /** PUSH entry point — the read_chat last-mile choke point already has a full observation. */
     observe(sessionId: string, observation: TranscriptObservation): void {
         if (!sessionId) return;
+        // Learn the stat-poll path from the file this read actually used, BEFORE
+        // the in-flight branch: every pull-driven observation arrives nested
+        // while the pull is in flight, so learning it only on the idle branch
+        // left the path unknown and the stat poll dead for every native-reader
+        // provider (claude/codex/antigravity/grok) — a turn's final message
+        // written after the last PTY-driven read was then never published.
+        const sourcePath = ((observation.provenance as any)?.transcriptProvenance as any)?.sourcePath;
+        if (typeof sourcePath === 'string' && sourcePath) {
+            this.knownPaths.set(sessionId, sourcePath);
+        }
         if (this.inFlight.has(sessionId)) {
             this.pendingObservation.set(sessionId, observation);
             // A nested observe() arriving during a pull is that pull's own
@@ -280,10 +289,6 @@ export class TranscriptProjectionService {
         }
         if (!this.admitSession(sessionId)) return;
         this.beginTrigger(sessionId, 'unspecified');
-        const sourcePath = ((observation.provenance as any)?.transcriptProvenance as any)?.sourcePath;
-        if (typeof sourcePath === 'string' && sourcePath) {
-            this.knownPaths.set(sessionId, sourcePath);
-        }
         void this.runObserve(sessionId, observation);
     }
 
@@ -422,11 +427,9 @@ export class TranscriptProjectionService {
 
     private runStatPoll(): void {
         for (const sessionId of this.pollingSessions) {
-            let path = this.knownPaths.get(sessionId);
-            if (!path && this.deps.resolveSourcePath) {
-                path = this.deps.resolveSourcePath(sessionId) ?? undefined;
-                if (path) this.knownPaths.set(sessionId, path);
-            }
+            // The path is the one the session's own read resolved (learned in
+            // observe()); there is no second resolver to drift from it.
+            const path = this.knownPaths.get(sessionId);
             if (!path) continue;
             try {
                 const st = fs.statSync(path);

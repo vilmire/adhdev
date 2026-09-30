@@ -94438,6 +94438,10 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       /** PUSH entry point — the read_chat last-mile choke point already has a full observation. */
       observe(sessionId, observation) {
         if (!sessionId) return;
+        const sourcePath = observation.provenance?.transcriptProvenance?.sourcePath;
+        if (typeof sourcePath === "string" && sourcePath) {
+          this.knownPaths.set(sessionId, sourcePath);
+        }
         if (this.inFlight.has(sessionId)) {
           this.pendingObservation.set(sessionId, observation);
           if (!this.pendingContext.has(sessionId) && !this.triggerContext.has(sessionId)) {
@@ -94447,10 +94451,6 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         }
         if (!this.admitSession(sessionId)) return;
         this.beginTrigger(sessionId, "unspecified");
-        const sourcePath = observation.provenance?.transcriptProvenance?.sourcePath;
-        if (typeof sourcePath === "string" && sourcePath) {
-          this.knownPaths.set(sessionId, sourcePath);
-        }
         void this.runObserve(sessionId, observation);
       }
       /**
@@ -94563,11 +94563,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       }
       runStatPoll() {
         for (const sessionId of this.pollingSessions) {
-          let path88 = this.knownPaths.get(sessionId);
-          if (!path88 && this.deps.resolveSourcePath) {
-            path88 = this.deps.resolveSourcePath(sessionId) ?? void 0;
-            if (path88) this.knownPaths.set(sessionId, path88);
-          }
+          const path88 = this.knownPaths.get(sessionId);
           if (!path88) continue;
           try {
             const st = fs26.statSync(path88);
@@ -148730,18 +148726,6 @@ ${notice.notice}${supersededHint}`;
           appendChatFrame: (sessionId, frame2, observation) => chat.appendChatFrame(sessionId, frame2, observation),
           readPersistedChat: (sessionId) => chat.readPersistedChat(sessionId),
           activateSession: (sessionId) => chat.activateSession(sessionId),
-          resolveSourcePath: (sessionId) => {
-            const session = s5.sessionRegistry.get(sessionId);
-            if (!session) return null;
-            const provider = s5.providerLoader.getMeta(session.providerType);
-            const nh = provider?.nativeHistory;
-            if (!nh?.source) return null;
-            return resolveJsonlSourcePath(nh.source, {
-              workspace: session.workspace,
-              providerSessionId: session.providerSessionId,
-              sessionStartedAtMs: session.spawnedAtMs
-            });
-          },
           // PULL collector: re-enters the SAME internal read_chat pipeline whose
           // choke point pushes the observation nested — TranscriptProjectionService's
           // in-flight guard queues that nested observe() and settle() publishes
