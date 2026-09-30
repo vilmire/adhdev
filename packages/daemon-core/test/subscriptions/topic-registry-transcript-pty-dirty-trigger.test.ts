@@ -51,7 +51,6 @@ function configureRecordingProjection(): { pulled: string[] } {
         daemonId: () => 'daemon-1',
         writerId: () => 'writer-1',
         appendChatFrame: async () => {},
-        resolveSourcePath: () => null,
         collectObservation: async (sessionId: string) => {
             pulled.push(sessionId);
             return null;

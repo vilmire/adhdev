@@ -10,7 +10,9 @@ import {
     configureTranscriptProjection,
     markTranscriptPtyOutputActivity,
     markTranscriptSessionDirty,
+    notifyTranscriptObservation,
 } from '../../src/seqscribe/transcript-publisher.js';
+import { buildTranscriptObservationFromReadChat } from '../../src/commands/transcript-observation-builder.js';
 import { SessionRegistry } from '../../src/sessions/registry.js';
 import { createSessionLifecycleBus } from '../../src/sessions/lifecycle-bus.js';
 import { subscribeTranscriptProjection } from '../../src/seqscribe/transcript-bus-subscriber.js';
@@ -41,13 +43,34 @@ describe('Transcript stat polling instead of PTY', () => {
         fs.writeFileSync(transcriptPath, `${JSON.stringify({ role: 'assistant', content: 'first' })}\n`);
 
         let collectorCalls = 0;
+        // The seed pull and the throttled PTY pulls below read before the file
+        // is known; the path is learned from the first observation after this flips.
+        let learnPath = false;
         const service = configureTranscriptProjection({
             daemonId: () => 'daemon-1',
             writerId: () => 'writer-1',
             appendChatFrame: async () => {},
-            resolveSourcePath: (s) => s === sessionId ? transcriptPath : null,
-            collectObservation: async () => {
+            // Production shape: the collector re-enters read_chat, whose choke
+            // point pushes the observation NESTED while this pull is in flight,
+            // carrying the file the read resolved in its provenance. That is the
+            // only way the stat poll learns the path — there is no separate
+            // resolver (a second one returned null for every native-reader
+            // provider and left the poll dead: 2026-09-30 BATRP incident).
+            collectObservation: async (s) => {
                 collectorCalls += 1;
+                if (s === sessionId && learnPath) {
+                    const observation = buildTranscriptObservationFromReadChat({
+                        sessionId,
+                        providerType: 'test-cli',
+                        status: 'idle',
+                        providerObservedStatus: 'idle',
+                        turn: null,
+                        provenance: { transcriptProvenance: { sourcePath: transcriptPath } },
+                        messages: [],
+                        coverage: { mode: 'full', omittedBefore: false },
+                    });
+                    if (observation) notifyTranscriptObservation(sessionId, observation);
+                }
                 return null;
             },
         });
@@ -98,8 +121,14 @@ describe('Transcript stat polling instead of PTY', () => {
         expect(collectorCalls).toBe(2);
         collectorCalls = 0;
 
-        // ★ observe나 markDirty 가 한 번도 안 불려도, 폴링 루프가 lazy resolve 로 경로를 찾는다.
-        // 1. 파일이 안 변하면 폴링이 돌아도 runPull이 불리지 않는다.
+        // A read learns the path (nested observation during an in-flight pull).
+        learnPath = true;
+        markTranscriptSessionDirty(sessionId);
+        await flushProjection();
+        expect(collectorCalls).toBe(1);
+        collectorCalls = 0;
+
+        // 1. 파일이 안 변하면 폴링이 돌아도 runPull이 불리지 않는다(첫 틱은 기준선).
         vi.advanceTimersByTime(TRANSCRIPT_STAT_POLL_INTERVAL_MS);
         await flushProjection();
         vi.advanceTimersByTime(TRANSCRIPT_STAT_POLL_INTERVAL_MS);
