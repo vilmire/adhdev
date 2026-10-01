@@ -34045,7 +34045,7 @@ child.on('exit', () => process.exit(0));
     async function detectCLI(cliId, providerLoader, options) {
       const resolvedId = providerLoader ? providerLoader.resolveAlias(cliId) : cliId;
       if (providerLoader) {
-        const cliList = providerLoader.getCliDetectionList();
+        const cliList = providerLoader.getCliDetectionList({ includeDisabled: options?.includeDisabled });
         const target = cliList.find((c) => c.id === resolvedId);
         if (target) {
           const platform10 = os10.platform();
