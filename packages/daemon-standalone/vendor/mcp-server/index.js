@@ -127546,6 +127546,9 @@ trust_level = "trusted"
       if (buttons.length < minCount && rule.section) {
         const whole = extractButtonsFromRule(rule, fullScreen);
         if (whole.length >= minCount && whole.some((b) => b.current)) buttons = whole;
+      } else if (buttons.length >= minCount && rule.section && !buttons.some((b) => b.current)) {
+        const whole = extractButtonsFromRule(rule, fullScreen);
+        if (whole.length >= minCount && whole.some((b) => b.current)) buttons = whole;
       }
       if (rule.cursor_marker && buttons.length > 0 && !buttons.some((b) => b.current)) {
         const relaxed = extractButtonsFromRule({ ...rule, cursor_marker: void 0 }, hay);
