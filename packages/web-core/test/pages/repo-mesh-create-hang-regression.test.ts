@@ -38,4 +38,17 @@ describe('mesh create form — standalone hang regression', () => {
     expect(branch).toContain('setCreateOnboardingPlan(null)')
     expect(branch).toContain('setCreatePlanLoading(false)')
   })
+
+  // 2026-10-01 (cloud): with newMeshWorkspace as a dependency every keystroke
+  // re-ran the auto-select, and a machine with no saved workspaces (every fresh
+  // install) cleared the field — a new user could not type a path to create a
+  // mesh. The pre-fill must follow the machine, and only ever fill an empty field.
+  it('the cloud auto-select never re-runs on the typed workspace and never overwrites it', () => {
+    const source = read('../../src/pages/RepoMesh.tsx')
+    const effect = source.slice(source.indexOf('Cloud: auto-select first workspace'))
+    const deps = effect.slice(effect.indexOf('}, ['), effect.indexOf(']', effect.indexOf('}, [')) + 1)
+    expect(deps).not.toContain('newMeshWorkspace')
+    expect(effect).toContain('setNewMeshWorkspace(current => current || firstPickerWorkspace)')
+  })
 })
+

@@ -456,14 +456,26 @@ export default function RepoMesh() {
     // then re-ran the plan effect, whose empty-workspace early-return leaves
     // planLoading stuck true, so the form sat on "Checking the workspace…"
     // forever with nothing selected.
+    //
+    // Cloud had the same shape: with newMeshWorkspace as a dependency, every
+    // keystroke in the workspace field re-ran this, and a machine with no saved
+    // workspaces (every fresh install) cleared it back to empty — a new user
+    // could not type a path, so could not create a mesh at all (2026-10-01).
+    // A typed path outside the saved list was likewise reset to the first one.
+    // So pre-fill only when the MACHINE changes, and never overwrite input.
+    const workspaceDaemon = useRef<string | null>(null)
+    // A string, not the array: `createPickerWorkspaces` is a fresh [] per render.
+    const firstPickerWorkspace = createPickerWorkspaces[0]?.path || ''
     useEffect(() => {
         if (!features.createDaemonPicker) return
-        if (!newMeshDaemonId) { setNewMeshWorkspace(''); return }
-        if (!createPickerWorkspaces.length) { setNewMeshWorkspace(''); return }
-        if (!createPickerWorkspaces.some(w => w.path === newMeshWorkspace)) {
-            setNewMeshWorkspace(createPickerWorkspaces[0]?.path || '')
+        if (workspaceDaemon.current !== newMeshDaemonId) {
+            // A different machine: its paths do not apply to the previous one.
+            workspaceDaemon.current = newMeshDaemonId
+            setNewMeshWorkspace('')
         }
-    }, [newMeshDaemonId, newMeshWorkspace, createPickerWorkspaces, features.createDaemonPicker])
+        // Fill an EMPTY field only — whatever the user typed stays.
+        if (newMeshDaemonId && firstPickerWorkspace) setNewMeshWorkspace(current => current || firstPickerWorkspace)
+    }, [newMeshDaemonId, firstPickerWorkspace, features.createDaemonPicker])
 
     // The graph is PUSHED by the coordinator: one `mesh.status` subscription —
     // a snapshot on subscribe (so a mesh switch paints at once), keyed per-node /
