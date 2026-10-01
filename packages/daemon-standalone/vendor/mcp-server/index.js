@@ -27549,18 +27549,18 @@ ${renderWorkerProtocolFooter2(input)}`;
       }
       if (cwd && cwd !== ws) bases.push(cwd);
       for (const base of bases) {
-        for (const relative8 of MESH_JSON_CONFIG_LOCATIONS) {
-          const configPath = (0, import_path.join)(base, relative8);
+        for (const relative9 of MESH_JSON_CONFIG_LOCATIONS) {
+          const configPath = (0, import_path.join)(base, relative9);
           if (!(0, import_fs.existsSync)(configPath)) continue;
           try {
             const parsed = parseConfigText(configPath, (0, import_fs.readFileSync)(configPath, "utf-8"));
             const result = normalizeRepoMeshDeclarativeConfig(parsed);
             if (!result.valid || !result.config) {
-              return { source: relative8, sourceType: "invalid", path: configPath, error: result.errors.join("; ") };
+              return { source: relative9, sourceType: "invalid", path: configPath, error: result.errors.join("; ") };
             }
-            return { config: result.config, source: relative8, sourceType: "repo_file", path: configPath };
+            return { config: result.config, source: relative9, sourceType: "repo_file", path: configPath };
           } catch (error) {
-            return { source: relative8, sourceType: "invalid", path: configPath, error: error?.message || String(error) };
+            return { source: relative9, sourceType: "invalid", path: configPath, error: error?.message || String(error) };
           }
         }
       }
@@ -27805,8 +27805,8 @@ ${renderWorkerProtocolFooter2(input)}`;
       return String(value).replace(/\r\n/g, "\n");
     }
     function isPathInside(parent, child) {
-      const relative8 = path2.relative(path2.resolve(parent), path2.resolve(child));
-      return relative8 === "" || !relative8.startsWith("..") && !path2.isAbsolute(relative8);
+      const relative9 = path2.relative(path2.resolve(parent), path2.resolve(child));
+      return relative9 === "" || !relative9.startsWith("..") && !path2.isAbsolute(relative9);
     }
     async function validateWorkspace(workspace) {
       if (typeof workspace !== "string" || workspace.length === 0 || workspace.includes("\0")) {
@@ -28052,8 +28052,8 @@ ${renderWorkerProtocolFooter2(input)}`;
       return { valid: errors.length === 0, errors, config: errors.length === 0 ? config : void 0 };
     }
     function loadChangeImpactConfig(repoRoot) {
-      for (const relative8 of CHANGE_IMPACT_CONFIG_LOCATIONS) {
-        const configPath = (0, import_path2.join)(repoRoot, relative8);
+      for (const relative9 of CHANGE_IMPACT_CONFIG_LOCATIONS) {
+        const configPath = (0, import_path2.join)(repoRoot, relative9);
         if (!(0, import_fs2.existsSync)(configPath)) continue;
         try {
           const text = (0, import_fs2.readFileSync)(configPath, "utf-8");
@@ -28064,10 +28064,10 @@ ${renderWorkerProtocolFooter2(input)}`;
             mtimeMs = text.length;
           }
           const parsed = parseConfigText(configPath, text);
-          const validation = validateChangeImpactConfig(parsed, relative8);
+          const validation = validateChangeImpactConfig(parsed, relative9);
           if (!validation.valid) {
             return {
-              source: relative8,
+              source: relative9,
               sourceType: "invalid",
               path: configPath,
               error: validation.errors.join("; "),
@@ -28076,14 +28076,14 @@ ${renderWorkerProtocolFooter2(input)}`;
           }
           return {
             config: validation.config,
-            source: relative8,
+            source: relative9,
             sourceType: "repo_file",
             path: configPath,
             sourceKey: `file:${configPath}:${mtimeMs}`
           };
         } catch (error) {
           return {
-            source: relative8,
+            source: relative9,
             sourceType: "invalid",
             path: configPath,
             error: error?.message || String(error),
@@ -55998,10 +55998,10 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       if (rejectedCommands.length) errors.push("one or more validation commands are invalid");
       return { valid: errors.length === 0, errors, bootstrapCommands, commands, rejectedCommands, bootstrapMode, deprecationWarnings };
     }
-    function readConfigFromBaseRef(gitCwd, ref, relative8) {
+    function readConfigFromBaseRef(gitCwd, ref, relative9) {
       if (!ref || ref.startsWith("-")) return void 0;
       try {
-        return (0, import_child_process4.execFileSync)("git", ["show", `${ref}:${relative8}`], {
+        return (0, import_child_process4.execFileSync)("git", ["show", `${ref}:${relative9}`], {
           cwd: gitCwd,
           encoding: "utf8",
           stdio: ["ignore", "pipe", "ignore"],
@@ -56041,26 +56041,26 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         if (!validation.valid) return { source: "mesh.policy.refineConfig", sourceType: "invalid", error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
         return { config: inline, source: "mesh.policy.refineConfig", sourceType: "mesh_policy" };
       }
-      for (const relative8 of MESH_REFINE_CONFIG_LOCATIONS) {
-        const configPath = (0, import_path10.join)(workspace, relative8);
+      for (const relative9 of MESH_REFINE_CONFIG_LOCATIONS) {
+        const configPath = (0, import_path10.join)(workspace, relative9);
         if (!(0, import_fs15.existsSync)(configPath)) continue;
         try {
           const parsed = parseConfigText(configPath, (0, import_fs15.readFileSync)(configPath, "utf-8"));
-          const validation = validateMeshRefineConfig(parsed, relative8);
-          if (!validation.valid) return { source: relative8, sourceType: "invalid", path: configPath, error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
-          return { config: parsed, source: relative8, sourceType: "repo_file", path: configPath };
+          const validation = validateMeshRefineConfig(parsed, relative9);
+          if (!validation.valid) return { source: relative9, sourceType: "invalid", path: configPath, error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
+          return { config: parsed, source: relative9, sourceType: "repo_file", path: configPath };
         } catch (error) {
-          return { source: relative8, sourceType: "invalid", path: configPath, error: error?.message || String(error) };
+          return { source: relative9, sourceType: "invalid", path: configPath, error: error?.message || String(error) };
         }
       }
       const baseRefs = (options?.baseRefs || []).filter((ref) => typeof ref === "string" && ref.trim().length > 0);
       for (const ref of baseRefs) {
-        for (const relative8 of MESH_REFINE_CONFIG_LOCATIONS) {
-          const text = readConfigFromBaseRef(options?.gitCwd || workspace, ref.trim(), relative8);
+        for (const relative9 of MESH_REFINE_CONFIG_LOCATIONS) {
+          const text = readConfigFromBaseRef(options?.gitCwd || workspace, ref.trim(), relative9);
           if (text === void 0) continue;
-          const source = `${ref.trim()}:${relative8}`;
+          const source = `${ref.trim()}:${relative9}`;
           try {
-            const parsed = parseConfigText(relative8, text);
+            const parsed = parseConfigText(relative9, text);
             const validation = validateMeshRefineConfig(parsed, source);
             if (!validation.valid) return { source, sourceType: "invalid", baseRef: ref.trim(), error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
             return { config: parsed, source, sourceType: "repo_file", baseRef: ref.trim() };
@@ -56482,28 +56482,28 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         if (!validation.valid) return { source: "mesh.policy.worktreeBootstrapConfig", sourceType: "invalid", error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
         return { config: inline, source: "mesh.policy.worktreeBootstrapConfig", sourceType: "mesh_policy" };
       }
-      for (const relative8 of MESH_WORKTREE_BOOTSTRAP_CONFIG_LOCATIONS) {
-        const configPath = (0, import_path11.join)(workspace, relative8);
+      for (const relative9 of MESH_WORKTREE_BOOTSTRAP_CONFIG_LOCATIONS) {
+        const configPath = (0, import_path11.join)(workspace, relative9);
         if (!(0, import_fs16.existsSync)(configPath)) continue;
         try {
           const parsed = parseConfigText(configPath, (0, import_fs16.readFileSync)(configPath, "utf-8"));
-          const validation = validateMeshWorktreeBootstrapConfig(parsed, relative8);
-          if (!validation.valid) return { source: relative8, sourceType: "invalid", path: configPath, error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
-          return { config: parsed, source: relative8, sourceType: "repo_file", path: configPath };
+          const validation = validateMeshWorktreeBootstrapConfig(parsed, relative9);
+          if (!validation.valid) return { source: relative9, sourceType: "invalid", path: configPath, error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
+          return { config: parsed, source: relative9, sourceType: "repo_file", path: configPath };
         } catch (error) {
-          return { source: relative8, sourceType: "invalid", path: configPath, error: error?.message || String(error) };
+          return { source: relative9, sourceType: "invalid", path: configPath, error: error?.message || String(error) };
         }
       }
       return { source: "unavailable", sourceType: "unavailable", error: `No worktree bootstrap config found. Checked: ${MESH_WORKTREE_BOOTSTRAP_CONFIG_LOCATIONS.join(", ")}` };
     }
     function computeStaleInputsDigest(workspace, staleInputs) {
       const digest = {};
-      for (const relative8 of staleInputs ?? []) {
-        const filePath2 = (0, import_path11.join)(workspace, relative8);
+      for (const relative9 of staleInputs ?? []) {
+        const filePath2 = (0, import_path11.join)(workspace, relative9);
         try {
-          digest[relative8] = (0, import_node_crypto22.createHash)("sha256").update((0, import_fs16.readFileSync)(filePath2)).digest("hex");
+          digest[relative9] = (0, import_node_crypto22.createHash)("sha256").update((0, import_fs16.readFileSync)(filePath2)).digest("hex");
         } catch {
-          digest[relative8] = "absent";
+          digest[relative9] = "absent";
         }
       }
       return digest;
@@ -60638,7 +60638,7 @@ When the user asks to **set up / configure / onboard** this repo for Repo Mesh (
           hasNpmLock ? { command: "npm", args: ["ci"] } : { command: "npm", args: ["install"] }
         );
       }
-      const staleInputs = CANDIDATE_STALE_INPUTS.filter((relative8) => (0, import_fs18.existsSync)((0, import_path13.join)(workspace, relative8)));
+      const staleInputs = CANDIDATE_STALE_INPUTS.filter((relative9) => (0, import_fs18.existsSync)((0, import_path13.join)(workspace, relative9)));
       if (!commands.length) {
         return { commands, staleInputs };
       }
@@ -105208,8 +105208,8 @@ ${output}` : "";
       const sourceMtimeMs = statMtimeMs(sessionPath);
       const brainRootPath = brainRoot();
       if (sessionPath.startsWith(brainRootPath + path48.sep) && sessionPath.endsWith(".jsonl")) {
-        const relative8 = sessionPath.slice(brainRootPath.length + 1);
-        const uuidFromPath = relative8.split(path48.sep)[0];
+        const relative9 = sessionPath.slice(brainRootPath.length + 1);
+        const uuidFromPath = relative9.split(path48.sep)[0];
         const resolvedSessionId = sessionId || (isUuidLike(uuidFromPath) ? uuidFromPath : "");
         if (!resolvedSessionId) return null;
         const messages = parseBrainTranscript(sessionPath, resolvedSessionId, workspace);
@@ -111086,10 +111086,13 @@ exec "${portableNode}" "${cliEntry}" "$@"
       };
     }
     function buildInstallEnvWithNodeOnPath(baseEnv = process.env) {
-      if (process.platform !== "win32") return { ...baseEnv };
       const nodeBinDir = path63.dirname(process.execPath);
       if (!nodeBinDir) return { ...baseEnv };
       const env2 = { ...baseEnv };
+      if (process.platform !== "win32") {
+        env2.PATH = env2.PATH ? `${nodeBinDir}:${env2.PATH}` : nodeBinDir;
+        return env2;
+      }
       const pathKey = Object.keys(env2).find((k) => k.toLowerCase() === "path") || "PATH";
       const current2 = env2[pathKey] || "";
       env2[pathKey] = current2 ? `${nodeBinDir};${current2}` : nodeBinDir;
@@ -111325,8 +111328,35 @@ ${marker}`,
           encoding: "utf8",
           stdio: "pipe",
           timeout: 3e4,
+          env: buildInstallEnvWithNodeOnPath(),
           ...process.platform === "win32" ? { windowsHide: true } : {}
         });
+      }
+      assertNativeAddonsLoad(prefix, packageName);
+    }
+    function assertNativeAddonsLoad(prefix, packageName) {
+      const packageRoot = [path65.join(prefix, "lib", "node_modules", packageName), path65.join(prefix, "node_modules", packageName)].find((candidate) => fs60.existsSync(path65.join(candidate, "package.json")));
+      if (!packageRoot) return;
+      const script = [
+        "const fs=require('fs'),path=require('path');",
+        'const root=path.join(process.argv[1],"node_modules");',
+        "const pkgs=[];",
+        "for(const n of fs.existsSync(root)?fs.readdirSync(root):[]){",
+        ' if(n.startsWith("@")){for(const m of fs.readdirSync(path.join(root,n)))pkgs.push(path.join(root,n,m));}else pkgs.push(path.join(root,n));}',
+        'for(const p of pkgs){const d=path.join(p,"build","Release");',
+        " if(!fs.existsSync(d))continue;",
+        ' for(const f of fs.readdirSync(d))if(f.endsWith(".node"))process.dlopen({exports:{}},path.join(d,f));}'
+      ].join("");
+      try {
+        (0, import_child_process11.execFileSync)(process.execPath, ["-e", script, packageRoot], {
+          encoding: "utf8",
+          stdio: "pipe",
+          timeout: 3e4,
+          ...process.platform === "win32" ? { windowsHide: true } : {}
+        });
+      } catch (error) {
+        const detail = String(error?.stderr || error?.message || error).trim().split("\n")[0];
+        throw new Error(`a native module does not load under ${process.execPath}: ${detail}`);
       }
     }
     function backupPosixInstall(options) {
@@ -111339,7 +111369,7 @@ ${marker}`,
         for (const name of resolvePosixBinNames(options.packageName)) {
           const shim = path65.join(binDir, name);
           if (fs60.existsSync(shim)) {
-            fs60.cpSync(shim, path65.join(backupDir, `bin-${name}`), { recursive: true });
+            fs60.cpSync(shim, path65.join(backupDir, `bin-${name}`), { recursive: true, verbatimSymlinks: true });
             binShims.push(shim);
           }
         }
@@ -111347,6 +111377,23 @@ ${marker}`,
       } catch (error) {
         appendUpgradeLog(`Install backup failed (${error?.code || "error"}): ${error?.message || String(error)} \u2014 proceeding without a rollback snapshot`, options.configDir);
         return null;
+      }
+    }
+    function preservePinnedShebangs(backup) {
+      for (const shim of backup.binShims) {
+        try {
+          const entry = fs60.realpathSync(shim);
+          const relative9 = path65.relative(backup.packageRoot, entry);
+          if (relative9.startsWith("..") || path65.isAbsolute(relative9)) continue;
+          const previousFirstLine = fs60.readFileSync(path65.join(backup.backupDir, "package", relative9), "utf8").split("\n", 1)[0];
+          if (!/^#!\/\S*node$/.test(previousFirstLine)) continue;
+          const current2 = fs60.readFileSync(entry, "utf8");
+          const currentFirstLine = current2.split("\n", 1)[0];
+          if (!currentFirstLine.startsWith("#!") || currentFirstLine === previousFirstLine) continue;
+          fs60.writeFileSync(entry, previousFirstLine + current2.slice(currentFirstLine.length));
+          appendUpgradeLog(`Kept the pinned interpreter ${previousFirstLine.slice(2)} for ${path65.basename(shim)}`);
+        } catch {
+        }
       }
     }
     function restorePosixInstall(backup) {
@@ -111357,7 +111404,10 @@ ${marker}`,
       fs60.rmSync(backup.packageRoot, { recursive: true, force: true });
       fs60.cpSync(snapshotPackage, backup.packageRoot, { recursive: true });
       for (const shim of backup.binShims) {
-        fs60.cpSync(path65.join(backup.backupDir, `bin-${path65.basename(shim)}`), shim, { recursive: true });
+        const saved = path65.join(backup.backupDir, `bin-${path65.basename(shim)}`);
+        fs60.rmSync(shim, { force: true });
+        if (fs60.lstatSync(saved).isSymbolicLink()) fs60.symlinkSync(fs60.readlinkSync(saved), shim);
+        else fs60.cpSync(saved, shim, { recursive: true });
       }
     }
     var UpgradeNoticeEmittedError = class extends Error {
@@ -111618,6 +111668,7 @@ ${marker}`,
         if (installOutput.trim()) {
           appendUpgradeLog(installOutput.trim());
         }
+        if (liveBackup) preservePinnedShebangs(liveBackup);
         if (installPrefix) {
           try {
             smokeTestInstalledBins(installPrefix, payload.packageName);
@@ -117812,7 +117863,7 @@ ${marker}`,
             normalizeRepoMeshDeclarativeConfig: normalizeRepoMeshDeclarativeConfig2,
             MESH_JSON_CONFIG_LOCATIONS: MESH_JSON_CONFIG_LOCATIONS2
           } = await Promise.resolve().then(() => (init_mesh_json_config(), mesh_json_config_exports));
-          const { mkdirSync: mkdirSync49, writeFileSync: writeFileSync39 } = await import("fs");
+          const { mkdirSync: mkdirSync49, writeFileSync: writeFileSync40 } = await import("fs");
           const { dirname: dirname42, join: join98 } = await import("path");
           const scaffold = buildMeshJsonConfigScaffold2(mesh);
           const scaffoldJson = serializeMeshJsonConfigScaffold2(scaffold);
@@ -117854,7 +117905,7 @@ ${marker}`,
             };
           }
           mkdirSync49(dirname42(absolutePath), { recursive: true });
-          writeFileSync39(absolutePath, `${scaffoldJson}
+          writeFileSync40(absolutePath, `${scaffoldJson}
 `, "utf-8");
           return {
             success: true,
@@ -117922,15 +117973,15 @@ ${marker}`,
             normalizeRepoMeshDeclarativeConfig: normalizeRepoMeshDeclarativeConfig2,
             MESH_JSON_CONFIG_LOCATIONS: MESH_JSON_CONFIG_LOCATIONS2
           } = await Promise.resolve().then(() => (init_mesh_json_config(), mesh_json_config_exports));
-          const { existsSync: existsSync95, readFileSync: readFileSync76, mkdirSync: mkdirSync49, writeFileSync: writeFileSync39 } = await import("fs");
+          const { existsSync: existsSync95, readFileSync: readFileSync76, mkdirSync: mkdirSync49, writeFileSync: writeFileSync40 } = await import("fs");
           const { dirname: dirname42, join: join98 } = await import("path");
           const yaml2 = await Promise.resolve().then(() => (init_js_yaml(), js_yaml_exports));
           const relativePath = MESH_JSON_CONFIG_LOCATIONS2[0];
           let baseDoc = { version: 1 };
           let existingPath = join98(workspace, relativePath);
           let existedAsYaml = false;
-          for (const relative8 of MESH_JSON_CONFIG_LOCATIONS2) {
-            const candidate = join98(workspace, relative8);
+          for (const relative9 of MESH_JSON_CONFIG_LOCATIONS2) {
+            const candidate = join98(workspace, relative9);
             if (!existsSync95(candidate)) continue;
             try {
               const text = readFileSync76(candidate, "utf-8");
@@ -117941,7 +117992,7 @@ ${marker}`,
                 existedAsYaml = !/\.json$/i.test(candidate);
               }
             } catch (e) {
-              return { success: false, error: `existing ${relative8} is unparseable, refusing to overwrite: ${e?.message || e}` };
+              return { success: false, error: `existing ${relative9} is unparseable, refusing to overwrite: ${e?.message || e}` };
             }
             break;
           }
@@ -117988,7 +118039,7 @@ ${marker}`,
             };
           }
           mkdirSync49(dirname42(absolutePath), { recursive: true });
-          writeFileSync39(absolutePath, serialized, "utf-8");
+          writeFileSync40(absolutePath, serialized, "utf-8");
           return {
             success: true,
             written: true,
@@ -120206,7 +120257,7 @@ ${ptyResult.output.slice(-2e3)}`);
               workspace
             };
           }
-          const { existsSync: existsSync95, readFileSync: readFileSync76, writeFileSync: writeFileSync39, copyFileSync: copyFileSync3, mkdirSync: mkdirSync49 } = await import("fs");
+          const { existsSync: existsSync95, readFileSync: readFileSync76, writeFileSync: writeFileSync40, copyFileSync: copyFileSync3, mkdirSync: mkdirSync49 } = await import("fs");
           const { dirname: dirname42 } = await import("path");
           const mcpConfigPath = coordinatorSetup.configPath;
           let mcpServerEnv;
@@ -120256,7 +120307,7 @@ ${ptyResult.output.slice(-2e3)}`);
             }
           };
           try {
-            writeFileSync39(mcpConfigPath, serializeMeshCoordinatorMcpConfig(mcpConfig, configFormat), "utf-8");
+            writeFileSync40(mcpConfigPath, serializeMeshCoordinatorMcpConfig(mcpConfig, configFormat), "utf-8");
           } catch (error) {
             const message = `Could not write MCP config for automatic setup: ${error?.message || error}`;
             LOG.error("MeshCoordinator", message);

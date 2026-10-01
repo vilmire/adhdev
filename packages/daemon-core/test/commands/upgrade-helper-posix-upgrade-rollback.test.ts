@@ -325,3 +325,153 @@ describe('POSIX in-place upgrade — pre-flight gate + rollback', () => {
     expect(leftovers).toEqual([])
   })
 })
+
+// 2026-10-01, Homebrew + nvm Mac: `adhdev update` ran Homebrew's npm, whose
+// `#!/usr/bin/env node` picked nvm's Node 22 off PATH, so better-sqlite3 was
+// installed for Node 22 while the daemon runs on Homebrew's Node 26. `--version`
+// passed, the daemon never booted, and the rollback then failed to restore the
+// relative-symlink bin shims (ERR_FS_CP_EINVAL).
+describe('POSIX in-place upgrade — node ABI and symlinked shims', () => {
+  const runtimeNodeDir = path.dirname(process.execPath)
+
+  it('runs every npm install with the daemon node first on PATH', async () => {
+    const homeDir = makeTempHome()
+    const configDir = path.join(homeDir, '.adhdev')
+    fs.mkdirSync(configDir, { recursive: true })
+    process.env.HOME = homeDir
+    const live = stageLiveInstall(homeDir)
+    mockNpmInstallCrash(live.prefixRoot)
+
+    await runHelper({
+      packageName: 'adhdev',
+      targetVersion: '2.0.0',
+      parentPid: 0,
+      restartArgv: [path.join(live.packageRoot, 'cli.js'), 'daemon'],
+      sessionHostAppName: 'adhdev',
+    }, configDir)
+
+    const installs = mocks.execFileSync.mock.calls.filter(([, args]) => (args as string[]).includes('install'))
+    expect(installs.length).toBeGreaterThanOrEqual(2)
+    for (const [, , options] of installs) {
+      expect(String((options as { env?: NodeJS.ProcessEnv }).env?.PATH).split(':')[0]).toBe(runtimeNodeDir)
+    }
+  })
+
+  it('fails the pre-flight gate when a native addon does not load under the daemon node', async () => {
+    const homeDir = makeTempHome()
+    const configDir = path.join(homeDir, '.adhdev')
+    fs.mkdirSync(configDir, { recursive: true })
+    process.env.HOME = homeDir
+    const live = stageLiveInstall(homeDir)
+    mocks.execFileSync.mockImplementation((file: string, args: readonly string[]) => {
+      const argv = [...args]
+      if (file === process.execPath && argv[0] === '-e') {
+        throw Object.assign(new Error('Command failed'), {
+          status: 1,
+          stderr: 'Error: better_sqlite3.node was compiled against a different Node.js version using NODE_MODULE_VERSION 127\n',
+        })
+      }
+      if (argv.includes('--version')) return '2.0.0\n'
+      if (argv.includes('install')) {
+        simulateNpmInstall(argv[argv.indexOf('--prefix') + 1], '2.0.0')
+        return ''
+      }
+      return ''
+    })
+
+    await runHelper({
+      packageName: 'adhdev',
+      targetVersion: '2.0.0',
+      parentPid: 0,
+      restartArgv: [path.join(live.packageRoot, 'cli.js'), 'daemon'],
+      sessionHostAppName: 'adhdev',
+    }, configDir)
+
+    expect(installedVersion(live.packageRoot)).toBe('1.0.0')
+    const liveInstalls = mocks.execFileSync.mock.calls.filter(([, args]) => {
+      const argv = args as string[]
+      return argv.includes('install') && argv[argv.indexOf('--prefix') + 1] === live.prefixRoot
+    })
+    expect(liveInstalls.length).toBe(0)
+    const log = fs.readFileSync(path.join(configDir, 'daemon-upgrade.log'), 'utf8')
+    expect(log).toMatch(/native module does not load under .*NODE_MODULE_VERSION 127/)
+  })
+
+  it('restores relative-symlink bin shims from the rollback snapshot', async () => {
+    const homeDir = makeTempHome()
+    const configDir = path.join(homeDir, '.adhdev')
+    fs.mkdirSync(configDir, { recursive: true })
+    process.env.HOME = homeDir
+    const live = stageLiveInstall(homeDir)
+    fs.rmSync(live.binShim)
+    fs.symlinkSync('../node_modules/adhdev/cli.js', live.binShim)
+    mockNpmInstallCrash(live.prefixRoot)
+
+    await runHelper({
+      packageName: 'adhdev',
+      targetVersion: '2.0.0',
+      parentPid: 0,
+      restartArgv: [path.join(live.packageRoot, 'cli.js'), 'daemon'],
+      sessionHostAppName: 'adhdev',
+    }, configDir)
+
+    expect(installedVersion(live.packageRoot)).toBe('1.0.0')
+    expect(fs.readlinkSync(live.binShim)).toBe('../node_modules/adhdev/cli.js')
+    expect(fs.realpathSync(live.binShim)).toBe(path.join(live.packageRoot, 'cli.js'))
+    const log = fs.readFileSync(path.join(configDir, 'daemon-upgrade.log'), 'utf8')
+    expect(log).not.toMatch(/Snapshot restore failed/)
+    expect(log).toMatch(/Rollback restored the previous install/)
+  })
+
+  it('keeps the node interpreter the previous install pinned its CLI to (Homebrew)', async () => {
+    const homeDir = makeTempHome()
+    const configDir = path.join(homeDir, '.adhdev')
+    fs.mkdirSync(configDir, { recursive: true })
+    process.env.HOME = homeDir
+    const live = stageLiveInstall(homeDir)
+    const pinned = '#!/opt/homebrew/opt/node/bin/node'
+    fs.writeFileSync(path.join(live.packageRoot, 'cli.js'), `${pinned}\n// cli v1\n`, 'utf8')
+    fs.rmSync(live.binShim)
+    fs.symlinkSync('../node_modules/adhdev/cli.js', live.binShim)
+    mocks.execFileSync.mockImplementation((_file: string, args: readonly string[]) => {
+      const argv = [...args]
+      if (argv.includes('--version')) return '2.0.0\n'
+      if (argv.includes('install')) {
+        const prefix = argv[argv.indexOf('--prefix') + 1]
+        const pkgRoot = path.join(prefix, 'node_modules', 'adhdev')
+        fs.rmSync(pkgRoot, { recursive: true, force: true })
+        fs.mkdirSync(pkgRoot, { recursive: true })
+        fs.writeFileSync(path.join(pkgRoot, 'package.json'), JSON.stringify({ name: 'adhdev', version: '2.0.0' }), 'utf8')
+        fs.writeFileSync(path.join(pkgRoot, 'cli.js'), '#!/usr/bin/env node\n// cli v2\n', 'utf8')
+        fs.mkdirSync(path.join(prefix, 'bin'), { recursive: true })
+        fs.rmSync(path.join(prefix, 'bin', 'adhdev'), { force: true })
+        fs.symlinkSync('../node_modules/adhdev/cli.js', path.join(prefix, 'bin', 'adhdev'))
+        return ''
+      }
+      return ''
+    })
+    const daemon = http.createServer((req, res) => {
+      res.setHeader('content-type', 'application/json')
+      if (req.url === '/health') res.end(JSON.stringify({ ok: true, pid: 2_000_000_002 }))
+      else res.end(JSON.stringify({ ok: true, pid: 2_000_000_002, status: { version: '2.0.0' } }))
+    })
+    await new Promise<void>((resolve) => daemon.listen(0, '127.0.0.1', resolve))
+    const port = (daemon.address() as AddressInfo).port
+    try {
+      await runHelper({
+        packageName: 'adhdev',
+        targetVersion: '2.0.0',
+        parentPid: 0,
+        restartArgv: [path.join(live.packageRoot, 'cli.js'), 'daemon', '-p', String(port)],
+        sessionHostAppName: 'adhdev',
+        healthTimeoutMs: 5_000,
+      }, configDir)
+    } finally {
+      await new Promise<void>((resolve) => daemon.close(() => resolve()))
+    }
+
+    expect(installedVersion(live.packageRoot)).toBe('2.0.0')
+    expect(fs.readFileSync(path.join(live.packageRoot, 'cli.js'), 'utf8')).toBe(`${pinned}\n// cli v2\n`)
+    expect(exitCodes).toEqual([0])
+  })
+})

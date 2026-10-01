@@ -219,14 +219,21 @@ export function buildPinnedGlobalInstallCommand(options: {
  * even though npm/adhdev actually run under a supported node. Pinning the
  * running node's dir to the front of PATH makes lifecycle scripts use the same
  * node as the install itself.
+ *
+ * POSIX needs the same PATH (2026-10-01, Homebrew + nvm Mac): npm's own bin is
+ * `#!/usr/bin/env node`, so running Homebrew's npm from a shell where nvm's
+ * Node 22 is first on PATH ran npm — and better-sqlite3's prebuild download —
+ * on Node 22. The daemon runs on Homebrew's Node 26, so the upgraded install
+ * could not load its native modules and never booted.
  */
 export function buildInstallEnvWithNodeOnPath(baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  // The Node-version guard this works around only fires on Windows, so scope the
-  // PATH rewrite to win32 — POSIX keeps its env untouched.
-  if (process.platform !== 'win32') return { ...baseEnv };
   const nodeBinDir = path.dirname(process.execPath);
   if (!nodeBinDir) return { ...baseEnv };
   const env: NodeJS.ProcessEnv = { ...baseEnv };
+  if (process.platform !== 'win32') {
+    env.PATH = env.PATH ? `${nodeBinDir}:${env.PATH}` : nodeBinDir;
+    return env;
+  }
   // Windows env keys are case-insensitive and conventionally spelled `Path`;
   // prepend to the existing key (whatever its case) to avoid creating a dupe.
   const pathKey = Object.keys(env).find((k) => k.toLowerCase() === 'path') || 'PATH';
