@@ -192,8 +192,43 @@ function smokeTestInstalledBins(prefix: string, packageName: string): void {
       encoding: 'utf8',
       stdio: 'pipe',
       timeout: 30_000,
+      env: buildInstallEnvWithNodeOnPath(),
       ...(process.platform === 'win32' ? { windowsHide: true } : {}),
     });
+  }
+  assertNativeAddonsLoad(prefix, packageName);
+}
+
+/**
+ * `--version` never touches the native addons, so a package whose addons were
+ * built for another Node ABI passes it and then the daemon dies at boot
+ * (2026-10-01: better-sqlite3 for Node 22 under a Node 26 daemon). Load every
+ * compiled addon of the installed package with the node the daemon runs on.
+ */
+function assertNativeAddonsLoad(prefix: string, packageName: string): void {
+  const packageRoot = [path.join(prefix, 'lib', 'node_modules', packageName), path.join(prefix, 'node_modules', packageName)]
+    .find((candidate) => fs.existsSync(path.join(candidate, 'package.json')));
+  if (!packageRoot) return;
+  const script = [
+    "const fs=require('fs'),path=require('path');",
+    'const root=path.join(process.argv[1],"node_modules");',
+    'const pkgs=[];',
+    'for(const n of fs.existsSync(root)?fs.readdirSync(root):[]){',
+    ' if(n.startsWith("@")){for(const m of fs.readdirSync(path.join(root,n)))pkgs.push(path.join(root,n,m));}else pkgs.push(path.join(root,n));}',
+    'for(const p of pkgs){const d=path.join(p,"build","Release");',
+    ' if(!fs.existsSync(d))continue;',
+    ' for(const f of fs.readdirSync(d))if(f.endsWith(".node"))process.dlopen({exports:{}},path.join(d,f));}',
+  ].join('');
+  try {
+    execFileSync(process.execPath, ['-e', script, packageRoot], {
+      encoding: 'utf8',
+      stdio: 'pipe',
+      timeout: 30_000,
+      ...(process.platform === 'win32' ? { windowsHide: true } : {}),
+    });
+  } catch (error: any) {
+    const detail = String(error?.stderr || error?.message || error).trim().split('\n')[0];
+    throw new Error(`a native module does not load under ${process.execPath}: ${detail}`);
   }
 }
 
@@ -226,7 +261,8 @@ function backupPosixInstall(options: {
     for (const name of resolvePosixBinNames(options.packageName)) {
       const shim = path.join(binDir, name);
       if (fs.existsSync(shim)) {
-        fs.cpSync(shim, path.join(backupDir, `bin-${name}`), { recursive: true });
+        // npm's shims are usually relative symlinks; keep the link text as-is.
+        fs.cpSync(shim, path.join(backupDir, `bin-${name}`), { recursive: true, verbatimSymlinks: true });
         binShims.push(shim);
       }
     }
@@ -234,6 +270,32 @@ function backupPosixInstall(options: {
   } catch (error: any) {
     appendUpgradeLog(`Install backup failed (${error?.code || 'error'}): ${error?.message || String(error)} — proceeding without a rollback snapshot`, options.configDir);
     return null;
+  }
+}
+
+/**
+ * Keep the node the previous install pinned its CLI to. Homebrew rewrites the
+ * bin entries to `#!/opt/homebrew/opt/node/bin/node`; npm's in-place install
+ * writes `#!/usr/bin/env node` back, so the CLI would start following whatever
+ * `node` is first on PATH (nvm's Node 22 on 2026-10-01) — a different ABI from
+ * the one the native modules were just installed for.
+ */
+function preservePinnedShebangs(backup: PosixInstallBackup): void {
+  for (const shim of backup.binShims) {
+    try {
+      const entry = fs.realpathSync(shim);
+      const relative = path.relative(backup.packageRoot, entry);
+      if (relative.startsWith('..') || path.isAbsolute(relative)) continue;
+      const previousFirstLine = fs.readFileSync(path.join(backup.backupDir, 'package', relative), 'utf8').split('\n', 1)[0];
+      if (!/^#!\/\S*node$/.test(previousFirstLine)) continue;
+      const current = fs.readFileSync(entry, 'utf8');
+      const currentFirstLine = current.split('\n', 1)[0];
+      if (!currentFirstLine.startsWith('#!') || currentFirstLine === previousFirstLine) continue;
+      fs.writeFileSync(entry, previousFirstLine + current.slice(currentFirstLine.length));
+      appendUpgradeLog(`Kept the pinned interpreter ${previousFirstLine.slice(2)} for ${path.basename(shim)}`);
+    } catch {
+      // A shim we cannot read keeps npm's shebang — the smoke gate still runs it.
+    }
   }
 }
 
@@ -249,7 +311,12 @@ function restorePosixInstall(backup: PosixInstallBackup): void {
   fs.rmSync(backup.packageRoot, { recursive: true, force: true });
   fs.cpSync(snapshotPackage, backup.packageRoot, { recursive: true });
   for (const shim of backup.binShims) {
-    fs.cpSync(path.join(backup.backupDir, `bin-${path.basename(shim)}`), shim, { recursive: true });
+    const saved = path.join(backup.backupDir, `bin-${path.basename(shim)}`);
+    // Copying a symlink onto the live symlink that points at the same file
+    // fails with ERR_FS_CP_EINVAL (2026-10-01, Homebrew prefix), so recreate it.
+    fs.rmSync(shim, { force: true });
+    if (fs.lstatSync(saved).isSymbolicLink()) fs.symlinkSync(fs.readlinkSync(saved), shim);
+    else fs.cpSync(saved, shim, { recursive: true });
   }
 }
 
@@ -605,6 +672,7 @@ async function runPosixInPlaceUpgrade(options: {
     if (installOutput.trim()) {
       appendUpgradeLog(installOutput.trim());
     }
+    if (liveBackup) preservePinnedShebangs(liveBackup);
 
     // Step 4: post-install smoke gate on the LIVE prefix. Catches a swap that
     // diverged from the pre-flight result (e.g. partial write with a zero exit).
