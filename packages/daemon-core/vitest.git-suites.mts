@@ -68,6 +68,8 @@ export const GIT_HEAVY_SUITES: string[] = [
   'test/mesh/mesh-refine-accept-preflight.test.ts',
   'test/mesh/mesh-onboarding-plan.test.ts',
   'test/mesh/preview-freshness.test.ts',
+  // BASE-REF-CONFIG-FALLBACK: real repo + worktree cut before .adhdev/refine.json landed on main.
+  'test/mesh/refine-config-base-ref-fallback.test.ts',
   'test/mesh/submodule-default-branch.test.ts',
   'test/mesh/worktree-bootstrap-stale-running.test.ts',
   'test/mesh/workspace-git-watcher.test.ts',

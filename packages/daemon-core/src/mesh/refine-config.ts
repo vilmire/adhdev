@@ -1,6 +1,9 @@
+import { execFileSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
+import { meshNodeIdMatches } from '@adhdev/mesh-shared';
 import { parseConfigText } from '../config/config-text.js';
+import { gitChildEnv, GIT_LOCAL_TIMEOUT_MS } from '../git/git-locale.js';
 
 export const MESH_REFINE_VALIDATION_CATEGORIES = ['typecheck', 'test', 'lint', 'build'] as const;
 export type MeshRefineValidationCategory = typeof MESH_REFINE_VALIDATION_CATEGORIES[number];
@@ -88,7 +91,39 @@ export interface MeshRefineConfigLoadResult {
     source: string;
     sourceType: 'mesh_policy' | 'repo_file' | 'unavailable' | 'invalid';
     path?: string;
+    /**
+     * BASE-REF-CONFIG-FALLBACK: set when the config was read from the base branch
+     * (`git show <baseRef>:<location>`) because the worktree itself has no config
+     * file — the branch predates the commit that introduced the config.
+     */
+    baseRef?: string;
     error?: string;
+}
+
+/**
+ * BASE-REF-CONFIG-FALLBACK options for {@link loadMeshRefineConfig}.
+ *
+ * ## The failure this closes (live, 2026-10-01)
+ *
+ * A coordinator committed `.adhdev/refine.json` to main AFTER its worktree nodes
+ * were cut. Every worktree branch predated the config, so the loader — which only
+ * looked at the worktree's files — reported `validation_unavailable` for every
+ * node, and finished work could not land without a manual rebase per node.
+ *
+ * ## Trust model
+ *
+ * The worktree's own config still wins when it has one (unchanged: a branch that
+ * registers a new gate in refine.json is how gates are added). The base branch is
+ * consulted ONLY when the worktree has no config file at any location. Base-branch
+ * content is already landed, so this widens nothing a worker can control — and it
+ * also means a branch can no longer switch validation off merely by deleting the
+ * config file that main carries.
+ */
+export interface MeshRefineConfigLoadOptions {
+    /** Refs tried in order (e.g. pinned baseHead, `origin/main`, `main`). Missing refs are skipped. */
+    baseRefs?: string[];
+    /** Directory git runs in for `git show` (defaults to the workspace — a worktree shares the object store). */
+    gitCwd?: string;
 }
 
 export interface MeshRefineValidationPlan {
@@ -358,7 +393,55 @@ export function validateMeshRefineConfig(config: unknown, source = 'inline'): { 
     return { valid: errors.length === 0, errors, bootstrapCommands, commands, rejectedCommands, bootstrapMode, deprecationWarnings };
 }
 
-export function loadMeshRefineConfig(mesh: any, workspace: string): MeshRefineConfigLoadResult {
+function readConfigFromBaseRef(gitCwd: string, ref: string, relative: string): string | undefined {
+    // `--` is not usable with the `<rev>:<path>` form; refuse refs that could be read
+    // as options instead. Refs come from git itself or the mesh record, never a worker.
+    if (!ref || ref.startsWith('-')) return undefined;
+    try {
+        return execFileSync('git', ['show', `${ref}:${relative}`], {
+            cwd: gitCwd,
+            encoding: 'utf8',
+            stdio: ['ignore', 'pipe', 'ignore'],
+            timeout: GIT_LOCAL_TIMEOUT_MS,
+            windowsHide: true,
+            env: gitChildEnv(),
+        });
+    } catch {
+        return undefined; // ref or path absent on that ref
+    }
+}
+
+/**
+ * BASE-REF-CONFIG-FALLBACK: the refs a node's refine config falls back to — the
+ * base branch the Refinery merges into, as `origin/<base>` (what resolve_refs pins)
+ * then the local `<base>` (where a coordinator's unpushed config commit lives).
+ * Synchronous and network-free: plan surfaces call it on every dry-run. Returns []
+ * when the node or its source repo cannot be resolved (loader then behaves as before).
+ */
+export function resolveMeshRefineConfigBaseRefs(mesh: any, node: any): string[] {
+    try {
+        if (!node || !node.isLocalWorktree) return [];
+        const nodes: any[] = Array.isArray(mesh?.nodes) ? mesh.nodes : [];
+        const sourceNode = node.clonedFromNodeId
+            ? nodes.find(n => meshNodeIdMatches(n, node.clonedFromNodeId))
+            : nodes.find(n => !n.isLocalWorktree);
+        const repoRoot = sourceNode?.repoRoot || sourceNode?.workspace;
+        if (typeof repoRoot !== 'string' || !repoRoot || !existsSync(repoRoot)) return [];
+        const baseBranch = execFileSync('git', ['branch', '--show-current'], {
+            cwd: repoRoot,
+            encoding: 'utf8',
+            stdio: ['ignore', 'pipe', 'ignore'],
+            timeout: GIT_LOCAL_TIMEOUT_MS,
+            windowsHide: true,
+            env: gitChildEnv(),
+        }).trim();
+        return baseBranch ? [`origin/${baseBranch}`, baseBranch] : [];
+    } catch {
+        return [];
+    }
+}
+
+export function loadMeshRefineConfig(mesh: any, workspace: string, options?: MeshRefineConfigLoadOptions): MeshRefineConfigLoadResult {
     const policy = mesh?.policy && typeof mesh.policy === 'object' && !Array.isArray(mesh.policy) ? mesh.policy : {};
     const inline = mesh?.refineConfig || (policy as any).refineConfig || (policy as any).refine;
     if (inline !== undefined) {
@@ -377,6 +460,25 @@ export function loadMeshRefineConfig(mesh: any, workspace: string): MeshRefineCo
             return { config: parsed as RepoMeshRefineConfig, source: relative, sourceType: 'repo_file', path: configPath };
         } catch (error: any) {
             return { source: relative, sourceType: 'invalid', path: configPath, error: error?.message || String(error) };
+        }
+    }
+
+    // BASE-REF-CONFIG-FALLBACK: the worktree has no config at all — honor the one the
+    // base branch carries (see MeshRefineConfigLoadOptions for the trust model).
+    const baseRefs = (options?.baseRefs || []).filter((ref): ref is string => typeof ref === 'string' && ref.trim().length > 0);
+    for (const ref of baseRefs) {
+        for (const relative of MESH_REFINE_CONFIG_LOCATIONS) {
+            const text = readConfigFromBaseRef(options?.gitCwd || workspace, ref.trim(), relative);
+            if (text === undefined) continue;
+            const source = `${ref.trim()}:${relative}`;
+            try {
+                const parsed = parseConfigText(relative, text);
+                const validation = validateMeshRefineConfig(parsed, source);
+                if (!validation.valid) return { source, sourceType: 'invalid', baseRef: ref.trim(), error: String(validation.rejectedCommands[0]?.reason || validation.errors.join('; ')) };
+                return { config: parsed as RepoMeshRefineConfig, source, sourceType: 'repo_file', baseRef: ref.trim() };
+            } catch (error: any) {
+                return { source, sourceType: 'invalid', baseRef: ref.trim(), error: error?.message || String(error) };
+            }
         }
     }
 
@@ -437,8 +539,8 @@ export function suggestMeshRefineConfig(mesh: any, workspace: string): { suggest
     };
 }
 
-export function resolveMeshRefineValidationPlan(mesh: any, workspace: string): MeshRefineValidationPlan {
-    const loaded = loadMeshRefineConfig(mesh, workspace);
+export function resolveMeshRefineValidationPlan(mesh: any, workspace: string, options?: MeshRefineConfigLoadOptions): MeshRefineValidationPlan {
+    const loaded = loadMeshRefineConfig(mesh, workspace, options);
     const suggestion = suggestMeshRefineConfig(mesh, workspace);
     if (!loaded.config) {
         return {

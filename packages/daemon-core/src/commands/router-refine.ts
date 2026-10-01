@@ -178,6 +178,10 @@ export async function refineValidationStage(self: DaemonCommandRouter, ctx: Refi
                 // (a) Scope the validation command set by coarse change-impact (resolved
                 // in resolve_refs). Undefined → gate runs the full command set (fail-open).
                 changeImpact: ctx.changeImpact,
+                // BASE-REF-CONFIG-FALLBACK: a worktree cut before .adhdev/refine.json landed on
+                // base (and whose rebase was skipped, e.g. already-merged / submodule paths)
+                // still validates with the base branch's config instead of validation_unavailable.
+                configBaseRefs: [ctx.baseHead, ctx.baseBranch ? `origin/${ctx.baseBranch}` : '', ctx.baseBranch].filter(Boolean),
                 // M2-2: consume the node's persisted bootstrap state; persist re-runs.
                 persistedBootstrapState: (node as any).worktreeBootstrap as WorktreeBootstrapState | undefined,
                 onBootstrapStateChange: (state) => {

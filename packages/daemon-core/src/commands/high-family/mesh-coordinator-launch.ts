@@ -801,6 +801,21 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                     }
                     if (cliType === 'claude-cli') {
                         cliArgs.push('--mcp-config', coordinatorSetup.configPath);
+                        // COORD-MCP-ALLOW: pre-allow the coordinator's OWN control-plane
+                        // server (mcp__<serverName> = every tool of that one server) so
+                        // each mesh_* call does not park on Claude Code's per-tool
+                        // "Tool use" prompt. Without this, daemon PTY auto-approve is
+                        // the only thing that clears those prompts, and it is
+                        // deliberately suppressed while the operator attends the
+                        // coordinator (manual-attendance.ts) — so a watched coordinator
+                        // needed a manual approve for every mesh tool call. Scope is
+                        // exactly this server: shell/file-write permissions are left to
+                        // the selected auto-approve mode. `=` form keeps commander from
+                        // treating the variadic flag as swallowing later args.
+                        const serverName = coordinatorSetup.serverName;
+                        if (typeof serverName === 'string' && /^[A-Za-z0-9_-]+$/.test(serverName)) {
+                            cliArgs.push(`--allowedTools=mcp__${serverName}`);
+                        }
                     }
 
                     // 3. Launch CLI session via existing cliManager.

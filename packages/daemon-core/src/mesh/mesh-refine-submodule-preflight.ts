@@ -52,6 +52,7 @@ import type { MeshRefineBatchOrderingResult } from './mesh-refine-batch.js';
 // Type-only (erased at compile time — same no-cycle discipline mesh-refine-gates.ts uses).
 import type { CommandRouterResult } from '../commands/router.js';
 import { buildMeshRefineValidationPlan } from './mesh-refine-gates.js';
+import { resolveMeshRefineConfigBaseRefs } from './refine-config.js';
 import { resolveSubmoduleDefaultBranch } from './worktree-bootstrap-config.js';
 
 const execFileAsync = promisify(execFile);
@@ -317,7 +318,7 @@ export async function buildMeshRefineBatchDryRunResult(args: {
         plan: orderedNodes.map(node => ({
             nodeId: node.id,
             workspace: node.workspace,
-            validationPlan: buildMeshRefineValidationPlan(mesh, node.workspace),
+            validationPlan: buildMeshRefineValidationPlan(mesh, node.workspace, { baseRefs: resolveMeshRefineConfigBaseRefs(mesh, node) }),
             mergeWillRun: false,
         })),
         ...(warnings.length ? { submodulePreflightWarnings: warnings } : {}),

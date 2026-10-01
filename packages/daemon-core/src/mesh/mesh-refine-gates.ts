@@ -18,7 +18,7 @@
 
 import type { ChangedPackageClassification } from '../git/git-status.js';
 import { loadMeshRefineConfig, resolveMeshRefineValidationPlan } from '../mesh/refine-config.js';
-import type { MeshRefineValidationCommandPlan, MeshRefineValidationScope } from '../mesh/refine-config.js';
+import type { MeshRefineConfigLoadOptions, MeshRefineValidationCommandPlan, MeshRefineValidationScope } from '../mesh/refine-config.js';
 import { evaluateWorktreeBootstrapState, loadMeshWorktreeBootstrapConfig, runMeshWorktreeBootstrap } from '../mesh/worktree-bootstrap-config.js';
 import type { WorktreeBootstrapState } from '../mesh/worktree-bootstrap-config.js';
 import { basename as pathBasename, join as pathJoin, resolve as pathResolve } from 'path';
@@ -497,8 +497,10 @@ export function resolveRefineryAutoPublishSubmoduleMainCommits(mesh: any, worksp
     return { enabled: false };
 }
 
-export function buildMeshRefineValidationPlan(mesh: any, workspace: string): Record<string, unknown> {
-    const plan = resolveMeshRefineValidationPlan(mesh, workspace);
+export function buildMeshRefineValidationPlan(mesh: any, workspace: string, configOptions?: MeshRefineConfigLoadOptions): Record<string, unknown> {
+    // BASE-REF-CONFIG-FALLBACK: plan surfaces pass the node's base refs so a worktree cut
+    // before the config landed on base previews the plan execute will actually run.
+    const plan = resolveMeshRefineValidationPlan(mesh, workspace, configOptions);
     const mapCommand = (command: MeshRefineValidationCommandPlan) => ({
         displayCommand: command.displayCommand,
         category: command.category,
@@ -609,6 +611,12 @@ interface MeshRefineValidationGateOptions {
      * fail-open to full validation on any uncertainty.
      */
     changeImpact?: ChangedPackageClassification;
+    /**
+     * BASE-REF-CONFIG-FALLBACK: base refs (pinned baseHead, then the base branch) the
+     * refine config is read from when the worktree itself has no config file. The
+     * worktree's own config still wins when present.
+     */
+    configBaseRefs?: string[];
     /**
      * ★B1 SLOW-GATE PROGRESS. Called after each validation command completes, with
      * its display name and wall-clock duration. The CALLER decides what is worth
@@ -949,7 +957,7 @@ export async function runMeshRefineValidationGate(
     const { execFile } = await import('node:child_process');
     const { promisify } = await import('node:util');
     const execFileAsync = promisify(execFile) as unknown as RefineGateExecFile;
-    const selection = resolveMeshRefineValidationPlan(mesh, workspace);
+    const selection = resolveMeshRefineValidationPlan(mesh, workspace, opts?.configBaseRefs?.length ? { baseRefs: opts.configBaseRefs } : undefined);
     const summary: MeshRefineValidationSummary = {
         status: 'skipped',
         required: true,
