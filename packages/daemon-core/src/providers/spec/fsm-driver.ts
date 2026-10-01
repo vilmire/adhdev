@@ -433,8 +433,9 @@ export class FsmDriver implements ISpecDriver {
         // verdict the engine never computed — which is precisely how the 4-minute
         // late `waiting_approval` stayed un-diagnosed: the debug surface agreed
         // with the (wrong) viewport-only reading and nothing contradicted it.
-        const guard = this.guardFrame(this.adapter.snapshot(), viewportCursor);
-        const ev = this.evalFsmNow(guard.screen, guard.cursor, now);
+        const viewportScreen = this.adapter.snapshot();
+        const guard = this.guardFrame(viewportScreen, viewportCursor);
+        const ev = this.evalFsmNow(guard, viewportScreen, guard.cursor, now);
         const state = stateById(this.spec, this.currentStateId);
         return {
             currentState: this.currentStateId,
@@ -595,9 +596,10 @@ export class FsmDriver implements ISpecDriver {
         return buildGuardFrame(viewportScreen, cursor, () => this.scrollbackLines());
     }
 
-    private evalFsmNow(screen: string, cursor: { row: number; col: number }, now: number) {
+    private evalFsmNow(guard: { screen: string; lines: string[] }, viewportScreen: string, cursor: { row: number; col: number }, now: number) {
         const prev = this.prevScreenLines.length > 0 ? this.prevScreenLines : undefined;
-        return evaluateFsm(this.spec, this.currentStateId, screen, cursor, prev, this.buildClock(now), this.signalObservation);
+        const viewportStartRow = guard.lines.length - viewportScreen.split('\n').length;
+        return evaluateFsm(this.spec, this.currentStateId, guard.screen, cursor, prev, this.buildClock(now), this.signalObservation, viewportStartRow);
     }
 
     /**
@@ -658,7 +660,7 @@ export class FsmDriver implements ISpecDriver {
             stableVerdictCache: this.stableVerdictCache,
         }, currentLines, cursor, now);
 
-        const ev = this.evalFsmNow(guard.screen, cursor, now);
+        const ev = this.evalFsmNow(guard, screen, cursor, now);
         this.lastFsmEval = ev;
         this.prevScreenLines = currentLines;
         this.logShadowDivergence(ev);

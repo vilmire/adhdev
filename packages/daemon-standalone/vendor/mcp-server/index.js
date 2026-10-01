@@ -78627,22 +78627,33 @@ ${cleanBody}`;
       }
       return { value: cond.result, unknown: false };
     }
-    function evalCond(cond, sections, fullScreen, cursor, prevLines, clock, legacyTrace, stateId, signalSnapshot) {
+    function evalCond(cond, sections, fullScreen, cursor, prevLines, clock, legacyTrace, stateId, signalSnapshot, absence) {
       if (isAll(cond)) {
-        const children = cond.all.map((c) => evalCond(c, sections, fullScreen, cursor, prevLines, clock, legacyTrace, stateId, signalSnapshot));
+        const children = cond.all.map((c) => evalCond(c, sections, fullScreen, cursor, prevLines, clock, legacyTrace, stateId, signalSnapshot, absence));
         const result = children.every((c) => c.result);
         const remainingMs = result ? 0 : Math.max(0, ...children.filter((c) => !c.result).map((c) => c.remainingMs ?? 0));
         return { kind: "all", result, detail: `all(${children.length})`, remainingMs, children };
       }
       if (isAny(cond)) {
-        const children = cond.any.map((c) => evalCond(c, sections, fullScreen, cursor, prevLines, clock, legacyTrace, stateId, signalSnapshot));
+        const children = cond.any.map((c) => evalCond(c, sections, fullScreen, cursor, prevLines, clock, legacyTrace, stateId, signalSnapshot, absence));
         const result = children.some((c) => c.result);
         const pending = children.filter((c) => !c.result).map((c) => c.remainingMs ?? Infinity);
         const remainingMs = result ? 0 : pending.length ? Math.min(...pending) : 0;
         return { kind: "any", result, detail: `any(${children.length})`, remainingMs: Number.isFinite(remainingMs) ? remainingMs : 0, children };
       }
       if (isNot(cond)) {
-        const child = evalCond(cond.not, sections, fullScreen, cursor, prevLines, clock, legacyTrace, stateId, signalSnapshot);
+        const child = evalCond(
+          cond.not,
+          sections,
+          fullScreen,
+          cursor,
+          prevLines,
+          clock,
+          legacyTrace,
+          stateId,
+          signalSnapshot,
+          absence ? { ...absence, inNot: !absence.inNot } : void 0
+        );
         return { kind: "not", result: !child.result, detail: `not`, remainingMs: 0, children: [child] };
       }
       if (isSignal(cond)) {
@@ -78676,13 +78687,14 @@ ${cleanBody}`;
         return { kind: "stable", result, detail: `stable ${where}${ign} ${stableFor}ms / ${cond.stable_ms}ms`, remainingMs };
       }
       if (isRegex(cond) || isChanged(cond)) {
-        const result = evaluateCondition(cond, sections, fullScreen, cursor, prevLines, legacyTrace, stateId);
+        const hayScreen = absence?.inNot && isRegex(cond) && !cond.section ? absence.viewportScreen : fullScreen;
+        const result = evaluateCondition(cond, sections, hayScreen, cursor, prevLines, legacyTrace, stateId);
         const kind = isRegex(cond) ? "regex" : "changed";
         const detail = isRegex(cond) ? `${cond.section ?? "*"}~/${cond.matches}/` : `cursor_above=${cond.cursor_above} changed=${cond.changed}`;
         let matchedText;
         if (result && isRegex(cond)) {
           try {
-            const hay = sectionText(sections, cond.section, fullScreen);
+            const hay = sectionText(sections, cond.section, hayScreen);
             const re = new RegExp(cond.matches, cond.flags ?? "i");
             const m = re.exec(hay);
             if (m && m[0]) matchedText = m[0].replace(/\s+/g, " ").trim().slice(0, 160);
@@ -78697,10 +78709,11 @@ ${cleanBody}`;
       const from = Array.isArray(t.from) ? t.from.join("|") : t.from;
       return t.label ?? `${from}\u2192${t.to}`;
     }
-    function evaluateFsm(spec, currentStateId, screenText, cursor, prevLines, clock, signalSnapshot) {
+    function evaluateFsm(spec, currentStateId, screenText, cursor, prevLines, clock, signalSnapshot, viewportStartRow) {
       const legacyTrace = [];
       const lines = screenText.split("\n").map((l) => l.endsWith("\r") ? l.slice(0, -1) : l);
       const cleanScreen = lines.join("\n");
+      const absence = viewportStartRow && viewportStartRow > 0 ? { viewportScreen: lines.slice(viewportStartRow).join("\n"), inNot: false } : void 0;
       const sections = resolveSections(spec.sections ?? {}, lines);
       const outgoing = outgoingTransitions(spec, currentStateId);
       const transitions = [];
@@ -78713,7 +78726,7 @@ ${cleanBody}`;
         let cond;
         let condResult = true;
         if (t.when) {
-          cond = evalCond(t.when, sections, cleanScreen, cursor, prevLines, clock, legacyTrace, `${currentStateId}\u2192${t.to}`, signalSnapshot);
+          cond = evalCond(t.when, sections, cleanScreen, cursor, prevLines, clock, legacyTrace, `${currentStateId}\u2192${t.to}`, signalSnapshot, absence);
           condResult = cond.result;
         }
         const fires = holdSatisfied && condResult;
@@ -128102,8 +128115,9 @@ trust_level = "trusted"
       getFsmDebug() {
         const now = Date.now();
         const viewportCursor = this.adapter.getCursorPosition();
-        const guard2 = this.guardFrame(this.adapter.snapshot(), viewportCursor);
-        const ev = this.evalFsmNow(guard2.screen, guard2.cursor, now);
+        const viewportScreen = this.adapter.snapshot();
+        const guard2 = this.guardFrame(viewportScreen, viewportCursor);
+        const ev = this.evalFsmNow(guard2, viewportScreen, guard2.cursor, now);
         const state = stateById(this.spec, this.currentStateId);
         return {
           currentState: this.currentStateId,
@@ -128241,9 +128255,10 @@ trust_level = "trusted"
       guardFrame(viewportScreen, cursor) {
         return buildGuardFrame(viewportScreen, cursor, () => this.scrollbackLines());
       }
-      evalFsmNow(screen, cursor, now) {
+      evalFsmNow(guard2, viewportScreen, cursor, now) {
         const prev = this.prevScreenLines.length > 0 ? this.prevScreenLines : void 0;
-        return evaluateFsm(this.spec, this.currentStateId, screen, cursor, prev, this.buildClock(now), this.signalObservation);
+        const viewportStartRow = guard2.lines.length - viewportScreen.split("\n").length;
+        return evaluateFsm(this.spec, this.currentStateId, guard2.screen, cursor, prev, this.buildClock(now), this.signalObservation, viewportStartRow);
       }
       /**
        * TX-FSM Stage 0 (shadow): compare each signal-guarded transition's
@@ -128290,7 +128305,7 @@ trust_level = "trusted"
           regionLastChangedAt: this.regionLastChangedAt,
           stableVerdictCache: this.stableVerdictCache
         }, currentLines, cursor, now);
-        const ev = this.evalFsmNow(guard2.screen, cursor, now);
+        const ev = this.evalFsmNow(guard2, screen, cursor, now);
         this.lastFsmEval = ev;
         this.prevScreenLines = currentLines;
         this.logShadowDivergence(ev);
