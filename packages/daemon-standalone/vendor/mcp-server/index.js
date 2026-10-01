@@ -119783,6 +119783,7 @@ ${marker}`,
     var import_path25 = require("path");
     var fs72 = __toESM2(require("fs"));
     init_logger();
+    init_config();
     init_mesh_host_ownership();
     init_coordinator_registry();
     init_runtime_surface();
@@ -120257,7 +120258,7 @@ ${ptyResult.output.slice(-2e3)}`);
               workspace
             };
           }
-          const { existsSync: existsSync95, readFileSync: readFileSync76, writeFileSync: writeFileSync40, copyFileSync: copyFileSync3, mkdirSync: mkdirSync49 } = await import("fs");
+          const { existsSync: existsSync95, readFileSync: readFileSync76, writeFileSync: writeFileSync40, mkdirSync: mkdirSync49 } = await import("fs");
           const { dirname: dirname42 } = await import("path");
           const mcpConfigPath = coordinatorSetup.configPath;
           let mcpServerEnv;
@@ -120283,11 +120284,12 @@ ${ptyResult.output.slice(-2e3)}`);
           }
           const hadExistingMcpConfig = existsSync95(mcpConfigPath);
           let existingMcpConfig = {};
+          let existingMcpConfigText = "";
           if (hadExistingMcpConfig) {
             try {
-              const parsedExistingMcpConfig = parseMeshCoordinatorMcpConfig(readFileSync76(mcpConfigPath, "utf-8"), configFormat);
+              existingMcpConfigText = readFileSync76(mcpConfigPath, "utf-8");
+              const parsedExistingMcpConfig = parseMeshCoordinatorMcpConfig(existingMcpConfigText, configFormat);
               existingMcpConfig = { ...existingMcpConfig, ...parsedExistingMcpConfig };
-              copyFileSync3(mcpConfigPath, mcpConfigPath + ".backup");
             } catch (error) {
               LOG.error("MeshCoordinator", `Failed to parse existing MCP config ${mcpConfigPath}: ${error?.message || error}`);
               return {
@@ -120307,7 +120309,16 @@ ${ptyResult.output.slice(-2e3)}`);
             }
           };
           try {
-            writeFileSync40(mcpConfigPath, serializeMeshCoordinatorMcpConfig(mcpConfig, configFormat), "utf-8");
+            const nextMcpConfigText = serializeMeshCoordinatorMcpConfig(mcpConfig, configFormat);
+            if (nextMcpConfigText !== existingMcpConfigText) {
+              if (hadExistingMcpConfig) {
+                const backupDir = (0, import_path25.join)(getConfigDir(), "mcp-config-backups");
+                mkdirSync49(backupDir, { recursive: true });
+                const backupName = `${mcpConfigPath.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+/, "")}.${Date.now()}`;
+                writeFileSync40((0, import_path25.join)(backupDir, backupName), existingMcpConfigText, "utf-8");
+              }
+              writeFileSync40(mcpConfigPath, nextMcpConfigText, "utf-8");
+            }
           } catch (error) {
             const message = `Could not write MCP config for automatic setup: ${error?.message || error}`;
             LOG.error("MeshCoordinator", message);

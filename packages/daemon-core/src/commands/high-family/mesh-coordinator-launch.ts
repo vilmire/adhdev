@@ -12,6 +12,7 @@
 import { join as pathJoin, resolve as pathResolve, sep as pathSep } from 'path';
 import * as fs from 'fs';
 import { LOG } from '../../logging/logger.js';
+import { getConfigDir } from '../../config/config.js';
 import { resolveMeshHostStatus, buildMeshHostRequiredFailure } from '../../mesh/mesh-host-ownership.js';
 import { registerMeshCoordinator } from '../../mesh/coordinator-registry.js';
 import { partitionSessionHostRecords } from '../../session-host/runtime-surface.js';
@@ -709,7 +710,7 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                     }
 
                     // 1. Write provider-declared MCP config for CLIs that auto-import it.
-                    const { existsSync, readFileSync, writeFileSync, copyFileSync, mkdirSync } = await import('fs');
+                    const { existsSync, readFileSync, writeFileSync, mkdirSync } = await import('fs');
                     const { dirname } = await import('path');
                     const mcpConfigPath = coordinatorSetup.configPath;
                     // Merge ADHDev mesh server into existing config.
@@ -741,14 +742,14 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                         return { success: false, code: 'mesh_coordinator_config_write_failed', error: message, meshId, cliType, workspace };
                     }
 
-                    // Backup existing MCP config if present.
                     const hadExistingMcpConfig = existsSync(mcpConfigPath);
                     let existingMcpConfig: Record<string, any> = {};
+                    let existingMcpConfigText = '';
                     if (hadExistingMcpConfig) {
                         try {
-                            const parsedExistingMcpConfig = parseMeshCoordinatorMcpConfig(readFileSync(mcpConfigPath, 'utf-8'), configFormat);
+                            existingMcpConfigText = readFileSync(mcpConfigPath, 'utf-8');
+                            const parsedExistingMcpConfig = parseMeshCoordinatorMcpConfig(existingMcpConfigText, configFormat);
                             existingMcpConfig = { ...existingMcpConfig, ...parsedExistingMcpConfig };
-                            copyFileSync(mcpConfigPath, mcpConfigPath + '.backup');
                         } catch (error: any) {
                             LOG.error('MeshCoordinator', `Failed to parse existing MCP config ${mcpConfigPath}: ${error?.message || error}`);
                             return {
@@ -769,7 +770,20 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                         },
                     };
                     try {
-                        writeFileSync(mcpConfigPath, serializeMeshCoordinatorMcpConfig(mcpConfig, configFormat), 'utf-8');
+                        const nextMcpConfigText = serializeMeshCoordinatorMcpConfig(mcpConfig, configFormat);
+                        if (nextMcpConfigText !== existingMcpConfigText) {
+                            // The backup of a config we are about to change goes to the
+                            // daemon's config dir, never next to it: a `.mcp.json.backup`
+                            // left in the workspace (2026-10-01, every coordinator
+                            // relaunch) made the repo dirty and blocked mesh convergence.
+                            if (hadExistingMcpConfig) {
+                                const backupDir = pathJoin(getConfigDir(), 'mcp-config-backups');
+                                mkdirSync(backupDir, { recursive: true });
+                                const backupName = `${mcpConfigPath.replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+/, '')}.${Date.now()}`;
+                                writeFileSync(pathJoin(backupDir, backupName), existingMcpConfigText, 'utf-8');
+                            }
+                            writeFileSync(mcpConfigPath, nextMcpConfigText, 'utf-8');
+                        }
                     } catch (error: any) {
                         const message = `Could not write MCP config for automatic setup: ${error?.message || error}`;
                         LOG.error('MeshCoordinator', message);
