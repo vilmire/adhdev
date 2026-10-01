@@ -81022,7 +81022,7 @@ ${tail}`;
       if (excludePaths.length > 0) {
         diffArgs.push("--", ".", ...excludePaths.map((path88) => `:(exclude)${path88}`));
       }
-      const { mkdtempSync: mkdtempSync3, rmSync: rmSync14, openSync: openSync14, closeSync: closeSync14 } = await import("fs");
+      const { mkdtempSync: mkdtempSync3, rmSync: rmSync15, openSync: openSync14, closeSync: closeSync14 } = await import("fs");
       const { tmpdir: tmpdir8 } = await import("os");
       const { join: join98 } = await import("path");
       const scratch = mkdtempSync3(join98(tmpdir8(), "adhdev-patchid-"));
@@ -81065,7 +81065,7 @@ ${tail}`;
         }
         return (patchIdRun.stdout || "").trim().split(/\s+/)[0] || "";
       } finally {
-        rmSync14(scratch, { recursive: true, force: true });
+        rmSync15(scratch, { recursive: true, force: true });
       }
     }
     async function runMeshRefinePatchEquivalenceGate(repoRoot, baseHead, branchHead) {
@@ -106799,13 +106799,56 @@ ${output}` : "";
        */
       async maybeFirstSyncVerifiedChannel() {
         if (!this.store) return null;
-        if (this.countVerifiedChannelPointers() > 0) return null;
+        if (this.countVerifiedChannelPointers() > 0) {
+          if (this.bootstrapMarkerExists("complete")) return null;
+          if (!this.bootstrapMarkerExists("pending") && this.hasActiveCliPointer()) return null;
+          return this.runBootstrapSync();
+        }
         if (this.host.hasUpstream()) return this.syncVerifiedChannel();
         try {
           fs50.mkdirSync(this.host.defaultProvidersDir, { recursive: true });
         } catch {
         }
-        return this.syncVerifiedChannel({ bootstrapAll: true });
+        return this.runBootstrapSync();
+      }
+      /**
+       * Whole-channel bootstrap; stamps completion only when no entry failed. An
+       * entry whose artifact the provider repo no longer ships
+       * (ENTRY_ARTIFACT_NOT_FOUND — a provider removed from the repo while its old
+       * registry row remains) can never succeed and does not hold the stamp back.
+       */
+      async runBootstrapSync() {
+        const report = await this.syncVerifiedChannel({ bootstrapAll: true });
+        const blocking = report.errors.filter((e) => e.code !== "ENTRY_ARTIFACT_NOT_FOUND");
+        const clean2 = report.status !== "error" && blocking.length === 0;
+        this.writeBootstrapMarker(clean2 ? "complete" : "pending");
+        return report;
+      }
+      /** Per-channel file names, so a preview and a stable instance never read each other's marker. */
+      bootstrapMarkerPath(kind) {
+        return path53.join(this.host.defaultProvidersDir, `.channel-bootstrap-${kind}.${this.channel}.json`);
+      }
+      bootstrapMarkerExists(kind) {
+        return fs50.existsSync(this.bootstrapMarkerPath(kind));
+      }
+      /** Exactly one of the two markers exists after a bootstrap pass. Best-effort: a missing marker only means one more pass. */
+      writeBootstrapMarker(kind) {
+        try {
+          fs50.mkdirSync(this.host.defaultProvidersDir, { recursive: true });
+          fs50.writeFileSync(this.bootstrapMarkerPath(kind), JSON.stringify({ channel: this.channel, at: (/* @__PURE__ */ new Date()).toISOString() }) + "\n", "utf-8");
+          fs50.rmSync(this.bootstrapMarkerPath(kind === "complete" ? "pending" : "complete"), { force: true });
+        } catch {
+        }
+      }
+      hasActiveCliPointer() {
+        if (!this.store) return false;
+        try {
+          for (const pointer of this.store.listPointers(this.channel).pointers.values()) {
+            if (pointer.active.category === "cli") return true;
+          }
+        } catch {
+        }
+        return false;
       }
       /** Stamp path recording which daemon version last ran a successful verified sync. */
       channelActivationStampPath() {
@@ -117813,7 +117856,7 @@ ${marker}`,
             normalizeRepoMeshDeclarativeConfig: normalizeRepoMeshDeclarativeConfig2,
             MESH_JSON_CONFIG_LOCATIONS: MESH_JSON_CONFIG_LOCATIONS2
           } = await Promise.resolve().then(() => (init_mesh_json_config(), mesh_json_config_exports));
-          const { existsSync: existsSync94, readFileSync: readFileSync76, mkdirSync: mkdirSync49, writeFileSync: writeFileSync39 } = await import("fs");
+          const { existsSync: existsSync95, readFileSync: readFileSync76, mkdirSync: mkdirSync49, writeFileSync: writeFileSync39 } = await import("fs");
           const { dirname: dirname42, join: join98 } = await import("path");
           const yaml2 = await Promise.resolve().then(() => (init_js_yaml(), js_yaml_exports));
           const relativePath = MESH_JSON_CONFIG_LOCATIONS2[0];
@@ -117822,7 +117865,7 @@ ${marker}`,
           let existedAsYaml = false;
           for (const relative8 of MESH_JSON_CONFIG_LOCATIONS2) {
             const candidate = join98(workspace, relative8);
-            if (!existsSync94(candidate)) continue;
+            if (!existsSync95(candidate)) continue;
             try {
               const text = readFileSync76(candidate, "utf-8");
               const parsed = /\.json$/i.test(candidate) ? JSON.parse(text) : yaml2.load(text);
@@ -120095,7 +120138,7 @@ ${ptyResult.output.slice(-2e3)}`);
               workspace
             };
           }
-          const { existsSync: existsSync94, readFileSync: readFileSync76, writeFileSync: writeFileSync39, copyFileSync: copyFileSync3, mkdirSync: mkdirSync49 } = await import("fs");
+          const { existsSync: existsSync95, readFileSync: readFileSync76, writeFileSync: writeFileSync39, copyFileSync: copyFileSync3, mkdirSync: mkdirSync49 } = await import("fs");
           const { dirname: dirname42 } = await import("path");
           const mcpConfigPath = coordinatorSetup.configPath;
           let mcpServerEnv;
@@ -120119,7 +120162,7 @@ ${ptyResult.output.slice(-2e3)}`);
             LOG.error("MeshCoordinator", message);
             return { success: false, code: "mesh_coordinator_config_write_failed", error: message, meshId, cliType, workspace };
           }
-          const hadExistingMcpConfig = existsSync94(mcpConfigPath);
+          const hadExistingMcpConfig = existsSync95(mcpConfigPath);
           let existingMcpConfig = {};
           if (hadExistingMcpConfig) {
             try {
@@ -120935,7 +120978,7 @@ ${ptyResult.output.slice(-2e3)}`);
           const { deriveMeshReviewInboxItems: deriveMeshReviewInboxItems2 } = await Promise.resolve().then(() => (init_mesh_review_inbox(), mesh_review_inbox_exports));
           const { readLocalRecords: readLocalRecords2 } = await Promise.resolve().then(() => (init_mesh_local_records(), mesh_local_records_exports));
           const { getGitDiffSummary: getGitDiffSummary2 } = await Promise.resolve().then(() => (init_git_diff(), git_diff_exports));
-          const { existsSync: existsSync94 } = await import("fs");
+          const { existsSync: existsSync95 } = await import("fs");
           const meshRecord2 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
           const mesh = meshRecord2?.mesh;
           if (!mesh) return { success: false, error: "Mesh not found" };
@@ -120954,7 +120997,7 @@ ${ptyResult.output.slice(-2e3)}`);
           const derivation = deriveMeshReviewInboxItems2({ nodes: nodeStatuses, ledgerEntries });
           for (const item of derivation.items) {
             const workspace = item.workspace;
-            if (!workspace || !existsSync94(workspace)) continue;
+            if (!workspace || !existsSync95(workspace)) continue;
             const baseRef = item.defaultBranch ? `origin/${item.defaultBranch}` : "origin/main";
             try {
               const diffResult = await getGitDiffSummary2(workspace, { baseRef, maxFiles: 100 });
