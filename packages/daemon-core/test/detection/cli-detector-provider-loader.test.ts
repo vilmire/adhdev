@@ -46,3 +46,29 @@ describe('detectCLIs providerLoader wiring', () => {
         expect(result.every((c) => c.installed === false)).toBe(true);
     });
 });
+
+describe('detectCLI includeDisabled', () => {
+    // A fresh machine has nothing enabled, and the gated detection list is then
+    // empty — `adhdev provider detect claude-cli` said "not installed" with
+    // Claude Code on PATH (2026-10-01). The option must reach the loader.
+    function gatedLoader(seen: Array<boolean | undefined>): ProviderLoader {
+        return {
+            resolveAlias: (t: string) => t,
+            getCliDetectionList(options?: { includeDisabled?: boolean }) {
+                seen.push(options?.includeDisabled);
+                if (!options?.includeDisabled) return [];
+                return [{ id: 'sh-cli', displayName: 'sh', icon: '🔧', command: 'sh', category: 'cli' as const, enabled: false }];
+            },
+        } as unknown as ProviderLoader;
+    }
+
+    it('finds a not-yet-enabled provider only when includeDisabled is passed', async () => {
+        const seen: Array<boolean | undefined> = [];
+        const { detectCLI } = await import('../../src/detection/cli-detector.js');
+        expect(await detectCLI('sh-cli', gatedLoader(seen), { includeVersion: false })).toBeNull();
+        const found = await detectCLI('sh-cli', gatedLoader(seen), { includeVersion: false, includeDisabled: true });
+        expect(found?.installed).toBe(true);
+        expect(seen[0]).toBeUndefined();
+        expect(seen[seen.length - 1]).toBe(true);
+    });
+});

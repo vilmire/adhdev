@@ -195,12 +195,12 @@ export async function detectCLIs(
 export async function detectCLI(
     cliId: string,
     providerLoader?: ProviderLoader,
-    options?: { includeVersion?: boolean },
+    options?: { includeVersion?: boolean; includeDisabled?: boolean },
 ): Promise<CLIInfo | null> {
     const resolvedId = providerLoader ? providerLoader.resolveAlias(cliId) : cliId;
 
     if (providerLoader) {
-        const cliList = providerLoader.getCliDetectionList();
+        const cliList = providerLoader.getCliDetectionList({ includeDisabled: options?.includeDisabled });
         const target = cliList.find((c) => c.id === resolvedId);
         if (target) {
             const platform = os.platform();
