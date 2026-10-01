@@ -10,7 +10,8 @@
 import { LOG, installGlobalInterceptor } from '../../logging/logger.js';
 import { loadConfig } from '../../config/config.js';
 import { applyDaemonEnvOverrides } from '../../config/env-overrides.js';
-import { readUpgradeFailureNotice } from '../../commands/upgrade-failure-notice.js';
+import { clearUpgradeFailureNotice, readUpgradeFailureNotice } from '../../commands/upgrade-failure-notice.js';
+import { compareVersions } from '../../providers/provider-loader-support.js';
 import { installProviderProcessShim } from '../../providers/sdk/v1/sandbox/require-whitelist.js';
 import { applyProcessHardening } from '../process-hardening.js';
 import type { DaemonBootConfig } from '../daemon-components.js';
@@ -33,6 +34,14 @@ export function describeUpgradeFailureNotice(notice: UpgradeFailureNotice, statu
         ? ` This notice targets a DIFFERENT version than the one now running (v${running}) — it is most likely a stale record of an earlier attempt, not a report about this boot.`
         : '';
     return `Previous daemon upgrade FAILED and was rolled back — this daemon is running the previous version. Notice (${age}${target}) at ${notice.noticePath}:\n${notice.notice}${supersededHint}`;
+}
+
+/** True when the version now running is the notice's failed target or newer. */
+export function upgradeFailureResolvedBy(notice: UpgradeFailureNotice, statusVersion: string | undefined): boolean {
+    const target = (notice.targetVersion || '').trim().replace(/^v/, '');
+    const running = (statusVersion || '').trim().replace(/^v/, '');
+    if (!target || !running) return false;
+    return running === target || compareVersions(running, target) > 0;
 }
 
 export async function bootPlatform(cfg: DaemonBootConfig): Promise<PlatformStage> {
@@ -60,7 +69,16 @@ export async function bootPlatform(cfg: DaemonBootConfig): Promise<PlatformStage
     // LAST upgrade attempt failed and this daemon runs the previous version. The
     // schedule-time response went out long before the helper failed, so this
     // log (plus get_status_metadata.upgradeFailure) is the only in-band signal.
-    const upgradeFailure = readUpgradeFailureNotice();
+    let upgradeFailure = readUpgradeFailureNotice();
+    if (upgradeFailure && upgradeFailureResolvedBy(upgradeFailure, cfg.statusVersion)) {
+        // The failed target (or something newer) is what booted — installed by
+        // another route, e.g. `brew upgrade` after a failed `adhdev update`
+        // (2026-10-01). Keeping the notice would report "NO healthy daemon"
+        // from a healthy daemon on every status read.
+        LOG.info('Upgrade', `Cleared the upgrade-failure notice for v${upgradeFailure.targetVersion}: this daemon is running v${cfg.statusVersion}`);
+        clearUpgradeFailureNotice();
+        upgradeFailure = null;
+    }
     if (upgradeFailure) LOG.warn('Upgrade', describeUpgradeFailureNotice(upgradeFailure, cfg.statusVersion));
 
     // One-shot: record the effective provider channel as an explicit

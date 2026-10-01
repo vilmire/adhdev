@@ -147396,6 +147396,12 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       return `Previous daemon upgrade FAILED and was rolled back \u2014 this daemon is running the previous version. Notice (${age}${target}) at ${notice.noticePath}:
 ${notice.notice}${supersededHint}`;
     }
+    function upgradeFailureResolvedBy(notice, statusVersion) {
+      const target = (notice.targetVersion || "").trim().replace(/^v/, "");
+      const running = (statusVersion || "").trim().replace(/^v/, "");
+      if (!target || !running) return false;
+      return running === target || compareVersions(running, target) > 0;
+    }
     async function bootPlatform(cfg) {
       applyProcessHardening();
       installProviderProcessShim();
@@ -147409,7 +147415,12 @@ ${notice.notice}${supersededHint}`;
       if (envOverridesApplied.length > 0) {
         LOG.info("EnvOverrides", `Applied ${envOverridesApplied.length} persisted env override(s) from config.json: ${envOverridesApplied.join(", ")}`);
       }
-      const upgradeFailure = readUpgradeFailureNotice();
+      let upgradeFailure = readUpgradeFailureNotice();
+      if (upgradeFailure && upgradeFailureResolvedBy(upgradeFailure, cfg.statusVersion)) {
+        LOG.info("Upgrade", `Cleared the upgrade-failure notice for v${upgradeFailure.targetVersion}: this daemon is running v${cfg.statusVersion}`);
+        clearUpgradeFailureNotice();
+        upgradeFailure = null;
+      }
       if (upgradeFailure) LOG.warn("Upgrade", describeUpgradeFailureNotice(upgradeFailure, cfg.statusVersion));
       try {
         const { migrateProviderChannelConfig: migrateProviderChannelConfig2 } = await Promise.resolve().then(() => (init_channel_migration(), channel_migration_exports));
