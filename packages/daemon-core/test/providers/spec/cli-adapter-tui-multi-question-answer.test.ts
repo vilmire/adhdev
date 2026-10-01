@@ -164,6 +164,25 @@ describe('claude TUI multi-question answer', () => {
         expect(adapter.activeInteractivePrompt).toBeNull()
     })
 
+    // 2026-10-01: a response that answered only q1 typed q1's digit and then
+    // failed on q2, so the caller was told "not delivered" while the terminal
+    // had already moved to q2 — and every later full answer was refused.
+    it('types nothing when the response is missing an answer for a later question', async () => {
+        const { adapter, dispatches, currentPage } = makeAdapter({
+            prompt: MULTI_PROMPT,
+            pages: [Q1_SCREEN, Q2_SCREEN, REVIEW_SCREEN],
+        })
+
+        await expect(adapter.setInteractivePromptResponse({
+            promptId: 'toolu_multi',
+            answers: { q1: { selectedLabels: ['Inline'] } },
+        })).rejects.toThrow(/Missing answer for q2/)
+
+        expect(dispatches.filter(d => d.kind === 'pty_write')).toEqual([])
+        expect(currentPage()).toBe(0)
+        expect(adapter.activeInteractivePrompt).toBe(MULTI_PROMPT)
+    })
+
     it('answers both questions when the repaint is instant', async () => {
         const { adapter, dispatches } = makeAdapter({
             prompt: MULTI_PROMPT,

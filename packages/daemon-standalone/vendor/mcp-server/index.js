@@ -130410,6 +130410,7 @@ ${text}` : text;
         const allowsFreeform = prompt.questions.some((q) => q.allowFreeform);
         let completedWithoutReview = false;
         let previewLayoutAnswer = prompt.questions.some((q) => q.options.some((o) => o.preview));
+        buildClaudeInteractiveTuiAnswerSteps(prompt, response);
         questionLoop: for (const question of prompt.questions) {
           const questionSteps = buildClaudeInteractiveTuiAnswerSteps({
             ...prompt,
