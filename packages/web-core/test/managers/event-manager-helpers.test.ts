@@ -9,6 +9,13 @@ import {
 describe('event-manager-helpers', () => {
     it('normalizes approval button labels and variants', () => {
         expect(cleanApprovalButtonText('⌘↵ Allow once')).toBe('Allow once')
+        // Claude Code wraps the shortcut in parentheses; stripping the keys used
+        // to leave "… session ()" / "Deny ()" on the dashboard buttons.
+        expect(cleanApprovalButtonText('Yes, allow all edits during this session (shift+tab)'))
+            .toBe('Yes, allow all edits during this session')
+        expect(cleanApprovalButtonText('Deny (esc)')).toBe('Deny')
+        expect(cleanApprovalButtonText('Allow all actions on localhost:4173 for this session'))
+            .toBe('Allow all actions on localhost:4173 for this session')
 
         expect(buildApprovalToastDescriptors([
             '⌘↵ Allow once',
