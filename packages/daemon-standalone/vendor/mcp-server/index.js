@@ -142666,6 +142666,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           appName: options.appName
         });
         this.ready = this.boot();
+        this.ready.catch((error) => this.failBoot(error));
       }
       ready;
       client;
@@ -142677,6 +142678,25 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       currentPid = 0;
       closed = false;
       metadata = null;
+      bootFailure = null;
+      failBoot(error) {
+        if (this.closed) return;
+        const message = error instanceof Error ? error.message : String(error);
+        LOG.warn("CLI", `[session-host:${this.options.runtimeId}] runtime failed to start: ${message}`);
+        const termination = {
+          exitCode: null,
+          signal: null,
+          reason: "failed",
+          lifecycle: "failed",
+          terminatedAt: Date.now(),
+          error: message
+        };
+        this.bootFailure = { exitCode: null, signal: null, termination };
+        for (const callback of this.exitCallbacks) {
+          callback(this.bootFailure);
+        }
+        void this.closeClient(false);
+      }
       get pid() {
         return this.currentPid;
       }
@@ -142697,6 +142717,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       }
       onExit(callback) {
         this.exitCallbacks.add(callback);
+        if (this.bootFailure) queueMicrotask(() => callback(this.bootFailure));
       }
       write(data) {
         return this.enqueue(async () => {
@@ -143507,7 +143528,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         }
         return stopped;
       }
-      async function stopHostRunningFromForeignEntry() {
+      async function stopHostRunningFromForeignEntry(options2 = {}) {
         let currentEntry;
         try {
           currentEntry = resolveEntry();
@@ -143534,6 +143555,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         if (!reported) return;
         if (pathsEquivalent(reported, currentEntry)) return;
         const reportedExists = fs98.existsSync(reported);
+        if (options2.onlyWhenEntryMissing && reportedExists) return;
         LOG.warn(
           "SessionHost",
           `Reachable session-host reports it is running from ${reported}${reportedExists ? "" : " (which no longer exists)"}, but this install runs from ${currentEntry}. That host would fail every create_session loading node-pty from its own prefix; stopping it so a current one is spawned in its place.`
@@ -143572,6 +143594,8 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         }
         if (process.platform === "win32") {
           await stopHostRunningFromForeignEntry();
+        } else {
+          await stopHostRunningFromForeignEntry({ onlyWhenEntryMissing: true });
         }
         if (process.platform === "win32") {
           try {

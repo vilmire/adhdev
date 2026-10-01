@@ -426,7 +426,7 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
      * host untouched, so this can never take down a healthy setup and can never
      * loop: the replacement host reports the current entry and matches.
      */
-    async function stopHostRunningFromForeignEntry(): Promise<void> {
+    async function stopHostRunningFromForeignEntry(options: { onlyWhenEntryMissing?: boolean } = {}): Promise<void> {
         let currentEntry: string;
         try {
             currentEntry = resolveEntry();
@@ -457,6 +457,9 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
         if (pathsEquivalent(reported, currentEntry)) return;
 
         const reportedExists = fs.existsSync(reported);
+        // POSIX keeps a host from another install that still exists: node-pty
+        // works from any intact prefix, and stopping it would end live sessions.
+        if (options.onlyWhenEntryMissing && reportedExists) return;
         LOG.warn(
             'SessionHost',
             `Reachable session-host reports it is running from ${reported}` +
@@ -544,6 +547,14 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
         // unknown is never treated as a mismatch.
         if (process.platform === 'win32') {
             await stopHostRunningFromForeignEntry();
+        } else {
+            // POSIX, same shape (2026-10-01, Homebrew): `brew upgrade adhdev`
+            // deletes the previous versioned Cellar prefix, and the 1.0.62 daemon
+            // reattached to the 1.0.61 host still serving the socket. node-pty's
+            // spawn helper lived in the deleted prefix, so every create_session
+            // failed with `posix_spawn failed: No such file or directory`. An
+            // in-place npm update keeps the same entry path and never trips this.
+            await stopHostRunningFromForeignEntry({ onlyWhenEntryMissing: true });
         }
 
         // D4-b: re-verify conpty on the REUSE path, not just the spawn path.
