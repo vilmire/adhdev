@@ -48,6 +48,7 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
     private currentPid = 0;
     private closed = false;
     private metadata: PtyRuntimeMetadata | null = null;
+    private bootFailure: PtyRuntimeExitInfo | null = null;
 
     constructor(private readonly options: SessionHostRuntimeOptions) {
         this.client = new SessionHostClient({
@@ -55,6 +56,33 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
             appName: options.appName,
         });
         this.ready = this.boot();
+        // A runtime that never started must END, not sit there. Nothing awaits
+        // `ready` except the write queue, so a failed create_session (2026-10-01:
+        // a stale session-host whose install was deleted answered every spawn with
+        // `posix_spawn failed: No such file or directory`) left the session to
+        // fall through startup-grace into 'idle' — the dashboard showed a healthy
+        // idle agent that could never receive input. Report it as a failed exit
+        // through the same path a real exit takes.
+        this.ready.catch((error: unknown) => this.failBoot(error));
+    }
+
+    private failBoot(error: unknown): void {
+        if (this.closed) return;
+        const message = error instanceof Error ? error.message : String(error);
+        LOG.warn('CLI', `[session-host:${this.options.runtimeId}] runtime failed to start: ${message}`);
+        const termination = {
+            exitCode: null,
+            signal: null,
+            reason: 'failed' as const,
+            lifecycle: 'failed' as const,
+            terminatedAt: Date.now(),
+            error: message,
+        };
+        this.bootFailure = { exitCode: null, signal: null, termination };
+        for (const callback of this.exitCallbacks) {
+            callback(this.bootFailure);
+        }
+        void this.closeClient(false);
     }
 
     get pid(): number {
@@ -80,6 +108,8 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
 
     onExit(callback: (info: PtyRuntimeExitInfo) => void): void {
         this.exitCallbacks.add(callback);
+        // Boot can fail before the owner subscribes; replay that exit once.
+        if (this.bootFailure) queueMicrotask(() => callback(this.bootFailure!));
     }
 
     write(data: string): Promise<void> {
