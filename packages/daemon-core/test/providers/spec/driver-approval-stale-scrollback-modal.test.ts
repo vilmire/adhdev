@@ -173,14 +173,14 @@ maybe('FsmDriver — approval press against a STALE scrollback modal', () => {
                 await sleep(250);
             }
 
-            // The whole trap: the dead lines still parse into a full modal, so
-            // the FSM is still reporting `approval` and mesh_approve is happy to
-            // aim at it. If the modal had NOT parsed, clickModalButton would
-            // return false for the boring reason (`!m`) and this test would
-            // prove nothing — so pin that the button really is still matchable.
+            // The FSM is still reporting `approval`, but the dead lines no longer
+            // parse into a modal at all: a choice list without a cursor row is
+            // not a live dialog, so the whole-screen fallback refuses to bind it
+            // (2026-10-01 — the same fallback bound an assistant's numbered
+            // answer as approval buttons). The press refusal below therefore
+            // holds at the first gate, before the cursor check is even reached.
             expect(driver.getFsmDebug().currentState).toBe('approval');
-            expect(seen.modal, 'the stale list must still parse — that is the trap').toBeTruthy();
-            expect(seen.modal!.buttons.map(b => b.label)).toContain('Yes');
+            expect(seen.modal, 'a cursorless stale list must not parse as a live modal').toBeFalsy();
 
             pty.writes.length = 0;
             // Pre-fix: returned true and wrote a bare '\r' into the composer.

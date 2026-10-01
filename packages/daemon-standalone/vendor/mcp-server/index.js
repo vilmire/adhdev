@@ -127379,7 +127379,7 @@ trust_level = "trusted"
       let buttons = extractButtonsFromRule(rule, hay);
       if (buttons.length < minCount && rule.section) {
         const whole = extractButtonsFromRule(rule, fullScreen);
-        if (whole.length >= minCount) buttons = whole;
+        if (whole.length >= minCount && whole.some((b) => b.current)) buttons = whole;
       }
       if (rule.cursor_marker && buttons.length > 0 && !buttons.some((b) => b.current)) {
         const relaxed = extractButtonsFromRule({ ...rule, cursor_marker: void 0 }, hay);

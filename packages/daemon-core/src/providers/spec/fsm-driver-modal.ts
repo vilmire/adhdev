@@ -50,8 +50,16 @@ export function deriveModal(
         // wider scope pulls in, so this cannot bind the wrong rows. Guards
         // it to the buttons-under-count case only, so a correctly-scoped
         // spec pays nothing.
+        //
+        // The wider scope must still show a real choice block, i.e. a row with
+        // the cursor marker. A list the assistant WROTE has none, yet it was
+        // bound here (2026-10-01, claude-cli): in the ~1s between answering an
+        // approval and approval→vanished, the modal is re-derived from a screen
+        // whose dialog is gone, and the answer's "1. … 2. … 3." block became the
+        // buttons (title: the footer status line) — pressing one typed a digit
+        // into the prompt.
         const whole = extractButtonsFromRule(rule, fullScreen);
-        if (whole.length >= minCount) buttons = whole;
+        if (whole.length >= minCount && whole.some(b => b.current)) buttons = whole;
     }
     // APPROVAL-DEADLOCK cursor fallback. A spec narrows `cursor_marker` to
     // keep an assistant blockquote (`> 1. quoted item`) from stealing the
