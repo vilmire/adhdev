@@ -60,6 +60,16 @@ export function deriveModal(
         // into the prompt.
         const whole = extractButtonsFromRule(rule, fullScreen);
         if (whole.length >= minCount && whole.some(b => b.current)) buttons = whole;
+    } else if (buttons.length >= minCount && rule.section && !buttons.some(b => b.current)) {
+        // Same rule from the other side: the section resolved to a numbered list
+        // with no cursor row while a real choice block is on screen. The modal
+        // anchor's "line followed by `1.`" candidate also matches an assistant's
+        // own numbered list in scrollback, and a `❯` prompt line between that
+        // list and a later picker ends the section early (2026-10-01, claude-cli
+        // AskUserQuestion): the picker reported the old list as its buttons for
+        // the rest of the session.
+        const whole = extractButtonsFromRule(rule, fullScreen);
+        if (whole.length >= minCount && whole.some(b => b.current)) buttons = whole;
     }
     // APPROVAL-DEADLOCK cursor fallback. A spec narrows `cursor_marker` to
     // keep an assistant blockquote (`> 1. quoted item`) from stealing the
