@@ -188,6 +188,61 @@ describe('Fresh-install bootstrap (empty .upstream + empty store)', () => {
     expect(loader.getMeta('p2-cli')).toBeDefined();
   });
 
+  // 2026-09-30 incident: the stable registry's CLI rows did not match the
+  // provider repo, so a fresh install activated only its IDE providers — and
+  // the old gate ("any pointer exists → never bootstrap again") kept it at zero
+  // CLI agents even after the registry was fixed.
+  it('retries a partially failed bootstrap on the next boot once the registry is fixed', async () => {
+    const goodRows = specs.map((spec) => makeRegistryRow(spec, digestFor(repoRoot, spec.category, spec.dirname)));
+    metadata.rows = specs.map((spec, i) => (i < 2 ? makeRegistryRow(spec, `sha256:${'e'.repeat(64)}`) : goodRows[i]));
+    const first = await newBootLoader().maybeFirstSyncVerifiedChannel();
+    expect(first?.errors.filter((e) => e.code === 'DIGEST_MISMATCH')).toHaveLength(2);
+    expect(store.listPointers('preview').pointers.size).toBe(PROVIDER_COUNT - 2);
+
+    metadata.rows = goodRows; // registry republished
+    const second = await newBootLoader().maybeFirstSyncVerifiedChannel();
+    expect(second?.activated.map((a) => a.providerType).sort()).toEqual(['p0-cli', 'p1-cli']);
+    expect(store.listPointers('preview').pointers.size).toBe(PROVIDER_COUNT);
+
+    // Clean now → the gate closes again with zero network.
+    const fetchBefore = fetchCount;
+    expect(await newBootLoader().maybeFirstSyncVerifiedChannel()).toBeNull();
+    expect(fetchCount).toBe(fetchBefore);
+  });
+
+  it('heals an install from before the bootstrap markers that has no CLI agent, and leaves one that has', async () => {
+    metadata.rows = specs.map((spec, i) => (i === 0 ? makeRegistryRow(spec, `sha256:${'e'.repeat(64)}`) : makeRegistryRow(spec, digestFor(repoRoot, spec.category, spec.dirname))));
+    await newBootLoader().maybeFirstSyncVerifiedChannel();
+    // Simulate a pre-marker install: drop the markers this daemon wrote.
+    for (const f of ['.channel-bootstrap-pending.preview.json', '.channel-bootstrap-complete.preview.json']) {
+      rmSync(join(tmpRoot, 'providers', f), { force: true });
+    }
+    // It has CLI agents (p1..p4) → a pre-marker install is left alone.
+    const fetchBefore = fetchCount;
+    expect(await newBootLoader().maybeFirstSyncVerifiedChannel()).toBeNull();
+    expect(fetchCount).toBe(fetchBefore);
+  });
+
+  it('heals a pre-marker install whose bootstrap left it with IDE providers but no CLI agent', async () => {
+    // Exactly the 1.0.61 shape: IDE rows verified, every CLI row mismatched.
+    specs = [
+      { category: 'ide', dirname: 'q-ide', type: 'q-ide', version: '1.0.0' },
+      { category: 'cli', dirname: 'q-cli', type: 'q-cli', version: '1.0.0' },
+    ];
+    buildRepoTree(repoRoot, specs);
+    const ide = makeRegistryRow(specs[0], digestFor(repoRoot, 'ide', 'q-ide'));
+    metadata.rows = [ide, makeRegistryRow(specs[1], `sha256:${'e'.repeat(64)}`)];
+    await newBootLoader().maybeFirstSyncVerifiedChannel();
+    expect([...store.listPointers('preview').pointers.keys()]).toEqual(['q-ide']);
+    for (const f of ['.channel-bootstrap-pending.preview.json', '.channel-bootstrap-complete.preview.json']) {
+      rmSync(join(tmpRoot, 'providers', f), { force: true });
+    }
+
+    metadata.rows = [ide, makeRegistryRow(specs[1], digestFor(repoRoot, 'cli', 'q-cli'))];
+    const healed = await newBootLoader().maybeFirstSyncVerifiedChannel();
+    expect(healed?.activated.map((a) => a.providerType)).toEqual(['q-cli']);
+  });
+
   it('stable fresh install queries the stable channel exactly', async () => {
     writeFileSync(join(tmpRoot, 'config.json'), JSON.stringify({ updateChannel: 'stable' }), 'utf-8');
     const loader = new ProviderLoader({

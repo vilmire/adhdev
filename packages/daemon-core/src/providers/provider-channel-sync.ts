@@ -359,14 +359,68 @@ export class ProviderChannelSync {
   */
   async maybeFirstSyncVerifiedChannel(): Promise<ChannelSyncReport | null> {
     if (!this.store) return null;
-    if (this.countVerifiedChannelPointers() > 0) return null;
+    if (this.countVerifiedChannelPointers() > 0) {
+      // A bootstrap that activated SOME entries used to close this gate for
+      // good, so whatever failed in it was never retried. 2026-09-30: the
+      // stable registry's CLI rows did not match the provider repo, a fresh
+      // install activated the 12 IDE providers and none of the 7 CLI agents,
+      // and kept zero CLI agents after the registry was fixed. Re-run the
+      // bootstrap until one completes cleanly. Installs from before the stamp
+      // existed (neither marker) are left alone unless they have no CLI agent
+      // at all — which only a failed bootstrap produces.
+      if (this.bootstrapMarkerExists('complete')) return null;
+      if (!this.bootstrapMarkerExists('pending') && this.hasActiveCliPointer()) return null;
+      return this.runBootstrapSync();
+    }
     if (this.host.hasUpstream()) return this.syncVerifiedChannel();
     // Fresh-install bootstrap: nothing installed, nothing activated. Make
     // sure the providers dir exists (nothing else creates it on this path —
     // the store's own mkdirs only cover providers/.store) and pull the whole
     // verified channel from the registry.
     try { fs.mkdirSync(this.host.defaultProvidersDir, { recursive: true }); } catch { /* best-effort */ }
-    return this.syncVerifiedChannel({ bootstrapAll: true });
+    return this.runBootstrapSync();
+  }
+
+  /**
+   * Whole-channel bootstrap; stamps completion only when no entry failed. An
+   * entry whose artifact the provider repo no longer ships
+   * (ENTRY_ARTIFACT_NOT_FOUND — a provider removed from the repo while its old
+   * registry row remains) can never succeed and does not hold the stamp back.
+   */
+  private async runBootstrapSync(): Promise<ChannelSyncReport> {
+    const report = await this.syncVerifiedChannel({ bootstrapAll: true });
+    const blocking = report.errors.filter((e) => e.code !== 'ENTRY_ARTIFACT_NOT_FOUND');
+    const clean = report.status !== 'error' && blocking.length === 0;
+    this.writeBootstrapMarker(clean ? 'complete' : 'pending');
+    return report;
+  }
+
+  /** Per-channel file names, so a preview and a stable instance never read each other's marker. */
+  private bootstrapMarkerPath(kind: 'complete' | 'pending'): string {
+    return path.join(this.host.defaultProvidersDir, `.channel-bootstrap-${kind}.${this.channel}.json`);
+  }
+
+  private bootstrapMarkerExists(kind: 'complete' | 'pending'): boolean {
+    return fs.existsSync(this.bootstrapMarkerPath(kind));
+  }
+
+  /** Exactly one of the two markers exists after a bootstrap pass. Best-effort: a missing marker only means one more pass. */
+  private writeBootstrapMarker(kind: 'complete' | 'pending'): void {
+    try {
+      fs.mkdirSync(this.host.defaultProvidersDir, { recursive: true });
+      fs.writeFileSync(this.bootstrapMarkerPath(kind), JSON.stringify({ channel: this.channel, at: new Date().toISOString() }) + '\n', 'utf-8');
+      fs.rmSync(this.bootstrapMarkerPath(kind === 'complete' ? 'pending' : 'complete'), { force: true });
+    } catch { /* best-effort */ }
+  }
+
+  private hasActiveCliPointer(): boolean {
+    if (!this.store) return false;
+    try {
+      for (const pointer of this.store.listPointers(this.channel).pointers.values()) {
+        if (pointer.active.category === 'cli') return true;
+      }
+    } catch { /* unreadable store → treat as none */ }
+    return false;
   }
 
   /** Stamp path recording which daemon version last ran a successful verified sync. */
