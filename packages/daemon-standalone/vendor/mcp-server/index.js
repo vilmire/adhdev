@@ -83525,8 +83525,26 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
         baseHeadRaw = localHead.trim();
       }
       const { stdout: branchHeadStdout } = await execFileAsync6("git", ["rev-parse", branch], { cwd: node.workspace, encoding: "utf8", windowsHide: true, env: gitChildEnv() });
-      const baseHead = baseHeadRaw;
       const branchHead = branchHeadStdout.trim();
+      let pinnedLocalAhead = false;
+      try {
+        const isAncestor3 = async (ancestor, descendant) => {
+          try {
+            await execFileAsync6("git", ["merge-base", "--is-ancestor", ancestor, descendant], { cwd: repoRoot, encoding: "utf8", windowsHide: true, env: gitChildEnv() });
+            return true;
+          } catch {
+            return false;
+          }
+        };
+        const { stdout: localHeadStdout } = await execFileAsync6("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8", windowsHide: true, env: gitChildEnv() });
+        const localHead = localHeadStdout.trim();
+        if (localHead && localHead !== baseHeadRaw && await isAncestor3(baseHeadRaw, localHead) && !await isAncestor3(branchHead, localHead)) {
+          baseHeadRaw = localHead;
+          pinnedLocalAhead = true;
+        }
+      } catch {
+      }
+      const baseHead = baseHeadRaw;
       let changeImpact;
       try {
         changeImpact = await classifyChangedPackages(node.workspace, baseHead, branchHead);
@@ -83538,6 +83556,7 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
         baseBranch,
         baseHead,
         branchHead,
+        ...pinnedLocalAhead ? { pinnedLocalAhead } : {},
         ...changeImpact ? { changeImpact } : {},
         ...fetchWarning ? { fetchWarning } : {}
       });
@@ -83914,7 +83933,7 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
       if (!liveBaseHead) {
         return { state: "undeterminable", reason: `git rev-parse origin/${baseBranch} produced no SHA` };
       }
-      if (liveBaseHead !== pinnedBaseHead) {
+      if (liveBaseHead !== pinnedBaseHead && !await isAncestor2(execFileAsync6, repoRoot, liveBaseHead, pinnedBaseHead, env2)) {
         return { state: "moved", liveBaseHead };
       }
       const localBaseHead = branchHead ? await resolveLocalBaseHead(execFileAsync6, repoRoot, env2) : void 0;

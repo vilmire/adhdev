@@ -1353,6 +1353,46 @@ describe('refine_mesh_node validation gate', () => {
     }
   }, 90000)
 
+  // 2026-10-01 todo demo: main had 4 unpushed local commits and three branches
+  // cut before them. The pin was always origin/main, so sync_base saw nothing to
+  // rebase, base_cas refused the diverged merge as base_moved, and the automatic
+  // retry re-pinned origin and failed the same way — nothing could land.
+  it('lands a branch cut before unpushed local commits on the base (pins the local base)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-local-ahead-'))
+    const repo = join(root, 'repo')
+    const previousConfigDir = process.env.ADHDEV_CONFIG_DIR
+    try {
+      withConfigDir(root)
+      initGitRepo(repo)
+      const worktree = createWorktreeWithCommit(root, repo)
+      // A local-only commit on main after the branch was cut, touching another file.
+      writeFileSync(join(repo, 'NOTES.md'), 'local only\n', 'utf-8')
+      execFileSync('git', ['add', '.'], { cwd: repo })
+      execFileSync('git', ['commit', '-q', '-m', 'local checkpoint'], { cwd: repo })
+      const localCheckpoint = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim()
+      const mesh = createMesh(repo, worktree, 'node-local-ahead', undefined, true, { requireApprovalForPush: true })
+      const router = createRouter()
+
+      const accepted: any = await router.execute('refine_mesh_node', {
+        execute: true, meshId: mesh.id, nodeId: 'node-local-ahead', inlineMesh: mesh,
+      })
+      expectAccepted(accepted, 'node-local-ahead')
+      const terminal = await waitForRefineLedger(mesh.id, accepted.jobId)
+      const result = (terminal.payload as any).result
+      expect(result.code).not.toBe('base_moved')
+      expect(result).toMatchObject({ mergedLocal: true })
+      // main now has both the local checkpoint and the feature.
+      execFileSync('git', ['merge-base', '--is-ancestor', localCheckpoint, 'HEAD'], { cwd: repo })
+      expect(execFileSync('git', ['show', 'HEAD:packages/daemon-core/src/feature.ts'], { cwd: repo, encoding: 'utf8' })).toContain('feature = 1')
+      const resolveRefs = result.refineStages.find((e: any) => e.stage === 'resolve_refs')
+      expect(resolveRefs.detail?.pinnedLocalAhead ?? resolveRefs.pinnedLocalAhead).toBe(true)
+    } finally {
+      if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
+      else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
+      rmTempRepo(root)
+    }
+  }, 90000)
+
   // ── DS1 approval path: merge lands locally, cleanup withheld (pending push) ──
   it('DS1: requireApprovalForPush leaves the merge on local base with cleanup withheld (merged_local_pending_push)', async () => {
     const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-approval-pending-'))
