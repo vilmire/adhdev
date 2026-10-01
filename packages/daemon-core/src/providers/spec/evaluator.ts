@@ -365,6 +365,27 @@ function continuesButtonSequence(line: string, re: RegExp, prevIndex: number): b
     return idx === prevIndex + 1;
 }
 
+/**
+ * PREVIEW-PANEL-LABEL-BLEED (live defect, 2026-10-01, claude-cli v2.1.220):
+ * a picker whose options carry previews renders the option list on the LEFT
+ * and a box-drawn preview panel on the RIGHT on the very same terminal rows:
+ *
+ *   "❯ 1. Keep them (Recommended)      ┌──────────────────┐"
+ *   "  2. Drop them                    │ src/store.test.ts│"
+ *
+ * A line-anchored button pattern captures everything up to end-of-line, so
+ * the panel column bled into every label ("Keep them (Recommended)  ┌──…┐"),
+ * breaking resolve_action label matching and the dashboard prompt options.
+ * Cut a label at the first run of 2+ spaces followed by a box-drawing glyph
+ * (U+2500–U+257F: ─ │ ┌ └ ├ ╭ ╰ …) — the column gutter between the two
+ * panes. Provider-agnostic: a real option label never contains a column
+ * gutter followed by a box border.
+ */
+const SIDE_PANEL_COLUMN_RE = /\s{2,}[\u2500-\u257F].*$/;
+export function stripSidePanelColumn(label: string): string {
+    return label.replace(SIDE_PANEL_COLUMN_RE, '').trim();
+}
+
 export function extractButtonsFromRule(
     rule: ExtractButtons,
     hay: string,
@@ -382,7 +403,7 @@ export function extractButtonsFromRule(
         const ordinal: { index: number; label: string; key: string; current: boolean }[] = [];
         let om: RegExpExecArray | null;
         while ((om = re.exec(hay)) !== null) {
-            const label = String(om[labelGroup] ?? '').trim();
+            const label = stripSidePanelColumn(String(om[labelGroup] ?? ''));
             if (!label) continue;
             let key: string;
             if (rule.key_group !== undefined) {
@@ -406,7 +427,7 @@ export function extractButtonsFromRule(
             const m = re.exec(lines[i]);
             if (!m) continue;
             const idx = Number(m[1]);
-            let label = String(m[2] ?? '').trim();
+            let label = stripSidePanelColumn(String(m[2] ?? ''));
             if (!Number.isFinite(idx) || idx <= 0 || !label) continue;
             const current = hasCursorMarker(lines[i], rule.cursor_marker);
             let j = i + 1;
@@ -442,7 +463,11 @@ export function extractButtonsFromRule(
                 // handle downstream.
                 if (re.test(next) && continuesButtonSequence(next, re, idx)) break;
                 if (!/^\s+/.test(next)) break;
-                label += ' ' + next.trim();
+                // Strip the side-by-side preview panel from wrapped rows too;
+                // a row that is ONLY panel (e.g. the box's bottom border) adds
+                // nothing to the label.
+                const nextText = stripSidePanelColumn(next);
+                if (nextText) label += ' ' + nextText;
                 j += 1;
             }
             // No top-down de-dup here: a stray body "1." above the modal would
@@ -458,7 +483,7 @@ export function extractButtonsFromRule(
         let m: RegExpExecArray | null;
         while ((m = re.exec(hay)) !== null) {
             const idx = Number(m[1]);
-            const label = String(m[2] ?? '').trim();
+            const label = stripSidePanelColumn(String(m[2] ?? ''));
             if (!Number.isFinite(idx) || idx <= 0 || !label) continue;
             const key = keyTemplate.replace(/\{index\}/g, String(idx));
             // The matched text begins at the cursor marker (the pattern's

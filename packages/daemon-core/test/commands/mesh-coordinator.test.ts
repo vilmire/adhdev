@@ -1559,6 +1559,65 @@ describe('claude-cli coordinator provider capability', () => {
     }
   })
 
+  it('launch_mesh_coordinator pre-allows ONLY its own mesh MCP server for claude-cli (COORD-MCP-ALLOW)', async () => {
+    // Regression (live 2026-10-01): a claude-cli coordinator raised a Claude Code
+    // "Tool use" permission prompt for every adhdev-mesh tool call. Daemon PTY
+    // auto-approve is suppressed while the operator attends the session, so each
+    // mesh_* call needed a manual approve. The launch must pre-allow exactly the
+    // coordinator's own server and nothing broader (no Bash/Edit/Write, no bypass).
+    const workspace = mkdtempSync(join(tmpdir(), 'adhdev-claude-coord-allow-'))
+    const mcpEntry = join(workspace, 'mcp-server.js')
+    writeFileSync(mcpEntry, '#!/usr/bin/env node\n', 'utf-8')
+    const previousMcpEntry = process.env.ADHDEV_MCP_SERVER_PATH
+    process.env.ADHDEV_MCP_SERVER_PATH = mcpEntry
+
+    const provider: ProviderModule = {
+      type: 'claude-cli',
+      name: 'Claude Code',
+      category: 'cli',
+      spawn: { command: 'claude' },
+      meshCoordinator: {
+        supported: true,
+        mcpConfig: { mode: 'auto_import', format: 'claude_mcp_json', path: '.mcp.json', serverName: 'adhdev-mesh' },
+        systemPromptInjection: { mode: 'cli_arg', flag: '--append-system-prompt' },
+      },
+    }
+    const cliManager = {
+      launchCli: vi.fn(async () => ({ success: true, sessionId: 'claude-coord-allow-session' })),
+    }
+    const router = createAutoImportRouter(provider, cliManager)
+    const inlineMesh = {
+      id: 'mesh_claude_allow',
+      name: 'Claude Allow Mesh',
+      repoIdentity: 'example/repo',
+      nodes: [{ id: 'node-1', workspace, policy: {} }],
+      policy: {},
+      coordinator: {},
+    }
+
+    try {
+      const result = await router.execute('launch_mesh_coordinator', {
+        meshId: 'mesh_claude_allow',
+        cliType: 'claude-cli',
+        autoApprove: true,
+        inlineMesh,
+      })
+      expect(result).toMatchObject({ success: true, cliType: 'claude-cli' })
+      const launchCall = (cliManager.launchCli as any).mock.calls[0]?.[0] as any
+      const cliArgs: string[] = launchCall.cliArgs || []
+      const allowArgs = cliArgs.filter((arg) => /^--allowed-?tools/i.test(arg))
+      expect(allowArgs).toEqual(['--allowedTools=mcp__adhdev-mesh'])
+      // Nothing broader than the coordinator's own server, and no permission bypass.
+      expect(cliArgs).not.toContain('--allowedTools')
+      expect(cliArgs).not.toContain('--dangerously-skip-permissions')
+      expect(cliArgs).not.toContain('bypassPermissions')
+    } finally {
+      if (previousMcpEntry === undefined) delete process.env.ADHDEV_MCP_SERVER_PATH
+      else process.env.ADHDEV_MCP_SERVER_PATH = previousMcpEntry
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  })
+
   it('launch_mesh_coordinator inherits the workspace .adhdev/mesh.json auto-approve MODE (no launchedByCoordinator)', async () => {
     // AUTOAPPROVE-COORD regression: a coordinator launched into a workspace whose
     // .adhdev/mesh.json declares providerDefaults.autoApproveModes[<provider>] must

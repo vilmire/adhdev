@@ -13,6 +13,7 @@ import { runMeshInit } from '../../mesh/mesh-init.js';
 import { detectCLIs } from '../../detection/cli-detector.js';
 import { buildMeshRefineValidationPlan } from '../router.js';
 import { planMeshRefineNodeSubmodulePreflight } from '../../mesh/mesh-refine-submodule-preflight.js';
+import { resolveMeshRefineConfigBaseRefs } from '../../mesh/refine-config.js';
 import type { CommandRouterResult } from '../router.js';
 import type { MedFamilyContext, MedFamilyHandler } from './types.js';
 import { defineCommandSpecs } from '../command-registry.js';
@@ -54,7 +55,7 @@ export const fastForwardHandlers: Record<string, MedFamilyHandler> = {
             dryRun: true,
             nodeId,
             workspace: node.workspace,
-            validationPlan: buildMeshRefineValidationPlan(mesh, node.workspace),
+            validationPlan: buildMeshRefineValidationPlan(mesh, node.workspace, { baseRefs: resolveMeshRefineConfigBaseRefs(mesh, node) }),
             mergeWillRun: false,
             cleanupWillRun: false,
             ...(submoduleReachabilityPreflight ? { submoduleReachabilityPreflight } : {}),
@@ -232,7 +233,7 @@ export const fastForwardHandlers: Record<string, MedFamilyHandler> = {
                 dryRun: true,
                 nodeId,
                 workspace: node.workspace,
-                validationPlan: buildMeshRefineValidationPlan(mesh, node.workspace),
+                validationPlan: buildMeshRefineValidationPlan(mesh, node.workspace, { baseRefs: resolveMeshRefineConfigBaseRefs(mesh, node) }),
                 mergeWillRun: false,
                 cleanupWillRun: false,
                 ...(submoduleReachabilityPreflight ? { submoduleReachabilityPreflight } : {}),

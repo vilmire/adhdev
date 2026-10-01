@@ -294,7 +294,11 @@ interface ClaudeTuiScreenLine {
 
 function readClaudeTuiScreenLines(screenText: string): ClaudeTuiScreenLine[] {
   return screenText.split(/\r?\n/).map((raw) => {
-    const panel = raw.match(/(\s+)[│┃].*$/);
+    // The panel's FIRST row starts with its top-left corner (┌/╭/┏) rather
+    // than a │ vertical, and ✂-hidden / bottom rows start with ├/└ — match
+    // those left-edge glyphs too, or the top option row keeps the whole
+    // "┌────…┐" border in its label (PREVIEW-PANEL-LABEL-BLEED, 2026-10-01).
+    const panel = raw.match(/(\s+)[│┃┌└├╭╰┏┗┣].*$/);
     return {
       // Keep the rc.58 preview-panel removal, but retain whether the main-pane
       // text reached the panel edge. One padding cell before the divider is the

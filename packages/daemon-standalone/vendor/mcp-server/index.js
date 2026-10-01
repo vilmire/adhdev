@@ -55998,7 +55998,42 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       if (rejectedCommands.length) errors.push("one or more validation commands are invalid");
       return { valid: errors.length === 0, errors, bootstrapCommands, commands, rejectedCommands, bootstrapMode, deprecationWarnings };
     }
-    function loadMeshRefineConfig(mesh, workspace) {
+    function readConfigFromBaseRef(gitCwd, ref, relative8) {
+      if (!ref || ref.startsWith("-")) return void 0;
+      try {
+        return (0, import_child_process4.execFileSync)("git", ["show", `${ref}:${relative8}`], {
+          cwd: gitCwd,
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "ignore"],
+          timeout: GIT_LOCAL_TIMEOUT_MS,
+          windowsHide: true,
+          env: gitChildEnv()
+        });
+      } catch {
+        return void 0;
+      }
+    }
+    function resolveMeshRefineConfigBaseRefs(mesh, node) {
+      try {
+        if (!node || !node.isLocalWorktree) return [];
+        const nodes = Array.isArray(mesh?.nodes) ? mesh.nodes : [];
+        const sourceNode = node.clonedFromNodeId ? nodes.find((n) => meshNodeIdMatches7(n, node.clonedFromNodeId)) : nodes.find((n) => !n.isLocalWorktree);
+        const repoRoot = sourceNode?.repoRoot || sourceNode?.workspace;
+        if (typeof repoRoot !== "string" || !repoRoot || !(0, import_fs15.existsSync)(repoRoot)) return [];
+        const baseBranch = (0, import_child_process4.execFileSync)("git", ["branch", "--show-current"], {
+          cwd: repoRoot,
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "ignore"],
+          timeout: GIT_LOCAL_TIMEOUT_MS,
+          windowsHide: true,
+          env: gitChildEnv()
+        }).trim();
+        return baseBranch ? [`origin/${baseBranch}`, baseBranch] : [];
+      } catch {
+        return [];
+      }
+    }
+    function loadMeshRefineConfig(mesh, workspace, options) {
       const policy = mesh?.policy && typeof mesh.policy === "object" && !Array.isArray(mesh.policy) ? mesh.policy : {};
       const inline = mesh?.refineConfig || policy.refineConfig || policy.refine;
       if (inline !== void 0) {
@@ -56016,6 +56051,22 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           return { config: parsed, source: relative8, sourceType: "repo_file", path: configPath };
         } catch (error) {
           return { source: relative8, sourceType: "invalid", path: configPath, error: error?.message || String(error) };
+        }
+      }
+      const baseRefs = (options?.baseRefs || []).filter((ref) => typeof ref === "string" && ref.trim().length > 0);
+      for (const ref of baseRefs) {
+        for (const relative8 of MESH_REFINE_CONFIG_LOCATIONS) {
+          const text = readConfigFromBaseRef(options?.gitCwd || workspace, ref.trim(), relative8);
+          if (text === void 0) continue;
+          const source = `${ref.trim()}:${relative8}`;
+          try {
+            const parsed = parseConfigText(relative8, text);
+            const validation = validateMeshRefineConfig(parsed, source);
+            if (!validation.valid) return { source, sourceType: "invalid", baseRef: ref.trim(), error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
+            return { config: parsed, source, sourceType: "repo_file", baseRef: ref.trim() };
+          } catch (error) {
+            return { source, sourceType: "invalid", baseRef: ref.trim(), error: error?.message || String(error) };
+          }
         }
       }
       return {
@@ -56070,8 +56121,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         suggestedConfig: suggestions.length ? { version: 1, validation: { required: true, commands: suggestions.slice(0, 4) } } : void 0
       };
     }
-    function resolveMeshRefineValidationPlan(mesh, workspace) {
-      const loaded = loadMeshRefineConfig(mesh, workspace);
+    function resolveMeshRefineValidationPlan(mesh, workspace, options) {
+      const loaded = loadMeshRefineConfig(mesh, workspace, options);
       const suggestion = suggestMeshRefineConfig(mesh, workspace);
       if (!loaded.config) {
         return {
@@ -56101,6 +56152,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         unavailableReason: validation.commands.length ? void 0 : "validation_unavailable: repo mesh/refine config has no validation.commands"
       };
     }
+    var import_child_process4;
     var import_fs15;
     var import_path10;
     var MESH_REFINE_VALIDATION_CATEGORIES;
@@ -56114,9 +56166,12 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     var init_refine_config = __esm2({
       "src/mesh/refine-config.ts"() {
         "use strict";
+        import_child_process4 = require("child_process");
         import_fs15 = require("fs");
         import_path10 = require("path");
+        init_dist();
         init_config_text();
+        init_git_locale();
         MESH_REFINE_VALIDATION_CATEGORIES = ["typecheck", "test", "lint", "build"];
         MESH_REFINE_VALIDATION_SCOPES = ["none", "web", "daemon"];
         MESH_REFINE_CONFIG_LOCATIONS = [
@@ -73627,7 +73682,7 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
       };
     }
     var os16;
-    var import_child_process4;
+    var import_child_process5;
     var import_util;
     var execAsync2;
     var REFRESH_INTERVAL_MS;
@@ -73638,9 +73693,9 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
       "src/system/host-memory.ts"() {
         "use strict";
         os16 = __toESM2(require("os"));
-        import_child_process4 = require("child_process");
+        import_child_process5 = require("child_process");
         import_util = require("util");
-        execAsync2 = (0, import_util.promisify)(import_child_process4.exec);
+        execAsync2 = (0, import_util.promisify)(import_child_process5.exec);
         REFRESH_INTERVAL_MS = 3e4;
         cachedDarwinAvail = null;
         darwinMemoryInterval = null;
@@ -78122,7 +78177,8 @@ ${cleanBody}`;
       lastContiguousNumberedBlock: () => lastContiguousNumberedBlock,
       mapButtonKeyToken: () => mapButtonKeyToken,
       resolveSections: () => resolveSections,
-      sectionText: () => sectionText
+      sectionText: () => sectionText,
+      stripSidePanelColumn: () => stripSidePanelColumn
     });
     function resolveSize(size, total) {
       if (size === void 0) return 0;
@@ -78372,6 +78428,9 @@ ${cleanBody}`;
       if (!Number.isFinite(idx) || idx <= 0) return false;
       return idx === prevIndex + 1;
     }
+    function stripSidePanelColumn(label) {
+      return label.replace(SIDE_PANEL_COLUMN_RE, "").trim();
+    }
     function extractButtonsFromRule(rule, hay) {
       const keyTemplate = rule.key_for_index ?? "{index}";
       if (rule.label_group !== void 0 || rule.key_group !== void 0) {
@@ -78380,7 +78439,7 @@ ${cleanBody}`;
         const ordinal = [];
         let om;
         while ((om = re.exec(hay)) !== null) {
-          const label = String(om[labelGroup] ?? "").trim();
+          const label = stripSidePanelColumn(String(om[labelGroup] ?? ""));
           if (!label) continue;
           let key2;
           if (rule.key_group !== void 0) {
@@ -78403,7 +78462,7 @@ ${cleanBody}`;
           const m = re.exec(lines[i]);
           if (!m) continue;
           const idx = Number(m[1]);
-          let label = String(m[2] ?? "").trim();
+          let label = stripSidePanelColumn(String(m[2] ?? ""));
           if (!Number.isFinite(idx) || idx <= 0 || !label) continue;
           const current2 = hasCursorMarker(lines[i], rule.cursor_marker);
           let j = i + 1;
@@ -78412,7 +78471,8 @@ ${cleanBody}`;
             if (!next.trim()) break;
             if (re.test(next) && continuesButtonSequence(next, re, idx)) break;
             if (!/^\s+/.test(next)) break;
-            label += " " + next.trim();
+            const nextText = stripSidePanelColumn(next);
+            if (nextText) label += " " + nextText;
             j += 1;
           }
           const key2 = keyTemplate.replace(/\{index\}/g, String(idx));
@@ -78424,7 +78484,7 @@ ${cleanBody}`;
         let m;
         while ((m = re.exec(hay)) !== null) {
           const idx = Number(m[1]);
-          const label = String(m[2] ?? "").trim();
+          const label = stripSidePanelColumn(String(m[2] ?? ""));
           if (!Number.isFinite(idx) || idx <= 0 || !label) continue;
           const key2 = keyTemplate.replace(/\{index\}/g, String(idx));
           buttons.push({ index: idx, label, key: key2, current: hasCursorMarker(m[0], rule.cursor_marker) });
@@ -78447,10 +78507,12 @@ ${cleanBody}`;
       const cls = markerClass ?? DEFAULT_CURSOR_MARKER_CLASS;
       return new RegExp("^\\s*[" + cls + "]").test(text);
     }
+    var SIDE_PANEL_COLUMN_RE;
     var DEFAULT_CURSOR_MARKER_CLASS;
     var init_evaluator = __esm2({
       "src/providers/spec/evaluator.ts"() {
         "use strict";
+        SIDE_PANEL_COLUMN_RE = /\s{2,}[\u2500-\u257F].*$/;
         DEFAULT_CURSOR_MARKER_CLASS = "\u276F\u203A>\u2192";
       }
     });
@@ -81551,8 +81613,8 @@ ${asText(streams.stderr)}
       }
       return { enabled: false };
     }
-    function buildMeshRefineValidationPlan(mesh, workspace) {
-      const plan = resolveMeshRefineValidationPlan(mesh, workspace);
+    function buildMeshRefineValidationPlan(mesh, workspace, configOptions) {
+      const plan = resolveMeshRefineValidationPlan(mesh, workspace, configOptions);
       const mapCommand = (command) => ({
         displayCommand: command.displayCommand,
         category: command.category,
@@ -81808,7 +81870,7 @@ ${asText(streams.stderr)}
       const { execFile: execFile8 } = await import("child_process");
       const { promisify: promisify10 } = await import("util");
       const execFileAsync6 = promisify10(execFile8);
-      const selection = resolveMeshRefineValidationPlan(mesh, workspace);
+      const selection = resolveMeshRefineValidationPlan(mesh, workspace, opts?.configBaseRefs?.length ? { baseRefs: opts.configBaseRefs } : void 0);
       const summary = {
         status: "skipped",
         required: true,
@@ -84455,6 +84517,10 @@ ${e?.stderr || ""}`;
         // (a) Scope the validation command set by coarse change-impact (resolved
         // in resolve_refs). Undefined → gate runs the full command set (fail-open).
         changeImpact: ctx.changeImpact,
+        // BASE-REF-CONFIG-FALLBACK: a worktree cut before .adhdev/refine.json landed on
+        // base (and whose rebase was skipped, e.g. already-merged / submodule paths)
+        // still validates with the base branch's config instead of validation_unavailable.
+        configBaseRefs: [ctx.baseHead, ctx.baseBranch ? `origin/${ctx.baseBranch}` : "", ctx.baseBranch].filter(Boolean),
         // M2-2: consume the node's persisted bootstrap state; persist re-runs.
         persistedBootstrapState: node.worktreeBootstrap,
         onBootstrapStateChange: (state) => {
@@ -85859,7 +85925,7 @@ ${tail}` : ""
     );
     function readClaudeTuiScreenLines(screenText) {
       return screenText.split(/\r?\n/).map((raw) => {
-        const panel = raw.match(/(\s+)[│┃].*$/);
+        const panel = raw.match(/(\s+)[│┃┌└├╭╰┏┗┣].*$/);
         return {
           // Keep the rc.58 preview-panel removal, but retain whether the main-pane
           // text reached the panel edge. One padding cell before the divider is the
@@ -100614,7 +100680,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         }
       }
     };
-    var import_child_process5 = require("child_process");
+    var import_child_process6 = require("child_process");
     var net = __toESM2(require("net"));
     var os27 = __toESM2(require("os"));
     var path58 = __toESM2(require("path"));
@@ -108845,7 +108911,7 @@ ${result.stderr}`, result.code);
     }
     async function execQuiet(command, options = {}) {
       return new Promise((resolve34) => {
-        (0, import_child_process5.exec)(command, { windowsHide: true, ...options }, (error, stdout) => {
+        (0, import_child_process6.exec)(command, { windowsHide: true, ...options }, (error, stdout) => {
           if (error) return resolve34("");
           resolve34(stdout.toString());
         });
@@ -109250,10 +109316,10 @@ ${result.stderr}`, result.code);
       const canUseAppLauncher = !!appName;
       const useAppLauncher = preferredMethod === "app" ? canUseAppLauncher : preferredMethod === "cli" ? false : !canUseCli && canUseAppLauncher;
       if (!useAppLauncher && ide.cliCommand) {
-        (0, import_child_process5.spawn)(ide.cliCommand, args, { detached: true, stdio: "ignore", windowsHide: true }).unref();
+        (0, import_child_process6.spawn)(ide.cliCommand, args, { detached: true, stdio: "ignore", windowsHide: true }).unref();
       } else if (appName) {
         const openArgs = ["-a", appName, "--args", ...args];
-        (0, import_child_process5.spawn)("open", openArgs, { detached: true, stdio: "ignore" }).unref();
+        (0, import_child_process6.spawn)("open", openArgs, { detached: true, stdio: "ignore" }).unref();
       } else {
         throw new Error(`No app identifier or CLI for ${ide.displayName}`);
       }
@@ -109279,7 +109345,7 @@ ${result.stderr}`, result.code);
       const args = ["--remote-debugging-port=" + port];
       if (newWindow) args.push("--new-window");
       if (workspace) args.push(workspace);
-      (0, import_child_process5.spawn)(cli, args, { detached: true, stdio: "ignore", windowsHide: true }).unref();
+      (0, import_child_process6.spawn)(cli, args, { detached: true, stdio: "ignore", windowsHide: true }).unref();
     }
     function getAvailableIdeIds() {
       return getProviderLoader().getAvailableIdeTypes();
@@ -109755,25 +109821,25 @@ ${result.stderr}`, result.code);
     init_mesh_relay_result();
     init_config();
     init_install();
-    var import_child_process10 = require("child_process");
     var import_child_process11 = require("child_process");
+    var import_child_process12 = require("child_process");
     init_hidden_spawn();
     var fs60 = __toESM2(require("fs"));
     var os29 = __toESM2(require("os"));
     var path65 = __toESM2(require("path"));
-    var import_child_process7 = require("child_process");
+    var import_child_process8 = require("child_process");
     var fs54 = __toESM2(require("fs"));
     var http2 = __toESM2(require("http"));
     var path59 = __toESM2(require("path"));
     init_track_identity();
-    var import_child_process6 = require("child_process");
+    var import_child_process7 = require("child_process");
     init_logger();
     function errorText(error) {
       return error instanceof Error ? error.message : String(error);
     }
     var warnedCommandLineFailures = /* @__PURE__ */ new Set();
     function defaultExecFileSync() {
-      return import_child_process6.execFileSync;
+      return import_child_process7.execFileSync;
     }
     function getWindowsProcessCommandLine(pid, exec6) {
       const pidFilter = `ProcessId=${pid}`;
@@ -110059,7 +110125,7 @@ ${result.stderr}`, result.code);
     }
     function nodeMajor(nodeExecutable) {
       try {
-        const version = String((0, import_child_process7.execFileSync)(nodeExecutable, ["-p", "process.versions.node"], {
+        const version = String((0, import_child_process8.execFileSync)(nodeExecutable, ["-p", "process.versions.node"], {
           encoding: "utf8",
           timeout: 5e3,
           windowsHide: true,
@@ -110159,7 +110225,7 @@ exec "${portableNode}" "${cliEntry}" "$@"
       }
     }
     function validateStagedCli(portableNode, cliEntry, targetVersion) {
-      const output = String((0, import_child_process7.execFileSync)(portableNode, [cliEntry, "--version"], {
+      const output = String((0, import_child_process8.execFileSync)(portableNode, [cliEntry, "--version"], {
         encoding: "utf8",
         timeout: 15e3,
         windowsHide: true,
@@ -110188,7 +110254,7 @@ exec "${portableNode}" "${cliEntry}" "$@"
           `} finally { if ([IO.File]::Exists($temporary)) { [IO.File]::Delete($temporary) } }`
         ].join("\n");
         const encoded = Buffer.from(script, "utf16le").toString("base64");
-        const result = (0, import_child_process7.spawnSync)("powershell.exe", [
+        const result = (0, import_child_process8.spawnSync)("powershell.exe", [
           "-NoLogo",
           "-NoProfile",
           "-NonInteractive",
@@ -110395,7 +110461,7 @@ exec "${portableNode}" "${cliEntry}" "$@"
           };
           const pathKey = Object.keys(env2).find((key2) => key2.toLowerCase() === "path") || "Path";
           env2[pathKey] = `${path59.dirname(portableNode)};${env2[pathKey] || ""}`;
-          const installOutput = String((0, import_child_process7.execFileSync)(portableNode, [
+          const installOutput = String((0, import_child_process8.execFileSync)(portableNode, [
             options.npmCliPath,
             "install",
             "-g",
@@ -110419,7 +110485,7 @@ exec "${portableNode}" "${cliEntry}" "$@"
             options.log("No restart arguments provided (daemon was not running); leaving the activated version in place without starting a daemon");
             return null;
           }
-          const child = (0, import_child_process7.spawn)(portableNode, restartArgv, {
+          const child = (0, import_child_process8.spawn)(portableNode, restartArgv, {
             detached: true,
             stdio: "ignore",
             windowsHide: true,
@@ -110431,7 +110497,7 @@ exec "${portableNode}" "${cliEntry}" "$@"
         },
         restartOld: (portableNode) => {
           if (options.restartArgv.length === 0) return;
-          const child = (0, import_child_process7.spawn)(portableNode, options.restartArgv, {
+          const child = (0, import_child_process8.spawn)(portableNode, options.restartArgv, {
             detached: true,
             stdio: "ignore",
             windowsHide: true,
@@ -110471,7 +110537,7 @@ exec "${portableNode}" "${cliEntry}" "$@"
         },
         stopProcess: (pid) => {
           try {
-            (0, import_child_process7.execFileSync)("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+            (0, import_child_process8.execFileSync)("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
           } catch {
           }
         },
@@ -110769,7 +110835,7 @@ exec "${portableNode}" "${cliEntry}" "$@"
     init_config();
     var path62 = __toESM2(require("path"));
     var fs57 = __toESM2(require("fs"));
-    var import_child_process8 = require("child_process");
+    var import_child_process9 = require("child_process");
     function isSpawnTimeoutError(error) {
       if (!error || typeof error !== "object") return false;
       const candidate = error;
@@ -110859,7 +110925,7 @@ exec "${portableNode}" "${cliEntry}" "$@"
       ].join("\n");
       let out = "";
       try {
-        out = String((0, import_child_process8.execFileSync)("powershell.exe", [
+        out = String((0, import_child_process9.execFileSync)("powershell.exe", [
           "-NoProfile",
           "-NonInteractive",
           "-ExecutionPolicy",
@@ -110902,7 +110968,7 @@ exec "${portableNode}" "${cliEntry}" "$@"
       }
       return results;
     }
-    var import_child_process9 = require("child_process");
+    var import_child_process10 = require("child_process");
     function resolveSiblingNpmInvocation(nodeExecutable, platform10 = process.platform) {
       const binDir = path63.dirname(nodeExecutable);
       if (platform10 === "win32") {
@@ -111040,7 +111106,7 @@ exec "${portableNode}" "${cliEntry}" "$@"
     }
     function execNpmCommandSync(args, options = {}, surface) {
       const execOptions = surface?.execOptions || getNpmExecOptions();
-      return (0, import_child_process9.execFileSync)(
+      return (0, import_child_process10.execFileSync)(
         surface?.npmExecutable || "npm",
         [...surface?.npmArgsPrefix || [], ...args],
         {
@@ -111255,7 +111321,7 @@ ${marker}`,
       for (const name of names) {
         const shimPath = path65.join(binDir, name);
         if (!fs60.existsSync(shimPath)) continue;
-        (0, import_child_process10.execFileSync)(shimPath, ["--version"], {
+        (0, import_child_process11.execFileSync)(shimPath, ["--version"], {
           encoding: "utf8",
           stdio: "pipe",
           timeout: 3e4,
@@ -111621,7 +111687,7 @@ ${marker}`,
     }
     function spawnDetachedDaemonUpgradeHelper(payload) {
       const env2 = buildUpgradeHelperChildEnv(payload);
-      const child = (0, import_child_process11.spawn)(process.execPath, process.argv.slice(1), {
+      const child = (0, import_child_process12.spawn)(process.execPath, process.argv.slice(1), {
         detached: true,
         stdio: "ignore",
         windowsHide: true,
@@ -111827,7 +111893,7 @@ ${marker}`,
         appendUpgradeLog(`Restarting daemon with args: ${restartArgv.join(" ")}`);
         const { fd: outFd, close: closeOutFd } = openCaptureLogFd();
         try {
-          const child = (0, import_child_process11.spawn)(process.execPath, restartArgv, {
+          const child = (0, import_child_process12.spawn)(process.execPath, restartArgv, {
             detached: true,
             stdio: ["ignore", outFd, outFd],
             windowsHide: true,
@@ -118479,6 +118545,7 @@ ${marker}`,
     init_git_locale();
     init_mesh_refine_gitlink_utils();
     init_mesh_refine_gates();
+    init_refine_config();
     init_worktree_bootstrap_config();
     var execFileAsync4 = (0, import_node_util6.promisify)(import_node_child_process10.execFile);
     var runGit2 = async (cwd, args) => {
@@ -118644,13 +118711,14 @@ ${marker}`,
         plan: orderedNodes.map((node) => ({
           nodeId: node.id,
           workspace: node.workspace,
-          validationPlan: buildMeshRefineValidationPlan(mesh, node.workspace),
+          validationPlan: buildMeshRefineValidationPlan(mesh, node.workspace, { baseRefs: resolveMeshRefineConfigBaseRefs(mesh, node) }),
           mergeWillRun: false
         })),
         ...warnings.length ? { submodulePreflightWarnings: warnings } : {},
         note: "Dry-run: no validation, rebase, or merge was executed. Re-run with execute=true to converge nodes in this order."
       };
     }
+    init_refine_config();
     init_command_args();
     init_mesh_relay_result();
     var fastForwardHandlers = {
@@ -118681,7 +118749,7 @@ ${marker}`,
           dryRun: true,
           nodeId,
           workspace: node.workspace,
-          validationPlan: buildMeshRefineValidationPlan(mesh, node.workspace),
+          validationPlan: buildMeshRefineValidationPlan(mesh, node.workspace, { baseRefs: resolveMeshRefineConfigBaseRefs(mesh, node) }),
           mergeWillRun: false,
           cleanupWillRun: false,
           ...submoduleReachabilityPreflight ? { submoduleReachabilityPreflight } : {}
@@ -118798,7 +118866,7 @@ ${marker}`,
             dryRun: true,
             nodeId,
             workspace: node.workspace,
-            validationPlan: buildMeshRefineValidationPlan(mesh, node.workspace),
+            validationPlan: buildMeshRefineValidationPlan(mesh, node.workspace, { baseRefs: resolveMeshRefineConfigBaseRefs(mesh, node) }),
             mergeWillRun: false,
             cleanupWillRun: false,
             ...submoduleReachabilityPreflight ? { submoduleReachabilityPreflight } : {},
@@ -120217,6 +120285,10 @@ ${ptyResult.output.slice(-2e3)}`);
           }
           if (cliType === "claude-cli") {
             cliArgs.push("--mcp-config", coordinatorSetup.configPath);
+            const serverName = coordinatorSetup.serverName;
+            if (typeof serverName === "string" && /^[A-Za-z0-9_-]+$/.test(serverName)) {
+              cliArgs.push(`--allowedTools=mcp__${serverName}`);
+            }
           }
           const launchResult = await ctx.execute("launch_cli", {
             cliType,
@@ -143347,7 +143419,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         });
       }
     }
-    var import_child_process12 = require("child_process");
+    var import_child_process13 = require("child_process");
     init_hidden_spawn();
     var fs98 = __toESM2(require("fs"));
     var os422 = __toESM2(require("os"));
@@ -143465,7 +143537,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           logFd = fs98.openSync(path87.join(logDir, "session-host.log"), "a");
           stdio = ["ignore", logFd, logFd];
         }
-        const child = (0, import_child_process12.spawn)(nodeExecutable, [entry], {
+        const child = (0, import_child_process13.spawn)(nodeExecutable, [entry], {
           detached: true,
           stdio,
           windowsHide: true,
@@ -143658,8 +143730,8 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     }
     init_hidden_spawn();
     var import_util2 = require("util");
-    var import_child_process13 = require("child_process");
-    var execAsync3 = (0, import_util2.promisify)(import_child_process13.exec);
+    var import_child_process14 = require("child_process");
+    var execAsync3 = (0, import_util2.promisify)(import_child_process14.exec);
     async function isExtensionInstalled(ide, marketplaceId) {
       if (!ide.cliCommand) return false;
       try {
