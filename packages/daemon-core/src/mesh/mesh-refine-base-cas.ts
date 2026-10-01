@@ -153,7 +153,11 @@ export async function probeRefineBaseCas(params: {
         return { state: 'undeterminable', reason: `git rev-parse origin/${baseBranch} produced no SHA` };
     }
 
-    if (liveBaseHead !== pinnedBaseHead) {
+    // The pin is origin/<base>, or the local base when it already contains origin
+    // and is ahead of it (resolve_refs). Origin still inside the pin is unmoved;
+    // only a commit the pin has never seen (a peer push) moves it.
+    if (liveBaseHead !== pinnedBaseHead
+        && !(await isAncestor(execFileAsync, repoRoot, liveBaseHead, pinnedBaseHead, env))) {
         return { state: 'moved', liveBaseHead };
     }
 

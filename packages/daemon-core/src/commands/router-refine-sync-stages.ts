@@ -99,9 +99,38 @@ export async function refineResolveRefsStage(self: DaemonCommandRouter,
                 baseHeadRaw = localHead.trim();
             }
 
+            // ★Local base ahead of origin (unpushed local commits — routine under
+            // requireApprovalForPush or a checkpoint on main): the merge target is the
+            // local base, so pin THAT. Pinning origin made sync_base measure a branch
+            // cut before those commits as up to date (no rebase), base_cas then refused
+            // the diverged merge as base_moved, and every retry re-pinned origin and
+            // failed identically (2026-10-01 todo demo: 4 local commits, 3 branches).
+            //
+            // Except when the local base already holds the branch: that is a retry after
+            // a push failure (attempt 1 merged locally). Pinning local there reads as
+            // no_effective_diff and hides the push failure, so origin stays the pin.
             const { stdout: branchHeadStdout } = await execFileAsync('git', ['rev-parse', branch], { cwd: node.workspace, encoding: 'utf8', windowsHide: true, env: gitChildEnv() });
-            const baseHead = baseHeadRaw;
             const branchHead = branchHeadStdout.trim();
+            let pinnedLocalAhead = false;
+            try {
+                const isAncestor = async (ancestor: string, descendant: string): Promise<boolean> => {
+                    try {
+                        await execFileAsync('git', ['merge-base', '--is-ancestor', ancestor, descendant], { cwd: repoRoot, encoding: 'utf8', windowsHide: true, env: gitChildEnv() });
+                        return true;
+                    } catch {
+                        return false;
+                    }
+                };
+                const { stdout: localHeadStdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8', windowsHide: true, env: gitChildEnv() });
+                const localHead = localHeadStdout.trim();
+                if (localHead && localHead !== baseHeadRaw
+                    && await isAncestor(baseHeadRaw, localHead)
+                    && !(await isAncestor(branchHead, localHead))) {
+                    baseHeadRaw = localHead;
+                    pinnedLocalAhead = true;
+                }
+            } catch { /* local HEAD unreadable — keep origin as the pin */ }
+            const baseHead = baseHeadRaw;
 
             // Coarse daemon-vs-web change-impact for baseHead..branchHead, computed
             // against the worktree so the same policy (.adhdev/change-impact.*) as the
@@ -117,6 +146,7 @@ export async function refineResolveRefsStage(self: DaemonCommandRouter,
             }
             recordMeshRefineStage(refineStages, 'resolve_refs', 'passed', resolveStarted, {
                 branch, baseBranch, baseHead, branchHead,
+                ...(pinnedLocalAhead ? { pinnedLocalAhead } : {}),
                 ...(changeImpact ? { changeImpact } : {}),
                 ...(fetchWarning ? { fetchWarning } : {}),
             });
