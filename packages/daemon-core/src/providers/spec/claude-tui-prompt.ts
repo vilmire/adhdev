@@ -789,6 +789,12 @@ export async function answerClaudeInteractivePrompt(
         // tool_result / busy-advance / the 1500ms lost-grace clear, which
         // structurally exceeds the 600ms page budget.
         let previewLayoutAnswer = prompt.questions.some(q => q.options.some(o => o.preview));
+        // Validate the WHOLE response before the first key. Steps are built per
+        // question below, so a response missing q2 used to type q1's answer and
+        // only then fail (2026-10-01): the caller saw "not delivered" while the
+        // terminal had moved on to q2, and every later answer was refused as a
+        // focus mismatch.
+        buildClaudeInteractiveTuiAnswerSteps(prompt, response);
         questionLoop: for (const question of prompt.questions) {
             const questionSteps = buildClaudeInteractiveTuiAnswerSteps({
                 ...prompt,
