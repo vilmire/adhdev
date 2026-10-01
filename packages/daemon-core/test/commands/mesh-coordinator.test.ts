@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -789,6 +789,51 @@ describe('resolveMeshCoordinatorSetup', () => {
         cliType: 'claude-cli',
         dir: workspace,
       }))
+    } finally {
+      if (previousMcpEntry === undefined) delete process.env.ADHDEV_MCP_SERVER_PATH
+      else process.env.ADHDEV_MCP_SERVER_PATH = previousMcpEntry
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  })
+
+  // 2026-10-01: every relaunch copied the existing `.mcp.json` to
+  // `.mcp.json.backup` in the workspace — an untracked file that made the repo
+  // dirty and blocked mesh convergence.
+  it('leaves no backup file in the workspace, and keeps a changed config backup in the config dir', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'adhdev-mesh-coordinator-backup-'))
+    const mcpEntry = join(workspace, 'mcp-server.js')
+    writeFileSync(mcpEntry, '#!/usr/bin/env node\n', 'utf-8')
+    const previousMcpEntry = process.env.ADHDEV_MCP_SERVER_PATH
+    process.env.ADHDEV_MCP_SERVER_PATH = mcpEntry
+    const userConfig = JSON.stringify({ mcpServers: { mine: { command: 'my-server' } } }, null, 2)
+    writeFileSync(join(workspace, '.mcp.json'), userConfig, 'utf-8')
+    const provider: ProviderModule = {
+      ...baseProvider,
+      type: 'claude-cli',
+      meshCoordinator: {
+        supported: true,
+        mcpConfig: { mode: 'auto_import', format: 'claude_mcp_json', path: '.mcp.json', serverName: 'adhdev-mesh' },
+      },
+    }
+    const cliManager = { launchCli: vi.fn(async () => ({ success: true, sessionId: 'session-1' })) }
+    const router = createAutoImportRouter(provider, cliManager)
+    const inlineMesh = {
+      id: 'mesh_123', name: 'Test Mesh', repoIdentity: 'example/repo',
+      nodes: [{ id: 'node-1', workspace, policy: {} }], policy: {}, coordinator: {},
+    }
+    const backupDir = join(process.env.ADHDEV_CONFIG_DIR!, 'mcp-config-backups')
+    const backupsBefore = existsSync(backupDir) ? readdirSync(backupDir).length : 0
+    try {
+      const launch = () => router.execute('launch_mesh_coordinator', { meshId: 'mesh_123', cliType: 'claude-cli', inlineMesh })
+      expect(await launch()).toMatchObject({ success: true })
+      const written = readFileSync(join(workspace, '.mcp.json'), 'utf-8')
+      expect(JSON.parse(written).mcpServers.mine).toEqual({ command: 'my-server' })
+      expect(readdirSync(backupDir).length).toBe(backupsBefore + 1)
+
+      expect(await launch()).toMatchObject({ success: true })
+      expect(readFileSync(join(workspace, '.mcp.json'), 'utf-8')).toBe(written)
+      expect(readdirSync(backupDir).length).toBe(backupsBefore + 1)
+      expect(readdirSync(workspace).filter((name) => name.includes('backup'))).toEqual([])
     } finally {
       if (previousMcpEntry === undefined) delete process.env.ADHDEV_MCP_SERVER_PATH
       else process.env.ADHDEV_MCP_SERVER_PATH = previousMcpEntry
