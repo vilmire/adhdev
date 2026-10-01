@@ -214,17 +214,18 @@ function evalCond(
     legacyTrace: TraceEntry[],
     stateId: string,
     signalSnapshot?: SignalSnapshot | null,
+    absence?: { viewportScreen: string; inNot: boolean },
 ): CondResult {
     if (isAll(cond)) {
         const children = cond.all.map(c =>
-            evalCond(c, sections, fullScreen, cursor, prevLines, clock, legacyTrace, stateId, signalSnapshot));
+            evalCond(c, sections, fullScreen, cursor, prevLines, clock, legacyTrace, stateId, signalSnapshot, absence));
         const result = children.every(c => c.result);
         const remainingMs = result ? 0 : Math.max(0, ...children.filter(c => !c.result).map(c => c.remainingMs ?? 0));
         return { kind: 'all', result, detail: `all(${children.length})`, remainingMs, children };
     }
     if (isAny(cond)) {
         const children = cond.any.map(c =>
-            evalCond(c, sections, fullScreen, cursor, prevLines, clock, legacyTrace, stateId, signalSnapshot));
+            evalCond(c, sections, fullScreen, cursor, prevLines, clock, legacyTrace, stateId, signalSnapshot, absence));
         const result = children.some(c => c.result);
         // remaining = the soonest child that could flip true
         const pending = children.filter(c => !c.result).map(c => c.remainingMs ?? Infinity);
@@ -232,7 +233,8 @@ function evalCond(
         return { kind: 'any', result, detail: `any(${children.length})`, remainingMs: Number.isFinite(remainingMs) ? remainingMs : 0, children };
     }
     if (isNot(cond)) {
-        const child = evalCond(cond.not, sections, fullScreen, cursor, prevLines, clock, legacyTrace, stateId, signalSnapshot);
+        const child = evalCond(cond.not, sections, fullScreen, cursor, prevLines, clock, legacyTrace, stateId, signalSnapshot,
+            absence ? { ...absence, inNot: !absence.inNot } : undefined);
         return { kind: 'not', result: !child.result, detail: `not`, remainingMs: 0, children: [child] };
     }
     if (isSignal(cond)) {
@@ -274,7 +276,16 @@ function evalCond(
     }
     // regex / changed → shared evaluator (operates on v3 Condition shape)
     if (isRegex(cond) || isChanged(cond)) {
-        const result = evaluateCondition(cond as Condition, sections, fullScreen, cursor, prevLines, legacyTrace, stateId);
+        // An unscoped regex under `not` asks "is this ABSENT from the screen?".
+        // Answer it from the viewport, not the scrollback-extended guard frame:
+        // the lookback exists so a tall modal's off-screen top still counts as
+        // PRESENT, but for absence it turns stale scrollback into a live match.
+        // (2026-10-01: SIGWINCH redraw nudges left copies of claude's spinner
+        // line in scrollback; `not <spinner>` stayed false for the 200-line
+        // lookback and the coordinator sat in busy at an idle prompt for an
+        // hour, with every queued mesh event undelivered.)
+        const hayScreen = absence?.inNot && isRegex(cond) && !(cond as any).section ? absence.viewportScreen : fullScreen;
+        const result = evaluateCondition(cond as Condition, sections, hayScreen, cursor, prevLines, legacyTrace, stateId);
         const kind = isRegex(cond) ? 'regex' : 'changed';
         const detail = isRegex(cond)
             ? `${(cond as any).section ?? '*'}~/${(cond as any).matches}/`
@@ -286,7 +297,7 @@ function evalCond(
         let matchedText: string | undefined;
         if (result && isRegex(cond)) {
             try {
-                const hay = sectionText(sections, (cond as any).section, fullScreen);
+                const hay = sectionText(sections, (cond as any).section, hayScreen);
                 const re = new RegExp((cond as any).matches, (cond as any).flags ?? 'i');
                 const m = re.exec(hay);
                 if (m && m[0]) matchedText = m[0].replace(/\s+/g, ' ').trim().slice(0, 160);
@@ -315,10 +326,16 @@ export function evaluateFsm(
     prevLines: string[] | undefined,
     clock: FsmClock,
     signalSnapshot?: SignalSnapshot | null,
+    /** First viewport row in `screenText` when it carries scrollback above the
+     *  viewport (FsmDriver's guard frame). Unscoped absence checks read from here. */
+    viewportStartRow?: number,
 ): FsmEvaluation {
     const legacyTrace: TraceEntry[] = [];
     const lines = screenText.split('\n').map(l => l.endsWith('\r') ? l.slice(0, -1) : l);
     const cleanScreen = lines.join('\n');
+    const absence = viewportStartRow && viewportStartRow > 0
+        ? { viewportScreen: lines.slice(viewportStartRow).join('\n'), inNot: false }
+        : undefined;
     const sections = resolveSections(spec.sections ?? {}, lines);
 
     const outgoing = outgoingTransitions(spec, currentStateId);
@@ -334,7 +351,7 @@ export function evaluateFsm(
         let cond: CondResult | undefined;
         let condResult = true;
         if (t.when) {
-            cond = evalCond(t.when, sections, cleanScreen, cursor, prevLines, clock, legacyTrace, `${currentStateId}→${t.to}`, signalSnapshot);
+            cond = evalCond(t.when, sections, cleanScreen, cursor, prevLines, clock, legacyTrace, `${currentStateId}→${t.to}`, signalSnapshot, absence);
             condResult = cond.result;
         }
 
