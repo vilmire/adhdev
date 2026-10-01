@@ -22,6 +22,9 @@ export function cleanApprovalButtonText(text: string): string {
     return text
         .replace(/[⌥⏎⇧⌫⌘⌃↵]/g, '')
         .replace(/\s*(Alt|Ctrl|Shift|Cmd|Enter|Return|Esc|Tab|Backspace)(\+\s*\w+)*/gi, '')
+        // A hint wrapped in parentheses ("… session (shift+tab)", "Deny (esc)")
+        // leaves an empty pair behind once the keys are stripped.
+        .replace(/\s*\(\s*\)/g, '')
         .trim()
 }
 
