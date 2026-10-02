@@ -63,6 +63,9 @@ import {
     WIN32_ECHO_PROBE_CHARS,
     WIN32_ECHO_MAX_WAIT_MS,
 } from './submit-policy.js';
+
+/** A CLI's collapsed-paste chip in the composer (Claude Code / Codex). */
+export const PASTE_PLACEHOLDER_RE = /\[Pasted\s*(?:text|Content)[^\]\n]*\]/i;
 import type { SendDisposition } from './submit-policy.js';
 
 // ── send_message serialization (SEND-OVERLAP) ────────────────────────────────
@@ -763,6 +766,12 @@ export class SendSubmitEngine {
             // Tail on the visible viewport (cursor end is always on screen); head on the
             // scrollback-inclusive buffer (leading lines of a tall body scroll off-screen).
             const visible = normalizeForEcho(this.host.adapter.snapshot());
+            // A long or multi-line body is collapsed by the CLI into a paste chip
+            // ("[Pasted text #1 +6 lines]" in Claude Code, "[Pasted Content 7572
+            // chars]" in Codex), so the literal text never echoes and every such
+            // send — mesh notices, task prompts — sat out the full blind-fire wait
+            // (20 s) before submitting (2026-10-03). The chip IS the body arriving.
+            if (PASTE_PLACEHOLDER_RE.test(visible)) return true;
             if (!visible.includes(tailProbe)) return false;
             const full = normalizeForEcho(this.host.adapter.snapshotWithScrollback());
             return full.includes(headProbe);
