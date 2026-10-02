@@ -32,7 +32,7 @@ import { ChatHistoryWriter } from '../config/chat-history.js';
 import { normalizeProviderSessionId } from './provider-session-id.js';
 import { resolveProviderStateSurface } from './provider-patch-state.js';
 import { workingDirBasename } from './working-dir.js';
-import { isCliGeneratingLikeStatus } from './cli-provider-status-helpers.js';
+import { hasNonEmptyCliModalButtons, isCliGeneratingLikeStatus } from './cli-provider-status-helpers.js';
 import { mergeConversationMessages } from './cli-provider-transcript-merge.js';
 import { ParsedIngestTimestampStamper } from './cli-provider-ingest-times.js';
 import { type PersistableCliHistoryMessage, buildIncrementalHistoryAppendMessages, projectCliChatMessage } from './cli-provider-history-dedup.js';
@@ -108,6 +108,18 @@ function toPersistedTailMessage(
         flattenContent,
         fallBackToParserTimestamp: true,
     });
+}
+
+/**
+ * The modal the session reports: the parsed status's when it has buttons, else
+ * the screen adapter's. A parsed `activeModal: null` (claude-cli's native history
+ * never carries the dialog) used to win through `??` and erase the adapter's
+ * buttons, so the dashboard got waiting_approval with no approval card
+ * (2026-10-02, a manual-approval `rm -rf dist`).
+ */
+export function resolveCliActiveModal<M>(parsed: M | null | undefined, adapter: M | null | undefined): M | null {
+    if (hasNonEmptyCliModalButtons(parsed)) return parsed as M;
+    return adapter ?? parsed ?? null;
 }
 
 export function buildProviderState(host: ProviderStateHost): ProviderState {
@@ -324,7 +336,9 @@ export function buildProviderState(host: ProviderStateHost): ProviderState {
             title: parsedStatus?.title || dirName,
             status: finalChatStatus,
             messages: statusMessages,
-            activeModal: (autoApproveActive || autoApproveHoldIdle) ? null : (parsedStatus?.activeModal ?? adapterStatus.activeModal),
+            activeModal: (autoApproveActive || autoApproveHoldIdle)
+                ? null
+                : resolveCliActiveModal(parsedStatus?.activeModal, adapterStatus.activeModal),
             activeInteractivePrompt: host.activeInteractivePrompt,
             inputContent: '',
         },

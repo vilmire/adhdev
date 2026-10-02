@@ -133815,6 +133815,10 @@ ${buttons.join("\n")}`;
         fallBackToParserTimestamp: true
       });
     }
+    function resolveCliActiveModal(parsed, adapter) {
+      if (hasNonEmptyCliModalButtons(parsed)) return parsed;
+      return adapter ?? parsed ?? null;
+    }
     function buildProviderState(host) {
       const adapterStatus = host.stabilizeFlappingApprovalStatus(host.adapter.getStatus());
       if (Object.prototype.hasOwnProperty.call(adapterStatus, "activeInteractivePrompt")) {
@@ -133952,7 +133956,7 @@ ${buttons.join("\n")}`;
           title: parsedStatus?.title || dirName,
           status: finalChatStatus,
           messages: statusMessages,
-          activeModal: autoApproveActive || autoApproveHoldIdle ? null : parsedStatus?.activeModal ?? adapterStatus.activeModal,
+          activeModal: autoApproveActive || autoApproveHoldIdle ? null : resolveCliActiveModal(parsedStatus?.activeModal, adapterStatus.activeModal),
           activeInteractivePrompt: host.activeInteractivePrompt,
           inputContent: ""
         },
