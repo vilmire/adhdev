@@ -58,6 +58,7 @@ import type { NativeHistoryRole, NativeHistoryKind } from './types.js';
 import { statMtimeMs } from './fs-utils.js';
 import { extractTimestampValue, isUuidLike, listJsonlTranscriptSessions } from './transcript-common.js';
 import {
+  formatToolCallArgs,
   oneLine,
   TOOL_CALL_SUMMARY_MAX,
   TOOL_RESULT_SUMMARY_MAX,
@@ -162,18 +163,10 @@ function flattenCodexContent(content: unknown): string {
   return '';
 }
 
-/**
- * Summarize tool call arguments into a compact string.
- */
+/** Summarize tool call arguments — the one formatter every tool bubble uses. */
 function summarizeToolArguments(value: unknown): string {
-  if (typeof value === 'string') return value.trim();
   if (Array.isArray(value)) return (value as unknown[]).map(String).join(' ').trim();
-  if (!value || typeof value !== 'object') return '';
-  const obj = value as Record<string, unknown>;
-  const direct = obj.command ?? obj.cmd ?? obj.query ?? obj.path ?? obj.prompt;
-  if (typeof direct === 'string') return direct.trim();
-  if (Array.isArray(direct)) return (direct as unknown[]).map(String).join(' ').trim();
-  try { return JSON.stringify(value).trim(); } catch { return ''; }
+  return formatToolCallArgs(value);
 }
 
 /**

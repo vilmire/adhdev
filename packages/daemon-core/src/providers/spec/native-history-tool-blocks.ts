@@ -78,7 +78,7 @@ export function projectToolBlock(
     // same string back.
     if (callTypes.includes(typeVal)) {
         const name = String(jsonPathGet(block, tmap.call_name || '$.name') ?? 'tool').trim() || 'tool';
-        const { text: args, truncated } = oneLine(stringifyContent(jsonPathGet(block, tmap.call_args || '$.input')), TOOL_CALL_SUMMARY_MAX);
+        const { text: args, truncated } = oneLine(formatToolCallArgs(jsonPathGet(block, tmap.call_args || '$.input')), TOOL_CALL_SUMMARY_MAX);
         const content = args ? `↗ ${name}: ${args}` : `↗ ${name}`;
         const msg: NativeHistoryMessage = { role: 'assistant', content, receivedAt: 0, kind: 'tool', toolName: name };
         if (truncated && isResolvableToolBlockRef(ref)) msg.toolBlockRef = ref;
@@ -92,6 +92,41 @@ export function projectToolBlock(
         return msg;
     }
     return null;
+}
+
+/** Input fields that ARE the call, in the order they are looked for. */
+const PRIMARY_TOOL_ARG_KEYS = ['command', 'cmd', 'file_path', 'notebook_path', 'path', 'pattern', 'url', 'query', 'prompt', 'skill'];
+
+/**
+ * A tool call's input as a person reads it. Raw JSON (`{"command":"rm -rf
+ * dist","description":"Delete dist"}`) was what every tool bubble showed
+ * (2026-10-02 launch screenshots). An input with a primary field shows that
+ * value (plus its `description`, which agents write for humans); any other
+ * object shows `key=value` pairs; strings pass through.
+ *
+ * Exported so the expand path (`tool-block-expand.ts`) measures truncation on
+ * the same text the summary was cut from.
+ */
+export function formatToolCallArgs(input: unknown): string {
+    if (input == null) return '';
+    if (typeof input !== 'object' || Array.isArray(input)) return stringifyContent(input);
+    const record = input as Record<string, unknown>;
+    const primaryText = (value: unknown): string => {
+        if (typeof value === 'string') return value.trim();
+        // codex shell calls carry the command as an argv array.
+        if (Array.isArray(value) && value.length && value.every(v => typeof v === 'string')) return value.join(' ').trim();
+        return '';
+    };
+    const primaryKey = PRIMARY_TOOL_ARG_KEYS.find(key => primaryText(record[key]));
+    if (primaryKey) {
+        const primary = primaryText(record[primaryKey]);
+        const description = typeof record.description === 'string' ? record.description.trim() : '';
+        return description ? `${primary} — ${description}` : primary;
+    }
+    const pairs = Object.entries(record)
+        .filter(([, value]) => value !== undefined && value !== null && value !== '')
+        .map(([key, value]) => `${key}=${typeof value === 'string' ? value : JSON.stringify(value)}`);
+    return pairs.join(' ');
 }
 
 /**
