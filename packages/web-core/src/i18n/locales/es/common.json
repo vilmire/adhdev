@@ -778,6 +778,7 @@
             "pushBranch": "publicar rama",
             "blockedReview": "revisión bloqueada",
             "refineFailed": "refine fallido",
+            "working": "en curso",
             "refining": "refinando…",
             "needsMerge": "necesita fusión",
             "refineWorktree": "refinar worktree",

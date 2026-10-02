@@ -778,6 +778,7 @@
             "pushBranch": "push branch",
             "blockedReview": "blocked review",
             "refineFailed": "refine failed",
+            "working": "working",
             "refining": "refining…",
             "needsMerge": "needs merge",
             "refineWorktree": "refine worktree",

@@ -778,6 +778,7 @@
             "pushBranch": "브랜치 푸시 필요",
             "blockedReview": "리뷰 차단",
             "refineFailed": "refine 실패",
+            "working": "작업 중",
             "refining": "refine 중…",
             "needsMerge": "병합 필요",
             "refineWorktree": "워크트리 refine",

@@ -778,6 +778,7 @@
             "pushBranch": "需推送分支",
             "blockedReview": "审查阻塞",
             "refineFailed": "refine 失败",
+            "working": "进行中",
             "refining": "refine 中…",
             "needsMerge": "需要合并",
             "refineWorktree": "refine 工作树",

@@ -778,6 +778,7 @@
             "pushBranch": "ブランチをプッシュ",
             "blockedReview": "レビューブロック",
             "refineFailed": "refine 失敗",
+            "working": "作業中",
             "refining": "refine 中…",
             "needsMerge": "マージ必要",
             "refineWorktree": "ワークツリー refine",

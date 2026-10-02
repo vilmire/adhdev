@@ -1268,6 +1268,27 @@ describe('buildMeshGraph', () => {
         expect(graph.nodes.find(n => n.id === 'node_clone')?.isOrphan).toBe(true)
     })
 
+    // 2026-10-02 launch screenshots: an active worker's worktree read as
+    // "dirty workspace · blocked" and a just-started branch as "Merged".
+    it('treats a node with a busy worker as in progress, not as a follow-up', () => {
+        const graph = buildMeshGraph({
+            meshId: 'mesh_busy', meshName: 'Busy', repoIdentity: 'repo', refreshedAt: '2026-10-02T00:00:00.000Z',
+            nodes: [
+                { nodeId: 'node_base', machineLabel: 'Mac', workspace: '/repo', health: 'online', providers: [], activeSessions: [], git: baseGit('main') },
+                {
+                    nodeId: 'node_wt', machineLabel: 'Mac', workspace: '/wt', health: 'online', providers: [], isLocalWorktree: true, worktreeBranch: 'feat/a', clonedFromNodeId: 'node_base',
+                    git: { ...baseGit('feat/a'), modified: 3 },
+                    branchConvergence: { status: 'not_mergeable', needsConvergence: true, reason: 'dirty_workspace', defaultBranch: 'main' },
+                    activeSessions: ['s1'],
+                    activeSessionDetails: [{ sessionId: 's1', providerType: 'claude-cli', chatStatus: 'generating', role: 'worker' }],
+                },
+            ],
+        } as any)
+        const wt = graph.nodes.find(n => n.id === 'node_wt')!
+        expect(wt.inProgress).toBe(true)
+        expect(graph.stats.followUpNodes).toBe(0)
+    })
+
     it('counts pendingGitSnapshotNodes on the aggregate stats', () => {
         const graph = buildMeshGraph({
             meshId: 'mesh_pending_stat',
