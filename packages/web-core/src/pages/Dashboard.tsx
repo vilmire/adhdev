@@ -625,7 +625,15 @@ export default function Dashboard({ suppressConnectionBanner = false }: Dashboar
                     suppress: suppressConnectionBanner,
                 }}
                 toastOverlay={{
-                    toasts,
+                    // An approval toast for the conversation already on screen
+                    // duplicates its approval banner and covered it on phones
+                    // (2026-10-02 landing capture); the banner is the one to use.
+                    toasts: toasts.filter(toast => !(
+                        toast.actions?.length
+                        && toast.targetKey
+                        && activeConv?.modalButtons?.length
+                        && resolveConversationByTarget(toast.targetKey)?.tabKey === activeConv.tabKey
+                    )),
                     onDismiss: (id) => setToasts(prev => prev.filter(t => t.id !== id)),
                     onClick: (toast) => {
                         if (toast.targetKey) {
