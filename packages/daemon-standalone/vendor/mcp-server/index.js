@@ -102840,7 +102840,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       const resultTypes = tmap.result_types ?? DEFAULT_TOOL_RESULT_TYPES;
       if (callTypes.includes(typeVal)) {
         const name = String(jsonPathGet(block2, tmap.call_name || "$.name") ?? "tool").trim() || "tool";
-        const { text: args, truncated } = oneLine(stringifyContent(jsonPathGet(block2, tmap.call_args || "$.input")), TOOL_CALL_SUMMARY_MAX);
+        const { text: args, truncated } = oneLine(formatToolCallArgs(jsonPathGet(block2, tmap.call_args || "$.input")), TOOL_CALL_SUMMARY_MAX);
         const content = args ? `\u2197 ${name}: ${args}` : `\u2197 ${name}`;
         const msg = { role: "assistant", content, receivedAt: 0, kind: "tool", toolName: name };
         if (truncated && isResolvableToolBlockRef(ref)) msg.toolBlockRef = ref;
@@ -102854,6 +102854,25 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         return msg;
       }
       return null;
+    }
+    var PRIMARY_TOOL_ARG_KEYS = ["command", "cmd", "file_path", "notebook_path", "path", "pattern", "url", "query", "prompt", "skill"];
+    function formatToolCallArgs(input) {
+      if (input == null) return "";
+      if (typeof input !== "object" || Array.isArray(input)) return stringifyContent(input);
+      const record2 = input;
+      const primaryText = (value) => {
+        if (typeof value === "string") return value.trim();
+        if (Array.isArray(value) && value.length && value.every((v) => typeof v === "string")) return value.join(" ").trim();
+        return "";
+      };
+      const primaryKey = PRIMARY_TOOL_ARG_KEYS.find((key2) => primaryText(record2[key2]));
+      if (primaryKey) {
+        const primary = primaryText(record2[primaryKey]);
+        const description = typeof record2.description === "string" ? record2.description.trim() : "";
+        return description ? `${primary} \u2014 ${description}` : primary;
+      }
+      const pairs2 = Object.entries(record2).filter(([, value]) => value !== void 0 && value !== null && value !== "").map(([key2, value]) => `${key2}=${typeof value === "string" ? value : JSON.stringify(value)}`);
+      return pairs2.join(" ");
     }
     function oneLine(s2, max) {
       const flat = s2.replace(/\s+/g, " ").trim();
@@ -103986,18 +104005,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       return "";
     }
     function summarizeToolArguments(value) {
-      if (typeof value === "string") return value.trim();
       if (Array.isArray(value)) return value.map(String).join(" ").trim();
-      if (!value || typeof value !== "object") return "";
-      const obj = value;
-      const direct = obj.command ?? obj.cmd ?? obj.query ?? obj.path ?? obj.prompt;
-      if (typeof direct === "string") return direct.trim();
-      if (Array.isArray(direct)) return direct.map(String).join(" ").trim();
-      try {
-        return JSON.stringify(value).trim();
-      } catch {
-        return "";
-      }
+      return formatToolCallArgs(value);
     }
     function summarizeToolCall(payload) {
       const name = String(payload.name ?? payload.type ?? "tool").trim() || "tool";
@@ -129054,7 +129063,7 @@ trust_level = "trusted"
       const resultTypes = tmap.result_types ?? DEFAULT_TOOL_RESULT_TYPES;
       if (callTypes.includes(typeVal)) {
         const toolName = String(jsonPathGet(block2, tmap.call_name || "$.name") ?? "tool").trim() || "tool";
-        const callArgs = stringifyContent(jsonPathGet(block2, tmap.call_args || "$.input"));
+        const callArgs = formatToolCallArgs(jsonPathGet(block2, tmap.call_args || "$.input"));
         return {
           ok: true,
           toolName,

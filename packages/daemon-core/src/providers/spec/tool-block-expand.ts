@@ -37,6 +37,7 @@ import {
     DEFAULT_TOOL_CALL_TYPES,
     DEFAULT_TOOL_RESULT_TYPES,
     TOOL_CALL_SUMMARY_MAX,
+    formatToolCallArgs,
     TOOL_RESULT_SUMMARY_MAX,
 } from './native-history-tool-blocks.js';
 import type { NativeHistoryToolBlockRef } from './native-history-types.js';
@@ -187,7 +188,7 @@ function readToolBlock(block: any, tmap: NativeHistoryToolMap): ToolBlockExpandR
 
     if (callTypes.includes(typeVal)) {
         const toolName = String(jsonPathGet(block, tmap.call_name || '$.name') ?? 'tool').trim() || 'tool';
-        const callArgs = stringifyContent(jsonPathGet(block, tmap.call_args || '$.input'));
+        const callArgs = formatToolCallArgs(jsonPathGet(block, tmap.call_args || '$.input'));
         return {
             ok: true,
             toolName,
