@@ -12,6 +12,26 @@ import type { LogEntry, IdeSessionEntry } from './types'
 import { useLaunchCli } from '../../context/LaunchCliContext'
 import { useConfirmDialog } from '../../hooks/useConfirmDialog'
 
+/** How long a nickname save may wait on the machine before it is reported as failed. */
+const NICKNAME_SAVE_TIMEOUT_MS = 15_000
+
+/** Resolve a nickname-save command, or throw: on a refused result and when it never settles. */
+export async function settleNicknameSave(
+    command: Promise<unknown>,
+    opts: { timeoutMs: number; timeoutMessage: string; failedMessage: string },
+): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+        const res: any = await Promise.race([
+            command,
+            new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(opts.timeoutMessage)), opts.timeoutMs) }),
+        ])
+        if (res && res.success === false) throw new Error(res.error || opts.failedMessage)
+    } finally {
+        if (timer) clearTimeout(timer)
+    }
+}
+
 export interface LaunchPickState {
     cliType: string
     argsStr?: string
@@ -295,7 +315,13 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
     const handleSaveNickname = useCallback(async () => {
         if (!machineId) return
         try {
-            await sendDaemonCommand(machineId, 'set_machine_nickname', { nickname: nicknameInput })
+            // The result was never checked (a refused save read as saved), and with
+            // the machine's connection stuck the command never settled, so nothing
+            // at all was shown (2026-10-02). Fail visibly on both.
+            await settleNicknameSave(
+                sendDaemonCommand(machineId, 'set_machine_nickname', { nickname: nicknameInput }),
+                { timeoutMs: NICKNAME_SAVE_TIMEOUT_MS, timeoutMessage: t('machine.actions.nicknameTimeout'), failedMessage: t('machine.actions.nicknameFailed') },
+            )
             if (onNicknameSynced) {
                 try {
                     await onNicknameSynced({

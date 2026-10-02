@@ -62252,6 +62252,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       for (const row of failureRows) {
         if (row.taskId) localTerminalTasks.add(`${row.kind}\0${row.taskId}`);
         if (isIntentionalCleanupStopEntry(row)) continue;
+        if (isRefineJobRecord(row)) continue;
         if (row.kind === "task_stalled") {
           taskStalled++;
           continue;
@@ -62289,6 +62290,10 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
         lastActivityAt: total > 0 && lastAtMs !== null ? new Date(lastAtMs).toISOString() : null,
         recentFailures
       };
+    }
+    function isRefineJobRecord(entry) {
+      const payload = entry.payload && typeof entry.payload === "object" ? entry.payload : {};
+      return payload.source === "refine_mesh_node_async_job";
     }
     function clampSliceLimit(limit) {
       if (typeof limit !== "number" || !Number.isFinite(limit)) return DEFAULT_LOCAL_RECORD_SLICE_LIMIT;
@@ -79289,7 +79294,7 @@ ${detail.join("\n")}` : stripped;
       let recorded = false;
       try {
         recorded = MeshRuntimeStore.getInstance().turnStore().insertWorkerEvent({
-          eventId: (0, import_crypto20.randomUUID)(),
+          eventId: (0, import_crypto21.randomUUID)(),
           attemptId: identity.attemptId,
           sessionId: identity.sessionId ?? null,
           kind: WORKER_PROGRESS_EVENT_KIND,
@@ -79374,7 +79379,7 @@ ${detail.join("\n")}` : stripped;
       PROGRESS_SURFACE_LAST_MS.set(key2, nowMs2);
       return true;
     }
-    var import_crypto20;
+    var import_crypto21;
     var WORKER_PROGRESS_SURFACE_MIN_GAP_MS;
     var WORKER_PROGRESS_SURFACE_MIN_CHARS;
     var PROGRESS_SURFACE_LAST_MS;
@@ -79385,7 +79390,7 @@ ${detail.join("\n")}` : stripped;
         init_worker_report();
         init_worker_report_forwarded();
         init_mesh_runtime_store();
-        import_crypto20 = require("crypto");
+        import_crypto21 = require("crypto");
         init_logger();
         init_worker_progress_notify();
         WORKER_PROGRESS_SURFACE_MIN_GAP_MS = 5 * 60 * 1e3;
@@ -79525,7 +79530,7 @@ ${detail.join("\n")}` : stripped;
       const mesh = config.meshes.find((m) => m.id === meshId);
       if (!mesh) return void 0;
       const now = opts.now || (/* @__PURE__ */ new Date()).toISOString();
-      const token = (opts.token || `mhj_${(0, import_crypto21.randomBytes)(24).toString("base64url")}`).trim();
+      const token = (opts.token || `mhj_${(0, import_crypto22.randomBytes)(24).toString("base64url")}`).trim();
       if (!token) throw new Error("token required");
       const tokenId = tokenIdForManualPairing(token);
       const expiresAt = normalizeTokenExpiry(opts.expiresAt);
@@ -79590,7 +79595,7 @@ ${detail.join("\n")}` : stripped;
       } else {
         if (mesh.nodes.length >= 10) throw new Error("Maximum 10 nodes per mesh");
         node = {
-          id: memberId || `node_${(0, import_crypto21.randomUUID)().replace(/-/g, "")}`,
+          id: memberId || `node_${(0, import_crypto22.randomUUID)().replace(/-/g, "")}`,
           workspace,
           repoRoot: opts.memberNode.repoRoot,
           daemonId: opts.memberNode.daemonId,
@@ -79726,14 +79731,14 @@ ${detail.join("\n")}` : stripped;
       saveMeshConfig(config);
       return { mesh, meshHost: mesh.meshHost };
     }
-    var import_crypto21;
+    var import_crypto22;
     var init_mesh_config_host_pairing = __esm2({
       "src/config/mesh-config-host-pairing.ts"() {
         "use strict";
         init_hash();
         init_mesh_config_store();
         init_mesh_host_ownership();
-        import_crypto21 = require("crypto");
+        import_crypto22 = require("crypto");
         init_dist();
       }
     });
@@ -90138,6 +90143,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       return "fsm_state";
     }
     init_dist();
+    var import_crypto17 = require("crypto");
     init_logger();
     var SUMMARY_REF_KINDS = /* @__PURE__ */ new Set(["turn_end", "transcript_final"]);
     var TURN_EVIDENCE_HANDOFF_KIND = "turn.evidence.text";
@@ -90295,8 +90301,13 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         source: opts.source,
         kind: "suspension",
         modal: opts.modal,
-        ...opts.modalKey ? { modalKey: opts.modalKey } : {}
+        ...opts.modalKey ? { modalKey: toModalKeyIdentifier(opts.modalKey) } : {}
       }), opts.envelope);
+    }
+    var MODAL_KEY_IDENTIFIER_RE = /^[^\s\u0000-\u001f\u007f]{1,256}$/;
+    function toModalKeyIdentifier(key2) {
+      if (MODAL_KEY_IDENTIFIER_RE.test(key2)) return key2;
+      return `fp:${(0, import_crypto17.createHash)("sha256").update(key2).digest("hex").slice(0, 32)}`;
     }
     var ExtensionProviderInstance = class {
       type;
@@ -92869,7 +92880,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     var fs26 = __toESM2(require("fs"));
     var import_node_crypto4 = require("crypto");
     init_logger();
-    var import_crypto17 = require("crypto");
+    var import_crypto18 = require("crypto");
     var BASE_62_DIGITS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
     var ZERO2 = BASE_62_DIGITS[0];
     var SMALLEST_INTEGER = `A${ZERO2.repeat(26)}`;
@@ -93033,7 +93044,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       return m ? { cls: "n", L: m[1], addr: m[2] } : void 0;
     }
     function newEpochToken() {
-      return (0, import_crypto17.randomBytes)(4).readUInt32BE(0).toString(36).padStart(6, "0").slice(-6);
+      return (0, import_crypto18.randomBytes)(4).readUInt32BE(0).toString(36).padStart(6, "0").slice(-6);
     }
     function contentKey(role, kind, text) {
       return `${role}\0${kind}\0${text}`;
@@ -106176,7 +106187,7 @@ ${output}` : "";
     init_contract();
     var fs47 = __toESM2(require("fs"));
     var path51 = __toESM2(require("path"));
-    var import_crypto18 = require("crypto");
+    var import_crypto19 = require("crypto");
     init_contract();
     var TREE_DIGEST_ALGORITHM = "adhdev-provider-tree-sha256-v1";
     function computeProviderTreeDigest(rootDir, providerType) {
@@ -106190,7 +106201,7 @@ ${output}` : "";
         );
       }
       relPaths.sort();
-      const hash = (0, import_crypto18.createHash)("sha256");
+      const hash = (0, import_crypto19.createHash)("sha256");
       for (const relPath of relPaths) {
         const absPath = path51.join(rootDir, ...relPath.split("/"));
         const bytes = fs47.readFileSync(absPath);
@@ -114102,7 +114113,7 @@ ${marker}`,
       }
     };
     var meshLedgerSpecs = defineCommandSpecs("low", meshLedgerHandlers, {}, { meshSender: "authenticated_peer" });
-    var import_crypto19 = require("crypto");
+    var import_crypto20 = require("crypto");
     init_dist();
     init_dist();
     var ROUTER_INTERNAL_ARG_PREFIX = "_";
@@ -114661,7 +114672,7 @@ ${marker}`,
           return { success: false, error: "turn_cancel: no attempt found for the given attemptId/taskId", code: "ledger_not_owner" };
         }
         const evidence = {
-          eventId: (0, import_crypto19.randomUUID)(),
+          eventId: (0, import_crypto20.randomUUID)(),
           at: Date.now(),
           source: "mcp_probe",
           sessionId: attempt.sessionId,
@@ -114695,7 +114706,7 @@ ${marker}`,
           return { success: true, ...response2 };
         }
         const evidence = {
-          eventId: (0, import_crypto19.randomUUID)(),
+          eventId: (0, import_crypto20.randomUUID)(),
           at: Date.now(),
           source: "mcp_probe",
           sessionId: attempt.sessionId,
@@ -119868,6 +119879,7 @@ ${marker}`,
     }, { meshSender: "authenticated_peer" });
     var import_path25 = require("path");
     var fs72 = __toESM2(require("fs"));
+    var import_child_process13 = require("child_process");
     init_logger();
     init_config();
     init_mesh_host_ownership();
@@ -119907,6 +119919,21 @@ ${marker}`,
       } catch (error) {
         LOG.warn("MeshCoordinator", `Host pin backfill skipped for mesh ${opts.meshId}: ${error?.message || String(error)}`);
       }
+    }
+    function isGitTrackedFile(workspace, filePath2) {
+      try {
+        (0, import_child_process13.execFileSync)("git", ["ls-files", "--error-unmatch", "--", filePath2], { cwd: workspace, stdio: "ignore", timeout: 5e3, windowsHide: true });
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    function resolveClaudeCoordinatorMcpConfigPath(opts) {
+      if (!isWorkspaceLocalPath(opts.configPath, opts.workspace)) return opts.configPath;
+      const tracked = (opts.isTracked ?? isGitTrackedFile)(opts.workspace, opts.configPath);
+      if (!tracked) return opts.configPath;
+      const safeMesh = opts.meshId.replace(/[^A-Za-z0-9_-]+/g, "_");
+      return (0, import_path25.join)(opts.configDir, "mcp-configs", `${safeMesh}.json`);
     }
     function isWorkspaceLocalPath(configPath, workspace) {
       const resolvedConfig = (0, import_path25.resolve)(configPath);
@@ -120346,7 +120373,7 @@ ${ptyResult.output.slice(-2e3)}`);
           }
           const { existsSync: existsSync95, readFileSync: readFileSync76, writeFileSync: writeFileSync40, mkdirSync: mkdirSync49 } = await import("fs");
           const { dirname: dirname42 } = await import("path");
-          const mcpConfigPath = coordinatorSetup.configPath;
+          const mcpConfigPath = cliType === "claude-cli" ? resolveClaudeCoordinatorMcpConfigPath({ configPath: coordinatorSetup.configPath, workspace, meshId, configDir: getConfigDir() }) : coordinatorSetup.configPath;
           let mcpServerEnv;
           if (args?.inlineMesh) {
             const modeArgIndex = coordinatorSetup.mcpServer.args.findIndex((value) => value === "--mode");
@@ -120432,7 +120459,7 @@ ${ptyResult.output.slice(-2e3)}`);
             cliArgs.push(...autoImportProviderLaunchArgs.filter((a) => typeof a === "string" && a.trim()));
           }
           if (cliType === "claude-cli") {
-            cliArgs.push("--mcp-config", coordinatorSetup.configPath);
+            cliArgs.push("--mcp-config", mcpConfigPath);
             const serverName = coordinatorSetup.serverName;
             if (typeof serverName === "string" && /^[A-Za-z0-9_-]+$/.test(serverName)) {
               cliArgs.push(`--allowedTools=mcp__${serverName}`);
@@ -121947,7 +121974,7 @@ ${ptyResult.output.slice(-2e3)}`);
       return port.pusher.restore(derived, { selfDaemonId: port.selfDaemonId });
     }
     init_mesh_remote_worktree_membership();
-    var import_crypto22 = require("crypto");
+    var import_crypto23 = require("crypto");
     init_config();
     init_cli_detector();
     init_build_info();
@@ -124302,7 +124329,7 @@ ${ptyResult.output.slice(-2e3)}`);
        * as `daemonBootId` in this daemon's own runtime summary (a coordinator that
        * sees it change knows this member restarted).
        */
-      meshCoordinatorBootId = (0, import_crypto22.randomUUID)();
+      meshCoordinatorBootId = (0, import_crypto23.randomUUID)();
       meshNodeStatePushRestore = null;
       constructor(deps) {
         this.deps = deps;
@@ -137017,6 +137044,9 @@ Run 'adhdev doctor' for detailed diagnostics.`
         restoredSettings.meshLastNodeId = recordMeshNodeId;
       }
       if (record2.launchedByCoordinator === true) restoredSettings.launchedByCoordinator = true;
+      if (typeof record2.autoApproveMode === "string" && record2.autoApproveMode.trim()) {
+        restoredSettings.autoApproveMode = record2.autoApproveMode.trim();
+      }
       return restoredSettings;
     }
     function pruneStaleCoordinatorEntries(sessions, restoredRuntimeIds, rebindAdoptedSessionIds) {
@@ -137397,6 +137427,11 @@ Run 'adhdev doctor' for detailed diagnostics.`
           ...launchMeshNodeFor ? { meshNodeFor: launchMeshNodeFor } : {},
           ...settings?.launchedByCoordinator === true ? { launchedByCoordinator: true } : {},
           ...launchAutoLaunchedForQueueTaskId ? { autoLaunchedForQueueTaskId: launchAutoLaunchedForQueueTaskId } : {},
+          // The session's own approval mode (launch dialog / mesh policy). Restore
+          // rebuilt settings from provider defaults only, so a restarted
+          // coordinator came back with auto-approve off and asked for every
+          // command (2026-10-02).
+          ...typeof settings?.autoApproveMode === "string" && settings.autoApproveMode.trim() ? { autoApproveMode: settings.autoApproveMode.trim() } : {},
           // Phase E: persisted so a hosted runtime re-attached after a daemon
           // restart keeps its model provenance (read back by listHostedCliRuntimes).
           ...!attachExisting && options?.launchRecord ? { launchRecord: options.launchRecord } : {}
@@ -143325,7 +143360,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         });
       }
     };
-    var import_crypto23 = require("crypto");
+    var import_crypto24 = require("crypto");
     var import_session_host_core11 = require_dist();
     var BASE_KEY_SEQUENCES = {
       enter: "\r",
@@ -143423,7 +143458,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         const sessionId = String(options.sessionId || "").trim();
         if (!sessionId) throw new Error("sessionId is required");
         const mode = options.mode || "read";
-        const clientId = options.clientId || `raw-terminal-${process.pid}-${(0, import_crypto23.randomUUID)().slice(0, 8)}`;
+        const clientId = options.clientId || `raw-terminal-${process.pid}-${(0, import_crypto24.randomUUID)().slice(0, 8)}`;
         const client = options.client || new import_session_host_core11.SessionHostClient({ endpoint: options.endpoint });
         await client.connect();
         const attachResponse = await client.request({
@@ -143604,6 +143639,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           meshNodeFor: typeof record2.meta?.meshNodeFor === "string" && record2.meta.meshNodeFor.trim() ? String(record2.meta.meshNodeFor).trim() : void 0,
           meshNodeId: typeof record2.meta?.meshNodeId === "string" && record2.meta.meshNodeId.trim() ? String(record2.meta.meshNodeId).trim() : void 0,
           launchedByCoordinator: record2.meta?.launchedByCoordinator === true ? true : void 0,
+          autoApproveMode: typeof record2.meta?.autoApproveMode === "string" && record2.meta.autoApproveMode.trim() ? String(record2.meta.autoApproveMode).trim() : void 0,
           // Phase E launch provenance written at spawn; validated on restore
           // (buildRestoredLaunchRecord), so it is passed through raw here.
           ...record2.meta?.launchRecord !== void 0 ? { launchRecord: record2.meta.launchRecord } : {}
@@ -143613,7 +143649,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         });
       }
     }
-    var import_child_process13 = require("child_process");
+    var import_child_process14 = require("child_process");
     init_hidden_spawn();
     var fs98 = __toESM2(require("fs"));
     var os422 = __toESM2(require("os"));
@@ -143731,7 +143767,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           logFd = fs98.openSync(path87.join(logDir, "session-host.log"), "a");
           stdio = ["ignore", logFd, logFd];
         }
-        const child = (0, import_child_process13.spawn)(nodeExecutable, [entry], {
+        const child = (0, import_child_process14.spawn)(nodeExecutable, [entry], {
           detached: true,
           stdio,
           windowsHide: true,
@@ -143924,8 +143960,8 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     }
     init_hidden_spawn();
     var import_util2 = require("util");
-    var import_child_process14 = require("child_process");
-    var execAsync3 = (0, import_util2.promisify)(import_child_process14.exec);
+    var import_child_process15 = require("child_process");
+    var execAsync3 = (0, import_util2.promisify)(import_child_process15.exec);
     async function isExtensionInstalled(ide, marketplaceId) {
       if (!ide.cliCommand) return false;
       try {
@@ -144887,7 +144923,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         }
       }
     }
-    var import_crypto24 = require("crypto");
+    var import_crypto25 = require("crypto");
     var import_fs30 = require("fs");
     var import_path30 = require("path");
     init_config();
@@ -144949,7 +144985,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       LOG.info("Seqscribe", "local authority secret minted (standalone, no fleet secret configured)");
     }
     function mintLocalAuthoritySecret() {
-      return (0, import_crypto24.randomBytes)(32).toString("hex");
+      return (0, import_crypto25.randomBytes)(32).toString("hex");
     }
     function loadOrCreateLocalAuthoritySecret(env2) {
       const existing = loadStoredLocalAuthoritySecret(env2);
@@ -145695,7 +145731,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     }
     init_mesh_publisher();
     init_mesh_record();
-    var import_crypto25 = require("crypto");
+    var import_crypto26 = require("crypto");
     init_dist();
     init_dist();
     init_policy();
@@ -146161,7 +146197,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         };
       }
       function notifyMeshEvent(notice) {
-        const eventId = notice.eventId ?? `mesh_event:${(0, import_crypto25.randomUUID)()}`;
+        const eventId = notice.eventId ?? `mesh_event:${(0, import_crypto26.randomUUID)()}`;
         const at = notice.at ?? now();
         const notifyKind = notice.notify ?? "mesh_event";
         const entry = {
@@ -156055,7 +156091,9 @@ var MESH_CLONE_NODE_TOOL = {
     properties: {
       source_node_id: { type: "string", description: "Node ID to clone from (from mesh_list_nodes)." },
       branch: { type: "string", description: 'Branch name for the new worktree (e.g. "feat/auth-refactor").' },
-      base_branch: { type: "string", description: "Starting point for the branch (default: current HEAD)." }
+      base_branch: { type: "string", description: "Starting point for the branch (default: current HEAD)." },
+      task_id: { type: "string", description: "The queue task this worktree is for, when it already exists. Shortly after an idle-mission reminder the daemon refuses a clone without task_id or reason." },
+      reason: { type: "string", description: 'Why this clone is needed (e.g. "user asked for two parallel features"). Required instead of task_id shortly after an idle-mission reminder \u2014 clone BEFORE enqueueing so the task can be pinned with target_node_id.' }
     },
     required: ["source_node_id", "branch"]
   }
@@ -162319,6 +162357,11 @@ async function meshCloneNode(ctx, args) {
     sourceNodeId: args.source_node_id,
     branch: args.branch,
     baseBranch: args.base_branch,
+    // The daemon's clone-after-idle-reminder guard reads these; without them
+    // a coordinator could only satisfy it by enqueueing first, leaving the
+    // task untargeted long enough for the base node to claim it (2026-10-02).
+    ...args.task_id ? { taskId: args.task_id } : {},
+    ...args.reason ? { reason: args.reason } : {},
     inlineMesh: ctx.mesh
   });
   const clonePayload = extractCloneNodePayload(result);

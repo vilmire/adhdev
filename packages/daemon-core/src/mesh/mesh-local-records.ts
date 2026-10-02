@@ -256,6 +256,10 @@ export function getLocalRecordSummary(meshId: string): MeshLedgerSummary {
     for (const row of failureRows) {
         if (row.taskId) localTerminalTasks.add(`${row.kind}\u0000${row.taskId}`);
         if (isIntentionalCleanupStopEntry(row)) continue;
+        // A refine (merge) job is not a task: a rebase conflict a worker then
+        // resolved read as a red "Failed" task here. Refine results have their
+        // own card (refine jobs).
+        if (isRefineJobRecord(row)) continue;
         if (row.kind === 'task_stalled') { taskStalled++; continue; }
         taskFailed++;
         if (new Date(row.timestamp).getTime() >= recentFailureCutoff) recentFailures++;
@@ -286,7 +290,12 @@ export function getLocalRecordSummary(meshId: string): MeshLedgerSummary {
     };
 }
 
-/** Payload fields isIntentionalCleanupStopEntry reads. */
+function isRefineJobRecord(entry: { payload?: Record<string, unknown> | undefined }): boolean {
+    const payload = entry.payload && typeof entry.payload === 'object' ? entry.payload as Record<string, unknown> : {};
+    return payload.source === 'refine_mesh_node_async_job';
+}
+
+/** Payload fields isIntentionalCleanupStopEntry (and isRefineJobRecord) read. */
 const CLEANUP_STOP_PROJECTION: LocalRecordProjection = {
     name: 'cleanup_stop',
     paths: ['$.intentional', '$.reason', '$.intentionalStopReason', '$.source'],

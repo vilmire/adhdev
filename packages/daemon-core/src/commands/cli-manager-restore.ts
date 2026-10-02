@@ -252,6 +252,12 @@ function buildRestoredSettings(
         restoredSettings.meshLastNodeId = recordMeshNodeId;
     }
     if (record.launchedByCoordinator === true) restoredSettings.launchedByCoordinator = true;
+    // The session's own approval mode survives the restart (without it a restored
+    // coordinator fell back to the provider default — auto-approve off — and asked
+    // for every command).
+    if (typeof record.autoApproveMode === 'string' && record.autoApproveMode.trim()) {
+        restoredSettings.autoApproveMode = record.autoApproveMode.trim();
+    }
     return restoredSettings;
 }
 

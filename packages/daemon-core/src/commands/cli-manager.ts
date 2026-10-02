@@ -111,6 +111,8 @@ export interface HostedCliRuntimeDescriptor {
     meshNodeFor?: string;
     meshNodeId?: string;
     launchedByCoordinator?: boolean;
+    /** The session's launch-time auto-approve mode id, re-applied on restore. */
+    autoApproveMode?: string;
     /**
      * Launch provenance persisted in the session-host record meta at spawn
      * (`meta.launchRecord`, Phase E). Raw — validated by
@@ -372,6 +374,12 @@ export class DaemonCliManager {
             ...(launchMeshNodeFor ? { meshNodeFor: launchMeshNodeFor } : {}),
             ...(settings?.launchedByCoordinator === true ? { launchedByCoordinator: true } : {}),
             ...(launchAutoLaunchedForQueueTaskId ? { autoLaunchedForQueueTaskId: launchAutoLaunchedForQueueTaskId } : {}),
+            // The session's own approval mode (launch dialog / mesh policy). Restore
+            // rebuilt settings from provider defaults only, so a restarted
+            // coordinator came back with auto-approve off and asked for every
+            // command (2026-10-02).
+            ...(typeof settings?.autoApproveMode === 'string' && settings.autoApproveMode.trim()
+                ? { autoApproveMode: settings.autoApproveMode.trim() } : {}),
             // Phase E: persisted so a hosted runtime re-attached after a daemon
             // restart keeps its model provenance (read back by listHostedCliRuntimes).
             ...(!attachExisting && options?.launchRecord ? { launchRecord: options.launchRecord } : {}),

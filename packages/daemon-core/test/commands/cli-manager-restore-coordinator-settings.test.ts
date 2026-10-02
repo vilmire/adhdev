@@ -137,6 +137,24 @@ describe('DaemonCliManager.restoreHostedSessions re-establishes launch settings'
     }
   }, 15000);
 
+  it('restores the session\'s own auto-approve MODE persisted at launch (not just the provider default)', async () => {
+    // A mode-declaring provider (claude-cli) launched with autoApproveMode came back
+    // after a restart with only the provider default (auto-approve off) and asked
+    // for every command (2026-10-02 standalone coordinator).
+    const loader = setupLoader();
+    testConfig.providerSettings['sample-cli'] = { autoApprove: false };
+    const addInstance = vi.fn();
+    const restored = await createManager(loader, {
+      getInstanceManager: () => ({ addInstance, removeInstance: vi.fn(), getInstance: () => null }),
+      getSessionRegistry: () => ({ register: vi.fn() }),
+    }).restoreHostedSessions([
+      { runtimeId: 'session-with-mode', cliType: 'sample-cli', workspace: workingDir, autoApproveMode: 'pty-parse' },
+    ]);
+    expect(restored).toBe(1);
+    const context = addInstance.mock.calls[0][2] as any;
+    expect(context.settings).toMatchObject({ autoApproveMode: 'pty-parse' });
+  }, 15000);
+
   it('CORDBADGE: rebinds the coordinator mark by workspace when the runtimeId no longer matches the registered sessionId', async () => {
     // The coordinator was registered under one sessionId, but on restart its runtime
     // re-attaches under a DIFFERENT runtimeId (registry survived, key no longer lines
