@@ -1721,6 +1721,8 @@
             "installing": "正在安装…",
             "done": "完成",
             "installCount": "安装 {{count}} 个",
+            "selectedCount_one": "已选 {{count}} 个",
+            "selectedCount_other": "已选 {{count}} 个",
             "intro": "选择你想使用的提供方。默认选中三个官方支持的 CLI 提供方；你可以从下方的选项卡安装 IDE 或扩展提供方，也可以稍后通过 Machines → Providers 安装。",
             "loadingRegistry": "正在加载注册表…",
             "loadError": "加载注册表失败：{{error}}",

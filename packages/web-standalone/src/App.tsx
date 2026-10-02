@@ -14,7 +14,7 @@ import {
     initStandaloneFontPreferences,
     normalizeStandaloneFontPreferences,
 } from './standalone-font-preferences'
-import { TransportProvider, LaunchCliProvider, MachineDetail, Dashboard, RepoMesh, StandaloneRepoMeshProvider, NotificationsPage, useBaseDaemons, initTheme, initChatTheme, initI18n, ApiProvider, createApiClient, InteractivePromptModal, useInteractivePrompt, AlertBanner, DashboardWireCompatOverlay, Button, Input, getMachineNickname, getMachineHostnameLabel } from '@adhdev/web-core'
+import { TransportProvider, LaunchCliProvider, MachineDetail, Dashboard, RepoMesh, StandaloneRepoMeshProvider, NotificationsPage, useBaseDaemons, initTheme, initChatTheme, initI18n, ApiProvider, createApiClient, InteractivePromptModal, useInteractivePrompt, AlertBanner, DashboardWireCompatOverlay, Button, Input, getMachineNickname, getMachineHostnameLabel, FIRST_RUN_DIALOG_EVENT } from '@adhdev/web-core'
 import { useTranslation } from 'react-i18next'
 import StandaloneLayout from './StandaloneLayout'
 import SetupWizardPage from './SetupWizardPage'
@@ -217,7 +217,10 @@ function OnboardingGate() {
             .then(r => r.ok ? r.json() : { providers: [] })
             .then((data: { providers?: unknown[] }) => {
                 if (cancelled) return
-                if ((data.providers ?? []).length === 0) setShow(true)
+                if ((data.providers ?? []).length === 0) {
+                    window.dispatchEvent(new Event(FIRST_RUN_DIALOG_EVENT))
+                    setShow(true)
+                }
             })
             .catch(() => { /* ignore — likely no daemon yet */ })
         return () => { cancelled = true }

@@ -1721,6 +1721,8 @@
             "installing": "Installing…",
             "done": "Done",
             "installCount": "Install {{count}}",
+            "selectedCount_one": "{{count}} selected",
+            "selectedCount_other": "{{count}} selected",
             "intro": "Pick the providers you want to use. Defaults to the three officially supported CLI providers; you can install IDE or extension providers from the tabs below or later from Machines → Providers.",
             "loadingRegistry": "Loading registry…",
             "loadError": "Failed to load registry: {{error}}",

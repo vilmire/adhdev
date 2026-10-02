@@ -1724,6 +1724,8 @@
             "installing": "Instalando…",
             "done": "Listo",
             "installCount": "Instalar {{count}}",
+            "selectedCount_one": "{{count}} seleccionado",
+            "selectedCount_other": "{{count}} seleccionados",
             "intro": "Elige los proveedores que quieras usar. De forma predeterminada se seleccionan los tres proveedores CLI con soporte oficial; puedes instalar proveedores de IDE o extensiones desde las pestañas de abajo, o más tarde desde Machines → Providers.",
             "loadingRegistry": "Cargando registro…",
             "loadError": "Error al cargar el registro: {{error}}",

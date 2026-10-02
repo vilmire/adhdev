@@ -351,7 +351,7 @@ export { RepoMeshContext, useRepoMeshContext, STANDALONE_FEATURES, CLOUD_FEATURE
 export type { RepoMeshContextValue, RepoMeshDaemonEntry, RepoMeshFeatures, LoadMeshStatusOptions, LaunchCoordinatorParams, LaunchCoordinatorResult } from './context/RepoMeshContext'
 export { StandaloneRepoMeshProvider } from './context/StandaloneRepoMeshProvider'
 
-export { default as OnboardingModal } from './components/OnboardingModal'
+export { default as OnboardingModal, FIRST_RUN_DIALOG_EVENT } from './components/OnboardingModal'
 
 // ── Dashboard Mesh ──
 export { DashboardMeshProvider } from './context/DashboardMeshContext'
