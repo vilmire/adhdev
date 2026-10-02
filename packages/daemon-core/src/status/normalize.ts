@@ -47,6 +47,16 @@ export const LIVE_STATUS_ACTIVE_CHAT_OPTIONS: Required<NormalizeActiveChatOption
     fallbackStringLimit: 256,
 };
 
+// The dashboard's daemon.metadata lane: the live summary PLUS the approval
+// modal. That lane is the only one carrying session state to the dashboard
+// (host-subscribers flushes it on every modal edge), so a modal stripped here
+// reaches no client — a session sat on waiting_approval with no approval card
+// (2026-10-02). The server-bound `live` profile keeps it stripped.
+export const METADATA_STATUS_ACTIVE_CHAT_OPTIONS: Required<NormalizeActiveChatOptions> = {
+    ...LIVE_STATUS_ACTIVE_CHAT_OPTIONS,
+    includeActiveModal: true,
+};
+
 const STATUS_MODAL_MESSAGE_LIMIT = 2 * 1024;
 const STATUS_MODAL_BUTTON_LIMIT = 120;
 
