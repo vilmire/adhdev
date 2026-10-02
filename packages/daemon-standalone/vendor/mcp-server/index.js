@@ -126351,6 +126351,7 @@ ${ptyResult.output.slice(-2e3)}`);
     var WIN32_SUBMIT_SETTLE_POLL_MS = 120;
     var WIN32_ECHO_PROBE_CHARS = 16;
     var WIN32_ECHO_MAX_WAIT_MS = 2e4;
+    var PASTE_PLACEHOLDER_RE = /\[Pasted\s*(?:text|Content)[^\]\n]*\]/i;
     var SendSubmitEngine = class {
       constructor(host) {
         this.host = host;
@@ -126789,6 +126790,7 @@ ${ptyResult.output.slice(-2e3)}`);
         const bodyEchoed = () => {
           if (!normBody) return true;
           const visible = normalizeForEcho(this.host.adapter.snapshot());
+          if (PASTE_PLACEHOLDER_RE.test(visible)) return true;
           if (!visible.includes(tailProbe)) return false;
           const full = normalizeForEcho(this.host.adapter.snapshotWithScrollback());
           return full.includes(headProbe);

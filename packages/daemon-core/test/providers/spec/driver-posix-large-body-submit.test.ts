@@ -183,6 +183,8 @@ async function run(
     totalWaitMs = 2600,
     /** MANIFEST-SEND-DELAY: the provider manifest's sendDelayMs, as route.ts threads it. */
     manifestSendDelayMs?: number,
+    /** What the composer shows for the body (default: the body itself). */
+    echo?: string,
 ): Promise<RunResult> {
     const factory = new IngestingFactory();
     factory.ingestMs = ingestMs;
@@ -209,7 +211,7 @@ async function run(
         const bodyAt = Date.now();
         let firstCrAt: number | null = null;
         // Echo the body so the verified path's echo-gate can confirm it.
-        pty.feed(`\n${text}`);
+        pty.feed(`\n${echo ?? text}`);
         // Poll for the first CR write and for a real submit; once the composer
         // accepts a submit, flip the FSM to generating so the resend loop stops.
         const deadline = Date.now() + totalWaitMs;
@@ -251,6 +253,18 @@ describe('POSIX-ENTER-DROP — large-body submit is echo-verified', () => {
         // — the live defect. The verified path holds the CR behind the echo-gate and
         // resends until it lands, so the message gets through.
         const res = await run(LARGE_BODY, 900);
+        expect(res.submits).toBeGreaterThanOrEqual(1);
+    });
+
+    it('treats a collapsed-paste chip as the body arriving — no 20 s blind wait', async () => {
+        // Claude Code shows a long or multi-line paste as "[Pasted text #1 +6 lines]"
+        // (Codex: "[Pasted Content 7572 chars]"), so the literal body never echoes.
+        // Every mesh notice and task prompt then sat out the full blind-fire wait
+        // before its submit key (2026-10-03).
+        setPlatform('darwin');
+        const res = await run(LARGE_BODY, 0, 3000, undefined, '❯ [Pasted text #1 +6 lines]');
+        expect(res.firstCrDelayMs).not.toBeNull();
+        expect(res.firstCrDelayMs!).toBeLessThan(3000);
         expect(res.submits).toBeGreaterThanOrEqual(1);
     });
 
