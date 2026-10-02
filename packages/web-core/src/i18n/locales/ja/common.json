@@ -3913,7 +3913,7 @@
             "point3": "チャットで続きを指示したら、スマホをしまう",
             "notificationLabel": "エージェント承認のためのモバイルプッシュ通知",
             "resumeLabel": "モバイルダッシュボードから承認して続きを指示",
-            "deviceShotLabel": "エージェントの完了・承認プッシュ通知がグループ表示された実機iOSロック画面の通知",
+            "deviceShotLabel": "Claude Codeが実行しようとしているBashコマンドを含むADHDev承認プッシュ通知が表示された実機iOSロック画面",
             "deviceShotCaption": "実機 — 実際のスマホに届いたプッシュ通知",
             "point4": "ポート開放・VPN・DMZ は不要 — P2P と TURN リレーで、カフェでもテザリングでも、デスクトップでもノートでも、ネットさえあればどこからでも"
         },

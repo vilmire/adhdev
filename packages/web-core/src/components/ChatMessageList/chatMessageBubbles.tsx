@@ -39,6 +39,12 @@ import {
 // without the system-message row dominating the chat column (G8).
 const SYSTEM_BUBBLE_TRUNCATE_LENGTH = 100;
 
+/** Text the mesh delivers into a coordinator's PTY — every such event starts
+ *  with this tag (daemon-core mesh event formatters). */
+export function isMeshInjectedSystemText(text: string): boolean {
+    return /^\s*\[System\]\s/.test(text);
+}
+
 // Native-turn tool rows arrive as a plaintext string with no toolBlockRef
 // (claude-cli does not emit structured tool_use blocks on that path). Fold
 // at the same cap the spec-history parser uses for tool *results*
@@ -543,12 +549,17 @@ export const ChatMessageRow = memo(function ChatMessageRow({
     const isQueued = isQueuedPendingLocal(message);
     const pendingId = getPendingId(message);
     const role = (message.role || '').toLowerCase();
-    const isUser = role === 'user' || role === 'human';
-    const kind = message.kind || (role === 'tool' ? 'tool' : 'standard');
-    const displayClassification = classifyChatMessageForDisplay(message);
     const structuredParts = isStructuredMessagePartArray(message.content) ? message.content : null;
     const hasStructuredRenderer = !!structuredParts?.some((part) => part.type !== 'text');
     const contentStr = stringifyTextContent(message.content, { joiner: '\n' });
+    // Mesh events reach a PTY-hosted coordinator as typed input ("[System] Node …
+    // has completed its task …"), so its transcript records them as USER turns.
+    // Drawn as user bubbles they read as the owner talking and a worker's full
+    // completion report filled the column; they render as system rows instead.
+    const isMeshInjected = (role === 'user' || role === 'human') && isMeshInjectedSystemText(contentStr);
+    const isUser = (role === 'user' || role === 'human') && !isMeshInjected;
+    const kind = isMeshInjected ? 'system' : (message.kind || (role === 'tool' ? 'tool' : 'standard'));
+    const displayClassification = classifyChatMessageForDisplay(message);
 
     if (displayClassification.isActivityFacing && kind !== 'thought' && kind !== 'tool' && kind !== 'terminal') {
         const label = displayClassification.label || t('chat.activityFallback');

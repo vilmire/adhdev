@@ -37,7 +37,7 @@ Your agents run locally; you drive them from anywhere. The dashboard is a real c
       <img src="docs/assets/readme/landing-desktop-detail.jpg" alt="ADHDev desktop session detail view showing chat, code, and terminal state together" width="100%" />
     </td>
     <td width="50%" align="center" valign="top">
-      <img src="docs/assets/readme/landing-mobile-notification-demo-poster.jpg" alt="ADHDev completion notification demo showing when to come back to a running session" width="100%" />
+      <img src="docs/assets/readme/landing-mobile-notification-demo-poster.jpg" alt="ADHDev approval banner on a phone showing the exact rm -rf command Claude Code wants to run, with Yes / always allow / No" width="100%" />
     </td>
   </tr>
 </table>
@@ -82,7 +82,7 @@ For a read-only investigation that matters — a bug RCA, a design review, an au
 Chat, commands, screenshots, and remote input travel over an encrypted WebRTC data channel directly between your dashboard and your daemon. The server only handles signaling and lightweight metadata — your working data doesn't sit on someone else's box. It's a trust property of the design, not an upsell.
 
 <p align="center">
-  <img src="docs/assets/readme/landing-mobile-resume-demo-poster.jpg" alt="ADHDev mobile resume flow reopening a saved session from a phone" width="320" />
+  <img src="docs/assets/readme/landing-mobile-resume-demo-poster.jpg" alt="ADHDev on a phone: reading an agent's answer and typing the next instruction to it" width="320" />
 </p>
 
 ---
