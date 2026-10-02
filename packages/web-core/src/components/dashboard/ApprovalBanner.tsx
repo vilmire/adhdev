@@ -46,6 +46,20 @@ export const cleanBtnText = (text: string) =>
  */
 const PENDING_BUTTON_RESET_MS = 12_000;
 
+/**
+ * Risk tone of an approval button (lower-cased, cleaned label). "Always allow"
+ * grants the broadest standing permission, so it is matched before the
+ * affirmative prefixes: claude's "Yes, and always allow access to …" starts
+ * with "yes" but must not read as the default choice. A bare "No" is the safe
+ * exit like "Deny".
+ */
+export function approvalButtonTone(clean: string): 'primary' | 'danger' | 'always' | 'neutral' {
+    if (/^always\b|\balways allow\b|\bdon'?t ask again\b|\ballow all\b/.test(clean)) return 'always';
+    if (/^(run|approve|accept|yes|allow)/.test(clean)) return 'primary';
+    if (/^(reject|deny|delete|remove|abort|no)\b/.test(clean)) return 'danger';
+    return 'neutral';
+}
+
 export default function ApprovalBanner({ activeConv, onModalButton }: Props) {
     const { t } = useTranslation();
     const [pendingButton, setPendingButton] = useState<string | null>(null);
@@ -182,7 +196,7 @@ export default function ApprovalBanner({ activeConv, onModalButton }: Props) {
         >
             {activeConv.modalMessage && (
                 <div
-                    className="text-2xs opacity-85 mb-1.5 line-clamp-3 max-w-full whitespace-pre-wrap break-words"
+                    className="text-2xs opacity-85 mb-1.5 line-clamp-4 max-w-full whitespace-pre-wrap break-words"
                     title={activeConv.modalMessage}
                 >
                     {activeConv.modalMessage}
@@ -207,9 +221,10 @@ export default function ApprovalBanner({ activeConv, onModalButton }: Props) {
                         //      only, warning icon. It grants the broadest standing
                         //      permission and is hard to walk back, so it must read as a
                         //      deliberate opt-in, never as the recommended choice.
-                        const isAlwaysAllow = /^always\b/.test(clean);
-                        const isPrimary = !isAlwaysAllow && /^(run|approve|accept|yes|allow|always)/.test(clean);
-                        const isDanger = /^(reject|deny|delete|remove|abort)/.test(clean);
+                        const tone = approvalButtonTone(clean);
+                        const isAlwaysAllow = tone === 'always';
+                        const isPrimary = tone === 'primary';
+                        const isDanger = tone === 'danger';
                         const isThisPending = pendingButton === btnText;
                         const isDisabled = pendingButton !== null;
                         return (
@@ -237,8 +252,11 @@ export default function ApprovalBanner({ activeConv, onModalButton }: Props) {
                                         }
                                         : !isDanger
                                             ? {
-                                                background: 'color-mix(in srgb, var(--surface-primary) 82%, transparent)',
-                                                boxShadow: 'inset 0 0 0 1px color-mix(in srgb, white 10%, transparent)',
+                                                // White label on a dark wash: a light surface fill
+                                                // here rendered the label white-on-white (claude's
+                                                // "No" was invisible, 2026-10-02).
+                                                background: 'color-mix(in srgb, black 18%, transparent)',
+                                                boxShadow: 'inset 0 0 0 1px color-mix(in srgb, white 35%, transparent)',
                                             }
                                             : undefined}
                             >

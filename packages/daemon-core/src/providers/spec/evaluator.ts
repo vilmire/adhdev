@@ -279,6 +279,9 @@ export function evaluateCondition(
 // Extraction helpers (used by FsmDriver for modal/title)
 // ────────────────────────────────────────────────────────────────────────────
 
+/** Bound on `detail_until` lines so an unterminated detail never swallows the screen. */
+const TITLE_DETAIL_MAX_LINES = 8;
+
 export function extractTitle(
     rule: ExtractTitle,
     sections: ResolvedSection[],
@@ -289,10 +292,19 @@ export function extractTitle(
 
     if (rule.first_line) {
         const lines = hay.split('\n');
-        for (const line of lines) {
-            const stripped = line.trim();
+        for (let i = 0; i < lines.length; i++) {
+            const stripped = lines[i].trim();
             if (stripped && !/^[─╌═─\s]+$/.test(stripped)) {
-                return stripped;
+                if (!rule.detail_until) return stripped;
+                let until: RegExp;
+                try { until = new RegExp(rule.detail_until); } catch { return stripped; }
+                const detail: string[] = [];
+                for (let j = i + 1; j < lines.length && detail.length < TITLE_DETAIL_MAX_LINES; j++) {
+                    if (until.test(lines[j])) break;
+                    const d = lines[j].trim();
+                    if (d && !/^[─╌═─\s]+$/.test(d)) detail.push(d);
+                }
+                return detail.length ? `${stripped}\n${detail.join('\n')}` : stripped;
             }
         }
         return null;

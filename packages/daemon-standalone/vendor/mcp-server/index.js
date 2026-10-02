@@ -78377,10 +78377,24 @@ ${cleanBody}`;
       if (!hay) return null;
       if (rule.first_line) {
         const lines = hay.split("\n");
-        for (const line of lines) {
-          const stripped = line.trim();
+        for (let i = 0; i < lines.length; i++) {
+          const stripped = lines[i].trim();
           if (stripped && !/^[─╌═─\s]+$/.test(stripped)) {
-            return stripped;
+            if (!rule.detail_until) return stripped;
+            let until;
+            try {
+              until = new RegExp(rule.detail_until);
+            } catch {
+              return stripped;
+            }
+            const detail = [];
+            for (let j = i + 1; j < lines.length && detail.length < TITLE_DETAIL_MAX_LINES; j++) {
+              if (until.test(lines[j])) break;
+              const d = lines[j].trim();
+              if (d && !/^[─╌═─\s]+$/.test(d)) detail.push(d);
+            }
+            return detail.length ? `${stripped}
+${detail.join("\n")}` : stripped;
           }
         }
         return null;
@@ -78513,11 +78527,13 @@ ${cleanBody}`;
       const cls = markerClass ?? DEFAULT_CURSOR_MARKER_CLASS;
       return new RegExp("^\\s*[" + cls + "]").test(text);
     }
+    var TITLE_DETAIL_MAX_LINES;
     var SIDE_PANEL_COLUMN_RE;
     var DEFAULT_CURSOR_MARKER_CLASS;
     var init_evaluator = __esm2({
       "src/providers/spec/evaluator.ts"() {
         "use strict";
+        TITLE_DETAIL_MAX_LINES = 8;
         SIDE_PANEL_COLUMN_RE = /\s{2,}[\u2500-\u257F].*$/;
         DEFAULT_CURSOR_MARKER_CLASS = "\u276F\u203A>\u2192";
       }

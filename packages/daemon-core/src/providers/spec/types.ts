@@ -378,6 +378,14 @@ export interface ExtractTitle {
     regex?: string;
     flags?: string;
     first_line?: true;
+    /**
+     * With `first_line`: also keep the non-blank lines below the title up to
+     * the first line matching this regex, one per line under the title.
+     * claude-cli's approval box puts the actual command under "Bash command";
+     * without it the approval card and push only said "Bash command", so
+     * `rm -rf` and `git push --force` looked the same.
+     */
+    detail_until?: string;
 }
 
 export interface ExtractButtons {
