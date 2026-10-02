@@ -547,16 +547,10 @@ function readAsyncRefineJobs(status: RepoMeshStatus): MeshGraphAsyncRefineJob[] 
 }
 
 function refineJobStatusPriority(status: MeshGraphRefineJobStatus): number {
-    switch (status) {
-        case 'running':
-        case 'accepted':
-            return 0 // in progress wins
-        case 'failed':
-            return 1
-        case 'completed':
-        default:
-            return 2
-    }
+    // In progress wins; finished jobs (failed or completed) rank only by recency.
+    // A fixed failed-over-completed rank kept "refine failed" on a node whose
+    // retry had already landed (2026-10-01: three merged branches in the map).
+    return status === 'running' || status === 'accepted' ? 0 : 1
 }
 
 function refineJobActivityMs(job: MeshGraphAsyncRefineJob): number {
@@ -564,8 +558,8 @@ function refineJobActivityMs(job: MeshGraphAsyncRefineJob): number {
     return parseTimestampMs(raw) ?? 0
 }
 
-/** Pick the most relevant refine job for a node: in-progress > failed > recent completed,
- * breaking ties by newest activity (lastUpdatedAt). */
+/** Pick the most relevant refine job for a node: in-progress first, otherwise the
+ * newest finished job by activity (lastUpdatedAt). */
 function pickDominantRefineJob(jobs: MeshGraphAsyncRefineJob[]): MeshGraphAsyncRefineJob | null {
     if (jobs.length === 0) return null
     return jobs.reduce((best, current) => {
