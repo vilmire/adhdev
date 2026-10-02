@@ -117283,6 +117283,7 @@ ${marker}`,
     };
     init_dist();
     init_worktree_bootstrap_config();
+    init_logger();
     init_mesh_events();
     init_mesh_clone_grace();
     init_config();
@@ -117538,7 +117539,12 @@ ${marker}`,
           const meshRecord2 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
           const mesh = meshRecord2?.mesh;
           if (!mesh) return { success: false, error: "Mesh not found" };
-          const sourceNode = mesh.nodes?.find((n) => meshNodeIdMatches7(n, sourceNodeId));
+          let sourceNode = mesh.nodes?.find((n) => meshNodeIdMatches7(n, sourceNodeId));
+          if (!sourceNode) {
+            const persisted = await ctx.getMeshForCommand(meshId, void 0, { preferInline: false });
+            sourceNode = persisted?.mesh?.nodes?.find((n) => meshNodeIdMatches7(n, sourceNodeId));
+            if (sourceNode) LOG.warn("Mesh", `[clone] source node ${sourceNodeId} missing from the inline view of ${meshId}; using the persisted mesh`);
+          }
           if (!sourceNode) return { success: false, error: `Source node '${sourceNodeId}' not found in mesh` };
           const sourceDaemonId = typeof sourceNode.daemonId === "string" ? sourceNode.daemonId.trim() : void 0;
           if (sourceDaemonId && !daemonIdsEquivalent4(sourceDaemonId, ctx.deps.statusInstanceId) && ctx.deps.dispatchMeshCommand && !readMeshDirectDispatchFlag(args)) {
