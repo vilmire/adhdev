@@ -132,6 +132,8 @@ export interface StatusTransitionHost {
     lastApprovalEventFingerprint: string;
     lastInteractivePromptEventKey: string;
     agentReadyEmitted: boolean;
+    /** A real turn (idle→generating) has started since this instance attached; never cleared. */
+    turnStartedThisBoot: boolean;
     errorMessage: string | undefined;
     errorReason: ProviderErrorReason | undefined;
     lastCompletionSummary: { content: string; receivedAt: number; sourceTimestampMs?: number } | null;
@@ -295,11 +297,18 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
     // generatingStartedAt, arms the debounce and emits turn_started evidence —
     // never runs, and that turn's completion has no evidence trail at all.
     //
-    // The startup-mask exemption applies while no turn is in flight: the adapter's
-    // pending-response flag is the only "a turn is running" signal (it is NOT read off
-    // generatingStartedAt, which non-turn busy phases such as a startup consent modal's
-    // waiting_approval arm also set).
-    const startupMaskWithNoActiveTurn = !host.hasAdapterPendingResponse();
+    // The exemption is for the PRE-FIRST-TURN phase only: no real turn has
+    // started since this instance attached (turnStartedThisBoot, set by the
+    // idle→generating arm below and never cleared) AND none is pending. It must
+    // not hang off hasAdapterPendingResponse() alone: on the spec adapter that is
+    // `status === 'generating'`, which is false on EVERY approval frame — so from
+    // 2026-09-30 (when the old turn-clock discriminator was deleted) to
+    // 2026-10-02 every auto-approved modal skipped the mask, ran the
+    // waiting_approval arm and pushed agent:waiting_approval: approve/deny toasts
+    // and approval pushes for sessions that approve themselves. Not read off
+    // generatingStartedAt either: a startup consent modal's own waiting_approval
+    // arm sets that.
+    const startupMaskWithNoActiveTurn = !host.turnStartedThisBoot && !host.hasAdapterPendingResponse();
     const newStatus = isQuestionPicker
         ? 'waiting_choice'
         : (autoApproveActive || autoApproveHoldIdle) && !startupMaskWithNoActiveTurn ? 'generating' : rawStatus;
@@ -398,6 +407,9 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
             // as "done" while the new turn generates. Re-populated when this turn
             // completes.
             host.lastCompletionSummary = null;
+            // A real turn has run on this instance: from now on the auto-approve
+            // mask covers its modals (see startupMaskWithNoActiveTurn above).
+            host.turnStartedThisBoot = true;
             // FALSE-IDLE continuity: entering a busy phase invalidates any
             // completedDebouncePending armed earlier in this settle window.
             host.busyEpoch++;

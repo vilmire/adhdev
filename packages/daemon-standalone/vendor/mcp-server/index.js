@@ -132901,7 +132901,7 @@ ${buttons.join("\n")}`;
       const isQuestionPicker = rawStatus === "waiting_approval" && !!interactivePrompt && (!activeModal || activeModalKind === "picker");
       const autoApproveActive = host.maybeAutoApproveStatus(adapterStatus, now);
       const autoApproveHoldIdle = host.autoApproveBusy && rawStatus === "idle";
-      const startupMaskWithNoActiveTurn = !host.hasAdapterPendingResponse();
+      const startupMaskWithNoActiveTurn = !host.turnStartedThisBoot && !host.hasAdapterPendingResponse();
       const newStatus = isQuestionPicker ? "waiting_choice" : (autoApproveActive || autoApproveHoldIdle) && !startupMaskWithNoActiveTurn ? "generating" : rawStatus;
       const dirName = workingDirBasename(host.workingDir);
       const chatTitle = `${host.provider.name} \xB7 ${dirName}`;
@@ -132944,6 +132944,7 @@ ${buttons.join("\n")}`;
           }
           if (!host.generatingStartedAt) host.generatingStartedAt = now;
           host.lastCompletionSummary = null;
+          host.turnStartedThisBoot = true;
           host.busyEpoch++;
           if (host.generatingDebounceTimer) clearTimeout(host.generatingDebounceTimer);
           host.generatingDebouncePending = { chatTitle, timestamp: now };
@@ -135038,6 +135039,8 @@ ${buttons.join("\n")}`;
       // queued task is never double-dispatched/double-injected. Whichever path fires
       // first sets it; the other becomes a no-op.
       agentReadyEmitted = false;
+      /** status-transition: a real turn has started on this instance (gates the startup auto-approve mask exemption). */
+      turnStartedThisBoot = false;
       generatingStartedAt = 0;
       // MESH-STALL-WATCH (feature 1): the lastOutputAt value the stall episode is
       // currently armed against. A stall episode is "the raw PTY output has not

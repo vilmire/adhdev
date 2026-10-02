@@ -116,6 +116,8 @@ export class CliProviderInstance implements ProviderInstance {
     // queued task is never double-dispatched/double-injected. Whichever path fires
     // first sets it; the other becomes a no-op.
     agentReadyEmitted = false;
+    /** status-transition: a real turn has started on this instance (gates the startup auto-approve mask exemption). */
+    turnStartedThisBoot = false;
     generatingStartedAt: number = 0;
     // MESH-STALL-WATCH (feature 1): the lastOutputAt value the stall episode is
     // currently armed against. A stall episode is "the raw PTY output has not
