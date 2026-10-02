@@ -540,6 +540,12 @@ export class SpecCliAdapter implements CliAdapter {
         try { this.driver.dispatch({ kind: 'shutdown' }); } catch { /* ignore */ }
     }
 
+    /** CliManager.detachAll() on daemon shutdown: release the runtime so it
+     *  survives the restart (shutdown() would stop it). */
+    detach(): void {
+        try { this.driver.detach(); } catch { /* ignore */ }
+    }
+
     cancel(): void {
         try { this.driver.dispatch({ kind: 'cancel' }); } catch { /* ignore */ }
     }

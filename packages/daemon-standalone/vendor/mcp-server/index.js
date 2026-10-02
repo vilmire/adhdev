@@ -126053,6 +126053,20 @@ ${ptyResult.output.slice(-2e3)}`);
         this.pty = null;
         this.screen.dispose();
       }
+      /** Let go of the runtime WITHOUT ending it — a session-host runtime keeps
+       *  running and the next daemon boot re-attaches it (restoreHostedSessions).
+       *  A transport that cannot detach (a direct node-pty child dies with us
+       *  anyway) is killed, as before. */
+      detach() {
+        this.stopTimers();
+        try {
+          if (typeof this.pty?.detach === "function") this.pty.detach();
+          else this.pty?.kill();
+        } catch {
+        }
+        this.pty = null;
+        this.screen.dispose();
+      }
       onChunk(chunk) {
         this.recordEvent("output", capPreview(escapeControl(chunk)), chunk.length);
         this.screen.write(chunk);
@@ -128122,6 +128136,16 @@ trust_level = "trusted"
         return this.opts.specPath;
       }
       shutdown() {
+        this.teardown("kill");
+      }
+      /** Daemon shutdown/restart: drop every timer and listener like shutdown(),
+       *  but leave the runtime alive for the next boot to re-attach. Ending it
+       *  here is what made every daemon restart kill the running CLIs once the
+       *  spec path became the only one (2026-10-02). */
+      detach() {
+        this.teardown("detach");
+      }
+      teardown(mode) {
         for (const t of this.delegateTimers.values()) clearTimeout(t);
         this.delegateTimers.clear();
         if (this.wakeTimer) {
@@ -128144,7 +128168,8 @@ trust_level = "trusted"
         }
         this.sends.discardQueued();
         this.specWatcher?.close();
-        this.adapter.kill();
+        if (mode === "detach") this.adapter.detach();
+        else this.adapter.kill();
       }
       // ── Debug surface (the whole reason for the rewrite) ──────────────────
       //
@@ -131088,6 +131113,14 @@ ${text}` : text;
         (this.liveAuth ??= createLiveAuthState()).stopRequested = true;
         try {
           this.driver.dispatch({ kind: "shutdown" });
+        } catch {
+        }
+      }
+      /** CliManager.detachAll() on daemon shutdown: release the runtime so it
+       *  survives the restart (shutdown() would stop it). */
+      detach() {
+        try {
+          this.driver.detach();
         } catch {
         }
       }
