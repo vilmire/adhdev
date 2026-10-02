@@ -1259,7 +1259,8 @@ describe('buildMeshGraph', () => {
             repoIdentity: 'repo',
             refreshedAt: '2026-10-02T00:00:00.000Z',
             nodes: [
-                { nodeId: 'node_wt', machineLabel: 'Mac', workspace: '/wt/feat', health: 'online', providers: [], activeSessions: [], isLocalWorktree: true, git: noUpstream('feat/a') },
+                { nodeId: 'node_base', machineLabel: 'Mac', workspace: '/repo', health: 'online', providers: [], activeSessions: [], git: baseGit('main') },
+                { nodeId: 'node_wt', machineLabel: 'Mac', workspace: '/wt/feat', health: 'online', providers: [], activeSessions: [], isLocalWorktree: true, worktreeBranch: 'feat/a', clonedFromNodeId: 'node_base', git: noUpstream('feat/a') },
                 { nodeId: 'node_clone', machineLabel: 'Linux', workspace: '/clone', health: 'online', providers: [], activeSessions: [], git: noUpstream('feat/b') },
             ],
         } as any)

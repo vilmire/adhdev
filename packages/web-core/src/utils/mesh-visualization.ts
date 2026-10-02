@@ -457,7 +457,9 @@ function detectOrphanReasonEntries(node: RepoMeshNodeStatus, defaultBranch: stri
     // left to push: "push to set its upstream" on them read as unfinished work
     // on a finished map (2026-10-02 launch screenshots).
     const convergenceStatus = (node as { branchConvergence?: { status?: string } }).branchConvergence?.status
-    const noUpstreamIsExpected = (node as { isLocalWorktree?: boolean }).isLocalWorktree === true
+    const noUpstreamIsExpected = node.isLocalWorktree === true
+        || !!node.worktreeBranch
+        || !!(node as { clonedFromNodeId?: string | null }).clonedFromNodeId
         || convergenceStatus === 'merged_to_main'
         || convergenceStatus === 'cleanup_candidate'
     if (git.branch && defaultBranch && git.branch !== defaultBranch && !git.upstream && !noUpstreamIsExpected) {
