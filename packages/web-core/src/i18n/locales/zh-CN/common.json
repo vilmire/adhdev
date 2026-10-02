@@ -3639,7 +3639,18 @@
     "landing": {
         "gallery": {
             "next": "下一个视图",
-            "previous": "上一个视图"
+            "previous": "上一个视图",
+            "slides": {
+                "overview": "任务与动态 —— 在手机上查看",
+                "tasks": "跨工作节点的任务队列",
+                "map": "节点与分支的实时地图",
+                "desktop": "同一网格的桌面视图"
+            }
+        },
+        "theme": {
+            "system": "跟随系统主题",
+            "light": "浅色主题",
+            "dark": "深色主题"
         },
         "nav": {
             "home": "ADHDev 首页",
@@ -3655,14 +3666,14 @@
             "mainNavigation": "主导航"
         },
         "hero": {
-            "badge": "多厂商、多机器的智能体控制平面",
-            "title": "在浏览器中驱动每一个本地编码智能体 —— 并行运行。",
+            "badge": "Claude Code、Codex、Cursor 等 —— 覆盖你的所有机器",
+            "title": "随时随地，管理在你电脑上运行的编码智能体。",
             "subtitleInstall": "在<os></os>上安装 ADHDev。",
             "subtitlePlace": "用你的<device></device>",
             "subtitleAsk": "让<coordinator></coordinator>把<worker></worker>派去<verb></verb>你的仓库。",
-            "subtitleFrom": "在<place></place>",
-            "anywhere": "随处",
-            "subtitleLand": "十个智能体同时运行，互不干扰。",
+            "subtitleFrom": "<place></place>，",
+            "anywhere": "随时随地",
+            "subtitleLand": "同时运行多个智能体，互不干扰。",
             "axes": {
                 "os": [
                     "Mac",
@@ -3670,18 +3681,18 @@
                     "Linux"
                 ],
                 "place": [
-                    "地铁",
-                    "咖啡馆",
-                    "父母家",
-                    "床上",
-                    "沙发",
-                    "花园",
-                    "副驾驶座",
-                    "渡轮",
-                    "厕所",
-                    "集装箱里",
-                    "月球",
-                    "服务器机架"
+                    "在地铁上",
+                    "在咖啡馆",
+                    "在父母家",
+                    "在床上",
+                    "在沙发上",
+                    "在花园里",
+                    "在副驾驶座上",
+                    "在渡轮上",
+                    "在健身房",
+                    "在集装箱里",
+                    "在月球上",
+                    "在服务器机架旁"
                 ],
                 "device": [
                     "台式机",
@@ -3733,7 +3744,7 @@
         },
         "compare": {
             "sectionTitle": "如今并行智能体无处不在，让它们互不冲突才是难点。",
-            "sectionSubtitle": "这是个中肯的问题。本地 CLI 会启动子智能体；桌面编排器以精美的原生 UI 跨工作树分发工作。两者都止步于分支。以下是诚实的界定 —— 包括它们各自胜过我们之处 —— 绝不含糊其辞。",
+            "sectionSubtitle": "本地 CLI 会启动子智能体；桌面编排器以原生 UI 跨工作树分发工作。两者都止步于分支 —— 审查与合并留给你自己。下面是对比，包括各自更适合的场景。",
             "colLocalCli": "本地 CLI + 子智能体",
             "colDesktop": "桌面编排器",
             "colAdhdev": "ADHDev Repo Mesh",
@@ -3768,7 +3779,7 @@
             "rowRestarts": "能挺过重启与上下文丢失",
             "rowRestartsLocalCli": "状态存于会话中 —— 关闭即丢失",
             "rowRestartsDesktop": "状态绑定于应用进程",
-            "rowRestartsAdhdev": "任务持久化到磁盘，并在协调器或守护进程重启后恢复 —— 仅追加、可防篡改的审计轨迹",
+            "rowRestartsAdhdev": "任务持久化到磁盘，并在协调器或守护进程重启后恢复 —— 仅追加的审计轨迹",
             "rowCrossCheck": "交叉核查答案",
             "rowCrossCheckLocalCli": "单个智能体的看法，没有第二意见",
             "rowCrossCheckDesktop": "并行工作，单一裁定",
@@ -3777,10 +3788,10 @@
         },
         "what": {
             "sectionTitle": "任意智能体，自由混用",
-            "sectionSubtitle": "设计上厂商中立。在 Mac 上运行 Claude Code，在 Windows GPU 机器上运行 Codex，用 Cursor CLI 做审阅 —— 都在同一个网格中、同一套策略之下。切换厂商无需切换平台。",
+            "sectionSubtitle": "设计上厂商中立。在 Mac 上运行 Claude Code，在 Windows GPU 机器上运行 Codex，用 Cursor CLI 做审阅 —— 都在同一个网格中，从同一个仪表盘驱动。切换厂商无需切换平台。",
             "cliHighlight": "CLI 智能体",
             "cliTitle": "从 Web 驱动任何终端智能体",
-            "cliDesc": "Claude Code、Codex CLI、Cursor CLI、Antigravity CLI、Grok、Kimi 和 OpenCode —— 通过 PTY 适配器在你的机器上接入，具备完善的恢复与重连，由你的浏览器驱动。即时发送提示并提供视觉上下文（粘贴、拖放，或一次上传多张图片，最多 5 张 / 每张 10MB）。",
+            "cliDesc": "Claude Code、Codex CLI、Cursor CLI、Antigravity CLI、Grok、Kimi 和 OpenCode —— 通过 PTY 适配器在你的机器上启动，具备完善的恢复与重连，由你的浏览器驱动。即时发送提示并提供视觉上下文（粘贴、拖放，或一次上传多张图片）。",
             "uiHighlight": "一个 UI",
             "uiTitle": "同一个仪表盘，任意设备",
             "uiDesc": "在 adhf.dev 云端托管 —— 无论你在办公桌前还是外出，都可从笔记本或手机驱动每个智能体。",
@@ -3789,7 +3800,7 @@
             "ideDesc": "Cursor、VS Code、VSCodium、Windsurf、Antigravity、Kiro、PearAI、Trae。读取实时聊天、发送提示、切换会话、捕获截图。",
             "p2pHighlight": "属于你，端到端",
             "p2pTitle": "P2P 优先：你的数据归你所有",
-            "p2pDesc": "聊天、命令和截图通过 WebRTC 在你的浏览器与守护进程之间直接流动。云端只看到认证和信令元数据，别无其他 —— 你的代码绝不经过服务器。"
+            "p2pDesc": "聊天、命令和截图通过 WebRTC 在你的浏览器与守护进程之间直接传输，你的代码绝不经过服务器。云端只负责登录、连接建立和会话状态。唯一的例外：审批推送通知会包含最多 80 个字符的待审批内容。"
         },
         "oss": {
             "sectionTitle": "开源且可自托管",
@@ -3816,7 +3827,7 @@
             "sectionSubtitle": "在一台机器上免费开始。两台选 Pro，五台选 Ultra。无需按席位计算，无需联系企业销售 — 只有下面这些方案。",
             "mostPopular": "最受欢迎",
             "upgradeToPro": "升级到 Pro",
-            "footnote": "简单、透明的定价 — 上面的价格就是你要付的金额。想自托管？守护进程和仪表盘均为开源。价格以 USD 计。",
+            "footnote": "价格以美元计，不含适用税费。想自托管？守护进程和仪表盘均为开源。",
             "plans": {
                 "free": {
                     "period": "永久",
@@ -3832,7 +3843,7 @@
                 },
                 "pro": {
                     "period": "/月",
-                    "tagline": "两台机器和更多并发会话 —— 还有 Repo Mesh，可跨两台机器编排智能体。",
+                    "tagline": "两台机器，让 Repo Mesh 跨两台机器运行智能体 —— 并发会话也更多。",
                     "cta": "开始 7 天 Pro 试用",
                     "features": {
                         "machines": "2 台机器 — 两台都能运行代理",
@@ -3865,12 +3876,12 @@
             "copyInstall": "复制安装命令：{{cmd}}",
             "copied": "已复制",
             "copy": "复制",
-            "platformNote": "macOS 和 Windows 是已验证的安装路径。Linux 运行同一套 Unix 脚本，由社区验证。",
+            "platformNote": "macOS 和 Linux 使用 Unix 脚本，Windows 使用 PowerShell 脚本。三者都在日常使用中。",
             "arrow": "→",
             "steps": {
                 "step1": {
                     "title": "安装守护进程",
-                    "desc": "一条 curl 命令即可安装守护进程和 adhdev CLI — 这是你用来配对机器并启动守护进程的启动器（不要与它所驱动的 CLI 代理混淆，如 Claude Code 或 Codex）。同一个二进制文件同时支持云端和独立模式。"
+                    "desc": "一条命令即可安装守护进程和 adhdev CLI — 这是你用来配对机器并启动守护进程的启动器（不要与它所驱动的 CLI 代理混淆，如 Claude Code 或 Codex）。同一个二进制文件同时支持云端和独立模式。"
                 },
                 "step2": {
                     "title": "关联一台机器",
@@ -3884,7 +3895,7 @@
         },
         "cta": {
             "headline": "别再切换标签页了。从一个仪表盘操控每一个代理。",
-            "subtitle": "一条 curl 命令、一个守护进程、你已经在用的每一个智能体。现在就从网页操控全部。",
+            "subtitle": "一条命令、一个守护进程、你已经在用的每一个智能体。全部从网页操控。",
             "getStarted": "开始使用 →",
             "github": "GitHub",
             "discord": "Discord"
@@ -3937,7 +3948,7 @@
             "step2Desc": "工作同时分派到你的Mac和Windows机器——各自在自己的分支上，运行你项目的测试和检查。",
             "step3Label": "完成的代码落地main",
             "step3Desc": "检查通过后，工作会自动、安全地合并进main。拿不准的会留给你审查——绝不force-push。",
-            "caveat": "Mac和Windows是经过验证的日常主力机器。Linux同样受支持。"
+            "caveat": "Mac、Windows 和 Linux 机器都在日常使用中。"
         }
     },
     "interactivePrompt": {

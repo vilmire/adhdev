@@ -2,7 +2,7 @@
 
 An [MCP](https://modelcontextprotocol.io) stdio server that exposes running [ADHDev](https://github.com/vilmire/adhdev) agent sessions as tools.
 
-ADHDev supervises AI coding agents — CLI agents (Claude Code, Codex CLI, and others), ACP agents, and IDE copilots — on your machines. This package lets an MCP client drive that supervision: list live sessions, read what an agent is doing, answer an approval prompt it is blocked on, and inspect the workspace it is working in.
+ADHDev supervises AI coding agents — CLI agents (Claude Code, Codex CLI, and others) and IDE copilots — on your machines. This package lets an MCP client drive that supervision: list live sessions, read what an agent is doing, answer an approval prompt it is blocked on, and inspect the workspace it is working in.
 
 It talks to an ADHDev daemon already running on your machine. It is a client of that daemon, not a standalone service — start the daemon first.
 
@@ -115,7 +115,7 @@ The hints are advisory. Actual enforcement stays in the daemon — dry-run defau
 
 ## Client Configuration
 
-Claude-style clients auto-import a repo-local `.mcp.json`; Hermes needs a manual `mcp_servers` YAML entry. See [Self-hosted configuration — Repo Mesh with Hermes Agent](../../docs/self-hosted/configuration.md) for the exact snippets.
+Claude-style clients auto-import a repo-local `.mcp.json`. See [Self-hosted configuration](../../docs/self-hosted/configuration.md) for the exact snippets.
 
 ## Development
 

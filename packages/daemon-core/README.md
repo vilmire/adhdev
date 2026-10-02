@@ -4,11 +4,10 @@ ADHDev daemon core — the shared engine behind every ADHDev daemon: provider in
 
 ## What It Owns
 
-- **Providers** — the four integration categories:
+- **Providers** — the three integration categories:
   - `ide` — IDEs driven over the Chrome DevTools Protocol (Cursor, VS Code, Windsurf, …)
   - `extension` — IDE extensions reached through CDP webviews (Claude Code, Cline, Roo Code, …)
   - `cli` — terminal agents driven over PTYs (Claude Code, Codex CLI, Kimi Code, Grok CLI, …)
-  - `acp` — agents speaking the Agent Client Protocol over stdio
 - **Provider SDK** (`src/providers/sdk`) — the versioned, typed contract that external provider manifests are authored against.
 - **Command routing** — the typed command surface (`send_chat`, `approve`, launch/stop, git operations, …) that the HTTP/WebSocket API, the MCP server, and the dashboard all converge on.
 - **Session & runtime state** — session lifecycle, runtime recovery, and the normalized status model shared with the web clients.
