@@ -12,6 +12,7 @@ import {
     startMeshWorktreeBootstrap,
     type WorktreeBootstrapState,
 } from '../../mesh/worktree-bootstrap-config.js';
+import { LOG } from '../../logging/logger.js';
 import { loadRepoSettings } from '../../config/repo-settings.js';
 import { handleMeshForwardEvent, notifyMeshCoordinator } from '../../mesh/mesh-events.js';
 import { noteRecentlyClonedNode } from '../../mesh/mesh-clone-grace.js';
@@ -464,7 +465,17 @@ export const meshNodeCloneHandlers: Record<string, MedFamilyHandler> = {
             const mesh = meshRecord?.mesh;
             if (!mesh) return { success: false, error: 'Mesh not found' };
 
-            const sourceNode = mesh.nodes?.find((n: any) => meshNodeIdMatches(n, sourceNodeId));
+            let sourceNode = mesh.nodes?.find((n: any) => meshNodeIdMatches(n, sourceNodeId));
+            if (!sourceNode) {
+                // Two clones issued together once failed the second with "source node
+                // not found" while the base node sat in meshes.json the whole time
+                // (2026-10-02; root cause in the inline-cache churn not yet pinned).
+                // The persisted mesh is authoritative for a registered node, so look
+                // there before refusing.
+                const persisted = await ctx.getMeshForCommand(meshId, undefined, { preferInline: false });
+                sourceNode = persisted?.mesh?.nodes?.find((n: any) => meshNodeIdMatches(n, sourceNodeId));
+                if (sourceNode) LOG.warn('Mesh', `[clone] source node ${sourceNodeId} missing from the inline view of ${meshId}; using the persisted mesh`);
+            }
             if (!sourceNode) return { success: false, error: `Source node '${sourceNodeId}' not found in mesh` };
 
             // Forward to the source node's daemon if it's on a different machine
