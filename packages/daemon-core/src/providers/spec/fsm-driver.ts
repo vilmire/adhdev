@@ -370,7 +370,15 @@ export class FsmDriver implements ISpecDriver {
     }
     getSpecPath(): string { return this.opts.specPath; }
 
-    shutdown(): void {
+    shutdown(): void { this.teardown('kill'); }
+
+    /** Daemon shutdown/restart: drop every timer and listener like shutdown(),
+     *  but leave the runtime alive for the next boot to re-attach. Ending it
+     *  here is what made every daemon restart kill the running CLIs once the
+     *  spec path became the only one (2026-10-02). */
+    detach(): void { this.teardown('detach'); }
+
+    private teardown(mode: 'kill' | 'detach'): void {
         for (const t of this.delegateTimers.values()) clearTimeout(t);
         this.delegateTimers.clear();
         if (this.wakeTimer) { clearTimeout(this.wakeTimer); this.wakeTimer = null; }
@@ -405,7 +413,8 @@ export class FsmDriver implements ISpecDriver {
         }
         this.sends.discardQueued();
         this.specWatcher?.close();
-        this.adapter.kill();
+        if (mode === 'detach') this.adapter.detach();
+        else this.adapter.kill();
     }
 
     // ── Debug surface (the whole reason for the rewrite) ──────────────────

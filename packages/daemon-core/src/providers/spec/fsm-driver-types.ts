@@ -102,6 +102,8 @@ export interface ISpecDriver {
     subscribe(listener: (ev: DashboardEvent) => void): () => void;
     start(): void;
     dispatch(cmd: DashboardCommand): void;
+    /** Release the runtime without ending it (daemon shutdown/restart). */
+    detach(): void;
     /**
      * BUTTON-INDEX-MISMAP (Fix C.3): click a modal button by its FSM display index and report
      * whether a button was actually matched and its confirm keys dispatched. Unlike the

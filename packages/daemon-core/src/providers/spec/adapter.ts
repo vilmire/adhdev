@@ -270,6 +270,20 @@ export class TerminalAdapter {
         this.screen.dispose();
     }
 
+    /** Let go of the runtime WITHOUT ending it — a session-host runtime keeps
+     *  running and the next daemon boot re-attaches it (restoreHostedSessions).
+     *  A transport that cannot detach (a direct node-pty child dies with us
+     *  anyway) is killed, as before. */
+    detach(): void {
+        this.stopTimers();
+        try {
+            if (typeof this.pty?.detach === 'function') this.pty.detach();
+            else this.pty?.kill();
+        } catch { /* ignore */ }
+        this.pty = null;
+        this.screen.dispose();
+    }
+
     private onChunk(chunk: string): void {
         this.recordEvent('output', capPreview(escapeControl(chunk)), chunk.length);
         // C6 ordering fix (wiring-unification): the screen MUST see this chunk
