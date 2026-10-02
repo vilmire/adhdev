@@ -163,6 +163,37 @@ maybe('FsmDriver — claude-cli approval modal vanished on a REPAINTING screen',
         } finally { driver.shutdown(); void pty; }
     });
 
+    it('escapes approval when the answer after it ends in a numbered list (prose, not a picker)', async () => {
+        // 2026-10-02 standalone: the agent's reply listed "1. Retitle … 2. Trim
+        // …" as options for the user. The modal checks matched ANY "1. … 2. …"
+        // pair, so the reply read as a still-open picker — approval and
+        // approval_vanished flipped every ~500ms at an idle ❯ prompt and
+        // resolve_action found no buttons. A live picker always carries the ❯
+        // cursor on one option; prose lists never do.
+        const { driver, pty } = await driveToWedge();
+        try {
+            const proseList = (tick: number) => [
+                '⏺ Two options, your call:',
+                '',
+                '  1. Retitle the heading — quick, makes it findable.',
+                '  2. Trim it to a sentence or two.',
+                '',
+                `  Tell me which and I'll do it. ${tick}`,
+                '',
+                RULE,
+                '❯',
+                RULE,
+                '  ⏸ manual mode on',
+            ];
+            for (let i = 0; i < 16; i++) {
+                pty.feed(paint(proseList(i), 9));
+                await sleep(250);
+            }
+            const st = driver.getFsmDebug().currentState;
+            expect(st, `expected idle, got ${st}`).toBe('idle');
+        } finally { driver.shutdown(); void pty; }
+    });
+
     it('returns to approval when the modal reappears mid-probation (transient parse miss)', async () => {
         const { driver, pty } = await driveToWedge();
         try {
