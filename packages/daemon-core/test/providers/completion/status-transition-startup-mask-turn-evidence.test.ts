@@ -105,6 +105,7 @@ function makeHarness() {
         lastInteractivePromptEventKey: '',
         startupGraceCollapseAt: null,
         agentReadyEmitted: true, // boot one-shot already consumed — isolate this test to the mask bug
+        turnStartedThisBoot: false,
         errorMessage: undefined,
         errorReason: undefined,
         lastCompletionSummary: null,
@@ -161,9 +162,9 @@ function makeHarness() {
         setRawStatus: (s: string) => { state.rawStatus = s; },
         setModal: (m: FakeAdapterState['activeModal']) => { state.activeModal = m; },
         setPendingResponse: (v: boolean) => { pendingResponse = v; },
-        // Models the real onTurnStarted stamping adapter.currentTurnTaskId on a
-        // genuine inject (the daemon calls this the moment it dispatches a task,
-        // ahead of/alongside setPendingResponse(true)).
+        // Historical: the pre-2026-09-30 discriminator read adapter.currentTurnTaskId.
+        // It is now host.turnStartedThisBoot, set by the idle→generating arm itself,
+        // so this no longer changes the outcome — kept so the sequence reads as live.
         markTurnStartedThisBoot: (taskId = 'task-real-1') => { (host.adapter as any).currentTurnTaskId = taskId; },
         armAutoApproveFire: () => { autoApproveFiresNext = true; },
         clearAutoApproveBusy: () => { (host as any).autoApproveBusy = false; },
@@ -290,6 +291,32 @@ describe('runStatusTransitionTick — F2 startup auto-approve mask must not swal
         // turn's start time is undisturbed.
         expect(h.host.lastStatus).toBe('generating');
         expect(h.host.generatingStartedAt).toBe(armedAt);
+    });
+
+    it('REGRESSION: a mid-turn auto-approved modal stays masked when the adapter reports no pending response during it (spec adapter)', () => {
+        // The spec adapter's isProcessing() — what hasAdapterPendingResponse()
+        // reads — is `status === 'generating'`, so it is FALSE on every approval
+        // frame. With the exemption keyed on that alone (2026-09-30..10-02), every
+        // auto-approved modal ran the approval arm: agent:waiting_approval went to
+        // the dashboard (approve/deny toast) and the server (push) for a session
+        // that approved itself (live: a mesh worker, five events in 30 s).
+        const h = makeHarness();
+        h.setPendingResponse(true);
+        h.setRawStatus('idle');
+        h.tick();
+        h.setRawStatus('generating');
+        h.tick(); // idle → generating: a real turn
+        const armedAt = h.host.generatingStartedAt;
+
+        h.setPendingResponse(false); // spec adapter: not 'generating' while the modal is up
+        h.setRawStatus('waiting_approval');
+        h.setModal({ message: 'Do you want to make this edit to store.ts?', buttons: ['Yes', 'Yes, allow all edits', 'No'] });
+        h.armAutoApproveFire();
+        h.tick();
+
+        expect(h.host.lastStatus).toBe('generating');
+        expect(h.host.generatingStartedAt).toBe(armedAt);
+        expect(h.pushed.some((e) => e.event === 'agent:waiting_approval')).toBe(false);
     });
 
     it('BREAK-ONCE control: with the startup mask exemption removed, the first real turn is silently swallowed', () => {
