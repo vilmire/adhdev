@@ -258,25 +258,53 @@ export const PROVIDER_VERIFICATION: ProviderVerificationMap = {
     "source": "docs/site/data/provider-catalog.mjs"
   },
   "claude-cli": {
-    "status": "unverified",
-    "testedOn": [],
-    "testedVersions": [],
-    "validatedFlows": [],
-    "lastValidated": null,
-    "notes": "",
-    "evidence": "",
-    "owner": "community",
+    "status": "verified",
+    "testedOn": [
+      "macOS",
+      "Windows",
+      "Linux"
+    ],
+    "testedVersions": [
+      "Claude Code 2.1.220"
+    ],
+    "validatedFlows": [
+      "launch",
+      "send_chat",
+      "read_chat",
+      "resolve_action",
+      "resume",
+      "stop",
+      "mesh_worker"
+    ],
+    "lastValidated": "2026-10-03",
+    "notes": "Maintainer's daily driver; also exercised as Repo Mesh coordinator/worker.",
+    "evidence": "Daily use across three OSes; 2026-10-02/03 launch rehearsal (standalone mesh rounds 1–4).",
+    "owner": "maintainer",
     "source": "docs/site/data/provider-catalog.mjs"
   },
   "codex-cli": {
-    "status": "unverified",
-    "testedOn": [],
-    "testedVersions": [],
-    "validatedFlows": [],
-    "lastValidated": null,
-    "notes": "",
-    "evidence": "",
-    "owner": "community",
+    "status": "verified",
+    "testedOn": [
+      "macOS",
+      "Windows",
+      "Linux"
+    ],
+    "testedVersions": [
+      "codex-cli 0.156.1"
+    ],
+    "validatedFlows": [
+      "launch",
+      "send_chat",
+      "read_chat",
+      "resolve_action",
+      "resume",
+      "stop",
+      "mesh_worker"
+    ],
+    "lastValidated": "2026-10-03",
+    "notes": "Maintainer's daily driver; also exercised as Repo Mesh coordinator/worker.",
+    "evidence": "Daily use across three OSes; 2026-10-02/03 launch rehearsal (standalone mesh rounds 1–4).",
+    "owner": "maintainer",
     "source": "docs/site/data/provider-catalog.mjs"
   },
   "cursor-cli": {
@@ -302,14 +330,28 @@ export const PROVIDER_VERIFICATION: ProviderVerificationMap = {
     "source": "docs/site/data/provider-catalog.mjs"
   },
   "kimi": {
-    "status": "unverified",
-    "testedOn": [],
-    "testedVersions": [],
-    "validatedFlows": [],
-    "lastValidated": null,
-    "notes": "",
-    "evidence": "",
-    "owner": "community",
+    "status": "verified",
+    "testedOn": [
+      "macOS",
+      "Windows",
+      "Linux"
+    ],
+    "testedVersions": [
+      "Kimi Code 2.1.1"
+    ],
+    "validatedFlows": [
+      "launch",
+      "send_chat",
+      "read_chat",
+      "resolve_action",
+      "resume",
+      "stop",
+      "mesh_worker"
+    ],
+    "lastValidated": "2026-10-03",
+    "notes": "Maintainer's daily driver; also exercised as Repo Mesh coordinator/worker.",
+    "evidence": "Daily use across three OSes; 2026-10-02/03 launch rehearsal (standalone mesh rounds 1–4).",
+    "owner": "maintainer",
     "source": "docs/site/data/provider-catalog.mjs"
   },
   "opencode": {
@@ -379,11 +421,11 @@ export const PROVIDER_VERIFICATION_STATUS: Record<string, ProviderVerificationSt
   "vscodium": "unverified",
   "windsurf": "unverified",
   "antigravity-cli": "unverified",
-  "claude-cli": "unverified",
-  "codex-cli": "unverified",
+  "claude-cli": "verified",
+  "codex-cli": "verified",
   "cursor-cli": "unverified",
   "grok-cli": "unverified",
-  "kimi": "unverified",
+  "kimi": "verified",
   "opencode": "unverified",
   "cline": "unverified",
   "codex": "unverified",
