@@ -265,6 +265,17 @@ describe('mesh-local-records (C-W9a: meshRecord local leg + readers)', () => {
             expect(summary.recentFailures).toBe(1);
             expect(summary.taskFailed).toBe(1);
         });
+
+        it('does not count a failed refine (merge) job as a failed task', () => {
+            // A rebase conflict the worker then resolved showed as a red "Failed"
+            // task on the mesh overview (2026-10-02 demo mesh).
+            seedLocalRecord(testMeshId, { kind: 'task_failed', payload: { source: 'refine_mesh_node_async_job', status: 'failed' } });
+            seedLocalRecord(testMeshId, { kind: 'task_failed', payload: {} });
+
+            const summary = getLocalRecordSummary(testMeshId);
+            expect(summary.taskFailed).toBe(1);
+            expect(summary.recentFailures).toBe(1);
+        });
     });
 
     describe('getLedgerDir', () => {

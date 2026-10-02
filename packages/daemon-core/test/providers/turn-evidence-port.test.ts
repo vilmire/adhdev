@@ -138,6 +138,24 @@ describe('guarded emit* helpers', () => {
         }).not.toThrow();
     });
 
+    it('emitSuspension keeps an approval fingerprint as a VALID modalKey (stable digest)', () => {
+        // The approval arm passes JSON of the modal (spaces, newlines, often > 256
+        // chars). Passed raw it failed the identifier guard and every approval
+        // suspension was dropped (2026-10-02).
+        const { port, observed } = makePort();
+        const fingerprint = JSON.stringify({ message: 'Bash command\nrm -rf node_modules/.vite\nRemove the cache'.padEnd(400, 'x'), buttons: ['Yes', 'No'], seq: 3 });
+        emitSuspension(port, { sessionId: 's1', observedBy: 'd', source: 'fsm_edge', modal: 'approval', modalKey: fingerprint });
+        emitSuspension(port, { sessionId: 's1', observedBy: 'd', source: 'fsm_edge', modal: 'approval', modalKey: fingerprint });
+        expect(observed).toHaveLength(2);
+        expect(isTurnEvidence(observed[0])).toBe(true);
+        const key = (observed[0] as any).modalKey as string;
+        expect(key).toMatch(/^fp:[0-9a-f]{32}$/);
+        expect((observed[1] as any).modalKey).toBe(key);
+        // An already-valid key passes through untouched.
+        emitSuspension(port, { sessionId: 's1', observedBy: 'd', source: 'fsm_edge', modal: 'choice', modalKey: 'ask-user-tui-abc' });
+        expect((observed[2] as any).modalKey).toBe('ask-user-tui-abc');
+    });
+
     it('emitTurnStarted builds a valid turn_started envelope with retro/source/eventId/at', () => {
         const { port, observed } = makePort();
         emitTurnStarted(port, { sessionId: 'sess_1', observedBy: 'daemon_a', retro: true, source: 'short_gen_inline', at: 500 });

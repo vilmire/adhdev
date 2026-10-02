@@ -11,6 +11,7 @@
  */
 import { join as pathJoin, resolve as pathResolve, sep as pathSep } from 'path';
 import * as fs from 'fs';
+import { execFileSync } from 'child_process';
 import { LOG } from '../../logging/logger.js';
 import { getConfigDir } from '../../config/config.js';
 import { resolveMeshHostStatus, buildMeshHostRequiredFailure } from '../../mesh/mesh-host-ownership.js';
@@ -109,6 +110,34 @@ async function backfillMeshHostPinAfterLaunch(opts: {
  * opencode.json) that the user may commit, propagating any machine-specific
  * absolute path we embed to every teammate's machine.
  */
+/** True when git tracks `filePath` in `workspace` (best-effort; false on any error). */
+function isGitTrackedFile(workspace: string, filePath: string): boolean {
+    try {
+        execFileSync('git', ['ls-files', '--error-unmatch', '--', filePath], { cwd: workspace, stdio: 'ignore', timeout: 5000, windowsHide: true });
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Where a Claude coordinator's MCP config goes. Claude takes it via
+ * `--mcp-config <path>`, so it need not live in the repo: when the repo already
+ * TRACKS `.mcp.json`, writing our server entry into it dirtied the base node
+ * (2026-10-02 demo mesh — the coordinator then had to ask how to handle the
+ * uncommitted file before any merge). Untracked or absent → unchanged path.
+ */
+export function resolveClaudeCoordinatorMcpConfigPath(opts: {
+    configPath: string; workspace: string; meshId: string; configDir: string;
+    isTracked?: (workspace: string, filePath: string) => boolean;
+}): string {
+    if (!isWorkspaceLocalPath(opts.configPath, opts.workspace)) return opts.configPath;
+    const tracked = (opts.isTracked ?? isGitTrackedFile)(opts.workspace, opts.configPath);
+    if (!tracked) return opts.configPath;
+    const safeMesh = opts.meshId.replace(/[^A-Za-z0-9_-]+/g, '_');
+    return pathJoin(opts.configDir, 'mcp-configs', `${safeMesh}.json`);
+}
+
 function isWorkspaceLocalPath(configPath: string, workspace: string): boolean {
     const resolvedConfig = pathResolve(configPath);
     const resolvedWorkspace = pathResolve(workspace);
@@ -712,7 +741,9 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                     // 1. Write provider-declared MCP config for CLIs that auto-import it.
                     const { existsSync, readFileSync, writeFileSync, mkdirSync } = await import('fs');
                     const { dirname } = await import('path');
-                    const mcpConfigPath = coordinatorSetup.configPath;
+                    const mcpConfigPath = cliType === 'claude-cli'
+                        ? resolveClaudeCoordinatorMcpConfigPath({ configPath: coordinatorSetup.configPath, workspace, meshId, configDir: getConfigDir() })
+                        : coordinatorSetup.configPath;
                     // Merge ADHDev mesh server into existing config.
                     // Pass full mesh data as env var so the MCP server can bootstrap
                     // without depending on meshes.json or a running daemon.
@@ -814,7 +845,7 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                         cliArgs.push(...autoImportProviderLaunchArgs.filter((a: unknown) => typeof a === 'string' && a.trim()));
                     }
                     if (cliType === 'claude-cli') {
-                        cliArgs.push('--mcp-config', coordinatorSetup.configPath);
+                        cliArgs.push('--mcp-config', mcpConfigPath);
                         // COORD-MCP-ALLOW: pre-allow the coordinator's OWN control-plane
                         // server (mcp__<serverName> = every tool of that one server) so
                         // each mesh_* call does not park on Claude Code's per-tool

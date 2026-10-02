@@ -443,7 +443,7 @@ async function buildSharedBaseWorktreeAdvisoryForClone(
 
 export async function meshCloneNode(
     ctx: MeshContext,
-    args: { source_node_id: string; branch: string; base_branch?: string },
+    args: { source_node_id: string; branch: string; base_branch?: string; task_id?: string; reason?: string },
 ): Promise<string> {
     const sourceNode = await findNodeWithRefresh(ctx, args.source_node_id);
 
@@ -470,6 +470,11 @@ export async function meshCloneNode(
         sourceNodeId: args.source_node_id,
         branch: args.branch,
         baseBranch: args.base_branch,
+        // The daemon's clone-after-idle-reminder guard reads these; without them
+        // a coordinator could only satisfy it by enqueueing first, leaving the
+        // task untargeted long enough for the base node to claim it (2026-10-02).
+        ...(args.task_id ? { taskId: args.task_id } : {}),
+        ...(args.reason ? { reason: args.reason } : {}),
         inlineMesh: ctx.mesh,
     });
     const clonePayload = extractCloneNodePayload(result);

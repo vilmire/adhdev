@@ -49,6 +49,31 @@ describe('display', () => {
         expect(ledgerKindDisplayLabel('ledger_reconciled', t)).toBe('ledger reconciled')
     })
 
+    it('labels node kinds specifically — a cloned worktree is not "Machine joined or left"', () => {
+        const t = (key: string) => `T(${key})`
+        expect(ledgerKindDisplayLabel('node_cloned', t)).toBe('T(mesh.activity.worktreeCreated)')
+        expect(ledgerKindDisplayLabel('node_joined', t)).toBe('T(mesh.activity.nodeJoined)')
+        expect(ledgerKindDisplayLabel('node_removed', t)).toBe('T(mesh.activity.nodeRemoved)')
+        for (const bundle of [en, ko, ja, zhCN, es] as any[]) {
+            for (const key of ['worktreeCreated', 'nodeJoined', 'nodeRemoved']) {
+                expect(typeof bundle.mesh.activity[key], key).toBe('string')
+            }
+        }
+    })
+
+    it('collapses adjacent rows of one event for the same node/task (dispatched+claimed, auto_launch+launched)', () => {
+        const entries = [
+            { kind: 'session_launched', nodeId: 'n1', sessionId: 's1' },
+            { kind: 'session_auto_launch', nodeId: 'n1' },
+            { kind: 'task_claimed', nodeId: 'n1', taskId: 't1' },
+            { kind: 'task_dispatched', nodeId: 'n1', taskId: 't1' },
+            { kind: 'task_dispatched', nodeId: 'n2', taskId: 't2' },
+        ]
+        expect(filterLedgerEntriesForDisplay(entries, false).map(e => `${e.kind}:${e.nodeId}`))
+            .toEqual(['session_launched:n1', 'task_claimed:n1', 'task_dispatched:n2'])
+        expect(filterLedgerEntriesForDisplay(entries, true)).toHaveLength(5)
+    })
+
     it('every event label exists in all five locales', () => {
         for (const bundle of [en, ko, ja, zhCN, es] as any[]) {
             for (const key of Object.values(MESH_USER_EVENT_LABEL_KEYS)) {

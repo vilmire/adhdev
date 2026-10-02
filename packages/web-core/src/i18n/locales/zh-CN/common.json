@@ -544,6 +544,9 @@
             "showKey": "仅显示关键事件",
             "showAll": "显示全部活动",
             "nodeChanged": "机器加入或离开",
+            "worktreeCreated": "已创建工作树",
+            "nodeJoined": "节点已加入",
+            "nodeRemoved": "节点已移除",
             "sessionStarted": "代理已启动",
             "needsInput": "需要你的输入",
             "taskFailed": "任务失败",
@@ -3334,6 +3337,7 @@
         "actions": {
             "nicknameSyncFailed": "机器昵称已更新，但账户同步失败",
             "nicknameFailed": "无法保存昵称",
+            "nicknameTimeout": "机器没有响应 — 请检查连接后重试",
             "nicknameSaved": "已保存昵称",
             "pathMissing": "该路径可能不存在于磁盘上",
             "workspaceActionFailed": "工作区更新失败",

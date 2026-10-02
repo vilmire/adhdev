@@ -544,6 +544,9 @@
             "showKey": "Show key events only",
             "showAll": "Show all activity",
             "nodeChanged": "Machine joined or left",
+            "worktreeCreated": "Worktree created",
+            "nodeJoined": "Node joined",
+            "nodeRemoved": "Node removed",
             "sessionStarted": "Agent started",
             "needsInput": "Needs your input",
             "taskFailed": "Task failed",
@@ -3334,6 +3337,7 @@
         "actions": {
             "nicknameSyncFailed": "Nickname updated on the machine, but account sync failed",
             "nicknameFailed": "Couldn't save nickname",
+            "nicknameTimeout": "The machine didn't answer — check its connection and try again",
             "nicknameSaved": "Nickname saved",
             "pathMissing": "The path may be missing on disk",
             "workspaceActionFailed": "Workspace update failed",

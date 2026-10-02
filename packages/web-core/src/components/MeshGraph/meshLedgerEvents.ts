@@ -48,16 +48,45 @@ export const MESH_USER_EVENT_LABEL_KEYS: Record<MeshUserEvent, string> = {
     nodeChanged: 'mesh.activity.nodeChanged',
 }
 
+/** Kinds whose own label says more than their event's ("Machine joined or left"
+ *  for a worktree a coordinator just created was misleading). */
+const KIND_LABEL_KEYS: Record<string, string> = {
+    node_cloned: 'mesh.activity.worktreeCreated',
+    node_joined: 'mesh.activity.nodeJoined',
+    node_removed: 'mesh.activity.nodeRemoved',
+}
+
 /**
  * Display label: the localized user event, or — for internal kinds shown only
  * in "all activity" mode — the raw kind made readable.
  */
 export function ledgerKindDisplayLabel(kind: string, t: (key: string) => string): string {
+    const specific = KIND_LABEL_KEYS[kind.trim().toLowerCase()]
+    if (specific) return t(specific)
     const event = classifyLedgerKind(kind)
     return event ? t(MESH_USER_EVENT_LABEL_KEYS[event]) : kind.replace(/[_-]+/g, ' ')
 }
 
-/** Keep only user-facing events unless `showAll`. Order is preserved. */
-export function filterLedgerEntriesForDisplay<T extends { kind: string }>(entries: T[], showAll: boolean): T[] {
-    return showAll ? entries : entries.filter(entry => classifyLedgerKind(entry.kind) !== null)
+type LedgerDisplayEntry = { kind: string; nodeId?: string | null; taskId?: string | null; sessionId?: string | null }
+
+/**
+ * Keep only user-facing events unless `showAll`. Order is preserved. Several
+ * internal kinds map to one event (task_dispatched + task_claimed → "Task
+ * started", session_auto_launch + session_launched → "Agent started"), so the
+ * same moment produced 2–3 identical rows; adjacent rows with the same event
+ * for the same node/task/session collapse to one.
+ */
+export function filterLedgerEntriesForDisplay<T extends LedgerDisplayEntry>(entries: T[], showAll: boolean): T[] {
+    if (showAll) return entries
+    const out: T[] = []
+    let prevKey: string | null = null
+    for (const entry of entries) {
+        const event = classifyLedgerKind(entry.kind)
+        if (!event) continue
+        const key = `${event}\u0000${entry.nodeId ?? ''}\u0000${entry.taskId ?? ''}\u0000${event === 'sessionStarted' ? '' : entry.sessionId ?? ''}`
+        if (key === prevKey) continue
+        prevKey = key
+        out.push(entry)
+    }
+    return out
 }

@@ -45,6 +45,7 @@
  */
 
 import { daemonIdsEquivalent, isTurnEvidence, type SummaryRef, type TurnAttemptRef, type TurnEvidence, type TurnEvidenceKind } from '@adhdev/mesh-shared';
+import { createHash } from 'crypto';
 import { LOG } from '../logging/logger.js';
 
 /**
@@ -514,8 +515,23 @@ export function emitSuspension(
         source: opts.source,
         kind: 'suspension',
         modal: opts.modal,
-        ...(opts.modalKey ? { modalKey: opts.modalKey } : {}),
+        ...(opts.modalKey ? { modalKey: toModalKeyIdentifier(opts.modalKey) } : {}),
     }) as TurnEvidence, opts.envelope);
+}
+
+/** Identifier shape the evidence guard accepts (mesh-shared IDENTIFIER_RE). */
+const MODAL_KEY_IDENTIFIER_RE = /^[^\s\u0000-\u001f\u007f]{1,256}$/;
+
+/**
+ * The approval fingerprint callers pass is JSON of the modal's message + buttons
+ * — spaces, newlines, often > 256 chars — which the evidence guard rejects as an
+ * identifier, so every approval `suspension` was dropped ("dropped invalid
+ * suspension … failed isTurnEvidence", 2026-10-02). A stable digest keeps the
+ * key's identity (same fingerprint → same key) in identifier shape.
+ */
+export function toModalKeyIdentifier(key: string): string {
+    if (MODAL_KEY_IDENTIFIER_RE.test(key)) return key;
+    return `fp:${createHash('sha256').update(key).digest('hex').slice(0, 32)}`;
 }
 
 /** `suspension_resolved` — the modal was answered (button/auto-approve/prompt). */

@@ -544,6 +544,9 @@
             "showKey": "Solo eventos clave",
             "showAll": "Mostrar toda la actividad",
             "nodeChanged": "Máquina unida o retirada",
+            "worktreeCreated": "Worktree creado",
+            "nodeJoined": "Nodo añadido",
+            "nodeRemoved": "Nodo eliminado",
             "sessionStarted": "Agente iniciado",
             "needsInput": "Requiere tu respuesta",
             "taskFailed": "Tarea fallida",
@@ -3337,6 +3340,7 @@
         "actions": {
             "nicknameSyncFailed": "Apodo actualizado en la máquina, pero falló la sincronización con la cuenta",
             "nicknameFailed": "No se pudo guardar el apodo",
+            "nicknameTimeout": "La máquina no respondió — comprueba su conexión e inténtalo de nuevo",
             "nicknameSaved": "Apodo guardado",
             "pathMissing": "Es posible que la ruta no exista en el disco",
             "workspaceActionFailed": "Error al actualizar el espacio de trabajo",

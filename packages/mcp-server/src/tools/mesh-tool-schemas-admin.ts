@@ -216,6 +216,8 @@ export const MESH_CLONE_NODE_TOOL = {
             source_node_id: { type: 'string', description: 'Node ID to clone from (from mesh_list_nodes).' },
             branch: { type: 'string', description: 'Branch name for the new worktree (e.g. "feat/auth-refactor").' },
             base_branch: { type: 'string', description: 'Starting point for the branch (default: current HEAD).' },
+            task_id: { type: 'string', description: 'The queue task this worktree is for, when it already exists. Shortly after an idle-mission reminder the daemon refuses a clone without task_id or reason.' },
+            reason: { type: 'string', description: 'Why this clone is needed (e.g. "user asked for two parallel features"). Required instead of task_id shortly after an idle-mission reminder — clone BEFORE enqueueing so the task can be pinned with target_node_id.' },
         },
         required: ['source_node_id', 'branch'],
     },

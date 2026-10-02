@@ -544,6 +544,9 @@
             "showKey": "主な活動のみ表示",
             "showAll": "すべてのアクティビティを表示",
             "nodeChanged": "マシンの参加・離脱",
+            "worktreeCreated": "ワークツリー作成",
+            "nodeJoined": "ノード追加",
+            "nodeRemoved": "ノード削除",
             "sessionStarted": "エージェント起動",
             "needsInput": "入力待ち",
             "taskFailed": "タスク失敗",
@@ -3334,6 +3337,7 @@
         "actions": {
             "nicknameSyncFailed": "マシンのニックネームは更新されましたが、アカウントへの同期に失敗しました",
             "nicknameFailed": "ニックネームを保存できませんでした",
+            "nicknameTimeout": "マシンが応答しません — 接続を確認してもう一度お試しください",
             "nicknameSaved": "ニックネームを保存しました",
             "pathMissing": "パスがディスク上に存在しない可能性があります",
             "workspaceActionFailed": "ワークスペースを更新できませんでした",

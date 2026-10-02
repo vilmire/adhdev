@@ -153,6 +153,24 @@ function notifyControllerRegistryChanged(): void {
     for (const listener of controllerRegistryListeners) listener()
 }
 
+let controllerRegistryNotifyQueued = false
+
+/**
+ * Controller CREATION happens inside ChatPane's render-time useMemo; notifying
+ * synchronously there made every useSyncExternalStore subscriber (the mobile
+ * chat list) update while ChatPane was rendering — React's "Cannot update a
+ * component while rendering a different component". Creation notifies on a
+ * microtask instead (coalesced); retain/release run in effects and stay sync.
+ */
+function notifyControllerRegistryChangedDeferred(): void {
+    if (controllerRegistryNotifyQueued) return
+    controllerRegistryNotifyQueued = true
+    queueMicrotask(() => {
+        controllerRegistryNotifyQueued = false
+        notifyControllerRegistryChanged()
+    })
+}
+
 export function subscribeControllerRegistry(listener: () => void): () => void {
     controllerRegistryListeners.add(listener)
     return () => {
@@ -416,7 +434,7 @@ export function getOrCreateSessionChatController(options: SessionChatControllerO
     }
     const controller = new SessionChatController(options)
     controllerRegistry.set(key, controller)
-    notifyControllerRegistryChanged()
+    notifyControllerRegistryChangedDeferred()
     return controller
 }
 

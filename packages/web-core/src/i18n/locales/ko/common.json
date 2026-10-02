@@ -544,6 +544,9 @@
             "showKey": "주요 활동만 보기",
             "showAll": "모든 활동 보기",
             "nodeChanged": "머신 참여·이탈",
+            "worktreeCreated": "워크트리 생성",
+            "nodeJoined": "노드 추가",
+            "nodeRemoved": "노드 제거",
             "sessionStarted": "에이전트 시작",
             "needsInput": "입력 필요",
             "taskFailed": "작업 실패",
@@ -3334,6 +3337,7 @@
         "actions": {
             "nicknameSyncFailed": "머신 별칭은 바뀌었지만 계정 동기화에 실패했습니다",
             "nicknameFailed": "별칭을 저장하지 못했습니다",
+            "nicknameTimeout": "머신이 응답하지 않습니다 — 연결 상태를 확인하고 다시 시도하세요",
             "nicknameSaved": "별칭 저장됨",
             "pathMissing": "디스크에 경로가 없을 수 있습니다",
             "workspaceActionFailed": "워크스페이스 변경 실패",
