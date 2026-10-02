@@ -47,6 +47,8 @@ export function getMeshGraphAttentionBadge(node: MeshGraphNode): { label: string
         return null
     }
 
+    // A busy worker's worktree is dirty / unmerged / level with main by nature.
+    if (node.inProgress) return { label: 'working', tone: 'info' }
     const convergence = node.branchConvergence
     if (convergence?.status === 'not_mergeable') {
         return { label: node.hasConflicts ? 'conflicts present' : 'dirty workspace', tone: 'danger' }
@@ -92,6 +94,7 @@ const DAEMON_HINT_KEYS: Record<string, string> = {
  * daemon's own sentence kept as `detail` for a tooltip.
  */
 export function localizeMeshGraphHint(node: MeshGraphNode, t: HintTranslator): { text: string; detail: string | null } | null {
+    if (node.inProgress) return null
     const raw = getMeshGraphCalloutText(node)
     if (!raw) return null
     const i18n = node.nextStepHintI18n
@@ -102,6 +105,7 @@ export function localizeMeshGraphHint(node: MeshGraphNode, t: HintTranslator): {
 }
 
 export function shouldShowMeshGraphCallout(node: MeshGraphNode): boolean {
+    if (node.inProgress) return false
     if (!getMeshGraphCalloutText(node)) return false
     if (node.type === 'defaultBranchNode') return false
     if (node.branchConvergence?.needsConvergence) return true

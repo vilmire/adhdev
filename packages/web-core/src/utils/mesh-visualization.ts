@@ -14,6 +14,7 @@ import type {
     RepoMeshStatus,
 } from '@adhdev/daemon-core'
 import { canonicalizeRepoMeshStatus, repoMeshNodeHasLiveGitEvidence } from './repo-mesh-status'
+import { isManagedStatusWaiting, isManagedStatusWorking } from '@adhdev/daemon-core/status/normalize'
 
 export type MeshGraphNodeType = 'defaultBranchNode' | 'worktreeNode' | 'orphanNode' | 'submoduleNode'
 export type MeshGraphEdgeType = 'parentBranch' | 'worktreeLink' | 'sessionLink' | 'orphanLink' | 'submoduleLink' | 'cloneLink'
@@ -111,6 +112,14 @@ export interface MeshGraphNode {
     activeSessionCount: number
     activeSessions: string[]
     sessionDetails: MeshGraphSessionDetail[]
+    /**
+     * A worker session is busy on this node right now. Its worktree is
+     * expected to be dirty, unmerged, or still level with main, so the map
+     * shows it as work in progress rather than a convergence problem
+     * (2026-10-02: an active worker read as "dirty workspace · blocked" and a
+     * just-started branch as "Merged — can be cleaned up").
+     */
+    inProgress: boolean
     providers: string[]
     isOrphan: boolean
     orphanReasons: string[]
@@ -854,6 +863,8 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
             dirty,
             dirtyFiles: dirtyFileCount(git),
             hasConflicts: git?.hasConflicts ?? false,
+            inProgress: sessionDetails.some(session => !session.isSelfCoordinator
+                && (isManagedStatusWorking(session.chatStatus ?? session.state) || isManagedStatusWaiting(session.chatStatus ?? session.state))),
             activeSessionCount: sessionDetails.length,
             activeSessions: sessionDetails.map(session => session.sessionId),
             sessionDetails,
@@ -913,6 +924,7 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
                 dirty: submodule.dirty,
                 dirtyFiles: submodule.dirty ? 1 : 0,
                 hasConflicts: false,
+                inProgress: false,
                 activeSessionCount: 0,
                 activeSessions: [],
                 sessionDetails: [],
@@ -1007,6 +1019,7 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
             dirty: branchNodes.some(node => node.dirty),
             dirtyFiles: branchNodes.reduce((total, node) => total + node.dirtyFiles, 0),
             hasConflicts: branchNodes.some(node => node.hasConflicts),
+            inProgress: branchNodes.some(node => node.inProgress),
             activeSessionCount: branchNodes.reduce((total, node) => total + node.activeSessionCount, 0),
             activeSessions: branchNodes.flatMap(node => node.activeSessions),
             sessionDetails: branchNodes.flatMap(node => node.sessionDetails),
@@ -1126,8 +1139,8 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
     const conflictCount = visibleGraphNodes.filter(node => node.hasConflicts).length
     const offlineCount = visibleGraphNodes.filter(node => node.health === 'offline').length
     const outOfSyncSubmoduleCount = visibleGraphNodes.filter(node => node.type === 'submoduleNode' && node.outOfSync).length
-    const followUpNodes = visibleGraphNodes.filter(node => node.type !== 'submoduleNode' && node.branchConvergence?.needsConvergence).length
-    const blockedReviewNodes = visibleGraphNodes.filter(node => node.branchConvergence?.status === 'blocked_review').length
+    const followUpNodes = visibleGraphNodes.filter(node => node.type !== 'submoduleNode' && !node.inProgress && node.branchConvergence?.needsConvergence).length
+    const blockedReviewNodes = visibleGraphNodes.filter(node => !node.inProgress && node.branchConvergence?.status === 'blocked_review').length
     const mergeReadyNodes = visibleGraphNodes.filter(node => node.branchConvergence?.status === 'pushed_feature_branch_needs_merge').length
     const cleanupCandidateNodes = visibleGraphNodes.filter(node => node.branchConvergence?.status === 'cleanup_candidate').length
     const notMergeableNodes = visibleGraphNodes.filter(node => node.branchConvergence?.status === 'not_mergeable').length

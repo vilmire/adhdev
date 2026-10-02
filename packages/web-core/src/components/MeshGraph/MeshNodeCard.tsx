@@ -207,6 +207,7 @@ const ATTENTION_LABEL_KEYS: Record<string, string> = {
     'push branch': 'mesh.attention.pushBranch',
     'blocked review': 'mesh.attention.blockedReview',
     'refine failed': 'mesh.attention.refineFailed',
+    'working': 'mesh.attention.working',
     'refining…': 'mesh.attention.refining',
     'needs merge': 'mesh.attention.needsMerge',
     'refine worktree': 'mesh.attention.refineWorktree',

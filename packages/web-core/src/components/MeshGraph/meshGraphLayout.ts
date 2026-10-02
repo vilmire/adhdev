@@ -376,6 +376,7 @@ function createPlaceholderNode(defaultAnchor: MeshGraphNode, data: MeshGraphData
     return {
         id: `${defaultAnchor.id}__placeholder`,
         type: 'worktreeNode',
+        inProgress: false,
         label: 'No active worktrees',
         workspace: data.repoIdentity,
         branch: defaultAnchor.branch,
