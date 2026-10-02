@@ -19,6 +19,7 @@ import type {
 } from '../providers/provider-instance.js';
 import {
     LIVE_STATUS_ACTIVE_CHAT_OPTIONS,
+    METADATA_STATUS_ACTIVE_CHAT_OPTIONS,
     normalizeActiveChatData,
     normalizeManagedStatus,
     type ManagedStatus,
@@ -157,6 +158,7 @@ export interface SessionEntryBuildOptions {
 
 function getActiveChatOptions(profile: SessionEntryProfile): NormalizeActiveChatOptions {
     if (profile === 'full') return {};
+    if (profile === 'metadata') return METADATA_STATUS_ACTIVE_CHAT_OPTIONS;
     return LIVE_STATUS_ACTIVE_CHAT_OPTIONS;
 }
 

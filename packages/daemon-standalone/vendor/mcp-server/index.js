@@ -56841,6 +56841,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     }
     var FULL_STATUS_ACTIVE_CHAT_OPTIONS;
     var LIVE_STATUS_ACTIVE_CHAT_OPTIONS;
+    var METADATA_STATUS_ACTIVE_CHAT_OPTIONS;
     var STATUS_MODAL_MESSAGE_LIMIT;
     var STATUS_MODAL_BUTTON_LIMIT;
     var init_normalize = __esm2({
@@ -56864,6 +56865,10 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           totalBytesLimit: 0,
           stringLimit: 512,
           fallbackStringLimit: 256
+        };
+        METADATA_STATUS_ACTIVE_CHAT_OPTIONS = {
+          ...LIVE_STATUS_ACTIVE_CHAT_OPTIONS,
+          includeActiveModal: true
         };
         STATUS_MODAL_MESSAGE_LIMIT = 2 * 1024;
         STATUS_MODAL_BUTTON_LIMIT = 120;
@@ -74435,6 +74440,7 @@ ${cleanBody}`;
     }
     function getActiveChatOptions(profile) {
       if (profile === "full") return {};
+      if (profile === "metadata") return METADATA_STATUS_ACTIVE_CHAT_OPTIONS;
       return LIVE_STATUS_ACTIVE_CHAT_OPTIONS;
     }
     function resolveSessionStatus(activeChat, providerStatus) {
