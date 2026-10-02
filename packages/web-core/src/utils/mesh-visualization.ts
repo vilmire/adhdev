@@ -452,7 +452,15 @@ function detectOrphanReasonEntries(node: RepoMeshNodeStatus, defaultBranch: stri
         reasons.push({ text: 'Merge conflicts need resolution', hint: { key: 'mesh.hint.mergeConflicts' } })
     }
 
-    if (git.branch && defaultBranch && git.branch !== defaultBranch && !git.upstream) {
+    // A mesh worktree branch is merged locally by the Refinery and never needs
+    // an upstream, and a branch already merged (cleanup candidate) has nothing
+    // left to push: "push to set its upstream" on them read as unfinished work
+    // on a finished map (2026-10-02 launch screenshots).
+    const convergenceStatus = (node as { branchConvergence?: { status?: string } }).branchConvergence?.status
+    const noUpstreamIsExpected = (node as { isLocalWorktree?: boolean }).isLocalWorktree === true
+        || convergenceStatus === 'merged_to_main'
+        || convergenceStatus === 'cleanup_candidate'
+    if (git.branch && defaultBranch && git.branch !== defaultBranch && !git.upstream && !noUpstreamIsExpected) {
         reasons.push({ text: `No upstream tracking for ${git.branch}`, hint: { key: 'mesh.hint.noUpstream', params: { branch: git.branch } } })
     }
 

@@ -1249,6 +1249,24 @@ describe('buildMeshGraph', () => {
         expect(graph.stats.activeRefineNodes).toBe(0)
     })
 
+    // 2026-10-02: merged mesh worktrees showed "needs follow-up / push to set its
+    // upstream" — a worktree branch is merged locally and never has an upstream.
+    it('does not flag a mesh worktree branch for having no upstream', () => {
+        const noUpstream = (branch: string) => ({ ...baseGit(branch), upstream: null, upstreamStatus: null })
+        const graph = buildMeshGraph({
+            meshId: 'mesh_wt_upstream',
+            meshName: 'Worktree Upstream',
+            repoIdentity: 'repo',
+            refreshedAt: '2026-10-02T00:00:00.000Z',
+            nodes: [
+                { nodeId: 'node_wt', machineLabel: 'Mac', workspace: '/wt/feat', health: 'online', providers: [], activeSessions: [], isLocalWorktree: true, git: noUpstream('feat/a') },
+                { nodeId: 'node_clone', machineLabel: 'Linux', workspace: '/clone', health: 'online', providers: [], activeSessions: [], git: noUpstream('feat/b') },
+            ],
+        } as any)
+        expect(graph.nodes.find(n => n.id === 'node_wt')?.isOrphan).toBe(false)
+        expect(graph.nodes.find(n => n.id === 'node_clone')?.isOrphan).toBe(true)
+    })
+
     it('counts pendingGitSnapshotNodes on the aggregate stats', () => {
         const graph = buildMeshGraph({
             meshId: 'mesh_pending_stat',
