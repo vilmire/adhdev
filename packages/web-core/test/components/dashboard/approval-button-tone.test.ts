@@ -11,6 +11,7 @@ describe('approvalButtonTone', () => {
     expect(approvalButtonTone("yes, and don't ask again for similar commands")).toBe('always')
     expect(approvalButtonTone('allow all actions on localhost')).toBe('always')
     expect(approvalButtonTone('always allow')).toBe('always')
+    expect(approvalButtonTone('yes, and allow access to dist/ and echo commands')).toBe('always')
   })
 
   it('keeps a one-time approval primary', () => {

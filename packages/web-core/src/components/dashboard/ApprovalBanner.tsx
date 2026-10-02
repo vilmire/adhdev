@@ -54,7 +54,7 @@ const PENDING_BUTTON_RESET_MS = 12_000;
  * exit like "Deny".
  */
 export function approvalButtonTone(clean: string): 'primary' | 'danger' | 'always' | 'neutral' {
-    if (/^always\b|\balways allow\b|\bdon'?t ask again\b|\ballow all\b/.test(clean)) return 'always';
+    if (/^always\b|\balways allow\b|\bdon'?t ask again\b|\ballow all\b|^yes,? and allow\b/.test(clean)) return 'always';
     if (/^(run|approve|accept|yes|allow)/.test(clean)) return 'primary';
     if (/^(reject|deny|delete|remove|abort|no)\b/.test(clean)) return 'danger';
     return 'neutral';
