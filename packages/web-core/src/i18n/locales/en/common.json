@@ -3639,7 +3639,18 @@
     "landing": {
         "gallery": {
             "next": "Next view",
-            "previous": "Previous view"
+            "previous": "Previous view",
+            "slides": {
+                "overview": "Missions & activity — from a phone",
+                "tasks": "Task queue across workers",
+                "map": "Live map of nodes and branches",
+                "desktop": "The same mesh, desktop view"
+            }
+        },
+        "theme": {
+            "system": "System theme",
+            "light": "Light theme",
+            "dark": "Dark theme"
         },
         "nav": {
             "home": "ADHDev Home",
@@ -3655,14 +3666,14 @@
             "mainNavigation": "Main navigation"
         },
         "hero": {
-            "badge": "Multi-vendor, multi-machine agent control plane",
+            "badge": "Claude Code, Codex, Cursor & more — on all your machines",
             "title": "Manage the coding agents running on your computer — from anywhere.",
             "subtitleInstall": "Install ADHDev on your <os></os>.",
             "subtitlePlace": "use your <device></device>",
             "subtitleAsk": "to ask <coordinator></coordinator> to send <worker></worker> to <verb></verb> your repo.",
-            "subtitleFrom": "from <place></place>",
+            "subtitleFrom": "From <place></place>,",
             "anywhere": "anywhere",
-            "subtitleLand": "Ten agents at once — none of them step on each other.",
+            "subtitleLand": "Many agents at once — none of them step on each other.",
             "axes": {
                 "os": [
                     "Mac",
@@ -3678,7 +3689,7 @@
                     "the garden",
                     "the passenger seat",
                     "the ferry",
-                    "the toilet",
+                    "the gym",
                     "inside a container",
                     "the moon",
                     "a server rack"
@@ -3733,7 +3744,7 @@
         },
         "compare": {
             "sectionTitle": "Everyone runs agents in parallel. Not everyone keeps them out of each other's way.",
-            "sectionSubtitle": "A fair question. Local CLIs spawn subagents; desktop orchestrators fan work across worktrees with a slick native UI. Both stop at the branch. Here's the honest line — including where each of them beats us — with no hand-waving.",
+            "sectionSubtitle": "Local CLIs spawn subagents; desktop orchestrators fan work across worktrees with a native UI. Both stop at the branch — reviewing and merging is left to you. Here's how they compare, including where each of them is the better fit.",
             "colLocalCli": "Local CLI + subagents",
             "colDesktop": "Desktop orchestrator",
             "colAdhdev": "ADHDev Repo Mesh",
@@ -3768,7 +3779,7 @@
             "rowRestarts": "Survives restarts & context loss",
             "rowRestartsLocalCli": "State lives in a session — close it and it's gone",
             "rowRestartsDesktop": "State tied to the app process",
-            "rowRestartsAdhdev": "Missions persist to disk and resume after a coordinator or daemon restart — append-only, tamper-evident audit trail",
+            "rowRestartsAdhdev": "Missions persist to disk and resume after a coordinator or daemon restart — append-only audit trail",
             "rowCrossCheck": "Cross-check the answer",
             "rowCrossCheckLocalCli": "One agent's take, no second opinion",
             "rowCrossCheckDesktop": "Parallel work, single verdict",
@@ -3777,10 +3788,10 @@
         },
         "what": {
             "sectionTitle": "Any agent, mixed freely",
-            "sectionSubtitle": "Vendor-neutral by design. Run Claude Code on the Mac, Codex on the Windows GPU box, Cursor CLI for review passes — in the same mesh, under the same policies. Switch vendors without switching platforms.",
+            "sectionSubtitle": "Vendor-neutral by design. Run Claude Code on the Mac, Codex on the Windows GPU box, Cursor CLI for review passes — all in the same mesh, driven from the same dashboard. Switch vendors without switching platforms.",
             "cliHighlight": "CLI agents",
             "cliTitle": "Drive any terminal agent from the web",
-            "cliDesc": "Claude Code, Codex CLI, Cursor CLI, Antigravity CLI, Grok, Kimi, and OpenCode — attached on your machine through a PTY adapter with proper resume and reconnect, driven from your browser. Send prompts and provide visual context instantly (paste, drag & drop, or upload multiple images at once, up to 5 images / 10MB each).",
+            "cliDesc": "Claude Code, Codex CLI, Cursor CLI, Antigravity CLI, Grok, Kimi, and OpenCode — launched on your machine through a PTY adapter with proper resume and reconnect, driven from your browser. Send prompts and provide visual context instantly (paste, drag & drop, or upload multiple images at once).",
             "uiHighlight": "One UI",
             "uiTitle": "Same dashboard, any device",
             "uiDesc": "Cloud-hosted at adhf.dev — drive every agent from a laptop or phone, whether you're at your desk or away from it.",
@@ -3789,7 +3800,7 @@
             "ideDesc": "Cursor, VS Code, VSCodium, Windsurf, Antigravity, Kiro, PearAI, Trae. Read live chat, send prompts, switch sessions, capture screenshots.",
             "p2pHighlight": "Yours, end to end",
             "p2pTitle": "P2P-first: your data stays yours",
-            "p2pDesc": "Chat, commands, and screenshots flow directly between your browser and your daemon over WebRTC. The cloud sees auth and signaling metadata, nothing else — your code never routes through the server."
+            "p2pDesc": "Chat, commands, and screenshots flow directly between your browser and your daemon over WebRTC — your code never routes through the server. The cloud handles sign-in, connection setup and session status. The one exception: approval push notifications include up to 80 characters of what you're approving."
         },
         "oss": {
             "sectionTitle": "Open source & self-hostable",
@@ -3816,7 +3827,7 @@
             "sectionSubtitle": "Start free on one machine. Go Pro for two, or Ultra for five. No per-seat math, no enterprise sales call — just the plans below.",
             "mostPopular": "Most popular",
             "upgradeToPro": "Upgrade to Pro",
-            "footnote": "Simple, transparent pricing — the prices above are what you'll pay. Prefer to self-host? The daemon and dashboard are open source. Prices in USD.",
+            "footnote": "Prices in USD, excluding applicable taxes. Prefer to self-host? The daemon and dashboard are open source.",
             "plans": {
                 "free": {
                     "period": "forever",
@@ -3832,7 +3843,7 @@
                 },
                 "pro": {
                     "period": "/mo",
-                    "tagline": "Two machines and more concurrent sessions — plus Repo Mesh to orchestrate agents across both.",
+                    "tagline": "Two machines, so Repo Mesh can run agents across both — plus more concurrent sessions.",
                     "cta": "Start 7-day Pro trial",
                     "features": {
                         "machines": "2 machines — run agents on both",
@@ -3865,12 +3876,12 @@
             "copyInstall": "Copy install command: {{cmd}}",
             "copied": "Copied",
             "copy": "Copy",
-            "platformNote": "macOS and Windows are the validated install paths. Linux runs the same Unix script and is community-tested.",
+            "platformNote": "macOS and Linux use the Unix script; Windows uses the PowerShell one. All three are in daily use.",
             "arrow": "→",
             "steps": {
                 "step1": {
                     "title": "Install the daemon",
-                    "desc": "One curl command installs the daemon plus the adhdev CLI — the launcher you run to pair machines and start the daemon (not to be confused with the CLI agents it drives, like Claude Code or Codex). Same binary powers cloud and standalone."
+                    "desc": "One command installs the daemon plus the adhdev CLI — the launcher you run to pair machines and start the daemon (not to be confused with the CLI agents it drives, like Claude Code or Codex). Same binary powers cloud and standalone."
                 },
                 "step2": {
                     "title": "Link a machine",
@@ -3884,7 +3895,7 @@
         },
         "cta": {
             "headline": "Stop juggling tabs. Drive every agent from one dashboard.",
-            "subtitle": "One curl command, one daemon, every agent you already use. Drive them all from the web — Cloud is live.",
+            "subtitle": "One command, one daemon, every agent you already use. Drive them all from the web.",
             "getStarted": "Get started →",
             "github": "GitHub",
             "discord": "Discord"
@@ -3937,7 +3948,7 @@
             "step2Desc": "The work splits across your Mac and Windows machines at once — each on its own branch, each running your project's tests and checks.",
             "step3Label": "Finished code lands on main",
             "step3Desc": "When the checks pass, the work merges into main automatically and safely. Anything unclear is held back for you to review — never force-pushed.",
-            "caveat": "Mac and Windows are the verified daily-driver machines. Linux is also supported."
+            "caveat": "Mac, Windows and Linux machines are all in daily use."
         }
     },
     "interactivePrompt": {

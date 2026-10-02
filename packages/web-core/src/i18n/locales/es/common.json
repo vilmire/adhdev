@@ -3642,7 +3642,18 @@
     "landing": {
         "gallery": {
             "next": "Vista siguiente",
-            "previous": "Vista anterior"
+            "previous": "Vista anterior",
+            "slides": {
+                "overview": "Misiones y actividad, desde el móvil",
+                "tasks": "Cola de tareas de todos los workers",
+                "map": "Mapa en vivo de nodos y ramas",
+                "desktop": "El mismo mesh, en el escritorio"
+            }
+        },
+        "theme": {
+            "system": "Tema del sistema",
+            "light": "Tema claro",
+            "dark": "Tema oscuro"
         },
         "nav": {
             "home": "Inicio de ADHDev",
@@ -3658,14 +3669,14 @@
             "mainNavigation": "Navegación principal"
         },
         "hero": {
-            "badge": "El plano de control de agentes multiproveedor y multimáquina",
-            "title": "Ejecuta cada agente de codificación local desde la web — en paralelo.",
+            "badge": "Claude Code, Codex, Cursor y más, en todas tus máquinas",
+            "title": "Gestiona los agentes de programación que se ejecutan en tu ordenador, desde cualquier lugar.",
             "subtitleInstall": "Instala ADHDev en tu <os></os>.",
             "subtitlePlace": "usa tu <device></device>",
             "subtitleAsk": "para pedirle a <coordinator></coordinator> que envíe a <worker></worker> a <verb></verb> tu repositorio.",
-            "subtitleFrom": "desde <place></place>",
-            "anywhere": "donde sea",
-            "subtitleLand": "Diez agentes a la vez, y ninguno pisa al otro.",
+            "subtitleFrom": "Desde <place></place>,",
+            "anywhere": "cualquier lugar",
+            "subtitleLand": "Muchos agentes a la vez, y ninguno pisa al otro.",
             "axes": {
                 "os": [
                     "Mac",
@@ -3681,7 +3692,7 @@
                     "el jardín",
                     "el asiento del copiloto",
                     "el ferry",
-                    "el baño",
+                    "el gimnasio",
                     "dentro de un contenedor",
                     "la luna",
                     "un rack de servidores"
@@ -3736,7 +3747,7 @@
         },
         "compare": {
             "sectionTitle": "Los agentes en paralelo están por todas partes. Evitar que se pisen es otra historia.",
-            "sectionSubtitle": "Una pregunta justa. Las CLI locales lanzan subagentes; los orquestadores de escritorio distribuyen el trabajo por worktrees con una elegante interfaz nativa. Ambos se detienen en la rama. Aquí está la línea honesta —incluido dónde cada uno de ellos nos supera— sin rodeos.",
+            "sectionSubtitle": "Las CLI locales lanzan subagentes; los orquestadores de escritorio distribuyen el trabajo por worktrees con una interfaz nativa. Ambos se detienen en la rama: revisar y fusionar queda en tus manos. Aquí tienes la comparación, incluido cuándo encaja mejor cada uno.",
             "colLocalCli": "CLI local + subagentes",
             "colDesktop": "Orquestador de escritorio",
             "colAdhdev": "ADHDev Repo Mesh",
@@ -3771,7 +3782,7 @@
             "rowRestarts": "Sobrevive a reinicios y pérdida de contexto",
             "rowRestartsLocalCli": "El estado vive en una sesión: ciérrala y desaparece",
             "rowRestartsDesktop": "El estado está ligado al proceso de la aplicación",
-            "rowRestartsAdhdev": "Las misiones persisten en disco y se reanudan tras el reinicio de un coordinador o daemon: registro de auditoría de solo anexión y a prueba de manipulaciones",
+            "rowRestartsAdhdev": "Las misiones persisten en disco y se reanudan tras el reinicio de un coordinador o daemon: registro de auditoría de solo anexión",
             "rowCrossCheck": "Verifica la respuesta de forma cruzada",
             "rowCrossCheckLocalCli": "La opinión de un solo agente, sin una segunda opinión",
             "rowCrossCheckDesktop": "Trabajo en paralelo, un único veredicto",
@@ -3780,10 +3791,10 @@
         },
         "what": {
             "sectionTitle": "Cualquier agente, mezclado libremente",
-            "sectionSubtitle": "Neutral respecto al proveedor por diseño. Ejecuta Claude Code en el Mac, Codex en la máquina GPU con Windows, Cursor CLI para las pasadas de revisión, en el mismo mesh y bajo las mismas políticas. Cambia de proveedor sin cambiar de plataforma.",
+            "sectionSubtitle": "Neutral respecto al proveedor por diseño. Ejecuta Claude Code en el Mac, Codex en la máquina GPU con Windows, Cursor CLI para las pasadas de revisión, todo en el mismo mesh y desde el mismo panel. Cambia de proveedor sin cambiar de plataforma.",
             "cliHighlight": "Agentes CLI",
             "cliTitle": "Controla cualquier agente de terminal desde la web",
-            "cliDesc": "Claude Code, Codex CLI, Cursor CLI, Antigravity CLI, Grok, Kimi y OpenCode: conectados en tu máquina mediante un adaptador PTY con reanudación y reconexión adecuadas, controlados desde tu navegador. Envía prompts y aporta contexto visual al instante (pega, arrastra y suelta, o sube varias imágenes a la vez, hasta 5 imágenes / 10MB cada una).",
+            "cliDesc": "Claude Code, Codex CLI, Cursor CLI, Antigravity CLI, Grok, Kimi y OpenCode: se ejecutan en tu máquina mediante un adaptador PTY con reanudación y reconexión adecuadas, controlados desde tu navegador. Envía prompts y aporta contexto visual al instante (pega, arrastra y suelta, o sube varias imágenes a la vez).",
             "uiHighlight": "Una sola UI",
             "uiTitle": "El mismo panel, cualquier dispositivo",
             "uiDesc": "Alojado en la nube en adhf.dev: controla cada agente desde una laptop o un teléfono, ya sea en tu escritorio o lejos de él.",
@@ -3792,7 +3803,7 @@
             "ideDesc": "Cursor, VS Code, VSCodium, Windsurf, Antigravity, Kiro, PearAI, Trae. Lee el chat en vivo, envía prompts, cambia de sesión, captura pantallas.",
             "p2pHighlight": "Tuyo, de extremo a extremo",
             "p2pTitle": "Prioridad P2P: tus datos siguen siendo tuyos",
-            "p2pDesc": "El chat, los comandos y las capturas de pantalla fluyen directamente entre tu navegador y tu daemon a través de WebRTC. La nube ve los metadatos de autenticación y señalización, nada más: tu código nunca pasa por el servidor."
+            "p2pDesc": "El chat, los comandos y las capturas de pantalla fluyen directamente entre tu navegador y tu daemon a través de WebRTC: tu código nunca pasa por el servidor. La nube se encarga del inicio de sesión, el establecimiento de la conexión y el estado de las sesiones. La única excepción: las notificaciones push de aprobación incluyen hasta 80 caracteres de lo que estás aprobando."
         },
         "oss": {
             "sectionTitle": "Código abierto y autoalojable",
@@ -3819,7 +3830,7 @@
             "sectionSubtitle": "Empieza gratis con una máquina. Pasa a Pro para dos, o a Ultra para cinco. Sin cálculos por puesto, sin llamadas de ventas empresariales: solo los planes de abajo.",
             "mostPopular": "Más popular",
             "upgradeToPro": "Actualizar a Pro",
-            "footnote": "Precios sencillos y transparentes: los precios de arriba son lo que pagarás. ¿Prefieres autoalojarlo? El daemon y el panel son de código abierto. Precios en USD.",
+            "footnote": "Precios en USD, sin incluir los impuestos aplicables. ¿Prefieres autoalojarlo? El daemon y el panel son de código abierto.",
             "plans": {
                 "free": {
                     "period": "para siempre",
@@ -3835,7 +3846,7 @@
                 },
                 "pro": {
                     "period": "/mes",
-                    "tagline": "Dos máquinas y más sesiones simultáneas, más Repo Mesh para orquestar agentes en ambas.",
+                    "tagline": "Dos máquinas, para que Repo Mesh ejecute agentes en ambas, y más sesiones simultáneas.",
                     "cta": "Empezar prueba Pro de 7 días",
                     "features": {
                         "machines": "2 máquinas: ejecuta agentes en ambas",
@@ -3868,12 +3879,12 @@
             "copyInstall": "Copiar comando de instalación: {{cmd}}",
             "copied": "Copiado",
             "copy": "Copiar",
-            "platformNote": "macOS y Windows son las rutas de instalación validadas. Linux ejecuta el mismo script de Unix y cuenta con la validación de la comunidad.",
+            "platformNote": "macOS y Linux usan el script de Unix; Windows, el de PowerShell. Los tres se usan a diario.",
             "arrow": "→",
             "steps": {
                 "step1": {
                     "title": "Instala el daemon",
-                    "desc": "Un solo comando curl instala el daemon y el CLI adhdev: el lanzador que ejecutas para emparejar máquinas e iniciar el daemon (no confundir con los agentes CLI que controla, como Claude Code o Codex). El mismo binario impulsa la nube y el modo autónomo."
+                    "desc": "Un solo comando instala el daemon y el CLI adhdev: el lanzador que ejecutas para emparejar máquinas e iniciar el daemon (no confundir con los agentes CLI que controla, como Claude Code o Codex). El mismo binario impulsa la nube y el modo autónomo."
                 },
                 "step2": {
                     "title": "Vincula una máquina",
@@ -3887,7 +3898,7 @@
         },
         "cta": {
             "headline": "Deja de hacer malabares con las pestañas. Controla cada agente desde un único panel.",
-            "subtitle": "Un comando curl, un daemon, cada agente que ya usas. Contrólalos todos desde la web ahora mismo.",
+            "subtitle": "Un comando, un daemon, cada agente que ya usas. Contrólalos todos desde la web.",
             "getStarted": "Empezar →",
             "github": "GitHub",
             "discord": "Discord"
@@ -3940,7 +3951,7 @@
             "step2Desc": "El trabajo se reparte a la vez entre tus máquinas Mac y Windows — cada una en su propia rama, ejecutando los tests y comprobaciones de tu proyecto.",
             "step3Label": "El código terminado aterriza en main",
             "step3Desc": "Cuando las comprobaciones pasan, el trabajo se fusiona en main de forma automática y segura. Lo dudoso se reserva para tu revisión — nunca con force-push.",
-            "caveat": "Mac y Windows son las máquinas de uso diario verificadas. Linux también está soportado."
+            "caveat": "Las máquinas Mac, Windows y Linux se usan a diario."
         }
     },
     "interactivePrompt": {

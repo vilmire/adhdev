@@ -2,7 +2,7 @@
 
 # ADHDev
 
-**Ten coding agents on one repo, none of them stepping on each other — driven from your browser or phone.**
+**Many coding agents on one repo, none of them stepping on each other — driven from your browser or phone.**
 
 [![GitHub stars](https://img.shields.io/github/stars/vilmire/adhdev?style=social)](https://github.com/vilmire/adhdev/stargazers)
 [![npm](https://img.shields.io/npm/v/adhdev?label=npm%20i%20-g%20adhdev)](https://www.npmjs.com/package/adhdev)
@@ -16,25 +16,27 @@ AI coding agents have become long-running background workers. ADHDev is the cont
 
 Website: **[adhf.dev](https://adhf.dev)** · Docs: **[docs.adhf.dev](https://docs.adhf.dev)**
 
+**Try it in one command:** `npx @adhdev/daemon-standalone`, then open http://localhost:3847.
+
 <p align="center">
-  <img src="docs/assets/readme/landing-command-center-demo-poster.jpg" alt="ADHDev desktop dashboard switching between chat and terminal views, floating a panel, and splitting the workspace" width="100%" />
+  <img src="docs/assets/readme/landing-command-center-demo-poster.jpg" alt="ADHDev desktop dashboard: a mesh coordinator answering with a status table while a Claude Code worker and a Codex worker build two features side by side" width="100%" />
 </p>
 
 **The loop:** describe a task in chat → the coordinator files it, tags it, queues it → an idle machine claims it into a fresh worktree → your repo's own gates decide → ff-merge to `main`, worktree gone. Your phone only buzzed if something needed approving.
 
-ADHDev is built that way. In the private monorepo where ADHDev is developed — this engine is published from it as a submodule — a large share of `main` commits are `Auto-merge via Refinery` commits: work that an agent finished, the repo's own gates approved, and Refinery landed without a human running `git merge`. That history lives in the upstream monorepo, so this public mirror's own log won't show those merge commits.
+ADHDev is built that way. In the private monorepo where ADHDev is developed — this engine is published from it as a submodule — roughly one in six `main` commits is an `Auto-merge via Refinery` commit: work that an agent finished, the repo's own gates approved, and Refinery landed without a human running `git merge`. That history lives in the upstream monorepo, so this public mirror's own log won't show those merge commits.
 
 ---
 
 ## Why ADHDev
 
 ### 🌐 Web-first control
-Your agents run locally; you drive them from anywhere. The dashboard is a real control surface — inspect active sessions, read chat and terminal state, approve or interrupt work, reopen the right history, and send the next instruction from a browser or your phone. No terminal babysitting. Approval notifications carry the command text itself, because approving `rm -rf build/` and approving `git push --force` deserve different reaction times (push-to-phone ships with the cloud edition).
+Your agents run locally; you drive them from anywhere. The dashboard is a real control surface — inspect active sessions, read chat and terminal state, approve or interrupt work, reopen the right history, and send the next instruction from a browser or your phone. No terminal babysitting. Approval pushes carry the start of the command itself, because approving `rm -rf build/` and approving `git push --force` deserve different reaction times: the push arrives → tap it → approve in one tap (push-to-phone ships with the cloud edition).
 
 <table>
   <tr>
     <td width="50%" align="center" valign="top">
-      <img src="docs/assets/readme/landing-desktop-detail.jpg" alt="ADHDev desktop session detail view showing chat, code, and terminal state together" width="100%" />
+      <img src="docs/assets/readme/landing-desktop-detail.jpg" alt="ADHDev desktop dashboard in dark mode: the coordinator's chat next to two worker sessions, each on its own git worktree branch" width="100%" />
     </td>
     <td width="50%" align="center" valign="top">
       <img src="docs/assets/readme/landing-mobile-notification-demo-poster.jpg" alt="ADHDev approval banner on a phone showing the exact rm -rf command Claude Code wants to run, with Yes / always allow / No" width="100%" />
@@ -43,7 +45,7 @@ Your agents run locally; you drive them from anywhere. The dashboard is a real c
 </table>
 
 ### 🕸️ Repo Mesh — true multi-machine parallelism
-Enqueue tasks with dependencies and let a coordinator dispatch them to whichever node has spare capacity — your laptop, a desktop, a build box. This is genuine multi-machine orchestration over a P2P mesh, **not** SSH into one host. Each task runs in its own worktree so agents never step on each other. The mesh and Refinery engine ships in this repo; cross-machine dispatch runs on the cloud edition.
+(A single-machine mesh runs fully local; spreading it across machines needs the cloud edition.) Enqueue tasks with dependencies and let a coordinator dispatch them to whichever node has spare capacity — your laptop, a desktop, a build box. This is genuine multi-machine orchestration over a P2P mesh, **not** SSH into one host. Each task runs in its own worktree so agents never step on each other. The mesh and Refinery engine ships in this repo; cross-machine dispatch runs on the cloud edition.
 
 A mesh is bound to one git repository and owns the moving parts you'd otherwise coordinate by hand:
 
@@ -52,21 +54,21 @@ A mesh is bound to one git repository and owns the moving parts you'd otherwise 
 | **Task queue** | Pull-based. `pending → assigned → completed/failed`, with `depends_on` ordering and retries. Idle nodes claim work themselves — no push scheduler to get out of sync. |
 | **Missions** | A goal that groups many tasks, so a restarted coordinator picks up where the last one left off instead of re-queuing everything. |
 | **Worktree nodes** | An isolated branch checkout per parallel task, bootstrapped automatically (install, native rebuilds, gitignored build outputs) before any work is dispatched to it. |
-| **Append-only ledger** | Every dispatch, completion, failure, stall, and checkpoint as a JSONL event — the audit trail that makes "what actually happened" answerable after the fact. |
+| **Append-only ledger** | Every dispatch, completion, failure, stall, and checkpoint as an append-only record in the mesh's local SQLite store — the audit trail that makes "what actually happened" answerable after the fact. |
 | **Operating notes** | Lessons recorded at runtime (a provider quirk, a recovery procedure) are injected into every future coordinator prompt, so knowledge outlives the session that learned it. |
 | **Live-state prompt** | The coordinator's system prompt isn't static text — at launch it's a render of live mesh state (node health, active mission, recent failures, accumulated notes), and at runtime events are injected into its session instead of it polling. |
 | **Difficulty routing** | Map easy work to cheap models and hard work to expensive ones with deep thinking, per node capability — the token bill scales with difficulty, not with task count. |
 | **Task chaining** | Chain tasks with `depends_on`: a dependent waits until its predecessors complete, then receives their completion summaries as an "Upstream results" appendix. A failed or cancelled predecessor holds (or, by mesh policy, cancels) the downstream chain and notifies the coordinator. `mesh_enqueue_batch` enqueues several already-confirmed tasks in one atomic call. |
 
 <p align="center">
-  <img src="docs/assets/readme/landing-mesh-observability.jpg" alt="ADHDev mesh observability board showing the ledger, task queue, active sessions, nodes, and refine jobs for a repo" width="100%" />
+  <img src="docs/assets/readme/landing-mesh-observability.jpg" alt="ADHDev mesh overview: an active mission, two tasks running in the queue, and the main checkout plus two worktree nodes online" width="100%" />
 </p>
 
 ### ⚡ Async by design — you talk to one place
 You talk to one place. The coordinator orchestrates every worker and machine asynchronously — it waits on events, you don't. No session babysitting. Instead of sitting in front of each agent window watching for it to finish, you hand work to a single coordinator that drives all the workers in parallel and reacts only when a completion, approval, or status event actually arrives — no polling, no blocking waits. One conversation for you; a non-blocking event loop underneath.
 
 ### 🚢 Refinery — unattended landing on `main`
-Parallelism only pays off if the work actually merges. The Refinery converges finished tasks with per-repo validation gates, patch-equivalence checks, submodule-aware rebase-and-merge (only if main hasn't moved), and automatic worktree cleanup — unattended. Agents finish; the Refinery lands them. The mesh board above surfaces the whole pipeline live: the ledger's `DIRECT FAST FORWARD` entries are landed tasks, and `REFINE JOBS` tracks convergence in flight.
+Parallelism only pays off if the work actually merges. The Refinery converges finished tasks with per-repo validation gates, patch-equivalence checks, submodule-aware rebase-and-merge (only if main hasn't moved), and automatic worktree cleanup — unattended. Agents finish; the Refinery lands them. The mesh board above surfaces the pipeline live: tasks moving through the queue, refine jobs while convergence is in flight, and every dispatch, completion, and stall in the activity feed.
 
 ### 🧩 Submodule-aware convergence — works on real monorepos
 Parallel worktrees and unattended merges get fragile the moment git submodules enter the picture. ADHDev handles that case head-on — this very project is a submodule monorepo (a root repo plus the AGPL engine and provider catalog as submodules), and we dogfood the mesh and Refinery on it every day. The Refinery treats submodules as first-class during convergence:
@@ -75,7 +77,7 @@ Parallel worktrees and unattended merges get fragile the moment git submodules e
 - **Patch-equivalence detection** — when a submodule commit is rebased or squashed and its SHA changes, the Refinery still determines whether the *content* already landed, so it won't double-merge or falsely flag a divergence.
 - **Atomic pointer bumps** — the submodule pointer bump converges together with the root change, so an unattended merge never leaves the root pointing at a broken or dangling submodule commit.
 
-### 🔺 Cross-verification
+### 🔺 Multi-perspective review
 For a read-only investigation that matters — a bug RCA, a design review, an audit — ask the coordinator for a second opinion: it sends the same question to 2–3 workers on different providers, waits for their reports, and lays out where they agree, where they disagree, and which claims only one of them made. High agreement is not the same as being right — the same model with the same context repeats the same mistake — so the disagreements are the part worth reading.
 
 ### 🔐 P2P transport (trust, not a paywall)
@@ -101,7 +103,7 @@ ADHDev doesn't replace your agents or spawn its own — it **attaches to the one
    │               │        CDP          ├──────────────────────┤
    │  · providers  │────────────────────▶│ Cursor, VS Code,     │
    │  · sessions   │                     │ Antigravity, …       │
-   │  · mesh + queue│                    └──────────────────────┘
+   │  · mesh/queue │                     └──────────────────────┘
    │  · Refinery   │
    └───────────────┘
          │
@@ -135,7 +137,7 @@ Four properties that shape everything else:
 
 ## Install
 
-**Requirements:** Node.js 22.x (see the Windows note below), git, and at least one coding agent already installed and authenticated — ADHDev drives the CLIs you already use.
+**Requirements:** Node.js 20 or newer (22 LTS recommended; on Windows use 22.x — see the note below), git, and at least one coding agent already installed and authenticated — ADHDev drives the CLIs you already use.
 
 **Recommended — the `adhdev` CLI:**
 
@@ -153,7 +155,15 @@ npm install -g @adhdev/daemon-standalone
 adhdev-standalone
 ```
 
-Everything runs on your machine as a local daemon with an embedded dashboard — no cloud account required for the standalone path.
+Everything runs on your machine as a local daemon with an embedded dashboard — no cloud account required for the standalone path. Both packages install an `adhdev` command, so install one or the other, not both.
+
+**Cloud edition (several machines, push notifications):**
+
+```bash
+curl -fsSL https://adhf.dev/install | sh      # macOS / Linux
+irm https://adhf.dev/install.ps1 | iex         # Windows (PowerShell)
+adhdev setup                                   # sign in, then open https://adhf.dev
+```
 
 Useful flags:
 
@@ -163,12 +173,12 @@ adhdev standalone --port 8080     # custom port
 adhdev standalone --token mysecret # token auth for scripts / operator access
 adhdev standalone --no-open       # don't auto-open the browser
 adhdev standalone --dev           # enable the DevServer API (:19280) to debug and test providers
-adhdev standalone --public <dir>  # serve a custom web dashboard build
+adhdev-standalone --public <dir>  # (standalone package) serve a custom web dashboard build
 ```
 
 Standalone stays localhost-only by default. If you bind to `0.0.0.0` for LAN access, the dashboard warns when neither token auth nor a dashboard password is configured.
 
-> **Windows note:** Windows + Node.js 24+ is currently blocked for normal startup/install paths. Use Node.js 22.x, or the PowerShell installer path described in the docs.
+> **Windows note:** Windows + Node.js 24+ is currently blocked for normal startup/install paths. Use Node.js 22.x, or the PowerShell installer: `irm https://adhf.dev/install.ps1 | iex` ([docs](https://docs.adhf.dev)).
 
 Canonical self-hosted docs:
 
@@ -223,7 +233,7 @@ Providers are data, not code you have to fork. A provider is a versioned manifes
 - Verification tiers are explicit: **Verified / Partial / Unverified**. "Built-in" only means the integration exists.
 - Guides: [Supported Providers](https://docs.adhf.dev/reference/supported-providers) · [Custom providers guide](https://docs.adhf.dev/guide/custom-providers)
 
-If you get an agent working that isn't in the catalog, that's the single most useful contribution to this repo.
+If you get an agent working that isn't in the catalog, that's the most useful contribution you can make — open it against [vilmire/adhdev-providers](https://github.com/vilmire/adhdev-providers). Core pull requests here require signing the CLA (the bot prompts you).
 
 ---
 
@@ -235,7 +245,7 @@ If you get an agent working that isn't in the catalog, that's the single most us
 
 ## Community
 
-- 💬 **Discord** — <!-- COMMUNITY: Discord invite link (pending, see LAUNCH-ASSETS-PREP) --> _(invite coming soon)_
+- 💬 [Discord](https://discord.gg/WJD3tCfBzk)
 - 🐛 [Issues](https://github.com/vilmire/adhdev/issues)
 - 🤝 [Contributing](CONTRIBUTING.md)
 - 📋 [Changelog](CHANGELOG.md)
@@ -312,7 +322,7 @@ The engine is open source. What the cloud adds is a **reach layer**: accounts, m
 | Hosted REST API + API keys | ❌ (local API only) | ✅ |
 | Price | free, no quotas | Free / Pro / Ultra |
 
-If you only drive one machine and stay on your own network, self-hosted is the whole product — no feature gate, no quota. The cloud exists for the moment you add a second machine or want to reach your agents from outside the house.
+If you only drive one machine and stay on your own network, self-hosted gives you everything except push notifications and the cross-machine mesh — no quotas. The cloud exists for the moment you add a second machine or want to reach your agents from outside the house.
 
 ---
 
