@@ -82,7 +82,11 @@ export class LocalTransport {
       res = await fetch(`${this.baseUrl}/api/v1/command`, {
         method: 'POST',
         headers: this.headers(),
-        body: JSON.stringify({ type, ...args }),
+        // Nested, not spread: the standalone envelope strips reserved top-level keys
+        // (id, command, args, requestId) from a flattened body, so e.g.
+        // mission_upsert's `id` vanished and every "close this mission" created a
+        // new one instead (2026-10-02).
+        body: JSON.stringify({ type, payload: args }),
         signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (e) {
