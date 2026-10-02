@@ -1189,7 +1189,7 @@ describe('buildMeshGraph', () => {
         expect(graph.stats.failedRefineNodes).toBe(1)
     })
 
-    it('prefers failed over completed when no in-progress refine job exists', () => {
+    it('shows the newer completed refine over an older failure (a retry that landed)', () => {
         const graph = buildMeshGraph({
             meshId: 'mesh_refine_priority',
             meshName: 'Refine Priority',
@@ -1207,9 +1207,39 @@ describe('buildMeshGraph', () => {
                 },
             ],
             asyncRefineJobs: [
-                // completed is newer, but failed should win over completed
+                // the retry completed after the failure: the node is no longer failing (2026-10-01: merged branches kept "refine failed")
                 { jobId: 'job_done', status: 'completed', nodeId: 'node_mixed', lastUpdatedAt: '2026-06-14T00:05:00.000Z' },
                 { jobId: 'job_fail', status: 'failed', nodeId: 'node_mixed', lastUpdatedAt: '2026-06-14T00:01:00.000Z' },
+            ],
+        } as any)
+
+        const mixedNode = graph.nodes.find(node => node.id === 'node_mixed')
+        expect(mixedNode?.refineJobStatus).toBe('completed')
+        expect(graph.stats.failedRefineNodes).toBe(0)
+        expect(graph.stats.activeRefineNodes).toBe(0)
+    })
+
+    it('shows a failure that is newer than the last completed refine', () => {
+        const graph = buildMeshGraph({
+            meshId: 'mesh_refine_priority',
+            meshName: 'Refine Priority',
+            repoIdentity: 'git@github.com:test/repo.git',
+            refreshedAt: '2026-06-14T00:00:00.000Z',
+            nodes: [
+                {
+                    nodeId: 'node_mixed',
+                    machineLabel: 'Mixed',
+                    workspace: '/repo/mixed',
+                    health: 'online',
+                    providers: [],
+                    activeSessions: [],
+                    git: baseGit('feat/mixed'),
+                },
+            ],
+            asyncRefineJobs: [
+                // a later attempt failed: that is the current state
+                { jobId: 'job_done', status: 'completed', nodeId: 'node_mixed', lastUpdatedAt: '2026-06-14T00:01:00.000Z' },
+                { jobId: 'job_fail', status: 'failed', nodeId: 'node_mixed', lastUpdatedAt: '2026-06-14T00:05:00.000Z' },
             ],
         } as any)
 
