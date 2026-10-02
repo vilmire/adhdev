@@ -1687,18 +1687,19 @@
         gap: 6px;
         border: 1px solid var(--border-subtle);
         border-radius: 999px;
-        background: color-mix(in srgb, var(--bg-secondary) 90%, transparent);
-        color: var(--text-muted);
+        /* Floats over the transcript, so the pill itself must be opaque —
+           a translucent pill let the message text underneath bleed through. */
+        background: var(--bg-secondary);
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+        color: color-mix(in srgb, var(--text-muted) 75%, transparent);
         padding: 3px 8px;
         font-size: 10px;
         font-weight: 700;
-        opacity: 0.62;
-        transition: opacity 120ms ease, border-color 120ms ease, color 120ms ease;
+        transition: border-color 120ms ease, color 120ms ease;
     }
 
     .chat-activity-toggle:hover,
     .chat-activity-toggle-active {
-        opacity: 0.95;
         color: var(--accent-primary);
         border-color: color-mix(in srgb, var(--accent-primary) 45%, var(--border-subtle));
     }

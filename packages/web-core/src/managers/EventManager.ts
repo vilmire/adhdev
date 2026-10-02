@@ -12,7 +12,7 @@
 
 import { i18next } from '../i18n/config'
 import { formatDurationLocalized } from '../utils/time'
-import { formatIdeType, getMachineDisplayName } from '../utils/daemon-utils'
+import { formatIdeType, getAgentDisplayName, getMachineDisplayName } from '../utils/daemon-utils'
 import { shouldNotify } from '../hooks/useNotificationPrefs'
 import { notify } from '../hooks/useBrowserNotifications'
 import type { DaemonData, DashboardStatusEventPayload } from '../types'
@@ -347,7 +347,11 @@ class EventManager {
             ? this.findOwningSession(payload.targetSessionId)
             : null
         const entryType = owningEntry?.type || ''
-        let ideLabel = formatIdeType(entryType)
+        // The agent's product name ("Claude Code"), not its type id prettified
+        // ("Claude Cli" in approval toasts).
+        let ideLabel = entryType && entryType !== 'adhdev-daemon'
+            ? getAgentDisplayName(entryType, { agentName: (owningEntry as { cliName?: string } | null)?.cliName })
+            : formatIdeType(entryType)
         const owningDaemon = this.resolveOwningDaemon(payload)
         if (owningDaemon) {
             const machineName = getMachineDisplayName(owningDaemon, { fallbackId: owningDaemon.id })
