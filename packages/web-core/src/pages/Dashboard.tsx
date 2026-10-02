@@ -1,4 +1,5 @@
 import { useState, useCallback, useMemo, useEffect } from 'react'
+import { FIRST_RUN_DIALOG_EVENT } from '../components/OnboardingModal'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 
 import { useDaemons } from '../compat'
@@ -82,6 +83,11 @@ export default function Dashboard({ suppressConnectionBanner = false }: Dashboar
     const [showOnboarding, setShowOnboarding] = useState(() => {
         try { return !localStorage.getItem('adhdev_onboarding_v1') } catch { return false }
     })
+    useEffect(() => {
+        const yield_ = () => setShowOnboarding(false)
+        window.addEventListener(FIRST_RUN_DIALOG_EVENT, yield_)
+        return () => window.removeEventListener(FIRST_RUN_DIALOG_EVENT, yield_)
+    }, [])
     const toasts: Toast[] = daemonCtx.toasts || []
     // Abstract connection state (injected by platform)
     const wsStatus = daemonCtx.wsStatus || 'connected'

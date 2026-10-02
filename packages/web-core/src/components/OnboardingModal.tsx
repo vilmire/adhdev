@@ -38,6 +38,16 @@ const STANDALONE_FINAL_STEP: OnboardingStep = {
   visual: IconCheckCircle,
 }
 
+
+/**
+ * A platform's own first-run dialog (standalone's provider picker) announces
+ * itself with this window event so the dashboard's welcome tour stays closed
+ * for that load instead of opening on top of it (2026-10-02: two stacked
+ * welcome dialogs on a fresh standalone install). The tour is not marked done,
+ * so it shows on a later load.
+ */
+export const FIRST_RUN_DIALOG_EVENT = 'adhdev:first-run-dialog'
+
 export default function OnboardingModal({ onClose, standalone = false }: OnboardingModalProps) {
   const [step, setStep] = useState(0)
   const { t } = useTranslation('common')

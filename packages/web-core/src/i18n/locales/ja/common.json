@@ -1721,6 +1721,8 @@
             "installing": "インストール中…",
             "done": "完了",
             "installCount": "{{count}} 件をインストール",
+            "selectedCount_one": "{{count}} 件を選択中",
+            "selectedCount_other": "{{count}} 件を選択中",
             "intro": "使用したいプロバイダーを選択してください。既定では公式サポートの 3 つの CLI プロバイダーが選ばれます。IDE や拡張機能のプロバイダーは下のタブから、または後で Machines → Providers からインストールできます。",
             "loadingRegistry": "レジストリを読み込み中…",
             "loadError": "レジストリの読み込みに失敗しました: {{error}}",
