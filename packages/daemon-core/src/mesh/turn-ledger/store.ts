@@ -192,6 +192,37 @@ interface TurnAttemptExtras {
 
 // ─── the store ───────────────────────────────────────────────────────────
 
+/**
+ * The `turn.deliver` exactly-once claim row id for one notice.
+ *
+ * A notice's coordinates are (topic, writer, seq) — seq counts per TOPIC, and
+ * every mesh has its own `mesh.<id>.events` topic written by the same daemon
+ * writer. The claim id used to be `delivered:<writer>:<seq>`, so on a daemon
+ * hosting several meshes, mesh B's notice #33 read as already delivered when
+ * mesh A had once delivered ITS #33: the deliver cursor skipped it silently and
+ * the coordinator never heard (2026-10-02: a coordinator waited forever on a
+ * `refine:completed` whose seq another mesh had used a week earlier). The mesh
+ * is part of the id now; a legacy `delivered:<writer>:<seq>` row still counts,
+ * but only for the mesh it was written for.
+ */
+export function deliveryClaimId(meshId: string | null | undefined, writer: string, seq: number): string {
+    return meshId ? `delivered:${meshId}:${writer}:${seq}` : legacyDeliveryClaimId(writer, seq);
+}
+
+export function legacyDeliveryClaimId(writer: string, seq: number): string {
+    return `delivered:${writer}:${seq}`;
+}
+
+/** Inverse of deliveryClaimId; `meshId` is null for a legacy id. */
+export function parseDeliveryClaimId(eventId: string): { meshId: string | null; writer: string; seq: number } | null {
+    if (!eventId.startsWith('delivered:')) return null;
+    const parts = eventId.slice('delivered:'.length).split(':');
+    const seq = Number(parts[parts.length - 1]);
+    if (parts.length < 2 || !Number.isSafeInteger(seq)) return null;
+    if (parts.length === 2) return { meshId: null, writer: parts[0], seq };
+    return { meshId: parts[0], writer: parts.slice(1, -1).join(':'), seq };
+}
+
 export class TurnStore {
     private readonly stmts = new Map<string, Statement>();
 
@@ -459,6 +490,13 @@ export class TurnStore {
 
     // ── events ───────────────────────────────────────────────────────────
 
+    /** True when this mesh's notice (writer, seq) already has a delivery claim (see deliveryClaimId). */
+    isDeliveryClaimed(meshId: string, writer: string, seq: number): boolean {
+        return !!this.stmt(`SELECT 1 FROM turn_events WHERE kind = 'delivered'
+            AND (event_id = ? OR (event_id = ? AND (mesh_id = ? OR mesh_id IS NULL))) LIMIT 1`)
+            .get(deliveryClaimId(meshId, writer, seq), legacyDeliveryClaimId(writer, seq), meshId);
+    }
+
     hasEvent(eventId: string): boolean {
         return !!this.stmt('SELECT 1 FROM turn_events WHERE event_id = ?').get(eventId);
     }
@@ -488,15 +526,17 @@ export class TurnStore {
     }
 
     /**
-     * Published `turn.notify` rows of one mesh that no `delivered:<writer>:<seq>`
-     * claim covers yet, in publish order (C-W3 deliver backlog + the MCP-only
+     * Published `turn.notify` rows of one mesh that no delivery claim of THAT
+     * mesh (deliveryClaimId) covers yet, in publish order (C-W3 deliver backlog + the MCP-only
      * coordinator read). Own-writer by construction: a notify row is only ever
      * written by this daemon's ledger. Read-only (check:turn-single-emitter rule 1).
      */
     listUndeliveredNotifies(meshId: string, opts: { sinceMs?: number; limit?: number } = {}): TurnEventRow[] {
         const rows = this.stmt(`SELECT n.* FROM turn_events n
             WHERE n.kind = 'notify' AND n.mesh_id = ? AND n.publish_state = 'published' AND n.recorded_at >= ?
-              AND NOT EXISTS (SELECT 1 FROM turn_events d WHERE d.event_id = 'delivered:' || n.src_writer || ':' || n.published_seq)
+              AND NOT EXISTS (SELECT 1 FROM turn_events d WHERE d.kind = 'delivered' AND (
+                    d.event_id = 'delivered:' || n.mesh_id || ':' || n.src_writer || ':' || n.published_seq
+                 OR (d.event_id = 'delivered:' || n.src_writer || ':' || n.published_seq AND (d.mesh_id = n.mesh_id OR d.mesh_id IS NULL))))
             ORDER BY n.published_seq, n.rowid LIMIT ?`).all(meshId, opts.sinceMs ?? 0, opts.limit ?? 200) as EventRowRaw[];
         return rows.map(eventFromRow);
     }
@@ -523,9 +563,11 @@ export class TurnStore {
     }
 
     /** The local row of an own-writer topic entry, by its published coordinates. */
-    findPublishedEvent(writer: string, seq: number): TurnEventRow | null {
-        const row = this.stmt(`SELECT * FROM turn_events WHERE src_writer = ? AND published_seq = ? AND publish_state = 'published' LIMIT 1`)
-            .get(writer, seq) as EventRowRaw | undefined;
+    findPublishedEvent(writer: string, seq: number, meshId?: string | null): TurnEventRow | null {
+        // seq is per topic: without the mesh this can return another mesh's row.
+        const row = (meshId
+            ? this.stmt(`SELECT * FROM turn_events WHERE src_writer = ? AND published_seq = ? AND publish_state = 'published' AND mesh_id = ? LIMIT 1`).get(writer, seq, meshId)
+            : this.stmt(`SELECT * FROM turn_events WHERE src_writer = ? AND published_seq = ? AND publish_state = 'published' LIMIT 1`).get(writer, seq)) as EventRowRaw | undefined;
         return row ? eventFromRow(row) : null;
     }
 
