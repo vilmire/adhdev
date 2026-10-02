@@ -35988,6 +35988,20 @@ ${error.message || ""}`;
         createdAt: row.created_at
       };
     }
+    function deliveryClaimId(meshId, writer, seq2) {
+      return meshId ? `delivered:${meshId}:${writer}:${seq2}` : legacyDeliveryClaimId(writer, seq2);
+    }
+    function legacyDeliveryClaimId(writer, seq2) {
+      return `delivered:${writer}:${seq2}`;
+    }
+    function parseDeliveryClaimId(eventId) {
+      if (!eventId.startsWith("delivered:")) return null;
+      const parts = eventId.slice("delivered:".length).split(":");
+      const seq2 = Number(parts[parts.length - 1]);
+      if (parts.length < 2 || !Number.isSafeInteger(seq2)) return null;
+      if (parts.length === 2) return { meshId: null, writer: parts[0], seq: seq2 };
+      return { meshId: parts[0], writer: parts.slice(1, -1).join(":"), seq: seq2 };
+    }
     var TurnStore;
     var init_store = __esm2({
       "src/mesh/turn-ledger/store.ts"() {
@@ -36236,6 +36250,11 @@ ${error.message || ""}`;
             return row?.next ?? null;
           }
           // ── events ───────────────────────────────────────────────────────────
+          /** True when this mesh's notice (writer, seq) already has a delivery claim (see deliveryClaimId). */
+          isDeliveryClaimed(meshId, writer, seq2) {
+            return !!this.stmt(`SELECT 1 FROM turn_events WHERE kind = 'delivered'
+            AND (event_id = ? OR (event_id = ? AND (mesh_id = ? OR mesh_id IS NULL))) LIMIT 1`).get(deliveryClaimId(meshId, writer, seq2), legacyDeliveryClaimId(writer, seq2), meshId);
+          }
           hasEvent(eventId) {
             return !!this.stmt("SELECT 1 FROM turn_events WHERE event_id = ?").get(eventId);
           }
@@ -36277,15 +36296,17 @@ ${error.message || ""}`;
             return rows.map(eventFromRow);
           }
           /**
-           * Published `turn.notify` rows of one mesh that no `delivered:<writer>:<seq>`
-           * claim covers yet, in publish order (C-W3 deliver backlog + the MCP-only
+           * Published `turn.notify` rows of one mesh that no delivery claim of THAT
+           * mesh (deliveryClaimId) covers yet, in publish order (C-W3 deliver backlog + the MCP-only
            * coordinator read). Own-writer by construction: a notify row is only ever
            * written by this daemon's ledger. Read-only (check:turn-single-emitter rule 1).
            */
           listUndeliveredNotifies(meshId, opts = {}) {
             const rows = this.stmt(`SELECT n.* FROM turn_events n
             WHERE n.kind = 'notify' AND n.mesh_id = ? AND n.publish_state = 'published' AND n.recorded_at >= ?
-              AND NOT EXISTS (SELECT 1 FROM turn_events d WHERE d.event_id = 'delivered:' || n.src_writer || ':' || n.published_seq)
+              AND NOT EXISTS (SELECT 1 FROM turn_events d WHERE d.kind = 'delivered' AND (
+                    d.event_id = 'delivered:' || n.mesh_id || ':' || n.src_writer || ':' || n.published_seq
+                 OR (d.event_id = 'delivered:' || n.src_writer || ':' || n.published_seq AND (d.mesh_id = n.mesh_id OR d.mesh_id IS NULL))))
             ORDER BY n.published_seq, n.rowid LIMIT ?`).all(meshId, opts.sinceMs ?? 0, opts.limit ?? 200);
             return rows.map(eventFromRow);
           }
@@ -36309,8 +36330,8 @@ ${error.message || ""}`;
             return this.stmt(`DELETE FROM turn_events WHERE event_id = ? AND kind = 'delivered'`).run(claimEventId).changes > 0;
           }
           /** The local row of an own-writer topic entry, by its published coordinates. */
-          findPublishedEvent(writer, seq2) {
-            const row = this.stmt(`SELECT * FROM turn_events WHERE src_writer = ? AND published_seq = ? AND publish_state = 'published' LIMIT 1`).get(writer, seq2);
+          findPublishedEvent(writer, seq2, meshId) {
+            const row = meshId ? this.stmt(`SELECT * FROM turn_events WHERE src_writer = ? AND published_seq = ? AND publish_state = 'published' AND mesh_id = ? LIMIT 1`).get(writer, seq2, meshId) : this.stmt(`SELECT * FROM turn_events WHERE src_writer = ? AND published_seq = ? AND publish_state = 'published' LIMIT 1`).get(writer, seq2);
             return row ? eventFromRow(row) : null;
           }
           /** `pending` rows in write order — the publisher's queue (C7-1) and the boot/tick republish input. */
@@ -43195,9 +43216,6 @@ Next step: ${nextStep}`;
       if (!daemonId) return false;
       return selfIds.some((id22) => daemonIdsEquivalent4(id22, daemonId));
     }
-    function claimKey(writer, seq2) {
-      return `delivered:${writer}:${seq2}`;
-    }
     function jsonSafe(value) {
       try {
         return JSON.parse(JSON.stringify(value ?? null));
@@ -43498,10 +43516,10 @@ ${line}`;
         if (!entry.own) return { outcome: "skipped", why: "foreign" };
         const p = entry.payload;
         if (!isSelf(deps.selfDaemonIds(), str3(p.targetDaemonId))) return { outcome: "skipped", why: "not_addressed" };
-        const key2 = claimKey(entry.writer, entry.seq);
         const store2 = deps.ledger.store;
-        if (store2.hasEvent(key2)) return { outcome: "skipped", why: "already_delivered" };
-        const row = (str3(p.eventId) ? store2.getEvent(str3(p.eventId)) : null) ?? store2.findPublishedEvent(entry.writer, entry.seq);
+        const isClaimed = () => store2.isDeliveryClaimed(entry.meshId, entry.writer, entry.seq);
+        if (isClaimed()) return { outcome: "skipped", why: "already_delivered" };
+        const row = (str3(p.eventId) ? store2.getEvent(str3(p.eventId)) : null) ?? store2.findPublishedEvent(entry.writer, entry.seq, entry.meshId);
         const eventName = str3(row?.payload.event);
         if (eventName && deps.isControlEvent?.(eventName)) return { outcome: "skipped", why: "control" };
         const notify2 = isNotifyKind2(p.notify) ? p.notify : "mesh_event";
@@ -43532,7 +43550,7 @@ ${line}`;
         let rounds = 0;
         const refusedSessions = /* @__PURE__ */ new Set();
         for (; ; ) {
-          if (store2.hasEvent(key2)) {
+          if (isClaimed()) {
             counters4.ackedElsewhere++;
             log.info(`deliver mesh=${entry.meshId} entry=${entry.writer}:${entry.seq} notify=${notify2} outcome=acked_elsewhere waitedMs=${now() - startedAt}`);
             return { outcome: "acked_elsewhere" };
@@ -43598,11 +43616,9 @@ ${line}`;
       const out = [];
       for (const claim of ctx.ledger.store.listRecentDeliveryClaims(sinceMs, limit)) {
         if (!TYPED_DELIVERY_OUTCOMES.has(str3(claim.payload.outcome) ?? "")) continue;
-        const coords = claim.eventId.slice("delivered:".length);
-        const cut = coords.lastIndexOf(":");
-        const seq2 = cut > 0 ? Number(coords.slice(cut + 1)) : NaN;
-        if (!Number.isSafeInteger(seq2)) continue;
-        const row = ctx.ledger.store.findPublishedEvent(coords.slice(0, cut), seq2);
+        const coords = parseDeliveryClaimId(claim.eventId);
+        if (!coords) continue;
+        const row = ctx.ledger.store.findPublishedEvent(coords.writer, coords.seq, coords.meshId ?? claim.meshId);
         const entry = row && isRecord6(row.payload.entry) ? row.payload.entry : null;
         const meshId = row?.meshId ?? claim.meshId;
         if (!row || !entry || !meshId) continue;
@@ -43776,6 +43792,7 @@ ${line}`;
         import_crypto7 = require("crypto");
         init_dist();
         init_policy();
+        init_store();
         init_reducer();
         init_format();
         init_routing();
@@ -146183,7 +146200,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       function claimDelivery(input) {
         const nowMs2 = now();
         return txn(() => store2.insertEvent({
-          eventId: `delivered:${input.writer}:${input.seq}`,
+          eventId: deliveryClaimId(input.meshId, input.writer, input.seq),
           meshId: input.meshId ?? null,
           attemptId: null,
           generation: null,
@@ -146191,7 +146208,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           kind: "delivered",
           source: "input_service",
           verdict: "recorded",
-          dedupeKey: `${input.writer}:${input.seq}`,
+          dedupeKey: input.meshId ? `${input.meshId}:${input.writer}:${input.seq}` : `${input.writer}:${input.seq}`,
           payload: { ...input.meshId ? { meshId: input.meshId } : {}, ...input.outcome ? { outcome: input.outcome } : {} },
           srcWriter: input.writer,
           srcSeq: input.seq,

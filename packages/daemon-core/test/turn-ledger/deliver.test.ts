@@ -125,7 +125,7 @@ function notifyEntry(f: Fixture): DeliverCursorEntry {
 }
 
 describe('turn.deliver — local commit → one submit, exactly once', () => {
-    it('renders the local summary at deliver time, submits once, and claims delivered:<writer>:<seq>', async () => {
+    it('renders the local summary at deliver time, submits once, and claims delivered:<mesh>:<writer>:<seq>', async () => {
         const f = fixture();
         await commitWithLocalSummary(f);
         const deliver = createTurnDeliverHandler(f.deps);
@@ -137,7 +137,7 @@ describe('turn.deliver — local commit → one submit, exactly once', () => {
         expect(msg).toMatchObject({ messageId: `notify:${entry.writer}:${entry.seq}`, origin: 'mesh', policy: { mode: 'queue' }, sessionId: 'coord' });
         expect(msg.input.textFallback).toContain("Node 'n1' has completed its task");
         expect(msg.input.textFallback).toContain(SENTINEL);
-        expect(f.ledger.store.hasEvent(`delivered:${entry.writer}:${entry.seq}`)).toBe(true);
+        expect(f.ledger.store.hasEvent(`delivered:${entry.meshId}:${entry.writer}:${entry.seq}`)).toBe(true);
         // Content boundary: the text rendered at deliver time never rode an events-topic entry.
         for (const e of f.publisher.entries) expect(JSON.stringify(e.entry)).not.toContain(SENTINEL);
     });
@@ -175,7 +175,7 @@ describe('turn.deliver — local commit → one submit, exactly once', () => {
         const entry = notifyEntry(f);
         const failing = { submit: async () => { throw new Error('pty write failed'); } };
         await expect(createTurnDeliverHandler({ ...f.deps, port: failing })(entry, new AbortController().signal)).rejects.toThrow(/pty write failed/);
-        expect(f.ledger.store.hasEvent(`delivered:${entry.writer}:${entry.seq}`)).toBe(false);
+        expect(f.ledger.store.hasEvent(`delivered:${entry.meshId}:${entry.writer}:${entry.seq}`)).toBe(false);
         expect(await createTurnDeliverHandler(f.deps)(entry, new AbortController().signal)).toMatchObject({ outcome: 'delivered' });
         expect(f.port.calls).toHaveLength(1);
     });
@@ -296,6 +296,51 @@ describe('turn.deliver — deferral on edges, escalation at the ceiling', () => 
     });
 });
 
+describe('turn.deliver — claims are per mesh (seq counts per mesh topic)', () => {
+    // 2026-10-02: one daemon writer publishes every mesh's events topic, and seq
+    // counts per topic, so mesh B's notice #N collided with mesh A's delivered #N
+    // under the old `delivered:<writer>:<seq>` id — the cursor skipped B's notice
+    // as already delivered and its coordinator waited forever.
+    it('delivers a notice whose (writer, seq) another mesh already delivered', async () => {
+        const f = fixture();
+        await commitWithLocalSummary(f);
+        const entry = notifyEntry(f);
+        // Another mesh delivered ITS notice with the same writer + seq — both the
+        // legacy id (rows written before the fix) and the mesh-scoped one.
+        f.ledger.store.insertEvent({
+            eventId: `delivered:${entry.writer}:${entry.seq}`, meshId: 'mesh_other', attemptId: null, generation: null,
+            sessionId: 'coord', kind: 'delivered', source: 'input_service', verdict: 'recorded',
+            payload: { meshId: 'mesh_other', outcome: 'delivered' }, publishState: 'none', atMs: T0, recordedAt: T0,
+        } as never);
+        expect(f.ledger.claimDelivery({ writer: entry.writer, seq: entry.seq, meshId: 'mesh_other', sessionId: 'coord' })).toBe(true);
+        expect(f.ledger.store.listUndeliveredNotifies(entry.meshId)).toHaveLength(1);
+
+        const result = await createTurnDeliverHandler(f.deps)(entry, new AbortController().signal);
+
+        expect(result).toMatchObject({ outcome: 'delivered', sessionId: 'coord' });
+        expect(f.port.calls).toHaveLength(1);
+        expect(f.ledger.store.hasEvent(`delivered:${entry.meshId}:${entry.writer}:${entry.seq}`)).toBe(true);
+        expect(f.ledger.store.listUndeliveredNotifies(entry.meshId)).toHaveLength(0);
+    });
+
+    it('still honours a legacy claim row written for the SAME mesh', async () => {
+        const f = fixture();
+        await commitWithLocalSummary(f);
+        const entry = notifyEntry(f);
+        f.ledger.store.insertEvent({
+            eventId: `delivered:${entry.writer}:${entry.seq}`, meshId: entry.meshId, attemptId: null, generation: null,
+            sessionId: 'coord', kind: 'delivered', source: 'input_service', verdict: 'recorded',
+            payload: { meshId: entry.meshId, outcome: 'delivered' }, publishState: 'none', atMs: T0, recordedAt: T0,
+        } as never);
+
+        const result = await createTurnDeliverHandler(f.deps)(entry, new AbortController().signal);
+
+        expect(result).toMatchObject({ outcome: 'skipped', why: 'already_delivered' });
+        expect(f.port.calls).toHaveLength(0);
+        expect(f.ledger.store.listUndeliveredNotifies(entry.meshId)).toHaveLength(0);
+    });
+});
+
 describe('suppression at deliver time', () => {
     it('an approval notice whose attempt left `suspended` is claimed without a submit', async () => {
         const f = fixture();
@@ -308,7 +353,7 @@ describe('suppression at deliver time', () => {
         const approval = f.entries().find((e) => (e.payload as { notify?: string }).notify === 'approval')!;
         expect(await createTurnDeliverHandler(f.deps)(approval, new AbortController().signal)).toEqual({ outcome: 'suppressed', why: 'stale_suspension' });
         expect(f.port.calls).toHaveLength(0);
-        expect(f.ledger.store.hasEvent(`delivered:${approval.writer}:${approval.seq}`)).toBe(true);
+        expect(f.ledger.store.hasEvent(`delivered:${approval.meshId}:${approval.writer}:${approval.seq}`)).toBe(true);
     });
 });
 
@@ -340,7 +385,7 @@ describe('producer notices (mesh_event)', () => {
         const listed = listRecentDeliveredNotices(f.deps, 0);
         expect(listed).toHaveLength(1);
         expect(listed[0]).toMatchObject({ meshId: 'm1', event: 'mesh:dispatch_blocked', taskId: 't9', text: body });
-        expect(listed[0]!.claimEventId).toBe(`delivered:${entry.writer}:${entry.seq}`);
+        expect(listed[0]!.claimEventId).toBe(`delivered:${entry.meshId}:${entry.writer}:${entry.seq}`);
 
         expect(f.ledger.store.releaseDeliveryClaim(listed[0]!.claimEventId)).toBe(true);
         expect(f.ledger.store.listUndeliveredNotifies('m1')).toHaveLength(1);

@@ -38,7 +38,7 @@ import {
 } from '@adhdev/mesh-shared';
 import { DEFAULT_TURN_POLICY, type TurnPolicy } from './policy.js';
 import { expireHolds, reduce, type ReduceResult } from './reducer.js';
-import { TurnStore, type TurnEventRow } from './store.js';
+import { TurnStore, deliveryClaimId, type TurnEventRow } from './store.js';
 import {
     applyHostEffects,
     buildForwardedEvidenceEntry,
@@ -149,7 +149,7 @@ export interface TurnLedger {
     observe(evidence: TurnEvidence, opts?: ObserveOptions): ObserveResult;
     /** Attempt-less coordinator notice (`turn.notify{notify:'mesh_event'}`); replaces the legacy pending-events outbox insert. */
     notifyMeshEvent(notice: MeshEventNotice): { eventId: string; inserted: boolean };
-    /** `turn.deliver` exactly-once claim: inserts `delivered:<writer>:<seq>`; false = already delivered. */
+    /** `turn.deliver` exactly-once claim: inserts the mesh-scoped deliveryClaimId row; false = already delivered. */
     claimDelivery(input: { writer: string; seq: number; meshId?: string | null; sessionId: string; outcome?: string }): boolean;
     isTerminal(attemptId: string): boolean | null;
     getAttempt(attemptId: string): TurnAttempt | null;
@@ -483,7 +483,7 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
     function claimDelivery(input: { writer: string; seq: number; meshId?: string | null; sessionId: string; outcome?: string }): boolean {
         const nowMs = now();
         return txn(() => store.insertEvent({
-            eventId: `delivered:${input.writer}:${input.seq}`,
+            eventId: deliveryClaimId(input.meshId, input.writer, input.seq),
             meshId: input.meshId ?? null,
             attemptId: null,
             generation: null,
@@ -491,7 +491,7 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
             kind: 'delivered',
             source: 'input_service',
             verdict: 'recorded',
-            dedupeKey: `${input.writer}:${input.seq}`,
+            dedupeKey: input.meshId ? `${input.meshId}:${input.writer}:${input.seq}` : `${input.writer}:${input.seq}`,
             payload: { ...(input.meshId ? { meshId: input.meshId } : {}), ...(input.outcome ? { outcome: input.outcome } : {}) },
             srcWriter: input.writer,
             srcSeq: input.seq,

@@ -54,7 +54,7 @@ import {
 } from '@adhdev/mesh-shared';
 import { DEFAULT_TURN_POLICY, type TurnPolicy } from './policy.js';
 import type { TurnLedger } from './ledger.js';
-import type { TurnEventRow } from './store.js';
+import { parseDeliveryClaimId, type TurnEventRow } from './store.js';
 import type { TurnAttempt } from './types.js';
 import { isUnredeliveredDirectFailure } from './reducer.js';
 import { renderTurnNotify, type FormatStopReason, type TurnNotifyRefs, type TurnNotifyScalars } from './format.js';
@@ -126,9 +126,7 @@ function isSelf(selfIds: readonly string[], daemonId: string | undefined): boole
     return selfIds.some((id) => daemonIdsEquivalent(id, daemonId));
 }
 
-function claimKey(writer: string, seq: number): string {
-    return `delivered:${writer}:${seq}`;
-}
+
 
 // ─── 1. producer API: non-turn coordinator notices ─────────────────────────
 
@@ -603,10 +601,10 @@ export function createTurnDeliverHandler(deps: TurnDeliverDeps, handlerOpts: Tur
         if (!entry.own) return { outcome: 'skipped', why: 'foreign' };
         const p = entry.payload;
         if (!isSelf(deps.selfDaemonIds(), str(p.targetDaemonId))) return { outcome: 'skipped', why: 'not_addressed' };
-        const key = claimKey(entry.writer, entry.seq);
         const store = deps.ledger.store;
-        if (store.hasEvent(key)) return { outcome: 'skipped', why: 'already_delivered' };
-        const row = (str(p.eventId) ? store.getEvent(str(p.eventId)!) : null) ?? store.findPublishedEvent(entry.writer, entry.seq);
+        const isClaimed = () => store.isDeliveryClaimed(entry.meshId, entry.writer, entry.seq);
+        if (isClaimed()) return { outcome: 'skipped', why: 'already_delivered' };
+        const row = (str(p.eventId) ? store.getEvent(str(p.eventId)!) : null) ?? store.findPublishedEvent(entry.writer, entry.seq, entry.meshId);
         const eventName = str(row?.payload.event);
         if (eventName && deps.isControlEvent?.(eventName)) return { outcome: 'skipped', why: 'control' };
         const notify = (isNotifyKind(p.notify) ? p.notify : 'mesh_event') as NotifyKind;
@@ -642,7 +640,7 @@ export function createTurnDeliverHandler(deps: TurnDeliverDeps, handlerOpts: Tur
         let rounds = 0;
         const refusedSessions = new Set<string>();
         for (;;) {
-            if (store.hasEvent(key)) {
+            if (isClaimed()) {
                 counters.ackedElsewhere++;
                 log.info(`deliver mesh=${entry.meshId} entry=${entry.writer}:${entry.seq} notify=${notify} outcome=acked_elsewhere waitedMs=${now() - startedAt}`);
                 return { outcome: 'acked_elsewhere' };
@@ -737,7 +735,7 @@ interface ReadNoticesDeps extends RenderContext {
 
 /** One notice this daemon typed into a coordinator session (composer-residue sweep input). */
 interface DeliveredNoticeView {
-    /** The `delivered:<writer>:<seq>` claim row id (the recovery handle). */
+    /** The delivery claim row id (deliveryClaimId — the recovery handle). */
     claimEventId: string;
     meshId: string;
     event: string;
@@ -762,11 +760,9 @@ export function listRecentDeliveredNotices(ctx: RenderContext, sinceMs: number, 
     const out: DeliveredNoticeView[] = [];
     for (const claim of ctx.ledger.store.listRecentDeliveryClaims(sinceMs, limit)) {
         if (!TYPED_DELIVERY_OUTCOMES.has(str(claim.payload.outcome) ?? '')) continue;
-        const coords = claim.eventId.slice('delivered:'.length);
-        const cut = coords.lastIndexOf(':');
-        const seq = cut > 0 ? Number(coords.slice(cut + 1)) : NaN;
-        if (!Number.isSafeInteger(seq)) continue;
-        const row = ctx.ledger.store.findPublishedEvent(coords.slice(0, cut), seq);
+        const coords = parseDeliveryClaimId(claim.eventId);
+        if (!coords) continue;
+        const row = ctx.ledger.store.findPublishedEvent(coords.writer, coords.seq, coords.meshId ?? claim.meshId);
         const entry = row && isRecord(row.payload.entry) ? row.payload.entry as Record<string, unknown> : null;
         const meshId = row?.meshId ?? claim.meshId;
         if (!row || !entry || !meshId) continue;

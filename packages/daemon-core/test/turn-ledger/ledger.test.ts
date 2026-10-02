@@ -301,11 +301,13 @@ describe('sessions, holds, notices', () => {
         expect(JSON.parse(String(rowsOf(db, 'notify')[0]!.payload_json))).toMatchObject({ event: 'refine:completed', local: { payload: { summary: 'LOCAL-ONLY TEXT' } } });
     });
 
-    it('claimDelivery is exactly-once per (writer, seq)', () => {
+    it('claimDelivery is exactly-once per (mesh, writer, seq)', () => {
         const ledger = ledgerOn(memDb());
         expect(ledger.claimDelivery({ writer: 'w-dc', seq: 5, meshId: 'm1', sessionId: 'coord' })).toBe(true);
         expect(ledger.claimDelivery({ writer: 'w-dc', seq: 5, meshId: 'm1', sessionId: 'coord' })).toBe(false);
-        expect(ledger.store.hasEvent('delivered:w-dc:5')).toBe(true);
+        expect(ledger.store.hasEvent('delivered:m1:w-dc:5')).toBe(true);
+        // seq counts per mesh topic: the same (writer, seq) on another mesh is a different notice.
+        expect(ledger.claimDelivery({ writer: 'w-dc', seq: 5, meshId: 'm2', sessionId: 'coord' })).toBe(true);
     });
 
     it('malformed evidence is refused before any write', () => {
