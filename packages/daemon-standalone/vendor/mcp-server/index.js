@@ -117550,6 +117550,18 @@ ${marker}`,
       }
       return submodulesInitialized;
     }
+    var meshCloneLocks = /* @__PURE__ */ new Map();
+    async function withMeshCloneLock(meshId, fn) {
+      const prev = meshCloneLocks.get(meshId) ?? Promise.resolve();
+      const run2 = prev.catch(() => void 0).then(fn);
+      const tail = run2.catch(() => void 0);
+      meshCloneLocks.set(meshId, tail);
+      try {
+        return await run2;
+      } finally {
+        if (meshCloneLocks.get(meshId) === tail) meshCloneLocks.delete(meshId);
+      }
+    }
     var meshNodeCloneHandlers = {
       clone_mesh_node: async (ctx, args) => {
         const meshId = typeof args?.meshId === "string" ? args.meshId.trim() : "";
@@ -117564,46 +117576,56 @@ ${marker}`,
         const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, "worktree clone");
         if (ownerFailure) return ownerFailure;
         try {
-          const meshRecord2 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
-          const mesh = meshRecord2?.mesh;
-          if (!mesh) return { success: false, error: "Mesh not found" };
-          let sourceNode = mesh.nodes?.find((n) => meshNodeIdMatches7(n, sourceNodeId));
-          if (!sourceNode) {
-            const persisted = await ctx.getMeshForCommand(meshId, void 0, { preferInline: false });
-            sourceNode = persisted?.mesh?.nodes?.find((n) => meshNodeIdMatches7(n, sourceNodeId));
-            if (sourceNode) LOG.warn("Mesh", `[clone] source node ${sourceNodeId} missing from the inline view of ${meshId}; using the persisted mesh`);
-          }
-          if (!sourceNode) return { success: false, error: `Source node '${sourceNodeId}' not found in mesh` };
-          const sourceDaemonId = typeof sourceNode.daemonId === "string" ? sourceNode.daemonId.trim() : void 0;
-          if (sourceDaemonId && !daemonIdsEquivalent4(sourceDaemonId, ctx.deps.statusInstanceId) && ctx.deps.dispatchMeshCommand && !readMeshDirectDispatchFlag(args)) {
-            return await forwardCloneToSourceDaemon(ctx, meshId, args, mesh, sourceDaemonId);
-          }
-          const identity = {
-            daemonId: readMeshNodeDaemonId(sourceNode) || readText(ctx.deps.statusInstanceId) || void 0,
-            machineId: readMeshNodeMachineId(sourceNode) || (() => {
-              try {
-                return readText(getMachineId());
-              } catch {
-                return "";
-              }
-            })() || void 0
-          };
-          const worktreeBaseDir = typeof mesh.policy?.worktreeBaseDir === "string" && mesh.policy.worktreeBaseDir.trim() ? mesh.policy.worktreeBaseDir.trim() : void 0;
-          const { createWorktree: createWorktree2 } = await Promise.resolve().then(() => (init_git_worktree(), git_worktree_exports));
-          const result = await createWorktree2({
-            repoRoot: sourceNode.repoRoot || sourceNode.workspace,
-            branch,
-            baseBranch,
-            meshName: mesh.name,
-            worktreeBaseDir
+          const prepared = await withMeshCloneLock(meshId, async () => {
+            const meshRecord3 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
+            const mesh2 = meshRecord3?.mesh;
+            if (!mesh2) return { ready: false, done: { success: false, error: "Mesh not found" } };
+            let sourceNode2 = mesh2.nodes?.find((n) => meshNodeIdMatches7(n, sourceNodeId));
+            if (!sourceNode2) {
+              const persisted = await ctx.getMeshForCommand(meshId, void 0, { preferInline: false });
+              sourceNode2 = persisted?.mesh?.nodes?.find((n) => meshNodeIdMatches7(n, sourceNodeId));
+              if (sourceNode2) LOG.warn("Mesh", `[clone] source node ${sourceNodeId} missing from the inline view of ${meshId}; using the persisted mesh`);
+            }
+            if (!sourceNode2) return { ready: false, done: { success: false, error: `Source node '${sourceNodeId}' not found in mesh` } };
+            const sourceDaemonId = typeof sourceNode2.daemonId === "string" ? sourceNode2.daemonId.trim() : void 0;
+            if (sourceDaemonId && !daemonIdsEquivalent4(sourceDaemonId, ctx.deps.statusInstanceId) && ctx.deps.dispatchMeshCommand && !readMeshDirectDispatchFlag(args)) {
+              return { ready: false, forward: { mesh: mesh2, sourceDaemonId } };
+            }
+            const identity2 = {
+              daemonId: readMeshNodeDaemonId(sourceNode2) || readText(ctx.deps.statusInstanceId) || void 0,
+              machineId: readMeshNodeMachineId(sourceNode2) || (() => {
+                try {
+                  return readText(getMachineId());
+                } catch {
+                  return "";
+                }
+              })() || void 0
+            };
+            const worktreeBaseDir = typeof mesh2.policy?.worktreeBaseDir === "string" && mesh2.policy.worktreeBaseDir.trim() ? mesh2.policy.worktreeBaseDir.trim() : void 0;
+            const { createWorktree: createWorktree2 } = await Promise.resolve().then(() => (init_git_worktree(), git_worktree_exports));
+            const result2 = await createWorktree2({
+              repoRoot: sourceNode2.repoRoot || sourceNode2.workspace,
+              branch,
+              baseBranch,
+              meshName: mesh2.name,
+              worktreeBaseDir
+            });
+            if (result2.baseSync?.warning) {
+              console.warn(`[mesh] clone_mesh_node base sync (${result2.baseSync.action}): ${result2.baseSync.warning}`);
+            } else if (result2.baseSync && result2.baseSync.action !== "up_to_date") {
+              console.log(`[mesh] clone_mesh_node base sync: ${result2.baseSync.action} (startRef=${result2.baseSync.startRef})`);
+            }
+            const node2 = await registerClonedWorktreeNode(ctx, meshId, meshRecord3, sourceNode2, sourceNodeId, result2, identity2);
+            if (!node2) return { ready: false, done: { success: false, error: "Failed to register worktree node" } };
+            return { ready: true, meshRecord: meshRecord3, mesh: mesh2, sourceNode: sourceNode2, result: result2, node: node2, identity: identity2 };
           });
-          if (result.baseSync?.warning) {
-            console.warn(`[mesh] clone_mesh_node base sync (${result.baseSync.action}): ${result.baseSync.warning}`);
-          } else if (result.baseSync && result.baseSync.action !== "up_to_date") {
-            console.log(`[mesh] clone_mesh_node base sync: ${result.baseSync.action} (startRef=${result.baseSync.startRef})`);
+          if (!prepared.ready) {
+            if ("forward" in prepared && prepared.forward) {
+              return await forwardCloneToSourceDaemon(ctx, meshId, args, prepared.forward.mesh, prepared.forward.sourceDaemonId);
+            }
+            return prepared.done;
           }
-          const node = await registerClonedWorktreeNode(ctx, meshId, meshRecord2, sourceNode, sourceNodeId, result, identity);
-          if (!node) return { success: false, error: "Failed to register worktree node" };
+          const { meshRecord: meshRecord2, mesh, sourceNode, result, node, identity } = prepared;
           if (typeof node?.id === "string" && node.id) noteRecentlyClonedNode(node.id);
           const target = { meshId, mesh, node, worktreePath: result.worktreePath, daemonId: identity.daemonId, machineId: identity.machineId };
           const persistWorktreeSetupState = (state) => persistNodeBootstrapState(ctx, meshId, meshRecord2, node, state);
