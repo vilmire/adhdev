@@ -5,6 +5,7 @@
  */
 import type { DetailSelection, MeshCommandSeam } from './MeshOverviewCards';
 import { ledgerKindLabel, queueTaskSortRank, useRecentList, StatusBadge, missionStatusLabel, missionStatusTone, StatTile, formatDuration, ListRow, queueTaskStatusLabel, queueTaskTone, difficultyLabel, difficultyTone, relativeTime, MoreToggle, ModalRow, payloadSummary, ledgerKindTone, sessionStatusTone, type MeshMissionDisplay } from './meshOverviewPrimitives';
+import { ledgerEntryNodeLabel } from './meshLedgerEvents';
 import { splitTaskMessage, splitFinalSummary } from './blueprintViewModel';
 import { queueTaskDisplayText, stripMarkdownSyntax } from '../../utils/queue-task-label';
 import { nodeDisplayName, sessionStatusLabel, sessionStatusText, sessionRoleText } from './MeshObservabilitySurface/meshSurfaceHelpers';
@@ -21,7 +22,7 @@ import type { MeshGraphSessionDetail } from '../../utils/mesh-visualization';
 function detailTitle(detail: DetailSelection, t: (key: string) => string): { kicker: string; title: string } {
     switch (detail.kind) {
         case 'mission': return { kicker: t('mesh.overview.detailKickerMission'), title: detail.mission.title }
-        case 'ledger': return { kicker: t('mesh.overview.detailKickerLedger'), title: ledgerKindLabel(detail.entry.kind, t) }
+        case 'ledger': return { kicker: t('mesh.overview.detailKickerLedger'), title: ledgerKindLabel(detail.entry.kind, t, detail.entry.payload) }
         case 'queue': return { kicker: t('mesh.overview.detailKickerQueue'), title: splitTaskMessage(queueTaskDisplayText(detail.task.message))?.lead.slice(0, 120) || t('mesh.overview.detailKickerQueue') }
         case 'session': return { kicker: t('mesh.overview.detailKickerSession'), title: [detail.session.providerType, nodeDisplayName(detail.node)].filter(Boolean).join(' · ') }
     }
@@ -412,12 +413,12 @@ function LedgerDetail({ meshTheme, entry, resolveNodeLabel }: { meshTheme: MeshG
     return (
         <div className="flex flex-col gap-3">
             <div className="flex flex-wrap items-center gap-1.5">
-                <StatusBadge meshTheme={meshTheme} label={ledgerKindLabel(entry.kind, t)} tone={ledgerKindTone(entry.kind)} />
+                <StatusBadge meshTheme={meshTheme} label={ledgerKindLabel(entry.kind, t, entry.payload)} tone={ledgerKindTone(entry.kind)} />
             </div>
             {summary && <div className={`whitespace-pre-wrap text-xs leading-5 ${meshTheme.textSecondary}`}>{summary}</div>}
             <div className="grid gap-1.5 text-xs">
                 <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelWhen')} value={relativeTime(entry.timestamp) ?? entry.timestamp} />
-                {entry.nodeId && <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelNode')} value={resolveNodeLabel(entry.nodeId)} />}
+                {entry.nodeId && <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelNode')} value={ledgerEntryNodeLabel(entry, resolveNodeLabel)} />}
                 {entry.providerType && <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelProvider')} value={entry.providerType} />}
                 {entry.sessionId && (
                     <ModalRow

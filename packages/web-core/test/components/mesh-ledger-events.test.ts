@@ -9,10 +9,13 @@ import zhCN from '../../src/i18n/locales/zh-CN/common.json'
 import es from '../../src/i18n/locales/es/common.json'
 import {
     MESH_USER_EVENT_LABEL_KEYS,
+    classifyLedgerEntry,
     classifyLedgerKind,
     filterLedgerEntriesForDisplay,
+    ledgerEntryNodeLabel,
     ledgerKindDisplayLabel,
 } from '../../src/components/MeshGraph/meshLedgerEvents'
+import { payloadSummary } from '../../src/components/MeshGraph/meshOverviewPrimitives'
 
 describe('classifyLedgerKind', () => {
     it('maps the user-meaningful kinds onto six events', () => {
@@ -82,5 +85,40 @@ describe('display', () => {
                 expect(leaf.length).toBeGreaterThan(0)
             }
         }
+    })
+})
+
+describe('auto-launch phases', () => {
+    it('only a started auto-launch is "Agent started"', () => {
+        expect(classifyLedgerEntry({ kind: 'session_auto_launch', payload: { phase: 'started' } })).toBe('sessionStarted')
+        expect(classifyLedgerEntry({ kind: 'session_auto_launch' })).toBe('sessionStarted')
+        expect(classifyLedgerEntry({ kind: 'session_auto_launch', payload: { phase: 'skipped', reason: 'auto_launch_orphan_session_detected' } })).toBeNull()
+        const shown = filterLedgerEntriesForDisplay([
+            { kind: 'session_auto_launch', nodeId: 'n1', payload: { phase: 'skipped' } },
+            { kind: 'session_auto_launch', nodeId: 'n1', payload: { phase: 'started' } },
+        ], false)
+        expect(shown).toHaveLength(1)
+        expect(shown[0].payload?.phase).toBe('started')
+    })
+})
+
+describe('payloadSummary', () => {
+    it('skips machine reason codes but keeps prose', () => {
+        expect(payloadSummary({ reason: 'auto_launch_orphan_session_detected' })).toBeNull()
+        expect(payloadSummary({ reason: 'auto_launch_orphan_session_detected', title: 'Add search' })).toBe('Add search')
+        expect(payloadSummary({ reason: 'Worker exited unexpectedly' })).toBe('Worker exited unexpectedly')
+    })
+})
+
+describe('ledgerEntryNodeLabel', () => {
+    const resolve = (id: string | undefined | null) => (id === 'known' ? 'MacBook · todo-web' : id ?? '')
+    it('prefers the live node label', () => {
+        expect(ledgerEntryNodeLabel({ nodeId: 'known', payload: { worktreeBranch: 'b' } }, resolve)).toBe('MacBook · todo-web')
+    })
+    it('names a removed node by its branch, then workspace', () => {
+        expect(ledgerEntryNodeLabel({ nodeId: 'node_gone', payload: { worktreeBranch: 'mesh/task-42' } }, resolve)).toBe('mesh/task-42')
+        expect(ledgerEntryNodeLabel({ nodeId: 'node_gone', payload: { mergedBranch: 'mesh/task-7' } }, resolve)).toBe('mesh/task-7')
+        expect(ledgerEntryNodeLabel({ nodeId: 'node_gone', payload: { workspace: '/Users/me/demo/todo-web-wt-3/' } }, resolve)).toBe('todo-web-wt-3')
+        expect(ledgerEntryNodeLabel({ nodeId: 'node_gone' }, resolve)).toBe('node_gone')
     })
 })

@@ -60,14 +60,57 @@ const KIND_LABEL_KEYS: Record<string, string> = {
  * Display label: the localized user event, or — for internal kinds shown only
  * in "all activity" mode — the raw kind made readable.
  */
-export function ledgerKindDisplayLabel(kind: string, t: (key: string) => string): string {
+export function ledgerKindDisplayLabel(kind: string, t: (key: string) => string, payload?: Record<string, unknown>): string {
     const specific = KIND_LABEL_KEYS[kind.trim().toLowerCase()]
     if (specific) return t(specific)
-    const event = classifyLedgerKind(kind)
-    return event ? t(MESH_USER_EVENT_LABEL_KEYS[event]) : kind.replace(/[_-]+/g, ' ')
+    const event = classifyLedgerEntry({ kind, payload })
+    if (event) return t(MESH_USER_EVENT_LABEL_KEYS[event])
+    const readable = kind.replace(/[_-]+/g, ' ')
+    const phase = payload?.phase
+    return typeof phase === 'string' && phase ? `${readable} · ${phase}` : readable
 }
 
-type LedgerDisplayEntry = { kind: string; nodeId?: string | null; taskId?: string | null; sessionId?: string | null }
+type LedgerDisplayEntry = { kind: string; nodeId?: string | null; taskId?: string | null; sessionId?: string | null; payload?: Record<string, unknown> }
+
+/**
+ * Entry-level classification. `session_auto_launch` records every phase of an
+ * auto-launch attempt (skipped / failed / completed as well as started); only
+ * a start is "Agent started" — the others are bookkeeping.
+ */
+export function classifyLedgerEntry(entry: Pick<LedgerDisplayEntry, 'kind' | 'payload'>): MeshUserEvent | null {
+    const event = classifyLedgerKind(entry.kind)
+    if (event === 'sessionStarted' && entry.kind.trim().toLowerCase() === 'session_auto_launch') {
+        const phase = entry.payload?.phase
+        if (typeof phase === 'string' && phase !== 'started') return null
+    }
+    return event
+}
+
+/**
+ * Node label for an activity row. A removed worktree node is gone from mesh
+ * status, so `resolveNodeLabel` can only echo its raw id; the removal/clone
+ * record itself carries the branch or workspace, which names it far better.
+ */
+export function ledgerEntryNodeLabel(
+    entry: Pick<LedgerDisplayEntry, 'nodeId' | 'payload'>,
+    resolveNodeLabel: (nodeId: string | undefined | null) => string,
+): string {
+    const nodeId = entry.nodeId
+    if (!nodeId) return ''
+    const resolved = resolveNodeLabel(nodeId)
+    if (resolved && resolved !== nodeId) return resolved
+    const p = entry.payload ?? {}
+    for (const key of ['worktreeBranch', 'mergedBranch', 'branch'] as const) {
+        const v = p[key]
+        if (typeof v === 'string' && v.trim()) return v.trim()
+    }
+    const workspace = p.workspace
+    if (typeof workspace === 'string' && workspace.trim()) {
+        const base = workspace.trim().replace(/[\\/]+$/, '').split(/[\\/]/).pop()
+        if (base) return base
+    }
+    return resolved || nodeId
+}
 
 /**
  * Keep only user-facing events unless `showAll`. Order is preserved. Several
@@ -81,7 +124,7 @@ export function filterLedgerEntriesForDisplay<T extends LedgerDisplayEntry>(entr
     const out: T[] = []
     let prevKey: string | null = null
     for (const entry of entries) {
-        const event = classifyLedgerKind(entry.kind)
+        const event = classifyLedgerEntry(entry)
         if (!event) continue
         const key = `${event}\u0000${entry.nodeId ?? ''}\u0000${entry.taskId ?? ''}\u0000${event === 'sessionStarted' ? '' : entry.sessionId ?? ''}`
         if (key === prevKey) continue

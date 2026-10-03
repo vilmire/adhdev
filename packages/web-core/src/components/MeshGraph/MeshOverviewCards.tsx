@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next'
 import { queueTaskDisplayText } from '../../utils/queue-task-label';
 import { Tooltip } from '../ui/InfoTip'
-import { filterLedgerEntriesForDisplay } from './meshLedgerEvents';
+import { filterLedgerEntriesForDisplay, ledgerEntryNodeLabel } from './meshLedgerEvents';
 import type {
     RepoMeshLedgerEntryStatus,
     RepoMeshLedgerSummaryStatus,
@@ -383,8 +383,8 @@ function LedgerCard({ meshTheme, ledgerSummary, entries, resolveNodeLabel, onSel
                             const summary = payloadSummary(entry.payload)
                             return (
                                 <ListRow key={entry.id} meshTheme={meshTheme} onClick={() => onSelect(entry)}>
-                                    <StatusBadge meshTheme={meshTheme} label={ledgerKindLabel(entry.kind, t)} tone={ledgerKindTone(entry.kind)} />
-                                    <span className={`min-w-0 flex-1 truncate ${meshTheme.textSecondary}`}>{summary || resolveNodeLabel(entry.nodeId) || '—'}</span>
+                                    <StatusBadge meshTheme={meshTheme} label={ledgerKindLabel(entry.kind, t, entry.payload)} tone={ledgerKindTone(entry.kind)} />
+                                    <span className={`min-w-0 flex-1 truncate ${meshTheme.textSecondary}`}>{summary || ledgerEntryNodeLabel(entry, resolveNodeLabel) || '—'}</span>
                                     <span className={`shrink-0 text-3xs ${meshTheme.textMuted}`}>{relativeTime(entry.timestamp) ?? ''}</span>
                                 </ListRow>
                             )

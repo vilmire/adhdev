@@ -216,8 +216,8 @@ export function formatDuration(ms: number | null | undefined): string | null {
     return parts.join(' ')
 }
 
-export function ledgerKindLabel(kind: string, t: (key: string) => string): string {
-    return ledgerKindDisplayLabel(kind, t)
+export function ledgerKindLabel(kind: string, t: (key: string) => string, payload?: Record<string, unknown>): string {
+    return ledgerKindDisplayLabel(kind, t, payload)
 }
 
 export function ledgerKindTone(kind: string): Tone {
@@ -232,10 +232,17 @@ export function ledgerKindTone(kind: string): Tone {
     return 'muted'
 }
 
+const MACHINE_CODE_RE = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/
+
 export function payloadSummary(payload: Record<string, unknown> | undefined): string | null {
     if (!payload) return null
-    const candidate = payload.message ?? payload.summary ?? payload.reason ?? payload.title
-    if (typeof candidate === 'string' && candidate.trim()) return candidate.trim()
+    for (const candidate of [payload.message, payload.summary, payload.reason, payload.title]) {
+        if (typeof candidate !== 'string' || !candidate.trim()) continue
+        // Machine reason codes (`auto_launch_orphan_session_detected`) are not
+        // prose; they stay in the raw-payload disclosure, not the summary line.
+        if (MACHINE_CODE_RE.test(candidate.trim())) continue
+        return candidate.trim()
+    }
     return null
 }
 
