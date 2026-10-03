@@ -42,7 +42,7 @@ import { useTabShortcuts } from '../../hooks/useTabShortcuts';
 import { isEditableTarget, normalizeKey, readActionShortcuts, type DashboardActionShortcutId } from '../../hooks/useActionShortcuts'
 import { getConversationTitle } from './conversation-presenters';
 import { buildDashboardDockviewContextMenuItems } from './dockviewContextMenuItems'
-import { shouldAwaitStoredDockviewHydration, shouldDeferDockviewPanelPrune } from './dashboardDockviewHydration'
+import { pendingStoredPanelsAfterRestore, shouldAwaitStoredDockviewHydration, shouldDeferDockviewPanelPrune, STORED_PANEL_ARRIVAL_GRACE_MS, takeRetainedStoredPanelIds, type PendingStoredPanels } from './dashboardDockviewHydration'
 import { getPassiveSessionSelectionCommand } from './dashboardSessionCommands'
 import type { DashboardScrollToBottomIntent } from './dashboard-scroll-to-bottom'
 import { attachDockviewIdleDragFloat, isDockviewIdleDragFloatEnabled } from './dockviewIdleDragFloat'
@@ -256,6 +256,9 @@ export default function DashboardDockviewWorkspace({
     const hasRestoredStoredActiveTabRef = useRef(false)
     const storedActiveTabIdRef = useRef<string | null>(null)
     const previousVisibleTabKeysRef = useRef<string[]>([])
+    const pendingStoredPanelsRef = useRef<PendingStoredPanels | null>(null)
+    const latestVisibleConversationsRef = useRef(visibleConversations)
+    latestVisibleConversationsRef.current = visibleConversations
     const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; tabKey: string; sourceDocument: Document } | null>(null)
     const [popoutWindowRevision, setPopoutWindowRevision] = useState(0)
     const hiddenRestoreStateRef = useRef<Record<string, DashboardStoredHiddenTabLocation>>(
@@ -852,6 +855,9 @@ export default function DashboardDockviewWorkspace({
         }
     }, [])
 
+    const retainedStoredPanelIds = useCallback((conversations: ActiveConversation[]) =>
+        takeRetainedStoredPanelIds(pendingStoredPanelsRef, conversations.map(conversation => conversation.tabKey)), [])
+
     const handleReady = useCallback((event: DockviewReadyEvent) => {
         apiRef.current = event.api
         idleDragFloatCleanupRef.current?.()
@@ -861,6 +867,17 @@ export default function DashboardDockviewWorkspace({
         storedActiveTabIdRef.current = stored?.activeTabId ?? null
         if (stored?.layout) {
             event.api.fromJSON(stored.layout, { reuseExistingPanels: false })
+            pendingStoredPanelsRef.current = pendingStoredPanelsAfterRestore(
+                event.api.panels.map(panel => panel.id), visibleConversations.map(conversation => conversation.tabKey), isRemotePanelId)
+            if (pendingStoredPanelsRef.current) {
+                // Sessions that never come back are pruned once the grace ends.
+                window.setTimeout(() => {
+                    const api = apiRef.current
+                    if (!api || !pendingStoredPanelsRef.current) return
+                    pendingStoredPanelsRef.current = null
+                    syncDockviewPanels(api, latestVisibleConversationsRef.current)
+                }, STORED_PANEL_ARRIVAL_GRACE_MS + 50)
+            }
         }
 
         awaitingInitialLayoutHydrationRef.current = shouldAwaitStoredDockviewHydration({
@@ -871,7 +888,7 @@ export default function DashboardDockviewWorkspace({
         })
 
         if (!awaitingInitialLayoutHydrationRef.current) {
-            syncDockviewPanels(event.api, visibleConversations)
+            syncDockviewPanels(event.api, visibleConversations, retainedStoredPanelIds(visibleConversations))
             syncRemotePanels(event.api, visibleConversations, requestedRemoteIdeId)
         }
 
@@ -964,6 +981,7 @@ export default function DashboardDockviewWorkspace({
         persistDockviewLayout,
         requestedActiveTabKey,
         requestedRemoteIdeId,
+        retainedStoredPanelIds,
         sendCommand,
         syncPopoutChrome,
         visibleConversations,
@@ -1005,7 +1023,7 @@ export default function DashboardDockviewWorkspace({
         }
 
         if (!shouldSkipPanelPrune) {
-            syncDockviewPanels(api, visibleConversations)
+            syncDockviewPanels(api, visibleConversations, retainedStoredPanelIds(visibleConversations))
             syncRemotePanels(api, visibleConversations, requestedRemoteIdeId)
         }
 
@@ -1054,7 +1072,7 @@ export default function DashboardDockviewWorkspace({
         if (!activePanelStillExists) {
             activateStoredActiveTab()
         }
-    }, [activatePanel, activateRequestedTab, activateStoredActiveTab, ides, initialDataLoaded, persistHiddenRestoreState, readHiddenRestoreStateFromLayout, requestedActiveTabKey, requestedRemoteIdeId, visibleConversations])
+    }, [activatePanel, activateRequestedTab, activateStoredActiveTab, ides, initialDataLoaded, persistHiddenRestoreState, readHiddenRestoreStateFromLayout, requestedActiveTabKey, requestedRemoteIdeId, retainedStoredPanelIds, visibleConversations])
 
     useEffect(() => {
         if (!hasInitializedRef.current) return

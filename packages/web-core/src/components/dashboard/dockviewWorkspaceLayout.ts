@@ -48,7 +48,13 @@ export function buildInitialDockviewLayout(
     return preferredActiveTabKey
 }
 
-export function syncDockviewPanels(api: DockviewApi, visibleConversations: ActiveConversation[]) {
+/**
+ * `retainIds`: panels restored from the stored layout whose conversation has not
+ * arrived yet. Removing them collapses the split they sit in — and the collapsed
+ * layout is then persisted — so a session that shows up a moment later lands as
+ * a tab instead of back in its pane.
+ */
+export function syncDockviewPanels(api: DockviewApi, visibleConversations: ActiveConversation[], retainIds?: ReadonlySet<string> | null) {
     const visibleKeys = new Set(visibleConversations.map(conversation => conversation.tabKey))
     const tabKeyCounts = new Map<string, number>()
     for (const conversation of visibleConversations) {
@@ -57,7 +63,7 @@ export function syncDockviewPanels(api: DockviewApi, visibleConversations: Activ
 
     for (const panel of [...api.panels]) {
         if (isRemotePanelId(panel.id)) continue
-        if (!visibleKeys.has(panel.id)) api.removePanel(panel)
+        if (!visibleKeys.has(panel.id) && !retainIds?.has(panel.id)) api.removePanel(panel)
     }
 
     for (const conversation of visibleConversations) {
