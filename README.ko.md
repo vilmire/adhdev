@@ -50,6 +50,16 @@ ADHDev는 그렇게 만들어집니다. ADHDev를 개발하는 비공개 모노�
   <img src="docs/assets/readme/landing-mesh-observability.jpg" alt="ADHDev 메시 개요 — 진행 중인 미션, 큐에서 실행 중인 태스크 2개, 메인 체크아웃과 워크트리 노드 2개" width="100%" />
 </p>
 
+### 📊 사용량 기반 라우팅 — 이미 내고 있는 구독을 굴리기
+머신마다 각 CLI 구독의 5시간·주간 한도가 얼마나 남았는지 읽습니다. 태스크를 가져갈 때 거의 다 쓴 플랜은 건너뛰고(태스크가 기다리거나 그 머신의 다음 CLI로 넘어감), 나머지 중에서는 다음 리셋 때 그냥 사라질 남은 사용량부터 씁니다. Machines 페이지에서 전체 머신을 한 표로 보고, 메시의 Tasks 탭에서 실행 전에 난이도별로 어떤 슬롯이 다음 태스크를 가져갈지 예보를 볼 수 있습니다.
+
+<p align="center">
+  <img src="docs/assets/readme/fleet-quota.png" alt="머신별 구독 사용량: 머신 4대 × CLI 7종(Antigravity, Claude Code, Codex, Cursor, Grok, Kimi, OpenCode)의 5시간·주간 사용률 칩" width="100%" />
+</p>
+<p align="center">
+  <img src="docs/assets/readme/route-forecast.png" alt="보통 난이도 태스크의 라우팅 예보: codex-cli가 다음 순번, Claude Code sonnet·opus 슬롯은 대기, 슬롯별 남은 병렬 정원" width="70%" />
+</p>
+
 ### 🚢 Refinery — `main`에 무인 착지
 병렬성은 작업이 실제로 머지될 때만 효과가 있습니다. Refinery는 완료된 태스크를 레포 자체의 검증 게이트·패치 동등성 검사·서브모듈 인식 리베이스 후 머지(그사이 main이 움직이지 않았을 때만)·자동 워크트리 정리로 수렴합니다 — 무인으로. 에이전트가 완료하면, Refinery가 착지시킵니다. 위 메시 보드가 파이프라인을 실시간으로 보여줍니다: 큐를 지나가는 태스크, 수렴이 진행되는 동안의 리파인 잡, 그리고 활동 피드에 쌓이는 모든 디스패치·완료·스톨.
 
@@ -88,6 +98,12 @@ ADHDev는 그렇게 만들어집니다. ADHDev를 개발하는 비공개 모노�
 </p>
 
 ---
+
+## 다른 도구와 비교
+
+- **Claude Code Remote Control, Codex Remote:** 한 벤더의 세션을 폰에서 조종하는 데 훌륭합니다. ADHDev는 여러 벤더·여러 머신이 함께 쓰는 큐, 그 사이의 사용량 기반 라우팅, 테스트 게이트 병합을 더합니다. 머신 한 대에서 CLI 하나만 쓴다면 기본 원격 기능으로 충분할 수 있습니다.
+- **Paseo, Happy:** 코딩 에이전트용 오픈소스 원격 조종·모바일 앱입니다. ADHDev의 초점은 프롬프트 이후의 일입니다. 노는 머신이 태스크를 가져가 각자 워크트리에서 작업하고, 테스트를 통과한 작업만 `main`에 들어갑니다.
+- **Conductor, Superset, Vibe Kanban:** 워크트리로 에이전트를 병렬 실행하고, 결과는 직접 검토해 병합할 diff나 PR로 끝납니다. ADHDev는 맥·윈도우·리눅스 머신이 함께 가져가는 큐 하나를 돌리고, 게이트를 통과하면 대신 병합합니다.
 
 ## 어떻게 동작하는가
 
