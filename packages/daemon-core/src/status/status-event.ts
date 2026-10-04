@@ -252,6 +252,21 @@ export function createTurnDurationTracker(maxEntries = 256): TurnDurationTracker
 }
 
 /**
+ * The push body carries only the first 80 characters of `modalMessage`
+ * (UserSession.ts), and a push exists to say WHAT is being approved. Codex's
+ * approval modal reads "Would you like to run the following command?",
+ * "Environment: ...", "Reason: ..." and only then "$ <command>", so the command
+ * was cut off. When a shell-command line is present it goes first; the text is
+ * the same, only its order changes (the content boundary is unchanged).
+ */
+export function commandFirstModalMessage(message: string): string {
+    const lines = message.split('\n');
+    const idx = lines.findIndex(line => /^\s*\$\s+\S/.test(line));
+    if (idx <= 0) return message;
+    return [lines[idx].trim(), ...lines.slice(0, idx), ...lines.slice(idx + 1)].join('\n');
+}
+
+/**
  * Server-bound projection. Allow-list: every field is copied individually and
  * type-checked; `provider:*` events are dropped whole (arbitrary text).
  */
@@ -308,7 +323,7 @@ export function projectServerStatusEvent(
         payload.elapsedSec = event.elapsedSec;
     }
     if (typeof event.modalMessage === 'string' && event.modalMessage.trim()) {
-        payload.modalMessage = event.modalMessage;
+        payload.modalMessage = commandFirstModalMessage(event.modalMessage);
     }
     if (Array.isArray(event.modalButtons)) {
         const modalButtons = event.modalButtons
