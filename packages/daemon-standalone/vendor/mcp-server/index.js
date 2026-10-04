@@ -151485,6 +151485,12 @@ ${notice.notice}${supersededHint}`;
         }
       };
     }
+    function commandFirstModalMessage(message) {
+      const lines = message.split("\n");
+      const idx = lines.findIndex((line) => /^\s*\$\s+\S/.test(line));
+      if (idx <= 0) return message;
+      return [lines[idx].trim(), ...lines.slice(0, idx), ...lines.slice(idx + 1)].join("\n");
+    }
     function projectServerStatusEvent(event, resolveHideMute) {
       const eventName = toDaemonStatusEventName(event.event);
       if (!eventName) return null;
@@ -151518,7 +151524,7 @@ ${notice.notice}${supersededHint}`;
         payload.elapsedSec = event.elapsedSec;
       }
       if (typeof event.modalMessage === "string" && event.modalMessage.trim()) {
-        payload.modalMessage = event.modalMessage;
+        payload.modalMessage = commandFirstModalMessage(event.modalMessage);
       }
       if (Array.isArray(event.modalButtons)) {
         const modalButtons = event.modalButtons.filter((button) => typeof button === "string" && button.trim().length > 0);

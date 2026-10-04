@@ -314,13 +314,36 @@ describe('codex-cli v4 FSM', () => {
         // (the modal section begins at the anchored question line, not at the
         // arbitrary body preamble above it).
         const title = extractTitle(approval.extract!.title!, sections, lines.join('\n'));
-        expect(title).toBe('Would you like to run the following command?');
+        // The command line rides along (approval pushes must show WHAT runs);
+        // the diff body stops the detail so the title stays one command long.
+        expect(title).toBe('Would you like to run the following command?\n$ git apply big.patch');
         // Buttons are still found below the long diff.
         const rule = approval.extract!.buttons!;
         const hay = sectionText(sections, rule.section, lines.join('\n'));
         const buttons = extractButtonsFromRule(rule, hay);
         expect(buttons.map(b => b.index)).toEqual([1, 2]);
         expect(buttons[0].key).toBe('1\r');
+    });
+
+    it('approval title carries the command and its reason, not the buttons', () => {
+        const lines = [
+            '',
+            '  Would you like to run the following command?',
+            '',
+            '  Reason: writes outside the workspace',
+            '',
+            '  $ touch ~/adhdev-outside-check && rm ~/adhdev-outside-check',
+            '',
+            '  › 1. Yes, proceed (y)',
+            "    2. Yes, and don't ask again for commands that start with `touch ~/adhdev-outside-check` (p)",
+            '    3. No, and tell Codex what to do differently (esc)',
+            '',
+            '  tab to queue message  ·  ⏎ send',
+        ];
+        const approval = spec.states.find(s => s.id === 'approval')!;
+        const sections = resolveSections(spec.sections ?? {}, lines);
+        const title = extractTitle(approval.extract!.title!, sections, lines.join('\n'));
+        expect(title).toBe('Would you like to run the following command?\nReason: writes outside the workspace\n$ touch ~/adhdev-outside-check && rm ~/adhdev-outside-check');
     });
 });
 
