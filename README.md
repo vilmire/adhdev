@@ -50,6 +50,16 @@ A mesh is bound to one git repository and owns the moving parts you'd otherwise 
   <img src="docs/assets/readme/landing-mesh-observability.jpg" alt="ADHDev mesh overview: an active mission, two tasks running in the queue, and the main checkout plus two worktree nodes online" width="100%" />
 </p>
 
+### 📊 Quota-aware routing — spend the subscriptions you already pay for
+Every machine reads how much of each CLI subscription's 5-hour and weekly window is left. When a task is claimed, a plan that is nearly out is skipped (the task waits or falls through to that machine's next CLI), and among the rest, quota that would expire unused at the next reset is spent first. The Machines page shows the whole fleet on one grid, and the mesh's Tasks tab forecasts which slot takes the next task at each difficulty before anything runs.
+
+<p align="center">
+  <img src="docs/assets/readme/fleet-quota.png" alt="Plan quota across machines: four machines by seven CLIs (Antigravity, Claude Code, Codex, Cursor, Grok, Kimi, OpenCode) with 5-hour and weekly usage chips" width="100%" />
+</p>
+<p align="center">
+  <img src="docs/assets/readme/route-forecast.png" alt="Routing forecast for a medium task: codex-cli is next up, Claude Code sonnet and opus slots are ready, with free parallel capacity per slot" width="70%" />
+</p>
+
 ### 🚢 Refinery — unattended landing on `main`
 Parallelism only pays off if the work actually merges. The Refinery converges finished tasks with per-repo validation gates, patch-equivalence checks, submodule-aware rebase-and-merge (only if main hasn't moved), and automatic worktree cleanup — unattended. Agents finish; the Refinery lands them. The mesh board above surfaces the pipeline live: tasks moving through the queue, refine jobs while convergence is in flight, and every dispatch, completion, and stall in the activity feed.
 
@@ -88,6 +98,12 @@ Chat, commands, screenshots, and remote input travel over an encrypted WebRTC da
 </p>
 
 ---
+
+## How it compares
+
+- **Claude Code Remote Control, Codex Remote:** great for driving one vendor's session from your phone. ADHDev adds a queue several vendors and machines share, quota-aware routing between them, and test-gated merges. If you run one CLI on one machine, the built-in remote features may be all you need.
+- **Paseo, Happy:** open-source remote control and mobile apps for coding agents. ADHDev's focus is the work after the prompt: idle machines pull tasks, each in its own worktree, and only work that passes your tests lands on `main`.
+- **Conductor, Superset, Vibe Kanban:** parallel agents in worktrees, ending in a diff or a PR you review and merge. ADHDev runs one queue that your Mac, Windows and Linux machines pull from and merges for you when the gates pass.
 
 ## How it works
 
