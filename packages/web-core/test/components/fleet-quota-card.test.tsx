@@ -37,4 +37,13 @@ describe('FleetQuotaCard', () => {
     // the high weekly reading is toned as danger
     expect(html).toMatch(/bg-red-500\/10[^>]*>7d 92%/)
   })
+
+  it('a just-reset window shows a dash, with the full cue only in the title', () => {
+    const quota = { provider: 'claude-cli', status: 'ok', updatedAt: 1, error: null,
+      session: { usedPercent: 40, windowMinutes: 300, resetsAt: Date.now() - 60_000 },
+      weekly: { usedPercent: 10, windowMinutes: 10080, resetsAt: null } } as any
+    const html = render([{ machineId: 'm1', label: 'mac', quota: { 'claude-cli': quota } }])
+    expect(html).toContain('>5h —<')
+    expect(html).toContain('7d 10%')
+  })
 })
