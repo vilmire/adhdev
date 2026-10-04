@@ -3933,11 +3933,11 @@
             "point4": "无需端口转发、VPN 或 DMZ —— P2P 加 TURN 中继,咖啡馆、手机热点、台式机或笔记本,只要能上网就能连接"
         },
         "brain": {
-            "sectionTitle": "简单活儿用便宜模型，只有难题才用贵的。",
-            "sectionSubtitle": "把任务标记为简单、中等或困难，网格就会套用对应的预设 —— provider、model 和思考预算。日常工作跑在便宜快速的模型上，只有难题才动用贵的。把 token 花在刀刃上。",
+            "sectionTitle": "每个任务用对的模型，跑在还有余量的订阅上。",
+            "sectionSubtitle": "把任务标记为简单、中等或困难，网格就会套用对应的预设 —— provider、model 和思考预算。每台机器还会读取各订阅 5 小时和每周额度的剩余量：快用完的套餐会被跳过，下次重置时会白白过期的余量优先用掉。",
             "point1": "基于难度的预设：简单 / 中等 / 困难",
             "point2": "每个预设选定 provider、model 和思考等级",
-            "point3": "无需逐个任务手动调参即可节省 token"
+            "point3": "自动避开额度快用完的套餐"
         },
         "scenario": {
             "sectionTitle": "一句话。Mac构建，Windows测试，main落地。",
