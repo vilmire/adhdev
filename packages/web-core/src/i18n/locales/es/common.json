@@ -3936,11 +3936,11 @@
             "point4": "Sin port forwarding, VPN ni DMZ — P2P con relé TURN conecta desde cafeterías, hotspots, escritorio o portátil, cualquier red con internet"
         },
         "brain": {
-            "sectionTitle": "Modelos baratos para lo fácil. Los caros solo cuando es difícil.",
-            "sectionSubtitle": "Etiqueta una tarea como fácil, media o difícil y la malla aplica un preset acorde: proveedor, modelo y presupuesto de razonamiento. El trabajo rutinario corre en un modelo barato y rápido; solo las tareas difíciles recurren al caro. Gastas tokens donde importan.",
+            "sectionTitle": "El modelo adecuado para cada tarea, en la suscripción que aún tiene margen.",
+            "sectionSubtitle": "Etiqueta una tarea como fácil, media o difícil y la malla aplica un preset acorde: proveedor, modelo y presupuesto de razonamiento. Cada máquina también lee cuánto queda de la ventana de 5 horas y la semanal de cada suscripción: un plan casi agotado se salta, y la cuota que caducaría sin usar en el siguiente reinicio se gasta primero.",
             "point1": "Presets por dificultad: fácil / media / difícil",
             "point2": "Cada preset elige proveedor, modelo y nivel de razonamiento",
-            "point3": "Ahorra tokens sin ajustar cada tarea a mano"
+            "point3": "Evita los planes que están casi sin cuota"
         },
         "scenario": {
             "sectionTitle": "Un prompt. Mac construye, Windows prueba, main aterriza.",

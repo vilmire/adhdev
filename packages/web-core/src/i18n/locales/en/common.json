@@ -3933,11 +3933,11 @@
             "point4": "No port forwarding, no VPN, no DMZ — P2P with TURN relay connects from cafés, hotspots, desktop or laptop, anywhere with internet"
         },
         "brain": {
-            "sectionTitle": "Cheap models for easy work. Expensive ones only when it's hard.",
-            "sectionSubtitle": "Tag a task easy, medium, or difficult and the mesh applies a matching preset — provider, model, and thinking budget. Routine work runs on a cheap fast model; only the hard tasks reach for the expensive one. You spend tokens where they matter.",
+            "sectionTitle": "The right model for each task, on the subscription that still has room.",
+            "sectionSubtitle": "Tag a task easy, medium, or difficult and the mesh applies a matching preset — provider, model, and thinking budget. Every machine also reads how much of each subscription's 5-hour and weekly window is left: a plan that is nearly out gets skipped, and quota that would expire unused at the next reset is spent first.",
             "point1": "Difficulty-based presets: easy / medium / difficult",
             "point2": "Each preset picks provider, model, and thinking level",
-            "point3": "Save tokens without hand-tuning every task"
+            "point3": "Routes around plans that are nearly out of quota"
         },
         "scenario": {
             "sectionTitle": "One prompt. Mac builds, Windows tests, main lands.",
