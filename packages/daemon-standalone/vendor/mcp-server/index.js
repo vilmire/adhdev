@@ -123671,6 +123671,32 @@ ${ptyResult.output.slice(-2e3)}`);
       }
       return out;
     }
+    function overlayFreshNodeFacts(snapshot, mesh) {
+      if (!mesh || typeof mesh !== "object" || !Array.isArray(mesh.nodes) || !Array.isArray(snapshot?.nodes)) return snapshot;
+      const recordsById = /* @__PURE__ */ new Map();
+      for (const node of mesh.nodes) {
+        const nodeId = readInlineMeshNodeId(node);
+        if (nodeId) recordsById.set(nodeId, node);
+      }
+      let changed = false;
+      const nodes = snapshot.nodes.map((statusNode) => {
+        const nodeId = normalizeMeshNodeId(statusNode);
+        const record2 = nodeId ? recordsById.get(nodeId) : void 0;
+        const facts = record2?.nodeFacts;
+        if (!facts || typeof facts !== "object") return statusNode;
+        const recordAt = typeof facts.reportedAt === "number" ? facts.reportedAt : 0;
+        const heldAt = typeof statusNode?.nodeFacts?.reportedAt === "number" ? statusNode.nodeFacts.reportedAt : 0;
+        if (recordAt <= heldAt) return statusNode;
+        changed = true;
+        return {
+          ...statusNode,
+          nodeFacts: facts,
+          ...typeof record2.reportedDaemonBuildVersion === "string" && record2.reportedDaemonBuildVersion ? { daemonBuildVersion: record2.reportedDaemonBuildVersion } : {},
+          ...record2.reportedProviderVersions && typeof record2.reportedProviderVersions === "object" ? { providerVersions: record2.reportedProviderVersions } : {}
+        };
+      });
+      return changed ? { ...snapshot, nodes } : snapshot;
+    }
     function hydrateCachedAggregateMeshStatusFromInline(self, snapshot, mesh, options) {
       if (!mesh || typeof mesh !== "object" || !Array.isArray(mesh.nodes) || !Array.isArray(snapshot?.nodes)) return snapshot;
       const inlineNodesById = /* @__PURE__ */ new Map();
@@ -123759,6 +123785,7 @@ ${ptyResult.output.slice(-2e3)}`);
       if (cached5.queueRevision !== getMeshQueueRevision(meshId)) return null;
       let snapshot = options?.nodesOnly ? cloneNodesSection(cached5.snapshot) : cloneAggregateSnapshot(cached5.snapshot);
       snapshot = hydrateCachedAggregateMeshStatusFromInline(self, snapshot, mesh, options);
+      snapshot = overlayFreshNodeFacts(snapshot, mesh);
       if (!options?.allowStalePending && shouldRefreshStalePendingAggregate(snapshot, options)) return null;
       const ageMs2 = Math.max(0, Date.now() - cached5.builtAt);
       const sourceOfTruth = snapshot.sourceOfTruth && typeof snapshot.sourceOfTruth === "object" ? snapshot.sourceOfTruth : {};
