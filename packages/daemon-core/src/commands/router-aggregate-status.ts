@@ -67,6 +67,45 @@ function cloneNodesSection(snapshot: any): any {
     return out;
 }
 
+/**
+ * The aggregate cache is invalidated by queue mutations, never by node facts, so
+ * a quiet mesh kept serving the nodeFacts bundle (plan quota, daemon build) it
+ * was built with: the standalone dashboard showed a 39-hour-old quota reading
+ * and a three-releases-old build while the node records held fresh ones
+ * (2026-10-05). Facts are an opaque, independently stamped bundle, so a cache hit
+ * takes the node record's copy whenever it is newer — nothing else is rebuilt.
+ */
+export function overlayFreshNodeFacts(snapshot: any, mesh: any): any {
+    if (!mesh || typeof mesh !== 'object' || !Array.isArray(mesh.nodes) || !Array.isArray(snapshot?.nodes)) return snapshot;
+    const recordsById = new Map<string, any>();
+    for (const node of mesh.nodes) {
+        const nodeId = readInlineMeshNodeId(node);
+        if (nodeId) recordsById.set(nodeId, node);
+    }
+    let changed = false;
+    const nodes = snapshot.nodes.map((statusNode: any) => {
+        const nodeId = normalizeMeshNodeId(statusNode);
+        const record = nodeId ? recordsById.get(nodeId) : undefined;
+        const facts = record?.nodeFacts;
+        if (!facts || typeof facts !== 'object') return statusNode;
+        const recordAt = typeof facts.reportedAt === 'number' ? facts.reportedAt : 0;
+        const heldAt = typeof statusNode?.nodeFacts?.reportedAt === 'number' ? statusNode.nodeFacts.reportedAt : 0;
+        if (recordAt <= heldAt) return statusNode;
+        changed = true;
+        return {
+            ...statusNode,
+            nodeFacts: facts,
+            ...(typeof record.reportedDaemonBuildVersion === 'string' && record.reportedDaemonBuildVersion
+                ? { daemonBuildVersion: record.reportedDaemonBuildVersion }
+                : {}),
+            ...(record.reportedProviderVersions && typeof record.reportedProviderVersions === 'object'
+                ? { providerVersions: record.reportedProviderVersions }
+                : {}),
+        };
+    });
+    return changed ? { ...snapshot, nodes } : snapshot;
+}
+
 export function hydrateCachedAggregateMeshStatusFromInline(
     self: DaemonCommandRouter,
     snapshot: any,
@@ -187,6 +226,7 @@ export function getCachedAggregateMeshStatus(
         // readers read. Otherwise everything but the shared queue section.
         let snapshot = options?.nodesOnly ? cloneNodesSection(cached.snapshot) : cloneAggregateSnapshot(cached.snapshot);
         snapshot = hydrateCachedAggregateMeshStatusFromInline(self, snapshot, mesh, options);
+        snapshot = overlayFreshNodeFacts(snapshot, mesh);
         // SWR: allowStalePending lets the interactive detail-open serve a snapshot
         // that still has pending peer-git nodes (would otherwise miss here) so the
         // graph paints instantly; the caller fires a background freshen. The
