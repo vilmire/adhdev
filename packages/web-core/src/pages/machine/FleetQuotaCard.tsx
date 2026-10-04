@@ -37,7 +37,10 @@ export interface FleetQuotaMachine {
 /** "5h 26.0% used · resets in 2h" → "5h 26%": the full text stays in the hover title. */
 function shortChipLabel(chip: QuotaDisplayChip): string {
     const axis = chip.key === 'session' ? '5h' : chip.key === 'weekly' ? '7d' : chip.key === 'monthly' ? '30d' : chip.key
-    return chip.usedPercent === null ? chip.label : `${axis} ${Math.round(chip.usedPercent)}%`
+    // A window that just reset (or is awaiting its first reading) has no number
+    // yet; the long cue text stays in the hover title, the grid shows a dash.
+    if (chip.usedPercent === null) return chip.key === 'usage' ? chip.label : `${axis} —`
+    return `${axis} ${Math.round(chip.usedPercent)}%`
 }
 
 export default function FleetQuotaCard({ machines }: { machines: FleetQuotaMachine[] }) {
