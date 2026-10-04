@@ -3286,6 +3286,12 @@
             "waitingForStats": "正在等待实时统计…",
             "waitingForStatsWithTotal": "正在等待实时统计… · 共 {{total}}"
         },
+        "fleetQuota": {
+            "title": "各机器的订阅额度",
+            "subtitle": "显示每台机器上各订阅 5 小时和每周额度的剩余量。任务队列会跳过快用完的套餐，并优先用掉重置时会过期的余量。",
+            "machine": "机器",
+            "unreadable": "无法读取"
+        },
         "quota": {
             "text": {
                 "failureKind": {

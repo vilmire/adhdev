@@ -3286,6 +3286,12 @@
             "waitingForStats": "Waiting for live stats…",
             "waitingForStatsWithTotal": "Waiting for live stats… · {{total}} total"
         },
+        "fleetQuota": {
+            "title": "Plan quota across machines",
+            "subtitle": "How much of each subscription's 5-hour and weekly window is left on every machine. The task queue skips plans that are nearly out and spends quota that would expire unused first.",
+            "machine": "Machine",
+            "unreadable": "unreadable"
+        },
         "quota": {
             "text": {
                 "failureKind": {

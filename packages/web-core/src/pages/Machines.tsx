@@ -17,6 +17,7 @@ import { Tooltip } from '../components/ui/InfoTip'
 import InstallCommand from '../components/InstallCommand'
 import { IconServer, IconMonitor, IconEyeOff, IconZap, IconShuffle } from '../components/Icons'
 import { ProviderLogo } from '../components/ProviderLogo'
+import FleetQuotaCard from './machine/FleetQuotaCard'
 
 // ─── Machine status dot ─────────────────────────
 export type MachineStatusTone = 'online' | 'connecting' | 'failed' | 'offline'
@@ -147,6 +148,8 @@ export default function MachinesPage() {
                 || typeof info?.totalMem !== 'number'
                 || typeof info?.arch !== 'string'
                 || typeof info?.release !== 'string'
+                // Plan quota rides the same runtime payload (MachineDetail does the same).
+                || !info?.quota
             if (!needsRuntime) continue
             void loadMachineRuntime(machine.daemonIde.id, { minFreshMs: 30_000 }).catch(() => {})
         }
@@ -257,6 +260,14 @@ export default function MachinesPage() {
                         </div>
                     </div>
                 )}
+
+                <FleetQuotaCard
+                    machines={machines.map(machine => ({
+                        machineId: machine.machineId,
+                        label: machine.nickname || machine.hostname,
+                        quota: machine.daemonIde.machine?.quota ?? machine.system?.quota,
+                    }))}
+                />
 
                 {/* Machine List — flat rows, matching the Account page pattern */}
                 <div className="flex flex-col gap-3">

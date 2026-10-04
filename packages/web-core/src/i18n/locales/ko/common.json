@@ -3286,6 +3286,12 @@
             "waitingForStats": "실시간 통계 대기 중…",
             "waitingForStatsWithTotal": "실시간 통계 대기 중… · 총 {{total}}"
         },
+        "fleetQuota": {
+            "title": "머신별 구독 사용량",
+            "subtitle": "머신마다 각 구독의 5시간·주간 한도가 얼마나 남았는지 보여줍니다. 작업 큐는 거의 다 쓴 플랜은 건너뛰고, 리셋 때 그냥 사라질 남은 사용량부터 씁니다.",
+            "machine": "머신",
+            "unreadable": "읽기 실패"
+        },
         "quota": {
             "text": {
                 "failureKind": {

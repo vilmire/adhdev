@@ -3286,6 +3286,12 @@
             "waitingForStats": "ライブ統計を待っています…",
             "waitingForStatsWithTotal": "ライブ統計を待っています… ・ 合計 {{total}}"
         },
+        "fleetQuota": {
+            "title": "マシン別のサブスク使用量",
+            "subtitle": "各マシンで各サブスクの 5 時間枠と週間枠がどれだけ残っているかを表示します。タスクキューは上限間近のプランを避け、リセットで消える残量から先に使います。",
+            "machine": "マシン",
+            "unreadable": "読み取り失敗"
+        },
         "quota": {
             "text": {
                 "failureKind": {
