@@ -3289,6 +3289,12 @@
             "waitingForStats": "Esperando estadísticas en vivo…",
             "waitingForStatsWithTotal": "Esperando estadísticas en vivo… · {{total}} en total"
         },
+        "fleetQuota": {
+            "title": "Cuota de suscripción por máquina",
+            "subtitle": "Cuánto queda de la ventana de 5 horas y la semanal de cada suscripción en cada máquina. La cola de tareas salta los planes casi agotados y gasta primero la cuota que caducaría sin usar.",
+            "machine": "Máquina",
+            "unreadable": "no legible"
+        },
         "quota": {
             "text": {
                 "failureKind": {
