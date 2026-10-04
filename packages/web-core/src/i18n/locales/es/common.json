@@ -3670,13 +3670,13 @@
         },
         "hero": {
             "badge": "Claude Code, Codex, Cursor y más, en todas tus máquinas",
-            "title": "Gestiona los agentes de programación que se ejecutan en tu ordenador, desde cualquier lugar.",
+            "title": "El plano de control para tus agentes de programación.",
             "subtitleInstall": "Instala ADHDev en tu <os></os>.",
             "subtitlePlace": "usa tu <device></device>",
             "subtitleAsk": "para pedirle a <coordinator></coordinator> que envíe a <worker></worker> a <verb></verb> tu repositorio.",
             "subtitleFrom": "Desde <place></place>,",
             "anywhere": "cualquier lugar",
-            "subtitleLand": "Muchos agentes a la vez, y ninguno pisa al otro.",
+            "subtitleLand": "Todos los agentes de todas tus máquinas en una vista, una cola de tareas compartida, y solo llega a main el trabajo que pasa tus tests.",
             "axes": {
                 "os": [
                     "Mac",
@@ -3897,8 +3897,8 @@
             }
         },
         "cta": {
-            "headline": "Deja de hacer malabares con las pestañas. Controla cada agente desde un único panel.",
-            "subtitle": "Un comando, un daemon, cada agente que ya usas. Contrólalos todos desde la web.",
+            "headline": "Pon cada agente y cada máquina detrás de una sola cola.",
+            "subtitle": "Un comando, un daemon, cada agente que ya usas. Encola el trabajo y solo llega a main lo que pasa tus tests.",
             "getStarted": "Empezar →",
             "github": "GitHub",
             "discord": "Discord"

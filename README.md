@@ -2,7 +2,7 @@
 
 # ADHDev
 
-**Many coding agents on one repo, none of them stepping on each other — driven from your browser or phone.**
+**The control plane for your coding agents: every agent on every machine in one view, one shared task queue, and only work that passes your tests reaches `main`.**
 
 [![GitHub stars](https://img.shields.io/github/stars/vilmire/adhdev?style=social)](https://github.com/vilmire/adhdev/stargazers)
 [![npm](https://img.shields.io/npm/v/adhdev?label=npm%20i%20-g%20adhdev)](https://www.npmjs.com/package/adhdev)
@@ -22,27 +22,13 @@ Website: **[adhf.dev](https://adhf.dev)** · Docs: **[docs.adhf.dev](https://doc
   <img src="docs/assets/readme/landing-command-center-demo-poster.jpg" alt="ADHDev desktop dashboard: a mesh coordinator answering with a status table while a Claude Code worker and a Codex worker build two features side by side" width="100%" />
 </p>
 
-**The loop:** describe a task in chat → the coordinator files it, tags it, queues it → an idle machine claims it into a fresh worktree → your repo's own gates decide → ff-merge to `main`, worktree gone. Your phone only buzzed if something needed approving.
+**The loop:** describe a task in chat → the coordinator files it, tags it, queues it → an idle machine claims it into a fresh worktree → your repo's own gates decide → rebased onto `main` and merged only if `main` hasn't moved, worktree gone. Your phone only buzzed if something needed approving.
 
 ADHDev is built that way. In the private monorepo where ADHDev is developed — this engine is published from it as a submodule — roughly one in six `main` commits is an `Auto-merge via Refinery` commit: work that an agent finished, the repo's own gates approved, and Refinery landed without a human running `git merge`. That history lives in the upstream monorepo, so this public mirror's own log won't show those merge commits.
 
 ---
 
 ## Why ADHDev
-
-### 🌐 Web-first control
-Your agents run locally; you drive them from anywhere. The dashboard is a real control surface — inspect active sessions, read chat and terminal state, approve or interrupt work, reopen the right history, and send the next instruction from a browser or your phone. No terminal babysitting. Approval pushes carry the start of the command itself, because approving `rm -rf build/` and approving `git push --force` deserve different reaction times: the push arrives → tap it → approve in one tap (push-to-phone ships with the cloud edition).
-
-<table>
-  <tr>
-    <td width="50%" align="center" valign="top">
-      <img src="docs/assets/readme/landing-desktop-detail.jpg" alt="ADHDev desktop dashboard in dark mode: the coordinator's chat next to two worker sessions, each on its own git worktree branch" width="100%" />
-    </td>
-    <td width="50%" align="center" valign="top">
-      <img src="docs/assets/readme/landing-mobile-notification-demo-poster.jpg" alt="ADHDev approval banner on a phone showing the exact rm -rf command Claude Code wants to run, with Yes / always allow / No" width="100%" />
-    </td>
-  </tr>
-</table>
 
 ### 🕸️ Repo Mesh — true multi-machine parallelism
 (A single-machine mesh runs fully local; spreading it across machines needs the cloud edition.) Enqueue tasks with dependencies and let a coordinator dispatch them to whichever node has spare capacity — your laptop, a desktop, a build box. This is genuine multi-machine orchestration over a P2P mesh, **not** SSH into one host. Each task runs in its own worktree so agents never step on each other. The mesh and Refinery engine ships in this repo; cross-machine dispatch runs on the cloud edition.
@@ -64,9 +50,6 @@ A mesh is bound to one git repository and owns the moving parts you'd otherwise 
   <img src="docs/assets/readme/landing-mesh-observability.jpg" alt="ADHDev mesh overview: an active mission, two tasks running in the queue, and the main checkout plus two worktree nodes online" width="100%" />
 </p>
 
-### ⚡ Async by design — you talk to one place
-You talk to one place. The coordinator orchestrates every worker and machine asynchronously — it waits on events, you don't. No session babysitting. Instead of sitting in front of each agent window watching for it to finish, you hand work to a single coordinator that drives all the workers in parallel and reacts only when a completion, approval, or status event actually arrives — no polling, no blocking waits. One conversation for you; a non-blocking event loop underneath.
-
 ### 🚢 Refinery — unattended landing on `main`
 Parallelism only pays off if the work actually merges. The Refinery converges finished tasks with per-repo validation gates, patch-equivalence checks, submodule-aware rebase-and-merge (only if main hasn't moved), and automatic worktree cleanup — unattended. Agents finish; the Refinery lands them. The mesh board above surfaces the pipeline live: tasks moving through the queue, refine jobs while convergence is in flight, and every dispatch, completion, and stall in the activity feed.
 
@@ -77,11 +60,28 @@ Parallel worktrees and unattended merges get fragile the moment git submodules e
 - **Patch-equivalence detection** — when a submodule commit is rebased or squashed and its SHA changes, the Refinery still determines whether the *content* already landed, so it won't double-merge or falsely flag a divergence.
 - **Atomic pointer bumps** — the submodule pointer bump converges together with the root change, so an unattended merge never leaves the root pointing at a broken or dangling submodule commit.
 
+### ⚡ Async by design — you talk to one place
+You talk to one place. The coordinator orchestrates every worker and machine asynchronously — it waits on events, you don't. No session babysitting. Instead of sitting in front of each agent window watching for it to finish, you hand work to a single coordinator that drives all the workers in parallel and reacts only when a completion, approval, or status event actually arrives — no polling, no blocking waits. One conversation for you; a non-blocking event loop underneath.
+
+### 🌐 See and steer every session
+Your agents run locally; you watch and drive them from any browser. The dashboard is a real control surface — inspect active sessions, read chat and terminal state, approve or interrupt work, reopen the right history, and send the next instruction from a browser or your phone. No terminal babysitting. Approval pushes carry the start of the command itself, because approving `rm -rf build/` and approving `git push --force` deserve different reaction times: the push arrives → tap it → approve in one tap (push-to-phone ships with the cloud edition).
+
+<table>
+  <tr>
+    <td width="50%" align="center" valign="top">
+      <img src="docs/assets/readme/landing-desktop-detail.jpg" alt="ADHDev desktop dashboard in dark mode: the coordinator's chat next to two worker sessions, each on its own git worktree branch" width="100%" />
+    </td>
+    <td width="50%" align="center" valign="top">
+      <img src="docs/assets/readme/landing-mobile-notification-demo-poster.jpg" alt="ADHDev approval banner on a phone showing the exact rm -rf command Claude Code wants to run, with Yes / always allow / No" width="100%" />
+    </td>
+  </tr>
+</table>
+
 ### 🔺 Multi-perspective review
 For a read-only investigation that matters — a bug RCA, a design review, an audit — ask the coordinator for a second opinion: it sends the same question to 2–3 workers on different providers, waits for their reports, and lays out where they agree, where they disagree, and which claims only one of them made. High agreement is not the same as being right — the same model with the same context repeats the same mistake — so the disagreements are the part worth reading.
 
 ### 🔐 P2P transport (trust, not a paywall)
-Chat, commands, screenshots, and remote input travel over an encrypted WebRTC data channel directly between your dashboard and your daemon. The server only handles signaling and lightweight metadata — your working data doesn't sit on someone else's box. It's a trust property of the design, not an upsell.
+Chat, commands, screenshots, and remote input travel over an encrypted WebRTC data channel directly between your dashboard and your daemon. The server handles sign-in, signaling and lightweight metadata, plus one deliberate exception: on the cloud edition it receives the approval prompt (the command and button labels) to build the push notification, and the push shows up to 80 characters of it. Chat, terminal output and your code don't sit on someone else's box. It's a trust property of the design, not an upsell.
 
 <p align="center">
   <img src="docs/assets/readme/landing-mobile-resume-demo-poster.jpg" alt="ADHDev on a phone: reading an agent's answer and typing the next instruction to it" width="320" />
