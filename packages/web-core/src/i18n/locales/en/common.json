@@ -3667,13 +3667,13 @@
         },
         "hero": {
             "badge": "Claude Code, Codex, Cursor & more — on all your machines",
-            "title": "Manage the coding agents running on your computer — from anywhere.",
+            "title": "The control plane for your coding agents.",
             "subtitleInstall": "Install ADHDev on your <os></os>.",
             "subtitlePlace": "use your <device></device>",
             "subtitleAsk": "to ask <coordinator></coordinator> to send <worker></worker> to <verb></verb> your repo.",
             "subtitleFrom": "From <place></place>,",
             "anywhere": "anywhere",
-            "subtitleLand": "Many agents at once — none of them step on each other.",
+            "subtitleLand": "Every agent on every machine in one view, one shared task queue, and only work that passes your tests reaches main.",
             "axes": {
                 "os": [
                     "Mac",
@@ -3894,8 +3894,8 @@
             }
         },
         "cta": {
-            "headline": "Stop juggling tabs. Drive every agent from one dashboard.",
-            "subtitle": "One command, one daemon, every agent you already use. Drive them all from the web.",
+            "headline": "Put every agent and every machine behind one queue.",
+            "subtitle": "One command, one daemon, every agent you already use. Queue the work, and only what passes your tests lands on main.",
             "getStarted": "Get started →",
             "github": "GitHub",
             "discord": "Discord"

@@ -3667,13 +3667,13 @@
         },
         "hero": {
             "badge": "Claude Code、Codex、Cursor など — すべてのマシンで",
-            "title": "あなたのコンピューターで動くコーディングエージェントを、どこからでも管理。",
+            "title": "コーディングエージェントのためのコントロールプレーン。",
             "subtitleInstall": "<os></os> に ADHDev をインストール。",
             "subtitlePlace": "<device></device>で",
             "subtitleAsk": "<coordinator></coordinator>に頼んで、<worker></worker>にリポジトリを<verb></verb>させましょう。",
             "subtitleFrom": "<place></place>、",
             "anywhere": "どこからでも",
-            "subtitleLand": "多数のエージェントを同時に動かしても、互いに踏み合いません。",
+            "subtitleLand": "すべてのマシンのすべてのエージェントを一画面で把握し、ひとつのタスクキューで分担。テストに通った作業だけが main に入ります。",
             "axes": {
                 "os": [
                     "Mac",
@@ -3894,8 +3894,8 @@
             }
         },
         "cta": {
-            "headline": "タブの切り替えはもう終わり。すべてのエージェントを 1 つのダッシュボードから操作。",
-            "subtitle": "コマンド 1 つ、デーモン 1 つ、すでに使っているすべてのエージェント。すべてをウェブから操作しましょう。",
+            "headline": "すべてのエージェントとすべてのマシンを、ひとつのキューの後ろに。",
+            "subtitle": "コマンド 1 つ、デーモン 1 つ、すでに使っているすべてのエージェント。作業をキューに入れれば、テストに通ったものだけが main に入ります。",
             "getStarted": "始める →",
             "github": "GitHub",
             "discord": "Discord"

@@ -3667,13 +3667,13 @@
         },
         "hero": {
             "badge": "Claude Code、Codex、Cursor 等 —— 覆盖你的所有机器",
-            "title": "随时随地，管理在你电脑上运行的编码智能体。",
+            "title": "为你的编码智能体打造的控制平面。",
             "subtitleInstall": "在<os></os>上安装 ADHDev。",
             "subtitlePlace": "用你的<device></device>",
             "subtitleAsk": "让<coordinator></coordinator>把<worker></worker>派去<verb></verb>你的仓库。",
             "subtitleFrom": "<place></place>，",
             "anywhere": "随时随地",
-            "subtitleLand": "同时运行多个智能体，互不干扰。",
+            "subtitleLand": "在一个界面看到每台机器上的每个智能体，共用一个任务队列，只有通过测试的工作才会进入 main。",
             "axes": {
                 "os": [
                     "Mac",
@@ -3894,8 +3894,8 @@
             }
         },
         "cta": {
-            "headline": "别再切换标签页了。从一个仪表盘操控每一个代理。",
-            "subtitle": "一条命令、一个守护进程、你已经在用的每一个智能体。全部从网页操控。",
+            "headline": "让每个智能体、每台机器都排在同一个队列后面。",
+            "subtitle": "一条命令、一个守护进程、你已经在用的每一个智能体。把工作放进队列，只有通过测试的才会进入 main。",
             "getStarted": "开始使用 →",
             "github": "GitHub",
             "discord": "Discord"
