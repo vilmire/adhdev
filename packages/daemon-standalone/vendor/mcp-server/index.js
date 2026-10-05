@@ -119957,6 +119957,14 @@ ${marker}`,
       const safeMesh = opts.meshId.replace(/[^A-Za-z0-9_-]+/g, "_");
       return (0, import_path25.join)(opts.configDir, "mcp-configs", `${safeMesh}.json`);
     }
+    function buildCodexMcpServerOverrideArgs(serverName, server) {
+      return [
+        "-c",
+        `mcp_servers.${serverName}.command=${JSON.stringify(server.command)}`,
+        "-c",
+        `mcp_servers.${serverName}.args=${JSON.stringify(server.args)}`
+      ];
+    }
     function isWorkspaceLocalPath(configPath, workspace) {
       const resolvedConfig = (0, import_path25.resolve)(configPath);
       const resolvedWorkspace = (0, import_path25.resolve)(workspace);
@@ -120219,7 +120227,11 @@ ${ptyResult.output.slice(-2e3)}`);
                 registration: mcpRegistrationFailure
               };
             }
-            if (cliType === "codex-cli") {
+            const codexMcpOverrideArgs = [];
+            if (cliType === "codex-cli" && isGitTrackedFile(workspace, ".mcp.json")) {
+              codexMcpOverrideArgs.push(...buildCodexMcpServerOverrideArgs(coordinatorSetup.serverName, coordinatorSetup.mcpServer));
+              LOG.info("MeshCoordinator", `Left tracked ${(0, import_path25.join)(workspace, ".mcp.json")} untouched; ${coordinatorSetup.serverName} passed as codex -c overrides`);
+            } else if (cliType === "codex-cli") {
               const repoMcpConfigPath = (0, import_path25.join)(workspace, ".mcp.json");
               if (fs72.existsSync(repoMcpConfigPath)) {
                 try {
@@ -120250,7 +120262,7 @@ ${ptyResult.output.slice(-2e3)}`);
                 }
               }
             }
-            const cliCmdArgs = [];
+            const cliCmdArgs = [...codexMcpOverrideArgs];
             const cliCmdEnv = {};
             let cliCmdContextFilePath;
             let cliCmdContextFileOwned = false;
@@ -127441,7 +127453,10 @@ trust_level = "trusted"
       if (opts.resolvedTrustPlan) {
         applyPreLaunchTrust(trust, opts.resolvedTrustPlan);
       } else if ("scheme" in trust && trust.scheme === "kimi_workspace_file") {
-        applyKimiWorkspaceTrust(opts.workingDir);
+        applyKimiWorkspaceTrust(opts.workingDir, {
+          ...process.env,
+          ...opts.extraEnv || {}
+        });
       } else if ("scheme" in trust && trust.scheme === "grok_toml_file") {
         applyGrokWorkspaceTrust(opts.workingDir, {
           ...process.env,

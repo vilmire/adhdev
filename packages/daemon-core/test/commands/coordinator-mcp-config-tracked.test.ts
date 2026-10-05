@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { join } from 'path';
-import { resolveClaudeCoordinatorMcpConfigPath } from '../../src/commands/high-family/mesh-coordinator-launch.js';
+import { buildCodexMcpServerOverrideArgs, resolveClaudeCoordinatorMcpConfigPath } from '../../src/commands/high-family/mesh-coordinator-launch.js';
 
 const ws = '/repo';
 const base = { configPath: join(ws, '.mcp.json'), workspace: ws, meshId: 'mesh_abc', configDir: '/home/u/.adhdev' };
@@ -23,5 +23,24 @@ describe('resolveClaudeCoordinatorMcpConfigPath', () => {
 
     it('leaves a path outside the workspace alone', () => {
         expect(resolveClaudeCoordinatorMcpConfigPath({ ...base, configPath: '/elsewhere/mcp.json', isTracked: () => true })).toBe('/elsewhere/mcp.json');
+    });
+});
+
+/**
+ * Codex: the repo-local `.mcp.json` refresh rewrote a TRACKED file, dirtying the
+ * base node so Refinery refused every merge (2026-10-05 provider matrix,
+ * codex→claude). Tracked → the entry rides argv as `-c` overrides instead.
+ */
+describe('buildCodexMcpServerOverrideArgs', () => {
+    it('emits TOML command/args overrides for the server', () => {
+        expect(buildCodexMcpServerOverrideArgs('adhdev-mesh', { command: '/usr/bin/node', args: ['/x/index.js', '--port', '3847'] })).toEqual([
+            '-c', 'mcp_servers.adhdev-mesh.command="/usr/bin/node"',
+            '-c', 'mcp_servers.adhdev-mesh.args=["/x/index.js","--port","3847"]',
+        ]);
+    });
+
+    it('escapes Windows backslashes as valid TOML basic strings', () => {
+        const [, cmd] = buildCodexMcpServerOverrideArgs('adhdev-mesh', { command: 'C:\\node\\node.exe', args: [] });
+        expect(cmd).toBe('mcp_servers.adhdev-mesh.command="C:\\\\node\\\\node.exe"');
     });
 });

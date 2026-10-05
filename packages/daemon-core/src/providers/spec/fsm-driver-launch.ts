@@ -25,9 +25,15 @@ export function applySpecPreLaunchTrust(spec: CliSpecV4, opts: SpecDriverOpts, s
         applyPreLaunchTrust(trust, opts.resolvedTrustPlan);
     } else if ('scheme' in trust
         && trust.scheme === 'kimi_workspace_file') {
-        // Kimi has no worker-private HOME yet. Keep its current
-        // KIMI_CODE_HOME/os.homedir() behavior until that isolation work lands.
-        applyKimiWorkspaceTrust(opts.workingDir);
+        // ★Delegated kimi workers run under a private KIMI_CODE_HOME. Reading
+        // only the daemon's env wrote the grant into the OWNER's
+        // ~/.kimi-code, so the worker hit kimi's folder-trust prompt and
+        // its task message was typed into that prompt and lost (2026-10-05
+        // provider matrix, claude→kimi). Follow the launch env like grok.
+        applyKimiWorkspaceTrust(opts.workingDir, {
+            ...process.env,
+            ...(opts.extraEnv || {}),
+        });
     } else if ('scheme' in trust
         && trust.scheme === 'grok_toml_file') {
         // ★grok GAINED a worker-private HOME on 2026-09-18 (its
