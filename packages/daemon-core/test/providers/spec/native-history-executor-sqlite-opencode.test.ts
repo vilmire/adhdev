@@ -36,9 +36,9 @@ function opencodeCfg(dbFile: string) {
             kind: 'sqlite' as const,
             path: dbFile,
             session_query:
-                "SELECT id FROM session WHERE (@workspace = '' OR directory = @workspace) AND time_updated >= (@floor - 2) * 1000 ORDER BY time_updated DESC LIMIT 1",
+                "SELECT id FROM session WHERE (@workspace = '' OR directory = @workspace) AND time_updated >= (@floor - 2) * 1000 ORDER BY time_updated DESC LIMIT 5",
             message_query:
-                "SELECT json_extract(m.data, '$.role') AS role, group_concat(CASE WHEN json_extract(p.data, '$.type') = 'text' THEN json_extract(p.data, '$.text') ELSE NULL END, '') AS content, (SELECT directory FROM session WHERE id = m.session_id) AS workspace, m.time_created AS timestamp_ms FROM message m JOIN part p ON p.message_id = m.id WHERE m.session_id = ? AND json_extract(p.data, '$.type') IN ('text', 'reasoning') GROUP BY m.id HAVING content IS NOT NULL AND content != '' ORDER BY m.time_created",
+                "SELECT json_extract(m.data, '$.role') AS role, COALESCE(group_concat(CASE WHEN json_extract(p.data, '$.type') = 'text' THEN json_extract(p.data, '$.text') ELSE NULL END, ''), CASE WHEN json_extract(m.data, '$.error.data.message') IS NOT NULL AND COALESCE(json_extract(m.data, '$.error.name'), '') != 'MessageAbortedError' THEN '⚠️ ' || json_extract(m.data, '$.error.data.message') END) AS content, (SELECT directory FROM session WHERE id = m.session_id) AS workspace, m.time_created AS timestamp_ms FROM message m LEFT JOIN part p ON p.message_id = m.id AND json_extract(p.data, '$.type') IN ('text', 'reasoning') WHERE m.session_id = ? GROUP BY m.id HAVING content IS NOT NULL AND content != '' ORDER BY m.time_created",
             message_map: {
                 role: '$.role',
                 content: '$.content',
@@ -105,6 +105,27 @@ afterEach(() => {
 });
 
 describe('native-history-executor sqlite (opencode)', () => {
+    it('shows an assistant turn that failed with an API error instead of dropping it', () => {
+        // opencode stores a failed turn as an assistant message with `error` and
+        // NO text parts; the inner JOIN dropped it, so the session looked idle
+        // with no reply (2026-10-05 provider matrix: proxy unreachable).
+        const Database = loadBetterSqlite3();
+        const db = new Database(dbPath);
+        db.prepare('INSERT INTO message (id, session_id, time_created, data) VALUES (?, ?, ?, ?)').run(
+            'msg_err', 'ses_THIS', NEW_MS + 50,
+            JSON.stringify({ role: 'assistant', error: { name: 'APIError', data: { message: 'Cannot connect to API: Unable to connect.' } } }),
+        );
+        db.prepare('INSERT INTO message (id, session_id, time_created, data) VALUES (?, ?, ?, ?)').run(
+            'msg_abort', 'ses_THIS', NEW_MS + 60,
+            JSON.stringify({ role: 'assistant', error: { name: 'MessageAbortedError', data: { message: 'The operation was aborted.' } } }),
+        );
+        db.close();
+        const result = executeNativeHistory(opencodeCfg(dbPath) as any, { agentType: 'opencode', workspace: WORKSPACE, sessionStartedAtMs: NEW_MS });
+        const contents = result!.messages.map((m) => m.content);
+        expect(contents).toContain('⚠️ Cannot connect to API: Unable to connect.');
+        expect(contents.some((c) => c.includes('aborted'))).toBe(false);
+    });
+
     it('binds this session via the spawn floor and stamps workspace on every message', () => {
         const result = executeNativeHistory(opencodeCfg(dbPath) as any, {
             agentType: 'opencode',

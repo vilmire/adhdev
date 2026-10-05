@@ -66,6 +66,17 @@ import {
 import type { NativeHistoryToolBlockRef } from '../spec/native-history-types.js';
 import { type MessageSourceAddress, nativeSourceAddress, recordBlockSource, SESSION_START_ADDRESS } from '../../chat/message-source-address.js';
 
+/**
+ * A turn codex ended on an error (e.g. "Selected model is at capacity") carries
+ * no agent message, only `task_complete.error`. Without surfacing it the
+ * dashboard showed a silent idle session and the user never learned the turn
+ * failed (2026-10-05 provider matrix).
+ */
+export function codexTurnErrorText(payload: Record<string, any>): string {
+  const message = typeof payload?.error?.message === 'string' ? payload.error.message.trim() : '';
+  return message ? `⚠️ ${message}` : '';
+}
+
 export interface NativeHistoryMessage {
   ts: string;
   receivedAt: number;
@@ -506,7 +517,7 @@ function parseSessionFile(
           records,
           sessionId,
           receivedAt,
-          flattenCodexContent(payload.last_agent_message),
+          flattenCodexContent(payload.last_agent_message) || codexTurnErrorText(payload),
           detectedWorkspace,
           recordIndex,
         );
