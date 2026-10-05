@@ -186,6 +186,40 @@ describe('antigravity-cli v4 FSM', () => {
         expect(ev.fired?.to).toBe('approval');
     });
 
+    it('recognizes the MCP tool-call approval (`Allow calling this tool?`) as approval with buttons', () => {
+        // Live screen 2026-10-05: a delegated agy worker's report_completion call
+        // parked here while the daemon still reported `generating`, so neither
+        // approve nor send_keys could clear it.
+        const screen = makeScreenWithModal(['  ● adhdev-mesh/report_completion({"branch_state":"cleanup_ca...)'], [
+            'MCP',
+            '────────────────────────────────────────',
+            '',
+            'adhdev-mesh/report_completion',
+            '',
+            'Allow calling this tool?',
+            '> 1. Yes, allow tool call',
+            "  2. Yes, and always allow tool 'adhdev-mesh/report_completion' in this",
+            'conversation',
+            "  3. Yes, and always allow tool 'adhdev-mesh/report_completion' (Persist to",
+            'settings.json)',
+            '  4. No, deny tool call',
+            "  5. No, and always deny tool 'adhdev-mesh/report_completion' in this",
+            'conversation',
+            "  6. No, and always deny tool 'adhdev-mesh/report_completion' (Persist to",
+            'settings.json)',
+            '',
+            '  ↑/↓ Navigate · tab Amend',
+        ], 'esc to cancel                                           Claude Opus 5.5 · medium');
+        const ev = evaluateFsm(spec, 'busy', screen, { row: 39, col: 4 }, undefined, clk(10000, 0));
+        expect(ev.fired?.to).toBe('approval');
+        const approval = spec.states.find(s => s.id === 'approval')!;
+        const lines = screen.split('\n');
+        const sections = resolveSections(spec.sections ?? {}, lines);
+        const rule = approval.extract!.buttons!;
+        const buttons = extractButtonsFromRule(rule, sectionText(sections, rule.section, screen));
+        expect(buttons[0].key).toBe('1\r');
+    });
+
     it('recognizes the live `Accept this file edit?` approval through the real section path', () => {
         expect(new RegExp(preFileEditModalAnchor).test(fileEditApprovalScreen)).toBe(false);
         expect(new RegExp(spec.sections!.modal.anchor as string).test(fileEditApprovalScreen)).toBe(true);

@@ -138,6 +138,20 @@ export function resolveClaudeCoordinatorMcpConfigPath(opts: {
     return pathJoin(opts.configDir, 'mcp-configs', `${safeMesh}.json`);
 }
 
+/**
+ * Codex `-c` overrides carrying one MCP server entry. Values are TOML; a JSON
+ * string / string array is valid TOML for them.
+ */
+export function buildCodexMcpServerOverrideArgs(
+    serverName: string,
+    server: { command: string; args: string[] },
+): string[] {
+    return [
+        '-c', `mcp_servers.${serverName}.command=${JSON.stringify(server.command)}`,
+        '-c', `mcp_servers.${serverName}.args=${JSON.stringify(server.args)}`,
+    ];
+}
+
 function isWorkspaceLocalPath(configPath: string, workspace: string): boolean {
     const resolvedConfig = pathResolve(configPath);
     const resolvedWorkspace = pathResolve(workspace);
@@ -529,7 +543,15 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                         // global `codex mcp add` registration. Refresh an
                         // existing ADHDev entry so a stale workspace command
                         // cannot shadow the registration we just verified.
-                        if (cliType === 'codex-cli') {
+                        // A git-TRACKED .mcp.json is never rewritten: that dirtied
+                        // the base node and blocked every Refinery merge
+                        // (2026-10-05 provider matrix, codex→claude). The same
+                        // entry goes on argv instead, which outranks any file.
+                        const codexMcpOverrideArgs: string[] = [];
+                        if (cliType === 'codex-cli' && isGitTrackedFile(workspace, '.mcp.json')) {
+                            codexMcpOverrideArgs.push(...buildCodexMcpServerOverrideArgs(coordinatorSetup.serverName, coordinatorSetup.mcpServer));
+                            LOG.info('MeshCoordinator', `Left tracked ${pathJoin(workspace, '.mcp.json')} untouched; ${coordinatorSetup.serverName} passed as codex -c overrides`);
+                        } else if (cliType === 'codex-cli') {
                             const repoMcpConfigPath = pathJoin(workspace, '.mcp.json');
                             if (fs.existsSync(repoMcpConfigPath)) {
                                 try {
@@ -567,7 +589,7 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                         }
 
                         // Inject system prompt declaratively from provider.v1.json.
-                        const cliCmdArgs: string[] = [];
+                        const cliCmdArgs: string[] = [...codexMcpOverrideArgs];
                         const cliCmdEnv: Record<string, string> = {};
                         let cliCmdContextFilePath: string | undefined;
                         let cliCmdContextFileOwned = false;
