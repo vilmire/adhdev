@@ -20,6 +20,7 @@ import {
     mkdirSync,
     writeFileSync,
 } from 'fs';
+import { ensureLocalGitExclude } from '../git/git-local-exclude.js';
 import { LOG } from '../logging/logger.js';
 
 // ─── Worker MCP config ──────────────────────────────────────────────────
@@ -270,6 +271,9 @@ export function writeWorkerMcpConfig(input: WriteWorkerMcpConfigInput): string {
 
     mkdirSync(path.dirname(target), { recursive: true });
     writeFileSync(target, serializeMeshCoordinatorMcpConfig(config, input.format), 'utf-8');
+    // The entry carries the worker's session bind token: keep a workspace-local
+    // file out of `git add -A` (see git-local-exclude.ts).
+    ensureLocalGitExclude(input.workspace, target);
     return target;
 }
 

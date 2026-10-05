@@ -1864,14 +1864,37 @@ describe('★config-root imports resolve from the real home (rc.16 regression)',
     })
   }
 
-  it('★opencode is deliberately exempt: XDG_CONFIG_HOME is already the declared root', () => {
-    // Not an oversight. opencode declares no imports at all — its credentials
-    // live under XDG_DATA_HOME, outside the config root — so there is no source
-    // path to bridge and no prefix to declare.
+  it('★opencode declares no prefix: XDG_CONFIG_HOME is already the declared root', () => {
+    // Credentials live under XDG_DATA_HOME, outside the config root. The one
+    // import (the owner's global config, minus `mcp`) names its real source
+    // explicitly instead of relying on a prefix.
     const spec = findWorkerPrivateHomeSpec('opencode')!
     expect(spec.homeEnvVar).toBe('XDG_CONFIG_HOME')
     expect(spec.configRootPrefix).toBeUndefined()
-    expect(spec.imports).toEqual([])
+    expect(spec.imports).toEqual([
+      expect.objectContaining({ sourceRelativePath: join('.config', 'opencode', 'opencode.json'), stripJsonKeys: ['mcp'] }),
+    ])
+  })
+
+  it('★opencode worker keeps the owner\'s provider and model but not the owner\'s MCP servers', () => {
+    // The worker used to start with NO global config, so a machine set up for
+    // Kimi ran its opencode workers on opencode's built-in default model
+    // (2026-10-06 provider matrix).
+    const realHome = tmp('adhdev-oc-home-')
+    mkdirSync(join(realHome, '.config', 'opencode'), { recursive: true })
+    writeFileSync(join(realHome, '.config', 'opencode', 'opencode.json'), JSON.stringify({
+      model: 'kimi-for-coding/k3',
+      provider: { 'kimi-for-coding': { npm: '@ai-sdk/openai-compatible' } },
+      mcp: { 'owner-server': { type: 'local', command: ['owner-mcp'] } },
+    }))
+    const spec = findWorkerPrivateHomeSpec('opencode')!
+    const prepared = prepareWorkerPrivateHome(spec, {
+      workspace: tmp('adhdev-ws-oc-'), sessionKey: 'task_oc', realHome, baseDir: tmp('adhdev-whbase-'),
+    })
+    const imported = JSON.parse(readFileSync(join(prepared.home, 'opencode', 'opencode.json'), 'utf-8'))
+    expect(imported.model).toBe('kimi-for-coding/k3')
+    expect(imported.provider).toEqual({ 'kimi-for-coding': { npm: '@ai-sdk/openai-compatible' } })
+    expect(imported.mcp).toBeUndefined()
   })
 
   it('★the three HOME-rooted specs declare no prefix — real and private paths coincide', () => {

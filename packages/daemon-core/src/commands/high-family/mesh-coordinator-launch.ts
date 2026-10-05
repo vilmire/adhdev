@@ -35,6 +35,7 @@ import type { HighFamilyContext, HighFamilyHandler } from './types.js';
 import { resolveCoordinatorRules, type CoordinatorRulesResolution } from '../../mesh/coordinator-rules.js';
 import { defineCommandSpecs } from '../command-registry.js';
 import { GROK_PROJECT_CONFIG_RELATIVE_PATH, writeGrokProjectMcpServer } from '../../mesh/grok-project-mcp-config.js';
+import { ensureLocalGitExclude } from '../../git/git-local-exclude.js';
 
 /**
  * Resolve the repo-read coordinator rules layer for this mesh (best-effort —
@@ -862,6 +863,9 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                             return { success: false, code: 'mesh_coordinator_config_write_failed', error: message, meshId, cliType, workspace };
                         }
                         LOG.info('MeshCoordinator', `Wrote ${mcpConfigPath} with ${coordinatorSetup.serverName} server`);
+                        // An UNTRACKED workspace config stays out of `git add -A`; a tracked
+                        // one is unaffected (exclude never applies to tracked paths).
+                        if (isWorkspaceLocalPath(mcpConfigPath, workspace)) ensureLocalGitExclude(workspace, mcpConfigPath);
                     }
 
                     const cliArgs: string[] = [];

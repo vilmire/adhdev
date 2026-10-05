@@ -61,6 +61,7 @@ export const GIT_HEAVY_SUITES: string[] = [
   'test/git/git-checkpoint-integration.test.ts',
   'test/git/git-diff.test.ts',
   'test/git/git-executor.test.ts',
+  'test/git/git-local-exclude.test.ts',
   'test/git/git-locale.test.ts',
   'test/git/git-status.test.ts',
   // ★REFINE-ACCEPT-BASE-PREFLIGHT: builds real bare-origin + clone topologies to

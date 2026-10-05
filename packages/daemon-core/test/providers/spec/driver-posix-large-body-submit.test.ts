@@ -109,7 +109,7 @@ class IngestingFactory implements PtyTransportFactory {
     }
 }
 
-function submitSpec(): Record<string, unknown> {
+function submitSpec(sendMessageExtra: Record<string, unknown> = {}): Record<string, unknown> {
     return {
         $schema: 'adhdev:cli/spec@4',
         id: 'test.posix-submit',
@@ -117,7 +117,7 @@ function submitSpec(): Record<string, unknown> {
         binary: '/bin/true',
         // 200ms — the exact value grok-cli, claude-cli, codex-cli and
         // antigravity-cli all ship, and the one that failed live.
-        send_message: { submit_key: '\r', delay_ms_before_submit: 200 },
+        send_message: { submit_key: '\r', delay_ms_before_submit: 200, ...sendMessageExtra },
         sections: { footer: { from_bottom: 1 } },
         states: [
             { id: 'starting', label: 'Starting', initial: true, status: 'idle' },
@@ -185,11 +185,13 @@ async function run(
     manifestSendDelayMs?: number,
     /** What the composer shows for the body (default: the body itself). */
     echo?: string,
+    /** Extra spec send_message fields (e.g. echo_confirm). */
+    sendMessageExtra?: Record<string, unknown>,
 ): Promise<RunResult> {
     const factory = new IngestingFactory();
     factory.ingestMs = ingestMs;
     const driver = new FsmDriver({
-        specPath: writeSpec(submitSpec()),
+        specPath: writeSpec(submitSpec(sendMessageExtra)),
         workingDir: os.tmpdir(),
         hotReload: false,
         transportFactory: factory,
@@ -266,6 +268,27 @@ describe('POSIX-ENTER-DROP — large-body submit is echo-verified', () => {
         expect(res.firstCrDelayMs).not.toBeNull();
         expect(res.firstCrDelayMs!).toBeLessThan(3000);
         expect(res.submits).toBeGreaterThanOrEqual(1);
+    });
+
+    it('echo_confirm "tail": a composer that scrolls inside its box confirms on the tail alone', async () => {
+        // kimi redraws a tall body inside its composer box, so only the last lines
+        // are ever on screen and the head is in neither viewport nor scrollback.
+        // Head+tail confirmation could never succeed and every long task prompt
+        // waited out the 20 s blind fire (2026-10-06 provider matrix).
+        setPlatform('darwin');
+        const body = ['Provider check run.', ...Array.from({ length: 30 }, (_, i) => `Context line ${i}: lorem ipsum dolor sit amet.`)].join('\n');
+        const tailOnly = ' │   Context line 29: lorem ipsum dolor sit amet.   │';
+        const res = await run(body, 0, 3000, undefined, tailOnly, { echo_confirm: 'tail' });
+        expect(res.firstCrDelayMs).not.toBeNull();
+        expect(res.firstCrDelayMs!).toBeLessThan(3000);
+        expect(res.submits).toBeGreaterThanOrEqual(1);
+    });
+
+    it('default head+tail confirmation still waits when only the tail is visible', async () => {
+        setPlatform('darwin');
+        const body = ['Provider check run.', ...Array.from({ length: 30 }, (_, i) => `Context line ${i}: lorem ipsum dolor sit amet.`)].join('\n');
+        const res = await run(body, 0, 2500, undefined, ' │   Context line 29: lorem ipsum dolor sit amet.   │');
+        expect(res.firstCrDelayMs).toBeNull();
     });
 
     it('holds the first CR well past the blind 200ms that failed live', async () => {

@@ -440,6 +440,18 @@ export interface CliSpecV4 {
     send_message: {
         submit_key: string;
         delay_ms_before_submit?: number;
+        /**
+         * How the engine confirms a sent body reached the composer before the
+         * submit key. Default `head_and_tail`: both ends must be on screen /
+         * in scrollback (guards a partially echoed multi-line body).
+         * `tail` is for CLIs whose composer scrolls INSIDE its own box (kimi):
+         * the head of a tall body is redrawn away and is in neither the
+         * viewport nor the scrollback, so it can never be observed — every
+         * long send sat out the 20 s blind-fire wait (2026-10-06 provider
+         * matrix). Bytes reach the CLI in order, so a visible tail implies the
+         * head arrived. Older daemons ignore the field.
+         */
+        echo_confirm?: 'head_and_tail' | 'tail';
         delay_ms_per_char?: number;
         /**
          * POSIX image-prompt delivery opt-in (claude-cli multi-image loss fix).
