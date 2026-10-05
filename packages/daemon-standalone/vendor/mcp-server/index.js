@@ -117342,6 +117342,16 @@ ${marker}`,
           }
           const node = updateNode2(meshId, nodeId, patch);
           if (node) {
+            const cached5 = await ctx.getMeshForCommand(meshId, void 0, { preferInline: true });
+            const cachedNode = cached5?.inline && Array.isArray(cached5.mesh?.nodes) ? cached5.mesh.nodes.find((n) => meshNodeIdMatches7(n, nodeId)) : void 0;
+            if (cachedNode) {
+              cachedNode.policy = node.policy;
+              if (node.systemPrompt) cachedNode.systemPrompt = node.systemPrompt;
+              else delete cachedNode.systemPrompt;
+              if (node.capabilities?.length) cachedNode.capabilities = node.capabilities;
+              else delete cachedNode.capabilities;
+              ctx.updateInlineMeshNode(meshId, cached5.mesh, cachedNode);
+            }
             ctx.invalidateAggregateMeshStatus(meshId);
             return { success: true, node };
           }
