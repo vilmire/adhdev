@@ -9,6 +9,8 @@ import {
     mkdirSync,
     existsSync,
     rmSync,
+    readFileSync,
+    writeFileSync,
 } from 'fs';
 import * as path from 'path';
 import { type WorkerPrivateHomeSpec, deriveCursorWorkspaceSlug, findWorkerPrivateHomeSpec } from './worker-home-specs.js';
@@ -151,7 +153,9 @@ export function prepareWorkerPrivateHome(
     const importPrefix = String(spec.configRootPrefix || '').trim();
     const sourceBase = importPrefix ? path.join(realHome, importPrefix) : realHome;
     for (const entry of spec.imports) {
-        const source = path.join(sourceBase, entry.relativePath);
+        const source = entry.sourceRelativePath
+            ? path.join(realHome, entry.sourceRelativePath)
+            : path.join(sourceBase, entry.relativePath);
         const target = path.join(home, entry.relativePath);
         const isRequired = typeof entry.required === 'function'
             ? entry.required(process.platform)
@@ -221,6 +225,11 @@ export function prepareWorkerPrivateHome(
                 if (kind !== 'symlink') {
                     LOG.info('WorkerMcp', `[${spec.providerType}] ${entry.relativePath} imported as ${kind} (${process.platform})`);
                 }
+            } else if (entry.stripJsonKeys?.length) {
+                const parsed = JSON.parse(readFileSync(source, 'utf8'));
+                if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('not a JSON object');
+                for (const key of entry.stripJsonKeys) delete parsed[key];
+                writeFileSync(target, JSON.stringify(parsed, null, 2), { mode: 0o600 });
             } else {
                 copyFileSync(source, target);
             }

@@ -52,7 +52,20 @@ export interface WorkerHomeImport {
      * file. The regression test asserts the TARGET exists inside the root.
      */
     relativePath: string;
+    /**
+     * Real-home-relative SOURCE, when it is not `[configRootPrefix/]relativePath`
+     * (e.g. opencode's global config at `~/.config/opencode/opencode.json`
+     * landing at `<XDG_CONFIG_HOME root>/opencode/opencode.json`).
+     */
+    sourceRelativePath?: string;
     mode: 'symlink' | 'copy';
+    /**
+     * `copy` only: parse the source as JSON and drop these top-level keys before
+     * writing — imports the owner's settings minus the surface the private root
+     * exists to isolate (opencode's `mcp` block). A source that is not plain
+     * JSON is not imported (the root stays isolated).
+     */
+    stripJsonKeys?: string[];
     /**
      * When true, a missing source is an error rather than a skip.
      *
@@ -807,9 +820,19 @@ export const WORKER_PRIVATE_HOME_SPECS: readonly WorkerPrivateHomeSpec[] = [
     {
         providerType: 'opencode',
         homeEnvVar: 'XDG_CONFIG_HOME',
-        imports: [],
-        // The ISOLATED surface. Empty means the owner's global
-        // `opencode.json` is absent and cannot be merged in.
+        // ★The owner's global `opencode.json` carries the provider definitions
+        // and default `model`, not only `mcp`. Leaving it out entirely isolated
+        // the MCP table but also dropped the model the owner chose: a worker on
+        // a machine configured for Kimi ran on opencode's built-in default
+        // instead (2026-10-06 provider matrix). Import it with `mcp` removed.
+        imports: [
+            {
+                relativePath: path.join('opencode', 'opencode.json'),
+                sourceRelativePath: path.join('.config', 'opencode', 'opencode.json'),
+                mode: 'copy',
+                stripJsonKeys: ['mcp'],
+            },
+        ],
         ensureDirs: ['opencode'],
     },
 ];

@@ -13,6 +13,7 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
+import { ensureLocalGitExclude } from '../git/git-local-exclude.js';
 
 export const GROK_PROJECT_CONFIG_RELATIVE_PATH = path.join('.grok', 'config.toml');
 
@@ -70,5 +71,6 @@ export function writeGrokProjectMcpServer(
     const existing = fs.existsSync(file) ? fs.readFileSync(file, 'utf-8') : '';
     const next = upsertGrokMcpServerTable(existing, name, server);
     if (next !== existing) fs.writeFileSync(file, next, 'utf-8');
+    ensureLocalGitExclude(workspace, file);
     return file;
 }

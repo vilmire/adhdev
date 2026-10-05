@@ -773,6 +773,7 @@ export class SendSubmitEngine {
             // (20 s) before submitting (2026-10-03). The chip IS the body arriving.
             if (PASTE_PLACEHOLDER_RE.test(visible)) return true;
             if (!visible.includes(tailProbe)) return false;
+            if (this.host.spec.send_message?.echo_confirm === 'tail') return true;
             const full = normalizeForEcho(this.host.adapter.snapshotWithScrollback());
             return full.includes(headProbe);
         };
