@@ -81141,13 +81141,13 @@ ${tail}`;
       if (excludePaths.length > 0) {
         diffArgs.push("--", ".", ...excludePaths.map((path88) => `:(exclude)${path88}`));
       }
-      const { mkdtempSync: mkdtempSync3, rmSync: rmSync15, openSync: openSync14, closeSync: closeSync14 } = await import("fs");
+      const { mkdtempSync: mkdtempSync3, rmSync: rmSync15, openSync: openSync15, closeSync: closeSync15 } = await import("fs");
       const { tmpdir: tmpdir8 } = await import("os");
       const { join: join98 } = await import("path");
       const scratch = mkdtempSync3(join98(tmpdir8(), "adhdev-patchid-"));
       const patchFile = join98(scratch, "patch.diff");
       try {
-        const out = openSync14(patchFile, "w");
+        const out = openSync15(patchFile, "w");
         let diffRun;
         try {
           diffRun = hiddenSpawnSync2(GIT, diffArgs, {
@@ -81156,7 +81156,7 @@ ${tail}`;
             encoding: "utf8"
           });
         } finally {
-          closeSync14(out);
+          closeSync15(out);
         }
         if (diffRun.error) throw diffRun.error;
         if (diffRun.status !== 0) {
@@ -81164,7 +81164,7 @@ ${tail}`;
             `git diff failed (exit ${diffRun.status}): ${(diffRun.stderr || "").trim() || "no stderr"}`
           );
         }
-        const patchIn = openSync14(patchFile, "r");
+        const patchIn = openSync15(patchFile, "r");
         let patchIdRun;
         try {
           patchIdRun = hiddenSpawnSync2(GIT, ["patch-id", "--stable"], {
@@ -81174,7 +81174,7 @@ ${tail}`;
             maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES
           });
         } finally {
-          closeSync14(patchIn);
+          closeSync15(patchIn);
         }
         if (patchIdRun.error) throw patchIdRun.error;
         if (patchIdRun.status !== 0) {
@@ -102510,25 +102510,27 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       }
     }
     function newestRecentFileAcrossGlob(template, pattern, windowMs, sessionFloorMs = 0) {
-      const dirs = expandDirGlob(template);
-      const cutoff = Math.max(Date.now() - windowMs, sessionFloorMs);
-      let best = null;
-      for (const d of dirs) {
-        let entries;
-        try {
-          entries = fs36.readdirSync(d, { withFileTypes: true });
-        } catch {
-          continue;
-        }
-        for (const e of entries) {
-          if (!e.isFile() || !pattern.test(e.name)) continue;
-          const p = path42.join(d, e.name);
-          const mtime = safeMtimeMs(p);
-          if (mtime < cutoff) continue;
-          if (!best || mtime > best.mtime) best = { p, mtime };
-        }
+      return recentFilesAcrossGlob(template, pattern, windowMs, sessionFloorMs)[0] ?? null;
+    }
+    function recentFilesAcrossGlob(template, pattern, windowMs, sessionFloorMs = 0) {
+      const out = [];
+      for (const d of expandDirGlob(template)) collectRecentFiles(d, pattern, windowMs, sessionFloorMs, out);
+      return out.sort((a, b) => b.mtime - a.mtime).map((c) => c.p);
+    }
+    function collectRecentFiles(dir, pattern, windowMs, sessionFloorMs, out) {
+      let entries;
+      try {
+        entries = fs36.readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return;
       }
-      return best ? best.p : null;
+      const cutoff = Math.max(Date.now() - windowMs, sessionFloorMs);
+      for (const e of entries) {
+        if (!e.isFile() || !pattern.test(e.name)) continue;
+        const p = path42.join(dir, e.name);
+        const mtime = safeMtimeMs(p);
+        if (mtime >= cutoff) out.push({ p, mtime });
+      }
     }
     function hasDateTemplateSegment(template) {
       return /\{yyyy\}|\{mm\}|\{dd\}/.test(template);
@@ -102595,22 +102597,12 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       return out;
     }
     function newestRecentFile(dir, pattern, windowMs, sessionFloorMs = 0) {
-      let entries;
-      try {
-        entries = fs36.readdirSync(dir, { withFileTypes: true });
-      } catch {
-        return null;
-      }
-      const cutoff = Math.max(Date.now() - windowMs, sessionFloorMs);
-      let best = null;
-      for (const e of entries) {
-        if (!e.isFile() || !pattern.test(e.name)) continue;
-        const p = path42.join(dir, e.name);
-        const mtime = safeMtimeMs(p);
-        if (mtime < cutoff) continue;
-        if (!best || mtime > best.mtime) best = { p, mtime };
-      }
-      return best ? best.p : null;
+      return recentFiles(dir, pattern, windowMs, sessionFloorMs)[0] ?? null;
+    }
+    function recentFiles(dir, pattern, windowMs, sessionFloorMs = 0) {
+      const out = [];
+      collectRecentFiles(dir, pattern, windowMs, sessionFloorMs, out);
+      return out.sort((a, b) => b.mtime - a.mtime).map((c) => c.p);
     }
     function safeMtimeMs(p) {
       try {
@@ -102780,6 +102772,36 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       return pickBoundFromEntries(files, sessionFloorMs, workspaceHint);
     }
     var UUID_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
+    var MAX_PROMPTS_PER_SESSION = 20;
+    var MIN_SNIPPET_CHARS = 8;
+    var MAX_SNIPPET_CHARS = 80;
+    var promptsByInstance = /* @__PURE__ */ new Map();
+    function promptSnippet(text) {
+      const line = String(text || "").split("\n").map((l) => l.replace(/\s+/g, " ").trim()).find(Boolean) || "";
+      return line.length >= MIN_SNIPPET_CHARS ? line.slice(0, MAX_SNIPPET_CHARS) : "";
+    }
+    function recordSentPrompt(instanceId, text) {
+      const id22 = typeof instanceId === "string" ? instanceId.trim() : "";
+      const snippet2 = promptSnippet(text);
+      if (!id22 || !snippet2) return;
+      const list = promptsByInstance.get(id22) ?? [];
+      if (list[list.length - 1] !== snippet2) list.push(snippet2);
+      if (list.length > MAX_PROMPTS_PER_SESSION) list.splice(0, list.length - MAX_PROMPTS_PER_SESSION);
+      promptsByInstance.set(id22, list);
+    }
+    function sentPromptSnippets(instanceId) {
+      const id22 = typeof instanceId === "string" ? instanceId.trim() : "";
+      return id22 ? (promptsByInstance.get(id22) ?? []).slice() : [];
+    }
+    function containsSentPrompt(haystack, snippets) {
+      if (!haystack || snippets.length === 0) return false;
+      const flat = haystack.replace(/\s+/g, " ");
+      return snippets.some((s2) => flat.includes(s2) || haystack.includes(JSON.stringify(s2).slice(1, -1)));
+    }
+    function releaseSentPrompts(instanceId) {
+      const id22 = typeof instanceId === "string" ? instanceId.trim() : "";
+      if (id22) promptsByInstance.delete(id22);
+    }
     var fs37 = __toESM2(require("fs"));
     init_load_better_sqlite3();
     init_message_source_address();
@@ -103042,6 +103064,11 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
           content = content.replace(open, "").replace(close, "");
         }
       }
+      if (content && map2.content_strip_literals) {
+        for (const literal of map2.content_strip_literals) {
+          if (literal) content = content.split(literal).join("");
+        }
+      }
       return content ? content.trim() : "";
     }
     function parseTimestamp(v) {
@@ -103178,20 +103205,19 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
             const workspaceHint = typeof input.workspace === "string" ? input.workspace : "";
             const stmt = db.prepare(src.session_query);
             try {
-              sessionRow = stmt.get({ floor: sessionFloorSeconds, workspace: workspaceHint });
+              sessionRow = stmt.all({ floor: sessionFloorSeconds, workspace: workspaceHint });
             } catch {
               try {
-                sessionRow = stmt.get(sessionFloorSeconds);
+                sessionRow = stmt.all(sessionFloorSeconds);
               } catch {
-                sessionRow = stmt.get();
+                sessionRow = stmt.all();
               }
             }
           } catch {
             return "";
           }
-          if (!sessionRow) return "";
-          const sessionIdRaw = Object.values(sessionRow)[0];
-          return sessionIdRaw == null ? "" : String(sessionIdRaw);
+          const candidates = (Array.isArray(sessionRow) ? sessionRow : []).map((row) => Object.values(row ?? {})[0]).filter((v) => v != null && String(v)).map((v) => String(v));
+          return pickSqliteSessionByPromptEvidence(candidates, resolved, input, resolveMessagesFor, src.message_map);
         };
         let sessionId;
         let messageRows;
@@ -103199,6 +103225,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
           messageRows = resolveMessagesFor(requested);
           if (messageRows) {
             sessionId = requested;
+            const owner = transcriptClaimOwnerToken(input.instanceId);
+            if (owner) claimTranscript(`${resolved}#${requested}`, owner);
           } else {
             sessionId = resolveNewestSessionId();
             messageRows = resolveMessagesFor(sessionId);
@@ -103232,6 +103260,21 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         } catch {
         }
       }
+    }
+    function pickSqliteSessionByPromptEvidence(candidates, dbPath, input, messagesFor, map2) {
+      const owner = transcriptClaimOwnerToken(input.instanceId);
+      if (!owner) return candidates[0] ?? "";
+      const key2 = (id22) => `${dbPath}#${id22}`;
+      const unclaimed = candidates.filter((id22) => !isTranscriptClaimedByOther(key2(id22), owner));
+      const snippets = sentPromptSnippets(input.instanceId);
+      if (snippets.length === 0) return unclaimed[0] ?? "";
+      const own = unclaimed.find((id22) => {
+        const rows = messagesFor(id22) ?? [];
+        const userText = rows.flatMap((row, i) => projectMessages(row, map2, i, rows.length, 0)).filter((m) => m.role === "user").map((m) => m.content).join("\n");
+        return containsSentPrompt(userText, snippets);
+      });
+      if (!own) return "";
+      return claimTranscript(key2(own), owner) === "denied" ? "" : own;
     }
     function executeNativeHistory(cfg, input) {
       if (!cfg?.source) return null;
@@ -103495,7 +103538,12 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
             sourcePath = newestRecentFileAcrossGlob(resolved, filePat, windowMs, sessionFloor);
           }
         } else {
-          sourcePath = pickExactSessionFileAcrossGlob(resolved, filePat, requestedSessionId) || pickSessionBoundFileAcrossGlob(resolved, filePat, windowMs, sessionFloor, workspaceHint) || newestRecentFileAcrossGlob(resolved, filePat, windowMs, sessionFloor);
+          const exact = pickExactSessionFileAcrossGlob(resolved, filePat, requestedSessionId);
+          if (exact) claimOwnTranscript(exact, input);
+          sourcePath = exact || pickSessionBoundFileAcrossGlob(resolved, filePat, windowMs, sessionFloor, workspaceHint);
+          if (!sourcePath) {
+            return pickRecentByPromptEvidence(recentFilesAcrossGlob(resolved, filePat, windowMs, sessionFloor), input);
+          }
         }
       } else {
         let stat2 = null;
@@ -103506,7 +103554,13 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         if (stat2 && stat2.isFile()) {
           sourcePath = resolved;
         } else if (stat2 && stat2.isDirectory()) {
-          sourcePath = pickExactSessionFile(resolved, filePat, requestedSessionId) || (requestedSessionId ? null : pickSessionBoundFile(resolved, filePat, windowMs, sessionFloor, workspaceHint)) || (requestedSessionId ? null : newestRecentFile(resolved, filePat, windowMs, sessionFloor));
+          const exact = pickExactSessionFile(resolved, filePat, requestedSessionId);
+          if (exact) claimOwnTranscript(exact, input);
+          sourcePath = exact || (requestedSessionId ? null : pickSessionBoundFile(resolved, filePat, windowMs, sessionFloor, workspaceHint));
+          if (!sourcePath && !requestedSessionId) {
+            const pick = pickRecentByPromptEvidence(recentFiles(resolved, filePat, windowMs, sessionFloor), input);
+            if (pick.path) return pick;
+          }
         }
         if (!sourcePath && hasDateTemplateSegment(src.path)) {
           sourcePath = pickExactSessionFileAcrossDateWindow(src.path, input, filePat, requestedSessionId) || (requestedSessionId ? null : pickSessionBoundFileAcrossDateWindow(src.path, input, filePat, windowMs, sessionFloor, workspaceHint)) || (requestedSessionId ? null : newestRecentFileAcrossDateWindow(src.path, input, filePat, windowMs, sessionFloor));
@@ -103529,6 +103583,44 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         }
       }
       return { path: sourcePath };
+    }
+    var PROMPT_EVIDENCE_SCAN_BYTES = 4 * 1024 * 1024;
+    function readForPromptEvidence(p) {
+      try {
+        const size = fs38.statSync(p).size;
+        if (size <= PROMPT_EVIDENCE_SCAN_BYTES * 2) return fs38.readFileSync(p, "utf8");
+        const fd = fs38.openSync(p, "r");
+        try {
+          const head = Buffer.alloc(PROMPT_EVIDENCE_SCAN_BYTES);
+          const tail = Buffer.alloc(PROMPT_EVIDENCE_SCAN_BYTES);
+          fs38.readSync(fd, head, 0, head.length, 0);
+          fs38.readSync(fd, tail, 0, tail.length, size - tail.length);
+          return head.toString("utf8") + "\n" + tail.toString("utf8");
+        } finally {
+          fs38.closeSync(fd);
+        }
+      } catch {
+        return "";
+      }
+    }
+    function claimOwnTranscript(p, input) {
+      const owner = transcriptClaimOwnerToken(input.instanceId);
+      if (owner) claimTranscript(claimKeyForPath(p), owner);
+    }
+    function pickRecentByPromptEvidence(candidates, input) {
+      const owner = transcriptClaimOwnerToken(input.instanceId);
+      if (!owner) return { path: candidates[0] ?? null };
+      const unclaimed = candidates.filter((p) => !isTranscriptClaimedByOther(claimKeyForPath(p), owner));
+      const snippets = sentPromptSnippets(input.instanceId);
+      if (snippets.length === 0) return { path: unclaimed[0] ?? null };
+      const own = unclaimed.find((p) => containsSentPrompt(readForPromptEvidence(p), snippets));
+      if (!own) {
+        if (unclaimed.length > 0) LOG.debug("TranscriptClaim", `decision=no_prompt_evidence provider=${input.agentType || "?"} owner=${owner} candidates=${unclaimed.length} \u2192 unresolved (no borrowed transcript)`);
+        return { path: null };
+      }
+      const verdict = claimTranscript(claimKeyForPath(own), owner);
+      if (verdict === "denied") return { path: null };
+      return { path: own, outcome: { attribution: "claimed", ownerConfirmed: true } };
     }
     function claimKeyForPath(p) {
       try {
@@ -131042,6 +131134,7 @@ ${text}` : text;
       async sendMessage(text, opts) {
         LOG.info("SpecAdapter", `[${this.cliType}] sendMessage(len=${text.length}${opts?.messageId ? ` id=${opts.messageId}` : ""})`);
         LOG.debug("SpecAdapter", `[${this.cliType}] sendMessage body=${JSON.stringify(text.slice(0, 80))}${text.length > 80 ? "\u2026" : ""}`);
+        recordSentPrompt(this.owningSessionId, text);
         if (typeof this.driver.sendMessageWithDisposition !== "function") {
           this.driver.dispatch({ kind: "send_message", text, bracketedPaste: opts?.bracketedPaste });
           return;
@@ -134888,10 +134981,9 @@ ${buttons.join("\n")}`;
         const owner = host.antigravityClaimOwner();
         if (owner) releaseAntigravityOwner(owner);
       }
-      if (host.type === "kimi") {
-        const owner = transcriptClaimOwnerToken(host.instanceId);
-        if (owner) releaseTranscriptOwner(owner);
-      }
+      const transcriptOwner = transcriptClaimOwnerToken(host.instanceId);
+      if (transcriptOwner) releaseTranscriptOwner(transcriptOwner);
+      releaseSentPrompts(host.instanceId);
       host.adapter.shutdown();
       host.monitor.reset();
       if (host.autoApproveSettleTimer) {

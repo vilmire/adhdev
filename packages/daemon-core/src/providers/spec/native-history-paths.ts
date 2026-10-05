@@ -461,21 +461,26 @@ function walkAllDirs(root: string, out: string[]): void {
 }
 
 export function newestRecentFileAcrossGlob(template: string, pattern: RegExp, windowMs: number, sessionFloorMs = 0): string | null {
-    const dirs = expandDirGlob(template);
+    return recentFilesAcrossGlob(template, pattern, windowMs, sessionFloorMs)[0] ?? null;
+}
+
+/** Every matching file across the glob inside the recency window, newest first. */
+export function recentFilesAcrossGlob(template: string, pattern: RegExp, windowMs: number, sessionFloorMs = 0): string[] {
+    const out: { p: string; mtime: number }[] = [];
+    for (const d of expandDirGlob(template)) collectRecentFiles(d, pattern, windowMs, sessionFloorMs, out);
+    return out.sort((a, b) => b.mtime - a.mtime).map(c => c.p);
+}
+
+function collectRecentFiles(dir: string, pattern: RegExp, windowMs: number, sessionFloorMs: number, out: { p: string; mtime: number }[]): void {
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
     const cutoff = Math.max(Date.now() - windowMs, sessionFloorMs);
-    let best: { p: string; mtime: number } | null = null;
-    for (const d of dirs) {
-        let entries: fs.Dirent[];
-        try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { continue; }
-        for (const e of entries) {
-            if (!e.isFile() || !pattern.test(e.name)) continue;
-            const p = path.join(d, e.name);
-            const mtime = safeMtimeMs(p);
-            if (mtime < cutoff) continue;
-            if (!best || mtime > best.mtime) best = { p, mtime };
-        }
+    for (const e of entries) {
+        if (!e.isFile() || !pattern.test(e.name)) continue;
+        const p = path.join(dir, e.name);
+        const mtime = safeMtimeMs(p);
+        if (mtime >= cutoff) out.push({ p, mtime });
     }
-    return best ? best.p : null;
 }
 
 export function hasDateTemplateSegment(template: string): boolean {
@@ -552,18 +557,14 @@ function expandPathForDate(template: string, input: NativeHistoryInput, day: Dat
 }
 
 export function newestRecentFile(dir: string, pattern: RegExp, windowMs: number, sessionFloorMs = 0): string | null {
-    let entries: fs.Dirent[];
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return null; }
-    const cutoff = Math.max(Date.now() - windowMs, sessionFloorMs);
-    let best: { p: string; mtime: number } | null = null;
-    for (const e of entries) {
-        if (!e.isFile() || !pattern.test(e.name)) continue;
-        const p = path.join(dir, e.name);
-        const mtime = safeMtimeMs(p);
-        if (mtime < cutoff) continue;
-        if (!best || mtime > best.mtime) best = { p, mtime };
-    }
-    return best ? best.p : null;
+    return recentFiles(dir, pattern, windowMs, sessionFloorMs)[0] ?? null;
+}
+
+/** Every matching file in `dir` inside the recency window, newest first. */
+export function recentFiles(dir: string, pattern: RegExp, windowMs: number, sessionFloorMs = 0): string[] {
+    const out: { p: string; mtime: number }[] = [];
+    collectRecentFiles(dir, pattern, windowMs, sessionFloorMs, out);
+    return out.sort((a, b) => b.mtime - a.mtime).map(c => c.p);
 }
 
 export function safeMtimeMs(p: string): number {

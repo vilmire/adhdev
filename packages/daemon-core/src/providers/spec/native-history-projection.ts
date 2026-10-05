@@ -254,6 +254,11 @@ function cleanContent(input: string, map: NativeHistoryMessageMap): string {
             content = content.replace(open, '').replace(close, '');
         }
     }
+    if (content && map.content_strip_literals) {
+        for (const literal of map.content_strip_literals) {
+            if (literal) content = content.split(literal).join('');
+        }
+    }
     return content ? content.trim() : '';
 }
 

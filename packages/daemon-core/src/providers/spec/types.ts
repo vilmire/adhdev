@@ -218,6 +218,9 @@ export interface NativeHistoryMessageMap {
     content: string;
     content_strip?: string[];
     content_unwrap?: string[];
+    /** Literal strings removed wherever they appear (e.g. cursor's `[REDACTED]`
+     *  placeholder for hidden reasoning). Not regex. */
+    content_strip_literals?: string[];
     timestamp_ms?: string;
     kind?: string;
     /**

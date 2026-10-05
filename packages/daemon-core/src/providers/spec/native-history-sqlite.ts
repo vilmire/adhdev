@@ -11,6 +11,8 @@ import type { NativeHistorySqliteSource } from './types.js';
 import type { NativeHistoryInput, NativeHistoryResult, NativeHistoryMessage } from './native-history-types.js';
 import { expandPath, safeMtimeMs } from './native-history-paths.js';
 import { projectMessages } from './native-history-projection.js';
+import { claimTranscript, isTranscriptClaimedByOther, transcriptClaimOwnerToken } from '../native-history/transcript-claim-registry.js';
+import { containsSentPrompt, sentPromptSnippets } from '../native-history/sent-prompt-registry.js';
 
 // ────────────────────────────────────────────────────────────────────────────
 // SQLite
@@ -49,7 +51,7 @@ export function executeSqlite(src: NativeHistorySqliteSource, input: NativeHisto
         };
 
         const resolveNewestSessionId = (): string => {
-            let sessionRow: any;
+            let sessionRow: any[] | undefined;
             try {
                 // session_query may reference `?` to receive the session's
                 // start-time floor in seconds (e.g. WHERE started_at >= ?).
@@ -76,20 +78,24 @@ export function executeSqlite(src: NativeHistorySqliteSource, input: NativeHisto
                 //   1. named { floor, workspace } — spec references @floor/@workspace
                 //   2. positional (floor) — legacy single-`?` floor specs
                 //   3. no-arg — specs with no bound params
+                // All rows: a spec may return several newest-first candidates
+                // so same-workspace sessions can be told apart below.
                 try {
-                    sessionRow = stmt.get({ floor: sessionFloorSeconds, workspace: workspaceHint });
+                    sessionRow = stmt.all({ floor: sessionFloorSeconds, workspace: workspaceHint });
                 } catch {
                     try {
-                        sessionRow = stmt.get(sessionFloorSeconds);
+                        sessionRow = stmt.all(sessionFloorSeconds);
                     } catch {
-                        sessionRow = stmt.get();
+                        sessionRow = stmt.all();
                     }
                 }
             } catch { return ''; }
-            if (!sessionRow) return '';
-            // First column of the first row is the session id.
-            const sessionIdRaw = Object.values(sessionRow)[0];
-            return sessionIdRaw == null ? '' : String(sessionIdRaw);
+            // First column of each row is the session id.
+            const candidates = (Array.isArray(sessionRow) ? sessionRow : [])
+                .map((row: any) => Object.values(row ?? {})[0])
+                .filter((v: unknown) => v != null && String(v))
+                .map((v: unknown) => String(v));
+            return pickSqliteSessionByPromptEvidence(candidates, resolved, input, resolveMessagesFor, src.message_map);
         };
 
         let sessionId: string;
@@ -102,6 +108,10 @@ export function executeSqlite(src: NativeHistorySqliteSource, input: NativeHisto
             messageRows = resolveMessagesFor(requested);
             if (messageRows) {
                 sessionId = requested;
+                // Keep the pinned session claimed so a same-workspace sibling's
+                // recency pick skips it.
+                const owner = transcriptClaimOwnerToken(input.instanceId);
+                if (owner) claimTranscript(`${resolved}#${requested}`, owner);
             } else {
                 // The pinned id has no rows — it is not a real session in this
                 // store (the mis-bound mesh runtime-id case). Recover by letting
@@ -142,4 +152,35 @@ export function executeSqlite(src: NativeHistorySqliteSource, input: NativeHisto
     } finally {
         try { db.close(); } catch { /* ignore */ }
     }
+}
+
+/**
+ * Same-workspace attribution for sqlite stores (opencode): the newest session
+ * row alone bound two live sessions in one workspace to the same conversation
+ * (2026-10-05 provider matrix). Mirrors the jsonl recency pick — a session
+ * another live session claimed is skipped; with recorded prompts only a session
+ * whose user messages contain one of them is this session's (claimed); none
+ * matching resolves nothing rather than borrowing a sibling's.
+ */
+function pickSqliteSessionByPromptEvidence(
+    candidates: string[],
+    dbPath: string,
+    input: NativeHistoryInput,
+    messagesFor: (sessionId: string) => any[] | null,
+    map: NativeHistorySqliteSource['message_map'],
+): string {
+    const owner = transcriptClaimOwnerToken(input.instanceId);
+    if (!owner) return candidates[0] ?? '';
+    const key = (id: string) => `${dbPath}#${id}`;
+    const unclaimed = candidates.filter(id => !isTranscriptClaimedByOther(key(id), owner));
+    const snippets = sentPromptSnippets(input.instanceId);
+    if (snippets.length === 0) return unclaimed[0] ?? '';
+    const own = unclaimed.find(id => {
+        const rows = messagesFor(id) ?? [];
+        const userText = rows.flatMap((row, i) => projectMessages(row, map, i, rows.length, 0))
+            .filter(m => m.role === 'user').map(m => m.content).join('\n');
+        return containsSentPrompt(userText, snippets);
+    });
+    if (!own) return '';
+    return claimTranscript(key(own), owner) === 'denied' ? '' : own;
 }
