@@ -34,6 +34,7 @@ import {
 import type { HighFamilyContext, HighFamilyHandler } from './types.js';
 import { resolveCoordinatorRules, type CoordinatorRulesResolution } from '../../mesh/coordinator-rules.js';
 import { defineCommandSpecs } from '../command-registry.js';
+import { GROK_PROJECT_CONFIG_RELATIVE_PATH, writeGrokProjectMcpServer } from '../../mesh/grok-project-mcp-config.js';
 
 /**
  * Resolve the repo-read coordinator rules layer for this mesh (best-effort —
@@ -787,62 +788,81 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                         ...(mcpServerEnv ? { env: mcpServerEnv } : {}),
                     });
 
-                    try {
-                        mkdirSync(dirname(mcpConfigPath), { recursive: true });
-                    } catch (error: any) {
-                        const message = `Could not prepare MCP config path for automatic setup: ${error?.message || error}`;
-                        LOG.error('MeshCoordinator', message);
-                        return { success: false, code: 'mesh_coordinator_config_write_failed', error: message, meshId, cliType, workspace };
-                    }
-
-                    const hadExistingMcpConfig = existsSync(mcpConfigPath);
-                    let existingMcpConfig: Record<string, any> = {};
-                    let existingMcpConfigText = '';
-                    if (hadExistingMcpConfig) {
+                    // grok has no per-launch MCP flag: in a repo that commits
+                    // `.mcp.json`, write the entry to grok's project config instead
+                    // (it outranks `.mcp.json` for the same server name), keeping the
+                    // tracked file — and therefore the base node — clean.
+                    const grokProjectConfig = cliType === 'grok-cli'
+                        && isWorkspaceLocalPath(coordinatorSetup.configPath, workspace)
+                        && isGitTrackedFile(workspace, coordinatorSetup.configPath)
+                        && !isGitTrackedFile(workspace, GROK_PROJECT_CONFIG_RELATIVE_PATH);
+                    if (grokProjectConfig) {
                         try {
-                            existingMcpConfigText = readFileSync(mcpConfigPath, 'utf-8');
-                            const parsedExistingMcpConfig = parseMeshCoordinatorMcpConfig(existingMcpConfigText, configFormat);
-                            existingMcpConfig = { ...existingMcpConfig, ...parsedExistingMcpConfig };
+                            const written = writeGrokProjectMcpServer(workspace, coordinatorSetup.serverName, mcpServerEntry as any);
+                            LOG.info('MeshCoordinator', `Left tracked ${coordinatorSetup.configPath} untouched; wrote ${coordinatorSetup.serverName} to ${written}`);
                         } catch (error: any) {
-                            LOG.error('MeshCoordinator', `Failed to parse existing MCP config ${mcpConfigPath}: ${error?.message || error}`);
-                            return {
-                                success: false,
-                                code: 'mesh_coordinator_config_parse_failed',
-                                error: `Failed to parse existing MCP config at ${mcpConfigPath}`,
-                            };
+                            const message = `Could not write grok project MCP config: ${error?.message || error}`;
+                            LOG.error('MeshCoordinator', message);
+                            return { success: false, code: 'mesh_coordinator_config_write_failed', error: message, meshId, cliType, workspace };
                         }
-                    }
+                    } else {
+                        try {
+                            mkdirSync(dirname(mcpConfigPath), { recursive: true });
+                        } catch (error: any) {
+                            const message = `Could not prepare MCP config path for automatic setup: ${error?.message || error}`;
+                            LOG.error('MeshCoordinator', message);
+                            return { success: false, code: 'mesh_coordinator_config_write_failed', error: message, meshId, cliType, workspace };
+                        }
 
-                    const mcpServersKey = getMcpServersKey(configFormat);
-                    const existingServers = existingMcpConfig[mcpServersKey];
-                    const mcpConfig = {
-                        ...existingMcpConfig,
-                        [mcpServersKey]: {
-                            ...(existingServers && typeof existingServers === 'object' && !Array.isArray(existingServers) ? existingServers : {}),
-                            [coordinatorSetup.serverName]: mcpServerEntry,
-                        },
-                    };
-                    try {
-                        const nextMcpConfigText = serializeMeshCoordinatorMcpConfig(mcpConfig, configFormat);
-                        if (nextMcpConfigText !== existingMcpConfigText) {
-                            // The backup of a config we are about to change goes to the
-                            // daemon's config dir, never next to it: a `.mcp.json.backup`
-                            // left in the workspace (2026-10-01, every coordinator
-                            // relaunch) made the repo dirty and blocked mesh convergence.
-                            if (hadExistingMcpConfig) {
-                                const backupDir = pathJoin(getConfigDir(), 'mcp-config-backups');
-                                mkdirSync(backupDir, { recursive: true });
-                                const backupName = `${mcpConfigPath.replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+/, '')}.${Date.now()}`;
-                                writeFileSync(pathJoin(backupDir, backupName), existingMcpConfigText, 'utf-8');
+                        const hadExistingMcpConfig = existsSync(mcpConfigPath);
+                        let existingMcpConfig: Record<string, any> = {};
+                        let existingMcpConfigText = '';
+                        if (hadExistingMcpConfig) {
+                            try {
+                                existingMcpConfigText = readFileSync(mcpConfigPath, 'utf-8');
+                                const parsedExistingMcpConfig = parseMeshCoordinatorMcpConfig(existingMcpConfigText, configFormat);
+                                existingMcpConfig = { ...existingMcpConfig, ...parsedExistingMcpConfig };
+                            } catch (error: any) {
+                                LOG.error('MeshCoordinator', `Failed to parse existing MCP config ${mcpConfigPath}: ${error?.message || error}`);
+                                return {
+                                    success: false,
+                                    code: 'mesh_coordinator_config_parse_failed',
+                                    error: `Failed to parse existing MCP config at ${mcpConfigPath}`,
+                                };
                             }
-                            writeFileSync(mcpConfigPath, nextMcpConfigText, 'utf-8');
                         }
-                    } catch (error: any) {
-                        const message = `Could not write MCP config for automatic setup: ${error?.message || error}`;
-                        LOG.error('MeshCoordinator', message);
-                        return { success: false, code: 'mesh_coordinator_config_write_failed', error: message, meshId, cliType, workspace };
+
+                        const mcpServersKey = getMcpServersKey(configFormat);
+                        const existingServers = existingMcpConfig[mcpServersKey];
+                        const mcpConfig = {
+                            ...existingMcpConfig,
+                            [mcpServersKey]: {
+                                ...(existingServers && typeof existingServers === 'object' && !Array.isArray(existingServers) ? existingServers : {}),
+                                [coordinatorSetup.serverName]: mcpServerEntry,
+                            },
+                        };
+                        try {
+                            const nextMcpConfigText = serializeMeshCoordinatorMcpConfig(mcpConfig, configFormat);
+                            if (nextMcpConfigText !== existingMcpConfigText) {
+                                // The backup of a config we are about to change goes to the
+                                // daemon's config dir, never next to it: a `.mcp.json.backup`
+                                // left in the workspace (2026-10-01, every coordinator
+                                // relaunch) made the repo dirty and blocked mesh convergence.
+                                if (hadExistingMcpConfig) {
+                                    const backupDir = pathJoin(getConfigDir(), 'mcp-config-backups');
+                                    mkdirSync(backupDir, { recursive: true });
+                                    const backupName = `${mcpConfigPath.replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+/, '')}.${Date.now()}`;
+                                    writeFileSync(pathJoin(backupDir, backupName), existingMcpConfigText, 'utf-8');
+                                }
+                                writeFileSync(mcpConfigPath, nextMcpConfigText, 'utf-8');
+                            }
+                        } catch (error: any) {
+                            const message = `Could not write MCP config for automatic setup: ${error?.message || error}`;
+                            LOG.error('MeshCoordinator', message);
+                            return { success: false, code: 'mesh_coordinator_config_write_failed', error: message, meshId, cliType, workspace };
+                        }
+                        LOG.info('MeshCoordinator', `Wrote ${mcpConfigPath} with ${coordinatorSetup.serverName} server`);
                     }
-                    LOG.info('MeshCoordinator', `Wrote ${mcpConfigPath} with ${coordinatorSetup.serverName} server`);
 
                     const cliArgs: string[] = [];
                     const launchEnv: Record<string, string> = {};

@@ -28,6 +28,7 @@
  */
 export const GIT_HEAVY_SUITES: string[] = [
   'test/commands/mesh-clone-node-registration.test.ts',
+  'test/commands/mesh-clone-registration-rollback.test.ts',
   'test/commands/mesh-coordinator.test.ts',
   'test/commands/mesh-crud-clone-sync-submodule-generic.test.ts',
   'test/commands/mesh-crud-oss-clone-sync-guard.test.ts',
