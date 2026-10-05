@@ -73,6 +73,7 @@ import {
 import type { ProviderFailure } from './provider-failure-classifier.js';
 import { authBillingLatchLogLine, classifyAuthBillingOutput, createLiveAuthState, exitClassificationAllowed, noteLiveAuthMatch, resolveLiveAuthSuspect, TAIL_BYTES, type LiveAuthContext, type LiveAuthState } from './live-auth-advisory.js';
 import { RawTail } from './raw-tail.js';
+import { recordSentPrompt } from '../native-history/sent-prompt-registry.js';
 
 /** What the adapter reports on PTY death (replaces the deleted shared/session-termination-sink). */
 export interface SpecAdapterExitReport { termination?: SessionTermination; runtimeSettings: Readonly<Record<string, unknown>> }
@@ -325,6 +326,7 @@ export class SpecCliAdapter implements CliAdapter {
     async sendMessage(text: string, opts?: { force?: boolean; bracketedPaste?: boolean; messageId?: string }): Promise<{ status: 'queued'; position: number } | { status: 'delivered' } | void> {
         LOG.info('SpecAdapter', `[${this.cliType}] sendMessage(len=${text.length}${opts?.messageId ? ` id=${opts.messageId}` : ''})`);
         LOG.debug('SpecAdapter', `[${this.cliType}] sendMessage body=${JSON.stringify(text.slice(0, 80))}${text.length > 80 ? '…' : ''}`);
+        recordSentPrompt(this.owningSessionId, text);
         if (typeof this.driver.sendMessageWithDisposition !== 'function') {
             this.driver.dispatch({ kind: 'send_message', text, bracketedPaste: opts?.bracketedPaste });
             return;

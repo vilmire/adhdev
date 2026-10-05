@@ -9,6 +9,7 @@ import { getCliScriptCommand, parseCliScriptResult } from './cli-script-results.
 import { getForcedNewSessionScriptName, waitForCliAdapterReady } from './cli-provider-status-helpers.js';
 import { antigravityOwnerToken, releaseAntigravityOwner } from './native-history/antigravity-claim-registry.js';
 import { releaseTranscriptOwner, transcriptClaimOwnerToken } from './native-history/transcript-claim-registry.js';
+import { releaseSentPrompts } from './native-history/sent-prompt-registry.js';
 import { closeSqliteProbeCache } from './completion/transcript-probe.js';
 import type { CliProviderInstance } from './cli-provider-instance.js';
 import type { InstanceContext } from './provider-instance.js';
@@ -173,10 +174,11 @@ export function dispose(host: TeardownHost): void {
     // owner token, so this session's wire.jsonl claims are released here
     // and a later same-cwd session can claim them immediately instead of
     // waiting on the stale-claim safety net.
-    if (host.type === 'kimi') {
-        const owner = transcriptClaimOwnerToken(host.instanceId);
-        if (owner) releaseTranscriptOwner(owner);
-    }
+    // Claims now cover every native-source provider (same-workspace sessions
+    // of cursor/opencode/… are attributed the same way), so release for all.
+    const transcriptOwner = transcriptClaimOwnerToken(host.instanceId);
+    if (transcriptOwner) releaseTranscriptOwner(transcriptOwner);
+    releaseSentPrompts(host.instanceId);
     host.adapter.shutdown();
     host.monitor.reset();
     // Cancel any armed auto-approve timers so a pending settle re-check

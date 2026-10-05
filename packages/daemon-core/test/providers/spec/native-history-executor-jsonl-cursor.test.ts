@@ -44,6 +44,7 @@ const CURSOR_SOURCE = {
         content: '$.message.content',
         content_strip: ['timestamp'],
         content_unwrap: ['user_query'],
+        content_strip_literals: ['[REDACTED]'],
         tools: {},
     },
 };
@@ -138,6 +139,20 @@ describe('cursor nativeHistory jsonl', () => {
         expect(r!.providerSessionId).toBe(SESSION_ID);
         expect(r!.workspace).toBe(WORKSPACE);
         expect(r!.messages.every((m: any) => m.workspace === WORKSPACE)).toBe(true);
+    });
+
+    it('strips cursor\'s [REDACTED] hidden-reasoning placeholder from replies', () => {
+        // Live cursor-agent 2026-10 writes `<answer>\n\n[REDACTED]` into the
+        // transcript; the dashboard showed the placeholder under every reply.
+        const dir = path.join(projectsDir, cursorSlug(WORKSPACE), 'agent-transcripts', SESSION_ID);
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, `${SESSION_ID}.jsonl`), [
+            JSON.stringify({ role: 'user', message: { content: [{ type: 'text', text: '<user_query>\nWhat is 17 times 23?\n</user_query>' }] } }),
+            JSON.stringify({ role: 'assistant', message: { content: [{ type: 'text', text: '391\n\n[REDACTED]' }] } }),
+        ].join('\n') + '\n', 'utf8');
+        const r = run({ providerSessionId: SESSION_ID, workspace: WORKSPACE, sessionStartedAtMs: 0 });
+        const assistant = r!.messages.filter((m: any) => m.role === 'assistant');
+        expect(assistant.map((m: any) => m.content)).toEqual(['391']);
     });
 
     it('does not stamp a mismatched workspace (no cross-workspace aliasing)', () => {

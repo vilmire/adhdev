@@ -38,8 +38,9 @@ import {
     safeBirthtimeMs, readRequestedSessionId, filenameUuid, pickExactSessionFile,
     pickExactSessionFileAcrossGlob, pickDirUuidFileAcrossGlob, pickExactSessionFileAcrossDateWindow,
     listMatchingFiles, pickSessionBoundFile, pickSessionBoundFileAcrossGlob,
-    pickSessionBoundFileAcrossDateWindow, UUID_RE,
+    pickSessionBoundFileAcrossDateWindow, UUID_RE, recentFiles, recentFilesAcrossGlob,
 } from './native-history-paths.js';
+import { containsSentPrompt, sentPromptSnippets } from '../native-history/sent-prompt-registry.js';
 import { executeSqlite } from './native-history-sqlite.js';
 import {
     compileRecordShapes, compileUsageShapes, projectUsageRecord, projectMessages,
@@ -539,9 +540,12 @@ function resolveJsonlSourcePathDetailed(src: NativeHistoryJsonlSource, input: Na
                 sourcePath = newestRecentFileAcrossGlob(resolved, filePat, windowMs, sessionFloor);
             }
         } else {
-            sourcePath = pickExactSessionFileAcrossGlob(resolved, filePat, requestedSessionId)
-                || pickSessionBoundFileAcrossGlob(resolved, filePat, windowMs, sessionFloor, workspaceHint)
-                || newestRecentFileAcrossGlob(resolved, filePat, windowMs, sessionFloor);
+            const exact = pickExactSessionFileAcrossGlob(resolved, filePat, requestedSessionId);
+            if (exact) claimOwnTranscript(exact, input);
+            sourcePath = exact || pickSessionBoundFileAcrossGlob(resolved, filePat, windowMs, sessionFloor, workspaceHint);
+            if (!sourcePath) {
+                return pickRecentByPromptEvidence(recentFilesAcrossGlob(resolved, filePat, windowMs, sessionFloor), input);
+            }
         }
     } else {
         let stat: fs.Stats | null = null;
@@ -549,9 +553,14 @@ function resolveJsonlSourcePathDetailed(src: NativeHistoryJsonlSource, input: Na
         if (stat && stat.isFile()) {
             sourcePath = resolved;
         } else if (stat && stat.isDirectory()) {
-            sourcePath = pickExactSessionFile(resolved, filePat, requestedSessionId)
-                || (requestedSessionId ? null : pickSessionBoundFile(resolved, filePat, windowMs, sessionFloor, workspaceHint))
-                || (requestedSessionId ? null : newestRecentFile(resolved, filePat, windowMs, sessionFloor));
+            const exact = pickExactSessionFile(resolved, filePat, requestedSessionId);
+            if (exact) claimOwnTranscript(exact, input);
+            sourcePath = exact
+                || (requestedSessionId ? null : pickSessionBoundFile(resolved, filePat, windowMs, sessionFloor, workspaceHint));
+            if (!sourcePath && !requestedSessionId) {
+                const pick = pickRecentByPromptEvidence(recentFiles(resolved, filePat, windowMs, sessionFloor), input);
+                if (pick.path) return pick;
+            }
         }
         // Date-templated directories (e.g. ~/.codex/sessions/{yyyy}/{mm}/{dd})
         // can drift from the provider's chosen calendar day because CLIs
@@ -616,6 +625,62 @@ function resolveJsonlSourcePathDetailed(src: NativeHistoryJsonlSource, input: Na
 //     'attribution_unknown') with no path, no messages, no providerSessionId —
 //     so no durable pin can be written from ambiguity.
 // ────────────────────────────────────────────────────────────────────────────
+
+/** Largest transcript scanned whole for prompt evidence; bigger files are
+ *  scanned head+tail (a session's prompts sit at its start and its end). */
+const PROMPT_EVIDENCE_SCAN_BYTES = 4 * 1024 * 1024;
+
+function readForPromptEvidence(p: string): string {
+    try {
+        const size = fs.statSync(p).size;
+        if (size <= PROMPT_EVIDENCE_SCAN_BYTES * 2) return fs.readFileSync(p, 'utf8');
+        const fd = fs.openSync(p, 'r');
+        try {
+            const head = Buffer.alloc(PROMPT_EVIDENCE_SCAN_BYTES);
+            const tail = Buffer.alloc(PROMPT_EVIDENCE_SCAN_BYTES);
+            fs.readSync(fd, head, 0, head.length, 0);
+            fs.readSync(fd, tail, 0, tail.length, size - tail.length);
+            return head.toString('utf8') + '\n' + tail.toString('utf8');
+        } finally { fs.closeSync(fd); }
+    } catch { return ''; }
+}
+
+/** Refresh this session's claim on the transcript it is exact-bound to, so a
+ *  same-workspace sibling's recency pick never lands on it. A denial is
+ *  ignored — an exact id bind stays authoritative for its own reader. */
+function claimOwnTranscript(p: string, input: NativeHistoryInput): void {
+    const owner = transcriptClaimOwnerToken(input.instanceId);
+    if (owner) claimTranscript(claimKeyForPath(p), owner);
+}
+
+/**
+ * Recency pick for stores that expose no session id up front (cursor's
+ * agent-transcripts, and any jsonl source without session_meta), made safe for
+ * two live sessions in one workspace: newest-mtime alone bound both to the same
+ * conversation (2026-10-05 provider matrix).
+ *
+ *   - a transcript another live session claimed is never picked;
+ *   - when this session has sent prompts, only a transcript containing one of
+ *     them is its own — that pick is claimed and owner-confirmed (pinnable);
+ *     none matching fails closed (no path) rather than borrowing a sibling's;
+ *   - with no recorded prompts (attached/restored session) the newest unclaimed
+ *     transcript is returned unconfirmed, as before.
+ */
+function pickRecentByPromptEvidence(candidates: string[], input: NativeHistoryInput): JsonlSourceResolution {
+    const owner = transcriptClaimOwnerToken(input.instanceId);
+    if (!owner) return { path: candidates[0] ?? null };
+    const unclaimed = candidates.filter(p => !isTranscriptClaimedByOther(claimKeyForPath(p), owner));
+    const snippets = sentPromptSnippets(input.instanceId);
+    if (snippets.length === 0) return { path: unclaimed[0] ?? null };
+    const own = unclaimed.find(p => containsSentPrompt(readForPromptEvidence(p), snippets));
+    if (!own) {
+        if (unclaimed.length > 0) LOG.debug('TranscriptClaim', `decision=no_prompt_evidence provider=${input.agentType || '?'} owner=${owner} candidates=${unclaimed.length} → unresolved (no borrowed transcript)`);
+        return { path: null };
+    }
+    const verdict = claimTranscript(claimKeyForPath(own), owner);
+    if (verdict === 'denied') return { path: null };
+    return { path: own, outcome: { attribution: 'claimed', ownerConfirmed: true } };
+}
 
 /** Canonical claim key for a transcript path: best-effort realpath so
  *  /tmp ↔ /private/tmp aliases of the same wire.jsonl share one claim. */
