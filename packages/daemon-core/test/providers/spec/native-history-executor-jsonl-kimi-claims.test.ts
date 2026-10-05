@@ -44,6 +44,7 @@ import {
     __resetTranscriptClaimRegistry,
 } from '../../../src/providers/native-history/transcript-claim-registry.js';
 import { readProviderChatHistory } from '../../../src/config/provider-native-history.js';
+import { __resetSentPromptRegistry, recordSentPrompt } from '../../../src/providers/native-history/sent-prompt-registry.js';
 
 // The shipped kimi nativeHistory.source (kept in sync with
 // adhdev-providers/cli/kimi/provider.v1.json).
@@ -138,11 +139,39 @@ beforeEach(() => {
     sessionsDir = path.join(tmpDir, '.kimi-code', 'sessions');
     fs.mkdirSync(sessionsDir, { recursive: true });
     __resetTranscriptClaimRegistry();
+    __resetSentPromptRegistry();
 });
 
 afterEach(() => {
     __resetTranscriptClaimRegistry();
+    __resetSentPromptRegistry();
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+});
+
+describe('kimi same-workspace attribution by sent prompts', () => {
+    // Two kimi sessions spawned within the spawn-grace window of each other in
+    // one folder: spawn proximity cannot tell their wires apart (both are
+    // "near" both spawns), and the first reader used to bind the only wire on
+    // disk even when it was the sibling's (2026-10-05 provider matrix).
+    it('each session binds the wire holding its own prompt', () => {
+        const now = Date.now();
+        writeSession({ sessionId: SESSION_A, workspace: WORKSPACE, hex12: '78117b8afba9', lines: lines(now, 'What is 17 times 23 A'), mtimeMs: now + 3000 });
+        writeSession({ sessionId: SESSION_B, workspace: WORKSPACE, hex12: '78117b8afba9', lines: lines(now, 'What is 19 times 21 B'), mtimeMs: now + 2000 });
+        recordSentPrompt('instance-A', 'What is 17 times 23 A prompt');
+        recordSentPrompt('instance-B', 'What is 19 times 21 B prompt');
+        expect(run({ workspace: WORKSPACE, sessionStartedAtMs: now, instanceId: 'instance-B' })!.providerSessionId).toBe(UUID_B);
+        expect(run({ workspace: WORKSPACE, sessionStartedAtMs: now, instanceId: 'instance-A' })!.providerSessionId).toBe(UUID_A);
+    });
+
+    it('does not take the only wire on disk when it holds none of this session\'s prompts', () => {
+        const now = Date.now();
+        writeSession({ sessionId: SESSION_A, workspace: WORKSPACE, hex12: '78117b8afba9', lines: lines(now, 'What is 17 times 23 A'), mtimeMs: now + 2000 });
+        recordSentPrompt('instance-B', 'What is 19 times 21 B prompt');
+        expect(run({ workspace: WORKSPACE, sessionStartedAtMs: now, instanceId: 'instance-B' })).toBeNull();
+        // A's own reader still binds it afterwards.
+        recordSentPrompt('instance-A', 'What is 17 times 23 A prompt');
+        expect(run({ workspace: WORKSPACE, sessionStartedAtMs: now, instanceId: 'instance-A' })!.providerSessionId).toBe(UUID_A);
+    });
 });
 
 describe('kimi transcript claim attribution (Stage 4)', () => {

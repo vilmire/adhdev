@@ -103669,10 +103669,16 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       if (unclaimed.length === 0) return failClosedResolution("already_claimed", workspaceHint, owner);
       const eligible = sessionFloorMs > 0 ? unclaimed.filter((c) => (c.birth > 0 ? c.birth : c.mtime) >= sessionFloorMs - SPAWN_BIND_GRACE_MS) : unclaimed;
       if (eligible.length === 0) return { path: null };
+      const snippets = sentPromptSnippets(input.instanceId);
       let chosen = null;
-      if (eligible.length === 1) {
+      if (snippets.length > 0) {
+        const withPrompt = eligible.filter((c) => containsSentPrompt(readForPromptEvidence(c.p), snippets));
+        if (withPrompt.length === 1) chosen = withPrompt[0].p;
+        else if (withPrompt.length === 0) return { path: null };
+      }
+      if (!chosen && eligible.length === 1) {
         chosen = eligible[0].p;
-      } else {
+      } else if (!chosen) {
         chosen = pickUniqueSpawnEvidence(eligible, sessionFloorMs);
       }
       if (!chosen) return failClosedResolution("ambiguous", workspaceHint, owner);

@@ -787,10 +787,21 @@ function resolveSidecarClaimSource(
         : unclaimed;
     if (eligible.length === 0) return { path: null };
 
+    // Content evidence first: the wire containing a prompt THIS session sent
+    // is its own. It also stops a lone candidate from being taken when it is a
+    // sibling's whose own reader has not claimed it yet (the first reader used
+    // to bind whatever single wire existed). No prompts recorded (attached /
+    // restored session) → the spawn-evidence rules below, unchanged.
+    const snippets = sentPromptSnippets(input.instanceId);
     let chosen: string | null = null;
-    if (eligible.length === 1) {
+    if (snippets.length > 0) {
+        const withPrompt = eligible.filter(c => containsSentPrompt(readForPromptEvidence(c.p), snippets));
+        if (withPrompt.length === 1) chosen = withPrompt[0].p;
+        else if (withPrompt.length === 0) return { path: null };
+    }
+    if (!chosen && eligible.length === 1) {
         chosen = eligible[0].p;
-    } else {
+    } else if (!chosen) {
         // ≥2 viable candidates: only unique spawn-proximity evidence may
         // decide. A wire born within ±grace of THIS session's spawn is its own;
         // a sibling spawned seconds later falls outside the window, so each
