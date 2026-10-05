@@ -510,6 +510,23 @@ export const meshNodeLifecycleHandlers: Record<string, MedFamilyHandler> = {
             }
             const node = updateNode(meshId, nodeId, patch as any);
             if (node) {
+                // Keep the inline cache coherent with the config write. get_mesh and
+                // the launch path read it FIRST (preferInline), so a clone node whose
+                // snapshot sits there kept its pre-update slots: mesh_node_slots set
+                // reported success and the very next mesh_launch_session was still
+                // refused for the new provider (2026-10-05 provider matrix).
+                const cached = await ctx.getMeshForCommand(meshId, undefined, { preferInline: true });
+                const cachedNode = cached?.inline && Array.isArray(cached.mesh?.nodes)
+                    ? cached.mesh.nodes.find((n: any) => meshNodeIdMatches(n, nodeId))
+                    : undefined;
+                if (cachedNode) {
+                    cachedNode.policy = node.policy;
+                    if (node.systemPrompt) cachedNode.systemPrompt = node.systemPrompt;
+                    else delete cachedNode.systemPrompt;
+                    if (node.capabilities?.length) cachedNode.capabilities = node.capabilities;
+                    else delete cachedNode.capabilities;
+                    ctx.updateInlineMeshNode(meshId, cached!.mesh, cachedNode);
+                }
                 // Provider priority / systemPrompt changes don't touch
                 // the queue revision, so without a manual bust the
                 // cached aggregate keeps surfacing pre-update values
