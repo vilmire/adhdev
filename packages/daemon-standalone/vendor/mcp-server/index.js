@@ -104106,6 +104106,10 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       summaryField: "last_agent_message",
       turnIdField: "turn_id"
     };
+    function codexTurnErrorText(payload) {
+      const message = typeof payload?.error?.message === "string" ? payload.error.message.trim() : "";
+      return message ? `\u26A0\uFE0F ${message}` : "";
+    }
     function codexSessionsRoot() {
       return path46.join(os222.homedir(), ".codex", "sessions");
     }
@@ -104345,7 +104349,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
               records,
               sessionId,
               receivedAt,
-              flattenCodexContent(payload.last_agent_message),
+              flattenCodexContent(payload.last_agent_message) || codexTurnErrorText(payload),
               detectedWorkspace,
               recordIndex
             );
