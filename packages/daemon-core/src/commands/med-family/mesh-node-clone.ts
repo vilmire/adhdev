@@ -545,8 +545,29 @@ export const meshNodeCloneHandlers: Record<string, MedFamilyHandler> = {
                     console.log(`[mesh] clone_mesh_node base sync: ${result.baseSync.action} (startRef=${result.baseSync.startRef})`);
                 }
 
-                const node = await registerClonedWorktreeNode(ctx, meshId, meshRecord, sourceNode, sourceNodeId, result, identity);
-                if (!node) return { ready: false as const, done: { success: false, error: 'Failed to register worktree node' } as CommandRouterResult };
+                // Registration can refuse AFTER `git worktree add` (e.g. "Maximum 10 nodes
+                // per mesh"). Undo the worktree then, or every refused clone leaves an
+                // orphan directory + branch no mesh node points at (2026-10-05 provider
+                // matrix). The branch goes only via safe delete: a pre-existing branch
+                // with unmerged work is kept.
+                const repoRoot = sourceNode.repoRoot || sourceNode.workspace;
+                const rollbackWorktree = async (reason: string) => {
+                    const { removeWorktree, deleteBranchRef } = await import('../../git/git-worktree.js');
+                    try { await removeWorktree(repoRoot, result.worktreePath); } catch (e: any) { console.warn(`[mesh] clone rollback: worktree remove failed (${reason}): ${e?.message || e}`); }
+                    try { await deleteBranchRef(repoRoot, result.branch, { safeDeleteOnly: true }); } catch { /* best-effort */ }
+                    console.warn(`[mesh] clone_mesh_node rolled back ${result.worktreePath}: ${reason}`);
+                };
+                let node: Awaited<ReturnType<typeof registerClonedWorktreeNode>>;
+                try {
+                    node = await registerClonedWorktreeNode(ctx, meshId, meshRecord, sourceNode, sourceNodeId, result, identity);
+                } catch (error: any) {
+                    await rollbackWorktree(error?.message || String(error));
+                    throw error;
+                }
+                if (!node) {
+                    await rollbackWorktree('registration returned no node');
+                    return { ready: false as const, done: { success: false, error: 'Failed to register worktree node' } as CommandRouterResult };
+                }
                 return { ready: true as const, meshRecord, mesh, sourceNode, result, node, identity };
             });
             if (!prepared.ready) {
