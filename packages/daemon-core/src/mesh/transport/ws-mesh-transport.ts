@@ -282,7 +282,7 @@ export class WsMeshTransport extends MeshRpcEndpoint {
         const host = canon(hostDaemonId);
         let removed = false;
         for (const link of Array.from(this.links.values())) {
-            if (link.hostDaemonId !== host) continue;
+            if (!daemonIdsEquivalent(link.hostDaemonId, host)) continue;
             if (meshId !== undefined && link.meshId !== meshId) continue;
             this.stopLink(link, 'Mesh host link removed');
             removed = true;
@@ -605,7 +605,7 @@ export class WsMeshTransport extends MeshRpcEndpoint {
     private linkForHost(hostDaemonId: string): HostLink | undefined {
         let found: HostLink | undefined;
         for (const link of this.links.values()) {
-            if (link.hostDaemonId !== hostDaemonId) continue;
+            if (!daemonIdsEquivalent(link.hostDaemonId, hostDaemonId)) continue;
             // Prefer the link that is dialing right now, as the most current signal.
             if (!found || (link.ws && !found.ws)) found = link;
         }
