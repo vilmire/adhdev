@@ -7,6 +7,8 @@
  * the input log (write-origin source), project addressing, staged project
  * notes, the review-turn trigger/whitelist, and the per-daemon store
  * instances the store verbs (commands/high-family/assistant-store.ts) use.
+ * Unit 3 cores: the system prompt builder, the `assistant.json` registry and
+ * the relay (ports only; boot wiring pending).
  * Not yet wired into sessions, MCP or the dashboard, and deliberately not
  * re-exported from the daemon-core package barrel: the only consumers are
  * in-package (the store verbs now, launch_assistant / the relay later).
@@ -27,3 +29,8 @@ export * from './assistant-review.js';
 export * from './assistant-projects.js';
 export * from './note-staging.js';
 export * from './assistant-services.js';
+export * from './assistant-prompt.js';
+export * from './assistant-registry.js';
+export * from './assistant-relay-format.js';
+export * from './assistant-relay-store.js';
+export * from './assistant-relay.js';
