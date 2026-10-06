@@ -146,6 +146,15 @@ export interface MeshEventNotice {
 export interface TurnLedger {
     readonly store: TurnStore;
     readonly selfDaemonId: string;
+    /**
+     * Ledger-clock time this ledger instance was created — one per daemon
+     * process (boot S7). An attempt with `acceptedAt` strictly before this was
+     * opened by a PREVIOUS daemon incarnation; the boot reconciliation
+     * (`reconcile.ts` `closeInterruptedPlainAttempts`, run before hosted-
+     * session restore) uses it to close plain attempts a restart interrupted
+     * even when their session is restored live.
+     */
+    readonly incarnationStartedAt: number;
     observe(evidence: TurnEvidence, opts?: ObserveOptions): ObserveResult;
     /** Attempt-less coordinator notice (`turn.notify{notify:'mesh_event'}`); replaces the legacy pending-events outbox insert. */
     notifyMeshEvent(notice: MeshEventNotice): { eventId: string; inserted: boolean };
@@ -191,6 +200,7 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
     const policy = deps.policy ?? DEFAULT_TURN_POLICY;
     const now = deps.now ?? (() => Date.now());
     const log = deps.log ?? DEFAULT_LOG;
+    const incarnationStartedAt = now();
     const ports = deps.ports ?? {};
     const autoFlush = deps.autoFlush !== false;
     const counters: TurnLedgerCounters = {
@@ -577,6 +587,7 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
     return {
         store,
         selfDaemonId: deps.selfDaemonId,
+        incarnationStartedAt,
         observe,
         notifyMeshEvent,
         claimDelivery,

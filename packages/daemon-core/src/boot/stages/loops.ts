@@ -39,7 +39,7 @@ import { createComponentsProbeReader, type TranscriptAnalyzer, type TranscriptOb
 import { resolveProbeLocation } from '../../mesh/turn-ledger/targets.js';
 import { readLiveHeldRuntime } from '../../mesh/mesh-node-git-refresher.js';
 import { startTurnScheduler } from '../../mesh/turn-ledger/scheduler.js';
-import { reconcileOrphanedPlainAttemptsOnBoot } from './mesh-runtime.js';
+import { closeInterruptedPlainAttemptsOnBoot, reconcileOrphanedPlainAttemptsOnBoot } from './mesh-runtime.js';
 
 /**
  * Quota: hydrate the last persisted snapshots, THEN the one-shot boot refresh.
@@ -216,6 +216,16 @@ export function stopTurnLoops(components: TurnWiredComponents): void {
 
 export async function startLoops(s7: MeshRuntimeStage): Promise<Disposer> {
     const { cfg, components } = s7;
+
+    // Plain attempts a restart interrupted (assistant-layer design 2026-10-07,
+    // appendix B item 2): close every open plain attempt the previous
+    // incarnation opened BEFORE restore, so a session restored live cannot
+    // fold its next turn into the stale attempt (R32). First in S8, before any
+    // loop or session can emit turn evidence. No liveness needed —
+    // the attempt predates this process, so this process can never see it end.
+    try { closeInterruptedPlainAttemptsOnBoot(components as TurnWiredComponents); } catch (e: any) {
+        LOG.warn('TurnLedger', `Interrupted-plain-attempt reconciliation failed: ${e?.message || e}`);
+    }
 
     s7.cdpInitializer.startPeriodicScan(cfg.cdpScanIntervalMs ?? DEFAULT_CDP_SCAN_INTERVAL_MS);
     s7.cdpInitializer.startDiscovery(DEFAULT_CDP_DISCOVERY_INTERVAL_MS);

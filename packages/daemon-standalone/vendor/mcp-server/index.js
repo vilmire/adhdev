@@ -149142,6 +149142,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       const policy = deps.policy ?? DEFAULT_TURN_POLICY;
       const now = deps.now ?? (() => Date.now());
       const log = deps.log ?? DEFAULT_LOG;
+      const incarnationStartedAt = now();
       const ports = deps.ports ?? {};
       const autoFlush = deps.autoFlush !== false;
       const counters4 = {
@@ -149480,6 +149481,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       return {
         store: store2,
         selfDaemonId: deps.selfDaemonId,
+        incarnationStartedAt,
         observe,
         notifyMeshEvent,
         claimDelivery,
@@ -152564,7 +152566,7 @@ ${notice.notice}${supersededHint}`;
     function isOrphanCandidate(attempt) {
       return attempt.scope === "plain";
     }
-    function reconcileOrphanedPlainAttempts(deps) {
+    function sweepPlainAttempts(deps, shouldClose, label) {
       const log = deps.log ?? NOOP_LOG3;
       const now = deps.now ?? (() => Date.now());
       const observedBy = deps.observedBy ?? deps.ledger.selfDaemonId;
@@ -152573,18 +152575,12 @@ ${notice.notice}${supersededHint}`;
       try {
         candidates = deps.ledger.store.listOpenAttempts({ ownerDaemonId: observedBy }).filter(isOrphanCandidate);
       } catch (error) {
-        log.warn(`turn-ledger: orphaned-plain-attempt reconciliation could not list open attempts: ${error instanceof Error ? error.message : String(error)}`);
+        log.warn(`turn-ledger: ${label} reconciliation could not list open attempts: ${error instanceof Error ? error.message : String(error)}`);
         return report;
       }
       for (const attempt of candidates) {
         report.checked++;
-        let live;
-        try {
-          live = deps.isSessionLive(attempt.sessionId);
-        } catch {
-          continue;
-        }
-        if (live) continue;
+        if (shouldClose(attempt) !== true) continue;
         const evidence = {
           eventId: `daemon_restart:${attempt.attemptId}:g${attempt.generation}`,
           at: now(),
@@ -152601,14 +152597,37 @@ ${notice.notice}${supersededHint}`;
             report.closed++;
             report.closedAttemptIds.push(attempt.attemptId);
           } else if (result.verdict !== "rejected" || result.rejection !== "already_terminal") {
-            log.warn(`turn-ledger: orphaned-plain-attempt reconciliation observed ${attempt.attemptId} with unexpected verdict ${result.verdict}${result.rejection ? `/${result.rejection}` : ""}`);
+            log.warn(`turn-ledger: ${label} reconciliation observed ${attempt.attemptId} with unexpected verdict ${result.verdict}${result.rejection ? `/${result.rejection}` : ""}`);
           }
         } catch (error) {
-          log.warn(`turn-ledger: orphaned-plain-attempt reconciliation failed for ${attempt.attemptId}: ${error instanceof Error ? error.message : String(error)}`);
+          log.warn(`turn-ledger: ${label} reconciliation failed for ${attempt.attemptId}: ${error instanceof Error ? error.message : String(error)}`);
         }
       }
+      return report;
+    }
+    function predatesIncarnationFn(deps) {
+      const startedAt = deps.incarnationStartedAt ?? deps.ledger.incarnationStartedAt;
+      if (typeof startedAt !== "number" || !Number.isFinite(startedAt)) return () => false;
+      return (attempt) => attempt.acceptedAt < startedAt;
+    }
+    function closeInterruptedPlainAttempts(deps) {
+      const predates = predatesIncarnationFn(deps);
+      const report = sweepPlainAttempts(deps, predates, "interrupted-plain-attempt");
       if (report.closed > 0) {
-        log.info(`turn-ledger: closed ${report.closed} orphaned plain attempt(s) after restart`);
+        (deps.log ?? NOOP_LOG3).info(`turn-ledger: closed ${report.closed} plain attempt(s) interrupted by the daemon restart`);
+      }
+      return report;
+    }
+    function reconcileOrphanedPlainAttempts(deps) {
+      const report = sweepPlainAttempts(deps, (attempt) => {
+        try {
+          return !deps.isSessionLive(attempt.sessionId);
+        } catch {
+          return null;
+        }
+      }, "orphaned-plain-attempt");
+      if (report.closed > 0) {
+        (deps.log ?? NOOP_LOG3).info(`turn-ledger: closed ${report.closed} orphaned plain attempt(s) after restart`);
       }
       return report;
     }
@@ -153047,6 +153066,17 @@ ${notice.notice}${supersededHint}`;
         }
       };
       return { ...s6, components, disposeMeshRuntime };
+    }
+    function closeInterruptedPlainAttemptsOnBoot(components) {
+      const ledger = components.turnLedger;
+      if (!ledger) return null;
+      return closeInterruptedPlainAttempts({
+        ledger,
+        log: {
+          info: (m) => LOG.info("TurnLedger", m),
+          warn: (m) => LOG.warn("TurnLedger", m)
+        }
+      });
     }
     function reconcileOrphanedPlainAttemptsOnBoot(components) {
       const ledger = components.turnLedger;
@@ -154179,6 +154209,11 @@ ${notice.notice}${supersededHint}`;
     }
     async function startLoops(s7) {
       const { cfg, components } = s7;
+      try {
+        closeInterruptedPlainAttemptsOnBoot(components);
+      } catch (e) {
+        LOG.warn("TurnLedger", `Interrupted-plain-attempt reconciliation failed: ${e?.message || e}`);
+      }
       s7.cdpInitializer.startPeriodicScan(cfg.cdpScanIntervalMs ?? DEFAULT_CDP_SCAN_INTERVAL_MS);
       s7.cdpInitializer.startDiscovery(DEFAULT_CDP_DISCOVERY_INTERVAL_MS);
       s7.poller.start();

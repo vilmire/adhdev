@@ -39,7 +39,7 @@ import { formatTurnLedgerMigrationV2Line } from '../../mesh/turn-ledger/migrate-
 import { formatTurnLedgerMigrationV3Line } from '../../mesh/turn-ledger/migrate-v3.js';
 import { createMeshRuntimeTurnLedger, revokeCutSessionWorkerBind } from '../../mesh/turn-ledger/runtime-ledger.js';
 import { createLateBoundProbePort } from '../../mesh/turn-ledger/scheduler.js';
-import { reconcileOrphanedPlainAttempts, type ReconcileOrphanedPlainAttemptsReport } from '../../mesh/turn-ledger/reconcile.js';
+import { closeInterruptedPlainAttempts, reconcileOrphanedPlainAttempts, type ReconcileOrphanedPlainAttemptsReport } from '../../mesh/turn-ledger/reconcile.js';
 import { setActiveTurnLedgerForIpc } from '../../commands/low-family/turn-ledger-ipc.js';
 import { createTurnEvidencePort } from '../../providers/turn-evidence-port.js';
 import type { TurnLedger } from '../../mesh/turn-ledger/ledger.js';
@@ -512,6 +512,28 @@ export function bootMeshRuntime(s6: ProjectionsStage): MeshRuntimeStage {
     };
 
     return { ...s6, components, disposeMeshRuntime };
+}
+
+/**
+ * Boot-only closure of plain attempts a restart interrupted (assistant-layer
+ * design 2026-10-07, appendix B item 2): every open plain attempt the
+ * PREVIOUS daemon incarnation opened (acceptedAt < the ledger's
+ * `incarnationStartedAt`) is closed `failed`/`daemon_restart` through the
+ * reducer, live session or not. The caller (`startLoops`, S8) MUST invoke
+ * this exactly once, BEFORE `cliManager.restoreHostedSessions()` — a session
+ * restored live would otherwise have its next `turn_started` absorbed into
+ * the stale attempt (R32), folding two turns into one.
+ */
+export function closeInterruptedPlainAttemptsOnBoot(components: DaemonComponents): ReconcileOrphanedPlainAttemptsReport | null {
+    const ledger = components.turnLedger;
+    if (!ledger) return null;
+    return closeInterruptedPlainAttempts({
+        ledger,
+        log: {
+            info: (m) => LOG.info('TurnLedger', m),
+            warn: (m) => LOG.warn('TurnLedger', m),
+        },
+    });
 }
 
 /**
