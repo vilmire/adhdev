@@ -53,7 +53,7 @@ class RecordingFactory implements PtyTransportFactory {
     }
 }
 
-function imagePasteSpec(optIn: boolean): Record<string, unknown> {
+function imagePasteSpec(optIn: boolean, textOptIn = false): Record<string, unknown> {
     return {
         $schema: 'adhdev:cli/spec@4',
         id: 'test.posix-image-paste',
@@ -63,6 +63,7 @@ function imagePasteSpec(optIn: boolean): Record<string, unknown> {
             submit_key: '\r',
             delay_ms_before_submit: 50,
             ...(optIn ? { posix_bracketed_paste_for_images: true } : {}),
+            ...(textOptIn ? { posix_bracketed_paste_text: true } : {}),
         },
         sections: { footer: { from_bottom: 1 } },
         states: [
@@ -113,10 +114,10 @@ function setPlatform(p: NodeJS.Platform): void {
 
 const BODY = '/tmp/adhdev-input-media/adhdev-input-image-1-0-aaaa.png\n/tmp/adhdev-input-media/adhdev-input-image-1-1-bbbb.png\nwhat are these?';
 
-async function collectWrites(optIn: boolean, bracketedPaste: boolean, totalWaitMs = 600): Promise<string[]> {
+async function collectWrites(optIn: boolean, bracketedPaste: boolean, totalWaitMs = 600, textOptIn = false, body = BODY): Promise<string[]> {
     const factory = new RecordingFactory();
     const driver = new FsmDriver({
-        specPath: writeSpec(imagePasteSpec(optIn)),
+        specPath: writeSpec(imagePasteSpec(optIn, textOptIn)),
         workingDir: os.tmpdir(),
         hotReload: false,
         transportFactory: factory,
@@ -127,7 +128,7 @@ async function collectWrites(optIn: boolean, bracketedPaste: boolean, totalWaitM
         pty.feed('\n>\n? for shortcuts');
         await sleep(200);
         const before = pty.writes.length;
-        driver.dispatch({ kind: 'send_message', text: BODY, bracketedPaste });
+        driver.dispatch({ kind: 'send_message', text: body, bracketedPaste });
         await sleep(totalWaitMs);
         return pty.writes.slice(before);
     } finally {
@@ -168,6 +169,34 @@ describe('FsmDriver -- POSIX bracketed-paste image delivery', () => {
         setPlatform('darwin');
         const writes = await collectWrites(false, true);
         expect(writes).toContain(BODY);
+        expect(writes.join('')).not.toContain(BP_OPEN);
+    });
+});
+
+// claude-cli 2.1.29x: a long raw text write split across pipe chunks reached the
+// model as its last paste burst only (live, 2026-10-06). posix_bracketed_paste_text
+// wraps every body, so one paste carries the whole task.
+describe('FsmDriver -- POSIX bracketed-paste for plain text (posix_bracketed_paste_text)', () => {
+    afterEach(() => setPlatform(ORIGINAL_PLATFORM));
+    const TEXT = 'HEADWORD. ' + 'filler line, the quick brown fox. '.repeat(60);
+
+    it('wraps a plain-text body (no image flag) when the spec opts in', async () => {
+        setPlatform('darwin');
+        const writes = await collectWrites(false, false, 600, true, TEXT);
+        expect(writes[0]).toBe(`${BP_OPEN}${TEXT}${BP_CLOSE}`);
+        expect(writes).not.toContain(TEXT);
+        expect(writes.filter(w => w === '\r').length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('leaves plain text raw when the spec does not opt in', async () => {
+        setPlatform('darwin');
+        const writes = await collectWrites(false, false, 600, false, TEXT);
+        expect(writes.join('')).not.toContain(BP_OPEN);
+    });
+
+    it('never wraps on win32 (ConPTY takes its own split path)', async () => {
+        setPlatform('win32');
+        const writes = await collectWrites(false, false, 600, true, TEXT);
         expect(writes.join('')).not.toContain(BP_OPEN);
     });
 });
