@@ -4,6 +4,7 @@
   "description": "ADHDev standalone daemon — embedded HTTP/WS server for local dashboard",
   "main": "dist/index.js",
   "bin": {
+    "daemon-standalone": "./dist/index.js",
     "adhdev-standalone": "./dist/index.js",
     "adhdev": "./dist/index.js",
     "adhdev-mcp": "./vendor/mcp-server/index.js"
