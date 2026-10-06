@@ -68,6 +68,7 @@ import { meshEventsTopic } from '../../seqscribe/topics.js';
 import type { SeqscribeRuntime } from '../../seqscribe/runtime.js';
 import { setupQuotaEventRefresh } from '../../quota/refresh-triggers.js';
 import { setupQuotaRefreshLoop } from '../../quota/refresh-loop.js';
+import { wireAssistantRuntime } from '../../assistant/assistant-runtime.js';
 import { getMachineId } from '../../config/config.js';
 import { LOG } from '../../logging/logger.js';
 import { daemonIdsEquivalent, expandDaemonIdForms, type SummaryRef } from '@adhdev/mesh-shared';
@@ -497,11 +498,16 @@ export function bootMeshRuntime(s6: ProjectionsStage): MeshRuntimeStage {
     // its event-driven complement (refetch the provider that just finished a turn).
     components.quotaRefreshLoop = setupQuotaRefreshLoop(components);
     components.quotaEventRefresh = setupQuotaEventRefresh(components);
+    // Assistant layer (design 2026-10-07 §4.3/§4.5): registry + relay bus
+    // subscribers and timers — inert until an assistant exists. After the
+    // router has its components (the relay reads read_chat in-process).
+    const assistant = wireAssistantRuntime(components);
 
     let disposed = false;
     const disposeMeshRuntime = (): void => {
         if (disposed) return;
         disposed = true;
+        try { assistant.dispose(); } catch { /* noop */ }
         try { components.quotaRefreshLoop?.stop(); } catch { /* noop */ }
         try { components.quotaEventRefresh?.stop(); } catch { /* noop */ }
         try { offForwarding(); } catch { /* noop */ }

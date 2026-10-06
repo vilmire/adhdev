@@ -97,6 +97,16 @@ interface Batch {
     maxTimer: unknown;
 }
 
+type Part = { text: string; source: AssistantInputSource; messageId: string; meshId?: string };
+
+/** One entry of `assistant_pending_relays` → `assistantEvents` (MCP-only assistant). */
+export interface AssistantPulledEvent {
+    source: AssistantInputSource;
+    messageId: string;
+    text: string;
+    meshId?: string;
+}
+
 type Item =
     | { kind: 'relay'; meshId: string; coordinatorSessionId: string; attemptIds: string[]; outcome: TurnOutcome; committedAt: number; idle: boolean }
     | { kind: 'line'; source: AssistantInputSource; text: string; messageId: string; meshId?: string };
@@ -398,9 +408,32 @@ export class AssistantRelay {
     private async deliverOnce(): Promise<void> {
         const sid = this.ports.assistantSessionId();
         if (!sid || this.pendingHuman.length || !this.ports.isAssistantReady(sid)) return;
-        const now = this.clock.now();
+        const { taken, parts } = await this.takeParts(this.clock.now());
+        if (!parts.length) {
+            this.queue = this.queue.filter((i) => !taken.includes(i));
+            return;
+        }
+        const messageId = parts.length === 1 ? parts[0]!.messageId : `${parts[0]!.messageId}+${parts.length - 1}`;
+        const outcome = await this.ports.submit(sid, { text: parts.map((p) => p.text).join('\n\n'), messageId, policy: { mode: 'queue' } });
+        if (outcome.kind === 'refused') return;
+        this.commitTaken(taken, parts, sid);
+    }
+
+    /**
+     * MCP-only pull (§4.5): claim what is queued now (same rendering/budget as a
+     * PTY delivery) and mark it delivered; `sessionId` gets the input-log entries.
+     */
+    async pullPending(sessionId: string | null): Promise<AssistantPulledEvent[]> {
+        await this.idle();
+        const { taken, parts } = await this.takeParts(this.clock.now());
+        this.commitTaken(taken, parts, sessionId);
+        return parts.map((p) => ({ source: p.source, messageId: p.messageId, text: p.text, ...(p.meshId ? { meshId: p.meshId } : {}) }));
+    }
+
+    /** Render the head of the queue into parts within the delivery budget (no side effects). */
+    private async takeParts(now: number): Promise<{ taken: Item[]; parts: Part[] }> {
         const taken: Item[] = [];
-        const parts: Array<{ text: string; source: AssistantInputSource; messageId: string }> = [];
+        const parts: Part[] = [];
         const folded = new Map<string, number>();
         let size = 0;
         for (const item of this.queue) {
@@ -409,8 +442,8 @@ export class AssistantRelay {
                 taken.push(item);
                 continue;
             }
-            const part = item.kind === 'line'
-                ? { text: item.text, source: item.source, messageId: item.messageId }
+            const part: Part = item.kind === 'line'
+                ? { text: item.text, source: item.source, messageId: item.messageId, ...(item.meshId ? { meshId: item.meshId } : {}) }
                 : await this.renderRelay(item);
             const cost = codePoints(part.text) + 2;
             if (parts.length && size + cost > RELAY_DELIVERY_MAX_CHARS) break;
@@ -420,18 +453,16 @@ export class AssistantRelay {
         }
         for (const [meshId, count] of folded) {
             const text = buildFoldedBacklogLine(this.ports.projectSlug(meshId) ?? meshId, count);
-            parts.push({ text, source: 'relay', messageId: `fold:${meshId}:${now}` });
+            parts.push({ text, source: 'relay', messageId: `fold:${meshId}:${now}`, meshId });
         }
-        if (!parts.length) {
-            this.queue = this.queue.filter((i) => !taken.includes(i));
-            return;
-        }
-        const messageId = parts.length === 1 ? parts[0]!.messageId : `${parts[0]!.messageId}+${parts.length - 1}`;
-        const outcome = await this.ports.submit(sid, { text: parts.map((p) => p.text).join('\n\n'), messageId, policy: { mode: 'queue' } });
-        if (outcome.kind === 'refused') return;
+        return { taken, parts };
+    }
+
+    /** The taken items reached the assistant: dequeue, log, mark rows delivered, reset signals. */
+    private commitTaken(taken: Item[], parts: Part[], sid: string | null): void {
         this.queue = this.queue.filter((i) => !taken.includes(i));
         const at = this.clock.now();
-        for (const p of parts) this.ports.inputLog.append(sid, p.source, { at, messageId: p.messageId });
+        if (sid) for (const p of parts) this.ports.inputLog.append(sid, p.source, { at, messageId: p.messageId });
         const relayItems = taken.filter((i): i is Item & { kind: 'relay' } => i.kind === 'relay');
         this.ports.store.markDelivered(relayItems.flatMap((i) => i.attemptIds), at);
         const meshes = [...new Set(relayItems.map((i) => i.meshId))];
@@ -443,7 +474,12 @@ export class AssistantRelay {
         if (meshes.length) this.ports.onRelayDelivered?.(meshes, at);
     }
 
-    private async renderRelay(item: Item & { kind: 'relay' }): Promise<{ text: string; source: AssistantInputSource; messageId: string }> {
+    /** Last relay delivery to the assistant for the mesh (this process), or null. */
+    lastRelayAtFor(meshId: string): number | null {
+        return this.lastRelayAt.get(meshId) ?? null;
+    }
+
+    private async renderRelay(item: Item & { kind: 'relay' }): Promise<Part> {
         let body: string | null = null;
         try {
             body = await this.ports.readCoordinatorTail(item.coordinatorSessionId);
@@ -458,6 +494,6 @@ export class AssistantRelay {
             earlierTurns: item.attemptIds.length - 1,
             idle: item.idle,
         });
-        return { text, source: 'relay', messageId: relayMessageId(item.meshId, item.attemptIds[item.attemptIds.length - 1]!) };
+        return { text, source: 'relay', messageId: relayMessageId(item.meshId, item.attemptIds[item.attemptIds.length - 1]!), meshId: item.meshId };
     }
 }

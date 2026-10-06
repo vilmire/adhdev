@@ -58,6 +58,9 @@ describe('launch provenance args', () => {
     expect(inferLaunchedBy({ meshNodeFor: 'mesh-1' })).toBe('mesh')
     expect(inferLaunchedBy({ autoApprove: true })).toBe('api')
     expect(inferLaunchedBy(undefined)).toBe('api')
+    // Assistant layer: the assistant session's own stamp wins.
+    expect(inferLaunchedBy({ assistant: true })).toBe('assistant')
+    expect(inferLaunchedBy({ assistant: true, meshCoordinatorFor: 'mesh-1' })).toBe('assistant')
   })
 })
 
@@ -234,5 +237,17 @@ describe('SessionRegistry launch record', () => {
     registry.setLaunchRecord('s1', record('s1'))
     registry.register({ ...target('s1'), workspace: '/moved' }, 'launch')
     expect(registry.get('s1')?.launch?.model.requested).toBe('sonnet')
+  })
+})
+
+describe('withSessionAnchorEnv (launch_cli session-anchor env)', () => {
+  it('stamps the coordinator id for a coordinator and the assistant id for the assistant only', async () => {
+    const { withSessionAnchorEnv } = await import('../../src/commands/cli-manager-launch.js')
+    expect(withSessionAnchorEnv({ settingsOverride: { meshCoordinatorFor: 'm1' } }, 'k1')?.extraEnv)
+      .toEqual({ ADHDEV_COORDINATOR_SESSION_ID: 'k1' })
+    expect(withSessionAnchorEnv({ settingsOverride: { assistant: true }, extraEnv: { A: 'b' } }, 'k2')?.extraEnv)
+      .toEqual({ A: 'b', ADHDEV_ASSISTANT_SESSION_ID: 'k2' })
+    expect(withSessionAnchorEnv({ settingsOverride: { assistant: 'yes' } }, 'k3')?.extraEnv).toBeUndefined()
+    expect(withSessionAnchorEnv(undefined, 'k4')).toBeUndefined()
   })
 })
