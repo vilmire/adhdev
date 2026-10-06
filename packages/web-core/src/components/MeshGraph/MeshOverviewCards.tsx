@@ -44,6 +44,8 @@ import {
     type AsyncRefineJob,
 } from './meshOverviewPrimitives';
 import { MeshOverviewDetailModal } from './MeshOverviewDetails';
+import MeshMachinePairingCard, { MeshNodePeerLinkBadge } from './MeshMachinePairingCard';
+import { useBaseDaemonIdentity } from '../../context/BaseDaemonContext';
 
 const EMPTY_LEDGER_SUMMARY: RepoMeshLedgerSummaryStatus = {
     meshId: '',
@@ -98,6 +100,9 @@ export default function MeshOverviewCards({
     // down. Aliased to `canonicalStatus` to make that contract explicit.
     const { theme } = useTheme()
     const meshTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
+    // Standalone has no P2P layer; there, machines join a mesh by manual
+    // pairing (design 2026-10-07 §4.6). Cloud joins machines via the account.
+    const { usesP2P } = useBaseDaemonIdentity()
 
     const queueSummary: RepoMeshQueueSummary | null = canonicalStatus.queue?.summary ?? null
     const queueTasks: RepoMeshQueueTask[] = canonicalStatus.queue?.tasks ?? []
@@ -197,7 +202,17 @@ export default function MeshOverviewCards({
                 />
             </div>
 
-            <NodesCard meshTheme={meshTheme} nodes={canonicalStatus.nodes} />
+            <NodesCard meshTheme={meshTheme} nodes={canonicalStatus.nodes} showPeerLink={usesP2P === false} />
+
+            {usesP2P === false && (
+                <MeshMachinePairingCard
+                    meshTheme={meshTheme}
+                    status={canonicalStatus}
+                    daemonId={daemonId}
+                    meshId={meshId ?? canonicalStatus.meshId ?? null}
+                    sendDaemonCommand={sendDaemonCommand}
+                />
+            )}
 
             <div className="grid gap-3 sm:grid-cols-2">
                 <SessionsCard
@@ -469,7 +484,9 @@ function convergenceBadge(node: RepoMeshNodeStatus, t: (key: string) => string):
     return null
 }
 
-function NodesCard({ meshTheme, nodes }: { meshTheme: MeshGraphTheme; nodes: RepoMeshNodeStatus[] }) {
+// showPeerLink: standalone only — the direct-WS link badge (cloud shows peer
+// state elsewhere and keeps its node rows unchanged).
+function NodesCard({ meshTheme, nodes, showPeerLink = false }: { meshTheme: MeshGraphTheme; nodes: RepoMeshNodeStatus[]; showPeerLink?: boolean }) {
     const { t } = useTranslation('common')
     return (
         <Card meshTheme={meshTheme} title={t('mesh.overview.nodesCard')} count={nodes.length}>
@@ -488,6 +505,7 @@ function NodesCard({ meshTheme, nodes }: { meshTheme: MeshGraphTheme; nodes: Rep
                                 <span className={`min-w-0 max-w-full flex-1 truncate text-sm font-medium ${meshTheme.textPrimary}`} title={node.workspace}>{nodeDisplayName(node)}</span>
                                 {branch && <span className={`max-w-full truncate font-mono text-2xs ${meshTheme.textSecondary}`} title={branch}>{branch}</span>}
                                 {drift && <span className={`max-w-full truncate font-mono text-3xs ${meshTheme.textMuted}`}>{drift}</span>}
+                                {showPeerLink && <MeshNodePeerLinkBadge meshTheme={meshTheme} node={node} />}
                                 {sessionCount > 0 && <span className={`shrink-0 text-3xs ${meshTheme.textMuted}`}>{t('mesh.overview.sessionCount', { count: sessionCount })}</span>}
                                 {typeof node.daemonBuildVersion === 'string' && node.daemonBuildVersion && (
                                     <Tooltip content={t('mesh.statusTab.daemonVersionHint')}>

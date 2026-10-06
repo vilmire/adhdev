@@ -12,7 +12,7 @@
 import type { IncomingMessage } from 'http';
 import * as path from 'path';
 import * as fs from 'fs';
-import type { StatusResponse } from '@adhdev/daemon-core';
+import { MESH_JOIN_HTTP_PATH, type StatusResponse } from '@adhdev/daemon-core';
 import type { SessionHostClient, SessionHostEvent } from '@adhdev/session-host-core';
 import {
   AdhMuxControlClient,
@@ -62,6 +62,70 @@ export interface StandaloneHttpDeps {
   interactivePromptService(): InteractivePromptHttpService;
   isCliSession(sessionId: string): boolean;
   createSessionHostClient(): Promise<SessionHostClient>;
+  /** Clock for the mesh-join rate limiter (tests). Default `Date.now`. */
+  now?(): number;
+}
+
+/**
+ * Member → host pairing endpoint (design 2026-10-07 standalone multi-machine
+ * mesh §4.4 step 2) — daemon-core's single-source `MESH_JOIN_HTTP_PATH`, which
+ * the member POSTs to.
+ */
+export const MESH_JOIN_PATH = MESH_JOIN_HTTP_PATH;
+/** Join attempts allowed per remote IP per window. */
+export const MESH_JOIN_RATE_LIMIT = 5;
+export const MESH_JOIN_RATE_WINDOW_MS = 60_000;
+/** Largest join request body accepted (bytes). */
+export const MESH_JOIN_MAX_BODY_BYTES = 64 * 1024;
+/** Distinct remote IPs tracked at once; past this, unknown IPs are refused (fail closed). */
+const MESH_JOIN_RATE_MAX_TRACKED = 10_000;
+
+/**
+ * Fixed-window-per-attempt limiter (sliding log) for the unauthenticated join
+ * route. In memory only: a daemon restart resets it, which is acceptable for a
+ * guard whose job is to make guessing a single-use, 10-minute pairing token
+ * impractical, not to be a durable ban list.
+ */
+export class MeshJoinRateLimiter {
+  private readonly hits = new Map<string, number[]>();
+
+  constructor(
+    private readonly limit = MESH_JOIN_RATE_LIMIT,
+    private readonly windowMs = MESH_JOIN_RATE_WINDOW_MS,
+  ) {}
+
+  /** Record one attempt from `key`; `retryAfterMs` is set when it is over the limit. */
+  hit(key: string, now: number): { allowed: boolean; retryAfterMs?: number } {
+    const cutoff = now - this.windowMs;
+    if (!this.hits.has(key) && this.hits.size >= 256) this.prune(cutoff);
+    const recent = (this.hits.get(key) ?? []).filter((ts) => ts > cutoff);
+    if (!this.hits.has(key) && this.hits.size >= MESH_JOIN_RATE_MAX_TRACKED) {
+      return { allowed: false, retryAfterMs: this.windowMs };
+    }
+    if (recent.length >= this.limit) {
+      this.hits.set(key, recent);
+      return { allowed: false, retryAfterMs: Math.max(1, recent[0] + this.windowMs - now) };
+    }
+    recent.push(now);
+    this.hits.set(key, recent);
+    return { allowed: true };
+  }
+
+  private prune(cutoff: number): void {
+    for (const [key, stamps] of this.hits) {
+      if (!stamps.some((ts) => ts > cutoff)) this.hits.delete(key);
+    }
+  }
+}
+
+/** The peer address the limiter keys on — the socket's, never a forwarding header. */
+function remoteAddressKey(req: IncomingMessage): string {
+  const raw = req.socket?.remoteAddress || 'unknown';
+  return raw.startsWith('::ffff:') ? raw.slice(7) : raw;
+}
+
+function readMeshJoinString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
 }
 
 export class StandaloneHttpApi {
@@ -70,6 +134,7 @@ export class StandaloneHttpApi {
   passwordConfig: StandalonePasswordConfig | null = null;
   authSessions = new StandaloneSessionStore();
   listenHost = '127.0.0.1';
+  readonly meshJoinLimiter = new MeshJoinRateLimiter();
 
   constructor(private readonly deps: StandaloneHttpDeps) {}
 
@@ -383,6 +448,22 @@ export class StandaloneHttpApi {
       return;
     }
 
+    // ─── Mesh join (member → host pairing) — deliberately UNAUTHENTICATED ───
+    // A member daemon on another machine asks this host to admit it. It holds
+    // no dashboard session, token or password of this host and must not need
+    // one: the credential is the pairing token the host operator minted and
+    // handed over out of band (single use, 10-minute expiry), which
+    // apply_mesh_host_join verifies and rejects when bad, spent or expired.
+    // The exemption is as narrow as it can be — this exact path, POST only, a
+    // JSON body of at most 64 KB, rate-limited to 5 attempts per minute per
+    // remote IP, and only the four join fields reach the handler. Every other
+    // /api path (including GET on this one) still goes through the gate below.
+    // Browsers from a foreign Origin were already refused above.
+    if (parsedUrl.pathname === MESH_JOIN_PATH && method === 'POST') {
+      void this.handleMeshJoin(req, res);
+      return;
+    }
+
     if (url.startsWith('/api/') && !this.isRequestAuthenticated(req, url)) {
       res.writeHead(401, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'Unauthorized. Provide dashboard session cookie or token auth.' }));
@@ -663,6 +744,94 @@ export class StandaloneHttpApi {
     // 404
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'Not found' }));
+  }
+
+  private async handleMeshJoin(req: IncomingMessage, res: import('http').ServerResponse): Promise<void> {
+    const sendJson = (status: number, body: unknown, headers: Record<string, string> = {}) => {
+      if (res.headersSent) return;
+      res.writeHead(status, { 'Content-Type': 'application/json', ...headers });
+      res.end(JSON.stringify(body));
+    };
+    const now = this.deps.now ? this.deps.now() : Date.now();
+    const verdict = this.meshJoinLimiter.hit(remoteAddressKey(req), now);
+    if (!verdict.allowed) {
+      req.resume();
+      sendJson(429, { success: false, code: 'mesh_join_rate_limited', error: 'Too many join attempts; retry later.' }, {
+        'Retry-After': String(Math.ceil((verdict.retryAfterMs ?? MESH_JOIN_RATE_WINDOW_MS) / 1000)),
+        Connection: 'close',
+      });
+      return;
+    }
+    const declaredLength = Number(req.headers['content-length']);
+    if (Number.isFinite(declaredLength) && declaredLength > MESH_JOIN_MAX_BODY_BYTES) {
+      req.resume();
+      sendJson(413, { success: false, code: 'mesh_join_body_too_large', error: 'Join request body too large.' }, { Connection: 'close' });
+      return;
+    }
+    let text: string;
+    try {
+      text = await new Promise<string>((resolve, reject) => {
+        const chunks: Buffer[] = [];
+        let size = 0;
+        let overflowed = false;
+        req.on('data', (chunk: Buffer | string) => {
+          if (overflowed) return;
+          const buf = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
+          size += buf.length;
+          if (size > MESH_JOIN_MAX_BODY_BYTES) {
+            overflowed = true;
+            chunks.length = 0;
+            reject(Object.assign(new Error('too large'), { status: 413 }));
+            return;
+          }
+          chunks.push(buf);
+        });
+        req.on('end', () => { if (!overflowed) resolve(Buffer.concat(chunks).toString('utf8')); });
+        req.on('error', reject);
+      });
+    } catch (error: any) {
+      if (error?.status === 413) {
+        sendJson(413, { success: false, code: 'mesh_join_body_too_large', error: 'Join request body too large.' }, { Connection: 'close' });
+      } else {
+        sendJson(400, { success: false, code: 'mesh_join_bad_request', error: 'Join request body could not be read.' });
+      }
+      return;
+    }
+    let body: unknown;
+    try {
+      body = JSON.parse(text);
+    } catch {
+      sendJson(400, { success: false, code: 'mesh_join_bad_request', error: 'Join request body must be JSON.' });
+      return;
+    }
+    const record = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null;
+    const meshId = readMeshJoinString(record?.meshId);
+    const token = readMeshJoinString(record?.token);
+    const memberNode = record?.memberNode;
+    const memberMeshId = readMeshJoinString(record?.memberMeshId);
+    if (!meshId || !token || !memberNode || typeof memberNode !== 'object' || Array.isArray(memberNode)) {
+      sendJson(400, { success: false, code: 'mesh_join_bad_request', error: 'meshId, token and memberNode required' });
+      return;
+    }
+    if (!this.deps.isReady()) {
+      sendJson(503, { success: false, error: 'router not initialized' });
+      return;
+    }
+    try {
+      // Only the join fields are forwarded — never caller-chosen extras such
+      // as inlineMesh — through the same host runtime /api/v1/command uses.
+      const result = await this.deps.executeCommand('apply_mesh_host_join', {
+        meshId,
+        token,
+        memberNode: memberNode as Record<string, unknown>,
+        ...(memberMeshId ? { memberMeshId } : {}),
+      });
+      const ok = (result as { success?: boolean } | null)?.success === true;
+      const rejected = (result as { code?: string } | null)?.code === 'mesh_host_join_rejected';
+      sendJson(ok ? 200 : rejected ? 403 : 400, result ?? { success: false, error: 'empty result' });
+    } catch (error: any) {
+      sendJson(500, { success: false, error: error?.message || String(error) });
+    }
   }
 
   private async handleMuxEvents(

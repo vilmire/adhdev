@@ -172,3 +172,107 @@ describe('/ws/seqscribe upgrade gate', () => {
     expect(upgrade).not.toHaveProperty('isStandaloneTranscriptLaneDisabled');
   });
 });
+
+/**
+ * `/ws/mesh` and `/ws/mesh-seqscribe` — the daemon⇄daemon mesh lanes (design
+ * 2026-10-07 §4.3). Peer daemons are not browsers: these paths must NOT run the
+ * dashboard Origin/token gate (the HMAC handshake on the upgraded socket is
+ * their door), and must refuse with 503 before upgrading when this daemon holds
+ * nothing a dialer could prove.
+ */
+describe('mesh lane upgrade routing', () => {
+  /** Known-answer pins: the member dials these literals (join response `meshTransport`). */
+  const MESH_RPC_PATH = '/ws/mesh';
+  const MESH_SEQSCRIBE_PATH = '/ws/mesh-seqscribe';
+
+  function fakeReq(url: string, headers: Record<string, string> = {}) {
+    return { url, headers: { host: '127.0.0.1:3847', ...headers } } as any;
+  }
+
+  function gate(calls: string[]) {
+    return {
+      isAllowedOrigin: () => { calls.push('origin'); return false; },
+      isRequestAuthenticated: () => { calls.push('auth'); return false; },
+    };
+  }
+
+  function meshOptions(available: Record<'rpc' | 'seqscribe', boolean>, seen: string[] = []) {
+    return {
+      seqscribePath: SEQSCRIBE_PATH,
+      seqscribeLaneAvailable: true,
+      mesh: {
+        rpcPath: MESH_RPC_PATH,
+        seqscribePath: MESH_SEQSCRIBE_PATH,
+        isAvailable: (lane: 'rpc' | 'seqscribe') => { seen.push(lane); return available[lane]; },
+      },
+    };
+  }
+
+  it('routes both mesh lanes WITHOUT consulting the dashboard Origin/token gate', () => {
+    const calls: string[] = [];
+    const opts = meshOptions({ rpc: true, seqscribe: true });
+    expect(upgrade.routeStandaloneUpgrade(fakeReq(MESH_RPC_PATH, { origin: 'https://evil.example' }), gate(calls), opts))
+      .toEqual({ kind: 'mesh', lane: 'rpc' });
+    expect(upgrade.routeStandaloneUpgrade(fakeReq(`${MESH_SEQSCRIBE_PATH}?x=1`), gate(calls), opts))
+      .toEqual({ kind: 'mesh', lane: 'seqscribe' });
+    expect(calls).toEqual([]);
+  });
+
+  it('answers 503 per lane when nothing could be proven there', () => {
+    const seen: string[] = [];
+    const opts = meshOptions({ rpc: false, seqscribe: false }, seen);
+    expect(upgrade.routeStandaloneUpgrade(fakeReq(MESH_RPC_PATH), gate([]), opts)).toEqual({ kind: 'reject', status: 503 });
+    expect(upgrade.routeStandaloneUpgrade(fakeReq(MESH_SEQSCRIBE_PATH), gate([]), opts)).toEqual({ kind: 'reject', status: 503 });
+    expect(seen).toEqual(['rpc', 'seqscribe']);
+  });
+
+  it('keeps the dashboard lanes gated (and never asks the mesh availability for them)', () => {
+    const calls: string[] = [];
+    const seen: string[] = [];
+    const opts = meshOptions({ rpc: true, seqscribe: true }, seen);
+    expect(upgrade.routeStandaloneUpgrade(fakeReq('/ws'), gate(calls), opts)).toEqual({ kind: 'reject', status: 403 });
+    expect(upgrade.routeStandaloneUpgrade(fakeReq(SEQSCRIBE_PATH), gate(calls), opts)).toEqual({ kind: 'reject', status: 403 });
+    expect(calls).toEqual(['origin', 'origin']);
+    expect(seen).toEqual([]);
+  });
+
+  it('does not serve the mesh paths at all when the host wires no mesh lanes', () => {
+    const opts = { seqscribePath: SEQSCRIBE_PATH, seqscribeLaneAvailable: true };
+    expect(upgrade.routeStandaloneUpgrade(fakeReq(MESH_RPC_PATH), gate([]), opts)).toEqual({ kind: 'ignore' });
+    expect(upgrade.routeStandaloneUpgrade(fakeReq(MESH_SEQSCRIBE_PATH), gate([]), opts)).toEqual({ kind: 'ignore' });
+  });
+
+  it('over a real server: a token-protected daemon still upgrades /ws/mesh for a token-less peer, /ws stays 401', async () => {
+    const http = new StandaloneHttpApi({
+      isReady: () => true,
+      getStatus: () => ({}) as any,
+      executeCommand: async () => ({}),
+      rawTerminalService: () => ({}) as any,
+      interactivePromptService: () => ({}) as any,
+      isCliSession: () => false,
+      createSessionHostClient: async () => ({}) as any,
+    });
+    http.configureAuth(TOKEN);
+    const wss = new WebSocketServer({ noServer: true });
+    const lanes: string[] = [];
+    const server = createServer((_req, res) => { res.writeHead(404); res.end(); });
+    server.on('upgrade', (req, socket, head) => {
+      const route = upgrade.routeStandaloneUpgrade(req, http, meshOptions({ rpc: true, seqscribe: false }));
+      if (route.kind === 'mesh') { wss.handleUpgrade(req, socket, head, () => { lanes.push(route.lane); }); return; }
+      if (route.kind === 'dashboard') { wss.handleUpgrade(req, socket, head, () => {}); return; }
+      if (route.kind === 'reject') { upgrade.rejectStandaloneUpgrade(socket, route.status); return; }
+      socket.destroy();
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('no port');
+    const base = `ws://127.0.0.1:${address.port}`;
+    const rpc = await dial(`${base}${MESH_RPC_PATH}`);
+    expect(rpc.outcome).toBe('open');
+    rpc.ws.close();
+    expect((await dial(`${base}${MESH_SEQSCRIBE_PATH}`)).outcome).toBe(503);
+    expect((await dial(`${base}/ws`)).outcome).toBe(401);
+    expect(lanes).toEqual(['rpc']);
+  });
+});

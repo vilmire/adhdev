@@ -4,6 +4,7 @@
  * takeover rules), and marking a pairing joined. Every write goes through the
  * meshes.json write lock.
  */
+import { parseMeshHostAddress } from '../shared/mesh-host-endpoints.js';
 import { shortHash } from '../system/hash.js';
 import type { RepoMeshHostMetadata, LocalMeshEntry, RepoMeshNodeCapabilities, RepoMeshNodePolicy, RepoMeshDaemonRole, LocalMeshNodeEntry } from '../repo-mesh-types.js';
 import { withMeshConfigWriteLock, loadMeshConfig, saveMeshConfig } from './mesh-config-store.js';
@@ -11,17 +12,19 @@ import { createDefaultMeshHostMetadata } from '../mesh/mesh-host-ownership.js';
 import { randomBytes, randomUUID } from 'crypto';
 import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
 
+/**
+ * Validate a member-entered host address and keep it as typed (minus trailing
+ * slashes): bare `ip:port` / `hostname:port` / `[v6]:port` or an http(s)/ws(s)
+ * URL. The join (HTTP) and dial (WS) URLs are both derived from it by
+ * shared/mesh-host-endpoints.ts, which is also the validator here.
+ */
 function normalizeManualHostAddress(hostAddress: string): string {
     const normalized = hostAddress.trim().replace(/\/+$/, '');
     if (!normalized) throw new Error('hostAddress required');
-    let parsed: URL;
     try {
-        parsed = new URL(normalized);
-    } catch {
-        throw new Error('hostAddress must be a valid http(s) or ws(s) URL');
-    }
-    if (!['http:', 'https:', 'ws:', 'wss:'].includes(parsed.protocol)) {
-        throw new Error('hostAddress must use http, https, ws, or wss');
+        parseMeshHostAddress(normalized);
+    } catch (e: any) {
+        throw new Error(`hostAddress must be host:port or an http(s)/ws(s) URL (${e?.message || String(e)})`);
     }
     return normalized;
 }
@@ -37,13 +40,32 @@ function normalizeTokenExpiry(value: unknown): string | undefined {
     return date.toISOString();
 }
 
-function assertPairingTokenValid(pairing: RepoMeshHostMetadata['pairing'], rawToken: string, nowIso: string): { ok: true; tokenId: string } | { ok: false; reason: string; expectedTokenId?: string; presentedTokenId?: string } {
+/**
+ * How long a host pairing token stays valid when the caller names no expiry
+ * (design 2026-10-07 standalone multi-machine mesh §4.4 step 1: the code is
+ * single-use and expires after 10 minutes).
+ */
+export const MESH_HOST_PAIRING_TOKEN_TTL_MS = 10 * 60 * 1000;
+
+/** Rejection reason for a token that already admitted a member. */
+export const MESH_HOST_PAIRING_TOKEN_USED_REASON = 'host pairing token already used';
+
+function assertPairingTokenValid(pairing: RepoMeshHostMetadata['pairing'], rawToken: string, nowIso: string): { ok: true; tokenId: string } | { ok: false; reason: string; expectedTokenId?: string; presentedTokenId?: string; consumed?: true } {
     const token = rawToken.trim();
     if (!token) return { ok: false, reason: 'token required' };
     const presentedTokenId = tokenIdForManualPairing(token);
     const expectedTokenId = pairing?.tokenId;
     if (!expectedTokenId || pairing?.status === 'not_configured' || pairing?.status === 'revoked') {
         return { ok: false, reason: 'host pairing token is not configured', presentedTokenId };
+    }
+    // Single use. A token that admitted a member is spent: the join now mints
+    // a per-member peer secret over an unauthenticated route
+    // (POST /api/v1/mesh/join), so a replayed token must not mint another one
+    // or overwrite an existing member's secret. `joinedAt` is the spent marker:
+    // only an accepted join sets it, a rejection carries it forward unchanged,
+    // and minting a new token builds a fresh pairing record without it.
+    if (pairing.joinedAt) {
+        return { ok: false, reason: MESH_HOST_PAIRING_TOKEN_USED_REASON, expectedTokenId, presentedTokenId, consumed: true };
     }
     if (pairing.expiresAt && new Date(pairing.expiresAt).getTime() <= new Date(nowIso).getTime()) {
         return { ok: false, reason: 'host pairing token expired', expectedTokenId, presentedTokenId };
@@ -120,7 +142,8 @@ function createMeshHostPairingTokenUnlocked(
     const token = (opts.token || `mhj_${randomBytes(24).toString('base64url')}`).trim();
     if (!token) throw new Error('token required');
     const tokenId = tokenIdForManualPairing(token);
-    const expiresAt = normalizeTokenExpiry(opts.expiresAt);
+    const expiresAt = normalizeTokenExpiry(opts.expiresAt)
+        ?? new Date(new Date(now).getTime() + MESH_HOST_PAIRING_TOKEN_TTL_MS).toISOString();
     const previous = mesh.meshHost || createDefaultMeshHostMetadata();
     if (previous.role === 'member') {
         throw new Error('Mesh Host daemon required to create host pairing tokens; member daemons cannot mint host join tokens.');
@@ -159,6 +182,15 @@ export interface ApplyMeshHostJoinOptions {
     now?: string;
 }
 
+/** The host-role mesh whose current pairing token is `rawToken` (spent or not), if exactly one. */
+function findHostMeshByPairingToken(meshes: readonly LocalMeshEntry[], rawToken: string): LocalMeshEntry | undefined {
+    const token = typeof rawToken === 'string' ? rawToken.trim() : '';
+    if (!token) return undefined;
+    const tokenId = tokenIdForManualPairing(token);
+    const matches = meshes.filter(m => m.meshHost?.role !== 'member' && m.meshHost?.pairing?.tokenId === tokenId);
+    return matches.length === 1 ? matches[0] : undefined;
+}
+
 export function applyMeshHostJoinRequest(
     ...args: Parameters<typeof applyMeshHostJoinRequestUnlocked>
 ): ReturnType<typeof applyMeshHostJoinRequestUnlocked> {
@@ -170,7 +202,12 @@ function applyMeshHostJoinRequestUnlocked(
     opts: ApplyMeshHostJoinOptions,
 ): { accepted: true; mesh: LocalMeshEntry; meshHost: RepoMeshHostMetadata; node: LocalMeshNodeEntry; tokenId: string } | { accepted: false; mesh?: LocalMeshEntry; meshHost?: RepoMeshHostMetadata; tokenId?: string; reason: string } | undefined {
     const config = loadMeshConfig();
-    const mesh = config.meshes.find(m => m.id === meshId);
+    // The member types only "address + code" (design §4.6): it does not know
+    // the host's mesh id and names its own. A mesh id this host does not know
+    // falls back to the one host-role mesh whose live pairing token matches —
+    // the token is the credential either way.
+    const mesh = config.meshes.find(m => m.id === meshId)
+        ?? findHostMeshByPairingToken(config.meshes, opts.token);
     if (!mesh) return undefined;
     const now = opts.now || new Date().toISOString();
     const previous = mesh.meshHost || createDefaultMeshHostMetadata();
@@ -179,6 +216,11 @@ function applyMeshHostJoinRequestUnlocked(
     }
     const meshHost: RepoMeshHostMetadata = { ...previous, role: 'host' };
     const validation = assertPairingTokenValid(meshHost.pairing, opts.token, now);
+    if (!validation.ok && validation.consumed) {
+        // A replay of a spent token: refuse without rewriting the pairing
+        // record, so the host keeps showing the member it already admitted.
+        return { accepted: false, mesh, meshHost: mesh.meshHost, tokenId: validation.presentedTokenId, reason: validation.reason };
+    }
     if (!validation.ok) {
         mesh.meshHost = {
             ...meshHost,
