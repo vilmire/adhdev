@@ -71,6 +71,12 @@ const PEER_CLOSE_CATEGORY_BY_CODE: Record<string, PeerCloseCategory> = {
   LOCAL_AUTH_EPOCH_CHANGED: 'planned_replacement',
   REMOTE_AUTH_EPOCH_CHANGED: 'planned_replacement',
   MANAGER_SHUTDOWN: 'planned_replacement',
+  // WsMeshTransport (standalone direct-WebSocket mesh): a newer socket from the
+  // same member superseded this one, or an operator removed the link / revoked
+  // the peer. Both are deliberate local decisions, not transport faults.
+  PEER_REPLACED: 'planned_replacement',
+  PEER_DISCONNECTED: 'planned_replacement',
+  LINK_REMOVED: 'planned_replacement',
   DATACHANNEL_CLOSED: 'remote_or_manager_closed',
   PC_STATE_CLOSED: 'remote_or_manager_closed',
   CONNECT_TIMEOUT: 'timeout',
@@ -443,6 +449,11 @@ export const STRUCTURED_P2P_UNAVAILABLE_CODES = new Set([
   'PC_STATE_FAILED',
   'SIGNAL_DESCRIPTION_FAILED',
   'MANAGER_SHUTDOWN',
+  // WsMeshTransport teardown codes (see PEER_CLOSE_CATEGORY_BY_CODE): requests
+  // caught by a replacement, revocation or link removal fail as p2p_unavailable.
+  'PEER_REPLACED',
+  'PEER_DISCONNECTED',
+  'LINK_REMOVED',
 ]);
 
 /**

@@ -6,6 +6,8 @@
  * 2. HTTP REST API — /api/v1/status, /api/v1/command
  * 3. WebSocket — ws://localhost:3847/ws (real-time status broadcast + command execution)
  *    + ws://localhost:3847/ws/seqscribe (dashboard transcript replica lane — raw seqscribe frames)
+ *    + /ws/mesh, /ws/mesh-seqscribe (daemon⇄daemon mesh lanes for paired machines —
+ *      HMAC handshake gate, see standalone-mesh-link.ts)
  * 4. Static file serving — web-standalone build output
  *
  * Usage:
@@ -50,6 +52,9 @@ import {
   StandaloneTranscriptLane,
   transcriptTopicsAvailableFrame,
   STANDALONE_SEQSCRIBE_WS_PATH,
+  MESH_RPC_WS_PATH,
+  MESH_SEQSCRIBE_WS_PATH,
+  StandaloneMeshSeqscribe,
   type DaemonHostRuntime,
   type DaemonRuntime,
   type DevServer,
@@ -80,6 +85,7 @@ import {
 import { standaloneIpcEnabled, startStandaloneIpcCompatServer } from './standalone-ipc-compat.js';
 import { broadcastToOpenClients, createStandaloneHostTransport, standaloneHelloFrame } from './standalone-host-transport.js';
 import { buildStandaloneStatusResponse } from './standalone-status-payload.js';
+import { StandaloneMeshLink } from './standalone-mesh-link.js';
 
 // ─── Constants ───
 const DEFAULT_PORT = DEFAULT_STANDALONE_PORT;
@@ -186,6 +192,13 @@ class StandaloneServer {
    * node did not open.
    */
   private transcriptLane: StandaloneTranscriptLane | null = null;
+  /**
+   * Daemon⇄daemon mesh links to paired machines (design 2026-10-07 §4.3):
+   * the direct-WebSocket mesh transport + seqscribe replication, host and
+   * member roles in one instance. Created before the boot (its hooks feed
+   * `DaemonBootConfig.mesh`), attached right after it.
+   */
+  private meshLink: StandaloneMeshLink | null = null;
   private readonly http = new StandaloneHttpApi({
     isReady: () => !!this.host,
     getStatus: () => buildStandaloneStatusResponse(this.host!.buildSnapshot('full')),
@@ -296,6 +309,11 @@ class StandaloneServer {
     // Auth token setup (opt-in only)
     this.http.configureAuth(options.token || process.env.ADHDEV_TOKEN || null);
 
+    // Mesh links exist before the boot so the boot's mesh hooks (dispatch,
+    // peer status, transcript peer) are wired from the first stage; the hooks
+    // read the transport / seqscribe link lazily, like cloud's mesh manager.
+    this.meshLink = new StandaloneMeshLink({ localDaemonId: statusInstanceId });
+
     // Staged boot. Hosted sessions are restored INSIDE the boot (startLoops),
     // after every bus subscriber is attached and before the residue sweep.
     this.runtime = await bootDaemonRuntime({
@@ -306,6 +324,7 @@ class StandaloneServer {
       tickIntervalMs: 3000,
       cdpScanIntervalMs: STANDALONE_CDP_SCAN_INTERVAL_MS,
       restoreHostedSessions: shouldAutoRestoreHostedSessionsOnStartup(process.env),
+      mesh: this.meshLink.bootConfig(),
     });
     const components = this.runtime.components;
     this.host = createDaemonHostRuntime(this.runtime, createStandaloneHostTransport({
@@ -328,6 +347,17 @@ class StandaloneServer {
         this.broadcastToClients(transcriptTopicsAvailableFrame(topics));
       });
     }
+    // Inbound mesh commands → host runtime (source 'mesh', sender stamped),
+    // peer-open → router, then dial every paired host.
+    this.meshLink.attach({
+      execute: (command, args, source) => (this.host
+        ? this.host.execute(command, args, source)
+        : Promise.resolve({ success: false, error: 'Components not initialized' })),
+      router: components.router,
+      seqscribe: this.runtime.seqscribe
+        ? new StandaloneMeshSeqscribe(this.runtime.seqscribe.node, { localDaemonId: statusInstanceId })
+        : null,
+    });
 
     // DevServer (optional) — shared with cloud, with provider hot reload.
     if (options.dev) {
@@ -346,9 +376,16 @@ class StandaloneServer {
       // lane) pass the SAME Origin + token/password gate before upgrading —
       // without it any page could open a WS to this daemon, subscribe to
       // topic_update streams and dispatch commands.
+      // The mesh lanes (peer daemons, not browsers) skip that gate: the HMAC
+      // handshake in StandaloneMeshLink is their only door.
       const route = routeStandaloneUpgrade(req, this.http, {
         seqscribePath: STANDALONE_SEQSCRIBE_WS_PATH,
         seqscribeLaneAvailable: this.transcriptLane !== null,
+        mesh: {
+          rpcPath: MESH_RPC_WS_PATH,
+          seqscribePath: MESH_SEQSCRIBE_WS_PATH,
+          isAvailable: (lane) => this.meshLink?.isAvailable(lane) ?? false,
+        },
       });
       switch (route.kind) {
         case 'dashboard':
@@ -360,6 +397,13 @@ class StandaloneServer {
           this.wss!.handleUpgrade(req, socket, head, (ws) => {
             this.handleSeqscribeLaneConnection(ws);
           });
+          return;
+        case 'mesh':
+          if (!this.meshLink) {
+            rejectStandaloneUpgrade(socket, 503);
+            return;
+          }
+          this.meshLink.handleUpgrade(route.lane, req, socket, head);
           return;
         case 'reject':
           rejectStandaloneUpgrade(socket, route.status);
@@ -401,6 +445,9 @@ class StandaloneServer {
       this.httpServer!.once('error', onError);
       this.httpServer!.listen(port, host, () => {
         this.httpServer!.off('error', onError);
+        // The bound port (differs from `port` only for an ephemeral `0`).
+        const bound = this.httpServer!.address();
+        this.meshLink?.setListenAddress({ host, port: bound && typeof bound === 'object' ? bound.port : port });
         resolve();
       });
     });
@@ -432,6 +479,10 @@ class StandaloneServer {
       console.log(`   IPC: ws://127.0.0.1:${DEFAULT_DAEMON_PORT}${DAEMON_WS_PATH} (for adhdev mcp --mode ipc)`);
     } else if (standaloneIpcEnabled()) {
       console.log(`   IPC: disabled (port ${DEFAULT_DAEMON_PORT} unavailable)`);
+    }
+    if (isLoopbackBindHost(host) && this.meshLink?.isAvailable('rpc')) {
+      console.warn('   ⚠️  Paired mesh machines cannot reach this daemon on a loopback bind.');
+      console.warn('      Restart with --host 0.0.0.0 (or this machine\'s LAN/Tailscale IP) to accept them.');
     }
     if (shouldWarnForPublicUnauthenticatedHost({ host, hasTokenAuth: !!this.http.authToken, hasPasswordAuth: !!this.http.passwordConfig })) {
       console.warn('   ⚠️  Public host mode is enabled without any auth.');
@@ -673,6 +724,10 @@ class StandaloneServer {
     // Replica lanes detach BEFORE the node closes (runtime.shutdown below).
     this.transcriptLane?.close();
     this.transcriptLane = null;
+    // Mesh links (dialers, peer sockets, replication sessions) go before the
+    // node and the router shut down.
+    this.meshLink?.close();
+    this.meshLink = null;
     this.runtimeOutputSubscriptions.clear();
 
     // Close WSS
@@ -713,6 +768,12 @@ class StandaloneServer {
     console.log('   ✓ ADHDev Standalone stopped.\n');
     process.exit(0);
   }
+}
+
+/** A bind address only this machine can reach. */
+function isLoopbackBindHost(host: string): boolean {
+  const h = host.trim().toLowerCase();
+  return h === 'localhost' || h === '::1' || h.startsWith('127.');
 }
 
 // ─── CLI ───

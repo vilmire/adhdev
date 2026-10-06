@@ -107,6 +107,7 @@ export function bootCommandPlane(s4: SeqscribeNodeStage): CommandPlaneStage {
         statusVersion: cfg.statusVersion,
         getMeshPeerConnectionStatus: cfg.mesh?.getMeshPeerConnectionStatus,
         dispatchMeshCommand: cfg.mesh?.dispatchMeshCommand,
+        getMeshListenAddress: cfg.mesh?.getMeshListenAddress,
         // Coordinator-held node git state survives a restart (mesh-runtime.db).
         meshNodeGitStateStore: new MeshNodeGitStateStore(
             createDbMeshNodeGitStatePersistence(() => MeshRuntimeStore.getInstance().db),

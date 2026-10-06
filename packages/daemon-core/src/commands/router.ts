@@ -10,6 +10,7 @@
  * dashboard invalidation — once, for every source.
  */
 
+import type { MeshListenAddress } from '../shared/mesh-host-endpoints.js';
 import { DaemonCdpManager } from '../cdp/manager.js';
 import { DaemonCommandHandler } from './handler.js';
 import { launchIde } from './med-family/ide.js';
@@ -223,7 +224,9 @@ export interface CommandRouterDeps {
     sessionHostControl?: SessionHostControlPlane | null;
     /** Selected-coordinator mesh peer telemetry surface for target daemons, when supported by the runtime. */
     getMeshPeerConnectionStatus?: (daemonId: string) => Record<string, unknown> | null;
-    /** Dispatch a command to a remote mesh node via P2P/relay. Injected by cloud runtime; absent in standalone. */
+    /** Standalone: the HTTP server's listen address, for host pairing address candidates. */
+    getMeshListenAddress?: () => MeshListenAddress | null;
+    /** Dispatch a command to a remote mesh node via P2P/relay (cloud WebRTC or standalone direct WebSocket). */
     dispatchMeshCommand?: (daemonId: string, cmd: string, args: Record<string, unknown>) => Promise<unknown>;
     /**
      * Coordinator-held node git state store. Boot passes one persisted in
@@ -363,23 +366,6 @@ function meshIdsRevealedByCommandArgs(args: unknown): string[] {
         readStringValue(settings.meshNodeFor),
     ].filter((value): value is string => value !== undefined);
     return [...new Set(ids)];
-}
-
-/**
- * Confine a spec path to ~/.adhdev/providers, defeating both prefix-bypass
- * (e.g. ".../providers-evil") and symlink escape. Resolves the real path of
- * the *parent* directory (the file may not exist yet for writes), requires the
- * basename to be a literal `*.json`, and re-joins under the verified parent so
- * the returned path can't point outside the tree. Used by get/write_spec_source.
- */
-export function normalizeStandaloneHostCommandUrl(hostAddress: string): string {
-    const raw = hostAddress.trim();
-    if (!raw) throw new Error('hostAddress required');
-    const url = new URL(raw.replace(/^ws:/, 'http:').replace(/^wss:/, 'https:'));
-    url.pathname = '/api/v1/command';
-    url.search = '';
-    url.hash = '';
-    return url.toString();
 }
 
 export function buildMemberJoinNode(mesh: any, args: any, fallbackDaemonId?: string): Record<string, unknown> | null {

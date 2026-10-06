@@ -341,3 +341,76 @@ export {
 export { summarizeMeshCommandArgs, summarizeMeshCommandGitResult, summarizeMeshCommandResult } from './mesh/transport/mesh-command-summarizer.js';
 export { maskDaemonId } from './mesh/transport/mask-daemon-id.js';
 export type { MeshPeerSnapshot, MeshPeerConnectionState } from './mesh/transport/mesh-peer-types.js';
+// Standalone multi-machine mesh (design 2026-10-07 §4): the direct-WebSocket
+// transport, the pairing peer-secret store, the HMAC handshake and the
+// daemon⇄daemon seqscribe replication link — consumed by daemon-standalone.
+export {
+  WsMeshTransport,
+  meshWsUrlForHostAddress,
+  WS_MESH_RPC_PATH,
+  WS_MESH_CLOSE_REPLACED,
+  WS_MESH_CLOSE_DISCONNECTED,
+  WS_MESH_CLOSE_SHUTDOWN,
+  WS_MESH_CLOSE_REFUSED,
+} from './mesh/transport/ws-mesh-transport.js';
+export type {
+  WsMeshTransportOptions,
+  WsMeshHostLink,
+  WsMeshAcceptedPeer,
+  WsMeshPeerSummary,
+} from './mesh/transport/ws-mesh-transport.js';
+export {
+  performMeshHandshake,
+  MeshHandshakeError,
+  MESH_HANDSHAKE_CLOSE_CODE,
+  MESH_HANDSHAKE_DEFAULT_TIMEOUT_MS,
+  MESH_HANDSHAKE_PROTOCOL_VERSION,
+} from './mesh/transport/mesh-peer-handshake.js';
+export type {
+  MeshHandshakeResult,
+  MeshHandshakeFailureCode,
+  WebSocketLike as MeshHandshakeSocket,
+} from './mesh/transport/mesh-peer-handshake.js';
+export {
+  MESH_PEER_SECRETS_FILE,
+  resolvePeerSecretsPath,
+  listPeerSecrets,
+  getPeerSecret,
+  putPeerSecret,
+  removePeerSecret,
+  mintPeerSecret,
+  onPeerSecretsChanged,
+} from './mesh/transport/mesh-peer-secrets.js';
+export type {
+  PeerSecretRecord,
+  PeerSecretRole,
+  PeerSecretsChange,
+  PeerSecretStoreOptions,
+} from './mesh/transport/mesh-peer-secrets.js';
+export {
+  MESH_JOIN_HTTP_PATH,
+  MESH_RPC_WS_PATH,
+  MESH_SEQSCRIBE_WS_PATH,
+  parseMeshHostAddress,
+  meshHostWsUrl,
+  meshHostHttpUrl,
+  computeMeshHostAddressCandidates,
+} from './shared/mesh-host-endpoints.js';
+export type {
+  MeshHostAuthority,
+  MeshListenAddress,
+  MeshNetworkInterfaces,
+  MeshHostAddressCandidates,
+} from './shared/mesh-host-endpoints.js';
+export {
+  MESH_JOIN_TRANSPORT,
+  REDACTED_PEER_SECRET,
+  normalizeStandaloneHostJoinUrl,
+} from './commands/med-family/mesh-host-pairing.js';
+export type { MeshJoinTransportDescriptor } from './commands/med-family/mesh-host-pairing.js';
+export {
+  StandaloneMeshSeqscribe,
+  deriveMeshPeerGrants,
+  STANDALONE_MESH_SEQSCRIBE_WS_PATH,
+} from './seqscribe/standalone-mesh-seqscribe.js';
+export type { StandaloneMeshSeqscribeOptions, MeshPeerGrant } from './seqscribe/standalone-mesh-seqscribe.js';

@@ -28,6 +28,7 @@ import type { ComposerResidueSweepHandle } from './composer-residue-sweep.js';
 import type { SessionOutputFanout } from './session-output-fanout.js';
 import type { TurnLedger } from '../mesh/turn-ledger/ledger.js';
 import type { MeshTurnWiring, TurnProbePort } from './stages/mesh-runtime.js';
+import type { MeshListenAddress } from '../shared/mesh-host-endpoints.js';
 import type { TurnScheduler } from '../mesh/turn-ledger/scheduler.js';
 import type { HousekeepingHandle } from '../mesh/mesh-housekeeping-tick.js';
 
@@ -58,6 +59,12 @@ export interface DaemonBootConfig {
     mesh?: {
         dispatchMeshCommand?: (daemonId: string, command: string, args: Record<string, unknown>) => Promise<any>;
         getMeshPeerConnectionStatus?: (daemonId: string) => Record<string, unknown> | null;
+        /**
+         * Standalone-only: where the HTTP server (and so the `/ws/mesh` lanes)
+         * listens, for the host pairing card's address candidates
+         * (`get_mesh_host_pairing`). Null until the server is listening.
+         */
+        getMeshListenAddress?: () => MeshListenAddress | null;
         /**
          * Cloud-only: refresh the host's dashboard mirror of a mesh worker session
          * (`meshOwnedSessions`) from a forwarded worker event and flush daemon.metadata.

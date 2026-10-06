@@ -55,6 +55,11 @@ Options:
                          address, or "localhost". Default: 127.0.0.1 (loopback
                          only). Use --host 0.0.0.0 to opt into public/LAN
                          binding — a warning is printed when no auth is set.
+                         Pairing another machine into a mesh this daemon
+                         hosts needs an address that machine can reach
+                         (0.0.0.0, or a LAN/Tailscale IP). Mesh peers do not
+                         use the dashboard token: each one authenticates on
+                         /ws/mesh with its own pairing secret (HMAC handshake).
   --token <token>        Set an authentication token for the dashboard UI
   --dev                  Enable DevConsole to debug and test providers (log level defaults to debug)
   --log-level <level>    Log level: debug|info|warn|error (default: info; also ADHDEV_LOG_LEVEL)
