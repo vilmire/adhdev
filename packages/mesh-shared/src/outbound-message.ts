@@ -113,8 +113,12 @@ export interface InputEnvelopeWire {
  * `'mesh'` (flagged as an open question in phase-D-plan.md §7.3 risk 5) —
  * kept here unchanged pending an owner decision; dropping a union member is
  * a decision for whoever lands D-daemon/D2, not this workstream.
+ *
+ * `'assistant'`: the assistant layer's `project_send` into a project
+ * coordinator (docs/design/2026-10-07-assistant-layer.md §4.3 step 4). A label
+ * only — it is not an auth signal and selects no policy of its own.
  */
-export type OutboundMessageOrigin = 'dashboard' | 'mcp' | 'mesh' | 'api' | 'cli'
+export type OutboundMessageOrigin = 'dashboard' | 'mcp' | 'mesh' | 'api' | 'cli' | 'assistant'
 
 /**
  * How this message should be admitted when the session is not idle.
@@ -243,7 +247,7 @@ export function isMessageId(value: unknown): value is string {
 
 // ─── Guards ─────────────────────────────────────────────────────────────────
 
-export const OUTBOUND_MESSAGE_ORIGINS = ['dashboard', 'mcp', 'mesh', 'api', 'cli'] as const satisfies readonly OutboundMessageOrigin[]
+export const OUTBOUND_MESSAGE_ORIGINS = ['dashboard', 'mcp', 'mesh', 'api', 'cli', 'assistant'] as const satisfies readonly OutboundMessageOrigin[]
 
 export function isOutboundMessageOrigin(value: unknown): value is OutboundMessageOrigin {
     return typeof value === 'string' && (OUTBOUND_MESSAGE_ORIGINS as readonly string[]).includes(value)
