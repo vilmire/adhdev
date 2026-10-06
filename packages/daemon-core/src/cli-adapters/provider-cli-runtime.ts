@@ -325,6 +325,10 @@ export function resolveCliSpawnPlanFromParts(options: {
         'CLI',
         `[${diagnosticCliType || 'cli'}] Spawning (spec v${diagnosticProviderVersion || 'unknown'}) in ${workingDir}: ${binaryPath} ${renderArgsForLog(allArgs)}`,
     );
+    if (isWin) {
+        const overflow = describeWin32CommandLineOverflow(shellCmd, shellArgs, useShell);
+        if (overflow) LOG.error('CLI', `[${diagnosticCliType || 'cli'}] ${overflow}`);
+    }
 
     return {
         binaryPath,
@@ -342,3 +346,22 @@ export function resolveCliSpawnPlanFromParts(options: {
     };
 }
 
+/** CreateProcess lpCommandLine cap, and cmd.exe's own command-string cap. */
+export const WIN32_COMMAND_LINE_MAX = 32_767;
+export const WIN32_CMD_SHELL_COMMAND_LINE_MAX = 8_191;
+
+/**
+ * Explain, before the spawn, a win32 command line that cannot launch. Windows
+ * reports an over-long command line only as an opaque spawn/cmd.exe failure,
+ * so name the cause here. Estimate: each arg plus a separator and quotes
+ * (escaping can only add to this, so a hit is never a false alarm).
+ */
+export function describeWin32CommandLineOverflow(shellCmd: string, shellArgs: readonly string[], viaCmdShell: boolean): string | null {
+    const length = [shellCmd, ...shellArgs].reduce((sum, arg) => sum + String(arg).length + 3, 0);
+    const max = viaCmdShell ? WIN32_CMD_SHELL_COMMAND_LINE_MAX : WIN32_COMMAND_LINE_MAX;
+    if (length <= max) return null;
+    const longest = shellArgs.reduce((m, a) => Math.max(m, String(a).length), 0);
+    return `win32 command line is ~${length} chars, over the ${max}-char ${viaCmdShell ? 'cmd.exe' : 'CreateProcess'} limit `
+        + `(longest single argument: ${longest} chars) — this spawn will fail. `
+        + 'A prompt-sized argument must be passed through a file instead (provider oversizeFallback).';
+}

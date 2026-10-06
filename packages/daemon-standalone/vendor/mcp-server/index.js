@@ -23292,8 +23292,8 @@ var require_dist3 = __commonJS({
     __export2(dist_exports, {
       ASSISTANT_OWNER_VERBS: () => ASSISTANT_OWNER_VERBS2,
       ASSISTANT_REVIEW_TURN_VERBS: () => ASSISTANT_REVIEW_TURN_VERBS2,
-      ASSISTANT_SESSION_ID_ARG: () => ASSISTANT_SESSION_ID_ARG,
-      ASSISTANT_SESSION_ID_ENV: () => ASSISTANT_SESSION_ID_ENV,
+      ASSISTANT_SESSION_ID_ARG: () => ASSISTANT_SESSION_ID_ARG2,
+      ASSISTANT_SESSION_ID_ENV: () => ASSISTANT_SESSION_ID_ENV2,
       ASSISTANT_TOOLS: () => ASSISTANT_TOOLS2,
       ASSISTANT_TOOL_VERBS: () => ASSISTANT_TOOL_VERBS2,
       ASSISTANT_VERB: () => ASSISTANT_VERB2,
@@ -23493,7 +23493,7 @@ var require_dist3 = __commonJS({
       hasGitStatusEvidence: () => hasGitStatusEvidence,
       hasWorkerProtocolFooter: () => hasWorkerProtocolFooter2,
       interpolateString: () => interpolateString,
-      isAssistantTool: () => isAssistantTool,
+      isAssistantTool: () => isAssistantTool2,
       isBlockedStatus: () => isBlockedStatus,
       isBusyStatus: () => isBusyStatus,
       isChunkType: () => isChunkType,
@@ -24701,7 +24701,7 @@ ${renderWorkerProtocolFooter2(input)}`;
         "- A `code_change` task's declared `owned_paths` (H1) is enforced at claim time: a second `code_change` task whose `owned_paths` overlaps an already-claimed task's is refused rather than silently racing it. A worker's `report_completion.touched_files` is compared against its own task's declaration afterward and any mismatch is surfaced back to you as evidence \u2014 it is never a validation failure, since a worker often cannot know its exact final file list at enqueue time."
       ].join("\n");
     }
-    function isAssistantTool(value) {
+    function isAssistantTool2(value) {
       return typeof value === "string" && ASSISTANT_TOOL_SET2.has(value);
     }
     function sanitizeRefusalCode2(value) {
@@ -26063,8 +26063,8 @@ ${renderWorkerProtocolFooter2(input)}`;
     var ASSISTANT_WRITE_TOOLS;
     var ASSISTANT_OWNER_VERBS2;
     var ASSISTANT_REVIEW_TURN_VERBS2;
-    var ASSISTANT_SESSION_ID_ENV;
-    var ASSISTANT_SESSION_ID_ARG;
+    var ASSISTANT_SESSION_ID_ENV2;
+    var ASSISTANT_SESSION_ID_ARG2;
     var MESH_TOPIC_PROTOCOL_VERSION;
     var EVIDENCE_SOURCE_IDS2;
     var TURN_SCOPES2;
@@ -26696,8 +26696,8 @@ ${renderWorkerProtocolFooter2(input)}`;
           ASSISTANT_VERB2.skillManage,
           ASSISTANT_VERB2.projectNote
         ];
-        ASSISTANT_SESSION_ID_ENV = "ADHDEV_ASSISTANT_SESSION_ID";
-        ASSISTANT_SESSION_ID_ARG = "assistantSessionId";
+        ASSISTANT_SESSION_ID_ENV2 = "ADHDEV_ASSISTANT_SESSION_ID";
+        ASSISTANT_SESSION_ID_ARG2 = "assistantSessionId";
         MESH_TOPIC_PROTOCOL_VERSION = 2;
         EVIDENCE_SOURCE_IDS2 = [
           "fsm_edge",
@@ -61550,11 +61550,13 @@ When the user asks to **set up / configure / onboard** this repo for Repo Mesh (
     });
     var mesh_coordinator_exports = {};
     __export2(mesh_coordinator_exports, {
+      COORDINATOR_INLINE_PROMPT_LIMITS: () => COORDINATOR_INLINE_PROMPT_LIMITS,
       applyMeshCoordinatorSystemPromptInjection: () => applyMeshCoordinatorSystemPromptInjection,
       buildMeshCoordinatorRegistrationPlan: () => buildMeshCoordinatorRegistrationPlan,
       cleanupCoordinatorAgentFile: () => cleanupCoordinatorAgentFile,
       execUnderPty: () => execUnderPty,
       inspectMeshCoordinatorMcpServerPaths: () => inspectMeshCoordinatorMcpServerPaths,
+      resolveCoordinatorInlinePromptLimit: () => resolveCoordinatorInlinePromptLimit,
       resolveMeshCoordinatorSetup: () => resolveMeshCoordinatorSetup,
       resolveWorkerMcpServerLaunch: () => resolveWorkerMcpServerLaunch,
       stripCoordinatorWrapperFile: () => stripCoordinatorWrapperFile
@@ -61772,22 +61774,57 @@ When the user asks to **set up / configure / onboard** this repo for Repo Mesh (
       }
       return IDENTITY2.defaultPort;
     }
+    function resolveCoordinatorInlinePromptLimit(platform10, viaCmdShell) {
+      if (platform10 === "win32") {
+        return viaCmdShell === false ? COORDINATOR_INLINE_PROMPT_LIMITS.win32Direct : COORDINATOR_INLINE_PROMPT_LIMITS.win32CmdShell;
+      }
+      return platform10 === "linux" ? COORDINATOR_INLINE_PROMPT_LIMITS.linux : COORDINATOR_INLINE_PROMPT_LIMITS.posix;
+    }
+    function inlineArgSize(value, platform10) {
+      return platform10 === "win32" ? value.length : Buffer.byteLength(value, "utf-8");
+    }
     function applyMeshCoordinatorSystemPromptInjection(systemPrompt, injection, ctx) {
       if (!systemPrompt || !injection) return {};
       return applyInjectionRule(systemPrompt, injection, ctx);
+    }
+    function applyInlineOrFallback(systemPrompt, injection, inlineValue, ctx) {
+      const platform10 = ctx.platform ?? process.platform;
+      const limit = resolveCoordinatorInlinePromptLimit(platform10, ctx.viaCmdShell);
+      const size = inlineArgSize(inlineValue, platform10);
+      if (size <= limit) {
+        ctx.cliArgs.push(injection.flag, inlineValue);
+        return {};
+      }
+      const fallback = injection.oversizeFallback;
+      const sizeNote = `${size} ${platform10 === "win32" ? "chars" : "bytes"} > ${limit} safe inline limit on ${platform10}` + (platform10 === "win32" ? ctx.viaCmdShell === false ? "" : " (cmd.exe)" : "");
+      if (fallback && (fallback.mode === "agent_file" || fallback.mode === "context_file")) {
+        const effect = applyInjectionRule(systemPrompt, fallback, ctx);
+        if (effect.agentFilePath || effect.contextFilePath) {
+          const extraArgs = Array.isArray(fallback.extraArgs) ? fallback.extraArgs.filter((a) => typeof a === "string" && a.length > 0) : [];
+          ctx.cliArgs.push(...extraArgs);
+          LOG.info("MeshCoordinator", `Coordinator prompt too long for ${injection.mode} ${injection.flag} (${sizeNote}) \u2014 using ${fallback.mode} fallback (${ctx.cliType})`);
+          return effect;
+        }
+        return {
+          errorCode: "mesh_coordinator_prompt_too_long",
+          error: `Coordinator system prompt for ${ctx.cliType} is too long to pass on the command line (${sizeNote}), and writing the ${fallback.mode} fallback failed. See the daemon log for the file error.`
+        };
+      }
+      return {
+        errorCode: "mesh_coordinator_prompt_too_long",
+        error: `Coordinator system prompt for ${ctx.cliType} is too long to pass on the command line via ${injection.flag} (${sizeNote}), and the provider declares no file-based oversizeFallback in meshCoordinator.systemPromptInjection. Update the ${ctx.cliType} provider spec.`
+      };
     }
     function applyInjectionRule(systemPrompt, injection, ctx) {
       switch (injection.mode) {
         case "cli_arg": {
           if (!injection.flag) return {};
-          ctx.cliArgs.push(injection.flag, systemPrompt);
-          return {};
+          return applyInlineOrFallback(systemPrompt, injection, systemPrompt, ctx);
         }
         case "config_override": {
           if (!injection.flag || !injection.template) return {};
           const rendered = injection.template.replace(/\{prompt_json\}/g, JSON.stringify(systemPrompt)).replace(/\{prompt\}/g, systemPrompt);
-          ctx.cliArgs.push(injection.flag, rendered);
-          return {};
+          return applyInlineOrFallback(systemPrompt, injection, rendered, ctx);
         }
         case "env_var": {
           if (!injection.name) return {};
@@ -61801,7 +61838,7 @@ When the user asks to **set up / configure / onboard** this repo for Repo Mesh (
           try {
             const dir = (0, import_node_fs3.mkdtempSync)((0, import_node_path3.join)(os15.tmpdir(), `adhdev-coord-${ctx.cliType}-`));
             const filePath2 = (0, import_node_path3.join)(dir, "coordinator-agent.md");
-            (0, import_node_fs3.writeFileSync)(filePath2, body, "utf-8");
+            (0, import_node_fs3.writeFileSync)(filePath2, body, { encoding: "utf-8", mode: 384 });
             ctx.cliArgs.push(injection.flag, filePath2);
             LOG.info("MeshCoordinator", `Wrote coordinator agent file to ${filePath2} (${ctx.cliType})`);
             return { agentFilePath: filePath2 };
@@ -61964,6 +62001,7 @@ ${rendered}`, "utf-8");
     var import_node_path3;
     var DEFAULT_SERVER_NAME;
     var DEFAULT_ADHDEV_MCP_COMMAND;
+    var COORDINATOR_INLINE_PROMPT_LIMITS;
     var init_mesh_coordinator = __esm2({
       "src/commands/mesh-coordinator.ts"() {
         "use strict";
@@ -61976,6 +62014,12 @@ ${rendered}`, "utf-8");
         init_embedded_path_health();
         DEFAULT_SERVER_NAME = "adhdev-mesh";
         DEFAULT_ADHDEV_MCP_COMMAND = IDENTITY2.binaryName;
+        COORDINATOR_INLINE_PROMPT_LIMITS = {
+          win32Direct: 3e4,
+          win32CmdShell: 8e3,
+          linux: 12e4,
+          posix: 256e3
+        };
       }
     });
     function getRegistryPath() {
@@ -77334,6 +77378,9 @@ ${cleanBody}`;
                         },
                         flag: {
                           type: "string"
+                        },
+                        oversizeFallback: {
+                          $ref: "#/$defs/systemPromptOversizeFallback"
                         }
                       }
                     },
@@ -77354,6 +77401,9 @@ ${cleanBody}`;
                         },
                         template: {
                           type: "string"
+                        },
+                        oversizeFallback: {
+                          $ref: "#/$defs/systemPromptOversizeFallback"
                         }
                       }
                     },
@@ -77710,6 +77760,66 @@ ${cleanBody}`;
             }
           },
           $defs: {
+            systemPromptOversizeFallback: {
+              description: "File-based injection used instead of an inline (cli_arg / config_override) prompt when the prompt would exceed the platform's argv limit (win32 CreateProcess 32,767 chars; 8,191 through cmd.exe). extraArgs are appended only when the fallback is used. Daemons that predate this field ignore it and keep the inline rule.",
+              oneOf: [
+                {
+                  type: "object",
+                  additionalProperties: false,
+                  required: [
+                    "mode",
+                    "flag"
+                  ],
+                  properties: {
+                    mode: {
+                      const: "agent_file"
+                    },
+                    flag: {
+                      type: "string"
+                    },
+                    template: {
+                      type: "string"
+                    },
+                    extraArgs: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                        minLength: 1
+                      }
+                    }
+                  }
+                },
+                {
+                  type: "object",
+                  additionalProperties: false,
+                  required: [
+                    "mode",
+                    "path"
+                  ],
+                  properties: {
+                    mode: {
+                      const: "context_file"
+                    },
+                    path: {
+                      type: "string"
+                    },
+                    wrapper: {
+                      type: "string"
+                    },
+                    owned: {
+                      type: "boolean"
+                    },
+                    extraArgs: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                        minLength: 1
+                      }
+                    }
+                  }
+                }
+              ]
+            },
             autoApproveMode: {
               type: "object",
               required: [
@@ -118368,6 +118478,10 @@ ${marker}`,
         "CLI",
         `[${diagnosticCliType || "cli"}] Spawning (spec v${diagnosticProviderVersion || "unknown"}) in ${workingDir}: ${binaryPath} ${renderArgsForLog(allArgs)}`
       );
+      if (isWin) {
+        const overflow = describeWin32CommandLineOverflow(shellCmd, shellArgs, useShell);
+        if (overflow) LOG.error("CLI", `[${diagnosticCliType || "cli"}] ${overflow}`);
+      }
       return {
         binaryPath,
         allArgs,
@@ -118382,6 +118496,15 @@ ${marker}`,
           env: env2
         }
       };
+    }
+    var WIN32_COMMAND_LINE_MAX = 32767;
+    var WIN32_CMD_SHELL_COMMAND_LINE_MAX = 8191;
+    function describeWin32CommandLineOverflow(shellCmd, shellArgs, viaCmdShell) {
+      const length = [shellCmd, ...shellArgs].reduce((sum, arg) => sum + String(arg).length + 3, 0);
+      const max = viaCmdShell ? WIN32_CMD_SHELL_COMMAND_LINE_MAX : WIN32_COMMAND_LINE_MAX;
+      if (length <= max) return null;
+      const longest = shellArgs.reduce((m, a) => Math.max(m, String(a).length), 0);
+      return `win32 command line is ~${length} chars, over the ${max}-char ${viaCmdShell ? "cmd.exe" : "CreateProcess"} limit (longest single argument: ${longest} chars) \u2014 this spawn will fail. A prompt-sized argument must be passed through a file instead (provider oversizeFallback).`;
     }
     init_auto_approve_modes();
     function isUuid(value) {
@@ -121755,6 +121878,10 @@ ${ptyResult.output.slice(-2e3)}`);
                 providerMeta?.meshCoordinator?.systemPromptInjection,
                 { cliArgs: cliCmdArgs, launchEnv: cliCmdEnv, workspace, cliType }
               );
+              if (effect.error) {
+                LOG.error("MeshCoordinator", effect.error);
+                return { success: false, code: effect.errorCode, error: effect.error, meshId, cliType, workspace };
+              }
               cliCmdContextFilePath = effect.contextFilePath;
               cliCmdContextFileOwned = effect.contextFileOwned === true;
               cliCmdAgentFilePath = effect.agentFilePath;
@@ -121978,6 +122105,10 @@ ${ptyResult.output.slice(-2e3)}`);
               providerMeta?.meshCoordinator?.systemPromptInjection,
               { cliArgs, launchEnv, workspace, cliType }
             );
+            if (effect.error) {
+              LOG.error("MeshCoordinator", effect.error);
+              return { success: false, code: effect.errorCode, error: effect.error, meshId, cliType, workspace };
+            }
             autoImportContextFilePath = effect.contextFilePath;
             autoImportContextFileOwned = effect.contextFileOwned === true;
             autoImportAgentFilePath = effect.agentFilePath;
@@ -124769,7 +124900,7 @@ ${body}`;
       return { success: false, code: "invalid_args", error };
     }
     function readAssistantSessionId(args) {
-      return str6(readOptionalRecord2(args)?.[ASSISTANT_SESSION_ID_ARG]);
+      return str6(readOptionalRecord2(args)?.[ASSISTANT_SESSION_ID_ARG2]);
     }
     function assistantToolGate(verb, args, svc = getAssistantServices()) {
       const sid = readAssistantSessionId(args);
@@ -157966,6 +158097,9 @@ var ASSISTANT_TOOLS = [
   "project_note"
 ];
 var ASSISTANT_TOOL_SET = new Set(ASSISTANT_TOOLS);
+function isAssistantTool(value) {
+  return typeof value === "string" && ASSISTANT_TOOL_SET.has(value);
+}
 var ASSISTANT_VERB = {
   // tool verbs
   projects: "assistant_projects",
@@ -158009,6 +158143,8 @@ var ASSISTANT_REVIEW_TURN_VERBS = [
   ASSISTANT_VERB.skillManage,
   ASSISTANT_VERB.projectNote
 ];
+var ASSISTANT_SESSION_ID_ENV = "ADHDEV_ASSISTANT_SESSION_ID";
+var ASSISTANT_SESSION_ID_ARG = "assistantSessionId";
 var EVIDENCE_SOURCE_IDS = [
   "fsm_edge",
   "short_gen_inline",
@@ -160814,7 +160950,31 @@ var TOOL_ANNOTATIONS = {
   // Each progress note is an additional note.
   progress_update: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   // Pulls context from peer workers — a read that crosses to other sessions.
-  peer_context_pull: READ_REMOTE
+  peer_context_pull: READ_REMOTE,
+  // ── Assistant mode (docs/design/2026-10-07-assistant-layer.md §4.4) ──
+  // ★Read-only vs write follows the design's own split, pinned to
+  // ASSISTANT_WRITE_TOOLS (@adhdev/mesh-shared) by assistant-tools-parity.test.ts:
+  // memory / skill_manage / project_note are the writes; every other assistant
+  // tool is annotated read-only. That includes project_send and project_add,
+  // which do cause effects (a coordinator message / launch, a new project) —
+  // the design classes them with the reads because they touch no assistant
+  // store and the daemon dedups/serializes them; openWorldHint still says
+  // where they reach.
+  projects: READ_LOCAL,
+  project_status: READ_REMOTE,
+  project_send: READ_REMOTE,
+  project_read: READ_LOCAL,
+  project_add: READ_LOCAL,
+  // Filesystem scan of this machine; returns paths and git metadata only.
+  discover_repos: READ_LOCAL,
+  // Updates view counters / un-archives on open, but returns content only.
+  skill_view: READ_LOCAL,
+  // replace/remove overwrite or drop an existing entry (journaled); add accumulates.
+  memory: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+  // patch overwrites a substring; each call counts against the patch caps.
+  skill_manage: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+  // Same shape as mesh_note: record appends, forget retracts.
+  project_note: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false }
 };
 function withAnnotations(tool) {
   const annotations = TOOL_ANNOTATIONS[tool.name];
@@ -168202,6 +168362,7 @@ var STANDARD_TOOLS = [
 function buildMcpHelpText() {
   const meshTools = ALL_MESH_TOOLS.map((tool) => tool.name);
   const workerTools = WORKER_TOOLS;
+  const assistantTools = ASSISTANT_TOOLS;
   return `
 ADHDev MCP Server
 
@@ -168209,6 +168370,7 @@ Usage:
   adhdev mcp                                    Local mode (requires standalone daemon)
   adhdev mcp --mode ipc --repo-mesh <mesh_id>   Cloud daemon IPC mesh mode
   adhdev mcp --mode ipc --worker                Delegated-worker mode (daemon-launched; needs a session bind)
+  adhdev mcp --assistant                        Assistant mode (project / memory / skill tools)
   adhdev-mcp --help                             Compatibility bin (same server, legacy package entrypoint)
 
 Options:
@@ -168218,6 +168380,8 @@ Options:
   --repo-mesh <mesh_id>   Enable mesh mode \u2014 exposes only mesh-scoped coordinator tools
   --worker                Enable worker mode \u2014 the minimal delegated-worker toolset.
                           Overrides --repo-mesh: a worker never gets coordinator tools.
+  --assistant             Enable assistant mode \u2014 the assistant's project, memory and skill tools.
+                          --worker wins over it; combining it with --repo-mesh is an error.
   --help                  Show this help
 
 Environment variables:
@@ -168226,14 +168390,22 @@ Environment variables:
   ADHDEV_MCP_TRANSPORT Transport: local or ipc
   ADHDEV_WORKER_SESSION_BIND  Worker session bind (worker mode; written by the daemon)
   ADHDEV_WORKER_TASK_TOKEN    Worker task token (worker mode; alternative to the bind)
+  ${ASSISTANT_SESSION_ID_ENV} Assistant session id (assistant mode; written by the daemon, optional)
 
 Standard tools:   ${STANDARD_TOOLS.join(", ")}
 Mesh tools:       ${meshTools.join(", ")}
 Worker tools:     ${workerTools.join(", ")}
+Assistant tools:  ${assistantTools.join(", ")}
 `.trim();
 }
 
 // src/cli-args.ts
+var McpCliArgsError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "McpCliArgsError";
+  }
+};
 function parseArgs(argv, env2 = process.env) {
   const args = argv.slice(2);
   let port;
@@ -168241,6 +168413,8 @@ function parseArgs(argv, env2 = process.env) {
   let meshId;
   let explicitMode;
   let worker = false;
+  let assistant = false;
+  let meshFromFlag = false;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === "--mode" && args[i + 1]) {
@@ -168257,10 +168431,14 @@ function parseArgs(argv, env2 = process.env) {
       password = args[++i];
     } else if ((arg === "--repo-mesh" || arg === "--mesh") && args[i + 1]) {
       meshId = args[++i];
+      meshFromFlag = true;
     } else if (arg?.startsWith("--repo-mesh=")) {
       meshId = arg.slice("--repo-mesh=".length);
+      meshFromFlag = true;
     } else if (arg === "--worker") {
       worker = true;
+    } else if (arg === "--assistant") {
+      assistant = true;
     } else if (arg === "--help" || arg === "-h") {
       printHelp();
       process.exit(0);
@@ -168274,6 +168452,12 @@ function parseArgs(argv, env2 = process.env) {
   }
   const mode = explicitMode || (meshId && env2.ADHDEV_INLINE_MESH ? "ipc" : "local");
   if (worker) return { mode, port, password, worker: true };
+  if (assistant) {
+    if (meshFromFlag) {
+      throw new McpCliArgsError("--assistant cannot be combined with --repo-mesh: the assistant toolset never includes mesh coordinator tools.");
+    }
+    return { mode, port, password, assistant: true };
+  }
   return { mode, port, password, meshId };
 }
 function printHelp() {
@@ -168281,10 +168465,10 @@ function printHelp() {
 }
 
 // src/server.ts
-var import_server = require("@modelcontextprotocol/sdk/server/index.js");
-var import_stdio = require("@modelcontextprotocol/sdk/server/stdio.js");
+var import_server2 = require("@modelcontextprotocol/sdk/server/index.js");
+var import_stdio2 = require("@modelcontextprotocol/sdk/server/stdio.js");
 var import_node_os2 = __toESM(require("os"));
-var import_types = require("@modelcontextprotocol/sdk/types.js");
+var import_types2 = require("@modelcontextprotocol/sdk/types.js");
 
 // src/transports/local.ts
 var import_daemon_core27 = __toESM(require_dist3());
@@ -170013,6 +170197,255 @@ function describeWorkerDeliveryAnswer(kind, result) {
   return kind === "report" ? renderReportResult(result).text : renderProgressResult(result).text;
 }
 
+// src/assistant-server.ts
+var import_server = require("@modelcontextprotocol/sdk/server/index.js");
+var import_stdio = require("@modelcontextprotocol/sdk/server/stdio.js");
+var import_types = require("@modelcontextprotocol/sdk/types.js");
+
+// src/tools/assistant-tools.ts
+function readAssistantSessionIdFromEnv(env2 = process.env) {
+  const raw = env2[ASSISTANT_SESSION_ID_ENV];
+  const value = typeof raw === "string" ? raw.trim() : "";
+  return value || void 0;
+}
+var PROJECT_PROP = {
+  project: {
+    type: "string",
+    description: "Project slug (or alias) as shown by `projects`."
+  }
+};
+var ASSISTANT_NOTE_CATEGORIES = ["provider_quirk", "pattern_to_avoid", "recovery_lesson"];
+var PROJECTS_TOOL = {
+  name: "projects",
+  description: "List every project, one line each: slug, repo, whether this machine hosts it or another one does (hostedElsewhere projects are read-only), coordinator state (none / idle / working), whether a thread is open, queue counts, active missions and pending approvals \u2014 plus a machines[] summary (label, OS, online, build).",
+  inputSchema: { type: "object", properties: {}, required: [] }
+};
+var PROJECT_STATUS_TOOL = {
+  name: "project_status",
+  description: "Compact status of one project: machines online, queue counts, active mission titles, failed tasks, pending approvals, and when its coordinator last reported back.",
+  inputSchema: { type: "object", properties: { ...PROJECT_PROP }, required: ["project"] }
+};
+var PROJECT_SEND_TOOL = {
+  name: "project_send",
+  description: "Send a request to a project's coordinator (launching one if none is running) and return immediately with {accepted|queued, launched}. Pass the user's words through as written. The coordinator's reply arrives later as a relay \u2014 do not wait or poll for it. `skills` attaches up to 2 of your skills' bodies below the message.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      ...PROJECT_PROP,
+      message: { type: "string", description: "The request for the coordinator. Required." },
+      skills: {
+        type: "array",
+        items: { type: "string" },
+        maxItems: 2,
+        description: 'Optional: up to 2 skill names whose SKILL.md body is attached as "## Attached procedure: <name>" (12,000 chars total, refused rather than truncated).'
+      }
+    },
+    required: ["project", "message"]
+  }
+};
+var PROJECT_READ_TOOL = {
+  name: "project_read",
+  description: "Read the compact tail of a project coordinator's transcript.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      ...PROJECT_PROP,
+      tail: { type: "integer", minimum: 1, description: "Optional: how many recent messages to return." }
+    },
+    required: ["project"]
+  }
+};
+var PROJECT_ADD_TOOL = {
+  name: "project_add",
+  description: "Make a local git checkout a project (this machine becomes its host). Checkouts on other machines are attached later by the project's coordinator once those machines are paired.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      path: { type: "string", description: "Absolute path of the repository checkout on this machine. Required." },
+      name: { type: "string", description: "Optional display name; defaults to the repository name." }
+    },
+    required: ["path"]
+  }
+};
+var DISCOVER_REPOS_TOOL = {
+  name: "discover_repos",
+  description: "Bounded scan for git repositories (2 s, depth 3, at most 300 directories). Returns only {path, repoIdentity, lastCommitAt, alreadyProject} \u2014 never file contents. Show the user which roots were scanned.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      roots: {
+        type: "array",
+        items: { type: "string" },
+        description: "Optional directories to scan instead of the defaults (~/Work, ~/code, ~/src, ~/dev, ~/Projects, ~ at depth 1, managed workspaces)."
+      }
+    },
+    required: []
+  }
+};
+var MEMORY_TOOL = {
+  name: "memory",
+  description: 'Change your persistent memory: target "memory" (environment & rules across projects) or "user" (the user\'s preferences). add needs text; replace needs match + text; remove needs match. `match` must hit exactly one entry. The result is applied, staged for the owner\'s review, or refused with a code, plus the new usage %. Your current prompt snapshot does not change; the write shows up next session.',
+  inputSchema: {
+    type: "object",
+    properties: {
+      action: enumOf(["add", "replace", "remove"], "Required."),
+      target: enumOf(["memory", "user"], "Which file. Required."),
+      text: { type: "string", description: "add / replace: the entry text." },
+      match: { type: "string", description: "replace / remove: a substring that occurs in exactly one existing entry." }
+    },
+    required: ["action", "target"]
+  }
+};
+var SKILL_VIEW_TOOL = {
+  name: "skill_view",
+  description: 'Read a skill\'s SKILL.md body, or one of its references/ files via `file`. name "list" returns every skill (name, description, state), including ones not in your index. Opening an archived skill makes it active again.',
+  inputSchema: {
+    type: "object",
+    properties: {
+      name: { type: "string", description: 'Skill name, or "list". Required.' },
+      file: { type: "string", description: "Optional: a file under the skill's references/ or templates/." }
+    },
+    required: ["name"]
+  }
+};
+var SKILL_MANAGE_TOOL = {
+  name: "skill_manage",
+  description: "Create, patch or archive one of your skills. create: new skill (name, description, body). patch: replace one unique substring `old` with `new` in the body or in `file` (`file` without `old` adds a reference file; `description` replaces the description). archive: mark it archived (files are kept). Patches are capped per session/turn; deleting, pinning and restoring are owner-only.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      action: enumOf(["create", "patch", "archive"], "Required."),
+      name: { type: "string", description: "Skill name: lowercase letters, digits and dashes. Required." },
+      description: { type: "string", description: "create: one-line description (1\u2013300 chars). patch: replacement description." },
+      body: { type: "string", description: "create: the SKILL.md body (\u2264 12,000 chars)." },
+      old: { type: "string", description: "patch: the unique substring to replace." },
+      new: { type: "string", description: "patch: the replacement text." },
+      file: { type: "string", description: "patch: a references/ or templates/ file to patch or add (.md .txt .json .yaml .yml)." },
+      project: { type: "string", description: "create: optional project slug this skill is for (an index hint only)." }
+    },
+    required: ["action", "name"]
+  }
+};
+var PROJECT_NOTE_TOOL = {
+  name: "project_note",
+  description: "Record or forget an operating note for ONE project \u2014 the rule reaches every coordinator of that project. Use memory instead for rules that span projects, and for the user's preferences. Not available for projects hosted on another machine.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      ...PROJECT_PROP,
+      action: enumOf(["record", "forget"], "Required."),
+      text: { type: "string", description: "record: the note (required). forget: retract notes with exactly this text." },
+      category: enumOf(ASSISTANT_NOTE_CATEGORIES, "record: optional classification (governs prompt retention)."),
+      note_id: { type: "string", description: "forget: the note id to retract." }
+    },
+    required: ["project", "action"]
+  }
+};
+var ALL_ASSISTANT_TOOL_SCHEMAS = [
+  PROJECTS_TOOL,
+  PROJECT_STATUS_TOOL,
+  PROJECT_SEND_TOOL,
+  PROJECT_READ_TOOL,
+  PROJECT_ADD_TOOL,
+  DISCOVER_REPOS_TOOL,
+  MEMORY_TOOL,
+  SKILL_VIEW_TOOL,
+  SKILL_MANAGE_TOOL,
+  PROJECT_NOTE_TOOL
+];
+var ALL_ASSISTANT_TOOLS = annotateAll(ALL_ASSISTANT_TOOL_SCHEMAS);
+function resolveAssistantModeTools(candidates = ALL_ASSISTANT_TOOL_SCHEMAS) {
+  const byName = /* @__PURE__ */ new Map();
+  for (const tool of candidates) {
+    if (byName.has(tool.name)) throw new Error(`assistant mode: tool '${tool.name}' is defined twice`);
+    byName.set(tool.name, tool);
+  }
+  const missingSchema = ASSISTANT_TOOLS.filter((name) => !byName.has(name));
+  const unlisted = [...byName.keys()].filter((name) => !isAssistantTool(name));
+  if (missingSchema.length || unlisted.length) {
+    throw new Error(
+      `assistant mode: tool schemas and ASSISTANT_TOOLS (@adhdev/mesh-shared) disagree \u2014 missing schema for [${missingSchema.join(", ")}]; schema not in ASSISTANT_TOOLS [${unlisted.join(", ")}]`
+    );
+  }
+  return annotateAll(ASSISTANT_TOOLS.map((name) => byName.get(name)));
+}
+async function callAssistantTool(transport, tool, args, assistantSessionId) {
+  const verb = ASSISTANT_TOOL_VERBS[tool];
+  const result = await transport.command(verb, {
+    ...args,
+    ...assistantSessionId ? { [ASSISTANT_SESSION_ID_ARG]: assistantSessionId } : {}
+  });
+  const text = result && typeof result === "object" ? JSON.stringify(result) : String(result);
+  return result?.success === true ? { text } : { text, isError: true };
+}
+async function pullAssistantEvents(transport, assistantSessionId) {
+  try {
+    const result = await transport.command(ASSISTANT_VERB.pendingRelays, {
+      ...assistantSessionId ? { [ASSISTANT_SESSION_ID_ARG]: assistantSessionId } : {}
+    });
+    return result?.success === true && Array.isArray(result.assistantEvents) ? result.assistantEvents : [];
+  } catch {
+    return [];
+  }
+}
+async function attachAssistantEvents(transport, assistantSessionId, text) {
+  if (!text.trimStart().startsWith("{")) return text;
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return text;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return text;
+  if (Object.prototype.hasOwnProperty.call(parsed, "assistantEvents")) return text;
+  const events = await pullAssistantEvents(transport, assistantSessionId);
+  if (events.length === 0) return text;
+  return JSON.stringify({ ...parsed, assistantEvents: events });
+}
+
+// src/assistant-server.ts
+function assistantToolArgsError(tool, args) {
+  const properties = tool.inputSchema.properties;
+  return unknownToolArgsError(tool.name, properties, args) ?? enumValueError(tool.name, properties, args) ?? missingRequiredToolArgsError(tool.name, tool.inputSchema, args);
+}
+async function handleAssistantToolCall(transport, tools, assistantSessionId, name, rawArgs) {
+  const args = rawArgs ?? {};
+  const tool = tools.find((t) => t.name === name);
+  if (!tool || !isAssistantTool(name)) {
+    return { content: [{ type: "text", text: `Unknown tool: ${name}` }], isError: true };
+  }
+  const argsError = assistantToolArgsError(tool, args);
+  if (argsError) return { content: [{ type: "text", text: argsError }], isError: true };
+  try {
+    const result = await callAssistantTool(transport, name, args, assistantSessionId);
+    const text = await attachAssistantEvents(transport, assistantSessionId, result.text);
+    return { content: [{ type: "text", text }], ...result.isError ? { isError: true } : {} };
+  } catch (err) {
+    return { content: [{ type: "text", text: `Error: ${err?.message ?? String(err)}` }], isError: true };
+  }
+}
+async function startAssistantServer(opts) {
+  const tools = resolveAssistantModeTools();
+  const assistantSessionId = readAssistantSessionIdFromEnv();
+  const server = new import_server.Server(
+    { name: "adhdev-mcp-server", version: opts.serverVersion },
+    { capabilities: { tools: {} } }
+  );
+  server.setRequestHandler(import_types.ListToolsRequestSchema, async () => ({ tools }));
+  server.setRequestHandler(import_types.CallToolRequestSchema, async (req) => handleAssistantToolCall(
+    opts.transport,
+    tools,
+    assistantSessionId,
+    req.params.name,
+    req.params.arguments
+  ));
+  await server.connect(new import_stdio.StdioServerTransport());
+  process.stderr.write(
+    `[adhdev-mcp] Server running in ${opts.mode} ASSISTANT mode \u2014 ${tools.length} tools${assistantSessionId ? "" : " (no ADHDEV_ASSISTANT_SESSION_ID: MCP-only assistant)"}.
+`
+  );
+}
+
 // src/server.ts
 var MCP_SERVER_VERSION = "0.0.0-vendored";
 async function buildMeshModeCoordinatorPrompt(mesh) {
@@ -170056,7 +170489,7 @@ async function startMcpServer(opts) {
     const workerToolByName = new Map(
       workerTools.map((tool) => [tool.name, tool])
     );
-    const server2 = new import_server.Server(
+    const server2 = new import_server2.Server(
       { name: "adhdev-mcp-server", version: MCP_SERVER_VERSION },
       { capabilities: { tools: {} } }
     );
@@ -170065,7 +170498,7 @@ async function startMcpServer(opts) {
     server2.onclose = () => {
       void delivery.flush().finally(() => delivery.dispose());
     };
-    server2.setRequestHandler(import_types.ListToolsRequestSchema, async () => ({ tools: workerTools }));
+    server2.setRequestHandler(import_types2.ListToolsRequestSchema, async () => ({ tools: workerTools }));
     async function withMailboxPiggyback(response) {
       const deliveryNotices = delivery.takeNotices();
       if (deliveryNotices.length) {
@@ -170091,7 +170524,7 @@ ${deliveryNotices.join("\n\n")}
       git_log: async (a) => asResponse({ text: await gitLog(transport, { workspace: a.workspace, limit: a.limit, file: a.file, since: a.since, until: a.until, format: a.format }) }),
       git_diff: async (a) => asResponse({ text: await gitDiff(transport, { workspace: a.workspace, file: a.file, max_lines: a.max_lines, staged: a.staged, format: a.format }) })
     };
-    server2.setRequestHandler(import_types.CallToolRequestSchema, async (req) => {
+    server2.setRequestHandler(import_types2.CallToolRequestSchema, async (req) => {
       const { name, arguments: args } = req.params;
       const a = args ?? {};
       delivery.kick();
@@ -170110,12 +170543,13 @@ ${deliveryNotices.join("\n\n")}
         return withMailboxPiggyback({ content: [{ type: "text", text: `Error: ${err?.message ?? String(err)}` }], isError: true });
       }
     });
-    const stdioTransport2 = new import_stdio.StdioServerTransport();
+    const stdioTransport2 = new import_stdio2.StdioServerTransport();
     await server2.connect(stdioTransport2);
     process.stderr.write(`[adhdev-mcp] Server running in ${opts.mode} WORKER mode \u2014 ${workerTools.length} tools.
 `);
     return;
   }
+  if (opts.assistant) return startAssistantServer({ transport, mode: opts.mode, serverVersion: MCP_SERVER_VERSION });
   if (opts.meshId) {
     let mesh;
     if (!mesh && process.env.ADHDEV_INLINE_MESH) {
@@ -170180,7 +170614,7 @@ ${deliveryNotices.join("\n\n")}
     const coordinatorSessionId = typeof process.env.ADHDEV_COORDINATOR_SESSION_ID === "string" && process.env.ADHDEV_COORDINATOR_SESSION_ID.trim() ? process.env.ADHDEV_COORDINATOR_SESSION_ID.trim() : void 0;
     const meshCtx = { mesh, transport, ...localDaemonId ? { localDaemonId } : {}, ...localMachineId ? { localMachineId } : {}, ...coordinatorHostname ? { coordinatorHostname } : {}, ...coordinatorSessionId ? { coordinatorSessionId } : {} };
     const coordinatorPrompt = await buildMeshModeCoordinatorPrompt(mesh);
-    const server2 = new import_server.Server(
+    const server2 = new import_server2.Server(
       { name: "adhdev-mcp-server", version: MCP_SERVER_VERSION },
       { capabilities: { tools: {}, resources: {} } }
     );
@@ -170201,8 +170635,8 @@ ${deliveryNotices.join("\n\n")}
     });
     const { isWorkerMcpEnabled } = await Promise.resolve().then(() => __toESM(require_dist3()));
     const meshTools = isWorkerMcpEnabled() ? [...ALL_MESH_TOOLS, ...annotateAll([MESH_NOTIFY_WORKER_TOOL])] : ALL_MESH_TOOLS;
-    server2.setRequestHandler(import_types.ListToolsRequestSchema, async () => ({ tools: meshTools }));
-    server2.setRequestHandler(import_types.CallToolRequestSchema, async (req) => {
+    server2.setRequestHandler(import_types2.ListToolsRequestSchema, async () => ({ tools: meshTools }));
+    server2.setRequestHandler(import_types2.CallToolRequestSchema, async (req) => {
       const { name, arguments: args } = req.params;
       const a = args ?? {};
       const unknownArgsError = validateMeshToolArgs(name, a);
@@ -170223,7 +170657,7 @@ ${deliveryNotices.join("\n\n")}
         return { content: [{ type: "text", text: `Error: ${err?.message ?? String(err)}` }], isError: true };
       }
     });
-    const stdioTransport2 = new import_stdio.StdioServerTransport();
+    const stdioTransport2 = new import_stdio2.StdioServerTransport();
     await server2.connect(stdioTransport2);
     process.stderr.write(`[adhdev-mcp] Server running in ${opts.mode} mesh mode \u2014 mesh: ${mesh.name} (${mesh.repoIdentity})
 `);
@@ -170252,15 +170686,15 @@ ${deliveryNotices.join("\n\n")}
     MESH_ADD_NODE_TOOL,
     ...isLocal ? [SCREENSHOT_TOOL] : []
   ]);
-  const server = new import_server.Server(
+  const server = new import_server2.Server(
     { name: "adhdev-mcp-server", version: MCP_SERVER_VERSION },
     { capabilities: { tools: {} } }
   );
-  server.setRequestHandler(import_types.ListToolsRequestSchema, async () => ({ tools: allTools }));
+  server.setRequestHandler(import_types2.ListToolsRequestSchema, async () => ({ tools: allTools }));
   const standardToolByName = new Map(
     allTools.map((tool) => [tool.name, tool])
   );
-  server.setRequestHandler(import_types.CallToolRequestSchema, async (req) => {
+  server.setRequestHandler(import_types2.CallToolRequestSchema, async (req) => {
     const { name, arguments: args } = req.params;
     const a = args ?? {};
     const standardTool = standardToolByName.get(name);
@@ -170368,14 +170802,24 @@ ${deliveryNotices.join("\n\n")}
       };
     }
   });
-  const stdioTransport = new import_stdio.StdioServerTransport();
+  const stdioTransport = new import_stdio2.StdioServerTransport();
   await server.connect(stdioTransport);
   process.stderr.write(`[adhdev-mcp] Server running in ${opts.mode} mode.
 `);
 }
 
 // src/index.ts
-startMcpServer(parseArgs(process.argv)).catch((err) => {
+function parseMcpCliArgsOrExit() {
+  try {
+    return parseArgs(process.argv);
+  } catch (err) {
+    if (!(err instanceof McpCliArgsError)) throw err;
+    process.stderr.write(`[adhdev-mcp] ${err.message}
+`);
+    process.exit(1);
+  }
+}
+startMcpServer(parseMcpCliArgsOrExit()).catch((err) => {
   process.stderr.write(`[adhdev-mcp] Fatal: ${err?.message ?? err}
 `);
   process.exit(1);
