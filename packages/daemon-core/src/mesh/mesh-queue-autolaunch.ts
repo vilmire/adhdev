@@ -274,8 +274,8 @@ async function resolveUsableProvider(
         const normalizedType = typeof providerLoader.resolveAlias === 'function'
             ? providerLoader.resolveAlias(requestedType)
             : requestedType;
-        // Skip providers that can't satisfy the task's requiredTags (e.g. provider=hermes-cli
-        // means only hermes-cli qualifies, not any other slot's provider).
+        // Skip providers that can't satisfy the task's requiredTags (e.g. provider=kimi
+        // means only kimi qualifies, not any other slot's provider).
         if (requiredTags?.length && !nodeSatisfiesRequiredTags(requiredTags, buildMeshNodeCapabilityTags(node, normalizedType))) {
             failed.push(`${requestedType}: required_tags_mismatch`);
             continue;
@@ -827,7 +827,7 @@ async function resolveAutoLaunchPlan(
     // provider-agnostic Anthropic model aliases (opus/sonnet/haiku). Now that
     // resolved.providerType is definitively known, drop the model if it is a
     // Claude model but the provider is NOT Anthropic-backed (codex-cli /
-    // antigravity-cli / hermes-cli): forwarding `claude-*` as an initialModel
+    // antigravity-cli): forwarding `claude-*` as an initialModel
     // makes those providers convert it to `-c model='claude-...'`, and a
     // ChatGPT-account codex then rejects the launch with a 400. Stripping it
     // lets the provider fall back to its own default model; the provider-neutral

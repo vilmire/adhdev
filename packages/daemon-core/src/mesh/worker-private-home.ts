@@ -61,7 +61,7 @@ export type WorkerHomeLinkKind = 'symlink' | 'junction' | 'copy';
  * servers (node_repl & co.) in view, the exact leak isolation exists to close.
  * Every provider that links a DIRECTORY through was exposed: codex
  * (`sessions`), antigravity (`brain`/`conversations`), grok (`.grok/sessions`,
- * `.grok/bin`), kimi (`credentials`/`oauth`/`sessions`), hermes (`sessions`).
+ * `.grok/bin`), kimi (`credentials`/`oauth`/`sessions`).
  *
  * So, per platform:
  *
@@ -144,7 +144,7 @@ export function prepareWorkerPrivateHome(
     const skipped: string[] = [];
     const failed: string[] = [];
     // ★The real-home base for SOURCES is not always `realHome` itself. When the
-    // private root stands in for `~/<prefix>` (codex, kimi, hermes), imports are
+    // private root stands in for `~/<prefix>` (codex, kimi), imports are
     // declared root-relative, so the source lives one segment deeper. Joining
     // both ends from the same string — as this loop did until 2026-09-19 —
     // makes every such source miss, and because these entries are deliberately

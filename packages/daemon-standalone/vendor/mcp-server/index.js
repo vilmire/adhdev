@@ -26190,18 +26190,6 @@ ${renderWorkerProtocolFooter2(input)}`;
               maxParallel: 1,
               rationale: "Easy tasks only; auto model selection."
             }
-          ],
-          "hermes-cli": [
-            {
-              difficulty: ["medium"],
-              maxParallel: 2,
-              provisional: true,
-              // NOTE: ESTIMATE, NOT OBSERVED. hermes-cli is absent from the live
-              // slot configuration this table was seeded from, so `medium` is a
-              // conservative placement rather than a transcription. Revisit once
-              // it has real usage data.
-              rationale: "ESTIMATE \u2014 no live slot to transcribe; conservative mid placement. Adjust after real use."
-            }
           ]
         });
         UNKNOWN_CLI_SLOT_RECIPE2 = Object.freeze({
@@ -36254,7 +36242,7 @@ ${error.message || ""}`;
           /** True when this mesh's notice (writer, seq) already has a delivery claim (see deliveryClaimId). */
           isDeliveryClaimed(meshId, writer, seq2) {
             return !!this.stmt(`SELECT 1 FROM turn_events WHERE kind = 'delivered'
-            AND (event_id = ? OR (event_id = ? AND (mesh_id = ? OR mesh_id IS NULL))) LIMIT 1`).get(deliveryClaimId(meshId, writer, seq2), legacyDeliveryClaimId(writer, seq2), meshId);
+            AND (event_id = ? OR (event_id = ? AND mesh_id = ?)) LIMIT 1`).get(deliveryClaimId(meshId, writer, seq2), legacyDeliveryClaimId(writer, seq2), meshId);
           }
           hasEvent(eventId) {
             return !!this.stmt("SELECT 1 FROM turn_events WHERE event_id = ?").get(eventId);
@@ -36307,7 +36295,7 @@ ${error.message || ""}`;
             WHERE n.kind = 'notify' AND n.mesh_id = ? AND n.publish_state = 'published' AND n.recorded_at >= ?
               AND NOT EXISTS (SELECT 1 FROM turn_events d WHERE d.kind = 'delivered' AND (
                     d.event_id = 'delivered:' || n.mesh_id || ':' || n.src_writer || ':' || n.published_seq
-                 OR (d.event_id = 'delivered:' || n.src_writer || ':' || n.published_seq AND (d.mesh_id = n.mesh_id OR d.mesh_id IS NULL))))
+                 OR (d.event_id = 'delivered:' || n.src_writer || ':' || n.published_seq AND d.mesh_id = n.mesh_id)))
             ORDER BY n.published_seq, n.rowid LIMIT ?`).all(meshId, opts.sinceMs ?? 0, opts.limit ?? 200);
             return rows.map(eventFromRow);
           }
@@ -39890,8 +39878,7 @@ ${pattern}
            * is empty" rather than as a broken worker.
            *
            * `sessions` is therefore SYMLINKED through to the real home, the same shape
-           * grok (`.grok/sessions`), kimi (`sessions`) and hermes (`sessions`) already
-           * use. Rewiring the reader instead was rejected for the reason given at the
+           * grok (`.grok/sessions`) and kimi (`sessions`) already use. Rewiring the reader instead was rejected for the reason given at the
            * head of the antigravity spec — symlinks buy the same isolation with zero
            * change to any read path.
            *
@@ -43645,7 +43632,7 @@ ${line}`;
             await deps.waiter.wait(entry.meshId, deadline, signal);
             continue;
           }
-          const messageId = `notify:${entry.writer}:${entry.seq}`;
+          const messageId = `notify:${entry.meshId}:${entry.writer}:${entry.seq}`;
           let outcome;
           try {
             outcome = await deps.port.submit({
@@ -134030,15 +134017,10 @@ ${text}` : text;
        *  can't leak into this session before the agent has written its
        *  own records. */
       spawnedAtMs = 0;
-      /** Env vars the daemon set on the spawned child. Mesh coordinator
-       *  points hermes at a per-coordinator HERMES_HOME so the dashboard's
-       *  native-history reader needs that override to find the right
-       *  state.db; without it the reader sees ~/.hermes/state.db which
-       *  the coordinator-launched hermes never writes to. The choice to
-       *  redirect HERMES_HOME is a workaround for an unresolved hermes
-       *  upstream feature gap (see hermes-agent#23130 — runtime-supplied
-       *  MCP config), so this routing keeps the dashboard honest until
-       *  hermes ships a runtime MCP override. */
+      /** Env vars the daemon set on the spawned child (e.g. a worker's
+       *  private config root such as CODEX_HOME). The native-history reader
+       *  expands `${VAR}` path templates from this map so it follows the
+       *  child's view of its config root rather than the daemon's. */
       spawnedEnv = {};
       /** Wall clock at the moment an approval modal was last resolved (auto-approve,
        *  dashboard, or mesh_approve) via a successful button press. Powers
@@ -155509,18 +155491,6 @@ var CLI_SLOT_RECIPES = Object.freeze({
       difficulty: ["easy"],
       maxParallel: 1,
       rationale: "Easy tasks only; auto model selection."
-    }
-  ],
-  "hermes-cli": [
-    {
-      difficulty: ["medium"],
-      maxParallel: 2,
-      provisional: true,
-      // NOTE: ESTIMATE, NOT OBSERVED. hermes-cli is absent from the live
-      // slot configuration this table was seeded from, so `medium` is a
-      // conservative placement rather than a transcription. Revisit once
-      // it has real usage data.
-      rationale: "ESTIMATE \u2014 no live slot to transcribe; conservative mid placement. Adjust after real use."
     }
   ]
 });

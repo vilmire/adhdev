@@ -191,15 +191,10 @@ export class SpecCliAdapter implements CliAdapter {
      *  can't leak into this session before the agent has written its
      *  own records. */
     private spawnedAtMs = 0;
-    /** Env vars the daemon set on the spawned child. Mesh coordinator
-     *  points hermes at a per-coordinator HERMES_HOME so the dashboard's
-     *  native-history reader needs that override to find the right
-     *  state.db; without it the reader sees ~/.hermes/state.db which
-     *  the coordinator-launched hermes never writes to. The choice to
-     *  redirect HERMES_HOME is a workaround for an unresolved hermes
-     *  upstream feature gap (see hermes-agent#23130 — runtime-supplied
-     *  MCP config), so this routing keeps the dashboard honest until
-     *  hermes ships a runtime MCP override. */
+    /** Env vars the daemon set on the spawned child (e.g. a worker's
+     *  private config root such as CODEX_HOME). The native-history reader
+     *  expands `${VAR}` path templates from this map so it follows the
+     *  child's view of its config root rather than the daemon's. */
     private spawnedEnv: Record<string, string> = {};
     /** Wall clock at the moment an approval modal was last resolved (auto-approve,
      *  dashboard, or mesh_approve) via a successful button press. Powers

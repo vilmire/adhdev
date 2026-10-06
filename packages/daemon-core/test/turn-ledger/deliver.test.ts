@@ -15,6 +15,7 @@ import {
     type TurnDeliverDeps,
 } from '../../src/mesh/turn-ledger/deliver.js';
 import type { CoordinatorSessionView } from '../../src/mesh/turn-ledger/routing.js';
+import { createSessionInputService } from '../../src/sessions/session-input-service.js';
 import { DEFAULT_TURN_POLICY } from '../../src/mesh/turn-ledger/policy.js';
 import type { TurnLedger } from '../../src/mesh/turn-ledger/ledger.js';
 import { T0, dispatch, evd, fakePublisher, ledgerOn, memDb, rowsOf } from './ledger-harness.js';
@@ -134,7 +135,7 @@ describe('turn.deliver — local commit → one submit, exactly once', () => {
         expect(result).toMatchObject({ outcome: 'delivered', sessionId: 'coord', escalated: false });
         expect(f.port.calls).toHaveLength(1);
         const msg = f.port.calls[0]!;
-        expect(msg).toMatchObject({ messageId: `notify:${entry.writer}:${entry.seq}`, origin: 'mesh', policy: { mode: 'queue' }, sessionId: 'coord' });
+        expect(msg).toMatchObject({ messageId: `notify:${entry.meshId}:${entry.writer}:${entry.seq}`, origin: 'mesh', policy: { mode: 'queue' }, sessionId: 'coord' });
         expect(msg.input.textFallback).toContain("Node 'n1' has completed its task");
         expect(msg.input.textFallback).toContain(SENTINEL);
         expect(f.ledger.store.hasEvent(`delivered:${entry.meshId}:${entry.writer}:${entry.seq}`)).toBe(true);
@@ -338,6 +339,68 @@ describe('turn.deliver — claims are per mesh (seq counts per mesh topic)', () 
         expect(result).toMatchObject({ outcome: 'skipped', why: 'already_delivered' });
         expect(f.port.calls).toHaveLength(0);
         expect(f.ledger.store.listUndeliveredNotifies(entry.meshId)).toHaveLength(0);
+    });
+
+    it('a legacy claim row with no mesh_id does not count for any mesh (pre-2026-10-02 rows are outside the backlog window)', async () => {
+        const f = fixture();
+        await commitWithLocalSummary(f);
+        const entry = notifyEntry(f);
+        f.ledger.store.insertEvent({
+            eventId: `delivered:${entry.writer}:${entry.seq}`, meshId: null, attemptId: null, generation: null,
+            sessionId: 'coord', kind: 'delivered', source: 'input_service', verdict: 'recorded',
+            payload: { outcome: 'delivered' }, publishState: 'none', atMs: T0, recordedAt: T0,
+        } as never);
+        expect(f.ledger.store.isDeliveryClaimed(entry.meshId, entry.writer, entry.seq)).toBe(false);
+        expect(f.ledger.store.listUndeliveredNotifies(entry.meshId)).toHaveLength(1);
+
+        const result = await createTurnDeliverHandler(f.deps)(entry, new AbortController().signal);
+
+        expect(result).toMatchObject({ outcome: 'delivered', sessionId: 'coord' });
+        expect(f.port.calls).toHaveLength(1);
+    });
+
+    it('two meshes with the same (writer, seq) deliver two distinct messages to one coordinator session', async () => {
+        // The input port dedupes on messageId for 300 s. The id used to be
+        // `notify:<writer>:<seq>`, so mesh B's notice reached the shared
+        // session as a `duplicate` of mesh A's and was silently dropped.
+        const writes: string[] = [];
+        const session = createSessionInputService({
+            resolveSession: () => ({
+                getStatus: () => ({ status: 'idle' }),
+                async sendMessage(text: string) { writes.push(text); return { status: 'delivered' as const }; },
+            }),
+            clock: () => T0,
+        });
+        const meshes = ['mesh_a', 'mesh_b'].map((meshId) => {
+            const f = fixture();
+            const outcomes: SubmitOutcome[] = [];
+            const port = { calls: [] as OutboundMessage[], async submit(msg: OutboundMessage) { port.calls.push(msg); const o = await session.submit(msg); outcomes.push(o); return o; } };
+            return { f, meshId, port, outcomes };
+        });
+        for (const m of meshes) {
+            m.f.ledger.observe(dispatch({ meshId: m.meshId }));
+            m.f.ledger.observe(evd('delivered', { messageId: 'msg-1', outcome: 'delivered', via: 'local' }, { source: 'input_service' }));
+            m.f.ledger.observe(evd('turn_started', { retro: false }));
+            m.f.ledger.observe(evd('turn_end', { strength: 'genuine' }), { envelope: { finalSummary: `summary of ${m.meshId}`, notice: { nodeLabel: "Node 'n1'" } } });
+            await m.f.ledger.flushPublish();
+        }
+        const [a, b] = meshes.map((m) => notifyEntry(m.f));
+        // Precondition: the collision — same daemon writer, same per-topic seq, different mesh.
+        expect(a!.meshId).toBe('mesh_a');
+        expect(b!.meshId).toBe('mesh_b');
+        expect([b!.writer, b!.seq]).toEqual([a!.writer, a!.seq]);
+
+        for (const [i, m] of meshes.entries()) {
+            const result = await createTurnDeliverHandler({ ...m.f.deps, port: m.port })([a, b][i]!, new AbortController().signal);
+            expect(result).toMatchObject({ outcome: 'delivered', sessionId: 'coord' });
+        }
+
+        const ids = meshes.map((m) => m.port.calls[0]!.messageId);
+        expect(new Set(ids).size).toBe(2);
+        expect(meshes.flatMap((m) => m.outcomes.map((o) => o.kind))).toEqual(['delivered', 'delivered']);
+        expect(writes).toHaveLength(2);
+        expect(writes[0]).toContain('summary of mesh_a');
+        expect(writes[1]).toContain('summary of mesh_b');
     });
 });
 

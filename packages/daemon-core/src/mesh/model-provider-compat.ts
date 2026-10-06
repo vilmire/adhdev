@@ -4,10 +4,10 @@
  * WHY THIS EXISTS: the difficulty→brain presets carry
  * provider-agnostic model strings like `opus`/`sonnet`/`haiku`, which are
  * Anthropic (Claude) model names. When a task lands on a node whose provider is
- * NOT Anthropic-backed — `codex-cli` (ChatGPT), `antigravity-cli`, `hermes-cli`
- * — forwarding a `claude-*` model as the launch arg makes that provider convert
- * it to e.g. `-c model='claude-...'`, and a ChatGPT-account codex then rejects
- * the launch with a 400. The model string was never meant to be forced onto a
+ * NOT Anthropic-backed — `codex-cli` (ChatGPT), `antigravity-cli` — forwarding
+ * a `claude-*` model as the launch arg makes that provider convert it to e.g.
+ * `-c model='claude-...'`, and a ChatGPT-account codex then rejects the launch
+ * with a 400. The model string was never meant to be forced onto a
  * provider that can't honor it (presets are "best-effort at launch").
  *
  * The invariant this enforces: **an Anthropic (`claude-*`) model is never passed

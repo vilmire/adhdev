@@ -92,14 +92,10 @@ export interface NativeHistoryInput {
      *  caller (chat-history pipeline) populates this from the session
      *  registry; specs/executor never need to know how it's sourced. */
     sessionStartedAtMs?: number;
-    /** Env overrides the daemon set on the spawned CLI. The mesh
-     *  coordinator points hermes at a per-coordinator HERMES_HOME so
-     *  the hermes process writes its state.db into a tmp directory
-     *  instead of ~/.hermes. expandPath consults this map before
+    /** Env overrides the daemon set on the spawned CLI (e.g. a worker's
+     *  private config root). expandPath consults this map before
      *  process.env so the native-history reader follows the spawned
-     *  child's view of HERMES_HOME / similar overrides; without it
-     *  the reader would always look at ~/.hermes and miss every
-     *  coordinator-session transcript. */
+     *  child's view of a `${VAR}` path template instead of the daemon's. */
     envOverrides?: Record<string, string>;
     /** Bypass parsed JSONL reuse for completion-contract evidence reads. */
     forceRefresh?: boolean;
