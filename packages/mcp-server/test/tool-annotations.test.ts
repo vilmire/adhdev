@@ -24,6 +24,7 @@ import test from 'node:test';
 
 import { ALL_MESH_TOOLS, MESH_NOTIFY_WORKER_TOOL } from '../src/tools/mesh-tools.js';
 import { ALL_WORKER_TOOLS } from '../src/tools/worker-tools.js';
+import { ALL_ASSISTANT_TOOLS } from '../src/tools/assistant-tools.js';
 import {
   TOOL_ANNOTATIONS,
   annotateAll,
@@ -217,6 +218,7 @@ test('no classification exists for a tool that is not published anywhere', () =>
   const published = new Set<string>([
     ...ALL_MESH_TOOLS.map(t => t.name),
     ...ALL_WORKER_TOOLS.map(t => t.name),
+    ...ALL_ASSISTANT_TOOLS.map(t => t.name),
     ...STANDARD_MODE_TOOLS.map(t => t.name),
     MESH_NOTIFY_WORKER_TOOL.name,
   ]);

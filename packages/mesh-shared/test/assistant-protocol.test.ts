@@ -41,7 +41,7 @@ describe('ASSISTANT_TOOLS', () => {
     })
 
     it('write tools are memory, skill_manage and project_note', () => {
-        expect([...ASSISTANT_WRITE_TOOLS].sort()).toEqual(['memory', 'project_note', 'skill_manage'])
+        expect([...ASSISTANT_WRITE_TOOLS].sort()).toEqual(['memory', 'project_add', 'project_note', 'project_send', 'skill_manage'])
     })
 })
 
