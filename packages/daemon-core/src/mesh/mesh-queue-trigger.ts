@@ -22,6 +22,7 @@ import { maybeAutoLaunchOneQueueSession } from './mesh-queue-autolaunch.js';
 import { LOG } from '../logging/logger.js';
 import { sweepAutoLaunchOrphanSessions, isAutoLaunchWithinAwaitClaimWindow } from './mesh-autolaunch-integrity.js';
 import { maybeAutoFastForwardIdleNode } from './mesh-auto-fast-forward.js';
+import { collectPinnedRemoteIdleCandidates } from './mesh-pinned-remote-idle.js';
 
 export interface MeshQueueTriggerResult {
     success: true;
@@ -188,6 +189,13 @@ export async function triggerMeshQueue(components: DaemonComponents, meshId: str
             remoteIdleSessionsChecked += 1;
             remoteCandidates.push({ nodeId: idle.nodeId, sessionId: idle.sessionId, providerType: idle.providerType, origin: 'remote', node });
         }
+    }
+
+    // A task pinned to a remote session that the member's pushed runtime reports idle —
+    // its own agent:ready edge is processed on the member, not here (mesh-pinned-remote-idle.ts).
+    for (const candidate of collectPinnedRemoteIdleCandidates(components, meshId, mesh, [...localCandidates, ...remoteCandidates])) {
+        remoteIdleSessionsChecked += 1;
+        remoteCandidates.push(candidate);
     }
 
     const quotaClaimTrace: QuotaClaimDrainTrace = { blocked: [], evaluated: 0, clear: 0 };

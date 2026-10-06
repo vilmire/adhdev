@@ -71626,6 +71626,46 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         AUTO_LAUNCH_COOLDOWN_MS = 5e3;
       }
     });
+    function collectPinnedRemoteIdleCandidates(components, meshId, mesh, alreadyOffered, now = Date.now()) {
+      const store2 = components.router?.meshNodeGitState;
+      const nodes = Array.isArray(mesh?.nodes) ? mesh.nodes : [];
+      if (!store2 || nodes.length === 0) return [];
+      let pending;
+      try {
+        pending = getQueue(meshId, { status: ["pending"] });
+      } catch {
+        return [];
+      }
+      const out = [];
+      for (const task of pending) {
+        const targetSessionId = readText(task.targetSessionId);
+        const targetNodeId = readText(task.targetNodeId);
+        if (!targetSessionId || !targetNodeId || taskIsParked(task)) continue;
+        if (alreadyOffered.some((c) => sessionIdsEquivalent(c.sessionId, targetSessionId))) continue;
+        if (out.some((c) => sessionIdsEquivalent(c.sessionId, targetSessionId))) continue;
+        if (components.instanceManager?.getInstance?.(targetSessionId)) continue;
+        const node = nodes.find((n) => meshNodeIdMatches7(n, targetNodeId));
+        if (!node) continue;
+        const daemonId = readMeshNodeDaemonId(node) ?? "";
+        const held = readLiveHeldRuntime(store2, { meshId, nodeId: readText(node.id) || targetNodeId, daemonId }, now);
+        const session = held?.runtime.sessions.find((s2) => sessionIdsEquivalent(readText(s2.id) || readText(s2.instanceId) || readText(s2.sessionId), targetSessionId));
+        if (!session || readText(session.status).toLowerCase() !== "idle") continue;
+        const providerType = readText(session.providerType);
+        if (!providerType) continue;
+        out.push({ nodeId: readText(node.id) || targetNodeId, sessionId: targetSessionId, providerType, origin: "remote", node });
+      }
+      return out;
+    }
+    var init_mesh_pinned_remote_idle = __esm2({
+      "src/mesh/mesh-pinned-remote-idle.ts"() {
+        "use strict";
+        init_dist();
+        init_mesh_work_queue();
+        init_mesh_task_parking();
+        init_mesh_node_identity();
+        init_mesh_node_git_refresher();
+      }
+    });
     function countQueueStatus(meshId, status) {
       return getQueueHeads2(meshId, { status: [status] }).length;
     }
@@ -71722,6 +71762,10 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
           remoteIdleSessionsChecked += 1;
           remoteCandidates.push({ nodeId: idle.nodeId, sessionId: idle.sessionId, providerType: idle.providerType, origin: "remote", node });
         }
+      }
+      for (const candidate of collectPinnedRemoteIdleCandidates(components, meshId, mesh, [...localCandidates, ...remoteCandidates])) {
+        remoteIdleSessionsChecked += 1;
+        remoteCandidates.push(candidate);
       }
       const quotaClaimTrace = { blocked: [], evaluated: 0, clear: 0 };
       const assignIdleCandidate = (candidate) => {
@@ -71838,6 +71882,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         init_logger();
         init_mesh_autolaunch_integrity();
         init_mesh_auto_fast_forward();
+        init_mesh_pinned_remote_idle();
         inFlightAutoLaunches = /* @__PURE__ */ new Map();
       }
     });
