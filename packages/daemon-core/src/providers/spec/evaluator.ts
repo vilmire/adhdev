@@ -287,6 +287,21 @@ export function extractTitle(
     sections: ResolvedSection[],
     fullScreen: string,
 ): string | null {
+    const title = extractBaseTitle(rule, sections, fullScreen);
+    if (!title || !rule.detail_section) return title;
+    const extra = sectionText(sections, rule.detail_section, '')
+        .split('\n')
+        .map(l => l.trim())
+        .filter(l => l && !/^[─╌═─\s]+$/.test(l))
+        .slice(0, TITLE_DETAIL_MAX_LINES);
+    return extra.length ? `${title}\n${extra.join('\n')}` : title;
+}
+
+function extractBaseTitle(
+    rule: ExtractTitle,
+    sections: ResolvedSection[],
+    fullScreen: string,
+): string | null {
     const hay = sectionText(sections, rule.section, fullScreen);
     if (!hay) return null;
 

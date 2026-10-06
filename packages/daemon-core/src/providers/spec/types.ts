@@ -389,6 +389,14 @@ export interface ExtractTitle {
      * `rm -rf` and `git push --force` looked the same.
      */
     detail_until?: string;
+    /**
+     * Also append the non-blank lines of this section under the title. For a
+     * modal whose subject is drawn ABOVE its question: cursor-cli renders the
+     * command as `$  rm … in .` over "Run this command?", so `first_line` on the
+     * question alone dropped the command from the approval card and push.
+     * Empty or missing section → title unchanged (older daemons ignore the key).
+     */
+    detail_section?: string;
 }
 
 export interface ExtractButtons {
