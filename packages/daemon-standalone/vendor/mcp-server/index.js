@@ -85201,6 +85201,7 @@ ${tail}` : ""
     });
     var index_exports2 = {};
     __export2(index_exports2, {
+      ACK_TIMEOUT_MS: () => ACK_TIMEOUT_MS,
       ADHDEV_AUTHORITY_ID: () => ADHDEV_AUTHORITY_ID,
       ALWAYS_ON_TRACE_CATEGORIES: () => ALWAYS_ON_TRACE_CATEGORIES,
       AgentStreamPoller: () => AgentStreamPoller,
@@ -85222,6 +85223,7 @@ ${tail}` : ""
       COMMAND_PREFIX_DEFAULTS: () => COMMAND_PREFIX_DEFAULTS,
       COMPACT_STATUS_GOAL_PREVIEW_MAX: () => COMPACT_STATUS_GOAL_PREVIEW_MAX,
       CONFIG_SETTINGS_TOPIC: () => CONFIG_SETTINGS_TOPIC,
+      CONNECT_TIMEOUT_MS: () => CONNECT_TIMEOUT_MS,
       CTRL_C: () => CTRL_C,
       CUSTOM_PROVIDERS_DOCS_URL: () => CUSTOM_PROVIDERS_DOCS_URL,
       CdpDomHandlers: () => CdpDomHandlers,
@@ -85269,6 +85271,8 @@ ${tail}` : ""
       FINALITY_INTERVAL_MS: () => FINALITY_INTERVAL_MS,
       FLEET_SECRET_FILE: () => FLEET_SECRET_FILE,
       FsmDriver: () => FsmDriver,
+      GIT_COMMAND_TIMEOUT_MS: () => GIT_COMMAND_TIMEOUT_MS,
+      GIT_STATUS_PROBE_TIMEOUT_MS: () => GIT_STATUS_PROBE_TIMEOUT_MS,
       GOAL_PREVIEW_MAX: () => GOAL_PREVIEW_MAX,
       GitCommandError: () => GitCommandError,
       GitWorkspaceMonitor: () => GitWorkspaceMonitor,
@@ -85290,12 +85294,16 @@ ${tail}` : ""
       KNOWN_DIGEST_ALGORITHMS: () => KNOWN_DIGEST_ALGORITHMS,
       LEGACY_TURN_TABLES: () => LEGACY_TURN_TABLES,
       LEGACY_UNVERIFIED_ALGORITHM: () => LEGACY_UNVERIFIED_ALGORITHM,
+      LIVENESS_PROOF_WINDOW_MS: () => LIVENESS_PROOF_WINDOW_MS,
       LOG: () => LOG,
       LowDiskSpaceError: () => LowDiskSpaceError,
       MAX_CAPTURE_LOG_GENERATIONS: () => MAX_CAPTURE_LOG_GENERATIONS,
       MAX_CAPTURE_LOG_SIZE: () => MAX_CAPTURE_LOG_SIZE,
+      MAX_CONNECT_QUEUE: () => MAX_CONNECT_QUEUE,
+      MAX_CONSECUTIVE_TIMEOUTS: () => MAX_CONSECUTIVE_TIMEOUTS,
       MAX_LEDGER_SLICE_LIMIT: () => MAX_LEDGER_SLICE_LIMIT,
       MAX_PROJECTED_STRING: () => MAX_PROJECTED_STRING,
+      MAX_RETAINED_PEERS: () => MAX_RETAINED_PEERS,
       MAX_SESSIONS_PER_MESH: () => MAX_SESSIONS_PER_MESH,
       MAX_SIZE_ROTATION_GENERATIONS: () => MAX_SIZE_ROTATION_GENERATIONS,
       MAX_STANDALONE_SEQSCRIBE_LANES: () => MAX_STANDALONE_SEQSCRIBE_LANES,
@@ -85314,6 +85322,7 @@ ${tail}` : ""
       MESH_RECORD_MAX_WAITING: () => MESH_RECORD_MAX_WAITING,
       MESH_REFINE_CONFIG_LOCATIONS: () => MESH_REFINE_CONFIG_LOCATIONS,
       MESH_REFINE_CONFIG_SCHEMA: () => MESH_REFINE_CONFIG_SCHEMA,
+      MESH_RPC_DATA_CHANNEL_LABEL: () => MESH_RPC_DATA_CHANNEL_LABEL,
       MESH_SCHEDULING_STRATEGIES: () => MESH_SCHEDULING_STRATEGIES,
       MESH_SENDER_DAEMON_ID_ARG: () => MESH_SENDER_DAEMON_ID_ARG,
       MESH_TASK_BATCH_MAX_TASKS: () => MESH_TASK_BATCH_MAX_TASKS2,
@@ -85324,6 +85333,7 @@ ${tail}` : ""
       MIN_MACHINE_RUNTIME_SUBSCRIPTION_INTERVAL_MS: () => MIN_MACHINE_RUNTIME_SUBSCRIPTION_INTERVAL_MS,
       MIN_SESSION_HOST_DIAGNOSTICS_SUBSCRIPTION_INTERVAL_MS: () => MIN_SESSION_HOST_DIAGNOSTICS_SUBSCRIPTION_INTERVAL_MS,
       MODEL_AXIS_SOURCES: () => MODEL_AXIS_SOURCES,
+      MeshRpcEndpoint: () => MeshRpcEndpoint,
       MeshTopicActivationError: () => MeshTopicActivationError,
       MeshTopicIndex: () => MeshTopicIndex,
       NOTICE_BACKLOG_WINDOW_MS: () => NOTICE_BACKLOG_WINDOW_MS,
@@ -85339,7 +85349,11 @@ ${tail}` : ""
       PARKED_TASK_RETENTION_MS: () => PARKED_TASK_RETENTION_MS,
       PARK_REASON_PIN_EXPIRED: () => PARK_REASON_PIN_EXPIRED,
       PARK_RETENTION_EXPIRED_REASON: () => PARK_RETENTION_EXPIRED_REASON,
+      PROBE_COMMAND_TIMEOUT_MS: () => PROBE_COMMAND_TIMEOUT_MS,
+      PROBE_CONNECT_WAIT_MS: () => PROBE_CONNECT_WAIT_MS,
+      PROBE_TIMEOUT_MS: () => PROBE_TIMEOUT_MS,
       PROJECTED_PAYLOAD_KEYS: () => PROJECTED_PAYLOAD_KEYS,
+      PROTOCOL_VERSION: () => PROTOCOL_VERSION,
       PROVIDER_CHANNEL_ENV_VAR: () => PROVIDER_CHANNEL_ENV_VAR,
       PRUNABLE_ORPHAN_STALE_REASONS: () => PRUNABLE_ORPHAN_STALE_REASONS,
       ProviderChannelError: () => ProviderChannelError,
@@ -85350,6 +85364,8 @@ ${tail}` : ""
       QUOTA_AXIS: () => QUOTA_AXIS,
       QUOTA_AXIS_TTL_MS: () => QUOTA_AXIS_TTL_MS,
       RECENT_TERMINAL_REFINE_CAP: () => RECENT_TERMINAL_REFINE_CAP,
+      REPO_MUTATION_COMMAND_TIMEOUT_MS: () => REPO_MUTATION_COMMAND_TIMEOUT_MS,
+      REQUEST_TIMEOUT_MS: () => REQUEST_TIMEOUT_MS6,
       RETIRED_MESH_CONSUMER_PREFIXES: () => RETIRED_MESH_CONSUMER_PREFIXES,
       RETIRED_MESH_TOOLS: () => RETIRED_MESH_TOOLS2,
       RawTerminalAttachment: () => RawTerminalAttachment,
@@ -85357,11 +85373,14 @@ ${tail}` : ""
       SEQSCRIBE_DB_SUFFIX_ENV_VAR: () => SEQSCRIBE_DB_SUFFIX_ENV_VAR,
       SESSION_BUSY_WITH_TASK_CODE: () => SESSION_BUSY_WITH_TASK_CODE2,
       SESSION_LAUNCHED_BY: () => SESSION_LAUNCHED_BY,
+      SETTLED_ID_RETENTION_MS: () => SETTLED_ID_RETENTION_MS,
       STALE_TERMINAL_REFINE_WINDOW_MS: () => STALE_TERMINAL_REFINE_WINDOW_MS,
       STANDALONE_CDP_SCAN_INTERVAL_MS: () => STANDALONE_CDP_SCAN_INTERVAL_MS,
       STANDALONE_SEQSCRIBE_PEER_CLASS: () => STANDALONE_SEQSCRIBE_PEER_CLASS,
       STANDALONE_SEQSCRIBE_WS_PATH: () => STANDALONE_SEQSCRIBE_WS_PATH,
+      STATUS_PROBE_ARG_KEY: () => STATUS_PROBE_ARG_KEY2,
       STOP_CONTROL_ID: () => STOP_CONTROL_ID,
+      STRUCTURED_P2P_UNAVAILABLE_CODES: () => STRUCTURED_P2P_UNAVAILABLE_CODES,
       SYM: () => SYM,
       SessionBusyWithTaskError: () => SessionBusyWithTaskError,
       SessionHostController: () => SessionHostController,
@@ -85400,6 +85419,7 @@ ${tail}` : ""
       applyBoundedRetention: () => applyBoundedRetention,
       applyDaemonEnvOverrides: () => applyDaemonEnvOverrides,
       applyInlineMeshBranchConvergence: () => applyInlineMeshBranchConvergence,
+      argsCarryStatusProbeMarker: () => argsCarryStatusProbeMarker,
       armMeshTurnConsumer: () => armMeshTurnConsumer,
       assertNoDependencyCycle: () => assertNoDependencyCycle,
       baseTopicDefinitions: () => baseTopicDefinitions,
@@ -85460,6 +85480,7 @@ ${tail}` : ""
       classifyDuplicateMeshDispatch: () => classifyDuplicateMeshDispatch,
       classifyMeshLaunchAxisSource: () => classifyMeshLaunchAxisSource,
       classifyP2pRelayFailure: () => classifyP2pRelayFailure3,
+      classifyPeerCloseReason: () => classifyPeerCloseReason,
       classifySessionBusyWithTask: () => classifySessionBusyWithTask2,
       classifyStaleDirectForPrune: () => classifyStaleDirectForPrune,
       classifyVolatilePath: () => classifyVolatilePath,
@@ -85474,6 +85495,7 @@ ${tail}` : ""
       computeMeshMissionStats: () => computeMeshMissionStats,
       computeMeshTaskStats: () => computeMeshTaskStats,
       computeProviderTreeDigest: () => computeProviderTreeDigest,
+      computeRecoverableRetryDelayMs: () => computeRecoverableRetryDelayMs,
       configSettingsPolicy: () => configSettingsPolicy,
       configureDebugTraceStore: () => configureDebugTraceStore,
       configureMeshPublisher: () => configureMeshPublisher,
@@ -85530,6 +85552,7 @@ ${tail}` : ""
       detectIDEs: () => detectIDEs,
       effectiveModelSelectionValue: () => effectiveModelSelectionValue,
       encodeDuplicateMeshDispatchCode: () => encodeDuplicateMeshDispatchCode,
+      encodeMeshHandlerErrorCode: () => encodeMeshHandlerErrorCode,
       enqueueTask: () => enqueueTask,
       enqueueTaskBatch: () => enqueueTaskBatch,
       ensureSessionHostReady: () => ensureSessionHostReady,
@@ -85665,6 +85688,7 @@ ${tail}` : ""
       isP2pRelayTransportFailure: () => isP2pRelayTransportFailure3,
       isPathInside: () => isPathInside,
       isPreviewReleaseChannel: () => isPreviewReleaseChannel,
+      isProbeClassMeshCommand: () => isProbeClassMeshCommand,
       isProjectedPayloadKey: () => isProjectedPayloadKey,
       isRestartBlockingPresentation: () => isRestartBlockingPresentation,
       isSecretLikeEnvKey: () => isSecretLikeEnvKey,
@@ -85702,10 +85726,12 @@ ${tail}` : ""
       loadStoredFleetSecret: () => loadStoredFleetSecret,
       logCommand: () => logCommand,
       logDiskSpaceStatus: () => logDiskSpaceStatus,
+      logMeshCommandEvent: () => logMeshCommandEvent,
       machineCoreFromDaemonId: () => machineCoreFromDaemonId,
       makeUsage: () => makeUsage,
       mapTranscriptViewToReadChatPayload: () => mapTranscriptViewToReadChatPayload3,
       markSetupComplete: () => markSetupComplete,
+      maskDaemonId: () => maskDaemonId,
       maxEntryBytes: () => maxEntryBytes,
       maybeInjectIdleActiveMissionReminder: () => maybeInjectIdleActiveMissionReminder,
       maybeRunDaemonUpgradeHelperFromEnv: () => maybeRunDaemonUpgradeHelperFromEnv,
@@ -85818,6 +85844,7 @@ ${tail}` : ""
       readOwnTaskLifecycle: () => readOwnTaskLifecycle,
       readSessionUsage: () => readSessionUsage,
       readStatuslineStatus: () => readStatuslineStatus,
+      readTimeoutEnv: () => readTimeoutEnv,
       readTokenCount: () => readTokenCount,
       readTurnTerminalViews: () => readTurnTerminalViews,
       recordDebugTrace: () => recordDebugTrace,
@@ -85855,6 +85882,7 @@ ${tail}` : ""
       resolveInstanceDir: () => resolveInstanceDir,
       resolveInterruptCapability: () => resolveInterruptCapability,
       resolveMaxParallelTasks: () => resolveMaxParallelTasks,
+      resolveMeshConnectWaitMs: () => resolveMeshConnectWaitMs,
       resolveMeshHostStatus: () => resolveMeshHostStatus,
       resolveMeshNodeAttribution: () => resolveMeshNodeAttribution,
       resolveMeshRefineValidationPlan: () => resolveMeshRefineValidationPlan,
@@ -85878,6 +85906,7 @@ ${tail}` : ""
       resolveTurnAttemptRow: () => resolveTurnAttemptRow,
       resolveWorktreeBaseDir: () => resolveWorktreeBaseDir,
       resolveWorktreePath: () => resolveWorktreePath,
+      resultTimeoutForCommand: () => resultTimeoutForCommand,
       retiredMeshToolError: () => retiredMeshToolError2,
       retractCoordinatorNotices: () => retractCoordinatorNotices,
       retractDispatchBlockedNotices: () => retractDispatchBlockedNotices,
@@ -85913,6 +85942,7 @@ ${tail}` : ""
       startMeshWorktreeBootstrap: () => startMeshWorktreeBootstrap,
       startTurnScheduler: () => startTurnScheduler,
       storeFleetSecret: () => storeFleetSecret,
+      stripStatusProbeMarker: () => stripStatusProbeMarker,
       subscribeHostCommandTopics: () => subscribeHostCommandTopics,
       subscribeHostMeshState: () => subscribeHostMeshState,
       subscribeHostStatusFacts: () => subscribeHostStatusFacts,
@@ -85924,6 +85954,9 @@ ${tail}` : ""
       sumSessionUsage: () => sumSessionUsage,
       summarizeGitStatus: () => summarizeGitStatus,
       summarizeMeshAsyncRefineJobs: () => summarizeMeshAsyncRefineJobs2,
+      summarizeMeshCommandArgs: () => summarizeMeshCommandArgs,
+      summarizeMeshCommandGitResult: () => summarizeMeshCommandGitResult,
+      summarizeMeshCommandResult: () => summarizeMeshCommandResult,
       summarizeMeshMission: () => summarizeMeshMission,
       summarizeMeshUsage: () => summarizeMeshUsage2,
       summarizeMissionTasks: () => summarizeMissionTasks,
@@ -85936,6 +85969,7 @@ ${tail}` : ""
       terminalizeSiblingDispatch: () => terminalizeSiblingDispatch,
       toDaemonStatusEventName: () => toDaemonStatusEventName,
       toJsonValue: () => toJsonValue,
+      toMeshPeerSnapshotState: () => toMeshPeerSnapshotState,
       totalTokens: () => totalTokens,
       transcriptChatRuntimeCounters: () => transcriptChatRuntimeCounters,
       transcriptTopicSessionSegment: () => transcriptTopicSessionSegment,
@@ -88559,6 +88593,651 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         ...match[2] !== "-" ? { currentAttemptId: match[2] } : {}
       };
     }
+    init_logger();
+    init_config();
+    init_dist();
+    init_dist();
+    function asRecord4(value) {
+      return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+    }
+    function summarizeMeshCommandArgs(command, args) {
+      if (command === "git_status") {
+        return {
+          workspace: typeof args.workspace === "string" ? args.workspace : null,
+          refreshUpstream: args.refreshUpstream === true,
+          includeSubmodules: args.includeSubmodules === true
+        };
+      }
+      if (command === "fast_forward_mesh_node") {
+        return {
+          meshId: typeof args.meshId === "string" ? args.meshId : null,
+          nodeId: typeof args.nodeId === "string" ? args.nodeId : null,
+          workspace: typeof args.workspace === "string" ? args.workspace : null,
+          mode: args.mode === "push" ? "push" : "merge",
+          branch: typeof args.branch === "string" ? args.branch : null,
+          execute: args.execute === true,
+          dryRun: args.dryRun === true,
+          updateSubmodules: args.updateSubmodules === true,
+          pushSubmodules: args.pushSubmodules === true
+        };
+      }
+      if (command === "mesh_status" || command === "get_mesh") {
+        const inlineMesh = asRecord4(args.inlineMesh);
+        const inlineNodes = Array.isArray(inlineMesh.nodes) ? inlineMesh.nodes : [];
+        return {
+          meshId: typeof args.meshId === "string" ? args.meshId : null,
+          requireDirectPeerTruth: args.requireDirectPeerTruth === true,
+          refresh: args.refresh === true,
+          inlineMeshNodes: inlineNodes.length
+        };
+      }
+      return { keys: Object.keys(args).sort() };
+    }
+    function summarizeMeshCommandGitResult(result) {
+      const envelope = asRecord4(result);
+      const nestedResult = asRecord4(envelope.result);
+      const status = Object.keys(asRecord4(envelope.status)).length ? asRecord4(envelope.status) : Object.keys(asRecord4(nestedResult.status)).length ? asRecord4(nestedResult.status) : Object.keys(envelope).length ? envelope : {};
+      return summarizeGitShape(status);
+    }
+    function summarizeMeshCommandResult(command, result) {
+      if (command === "git_status") return summarizeMeshCommandGitResult(result);
+      const record2 = asRecord4(result);
+      if (command === "mesh_status") {
+        const nodes = Array.isArray(record2.nodes) ? record2.nodes : [];
+        return {
+          success: record2.success,
+          meshId: record2.meshId ?? null,
+          sourceOfTruth: record2.sourceOfTruth ?? null,
+          nodeCount: nodes.length,
+          nodes: nodes.map((node) => ({
+            nodeId: node?.nodeId ?? node?.id ?? null,
+            daemonId: node?.daemonId ?? null,
+            workspace: node?.workspace ?? node?.git?.workspace ?? null,
+            health: node?.health ?? null,
+            gitProbePending: node?.gitProbePending === true,
+            git: summarizeMeshCommandGitResult({ status: node?.git })
+          }))
+        };
+      }
+      return null;
+    }
+    var KNOWN_PREFIXES = ["standalone_mach_", "daemon_mach_", "mach_"];
+    var KEEP = 8;
+    function maskDaemonId(id22) {
+      if (!id22) return "(empty)";
+      for (const prefix of KNOWN_PREFIXES) {
+        if (id22.startsWith(prefix)) {
+          const rest = id22.slice(prefix.length);
+          return rest.length <= KEEP ? `${prefix}${rest}` : `${prefix}${rest.slice(0, KEEP)}\u2026`;
+        }
+      }
+      return id22.length <= KEEP ? id22 : `${id22.slice(0, KEEP)}\u2026`;
+    }
+    init_logger();
+    init_mesh_duplicate_dispatch();
+    init_dist();
+    init_dist();
+    function readTimeoutEnv(name, fallback) {
+      const raw = process.env[name];
+      if (raw) {
+        const parsed = Number.parseInt(raw, 10);
+        if (Number.isFinite(parsed) && parsed >= 1e3 && parsed <= 12e4) return parsed;
+      }
+      return fallback;
+    }
+    var REQUEST_TIMEOUT_MS6 = readTimeoutEnv("MESH_RPC_REQUEST_TIMEOUT_MS", 3e4);
+    var GIT_COMMAND_TIMEOUT_MS = readTimeoutEnv("MESH_RPC_GIT_TIMEOUT_MS", 9e4);
+    var PROBE_COMMAND_TIMEOUT_MS = readTimeoutEnv("MESH_RPC_PROBE_TIMEOUT_MS", 15e3);
+    var GIT_STATUS_PROBE_TIMEOUT_MS = readTimeoutEnv("MESH_RPC_GIT_STATUS_PROBE_TIMEOUT_MS", 3e4);
+    var REPO_MUTATION_COMMAND_TIMEOUT_MS = readTimeoutEnv("MESH_RPC_REPO_MUTATION_TIMEOUT_MS", 6e4);
+    var PROBE_CONNECT_WAIT_MS = readTimeoutEnv("MESH_RPC_PROBE_CONNECT_WAIT_MS", 12e3);
+    var GIT_COMMANDS = /* @__PURE__ */ new Set([
+      "fast_forward_mesh_node",
+      "refine_mesh_node",
+      "mesh_fast_forward_node",
+      "mesh_refine_node",
+      "clone_mesh_node"
+    ]);
+    var REPO_MUTATION_COMMANDS = /* @__PURE__ */ new Set([
+      "remove_mesh_node"
+    ]);
+    var GIT_STATUS_PROBE_COMMANDS = /* @__PURE__ */ new Set([
+      "git_status",
+      "mesh_git_status",
+      "plan_mesh_onboarding"
+    ]);
+    var PROBE_COMMANDS = /* @__PURE__ */ new Set([
+      "get_pending_mesh_events"
+    ]);
+    function resultTimeoutForCommand(command) {
+      if (GIT_COMMANDS.has(command)) return GIT_COMMAND_TIMEOUT_MS;
+      if (REPO_MUTATION_COMMANDS.has(command)) return REPO_MUTATION_COMMAND_TIMEOUT_MS;
+      if (GIT_STATUS_PROBE_COMMANDS.has(command)) return GIT_STATUS_PROBE_TIMEOUT_MS;
+      if (PROBE_COMMANDS.has(command)) return PROBE_COMMAND_TIMEOUT_MS;
+      return REQUEST_TIMEOUT_MS6;
+    }
+    var PROBE_CLASS_COMMANDS = /* @__PURE__ */ new Set([
+      "get_pending_mesh_events",
+      "get_status_metadata",
+      "read_chat"
+    ]);
+    function isProbeClassMeshCommand(command) {
+      return PROBE_CLASS_COMMANDS.has(command);
+    }
+    function resolveMeshConnectWaitMs(command, args) {
+      if (isProbeClassMeshCommand(command) || argsCarryStatusProbeMarker(args)) {
+        return PROBE_CONNECT_WAIT_MS;
+      }
+      return void 0;
+    }
+    var PROTOCOL_VERSION = 1;
+    var NOISY_POLL_COMMANDS = /* @__PURE__ */ new Set([
+      "get_pending_mesh_events",
+      "get_status_metadata"
+    ]);
+    var NORMAL_MESH_EVENTS = /* @__PURE__ */ new Set(["sent", "ack_received", "response_sent", "response_received"]);
+    var PEER_CLOSE_CATEGORY_BY_CODE = {
+      AUTH_EPOCH_REBIND: "planned_replacement",
+      LOCAL_AUTH_EPOCH_CHANGED: "planned_replacement",
+      REMOTE_AUTH_EPOCH_CHANGED: "planned_replacement",
+      MANAGER_SHUTDOWN: "planned_replacement",
+      DATACHANNEL_CLOSED: "remote_or_manager_closed",
+      PC_STATE_CLOSED: "remote_or_manager_closed",
+      CONNECT_TIMEOUT: "timeout",
+      ACK_TIMEOUT: "timeout",
+      REQUEST_TIMEOUT: "timeout",
+      PEER_UNRESPONSIVE: "timeout",
+      SIGNAL_REJECTED: "signal_rejected",
+      SIGNAL_TARGET_OFFLINE: "signal_rejected",
+      SIGNAL_RATE_LIMIT: "signal_rejected",
+      SIGNAL_RELAY_FAILED: "signal_rejected",
+      PC_STATE_FAILED: "transport_failure",
+      ICE_LIVENESS_LOST: "transport_failure",
+      RELAY_DATA_STALL: "transport_failure",
+      SIGNAL_DESCRIPTION_FAILED: "transport_failure"
+    };
+    function classifyPeerCloseReason(code) {
+      return PEER_CLOSE_CATEGORY_BY_CODE[code] ?? "transport_failure";
+    }
+    function encodeMeshHandlerErrorCode(err) {
+      const duplicate = classifyDuplicateMeshDispatch(err);
+      if (duplicate) return encodeDuplicateMeshDispatchCode(duplicate.holderSessionId);
+      return "HANDLER_ERROR";
+    }
+    var CONNECT_TIMEOUT_MS = readTimeoutEnv("MESH_RPC_CONNECT_TIMEOUT_MS", 9e4);
+    var PROBE_TIMEOUT_MS = readTimeoutEnv("MESH_RPC_HEALTH_PROBE_TIMEOUT_MS", 8e3);
+    var ACK_TIMEOUT_MS = readTimeoutEnv("MESH_RPC_ACK_TIMEOUT_MS", 1e4);
+    var MAX_CONNECT_QUEUE = 64;
+    var SETTLED_ID_RETENTION_MS = 18e4;
+    var MAX_CONSECUTIVE_TIMEOUTS = (() => {
+      const raw = process.env.MESH_RPC_MAX_CONSECUTIVE_TIMEOUTS;
+      const parsed = raw ? Number.parseInt(raw, 10) : NaN;
+      return Number.isFinite(parsed) && parsed >= 1 ? parsed : 3;
+    })();
+    var LIVENESS_PROOF_WINDOW_MS = (() => {
+      const raw = process.env.MESH_RPC_LIVENESS_PROOF_WINDOW_MS;
+      const parsed = raw ? Number.parseInt(raw, 10) : NaN;
+      return Number.isFinite(parsed) && parsed >= 1e3 ? parsed : 2e4;
+    })();
+    var MESH_RPC_DATA_CHANNEL_LABEL = "mesh_data";
+    var MAX_RETAINED_PEERS = 256;
+    var RECOVERABLE_RETRY_BASE_DELAY_MS = 4e3;
+    var RECOVERABLE_RETRY_CAP_MS = 3e5;
+    var RECOVERABLE_RETRY_JITTER_RATIO = 0.25;
+    function computeRecoverableRetryDelayMs(attempt, random = Math.random) {
+      const n = Number.isFinite(attempt) && attempt > 1 ? Math.floor(attempt) : 1;
+      const growth = Math.min(2 ** Math.min(n - 1, 32), RECOVERABLE_RETRY_CAP_MS);
+      const base = Math.min(RECOVERABLE_RETRY_BASE_DELAY_MS * growth, RECOVERABLE_RETRY_CAP_MS);
+      if (n === 1) return base;
+      const jitter = base * RECOVERABLE_RETRY_JITTER_RATIO * random();
+      return Math.max(RECOVERABLE_RETRY_BASE_DELAY_MS, Math.round(base - jitter));
+    }
+    var STRUCTURED_P2P_UNAVAILABLE_CODES = /* @__PURE__ */ new Set([
+      "NO_TRANSPORT",
+      "NO_PEER",
+      "PEER_FAILED",
+      "SEND_FAILED",
+      "QUEUE_OVERFLOW",
+      "SIGNAL_RATE_LIMIT",
+      "SIGNAL_RELAY_FAILED",
+      "AUTH_EPOCH_REBIND",
+      "REMOTE_AUTH_EPOCH_CHANGED",
+      "LOCAL_AUTH_EPOCH_CHANGED",
+      // PEER-CLOSE-REASON: these replace what used to be the generic PEER_FAILED
+      // default at their call sites (pc.onStateChange 'failed' mid-handshake, and a
+      // failed setRemoteDescription) — same public error contract (p2p_unavailable),
+      // just a more specific meshCode for logs/diagnostics.
+      "PC_STATE_FAILED",
+      "SIGNAL_DESCRIPTION_FAILED",
+      "MANAGER_SHUTDOWN"
+    ]);
+    function logMeshCommandEvent(event, fields) {
+      const command = typeof fields.command === "string" ? fields.command : void 0;
+      const responseSucceeded = event === "response_sent" || event === "response_received" ? fields.ok === true : true;
+      const demote = NORMAL_MESH_EVENTS.has(event) && responseSucceeded && !!command && NOISY_POLL_COMMANDS.has(command);
+      const emit = demote ? LOG.debug.bind(LOG) : LOG.info.bind(LOG);
+      try {
+        emit("Mesh", `[MeshCommand] ${JSON.stringify({ event, ...fields })}`);
+      } catch {
+        emit("Mesh", `[MeshCommand] ${event}`);
+      }
+    }
+    function toMeshPeerSnapshotState(state) {
+      switch (state) {
+        case "connecting":
+          return "connecting";
+        case "connected":
+          return "connected";
+        case "closing":
+          return "disconnected";
+        case "closed":
+          return "closed";
+        case "failed":
+          return "failed";
+      }
+    }
+    var MeshRpcEndpoint = class {
+      // Settled request ids, so a duplicate/late response is a no-op instead of an
+      // orphan-log. Bounded by time-bucket rotation so it cannot grow without limit:
+      // ids accumulate in `current`; every SETTLED_ID_RETENTION_MS the older bucket is
+      // dropped, `current` becomes `previous`, and a fresh `current` starts. wasSettled()
+      // checks both buckets, so an id is remembered for between 1× and 2× the retention
+      // window — long enough that any late duplicate (a request may sit inflight up to
+      // CONNECT_TIMEOUT_MS + the longest result budget) has surely already arrived.
+      settledIdsCurrent = /* @__PURE__ */ new Set();
+      settledIdsPrevious = /* @__PURE__ */ new Set();
+      settledIdsRotatedAt = Date.now();
+      idNonce = `${loadConfig().machineId ?? "mesh"}_${process.pid}`;
+      idSeq = 0;
+      commandCallback;
+      // ─── Request / response ─────────────────────────────────────────────────────
+      /**
+       * MESH-IMAGE-CHUNKING: write one envelope to a peer, splitting it across chunk frames
+       * when it exceeds what a single DataChannel message can carry.
+       *
+       * Every mesh frame used to go out as one `sendMessage(JSON.stringify(envelope))`. That
+       * held while args were small text, but a coordinator dispatching an image puts a
+       * multi-MB base64 part in `args`, which the transport cannot carry in one frame — the
+       * send throws or the frame vanishes and the dispatch dies silently. Oversized frames
+       * now ride the same split/reassemble scheme the dashboard P2P path has used in
+       * production (`daemon-p2p/data-channel-router.ts`), ported into `@adhdev/mesh-shared`.
+       *
+       * Small frames — every frame before this change — still take the identical single-send
+       * path, so the common case is byte-for-byte unchanged.
+       *
+       * Returns false on refusal/failure WITHOUT throwing; the caller owns the error surface
+       * (a request rejects its promise, a best-effort ack just logs). A payload past the
+       * chunk cap is refused explicitly rather than truncated.
+       */
+      writeEnvelope(peer, envelope, describe3) {
+        let json2;
+        try {
+          json2 = JSON.stringify(envelope);
+        } catch (err) {
+          LOG.warn("Mesh", `[Mesh] Failed to serialize ${describe3}: ${err?.message || err}`);
+          return false;
+        }
+        if (!meshFrameNeedsChunking(json2)) {
+          peer.dc.sendMessage(json2);
+          return true;
+        }
+        const chunkId = `${this.idNonce}:chunk:${this.idSeq++}`;
+        const split = splitMeshFrame(json2, chunkId, PROTOCOL_VERSION);
+        if (!split.ok) {
+          LOG.warn("Mesh", `[Mesh] Refusing to send oversized ${describe3} to ${maskDaemonId(peer.daemonId)}: ${split.reason} (${split.detail})`);
+          this.logEvent("chunked_send_refused", {
+            targetDaemonId: peer.daemonId,
+            reason: split.reason,
+            detail: split.detail,
+            bytes: json2.length
+          });
+          return false;
+        }
+        this.logEvent("chunked_send", {
+          targetDaemonId: peer.daemonId,
+          chunkId,
+          chunks: split.chunks.length,
+          bytes: json2.length
+        });
+        for (const chunk of split.chunks) {
+          peer.dc.sendMessage(JSON.stringify(chunk));
+        }
+        return true;
+      }
+      writeRequest(peer, pending) {
+        if (pending.connectWaitTimer) {
+          clearTimeout(pending.connectWaitTimer);
+          pending.connectWaitTimer = void 0;
+        }
+        const envelope = {
+          v: PROTOCOL_VERSION,
+          kind: "rpc_req",
+          id: pending.id,
+          command: pending.command,
+          args: pending.args
+        };
+        try {
+          if (!this.writeEnvelope(peer, envelope, `rpc_req ${pending.command}`)) {
+            const message = `mesh request payload could not be sent (too large for the mesh transport)`;
+            this.logEvent("send_failed", { requestId: pending.id, command: pending.command, targetDaemonId: peer.daemonId, error: message });
+            pending.reject(this.failure(message, pending.command, peer.daemonId, "PAYLOAD_TOO_LARGE"));
+            return;
+          }
+        } catch (err) {
+          const message = err?.message || "P2P DataChannel send failed";
+          this.logEvent("send_failed", { requestId: pending.id, command: pending.command, targetDaemonId: peer.daemonId, error: message });
+          pending.reject(this.failure(message, pending.command, peer.daemonId, "SEND_FAILED"));
+          return;
+        }
+        pending.sentAt = (/* @__PURE__ */ new Date()).toISOString();
+        peer.inflight.set(pending.id, pending);
+        this.logEvent("sent", {
+          requestId: pending.id,
+          command: pending.command,
+          targetDaemonId: peer.daemonId,
+          queuedAt: pending.queuedAt,
+          sentAt: pending.sentAt,
+          queueWaitMs: Date.parse(pending.sentAt) - Date.parse(pending.queuedAt),
+          attempt: peer.attempt,
+          resultTimeoutMs: pending.resultTimeoutMs,
+          ackTimeoutMs: ACK_TIMEOUT_MS,
+          transport: peer.isRelay === true ? "relay" : peer.isRelay === false ? "direct" : "unknown",
+          argsSummary: summarizeMeshCommandArgs(pending.command, pending.args)
+        });
+        pending.requestTimer = setTimeout(() => {
+          if (!peer.inflight.has(pending.id)) return;
+          peer.inflight.delete(pending.id);
+          this.rememberSettled(pending.id);
+          if (pending.ackTimer) {
+            clearTimeout(pending.ackTimer);
+            pending.ackTimer = void 0;
+          }
+          this.logEvent("timeout", {
+            requestId: pending.id,
+            command: pending.command,
+            targetDaemonId: peer.daemonId,
+            sentAt: pending.sentAt,
+            acked: pending.acked === true,
+            resultTimeoutMs: pending.resultTimeoutMs
+          });
+          pending.reject(this.failure(
+            `P2P mesh command '${pending.command}' to ${maskDaemonId(peer.daemonId)} timed out after ${pending.resultTimeoutMs}ms`,
+            pending.command,
+            peer.daemonId,
+            "REQUEST_TIMEOUT"
+          ));
+          this.noteRequestTimeout(peer);
+        }, pending.resultTimeoutMs);
+        if (typeof pending.requestTimer.unref === "function") pending.requestTimer.unref();
+        pending.ackTimer = setTimeout(() => {
+          if (!peer.inflight.has(pending.id) || pending.acked) return;
+          if (peer.supportsAck) {
+            peer.inflight.delete(pending.id);
+            this.rememberSettled(pending.id);
+            if (pending.requestTimer) {
+              clearTimeout(pending.requestTimer);
+              pending.requestTimer = void 0;
+            }
+            this.logEvent("ack_timeout", {
+              requestId: pending.id,
+              command: pending.command,
+              targetDaemonId: peer.daemonId,
+              sentAt: pending.sentAt
+            });
+            pending.reject(this.failure(
+              `P2P mesh command '${pending.command}' to ${maskDaemonId(peer.daemonId)} was not acknowledged within ${ACK_TIMEOUT_MS}ms (delivery failure)`,
+              pending.command,
+              peer.daemonId,
+              "ACK_TIMEOUT"
+            ));
+            this.noteRequestTimeout(peer);
+          } else {
+            this.logEvent("ack_missing_degrade", {
+              requestId: pending.id,
+              command: pending.command,
+              targetDaemonId: peer.daemonId,
+              sentAt: pending.sentAt
+            });
+          }
+        }, ACK_TIMEOUT_MS);
+        if (typeof pending.ackTimer.unref === "function") pending.ackTimer.unref();
+      }
+      onMessage(peer, msg) {
+        let data;
+        try {
+          data = JSON.parse(typeof msg === "string" ? msg : msg.toString("utf8"));
+        } catch (e) {
+          LOG.warn("Mesh", `[Mesh] Failed to parse P2P message: ${e.message}`);
+          return;
+        }
+        if (MeshChunkAssembler.isChunkFrame(data)) {
+          const reassembled = this.acceptChunk(peer, data);
+          if (reassembled === void 0) return;
+          data = reassembled;
+        }
+        if (data?.kind === "rpc_req" && typeof data.command === "string") {
+          this.handleIncomingRequest(peer, data);
+          return;
+        }
+        if (data?.kind === "rpc_ack" && typeof data.id === "string") {
+          this.handleIncomingAck(peer, data);
+          return;
+        }
+        if (data?.kind === "rpc_res" && typeof data.id === "string") {
+          this.handleIncomingResponse(peer, data);
+          return;
+        }
+        if (data?.kind === "rpc_probe" && typeof data.id === "string") {
+          this.writeProbeAck(peer, data.id);
+          return;
+        }
+        if (data?.kind === "rpc_probe_ack" && typeof data.id === "string") {
+          this.handleIncomingProbeAck(peer, data);
+          return;
+        }
+        this.logEvent("frame_ignored", { targetDaemonId: peer.daemonId, kind: data?.kind, v: data?.v });
+      }
+      /**
+       * MESH-IMAGE-CHUNKING: feed one inbound chunk to this peer's assembler.
+       *
+       * Returns the reassembled frame when the group completes, or `undefined` when the
+       * frame is still partial OR was explicitly rejected. A rejection is never silent: it
+       * is logged with its typed reason, and when the broken frame was a REQUEST we answer
+       * with an error envelope so the sender fails fast with a real explanation instead of
+       * waiting out its deadline. (A broken inbound RESPONSE cannot be answered — its
+       * request's own deadline is the backstop — so it is logged and dropped.)
+       */
+      acceptChunk(peer, frame2) {
+        if (!peer.chunkAssembler) peer.chunkAssembler = new MeshChunkAssembler();
+        let result;
+        try {
+          result = peer.chunkAssembler.accept(frame2);
+        } catch (err) {
+          LOG.warn("Mesh", `[Mesh] Chunk reassembly threw for ${maskDaemonId(peer.daemonId)}: ${err?.message || err}`);
+          return void 0;
+        }
+        if (result.status === "partial") return void 0;
+        if (result.status === "complete") return result.frame;
+        LOG.warn("Mesh", `[Mesh] Discarding chunked frame from ${maskDaemonId(peer.daemonId)}: ${result.reason} (${result.detail})`);
+        this.logEvent("chunk_reassembly_failed", {
+          senderDaemonId: peer.daemonId,
+          reason: result.reason,
+          detail: result.detail,
+          chunkId: result.chunkId
+        });
+        return void 0;
+      }
+      handleIncomingRequest(peer, req) {
+        this.logEvent("incoming", {
+          requestId: req.id,
+          command: req.command,
+          senderDaemonId: peer.daemonId,
+          argsSummary: summarizeMeshCommandArgs(req.command, req.args ?? {})
+        });
+        this.writeAck(peer, req.id);
+        if (!this.commandCallback) {
+          this.writeResponse(peer, req.id, false, void 0, req.command, { code: "NO_HANDLER", message: "No mesh command handler registered" });
+          return;
+        }
+        this.commandCallback(peer.daemonId, req.command, req.args ?? {}).then((result) => this.writeResponse(peer, req.id, true, result, req.command)).catch((err) => this.writeResponse(peer, req.id, false, void 0, req.command, {
+          // DUP-CLAIM-REBIND: the envelope preserves `error.code` verbatim (the sender maps it
+          // onto meshCode), so a handler answer the CALLER must act on structurally rides the
+          // code rather than the prose message. A duplicate mesh dispatch is such an answer:
+          // "you already have this task, and session X is working it" — the coordinator rebinds
+          // its turn ledger onto X instead of cancelling the attempt. Everything else keeps the
+          // opaque HANDLER_ERROR code exactly as before.
+          code: encodeMeshHandlerErrorCode(err),
+          message: err?.message || String(err)
+        }));
+      }
+      writeAck(peer, id22) {
+        if (!peer.dc?.isOpen?.()) return;
+        const envelope = { v: PROTOCOL_VERSION, kind: "rpc_ack", id: id22 };
+        try {
+          peer.dc.sendMessage(JSON.stringify(envelope));
+        } catch (err) {
+          LOG.warn("Mesh", `[Mesh] Failed to send rpc_ack: ${err.message}`);
+        }
+      }
+      /** Echo a probe_ack the instant a health probe lands — pure transport round trip,
+       *  no handler work. Best-effort: a failed send just means the prober's deadline
+       *  fires and the relay is (correctly) judged stalled. */
+      writeProbeAck(peer, id22) {
+        if (!peer.dc?.isOpen?.()) return;
+        const envelope = { v: PROTOCOL_VERSION, kind: "rpc_probe_ack", id: id22 };
+        try {
+          peer.dc.sendMessage(JSON.stringify(envelope));
+        } catch (err) {
+          LOG.warn("Mesh", `[Mesh] Failed to send rpc_probe_ack: ${err?.message || err}`);
+        }
+      }
+      /** A probe_ack returned: the relay provably carries data. Confirm the peer, cancel
+       *  the stall deadline, and flush the queued requests that waited on the probe. A
+       *  stale/duplicate probe_ack (wrong or already-confirmed id) is a no-op. */
+      handleIncomingProbeAck(peer, ack) {
+        if (peer.probeConfirmed || ack.id !== peer.probeId) return;
+        peer.probeConfirmed = true;
+        peer.lastSuccessAt = Date.now();
+        if (peer.probeTimer) {
+          clearTimeout(peer.probeTimer);
+          peer.probeTimer = void 0;
+        }
+        this.logEvent("relay_probe_ack", { targetDaemonId: peer.daemonId, probeId: ack.id });
+        this.emitPeerOpen(peer);
+        this.flushConnectQueue(peer);
+      }
+      writeResponse(peer, id22, ok, result, command, error) {
+        if (!peer.dc?.isOpen?.()) {
+          this.logEvent("response_send_failed", { requestId: id22, targetDaemonId: peer.daemonId, error: "P2P not open" });
+          return;
+        }
+        const envelope = { v: PROTOCOL_VERSION, kind: "rpc_res", id: id22, ok, ...ok ? { result } : { error } };
+        try {
+          if (!this.writeEnvelope(peer, envelope, "rpc_res")) {
+            const fallback = {
+              v: PROTOCOL_VERSION,
+              kind: "rpc_res",
+              id: id22,
+              ok: false,
+              error: { code: "PAYLOAD_TOO_LARGE", message: "mesh response payload exceeded the mesh transport limit" }
+            };
+            try {
+              peer.dc.sendMessage(JSON.stringify(fallback));
+            } catch {
+            }
+            this.logEvent("response_send_failed", { requestId: id22, targetDaemonId: peer.daemonId, error: "payload_too_large" });
+            return;
+          }
+          this.logEvent("response_sent", {
+            requestId: id22,
+            command,
+            targetDaemonId: peer.daemonId,
+            ok,
+            // Use the command-aware summarizer (matching response_received) so a non-git
+            // command like get_pending_mesh_events falls to its default rather than being
+            // forced into a git-shaped, all-null summary that spams the log every poll.
+            resultSummary: ok ? summarizeMeshCommandResult(command ?? "", result) : null,
+            error: error?.message
+          });
+        } catch (err) {
+          LOG.warn("Mesh", `[Mesh] Failed to send rpc_res: ${err.message}`);
+        }
+      }
+      handleIncomingAck(peer, ack) {
+        peer.supportsAck = true;
+        const pending = peer.inflight.get(ack.id);
+        if (!pending || pending.acked) return;
+        pending.acked = true;
+        peer.consecutiveTimeouts = 0;
+        peer.lastSuccessAt = Date.now();
+        if (pending.ackTimer) {
+          clearTimeout(pending.ackTimer);
+          pending.ackTimer = void 0;
+        }
+        this.logEvent("ack_received", {
+          requestId: ack.id,
+          command: pending.command,
+          targetDaemonId: peer.daemonId,
+          sentAt: pending.sentAt,
+          resultTimeoutMs: pending.resultTimeoutMs,
+          attempt: peer.attempt,
+          ackMs: pending.sentAt ? Date.now() - Date.parse(pending.sentAt) : void 0
+        });
+      }
+      handleIncomingResponse(peer, res) {
+        const pending = peer.inflight.get(res.id);
+        if (!pending) {
+          if (!this.wasSettled(res.id)) {
+            this.logEvent("response_orphan", { requestId: res.id, targetDaemonId: peer.daemonId, ok: res.ok });
+          }
+          return;
+        }
+        peer.inflight.delete(res.id);
+        this.rememberSettled(res.id);
+        peer.consecutiveTimeouts = 0;
+        peer.lastSuccessAt = Date.now();
+        if (pending.requestTimer) clearTimeout(pending.requestTimer);
+        if (pending.ackTimer) clearTimeout(pending.ackTimer);
+        this.logEvent("response_received", {
+          requestId: res.id,
+          command: pending.command,
+          targetDaemonId: peer.daemonId,
+          queuedAt: pending.queuedAt,
+          sentAt: pending.sentAt,
+          ok: res.ok,
+          resultSummary: res.ok ? summarizeMeshCommandResult(pending.command, res.result) : null,
+          error: res.ok ? void 0 : res.error?.message
+        });
+        if (res.ok) {
+          pending.resolve(res.result);
+        } else {
+          pending.reject(this.failure(res.error?.message || "P2P command failed", pending.command, peer.daemonId, res.error?.code || "HANDLER_ERROR"));
+        }
+      }
+      // ─── Settled-id bookkeeping (bounded) ───────────────────────────────────────
+      /** Rotate the time buckets if the retention window has elapsed: drop the older
+       *  bucket, age the current one, and start a fresh current bucket. */
+      rotateSettledIdsIfDue() {
+        if (Date.now() - this.settledIdsRotatedAt < SETTLED_ID_RETENTION_MS) return;
+        this.settledIdsPrevious = this.settledIdsCurrent;
+        this.settledIdsCurrent = /* @__PURE__ */ new Set();
+        this.settledIdsRotatedAt = Date.now();
+      }
+      /** Record a request id as settled so a late duplicate reply is a no-op. */
+      rememberSettled(id22) {
+        this.rotateSettledIdsIfDue();
+        this.settledIdsCurrent.add(id22);
+      }
+      /** Whether a request id was already settled (checks both live buckets). */
+      wasSettled(id22) {
+        this.rotateSettledIdsIfDue();
+        return this.settledIdsCurrent.has(id22) || this.settledIdsPrevious.has(id22);
+      }
+      /** The structured [MeshCommand] log line (an instance seam: tests observe it). */
+      logEvent(event, fields) {
+        logMeshCommandEvent(event, fields);
+      }
+    };
     init_state_store();
     var import_fs24 = require("fs");
     var import_os2 = require("os");

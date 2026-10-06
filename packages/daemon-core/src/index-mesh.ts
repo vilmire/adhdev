@@ -289,3 +289,55 @@ export {
   classifySessionBusyWithTask,
 } from './mesh/mesh-session-busy-dispatch.js';
 export type { SessionBusyWithTaskInfo } from './mesh/mesh-session-busy-dispatch.js';
+
+// ── Mesh RPC transport base (shared by cloud WebRTC and standalone WebSocket) ──
+export { MeshRpcEndpoint } from './mesh/transport/mesh-rpc-endpoint.js';
+export {
+  PROTOCOL_VERSION,
+  classifyPeerCloseReason,
+  encodeMeshHandlerErrorCode,
+  CONNECT_TIMEOUT_MS,
+  PROBE_TIMEOUT_MS,
+  ACK_TIMEOUT_MS,
+  MAX_CONNECT_QUEUE,
+  SETTLED_ID_RETENTION_MS,
+  MAX_CONSECUTIVE_TIMEOUTS,
+  LIVENESS_PROOF_WINDOW_MS,
+  MESH_RPC_DATA_CHANNEL_LABEL,
+  MAX_RETAINED_PEERS,
+  computeRecoverableRetryDelayMs,
+  STRUCTURED_P2P_UNAVAILABLE_CODES,
+  logMeshCommandEvent,
+  toMeshPeerSnapshotState,
+} from './mesh/transport/mesh-rpc-protocol.js';
+export type {
+  RpcRequestEnvelope,
+  RpcResponseEnvelope,
+  RpcAckEnvelope,
+  RpcProbeEnvelope,
+  RpcProbeAckEnvelope,
+  PeerState,
+  PendingRpc,
+  MeshPeerLifecycleListener,
+  Peer,
+  PeerDiagnostic,
+  FailureOptions,
+} from './mesh/transport/mesh-rpc-protocol.js';
+export {
+  readTimeoutEnv,
+  REQUEST_TIMEOUT_MS,
+  GIT_COMMAND_TIMEOUT_MS,
+  PROBE_COMMAND_TIMEOUT_MS,
+  GIT_STATUS_PROBE_TIMEOUT_MS,
+  REPO_MUTATION_COMMAND_TIMEOUT_MS,
+  PROBE_CONNECT_WAIT_MS,
+  resultTimeoutForCommand,
+  isProbeClassMeshCommand,
+  resolveMeshConnectWaitMs,
+  STATUS_PROBE_ARG_KEY,
+  argsCarryStatusProbeMarker,
+  stripStatusProbeMarker,
+} from './mesh/transport/mesh-rpc-timeouts.js';
+export { summarizeMeshCommandArgs, summarizeMeshCommandGitResult, summarizeMeshCommandResult } from './mesh/transport/mesh-command-summarizer.js';
+export { maskDaemonId } from './mesh/transport/mask-daemon-id.js';
+export type { MeshPeerSnapshot, MeshPeerConnectionState } from './mesh/transport/mesh-peer-types.js';
