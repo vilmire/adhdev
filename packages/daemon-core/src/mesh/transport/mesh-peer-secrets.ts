@@ -32,7 +32,7 @@
 import { randomBytes } from 'crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
-import { canonicalDaemonId } from '@adhdev/mesh-shared';
+import { canonicalDaemonId, daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { getConfigDir } from '../../config/config.js';
 import { LOG } from '../../logging/logger.js';
 
@@ -240,7 +240,7 @@ export function getPeerSecret(
     const mesh = typeof meshId === 'string' ? meshId.trim() : '';
     if (!canonical || !mesh) return null;
     const found = readRecords(resolvePeerSecretsPath(opts))
-        .find((rec) => rec.meshId === mesh && rec.peerDaemonId === canonical);
+        .find((rec) => rec.meshId === mesh && daemonIdsEquivalent(rec.peerDaemonId, canonical));
     return found ? { ...found } : null;
 }
 
@@ -257,7 +257,7 @@ export function putPeerSecret(record: PeerSecretRecord, opts: PeerSecretStoreOpt
     const normalized = normalizeRecord(record);
     const path = resolvePeerSecretsPath(opts);
     const others = readRecords(path)
-        .filter((rec) => !(rec.meshId === normalized.meshId && rec.peerDaemonId === normalized.peerDaemonId));
+        .filter((rec) => !(rec.meshId === normalized.meshId && daemonIdsEquivalent(rec.peerDaemonId, normalized.peerDaemonId)));
     writeRecords(path, [...others, normalized]);
     emit({
         kind: 'put',
@@ -279,9 +279,9 @@ export function removePeerSecret(
     if (!canonical || !mesh) return false;
     const path = resolvePeerSecretsPath(opts);
     const all = readRecords(path);
-    const removed = all.find((rec) => rec.meshId === mesh && rec.peerDaemonId === canonical);
+    const removed = all.find((rec) => rec.meshId === mesh && daemonIdsEquivalent(rec.peerDaemonId, canonical));
     if (!removed) return false;
-    const kept = all.filter((rec) => !(rec.meshId === mesh && rec.peerDaemonId === canonical));
+    const kept = all.filter((rec) => !(rec.meshId === mesh && daemonIdsEquivalent(rec.peerDaemonId, canonical)));
     writeRecords(path, kept);
     emit({ kind: 'remove', meshId: mesh, peerDaemonId: canonical, role: removed.role, filePath: path });
     return true;
