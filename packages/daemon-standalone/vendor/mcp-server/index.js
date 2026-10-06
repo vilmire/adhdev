@@ -152253,8 +152253,9 @@ ${notice.notice}${supersededHint}`;
     init_logger();
     var import_session_host_core14 = require_dist();
     var SessionHostController = class _SessionHostController {
-      constructor(endpoint, onEvent) {
+      constructor(endpoint, onEvent, respawn) {
         this.onEvent = onEvent;
+        this.respawn = respawn;
         this.client = new import_session_host_core14.SessionHostClient({ endpoint });
         this.plane = (0, import_session_host_core14.createSessionHostControlPlane)({
           request: (type2, payload) => this.request({ type: type2, payload })
@@ -152270,6 +152271,10 @@ ${notice.notice}${supersededHint}`;
       consecutiveConnectFailures = 0;
       /** Every Nth consecutive 2s connect failure gets a warn line (30 → ~1/min). */
       static CONNECT_FAILURE_LOG_EVERY = 30;
+      /** First respawn after this many consecutive failures (~6s), then every RESPAWN_RETRY_EVERY (~30s). */
+      static RESPAWN_AFTER_FAILURES = 3;
+      static RESPAWN_RETRY_EVERY = 15;
+      respawnInFlight = false;
       async start() {
         if (this.started) return;
         this.started = true;
@@ -152377,7 +152382,20 @@ ${notice.notice}${supersededHint}`;
           } else {
             LOG.debug("SessionHost", message);
           }
+          this.maybeRespawn(n);
         }
+      }
+      maybeRespawn(failures) {
+        if (!this.respawn || this.respawnInFlight) return;
+        const first = _SessionHostController.RESPAWN_AFTER_FAILURES;
+        if (failures < first || (failures - first) % _SessionHostController.RESPAWN_RETRY_EVERY !== 0) return;
+        this.respawnInFlight = true;
+        LOG.warn("SessionHost", `Session host unreachable after ${failures} attempt(s) \u2014 respawning it`);
+        void this.respawn().catch((error) => {
+          LOG.error("SessionHost", `Session host respawn failed: ${error?.message || error}`);
+        }).finally(() => {
+          this.respawnInFlight = false;
+        });
       }
       handleEvent(event) {
         if (event.type === "host_log") {
@@ -152414,12 +152432,18 @@ ${notice.notice}${supersededHint}`;
     };
     async function bootSessionHost(opts) {
       let current2 = await opts.ensureReady();
-      const ensure = async () => {
-        current2 = await opts.ensureReady();
-        return current2;
+      let inFlight3 = null;
+      const ensure = () => {
+        inFlight3 ??= opts.ensureReady().then((endpoint) => {
+          current2 = endpoint;
+          return endpoint;
+        }).finally(() => {
+          inFlight3 = null;
+        });
+        return inFlight3;
       };
       const onEvent = (event) => opts.onHostEvent?.(event);
-      const control = opts.createController ? opts.createController(current2, onEvent) : new SessionHostController(current2, onEvent);
+      const control = opts.createController ? opts.createController(current2, onEvent, ensure) : new SessionHostController(current2, onEvent, ensure);
       await control.start();
       const listHostedRuntimes = () => (opts.listHostedRuntimes ?? listHostedCliRuntimes)(current2);
       const ptyFactory = (params) => new SessionHostPtyTransportFactory({
