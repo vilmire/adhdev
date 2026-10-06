@@ -87315,19 +87315,22 @@ ${tail}` : ""
     init_config_dir();
     init_track_identity();
     var DEFAULT_SESSION_HOST_APP_NAME = IDENTITY2.sessionHostName;
-    var RESERVED_GLOBAL_SESSION_HOST_APP_NAME = IDENTITY2.sessionHostName;
+    var RESERVED_GLOBAL_SESSION_HOST_APP_NAMES = /* @__PURE__ */ new Set([
+      getTrackIdentity("stable").sessionHostName,
+      getTrackIdentity("preview").sessionHostName
+    ]);
     var DEFAULT_STANDALONE_SESSION_HOST_APP_NAME = "adhdev-standalone";
-    function getReservedStandaloneNamespaceWarning() {
-      return `Standalone session-host namespace '${RESERVED_GLOBAL_SESSION_HOST_APP_NAME}' is reserved for the global daemon. Falling back to '${DEFAULT_STANDALONE_SESSION_HOST_APP_NAME}' for this standalone run.`;
+    function getReservedStandaloneNamespaceWarning(name) {
+      return `Standalone session-host namespace '${name}' is reserved for the global daemon. Falling back to '${DEFAULT_STANDALONE_SESSION_HOST_APP_NAME}' for this standalone run.`;
     }
     function resolveSessionHostAppNameResolution(options = {}) {
       const env2 = options.env || process.env;
       const explicit = typeof env2.ADHDEV_SESSION_HOST_NAME === "string" ? env2.ADHDEV_SESSION_HOST_NAME.trim() : "";
       if (explicit) {
-        if (options.standalone && explicit === RESERVED_GLOBAL_SESSION_HOST_APP_NAME) {
+        if (options.standalone && RESERVED_GLOBAL_SESSION_HOST_APP_NAMES.has(explicit)) {
           return {
             appName: DEFAULT_STANDALONE_SESSION_HOST_APP_NAME,
-            warning: getReservedStandaloneNamespaceWarning(),
+            warning: getReservedStandaloneNamespaceWarning(explicit),
             source: "reserved-standalone-fallback"
           };
         }

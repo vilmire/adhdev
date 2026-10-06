@@ -2,6 +2,19 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { resolveSessionHostAppName, resolveSessionHostAppNameResolution } from '../src/session-host/app-name'
 
 describe('session host app-name resolution', () => {
+  it('reserves BOTH tracks\' global namespaces against standalone, whatever this build is', () => {
+    // A stable standalone launched inside a preview daemon's PTY inherits
+    // ADHDEV_SESSION_HOST_NAME=adhdev-preview (2026-10-06 incident).
+    for (const name of ['adhdev', 'adhdev-preview']) {
+      expect(resolveSessionHostAppNameResolution({
+        standalone: true,
+        env: { ADHDEV_SESSION_HOST_NAME: name },
+      })).toMatchObject({ appName: 'adhdev-standalone', source: 'reserved-standalone-fallback' })
+    }
+    // The global daemon itself still honors its explicit namespace.
+    expect(resolveSessionHostAppName({ env: { ADHDEV_SESSION_HOST_NAME: 'adhdev-preview' } })).toBe('adhdev-preview')
+  })
+
   it('keeps cloud/default mode on adhdev but isolates standalone by default', () => {
     expect(resolveSessionHostAppName({ env: {} })).toBe('adhdev')
     expect(resolveSessionHostAppName({ standalone: true, env: {} })).toBe('adhdev-standalone')
