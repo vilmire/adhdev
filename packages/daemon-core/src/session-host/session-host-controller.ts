@@ -38,10 +38,21 @@ export class SessionHostController implements SessionHostControlPlane {
     private consecutiveConnectFailures = 0;
     /** Every Nth consecutive 2s connect failure gets a warn line (30 → ~1/min). */
     private static readonly CONNECT_FAILURE_LOG_EVERY = 30;
+    /** First respawn after this many consecutive failures (~6s), then every RESPAWN_RETRY_EVERY (~30s). */
+    private static readonly RESPAWN_AFTER_FAILURES = 3;
+    private static readonly RESPAWN_RETRY_EVERY = 15;
+    private respawnInFlight = false;
 
     constructor(
         endpoint: SessionHostEndpoint,
         private readonly onEvent?: (event: SessionHostEvent) => void,
+        /**
+         * Brings a dead host back (the boot's `ensureReady`). Without it the reconnect
+         * loop only re-dialled a pipe nobody listens on: on 2026-10-06 a Windows host
+         * exited with code 1 and the daemon retried for 71 minutes, recovering only when
+         * a new session launch happened to call ensureReady.
+         */
+        private readonly respawn?: () => Promise<unknown>,
     ) {
         this.client = new SessionHostClient({ endpoint });
         // The 12-method dispatch table (type strings + throw text) is shared with
@@ -194,7 +205,23 @@ export class SessionHostController implements SessionHostControlPlane {
             } else {
                 LOG.debug('SessionHost', message);
             }
+            this.maybeRespawn(n);
         }
+    }
+
+    private maybeRespawn(failures: number): void {
+        if (!this.respawn || this.respawnInFlight) return;
+        const first = SessionHostController.RESPAWN_AFTER_FAILURES;
+        if (failures < first || (failures - first) % SessionHostController.RESPAWN_RETRY_EVERY !== 0) return;
+        this.respawnInFlight = true;
+        LOG.warn('SessionHost', `Session host unreachable after ${failures} attempt(s) — respawning it`);
+        void this.respawn()
+            .catch((error: any) => {
+                LOG.error('SessionHost', `Session host respawn failed: ${error?.message || error}`);
+            })
+            .finally(() => {
+                this.respawnInFlight = false;
+            });
     }
 
     private handleEvent(event: SessionHostEvent): void {

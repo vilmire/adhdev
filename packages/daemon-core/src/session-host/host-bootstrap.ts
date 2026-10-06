@@ -39,7 +39,11 @@ export interface SessionHostBootOptions {
     /** Every host event (after the controller's own logging). */
     onHostEvent?(event: SessionHostEvent): void;
     /** Test seam: the persistent controller (default {@link SessionHostController}). */
-    createController?(endpoint: SessionHostEndpoint, onEvent: (event: SessionHostEvent) => void): SessionHostController;
+    createController?(
+        endpoint: SessionHostEndpoint,
+        onEvent: (event: SessionHostEvent) => void,
+        respawn: () => Promise<unknown>,
+    ): SessionHostController;
     /** Test seam: list hosted runtimes (default: core `listHostedCliRuntimes`). */
     listHostedRuntimes?(endpoint: SessionHostEndpoint): Promise<HostedCliRuntimeDescriptor[]>;
 }
@@ -62,14 +66,19 @@ export interface SessionHostHandle {
 
 export async function bootSessionHost(opts: SessionHostBootOptions): Promise<SessionHostHandle> {
     let current = await opts.ensureReady();
-    const ensure = async (): Promise<SessionHostEndpoint> => {
-        current = await opts.ensureReady();
-        return current;
+    // Single-flight: the PTY factory and the controller's dead-host respawn can both
+    // land here at once, and two concurrent ensureReady calls would spawn two hosts.
+    let inFlight: Promise<SessionHostEndpoint> | null = null;
+    const ensure = (): Promise<SessionHostEndpoint> => {
+        inFlight ??= opts.ensureReady()
+            .then((endpoint) => { current = endpoint; return endpoint; })
+            .finally(() => { inFlight = null; });
+        return inFlight;
     };
     const onEvent = (event: SessionHostEvent) => opts.onHostEvent?.(event);
     const control = opts.createController
-        ? opts.createController(current, onEvent)
-        : new SessionHostController(current, onEvent);
+        ? opts.createController(current, onEvent, ensure)
+        : new SessionHostController(current, onEvent, ensure);
     await control.start();
 
     const listHostedRuntimes = () => (opts.listHostedRuntimes ?? listHostedCliRuntimes)(current);
