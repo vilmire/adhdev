@@ -49,6 +49,7 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
     private closed = false;
     private metadata: PtyRuntimeMetadata | null = null;
     private bootFailure: PtyRuntimeExitInfo | null = null;
+    private lostRuntimeReported = false;
 
     constructor(private readonly options: SessionHostRuntimeOptions) {
         this.client = new SessionHostClient({
@@ -145,9 +146,36 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
                 }
             }
             if (!response.success) {
+                if (isLostRuntimeError(response.error)) this.reportLostRuntime(response.error!);
                 throw new Error(response.error || `Failed to write to runtime ${this.options.runtimeId}`);
             }
         });
+    }
+
+    /**
+     * The host answered but no longer runs this runtime: it died and was respawned
+     * (its PTYs died with it), or the record was removed. Nothing will ever send
+     * `session_exit` for it, so without this the session sat 'generating' forever —
+     * 2026-10-06 a Windows host exited with code 1 and its antigravity session stayed
+     * generating for hours, re-injecting focus every 2 s and blocking the daemon's
+     * own restart as a "busy" session. Report it through the normal exit path once.
+     */
+    private reportLostRuntime(error: string): void {
+        if (this.closed || this.lostRuntimeReported) return;
+        this.lostRuntimeReported = true;
+        LOG.warn('CLI', `[session-host:${this.options.runtimeId}] runtime is gone from the session host (${error}) — ending the session`);
+        const info: PtyRuntimeExitInfo = {
+            exitCode: null,
+            signal: null,
+            termination: {
+                exitCode: null,
+                signal: null,
+                reason: 'failed',
+                lifecycle: 'failed',
+                terminatedAt: Date.now(),
+            },
+        };
+        for (const callback of this.exitCallbacks) callback(info);
     }
 
     resize(cols: number, rows: number): void {
@@ -481,4 +509,9 @@ export class SessionHostPtyTransportFactory implements PtyTransportFactory {
             spawnOptions,
         });
     }
+}
+
+/** Host errors that mean the runtime no longer exists there (server.ts requireRuntime / registry). */
+export function isLostRuntimeError(error: string | undefined): boolean {
+    return typeof error === 'string' && /^(?:Runtime not found for session|Unknown session):/.test(error);
 }
