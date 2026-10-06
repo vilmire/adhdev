@@ -1,4 +1,4 @@
-import { IDENTITY } from '../track-identity.js'
+import { IDENTITY, getTrackIdentity } from '../track-identity.js'
 
 /**
  * The session-host namespace this BUILD owns ('adhdev' stable /
@@ -14,11 +14,21 @@ import { IDENTITY } from '../track-identity.js'
 export const DEFAULT_SESSION_HOST_APP_NAME = IDENTITY.sessionHostName
 
 /**
- * The namespace reserved for the global (non-standalone) daemon of THIS track.
- * Kept separate from the default above: this is the name standalone must not
+ * The namespaces reserved for the global (non-standalone) daemons of EVERY track.
+ * Kept separate from the default above: these are the names standalone must not
  * squat on, which is a distinct concern from the name this build defaults to.
+ *
+ * Both tracks, not just this build's: every PTY a daemon hosts inherits
+ * ADHDEV_SESSION_HOST_NAME, so a stable `npx @adhdev/daemon-standalone` run from a
+ * terminal inside a preview daemon's session saw 'adhdev-preview', adopted the
+ * preview daemon's session-host pipe and pidfile, and on Windows stopped that host
+ * as "running from a foreign install" — every live session on the machine died
+ * (2026-10-06, clean-install e2e).
  */
-const RESERVED_GLOBAL_SESSION_HOST_APP_NAME = IDENTITY.sessionHostName
+const RESERVED_GLOBAL_SESSION_HOST_APP_NAMES: ReadonlySet<string> = new Set([
+  getTrackIdentity('stable').sessionHostName,
+  getTrackIdentity('preview').sessionHostName,
+])
 
 export const DEFAULT_STANDALONE_SESSION_HOST_APP_NAME = 'adhdev-standalone'
 
@@ -28,8 +38,8 @@ export interface SessionHostAppNameResolution {
   source: 'default' | 'explicit' | 'reserved-standalone-fallback'
 }
 
-function getReservedStandaloneNamespaceWarning(): string {
-  return `Standalone session-host namespace '${RESERVED_GLOBAL_SESSION_HOST_APP_NAME}' is reserved for the global daemon. `
+function getReservedStandaloneNamespaceWarning(name: string): string {
+  return `Standalone session-host namespace '${name}' is reserved for the global daemon. `
     + `Falling back to '${DEFAULT_STANDALONE_SESSION_HOST_APP_NAME}' for this standalone run.`
 }
 
@@ -43,10 +53,10 @@ export function resolveSessionHostAppNameResolution(options: {
     : ''
 
   if (explicit) {
-    if (options.standalone && explicit === RESERVED_GLOBAL_SESSION_HOST_APP_NAME) {
+    if (options.standalone && RESERVED_GLOBAL_SESSION_HOST_APP_NAMES.has(explicit)) {
       return {
         appName: DEFAULT_STANDALONE_SESSION_HOST_APP_NAME,
-        warning: getReservedStandaloneNamespaceWarning(),
+        warning: getReservedStandaloneNamespaceWarning(explicit),
         source: 'reserved-standalone-fallback',
       }
     }
