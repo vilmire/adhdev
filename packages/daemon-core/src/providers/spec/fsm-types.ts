@@ -468,6 +468,18 @@ export interface CliSpecV4 {
          */
         posix_bracketed_paste_for_images?: boolean;
         /**
+         * POSIX: wrap EVERY body — plain text too — in a bracketed-paste region.
+         * claude-cli 2.1.29x keeps only the LAST heuristic-paste burst of a long
+         * raw write: a ~1.5k-char task split across pipe chunks reached the model
+         * as its tail alone ("inish with report_completion…"), with "paste again
+         * to expand" under the composer (live, 2026-10-06). One bracketed region is
+         * one paste, delivered whole. The composer shows a `[Pasted text #N]` chip
+         * instead of the literal body, so the echo gate is skipped exactly as for
+         * image pastes; the verified-resend net still guards the submit.
+         * Older daemons ignore the field.
+         */
+        posix_bracketed_paste_text?: boolean;
+        /**
          * NOTIF-IMMEDIACY opt-in: this CLI holds input typed DURING a turn in its
          * own queue and answers it as the next turn (claude-cli shows "Press up to
          * edit queued messages").

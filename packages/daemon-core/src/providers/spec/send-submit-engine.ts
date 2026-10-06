@@ -507,8 +507,8 @@ export class SendSubmitEngine {
         // reaches the CLI as literal text, and that is true whether the session
         // was idle or generating when the owner pressed send.
         const wrapInPaste = process.platform !== 'win32'
-            && bracketedPaste === true
-            && sm.posix_bracketed_paste_for_images === true;
+            && ((bracketedPaste === true && sm.posix_bracketed_paste_for_images === true)
+                || sm.posix_bracketed_paste_text === true);
 
         // SEND-NOW-AGENT-QUEUE: a mid-generation write takes the PLAIN split path
         // — body write, timed gap, submit key — and never the echo-verified one,

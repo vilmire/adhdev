@@ -127034,7 +127034,7 @@ ${ptyResult.output.slice(-2e3)}`);
         this.submitUnconfirmed = false;
         const perChar = sm.delay_ms_per_char ?? 0;
         const beforeSubmit = resolveSubmitDelayMs(sm.delay_ms_before_submit, text, this.host.opts.manifestSendDelayMs);
-        const wrapInPaste = process.platform !== "win32" && bracketedPaste === true && sm.posix_bracketed_paste_for_images === true;
+        const wrapInPaste = process.platform !== "win32" && (bracketedPaste === true && sm.posix_bracketed_paste_for_images === true || sm.posix_bracketed_paste_text === true);
         if (opts?.midGeneration) {
           const body = wrapInPaste ? `${BRACKETED_PASTE_OPEN}${text}${BRACKETED_PASTE_CLOSE}` : text;
           this.host.adapter.send_keys(body);
