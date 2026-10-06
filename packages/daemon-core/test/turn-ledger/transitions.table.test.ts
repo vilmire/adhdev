@@ -79,6 +79,7 @@ const FIRES: Record<string, Fixture> = {
     R7: { attempt: makeAttempt('suspended'), evidence: ev('suspension_resolved', { resolution: 'approved', via: 'modal_button' }), state: 'generating', effects: ['bus', 'notify_coordinator'] },
     R8: { attempt: makeAttempt('suspended'), evidence: ev('turn_started', { retro: false }), state: 'generating', effects: ['hold', 'bus'] },
     R9: { attempt: G(), evidence: ev('turn_end', { strength: 'genuine', summary: REF }), state: 'completed', effects: ['commit', 'queue_status', 'task_terminal', 'bus', 'notify_coordinator', 'release_attempt_ref'] },
+    R9f: { attempt: G(), evidence: ev('turn_end', { strength: 'genuine', summary: REF, reportExpected: true, providerFailure: 'auth_failed' }), state: 'failed', effects: ['commit', 'queue_status', 'task_terminal', 'notify_coordinator'] },
     R10: { attempt: G(), evidence: ev('turn_end', { strength: 'weak' }), state: 'finalizing', effects: ['hold', 'notify_coordinator'] },
     R10a: { attempt: makeAttempt('finalizing'), evidence: ev('turn_end', { strength: 'weak' }), state: 'finalizing', effects: ['record'] },
     R11: { attempt: makeAttempt('finalizing'), evidence: ev('turn_end', { strength: 'genuine' }), state: 'completed', effects: ['commit'] },
@@ -193,11 +194,12 @@ describe('rule matching is unambiguous', () => {
             }
         }
         expect(ambiguous).toEqual([]);
-        // 58 evidence variants (all 23 kinds; +6 report-gate variants 2026-09-24, +1 await_end expiry 2026-09-25)
+        // 61 evidence variants (all 23 kinds; +6 report-gate variants 2026-09-24, +1 await_end expiry 2026-09-25,
+        // +3 auth-failed turn_end variants 2026-10-06 — R9f)
         // × (1 no-attempt + 34 attempt variants (+6 reported, 2026-09-25) × 2 lanes).
         const variantCount = TURN_EVIDENCE_KINDS.reduce((n, kind) => n + variantsFor(kind).length, 0);
-        expect(variantCount).toBe(58);
-        expect(visited).toBe(58 * (1 + 34 * 2));
+        expect(variantCount).toBe(61);
+        expect(visited).toBe(61 * (1 + 34 * 2));
     });
 });
 

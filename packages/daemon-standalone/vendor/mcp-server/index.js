@@ -26806,7 +26806,8 @@ ${renderWorkerProtocolFooter2(input)}`;
             releasedByHardCap: boolOpt2,
             nativeOutcome: enOpt2(NATIVE_TURN_OUTCOMES2),
             live: { t: "live", optional: true },
-            reportExpected: boolOpt2
+            reportExpected: boolOpt2,
+            providerFailure: enOpt2(PROVIDER_FAILURES2)
           },
           transcript_final: {
             selfAttributing: bool3,
@@ -41455,6 +41456,18 @@ ${rendered.join("\n\n")}`,
           { id: "R9", lane: "current", from: [C, G, S], on: ["turn_end"], guard: "end_genuine", to: "completed", verdict: "applied", effects: [
             { e: "commit", outcome: "completed", strength: "genuine", reason: "turn_end" }
           ] },
+          // R9f (2026-10-06 preview incident, task ec7017b3): the worker's daemon
+          // stamped the end `providerFailure` — the turn's whole reply was a provider
+          // auth/billing banner ("Login expired · Please run /login"). Without this
+          // rule the idle edge went R9r → await_report → R13r and committed
+          // task_completed / weak_end_confirmed for a task that never started. It is a
+          // provider failure, exactly as R20f treats the same verdict at process exit:
+          // failed, no reclaim (a re-dispatch to the same expired login would burn a
+          // retry), and the coordinator notice names the auth failure. Every other
+          // turn_end guard excludes a stamped end (reducer.ts completionEnd).
+          { id: "R9f", lane: "current", from: [C, G, S, F], on: ["turn_end"], guard: "end_provider_failure", to: "failed", verdict: "applied", effects: [
+            { e: "commit", outcome: "failed", strength: "genuine", reason: "from_provider_failure" }
+          ] },
           { id: "R10", lane: "current", from: [C, G, S], on: ["turn_end"], guard: "end_weak", to: F, verdict: "applied", effects: weakCandidate },
           { id: "R10a", lane: "current", from: [F], on: ["turn_end", "transcript_final"], guard: "weak_end_or_final", to: "same", verdict: "recorded", effects: [
             { e: "record", note: "duplicate_weak_end" }
@@ -41723,11 +41736,15 @@ ${rendered.join("\n\n")}`,
     function turnEnd(ctx) {
       return ctx.evidence.kind === "turn_end" ? ctx.evidence : null;
     }
+    function completionEnd(ctx) {
+      const e = turnEnd(ctx);
+      return e && !e.providerFailure ? e : null;
+    }
     function notHeld(ctx) {
       return admissionOf(ctx)?.kind !== "hold";
     }
     function reportAwaitedEnd(ctx) {
-      const e = turnEnd(ctx);
+      const e = completionEnd(ctx);
       return !!e && e.strength === "genuine" && !e.hollow && e.reportExpected === true && !!ctx.attempt && isMeshScope(ctx.attempt);
     }
     function reportedThisGeneration(ctx) {
@@ -42262,7 +42279,7 @@ ${rendered.join("\n\n")}`,
             if (!sessionIdsEquivalent(ctx.evidence.sessionId, attempt.prevGeneration.sessionId)) return false;
             const ev = ctx.evidence;
             if (ev.kind === "worker_report") return true;
-            if (ev.kind === "turn_end") return ev.strength === "genuine" && !ev.hollow;
+            if (ev.kind === "turn_end") return ev.strength === "genuine" && !ev.hollow && !ev.providerFailure;
             if (ev.kind === "transcript_final") return admitTranscriptFinal(ev, ctx.policy).kind === "strong";
             return false;
           },
@@ -42272,28 +42289,32 @@ ${rendered.join("\n\n")}`,
           // Every idle-signal guard below yields to R9t once a report is recorded for
           // this generation (`!reportedThisGeneration`): the report is the verdict.
           end_genuine: (ctx) => {
-            const e = turnEnd(ctx);
+            const e = completionEnd(ctx);
             return !!e && e.strength === "genuine" && !e.hollow && notHeld(ctx) && !reportAwaitedEnd(ctx) && !reportedThisGeneration(ctx);
           },
           end_report_awaited: (ctx) => reportAwaitedEnd(ctx) && notHeld(ctx) && !awaitReportHeld(ctx) && !reportedThisGeneration(ctx),
           end_report_awaited_held: (ctx) => reportAwaitedEnd(ctx) && notHeld(ctx) && awaitReportHeld(ctx) && !reportedThisGeneration(ctx),
           final_strong_report_awaited: (ctx) => ctx.evidence.kind === "transcript_final" && admissionOf(ctx)?.kind === "strong" && awaitReportHeld(ctx) && !reportedThisGeneration(ctx),
           finished_after_report: finishedAfterReport,
+          end_provider_failure: (ctx) => {
+            const e = turnEnd(ctx);
+            return !!e?.providerFailure && notHeld(ctx) && !reportedThisGeneration(ctx);
+          },
           false_idle_resumed: (ctx) => (ctx.evidence.kind === "turn_started" || ctx.evidence.kind === "transcript_activity") && afterWeakSince(ctx) && awaitReportHeld(ctx),
           end_weak: (ctx) => {
-            const e = turnEnd(ctx);
+            const e = completionEnd(ctx);
             return !!e && e.strength === "weak" && !e.afterFinalizationTimeout && !e.hollow && notHeld(ctx) && !reportedThisGeneration(ctx);
           },
           end_weak_after_timeout: (ctx) => {
-            const e = turnEnd(ctx);
+            const e = completionEnd(ctx);
             return !!e && e.strength === "weak" && !!e.afterFinalizationTimeout && !e.hollow && notHeld(ctx) && !reportedThisGeneration(ctx);
           },
           hollow_retry: (ctx) => {
-            const e = turnEnd(ctx);
+            const e = completionEnd(ctx);
             return !!e && !!e.hollow && notHeld(ctx) && !reportedThisGeneration(ctx) && ctx.attempt.hollowCount < ctx.attempt.maxTaskRetries;
           },
           hollow_exhausted: (ctx) => {
-            const e = turnEnd(ctx);
+            const e = completionEnd(ctx);
             return !!e && !!e.hollow && notHeld(ctx) && !reportedThisGeneration(ctx) && ctx.attempt.hollowCount >= ctx.attempt.maxTaskRetries;
           },
           final_strong: (ctx) => ctx.evidence.kind === "transcript_final" && admissionOf(ctx)?.kind === "strong" && !reportedThisGeneration(ctx),
@@ -90319,7 +90340,8 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         ...opts.blockReason ? { blockReason: opts.blockReason } : {},
         ...opts.releasedByHardCap !== void 0 ? { releasedByHardCap: opts.releasedByHardCap } : {},
         ...opts.nativeOutcome ? { nativeOutcome: opts.nativeOutcome } : {},
-        ...opts.live ? { live: opts.live } : {}
+        ...opts.live ? { live: opts.live } : {},
+        ...opts.providerFailure ? { providerFailure: opts.providerFailure } : {}
       }), opts.envelope);
     }
     function emitNoProgress(port, opts) {
@@ -129924,6 +129946,7 @@ ${text}` : text;
       if (s2.indexOf("\x1B") === -1) return s2;
       return s2.replace(ANSI_OSC_DCS_RE, "").replace(ANSI_CSI_RE, "");
     }
+    var AUTH_FAILURE_MESSAGE = "Provider credential was rejected by the CLI. Re-authenticate this CLI in this environment before retrying.";
     function hasProviderFailureEnvelope(text) {
       return /\bprovider\.[a-z_]*error\b/.test(text) || /\b(?:http\s*)?(?:40[23])\b\s*(?:[-:—]|\bforbidden\b|\bpayment\b|you\b|your\b)/.test(text) || /\bstatus(?:\s+code)?\s*[:=]?\s*40[23]\b/.test(text);
     }
@@ -130002,10 +130025,31 @@ ${text}` : text;
           // of an auth-failure event poisoned the receiving session's own tail and
           // got IT flagged next (the 2026-09-21 coordinator kill loop). Keep the
           // wording out of every pattern in this file when editing it.
-          message: "Provider credential was rejected by the CLI. Re-authenticate this CLI in this environment before retrying."
+          message: AUTH_FAILURE_MESSAGE
         };
       }
       return null;
+    }
+    var AUTH_ONLY_SEGMENT_RE = new RegExp("^(?:" + [
+      // "Login expired", "OAuth token has expired", "Your session has expired"
+      String.raw`(?:your\s+|the\s+)?(?:login|session|credentials?|(?:oauth\s+|access\s+|auth\s+|refresh\s+)?token)\s+(?:has\s+|have\s+|is\s+|are\s+)?expired`,
+      // "Please run /login", "Run /login to re-authenticate"
+      String.raw`(?:please\s+)?(?:run|use)\s+\/login(?:\s+to\s+[a-z\s-]{1,40})?`,
+      // "Not logged in", "Invalid API key", "Authentication required"
+      String.raw`not\s+(?:logged|signed)\s+in`,
+      String.raw`invalid\s+api\s+key`,
+      String.raw`(?:authentication|login)\s+(?:required|failed)`,
+      // "API Error: 401 {…authentication_error…}" — the CLI's raw 401 echo.
+      String.raw`api\s+error:\s*401\b.*`
+    ].join("|") + ")$");
+    var AUTH_ONLY_REPLY_MAX_CHARS = 600;
+    function detectAuthFailureOnlyReply(reply) {
+      const text = stripAnsi(reply).replace(/\s+/g, " ").trim().toLowerCase();
+      if (!text || text.length > AUTH_ONLY_REPLY_MAX_CHARS) return null;
+      const segments = (/^api\s+error:\s*401\b/.test(text) ? text.split(/\s*·\s*/) : text.split(/\s*[.!?·;\n]\s*/)).map((segment) => segment.replace(/^[\s:,-]+|[\s:,.!-]+$/g, "")).filter(Boolean);
+      if (segments.length === 0 || !segments.every((segment) => AUTH_ONLY_SEGMENT_RE.test(segment))) return null;
+      const failure6 = detectProviderFailure(text);
+      return failure6?.failureKind === "auth" ? failure6 : { errorReason: "auth_failed", failureKind: "auth", message: AUTH_FAILURE_MESSAGE };
     }
     function buildSpecDebugSnapshot(v, driver) {
       let screen = "";
@@ -134702,6 +134746,13 @@ ${buttons.join("\n")}`;
           // native-marker reconcile) — `turn_end`'s closed `nativeOutcome`
           // enum, never a free-text passthrough.
           nativeOutcome: asNativeTurnOutcome(opts.completionDiagnostic?.nativeTurnOutcome),
+          // A turn whose whole reply is an auth-failure banner (claude-cli
+          // "Login expired · Please run /login", 2026-10-06 preview incident:
+          // the idle edge was committed task_completed / weak_end_confirmed)
+          // is not a completion. The closed enum rides the evidence; the owner's
+          // reducer commits it failed / provider_auth_failed (R9f). Whole-reply
+          // match only — a summary that merely mentions the banner is untouched.
+          providerFailure: summary && detectAuthFailureOnlyReply(summary) ? "auth_failed" : void 0,
           // `nodeLabel` is intentionally omitted — `turn-ledger/deliver.ts`'s
           // `nodeLabelFor` already falls back to the attempt's own
           // `nodeId`/`providerType` (dispatch-time facts the ledger has),
@@ -153264,7 +153315,8 @@ var TURN_EVIDENCE_FIELD_SPECS = {
     releasedByHardCap: boolOpt,
     nativeOutcome: enOpt(NATIVE_TURN_OUTCOMES),
     live: { t: "live", optional: true },
-    reportExpected: boolOpt
+    reportExpected: boolOpt,
+    providerFailure: enOpt(PROVIDER_FAILURES)
   },
   transcript_final: {
     selfAttributing: bool,

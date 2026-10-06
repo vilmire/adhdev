@@ -136,3 +136,18 @@ describe('completion-flush emitGeneratingCompleted -> turn_end evidence (chokepo
         expect(() => emitGeneratingCompleted(host, { chatTitle: 'x', duration: 1, timestamp: 7000 })).not.toThrow();
     });
 });
+
+describe('completion-flush: an auth-failure-only reply stamps providerFailure on turn_end (2026-10-06 preview incident)', () => {
+    it('stamps providerFailure=auth_failed when the final reply is exactly "Login expired · Please run /login"', () => {
+        const { host, observed } = makeHost();
+        emitGeneratingCompleted(host, { chatTitle: 'x', duration: 34, timestamp: 1000, taskId: 't1', finalSummary: 'Login expired · Please run /login' });
+        expect(observed).toHaveLength(1);
+        expect((observed[0] as Extract<TurnEvidence, { kind: 'turn_end' }>).providerFailure).toBe('auth_failed');
+    });
+
+    it('does not stamp a real reply that merely mentions the banner', () => {
+        const { host, observed } = makeHost();
+        emitGeneratingCompleted(host, { chatTitle: 'x', duration: 34, timestamp: 1000, taskId: 't1', finalSummary: 'Done. Login expired banner now renders.' });
+        expect((observed[0] as Extract<TurnEvidence, { kind: 'turn_end' }>).providerFailure).toBeUndefined();
+    });
+});

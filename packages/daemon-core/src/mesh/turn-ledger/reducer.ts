@@ -169,6 +169,17 @@ function turnEnd(ctx: GuardCtx): TurnEvidenceOf<'turn_end'> | null {
     return ctx.evidence.kind === 'turn_end' ? ctx.evidence : null;
 }
 
+/**
+ * A turn_end the worker's daemon stamped `providerFailure` (its whole reply was
+ * an auth/billing failure banner — 2026-10-06 preview incident, claude-cli
+ * "Login expired · Please run /login" committed task_completed). R9f fails it;
+ * every completion-shaped turn_end guard below excludes it.
+ */
+function completionEnd(ctx: GuardCtx): TurnEvidenceOf<'turn_end'> | null {
+    const e = turnEnd(ctx);
+    return e && !e.providerFailure ? e : null;
+}
+
 function notHeld(ctx: GuardCtx): boolean {
     return admissionOf(ctx)?.kind !== 'hold';
 }
@@ -179,7 +190,7 @@ function notHeld(ctx: GuardCtx): boolean {
  * edge, commits it (R9r). Plain attempts never await a report.
  */
 function reportAwaitedEnd(ctx: GuardCtx): boolean {
-    const e = turnEnd(ctx);
+    const e = completionEnd(ctx);
     return !!e && e.strength === 'genuine' && !e.hollow && e.reportExpected === true
         && !!ctx.attempt && isMeshScope(ctx.attempt);
 }
@@ -231,7 +242,7 @@ const GUARDS: Record<Exclude<GuardId, 'otherwise'>, (ctx: GuardCtx) => boolean> 
         if (!sessionIdsEquivalent(ctx.evidence.sessionId, attempt.prevGeneration.sessionId)) return false;
         const ev = ctx.evidence;
         if (ev.kind === 'worker_report') return true;
-        if (ev.kind === 'turn_end') return ev.strength === 'genuine' && !ev.hollow;
+        if (ev.kind === 'turn_end') return ev.strength === 'genuine' && !ev.hollow && !ev.providerFailure;
         if (ev.kind === 'transcript_final') return admitTranscriptFinal(ev, ctx.policy).kind === 'strong';
         return false;
     },
@@ -241,17 +252,18 @@ const GUARDS: Record<Exclude<GuardId, 'otherwise'>, (ctx: GuardCtx) => boolean> 
     suspension_changed: (ctx) => ctx.evidence.kind === 'suspension' && ctx.attempt?.suspension !== ctx.evidence.modal,
     // Every idle-signal guard below yields to R9t once a report is recorded for
     // this generation (`!reportedThisGeneration`): the report is the verdict.
-    end_genuine: (ctx) => { const e = turnEnd(ctx); return !!e && e.strength === 'genuine' && !e.hollow && notHeld(ctx) && !reportAwaitedEnd(ctx) && !reportedThisGeneration(ctx); },
+    end_genuine: (ctx) => { const e = completionEnd(ctx); return !!e && e.strength === 'genuine' && !e.hollow && notHeld(ctx) && !reportAwaitedEnd(ctx) && !reportedThisGeneration(ctx); },
     end_report_awaited: (ctx) => reportAwaitedEnd(ctx) && notHeld(ctx) && !awaitReportHeld(ctx) && !reportedThisGeneration(ctx),
     end_report_awaited_held: (ctx) => reportAwaitedEnd(ctx) && notHeld(ctx) && awaitReportHeld(ctx) && !reportedThisGeneration(ctx),
     final_strong_report_awaited: (ctx) => ctx.evidence.kind === 'transcript_final' && admissionOf(ctx)?.kind === 'strong' && awaitReportHeld(ctx) && !reportedThisGeneration(ctx),
     finished_after_report: finishedAfterReport,
+    end_provider_failure: (ctx) => { const e = turnEnd(ctx); return !!e?.providerFailure && notHeld(ctx) && !reportedThisGeneration(ctx); },
     false_idle_resumed: (ctx) => (ctx.evidence.kind === 'turn_started' || ctx.evidence.kind === 'transcript_activity')
         && afterWeakSince(ctx) && awaitReportHeld(ctx),
-    end_weak: (ctx) => { const e = turnEnd(ctx); return !!e && e.strength === 'weak' && !e.afterFinalizationTimeout && !e.hollow && notHeld(ctx) && !reportedThisGeneration(ctx); },
-    end_weak_after_timeout: (ctx) => { const e = turnEnd(ctx); return !!e && e.strength === 'weak' && !!e.afterFinalizationTimeout && !e.hollow && notHeld(ctx) && !reportedThisGeneration(ctx); },
-    hollow_retry: (ctx) => { const e = turnEnd(ctx); return !!e && !!e.hollow && notHeld(ctx) && !reportedThisGeneration(ctx) && ctx.attempt!.hollowCount < ctx.attempt!.maxTaskRetries; },
-    hollow_exhausted: (ctx) => { const e = turnEnd(ctx); return !!e && !!e.hollow && notHeld(ctx) && !reportedThisGeneration(ctx) && ctx.attempt!.hollowCount >= ctx.attempt!.maxTaskRetries; },
+    end_weak: (ctx) => { const e = completionEnd(ctx); return !!e && e.strength === 'weak' && !e.afterFinalizationTimeout && !e.hollow && notHeld(ctx) && !reportedThisGeneration(ctx); },
+    end_weak_after_timeout: (ctx) => { const e = completionEnd(ctx); return !!e && e.strength === 'weak' && !!e.afterFinalizationTimeout && !e.hollow && notHeld(ctx) && !reportedThisGeneration(ctx); },
+    hollow_retry: (ctx) => { const e = completionEnd(ctx); return !!e && !!e.hollow && notHeld(ctx) && !reportedThisGeneration(ctx) && ctx.attempt!.hollowCount < ctx.attempt!.maxTaskRetries; },
+    hollow_exhausted: (ctx) => { const e = completionEnd(ctx); return !!e && !!e.hollow && notHeld(ctx) && !reportedThisGeneration(ctx) && ctx.attempt!.hollowCount >= ctx.attempt!.maxTaskRetries; },
     final_strong: (ctx) => ctx.evidence.kind === 'transcript_final' && admissionOf(ctx)?.kind === 'strong' && !reportedThisGeneration(ctx),
     final_weak: (ctx) => ctx.evidence.kind === 'transcript_final' && admissionOf(ctx)?.kind === 'weak' && !reportedThisGeneration(ctx),
     genuine_end_or_strong_final: (ctx) => GUARDS.end_genuine(ctx) || (GUARDS.final_strong(ctx) && !awaitReportHeld(ctx)),
@@ -834,7 +846,7 @@ function applyTemplate(template: EffectTemplate, draft: Draft): void {
             if (template.reason === 'from_cancel') reason = (ev as TurnEvidenceOf<'cancel'>).reason;
             else if (template.reason === 'from_operator') reason = (ev as TurnEvidenceOf<'operator_status'>).reason;
             else if (template.reason === 'from_provider_failure') {
-                reason = (ev as TurnEvidenceOf<'process_exit'>).providerFailure === 'billing_failed' ? 'provider_billing_failed' : 'provider_auth_failed';
+                reason = (ev as TurnEvidenceOf<'process_exit' | 'turn_end'>).providerFailure === 'billing_failed' ? 'provider_billing_failed' : 'provider_auth_failed';
             } else reason = template.reason;
             commit(draft, outcome, template.strength, reason, template.text === 'recorded_report' ? recordedReportText(draft) : undefined);
             return;

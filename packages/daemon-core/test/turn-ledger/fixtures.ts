@@ -87,6 +87,9 @@ export function variantsFor(kind: TurnEvidenceKind): Array<{ label: string; evid
             v('live', ev(kind, { strength: 'genuine', live: { ...LIVE_IDLE, adapterPending: true } })),
             v('report-expected', ev(kind, { strength: 'genuine', summary: REF, reportExpected: true })),
             v('report-expected-held', ev(kind, { strength: 'genuine', summary: REF, reportExpected: true }), [makeHold('await_report')]),
+            v('auth-failed', ev(kind, { strength: 'genuine', summary: REF, providerFailure: 'auth_failed' })),
+            v('auth-failed-report-expected', ev(kind, { strength: 'genuine', reportExpected: true, providerFailure: 'auth_failed' })),
+            v('auth-failed-hollow-weak', ev(kind, { strength: 'weak', hollow: true, providerFailure: 'auth_failed' })),
         ];
         case 'transcript_final': return [
             v('marker', ev(kind, { selfAttributing: false, nativeRead: true, nativeMarker: { outcome: 'completed' }, live: LIVE_IDLE })),

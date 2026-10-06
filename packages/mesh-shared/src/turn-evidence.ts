@@ -258,7 +258,15 @@ export type TurnEvidenceBody =
          * owner then treats a genuine end as a report-awaiting candidate (R9r), not
          * a commit. Absent = no reporting surface = today's genuine-end commit.
          */
-        reportExpected?: boolean }
+        reportExpected?: boolean
+        /**
+         * Stamped by the WORKER's daemon when the turn's whole reply is a provider
+         * auth/billing failure banner (claude-cli "Login expired · Please run
+         * /login", 2026-10-06 preview incident). The owner commits the attempt
+         * `failed / provider_auth_failed` (R9f) instead of reading the idle edge
+         * as a completion. Closed enum — the banner text itself never travels.
+         */
+        providerFailure?: ProviderFailure }
     | { kind: 'transcript_final'; selfAttributing: boolean; nativeRead: boolean; nativeMarker?: NativeTurnMarkerRef
         live: LiveTurnPending; summary?: SummaryRef; messageAt?: number }
     | { kind: 'transcript_activity'; newestActivityAt: number }
@@ -348,7 +356,7 @@ export const TURN_EVIDENCE_FIELD_SPECS: TurnEvidenceFieldSpecs = {
         strength: en(TURN_END_STRENGTHS), afterFinalizationTimeout: boolOpt, hollow: boolOpt,
         summary: { t: 'summary_ref', optional: true }, blockReason: enOpt(TURN_END_BLOCK_REASONS),
         releasedByHardCap: boolOpt, nativeOutcome: enOpt(NATIVE_TURN_OUTCOMES), live: { t: 'live', optional: true },
-        reportExpected: boolOpt,
+        reportExpected: boolOpt, providerFailure: enOpt(PROVIDER_FAILURES),
     },
     transcript_final: {
         selfAttributing: bool, nativeRead: bool, nativeMarker: { t: 'native_marker', optional: true },
