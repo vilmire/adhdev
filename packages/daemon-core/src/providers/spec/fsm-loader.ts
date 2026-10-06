@@ -144,6 +144,8 @@ export function validateFsmSpec(raw: unknown): string[] {
     for (const [i, s] of spec.states.entries()) {
         const sec = s.extract?.title?.section;
         if (sec && !sectionIds.has(sec)) errs.push(`states[${i}].extract.title.section "${sec}" unknown`);
+        const dsec = s.extract?.title?.detail_section;
+        if (dsec && !sectionIds.has(dsec)) errs.push(`states[${i}].extract.title.detail_section "${dsec}" unknown`);
         const bsec = s.extract?.buttons?.section;
         if (bsec && !sectionIds.has(bsec)) errs.push(`states[${i}].extract.buttons.section "${bsec}" unknown`);
     }

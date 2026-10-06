@@ -78134,6 +78134,8 @@ ${cleanBody}`;
       for (const [i, s2] of spec.states.entries()) {
         const sec = s2.extract?.title?.section;
         if (sec && !sectionIds.has(sec)) errs.push(`states[${i}].extract.title.section "${sec}" unknown`);
+        const dsec = s2.extract?.title?.detail_section;
+        if (dsec && !sectionIds.has(dsec)) errs.push(`states[${i}].extract.title.detail_section "${dsec}" unknown`);
         const bsec = s2.extract?.buttons?.section;
         if (bsec && !sectionIds.has(bsec)) errs.push(`states[${i}].extract.buttons.section "${bsec}" unknown`);
       }
@@ -78470,6 +78472,13 @@ ${cleanBody}`;
       return false;
     }
     function extractTitle(rule, sections, fullScreen) {
+      const title = extractBaseTitle(rule, sections, fullScreen);
+      if (!title || !rule.detail_section) return title;
+      const extra = sectionText(sections, rule.detail_section, "").split("\n").map((l) => l.trim()).filter((l) => l && !/^[─╌═─\s]+$/.test(l)).slice(0, TITLE_DETAIL_MAX_LINES);
+      return extra.length ? `${title}
+${extra.join("\n")}` : title;
+    }
+    function extractBaseTitle(rule, sections, fullScreen) {
       const hay = sectionText(sections, rule.section, fullScreen);
       if (!hay) return null;
       if (rule.first_line) {
