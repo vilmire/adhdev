@@ -107,11 +107,13 @@ export const PROVIDER_FAILURES = ['auth_failed', 'billing_failed'] as const
 export type ProviderFailure = typeof PROVIDER_FAILURES[number]
 
 /**
- * `daemon_restart` (wiring-unification follow-up, design §5): a boot-time
- * reconciliation observes this for a plain attempt whose session is gone
- * after a restart — the daemon never saw the session's own exit, so it is
- * not `provider_error`/`adapter_error`/etc.; it is the daemon itself
- * reporting "this session no longer exists".
+ * `daemon_restart` (wiring-unification follow-up, design §5): boot-time
+ * reconciliation observes this for a plain attempt that was open when the
+ * daemon restarted — either its session is gone, or the session was restored
+ * live but the turn in flight was cut by the restart. The daemon never saw
+ * the session's own exit or commit, so it is not `provider_error` /
+ * `adapter_error` / etc.; it is the daemon itself closing a turn it can no
+ * longer follow.
  */
 export const SESSION_ERROR_REASONS = ['provider_error', 'adapter_error', 'spawn_failed', 'auth_failed', 'billing_failed', 'unknown', 'daemon_restart'] as const
 export type SessionErrorReason = typeof SESSION_ERROR_REASONS[number]
