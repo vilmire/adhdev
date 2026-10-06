@@ -20,6 +20,9 @@ export function stripAnsi(text: string): string {
     return s.replace(ANSI_OSC_DCS_RE, '').replace(ANSI_CSI_RE, '');
 }
 
+/** Canonical auth-failure copy (see the SELF-MATCH GUARD in detectProviderFailure). */
+const AUTH_FAILURE_MESSAGE = 'Provider credential was rejected by the CLI. Re-authenticate this CLI in this environment before retrying.';
+
 export interface ProviderFailure {
     errorReason: 'auth_failed' | 'billing_failed' | 'quota_exceeded';
     failureKind: 'auth' | 'billing' | 'quota';
@@ -170,8 +173,60 @@ export function detectProviderFailure(output: string, _exitCode?: number): Provi
             // of an auth-failure event poisoned the receiving session's own tail and
             // got IT flagged next (the 2026-09-21 coordinator kill loop). Keep the
             // wording out of every pattern in this file when editing it.
-            message: 'Provider credential was rejected by the CLI. Re-authenticate this CLI in this environment before retrying.',
+            message: AUTH_FAILURE_MESSAGE,
         };
     }
     return null;
+}
+
+/**
+ * One auth-failure STATEMENT, matched against a whole sentence segment of a
+ * normalized (lowercased, whitespace-collapsed) reply. Each alternative must
+ * consume the entire segment — that is what separates the CLI's banner from a
+ * reply that merely mentions it ("login expired banner now renders").
+ */
+const AUTH_ONLY_SEGMENT_RE = new RegExp('^(?:'
+    + [
+        // "Login expired", "OAuth token has expired", "Your session has expired"
+        String.raw`(?:your\s+|the\s+)?(?:login|session|credentials?|(?:oauth\s+|access\s+|auth\s+|refresh\s+)?token)\s+(?:has\s+|have\s+|is\s+|are\s+)?expired`,
+        // "Please run /login", "Run /login to re-authenticate"
+        String.raw`(?:please\s+)?(?:run|use)\s+\/login(?:\s+to\s+[a-z\s-]{1,40})?`,
+        // "Not logged in", "Invalid API key", "Authentication required"
+        String.raw`not\s+(?:logged|signed)\s+in`,
+        String.raw`invalid\s+api\s+key`,
+        String.raw`(?:authentication|login)\s+(?:required|failed)`,
+        // "API Error: 401 {…authentication_error…}" — the CLI's raw 401 echo.
+        String.raw`api\s+error:\s*401\b.*`,
+    ].join('|')
+    + ')$');
+/** A banner is a line or two; anything longer is a real reply. */
+const AUTH_ONLY_REPLY_MAX_CHARS = 600;
+
+/**
+ * Stricter sibling of `detectProviderFailure` for a TURN VERDICT: true only
+ * when the turn's whole final reply is auth-failure wording, e.g. claude-cli's
+ *   "Login expired · Please run /login"
+ * (2026-10-06 preview incident: three workers answered a task with only this
+ * line and the mesh committed one of them `task_completed`).
+ *
+ * `detectProviderFailure` is a live-tail suspicion classifier — it fires on a
+ * statement anywhere in the text ("Done. Login expired banner now renders."
+ * matches). That is fine for a suspicion re-checked on screen, but a turn
+ * verdict fails a task outright, so here EVERY sentence segment of the reply
+ * must itself be an auth statement. Auth axis only: billing/quota keep their
+ * kimi-scoped admission (live-auth-advisory.ts).
+ */
+export function detectAuthFailureOnlyReply(reply: string): ProviderFailure | null {
+    const text = stripAnsi(reply).replace(/\s+/g, ' ').trim().toLowerCase();
+    if (!text || text.length > AUTH_ONLY_REPLY_MAX_CHARS) return null;
+    // The raw 401 echo carries JSON (with its own punctuation) and may be followed
+    // by "· Please run /login": split only on the CLI's `·` / newline joiners there.
+    const segments = (/^api\s+error:\s*401\b/.test(text) ? text.split(/\s*·\s*/) : text.split(/\s*[.!?·;\n]\s*/))
+        .map((segment) => segment.replace(/^[\s:,-]+|[\s:,.!-]+$/g, ''))
+        .filter(Boolean);
+    if (segments.length === 0 || !segments.every((segment) => AUTH_ONLY_SEGMENT_RE.test(segment))) return null;
+    const failure = detectProviderFailure(text);
+    return failure?.failureKind === 'auth'
+        ? failure
+        : { errorReason: 'auth_failed', failureKind: 'auth', message: AUTH_FAILURE_MESSAGE };
 }

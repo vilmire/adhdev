@@ -27,6 +27,7 @@ import { resolveTranscriptAuthorityProfile } from '../transcript-evidence.js';
 import { isWeakCompletionEvidence } from '../../mesh/mesh-events-utils.js';
 import type { ProviderModule } from '../contracts.js';
 import { emitTurnEnd, type TurnEvidencePort } from '../turn-evidence-port.js';
+import { detectAuthFailureOnlyReply } from '../spec/provider-failure-classifier.js';
 import type { TurnAttemptRef, TurnEndBlockReason, NativeTurnOutcome } from '@adhdev/mesh-shared';
 
 /**
@@ -390,6 +391,13 @@ export function emitGeneratingCompleted(host: CompletionEmitHost, opts: {
             // native-marker reconcile) — `turn_end`'s closed `nativeOutcome`
             // enum, never a free-text passthrough.
             nativeOutcome: asNativeTurnOutcome(opts.completionDiagnostic?.nativeTurnOutcome),
+            // A turn whose whole reply is an auth-failure banner (claude-cli
+            // "Login expired · Please run /login", 2026-10-06 preview incident:
+            // the idle edge was committed task_completed / weak_end_confirmed)
+            // is not a completion. The closed enum rides the evidence; the owner's
+            // reducer commits it failed / provider_auth_failed (R9f). Whole-reply
+            // match only — a summary that merely mentions the banner is untouched.
+            providerFailure: summary && detectAuthFailureOnlyReply(summary) ? 'auth_failed' : undefined,
             // `nodeLabel` is intentionally omitted — `turn-ledger/deliver.ts`'s
             // `nodeLabelFor` already falls back to the attempt's own
             // `nodeId`/`providerType` (dispatch-time facts the ledger has),

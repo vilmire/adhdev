@@ -51,7 +51,7 @@ export type GuardId =
     | 'prev_generation_completion' | 'stale_session_distinct'
     | 'reclaiming_refusal'
     | 'suspension_changed'
-    | 'end_genuine' | 'end_weak' | 'end_weak_after_timeout' | 'hollow_retry' | 'hollow_exhausted'
+    | 'end_genuine' | 'end_provider_failure' | 'end_weak' | 'end_weak_after_timeout' | 'hollow_retry' | 'hollow_exhausted'
     | 'end_report_awaited' | 'end_report_awaited_held' | 'final_strong_report_awaited' | 'false_idle_resumed'
     | 'final_strong' | 'final_weak'
     | 'genuine_end_or_strong_final' | 'weak_end_or_final'
@@ -247,6 +247,18 @@ export const TRANSITIONS: readonly TransitionRule[] = [
     // ── turn end ────────────────────────────────────────────────────────
     { id: 'R9', lane: 'current', from: [C, G, S], on: ['turn_end'], guard: 'end_genuine', to: 'completed', verdict: 'applied', effects: [
         { e: 'commit', outcome: 'completed', strength: 'genuine', reason: 'turn_end' },
+    ] },
+    // R9f (2026-10-06 preview incident, task ec7017b3): the worker's daemon
+    // stamped the end `providerFailure` — the turn's whole reply was a provider
+    // auth/billing banner ("Login expired · Please run /login"). Without this
+    // rule the idle edge went R9r → await_report → R13r and committed
+    // task_completed / weak_end_confirmed for a task that never started. It is a
+    // provider failure, exactly as R20f treats the same verdict at process exit:
+    // failed, no reclaim (a re-dispatch to the same expired login would burn a
+    // retry), and the coordinator notice names the auth failure. Every other
+    // turn_end guard excludes a stamped end (reducer.ts completionEnd).
+    { id: 'R9f', lane: 'current', from: [C, G, S, F], on: ['turn_end'], guard: 'end_provider_failure', to: 'failed', verdict: 'applied', effects: [
+        { e: 'commit', outcome: 'failed', strength: 'genuine', reason: 'from_provider_failure' },
     ] },
     { id: 'R10', lane: 'current', from: [C, G, S], on: ['turn_end'], guard: 'end_weak', to: F, verdict: 'applied', effects: weakCandidate },
     { id: 'R10a', lane: 'current', from: [F], on: ['turn_end', 'transcript_final'], guard: 'weak_end_or_final', to: 'same', verdict: 'recorded', effects: [

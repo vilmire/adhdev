@@ -375,6 +375,7 @@ export function emitTurnEnd(
         releasedByHardCap?: boolean;
         nativeOutcome?: Extract<TurnEvidence, { kind: 'turn_end' }>['nativeOutcome'];
         live?: Extract<TurnEvidence, { kind: 'turn_end' }>['live'];
+        providerFailure?: Extract<TurnEvidence, { kind: 'turn_end' }>['providerFailure'];
     },
 ): void {
     guardEmit(port, 'turn_end', opts.sessionId, () => ({
@@ -389,6 +390,7 @@ export function emitTurnEnd(
         ...(opts.releasedByHardCap !== undefined ? { releasedByHardCap: opts.releasedByHardCap } : {}),
         ...(opts.nativeOutcome ? { nativeOutcome: opts.nativeOutcome } : {}),
         ...(opts.live ? { live: opts.live } : {}),
+        ...(opts.providerFailure ? { providerFailure: opts.providerFailure } : {}),
     }) as TurnEvidence, opts.envelope);
 }
 
