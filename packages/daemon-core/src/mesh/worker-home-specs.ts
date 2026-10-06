@@ -135,7 +135,7 @@ export interface WorkerPrivateHomeSpec {
      * `~`, so the launch seam redirects `HOME` itself and the private directory
      * IS the worker's home.
      *
-     * Present (codex, kimi, opencode, hermes) means the CLI exposes a dedicated
+     * Present (codex, kimi, opencode) means the CLI exposes a dedicated
      * config-root variable, and redirecting that variable is strictly cheaper
      * and safer than redirecting `HOME`:
      *
@@ -180,10 +180,8 @@ export interface WorkerPrivateHomeSpec {
      *     source. See `WorkerHomeImport.relativePath` for the measurements, and
      *     for the live regression that established this field must span both.
      *
-     * Measured 2026-09-19 (all three under an override pointed at a scratch dir):
+     * Measured 2026-09-19 (both under an override pointed at a scratch dir):
      *
-     *   HERMES_HOME=<dir> hermes config path     → <dir>/config.yaml
-     *   HERMES_HOME=<dir> hermes config env-path → <dir>/.env
      *   CODEX_HOME=<dir with auth.json AT ROOT>  codex login status
      *     → "Logged in using ChatGPT";  nested <dir>/.codex/auth.json → "Not logged in"
      *   KIMI_CODE_HOME=<dir with config.toml AT ROOT> kimi --prompt "say OK"
@@ -280,8 +278,8 @@ export function deriveCursorWorkspaceSlug(workspace: string, realpath?: (p: stri
  * the manifest's `watchPath`: the loader discards it (`provider-loader.ts`
  * sets `watchPath: undefined`) because antigravity resolves to the BUILT-IN
  * `reader: "antigravity-cli"` from its spec, not the declarative `source`
- * executor. So the `${VAR}`/`envOverrides` expansion that makes hermes's
- * HERMES_HOME precedent work is never reached on this path.
+ * executor. So the declarative executor's `${VAR}`/`envOverrides` expansion
+ * is never reached on this path.
  *
  * Net effect of a naive tempdir HOME: worker writes to /tmp/…/.gemini/…,
  * daemon reads ~/.gemini/…, and every session reports zero assistant
@@ -673,8 +671,7 @@ export const WORKER_PRIVATE_HOME_SPECS: readonly WorkerPrivateHomeSpec[] = [
      * is empty" rather than as a broken worker.
      *
      * `sessions` is therefore SYMLINKED through to the real home, the same shape
-     * grok (`.grok/sessions`), kimi (`sessions`) and hermes (`sessions`) already
-     * use. Rewiring the reader instead was rejected for the reason given at the
+     * grok (`.grok/sessions`) and kimi (`sessions`) already use. Rewiring the reader instead was rejected for the reason given at the
      * head of the antigravity spec — symlinks buy the same isolation with zero
      * change to any read path.
      *

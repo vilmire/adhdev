@@ -19,12 +19,11 @@ import type { CliProviderInstance } from './cli-provider-instance.js';
 export type TranscriptSignalHost = Pick<CliProviderInstance, 'adapter' | 'busyEpoch' | 'completionHasFinalAssistantMessage' | 'lastEmittedCompletion' | 'lastExternalCompletionProbe' | 'lastFinalSummaryProvenance' | 'lastNativeTurnTerminalMarkers' | 'lastTranscriptSignalSnapshot' | 'meshTaskInjectedAt' | 'nativeTurnTerminalMarker' | 'provider' | 'readExternalCompletionMessages' | 'transcriptSignalSource' | 'type'>;
 
 /**
- * The spawned CLI's env overrides (e.g. the mesh coordinator points hermes
- * at a per-coordinator HERMES_HOME so its state.db lives in a tmpdir instead
- * of ~/.hermes). The native-history executor expands `${HERMES_HOME:-~/.hermes}`
- * from this map, so the completion gate MUST pass it through — otherwise the
- * gate reads ~/.hermes, finds no coordinator-session transcript, and
- * false-fires missing_final_assistant on every coordinator turn.
+ * The spawned CLI's env overrides. The native-history executor expands
+ * `${VAR:-fallback}` path templates from this map, so the completion gate MUST
+ * pass it through — otherwise a session launched with its config root
+ * redirected is read from the default root, no transcript is found, and the
+ * gate false-fires missing_final_assistant.
  */
 export function spawnedEnvOverrides(host: TranscriptSignalHost): Record<string, string> | undefined {
     const env = host.adapter.getRuntimeMetadata()?.spawnedEnv;

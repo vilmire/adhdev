@@ -162,9 +162,9 @@ export function expandPath(template: string, input: NativeHistoryInput, opts?: {
     }
     // ${VAR} expands from envOverrides (the spawned child's view) first,
     // then process.env. ${VAR:-fallback} keeps the bash-style default
-    // so spec authors can say e.g. ${HERMES_HOME:-~/.hermes}/state.db
-    // and have it work both for coordinator-launched sessions (where
-    // HERMES_HOME is set to a tmpdir) and normal sessions.
+    // so spec authors can say e.g. ${TOOL_HOME:-~/.tool}/state.db and
+    // have it work both for sessions launched with that variable
+    // redirected and normal sessions.
     out = out.replace(/\$\{([A-Z_][A-Z0-9_]*)(?::-(.*?))?\}/g, (_m, name, fallback) => {
         const v = input.envOverrides?.[name] ?? process.env[name];
         return v != null && v !== '' ? v : (fallback ?? '');

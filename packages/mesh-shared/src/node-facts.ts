@@ -238,7 +238,6 @@ export function normalizeMeshNodeFacts(raw: unknown): MeshNodeFacts | undefined 
  *
  * Known non-members and why, so this is not re-litigated per surface:
  *   - cursor-cli    — permanently impossible; no personal usage API exists
- *   - hermes-cli    — no model-axis quota to report
  *
  * ★grok-cli WAS listed here as impossible and is not: that verdict came from
  * probing `api.x.ai` / `management-api.x.ai` (the team-API billing axis, which

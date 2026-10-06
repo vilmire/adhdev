@@ -191,11 +191,9 @@ export function sessionStartedAtMsFromRegistry(h: CommandHelpers, targetSessionI
 }
 
 /**
- * Pull the env vars the daemon set when it spawned this session's CLI.
- * Mesh coordinator points hermes at a per-coordinator HERMES_HOME so
- * the native-history reader needs that override to find the right
- * state.db; without it the reader sees ~/.hermes/state.db and misses
- * every coordinator-session transcript.
+ * Pull the env vars the daemon set when it spawned this session's CLI, so
+ * the native-history reader expands `${VAR}` path templates from the
+ * child's view rather than the daemon's.
  *
  * Returns undefined when no SpecCliAdapter is in play (legacy
  * providers / CDP) or when the adapter exposes no spawn env.

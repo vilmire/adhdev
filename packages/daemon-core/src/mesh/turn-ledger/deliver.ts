@@ -28,13 +28,16 @@
 //      deferral as an AWAIT on a bus edge bounded by `at + deliveryCeilingMs`.
 //   4. `readCoordinatorNotices` — the MCP-only coordinator surface
 //      (`get_pending_mesh_events`): undelivered notices rendered + claimed into
-//      the same `delivered:<writer>:<seq>` rows the cursor honours.
+//      the same `delivered:<meshId>:<writer>:<seq>` rows the cursor honours.
 //
-// EXACTLY-ONCE: a notice is delivered at most once per `(writer, seq)`: the
+// EXACTLY-ONCE: a notice is delivered at most once per `(mesh, writer, seq)`: the
 // cursor checks the `delivered:` row before submitting and writes it after the
-// submit resolves; `messageId = notify:<writer>:<seq>` makes the input port
-// dedupe a resubmit inside the process. Residual (C2): one duplicate when the
-// process dies between submit and the claim insert.
+// submit resolves; `messageId = notify:<meshId>:<writer>:<seq>` makes the
+// input port dedupe a resubmit inside the process. The meshId is part of the
+// id because `seq` is per topic: two meshes on one daemon can reach the same
+// writer+seq, and the port's 300 s messageId dedupe would silently drop the
+// second mesh's notice to a shared coordinator session. Residual (C2): one
+// duplicate when the process dies between submit and the claim insert.
 //
 // CONTENT BOUNDARY: nothing here writes text to `mesh.<id>.events`. Text is
 // rendered at deliver time from local `turn_events` rows or the handoff topic.
@@ -660,7 +663,7 @@ export function createTurnDeliverHandler(deps: TurnDeliverDeps, handlerOpts: Tur
                 await deps.waiter.wait(entry.meshId, deadline, signal);
                 continue;
             }
-            const messageId = `notify:${entry.writer}:${entry.seq}`;
+            const messageId = `notify:${entry.meshId}:${entry.writer}:${entry.seq}`;
             let outcome: SubmitOutcome;
             try {
                 outcome = await deps.port.submit({

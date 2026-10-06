@@ -57,13 +57,6 @@ export function recordBlockAddress(recordIndex: number, blockIndex: number): str
     return `${recordIndex}.${blockIndex + 1}`;
 }
 
-/** hermes `messages.id` row address: `h<rowId>.<part>`. */
-export function rowIdAddress(rowId: unknown, part = 0): string | undefined {
-    const token = normalizeNativeIdToken(rowId);
-    if (!token || !Number.isInteger(part) || part < 0) return undefined;
-    return `h${token}.${part}`;
-}
-
 /** Script/manifest-supplied native id address: `k<nativeId>.<part>`. */
 export function keyedNativeAddress(nativeId: unknown, part = 0): string | undefined {
     const token = normalizeNativeIdToken(nativeId);

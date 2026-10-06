@@ -18,7 +18,6 @@
  *                          over-counts by roughly N×. (Observed live: a single
  *                          session's last record read 53,220,473 input tokens —
  *                          that is the session total, not one turn.)
- *   hermes-cli  CUMULATIVE the `sessions` row holds session-to-date totals.
  *
  * `mode` carries this per record so `foldUsageRecords` can apply the right
  * rule: DELTA records sum, CUMULATIVE records take the last (max) observation.
@@ -26,11 +25,10 @@
  *
  * ── Cost ────────────────────────────────────────────────────────────────────
  *
- * Only hermes persists a USD figure. It is carried through verbatim when the
- * provider marks it trustworthy and dropped otherwise (see `readHermesCost`),
- * because hermes ships `estimated_cost_usd = 0.0` with `cost_status = 'unknown'`
- * when no pricing table was available — a real zero and an absent value are
- * different facts and must not be conflated. No cost is ever computed here from
+ * `costUsd` is carried through only when a provider computed a USD figure
+ * itself and marks it trustworthy; a provider that reports `0.0` for "no
+ * pricing table" must leave it absent instead — a real zero and an absent
+ * value are different facts and must not be conflated. No cost is ever computed here from
  * a token count: that would require a pricing table this layer has no business
  * owning, and a stale table silently produces confidently wrong money numbers.
  *

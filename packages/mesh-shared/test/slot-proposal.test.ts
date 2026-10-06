@@ -24,7 +24,6 @@ describe('buildSlotProposal — mapping table → slots', () => {
             { type: 'codex-cli', expect: [{ provider: 'codex-cli', difficulty: ['medium', 'difficult', 'freeform'], maxParallel: 2 }] },
             { type: 'antigravity-cli', expect: [{ provider: 'antigravity-cli', model: 'Gemini 3.1 Pro (High)', difficulty: ['easy'], maxParallel: 2 }] },
             { type: 'cursor-cli', expect: [{ provider: 'cursor-cli', model: 'auto', difficulty: ['easy'], maxParallel: 1 }] },
-            { type: 'hermes-cli', expect: [{ provider: 'hermes-cli', difficulty: ['medium'], maxParallel: 2 }] },
         ]
 
         for (const c of cases) {
@@ -40,13 +39,6 @@ describe('buildSlotProposal — mapping table → slots', () => {
         // The cost-bounding property that makes the opus slot safe.
         expect(proposedSlots[1].maxParallel).toBe(1)
         expect(proposedSlots[1].difficulty).toEqual(['difficult'])
-    })
-
-    it('flags hermes-cli as provisional (it is an estimate, not an observed slot)', () => {
-        const p = buildSlotProposal(det('hermes-cli'))
-        expect(p.provisionalProviders).toEqual(['hermes-cli'])
-        expect(p.entries[0].provisional).toBe(true)
-        expect(p.unknownProviders).toEqual([])
     })
 
     it('does NOT flag transcribed providers as provisional', () => {
@@ -174,11 +166,12 @@ describe('CLI_SLOT_RECIPES table integrity', () => {
         expect(Object.isFrozen(UNKNOWN_CLI_SLOT_RECIPE)).toBe(true)
     })
 
-    it('marks exactly hermes-cli as provisional among table entries', () => {
+    it('marks no table entry as provisional (only the unknown-provider fallback is)', () => {
         const provisional = Object.entries(CLI_SLOT_RECIPES)
             .filter(([, recipes]) => recipes.some(r => r.provisional))
             .map(([type]) => type)
-        expect(provisional).toEqual(['hermes-cli'])
+        expect(provisional).toEqual([])
+        expect(UNKNOWN_CLI_SLOT_RECIPE.provisional).toBe(true)
     })
 
     it('declares only valid difficulty values', () => {

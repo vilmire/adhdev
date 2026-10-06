@@ -78,7 +78,7 @@ interface CoordinatorRecentActivity {
  * One coordinator operating note — a runtime-accumulated lesson (provider
  * quirk, pattern to avoid, recovery lesson) persisted in the ledger so it
  * survives coordinator restarts and is provider-neutral (visible to codex /
- * hermes / antigravity coordinators, not just Claude's memory).
+ * kimi / antigravity coordinators, not just Claude's memory).
  */
 export interface CoordinatorOperatingNote {
     text: string;

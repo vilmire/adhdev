@@ -203,7 +203,9 @@ interface TurnAttemptExtras {
  * the coordinator never heard (2026-10-02: a coordinator waited forever on a
  * `refine:completed` whose seq another mesh had used a week earlier). The mesh
  * is part of the id now; a legacy `delivered:<writer>:<seq>` row still counts,
- * but only for the mesh it was written for.
+ * but only for the mesh it was written for. A legacy row with no mesh_id is
+ * ambiguous (it could be any mesh's notice) and no longer counts: such rows
+ * predate 2026-10-02, outside the 24 h notice backlog window.
  */
 export function deliveryClaimId(meshId: string | null | undefined, writer: string, seq: number): string {
     return meshId ? `delivered:${meshId}:${writer}:${seq}` : legacyDeliveryClaimId(writer, seq);
@@ -493,7 +495,7 @@ export class TurnStore {
     /** True when this mesh's notice (writer, seq) already has a delivery claim (see deliveryClaimId). */
     isDeliveryClaimed(meshId: string, writer: string, seq: number): boolean {
         return !!this.stmt(`SELECT 1 FROM turn_events WHERE kind = 'delivered'
-            AND (event_id = ? OR (event_id = ? AND (mesh_id = ? OR mesh_id IS NULL))) LIMIT 1`)
+            AND (event_id = ? OR (event_id = ? AND mesh_id = ?)) LIMIT 1`)
             .get(deliveryClaimId(meshId, writer, seq), legacyDeliveryClaimId(writer, seq), meshId);
     }
 
@@ -536,7 +538,7 @@ export class TurnStore {
             WHERE n.kind = 'notify' AND n.mesh_id = ? AND n.publish_state = 'published' AND n.recorded_at >= ?
               AND NOT EXISTS (SELECT 1 FROM turn_events d WHERE d.kind = 'delivered' AND (
                     d.event_id = 'delivered:' || n.mesh_id || ':' || n.src_writer || ':' || n.published_seq
-                 OR (d.event_id = 'delivered:' || n.src_writer || ':' || n.published_seq AND (d.mesh_id = n.mesh_id OR d.mesh_id IS NULL))))
+                 OR (d.event_id = 'delivered:' || n.src_writer || ':' || n.published_seq AND d.mesh_id = n.mesh_id)))
             ORDER BY n.published_seq, n.rowid LIMIT ?`).all(meshId, opts.sinceMs ?? 0, opts.limit ?? 200) as EventRowRaw[];
         return rows.map(eventFromRow);
     }

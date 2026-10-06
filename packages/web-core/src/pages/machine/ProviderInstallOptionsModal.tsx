@@ -31,7 +31,7 @@ interface ProviderInstallOptionsModalProps {
     displayName: string
     /**
      * Whether to offer the quota row at all. False for providers with no
-     * shipped fetcher (cursor-cli, antigravity-cli, hermes-cli): a switch that
+     * shipped fetcher: a switch that
      * cannot collect anything would be a promise the daemon can't keep, so the
      * row is omitted rather than shown disabled.
      */

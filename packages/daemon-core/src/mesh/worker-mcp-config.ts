@@ -68,7 +68,7 @@ export interface WriteWorkerMcpConfigInput {
  * difference: `~` resolves against the worker-private HOME when there is one.
  * That single substitution is what makes a home-rooted provider isolable at
  * all — the coordinator resolver has no such seam, which is why antigravity
- * and hermes workers currently share the coordinator's global file.
+ * workers currently share the coordinator's global file.
  *
  * ★`configRootPrefix` handles the case where the private root is a NAMED config
  * root rather than a home: the declared path's leading `~/<prefix>` collapses to
