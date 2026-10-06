@@ -27979,7 +27979,7 @@ ${renderWorkerProtocolFooter2(input)}`;
       if (cached) return cached;
       const commit2 = readInjected(true ? "unknown" : void 0) ?? "unknown";
       const commitShort = readInjected(true ? "unknown" : void 0) ?? (commit2 !== "unknown" ? commit2.slice(0, 7) : "unknown");
-      const version = readInjected(true ? "1.0.74" : void 0) ?? readInjected(typeof process !== "undefined" ? process.env?.ADHDEV_PKG_VERSION : void 0) ?? "unknown";
+      const version = readInjected(true ? "1.0.75" : void 0) ?? readInjected(typeof process !== "undefined" ? process.env?.ADHDEV_PKG_VERSION : void 0) ?? "unknown";
       const builtAt = readInjected(true ? "unknown" : void 0);
       cached = builtAt ? { commit: commit2, commitShort, version, builtAt } : { commit: commit2, commitShort, version };
       return cached;
