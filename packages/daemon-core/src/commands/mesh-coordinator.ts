@@ -391,7 +391,9 @@ function resolveMcpPort(explicitPort?: number): number | undefined {
  * coordinator session still launches, just without the prompt for that
  * provider. A missing/unknown rule means "skip injection" — safe by default
  * (the previous fallback unconditionally pushed --append-system-prompt onto
- * every non-Claude CLI, which crashed agy on launch).
+ * every non-Claude CLI, which crashed agy on launch). The one fatal case is
+ * an inline prompt over the platform argv limit with no usable file
+ * fallback: that spawn cannot succeed, so `error` is returned instead.
  */
 export interface CoordinatorInjectionEffect {
   /** Absolute path the daemon wrote a wrapper-blocked file to. Only set for
@@ -407,35 +409,125 @@ export interface CoordinatorInjectionEffect {
    *  path schedules a delete after the spawn settles; leftovers in the temp
    *  dir are harmless (OS-reaped) but we still best-effort clean up. */
   agentFilePath?: string
+  /** Set when the prompt could not be delivered and the launch must not
+   *  proceed: an inline (argv) prompt over the platform limit with no usable
+   *  `oversizeFallback`. Callers fail the launch with this message instead of
+   *  letting the spawn die obscurely (CreateProcess / cmd.exe length limit). */
+  error?: string
+  /** Stable machine code for `error`. */
+  errorCode?: 'mesh_coordinator_prompt_too_long'
+}
+
+export interface CoordinatorInjectionContext {
+  cliArgs: string[]
+  launchEnv: Record<string, string>
+  workspace: string
+  cliType: string
+  /** Defaults to process.platform; injectable for tests. */
+  platform?: NodeJS.Platform
+  /** win32 only: whether the spawn goes through cmd.exe (npm .cmd shim).
+   *  Unknown (undefined) is treated as true — the conservative limit. */
+  viaCmdShell?: boolean
+}
+
+/**
+ * Largest single argv value an inline (cli_arg / config_override) prompt may
+ * occupy before the daemon switches to the declared file fallback.
+ *
+ *  - win32 direct CreateProcess: whole command line ≤ 32,767 UTF-16 units.
+ *  - win32 through cmd.exe (npm .cmd shims): ≤ 8,191 chars.
+ *    Both keep headroom for the binary path, other args and quoting.
+ *  - linux: MAX_ARG_STRLEN caps ONE argv string at 131,072 bytes.
+ *  - other POSIX (darwin): ARG_MAX ≈ 1 MiB for argv + env together.
+ */
+export const COORDINATOR_INLINE_PROMPT_LIMITS = {
+  win32Direct: 30_000,
+  win32CmdShell: 8_000,
+  linux: 120_000,
+  posix: 256_000,
+} as const
+
+export function resolveCoordinatorInlinePromptLimit(platform: NodeJS.Platform, viaCmdShell?: boolean): number {
+  if (platform === 'win32') {
+    return viaCmdShell === false
+      ? COORDINATOR_INLINE_PROMPT_LIMITS.win32Direct
+      : COORDINATOR_INLINE_PROMPT_LIMITS.win32CmdShell
+  }
+  return platform === 'linux' ? COORDINATOR_INLINE_PROMPT_LIMITS.linux : COORDINATOR_INLINE_PROMPT_LIMITS.posix
+}
+
+/** win32 limits are in UTF-16 units (string length); POSIX limits in bytes. */
+function inlineArgSize(value: string, platform: NodeJS.Platform): number {
+  return platform === 'win32' ? value.length : Buffer.byteLength(value, 'utf-8')
 }
 
 export function applyMeshCoordinatorSystemPromptInjection(
   systemPrompt: string,
   injection: MeshCoordinatorSystemPromptInjection | undefined,
-  ctx: { cliArgs: string[]; launchEnv: Record<string, string>; workspace: string; cliType: string },
+  ctx: CoordinatorInjectionContext,
 ): CoordinatorInjectionEffect {
   if (!systemPrompt || !injection) return {}
   return applyInjectionRule(systemPrompt, injection, ctx)
 }
 
+/**
+ * Push an inline prompt argument, or — when it would exceed the platform's
+ * argv limit — apply the rule's declared file fallback instead. With no
+ * usable fallback the launch is refused with a clear error.
+ */
+function applyInlineOrFallback(
+  systemPrompt: string,
+  injection: Extract<MeshCoordinatorSystemPromptInjection, { mode: 'cli_arg' | 'config_override' }>,
+  inlineValue: string,
+  ctx: CoordinatorInjectionContext,
+): CoordinatorInjectionEffect {
+  const platform = ctx.platform ?? process.platform
+  const limit = resolveCoordinatorInlinePromptLimit(platform, ctx.viaCmdShell)
+  const size = inlineArgSize(inlineValue, platform)
+  if (size <= limit) {
+    ctx.cliArgs.push(injection.flag, inlineValue)
+    return {}
+  }
+  const fallback = injection.oversizeFallback
+  const sizeNote = `${size} ${platform === 'win32' ? 'chars' : 'bytes'} > ${limit} safe inline limit on ${platform}`
+    + (platform === 'win32' ? (ctx.viaCmdShell === false ? '' : ' (cmd.exe)') : '')
+  if (fallback && (fallback.mode === 'agent_file' || fallback.mode === 'context_file')) {
+    const effect = applyInjectionRule(systemPrompt, fallback, ctx)
+    if (effect.agentFilePath || effect.contextFilePath) {
+      const extraArgs = Array.isArray(fallback.extraArgs)
+        ? fallback.extraArgs.filter((a): a is string => typeof a === 'string' && a.length > 0)
+        : []
+      ctx.cliArgs.push(...extraArgs)
+      LOG.info('MeshCoordinator', `Coordinator prompt too long for ${injection.mode} ${injection.flag} (${sizeNote}) — using ${fallback.mode} fallback (${ctx.cliType})`)
+      return effect
+    }
+    return {
+      errorCode: 'mesh_coordinator_prompt_too_long',
+      error: `Coordinator system prompt for ${ctx.cliType} is too long to pass on the command line (${sizeNote}), and writing the ${fallback.mode} fallback failed. See the daemon log for the file error.`,
+    }
+  }
+  return {
+    errorCode: 'mesh_coordinator_prompt_too_long',
+    error: `Coordinator system prompt for ${ctx.cliType} is too long to pass on the command line via ${injection.flag} (${sizeNote}), and the provider declares no file-based oversizeFallback in meshCoordinator.systemPromptInjection. Update the ${ctx.cliType} provider spec.`,
+  }
+}
+
 function applyInjectionRule(
   systemPrompt: string,
   injection: MeshCoordinatorSystemPromptInjection,
-  ctx: { cliArgs: string[]; launchEnv: Record<string, string>; workspace: string; cliType: string },
+  ctx: CoordinatorInjectionContext,
 ): CoordinatorInjectionEffect {
   switch (injection.mode) {
     case 'cli_arg': {
       if (!injection.flag) return {}
-      ctx.cliArgs.push(injection.flag, systemPrompt)
-      return {}
+      return applyInlineOrFallback(systemPrompt, injection, systemPrompt, ctx)
     }
     case 'config_override': {
       if (!injection.flag || !injection.template) return {}
       const rendered = injection.template
         .replace(/\{prompt_json\}/g, JSON.stringify(systemPrompt))
         .replace(/\{prompt\}/g, systemPrompt)
-      ctx.cliArgs.push(injection.flag, rendered)
-      return {}
+      return applyInlineOrFallback(systemPrompt, injection, rendered, ctx)
     }
     case 'env_var': {
       if (!injection.name) return {}
@@ -451,7 +543,9 @@ function applyInjectionRule(
       try {
         const dir = mkdtempSync(join(os.tmpdir(), `adhdev-coord-${ctx.cliType}-`))
         const filePath = join(dir, 'coordinator-agent.md')
-        writeFileSync(filePath, body, 'utf-8')
+        // 0600: the prompt carries mesh/node identifiers; the temp dir is
+        // already 0700 (mkdtemp), the file mode keeps it private on its own.
+        writeFileSync(filePath, body, { encoding: 'utf-8', mode: 0o600 })
         ctx.cliArgs.push(injection.flag, filePath)
         LOG.info('MeshCoordinator', `Wrote coordinator agent file to ${filePath} (${ctx.cliType})`)
         return { agentFilePath: filePath }

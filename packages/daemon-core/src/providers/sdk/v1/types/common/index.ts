@@ -175,9 +175,18 @@ export interface MeshCoordinatorDef {
   delegatedWorkerIsolation?: MeshCoordinatorDelegatedWorkerIsolationDef;
 }
 
+/**
+ * File-based rule an inline (cli_arg / config_override) injection falls back
+ * to when the prompt would exceed the platform's argv limit (win32: 32,767
+ * chars, 8,191 through cmd.exe). `extraArgs` are applied only with the fallback.
+ */
+export type MeshCoordinatorSystemPromptOversizeFallbackDef =
+  | { mode: 'agent_file'; flag: string; template?: string; extraArgs?: string[] }
+  | { mode: 'context_file'; path: string; wrapper?: string; owned?: boolean; extraArgs?: string[] };
+
 export type MeshCoordinatorSystemPromptInjectionDef =
-  | { mode: 'cli_arg'; flag: string }
-  | { mode: 'config_override'; flag: string; template: string }
+  | { mode: 'cli_arg'; flag: string; oversizeFallback?: MeshCoordinatorSystemPromptOversizeFallbackDef }
+  | { mode: 'config_override'; flag: string; template: string; oversizeFallback?: MeshCoordinatorSystemPromptOversizeFallbackDef }
   | { mode: 'context_file'; path: string; wrapper?: string; owned?: boolean }
   | { mode: 'env_var'; name: string }
   | { mode: 'agent_file'; flag: string; template?: string };

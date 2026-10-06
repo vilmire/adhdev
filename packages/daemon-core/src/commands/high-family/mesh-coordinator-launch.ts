@@ -603,6 +603,10 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                                 providerMeta?.meshCoordinator?.systemPromptInjection,
                                 { cliArgs: cliCmdArgs, launchEnv: cliCmdEnv, workspace, cliType },
                             );
+                            if (effect.error) {
+                                LOG.error('MeshCoordinator', effect.error);
+                                return { success: false, code: effect.errorCode, error: effect.error, meshId, cliType, workspace };
+                            }
                             cliCmdContextFilePath = effect.contextFilePath;
                             cliCmdContextFileOwned = effect.contextFileOwned === true;
                             cliCmdAgentFilePath = effect.agentFilePath;
@@ -880,6 +884,10 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                             providerMeta?.meshCoordinator?.systemPromptInjection,
                             { cliArgs, launchEnv, workspace, cliType },
                         );
+                        if (effect.error) {
+                            LOG.error('MeshCoordinator', effect.error);
+                            return { success: false, code: effect.errorCode, error: effect.error, meshId, cliType, workspace };
+                        }
                         autoImportContextFilePath = effect.contextFilePath;
                         autoImportContextFileOwned = effect.contextFileOwned === true;
                         autoImportAgentFilePath = effect.agentFilePath;

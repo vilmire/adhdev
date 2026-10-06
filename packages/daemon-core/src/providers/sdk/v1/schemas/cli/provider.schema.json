@@ -712,6 +712,9 @@
                 },
                 "flag": {
                   "type": "string"
+                },
+                "oversizeFallback": {
+                  "$ref": "#/$defs/systemPromptOversizeFallback"
                 }
               }
             },
@@ -732,6 +735,9 @@
                 },
                 "template": {
                   "type": "string"
+                },
+                "oversizeFallback": {
+                  "$ref": "#/$defs/systemPromptOversizeFallback"
                 }
               }
             },
@@ -1088,6 +1094,66 @@
     }
   },
   "$defs": {
+    "systemPromptOversizeFallback": {
+      "description": "File-based injection used instead of an inline (cli_arg / config_override) prompt when the prompt would exceed the platform's argv limit (win32 CreateProcess 32,767 chars; 8,191 through cmd.exe). extraArgs are appended only when the fallback is used. Daemons that predate this field ignore it and keep the inline rule.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "flag"
+          ],
+          "properties": {
+            "mode": {
+              "const": "agent_file"
+            },
+            "flag": {
+              "type": "string"
+            },
+            "template": {
+              "type": "string"
+            },
+            "extraArgs": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "path"
+          ],
+          "properties": {
+            "mode": {
+              "const": "context_file"
+            },
+            "path": {
+              "type": "string"
+            },
+            "wrapper": {
+              "type": "string"
+            },
+            "owned": {
+              "type": "boolean"
+            },
+            "extraArgs": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      ]
+    },
     "autoApproveMode": {
       "type": "object",
       "required": [

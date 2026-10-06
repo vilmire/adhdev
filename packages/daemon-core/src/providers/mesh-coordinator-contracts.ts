@@ -174,12 +174,34 @@ export type MeshCoordinatorDelegatedWorkerArgRule =
  *
  * The prompt text is templated with `{prompt}` (raw) or `{prompt_json}`
  * (JSON-encoded for embedding inside config-override strings).
+ *
+ * The two inline modes (cli_arg, config_override) put the whole prompt on the
+ * command line. That breaks past the platform's argv limit — on win32
+ * CreateProcess caps the command line at 32,767 chars and cmd.exe (npm .cmd
+ * shims) at 8,191, below the coordinator prompt's size. An inline rule may
+ * therefore declare `oversizeFallback`: a file-based rule the daemon uses
+ * instead when the inline argument would exceed the limit. Without one the
+ * launch fails with a clear error rather than an obscure spawn failure.
+ * Daemons that predate the field ignore it and keep the inline behaviour.
  */
+export type MeshCoordinatorSystemPromptOversizeFallback =
+  | Extract<MeshCoordinatorSystemPromptNonInlineInjection, { mode: 'agent_file' }>
+  | Extract<MeshCoordinatorSystemPromptNonInlineInjection, { mode: 'context_file' }>;
+
+/** Extra spawn args applied only when the fallback is used, e.g. codex's
+ *  `-c project_doc_max_bytes=…` so an AGENTS.md-delivered prompt is not
+ *  truncated at the CLI's default project-doc budget. */
+export type MeshCoordinatorSystemPromptFallbackRule = MeshCoordinatorSystemPromptOversizeFallback & {
+  extraArgs?: string[];
+};
+
 export type MeshCoordinatorSystemPromptInjection =
   | {
       mode: 'cli_arg';
       /** Spawn-args flag, e.g. '--append-system-prompt'. The prompt becomes the next argv. */
       flag: string;
+      /** File-based rule used when the inline prompt would exceed the argv limit. */
+      oversizeFallback?: MeshCoordinatorSystemPromptFallbackRule;
     }
   | {
       mode: 'config_override';
@@ -187,7 +209,13 @@ export type MeshCoordinatorSystemPromptInjection =
       flag: string;
       /** Template using {prompt} or {prompt_json}, e.g. 'developer_instructions={prompt_json}'. */
       template: string;
+      /** File-based rule used when the inline prompt would exceed the argv limit. */
+      oversizeFallback?: MeshCoordinatorSystemPromptFallbackRule;
     }
+  | MeshCoordinatorSystemPromptNonInlineInjection;
+
+/** Injection rules that keep the prompt body off the command line. */
+export type MeshCoordinatorSystemPromptNonInlineInjection =
   | {
       mode: 'context_file';
       /** Workspace-relative file path the CLI auto-loads, e.g. 'AGENTS.md' or 'GEMINI.md'. */
