@@ -3,10 +3,10 @@
  * `assistant_threads`, `assistant_relays` — ids, times and enums only, never a
  * body; the body is re-read at send time).
  *
- * The durable implementation belongs in `mesh-runtime.db` (schema unit, not
- * landed). `InMemoryAssistantRelayStore` implements the same port for tests
- * and as the pre-schema default; it loses rows on restart, which only means
- * no backlog survives a daemon restart until the SQLite store is wired.
+ * The durable implementation is `SqliteAssistantRelayStore`
+ * (assistant-relay-sqlite-store.ts, tables in `mesh-runtime.db`).
+ * `InMemoryAssistantRelayStore` implements the same port for tests and as the
+ * fallback when the runtime store cannot open; it loses rows on restart.
  */
 
 export type AssistantRelayKind = 'relay';

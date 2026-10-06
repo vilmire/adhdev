@@ -309,6 +309,23 @@ export class AssistantRegistry {
     }
 }
 
+let sharedRegistry: AssistantRegistry | null = null;
+
+/**
+ * The daemon's one registry instance (boot wiring, `launch_assistant`,
+ * restore), so its in-memory copy never goes stale against another writer in
+ * the same process. Built lazily from the config dir.
+ */
+export function getAssistantRegistry(): AssistantRegistry {
+    if (!sharedRegistry) sharedRegistry = new AssistantRegistry();
+    return sharedRegistry;
+}
+
+/** Tests: install a registry (null → rebuild lazily from the config dir). */
+export function setAssistantRegistryForTests(registry: AssistantRegistry | null): void {
+    sharedRegistry = registry;
+}
+
 /**
  * Keep the registry in step with the bus (wiring calls this at boot):
  *  - `terminated` of the bound session releases the binding (not on daemon_shutdown);

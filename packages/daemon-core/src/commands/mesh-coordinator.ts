@@ -55,6 +55,19 @@ export interface ResolveMeshCoordinatorSetupOptions {
   nodeExecutable?: string
   adhdevMcpTransport?: 'local' | 'ipc'
   adhdevMcpPort?: number
+  /**
+   * Which ADHDev MCP toolset the launched server exposes. Default: the mesh
+   * coordinator toolset for `meshId`. The assistant layer passes
+   * `{kind:'assistant'}` (docs/design/2026-10-07-assistant-layer.md §4.5).
+   */
+  toolset?: AdhdevMcpToolset
+}
+
+/** The ADHDev MCP server toolset a launch selects (`--repo-mesh <id>` | `--assistant`). */
+export type AdhdevMcpToolset = { kind: 'mesh'; meshId: string } | { kind: 'assistant' }
+
+function toolsetArgs(toolset: AdhdevMcpToolset): string[] {
+  return toolset.kind === 'assistant' ? ['--assistant'] : ['--repo-mesh', toolset.meshId]
 }
 
 const DEFAULT_SERVER_NAME = 'adhdev-mesh'
@@ -83,13 +96,14 @@ export function resolveMeshCoordinatorSetup(options: ResolveMeshCoordinatorSetup
   }
 
   const serverName = mcpConfig.serverName?.trim() || DEFAULT_SERVER_NAME
+  const toolset: AdhdevMcpToolset = options.toolset ?? { kind: 'mesh', meshId }
   if (mcpConfig.mode === 'auto_import') {
     const path = mcpConfig.path?.trim()
     if (!path) {
       return { kind: 'unsupported', reason: 'Provider auto-import MCP config is missing a config path' }
     }
     const mcpServer = resolveAdhdevMcpServerLaunch({
-      meshId,
+      toolset,
       adhdevMcpCommand: options.adhdevMcpCommand,
       adhdevMcpEntryPath: options.adhdevMcpEntryPath,
       nodeExecutable: options.nodeExecutable,
@@ -118,7 +132,7 @@ export function resolveMeshCoordinatorSetup(options: ResolveMeshCoordinatorSetup
       return { kind: 'unsupported', reason: 'Provider manual MCP setup is missing instructions or template' }
     }
     const mcpServer = resolveAdhdevMcpServerLaunch({
-      meshId,
+      toolset,
       adhdevMcpCommand: options.adhdevMcpCommand,
       adhdevMcpEntryPath: options.adhdevMcpEntryPath,
       nodeExecutable: options.nodeExecutable,
@@ -190,8 +204,8 @@ function resolveMcpConfigPath(configPath: string, workspace: string): string {
   return join(workspace, trimmed)
 }
 
-function resolveAdhdevMcpServerLaunch(options: {
-  meshId: string
+export function resolveAdhdevMcpServerLaunch(options: {
+  toolset: AdhdevMcpToolset
   adhdevMcpCommand?: string
   adhdevMcpEntryPath?: string
   nodeExecutable?: string
@@ -201,7 +215,7 @@ function resolveAdhdevMcpServerLaunch(options: {
   const directEntryPath = resolveAdhdevMcpEntryPath(options.adhdevMcpEntryPath)
   if (directEntryPath) {
     const transport = resolveMcpTransport(options.adhdevMcpTransport)
-    const args = [directEntryPath, '--mode', transport, '--repo-mesh', options.meshId]
+    const args = [directEntryPath, '--mode', transport, ...toolsetArgs(options.toolset)]
     const port = resolveMcpPort(options.adhdevMcpPort)
     if (port !== undefined) args.push('--port', String(port))
     return {
@@ -215,7 +229,7 @@ function resolveAdhdevMcpServerLaunch(options: {
   const directMcpEntrypoint = basename(command).startsWith('adhdev-mcp')
     || command.includes('/vendor/mcp-server/')
     || command.includes('\\vendor\\mcp-server\\')
-  const args = [...(directMcpEntrypoint ? [] : ['mcp']), '--mode', transport, '--repo-mesh', options.meshId]
+  const args = [...(directMcpEntrypoint ? [] : ['mcp']), '--mode', transport, ...toolsetArgs(options.toolset)]
   const port = resolveMcpPort(options.adhdevMcpPort)
   if (port !== undefined) args.push('--port', String(port))
   return {

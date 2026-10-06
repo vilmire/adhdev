@@ -10,6 +10,7 @@ import {
     getCoordinatorForSession, listCoordinatorsForWorkspace, pruneDeadMeshCoordinators,
 } from '../mesh/coordinator-registry.js';
 import { LOG } from '../logging/logger.js';
+import { findAssistantRestoreRecord, getAssistantRegistry } from '../assistant/assistant-registry.js';
 import { buildRestoredLaunchRecord } from '../sessions/launch-record.js';
 import { shouldRestoreHostedRuntime } from './hosted-runtime-restore.js';
 import { resolveCliSessionBinding } from './cli-session-binding.js';
@@ -129,6 +130,7 @@ export async function restoreHostedSessions(host: CliRestoreHost, records?: Host
 
     if (!records && typeof host.deps.listHostedCliRuntimes === 'function') {
         pruneStaleCoordinatorEntries(sessions, restoredRuntimeIds, rebindAdoptedSessionIds);
+        pruneStaleAssistantBinding(sessions, restoredRuntimeIds);
     }
 
     return restored;
@@ -258,7 +260,43 @@ function buildRestoredSettings(
     if (typeof record.autoApproveMode === 'string' && record.autoApproveMode.trim()) {
         restoredSettings.autoApproveMode = record.autoApproveMode.trim();
     }
+    applyAssistantRestoreMark(record, restoredSettings);
     return restoredSettings;
+}
+
+/**
+ * Assistant layer (design 2026-10-07 §4.5): the assistant session re-binds by
+ * EXACT runtimeId only (`findAssistantRestoreRecord`) — one assistant per
+ * daemon, so no workspace fallback. The mark is `assistant: true`, and unless
+ * the session carried its own approval mode, auto-approve stays OFF (a
+ * provider-level `autoApprove` default must not turn on for the assistant).
+ */
+function applyAssistantRestoreMark(record: HostedCliRuntimeDescriptor, restoredSettings: Record<string, any>): void {
+    let entry;
+    try {
+        entry = getAssistantRegistry().read();
+    } catch {
+        return;
+    }
+    if (!findAssistantRestoreRecord(entry, [record])) return;
+    restoredSettings.assistant = true;
+    if (typeof restoredSettings.autoApproveMode !== 'string') {
+        restoredSettings.autoApprove = false;
+        delete restoredSettings.autoApproveMode;
+    }
+    LOG.info('CLI', `↻ Re-bound assistant session ${record.runtimeId}`);
+}
+
+/** Full boot restore only: clear an assistant binding whose runtime is not live (FULL restore set). */
+function pruneStaleAssistantBinding(sessions: HostedCliRuntimeDescriptor[], restoredRuntimeIds: ReadonlySet<string>): void {
+    const live = new Set<string>(restoredRuntimeIds);
+    for (const r of sessions) if (r?.runtimeId) live.add(r.runtimeId);
+    try {
+        const cleared = getAssistantRegistry().pruneAfterRestore(live);
+        if (cleared) LOG.info('CLI', `🧹 Cleared stale assistant binding ${cleared}: not among the ${live.size} live hosted runtime(s)`);
+    } catch (e: any) {
+        LOG.warn('CLI', `assistant binding prune failed: ${e?.message || e}`);
+    }
 }
 
 /**

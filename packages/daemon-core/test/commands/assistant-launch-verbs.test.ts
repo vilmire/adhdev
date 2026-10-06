@@ -1,0 +1,183 @@
+/**
+ * `launch_assistant` / `assistant_pending_relays` (commands/high-family/
+ * assistant-launch.ts; design 2026-10-07-assistant-layer.md §4.4, §4.5) over
+ * fake daemon deps: the launch_cli envelope (workspace, settings stamp,
+ * launchedBy, prompt injection, claude MCP + `--tools=Read`), the MCP config
+ * file, idempotence, registry binding + restart note, the dangerous-mode
+ * refusal, and the MCP-only pull ownership rule.
+ */
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ASSISTANT_VERB } from '@adhdev/mesh-shared';
+import { assistantLaunchHandlers } from '../../src/commands/high-family/assistant-launch.js';
+import { createAssistantServices, setAssistantServicesForTests } from '../../src/assistant/assistant-services.js';
+import { setAssistantProjectPortsForTests, type AssistantProjectPorts } from '../../src/assistant/assistant-project-ports.js';
+import { AssistantRegistry, setAssistantRegistryForTests } from '../../src/assistant/assistant-registry.js';
+import { InMemoryAssistantRelayStore } from '../../src/assistant/assistant-relay-store.js';
+import { wireAssistantRuntime, type AssistantRuntime } from '../../src/assistant/assistant-runtime.js';
+import { ASSISTANT_SAFETY_TAIL } from '../../src/assistant/assistant-prompt.js';
+import type { LocalMeshEntry } from '../../src/repo-mesh-types.js';
+
+const SELF = 'daemon_mach_self';
+let dir: string;
+let prevConfigDir: string | undefined;
+let live: Set<string>;
+let execute: ReturnType<typeof vi.fn>;
+let registry: AssistantRegistry;
+let runtime: AssistantRuntime | null;
+let launchCount: number;
+
+const provider: any = {
+    type: 'claude-cli',
+    meshCoordinator: {
+        supported: true,
+        mcpConfig: { mode: 'auto_import', format: 'claude_mcp_json', path: '.mcp.json', serverName: 'adhdev-mesh' },
+        systemPromptInjection: { mode: 'cli_arg', flag: '--append-system-prompt' },
+    },
+    autoApproveModes: { default: 'pty-parse', modes: [{ id: 'pty-parse', risk: 'safe', strategy: 'pty-parse-default' }, { id: 'yolo', risk: 'dangerous', strategy: 'launch-args', launchArgs: ['--permission-mode', 'bypassPermissions'] }] },
+};
+
+function ctx(): any {
+    return {
+        deps: {
+            statusInstanceId: SELF,
+            instanceManager: { getInstance: (id: string) => (live.has(id) ? { getState: () => ({ status: 'idle', settings: { assistant: true } }) } : undefined) },
+            providerLoader: { resolveAlias: (t: string) => (t === 'claude' ? 'claude-cli' : t), resolve: () => provider, getMeta: () => provider },
+        },
+        components: () => { throw new Error('not used'); },
+        execute,
+    };
+}
+
+const run = (verb: string, args: Record<string, unknown> = {}) => assistantLaunchHandlers[verb](ctx(), args);
+const launchCalls = () => execute.mock.calls.filter((c) => c[0] === 'launch_cli').map((c) => c[1]);
+
+function fakeComponents(submits: any[]) {
+    return {
+        bus: { on: () => () => {} },
+        instanceManager: { getInstance: (id: string) => (live.has(id) ? { getState: () => ({ status: 'idle', settings: {} }) } : undefined) },
+        router: { execute: async () => ({ success: false }) },
+        cliManager: { input: { submit: async (m: any) => { submits.push(m); return { kind: 'delivered' }; } } },
+    } as any;
+}
+
+beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'adhdev-assistant-launch-'));
+    prevConfigDir = process.env.ADHDEV_CONFIG_DIR;
+    process.env.ADHDEV_CONFIG_DIR = dir;
+    live = new Set();
+    launchCount = 0;
+    execute = vi.fn(async (cmd: string) => {
+        if (cmd === 'launch_cli') return { success: true, sessionId: `asst-${++launchCount}` };
+        return { success: true };
+    });
+    registry = new AssistantRegistry({ configDir: dir });
+    setAssistantRegistryForTests(registry);
+    const meshes = [{ id: 'mesh_a', name: 'ADHDev', repoIdentity: 'github.com/vilmire/adhdev', nodes: [] } as unknown as LocalMeshEntry];
+    setAssistantServicesForTests(createAssistantServices({ configDir: dir, listMeshes: () => meshes }));
+    const ports = {
+        selfDaemonId: () => SELF,
+        listMeshes: () => meshes,
+        isHostedHere: () => true,
+        relay: {},
+    } as unknown as AssistantProjectPorts;
+    setAssistantProjectPortsForTests(() => ports);
+    runtime = null;
+});
+
+afterEach(() => {
+    runtime?.dispose();
+    setAssistantRegistryForTests(null);
+    setAssistantServicesForTests(null);
+    setAssistantProjectPortsForTests(null);
+    if (prevConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR;
+    else process.env.ADHDEV_CONFIG_DIR = prevConfigDir;
+    rmSync(dir, { recursive: true, force: true });
+});
+
+describe('launch_assistant', () => {
+    it('launches claude-cli in <configDir>/assistant with the assistant stamp, prompt and MCP wiring', async () => {
+        const r: any = await run(ASSISTANT_VERB.launch, { model: 'opus', thinkingLevel: 'high' });
+        expect(r).toMatchObject({ success: true, launched: true, sessionId: 'asst-1', cliType: 'claude-cli', workspace: join(dir, 'assistant') });
+        const [launch] = launchCalls();
+        expect(launch).toMatchObject({
+            cliType: 'claude-cli',
+            dir: join(dir, 'assistant'),
+            settings: { assistant: true, autoApprove: false },
+            launchedBy: 'assistant',
+            initialModel: 'opus',
+            initialThinkingLevel: 'high',
+        });
+        expect(launch.settings.autoApproveMode).toBeUndefined();
+        const args: string[] = launch.cliArgs;
+        const prompt = args[args.indexOf('--append-system-prompt') + 1];
+        expect(prompt).toContain("You are the user's ADHDev assistant");
+        expect(prompt.endsWith(ASSISTANT_SAFETY_TAIL)).toBe(true);
+        expect(prompt).toContain('adhdev');
+        const cfgPath = join(dir, 'mcp-configs', 'assistant.json');
+        expect(args).toEqual(expect.arrayContaining(['--mcp-config', cfgPath, '--strict-mcp-config', '--allowedTools=mcp__adhdev-assistant', '--tools=Read']));
+        const cfg = JSON.parse(readFileSync(cfgPath, 'utf-8'));
+        expect(cfg.mcpServers['adhdev-assistant'].args).toContain('--assistant');
+        expect(cfg.mcpServers['adhdev-assistant'].args).not.toContain('--repo-mesh');
+        expect(existsSync(join(dir, 'assistant'))).toBe(true);
+        expect(registry.read()).toMatchObject({ sessionId: 'asst-1', cliType: 'claude-cli', mcpConfigPath: cfgPath });
+    });
+
+    it('is idempotent while the bound session is live', async () => {
+        await run(ASSISTANT_VERB.launch);
+        live.add('asst-1');
+        const again: any = await run(ASSISTANT_VERB.launch, { cliType: 'codex-cli' });
+        expect(again).toMatchObject({ success: true, launched: false, sessionId: 'asst-1', cliType: 'claude-cli' });
+        expect(launchCalls()).toHaveLength(1);
+    });
+
+    it('a fresh launch after a mid-turn death queues the restart note in the relay', async () => {
+        registry.bindSession({ sessionId: 'asst-old', cliType: 'claude-cli', workspace: join(dir, 'assistant'), at: Date.now() - 60 * 60_000 });
+        registry.recordTurnState('asst-old', 'working', Date.now() - 30 * 60_000);
+        registry.releaseSession('asst-old', 'pty_exit');
+        runtime = wireAssistantRuntime(fakeComponents([]), { registry, store: new InMemoryAssistantRelayStore(), metrics: null });
+        const r: any = await run(ASSISTANT_VERB.launch);
+        expect(r).toMatchObject({ success: true, launched: true, sessionId: 'asst-1', restartNote: true });
+        expect(runtime.relay.snapshot().queued).toBe(1);
+        expect(runtime.isActive()).toBe(true);
+    });
+
+    it('refuses a dangerous approval mode and never launches', async () => {
+        const r: any = await run(ASSISTANT_VERB.launch, { autoApproveMode: 'yolo' });
+        expect(r).toMatchObject({ success: false, code: 'assistant_dangerous_mode_refused' });
+        expect(launchCalls()).toHaveLength(0);
+        expect(registry.read()).toBeNull();
+    });
+
+    it('surfaces a launch_cli failure without binding', async () => {
+        execute.mockImplementation(async () => ({ success: false, error: 'not installed' }));
+        expect(await run(ASSISTANT_VERB.launch)).toMatchObject({ success: false, code: 'assistant_launch_failed', error: 'not installed' });
+        expect(registry.read()).toBeNull();
+    });
+});
+
+describe('assistant_pending_relays', () => {
+    it('no runtime → empty events', async () => {
+        expect(await run(ASSISTANT_VERB.pendingRelays)).toEqual({ success: true, assistantEvents: [] });
+    });
+
+    it('MCP-only: claims queued inputs once; a live PTY assistant only serves its own session', async () => {
+        const submits: any[] = [];
+        runtime = wireAssistantRuntime(fakeComponents(submits), { registry, store: new InMemoryAssistantRelayStore(), metrics: null });
+        expect(runtime.isActive()).toBe(false); // no assistant.json entry yet
+        runtime.relay.enqueueInput({ source: 'first_run', text: '[ADHDev first run] hello', messageId: 'first:1' });
+        const pulled: any = await run(ASSISTANT_VERB.pendingRelays);
+        expect(pulled.success).toBe(true);
+        expect(pulled.assistantEvents).toEqual([{ source: 'first_run', messageId: 'first:1', text: '[ADHDev first run] hello' }]);
+        expect(runtime.isActive()).toBe(true);
+        expect((await run(ASSISTANT_VERB.pendingRelays) as any).assistantEvents).toEqual([]);
+
+        registry.bindSession({ sessionId: 'asst-pty', cliType: 'claude-cli', workspace: join(dir, 'assistant'), at: Date.now() });
+        live.add('asst-pty');
+        expect(await run(ASSISTANT_VERB.pendingRelays, { assistantSessionId: 'someone-else' })).toMatchObject({ success: false, code: 'assistant_session_mismatch' });
+        expect(await run(ASSISTANT_VERB.pendingRelays, { assistantSessionId: 'asst-pty' })).toEqual({ success: true, assistantEvents: [] });
+        expect(submits).toEqual([]);
+    });
+});

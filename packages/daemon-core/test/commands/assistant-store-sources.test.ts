@@ -23,12 +23,14 @@ const EXPECTED_SOURCES: Record<string, string[]> = {
     assistant_staged_resolve: ['p2p', 'standalone', 'ws'],
     assistant_store_admin: ['p2p', 'standalone', 'ws'],
     assistant_import_skills: ['p2p', 'standalone', 'ws'],
+    launch_assistant: ['ipc', 'p2p', 'standalone', 'ws'],
+    assistant_pending_relays: ['ipc', 'standalone'],
 };
 
 describe('assistant verbs — sources', () => {
     const registry = getDaemonCommandRegistry();
 
-    it('registers the store and project verbs with exactly the §4.4 sources', () => {
+    it('registers the store, project and session verbs with exactly the §4.4 sources', () => {
         const actual: Record<string, string[] | undefined> = {};
         for (const name of Object.keys(EXPECTED_SOURCES)) {
             const spec = registry.get(name);
@@ -40,7 +42,9 @@ describe('assistant verbs — sources', () => {
     it('no registered assistant verb accepts mesh or omits a sources list', () => {
         const assistantVerbs = new Set<string>(Object.values(ASSISTANT_VERB));
         const specs = registry.list().filter((s) => assistantVerbs.has(s.name));
-        expect(specs.length).toBeGreaterThanOrEqual(Object.keys(EXPECTED_SOURCES).length);
+        // Every ASSISTANT_VERB is registered (15 = 10 tool verbs + launch + pull + 3 owner verbs).
+        expect(specs.map((s) => s.name).sort()).toEqual([...assistantVerbs].sort());
+        expect(specs.length).toBe(Object.keys(EXPECTED_SOURCES).length);
         expect(specs.filter((s) => !s.sources).map((s) => s.name)).toEqual([]);
         expect(specs.filter((s) => specAcceptsMeshSource(s)).map((s) => s.name)).toEqual([]);
         expect(specs.filter((s) => s.meshSender).map((s) => s.name)).toEqual([]);

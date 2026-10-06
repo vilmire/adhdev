@@ -33,6 +33,7 @@ export * from './assistant-prompt.js';
 export * from './assistant-registry.js';
 export * from './assistant-relay-format.js';
 export * from './assistant-relay-store.js';
+export * from './assistant-relay-sqlite-store.js';
 export * from './assistant-relay.js';
 export * from './coordinator-lifecycle.js';
 export * from './project-message.js';

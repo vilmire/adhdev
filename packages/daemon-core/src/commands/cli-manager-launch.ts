@@ -9,6 +9,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import chalk from 'chalk';
+import { ASSISTANT_SESSION_ID_ENV } from '@adhdev/mesh-shared';
 import { detectCLI } from '../detection/cli-detector.js';
 import { loadConfig } from '../config/config.js';
 import { getWorkspaceState, resolveLaunchDirectory } from '../config/workspaces.js';
@@ -117,13 +118,27 @@ function planSessionStart(host: CliLaunchHost, cliType: string, workingDir: stri
     // session agree. Re-applied on every (re)launch, so it always reflects the current id;
     // a stale value only survives if the CLI process outlives a daemon restart, in which
     // case routing falls back to the daemon level (no wedge — see mesh-reconcile-loop).
-    {
-        const coordinatorMeshId = (options?.settingsOverride as Record<string, unknown> | undefined)?.meshCoordinatorFor;
-        if (typeof coordinatorMeshId === 'string' && coordinatorMeshId.trim()) {
-            options = { ...options, extraEnv: { ...(options?.extraEnv || {}), ADHDEV_COORDINATOR_SESSION_ID: key } };
-        }
-    }
+    options = withSessionAnchorEnv(options, key);
     return { resolvedDir, normalizedType, provider, key, options };
+}
+
+/**
+ * Session-anchor env for the session's own MCP server (see (3) above): a mesh
+ * coordinator gets `ADHDEV_COORDINATOR_SESSION_ID`, the assistant session
+ * (`settings.assistant`, design 2026-10-07 §4.5) gets
+ * `ADHDEV_ASSISTANT_SESSION_ID` — routing / pull ownership only, never auth.
+ */
+export function withSessionAnchorEnv(options: CliStartOptions | undefined, key: string): CliStartOptions | undefined {
+    const settings = options?.settingsOverride as Record<string, unknown> | undefined;
+    let next = options;
+    const coordinatorMeshId = settings?.meshCoordinatorFor;
+    if (typeof coordinatorMeshId === 'string' && coordinatorMeshId.trim()) {
+        next = { ...next, extraEnv: { ...(next?.extraEnv || {}), ADHDEV_COORDINATOR_SESSION_ID: key } };
+    }
+    if (settings?.assistant === true) {
+        next = { ...next, extraEnv: { ...(next?.extraEnv || {}), [ASSISTANT_SESSION_ID_ENV]: key } };
+    }
+    return next;
 }
 
 /** CLI category: detect the binary, expand launch args, then register (or directly spawn) the PTY session. */

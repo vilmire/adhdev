@@ -112,11 +112,13 @@ export function readLaunchProvenanceArgs(args: unknown): LaunchProvenanceArgs {
 }
 
 /**
- * Who launched a `launch_cli` session when the caller did not say: a delegated
- * worker or a coordinator carries mesh settings; anything else is an API caller.
+ * Who launched a `launch_cli` session when the caller did not say: the
+ * assistant session carries `assistant: true`; a delegated worker or a
+ * coordinator carries mesh settings; anything else is an API caller.
  */
 export function inferLaunchedBy(settings: Record<string, unknown> | undefined): SessionLaunchedBy {
     if (!settings) return 'api';
+    if (settings.assistant === true) return 'assistant';
     const meshSetting = (key: string) => typeof settings[key] === 'string' && (settings[key] as string).trim().length > 0;
     if (settings.launchedByCoordinator === true || meshSetting('meshNodeFor') || meshSetting('meshCoordinatorFor')) return 'mesh';
     return 'api';

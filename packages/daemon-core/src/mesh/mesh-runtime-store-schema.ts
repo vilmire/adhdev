@@ -184,6 +184,56 @@ export function migrate(self: MeshRuntimeStore): void {
     ensureTurnLedgerSchema(self.db);
     // Coordinator-held last-known node git state (additive, idempotent).
     ensureMeshNodeGitStateSchema(self.db);
+    // Assistant layer relay threads / rows / daily metrics (additive, idempotent).
+    ensureAssistantRelaySchema(self.db);
+}
+
+/**
+ * Assistant layer tables (docs/design/2026-10-07-assistant-layer.md §4.6, D8):
+ * ids, times, enums and counters only — never a relay body (re-read at send
+ * time) or any other text. Local-only: no seqscribe topic, never projected to
+ * the cloud status path. Read/written by assistant/assistant-relay-sqlite-store.ts.
+ */
+export function ensureAssistantRelaySchema(db: MeshRuntimeStore['db']): void {
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS assistant_threads (
+            mesh_id TEXT PRIMARY KEY,
+            opened_at INTEGER NOT NULL,
+            last_send_at INTEGER NOT NULL,
+            closed_at INTEGER
+        );
+
+        CREATE TABLE IF NOT EXISTS assistant_relays (
+            attempt_id TEXT PRIMARY KEY,
+            mesh_id TEXT NOT NULL,
+            coordinator_session_id TEXT NOT NULL,
+            committed_at INTEGER NOT NULL,
+            delivered_at INTEGER,
+            kind TEXT NOT NULL,
+            outcome TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_assistant_relays_undelivered
+            ON assistant_relays(delivered_at, committed_at);
+
+        -- One row per (local day, mesh); global counters (memory / skills /
+        -- review) use mesh_id = ''. Retention 90 days.
+        CREATE TABLE IF NOT EXISTS assistant_metric_daily (
+            day TEXT NOT NULL,
+            mesh_id TEXT NOT NULL DEFAULT '',
+            assistant_sends INTEGER NOT NULL DEFAULT 0,
+            human_sends INTEGER NOT NULL DEFAULT 0,
+            relays INTEGER NOT NULL DEFAULT 0,
+            project_reads INTEGER NOT NULL DEFAULT 0,
+            memory_writes INTEGER NOT NULL DEFAULT 0,
+            memory_discards INTEGER NOT NULL DEFAULT 0,
+            skill_views INTEGER NOT NULL DEFAULT 0,
+            skill_attaches INTEGER NOT NULL DEFAULT 0,
+            skill_writes INTEGER NOT NULL DEFAULT 0,
+            review_turns INTEGER NOT NULL DEFAULT 0,
+            review_turns_with_writes INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (day, mesh_id)
+        );
+    `);
 }
 
 

@@ -54,8 +54,10 @@ export function isModelAxisSource(value: unknown): value is ModelAxisSource {
 /**
  * Which surface started the session. `restore` means "re-attached to a hosted
  * runtime that outlived a daemon restart" — the axis sources are preserved.
+ * `assistant` is the assistant layer's own session (`launch_assistant`,
+ * docs/design/2026-10-07-assistant-layer.md §4.5).
  */
-export const SESSION_LAUNCHED_BY = ['dashboard', 'mesh', 'cli', 'api', 'restore'] as const
+export const SESSION_LAUNCHED_BY = ['dashboard', 'mesh', 'cli', 'api', 'restore', 'assistant'] as const
 
 export type SessionLaunchedBy = typeof SESSION_LAUNCHED_BY[number]
 
