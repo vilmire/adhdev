@@ -13,7 +13,7 @@ import { getTimeoutMs } from '../src/transports/ipc.js';
 //   - LOCAL node: the BARE verb is sent (no relay layer). getTimeoutMs(verb, '') is the
 //     SOLE deadline and must directly cover the responder's synchronous budget.
 //
-// The relay budgets are the documented contract from daemon-cloud mesh-rpc-timeouts.ts:
+// The relay budgets are the documented contract from daemon-core mesh/transport/mesh-rpc-timeouts.ts:
 //   clone 90s, remove 60s, git/fast-forward/refine 90s, git_status 30s.
 
 // Relay-layer budgets (the contract this IPC layer must dominate).
