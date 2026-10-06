@@ -3,10 +3,13 @@
  *
  * Work-order unit 2(a): the memory store, its write guards and the frozen
  * snapshot renderer. Unit 2(c)/(d)/(f-store): the skill store, index and
- * attach renderers, the curator, and the read-only Hermes import. Not yet wired into sessions, daemon verbs, MCP or the
- * dashboard, and deliberately not re-exported from the daemon-core package
- * barrel until a consumer (the `assistant_memory` verb / launch_assistant
- * prompt builder) lands.
+ * attach renderers, the curator, and the read-only Hermes import. Unit 2(b)/(e):
+ * the input log (write-origin source), project addressing, staged project
+ * notes, the review-turn trigger/whitelist, and the per-daemon store
+ * instances the store verbs (commands/high-family/assistant-store.ts) use.
+ * Not yet wired into sessions, MCP or the dashboard, and deliberately not
+ * re-exported from the daemon-core package barrel: the only consumers are
+ * in-package (the store verbs now, launch_assistant / the relay later).
  */
 
 export * from './store-guards.js';
@@ -19,3 +22,8 @@ export * from './skills/skill-store.js';
 export * from './skills/skill-index.js';
 export * from './skills/skill-curator.js';
 export * from './skills/hermes-import.js';
+export * from './assistant-input-log.js';
+export * from './assistant-review.js';
+export * from './assistant-projects.js';
+export * from './note-staging.js';
+export * from './assistant-services.js';
