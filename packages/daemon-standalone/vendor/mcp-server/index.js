@@ -26684,7 +26684,7 @@ ${renderWorkerProtocolFooter2(input)}`;
           skill_manage: ASSISTANT_VERB2.skillManage,
           project_note: ASSISTANT_VERB2.projectNote
         };
-        ASSISTANT_WRITE_TOOLS = ["memory", "skill_manage", "project_note"];
+        ASSISTANT_WRITE_TOOLS = ["memory", "skill_manage", "project_note", "project_send", "project_add"];
         ASSISTANT_OWNER_VERBS2 = [
           ASSISTANT_VERB2.stagedResolve,
           ASSISTANT_VERB2.storeAdmin,
@@ -160952,19 +160952,14 @@ var TOOL_ANNOTATIONS = {
   // Pulls context from peer workers — a read that crosses to other sessions.
   peer_context_pull: READ_REMOTE,
   // ── Assistant mode (docs/design/2026-10-07-assistant-layer.md §4.4) ──
-  // ★Read-only vs write follows the design's own split, pinned to
-  // ASSISTANT_WRITE_TOOLS (@adhdev/mesh-shared) by assistant-tools-parity.test.ts:
-  // memory / skill_manage / project_note are the writes; every other assistant
-  // tool is annotated read-only. That includes project_send and project_add,
-  // which do cause effects (a coordinator message / launch, a new project) —
-  // the design classes them with the reads because they touch no assistant
-  // store and the daemon dedups/serializes them; openWorldHint still says
-  // where they reach.
+  // ★Read-only vs write is pinned to ASSISTANT_WRITE_TOOLS (@adhdev/mesh-shared)
+  // by assistant-tools-parity.test.ts: the three store writes plus project_send
+  // (sends to a coordinator, may launch one) and project_add (creates a project).
   projects: READ_LOCAL,
   project_status: READ_REMOTE,
-  project_send: READ_REMOTE,
+  project_send: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   project_read: READ_LOCAL,
-  project_add: READ_LOCAL,
+  project_add: WRITE_LOCAL_SAFE,
   // Filesystem scan of this machine; returns paths and git metadata only.
   discover_repos: READ_LOCAL,
   // Updates view counters / un-archives on open, but returns content only.

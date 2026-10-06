@@ -294,6 +294,26 @@ export const TOOL_ANNOTATIONS: Record<string, ToolBehaviorAnnotations> = {
   progress_update: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   // Pulls context from peer workers — a read that crosses to other sessions.
   peer_context_pull: READ_REMOTE,
+
+  // ── Assistant mode (docs/design/2026-10-07-assistant-layer.md §4.4) ──
+  // ★Read-only vs write is pinned to ASSISTANT_WRITE_TOOLS (@adhdev/mesh-shared)
+  // by assistant-tools-parity.test.ts: the three store writes plus project_send
+  // (sends to a coordinator, may launch one) and project_add (creates a project).
+  projects: READ_LOCAL,
+  project_status: READ_REMOTE,
+  project_send: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  project_read: READ_LOCAL,
+  project_add: WRITE_LOCAL_SAFE,
+  // Filesystem scan of this machine; returns paths and git metadata only.
+  discover_repos: READ_LOCAL,
+  // Updates view counters / un-archives on open, but returns content only.
+  skill_view: READ_LOCAL,
+  // replace/remove overwrite or drop an existing entry (journaled); add accumulates.
+  memory: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+  // patch overwrites a substring; each call counts against the patch caps.
+  skill_manage: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+  // Same shape as mesh_note: record appends, forget retracts.
+  project_note: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
 };
 
 /**

@@ -8,12 +8,25 @@ import { buildMcpHelpText } from './help.js';
  * there would boot a real stdio server.
  */
 
+/**
+ * A command line that names two toolsets that cannot be combined. Thrown (not
+ * `process.exit`) so parseArgs stays side-effect free for tests; index.ts turns
+ * it into exit 1.
+ */
+export class McpCliArgsError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'McpCliArgsError';
+  }
+}
+
 export function parseArgs(argv: string[], env: NodeJS.ProcessEnv = process.env): {
   mode: 'local' | 'ipc';
   port?: number;
   password?: string;
   meshId?: string;
   worker?: boolean;
+  assistant?: boolean;
 } {
   const args = argv.slice(2);
   let port: number | undefined;
@@ -24,6 +37,12 @@ export function parseArgs(argv: string[], env: NodeJS.ProcessEnv = process.env):
   // Orthogonal to `--mode`, which is the TRANSPORT axis (local | ipc) — the
   // same distinction that makes "mesh mode" a toolset and not a third transport.
   let worker = false;
+  // Assistant layer (docs/design/2026-10-07-assistant-layer.md §4.5): the
+  // assistant's project/memory/skill toolset. Same toolset axis as --worker.
+  let assistant = false;
+  // Only an explicit --repo-mesh flag conflicts with --assistant; an inherited
+  // ADHDEV_MESH_ID env is dropped below instead (see the precedence note).
+  let meshFromFlag = false;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -41,10 +60,14 @@ export function parseArgs(argv: string[], env: NodeJS.ProcessEnv = process.env):
       password = args[++i];
     } else if ((arg === '--repo-mesh' || arg === '--mesh') && args[i + 1]) {
       meshId = args[++i];
+      meshFromFlag = true;
     } else if (arg?.startsWith('--repo-mesh=')) {
       meshId = arg.slice('--repo-mesh='.length);
+      meshFromFlag = true;
     } else if (arg === '--worker') {
       worker = true;
+    } else if (arg === '--assistant') {
+      assistant = true;
     } else if (arg === '--help' || arg === '-h') {
       printHelp();
       process.exit(0);
@@ -67,6 +90,18 @@ export function parseArgs(argv: string[], env: NodeJS.ProcessEnv = process.env):
   // the exact inheritance this feature removes. Dropping meshId here makes that
   // unreachable rather than merely unlikely.
   if (worker) return { mode, port, password, worker: true };
+  // --worker > --assistant (checked above): a worker launched with both still
+  // gets only the worker toolset. --assistant with an explicit --repo-mesh is
+  // contradictory — the assistant drives projects through its own verbs and
+  // never holds the coordinator surface — so it is refused rather than
+  // silently resolved either way. An env-inherited ADHDEV_MESH_ID is dropped
+  // for the same reason worker mode drops it.
+  if (assistant) {
+    if (meshFromFlag) {
+      throw new McpCliArgsError('--assistant cannot be combined with --repo-mesh: the assistant toolset never includes mesh coordinator tools.');
+    }
+    return { mode, port, password, assistant: true };
+  }
   return { mode, port, password, meshId };
 }
 

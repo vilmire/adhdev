@@ -75,8 +75,13 @@ export const ASSISTANT_TOOL_VERBS: Readonly<Record<AssistantTool, AssistantVerb>
     project_note: ASSISTANT_VERB.projectNote,
 }
 
-/** Tools annotated as writes (§4.4); every other assistant tool is read-only. */
-export const ASSISTANT_WRITE_TOOLS: readonly AssistantTool[] = ['memory', 'skill_manage', 'project_note']
+/**
+ * Tools annotated as writes; every other assistant tool is read-only. §4.4
+ * lists the three store writes; project_send and project_add are here too
+ * because they cause effects (a coordinator message or launch, a new
+ * project), and MCP clients use readOnlyHint to skip confirmation.
+ */
+export const ASSISTANT_WRITE_TOOLS: readonly AssistantTool[] = ['memory', 'skill_manage', 'project_note', 'project_send', 'project_add']
 
 /** Owner-only verbs: never reachable from the assistant's MCP server (no `ipc`). */
 export const ASSISTANT_OWNER_VERBS: readonly AssistantVerb[] = [

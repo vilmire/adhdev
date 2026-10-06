@@ -56,6 +56,7 @@ import {
 } from './tools/worker-tools.js';
 import { WorkerReportDelivery } from './tools/worker-report-outbox.js';
 import type { WorkerTool } from '@adhdev/mesh-shared';
+import { startAssistantServer } from './assistant-server.js';
 
 /**
  * Version reported in the MCP `initialize` response (`serverInfo.version`).
@@ -94,6 +95,9 @@ interface AdhdevMcpServerOptions {
   // worker mode (optional — the MINIMAL delegated-worker toolset). Mutually
   // exclusive with meshId, and index.ts enforces that by dropping meshId.
   worker?: boolean;
+  // assistant mode (optional — assistant-server.ts). cli-args.ts gives
+  // --worker precedence and refuses --assistant with --repo-mesh.
+  assistant?: boolean;
 }
 
 export async function buildMeshModeCoordinatorPrompt(mesh: any): Promise<string> {
@@ -253,6 +257,9 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
     process.stderr.write(`[adhdev-mcp] Server running in ${opts.mode} WORKER mode — ${workerTools.length} tools.\n`);
     return;
   }
+
+  // ── Assistant Mode (assistant-server.ts) ──────
+  if (opts.assistant) return startAssistantServer({ transport, mode: opts.mode, serverVersion: MCP_SERVER_VERSION });
 
   // ── Mesh Mode ─────────────────────────────────
   if (opts.meshId) {
