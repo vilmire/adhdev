@@ -60,6 +60,7 @@ import { meshStatusSpecs } from './high-family/mesh-status.js';
 import { meshNodeStateSpecs } from './high-family/mesh-node-state.js';
 import { meshStatusViewSpecs } from './high-family/mesh-status-view.js';
 import { assistantStoreSpecs } from './high-family/assistant-store.js';
+import { assistantProjectSpecs } from './high-family/assistant.js';
 import { MeshNodeGitStateStore } from '../mesh/mesh-node-git-state.js';
 import { MeshNodeGitRefresher } from '../mesh/mesh-node-git-refresher.js';
 import { MeshNodeStatePusher } from '../mesh/mesh-node-state-pusher.js';
@@ -326,6 +327,7 @@ export function getDaemonCommandRegistry(): CommandRegistry {
             ...meshNodeStateSpecs,
             ...meshStatusViewSpecs,
             ...assistantStoreSpecs,
+            ...assistantProjectSpecs,
             ...handlerSpecs,
             ...gitSpecs,
         ], COMMAND_PREFIX_DEFAULTS);

@@ -280,6 +280,9 @@ const LEGACY_HIGH_FAMILY_COMMANDS = [
     // assistant-store-sources.test.ts.
     'assistant_memory', 'assistant_skill_view', 'assistant_skill_manage', 'assistant_project_note',
     'assistant_staged_resolve', 'assistant_store_admin', 'assistant_import_skills',
+    // Assistant project verbs (high-family/assistant.ts, same design §4.2–§4.4).
+    'assistant_projects', 'assistant_project_status', 'assistant_project_send',
+    'assistant_project_read', 'assistant_project_add', 'assistant_discover_repos',
 ];
 
 // ─── Helpers ───────────────────────────────────────────────────────────────

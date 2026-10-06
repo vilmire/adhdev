@@ -34,3 +34,8 @@ export * from './assistant-registry.js';
 export * from './assistant-relay-format.js';
 export * from './assistant-relay-store.js';
 export * from './assistant-relay.js';
+export * from './coordinator-lifecycle.js';
+export * from './project-message.js';
+export * from './discover-repos.js';
+export * from './project-views.js';
+export * from './assistant-project-ports.js';

@@ -208,6 +208,11 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                 // Legacy (no declared modes) providers use a plain boolean toggle instead —
                 // mirrors LegacyAutoApproveToggle in the workspace dialog.
                 const legacyAutoApproveOverride = typeof args?.autoApprove === 'boolean' ? args.autoApprove : null;
+                // Assistant layer (design 2026-10-07-assistant-layer.md §4.3): a
+                // coordinator the assistant launches carries `managedByAssistant` so
+                // its selection (and later its idle reclaim) can tell it apart from
+                // a coordinator a person launched.
+                const assistantStamp = args?.managedByAssistant === true ? { managedByAssistant: true } : {};
                 if (!meshId) return { success: false, error: 'meshId required' };
 
                 try {
@@ -626,6 +631,7 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                             env: Object.keys(cliCmdEnv).length > 0 ? cliCmdEnv : undefined,
                             settings: {
                                 meshCoordinatorFor: meshId,
+                                ...assistantStamp,
                                 // AUTOAPPROVE-COORD: the coordinator is a mesh session too, so it
                                 // must inherit the workspace's declarative auto-approve MODE
                                 // (.adhdev/mesh.json providerDefaults.autoApproveModes) exactly like
@@ -927,6 +933,7 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                         env: Object.keys(launchEnv).length > 0 ? launchEnv : undefined,
                         settings: {
                             meshCoordinatorFor: meshId,
+                            ...assistantStamp,
                             // AUTOAPPROVE-COORD: inherit the workspace declarative auto-approve MODE
                             // for the coordinator session (see the cli_command branch for the full
                             // rationale). No launchedByCoordinator stamp — the coordinator is the owner.
