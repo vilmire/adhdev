@@ -141,6 +141,14 @@
             "startHint": "パーソナルアシスタントを開始 — プロジェクトとコーディネーターを管理するチャット",
             "startFailed": "アシスタントを開始できませんでした: {{error}}"
         },
+        "assistantLaunch": {
+            "chooseCli": "アシスタントの CLI を選択",
+            "startWith": "{{cli}} で開始",
+            "noToolLock": "ツール制限なし",
+            "noToolLockHint": "この CLI のツールはアシスタントの指示でのみ制限されます — シェルやファイル操作のツールはそのまま使えます",
+            "unavailable": "利用不可: {{reason}}",
+            "unsupported": "この CLI ではアシスタントを実行できません"
+        },
         "versionBanner": {
             "restarting": "再起動中",
             "upgrading": "更新中…",
@@ -1526,7 +1534,23 @@
         "sendNowTitle": "このメッセージを今すぐエージェントに送信します。エージェント自身のキューに入り次のターンで処理され、進行中のターンはそのまま続きます。",
         "cancelQueued": "キャンセル",
         "cancelQueuedAria": "この待機中のメッセージをキャンセル",
-        "cancelQueuedTitle": "このメッセージをキューから削除します。エージェントには送信されません。"
+        "cancelQueuedTitle": "このメッセージをキューから削除します。エージェントには送信されません。",
+        "agent": "エージェント",
+        "tool": "ツール",
+        "ranCommand": "実行したコマンド",
+        "activityTerminal": "ターミナル",
+        "activityRuntime": "ランタイム",
+        "system": "システム",
+        "injected": "挿入された入力",
+        "relayLabel": "リレー · {{project}} · {{outcome}}",
+        "relayOutcome": {
+            "completed": "完了",
+            "failed": "失敗",
+            "cancelled": "キャンセル"
+        },
+        "relayIdle": "実行中の作業なし",
+        "reviewLabel": "メモリーの見直し",
+        "daemonNoticeLabel": "お知らせ"
     },
     "chatPane": {
         "debugBundleFailed": "デバッグ情報を収集できませんでした",

@@ -141,6 +141,14 @@
             "startHint": "Inicia tu asistente personal: un chat que gestiona tus proyectos y coordinadores",
             "startFailed": "No se pudo iniciar el asistente: {{error}}"
         },
+        "assistantLaunch": {
+            "chooseCli": "Elegir la CLI del asistente",
+            "startWith": "Inicia con {{cli}}",
+            "noToolLock": "sin bloqueo de herramientas",
+            "noToolLockHint": "Solo las instrucciones del asistente limitan las herramientas de esta CLI; conserva sus propias herramientas de shell y archivos",
+            "unavailable": "No disponible: {{reason}}",
+            "unsupported": "Esta CLI no puede ejecutar el asistente"
+        },
         "versionBanner": {
             "restarting": "reiniciando",
             "upgrading": "actualizando…",
@@ -1529,7 +1537,23 @@
         "sendNowTitle": "Envía este mensaje al agente ahora. Entra en la propia cola del agente y se responde a continuación; el turno en curso sigue ejecutándose.",
         "cancelQueued": "Cancelar",
         "cancelQueuedAria": "Cancelar este mensaje en cola",
-        "cancelQueuedTitle": "Quita este mensaje de la cola. No se enviará al agente."
+        "cancelQueuedTitle": "Quita este mensaje de la cola. No se enviará al agente.",
+        "agent": "Agente",
+        "tool": "Herramienta",
+        "ranCommand": "Comando ejecutado",
+        "activityTerminal": "Terminal",
+        "activityRuntime": "Entorno de ejecución",
+        "system": "Sistema",
+        "injected": "Entrada inyectada",
+        "relayLabel": "Relevo · {{project}} · {{outcome}}",
+        "relayOutcome": {
+            "completed": "completado",
+            "failed": "fallido",
+            "cancelled": "cancelado"
+        },
+        "relayIdle": "Sin trabajo en curso",
+        "reviewLabel": "Revisión de memoria",
+        "daemonNoticeLabel": "Aviso"
     },
     "chatPane": {
         "debugBundleFailed": "No se pudo recopilar la información de depuración",

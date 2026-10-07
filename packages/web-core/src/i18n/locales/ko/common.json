@@ -141,6 +141,14 @@
             "startHint": "개인 비서 시작 — 프로젝트와 코디네이터를 관리하는 대화",
             "startFailed": "비서를 시작하지 못했습니다: {{error}}"
         },
+        "assistantLaunch": {
+            "chooseCli": "비서 CLI 선택",
+            "startWith": "{{cli}}(으)로 시작",
+            "noToolLock": "도구 잠금 없음",
+            "noToolLockHint": "이 CLI의 도구는 비서 지침으로만 제한됩니다 — 자체 셸·파일 도구가 그대로 남습니다",
+            "unavailable": "사용 불가: {{reason}}",
+            "unsupported": "이 CLI로는 비서를 실행할 수 없습니다"
+        },
         "versionBanner": {
             "restarting": "재시작 중",
             "upgrading": "업데이트 중…",
@@ -1526,7 +1534,23 @@
         "sendNowTitle": "이 메시지를 지금 에이전트에게 보냅니다. 에이전트 자체 대기열에 들어가 다음 턴에 처리되며, 진행 중인 턴은 그대로 계속됩니다.",
         "cancelQueued": "취소",
         "cancelQueuedAria": "대기 중인 이 메시지 취소",
-        "cancelQueuedTitle": "이 메시지를 대기열에서 제거합니다. 에이전트에게 전송되지 않습니다."
+        "cancelQueuedTitle": "이 메시지를 대기열에서 제거합니다. 에이전트에게 전송되지 않습니다.",
+        "agent": "에이전트",
+        "tool": "도구",
+        "ranCommand": "실행한 명령",
+        "activityTerminal": "터미널",
+        "activityRuntime": "런타임",
+        "system": "시스템",
+        "injected": "주입된 입력",
+        "relayLabel": "릴레이 · {{project}} · {{outcome}}",
+        "relayOutcome": {
+            "completed": "완료",
+            "failed": "실패",
+            "cancelled": "취소됨"
+        },
+        "relayIdle": "진행 중인 작업 없음",
+        "reviewLabel": "기억 정리",
+        "daemonNoticeLabel": "알림"
     },
     "chatPane": {
         "debugBundleFailed": "디버그 정보를 수집하지 못했습니다",

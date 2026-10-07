@@ -11,7 +11,10 @@ export interface ChatVisibilityClassification {
     isInternal: boolean
     role: string
     kind: string
+    /** English fallback label (kept for callers outside the chat list). */
     label: string
+    /** i18n key (`common` namespace) for `label` when it is not an explicit meta label. */
+    labelKey: string
 }
 
 const EXPLICIT_HIDDEN_VISIBILITIES = new Set(['hidden', 'debug', 'internal'])
@@ -45,15 +48,28 @@ function getKind(message: ChatMessage, role: string): string {
     return role === 'tool' ? 'tool' : 'standard'
 }
 
+/** Activity label kinds → English fallback + i18n key. One table for both. */
+const ACTIVITY_LABELS = {
+    terminal: { text: 'Terminal', key: 'chat.activityTerminal' },
+    tool: { text: 'Tool', key: 'chat.tool' },
+    thought: { text: 'Thought', key: 'chat.thought' },
+    runtime: { text: 'Runtime', key: 'chat.activityRuntime' },
+    activity: { text: 'Activity', key: 'chat.activityFallback' },
+} as const
+
+function getActivityLabelEntry(kind: string, source: string): { text: string; key: string } {
+    if (kind === 'terminal' || source === 'terminal_command') return ACTIVITY_LABELS.terminal
+    if (kind === 'tool' || source === 'tool_call') return ACTIVITY_LABELS.tool
+    if (kind === 'thought') return ACTIVITY_LABELS.thought
+    if (source === 'runtime_activity') return ACTIVITY_LABELS.runtime
+    return ACTIVITY_LABELS.activity
+}
+
 function getActivityLabel(message: ChatMessage, kind: string, source: string): string {
     const meta = readMeta(message)
     const explicit = typeof meta?.label === 'string' ? meta.label.trim() : ''
     if (explicit) return explicit
-    if (kind === 'terminal' || source === 'terminal_command') return 'Terminal'
-    if (kind === 'tool' || source === 'tool_call') return 'Tool'
-    if (kind === 'thought') return 'Thought'
-    if (source === 'runtime_activity') return 'Runtime'
-    return 'Activity'
+    return getActivityLabelEntry(kind, source).text
 }
 
 function hasStructuredDisplayContent(message: ChatMessage): boolean {
@@ -63,7 +79,7 @@ function hasStructuredDisplayContent(message: ChatMessage): boolean {
 
 export function classifyChatMessageForDisplay(message: ChatMessage | null | undefined): ChatVisibilityClassification {
     if (!message) {
-        return { surface: 'internal', isUserFacing: false, isActivityFacing: false, isInternal: true, role: '', kind: 'standard', label: 'Internal' }
+        return { surface: 'internal', isUserFacing: false, isActivityFacing: false, isInternal: true, role: '', kind: 'standard', label: 'Internal', labelKey: ACTIVITY_LABELS.activity.key }
     }
     const meta = readMeta(message)
     const role = readString(message.role)
@@ -81,6 +97,7 @@ export function classifyChatMessageForDisplay(message: ChatMessage | null | unde
         || audience === 'chat'
         || hasBooleanMarker(message, meta, ['userFacing'])
     const activityLike = ACTIVITY_KINDS.has(kind) || ACTIVITY_SOURCES.has(source)
+    const labelKey = getActivityLabelEntry(kind, source).key
 
     if (explicitHidden) {
         return {
@@ -91,22 +108,23 @@ export function classifyChatMessageForDisplay(message: ChatMessage | null | unde
             role,
             kind,
             label: getActivityLabel(message, kind, source),
+            labelKey,
         }
     }
     if (explicitUserFacing) {
-        return { surface: 'chat', isUserFacing: true, isActivityFacing: false, isInternal: false, role, kind, label: getActivityLabel(message, kind, source) }
+        return { surface: 'chat', isUserFacing: true, isActivityFacing: false, isInternal: false, role, kind, label: getActivityLabel(message, kind, source), labelKey }
     }
     if ((role === 'system' || kind === 'system') && hasStructuredDisplayContent(message)) {
-        return { surface: 'chat', isUserFacing: true, isActivityFacing: false, isInternal: false, role, kind, label: 'Chat' }
+        return { surface: 'chat', isUserFacing: true, isActivityFacing: false, isInternal: false, role, kind, label: 'Chat', labelKey }
     }
     if (INTERNAL_SOURCES.has(source) || role === 'system' || kind === 'system') {
-        return { surface: 'internal', isUserFacing: false, isActivityFacing: false, isInternal: true, role, kind, label: 'Internal' }
+        return { surface: 'internal', isUserFacing: false, isActivityFacing: false, isInternal: true, role, kind, label: 'Internal', labelKey }
     }
     if (activityLike) {
-        return { surface: 'activity', isUserFacing: false, isActivityFacing: true, isInternal: false, role, kind, label: getActivityLabel(message, kind, source) }
+        return { surface: 'activity', isUserFacing: false, isActivityFacing: true, isInternal: false, role, kind, label: getActivityLabel(message, kind, source), labelKey }
     }
     const isUserFacing = (role === 'user' || role === 'human' || role === 'assistant') && (kind === 'standard' || kind === '')
-    return { surface: isUserFacing ? 'chat' : 'internal', isUserFacing, isActivityFacing: false, isInternal: !isUserFacing, role, kind, label: isUserFacing ? 'Chat' : 'Internal' }
+    return { surface: isUserFacing ? 'chat' : 'internal', isUserFacing, isActivityFacing: false, isInternal: !isUserFacing, role, kind, label: isUserFacing ? 'Chat' : 'Internal', labelKey }
 }
 
 export function filterChatMessagesForDefaultTranscript<T extends ChatMessage>(messages: T[] | null | undefined): T[] {

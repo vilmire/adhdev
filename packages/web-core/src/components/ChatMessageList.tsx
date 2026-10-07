@@ -1,8 +1,9 @@
 /**
  * ChatMessageList — shared Chat message rendering component
  *
- * Dashboard / IDE / AgentStreamPanelfrom commonto use.
- * Supports 5 message types: thought, tool, system, action, standard.
+ * Shared by the dashboard chat pane and the web-cloud share view.
+ * Each message is resolved ONCE into a `ChatRowModel` (chat-row-model.ts) —
+ * kind, surface, label, body, collapse — and the row only renders that model.
  *
  * Rendering only:
  * - Provider/daemon own transcript parsing and message boundaries.
@@ -12,7 +13,9 @@
  * Structure (survey C9 3/3 decomposition — pure move, behaviour preserved):
  * - ./ChatMessageList/chatMessageHelpers.ts — pure helpers, types, constants.
  * - ./ChatMessageList/chatScrollHelpers.ts  — pure scroll-decision functions.
- * - ./ChatMessageList/chatMessageBubbles.tsx — bubble/row renderers + row memo.
+ * - ./ChatMessageList/chat-row-model.ts      — resolveChatRow (the one classifier call).
+ * - ./ChatMessageList/chatMessageBubbles.tsx — row component + row memo.
+ * - ./ChatMessageList/chat-row-expansion.ts  — the one expand-state store.
  * This file keeps the shell: the scroll-owning component body (refs, state, and
  * the stateful effects that a source-string test pins here) and the list JSX.
  */
@@ -20,12 +23,8 @@
 import { memo, useState, useRef, useEffect, useMemo, useCallback, forwardRef, useImperativeHandle } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
-    getRenderableTimestamp,
-    getChatMessageStableKey,
-    getToolExpandStateKey,
     buildChatMessageStableKeys,
     type ActionLog,
-    type ToolExpandAddress,
 } from './ChatMessageList/chatMessageHelpers';
 import {
     CHAT_SCROLL_NEAR_BOTTOM_PX,
@@ -47,9 +46,10 @@ import {
 import {
     ActionLogRow,
     ChatMessageRow,
-    type ToolExpandState,
 } from './ChatMessageList/chatMessageBubbles';
-import { classifyChatMessageForDisplay, mergeChatAndActivityMessages, collapseAdjacentDuplicateChatMessages } from './dashboard/chat-activity-visibility';
+import { resolveChatRow, type ChatRowModel } from './ChatMessageList/chat-row-model';
+import { useChatRowExpansion, type FetchToolBlock } from './ChatMessageList/chat-row-expansion';
+import { mergeChatAndActivityMessages, collapseAdjacentDuplicateChatMessages } from './dashboard/chat-activity-visibility';
 
 // ─── Types ────────────────────────────────────
 
@@ -71,6 +71,8 @@ export {
     shouldRestoreChatScrollSnapshot,
 } from './ChatMessageList/chatScrollHelpers';
 export { buildChatMessageRowSignature } from './ChatMessageList/chatMessageBubbles';
+export { resolveChatRow, type ChatRowModel, type ChatRowKind } from './ChatMessageList/chat-row-model';
+export type { FetchToolBlock, ToolExpandState } from './ChatMessageList/chat-row-expansion';
 
 export interface ChatMessageListProps {
     messages: ChatMessage[];
@@ -123,15 +125,12 @@ export interface ChatMessageListProps {
      */
     onCancelQueued?: (pendingId: string) => void;
     /**
-     * (TOOL-EXPAND) Fetch the untruncated body of a truncated tool bubble.
-     * Rendered only on bubbles the parser actually truncated, so a host that
-     * omits it (read-only share views) loses no affordance that would work.
+     * (TOOL-EXPAND) Fetch the untruncated body of a truncated tool bubble. The
+     * list keeps the result in its one expand store; the affordance renders
+     * only on bubbles the parser truncated, so a host that omits this
+     * (read-only share views) loses nothing that would work.
      */
-    onExpandToolBlock?: (messageKey: string, address: ToolExpandAddress) => void;
-    /** Collapse an expanded tool bubble back to its summary. */
-    onCollapseToolBlock?: (messageKey: string) => void;
-    /** Expansion state per message key, owned by the host that fetches. */
-    toolExpansions?: Record<string, ToolExpandState>;
+    fetchToolBlock?: FetchToolBlock;
 }
 
 export interface ChatMessageListRef {
@@ -142,7 +141,7 @@ export interface ChatMessageListRef {
 // ─── Component ────────────────────────────────
 
 const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(function ChatMessageList(
-    { messages, actionLogs, agentName = 'Agent', userName, isCliMode = false, isWorking = false, contextKey = '', receivedAtMap = {}, lastMessageHash, showActivityMessages = false, emptyState, onLoadMore, isLoadingMore, hasMoreHistory, hiddenLiveCount = 0, loadError, scrollToBottomRequestNonce, isVisible = true, onSendNow, isSendingNow, onCancelQueued, onExpandToolBlock, onCollapseToolBlock, toolExpansions },
+    { messages, actionLogs, agentName = 'Agent', userName, isCliMode = false, isWorking = false, contextKey = '', receivedAtMap = {}, lastMessageHash, showActivityMessages = false, emptyState, onLoadMore, isLoadingMore, hasMoreHistory, hiddenLiveCount = 0, loadError, scrollToBottomRequestNonce, isVisible = true, onSendNow, isSendingNow, onCancelQueued, fetchToolBlock },
     ref
 ) {
     const { t } = useTranslation('common');
@@ -157,7 +156,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
     const contextAutoScrollRef = useRef(false);
     const contextAutoScrollTimerRef = useRef<number | null>(null);
     const hasSelectionRef = useRef(false);
-    const [expandedTexts, setExpandedTexts] = useState<Set<string>>(new Set());
+    const bindExpansion = useChatRowExpansion(contextKey, fetchToolBlock);
     const [jumpButtons, setJumpButtons] = useState<ChatScrollJumpButtonState>({ showTop: false, showBottom: false });
 
     const userScrolledUp = useRef(false);
@@ -219,32 +218,32 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
 
     // Visible chat transcript hides internal provider/coordinator activity rows.
     // The daemon/read_chat transcript still preserves these messages for debug/export paths.
-    const visibleMessages = useMemo(() => {
-        // Single classification pass. `filterChatMessagesForDefaultTranscript` and
-        // `filterChatActivityMessages` each walked the full list calling
-        // `classifyChatMessageForDisplay` per message; the two predicates are
-        // mutually exclusive branches of that ONE classification, so partition in
-        // one pass instead of classifying every message twice. The helpers remain
-        // exported and unchanged for their other callers.
+    const { visibleMessages, rowByMessage } = useMemo(() => {
+        // ONE resolution per message: `resolveChatRow` is the only caller of the
+        // display classifier, and its `surface` partitions the list here. The
+        // row receives the same model and never classifies again.
+        const rows = new Map<ChatMessage, ChatRowModel>();
         const chatMessages: ChatMessage[] = [];
         const activityMessages: ChatMessage[] = [];
         for (const message of (Array.isArray(messages) ? messages : [])) {
-            const classification = classifyChatMessageForDisplay(message);
-            // kind:'tool' is classified user-facing (chat-activity-visibility)
-            // so it takes this branch and ChatMessageRow's existing tool-bubble
-            // renderer. Do not add a kind==='standard' allow-list here — that
-            // is the filter that previously dropped every tool row from DOM.
-            if (classification.isUserFacing) chatMessages.push(message);
-            else if (classification.isActivityFacing) activityMessages.push(message);
+            const row = resolveChatRow(message, { agentName, userName, receivedAtMap });
+            rows.set(message, row);
+            // Do not add a kind==='standard' allow-list here — that is the
+            // filter that previously dropped every tool row from the DOM.
+            if (row.surface === 'chat') chatMessages.push(message);
+            else if (row.surface === 'activity') activityMessages.push(message);
         }
         // Collapse back-to-back identical bubbles (history↔live seam duplicate, or a
         // native transcript replaying a finalized turn) before rendering — this is
         // adjacent-only, so the intentional non-adjacent history/live overlap is
         // preserved. (ANTIGRAVITY-REPLICA-DUP)
-        return collapseAdjacentDuplicateChatMessages(
-            mergeChatAndActivityMessages(chatMessages, activityMessages, showActivityMessages),
-        );
-    }, [messages, showActivityMessages]);
+        return {
+            visibleMessages: collapseAdjacentDuplicateChatMessages(
+                mergeChatAndActivityMessages(chatMessages, activityMessages, showActivityMessages),
+            ),
+            rowByMessage: rows,
+        };
+    }, [messages, showActivityMessages, agentName, userName, receivedAtMap]);
 
     const visibleLastMessageHash = visibleMessages.length === messages.length ? lastMessageHash : undefined;
 
@@ -511,19 +510,23 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
     // which are indistinguishable on their own material — same turn, role,
     // content and timestamp — still get unique React keys. See
     // `buildChatMessageStableKeys`.
-    type MsgItem = { type: 'message'; data: ChatMessage; index: number; ts: number; stableKey: string };
+    type MsgItem = { type: 'message'; data: ChatMessage; row: ChatRowModel; index: number; ts: number; stableKey: string };
     type LogItem = { type: 'action'; data: ActionLog; index: number; ts: number };
     type MergedItem = MsgItem | LogItem;
 
     const items: MergedItem[] = useMemo(() => {
         const stableKeys = buildChatMessageStableKeys(visibleMessages);
-        const msgItems: MsgItem[] = visibleMessages.map((m, i) => ({
-            type: 'message' as const,
-            data: m,
-            index: i,
-            ts: getRenderableTimestamp(m, i, receivedAtMap),
-            stableKey: stableKeys[i],
-        }));
+        const msgItems: MsgItem[] = visibleMessages.map((m, i) => {
+            const row = rowByMessage.get(m) ?? resolveChatRow(m, { agentName, userName, receivedAtMap });
+            return {
+                type: 'message' as const,
+                data: m,
+                row,
+                index: i,
+                ts: row.timestamp ?? 0,
+                stableKey: stableKeys[i],
+            };
+        });
 
         if (!actionLogs || actionLogs.length === 0) return msgItems;
 
@@ -541,7 +544,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
         }
         while (logIdx < logItems.length) merged.push(logItems[logIdx++]);
         return merged;
-    }, [visibleMessages, actionLogs, receivedAtMap]);
+    }, [visibleMessages, rowByMessage, actionLogs, agentName, userName, receivedAtMap]);
     const hasMoreVisibleContent = hiddenLiveCount > 0 || !!hasMoreHistory;
     const loadMoreLabel = hiddenLiveCount > 0
         ? (hiddenLiveCount > 80
@@ -619,44 +622,26 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
                 }
 
                 const m = item.data as ChatMessage;
-                const i = item.index;
+                const row = item.row;
                 const messageKey = item.stableKey;
-                // The receivedAt cache is keyed by the BASE key (what
-                // `getRenderableTimestamp` and ChatPane write), which duplicate
-                // siblings legitimately share — only the React key needs to be
-                // unique per bubble.
-                const receivedAt = m.receivedAt || receivedAtMap[getChatMessageStableKey(m, i)];
-                const expandKey = `${contextKey}-${messageKey}`;
-                const isTextExpanded = expandedTexts.has(expandKey);
-                // (TOOL-EXPAND) Expansion state is keyed by the tool BLOCK, not
-                // by the React key. On the replica lane the React key can fall
-                // back to a content hash, and a tool bubble's content is exactly
-                // what changes as its result streams — which silently dropped
-                // open expansions. `getToolExpandStateKey` addresses the block
-                // instead, so it survives the rewrite. Bubbles with no ref (not
-                // expandable, or a non-replica bubble with full identity) keep
-                // the previous key, byte-identical.
-                const toolExpandKey = getToolExpandStateKey(m) ?? messageKey;
+                // (TOOL-EXPAND) Expansion is keyed by the tool BLOCK when the row
+                // has one: on the replica lane the React key can fall back to a
+                // content hash, and a tool bubble's content is exactly what changes
+                // as its result streams — which silently dropped open expansions.
+                const expansion = bindExpansion(row.expandKey ?? messageKey);
                 return (
                     <ChatMessageRow
                         key={`msg-${messageKey}`}
                         message={m}
-                        receivedAt={receivedAt}
+                        row={row}
+                        receivedAt={row.timestamp ?? undefined}
                         agentName={agentName}
                         userName={userName}
                         isCliMode={isCliMode}
-                        isTextExpanded={isTextExpanded}
                         onSendNow={onSendNow}
                         isSendingNow={isSendingNow}
                         onCancelQueued={onCancelQueued}
-                        toolExpand={toolExpansions?.[toolExpandKey]}
-                        onExpandToolBlock={onExpandToolBlock ? (address) => onExpandToolBlock(toolExpandKey, address) : undefined}
-                        onCollapseToolBlock={onCollapseToolBlock ? () => onCollapseToolBlock(toolExpandKey) : undefined}
-                        onToggleTextExpanded={() => setExpandedTexts(prev => {
-                            const next = new Set(prev);
-                            if (isTextExpanded) next.delete(expandKey); else next.add(expandKey);
-                            return next;
-                        })}
+                        {...expansion}
                     />
                 );
             })}
@@ -730,13 +715,8 @@ const MemoizedChatMessageList = memo(ChatMessageList, (prev, next) => (
     // (G8-6 class) A handler missing from this comparator never reaches the row:
     // the list short-circuits and the button keeps calling a stale closure.
     && prev.onCancelQueued === next.onCancelQueued
-    // (TOOL-EXPAND) Same class: without these the list short-circuits and an
-    // expanded body — or the refusal notice — never reaches the row that asked
-    // for it. `toolExpansions` is replaced (not mutated) on every state change,
-    // so reference equality is the correct test.
-    && prev.toolExpansions === next.toolExpansions
-    && prev.onExpandToolBlock === next.onExpandToolBlock
-    && prev.onCollapseToolBlock === next.onCollapseToolBlock
+    // (TOOL-EXPAND) Same class: a new fetcher must reach the rows.
+    && prev.fetchToolBlock === next.fetchToolBlock
 ));
 
 export default MemoizedChatMessageList;
