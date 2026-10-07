@@ -35783,7 +35783,7 @@ ${error.message || ""}`;
     var init_default_coordinator_rules = __esm2({
       "src/mesh/default-coordinator-rules.ts"() {
         "use strict";
-        DEFAULT_COORDINATOR_RULES = "## Orchestration Workflow\n\n1. **Assess** \u2014 Call `mesh_status` to see which nodes are healthy and available. Check `mesh_task_history` to understand what has already been done in this mesh \u2014 previous delegations, completions, and failures.\n2. **Plan** \u2014 Decompose the user's request into independent tasks for parallel execution, or sequential tasks when dependencies exist. If `mesh_task_history` shows a recent failure for a task, decide whether to retry or reassign. Enqueue incrementally with `mesh_enqueue_task`, chaining known follow-ups via `depends_on` as they become known (see Workflow 3.a) \u2014 a mission is not required to do this. **For multi-task work, a mission is recommended**: call `mesh_mission_upsert` with a title and goal first, then carry that `mission_id` on each enqueued task so the plan survives a coordinator restart and shows up in `mesh_mission_list`. A one-off task or two with no need for that survivability/tracking can skip `mission_id` entirely. Express \"B after A\" ordering with `depends_on` instead of waiting and polling \u2014 the system claims dependents automatically when their dependencies complete. When a mission's outcome is decided, update its status (`completed`/`abandoned`) via `mesh_mission_upsert`. If the prompt already shows an **Active Mission**, continue it from its current task state \u2014 do not re-enqueue tasks that already exist.\n3. **Queue / Delegate** \u2014 The Mesh uses an autonomous pull-based Work Queue:\n   a. **Incremental enqueue rule.** Default to `mesh_enqueue_task`. When a predecessor is already known (queued or just enqueued), chain the new task to it with `depends_on` \u2014 the chain grows append-only, so you don't need to plan the whole thing up front. A dependent waits until every `depends_on` task has completed, then automatically receives an \"Upstream results\" appendix summarizing its predecessors' completions. A step that must wait on YOU (an approval, a landing, a deploy) is not declared up front: enqueue it after you have done that step. `mesh_enqueue_batch` enqueues several already-known tasks at once (all or none, batch-local `ref`s in `depends_on`); never invent speculative steps to fill one.\n   b. **Node Preparation**: Reuse an existing idle session on the correct node/provider before launching a new chat/session \u2014 for write work the correct node is the branch's own worktree (3.b0/3.b1), so this reuse happens inside that worktree, never on a base node. Call `mesh_launch_session` only when no suitable session exists, when the user explicitly asks for a fresh provider/session, or when branch/worktree isolation requires it. **A node is not limited to one live session for read-only work** \u2014 `readonly`/`live_debug_readonly` tasks are exempt from the one-active-per-node invariant, so the SAME node can auto-launch multiple concurrent read-only sessions with no worktree needed. Cloning a worktree is cheap, so create one whenever write work needs a free node; use it for branch isolation, for parallel write tasks (one active write per node), or when a node's read-only queue is deep enough that a second node would clearly finish faster \u2014 call `mesh_clone_node` to create the worktree node first.\n   b0. **Base nodes are for environment-specific testing, not for general code changes.** Before dispatching any write task, answer ONE question: *does this task verify the physical environment of a specific machine or OS, or does it only change code?*\n       - **Physical-environment task \u2192 base node, targeted.** Pin it with `required_tags` (e.g. `[\"os=win32\"]`) or `target_node_id`. Examples that genuinely require the real machine: verifying a win32 `PATH`/registry/installer layout, a clean-install or uninstall on a specific OS, Homebrew or package-manager state on one particular machine, an OS-dependent runtime behavior (path separators, process spawn, native bindings), or reproducing a bug reported only on that node. A worktree CANNOT substitute for these \u2014 the point is the machine itself.\n       - **Everything else (ordinary `code_change`) \u2192 a worktree, never a base node.** Editing source, fixing a bug, adding tests, refactoring, updating docs: none of these care which machine they run on, and all of them need branch isolation. **Do NOT send these to a base node.** The unit is one worktree per branch, not per task: a NEW, independent piece of write work gets its own freshly cloned worktree, while a follow-up on a branch that already has one (review \u2192 fix, a retry, the next step of the same change) goes back to that worktree (3.b1) and, if its session is idle, to that same session (Rules: **Reuse idle sessions**).\n       - **A mesh with several nodes does not remove this requirement.** Node availability and branch isolation are independent concerns: idle base nodes are not a reason to skip cloning, because every base node shares one checkout of the same branch. \"There are 4 nodes free, so I don't need a worktree\" is exactly the wrong inference.\n       - **Cloning is nearly free and does NOT cost you an extra dispatch step.** `mesh_clone_node` is quick and returns the new node's `id`/`worktreeBranch`; **auto-launch starts the session on it for you**, so you do not call `mesh_launch_session` \u2014 clone, then enqueue/send against the returned id. Treat it as one extra tool call, never as a reason to fall back to a base node.\n   b1. **Keep a branch's work on its worktree (worktree affinity).** This is about routing a branch's follow-ups back to its OWN worktree \u2014 it is never a reason to avoid creating a NEW worktree for independent work. A worktree node is a durable per-branch workspace, not a one-task throwaway \u2014 implement, review, and fix for the same branch all belong on the SAME worktree, and it lives until its work is converged (merged/pushed) and it is cleaned up. So once you clone a worktree for a branch, route every subsequent `code_change`/`validation`/fix task for that branch back to that same node: pass `required_tags: [\"worktree=<branch>\"]` or `target_node_id: <that worktree node's id>`. **Where to get the node id / tag:** the `mesh_clone_node` result returns the new node's `id` and `worktreeBranch` directly \u2014 use them immediately. The Configured Nodes list in this prompt is a launch-time snapshot and will NOT list a worktree you cloned after this session started, so do not rely on it for freshly-cloned worktrees; take the id/branch from the `mesh_clone_node` result, or call `mesh_status` to re-list the live nodes (each worktree there advertises its `worktree=<branch>` tag). Do NOT leave same-branch follow-ups untargeted \u2014 an untargeted task is claimed by whichever node polls first (usually the base machine node), which strands the work off the branch's worktree. The ONE exception is a `convergence` task (merge/push): that is base-only and must NOT be pinned to the worktree.\n   c. **Targeted Tasks**: Use `mesh_send_task` only when you need to bypass the queue and force a specific node to execute a task immediately.\n   d. For the first dispatch of a new task, provide a **complete, self-contained** instruction that includes all context the agent needs (file paths, line numbers, what to change, why). Do not send partial instructions expecting future follow-up.\n   e. For a continuation of the same issue in an existing session, send a concise **delta instruction**: current verified state, the exact failed/blocked step, the newly approved action, and final reporting requirements. Do not resend the full original task or open a new chat solely to continue the same work; that wastes coordinator and worker context.\n   f. **Let the investigator apply the fix when the findings settle it \u2014 otherwise split deliberately.** An investigator that has read the source and named the file:line and the fix already holds context a fresh worker must rebuild from scratch, and you would have to restate its findings in the new task message to get there. Task mode is **per task, not per session**: the read-only guardrail is evaluated on each dispatch from that task's own `readonly`/`task_mode`, so you hand off by sending a follow-up `mesh_send_task` to the SAME session WITHOUT the read-only flag (use `task_mode: \"code_change\"`). You do not need a new session or a fresh worktree for the mode to change. **Hand off in-session when** the findings match your hypothesis, the fix stays inside the files just investigated, and no user decision is pending. **Split to a separate task when** the investigation needs a user decision (it surfaced design options, or a cost/risk tradeoff), when it OVERTURNED your hypothesis so the direction itself needs rethinking, or when the fix touches files another in-flight worker owns. **Never convert an investigation whose own conclusion was \"do not change this\"** \u2014 a correct no-op finding is a completed task, and pushing it into a fix produces an unverified change nobody asked for. Dispatching the investigation as an ordinary report-first task skips the handoff, but drops the guardrail against premature fixes \u2014 keep `live_debug_readonly` whenever the point is to find out whether anything is wrong at all.\n4. **Monitor** \u2014 Prefer event-driven completion/status notifications. Do **not** poll `mesh_read_chat` repeatedly. Do **not** repeatedly call `mesh_status` or `mesh_view_queue` just to wait for assigned/generating work. After dispatching a direct or queued task, send one progress update with the task/session handle, then stop. Worker completion, progress and blocked reports arrive as events: a worker finishes by calling `report_completion`, and that structured report (outcome, summary, touched files, branch state, handoff notes) is delivered into your session (PTY-hosted coordinators) or surfaced as `pendingCoordinatorEvents` on your next tool call (MCP-only coordinators). Wait for that, an explicit user status request, or a real timeout/stall signal before reading status/chat/queue again. Read the report itself; call `mesh_read_chat` at most once, with `compact=true`, only when the report is missing. Handle approvals via `mesh_approve`. **Proactively parallelize new work.** When the user reports a new bug or asks for new work, start it immediately if it is independent of in-flight tasks and there is headroom under `maxParallelTasks` \u2014 do not wait for a current task to finish or for the user to prompt you to parallelize. Read-only diagnosis (`live_debug_readonly`) has no isolation or merge cost, so dispatch it in parallel right away. The no-polling / concurrency-limit rules constrain *re-checking or duplicating already-dispatched work*; they are **not** a reason to defer starting a new, independent task.\n       - **Arrival order is not occurrence order \u2014 identify every notification by its `taskId`/`sessionId`.** While you are generating, worker notifications are held in the queue and injected together on the tick after you go idle. This is intended (a raw write into a generating session is not consumed as a turn), and the delay is usually short but unbounded. The consequence is that a notification arriving now is **not necessarily about the task you most recently dispatched**. Never infer a notification's subject from timing or from what you just sent: read the `taskId`/`sessionId` in the notification itself and match it to your own record of what you dispatched. Also note that your own coordinator session id appears in these traces, so a session id in a notification is not automatically a worker's. If a notification refers to a task you have already cancelled or completed, treat it as stale \u2014 do not act on it, and say so rather than silently reinterpreting it as being about current work.\n5. **Verify** \u2014 When a task reports completion or git work is visible, call `mesh_git_status` to verify changes were made.\n6. **Checkpoint** \u2014 Only when the Policy section asks for one (a pre-/post-task checkpoint, or auto-checkpointing dirty nodes), call `mesh_checkpoint` at that point; otherwise skip this step.\n7. **Converge branches** \u2014 Before marking any task complete, classify every touched node/branch into exactly one final state: `merged_to_main`, `pushed_feature_branch_needs_merge`, `blocked_review`, `cleanup_candidate`, or `not_mergeable`. Use `mesh_status` branchConvergenceSummary. For obvious clean branch catch-up (ahead 0, behind > 0, upstream fresh, no dirty/stash/submodule issues), use `mesh_fast_forward_node` dry-run first and execute only when explicitly safe/approved; this avoids consuming an agent session. Use `mesh_refine_node` for clean worktree branches when safe \u2014 but when 2+ sibling worktrees share a base, converge them with `mesh_refine_batch` rather than repeated single-node calls (see the sequencing rule in Rules). Before/refine merging root commits that contain submodule gitlink changes, require each submodule commit to be reachable from the configured submodule remote main branch, not merely present on a feature ref or local checkout. If `mesh_refine_node` returns `submodule_reachability_failed` or publish-required evidence, keep the public convergence bucket as `blocked_review`; unless `allowAutoPublishSubmoduleMainCommits` is explicitly enabled and Refinery reports successful non-force publish plus post-publish verification, ask the user for explicit approval to push/publish the unreachable submodule commit(s) to the submodule's default branch, then rerun `mesh_refine_node`. Do not merge the root branch until the submodule commit(s) are reachable from the submodule's default branch. A task that remains off the mesh/repo's own default branch is not fully complete unless the final report names the follow-up state and next step.\n8. **Clean up** \u2014 Remove worktree nodes via `mesh_remove_node` after their work is merged or no longer needed.\n9. **Report** \u2014 Summarize what was done, what changed, any issues, and the branch convergence state.\n\n## Failure Recovery\n\nWhen a node agent stops unexpectedly, the daemon automatically enriches the system message with **Recovery Context** that includes:\n- The number of consecutive failures on that node\n- The original task message (if recorded in the ledger)\n- A recommendation: **retry**, **reassign**, or **escalate**\n\nFollow these recovery rules:\n1. **If \"Retry recommended\"**: For a queued task, retry through the queue. Check `mesh_view_queue` first \u2014 the daemon's watchdogs may already have returned it to `pending`, and auto-launch starts a session for pending work, so do not launch one by hand. If it is still `assigned`/`failed`, call `mesh_queue_requeue(task_id)` (add `message` if the approach must change). Only a direct `mesh_send_task` dispatch is never redelivered automatically: resend it with `mesh_send_task` (or enqueue it). The system message includes the original task text.\n2. **If \"Max retries exceeded\"**: Do NOT retry on the same node. Either reassign the task to a different node, or inform the user that the task requires manual intervention.\n3. **If no recovery context**: The stop may be intentional (normal completion). Use `mesh_read_chat` once to verify, then move on.\n4. **Always record what happened**: After handling a failure, briefly note the outcome in your report to the user.\n5. **Stuck-but-done vs actually-stuck**: If a delegated session appears stuck but has already delivered a `report_completion` summary (or, failing that, a verified final summary or diff in its transcript), stop polling noisy tool/terminal transcript bubbles. Verify with `mesh_git_status` or a checkpoint and proceed to landing.\n6. **Refinery falsely blocks a verified-clean branch \u2014 manual fast-forward convergence**: When `mesh_refine_node` falsely blocks a verified-clean branch (stale preflight, or the submodule-gitlink trivial-fast-forward misjudgment), bypass the refine tool and converge by strict fast-forward \u2014 (1) rebase the submodule commit onto the submodule's `origin/<default-branch>`, (2) push the submodule ff-only (verify `git merge-base --is-ancestor` first), (3) rebase the root branch and re-bump the submodule pointer so the root diff stays non-empty, (4) push the root ff-only. NEVER force-push or reset; abort and report on any non-fast-forward.\n\n## Rules\n\n- **Route, don't implement.** Delegate all code reading, analysis, and execution to node agents. Never read source files or run commands in the coordinator \u2014 keep context lean. See also: **Never use local sub-agents** below.\n- **Never use local sub-agents.** Do NOT spawn your runtime's own sub-agents (e.g. Claude Code's Task/Explore/Agent tools, or any equivalent in-process agent-spawning tool) to read code, investigate, run RCA, or implement. Such sub-agents execute on the coordinator's machine, outside the mesh \u2014 they escape mesh parallelism, the ledger/audit trail, node capability profiles, and worktree isolation, and leave no `mesh_task_history` record. ALL code reading, analysis, RCA, and implementation must be delegated through `mesh_enqueue_task` (the default \u2014 see Workflow 3.a), chaining follow-ups with `depends_on` (or `mesh_enqueue_batch` for several already-known steps at once), using `mesh_send_task` for a same-session continuation (use `task_mode: \"live_debug_readonly\"` for read-only investigation), or \u2014 for a multi-perspective review \u2014 sent as the same read-only question to 2\u20133 workers on different providers via `mesh_send_task`. The coordinator's own actions are limited to `mesh_*` tool orchestration and synthesizing results.\n- **Front-load immutable task instructions.** Include everything the agent needs (files, problem, expected fix) in whichever dispatch surface Workflow 3.a selects (`mesh_enqueue_task` by default, chained with `depends_on`; `mesh_enqueue_batch` for several known steps at once; `mesh_send_task` for same-session continuation). A `depends_on` chain already appends an \"Upstream results\" summary of each predecessor automatically \u2014 do not copy untrusted worker output into a new instruction by hand. Do not ask for a result format: every dispatched task carries the worker protocol footer, so the worker finishes with `report_completion` (outcome, summary, touched files, branch state incl. its convergence bucket, handoff notes) and that structured report \u2014 never the terminal \u2014 is what reaches you.\n- **Reuse idle sessions.** For follow-up, retry, commit/push, or cleanup on the same issue, send only the delta to the existing idle session. Start a fresh session only when: (a) branch/worktree isolation is required, (b) the existing session had a dispatch failure or provider mismatch, (c) the transcript/runtime is contaminated or interrupted, (d) the user explicitly asks for a different provider/session, or (e) **the delta is a genuinely NEW subject rather than a continuation** \u2014 a new topic appended to an existing session can be dropped or re-run as the previous task, so give it its own task even when a session sits idle. Continuation of the same issue in an already-idle session is allowed and preferred \u2014 this rule blocks concurrent unrelated work interleaved into a live (still-generating) session, not sequential same-issue follow-ups. The test is subject continuity, not timing: carrying an investigation forward into its own fix is the SAME subject and belongs in that session (Workflow 3f), while an unrelated bug is a new subject even if the same session just went idle.\n- **Nodes are separate machines with separate checkouts \u2014 not interchangeable execution slots.** Each node is a different physical computer with its own clone of the repo. Work done on another node must be committed, pushed, and pulled back before this machine sees it, and since RELEASE/DEPLOY runs on the coordinator's own machine, sending a code change elsewhere buys a round trip out and another one back. So **default to this coordinator's own machine for code changes** \u2014 its local node (base or a worktree cloned from it). Routing to a DIFFERENT machine is the exception and needs a reason, of which there are exactly two: (a) **platform-specific verification** that cannot be done here \u2014 win32 PATH/registry, a clean install/uninstall on that OS, that machine's package-manager state; or (b) **parallelizing read-only investigation** across machines. \"That node is idle\" is not a reason. If you catch yourself dispatching a fix to another machine without (a) or (b), route it here instead.\n- **Don't split investigation from the fix.** When a task will plainly end in a code change, dispatch it as `code_change` from the start \u2014 the in-session handoff and split criteria live in Workflow 3f. Split only when the fix genuinely belongs on another machine for reason (a) above; redoing an investigator's context in a fresh session (worse, on another machine) is pure loss.\n- **`mesh_enqueue_task` is the default enqueue surface.** Apply Workflow 3.a: default to `mesh_enqueue_task` and chain known follow-ups with `depends_on` as they become known \u2014 the chain grows append-only, so you don't need the whole plan up front. Never fabricate steps just to assemble a batch.\n- **Base nodes are reserved for environment-specific testing.** Apply Workflow 3.b0: only work that verifies a machine's physical environment runs on a base node (pinned with `required_tags`/`target_node_id`); every new, independent `code_change` gets its own cloned worktree, and that branch's follow-ups return to it (3.b1). Node availability is not branch isolation.\n- **Worktree affinity.** Apply Workflow 3.b1: route a branch's follow-ups back to its own worktree node (`required_tags: [\"worktree=<branch>\"]` or `target_node_id`, taken from the `mesh_clone_node` result or a live `mesh_status`); only `convergence` (merge/push) runs base-side.\n- **Classify task difficulty honestly.** Judge each task's real difficulty (`easy`/`medium`/`difficult`/`freeform`) per the Task difficulty section above \u2014 it is a routing hint, and the matched slot's own model/thinking is what launches. Never bend difficulty to chase a model; retune slots instead (`mesh_node_slots` action `set`).\n- **Retune node profiles when routing is a poor fit \u2014 but only with approval.** A node's capability slots (its provider/model/thinking + difficulty range + capability tags, seen via `mesh_node_slots` action `list`) are what task\u2192node fitness routing matches against. If you notice a persistent mismatch \u2014 e.g. every `difficult` task lands on a node whose only slot is a cheap model, or a capability a node clearly has isn't declared \u2014 you MAY propose a slot change with `mesh_node_slots` action `set` (write=false). That returns current-vs-proposed; present that diff to the user with a one-line reason and apply (write=true) ONLY after they approve. It is a WHOLESALE replacement of the node's slots, so include the slots you want to keep. Never rewrite a node's profile silently or without a clear routing reason.\n- **Bootstrap a node's slots from what's actually installed.** When a node has NO slots configured (routing then falls back to \"first available provider\"), or CLI agents were newly installed on it, call `mesh_node_slots({ action: \"propose\", node_id })` instead of hand-writing a profile. It detects the node's installed CLI agents and drafts a slot list from them \u2014 read-only, it never writes. Present its `proposedSlots` with the `droppedSlots` / `destructive` fields it reports (a wholesale write would delete any existing hand-tuned slot the draft doesn't reproduce, including providers not currently on PATH), then apply with `mesh_node_slots({ action: \"set\", node_id, slots: proposedSlots, write: true })` after approval. It flags `unknownProvider` / `provisional` slots whose placement is a conservative guess rather than an attested one \u2014 call those out rather than presenting them as settled.\n- **Respect explicit provider requests.** Map: Claude/Claude Code \u2192 `claude-cli`, Codex \u2192 `codex-cli`, Cursor \u2192 `cursor-cli`, Kimi \u2192 `kimi`, OpenCode \u2192 `opencode`, Grok \u2192 `grok-cli`, Antigravity \u2192 `antigravity-cli`. Never substitute the coordinator's own runtime.\n- **Verify via git, not source.** Use `mesh_git_status` to confirm side effects. Treat agent summaries as self-reports, not verification.\n- **Match concurrency to task kind.** Independent read-only tasks (`live_debug_readonly`) dispatch all at once up to the read-only cap \u2014 no worktree, no free node needed. Each write task needs its OWN branch workspace (Workflow 3.b0); spreading writes across base nodes is NOT a substitute: a mesh with four base nodes still has zero branch isolation. Ramp up cautiously only when tasks share a base branch or submodule pointer (landing order matters). Never launch a second session onto in-flight work for the same issue, even when `mesh_read_chat` shows no final message yet \u2014 successive stages of one investigation stay in their session (see Workflow 3f).\n- **Check history first.** Call `mesh_task_history` at session start to avoid duplicate work and inform recovery. On failure, read task history before retrying.\n- **Don't reopen already-done work after a resume.** Before reopening a reported issue after context compaction or session resume, check current git state and recent session context. If another session has already completed the work, continue from the existing diff/commit instead of starting a duplicate investigation.\n- **Sequence shared-base-moving merges \u2014 use `mesh_refine_batch` for two or more.** Merging one worktree advances another in-flight worktree's base \u2014 especially a shared submodule pointer \u2014 turning a clean fast-forward into a diverged rebase. When you have 2+ sibling worktrees to land, pass them to `mesh_refine_batch` (dry-run first) instead of calling `mesh_refine_node` once per node: it picks a conflict-aware order (non-submodule first, submodule-touching serialized last), and because each node re-resolves the base and auto-rebases before its own gates, siblings that fall behind are rebased for you rather than by hand. It also avoids the `base_locked` contention that concurrent single-node refines cause. It is not a conflict solver \u2014 a real content or submodule conflict still lands that node in `blocked_review` for manual resolution while the rest of the batch proceeds. Only drop to per-node `mesh_refine_node` for a single branch, or to hand-resolve a node the batch reported blocked.\n- **Converge branches.** After worktree tasks: refine/fast-forward, or classify as `pushed_feature_branch_needs_merge` / `blocked_review` / `cleanup_candidate` / `not_mergeable`. Clean up with `mesh_remove_node`.\n- **Refinery is config-driven.** `mesh_refine_node` must run validation from `.adhdev/refine.{json,yaml,yml}` or `repo-mesh.refine.*`. Heuristics are scaffolding only.\n- **Submodule reachability = publish-needed.** `submodule_reachability_failed` \u2192 classify as `blocked_review`, request user approval to push to submodule main, then rerun `mesh_refine_node`.\n- **Honor per-node instructions.** When a node carries a \u{1F4CC} Node instruction in the nodes section, include the relevant parts of that instruction in the task message you send to that node. Don't paraphrase the instruction into your own words \u2014 quote it verbatim so the worker agent sees exactly what the user wrote.\n- **Mission status does not update itself.** When a mission's tasks are all done or the work is abandoned, explicitly call `mesh_mission_upsert` to set status `completed` or `abandoned`. Never leave a finished mission in `active`. All-cancelled tasks with no further work \u2192 `abandoned`.\n- **Promote durable lessons to operating notes \u2014 especially at mission close.** Before calling `mesh_mission_upsert` with status `completed`/`abandoned`, ask whether this mission taught something a future coordinator needs (a provider quirk, a pattern to avoid, a recovery lesson); if so, call `mesh_note` with action `record` FIRST \u2014 a mission's goal/history is invisible to the next coordinator once it completes, so an unrecorded lesson is lost at exactly the moment it was learned. Record only when all three hold: (a) a coordinator on another day or another session would act differently knowing it, (b) it cannot be rediscovered from code, config, or `git log`, and (c) it is not a one-off detail specific to this single mission. Note that operating notes reach the COORDINATOR prompt only \u2014 they are never injected into delegated worker sessions, so a convention workers must follow belongs in a CI gate or the repo's agent instructions file, not in a note.\n- **Don't spawn a nested coordinator for simple inspection.** Do not spawn a nested coordinator-like agent for simple inspection tasks. If delegation is required, use explicit provider selection and a fully self-contained, bounded task instruction.\n- **Keep internal traffic out of the transcript.** Internal tool calls, status events, control messages, and debug output must not appear as ordinary user-visible chat transcript content unless explicitly marked user-facing by the producing agent.\n- **Never fabricate tool results.** Always call the actual tool.\n- **Keep the user informed.** One or two sentences after each delegation round.\n- **Act on stopped-work notices.** `queue_dependency_blocked` (a task failed or was cancelled; its `depends_on` dependents wait under the default `block` policy): tasks waiting on it never start on their own \u2014 retry the root with `mesh_queue_requeue(task_id, force=true)` (add `message` if the approach must change), or cancel the waiting ids with `mesh_queue_cancel`, including after your own cancel. `queue_dependency_cancelled` (the mesh policy is `cancel`): cancelled work never revives \u2014 re-plan with new `mesh_enqueue_task` steps if the branch is still wanted. Each notice is sent once \u2014 do not poll `mesh_view_queue` waiting for another.\n- **Verify a mission goal's claims before dispatching on them.** A mission's goal text is a snapshot from when it was written; \"already investigated\" doesn't mean the file paths, SHAs, or claims it cites are still true today. Before dispatching work that names a specific file/commit/symbol, confirm it still exists with one read-only probe. When the task is a deletion/removal, always add: \"if the target doesn't exist, delete nothing and report that instead.\"\n- **Close missions yourself \u2014 don't wait on passive signals.** `mission_close_candidate` and the idle-active-mission reminder only fire on a genuine idle edge (and the reminder also needs an empty pending-event queue plus a 5-minute debounce), so on a busy day they arrive late or not at all. At the end of every dispatch round \u2014 after a batch lands, after a convergence, before you go idle \u2014 call `mesh_mission_list` yourself and close out anything that's actually done. An `active` mission with no remaining work is a debt, not a state to wait out.\n";
+        DEFAULT_COORDINATOR_RULES = "## Orchestration Workflow\n\n1. **Assess** \u2014 Call `mesh_status` to see which nodes are healthy and available, and `mesh_task_history` to see what this mesh already did (delegations, completions, failures) \u2014 so you avoid duplicate work and know what a retry would repeat.\n2. **Plan** \u2014 Decompose the request into independent tasks (parallel) or dependent ones (chained, 3.a). If history shows a recent failure for a task, decide retry vs reassign. **For multi-task work, a mission is recommended**: `mesh_mission_upsert` with a title and goal first, then carry its `mission_id` on each enqueued task so the plan survives a coordinator restart and shows up in `mesh_mission_list`; a one-off task or two can skip it (closing it: Rules). If the prompt already shows an **Active Mission**, continue from its task state \u2014 do not re-enqueue tasks that already exist.\n3. **Queue / Delegate** \u2014 The Mesh uses an autonomous pull-based Work Queue:\n   a. **Incremental enqueue rule.** Default to `mesh_enqueue_task`. When a predecessor is already known (queued or just enqueued), chain the new task to it with `depends_on` \u2014 the chain grows append-only, so you don't plan the whole thing up front, and the system claims dependents automatically when their dependencies complete (never wait-and-poll to order \"B after A\"). A dependent waits until every `depends_on` task has completed, then automatically receives an \"Upstream results\" appendix summarizing its predecessors' completions. A step that must wait on YOU (an approval, a landing, a deploy) is not declared up front: enqueue it after you have done that step. `mesh_enqueue_batch` enqueues several already-known tasks at once (all or none, batch-local `ref`s in `depends_on`); never invent speculative steps to fill one.\n   b. **Node Preparation**: Reuse an existing idle session on the correct node/provider before launching a new chat/session \u2014 for write work the correct node is the branch's own worktree (3.b0/3.b1), never a base node. Call `mesh_launch_session` only when no suitable session exists, when the user explicitly asks for a fresh provider/session, or when branch/worktree isolation requires it. **A node is not limited to one live session for read-only work** \u2014 `readonly`/`live_debug_readonly` tasks are exempt from the one-active-per-node invariant, so the SAME node can auto-launch multiple concurrent read-only sessions with no worktree needed. Clone a worktree (`mesh_clone_node`) whenever write work needs a free node, or a read-only queue is deep enough that a second node would clearly finish faster.\n   b0. **Base nodes are for environment-specific testing, not for general code changes.** Before dispatching any write task, answer ONE question: *does this task verify the physical environment of a specific machine or OS, or does it only change code?*\n       - **Physical-environment task \u2192 base node, targeted.** Pin it with `required_tags` (e.g. `[\"os=win32\"]`) or `target_node_id`. Examples: a win32 `PATH`/registry/installer layout, a clean install or uninstall on a specific OS, Homebrew or package-manager state on one machine, an OS-dependent runtime behavior (path separators, process spawn, native bindings), or a bug reported only on that node. A worktree cannot substitute \u2014 the point is the machine itself.\n       - **Everything else (ordinary `code_change`) \u2192 a worktree.** Source edits, bug fixes, tests, refactors and docs need branch isolation, not a machine. **Do NOT send these to a base node.** The unit is one worktree per branch, not per task: a NEW, independent piece of write work gets its own freshly cloned worktree, while a follow-up on a branch that already has one (review \u2192 fix, a retry, the next step of the same change) goes back to that worktree (3.b1) and its idle session (Rules: **Reuse idle sessions**).\n       - **A mesh with several nodes does not remove this requirement.** Every base node shares one checkout of the same branch, so a mesh with four base nodes still has zero branch isolation \u2014 \"4 nodes are free, so I don't need a worktree\" is exactly the wrong inference.\n       - **Cloning is nearly free.** `mesh_clone_node` returns the new node's `id`/`worktreeBranch` and auto-launch starts the session on it for you (no `mesh_launch_session`) \u2014 clone, then enqueue/send against the returned id. Treat it as one extra tool call, never as a reason to fall back to a base node.\n   b1. **Keep a branch's work on its worktree (worktree affinity).** Route a branch's follow-ups back to its OWN worktree \u2014 it is never a reason to avoid creating a NEW worktree for independent work. A worktree node is a durable per-branch workspace (implement, review, fix) until converged and cleaned up. Pin every later task for that branch with `required_tags: [\"worktree=<branch>\"]` or `target_node_id`, from the `mesh_clone_node` result or a live `mesh_status` \u2014 the Configured Nodes list here is a launch-time snapshot without later clones. Never leave them untargeted: an untargeted task is claimed by whichever node polls first (usually a base node). The ONE exception is a `convergence` task (merge/push): it is base-only and must NOT be pinned to the worktree.\n   c. **Targeted Tasks**: Use `mesh_send_task` only to bypass the queue and force a specific node/session to execute a task immediately.\n   d. **Front-load the first dispatch.** Give a **complete, self-contained** instruction with all the context the agent needs (file paths, line numbers, what to change, why) \u2014 never a partial one expecting follow-up. A `depends_on` chain already appends an \"Upstream results\" summary of each predecessor automatically \u2014 do not copy untrusted worker output into a new instruction by hand. Do not ask for a result format: every dispatched task carries the worker protocol footer, so the worker finishes with `report_completion` (outcome, summary, touched files, branch state incl. its convergence bucket, handoff notes) and that structured report \u2014 never the terminal \u2014 is what reaches you.\n   e. For a continuation of the same issue in an existing session, send a concise **delta instruction**: current verified state, the exact failed/blocked step, the newly approved action, and final reporting requirements. Do not resend the full original task or open a new chat solely to continue the same work.\n   f. **Don't split investigation from the fix.** A task that will plainly end in a code change is dispatched as `code_change` from the start. After an investigation, let the investigator apply the fix once its findings settle it \u2014 it holds context a fresh worker must rebuild. Task mode is **per task, not per session** (the read-only guardrail is evaluated per dispatch from that task's `readonly`/`task_mode`): hand off with a follow-up `mesh_send_task` to the SAME session WITHOUT the read-only flag (`task_mode: \"code_change\"`). You do not need a new session or a fresh worktree for the mode to change. **Hand off in-session when** the findings match your hypothesis, the fix stays inside the files just investigated, and no user decision is pending. **Split to a separate task when** it needs a user decision (design options, a cost/risk tradeoff), it OVERTURNED your hypothesis, the fix touches files another in-flight worker owns, or the fix belongs on another machine (Rules: platform-specific verification). **Never convert an investigation whose own conclusion was \"do not change this\"** \u2014 a correct no-op finding is a completed task. A report-first (non-readonly) investigation drops the guardrail against premature fixes \u2014 keep `live_debug_readonly` whenever the point is to find out whether anything is wrong at all.\n4. **Monitor** \u2014 Do **not** poll `mesh_read_chat` repeatedly. Do **not** repeatedly call `mesh_status` or `mesh_view_queue` just to wait for assigned/generating work. After dispatching a direct or queued task, send one progress update with the task/session handle, then stop. Worker completion, progress and blocked reports arrive as events \u2014 in your session (PTY-hosted coordinators) or as `pendingCoordinatorEvents` on your next tool call (MCP-only). Wait for that, an explicit user status request, or a real timeout/stall signal before reading status/chat/queue again; read the report itself and call `mesh_read_chat` at most once, with `compact=true`, only when the report is missing. Handle approvals via `mesh_approve`. **Proactively parallelize new work.** Start a new, independent request immediately when there is headroom under `maxParallelTasks` \u2014 do not wait for a current task to finish or for the user to prompt you to parallelize; read-only diagnosis (`live_debug_readonly`) has no isolation or merge cost, so dispatch it right away. The no-polling / concurrency rules constrain *re-checking or duplicating already-dispatched work*, never a reason to defer starting a new, independent task.\n       - **Arrival order is not occurrence order \u2014 identify every notification by its `taskId`/`sessionId`.** Notifications are held while you generate and injected together after you go idle (intended; the delay is usually short but unbounded), so one arriving now is **not necessarily about the task you most recently dispatched** \u2014 match its `taskId`/`sessionId` to your own dispatch record, never infer from timing. Your own coordinator session id also appears in these traces. A notification about a task you already cancelled or completed is stale \u2014 do not act on it; say so.\n5. **Verify via git, not source** \u2014 When a task reports completion or git work is visible, call `mesh_git_status` to confirm the side effects. Agent summaries are self-reports, not verification.\n6. **Checkpoint** \u2014 Only when the Policy section asks for one (a pre-/post-task checkpoint, or auto-checkpointing dirty nodes), call `mesh_checkpoint` at that point; otherwise skip this step.\n7. **Converge branches** \u2014 Before marking any task complete, classify every touched node/branch into exactly one final state: `merged_to_main`, `pushed_feature_branch_needs_merge`, `blocked_review`, `cleanup_candidate`, or `not_mergeable` (`mesh_status` branchConvergenceSummary). Obvious clean catch-up (ahead 0, behind > 0, upstream fresh, no dirty/stash/submodule issues) \u2192 `mesh_fast_forward_node` dry-run first, execute only when explicitly safe/approved (no agent session needed). A clean worktree branch \u2192 `mesh_refine_node`; when 2+ sibling worktrees share a base, converge them with `mesh_refine_batch` (Rules: sequencing; submodule gitlinks: Rules \u2014 **Submodule reachability**). A task left off the default branch is not complete unless the final report names the follow-up state and next step.\n8. **Clean up** \u2014 Remove worktree nodes via `mesh_remove_node` after their work is merged or no longer needed.\n9. **Report** \u2014 Summarize what was done, what changed, any issues, and the branch convergence state.\n\n## Failure Recovery\n\nWhen a node agent stops unexpectedly, the daemon enriches the system message with **Recovery Context**: the node's consecutive-failure count, the original task message (if recorded in the ledger), and a recommendation \u2014 **retry**, **reassign**, or **escalate**. Read `mesh_task_history` before any retry.\n1. **If \"Retry recommended\"**: Retry a queued task through the queue. Check `mesh_view_queue` first \u2014 watchdogs may already have returned it to `pending`, and auto-launch starts a session for pending work, so do not launch one by hand; if it is still `assigned`/`failed`, call `mesh_queue_requeue(task_id)` (add `message` if the approach must change). Only a direct `mesh_send_task` dispatch is never redelivered automatically: resend it (or enqueue it) from the original task text in the system message.\n2. **If \"Max retries exceeded\"**: Do NOT retry on the same node. Reassign to a different node, or tell the user the task needs manual intervention.\n3. **If no recovery context**: The stop may be intentional (normal completion). Use `mesh_read_chat` once to verify, then move on.\n4. **Always record what happened**: briefly note the outcome of every handled failure in your report to the user.\n5. **Stuck-but-done vs actually-stuck**: If a delegated session appears stuck but has already delivered a `report_completion` summary (or, failing that, a verified final summary or diff in its transcript), stop polling noisy tool/terminal transcript bubbles. Verify with `mesh_git_status` or a checkpoint and proceed to landing.\n6. **Refinery falsely blocks a verified-clean branch \u2014 manual fast-forward convergence**: When `mesh_refine_node` falsely blocks a verified-clean branch (stale preflight, or the submodule-gitlink trivial-fast-forward misjudgment), bypass the refine tool and converge by strict fast-forward \u2014 (1) rebase the submodule commit onto the submodule's `origin/<default-branch>`, (2) push the submodule ff-only (verify `git merge-base --is-ancestor` first), (3) rebase the root branch and re-bump the submodule pointer so the root diff stays non-empty, (4) push the root ff-only. NEVER force-push or reset; abort and report on any non-fast-forward.\n\n## Rules\n\n- **Route, don't implement.** Delegate all code reading, analysis, and execution to node agents. Never read source files or run commands in the coordinator \u2014 keep context lean. Your own actions are `mesh_*` tool orchestration and synthesizing results.\n- **Never use local sub-agents.** Do NOT spawn your runtime's own sub-agents (e.g. Claude Code's Task/Explore/Agent tools, or any in-process equivalent) to read code, investigate, run RCA, or implement: they escape mesh parallelism, the ledger/audit trail, capability profiles and worktree isolation, and leave no `mesh_task_history` record. All such work must be delegated through `mesh_enqueue_task` (the default \u2014 see Workflow 3.a), `mesh_send_task` for a same-session continuation, or the Multi-perspective review recipe.\n- **`mesh_enqueue_task` is the default enqueue surface** (Workflow 3.a). Never fabricate steps just to assemble a batch.\n- **Reuse idle sessions.** For follow-up, retry, commit/push, or cleanup on the same issue, send only the delta to the existing idle session. Start a fresh session only when: (a) branch/worktree isolation is required, (b) the existing session had a dispatch failure or provider mismatch, (c) the transcript/runtime is contaminated or interrupted, (d) the user explicitly asks for a different provider/session, or (e) **the delta is a genuinely NEW subject rather than a continuation** \u2014 a new topic appended to an existing session can be dropped or re-run as the previous task, so give it its own task even when a session sits idle. Continuation of the same issue in an already-idle session is allowed and preferred \u2014 this rule blocks unrelated work interleaved into a live (still-generating) session, not sequential same-issue follow-ups. The test is subject continuity, not timing: an investigation's own fix is the SAME subject (Workflow 3f); an unrelated bug is new even if the session just went idle.\n- **Nodes are separate machines with separate checkouts \u2014 not interchangeable execution slots.** Work done on another node must be committed, pushed, and pulled back before this machine sees it, and RELEASE/DEPLOY runs here \u2014 a round trip each way. So **default to this coordinator's own machine for code changes** (its base node or a worktree cloned from it). A DIFFERENT machine needs one of exactly two reasons: (a) **platform-specific verification** that cannot be done here (win32 PATH/registry, a clean install/uninstall on that OS, that machine's package-manager state); or (b) **parallelizing read-only investigation** across machines. \"That node is idle\" is not a reason.\n- **Match concurrency to task kind.** Independent read-only tasks (`live_debug_readonly`) dispatch all at once up to the read-only cap \u2014 no worktree, no free node needed. Each write task needs its OWN branch workspace (Workflow 3.b0). Ramp up cautiously only when tasks share a base branch or submodule pointer (landing order matters). Never launch a second session onto in-flight work for the same issue, even when `mesh_read_chat` shows no final message yet \u2014 successive stages of one investigation stay in their session (see Workflow 3f).\n- **Classify task difficulty honestly** (Task difficulty section). Never bend difficulty to chase a model; retune slots instead.\n- **Node slots change only with approval.** On a persistent routing misfit (every `difficult` task lands on a cheap-model-only node, or a capability a node clearly has isn't declared), propose with `mesh_node_slots` action `set` (write=false) and present the current-vs-proposed diff with a one-line reason. When a node has NO slots (routing falls back to \"first available provider\") or CLI agents were newly installed, draft with action `propose` instead of hand-writing, and call out its `unknownProvider` / `provisional` slots as guesses. A write is a WHOLESALE replacement: present the `droppedSlots` / `destructive` it reports and apply (write=true) only after the user approves \u2014 never silently.\n- **Respect explicit provider requests.** Map: Claude/Claude Code \u2192 `claude-cli`, Codex \u2192 `codex-cli`, Cursor \u2192 `cursor-cli`, Kimi \u2192 `kimi`, OpenCode \u2192 `opencode`, Grok \u2192 `grok-cli`, Antigravity \u2192 `antigravity-cli`. Never substitute the coordinator's own runtime.\n- **Don't reopen already-done work after a resume.** Before reopening a reported issue after context compaction or session resume, check current git state and recent session context. If another session has already completed the work, continue from the existing diff/commit instead of starting a duplicate investigation.\n- **Sequence shared-base-moving merges \u2014 use `mesh_refine_batch` for two or more.** Merging one worktree advances its siblings' base (especially a shared submodule pointer), turning a clean fast-forward into a diverged rebase. Pass 2+ sibling worktrees to `mesh_refine_batch` (dry-run first) instead of per-node `mesh_refine_node`: it picks a conflict-aware order (non-submodule first, submodule-touching serialized last), each node re-resolves the base and auto-rebases before its own gates, and it avoids the `base_locked` contention concurrent single-node refines cause. It is not a conflict solver \u2014 a real content or submodule conflict lands that node in `blocked_review` for manual resolution while the rest proceeds. Use per-node `mesh_refine_node` only for a single branch or to hand-resolve a node the batch reported blocked.\n- **Submodule reachability = publish-needed.** Before refining/merging root commits that contain submodule gitlink changes, require each submodule commit to be reachable from the configured submodule remote main branch, not merely present on a feature ref or local checkout. On `submodule_reachability_failed` or publish-required evidence, keep the public convergence bucket as `blocked_review`; unless `allowAutoPublishSubmoduleMainCommits` is enabled and Refinery reports a successful non-force publish plus post-publish verification, ask the user for explicit approval to push/publish the unreachable submodule commit(s) to the submodule's default branch, then rerun `mesh_refine_node`. Never merge the root branch before that.\n- **Refinery is config-driven.** `mesh_refine_node` must run validation from `.adhdev/refine.{json,yaml,yml}` or `repo-mesh.refine.*`. Heuristics are scaffolding only.\n- **Honor per-node instructions.** When a node carries a \u{1F4CC} Node instruction in the nodes section, quote its relevant parts verbatim in the task message you send to that node \u2014 don't paraphrase, so the worker sees exactly what the user wrote.\n- **Close missions yourself \u2014 status does not update itself.** When a mission's work is done or abandoned, call `mesh_mission_upsert` with status `completed` or `abandoned` (all-cancelled tasks with no further work \u2192 `abandoned`); never leave a finished mission `active`. Don't wait for `mission_close_candidate` or the idle-active-mission reminder \u2014 they fire only on a genuine idle edge (the reminder also needs an empty pending-event queue and a 5-minute debounce), so on a busy day they arrive late or never. At the end of every dispatch round \u2014 after a batch lands, after a convergence, before you go idle \u2014 call `mesh_mission_list` and close what is done; an `active` mission with no remaining work is a debt.\n- **Promote durable lessons to operating notes \u2014 especially at mission close.** If a mission taught something a future coordinator needs (a provider quirk, a pattern to avoid, a recovery lesson), call `mesh_note` with action `record` FIRST, before closing it \u2014 a completed mission's history is invisible to the next coordinator. Record only when all three hold: (a) a coordinator on another day or another session would act differently knowing it, (b) it cannot be rediscovered from code, config, or `git log`, and (c) it is not a one-off detail specific to this single mission. Operating notes reach the COORDINATOR prompt only \u2014 they are never injected into delegated worker sessions, so a convention workers must follow belongs in a CI gate or the repo's agent instructions file.\n- **Verify a mission goal's claims before dispatching on them.** A goal is a snapshot; the paths, SHAs and claims it cites may be stale. Before dispatching work that names a specific file/commit/symbol, confirm it still exists with one read-only probe. For a deletion/removal task, always add: \"if the target doesn't exist, delete nothing and report that instead.\"\n- **Act on stopped-work notices.** `queue_dependency_blocked` (a task failed or was cancelled; its `depends_on` dependents wait under the default `block` policy): tasks waiting on it never start on their own \u2014 retry the root with `mesh_queue_requeue(task_id, force=true)` (add `message` if the approach must change), or cancel the waiting ids with `mesh_queue_cancel`, including after your own cancel. `queue_dependency_cancelled` (the mesh policy is `cancel`): cancelled work never revives \u2014 re-plan with new `mesh_enqueue_task` steps if the branch is still wanted. Each notice is sent once \u2014 do not poll `mesh_view_queue` waiting for another.\n- **Don't spawn a nested coordinator for simple inspection.** Do not spawn a nested coordinator-like agent for simple inspection tasks. If delegation is required, use explicit provider selection and a fully self-contained, bounded task instruction.\n- **Keep internal traffic out of the transcript.** Internal tool calls, status events, control messages, and debug output must not appear as ordinary user-visible chat transcript content unless explicitly marked user-facing by the producing agent.\n- **Never fabricate tool results.** Always call the actual tool.\n- **Keep the user informed.** One or two sentences after each delegation round.\n";
       }
     });
     function resolveCoordinatorRules(meshBaseWorkspace) {
@@ -60895,9 +60895,9 @@ ${buildSafetyTailSection(coordinatorCliType)}`,
       const rules = [];
       if (policy.requirePreTaskCheckpoint) rules.push("- Create a git checkpoint **before** starting each task");
       if (policy.requirePostTaskCheckpoint) rules.push("- Create a git checkpoint **after** each task completes");
-      if (policy.requireApprovalForPush) rules.push("- **Ask for user approval** before pushing to remote");
+      if (policy.requireApprovalForPush) rules.push("- **Ask for user approval** before pushing to remote (the refine path enforces it)");
       if (policy.allowAutoPublishSubmoduleMainCommits) {
-        rules.push("- Refinery may auto-publish unreachable submodule gitlink commits to submodule origin/main with non-force pushes after validation and patch-equivalence pass");
+        rules.push("- Refinery may auto-publish unreachable submodule gitlink commits to submodule origin/main (non-force, after validation and patch-equivalence pass)");
       }
       rules.push("- **Ask for user approval** before destructive git operations (force push, reset, etc.)");
       const dirtyBehavior = {
@@ -60906,14 +60906,14 @@ ${buildSafetyTailSection(coordinatorCliType)}`,
         checkpoint_then_continue: "- Auto-checkpoint dirty nodes before sending tasks"
       }[policy.dirtyWorkspaceBehavior] || "";
       if (dirtyBehavior) rules.push(dirtyBehavior);
-      rules.push(`- Maximum **${policy.maxParallelTasks}** concurrent WRITE tasks; **${resolveMaxReadonlyParallelTasks(policy.maxParallelTasks)}** concurrent READ-ONLY tasks (\`live_debug_readonly\`) \u2014 read-only work runs under its own, larger cap`);
-      rules.push("- Write tasks are limited to **one active task per node**, so N parallel write tasks need N *separate branch workspaces* \u2014 clone a worktree per task. **Having N nodes in the mesh does not satisfy this**: the constraint is branch isolation, not node count. Base nodes all share one checkout, so two write tasks on two base nodes still collide on the branch. Read-only tasks are exempt and may stack on a node that is already busy. Both caps are ceilings, not targets");
+      rules.push(`- Maximum **${policy.maxParallelTasks}** concurrent WRITE tasks; **${resolveMaxReadonlyParallelTasks(policy.maxParallelTasks)}** concurrent READ-ONLY tasks (\`live_debug_readonly\`, own cap)`);
+      rules.push("- Write tasks are limited to **one active task per node**, so N parallel write tasks need N *separate branch workspaces* \u2014 clone a worktree per task (**Having N nodes in the mesh does not satisfy this**, Workflow 3.b0). Read-only tasks are exempt and may stack on a node that is already busy. Both caps are ceilings, not targets");
       if (policy.coordinatorIdlePushPolicy === "auto_silent_on_dispatch") {
         rules.push("- Delegated-worker completions are **auto-silenced**: the routine idle/completion push for a task you dispatch is suppressed once (approval-needed, failure, and long-running alerts still notify the owner normally)");
       }
       const failurePolicy = policy.onDependencyFailure === "cancel" ? "cancel" : "block";
       rules.push(
-        `- on_dependency_failure: **${failurePolicy}** \u2014 controls downstream tasks when a required worker task fails or is cancelled. \`block\` (default) keeps downstream pending and automatically recovers if the predecessor is retried and later completes. \`cancel\` terminally cancels the dependent branch; it is not revived by predecessor retry.`
+        failurePolicy === "cancel" ? "- on_dependency_failure: **cancel** \u2014 dependents of a failed/cancelled task are cancelled terminally (a retry does not revive them)" : "- on_dependency_failure: **block** (default) \u2014 dependents of a failed/cancelled task stay pending and recover if it is retried and completes"
       );
       return `## Policy
 ${rules.join("\n")}`;
@@ -60959,62 +60959,34 @@ ${rules.join("\n")}`;
 For a multi-perspective review (a design check, a root-cause cross-check, a claim audit), send the same question to 2\u20133 workers via \`mesh_send_task\`, each on a different provider (use \`task_mode: "live_debug_readonly"\`), wait for their \`report_completion\`, then synthesize yourself: what they agree on, where they disagree, and which claims only one worker made \u2014 verify those before acting on them.`;
         TOOLS_SECTION = `## Available Tools
 
-| Tool | Purpose |
-|------|---------|
-| \`mesh_status\` | Nodes' health, git state, sessions, branch convergence |
-| \`mesh_route_preview\` | Explain a hypothetical difficulty/tags/readonly/node route from the current point-in-time capacity + quota-facts snapshot (read-only, fetch-free) |
-| \`mesh_list_nodes\` | List nodes with workspace paths |
-| \`mesh_enqueue_task\` | **DEFAULT enqueue surface.** One task; chain a known follow-up onto it with \`depends_on\` as it becomes known. A dependent waits until every \`depends_on\` task has COMPLETED, then automatically receives an "Upstream results" appendix summarizing its predecessors' completions. If a dependency fails or is cancelled you get a \`queue_dependency_blocked\` notice (retry it with \`mesh_queue_requeue\`, or cancel the waiters). A step that must wait on YOU (an approval, a landing, a deploy) is simply enqueued once you have done that. Idle nodes auto-claim |
-| \`mesh_enqueue_batch\` | Several \`mesh_enqueue_task\` tasks at once, atomically (all insert or none); \`depends_on\` may name batch-local \`ref\`s (forward refs OK). Only for steps that are already known \u2014 never invent steps to fill a batch |
-| \`mesh_view_queue\` | Queue status \u2014 pending/assigned/completed/failed/cancelled, and which pending tasks are blocked by a failed dependency |
-| \`mesh_queue_cancel\` | Cancel a queue task (audit history kept) |
-| \`mesh_queue_requeue\` | Return a task to pending for retry |
-| \`mesh_send_task\` | Push a task straight to a specific node/session |
-| \`mesh_notify_worker\` | Deliver an urgent memo to a BUSY worker mid-task \u2014 piggybacks on the worker's next tool call, no interrupt. Published only while worker MCP is on (\`ADHDEV_WORKER_MCP\`, default on) |
-| \`mesh_mission_upsert\` | Create/update a persistent mission; set completed/abandoned when decided |
-| \`mesh_mission_list\` | All missions with goal/status/progress \u2014 the authority for "what work remains" |
-| \`mesh_launch_session\` | Start a new agent session on a node |
-| \`mesh_read_chat\` | Read recent chat from a delegated session |
-| \`mesh_read_debug\` | Daemon-side chat/parser debug bundle for a session |
-| \`mesh_read_terminal\` | Worker's live raw PTY screen (modal/spinner/unparsed) when parsed chat isn't enough; byte-bounded; may contain secrets |
-| \`mesh_send_keys\` | Inject structured keys (text + ENTER/ESC/CTRL_C/arrows) into a worker PTY for non-approval prompts/pickers; approvals use \`mesh_approve\`; destructive keys are gated |
-| \`mesh_task_history\` | Task ledger \u2014 dispatches, completions, failures |
-| \`mesh_ledger_query\` | Ledger query by kind/since/node/tail (kind/time/node axes) |
-| \`mesh_reconcile_ledger\` | Import missing ledger entries from remote nodes over P2P |
-| \`mesh_review_inbox\` | Local worktree nodes needing human review, with evidence/diff summaries |
-| \`mesh_note\` | **When you learn a durable lesson (always before closing a mission that taught one), or an injected note turns out stale/wrong.** \`action\`: \`record\` (quirk / pattern to avoid / recovery lesson, inherited by every future coordinator) or \`forget\` (retract by id or exact text; tombstone, history kept) |
-| \`mesh_git_status\` | Git status on a specific node |
-| \`mesh_read_node_logs\` | Remote node's daemon log tail over P2P (grep/since; secrets redacted) |
-| \`mesh_fast_forward_node\` | Dry-run / execute an obvious clean fast-forward without an agent session |
-| \`mesh_restart_daemon\` | Update a node's daemon to its channel's latest and restart |
-| \`mesh_checkpoint\` | Create a git checkpoint on a node |
-| \`mesh_approve\` | Approve/reject a pending yes/no tool-consent modal |
-| \`mesh_answer_question\` | Answer a session's multi-choice QUESTION (promptId from agent:waiting_choice; one answer per question) \u2014 never \`mesh_approve\` for questions |
-| \`mesh_list_pending_approvals\` | Approval inbox: every session awaiting a decision (read-only) |
-| \`mesh_create\` | **When the user asks to set up Repo Mesh for a repo with no mesh yet, or before adding/cloning a node.** \`mode\`: \`plan\` (read-only Git-aware discovery + dry-run plan for create / add existing / clone worktree \u2014 run it first) or \`create\` (default; bootstrap a NEW mesh after approval) |
-| \`mesh_add_node\` | Register an existing checkout as a node (worktrees: use \`mesh_clone_node\`) |
-| \`mesh_clone_node\` | Create a worktree node for isolated branch work (auto-launches its session) |
-| \`mesh_refine_node\` | Validate + merge a completed worktree node into its base branch |
-| \`mesh_refine_batch\` | Converge multiple sibling worktrees in one conflict-aware sequential pipeline |
-| \`mesh_refine_plan\` | Dry-run Refinery plan (config source, validation, merge intent) |
-| \`mesh_config\` | **When a refine run reports a config error, when deciding whether a landed change needs a daemon restart, or when the user wants the coordinator prompt committed to the repo.** \`kind\`: \`refine\` / \`change_impact\` (read-only; \`mode\` = schema / validate / suggest) or \`mesh_json\` (gated write of \`.adhdev/mesh.json\`; dry-run default) |
-| \`mesh_remove_node\` | Remove a node (cleans up its worktree) |
-| \`mesh_cleanup_worktree_nodes\` | Plan/execute safe removal of CONVERGED worktree nodes (dry-run default) |
-| \`mesh_cleanup_sessions\` | **When a node is cluttered with finished/stuck worker sessions, or \`mesh_status\` keeps listing stale direct dispatches.** \`mode\`: preserve / stop / delete_stopped / stop_and_delete (a node's session records) or \`prune_stale_direct\` (mesh-wide orphaned direct-dispatch records; dry-run unless \`execute=true\`) |
-| \`mesh_init\` | **When the user asks to onboard (or re-configure) this repo for Repo Mesh.** \`mode\`: \`init\` (default; fresh repo, existing config wins) or \`reinit\` (onboarded repo; overwrite semantics \u2014 present the per-section diff and get approval before \`write=true\`). Dry-run unless \`write=true\` |
-| \`mesh_node_slots\` | **When routing keeps landing work on a poor-fit node, a node has no slots, or CLI agents were installed on a node.** \`action\`: \`list\` (provider/model/thinking + difficulty + tags), \`propose\` (auto-detect installed CLIs and draft a profile; read-only, reports droppedSlots) or \`set\` (dry-run, then apply with \`write=true\` \u2014 wholesale replace, approve the diff first) |
-| \`mesh_coordinator_prompt_append\` | **Only when the user asks for a standing instruction on every coordinator this machine runs.** \`action\`: \`get\` (read this daemon's per-machine APPEND for a CLI type) or \`set\` (write/clear it; append-only \u2014 the base prompt is not replaceable) |`;
+Index only \u2014 each tool's own description carries its parameters and contract.
+- Status: \`mesh_status\`, \`mesh_list_nodes\`, \`mesh_route_preview\`, \`mesh_git_status\`, \`mesh_read_node_logs\`
+- Queue: \`mesh_enqueue_task\` (**DEFAULT enqueue surface.**), \`mesh_enqueue_batch\`, \`mesh_view_queue\`, \`mesh_queue_cancel\`, \`mesh_queue_requeue\`
+- Sessions: \`mesh_send_task\`, \`mesh_launch_session\`, \`mesh_notify_worker\` (memo to a busy worker; published only while worker MCP is on, \`ADHDEV_WORKER_MCP\`, default on), \`mesh_read_chat\`, \`mesh_read_debug\`, \`mesh_read_terminal\`, \`mesh_send_keys\`
+- Approvals: \`mesh_approve\` (yes/no), \`mesh_answer_question\` (multi-choice questions \u2014 never \`mesh_approve\`), \`mesh_list_pending_approvals\`
+- Missions & ledger: \`mesh_mission_upsert\`, \`mesh_mission_list\` (the authority for "what work remains"), \`mesh_task_history\`, \`mesh_ledger_query\`, \`mesh_reconcile_ledger\`, \`mesh_note\`
+- Nodes & convergence: \`mesh_clone_node\`, \`mesh_add_node\`, \`mesh_remove_node\`, \`mesh_checkpoint\`, \`mesh_fast_forward_node\`, \`mesh_refine_node\`, \`mesh_refine_batch\`, \`mesh_refine_plan\`, \`mesh_review_inbox\`, \`mesh_cleanup_worktree_nodes\`, \`mesh_cleanup_sessions\`, \`mesh_restart_daemon\`
+- Setup & config: \`mesh_create\`, \`mesh_init\`, \`mesh_config\`, \`mesh_node_slots\`, \`mesh_coordinator_prompt_append\`
+
+When to reach for the rarely used ones:
+- \`mesh_note\` \u2014 **When** you learn a durable lesson (always before closing a mission that taught one), or an injected note turns out stale/wrong.
+- \`mesh_node_slots\` \u2014 **When** routing keeps landing work on a poor-fit node, a node has no slots, or CLI agents were installed on a node.
+- \`mesh_config\` \u2014 **When** a refine run reports a config error, when deciding whether a landed change needs a daemon restart, or when the user wants the coordinator prompt committed to the repo.
+- \`mesh_create\` \u2014 **When** the user asks to set up Repo Mesh for a repo with no mesh yet, or before adding/cloning a node (\`mode: "plan"\` first).
+- \`mesh_init\` \u2014 **When** the user asks to onboard (or re-configure) this repo for Repo Mesh.
+- \`mesh_cleanup_sessions\` \u2014 **When** a node is cluttered with finished/stuck worker sessions, or \`mesh_status\` keeps listing stale direct dispatches.
+- \`mesh_coordinator_prompt_append\` \u2014 **Only when** the user asks for a standing instruction on every coordinator this machine runs.`;
         WORKERS_SECTION = renderCoordinatorWorkerSection();
         OWNERSHIP_AND_BRIEF_SECTION = [
           "## Path Ownership & Mission Briefs",
           "",
-          "- When two or more `code_change` tasks may touch the same files (parallel worktrees, a fix + its follow-up, a refactor split across tasks), declare `owned_paths` on each \u2014 repo-relative files/dirs it will touch (`src/foo.ts`, or `src/mesh/**` for a subtree). A second `code_change` task whose `owned_paths` overlaps an already-claimed one is refused at claim time (`owned_paths_conflict`) instead of silently racing it \u2014 cheaper than discovering the collision in a merge conflict later. It is opt-in: omitting it performs no check, so declare it whenever a collision is plausible.",
-          "- After a worker reports, check the response for `ownedPathsMismatch` \u2014 it means `touched_files` included paths outside the task's declared `owned_paths`. This is evidence, not a rejection (the completion already committed): read it to decide whether the task drifted in scope or your declaration was too narrow, not to re-run anything.",
-          "- Attach a `brief` (`goal`, `constraints`, `doneCriteria`, `handoffNotes`, `ownedPaths`) to a mission via `mesh_mission_upsert` whenever that mission is meant to outlive this coordinator session \u2014 a long multi-task plan, or one a differently-scoped coordinator (fresh session, different machine) may pick up later. The brief is rendered into every task dispatched under that mission's worker protocol footer, so a worker sees it without a separate lookup; `mesh_mission_list` / a mission upsert response both echo the stored `brief` back to you. A mission you expect to finish within this session does not need one."
+          "- When two or more `code_change` tasks may touch the same files (parallel worktrees, a fix + its follow-up, a split refactor), declare `owned_paths` on each \u2014 repo-relative files/dirs (`src/foo.ts`, or `src/mesh/**` for a subtree). Overlap is refused at claim time (`owned_paths_conflict`, see Workers); omitting it performs no check, so declare it whenever a collision is plausible.",
+          "- `ownedPathsMismatch` in a completion means `touched_files` escaped the declared `owned_paths`. It is evidence, not a rejection (the completion already committed): decide whether the task drifted or your declaration was too narrow \u2014 do not re-run anything.",
+          "- Attach a `brief` (`goal`, `constraints`, `doneCriteria`, `handoffNotes`, `ownedPaths`) via `mesh_mission_upsert` when a mission should outlive this coordinator session (a long plan, or one another coordinator may pick up). It is rendered into every task dispatched under that mission, and `mesh_mission_list` / the upsert response echo it back. A mission that finishes within this session needs none."
         ].join("\n");
         TOOL_EXPOSURE_PREFLIGHT_SECTION = `## Tool Exposure Preflight
 
-Before doing any coordinator work, confirm that the actual callable tool list includes \`mesh_status\` and the other \`mesh_*\` tools from the table above. If this Repo Mesh coordinator prompt is present but the callable \`mesh_*\` tools are missing, the MCP server/tool manifest is stale or not injected yet. Do not substitute terminal/file/git tools, do not inspect or edit the repository directly, and do not continue as a non-mesh local coding agent. Stop immediately and tell the user to run \`/reload-mcp\` or start a fresh coordinator session so ADHDev can reconnect \`adhdev-mesh\`.`;
+Before doing any coordinator work, confirm that the actual callable tool list includes \`mesh_status\` and the other \`mesh_*\` tools indexed above. If this Repo Mesh coordinator prompt is present but the callable \`mesh_*\` tools are missing, the MCP server/tool manifest is stale or not injected yet. Do not substitute terminal/file/git tools, do not inspect or edit the repository directly, and do not continue as a non-mesh local coding agent. Stop immediately and tell the user to run \`/reload-mcp\` or start a fresh coordinator session so ADHDev can reconnect \`adhdev-mesh\`.`;
         QUOTA_SECTION = `## Provider Quota
 
 \`mesh_status\` per-provider quota reads \`7d X% \xB7 5h Y% \xB7 <age>\` \u2014 used% on the weekly (7d) and session (5h) axes; \`\u2014\` = axis not measured.
@@ -61023,25 +60995,7 @@ Before doing any coordinator work, confirm that the actual callable tool list in
 - **To pin a provider, use \`required_tags: ["provider=<type>"]\`.** The \`model\` parameter does NOT fix the provider.`;
         ONBOARDING_SECTION = `## Onboarding / Reinit
 
-When the user asks to **set up / configure / onboard** this repo for Repo Mesh (or to **re-init / reconfigure** an already-onboarded repo), run ONE guided, approval-gated conversation. You draft, the user approves, the daemon writes. Never auto-write a heuristic suggestion without an explicit user approval turn.
-
-**Save scopes \u2014 label every draft with its scope before asking for approval:**
-- **repo-file (commit target)** \u2014 \`.adhdev/refine.json\`, \`.adhdev/worktree_bootstrap.json\`, \`.adhdev/change-impact.json\`, \`.adhdev/mesh.json\`. These are committed to the repository and shared with every machine/contributor.
-- **machine-local** \u2014 node providerPriority (\`~/.adhdev/meshes.json\`). These stay on this machine and are NOT committed.
-
-**Guided sequence:**
-1. **Scan (dry-run)** \u2014 Call \`mesh_init\` (write=false, the default). It returns per-domain suggested configs for refine / worktree_bootstrap / change-impact, a recommended providerPriority, AND \`currentConfig\` \u2014 the currently-saved config per domain (repo files). Nothing is written.
-2. **Present drafts** \u2014 For each domain, show the user the suggested config with its **save scope label** (repo-file vs machine-local). When \`currentConfig\` already has a saved value for a domain (init on a partially-onboarded repo, or any reinit), present a **current-vs-suggested diff**, not just the suggestion.
-3. **Approve \u2192 gated write** \u2014 Only after the user approves, call the matching gated-write tool:
-   - repo \`.adhdev/*\` config files \u2192 \`mesh_init\` with \`write=true\` (and \`overwrite=true\` ONLY for domains the user approved replacing).
-   - \`.adhdev/mesh.json\` (coordinator prompt / operating notes) \u2192 \`mesh_config\` with \`kind="mesh_json"\` (write=true, overwrite only if approved).
-   - providerPriority \u2192 apply via node policy update.
-
-**init vs reinit:**
-- **\`mesh_init\`** (\`mode="init"\`, the default) \u2014 for a fresh, never-onboarded repo. Existing config files are kept (existing-wins) unless the user explicitly approves overwrite. Use for first-time setup.
-- **\`mesh_init\` with \`mode="reinit"\`** \u2014 for a repo that is already onboarded and needs its config refreshed. It re-suggests with OVERWRITE semantics and returns the current-vs-suggested \`currentConfig\` echo. Its first call is a DRY-RUN preview: you MUST present the per-section current-vs-suggested diff and get EXPLICIT per-section approval before re-invoking with write=true. Overwrite is a wholesale replacement, so it silently drops operator hand-edits if you skip the diff \u2014 never do that.
-
-`;
+When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, follow the guided flow in the \`mesh_init\` description: you draft, the user approves, the daemon writes \u2014 label every draft repo-file (commit target) vs machine-local, show a current-vs-suggested diff, and never write without an explicit approval turn (\`mesh_init\` with \`mode="reinit"\` needs per-section approval; \`.adhdev/mesh.json\` goes through \`mesh_config\` with \`kind="mesh_json"\`).`;
         ASSISTANT_RELAY_SECTION = `## Requests relayed by the assistant
 
 - A message may come from the user's assistant relaying the user's request (origin \`assistant\`). Your final message of the turn is relayed back and summarised \u2014 make it self-contained: outcome, current state, what is still pending, and any question you need answered.
@@ -62046,12 +62000,15 @@ When the user asks to **set up / configure / onboard** this repo for Repo Mesh (
     var mesh_coordinator_exports = {};
     __export2(mesh_coordinator_exports, {
       COORDINATOR_INLINE_PROMPT_LIMITS: () => COORDINATOR_INLINE_PROMPT_LIMITS,
+      LEGACY_COORDINATOR_WRAPPER_SENTINELS: () => LEGACY_COORDINATOR_WRAPPER_SENTINELS,
       applyMeshCoordinatorSystemPromptInjection: () => applyMeshCoordinatorSystemPromptInjection,
       buildMeshCoordinatorRegistrationPlan: () => buildMeshCoordinatorRegistrationPlan,
       cleanupCoordinatorAgentFile: () => cleanupCoordinatorAgentFile,
+      coordinatorWrapperSentinels: () => coordinatorWrapperSentinels,
       execUnderPty: () => execUnderPty,
       inspectMeshCoordinatorMcpServerPaths: () => inspectMeshCoordinatorMcpServerPaths,
       resolveAdhdevMcpServerLaunch: () => resolveAdhdevMcpServerLaunch,
+      resolveCoordinatorDisallowedToolsArgs: () => resolveCoordinatorDisallowedToolsArgs,
       resolveCoordinatorInlinePromptLimit: () => resolveCoordinatorInlinePromptLimit,
       resolveMeshCoordinatorSetup: () => resolveMeshCoordinatorSetup,
       resolveWorkerMcpServerLaunch: () => resolveWorkerMcpServerLaunch,
@@ -62356,17 +62313,18 @@ When the user asks to **set up / configure / onboard** this repo for Repo Mesh (
 
 ${systemPrompt}`;
           const rendered = wrapper.replace(/\{prompt\}/g, promptWithNote);
-          const sentinel = wrapper.split("{prompt}")[0].trim();
+          const sentinels = coordinatorWrapperSentinels(wrapper);
+          let owned = injection.owned === true;
           try {
             (0, import_node_fs3.mkdirSync)((0, import_node_path3.dirname)(target), { recursive: true });
             if ((0, import_node_fs3.existsSync)(target)) {
               const existing = (0, import_node_fs3.readFileSync)(target, "utf-8");
-              if (sentinel && existing.includes(sentinel)) {
-                const closing = wrapper.split("{prompt}")[1]?.trim();
-                const safeOpen = sentinel.replace(/[.+^${}()|[\]\\]/g, "\\$&");
-                const safeClose3 = closing ? closing.replace(/[.+^${}()|[\]\\]/g, "\\$&") : "";
-                const re = closing ? new RegExp(`${safeOpen}[\\s\\S]*?${safeClose3}`, "g") : new RegExp(`${safeOpen}[\\s\\S]*$`, "g");
-                (0, import_node_fs3.writeFileSync)(target, existing.replace(re, rendered), "utf-8");
+              if (owned && removeWrapperBlock(existing, sentinels).trim()) {
+                owned = false;
+                LOG.warn("MeshCoordinator", `${target} already exists with content the daemon did not write \u2014 keeping it and injecting between sentinels instead of taking ownership of the file (${ctx.cliType})`);
+              }
+              if (sentinels.open && existing.includes(sentinels.open)) {
+                (0, import_node_fs3.writeFileSync)(target, existing.replace(wrapperBlockPattern(sentinels), () => rendered), "utf-8");
               } else {
                 (0, import_node_fs3.writeFileSync)(target, `${existing}
 
@@ -62376,7 +62334,7 @@ ${rendered}`, "utf-8");
               (0, import_node_fs3.writeFileSync)(target, rendered, "utf-8");
             }
             LOG.info("MeshCoordinator", `Wrote coordinator prompt to ${target} (${ctx.cliType})`);
-            return { contextFilePath: target, contextFileOwned: injection.owned === true };
+            return { contextFilePath: target, contextFileOwned: owned, contextFileSentinels: sentinels };
           } catch (error) {
             LOG.warn("MeshCoordinator", `Could not write ${target}: ${error?.message || error}`);
             return {};
@@ -62386,29 +62344,41 @@ ${rendered}`, "utf-8");
           return {};
       }
     }
-    function stripCoordinatorWrapperFile(filePath2, owned = false) {
-      const OPEN = "<!-- adhdev-mesh-coordinator-prompt -->";
-      const CLOSE = "<!-- /adhdev-mesh-coordinator-prompt -->";
+    function coordinatorWrapperSentinels(wrapper) {
+      const w = wrapper && wrapper.includes("{prompt}") ? wrapper : "{prompt}";
+      const [before, after] = w.split("{prompt}");
+      return { open: (before ?? "").trim(), close: (after ?? "").trim() };
+    }
+    function escapeRegExp(text) {
+      return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }
+    function wrapperBlockPattern(sentinels) {
+      const open = escapeRegExp(sentinels.open);
+      return sentinels.close ? new RegExp(`${open}[\\s\\S]*?${escapeRegExp(sentinels.close)}`, "g") : new RegExp(`${open}[\\s\\S]*$`, "g");
+    }
+    function removeWrapperBlock(text, sentinels) {
+      if (!sentinels.open) return text;
+      return text.replace(wrapperBlockPattern(sentinels), "");
+    }
+    function stripCoordinatorWrapperFile(filePath2, owned = false, sentinels = LEGACY_COORDINATOR_WRAPPER_SENTINELS) {
       try {
         if (!(0, import_node_fs3.existsSync)(filePath2)) return;
         if (owned) {
           try {
-            const fs101 = require("fs");
-            fs101.unlinkSync(filePath2);
+            (0, import_node_fs3.unlinkSync)(filePath2);
           } catch {
           }
           return;
         }
+        if (!sentinels.open) return;
         const existing = (0, import_node_fs3.readFileSync)(filePath2, "utf-8");
-        const openIdx = existing.indexOf(OPEN);
-        if (openIdx < 0) return;
-        const closeIdx = existing.indexOf(CLOSE, openIdx);
-        if (closeIdx < 0) return;
-        const remaining = (existing.slice(0, openIdx) + existing.slice(closeIdx + CLOSE.length)).replace(/^\s*\n+/, "").replace(/\n+\s*$/, "");
+        if (!existing.includes(sentinels.open)) return;
+        const stripped = removeWrapperBlock(existing, sentinels);
+        if (stripped === existing) return;
+        const remaining = stripped.replace(/^\s*\n+/, "").replace(/\n+\s*$/, "");
         if (!remaining.trim()) {
           try {
-            const fs101 = require("fs");
-            fs101.unlinkSync(filePath2);
+            (0, import_node_fs3.unlinkSync)(filePath2);
           } catch {
           }
         } else {
@@ -62416,6 +62386,24 @@ ${rendered}`, "utf-8");
         }
       } catch {
       }
+    }
+    function resolveCoordinatorDisallowedToolsArgs(decl, cliType) {
+      if (!decl || typeof decl !== "object") return [];
+      const flag = typeof decl.flag === "string" ? decl.flag.trim() : "";
+      if (!/^--?[A-Za-z][A-Za-z0-9-]*$/.test(flag)) {
+        LOG.warn("MeshCoordinator", `Ignoring meshCoordinator.disallowedTools for ${cliType}: invalid flag ${JSON.stringify(decl.flag)}`);
+        return [];
+      }
+      const tools = [];
+      for (const raw of Array.isArray(decl.tools) ? decl.tools : []) {
+        const rule = typeof raw === "string" ? raw.trim() : "";
+        if (!rule || /[,\r\n]/.test(rule)) {
+          LOG.warn("MeshCoordinator", `Ignoring meshCoordinator.disallowedTools entry for ${cliType}: ${JSON.stringify(raw)}`);
+          continue;
+        }
+        if (!tools.includes(rule)) tools.push(rule);
+      }
+      return tools.length ? [`${flag}=${tools.join(",")}`] : [];
     }
     function cleanupCoordinatorAgentFile(filePath2) {
       try {
@@ -62502,6 +62490,7 @@ ${rendered}`, "utf-8");
     var DEFAULT_SERVER_NAME;
     var DEFAULT_ADHDEV_MCP_COMMAND;
     var COORDINATOR_INLINE_PROMPT_LIMITS;
+    var LEGACY_COORDINATOR_WRAPPER_SENTINELS;
     var init_mesh_coordinator = __esm2({
       "src/commands/mesh-coordinator.ts"() {
         "use strict";
@@ -62519,6 +62508,10 @@ ${rendered}`, "utf-8");
           win32CmdShell: 8e3,
           linux: 12e4,
           posix: 256e3
+        };
+        LEGACY_COORDINATOR_WRAPPER_SENTINELS = {
+          open: "<!-- adhdev-mesh-coordinator-prompt -->",
+          close: "<!-- /adhdev-mesh-coordinator-prompt -->"
         };
       }
     });
@@ -62570,6 +62563,19 @@ ${rendered}`, "utf-8");
       if (!_registry.delete(sessionId)) return;
       saveRegistry();
       if (!entry) return;
+      const recorded = entry.injection?.contextFile;
+      if (recorded && typeof recorded.path === "string" && recorded.path) {
+        try {
+          const { stripCoordinatorWrapperFile: stripCoordinatorWrapperFile2 } = (init_mesh_coordinator(), __toCommonJS2(mesh_coordinator_exports));
+          stripCoordinatorWrapperFile2(
+            recorded.path,
+            recorded.owned === true,
+            typeof recorded.open === "string" ? { open: recorded.open, close: typeof recorded.close === "string" ? recorded.close : "" } : void 0
+          );
+        } catch {
+        }
+        return;
+      }
       const workspace = entry.workspace;
       const owned = entry.injection?.owned === true;
       const target = entry.injection?.mode === "context_file" && typeof entry.injection.target === "string" ? entry.injection.target : "";
@@ -78228,6 +78234,30 @@ ${cleanBody}`;
                     minLength: 1
                   }
                 },
+                disallowedTools: {
+                  description: "Tools the coordinator session must not have, enforced by the CLI's own permission system (route, don't implement: no local sub-agents; no destructive git). Rendered at coordinator launch only as ONE argv `<flag>=<tools joined by ','>`, e.g. claude-cli `--disallowedTools=Agent,Bash(git reset --hard*)`. Each entry uses the CLI's own rule syntax and must not contain ',' or a line break. Daemons that predate this field ignore it.",
+                  type: "object",
+                  additionalProperties: false,
+                  required: [
+                    "flag",
+                    "tools"
+                  ],
+                  properties: {
+                    flag: {
+                      type: "string",
+                      pattern: "^--?[A-Za-z][A-Za-z0-9-]*$"
+                    },
+                    tools: {
+                      type: "array",
+                      minItems: 1,
+                      items: {
+                        type: "string",
+                        minLength: 1,
+                        pattern: "^[^,\\r\\n]+$"
+                      }
+                    }
+                  }
+                },
                 delegatedWorkerIsolation: {
                   description: "Provider-declared launch isolation for coordinator-spawned worker sessions. Keeps worker-only sessions from inheriting coordinator MCP/tools/config.",
                   type: "object",
@@ -83743,6 +83773,80 @@ ${asText(streams.stderr)}
           removalFailures: 0,
           leaseConflicts: 0
         };
+      }
+    });
+    var coordinator_injection_cleanup_exports = {};
+    __export2(coordinator_injection_cleanup_exports, {
+      INJECTION_CLEANUP_MAX_WAIT_MS: () => INJECTION_CLEANUP_MAX_WAIT_MS,
+      INJECTION_CLEANUP_MIN_SETTLE_MS: () => INJECTION_CLEANUP_MIN_SETTLE_MS,
+      hasInjectionFiles: () => hasInjectionFiles,
+      localSessionReadyProbe: () => localSessionReadyProbe,
+      removeInjectionFiles: () => removeInjectionFiles,
+      scheduleInjectionCleanup: () => scheduleInjectionCleanup
+    });
+    function hasInjectionFiles(effect) {
+      return !!(effect?.contextFilePath || effect?.agentFilePath);
+    }
+    function removeInjectionFiles(effect, reason, label) {
+      if (effect.contextFilePath) {
+        stripCoordinatorWrapperFile(effect.contextFilePath, effect.contextFileOwned === true, effect.contextFileSentinels);
+        LOG.info("MeshCoordinator", `Stripped wrapper from ${effect.contextFilePath} (${label}, ${reason})`);
+      }
+      if (effect.agentFilePath) cleanupCoordinatorAgentFile(effect.agentFilePath);
+    }
+    function scheduleInjectionCleanup(effect, opts) {
+      if (!effect || !hasInjectionFiles(effect)) return Promise.resolve();
+      if (!opts.launched) {
+        removeInjectionFiles(effect, "launch failed", opts.label);
+        return Promise.resolve();
+      }
+      const minSettleMs = opts.minSettleMs ?? INJECTION_CLEANUP_MIN_SETTLE_MS;
+      const maxWaitMs = Math.max(minSettleMs, opts.maxWaitMs ?? INJECTION_CLEANUP_MAX_WAIT_MS);
+      const pollMs = opts.pollMs ?? INJECTION_CLEANUP_POLL_MS;
+      const startedAt = Date.now();
+      return new Promise((resolve39) => {
+        const tick = () => {
+          const elapsed = Date.now() - startedAt;
+          let ready2 = true;
+          if (opts.isReady) {
+            try {
+              ready2 = opts.isReady();
+            } catch {
+              ready2 = true;
+            }
+          }
+          if (ready2 || elapsed >= maxWaitMs) {
+            removeInjectionFiles(effect, ready2 ? "session ready" : `session not ready after ${maxWaitMs}ms`, opts.label);
+            resolve39();
+            return;
+          }
+          const t2 = setTimeout(tick, pollMs);
+          t2.unref?.();
+        };
+        const t = setTimeout(tick, minSettleMs);
+        t.unref?.();
+      });
+    }
+    function localSessionReadyProbe(adapters, sessionId) {
+      if (!adapters || !sessionId) return void 0;
+      return () => {
+        const adapter = adapters.get(sessionId);
+        if (!adapter) return true;
+        if (typeof adapter.isReady === "function" && adapter.isReady()) return true;
+        return adapter.currentStatus === "idle";
+      };
+    }
+    var INJECTION_CLEANUP_MIN_SETTLE_MS;
+    var INJECTION_CLEANUP_MAX_WAIT_MS;
+    var INJECTION_CLEANUP_POLL_MS;
+    var init_coordinator_injection_cleanup = __esm2({
+      "src/commands/coordinator-injection-cleanup.ts"() {
+        "use strict";
+        init_logger();
+        init_mesh_coordinator();
+        INJECTION_CLEANUP_MIN_SETTLE_MS = 5e3;
+        INJECTION_CLEANUP_MAX_WAIT_MS = 6e4;
+        INJECTION_CLEANUP_POLL_MS = 250;
       }
     });
     function looksLikeBase64Secret(run2) {
@@ -125578,6 +125682,16 @@ ${marker}`,
         `mcp_servers.${serverName}.args=${JSON.stringify(server.args)}`
       ];
     }
+    function contextFileRegistryRecord(effect) {
+      if (!effect?.contextFilePath) return {};
+      return {
+        contextFile: {
+          path: effect.contextFilePath,
+          owned: effect.contextFileOwned === true,
+          ...effect.contextFileSentinels ? { open: effect.contextFileSentinels.open, close: effect.contextFileSentinels.close } : {}
+        }
+      };
+    }
     function isWorkspaceLocalPath(configPath, workspace) {
       const resolvedConfig = (0, import_path26.resolve)(configPath);
       const resolvedWorkspace = (0, import_path26.resolve)(workspace);
@@ -125878,9 +125992,7 @@ ${ptyResult.output.slice(-2e3)}`);
             }
             const cliCmdArgs = [...codexMcpOverrideArgs];
             const cliCmdEnv = {};
-            let cliCmdContextFilePath;
-            let cliCmdContextFileOwned = false;
-            let cliCmdAgentFilePath;
+            let cliCmdInjectionFiles;
             if (cliCmdSystemPrompt) {
               const { applyMeshCoordinatorSystemPromptInjection: applyMeshCoordinatorSystemPromptInjection2 } = await Promise.resolve().then(() => (init_mesh_coordinator(), mesh_coordinator_exports));
               const effect = applyMeshCoordinatorSystemPromptInjection2(
@@ -125892,65 +126004,56 @@ ${ptyResult.output.slice(-2e3)}`);
                 LOG.error("MeshCoordinator", effect.error);
                 return { success: false, code: effect.errorCode, error: effect.error, meshId, cliType, workspace };
               }
-              cliCmdContextFilePath = effect.contextFilePath;
-              cliCmdContextFileOwned = effect.contextFileOwned === true;
-              cliCmdAgentFilePath = effect.agentFilePath;
+              cliCmdInjectionFiles = effect;
             }
             const cliCmdProviderLaunchArgs = providerMeta?.meshCoordinator?.launchArgs;
             if (Array.isArray(cliCmdProviderLaunchArgs)) {
               cliCmdArgs.push(...cliCmdProviderLaunchArgs.filter((a) => typeof a === "string" && a.trim()));
             }
-            const cliCmdLaunch = await ctx.execute("launch_cli", {
-              cliType,
-              dir: workspace,
-              cliArgs: cliCmdArgs.length > 0 ? cliCmdArgs : void 0,
-              env: Object.keys(cliCmdEnv).length > 0 ? cliCmdEnv : void 0,
-              settings: {
-                meshCoordinatorFor: meshId,
-                ...assistantStamp,
-                // AUTOAPPROVE-COORD: the coordinator is a mesh session too, so it
-                // must inherit the workspace's declarative auto-approve MODE
-                // (.adhdev/mesh.json providerDefaults.autoApproveModes) exactly like
-                // a delegated worker does at dispatch. Reuse the already-loaded repo
-                // config so the launch args carry --permission-mode. NB: we deliberately
-                // do NOT stamp launchedByCoordinator here — that flag is a WORKER-only
-                // dangerous-mode downgrade signal (auto-approve-modes.ts); the coordinator
-                // is the owner, not a worker. The dangerous gate is already applied inside
-                // delegatedWorkerAutoApproveSettings via mesh/node policy.
-                ...delegatedWorkerAutoApproveSettings(
-                  effectiveMesh?.policy,
-                  coordinatorNode?.policy,
-                  providerMeta,
-                  repoMeshConfigLoad.config,
-                  cliType,
-                  autoApproveModeOverride,
-                  legacyAutoApproveOverride
-                )
-              },
-              ...initialModel ? { initialModel } : {},
-              ...initialThinkingLevel ? { initialThinkingLevel } : {},
-              ...coordinatorLaunchProvenance
-            }, "mesh", { inProcess: true });
-            if (cliCmdLaunch?.success && cliCmdContextFilePath) {
-              const stripPath = cliCmdContextFilePath;
-              const stripOwned = cliCmdContextFileOwned;
-              setTimeout(() => {
-                void Promise.resolve().then(() => (init_mesh_coordinator(), mesh_coordinator_exports)).then(({ stripCoordinatorWrapperFile: stripCoordinatorWrapperFile2 }) => {
-                  stripCoordinatorWrapperFile2(stripPath, stripOwned);
-                  LOG.info("MeshCoordinator", `Stripped wrapper from ${stripPath} after launch settle (cli_command)`);
-                }).catch(() => {
-                });
-              }, 5e3);
+            cliCmdArgs.push(...resolveCoordinatorDisallowedToolsArgs(providerMeta?.meshCoordinator?.disallowedTools, cliType));
+            const { scheduleInjectionCleanup: scheduleInjectionCleanup3, localSessionReadyProbe: localSessionReadyProbe3 } = await Promise.resolve().then(() => (init_coordinator_injection_cleanup(), coordinator_injection_cleanup_exports));
+            let cliCmdLaunch;
+            try {
+              cliCmdLaunch = await ctx.execute("launch_cli", {
+                cliType,
+                dir: workspace,
+                cliArgs: cliCmdArgs.length > 0 ? cliCmdArgs : void 0,
+                env: Object.keys(cliCmdEnv).length > 0 ? cliCmdEnv : void 0,
+                settings: {
+                  meshCoordinatorFor: meshId,
+                  ...assistantStamp,
+                  // AUTOAPPROVE-COORD: the coordinator is a mesh session too, so it
+                  // must inherit the workspace's declarative auto-approve MODE
+                  // (.adhdev/mesh.json providerDefaults.autoApproveModes) exactly like
+                  // a delegated worker does at dispatch. Reuse the already-loaded repo
+                  // config so the launch args carry --permission-mode. NB: we deliberately
+                  // do NOT stamp launchedByCoordinator here — that flag is a WORKER-only
+                  // dangerous-mode downgrade signal (auto-approve-modes.ts); the coordinator
+                  // is the owner, not a worker. The dangerous gate is already applied inside
+                  // delegatedWorkerAutoApproveSettings via mesh/node policy.
+                  ...delegatedWorkerAutoApproveSettings(
+                    effectiveMesh?.policy,
+                    coordinatorNode?.policy,
+                    providerMeta,
+                    repoMeshConfigLoad.config,
+                    cliType,
+                    autoApproveModeOverride,
+                    legacyAutoApproveOverride
+                  )
+                },
+                ...initialModel ? { initialModel } : {},
+                ...initialThinkingLevel ? { initialThinkingLevel } : {},
+                ...coordinatorLaunchProvenance
+              }, "mesh", { inProcess: true });
+            } catch (launchError) {
+              void scheduleInjectionCleanup3(cliCmdInjectionFiles, { launched: false, label: "coordinator cli_command" });
+              throw launchError;
             }
-            if (cliCmdLaunch?.success && cliCmdAgentFilePath) {
-              const agentPath = cliCmdAgentFilePath;
-              setTimeout(() => {
-                void Promise.resolve().then(() => (init_mesh_coordinator(), mesh_coordinator_exports)).then(({ cleanupCoordinatorAgentFile: cleanupCoordinatorAgentFile2 }) => {
-                  cleanupCoordinatorAgentFile2(agentPath);
-                }).catch(() => {
-                });
-              }, 5e3);
-            }
+            void scheduleInjectionCleanup3(cliCmdInjectionFiles, {
+              launched: cliCmdLaunch?.success === true,
+              isReady: localSessionReadyProbe3(ctx.deps.cliManager?.adapters, cliCmdLaunch?.sessionId || cliCmdLaunch?.id),
+              label: "coordinator cli_command"
+            });
             if (!cliCmdLaunch?.success) {
               return { success: false, error: cliCmdLaunch?.error || "Failed to launch CLI session" };
             }
@@ -125969,7 +126072,8 @@ ${ptyResult.output.slice(-2e3)}`);
                 injection: cliCmdInjectionDecl ? {
                   mode: cliCmdInjectionDecl.mode,
                   target: "flag" in cliCmdInjectionDecl ? cliCmdInjectionDecl.flag : "name" in cliCmdInjectionDecl ? cliCmdInjectionDecl.name : "path" in cliCmdInjectionDecl ? cliCmdInjectionDecl.path : void 0,
-                  ..."owned" in cliCmdInjectionDecl ? { owned: cliCmdInjectionDecl.owned === true } : {}
+                  ..."owned" in cliCmdInjectionDecl ? { owned: cliCmdInjectionDecl.owned === true } : {},
+                  ...contextFileRegistryRecord(cliCmdInjectionFiles)
                 } : void 0
               });
             }
@@ -126106,9 +126210,7 @@ ${ptyResult.output.slice(-2e3)}`);
           }
           const cliArgs = [];
           const launchEnv = {};
-          let autoImportContextFilePath;
-          let autoImportContextFileOwned = false;
-          let autoImportAgentFilePath;
+          let autoImportInjectionFiles;
           if (systemPrompt) {
             const { applyMeshCoordinatorSystemPromptInjection: applyMeshCoordinatorSystemPromptInjection2 } = await Promise.resolve().then(() => (init_mesh_coordinator(), mesh_coordinator_exports));
             const effect = applyMeshCoordinatorSystemPromptInjection2(
@@ -126120,14 +126222,13 @@ ${ptyResult.output.slice(-2e3)}`);
               LOG.error("MeshCoordinator", effect.error);
               return { success: false, code: effect.errorCode, error: effect.error, meshId, cliType, workspace };
             }
-            autoImportContextFilePath = effect.contextFilePath;
-            autoImportContextFileOwned = effect.contextFileOwned === true;
-            autoImportAgentFilePath = effect.agentFilePath;
+            autoImportInjectionFiles = effect;
           }
           const autoImportProviderLaunchArgs = providerMeta?.meshCoordinator?.launchArgs;
           if (Array.isArray(autoImportProviderLaunchArgs)) {
             cliArgs.push(...autoImportProviderLaunchArgs.filter((a) => typeof a === "string" && a.trim()));
           }
+          cliArgs.push(...resolveCoordinatorDisallowedToolsArgs(providerMeta?.meshCoordinator?.disallowedTools, cliType));
           if (cliType === "claude-cli") {
             cliArgs.push("--mcp-config", mcpConfigPath);
             const serverName = coordinatorSetup.serverName;
@@ -126135,51 +126236,43 @@ ${ptyResult.output.slice(-2e3)}`);
               cliArgs.push(`--allowedTools=mcp__${serverName}`);
             }
           }
-          const launchResult = await ctx.execute("launch_cli", {
-            cliType,
-            dir: workspace,
-            cliArgs: cliArgs.length > 0 ? cliArgs : void 0,
-            env: Object.keys(launchEnv).length > 0 ? launchEnv : void 0,
-            settings: {
-              meshCoordinatorFor: meshId,
-              ...assistantStamp,
-              // AUTOAPPROVE-COORD: inherit the workspace declarative auto-approve MODE
-              // for the coordinator session (see the cli_command branch for the full
-              // rationale). No launchedByCoordinator stamp — the coordinator is the owner.
-              ...delegatedWorkerAutoApproveSettings(
-                effectiveMesh?.policy,
-                coordinatorNode?.policy,
-                providerMeta,
-                repoMeshConfigLoad.config,
-                cliType,
-                autoApproveModeOverride,
-                legacyAutoApproveOverride
-              )
-            },
-            ...initialModel ? { initialModel } : {},
-            ...initialThinkingLevel ? { initialThinkingLevel } : {},
-            ...coordinatorLaunchProvenance
-          }, "mesh", { inProcess: true });
-          if (launchResult?.success && autoImportContextFilePath) {
-            const stripPath = autoImportContextFilePath;
-            const stripOwned = autoImportContextFileOwned;
-            setTimeout(() => {
-              void Promise.resolve().then(() => (init_mesh_coordinator(), mesh_coordinator_exports)).then(({ stripCoordinatorWrapperFile: stripCoordinatorWrapperFile2 }) => {
-                stripCoordinatorWrapperFile2(stripPath, stripOwned);
-                LOG.info("MeshCoordinator", `Stripped wrapper from ${stripPath} after launch settle (auto_import)`);
-              }).catch(() => {
-              });
-            }, 5e3);
+          const { scheduleInjectionCleanup: scheduleInjectionCleanup2, localSessionReadyProbe: localSessionReadyProbe2 } = await Promise.resolve().then(() => (init_coordinator_injection_cleanup(), coordinator_injection_cleanup_exports));
+          let launchResult;
+          try {
+            launchResult = await ctx.execute("launch_cli", {
+              cliType,
+              dir: workspace,
+              cliArgs: cliArgs.length > 0 ? cliArgs : void 0,
+              env: Object.keys(launchEnv).length > 0 ? launchEnv : void 0,
+              settings: {
+                meshCoordinatorFor: meshId,
+                ...assistantStamp,
+                // AUTOAPPROVE-COORD: inherit the workspace declarative auto-approve MODE
+                // for the coordinator session (see the cli_command branch for the full
+                // rationale). No launchedByCoordinator stamp — the coordinator is the owner.
+                ...delegatedWorkerAutoApproveSettings(
+                  effectiveMesh?.policy,
+                  coordinatorNode?.policy,
+                  providerMeta,
+                  repoMeshConfigLoad.config,
+                  cliType,
+                  autoApproveModeOverride,
+                  legacyAutoApproveOverride
+                )
+              },
+              ...initialModel ? { initialModel } : {},
+              ...initialThinkingLevel ? { initialThinkingLevel } : {},
+              ...coordinatorLaunchProvenance
+            }, "mesh", { inProcess: true });
+          } catch (launchError) {
+            void scheduleInjectionCleanup2(autoImportInjectionFiles, { launched: false, label: "coordinator auto_import" });
+            throw launchError;
           }
-          if (launchResult?.success && autoImportAgentFilePath) {
-            const agentPath = autoImportAgentFilePath;
-            setTimeout(() => {
-              void Promise.resolve().then(() => (init_mesh_coordinator(), mesh_coordinator_exports)).then(({ cleanupCoordinatorAgentFile: cleanupCoordinatorAgentFile2 }) => {
-                cleanupCoordinatorAgentFile2(agentPath);
-              }).catch(() => {
-              });
-            }, 5e3);
-          }
+          void scheduleInjectionCleanup2(autoImportInjectionFiles, {
+            launched: launchResult?.success === true,
+            isReady: localSessionReadyProbe2(ctx.deps.cliManager?.adapters, launchResult?.sessionId || launchResult?.id),
+            label: "coordinator auto_import"
+          });
           if (!launchResult?.success) {
             return { success: false, error: launchResult?.error || "Failed to launch CLI session" };
           }
@@ -126199,7 +126292,8 @@ ${ptyResult.output.slice(-2e3)}`);
               injection: autoImportInjectionDecl ? {
                 mode: autoImportInjectionDecl.mode,
                 target: "flag" in autoImportInjectionDecl ? autoImportInjectionDecl.flag : "name" in autoImportInjectionDecl ? autoImportInjectionDecl.name : "path" in autoImportInjectionDecl ? autoImportInjectionDecl.path : void 0,
-                ..."owned" in autoImportInjectionDecl ? { owned: autoImportInjectionDecl.owned === true } : {}
+                ..."owned" in autoImportInjectionDecl ? { owned: autoImportInjectionDecl.owned === true } : {},
+                ...contextFileRegistryRecord(autoImportInjectionFiles)
               } : void 0
             });
           }
@@ -128335,17 +128429,6 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         };
       });
     }
-    function scheduleInjectionCleanup(effect) {
-      if (!effect.contextFilePath && !effect.agentFilePath) return;
-      const t = setTimeout(() => {
-        void Promise.resolve().then(() => (init_mesh_coordinator(), mesh_coordinator_exports)).then(({ stripCoordinatorWrapperFile: stripCoordinatorWrapperFile2, cleanupCoordinatorAgentFile: cleanupCoordinatorAgentFile2 }) => {
-          if (effect.contextFilePath) stripCoordinatorWrapperFile2(effect.contextFilePath, effect.contextFileOwned === true);
-          if (effect.agentFilePath) cleanupCoordinatorAgentFile2(effect.agentFilePath);
-        }).catch(() => {
-        });
-      }, 5e3);
-      t.unref?.();
-    }
     var launchAssistant = async (ctx, args) => {
       const registry = getAssistantRegistry();
       const entry = registry.read();
@@ -128412,19 +128495,30 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       cliArgs.push(...mcp.cliArgs);
       const model = str9(args?.model);
       const thinkingLevel = str9(args?.thinkingLevel);
-      const launched = await ctx.execute("launch_cli", {
-        cliType,
-        dir: workspace,
-        cliArgs: cliArgs.length ? cliArgs : void 0,
-        env: Object.keys(launchEnv).length ? launchEnv : void 0,
-        settings: assistantSessionSettings(approval.settings),
-        assistantSessionKey,
-        ...model ? { initialModel: model, modelSource: "user" } : {},
-        ...thinkingLevel ? { initialThinkingLevel: thinkingLevel, thinkingLevelSource: "user" } : {},
-        launchedBy: "assistant"
-      }, "ipc", { inProcess: true });
-      if (launched?.success) scheduleInjectionCleanup(injection);
+      const { scheduleInjectionCleanup: scheduleInjectionCleanup2, localSessionReadyProbe: localSessionReadyProbe2 } = await Promise.resolve().then(() => (init_coordinator_injection_cleanup(), coordinator_injection_cleanup_exports));
+      let launched;
+      try {
+        launched = await ctx.execute("launch_cli", {
+          cliType,
+          dir: workspace,
+          cliArgs: cliArgs.length ? cliArgs : void 0,
+          env: Object.keys(launchEnv).length ? launchEnv : void 0,
+          settings: assistantSessionSettings(approval.settings),
+          assistantSessionKey,
+          ...model ? { initialModel: model, modelSource: "user" } : {},
+          ...thinkingLevel ? { initialThinkingLevel: thinkingLevel, thinkingLevelSource: "user" } : {},
+          launchedBy: "assistant"
+        }, "ipc", { inProcess: true });
+      } catch (e) {
+        void scheduleInjectionCleanup2(injection, { launched: false, label: "assistant" });
+        throw e;
+      }
       const sessionId = str9(launched?.sessionId) || str9(launched?.id);
+      void scheduleInjectionCleanup2(injection, {
+        launched: launched?.success === true && !!sessionId,
+        isReady: localSessionReadyProbe2(ctx.deps.cliManager?.adapters, sessionId),
+        label: "assistant"
+      });
       if (!launched?.success || !sessionId) {
         return fail2(str9(launched?.code) || "assistant_launch_failed", str9(launched?.error) || "Failed to launch the assistant session", { cliType, workspace });
       }
@@ -164506,25 +164600,25 @@ var MESH_QUEUE_REQUEUE_TOOL = {
 // src/tools/mesh-tool-schemas-session.ts
 var MESH_SEND_TASK_TOOL = {
   name: "mesh_send_task",
-  description: "Legacy push-based task assignment. Enqueues a task specifically targeted at a given node. The node will pull it immediately if idle.",
+  description: "Push a task straight to a specific node/session, bypassing the queue \u2014 an idle target runs it immediately. Use for a same-session continuation or handoff, or to force a node; otherwise prefer mesh_enqueue_task. A direct dispatch is never redelivered automatically after a failure.",
   inputSchema: {
     type: "object",
     properties: {
       node_id: { type: "string", description: "Target node ID (from mesh_list_nodes)." },
-      session_id: { type: "string", description: "Agent session ID on the target node. Optional: when omitted the task is dispatched to the node (a remote node scopes it to its own session for this workspace; a local node routes it through the queue pull)." },
+      session_id: { type: "string", description: "Optional. Omitted: a remote node picks its own session for this workspace; a local node routes it via the queue pull." },
       message: { type: "string", description: "Natural-language task to send to the agent." },
       input: MESH_TASK_INPUT_SCHEMA,
-      task_mode: { ...enumOf(MESH_TASK_MODES), description: "Optional task-mode contract. live_debug_readonly rejects obvious write/commit/push/deploy/destructive instructions before dispatch." },
-      readonly: { type: "boolean", description: "Optional read-only axis (orthogonal to task_mode). When true, runs without write isolation, counted under the read-only cap, and rejects write/commit/push/deploy/destructive instructions like live_debug_readonly. Composable with any task_mode." },
-      owned_paths: { type: "array", items: { type: "string" }, description: "H1 (path ownership); same semantics as mesh_enqueue_task. Repo-relative files/dirs this code_change task will touch (trailing /** claims the subtree). Optional/opt-in; not a routing input \u2014 recorded for the code_change overlap check against other in-flight tasks and for report_completion.touched_files comparison." },
-      mission_id: { type: "string", description: "Mission this task belongs to (mesh_mission record id, full/exact). When set, attributed to the mission task aggregates exactly like mesh_enqueue_task, including terminal completion. Omit for unattributed. An unresolvable id is REJECTED before dispatch (mission_not_found), never silently attached." },
-      difficulty: { ...enumOf(MESH_TASK_DIFFICULTIES), description: "REQUIRED task execution difficulty. On a direct dispatch the target node/session is already chosen, so this does not ROUTE \u2014 it is recorded so scheduling analytics, mission aggregates and failure-recovery relaunch see the same axis a queued task carries (a recovery relaunch inherits it from the ledger)." },
+      task_mode: { ...enumOf(MESH_TASK_MODES), description: "Optional. live_debug_readonly rejects obvious write/commit/push/deploy/destructive instructions before dispatch." },
+      readonly: { type: "boolean", description: "Read-only axis (any task_mode): no write isolation, read-only cap, rejects write instructions." },
+      owned_paths: { type: "array", items: { type: "string" }, description: "As mesh_enqueue_task: repo-relative files/dirs (trailing /** = subtree) this code_change task touches; opt-in, not routing \u2014 feeds the overlap check and the touched_files comparison." },
+      mission_id: { type: "string", description: "Full/exact mission id (attributes the task and its completion); unresolvable \u2192 REJECTED (mission_not_found)." },
+      difficulty: { ...enumOf(MESH_TASK_DIFFICULTIES), description: "REQUIRED. Does not route here; recorded for analytics, mission aggregates and recovery relaunch (inherited from the ledger)." },
       delivery_mode: {
         ...enumOf(MESH_DELIVERY_MODES),
-        description: "How to deliver when the target session is BUSY. Default 'when_idle': queued, auto-delivered once the session goes idle \u2014 never disturbs the running turn. 'interrupt' ABORTS the in-flight turn via the provider's own stop control (Ctrl-C, or ESC on antigravity-cli), then delivers once settled \u2014 THE WORK IN PROGRESS IS DISCARDED, including partial edits. Use only when the running turn is going wrong and finishing it is worse than losing it. If the provider cannot interrupt (no stop control declared), the dispatch is REJECTED rather than silently falling back to when_idle. Has no effect on an idle session (delivered immediately either way)."
+        description: "Busy target only. Default 'when_idle': delivered once idle, turn undisturbed. 'interrupt' ABORTS the turn (provider stop control: Ctrl-C, ESC on antigravity-cli) then delivers \u2014 work in progress, partial edits included, is DISCARDED; only when finishing the turn is worse than losing it. No stop control \u2192 REJECTED, never silently downgraded."
       },
-      allow_stale_node: { type: "boolean", description: "GIT-GATE: a non-readonly direct dispatch is refused (dirty_workspace / node_stale_behind_upstream) when the target node's git telemetry shows an uncommitted working tree or a branch behind its upstream beyond the mesh's autoFastForward.maxBehind \u2014 same predicates as the claim-time/auto-launch gates. Set true to dispatch anyway (e.g. a task whose job IS to fix the dirty/stale tree). No effect on a readonly dispatch. Default: false." },
-      allow_quota_exhausted: { type: "boolean", description: "QUOTA-GATE: a direct dispatch NAMING a session_id is refused when that session's provider is measurably quota-exhausted on the target node \u2014 same predicate the queue claim path applies before pulling a pending task onto an idle session. A stale/missing/unmarked snapshot fails OPEN (dispatch proceeds); only a fresh measured block refuses. Set true to dispatch anyway (e.g. testing the provider's own quota error). Default: false. No effect on a sessionless dispatch that ends up in the queue \u2014 the claim-time gate covers that." }
+      allow_stale_node: { type: "boolean", description: "Default false. Non-readonly dispatch to a dirty tree or one behind upstream beyond autoFastForward.maxBehind is refused (dirty_workspace / node_stale_behind_upstream, the claim-gate predicates); true when the task IS fixing that tree." },
+      allow_quota_exhausted: { type: "boolean", description: "Default false. A dispatch naming session_id is refused when that provider is measurably quota-exhausted (queue-claim predicate; stale/missing data fails OPEN); true e.g. to test its quota error. Sessionless dispatch: the claim gate applies instead." }
     },
     // session_id is deliberately NOT required: meshSendTask supports a sessionless
     // dispatch (node-scoped on the worker) and the required-arg gate enforces this list.
@@ -164657,20 +164751,20 @@ var MESH_FAST_FORWARD_NODE_TOOL = {
 };
 var MESH_RESTART_DAEMON_TOOL = {
   name: "mesh_restart_daemon",
-  description: `Restart a mesh node's daemon, optionally updating it first \u2014 the same path as the dashboard "preview update" button. No agent session is launched. Idle-gated: a node with an active session (generating / waiting_approval / starting) is refused with code "blocking_sessions" so an in-flight turn is never interrupted \u2014 see self_only/force/when_idle to override. On Windows any restart/upgrade terminates all hosted sessions regardless of options; on POSIX hosted sessions survive a plain restart and rebind on next boot. The response compares meshAttachedDaemon (the daemon that answered status immediately before the command) with restartTargetDaemon (the daemon process that accepted the lifecycle operation). daemonMismatch/trackMismatch=true and trackWarning surface a split but do not block the operation; null means an older/unreachable daemon did not report enough identity.`,
+  description: `Restart (default: update, then restart) a node's daemon \u2014 the dashboard "preview update" path; no agent session. Idle-gated: an active session (generating / waiting_approval / starting) refuses it with "blocking_sessions" (see self_only / when_idle / force). Windows: any restart/upgrade ends all hosted sessions; POSIX: they survive a plain restart and rebind. daemonMismatch/trackMismatch/trackWarning flag (without blocking) that meshAttachedDaemon (answered status) differs from restartTargetDaemon (took the operation); null = old/unreachable daemon.`,
   inputSchema: {
     type: "object",
     properties: {
-      node_id: { type: "string", description: "Target node ID \u2014 the daemon that owns this node is restarted (and updated, in upgrade mode)." },
-      channel: { type: "string", enum: ["stable", "preview"], description: "DEPRECATED and ignored: the release channel is a build-time identity of the installed binary, so an upgrade always targets the daemon's own build track. Kept optional so older callers do not break; a conflicting value is reported back as channelOverride rather than silently honored." },
-      allow_downgrade: { type: "boolean", description: 'Permit an upgrade whose resolved target is OLDER than the running daemon (upgrade mode only). Default false: refused with code "downgrade_refused". Set true only for a deliberate rollback.' },
-      mode: { type: "string", enum: ["upgrade", "restart"], description: "upgrade (default): update to the latest published version on the daemon's build track, then restart; already-latest is a no-op (no restart, returns alreadyLatest:true). restart: pure re-spawn, no reinstall \u2014 restarts even when already latest, with much shorter downtime; use to reset wedged daemon state (memory leaks, zombie sessions)." },
-      force: { type: "boolean", description: "Bypass the idle-gate entirely. Destructive: in-flight turns are killed and the in-memory pendingOutboundQueue is permanently lost. Default false." },
-      self_only: { type: "boolean", description: "Waive only this mesh's own coordinator session when it blocks the restart (the structural self-deadlock: the coordinator is always generating while it calls). Other sessions still refuse. Default false." },
-      when_idle: { type: "boolean", description: "If blocked, schedule the restart to run automatically once the daemon goes idle (safest \u2014 no pendingOutboundQueue loss). Every response reports the schedule under deferredRestart; expires after timeout_ms (default 30 min). Default false." },
-      cancel_when_idle: { type: "boolean", description: "Cancel a previously scheduled when_idle restart on the owning daemon." },
-      timeout_ms: { type: "number", description: "Expiry for a when_idle schedule in milliseconds (default 1800000 = 30 min, max 6 h)." },
-      kill_session_host: { type: "boolean", description: "Hard refresh: also stop the session-host process, destroying ALL hosted CLI sessions on the machine (this is what Windows already does on every upgrade). Default false." }
+      node_id: { type: "string", description: "Node whose owning daemon is restarted." },
+      channel: { type: "string", enum: ["stable", "preview"], description: "DEPRECATED, ignored (an upgrade targets the daemon's own build track); a conflict is echoed as channelOverride." },
+      allow_downgrade: { type: "boolean", description: 'Upgrade: allow an OLDER target, for a deliberate rollback (default false \u2192 "downgrade_refused").' },
+      mode: { type: "string", enum: ["upgrade", "restart"], description: "upgrade (default): latest on the daemon's build track, then restart; already latest = no-op (alreadyLatest:true). restart: re-spawn only, shorter downtime \u2014 resets wedged state (leaks, zombie sessions)." },
+      force: { type: "boolean", description: "Bypass the idle-gate. Destructive: kills in-flight turns, loses the in-memory pendingOutboundQueue." },
+      self_only: { type: "boolean", description: "Waive only this mesh's own coordinator session (always generating while it calls); others still block." },
+      when_idle: { type: "boolean", description: "If blocked, run once the daemon is idle (safest, no queue loss); shown as deferredRestart, expires after timeout_ms." },
+      cancel_when_idle: { type: "boolean", description: "Cancel a scheduled when_idle restart on the owning daemon." },
+      timeout_ms: { type: "number", description: "when_idle expiry in ms (default 1800000 = 30 min, max 6 h)." },
+      kill_session_host: { type: "boolean", description: "Hard refresh: also stop the session-host, ending ALL hosted CLI sessions on the machine (as Windows always does)." }
     },
     required: ["node_id"]
   }
@@ -164691,28 +164785,28 @@ var MESH_CHECKPOINT_TOOL = {
 // src/tools/mesh-tool-schemas-admin.ts
 var MESH_MISSION_UPSERT_TOOL = {
   name: "mesh_mission_upsert",
-  description: "Create or update a persistent mission record so the plan survives coordinator restarts. Optional \u2014 tasks do not require a mission; use one when you want the plan tracked as a durable, named unit of work. Recommended for multi-task work: create a mission first, then attach every task to it with mission_id (mesh_enqueue_task, or a top-level mission_id on mesh_enqueue_batch, which applies to every entry). Update status to completed/abandoned when the outcome is decided. Progress is derived from task statuses \u2014 there is no separate progress field. Single mission: pass title (and optionally mission_id to update an existing one). Bulk status transition (e.g. one-time stale cleanup): pass mission_ids (array) + status to apply that status to many missions at once; title/goal are ignored and a per-mission result array is returned. mission_ids takes precedence over mission_id when both are given.",
+  description: "Create or update a persistent mission so a plan survives coordinator restarts. Optional \u2014 tasks need no mission; recommended for multi-task work: create it first, then attach each task with mission_id (mesh_enqueue_task, or one top-level mission_id on mesh_enqueue_batch for every entry). Set completed/abandoned when the outcome is decided. Progress is derived from task statuses (no progress field). Single: title (+ mission_id to update). Bulk status change (e.g. stale cleanup): mission_ids + status \u2014 title/goal ignored, per-mission results returned; mission_ids wins over mission_id.",
   inputSchema: {
     type: "object",
     properties: {
-      mission_id: { type: "string", description: "Full mission id (exact match) to update. Omit to create a new mission \u2014 do not guess/truncate an id to force a create. An id that does not resolve to an existing mission is REJECTED (mission_not_found), never silently created under that id \u2014 use mesh_mission_list to get a valid full id. Ignored when mission_ids is provided." },
+      mission_id: { type: "string", description: "Full/exact id to update (from mesh_mission_list); omit to create. Unknown/truncated ids are REJECTED (mission_not_found), never created." },
       mission_ids: {
         type: "array",
         items: { type: "string" },
-        description: "Bulk mode: apply `status` to every listed mission id in one call (stale cleanup). Requires `status`. Returns a per-mission { id, ok, status?, error? } result array. Overrides mission_id/title/goal."
+        description: "Bulk mode: apply `status` (required) to every listed id; returns per-mission { id, ok, status?, error? }. Overrides mission_id/title/goal."
       },
-      title: { type: "string", description: "Short mission title. Required to create/update a single mission; ignored in bulk (mission_ids) mode." },
-      goal: { type: "string", description: "Free-text mission goal/definition of done. Ignored in bulk (mission_ids) mode." },
-      status: { type: "string", enum: ["active", "paused", "completed", "abandoned"], description: "Mission lifecycle status. Defaults to active on create. Required in bulk (mission_ids) mode." },
+      title: { type: "string", description: "Short title. Required for a single create/update; ignored in bulk." },
+      goal: { type: "string", description: "Free-text goal/definition of done (the short summary mesh_mission_list shows). Ignored in bulk." },
+      status: { type: "string", enum: ["active", "paused", "completed", "abandoned"], description: "Defaults to active on create. Required in bulk." },
       brief: {
         type: "object",
-        description: "H2 (mission brief). Optional structured brief, rendered into every task dispatched under this mission's worker-protocol footer so a freshly launched worker sees it without a separate lookup. {goal (required \u2014 a brief with no goal is dropped, not stored empty), constraints?, doneCriteria?, handoffNotes?, ownedPaths?} \u2014 each of the four optional fields is a string array; done_criteria/handoff_notes/owned_paths snake_case aliases are also accepted though not published. Ignored in bulk (mission_ids) mode. When a non-empty brief is dropped (no goal, or a field of the wrong type), the response carries `briefIgnored: {reason, field?}` instead of silently discarding it. This is DISTINCT from the top-level `goal` field: `goal` is the mission record's short free-text summary shown in mesh_mission_list; `brief` is the longer structured packet a worker actually reads.",
+        description: "Structured packet rendered into every task dispatched under this mission (unlike `goal`, which is the list summary): {goal (required \u2014 no goal = dropped), constraints?, doneCriteria?, handoffNotes?, ownedPaths?} string arrays (snake_case aliases accepted). Ignored in bulk. A dropped brief returns `briefIgnored: {reason, field?}`.",
         properties: {
-          goal: { type: "string", description: "What this mission is trying to accomplish. Required for the brief to be stored \u2014 an object with no goal is treated as no brief." },
-          constraints: { type: "array", items: { type: "string" }, description: 'Hard constraints a worker must respect, e.g. "do not touch daemon-core", "no npm install".' },
-          doneCriteria: { type: "array", items: { type: "string" }, description: "How to know the mission is actually done." },
+          goal: { type: "string", description: "Required for the brief to be stored." },
+          constraints: { type: "array", items: { type: "string" }, description: 'Hard constraints a worker must respect, e.g. "do not touch daemon-core".' },
+          doneCriteria: { type: "array", items: { type: "string" }, description: "How to know the mission is done." },
           handoffNotes: { type: "array", items: { type: "string" }, description: "Standing notes for whoever picks up mission work next." },
-          ownedPaths: { type: "array", items: { type: "string" }, description: "Paths this mission's tasks collectively own \u2014 surfaced to workers, not itself enforced (per-task owned_paths on mesh_enqueue_task/mesh_enqueue_batch/mesh_send_task is what claim-time enforcement reads)." }
+          ownedPaths: { type: "array", items: { type: "string" }, description: "Shown to workers, not enforced (claims check per-task owned_paths)." }
         }
       }
     },
@@ -164757,33 +164851,33 @@ var MESH_APPROVE_TOOL = {
 };
 var MESH_ANSWER_QUESTION_TOOL = {
   name: "mesh_answer_question",
-  description: 'Answer a multi-choice QUESTION (AskUserQuestion) a delegated agent session is waiting on. This is the counterpart to mesh_approve: a QUESTION (surfaced as an agent:waiting_choice event / status "awaiting_choice") is NOT a yes/no approval \u2014 it offers labelled options (optionally multi-select, optionally a freeform "Type something") and must be answered here, never with mesh_approve. Supply the promptId from the waiting_choice event and `answers`: an array with one entry per question, in question order. For a single-question prompt, the simplest valid form is answers: ["<exact label>"] or answers: [<1-based index>] \u2014 the bare label/index IS the entry. Each entry may instead be an object { select, freeform? } (questionId optional; entries match by position when omitted): `select` is an option label (string), a 1-based index (number), or an array of labels/indices for a multi-select question; a freeform answer sets `freeform` to the text instead of `select`. The daemon drives the correct keystrokes into the provider TUI to submit the selection. RETURN CONTRACT: success:true means the answer RESOLVED against the session\'s active prompt and the submit keystrokes were DISPATCHED (submitted:true) \u2014 it does not prove the TUI finished redrawing, so confirm the session left awaiting_choice on a later status read. An unmatched option label, a stale promptId, or a provider that cannot answer questions returns success:false with the live option list in activePrompt \u2014 re-answer using one of those labels or its 1-based index.',
+  description: 'Answer a multi-choice QUESTION (AskUserQuestion \u2014 agent:waiting_choice / status "awaiting_choice"; labelled options, maybe multi-select or freeform "Type something"). Not a yes/no approval: never mesh_approve. Pass the event\'s promptId and `answers`, one entry per question in order \u2014 e.g. ["<exact label>"] or [<1-based index>]; the daemon keys the selection into the TUI. success:true = resolved and submit keys dispatched (submitted:true), not proof the TUI redrew \u2014 confirm the session left awaiting_choice later. An unmatched label, stale promptId or a provider that cannot answer returns success:false with live options in activePrompt; re-answer with one.',
   inputSchema: {
     type: "object",
     properties: {
-      node_id: { type: "string", description: "Target node ID (from the waiting_choice event / mesh_list_nodes)." },
-      session_id: { type: "string", description: "Agent session ID that is awaiting the question answer." },
-      promptId: { type: "string", description: "The InteractivePrompt promptId from the agent:waiting_choice event. Ensures the answer matches the active prompt." },
+      node_id: { type: "string", description: "Target node ID (from the waiting_choice event)." },
+      session_id: { type: "string", description: "Session awaiting the answer." },
+      promptId: { type: "string", description: "promptId from the agent:waiting_choice event; must match the active prompt." },
       answers: {
         type: "array",
-        description: "One entry per question in the prompt (in question order). Each entry answers a single question by selecting option label(s)/index(es), or by supplying freeform text. An entry may be a bare option label (string) or 1-based index (number) \u2014 equivalent to { select: <that value> } \u2014 or the full { questionId?, select?, freeform? } object.",
+        description: "One entry per question, in order: a bare option label (string) or 1-based index (number), or { questionId?, select?, freeform? }.",
         items: {
           oneOf: [
-            { type: "string", description: "Shorthand: the exact option label to select." },
-            { type: "number", description: "Shorthand: the 1-based option index to select." },
+            { type: "string", description: "Shorthand: the exact option label." },
+            { type: "number", description: "Shorthand: the 1-based option index." },
             {
               type: "object",
               properties: {
-                questionId: { type: "string", description: "Optional question id from the prompt payload. When omitted, entries are matched to the prompt questions by array position." },
+                questionId: { type: "string", description: "Optional; entries match questions by position when omitted." },
                 select: {
-                  description: "The chosen option(s): an option label (string), a 1-based option index (number), or an array of labels/indices for a multi-select question.",
+                  description: "Option label, 1-based index, or an array of them for a multi-select question.",
                   oneOf: [
                     { type: "string" },
                     { type: "number" },
                     { type: "array", items: { type: ["string", "number"] } }
                   ]
                 },
-                freeform: { type: "string", description: 'Freeform text answer (for a "Type something" option). Mutually exclusive with select.' }
+                freeform: { type: "string", description: 'Freeform text (a "Type something" option); instead of select.' }
               }
             }
           ]
@@ -164803,28 +164897,28 @@ var MESH_LIST_PENDING_APPROVALS_TOOL = {
 };
 var MESH_CREATE_TOOL = {
   name: "mesh_create",
-  description: 'Bootstrap a brand-new mesh for a Git repository, or (mode="plan") dry-run the onboarding plan first. Mirrors `adhdev mesh create <name>`. A mesh groups one repo\'s workspaces/nodes so the coordinator can delegate work across them.\n\u2022 mode="plan" \u2014 READ-ONLY Git-aware discovery + dry-run plan for a workspace path: Git root, normalized remotes/repo identity, current/default branch, main checkout vs linked worktree, dirty/conflict state, existing mesh/node membership. Returns a typed create+onboarding, add-existing-workspace, or clone-new-worktree plan with suggested .adhdev configs. Never fetches, writes config, or creates a mesh/node/branch/worktree. Run it before creating a mesh, adding a node (mesh_add_node) or cloning a worktree (mesh_clone_node).\n\u2022 mode="create" (default) \u2014 a persistent write: run mode="plan" first and obtain explicit user approval. Pass workspace to auto-detect Git identity/branch/worktree through the read-only planner, or pass repo_remote_url / repo_identity explicitly. add_current:true also registers a node in the same call (workspace if given, else the daemon\'s cwd). Returns mesh_id (and node_id with add_current).\nBOOT-GATE: reachable in STANDARD mode (adhdev mcp, no --repo-mesh) \u2014 the no-mesh-yet bootstrap context \u2014 and in mesh mode (where create makes a SEPARATE additional mesh). `adhdev mcp --repo-mesh <id>` refuses to start without an existing meshId, so the flow is: standard-mode MCP \u2192 mesh_create \u2192 mesh_add_node \u2192 relaunch as `adhdev mcp --repo-mesh <returned mesh_id>`.',
+  description: 'Bootstrap a new mesh (one repo\'s nodes; = `adhdev mesh create <name>`) or dry-run the onboarding plan.\n\u2022 mode="plan" \u2014 READ-ONLY Git-aware discovery of a workspace (git root, repo identity, branches, main checkout vs linked worktree, dirty/conflict state, existing mesh/node membership) \u2192 a typed create+onboarding / add-existing / clone-new-worktree plan with suggested .adhdev configs. Never fetches, writes config, or creates a mesh/node/branch/worktree. Run before creating a mesh, mesh_add_node or mesh_clone_node.\n\u2022 mode="create" (default) \u2014 persistent write: plan first, then explicit user approval. Identity from workspace auto-detection or repo_remote_url / repo_identity; add_current:true also registers a node. Returns mesh_id (+ node_id).\nBOOT-GATE: works in STANDARD mode (adhdev mcp, no --repo-mesh) and in mesh mode (creates a SEPARATE mesh); `adhdev mcp --repo-mesh <id>` needs an existing mesh, so: standard-mode MCP \u2192 mesh_create \u2192 mesh_add_node \u2192 relaunch with `--repo-mesh <mesh_id>`.',
   inputSchema: {
     type: "object",
     properties: {
       mode: {
         type: "string",
         enum: ["create", "plan"],
-        description: "create (default) = create the mesh; plan = read-only onboarding discovery/dry-run plan. Each mode accepts only its own arguments \u2014 see the tool description."
+        description: "create (default) or plan (read-only discovery). Each mode takes only its own arguments."
       },
-      name: { type: "string", description: 'create: human-readable mesh name (e.g. "adhdev-main"). Trimmed, max 100 chars. Required for create.' },
-      repo_remote_url: { type: "string", description: "create: optional explicit Git remote URL. When omitted with repo_identity, identity is read-only auto-detected from workspace." },
-      repo_identity: { type: "string", description: "create: optional explicit normalized repo identity. Wins over repo_remote_url; when both are omitted, workspace is auto-detected." },
-      default_branch: { type: "string", description: 'create: default branch for the repo (e.g. "main"). Optional; used as the merge/convergence target.' },
-      add_current: { type: "boolean", description: "create: also register a node in this same call (parity with CLI --add-current). Uses `workspace` if provided, otherwise the daemon's current working directory." },
-      workspace: { type: "string", description: "Absolute workspace path on the daemon. plan: the checkout to inspect (required). create: used for Git auto-detection and, with add_current:true, node registration; defaults to the daemon cwd." },
-      mesh_id: { type: "string", description: "plan: optional existing mesh to validate against. In mesh mode defaults to the active mesh." },
+      name: { type: "string", description: 'create (required): mesh name, e.g. "adhdev-main"; trimmed, max 100 chars.' },
+      repo_remote_url: { type: "string", description: "create: optional explicit Git remote URL (else auto-detected from workspace)." },
+      repo_identity: { type: "string", description: "create: optional normalized repo identity; wins over repo_remote_url." },
+      default_branch: { type: "string", description: 'create: optional default branch (merge/convergence target), e.g. "main".' },
+      add_current: { type: "boolean", description: "create: also register a node (CLI --add-current) at `workspace`, else the daemon cwd." },
+      workspace: { type: "string", description: "Absolute path on the daemon. plan (required): checkout to inspect. create: detection + add_current node (default: daemon cwd)." },
+      mesh_id: { type: "string", description: "plan: optional existing mesh to validate against (mesh mode: the active mesh)." },
       operation: {
         type: "string",
         enum: ["auto", "add_existing", "clone_worktree", "create_mesh"],
-        description: "plan: planning intent. auto chooses create+onboard when no compatible mesh exists, otherwise add existing. clone_worktree requires branch and a clean source."
+        description: "plan intent; auto = create+onboard if no compatible mesh, else add existing. clone_worktree needs branch + clean source."
       },
-      branch: { type: "string", description: "plan: new branch name when operation=clone_worktree." }
+      branch: { type: "string", description: "plan: new branch name for operation=clone_worktree." }
     }
   }
 };
@@ -164942,43 +165036,43 @@ var MESH_LEDGER_QUERY_TOOL = {
 };
 var MESH_NOTE_TOOL = {
   name: "mesh_note",
-  description: "Record or retract a durable operating note for this mesh \u2014 a runtime-accumulated lesson every future coordinator inherits. Provider-neutral: it persists in the mesh ledger and is injected into every coordinator's system prompt at launch (codex, antigravity, claude alike). Select with `action` (REQUIRED):\n\u2022 record \u2014 when you learn something durable (a provider quirk, a pattern to avoid, a recovery lesson), and before closing a mission that taught one. Keep each note to one concrete, reusable fact; not for transient task status (use missions/checkpoints).\n\u2022 forget \u2014 when an injected note is stale or wrong. Appends a tombstone so the note(s) stop riding into future prompts; history is preserved (append-only). Target by note_id (exact) or by exact text; provide at least one.",
+  description: "Record or retract a durable operating note: a lesson persisted in the mesh ledger and injected into every future coordinator's system prompt at launch, whatever its provider. `action` (REQUIRED):\n\u2022 record \u2014 when you learn something durable (provider quirk, pattern to avoid, recovery lesson), and before closing a mission that taught one. One concrete, reusable fact per note; not for transient task status (use missions/checkpoints).\n\u2022 forget \u2014 when an injected note is stale or wrong: appends a tombstone so it stops riding into prompts (append-only, history kept). Target by note_id or exact text.",
   inputSchema: {
     type: "object",
     properties: {
       action: {
         type: "string",
         enum: ["record", "forget"],
-        description: "record = add a note; forget = retract one. Required. Each action accepts only its own arguments \u2014 see the tool description."
+        description: "record = add a note; forget = retract one. Each action takes only its own arguments."
       },
-      text: { type: "string", description: "record: the note \u2014 one concrete, reusable operating fact, phrased so a future coordinator can act on it without this conversation (required for record). forget: retract every note whose trimmed text exactly matches this string (use when you do not have the id)." },
+      text: { type: "string", description: "record (required): the fact, actionable without this conversation. forget: retract notes whose trimmed text matches exactly." },
       category: {
         type: "string",
         enum: ["provider_quirk", "pattern_to_avoid", "recovery_lesson"],
-        description: "record: optional classification. Also governs default read-side retention: recovery_lesson ages out of the injected prompt after ~14 days, pattern_to_avoid after ~30, provider_quirk and uncategorized never age out. The ledger entry is always kept for audit."
+        description: "record: sets prompt retention \u2014 recovery_lesson ~14 d, pattern_to_avoid ~30 d, provider_quirk/none never expire (ledger keeps all)."
       },
       pinned: {
         type: "boolean",
-        description: "record: pin so it ALWAYS rides into every coordinator prompt \u2014 never dropped by TTL expiry and kept ahead of unpinned notes when the injection cap is hit."
+        description: "record: ALWAYS ride into every prompt \u2014 never TTL-expired, kept ahead of unpinned notes at the injection cap."
       },
       ttl_days: {
         type: "number",
-        description: "record: optional read-side lifespan in days, resolved to an absolute expiry at record time; after it an UNPINNED note is hidden from the prompt (kept in the ledger). Overrides the category default. Ignored when pinned."
+        description: "record: prompt lifespan (absolute expiry fixed at record time) after which an unpinned note is hidden; overrides the category default."
       },
       expiresAt: {
         type: "string",
-        description: "record: optional explicit ISO-8601 expiry, an alternative to ttl_days (expires_at, snake_case, is also accepted though not published). Wins over ttl_days. Ignored when pinned."
+        description: "record: ISO-8601 expiry (or expires_at); wins over ttl_days. Both ignored when pinned."
       },
       supersedes: {
         type: "string",
-        description: "record: optional version-supersede \u2014 the note_id of an earlier note this one replaces, OR a subject_key shared with earlier notes. Matching earlier LIVE notes are hidden from the prompt (ledger kept). Pinned notes are never hidden by supersede."
+        description: "record: earlier note_id or shared subject_key to replace \u2014 those LIVE notes are hidden (not pinned ones; ledger kept)."
       },
       subject_key: {
         type: "string",
-        description: "record: optional stable subject key grouping notes about the same subject. Drives supersede targeting and read-side folding (same category AND subject_key collapse to one injected entry, newest kept). When omitted, folding falls back to a leading [tag] bracket in the text."
+        description: "record: drives supersede and folding (same category + subject_key \u2192 newest one injected); default = leading [tag] in text."
       },
-      note_id: { type: "string", description: "forget: the ledger note id to retract (full/exact \u2014 no prefix matching). Returned by record as noteId, or visible in mesh_task_history. An id that matches no live note returns success:false, code:note_not_found \u2014 do not guess/truncate an id." },
-      reason: { type: "string", description: "forget: optional short reason, recorded on the tombstone for audit." }
+      note_id: { type: "string", description: "forget: exact note id (record's noteId; also in mesh_task_history) \u2014 no prefix match; unknown \u2192 note_not_found." },
+      reason: { type: "string", description: "forget: optional reason, kept on the tombstone." }
     },
     required: ["action"]
   }
@@ -165031,53 +165125,53 @@ var MESH_REFINE_BATCH_TOOL = {
 };
 var MESH_CONFIG_TOOL = {
   name: "mesh_config",
-  description: 'Repo Mesh repo-config helper. Select the config family with `kind` (REQUIRED):\n\u2022 kind="refine" \u2014 the Refinery config (read-only). Use when a refine run reports a config error or you need to know which validation commands will run. `mode` (REQUIRED): schema = the config JSON schema and supported repo-local locations (the validation authority; heuristic command detection is suggestions-only), no other args; validate = validate a node/workspace config without running validation or merging (optional node_id, optional inline `config`); suggest = scaffold a config from project context/package scripts (never executed until saved; optional node_id). Never runs validation or merges \u2014 that is mesh_refine_node / mesh_refine_plan.\n\u2022 kind="change_impact" \u2014 the Change Impact config (read-only, declarative, never executed): which package/file changes between the live daemon build and workspace HEAD need a daemon rebuild/restart vs a web-only redeploy vs nothing. Use when deciding whether a landed change needs a daemon restart. Same `mode` values: schema; validate (loads .adhdev/change-impact.{json,yaml,yml} or repo-mesh-change-impact.* unless inline `config`); suggest (web-* \u2192 web-only, others \u2192 daemon-runtime, docs/license markers \u2192 non-runtime; review and save before it takes effect).\n\u2022 kind="mesh_json" \u2014 gated WRITE of `.adhdev/mesh.json` (the repo-committed coordinator prompt override/append + declarative config) from the machine-local mesh entry. Use when the user wants the coordinator prompt/config committed to the repo. Dry-run by default (write=false), never clobbers an existing file unless overwrite=true, validates before writing. Overwrite silently replaces the file: present a current-vs-suggested diff and get explicit approval first. REPO-COMMITTED scope; takes no `mode`.',
+  description: 'Repo-config helper; `kind` (REQUIRED) picks the family, each taking only its own arguments:\n\u2022 kind="refine" \u2014 Refinery config, read-only (use on a refine config error, or to see which validation commands run). `mode` (REQUIRED): schema = JSON schema + supported repo-local locations (the validation authority; heuristic detection only suggests); validate = check a config without running validation or merging; suggest = scaffold from project scripts (never executed until saved). Validation+merge itself is mesh_refine_node.\n\u2022 kind="change_impact" \u2014 read-only, declarative, never executed: which changes between the live daemon build and workspace HEAD need a daemon restart vs a web-only redeploy vs nothing (use when deciding whether a landed change needs a restart). Same modes; validate loads .adhdev/change-impact.{json,yaml,yml} or repo-mesh-change-impact.*; suggest maps web-* \u2192 web-only, others \u2192 daemon-runtime, docs/license \u2192 non-runtime, effective once saved.\n\u2022 kind="mesh_json" \u2014 gated WRITE of `.adhdev/mesh.json` (repo-committed coordinator prompt override/append + config) from the machine-local mesh entry. REPO-COMMITTED scope, no `mode`; dry-run by default, validated, never clobbers without overwrite=true \u2014 show a current-vs-suggested diff and get explicit approval first.',
   inputSchema: {
     type: "object",
     properties: {
       kind: {
         type: "string",
         enum: ["refine", "change_impact", "mesh_json"],
-        description: "Which config family (required). Each kind accepts only its own arguments \u2014 see the tool description."
+        description: "Config family (required)."
       },
       mode: {
         type: "string",
         enum: ["schema", "validate", "suggest"],
-        description: "refine / change_impact only (required for them): schema (no other params), validate (optional node_id, optional inline config), suggest (optional node_id)."
+        description: "refine / change_impact (required): schema (no other args) | validate | suggest."
       },
-      node_id: { type: "string", description: "Optional node/workspace; defaults to the first mesh node. refine / change_impact: the config to load (validate) or context source (suggest), ignored by schema. mesh_json: whose workspace .adhdev/mesh.json is written (`workspace` wins when both are given)." },
-      config: { type: "object", description: "refine / change_impact, mode=validate only: inline config object to validate instead of loading from the repo." },
-      write: { type: "boolean", description: "mesh_json: when true, persist .adhdev/mesh.json to the repo (commit target). Defaults false (dry-run preview)." },
-      overwrite: { type: "boolean", description: "mesh_json: when true, replace an existing .adhdev/mesh.json. Defaults false (never clobber an existing repo mesh.json)." },
-      workspace: { type: "string", description: "mesh_json: optional workspace path whose .adhdev/mesh.json is written. Defaults to the resolved node_id node's workspace." }
+      node_id: { type: "string", description: "Default: first mesh node. Config/context source (refine, change_impact) or target workspace (mesh_json; `workspace` wins)." },
+      config: { type: "object", description: "mode=validate: inline config to validate instead of the repo file." },
+      write: { type: "boolean", description: "mesh_json: persist .adhdev/mesh.json (commit target). Default false (dry-run)." },
+      overwrite: { type: "boolean", description: "mesh_json: replace an existing .adhdev/mesh.json. Default false." },
+      workspace: { type: "string", description: "mesh_json: workspace path to write into; defaults to node_id's workspace." }
     },
     required: ["kind"]
   }
 };
 var MESH_INIT_TOOL = {
   name: "mesh_init",
-  description: 'Mesh onboarding for a git project: detects installed CLI providers, suggests all three repo `.adhdev/*` config families \u2014 Refinery (.adhdev/refine.json), worktree bootstrap (.adhdev/worktree_bootstrap.json) AND change-impact (.adhdev/change-impact.json) \u2014 optionally writes them, and recommends a node providerPriority. Also returns `currentConfig` (the saved config per domain: repo files) so you can present a current-vs-suggested diff. Suggestions never execute until saved; providerPriority is a recommendation, not auto-applied. Always dry-run unless write=true. Select with `mode`:\n\u2022 mode="init" (default) \u2014 a fresh, never-onboarded repo. Never overwrites an existing config unless overwrite=true.\n\u2022 mode="reinit" \u2014 re-onboard an ALREADY-initialized repo whose config needs refreshing: same suggest\u2192validate\u2192gated-write engine with overwrite defaulting to TRUE and a reinit contract in the response. Overwrite is a WHOLESALE replacement, so it must NOT silently drop operator hand-edits: the first call (write=false) is a DRY-RUN \u2014 present the per-section current-vs-suggested diff, get EXPLICIT per-section approval, then re-invoke with write=true.',
+  description: 'Mesh onboarding for a git repo: detects installed CLI providers, suggests the three repo `.adhdev/*` config families \u2014 Refinery (refine.json), worktree bootstrap (worktree_bootstrap.json) and change-impact (change-impact.json) \u2014 optionally writes them, and recommends a node providerPriority (never auto-applied). Returns `currentConfig` (the saved config per domain). Suggestions never execute until saved; always dry-run unless write=true.\n\u2022 mode="init" (default) \u2014 a fresh repo; never overwrites an existing config unless overwrite=true.\n\u2022 mode="reinit" \u2014 refresh an already-onboarded repo: same engine, overwrite defaults to TRUE. Overwrite is a WHOLESALE replacement that would silently drop operator hand-edits, so the first call (write=false) is a DRY-RUN: present the per-section current-vs-suggested diff and get EXPLICIT per-section approval before write=true.\nGUIDED FLOW (one approval-gated conversation \u2014 you draft, the user approves, the daemon writes; never write a heuristic suggestion without an explicit approval turn): (1) call with write=false; (2) present each domain\'s draft labelled with its save scope \u2014 repo-file (commit target: .adhdev/refine.json, worktree_bootstrap.json, change-impact.json, mesh.json; shared with every machine) or machine-local (node providerPriority in ~/.adhdev/meshes.json, not committed) \u2014 as a current-vs-suggested diff whenever currentConfig already holds a value; (3) after approval write: repo .adhdev/* files \u2192 mesh_init write=true (overwrite=true only for approved domains); .adhdev/mesh.json \u2192 mesh_config kind="mesh_json" write=true; providerPriority \u2192 the node policy update.',
   inputSchema: {
     type: "object",
     properties: {
       mode: {
         type: "string",
         enum: ["init", "reinit"],
-        description: "init (default) = first-time onboarding, existing config wins; reinit = refresh an onboarded repo, overwrite defaults to true."
+        description: "init (default) = first-time onboarding, existing config wins; reinit = refresh, overwrite defaults to true."
       },
-      node_id: { type: "string", description: "Optional node/workspace to onboard. Defaults to the first mesh node with a workspace." },
-      write: { type: "boolean", description: "When true, persist the suggested configs to disk. Defaults false (dry-run preview only \u2014 for reinit, the preview surfaces the current-vs-suggested diff; approve per-section first)." },
-      overwrite: { type: "boolean", description: "Replace an existing config file. Defaults false for mode=init (never clobber) and true for mode=reinit; pass false with reinit to fall back to existing-wins." }
+      node_id: { type: "string", description: "Optional node/workspace to onboard; defaults to the first mesh node with a workspace." },
+      write: { type: "boolean", description: "Persist the suggested configs. Default false (dry-run; for reinit it surfaces the diff to approve per section)." },
+      overwrite: { type: "boolean", description: "Replace existing config files. Default false for init, true for reinit (pass false to keep existing-wins)." }
     }
   }
 };
 var MESH_REFINE_PLAN_TOOL = {
   name: "mesh_refine_plan",
-  description: "Dry-run Refinery plan for a worktree node: reports config source, validation commands, suggestions/unavailable reason, and merge/cleanup intent without executing validation or git merge.",
+  description: "Alias of mesh_refine_node's default dry-run: the Refinery plan for a worktree node (config source, validation commands, merge/cleanup intent); executes nothing.",
   inputSchema: {
     type: "object",
     properties: {
-      node_id: { type: "string", description: "Node ID of the worktree node to plan." }
+      node_id: { type: "string", description: "Worktree node to plan." }
     },
     required: ["node_id"]
   }
@@ -165095,34 +165189,34 @@ var MESH_REVIEW_INBOX_TOOL = {
 };
 var MESH_NODE_SLOTS_TOOL = {
   name: "mesh_node_slots",
-  description: "Read, draft, or change a mesh node's capability slots (policy.slots) \u2014 the provider/model/thinking + difficulty + capability-tag profile that task\u2192node fitness routing matches against. Use it when routing keeps landing work on a poor-fit node, when a node has no slots, or after CLI agents were installed on a node. Select with `action` (REQUIRED):\n\u2022 list \u2014 read-only: the node's current slots.\n\u2022 propose \u2014 read-only AUTO-DETECT: reads the node's installed CLI agents from the coordinator (its own provider catalog, or the one the node pushed \u2014 category=cli + installed=true), maps each through a seeded provider\u2192(model/thinkingLevel/difficulty/maxParallel) table, and returns `proposedSlots` with per-slot rationale plus `droppedSlots` / `droppedProviders` / `destructive` (hand-tuned slots, tuned maxParallel, providers not on PATH are NOT preserved by the draft \u2014 present those before approving). Detects nothing \u2192 proposes nothing. Never writes.\n\u2022 set \u2014 PROPOSE (dry-run, default) or APPLY (write=true) a slot list. WHOLESALE REPLACEMENT: the `slots` you pass become the COMPLETE new list; any prior slot not in it is dropped. The dry-run returns `currentSlots` vs `proposedSlots` \u2014 present the diff and get EXPLICIT user approval before write=true. Apply goes through update_mesh_node (machine-local node policy).",
+  description: "Read, draft or change a node's capability slots (policy.slots): the provider/model/thinking + difficulty + capability tags routing matches. Use when routing keeps landing on a poor-fit node, a node has no slots, or CLIs were installed. `action` (REQUIRED, own arguments only):\n\u2022 list \u2014 read-only current slots.\n\u2022 propose \u2014 read-only AUTO-DETECT from the node's installed CLIs (category=cli, installed=true) via a seeded provider\u2192(model/thinkingLevel/difficulty/maxParallel) table: `proposedSlots` with rationale plus `droppedSlots` / `droppedProviders` / `destructive` (hand-tuned slots, tuned maxParallel and providers not on PATH are NOT kept \u2014 present them before approving). Nothing detected \u2192 nothing proposed.\n\u2022 set \u2014 dry-run (default) or write=true. WHOLESALE REPLACEMENT: `slots` becomes the complete list. Present the dry-run's `currentSlots` vs `proposedSlots` and get EXPLICIT user approval before writing (machine-local node policy, via update_mesh_node).",
   inputSchema: {
     type: "object",
     properties: {
       action: {
         type: "string",
         enum: ["list", "propose", "set"],
-        description: "Which slot operation to run (required). Each action accepts only its own arguments \u2014 see the tool description."
+        description: "Slot operation (required)."
       },
-      node_id: { type: "string", description: "REQUIRED \u2014 the mesh node id. All actions." },
+      node_id: { type: "string", description: "REQUIRED for every action \u2014 the mesh node id." },
       slots: {
         type: "array",
-        description: "set: the COMPLETE desired capability-slot list (wholesale replacement). Each slot: { provider (REQUIRED), model?, thinkingLevel?, difficulty?, capability?, maxParallel? }. Required for set.",
+        description: "set (required): the COMPLETE desired slot list.",
         items: {
           type: "object",
           properties: {
-            provider: { type: "string", description: "REQUIRED \u2014 provider type, e.g. claude-cli / codex-cli / antigravity-cli." },
-            model: { type: "string", description: "Optional \u2014 model for this slot (best-effort at launch, e.g. opus / gpt-5-codex)." },
-            thinkingLevel: { type: "string", description: "Optional \u2014 provider-specific thinking level verbatim (e.g. low/medium/high/max, or codex minimal/xhigh)." },
-            difficulty: { type: "array", items: { type: "string" }, description: "Optional \u2014 task difficulties this slot handles (easy/medium/difficult/freeform). Empty = all (general-purpose)." },
-            capability: { type: "array", items: { type: "string" }, description: "Optional \u2014 capability tags this slot satisfies (matched against a task's requiredTags)." },
-            maxParallel: { type: "number", description: "Optional \u2014 per-node\xB7per-slot max concurrent tasks. Omit = no per-slot cap." }
+            provider: { type: "string", description: "REQUIRED provider type, e.g. claude-cli / codex-cli / antigravity-cli." },
+            model: { type: "string", description: "Best-effort at launch, e.g. opus / gpt-5-codex." },
+            thinkingLevel: { type: "string", description: "Provider-specific level verbatim (low/medium/high/max; codex minimal/xhigh)." },
+            difficulty: { type: "array", items: { type: "string" }, description: "Difficulties handled (easy/medium/difficult/freeform); empty = all." },
+            capability: { type: "array", items: { type: "string" }, description: "Capability tags satisfied (matched against a task's requiredTags)." },
+            maxParallel: { type: "number", description: "Per-node\xB7per-slot concurrency cap; omit = none." }
           },
           required: ["provider"]
         }
       },
-      reason: { type: "string", description: "set: optional short rationale, echoed in the dry-run so the user sees WHY the change is suggested." },
-      write: { type: "boolean", description: "set: when true, apply the slot list (wholesale replacement). Defaults false (dry-run preview of proposedSlots + currentSlots)." }
+      reason: { type: "string", description: "set: optional rationale echoed in the dry-run." },
+      write: { type: "boolean", description: "set: apply (wholesale replacement). Default false (dry-run)." }
     },
     required: ["action", "node_id"]
   }
