@@ -4,14 +4,22 @@
  * `launch_assistant {cliType}` through the dashboard's normal command transport
  * (standalone REST/WS, cloud P2P) — the daemon is idempotent, so a double click
  * or a race with another dashboard returns the live session instead of a second one.
+ *
+ * The main click launches the default target (the remembered choice when still
+ * eligible, else claude-cli, else the first eligible CLI); `start(target)` from
+ * the dropdown launches that CLI/machine and remembers it (localStorage).
  */
 import { useCallback, useMemo, useRef, useState } from 'react'
 import type { DaemonData } from '../types'
 import type { ActiveConversation } from '../components/dashboard/types'
 import {
     LAUNCH_ASSISTANT_COMMAND,
-    pickAssistantLaunchTarget,
+    readAssistantLaunchChoice,
+    resolveAssistantLaunchOptions,
     shouldOfferStartAssistant,
+    writeAssistantLaunchChoice,
+    type AssistantLaunchTarget,
+    type AssistantMachineOption,
 } from '../components/dashboard/assistant-session'
 
 interface UseStartAssistantOptions {
@@ -24,18 +32,30 @@ export interface StartAssistantState {
     visible: boolean
     pending: boolean
     error: string | null
-    start: () => Promise<void>
+    /** What the main click launches. */
+    defaultTarget: AssistantLaunchTarget | null
+    /** Machines and their CLIs for the dropdown (ineligible CLIs included, flagged). */
+    machines: AssistantMachineOption[]
+    /** Launch `target` (a dropdown choice, remembered) or the default target. */
+    start: (target?: AssistantLaunchTarget) => Promise<void>
 }
 
 export function useStartAssistant({ machineEntries, conversations, sendDaemonCommand }: UseStartAssistantOptions): StartAssistantState {
     const [pending, setPending] = useState(false)
     const [error, setError] = useState<string | null>(null)
+    const [choice, setChoice] = useState(() => readAssistantLaunchChoice())
     const inFlight = useRef(false)
-    const target = useMemo(() => pickAssistantLaunchTarget(machineEntries), [machineEntries])
-    const visible = shouldOfferStartAssistant(conversations, target)
+    const options = useMemo(() => resolveAssistantLaunchOptions(machineEntries, choice), [machineEntries, choice])
+    const defaultTarget = options.defaultTarget
+    const visible = shouldOfferStartAssistant(conversations, defaultTarget)
 
-    const start = useCallback(async () => {
+    const start = useCallback(async (picked?: AssistantLaunchTarget) => {
+        const target = picked || defaultTarget
         if (!target || inFlight.current) return
+        if (picked) {
+            writeAssistantLaunchChoice(picked)
+            setChoice({ machineId: picked.machineId, cliType: picked.cliType })
+        }
         inFlight.current = true
         setPending(true)
         setError(null)
@@ -51,7 +71,7 @@ export function useStartAssistant({ machineEntries, conversations, sendDaemonCom
             inFlight.current = false
             setPending(false)
         }
-    }, [sendDaemonCommand, target])
+    }, [sendDaemonCommand, defaultTarget])
 
-    return { visible, pending, error, start }
+    return { visible, pending, error, defaultTarget, machines: options.machines, start }
 }

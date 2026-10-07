@@ -8,11 +8,16 @@
  * local only), with `settings.assistant` (stamped by `launch_assistant`) as the
  * fallback for an older daemon that only ships settings. It is pinned first in
  * session lists and, when none exists, the dashboard offers "Start assistant",
- * which sends `launch_assistant` through the normal command transport.
+ * which sends `launch_assistant` through the normal command transport. Its
+ * dropdown lets the person pick the CLI (and machine); eligibility per CLI is
+ * the daemon's own answer (`availableProviders[].assistant`, computed by the
+ * same planner `launch_assistant` runs), so the picker never offers a CLI the
+ * verb would refuse.
  */
 import type { DaemonData } from '../../types'
 import type { ActiveConversation } from './types'
 import { isLaunchableMachineProvider } from '../../utils/provider-activation'
+import { getMachineDisplayName } from '../../utils/daemon-utils'
 
 /** Brand label used as the assistant conversation's primary label. */
 export const ASSISTANT_DISPLAY_LABEL = 'Assistant'
@@ -49,28 +54,123 @@ export interface AssistantLaunchTarget {
     cliType: string
 }
 
+/** One CLI the assistant picker lists for a machine (eligibility from the daemon's `availableProviders[].assistant`). */
+export interface AssistantCliOption {
+    cliType: string
+    label: string
+    /** `launch_assistant` would accept it. An older daemon without the field: assumed true (the daemon still decides). */
+    supported: boolean
+    /** Daemon refusal reason (unsupported only). */
+    reason?: string
+    /** Tool limit held only by the system prompt (every CLI but claude-cli) — the picker says "no tool lock". */
+    promptOnly: boolean
+}
+
+export interface AssistantMachineOption {
+    machineId: string
+    label: string
+    clis: AssistantCliOption[]
+}
+
+export interface AssistantLaunchOptions {
+    machines: AssistantMachineOption[]
+    /** What the main "Start assistant" click launches. */
+    defaultTarget: AssistantLaunchTarget | null
+}
+
 function isMachineOnline(machine: DaemonData): boolean {
     const status = String(machine.status || '').toLowerCase()
     return status !== 'offline' && status !== 'disconnected'
 }
 
+function cliOption(provider: NonNullable<DaemonData['availableProviders']>[number]): AssistantCliOption {
+    const eligibility = provider.assistant
+    return {
+        cliType: provider.type,
+        label: provider.displayName || provider.name || provider.type,
+        supported: eligibility ? eligibility.supported === true : true,
+        ...(eligibility && !eligibility.supported && eligibility.reason ? { reason: eligibility.reason } : {}),
+        promptOnly: eligibility ? eligibility.toolRestriction === 'prompt_only' : false,
+    }
+}
+
 /**
- * Where "Start assistant" launches: the first online machine (in the caller's
- * order) with a launchable CLI, preferring claude-cli, then a CLI that declares
- * Repo Mesh coordinator (MCP) support, then any launchable CLI. Null when no
- * machine can host one — the affordance is then not shown.
+ * Every online machine with a launchable (enabled) CLI, each listing its CLIs:
+ * eligible ones first (claude-cli leading), then the ineligible ones the picker
+ * shows disabled with their reason.
  */
-export function pickAssistantLaunchTarget(machines: ReadonlyArray<DaemonData>): AssistantLaunchTarget | null {
+export function listAssistantLaunchMachines(machines: ReadonlyArray<DaemonData>): AssistantMachineOption[] {
+    const out: AssistantMachineOption[] = []
     for (const machine of machines) {
         if (!machine?.id || !isMachineOnline(machine)) continue
-        const clis = (machine.availableProviders || []).filter(provider => isLaunchableMachineProvider(provider, 'cli'))
+        const clis = (machine.availableProviders || [])
+            .filter(provider => isLaunchableMachineProvider(provider, 'cli'))
+            .map(cliOption)
         if (clis.length === 0) continue
-        const pick = clis.find(provider => provider.type === DEFAULT_ASSISTANT_CLI_TYPE)
-            || clis.find(provider => !!provider.meshCoordinator)
-            || clis[0]
-        return { machineId: machine.id, cliType: pick.type }
+        const rank = (o: AssistantCliOption) => (o.supported ? 0 : 2) + (o.cliType === DEFAULT_ASSISTANT_CLI_TYPE ? 0 : 1)
+        clis.sort((a, b) => rank(a) - rank(b))
+        out.push({ machineId: machine.id, label: getMachineDisplayName(machine, { fallbackId: machine.id }), clis })
     }
-    return null
+    return out
+}
+
+/**
+ * Where the main "Start assistant" click launches: the remembered choice when
+ * that machine is still listed and the CLI still eligible, else the first
+ * machine (in the caller's order) with an eligible CLI — claude-cli when
+ * eligible, else its first eligible CLI. Null when no machine can host one —
+ * the affordance is then not shown.
+ */
+export function pickAssistantLaunchTarget(
+    machines: ReadonlyArray<DaemonData>,
+    preferred?: Partial<AssistantLaunchTarget> | null,
+): AssistantLaunchTarget | null {
+    return resolveAssistantLaunchOptions(machines, preferred).defaultTarget
+}
+
+export function resolveAssistantLaunchOptions(
+    machines: ReadonlyArray<DaemonData>,
+    preferred?: Partial<AssistantLaunchTarget> | null,
+): AssistantLaunchOptions {
+    const list = listAssistantLaunchMachines(machines)
+    const eligible = (m: AssistantMachineOption, cliType?: string) => m.clis.find(c => c.supported && (!cliType || c.cliType === cliType))
+    if (preferred?.cliType) {
+        const candidates = preferred.machineId ? list.filter(m => m.machineId === preferred.machineId) : list
+        for (const m of candidates) {
+            if (eligible(m, preferred.cliType)) return { machines: list, defaultTarget: { machineId: m.machineId, cliType: preferred.cliType } }
+        }
+    }
+    for (const m of list) {
+        const cli = eligible(m)
+        if (cli) return { machines: list, defaultTarget: { machineId: m.machineId, cliType: cli.cliType } }
+    }
+    return { machines: list, defaultTarget: null }
+}
+
+/** localStorage key for the last CLI (and machine) the picker launched. */
+export const ASSISTANT_LAUNCH_CHOICE_STORAGE_KEY = 'adhdev_assistant_launch_choice'
+
+export function readAssistantLaunchChoice(
+    storage: Pick<Storage, 'getItem'> | undefined = typeof localStorage !== 'undefined' ? localStorage : undefined,
+): Partial<AssistantLaunchTarget> | null {
+    try {
+        const raw = storage?.getItem(ASSISTANT_LAUNCH_CHOICE_STORAGE_KEY)
+        if (!raw) return null
+        const parsed = JSON.parse(raw)
+        if (!parsed || typeof parsed.cliType !== 'string' || !parsed.cliType) return null
+        return { cliType: parsed.cliType, ...(typeof parsed.machineId === 'string' && parsed.machineId ? { machineId: parsed.machineId } : {}) }
+    } catch {
+        return null
+    }
+}
+
+export function writeAssistantLaunchChoice(
+    target: AssistantLaunchTarget,
+    storage: Pick<Storage, 'setItem'> | undefined = typeof localStorage !== 'undefined' ? localStorage : undefined,
+): void {
+    try {
+        storage?.setItem(ASSISTANT_LAUNCH_CHOICE_STORAGE_KEY, JSON.stringify({ machineId: target.machineId, cliType: target.cliType }))
+    } catch { /* storage unavailable — the choice is a convenience */ }
 }
 
 /** Show "Start assistant" only when no assistant session exists and a machine can host one. */

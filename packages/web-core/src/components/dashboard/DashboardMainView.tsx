@@ -674,6 +674,9 @@ export default function DashboardMainView({
                     onStartAssistant={startAssistant.visible ? () => { void startAssistant.start() } : undefined}
                     startAssistantPending={startAssistant.pending}
                     startAssistantError={startAssistant.error}
+                    onStartAssistantWith={startAssistant.visible ? (target) => { void startAssistant.start(target) } : undefined}
+                    startAssistantMachines={startAssistant.machines}
+                    startAssistantDefault={startAssistant.defaultTarget}
                     onOpenDashboardGuide={handleOpenShortcutHelp}
                     guideNudgeVisible={guideNudgeVisible}
                     actionShortcuts={actionShortcuts}

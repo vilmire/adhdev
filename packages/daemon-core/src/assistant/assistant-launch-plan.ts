@@ -29,9 +29,10 @@
  */
 
 import { join, resolve, sep } from 'path';
-import type { MeshCoordinatorSetup } from '../commands/mesh-coordinator.js';
+import { resolveMeshCoordinatorSetup, type MeshCoordinatorSetup } from '../commands/mesh-coordinator.js';
 import { deriveAutoApproveModeRisk } from '../providers/auto-approve-modes.js';
 import type { ProviderModule } from '../providers/contracts.js';
+import type { ProviderAssistantEligibility } from '../shared-types.js';
 
 export const DEFAULT_ASSISTANT_CLI_TYPE = 'claude-cli';
 export const ASSISTANT_MCP_SERVER_NAME = 'adhdev-assistant';
@@ -53,8 +54,21 @@ export interface AssistantMcpConfigWrite {
     server: { command: string; args: string[] };
 }
 
+/**
+ * How the assistant's tool limit is held: `enforced` = the CLI's own built-in
+ * tool allowlist (claude-cli `--tools=Read`); `prompt_only` = the system prompt
+ * is the only restriction (every other CLI keeps its shell-capable tools).
+ */
+export type AssistantToolRestriction = ProviderAssistantEligibility['toolRestriction'];
+
 export type AssistantMcpPlan =
-    | { ok: true; cliArgs: string[]; configWrite: AssistantMcpConfigWrite | null; mcpServer: { command: string; args: string[] } }
+    | {
+        ok: true;
+        cliArgs: string[];
+        configWrite: AssistantMcpConfigWrite | null;
+        mcpServer: { command: string; args: string[] };
+        toolRestriction: AssistantToolRestriction;
+    }
     | { ok: false; code: string; error: string };
 
 function isInside(path: string, dir: string): boolean {
@@ -101,7 +115,13 @@ export function planAssistantMcp(input: {
                 error: `${cliType} registers MCP servers in its global config; the assistant does not register one on your behalf`,
             };
         }
-        return { ok: true, cliArgs: buildAssistantCodexOverrideArgs(serverName, setup.mcpServer), configWrite: null, mcpServer: setup.mcpServer };
+        return {
+            ok: true,
+            cliArgs: buildAssistantCodexOverrideArgs(serverName, setup.mcpServer),
+            configWrite: null,
+            mcpServer: setup.mcpServer,
+            toolRestriction: 'prompt_only',
+        };
     }
     if (cliType === 'claude-cli') {
         const path = assistantClaudeMcpConfigPath(configDir);
@@ -110,6 +130,7 @@ export function planAssistantMcp(input: {
             cliArgs: buildAssistantClaudeArgs(path, serverName),
             configWrite: { path, format: setup.configFormat ?? 'claude_mcp_json', serverName, server: setup.mcpServer },
             mcpServer: setup.mcpServer,
+            toolRestriction: 'enforced',
         };
     }
     if (!isInside(setup.configPath, workspace)) {
@@ -124,7 +145,39 @@ export function planAssistantMcp(input: {
         cliArgs: [],
         configWrite: { path: setup.configPath, format: setup.configFormat ?? 'claude_mcp_json', serverName, server: setup.mcpServer },
         mcpServer: setup.mcpServer,
+        toolRestriction: 'prompt_only',
     };
+}
+
+/**
+ * Would `launch_assistant` accept this CLI? Runs the SAME two steps the verb
+ * runs (`resolveMeshCoordinatorSetup` with the assistant toolset →
+ * `planAssistantMcp`) on the provider manifest, so the dashboard's picker and
+ * the verb cannot disagree. Pure apart from resolving `~` and relative MCP
+ * config paths: the MCP server launch is pinned to a placeholder command
+ * because only the setup KIND and config PATH decide eligibility, never the
+ * binary the server would run.
+ */
+export function describeAssistantEligibility(input: {
+    cliType: string;
+    provider: Pick<ProviderModule, 'meshCoordinator'> | null | undefined;
+    configDir: string;
+}): ProviderAssistantEligibility {
+    const { cliType, provider, configDir } = input;
+    const workspace = assistantWorkspaceDir(configDir);
+    const setup = resolveMeshCoordinatorSetup({
+        provider: (provider ?? null) as ProviderModule | null,
+        cliType,
+        meshId: '',
+        workspace,
+        toolset: { kind: 'assistant' },
+        adhdevMcpCommand: 'adhdev',
+        adhdevMcpTransport: 'ipc',
+        adhdevMcpPort: 1,
+    });
+    const plan = planAssistantMcp({ cliType, setup, workspace, configDir });
+    if (plan.ok) return { supported: true, toolRestriction: plan.toolRestriction };
+    return { supported: false, toolRestriction: 'prompt_only', code: plan.code, reason: plan.error };
 }
 
 export type AssistantApprovalSettings =

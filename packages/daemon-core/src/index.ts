@@ -59,6 +59,7 @@ export type {
   SubscribeRequest,
   UnsubscribeRequest,
   AvailableProviderInfo,
+  ProviderAssistantEligibility,
   ProviderControlSchema,
   StatusReportPayload,
   MachineInfo,
