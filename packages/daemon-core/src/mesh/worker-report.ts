@@ -168,7 +168,7 @@ export function findPriorWorkerReport(meshId: string, taskId: string): PriorWork
 export const REPORTED_SUMMARY_STORE = new Map<string, { summary: string; recordedAtMs: number }>();
 
 export function summaryKey(meshId: string, taskId: string): string {
-    return `${meshId} ${taskId}`;
+    return `${meshId}\u0000${taskId}`;
 }
 
 function readReportedSummary(meshId: string, taskId: string): string | undefined {

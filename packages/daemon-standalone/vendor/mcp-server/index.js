@@ -121403,7 +121403,9 @@ ${marker}`,
         const bind = typeof credential.bind === "string" ? credential.bind.trim() : "";
         const binding = bind ? verifyWorkerSessionBind(bind) : null;
         const who = binding ? `session ${binding.sessionId} (mesh ${binding.meshId})` : bind ? `bind ${hashWorkerSessionBind(bind).slice(0, 12)}` : "a caller with no bind";
-        LOG.warn("WorkerReport", `Local ${what} from ${who} \u2192 refused ${refusal}${detail ? ` \u2014 ${detail}` : ""}`);
+        const line = `Local ${what} from ${who} \u2192 refused ${refusal}${detail ? ` \u2014 ${detail}` : ""}`;
+        if (what === "mailbox drain" && binding && detail?.includes("no assigned task")) LOG.debug("WorkerReport", line);
+        else LOG.warn("WorkerReport", line);
       } catch {
       }
     }

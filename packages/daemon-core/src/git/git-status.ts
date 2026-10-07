@@ -840,7 +840,7 @@ async function detectDaemonBuildBehind(
       // pending. Conservative: any probe failure → treat as daemon-affecting. The
       // verdict is memoized on (repoPath, buildCommit, head, config) to suppress
       // re-evaluation on the hot status path.
-      const evalKey = `${repoPath} ${build.commit} ${head} ${configKey}`;
+      const evalKey = `${repoPath}\u0000${build.commit}\u0000${head}\u0000${configKey}`;
       if (!head) continue; // proven non-empty oid here; every other branch above continued
       let evaluated = changeImpactEvalCache.get(evalKey);
       if (!evaluated) {
