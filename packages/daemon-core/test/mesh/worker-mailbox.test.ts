@@ -202,8 +202,12 @@ describe('deposit_worker_mailbox low-family handler', () => {
 
 describe('worker_drain_mailbox low-family handler', () => {
   it('refuses (unauthenticated) for an unresolvable bind/token, never returning a fake-empty success', async () => {
-    const result: any = await workerMailboxHandlers.worker_drain_mailbox({} as any, { bind: 'wsb_forged' })
-    expect(result).toMatchObject({ success: false, error: 'unauthenticated' })
+    // A `wsb_` bind this daemon never saw gets the distinct restart code; a
+    // non-bind credential stays plain `unauthenticated`.
+    const forged: any = await workerMailboxHandlers.worker_drain_mailbox({} as any, { bind: 'wsb_forged' })
+    expect(forged).toMatchObject({ success: false, error: 'bind_unknown_after_restart' })
+    const none: any = await workerMailboxHandlers.worker_drain_mailbox({} as any, { token: 'wtk_forged' })
+    expect(none).toMatchObject({ success: false, error: 'unauthenticated' })
   })
 
   it("drains the caller's OWN task mailbox via bind resolution, not a caller-supplied id", async () => {

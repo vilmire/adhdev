@@ -24,7 +24,8 @@
 import { subscribeMeshTermination } from '../../mesh/mesh-termination-bridge.js';
 import { subscribeMeshProviderSignals } from '../../mesh/mesh-signal-bridge.js';
 import { subscribeCoordinatorRegistryRemoval } from '../../mesh/coordinator-registry.js';
-import { hasLiveWorkerSessionBind, subscribeWorkerBindRevocation } from '../../mesh/worker-mcp-isolation.js';
+import { hasLiveWorkerSessionBind, setWorkerSessionBindPersistence, subscribeWorkerBindRevocation } from '../../mesh/worker-mcp-isolation.js';
+import { SqliteWorkerSessionBindStore } from '../../mesh/worker-session-bind-store.js';
 import {
     listLocalCoordinatorSessions,
     resolveCoordinatorDrainDaemonIds,
@@ -466,9 +467,30 @@ export function detachLocalMeshTaskStamp(components: DaemonComponents, request: 
     try { instance.detachMeshAssignment(); } catch { /* best-effort */ }
 }
 
+/**
+ * Persist worker session binds (hash-keyed) in mesh-runtime.db so a worker the
+ * session host restores across a daemon restart can still report. A persisted
+ * bind is honoured only for a session live on THIS daemon — the same two-source
+ * liveness `reconcileOrphanedPlainAttemptsOnBoot` uses. Restore (S8) adopts the
+ * rows of sessions that came back and prunes the rest. Returns the uninstaller.
+ */
+function installWorkerSessionBindPersistence(components: DaemonComponents): () => void {
+    try {
+        const store = new SqliteWorkerSessionBindStore(MeshRuntimeStore.getInstance().db);
+        setWorkerSessionBindPersistence(store, (sessionId) => {
+            if (components.sessionRegistry.has(sessionId)) return true;
+            try { return !!components.instanceManager.getInstance(sessionId); } catch { return false; }
+        });
+    } catch (e: any) {
+        LOG.warn('WorkerMcp', `worker session bind persistence unavailable (binds are in-memory only this run): ${e?.message || e}`);
+    }
+    return () => setWorkerSessionBindPersistence(null);
+}
+
 export function bootMeshRuntime(s6: ProjectionsStage): MeshRuntimeStage {
     const components = assembleDaemonComponents(s6);
     const { bus } = s6;
+    const offBindPersistence = installWorkerSessionBindPersistence(components);
 
     // Session-death consumers. Registration order = delivery order on the sync
     // lane; the ledger writer runs on the async lane.
@@ -515,6 +537,7 @@ export function bootMeshRuntime(s6: ProjectionsStage): MeshRuntimeStage {
         for (const off of offSubscribers.reverse()) {
             try { off(); } catch { /* noop */ }
         }
+        try { offBindPersistence(); } catch { /* noop */ }
     };
 
     return { ...s6, components, disposeMeshRuntime };

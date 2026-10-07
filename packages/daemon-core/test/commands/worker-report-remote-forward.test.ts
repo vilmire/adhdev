@@ -237,12 +237,13 @@ describe('F7 — worker daemon: remote-owned task', () => {
       expect(res.success).toBe(false)
       expect(res.error).toBe('unauthenticated')
     }
-    // An unknown bind with a perfect stamp is refused too.
+    // An unknown bind with a perfect stamp is refused too — with the distinct
+    // code for a bind this daemon has no record of (not live, not persisted).
     const res: any = await workerReportHandlers.worker_report_completion(
       workerCtx(ids.sessionId, stampSettings(ids, 'a1'), relay),
       { bind: 'wsb_not_a_real_bind', report: REPORT },
     )
-    expect(res.error).toBe('unauthenticated')
+    expect(res.error).toBe('bind_unknown_after_restart')
     expect(relay).not.toHaveBeenCalled()
   })
 

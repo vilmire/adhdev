@@ -10,6 +10,7 @@ import {
     getCoordinatorForSession, listCoordinatorsForWorkspace, pruneDeadMeshCoordinators,
 } from '../mesh/coordinator-registry.js';
 import { LOG } from '../logging/logger.js';
+import { reconcileWorkerSessionBindsAfterRestore } from '../runtime-defaults.js';
 import { findAssistantRestoreRecord, getAssistantRegistry } from '../assistant/assistant-registry.js';
 import { buildRestoredLaunchRecord } from '../sessions/launch-record.js';
 import { shouldRestoreHostedRuntime } from './hosted-runtime-restore.js';
@@ -131,6 +132,7 @@ export async function restoreHostedSessions(host: CliRestoreHost, records?: Host
     if (!records && typeof host.deps.listHostedCliRuntimes === 'function') {
         pruneStaleCoordinatorEntries(sessions, restoredRuntimeIds, rebindAdoptedSessionIds);
         pruneStaleAssistantBinding(sessions, restoredRuntimeIds);
+        reconcileWorkerBindsAfterRestore(sessions, restoredRuntimeIds);
     }
 
     return restored;
@@ -285,6 +287,24 @@ function applyAssistantRestoreMark(record: HostedCliRuntimeDescriptor, restoredS
         delete restoredSettings.autoApproveMode;
     }
     LOG.info('CLI', `↻ Re-bound assistant session ${record.runtimeId}`);
+}
+
+/**
+ * Full boot restore only: a restored worker keeps running with the session bind
+ * it was spawned with (in its MCP server's env), so re-adopt the persisted bind
+ * of every session that came back and drop the rows of sessions that did not.
+ */
+function reconcileWorkerBindsAfterRestore(sessions: HostedCliRuntimeDescriptor[], restoredRuntimeIds: ReadonlySet<string>): void {
+    const live = new Set<string>(restoredRuntimeIds);
+    for (const r of sessions) if (r?.runtimeId) live.add(r.runtimeId);
+    try {
+        const { rehydrated, pruned } = reconcileWorkerSessionBindsAfterRestore(live);
+        if (rehydrated || pruned) {
+            LOG.info('CLI', `♻ Worker session binds after restore: ${rehydrated} re-adopted for restored session(s), ${pruned} pruned (session did not come back)`);
+        }
+    } catch (e: any) {
+        LOG.warn('CLI', `worker session bind reconcile failed: ${e?.message || e}`);
+    }
 }
 
 /** Full boot restore only: clear an assistant binding whose runtime is not live (FULL restore set). */

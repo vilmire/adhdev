@@ -22,6 +22,7 @@ import { migrateMeshTaskOutputs } from './mesh-task-outputs.js';
 import { ensureTurnLedgerSchema } from './turn-ledger/schema.js';
 import { LocalRecordStore } from './mesh-local-record-store.js';
 import { ensureMeshNodeGitStateSchema } from './mesh-node-git-state.js';
+import { ensureWorkerSessionBindSchema } from './worker-session-bind-store.js';
 import type { MeshRuntimeStore } from './mesh-runtime-store.js';
 
 let loggedMigrationFailureFlag = false;
@@ -186,6 +187,9 @@ export function migrate(self: MeshRuntimeStore): void {
     ensureMeshNodeGitStateSchema(self.db);
     // Assistant layer relay threads / rows / daily metrics (additive, idempotent).
     ensureAssistantRelaySchema(self.db);
+    // Worker session binds, hash-keyed, so a session-host-restored worker can
+    // still report after a daemon restart (additive, idempotent).
+    ensureWorkerSessionBindSchema(self.db);
 }
 
 /**

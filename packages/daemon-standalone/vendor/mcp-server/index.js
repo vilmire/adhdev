@@ -38770,8 +38770,8 @@ ${error.message || ""}`;
         ];
         UPSTREAM_FRESHNESS_CARRY_MAX_AGE_MS = 10 * 6e4;
         MeshNodeGitStateStore = class {
-          constructor(persistence = null, now = Date.now) {
-            this.persistence = persistence;
+          constructor(persistence2 = null, now = Date.now) {
+            this.persistence = persistence2;
             this.now = now;
           }
           entries = /* @__PURE__ */ new Map();
@@ -39002,6 +39002,61 @@ ${error.message || ""}`;
         };
       }
     });
+    function ensureWorkerSessionBindSchema(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS worker_session_binds (
+            bind_hash TEXT PRIMARY KEY,
+            mesh_id TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            node_id TEXT,
+            spawned_for_task_id TEXT,
+            minted_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_worker_session_binds_session
+            ON worker_session_binds(session_id);
+    `);
+    }
+    function toRow(r) {
+      return {
+        bindHash: r.bind_hash,
+        meshId: r.mesh_id,
+        sessionId: r.session_id,
+        ...r.node_id ? { nodeId: r.node_id } : {},
+        ...r.spawned_for_task_id ? { spawnedForTaskId: r.spawned_for_task_id } : {},
+        mintedAtMs: r.minted_at
+      };
+    }
+    var SqliteWorkerSessionBindStore;
+    var init_worker_session_bind_store = __esm2({
+      "src/mesh/worker-session-bind-store.ts"() {
+        "use strict";
+        SqliteWorkerSessionBindStore = class {
+          constructor(db) {
+            this.db = db;
+          }
+          put(row) {
+            this.db.prepare(`
+            INSERT OR REPLACE INTO worker_session_binds
+                (bind_hash, mesh_id, session_id, node_id, spawned_for_task_id, minted_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        `).run(row.bindHash, row.meshId, row.sessionId, row.nodeId ?? null, row.spawnedForTaskId ?? null, row.mintedAtMs);
+          }
+          get(bindHash) {
+            const r = this.db.prepare("SELECT * FROM worker_session_binds WHERE bind_hash = ?").get(bindHash);
+            return r ? toRow(r) : null;
+          }
+          delete(bindHash) {
+            this.db.prepare("DELETE FROM worker_session_binds WHERE bind_hash = ?").run(bindHash);
+          }
+          deleteForSession(sessionId) {
+            return this.db.prepare("DELETE FROM worker_session_binds WHERE session_id = ?").run(sessionId).changes;
+          }
+          list() {
+            return this.db.prepare("SELECT * FROM worker_session_binds").all().map(toRow);
+          }
+        };
+      }
+    });
     function hasLoggedMigrationFailure() {
       return loggedMigrationFailureFlag;
     }
@@ -39150,6 +39205,7 @@ ${error.message || ""}`;
       ensureTurnLedgerSchema(self.db);
       ensureMeshNodeGitStateSchema(self.db);
       ensureAssistantRelaySchema(self.db);
+      ensureWorkerSessionBindSchema(self.db);
     }
     function ensureAssistantRelaySchema(db) {
       db.exec(`
@@ -39249,6 +39305,7 @@ ${error.message || ""}`;
         init_schema();
         init_mesh_local_record_store();
         init_mesh_node_git_state();
+        init_worker_session_bind_store();
         loggedMigrationFailureFlag = false;
       }
     });
@@ -39313,6 +39370,230 @@ ${error.message || ""}`;
         MESH_COORDINATOR_AUTO_IMPORT_FORMATS = ["claude_mcp_json", "opencode_json"];
       }
     });
+    function sessionKey(meshId, sessionId) {
+      return `${meshId}\0${sessionId}`;
+    }
+    function hashWorkerSessionBind(bind) {
+      return crypto2.createHash("sha256").update(bind, "utf8").digest("hex");
+    }
+    function setWorkerSessionBindPersistence(port, liveness = null) {
+      persistence = port;
+      isSessionLive = liveness;
+    }
+    function persistBestEffort(fn) {
+      if (!persistence) return;
+      try {
+        fn(persistence);
+      } catch {
+      }
+    }
+    function toPersisted(entry) {
+      return {
+        bindHash: entry.bindHash,
+        meshId: entry.meshId,
+        sessionId: entry.sessionId,
+        ...entry.nodeId ? { nodeId: entry.nodeId } : {},
+        ...entry.spawnedForTaskId ? { spawnedForTaskId: entry.spawnedForTaskId } : {},
+        mintedAtMs: entry.mintedAtMs
+      };
+    }
+    function addEntry(entry) {
+      LIVE_BINDS.set(entry.bindHash, entry);
+      const key2 = sessionKey(entry.meshId, entry.sessionId);
+      let set2 = BINDS_BY_SESSION.get(key2);
+      if (!set2) {
+        set2 = /* @__PURE__ */ new Set();
+        BINDS_BY_SESSION.set(key2, set2);
+      }
+      set2.add(entry.bindHash);
+    }
+    function adoptPersisted(row) {
+      const entry = {
+        bindHash: row.bindHash,
+        meshId: row.meshId,
+        sessionId: row.sessionId,
+        ...row.nodeId ? { nodeId: row.nodeId } : {},
+        ...row.spawnedForTaskId ? { spawnedForTaskId: row.spawnedForTaskId } : {},
+        mintedAtMs: row.mintedAtMs,
+        restored: true
+      };
+      addEntry(entry);
+      return entry;
+    }
+    function sessionLiveHere(sessionId) {
+      if (!isSessionLive) return false;
+      try {
+        return isSessionLive(sessionId) === true;
+      } catch {
+        return false;
+      }
+    }
+    function mintWorkerSessionBind(input) {
+      const meshId = String(input.meshId || "").trim();
+      const sessionId = String(input.sessionId || "").trim();
+      if (!meshId || !sessionId) {
+        throw new Error("mintWorkerSessionBind requires both meshId and sessionId");
+      }
+      for (const hash of [...BINDS_BY_SESSION.get(sessionKey(meshId, sessionId)) || []]) revokeByHash(hash);
+      persistBestEffort((port) => {
+        for (const row of port.list()) {
+          if (row.meshId === meshId && row.sessionId === sessionId) port.delete(row.bindHash);
+        }
+      });
+      const bind = `${WORKER_BIND_CANARY_PREFIX}${crypto2.randomBytes(32).toString("base64url")}`;
+      const entry = {
+        bindHash: hashWorkerSessionBind(bind),
+        bind,
+        meshId,
+        sessionId,
+        ...input.nodeId ? { nodeId: String(input.nodeId).trim() } : {},
+        ...input.spawnedForTaskId ? { spawnedForTaskId: String(input.spawnedForTaskId).trim() } : {},
+        mintedAtMs: Date.now()
+      };
+      addEntry(entry);
+      persistBestEffort((port) => port.put(toPersisted(entry)));
+      return toBinding(entry, bind);
+    }
+    function toBinding(entry, bind) {
+      return {
+        bind,
+        meshId: entry.meshId,
+        sessionId: entry.sessionId,
+        ...entry.nodeId ? { nodeId: entry.nodeId } : {},
+        ...entry.spawnedForTaskId ? { spawnedForTaskId: entry.spawnedForTaskId } : {},
+        mintedAtMs: entry.mintedAtMs,
+        ...entry.restored ? { restored: true } : {}
+      };
+    }
+    function workerSessionBindStatus(bind) {
+      if (typeof bind !== "string" || !bind.trim()) return { status: "invalid" };
+      const raw = bind.trim();
+      const hash = hashWorkerSessionBind(raw);
+      const live = LIVE_BINDS.get(hash);
+      if (live) {
+        if (!live.bind) live.bind = raw;
+        return { status: "live", binding: toBinding(live, raw) };
+      }
+      if (REVOKED_HASHES.has(hash)) return { status: "revoked" };
+      let row = null;
+      if (persistence) {
+        try {
+          row = persistence.get(hash);
+        } catch {
+          row = null;
+        }
+      }
+      if (!row) return { status: "unknown" };
+      if (!sessionLiveHere(row.sessionId)) return { status: "session_not_live" };
+      const adopted = adoptPersisted(row);
+      adopted.bind = raw;
+      return { status: "live", binding: toBinding(adopted, raw) };
+    }
+    function verifyWorkerSessionBind(bind) {
+      return workerSessionBindStatus(bind).binding ?? null;
+    }
+    function rememberRevoked(hash) {
+      REVOKED_HASHES.add(hash);
+      if (REVOKED_HASHES.size > REVOKED_HASHES_CAP) {
+        const oldest = REVOKED_HASHES.values().next().value;
+        if (oldest !== void 0) REVOKED_HASHES.delete(oldest);
+      }
+    }
+    function revokeByHash(hash) {
+      const found = LIVE_BINDS.get(hash);
+      persistBestEffort((port) => port.delete(hash));
+      if (!found) return false;
+      LIVE_BINDS.delete(hash);
+      rememberRevoked(hash);
+      const key2 = sessionKey(found.meshId, found.sessionId);
+      const set2 = BINDS_BY_SESSION.get(key2);
+      if (set2) {
+        set2.delete(hash);
+        if (set2.size === 0) BINDS_BY_SESSION.delete(key2);
+      }
+      return true;
+    }
+    function revokeWorkerSessionBindsForSession(sessionId) {
+      const sid = String(sessionId || "").trim();
+      if (!sid) return 0;
+      let revoked = 0;
+      for (const entry of [...LIVE_BINDS.values()]) {
+        if (entry.sessionId === sid && revokeByHash(entry.bindHash)) revoked += 1;
+      }
+      persistBestEffort((port) => {
+        port.deleteForSession(sid);
+      });
+      return revoked;
+    }
+    function subscribeWorkerBindRevocation(bus) {
+      return bus.on("terminated", (event) => {
+        if (event.cause === "daemon_shutdown") return;
+        revokeWorkerSessionBindsForSession(event.sessionId);
+      }, { name: "mesh.worker-binds" });
+    }
+    function revokeWorkerSessionBind(bind) {
+      if (typeof bind !== "string" || !bind.trim()) return false;
+      return revokeByHash(hashWorkerSessionBind(bind.trim()));
+    }
+    function reconcileWorkerSessionBindsAfterRestore(liveSessionIds) {
+      if (!persistence) return { rehydrated: 0, pruned: 0 };
+      let rows = [];
+      try {
+        rows = persistence.list();
+      } catch {
+        return { rehydrated: 0, pruned: 0 };
+      }
+      let rehydrated = 0;
+      let pruned = 0;
+      for (const row of rows) {
+        if (LIVE_BINDS.has(row.bindHash)) continue;
+        if (liveSessionIds.has(row.sessionId) && sessionLiveHere(row.sessionId)) {
+          adoptPersisted(row);
+          rehydrated += 1;
+        } else {
+          persistBestEffort((port) => port.delete(row.bindHash));
+          pruned += 1;
+        }
+      }
+      return { rehydrated, pruned };
+    }
+    function hasLiveWorkerSessionBind(sessionId) {
+      const sid = String(sessionId || "").trim();
+      if (!sid) return false;
+      for (const entry of LIVE_BINDS.values()) {
+        if (entry.sessionId === sid) return true;
+      }
+      return false;
+    }
+    function __resetWorkerSessionBindsForTest() {
+      LIVE_BINDS.clear();
+      BINDS_BY_SESSION.clear();
+      REVOKED_HASHES.clear();
+    }
+    function liveWorkerSessionBindCount() {
+      return LIVE_BINDS.size;
+    }
+    var crypto2;
+    var LIVE_BINDS;
+    var BINDS_BY_SESSION;
+    var REVOKED_HASHES;
+    var REVOKED_HASHES_CAP;
+    var persistence;
+    var isSessionLive;
+    var WORKER_BIND_CANARY_PREFIX;
+    var init_worker_session_bind_registry = __esm2({
+      "src/worker-session-bind-registry.ts"() {
+        "use strict";
+        crypto2 = __toESM2(require("crypto"));
+        LIVE_BINDS = /* @__PURE__ */ new Map();
+        BINDS_BY_SESSION = /* @__PURE__ */ new Map();
+        REVOKED_HASHES = /* @__PURE__ */ new Set();
+        REVOKED_HASHES_CAP = 4096;
+        persistence = null;
+        isSessionLive = null;
+        WORKER_BIND_CANARY_PREFIX = "wsb_";
+      }
+    });
     function isWorkerMcpEnabled(env2 = process.env) {
       const raw = env2.ADHDEV_WORKER_MCP;
       if (typeof raw !== "string") return true;
@@ -39331,90 +39612,6 @@ ${error.message || ""}`;
       }
       return defaultMs;
     }
-    function sessionKey(meshId, sessionId) {
-      return `${meshId}${sessionId}`;
-    }
-    function mintWorkerSessionBind(input) {
-      const meshId = String(input.meshId || "").trim();
-      const sessionId = String(input.sessionId || "").trim();
-      if (!meshId || !sessionId) {
-        throw new Error("mintWorkerSessionBind requires both meshId and sessionId");
-      }
-      for (const existing of bindsForSession(meshId, sessionId)) revokeWorkerSessionBind(existing.bind);
-      const minted = {
-        bind: `${WORKER_BIND_CANARY_PREFIX}${crypto2.randomBytes(32).toString("base64url")}`,
-        meshId,
-        sessionId,
-        ...input.nodeId ? { nodeId: String(input.nodeId).trim() } : {},
-        ...input.spawnedForTaskId ? { spawnedForTaskId: String(input.spawnedForTaskId).trim() } : {},
-        mintedAtMs: Date.now()
-      };
-      LIVE_BINDS.set(minted.bind, minted);
-      const key2 = sessionKey(meshId, sessionId);
-      let set2 = BINDS_BY_SESSION.get(key2);
-      if (!set2) {
-        set2 = /* @__PURE__ */ new Set();
-        BINDS_BY_SESSION.set(key2, set2);
-      }
-      set2.add(minted.bind);
-      return minted;
-    }
-    function bindsForSession(meshId, sessionId) {
-      const set2 = BINDS_BY_SESSION.get(sessionKey(meshId, sessionId));
-      if (!set2) return [];
-      const out = [];
-      for (const secret of set2) {
-        const found = LIVE_BINDS.get(secret);
-        if (found) out.push(found);
-      }
-      return out;
-    }
-    function verifyWorkerSessionBind(bind) {
-      if (typeof bind !== "string" || !bind.trim()) return null;
-      return LIVE_BINDS.get(bind.trim()) || null;
-    }
-    function revokeWorkerSessionBindsForSession(sessionId) {
-      const sid = String(sessionId || "").trim();
-      if (!sid) return 0;
-      let revoked = 0;
-      for (const binding of [...LIVE_BINDS.values()]) {
-        if (binding.sessionId === sid && revokeWorkerSessionBind(binding.bind)) revoked += 1;
-      }
-      return revoked;
-    }
-    function subscribeWorkerBindRevocation(bus) {
-      return bus.on("terminated", (event) => {
-        revokeWorkerSessionBindsForSession(event.sessionId);
-      }, { name: "mesh.worker-binds" });
-    }
-    function revokeWorkerSessionBind(bind) {
-      const found = LIVE_BINDS.get(bind);
-      if (!found) return false;
-      LIVE_BINDS.delete(bind);
-      const key2 = sessionKey(found.meshId, found.sessionId);
-      const set2 = BINDS_BY_SESSION.get(key2);
-      if (set2) {
-        set2.delete(bind);
-        if (set2.size === 0) BINDS_BY_SESSION.delete(key2);
-      }
-      return true;
-    }
-    function hasLiveWorkerSessionBind(sessionId) {
-      const sid = String(sessionId || "").trim();
-      if (!sid) return false;
-      for (const binding of LIVE_BINDS.values()) {
-        if (binding.sessionId === sid) return true;
-      }
-      return false;
-    }
-    function __resetWorkerSessionBindsForTest() {
-      LIVE_BINDS.clear();
-      BINDS_BY_SESSION.clear();
-    }
-    function liveWorkerSessionBindCount() {
-      return LIVE_BINDS.size;
-    }
-    var crypto2;
     var DEFAULT_CDP_SCAN_INTERVAL_MS;
     var DEFAULT_CDP_DISCOVERY_INTERVAL_MS;
     var DEFAULT_STATUS_INITIAL_REPORT_DELAY_MS;
@@ -39427,14 +39624,11 @@ ${error.message || ""}`;
     var DEFAULT_SESSION_HOST_READY_TIMEOUT_MS;
     var STANDALONE_CDP_SCAN_INTERVAL_MS;
     var DEFAULT_STANDALONE_PORT2;
-    var LIVE_BINDS;
-    var BINDS_BY_SESSION;
-    var WORKER_BIND_CANARY_PREFIX;
     var MESH_CONNECT_TIMEOUT_MS;
     var init_runtime_defaults = __esm2({
       "src/runtime-defaults.ts"() {
         "use strict";
-        crypto2 = __toESM2(require("crypto"));
+        init_worker_session_bind_registry();
         DEFAULT_CDP_SCAN_INTERVAL_MS = 3e4;
         DEFAULT_CDP_DISCOVERY_INTERVAL_MS = 3e4;
         DEFAULT_STATUS_INITIAL_REPORT_DELAY_MS = 2e3;
@@ -39447,9 +39641,6 @@ ${error.message || ""}`;
         DEFAULT_SESSION_HOST_READY_TIMEOUT_MS = 15e3;
         STANDALONE_CDP_SCAN_INTERVAL_MS = 15e3;
         DEFAULT_STANDALONE_PORT2 = 3847;
-        LIVE_BINDS = /* @__PURE__ */ new Map();
-        BINDS_BY_SESSION = /* @__PURE__ */ new Map();
-        WORKER_BIND_CANARY_PREFIX = "wsb_";
         MESH_CONNECT_TIMEOUT_MS = readMeshTimeoutEnvMs(
           ["MESH_CONNECT_TIMEOUT_MS", "MESH_DIRECT_PROBE_CONNECT_TIMEOUT_MS"],
           45e3
@@ -40352,12 +40543,14 @@ ${pattern}
       findWorkerPrivateHomeSpec: () => findWorkerPrivateHomeSpec,
       findWorkerTaskTokenForSession: () => findWorkerTaskTokenForSession,
       hasLiveWorkerSessionBind: () => hasLiveWorkerSessionBind,
+      hashWorkerSessionBind: () => hashWorkerSessionBind,
       isWorkerMcpEnabled: () => isWorkerMcpEnabled,
       liveWorkerSessionBindCount: () => liveWorkerSessionBindCount,
       liveWorkerTaskTokenCount: () => liveWorkerTaskTokenCount,
       mintWorkerSessionBind: () => mintWorkerSessionBind,
       mintWorkerTaskToken: () => mintWorkerTaskToken,
       prepareWorkerPrivateHome: () => prepareWorkerPrivateHome,
+      reconcileWorkerSessionBindsAfterRestore: () => reconcileWorkerSessionBindsAfterRestore,
       removeWorkerMcpConfigEntry: () => removeWorkerMcpConfigEntry,
       resolvePrivateWorkerMcpConfigPath: () => resolvePrivateWorkerMcpConfigPath,
       resolveWorkerMcpConfigPath: () => resolveWorkerMcpConfigPath,
@@ -40366,9 +40559,11 @@ ${pattern}
       revokeWorkerSessionBind: () => revokeWorkerSessionBind,
       revokeWorkerSessionBindsForSession: () => revokeWorkerSessionBindsForSession,
       revokeWorkerTaskToken: () => revokeWorkerTaskToken,
+      setWorkerSessionBindPersistence: () => setWorkerSessionBindPersistence,
       subscribeWorkerBindRevocation: () => subscribeWorkerBindRevocation,
       verifyWorkerSessionBind: () => verifyWorkerSessionBind,
       verifyWorkerTaskToken: () => verifyWorkerTaskToken,
+      workerSessionBindStatus: () => workerSessionBindStatus,
       writeWorkerMcpConfig: () => writeWorkerMcpConfig
     });
     function taskKey(meshId, taskId) {
@@ -40579,7 +40774,16 @@ ${pattern}
         return null;
       }
       if (!current4?.taskId) return null;
-      const token = findWorkerTaskTokenForSession(binding.meshId, current4.taskId, binding.sessionId);
+      let token = findWorkerTaskTokenForSession(binding.meshId, current4.taskId, binding.sessionId);
+      if (!token && binding.restored && tokensForTask(binding.meshId, current4.taskId).length === 0) {
+        token = mintWorkerTaskToken({
+          meshId: binding.meshId,
+          taskId: current4.taskId,
+          ...current4.attemptId ? { attemptId: current4.attemptId } : {},
+          sessionId: binding.sessionId,
+          ...binding.nodeId ? { nodeId: binding.nodeId } : {}
+        });
+      }
       if (!token) return null;
       return {
         token: token.token,
@@ -62984,6 +63188,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       acceptWorkerCompletionReport: () => acceptWorkerCompletionReport,
       acceptWorkerCompletionReportForIdentity: () => acceptWorkerCompletionReportForIdentity,
       checkReportAgainstTaskMode: () => checkReportAgainstTaskMode,
+      classifyUnresolvedWorkerCredential: () => classifyUnresolvedWorkerCredential,
       fenceWorkerReportOnLedger: () => fenceWorkerReportOnLedger,
       findPriorWorkerReport: () => findPriorWorkerReport,
       hasLocalWorkerIdentity: () => hasLocalWorkerIdentity,
@@ -63037,13 +63242,43 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       }
       return exchangeWorkerSessionBind(credential.bind, resolveCurrentTaskForSession);
     }
+    function classifyUnresolvedWorkerCredential(credential) {
+      const bind = typeof credential.bind === "string" ? credential.bind.trim() : "";
+      if (!bind) return { refusal: "unauthenticated", detail: "no worker session bind or task token was presented" };
+      const bindRef = hashWorkerSessionBind(bind).slice(0, 12);
+      if (!bind.startsWith(WORKER_BIND_CANARY_PREFIX)) return { refusal: "unauthenticated", bindRef };
+      const { status } = workerSessionBindStatus(bind);
+      switch (status) {
+        case "unknown":
+          return {
+            refusal: "bind_unknown_after_restart",
+            detail: "this daemon has no record of the worker session bind (not live, not persisted) \u2014 it was most likely minted before a daemon restart that did not carry it over",
+            bindRef
+          };
+        case "session_not_live":
+          return { refusal: "unauthenticated", detail: "the bind is known, but its session is not live on this daemon", bindRef };
+        case "revoked":
+          return { refusal: "unauthenticated", detail: "the bind was revoked (session ended, reclaimed, or re-spawned)", bindRef };
+        default:
+          return { refusal: "unauthenticated", detail: "the bind is live, but its session holds no assigned task here", bindRef };
+      }
+    }
     function resolveCurrentTaskForSession(meshId, sessionId) {
       try {
-        const entry = MeshRuntimeStore.getInstance().findAssignedBySession(meshId, sessionId);
+        const store2 = MeshRuntimeStore.getInstance();
+        const entry = store2.findAssignedBySession(meshId, sessionId);
         if (!entry?.id) return null;
+        let attemptId = entry.attemptId || void 0;
+        if (!attemptId) {
+          try {
+            const latest = store2.turnStore().findLatestAttemptForTask(meshId, entry.id);
+            if (latest && !latest.terminal && (!latest.sessionId || sessionIdsEquivalent(latest.sessionId, sessionId))) attemptId = latest.attemptId;
+          } catch {
+          }
+        }
         return {
           taskId: entry.id,
-          ...entry.attemptId ? { attemptId: entry.attemptId } : {}
+          ...attemptId ? { attemptId } : {}
         };
       } catch {
         return null;
@@ -63114,7 +63349,8 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
           detail: `the report predates task ${live.taskId}, which this session holds now, and the attempt it was written for is no longer open to a late report`
         };
       }
-      return { accepted: false, refusal: "unauthenticated" };
+      const unresolved = classifyUnresolvedWorkerCredential(credential);
+      return { accepted: false, refusal: unresolved.refusal, ...unresolved.detail ? { detail: unresolved.detail } : {} };
     }
     function normalizeWorkerReportedAtMs(raw, nowMs2) {
       if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) return void 0;
@@ -79825,7 +80061,10 @@ ${detail.join("\n")}` : stripped;
     });
     function acceptWorkerProgressUpdate(credential, note, opts = {}) {
       const identity = resolveWorkerIdentity(credential);
-      if (!identity) return { accepted: false, refusal: "unauthenticated" };
+      if (!identity) {
+        const unresolved = classifyUnresolvedWorkerCredential(credential);
+        return { accepted: false, refusal: unresolved.refusal, ...unresolved.detail ? { detail: unresolved.detail } : {} };
+      }
       const reportedAt = normalizeWorkerReportedAtMs(opts.reportedAtMs, opts.nowMs ?? Date.now());
       if (reportedAt === "too_old" || reportedAt !== void 0 && workerIdentityPostdates(identity, reportedAt)) {
         return {
@@ -121046,6 +121285,7 @@ ${marker}`,
       host.adapter.updateRuntimeSettings?.(host.settings);
     }
     init_logger();
+    init_runtime_defaults();
     var WORKER_DELIVERY_REPLAY_TTL_MS = 2 * 60 * 60 * 1e3;
     var WORKER_DELIVERY_REPLAY_MAX_ENTRIES = 2e3;
     var remembered = /* @__PURE__ */ new Map();
@@ -121158,13 +121398,22 @@ ${marker}`,
         return node ? readMeshNodeDaemonId(node) : void 0;
       };
     }
+    function logLocalWorkerRefusal(what, credential, refusal, detail) {
+      try {
+        const bind = typeof credential.bind === "string" ? credential.bind.trim() : "";
+        const binding = bind ? verifyWorkerSessionBind(bind) : null;
+        const who = binding ? `session ${binding.sessionId} (mesh ${binding.meshId})` : bind ? `bind ${hashWorkerSessionBind(bind).slice(0, 12)}` : "a caller with no bind";
+        LOG.warn("WorkerReport", `Local ${what} from ${who} \u2192 refused ${refusal}${detail ? ` \u2014 ${detail}` : ""}`);
+      } catch {
+      }
+    }
     function toReportResponse(result) {
       if (!result.accepted) {
         return {
           success: false,
           error: result.refusal,
           ...result.detail ? { detail: result.detail } : {},
-          hint: result.refusal === "unauthenticated" ? "No live task is bound to this worker session \u2014 the task may already be terminal or reassigned." : result.refusal === "invalid_for_task_mode" ? "Fix the touchedFiles list to match the task mode and call again." : result.refusal === "storage_failed" ? "Nothing was recorded \u2014 call again." : result.refusal === "stale_report" ? "This report was written for an earlier task of this session and can no longer be filed against it; nothing was recorded." : "The completion was refused by the turn ledger; the task state is authoritative."
+          hint: result.refusal === "unauthenticated" ? "No live task is bound to this worker session \u2014 the task may already be terminal or reassigned." : result.refusal === "bind_unknown_after_restart" ? "This daemon does not recognise the worker session bind \u2014 it was issued before a daemon restart that did not carry it over. A retry will not help; put your result in your final message so the coordinator can read it." : result.refusal === "invalid_for_task_mode" ? "Fix the touchedFiles list to match the task mode and call again." : result.refusal === "storage_failed" ? "Nothing was recorded \u2014 call again." : result.refusal === "stale_report" ? "This report was written for an earlier task of this session and can no longer be filed against it; nothing was recorded." : "The completion was refused by the turn ledger; the task state is authoritative."
         };
       }
       return {
@@ -121360,7 +121609,9 @@ ${marker}`,
               return response;
             }
           }
-          response = toReportResponse(acceptWorkerCompletionReport2(credential, report, { isSelfDaemon, reportedAtMs }));
+          const result = acceptWorkerCompletionReport2(credential, report, { isSelfDaemon, reportedAtMs });
+          if (!result.accepted) logLocalWorkerRefusal(`${report.outcome} report`, credential, result.refusal, result.detail);
+          response = toReportResponse(result);
           rememberWorkerDelivery("report", credential, deliveryId, response);
           return response;
         } catch (e) {
@@ -121425,7 +121676,9 @@ ${marker}`,
               return response;
             }
           }
-          response = toProgressResponse(acceptWorkerProgressUpdate2(credential, note, { reportedAtMs }));
+          const result = acceptWorkerProgressUpdate2(credential, note, { reportedAtMs });
+          if (!result.accepted) logLocalWorkerRefusal("progress note", credential, result.refusal ?? "unauthenticated", result.detail);
+          response = toProgressResponse(result);
           rememberWorkerDelivery("progress", credential, deliveryId, response);
           return response;
         } catch (e) {
@@ -121530,18 +121783,26 @@ ${marker}`,
       /**
        * Drain the caller's own pending mailbox messages. Identity resolves
        * exactly like `worker_report_completion` — a bind/token that fails to
-       * resolve is reported as `unauthenticated` rather than as an empty
+       * resolve is reported as `unauthenticated` (or `bind_unknown_after_restart`
+       * for a `wsb_` bind this daemon has no record of) rather than as an empty
        * mailbox, so the mcp-server piggyback layer can tell "nothing to deliver"
        * apart from "could not even ask".
        */
       worker_drain_mailbox: async (_ctx, args) => {
         try {
-          const { resolveWorkerIdentity: resolveWorkerIdentity2 } = await Promise.resolve().then(() => (init_worker_report(), worker_report_exports));
-          const identity = resolveWorkerIdentity2({ token: args?.token, bind: args?.bind });
+          const { resolveWorkerIdentity: resolveWorkerIdentity2, classifyUnresolvedWorkerCredential: classifyUnresolvedWorkerCredential2 } = await Promise.resolve().then(() => (init_worker_report(), worker_report_exports));
+          const credential = { token: args?.token, bind: args?.bind };
+          const identity = resolveWorkerIdentity2(credential);
           const remote = identity ? null : await resolveRemoteWorker(_ctx, args);
           const target = identity ? { meshId: identity.meshId, taskId: identity.taskId } : remote?.taskId ? { meshId: remote.meshId, taskId: remote.taskId } : null;
           if (!target) {
-            return { success: false, error: "unauthenticated" };
+            const unresolved = classifyUnresolvedWorkerCredential2(credential);
+            logLocalWorkerRefusal("mailbox drain", credential, unresolved.refusal, unresolved.detail);
+            return {
+              success: false,
+              error: unresolved.refusal,
+              ...unresolved.detail ? { detail: unresolved.detail } : {}
+            };
           }
           const { drainWorkerMailboxForTask: drainWorkerMailboxForTask2 } = await Promise.resolve().then(() => (init_worker_mailbox(), worker_mailbox_exports));
           const messages = drainWorkerMailboxForTask2(target.meshId, target.taskId).map((m) => ({ id: m.id, text: m.text }));
@@ -145414,6 +145675,7 @@ Run 'adhdev doctor' for detailed diagnostics.`
     }
     init_coordinator_registry();
     init_logger();
+    init_runtime_defaults();
     init_assistant_registry();
     init_launch_record();
     function shouldRestoreHostedRuntime(record2, managerTag) {
@@ -145510,6 +145772,7 @@ Run 'adhdev doctor' for detailed diagnostics.`
       if (!records && typeof host.deps.listHostedCliRuntimes === "function") {
         pruneStaleCoordinatorEntries(sessions, restoredRuntimeIds, rebindAdoptedSessionIds);
         pruneStaleAssistantBinding(sessions, restoredRuntimeIds);
+        reconcileWorkerBindsAfterRestore(sessions, restoredRuntimeIds);
       }
       return restored;
     }
@@ -145573,6 +145836,18 @@ Run 'adhdev doctor' for detailed diagnostics.`
         delete restoredSettings.autoApproveMode;
       }
       LOG.info("CLI", `\u21BB Re-bound assistant session ${record2.runtimeId}`);
+    }
+    function reconcileWorkerBindsAfterRestore(sessions, restoredRuntimeIds) {
+      const live = new Set(restoredRuntimeIds);
+      for (const r of sessions) if (r?.runtimeId) live.add(r.runtimeId);
+      try {
+        const { rehydrated, pruned } = reconcileWorkerSessionBindsAfterRestore(live);
+        if (rehydrated || pruned) {
+          LOG.info("CLI", `\u267B Worker session binds after restore: ${rehydrated} re-adopted for restored session(s), ${pruned} pruned (session did not come back)`);
+        }
+      } catch (e) {
+        LOG.warn("CLI", `worker session bind reconcile failed: ${e?.message || e}`);
+      }
     }
     function pruneStaleAssistantBinding(sessions, restoredRuntimeIds) {
       const live = new Set(restoredRuntimeIds);
@@ -157963,6 +158238,7 @@ ${notice.notice}${supersededHint}`;
     }
     init_coordinator_registry();
     init_worker_mcp_isolation();
+    init_worker_session_bind_store();
     init_mesh_event_forwarding();
     init_mesh_runtime_store();
     init_mesh_ledger_paths();
@@ -158351,9 +158627,26 @@ ${notice.notice}${supersededHint}`;
       } catch {
       }
     }
+    function installWorkerSessionBindPersistence(components) {
+      try {
+        const store2 = new SqliteWorkerSessionBindStore(MeshRuntimeStore.getInstance().db);
+        setWorkerSessionBindPersistence(store2, (sessionId) => {
+          if (components.sessionRegistry.has(sessionId)) return true;
+          try {
+            return !!components.instanceManager.getInstance(sessionId);
+          } catch {
+            return false;
+          }
+        });
+      } catch (e) {
+        LOG.warn("WorkerMcp", `worker session bind persistence unavailable (binds are in-memory only this run): ${e?.message || e}`);
+      }
+      return () => setWorkerSessionBindPersistence(null);
+    }
     function bootMeshRuntime(s6) {
       const components = assembleDaemonComponents(s6);
       const { bus } = s6;
+      const offBindPersistence = installWorkerSessionBindPersistence(components);
       const offSubscribers = [
         subscribeMeshTermination(bus),
         subscribeMeshProviderSignals(bus),
@@ -158398,6 +158691,10 @@ ${notice.notice}${supersededHint}`;
             off();
           } catch {
           }
+        }
+        try {
+          offBindPersistence();
+        } catch {
         }
       };
       return { ...s6, components, disposeMeshRuntime };

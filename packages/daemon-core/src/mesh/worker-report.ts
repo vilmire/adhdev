@@ -65,7 +65,7 @@ import { isTaskReadonly } from './mesh-work-queue.js';
 import { meshRecord } from './mesh-record.js';
 import { getActiveTurnLedger } from './turn-ledger/active-ledger.js';
 import { observeAcceptedWorkerReport } from './turn-ledger/worker-report-evidence.js';
-import { exchangeWorkerSessionBind, verifyWorkerTaskToken, type WorkerTokenExchangeResult } from './worker-mcp-isolation.js';
+import { exchangeWorkerSessionBind, hashWorkerSessionBind, verifyWorkerTaskToken, workerSessionBindStatus, WORKER_BIND_CANARY_PREFIX, type WorkerTokenExchangeResult } from './worker-mcp-isolation.js';
 import type { WorkerHandoffNotes, WorkerCompletionReport } from './worker-report-validation.js';
 import { resolveLateWorkerIdentity, acceptLateWorkerCompletionReport } from './worker-report-late.js';
 
@@ -214,6 +214,42 @@ export function resolveWorkerIdentity(credential: {
 }
 
 /**
+ * Why a credential that `resolveWorkerIdentity` could not resolve was refused.
+ *
+ * A `wsb_` bind this daemon has never seen and has not persisted is reported as
+ * `bind_unknown_after_restart` — the worker was spawned by a daemon incarnation
+ * whose registry did not survive (or the value is forged) — instead of the
+ * generic `unauthenticated`, whose hint ("the task may already be terminal")
+ * sent operators looking in the wrong place. `bindRef` is a short hash prefix
+ * for log correlation; the bind itself is never logged or returned.
+ */
+export function classifyUnresolvedWorkerCredential(credential: { token?: unknown; bind?: unknown }): {
+    refusal: 'unauthenticated' | 'bind_unknown_after_restart';
+    detail?: string;
+    bindRef?: string;
+} {
+    const bind = typeof credential.bind === 'string' ? credential.bind.trim() : '';
+    if (!bind) return { refusal: 'unauthenticated', detail: 'no worker session bind or task token was presented' };
+    const bindRef = hashWorkerSessionBind(bind).slice(0, 12);
+    if (!bind.startsWith(WORKER_BIND_CANARY_PREFIX)) return { refusal: 'unauthenticated', bindRef };
+    const { status } = workerSessionBindStatus(bind);
+    switch (status) {
+        case 'unknown':
+            return {
+                refusal: 'bind_unknown_after_restart',
+                detail: 'this daemon has no record of the worker session bind (not live, not persisted) — it was most likely minted before a daemon restart that did not carry it over',
+                bindRef,
+            };
+        case 'session_not_live':
+            return { refusal: 'unauthenticated', detail: 'the bind is known, but its session is not live on this daemon', bindRef };
+        case 'revoked':
+            return { refusal: 'unauthenticated', detail: 'the bind was revoked (session ended, reclaimed, or re-spawned)', bindRef };
+        default:
+            return { refusal: 'unauthenticated', detail: 'the bind is live, but its session holds no assigned task here', bindRef };
+    }
+}
+
+/**
  * "Which task is this session working on right now?"
  *
  * Reuses `findAssignedBySession` — the SAME lookup the completion-event path
@@ -227,11 +263,22 @@ function resolveCurrentTaskForSession(
     sessionId: string,
 ): { taskId: string; attemptId?: string } | null {
     try {
-        const entry = MeshRuntimeStore.getInstance().findAssignedBySession(meshId, sessionId);
+        const store = MeshRuntimeStore.getInstance();
+        const entry = store.findAssignedBySession(meshId, sessionId);
         if (!entry?.id) return null;
+        // A row without an attempt id: name the task's current ledger attempt when
+        // it is this session's. Only the bind exchange's restored-worker token
+        // re-mint reads this — the normal exchange takes the attempt from the token.
+        let attemptId = entry.attemptId || undefined;
+        if (!attemptId) {
+            try {
+                const latest = store.turnStore().findLatestAttemptForTask(meshId, entry.id);
+                if (latest && !latest.terminal && (!latest.sessionId || sessionIdsEquivalent(latest.sessionId, sessionId))) attemptId = latest.attemptId;
+            } catch { /* no ledger — leave it unset */ }
+        }
         return {
             taskId: entry.id,
-            ...(entry.attemptId ? { attemptId: entry.attemptId } : {}),
+            ...(attemptId ? { attemptId } : {}),
         };
     } catch {
         return null;
@@ -272,6 +319,12 @@ export function fenceWorkerReportOnLedger(
 export type WorkerReportRefusal =
     /** No valid token/bind, or the session holds no assigned task. */
     | 'unauthenticated'
+    /**
+     * The presented `wsb_` bind is unknown to this daemon — not in memory and not
+     * persisted. Typically the worker outlived a daemon restart whose bind
+     * registry was lost. A retry cannot fix it.
+     */
+    | 'bind_unknown_after_restart'
     /** The reducer refused on causal grounds — its typed reason is carried through. */
     | 'rejected_by_reducer'
     /** The task id no longer resolves to a queue row. */
@@ -494,7 +547,8 @@ export function acceptWorkerCompletionReport(
             detail: `the report predates task ${live!.taskId}, which this session holds now, and the attempt it was written for is no longer open to a late report`,
         };
     }
-    return { accepted: false, refusal: 'unauthenticated' };
+    const unresolved = classifyUnresolvedWorkerCredential(credential);
+    return { accepted: false, refusal: unresolved.refusal, ...(unresolved.detail ? { detail: unresolved.detail } : {}) };
 }
 
 /**

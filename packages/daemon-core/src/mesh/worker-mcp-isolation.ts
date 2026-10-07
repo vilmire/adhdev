@@ -66,14 +66,19 @@ import {
     isWorkerMcpEnabled,
     mintWorkerSessionBind,
     verifyWorkerSessionBind,
+    workerSessionBindStatus,
     revokeWorkerSessionBindsForSession,
     subscribeWorkerBindRevocation,
     revokeWorkerSessionBind,
+    reconcileWorkerSessionBindsAfterRestore,
+    setWorkerSessionBindPersistence,
+    hashWorkerSessionBind,
     hasLiveWorkerSessionBind,
     __resetWorkerSessionBindsForTest,
     liveWorkerSessionBindCount,
     WORKER_BIND_CANARY_PREFIX,
     type WorkerSessionBinding,
+    type WorkerSessionBindStatus,
 } from '../runtime-defaults.js';
 import { resolvePrivateWorkerMcpConfigPath, writeWorkerMcpConfig, WORKER_SESSION_BIND_ENV, type WorkerMcpServerCommand } from './worker-mcp-config.js';
 import { prepareWorkerPrivateHome } from './worker-private-home.js';
@@ -114,9 +119,11 @@ interface WorkerTaskToken extends WorkerTaskTokenBinding {
  * Live tokens, keyed by the token secret itself so verification is an O(1)
  * lookup that cannot be tricked by a caller-supplied identifier.
  *
- * In-memory ONLY, by design (§9.2). A daemon restart invalidates every token,
- * which is the correct outcome: the workers those tokens belonged to did not
- * survive the restart either.
+ * In-memory ONLY, by design (§9.2). A daemon restart invalidates every token.
+ * A worker restored by the session host across that restart keeps its SESSION
+ * BIND (persisted as a hash — worker-session-bind-registry.ts), and the bind
+ * exchange re-mints the token for the session's current attempt on first use
+ * (`exchangeWorkerSessionBind`), so no token secret ever needs persisting.
  *
  * ★Never persist this map to seqscribe, a status_report, or any server-bound
  * payload. Integration plan §6.1 (no secrets in topics) applies to this token;
@@ -297,7 +304,7 @@ export const WORKER_TOKEN_CANARY_PREFIX = 'wtk_';
  * test, and is deliberately a DIFFERENT prefix from the token's so a boundary
  * scan cannot pass by only checking one of them.
  */
-// ─── Registry moved to runtime-defaults.ts (2026-09-24) ──────────────────
+// ─── Registry moved to runtime-defaults.ts (2026-09-24; now worker-session-bind-registry.ts, re-exported there) ──
 //
 // Same reason as `isWorkerMcpEnabled` above: `providers/**` (specifically
 // `cli-provider-events.ts`'s idle-edge detach gate) needs to read
@@ -312,14 +319,19 @@ export const WORKER_TOKEN_CANARY_PREFIX = 'wtk_';
 export {
     mintWorkerSessionBind,
     verifyWorkerSessionBind,
+    workerSessionBindStatus,
     revokeWorkerSessionBindsForSession,
     subscribeWorkerBindRevocation,
     revokeWorkerSessionBind,
+    reconcileWorkerSessionBindsAfterRestore,
+    setWorkerSessionBindPersistence,
+    hashWorkerSessionBind,
     hasLiveWorkerSessionBind,
     __resetWorkerSessionBindsForTest,
     liveWorkerSessionBindCount,
     WORKER_BIND_CANARY_PREFIX,
     type WorkerSessionBinding,
+    type WorkerSessionBindStatus,
 };
 
 /**
@@ -750,7 +762,23 @@ export function exchangeWorkerSessionBind(
     }
     if (!current?.taskId) return null;
 
-    const token = findWorkerTaskTokenForSession(binding.meshId, current.taskId, binding.sessionId);
+    let token = findWorkerTaskTokenForSession(binding.meshId, current.taskId, binding.sessionId);
+    // A bind re-adopted for a session restored across a daemon restart: the
+    // task tokens of the previous incarnation are gone with its memory, but the
+    // session's CURRENT assigned attempt (just resolved daemon-side) is still
+    // its task. Re-mint that attempt's token — only when the task holds no token
+    // at all, so a deliberate revocation in THIS incarnation (a reclaim cut also
+    // revokes the bind, so it never reaches here) is never papered over. The
+    // ledger fence still rejects a stale attempt.
+    if (!token && binding.restored && tokensForTask(binding.meshId, current.taskId).length === 0) {
+        token = mintWorkerTaskToken({
+            meshId: binding.meshId,
+            taskId: current.taskId,
+            ...(current.attemptId ? { attemptId: current.attemptId } : {}),
+            sessionId: binding.sessionId,
+            ...(binding.nodeId ? { nodeId: binding.nodeId } : {}),
+        });
+    }
     if (!token) return null;
 
     // ★The attemptId is taken from the TOKEN, not from the resolver: the token is
