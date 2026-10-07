@@ -9,7 +9,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ActiveConversation, CliConversationViewMode } from './types';
 import { isCliConv, isCliTerminalConv } from './types';
-import { IconAssistant, IconBell, IconChat, IconEyeOff, IconX, IconPlus } from '../Icons';
+import { IconBell, IconChat, IconEyeOff, IconX, IconPlus } from '../Icons';
+import StartAssistantButton from './StartAssistantButton';
+import type { AssistantLaunchTarget, AssistantMachineOption } from './assistant-session';
 import { useBaseDaemons } from '../../context/BaseDaemonContext';
 import CliViewModeToggle from './CliViewModeToggle';
 import { getConversationMetaText, getConversationTitle } from './conversation-presenters';
@@ -56,6 +58,10 @@ export interface DashboardHeaderProps {
     onStartAssistant?: () => void;
     startAssistantPending?: boolean;
     startAssistantError?: string | null;
+    /** The split button's dropdown: launch a chosen CLI/machine (remembered). */
+    onStartAssistantWith?: (target: AssistantLaunchTarget) => void;
+    startAssistantMachines?: AssistantMachineOption[];
+    startAssistantDefault?: AssistantLaunchTarget | null;
     onOpenDashboardGuide?: () => void;
     guideNudgeVisible?: boolean;
     actionShortcuts?: Partial<Record<DashboardActionShortcutId, string>>;
@@ -256,6 +262,9 @@ export default function DashboardHeader({
     onStartAssistant,
     startAssistantPending = false,
     startAssistantError = null,
+    onStartAssistantWith,
+    startAssistantMachines,
+    startAssistantDefault = null,
     onOpenDashboardGuide,
     guideNudgeVisible = false,
     actionShortcuts,
@@ -430,20 +439,14 @@ export default function DashboardHeader({
                                 </button>
                             )}
                             {onStartAssistant && (
-                                <button
-                                    type="button"
-                                    onClick={onStartAssistant}
-                                    disabled={startAssistantPending}
-                                    className="btn btn-secondary btn-sm ml-2 inline-flex items-center gap-1.5"
-                                    title={startAssistantError
-                                        ? t('dashboard.assistant.startFailed', { error: startAssistantError })
-                                        : t('dashboard.assistant.startHint')}
-                                    aria-label={t('dashboard.assistant.start')}
-                                    data-testid="dashboard-start-assistant"
-                                >
-                                    <IconAssistant size={14} />
-                                    <span>{startAssistantPending ? t('dashboard.assistant.starting') : t('dashboard.assistant.start')}</span>
-                                </button>
+                                <StartAssistantButton
+                                    onStart={onStartAssistant}
+                                    onStartWith={onStartAssistantWith}
+                                    machines={startAssistantMachines}
+                                    defaultTarget={startAssistantDefault}
+                                    pending={startAssistantPending}
+                                    error={startAssistantError}
+                                />
                             )}
                         </div>
                     </div>

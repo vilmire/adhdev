@@ -47,6 +47,7 @@ describe('planAssistantMcp', () => {
             cliArgs: ['--mcp-config', assistantClaudeMcpConfigPath(CFG), '--strict-mcp-config', `--allowedTools=mcp__${ASSISTANT_MCP_SERVER_NAME}`, '--tools=Read'],
             configWrite: { path: assistantClaudeMcpConfigPath(CFG), format: 'claude_mcp_json', serverName: ASSISTANT_MCP_SERVER_NAME, server },
             mcpServer: server,
+            toolRestriction: 'enforced',
         });
     });
 

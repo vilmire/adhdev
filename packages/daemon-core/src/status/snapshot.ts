@@ -7,7 +7,8 @@
  */
 
 import * as os from 'os';
-import { loadConfig } from '../config/config.js';
+import { getConfigDir, loadConfig } from '../config/config.js';
+import { describeAssistantEligibility } from '../assistant/assistant-launch-plan.js';
 import { loadState } from '../config/state-store.js';
 import { getRecentActivity, getSessionSeenAt, getSessionSeenMarker, getSessionNotificationDismissal, getSessionNotificationUnreadOverride, applySessionNotificationOverlay } from '../config/recent-activity.js';
 import { getWorkspaceState } from '../config/workspaces.js';
@@ -168,6 +169,7 @@ export function buildAvailableProviders(
         describeTrust = mod.describeTrust as typeof describeTrust;
         requiresConfirmation = mod.requiresConfirmation as typeof requiresConfirmation;
     } catch { /* enrichment only */ }
+    let configDir: string | null = null;
     return providers.map((provider) => {
         const trust = (provider as any)._sourceTrust as AvailableProviderInfo['trust'] | undefined;
         const sourceLayer = (provider as any)._sourceLayer as AvailableProviderInfo['sourceLayer'] | undefined;
@@ -186,6 +188,14 @@ export function buildAvailableProviders(
             ...(provider.lastVerification !== undefined ? { lastVerification: provider.lastVerification } : {}),
             ...(provider.meshCoordinator !== undefined ? { meshCoordinator: provider.meshCoordinator } : {}),
             ...(provider.autoApproveModes !== undefined ? { autoApproveModes: provider.autoApproveModes } : {}),
+            // What `launch_assistant` would say for this CLI — the verb's own planner.
+            ...(provider.category === 'cli' ? {
+                assistant: describeAssistantEligibility({
+                    cliType: provider.type,
+                    provider,
+                    configDir: configDir ??= getConfigDir(),
+                }),
+            } : {}),
             ...(trust ? {
                 trust,
                 trustDescription: describeTrust(trust),

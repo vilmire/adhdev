@@ -18,9 +18,13 @@ import { buildConversations } from '../../../src/components/dashboard/buildConve
 import { compareConversationRecency } from '../../../src/components/dashboard/conversation-sort'
 import { sortMobileInboxItems } from '../../../src/components/dashboard/dashboard-mobile-chat-mode-helpers'
 import {
+    ASSISTANT_LAUNCH_CHOICE_STORAGE_KEY,
     isAssistantConversation,
+    listAssistantLaunchMachines,
     pickAssistantLaunchTarget,
+    readAssistantLaunchChoice,
     shouldOfferStartAssistant,
+    writeAssistantLaunchChoice,
 } from '../../../src/components/dashboard/assistant-session'
 import { useStartAssistant } from '../../../src/hooks/useStartAssistant'
 import { statusPayloadToEntries } from '../../../src/utils/status-transform'
@@ -117,14 +121,43 @@ describe('daemon.metadata → conversation', () => {
     })
 })
 
+const ok = (toolRestriction: 'enforced' | 'prompt_only' = 'prompt_only') => ({ assistant: { supported: true, toolRestriction } })
+const refused = (reason: string) => ({ assistant: { supported: false, toolRestriction: 'prompt_only', code: 'assistant_mcp_setup_unsupported', reason } })
+
 describe('Start assistant target and visibility', () => {
-    it('prefers claude-cli, then a mesh-capable CLI, then any launchable CLI', () => {
-        expect(pickAssistantLaunchTarget([machine('m1', [cliProvider('codex-cli'), cliProvider('claude-cli')])]))
+    it('defaults to claude-cli when eligible, else the first eligible CLI; an ineligible CLI is never the default', () => {
+        expect(pickAssistantLaunchTarget([machine('m1', [cliProvider('codex-cli', ok()), cliProvider('claude-cli', ok('enforced'))])]))
             .toEqual({ machineId: 'm1', cliType: 'claude-cli' })
-        expect(pickAssistantLaunchTarget([machine('m1', [cliProvider('aider-cli'), cliProvider('codex-cli', { meshCoordinator: { mcp: true } })])]))
-            .toEqual({ machineId: 'm1', cliType: 'codex-cli' })
+        expect(pickAssistantLaunchTarget([machine('m1', [cliProvider('claude-cli', refused('no')), cliProvider('antigravity-cli', refused('global')), cliProvider('kimi', ok())])]))
+            .toEqual({ machineId: 'm1', cliType: 'kimi' })
+        expect(pickAssistantLaunchTarget([machine('m1', [cliProvider('antigravity-cli', refused('global'))])])).toBeNull()
+        // An older daemon without the field: the CLI is assumed eligible (the daemon still decides).
         expect(pickAssistantLaunchTarget([machine('m1', [cliProvider('aider-cli')])]))
             .toEqual({ machineId: 'm1', cliType: 'aider-cli' })
+    })
+
+    it('honours a remembered choice while it is still eligible on a listed machine', () => {
+        const machines = [
+            machine('m1', [cliProvider('claude-cli', ok('enforced')), cliProvider('codex-cli', ok())]),
+            machine('m2', [cliProvider('claude-cli', ok('enforced')), cliProvider('kimi', ok()), cliProvider('antigravity-cli', refused('global'))]),
+        ]
+        expect(pickAssistantLaunchTarget(machines, { machineId: 'm2', cliType: 'kimi' })).toEqual({ machineId: 'm2', cliType: 'kimi' })
+        expect(pickAssistantLaunchTarget(machines, { cliType: 'kimi' })).toEqual({ machineId: 'm2', cliType: 'kimi' })
+        expect(pickAssistantLaunchTarget(machines, { machineId: 'm2', cliType: 'antigravity-cli' })).toEqual({ machineId: 'm1', cliType: 'claude-cli' })
+        expect(pickAssistantLaunchTarget(machines, { machineId: 'gone', cliType: 'codex-cli' })).toEqual({ machineId: 'm1', cliType: 'claude-cli' })
+    })
+
+    it('lists eligible CLIs first (claude-cli leading) and keeps ineligible ones with their reason', () => {
+        const [m] = listAssistantLaunchMachines([machine('m1', [
+            cliProvider('antigravity-cli', refused('reads a global config')),
+            cliProvider('codex-cli', ok()),
+            cliProvider('claude-cli', ok('enforced')),
+        ])])
+        expect(m.clis.map(c => [c.cliType, c.supported, c.promptOnly, c.reason])).toEqual([
+            ['claude-cli', true, false, undefined],
+            ['codex-cli', true, true, undefined],
+            ['antigravity-cli', false, true, 'reads a global config'],
+        ])
     })
 
     it('skips offline machines and machines without an enabled CLI', () => {
@@ -134,6 +167,19 @@ describe('Start assistant target and visibility', () => {
             machine('ok', [cliProvider('codex-cli')]),
         ])).toEqual({ machineId: 'ok', cliType: 'codex-cli' })
         expect(pickAssistantLaunchTarget([])).toBeNull()
+    })
+
+    it('remembers the choice in storage and survives a throwing storage', () => {
+        const store = new Map<string, string>()
+        const storage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => { store.set(k, v) } }
+        writeAssistantLaunchChoice({ machineId: 'm1', cliType: 'codex-cli' }, storage)
+        expect(store.get(ASSISTANT_LAUNCH_CHOICE_STORAGE_KEY)).toBe(JSON.stringify({ machineId: 'm1', cliType: 'codex-cli' }))
+        expect(readAssistantLaunchChoice(storage)).toEqual({ machineId: 'm1', cliType: 'codex-cli' })
+        const throwing = { getItem: () => { throw new Error('denied') }, setItem: () => { throw new Error('denied') } }
+        expect(readAssistantLaunchChoice(throwing)).toBeNull()
+        expect(() => writeAssistantLaunchChoice({ machineId: 'm1', cliType: 'x' }, throwing)).not.toThrow()
+        store.set(ASSISTANT_LAUNCH_CHOICE_STORAGE_KEY, '{not json')
+        expect(readAssistantLaunchChoice(storage)).toBeNull()
     })
 
     it('is offered only while no assistant session exists and a machine can host one', () => {
@@ -155,6 +201,7 @@ describe('assistant in the dashboard header', () => {
         root = createRoot(container)
     })
     afterEach(() => {
+        vi.unstubAllGlobals()
         act(() => root.unmount())
         container.remove()
     })
@@ -210,6 +257,64 @@ describe('assistant in the dashboard header', () => {
         expect(startButton()?.textContent).toContain('Start assistant')
         act(() => startButton()!.click())
         expect(onStartAssistant).toHaveBeenCalledTimes(1)
+    })
+
+    it('split button: the menu lists each machine\'s CLIs, ineligible ones disabled with the reason, prompt-only ones noted', () => {
+        const onStartAssistant = vi.fn()
+        const onStartAssistantWith = vi.fn()
+        const machines = listAssistantLaunchMachines([
+            machine('m1', [cliProvider('claude-cli', ok('enforced')), cliProvider('codex-cli', ok()), cliProvider('antigravity-cli', refused('reads ~/.gemini globally'))]),
+            machine('m2', [cliProvider('kimi', ok())]),
+        ])
+        renderHeader(conversation(), {
+            onStartAssistant, onStartAssistantWith,
+            startAssistantMachines: machines,
+            startAssistantDefault: { machineId: 'm1', cliType: 'claude-cli' },
+        })
+        expect(document.querySelector('[data-testid="dashboard-start-assistant-options"]')).toBeNull()
+        act(() => container.querySelector<HTMLButtonElement>('[data-testid="dashboard-start-assistant-menu"]')!.click())
+        const menu = document.querySelector('[data-testid="dashboard-start-assistant-options"]')!
+        expect(menu).not.toBeNull()
+        const item = (machineId: string, cliType: string) => menu.querySelector<HTMLButtonElement>(`[data-assistant-machine="${machineId}"][data-assistant-cli="${cliType}"]`)!
+        // Machine headings appear because two machines are online.
+        expect(menu.textContent).toContain('Machine-m1')
+        expect(item('m1', 'claude-cli').getAttribute('aria-checked')).toBe('true')
+        expect(item('m1', 'claude-cli').querySelector('[data-testid="assistant-cli-no-tool-lock"]')).toBeNull()
+        expect(item('m1', 'codex-cli').querySelector('[data-testid="assistant-cli-no-tool-lock"]')?.textContent).toBe('no tool lock')
+        const agy = item('m1', 'antigravity-cli')
+        expect(agy.disabled).toBe(true)
+        expect(agy.querySelector('[data-testid="assistant-cli-unavailable-reason"]')?.textContent).toBe('reads ~/.gemini globally')
+        act(() => item('m2', 'kimi').click())
+        expect(onStartAssistantWith).toHaveBeenCalledWith({ machineId: 'm2', cliType: 'kimi' })
+        expect(onStartAssistant).not.toHaveBeenCalled()
+        expect(document.querySelector('[data-testid="dashboard-start-assistant-options"]')).toBeNull()
+    })
+
+    it('useStartAssistant sends a dropdown choice as cliType and remembers it as the next default', async () => {
+        // test/setup.ts stubs a no-op localStorage; give this case a real one.
+        const store = new Map<string, string>()
+        vi.stubGlobal('localStorage', { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => { store.set(k, v) }, removeItem: (k: string) => { store.delete(k) } })
+        const send = vi.fn(async () => ({ success: true, sessionId: 'asst-1' }))
+        let state: ReturnType<typeof useStartAssistant> | null = null
+        const entries = [machine('m1', [cliProvider('claude-cli', ok('enforced')), cliProvider('codex-cli', ok())])]
+        function Probe() {
+            state = useStartAssistant({ machineEntries: entries, conversations: [], sendDaemonCommand: send })
+            return null
+        }
+        render(<Probe />)
+        expect(state!.defaultTarget).toEqual({ machineId: 'm1', cliType: 'claude-cli' })
+        await act(async () => { await state!.start({ machineId: 'm1', cliType: 'codex-cli' }) })
+        expect(send).toHaveBeenCalledWith('m1', 'launch_assistant', { cliType: 'codex-cli' })
+        expect(state!.defaultTarget).toEqual({ machineId: 'm1', cliType: 'codex-cli' })
+        expect(readAssistantLaunchChoice()).toEqual({ machineId: 'm1', cliType: 'codex-cli' })
+        await act(async () => { await state!.start() })
+        expect(send).toHaveBeenLastCalledWith('m1', 'launch_assistant', { cliType: 'codex-cli' })
+        // A fresh mount reads the remembered choice back as the default.
+        state = null
+        act(() => root.unmount())
+        root = createRoot(container)
+        render(<Probe />)
+        expect(state!.defaultTarget).toEqual({ machineId: 'm1', cliType: 'codex-cli' })
     })
 
     it('useStartAssistant sends launch_assistant with the picked CLI through the command transport', async () => {

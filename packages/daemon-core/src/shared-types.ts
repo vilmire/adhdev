@@ -594,6 +594,12 @@ export interface AvailableProviderInfo {
     meshCoordinator?: ProviderMeshCoordinatorConfig;
     /** Provider-declared auto-approve choices shown by session launch UIs. */
     autoApproveModes?: AutoApproveModesConfig;
+    /**
+     * Whether `launch_assistant` would accept this CLI (derived from the
+     * manifest by `describeAssistantEligibility`, the same planner the verb
+     * runs). CLI providers only; local/P2P metadata, never on the cloud status path.
+     */
+    assistant?: ProviderAssistantEligibility;
     /** BRAIN-ROUTING: suggested model values for the new-session model dropdown. */
     modelOptions?: string[];
     /** BRAIN-ROUTING: reasoning-effort values for the new-session thinking dropdown. */
@@ -623,6 +629,21 @@ export interface AvailableProviderInfo {
     details?: string;
     /** Manifest-declared links: homepage, docs, repo, … */
     links?: Record<string, string>;
+}
+
+/**
+ * Assistant-session eligibility of one CLI provider (design
+ * 2026-10-07-assistant-layer.md §4.5). `toolRestriction` says how the
+ * assistant's tool limit is held: `enforced` = the CLI's own allowlist
+ * (claude-cli `--tools=Read`), `prompt_only` = only the system prompt asks.
+ */
+export interface ProviderAssistantEligibility {
+    supported: boolean;
+    toolRestriction: 'enforced' | 'prompt_only';
+    /** Refusal code `launch_assistant` would return (unsupported only). */
+    code?: string;
+    /** Human-readable refusal reason (unsupported only). */
+    reason?: string;
 }
 
 export type ProviderTrust =
