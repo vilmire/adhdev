@@ -9,7 +9,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ActiveConversation, CliConversationViewMode } from './types';
 import { isCliConv, isCliTerminalConv } from './types';
-import { IconBell, IconChat, IconEyeOff, IconX, IconPlus } from '../Icons';
+import { IconAssistant, IconBell, IconChat, IconEyeOff, IconX, IconPlus } from '../Icons';
 import { useBaseDaemons } from '../../context/BaseDaemonContext';
 import CliViewModeToggle from './CliViewModeToggle';
 import { getConversationMetaText, getConversationTitle } from './conversation-presenters';
@@ -52,6 +52,10 @@ export interface DashboardHeaderProps {
     onMarkNotificationUnread: (notificationId: string) => void;
     onDeleteNotification: (notificationId: string) => void;
     onOpenNewSession?: () => void;
+    /** "Start assistant" — passed only while no assistant session exists and a machine can host one. */
+    onStartAssistant?: () => void;
+    startAssistantPending?: boolean;
+    startAssistantError?: string | null;
     onOpenDashboardGuide?: () => void;
     guideNudgeVisible?: boolean;
     actionShortcuts?: Partial<Record<DashboardActionShortcutId, string>>;
@@ -249,6 +253,9 @@ export default function DashboardHeader({
     hiddenOpen,
     onHiddenOpenChange,
     onOpenNewSession,
+    onStartAssistant,
+    startAssistantPending = false,
+    startAssistantError = null,
     onOpenDashboardGuide,
     guideNudgeVisible = false,
     actionShortcuts,
@@ -420,6 +427,22 @@ export default function DashboardHeader({
                                     aria-label={t('paneGroup.newSession')}
                                 >
                                     <IconPlus size={14} />
+                                </button>
+                            )}
+                            {onStartAssistant && (
+                                <button
+                                    type="button"
+                                    onClick={onStartAssistant}
+                                    disabled={startAssistantPending}
+                                    className="btn btn-secondary btn-sm ml-2 inline-flex items-center gap-1.5"
+                                    title={startAssistantError
+                                        ? t('dashboard.assistant.startFailed', { error: startAssistantError })
+                                        : t('dashboard.assistant.startHint')}
+                                    aria-label={t('dashboard.assistant.start')}
+                                    data-testid="dashboard-start-assistant"
+                                >
+                                    <IconAssistant size={14} />
+                                    <span>{startAssistantPending ? t('dashboard.assistant.starting') : t('dashboard.assistant.start')}</span>
                                 </button>
                             )}
                         </div>

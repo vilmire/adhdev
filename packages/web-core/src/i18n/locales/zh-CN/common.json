@@ -134,6 +134,13 @@
             "workerUnknownMesh": "Mesh 工作者",
             "openMeshGraph": "打开 Mesh 图"
         },
+        "assistant": {
+            "label": "助手",
+            "start": "启动助手",
+            "starting": "正在启动…",
+            "startHint": "启动你的个人助手——一个管理项目和协调器的对话",
+            "startFailed": "无法启动助手：{{error}}"
+        },
         "versionBanner": {
             "restarting": "重启中",
             "upgrading": "更新中…",

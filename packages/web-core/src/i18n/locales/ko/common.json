@@ -134,6 +134,13 @@
             "workerUnknownMesh": "메시 워커",
             "openMeshGraph": "메시 그래프 열기"
         },
+        "assistant": {
+            "label": "비서",
+            "start": "비서 시작",
+            "starting": "시작하는 중…",
+            "startHint": "개인 비서 시작 — 프로젝트와 코디네이터를 관리하는 대화",
+            "startFailed": "비서를 시작하지 못했습니다: {{error}}"
+        },
         "versionBanner": {
             "restarting": "재시작 중",
             "upgrading": "업데이트 중…",

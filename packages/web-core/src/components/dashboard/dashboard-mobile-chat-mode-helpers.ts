@@ -7,6 +7,7 @@ import type { ActiveConversation } from './types'
 import { getConversationMachineId } from './conversation-selectors'
 import { getConversationMachineCardPreview } from './conversation-presenters'
 import { getSessionChatSnapshotForConversation } from './session-chat-controller'
+import { compareAssistantFirst } from './assistant-session'
 
 export interface MobileInboxBuckets {
     attentionItems: MobileConversationListItem[]
@@ -17,6 +18,8 @@ export interface MobileInboxBuckets {
 
 export function sortMobileInboxItems(items: MobileConversationListItem[]) {
     return [...items].sort((left, right) => {
+        const assistantDiff = compareAssistantFirst(left.conversation, right.conversation)
+        if (assistantDiff !== 0) return assistantDiff
         const timestampDiff = right.timestamp - left.timestamp
         if (timestampDiff !== 0) return timestampDiff
         return left.conversation.tabKey.localeCompare(right.conversation.tabKey)

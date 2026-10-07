@@ -134,6 +134,13 @@
             "workerUnknownMesh": "メッシュのワーカー",
             "openMeshGraph": "メッシュグラフを開く"
         },
+        "assistant": {
+            "label": "アシスタント",
+            "start": "アシスタントを開始",
+            "starting": "開始中…",
+            "startHint": "パーソナルアシスタントを開始 — プロジェクトとコーディネーターを管理するチャット",
+            "startFailed": "アシスタントを開始できませんでした: {{error}}"
+        },
         "versionBanner": {
             "restarting": "再起動中",
             "upgrading": "更新中…",

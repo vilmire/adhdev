@@ -500,6 +500,7 @@ function buildCliSession(state: CliProviderState, options: SessionEntryBuildOpti
         settings: state.settings,
         ...(coordinator && { coordinator }),
         ...(meshQueueStats && { meshQueueStats }),
+        ...buildAssistantRoleFields(state.settings),
         // Emit these booleans explicitly (including false) so an un-hide/un-mute clears a
         // previously-true value downstream. Consumers merge with `?? existing` and copy only
         // `!== undefined` fields, so an absent field on false never overwrote a prior true —
@@ -508,6 +509,22 @@ function buildCliSession(state: CliProviderState, options: SessionEntryBuildOpti
         // status-gated so a one-shot silent-idle arm mutes ONLY the idle/completion
         // snapshot, never an approval/generating frame in the same turn.
         muted: resolveMuted(state.settings, resolvedStatus),
+    };
+}
+
+/**
+ * Assistant role flags for the dashboard lane (daemon.metadata, P2P / local).
+ * Present only when true, so non-assistant entries are byte-identical to before.
+ * The cloud status path never forwards them: buildCloudStatusReportPayload is an
+ * allow-list over RoutingSessionEntry, which does not declare these fields.
+ */
+export function buildAssistantRoleFields(
+    settings: Record<string, any> | undefined,
+): Pick<SessionEntry, 'assistant' | 'managedByAssistant'> {
+    if (!settings) return {};
+    return {
+        ...(settings.assistant === true ? { assistant: true as const } : {}),
+        ...(settings.managedByAssistant === true ? { managedByAssistant: true as const } : {}),
     };
 }
 

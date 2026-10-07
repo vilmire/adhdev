@@ -492,6 +492,14 @@ export interface SessionEntry {
     /** Set when this session is acting as a mesh coordinator for the given mesh. */
     coordinator?: { meshId: string; role: 'coordinator' };
     meshQueueStats?: SessionMeshQueueStats;
+    /**
+     * The personal assistant session (launch_assistant stamps `settings.assistant`).
+     * Present only when true. P2P / local only — never in RoutingSessionEntry or the
+     * cloud status allow-lists (design 2026-10-07-assistant-layer.md §4.6).
+     */
+    assistant?: true;
+    /** A coordinator the assistant launched (`settings.managedByAssistant`). Present only when true; P2P / local only. */
+    managedByAssistant?: true;
 }
 
 /**

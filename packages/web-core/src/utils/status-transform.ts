@@ -30,6 +30,18 @@ export interface StatusTransformOptions {
 // Optional session-summary fields copied only when the merged entry defines them.
 const LAST_MESSAGE_KEYS = ['lastMessagePreview', 'lastMessageRole', 'lastMessageAt', 'lastMessageHash'] as const
 const CONTROL_KEYS = ['controlValues', 'providerControls', 'summaryMetadata', 'settings', 'messageInput'] as const
+/**
+ * Assistant role flags (SessionEntry.assistant / managedByAssistant — P2P /
+ * local only, present only when true). Read structurally so an older daemon
+ * (or a stale daemon-core .d.ts) without the fields simply yields nothing.
+ */
+function pickAssistantFlags(session: object): Pick<DaemonData, 'assistant' | 'managedByAssistant'> {
+    const flags = session as { assistant?: unknown; managedByAssistant?: unknown }
+    return {
+        ...(flags.assistant === true ? { assistant: true } : {}),
+        ...(flags.managedByAssistant === true ? { managedByAssistant: true } : {}),
+    }
+}
 const RUNTIME_KEYS = [
     'runtimeKey',
     'runtimeDisplayName',
@@ -282,6 +294,7 @@ export function statusPayloadToEntries(
             surfaceHidden: mergedSession.surfaceHidden,
             muted: mergedSession.muted,
             ...pickDefined(mergedSession, CONTROL_KEYS),
+            ...pickAssistantFlags(mergedSession),
             timestamp: ts,
             _isCli: true,
         } as DaemonData)

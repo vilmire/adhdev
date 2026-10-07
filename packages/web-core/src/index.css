@@ -649,6 +649,11 @@
         color: var(--mesh-coordinator);
     }
 
+    /* Personal assistant marker (same slot as the coordinator marker, distinct glyph). */
+    .mesh-role-icon.is-assistant {
+        color: var(--accent-primary);
+    }
+
     .adhdev-dockview-tab-unread-dot {
         position: absolute;
         top: 4px;

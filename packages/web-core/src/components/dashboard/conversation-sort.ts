@@ -1,5 +1,6 @@
 import type { ActiveConversation, DashboardMessage } from './types'
 import { normalizeManagedStatus } from '@adhdev/daemon-core/status/normalize'
+import { compareAssistantFirst } from './assistant-session'
 
 function parseMessageTimestamp(value: unknown): number {
     if (typeof value === 'number' && Number.isFinite(value)) return value
@@ -35,6 +36,10 @@ export function compareConversationRecency(
     right: ActiveConversation,
     getSortTimestamp: (conversation: ActiveConversation) => number = getConversationSortTimestamp,
 ): number {
+    // The assistant session is pinned first in every recency-ordered list.
+    const assistantDiff = compareAssistantFirst(left, right)
+    if (assistantDiff !== 0) return assistantDiff
+
     const activityDiff = getSortTimestamp(right) - getSortTimestamp(left)
     if (activityDiff !== 0) return activityDiff
 

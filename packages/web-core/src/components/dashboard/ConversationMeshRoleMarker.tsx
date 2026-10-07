@@ -13,7 +13,7 @@
  * safe inside buttons and draggable tabs where a focusable popover is not.
  */
 import { useTranslation } from 'react-i18next'
-import { IconMesh } from '../Icons'
+import { IconAssistant, IconMesh } from '../Icons'
 import { cn } from '../../lib/utils'
 import type { ActiveConversation } from './types'
 import {
@@ -22,8 +22,9 @@ import {
     useConversationMeshRole,
     type ConversationMeshRole,
 } from './conversation-mesh-role'
+import { isAssistantConversation } from './assistant-session'
 
-type MeshRoleSource = Pick<ActiveConversation, 'coordinator' | 'settings'>
+type MeshRoleSource = Pick<ActiveConversation, 'coordinator' | 'settings'> & Partial<Pick<ActiveConversation, 'assistant'>>
 
 export interface MeshRoleText {
     /** "Coordinator" / "Worker" */
@@ -52,10 +53,12 @@ export function useMeshRoleText(role: ConversationMeshRole): MeshRoleText | null
     }
 }
 
-/** Title text + role, for the `title` attribute of a row / tab. */
+/** Title text + role, for the `title` attribute of a row / tab. The assistant wins over a mesh role. */
 export function useConversationMeshRoleTitle(conversation: MeshRoleSource | null | undefined): string | null {
+    const { t } = useTranslation('common')
     const role = useConversationMeshRole(conversation)
-    return useMeshRoleText(role)?.full ?? null
+    const meshTitle = useMeshRoleText(role)?.full ?? null
+    return isAssistantConversation(conversation) ? t('dashboard.assistant.label') : meshTitle
 }
 
 interface MarkerProps {
@@ -63,10 +66,28 @@ interface MarkerProps {
     className?: string
 }
 
-/** Compact icon placed immediately before the conversation title. Coordinator-only. */
+/**
+ * Compact icon placed immediately before the conversation title: the assistant
+ * marker for the personal assistant session, else the coordinator marker.
+ */
 export function MeshRoleIcon({ conversation, className, size = 12 }: MarkerProps & { size?: number }) {
+    const { t } = useTranslation('common')
     const role = useConversationMeshRole(conversation)
     const text = useMeshRoleText(role)
+    if (isAssistantConversation(conversation)) {
+        const label = t('dashboard.assistant.label')
+        return (
+            <span
+                role="img"
+                aria-label={label}
+                title={label}
+                data-assistant-role="assistant"
+                className={cn('mesh-role-icon', 'is-assistant', className)}
+            >
+                <IconAssistant size={size} />
+            </span>
+        )
+    }
     if (!isCoordinatorConversation(conversation) || !text) return null
     return (
         <span
