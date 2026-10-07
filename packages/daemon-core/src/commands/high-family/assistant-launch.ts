@@ -12,8 +12,11 @@
  * `launch_cli` in `<configDir>/assistant/` with `settings {assistant:true,
  * <approval>}` (`launch_cli` stamps `ADHDEV_ASSISTANT_SESSION_ID`) →
  * `AssistantRegistry.bindSession` → `relay.armRestartNote(previous)`. The
- * session id exists only after the spawn, so binding (and the restart note,
- * which the relay holds until the new session is ready) follows the launch.
+ * session id is minted HERE, before planning, and handed to `launch_cli` as
+ * `assistantSessionKey`: the MCP server entry (config file `env` / codex
+ * `-c mcp_servers.*.env.*`) must carry it, and the config is written before
+ * the spawn. Binding (and the restart note, which the relay holds until the
+ * new session is ready) still follows a successful launch.
  *
  * `assistant_pending_relays` is the MCP-only pull (§4.5): it claims queued
  * relay rows / signals and returns `{success:true, assistantEvents}`. While a
@@ -25,6 +28,7 @@
  * ipc/standalone. Neither accepts `mesh`.
  */
 
+import { randomUUID } from 'crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { dirname } from 'path';
 import { ASSISTANT_VERB } from '@adhdev/mesh-shared';
@@ -130,7 +134,8 @@ const launchAssistant: HighFamilyHandler = async (ctx, args) => {
     const configDir = getConfigDir();
     const workspace = assistantWorkspaceDir(configDir);
     const setup = resolveMeshCoordinatorSetup({ provider, cliType, meshId: '', workspace, toolset: { kind: 'assistant' } });
-    const mcp = planAssistantMcp({ cliType, setup, workspace, configDir });
+    const assistantSessionKey = randomUUID();
+    const mcp = planAssistantMcp({ cliType, setup, workspace, configDir, sessionId: assistantSessionKey });
     if (!mcp.ok) return fail(mcp.code, mcp.error, { cliType });
     const approval = resolveAssistantApprovalSettings(provider, args?.autoApproveMode);
     if (!approval.ok) return fail(approval.code, approval.error, { cliType });
@@ -171,6 +176,7 @@ const launchAssistant: HighFamilyHandler = async (ctx, args) => {
         cliArgs: cliArgs.length ? cliArgs : undefined,
         env: Object.keys(launchEnv).length ? launchEnv : undefined,
         settings: assistantSessionSettings(approval.settings),
+        assistantSessionKey,
         ...(model ? { initialModel: model, modelSource: 'user' } : {}),
         ...(thinkingLevel ? { initialThinkingLevel: thinkingLevel, thinkingLevelSource: 'user' } : {}),
         launchedBy: 'assistant',

@@ -74151,12 +74151,22 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
       ];
     }
     function buildAssistantCodexOverrideArgs(serverName, server) {
-      return [
+      const args = [
         "-c",
         `mcp_servers.${serverName}.command=${JSON.stringify(server.command)}`,
         "-c",
         `mcp_servers.${serverName}.args=${JSON.stringify(server.args)}`
       ];
+      for (const [key2, value] of Object.entries(server.env ?? {})) {
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key2)) continue;
+        args.push("-c", `mcp_servers.${serverName}.env.${key2}=${JSON.stringify(value)}`);
+      }
+      return args;
+    }
+    function withAssistantSessionEnv(server, sessionId) {
+      const id22 = typeof sessionId === "string" ? sessionId.trim() : "";
+      if (!id22) return server;
+      return { ...server, env: { ...server.env ?? {}, [ASSISTANT_SESSION_ID_ENV2]: id22 } };
     }
     function planAssistantMcp(input) {
       const { cliType, setup, workspace, configDir } = input;
@@ -74173,21 +74183,23 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
             error: `${cliType} registers MCP servers in its global config; the assistant does not register one on your behalf`
           };
         }
+        const codexServer = withAssistantSessionEnv(setup.mcpServer, input.sessionId);
         return {
           ok: true,
-          cliArgs: buildAssistantCodexOverrideArgs(serverName, setup.mcpServer),
+          cliArgs: buildAssistantCodexOverrideArgs(serverName, codexServer),
           configWrite: null,
-          mcpServer: setup.mcpServer,
+          mcpServer: codexServer,
           toolRestriction: "prompt_only"
         };
       }
+      const mcpServer = withAssistantSessionEnv(setup.mcpServer, input.sessionId);
       if (cliType === "claude-cli") {
         const path90 = assistantClaudeMcpConfigPath(configDir);
         return {
           ok: true,
           cliArgs: buildAssistantClaudeArgs(path90, serverName),
-          configWrite: { path: path90, format: setup.configFormat ?? "claude_mcp_json", serverName, server: setup.mcpServer },
-          mcpServer: setup.mcpServer,
+          configWrite: { path: path90, format: setup.configFormat ?? "claude_mcp_json", serverName, server: mcpServer },
+          mcpServer,
           toolRestriction: "enforced"
         };
       }
@@ -74201,8 +74213,8 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
       return {
         ok: true,
         cliArgs: [],
-        configWrite: { path: setup.configPath, format: setup.configFormat ?? "claude_mcp_json", serverName, server: setup.mcpServer },
-        mcpServer: setup.mcpServer,
+        configWrite: { path: setup.configPath, format: setup.configFormat ?? "claude_mcp_json", serverName, server: mcpServer },
+        mcpServer,
         toolRestriction: "prompt_only"
       };
     }
@@ -74244,6 +74256,7 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
       "src/assistant/assistant-launch-plan.ts"() {
         "use strict";
         import_path16 = require("path");
+        init_dist();
         init_mesh_coordinator();
         init_auto_approve_modes();
         DEFAULT_ASSISTANT_CLI_TYPE = "claude-cli";
@@ -123447,9 +123460,9 @@ ${marker}`,
         policy: clonedPolicy
       };
       if (meshRecord2.inline) {
-        const { randomUUID: randomUUID28 } = await import("crypto");
+        const { randomUUID: randomUUID29 } = await import("crypto");
         const node2 = {
-          id: `node_${randomUUID28().replace(/-/g, "")}`,
+          id: `node_${randomUUID29().replace(/-/g, "")}`,
           workspace: fields.workspace,
           repoRoot: fields.repoRoot,
           daemonId: fields.daemonId,
@@ -127836,6 +127849,7 @@ ${skill.body.trim()}`;
       [ASSISTANT_VERB2.projectAdd]: { sources: [...ASSISTANT_TOOL_SOURCES] },
       [ASSISTANT_VERB2.discoverRepos]: { sources: [...ASSISTANT_TOOL_SOURCES] }
     });
+    var import_crypto29 = require("crypto");
     var import_fs42 = require("fs");
     var import_path40 = require("path");
     init_dist();
@@ -128058,7 +128072,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const configDir = getConfigDir();
       const workspace = assistantWorkspaceDir(configDir);
       const setup = resolveMeshCoordinatorSetup({ provider, cliType, meshId: "", workspace, toolset: { kind: "assistant" } });
-      const mcp = planAssistantMcp({ cliType, setup, workspace, configDir });
+      const assistantSessionKey = (0, import_crypto29.randomUUID)();
+      const mcp = planAssistantMcp({ cliType, setup, workspace, configDir, sessionId: assistantSessionKey });
       if (!mcp.ok) return fail2(mcp.code, mcp.error, { cliType });
       const approval = resolveAssistantApprovalSettings(provider, args?.autoApproveMode);
       if (!approval.ok) return fail2(approval.code, approval.error, { cliType });
@@ -128094,6 +128109,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         cliArgs: cliArgs.length ? cliArgs : void 0,
         env: Object.keys(launchEnv).length ? launchEnv : void 0,
         settings: assistantSessionSettings(approval.settings),
+        assistantSessionKey,
         ...model ? { initialModel: model, modelSource: "user" } : {},
         ...thinkingLevel ? { initialThinkingLevel: thinkingLevel, thinkingLevelSource: "user" } : {},
         launchedBy: "assistant"
@@ -128457,7 +128473,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       return port.pusher.restore(derived, { selfDaemonId: port.selfDaemonId });
     }
     init_mesh_remote_worktree_membership();
-    var import_crypto29 = require("crypto");
+    var import_crypto30 = require("crypto");
     init_config();
     init_cli_detector();
     init_build_info();
@@ -130833,7 +130849,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
        * as `daemonBootId` in this daemon's own runtime summary (a coordinator that
        * sees it change knows this member restarted).
        */
-      meshCoordinatorBootId = (0, import_crypto29.randomUUID)();
+      meshCoordinatorBootId = (0, import_crypto30.randomUUID)();
       meshNodeStatePushRestore = null;
       constructor(deps) {
         this.deps = deps;
@@ -145551,6 +145567,10 @@ Run 'adhdev doctor' for detailed diagnostics.`
         providerType,
         provLookup
       );
+      const assistantSessionKey = readAssistantSessionKey(args, settingsOverride);
+      if (assistantSessionKey && host.adapters?.has?.(assistantSessionKey)) {
+        return { success: false, code: "session_id_in_use", error: `session id ${assistantSessionKey} is already in use` };
+      }
       const provMeta = provLookup;
       const provTrust = provMeta?._sourceTrust;
       if (provTrust === "external-untrusted" && args?.confirmExternalUntrusted !== true) {
@@ -145576,6 +145596,7 @@ Run 'adhdev doctor' for detailed diagnostics.`
           extraEnv: delegatedLaunch ? delegatedLaunch.env : args?.env,
           ...delegatedLaunch && "resolvedTrustPlan" in delegatedLaunch ? { resolvedTrustPlan: delegatedLaunch.resolvedTrustPlan } : {},
           ...delegatedSessionKey ? { presetSessionKey: delegatedSessionKey } : {},
+          ...!delegatedSessionKey && assistantSessionKey ? { presetSessionKey: assistantSessionKey } : {},
           ...typeof args?.initialThinkingLevel === "string" && args.initialThinkingLevel.trim() ? { initialThinkingLevel: args.initialThinkingLevel.trim() } : {},
           launchProvenance: resolveLaunchProvenance(args, settingsOverride)
         }
@@ -145595,6 +145616,13 @@ Run 'adhdev doctor' for detailed diagnostics.`
         // response is unchanged.
         ...workerMcpDelivery ? { workerMcp: workerMcpDelivery } : {}
       };
+    }
+    var UUID_RE2 = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    function readAssistantSessionKey(args, settings) {
+      if (settings?.assistant !== true) return void 0;
+      const raw = args?.assistantSessionKey;
+      const key2 = typeof raw === "string" ? raw.trim() : "";
+      return UUID_RE2.test(key2) ? key2 : void 0;
     }
     var chalkModule = import_chalk.default;
     var chalkApi = typeof chalkModule.yellow === "function" ? chalkModule : chalkModule.default || null;
@@ -152253,7 +152281,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     function isLostRuntimeError(error) {
       return typeof error === "string" && /^(?:Runtime not found for session|Unknown session):/.test(error);
     }
-    var import_crypto30 = require("crypto");
+    var import_crypto31 = require("crypto");
     var import_session_host_core11 = require_dist();
     var BASE_KEY_SEQUENCES = {
       enter: "\r",
@@ -152351,7 +152379,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         const sessionId = String(options.sessionId || "").trim();
         if (!sessionId) throw new Error("sessionId is required");
         const mode = options.mode || "read";
-        const clientId = options.clientId || `raw-terminal-${process.pid}-${(0, import_crypto30.randomUUID)().slice(0, 8)}`;
+        const clientId = options.clientId || `raw-terminal-${process.pid}-${(0, import_crypto31.randomUUID)().slice(0, 8)}`;
         const client = options.client || new import_session_host_core11.SessionHostClient({ endpoint: options.endpoint });
         await client.connect();
         const attachResponse = await client.request({
@@ -153818,7 +153846,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         }
       }
     }
-    var import_crypto31 = require("crypto");
+    var import_crypto32 = require("crypto");
     var import_fs48 = require("fs");
     var import_path46 = require("path");
     init_config();
@@ -153880,7 +153908,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       LOG.info("Seqscribe", "local authority secret minted (standalone, no fleet secret configured)");
     }
     function mintLocalAuthoritySecret() {
-      return (0, import_crypto31.randomBytes)(32).toString("hex");
+      return (0, import_crypto32.randomBytes)(32).toString("hex");
     }
     function loadOrCreateLocalAuthoritySecret(env2) {
       const existing = loadStoredLocalAuthoritySecret(env2);
@@ -154626,7 +154654,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     }
     init_mesh_publisher();
     init_mesh_record();
-    var import_crypto32 = require("crypto");
+    var import_crypto33 = require("crypto");
     init_dist();
     init_dist();
     init_policy();
@@ -155093,7 +155121,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         };
       }
       function notifyMeshEvent(notice) {
-        const eventId = notice.eventId ?? `mesh_event:${(0, import_crypto32.randomUUID)()}`;
+        const eventId = notice.eventId ?? `mesh_event:${(0, import_crypto33.randomUUID)()}`;
         const at = notice.at ?? now();
         const notifyKind = notice.notify ?? "mesh_event";
         const entry = {
