@@ -1004,9 +1004,9 @@ function buildPolicySection(policy: RepoMeshPolicy): string {
     const rules: string[] = [];
     if (policy.requirePreTaskCheckpoint) rules.push('- Create a git checkpoint **before** starting each task');
     if (policy.requirePostTaskCheckpoint) rules.push('- Create a git checkpoint **after** each task completes');
-    if (policy.requireApprovalForPush) rules.push('- **Ask for user approval** before pushing to remote');
+    if (policy.requireApprovalForPush) rules.push('- **Ask for user approval** before pushing to remote (the refine path enforces it)');
     if (policy.allowAutoPublishSubmoduleMainCommits) {
-        rules.push('- Refinery may auto-publish unreachable submodule gitlink commits to submodule origin/main with non-force pushes after validation and patch-equivalence pass');
+        rules.push('- Refinery may auto-publish unreachable submodule gitlink commits to submodule origin/main (non-force, after validation and patch-equivalence pass)');
     }
     rules.push('- **Ask for user approval** before destructive git operations (force push, reset, etc.)');
 
@@ -1017,8 +1017,11 @@ function buildPolicySection(policy: RepoMeshPolicy): string {
     }[policy.dirtyWorkspaceBehavior] || '';
     if (dirtyBehavior) rules.push(dirtyBehavior);
 
-    rules.push(`- Maximum **${policy.maxParallelTasks}** concurrent WRITE tasks; **${resolveMaxReadonlyParallelTasks(policy.maxParallelTasks)}** concurrent READ-ONLY tasks (\`live_debug_readonly\`) — read-only work runs under its own, larger cap`);
-    rules.push('- Write tasks are limited to **one active task per node**, so N parallel write tasks need N *separate branch workspaces* — clone a worktree per task. **Having N nodes in the mesh does not satisfy this**: the constraint is branch isolation, not node count. Base nodes all share one checkout, so two write tasks on two base nodes still collide on the branch. Read-only tasks are exempt and may stack on a node that is already busy. Both caps are ceilings, not targets');
+    // The caps, the one-write-per-node invariant, depends_on notices, owned_paths
+    // claim refusal and unknown-argument rejection are all code-enforced, so
+    // each gets one line here — the rules layer carries the why.
+    rules.push(`- Maximum **${policy.maxParallelTasks}** concurrent WRITE tasks; **${resolveMaxReadonlyParallelTasks(policy.maxParallelTasks)}** concurrent READ-ONLY tasks (\`live_debug_readonly\`, own cap)`);
+    rules.push('- Write tasks are limited to **one active task per node**, so N parallel write tasks need N *separate branch workspaces* — clone a worktree per task (**Having N nodes in the mesh does not satisfy this**, Workflow 3.b0). Read-only tasks are exempt and may stack on a node that is already busy. Both caps are ceilings, not targets');
 
     if (policy.coordinatorIdlePushPolicy === 'auto_silent_on_dispatch') {
         rules.push('- Delegated-worker completions are **auto-silenced**: the routine idle/completion push for a task you dispatch is suppressed once (approval-needed, failure, and long-running alerts still notify the owner normally)');
@@ -1026,59 +1029,39 @@ function buildPolicySection(policy: RepoMeshPolicy): string {
 
     const failurePolicy = policy.onDependencyFailure === 'cancel' ? 'cancel' : 'block';
     rules.push(
-        `- on_dependency_failure: **${failurePolicy}** — controls downstream tasks when a required worker task fails or is cancelled. \`block\` (default) keeps downstream pending and automatically recovers if the predecessor is retried and later completes. \`cancel\` terminally cancels the dependent branch; it is not revived by predecessor retry.`,
+        failurePolicy === 'cancel'
+            ? '- on_dependency_failure: **cancel** — dependents of a failed/cancelled task are cancelled terminally (a retry does not revive them)'
+            : '- on_dependency_failure: **block** (default) — dependents of a failed/cancelled task stay pending and recover if it is retried and completes',
     );
 
     return `## Policy\n${rules.join('\n')}`;
 }
 
+// The tool index. Each tool's own schema description carries its parameters
+// and contract, so this section only names every tool once, grouped by domain
+// (the 6-6 test pins the name set to the canonical registry), plus a "when to
+// reach for it" trigger for the rarely used merged tools — a rule living only in
+// a tool description is a rule the coordinator never reads (owner finding
+// 2026-09-26), so those triggers stay as literal prompt text.
 const TOOLS_SECTION = `## Available Tools
 
-| Tool | Purpose |
-|------|---------|
-| \`mesh_status\` | Nodes' health, git state, sessions, branch convergence |
-| \`mesh_route_preview\` | Explain a hypothetical difficulty/tags/readonly/node route from the current point-in-time capacity + quota-facts snapshot (read-only, fetch-free) |
-| \`mesh_list_nodes\` | List nodes with workspace paths |
-| \`mesh_enqueue_task\` | **DEFAULT enqueue surface.** One task; chain a known follow-up onto it with \`depends_on\` as it becomes known. A dependent waits until every \`depends_on\` task has COMPLETED, then automatically receives an "Upstream results" appendix summarizing its predecessors' completions. If a dependency fails or is cancelled you get a \`queue_dependency_blocked\` notice (retry it with \`mesh_queue_requeue\`, or cancel the waiters). A step that must wait on YOU (an approval, a landing, a deploy) is simply enqueued once you have done that. Idle nodes auto-claim |
-| \`mesh_enqueue_batch\` | Several \`mesh_enqueue_task\` tasks at once, atomically (all insert or none); \`depends_on\` may name batch-local \`ref\`s (forward refs OK). Only for steps that are already known — never invent steps to fill a batch |
-| \`mesh_view_queue\` | Queue status — pending/assigned/completed/failed/cancelled, and which pending tasks are blocked by a failed dependency |
-| \`mesh_queue_cancel\` | Cancel a queue task (audit history kept) |
-| \`mesh_queue_requeue\` | Return a task to pending for retry |
-| \`mesh_send_task\` | Push a task straight to a specific node/session |
-| \`mesh_notify_worker\` | Deliver an urgent memo to a BUSY worker mid-task — piggybacks on the worker's next tool call, no interrupt. Published only while worker MCP is on (\`ADHDEV_WORKER_MCP\`, default on) |
-| \`mesh_mission_upsert\` | Create/update a persistent mission; set completed/abandoned when decided |
-| \`mesh_mission_list\` | All missions with goal/status/progress — the authority for "what work remains" |
-| \`mesh_launch_session\` | Start a new agent session on a node |
-| \`mesh_read_chat\` | Read recent chat from a delegated session |
-| \`mesh_read_debug\` | Daemon-side chat/parser debug bundle for a session |
-| \`mesh_read_terminal\` | Worker's live raw PTY screen (modal/spinner/unparsed) when parsed chat isn't enough; byte-bounded; may contain secrets |
-| \`mesh_send_keys\` | Inject structured keys (text + ENTER/ESC/CTRL_C/arrows) into a worker PTY for non-approval prompts/pickers; approvals use \`mesh_approve\`; destructive keys are gated |
-| \`mesh_task_history\` | Task ledger — dispatches, completions, failures |
-| \`mesh_ledger_query\` | Ledger query by kind/since/node/tail (kind/time/node axes) |
-| \`mesh_reconcile_ledger\` | Import missing ledger entries from remote nodes over P2P |
-| \`mesh_review_inbox\` | Local worktree nodes needing human review, with evidence/diff summaries |
-| \`mesh_note\` | **When you learn a durable lesson (always before closing a mission that taught one), or an injected note turns out stale/wrong.** \`action\`: \`record\` (quirk / pattern to avoid / recovery lesson, inherited by every future coordinator) or \`forget\` (retract by id or exact text; tombstone, history kept) |
-| \`mesh_git_status\` | Git status on a specific node |
-| \`mesh_read_node_logs\` | Remote node's daemon log tail over P2P (grep/since; secrets redacted) |
-| \`mesh_fast_forward_node\` | Dry-run / execute an obvious clean fast-forward without an agent session |
-| \`mesh_restart_daemon\` | Update a node's daemon to its channel's latest and restart |
-| \`mesh_checkpoint\` | Create a git checkpoint on a node |
-| \`mesh_approve\` | Approve/reject a pending yes/no tool-consent modal |
-| \`mesh_answer_question\` | Answer a session's multi-choice QUESTION (promptId from agent:waiting_choice; one answer per question) — never \`mesh_approve\` for questions |
-| \`mesh_list_pending_approvals\` | Approval inbox: every session awaiting a decision (read-only) |
-| \`mesh_create\` | **When the user asks to set up Repo Mesh for a repo with no mesh yet, or before adding/cloning a node.** \`mode\`: \`plan\` (read-only Git-aware discovery + dry-run plan for create / add existing / clone worktree — run it first) or \`create\` (default; bootstrap a NEW mesh after approval) |
-| \`mesh_add_node\` | Register an existing checkout as a node (worktrees: use \`mesh_clone_node\`) |
-| \`mesh_clone_node\` | Create a worktree node for isolated branch work (auto-launches its session) |
-| \`mesh_refine_node\` | Validate + merge a completed worktree node into its base branch |
-| \`mesh_refine_batch\` | Converge multiple sibling worktrees in one conflict-aware sequential pipeline |
-| \`mesh_refine_plan\` | Dry-run Refinery plan (config source, validation, merge intent) |
-| \`mesh_config\` | **When a refine run reports a config error, when deciding whether a landed change needs a daemon restart, or when the user wants the coordinator prompt committed to the repo.** \`kind\`: \`refine\` / \`change_impact\` (read-only; \`mode\` = schema / validate / suggest) or \`mesh_json\` (gated write of \`.adhdev/mesh.json\`; dry-run default) |
-| \`mesh_remove_node\` | Remove a node (cleans up its worktree) |
-| \`mesh_cleanup_worktree_nodes\` | Plan/execute safe removal of CONVERGED worktree nodes (dry-run default) |
-| \`mesh_cleanup_sessions\` | **When a node is cluttered with finished/stuck worker sessions, or \`mesh_status\` keeps listing stale direct dispatches.** \`mode\`: preserve / stop / delete_stopped / stop_and_delete (a node's session records) or \`prune_stale_direct\` (mesh-wide orphaned direct-dispatch records; dry-run unless \`execute=true\`) |
-| \`mesh_init\` | **When the user asks to onboard (or re-configure) this repo for Repo Mesh.** \`mode\`: \`init\` (default; fresh repo, existing config wins) or \`reinit\` (onboarded repo; overwrite semantics — present the per-section diff and get approval before \`write=true\`). Dry-run unless \`write=true\` |
-| \`mesh_node_slots\` | **When routing keeps landing work on a poor-fit node, a node has no slots, or CLI agents were installed on a node.** \`action\`: \`list\` (provider/model/thinking + difficulty + tags), \`propose\` (auto-detect installed CLIs and draft a profile; read-only, reports droppedSlots) or \`set\` (dry-run, then apply with \`write=true\` — wholesale replace, approve the diff first) |
-| \`mesh_coordinator_prompt_append\` | **Only when the user asks for a standing instruction on every coordinator this machine runs.** \`action\`: \`get\` (read this daemon's per-machine APPEND for a CLI type) or \`set\` (write/clear it; append-only — the base prompt is not replaceable) |`;
+Index only — each tool's own description carries its parameters and contract.
+- Status: \`mesh_status\`, \`mesh_list_nodes\`, \`mesh_route_preview\`, \`mesh_git_status\`, \`mesh_read_node_logs\`
+- Queue: \`mesh_enqueue_task\` (**DEFAULT enqueue surface.**), \`mesh_enqueue_batch\`, \`mesh_view_queue\`, \`mesh_queue_cancel\`, \`mesh_queue_requeue\`
+- Sessions: \`mesh_send_task\`, \`mesh_launch_session\`, \`mesh_notify_worker\` (memo to a busy worker; published only while worker MCP is on, \`ADHDEV_WORKER_MCP\`, default on), \`mesh_read_chat\`, \`mesh_read_debug\`, \`mesh_read_terminal\`, \`mesh_send_keys\`
+- Approvals: \`mesh_approve\` (yes/no), \`mesh_answer_question\` (multi-choice questions — never \`mesh_approve\`), \`mesh_list_pending_approvals\`
+- Missions & ledger: \`mesh_mission_upsert\`, \`mesh_mission_list\` (the authority for "what work remains"), \`mesh_task_history\`, \`mesh_ledger_query\`, \`mesh_reconcile_ledger\`, \`mesh_note\`
+- Nodes & convergence: \`mesh_clone_node\`, \`mesh_add_node\`, \`mesh_remove_node\`, \`mesh_checkpoint\`, \`mesh_fast_forward_node\`, \`mesh_refine_node\`, \`mesh_refine_batch\`, \`mesh_refine_plan\`, \`mesh_review_inbox\`, \`mesh_cleanup_worktree_nodes\`, \`mesh_cleanup_sessions\`, \`mesh_restart_daemon\`
+- Setup & config: \`mesh_create\`, \`mesh_init\`, \`mesh_config\`, \`mesh_node_slots\`, \`mesh_coordinator_prompt_append\`
+
+When to reach for the rarely used ones:
+- \`mesh_note\` — **When** you learn a durable lesson (always before closing a mission that taught one), or an injected note turns out stale/wrong.
+- \`mesh_node_slots\` — **When** routing keeps landing work on a poor-fit node, a node has no slots, or CLI agents were installed on a node.
+- \`mesh_config\` — **When** a refine run reports a config error, when deciding whether a landed change needs a daemon restart, or when the user wants the coordinator prompt committed to the repo.
+- \`mesh_create\` — **When** the user asks to set up Repo Mesh for a repo with no mesh yet, or before adding/cloning a node (\`mode: "plan"\` first).
+- \`mesh_init\` — **When** the user asks to onboard (or re-configure) this repo for Repo Mesh.
+- \`mesh_cleanup_sessions\` — **When** a node is cluttered with finished/stuck worker sessions, or \`mesh_status\` keeps listing stale direct dispatches.
+- \`mesh_coordinator_prompt_append\` — **Only when** the user asks for a standing instruction on every coordinator this machine runs.`;
 
 // WIRING-UNIFICATION F1: the coordinator half of the worker protocol, rendered
 // by mesh-shared next to the footer every dispatched task carries so the two
@@ -1100,9 +1083,9 @@ const WORKERS_SECTION = renderCoordinatorWorkerSection();
 const OWNERSHIP_AND_BRIEF_SECTION = [
     '## Path Ownership & Mission Briefs',
     '',
-    '- When two or more `code_change` tasks may touch the same files (parallel worktrees, a fix + its follow-up, a refactor split across tasks), declare `owned_paths` on each — repo-relative files/dirs it will touch (`src/foo.ts`, or `src/mesh/**` for a subtree). A second `code_change` task whose `owned_paths` overlaps an already-claimed one is refused at claim time (`owned_paths_conflict`) instead of silently racing it — cheaper than discovering the collision in a merge conflict later. It is opt-in: omitting it performs no check, so declare it whenever a collision is plausible.',
-    '- After a worker reports, check the response for `ownedPathsMismatch` — it means `touched_files` included paths outside the task\'s declared `owned_paths`. This is evidence, not a rejection (the completion already committed): read it to decide whether the task drifted in scope or your declaration was too narrow, not to re-run anything.',
-    '- Attach a `brief` (`goal`, `constraints`, `doneCriteria`, `handoffNotes`, `ownedPaths`) to a mission via `mesh_mission_upsert` whenever that mission is meant to outlive this coordinator session — a long multi-task plan, or one a differently-scoped coordinator (fresh session, different machine) may pick up later. The brief is rendered into every task dispatched under that mission\'s worker protocol footer, so a worker sees it without a separate lookup; `mesh_mission_list` / a mission upsert response both echo the stored `brief` back to you. A mission you expect to finish within this session does not need one.',
+    '- When two or more `code_change` tasks may touch the same files (parallel worktrees, a fix + its follow-up, a split refactor), declare `owned_paths` on each — repo-relative files/dirs (`src/foo.ts`, or `src/mesh/**` for a subtree). Overlap is refused at claim time (`owned_paths_conflict`, see Workers); omitting it performs no check, so declare it whenever a collision is plausible.',
+    '- `ownedPathsMismatch` in a completion means `touched_files` escaped the declared `owned_paths`. It is evidence, not a rejection (the completion already committed): decide whether the task drifted or your declaration was too narrow — do not re-run anything.',
+    '- Attach a `brief` (`goal`, `constraints`, `doneCriteria`, `handoffNotes`, `ownedPaths`) via `mesh_mission_upsert` when a mission should outlive this coordinator session (a long plan, or one another coordinator may pick up). It is rendered into every task dispatched under that mission, and `mesh_mission_list` / the upsert response echo it back. A mission that finishes within this session needs none.',
 ].join('\n');
 
 // The tool-availability check below is kept FIRST
@@ -1110,7 +1093,7 @@ const OWNERSHIP_AND_BRIEF_SECTION = [
 // mesh_* tool manifest must be caught before any workflow reasoning runs.
 const TOOL_EXPOSURE_PREFLIGHT_SECTION = `## Tool Exposure Preflight
 
-Before doing any coordinator work, confirm that the actual callable tool list includes \`mesh_status\` and the other \`mesh_*\` tools from the table above. If this Repo Mesh coordinator prompt is present but the callable \`mesh_*\` tools are missing, the MCP server/tool manifest is stale or not injected yet. Do not substitute terminal/file/git tools, do not inspect or edit the repository directly, and do not continue as a non-mesh local coding agent. Stop immediately and tell the user to run \`/reload-mcp\` or start a fresh coordinator session so ADHDev can reconnect \`adhdev-mesh\`.`;
+Before doing any coordinator work, confirm that the actual callable tool list includes \`mesh_status\` and the other \`mesh_*\` tools indexed above. If this Repo Mesh coordinator prompt is present but the callable \`mesh_*\` tools are missing, the MCP server/tool manifest is stale or not injected yet. Do not substitute terminal/file/git tools, do not inspect or edit the repository directly, and do not continue as a non-mesh local coding agent. Stop immediately and tell the user to run \`/reload-mcp\` or start a fresh coordinator session so ADHDev can reconnect \`adhdev-mesh\`.`;
 
 const QUOTA_SECTION = `## Provider Quota
 
@@ -1119,27 +1102,13 @@ const QUOTA_SECTION = `## Provider Quota
 - **A \`stale\` or \`refreshing\` number is NOT a current value.** \`stale\` = reading older than the routing staleness threshold; \`refreshing\` = a retained last-good reading while the refetch is failing. Never judge routing from one, and never declare a provider exhausted — or available — on its basis; re-check \`mesh_status\` first.
 - **To pin a provider, use \`required_tags: ["provider=<type>"]\`.** The \`model\` parameter does NOT fix the provider.`;
 
+// The full guided flow (save scopes, scan → present → approve → gated write,
+// init vs reinit) lives in the mesh_init tool description — a rare flow, read
+// when the coordinator is about to call that tool. This pointer keeps the
+// approval invariant in the prompt itself.
 const ONBOARDING_SECTION = `## Onboarding / Reinit
 
-When the user asks to **set up / configure / onboard** this repo for Repo Mesh (or to **re-init / reconfigure** an already-onboarded repo), run ONE guided, approval-gated conversation. You draft, the user approves, the daemon writes. Never auto-write a heuristic suggestion without an explicit user approval turn.
-
-**Save scopes — label every draft with its scope before asking for approval:**
-- **repo-file (commit target)** — \`.adhdev/refine.json\`, \`.adhdev/worktree_bootstrap.json\`, \`.adhdev/change-impact.json\`, \`.adhdev/mesh.json\`. These are committed to the repository and shared with every machine/contributor.
-- **machine-local** — node providerPriority (\`~/.adhdev/meshes.json\`). These stay on this machine and are NOT committed.
-
-**Guided sequence:**
-1. **Scan (dry-run)** — Call \`mesh_init\` (write=false, the default). It returns per-domain suggested configs for refine / worktree_bootstrap / change-impact, a recommended providerPriority, AND \`currentConfig\` — the currently-saved config per domain (repo files). Nothing is written.
-2. **Present drafts** — For each domain, show the user the suggested config with its **save scope label** (repo-file vs machine-local). When \`currentConfig\` already has a saved value for a domain (init on a partially-onboarded repo, or any reinit), present a **current-vs-suggested diff**, not just the suggestion.
-3. **Approve → gated write** — Only after the user approves, call the matching gated-write tool:
-   - repo \`.adhdev/*\` config files → \`mesh_init\` with \`write=true\` (and \`overwrite=true\` ONLY for domains the user approved replacing).
-   - \`.adhdev/mesh.json\` (coordinator prompt / operating notes) → \`mesh_config\` with \`kind="mesh_json"\` (write=true, overwrite only if approved).
-   - providerPriority → apply via node policy update.
-
-**init vs reinit:**
-- **\`mesh_init\`** (\`mode="init"\`, the default) — for a fresh, never-onboarded repo. Existing config files are kept (existing-wins) unless the user explicitly approves overwrite. Use for first-time setup.
-- **\`mesh_init\` with \`mode="reinit"\`** — for a repo that is already onboarded and needs its config refreshed. It re-suggests with OVERWRITE semantics and returns the current-vs-suggested \`currentConfig\` echo. Its first call is a DRY-RUN preview: you MUST present the per-section current-vs-suggested diff and get EXPLICIT per-section approval before re-invoking with write=true. Overwrite is a wholesale replacement, so it silently drops operator hand-edits if you skip the diff — never do that.
-
-`;
+When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, follow the guided flow in the \`mesh_init\` description: you draft, the user approves, the daemon writes — label every draft repo-file (commit target) vs machine-local, show a current-vs-suggested diff, and never write without an explicit approval turn (\`mesh_init\` with \`mode="reinit"\` needs per-section approval; \`.adhdev/mesh.json\` goes through \`mesh_config\` with \`kind="mesh_json"\`).`;
 
 // Base-prompt (not launch-scoped) on purpose: the assistant's ensureCoordinator
 // reuses ANY live coordinator of the mesh, including one the user started, so a

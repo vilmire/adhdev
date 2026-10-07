@@ -9,27 +9,27 @@ import { enumOf, MESH_TASK_MODES, MESH_TASK_DIFFICULTIES, MESH_DELIVERY_MODES } 
 
 export const MESH_SEND_TASK_TOOL = {
     name: 'mesh_send_task',
-    description: 'Legacy push-based task assignment. Enqueues a task specifically targeted at a given node. The node will pull it immediately if idle.',
+    description: 'Push a task straight to a specific node/session, bypassing the queue — an idle target runs it immediately. Use for a same-session continuation or handoff, or to force a node; otherwise prefer mesh_enqueue_task. A direct dispatch is never redelivered automatically after a failure.',
     inputSchema: {
         type: 'object' as const,
         properties: {
             node_id: { type: 'string', description: 'Target node ID (from mesh_list_nodes).' },
-            session_id: { type: 'string', description: 'Agent session ID on the target node. Optional: when omitted the task is dispatched to the node (a remote node scopes it to its own session for this workspace; a local node routes it through the queue pull).' },
+            session_id: { type: 'string', description: 'Optional. Omitted: a remote node picks its own session for this workspace; a local node routes it via the queue pull.' },
             message: { type: 'string', description: 'Natural-language task to send to the agent.' },
             input: MESH_TASK_INPUT_SCHEMA,
-            task_mode: { ...enumOf(MESH_TASK_MODES), description: 'Optional task-mode contract. live_debug_readonly rejects obvious write/commit/push/deploy/destructive instructions before dispatch.' },
-            readonly: { type: 'boolean', description: 'Optional read-only axis (orthogonal to task_mode). When true, runs without write isolation, counted under the read-only cap, and rejects write/commit/push/deploy/destructive instructions like live_debug_readonly. Composable with any task_mode.' },
-            owned_paths: { type: 'array', items: { type: 'string' }, description: 'H1 (path ownership); same semantics as mesh_enqueue_task. Repo-relative files/dirs this code_change task will touch (trailing /** claims the subtree). Optional/opt-in; not a routing input — recorded for the code_change overlap check against other in-flight tasks and for report_completion.touched_files comparison.' },
-            mission_id: { type: 'string', description: 'Mission this task belongs to (mesh_mission record id, full/exact). When set, attributed to the mission task aggregates exactly like mesh_enqueue_task, including terminal completion. Omit for unattributed. An unresolvable id is REJECTED before dispatch (mission_not_found), never silently attached.' },
-            difficulty: { ...enumOf(MESH_TASK_DIFFICULTIES), description: 'REQUIRED task execution difficulty. On a direct dispatch the target node/session is already chosen, so this does not ROUTE — it is recorded so scheduling analytics, mission aggregates and failure-recovery relaunch see the same axis a queued task carries (a recovery relaunch inherits it from the ledger).' },
+            task_mode: { ...enumOf(MESH_TASK_MODES), description: 'Optional. live_debug_readonly rejects obvious write/commit/push/deploy/destructive instructions before dispatch.' },
+            readonly: { type: 'boolean', description: 'Read-only axis (any task_mode): no write isolation, read-only cap, rejects write instructions.' },
+            owned_paths: { type: 'array', items: { type: 'string' }, description: 'As mesh_enqueue_task: repo-relative files/dirs (trailing /** = subtree) this code_change task touches; opt-in, not routing — feeds the overlap check and the touched_files comparison.' },
+            mission_id: { type: 'string', description: 'Full/exact mission id (attributes the task and its completion); unresolvable → REJECTED (mission_not_found).' },
+            difficulty: { ...enumOf(MESH_TASK_DIFFICULTIES), description: 'REQUIRED. Does not route here; recorded for analytics, mission aggregates and recovery relaunch (inherited from the ledger).' },
             delivery_mode: {
                 ...enumOf(MESH_DELIVERY_MODES),
-                description: "How to deliver when the target session is BUSY. Default 'when_idle': queued, auto-delivered once the session goes idle — never disturbs the running turn. "
-                    + "'interrupt' ABORTS the in-flight turn via the provider's own stop control (Ctrl-C, or ESC on antigravity-cli), then delivers once settled — THE WORK IN PROGRESS IS DISCARDED, including partial edits. Use only when the running turn is going wrong and finishing it is worse than losing it. "
-                    + "If the provider cannot interrupt (no stop control declared), the dispatch is REJECTED rather than silently falling back to when_idle. Has no effect on an idle session (delivered immediately either way).",
+                description: "Busy target only. Default 'when_idle': delivered once idle, turn undisturbed. "
+                    + "'interrupt' ABORTS the turn (provider stop control: Ctrl-C, ESC on antigravity-cli) then delivers — work in progress, partial edits included, is DISCARDED; only when finishing the turn is worse than losing it. "
+                    + 'No stop control → REJECTED, never silently downgraded.',
             },
-            allow_stale_node: { type: 'boolean', description: "GIT-GATE: a non-readonly direct dispatch is refused (dirty_workspace / node_stale_behind_upstream) when the target node's git telemetry shows an uncommitted working tree or a branch behind its upstream beyond the mesh's autoFastForward.maxBehind — same predicates as the claim-time/auto-launch gates. Set true to dispatch anyway (e.g. a task whose job IS to fix the dirty/stale tree). No effect on a readonly dispatch. Default: false." },
-            allow_quota_exhausted: { type: 'boolean', description: "QUOTA-GATE: a direct dispatch NAMING a session_id is refused when that session's provider is measurably quota-exhausted on the target node — same predicate the queue claim path applies before pulling a pending task onto an idle session. A stale/missing/unmarked snapshot fails OPEN (dispatch proceeds); only a fresh measured block refuses. Set true to dispatch anyway (e.g. testing the provider's own quota error). Default: false. No effect on a sessionless dispatch that ends up in the queue — the claim-time gate covers that." },
+            allow_stale_node: { type: 'boolean', description: "Default false. Non-readonly dispatch to a dirty tree or one behind upstream beyond autoFastForward.maxBehind is refused (dirty_workspace / node_stale_behind_upstream, the claim-gate predicates); true when the task IS fixing that tree." },
+            allow_quota_exhausted: { type: 'boolean', description: "Default false. A dispatch naming session_id is refused when that provider is measurably quota-exhausted (queue-claim predicate; stale/missing data fails OPEN); true e.g. to test its quota error. Sessionless dispatch: the claim gate applies instead." },
         },
         // session_id is deliberately NOT required: meshSendTask supports a sessionless
         // dispatch (node-scoped on the worker) and the required-arg gate enforces this list.
@@ -185,23 +185,23 @@ export const MESH_FAST_FORWARD_NODE_TOOL = {
 
 export const MESH_RESTART_DAEMON_TOOL = {
     name: 'mesh_restart_daemon',
-    description: 'Restart a mesh node\'s daemon, optionally updating it first — the same path as the dashboard "preview update" button. No agent session is launched. '
-        + 'Idle-gated: a node with an active session (generating / waiting_approval / starting) is refused with code "blocking_sessions" so an in-flight turn is never interrupted — see self_only/force/when_idle to override. '
-        + 'On Windows any restart/upgrade terminates all hosted sessions regardless of options; on POSIX hosted sessions survive a plain restart and rebind on next boot. '
-        + 'The response compares meshAttachedDaemon (the daemon that answered status immediately before the command) with restartTargetDaemon (the daemon process that accepted the lifecycle operation). daemonMismatch/trackMismatch=true and trackWarning surface a split but do not block the operation; null means an older/unreachable daemon did not report enough identity.',
+    description: 'Restart (default: update, then restart) a node\'s daemon — the dashboard "preview update" path; no agent session. '
+        + 'Idle-gated: an active session (generating / waiting_approval / starting) refuses it with "blocking_sessions" (see self_only / when_idle / force). '
+        + 'Windows: any restart/upgrade ends all hosted sessions; POSIX: they survive a plain restart and rebind. '
+        + 'daemonMismatch/trackMismatch/trackWarning flag (without blocking) that meshAttachedDaemon (answered status) differs from restartTargetDaemon (took the operation); null = old/unreachable daemon.',
     inputSchema: {
         type: 'object' as const,
         properties: {
-            node_id: { type: 'string', description: 'Target node ID — the daemon that owns this node is restarted (and updated, in upgrade mode).' },
-            channel: { type: 'string', enum: ['stable', 'preview'], description: 'DEPRECATED and ignored: the release channel is a build-time identity of the installed binary, so an upgrade always targets the daemon\'s own build track. Kept optional so older callers do not break; a conflicting value is reported back as channelOverride rather than silently honored.' },
-            allow_downgrade: { type: 'boolean', description: 'Permit an upgrade whose resolved target is OLDER than the running daemon (upgrade mode only). Default false: refused with code "downgrade_refused". Set true only for a deliberate rollback.' },
-            mode: { type: 'string', enum: ['upgrade', 'restart'], description: 'upgrade (default): update to the latest published version on the daemon\'s build track, then restart; already-latest is a no-op (no restart, returns alreadyLatest:true). restart: pure re-spawn, no reinstall — restarts even when already latest, with much shorter downtime; use to reset wedged daemon state (memory leaks, zombie sessions).' },
-            force: { type: 'boolean', description: 'Bypass the idle-gate entirely. Destructive: in-flight turns are killed and the in-memory pendingOutboundQueue is permanently lost. Default false.' },
-            self_only: { type: 'boolean', description: 'Waive only this mesh\'s own coordinator session when it blocks the restart (the structural self-deadlock: the coordinator is always generating while it calls). Other sessions still refuse. Default false.' },
-            when_idle: { type: 'boolean', description: 'If blocked, schedule the restart to run automatically once the daemon goes idle (safest — no pendingOutboundQueue loss). Every response reports the schedule under deferredRestart; expires after timeout_ms (default 30 min). Default false.' },
-            cancel_when_idle: { type: 'boolean', description: 'Cancel a previously scheduled when_idle restart on the owning daemon.' },
-            timeout_ms: { type: 'number', description: 'Expiry for a when_idle schedule in milliseconds (default 1800000 = 30 min, max 6 h).' },
-            kill_session_host: { type: 'boolean', description: 'Hard refresh: also stop the session-host process, destroying ALL hosted CLI sessions on the machine (this is what Windows already does on every upgrade). Default false.' },
+            node_id: { type: 'string', description: 'Node whose owning daemon is restarted.' },
+            channel: { type: 'string', enum: ['stable', 'preview'], description: 'DEPRECATED, ignored (an upgrade targets the daemon\'s own build track); a conflict is echoed as channelOverride.' },
+            allow_downgrade: { type: 'boolean', description: 'Upgrade: allow an OLDER target, for a deliberate rollback (default false → "downgrade_refused").' },
+            mode: { type: 'string', enum: ['upgrade', 'restart'], description: 'upgrade (default): latest on the daemon\'s build track, then restart; already latest = no-op (alreadyLatest:true). restart: re-spawn only, shorter downtime — resets wedged state (leaks, zombie sessions).' },
+            force: { type: 'boolean', description: 'Bypass the idle-gate. Destructive: kills in-flight turns, loses the in-memory pendingOutboundQueue.' },
+            self_only: { type: 'boolean', description: 'Waive only this mesh\'s own coordinator session (always generating while it calls); others still block.' },
+            when_idle: { type: 'boolean', description: 'If blocked, run once the daemon is idle (safest, no queue loss); shown as deferredRestart, expires after timeout_ms.' },
+            cancel_when_idle: { type: 'boolean', description: 'Cancel a scheduled when_idle restart on the owning daemon.' },
+            timeout_ms: { type: 'number', description: 'when_idle expiry in ms (default 1800000 = 30 min, max 6 h).' },
+            kill_session_host: { type: 'boolean', description: 'Hard refresh: also stop the session-host, ending ALL hosted CLI sessions on the machine (as Windows always does).' },
         },
         required: ['node_id'],
     },
