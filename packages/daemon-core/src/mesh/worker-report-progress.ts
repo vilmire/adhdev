@@ -3,7 +3,7 @@
  * attempt, recorded on the ledger, and surfaced to the coordinator only when enough
  * time and text have accumulated since the last surfaced update.
  */
-import { resolveWorkerIdentity, normalizeWorkerReportedAtMs, workerIdentityPostdates, WORKER_PROGRESS_EVENT_KIND, summaryKey, type WorkerReportRefusal } from './worker-report.js';
+import { resolveWorkerIdentity, classifyUnresolvedWorkerCredential, normalizeWorkerReportedAtMs, workerIdentityPostdates, WORKER_PROGRESS_EVENT_KIND, summaryKey, type WorkerReportRefusal } from './worker-report.js';
 import { resolveForwardedWorkerIdentity, type ForwardedWorkerReportClaim, type ForwardedReportSender, type ForwardedReportRefusalReason } from './worker-report-forwarded.js';
 import type { WorkerTokenExchangeResult } from './worker-mcp-isolation.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
@@ -22,7 +22,10 @@ export function acceptWorkerProgressUpdate(
     opts: { nowMs?: number; reportedAtMs?: unknown } = {},
 ): WorkerProgressUpdateResult {
     const identity = resolveWorkerIdentity(credential);
-    if (!identity) return { accepted: false, refusal: 'unauthenticated' };
+    if (!identity) {
+        const unresolved = classifyUnresolvedWorkerCredential(credential);
+        return { accepted: false, refusal: unresolved.refusal, ...(unresolved.detail ? { detail: unresolved.detail } : {}) };
+    }
     // Durable delivery: a queued note written before this session's CURRENT task was
     // dispatched belongs to a finished task — never file it against the new one.
     const reportedAt = normalizeWorkerReportedAtMs(opts.reportedAtMs, opts.nowMs ?? Date.now());

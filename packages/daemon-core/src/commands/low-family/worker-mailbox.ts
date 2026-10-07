@@ -17,7 +17,7 @@
  */
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
 import { defineCommandSpecs } from '../command-registry.js';
-import { findLocalWorkerOfRemoteTask, resolveRemoteWorker } from './worker-report.js';
+import { findLocalWorkerOfRemoteTask, logLocalWorkerRefusal, resolveRemoteWorker } from './worker-report.js';
 import { LOG } from '../../logging/logger.js';
 
 export const workerMailboxHandlers: Record<string, LowFamilyHandler> = {
@@ -91,14 +91,16 @@ export const workerMailboxHandlers: Record<string, LowFamilyHandler> = {
     /**
      * Drain the caller's own pending mailbox messages. Identity resolves
      * exactly like `worker_report_completion` — a bind/token that fails to
-     * resolve is reported as `unauthenticated` rather than as an empty
+     * resolve is reported as `unauthenticated` (or `bind_unknown_after_restart`
+     * for a `wsb_` bind this daemon has no record of) rather than as an empty
      * mailbox, so the mcp-server piggyback layer can tell "nothing to deliver"
      * apart from "could not even ask".
      */
     worker_drain_mailbox: async (_ctx: LowFamilyContext, args: any) => {
         try {
-            const { resolveWorkerIdentity } = await import('../../mesh/worker-report.js');
-            const identity = resolveWorkerIdentity({ token: args?.token, bind: args?.bind });
+            const { resolveWorkerIdentity, classifyUnresolvedWorkerCredential } = await import('../../mesh/worker-report.js');
+            const credential = { token: args?.token, bind: args?.bind };
+            const identity = resolveWorkerIdentity(credential);
             // F7 (mailbox axis): a worker whose task another daemon owns has no
             // local identity; its memos are deposited HERE (see the deposit
             // handler), keyed by the task its assignment stamp names.
@@ -107,7 +109,13 @@ export const workerMailboxHandlers: Record<string, LowFamilyHandler> = {
                 ? { meshId: identity.meshId, taskId: identity.taskId }
                 : remote?.taskId ? { meshId: remote.meshId, taskId: remote.taskId } : null;
             if (!target) {
-                return { success: false, error: 'unauthenticated' };
+                const unresolved = classifyUnresolvedWorkerCredential(credential);
+                logLocalWorkerRefusal('mailbox drain', credential, unresolved.refusal, unresolved.detail);
+                return {
+                    success: false,
+                    error: unresolved.refusal,
+                    ...(unresolved.detail ? { detail: unresolved.detail } : {}),
+                };
             }
             const { drainWorkerMailboxForTask } = await import('../../mesh/worker-mailbox.js');
             const messages = drainWorkerMailboxForTask(target.meshId, target.taskId)

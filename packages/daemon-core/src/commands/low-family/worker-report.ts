@@ -38,6 +38,7 @@ import { unwrapMeshRelayResult } from '../mesh-relay-result.js';
 import { readMeshNodeDaemonId } from '../../mesh/mesh-node-identity.js';
 import { currentMeshAttemptRef } from '../../providers/cli-provider-mesh-assignment.js';
 import { LOG } from '../../logging/logger.js';
+import { hashWorkerSessionBind, verifyWorkerSessionBind } from '../../runtime-defaults.js';
 import { normalizeWorkerDeliveryId, recallWorkerDelivery, rememberWorkerDelivery } from '../../mesh/worker-report-idempotency.js';
 import type { WorkerReportResult } from '../../mesh/worker-report.js';
 import type { WorkerProgressUpdateResult } from '../../mesh/worker-report-progress.js';
@@ -170,6 +171,28 @@ async function ownerRosterNodeDaemonLookup(ctx: LowFamilyContext, meshId: string
     };
 }
 
+/**
+ * ONE worker-side line per locally refused report/note — the forwarded path
+ * already logs its owner-side verdict, the local path used to be silent. Names
+ * the session/task when the credential resolves that far, and otherwise a short
+ * hash prefix of the bind; never the bind or token itself.
+ */
+export function logLocalWorkerRefusal(
+    what: string,
+    credential: { token?: unknown; bind?: unknown },
+    refusal: string,
+    detail?: string,
+): void {
+    try {
+        const bind = typeof credential.bind === 'string' ? credential.bind.trim() : '';
+        const binding = bind ? verifyWorkerSessionBind(bind) : null;
+        const who = binding
+            ? `session ${binding.sessionId} (mesh ${binding.meshId})`
+            : bind ? `bind ${hashWorkerSessionBind(bind).slice(0, 12)}` : 'a caller with no bind';
+        LOG.warn('WorkerReport', `Local ${what} from ${who} → refused ${refusal}${detail ? ` — ${detail}` : ''}`);
+    } catch { /* logging must never change the answer */ }
+}
+
 /** The command-layer answer for a report result — identical for local and forwarded reports. */
 function toReportResponse(result: WorkerReportResult): Record<string, unknown> & { success: boolean } {
     if (!result.accepted) {
@@ -179,7 +202,9 @@ function toReportResponse(result: WorkerReportResult): Record<string, unknown> &
             ...(result.detail ? { detail: result.detail } : {}),
             hint: result.refusal === 'unauthenticated'
                 ? 'No live task is bound to this worker session — the task may already be terminal or reassigned.'
-                : result.refusal === 'invalid_for_task_mode'
+                : result.refusal === 'bind_unknown_after_restart'
+                    ? 'This daemon does not recognise the worker session bind — it was issued before a daemon restart that did not carry it over. A retry will not help; put your result in your final message so the coordinator can read it.'
+                    : result.refusal === 'invalid_for_task_mode'
                     ? 'Fix the touchedFiles list to match the task mode and call again.'
                     : result.refusal === 'storage_failed'
                         ? 'Nothing was recorded — call again.'
@@ -440,7 +465,9 @@ export const workerReportHandlers: Record<string, LowFamilyHandler> = {
                     return response;
                 }
             }
-            response = toReportResponse(acceptWorkerCompletionReport(credential, report, { isSelfDaemon, reportedAtMs }));
+            const result = acceptWorkerCompletionReport(credential, report, { isSelfDaemon, reportedAtMs });
+            if (!result.accepted) logLocalWorkerRefusal(`${report.outcome} report`, credential, result.refusal, result.detail);
+            response = toReportResponse(result);
             rememberWorkerDelivery('report', credential, deliveryId, response);
             return response;
         } catch (e: any) {
@@ -513,7 +540,9 @@ export const workerReportHandlers: Record<string, LowFamilyHandler> = {
                     return response;
                 }
             }
-            response = toProgressResponse(acceptWorkerProgressUpdate(credential, note, { reportedAtMs }));
+            const result = acceptWorkerProgressUpdate(credential, note, { reportedAtMs });
+            if (!result.accepted) logLocalWorkerRefusal('progress note', credential, result.refusal ?? 'unauthenticated', result.detail);
+            response = toProgressResponse(result);
             rememberWorkerDelivery('progress', credential, deliveryId, response);
             return response;
         } catch (e: any) {
