@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ActiveConversation } from '../components/dashboard/types'
-import { isAssistantConversation } from '../components/dashboard/assistant-session'
+import {
+    createAssistantTabPinState,
+    takeAssistantTabsToPin,
+    type AssistantTabPinState,
+} from '../components/dashboard/assistant-session'
 
 interface UsePaneGroupTabsOptions {
     conversations: ActiveConversation[]
@@ -10,14 +14,22 @@ interface UsePaneGroupTabsOptions {
     onTabOrderChange?: (order: string[]) => void
 }
 
-function mergeTabOrder(prev: string[], conversations: ActiveConversation[]) {
+/**
+ * Keep the tab order in step with the conversations: gone tabs drop out, new
+ * ones append. A newly appearing assistant tab is pinned first — also when its
+ * assistant flag arrives after the tab (`pins` remembers which tabs appeared
+ * here and which were already pinned); user-dragged order is kept after that.
+ * Mutates `pins`, so call it outside a state updater.
+ */
+export function mergeTabOrder(prev: string[], conversations: ActiveConversation[], pins: AssistantTabPinState) {
     const currentKeys = new Set(conversations.map(conversation => conversation.tabKey))
     const existing = prev.filter(tabKey => currentKeys.has(tabKey))
-    const added = conversations.filter(conversation => !prev.includes(conversation.tabKey))
-    // A newly appearing assistant tab is pinned first; user-dragged order is kept after that.
-    const newAssistantKeys = added.filter(isAssistantConversation).map(conversation => conversation.tabKey)
-    const newKeys = added.filter(conversation => !isAssistantConversation(conversation)).map(conversation => conversation.tabKey)
-    return [...newAssistantKeys, ...existing, ...newKeys]
+    const added = conversations.filter(conversation => !prev.includes(conversation.tabKey)).map(conversation => conversation.tabKey)
+    for (const tabKey of added) pins.fresh.add(tabKey)
+    const toPin = takeAssistantTabsToPin(conversations, pins)
+    if (toPin.length === 0) return [...existing, ...added]
+    const pinned = new Set(toPin)
+    return [...toPin, ...[...existing, ...added].filter(tabKey => !pinned.has(tabKey))]
 }
 
 export function usePaneGroupTabs({
@@ -29,6 +41,10 @@ export function usePaneGroupTabs({
 }: UsePaneGroupTabsOptions) {
     const [activeTabId, setActiveTabId] = useState<string | null>(initialActiveTabId ?? null)
     const [tabOrder, setTabOrder] = useState<string[]>(initialTabOrder ?? [])
+    const tabOrderRef = useRef(tabOrder)
+    tabOrderRef.current = tabOrder
+    const assistantPinsRef = useRef<AssistantTabPinState | null>(null)
+    if (!assistantPinsRef.current) assistantPinsRef.current = createAssistantTabPinState()
     const [previewOrder, setPreviewOrder] = useState<string[] | null>(null)
     const previewOrderRef = useRef<string[] | null>(null)
     const draggingTabRef = useRef<string | null>(null)
@@ -50,13 +66,12 @@ export function usePaneGroupTabs({
     }, [initialActiveTabId, activeTabId])
 
     useEffect(() => {
-        setTabOrder(prev => {
-            const next = mergeTabOrder(prev, conversations)
-            if (next.length === prev.length && next.every((tabKey, index) => tabKey === prev[index])) {
-                return prev
-            }
-            return next
-        })
+        // Merged outside the updater: the pin bookkeeping must run exactly once per change.
+        const prev = tabOrderRef.current
+        const next = mergeTabOrder(prev, conversations, assistantPinsRef.current!)
+        if (next.length === prev.length && next.every((tabKey, index) => tabKey === prev[index])) return
+        tabOrderRef.current = next
+        setTabOrder(next)
     }, [conversations])
 
     const sortedConversations = useMemo(() => {

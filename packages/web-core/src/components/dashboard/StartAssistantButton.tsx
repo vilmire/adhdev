@@ -3,12 +3,14 @@
  * (design 2026-10-07-assistant-layer.md §4.7).
  *
  * The main part launches the default target (remembered choice, else
- * claude-cli, else the first eligible CLI). The chevron opens a menu listing
+ * claude-cli, else the first eligible CLI, on the machine hosting the most projects). The chevron opens a menu listing
  * the CLIs of every machine that can host the assistant: eligible ones are
  * selectable, a CLI whose tool limit is only the system prompt carries a
  * "no tool lock" note, and ineligible ones are listed disabled with the
  * daemon's reason. Machine headings appear only when more than one machine is
- * online. Eligibility is the daemon's own (`availableProviders[].assistant`).
+ * online; machines are listed host-first (most hosted projects first — an
+ * assistant can only route work to projects on its own daemon) and a heading
+ * says "hosts N projects". Eligibility is the daemon's own (`availableProviders[].assistant`).
  *
  * Picking a CLI selects it; the footer then offers compact Model / Thinking
  * selects for that CLI (only the lists its manifest advertises — a CLI with
@@ -175,7 +177,18 @@ export default function StartAssistantButton({
                     {machines.map(machine => (
                         <div key={machine.machineId} role="group" aria-label={machine.label} className="flex flex-col">
                             {showMachines && (
-                                <div className="px-2.5 pb-1 pt-2 text-2xs font-semibold uppercase tracking-wide text-text-muted">{machine.label}</div>
+                                <div className="flex min-w-0 items-baseline gap-1.5 px-2.5 pb-1 pt-2 text-2xs text-text-muted">
+                                    <span className="truncate font-semibold uppercase tracking-wide">{machine.label}</span>
+                                    {machine.hostedProjects > 0 && (
+                                        <span
+                                            className="shrink-0 font-normal"
+                                            title={t('dashboard.assistantLaunch.hostsProjectsHint')}
+                                            data-testid="assistant-machine-hosts-projects"
+                                        >
+                                            {t('dashboard.assistantLaunch.hostsProjects', { count: machine.hostedProjects })}
+                                        </span>
+                                    )}
+                                </div>
                             )}
                             {machine.clis.map(cli => {
                                 const isSelected = !!selected && selected.machineId === machine.machineId && selected.cliType === cli.cliType
