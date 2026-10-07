@@ -54,32 +54,28 @@ export const MESH_REFINE_BATCH_TOOL = {
 // dispatchable as hidden aliases with kind + mode injected (mesh-tool-dispatch.ts).
 export const MESH_CONFIG_TOOL = {
     name: 'mesh_config',
-    description: 'Repo Mesh repo-config helper. Select the config family with `kind` (REQUIRED):\n'
-        + '• kind="refine" — the Refinery config (read-only). Use when a refine run reports a config error or you need to know which validation commands will run. `mode` (REQUIRED): '
-        + 'schema = the config JSON schema and supported repo-local locations (the validation authority; heuristic command detection is suggestions-only), no other args; validate = validate a node/workspace config without running validation or merging (optional node_id, optional inline `config`); suggest = scaffold a config from project context/package scripts (never executed until saved; optional node_id). '
-        + 'Never runs validation or merges — that is mesh_refine_node / mesh_refine_plan.\n'
-        + '• kind="change_impact" — the Change Impact config (read-only, declarative, never executed): which package/file changes between the live daemon build and workspace HEAD need a daemon rebuild/restart vs a web-only redeploy vs nothing. Use when deciding whether a landed change needs a daemon restart. '
-        + 'Same `mode` values: schema; validate (loads .adhdev/change-impact.{json,yaml,yml} or repo-mesh-change-impact.* unless inline `config`); suggest (web-* → web-only, others → daemon-runtime, docs/license markers → non-runtime; review and save before it takes effect).\n'
-        + '• kind="mesh_json" — gated WRITE of `.adhdev/mesh.json` (the repo-committed coordinator prompt override/append + declarative config) from the machine-local mesh entry. Use when the user wants the coordinator prompt/config committed to the repo. '
-        + 'Dry-run by default (write=false), never clobbers an existing file unless overwrite=true, validates before writing. Overwrite silently replaces the file: present a current-vs-suggested diff and get explicit approval first. REPO-COMMITTED scope; takes no `mode`.',
+    description: 'Repo-config helper; `kind` (REQUIRED) picks the family, each taking only its own arguments:\n'
+        + '• kind="refine" — Refinery config, read-only (use on a refine config error, or to see which validation commands run). `mode` (REQUIRED): schema = JSON schema + supported repo-local locations (the validation authority; heuristic detection only suggests); validate = check a config without running validation or merging; suggest = scaffold from project scripts (never executed until saved). Validation+merge itself is mesh_refine_node.\n'
+        + '• kind="change_impact" — read-only, declarative, never executed: which changes between the live daemon build and workspace HEAD need a daemon restart vs a web-only redeploy vs nothing (use when deciding whether a landed change needs a restart). Same modes; validate loads .adhdev/change-impact.{json,yaml,yml} or repo-mesh-change-impact.*; suggest maps web-* → web-only, others → daemon-runtime, docs/license → non-runtime, effective once saved.\n'
+        + '• kind="mesh_json" — gated WRITE of `.adhdev/mesh.json` (repo-committed coordinator prompt override/append + config) from the machine-local mesh entry. REPO-COMMITTED scope, no `mode`; dry-run by default, validated, never clobbers without overwrite=true — show a current-vs-suggested diff and get explicit approval first.',
     inputSchema: {
         type: 'object' as const,
         properties: {
             kind: {
                 type: 'string',
                 enum: ['refine', 'change_impact', 'mesh_json'],
-                description: 'Which config family (required). Each kind accepts only its own arguments — see the tool description.',
+                description: 'Config family (required).',
             },
             mode: {
                 type: 'string',
                 enum: ['schema', 'validate', 'suggest'],
-                description: 'refine / change_impact only (required for them): schema (no other params), validate (optional node_id, optional inline config), suggest (optional node_id).',
+                description: 'refine / change_impact (required): schema (no other args) | validate | suggest.',
             },
-            node_id: { type: 'string', description: 'Optional node/workspace; defaults to the first mesh node. refine / change_impact: the config to load (validate) or context source (suggest), ignored by schema. mesh_json: whose workspace .adhdev/mesh.json is written (`workspace` wins when both are given).' },
-            config: { type: 'object', description: 'refine / change_impact, mode=validate only: inline config object to validate instead of loading from the repo.' },
-            write: { type: 'boolean', description: 'mesh_json: when true, persist .adhdev/mesh.json to the repo (commit target). Defaults false (dry-run preview).' },
-            overwrite: { type: 'boolean', description: 'mesh_json: when true, replace an existing .adhdev/mesh.json. Defaults false (never clobber an existing repo mesh.json).' },
-            workspace: { type: 'string', description: 'mesh_json: optional workspace path whose .adhdev/mesh.json is written. Defaults to the resolved node_id node\'s workspace.' },
+            node_id: { type: 'string', description: 'Default: first mesh node. Config/context source (refine, change_impact) or target workspace (mesh_json; `workspace` wins).' },
+            config: { type: 'object', description: 'mode=validate: inline config to validate instead of the repo file.' },
+            write: { type: 'boolean', description: 'mesh_json: persist .adhdev/mesh.json (commit target). Default false (dry-run).' },
+            overwrite: { type: 'boolean', description: 'mesh_json: replace an existing .adhdev/mesh.json. Default false.' },
+            workspace: { type: 'string', description: 'mesh_json: workspace path to write into; defaults to node_id\'s workspace.' },
         },
         required: ['kind'],
     },
@@ -87,33 +83,32 @@ export const MESH_CONFIG_TOOL = {
 
 export const MESH_INIT_TOOL = {
     name: 'mesh_init',
-    description: 'Mesh onboarding for a git project: detects installed CLI providers, suggests all three repo `.adhdev/*` config families — Refinery (.adhdev/refine.json), worktree bootstrap (.adhdev/worktree_bootstrap.json) AND change-impact (.adhdev/change-impact.json) — optionally writes them, and recommends a node providerPriority. '
-        + 'Also returns `currentConfig` (the saved config per domain: repo files) so you can present a current-vs-suggested diff. Suggestions never execute until saved; providerPriority is a recommendation, not auto-applied. Always dry-run unless write=true. Select with `mode`:\n'
-        + '• mode="init" (default) — a fresh, never-onboarded repo. Never overwrites an existing config unless overwrite=true.\n'
-        + '• mode="reinit" — re-onboard an ALREADY-initialized repo whose config needs refreshing: same suggest→validate→gated-write engine with overwrite defaulting to TRUE and a reinit contract in the response. '
-        + 'Overwrite is a WHOLESALE replacement, so it must NOT silently drop operator hand-edits: the first call (write=false) is a DRY-RUN — present the per-section current-vs-suggested diff, get EXPLICIT per-section approval, then re-invoke with write=true.',
+    description: 'Mesh onboarding for a git repo: detects installed CLI providers, suggests the three repo `.adhdev/*` config families — Refinery (refine.json), worktree bootstrap (worktree_bootstrap.json) and change-impact (change-impact.json) — optionally writes them, and recommends a node providerPriority (never auto-applied). Returns `currentConfig` (the saved config per domain). Suggestions never execute until saved; always dry-run unless write=true.\n'
+        + '• mode="init" (default) — a fresh repo; never overwrites an existing config unless overwrite=true.\n'
+        + '• mode="reinit" — refresh an already-onboarded repo: same engine, overwrite defaults to TRUE. Overwrite is a WHOLESALE replacement that would silently drop operator hand-edits, so the first call (write=false) is a DRY-RUN: present the per-section current-vs-suggested diff and get EXPLICIT per-section approval before write=true.\n'
+        + 'GUIDED FLOW (one approval-gated conversation — you draft, the user approves, the daemon writes; never write a heuristic suggestion without an explicit approval turn): (1) call with write=false; (2) present each domain\'s draft labelled with its save scope — repo-file (commit target: .adhdev/refine.json, worktree_bootstrap.json, change-impact.json, mesh.json; shared with every machine) or machine-local (node providerPriority in ~/.adhdev/meshes.json, not committed) — as a current-vs-suggested diff whenever currentConfig already holds a value; (3) after approval write: repo .adhdev/* files → mesh_init write=true (overwrite=true only for approved domains); .adhdev/mesh.json → mesh_config kind="mesh_json" write=true; providerPriority → the node policy update.',
     inputSchema: {
         type: 'object' as const,
         properties: {
             mode: {
                 type: 'string',
                 enum: ['init', 'reinit'],
-                description: 'init (default) = first-time onboarding, existing config wins; reinit = refresh an onboarded repo, overwrite defaults to true.',
+                description: 'init (default) = first-time onboarding, existing config wins; reinit = refresh, overwrite defaults to true.',
             },
-            node_id: { type: 'string', description: 'Optional node/workspace to onboard. Defaults to the first mesh node with a workspace.' },
-            write: { type: 'boolean', description: 'When true, persist the suggested configs to disk. Defaults false (dry-run preview only — for reinit, the preview surfaces the current-vs-suggested diff; approve per-section first).' },
-            overwrite: { type: 'boolean', description: 'Replace an existing config file. Defaults false for mode=init (never clobber) and true for mode=reinit; pass false with reinit to fall back to existing-wins.' },
+            node_id: { type: 'string', description: 'Optional node/workspace to onboard; defaults to the first mesh node with a workspace.' },
+            write: { type: 'boolean', description: 'Persist the suggested configs. Default false (dry-run; for reinit it surfaces the diff to approve per section).' },
+            overwrite: { type: 'boolean', description: 'Replace existing config files. Default false for init, true for reinit (pass false to keep existing-wins).' },
         },
     },
 };
 
 export const MESH_REFINE_PLAN_TOOL = {
     name: 'mesh_refine_plan',
-    description: 'Dry-run Refinery plan for a worktree node: reports config source, validation commands, suggestions/unavailable reason, and merge/cleanup intent without executing validation or git merge.',
+    description: 'Alias of mesh_refine_node\'s default dry-run: the Refinery plan for a worktree node (config source, validation commands, merge/cleanup intent); executes nothing.',
     inputSchema: {
         type: 'object' as const,
         properties: {
-            node_id: { type: 'string', description: 'Node ID of the worktree node to plan.' },
+            node_id: { type: 'string', description: 'Worktree node to plan.' },
         },
         required: ['node_id'],
     },
@@ -136,39 +131,37 @@ export const MESH_REVIEW_INBOX_TOOL = {
 // validate-tool-args.ts MESH_TOOL_ACTIONS).
 export const MESH_NODE_SLOTS_TOOL = {
     name: 'mesh_node_slots',
-    description: 'Read, draft, or change a mesh node\'s capability slots (policy.slots) — the provider/model/thinking + difficulty + capability-tag profile that task→node fitness routing matches against. '
-        + 'Use it when routing keeps landing work on a poor-fit node, when a node has no slots, or after CLI agents were installed on a node. Select with `action` (REQUIRED):\n'
-        + '• list — read-only: the node\'s current slots.\n'
-        + '• propose — read-only AUTO-DETECT: reads the node\'s installed CLI agents from the coordinator (its own provider catalog, or the one the node pushed — category=cli + installed=true), maps each through a seeded provider→(model/thinkingLevel/difficulty/maxParallel) table, and returns `proposedSlots` with per-slot rationale plus `droppedSlots` / `droppedProviders` / `destructive` '
-        + '(hand-tuned slots, tuned maxParallel, providers not on PATH are NOT preserved by the draft — present those before approving). Detects nothing → proposes nothing. Never writes.\n'
-        + '• set — PROPOSE (dry-run, default) or APPLY (write=true) a slot list. WHOLESALE REPLACEMENT: the `slots` you pass become the COMPLETE new list; any prior slot not in it is dropped. The dry-run returns `currentSlots` vs `proposedSlots` — present the diff and get EXPLICIT user approval before write=true. Apply goes through update_mesh_node (machine-local node policy).',
+    description: 'Read, draft or change a node\'s capability slots (policy.slots): the provider/model/thinking + difficulty + capability tags routing matches. Use when routing keeps landing on a poor-fit node, a node has no slots, or CLIs were installed. `action` (REQUIRED, own arguments only):\n'
+        + '• list — read-only current slots.\n'
+        + '• propose — read-only AUTO-DETECT from the node\'s installed CLIs (category=cli, installed=true) via a seeded provider→(model/thinkingLevel/difficulty/maxParallel) table: `proposedSlots` with rationale plus `droppedSlots` / `droppedProviders` / `destructive` (hand-tuned slots, tuned maxParallel and providers not on PATH are NOT kept — present them before approving). Nothing detected → nothing proposed.\n'
+        + '• set — dry-run (default) or write=true. WHOLESALE REPLACEMENT: `slots` becomes the complete list. Present the dry-run\'s `currentSlots` vs `proposedSlots` and get EXPLICIT user approval before writing (machine-local node policy, via update_mesh_node).',
     inputSchema: {
         type: 'object' as const,
         properties: {
             action: {
                 type: 'string',
                 enum: ['list', 'propose', 'set'],
-                description: 'Which slot operation to run (required). Each action accepts only its own arguments — see the tool description.',
+                description: 'Slot operation (required).',
             },
-            node_id: { type: 'string', description: 'REQUIRED — the mesh node id. All actions.' },
+            node_id: { type: 'string', description: 'REQUIRED for every action — the mesh node id.' },
             slots: {
                 type: 'array',
-                description: 'set: the COMPLETE desired capability-slot list (wholesale replacement). Each slot: { provider (REQUIRED), model?, thinkingLevel?, difficulty?, capability?, maxParallel? }. Required for set.',
+                description: 'set (required): the COMPLETE desired slot list.',
                 items: {
                     type: 'object',
                     properties: {
-                        provider: { type: 'string', description: 'REQUIRED — provider type, e.g. claude-cli / codex-cli / antigravity-cli.' },
-                        model: { type: 'string', description: 'Optional — model for this slot (best-effort at launch, e.g. opus / gpt-5-codex).' },
-                        thinkingLevel: { type: 'string', description: 'Optional — provider-specific thinking level verbatim (e.g. low/medium/high/max, or codex minimal/xhigh).' },
-                        difficulty: { type: 'array', items: { type: 'string' }, description: 'Optional — task difficulties this slot handles (easy/medium/difficult/freeform). Empty = all (general-purpose).' },
-                        capability: { type: 'array', items: { type: 'string' }, description: 'Optional — capability tags this slot satisfies (matched against a task\'s requiredTags).' },
-                        maxParallel: { type: 'number', description: 'Optional — per-node·per-slot max concurrent tasks. Omit = no per-slot cap.' },
+                        provider: { type: 'string', description: 'REQUIRED provider type, e.g. claude-cli / codex-cli / antigravity-cli.' },
+                        model: { type: 'string', description: 'Best-effort at launch, e.g. opus / gpt-5-codex.' },
+                        thinkingLevel: { type: 'string', description: 'Provider-specific level verbatim (low/medium/high/max; codex minimal/xhigh).' },
+                        difficulty: { type: 'array', items: { type: 'string' }, description: 'Difficulties handled (easy/medium/difficult/freeform); empty = all.' },
+                        capability: { type: 'array', items: { type: 'string' }, description: 'Capability tags satisfied (matched against a task\'s requiredTags).' },
+                        maxParallel: { type: 'number', description: 'Per-node·per-slot concurrency cap; omit = none.' },
                     },
                     required: ['provider'],
                 },
             },
-            reason: { type: 'string', description: 'set: optional short rationale, echoed in the dry-run so the user sees WHY the change is suggested.' },
-            write: { type: 'boolean', description: 'set: when true, apply the slot list (wholesale replacement). Defaults false (dry-run preview of proposedSlots + currentSlots).' },
+            reason: { type: 'string', description: 'set: optional rationale echoed in the dry-run.' },
+            write: { type: 'boolean', description: 'set: apply (wholesale replacement). Default false (dry-run).' },
         },
         required: ['action', 'node_id'],
     },

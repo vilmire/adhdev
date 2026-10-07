@@ -174,9 +174,11 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(prompt).toContain('auto-launch starts the session on it for you')
     expect(prompt).toContain('never as a reason to fall back to a base node')
 
-    // 5. The same boundary is restated in the durable Rules section.
-    expect(prompt).toContain('**Base nodes are reserved for environment-specific testing.**')
-    expect(prompt).toContain('every new, independent `code_change` gets its own cloned worktree')
+    // 5. Batch 2 (2026-10-07) dropped the Rules-section restatement of this
+    //    boundary — the rule now lives once, in Workflow 3.b0, and the Rules
+    //    bullets point to it. The per-task-new-worktree half is pinned here.
+    expect(prompt).not.toContain('**Base nodes are reserved for environment-specific testing.**')
+    expect(prompt).toContain('a NEW, independent piece of write work gets its own freshly cloned worktree')
     expect(prompt).toContain('mesh_clone_node')
   })
 
@@ -1036,16 +1038,18 @@ describe('Repo Mesh coordinator prompt', () => {
   // tool added to the schema without exposing it in the prompt (or vice-versa) fails here.
   //
   // Extract the tool names the prompt actually renders from the "## Available Tools"
-  // table rows (`| \`mesh_x\` | … |`) and require SET-equality with CANONICAL_MESH_TOOL_NAMES.
+  // index (batch 2, 2026-10-07: the per-tool table became a one-line-per-domain
+  // index — every backticked `mesh_x` name in the section counts) and require
+  // SET-equality with CANONICAL_MESH_TOOL_NAMES.
   const extractPromptToolTable = (prompt: string): string[] => {
     const start = prompt.indexOf('## Available Tools')
     expect(start).toBeGreaterThanOrEqual(0)
-    // The table runs until the next "## " section heading.
+    // The index runs until the next "## " section heading.
     const rest = prompt.slice(start + '## Available Tools'.length)
     const end = rest.indexOf('\n## ')
     const table = end >= 0 ? rest.slice(0, end) : rest
     const names = new Set<string>()
-    for (const m of table.matchAll(/^\|\s*`(mesh_[a-z0-9_]+)`\s*\|/gm)) {
+    for (const m of table.matchAll(/`(mesh_[a-z0-9_]+)`/g)) {
       names.add(m[1])
     }
     return [...names]
@@ -1095,14 +1099,14 @@ describe('Repo Mesh coordinator prompt', () => {
 
   // Owner finding (2026-09-26): rarely used tools sat in the table as one line with
   // no "when to use" trigger, so a coordinator never reached for them. Every merged
-  // tool's row must open with a bold **When …** trigger.
-  it('every merged tool row in the tool table opens with a concrete **When…** trigger', () => {
+  // tool keeps its own trigger line under the tool index, led by a bold **When**.
+  it('every merged tool has a concrete **When…** trigger line under the tool index', () => {
     const prompt = buildCoordinatorSystemPrompt({ mesh: baseMesh() as any })
     const merged = ['mesh_node_slots', 'mesh_coordinator_prompt_append', 'mesh_note', 'mesh_config', 'mesh_init', 'mesh_create', 'mesh_cleanup_sessions']
     for (const tool of merged) {
-      const row = prompt.split('\n').find(line => line.startsWith(`| \`${tool}\` |`))
-      expect(row, `${tool} has no tool-table row`).toBeTruthy()
-      expect(row!, `${tool} row has no trigger`).toMatch(/^\| `[a-z_]+` \| \*\*(When|Only when) /)
+      const row = prompt.split('\n').find(line => line.startsWith(`- \`${tool}\` — `))
+      expect(row, `${tool} has no trigger line`).toBeTruthy()
+      expect(row!, `${tool} row has no trigger`).toMatch(/^- `[a-z_]+` — \*\*(When|Only when)\*\* /)
     }
   })
 
@@ -1274,11 +1278,14 @@ describe('Repo Mesh coordinator prompt — queue tasks with depends_on (graph or
   })
 
   it('describes mesh_enqueue_batch as a plain atomic multi-enqueue', () => {
+    // Batch 2 (2026-10-07): the tool-table row is gone (the schema description
+    // carries it — pinned by mcp-server's mesh-enqueue-tool-exposure test); the
+    // prompt states it once, in Workflow 3.a.
     const p = prompt()
-    const row = p.split('\n').find(line => line.startsWith('| `mesh_enqueue_batch` |'))
-    expect(row).toBeTruthy()
-    expect(row!).toContain('atomically')
-    expect(row!).toContain('never invent steps to fill a batch')
+    const line = p.split('\n').find(l => l.includes('**Incremental enqueue rule.**'))
+    expect(line).toBeTruthy()
+    expect(line!).toContain('`mesh_enqueue_batch` enqueues several already-known tasks at once (all or none')
+    expect(line!).toContain('never invent speculative steps to fill one')
   })
 
   it('tells the coordinator how a failed dependency is surfaced and resolved', () => {

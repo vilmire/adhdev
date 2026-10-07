@@ -8,31 +8,29 @@ import { enumOf, MESH_SESSION_CLEANUP_MODES } from '@adhdev/mesh-shared';
 
 export const MESH_MISSION_UPSERT_TOOL = {
     name: 'mesh_mission_upsert',
-    description: 'Create or update a persistent mission record so the plan survives coordinator restarts. Optional — tasks do not require a mission; use one when you want the plan tracked as a durable, named unit of work. '
-        + 'Recommended for multi-task work: create a mission first, then attach every task to it with mission_id (mesh_enqueue_task, or a top-level mission_id on mesh_enqueue_batch, which applies to every entry). Update status to completed/abandoned when the outcome is decided. Progress is derived from task statuses — there is no separate progress field. '
-        + 'Single mission: pass title (and optionally mission_id to update an existing one). '
-        + 'Bulk status transition (e.g. one-time stale cleanup): pass mission_ids (array) + status to apply that status to many missions at once; title/goal are ignored and a per-mission result array is returned. mission_ids takes precedence over mission_id when both are given.',
+    description: 'Create or update a persistent mission so a plan survives coordinator restarts. Optional — tasks need no mission; recommended for multi-task work: create it first, then attach each task with mission_id (mesh_enqueue_task, or one top-level mission_id on mesh_enqueue_batch for every entry). Set completed/abandoned when the outcome is decided. Progress is derived from task statuses (no progress field). '
+        + 'Single: title (+ mission_id to update). Bulk status change (e.g. stale cleanup): mission_ids + status — title/goal ignored, per-mission results returned; mission_ids wins over mission_id.',
     inputSchema: {
         type: 'object' as const,
         properties: {
-            mission_id: { type: 'string', description: 'Full mission id (exact match) to update. Omit to create a new mission — do not guess/truncate an id to force a create. An id that does not resolve to an existing mission is REJECTED (mission_not_found), never silently created under that id — use mesh_mission_list to get a valid full id. Ignored when mission_ids is provided.' },
+            mission_id: { type: 'string', description: 'Full/exact id to update (from mesh_mission_list); omit to create. Unknown/truncated ids are REJECTED (mission_not_found), never created.' },
             mission_ids: {
                 type: 'array',
                 items: { type: 'string' },
-                description: 'Bulk mode: apply `status` to every listed mission id in one call (stale cleanup). Requires `status`. Returns a per-mission { id, ok, status?, error? } result array. Overrides mission_id/title/goal.',
+                description: 'Bulk mode: apply `status` (required) to every listed id; returns per-mission { id, ok, status?, error? }. Overrides mission_id/title/goal.',
             },
-            title: { type: 'string', description: 'Short mission title. Required to create/update a single mission; ignored in bulk (mission_ids) mode.' },
-            goal: { type: 'string', description: 'Free-text mission goal/definition of done. Ignored in bulk (mission_ids) mode.' },
-            status: { type: 'string', enum: ['active', 'paused', 'completed', 'abandoned'], description: 'Mission lifecycle status. Defaults to active on create. Required in bulk (mission_ids) mode.' },
+            title: { type: 'string', description: 'Short title. Required for a single create/update; ignored in bulk.' },
+            goal: { type: 'string', description: 'Free-text goal/definition of done (the short summary mesh_mission_list shows). Ignored in bulk.' },
+            status: { type: 'string', enum: ['active', 'paused', 'completed', 'abandoned'], description: 'Defaults to active on create. Required in bulk.' },
             brief: {
                 type: 'object',
-                description: 'H2 (mission brief). Optional structured brief, rendered into every task dispatched under this mission\'s worker-protocol footer so a freshly launched worker sees it without a separate lookup. {goal (required — a brief with no goal is dropped, not stored empty), constraints?, doneCriteria?, handoffNotes?, ownedPaths?} — each of the four optional fields is a string array; done_criteria/handoff_notes/owned_paths snake_case aliases are also accepted though not published. Ignored in bulk (mission_ids) mode. When a non-empty brief is dropped (no goal, or a field of the wrong type), the response carries `briefIgnored: {reason, field?}` instead of silently discarding it. This is DISTINCT from the top-level `goal` field: `goal` is the mission record\'s short free-text summary shown in mesh_mission_list; `brief` is the longer structured packet a worker actually reads.',
+                description: 'Structured packet rendered into every task dispatched under this mission (unlike `goal`, which is the list summary): {goal (required — no goal = dropped), constraints?, doneCriteria?, handoffNotes?, ownedPaths?} string arrays (snake_case aliases accepted). Ignored in bulk. A dropped brief returns `briefIgnored: {reason, field?}`.',
                 properties: {
-                    goal: { type: 'string', description: 'What this mission is trying to accomplish. Required for the brief to be stored — an object with no goal is treated as no brief.' },
-                    constraints: { type: 'array', items: { type: 'string' }, description: 'Hard constraints a worker must respect, e.g. "do not touch daemon-core", "no npm install".' },
-                    doneCriteria: { type: 'array', items: { type: 'string' }, description: 'How to know the mission is actually done.' },
+                    goal: { type: 'string', description: 'Required for the brief to be stored.' },
+                    constraints: { type: 'array', items: { type: 'string' }, description: 'Hard constraints a worker must respect, e.g. "do not touch daemon-core".' },
+                    doneCriteria: { type: 'array', items: { type: 'string' }, description: 'How to know the mission is done.' },
                     handoffNotes: { type: 'array', items: { type: 'string' }, description: 'Standing notes for whoever picks up mission work next.' },
-                    ownedPaths: { type: 'array', items: { type: 'string' }, description: 'Paths this mission\'s tasks collectively own — surfaced to workers, not itself enforced (per-task owned_paths on mesh_enqueue_task/mesh_enqueue_batch/mesh_send_task is what claim-time enforcement reads).' },
+                    ownedPaths: { type: 'array', items: { type: 'string' }, description: 'Shown to workers, not enforced (claims check per-task owned_paths).' },
                 },
             },
         },
@@ -89,44 +87,35 @@ export const MESH_APPROVE_TOOL = {
 
 export const MESH_ANSWER_QUESTION_TOOL = {
     name: 'mesh_answer_question',
-    description: 'Answer a multi-choice QUESTION (AskUserQuestion) a delegated agent session is waiting on. '
-        + 'This is the counterpart to mesh_approve: a QUESTION (surfaced as an agent:waiting_choice event / status "awaiting_choice") is NOT a yes/no approval — '
-        + 'it offers labelled options (optionally multi-select, optionally a freeform "Type something") and must be answered here, never with mesh_approve. '
-        + 'Supply the promptId from the waiting_choice event and `answers`: an array with one entry per question, in question order. '
-        + 'For a single-question prompt, the simplest valid form is answers: ["<exact label>"] or answers: [<1-based index>] — the bare label/index IS the entry. '
-        + 'Each entry may instead be an object { select, freeform? } (questionId optional; entries match by position when omitted): '
-        + '`select` is an option label (string), a 1-based index (number), or an array of labels/indices for a multi-select question; '
-        + 'a freeform answer sets `freeform` to the text instead of `select`. '
-        + 'The daemon drives the correct keystrokes into the provider TUI to submit the selection. '
-        + 'RETURN CONTRACT: success:true means the answer RESOLVED against the session\'s active prompt and the submit keystrokes were DISPATCHED (submitted:true) — it does not prove the TUI finished redrawing, so confirm the session left awaiting_choice on a later status read. '
-        + 'An unmatched option label, a stale promptId, or a provider that cannot answer questions returns success:false with the live option list in activePrompt — re-answer using one of those labels or its 1-based index.',
+    description: 'Answer a multi-choice QUESTION (AskUserQuestion — agent:waiting_choice / status "awaiting_choice"; labelled options, maybe multi-select or freeform "Type something"). Not a yes/no approval: never mesh_approve. '
+        + 'Pass the event\'s promptId and `answers`, one entry per question in order — e.g. ["<exact label>"] or [<1-based index>]; the daemon keys the selection into the TUI. '
+        + 'success:true = resolved and submit keys dispatched (submitted:true), not proof the TUI redrew — confirm the session left awaiting_choice later. An unmatched label, stale promptId or a provider that cannot answer returns success:false with live options in activePrompt; re-answer with one.',
     inputSchema: {
         type: 'object' as const,
         properties: {
-            node_id: { type: 'string', description: 'Target node ID (from the waiting_choice event / mesh_list_nodes).' },
-            session_id: { type: 'string', description: 'Agent session ID that is awaiting the question answer.' },
-            promptId: { type: 'string', description: 'The InteractivePrompt promptId from the agent:waiting_choice event. Ensures the answer matches the active prompt.' },
+            node_id: { type: 'string', description: 'Target node ID (from the waiting_choice event).' },
+            session_id: { type: 'string', description: 'Session awaiting the answer.' },
+            promptId: { type: 'string', description: 'promptId from the agent:waiting_choice event; must match the active prompt.' },
             answers: {
                 type: 'array',
-                description: 'One entry per question in the prompt (in question order). Each entry answers a single question by selecting option label(s)/index(es), or by supplying freeform text. '
-                    + 'An entry may be a bare option label (string) or 1-based index (number) — equivalent to { select: <that value> } — or the full { questionId?, select?, freeform? } object.',
+                description: 'One entry per question, in order: a bare option label (string) or 1-based index (number), or { questionId?, select?, freeform? }.',
                 items: {
                     oneOf: [
-                        { type: 'string', description: 'Shorthand: the exact option label to select.' },
-                        { type: 'number', description: 'Shorthand: the 1-based option index to select.' },
+                        { type: 'string', description: 'Shorthand: the exact option label.' },
+                        { type: 'number', description: 'Shorthand: the 1-based option index.' },
                         {
                             type: 'object',
                             properties: {
-                                questionId: { type: 'string', description: 'Optional question id from the prompt payload. When omitted, entries are matched to the prompt questions by array position.' },
+                                questionId: { type: 'string', description: 'Optional; entries match questions by position when omitted.' },
                                 select: {
-                                    description: 'The chosen option(s): an option label (string), a 1-based option index (number), or an array of labels/indices for a multi-select question.',
+                                    description: 'Option label, 1-based index, or an array of them for a multi-select question.',
                                     oneOf: [
                                         { type: 'string' },
                                         { type: 'number' },
                                         { type: 'array', items: { type: ['string', 'number'] } },
                                     ],
                                 },
-                                freeform: { type: 'string', description: 'Freeform text answer (for a "Type something" option). Mutually exclusive with select.' },
+                                freeform: { type: 'string', description: 'Freeform text (a "Type something" option); instead of select.' },
                             },
                         },
                     ],
@@ -150,32 +139,31 @@ export const MESH_LIST_PENDING_APPROVALS_TOOL = {
 
 export const MESH_CREATE_TOOL = {
     name: 'mesh_create',
-    description: 'Bootstrap a brand-new mesh for a Git repository, or (mode="plan") dry-run the onboarding plan first. Mirrors `adhdev mesh create <name>`. A mesh groups one repo\'s workspaces/nodes so the coordinator can delegate work across them.\n'
-        + '• mode="plan" — READ-ONLY Git-aware discovery + dry-run plan for a workspace path: Git root, normalized remotes/repo identity, current/default branch, main checkout vs linked worktree, dirty/conflict state, existing mesh/node membership. '
-        + 'Returns a typed create+onboarding, add-existing-workspace, or clone-new-worktree plan with suggested .adhdev configs. Never fetches, writes config, or creates a mesh/node/branch/worktree. Run it before creating a mesh, adding a node (mesh_add_node) or cloning a worktree (mesh_clone_node).\n'
-        + '• mode="create" (default) — a persistent write: run mode="plan" first and obtain explicit user approval. Pass workspace to auto-detect Git identity/branch/worktree through the read-only planner, or pass repo_remote_url / repo_identity explicitly. add_current:true also registers a node in the same call (workspace if given, else the daemon\'s cwd). Returns mesh_id (and node_id with add_current).\n'
-        + 'BOOT-GATE: reachable in STANDARD mode (adhdev mcp, no --repo-mesh) — the no-mesh-yet bootstrap context — and in mesh mode (where create makes a SEPARATE additional mesh). `adhdev mcp --repo-mesh <id>` refuses to start without an existing meshId, so the flow is: standard-mode MCP → mesh_create → mesh_add_node → relaunch as `adhdev mcp --repo-mesh <returned mesh_id>`.',
+    description: 'Bootstrap a new mesh (one repo\'s nodes; = `adhdev mesh create <name>`) or dry-run the onboarding plan.\n'
+        + '• mode="plan" — READ-ONLY Git-aware discovery of a workspace (git root, repo identity, branches, main checkout vs linked worktree, dirty/conflict state, existing mesh/node membership) → a typed create+onboarding / add-existing / clone-new-worktree plan with suggested .adhdev configs. Never fetches, writes config, or creates a mesh/node/branch/worktree. Run before creating a mesh, mesh_add_node or mesh_clone_node.\n'
+        + '• mode="create" (default) — persistent write: plan first, then explicit user approval. Identity from workspace auto-detection or repo_remote_url / repo_identity; add_current:true also registers a node. Returns mesh_id (+ node_id).\n'
+        + 'BOOT-GATE: works in STANDARD mode (adhdev mcp, no --repo-mesh) and in mesh mode (creates a SEPARATE mesh); `adhdev mcp --repo-mesh <id>` needs an existing mesh, so: standard-mode MCP → mesh_create → mesh_add_node → relaunch with `--repo-mesh <mesh_id>`.',
     inputSchema: {
         type: 'object' as const,
         properties: {
             mode: {
                 type: 'string',
                 enum: ['create', 'plan'],
-                description: 'create (default) = create the mesh; plan = read-only onboarding discovery/dry-run plan. Each mode accepts only its own arguments — see the tool description.',
+                description: 'create (default) or plan (read-only discovery). Each mode takes only its own arguments.',
             },
-            name: { type: 'string', description: 'create: human-readable mesh name (e.g. "adhdev-main"). Trimmed, max 100 chars. Required for create.' },
-            repo_remote_url: { type: 'string', description: 'create: optional explicit Git remote URL. When omitted with repo_identity, identity is read-only auto-detected from workspace.' },
-            repo_identity: { type: 'string', description: 'create: optional explicit normalized repo identity. Wins over repo_remote_url; when both are omitted, workspace is auto-detected.' },
-            default_branch: { type: 'string', description: 'create: default branch for the repo (e.g. "main"). Optional; used as the merge/convergence target.' },
-            add_current: { type: 'boolean', description: 'create: also register a node in this same call (parity with CLI --add-current). Uses `workspace` if provided, otherwise the daemon\'s current working directory.' },
-            workspace: { type: 'string', description: 'Absolute workspace path on the daemon. plan: the checkout to inspect (required). create: used for Git auto-detection and, with add_current:true, node registration; defaults to the daemon cwd.' },
-            mesh_id: { type: 'string', description: 'plan: optional existing mesh to validate against. In mesh mode defaults to the active mesh.' },
+            name: { type: 'string', description: 'create (required): mesh name, e.g. "adhdev-main"; trimmed, max 100 chars.' },
+            repo_remote_url: { type: 'string', description: 'create: optional explicit Git remote URL (else auto-detected from workspace).' },
+            repo_identity: { type: 'string', description: 'create: optional normalized repo identity; wins over repo_remote_url.' },
+            default_branch: { type: 'string', description: 'create: optional default branch (merge/convergence target), e.g. "main".' },
+            add_current: { type: 'boolean', description: 'create: also register a node (CLI --add-current) at `workspace`, else the daemon cwd.' },
+            workspace: { type: 'string', description: 'Absolute path on the daemon. plan (required): checkout to inspect. create: detection + add_current node (default: daemon cwd).' },
+            mesh_id: { type: 'string', description: 'plan: optional existing mesh to validate against (mesh mode: the active mesh).' },
             operation: {
                 type: 'string',
                 enum: ['auto', 'add_existing', 'clone_worktree', 'create_mesh'],
-                description: 'plan: planning intent. auto chooses create+onboard when no compatible mesh exists, otherwise add existing. clone_worktree requires branch and a clean source.',
+                description: 'plan intent; auto = create+onboard if no compatible mesh, else add existing. clone_worktree needs branch + clean source.',
             },
-            branch: { type: 'string', description: 'plan: new branch name when operation=clone_worktree.' },
+            branch: { type: 'string', description: 'plan: new branch name for operation=clone_worktree.' },
         },
     },
 };
@@ -313,46 +301,45 @@ export const MESH_LEDGER_QUERY_TOOL = {
 // 2026-09-26 tool consolidation: record / forget operating notes as one tool.
 export const MESH_NOTE_TOOL = {
     name: 'mesh_note',
-    description: 'Record or retract a durable operating note for this mesh — a runtime-accumulated lesson every future coordinator inherits. '
-        + 'Provider-neutral: it persists in the mesh ledger and is injected into every coordinator\'s system prompt at launch (codex, antigravity, claude alike). Select with `action` (REQUIRED):\n'
-        + '• record — when you learn something durable (a provider quirk, a pattern to avoid, a recovery lesson), and before closing a mission that taught one. Keep each note to one concrete, reusable fact; not for transient task status (use missions/checkpoints).\n'
-        + '• forget — when an injected note is stale or wrong. Appends a tombstone so the note(s) stop riding into future prompts; history is preserved (append-only). Target by note_id (exact) or by exact text; provide at least one.',
+    description: 'Record or retract a durable operating note: a lesson persisted in the mesh ledger and injected into every future coordinator\'s system prompt at launch, whatever its provider. `action` (REQUIRED):\n'
+        + '• record — when you learn something durable (provider quirk, pattern to avoid, recovery lesson), and before closing a mission that taught one. One concrete, reusable fact per note; not for transient task status (use missions/checkpoints).\n'
+        + '• forget — when an injected note is stale or wrong: appends a tombstone so it stops riding into prompts (append-only, history kept). Target by note_id or exact text.',
     inputSchema: {
         type: 'object' as const,
         properties: {
             action: {
                 type: 'string',
                 enum: ['record', 'forget'],
-                description: 'record = add a note; forget = retract one. Required. Each action accepts only its own arguments — see the tool description.',
+                description: 'record = add a note; forget = retract one. Each action takes only its own arguments.',
             },
-            text: { type: 'string', description: 'record: the note — one concrete, reusable operating fact, phrased so a future coordinator can act on it without this conversation (required for record). forget: retract every note whose trimmed text exactly matches this string (use when you do not have the id).' },
+            text: { type: 'string', description: 'record (required): the fact, actionable without this conversation. forget: retract notes whose trimmed text matches exactly.' },
             category: {
                 type: 'string',
                 enum: ['provider_quirk', 'pattern_to_avoid', 'recovery_lesson'],
-                description: 'record: optional classification. Also governs default read-side retention: recovery_lesson ages out of the injected prompt after ~14 days, pattern_to_avoid after ~30, provider_quirk and uncategorized never age out. The ledger entry is always kept for audit.',
+                description: 'record: sets prompt retention — recovery_lesson ~14 d, pattern_to_avoid ~30 d, provider_quirk/none never expire (ledger keeps all).',
             },
             pinned: {
                 type: 'boolean',
-                description: 'record: pin so it ALWAYS rides into every coordinator prompt — never dropped by TTL expiry and kept ahead of unpinned notes when the injection cap is hit.',
+                description: 'record: ALWAYS ride into every prompt — never TTL-expired, kept ahead of unpinned notes at the injection cap.',
             },
             ttl_days: {
                 type: 'number',
-                description: 'record: optional read-side lifespan in days, resolved to an absolute expiry at record time; after it an UNPINNED note is hidden from the prompt (kept in the ledger). Overrides the category default. Ignored when pinned.',
+                description: 'record: prompt lifespan (absolute expiry fixed at record time) after which an unpinned note is hidden; overrides the category default.',
             },
             expiresAt: {
                 type: 'string',
-                description: 'record: optional explicit ISO-8601 expiry, an alternative to ttl_days (expires_at, snake_case, is also accepted though not published). Wins over ttl_days. Ignored when pinned.',
+                description: 'record: ISO-8601 expiry (or expires_at); wins over ttl_days. Both ignored when pinned.',
             },
             supersedes: {
                 type: 'string',
-                description: 'record: optional version-supersede — the note_id of an earlier note this one replaces, OR a subject_key shared with earlier notes. Matching earlier LIVE notes are hidden from the prompt (ledger kept). Pinned notes are never hidden by supersede.',
+                description: 'record: earlier note_id or shared subject_key to replace — those LIVE notes are hidden (not pinned ones; ledger kept).',
             },
             subject_key: {
                 type: 'string',
-                description: 'record: optional stable subject key grouping notes about the same subject. Drives supersede targeting and read-side folding (same category AND subject_key collapse to one injected entry, newest kept). When omitted, folding falls back to a leading [tag] bracket in the text.',
+                description: 'record: drives supersede and folding (same category + subject_key → newest one injected); default = leading [tag] in text.',
             },
-            note_id: { type: 'string', description: 'forget: the ledger note id to retract (full/exact — no prefix matching). Returned by record as noteId, or visible in mesh_task_history. An id that matches no live note returns success:false, code:note_not_found — do not guess/truncate an id.' },
-            reason: { type: 'string', description: 'forget: optional short reason, recorded on the tombstone for audit.' },
+            note_id: { type: 'string', description: 'forget: exact note id (record\'s noteId; also in mesh_task_history) — no prefix match; unknown → note_not_found.' },
+            reason: { type: 'string', description: 'forget: optional reason, kept on the tombstone.' },
         },
         required: ['action'],
     },
