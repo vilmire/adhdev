@@ -62,6 +62,15 @@ export interface WorkerProtocolFooterInput {
     enclosedHandoffNotes?: number
     /** H2: the owning mission's brief, when this task belongs to one. Rendered above the marker line — see module doc. */
     missionBrief?: MissionBrief
+    /**
+     * Whether the worker MCP (the `WORKER_TOOLS` surface) was actually delivered
+     * to the receiving session — the launch-time `deriveWorkerMcpDeliveryStatus`
+     * outcome. `false` renders the no-tools variant: the worker is told to end
+     * with a plain final summary instead of being sent hunting for tools it does
+     * not hold. Absent = unknown (e.g. a remote session) — the tool variant,
+     * which is what every worker launched with the default gate receives.
+     */
+    workerMcp?: boolean
 }
 
 export function hasWorkerProtocolFooter(body: string): boolean {
@@ -99,6 +108,24 @@ export function renderWorkerProtocolFooter(input: WorkerProtocolFooterInput = {}
     if (input.readonly) scope.push('read-only')
     if (scope.length) lines.push(`You are a delegated worker (${scope.join(', ')}).`)
     else lines.push('You are a delegated worker.')
+    if (input.workerMcp === false) {
+        lines.push(
+            'This session has NO adhdev worker tools (`report_completion`, `progress_update`, `peer_context_pull`, '
+                + '`git_*`) — do not look for them. When your work is finished, blocked, or has failed, end your turn '
+                + 'with a plain final summary: what you did, what you found, which files you changed, and where you '
+                + 'left the branch. That final message is what the coordinator receives.',
+            'You have no coordinator tools (no `mesh_*`) by design: do not enqueue, dispatch, or restart anything. '
+                + 'If you need a decision from the coordinator, say so plainly in your final summary — what is blocked '
+                + 'and what you need — and stop.',
+        )
+        if (input.enclosedHandoffNotes && input.enclosedHandoffNotes > 0) {
+            lines.push(
+                `The ${input.enclosedHandoffNotes} handoff note(s) above were written by agents who touched this code before you; `
+                    + 'honour their conflict guidance and mention anything the next agent should know in your final summary.',
+            )
+        }
+        return lines.join('\n')
+    }
     lines.push(
         'When your work is finished, blocked, or has failed, call `report_completion` exactly once. '
             + 'Its `summary` is recorded verbatim as the authoritative record of this task — your terminal is not '
@@ -107,6 +134,8 @@ export function renderWorkerProtocolFooter(input: WorkerProtocolFooterInput = {}
             + 'coordinator can see you are alive without polling.',
         '`peer_context_pull` shows what sibling tasks in this mission have reported; `git_status` / `git_diff` / '
             + '`git_log` inspect your own workspace — all three REQUIRE the absolute path to it as `workspace`.',
+        'Memos from the coordinator arrive appended to the response of whichever worker tool you call next; '
+            + 'read them and follow them.',
         'You have no coordinator tools (no `mesh_*`) by design: do not enqueue, dispatch, or restart anything. '
             + 'If you need a decision from the coordinator, finish with `report_completion` and outcome `blocked`, '
             + 'listing what you need in `blockers`.',

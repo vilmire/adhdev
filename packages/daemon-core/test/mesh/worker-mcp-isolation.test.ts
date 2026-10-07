@@ -1245,10 +1245,10 @@ describe('resolveWorkerMcpIsolation (gate ON)', () => {
   it('covers a repo-local provider by writing a worker config', () => {
     const workspace = tmp('adhdev-ws-on-kimi-')
     // ★`realHome` is supplied so this never reads the developer's actual home.
-    // kimi gained a private CONFIG ROOT on 2026-09-19; its declared path stays
-    // workspace-relative, so the worker config still lands in the workspace —
-    // what the root changes is that the owner's GLOBAL mcp.json is no longer
-    // merged alongside it.
+    // kimi gained a private CONFIG ROOT on 2026-09-19. Its declared path is
+    // workspace-relative, and until 2026-10-07 the worker config was written
+    // THERE — replacing the shared `.kimi-code/mcp.json` wholesale. It now goes
+    // to the private root's user layer (`$KIMI_CODE_HOME/mcp.json`).
     const realHome = tmp('adhdev-worker-kimi-cover-')
     const result = resolveWorkerMcpIsolation({
       providerType: 'kimi',
@@ -1262,7 +1262,8 @@ describe('resolveWorkerMcpIsolation (gate ON)', () => {
     expect(result).not.toBeNull()
     expect(result!.workerHome).toBeTruthy()
     expect(result!.workerHomeEnvVar).toBe('KIMI_CODE_HOME')
-    expect(result!.configPath).toBe(join(workspace, '.kimi-code', 'mcp.json'))
+    expect(result!.configPath).toBe(join(result!.workerHome!, 'mcp.json'))
+    expect(existsSync(join(workspace, '.kimi-code', 'mcp.json'))).toBe(false)
     expect(JSON.parse(readFileSync(result!.configPath!, 'utf-8'))).toEqual({ mcpServers: {} })
   })
 

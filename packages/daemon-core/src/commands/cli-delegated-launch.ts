@@ -442,6 +442,14 @@ export function buildCoordinatorDelegatedCliLaunchOptions(
 
     for (const key of envUnsets) env[key] = '';
 
+    // Inline worker MCP config (opencode's `OPENCODE_CONFIG_CONTENT`, chosen
+    // only when a workspace layer would shadow the private one — see
+    // `resolveWorkerMcpPlacement`). Applied after the unset sweep: it is the
+    // daemon's own delivery, not inherited state. Carries the bind — never logged.
+    for (const [key, value] of Object.entries(workerIsolation?.configEnv || {})) {
+        env[key] = value;
+    }
+
     // config_override delivery is intentionally rendered at the launch seam:
     // the bind VALUE goes only into the Codex process environment, while argv
     // carries the non-secret variable name for Codex to forward to its MCP

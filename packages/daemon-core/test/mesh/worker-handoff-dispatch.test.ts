@@ -15,7 +15,7 @@ import {
   renderWorkerProtocolFooter,
 } from '@adhdev/mesh-shared'
 
-import { resolveDispatchMessage } from '../../src/mesh/worker-handoff-dispatch'
+import { readSessionWorkerMcpDelivered, resolveDispatchMessage } from '../../src/mesh/worker-handoff-dispatch'
 import { storeHandoffNote } from '../../src/mesh/worker-handoff-notes'
 import { WORKER_HANDOFF_EVENT_KIND } from '../../src/mesh/worker-report'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store'
@@ -75,6 +75,27 @@ describe('resolveDispatchMessage — worker protocol footer', () => {
     expect(countMarkers(body)).toBe(1)
     // The footer is the tail of the body — nothing rides after it.
     expect(body.trimEnd().endsWith(renderWorkerProtocolFooter({ taskId: 'task_off', taskMode: 'code_change', difficulty: 'medium' }))).toBe(true)
+  })
+
+  it('renders the no-tools footer when the target session did not receive the worker MCP', () => {
+    const body = resolveDispatchMessage({ id: 'task_nomcp', message: 'Fix the thing.' }, MESH, null, { workerMcp: false })
+    expect(body.trimEnd().endsWith(renderWorkerProtocolFooter({ taskId: 'task_nomcp', workerMcp: false }))).toBe(true)
+    expect(body).not.toContain('call `report_completion`')
+    expect(body).toContain('plain final summary')
+  })
+
+  it('keeps the tool footer when delivery is confirmed or unknown', () => {
+    const confirmed = resolveDispatchMessage({ id: 'task_mcp', message: 'x' }, MESH, null, { workerMcp: true })
+    const unknown = resolveDispatchMessage({ id: 'task_mcp', message: 'x' }, MESH, null)
+    expect(confirmed).toBe(unknown)
+    expect(unknown).toContain('call `report_completion` exactly once')
+  })
+
+  it('reads the delivery verdict from launch settings (boolean only)', () => {
+    expect(readSessionWorkerMcpDelivered({ workerMcpDelivered: false })).toBe(false)
+    expect(readSessionWorkerMcpDelivered({ workerMcpDelivered: true })).toBe(true)
+    expect(readSessionWorkerMcpDelivered({ workerMcpDelivered: 'false' })).toBeUndefined()
+    expect(readSessionWorkerMcpDelivered(undefined)).toBeUndefined()
   })
 
   it('carries the task id, mode, difficulty and read-only axis in the footer', () => {

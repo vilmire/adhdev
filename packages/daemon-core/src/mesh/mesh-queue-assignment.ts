@@ -28,7 +28,7 @@ import { type MeshTaskRoutingDecision } from './mesh-routing-decision.js';
 import { AUTO_LAUNCH_AWAIT_CLAIM_MS } from './mesh-autolaunch-integrity.js';
 import { allowedClassifiedDifficultiesForSession, handleClaimPathDifficultyFloorRefusal, readSessionModel } from './mesh-difficulty-floor.js';
 import { isWorkerMcpEnabled, mintWorkerTaskToken } from './worker-mcp-isolation.js';
-import { resolveDispatchMessage } from './worker-handoff-dispatch.js';
+import { readSessionWorkerMcpDelivered, resolveDispatchMessage } from './worker-handoff-dispatch.js';
 import { isIdleSessionState, nodeHasActiveMeshWork, isLocalAutoLaunchNode, isSessionActivelyGenerating, resolveSessionBusyVerdict, type SessionBusyVerdict } from './mesh-candidacy-predicates.js';
 
 // The claim path's mesh view, the dispatch delivery lifecycle and the queue drain
@@ -572,7 +572,9 @@ export function tryAssignQueueTask(
     // WORKER-MCP decision C: the dispatched body may carry handoff notes from related
     // earlier work — composed ONCE (not per transport) and applied to the DISPATCHED
     // body only; `task.message` stays the authored text.
-    const dispatchMessage = resolveDispatchMessage(task, meshId, node);
+    const dispatchMessage = resolveDispatchMessage(task, meshId, node, {
+        workerMcp: readSessionWorkerMcpDelivered(claiming.claimState?.settings),
+    });
     const coordinatorDaemonId = localCoordinatorDaemonId();
     const coordinatorSessionId = readText(task.sourceCoordinatorSessionId) || undefined;
     const meshContext = buildClaimDispatchMeshContext({

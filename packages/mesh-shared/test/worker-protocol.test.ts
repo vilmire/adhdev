@@ -160,3 +160,45 @@ describe('renderWorkerProtocolFooter — MCP usage audit (workspace/refusal/touc
         })
     })
 })
+
+/**
+ * Audit 2026-10-07: the footer used to promise the worker tools unconditionally,
+ * even to a session whose worker MCP was never delivered — a worker then went
+ * looking for `report_completion` it could not call.
+ */
+describe('renderWorkerProtocolFooter — worker MCP availability', () => {
+    it('default (availability unknown) keeps the tool variant and names the memo channel', () => {
+        const footer = renderWorkerProtocolFooter({ taskId: 't1' })
+        expect(footer).toContain('call `report_completion` exactly once')
+        expect(footer).toContain('Memos from the coordinator arrive appended to the response of whichever worker tool you call next')
+    })
+
+    it('workerMcp: true is identical to the default', () => {
+        expect(renderWorkerProtocolFooter({ taskId: 't1', workerMcp: true })).toBe(renderWorkerProtocolFooter({ taskId: 't1' }))
+    })
+
+    it('workerMcp: false drops every tool claim and asks for a plain final summary', () => {
+        const footer = renderWorkerProtocolFooter({ taskId: 't1', taskMode: 'code_change', workerMcp: false })
+        expect(footer.startsWith(WORKER_PROTOCOL_FOOTER_MARKER)).toBe(true)
+        expect(footer).toContain('You are a delegated worker (task t1, mode code_change).')
+        expect(footer).toContain('NO adhdev worker tools')
+        expect(footer).toContain('plain final summary')
+        expect(footer).not.toContain('call `report_completion`')
+        expect(footer).not.toContain('progress_update` at natural checkpoints')
+        expect(footer).not.toContain('Memos from the coordinator')
+        expect(footer).not.toContain('validationErrors')
+        expect(footer).toContain('no `mesh_*`')
+    })
+
+    it('workerMcp: false still honours enclosed handoff notes, without the handoff_notes field', () => {
+        const footer = renderWorkerProtocolFooter({ taskId: 't1', enclosedHandoffNotes: 2, workerMcp: false })
+        expect(footer).toContain('The 2 handoff note(s) above')
+        expect(footer).not.toContain('`handoff_notes`')
+    })
+
+    it('the no-tools variant keeps the strip/idempotency contract (marker-keyed)', () => {
+        const body = appendWorkerProtocolFooter('do the thing', { taskId: 't1', workerMcp: false })
+        expect(appendWorkerProtocolFooter(body, { taskId: 't1', workerMcp: false })).toBe(body)
+        expect(stripWorkerProtocolFooter(body)).toBe('do the thing')
+    })
+})

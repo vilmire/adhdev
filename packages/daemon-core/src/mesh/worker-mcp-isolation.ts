@@ -80,15 +80,15 @@ import {
     type WorkerSessionBinding,
     type WorkerSessionBindStatus,
 } from '../runtime-defaults.js';
-import { resolvePrivateWorkerMcpConfigPath, writeWorkerMcpConfig, WORKER_SESSION_BIND_ENV, type WorkerMcpServerCommand } from './worker-mcp-config.js';
+import { buildInlineWorkerMcpConfig, resolvePrivateWorkerMcpConfigPath, resolveWorkerMcpPlacement, writeWorkerMcpConfig, WORKER_SESSION_BIND_ENV, type WorkerMcpServerCommand } from './worker-mcp-config.js';
 import { prepareWorkerPrivateHome } from './worker-private-home.js';
 import { findWorkerPrivateHomeSpec } from './worker-home-specs.js';
 export { deriveCursorWorkspaceSlug, WORKER_PRIVATE_HOME_SPECS, findWorkerPrivateHomeSpec } from './worker-home-specs.js';
-export type { WorkerHomeImport, WorkerWorkspaceLink, WorkerPrivateHomeSpec } from './worker-home-specs.js';
+export type { WorkerHomeImport, WorkerWorkspaceLink, WorkerPrivateHomeSpec, WorkerPrivateMcpConfigSpec } from './worker-home-specs.js';
 export { prepareWorkerPrivateHome, resolveWorkerTrustHome } from './worker-private-home.js';
 export type { PreparedWorkerHome, WorkerHomeLinkKind, WorkerTrustHome } from './worker-private-home.js';
-export { resolveWorkerMcpConfigPath, resolvePrivateWorkerMcpConfigPath, writeWorkerMcpConfig, removeWorkerMcpConfigEntry, WORKER_HOME_PLACEHOLDER, WORKER_SESSION_BIND_ENV, expandWorkerIsolationPlaceholders } from './worker-mcp-config.js';
-export type { WorkerMcpServerCommand, WriteWorkerMcpConfigInput } from './worker-mcp-config.js';
+export { resolveWorkerMcpConfigPath, resolvePrivateWorkerMcpConfigPath, resolveWorkerMcpPlacement, writeWorkerMcpConfig, buildInlineWorkerMcpConfig, removeWorkerMcpConfigEntry, releaseWorkerMcpSharedEntries, subscribeWorkerMcpSharedConfigCleanup, workerMcpConfigDeclaresServer, __resetSharedWorkerMcpEntriesForTest, WORKER_HOME_PLACEHOLDER, WORKER_SESSION_BIND_ENV, expandWorkerIsolationPlaceholders } from './worker-mcp-config.js';
+export type { WorkerMcpServerCommand, WriteWorkerMcpConfigInput, WorkerMcpPlacement } from './worker-mcp-config.js';
 
 // ─── Flag gate ──────────────────────────────────────────────────────────
 // Moved to ../runtime-defaults.ts (layer-neutral — import-boundary gate blocks
@@ -446,6 +446,17 @@ export interface WorkerMcpIsolation {
     /** Config file actually written, if any. */
     configPath?: string;
     /**
+     * True when `configPath` is a SHARED workspace file (merged, undone at
+     * session teardown) rather than a file only this worker reads.
+     */
+    configShared?: boolean;
+    /**
+     * Env vars the launch seam must export for the worker config to be seen —
+     * set when the config travels INLINE (opencode's `OPENCODE_CONFIG_CONTENT`)
+     * instead of in a file. ★Carries the bind: never log the values.
+     */
+    configEnv?: Record<string, string>;
+    /**
      * True when `configPath` carries an actual worker MCP server entry (Phase B)
      * rather than Phase A's zero-server config.
      *
@@ -596,34 +607,63 @@ export function resolveWorkerMcpIsolation(
         }
     }
 
-    const privateConfigPath = resolvePrivateWorkerMcpConfigPath({
+    // ★WORKSPACE CLOBBER (audit 2026-10-07): decide WHERE the worker entry
+    // goes before writing anything. Never the shared workspace file when the
+    // CLI offers a per-launch alternative — see `resolveWorkerMcpPlacement`.
+    const forcedPath = resolvePrivateWorkerMcpConfigPath({
         declaredPath,
         sessionKey: input.sessionKey,
         forcedConfigFile: input.forcedConfigFile,
         baseDir: input.baseDir,
     });
-    if (privateConfigPath) {
-        notes.push(`launch forces an explicit config file — worker config kept out of the shared workspace (${declaredPath} untouched)`);
+    const placement = resolveWorkerMcpPlacement({
+        declaredPath,
+        format,
+        serverName,
+        workspace: input.workspace,
+        workerHome: result.workerHome,
+        ...(spec?.configRootPrefix ? { configRootPrefix: spec.configRootPrefix } : {}),
+        privateMcpConfig: spec?.workerMcpConfig,
+        forcedPrivatePath: forcedPath,
+        hasServer: Boolean(input.server),
+    });
+    notes.push(placement.note);
+    if (placement.kind === 'skip') {
+        if (pendingBind) revokeWorkerSessionBind(pendingBind.bind);
+        return result;
     }
 
     try {
-        result.configPath = writeWorkerMcpConfig({
-            declaredPath,
-            format,
-            serverName,
-            ...(privateConfigPath ? { privateConfigPath } : {}),
-            workspace: input.workspace,
-            workerHome: result.workerHome,
-            ...(spec?.configRootPrefix ? { configRootPrefix: spec.configRootPrefix } : {}),
-            server: input.server,
-            token: input.token,
-            ...(pendingBind ? { bind: pendingBind.bind } : {}),
-        });
+        if (placement.kind === 'inline_env') {
+            const inline = buildInlineWorkerMcpConfig({
+                format,
+                serverName,
+                server: input.server,
+                token: input.token,
+                ...(pendingBind ? { bind: pendingBind.bind } : {}),
+            });
+            result.configEnv = { [placement.envVar]: inline };
+        } else {
+            result.configPath = writeWorkerMcpConfig({
+                declaredPath,
+                format,
+                serverName,
+                ...(placement.kind === 'private_file' ? { privateConfigPath: placement.path } : {}),
+                workspace: input.workspace,
+                workerHome: result.workerHome,
+                ...(spec?.configRootPrefix ? { configRootPrefix: spec.configRootPrefix } : {}),
+                server: input.server,
+                token: input.token,
+                ...(pendingBind ? { bind: pendingBind.bind } : {}),
+                ...(input.bindContext?.sessionId ? { teardownSessionId: input.bindContext.sessionId } : {}),
+            });
+            if (placement.kind === 'shared_merge') result.configShared = true;
+        }
         if (input.server) result.configHasServer = true;
         if (pendingBind) result.bind = pendingBind.bind;
         // The bind itself is a secret and never enters the note text.
         notes.push(
-            `worker MCP config written to ${result.configPath}`
+            (result.configPath ? `worker MCP config written to ${result.configPath}` : `worker MCP config delivered inline via ${Object.keys(result.configEnv || {}).join(', ')}`)
             + (pendingBind ? ` (session bind issued for ${pendingBind.sessionId})` : ''),
         );
     } catch (err: any) {

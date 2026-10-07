@@ -22,6 +22,13 @@
  * no handoff note was relevant, and the coordinator prompt never mentioned the
  * worker tools. The footer is therefore appended to EVERY dispatched body; the
  * worker-MCP gate governs only the handoff-note enclosure.
+ *
+ * ★The footer's CONTENT follows what the receiving session actually holds
+ * (audit 2026-10-07): when the claim path knows the worker MCP was NOT
+ * delivered to that session (`workerMcpDelivered: false` stamped at launch from
+ * `deriveWorkerMcpDeliveryStatus`), the footer drops the tool claims and tells
+ * the worker to finish with a plain final summary — rather than sending it
+ * looking for `report_completion` it cannot call.
  */
 
 import {
@@ -92,6 +99,7 @@ export function resolveDispatchMessage(
     task: DispatchableTask,
     meshId: string,
     node: unknown,
+    target: { workerMcp?: boolean } = {},
 ): string {
     if (hasWorkerProtocolFooter(task.message)) {
         LOG.debug('WorkerProtocol', `Task ${task.id} body already carries the worker protocol footer — not re-materializing`);
@@ -163,5 +171,17 @@ export function resolveDispatchMessage(
         ...(isTaskReadonly(task) ? { readonly: true } : {}),
         ...(enclosedHandoffNotes > 0 ? { enclosedHandoffNotes } : {}),
         ...(missionBrief ? { missionBrief } : {}),
+        ...(typeof target.workerMcp === 'boolean' ? { workerMcp: target.workerMcp } : {}),
     });
+}
+
+/**
+ * Whether the worker MCP reached a session, read from the launch settings
+ * `launchCli` stamps (`workerMcpDelivered`). `undefined` when unknown — a
+ * remote session, or one launched without a delivery verdict — so the caller
+ * keeps the default (tool) footer rather than guessing.
+ */
+export function readSessionWorkerMcpDelivered(settings: unknown): boolean | undefined {
+    const value = (settings as { workerMcpDelivered?: unknown } | null | undefined)?.workerMcpDelivered;
+    return typeof value === 'boolean' ? value : undefined;
 }
