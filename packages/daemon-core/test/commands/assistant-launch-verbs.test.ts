@@ -121,8 +121,29 @@ describe('launch_assistant', () => {
         const cfg = JSON.parse(readFileSync(cfgPath, 'utf-8'));
         expect(cfg.mcpServers['adhdev-assistant'].args).toContain('--assistant');
         expect(cfg.mcpServers['adhdev-assistant'].args).not.toContain('--repo-mesh');
+        // The session id is minted before the config write and handed to launch_cli,
+        // so the MCP server entry names the session that is about to spawn.
+        expect(launch.assistantSessionKey).toMatch(/^[0-9a-f-]{36}$/);
+        expect(cfg.mcpServers['adhdev-assistant'].env).toEqual({ ADHDEV_ASSISTANT_SESSION_ID: launch.assistantSessionKey });
         expect(existsSync(join(dir, 'assistant'))).toBe(true);
         expect(registry.read()).toMatchObject({ sessionId: 'asst-1', cliType: 'claude-cli', mcpConfigPath: cfgPath });
+    });
+
+    it('codex-cli: the session id rides a -c mcp_servers.*.env override matching assistantSessionKey', async () => {
+        const codex: any = {
+            type: 'codex-cli',
+            meshCoordinator: {
+                supported: true,
+                mcpConfig: { mode: 'manual', serverName: 'adhdev-mesh', requiresRestart: true, instructions: 'codex mcp add', template: 'codex mcp add {{serverName}} -- {{adhdevMcpCommand}} {{adhdevMcpArgs}}' },
+                systemPromptInjection: { mode: 'cli_arg', flag: '-c' },
+            },
+        };
+        const c = ctx();
+        c.deps.providerLoader = { resolveAlias: (t: string) => t, resolve: () => codex, getMeta: () => codex };
+        const r: any = await assistantLaunchHandlers[ASSISTANT_VERB.launch](c, { cliType: 'codex-cli' });
+        expect(r).toMatchObject({ success: true, cliType: 'codex-cli' });
+        const [launch] = launchCalls();
+        expect(launch.cliArgs).toContain(`mcp_servers.adhdev-assistant.env.ADHDEV_ASSISTANT_SESSION_ID="${launch.assistantSessionKey}"`);
     });
 
     it('is idempotent while the bound session is live', async () => {

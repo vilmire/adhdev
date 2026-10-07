@@ -5,6 +5,7 @@
  * and the never-dangerous approval rule.
  */
 import { describe, expect, it } from 'vitest';
+import { buildMeshCoordinatorMcpServerEntry, getMcpServersKey } from '../../src/mesh/mesh-coordinator-config.js';
 import { resolveAdhdevMcpServerLaunch, resolveMeshCoordinatorSetup, type MeshCoordinatorSetup } from '../../src/commands/mesh-coordinator.js';
 import {
     ASSISTANT_MCP_SERVER_NAME,
@@ -73,6 +74,55 @@ describe('planAssistantMcp', () => {
         expect(planAssistantMcp({ cliType: 'x', setup: { kind: 'unsupported', reason: 'nope' }, workspace: WS, configDir: CFG })).toEqual({ ok: false, code: 'assistant_unsupported', error: 'nope' });
         expect(planAssistantMcp({ cliType: 'x', setup: { kind: 'manual', serverName: 's', requiresRestart: false, instructions: 'do it', template: '{}' }, workspace: WS, configDir: CFG }))
             .toEqual({ ok: false, code: 'assistant_manual_mcp_setup_required', error: 'do it' });
+    });
+});
+
+describe('assistant session id reaches the MCP server (every eligible provider)', () => {
+    const SID = '8ebaf6d0-f9d9-4766-92b6-6c7892c171ea';
+    // The shipped manifests' `meshCoordinator.mcpConfig` (same fixtures as assistant-eligibility.test.ts).
+    const FIXTURES: Record<string, any> = {
+        'claude-cli': { mode: 'auto_import', format: 'claude_mcp_json', path: '.mcp.json', serverName: 'adhdev-mesh' },
+        'codex-cli': {
+            mode: 'manual', serverName: 'adhdev-mesh', requiresRestart: true, instructions: 'codex mcp add',
+            template: 'codex mcp add {{serverName}} -- {{adhdevMcpCommand}} {{adhdevMcpArgs}}',
+        },
+        'cursor-cli': { mode: 'auto_import', format: 'claude_mcp_json', path: '.cursor/mcp.json', serverName: 'adhdev-mesh' },
+        kimi: { mode: 'auto_import', format: 'claude_mcp_json', path: '.kimi-code/mcp.json', serverName: 'adhdev-mesh' },
+        opencode: { mode: 'auto_import', format: 'opencode_json', path: 'opencode.json', serverName: 'adhdev-mesh' },
+        'grok-cli': { mode: 'auto_import', format: 'claude_mcp_json', path: '.mcp.json', serverName: 'adhdev-mesh' },
+    };
+    const plan = (cliType: string, sessionId?: string) => {
+        const provider: any = { meshCoordinator: { supported: true, mcpConfig: FIXTURES[cliType] } };
+        const setup = resolveMeshCoordinatorSetup({ provider, cliType, meshId: '', workspace: WS, toolset: { kind: 'assistant' }, adhdevMcpCommand: 'adhdev', adhdevMcpTransport: 'ipc', adhdevMcpPort: 19223 });
+        const p = planAssistantMcp({ cliType, setup, workspace: WS, configDir: CFG, sessionId });
+        if (!p.ok) throw new Error(`${cliType}: ${p.code}`);
+        return p;
+    };
+
+    it('codex-cli: a dotted `-c mcp_servers.<name>.env.<KEY>` override (codex passes MCP children only configured env)', () => {
+        const p = plan('codex-cli', SID);
+        const i = p.cliArgs.indexOf(`mcp_servers.${ASSISTANT_MCP_SERVER_NAME}.env.ADHDEV_ASSISTANT_SESSION_ID="${SID}"`);
+        expect(i).toBeGreaterThan(0);
+        expect(p.cliArgs[i - 1]).toBe('-c');
+        expect(p.mcpServer.env).toEqual({ ADHDEV_ASSISTANT_SESSION_ID: SID });
+        expect(p.cliArgs.filter((a) => a.includes('.env.'))).toHaveLength(1);
+    });
+
+    it.each(['claude-cli', 'cursor-cli', 'kimi', 'opencode', 'grok-cli'])('%s: the written config entry carries the env', (cliType) => {
+        const p = plan(cliType, SID);
+        const w = p.configWrite!;
+        expect(w).toBeTruthy();
+        const entry = buildMeshCoordinatorMcpServerEntry(w.format as any, w.server);
+        const envKey = w.format === 'opencode_json' ? 'environment' : 'env';
+        expect(entry[envKey]).toEqual({ ADHDEV_ASSISTANT_SESSION_ID: SID });
+        expect(getMcpServersKey(w.format as any)).toBeTruthy();
+        expect(entry[w.format === 'opencode_json' ? 'command' : 'args']).toEqual(expect.arrayContaining(['--assistant']));
+    });
+
+    it('no session id (eligibility probe) → no env, no env override', () => {
+        expect(plan('codex-cli').cliArgs.some((a) => a.includes('.env.'))).toBe(false);
+        expect(plan('cursor-cli').configWrite!.server.env).toBeUndefined();
+        expect(plan('claude-cli', '  ').configWrite!.server.env).toBeUndefined();
     });
 });
 

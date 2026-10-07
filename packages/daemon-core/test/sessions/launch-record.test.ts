@@ -250,4 +250,14 @@ describe('withSessionAnchorEnv (launch_cli session-anchor env)', () => {
     expect(withSessionAnchorEnv({ settingsOverride: { assistant: 'yes' } }, 'k3')?.extraEnv).toBeUndefined()
     expect(withSessionAnchorEnv(undefined, 'k4')).toBeUndefined()
   })
+
+  it('readAssistantSessionKey: honored only for an assistant launch and only as a UUID', async () => {
+    const { readAssistantSessionKey } = await import('../../src/commands/cli-manager-launch.js')
+    const id = '8ebaf6d0-f9d9-4766-92b6-6c7892c171ea'
+    expect(readAssistantSessionKey({ assistantSessionKey: id }, { assistant: true })).toBe(id)
+    expect(readAssistantSessionKey({ assistantSessionKey: id }, {})).toBeUndefined()
+    expect(readAssistantSessionKey({ assistantSessionKey: id }, undefined)).toBeUndefined()
+    expect(readAssistantSessionKey({ assistantSessionKey: 'not-a-uuid' }, { assistant: true })).toBeUndefined()
+    expect(readAssistantSessionKey({}, { assistant: true })).toBeUndefined()
+  })
 })

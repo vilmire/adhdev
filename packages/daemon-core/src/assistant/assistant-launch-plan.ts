@@ -22,6 +22,15 @@
  *   - manual / other cli_command providers: refused (fail closed, no global
  *     registration on the user's behalf).
  *
+ * Session id (all providers): the assistant MCP server learns its session from
+ * `ADHDEV_ASSISTANT_SESSION_ID`, carried in the server entry itself — the
+ * config file's `env` block, or codex's `-c mcp_servers.<name>.env.*` — never
+ * by inheritance from the CLI's process env (codex hands an MCP child only the
+ * env its config lists; same rule as the delegated worker's session bind in
+ * mesh/worker-mcp-config.ts). The verb mints the id before planning and passes
+ * it to `launch_cli` (`assistantSessionKey`) so the config and the live
+ * session agree on one value.
+ *
  * Approval: the default is NO auto-approve (the assistant has shell-capable
  * tools near the home directory on every CLI but claude, §4.5 "위험 모드는
  * 절대 쓰지 않는다"). A caller may pick one declared mode explicitly; a mode
@@ -29,6 +38,7 @@
  */
 
 import { join, resolve, sep } from 'path';
+import { ASSISTANT_SESSION_ID_ENV } from '@adhdev/mesh-shared';
 import { resolveMeshCoordinatorSetup, type MeshCoordinatorSetup } from '../commands/mesh-coordinator.js';
 import { deriveAutoApproveModeRisk } from '../providers/auto-approve-modes.js';
 import type { ProviderModule } from '../providers/contracts.js';
@@ -51,7 +61,13 @@ export interface AssistantMcpConfigWrite {
     path: string;
     format: string;
     serverName: string;
-    server: { command: string; args: string[] };
+    server: AssistantMcpServerLaunch;
+}
+
+export interface AssistantMcpServerLaunch {
+    command: string;
+    args: string[];
+    env?: Record<string, string>;
 }
 
 /**
@@ -66,7 +82,7 @@ export type AssistantMcpPlan =
         ok: true;
         cliArgs: string[];
         configWrite: AssistantMcpConfigWrite | null;
-        mcpServer: { command: string; args: string[] };
+        mcpServer: AssistantMcpServerLaunch;
         toolRestriction: AssistantToolRestriction;
     }
     | { ok: false; code: string; error: string };
@@ -87,12 +103,31 @@ export function buildAssistantClaudeArgs(mcpConfigPath: string, serverName: stri
     ];
 }
 
-/** Codex `-c` overrides carrying one MCP server entry (TOML values; JSON strings/arrays are valid TOML). */
-export function buildAssistantCodexOverrideArgs(serverName: string, server: { command: string; args: string[] }): string[] {
-    return [
+/**
+ * Codex `-c` overrides carrying one MCP server entry (TOML values; JSON strings/arrays are valid TOML).
+ * Each env var is its own dotted override (`mcp_servers.<name>.env.<KEY>="v"`): codex passes an MCP
+ * child only the env its config lists, so inheritance from the codex process never reaches it.
+ */
+export function buildAssistantCodexOverrideArgs(serverName: string, server: AssistantMcpServerLaunch): string[] {
+    const args = [
         '-c', `mcp_servers.${serverName}.command=${JSON.stringify(server.command)}`,
         '-c', `mcp_servers.${serverName}.args=${JSON.stringify(server.args)}`,
     ];
+    for (const [key, value] of Object.entries(server.env ?? {})) {
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
+        args.push('-c', `mcp_servers.${serverName}.env.${key}=${JSON.stringify(value)}`);
+    }
+    return args;
+}
+
+/** The assistant MCP server launch with its session id in the entry's own env (absent id → unchanged). */
+export function withAssistantSessionEnv(
+    server: { command: string; args: string[]; env?: Record<string, string> },
+    sessionId: string | undefined,
+): AssistantMcpServerLaunch {
+    const id = typeof sessionId === 'string' ? sessionId.trim() : '';
+    if (!id) return server;
+    return { ...server, env: { ...(server.env ?? {}), [ASSISTANT_SESSION_ID_ENV]: id } };
 }
 
 export function planAssistantMcp(input: {
@@ -100,6 +135,8 @@ export function planAssistantMcp(input: {
     setup: MeshCoordinatorSetup;
     workspace: string;
     configDir: string;
+    /** The session id the launch will use (minted before planning); stamped into the server env. */
+    sessionId?: string;
 }): AssistantMcpPlan {
     const { cliType, setup, workspace, configDir } = input;
     const serverName = ASSISTANT_MCP_SERVER_NAME;
@@ -115,21 +152,23 @@ export function planAssistantMcp(input: {
                 error: `${cliType} registers MCP servers in its global config; the assistant does not register one on your behalf`,
             };
         }
+        const codexServer = withAssistantSessionEnv(setup.mcpServer, input.sessionId);
         return {
             ok: true,
-            cliArgs: buildAssistantCodexOverrideArgs(serverName, setup.mcpServer),
+            cliArgs: buildAssistantCodexOverrideArgs(serverName, codexServer),
             configWrite: null,
-            mcpServer: setup.mcpServer,
+            mcpServer: codexServer,
             toolRestriction: 'prompt_only',
         };
     }
+    const mcpServer = withAssistantSessionEnv(setup.mcpServer, input.sessionId);
     if (cliType === 'claude-cli') {
         const path = assistantClaudeMcpConfigPath(configDir);
         return {
             ok: true,
             cliArgs: buildAssistantClaudeArgs(path, serverName),
-            configWrite: { path, format: setup.configFormat ?? 'claude_mcp_json', serverName, server: setup.mcpServer },
-            mcpServer: setup.mcpServer,
+            configWrite: { path, format: setup.configFormat ?? 'claude_mcp_json', serverName, server: mcpServer },
+            mcpServer,
             toolRestriction: 'enforced',
         };
     }
@@ -143,8 +182,8 @@ export function planAssistantMcp(input: {
     return {
         ok: true,
         cliArgs: [],
-        configWrite: { path: setup.configPath, format: setup.configFormat ?? 'claude_mcp_json', serverName, server: setup.mcpServer },
-        mcpServer: setup.mcpServer,
+        configWrite: { path: setup.configPath, format: setup.configFormat ?? 'claude_mcp_json', serverName, server: mcpServer },
+        mcpServer,
         toolRestriction: 'prompt_only',
     };
 }

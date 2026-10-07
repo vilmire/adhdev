@@ -391,6 +391,10 @@ export async function launchCli(host: CliLaunchHost, args: any): Promise<Command
     const { settingsOverride, delegatedSessionKey, delegatedMeshId, delegatedLaunch, workerMcpDelivery } = prepareDelegatedLaunch(
         host, args, cliType, dir, providerType, provLookup,
     );
+    const assistantSessionKey = readAssistantSessionKey(args, settingsOverride);
+    if (assistantSessionKey && host.adapters?.has?.(assistantSessionKey)) {
+        return { success: false, code: 'session_id_in_use', error: `session id ${assistantSessionKey} is already in use` };
+    }
     // Untrusted-provider gate: an external source that ships JS
     // hooks needs explicit user confirmation before its first
     // launch. Dashboards add `confirmExternalUntrusted: true` to
@@ -423,6 +427,7 @@ export async function launchCli(host: CliLaunchHost, args: any): Promise<Command
                 ? { resolvedTrustPlan: delegatedLaunch.resolvedTrustPlan }
                 : {}),
             ...(delegatedSessionKey ? { presetSessionKey: delegatedSessionKey } : {}),
+            ...(!delegatedSessionKey && assistantSessionKey ? { presetSessionKey: assistantSessionKey } : {}),
             ...(typeof args?.initialThinkingLevel === 'string' && args.initialThinkingLevel.trim() ? { initialThinkingLevel: args.initialThinkingLevel.trim() } : {}),
             launchProvenance: resolveLaunchProvenance(args, settingsOverride),
         },
@@ -446,6 +451,23 @@ export async function launchCli(host: CliLaunchHost, args: any): Promise<Command
         // response is unchanged.
         ...(workerMcpDelivery ? { workerMcp: workerMcpDelivery } : {}),
     };
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Assistant launch (`settings.assistant`): `launch_assistant` mints the
+ * session id before it writes the assistant MCP config — the server entry
+ * carries `ADHDEV_ASSISTANT_SESSION_ID` — and passes it here as
+ * `assistantSessionKey` (same role as the delegated worker's preset key).
+ * Honored only for an assistant launch and only as a UUID; anything else is
+ * ignored and startSession mints its own id.
+ */
+export function readAssistantSessionKey(args: unknown, settings: Record<string, unknown> | undefined): string | undefined {
+    if (settings?.assistant !== true) return undefined;
+    const raw = (args as { assistantSessionKey?: unknown } | null | undefined)?.assistantSessionKey;
+    const key = typeof raw === 'string' ? raw.trim() : '';
+    return UUID_RE.test(key) ? key : undefined;
 }
 
 export type CommandResult = { success: boolean;[key: string]: unknown };
