@@ -22,6 +22,12 @@ export default defineConfig({
     },
     test: {
         include: ['test-browser/**/*.test.ts'],
+        // Files run one at a time: they share one origin's OPFS and each cold-loads
+        // sqlite-wasm in a worker, and parallel files made a slow CI runner miss the
+        // per-test OPFS waits.
+        fileParallelism: false,
+        // Room for the 15 s OPFS waits above the 5 s vitest default.
+        testTimeout: 30_000,
         exclude: ['**/node_modules/**', '**/.git/**'],
         browser: {
             enabled: true,

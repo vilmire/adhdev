@@ -9,7 +9,8 @@
 // not an in-memory stand-in.
 import { describe, expect, it } from 'vitest';
 
-async function waitFor(cond: () => boolean | Promise<boolean>, timeoutMs = 4000): Promise<void> {
+// 15 s: a cold CI runner compiles sqlite-wasm inside the worker before the VFS exists.
+async function waitFor(cond: () => boolean | Promise<boolean>, timeoutMs = 15_000): Promise<void> {
     const start = performance.now();
     for (;;) {
         if (await cond()) return;
