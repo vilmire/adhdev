@@ -1419,9 +1419,16 @@
         line-height: 0;
     }
 
-    .chat-bubble:hover .chat-copy-btn,
-    .chat-msg-tool:hover .chat-copy-btn {
+    /* Every row kind carries .chat-row (chat-row-shell.tsx), and relay cards /
+       notice chips reveal their own copy control. */
+    .chat-row:hover .chat-copy-btn,
+    .chat-relay-card:hover .chat-copy-btn,
+    .chat-notice-chip:hover .chat-copy-btn {
         opacity: 0.45;
+    }
+
+    .chat-copy-btn:focus-visible {
+        opacity: 0.85;
     }
 
     .chat-copy-btn:hover {
@@ -1484,6 +1491,9 @@
            the tool text never run underneath it. */
         position: relative;
         padding-right: 56px;
+        /* (TOOL-EXPAND) The bubble is a flex ROW; wrapping lets the expand
+           footer take its own line instead of competing with the text. */
+        flex-wrap: wrap;
         background: color-mix(in srgb, var(--chat-tool-bg) 92%, var(--chat-tool-accent) 8%);
         border: var(--chat-tool-border);
         border-left: 3px solid color-mix(in srgb, var(--chat-tool-accent) 64%, var(--border-subtle));
@@ -1536,19 +1546,17 @@
         flex-shrink: 0;
     }
 
+    /* An expanded body can be long, so it scrolls inside the bubble instead of
+       pushing the page sideways. */
     .chat-msg-tool .tool-text {
         color: var(--chat-tool-accent);
         opacity: 0.86;
         min-width: 0;
+        max-height: 60vh;
+        overflow: auto;
     }
 
-    /* (TOOL-EXPAND) Expand/collapse footer. The bubble is a flex ROW, so this
-       wraps onto its own line rather than competing with the text for width;
-       an expanded body can be long, so it scrolls inside the bubble instead of
-       pushing the page sideways. */
-    .chat-msg-tool {
-        flex-wrap: wrap;
-    }
+    /* (TOOL-EXPAND) Expand/collapse footer. */
 
     .chat-msg-tool .chat-msg-tool-expand {
         flex: 0 0 100%;
@@ -1577,11 +1585,6 @@
         text-transform: none;
         letter-spacing: 0;
         font-weight: 500;
-    }
-
-    .chat-msg-tool .tool-text {
-        max-height: 60vh;
-        overflow: auto;
     }
 
     .chat-msg-terminal {
@@ -1635,6 +1638,189 @@
         border: var(--chat-system-border);
     }
 
+    /* ── Chat row shell (chat-row-shell.tsx) ─────────────────────────────
+       Header meta (copy · time) sits at the end of every header. The tool
+       bubble keeps its absolute corner pill (rule above, higher specificity). */
+    .chat-row-header > .chat-row-meta {
+        margin-left: auto;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        text-transform: none;
+        letter-spacing: 0;
+        font-weight: 400;
+    }
+
+    .chat-row-meta .chat-time {
+        font-size: var(--chat-header-font-size);
+        opacity: 0.55;
+    }
+
+    .chat-row-icon {
+        display: inline-flex;
+        align-items: center;
+        flex-shrink: 0;
+    }
+
+    /* Inline system row: text … [show more] … copy · time. */
+    .chat-msg-system .chat-msg-system-meta {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        margin-left: 6px;
+        vertical-align: middle;
+    }
+
+    .chat-msg-system .chat-msg-system-meta > .chat-row-meta {
+        margin-left: 0;
+    }
+
+    /* The one expand/collapse control; kinds tint it via their variant class. */
+    .chat-row-expand {
+        padding: 0;
+        background: none;
+        border: none;
+        color: inherit;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.03em;
+        cursor: pointer;
+        opacity: 0.75;
+        text-align: left;
+    }
+
+    button.chat-row-expand:hover {
+        opacity: 1;
+        text-decoration: underline;
+    }
+
+    .chat-row-expand-error {
+        cursor: default;
+        font-weight: 500;
+        letter-spacing: 0;
+    }
+
+    .chat-msg-system .chat-msg-system-expand {
+        margin-left: 6px;
+        text-decoration: underline;
+    }
+
+    .chat-msg-thought .chat-row-expand,
+    .chat-msg-terminal .chat-row-expand,
+    .chat-msg-activity .chat-row-expand,
+    .chat-bubble .chat-row-expand {
+        display: block;
+        margin: 4px 12px 6px;
+    }
+
+    /* ── Daemon-injected input (chat-injected-row.tsx) ───────────────────── */
+    .chat-msg-injected {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 6px;
+        min-width: 0;
+    }
+
+    .chat-relay-card {
+        max-width: min(78ch, 90%);
+        min-width: 0;
+        padding: 7px 12px 8px;
+        border-radius: var(--radius-sm);
+        border: var(--chat-assistant-border);
+        border-left: 3px solid color-mix(in srgb, var(--accent-primary) 50%, var(--border-subtle));
+        background: color-mix(in srgb, var(--bg-secondary) 90%, var(--accent-primary) 6%);
+        color: var(--text-secondary);
+        font-family: var(--chat-font-family);
+        font-size: 12px;
+    }
+
+    .chat-relay-header {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+        color: var(--accent-primary);
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+    }
+
+    .chat-relay-label {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .chat-relay-badge {
+        flex-shrink: 0;
+        padding: 0 6px;
+        border-radius: 999px;
+        border: 1px solid color-mix(in srgb, currentColor 35%, transparent);
+        font-size: 10px;
+        font-weight: 600;
+        opacity: 0.8;
+    }
+
+    .chat-relay-preview {
+        margin-top: 3px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: var(--text-muted);
+    }
+
+    .chat-relay-body {
+        margin-top: 6px;
+    }
+
+    .chat-relay-card .chat-relay-expand {
+        display: block;
+        margin-top: 4px;
+        color: var(--accent-primary);
+    }
+
+    .chat-notice-chip {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        align-self: center;
+        max-width: min(78ch, 92%);
+        min-width: 0;
+        padding: 2px 10px;
+        border-radius: 20px;
+        border: var(--chat-system-border);
+        color: var(--chat-system-color);
+        font-family: var(--chat-font-family);
+        font-size: 11px;
+        opacity: 0.75;
+    }
+
+    .chat-notice-chip-label {
+        flex-shrink: 0;
+        font-weight: 700;
+    }
+
+    .chat-notice-chip-text {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .chat-notice-chip > .chat-row-meta {
+        margin-left: auto;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+    }
+
+    .chat-injected-text {
+        font-size: 12px;
+        color: var(--text-muted);
+    }
+
     .chat-msg-activity {
         max-width: min(78ch, 88%);
         min-width: 0;
@@ -1649,7 +1835,7 @@
     }
 
     .chat-msg-activity-meta {
-        display: inline-flex;
+        display: flex;
         align-items: center;
         gap: 6px;
         margin-bottom: 4px;

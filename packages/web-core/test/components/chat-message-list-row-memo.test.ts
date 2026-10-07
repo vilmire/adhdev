@@ -34,11 +34,20 @@ describe('buildChatMessageRowSignature (row memo comparator)', () => {
       .not.toBe(buildChatMessageRowSignature(msg({ kind: 'tool' })))
   })
 
+  // The signature is derived from the row model (design 2026-10-07-chat-row-model.md),
+  // so a meta flag changes it exactly where the flag changes what renders:
+  // `isRunning` drives the terminal row's icon and `label` the thought/terminal
+  // header. On a plain assistant bubble neither is rendered, so neither re-renders it.
   it('changes the signature when meta render flags change', () => {
-    expect(buildChatMessageRowSignature(msg({ meta: { isRunning: true } })))
-      .not.toBe(buildChatMessageRowSignature(msg({ meta: { isRunning: false } })))
+    expect(buildChatMessageRowSignature(msg({ kind: 'terminal', meta: { isRunning: true } })))
+      .not.toBe(buildChatMessageRowSignature(msg({ kind: 'terminal', meta: { isRunning: false } })))
+    expect(buildChatMessageRowSignature(msg({ kind: 'thought', meta: { label: 'Thinking' } })))
+      .not.toBe(buildChatMessageRowSignature(msg({ kind: 'thought', meta: { label: 'Done' } })))
+  })
+
+  it('keeps the signature when a meta flag the row does not render changes', () => {
     expect(buildChatMessageRowSignature(msg({ meta: { label: 'Thinking' } })))
-      .not.toBe(buildChatMessageRowSignature(msg({ meta: { label: 'Done' } })))
+      .toBe(buildChatMessageRowSignature(msg({ meta: { label: 'Done' } })))
   })
 
   it('changes the signature when classification-driving visibility flips without content change', () => {

@@ -454,31 +454,17 @@ export default function ChatPane({
     );
 
     /**
-     * (TOOL-EXPAND) Per-bubble expansion state.
+     * (TOOL-EXPAND) Fetch the untruncated body of a truncated tool bubble.
      *
-     * The key is chosen by the list (`getToolExpandStateKey`, falling back to
-     * the stable message key): a bubble carrying a `toolBlockRef` is keyed by
-     * the tool BLOCK it was summarised from, so the expansion follows that
-     * block rather than the bubble's rendered text. That matters on the replica
-     * lane, where the stable key can fall back to a content hash and a tool
-     * bubble's content is precisely what is rewritten as its result streams —
-     * which used to drop the expansion mid-read. Bubbles with no ref keep the
-     * stable key.
+     * The list owns the expansion state (its one expand store, keyed by the
+     * tool BLOCK so an open expansion survives the bubble's content being
+     * rewritten as its result streams); this pane owns only the transport.
+     * A refusal resolves to an error state rather than an empty expansion: the
+     * daemon declined to guess which block the ref now names, and the UI must
+     * not imply the output was empty.
      */
-    const [toolExpansions, setToolExpansions] = useState<Record<string, ToolExpandState>>({});
-
-    // Expansions are transcript-position-specific; when the conversation changes
-    // the old keys describe bubbles that are no longer on screen.
-    useEffect(() => {
-        setToolExpansions({});
-    }, [activeConv.tabKey]);
-
-    const handleExpandToolBlock = useCallback(async (
-        messageKey: string,
-        address: ToolExpandAddress,
-    ) => {
-        if (!daemonId) return;
-        setToolExpansions(prev => ({ ...prev, [messageKey]: { status: 'loading' } }));
+    const fetchToolBlock = useCallback(async (address: ToolExpandAddress): Promise<ToolExpandState> => {
+        if (!daemonId) return { status: 'error' };
         try {
             // `{ toolBlockRef }` (read_chat lane) or `{ messageId }` (keyed
             // replica lane, design 2026-09-28 §5.9) — the daemon accepts either
@@ -495,41 +481,21 @@ export default function ChatPane({
                 result?: string;
                 reason?: string;
             } | null;
-            // A refusal is surfaced as an error rather than an empty expansion:
-            // the daemon declined to guess which block the ref now names, and
-            // the UI must not imply the output was empty.
             const text = body?.success
                 ? (body.callArgs !== undefined
                     ? `${body.toolName ? `${body.toolName}: ` : ''}${body.callArgs}`
                     : body.result)
                 : undefined;
-            setToolExpansions(prev => ({
-                ...prev,
-                [messageKey]: text !== undefined
-                    ? { status: 'expanded', text }
-                    // ★ Carry the daemon's typed reason through. It already
-                    // travels on the command reply (`handleExpandToolBlock`
-                    // returns `{success:false, reason}` on every refusal path);
-                    // dropping it here is what made all five refusals render as
-                    // one "the transcript changed" sentence, four of which were
-                    // false. Validated rather than cast: an unrecognised or
-                    // absent value becomes undefined and takes the generic
-                    // branch, so a newer daemon cannot inject arbitrary text.
-                    : { status: 'error', error: toExpandFailureReason(body?.reason) },
-            }));
+            // ★ Carry the daemon's typed reason through, validated rather than
+            // cast: an unrecognised or absent value becomes undefined and takes
+            // the generic branch, so a newer daemon cannot inject arbitrary text.
+            return text !== undefined
+                ? { status: 'expanded', text }
+                : { status: 'error', error: toExpandFailureReason(body?.reason) };
         } catch {
-            setToolExpansions(prev => ({ ...prev, [messageKey]: { status: 'error' } }));
+            return { status: 'error' };
         }
     }, [activeConv.agentType, activeConv.sessionId, controlsContext.providerType, daemonId, sendCommand]);
-
-    const handleCollapseToolBlock = useCallback((messageKey: string) => {
-        setToolExpansions(prev => {
-            if (!prev[messageKey]) return prev;
-            const next = { ...prev };
-            delete next[messageKey];
-            return next;
-        });
-    }, []);
 
     const collectChatDebugBundle = useCallback(async () => {
         if (!daemonId) return;
@@ -769,9 +735,7 @@ export default function ChatPane({
                 onSendNow={handleSendNowQueued}
                 isSendingNow={isSendingChat}
                 onCancelQueued={handleCancelQueued}
-                toolExpansions={toolExpansions}
-                onExpandToolBlock={handleExpandToolBlock}
-                onCollapseToolBlock={handleCollapseToolBlock}
+                fetchToolBlock={fetchToolBlock}
             />
 
             {/* (QUEUE-PINNED-COMPOSER) Outside the scroll container by design: a

@@ -141,6 +141,14 @@
             "startHint": "Start your personal assistant — a chat that manages your projects and coordinators",
             "startFailed": "Could not start the assistant: {{error}}"
         },
+        "assistantLaunch": {
+            "chooseCli": "Choose the assistant's CLI",
+            "startWith": "Starts with {{cli}}",
+            "noToolLock": "no tool lock",
+            "noToolLockHint": "Only the assistant's instructions limit this CLI's tools — it keeps its own shell and file tools",
+            "unavailable": "Unavailable: {{reason}}",
+            "unsupported": "This CLI can't host the assistant"
+        },
         "versionBanner": {
             "restarting": "restarting",
             "upgrading": "updating…",
@@ -1526,7 +1534,23 @@
         "sendNowTitle": "Send this message to the agent now. It goes into the agent's own queue and is answered next — the turn in progress keeps running.",
         "cancelQueued": "Cancel",
         "cancelQueuedAria": "Cancel this queued message",
-        "cancelQueuedTitle": "Remove this message from the queue. It will not be sent to the agent."
+        "cancelQueuedTitle": "Remove this message from the queue. It will not be sent to the agent.",
+        "agent": "Agent",
+        "tool": "Tool",
+        "ranCommand": "Ran command",
+        "activityTerminal": "Terminal",
+        "activityRuntime": "Runtime",
+        "system": "System",
+        "injected": "Injected input",
+        "relayLabel": "Relay · {{project}} · {{outcome}}",
+        "relayOutcome": {
+            "completed": "completed",
+            "failed": "failed",
+            "cancelled": "cancelled"
+        },
+        "relayIdle": "Nothing left running",
+        "reviewLabel": "Memory review",
+        "daemonNoticeLabel": "Notice"
     },
     "chatPane": {
         "debugBundleFailed": "Couldn't collect debug info",

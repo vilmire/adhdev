@@ -94,6 +94,10 @@ export function buildGitSystemBubbleMessages(
         id,
         role: 'system',
         kind: 'system',
+        // System-role rows are internal by default (daemon status chatter);
+        // this one is built FOR the chat, so it says so. Without the stamp the
+        // display classifier dropped every git bubble before it reached a row.
+        visibility: 'visible',
         content: buildGitSystemBubbleContent(phase, conversation.git),
         timestamp: getGitSystemBubbleTimestamp(conversation, conversation.git),
         meta: {
