@@ -1173,6 +1173,8 @@
             "continuousScan": "연속 (주기적 스캔)",
             "sessionCleanupLabel": "노드 제거 시 해당 세션은…",
             "sessionCleanupHint": "트랜스크립트 정리를 런타임/프로세스 정리와 분리합니다.",
+            "sessionCleanupByNodeType": "노드 종류에 따름 (워크트리: 중지·삭제, 베이스: 유지)",
+            "sessionCleanupByNodeTypeHint": "지정하지 않으면 워크트리 노드를 제거할 때 그 세션은 중지·삭제되고, 베이스 노드의 세션은 유지됩니다.",
             "mcpDescription": "· 메시 MCP 서버는 CLI 에이전트에서 직접 사용할 수 있습니다.",
             "repoMeshJsonTitle": "저장소 파일에서 (읽기 전용)",
             "repoMeshJsonHint": "이 저장소가 커밋한 코디네이터 프롬프트 텍스트로, 위 필드와 함께 쌓입니다. 여기가 아니라 저장소 파일에서 수정하세요:",

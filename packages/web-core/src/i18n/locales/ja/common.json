@@ -1173,6 +1173,8 @@
             "continuousScan": "継続（定期スキャン）",
             "sessionCleanupLabel": "ノードを削除するとき、そのセッションは…",
             "sessionCleanupHint": "トランスクリプトのクリーンアップをランタイム／プロセスのクリーンアップと分離します。",
+            "sessionCleanupByNodeType": "ノードの種類による（ワークツリー: 停止・削除、ベース: 保持）",
+            "sessionCleanupByNodeTypeHint": "未設定の場合、ワークツリーノードを削除するとそのセッションは停止・削除され、ベースノードのセッションは保持されます。",
             "mcpDescription": "· メッシュ MCP サーバーは CLI エージェントから直接使用できます。",
             "repoMeshJsonTitle": "リポジトリのファイルから（読み取り専用）",
             "repoMeshJsonHint": "このリポジトリがコミットしたコーディネータープロンプトで、上のフィールドと重なって適用されます。ここではなくリポジトリのファイルで編集してください:",
