@@ -154,6 +154,9 @@ describe('launch_assistant', () => {
         mkdirSync(join(agyDir, 'cache'), { recursive: true });
         writeFileSync(join(agyDir, 'settings.json'), '{"theme":"dark"}', { mode: 0o600 });
         writeFileSync(join(agyDir, 'cache', 'onboarding.json'), '{"done":true}');
+        // Linux authenticates agy with this file (macOS/Windows use the OS keyring),
+        // and the private home refuses to build without it there.
+        writeFileSync(join(agyDir, 'antigravity-oauth-token'), '{"token":{"access_token":"x"}}', { mode: 0o600 });
         const prevHome = process.env.HOME;
         process.env.HOME = fakeHome;
         try {
