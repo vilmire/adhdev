@@ -88,6 +88,9 @@ function planSessionStart(host: CliLaunchHost, cliType: string, workingDir: stri
     // behavior, but the path is resolved here in launch planning. A
     // delegated launch must provide its worker-private plan explicitly;
     // absence is represented as null so no daemon-HOME fallback is possible.
+    // A non-delegated launch that redirects HOME (the assistant's private HOME
+    // for a home-rooted CLI, commands/high-family/assistant-launch.ts) trusts
+    // the store under THAT home — the one the CLI reads — never the real one.
     if (provider && provider.category === 'cli' && options?.resolvedTrustPlan === undefined) {
         const declaredTrust = loadPreLaunchTrustFromSpecPath(
             (provider as unknown as { _resolvedSpecPath?: string })._resolvedSpecPath,
@@ -98,7 +101,7 @@ function planSessionStart(host: CliLaunchHost, cliType: string, workingDir: stri
                 provider: normalizedType,
                 workspace: resolvedDir,
                 trust: declaredTrust,
-                storeHome: os.homedir(),
+                storeHome: userLaunchTrustStoreHome(options?.extraEnv),
                 scope: 'user',
                 origin: 'user_confirmed',
                 sessionKey: key,
@@ -120,6 +123,12 @@ function planSessionStart(host: CliLaunchHost, cliType: string, workingDir: stri
     // case routing falls back to the daemon level (no wedge — see mesh-reconcile-loop).
     options = withSessionAnchorEnv(options, key);
     return { resolvedDir, normalizedType, provider, key, options };
+}
+
+/** The HOME a non-delegated launch's trust store resolves against: the launch's own `HOME` override, else the daemon's. */
+export function userLaunchTrustStoreHome(extraEnv: Record<string, string> | undefined): string {
+    const home = typeof extraEnv?.HOME === 'string' ? extraEnv.HOME.trim() : '';
+    return home || os.homedir();
 }
 
 /**

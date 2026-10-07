@@ -130,10 +130,26 @@ export function prepareWorkerPrivateHome(
     spec: WorkerPrivateHomeSpec,
     opts: { workspace: string; sessionKey: string; realHome?: string; baseDir?: string },
 ): PreparedWorkerHome {
-    const realHome = opts.realHome || os.homedir();
     const baseDir = opts.baseDir || path.join(os.tmpdir(), 'adhdev-worker-home');
     const scope = shortHash(`${spec.providerType}${path.resolve(opts.workspace || '')}${opts.sessionKey}`);
     const home = path.join(baseDir, `${spec.providerType}-${scope}`);
+    return materializePrivateHome(spec, { home, workspace: opts.workspace, realHome: opts.realHome });
+}
+
+/**
+ * Materialize a private HOME from `spec` at an EXPLICIT directory — the body of
+ * `prepareWorkerPrivateHome` without the per-task keying. Re-running it on the
+ * same directory refreshes every import (copies are re-taken, links re-made),
+ * so a stable directory (the assistant's `<configDir>/assistant-home/<type>`,
+ * see assistant/assistant-launch-plan.ts) is safe to prepare on every launch.
+ * Same fail-closed contract: a missing/insecure `required` import throws.
+ */
+export function materializePrivateHome(
+    spec: WorkerPrivateHomeSpec,
+    opts: { home: string; workspace: string; realHome?: string },
+): PreparedWorkerHome {
+    const realHome = opts.realHome || os.homedir();
+    const home = opts.home;
 
     mkdirSync(home, { recursive: true });
     for (const dir of spec.ensureDirs || []) {

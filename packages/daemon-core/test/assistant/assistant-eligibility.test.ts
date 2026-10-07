@@ -22,7 +22,8 @@ const EXPECTED: Record<string, { supported: boolean; toolRestriction: 'enforced'
     kimi: { supported: true, toolRestriction: 'prompt_only' },
     opencode: { supported: true, toolRestriction: 'prompt_only' },
     'grok-cli': { supported: true, toolRestriction: 'prompt_only' },
-    'antigravity-cli': { supported: false, toolRestriction: 'prompt_only', code: 'assistant_mcp_setup_unsupported' },
+    // Global `~/.gemini/config/mcp_config.json` → the worker private-HOME mechanism at a stable assistant dir.
+    'antigravity-cli': { supported: true, toolRestriction: 'prompt_only' },
 };
 
 /** The `meshCoordinator.mcpConfig` blocks of the shipped manifests (OSS-only checkouts have no adhdev-providers sibling). */
@@ -61,6 +62,9 @@ describe('describeAssistantEligibility', () => {
         const otherCli = describeAssistantEligibility({ cliType: 'gemini-cli', provider: { meshCoordinator: { supported: true, mcpConfig: FIXTURES['codex-cli'] } } as any, configDir: CFG });
         expect(otherCli).toMatchObject({ supported: false, code: 'assistant_mcp_setup_unsupported' });
         expect(otherCli.reason).toContain('global config');
+        // A global `~/…` config with no private-HOME spec for the CLI stays refused.
+        const globalNoSpec = describeAssistantEligibility({ cliType: 'gemini-cli', provider: { meshCoordinator: { supported: true, mcpConfig: FIXTURES['antigravity-cli'] } } as any, configDir: CFG });
+        expect(globalNoSpec).toMatchObject({ supported: false, code: 'assistant_mcp_setup_unsupported' });
     });
 
     const providersRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../../../adhdev-providers/cli');
@@ -83,7 +87,7 @@ describe('availableProviders carries assistant eligibility (daemon.metadata lane
         } as any;
         const byType = Object.fromEntries(buildAvailableProviders(loader).map((p) => [p.type, p]));
         expect(byType['claude-cli'].assistant).toEqual({ supported: true, toolRestriction: 'enforced' });
-        expect(byType['antigravity-cli'].assistant).toMatchObject({ supported: false, code: 'assistant_mcp_setup_unsupported' });
+        expect(byType['antigravity-cli'].assistant).toEqual({ supported: true, toolRestriction: 'prompt_only' });
         expect(byType['aider-cli'].assistant).toMatchObject({ supported: false, code: 'assistant_unsupported' });
         expect(byType.cursor).not.toHaveProperty('assistant');
     });

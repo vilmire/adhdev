@@ -6,10 +6,12 @@
  */
 import { describe, expect, it } from 'vitest';
 import { buildMeshCoordinatorMcpServerEntry, getMcpServersKey } from '../../src/mesh/mesh-coordinator-config.js';
+import { findWorkerPrivateHomeSpec } from '../../src/mesh/worker-home-specs.js';
 import { resolveAdhdevMcpServerLaunch, resolveMeshCoordinatorSetup, type MeshCoordinatorSetup } from '../../src/commands/mesh-coordinator.js';
 import {
     ASSISTANT_MCP_SERVER_NAME,
     assistantClaudeMcpConfigPath,
+    assistantPrivateHomeDir,
     assistantSessionSettings,
     assistantWorkspaceDir,
     planAssistantMcp,
@@ -67,7 +69,25 @@ describe('planAssistantMcp', () => {
         const inside: MeshCoordinatorSetup = { kind: 'auto_import', serverName: 'adhdev-mesh', configPath: `${WS}/.cursor/mcp.json`, configFormat: 'claude_mcp_json', mcpServer: server };
         expect(planAssistantMcp({ cliType: 'cursor-cli', setup: inside, workspace: WS, configDir: CFG })).toMatchObject({ ok: true, cliArgs: [], configWrite: { path: `${WS}/.cursor/mcp.json` } });
         const global: MeshCoordinatorSetup = { ...inside, configPath: '/home/u/.gemini/config/mcp_config.json' };
+        // No private-HOME spec (gemini-cli), or no declared `~/` path to re-root: refused.
+        expect(planAssistantMcp({ cliType: 'gemini-cli', setup: global, workspace: WS, configDir: CFG, declaredMcpConfigPath: '~/.gemini/config/mcp_config.json' })).toMatchObject({ ok: false, code: 'assistant_mcp_setup_unsupported' });
         expect(planAssistantMcp({ cliType: 'antigravity-cli', setup: global, workspace: WS, configDir: CFG })).toMatchObject({ ok: false, code: 'assistant_mcp_setup_unsupported' });
+        expect(planAssistantMcp({ cliType: 'antigravity-cli', setup: global, workspace: WS, configDir: CFG, declaredMcpConfigPath: '/etc/mcp.json' })).toMatchObject({ ok: false, code: 'assistant_mcp_setup_unsupported' });
+    });
+
+    it('antigravity-cli: the worker private-HOME spec at a stable assistant dir, config inside it, HOME pointed at it', () => {
+        const global: MeshCoordinatorSetup = { kind: 'auto_import', serverName: 'adhdev-mesh', configPath: '/home/u/.gemini/config/mcp_config.json', configFormat: 'claude_mcp_json', mcpServer: server };
+        const plan = planAssistantMcp({ cliType: 'antigravity-cli', setup: global, workspace: WS, configDir: CFG, declaredMcpConfigPath: '~/.gemini/config/mcp_config.json' });
+        if (!plan.ok) throw new Error(plan.code);
+        const home = assistantPrivateHomeDir(CFG, 'antigravity-cli');
+        expect(home).toBe(`${CFG}/assistant-home/antigravity-cli`);
+        expect(home.startsWith(`${WS}/`)).toBe(false);
+        expect(plan.cliArgs).toEqual([]);
+        expect(plan.toolRestriction).toBe('prompt_only');
+        expect(plan.configWrite).toEqual({ path: `${home}/.gemini/config/mcp_config.json`, format: 'claude_mcp_json', serverName: ASSISTANT_MCP_SERVER_NAME, server });
+        expect(plan.privateHome?.dir).toBe(home);
+        expect(plan.privateHome?.spec).toBe(findWorkerPrivateHomeSpec('antigravity-cli'));
+        expect(plan.privateHome?.env.HOME).toBe(home);
     });
 
     it('unsupported / manual setups fail closed', () => {
@@ -90,11 +110,12 @@ describe('assistant session id reaches the MCP server (every eligible provider)'
         kimi: { mode: 'auto_import', format: 'claude_mcp_json', path: '.kimi-code/mcp.json', serverName: 'adhdev-mesh' },
         opencode: { mode: 'auto_import', format: 'opencode_json', path: 'opencode.json', serverName: 'adhdev-mesh' },
         'grok-cli': { mode: 'auto_import', format: 'claude_mcp_json', path: '.mcp.json', serverName: 'adhdev-mesh' },
+        'antigravity-cli': { mode: 'auto_import', format: 'claude_mcp_json', path: '~/.gemini/config/mcp_config.json', serverName: 'adhdev-mesh' },
     };
     const plan = (cliType: string, sessionId?: string) => {
         const provider: any = { meshCoordinator: { supported: true, mcpConfig: FIXTURES[cliType] } };
         const setup = resolveMeshCoordinatorSetup({ provider, cliType, meshId: '', workspace: WS, toolset: { kind: 'assistant' }, adhdevMcpCommand: 'adhdev', adhdevMcpTransport: 'ipc', adhdevMcpPort: 19223 });
-        const p = planAssistantMcp({ cliType, setup, workspace: WS, configDir: CFG, sessionId });
+        const p = planAssistantMcp({ cliType, setup, workspace: WS, configDir: CFG, sessionId, declaredMcpConfigPath: FIXTURES[cliType].path });
         if (!p.ok) throw new Error(`${cliType}: ${p.code}`);
         return p;
     };
@@ -108,7 +129,7 @@ describe('assistant session id reaches the MCP server (every eligible provider)'
         expect(p.cliArgs.filter((a) => a.includes('.env.'))).toHaveLength(1);
     });
 
-    it.each(['claude-cli', 'cursor-cli', 'kimi', 'opencode', 'grok-cli'])('%s: the written config entry carries the env', (cliType) => {
+    it.each(['claude-cli', 'cursor-cli', 'kimi', 'opencode', 'grok-cli', 'antigravity-cli'])('%s: the written config entry carries the env', (cliType) => {
         const p = plan(cliType, SID);
         const w = p.configWrite!;
         expect(w).toBeTruthy();

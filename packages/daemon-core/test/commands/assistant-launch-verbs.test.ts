@@ -6,7 +6,7 @@
  * file, idempotence, registry binding + restart note, the dangerous-mode
  * refusal, and the MCP-only pull ownership rule.
  */
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -144,6 +144,80 @@ describe('launch_assistant', () => {
         expect(r).toMatchObject({ success: true, cliType: 'codex-cli' });
         const [launch] = launchCalls();
         expect(launch.cliArgs).toContain(`mcp_servers.adhdev-assistant.env.ADHDEV_ASSISTANT_SESSION_ID="${launch.assistantSessionKey}"`);
+    });
+
+    it('antigravity-cli: private HOME at <configDir>/assistant-home, MCP config + session env inside it, real ~/.gemini untouched', async () => {
+        // A temp HOME stands in for the person's real one (os.homedir() follows $HOME on POSIX).
+        const fakeHome = join(dir, 'real-home');
+        const agyDir = join(fakeHome, '.gemini', 'antigravity-cli');
+        mkdirSync(join(agyDir, 'brain'), { recursive: true });
+        mkdirSync(join(agyDir, 'cache'), { recursive: true });
+        writeFileSync(join(agyDir, 'settings.json'), '{"theme":"dark"}', { mode: 0o600 });
+        writeFileSync(join(agyDir, 'cache', 'onboarding.json'), '{"done":true}');
+        const prevHome = process.env.HOME;
+        process.env.HOME = fakeHome;
+        try {
+            const agy: any = {
+                type: 'antigravity-cli',
+                meshCoordinator: {
+                    supported: true,
+                    mcpConfig: { mode: 'auto_import', format: 'claude_mcp_json', path: '~/.gemini/config/mcp_config.json', serverName: 'adhdev-mesh' },
+                    systemPromptInjection: { mode: 'context_file', path: 'AGENTS.md', wrapper: '<!-- p -->\n{prompt}\n<!-- /p -->' },
+                },
+            };
+            const c = ctx();
+            c.deps.providerLoader = { resolveAlias: (t: string) => t, resolve: () => agy, getMeta: () => agy };
+            const r: any = await assistantLaunchHandlers[ASSISTANT_VERB.launch](c, { cliType: 'antigravity-cli' });
+            expect(r).toMatchObject({ success: true, launched: true, cliType: 'antigravity-cli', workspace: join(dir, 'assistant') });
+            const home = join(dir, 'assistant-home', 'antigravity-cli');
+            const [launch] = launchCalls();
+            expect(launch.env).toMatchObject({ HOME: home });
+            expect(launch.dir).toBe(join(dir, 'assistant'));
+            const cfgPath = join(home, '.gemini', 'config', 'mcp_config.json');
+            const cfg = JSON.parse(readFileSync(cfgPath, 'utf-8'));
+            expect(cfg.mcpServers['adhdev-assistant'].args).toContain('--assistant');
+            expect(cfg.mcpServers['adhdev-assistant'].env).toEqual({ ADHDEV_ASSISTANT_SESSION_ID: launch.assistantSessionKey });
+            expect(registry.read()).toMatchObject({ cliType: 'antigravity-cli', mcpConfigPath: cfgPath });
+            // Nothing written to the (stand-in) real home's global MCP config.
+            expect(existsSync(join(fakeHome, '.gemini', 'config'))).toBe(false);
+            // settings.json is a copy; transcripts link through to the real home.
+            expect(lstatSync(join(home, '.gemini', 'antigravity-cli', 'settings.json')).isSymbolicLink()).toBe(false);
+            expect(lstatSync(join(home, '.gemini', 'antigravity-cli', 'brain')).isSymbolicLink()).toBe(true);
+            expect(realpathSync(join(home, '.gemini', 'antigravity-cli', 'brain'))).toBe(realpathSync(join(agyDir, 'brain')));
+
+            // Stable dir: a relaunch re-takes the copy (assistant-side settings edits do not survive or flow back).
+            writeFileSync(join(home, '.gemini', 'antigravity-cli', 'settings.json'), '{"theme":"assistant-edit"}');
+            const again: any = await assistantLaunchHandlers[ASSISTANT_VERB.launch](c, { cliType: 'antigravity-cli' });
+            expect(again).toMatchObject({ success: true, launched: true });
+            expect(launchCalls()[1].env).toMatchObject({ HOME: home });
+            expect(readFileSync(join(home, '.gemini', 'antigravity-cli', 'settings.json'), 'utf-8')).toBe('{"theme":"dark"}');
+            expect(readFileSync(join(agyDir, 'settings.json'), 'utf-8')).toBe('{"theme":"dark"}');
+        } finally {
+            if (prevHome === undefined) delete process.env.HOME;
+            else process.env.HOME = prevHome;
+        }
+    });
+
+    it('antigravity-cli: a private HOME that cannot be prepared fails closed (no launch)', async () => {
+        const fakeHome = join(dir, 'real-home-loose');
+        const agyDir = join(fakeHome, '.gemini', 'antigravity-cli');
+        mkdirSync(agyDir, { recursive: true });
+        // settings.json is owner-only credential-adjacent material; a loose source is refused.
+        writeFileSync(join(agyDir, 'settings.json'), '{}');
+        chmodSync(join(agyDir, 'settings.json'), 0o644);
+        const prevHome = process.env.HOME;
+        process.env.HOME = fakeHome;
+        try {
+            const agy: any = { type: 'antigravity-cli', meshCoordinator: { supported: true, mcpConfig: { mode: 'auto_import', format: 'claude_mcp_json', path: '~/.gemini/config/mcp_config.json' } } };
+            const c = ctx();
+            c.deps.providerLoader = { resolveAlias: (t: string) => t, resolve: () => agy, getMeta: () => agy };
+            const r: any = await assistantLaunchHandlers[ASSISTANT_VERB.launch](c, { cliType: 'antigravity-cli' });
+            expect(r).toMatchObject({ success: false, code: 'assistant_private_home_failed' });
+            expect(launchCalls()).toHaveLength(0);
+        } finally {
+            if (prevHome === undefined) delete process.env.HOME;
+            else process.env.HOME = prevHome;
+        }
     });
 
     it('is idempotent while the bound session is live', async () => {
