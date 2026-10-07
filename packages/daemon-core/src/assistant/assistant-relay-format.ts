@@ -16,6 +16,13 @@ export const RELAY_BODY_MAX_CHARS = 4_096;
 export const RELAY_QUIET_MS = 15_000;
 /** Longest a batch waits for the coordinator to stop chaining turns. */
 export const RELAY_MAX_WAIT_MS = 120_000;
+/**
+ * An idle relay does not close the thread at once: the coordinator usually
+ * takes one more turn to report a worker's result (the completion notice
+ * lands right as the queue empties). The thread closes after this long with
+ * no further committed turn.
+ */
+export const RELAY_IDLE_CLOSE_GRACE_MS = 10 * 60_000;
 /** Progress / stall signal thresholds (chosen, not measured — §4.3). */
 export const RELAY_PROGRESS_AFTER_MS = 30 * 60_000;
 export const RELAY_STALL_AFTER_MS = 30 * 60_000;

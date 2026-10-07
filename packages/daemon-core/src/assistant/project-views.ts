@@ -15,9 +15,18 @@ import type { LocalMeshEntry } from '../repo-mesh-types.js';
 import type { AssistantCoordinatorView } from './coordinator-lifecycle.js';
 import type { QueueCounts } from './assistant-project-ports.js';
 
-/** URL-shaped identities (`host.tld/owner/repo`) are managed; `test-repo`, `local:*`, `scratch/*` are not (§4.2). */
+/**
+ * Scratch meshes (§4.2) are listed apart and not treated as projects:
+ * `test-repo`, `scratch/*`, `local:*`, and repos under a temp directory.
+ * A repo with no remote is still a project — onboarding gives it a
+ * `local/<name>` or path identity, and the owner's local-only repos look
+ * exactly like that.
+ */
 export function isUnmanagedRepoIdentity(repoIdentity: string | undefined): boolean {
-    return !/^[a-z0-9-]+(\.[a-z0-9-]+)+(:\d+)?\/[^/\s]+\/[^\s]+$/i.test(String(repoIdentity ?? '').trim());
+    const id = String(repoIdentity ?? '').trim();
+    if (!id) return true;
+    if (/^test-repo$/i.test(id) || /^scratch\//i.test(id) || /^local:/i.test(id)) return true;
+    return /^(?:\/private)?\/tmp\//.test(id) || /^\/var\/folders\//.test(id) || /^[A-Za-z]:[\\/].*[\\/](?:Temp|tmp)[\\/]/i.test(id);
 }
 
 function readText(v: unknown): string {
