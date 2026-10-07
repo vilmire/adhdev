@@ -206,6 +206,59 @@ export interface WorkerPrivateHomeSpec {
      * time from `opts.workspace`. See `WorkerWorkspaceLink`.
      */
     workspaceLinks?: WorkerWorkspaceLink[];
+    /**
+     * Where INSIDE the private root this CLI reads a user-level MCP layer the
+     * daemon can write the worker entry to, instead of the provider's
+     * workspace-relative `mcpConfig.path`. See `WorkerPrivateMcpConfigSpec`.
+     */
+    workerMcpConfig?: WorkerPrivateMcpConfigSpec;
+}
+
+/**
+ * ★WORKSPACE CLOBBER (audit 2026-10-07). kimi, cursor-cli, opencode and grok-cli
+ * declare a WORKSPACE-relative `mcpConfig.path` (`.kimi-code/mcp.json`,
+ * `.cursor/mcp.json`, `opencode.json`, `.mcp.json`). A worker on the base node
+ * runs in the coordinator's own workspace, so writing the worker entry there
+ * replaced the coordinator's (and the owner's) servers in a file every other
+ * session on that workspace reads — and concurrent workers raced on it.
+ *
+ * Each of those CLIs also reads a USER-level MCP layer from its config root,
+ * which the worker-private root already redirects. Writing the worker entry
+ * there touches nothing shared. Measured 2026-10-07 against the installed CLIs
+ * under scratch roots (never the owner's):
+ *
+ *  - kimi 2.x: `<KIMI_CODE_HOME>/mcp.json` is the user layer (binary
+ *    `resolveMcpJsonPaths`: user → `<git root>/.mcp.json` → `<cwd>/.kimi-code/mcp.json`,
+ *    later layers win by name).
+ *  - cursor-agent: `~/.cursor/mcp.json` is loaded with NO approval gate; a
+ *    same-named server in `<ws>/.cursor/mcp.json` wins (`mcp list-tools`).
+ *  - opencode 1.18: `$XDG_CONFIG_HOME/opencode/opencode.json` is merged under
+ *    the project `opencode.json`, which wins by name (`opencode debug config`);
+ *    `OPENCODE_CONFIG_CONTENT` outranks the project file.
+ *  - grok 1.0.46: `~/.claude.json` (claude-compat user layer) OUTRANKS the
+ *    repo `.mcp.json` by name in a trusted folder (`grok inspect --json`,
+ *    `grok mcp doctor --json`) — and worker folders are trusted by the
+ *    pre-launch trust projection.
+ */
+export interface WorkerPrivateMcpConfigSpec {
+    /** Path relative to the private root (the directory the env var / HOME names). */
+    relativePath: string;
+    /**
+     * Workspace-relative config files that OUTRANK the private layer when they
+     * declare the same server name (typically: a coordinator of a compatible
+     * provider registered `adhdev-mesh` in this workspace). On such a collision
+     * the private entry would be shadowed — and the worker would load the
+     * coordinator's entry instead — so the launch falls back to `inlineEnvVar`
+     * when declared, else to a MERGE into the declared workspace file that is
+     * undone at session teardown.
+     */
+    overriddenBy: string[];
+    /**
+     * Env var carrying an inline config that outranks every file layer, used on
+     * a collision instead of touching the shared file (opencode's
+     * `OPENCODE_CONFIG_CONTENT`).
+     */
+    inlineEnvVar?: string;
 }
 
 /**
@@ -445,6 +498,9 @@ export const WORKER_PRIVATE_HOME_SPECS: readonly WorkerPrivateHomeSpec[] = [
         // The ISOLATED surface: empty means the owner's global `~/.cursor/mcp.json`
         // is not reachable and therefore cannot be merged in.
         ensureDirs: ['.cursor'],
+        // The worker entry goes into the PRIVATE global layer (loaded without an
+        // approval gate — measured), not the shared `<ws>/.cursor/mcp.json`.
+        workerMcpConfig: { relativePath: path.join('.cursor', 'mcp.json'), overriddenBy: [path.join('.cursor', 'mcp.json')] },
         workspaceLinks: [
             // Transcripts must stay readable by the daemon, which globs the REAL
             // `~/.cursor/projects/*/agent-transcripts/*`. Leaf only — the parent
@@ -572,6 +628,10 @@ export const WORKER_PRIVATE_HOME_SPECS: readonly WorkerPrivateHomeSpec[] = [
         // has no owner cursor/claude config to import — neither MCP servers nor
         // the `user_rule` that was observed in the worker prompt.
         ensureDirs: ['.cursor', '.claude'],
+        // The worker entry goes into the PRIVATE `~/.claude.json` (claude-compat
+        // user layer), which outranks the workspace `.mcp.json` by name — so it
+        // also shadows a coordinator's `adhdev-mesh` there without touching it.
+        workerMcpConfig: { relativePath: '.claude.json', overriddenBy: [] },
     },
     /**
      * ★codex-cli (measured live 2026-09-19, codex-cli 0.154.0).
@@ -775,6 +835,9 @@ export const WORKER_PRIVATE_HOME_SPECS: readonly WorkerPrivateHomeSpec[] = [
             { relativePath: 'sessions', mode: 'symlink' },
             { relativePath: 'session_index.jsonl', mode: 'symlink' },
         ],
+        // `<KIMI_CODE_HOME>/mcp.json` is kimi's user layer — the LOWEST of its
+        // three, so a same-named entry in either workspace file shadows it.
+        workerMcpConfig: { relativePath: 'mcp.json', overriddenBy: ['.mcp.json', path.join('.kimi-code', 'mcp.json')] },
     },
     /**
      * ★opencode (measured live 2026-09-19).
@@ -831,6 +894,15 @@ export const WORKER_PRIVATE_HOME_SPECS: readonly WorkerPrivateHomeSpec[] = [
             },
         ],
         ensureDirs: ['opencode'],
+        // The private global `opencode.json` (the mcp-stripped copy above) is the
+        // user layer; the project `opencode.json` wins by name, and on that
+        // collision `OPENCODE_CONFIG_CONTENT` (which outranks it) carries the
+        // entry instead of a write into the shared project file.
+        workerMcpConfig: {
+            relativePath: path.join('opencode', 'opencode.json'),
+            overriddenBy: ['opencode.json', path.join('.opencode', 'opencode.json')],
+            inlineEnvVar: 'OPENCODE_CONFIG_CONTENT',
+        },
     },
 ];
 

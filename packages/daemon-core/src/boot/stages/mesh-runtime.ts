@@ -24,7 +24,7 @@
 import { subscribeMeshTermination } from '../../mesh/mesh-termination-bridge.js';
 import { subscribeMeshProviderSignals } from '../../mesh/mesh-signal-bridge.js';
 import { subscribeCoordinatorRegistryRemoval } from '../../mesh/coordinator-registry.js';
-import { hasLiveWorkerSessionBind, setWorkerSessionBindPersistence, subscribeWorkerBindRevocation } from '../../mesh/worker-mcp-isolation.js';
+import { hasLiveWorkerSessionBind, setWorkerSessionBindPersistence, subscribeWorkerBindRevocation, subscribeWorkerMcpSharedConfigCleanup } from '../../mesh/worker-mcp-isolation.js';
 import { SqliteWorkerSessionBindStore } from '../../mesh/worker-session-bind-store.js';
 import {
     listLocalCoordinatorSessions,
@@ -498,6 +498,9 @@ export function bootMeshRuntime(s6: ProjectionsStage): MeshRuntimeStage {
         subscribeMeshTermination(bus),
         subscribeMeshProviderSignals(bus),
         subscribeCoordinatorRegistryRemoval(bus),
+        // Takes a dead worker's entry back out of a SHARED workspace MCP config
+        // (restoring what it shadowed) — see resolveWorkerMcpPlacement.
+        subscribeWorkerMcpSharedConfigCleanup(bus),
         subscribeWorkerBindRevocation(bus),
     ];
 

@@ -575,7 +575,7 @@ describe('worker-MCP gate ON ⇒ provider-specific worker delivery is active', (
     expect(result.cliArgs.filter((arg) => arg === '--approve-mcps')).toHaveLength(1)
   })
 
-  it('★writes the worker cursor config into the WORKSPACE, never the owner\'s global one', () => {
+  it('★writes the worker cursor config into the PRIVATE HOME layer — never the owner\'s global one, never the shared workspace file', () => {
     const realHome = mkdtempSync(join(tmpdir(), 'adhdev-gateon-cursor-global-home-'))
     const workspace = mkdtempSync(join(tmpdir(), 'adhdev-gateon-cursor-global-'))
     __tmpDirsToClean.push(realHome, workspace)
@@ -593,11 +593,15 @@ describe('worker-MCP gate ON ⇒ provider-specific worker delivery is active', (
       workerHomeBaseDir: mkdtempSync(join(tmpdir(), 'adhdev-gateon-cursor-global-base-')),
     })
 
-    expect(result.workerIsolation?.configPath).toBe(join(workspace, '.cursor', 'mcp.json'))
+    // WORKSPACE CLOBBER (2026-10-07): the entry goes to the worker HOME's own
+    // `.cursor/mcp.json` (cursor's global layer, loaded without approval) —
+    // the shared `<ws>/.cursor/mcp.json` is never written.
+    expect(result.workerIsolation?.configPath).toBe(join(result.env.HOME!, '.cursor', 'mcp.json'))
+    expect(existsSync(join(workspace, '.cursor', 'mcp.json'))).toBe(false)
     // The owner's personal global config is untouched...
     expect(JSON.parse(readFileSync(ownerGlobal, 'utf-8')).mcpServers.blender).toBeTruthy()
-    // ...and unreachable from the HOME the worker will actually read.
-    expect(existsSync(join(result.env.HOME!, '.cursor', 'mcp.json'))).toBe(false)
+    // ...and its servers are not in what the worker HOME reads.
+    expect(Object.keys(JSON.parse(readFileSync(join(result.env.HOME!, '.cursor', 'mcp.json'), 'utf-8')).mcpServers)).toEqual([])
   })
 })
 
