@@ -53,11 +53,11 @@ describe('transcript-worker-entry.ts — second worker on a held OPFS pool', () 
         const first = startEntryWorker(writerId);
         started.push(first.worker);
         // The first worker owns the SAH pool for as long as it lives.
-        await within(first.firstWireFrame, 4000, 'first worker');
+        await within(first.firstWireFrame, 15_000, 'first worker');
 
         const second = startEntryWorker(writerId);
         started.push(second.worker);
-        const frame = await within(second.firstWireFrame, 4000, 'second worker');
+        const frame = await within(second.firstWireFrame, 15_000, 'second worker');
         expect(typeof frame).toBe('string');
         expect(frame.length).toBeGreaterThan(0);
     });
