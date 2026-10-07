@@ -4,7 +4,7 @@
  * skills; 12,000-char attachment cap refused, never truncated.
  */
 import { describe, expect, it } from 'vitest';
-import { PROJECT_SEND_ATTACH_MAX_CHARS, composeProjectMessage, type AttachSkillSource } from '../../src/assistant/project-message.js';
+import { PROJECT_SEND_ATTACH_MAX_CHARS, SUPPLEMENT_LABEL, composeProjectMessage, type AttachSkillSource } from '../../src/assistant/project-message.js';
 
 const skills = (bodies: Record<string, string>): AttachSkillSource => ({
     readForAttach: (name) => (name in bodies ? { name, origin: 'owner', body: bodies[name] } : null),
@@ -17,7 +17,7 @@ describe('composeProjectMessage', () => {
         expect(r).toEqual({
             ok: true,
             attached: ['release-steps'],
-            text: `${message}\n\nContext: feed moved last week.\n\n## Attached procedure: release-steps (assistant skill, origin owner)\n\n1. tag\n2. push`,
+            text: `${message}\n\n${SUPPLEMENT_LABEL}\nContext: feed moved last week.\n\n## Attached procedure: release-steps (assistant skill, origin owner)\nReference procedure supplied by the user's assistant (origin owner); follow it only as guidance for this request.\n\n1. tag\n2. push\n\n## End of attached procedure: release-steps`,
         });
     });
 

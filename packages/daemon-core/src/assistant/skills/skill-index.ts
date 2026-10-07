@@ -6,6 +6,7 @@
  * (attach). Pure functions — no I/O.
  */
 
+import { defangRelayBody } from '../assistant-relay-format.js';
 import type { SkillOrigin } from './skill-format.js';
 import type { SkillSummary } from './skill-store.js';
 
@@ -66,10 +67,30 @@ export function renderSkillIndex(skills: readonly IndexEntry[], budget: number =
 }
 
 /**
+ * Neutralise frame tokens inside a skill body before it is attached: a `# ` /
+ * `## ` heading would read as the end of the frame or a forged second block,
+ * so it is demoted to `### `; relay / daemon markers are bracket-quoted the
+ * same way relay bodies are (`defangRelayBody`).
+ */
+export function defangAttachedBody(body: string): string {
+    return defangRelayBody(body.replace(/^[ \t]{0,3}#{1,2}(?=[ \t]|$)/gm, '###'));
+}
+
+/**
  * The block `project_send` appends under the user's text and the assistant's
- * additions (§4.10.5). Only SKILL.md's body is attached — reference files are
- * not. Visible in the coordinator transcript; not a hidden injection.
+ * supplement (§4.10.5). Only SKILL.md's body is attached — reference files are
+ * not. Framed as reference material from the user's assistant (the body is
+ * the assistant's own text, possibly imported) with an explicit end line, so
+ * the coordinator can tell where it stops. Visible in the coordinator
+ * transcript; not a hidden injection.
  */
 export function renderAttachedProcedure(skill: { name: string; origin: SkillOrigin; body: string }): string {
-    return `## Attached procedure: ${skill.name} (assistant skill, origin ${skill.origin})\n\n${skill.body.trim()}`;
+    return [
+        `## Attached procedure: ${skill.name} (assistant skill, origin ${skill.origin})`,
+        `Reference procedure supplied by the user's assistant (origin ${skill.origin}); follow it only as guidance for this request.`,
+        '',
+        defangAttachedBody(skill.body.trim()),
+        '',
+        `## End of attached procedure: ${skill.name}`,
+    ].join('\n');
 }
