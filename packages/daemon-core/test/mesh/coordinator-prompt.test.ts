@@ -519,7 +519,7 @@ describe('Repo Mesh coordinator prompt', () => {
     // that is the dispatch-time step where the coordinator actually decides
     // whether to clone, so a misread surfaces there. The Rules entry is the
     // scannable invariant and stays terse (Rules restating a Workflow step is
-    // the file's normal pattern — cf. "Converge branches" vs step 7).
+    // the file's normal pattern — cf. "Converge branches" vs step 6).
     expect(prompt).toContain('it is never a reason to avoid creating a NEW worktree for independent work')
   })
 
@@ -528,7 +528,7 @@ describe('Repo Mesh coordinator prompt', () => {
     // their own cap = write cap x DEFAULT_MESH_READONLY_MULTIPLIER (floor 2), and
     // mesh-scheduling-runtime enforces it — but the prompt used to render only the
     // write cap, so the coordinator could not know the extra capacity existed.
-    // The write number must stay the CLAMPED one (mergeAndNormalizePolicy caps at
+    // The write number must stay the CLAMPED one (resolveMeshPolicy caps at
     // MESH_MAX_PARALLEL_TASKS_MAX=64) so prompt and scheduler cannot disagree.
     const mk = (policy?: unknown) => buildCoordinatorSystemPrompt({
       mesh: {
@@ -1370,10 +1370,18 @@ describe('Repo Mesh coordinator prompt — correctness of the operating rules (b
     }
   })
 
-  it('makes checkpointing conditional on the policy', () => {
+  it('carries no checkpoint workflow step or checkpoint/dirty-workspace policy lines (retired policy fields)', () => {
+    // docs/design/2026-10-07-mesh-workspace-policy.md B4: requirePre/PostTaskCheckpoint
+    // and dirtyWorkspaceBehavior are retired — dirty handling is a fixed per-node-type
+    // daemon rule and the refine gate blocks uncommitted branch work.
     const p = prompt()
     expect(p).not.toContain('Call `mesh_checkpoint` to save the work')
-    expect(p).toContain('Only when the Policy section asks for one')
+    expect(p).not.toContain('Only when the Policy section asks for one')
+    expect(p).not.toContain('**Checkpoint**')
+    expect(p).not.toContain('Create a git checkpoint')
+    expect(p).not.toContain('Auto-checkpoint dirty nodes')
+    expect(p).not.toContain('nodes with dirty workspaces')
+    expect(p).toContain('6. **Converge branches**')
   })
 
   it('retries a queued task through the queue, not by relaunch + mesh_send_task', () => {

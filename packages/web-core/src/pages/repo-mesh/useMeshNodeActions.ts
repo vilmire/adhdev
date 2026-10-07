@@ -200,6 +200,11 @@ export function useMeshNodeActions({
     async function handleRemoveNode(nodeId: string) {
         if (!selectedMesh) return
         const policy = readMeshPolicy(selectedMesh)
+        // Unset = the context default: a worktree node's sessions go with it
+        // (stop_and_delete), a base node's are preserved.
+        const removedNode = (selectedMesh.nodes || []).find(n => n.id === nodeId)
+        const cleanupMode = policy.sessionCleanupOnNodeRemove
+            || (removedNode?.isLocalWorktree === true ? 'stop_and_delete' : 'preserve')
         const cleanupLabel = (
             [
                 { value: 'preserve', label: 'Preserve history and runtimes' },
@@ -207,7 +212,7 @@ export function useMeshNodeActions({
                 { value: 'delete_stopped', label: 'Delete stopped sessions only' },
                 { value: 'stop_and_delete', label: 'Stop and delete sessions' },
             ] as const
-        ).find(o => o.value === policy.sessionCleanupOnNodeRemove)?.label || 'Preserve history and runtimes'
+        ).find(o => o.value === cleanupMode)?.label || 'Preserve history and runtimes'
         const confirmed = confirmAction
             ? await confirmAction({
                 title: 'Remove this node?',
@@ -229,9 +234,12 @@ export function useMeshNodeActions({
         } catch (e: any) { setError(e?.message || 'Remove node failed') }
     }
 
+    // Sends ONLY the changed keys: the daemon merges a patch into the stored overrides
+    // (`null` resets a key to its default). Sending the whole displayed policy would
+    // persist every default as if the owner had chosen it.
     async function handleUpdatePolicy(patch: Record<string, unknown>) {
         if (!selectedMesh) return
-        const nextPolicy = { ...readMeshPolicy(selectedMesh), ...patch }
+        const nextPolicy = { ...patch }
         const targetDaemonId = requireCoordinator()
         if (!targetDaemonId) return
         try {

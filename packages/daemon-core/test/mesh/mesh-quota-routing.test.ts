@@ -23,7 +23,8 @@ import { isQuotaSnapshotFresh, quotaSnapshotAgeMs, liveLocalProviderEnablementFo
 import { LOG } from '../../src/logging/logger.js';
 import {
     DEFAULT_QUOTA_ROUTING_POLICY,
-    mergeAndNormalizePolicy,
+    mergePolicyOverrides,
+    normalizePolicyOverrides,
     normalizeQuotaRoutingPolicy,
     resolveQuotaRoutingPolicy,
 } from '../../src/repo-mesh-types.js';
@@ -101,8 +102,8 @@ describe('quota routing policy — resolution & persistence economy', () => {
     });
 
     it('drops an absent or all-default quotaRouting from the persisted policy', () => {
-        expect(mergeAndNormalizePolicy(undefined, undefined).quotaRouting).toBeUndefined();
-        expect(mergeAndNormalizePolicy(undefined, {
+        expect(normalizePolicyOverrides(undefined).quotaRouting).toBeUndefined();
+        expect(normalizePolicyOverrides({
             quotaRouting: { sessionMinRemainingPercent: 10, weeklyMinRemainingPercent: 15 },
         } as any).quotaRouting).toBeUndefined();
         expect(normalizeQuotaRoutingPolicy({ staleAfterMs: 60 * MIN })).toBeUndefined();
@@ -113,11 +114,11 @@ describe('quota routing policy — resolution & persistence economy', () => {
     });
 
     it('persists only explicit non-default overrides, idempotently', () => {
-        const merged = mergeAndNormalizePolicy(undefined, {
+        const merged = mergePolicyOverrides(undefined, {
             quotaRouting: { sessionMinRemainingPercent: 25, staleAfterMs: 10 * MIN },
         } as any);
         expect(merged.quotaRouting).toEqual({ sessionMinRemainingPercent: 25, staleAfterMs: 10 * MIN });
-        const remerged = mergeAndNormalizePolicy(merged, undefined);
+        const remerged = mergePolicyOverrides(merged, undefined);
         expect(remerged.quotaRouting).toEqual(merged.quotaRouting);
     });
 });

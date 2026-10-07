@@ -120,9 +120,15 @@ export interface RepoMeshAutoFastForwardPolicy {
     mode?: 'idle' | 'continuous';
 }
 
+/**
+ * The EFFECTIVE mesh policy (resolveMeshPolicy). meshes.json stores only the keys
+ * the owner set (RepoMeshPolicyOverrides); read a defaulted key through
+ * resolveMeshPolicy, never raw off `mesh.policy`.
+ *
+ * Retired (docs/design/2026-10-07-mesh-workspace-policy.md B4): requirePreTaskCheckpoint,
+ * requirePostTaskCheckpoint, dirtyWorkspaceBehavior — see RETIRED_MESH_POLICY_KEYS.
+ */
 export interface RepoMeshPolicy {
-    requirePreTaskCheckpoint: boolean;
-    requirePostTaskCheckpoint: boolean;
     requireApprovalForPush: boolean;
     /**
      * Narrow Refinery opt-in: when validation and patch-equivalence have passed,
@@ -131,7 +137,6 @@ export interface RepoMeshPolicy {
      * Defaults to false; root branch pushes/merges are not affected.
      */
     allowAutoPublishSubmoduleMainCommits?: boolean;
-    dirtyWorkspaceBehavior: 'block' | 'warn' | 'checkpoint_then_continue';
     maxParallelTasks: number;
     allowedProviders?: string[];
     /**
@@ -176,8 +181,9 @@ export interface RepoMeshPolicy {
     allowSendKeysDestructive?: boolean;
     /**
      * What to do with delegated session-host records for a node when it is removed.
-     * Defaults to 'preserve' so completed work can be reviewed later and live
-     * runtimes are never stopped/deleted unless the mesh owner opts in.
+     * Unset = the context default: a worktree node's sessions are stopped and deleted
+     * with it (stop_and_delete — manual removal and refine cleanup alike); a base
+     * node's are preserved. An explicit value (including 'preserve') always wins.
      */
     sessionCleanupOnNodeRemove?: RepoMeshSessionCleanupMode;
     /**
@@ -541,15 +547,13 @@ export function resolveNodeMaxConcurrentSessions(value: unknown): number {
 }
 
 export const DEFAULT_MESH_POLICY: RepoMeshPolicy = {
-    requirePreTaskCheckpoint: false,
-    requirePostTaskCheckpoint: true,
     requireApprovalForPush: true,
     allowAutoPublishSubmoduleMainCommits: false,
-    dirtyWorkspaceBehavior: 'warn',
     // Mesh-wide task cap is effectively unlimited by default: the real concurrency
     // limits live per node / per capability slot (node capability slots design, 2026-07-09), so a
     // global ceiling is rarely meaningful. The UI hides this control; set it via the
-    // API only to impose a deliberate mesh-wide cap.
+    // API only to impose a deliberate mesh-wide cap. Resolved through
+    // resolveMaxParallelTasks, which clamps it to MESH_MAX_PARALLEL_TASKS_MAX (64).
     maxParallelTasks: 200,
     // Coordinator-spawned worker sessions default to hidden so the dashboard is not
     // flooded with mesh noise tabs/notifications. Users can still surface or unmute
@@ -557,7 +561,7 @@ export const DEFAULT_MESH_POLICY: RepoMeshPolicy = {
     spawnedSessionVisibility: 'hidden',
     delegatedWorkerAutoApprove: true,
     delegatedWorkerDangerousModeAllow: false,
-    sessionCleanupOnNodeRemove: 'preserve',
+    // sessionCleanupOnNodeRemove has no mesh-wide default — see its doc.
     autoFastForward: { enabled: true },
     maxTaskRetries: 1,
     // Nudge the coordinator when the mesh is fully idle but active missions linger,

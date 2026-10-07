@@ -11,7 +11,7 @@ import {
 import {
     resolveDelegatedSessionIdleTtlMinutes,
     resolveDelegatedSessionIdleTtlMs,
-    mergeAndNormalizePolicy,
+    resolveMeshPolicy,
     DEFAULT_MESH_POLICY,
     DEFAULT_DELEGATED_SESSION_IDLE_TTL_MINUTES,
     MESH_DELEGATED_SESSION_IDLE_TTL_MIN_MINUTES,
@@ -185,13 +185,13 @@ describe('resolveDelegatedSessionIdleTtlMinutes', () => {
         expect(resolveDelegatedSessionIdleTtlMinutes('banana')).toBe(30);
     });
 
-    it('is applied by mergeAndNormalizePolicy (default + explicit disable)', () => {
+    it('is applied by resolveMeshPolicy (default + explicit disable)', () => {
         expect(DEFAULT_MESH_POLICY.delegatedSessionIdleTtlMinutes).toBe(30);
-        expect(mergeAndNormalizePolicy(undefined, undefined).delegatedSessionIdleTtlMinutes).toBe(30);
-        expect(mergeAndNormalizePolicy(undefined, { delegatedSessionIdleTtlMinutes: false })
+        expect(resolveMeshPolicy(undefined).delegatedSessionIdleTtlMinutes).toBe(30);
+        expect(resolveMeshPolicy({ delegatedSessionIdleTtlMinutes: false })
             .delegatedSessionIdleTtlMinutes).toBe(0);
         // a hand-edited meshes.json with a nonsense value normalizes, never crashes
-        expect(mergeAndNormalizePolicy(undefined, { delegatedSessionIdleTtlMinutes: 2 })
+        expect(resolveMeshPolicy({ delegatedSessionIdleTtlMinutes: 2 })
             .delegatedSessionIdleTtlMinutes).toBe(MESH_DELEGATED_SESSION_IDLE_TTL_MIN_MINUTES);
     });
 });

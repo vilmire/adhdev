@@ -315,6 +315,9 @@ describe('launch-time host pin backfill', () => {
                 name: 'm',
                 repoIdentity: 'id_a',
                 policy: {},
+                // Already in the sparse-policy storage format (the one-time load
+                // migration has run), so the only thing under test is the host pin.
+                policyStorage: 2,
                 meshHost: { role: 'host', hostDaemonId: HOST_DAEMON, hostNodeId: 'node-coord', pairing: { status: 'not_configured' } },
                 nodes: [
                     { id: 'node-coord', workspace: '/w', daemonId: HOST_DAEMON, role: 'host' },

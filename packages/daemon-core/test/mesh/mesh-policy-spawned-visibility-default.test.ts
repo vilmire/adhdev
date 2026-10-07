@@ -18,7 +18,7 @@ vi.mock('../../src/config/config.js', () => ({
 }));
 
 import { createMesh, updateMesh } from '../../src/config/mesh-config.js';
-import { DEFAULT_MESH_POLICY } from '../../src/repo-mesh-types.js';
+import { DEFAULT_MESH_POLICY, resolveMeshPolicy } from '../../src/repo-mesh-types.js';
 
 afterEach(() => {
     if (existsSync(testTmpDir)) rmSync(testTmpDir, { recursive: true, force: true });
@@ -31,7 +31,9 @@ describe('mesh policy — coordinator spawned-session visibility default', () =>
 
     it('a freshly created mesh (no explicit policy) defaults spawnedSessionVisibility to hidden', () => {
         const mesh = createMesh({ name: 'm', repoIdentity: 'id_default' });
-        expect(mesh.policy.spawnedSessionVisibility).toBe('hidden');
+        expect(resolveMeshPolicy(mesh.policy).spawnedSessionVisibility).toBe('hidden');
+        // Sparse storage: the default is resolved, not copied into meshes.json.
+        expect('spawnedSessionVisibility' in mesh.policy).toBe(false);
     });
 
     it('preserves an explicit visible override (user opt-in to visible coordinator sessions)', () => {
@@ -53,6 +55,7 @@ describe('mesh policy — coordinator spawned-session visibility default', () =>
             repoIdentity: 'id_invalid',
             policy: { spawnedSessionVisibility: 'bogus' as any },
         });
-        expect(mesh.policy.spawnedSessionVisibility).toBe('hidden');
+        expect(resolveMeshPolicy(mesh.policy).spawnedSessionVisibility).toBe('hidden');
+        expect('spawnedSessionVisibility' in mesh.policy).toBe(false);
     });
 });

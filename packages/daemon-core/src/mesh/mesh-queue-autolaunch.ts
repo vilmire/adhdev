@@ -20,7 +20,7 @@ import { spendTaskAutoLaunchSpawnBudget, recordTaskAutoLaunchDispatchFailure } f
 import { buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, getQueue, recordTaskAutoLaunch, isTaskReadonly, taskDependenciesSatisfied, meshTaskNotBeforeReady, meshTaskPriorityRank, requeueTask, parkTaskTargetPin, failRetentionExpiredParkedTask } from './mesh-work-queue.js';
 import { clearClaimDeferralForNode, noteClaimDeferredForNode, shouldRedriveDeferredClaim } from './mesh-claim-refusal.js';
 import { waitForRemoteSessionReady } from './mesh-remote-ready-wait.js';
-import { resolveProviderMaxParallel, resolveMaxParallelTasks, resolveMaxReadonlyParallelTasks, resolveQuotaRoutingPolicy, resolveNodeMaxConcurrentSessions } from '../repo-mesh-types.js';
+import { resolveProviderMaxParallel, resolveMaxReadonlyParallelTasks, resolveQuotaRoutingPolicy, resolveNodeMaxConcurrentSessions, resolveMeshPolicy } from '../repo-mesh-types.js';
 import type { RepoMeshQuotaRoutingPolicy } from '../repo-mesh-types.js';
 import { meshNodeIdMatches, withStatusProbeMarker, type NodeCapabilitySlot, readText } from '@adhdev/mesh-shared';
 import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
@@ -32,7 +32,8 @@ import { readMeshNodeDaemonId, isMeshNodeFreshEnoughToLaunch } from './mesh-node
 import { isModelCompatibleWithProvider } from './model-provider-compat.js';
 import { classifyMeshLaunchAxisSource } from '../sessions/launch-record.js';
 import { decideSlotForModel, finalizeSlotSelection } from './slot-model-enforcement.js';
-import { isWorkspaceAutoFastForwardInFlight, resolveAutoFastForwardPolicy, isDirtyNode } from './mesh-auto-fast-forward.js';
+import { isWorkspaceAutoFastForwardInFlight, resolveAutoFastForwardPolicy } from './mesh-auto-fast-forward.js';
+import { dirtyWriteVerdict, readDirtyWriteGate } from './mesh-dirty-write-verdict.js';
 import { isActionableSkipReason, isTargetNodeTransientlyUnresolved, resolveDeadTargetVerdict, retractActionableSkipIfPreviouslyNotified, notifyCoordinatorOfActionableSkip, resolveTargetPinTtlVerdict, TARGET_SESSION_PIN_TTL_MS, TRANSIENT_TARGET_NODE_BOOTSTRAP_PENDING_REASON } from './mesh-skip-notify.js';
 import { PARKED_SKIP_REASON, noteTargetPinCleared, parkExpiredTargetPin, settleParkedQueueTask, taskIsParked } from './mesh-task-parking.js';
 import { activeWriteAssignedCount, activeReadonlyAssignedCount, nodeHasActiveAssignment, resolveSchedulingStrategy, orderEligibleNodes, orderSlotsForProviderSelection, activeProviderAssignedCount, slotCoversTaskDifficulty, taskRequiresDifficultyFloor, slotHasCapacity, resolveLaunchAxis, type RankableNode, type FitnessTask } from './mesh-scheduling-fitness.js';
@@ -584,11 +585,19 @@ function screenNodeForAutoLaunch(
         markSkip(nodeId, 'auto_launch_cooldown');
         return null;
     }
-    if (isDirtyNode(node)) {
+    // Dirty workspace: the fixed per-node-type rule (mesh-dirty-write-verdict.ts),
+    // the same table the claim that follows applies. A dirty base node refuses a
+    // write; a dirty worktree takes a write bound to its own branch; a readonly task
+    // never touches the tree. When the verdict lets the task through, the node's
+    // 'dirty' HEALTH is the verdict's call, not a health failure.
+    // (Tolerated only when the dirt is what the verdict judged — positive git
+    // telemetry; a health derived 'dirty' some other way stays a health failure.)
+    const dirtyGate = readDirtyWriteGate(node);
+    if (dirtyWriteVerdict(dirtyGate, task) === 'refuse') {
         markSkip(nodeId, 'dirty_workspace');
         return null;
     }
-    if (!isLaunchableNode(node)) {
+    if (!isLaunchableNode(node, { tolerateDirty: dirtyGate.dirty })) {
         // Names the HEALTH gate specifically (isMeshNodeHealthLaunchable:
         // resolved health must be 'online' or 'unknown'). Deliberately NOT
         // called `node_not_launch_ready`: that read as the negation of the
@@ -899,7 +908,7 @@ async function resolveAutoLaunchPlan(
         role: 'worker',
         meshNodeFor: meshId,
         meshNodeId: nodeId,
-        spawnedSessionVisibility: mesh?.policy?.spawnedSessionVisibility || 'hidden',
+        spawnedSessionVisibility: resolveMeshPolicy(mesh?.policy).spawnedSessionVisibility || 'hidden',
         // Coordinator-dispatched worker: auto-approve unless mesh/node policy
         // opts out (default true). Lands in settingsOverride and beats the
         // global per-provider-type boolean/mode through explicit opposite-key clearing.
@@ -1129,7 +1138,7 @@ export async function maybeAutoLaunchOneQueueSession(components: DaemonComponent
     // MACHINE-LOCAL stored mesh policy (no repo-file overlay). These are the same
     // resolvers the observability projection uses, so the enforced and exposed
     // caps can never drift.
-    const maxParallelTasks = resolveMaxParallelTasks(mesh?.policy?.maxParallelTasks);
+    const maxParallelTasks = resolveMeshPolicy(mesh?.policy).maxParallelTasks;
     // Read-only diagnoses carry no isolation/merge cost, so they are exempt from the
     // write-task parallel cap. To prevent runaway auto-launch they get their own,
     // higher safety cap (default 2× the write cap).

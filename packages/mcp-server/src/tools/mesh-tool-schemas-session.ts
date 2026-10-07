@@ -28,7 +28,7 @@ export const MESH_SEND_TASK_TOOL = {
                     + "'interrupt' ABORTS the turn (provider stop control: Ctrl-C, ESC on antigravity-cli) then delivers — work in progress, partial edits included, is DISCARDED; only when finishing the turn is worse than losing it. "
                     + 'No stop control → REJECTED, never silently downgraded.',
             },
-            allow_stale_node: { type: 'boolean', description: "Default false. Non-readonly dispatch to a dirty tree or one behind upstream beyond autoFastForward.maxBehind is refused (dirty_workspace / node_stale_behind_upstream, the claim-gate predicates); true when the task IS fixing that tree." },
+            allow_stale_node: { type: 'boolean', description: "Default false. Non-readonly dispatch to a dirty BASE node, or one behind upstream beyond autoFastForward.maxBehind, is refused (dirty_workspace / node_stale_behind_upstream, the claim-gate predicates); a dirty worktree node takes the dispatch as a branch continuation. true when the task IS fixing that tree." },
             allow_quota_exhausted: { type: 'boolean', description: "Default false. A dispatch naming session_id is refused when that provider is measurably quota-exhausted (queue-claim predicate; stale/missing data fails OPEN); true e.g. to test its quota error. Sessionless dispatch: the claim gate applies instead." },
         },
         // session_id is deliberately NOT required: meshSendTask supports a sessionless
@@ -209,7 +209,7 @@ export const MESH_RESTART_DAEMON_TOOL = {
 
 export const MESH_CHECKPOINT_TOOL = {
     name: 'mesh_checkpoint',
-    description: 'Create a git checkpoint (commit) on a mesh node workspace.',
+    description: 'Create a git checkpoint (commit of all changes, untracked included) on a mesh node workspace — e.g. to commit a worktree branch\'s leftovers before mesh_refine_node. The result flags onDefaultBranch / detachedHead with a warning; report those to the user.',
     inputSchema: {
         type: 'object' as const,
         properties: {

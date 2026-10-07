@@ -14,6 +14,7 @@ import { meshNodeIdMatches, daemonIdsEquivalent, expandDaemonIdForms, sessionIds
 import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
 import { selectClaimCandidate, type MeshClaimRefusal, type MeshClaimRefusalReason } from './mesh-claim-refusal.js';
 import type { MeshRuntimeStore } from './mesh-runtime-store.js';
+import { dirtyWriteVerdict, describeDirtyWriteRefusal, type DirtyWriteGate } from './mesh-dirty-write-verdict.js';
 
 /** The MeshRuntimeStore members these functions read or call (compiler-checked; no cast). */
 export type MeshRuntimeStoreClaimHost = Pick<MeshRuntimeStore, 'activeProviderAssignmentCount' | 'activeSlotAssignmentCount' | 'assignedRowsMeshWide' | 'db' | 'ensureLegacyQueueMigrated' | 'hasActiveNodeAssignment' | 'hasActiveSessionAssignment' | 'maybeCheckpointWal' | 'transaction'>;
@@ -44,7 +45,7 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
              * candidates only — a readonly candidate bypasses this gate entirely, same
              * as `nodeConflictAllows` above.
              */
-            nodeGitGate?: { dirty: boolean; staleBehind: boolean; behind?: number; maxBehind?: number };
+            nodeGitGate?: { dirty: boolean; worktreeBranch?: string; nodeId?: string; staleBehind: boolean; behind?: number; maxBehind?: number };
             /** A6-SILENT-REFUSAL: optional sink the claim fills in when it returns null,
              *  naming WHICH predicate refused. See MeshClaimRefusal. Purely diagnostic —
              *  the return contract (`MeshWorkQueueEntry | null`) is unchanged, so every
@@ -249,10 +250,17 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
         // `nodeIsWorktree`. Fail-open: an omitted gate (unresolved/absent telemetry)
         // never refuses. Applies to WRITE candidates only — a readonly candidate does
         // not touch the tree, so it bypasses this gate exactly like nodeConflictAllows.
+        //
+        // Dirty: the fixed per-node-type rule (mesh-dirty-write-verdict.ts) — a dirty
+        // base node refuses every write; a dirty WORKTREE accepts a write bound to its
+        // own branch (branch continuation) and refuses the rest.
         const nodeGitGate = opts?.nodeGitGate;
+        const nodeDirtyGate: DirtyWriteGate | undefined = nodeGitGate
+            ? { dirty: nodeGitGate.dirty, worktreeBranch: nodeGitGate.worktreeBranch, nodeId: nodeGitGate.nodeId ?? nodeId }
+            : undefined;
         const nodeNotDirty = (candidate: MeshWorkQueueEntry): boolean => {
-            if (!nodeGitGate || isTaskReadonly(candidate)) return true;
-            return !nodeGitGate.dirty;
+            if (!nodeDirtyGate) return true;
+            return dirtyWriteVerdict(nodeDirtyGate, candidate) !== 'refuse';
         };
         const nodeNotStaleBehind = (candidate: MeshWorkQueueEntry): boolean => {
             if (!nodeGitGate || isTaskReadonly(candidate)) return true;
@@ -365,7 +373,7 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
             // GIT-GATE: name the concrete git evidence (behind count / maxBehind) rather
             // than the generic "closest candidate" prose, mirroring the H1 detail above.
             if (selected.reason === 'dirty_workspace') {
-                return refuse('dirty_workspace', `node ${nodeId} has a dirty workspace`, selected.deepest);
+                return refuse('dirty_workspace', describeDirtyWriteRefusal(nodeDirtyGate ?? { dirty: true }, nodeId), selected.deepest);
             }
             if (selected.reason === 'node_stale_behind_upstream') {
                 const behindDetail = nodeGitGate?.behind !== undefined

@@ -50,6 +50,19 @@ export interface GitCheckpointResult extends GitRepoIdentity {
   skipped?: boolean;
   noop?: boolean;
   reason?: 'nothing_to_commit';
+  /** Branch the checkpoint was (or would have been) committed on; null = detached HEAD. */
+  branch?: string | null;
+  /**
+   * The checkpoint landed on the repository's DEFAULT branch (origin/HEAD, else
+   * main/master). Not refused — a user-requested checkpoint of base config is a real
+   * use — but surfaced so the coordinator tells the user it committed to the default
+   * branch directly (docs/design/2026-10-07-mesh-workspace-policy.md B1).
+   */
+  onDefaultBranch?: boolean;
+  /** HEAD was detached: the commit is on no branch and is easy to lose. */
+  detachedHead?: boolean;
+  /** Human-readable warning for onDefaultBranch / detachedHead. */
+  warning?: string;
   lastCheckedAt: number;
 }
 
@@ -565,6 +578,8 @@ async function gitCheckpoint(
     );
   }
 
+  const branchFacts = await describeCheckpointBranch(repo, repoRoot, statusResult.branch);
+
   const addArgs = includeUntracked ? ['-A'] : ['-u'];
   await runGit(repo, ['add', ...addArgs], { cwd: repoRoot });
 
@@ -586,6 +601,7 @@ async function gitCheckpoint(
         skipped: true,
         noop: true,
         reason: 'nothing_to_commit',
+        ...branchFacts,
         lastCheckedAt: Date.now(),
       };
     }
@@ -599,8 +615,42 @@ async function gitCheckpoint(
     commit: commitSha,
     message: fullMsg,
     status: 'created',
+    ...branchFacts,
     lastCheckedAt: Date.now(),
   };
+}
+
+/**
+ * Branch facts for a checkpoint: which branch, and whether it is the repository's
+ * default branch (origin/HEAD's target, else main/master) or a detached HEAD. Never
+ * throws — an undeterminable default branch just omits onDefaultBranch.
+ */
+async function describeCheckpointBranch(
+  repo: Awaited<ReturnType<typeof resolveGitRepository>>,
+  repoRoot: string,
+  branch: string | null | undefined,
+): Promise<Pick<GitCheckpointResult, 'branch' | 'onDefaultBranch' | 'detachedHead' | 'warning'>> {
+  if (!branch) {
+    return {
+      branch: null,
+      detachedHead: true,
+      warning: 'HEAD is detached — this checkpoint commit is on no branch; create or switch to a branch to keep it.',
+    };
+  }
+  let defaultBranch: string | undefined;
+  try {
+    const head = await runGit(repo, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], { cwd: repoRoot });
+    const ref = head.stdout.trim();
+    defaultBranch = ref.startsWith('origin/') ? ref.slice('origin/'.length) : ref || undefined;
+  } catch { /* no origin/HEAD — fall back to the conventional names */ }
+  const onDefaultBranch = defaultBranch ? branch === defaultBranch : branch === 'main' || branch === 'master';
+  return onDefaultBranch
+    ? {
+      branch,
+      onDefaultBranch: true,
+      warning: `This checkpoint commits directly to the default branch '${branch}' — tell the user; it is not a branch worktree.`,
+    }
+    : { branch, onDefaultBranch: false };
 }
 
 async function gitStashPush(

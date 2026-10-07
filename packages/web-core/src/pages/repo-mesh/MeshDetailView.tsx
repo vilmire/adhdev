@@ -28,6 +28,7 @@ import { MeshHostDaemonSection } from './MeshHostDaemonSection'
 import { buildMeshGraphLaunchConversation } from './graph-launch'
 import {
     readMeshPolicy,
+    isMeshPolicyKeySet,
     SESSION_CLEANUP_MODE_OPTIONS,
     DISTRIBUTION_OPTIONS,
     distributionToStrategy,
@@ -242,7 +243,10 @@ export function MeshDetailView({
     const meshTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
 
     const selectCls = 'w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary'
-    const quotaRouting = (policy.quotaRouting && typeof policy.quotaRouting === 'object' ? policy.quotaRouting : {}) as RepoMeshQuotaRoutingPolicy
+    // quotaRouting editors work on the stored OVERRIDES (not the resolved thresholds),
+    // so a save never re-sends every default as an explicit value.
+    const storedQuotaRouting = selectedMesh.policy?.quotaRouting
+    const quotaRouting = (storedQuotaRouting && typeof storedQuotaRouting === 'object' ? storedQuotaRouting : {}) as RepoMeshQuotaRoutingPolicy
     const quotaBusyFallbackOn = quotaRouting.quotaBusyFallback !== false
     const currentDistribution = strategyToDistribution(policy.schedulingStrategy, { priorityConfigured: anyNodePriorityConfigured })
 
@@ -381,6 +385,22 @@ export function MeshDetailView({
     const patchAff = (change: Record<string, unknown>) => onUpdatePolicy({ autoFastForward: { ...aff, ...change } })
     const cleanupMode = SESSION_CLEANUP_MODE_OPTIONS.find(o => o.value === policy.sessionCleanupOnNodeRemove) ?? SESSION_CLEANUP_MODE_OPTIONS[0]
 
+    // Set-vs-default for a policy row. The daemon stores only the keys the owner set;
+    // an unset key shows a "Default" badge (its value is the daemon-resolved effective
+    // one), a set key offers "Reset to default", which sends `null` for that key.
+    const policyKeyState = (key: string) => isMeshPolicyKeySet(selectedMesh, key)
+        ? (
+            <button type="button" className="mt-1.5 text-2xs text-text-muted underline hover:text-text-primary disabled:opacity-50"
+                disabled={savingPolicy} onClick={() => onUpdatePolicy({ [key]: null })}>
+                {t('mesh.detail.policyResetToDefault')}
+            </button>
+        )
+        : (
+            <span className="mt-1.5 inline-block rounded border border-border-subtle px-1.5 py-0.5 text-2xs uppercase tracking-wider text-text-muted">
+                {t('mesh.detail.policyDefaultBadge')}
+            </span>
+        )
+
     const advancedTabContent = (
         <>
             {/* Quota-aware routing — thresholds AND the busy fallback in one group.
@@ -401,7 +421,7 @@ export function MeshDetailView({
                     />
                 </div>
                 <QuotaPolicyStep
-                    quotaRouting={(policy.quotaRouting as RepoMeshQuotaRoutingPolicy | undefined) ?? null}
+                    quotaRouting={(storedQuotaRouting as RepoMeshQuotaRoutingPolicy | undefined) ?? null}
                     saving={savingPolicy}
                     error={error}
                     hideHeader
@@ -418,10 +438,7 @@ export function MeshDetailView({
             <Section title={t('mesh.detail.safetyTitle')} collapsible defaultOpen={false} description={t('mesh.detail.safetyDescription')}>
                 <div className="grid gap-4 sm:grid-cols-2">
                     {[
-                        { label: t('mesh.detail.checkpointBefore'), key: 'requirePreTaskCheckpoint', opts: [['no', t('mesh.detail.optionNo')], ['yes', t('mesh.detail.optionYes')]], val: (v: any) => v ? 'yes' : 'no', parse: (v: string) => v === 'yes' },
-                        { label: t('mesh.detail.checkpointAfter'), key: 'requirePostTaskCheckpoint', opts: [['yes', t('mesh.detail.optionYes')], ['no', t('mesh.detail.optionNo')]], val: (v: any) => v ? 'yes' : 'no', parse: (v: string) => v === 'yes' },
                         { label: t('mesh.detail.pushApproval'), key: 'requireApprovalForPush', opts: [['required', t('mesh.detail.requireApprovalBeforePush')], ['not_required', t('mesh.detail.doNotRequireApproval')]], val: (v: any) => v ? 'required' : 'not_required', parse: (v: string) => v === 'required' },
-                        { label: t('mesh.detail.uncommittedChanges'), key: 'dirtyWorkspaceBehavior', opts: [['warn', t('mesh.detail.warnAndContinue')], ['block', t('mesh.detail.blockTask')], ['checkpoint_then_continue', t('mesh.detail.checkpointThenContinue')]], val: (v: any) => v || 'warn', parse: (v: string) => v },
                         { label: t('mesh.detail.autoPublishSubmodule'), key: 'allowAutoPublishSubmoduleMainCommits', opts: [['disabled', t('mesh.detail.requireExplicitApproval')], ['enabled', t('mesh.detail.allowRefineryPublish')]], val: (v: any) => v ? 'enabled' : 'disabled', parse: (v: string) => v === 'enabled' },
                     ].map(({ label, key, opts, val, parse }) => (
                         <FormField key={key} label={label}>
@@ -429,6 +446,7 @@ export function MeshDetailView({
                                 value={val(policy[key])} onChange={e => onUpdatePolicy({ [key]: parse(e.target.value) })} disabled={savingPolicy}>
                                 {opts.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                             </select>
+                            {policyKeyState(key)}
                         </FormField>
                     ))}
                 </div>
@@ -439,6 +457,7 @@ export function MeshDetailView({
                             <option value="enabled">{t('mesh.detail.ffEnabled')}</option>
                             <option value="disabled">{t('mesh.detail.ffDisabled')}</option>
                         </select>
+                        {policyKeyState('autoFastForward')}
                     </FormField>
                     <FormField label={t('mesh.detail.includeRemoteNodes')} hint={t('mesh.detail.includeRemoteNodesHint')}>
                         <select className={selectCls}
@@ -459,6 +478,7 @@ export function MeshDetailView({
                             value={policy.sessionCleanupOnNodeRemove || 'preserve'} onChange={e => onUpdatePolicy({ sessionCleanupOnNodeRemove: e.target.value })} disabled={savingPolicy}>
                             {SESSION_CLEANUP_MODE_OPTIONS.map(o => <option key={o.value} value={o.value}>{t(o.labelKey)}</option>)}
                         </select>
+                        {policyKeyState('sessionCleanupOnNodeRemove')}
                     </FormField>
                 </div>
             </Section>

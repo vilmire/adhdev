@@ -20,17 +20,15 @@ import type {
     MeshReportedMemberState,
 } from '../repo-mesh-types.js';
 import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
-import { mergeAndNormalizePolicy } from '../repo-mesh-types.js';
+import { mergePolicyOverrides, normalizePolicyOverrides, MESH_POLICY_STORAGE_VERSION } from '../repo-mesh-types.js';
 import { createDefaultMeshHostMetadata } from '../mesh/mesh-host-ownership.js';
 import { withMeshConfigWriteLock, loadMeshConfig, normalizeCapabilityTags, saveMeshConfig, normalizeRepoIdentity } from './mesh-config-store.js';
 
 // ─── CRUD Operations ────────────────────────────
 
-// Single source of truth for default+merge+per-field normalization is
-// mergeAndNormalizePolicy in repo-mesh-types.ts. This thin alias keeps the local
-// call sites (createMesh/updateMesh) reading naturally while ensuring config
-// writes go through the exact same normalizer the scheduler/display paths use.
-const mergeMeshPolicy = mergeAndNormalizePolicy;
+// Policy storage is SPARSE (docs/design/2026-10-07-mesh-workspace-policy.md §A):
+// create stores normalizePolicyOverrides(opts.policy), update applies the patch via
+// mergePolicyOverrides (`null` clears a key). Readers resolve through resolveMeshPolicy.
 
 /**
  * Count of `listMeshes()` calls that actually reached disk (readFileSync +
@@ -105,7 +103,8 @@ function createMeshUnlocked(opts: CreateMeshOptions): LocalMeshEntry {
         repoIdentity,
         repoRemoteUrl: opts.repoRemoteUrl,
         defaultBranch: opts.defaultBranch,
-        policy: mergeMeshPolicy(undefined, opts.policy),
+        policy: normalizePolicyOverrides(opts.policy),
+        policyStorage: MESH_POLICY_STORAGE_VERSION,
         coordinator: opts.coordinator || {},
         meshHost: opts.meshHost || (() => {
             const base = createDefaultMeshHostMetadata();
@@ -126,7 +125,8 @@ function createMeshUnlocked(opts: CreateMeshOptions): LocalMeshEntry {
 export interface UpdateMeshOptions {
     name?: string;
     defaultBranch?: string;
-    policy?: Partial<RepoMeshPolicy>;
+    /** Policy PATCH: a key sets that override, `null` resets it to the default. */
+    policy?: { [K in keyof RepoMeshPolicy]?: RepoMeshPolicy[K] | null } & Record<string, unknown>;
     coordinator?: RepoMeshCoordinatorConfig;
     meshHost?: RepoMeshHostMetadata;
 }
@@ -142,7 +142,10 @@ function updateMeshUnlocked(meshId: string, opts: UpdateMeshOptions): LocalMeshE
 
     if (opts.name !== undefined) mesh.name = opts.name.trim().slice(0, 100);
     if (opts.defaultBranch !== undefined) mesh.defaultBranch = opts.defaultBranch;
-    if (opts.policy) mesh.policy = mergeMeshPolicy(mesh.policy, opts.policy);
+    if (opts.policy) {
+        mesh.policy = mergePolicyOverrides(mesh.policy, opts.policy);
+        mesh.policyStorage = MESH_POLICY_STORAGE_VERSION;
+    }
     if (opts.coordinator) mesh.coordinator = opts.coordinator;
     if (opts.meshHost) mesh.meshHost = opts.meshHost;
     mesh.updatedAt = new Date().toISOString();

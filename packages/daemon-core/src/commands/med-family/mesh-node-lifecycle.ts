@@ -14,6 +14,7 @@ import type { MedFamilyContext, MedFamilyHandler } from './types.js';
 import { readMeshDirectDispatchFlag, withMeshDirectDispatch } from '../command-args.js';
 import { rosterEvidenceExtra } from '../mesh-sender.js';
 import { unwrapMeshRelayResult } from '../mesh-relay-result.js';
+import { resolveMeshPolicy } from '../../repo-mesh-types.js';
 
 /**
  * PROVIDER-PRIORITY-FROM-SLOTS write-path sync: slots order = preference
@@ -318,7 +319,7 @@ async function removeMeshNode(ctx: MedFamilyContext, args: any): Promise<Command
         const sessionCleanupMode = ctx.normalizeMeshSessionCleanupMode(
             explicitCleanupMode
             ?? (node?.isLocalWorktree === true ? 'stop_and_delete' : undefined)
-            ?? mesh?.policy?.sessionCleanupOnNodeRemove,
+            ?? resolveMeshPolicy(mesh?.policy).sessionCleanupOnNodeRemove,
         );
         // Explicit sessionIds (e.g. supplied by refine auto-cleanup) bypass the
         // workspace-only-match guard so a delegate session that lacks a
@@ -595,7 +596,7 @@ export const meshNodeLifecycleHandlers: Record<string, MedFamilyHandler> = {
             if (!mesh) return { success: false, error: 'Mesh not found' };
             const node = mesh?.nodes?.find((n: any) => meshNodeIdMatches(n, nodeId));
             if (!node) return { success: false, error: `Node '${nodeId}' not found in mesh` };
-            const mode = ctx.normalizeMeshSessionCleanupMode(args?.mode ?? mesh?.policy?.sessionCleanupOnNodeRemove);
+            const mode = ctx.normalizeMeshSessionCleanupMode(args?.mode ?? resolveMeshPolicy(mesh?.policy).sessionCleanupOnNodeRemove);
             const sessionIds = Array.isArray(args?.sessionIds)
                 ? args.sessionIds.map((id: any) => typeof id === 'string' ? id.trim() : '').filter(Boolean)
                 : undefined;

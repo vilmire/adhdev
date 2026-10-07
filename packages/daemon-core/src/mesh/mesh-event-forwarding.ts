@@ -59,6 +59,7 @@ import { resolveEventSessionId, readWorkerResultMetadata, resolveMeshSurfacedSes
 import { isMeshCoordinatorEvent } from './mesh-event-classify.js';
 import type { CoordinatorSessionView } from './turn-ledger/routing.js';
 import { meshNoticeRuntime, notifyMeshCoordinator, type CoordinatorNotice } from './turn-ledger/deliver.js';
+import { resolveMeshPolicy } from '../repo-mesh-types.js';
 
 // ---------------------------------------------------------------------------
 // Remote Node Idle Session Tracking
@@ -730,7 +731,7 @@ function onCoordinatorIdleEdge(components: DaemonComponents, instanceId: string)
             coordinatorMeshId,
             // D2: through the daemon's one send funnel (shared messageId dedupe).
             { sessionId: instanceId, input: components.cliManager.input },
-            getMesh(coordinatorMeshId)?.policy,
+            (() => { const m = getMesh(coordinatorMeshId); return m ? resolveMeshPolicy(m.policy) : undefined; })(),
             undefined,
             components.instanceManager,
             undefined,

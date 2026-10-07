@@ -14,7 +14,6 @@ import { promisify } from 'node:util';
 import { gitChildEnv } from '../git/git-locale.js';
 import type { CLIInfo } from '../detection/cli-detector.js';
 import type { LocalMeshEntry, LocalMeshNodeEntry } from '../repo-mesh-types.js';
-import { mergeAndNormalizePolicy } from '../repo-mesh-types.js';
 import { listMeshesReadOnly } from '../config/mesh-config.js';
 import { normalizeRepoIdentity } from '../config/mesh-config-store.js';
 import { runMeshInit, type RunMeshInitResult } from './mesh-init.js';
@@ -616,35 +615,19 @@ export async function planMeshOnboarding(options: PlanMeshOnboardingOptions): Pr
                 { discovery, membership },
             );
         }
-        // DIRTY SOURCE: advisory by default, blocking only when the mesh says so.
+        // DIRTY SOURCE: always advisory, never a refusal.
         //
         // `git worktree add` creates the new tree from HEAD, so uncommitted changes in
         // the source workspace are simply absent from the clone — that is the defined
-        // behavior of a worktree, not a fault. Hard-failing here made worktrees
-        // unusable in the normal case, because a coordinator's own checkout is dirty
-        // most of the time it is working; the whole parallel-worktree workflow (clone
-        // N branches → work → converge) died on this preflight rather than on anything
-        // being wrong.
-        //
-        // The mesh already has `dirtyWorkspaceBehavior` (default 'warn') expressing the
-        // operator's intent, and this path simply never read it. Honor it: 'block'
-        // still refuses; 'warn' / 'checkpoint_then_continue' proceed with an advisory.
+        // behavior of a worktree, not a fault (information, not risk). Hard-failing here
+        // made worktrees unusable in the normal case, because a coordinator's own
+        // checkout is dirty most of the time it is working. The former
+        // `dirtyWorkspaceBehavior: 'block'` opt-in was retired with that policy field
+        // (docs/design/2026-10-07-mesh-workspace-policy.md B4).
         //
         // Genuinely dangerous states are NOT relaxed here and are handled elsewhere:
         // unresolved conflicts hard-fail earlier in discoverWorkspace
         // ('conflicted_workspace'), before this point is ever reached.
-        // Normalize against the shipped defaults so an unset/invalid value resolves to
-        // the documented default ('warn') rather than being read as a block.
-        const dirtyBehavior = mergeAndNormalizePolicy(compatibleMesh.policy, undefined).dirtyWorkspaceBehavior;
-        if (discovery.dirty && dirtyBehavior === 'block') {
-            return failure(
-                'dirty_workspace',
-                `Workspace has ${discovery.changedFileCount} uncommitted change(s); a cloned worktree would not include them.`,
-                'Commit or stash the changes, then re-run the clone plan. '
-                    + "(This mesh's dirtyWorkspaceBehavior is 'block'; set it to 'warn' to allow cloning from a dirty workspace.)",
-                { discovery, membership },
-            );
-        }
         if (discovery.dirty) {
             planWarnings.push(
                 `Source workspace has ${discovery.changedFileCount} uncommitted change(s). `
@@ -682,10 +665,9 @@ export async function planMeshOnboarding(options: PlanMeshOnboardingOptions): Pr
             plan: {
                 kind: 'clone_new_worktree',
                 summary: `Create an isolated worktree node from '${sourceNode.id}' on branch '${branch}'.`,
-                // Only a 'block' mesh actually requires a clean source; under the
-                // default 'warn' a dirty workspace is advisory, so reporting true here
-                // would misdescribe the plan the caller is approving.
-                requiresClean: dirtyBehavior === 'block',
+                // A dirty source is advisory (the worktree is built from HEAD), so the
+                // plan never requires a clean tree.
+                requiresClean: false,
                 approvalRequired: true,
                 steps: [{
                     command: 'clone_mesh_node',

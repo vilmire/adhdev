@@ -14,8 +14,7 @@
 
 import type { RepoMeshNodePolicy, RepoMeshSchedulingStrategy } from '../repo-mesh-types.js';
 import {
-    normalizeMeshSchedulingStrategy,
-    resolveMaxParallelTasks,
+    resolveMeshPolicy,
     resolveMaxReadonlyParallelTasks,
     resolveNodeMaxConcurrentSessions,
     resolveNodeSchedulingPriority,
@@ -107,8 +106,9 @@ export function buildMeshSchedulingRuntime(
     mesh: MeshLike | null | undefined,
     queue: MeshWorkQueueEntry[],
 ): MeshSchedulingRuntime {
-    const strategy = normalizeMeshSchedulingStrategy(mesh?.policy?.schedulingStrategy);
-    const maxParallelTasks = resolveMaxParallelTasks(mesh?.policy?.maxParallelTasks);
+    const effectivePolicy = resolveMeshPolicy(mesh?.policy);
+    const strategy = effectivePolicy.schedulingStrategy ?? 'first_eligible';
+    const maxParallelTasks = effectivePolicy.maxParallelTasks;
     // Read-only diagnoses are exempt from the write cap and get their own higher
     // safety cap (multiplier × the write cap, floor 2) — identical to the claim
     // path, via the shared helper so the two can never drift.

@@ -14,6 +14,7 @@ import {
     type RepoMeshSessionCleanupMode,
     normalizeMeshSchedulingStrategy,
     normalizeQuotaRoutingPolicy,
+    resolveQuotaRoutingPolicy,
     type RepoMeshNodePolicy,
 } from './repo-mesh-policy.js';
 import type { ProviderModule } from './providers/contracts.js';
@@ -24,20 +25,16 @@ import { deriveAutoApproveModeRisk } from './providers/auto-approve-modes.js';
 
 // ─── Policy normalization (single source of truth) ──────────────────────────
 //
-// Every mesh policy passes through mergeAndNormalizePolicy exactly once on write
-// (createMesh/updateMesh) and again whenever a policy is materialized for display
-// or scheduling. Co-locating the default constant, the per-field normalizers, and
-// the merge here keeps the three former layers (DEFAULT_MESH_POLICY, the merge in
-// mesh-config, and the scattered field clamps) from drifting apart. The function
-// is idempotent: feeding it an already-normalized policy yields the same object.
+// Storage model (docs/design/2026-10-07-mesh-workspace-policy.md §A): meshes.json
+// stores only the keys the owner set (normalizePolicyOverrides / mergePolicyOverrides);
+// every reader resolves the effective policy through resolveMeshPolicy. The per-key
+// rules (default, clamp, canonical stored form) live in ONE table below, so the
+// write path, the reader and the migration can never disagree on what a key means.
 
 const SESSION_CLEANUP_MODES: ReadonlySet<string> = new Set<string>(MESH_SESSION_CLEANUP_MODES);
 
 const SPAWNED_SESSION_VISIBILITY_MODES = new Set<RepoMeshSpawnedSessionVisibility>([
     'visible', 'hidden',
-]);
-const DIRTY_WORKSPACE_BEHAVIORS = new Set<RepoMeshPolicy['dirtyWorkspaceBehavior']>([
-    'block', 'warn', 'checkpoint_then_continue',
 ]);
 
 /** Min/max bounds for the global write-task parallel cap. */
@@ -74,8 +71,13 @@ export function resolveMaxReadonlyParallelTasks(maxParallelTasks: number, multip
  * helper so they can never disagree on what "max parallel" means.
  */
 export function resolveMaxParallelTasks(value: unknown): number {
-    const n = Number(value);
-    if (!Number.isFinite(n)) return DEFAULT_MESH_POLICY.maxParallelTasks;
+    // An unset value goes through the SAME clamp as a stored one: the default (200,
+    // "effectively unlimited") used to be returned unclamped while a stored 200 was
+    // clamped to 64, so "unset" and "default stored" meant different caps — and
+    // sparse policy storage (which drops a stored default) would have silently
+    // raised every mesh's cap from 64 to 200.
+    const raw = value === undefined || value === null ? DEFAULT_MESH_POLICY.maxParallelTasks : Number(value);
+    const n = Number.isFinite(raw) ? raw : DEFAULT_MESH_POLICY.maxParallelTasks;
     return Math.max(MESH_MAX_PARALLEL_TASKS_MIN, Math.min(MESH_MAX_PARALLEL_TASKS_MAX, Math.floor(n)));
 }
 
@@ -127,96 +129,214 @@ export function normalizeAutoFastForwardPolicy(value: unknown): NonNullable<Repo
 }
 
 /**
- * Canonical merge+normalize for a RepoMeshPolicy. Layers (lowest→highest):
- * DEFAULT_MESH_POLICY → base (existing persisted policy) → patch (incoming change),
- * then applies every per-field normalizer so the result is always valid regardless
- * of what a hand-edited meshes.json or a partial patch contained.
- *
- * Persistence economy is preserved: schedulingStrategy is dropped when it
- * normalizes to the 'first_eligible' default, and autoConvergeCodeChange is dropped
- * unless explicitly true — so an untouched meshes.json stays byte-for-byte the same.
+ * Stored mesh policy = the keys the mesh owner actually set (sparse overrides).
+ * Readers never read it raw for a defaulted key — they go through resolveMeshPolicy.
+ * Unknown keys (e.g. refineConfig / worktreeBootstrapConfig, which ride the policy
+ * block) pass through untouched in both directions.
  */
-export function mergeAndNormalizePolicy(
-    base: RepoMeshPolicy | undefined,
-    patch: Partial<RepoMeshPolicy> | undefined,
-): RepoMeshPolicy {
-    const autoFastForward = normalizeAutoFastForwardPolicy({
-        ...DEFAULT_MESH_POLICY.autoFastForward,
-        ...((base?.autoFastForward && typeof base.autoFastForward === 'object') ? base.autoFastForward : {}),
-        ...((patch?.autoFastForward && typeof patch.autoFastForward === 'object') ? patch.autoFastForward : {}),
-    });
-    const policy: RepoMeshPolicy = {
-        ...DEFAULT_MESH_POLICY,
-        ...(base || {}),
-        ...(patch || {}),
-        autoFastForward,
-    };
-    if (!DIRTY_WORKSPACE_BEHAVIORS.has(policy.dirtyWorkspaceBehavior)) {
-        policy.dirtyWorkspaceBehavior = 'warn';
+export type RepoMeshPolicyOverrides = Partial<RepoMeshPolicy>;
+
+/**
+ * Policy keys that no longer exist. Deleted on every write and by the load-time
+ * migration; never emitted by resolveMeshPolicy. `requirePre/PostTaskCheckpoint` and
+ * `dirtyWorkspaceBehavior` were retired by docs/design/2026-10-07-mesh-workspace-policy.md
+ * (B4): dirty handling is a fixed per-node-type rule (mesh-dirty-write-verdict.ts) and
+ * Refinery blocks a branch worktree carrying uncommitted work (branch_worktree_dirty).
+ */
+export const RETIRED_MESH_POLICY_KEYS: readonly string[] = [
+    'requirePreTaskCheckpoint',
+    'requirePostTaskCheckpoint',
+    'dirtyWorkspaceBehavior',
+    'magiSessionCleanup',
+];
+const RETIRED_KEYS: ReadonlySet<string> = new Set(RETIRED_MESH_POLICY_KEYS);
+
+interface PolicyKeySpec {
+    /** Effective value for a raw stored value (undefined = unset). May return undefined: no default. */
+    effective(value: unknown): unknown;
+    /** Canonical stored form (defaults to `effective`). Throws to reject an invalid write. */
+    stored?(value: unknown): unknown;
+}
+
+const boolDefault = (fallback: boolean): PolicyKeySpec => ({
+    effective: (v) => (typeof v === 'boolean' ? v : fallback),
+});
+
+/**
+ * One row per known policy key: how a stored value resolves, and how it is stored.
+ * A key absent here is opaque — stored and resolved verbatim.
+ */
+const POLICY_KEY_SPECS: Record<string, PolicyKeySpec> = {
+    requireApprovalForPush: boolDefault(DEFAULT_MESH_POLICY.requireApprovalForPush),
+    allowAutoPublishSubmoduleMainCommits: { effective: (v) => v === true },
+    maxParallelTasks: { effective: (v) => resolveMaxParallelTasks(v) },
+    schedulingStrategy: { effective: (v) => normalizeMeshSchedulingStrategy(v) },
+    spawnedSessionVisibility: {
+        effective: (v) => (SPAWNED_SESSION_VISIBILITY_MODES.has(v as RepoMeshSpawnedSessionVisibility)
+            ? v
+            : DEFAULT_MESH_POLICY.spawnedSessionVisibility),
+    },
+    delegatedWorkerAutoApprove: boolDefault(DEFAULT_MESH_POLICY.delegatedWorkerAutoApprove !== false),
+    delegatedWorkerDangerousModeAllow: { effective: (v) => v === true },
+    allowSendKeysDestructive: { effective: (v) => v === true },
+    // No single default: an unset value means "the context's default" (a refine /
+    // worktree removal → stop_and_delete, a base-node removal → preserve), which is
+    // why an EXPLICIT 'preserve' is a real override and is kept.
+    sessionCleanupOnNodeRemove: {
+        effective: (v) => (SESSION_CLEANUP_MODES.has(v as RepoMeshSessionCleanupMode) ? v : undefined),
+    },
+    autoFastForward: {
+        effective: (v) => normalizeAutoFastForwardPolicy({
+            ...DEFAULT_MESH_POLICY.autoFastForward,
+            ...(v && typeof v === 'object' && !Array.isArray(v) ? v : {}),
+        }),
+    },
+    maxTaskRetries: {
+        effective: (v) => (typeof v === 'number' && Number.isFinite(v) ? v : DEFAULT_MESH_POLICY.maxTaskRetries),
+    },
+    idleActiveMissionReminder: { effective: (v) => v !== false },
+    delegatedSessionIdleTtlMinutes: { effective: (v) => resolveDelegatedSessionIdleTtlMinutes(v) },
+    coordinatorIdlePushPolicy: {
+        effective: (v) => (v === 'auto_silent_on_dispatch' ? 'auto_silent_on_dispatch' : 'always'),
+    },
+    quotaRouting: {
+        effective: (v) => resolveQuotaRoutingPolicy(normalizeQuotaRoutingPolicy(v) ?? null),
+        stored: (v) => normalizeQuotaRoutingPolicy(v),
+    },
+    onDependencyFailure: {
+        effective: (v) => (v === 'cancel' ? 'cancel' : 'block'),
+        // C3: an invalid value fails the write instead of silently becoming `block`.
+        stored: (v) => {
+            if (v === 'block' || v === 'cancel') return v;
+            throw new Error(
+                `invalid_on_dependency_failure: must be 'block' or 'cancel' (got ${JSON.stringify(v)}). `
+                + 'Invalid values are rejected; they do not silently become \'block\'.',
+            );
+        },
+    },
+    worktreeBaseDir: {
+        effective: (v) => (typeof v === 'string' && v.trim() ? v.trim() : undefined),
+    },
+};
+
+function policyRecord(value: unknown): Record<string, unknown> {
+    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function sameValue(a: unknown, b: unknown): boolean {
+    return a === b || JSON.stringify(a) === JSON.stringify(b);
+}
+
+/**
+ * THE policy reader: the effective policy for a stored (sparse) override block —
+ * DEFAULT ⊕ overrides, every known key normalized. Readers of a defaulted key go
+ * through here (or a per-key resolver it uses) instead of `mesh.policy.X`; a reader
+ * whose meaning is "did the owner set this" asks `key in mesh.policy` instead.
+ * Never throws; retired keys are never emitted.
+ */
+export function resolveMeshPolicy(overrides: unknown): RepoMeshPolicy {
+    const src = policyRecord(overrides);
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(src)) {
+        if (RETIRED_KEYS.has(key) || key in POLICY_KEY_SPECS) continue;
+        if (value !== undefined && value !== null) out[key] = value;
     }
-    policy.maxParallelTasks = resolveMaxParallelTasks(policy.maxParallelTasks);
-    policy.allowAutoPublishSubmoduleMainCommits = policy.allowAutoPublishSubmoduleMainCommits === true;
-    if (!SESSION_CLEANUP_MODES.has(policy.sessionCleanupOnNodeRemove as RepoMeshSessionCleanupMode)) {
-        policy.sessionCleanupOnNodeRemove = 'preserve';
+    for (const [key, spec] of Object.entries(POLICY_KEY_SPECS)) {
+        const raw = src[key];
+        const value = spec.effective(raw === null ? undefined : raw);
+        if (value !== undefined) out[key] = value;
     }
-    // Drop the retired MAGI session-cleanup key a stored policy may still carry.
-    delete (policy as unknown as Record<string, unknown>).magiSessionCleanup;
-    // Canonicalize the delegate idle TTL to a clamped minute count (0 = disabled), so
-    // the reaper and any policy reader can never disagree on what the TTL means.
-    policy.delegatedSessionIdleTtlMinutes = resolveDelegatedSessionIdleTtlMinutes(
-        policy.delegatedSessionIdleTtlMinutes,
-    );
-    if (!SPAWNED_SESSION_VISIBILITY_MODES.has(policy.spawnedSessionVisibility as RepoMeshSpawnedSessionVisibility)) {
-        policy.spawnedSessionVisibility = DEFAULT_MESH_POLICY.spawnedSessionVisibility;
+    return out as unknown as RepoMeshPolicy;
+}
+
+/**
+ * Canonical stored form of a policy block: each known key normalized, and dropped
+ * when it resolves exactly as an unset key would (`effective(undefined)`). Retired
+ * keys and null/undefined values are dropped; unknown keys are kept verbatim.
+ * Idempotent, and resolve-neutral: resolveMeshPolicy(normalizePolicyOverrides(p))
+ * deep-equals resolveMeshPolicy(p) for every p. Throws only for a value a write must
+ * reject (an invalid onDependencyFailure).
+ */
+export function normalizePolicyOverrides(value: unknown): RepoMeshPolicyOverrides {
+    const out: Record<string, unknown> = {};
+    for (const [key, raw] of Object.entries(policyRecord(value))) {
+        if (RETIRED_KEYS.has(key) || raw === undefined || raw === null) continue;
+        const spec = POLICY_KEY_SPECS[key];
+        if (!spec) {
+            out[key] = raw;
+            continue;
+        }
+        const stored = (spec.stored ?? spec.effective)(raw);
+        if (stored === undefined) continue;
+        if (sameValue(spec.effective(stored), spec.effective(undefined))) continue;
+        out[key] = stored;
     }
-    // Load-balancing: normalize the scheduling strategy so an invalid/blank value
-    // falls back to 'first_eligible' (strict no-change). Only persist the field when
-    // it is explicitly a non-default value to keep existing meshes.json untouched.
-    const normalizedStrategy = normalizeMeshSchedulingStrategy(policy.schedulingStrategy);
-    if (normalizedStrategy === 'first_eligible') {
-        delete policy.schedulingStrategy;
-    } else {
-        policy.schedulingStrategy = normalizedStrategy;
+    return out as RepoMeshPolicyOverrides;
+}
+
+/**
+ * Apply a policy PATCH to stored overrides (update_mesh): a key in the patch sets
+ * that override, `null` clears it (the key returns to its default), an absent key
+ * is untouched. `autoFastForward` merges per sub-key; every other key is replaced
+ * wholesale. The result is normalized (sparse).
+ */
+export function mergePolicyOverrides(base: unknown, patch: unknown): RepoMeshPolicyOverrides {
+    const merged: Record<string, unknown> = { ...policyRecord(base) };
+    for (const [key, value] of Object.entries(policyRecord(patch))) {
+        if (value === undefined) continue;
+        if (value === null) {
+            delete merged[key];
+            continue;
+        }
+        if (key === 'autoFastForward' && value && typeof value === 'object' && !Array.isArray(value)) {
+            merged[key] = { ...policyRecord(merged[key]), ...(value as Record<string, unknown>) };
+            continue;
+        }
+        merged[key] = value;
     }
-    // Dangerous delegated-worker provider modes are fail-closed and only persist
-    // when the mesh owner has explicitly opted in.
-    if (policy.delegatedWorkerDangerousModeAllow === true) {
-        policy.delegatedWorkerDangerousModeAllow = true;
-    } else {
-        delete policy.delegatedWorkerDangerousModeAllow;
+    return normalizePolicyOverrides(merged);
+}
+
+/** Bumped on a mesh entry once its stored policy is in the sparse form (load-time migration). */
+export const MESH_POLICY_STORAGE_VERSION = 2;
+
+/**
+ * One-time load migration of a mesh's stored policy to sparse overrides.
+ *
+ * PROVENANCE RULE: a stored value that resolves exactly as an unset key would is
+ * treated as a default. Meshes created before sparse storage carry a full copy of the
+ * then-defaults, and nothing on disk distinguishes that copy from an owner who chose
+ * the same value — resolve-equality is the only rule that is behavior-neutral by
+ * construction. The cost: an owner who deliberately chose today's default follows
+ * future default changes. A PAST default that differs from today's resolution (e.g. a
+ * pre-07-09 `maxParallelTasks: 2`) is kept: dropping it would change behavior.
+ *
+ * Plus (owner decision E2): a copied `sessionCleanupOnNodeRemove: 'preserve'` is
+ * removed — it was the creation-time default copy, and keeping it made refine's
+ * worktree session cleanup ignore its stop_and_delete default (REFINE-CLEANUP-DEFAULT).
+ * This is the one deliberate behavior change of the migration.
+ *
+ * Returns the migrated overrides; never throws (an invalid value a write would reject
+ * is kept verbatim so the owner's data is not lost).
+ */
+export function migratePolicyToSparseOverrides(stored: unknown): RepoMeshPolicyOverrides {
+    const record = { ...policyRecord(stored) };
+    if (record.sessionCleanupOnNodeRemove === 'preserve') delete record.sessionCleanupOnNodeRemove;
+    try {
+        return normalizePolicyOverrides(record);
+    } catch {
+        const out: Record<string, unknown> = {};
+        for (const [key, raw] of Object.entries(record)) {
+            if (RETIRED_KEYS.has(key) || raw === undefined || raw === null) continue;
+            try {
+                const one = normalizePolicyOverrides({ [key]: raw }) as Record<string, unknown>;
+                if (key in one) out[key] = one[key];
+            } catch {
+                out[key] = raw;
+            }
+        }
+        return out as RepoMeshPolicyOverrides;
     }
-    // Coordinator idle-push policy: strict opt-in. Only persist the explicit
-    // 'auto_silent_on_dispatch' value; any other/invalid value normalizes to the
-    // 'always' default and is dropped so existing meshes.json stays byte-for-byte
-    // untouched (a typo cannot silently disable owner completion notifications).
-    if (policy.coordinatorIdlePushPolicy === 'auto_silent_on_dispatch') {
-        policy.coordinatorIdlePushPolicy = 'auto_silent_on_dispatch';
-    } else {
-        delete policy.coordinatorIdlePushPolicy;
-    }
-    // Quota routing: normalize + persistence economy — persist only explicit
-    // non-default overrides so an untouched meshes.json stays byte-for-byte the
-    // same. Readers resolve the effective thresholds via resolveQuotaRoutingPolicy.
-    const quotaRouting = normalizeQuotaRoutingPolicy(policy.quotaRouting);
-    if (quotaRouting) {
-        policy.quotaRouting = quotaRouting;
-    } else {
-        delete policy.quotaRouting;
-    }
-    // C3: invalid onDependencyFailure fails validation instead of silently
-    // becoming `block` (design :548-550). Persist only the non-default so
-    // existing meshes.json stays byte-identical.
-    if (policy.onDependencyFailure === undefined || policy.onDependencyFailure === 'block') {
-        delete policy.onDependencyFailure;
-    } else if (policy.onDependencyFailure === 'cancel') {
-        policy.onDependencyFailure = 'cancel';
-    } else {
-        throw new Error(
-            `invalid_on_dependency_failure: must be 'block' or 'cancel' (got ${JSON.stringify(policy.onDependencyFailure)}). `
-            + 'Invalid values are rejected; they do not silently become \'block\'.',
-        );
-    }
-    return policy;
 }
 
 /**

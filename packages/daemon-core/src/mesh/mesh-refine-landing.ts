@@ -105,6 +105,9 @@ export function classifyRefineTerminal(result: Record<string, unknown>): RefineT
         : refineCode === 'blocked_review' || refineCode === 'worktree_missing'
             || refineCode === 'worktree_dirty' || refineCode === 'rebase_precondition_failed'
             || refineCode === 'rebase_failed'
+            // BRANCH-WORKTREE-DIRTY: refused before validation — nothing ran or merged;
+            // the branch's uncommitted work needs committing first.
+            || refineCode === 'branch_worktree_dirty'
             ? 'blocked_review'
             // QW3: the validation stage returns `code: validationSummary.failureCode`,
             // so a dependency/spawn failure surfaces as one of these codes — NOT the

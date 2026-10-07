@@ -35,7 +35,16 @@ function cleanupMesh(meshId: string): void {
     }
 }
 
-function createLocalCtx(meshId: string, opts: { git?: Record<string, unknown>; autoFastForward?: Record<string, unknown> }) {
+function createLocalCtx(meshId: string, opts: {
+    git?: Record<string, unknown>;
+    autoFastForward?: Record<string, unknown>;
+    /** Make the node a worktree node on this branch. */
+    worktreeBranch?: string;
+    /** Extra (possibly retired) mesh policy keys. */
+    policy?: Record<string, unknown>;
+    /** Answer `agent_command` with a successful delivery. */
+    acceptDelivery?: boolean;
+}) {
     const session = {
         id: SESSION,
         providerType: 'claude-cli',
@@ -44,7 +53,7 @@ function createLocalCtx(meshId: string, opts: { git?: Record<string, unknown>; a
     };
     const mesh = {
         id: meshId, name: 'Git Gate', repoIdentity: 'example/repo',
-        policy: { ...(opts.autoFastForward ? { autoFastForward: opts.autoFastForward } : {}) },
+        policy: { ...(opts.autoFastForward ? { autoFastForward: opts.autoFastForward } : {}), ...(opts.policy ?? {}) },
         coordinator: {},
         createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
         nodes: [{
@@ -52,6 +61,7 @@ function createLocalCtx(meshId: string, opts: { git?: Record<string, unknown>; a
             daemonId: COORDINATOR, machineId: 'machine-coordinator', userOverrides: {},
             policy: { providerPriority: ['claude-cli'] }, sessions: [session],
             ...(opts.git ? { git: opts.git } : {}),
+            ...(opts.worktreeBranch ? { isLocalWorktree: true, worktreeBranch: opts.worktreeBranch } : {}),
         }],
     };
     const transport = new IpcTransport() as any;
@@ -63,6 +73,8 @@ function createLocalCtx(meshId: string, opts: { git?: Record<string, unknown>; a
         if (command === 'get_pending_mesh_events') return { events: [] };
         if (command === 'trigger_mesh_queue') return { success: true };
         if (command === 'get_status_metadata') return { success: true, status: { sessions: [session] } };
+        if (command === 'agent_command' && opts.acceptDelivery) return { success: true, sessionId: SESSION, providerType: 'claude-cli' };
+        if (command === 'record_local' || command === 'mesh_record_local') return { success: true };
         throw new Error(`unexpected LOCAL command: ${command}`);
     };
     const ctx = { mesh, transport, localDaemonId: COORDINATOR, localMachineId: 'machine-coordinator', coordinatorSessionId: 'sess-coord' } as any;
@@ -81,7 +93,7 @@ async function send(ctx: any, extra: Record<string, unknown> = {}) {
     } as any));
 }
 
-test('dirty node → non-readonly direct dispatch refused dirty_workspace', async () => {
+test('dirty BASE node → non-readonly direct dispatch refused dirty_workspace', async () => {
     const meshId = `mesh-gitgate-dirty-${randomUUID().slice(0, 8)}`;
     cleanupMesh(meshId);
     const h = createLocalCtx(meshId, { git: { dirty: true } });
@@ -90,6 +102,7 @@ test('dirty node → non-readonly direct dispatch refused dirty_workspace', asyn
             const res = await send(h.ctx);
             assert.equal(res.success, false, JSON.stringify(res));
             assert.equal(res.code, 'dirty_workspace');
+            assert.match(res.error, /dirty base node/);
             assert.equal(getQueue(meshId).length, 0, 'a refused dispatch never materializes a task row');
         });
     } finally {
@@ -170,3 +183,58 @@ test('allow_stale_node:true bypasses the refusal on a dirty node', async () => {
         cleanupMesh(meshId);
     }
 });
+
+// ── Dirty-write verdict (daemon-core mesh-dirty-write-verdict.ts; docs/design/
+// 2026-10-07-mesh-workspace-policy.md §B). A direct send names its node, so a dirty
+// WORKTREE is a branch continuation: dispatched with a one-line commit notice, never
+// checkpointed by the daemon. The retired dirtyWorkspaceBehavior changes nothing.
+
+test('dirty WORKTREE node → dispatched as a branch continuation with the commit notice; no checkpoint', async () => {
+    const meshId = `mesh-gitgate-wt-${randomUUID().slice(0, 8)}`;
+    cleanupMesh(meshId);
+    const h = createLocalCtx(meshId, { git: { dirty: true, modified: 2, untracked: 1 }, worktreeBranch: 'feat/a', acceptDelivery: true });
+    try {
+        await withLedger(async () => {
+            const res = await send(h.ctx);
+            assert.equal(res.success, true, JSON.stringify(res));
+            assert.match(String(res.dirtyWorkspaceNotice), /Branch feat\/a has 3 uncommitted change/);
+            const delivery = h.localCommands.find(c => c.command === 'agent_command');
+            assert.ok(delivery, 'delivered');
+            assert.match(String((delivery!.args as any).message), /commit before you finish/, 'the worker sees the notice');
+            assert.ok(!h.localCommands.some(c => c.command === 'git_checkpoint'), 'the daemon never commits on the worker\'s behalf');
+        });
+    } finally {
+        cleanupMesh(meshId);
+    }
+});
+
+test('clean WORKTREE node → no continuation notice', async () => {
+    const meshId = `mesh-gitgate-wt-clean-${randomUUID().slice(0, 8)}`;
+    cleanupMesh(meshId);
+    const h = createLocalCtx(meshId, { worktreeBranch: 'feat/a', acceptDelivery: true });
+    try {
+        await withLedger(async () => {
+            const res = await send(h.ctx);
+            assert.equal(res.success, true, JSON.stringify(res));
+            assert.equal(res.dirtyWorkspaceNotice, undefined);
+        });
+    } finally {
+        cleanupMesh(meshId);
+    }
+});
+
+test('a retired dirtyWorkspaceBehavior on the mesh policy changes nothing (dirty base still refused)', async () => {
+    const meshId = `mesh-gitgate-retired-${randomUUID().slice(0, 8)}`;
+    cleanupMesh(meshId);
+    const h = createLocalCtx(meshId, { git: { dirty: true }, policy: { dirtyWorkspaceBehavior: 'warn', requirePreTaskCheckpoint: true } });
+    try {
+        await withLedger(async () => {
+            const res = await send(h.ctx);
+            assert.equal(res.code, 'dirty_workspace', JSON.stringify(res));
+            assert.ok(!h.localCommands.some(c => c.command === 'git_checkpoint'));
+        });
+    } finally {
+        cleanupMesh(meshId);
+    }
+});
+

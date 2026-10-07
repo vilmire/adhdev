@@ -67,7 +67,8 @@ function readRawMeshConfig(): any {
 
 function baseMesh(id: string, nodes: any[] = []): any {
     const now = new Date().toISOString();
-    return { id, name: id, repoIdentity: `identity/${id}`, policy: {}, coordinator: {}, nodes, createdAt: now, updatedAt: now };
+    // policyStorage: 2 = a current-format file (no load-time migration to persist).
+    return { id, name: id, repoIdentity: `identity/${id}`, policy: {}, policyStorage: 2, coordinator: {}, nodes, createdAt: now, updatedAt: now };
 }
 
 /**

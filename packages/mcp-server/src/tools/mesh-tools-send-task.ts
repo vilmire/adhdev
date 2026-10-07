@@ -59,7 +59,12 @@ import {
     type MeshDeliveryMode,
     type MeshWorkQueueEntry,
     isTaskReadonly,
-    isDirtyNode,
+    readDirtyWriteGate,
+    dirtyWriteVerdict,
+    describeDirtyWriteRefusal,
+    readWorktreeNodeBranch,
+    buildBranchContinuationNotice,
+    countGitWorktreeChanges,
     resolveAutoFastForwardPolicy,
     isMeshNodeFreshEnoughToLaunch,
     resolveDispatchMessage,
@@ -235,8 +240,14 @@ function checkSendTaskNodeGates(ctx: MeshContext, node: LocalMeshNodeEntry, args
     // unless the caller explicitly opts out with allow_stale_node (e.g. a deliberate
     // "fix the dirty tree" task). Readonly dispatches are exempt — same write-only
     // scope as the claim-path gate.
+    //
+    // Dirty: the fixed per-node-type verdict (daemon-core mesh-dirty-write-verdict.ts)
+    // the claim path uses. A direct send names its node, so a dirty WORKTREE is a
+    // branch continuation (dispatched, with a notice — buildWorkerDispatchBody) and only
+    // a dirty BASE node is refused.
     if (req.allowStaleNode || isTaskReadonly({ readonly: req.readonly, taskMode })) return null;
-    const dirty = isDirtyNode(node);
+    const dirtyGate = readDirtyWriteGate(node);
+    const dirty = dirtyWriteVerdict(dirtyGate, directDispatchTaskFacts(args, req)) === 'refuse';
     const maxBehind = resolveAutoFastForwardPolicy(ctx.mesh).maxBehind;
     const staleBehind = !isMeshNodeFreshEnoughToLaunch(node, { maxBehind });
     if (!dirty && !staleBehind) return null;
@@ -250,7 +261,7 @@ function checkSendTaskNodeGates(ctx: MeshContext, node: LocalMeshNodeEntry, args
         sessionId: args.session_id,
         taskMode: taskMode || 'unspecified',
         error: dirty
-            ? `Node '${args.node_id}' has a dirty workspace (uncommitted changes) — refusing a non-readonly direct dispatch that could race a concurrent edit.`
+            ? `Refusing a non-readonly direct dispatch: ${describeDirtyWriteRefusal(dirtyGate, `'${args.node_id}'`)} — the uncommitted changes are the user's, not a task's.`
             : `Node '${args.node_id}' is behind its upstream${behind !== undefined ? ` (${behind} commit(s), max ${maxBehind ?? 0})` : ''} — refusing a non-readonly direct dispatch against stale code.`,
         nextAction: `Let the node's auto fast-forward / clean-up run first, retry with a readonly task_mode, or pass allow_stale_node: true to dispatch anyway (e.g. a task whose job IS to fix the dirty/stale tree).`,
     });
@@ -545,8 +556,12 @@ async function admitExplicitSessionDelivery(
  * image-attached dispatch. appendWorkerProtocolFooter is idempotent, so this is
  * safe even if the text part already carries the marker.
  */
-function buildWorkerDispatchBody(ctx: MeshContext, node: LocalMeshNodeEntry, taskId: string, req: SendTaskRequest): { body: string; input: MeshTaskInput | undefined } {
-    const { message, taskMode, difficulty, readonly, missionId, taskInput } = req;
+function buildWorkerDispatchBody(ctx: MeshContext, node: LocalMeshNodeEntry, taskId: string, args: MeshSendTaskArgs, req: SendTaskRequest): { body: string; input: MeshTaskInput | undefined; dirtyWorkspaceNotice?: string } {
+    const { taskMode, difficulty, readonly, missionId, taskInput } = req;
+    // BRANCH CONTINUATION: a write onto a dirty worktree carries one line telling the
+    // worker the leftovers are its branch's unfinished work, to be committed.
+    const dirtyWorkspaceNotice = resolveDirectBranchContinuationNotice(node, args, req);
+    const message = dirtyWorkspaceNotice ? `${req.message}\n\n${dirtyWorkspaceNotice}` : req.message;
     const body = resolveDispatchMessage(
         {
             id: taskId, message, taskMode, difficulty,
@@ -566,7 +581,19 @@ function buildWorkerDispatchBody(ctx: MeshContext, node: LocalMeshNodeEntry, tas
             ),
         }
         : taskInput;
-    return { body, input };
+    return { body, input, ...(dirtyWorkspaceNotice ? { dirtyWorkspaceNotice } : {}) };
+}
+
+/** The task facts the dirty-write verdict reads, for a direct send (bound to its node). */
+function directDispatchTaskFacts(args: MeshSendTaskArgs, req: SendTaskRequest): { readonly: boolean; taskMode?: string; targetNodeId: string } {
+    return { readonly: req.readonly, ...(req.taskMode ? { taskMode: req.taskMode } : {}), targetNodeId: args.node_id };
+}
+
+/** The continuation notice when this direct write lands on a dirty worktree (else undefined). */
+function resolveDirectBranchContinuationNotice(node: LocalMeshNodeEntry, args: MeshSendTaskArgs, req: SendTaskRequest): string | undefined {
+    if (dirtyWriteVerdict(readDirtyWriteGate(node), directDispatchTaskFacts(args, req)) !== 'branch_continuation') return undefined;
+    const git = (node as any)?.git ?? (node as any)?.cachedStatus?.git;
+    return buildBranchContinuationNotice(readWorktreeNodeBranch(node) || '', countGitWorktreeChanges(git));
 }
 
 /**
@@ -811,7 +838,19 @@ async function dispatchSendTaskDirect(
             ...(explicitTargetSession ? { dispatchedToIdleSession: sessionWasIdle } : {}),
         });
     } catch { /* best-effort */ }
-    const dispatch = buildWorkerDispatchBody(ctx, node, taskId, req);
+    const dispatch = buildWorkerDispatchBody(ctx, node, taskId, args, req);
+    if (dispatch.dirtyWorkspaceNotice) {
+        // Same signal the queue claim records (B5: the continuation rule's sunset metric).
+        try {
+            await recordLocal(ctx.transport, {
+                meshId: ctx.mesh.id,
+                kind: 'dirty_workspace_dispatch',
+                nodeId: args.node_id,
+                ...(target.sessionId ? { sessionId: target.sessionId } : {}),
+                payload: { taskId, verdict: 'branch_continuation', branch: readWorktreeNodeBranch(node), via: 'direct' },
+            });
+        } catch { /* best-effort */ }
+    }
     // C-W6c: open the attempt in the NEW turn ledger (C1 reducer) BEFORE the send, so
     // its attemptRef rides in meshContext — the worker's cli-manager.ts echoes
     // meshContext.attemptId/attemptGeneration onto its turn evidence. A sessionless
@@ -905,6 +944,7 @@ async function dispatchSendTaskDirect(
         ...(result.sessionId ? computeIdleDispatchAckRisk(sessionWasIdle, dispatchPreRecorded, result.sessionId) : {}),
         ...((await buildMissionInactiveWarning(ctx, req.missionId)) ?? {}),
         ...req.deliveryModeWarning,
+        ...(dispatch.dirtyWorkspaceNotice ? { dirtyWorkspaceNotice: dispatch.dirtyWorkspaceNotice } : {}),
     });
 }
 

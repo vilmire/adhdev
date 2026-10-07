@@ -30,7 +30,7 @@ import type {
     RepoMeshStatus,
     RepoMeshNodeStatus,
 } from '../repo-mesh-types.js';
-import { mergeAndNormalizePolicy, resolveProviderMaxParallel, resolveMaxReadonlyParallelTasks } from '../repo-mesh-types.js';
+import { resolveMeshPolicy, resolveProviderMaxParallel, resolveMaxReadonlyParallelTasks } from '../repo-mesh-types.js';
 import { getDifficultyBrains } from '../config/mesh-config-routing.js';
 import { getConfigDir } from '../config/config.js';
 import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
@@ -361,7 +361,7 @@ Repository: \`${mesh.repoIdentity}\`${mesh.defaultBranch ? `\nDefault branch: \`
     }
 
     // ── Policy ──
-    sections.push(buildPolicySection(mergeAndNormalizePolicy(undefined, mesh.policy)));
+    sections.push(buildPolicySection(resolveMeshPolicy(mesh.policy)));
 
     // ── Brain presets (difficulty → model/thinking) ──
     sections.push(buildBrainPresetsSection());
@@ -479,7 +479,7 @@ function expandPromptPlaceholders(template: string, ctx: CoordinatorPromptContex
         mission: ctx.missionSection?.trim() || '',
         recentActivity: buildRecentActivitySection(ctx.recentActivity) || '',
         operatingNotes: buildOperatingNotesSection(ctx.operatingNotes) || '',
-        policy: buildPolicySection(mergeAndNormalizePolicy(undefined, mesh.policy)),
+        policy: buildPolicySection(resolveMeshPolicy(mesh.policy)),
         tools: TOOLS_SECTION,
         workers: WORKERS_SECTION,
         ownershipAndBrief: OWNERSHIP_AND_BRIEF_SECTION,
@@ -1002,20 +1002,11 @@ For a multi-perspective review (a design check, a root-cause cross-check, a clai
 
 function buildPolicySection(policy: RepoMeshPolicy): string {
     const rules: string[] = [];
-    if (policy.requirePreTaskCheckpoint) rules.push('- Create a git checkpoint **before** starting each task');
-    if (policy.requirePostTaskCheckpoint) rules.push('- Create a git checkpoint **after** each task completes');
     if (policy.requireApprovalForPush) rules.push('- **Ask for user approval** before pushing to remote (the refine path enforces it)');
     if (policy.allowAutoPublishSubmoduleMainCommits) {
         rules.push('- Refinery may auto-publish unreachable submodule gitlink commits to submodule origin/main (non-force, after validation and patch-equivalence pass)');
     }
     rules.push('- **Ask for user approval** before destructive git operations (force push, reset, etc.)');
-
-    const dirtyBehavior = {
-        block: '- **Do not** send tasks to nodes with dirty workspaces',
-        warn: '- Warn the user if a node has uncommitted changes before sending a task',
-        checkpoint_then_continue: '- Auto-checkpoint dirty nodes before sending tasks',
-    }[policy.dirtyWorkspaceBehavior] || '';
-    if (dirtyBehavior) rules.push(dirtyBehavior);
 
     // The caps, the one-write-per-node invariant, depends_on notices, owned_paths
     // claim refusal and unknown-argument rejection are all code-enforced, so

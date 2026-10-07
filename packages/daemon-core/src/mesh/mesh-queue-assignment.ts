@@ -6,7 +6,7 @@ import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
 import { resolveTranscriptAuthorityProfile } from '../providers/transcript-evidence.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { clearClaimDeferralForNode, noteClaimDeferredForNode, noteSessionClaimRefusal, type MeshClaimRefusal } from './mesh-claim-refusal.js';
-import { resolveProviderMaxParallel, resolveSlotMaxParallel, resolveCoordinatorIdlePushPolicy } from '../repo-mesh-types.js';
+import { resolveProviderMaxParallel, resolveSlotMaxParallel, resolveCoordinatorIdlePushPolicy, resolveMeshPolicy } from '../repo-mesh-types.js';
 import { meshNodeIdMatches, normalizeMeshWorkspaceForCompare, meshWorkspacesEquivalent, sessionIdsEquivalent, type MeshNodeIdentified, readText } from '@adhdev/mesh-shared';
 import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
 import { resolveDaemonSiblingNodeIds } from './mesh-daemon-slot-axis.js';
@@ -20,7 +20,9 @@ import { dispatchMessageId, openOrResumeQueueAttempt } from './mesh-queue-dispat
 import { withMeshDirectDispatch } from '../commands/command-args.js';
 import type { TurnAttemptRef } from '@adhdev/mesh-shared';
 import type { TurnLedger } from './turn-ledger/ledger.js';
-import { isWorkspaceAutoFastForwardInFlight, maybeAutoFastForwardIdleNode, isDirtyNode, resolveAutoFastForwardPolicy } from './mesh-auto-fast-forward.js';
+import { isWorkspaceAutoFastForwardInFlight, maybeAutoFastForwardIdleNode, resolveAutoFastForwardPolicy } from './mesh-auto-fast-forward.js';
+import { readDirtyWriteGate, resolveDirtyWriteVerdict, readWorktreeNodeBranch, buildBranchContinuationNotice } from './mesh-dirty-write-verdict.js';
+import { countGitWorktreeChanges } from './mesh-node-identity.js';
 import { retractActionableSkipIfPreviouslyNotified } from './mesh-skip-notify.js';
 import { activeWriteAssignedCount, activeReadonlyAssignedCount, sessionHasActiveAssignment } from './mesh-scheduling-fitness.js';
 import { AUTO_LAUNCH_LEDGER_DEDUP_MAX, clearClaimRefusalState, clearWorktreeBootstrapStaleBypassState, logQuotaClaimFallbackSuccess, logWorktreeBootstrapStaleBypass, recordClaimRefusal, type QuotaClaimDrainTrace } from './mesh-queue-observability.js';
@@ -269,8 +271,11 @@ function buildClaimOptions(p: {
     // Fail-open by construction: both predicates decide only on POSITIVE telemetry.
     const gitGateMaxBehind = resolveAutoFastForwardPolicy(mesh).maxBehind;
     const nodeGitBehind = readNumberValue(node?.git?.behind, node?.cachedStatus?.git?.behind);
+    // Dirty: the fixed per-node-type rule (mesh-dirty-write-verdict.ts) — the gate
+    // carries the worktree branch + node id so the store can let a write BOUND to a
+    // dirty worktree's own branch through (branch continuation).
     const nodeGitGate = {
-        dirty: isDirtyNode(node),
+        ...readDirtyWriteGate(node),
         staleBehind: !isMeshNodeFreshEnoughToLaunch(node, { maxBehind: gitGateMaxBehind }),
         ...(nodeGitBehind !== undefined ? { behind: nodeGitBehind } : {}),
         ...(gitGateMaxBehind !== undefined ? { maxBehind: gitGateMaxBehind } : {}),
@@ -335,7 +340,7 @@ function openClaimAttempt(p: {
             sessionId,
             providerType: p.providerType,
             consumeProfile: p.assignedTranscriptProfile?.class === 'native-source' ? 'native_source' : 'default',
-            maxTaskRetries: typeof p.mesh?.policy?.maxTaskRetries === 'number' ? p.mesh.policy.maxTaskRetries : 1,
+            maxTaskRetries: resolveMeshPolicy(p.mesh?.policy).maxTaskRetries ?? 1,
         });
         if ('refused' in opened) {
             // A prompt must never be injected into an attempt that already
@@ -572,9 +577,16 @@ export function tryAssignQueueTask(
     // WORKER-MCP decision C: the dispatched body may carry handoff notes from related
     // earlier work — composed ONCE (not per transport) and applied to the DISPATCHED
     // body only; `task.message` stays the authored text.
-    const dispatchMessage = resolveDispatchMessage(task, meshId, node, {
-        workerMcp: readSessionWorkerMcpDelivered(claiming.claimState?.settings),
-    });
+    // BRANCH CONTINUATION (mesh-dirty-write-verdict.ts): a write bound to a dirty
+    // worktree's own branch was let through the claim — record it and tell the worker
+    // the leftovers are its branch's unfinished work, to be committed.
+    const continuationNotice = noteBranchContinuationDispatch(meshId, node, task, nodeId, sessionId);
+    const dispatchMessage = resolveDispatchMessage(
+        continuationNotice ? { ...task, message: `${task.message}\n\n${continuationNotice}` } : task,
+        meshId,
+        node,
+        { workerMcp: readSessionWorkerMcpDelivered(claiming.claimState?.settings) },
+    );
     const coordinatorDaemonId = localCoordinatorDaemonId();
     const coordinatorSessionId = readText(task.sourceCoordinatorSessionId) || undefined;
     const meshContext = buildClaimDispatchMeshContext({
@@ -692,3 +704,23 @@ export { AUTO_LAUNCH_AWAIT_CLAIM_MS };
 // file-size baseline entry). Re-exported here, which is the path tests import from.
 export { __resetClaimDeferralForTests, __resetSessionClaimRefusalsForTests } from './mesh-claim-refusal.js';
 export { __seedAutoLaunchAwaitClaimBackoffForTests } from './mesh-autolaunch-integrity.js';
+
+/**
+ * When this write is a branch continuation onto a dirty worktree, record
+ * `dirty_workspace_dispatch` (the signal B5 keys the rule's sunset on) and return the
+ * one-line worker notice; null for every other dispatch.
+ */
+function noteBranchContinuationDispatch(meshId: string, node: any, task: MeshWorkQueueEntry, nodeId: string, sessionId: string): string | null {
+    if (resolveDirtyWriteVerdict(node, task) !== 'branch_continuation') return null;
+    const branch = readWorktreeNodeBranch(node) || '';
+    const changedFileCount = countGitWorktreeChanges(node?.git ?? node?.cachedStatus?.git);
+    LOG.info('MeshQueue', `Task ${task.id} continues branch ${branch} on dirty worktree node ${nodeId} (${changedFileCount} uncommitted change(s))`);
+    try {
+        meshRecord(meshId, 'dirty_workspace_dispatch', {
+            nodeId,
+            sessionId,
+            payload: { taskId: task.id, verdict: 'branch_continuation', branch, changedFileCount, via: 'queue' },
+        }, { local: true });
+    } catch { /* the record is best-effort */ }
+    return buildBranchContinuationNotice(branch, changedFileCount);
+}

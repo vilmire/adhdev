@@ -10,8 +10,8 @@
  *  - Stages are independent: one failing stage does not abort the rest, and
  *    every failure is collected (partial commit is explicit, never silent).
  *  - The scheduling write maps the 2-mode façade to the raw strategy
- *    (distributionToStrategy) and merges the patch OVER the current policy,
- *    exactly like MeshDetailView's onUpdatePolicy.
+ *    (distributionToStrategy) and sends ONLY the changed keys (the daemon stores
+ *    sparse overrides), exactly like MeshDetailView's onUpdatePolicy.
  */
 import { describe, expect, it } from 'vitest'
 import { runWizardPolicyCommit, type WizardPolicyCommitOptions } from '../../../src/components/setup-wizard/wizardCommit'
@@ -33,7 +33,6 @@ const base = (overrides: Partial<WizardPolicyCommitOptions>): WizardPolicyCommit
     unwrapResult: (raw: any) => raw,
     targetDaemonId: 'daemon-1',
     meshId: 'mesh-1',
-    currentPolicy: { schedulingStrategy: 'first_eligible', requireApprovalForPush: true },
     ...overrides,
 })
 
@@ -59,13 +58,15 @@ describe('runWizardPolicyCommit', () => {
         expect(result.applied).toEqual(['slots', 'policy', 'quota'])
     })
 
-    it('maps the distribution façade to the raw strategy and merges over current policy', async () => {
+    it('maps the distribution façade to the raw strategy and sends only the changed keys', async () => {
         const { calls, sendCommand } = makeTransport()
         await runWizardPolicyCommit(base({ sendCommand, distribution: 'smart' }))
         const policyCall = calls.find(c => c.type === 'update_mesh')
+        // Patch-only: no default (or unchanged) key rides along, so the daemon never
+        // persists a default as if the owner had chosen it.
         expect(policyCall?.payload).toEqual({
             meshId: 'mesh-1',
-            policy: { schedulingStrategy: 'fitness', requireApprovalForPush: true },
+            policy: { schedulingStrategy: 'fitness' },
         })
     })
 
