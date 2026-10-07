@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ActiveConversation } from '../components/dashboard/types'
+import { isAssistantConversation } from '../components/dashboard/assistant-session'
 
 interface UsePaneGroupTabsOptions {
     conversations: ActiveConversation[]
@@ -12,10 +13,11 @@ interface UsePaneGroupTabsOptions {
 function mergeTabOrder(prev: string[], conversations: ActiveConversation[]) {
     const currentKeys = new Set(conversations.map(conversation => conversation.tabKey))
     const existing = prev.filter(tabKey => currentKeys.has(tabKey))
-    const newKeys = conversations
-        .filter(conversation => !prev.includes(conversation.tabKey))
-        .map(conversation => conversation.tabKey)
-    return [...existing, ...newKeys]
+    const added = conversations.filter(conversation => !prev.includes(conversation.tabKey))
+    // A newly appearing assistant tab is pinned first; user-dragged order is kept after that.
+    const newAssistantKeys = added.filter(isAssistantConversation).map(conversation => conversation.tabKey)
+    const newKeys = added.filter(conversation => !isAssistantConversation(conversation)).map(conversation => conversation.tabKey)
+    return [...newAssistantKeys, ...existing, ...newKeys]
 }
 
 export function usePaneGroupTabs({

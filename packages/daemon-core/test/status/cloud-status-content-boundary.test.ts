@@ -78,6 +78,13 @@ describe('buildCloudStatusReportPayload — server WS content boundary', () => {
         }
     });
 
+    it('keeps P2P-only assistant role flags off the server payload', () => {
+        // Assistant layer §4.6: the assistant flag is dashboard (P2P / local) only.
+        const [session] = buildCloudStatusReportPayload([sessionWithContent({ assistant: true, managedByAssistant: true })], undefined, 1).sessions;
+        expect(session).not.toHaveProperty('assistant');
+        expect(session).not.toHaveProperty('managedByAssistant');
+    });
+
     it('never serializes chat text anywhere in the payload', () => {
         // Belt-and-braces: no nesting, rename, or stray passthrough can smuggle it.
         const payload = buildCloudStatusReportPayload([sessionWithContent()], undefined, 1);

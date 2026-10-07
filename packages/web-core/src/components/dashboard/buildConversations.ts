@@ -10,6 +10,7 @@ import { deriveNativeConversationStatus, deriveStreamConversationStatus, formatI
 import { isCliConv } from './types';
 import type { ActiveConversation, DashboardMessage } from './types';
 import { getConversationTabKey, resolveOwnerMachineName } from './conversation-identity';
+import { ASSISTANT_DISPLAY_LABEL, isAssistantSession } from './assistant-session';
 
 interface BuildConversationContext {
     machineName?: string;
@@ -238,7 +239,8 @@ export function buildIdeConversations(
         const isMeshCoordinator = ide.settings?.meshCoordinatorFor;
         const isMeshNode = ide.settings?.meshNodeFor
             || (!ide.settings?.meshCoordinatorFor && ide.settings?.launchedByCoordinator);
-        const roleSuffix = isMeshCoordinator ? ' (Coordinator)' : isMeshNode ? ' (Mesh Node)' : '';
+        const isAssistant = isAssistantSession(ide);
+        const roleSuffix = isAssistant ? ' (Assistant)' : isMeshCoordinator ? ' (Coordinator)' : isMeshNode ? ' (Mesh Node)' : '';
         const agentName = providerLabel + roleSuffix;
         const modal = ide.activeChat?.activeModal;
         const hasRealModal = modal && Array.isArray(modal.buttons) && modal.buttons.length > 0;
@@ -299,7 +301,9 @@ export function buildIdeConversations(
             // Owner UX: folder name is the primary tab label for every provider.
             // Fall back to an explicit chat title, then the provider label, so a
             // workspace-less session still renders something meaningful.
-            displayPrimary: workspaceName
+            // The assistant runs in its own config dir; name it, not the folder.
+            displayPrimary: (isAssistant ? ASSISTANT_DISPLAY_LABEL : '')
+                || workspaceName
                 || effectiveNativeTitle
                 || (isCliConv(ide)
                     ? ((ide.mode === 'chat') ? agentName : `Terminal${roleSuffix}`)
@@ -322,6 +326,7 @@ export function buildIdeConversations(
             connectionState,
             settings: ide.settings,
             coordinator: nativeCoordinator,
+            ...(isAssistant ? { assistant: true } : {}),
             messageInput: ide.messageInput,
         });
     }

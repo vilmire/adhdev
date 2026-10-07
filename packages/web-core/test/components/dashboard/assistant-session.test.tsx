@@ -1,0 +1,243 @@
+// @vitest-environment jsdom
+//
+// Assistant layer (design 2026-10-07-assistant-layer.md §4.6–§4.7): the
+// assistant is an ordinary session chat, marked with its own icon + "Assistant"
+// label, pinned first in session lists, and — while none exists — the dashboard
+// header offers "Start assistant", which sends `launch_assistant` through the
+// normal command transport.
+import { act } from 'react'
+import { createRoot, type Root } from 'react-dom/client'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { MemoryRouter } from 'react-router-dom'
+import type { SessionEntry, StatusReportPayload } from '@adhdev/daemon-core'
+
+import DashboardHeader from '../../../src/components/dashboard/DashboardHeader'
+import { BaseDaemonProvider } from '../../../src/context/BaseDaemonContext'
+import { TransportProvider } from '../../../src/context/TransportContext'
+import { buildConversations } from '../../../src/components/dashboard/buildConversations'
+import { compareConversationRecency } from '../../../src/components/dashboard/conversation-sort'
+import { sortMobileInboxItems } from '../../../src/components/dashboard/dashboard-mobile-chat-mode-helpers'
+import {
+    isAssistantConversation,
+    pickAssistantLaunchTarget,
+    shouldOfferStartAssistant,
+} from '../../../src/components/dashboard/assistant-session'
+import { useStartAssistant } from '../../../src/hooks/useStartAssistant'
+import { statusPayloadToEntries } from '../../../src/utils/status-transform'
+import type { ActiveConversation } from '../../../src/components/dashboard/types'
+import type { MobileConversationListItem } from '../../../src/components/dashboard/DashboardMobileChatShared'
+import type { DaemonData } from '../../../src/types'
+
+function conversation(overrides: Partial<ActiveConversation> = {}): ActiveConversation {
+    return {
+        routeId: 'machine-1',
+        daemonId: 'machine-1',
+        sessionId: 'session-1',
+        transport: 'pty',
+        mode: 'chat',
+        agentName: 'Claude Code',
+        agentType: 'claude-cli',
+        status: 'idle',
+        title: 'adhdev',
+        messages: [],
+        workspaceName: 'adhdev',
+        workspacePath: '/work/adhdev',
+        displayPrimary: 'adhdev',
+        displaySecondary: 'Claude Code',
+        streamSource: 'native',
+        tabKey: 'tab-1',
+        machineName: 'mbp',
+        connectionState: 'connected',
+        ...overrides,
+    }
+}
+
+const assistant = (overrides: Partial<ActiveConversation> = {}) => conversation({
+    tabKey: 'tab-a', sessionId: 'session-a', displayPrimary: 'Assistant', assistant: true, settings: { assistant: true },
+    ...overrides,
+})
+
+function machine(id: string, providers: Array<Record<string, unknown>>, status = 'online'): DaemonData {
+    return { id, type: 'adhdev-daemon', status, availableProviders: providers } as unknown as DaemonData
+}
+const cliProvider = (type: string, extra: Record<string, unknown> = {}) => ({ type, name: type, category: 'cli', displayName: type, icon: '', enabled: true, ...extra })
+
+describe('assistant detection and pinning', () => {
+    it('detects the assistant from the lane flag or the settings fallback', () => {
+        expect(isAssistantConversation(conversation({ assistant: true }))).toBe(true)
+        expect(isAssistantConversation(conversation({ settings: { assistant: true } }))).toBe(true)
+        expect(isAssistantConversation(conversation({ settings: { managedByAssistant: true, meshCoordinatorFor: 'm' } }))).toBe(false)
+        expect(isAssistantConversation(conversation())).toBe(false)
+    })
+
+    it('pins the assistant first regardless of recency', () => {
+        const fresh = conversation({ tabKey: 'tab-new', lastMessageAt: 9_000 })
+        const old = assistant({ lastMessageAt: 1 })
+        const sorted = [fresh, old].sort((l, r) => compareConversationRecency(l, r))
+        expect(sorted.map(c => c.tabKey)).toEqual(['tab-a', 'tab-new'])
+    })
+
+    it('pins the assistant first in the mobile inbox', () => {
+        const item = (conv: ActiveConversation, timestamp: number) => ({ conversation: conv, timestamp } as MobileConversationListItem)
+        const sorted = sortMobileInboxItems([item(conversation({ tabKey: 'tab-new' }), 9_000), item(assistant(), 1)])
+        expect(sorted.map(i => i.conversation.tabKey)).toEqual(['tab-a', 'tab-new'])
+    })
+})
+
+describe('daemon.metadata → conversation', () => {
+    function session(overrides: Partial<SessionEntry> & Record<string, unknown>): SessionEntry {
+        return {
+            id: 'asst-1', parentId: null, providerType: 'claude-cli', providerName: 'Claude Code', kind: 'agent',
+            transport: 'pty', status: 'idle', title: 'Claude Code', workspace: '/home/u/.adhdev/assistant',
+            activeChat: null, capabilities: [], mode: 'chat', ...overrides,
+        } as SessionEntry
+    }
+    const payload = (sessions: SessionEntry[]) => ({
+        instanceId: 'daemon-1', version: '1', daemonMode: true,
+        machine: { hostname: 'mbp', platform: 'darwin', arch: 'arm64', cpus: 8, totalMem: 16, freeMem: 8, loadavg: [0, 0, 0], uptime: 1, release: '15' },
+        timestamp: 1, detectedIdes: [], sessions,
+    }) as unknown as StatusReportPayload
+
+    it('carries the assistant flag onto the CLI entry and labels the conversation "Assistant"', () => {
+        const entries = statusPayloadToEntries(payload([
+            session({ assistant: true, settings: { assistant: true } }),
+            session({ id: 'plain-1', workspace: '/work/adhdev' }),
+        ]), { daemonId: 'daemon-1' })
+        const cli = entries.filter(e => e.transport === 'pty')
+        expect(cli.find(e => e.sessionId === 'asst-1')?.assistant).toBe(true)
+        expect(cli.find(e => e.sessionId === 'plain-1')).not.toHaveProperty('assistant')
+
+        const conversations = buildConversations(cli, entries)
+        const asst = conversations.find(c => c.sessionId === 'asst-1')!
+        expect(asst.assistant).toBe(true)
+        expect(asst.displayPrimary).toBe('Assistant')
+        const plain = conversations.find(c => c.sessionId === 'plain-1')!
+        expect(plain.assistant).toBeUndefined()
+        expect(plain.displayPrimary).toBe('adhdev')
+    })
+})
+
+describe('Start assistant target and visibility', () => {
+    it('prefers claude-cli, then a mesh-capable CLI, then any launchable CLI', () => {
+        expect(pickAssistantLaunchTarget([machine('m1', [cliProvider('codex-cli'), cliProvider('claude-cli')])]))
+            .toEqual({ machineId: 'm1', cliType: 'claude-cli' })
+        expect(pickAssistantLaunchTarget([machine('m1', [cliProvider('aider-cli'), cliProvider('codex-cli', { meshCoordinator: { mcp: true } })])]))
+            .toEqual({ machineId: 'm1', cliType: 'codex-cli' })
+        expect(pickAssistantLaunchTarget([machine('m1', [cliProvider('aider-cli')])]))
+            .toEqual({ machineId: 'm1', cliType: 'aider-cli' })
+    })
+
+    it('skips offline machines and machines without an enabled CLI', () => {
+        expect(pickAssistantLaunchTarget([
+            machine('off', [cliProvider('claude-cli')], 'offline'),
+            machine('none', [cliProvider('claude-cli', { enabled: false })]),
+            machine('ok', [cliProvider('codex-cli')]),
+        ])).toEqual({ machineId: 'ok', cliType: 'codex-cli' })
+        expect(pickAssistantLaunchTarget([])).toBeNull()
+    })
+
+    it('is offered only while no assistant session exists and a machine can host one', () => {
+        const target = { machineId: 'm1', cliType: 'claude-cli' }
+        expect(shouldOfferStartAssistant([conversation()], target)).toBe(true)
+        expect(shouldOfferStartAssistant([conversation(), assistant()], target)).toBe(false)
+        expect(shouldOfferStartAssistant([conversation()], null)).toBe(false)
+    })
+})
+
+describe('assistant in the dashboard header', () => {
+    let container: HTMLDivElement
+    let root: Root
+    const sendCommand = vi.fn(async () => ({ success: true }))
+
+    beforeEach(() => {
+        container = document.createElement('div')
+        document.body.appendChild(container)
+        root = createRoot(container)
+    })
+    afterEach(() => {
+        act(() => root.unmount())
+        container.remove()
+    })
+
+    function render(node: React.ReactNode) {
+        act(() => root.render(
+            <MemoryRouter>
+                <TransportProvider value={{ sendCommand }}>
+                    <BaseDaemonProvider>{node}</BaseDaemonProvider>
+                </TransportProvider>
+            </MemoryRouter>,
+        ))
+    }
+
+    function renderHeader(activeConv: ActiveConversation, extra: Record<string, unknown> = {}) {
+        render(
+            <DashboardHeader
+                activeConv={activeConv}
+                wsStatus="connected"
+                isConnected
+                conversations={[activeConv]}
+                onOpenHistory={() => {}}
+                inboxOpen={false}
+                onInboxOpenChange={() => {}}
+                hiddenOpen={false}
+                onHiddenOpenChange={() => {}}
+                notifications={[]}
+                notificationUnreadCount={0}
+                onOpenNotification={() => {}}
+                onMarkNotificationRead={() => {}}
+                onMarkNotificationUnread={() => {}}
+                onDeleteNotification={() => {}}
+                {...extra}
+            />,
+        )
+    }
+
+    const startButton = () => container.querySelector<HTMLButtonElement>('[data-testid="dashboard-start-assistant"]')
+
+    it('marks the assistant with its own icon and label, not the coordinator marker', () => {
+        renderHeader(assistant())
+        const icon = container.querySelector('.header-title-mobile-role.is-assistant')
+        expect(icon).not.toBeNull()
+        expect(icon?.getAttribute('aria-label')).toBe('Assistant')
+        expect(container.querySelector('.mesh-role-icon.is-coordinator')).toBeNull()
+    })
+
+    it('shows "Start assistant" only when the handler is provided, and clicking it starts', () => {
+        renderHeader(conversation())
+        expect(startButton()).toBeNull()
+        const onStartAssistant = vi.fn()
+        renderHeader(conversation(), { onStartAssistant })
+        expect(startButton()?.textContent).toContain('Start assistant')
+        act(() => startButton()!.click())
+        expect(onStartAssistant).toHaveBeenCalledTimes(1)
+    })
+
+    it('useStartAssistant sends launch_assistant with the picked CLI through the command transport', async () => {
+        const send = vi.fn(async () => ({ success: true, sessionId: 'asst-1' }))
+        let state: ReturnType<typeof useStartAssistant> | null = null
+        function Probe({ conversations }: { conversations: ActiveConversation[] }) {
+            state = useStartAssistant({ machineEntries: [machine('m1', [cliProvider('claude-cli')])], conversations, sendDaemonCommand: send })
+            return null
+        }
+        render(<Probe conversations={[conversation()]} />)
+        expect(state!.visible).toBe(true)
+        await act(async () => { await state!.start() })
+        expect(send).toHaveBeenCalledWith('m1', 'launch_assistant', { cliType: 'claude-cli' })
+        expect(state!.error).toBeNull()
+
+        render(<Probe conversations={[conversation(), assistant()]} />)
+        expect(state!.visible).toBe(false)
+    })
+
+    it('useStartAssistant surfaces a daemon refusal', async () => {
+        const send = vi.fn(async () => ({ success: false, code: 'assistant_mcp_unsupported', error: 'assistant_mcp_unsupported' }))
+        let state: ReturnType<typeof useStartAssistant> | null = null
+        function Probe() {
+            state = useStartAssistant({ machineEntries: [machine('m1', [cliProvider('claude-cli')])], conversations: [], sendDaemonCommand: send })
+            return null
+        }
+        render(<Probe />)
+        await act(async () => { await state!.start() })
+        expect(state!.error).toBe('assistant_mcp_unsupported')
+    })
+})

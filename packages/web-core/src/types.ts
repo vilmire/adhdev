@@ -247,6 +247,10 @@ export interface BaseDaemonData {
     ownerMachineName?: string;
     /** Set when this session is acting as a mesh coordinator for the given mesh. */
     coordinator?: { meshId: string; role: 'coordinator' };
+    /** The personal assistant session (mirrors SessionEntry.assistant; P2P / local only). */
+    assistant?: boolean;
+    /** A coordinator the assistant launched (mirrors SessionEntry.managedByAssistant). */
+    managedByAssistant?: boolean;
     meshQueueStats?: {
         total?: number;
         active?: number;

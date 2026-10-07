@@ -134,6 +134,13 @@
             "workerUnknownMesh": "Mesh worker",
             "openMeshGraph": "Open mesh graph"
         },
+        "assistant": {
+            "label": "Assistant",
+            "start": "Start assistant",
+            "starting": "Starting…",
+            "startHint": "Start your personal assistant — a chat that manages your projects and coordinators",
+            "startFailed": "Could not start the assistant: {{error}}"
+        },
         "versionBanner": {
             "restarting": "restarting",
             "upgrading": "updating…",

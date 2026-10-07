@@ -65,6 +65,8 @@ export interface ActiveConversation {
     settings?: Record<string, any>;
     /** Set when this session is acting as a mesh coordinator. Survives daemon restart via registry. */
     coordinator?: { meshId: string; role: 'coordinator' };
+    /** The personal assistant session — pinned first, marked with the assistant icon. */
+    assistant?: boolean;
     meshQueueStats?: {
         total?: number;
         active?: number;

@@ -28,6 +28,7 @@ import { onOpenSessionChat } from '../../utils/session-nav'
 import { eventManager } from '../../managers/EventManager'
 import type { DashboardScrollToBottomIntent } from './dashboard-scroll-to-bottom'
 import type { LaunchResult, MeshLaunchOption } from '../../hooks/useDashboardCommandActions'
+import { useStartAssistant } from '../../hooks/useStartAssistant'
 
 type ShortcutSectionId = DashboardMainViewShortcutSectionId
 
@@ -639,6 +640,12 @@ export default function DashboardMainView({
         return () => window.removeEventListener('keydown', handleKeyDown, true)
     }, [handleCloseShortcutHelp, shortcutHelpOpen, shortcutListening])
 
+    const allConversations = React.useMemo(
+        () => [...visibleConversations, ...hiddenConversations],
+        [visibleConversations, hiddenConversations],
+    )
+    const startAssistant = useStartAssistant({ machineEntries, conversations: allConversations, sendDaemonCommand })
+
     return (
         <>
             {!showMobileChatMode && (
@@ -664,6 +671,9 @@ export default function DashboardMainView({
                     hiddenOpen={hiddenOpen}
                     onHiddenOpenChange={handleHiddenOpenChange}
                     onOpenNewSession={!isMobile ? openNewSession : undefined}
+                    onStartAssistant={startAssistant.visible ? () => { void startAssistant.start() } : undefined}
+                    startAssistantPending={startAssistant.pending}
+                    startAssistantError={startAssistant.error}
                     onOpenDashboardGuide={handleOpenShortcutHelp}
                     guideNudgeVisible={guideNudgeVisible}
                     actionShortcuts={actionShortcuts}

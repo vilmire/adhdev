@@ -75067,6 +75067,7 @@ ${cleanBody}`;
         settings: state.settings,
         ...coordinator && { coordinator },
         ...meshQueueStats && { meshQueueStats },
+        ...buildAssistantRoleFields(state.settings),
         // Emit these booleans explicitly (including false) so an un-hide/un-mute clears a
         // previously-true value downstream. Consumers merge with `?? existing` and copy only
         // `!== undefined` fields, so an absent field on false never overwrote a prior true —
@@ -75075,6 +75076,13 @@ ${cleanBody}`;
         // status-gated so a one-shot silent-idle arm mutes ONLY the idle/completion
         // snapshot, never an approval/generating frame in the same turn.
         muted: resolveMuted(state.settings, resolvedStatus)
+      };
+    }
+    function buildAssistantRoleFields(settings) {
+      if (!settings) return {};
+      return {
+        ...settings.assistant === true ? { assistant: true } : {},
+        ...settings.managedByAssistant === true ? { managedByAssistant: true } : {}
       };
     }
     function buildSessionEntries(allStates, cdpManagers, options = {}) {
