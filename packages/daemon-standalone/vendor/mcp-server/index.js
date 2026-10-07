@@ -17435,7 +17435,7 @@ var require_streamx = __commonJS({
     "use strict";
     var { EventEmitter } = require_default2();
     var FIFO = require_fast_fifo();
-    var TextDecoder2 = require_text_decoder();
+    var TextDecoder = require_text_decoder();
     var StreamError = require_errors2();
     var qmt = typeof queueMicrotask === "undefined" ? (fn) => global.process.nextTick(fn) : queueMicrotask;
     var MAX = (1 << 29) - 1;
@@ -18054,7 +18054,7 @@ var require_streamx = __commonJS({
         return out;
       }
       setEncoding(encoding) {
-        const dec = new TextDecoder2(encoding);
+        const dec = new TextDecoder(encoding);
         const map2 = this._readableState.map || echo;
         this._readableState.map = mapOrSkip;
         return this;
@@ -83680,10 +83680,11 @@ ${asText(streams.stderr)}
             if (!(0, import_fs27.existsSync)(path90)) return empty;
             let text;
             try {
-              text = new TextDecoder("utf-8", { fatal: true }).decode((0, import_fs27.readFileSync)(path90));
+              const bytes = (0, import_fs27.readFileSync)(path90);
+              text = bytes.toString("utf8");
+              if (!Buffer.from(text, "utf8").equals(bytes)) return { ...empty, unreadable: "invalid utf-8" };
             } catch (err) {
-              const reason = err instanceof TypeError ? "invalid utf-8" : err instanceof Error ? err.message : String(err);
-              return { ...empty, unreadable: reason };
+              return { ...empty, unreadable: err instanceof Error ? err.message : String(err) };
             }
             const entries = parseMemoryEntries(text);
             const invalid = [];

@@ -230,10 +230,14 @@ export class AssistantMemoryStore {
         if (!existsSync(path)) return empty;
         let text: string;
         try {
-            text = new TextDecoder('utf-8', { fatal: true }).decode(readFileSync(path));
+            // UTF-8 round trip instead of TextDecoder({fatal}) — this module is
+            // type-checked by consumers whose lib (Workers) types TextDecoder
+            // options differently. Invalid bytes do not survive the round trip.
+            const bytes = readFileSync(path);
+            text = bytes.toString('utf8');
+            if (!Buffer.from(text, 'utf8').equals(bytes)) return { ...empty, unreadable: 'invalid utf-8' };
         } catch (err) {
-            const reason = err instanceof TypeError ? 'invalid utf-8' : err instanceof Error ? err.message : String(err);
-            return { ...empty, unreadable: reason };
+            return { ...empty, unreadable: err instanceof Error ? err.message : String(err) };
         }
         const entries = parseMemoryEntries(text);
         const invalid: MemoryFileState['invalid'] = [];
