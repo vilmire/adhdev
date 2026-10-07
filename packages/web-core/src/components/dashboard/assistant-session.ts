@@ -9,7 +9,8 @@
  * fallback for an older daemon that only ships settings. It is pinned first in
  * session lists and, when none exists, the dashboard offers "Start assistant",
  * which sends `launch_assistant` through the normal command transport. Its
- * dropdown lets the person pick the CLI (and machine); eligibility per CLI is
+ * dropdown lets the person pick the CLI (and machine) plus the model and
+ * thinking level the CLI advertises; eligibility per CLI is
  * the daemon's own answer (`availableProviders[].assistant`, computed by the
  * same planner `launch_assistant` runs), so the picker never offers a CLI the
  * verb would refuse.
@@ -18,6 +19,7 @@ import type { DaemonData } from '../../types'
 import type { ActiveConversation } from './types'
 import { isLaunchableMachineProvider } from '../../utils/provider-activation'
 import { getMachineDisplayName } from '../../utils/daemon-utils'
+import { modelOptionsForProvider, thinkingOptionsForProvider } from '../../utils/provider-priority'
 
 /** Brand label used as the assistant conversation's primary label. */
 export const ASSISTANT_DISPLAY_LABEL = 'Assistant'
@@ -52,6 +54,10 @@ export function hasAssistantConversation(conversations: ReadonlyArray<Pick<Activ
 export interface AssistantLaunchTarget {
     machineId: string
     cliType: string
+    /** One of the CLI's advertised `modelOptions` (absent = the CLI's own default). */
+    model?: string
+    /** One of the CLI's advertised `thinkingLevelOptions` (absent = the CLI's own default). */
+    thinkingLevel?: string
 }
 
 /** One CLI the assistant picker lists for a machine (eligibility from the daemon's `availableProviders[].assistant`). */
@@ -64,6 +70,16 @@ export interface AssistantCliOption {
     reason?: string
     /** Tool limit held only by the system prompt (every CLI but claude-cli) — the picker says "no tool lock". */
     promptOnly: boolean
+    /** Advisory model list (manifest `modelOptions`); empty = no model picker. */
+    modelOptions: string[]
+    /**
+     * Advisory thinking levels (manifest `thinkingLevelOptions`); empty = no
+     * thinking picker. Deliberately NO low/medium/high fallback (unlike the
+     * new-session dialog): a manifest lists levels exactly when it declares
+     * `thinkingLaunchArgs`, and a level sent to a CLI without them is dropped
+     * by the daemon with a warning.
+     */
+    thinkingLevelOptions: string[]
 }
 
 export interface AssistantMachineOption {
@@ -91,6 +107,32 @@ function cliOption(provider: NonNullable<DaemonData['availableProviders']>[numbe
         supported: eligibility ? eligibility.supported === true : true,
         ...(eligibility && !eligibility.supported && eligibility.reason ? { reason: eligibility.reason } : {}),
         promptOnly: eligibility ? eligibility.toolRestriction === 'prompt_only' : false,
+        modelOptions: modelOptionsForProvider([provider], provider.type),
+        thinkingLevelOptions: thinkingOptionsForProvider([provider], provider.type),
+    }
+}
+
+/**
+ * The launch target for `cli` on `machineId` with a model / thinking level kept
+ * only while the CLI still advertises it (a remembered value from a manifest
+ * that has since dropped it falls back to the CLI default).
+ */
+export function assistantLaunchTargetFor(
+    machineId: string,
+    cli: Pick<AssistantCliOption, 'cliType' | 'modelOptions' | 'thinkingLevelOptions'>,
+    picked?: { model?: string; thinkingLevel?: string } | null,
+): AssistantLaunchTarget {
+    const model = picked?.model && cli.modelOptions.includes(picked.model) ? picked.model : undefined
+    const thinkingLevel = picked?.thinkingLevel && cli.thinkingLevelOptions.includes(picked.thinkingLevel) ? picked.thinkingLevel : undefined
+    return { machineId, cliType: cli.cliType, ...(model ? { model } : {}), ...(thinkingLevel ? { thinkingLevel } : {}) }
+}
+
+/** `launch_assistant` args for a target (the daemon applies model / thinking at launch). */
+export function assistantLaunchArgs(target: AssistantLaunchTarget): Record<string, string> {
+    return {
+        cliType: target.cliType,
+        ...(target.model ? { model: target.model } : {}),
+        ...(target.thinkingLevel ? { thinkingLevel: target.thinkingLevel } : {}),
     }
 }
 
@@ -137,17 +179,18 @@ export function resolveAssistantLaunchOptions(
     if (preferred?.cliType) {
         const candidates = preferred.machineId ? list.filter(m => m.machineId === preferred.machineId) : list
         for (const m of candidates) {
-            if (eligible(m, preferred.cliType)) return { machines: list, defaultTarget: { machineId: m.machineId, cliType: preferred.cliType } }
+            const cli = eligible(m, preferred.cliType)
+            if (cli) return { machines: list, defaultTarget: assistantLaunchTargetFor(m.machineId, cli, preferred) }
         }
     }
     for (const m of list) {
         const cli = eligible(m)
-        if (cli) return { machines: list, defaultTarget: { machineId: m.machineId, cliType: cli.cliType } }
+        if (cli) return { machines: list, defaultTarget: assistantLaunchTargetFor(m.machineId, cli) }
     }
     return { machines: list, defaultTarget: null }
 }
 
-/** localStorage key for the last CLI (and machine) the picker launched. */
+/** localStorage key for the last CLI (and machine, model, thinking level) the picker launched. */
 export const ASSISTANT_LAUNCH_CHOICE_STORAGE_KEY = 'adhdev_assistant_launch_choice'
 
 export function readAssistantLaunchChoice(
@@ -158,7 +201,8 @@ export function readAssistantLaunchChoice(
         if (!raw) return null
         const parsed = JSON.parse(raw)
         if (!parsed || typeof parsed.cliType !== 'string' || !parsed.cliType) return null
-        return { cliType: parsed.cliType, ...(typeof parsed.machineId === 'string' && parsed.machineId ? { machineId: parsed.machineId } : {}) }
+        const opt = (key: 'machineId' | 'model' | 'thinkingLevel') => (typeof parsed[key] === 'string' && parsed[key] ? { [key]: parsed[key] as string } : {})
+        return { cliType: parsed.cliType, ...opt('machineId'), ...opt('model'), ...opt('thinkingLevel') }
     } catch {
         return null
     }
@@ -169,7 +213,12 @@ export function writeAssistantLaunchChoice(
     storage: Pick<Storage, 'setItem'> | undefined = typeof localStorage !== 'undefined' ? localStorage : undefined,
 ): void {
     try {
-        storage?.setItem(ASSISTANT_LAUNCH_CHOICE_STORAGE_KEY, JSON.stringify({ machineId: target.machineId, cliType: target.cliType }))
+        storage?.setItem(ASSISTANT_LAUNCH_CHOICE_STORAGE_KEY, JSON.stringify({
+            machineId: target.machineId,
+            cliType: target.cliType,
+            ...(target.model ? { model: target.model } : {}),
+            ...(target.thinkingLevel ? { thinkingLevel: target.thinkingLevel } : {}),
+        }))
     } catch { /* storage unavailable — the choice is a convenience */ }
 }
 

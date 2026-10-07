@@ -1,19 +1,21 @@
 /**
  * "Start assistant" (design 2026-10-07-assistant-layer.md §4.7): offered while
  * no assistant session exists and some machine can host one. Sends
- * `launch_assistant {cliType}` through the dashboard's normal command transport
+ * `launch_assistant {cliType, model?, thinkingLevel?}` through the dashboard's normal command transport
  * (standalone REST/WS, cloud P2P) — the daemon is idempotent, so a double click
  * or a race with another dashboard returns the live session instead of a second one.
  *
  * The main click launches the default target (the remembered choice when still
  * eligible, else claude-cli, else the first eligible CLI); `start(target)` from
- * the dropdown launches that CLI/machine and remembers it (localStorage).
+ * the dropdown launches that CLI/machine (with its model / thinking level) and
+ * remembers it (localStorage).
  */
 import { useCallback, useMemo, useRef, useState } from 'react'
 import type { DaemonData } from '../types'
 import type { ActiveConversation } from '../components/dashboard/types'
 import {
     LAUNCH_ASSISTANT_COMMAND,
+    assistantLaunchArgs,
     readAssistantLaunchChoice,
     resolveAssistantLaunchOptions,
     shouldOfferStartAssistant,
@@ -54,13 +56,13 @@ export function useStartAssistant({ machineEntries, conversations, sendDaemonCom
         if (!target || inFlight.current) return
         if (picked) {
             writeAssistantLaunchChoice(picked)
-            setChoice({ machineId: picked.machineId, cliType: picked.cliType })
+            setChoice({ ...picked })
         }
         inFlight.current = true
         setPending(true)
         setError(null)
         try {
-            const res: any = await sendDaemonCommand(target.machineId, LAUNCH_ASSISTANT_COMMAND, { cliType: target.cliType })
+            const res: any = await sendDaemonCommand(target.machineId, LAUNCH_ASSISTANT_COMMAND, assistantLaunchArgs(target))
             const result = res?.result || res
             if (res?.success === false || result?.success === false) {
                 setError(String(result?.error || res?.error || result?.code || 'launch_assistant failed'))

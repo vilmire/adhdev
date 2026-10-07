@@ -147,7 +147,11 @@
             "noToolLock": "无工具锁定",
             "noToolLockHint": "此 CLI 的工具仅由助手指令限制——它仍保留自身的 shell 和文件工具",
             "unavailable": "不可用：{{reason}}",
-            "unsupported": "此 CLI 无法运行助手"
+            "unsupported": "此 CLI 无法运行助手",
+            "model": "模型",
+            "thinking": "思考级别",
+            "defaultOption": "默认",
+            "start": "启动助手"
         },
         "versionBanner": {
             "restarting": "重启中",

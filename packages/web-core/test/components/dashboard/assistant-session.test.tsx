@@ -153,6 +153,7 @@ describe('Start assistant target and visibility', () => {
             cliProvider('codex-cli', ok()),
             cliProvider('claude-cli', ok('enforced')),
         ])])
+        expect(m.clis.every(c => Array.isArray(c.modelOptions) && Array.isArray(c.thinkingLevelOptions))).toBe(true)
         expect(m.clis.map(c => [c.cliType, c.supported, c.promptOnly, c.reason])).toEqual([
             ['claude-cli', true, false, undefined],
             ['codex-cli', true, true, undefined],
@@ -175,6 +176,8 @@ describe('Start assistant target and visibility', () => {
         writeAssistantLaunchChoice({ machineId: 'm1', cliType: 'codex-cli' }, storage)
         expect(store.get(ASSISTANT_LAUNCH_CHOICE_STORAGE_KEY)).toBe(JSON.stringify({ machineId: 'm1', cliType: 'codex-cli' }))
         expect(readAssistantLaunchChoice(storage)).toEqual({ machineId: 'm1', cliType: 'codex-cli' })
+        writeAssistantLaunchChoice({ machineId: 'm1', cliType: 'claude-cli', model: 'opus', thinkingLevel: 'max' }, storage)
+        expect(readAssistantLaunchChoice(storage)).toEqual({ machineId: 'm1', cliType: 'claude-cli', model: 'opus', thinkingLevel: 'max' })
         const throwing = { getItem: () => { throw new Error('denied') }, setItem: () => { throw new Error('denied') } }
         expect(readAssistantLaunchChoice(throwing)).toBeNull()
         expect(() => writeAssistantLaunchChoice({ machineId: 'm1', cliType: 'x' }, throwing)).not.toThrow()
@@ -284,10 +287,83 @@ describe('assistant in the dashboard header', () => {
         const agy = item('m1', 'antigravity-cli')
         expect(agy.disabled).toBe(true)
         expect(agy.querySelector('[data-testid="assistant-cli-unavailable-reason"]')?.textContent).toBe('reads ~/.gemini globally')
+        // Picking a CLI selects it; Start launches the selection.
         act(() => item('m2', 'kimi').click())
+        expect(onStartAssistantWith).not.toHaveBeenCalled()
+        expect(item('m2', 'kimi').getAttribute('aria-checked')).toBe('true')
+        expect(item('m1', 'claude-cli').getAttribute('aria-checked')).toBe('false')
+        act(() => menu.querySelector<HTMLButtonElement>('[data-testid="assistant-launch-start"]')!.click())
         expect(onStartAssistantWith).toHaveBeenCalledWith({ machineId: 'm2', cliType: 'kimi' })
         expect(onStartAssistant).not.toHaveBeenCalled()
         expect(document.querySelector('[data-testid="dashboard-start-assistant-options"]')).toBeNull()
+    })
+
+    it('model / thinking selects follow the selected CLI: advertised lists only, no thinking select without levels', () => {
+        const onStartAssistantWith = vi.fn()
+        const machines = listAssistantLaunchMachines([machine('m1', [
+            cliProvider('claude-cli', { ...ok('enforced'), modelOptions: ['opus', 'sonnet'], thinkingLevelOptions: ['low', 'high', 'max'] }),
+            cliProvider('antigravity-cli', { ...ok(), modelOptions: ['Gemini 3.7 Flash (High)'] }),
+        ])])
+        renderHeader(conversation(), {
+            onStartAssistant: vi.fn(), onStartAssistantWith,
+            startAssistantMachines: machines,
+            startAssistantDefault: { machineId: 'm1', cliType: 'claude-cli', model: 'sonnet', thinkingLevel: 'max' },
+        })
+        act(() => container.querySelector<HTMLButtonElement>('[data-testid="dashboard-start-assistant-menu"]')!.click())
+        const menu = document.querySelector('[data-testid="dashboard-start-assistant-options"]')!
+        const model = () => menu.querySelector<HTMLSelectElement>('[data-testid="assistant-launch-model"]')
+        const thinking = () => menu.querySelector<HTMLSelectElement>('[data-testid="assistant-launch-thinking"]')
+        // Opens on the default target, with its remembered model / level.
+        expect(model()!.value).toBe('sonnet')
+        expect(Array.from(model()!.options).map(o => o.value)).toEqual(['', 'opus', 'sonnet'])
+        expect(thinking()!.value).toBe('max')
+        expect(Array.from(thinking()!.options).map(o => o.value)).toEqual(['', 'low', 'high', 'max'])
+        const choose = (select: HTMLSelectElement, value: string) => act(() => {
+            select.value = value
+            select.dispatchEvent(new Event('change', { bubbles: true }))
+        })
+        choose(model()!, 'opus')
+        choose(thinking()!, '')
+        // A CLI without thinking levels: model select only, model reset to its default.
+        act(() => menu.querySelector<HTMLButtonElement>('[data-assistant-cli="antigravity-cli"]')!.click())
+        expect(model()!.value).toBe('')
+        expect(thinking()).toBeNull()
+        choose(model()!, 'Gemini 3.7 Flash (High)')
+        act(() => menu.querySelector<HTMLButtonElement>('[data-testid="assistant-launch-start"]')!.click())
+        expect(onStartAssistantWith).toHaveBeenLastCalledWith({ machineId: 'm1', cliType: 'antigravity-cli', model: 'Gemini 3.7 Flash (High)' })
+        // Edits are per-open: reopening starts from the default target (and its remembered model / level) again.
+        act(() => container.querySelector<HTMLButtonElement>('[data-testid="dashboard-start-assistant-menu"]')!.click())
+        const reopened = document.querySelector('[data-testid="dashboard-start-assistant-options"]')!
+        act(() => reopened.querySelector<HTMLButtonElement>('[data-testid="assistant-launch-start"]')!.click())
+        expect(onStartAssistantWith).toHaveBeenLastCalledWith({ machineId: 'm1', cliType: 'claude-cli', model: 'sonnet', thinkingLevel: 'max' })
+    })
+
+    it('useStartAssistant sends model / thinkingLevel, persists them, and drops values the CLI no longer advertises', async () => {
+        const store = new Map<string, string>()
+        vi.stubGlobal('localStorage', { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => { store.set(k, v) }, removeItem: (k: string) => { store.delete(k) } })
+        const send = vi.fn(async () => ({ success: true, sessionId: 'asst-1' }))
+        let state: ReturnType<typeof useStartAssistant> | null = null
+        let entries = [machine('m1', [cliProvider('claude-cli', { ...ok('enforced'), modelOptions: ['opus', 'sonnet'], thinkingLevelOptions: ['low', 'high'] })])]
+        function Probe() {
+            state = useStartAssistant({ machineEntries: entries, conversations: [], sendDaemonCommand: send })
+            return null
+        }
+        render(<Probe />)
+        await act(async () => { await state!.start({ machineId: 'm1', cliType: 'claude-cli', model: 'opus', thinkingLevel: 'high' }) })
+        expect(send).toHaveBeenLastCalledWith('m1', 'launch_assistant', { cliType: 'claude-cli', model: 'opus', thinkingLevel: 'high' })
+        expect(JSON.parse(store.get(ASSISTANT_LAUNCH_CHOICE_STORAGE_KEY)!)).toEqual({ machineId: 'm1', cliType: 'claude-cli', model: 'opus', thinkingLevel: 'high' })
+        expect(state!.defaultTarget).toEqual({ machineId: 'm1', cliType: 'claude-cli', model: 'opus', thinkingLevel: 'high' })
+        await act(async () => { await state!.start() })
+        expect(send).toHaveBeenLastCalledWith('m1', 'launch_assistant', { cliType: 'claude-cli', model: 'opus', thinkingLevel: 'high' })
+        // Remount against a manifest that dropped 'opus' and the thinking levels: the stale values fall back to defaults.
+        entries = [machine('m1', [cliProvider('claude-cli', { ...ok('enforced'), modelOptions: ['sonnet'] })])]
+        state = null
+        act(() => root.unmount())
+        root = createRoot(container)
+        render(<Probe />)
+        expect(state!.defaultTarget).toEqual({ machineId: 'm1', cliType: 'claude-cli' })
+        await act(async () => { await state!.start() })
+        expect(send).toHaveBeenLastCalledWith('m1', 'launch_assistant', { cliType: 'claude-cli' })
     })
 
     it('useStartAssistant sends a dropdown choice as cliType and remembers it as the next default', async () => {

@@ -147,7 +147,11 @@
             "noToolLock": "sin bloqueo de herramientas",
             "noToolLockHint": "Solo las instrucciones del asistente limitan las herramientas de esta CLI; conserva sus propias herramientas de shell y archivos",
             "unavailable": "No disponible: {{reason}}",
-            "unsupported": "Esta CLI no puede ejecutar el asistente"
+            "unsupported": "Esta CLI no puede ejecutar el asistente",
+            "model": "Modelo",
+            "thinking": "Razonamiento",
+            "defaultOption": "Predeterminado",
+            "start": "Iniciar asistente"
         },
         "versionBanner": {
             "restarting": "reiniciando",

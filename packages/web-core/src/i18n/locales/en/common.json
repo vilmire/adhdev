@@ -147,7 +147,11 @@
             "noToolLock": "no tool lock",
             "noToolLockHint": "Only the assistant's instructions limit this CLI's tools — it keeps its own shell and file tools",
             "unavailable": "Unavailable: {{reason}}",
-            "unsupported": "This CLI can't host the assistant"
+            "unsupported": "This CLI can't host the assistant",
+            "model": "Model",
+            "thinking": "Thinking",
+            "defaultOption": "Default",
+            "start": "Start assistant"
         },
         "versionBanner": {
             "restarting": "restarting",
