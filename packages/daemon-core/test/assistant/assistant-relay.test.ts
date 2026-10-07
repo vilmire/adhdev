@@ -10,6 +10,7 @@ import {
 } from '../../src/assistant/assistant-relay.js';
 import {
     RELAY_CLOSE,
+    RELAY_IDLE_CLOSE_GRACE_MS,
     RELAY_MAX_WAIT_MS,
     RELAY_QUIET_MS,
     buildRelayEnvelope,
@@ -174,7 +175,7 @@ describe('relay trigger and batching', () => {
         expect(h.submits).toHaveLength(1);
     });
 
-    it('closes the thread with [idle] when no work is left, then stops relaying', async () => {
+    it('marks [idle] when no work is left, still relays the follow-up turn, and closes after the grace', async () => {
         const h = harness();
         h.relay.openThread(MESH);
         h.state.work = { activeMissions: 0, pending: 0, assigned: 0 };
@@ -182,11 +183,20 @@ describe('relay trigger and batching', () => {
         h.clock.advance(RELAY_QUIET_MS);
         await settle(h);
         expect(h.submits[0]!.text).toMatch(/\n\[idle\]\n\[\/relay\]$/);
+        // The coordinator reports the worker's result one turn later: still relayed.
+        expect(h.store.isThreadOpen(MESH)).toBe(true);
+        h.emit(turn('committed', COORD, 2, h.clock.now()));
+        h.clock.advance(RELAY_QUIET_MS);
+        await settle(h);
+        expect(h.submits).toHaveLength(2);
+        // No further turn: the grace runs out and the thread closes.
+        h.clock.advance(RELAY_IDLE_CLOSE_GRACE_MS);
+        h.relay.tick(h.clock.now());
         expect(h.store.isThreadOpen(MESH)).toBe(false);
-        h.emit(turn('committed', COORD, 2, h.clock.now())); // the human typed into the coordinator tab
+        h.emit(turn('committed', COORD, 3, h.clock.now())); // the human typed into the coordinator tab
         h.clock.advance(RELAY_MAX_WAIT_MS);
         await settle(h);
-        expect(h.submits).toHaveLength(1);
+        expect(h.submits).toHaveLength(2);
     });
 });
 

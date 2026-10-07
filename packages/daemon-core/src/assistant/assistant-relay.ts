@@ -30,7 +30,7 @@ import type { AssistantInputSource } from './store-guards.js';
 import type { AssistantRelayStore } from './assistant-relay-store.js';
 import { busyInputModeToSendPolicy, type BusyInputMode } from './assistant-registry.js';
 import {
-    RELAY_BACKLOG_FOLD_AFTER_MS, RELAY_DELIVERY_MAX_CHARS, RELAY_MAX_WAIT_MS, RELAY_PROGRESS_AFTER_MS, RELAY_QUIET_MS,
+    RELAY_BACKLOG_FOLD_AFTER_MS, RELAY_DELIVERY_MAX_CHARS, RELAY_IDLE_CLOSE_GRACE_MS, RELAY_MAX_WAIT_MS, RELAY_PROGRESS_AFTER_MS, RELAY_QUIET_MS,
     RELAY_STALL_AFTER_MS, buildApprovalSignal, buildCoordinatorEndedSignal, buildFoldedBacklogLine, buildProgressSignal,
     buildRelayEnvelope, buildRestartNote, buildStallSignal, codePoints, relayMessageId, shouldAddRestartNote,
     type RestartContext,
@@ -114,6 +114,8 @@ type Item =
 export class AssistantRelay {
     private readonly clock: RelayClock;
     private readonly batches = new Map<string, Batch>();
+    /** Mesh -> when its last relay found no work left; the thread closes after the grace. */
+    private readonly idleSince = new Map<string, number>();
     private readonly working = new Map<string, number>(); // meshId → coordinator working since
     private readonly sessionMesh = new Map<string, string>(); // coordinator sessionId → meshId (remembered)
     private readonly progressSent = new Set<string>();
@@ -159,6 +161,7 @@ export class AssistantRelay {
 
     /** `project_send` accepted: open/refresh the project's thread. */
     openThread(meshId: string): void {
+        this.idleSince.delete(meshId);
         this.ports.store.openThread(meshId, this.clock.now());
         this.stallSent.delete(meshId);
     }
@@ -214,6 +217,12 @@ export class AssistantRelay {
     tick(now: number = this.clock.now()): void {
         this.pendingHuman = this.pendingHuman.filter((t) => now - t < PENDING_HUMAN_MAX_AGE_MS);
         for (const t of this.ports.store.openThreads()) {
+            const idleAt = this.idleSince.get(t.meshId);
+            if (idleAt !== undefined && now - idleAt >= RELAY_IDLE_CLOSE_GRACE_MS && !this.batches.has(t.meshId)) {
+                this.idleSince.delete(t.meshId);
+                this.ports.store.closeThread(t.meshId, now);
+                continue;
+            }
             const slug = this.ports.projectSlug(t.meshId);
             if (slug === null) {
                 this.ports.store.closeThread(t.meshId, now);
@@ -376,7 +385,8 @@ export class AssistantRelay {
         this.dropBatch(meshId);
         const w = this.ports.meshWork(meshId);
         const idle = !!w && w.activeMissions === 0 && w.pending + w.assigned === 0;
-        if (idle) this.ports.store.closeThread(meshId, this.clock.now());
+        if (idle) this.idleSince.set(meshId, this.clock.now());
+        else this.idleSince.delete(meshId);
         this.queue.push({
             kind: 'relay', meshId, coordinatorSessionId: b.coordinatorSessionId, attemptIds: b.attemptIds,
             outcome: b.outcome, committedAt: b.lastCommitAt, idle,

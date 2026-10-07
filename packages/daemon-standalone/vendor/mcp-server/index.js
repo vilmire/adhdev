@@ -85911,7 +85911,10 @@ ${body}`;
       }
     });
     function isUnmanagedRepoIdentity(repoIdentity) {
-      return !/^[a-z0-9-]+(\.[a-z0-9-]+)+(:\d+)?\/[^/\s]+\/[^\s]+$/i.test(String(repoIdentity ?? "").trim());
+      const id22 = String(repoIdentity ?? "").trim();
+      if (!id22) return true;
+      if (/^test-repo$/i.test(id22) || /^scratch\//i.test(id22) || /^local:/i.test(id22)) return true;
+      return /^(?:\/private)?\/tmp\//.test(id22) || /^\/var\/folders\//.test(id22) || /^[A-Za-z]:[\\/].*[\\/](?:Temp|tmp)[\\/]/i.test(id22);
     }
     function readText3(v) {
       return typeof v === "string" ? v.trim() : "";
@@ -86364,6 +86367,7 @@ ${body}`;
     var RELAY_BODY_MAX_CHARS;
     var RELAY_QUIET_MS;
     var RELAY_MAX_WAIT_MS;
+    var RELAY_IDLE_CLOSE_GRACE_MS;
     var RELAY_PROGRESS_AFTER_MS;
     var RELAY_STALL_AFTER_MS;
     var RELAY_BACKLOG_FOLD_AFTER_MS;
@@ -86378,6 +86382,7 @@ ${body}`;
         RELAY_BODY_MAX_CHARS = 4096;
         RELAY_QUIET_MS = 15e3;
         RELAY_MAX_WAIT_MS = 12e4;
+        RELAY_IDLE_CLOSE_GRACE_MS = 10 * 6e4;
         RELAY_PROGRESS_AFTER_MS = 30 * 6e4;
         RELAY_STALL_AFTER_MS = 30 * 6e4;
         RELAY_BACKLOG_FOLD_AFTER_MS = 24 * 60 * 6e4;
@@ -86416,6 +86421,8 @@ ${body}`;
           }
           clock;
           batches = /* @__PURE__ */ new Map();
+          /** Mesh -> when its last relay found no work left; the thread closes after the grace. */
+          idleSince = /* @__PURE__ */ new Map();
           working = /* @__PURE__ */ new Map();
           // meshId → coordinator working since
           sessionMesh = /* @__PURE__ */ new Map();
@@ -86457,6 +86464,7 @@ ${body}`;
           }
           /** `project_send` accepted: open/refresh the project's thread. */
           openThread(meshId) {
+            this.idleSince.delete(meshId);
             this.ports.store.openThread(meshId, this.clock.now());
             this.stallSent.delete(meshId);
           }
@@ -86508,6 +86516,12 @@ ${body}`;
           tick(now = this.clock.now()) {
             this.pendingHuman = this.pendingHuman.filter((t) => now - t < PENDING_HUMAN_MAX_AGE_MS);
             for (const t of this.ports.store.openThreads()) {
+              const idleAt = this.idleSince.get(t.meshId);
+              if (idleAt !== void 0 && now - idleAt >= RELAY_IDLE_CLOSE_GRACE_MS && !this.batches.has(t.meshId)) {
+                this.idleSince.delete(t.meshId);
+                this.ports.store.closeThread(t.meshId, now);
+                continue;
+              }
               const slug = this.ports.projectSlug(t.meshId);
               if (slug === null) {
                 this.ports.store.closeThread(t.meshId, now);
@@ -86661,7 +86675,8 @@ ${body}`;
             this.dropBatch(meshId);
             const w = this.ports.meshWork(meshId);
             const idle = !!w && w.activeMissions === 0 && w.pending + w.assigned === 0;
-            if (idle) this.ports.store.closeThread(meshId, this.clock.now());
+            if (idle) this.idleSince.set(meshId, this.clock.now());
+            else this.idleSince.delete(meshId);
             this.queue.push({
               kind: "relay",
               meshId,
