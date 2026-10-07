@@ -6,8 +6,9 @@
  */
 import { join } from 'path';
 import { getConfigDir } from './config.js';
-import { mkdirSync, rmSync, statSync, existsSync, readFileSync, writeFileSync, renameSync } from 'fs';
-import type { LocalMeshConfig } from '../repo-mesh-types.js';
+import { mkdirSync, rmSync, statSync, existsSync, readFileSync, writeFileSync, renameSync, copyFileSync } from 'fs';
+import type { LocalMeshConfig, LocalMeshEntry } from '../repo-mesh-types.js';
+import { migratePolicyToSparseOverrides, MESH_POLICY_STORAGE_VERSION } from '../repo-mesh-policy-resolve.js';
 import { normalizeDifficultyBrainMap, DEFAULT_DIFFICULTY_BRAINS, normalizeNodeCapabilitySlots, deriveSlotsFromLegacy, type DifficultyBrainMap, type NodeCapabilitySlot } from '@adhdev/mesh-shared';
 
 // ─── Persistence ────────────────────────────────
@@ -150,7 +151,11 @@ export function loadMeshConfig(options: { persistMigrations?: boolean } = {}): L
             // 2026-08-22 live evidence this module's lock now fixes).
             withMeshConfigWriteLock(() => {
                 const fresh = readMeshConfigFile();
-                if (migrateLoadedMeshConfig(fresh)) saveMeshConfig(fresh);
+                const policyMigrationPending = fresh.meshes.some(meshNeedsPolicyStorageMigration);
+                if (migrateLoadedMeshConfig(fresh)) {
+                    if (policyMigrationPending) backupMeshConfigBeforePolicyMigration();
+                    saveMeshConfig(fresh);
+                }
             });
         } catch {
             // keep the in-memory strip; disk converges on the next mutating op
@@ -194,6 +199,7 @@ function migrateLoadedMeshConfig(config: LocalMeshConfig): boolean {
             delete meshRecord.magiKindPanels;
             changed = true;
         }
+        if (migrateMeshPolicyStorage(mesh)) changed = true;
         if (!mesh || !Array.isArray(mesh.nodes)) continue;
         // Each node's legacy slot derivation uses ITS OWN mesh's presets. Reading a
         // global map here is what let one mesh's model choice leak into another's
@@ -205,6 +211,41 @@ function migrateLoadedMeshConfig(config: LocalMeshConfig): boolean {
         }
     }
     return changed;
+}
+
+/** True when a mesh entry still stores its policy in the pre-sparse (full copy) form. */
+function meshNeedsPolicyStorageMigration(mesh: LocalMeshEntry | undefined): boolean {
+    return !!mesh && typeof mesh === 'object' && mesh.policyStorage !== MESH_POLICY_STORAGE_VERSION;
+}
+
+/**
+ * SPARSE POLICY migration (docs/design/2026-10-07-mesh-workspace-policy.md §A), once per
+ * mesh: the stored policy becomes the owner's overrides only (see
+ * migratePolicyToSparseOverrides for the provenance rule and the one deliberate
+ * behavior change, E2), retired keys are dropped, and `policyStorage: 2` marks it done.
+ * Returns true when the entry was mutated.
+ */
+export function migrateMeshPolicyStorage(mesh: LocalMeshEntry | undefined): boolean {
+    if (!meshNeedsPolicyStorageMigration(mesh)) return false;
+    const entry = mesh as LocalMeshEntry;
+    entry.policy = migratePolicyToSparseOverrides(entry.policy);
+    entry.policyStorage = MESH_POLICY_STORAGE_VERSION;
+    return true;
+}
+
+/**
+ * One backup of meshes.json taken right before the sparse-policy migration first
+ * persists (`meshes.json.bak-policy-sparse`). Never overwritten — the first copy is
+ * the pre-migration file. Best-effort: a failed backup does not block the migration.
+ */
+function backupMeshConfigBeforePolicyMigration(): void {
+    const path = getMeshConfigPath();
+    const backupPath = `${path}.bak-policy-sparse`;
+    try {
+        if (existsSync(path) && !existsSync(backupPath)) copyFileSync(path, backupPath);
+    } catch {
+        // best-effort
+    }
 }
 
 /**

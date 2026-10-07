@@ -3,7 +3,8 @@ import { describe, it, expect } from 'vitest';
 import {
   DEFAULT_MESH_POLICY,
   SILENT_IDLE_PUSH_TTL_MS,
-  mergeAndNormalizePolicy,
+  mergePolicyOverrides,
+  resolveMeshPolicy,
   resolveCoordinatorIdlePushPolicy,
 } from '../../src/repo-mesh-types.js';
 import { resolveMuted } from '../../src/status/builders.js';
@@ -31,25 +32,26 @@ describe('resolveCoordinatorIdlePushPolicy', () => {
   });
 });
 
-describe('mergeAndNormalizePolicy — coordinatorIdlePushPolicy persistence economy', () => {
+describe('sparse policy storage — coordinatorIdlePushPolicy', () => {
   it('drops the field when it normalizes to the default so meshes.json stays untouched', () => {
-    const p = mergeAndNormalizePolicy(undefined, {});
+    const p = mergePolicyOverrides(undefined, {});
     expect('coordinatorIdlePushPolicy' in p).toBe(false);
+    expect(resolveMeshPolicy(p).coordinatorIdlePushPolicy).toBe('always');
   });
 
   it('drops an invalid value (never persists a typo)', () => {
-    const p = mergeAndNormalizePolicy(undefined, { coordinatorIdlePushPolicy: 'bogus' as any });
+    const p = mergePolicyOverrides(undefined, { coordinatorIdlePushPolicy: 'bogus' as any });
     expect('coordinatorIdlePushPolicy' in p).toBe(false);
   });
 
   it('persists the explicit opt-in', () => {
-    const p = mergeAndNormalizePolicy(undefined, { coordinatorIdlePushPolicy: 'auto_silent_on_dispatch' });
+    const p = mergePolicyOverrides(undefined, { coordinatorIdlePushPolicy: 'auto_silent_on_dispatch' });
     expect(p.coordinatorIdlePushPolicy).toBe('auto_silent_on_dispatch');
   });
 
   it("an explicit 'always' patch clears a previously-persisted opt-in", () => {
-    const base = mergeAndNormalizePolicy(undefined, { coordinatorIdlePushPolicy: 'auto_silent_on_dispatch' });
-    const p = mergeAndNormalizePolicy(base, { coordinatorIdlePushPolicy: 'always' });
+    const base = mergePolicyOverrides(undefined, { coordinatorIdlePushPolicy: 'auto_silent_on_dispatch' });
+    const p = mergePolicyOverrides(base, { coordinatorIdlePushPolicy: 'always' });
     expect('coordinatorIdlePushPolicy' in p).toBe(false);
   });
 });

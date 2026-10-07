@@ -188,6 +188,7 @@ describe('mesh-config — legacy providerRoles → slots migration on load', () 
                     name: 'm',
                     repoIdentity: 'id_c',
                     policy: {},
+                    policyStorage: 2,
                     coordinator: {},
                     nodes: [
                         {

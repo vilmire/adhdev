@@ -145,6 +145,11 @@ export { applyInlineMeshBranchConvergence } from './mesh/mesh-branch-convergence
 // mesh-queue-assignment.ts, and direct-dispatch, in mcp-server) must never drift onto
 // separately-reimplemented logic.
 export { isDirtyNode, resolveAutoFastForwardPolicy } from './mesh/mesh-auto-fast-forward.js';
+// Dirty-workspace rule for write dispatches (fixed per node type — docs/design/
+// 2026-10-07-mesh-workspace-policy.md §B). Claim, auto-launch and the mcp-server direct
+// send all decide through this one verdict.
+export { resolveDirtyWriteVerdict, dirtyWriteVerdict, readDirtyWriteGate, readWorktreeNodeBranch, isTaskBoundToWorktree, describeDirtyWriteRefusal, buildBranchContinuationNotice, type DirtyWriteVerdict, type DirtyWriteGate, type DirtyWriteTask } from './mesh/mesh-dirty-write-verdict.js';
+export { countGitWorktreeChanges } from './mesh/mesh-node-identity.js';
 export { buildCompactStaleDirectWorkSummary, buildMeshActiveWork, buildMeshActiveWorkSummary, collectPendingApprovals, classifyStaleDirectForPrune, pruneStaleDirectDispatches, PRUNABLE_ORPHAN_STALE_REASONS } from './mesh/mesh-active-work.js';
 export type { StaleDirectPruneClassification, StaleDirectPruneResult, PruneStaleDirectDispatchesOptions } from './mesh/mesh-active-work.js';
 export type { MeshActiveWorkRecord, MeshActiveWorkStatus, MeshActiveWorkSummary, MeshActiveWorkSource, MeshStaleDirectWorkSummary, MeshPendingApproval } from './mesh/mesh-active-work.js';

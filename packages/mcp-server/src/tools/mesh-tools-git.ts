@@ -318,6 +318,9 @@ export async function meshCheckpoint(
                 outcome: (result as any)?.checkpoint?.status || ((result as any)?.checkpoint?.noop ? 'skipped' : undefined),
                 noop: (result as any)?.checkpoint?.noop === true,
                 reason: (result as any)?.checkpoint?.reason,
+                // B5 signal (docs/design/2026-10-07-mesh-workspace-policy.md): checkpoints
+                // that committed straight to the default branch.
+                ...((result as any)?.checkpoint?.onDefaultBranch === true ? { onDefaultBranch: true } : {}),
             },
         });
     } catch { /* ledger append is best-effort */ }

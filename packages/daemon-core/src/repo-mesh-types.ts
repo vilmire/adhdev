@@ -14,7 +14,8 @@
 
 import type { GitCompactSummary } from './git/git-types.js';
 import type { DifficultyBrainMap } from '@adhdev/mesh-shared';
-import type { RepoMeshPolicy, RepoMeshRelatedRepo, MeshReportedMemberState, RepoMeshNodePolicy } from './repo-mesh-policy.js';
+import type { RepoMeshRelatedRepo, MeshReportedMemberState, RepoMeshNodePolicy } from './repo-mesh-policy.js';
+import type { RepoMeshPolicyOverrides } from './repo-mesh-policy-resolve.js';
 
 // Policy types/defaults, their normalization and the runtime status types live in
 // sibling modules; this module re-exports them so `repo-mesh-types` stays the one
@@ -31,7 +32,14 @@ export interface RepoMesh {
     repoIdentity: string;
     repoRemoteUrl?: string;
     defaultBranch?: string;
-    policy: RepoMeshPolicy;
+    /**
+     * Stored policy OVERRIDES — only the keys the owner set (sparse). Read the
+     * effective value through resolveMeshPolicy(mesh.policy); `key in mesh.policy`
+     * means "explicitly set". Docs: docs/design/2026-10-07-mesh-workspace-policy.md §A.
+     */
+    policy: RepoMeshPolicyOverrides;
+    /** Policy storage format marker; 2 = sparse overrides (set by the load-time migration). */
+    policyStorage?: number;
     coordinator: RepoMeshCoordinatorConfig;
     meshHost?: RepoMeshHostMetadata;
     projectContext: ProjectContextSnapshot;
@@ -244,7 +252,14 @@ export interface LocalMeshEntry {
     repoIdentity: string;
     repoRemoteUrl?: string;
     defaultBranch?: string;
-    policy: RepoMeshPolicy;
+    /**
+     * Stored policy OVERRIDES — only the keys the owner set (sparse). Read the
+     * effective value through resolveMeshPolicy(mesh.policy); `key in mesh.policy`
+     * means "explicitly set". Docs: docs/design/2026-10-07-mesh-workspace-policy.md §A.
+     */
+    policy: RepoMeshPolicyOverrides;
+    /** Policy storage format marker; 2 = sparse overrides (set by the load-time migration). */
+    policyStorage?: number;
     coordinator: RepoMeshCoordinatorConfig;
     meshHost?: RepoMeshHostMetadata;
     nodes: LocalMeshNodeEntry[];

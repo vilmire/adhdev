@@ -4,7 +4,7 @@
  */
 import { normalizeDifficultyBrainMap, DEFAULT_DIFFICULTY_BRAINS, type DifficultyBrainMap } from '@adhdev/mesh-shared';
 import { loadMeshConfig, withMeshConfigWriteLock, saveMeshConfig } from './mesh-config-store.js';
-import { normalizeQuotaRoutingPolicy, mergeAndNormalizePolicy, type LocalMeshConfig, type LocalMeshEntry, type RepoMeshQuotaRoutingPolicy } from '../repo-mesh-types.js';
+import { normalizeQuotaRoutingPolicy, mergePolicyOverrides, type LocalMeshConfig, type LocalMeshEntry, type RepoMeshQuotaRoutingPolicy } from '../repo-mesh-types.js';
 
 /**
  * Resolve which mesh a per-mesh setting applies to when the caller did not name one.
@@ -179,7 +179,7 @@ export function getMeshQuotaRouting(meshId?: string): RepoMeshQuotaRoutingPolicy
  * Replace one mesh's quotaRouting overrides WHOLESALE (the editor pushes the
  * full sub-policy, same contract as setDifficultyBrains). Passing an empty
  * object (or one whose fields all equal the defaults) clears the override
- * entirely — mergeAndNormalizePolicy's persistence economy drops the key, so
+ * entirely — sparse policy storage (normalizePolicyOverrides) drops the key, so
  * readers fall back to DEFAULT_QUOTA_ROUTING_POLICY. Returns the normalized,
  * persisted overrides.
  */
@@ -201,7 +201,8 @@ function setMeshQuotaRoutingUnlocked(input: unknown, meshId?: string): RepoMeshQ
                   + `mesh changes what work that mesh refuses.`,
         );
     }
-    mesh.policy = mergeAndNormalizePolicy(mesh.policy, { quotaRouting: overrides });
+    // `null` clears the override (sparse storage drops an all-default value anyway).
+    mesh.policy = mergePolicyOverrides(mesh.policy, { quotaRouting: overrides ?? null });
     mesh.updatedAt = new Date().toISOString();
     saveMeshConfig(stored);
     return normalizeQuotaRoutingPolicy(overrides) ?? {};

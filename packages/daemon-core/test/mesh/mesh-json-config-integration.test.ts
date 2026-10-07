@@ -25,7 +25,7 @@ import {
     serializeMeshJsonConfigScaffold,
 } from '../../src/config/mesh-json-config.js';
 import { buildCoordinatorSystemPrompt } from '../../src/mesh/coordinator-prompt.js';
-import { mergeAndNormalizePolicy } from '../../src/repo-mesh-types.js';
+import { mergePolicyOverrides } from '../../src/repo-mesh-types.js';
 
 const tmpDirs: string[] = [];
 function workspaceWith(meshJson: unknown): string {
@@ -40,7 +40,7 @@ function localMesh(policyPatch?: Record<string, unknown>, coordinator?: Record<s
         id: 'mesh_int',
         name: 'ADHDev',
         repoIdentity: 'github.com/acme/adhdev',
-        policy: mergeAndNormalizePolicy(undefined, policyPatch),
+        policy: mergePolicyOverrides(undefined, policyPatch),
         coordinator: coordinator || {},
         nodes: [{ id: 'node_1', workspace: '/repo', daemonId: 'daemon_1', userOverrides: {}, policy: {} }],
         createdAt: '2026-01-01T00:00:00Z',

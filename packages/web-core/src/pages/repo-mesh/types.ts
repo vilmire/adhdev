@@ -28,7 +28,10 @@ export interface MeshEntry {
     repoIdentity: string
     repoRemoteUrl?: string
     defaultBranch?: string
+    /** Stored policy OVERRIDES — only the keys the owner set (daemon sparse storage). */
     policy?: Record<string, any>
+    /** What every policy key resolves to (daemon resolveMeshPolicy). Absent from older daemons. */
+    effectivePolicy?: Record<string, any>
     nodes: MeshNode[]
     createdAt: string
     updatedAt: string
@@ -123,17 +126,6 @@ export function strategyToDistribution(
     return 'in_order'
 }
 
-export const DEFAULT_MESH_POLICY: Record<string, any> = {
-    requirePreTaskCheckpoint: false,
-    requirePostTaskCheckpoint: true,
-    requireApprovalForPush: true,
-    allowAutoPublishSubmoduleMainCommits: false,
-    dirtyWorkspaceBehavior: 'warn',
-    maxParallelTasks: 2,
-    schedulingStrategy: 'first_eligible',
-    sessionCleanupOnNodeRemove: 'preserve',
-}
-
 // Mirror of daemon-core repo-mesh-types MESH_MAX_PARALLEL_TASKS_MIN/MAX. The
 // daemon clamps to this range in resolveMaxParallelTasks; the UI clamps to the
 // same bounds so the input can never propose a value the daemon would silently
@@ -141,8 +133,21 @@ export const DEFAULT_MESH_POLICY: Record<string, any> = {
 export const MESH_MAX_PARALLEL_TASKS_MIN = 1
 export const MESH_MAX_PARALLEL_TASKS_MAX = 64
 
+/**
+ * The EFFECTIVE mesh policy — what each key resolves to on the daemon. The daemon
+ * ships it as `effectivePolicy` next to the stored overrides (`policy`), so the
+ * dashboard keeps no copy of the defaults (a copy drifted: it said maxParallelTasks 2
+ * while the daemon resolved 64). An older daemon sends no `effectivePolicy`; its
+ * `policy` is then a full stored copy, which is the best available answer.
+ */
 export function readMeshPolicy(mesh: MeshEntry | null): Record<string, any> {
-    return { ...DEFAULT_MESH_POLICY, ...(mesh?.policy || {}) }
+    return { ...(mesh?.effectivePolicy || mesh?.policy || {}) }
+}
+
+/** True when the owner explicitly SET this policy key (it is in the stored overrides). */
+export function isMeshPolicyKeySet(mesh: MeshEntry | null, key: string): boolean {
+    const overrides = mesh?.policy
+    return !!overrides && typeof overrides === 'object' && Object.prototype.hasOwnProperty.call(overrides, key)
 }
 
 // Feature flags shape used by MeshListView

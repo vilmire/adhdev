@@ -13,7 +13,7 @@ import { notifyMeshCoordinator } from '../mesh/mesh-events.js';
 import { buildRefineJobKey } from './router-refine-jobs.js';
 import { probeRefineBaseCas, describeRefineBaseCasStage, buildRefineBaseCasBlockedResult } from '../mesh/mesh-refine-base-cas.js';
 import { gitChildEnv } from '../git/git-locale.js';
-import { DEFAULT_MESH_POLICY } from '../repo-mesh-types.js';
+import { resolveMeshPolicy } from '../repo-mesh-types.js';
 
 /**
  * DS3: after a successful Refinery push advanced origin/<baseBranch>, bring the
@@ -315,7 +315,7 @@ export async function runRefineMergeAndFinalizeLocked(self: DaemonCommandRouter,
             // destructive worktree/branch cleanup once the push is proven — a push failure
             // must leave the worktree + branch ref intact so a retry can re-push without
             // reconstructing anything, and the batch must NOT count the node as merged.
-            const requireApprovalForPush: boolean = (mesh as any)?.policy?.requireApprovalForPush ?? DEFAULT_MESH_POLICY.requireApprovalForPush;
+            const requireApprovalForPush: boolean = resolveMeshPolicy((mesh as any)?.policy).requireApprovalForPush;
 
             let pushResult: Record<string, unknown> | undefined;
             if (!requireApprovalForPush) {
@@ -435,7 +435,8 @@ export async function runRefineMergeAndFinalizeLocked(self: DaemonCommandRouter,
             // manual mesh_remove_node (which omits the key) succeeded on the identical
             // code path. Omitting restores that default; an explicitly configured
             // policy (including an explicit 'preserve') is still honored verbatim.
-            const explicitRefineSessionCleanupPolicy = mesh?.policy?.sessionCleanupOnNodeRemove;
+            // Sparse policy storage: the key is present only when the owner set it.
+            const explicitRefineSessionCleanupPolicy = resolveMeshPolicy(mesh?.policy).sessionCleanupOnNodeRemove;
             const refineSessionCleanupMode = explicitRefineSessionCleanupPolicy
                 ? self.normalizeMeshSessionCleanupMode(explicitRefineSessionCleanupPolicy)
                 : undefined;
@@ -476,8 +477,10 @@ export async function runRefineMergeAndFinalizeLocked(self: DaemonCommandRouter,
                 ...(refineSessionIds && refineSessionIds.length > 0 ? { sessionIds: refineSessionIds } : {}),
                 inlineMesh: args?.inlineMesh,
                 // REFINE-CLEANUP: refine reaches cleanup only AFTER a verified merge AND a
-                // successful push (DS1), so any residual worktree dirtiness here is
-                // incidental (e.g. a bootstrap lockfile rewrite) — never unmerged work.
+                // successful push (DS1), and the branch_worktree_dirty pre-gate refused any
+                // uncommitted work BEFORE validation — so residual worktree dirtiness here
+                // was created after validation (e.g. a bootstrap lockfile rewrite), never
+                // unmerged work.
                 // `force` sets requireClean=false so a plain-dirty worktree no longer aborts
                 // removal with merged_cleanup_failed. Branch-ref deletion still keys off
                 // mergeConvergence (NOT the force flag), so no merged work can be lost.

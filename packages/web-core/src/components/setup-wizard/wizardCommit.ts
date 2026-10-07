@@ -39,13 +39,11 @@ export interface WizardPolicyCommitOptions {
     /** Mesh host daemon — every mesh write routes here. */
     targetDaemonId: string
     meshId: string
-    /** Current persisted policy (readMeshPolicy output) — the patch merges over it. */
-    currentPolicy: Record<string, any>
     /** Step 2: node id → capability slots. Only staged nodes are written. */
     slotsByNodeId?: Record<string, NodeCapabilitySlot[]>
     /** Step 3: 2-mode distribution façade; mapped to the raw strategy on write. */
     distribution?: MeshDistribution | null
-    /** Step 5: approval policy keys (checkpoint/push/dirty-workspace flags). */
+    /** Step 5: approval policy keys (e.g. requireApprovalForPush). */
     approvalPatch?: Record<string, unknown> | null
     /** Step 4: quota-routing overrides (`{}` clears every override). */
     quotaRouting?: RepoMeshQuotaRoutingPolicy | null
@@ -89,14 +87,14 @@ export async function runWizardPolicyCommit(opts: WizardPolicyCommitOptions): Pr
         if (allOk) applied.push('slots')
     }
 
-    // 2. Mesh policy patch — scheduling strategy + approval flags in ONE write,
-    //    merged over the current policy exactly like MeshDetailView's onUpdatePolicy.
+    // 2. Mesh policy patch — scheduling strategy + approval flags in ONE write. Only
+    //    the changed keys are sent (the daemon merges them into the stored overrides),
+    //    exactly like MeshDetailView's onUpdatePolicy.
     const policyPatch: Record<string, unknown> = { ...(opts.approvalPatch || {}) }
     if (opts.distribution) policyPatch.schedulingStrategy = distributionToStrategy(opts.distribution)
     if (Object.keys(policyPatch).length > 0) {
-        const nextPolicy = { ...(opts.currentPolicy || {}), ...policyPatch }
         const ok = await run('policy', undefined, () =>
-            sendCommand(targetDaemonId, 'update_mesh', { meshId, policy: nextPolicy }),
+            sendCommand(targetDaemonId, 'update_mesh', { meshId, policy: policyPatch }),
         'Policy update failed')
         if (ok) applied.push('policy')
     }

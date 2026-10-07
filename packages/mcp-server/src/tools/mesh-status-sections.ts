@@ -25,7 +25,7 @@ import {
 import { buildNodeCapabilityExposure, getNodeLaunchReadiness } from './mesh-tools-internal-core.js';
 import { buildNodeMachineIdentity, readNodeDaemonId, readNodeMachineId } from './mesh-node-identity.js';
 import type { MeshContext } from './mesh-tools-internal.js';
-import { DEFAULT_MESH_POLICY } from '@adhdev/daemon-core';
+import { normalizePolicyOverrides, resolveMeshPolicy } from '@adhdev/daemon-core';
 import type { LocalMeshNodeEntry } from '@adhdev/daemon-core';
 import { compactDaemonMachine, compactDaemonQuotaSnapshots, dedupeCompactNodeGitFields, dedupeProviderCapabilityTags } from './mesh-compact.js';
 import { applyHeldNodeGitToEntry } from './mesh-status-held-git.js';
@@ -564,26 +564,33 @@ export function compactStatusNodes(results: StatusNodeEntry[], includeSessions: 
     return { nodes: out, stubbedNodeCount, foldedNodesSummary };
 }
 
-/** The mesh policy as mesh_status reports it (compact: only keys that differ from the defaults). */
+/**
+ * The mesh policy as mesh_status reports it. Compact: the keys the owner actually SET
+ * (policy storage is sparse — daemon-core normalizePolicyOverrides); verbose: the
+ * effective policy every key resolves to (resolveMeshPolicy).
+ */
 export function statusPolicyForResponse(meshPolicy: unknown, compact: boolean): Record<string, unknown> {
-    const mesh = { policy: meshPolicy };
-// MISSION-STATUS-TASK-WARNING-sibling MESH-CAP-SURFACE-REMOVAL: mesh.policy is
-// spread minus maxParallelTasks, and the mesh-level scheduling rollup drops the
-// global-cap numbers (maxParallelTasks/maxReadonlyParallelTasks/activeWriteAssigned/
-// activeReadonlyAssigned/globalWriteCapReached/globalReadonlyCapReached). Real
-// concurrency is governed per-node/per-slot (nodes[].scheduling.providerRoles /
-// capReasons, still present below) — the global number does not represent actual
-// capacity and misleads a coordinator into narrating "N of M slots free" from it.
-// Exposure-only: buildMeshSchedulingRuntime still computes these internally for
-// maybeAutoLaunchOneQueueSession's own gating; only the response surface changed.
-const { maxParallelTasks: _omitPolicyMaxParallelTasks, ...policyForResponse } = (mesh.policy || {}) as unknown as Record<string, unknown>;
-// Compact: only the policy keys that differ from the defaults (DEFAULT_MESH_POLICY)
-// — the rest is the same static block on every poll. Verbose: the full policy.
-const policyOverrides: Record<string, unknown> = {};
-for (const [key, value] of Object.entries(policyForResponse)) {
-    if (JSON.stringify(value) !== JSON.stringify((DEFAULT_MESH_POLICY as unknown as Record<string, unknown>)[key])) policyOverrides[key] = value;
-}
-    return compact ? policyOverrides : policyForResponse;
+    let source: Record<string, unknown>;
+    if (compact) {
+        try {
+            source = normalizePolicyOverrides(meshPolicy) as Record<string, unknown>;
+        } catch {
+            source = { ...((meshPolicy && typeof meshPolicy === 'object') ? meshPolicy as Record<string, unknown> : {}) };
+        }
+    } else {
+        source = resolveMeshPolicy(meshPolicy) as unknown as Record<string, unknown>;
+    }
+    // MISSION-STATUS-TASK-WARNING-sibling MESH-CAP-SURFACE-REMOVAL: the policy is
+    // reported minus maxParallelTasks, and the mesh-level scheduling rollup drops the
+    // global-cap numbers (maxParallelTasks/maxReadonlyParallelTasks/activeWriteAssigned/
+    // activeReadonlyAssigned/globalWriteCapReached/globalReadonlyCapReached). Real
+    // concurrency is governed per-node/per-slot (nodes[].scheduling.providerRoles /
+    // capReasons, still present below) — the global number does not represent actual
+    // capacity and misleads a coordinator into narrating "N of M slots free" from it.
+    // Exposure-only: buildMeshSchedulingRuntime still computes these internally for
+    // maybeAutoLaunchOneQueueSession's own gating; only the response surface changed.
+    const { maxParallelTasks: _omitPolicyMaxParallelTasks, ...policyForResponse } = source;
+    return policyForResponse;
 }
 
 /** Missions section (compact: byte-bounded live detail + history fold; verbose: full rows + stats). */

@@ -17,8 +17,10 @@ describe('buildMeshSchedulingRuntime', () => {
         const rt = buildMeshSchedulingRuntime({ policy: {}, nodes: [] }, []);
         expect(rt.strategy).toBe('first_eligible');
         // Mesh-level cap defaults high (real limits are per node/slot); see 729a2bf6.
-        expect(rt.maxParallelTasks).toBe(200);
-        expect(rt.maxReadonlyParallelTasks).toBe(400); // max(2, 200*2)
+        // The default (200) goes through the same clamp as a stored value → 64, so an
+        // unset cap and a stored default resolve identically (sparse policy storage).
+        expect(rt.maxParallelTasks).toBe(64);
+        expect(rt.maxReadonlyParallelTasks).toBe(128); // max(2, 64*2)
         expect(rt.activeWriteAssigned).toBe(0);
         expect(rt.globalWriteCapReached).toBe(false);
     });
@@ -84,6 +86,6 @@ describe('buildMeshSchedulingRuntime', () => {
     it('is empty-safe for missing mesh/queue', () => {
         const rt = buildMeshSchedulingRuntime(null, []);
         expect(rt.nodes).toEqual([]);
-        expect(rt.maxParallelTasks).toBe(200);
+        expect(rt.maxParallelTasks).toBe(64);
     });
 });

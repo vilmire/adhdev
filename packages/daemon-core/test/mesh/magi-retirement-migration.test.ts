@@ -25,7 +25,7 @@ import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 import { tableColumns } from '../../src/mesh/mesh-runtime-store-schema.js';
 import { upsertMeshMission, getMeshMissions } from '../../src/mesh/mesh-missions.js';
 import { listMeshes } from '../../src/config/mesh-config.js';
-import { mergeAndNormalizePolicy } from '../../src/repo-mesh-types.js';
+import { normalizePolicyOverrides, resolveMeshPolicy } from '../../src/repo-mesh-types.js';
 
 afterEach(() => {
     MeshRuntimeStore.resetForTests();
@@ -93,7 +93,8 @@ describe('MAGI retirement — machine-local config', () => {
     });
 
     it('drops a stored magiSessionCleanup policy key during normalization', () => {
-        const policy = mergeAndNormalizePolicy(undefined, { magiSessionCleanup: 'preserve' } as any);
-        expect(policy).not.toHaveProperty('magiSessionCleanup');
+        const stored = normalizePolicyOverrides({ magiSessionCleanup: 'preserve' } as any);
+        expect(stored).not.toHaveProperty('magiSessionCleanup');
+        expect(resolveMeshPolicy({ magiSessionCleanup: 'preserve' } as any)).not.toHaveProperty('magiSessionCleanup');
     });
 });

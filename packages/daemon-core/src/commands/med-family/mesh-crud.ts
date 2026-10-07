@@ -9,7 +9,23 @@
  * three handler maps merge into meshCrudHandlers below. The inline-cache,
  * session/worktree cleanup and aggregate-status collaborators come from ctx.
  */
-import { DEFAULT_QUOTA_ROUTING_POLICY, resolveQuotaRoutingPolicy } from '../../repo-mesh-types.js';
+import { DEFAULT_QUOTA_ROUTING_POLICY, resolveQuotaRoutingPolicy, resolveMeshPolicy } from '../../repo-mesh-types.js';
+
+/**
+ * A mesh record as the dashboard reads it: `policy` is the stored OVERRIDES (the keys
+ * the owner set — sparse storage) and `effectivePolicy` is what every key resolves to,
+ * so the UI can show "set" vs "default" without keeping its own copy of the defaults
+ * (docs/design/2026-10-07-mesh-workspace-policy.md §A). Never mutates the input (the
+ * inline cache holds the same object).
+ */
+function withEffectivePolicy<T extends { policy?: unknown } | null | undefined>(mesh: T): T {
+    if (!mesh || typeof mesh !== 'object') return mesh;
+    try {
+        return { ...mesh, effectivePolicy: resolveMeshPolicy(mesh.policy) };
+    } catch {
+        return mesh;
+    }
+}
 import { resolveMeshHostStatus } from '../../mesh/mesh-host-ownership.js';
 import { getMachineId } from '../../config/config.js';
 import { hydrateInlineMeshDirectTruth } from '../router.js';
@@ -40,7 +56,7 @@ const meshRecordHandlers: Record<string, MedFamilyHandler> = {
             const meshesWithHost = Array.isArray(meshes)
                 ? meshes.map((mesh: any) => {
                     try {
-                        return { ...mesh, meshHost: resolveMeshHostStatus(mesh, { localDaemonId }) };
+                        return withEffectivePolicy({ ...mesh, meshHost: resolveMeshHostStatus(mesh, { localDaemonId }) });
                     } catch {
                         // Resolver failure on a single mesh must not drop the whole list.
                         return mesh;
@@ -122,7 +138,7 @@ const meshRecordHandlers: Record<string, MedFamilyHandler> = {
                 sourceOfTruth,
             };
         }
-        return { success: true, mesh: meshRecord.mesh, sourceOfTruth };
+        return { success: true, mesh: withEffectivePolicy(meshRecord.mesh), sourceOfTruth };
     },
 
     create_mesh: async (ctx: MedFamilyContext, args: any) => {
@@ -169,7 +185,7 @@ const meshRecordHandlers: Record<string, MedFamilyHandler> = {
                 meshHost,
                 ...(requestedHostDaemonId ? { hostDaemonId: requestedHostDaemonId } : {}),
             });
-            return { success: true, mesh };
+            return { success: true, mesh: withEffectivePolicy(mesh) };
         } catch (e: any) {
             return { success: false, error: e.message };
         }
@@ -251,7 +267,7 @@ const meshRecordHandlers: Record<string, MedFamilyHandler> = {
             if (!mesh) return { success: false, error: 'Mesh not found' };
             ctx.inlineMeshCache.set(meshId, mesh);
             ctx.invalidateAggregateMeshStatus(meshId);
-            return { success: true, mesh };
+            return { success: true, mesh: withEffectivePolicy(mesh) };
         } catch (e: any) {
             return { success: false, error: e.message };
         }

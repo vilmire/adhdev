@@ -292,7 +292,7 @@ describe('planMeshOnboarding', () => {
     // defined worktree behaviour, not a fault. Hard-failing here killed the whole
     // parallel-worktree workflow, because a coordinator's own checkout is dirty most of
     // the time it is working.
-    it('allows cloning from a dirty source under the default policy, with a warning', async () => {
+    it('allows cloning from a dirty source, with a warning', async () => {
         const repo = makeRepo('mesh-plan-dirty');
         writeFileSync(join(repo, 'dirty.txt'), 'uncommitted\n');
         const result = await planMeshOnboarding({
@@ -300,7 +300,6 @@ describe('planMeshOnboarding', () => {
             meshId: 'mesh_dirty',
             operation: 'clone_worktree',
             branch: 'feat/isolated',
-            // policy: {} → dirtyWorkspaceBehavior defaults to 'warn'.
             meshes: [mesh('github.com/acme/project', repo, 'mesh_dirty')],
         });
         expect(result.success).toBe(true);
@@ -314,23 +313,23 @@ describe('planMeshOnboarding', () => {
         expect(result.plan.requiresClean).toBe(false);
     });
 
-    it('★ still blocks a dirty source when the mesh policy says block', async () => {
+    it('★ a retired dirtyWorkspaceBehavior: block left on a stored policy no longer refuses the clone', async () => {
+        // docs/design/2026-10-07-mesh-workspace-policy.md B4: the field is retired; a
+        // dirty source is information (the worktree is built from HEAD), never a refusal.
         const repo = makeRepo('mesh-plan-dirty-block');
         writeFileSync(join(repo, 'dirty.txt'), 'uncommitted\n');
-        const blocking = mesh('github.com/acme/project', repo, 'mesh_dirty_block');
-        (blocking.policy as any).dirtyWorkspaceBehavior = 'block';
+        const legacy = mesh('github.com/acme/project', repo, 'mesh_dirty_block');
+        (legacy.policy as any).dirtyWorkspaceBehavior = 'block';
         const result = await planMeshOnboarding({
             workspace: repo,
             meshId: 'mesh_dirty_block',
             operation: 'clone_worktree',
             branch: 'feat/isolated',
-            meshes: [blocking],
+            meshes: [legacy],
         });
-        expect(result.success).toBe(false);
-        if (result.success) return;
-        expect(result.code).toBe('dirty_workspace');
-        // The refusal names the policy that caused it, so it is actionable.
-        expect(result.action).toMatch(/dirtyWorkspaceBehavior/);
+        expect(result.success).toBe(true);
+        if (!result.success) return;
+        expect(result.warnings?.join(' ')).toMatch(/NOT included/i);
     });
 
     it('emits no warning when the source is clean', async () => {

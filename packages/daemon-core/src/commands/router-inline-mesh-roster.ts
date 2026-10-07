@@ -16,7 +16,7 @@ import { normalizeMeshNodeId, meshNodeIdMatches } from '@adhdev/mesh-shared';
 import { LOG } from '../logging/logger.js';
 import { resolveMeshHostStatus } from '../mesh/mesh-host-ownership.js';
 import type { RepoMeshSpawnedSessionVisibility } from '../repo-mesh-types.js';
-import { mergeAndNormalizePolicy } from '../repo-mesh-types.js';
+import { normalizePolicyOverrides, resolveMeshPolicy } from '../repo-mesh-types.js';
 import { readMeshConfigFromDisk, statMeshConfigFile } from '../config/mesh-config-store.js';
 import * as fs from 'fs';
 import {
@@ -88,7 +88,10 @@ export function syncInlineMeshPoliciesFromDisk(host: InlineMeshRosterHost): void
     for (const [meshId, cached] of host.inlineMeshCache) {
         const diskPolicy = diskPolicyByMeshId.get(meshId);
         if (!diskPolicy) continue;
-        const nextPolicy = mergeAndNormalizePolicy(undefined, diskPolicy);
+        // The cache holds the same sparse overrides meshes.json stores (what
+        // update_mesh writes into it), so readers resolve both identically.
+        let nextPolicy: Record<string, unknown>;
+        try { nextPolicy = normalizePolicyOverrides(diskPolicy); } catch { nextPolicy = diskPolicy; }
         if (JSON.stringify(cached?.policy ?? null) === JSON.stringify(nextPolicy)) continue;
         cached.policy = nextPolicy;
         host.invalidateAggregateMeshStatus(meshId);
@@ -121,7 +124,7 @@ export function getCachedInlineMeshNodesWithVisibility(host: InlineMeshRosterHos
     const out: Array<{ node: any; spawnedSessionVisibility: RepoMeshSpawnedSessionVisibility }> = [];
     for (const mesh of host.inlineMeshCache.values()) {
         const spawnedSessionVisibility: RepoMeshSpawnedSessionVisibility =
-            mesh?.policy?.spawnedSessionVisibility === 'visible' ? 'visible' : 'hidden';
+            resolveMeshPolicy(mesh?.policy).spawnedSessionVisibility === 'visible' ? 'visible' : 'hidden';
         if (Array.isArray(mesh?.nodes)) {
             for (const node of mesh.nodes) {
                 out.push({ node, spawnedSessionVisibility });

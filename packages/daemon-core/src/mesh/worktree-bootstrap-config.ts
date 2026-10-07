@@ -243,6 +243,17 @@ export async function resolveSubmoduleDefaultBranch(opts: {
  * =all would over-suppress).
  */
 function isCleanIgnoringSubmoduleGitlinks(porcelain: string, submodulePaths: Set<string>): boolean {
+    return listPorcelainChangesIgnoringSubmoduleGitlinks(porcelain, submodulePaths).length === 0;
+}
+
+/**
+ * The `git status --porcelain` (v1) lines that are NOT submodule-gitlink pointer moves
+ * — i.e. the real uncommitted work (file edits, untracked files, staged adds, unmerged
+ * paths). Shared by the stale-bootstrap backstop above and the Refinery
+ * `branch_worktree_dirty` gate (mesh-refine-branch-dirty-gate.ts).
+ */
+export function listPorcelainChangesIgnoringSubmoduleGitlinks(porcelain: string, submodulePaths: Set<string>): string[] {
+    const changes: string[] = [];
     const lines = porcelain.split(/\r?\n/).filter(line => line.length > 0);
     for (const line of lines) {
         // Porcelain v1 line: two status chars (XY) + space + path. A submodule gitlink
@@ -253,9 +264,9 @@ function isCleanIgnoringSubmoduleGitlinks(porcelain: string, submodulePaths: Set
         const status = line.slice(0, 2);
         const path = line.slice(3).trim().replace(/\\/g, '/').replace(/\/+$/, '');
         const isGitlinkPointerMove = (status === ' M' || status === 'M ') && submodulePaths.has(path);
-        if (!isGitlinkPointerMove) return false; // any non-gitlink change → dirty
+        if (!isGitlinkPointerMove) changes.push(line); // any non-gitlink change → dirty
     }
-    return true;
+    return changes;
 }
 
 export function isWorktreeBootstrapStaleRunning(

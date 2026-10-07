@@ -21,6 +21,7 @@ import { getMachineId } from '../config/config.js';
 import { listMeshes, getMesh } from '../config/mesh-config.js';
 import { LOG } from '../logging/logger.js';
 import type { LocalMeshEntry } from '../repo-mesh-types.js';
+import { resolveMeshPolicy } from '../repo-mesh-types.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { triggerMeshQueue } from './mesh-events-coordinator.js';
 import { resolveCoordinatorDaemonIds, daemonHostsMesh, resolveCoordinatorSelfIds } from './mesh-reconcile-identity.js';
@@ -196,7 +197,7 @@ export async function runMeshHousekeepingTick(
             };
             for (const { mesh } of hosted) {
                 try {
-                    await runIdleSessionReapPass(reaperDeps, { meshId: mesh.id, policy: getMesh(mesh.id)?.policy, now: nowMs });
+                    await runIdleSessionReapPass(reaperDeps, { meshId: mesh.id, policy: (() => { const m = getMesh(mesh.id); return m ? resolveMeshPolicy(m.policy) : undefined; })(), now: nowMs });
                 } catch (e: any) {
                     LOG.warn('MeshHousekeeping', `Idle session reap failed for mesh ${mesh.id}: ${e?.message || e}`);
                 }

@@ -30,6 +30,7 @@ import { classifyRefineTerminal, refineTerminalNextStep, buildRefineBlockerConte
 import type { WorktreeBootstrapState } from '../mesh/worktree-bootstrap-config.js';
 import { gitChildEnv, GIT_LOCAL_TIMEOUT_MS as REFINE_GIT_LOCAL_TIMEOUT_MS } from '../git/git-locale.js';
 import { readStringValue } from '../mesh/mesh-node-identity.js';
+import { probeBranchWorktreeDirt, buildBranchWorktreeDirtyRefusal, BRANCH_WORKTREE_DIRTY_CODE } from '../mesh/mesh-refine-branch-dirty-gate.js';
 import {
     MeshRefineJobHandle,
     MeshRefineTerminalJob,
@@ -119,6 +120,14 @@ export async function executeMeshRefineNodeSynchronously(self: DaemonCommandRout
             // accept contract untouched.
             const basePreflight = await refineBasePreflightStage(self, ctx);
             if (basePreflight.kind === 'terminal') return basePreflight.result;
+
+            // ★BRANCH-WORKTREE-DIRTY (docs/design/2026-10-07-mesh-workspace-policy.md B2):
+            // refine merges COMMITS but validates the WORKING TREE. Uncommitted work in the
+            // branch worktree would pass validation, miss the merge, and be deleted by the
+            // forced post-merge cleanup — so refuse before anything is validated (or
+            // rebased), and never commit it on the worker's behalf.
+            const branchDirty = await refineBranchWorktreeDirtyStage(self, ctx);
+            if (branchDirty.kind === 'terminal') return branchDirty.result;
 
             // DS2: sync_base runs BEFORE validation. A branch that is behind base — whether
             // strictly behind (fast-forwardable) or DIVERGED (ahead>0 AND behind>0, the
@@ -629,6 +638,49 @@ export async function recordRefineAcceptBaseDivergence(
  * an indeterminate verdict restores exactly today's behaviour rather than
  * inventing a new way for refine to be unavailable.
  */
+/**
+ * Refinery pre-gate `branch_worktree_dirty` — see mesh/mesh-refine-branch-dirty-gate.ts.
+ * Applies to a BRANCH worktree only (a node whose workspace is the base checkout itself
+ * has nothing separate to merge from). Fails open on an uninspectable tree.
+ */
+export async function refineBranchWorktreeDirtyStage(_self: DaemonCommandRouter, ctx: RefineContext): Promise<RefineStageOutcome> {
+    const startedAt = Date.now();
+    const workspace = typeof ctx.node?.workspace === 'string' ? ctx.node.workspace : '';
+    const normalize = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '');
+    if (!workspace || (ctx.repoRoot && normalize(workspace) === normalize(ctx.repoRoot))) {
+        recordMeshRefineStage(ctx.refineStages, 'branch_worktree_clean', 'skipped', startedAt, { reason: 'not_a_branch_worktree' });
+        return { kind: 'continue', ctx };
+    }
+    const verdict = await probeBranchWorktreeDirt(ctx.execFileAsync, workspace, { env: gitChildEnv(), timeoutMs: REFINE_GIT_LOCAL_TIMEOUT_MS });
+    if (verdict.kind === 'clean') {
+        recordMeshRefineStage(ctx.refineStages, 'branch_worktree_clean', 'passed', startedAt, { workspace });
+        return { kind: 'continue', ctx };
+    }
+    if (verdict.kind === 'indeterminate') {
+        recordMeshRefineStage(ctx.refineStages, 'branch_worktree_clean', 'skipped', startedAt, { workspace, reason: verdict.reason });
+        return { kind: 'continue', ctx };
+    }
+    recordMeshRefineStage(ctx.refineStages, 'branch_worktree_clean', 'failed', startedAt, {
+        code: BRANCH_WORKTREE_DIRTY_CODE, workspace, files: verdict.files, fileCount: verdict.fileCount, retryable: true,
+    });
+    LOG.warn('Mesh', `[Refinery] Branch worktree ${workspace} (${ctx.branch}) has ${verdict.fileCount} uncommitted change(s) — `
+        + `blocked node ${ctx.nodeId} before validation (${BRANCH_WORKTREE_DIRTY_CODE}).`);
+    return {
+        kind: 'terminal',
+        result: {
+            ...buildBranchWorktreeDirtyRefusal({
+                meshId: ctx.meshId, nodeId: ctx.nodeId, workspace, branch: ctx.branch, files: verdict.files, fileCount: verdict.fileCount,
+            }),
+            branch: ctx.branch,
+            into: ctx.baseBranch,
+            refineStages: ctx.refineStages,
+            finalBranchConvergenceState: {
+                branch: ctx.branch, baseBranch: ctx.baseBranch, merged: false, removed: false, status: 'blocked_review',
+            },
+        } as CommandRouterResult,
+    };
+}
+
 export async function refineBasePreflightStage(self: DaemonCommandRouter, ctx: RefineContext): Promise<RefineStageOutcome> {
     const startedAt = Date.now();
     let verdict: Awaited<ReturnType<typeof assessRefineAcceptPreflight>>;

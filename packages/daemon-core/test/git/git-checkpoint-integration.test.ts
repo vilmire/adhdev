@@ -110,4 +110,50 @@ describe('git checkpoint integration', () => {
     });
     expect(git(repo, ['log', '-1', '--pretty=%B'])).toBe('add oss submodule');
   });
+
+  // docs/design/2026-10-07-mesh-workspace-policy.md B1: a checkpoint is a user-requested
+  // tool, never refused for its branch — but a commit straight onto the default branch
+  // (or a detached HEAD) is flagged so the coordinator reports it.
+  describe('branch facts (onDefaultBranch / detachedHead)', () => {
+    async function checkpoint(repo: string) {
+      writeFileSync(join(repo, 'README.md'), `initial\n${Math.random()}\n`);
+      const result: any = await handleGitCommand('git_checkpoint', { workspace: repo, message: 'branch facts', includeUntracked: true });
+      expect(result.success).toBe(true);
+      return result.checkpoint;
+    }
+
+    it('flags a checkpoint on the default branch (no origin/HEAD → main) with a warning, and still commits', async () => {
+      const repo = initRepo('checkpoint-default-branch');
+      git(repo, ['branch', '-M', 'main']);
+      const cp = await checkpoint(repo);
+      expect(cp).toMatchObject({ status: 'created', branch: 'main', onDefaultBranch: true });
+      expect(cp.warning).toMatch(/default branch 'main'/);
+    });
+
+    it('a feature branch is not the default branch', async () => {
+      const repo = initRepo('checkpoint-feature-branch');
+      git(repo, ['branch', '-M', 'main']);
+      git(repo, ['checkout', '-q', '-b', 'feat/x']);
+      const cp = await checkpoint(repo);
+      expect(cp).toMatchObject({ status: 'created', branch: 'feat/x', onDefaultBranch: false });
+      expect(cp.warning).toBeUndefined();
+    });
+
+    it('origin/HEAD decides the default branch when present', async () => {
+      const repo = initRepo('checkpoint-origin-head');
+      git(repo, ['branch', '-M', 'trunk']);
+      git(repo, ['update-ref', 'refs/remotes/origin/trunk', 'HEAD']);
+      git(repo, ['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/trunk']);
+      const cp = await checkpoint(repo);
+      expect(cp).toMatchObject({ branch: 'trunk', onDefaultBranch: true });
+    });
+
+    it('flags a detached HEAD', async () => {
+      const repo = initRepo('checkpoint-detached');
+      git(repo, ['checkout', '-q', '--detach', 'HEAD']);
+      const cp = await checkpoint(repo);
+      expect(cp).toMatchObject({ status: 'created', branch: null, detachedHead: true });
+      expect(cp.warning).toMatch(/detached/);
+    });
+  });
 });

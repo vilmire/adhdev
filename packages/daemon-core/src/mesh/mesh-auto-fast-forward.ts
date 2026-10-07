@@ -134,9 +134,8 @@ export function __resetIdleAutoFastForwardForTests(): void {
     autoFastForwardWorkspaceLease.clear();
 }
 
-export function isDirtyNode(node: any): boolean {
-    return node?.health === 'dirty' || node?.git?.dirty === true;
-}
+// The dirty predicate lives with the dirty-write verdict (one definition for every gate).
+export { isDirtyNode } from './mesh-dirty-write-verdict.js';
 
 export function resolveAutoFastForwardPolicy(mesh: any): { enabled: boolean; maxBehind?: number; requireCleanSubmodules: boolean; remoteNodes: boolean; mode: 'idle' | 'continuous' } {
     const record = mesh?.policy?.autoFastForward && typeof mesh.policy.autoFastForward === 'object' && !Array.isArray(mesh.policy.autoFastForward)

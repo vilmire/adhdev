@@ -17,7 +17,7 @@ import {
 import { isIdleSessionState, isTerminalSessionStatus } from './mesh-candidacy-predicates.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { type QuotaClaimDrainTrace, logAllQuotaClaimCandidatesBlocked, clearAllQuotaClaimCandidatesBlockedState } from './mesh-queue-observability.js';
-import { resolveNodeSchedulingPriority, resolveDelegatedSessionIdleTtlMinutes } from '../repo-mesh-types.js';
+import { resolveNodeSchedulingPriority, resolveDelegatedSessionIdleTtlMinutes, resolveMeshPolicy } from '../repo-mesh-types.js';
 import { maybeAutoLaunchOneQueueSession } from './mesh-queue-autolaunch.js';
 import { LOG } from '../logging/logger.js';
 import { sweepAutoLaunchOrphanSessions, isAutoLaunchWithinAwaitClaimWindow } from './mesh-autolaunch-integrity.js';
@@ -277,7 +277,7 @@ export async function triggerMeshQueue(components: DaemonComponents, meshId: str
     // AUTOLAUNCH-ORPHAN-SWEEP: run AFTER the drain + auto-launch so it reads post-claim
     // assignment state (a session that just won its claim must not be reported as an orphan).
     sweepAutoLaunchOrphanSessions(components, meshId, {
-        idleTtlMinutes: resolveDelegatedSessionIdleTtlMinutes(mesh.policy?.delegatedSessionIdleTtlMinutes),
+        idleTtlMinutes: resolveDelegatedSessionIdleTtlMinutes(resolveMeshPolicy(mesh.policy).delegatedSessionIdleTtlMinutes),
     });
     // IPC load audit #10: heads-only read (id/status/assignedNodeId/assignedSessionId) — this
     // block never needs payload fields off the full queue entries.

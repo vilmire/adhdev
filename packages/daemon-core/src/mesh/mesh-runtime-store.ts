@@ -653,7 +653,7 @@ export class MeshRuntimeStore {
              * candidates only — a readonly candidate bypasses this gate entirely, same
              * as `nodeConflictAllows` above.
              */
-            nodeGitGate?: { dirty: boolean; staleBehind: boolean; behind?: number; maxBehind?: number };
+            nodeGitGate?: { dirty: boolean; worktreeBranch?: string; nodeId?: string; staleBehind: boolean; behind?: number; maxBehind?: number };
             /** A6-SILENT-REFUSAL: optional sink the claim fills in when it returns null,
              *  naming WHICH predicate refused. See MeshClaimRefusal. Purely diagnostic —
              *  the return contract (`MeshWorkQueueEntry | null`) is unchanged, so every

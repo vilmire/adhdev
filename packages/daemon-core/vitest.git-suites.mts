@@ -36,6 +36,7 @@ export const GIT_HEAVY_SUITES: string[] = [
   'test/commands/mesh-refine-batch.test.ts',
   'test/commands/mesh-refine-no-op-guard.test.ts',
   'test/commands/mesh-refine-validation.test.ts',
+  'test/commands/mesh-refine-branch-dirty-gate.test.ts',
   'test/commands/mesh-session-cleanup.test.ts',
   'test/commands/mesh-status.test.ts',
   'test/commands/mesh-status-node-state.test.ts',

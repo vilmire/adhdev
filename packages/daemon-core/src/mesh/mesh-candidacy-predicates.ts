@@ -32,7 +32,7 @@ import { loadConfig } from '../config/config.js';
 import { buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, getQueue } from './mesh-work-queue.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
 import { daemonIdsEquivalent, sessionIdsEquivalent, isBusyStatus, isIdleSessionState, isTerminalSessionRecordStatus as isTerminalSessionStatus, readText } from '@adhdev/mesh-shared';
-import { isMeshNodeHealthLaunchable } from './mesh-node-identity.js';
+import { isMeshNodeHealthLaunchable, resolveEffectiveMeshNodeHealth } from './mesh-node-identity.js';
 import { shouldDeferDispatchForBootstrap } from './worktree-bootstrap-config.js';
 import { inWindowAutoLaunchSessionIdsForNode } from './mesh-autolaunch-integrity.js';
 import { sessionClaimRefusalReleasesSpawnGate } from './mesh-claim-refusal.js';
@@ -95,7 +95,7 @@ export function nodeHasActiveMeshWork(components: DaemonComponents, meshId: stri
     });
 }
 
-export function isLaunchableNode(node: any): boolean {
+export function isLaunchableNode(node: any, opts: { tolerateDirty?: boolean } = {}): boolean {
     if (!node || node.status === 'disabled' || node.status === 'removed') return false;
     // BOOTSTRAP-POLICY-CONSISTENCY (Fix B, rc.15 orchestration RCA): a worktree node whose
     // bootstrap is still 'running' must be excluded from auto-launch candidacy, not merely
@@ -113,6 +113,11 @@ export function isLaunchableNode(node: any): boolean {
     // Delegate the health gate to the shared resolver so the auto-launch gate and the
     // other launch-readiness readers agree on exactly what "launchable health" means (online /
     // unknown / absent pass; degraded / offline / dirty / wrong_branch are blocked).
+    // `tolerateDirty`: the caller already decided the dirty tree through the dirty-write
+    // verdict (mesh-dirty-write-verdict.ts — a branch continuation or a readonly task),
+    // so a 'dirty' health is then not a health failure. Every other non-launchable
+    // health stays blocked.
+    if (opts.tolerateDirty && resolveEffectiveMeshNodeHealth(node) === 'dirty') return true;
     return isMeshNodeHealthLaunchable(node);
 }
 

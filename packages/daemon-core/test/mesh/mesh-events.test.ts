@@ -1328,6 +1328,59 @@ const { emit } = components
     }
   })
 
+  it('auto-launch screens a dirty WORKTREE through for a task bound to its branch (branch continuation), but not an unbound one', async () => {
+    // docs/design/2026-10-07-mesh-workspace-policy.md §B: the fixed per-node-type
+    // rule — a dirty worktree's leftovers are its own branch's unfinished work, so a
+    // follow-up pinned to worktree=<branch> proceeds; unrelated work stays out.
+    const node = {
+      id: 'node_wt_1', workspace: '/repo/worktree-a', isLocalWorktree: true, worktreeBranch: 'feat/a',
+      health: 'dirty', git: { dirty: true, modified: 1 }, policy: { providerPriority: ['hermes-cli'] },
+    }
+    const boundMesh = `mesh_auto_launch_dirty_wt_bound_${Date.now()}`
+    const unboundMesh = `mesh_auto_launch_dirty_wt_unbound_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({ id: boundMesh, nodes: [node], policy: { maxParallelTasks: 2 } })
+      enqueueTask(boundMesh, 'fix review findings', { difficulty: 'medium', requiredTags: ['worktree=feat/a'] })
+      const bound = createQueueAutoLaunchComponents()
+      await triggerMeshQueue(bound.components, boundMesh)
+      // Past the dirty gate AND the health gate (the 'dirty' health is the verdict's
+      // call); whatever stops it later (this fixture's provider probe) is not the tree.
+      const boundReason = String(getQueue(boundMesh)[0].autoLaunch?.reason ?? '')
+      expect(boundReason).not.toBe('dirty_workspace')
+      expect(boundReason).not.toBe('node_health_not_launchable')
+
+      meshConfigMocks.getMesh.mockReturnValue({ id: unboundMesh, nodes: [node], policy: { maxParallelTasks: 2 } })
+      enqueueTask(unboundMesh, 'unrelated work', { difficulty: 'medium' })
+      const unbound = createQueueAutoLaunchComponents()
+      await triggerMeshQueue(unbound.components, unboundMesh)
+      expect(unbound.cliManager.handleCliCommand).not.toHaveBeenCalledWith('launch_cli', expect.anything())
+      expect(getQueue(unboundMesh)[0].autoLaunch?.reason).toBe('dirty_workspace')
+    } finally {
+      cleanupMeshFiles(boundMesh)
+      cleanupMeshFiles(unboundMesh)
+    }
+  })
+
+  it('a retired dirtyWorkspaceBehavior left on the mesh policy changes nothing (dirty base still skipped)', async () => {
+    const meshId = `mesh_auto_launch_dirty_retired_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a', health: 'dirty', git: { dirty: true }, policy: { providerPriority: ['hermes-cli'] } }],
+        policy: { maxParallelTasks: 2, dirtyWorkspaceBehavior: 'warn' },
+      })
+      enqueueTask(meshId, 'pending task', { difficulty: 'medium' })
+      const { components, cliManager } = createQueueAutoLaunchComponents()
+
+      await triggerMeshQueue(components, meshId)
+
+      expect(cliManager.handleCliCommand).not.toHaveBeenCalledWith('launch_cli', expect.anything())
+      expect(getQueue(meshId)[0].autoLaunch?.reason).toBe('dirty_workspace')
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
   it('does not auto-launch another session for a node that already has an active assigned task', async () => {
     const meshId = `mesh_auto_launch_active_${Date.now()}`
     try {

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { resolveMeshPolicy } from '../../src/repo-mesh-types.js'
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { cleanupTempDir, resetMeshRuntimeStore } from '../helpers/temp-cleanup.js'
 import { tmpdir } from 'node:os'
@@ -50,7 +51,9 @@ describe('meshes.json policy resync into the inline mesh cache', () => {
       const { createMesh, addNode, getMesh } = await import('../../src/config/mesh-config.js')
 
       const mesh = createMesh({ name: 'Resync', repoIdentity: 'github.com/acme/resync', defaultBranch: 'main' })
-      expect(mesh.policy.requireApprovalForPush).toBe(true)
+      expect(resolveMeshPolicy(mesh.policy).requireApprovalForPush).toBe(true)
+      // Sparse storage: an untouched default is not written to meshes.json.
+      expect('requireApprovalForPush' in mesh.policy).toBe(false)
       addNode(mesh.id, { workspace: '/tmp/resync-workspace', repoRoot: '/tmp/resync-workspace' })
 
       const { router } = createRouter()
@@ -58,7 +61,7 @@ describe('meshes.json policy resync into the inline mesh cache', () => {
       router.getCachedInlineMesh(mesh.id, getMesh(mesh.id))
       // First command read records the meshes.json baseline (no apply yet).
       const baseline = await router.getMeshForCommand(mesh.id)
-      expect(baseline?.mesh?.policy?.requireApprovalForPush).toBe(true)
+      expect(resolveMeshPolicy(baseline?.mesh?.policy).requireApprovalForPush).toBe(true)
       // Marker proving the resync touches ONLY the policy block: in-memory node
       // truth the disk copy does not have must survive the reload.
       baseline.mesh.nodes[0].liveTruthMarker = 'keep-me'
@@ -79,8 +82,8 @@ describe('meshes.json policy resync into the inline mesh cache', () => {
 
       await sleep(300) // > MESH_POLICY_DISK_SYNC_THROTTLE_MS
       const after = await router.getMeshForCommand(mesh.id)
-      expect(after?.mesh?.policy?.requireApprovalForPush).toBe(false)
-      expect(after?.mesh?.policy?.maxTaskRetries).toBe(3)
+      expect(resolveMeshPolicy(after?.mesh?.policy).requireApprovalForPush).toBe(false)
+      expect(resolveMeshPolicy(after?.mesh?.policy).maxTaskRetries).toBe(3)
       // Policy-only reload: the in-memory node truth was NOT overwritten by the
       // disk copy (the daemon's in-flight writes live on the node entries).
       expect(after?.mesh?.nodes?.[0]?.liveTruthMarker).toBe('keep-me')
@@ -106,7 +109,7 @@ describe('meshes.json policy resync into the inline mesh cache', () => {
       const { router } = createRouter()
       router.getCachedInlineMesh(mesh.id, getMesh(mesh.id))
       const baseline = await router.getMeshForCommand(mesh.id)
-      expect(baseline?.mesh?.policy?.requireApprovalForPush).toBe(true)
+      expect(resolveMeshPolicy(baseline?.mesh?.policy).requireApprovalForPush).toBe(true)
 
       // Torn write: the file changed but is not valid JSON.
       const configPath = join(configDir, 'meshes.json')
@@ -116,7 +119,7 @@ describe('meshes.json policy resync into the inline mesh cache', () => {
       const duringBroken = await router.getMeshForCommand(mesh.id)
       // Safe direction: the in-memory (restrictive) policy is kept, not dropped
       // to defaults.
-      expect(duringBroken?.mesh?.policy?.requireApprovalForPush).toBe(true)
+      expect(resolveMeshPolicy(duringBroken?.mesh?.policy).requireApprovalForPush).toBe(true)
 
       // Repaired file with the edited flag: resync resumes. (getMesh now reads
       // the broken file, so rebuild the document from the cached mesh.)
@@ -127,7 +130,7 @@ describe('meshes.json policy resync into the inline mesh cache', () => {
 
       await sleep(300)
       const afterRepair = await router.getMeshForCommand(mesh.id)
-      expect(afterRepair?.mesh?.policy?.requireApprovalForPush).toBe(false)
+      expect(resolveMeshPolicy(afterRepair?.mesh?.policy).requireApprovalForPush).toBe(false)
     } finally {
       if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
       else process.env.ADHDEV_CONFIG_DIR = previousConfigDir

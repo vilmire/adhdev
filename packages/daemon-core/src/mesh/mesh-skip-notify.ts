@@ -514,8 +514,8 @@ function actionableSkipGuidance(
         nextAction: "Check the node's providerPriority policy and that the required CLI provider is installed and enabled on that machine. Quota-gated candidates use a separate, self-resolving reason and are not proof of this configuration blocker.",
     };
     if (reason === 'dirty_workspace') return {
-        summary: "the node's workspace is dirty, so auto-launch is blocked to avoid clobbering uncommitted changes",
-        nextAction: "Clean or commit the node's working tree (or fast-forward it); the task will then auto-assign.",
+        summary: "the node's workspace has uncommitted changes, so a write task is not launched onto it (a dirty base node holds the user's own edits; a dirty worktree only takes tasks bound to its own branch)",
+        nextAction: "Base node: have the user commit or clean up their edits — the task then auto-assigns. Worktree node: if this task continues that branch, pin it with required_tags [\"worktree=<branch>\"] (or target the node); otherwise commit or clean that worktree first.",
     };
     if (reason === SPAWN_CAP_PARK_REASON) {
         // AUTOLAUNCH-SPAWN-CAP (P3), branched by cause (SPAWN-CAP-TRANSPORT-AWARE). The park
