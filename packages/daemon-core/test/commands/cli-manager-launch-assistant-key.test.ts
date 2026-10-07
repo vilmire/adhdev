@@ -80,3 +80,15 @@ describe('launch_cli assistantSessionKey', () => {
     expect(startSession).not.toHaveBeenCalled()
   })
 })
+
+describe('user-launch trust store HOME', () => {
+  // The assistant's agy runs with HOME = its private home; its folder-trust grant must
+  // land in the settings copy that agy reads there, never in the real ~/.gemini.
+  it('follows the launch HOME override, else the daemon HOME', async () => {
+    const { userLaunchTrustStoreHome } = await import('../../src/commands/cli-manager-launch.js')
+    const { homedir } = await import('os')
+    expect(userLaunchTrustStoreHome({ HOME: '/cfg/assistant-home/antigravity-cli' })).toBe('/cfg/assistant-home/antigravity-cli')
+    expect(userLaunchTrustStoreHome({ HOME: '  ' })).toBe(homedir())
+    expect(userLaunchTrustStoreHome(undefined)).toBe(homedir())
+  })
+})

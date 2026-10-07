@@ -9,7 +9,8 @@
  * (`buildAssistantSystemPrompt`: rules, project table, memory snapshot, skill
  * index, safety tail) injected through the coordinator's prompt-agnostic
  * `applyMeshCoordinatorSystemPromptInjection` (oversize fallbacks included) →
- * `launch_cli` in `<configDir>/assistant/` with `settings {assistant:true,
+ * (a home-rooted CLI first gets its private HOME materialized, see
+ * `AssistantPrivateHome`) → `launch_cli` in `<configDir>/assistant/` with `settings {assistant:true,
  * <approval>}` (`launch_cli` stamps `ADHDEV_ASSISTANT_SESSION_ID`) →
  * `AssistantRegistry.bindSession` → `relay.armRestartNote(previous)`. The
  * session id is minted HERE, before planning, and handed to `launch_cli` as
@@ -45,6 +46,7 @@ import {
     buildMeshCoordinatorMcpServerEntry, getMcpServersKey, isSupportedMeshCoordinatorConfigFormat,
     parseMeshCoordinatorMcpConfig, serializeMeshCoordinatorMcpConfig,
 } from '../../mesh/mesh-coordinator-config.js';
+import { materializePrivateHome } from '../../mesh/worker-private-home.js';
 import { getAssistantRegistry } from '../../assistant/assistant-registry.js';
 import { getAssistantServices } from '../../assistant/assistant-services.js';
 import { buildAssistantSystemPrompt, type AssistantPromptProject } from '../../assistant/assistant-prompt.js';
@@ -135,7 +137,10 @@ const launchAssistant: HighFamilyHandler = async (ctx, args) => {
     const workspace = assistantWorkspaceDir(configDir);
     const setup = resolveMeshCoordinatorSetup({ provider, cliType, meshId: '', workspace, toolset: { kind: 'assistant' } });
     const assistantSessionKey = randomUUID();
-    const mcp = planAssistantMcp({ cliType, setup, workspace, configDir, sessionId: assistantSessionKey });
+    const mcp = planAssistantMcp({
+        cliType, setup, workspace, configDir, sessionId: assistantSessionKey,
+        declaredMcpConfigPath: provider?.meshCoordinator?.mcpConfig?.path,
+    });
     if (!mcp.ok) return fail(mcp.code, mcp.error, { cliType });
     const approval = resolveAssistantApprovalSettings(provider, args?.autoApproveMode);
     if (!approval.ok) return fail(approval.code, approval.error, { cliType });
@@ -153,13 +158,31 @@ const launchAssistant: HighFamilyHandler = async (ctx, args) => {
 
     try {
         mkdirSync(workspace, { recursive: true, mode: 0o700 });
+    } catch (e) {
+        return fail('assistant_config_write_failed', `could not prepare the assistant workspace: ${(e as Error)?.message ?? e}`, { cliType, workspace });
+    }
+    if (mcp.privateHome) {
+        // Home-rooted CLI (antigravity): the worker private-HOME mechanism at a
+        // stable per-assistant dir, re-prepared every launch. Fail closed — a
+        // launch without it would read (and need a write to) the person's
+        // global MCP config.
+        try {
+            mkdirSync(dirname(mcp.privateHome.dir), { recursive: true, mode: 0o700 });
+            const prepared = materializePrivateHome(mcp.privateHome.spec, { home: mcp.privateHome.dir, workspace });
+            if (prepared.failed.length) LOG.warn('Assistant', `[${cliType}] private HOME imports failed: ${prepared.failed.join(', ')}`);
+        } catch (e) {
+            return fail('assistant_private_home_failed', `could not prepare the assistant's private HOME: ${(e as Error)?.message ?? e}`, { cliType, workspace });
+        }
+    }
+    try {
         if (mcp.configWrite) writeAssistantMcpConfig(mcp.configWrite);
     } catch (e) {
-        return fail('assistant_config_write_failed', `could not prepare the assistant workspace / MCP config: ${(e as Error)?.message ?? e}`, { cliType, workspace });
+        return fail('assistant_config_write_failed', `could not prepare the assistant MCP config: ${(e as Error)?.message ?? e}`, { cliType, workspace });
     }
 
     const cliArgs: string[] = [];
-    const launchEnv: Record<string, string> = {};
+    // The private HOME env first; the prompt injection may add its own keys.
+    const launchEnv: Record<string, string> = { ...(mcp.privateHome?.env ?? {}) };
     const { applyMeshCoordinatorSystemPromptInjection } = await import('../mesh-coordinator.js');
     const injection = applyMeshCoordinatorSystemPromptInjection(prompt.text, provider?.meshCoordinator?.systemPromptInjection, { cliArgs, launchEnv, workspace, cliType });
     if (injection.error) return fail(injection.errorCode ?? 'assistant_prompt_failed', injection.error, { cliType, workspace });

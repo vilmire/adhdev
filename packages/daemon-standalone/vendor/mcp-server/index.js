@@ -27618,18 +27618,18 @@ ${renderWorkerProtocolFooter2(input)}`;
       }
       if (cwd && cwd !== ws) bases.push(cwd);
       for (const base of bases) {
-        for (const relative11 of MESH_JSON_CONFIG_LOCATIONS) {
-          const configPath = (0, import_path.join)(base, relative11);
+        for (const relative12 of MESH_JSON_CONFIG_LOCATIONS) {
+          const configPath = (0, import_path.join)(base, relative12);
           if (!(0, import_fs.existsSync)(configPath)) continue;
           try {
             const parsed = parseConfigText(configPath, (0, import_fs.readFileSync)(configPath, "utf-8"));
             const result = normalizeRepoMeshDeclarativeConfig(parsed);
             if (!result.valid || !result.config) {
-              return { source: relative11, sourceType: "invalid", path: configPath, error: result.errors.join("; ") };
+              return { source: relative12, sourceType: "invalid", path: configPath, error: result.errors.join("; ") };
             }
-            return { config: result.config, source: relative11, sourceType: "repo_file", path: configPath };
+            return { config: result.config, source: relative12, sourceType: "repo_file", path: configPath };
           } catch (error) {
-            return { source: relative11, sourceType: "invalid", path: configPath, error: error?.message || String(error) };
+            return { source: relative12, sourceType: "invalid", path: configPath, error: error?.message || String(error) };
           }
         }
       }
@@ -27874,8 +27874,8 @@ ${renderWorkerProtocolFooter2(input)}`;
       return String(value).replace(/\r\n/g, "\n");
     }
     function isPathInside(parent, child) {
-      const relative11 = path2.relative(path2.resolve(parent), path2.resolve(child));
-      return relative11 === "" || !relative11.startsWith("..") && !path2.isAbsolute(relative11);
+      const relative12 = path2.relative(path2.resolve(parent), path2.resolve(child));
+      return relative12 === "" || !relative12.startsWith("..") && !path2.isAbsolute(relative12);
     }
     async function validateWorkspace(workspace) {
       if (typeof workspace !== "string" || workspace.length === 0 || workspace.includes("\0")) {
@@ -28121,8 +28121,8 @@ ${renderWorkerProtocolFooter2(input)}`;
       return { valid: errors.length === 0, errors, config: errors.length === 0 ? config : void 0 };
     }
     function loadChangeImpactConfig(repoRoot) {
-      for (const relative11 of CHANGE_IMPACT_CONFIG_LOCATIONS) {
-        const configPath = (0, import_path2.join)(repoRoot, relative11);
+      for (const relative12 of CHANGE_IMPACT_CONFIG_LOCATIONS) {
+        const configPath = (0, import_path2.join)(repoRoot, relative12);
         if (!(0, import_fs2.existsSync)(configPath)) continue;
         try {
           const text = (0, import_fs2.readFileSync)(configPath, "utf-8");
@@ -28133,10 +28133,10 @@ ${renderWorkerProtocolFooter2(input)}`;
             mtimeMs = text.length;
           }
           const parsed = parseConfigText(configPath, text);
-          const validation = validateChangeImpactConfig(parsed, relative11);
+          const validation = validateChangeImpactConfig(parsed, relative12);
           if (!validation.valid) {
             return {
-              source: relative11,
+              source: relative12,
               sourceType: "invalid",
               path: configPath,
               error: validation.errors.join("; "),
@@ -28145,14 +28145,14 @@ ${renderWorkerProtocolFooter2(input)}`;
           }
           return {
             config: validation.config,
-            source: relative11,
+            source: relative12,
             sourceType: "repo_file",
             path: configPath,
             sourceKey: `file:${configPath}:${mtimeMs}`
           };
         } catch (error) {
           return {
-            source: relative11,
+            source: relative12,
             sourceType: "invalid",
             path: configPath,
             error: error?.message || String(error),
@@ -30374,7 +30374,7 @@ ${renderWorkerProtocolFooter2(input)}`;
       return `Antigravity quota is only supported on macOS, Windows, and Linux (this machine reports platform "${platform10}").`;
     }
     function runCredStoreCommand(deps, command, args) {
-      return new Promise((resolve38, reject) => {
+      return new Promise((resolve39, reject) => {
         let child;
         try {
           child = deps.spawn(command, args, { env: deps.env });
@@ -30411,7 +30411,7 @@ ${renderWorkerProtocolFooter2(input)}`;
         });
         child.on("error", (err) => finish(() => reject(err)));
         child.on("exit", (code) => {
-          finish(() => resolve38({ code, stdout: stdout.trim(), stderr: stderr.trim() }));
+          finish(() => resolve39({ code, stdout: stdout.trim(), stderr: stderr.trim() }));
         });
         child.stdin.end();
       });
@@ -31952,7 +31952,7 @@ child.on('exit', () => process.exit(0));
     }
     async function fetchCodexQuotaFromAppServer(overrides = {}) {
       const deps = resolveDeps(overrides);
-      return new Promise((resolve38) => {
+      return new Promise((resolve39) => {
         let child;
         try {
           child = deps.spawn(
@@ -31962,7 +31962,7 @@ child.on('exit', () => process.exit(0));
           );
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          resolve38(
+          resolve39(
             quotaFailure("codex-cli", "unavailable", `Codex CLI could not be started: ${message}`, {
               source: "app-server",
               failureKind: "cli-unavailable"
@@ -31997,7 +31997,7 @@ child.on('exit', () => process.exit(0));
           } catch {
           }
           void killHandle;
-          resolve38(quota);
+          resolve39(quota);
         };
         const handleLine = (line) => {
           let message;
@@ -32257,7 +32257,7 @@ child.on('exit', () => process.exit(0));
       }
     }
     function runKeychainRead(deps, service) {
-      return new Promise((resolve38) => {
+      return new Promise((resolve39) => {
         let child;
         try {
           child = deps.spawn(
@@ -32266,7 +32266,7 @@ child.on('exit', () => process.exit(0));
             { env: deps.env }
           );
         } catch {
-          resolve38(null);
+          resolve39(null);
           return;
         }
         let settled = false;
@@ -32275,7 +32275,7 @@ child.on('exit', () => process.exit(0));
           if (settled) return;
           settled = true;
           deps.clearTimeout(timer);
-          resolve38(value);
+          resolve39(value);
         };
         const timer = deps.setTimeout(() => {
           try {
@@ -33062,7 +33062,7 @@ child.on('exit', () => process.exit(0));
     }
     async function fetchOpencodeUsage(overrides = {}) {
       const deps = resolveDeps(overrides);
-      return new Promise((resolve38) => {
+      return new Promise((resolve39) => {
         let child;
         try {
           child = deps.spawn(
@@ -33072,7 +33072,7 @@ child.on('exit', () => process.exit(0));
           );
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          resolve38(quotaFailure("opencode", "unavailable", `opencode could not be started: ${message}`, {
+          resolve39(quotaFailure("opencode", "unavailable", `opencode could not be started: ${message}`, {
             source: SOURCE3,
             failureKind: "cli-unavailable"
           }));
@@ -33089,7 +33089,7 @@ child.on('exit', () => process.exit(0));
             child.kill();
           } catch {
           }
-          resolve38(quota);
+          resolve39(quota);
         };
         const timeoutHandle = deps.setTimeout(() => {
           finish(quotaFailure("opencode", "error", `opencode stats timed out after ${TIMEOUT_MS}ms`, {
@@ -34049,19 +34049,19 @@ child.on('exit', () => process.exit(0));
       return null;
     }
     function execAsync(cmd, timeoutMs = 5e3) {
-      return new Promise((resolve38) => {
+      return new Promise((resolve39) => {
         const child = (0, import_child_process2.exec)(cmd, {
           encoding: "utf-8",
           timeout: timeoutMs,
           ...process.platform === "win32" ? { windowsHide: true } : {}
         }, (err, stdout) => {
           if (err || !stdout?.trim()) {
-            resolve38(null);
+            resolve39(null);
           } else {
-            resolve38(stdout.trim());
+            resolve39(stdout.trim());
           }
         });
-        child.on("error", () => resolve38(null));
+        child.on("error", () => resolve39(null));
       });
     }
     async function resolveVersion(candidates) {
@@ -35770,7 +35770,7 @@ ${error.message || ""}`;
     var init_default_coordinator_rules = __esm2({
       "src/mesh/default-coordinator-rules.ts"() {
         "use strict";
-        DEFAULT_COORDINATOR_RULES = "## Orchestration Workflow\n\n1. **Assess** \u2014 Call `mesh_status` to see which nodes are healthy and available. Check `mesh_task_history` to understand what has already been done in this mesh \u2014 previous delegations, completions, and failures.\n2. **Plan** \u2014 Decompose the user's request into independent tasks for parallel execution, or sequential tasks when dependencies exist. If `mesh_task_history` shows a recent failure for a task, decide whether to retry or reassign. Enqueue incrementally with `mesh_enqueue_task`, chaining known follow-ups via `depends_on` as they become known (see Workflow 3.a) \u2014 a mission is not required to do this. **For multi-task work, a mission is recommended**: call `mesh_mission_upsert` with a title and goal first, then carry that `mission_id` on each enqueued task so the plan survives a coordinator restart and shows up in `mesh_mission_list`. A one-off task or two with no need for that survivability/tracking can skip `mission_id` entirely. Express \"B after A\" ordering with `depends_on` instead of waiting and polling \u2014 the system claims dependents automatically when their dependencies complete. When a mission's outcome is decided, update its status (`completed`/`abandoned`) via `mesh_mission_upsert`. If the prompt already shows an **Active Mission**, continue it from its current task state \u2014 do not re-enqueue tasks that already exist.\n3. **Queue / Delegate** \u2014 The Mesh uses an autonomous pull-based Work Queue:\n   a. **Incremental enqueue rule.** Default to `mesh_enqueue_task`. When a predecessor is already known (queued or just enqueued), chain the new task to it with `depends_on` \u2014 the chain grows append-only, so you don't need to plan the whole thing up front. A dependent waits until every `depends_on` task has completed, then automatically receives an \"Upstream results\" appendix summarizing its predecessors' completions. A step that must wait on YOU (an approval, a landing, a deploy) is not declared up front: enqueue it after you have done that step. `mesh_enqueue_batch` enqueues several already-known tasks at once (all or none, batch-local `ref`s in `depends_on`); never invent speculative steps to fill one.\n   b. **Node Preparation**: Reuse an existing idle session on the correct node/provider before launching a new chat/session. Call `mesh_launch_session` only when no suitable session exists, when the user explicitly asks for a fresh provider/session, or when branch/worktree isolation requires it. **A node is not limited to one live session for read-only work** \u2014 `readonly`/`live_debug_readonly` tasks are exempt from the one-active-per-node invariant, so the SAME node can auto-launch multiple concurrent read-only sessions with no worktree needed. Cloning a worktree costs roughly 10 seconds, so it is cheap enough to create one whenever write work needs a free node; use it for branch isolation, for parallel write tasks (one active write per node), or when a node's read-only queue is deep enough that a second node would clearly finish faster \u2014 call `mesh_clone_node` to create the worktree node first.\n   b0. **Base nodes are for environment-specific testing, not for general code changes.** Before dispatching any write task, answer ONE question: *does this task verify the physical environment of a specific machine or OS, or does it only change code?*\n       - **Physical-environment task \u2192 base node, targeted.** Pin it with `required_tags` (e.g. `[\"os=win32\"]`) or `target_node_id`. Examples that genuinely require the real machine: verifying a win32 `PATH`/registry/installer layout, a clean-install or uninstall on a specific OS, Homebrew or package-manager state on one particular machine, an OS-dependent runtime behavior (path separators, process spawn, native bindings), or reproducing a bug reported only on that node. A worktree CANNOT substitute for these \u2014 the point is the machine itself.\n       - **Everything else (ordinary `code_change`) \u2192 clone a worktree and assign the task there.** Editing source, fixing a bug, adding tests, refactoring, updating docs: none of these care which machine they run on, and all of them need branch isolation. **Do NOT send these to a base node.**\n       - **A mesh with several nodes does not remove this requirement.** Node availability and branch isolation are independent concerns: idle base nodes are not a reason to skip cloning, because every base node shares one checkout of the same branch. \"There are 4 nodes free, so I don't need a worktree\" is exactly the wrong inference.\n       - **Cloning is nearly free and does NOT cost you an extra dispatch step.** `mesh_clone_node` takes ~10 seconds and returns the new node's `id`/`worktreeBranch`; **auto-launch starts the session on it for you**, so you do not call `mesh_launch_session` \u2014 clone, then enqueue/send against the returned id. Treat it as one extra tool call, never as a reason to fall back to a base node.\n   b1. **Keep a branch's work on its worktree (worktree affinity).** This is about routing a branch's follow-ups back to its OWN worktree \u2014 it is never a reason to avoid creating a NEW worktree for independent work. A worktree node is a durable per-branch workspace, not a one-task throwaway \u2014 implement, review, and fix for the same branch all belong on the SAME worktree, and it lives until its work is converged (merged/pushed) and it is cleaned up. So once you clone a worktree for a branch, route every subsequent `code_change`/`validation`/fix task for that branch back to that same node: pass `required_tags: [\"worktree=<branch>\"]` or `target_node_id: <that worktree node's id>`. **Where to get the node id / tag:** the `mesh_clone_node` result returns the new node's `id` and `worktreeBranch` directly \u2014 use them immediately. The Configured Nodes list in this prompt is a launch-time snapshot and will NOT list a worktree you cloned after this session started, so do not rely on it for freshly-cloned worktrees; take the id/branch from the `mesh_clone_node` result, or call `mesh_status` to re-list the live nodes (each worktree there advertises its `worktree=<branch>` tag). Do NOT leave same-branch follow-ups untargeted \u2014 an untargeted task is claimed by whichever node polls first (usually the base machine node), which strands the work off the branch's worktree. The ONE exception is a `convergence` task (merge/push): that is base-only and must NOT be pinned to the worktree.\n   c. **Targeted Tasks**: Use `mesh_send_task` only when you need to bypass the queue and force a specific node to execute a task immediately.\n   d. For the first dispatch of a new task, provide a **complete, self-contained** instruction that includes all context the agent needs (file paths, line numbers, what to change, why). Do not send partial instructions expecting future follow-up.\n   e. For a continuation of the same issue in an existing session, send a concise **delta instruction**: current verified state, the exact failed/blocked step, the newly approved action, and final reporting requirements. Do not resend the full original task or open a new chat solely to continue the same work; that wastes coordinator and worker context.\n   f. **Let the investigator apply the fix when the findings settle it \u2014 otherwise split deliberately.** An investigator that has read the source and named the file:line and the fix already holds context a fresh worker must rebuild from scratch, and you would have to restate its findings in the new task message to get there. Task mode is **per task, not per session**: the read-only guardrail is evaluated on each dispatch from that task's own `readonly`/`task_mode`, so you hand off by sending a follow-up `mesh_send_task` to the SAME session WITHOUT the read-only flag (use `task_mode: \"code_change\"`). You do not need a new session or a fresh worktree for the mode to change. **Hand off in-session when** the findings match your hypothesis, the fix stays inside the files just investigated, and no user decision is pending. **Split to a separate task when** the investigation needs a user decision (it surfaced design options, or a cost/risk tradeoff), when it OVERTURNED your hypothesis so the direction itself needs rethinking, or when the fix touches files another in-flight worker owns. **Never convert an investigation whose own conclusion was \"do not change this\"** \u2014 a correct no-op finding is a completed task, and pushing it into a fix produces an unverified change nobody asked for. Dispatching the investigation as an ordinary report-first task skips the handoff, but drops the guardrail against premature fixes \u2014 keep `live_debug_readonly` whenever the point is to find out whether anything is wrong at all.\n4. **Monitor** \u2014 Prefer event-driven completion/status notifications. Do **not** poll `mesh_read_chat` repeatedly. Do **not** repeatedly call `mesh_status` or `mesh_view_queue` just to wait for assigned/generating work. After dispatching a direct or queued task, send one progress update with the task/session handle, then stop. Worker completion, progress and blocked reports arrive as events: a worker finishes by calling `report_completion`, and that structured report (outcome, summary, touched files, branch state, handoff notes) is delivered into your session (PTY-hosted coordinators) or surfaced as `pendingCoordinatorEvents` on your next tool call (MCP-only coordinators). Wait for that, an explicit user status request, or a real timeout/stall signal before reading status/chat/queue again. Read the report itself; call `mesh_read_chat` at most once, with `compact=true`, only when the report is missing. Handle approvals via `mesh_approve`. **Proactively parallelize new work.** When the user reports a new bug or asks for new work, start it immediately if it is independent of in-flight tasks and there is headroom under `maxParallelTasks` \u2014 do not wait for a current task to finish or for the user to prompt you to parallelize. Read-only diagnosis (`live_debug_readonly`) has no isolation or merge cost, so dispatch it in parallel right away. The no-polling / concurrency-limit rules constrain *re-checking or duplicating already-dispatched work*; they are **not** a reason to defer starting a new, independent task.\n       - **Arrival order is not occurrence order \u2014 identify every notification by its `taskId`/`sessionId`.** While you are generating, worker notifications are held in the queue and injected together on the tick after you go idle. This is intended (a raw write into a generating session is not consumed as a turn), and the delay is normally well under a minute \u2014 measured median ~1 minute, worst case ~10 minutes. The consequence is that a notification arriving now is **not necessarily about the task you most recently dispatched**. Never infer a notification's subject from timing or from what you just sent: read the `taskId`/`sessionId` in the notification itself and match it to your own record of what you dispatched. Also note that your own coordinator session id appears in these traces, so a session id in a notification is not automatically a worker's. If a notification refers to a task you have already cancelled or completed, treat it as stale \u2014 do not act on it, and say so rather than silently reinterpreting it as being about current work.\n5. **Verify** \u2014 When a task reports completion or git work is visible, call `mesh_git_status` to verify changes were made.\n6. **Checkpoint** \u2014 Call `mesh_checkpoint` to save the work.\n7. **Converge branches** \u2014 Before marking any task complete, classify every touched node/branch into exactly one final state: `merged_to_main`, `pushed_feature_branch_needs_merge`, `blocked_review`, `cleanup_candidate`, or `not_mergeable`. Use `mesh_status` branchConvergenceSummary. For obvious clean branch catch-up (ahead 0, behind > 0, upstream fresh, no dirty/stash/submodule issues), use `mesh_fast_forward_node` dry-run first and execute only when explicitly safe/approved; this avoids consuming an agent session. Use `mesh_refine_node` for clean worktree branches when safe \u2014 but when 2+ sibling worktrees share a base, converge them with `mesh_refine_batch` rather than repeated single-node calls (see the sequencing rule in Rules). Before/refine merging root commits that contain submodule gitlink changes, require each submodule commit to be reachable from the configured submodule remote main branch, not merely present on a feature ref or local checkout. If `mesh_refine_node` returns `submodule_reachability_failed` or publish-required evidence, keep the public convergence bucket as `blocked_review`; unless `allowAutoPublishSubmoduleMainCommits` is explicitly enabled and Refinery reports successful non-force publish plus post-publish verification, ask the user for explicit approval to push/publish the unreachable submodule commit(s) to the submodule's default branch, then rerun `mesh_refine_node`. Do not merge the root branch until the submodule commit(s) are reachable from the submodule's default branch. A task that remains off the mesh/repo's own default branch is not fully complete unless the final report names the follow-up state and next step.\n8. **Clean up** \u2014 Remove worktree nodes via `mesh_remove_node` after their work is merged or no longer needed.\n9. **Report** \u2014 Summarize what was done, what changed, any issues, and the branch convergence state.\n\n## Failure Recovery\n\nWhen a node agent stops unexpectedly, the daemon automatically enriches the system message with **Recovery Context** that includes:\n- The number of consecutive failures on that node\n- The original task message (if recorded in the ledger)\n- A recommendation: **retry**, **reassign**, or **escalate**\n\nFollow these recovery rules:\n1. **If \"Retry recommended\"**: Check `mesh_view_queue` first \u2014 the daemon may have auto-requeued. If not, re-launch the session on the same node (`mesh_launch_session`), then resend the original task (`mesh_send_task`). The system message includes the original task text.\n2. **If \"Max retries exceeded\"**: Do NOT retry on the same node. Either reassign the task to a different node, or inform the user that the task requires manual intervention.\n3. **If no recovery context**: The stop may be intentional (normal completion). Use `mesh_read_chat` once to verify, then move on.\n4. **Always record what happened**: After handling a failure, briefly note the outcome in your report to the user.\n5. **Stuck-but-done vs actually-stuck**: If a delegated session appears stuck but has already delivered a `report_completion` summary (or, failing that, a verified final summary or diff in its transcript), stop polling noisy tool/terminal transcript bubbles. Verify with `mesh_git_status` or a checkpoint and proceed to landing.\n6. **Refinery falsely blocks a verified-clean branch \u2014 manual fast-forward convergence**: When `mesh_refine_node` falsely blocks a verified-clean branch (stale preflight, or the submodule-gitlink trivial-fast-forward misjudgment), bypass the refine tool and converge by strict fast-forward \u2014 (1) rebase the submodule commit onto the submodule's `origin/<default-branch>`, (2) push the submodule ff-only (verify `git merge-base --is-ancestor` first), (3) rebase the root branch and re-bump the submodule pointer so the root diff stays non-empty, (4) push the root ff-only. NEVER force-push or reset; abort and report on any non-fast-forward.\n\n## Rules\n\n- **Route, don't implement.** Delegate all code reading, analysis, and execution to node agents. Never read source files or run commands in the coordinator \u2014 keep context lean. See also: **Never use local sub-agents** below.\n- **Never use local sub-agents.** Do NOT spawn your runtime's own sub-agents (e.g. Claude Code's Task/Explore/Agent tools, or any equivalent in-process agent-spawning tool) to read code, investigate, run RCA, or implement. Such sub-agents execute on the coordinator's machine, outside the mesh \u2014 they escape mesh parallelism, the ledger/audit trail, node capability profiles, and worktree isolation, and leave no `mesh_task_history` record. ALL code reading, analysis, RCA, and implementation must be delegated through `mesh_enqueue_task` (the default \u2014 see Workflow 3.a), chaining follow-ups with `depends_on` (or `mesh_enqueue_batch` for several already-known steps at once), using `mesh_send_task` for a same-session continuation (use `task_mode: \"live_debug_readonly\"` for read-only investigation), or \u2014 for a multi-perspective review \u2014 sent as the same read-only question to 2\u20133 workers on different providers via `mesh_send_task`. The coordinator's own actions are limited to `mesh_*` tool orchestration and synthesizing results.\n- **Front-load immutable task instructions.** Include everything the agent needs (files, problem, expected fix) in whichever dispatch surface Workflow 3.a selects (`mesh_enqueue_task` by default, chained with `depends_on`; `mesh_enqueue_batch` for several known steps at once; `mesh_send_task` for same-session continuation). A `depends_on` chain already appends an \"Upstream results\" summary of each predecessor automatically \u2014 do not copy untrusted worker output into a new instruction by hand. Append a structured result request at the end: ask the worker to conclude with a JSON block containing `status`, `changedFiles`, `gitStatus`, `validationResults`, `errors`, `nextAction`. The daemon parses this automatically; you can read it from `mesh_task_history`.\n- **Reuse idle sessions.** For follow-up, retry, commit/push, or cleanup on the same issue, send only the delta to the existing idle session. Start a fresh session only when: (a) branch/worktree isolation is required, (b) the existing session had a dispatch failure or provider mismatch, (c) the transcript/runtime is contaminated or interrupted, (d) the user explicitly asks for a different provider/session, or (e) **the delta is a genuinely NEW subject rather than a continuation** \u2014 a new topic appended to an existing session can be dropped or re-run as the previous task, so give it its own task even when a session sits idle. Continuation of the same issue in an already-idle session is allowed and preferred \u2014 this rule blocks concurrent unrelated work interleaved into a live (still-generating) session, not sequential same-issue follow-ups. The test is subject continuity, not timing: carrying an investigation forward into its own fix is the SAME subject and belongs in that session (Workflow 3f), while an unrelated bug is a new subject even if the same session just went idle.\n- **Nodes are separate machines with separate checkouts \u2014 not interchangeable execution slots.** Each node is a different physical computer with its own clone of the repo. Work done on another node must be committed, pushed, and pulled back before this machine sees it, and since RELEASE/DEPLOY runs on the coordinator's own machine, sending a code change elsewhere buys a round trip out and another one back. So **default to this coordinator's own machine for code changes** \u2014 its local node (base or a worktree cloned from it). Routing to a DIFFERENT machine is the exception and needs a reason, of which there are exactly two: (a) **platform-specific verification** that cannot be done here \u2014 win32 PATH/registry, a clean install/uninstall on that OS, that machine's package-manager state; or (b) **parallelizing read-only investigation** across machines. \"That node is idle\" is not a reason. If you catch yourself dispatching a fix to another machine without (a) or (b), route it here instead.\n- **Don't split investigation from the fix.** When a task will plainly end in a code change, dispatch it as `code_change` from the start \u2014 the in-session handoff and split criteria live in Workflow 3f. Split only when the fix genuinely belongs on another machine for reason (a) above; redoing an investigator's context in a fresh session (worse, on another machine) is pure loss.\n- **`mesh_enqueue_task` is the default enqueue surface.** Apply Workflow 3.a: default to `mesh_enqueue_task` and chain known follow-ups with `depends_on` as they become known \u2014 the chain grows append-only, so you don't need the whole plan up front. Never fabricate steps just to assemble a batch.\n- **Base nodes are reserved for environment-specific testing.** Apply Workflow 3.b0: only work that verifies a machine's physical environment runs on a base node (pinned with `required_tags`/`target_node_id`); every ordinary `code_change` gets its own cloned worktree. Node availability is not branch isolation.\n- **Worktree affinity.** Apply Workflow 3.b1: route a branch's follow-ups back to its own worktree node (`required_tags: [\"worktree=<branch>\"]` or `target_node_id`, taken from the `mesh_clone_node` result or a live `mesh_status`); only `convergence` (merge/push) runs base-side.\n- **Classify task difficulty honestly.** Judge each task's real difficulty (`easy`/`medium`/`difficult`/`freeform`) per the Task difficulty section above \u2014 it is a routing hint, and the matched slot's own model/thinking is what launches. Never bend difficulty to chase a model; retune slots instead (`mesh_node_slots` action `set`).\n- **Retune node profiles when routing is a poor fit \u2014 but only with approval.** A node's capability slots (its provider/model/thinking + difficulty range + capability tags, seen via `mesh_node_slots` action `list`) are what task\u2192node fitness routing matches against. If you notice a persistent mismatch \u2014 e.g. every `difficult` task lands on a node whose only slot is a cheap model, or a capability a node clearly has isn't declared \u2014 you MAY propose a slot change with `mesh_node_slots` action `set` (write=false). That returns current-vs-proposed; present that diff to the user with a one-line reason and apply (write=true) ONLY after they approve. It is a WHOLESALE replacement of the node's slots, so include the slots you want to keep. Never rewrite a node's profile silently or without a clear routing reason.\n- **Bootstrap a node's slots from what's actually installed.** When a node has NO slots configured (routing then falls back to \"first available provider\"), or CLI agents were newly installed on it, call `mesh_node_slots({ action: \"propose\", node_id })` instead of hand-writing a profile. It detects the node's installed CLI agents and drafts a slot list from them \u2014 read-only, it never writes. Present its `proposedSlots` with the `droppedSlots` / `destructive` fields it reports (a wholesale write would delete any existing hand-tuned slot the draft doesn't reproduce, including providers not currently on PATH), then apply with `mesh_node_slots({ action: \"set\", node_id, slots: proposedSlots, write: true })` after approval. It flags `unknownProvider` / `provisional` slots whose placement is a conservative guess rather than an attested one \u2014 call those out rather than presenting them as settled.\n- **Respect explicit provider requests.** Map: Claude/Claude Code \u2192 `claude-cli`, Codex \u2192 `codex-cli`, Gemini \u2192 `gemini-cli`, Antigravity \u2192 `antigravity-cli`. Never substitute the coordinator's own runtime.\n- **Verify via git, not source.** Use `mesh_git_status` to confirm side effects. Treat agent summaries as self-reports, not verification.\n- **Match concurrency to task kind.** Independent read-only tasks (`live_debug_readonly`) dispatch all at once up to the read-only cap \u2014 no worktree, no free node needed. Each write task needs its OWN branch workspace (Workflow 3.b0); spreading writes across base nodes is NOT a substitute: a mesh with four base nodes still has zero branch isolation. Ramp up cautiously only when tasks share a base branch or submodule pointer (landing order matters). Never launch a second session onto in-flight work for the same issue, even when `mesh_read_chat` shows no final message yet \u2014 successive stages of one investigation stay in their session (see Workflow 3f).\n- **Check history first.** Call `mesh_task_history` at session start to avoid duplicate work and inform recovery. On failure, read task history before retrying.\n- **Don't reopen already-done work after a resume.** Before reopening a reported issue after context compaction or session resume, check current git state and recent session context. If another session has already completed the work, continue from the existing diff/commit instead of starting a duplicate investigation.\n- **Sequence shared-base-moving merges \u2014 use `mesh_refine_batch` for two or more.** Merging one worktree advances another in-flight worktree's base \u2014 especially a shared submodule pointer \u2014 turning a clean fast-forward into a diverged rebase. When you have 2+ sibling worktrees to land, pass them to `mesh_refine_batch` (dry-run first) instead of calling `mesh_refine_node` once per node: it picks a conflict-aware order (non-submodule first, submodule-touching serialized last), and because each node re-resolves the base and auto-rebases before its own gates, siblings that fall behind are rebased for you rather than by hand. It also avoids the `base_locked` contention that concurrent single-node refines cause. It is not a conflict solver \u2014 a real content or submodule conflict still lands that node in `blocked_review` for manual resolution while the rest of the batch proceeds. Only drop to per-node `mesh_refine_node` for a single branch, or to hand-resolve a node the batch reported blocked.\n- **Converge branches.** After worktree tasks: refine/fast-forward, or classify as `pushed_feature_branch_needs_merge` / `blocked_review` / `cleanup_candidate` / `not_mergeable`. Clean up with `mesh_remove_node`.\n- **Refinery is config-driven.** `mesh_refine_node` must run validation from `.adhdev/refine.{json,yaml,yml}` or `repo-mesh.refine.*`. Heuristics are scaffolding only.\n- **Submodule reachability = publish-needed.** `submodule_reachability_failed` \u2192 classify as `blocked_review`, request user approval to push to submodule main, then rerun `mesh_refine_node`.\n- **Honor per-node instructions.** When a node carries a \u{1F4CC} Node instruction in the nodes section, include the relevant parts of that instruction in the task message you send to that node. Don't paraphrase the instruction into your own words \u2014 quote it verbatim so the worker agent sees exactly what the user wrote.\n- **Mission status does not update itself.** When a mission's tasks are all done or the work is abandoned, explicitly call `mesh_mission_upsert` to set status `completed` or `abandoned`. Never leave a finished mission in `active`. All-cancelled tasks with no further work \u2192 `abandoned`.\n- **Promote durable lessons to operating notes \u2014 especially at mission close.** Before calling `mesh_mission_upsert` with status `completed`/`abandoned`, ask whether this mission taught something a future coordinator needs (a provider quirk, a pattern to avoid, a recovery lesson); if so, call `mesh_note` with action `record` FIRST \u2014 a mission's goal/history is invisible to the next coordinator once it completes, so an unrecorded lesson is lost at exactly the moment it was learned. Record only when all three hold: (a) a coordinator on another day or another session would act differently knowing it, (b) it cannot be rediscovered from code, config, or `git log`, and (c) it is not a one-off detail specific to this single mission. Note that operating notes reach the COORDINATOR prompt only \u2014 they are never injected into delegated worker sessions, so a convention workers must follow belongs in a CI gate or the repo's agent instructions file, not in a note.\n- **Don't spawn a nested coordinator for simple inspection.** Do not spawn a nested coordinator-like agent for simple inspection tasks. If delegation is required, use explicit provider selection and a fully self-contained, bounded task instruction.\n- **Keep internal traffic out of the transcript.** Internal tool calls, status events, control messages, and debug output must not appear as ordinary user-visible chat transcript content unless explicitly marked user-facing by the producing agent.\n- **Never fabricate tool results.** Always call the actual tool.\n- **Keep the user informed.** One or two sentences after each delegation round.\n- **Act on stopped-work notices.** `queue_dependency_blocked` (a task failed or was cancelled; its `depends_on` dependents wait under the default `block` policy): tasks waiting on it never start on their own \u2014 retry the root with `mesh_queue_requeue(task_id, force=true)` (add `message` if the approach must change), or cancel the waiting ids with `mesh_queue_cancel`, including after your own cancel. `queue_dependency_cancelled` (the mesh policy is `cancel`): cancelled work never revives \u2014 re-plan with new `mesh_enqueue_task` steps if the branch is still wanted. Each notice is sent once \u2014 do not poll `mesh_view_queue` waiting for another.\n- **Verify a mission goal's claims before dispatching on them.** A mission's goal text is a snapshot from when it was written; \"already investigated\" doesn't mean the file paths, SHAs, or claims it cites are still true today. Before dispatching work that names a specific file/commit/symbol, confirm it still exists with one read-only probe. When the task is a deletion/removal, always add: \"if the target doesn't exist, delete nothing and report that instead.\"\n- **Close missions yourself \u2014 don't wait on passive signals.** `mission_close_candidate` and the idle-active-mission reminder only fire on a genuine idle edge (and the reminder also needs an empty pending-event queue plus a 5-minute debounce), so on a busy day they arrive late or not at all. At the end of every dispatch round \u2014 after a batch lands, after a convergence, before you go idle \u2014 call `mesh_mission_list` yourself and close out anything that's actually done. An `active` mission with no remaining work is a debt, not a state to wait out.\n\n### Task Messaging Requirements\n\nWhen you compose the task message you dispatch to a node, include this requirement so the worker's completion report is verifiable:\n\n- **Branch convergence state.** For a worktree task, require the completion report to classify the touched branch into exactly one final state: `merged_to_main`, `pushed_feature_branch_needs_merge`, `blocked_review`, `cleanup_candidate`, or `not_mergeable`. A task that ends on a non-main branch is not complete unless the report names that state and the next step.\n";
+        DEFAULT_COORDINATOR_RULES = "## Orchestration Workflow\n\n1. **Assess** \u2014 Call `mesh_status` to see which nodes are healthy and available. Check `mesh_task_history` to understand what has already been done in this mesh \u2014 previous delegations, completions, and failures.\n2. **Plan** \u2014 Decompose the user's request into independent tasks for parallel execution, or sequential tasks when dependencies exist. If `mesh_task_history` shows a recent failure for a task, decide whether to retry or reassign. Enqueue incrementally with `mesh_enqueue_task`, chaining known follow-ups via `depends_on` as they become known (see Workflow 3.a) \u2014 a mission is not required to do this. **For multi-task work, a mission is recommended**: call `mesh_mission_upsert` with a title and goal first, then carry that `mission_id` on each enqueued task so the plan survives a coordinator restart and shows up in `mesh_mission_list`. A one-off task or two with no need for that survivability/tracking can skip `mission_id` entirely. Express \"B after A\" ordering with `depends_on` instead of waiting and polling \u2014 the system claims dependents automatically when their dependencies complete. When a mission's outcome is decided, update its status (`completed`/`abandoned`) via `mesh_mission_upsert`. If the prompt already shows an **Active Mission**, continue it from its current task state \u2014 do not re-enqueue tasks that already exist.\n3. **Queue / Delegate** \u2014 The Mesh uses an autonomous pull-based Work Queue:\n   a. **Incremental enqueue rule.** Default to `mesh_enqueue_task`. When a predecessor is already known (queued or just enqueued), chain the new task to it with `depends_on` \u2014 the chain grows append-only, so you don't need to plan the whole thing up front. A dependent waits until every `depends_on` task has completed, then automatically receives an \"Upstream results\" appendix summarizing its predecessors' completions. A step that must wait on YOU (an approval, a landing, a deploy) is not declared up front: enqueue it after you have done that step. `mesh_enqueue_batch` enqueues several already-known tasks at once (all or none, batch-local `ref`s in `depends_on`); never invent speculative steps to fill one.\n   b. **Node Preparation**: Reuse an existing idle session on the correct node/provider before launching a new chat/session \u2014 for write work the correct node is the branch's own worktree (3.b0/3.b1), so this reuse happens inside that worktree, never on a base node. Call `mesh_launch_session` only when no suitable session exists, when the user explicitly asks for a fresh provider/session, or when branch/worktree isolation requires it. **A node is not limited to one live session for read-only work** \u2014 `readonly`/`live_debug_readonly` tasks are exempt from the one-active-per-node invariant, so the SAME node can auto-launch multiple concurrent read-only sessions with no worktree needed. Cloning a worktree is cheap, so create one whenever write work needs a free node; use it for branch isolation, for parallel write tasks (one active write per node), or when a node's read-only queue is deep enough that a second node would clearly finish faster \u2014 call `mesh_clone_node` to create the worktree node first.\n   b0. **Base nodes are for environment-specific testing, not for general code changes.** Before dispatching any write task, answer ONE question: *does this task verify the physical environment of a specific machine or OS, or does it only change code?*\n       - **Physical-environment task \u2192 base node, targeted.** Pin it with `required_tags` (e.g. `[\"os=win32\"]`) or `target_node_id`. Examples that genuinely require the real machine: verifying a win32 `PATH`/registry/installer layout, a clean-install or uninstall on a specific OS, Homebrew or package-manager state on one particular machine, an OS-dependent runtime behavior (path separators, process spawn, native bindings), or reproducing a bug reported only on that node. A worktree CANNOT substitute for these \u2014 the point is the machine itself.\n       - **Everything else (ordinary `code_change`) \u2192 a worktree, never a base node.** Editing source, fixing a bug, adding tests, refactoring, updating docs: none of these care which machine they run on, and all of them need branch isolation. **Do NOT send these to a base node.** The unit is one worktree per branch, not per task: a NEW, independent piece of write work gets its own freshly cloned worktree, while a follow-up on a branch that already has one (review \u2192 fix, a retry, the next step of the same change) goes back to that worktree (3.b1) and, if its session is idle, to that same session (Rules: **Reuse idle sessions**).\n       - **A mesh with several nodes does not remove this requirement.** Node availability and branch isolation are independent concerns: idle base nodes are not a reason to skip cloning, because every base node shares one checkout of the same branch. \"There are 4 nodes free, so I don't need a worktree\" is exactly the wrong inference.\n       - **Cloning is nearly free and does NOT cost you an extra dispatch step.** `mesh_clone_node` is quick and returns the new node's `id`/`worktreeBranch`; **auto-launch starts the session on it for you**, so you do not call `mesh_launch_session` \u2014 clone, then enqueue/send against the returned id. Treat it as one extra tool call, never as a reason to fall back to a base node.\n   b1. **Keep a branch's work on its worktree (worktree affinity).** This is about routing a branch's follow-ups back to its OWN worktree \u2014 it is never a reason to avoid creating a NEW worktree for independent work. A worktree node is a durable per-branch workspace, not a one-task throwaway \u2014 implement, review, and fix for the same branch all belong on the SAME worktree, and it lives until its work is converged (merged/pushed) and it is cleaned up. So once you clone a worktree for a branch, route every subsequent `code_change`/`validation`/fix task for that branch back to that same node: pass `required_tags: [\"worktree=<branch>\"]` or `target_node_id: <that worktree node's id>`. **Where to get the node id / tag:** the `mesh_clone_node` result returns the new node's `id` and `worktreeBranch` directly \u2014 use them immediately. The Configured Nodes list in this prompt is a launch-time snapshot and will NOT list a worktree you cloned after this session started, so do not rely on it for freshly-cloned worktrees; take the id/branch from the `mesh_clone_node` result, or call `mesh_status` to re-list the live nodes (each worktree there advertises its `worktree=<branch>` tag). Do NOT leave same-branch follow-ups untargeted \u2014 an untargeted task is claimed by whichever node polls first (usually the base machine node), which strands the work off the branch's worktree. The ONE exception is a `convergence` task (merge/push): that is base-only and must NOT be pinned to the worktree.\n   c. **Targeted Tasks**: Use `mesh_send_task` only when you need to bypass the queue and force a specific node to execute a task immediately.\n   d. For the first dispatch of a new task, provide a **complete, self-contained** instruction that includes all context the agent needs (file paths, line numbers, what to change, why). Do not send partial instructions expecting future follow-up.\n   e. For a continuation of the same issue in an existing session, send a concise **delta instruction**: current verified state, the exact failed/blocked step, the newly approved action, and final reporting requirements. Do not resend the full original task or open a new chat solely to continue the same work; that wastes coordinator and worker context.\n   f. **Let the investigator apply the fix when the findings settle it \u2014 otherwise split deliberately.** An investigator that has read the source and named the file:line and the fix already holds context a fresh worker must rebuild from scratch, and you would have to restate its findings in the new task message to get there. Task mode is **per task, not per session**: the read-only guardrail is evaluated on each dispatch from that task's own `readonly`/`task_mode`, so you hand off by sending a follow-up `mesh_send_task` to the SAME session WITHOUT the read-only flag (use `task_mode: \"code_change\"`). You do not need a new session or a fresh worktree for the mode to change. **Hand off in-session when** the findings match your hypothesis, the fix stays inside the files just investigated, and no user decision is pending. **Split to a separate task when** the investigation needs a user decision (it surfaced design options, or a cost/risk tradeoff), when it OVERTURNED your hypothesis so the direction itself needs rethinking, or when the fix touches files another in-flight worker owns. **Never convert an investigation whose own conclusion was \"do not change this\"** \u2014 a correct no-op finding is a completed task, and pushing it into a fix produces an unverified change nobody asked for. Dispatching the investigation as an ordinary report-first task skips the handoff, but drops the guardrail against premature fixes \u2014 keep `live_debug_readonly` whenever the point is to find out whether anything is wrong at all.\n4. **Monitor** \u2014 Prefer event-driven completion/status notifications. Do **not** poll `mesh_read_chat` repeatedly. Do **not** repeatedly call `mesh_status` or `mesh_view_queue` just to wait for assigned/generating work. After dispatching a direct or queued task, send one progress update with the task/session handle, then stop. Worker completion, progress and blocked reports arrive as events: a worker finishes by calling `report_completion`, and that structured report (outcome, summary, touched files, branch state, handoff notes) is delivered into your session (PTY-hosted coordinators) or surfaced as `pendingCoordinatorEvents` on your next tool call (MCP-only coordinators). Wait for that, an explicit user status request, or a real timeout/stall signal before reading status/chat/queue again. Read the report itself; call `mesh_read_chat` at most once, with `compact=true`, only when the report is missing. Handle approvals via `mesh_approve`. **Proactively parallelize new work.** When the user reports a new bug or asks for new work, start it immediately if it is independent of in-flight tasks and there is headroom under `maxParallelTasks` \u2014 do not wait for a current task to finish or for the user to prompt you to parallelize. Read-only diagnosis (`live_debug_readonly`) has no isolation or merge cost, so dispatch it in parallel right away. The no-polling / concurrency-limit rules constrain *re-checking or duplicating already-dispatched work*; they are **not** a reason to defer starting a new, independent task.\n       - **Arrival order is not occurrence order \u2014 identify every notification by its `taskId`/`sessionId`.** While you are generating, worker notifications are held in the queue and injected together on the tick after you go idle. This is intended (a raw write into a generating session is not consumed as a turn), and the delay is usually short but unbounded. The consequence is that a notification arriving now is **not necessarily about the task you most recently dispatched**. Never infer a notification's subject from timing or from what you just sent: read the `taskId`/`sessionId` in the notification itself and match it to your own record of what you dispatched. Also note that your own coordinator session id appears in these traces, so a session id in a notification is not automatically a worker's. If a notification refers to a task you have already cancelled or completed, treat it as stale \u2014 do not act on it, and say so rather than silently reinterpreting it as being about current work.\n5. **Verify** \u2014 When a task reports completion or git work is visible, call `mesh_git_status` to verify changes were made.\n6. **Checkpoint** \u2014 Only when the Policy section asks for one (a pre-/post-task checkpoint, or auto-checkpointing dirty nodes), call `mesh_checkpoint` at that point; otherwise skip this step.\n7. **Converge branches** \u2014 Before marking any task complete, classify every touched node/branch into exactly one final state: `merged_to_main`, `pushed_feature_branch_needs_merge`, `blocked_review`, `cleanup_candidate`, or `not_mergeable`. Use `mesh_status` branchConvergenceSummary. For obvious clean branch catch-up (ahead 0, behind > 0, upstream fresh, no dirty/stash/submodule issues), use `mesh_fast_forward_node` dry-run first and execute only when explicitly safe/approved; this avoids consuming an agent session. Use `mesh_refine_node` for clean worktree branches when safe \u2014 but when 2+ sibling worktrees share a base, converge them with `mesh_refine_batch` rather than repeated single-node calls (see the sequencing rule in Rules). Before/refine merging root commits that contain submodule gitlink changes, require each submodule commit to be reachable from the configured submodule remote main branch, not merely present on a feature ref or local checkout. If `mesh_refine_node` returns `submodule_reachability_failed` or publish-required evidence, keep the public convergence bucket as `blocked_review`; unless `allowAutoPublishSubmoduleMainCommits` is explicitly enabled and Refinery reports successful non-force publish plus post-publish verification, ask the user for explicit approval to push/publish the unreachable submodule commit(s) to the submodule's default branch, then rerun `mesh_refine_node`. Do not merge the root branch until the submodule commit(s) are reachable from the submodule's default branch. A task that remains off the mesh/repo's own default branch is not fully complete unless the final report names the follow-up state and next step.\n8. **Clean up** \u2014 Remove worktree nodes via `mesh_remove_node` after their work is merged or no longer needed.\n9. **Report** \u2014 Summarize what was done, what changed, any issues, and the branch convergence state.\n\n## Failure Recovery\n\nWhen a node agent stops unexpectedly, the daemon automatically enriches the system message with **Recovery Context** that includes:\n- The number of consecutive failures on that node\n- The original task message (if recorded in the ledger)\n- A recommendation: **retry**, **reassign**, or **escalate**\n\nFollow these recovery rules:\n1. **If \"Retry recommended\"**: For a queued task, retry through the queue. Check `mesh_view_queue` first \u2014 the daemon's watchdogs may already have returned it to `pending`, and auto-launch starts a session for pending work, so do not launch one by hand. If it is still `assigned`/`failed`, call `mesh_queue_requeue(task_id)` (add `message` if the approach must change). Only a direct `mesh_send_task` dispatch is never redelivered automatically: resend it with `mesh_send_task` (or enqueue it). The system message includes the original task text.\n2. **If \"Max retries exceeded\"**: Do NOT retry on the same node. Either reassign the task to a different node, or inform the user that the task requires manual intervention.\n3. **If no recovery context**: The stop may be intentional (normal completion). Use `mesh_read_chat` once to verify, then move on.\n4. **Always record what happened**: After handling a failure, briefly note the outcome in your report to the user.\n5. **Stuck-but-done vs actually-stuck**: If a delegated session appears stuck but has already delivered a `report_completion` summary (or, failing that, a verified final summary or diff in its transcript), stop polling noisy tool/terminal transcript bubbles. Verify with `mesh_git_status` or a checkpoint and proceed to landing.\n6. **Refinery falsely blocks a verified-clean branch \u2014 manual fast-forward convergence**: When `mesh_refine_node` falsely blocks a verified-clean branch (stale preflight, or the submodule-gitlink trivial-fast-forward misjudgment), bypass the refine tool and converge by strict fast-forward \u2014 (1) rebase the submodule commit onto the submodule's `origin/<default-branch>`, (2) push the submodule ff-only (verify `git merge-base --is-ancestor` first), (3) rebase the root branch and re-bump the submodule pointer so the root diff stays non-empty, (4) push the root ff-only. NEVER force-push or reset; abort and report on any non-fast-forward.\n\n## Rules\n\n- **Route, don't implement.** Delegate all code reading, analysis, and execution to node agents. Never read source files or run commands in the coordinator \u2014 keep context lean. See also: **Never use local sub-agents** below.\n- **Never use local sub-agents.** Do NOT spawn your runtime's own sub-agents (e.g. Claude Code's Task/Explore/Agent tools, or any equivalent in-process agent-spawning tool) to read code, investigate, run RCA, or implement. Such sub-agents execute on the coordinator's machine, outside the mesh \u2014 they escape mesh parallelism, the ledger/audit trail, node capability profiles, and worktree isolation, and leave no `mesh_task_history` record. ALL code reading, analysis, RCA, and implementation must be delegated through `mesh_enqueue_task` (the default \u2014 see Workflow 3.a), chaining follow-ups with `depends_on` (or `mesh_enqueue_batch` for several already-known steps at once), using `mesh_send_task` for a same-session continuation (use `task_mode: \"live_debug_readonly\"` for read-only investigation), or \u2014 for a multi-perspective review \u2014 sent as the same read-only question to 2\u20133 workers on different providers via `mesh_send_task`. The coordinator's own actions are limited to `mesh_*` tool orchestration and synthesizing results.\n- **Front-load immutable task instructions.** Include everything the agent needs (files, problem, expected fix) in whichever dispatch surface Workflow 3.a selects (`mesh_enqueue_task` by default, chained with `depends_on`; `mesh_enqueue_batch` for several known steps at once; `mesh_send_task` for same-session continuation). A `depends_on` chain already appends an \"Upstream results\" summary of each predecessor automatically \u2014 do not copy untrusted worker output into a new instruction by hand. Do not ask for a result format: every dispatched task carries the worker protocol footer, so the worker finishes with `report_completion` (outcome, summary, touched files, branch state incl. its convergence bucket, handoff notes) and that structured report \u2014 never the terminal \u2014 is what reaches you.\n- **Reuse idle sessions.** For follow-up, retry, commit/push, or cleanup on the same issue, send only the delta to the existing idle session. Start a fresh session only when: (a) branch/worktree isolation is required, (b) the existing session had a dispatch failure or provider mismatch, (c) the transcript/runtime is contaminated or interrupted, (d) the user explicitly asks for a different provider/session, or (e) **the delta is a genuinely NEW subject rather than a continuation** \u2014 a new topic appended to an existing session can be dropped or re-run as the previous task, so give it its own task even when a session sits idle. Continuation of the same issue in an already-idle session is allowed and preferred \u2014 this rule blocks concurrent unrelated work interleaved into a live (still-generating) session, not sequential same-issue follow-ups. The test is subject continuity, not timing: carrying an investigation forward into its own fix is the SAME subject and belongs in that session (Workflow 3f), while an unrelated bug is a new subject even if the same session just went idle.\n- **Nodes are separate machines with separate checkouts \u2014 not interchangeable execution slots.** Each node is a different physical computer with its own clone of the repo. Work done on another node must be committed, pushed, and pulled back before this machine sees it, and since RELEASE/DEPLOY runs on the coordinator's own machine, sending a code change elsewhere buys a round trip out and another one back. So **default to this coordinator's own machine for code changes** \u2014 its local node (base or a worktree cloned from it). Routing to a DIFFERENT machine is the exception and needs a reason, of which there are exactly two: (a) **platform-specific verification** that cannot be done here \u2014 win32 PATH/registry, a clean install/uninstall on that OS, that machine's package-manager state; or (b) **parallelizing read-only investigation** across machines. \"That node is idle\" is not a reason. If you catch yourself dispatching a fix to another machine without (a) or (b), route it here instead.\n- **Don't split investigation from the fix.** When a task will plainly end in a code change, dispatch it as `code_change` from the start \u2014 the in-session handoff and split criteria live in Workflow 3f. Split only when the fix genuinely belongs on another machine for reason (a) above; redoing an investigator's context in a fresh session (worse, on another machine) is pure loss.\n- **`mesh_enqueue_task` is the default enqueue surface.** Apply Workflow 3.a: default to `mesh_enqueue_task` and chain known follow-ups with `depends_on` as they become known \u2014 the chain grows append-only, so you don't need the whole plan up front. Never fabricate steps just to assemble a batch.\n- **Base nodes are reserved for environment-specific testing.** Apply Workflow 3.b0: only work that verifies a machine's physical environment runs on a base node (pinned with `required_tags`/`target_node_id`); every new, independent `code_change` gets its own cloned worktree, and that branch's follow-ups return to it (3.b1). Node availability is not branch isolation.\n- **Worktree affinity.** Apply Workflow 3.b1: route a branch's follow-ups back to its own worktree node (`required_tags: [\"worktree=<branch>\"]` or `target_node_id`, taken from the `mesh_clone_node` result or a live `mesh_status`); only `convergence` (merge/push) runs base-side.\n- **Classify task difficulty honestly.** Judge each task's real difficulty (`easy`/`medium`/`difficult`/`freeform`) per the Task difficulty section above \u2014 it is a routing hint, and the matched slot's own model/thinking is what launches. Never bend difficulty to chase a model; retune slots instead (`mesh_node_slots` action `set`).\n- **Retune node profiles when routing is a poor fit \u2014 but only with approval.** A node's capability slots (its provider/model/thinking + difficulty range + capability tags, seen via `mesh_node_slots` action `list`) are what task\u2192node fitness routing matches against. If you notice a persistent mismatch \u2014 e.g. every `difficult` task lands on a node whose only slot is a cheap model, or a capability a node clearly has isn't declared \u2014 you MAY propose a slot change with `mesh_node_slots` action `set` (write=false). That returns current-vs-proposed; present that diff to the user with a one-line reason and apply (write=true) ONLY after they approve. It is a WHOLESALE replacement of the node's slots, so include the slots you want to keep. Never rewrite a node's profile silently or without a clear routing reason.\n- **Bootstrap a node's slots from what's actually installed.** When a node has NO slots configured (routing then falls back to \"first available provider\"), or CLI agents were newly installed on it, call `mesh_node_slots({ action: \"propose\", node_id })` instead of hand-writing a profile. It detects the node's installed CLI agents and drafts a slot list from them \u2014 read-only, it never writes. Present its `proposedSlots` with the `droppedSlots` / `destructive` fields it reports (a wholesale write would delete any existing hand-tuned slot the draft doesn't reproduce, including providers not currently on PATH), then apply with `mesh_node_slots({ action: \"set\", node_id, slots: proposedSlots, write: true })` after approval. It flags `unknownProvider` / `provisional` slots whose placement is a conservative guess rather than an attested one \u2014 call those out rather than presenting them as settled.\n- **Respect explicit provider requests.** Map: Claude/Claude Code \u2192 `claude-cli`, Codex \u2192 `codex-cli`, Cursor \u2192 `cursor-cli`, Kimi \u2192 `kimi`, OpenCode \u2192 `opencode`, Grok \u2192 `grok-cli`, Antigravity \u2192 `antigravity-cli`. Never substitute the coordinator's own runtime.\n- **Verify via git, not source.** Use `mesh_git_status` to confirm side effects. Treat agent summaries as self-reports, not verification.\n- **Match concurrency to task kind.** Independent read-only tasks (`live_debug_readonly`) dispatch all at once up to the read-only cap \u2014 no worktree, no free node needed. Each write task needs its OWN branch workspace (Workflow 3.b0); spreading writes across base nodes is NOT a substitute: a mesh with four base nodes still has zero branch isolation. Ramp up cautiously only when tasks share a base branch or submodule pointer (landing order matters). Never launch a second session onto in-flight work for the same issue, even when `mesh_read_chat` shows no final message yet \u2014 successive stages of one investigation stay in their session (see Workflow 3f).\n- **Check history first.** Call `mesh_task_history` at session start to avoid duplicate work and inform recovery. On failure, read task history before retrying.\n- **Don't reopen already-done work after a resume.** Before reopening a reported issue after context compaction or session resume, check current git state and recent session context. If another session has already completed the work, continue from the existing diff/commit instead of starting a duplicate investigation.\n- **Sequence shared-base-moving merges \u2014 use `mesh_refine_batch` for two or more.** Merging one worktree advances another in-flight worktree's base \u2014 especially a shared submodule pointer \u2014 turning a clean fast-forward into a diverged rebase. When you have 2+ sibling worktrees to land, pass them to `mesh_refine_batch` (dry-run first) instead of calling `mesh_refine_node` once per node: it picks a conflict-aware order (non-submodule first, submodule-touching serialized last), and because each node re-resolves the base and auto-rebases before its own gates, siblings that fall behind are rebased for you rather than by hand. It also avoids the `base_locked` contention that concurrent single-node refines cause. It is not a conflict solver \u2014 a real content or submodule conflict still lands that node in `blocked_review` for manual resolution while the rest of the batch proceeds. Only drop to per-node `mesh_refine_node` for a single branch, or to hand-resolve a node the batch reported blocked.\n- **Converge branches.** After worktree tasks: refine/fast-forward, or classify as `pushed_feature_branch_needs_merge` / `blocked_review` / `cleanup_candidate` / `not_mergeable`. Clean up with `mesh_remove_node`.\n- **Refinery is config-driven.** `mesh_refine_node` must run validation from `.adhdev/refine.{json,yaml,yml}` or `repo-mesh.refine.*`. Heuristics are scaffolding only.\n- **Submodule reachability = publish-needed.** `submodule_reachability_failed` \u2192 classify as `blocked_review`, request user approval to push to submodule main, then rerun `mesh_refine_node`.\n- **Honor per-node instructions.** When a node carries a \u{1F4CC} Node instruction in the nodes section, include the relevant parts of that instruction in the task message you send to that node. Don't paraphrase the instruction into your own words \u2014 quote it verbatim so the worker agent sees exactly what the user wrote.\n- **Mission status does not update itself.** When a mission's tasks are all done or the work is abandoned, explicitly call `mesh_mission_upsert` to set status `completed` or `abandoned`. Never leave a finished mission in `active`. All-cancelled tasks with no further work \u2192 `abandoned`.\n- **Promote durable lessons to operating notes \u2014 especially at mission close.** Before calling `mesh_mission_upsert` with status `completed`/`abandoned`, ask whether this mission taught something a future coordinator needs (a provider quirk, a pattern to avoid, a recovery lesson); if so, call `mesh_note` with action `record` FIRST \u2014 a mission's goal/history is invisible to the next coordinator once it completes, so an unrecorded lesson is lost at exactly the moment it was learned. Record only when all three hold: (a) a coordinator on another day or another session would act differently knowing it, (b) it cannot be rediscovered from code, config, or `git log`, and (c) it is not a one-off detail specific to this single mission. Note that operating notes reach the COORDINATOR prompt only \u2014 they are never injected into delegated worker sessions, so a convention workers must follow belongs in a CI gate or the repo's agent instructions file, not in a note.\n- **Don't spawn a nested coordinator for simple inspection.** Do not spawn a nested coordinator-like agent for simple inspection tasks. If delegation is required, use explicit provider selection and a fully self-contained, bounded task instruction.\n- **Keep internal traffic out of the transcript.** Internal tool calls, status events, control messages, and debug output must not appear as ordinary user-visible chat transcript content unless explicitly marked user-facing by the producing agent.\n- **Never fabricate tool results.** Always call the actual tool.\n- **Keep the user informed.** One or two sentences after each delegation round.\n- **Act on stopped-work notices.** `queue_dependency_blocked` (a task failed or was cancelled; its `depends_on` dependents wait under the default `block` policy): tasks waiting on it never start on their own \u2014 retry the root with `mesh_queue_requeue(task_id, force=true)` (add `message` if the approach must change), or cancel the waiting ids with `mesh_queue_cancel`, including after your own cancel. `queue_dependency_cancelled` (the mesh policy is `cancel`): cancelled work never revives \u2014 re-plan with new `mesh_enqueue_task` steps if the branch is still wanted. Each notice is sent once \u2014 do not poll `mesh_view_queue` waiting for another.\n- **Verify a mission goal's claims before dispatching on them.** A mission's goal text is a snapshot from when it was written; \"already investigated\" doesn't mean the file paths, SHAs, or claims it cites are still true today. Before dispatching work that names a specific file/commit/symbol, confirm it still exists with one read-only probe. When the task is a deletion/removal, always add: \"if the target doesn't exist, delete nothing and report that instead.\"\n- **Close missions yourself \u2014 don't wait on passive signals.** `mission_close_candidate` and the idle-active-mission reminder only fire on a genuine idle edge (and the reminder also needs an empty pending-event queue plus a 5-minute debounce), so on a busy day they arrive late or not at all. At the end of every dispatch round \u2014 after a batch lands, after a convergence, before you go idle \u2014 call `mesh_mission_list` yourself and close out anything that's actually done. An `active` mission with no remaining work is a debt, not a state to wait out.\n";
       }
     });
     function resolveCoordinatorRules(meshBaseWorkspace) {
@@ -39708,8 +39708,93 @@ ${pattern}
       const sessionDir = crypto3.createHash("sha256").update(String(input.sessionKey || "")).digest("hex").slice(0, 16);
       return path23.join(root, sessionDir, path23.basename(declared));
     }
-    function isPrivateWorkerTarget(input) {
-      return Boolean(input.privateConfigPath || input.workerHome);
+    function resolveWorkerMcpPlacement(input) {
+      const declared = String(input.declaredPath || "").trim();
+      if (input.forcedPrivatePath) {
+        return {
+          kind: "private_file",
+          path: input.forcedPrivatePath,
+          note: `launch forces an explicit config file \u2014 worker config kept out of the shared workspace (${declared} untouched)`
+        };
+      }
+      if (declared.startsWith("~") && input.workerHome) {
+        return {
+          kind: "private_file",
+          path: resolveWorkerMcpConfigPath(declared, input.workspace, input.workerHome, input.configRootPrefix),
+          note: `${declared} resolved inside the worker-private root`
+        };
+      }
+      if (path23.isAbsolute(declared)) {
+        return { kind: "shared_merge", note: `${declared} is a pinned absolute path \u2014 merging the worker entry into it` };
+      }
+      const alt = input.privateMcpConfig;
+      if (!alt || !input.workerHome) {
+        return {
+          kind: "shared_merge",
+          note: `${declared} is workspace-relative and this provider has no private MCP layer \u2014 merging into the shared file (undone at session teardown)`
+        };
+      }
+      const shadowing = alt.overriddenBy.filter((rel) => workerMcpConfigDeclaresServer(
+        path23.join(input.workspace, rel),
+        input.format,
+        input.serverName
+      ));
+      if (shadowing.length === 0) {
+        return {
+          kind: "private_file",
+          path: path23.join(input.workerHome, alt.relativePath),
+          note: `worker config written to the private user layer (${alt.relativePath}) \u2014 ${declared} in the workspace untouched`
+        };
+      }
+      const why = `workspace ${shadowing.join(", ")} already declares "${input.serverName}" and would shadow the private layer`;
+      if (!input.hasServer) {
+        return { kind: "skip", note: `${why} \u2014 no worker server to deliver, workspace left untouched` };
+      }
+      if (alt.inlineEnvVar) {
+        return { kind: "inline_env", envVar: alt.inlineEnvVar, note: `${why} \u2014 delivering inline via ${alt.inlineEnvVar}` };
+      }
+      return { kind: "shared_merge", note: `${why} \u2014 merging into ${declared} (entry restored at session teardown)` };
+    }
+    function isPrivateWorkerTarget(target, input) {
+      if (input.privateConfigPath && path23.resolve(target) === path23.resolve(input.privateConfigPath)) return true;
+      return Boolean(input.workerHome) && isPathInside2(target, input.workerHome);
+    }
+    function isPathInside2(target, root) {
+      const rel = path23.relative(path23.resolve(root), path23.resolve(target));
+      return !!rel && !rel.startsWith("..") && !path23.isAbsolute(rel);
+    }
+    function workerMcpConfigDeclaresServer(filePath2, format, serverName) {
+      if (!(0, import_fs12.existsSync)(filePath2)) return false;
+      try {
+        const parsed = parseMeshCoordinatorMcpConfig((0, import_fs12.readFileSync)(filePath2, "utf-8"), format);
+        const servers = readServersRecord(parsed, format);
+        return !!servers && Object.prototype.hasOwnProperty.call(servers, serverName);
+      } catch {
+        return true;
+      }
+    }
+    function readServersRecord(config, format) {
+      const raw = config?.[getMcpServersKey(format)];
+      return raw && typeof raw === "object" && !Array.isArray(raw) ? raw : null;
+    }
+    function buildWorkerEntry(input) {
+      if (!input.server) return null;
+      const entryEnv = {};
+      if (input.token) entryEnv.ADHDEV_WORKER_TASK_TOKEN = input.token;
+      if (input.bind) entryEnv.ADHDEV_WORKER_SESSION_BIND = input.bind;
+      return buildMeshCoordinatorMcpServerEntry(input.format, {
+        command: input.server.command,
+        args: input.server.args,
+        ...Object.keys(entryEnv).length ? { env: entryEnv } : {}
+      });
+    }
+    function buildInlineWorkerMcpConfig(input) {
+      if (!isSupportedMeshCoordinatorConfigFormat(input.format)) {
+        throw new Error(`worker_mcp_unsupported_format: ${String(input.format)}`);
+      }
+      const entry = buildWorkerEntry(input);
+      const servers = entry ? { [input.serverName]: entry } : {};
+      return JSON.stringify({ [getMcpServersKey(input.format)]: servers });
     }
     function writeWorkerMcpConfig(input) {
       if (!isSupportedMeshCoordinatorConfigFormat(input.format)) {
@@ -39727,20 +39812,23 @@ ${pattern}
           `worker_mcp_home_rooted_without_private_home: ${declared} would overwrite the coordinator config`
         );
       }
-      const entryEnv = {};
-      if (input.token) entryEnv.ADHDEV_WORKER_TASK_TOKEN = input.token;
-      if (input.bind) entryEnv.ADHDEV_WORKER_SESSION_BIND = input.bind;
-      const workerEntry = input.server ? buildMeshCoordinatorMcpServerEntry(input.format, {
-        command: input.server.command,
-        args: input.server.args,
-        ...Object.keys(entryEnv).length ? { env: entryEnv } : {}
-      }) : null;
+      const workerEntry = buildWorkerEntry(input);
       const serversKey = getMcpServersKey(input.format);
       let config;
-      if (isPrivateWorkerTarget(input)) {
+      const isPrivate = isPrivateWorkerTarget(target, input);
+      let previousEntry;
+      if (isPrivate) {
+        let existing = {};
+        if ((0, import_fs12.existsSync)(target)) {
+          try {
+            existing = parseMeshCoordinatorMcpConfig((0, import_fs12.readFileSync)(target, "utf-8"), input.format);
+          } catch {
+            existing = {};
+          }
+        }
         const servers = {};
         if (workerEntry) servers[input.serverName] = workerEntry;
-        config = { [serversKey]: servers };
+        config = { ...existing, [serversKey]: servers };
       } else {
         let existing = {};
         if ((0, import_fs12.existsSync)(target)) {
@@ -39756,8 +39844,8 @@ ${pattern}
             throw new Error(`worker_mcp_shared_config_parse_failed: ${target}: ${err?.message || err}`);
           }
         }
-        const existingServersRaw = existing[serversKey];
-        const existingServers = existingServersRaw && typeof existingServersRaw === "object" && !Array.isArray(existingServersRaw) ? existingServersRaw : {};
+        const existingServers = readServersRecord(existing, input.format) || {};
+        previousEntry = existingServers[input.serverName];
         config = {
           ...existing,
           [serversKey]: workerEntry ? { ...existingServers, [input.serverName]: workerEntry } : existingServers
@@ -39770,17 +39858,28 @@ ${pattern}
       (0, import_fs12.mkdirSync)(path23.dirname(target), { recursive: true });
       (0, import_fs12.writeFileSync)(target, serializeMeshCoordinatorMcpConfig(config, input.format), "utf-8");
       ensureLocalGitExclude(input.workspace, target);
+      if (!isPrivate && workerEntry && input.teardownSessionId) {
+        recordSharedWorkerMcpEntry({
+          sessionId: input.teardownSessionId,
+          target,
+          format: input.format,
+          serverName: input.serverName,
+          workspace: input.workspace,
+          entry: workerEntry,
+          previousEntry
+        });
+      }
       return target;
     }
     function removeWorkerMcpConfigEntry(input) {
-      if (isPrivateWorkerTarget(input)) return false;
       if (!isSupportedMeshCoordinatorConfigFormat(input.format)) return false;
-      const target = resolveWorkerMcpConfigPath(
+      const target = input.privateConfigPath || resolveWorkerMcpConfigPath(
         input.declaredPath,
         input.workspace,
         input.workerHome,
         input.configRootPrefix
       );
+      if (isPrivateWorkerTarget(target, input)) return false;
       if (!(0, import_fs12.existsSync)(target)) return false;
       let existing;
       try {
@@ -39790,11 +39889,12 @@ ${pattern}
         return false;
       }
       const serversKey = getMcpServersKey(input.format);
-      const serversRaw = existing[serversKey];
-      const servers = serversRaw && typeof serversRaw === "object" && !Array.isArray(serversRaw) ? serversRaw : null;
+      const servers = readServersRecord(existing, input.format);
       if (!servers || !(input.serverName in servers)) return false;
+      if (input.expectedEntry !== void 0 && !sameEntry(servers[input.serverName], input.expectedEntry)) return false;
       const nextServers = { ...servers };
-      delete nextServers[input.serverName];
+      if (input.restoreEntry !== void 0) nextServers[input.serverName] = input.restoreEntry;
+      else delete nextServers[input.serverName];
       const next = { ...existing, [serversKey]: nextServers };
       try {
         (0, import_fs12.writeFileSync)(target, serializeMeshCoordinatorMcpConfig(next, input.format), "utf-8");
@@ -39802,8 +39902,78 @@ ${pattern}
         LOG.warn("WorkerMcp", `worker MCP cleanup: failed to write ${target}: ${err?.message || err}`);
         return false;
       }
-      LOG.info("WorkerMcp", `removed worker MCP entry "${input.serverName}" from shared config ${target}`);
+      LOG.info(
+        "WorkerMcp",
+        `${input.restoreEntry !== void 0 ? "restored the shadowed" : "removed worker MCP"} entry "${input.serverName}" in shared config ${target}`
+      );
       return true;
+    }
+    function sameEntry(a, b) {
+      return JSON.stringify(a) === JSON.stringify(b);
+    }
+    function sharedEntryKey(target, serverName) {
+      return `${path23.resolve(target)}\0${serverName}`;
+    }
+    function recordSharedWorkerMcpEntry(input) {
+      const key2 = sharedEntryKey(input.target, input.serverName);
+      let record2 = SHARED_ENTRIES.get(key2);
+      if (!record2) {
+        record2 = {
+          target: input.target,
+          format: input.format,
+          serverName: input.serverName,
+          workspace: input.workspace,
+          // When the slot held a sibling worker's entry that THIS registry did
+          // not record (written by a previous daemon incarnation), it is not
+          // an original worth restoring — see `isDeadWorkerEntry`.
+          original: input.previousEntry,
+          holders: []
+        };
+        SHARED_ENTRIES.set(key2, record2);
+      }
+      record2.holders = record2.holders.filter((holder) => holder.sessionId !== input.sessionId);
+      record2.holders.push({ sessionId: input.sessionId, entry: input.entry });
+    }
+    function isDeadWorkerEntry(entry) {
+      const env2 = entry || null;
+      const bind = env2?.env?.[WORKER_SESSION_BIND_ENV] ?? env2?.environment?.[WORKER_SESSION_BIND_ENV];
+      if (typeof bind !== "string" || !bind) return false;
+      return !verifyWorkerSessionBind(bind);
+    }
+    function releaseWorkerMcpSharedEntries(sessionId) {
+      const sid = String(sessionId || "").trim();
+      if (!sid) return 0;
+      let changed = 0;
+      for (const [key2, record2] of [...SHARED_ENTRIES.entries()]) {
+        const mine = record2.holders.find((holder) => holder.sessionId === sid);
+        if (!mine) continue;
+        record2.holders = record2.holders.filter((holder) => holder.sessionId !== sid);
+        const survivor = record2.holders[record2.holders.length - 1];
+        const restoreEntry = survivor ? survivor.entry : record2.original !== void 0 && !isDeadWorkerEntry(record2.original) ? record2.original : void 0;
+        if (removeWorkerMcpConfigEntry({
+          declaredPath: record2.target,
+          format: record2.format,
+          serverName: record2.serverName,
+          workspace: record2.workspace,
+          expectedEntry: mine.entry,
+          ...restoreEntry !== void 0 ? { restoreEntry } : {}
+        })) changed += 1;
+        if (!survivor) SHARED_ENTRIES.delete(key2);
+      }
+      return changed;
+    }
+    function subscribeWorkerMcpSharedConfigCleanup(bus) {
+      return bus.on("terminated", (event) => {
+        if (event.cause === "daemon_shutdown") return;
+        try {
+          releaseWorkerMcpSharedEntries(event.sessionId);
+        } catch (err) {
+          LOG.warn("WorkerMcp", `shared worker MCP cleanup failed for ${event.sessionId}: ${err?.message || err}`);
+        }
+      }, { name: "mesh.worker-mcp-shared-config" });
+    }
+    function __resetSharedWorkerMcpEntriesForTest() {
+      SHARED_ENTRIES.clear();
     }
     function expandWorkerIsolationPlaceholders(value, isolation) {
       if (!value.includes(WORKER_HOME_PLACEHOLDER)) return value;
@@ -39814,6 +39984,7 @@ ${pattern}
     var path23;
     var crypto3;
     var import_fs12;
+    var SHARED_ENTRIES;
     var WORKER_HOME_PLACEHOLDER;
     var WORKER_SESSION_BIND_ENV;
     var init_worker_mcp_config = __esm2({
@@ -39826,6 +39997,8 @@ ${pattern}
         import_fs12 = require("fs");
         init_git_local_exclude();
         init_logger();
+        init_worker_session_bind_registry();
+        SHARED_ENTRIES = /* @__PURE__ */ new Map();
         WORKER_HOME_PLACEHOLDER = "{{workerHome}}";
         WORKER_SESSION_BIND_ENV = "ADHDEV_WORKER_SESSION_BIND";
       }
@@ -39965,6 +40138,9 @@ ${pattern}
             // The ISOLATED surface: empty means the owner's global `~/.cursor/mcp.json`
             // is not reachable and therefore cannot be merged in.
             ensureDirs: [".cursor"],
+            // The worker entry goes into the PRIVATE global layer (loaded without an
+            // approval gate — measured), not the shared `<ws>/.cursor/mcp.json`.
+            workerMcpConfig: { relativePath: path24.join(".cursor", "mcp.json"), overriddenBy: [path24.join(".cursor", "mcp.json")] },
             workspaceLinks: [
               // Transcripts must stay readable by the daemon, which globs the REAL
               // `~/.cursor/projects/*/agent-transcripts/*`. Leaf only — the parent
@@ -40091,7 +40267,11 @@ ${pattern}
             // The ISOLATED surfaces: empty means grok's harness-compatibility layer
             // has no owner cursor/claude config to import — neither MCP servers nor
             // the `user_rule` that was observed in the worker prompt.
-            ensureDirs: [".cursor", ".claude"]
+            ensureDirs: [".cursor", ".claude"],
+            // The worker entry goes into the PRIVATE `~/.claude.json` (claude-compat
+            // user layer), which outranks the workspace `.mcp.json` by name — so it
+            // also shadows a coordinator's `adhdev-mesh` there without touching it.
+            workerMcpConfig: { relativePath: ".claude.json", overriddenBy: [] }
           },
           /**
            * ★codex-cli (measured live 2026-09-19, codex-cli 0.154.0).
@@ -40294,7 +40474,10 @@ ${pattern}
               // Transcript surfaces — linked THROUGH to the real home.
               { relativePath: "sessions", mode: "symlink" },
               { relativePath: "session_index.jsonl", mode: "symlink" }
-            ]
+            ],
+            // `<KIMI_CODE_HOME>/mcp.json` is kimi's user layer — the LOWEST of its
+            // three, so a same-named entry in either workspace file shadows it.
+            workerMcpConfig: { relativePath: "mcp.json", overriddenBy: [".mcp.json", path24.join(".kimi-code", "mcp.json")] }
           },
           /**
            * ★opencode (measured live 2026-09-19).
@@ -40350,7 +40533,16 @@ ${pattern}
                 stripJsonKeys: ["mcp"]
               }
             ],
-            ensureDirs: ["opencode"]
+            ensureDirs: ["opencode"],
+            // The private global `opencode.json` (the mcp-stripped copy above) is the
+            // user layer; the project `opencode.json` wins by name, and on that
+            // collision `OPENCODE_CONFIG_CONTENT` (which outranks it) carries the
+            // entry instead of a write into the shared project file.
+            workerMcpConfig: {
+              relativePath: path24.join("opencode", "opencode.json"),
+              overriddenBy: ["opencode.json", path24.join(".opencode", "opencode.json")],
+              inlineEnvVar: "OPENCODE_CONFIG_CONTENT"
+            }
           }
         ];
       }
@@ -40537,8 +40729,10 @@ ${pattern}
       WORKER_PRIVATE_HOME_SPECS: () => WORKER_PRIVATE_HOME_SPECS,
       WORKER_SESSION_BIND_ENV: () => WORKER_SESSION_BIND_ENV,
       WORKER_TOKEN_CANARY_PREFIX: () => WORKER_TOKEN_CANARY_PREFIX,
+      __resetSharedWorkerMcpEntriesForTest: () => __resetSharedWorkerMcpEntriesForTest,
       __resetWorkerSessionBindsForTest: () => __resetWorkerSessionBindsForTest,
       __resetWorkerTaskTokensForTest: () => __resetWorkerTaskTokensForTest,
+      buildInlineWorkerMcpConfig: () => buildInlineWorkerMcpConfig,
       deriveCursorWorkspaceSlug: () => deriveCursorWorkspaceSlug,
       deriveWorkerMcpDeliveryStatus: () => deriveWorkerMcpDeliveryStatus,
       exchangeWorkerSessionBind: () => exchangeWorkerSessionBind,
@@ -40555,18 +40749,22 @@ ${pattern}
       mintWorkerTaskToken: () => mintWorkerTaskToken,
       prepareWorkerPrivateHome: () => prepareWorkerPrivateHome,
       reconcileWorkerSessionBindsAfterRestore: () => reconcileWorkerSessionBindsAfterRestore,
+      releaseWorkerMcpSharedEntries: () => releaseWorkerMcpSharedEntries,
       removeWorkerMcpConfigEntry: () => removeWorkerMcpConfigEntry,
       resolvePrivateWorkerMcpConfigPath: () => resolvePrivateWorkerMcpConfigPath,
       resolveWorkerMcpConfigPath: () => resolveWorkerMcpConfigPath,
       resolveWorkerMcpIsolation: () => resolveWorkerMcpIsolation,
+      resolveWorkerMcpPlacement: () => resolveWorkerMcpPlacement,
       resolveWorkerTrustHome: () => resolveWorkerTrustHome,
       revokeWorkerSessionBind: () => revokeWorkerSessionBind,
       revokeWorkerSessionBindsForSession: () => revokeWorkerSessionBindsForSession,
       revokeWorkerTaskToken: () => revokeWorkerTaskToken,
       setWorkerSessionBindPersistence: () => setWorkerSessionBindPersistence,
       subscribeWorkerBindRevocation: () => subscribeWorkerBindRevocation,
+      subscribeWorkerMcpSharedConfigCleanup: () => subscribeWorkerMcpSharedConfigCleanup,
       verifyWorkerSessionBind: () => verifyWorkerSessionBind,
       verifyWorkerTaskToken: () => verifyWorkerTaskToken,
+      workerMcpConfigDeclaresServer: () => workerMcpConfigDeclaresServer,
       workerSessionBindStatus: () => workerSessionBindStatus,
       writeWorkerMcpConfig: () => writeWorkerMcpConfig
     });
@@ -40725,32 +40923,58 @@ ${pattern}
           notes.push(`worker session bind mint failed (${err?.message || err})`);
         }
       }
-      const privateConfigPath = resolvePrivateWorkerMcpConfigPath({
+      const forcedPath = resolvePrivateWorkerMcpConfigPath({
         declaredPath,
         sessionKey: input.sessionKey,
         forcedConfigFile: input.forcedConfigFile,
         baseDir: input.baseDir
       });
-      if (privateConfigPath) {
-        notes.push(`launch forces an explicit config file \u2014 worker config kept out of the shared workspace (${declaredPath} untouched)`);
+      const placement = resolveWorkerMcpPlacement({
+        declaredPath,
+        format,
+        serverName,
+        workspace: input.workspace,
+        workerHome: result.workerHome,
+        ...spec?.configRootPrefix ? { configRootPrefix: spec.configRootPrefix } : {},
+        privateMcpConfig: spec?.workerMcpConfig,
+        forcedPrivatePath: forcedPath,
+        hasServer: Boolean(input.server)
+      });
+      notes.push(placement.note);
+      if (placement.kind === "skip") {
+        if (pendingBind) revokeWorkerSessionBind(pendingBind.bind);
+        return result;
       }
       try {
-        result.configPath = writeWorkerMcpConfig({
-          declaredPath,
-          format,
-          serverName,
-          ...privateConfigPath ? { privateConfigPath } : {},
-          workspace: input.workspace,
-          workerHome: result.workerHome,
-          ...spec?.configRootPrefix ? { configRootPrefix: spec.configRootPrefix } : {},
-          server: input.server,
-          token: input.token,
-          ...pendingBind ? { bind: pendingBind.bind } : {}
-        });
+        if (placement.kind === "inline_env") {
+          const inline = buildInlineWorkerMcpConfig({
+            format,
+            serverName,
+            server: input.server,
+            token: input.token,
+            ...pendingBind ? { bind: pendingBind.bind } : {}
+          });
+          result.configEnv = { [placement.envVar]: inline };
+        } else {
+          result.configPath = writeWorkerMcpConfig({
+            declaredPath,
+            format,
+            serverName,
+            ...placement.kind === "private_file" ? { privateConfigPath: placement.path } : {},
+            workspace: input.workspace,
+            workerHome: result.workerHome,
+            ...spec?.configRootPrefix ? { configRootPrefix: spec.configRootPrefix } : {},
+            server: input.server,
+            token: input.token,
+            ...pendingBind ? { bind: pendingBind.bind } : {},
+            ...input.bindContext?.sessionId ? { teardownSessionId: input.bindContext.sessionId } : {}
+          });
+          if (placement.kind === "shared_merge") result.configShared = true;
+        }
         if (input.server) result.configHasServer = true;
         if (pendingBind) result.bind = pendingBind.bind;
         notes.push(
-          `worker MCP config written to ${result.configPath}` + (pendingBind ? ` (session bind issued for ${pendingBind.sessionId})` : "")
+          (result.configPath ? `worker MCP config written to ${result.configPath}` : `worker MCP config delivered inline via ${Object.keys(result.configEnv || {}).join(", ")}`) + (pendingBind ? ` (session bind issued for ${pendingBind.sessionId})` : "")
         );
       } catch (err) {
         if (pendingBind) revokeWorkerSessionBind(pendingBind.bind);
@@ -42824,7 +43048,7 @@ ${rendered.join("\n\n")}`,
       const taskSuffix = taskId ? ` for task ${taskId}` : "";
       return `[System] ${label} is not yet available${taskSuffix} \u2014 call mesh_task_report once it replicates; do not poll repeatedly.`;
     }
-    function resolve13(ref, resolveRef, missing) {
+    function resolve14(ref, resolveRef, missing) {
       if (!ref) return null;
       const text = resolveRef(ref);
       if (text === null) missing.push(ref);
@@ -42873,7 +43097,7 @@ ${statusLine}` : text;
       const weakCompletion = s2.strength === "weak";
       const completionLead = weakCompletion ? `[System] ${nodeLabel} reported a possible completion (weak evidence) \u2014 awaiting confirmation${metadata}.` : `[System] ${nodeLabel} has completed its task and is now idle${metadata}.`;
       const verifyTextNote = " Completion evidence is weak \u2014 verify via mesh_read_chat or git status before declaring the task done; the worker may still be mid-turn or parked on an approval/modal.";
-      const completionSummary = resolve13(input.refs.summary, input.resolveRef, missing);
+      const completionSummary = resolve14(input.refs.summary, input.resolveRef, missing);
       if (completionSummary) {
         const truncationSuffix = "\n\u2026[truncated \u2014 call mesh_read_chat once for the full transcript]";
         const surfaced = truncate(completionSummary, MESH_COMPLETION_SURFACE_MAX_CHARS, truncationSuffix);
@@ -42909,7 +43133,7 @@ ${surfaced}`;
           });
         }
       } else {
-        const modalMessage = resolve13(input.refs.summary, input.resolveRef, missing);
+        const modalMessage = resolve14(input.refs.summary, input.resolveRef, missing);
         if (modalMessage) lines.push(`
 ${modalMessage}`);
       }
@@ -42925,11 +43149,11 @@ Answer with mesh_answer_question(node_id, session_id${s2.promptId ? `, promptId:
       const metadata = formatMetadataSuffix(s2);
       if (s2.stopReason === "auth_failed" || s2.stopReason === "billing_failed") {
         const kind = s2.stopReason === "billing_failed" ? "billing/subscription" : "authentication";
-        const detail = resolve13(input.refs.error, input.resolveRef, missing) ?? resolve13(input.refs.summary, input.resolveRef, missing);
+        const detail = resolve14(input.refs.error, input.resolveRef, missing) ?? resolve14(input.refs.summary, input.resolveRef, missing);
         return `[System] ${nodeLabel} stopped because the provider reported a non-retryable ${kind} failure${metadata}. Automatic recovery was suppressed so the same rejected credential or entitlement does not waste retries.${detail ? ` ${detail}` : ""}`;
       }
       if (s2.stopReason === "quota_exceeded") {
-        const detail = resolve13(input.refs.error, input.resolveRef, missing) ?? resolve13(input.refs.summary, input.resolveRef, missing);
+        const detail = resolve14(input.refs.error, input.resolveRef, missing) ?? resolve14(input.refs.summary, input.resolveRef, missing);
         return `[System] ${nodeLabel} stopped because the provider's usage quota is exhausted${metadata}. This is not a billing or auth problem \u2014 it resets automatically at the next window boundary, and ADHDev will resume work on it once quota is available.${detail ? ` ${detail}` : ""}`;
       }
       if (s2.stopReason === "direct_not_redelivered") {
@@ -42947,7 +43171,7 @@ Answer with mesh_answer_question(node_id, session_id${s2.promptId ? `, promptId:
           rc.taskAttemptCount > 0 ? `- This task has been attempted ${rc.taskAttemptCount} time(s)` : "",
           `- Recommendation: ${rc.advice}`
         ];
-        const lastTaskMessage = resolve13(input.refs.lastTaskMessage ?? input.refs.prompt, input.resolveRef, missing);
+        const lastTaskMessage = resolve14(input.refs.lastTaskMessage ?? input.refs.prompt, input.resolveRef, missing);
         if (rc.retryRecommended && lastTaskMessage) {
           parts.push(
             `
@@ -42955,7 +43179,7 @@ Answer with mesh_answer_question(node_id, session_id${s2.promptId ? `, promptId:
 **Original task to retry:**`,
             `> ${truncateAppend(lastTaskMessage, RECOVERY_PROMPT_TRUNCATE_CHARS, "...")}`,
             `
-To retry: call \`mesh_launch_session\` for this node, then \`mesh_send_task\` with the original task.`
+To retry: a queued task goes back through the queue \u2014 check \`mesh_view_queue\` (it may already be pending; auto-launch starts its session), else \`mesh_queue_requeue\`. Only a direct \`mesh_send_task\` dispatch is resent by hand: \`mesh_launch_session\`, then \`mesh_send_task\` with the original task.`
           );
         } else if (!rc.retryRecommended) {
           parts.push(`
@@ -42976,7 +43200,7 @@ Do NOT retry on this node. Consider reassigning to a different node or asking th
     }
     function renderProgress(input, missing) {
       const s2 = input.scalars;
-      const note = resolve13(input.refs.note, input.resolveRef, missing);
+      const note = resolve14(input.refs.note, input.resolveRef, missing);
       const taskId = s2.progressTaskId ?? s2.taskId ?? "";
       if (note === null) return pointerLine(`${s2.nodeLabel}'s progress note`, taskId);
       return `[System] ${s2.nodeLabel} progress on task ${taskId}: ${note.trim()} \u2014 this is an informational mid-task update, NOT a completion. The task is still running; do not dispatch it elsewhere and do not poll. Wait for its completion event.`;
@@ -42984,7 +43208,7 @@ Do NOT retry on this node. Consider reassigning to a different node or asking th
     function renderWorktreeBootstrap(input, missing) {
       const s2 = input.scalars;
       if (s2.worktreeOutcome === "failed") {
-        const error = resolve13(input.refs.error, input.resolveRef, missing);
+        const error = resolve14(input.refs.error, input.resolveRef, missing);
         return `[System] ${s2.nodeLabel} worktree bootstrap failed${error ? `: ${error}` : "."}. Use \`mesh_retry_node_bootstrap\` to retry or inspect the node state.`;
       }
       const prefix = `[System] ${s2.nodeLabel} worktree bootstrap completed${s2.worktreePath ? ` at ${s2.worktreePath}` : ""}${s2.durationMs !== void 0 ? ` in ${Math.round(s2.durationMs / 1e3)}s` : ""}.`;
@@ -43021,7 +43245,7 @@ Next step: ${nextStep}`;
         s2.convergenceStatus ? `convergence=${s2.convergenceStatus}` : "",
         s2.refineBlockedReason ? `reason=${s2.refineBlockedReason}` : ""
       ].filter(Boolean).join("; ");
-      const refineError = resolve13(input.refs.error, input.resolveRef, missing);
+      const refineError = resolve14(input.refs.error, input.resolveRef, missing);
       const parts = [
         `[System] Refinery async job for ${nodeLabel} failed${details ? ` (${details})` : ""}${refineError ? `: ${refineError}` : "."}`,
         s2.refineNextStep ? `Next step: ${s2.refineNextStep}` : "Review the terminal refine event/ledger before retrying."
@@ -43043,7 +43267,7 @@ Next step: ${nextStep}`;
       const taskId = s2.reportTaskId ?? s2.taskId ?? "";
       const outcome = s2.reportOutcome ?? "";
       if (s2.reportHasSummary) {
-        const summary = resolve13(input.refs.report, input.resolveRef, missing);
+        const summary = resolve14(input.refs.report, input.resolveRef, missing);
         if (summary !== null) {
           return `[System] ${s2.nodeLabel} reported task ${taskId} as '${outcome}' via report_completion: ${summary}`;
         }
@@ -43061,7 +43285,7 @@ Next step: ${nextStep}`;
       const taskId = s2.taskId ?? "";
       const priorGen = s2.priorGeneration !== void 0 ? `g${s2.priorGeneration}` : "a prior generation";
       const lead = `[System] ${s2.nodeLabel} reported a late completion for task ${taskId} from a superseded attempt (generation ${priorGen}); the current attempt continues \u2014 review the summary below if you want to salvage it`;
-      const summary = resolve13(input.refs.summary, input.resolveRef, missing);
+      const summary = resolve14(input.refs.summary, input.resolveRef, missing);
       if (summary !== null) {
         return `${lead}.
 
@@ -43079,7 +43303,7 @@ ${summary}`;
       if (s2.refineOutcome) return renderRefine(input, missing);
       if (s2.reportTaskId || s2.reportOutcome) return renderReportSubstitution(input, missing);
       if (s2.progressTaskId !== void 0) return renderProgress(input, missing);
-      const missionTitle = resolve13(input.refs.missionTitle, input.resolveRef, missing);
+      const missionTitle = resolve14(input.refs.missionTitle, input.resolveRef, missing);
       if (missionTitle !== null) {
         return `[System] ${s2.nodeLabel}: "${missionTitle}"`;
       }
@@ -43408,7 +43632,7 @@ Answer with mesh_answer_question(node_id, session_id${promptId ? `, promptId: "$
 **Original task to retry:**`,
               `> ${rc.lastTaskMessage.length > 300 ? rc.lastTaskMessage.slice(0, 300) + "..." : rc.lastTaskMessage}`,
               `
-To retry: call \`mesh_launch_session\` for this node, then \`mesh_send_task\` with the original task.`
+To retry: a queued task goes back through the queue \u2014 check \`mesh_view_queue\` (it may already be pending; auto-launch starts its session), else \`mesh_queue_requeue\`. Only a direct \`mesh_send_task\` dispatch is resent by hand: \`mesh_launch_session\`, then \`mesh_send_task\` with the original task.`
             );
           } else if (!rc.retryRecommended) {
             parts.push(
@@ -43852,7 +44076,7 @@ ${line}`;
       const waiters = /* @__PURE__ */ new Set();
       return {
         wait(meshId, untilMs, signal) {
-          return new Promise((resolve38, reject) => {
+          return new Promise((resolve39, reject) => {
             if (signal.aborted) {
               reject(signal.reason ?? new Error("aborted"));
               return;
@@ -43867,7 +44091,7 @@ ${line}`;
                 waiters.delete(waiter);
                 timers.clearTimeout(handle);
                 signal.removeEventListener("abort", onAbort);
-                resolve38(v);
+                resolve39(v);
               }
             };
             const onAbort = () => {
@@ -44613,8 +44837,8 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       return {
         acquire() {
           if (held < max && waiters.length === 0) return Promise.resolve(grant());
-          return new Promise((resolve38) => {
-            waiters.push(resolve38);
+          return new Promise((resolve39) => {
+            waiters.push(resolve39);
           });
         },
         inflight: () => held,
@@ -46449,7 +46673,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
               const through = this.deps.store.maxRowid(topic);
               if (this.deps.store.cursorGet(name, topic) >= through)
                 return Promise.resolve({ throughRowid: through });
-              return new Promise((resolve38, reject) => c.waiters.push({ through, resolve: resolve38, reject }));
+              return new Promise((resolve39, reject) => c.waiters.push({ through, resolve: resolve39, reject }));
             } catch (e) {
               return Promise.reject(e);
             }
@@ -47814,7 +48038,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
             } catch (e) {
               return Promise.reject(e);
             }
-            return new Promise((resolve38, reject) => {
+            return new Promise((resolve39, reject) => {
               this.push({
                 t: "append",
                 topic,
@@ -47824,7 +48048,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
                 causal: o?.causal,
                 causalProvider: o?.causalProvider,
                 ref: o?.ref,
-                resolve: resolve38,
+                resolve: resolve39,
                 reject
               });
             });
@@ -47834,8 +48058,8 @@ The instruction it carried was never delivered to anyone. If it still matters, r
               throw new SeqscribeError("ERR_MISUSE", "node is closed");
             validateEntry(entry, this.constants);
             this.topics.get(entry.topic);
-            return new Promise((resolve38, reject) => {
-              this.push({ t: "external", entry, via, resolve: resolve38, reject });
+            return new Promise((resolve39, reject) => {
+              this.push({ t: "external", entry, via, resolve: resolve39, reject });
             });
           }
           // §6.4 fork path ② (HAVE contradiction) is detected outside the queue but the
@@ -47843,8 +48067,8 @@ The instruction it carried was never delivered to anyone. If it still matters, r
           sealStream(topic, writer) {
             if (this.closed)
               throw new SeqscribeError("ERR_MISUSE", "node is closed");
-            return new Promise((resolve38, reject) => {
-              this.push({ t: "seal", topic, writer, resolve: resolve38, reject });
+            return new Promise((resolve39, reject) => {
+              this.push({ t: "seal", topic, writer, resolve: resolve39, reject });
             });
           }
           setOnApplied(hook) {
@@ -47867,15 +48091,15 @@ The instruction it carried was never delivered to anyone. If it still matters, r
           applyCert(cert) {
             if (this.closed)
               throw new SeqscribeError("ERR_MISUSE", "node is closed");
-            return new Promise((resolve38, reject) => {
-              this.push({ t: "cert", cert, resolve: resolve38, reject });
+            return new Promise((resolve39, reject) => {
+              this.push({ t: "cert", cert, resolve: resolve39, reject });
             });
           }
           applyDirective(directive) {
             if (this.closed)
               throw new SeqscribeError("ERR_MISUSE", "node is closed");
-            return new Promise((resolve38, reject) => {
-              this.push({ t: "directive", directive, resolve: resolve38, reject });
+            return new Promise((resolve39, reject) => {
+              this.push({ t: "directive", directive, resolve: resolve39, reject });
             });
           }
           // §7.8 snapshot adoption: stream heads jump to the cut (chains continue from
@@ -47883,8 +48107,8 @@ The instruction it carried was never delivered to anyone. If it still matters, r
           adoptSnapshotCut(topic, cut) {
             if (this.closed)
               throw new SeqscribeError("ERR_MISUSE", "node is closed");
-            return new Promise((resolve38, reject) => {
-              this.push({ t: "adopt", topic, cut, resolve: resolve38, reject });
+            return new Promise((resolve39, reject) => {
+              this.push({ t: "adopt", topic, cut, resolve: resolve39, reject });
             });
           }
           // C7-7 writer-row GC. Local housekeeping only — no signed authority, no
@@ -47903,8 +48127,8 @@ The instruction it carried was never delivered to anyone. If it still matters, r
             if (entry.policy.replication === "full-sync") {
               return Promise.reject(misuse(`retireTopic: full-sync topics are not GC-eligible (${topic})`));
             }
-            return new Promise((resolve38, reject) => {
-              this.push({ t: "retireTopic", topic, resolve: resolve38, reject });
+            return new Promise((resolve39, reject) => {
+              this.push({ t: "retireTopic", topic, resolve: resolve39, reject });
             });
           }
           // Local entry prune (host-guide `pruneTopic`, REQUESTED EDIT). Unlike
@@ -47938,13 +48162,13 @@ The instruction it carried was never delivered to anyone. If it still matters, r
             if (o.olderThanMs === void 0 && o.keepNewest === void 0) {
               return Promise.reject(misuse(`pruneTopic: at least one of olderThanMs/keepNewest is required`));
             }
-            return new Promise((resolve38, reject) => {
+            return new Promise((resolve39, reject) => {
               this.push({
                 t: "pruneTopic",
                 topic,
                 olderThanMs: o.olderThanMs,
                 keepNewest: o.keepNewest,
-                resolve: resolve38,
+                resolve: resolve39,
                 reject
               });
             });
@@ -47980,14 +48204,14 @@ The instruction it carried was never delivered to anyone. If it still matters, r
             } catch (e) {
               return Promise.reject(e);
             }
-            return new Promise((resolve38, reject) => {
+            return new Promise((resolve39, reject) => {
               this.push({
                 t: "pruneSuperseded",
                 topic,
                 uptoRowid: o.uptoRowid,
                 maxRows: Math.min(o.maxRows ?? PRUNE_SUPERSEDED_DEFAULT_MAX_ROWS, PRUNE_SUPERSEDED_MAX_ROWS_CAP),
                 supersedeOtherWriters: o.supersedeOtherWriters === true,
-                resolve: resolve38,
+                resolve: resolve39,
                 reject
               });
             });
@@ -48016,13 +48240,13 @@ The instruction it carried was never delivered to anyone. If it still matters, r
             } catch (e) {
               return Promise.reject(e);
             }
-            return new Promise((resolve38, reject) => {
+            return new Promise((resolve39, reject) => {
               this.push({
                 t: "pruneAcked",
                 topic,
                 o,
                 maxRows: Math.min(o.maxRows ?? ACKED_PRUNE_DEFAULT_MAX_ROWS, ACKED_PRUNE_MAX_ROWS_CAP),
-                resolve: resolve38,
+                resolve: resolve39,
                 reject
               });
             });
@@ -48030,8 +48254,8 @@ The instruction it carried was never delivered to anyone. If it still matters, r
           adoptFloor(topic, writer, seq2, chain) {
             if (this.closed)
               return Promise.reject(new SeqscribeError("ERR_MISUSE", "node is closed"));
-            return new Promise((resolve38, reject) => {
-              this.push({ t: "adoptFloor", topic, writer, seq: seq2, chain, resolve: resolve38, reject });
+            return new Promise((resolve39, reject) => {
+              this.push({ t: "adoptFloor", topic, writer, seq: seq2, chain, resolve: resolve39, reject });
             });
           }
           // This node's retention floor for a stream (rows ≤ seq are not held), or null.
@@ -55757,7 +55981,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     });
     function awaitWithWarmupDeadline(work, opts) {
       const pollMs = Math.max(1, Math.min(opts.pollIntervalMs ?? 200, opts.connectTimeoutMs));
-      return new Promise((resolve38, reject) => {
+      return new Promise((resolve39, reject) => {
         let done = false;
         let poll;
         let responseTimer;
@@ -55807,7 +56031,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           if (typeof poll.unref === "function") poll.unref();
         }
         work.then(
-          (val) => settle2(() => resolve38(val)),
+          (val) => settle2(() => resolve39(val)),
           (err) => settle2(() => reject(err))
         );
       });
@@ -56492,10 +56716,10 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       if (rejectedCommands.length) errors.push("one or more validation commands are invalid");
       return { valid: errors.length === 0, errors, bootstrapCommands, commands, rejectedCommands, bootstrapMode, deprecationWarnings };
     }
-    function readConfigFromBaseRef(gitCwd, ref, relative11) {
+    function readConfigFromBaseRef(gitCwd, ref, relative12) {
       if (!ref || ref.startsWith("-")) return void 0;
       try {
-        return (0, import_child_process5.execFileSync)("git", ["show", `${ref}:${relative11}`], {
+        return (0, import_child_process5.execFileSync)("git", ["show", `${ref}:${relative12}`], {
           cwd: gitCwd,
           encoding: "utf8",
           stdio: ["ignore", "pipe", "ignore"],
@@ -56535,26 +56759,26 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         if (!validation.valid) return { source: "mesh.policy.refineConfig", sourceType: "invalid", error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
         return { config: inline, source: "mesh.policy.refineConfig", sourceType: "mesh_policy" };
       }
-      for (const relative11 of MESH_REFINE_CONFIG_LOCATIONS) {
-        const configPath = (0, import_path10.join)(workspace, relative11);
+      for (const relative12 of MESH_REFINE_CONFIG_LOCATIONS) {
+        const configPath = (0, import_path10.join)(workspace, relative12);
         if (!(0, import_fs16.existsSync)(configPath)) continue;
         try {
           const parsed = parseConfigText(configPath, (0, import_fs16.readFileSync)(configPath, "utf-8"));
-          const validation = validateMeshRefineConfig(parsed, relative11);
-          if (!validation.valid) return { source: relative11, sourceType: "invalid", path: configPath, error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
-          return { config: parsed, source: relative11, sourceType: "repo_file", path: configPath };
+          const validation = validateMeshRefineConfig(parsed, relative12);
+          if (!validation.valid) return { source: relative12, sourceType: "invalid", path: configPath, error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
+          return { config: parsed, source: relative12, sourceType: "repo_file", path: configPath };
         } catch (error) {
-          return { source: relative11, sourceType: "invalid", path: configPath, error: error?.message || String(error) };
+          return { source: relative12, sourceType: "invalid", path: configPath, error: error?.message || String(error) };
         }
       }
       const baseRefs = (options?.baseRefs || []).filter((ref) => typeof ref === "string" && ref.trim().length > 0);
       for (const ref of baseRefs) {
-        for (const relative11 of MESH_REFINE_CONFIG_LOCATIONS) {
-          const text = readConfigFromBaseRef(options?.gitCwd || workspace, ref.trim(), relative11);
+        for (const relative12 of MESH_REFINE_CONFIG_LOCATIONS) {
+          const text = readConfigFromBaseRef(options?.gitCwd || workspace, ref.trim(), relative12);
           if (text === void 0) continue;
-          const source = `${ref.trim()}:${relative11}`;
+          const source = `${ref.trim()}:${relative12}`;
           try {
-            const parsed = parseConfigText(relative11, text);
+            const parsed = parseConfigText(relative12, text);
             const validation = validateMeshRefineConfig(parsed, source);
             if (!validation.valid) return { source, sourceType: "invalid", baseRef: ref.trim(), error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
             return { config: parsed, source, sourceType: "repo_file", baseRef: ref.trim() };
@@ -56976,28 +57200,28 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         if (!validation.valid) return { source: "mesh.policy.worktreeBootstrapConfig", sourceType: "invalid", error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
         return { config: inline, source: "mesh.policy.worktreeBootstrapConfig", sourceType: "mesh_policy" };
       }
-      for (const relative11 of MESH_WORKTREE_BOOTSTRAP_CONFIG_LOCATIONS) {
-        const configPath = (0, import_path11.join)(workspace, relative11);
+      for (const relative12 of MESH_WORKTREE_BOOTSTRAP_CONFIG_LOCATIONS) {
+        const configPath = (0, import_path11.join)(workspace, relative12);
         if (!(0, import_fs17.existsSync)(configPath)) continue;
         try {
           const parsed = parseConfigText(configPath, (0, import_fs17.readFileSync)(configPath, "utf-8"));
-          const validation = validateMeshWorktreeBootstrapConfig(parsed, relative11);
-          if (!validation.valid) return { source: relative11, sourceType: "invalid", path: configPath, error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
-          return { config: parsed, source: relative11, sourceType: "repo_file", path: configPath };
+          const validation = validateMeshWorktreeBootstrapConfig(parsed, relative12);
+          if (!validation.valid) return { source: relative12, sourceType: "invalid", path: configPath, error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
+          return { config: parsed, source: relative12, sourceType: "repo_file", path: configPath };
         } catch (error) {
-          return { source: relative11, sourceType: "invalid", path: configPath, error: error?.message || String(error) };
+          return { source: relative12, sourceType: "invalid", path: configPath, error: error?.message || String(error) };
         }
       }
       return { source: "unavailable", sourceType: "unavailable", error: `No worktree bootstrap config found. Checked: ${MESH_WORKTREE_BOOTSTRAP_CONFIG_LOCATIONS.join(", ")}` };
     }
     function computeStaleInputsDigest(workspace, staleInputs) {
       const digest = {};
-      for (const relative11 of staleInputs ?? []) {
-        const filePath2 = (0, import_path11.join)(workspace, relative11);
+      for (const relative12 of staleInputs ?? []) {
+        const filePath2 = (0, import_path11.join)(workspace, relative12);
         try {
-          digest[relative11] = (0, import_node_crypto22.createHash)("sha256").update((0, import_fs17.readFileSync)(filePath2)).digest("hex");
+          digest[relative12] = (0, import_node_crypto22.createHash)("sha256").update((0, import_fs17.readFileSync)(filePath2)).digest("hex");
         } catch {
-          digest[relative11] = "absent";
+          digest[relative12] = "absent";
         }
       }
       return digest;
@@ -58171,7 +58395,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           const connection = args.getConnection?.(args.daemonId);
           if (args.getConnection && readMeshConnectionState(connection) !== "connected") break;
           if (connection) args.onConnection?.(connection);
-          await new Promise((resolve38) => setTimeout(resolve38, 250 * 2 ** (attempt - 1)));
+          await new Promise((resolve39) => setTimeout(resolve39, 250 * 2 ** (attempt - 1)));
         }
         try {
           const remoteGit = await probeRemoteMeshGitStatus({
@@ -60218,6 +60442,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     });
     var coordinator_prompt_exports = {};
     __export2(coordinator_prompt_exports, {
+      ASSISTANT_RELAY_SECTION: () => ASSISTANT_RELAY_SECTION,
       buildCoordinatorSystemPrompt: () => buildCoordinatorSystemPrompt,
       selectOperatingNotesForPrompt: () => selectOperatingNotesForPrompt
     });
@@ -60329,6 +60554,7 @@ Default branch: \`${mesh.defaultBranch}\`` : ""}`);
       if (rulesLayer.workflow) sections.push(rulesLayer.workflow);
       sections.push(QUOTA_SECTION);
       sections.push(ONBOARDING_SECTION);
+      sections.push(ASSISTANT_RELAY_SECTION);
       sections.push(rulesLayer.rules);
       sections.push(buildSafetyTailSection(coordinatorCliType));
       return sections.join("\n\n");
@@ -60698,6 +60924,7 @@ ${rules.join("\n")}`;
     var TOOL_EXPOSURE_PREFLIGHT_SECTION;
     var QUOTA_SECTION;
     var ONBOARDING_SECTION;
+    var ASSISTANT_RELAY_SECTION;
     var init_coordinator_prompt = __esm2({
       "src/mesh/coordinator-prompt.ts"() {
         "use strict";
@@ -60802,6 +61029,11 @@ When the user asks to **set up / configure / onboard** this repo for Repo Mesh (
 - **\`mesh_init\` with \`mode="reinit"\`** \u2014 for a repo that is already onboarded and needs its config refreshed. It re-suggests with OVERWRITE semantics and returns the current-vs-suggested \`currentConfig\` echo. Its first call is a DRY-RUN preview: you MUST present the per-section current-vs-suggested diff and get EXPLICIT per-section approval before re-invoking with write=true. Overwrite is a wholesale replacement, so it silently drops operator hand-edits if you skip the diff \u2014 never do that.
 
 `;
+        ASSISTANT_RELAY_SECTION = `## Requests relayed by the assistant
+
+- A message may come from the user's assistant relaying the user's request (origin \`assistant\`). Your final message of the turn is relayed back and summarised \u2014 make it self-contained: outcome, current state, what is still pending, and any question you need answered.
+- A question, status check or read-only lookup is answered directly from \`mesh_*\` reads \u2014 do not enqueue tasks for it. When a request says not to enqueue or not to edit, obey it.
+- Approvals reach the user through the dashboard Inbox. When an approval modal is the mechanism, rely on it \u2014 do not ask for that approval in chat text.`;
       }
     });
     function eventStatus(event, fallback) {
@@ -61137,7 +61369,7 @@ When the user asks to **set up / configure / onboard** this repo for Repo Mesh (
           hasNpmLock ? { command: "npm", args: ["ci"] } : { command: "npm", args: ["install"] }
         );
       }
-      const staleInputs = CANDIDATE_STALE_INPUTS.filter((relative11) => (0, import_fs19.existsSync)((0, import_path13.join)(workspace, relative11)));
+      const staleInputs = CANDIDATE_STALE_INPUTS.filter((relative12) => (0, import_fs19.existsSync)((0, import_path13.join)(workspace, relative12)));
       if (!commands.length) {
         return { commands, staleInputs };
       }
@@ -62926,7 +63158,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
         advice = "No recent failures detected. This may be a normal stop.";
       } else if (retryRecommended) {
         const remaining = maxRetries - consecutiveNodeFailures + 1;
-        advice = `Retry recommended (${consecutiveNodeFailures}/${maxRetries + 1} attempts used, ${remaining} remaining). ` + (lastTaskMessage ? `Re-launch the session and resend the original task.` : `Re-launch the session. Original task message not found in ledger.`);
+        advice = `Retry recommended (${consecutiveNodeFailures}/${maxRetries + 1} attempts used, ${remaining} remaining). ` + (lastTaskMessage ? `Retry it through the queue (mesh_view_queue, then mesh_queue_requeue); resend with mesh_send_task only if it was a direct dispatch.` : `Retry it through the queue (mesh_view_queue, then mesh_queue_requeue). Original task message not found in ledger.`);
       } else {
         advice = `Max retries exceeded (${consecutiveNodeFailures} consecutive failures). Consider: (1) reassigning to a different node, (2) simplifying the task, or (3) escalating to the user.`;
       }
@@ -70610,7 +70842,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       const deadline = Date.now() + LOCAL_LAUNCH_READY_TIMEOUT_MS;
       while (Date.now() < deadline) {
         if (adapter.isReady() || adapter.currentStatus === "idle") return;
-        await new Promise((resolve38) => setTimeout(resolve38, LOCAL_LAUNCH_READY_POLL_MS));
+        await new Promise((resolve39) => setTimeout(resolve39, LOCAL_LAUNCH_READY_POLL_MS));
       }
       LOG.warn("MeshQueue", `Auto-launched session ${sessionId} not interactive after ${LOCAL_LAUNCH_READY_TIMEOUT_MS}ms; dispatching anyway (adapter queue-until-ready will buffer)`);
     }
@@ -70924,7 +71156,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       const timeoutMs = opts.timeoutMs ?? REMOTE_LAUNCH_READY_TIMEOUT_MS;
       const pollMs = opts.pollMs ?? REMOTE_LAUNCH_READY_POLL_MS;
       const now = opts.now ?? (() => Date.now());
-      const sleep3 = opts.sleep ?? ((ms3) => new Promise((resolve38) => setTimeout(resolve38, ms3)));
+      const sleep3 = opts.sleep ?? ((ms3) => new Promise((resolve39) => setTimeout(resolve39, ms3)));
       const deadline = now() + timeoutMs;
       for (; ; ) {
         let ready2 = false;
@@ -72305,7 +72537,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       trackInFlightAutoLaunch(meshId, autoLaunchPromise);
       autoLaunchStarted = await Promise.race([
         autoLaunchPromise,
-        new Promise((resolve38) => setImmediate(() => resolve38(false)))
+        new Promise((resolve39) => setImmediate(() => resolve39(false)))
       ]);
       sweepAutoLaunchOrphanSessions(components, meshId, {
         idleTtlMinutes: resolveDelegatedSessionIdleTtlMinutes(mesh.policy?.delegatedSessionIdleTtlMinutes)
@@ -73235,7 +73467,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
           }
           const realByDispatch = /* @__PURE__ */ new Map();
           const approvalByDispatch = /* @__PURE__ */ new Map();
-          const resolve38 = (queries, buckets, bucketKind, output) => {
+          const resolve39 = (queries, buckets, bucketKind, output) => {
             for (const [key2, bucketQueries] of queries) {
               const terminals = buckets.get(key2)?.[bucketKind];
               if (!terminals?.length) continue;
@@ -73251,9 +73483,9 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
               }
             }
           };
-          resolve38(taskQueries, taskBuckets, "real", realByDispatch);
-          resolve38(sessionQueries, sessionBuckets, "real", realByDispatch);
-          resolve38(nodeQueries, nodeBuckets, "real", realByDispatch);
+          resolve39(taskQueries, taskBuckets, "real", realByDispatch);
+          resolve39(sessionQueries, sessionBuckets, "real", realByDispatch);
+          resolve39(nodeQueries, nodeBuckets, "real", realByDispatch);
           const resolveLatestApproval = (queries, buckets) => {
             for (const [key2, bucketQueries] of queries) {
               const transitions = buckets.get(key2)?.approval;
@@ -88329,8 +88561,8 @@ ${body}`;
       const limit = resolveRefineMaxConcurrentJobs();
       if (activeExecutions >= limit) {
         LOG.info("Mesh", `[Refinery] ${label} QUEUED \u2014 ${activeExecutions} refine job(s) already executing (limit ${limit}), ${waitQueue.length + 1} waiting. It starts automatically; do not re-invoke.`);
-        await new Promise((resolve38) => {
-          waitQueue.push(resolve38);
+        await new Promise((resolve39) => {
+          waitQueue.push(resolve39);
         });
         LOG.info("Mesh", `[Refinery] ${label} dequeued \u2014 starting now (${activeExecutions} other job(s) still executing).`);
       }
@@ -94909,7 +95141,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       return null;
     }
     function performMeshHandshake(socket, side, opts, timeoutMs = MESH_HANDSHAKE_DEFAULT_TIMEOUT_MS) {
-      return new Promise((resolve38, reject) => {
+      return new Promise((resolve39, reject) => {
         let settled = false;
         const send = (frame2) => {
           if (socket.readyState !== WS_OPEN2) return;
@@ -94927,7 +95159,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           if (settled) return;
           settled = true;
           detach();
-          resolve38(result);
+          resolve39(result);
         };
         const settleFail = (code, detail) => {
           if (settled) return;
@@ -95169,10 +95401,10 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         }
         const peer = this.getOrCreatePeer(target, "initiator", "demand");
         peer.lastCommandAt = (/* @__PURE__ */ new Date()).toISOString();
-        return new Promise((resolve38, reject) => {
+        return new Promise((resolve39, reject) => {
           const id22 = `${this.idNonce}:${this.idSeq++}`;
           const resultTimeoutMs = typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : resultTimeoutForCommand(command);
-          const pending = { id: id22, command, args, resolve: resolve38, reject, queuedAt: (/* @__PURE__ */ new Date()).toISOString(), resultTimeoutMs };
+          const pending = { id: id22, command, args, resolve: resolve39, reject, queuedAt: (/* @__PURE__ */ new Date()).toISOString(), resultTimeoutMs };
           if (peer.state === "connected" && peer.dc.isOpen()) {
             this.writeRequest(peer, pending);
             return;
@@ -96065,7 +96297,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       * Returns multiple entries if multiple IDE windows are open on same port
       */
       static listAllTargets(port) {
-        return new Promise((resolve38) => {
+        return new Promise((resolve39) => {
           const req = http.get(`http://127.0.0.1:${port}/json`, (res) => {
             let data = "";
             res.on("data", (chunk) => data += chunk.toString());
@@ -96081,16 +96313,16 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
                   (t) => !isNonMain(t.title || "") && t.url?.includes("workbench.html") && !t.url?.includes("agent")
                 );
                 const fallbackPages = pages.filter((t) => !isNonMain(t.title || ""));
-                resolve38(mainPages.length > 0 ? mainPages : fallbackPages);
+                resolve39(mainPages.length > 0 ? mainPages : fallbackPages);
               } catch {
-                resolve38([]);
+                resolve39([]);
               }
             });
           });
-          req.on("error", () => resolve38([]));
+          req.on("error", () => resolve39([]));
           req.setTimeout(2e3, () => {
             req.destroy();
-            resolve38([]);
+            resolve39([]);
           });
         });
       }
@@ -96130,7 +96362,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         }
       }
       findTargetOnPort(port) {
-        return new Promise((resolve38) => {
+        return new Promise((resolve39) => {
           const req = http.get(`http://127.0.0.1:${port}/json`, (res) => {
             let data = "";
             res.on("data", (chunk) => data += chunk.toString());
@@ -96141,7 +96373,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
                   (t) => (t.type === "page" || t.type === "browser" || t.type === "Page") && t.webSocketDebuggerUrl
                 );
                 if (pages.length === 0) {
-                  resolve38(targets.find((t) => t.webSocketDebuggerUrl) || null);
+                  resolve39(targets.find((t) => t.webSocketDebuggerUrl) || null);
                   return;
                 }
                 const titleFilteredPages = pages.filter((t) => !this.isNonMainTitle(t.title || ""));
@@ -96160,25 +96392,25 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
                     this._targetId = selected.target.id;
                   }
                   this._pageTitle = selected.target.title || "";
-                  resolve38(selected.target);
+                  resolve39(selected.target);
                   return;
                 }
                 if (previousTargetId) {
                   this.log(`[CDP] Target ${previousTargetId} not found in page list`);
-                  resolve38(null);
+                  resolve39(null);
                   return;
                 }
                 this._pageTitle = list[0]?.title || "";
-                resolve38(list[0]);
+                resolve39(list[0]);
               } catch {
-                resolve38(null);
+                resolve39(null);
               }
             });
           });
-          req.on("error", () => resolve38(null));
+          req.on("error", () => resolve39(null));
           req.setTimeout(2e3, () => {
             req.destroy();
-            resolve38(null);
+            resolve39(null);
           });
         });
       }
@@ -96189,7 +96421,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         this.extensionProviders = providers;
       }
       connectToTarget(wsUrl) {
-        return new Promise((resolve38) => {
+        return new Promise((resolve39) => {
           this.ws = new import_ws3.default(wsUrl);
           this.ws.on("open", async () => {
             this._connected = true;
@@ -96199,17 +96431,17 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
             }
             this.connectBrowserWs().catch(() => {
             });
-            resolve38(true);
+            resolve39(true);
           });
           this.ws.on("message", (data) => {
             try {
               const msg = JSON.parse(data.toString());
               if (msg.id && this.pending.has(msg.id)) {
-                const { resolve: resolve39, reject } = this.pending.get(msg.id);
+                const { resolve: resolve40, reject } = this.pending.get(msg.id);
                 this.pending.delete(msg.id);
                 this.failureCount = 0;
                 if (msg.error) reject(new Error(msg.error.message));
-                else resolve39(msg.result);
+                else resolve40(msg.result);
               } else if (msg.method === "Runtime.executionContextCreated") {
                 this.contexts.add(msg.params.context.id);
               } else if (msg.method === "Runtime.executionContextDestroyed") {
@@ -96232,7 +96464,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           this.ws.on("error", (err) => {
             this.log(`[CDP] WebSocket error: ${err.message}`);
             this._connected = false;
-            resolve38(false);
+            resolve39(false);
           });
         });
       }
@@ -96246,7 +96478,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
             return;
           }
           this.log(`[CDP] Connecting browser WS for target discovery...`);
-          await new Promise((resolve38, reject) => {
+          await new Promise((resolve39, reject) => {
             this.browserWs = new import_ws3.default(browserWsUrl);
             this.browserWs.on("open", async () => {
               this._browserConnected = true;
@@ -96256,16 +96488,16 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
               } catch (e) {
                 this.log(`[CDP] setDiscoverTargets failed: ${e.message}`);
               }
-              resolve38();
+              resolve39();
             });
             this.browserWs.on("message", (data) => {
               try {
                 const msg = JSON.parse(data.toString());
                 if (msg.id && this.browserPending.has(msg.id)) {
-                  const { resolve: resolve39, reject: reject2 } = this.browserPending.get(msg.id);
+                  const { resolve: resolve40, reject: reject2 } = this.browserPending.get(msg.id);
                   this.browserPending.delete(msg.id);
                   if (msg.error) reject2(new Error(msg.error.message));
-                  else resolve39(msg.result);
+                  else resolve40(msg.result);
                 }
               } catch {
               }
@@ -96285,31 +96517,31 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         }
       }
       getBrowserWsUrl() {
-        return new Promise((resolve38) => {
+        return new Promise((resolve39) => {
           const req = http.get(`http://127.0.0.1:${this.port}/json/version`, (res) => {
             let data = "";
             res.on("data", (chunk) => data += chunk.toString());
             res.on("end", () => {
               try {
                 const info = JSON.parse(data);
-                resolve38(info.webSocketDebuggerUrl || null);
+                resolve39(info.webSocketDebuggerUrl || null);
               } catch {
-                resolve38(null);
+                resolve39(null);
               }
             });
           });
-          req.on("error", () => resolve38(null));
+          req.on("error", () => resolve39(null));
           req.setTimeout(3e3, () => {
             req.destroy();
-            resolve38(null);
+            resolve39(null);
           });
         });
       }
       sendBrowser(method, params = {}, timeoutMs = 15e3) {
-        return new Promise((resolve38, reject) => {
+        return new Promise((resolve39, reject) => {
           if (!this.browserWs || !this._browserConnected) return reject(new Error("Browser WS not connected"));
           const id22 = this.browserMsgId++;
-          this.browserPending.set(id22, { resolve: resolve38, reject });
+          this.browserPending.set(id22, { resolve: resolve39, reject });
           this.browserWs.send(JSON.stringify({ id: id22, method, params }));
           setTimeout(() => {
             if (this.browserPending.has(id22)) {
@@ -96349,11 +96581,11 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       }
       // ─── CDP Protocol ────────────────────────────────────────
       sendInternal(method, params = {}, timeoutMs = 15e3) {
-        return new Promise((resolve38, reject) => {
+        return new Promise((resolve39, reject) => {
           if (!this.ws || !this._connected) return reject(new Error("CDP not connected"));
           if (this.ws.readyState !== import_ws3.default.OPEN) return reject(new Error("WebSocket not open"));
           const id22 = this.msgId++;
-          this.pending.set(id22, { resolve: resolve38, reject });
+          this.pending.set(id22, { resolve: resolve39, reject });
           this.ws.send(JSON.stringify({ id: id22, method, params }));
           setTimeout(() => {
             if (this.pending.has(id22)) {
@@ -96602,7 +96834,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         const browserWs = this.browserWs;
         let msgId = this.browserMsgId;
         const sendWs = (method, params = {}, sessionId) => {
-          return new Promise((resolve38, reject) => {
+          return new Promise((resolve39, reject) => {
             const mid = msgId++;
             this.browserMsgId = msgId;
             const handler = (raw) => {
@@ -96611,7 +96843,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
                 if (msg.id === mid) {
                   browserWs.removeListener("message", handler);
                   if (msg.error) reject(new Error(msg.error.message || JSON.stringify(msg.error)));
-                  else resolve38(msg.result);
+                  else resolve39(msg.result);
                 }
               } catch {
               }
@@ -96812,14 +97044,14 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         if (!ws || ws.readyState !== import_ws3.default.OPEN) {
           throw new Error("CDP not connected");
         }
-        return new Promise((resolve38, reject) => {
+        return new Promise((resolve39, reject) => {
           const id22 = getNextId();
           pendingMap.set(id22, {
             resolve: (result) => {
               if (result?.result?.subtype === "error") {
                 reject(new Error(result.result.description));
               } else {
-                resolve38(result?.result?.value);
+                resolve39(result?.result?.value);
               }
             },
             reject
@@ -96851,10 +97083,10 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           throw new Error("CDP not connected");
         }
         const sendViaSession = (method, params = {}) => {
-          return new Promise((resolve38, reject) => {
+          return new Promise((resolve39, reject) => {
             const pendingMap = this._browserConnected ? this.browserPending : this.pending;
             const id22 = this._browserConnected ? this.browserMsgId++ : this.msgId++;
-            pendingMap.set(id22, { resolve: resolve38, reject });
+            pendingMap.set(id22, { resolve: resolve39, reject });
             ws.send(JSON.stringify({ id: id22, sessionId, method, params }));
             setTimeout(() => {
               if (pendingMap.has(id22)) {
@@ -103424,8 +103656,8 @@ ${output}` : "";
       const sourceMtimeMs = statMtimeMs(sessionPath);
       const brainRootPath = brainRoot();
       if (sessionPath.startsWith(brainRootPath + path44.sep) && sessionPath.endsWith(".jsonl")) {
-        const relative11 = sessionPath.slice(brainRootPath.length + 1);
-        const uuidFromPath = relative11.split(path44.sep)[0];
+        const relative12 = sessionPath.slice(brainRootPath.length + 1);
+        const uuidFromPath = relative12.split(path44.sep)[0];
         const resolvedSessionId = sessionId || (isUuidLike(uuidFromPath) ? uuidFromPath : "");
         if (!resolvedSessionId) return null;
         const messages = parseBrainTranscript(sessionPath, resolvedSessionId, workspace);
@@ -104448,7 +104680,7 @@ ${output}` : "";
       return e?.message || String(e);
     }
     function delay(ms3) {
-      return new Promise((resolve38) => setTimeout(resolve38, ms3));
+      return new Promise((resolve39) => setTimeout(resolve39, ms3));
     }
     var ProviderChannelRuntime = class {
       store;
@@ -104777,7 +105009,7 @@ ${output}` : "";
     }
     function defaultFetchJson(url) {
       const https = require("https");
-      return new Promise((resolve38, reject) => {
+      return new Promise((resolve39, reject) => {
         const req = https.get(url, { headers: { "User-Agent": "adhdev-daemon", Accept: "application/json" }, timeout: 15e3 }, (res) => {
           if (res.statusCode !== 200) {
             reject(new Error(`HTTP ${res.statusCode}`));
@@ -104787,7 +105019,7 @@ ${output}` : "";
           res.on("data", (c) => chunks.push(c));
           res.on("end", () => {
             try {
-              resolve38(JSON.parse(Buffer.concat(chunks).toString("utf-8")));
+              resolve39(JSON.parse(Buffer.concat(chunks).toString("utf-8")));
             } catch (e) {
               reject(e);
             }
@@ -104803,7 +105035,7 @@ ${output}` : "";
     function defaultDownloadFile(url, destPath) {
       const https = require("https");
       const http4 = require("http");
-      return new Promise((resolve38, reject) => {
+      return new Promise((resolve39, reject) => {
         const doRequest = (reqUrl, redirectCount = 0) => {
           if (redirectCount > 5) {
             reject(new Error("Too many redirects"));
@@ -104823,7 +105055,7 @@ ${output}` : "";
             res.pipe(ws);
             ws.on("finish", () => {
               ws.close();
-              resolve38();
+              resolve39();
             });
             ws.on("error", reject);
           });
@@ -105513,7 +105745,7 @@ ${output}` : "";
     async function discoverByCommand(provider, binary2, spec, deps) {
       const timeoutMs = spec.timeoutMs ?? MODEL_DISCOVERY_TIMEOUT_MS;
       const started = deps.now();
-      const result = await new Promise((resolve38) => {
+      const result = await new Promise((resolve39) => {
         let stdout = "";
         let stderr = "";
         let settled = false;
@@ -105522,7 +105754,7 @@ ${output}` : "";
           if (settled) return;
           settled = true;
           if (timer) clearTimeout(timer);
-          resolve38(value);
+          resolve39(value);
         };
         let child;
         try {
@@ -107126,10 +107358,10 @@ ${result.stderr}`, result.code);
       return pids;
     }
     async function execQuiet(command, options = {}) {
-      return new Promise((resolve38) => {
+      return new Promise((resolve39) => {
         (0, import_child_process7.exec)(command, { windowsHide: true, ...options }, (error, stdout) => {
-          if (error) return resolve38("");
-          resolve38(stdout.toString());
+          if (error) return resolve39("");
+          resolve39(stdout.toString());
         });
       });
     }
@@ -107215,17 +107447,17 @@ ${result.stderr}`, result.code);
       throw new Error("No free port found");
     }
     function checkPortFree(port) {
-      return new Promise((resolve38) => {
+      return new Promise((resolve39) => {
         const server = net.createServer();
         server.unref();
-        server.on("error", () => resolve38(false));
+        server.on("error", () => resolve39(false));
         server.listen(port, "127.0.0.1", () => {
-          server.close(() => resolve38(true));
+          server.close(() => resolve39(true));
         });
       });
     }
     async function isCdpActive(port) {
-      return new Promise((resolve38) => {
+      return new Promise((resolve39) => {
         const req = require("http").get(`http://127.0.0.1:${port}/json/version`, {
           timeout: 2e3
         }, (res) => {
@@ -107234,16 +107466,16 @@ ${result.stderr}`, result.code);
           res.on("end", () => {
             try {
               const info = JSON.parse(data);
-              resolve38(!!info["WebKit-Version"] || !!info["Browser"]);
+              resolve39(!!info["WebKit-Version"] || !!info["Browser"]);
             } catch {
-              resolve38(false);
+              resolve39(false);
             }
           });
         });
-        req.on("error", () => resolve38(false));
+        req.on("error", () => resolve39(false));
         req.on("timeout", () => {
           req.destroy();
-          resolve38(false);
+          resolve39(false);
         });
       });
     }
@@ -108244,7 +108476,7 @@ ${result.stderr}`, result.code);
       while (Date.now() - start < timeoutMs) {
         try {
           process.kill(pid, 0);
-          await new Promise((resolve38) => setTimeout(resolve38, 250));
+          await new Promise((resolve39) => setTimeout(resolve39, 250));
         } catch {
           return true;
         }
@@ -108347,17 +108579,17 @@ ${result.stderr}`, result.code);
     }
     var DEFAULT_HEALTH_TIMEOUT_MS = 12e4;
     function fetchLocalJson(port, pathname) {
-      return new Promise((resolve38) => {
+      return new Promise((resolve39) => {
         const req = http2.get(`http://127.0.0.1:${port}${pathname}`, { timeout: 1500 }, (res) => {
           let body = "";
           res.setEncoding("utf8");
           res.on("data", (chunk) => {
             body += chunk;
           });
-          res.on("end", () => resolve38({ ok: res.statusCode === 200, body }));
+          res.on("end", () => resolve39({ ok: res.statusCode === 200, body }));
         });
         req.on("timeout", () => req.destroy());
-        req.on("error", () => resolve38({ ok: false, body: "" }));
+        req.on("error", () => resolve39({ ok: false, body: "" }));
       });
     }
     async function fetchLocalHealth(port) {
@@ -108824,7 +109056,7 @@ exec "${portableNode}" "${cliEntry}" "$@"
               loggedVersionPending = true;
               options.log(`Health gate: replacement reports version ${version} (want ${targetVersion}) at ${elapsedMs}ms`);
             }
-            await new Promise((resolve38) => setTimeout(resolve38, 500));
+            await new Promise((resolve39) => setTimeout(resolve39, 500));
           }
           options.log(`Health gate timed out after ${Date.now() - startedAt}ms (${attempt} probe(s), budget ${healthTimeoutMs}ms) waiting for pid ${pid} to report ${targetVersion}`);
           return false;
@@ -109677,9 +109909,9 @@ ${marker}`,
       for (const shim of backup.binShims) {
         try {
           const entry = fs54.realpathSync(shim);
-          const relative11 = path61.relative(backup.packageRoot, entry);
-          if (relative11.startsWith("..") || path61.isAbsolute(relative11)) continue;
-          const previousFirstLine = fs54.readFileSync(path61.join(backup.backupDir, "package", relative11), "utf8").split("\n", 1)[0];
+          const relative12 = path61.relative(backup.packageRoot, entry);
+          if (relative12.startsWith("..") || path61.isAbsolute(relative12)) continue;
+          const previousFirstLine = fs54.readFileSync(path61.join(backup.backupDir, "package", relative12), "utf8").split("\n", 1)[0];
           if (!/^#!\/\S*node$/.test(previousFirstLine)) continue;
           const current4 = fs54.readFileSync(entry, "utf8");
           const currentFirstLine = current4.split("\n", 1)[0];
@@ -109786,7 +110018,7 @@ ${marker}`,
           });
           return "reinstall";
         },
-        sleep: (ms3) => new Promise((resolve38) => setTimeout(resolve38, ms3)),
+        sleep: (ms3) => new Promise((resolve39) => setTimeout(resolve39, ms3)),
         now: () => Date.now(),
         log
       };
@@ -110181,7 +110413,7 @@ ${marker}`,
             appendUpgradeLog(`Install attempt ${attempt} hit a file lock (${error?.code || "lock"}); clearing holders + staging and retrying after backoff`);
             await stopForeignNativeAddonHolders(installCommand.surface.packageRoot, { parentPid: payload.parentPid });
             cleanupStaleGlobalInstallDirs(payload.packageName, installCommand.surface);
-            await new Promise((resolve38) => setTimeout(resolve38, attempt * 1500));
+            await new Promise((resolve39) => setTimeout(resolve39, attempt * 1500));
             continue;
           }
           if (isRetriableInstallLockError(error)) {
@@ -110224,7 +110456,7 @@ ${marker}`,
         }
       }
       if (process.platform === "win32") {
-        await new Promise((resolve38) => setTimeout(resolve38, 500));
+        await new Promise((resolve39) => setTimeout(resolve39, 500));
         cleanupStaleGlobalInstallDirs(payload.packageName, installCommand.surface);
         appendUpgradeLog("Post-install staging cleanup complete");
       }
@@ -116079,7 +116311,7 @@ ${marker}`,
       }
     }
     function sleep(ms3) {
-      return new Promise((resolve38) => setTimeout(resolve38, ms3));
+      return new Promise((resolve39) => setTimeout(resolve39, ms3));
     }
     async function waitForIdleAfterInterrupt(target, timeoutMs = INTERRUPT_IDLE_TIMEOUT_MS, pollMs = INTERRUPT_IDLE_POLL_MS, options) {
       const startedAt = Date.now();
@@ -116648,7 +116880,7 @@ ${marker}`,
     async function getStableExtensionBaseline(h) {
       const first = await readExtensionChatState(h);
       if (getStateMessageCount(first) > 0 || getStateLastSignature(first)) return first;
-      await new Promise((resolve38) => setTimeout(resolve38, 150));
+      await new Promise((resolve39) => setTimeout(resolve39, 150));
       const second = await readExtensionChatState(h);
       return getStateMessageCount(second) >= getStateMessageCount(first) ? second : first;
     }
@@ -116656,7 +116888,7 @@ ${marker}`,
       const beforeCount = getStateMessageCount(before);
       const beforeSignature = getStateLastSignature(before);
       for (let attempt = 0; attempt < 12; attempt += 1) {
-        await new Promise((resolve38) => setTimeout(resolve38, 250));
+        await new Promise((resolve39) => setTimeout(resolve39, 250));
         const state = await readExtensionChatState(h);
         if (state?.status === "waiting_approval") return true;
         const afterCount = getStateMessageCount(state);
@@ -118303,7 +118535,7 @@ ${marker}`,
             const enterCount = cliCommand.enterCount || 1;
             await adapter.writeRaw(cliCommand.text + "\r");
             for (let i = 1; i < enterCount; i += 1) {
-              await new Promise((resolve38) => setTimeout(resolve38, 50));
+              await new Promise((resolve39) => setTimeout(resolve39, 50));
               await adapter.writeRaw("\r");
             }
           }
@@ -123737,7 +123969,7 @@ ${marker}`,
           const setupPromise = finishWorktreeSetup();
           const setupResult = await Promise.race([
             setupPromise.then((value) => ({ completed: true, value })),
-            new Promise((resolve38) => setTimeout(() => resolve38({ completed: false }), setupWaitMs))
+            new Promise((resolve39) => setTimeout(() => resolve39({ completed: false }), setupWaitMs))
           ]);
           const bootstrapStartedMs = Date.now();
           const terminalBootstrapEvent = (state) => state.status === "failed" ? "bootstrap_failed" : "bootstrap_complete";
@@ -124181,8 +124413,8 @@ ${marker}`,
           let baseDoc = { version: 1 };
           let existingPath = join111(workspace, relativePath);
           let existedAsYaml = false;
-          for (const relative11 of MESH_JSON_CONFIG_LOCATIONS2) {
-            const candidate = join111(workspace, relative11);
+          for (const relative12 of MESH_JSON_CONFIG_LOCATIONS2) {
+            const candidate = join111(workspace, relative12);
             if (!existsSync112(candidate)) continue;
             try {
               const text = readFileSync92(candidate, "utf-8");
@@ -124193,7 +124425,7 @@ ${marker}`,
                 existedAsYaml = !/\.json$/i.test(candidate);
               }
             } catch (e) {
-              return { success: false, error: `existing ${relative11} is unparseable, refusing to overwrite: ${e?.message || e}` };
+              return { success: false, error: `existing ${relative12} is unparseable, refusing to overwrite: ${e?.message || e}` };
             }
             break;
           }
@@ -127350,10 +127582,7 @@ ${ptyResult.output.slice(-2e3)}`);
     init_assistant_services();
     init_assistant_projects();
     init_assistant_project_ports();
-    var ASSISTANT_COORDINATOR_EXTRA_PROMPT = [
-      "Instructions arrive from the user's assistant; your final message of each turn is relayed to the user.",
-      "Ask questions by ending your turn with them."
-    ].join("\n");
+    var ASSISTANT_COORDINATOR_EXTRA_PROMPT = "";
     function pickCoordinator(views) {
       if (views.length === 0) return null;
       const rank = (v) => (v.managedByAssistant ? 2 : 0) + (v.idle ? 1 : 0);
@@ -129528,7 +129757,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     }
     async function bestEffortRemoveWorktreeDir(self, dir) {
       if (!dir || !fs78.existsSync(dir)) return { removed: true, residue: false };
-      const sleep3 = (ms3) => new Promise((resolve38) => setTimeout(resolve38, ms3));
+      const sleep3 = (ms3) => new Promise((resolve39) => setTimeout(resolve39, ms3));
       const ABSORB = /* @__PURE__ */ new Set(["EINVAL", "EPERM", "EBUSY", "ENOTEMPTY", "EACCES", "EMFILE", "ENFILE"]);
       let lastErr;
       for (let attempt = 0; attempt < 4; attempt++) {
@@ -132982,7 +133211,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const channel = host._ctx.providerLoader?.channel ?? "stable";
       const url = `${REGISTRY}/providers?sort=${encodeURIComponent(sort)}&limit=${limit}&channel=${encodeURIComponent(channel)}`;
       try {
-        const data = await new Promise((resolve38, reject) => {
+        const data = await new Promise((resolve39, reject) => {
           const req = https.get(url, { headers: { "User-Agent": "adhdev-daemon", "Accept": "application/json" }, timeout: 1e4 }, (res) => {
             if (res.statusCode !== 200) {
               reject(new Error(`HTTP ${res.statusCode}`));
@@ -132992,7 +133221,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
             res.on("data", (c) => chunks.push(c));
             res.on("end", () => {
               try {
-                resolve38(JSON.parse(Buffer.concat(chunks).toString("utf-8")));
+                resolve39(JSON.parse(Buffer.concat(chunks).toString("utf-8")));
               } catch (e) {
                 reject(e);
               }
@@ -133016,7 +133245,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const cfg = loadConfig();
       const REGISTRY = resolveRegistryBaseUrl(cfg.registryUrl, process.env, cfg.serverUrl);
       function fetchJson(url) {
-        return new Promise((resolve38, reject) => {
+        return new Promise((resolve39, reject) => {
           const req = https.get(url, { headers: { "User-Agent": "adhdev-daemon", "Accept": "application/json" }, timeout: 1e4 }, (res) => {
             if (res.statusCode !== 200) {
               reject(new Error(`HTTP ${res.statusCode}`));
@@ -133026,7 +133255,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
             res.on("data", (c) => chunks.push(c));
             res.on("end", () => {
               try {
-                resolve38(JSON.parse(Buffer.concat(chunks).toString("utf-8")));
+                resolve39(JSON.parse(Buffer.concat(chunks).toString("utf-8")));
               } catch (e) {
                 reject(e);
               }
@@ -133818,7 +134047,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         try {
           const http4 = await import("http");
           const postData = JSON.stringify(body);
-          const result = await new Promise((resolve38, reject) => {
+          const result = await new Promise((resolve39, reject) => {
             const req = http4.request({
               hostname: "127.0.0.1",
               port: 19280,
@@ -133830,9 +134059,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
               res.on("data", (chunk) => data += chunk);
               res.on("end", () => {
                 try {
-                  resolve38(JSON.parse(data));
+                  resolve39(JSON.parse(data));
                 } catch {
-                  resolve38({ raw: data });
+                  resolve39({ raw: data });
                 }
               });
             });
@@ -133850,15 +134079,15 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         if (!providerType) return { success: false, error: "providerType required" };
         try {
           const http4 = await import("http");
-          const result = await new Promise((resolve38, reject) => {
+          const result = await new Promise((resolve39, reject) => {
             http4.get(`http://127.0.0.1:19280/api/providers/${providerType}/${endpoint}`, (res) => {
               let data = "";
               res.on("data", (chunk) => data += chunk);
               res.on("end", () => {
                 try {
-                  resolve38(JSON.parse(data));
+                  resolve39(JSON.parse(data));
                 } catch {
-                  resolve38({ raw: data });
+                  resolve39({ raw: data });
                 }
               });
             }).on("error", reject);
@@ -133872,7 +134101,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         try {
           const http4 = await import("http");
           const postData = JSON.stringify(args || {});
-          const result = await new Promise((resolve38, reject) => {
+          const result = await new Promise((resolve39, reject) => {
             const req = http4.request({
               hostname: "127.0.0.1",
               port: 19280,
@@ -133884,9 +134113,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
               res.on("data", (chunk) => data += chunk);
               res.on("end", () => {
                 try {
-                  resolve38(JSON.parse(data));
+                  resolve39(JSON.parse(data));
                 } catch {
-                  resolve38({ raw: data });
+                  resolve39({ raw: data });
                 }
               });
             });
@@ -135486,14 +135715,14 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       whenSubmitDrained(timeoutMs) {
         if (!this.hasInFlightSubmit()) return Promise.resolve(true);
         const deadline = Date.now() + Math.max(0, timeoutMs);
-        return new Promise((resolve38) => {
+        return new Promise((resolve39) => {
           const poll = () => {
             if (!this.hasInFlightSubmit()) {
-              resolve38(true);
+              resolve39(true);
               return;
             }
             if (Date.now() >= deadline) {
-              resolve38(false);
+              resolve39(false);
               return;
             }
             setTimeout(poll, 100);
@@ -137721,7 +137950,7 @@ trust_level = "trusted"
     };
     init_evaluator();
     function delay2(ms3) {
-      return new Promise((resolve38) => setTimeout(resolve38, ms3));
+      return new Promise((resolve39) => setTimeout(resolve39, ms3));
     }
     async function openPickerAndListChoices(driver, ctl, action) {
       driver.dispatch({ kind: "click_control", control_id: ctl.id });
@@ -139293,7 +139522,7 @@ ${text}` : text;
       let screenText = readClaudeTuiSnapshotForAnswer(host);
       let focused = readFocusedClaudeTuiQuestion(screenText);
       while (Date.now() < deadline && !(focused && claudeTuiQuestionMatches(expected, focused))) {
-        await new Promise((resolve38) => setTimeout(resolve38, CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
+        await new Promise((resolve39) => setTimeout(resolve39, CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
         screenText = readClaudeTuiSnapshotForAnswer(host);
         focused = readFocusedClaudeTuiQuestion(screenText);
       }
@@ -139344,7 +139573,7 @@ ${text}` : text;
         if (review) return screenText;
         if (directSubmitted) return null;
         if (Date.now() >= deadline) return screenText;
-        await new Promise((resolve38) => setTimeout(resolve38, CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
+        await new Promise((resolve39) => setTimeout(resolve39, CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
         screenText = readClaudeTuiSnapshotForAnswer(host);
       }
     }
@@ -139380,7 +139609,7 @@ ${text}` : text;
       let screenText = host.driver.snapshot();
       const deadline = Date.now() + CLAUDE_TUI_PAGE_SETTLE_TIMEOUT_MS;
       while (!detectClaudeTuiMultiSelect(screenText) && Date.now() < deadline) {
-        await new Promise((resolve38) => setTimeout(resolve38, CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
+        await new Promise((resolve39) => setTimeout(resolve39, CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
         screenText = host.driver.snapshot();
       }
       return screenText;
@@ -139391,13 +139620,13 @@ ${text}` : text;
       for (let index = 1; index < headers.length; index += 1) {
         if (host.claudeTuiCaptureSuppressed) return;
         host.driver.dispatch({ kind: "pty_write", data: "	" });
-        await new Promise((resolve38) => setTimeout(resolve38, CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
+        await new Promise((resolve39) => setTimeout(resolve39, CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
         pages.push({ screenText: await snapshotSettledClaudeTuiPage(host), header: headers[index] });
       }
       for (let index = headers.length - 1; index > 0; index -= 1) {
         if (host.claudeTuiCaptureSuppressed) return;
         host.driver.dispatch({ kind: "pty_write", data: "\x1B[Z" });
-        await new Promise((resolve38) => setTimeout(resolve38, CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
+        await new Promise((resolve39) => setTimeout(resolve39, CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
         const reread = await snapshotSettledClaudeTuiPage(host);
         const landed = pages[index - 1];
         if (landed && !detectClaudeTuiMultiSelect(landed.screenText) && detectClaudeTuiMultiSelect(reread) && claudeTuiPagesLookLikeSameQuestion(landed, reread)) {
@@ -139452,7 +139681,7 @@ ${text}` : text;
               break questionLoop;
             }
             host.driver.dispatch({ kind: "pty_write", data: step });
-            await new Promise((resolve38) => setTimeout(resolve38, 180));
+            await new Promise((resolve39) => setTimeout(resolve39, 180));
           }
           const answer = response.answers[question.questionId];
           const singleSelectDigitOnly = !question.multiSelect && (answer?.selectedLabels.length ?? 0) === 1 && !answer?.freeformText?.trim();
@@ -139463,7 +139692,7 @@ ${text}` : text;
               previewLayoutAnswer = true;
               LOG.info("SpecAdapter", `[${host.cliType}] preview panel layout detected on screen after digit \u2014 sending commit Enter (question "${question.questionId}")`);
               host.driver.dispatch({ kind: "pty_write", data: "\r" });
-              await new Promise((resolve38) => setTimeout(resolve38, 180));
+              await new Promise((resolve39) => setTimeout(resolve39, 180));
             }
           }
         }
@@ -139479,7 +139708,7 @@ ${text}` : text;
             throw new Error("Claude TUI active interactive prompt changed before review submission");
           }
           host.driver.dispatch({ kind: "pty_write", data: "\r" });
-          await new Promise((resolve38) => setTimeout(resolve38, 180));
+          await new Promise((resolve39) => setTimeout(resolve39, 180));
         }
       } else {
         host.driver.dispatch({ kind: "pty_write", data: `${buildClaudeInteractiveToolResult(response)}
@@ -140200,7 +140429,7 @@ ${text}` : text;
           const steps = prompt.promptId.startsWith(KIMI_TUI_SELECTOR_PROMPT_PREFIX) ? buildKimiSelectorAnswerSteps(prompt, response, this.driver.snapshot()) : buildKimiInteractiveTuiAnswerSteps(prompt, response);
           for (const step of steps) {
             this.driver.dispatch({ kind: "pty_write", data: step });
-            await new Promise((resolve38) => setTimeout(resolve38, 180));
+            await new Promise((resolve39) => setTimeout(resolve39, 180));
           }
           this.activeInteractivePrompt = null;
           this.notifyChange("prompt_cleared");
@@ -140822,7 +141051,7 @@ ${text}` : text;
         if (status === "stopped") {
           throw new Error("CLI runtime stopped before it became ready");
         }
-        await new Promise((resolve38) => setTimeout(resolve38, pollMs));
+        await new Promise((resolve39) => setTimeout(resolve39, pollMs));
       }
       throw new Error(`CLI runtime did not become ready within ${timeoutMs}ms`);
     }
@@ -143640,7 +143869,7 @@ ${buttons.join("\n")}`;
         const enterCount = cliCommand.enterCount || 1;
         await host.adapter.writeRaw(cliCommand.text + "\r");
         for (let i = 1; i < enterCount; i += 1) {
-          await new Promise((resolve38) => setTimeout(resolve38, 50));
+          await new Promise((resolve39) => setTimeout(resolve39, 50));
           await host.adapter.writeRaw("\r");
         }
       }
@@ -145211,6 +145440,9 @@ ${buttons.join("\n")}`;
         }
       }
       for (const key2 of envUnsets) env2[key2] = "";
+      for (const [key2, value] of Object.entries(workerIsolation?.configEnv || {})) {
+        env2[key2] = value;
+      }
       if (workerIsolation?.delivery && workerIsolation.bind) {
         env2[workerIsolation.delivery.bindEnvVar] = workerIsolation.bind;
         const deliveryArgs = renderWorkerMcpDeliveryArgs(cliArgs, workerIsolation.delivery);
@@ -146835,7 +147067,7 @@ Run 'adhdev doctor' for detailed diagnostics.`
         const beforeCount = this.messageCount(before);
         const beforeSignature = this.lastMessageSignature(before);
         for (let attempt = 0; attempt < 12; attempt += 1) {
-          await new Promise((resolve38) => setTimeout(resolve38, 250));
+          await new Promise((resolve39) => setTimeout(resolve39, 250));
           let state;
           try {
             state = await this.readChat(evaluate);
@@ -146857,7 +147089,7 @@ Run 'adhdev doctor' for detailed diagnostics.`
         if (this.messageCount(first) > 0 || this.lastMessageSignature(first)) {
           return first;
         }
-        await new Promise((resolve38) => setTimeout(resolve38, 150));
+        await new Promise((resolve39) => setTimeout(resolve39, 150));
         const second = await this.readChat(evaluate);
         return this.messageCount(second) >= this.messageCount(first) ? second : first;
       }
@@ -147008,7 +147240,7 @@ Run 'adhdev doctor' for detailed diagnostics.`
           if (typeof data.error === "string" && data.error.trim()) return false;
         }
         for (let attempt = 0; attempt < 6; attempt += 1) {
-          await new Promise((resolve38) => setTimeout(resolve38, 250));
+          await new Promise((resolve39) => setTimeout(resolve39, 250));
           const state = await this.readChat(evaluate);
           const title = this.getStateTitle(state);
           if (this.titlesMatch(title, sessionId)) return true;
@@ -148543,13 +148775,13 @@ Run 'adhdev doctor' for detailed diagnostics.`
       }
     };
     async function runCommand(cmd, timeout = 1e4) {
-      return new Promise((resolve38) => {
+      return new Promise((resolve39) => {
         hiddenExec(cmd, {
           encoding: "utf-8",
           timeout
         }, (error, stdout) => {
-          if (error) return resolve38(null);
-          resolve38(stdout.trim());
+          if (error) return resolve39(null);
+          resolve39(stdout.trim());
         });
       });
     }
@@ -150346,7 +150578,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       return { target, instance, adapter };
     }
     function sleep2(ms3) {
-      return new Promise((resolve38) => setTimeout(resolve38, ms3));
+      return new Promise((resolve39) => setTimeout(resolve39, ms3));
     }
     async function waitForCliReady(ctx, type2, instanceId, timeoutMs) {
       const startedAt = Date.now();
@@ -151187,15 +151419,15 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
             this.json(res, 500, { error: e.message });
           }
         });
-        return new Promise((resolve38, reject) => {
+        return new Promise((resolve39, reject) => {
           this.server.listen(port, "127.0.0.1", () => {
             this.log(`Dev server listening on http://127.0.0.1:${port}`);
-            resolve38();
+            resolve39();
           });
           this.server.on("error", (e) => {
             if (e.code === "EADDRINUSE") {
               this.log(`Port ${port} in use, skipping dev server`);
-              resolve38();
+              resolve39();
             } else {
               reject(e);
             }
@@ -151279,20 +151511,20 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           child.stderr?.on("data", (d) => {
             stderr += d.toString().slice(0, 2e3);
           });
-          await new Promise((resolve38) => {
+          await new Promise((resolve39) => {
             const timer = setTimeout(() => {
               child.kill();
-              resolve38();
+              resolve39();
             }, 3e3);
             child.on("exit", () => {
               clearTimeout(timer);
-              resolve38();
+              resolve39();
             });
             child.stdout?.once("data", () => {
               setTimeout(() => {
                 child.kill();
                 clearTimeout(timer);
-                resolve38();
+                resolve39();
               }, 500);
             });
           });
@@ -151829,14 +152061,14 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         res.end(JSON.stringify(data, null, 2));
       }
       async readBody(req) {
-        return new Promise((resolve38) => {
+        return new Promise((resolve39) => {
           let body = "";
           req.on("data", (chunk) => body += chunk);
           req.on("end", () => {
             try {
-              resolve38(JSON.parse(body));
+              resolve39(JSON.parse(body));
             } catch {
-              resolve38({});
+              resolve39({});
             }
           });
         });
@@ -152584,7 +152816,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       const deadline = Date.now() + timeoutMs;
       while (Date.now() < deadline) {
         if (await canConnect(endpoint, requiredRequestTypes)) return;
-        await new Promise((resolve38) => setTimeout(resolve38, STARTUP_POLL_MS));
+        await new Promise((resolve39) => setTimeout(resolve39, STARTUP_POLL_MS));
       }
       throw new Error(`Session host did not become ready within ${timeoutMs}ms`);
     }
@@ -152990,10 +153222,10 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
             const buffer = Buffer.from(await res.arrayBuffer());
             const fs101 = await import("fs");
             fs101.writeFileSync(vsixPath, buffer);
-            return new Promise((resolve38) => {
+            return new Promise((resolve39) => {
               const cmd = `"${ide.cliCommand}" --install-extension "${vsixPath}" --force`;
               hiddenExec(cmd, { timeout: 6e4 }, (error, _stdout, stderr) => {
-                resolve38({
+                resolve39({
                   extensionId: extension.id,
                   marketplaceId: extension.marketplaceId,
                   success: !error,
@@ -153006,11 +153238,11 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         } catch (e) {
         }
       }
-      return new Promise((resolve38) => {
+      return new Promise((resolve39) => {
         const cmd = `"${ide.cliCommand}" --install-extension ${extension.marketplaceId} --force`;
         hiddenExec(cmd, { timeout: 6e4 }, (error, stdout, stderr) => {
           if (error) {
-            resolve38({
+            resolve39({
               extensionId: extension.id,
               marketplaceId: extension.marketplaceId,
               success: false,
@@ -153018,7 +153250,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
               error: stderr || error.message
             });
           } else {
-            resolve38({
+            resolve39({
               extensionId: extension.id,
               marketplaceId: extension.marketplaceId,
               success: true,
@@ -153268,7 +153500,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           LOG.warn(logCategory, `response write under backpressure: command='${command}' requestId=${requestId} handlerMs=${handlerMs} payloadBytes=${body.length} bufferedBefore=${bufferedBefore}`);
         }
       }
-      await new Promise((resolve38, reject) => {
+      await new Promise((resolve39, reject) => {
         const onError = (error) => {
           httpServer?.off("listening", onListening);
           reject(error);
@@ -153276,7 +153508,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         const onListening = () => {
           httpServer?.off("error", onError);
           listening = true;
-          resolve38();
+          resolve39();
         };
         httpServer.once("error", onError);
         httpServer.once("listening", onListening);
@@ -153303,12 +153535,12 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
             }
           }
           clients.clear();
-          await new Promise((resolve38) => {
+          await new Promise((resolve39) => {
             if (!httpServer) {
-              resolve38();
+              resolve39();
               return;
             }
-            httpServer.close(() => resolve38());
+            httpServer.close(() => resolve39());
           });
           httpServer = null;
           wss = null;
@@ -154289,7 +154521,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       return { legacyCleared: [], discovered: [], budgetExhausted: false, meshRowsPruned: 0, vacuumedPages: 0 };
     }
     function yieldToEventLoop() {
-      return new Promise((resolve38) => setImmediate(resolve38));
+      return new Promise((resolve39) => setImmediate(resolve39));
     }
     function errText2(error) {
       return error instanceof Error ? error.message : String(error);
@@ -156373,7 +156605,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       return { ...runtimeCounters };
     }
     function yieldToEventLoop2() {
-      return new Promise((resolve38) => setImmediate(resolve38));
+      return new Promise((resolve39) => setImmediate(resolve39));
     }
     var CHAT_SCAN_PAGE_ROWS = 2e3;
     function scanAllLatestPerKey(node, topic, options = {}) {
@@ -158796,6 +159028,9 @@ ${notice.notice}${supersededHint}`;
         subscribeMeshTermination(bus),
         subscribeMeshProviderSignals(bus),
         subscribeCoordinatorRegistryRemoval(bus),
+        // Takes a dead worker's entry back out of a SHARED workspace MCP config
+        // (restoring what it shadowed) — see resolveWorkerMcpPlacement.
+        subscribeWorkerMcpSharedConfigCleanup(bus),
         subscribeWorkerBindRevocation(bus)
       ];
       const turn = wireTurnLedger(components);
@@ -164333,12 +164568,12 @@ var MESH_SEND_KEYS_TOOL = {
 };
 var MESH_LAUNCH_SESSION_TOOL = {
   name: "mesh_launch_session",
-  description: "Launch a new agent session on a mesh node. Returns the session ID for subsequent send_task/read_chat calls. If the user names a provider, preserve it exactly: Claude Code/Claude = claude-cli, Codex = codex-cli, Gemini = gemini-cli. If type is omitted, resolve strictly from the node policy providerPriority and provider detection; fail closed when no configured provider is usable. Do not default to claude-cli.",
+  description: "Launch a new agent session on a mesh node. Returns the session ID for subsequent send_task/read_chat calls. If the user names a provider, preserve it exactly: Claude Code/Claude = claude-cli, Codex = codex-cli, Cursor = cursor-cli, Kimi = kimi, OpenCode = opencode, Grok = grok-cli, Antigravity = antigravity-cli. If type is omitted, resolve strictly from the node policy providerPriority and provider detection; fail closed when no configured provider is usable. Do not default to claude-cli.",
   inputSchema: {
     type: "object",
     properties: {
       node_id: { type: "string", description: "Target node ID." },
-      type: { type: "string", description: "Optional provider type to launch. Use claude-cli for Claude Code, codex-cli for Codex, gemini-cli for Gemini. When omitted, node.policy.providerPriority is probed in order." },
+      type: { type: "string", description: "Optional provider type to launch. Use claude-cli for Claude Code, codex-cli for Codex, cursor-cli for Cursor, kimi for Kimi, opencode for OpenCode, grok-cli for Grok, antigravity-cli for Antigravity. When omitted, node.policy.providerPriority is probed in order." },
       force: { type: "boolean", description: "Set true to launch an ADDITIONAL session even when this node already has a live mesh-owned worker session. Default false: if a live worker session for this mesh+node already exists (e.g. an enqueue auto-launch just spawned one), the existing session is returned idempotently instead of creating an empty duplicate. Only pass force when you intentionally want a second concurrent provider/session on the node." }
     },
     required: ["node_id"]
@@ -164898,7 +165133,6 @@ var MESH_STATUS_TOOL = {
     type: "object",
     properties: {
       refresh: { type: "boolean", description: "Ask the coordinator daemon to refresh node git in the background (returns immediately; refreshing nodes show gitObservation.refreshing, results appear on a later call) and bypass the 5 s session-probe cache. Default false." },
-      _gemini_compat: { type: "string", description: "Dummy property for Gemini compatibility. Ignore this." },
       includeStaleDirectWorkDetails: { type: "boolean", description: "Opt in to the full staleDirectWork array. Defaults false; normal status returns compact staleDirectWorkSummary only." },
       includeTerminalDirectWork: { type: "boolean", description: "Include historical completed/failed direct dispatches (terminalDirectWork) in the response. Defaults false." },
       includeSessions: { type: "boolean", description: "Opt in to per-node live session arrays. Default false: compact mode returns a per-node sessionSummary (counts) and de-duplicated full session lists under top-level daemonSessions keyed by daemonId (sessions are not repeated for every node that shares a daemon). Set true to also include the full session array on each node." },
@@ -164940,9 +165174,7 @@ var MESH_LIST_NODES_TOOL = {
   description: "List all nodes in the mesh with their capabilities, platform, and workspace paths.",
   inputSchema: {
     type: "object",
-    properties: {
-      _gemini_compat: { type: "string", description: "Dummy property for Gemini compatibility. Ignore this." }
-    }
+    properties: {}
   }
 };
 var ALL_MESH_TOOLS = [
@@ -173554,6 +173786,13 @@ async function buildMeshModeCoordinatorPrompt(mesh) {
     throw new Error(`Failed to build Repo Mesh coordinator prompt: ${e?.message ?? String(e)}`);
   }
 }
+async function readCoordinatorPromptResourceText(mesh) {
+  try {
+    return await buildMeshModeCoordinatorPrompt(mesh);
+  } catch (e) {
+    return `Coordinator system prompt unavailable: ${e?.message ?? String(e)}`;
+  }
+}
 async function startMcpServer(opts) {
   const transport = opts.mode === "ipc" ? new IpcTransport({ port: opts.port }) : new LocalTransport({ port: opts.port, password: opts.password });
   const alive = await transport.ping();
@@ -173711,7 +173950,6 @@ ${deliveryNotices.join("\n\n")}
     }
     const coordinatorSessionId = typeof process.env.ADHDEV_COORDINATOR_SESSION_ID === "string" && process.env.ADHDEV_COORDINATOR_SESSION_ID.trim() ? process.env.ADHDEV_COORDINATOR_SESSION_ID.trim() : void 0;
     const meshCtx = { mesh, transport, ...localDaemonId ? { localDaemonId } : {}, ...localMachineId ? { localMachineId } : {}, ...coordinatorHostname ? { coordinatorHostname } : {}, ...coordinatorSessionId ? { coordinatorSessionId } : {} };
-    const coordinatorPrompt = await buildMeshModeCoordinatorPrompt(mesh);
     const server2 = new import_server2.Server(
       { name: "adhdev-mcp-server", version: MCP_SERVER_VERSION },
       { capabilities: { tools: {}, resources: {} } }
@@ -173721,13 +173959,13 @@ ${deliveryNotices.join("\n\n")}
       resources: [{
         uri: "coordinator://system-prompt",
         name: "Coordinator System Prompt",
-        description: `System prompt for mesh "${mesh.name}" coordinator`,
+        description: `Preview of the coordinator system prompt for mesh "${mesh.name}" (config-only render; the launched prompt also carries live status, mission, notes and repo rules)`,
         mimeType: "text/plain"
       }]
     }));
     server2.setRequestHandler(ReadResourceRequestSchema, async (req) => {
       if (req.params.uri === "coordinator://system-prompt") {
-        return { contents: [{ uri: req.params.uri, mimeType: "text/plain", text: coordinatorPrompt }] };
+        return { contents: [{ uri: req.params.uri, mimeType: "text/plain", text: await readCoordinatorPromptResourceText(mesh) }] };
       }
       throw new Error(`Unknown resource: ${req.params.uri}`);
     });
