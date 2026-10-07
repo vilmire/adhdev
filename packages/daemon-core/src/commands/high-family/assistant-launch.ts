@@ -108,18 +108,6 @@ async function promptProjects(ctx: HighFamilyContext): Promise<AssistantPromptPr
     });
 }
 
-/** Strip / delete the files a file-based injection wrote, once the CLI has read them (same timing as the coordinator). */
-function scheduleInjectionCleanup(effect: { contextFilePath?: string; contextFileOwned?: boolean; agentFilePath?: string }): void {
-    if (!effect.contextFilePath && !effect.agentFilePath) return;
-    const t = setTimeout(() => {
-        void import('../mesh-coordinator.js').then(({ stripCoordinatorWrapperFile, cleanupCoordinatorAgentFile }) => {
-            if (effect.contextFilePath) stripCoordinatorWrapperFile(effect.contextFilePath, effect.contextFileOwned === true);
-            if (effect.agentFilePath) cleanupCoordinatorAgentFile(effect.agentFilePath);
-        }).catch(() => { /* best-effort */ });
-    }, 5000);
-    (t as { unref?: () => void }).unref?.();
-}
-
 const launchAssistant: HighFamilyHandler = async (ctx, args) => {
     const registry = getAssistantRegistry();
     const entry = registry.read();
@@ -193,19 +181,32 @@ const launchAssistant: HighFamilyHandler = async (ctx, args) => {
 
     const model = str(args?.model);
     const thinkingLevel = str(args?.thinkingLevel);
-    const launched: any = await ctx.execute('launch_cli', {
-        cliType,
-        dir: workspace,
-        cliArgs: cliArgs.length ? cliArgs : undefined,
-        env: Object.keys(launchEnv).length ? launchEnv : undefined,
-        settings: assistantSessionSettings(approval.settings),
-        assistantSessionKey,
-        ...(model ? { initialModel: model, modelSource: 'user' } : {}),
-        ...(thinkingLevel ? { initialThinkingLevel: thinkingLevel, thinkingLevelSource: 'user' } : {}),
-        launchedBy: 'assistant',
-    }, 'ipc', { inProcess: true });
-    if (launched?.success) scheduleInjectionCleanup(injection);
+    // Same inject-then-remove as the coordinator (coordinator-injection-cleanup.ts):
+    // after the session is ready, or at once when the launch fails or throws.
+    const { scheduleInjectionCleanup, localSessionReadyProbe } = await import('../coordinator-injection-cleanup.js');
+    let launched: any;
+    try {
+        launched = await ctx.execute('launch_cli', {
+            cliType,
+            dir: workspace,
+            cliArgs: cliArgs.length ? cliArgs : undefined,
+            env: Object.keys(launchEnv).length ? launchEnv : undefined,
+            settings: assistantSessionSettings(approval.settings),
+            assistantSessionKey,
+            ...(model ? { initialModel: model, modelSource: 'user' } : {}),
+            ...(thinkingLevel ? { initialThinkingLevel: thinkingLevel, thinkingLevelSource: 'user' } : {}),
+            launchedBy: 'assistant',
+        }, 'ipc', { inProcess: true });
+    } catch (e) {
+        void scheduleInjectionCleanup(injection, { launched: false, label: 'assistant' });
+        throw e;
+    }
     const sessionId = str(launched?.sessionId) || str(launched?.id);
+    void scheduleInjectionCleanup(injection, {
+        launched: launched?.success === true && !!sessionId,
+        isReady: localSessionReadyProbe(ctx.deps.cliManager?.adapters, sessionId),
+        label: 'assistant',
+    });
     if (!launched?.success || !sessionId) {
         return fail(str(launched?.code) || 'assistant_launch_failed', str(launched?.error) || 'Failed to launch the assistant session', { cliType, workspace });
     }

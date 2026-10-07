@@ -29,7 +29,15 @@ export interface CoordinatorRegistryEntry {
      *  added vs. what the daemon's default template produced. */
     extraSystemPrompt?: string;
     /** How the prompt was actually injected (cli_arg / context_file / …). */
-    injection?: { mode: string; target?: string; owned?: boolean };
+    injection?: {
+        mode: string;
+        target?: string;
+        owned?: boolean;
+        /** The context file the launch actually wrote (declared rule OR its oversize
+         *  fallback), the ownership the writer settled on, and the provider's wrapper
+         *  sentinels. Preferred over mode/target/owned by the unregister fallback. */
+        contextFile?: { path: string; owned: boolean; open?: string; close?: string };
+    };
     /** Path of the MCP config file the daemon wrote for this session. */
     mcpConfigPath?: string;
 }
@@ -95,6 +103,20 @@ export function unregisterMeshCoordinator(sessionId: string): void {
     if (!_registry.delete(sessionId)) return;
     saveRegistry();
     if (!entry) return;
+    const recorded = entry.injection?.contextFile;
+    if (recorded && typeof recorded.path === 'string' && recorded.path) {
+        try {
+            // eslint-disable-next-line @typescript-eslint/no-require-imports
+            const { stripCoordinatorWrapperFile } = require('../commands/mesh-coordinator.js');
+            stripCoordinatorWrapperFile(
+                recorded.path,
+                recorded.owned === true,
+                typeof recorded.open === 'string' ? { open: recorded.open, close: typeof recorded.close === 'string' ? recorded.close : '' } : undefined,
+            );
+        } catch { /* best-effort cleanup; never throw out of unregister */ }
+        return;
+    }
+    // Entry persisted by an older daemon: only the declared rule is known.
     const workspace = entry.workspace;
     const owned = entry.injection?.owned === true;
     const target = entry.injection?.mode === 'context_file' && typeof entry.injection.target === 'string'

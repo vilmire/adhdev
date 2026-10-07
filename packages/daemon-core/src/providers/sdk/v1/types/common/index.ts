@@ -172,6 +172,8 @@ export interface MeshCoordinatorDef {
   systemPromptInjection?: MeshCoordinatorSystemPromptInjectionDef;
   /** Coordinator-only extra spawn args (e.g. cursor's --approve-mcps). */
   launchArgs?: string[];
+  /** Coordinator-only deny list rendered as `<flag>=<tools joined by ','>` (e.g. claude --disallowedTools). */
+  disallowedTools?: { flag: string; tools: string[] };
   delegatedWorkerIsolation?: MeshCoordinatorDelegatedWorkerIsolationDef;
 }
 
