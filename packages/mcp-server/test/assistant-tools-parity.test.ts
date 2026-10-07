@@ -159,6 +159,23 @@ test('argument gate: unknown key, bad enum value and missing required key never 
   }
 });
 
+test('project_send accepts the daemon\'s supplement and messageId and passes them through unchanged', async () => {
+  const tools = resolveAssistantModeTools();
+  const send = tools.find(t => t.name === 'project_send')!;
+  for (const key of ['supplement', 'messageId'] as const) {
+    assert.equal((send.inputSchema.properties[key] as { type?: string })?.type, 'string', `project_send.${key} is declared`);
+  }
+  assert.deepEqual(send.inputSchema.required, ['project', 'message'], 'supplement and messageId stay optional');
+  assert.match(send.description, /duplicate/, 'the description documents the duplicate status');
+  const args = { project: 'adhdev', message: '테스트 돌려줘', supplement: 'Context: CI was red yesterday.', messageId: 'turn3-1' };
+  const transport = fakeTransport();
+  const res = await handleAssistantToolCall(transport, tools, 'sess', 'project_send', args);
+  assert.equal(res.isError, undefined, res.content[0]?.text);
+  const call = transport.calls[0];
+  assert.equal(call.type, ASSISTANT_TOOL_VERBS.project_send);
+  for (const [key, value] of Object.entries(args)) assert.deepEqual(call.args[key], value, `passes ${key} through`);
+});
+
 test('a daemon refusal (or an unknown verb) is returned as an error with the daemon payload', async () => {
   const tools = resolveAssistantModeTools();
   const transport = fakeTransport((type) => type === ASSISTANT_VERB.projects

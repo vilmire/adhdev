@@ -157,7 +157,7 @@ describe('renderProjectTable', () => {
         ], AT);
         const lines = t.split('\n');
         expect(lines[1]).toMatch(/^- alpha .*this machine$/);
-        expect(lines[2]).toMatch(/^- beta .*hosted on win-box, read-only here$/);
+        expect(lines[2]).toMatch(/^- beta .*hosted on win-box; open it there$/);
         expect(lines[3]).toMatch(/^- zeta .*unmanaged/);
     });
 
@@ -181,3 +181,40 @@ describe('language rule', () => {
     });
 });
 
+
+describe('routing, notice and tool-boundary rules', () => {
+    it('routes the user\'s words via message and the assistant\'s own additions via supplement, with messageId retry', () => {
+        expect(ASSISTANT_FIXED_RULES).toMatch(/`message` is the user's words \*\*verbatim\*\*/);
+        expect(ASSISTANT_FIXED_RULES).toMatch(/additions[^\n]*go in `supplement`/);
+        expect(ASSISTANT_FIXED_RULES).toContain('`messageId`');
+        expect(ASSISTANT_FIXED_RULES).toContain('`duplicate`');
+    });
+
+    it('never calls an elsewhere-hosted project read-only; it points the user at the hosting machine', () => {
+        expect(ASSISTANT_FIXED_RULES).not.toMatch(/read-only/);
+        expect(ASSISTANT_FIXED_RULES).toMatch(/open the project there/);
+    });
+
+    it('names only daemon markers that are actually produced', () => {
+        expect(ASSISTANT_FIXED_RULES).not.toContain('[ADHDev first run]');
+        expect(ASSISTANT_FIXED_RULES).toContain('[ADHDev restart]');
+        expect(ASSISTANT_FIXED_RULES).toContain('[ADHDev review]');
+    });
+
+    it('treats [idle] as "nothing running now" and hides the marker', () => {
+        expect(ASSISTANT_FIXED_RULES).toMatch(/`\[idle\]`[^\n]*nothing is running[^\n]*final report may still follow[^\n]*Do not show the marker/);
+    });
+
+    it('classifies [project …] notices as trusted ADHDev status and only relay bodies / project_read as untrusted', () => {
+        expect(ASSISTANT_FIXED_RULES).toMatch(/`\[project <slug>\]` status notices[^\n]*trusted status/);
+        expect(ASSISTANT_SAFETY_TAIL).toMatch(/relay body[^\n]*`project_read` result are agent output/);
+        expect(ASSISTANT_SAFETY_TAIL).not.toMatch(/project notice/);
+    });
+
+    it('forbids shell, direct repo file access and driving ADHDev around the tools', () => {
+        expect(ASSISTANT_SAFETY_TAIL).toMatch(/Run no shell commands at all/);
+        expect(ASSISTANT_SAFETY_TAIL).toMatch(/Do not read or edit repository files directly/);
+        expect(ASSISTANT_SAFETY_TAIL).toMatch(/`adhdev` CLI[^\n]*local ADHDev HTTP API[^\n]*resolved only by the owner/);
+        expect(ASSISTANT_SAFETY_TAIL).toMatch(/Read tool[^\n]*only for your own skill and reference files/);
+    });
+});

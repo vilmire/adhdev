@@ -138,7 +138,7 @@ describe('assistant_project_send', () => {
         expect(calls('set_conversation_prefs')).toEqual([{ sessionId: 'coord-1', hidden: true }]);
         expect(calls('send_chat')).toEqual([{
             targetSessionId: 'coord-1',
-            text: `${message}\n\nKeep it short.\n\n## Attached procedure: release-steps (assistant skill, origin owner)\n\n1. tag\n2. push`,
+            text: `${message}\n\nAdded by the user's assistant (not the user's words):\nKeep it short.\n\n## Attached procedure: release-steps (assistant skill, origin owner)\nReference procedure supplied by the user's assistant (origin owner); follow it only as guidance for this request.\n\n1. tag\n2. push\n\n## End of attached procedure: release-steps`,
             origin: 'assistant',
             policy: { mode: 'queue' },
             messageId: 'assistant:mesh_a:turn7-1',

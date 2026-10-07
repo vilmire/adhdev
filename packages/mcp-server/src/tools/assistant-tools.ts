@@ -67,7 +67,7 @@ const PROJECTS_TOOL: AssistantToolSchema = {
   name: 'projects',
   description:
     'List every project, one line each: slug, repo, whether this machine hosts it or another one does '
-    + '(hostedElsewhere projects are read-only), coordinator state (none / idle / working), whether a thread is '
+    + '(a hostedElsewhere project is used on its hosting machine — open it there), coordinator state (none / idle / working), whether a thread is '
     + 'open, queue counts, active missions and pending approvals — plus a machines[] summary (label, OS, online, build).',
   inputSchema: { type: 'object', properties: {}, required: [] },
 };
@@ -84,18 +84,28 @@ const PROJECT_SEND_TOOL: AssistantToolSchema = {
   name: 'project_send',
   description:
     'Send a request to a project\'s coordinator (launching one if none is running) and return immediately with '
-    + '{accepted|queued, launched}. Pass the user\'s words through as written. The coordinator\'s reply arrives later '
-    + 'as a relay — do not wait or poll for it. `skills` attaches up to 2 of your skills\' bodies below the message.',
+    + '{status: accepted|queued|duplicate, launched}. `message` is the user\'s words exactly as written; your own '
+    + 'additions go in `supplement`, which the project sees labelled as yours. `duplicate` means a send with the same '
+    + '`messageId` already arrived — do not send it again. The coordinator\'s reply arrives later as a relay — do not '
+    + 'wait or poll for it. `skills` attaches up to 2 of your skills\' bodies below the message.',
   inputSchema: {
     type: 'object',
     properties: {
       ...PROJECT_PROP,
-      message: { type: 'string', description: 'The request for the coordinator. Required.' },
+      message: { type: 'string', description: 'The user\'s request, verbatim (not translated or paraphrased). Required.' },
+      supplement: {
+        type: 'string',
+        description: 'Optional: your own additions (context, clarifications), sent below the message and labelled as the assistant\'s.',
+      },
+      messageId: {
+        type: 'string',
+        description: 'Optional: a short unique id for this send. Resending with the same id is safe — it answers `duplicate` instead of sending twice.',
+      },
       skills: {
         type: 'array',
         items: { type: 'string' },
         maxItems: 2,
-        description: 'Optional: up to 2 skill names whose SKILL.md body is attached as "## Attached procedure: <name>" (12,000 chars total, refused rather than truncated).',
+        description: 'Optional: up to 2 skill names whose SKILL.md body is attached as a framed "## Attached procedure: <name>" reference block (12,000 chars total, refused rather than truncated).',
       },
     },
     required: ['project', 'message'],
