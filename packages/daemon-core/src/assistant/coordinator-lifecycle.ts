@@ -9,7 +9,7 @@
  *     `managedByAssistant` → idle → most recently started;
  *   - none live → launch through the existing in-process
  *     `launch_mesh_coordinator` (ports.launch) with `managedByAssistant: true`
- *     and the fixed two-line extra system prompt, then hide its tab
+ *     (assistant guidance rides in the base coordinator prompt), then hide its tab
  *     (`set_conversation_prefs hidden`). A launch failure returns the launch
  *     command's own code/error unchanged (§4.8: no automatic fallback CLI).
  *
@@ -18,11 +18,15 @@
  * idle reaper for managed coordinators (§4.3) is not implemented yet.
  */
 
-/** The fixed addition to a coordinator the assistant launches (§4.3 step 2). */
-export const ASSISTANT_COORDINATOR_EXTRA_PROMPT = [
-    "Instructions arrive from the user's assistant; your final message of each turn is relayed to the user.",
-    'Ask questions by ending your turn with them.',
-].join('\n');
+/**
+ * The launch-scoped addition to a coordinator the assistant launches (§4.3 step 2).
+ * Intentionally empty: the guidance it used to carry (relayed instructions, a
+ * self-contained final message, questions at the end of the turn) now lives in
+ * the BASE coordinator prompt (mesh/coordinator-prompt.ts ASSISTANT_RELAY_SECTION),
+ * because pickCoordinator also reuses coordinators the user started, which never
+ * saw a launch-only addition. An empty string renders no "Additional Context".
+ */
+export const ASSISTANT_COORDINATOR_EXTRA_PROMPT = '';
 
 export interface AssistantCoordinatorView {
     sessionId: string;

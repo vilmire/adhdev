@@ -451,8 +451,8 @@ export function getSessionRecoveryContext(
         const remaining = maxRetries - consecutiveNodeFailures + 1;
         advice = `Retry recommended (${consecutiveNodeFailures}/${maxRetries + 1} attempts used, ${remaining} remaining). `
             + (lastTaskMessage
-                ? `Re-launch the session and resend the original task.`
-                : `Re-launch the session. Original task message not found in ledger.`);
+                ? `Retry it through the queue (mesh_view_queue, then mesh_queue_requeue); resend with mesh_send_task only if it was a direct dispatch.`
+                : `Retry it through the queue (mesh_view_queue, then mesh_queue_requeue). Original task message not found in ledger.`);
     } else {
         advice = `Max retries exceeded (${consecutiveNodeFailures} consecutive failures). `
             + `Consider: (1) reassigning to a different node, (2) simplifying the task, or (3) escalating to the user.`;

@@ -24661,10 +24661,23 @@ ${line}` : line;
       if (input.readonly) scope.push("read-only");
       if (scope.length) lines.push(`You are a delegated worker (${scope.join(", ")}).`);
       else lines.push("You are a delegated worker.");
+      if (input.workerMcp === false) {
+        lines.push(
+          "This session has NO adhdev worker tools (`report_completion`, `progress_update`, `peer_context_pull`, `git_*`) \u2014 do not look for them. When your work is finished, blocked, or has failed, end your turn with a plain final summary: what you did, what you found, which files you changed, and where you left the branch. That final message is what the coordinator receives.",
+          "You have no coordinator tools (no `mesh_*`) by design: do not enqueue, dispatch, or restart anything. If you need a decision from the coordinator, say so plainly in your final summary \u2014 what is blocked and what you need \u2014 and stop."
+        );
+        if (input.enclosedHandoffNotes && input.enclosedHandoffNotes > 0) {
+          lines.push(
+            `The ${input.enclosedHandoffNotes} handoff note(s) above were written by agents who touched this code before you; honour their conflict guidance and mention anything the next agent should know in your final summary.`
+          );
+        }
+        return lines.join("\n");
+      }
       lines.push(
         "When your work is finished, blocked, or has failed, call `report_completion` exactly once. Its `summary` is recorded verbatim as the authoritative record of this task \u2014 your terminal is not scraped for it \u2014 so state what you did, what you found, and where you left the branch.",
         "For work that runs longer than a few minutes, call `progress_update` at natural checkpoints so the coordinator can see you are alive without polling.",
         "`peer_context_pull` shows what sibling tasks in this mission have reported; `git_status` / `git_diff` / `git_log` inspect your own workspace \u2014 all three REQUIRE the absolute path to it as `workspace`.",
+        "Memos from the coordinator arrive appended to the response of whichever worker tool you call next; read them and follow them.",
         "You have no coordinator tools (no `mesh_*`) by design: do not enqueue, dispatch, or restart anything. If you need a decision from the coordinator, finish with `report_completion` and outcome `blocked`, listing what you need in `blockers`.",
         "On a code-changing task, `report_completion` with outcome `completed` requires `touched_files` \u2014 send `[]` if you changed nothing, omitting the field is what gets refused. `blocked`/`failed` never need it, and a read-only task should omit it or send `[]`.",
         "If `report_completion` is refused, the response carries `validationErrors` (or a `hint`) naming exactly what to fix \u2014 correct that field and call it again; a refusal records nothing."
@@ -64157,7 +64170,7 @@ ${preamble ? `${preamble}
     function readNonEmpty2(value) {
       return typeof value === "string" && value.trim() ? value.trim() : void 0;
     }
-    function resolveDispatchMessage2(task, meshId, node) {
+    function resolveDispatchMessage2(task, meshId, node, target = {}) {
       if (hasWorkerProtocolFooter2(task.message)) {
         LOG.debug("WorkerProtocol", `Task ${task.id} body already carries the worker protocol footer \u2014 not re-materializing`);
         return task.message;
@@ -64223,8 +64236,13 @@ ${upstream}`;
         ...readNonEmpty2(task.difficulty) ? { difficulty: task.difficulty.trim() } : {},
         ...isTaskReadonly3(task) ? { readonly: true } : {},
         ...enclosedHandoffNotes > 0 ? { enclosedHandoffNotes } : {},
-        ...missionBrief ? { missionBrief } : {}
+        ...missionBrief ? { missionBrief } : {},
+        ...typeof target.workerMcp === "boolean" ? { workerMcp: target.workerMcp } : {}
       });
+    }
+    function readSessionWorkerMcpDelivered(settings) {
+      const value = settings?.workerMcpDelivered;
+      return typeof value === "boolean" ? value : void 0;
     }
     var init_worker_handoff_dispatch = __esm2({
       "src/mesh/worker-handoff-dispatch.ts"() {
@@ -72877,7 +72895,9 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       const dispatchAttemptRef = openClaimAttempt({ turnLedger, meshId, task, nodeId, sessionId, providerType, mesh, assignedTranscriptProfile: claim.assignedTranscriptProfile, trigger });
       if (!dispatchAttemptRef) return false;
       recordTaskClaimed({ meshId, task, nodeId, sessionId, providerType, attemptId: dispatchAttemptRef.attemptId });
-      const dispatchMessage = resolveDispatchMessage2(task, meshId, node);
+      const dispatchMessage = resolveDispatchMessage2(task, meshId, node, {
+        workerMcp: readSessionWorkerMcpDelivered(claiming.claimState?.settings)
+      });
       const coordinatorDaemonId = localCoordinatorDaemonId2();
       const coordinatorSessionId = readText(task.sourceCoordinatorSessionId) || void 0;
       const meshContext = buildClaimDispatchMeshContext({
@@ -161392,10 +161412,23 @@ function renderWorkerProtocolFooter(input = {}) {
   if (input.readonly) scope.push("read-only");
   if (scope.length) lines.push(`You are a delegated worker (${scope.join(", ")}).`);
   else lines.push("You are a delegated worker.");
+  if (input.workerMcp === false) {
+    lines.push(
+      "This session has NO adhdev worker tools (`report_completion`, `progress_update`, `peer_context_pull`, `git_*`) \u2014 do not look for them. When your work is finished, blocked, or has failed, end your turn with a plain final summary: what you did, what you found, which files you changed, and where you left the branch. That final message is what the coordinator receives.",
+      "You have no coordinator tools (no `mesh_*`) by design: do not enqueue, dispatch, or restart anything. If you need a decision from the coordinator, say so plainly in your final summary \u2014 what is blocked and what you need \u2014 and stop."
+    );
+    if (input.enclosedHandoffNotes && input.enclosedHandoffNotes > 0) {
+      lines.push(
+        `The ${input.enclosedHandoffNotes} handoff note(s) above were written by agents who touched this code before you; honour their conflict guidance and mention anything the next agent should know in your final summary.`
+      );
+    }
+    return lines.join("\n");
+  }
   lines.push(
     "When your work is finished, blocked, or has failed, call `report_completion` exactly once. Its `summary` is recorded verbatim as the authoritative record of this task \u2014 your terminal is not scraped for it \u2014 so state what you did, what you found, and where you left the branch.",
     "For work that runs longer than a few minutes, call `progress_update` at natural checkpoints so the coordinator can see you are alive without polling.",
     "`peer_context_pull` shows what sibling tasks in this mission have reported; `git_status` / `git_diff` / `git_log` inspect your own workspace \u2014 all three REQUIRE the absolute path to it as `workspace`.",
+    "Memos from the coordinator arrive appended to the response of whichever worker tool you call next; read them and follow them.",
     "You have no coordinator tools (no `mesh_*`) by design: do not enqueue, dispatch, or restart anything. If you need a decision from the coordinator, finish with `report_completion` and outcome `blocked`, listing what you need in `blockers`.",
     "On a code-changing task, `report_completion` with outcome `completed` requires `touched_files` \u2014 send `[]` if you changed nothing, omitting the field is what gets refused. `blocked`/`failed` never need it, and a read-only task should omit it or send `[]`.",
     "If `report_completion` is refused, the response carries `validationErrors` (or a `hint`) naming exactly what to fix \u2014 correct that field and call it again; a refusal records nothing."

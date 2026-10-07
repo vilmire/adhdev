@@ -26,7 +26,6 @@ export const MESH_STATUS_TOOL = {
         type: 'object' as const,
         properties: {
             refresh: { type: 'boolean', description: 'Ask the coordinator daemon to refresh node git in the background (returns immediately; refreshing nodes show gitObservation.refreshing, results appear on a later call) and bypass the 5 s session-probe cache. Default false.' },
-            _gemini_compat: { type: 'string', description: 'Dummy property for Gemini compatibility. Ignore this.' },
             includeStaleDirectWorkDetails: { type: 'boolean', description: 'Opt in to the full staleDirectWork array. Defaults false; normal status returns compact staleDirectWorkSummary only.' },
             includeTerminalDirectWork: { type: 'boolean', description: 'Include historical completed/failed direct dispatches (terminalDirectWork) in the response. Defaults false.' },
             includeSessions: { type: 'boolean', description: 'Opt in to per-node live session arrays. Default false: compact mode returns a per-node sessionSummary (counts) and de-duplicated full session lists under top-level daemonSessions keyed by daemonId (sessions are not repeated for every node that shares a daemon). Set true to also include the full session array on each node.' },
@@ -71,7 +70,6 @@ export const MESH_LIST_NODES_TOOL = {
     inputSchema: {
         type: 'object' as const,
         properties: {
-            _gemini_compat: { type: 'string', description: 'Dummy property for Gemini compatibility. Ignore this.' },
         },
     },
 };

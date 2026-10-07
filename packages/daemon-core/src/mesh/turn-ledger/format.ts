@@ -418,7 +418,7 @@ function renderStopped(input: RenderTurnNotifyInput, missing: SummaryRef[]): str
             parts.push(
                 `\n\n**Original task to retry:**`,
                 `> ${truncateAppend(lastTaskMessage, RECOVERY_PROMPT_TRUNCATE_CHARS, '...')}`,
-                `\nTo retry: call \`mesh_launch_session\` for this node, then \`mesh_send_task\` with the original task.`,
+                `\nTo retry: a queued task goes back through the queue — check \`mesh_view_queue\` (it may already be pending; auto-launch starts its session), else \`mesh_queue_requeue\`. Only a direct \`mesh_send_task\` dispatch is resent by hand: \`mesh_launch_session\`, then \`mesh_send_task\` with the original task.`,
             );
         } else if (!rc.retryRecommended) {
             parts.push(`\nDo NOT retry on this node. Consider reassigning to a different node or asking the user for guidance.`);

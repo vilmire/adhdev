@@ -55,7 +55,9 @@ describe('ensureCoordinator', () => {
         expect(await ensureCoordinator('mesh_a', p)).toEqual({ ok: true, sessionId: 'coord-new', launched: true, managedByAssistant: true });
         expect(p.launch).toHaveBeenCalledWith({ meshId: 'mesh_a', cliType: 'claude-cli', extraSystemPrompt: ASSISTANT_COORDINATOR_EXTRA_PROMPT, managedByAssistant: true });
         expect(p.hide).toHaveBeenCalledWith('coord-new');
-        expect(ASSISTANT_COORDINATOR_EXTRA_PROMPT.split('\n')).toHaveLength(2);
+        // The assistant guidance moved into the base coordinator prompt (it must reach
+        // reused, user-started coordinators too), so the launch adds nothing.
+        expect(ASSISTANT_COORDINATOR_EXTRA_PROMPT).toBe('');
     });
 
     it('two concurrent sends for one mesh launch exactly one coordinator', async () => {

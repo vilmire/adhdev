@@ -109,6 +109,24 @@ export async function buildMeshModeCoordinatorPrompt(mesh: any): Promise<string>
   }
 }
 
+/**
+ * Text served for the `coordinator://system-prompt` resource. Rendered on READ,
+ * not at MCP boot: a prompt-render failure used to abort the whole coordinator
+ * MCP server before any mesh tool was registered, for a resource nothing in the
+ * daemon consumes (the launched coordinator gets its prompt from the launch
+ * path, not from here). It renders from the mesh config alone, so it is a
+ * preview — the launched prompt also carries live node status, the active
+ * mission, recent activity, operating notes and the repo's rules file. A render
+ * error returns a short error text instead of failing the read.
+ */
+export async function readCoordinatorPromptResourceText(mesh: any): Promise<string> {
+  try {
+    return await buildMeshModeCoordinatorPrompt(mesh);
+  } catch (e: any) {
+    return `Coordinator system prompt unavailable: ${e?.message ?? String(e)}`;
+  }
+}
+
 export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void> {
   const transport: CommandTransport =
     opts.mode === 'ipc'
@@ -341,8 +359,6 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
 
     const meshCtx: MeshContext = { mesh, transport, ...(localDaemonId ? { localDaemonId } : {}), ...(localMachineId ? { localMachineId } : {}), ...(coordinatorHostname ? { coordinatorHostname } : {}), ...(coordinatorSessionId ? { coordinatorSessionId } : {}) };
 
-    const coordinatorPrompt = await buildMeshModeCoordinatorPrompt(mesh);
-
     const server = new Server(
       { name: 'adhdev-mcp-server', version: MCP_SERVER_VERSION },
       { capabilities: { tools: {}, resources: {} } },
@@ -354,13 +370,13 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
       resources: [{
         uri: 'coordinator://system-prompt',
         name: 'Coordinator System Prompt',
-        description: `System prompt for mesh "${mesh.name}" coordinator`,
+        description: `Preview of the coordinator system prompt for mesh "${mesh.name}" (config-only render; the launched prompt also carries live status, mission, notes and repo rules)`,
         mimeType: 'text/plain',
       }],
     }));
     server.setRequestHandler(ReadResourceRequestSchema, async (req) => {
       if (req.params.uri === 'coordinator://system-prompt') {
-        return { contents: [{ uri: req.params.uri, mimeType: 'text/plain', text: coordinatorPrompt }] };
+        return { contents: [{ uri: req.params.uri, mimeType: 'text/plain', text: await readCoordinatorPromptResourceText(mesh) }] };
       }
       throw new Error(`Unknown resource: ${req.params.uri}`);
     });
