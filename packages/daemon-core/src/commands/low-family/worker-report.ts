@@ -189,7 +189,11 @@ export function logLocalWorkerRefusal(
         const who = binding
             ? `session ${binding.sessionId} (mesh ${binding.meshId})`
             : bind ? `bind ${hashWorkerSessionBind(bind).slice(0, 12)}` : 'a caller with no bind';
-        LOG.warn('WorkerReport', `Local ${what} from ${who} → refused ${refusal}${detail ? ` — ${detail}` : ''}`);
+        const line = `Local ${what} from ${who} → refused ${refusal}${detail ? ` — ${detail}` : ''}`;
+        // A worker checks its mailbox once more right after its completion
+        // report; by then the task is terminal, so this refusal is routine.
+        if (what === 'mailbox drain' && binding && detail?.includes('no assigned task')) LOG.debug('WorkerReport', line);
+        else LOG.warn('WorkerReport', line);
     } catch { /* logging must never change the answer */ }
 }
 

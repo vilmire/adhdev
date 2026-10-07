@@ -763,7 +763,7 @@ function foldSameClassNotes(ranked: CoordinatorOperatingNote[]): FoldedNote[] {
         // keep the note standalone (lossless for legacy/uncategorized notes).
         const foldable = !note.pinned && !!note.category && !!subject;
         if (foldable) {
-            const key = `${note.category} ${subject}`;
+            const key = `${note.category}\u0000${subject}`;
             const existing = survivorByKey.get(key);
             if (existing !== undefined) {
                 const survivor = out[existing];
