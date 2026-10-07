@@ -45,6 +45,8 @@ import { buildGitSystemBubbleMessages } from './git-system-bubbles';
 import {
     filterChatActivityMessages,
     readChatActivityVisiblePreference,
+    readAssistantActivityVisiblePreference,
+    writeAssistantActivityVisiblePreference,
     setChatActivityVisiblePreference,
     subscribeChatActivityVisiblePreference,
 } from './chat-activity-visibility';
@@ -257,7 +259,10 @@ export default function ChatPane({
     const [visibleLiveCount, setVisibleLiveCount] = useState(
         () => getRememberedVisibleLiveCount(activeConv.tabKey, defaultVisibleLiveMessages),
     );
-    const [showActivityMessages, setShowActivityMessages] = useState(() => readChatActivityVisiblePreference());
+    const isAssistantPane = activeConv.assistant === true;
+    const [globalShowActivity, setGlobalShowActivity] = useState(() => readChatActivityVisiblePreference());
+    const [assistantShowActivity, setAssistantShowActivity] = useState(() => readAssistantActivityVisiblePreference());
+    const showActivityMessages = isAssistantPane ? assistantShowActivity : globalShowActivity;
 
     const tabKey = activeConv.tabKey;
     const historyMessages = chatState.historyMessages;
@@ -594,15 +599,23 @@ export default function ChatPane({
 
     // React to preference flips from the Settings toggle (same document, custom
     // event) and from other tabs (storage event).
-    useEffect(() => subscribeChatActivityVisiblePreference(setShowActivityMessages), []);
+    useEffect(() => subscribeChatActivityVisiblePreference(setGlobalShowActivity), []);
 
     const handleActivityToggle = useCallback(() => {
-        setShowActivityMessages((current) => {
+        if (isAssistantPane) {
+            setAssistantShowActivity((current) => {
+                const next = !current;
+                writeAssistantActivityVisiblePreference(next);
+                return next;
+            });
+            return;
+        }
+        setGlobalShowActivity((current) => {
             const next = !current;
             setChatActivityVisiblePreference(next);
             return next;
         });
-    }, []);
+    }, [isAssistantPane]);
 
     const handleControlsToggleDebugGesture = useCallback(() => {
         const result = recordControlsToggleDebugGesture(debugGestureStateRef.current);

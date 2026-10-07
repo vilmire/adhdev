@@ -242,3 +242,25 @@ export function subscribeChatActivityVisiblePreference(listener: (visible: boole
         window.removeEventListener('storage', onStorage)
     }
 }
+
+/**
+ * The assistant chat keeps its own tool-step preference, hidden by default:
+ * its tool calls are routing plumbing (project lists, sends, relays) whose raw
+ * JSON drowns the conversation, while coding sessions keep the global one.
+ */
+export const ASSISTANT_ACTIVITY_VISIBILITY_STORAGE_KEY = 'adhdev_assistant_activity_visible'
+
+export function readAssistantActivityVisiblePreference(storage: Pick<Storage, 'getItem'> | undefined = typeof localStorage !== 'undefined' ? localStorage : undefined): boolean {
+    try {
+        return storage?.getItem(ASSISTANT_ACTIVITY_VISIBILITY_STORAGE_KEY) === '1'
+    } catch {
+        return false
+    }
+}
+
+export function writeAssistantActivityVisiblePreference(value: boolean, storage: Pick<Storage, 'setItem'> | undefined = typeof localStorage !== 'undefined' ? localStorage : undefined): void {
+    try {
+        storage?.setItem(ASSISTANT_ACTIVITY_VISIBILITY_STORAGE_KEY, value ? '1' : '0')
+    } catch { /* storage unavailable — preference is best-effort */ }
+}
+
