@@ -48,6 +48,7 @@ function StandaloneAuthGate({ children }: { children: ReactNode }) {
         setError('')
         try {
             const res = await standaloneFetch('/auth/session')
+            if (!res.ok) throw new Error(`HTTP ${res.status}`)
             const data = await res.json() as StandaloneAuthSessionStatus
             setStatus(data)
         } catch (err) {
@@ -57,9 +58,26 @@ function StandaloneAuthGate({ children }: { children: ReactNode }) {
         }
     }
 
+    // The daemon restarts on updates and in dev on every rebuild; a request
+    // that lands mid-restart gets an empty or failed reply. Keep retrying
+    // (0.5 s doubling to 5 s) instead of leaving a dead error screen, and
+    // only show the error after a few failed attempts.
+    const [failures, setFailures] = useState(0)
     useEffect(() => {
         void refreshStatus()
     }, [])
+    useEffect(() => {
+        if (!error || status) return
+        const delay = Math.min(5000, 500 * 2 ** failures)
+        const timer = window.setTimeout(() => {
+            setFailures((n) => n + 1)
+            void refreshStatus()
+        }, delay)
+        return () => window.clearTimeout(timer)
+    }, [error, status, failures])
+    useEffect(() => {
+        if (status) setFailures(0)
+    }, [status])
 
     useEffect(() => {
         if (!status || (status.required && !status.authenticated)) return
@@ -104,7 +122,7 @@ function StandaloneAuthGate({ children }: { children: ReactNode }) {
         }
     }
 
-    if (loading) {
+    if (loading || (!status && failures < 3)) {
         return <div className="min-h-screen flex items-center justify-center text-sm text-text-muted">{t('standalone.auth.loading')}</div>
     }
 
