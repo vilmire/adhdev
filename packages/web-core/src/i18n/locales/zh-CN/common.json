@@ -1173,6 +1173,8 @@
             "continuousScan": "持续（定期扫描）",
             "sessionCleanupLabel": "移除节点时，其会话……",
             "sessionCleanupHint": "将转录清理与运行时／进程清理分开。",
+            "sessionCleanupByNodeType": "按节点类型（工作树：停止并删除，基础：保留）",
+            "sessionCleanupByNodeTypeHint": "未设置时，移除工作树节点会停止并删除其会话；移除基础节点会保留其会话。",
             "mcpDescription": "· mesh MCP 服务器可直接从你的 CLI 智能体使用。",
             "repoMeshJsonTitle": "来自仓库文件（只读）",
             "repoMeshJsonHint": "此仓库提交的协调器提示词文本，会与上方字段叠加生效。请在仓库文件中修改，而不是在这里:",

@@ -384,6 +384,7 @@ export function MeshDetailView({
     const affMode = aff.mode === 'continuous' ? 'continuous' : 'idle'
     const patchAff = (change: Record<string, unknown>) => onUpdatePolicy({ autoFastForward: { ...aff, ...change } })
     const cleanupMode = SESSION_CLEANUP_MODE_OPTIONS.find(o => o.value === policy.sessionCleanupOnNodeRemove) ?? SESSION_CLEANUP_MODE_OPTIONS[0]
+    const cleanupSet = isMeshPolicyKeySet(selectedMesh, 'sessionCleanupOnNodeRemove')
 
     // Set-vs-default for a policy row. The daemon stores only the keys the owner set;
     // an unset key shows a "Default" badge (its value is the daemon-resolved effective
@@ -473,9 +474,12 @@ export function MeshDetailView({
                             <option value="continuous">{t('mesh.detail.continuousScan')}</option>
                         </select>
                     </FormField>
-                    <FormField label={t('mesh.detail.sessionCleanupLabel')} hint={`${t('mesh.detail.sessionCleanupHint')}\n${t(cleanupMode.descriptionKey)}`}>
+                    <FormField label={t('mesh.detail.sessionCleanupLabel')} hint={`${t('mesh.detail.sessionCleanupHint')}\n${cleanupSet ? t(cleanupMode.descriptionKey) : t('mesh.detail.sessionCleanupByNodeTypeHint')}`}>
+                        {/* Unset has no single value: the daemon picks per node type
+                            (worktree: stop and delete, base: preserve). */}
                         <select className={selectCls}
-                            value={policy.sessionCleanupOnNodeRemove || 'preserve'} onChange={e => onUpdatePolicy({ sessionCleanupOnNodeRemove: e.target.value })} disabled={savingPolicy}>
+                            value={cleanupSet ? policy.sessionCleanupOnNodeRemove : ''} onChange={e => onUpdatePolicy({ sessionCleanupOnNodeRemove: e.target.value || null })} disabled={savingPolicy}>
+                            {!cleanupSet && <option value="">{t('mesh.detail.sessionCleanupByNodeType')}</option>}
                             {SESSION_CLEANUP_MODE_OPTIONS.map(o => <option key={o.value} value={o.value}>{t(o.labelKey)}</option>)}
                         </select>
                         {policyKeyState('sessionCleanupOnNodeRemove')}

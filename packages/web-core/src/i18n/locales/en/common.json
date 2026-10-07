@@ -1173,6 +1173,8 @@
             "continuousScan": "Continuous (periodic scan)",
             "sessionCleanupLabel": "When removing a node, its sessions…",
             "sessionCleanupHint": "Separate transcript cleanup from runtime/process cleanup.",
+            "sessionCleanupByNodeType": "By node type (worktree: stop and delete, base: keep)",
+            "sessionCleanupByNodeTypeHint": "Not set: removing a worktree node stops and deletes its sessions; removing a base node keeps them.",
             "mcpDescription": "· The mesh MCP server can be used directly from your CLI agent.",
             "repoMeshJsonTitle": "From repo file (read-only)",
             "repoMeshJsonHint": "This repo commits coordinator prompt text that stacks with the fields above. Edit it in the repo file, not here:",

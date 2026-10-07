@@ -1176,6 +1176,8 @@
             "continuousScan": "Continuo (escaneo periódico)",
             "sessionCleanupLabel": "Al eliminar un nodo, sus sesiones…",
             "sessionCleanupHint": "Separa la limpieza de transcripciones de la limpieza de runtime/procesos.",
+            "sessionCleanupByNodeType": "Según el tipo de nodo (worktree: detener y eliminar, base: conservar)",
+            "sessionCleanupByNodeTypeHint": "Sin definir: al quitar un nodo worktree sus sesiones se detienen y eliminan; las de un nodo base se conservan.",
             "mcpDescription": "· El servidor MCP del mesh se puede usar directamente desde tu agente CLI.",
             "repoMeshJsonTitle": "Del archivo del repositorio (solo lectura)",
             "repoMeshJsonHint": "Este repositorio incluye texto del prompt del coordinador que se suma a los campos de arriba. Edítalo en el archivo del repositorio, no aquí:",
