@@ -62,9 +62,11 @@ describe('Repo Mesh coordinator prompt', () => {
       coordinatorCliType: 'claude-cli',
     })
 
-    expect(prompt).toContain('### Task Messaging Requirements')
-    // The only rule left: branch convergence final state in the completion report.
-    expect(prompt).toContain('require the completion report to classify the touched branch into exactly one final state')
+    // The section's last rule (branch convergence state in the task message) was
+    // dropped: report_completion.branch_state already carries it, so asking for it
+    // again in every task message only duplicated the worker protocol.
+    expect(prompt).not.toContain('### Task Messaging Requirements')
+    expect(prompt).toContain('branch state incl. its convergence bucket')
 
     // Repo-specific rules must NOT be hardcoded into the default prompt.
     expect(prompt).not.toContain('oss/` MUST be English')
@@ -174,7 +176,7 @@ describe('Repo Mesh coordinator prompt', () => {
 
     // 5. The same boundary is restated in the durable Rules section.
     expect(prompt).toContain('**Base nodes are reserved for environment-specific testing.**')
-    expect(prompt).toContain('clone a worktree and assign the task there')
+    expect(prompt).toContain('every new, independent `code_change` gets its own cloned worktree')
     expect(prompt).toContain('mesh_clone_node')
   })
 
@@ -1318,5 +1320,71 @@ describe('Repo Mesh coordinator prompt — queue tasks with depends_on (graph or
     for (const provider of ['claude', 'codex', 'hermes', 'antigravity', 'Claude Code']) {
       expect(enqueueBullet).not.toContain(provider)
     }
+  })
+})
+
+describe('Repo Mesh coordinator prompt — correctness of the operating rules (batch 1)', () => {
+  const mesh = () => ({
+    id: 'mesh_1',
+    name: 'ADHDev',
+    repoIdentity: 'github.com/acme/adhdev',
+    nodes: [{ id: 'node_1', workspace: '/repo', daemonId: 'daemon_1', userOverrides: {}, policy: {} }],
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+  })
+  const prompt = (policy?: Record<string, unknown>) => buildCoordinatorSystemPrompt({
+    mesh: { ...mesh(), ...(policy ? { policy } : {}) } as any,
+    coordinatorCliType: 'claude-cli',
+  })
+
+  it('tells every coordinator — not only assistant-launched ones — how to handle assistant-relayed requests', () => {
+    const p = prompt()
+    expect(p).toContain('## Requests relayed by the assistant')
+    const section = p.slice(p.indexOf('## Requests relayed by the assistant'))
+    expect(section).toContain('origin `assistant`')
+    expect(section).toContain('do not enqueue tasks for it')
+    expect(section).toContain('says not to enqueue or not to edit, obey it')
+    expect(section).toContain('self-contained')
+    expect(section).toContain('dashboard Inbox')
+  })
+
+  it('does not ask workers for a terminal-scraped JSON result block — report_completion is the record', () => {
+    const p = prompt()
+    expect(p).not.toContain('The daemon parses this automatically')
+    expect(p).not.toContain('conclude with a JSON block')
+    expect(p).toContain('Do not ask for a result format')
+  })
+
+  it('maps provider names only to providers that exist', () => {
+    const p = prompt()
+    expect(p).not.toContain('gemini-cli')
+    for (const t of ['claude-cli', 'codex-cli', 'cursor-cli', '`kimi`', '`opencode`', 'grok-cli', 'antigravity-cli']) {
+      expect(p).toContain(t)
+    }
+  })
+
+  it('makes checkpointing conditional on the policy', () => {
+    const p = prompt()
+    expect(p).not.toContain('Call `mesh_checkpoint` to save the work')
+    expect(p).toContain('Only when the Policy section asks for one')
+  })
+
+  it('retries a queued task through the queue, not by relaunch + mesh_send_task', () => {
+    const p = prompt()
+    const recovery = p.slice(p.indexOf('## Failure Recovery'), p.indexOf('## Rules'))
+    expect(recovery).toContain('mesh_queue_requeue(task_id)')
+    expect(recovery).toContain('do not launch one by hand')
+    expect(recovery).not.toContain('re-launch the session on the same node')
+  })
+
+  it('reconciles idle-session reuse with worktree-per-write: one worktree per branch, not per task', () => {
+    const p = prompt()
+    expect(p).toContain('one worktree per branch, not per task')
+    expect(p).not.toContain('every ordinary `code_change` gets its own cloned worktree')
+  })
+
+  it('carries no hard-coded latency figures', () => {
+    const p = prompt()
+    expect(p).not.toMatch(/median ~|worst case ~|~10 seconds|roughly 10 seconds/)
   })
 })

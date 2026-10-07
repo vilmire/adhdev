@@ -398,6 +398,9 @@ Repository: \`${mesh.repoIdentity}\`${mesh.defaultBranch ? `\nDefault branch: \`
     // ── Onboarding / Reinit ──
     sections.push(ONBOARDING_SECTION);
 
+    // ── Requests relayed by the user's assistant ──
+    sections.push(ASSISTANT_RELAY_SECTION);
+
     // ── Rules (layer half) + compiled safety tail ──
     sections.push(rulesLayer.rules);
     sections.push(buildSafetyTailSection(coordinatorCliType));
@@ -1137,6 +1140,15 @@ When the user asks to **set up / configure / onboard** this repo for Repo Mesh (
 - **\`mesh_init\` with \`mode="reinit"\`** — for a repo that is already onboarded and needs its config refreshed. It re-suggests with OVERWRITE semantics and returns the current-vs-suggested \`currentConfig\` echo. Its first call is a DRY-RUN preview: you MUST present the per-section current-vs-suggested diff and get EXPLICIT per-section approval before re-invoking with write=true. Overwrite is a wholesale replacement, so it silently drops operator hand-edits if you skip the diff — never do that.
 
 `;
+
+// Base-prompt (not launch-scoped) on purpose: the assistant's ensureCoordinator
+// reuses ANY live coordinator of the mesh, including one the user started, so a
+// rule that only rode on assistant-launched coordinators missed most of them.
+export const ASSISTANT_RELAY_SECTION = `## Requests relayed by the assistant
+
+- A message may come from the user's assistant relaying the user's request (origin \`assistant\`). Your final message of the turn is relayed back and summarised — make it self-contained: outcome, current state, what is still pending, and any question you need answered.
+- A question, status check or read-only lookup is answered directly from \`mesh_*\` reads — do not enqueue tasks for it. When a request says not to enqueue or not to edit, obey it.
+- Approvals reach the user through the dashboard Inbox. When an approval modal is the mechanism, rely on it — do not ask for that approval in chat text.`;
 
 function buildSafetyTailSection(coordinatorCliType?: string): string {
     const coordinatorNote = coordinatorCliType

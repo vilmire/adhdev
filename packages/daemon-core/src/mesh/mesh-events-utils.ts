@@ -441,7 +441,7 @@ export function buildMeshSystemMessage(args: {
                 parts.push(
                     `\n\n**Original task to retry:**`,
                     `> ${rc.lastTaskMessage.length > 300 ? rc.lastTaskMessage.slice(0, 300) + '...' : rc.lastTaskMessage}`,
-                    `\nTo retry: call \`mesh_launch_session\` for this node, then \`mesh_send_task\` with the original task.`,
+                    `\nTo retry: a queued task goes back through the queue — check \`mesh_view_queue\` (it may already be pending; auto-launch starts its session), else \`mesh_queue_requeue\`. Only a direct \`mesh_send_task\` dispatch is resent by hand: \`mesh_launch_session\`, then \`mesh_send_task\` with the original task.`,
                 );
             } else if (!rc.retryRecommended) {
                 parts.push(
