@@ -22,10 +22,11 @@
  * by the (not-yet-built, consumer-cutover) code that owns the real transport.
  */
 import sqlite3InitModule from '@sqlite.org/sqlite-wasm';
-import { sqliteWasmHandle, type PeerHandle, type SqliteWasmDbLike } from 'seqscribe';
+import type { PeerHandle } from 'seqscribe';
 import { browserRejectAuthority } from './browser-reject-authority.js';
 import { workerPortChannel } from './message-port-channel.js';
 import { TranscriptWorkerNode, type TranscriptWorkerStorage } from './transcript-worker-node.js';
+import { openTranscriptWorkerStorage, type TranscriptSqliteModuleLike } from './transcript-worker-storage.js';
 import { runTranscriptWorkerSession, type TranscriptWorkerSessionPort } from './transcript-worker-session.js';
 
 interface DedicatedWorkerScope {
@@ -50,19 +51,21 @@ const OPFS_DIRECTORY = '.adhdev-transcript';
  */
 const DAEMON_PEER_ID = 'daemon';
 
-async function openOpfsStorage(sessionKey: string, writerId: string): Promise<TranscriptWorkerStorage> {
+/**
+ * OPFS when this worker can own the SAH pool, in-memory when another worker
+ * (a second tab of this dashboard) already holds it — see
+ * `transcript-worker-storage.ts` for why the fallback is mandatory.
+ */
+async function openStorage(sessionKey: string, writerId: string): Promise<TranscriptWorkerStorage> {
     const sqlite3 = await sqlite3InitModule();
-    const poolUtil = await sqlite3.installOpfsSAHPoolVfs({
+    const storage = await openTranscriptWorkerStorage(sqlite3 as unknown as TranscriptSqliteModuleLike, {
         directory: `${OPFS_DIRECTORY}/${writerId}`,
-        clearOnInit: false,
+        filename: `${sessionKey}.sqlite3`,
     });
-    const db = new poolUtil.OpfsSAHPoolDb(`${sessionKey}.sqlite3`);
-    return {
-        handle: sqliteWasmHandle(db as unknown as SqliteWasmDbLike),
-        dispose(): void {
-            db.close();
-        },
-    };
+    if (storage.kind === 'memory') {
+        console.warn('[Transcript] OPFS replica held by another tab — using an in-memory replica', storage.opfsError);
+    }
+    return storage;
 }
 
 /**
@@ -84,7 +87,7 @@ scope.onmessage = (ev) => {
 
     const node = new TranscriptWorkerNode({
         writerId,
-        openStorage: () => openOpfsStorage(sessionKey, writerId),
+        openStorage: () => openStorage(sessionKey, writerId),
         // Satisfies seqscribe's `finalityAuthority` presence gate without any
         // key material, and arms the browser-safe-finality interlock (ring OR
         // full+subscribe-only — see `browser-reject-authority.ts`). This is
@@ -123,5 +126,9 @@ scope.onmessage = (ev) => {
             peer = null;
             session.detach();
         });
+    }).catch((error: unknown) => {
+        // Without this the failure is an unhandled rejection in the worker and
+        // the lane just times out its HELLO with no trace on the page.
+        console.error('[Transcript] transcript worker node failed to open', error);
     });
 };
