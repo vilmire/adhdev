@@ -808,6 +808,30 @@
             "minLength": 1
           }
         },
+        "disallowedTools": {
+          "description": "Tools the coordinator session must not have, enforced by the CLI's own permission system (route, don't implement: no local sub-agents; no destructive git). Rendered at coordinator launch only as ONE argv `<flag>=<tools joined by ','>`, e.g. claude-cli `--disallowedTools=Agent,Bash(git reset --hard*)`. Each entry uses the CLI's own rule syntax and must not contain ',' or a line break. Daemons that predate this field ignore it.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "flag",
+            "tools"
+          ],
+          "properties": {
+            "flag": {
+              "type": "string",
+              "pattern": "^--?[A-Za-z][A-Za-z0-9-]*$"
+            },
+            "tools": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^[^,\\r\\n]+$"
+              }
+            }
+          }
+        },
         "delegatedWorkerIsolation": {
           "description": "Provider-declared launch isolation for coordinator-spawned worker sessions. Keeps worker-only sessions from inheriting coordinator MCP/tools/config.",
           "type": "object",

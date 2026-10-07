@@ -17,7 +17,7 @@ import { getConfigDir } from '../../config/config.js';
 import { resolveMeshHostStatus, buildMeshHostRequiredFailure } from '../../mesh/mesh-host-ownership.js';
 import { registerMeshCoordinator } from '../../mesh/coordinator-registry.js';
 import { partitionSessionHostRecords } from '../../session-host/runtime-surface.js';
-import { inspectMeshCoordinatorMcpServerPaths, resolveMeshCoordinatorSetup } from '../mesh-coordinator.js';
+import { inspectMeshCoordinatorMcpServerPaths, resolveCoordinatorDisallowedToolsArgs, resolveMeshCoordinatorSetup } from '../mesh-coordinator.js';
 import { normalizeMeshNodeId } from '@adhdev/mesh-shared';
 import { delegatedWorkerAutoApproveSettings } from '../../repo-mesh-types.js';
 import {
@@ -152,6 +152,23 @@ export function buildCodexMcpServerOverrideArgs(
         '-c', `mcp_servers.${serverName}.command=${JSON.stringify(server.command)}`,
         '-c', `mcp_servers.${serverName}.args=${JSON.stringify(server.args)}`,
     ];
+}
+
+/**
+ * The context file a launch ACTUALLY wrote (declared rule or its oversize
+ * fallback), with the ownership the writer settled on and the provider's
+ * sentinels — so the registry's unregister fallback strips exactly that block
+ * and never deletes a pre-existing file the writer refused to own.
+ */
+function contextFileRegistryRecord(effect: import('../mesh-coordinator.js').CoordinatorInjectionEffect | undefined): { contextFile?: { path: string; owned: boolean; open?: string; close?: string } } {
+    if (!effect?.contextFilePath) return {};
+    return {
+        contextFile: {
+            path: effect.contextFilePath,
+            owned: effect.contextFileOwned === true,
+            ...(effect.contextFileSentinels ? { open: effect.contextFileSentinels.open, close: effect.contextFileSentinels.close } : {}),
+        },
+    };
 }
 
 function isWorkspaceLocalPath(configPath: string, workspace: string): boolean {
@@ -598,9 +615,7 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                         // Inject system prompt declaratively from provider.v1.json.
                         const cliCmdArgs: string[] = [...codexMcpOverrideArgs];
                         const cliCmdEnv: Record<string, string> = {};
-                        let cliCmdContextFilePath: string | undefined;
-                        let cliCmdContextFileOwned = false;
-                        let cliCmdAgentFilePath: string | undefined;
+                        let cliCmdInjectionFiles: import('../mesh-coordinator.js').CoordinatorInjectionEffect | undefined;
                         if (cliCmdSystemPrompt) {
                             const { applyMeshCoordinatorSystemPromptInjection } = await import('../mesh-coordinator.js');
                             const effect = applyMeshCoordinatorSystemPromptInjection(
@@ -612,9 +627,7 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                                 LOG.error('MeshCoordinator', effect.error);
                                 return { success: false, code: effect.errorCode, error: effect.error, meshId, cliType, workspace };
                             }
-                            cliCmdContextFilePath = effect.contextFilePath;
-                            cliCmdContextFileOwned = effect.contextFileOwned === true;
-                            cliCmdAgentFilePath = effect.agentFilePath;
+                            cliCmdInjectionFiles = effect;
                         }
                         // Provider-declared coordinator-only launch args (e.g.
                         // cursor-agent --approve-mcps: accept the daemon-written
@@ -623,67 +636,58 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                         if (Array.isArray(cliCmdProviderLaunchArgs)) {
                             cliCmdArgs.push(...cliCmdProviderLaunchArgs.filter((a: unknown) => typeof a === 'string' && a.trim()));
                         }
+                        // Provider-declared coordinator deny list (route, don't implement:
+                        // no local sub-agents; no destructive git) — enforced by the CLI.
+                        cliCmdArgs.push(...resolveCoordinatorDisallowedToolsArgs(providerMeta?.meshCoordinator?.disallowedTools, cliType));
 
-                        const cliCmdLaunch: any = await ctx.execute('launch_cli', {
-                            cliType,
-                            dir: workspace,
-                            cliArgs: cliCmdArgs.length > 0 ? cliCmdArgs : undefined,
-                            env: Object.keys(cliCmdEnv).length > 0 ? cliCmdEnv : undefined,
-                            settings: {
-                                meshCoordinatorFor: meshId,
-                                ...assistantStamp,
-                                // AUTOAPPROVE-COORD: the coordinator is a mesh session too, so it
-                                // must inherit the workspace's declarative auto-approve MODE
-                                // (.adhdev/mesh.json providerDefaults.autoApproveModes) exactly like
-                                // a delegated worker does at dispatch. Reuse the already-loaded repo
-                                // config so the launch args carry --permission-mode. NB: we deliberately
-                                // do NOT stamp launchedByCoordinator here — that flag is a WORKER-only
-                                // dangerous-mode downgrade signal (auto-approve-modes.ts); the coordinator
-                                // is the owner, not a worker. The dangerous gate is already applied inside
-                                // delegatedWorkerAutoApproveSettings via mesh/node policy.
-                                ...delegatedWorkerAutoApproveSettings(
-                                    effectiveMesh?.policy,
-                                    coordinatorNode?.policy,
-                                    providerMeta,
-                                    repoMeshConfigLoad.config,
-                                    cliType,
-                                    autoApproveModeOverride,
-                                    legacyAutoApproveOverride,
-                                ),
-                            },
-                            ...(initialModel ? { initialModel } : {}),
-                            ...(initialThinkingLevel ? { initialThinkingLevel } : {}),
-                            ...coordinatorLaunchProvenance,
-                        }, 'mesh', { inProcess: true });
-
-                        // R48 inject-then-remove. Spawn was just kicked off above; agy and
-                        // gemini-cli read AGENTS.md / GEMINI.md exactly once at startup and
-                        // cache it for the rest of the session, so we can safely strip
-                        // the wrapper from disk shortly after launch. That keeps any
-                        // worker session launched into the same workspace later from
-                        // picking up our wrapper block.
-                        if (cliCmdLaunch?.success && cliCmdContextFilePath) {
-                            const stripPath = cliCmdContextFilePath;
-                            const stripOwned = cliCmdContextFileOwned;
-                            setTimeout(() => {
-                                void import('../mesh-coordinator.js').then(({ stripCoordinatorWrapperFile }) => {
-                                    stripCoordinatorWrapperFile(stripPath, stripOwned);
-                                    LOG.info('MeshCoordinator', `Stripped wrapper from ${stripPath} after launch settle (cli_command)`);
-                                }).catch(() => { /* best-effort */ });
-                            }, 5000);
+                        const { scheduleInjectionCleanup, localSessionReadyProbe } = await import('../coordinator-injection-cleanup.js');
+                        let cliCmdLaunch: any;
+                        try {
+                        cliCmdLaunch = await ctx.execute('launch_cli', {
+                                cliType,
+                                dir: workspace,
+                                cliArgs: cliCmdArgs.length > 0 ? cliCmdArgs : undefined,
+                                env: Object.keys(cliCmdEnv).length > 0 ? cliCmdEnv : undefined,
+                                settings: {
+                                    meshCoordinatorFor: meshId,
+                                    ...assistantStamp,
+                                    // AUTOAPPROVE-COORD: the coordinator is a mesh session too, so it
+                                    // must inherit the workspace's declarative auto-approve MODE
+                                    // (.adhdev/mesh.json providerDefaults.autoApproveModes) exactly like
+                                    // a delegated worker does at dispatch. Reuse the already-loaded repo
+                                    // config so the launch args carry --permission-mode. NB: we deliberately
+                                    // do NOT stamp launchedByCoordinator here — that flag is a WORKER-only
+                                    // dangerous-mode downgrade signal (auto-approve-modes.ts); the coordinator
+                                    // is the owner, not a worker. The dangerous gate is already applied inside
+                                    // delegatedWorkerAutoApproveSettings via mesh/node policy.
+                                    ...delegatedWorkerAutoApproveSettings(
+                                        effectiveMesh?.policy,
+                                        coordinatorNode?.policy,
+                                        providerMeta,
+                                        repoMeshConfigLoad.config,
+                                        cliType,
+                                        autoApproveModeOverride,
+                                        legacyAutoApproveOverride,
+                                    ),
+                                },
+                                ...(initialModel ? { initialModel } : {}),
+                                ...(initialThinkingLevel ? { initialThinkingLevel } : {}),
+                                ...coordinatorLaunchProvenance,
+                            }, 'mesh', { inProcess: true });
+                        } catch (launchError) {
+                            void scheduleInjectionCleanup(cliCmdInjectionFiles, { launched: false, label: 'coordinator cli_command' });
+                            throw launchError;
                         }
 
-                        // agent_file inject-then-remove: the CLI (kimi --agent-file)
-                        // reads the temp agent file once at startup and binds it to
-                        // the session, so delete our temp copy after launch settles.
-                        if (cliCmdLaunch?.success && cliCmdAgentFilePath) {
-                            const agentPath = cliCmdAgentFilePath;
-                            setTimeout(() => {
-                                void import('../mesh-coordinator.js').then(({ cleanupCoordinatorAgentFile }) => {
-                                    cleanupCoordinatorAgentFile(agentPath);
-                                }).catch(() => { /* best-effort */ });
-                            }, 5000);
-                        }
+                        // R48 inject-then-remove: the CLI reads the context/agent file once
+                        // at startup, so strip it once the session is ready (≥5 s, ≤60 s) —
+                        // or at once when the launch failed, which would otherwise leave
+                        // the coordinator block in the workspace for every later session.
+                        void scheduleInjectionCleanup(cliCmdInjectionFiles, {
+                            launched: cliCmdLaunch?.success === true,
+                            isReady: localSessionReadyProbe(ctx.deps.cliManager?.adapters, cliCmdLaunch?.sessionId || cliCmdLaunch?.id),
+                            label: 'coordinator cli_command',
+                        });
 
                         if (!cliCmdLaunch?.success) {
                             return { success: false, error: cliCmdLaunch?.error || 'Failed to launch CLI session' };
@@ -708,6 +712,7 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                                         : 'path' in cliCmdInjectionDecl ? cliCmdInjectionDecl.path
                                         : undefined,
                                     ...('owned' in cliCmdInjectionDecl ? { owned: cliCmdInjectionDecl.owned === true } : {}),
+                                    ...contextFileRegistryRecord(cliCmdInjectionFiles),
                                 } : undefined,
                             });
                         }
@@ -880,9 +885,7 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
 
                     const cliArgs: string[] = [];
                     const launchEnv: Record<string, string> = {};
-                    let autoImportContextFilePath: string | undefined;
-                    let autoImportContextFileOwned = false;
-                    let autoImportAgentFilePath: string | undefined;
+                    let autoImportInjectionFiles: import('../mesh-coordinator.js').CoordinatorInjectionEffect | undefined;
                     if (systemPrompt) {
                         const { applyMeshCoordinatorSystemPromptInjection } = await import('../mesh-coordinator.js');
                         const effect = applyMeshCoordinatorSystemPromptInjection(
@@ -894,9 +897,7 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                             LOG.error('MeshCoordinator', effect.error);
                             return { success: false, code: effect.errorCode, error: effect.error, meshId, cliType, workspace };
                         }
-                        autoImportContextFilePath = effect.contextFilePath;
-                        autoImportContextFileOwned = effect.contextFileOwned === true;
-                        autoImportAgentFilePath = effect.agentFilePath;
+                        autoImportInjectionFiles = effect;
                     }
                     // Provider-declared coordinator-only launch args (see the
                     // cli_command branch for the rationale).
@@ -904,6 +905,8 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                     if (Array.isArray(autoImportProviderLaunchArgs)) {
                         cliArgs.push(...autoImportProviderLaunchArgs.filter((a: unknown) => typeof a === 'string' && a.trim()));
                     }
+                    // Provider-declared coordinator deny list (see the cli_command branch).
+                    cliArgs.push(...resolveCoordinatorDisallowedToolsArgs(providerMeta?.meshCoordinator?.disallowedTools, cliType));
                     if (cliType === 'claude-cli') {
                         cliArgs.push('--mcp-config', mcpConfigPath);
                         // COORD-MCP-ALLOW: pre-allow the coordinator's OWN control-plane
@@ -926,56 +929,45 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                     // 3. Launch CLI session via existing cliManager.
                     // Provider-specific prompt injection remains fail-closed: Claude gets
                     // explicit CLI args.
-                    const launchResult: any = await ctx.execute('launch_cli', {
-                        cliType,
-                        dir: workspace,
-                        cliArgs: cliArgs.length > 0 ? cliArgs : undefined,
-                        env: Object.keys(launchEnv).length > 0 ? launchEnv : undefined,
-                        settings: {
-                            meshCoordinatorFor: meshId,
-                            ...assistantStamp,
-                            // AUTOAPPROVE-COORD: inherit the workspace declarative auto-approve MODE
-                            // for the coordinator session (see the cli_command branch for the full
-                            // rationale). No launchedByCoordinator stamp — the coordinator is the owner.
-                            ...delegatedWorkerAutoApproveSettings(
-                                effectiveMesh?.policy,
-                                coordinatorNode?.policy,
-                                providerMeta,
-                                repoMeshConfigLoad.config,
-                                cliType,
-                                autoApproveModeOverride,
-                                legacyAutoApproveOverride,
-                            ),
-                        },
-                        ...(initialModel ? { initialModel } : {}),
-                        ...(initialThinkingLevel ? { initialThinkingLevel } : {}),
-                        ...coordinatorLaunchProvenance,
-                    }, 'mesh', { inProcess: true });
-
-                    // R48 inject-then-remove. See the cli_command branch for context;
-                    // same idea: strip the wrapper from disk ~5s after launch so the
-                    // user's AGENTS.md / GEMINI.md is untouched the moment any
-                    // worker session opens up in the same workspace.
-                    if (launchResult?.success && autoImportContextFilePath) {
-                        const stripPath = autoImportContextFilePath;
-                        const stripOwned = autoImportContextFileOwned;
-                        setTimeout(() => {
-                            void import('../mesh-coordinator.js').then(({ stripCoordinatorWrapperFile }) => {
-                                stripCoordinatorWrapperFile(stripPath, stripOwned);
-                                LOG.info('MeshCoordinator', `Stripped wrapper from ${stripPath} after launch settle (auto_import)`);
-                            }).catch(() => { /* best-effort */ });
-                        }, 5000);
+                    const { scheduleInjectionCleanup, localSessionReadyProbe } = await import('../coordinator-injection-cleanup.js');
+                    let launchResult: any;
+                    try {
+                    launchResult = await ctx.execute('launch_cli', {
+                            cliType,
+                            dir: workspace,
+                            cliArgs: cliArgs.length > 0 ? cliArgs : undefined,
+                            env: Object.keys(launchEnv).length > 0 ? launchEnv : undefined,
+                            settings: {
+                                meshCoordinatorFor: meshId,
+                                ...assistantStamp,
+                                // AUTOAPPROVE-COORD: inherit the workspace declarative auto-approve MODE
+                                // for the coordinator session (see the cli_command branch for the full
+                                // rationale). No launchedByCoordinator stamp — the coordinator is the owner.
+                                ...delegatedWorkerAutoApproveSettings(
+                                    effectiveMesh?.policy,
+                                    coordinatorNode?.policy,
+                                    providerMeta,
+                                    repoMeshConfigLoad.config,
+                                    cliType,
+                                    autoApproveModeOverride,
+                                    legacyAutoApproveOverride,
+                                ),
+                            },
+                            ...(initialModel ? { initialModel } : {}),
+                            ...(initialThinkingLevel ? { initialThinkingLevel } : {}),
+                            ...coordinatorLaunchProvenance,
+                        }, 'mesh', { inProcess: true });
+                    } catch (launchError) {
+                        void scheduleInjectionCleanup(autoImportInjectionFiles, { launched: false, label: 'coordinator auto_import' });
+                        throw launchError;
                     }
 
-                    // agent_file inject-then-remove (see the cli_command branch).
-                    if (launchResult?.success && autoImportAgentFilePath) {
-                        const agentPath = autoImportAgentFilePath;
-                        setTimeout(() => {
-                            void import('../mesh-coordinator.js').then(({ cleanupCoordinatorAgentFile }) => {
-                                cleanupCoordinatorAgentFile(agentPath);
-                            }).catch(() => { /* best-effort */ });
-                        }, 5000);
-                    }
+                    // R48 inject-then-remove (see the cli_command branch).
+                    void scheduleInjectionCleanup(autoImportInjectionFiles, {
+                        launched: launchResult?.success === true,
+                        isReady: localSessionReadyProbe(ctx.deps.cliManager?.adapters, launchResult?.sessionId || launchResult?.id),
+                        label: 'coordinator auto_import',
+                    });
 
                     if (!launchResult?.success) {
                         return { success: false, error: launchResult?.error || 'Failed to launch CLI session' };
@@ -1001,6 +993,7 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                                     : 'path' in autoImportInjectionDecl ? autoImportInjectionDecl.path
                                     : undefined,
                                 ...('owned' in autoImportInjectionDecl ? { owned: autoImportInjectionDecl.owned === true } : {}),
+                                ...contextFileRegistryRecord(autoImportInjectionFiles),
                             } : undefined,
                         });
                     }

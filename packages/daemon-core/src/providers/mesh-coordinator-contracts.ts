@@ -49,11 +49,29 @@ export interface ProviderMeshCoordinatorConfig {
    */
   launchArgs?: string[];
   /**
+   * Tools the coordinator session must not have, enforced by the CLI's own
+   * permission system rather than by prompt text: the coordinator routes work to
+   * mesh workers instead of implementing it with local sub-agents, and must not
+   * run destructive git itself. Rendered at coordinator launch only (never for
+   * workers, interactive sessions or the assistant) as ONE argv
+   * `<flag>=<tools joined by ','>` — e.g. claude-cli
+   * `--disallowedTools=Agent,Bash(git push --force*)`. Each entry is the CLI's
+   * own rule syntax; entries containing ',' or a line break are skipped.
+   */
+  disallowedTools?: MeshCoordinatorDisallowedTools;
+  /**
    * How coordinator-launched worker sessions are isolated from coordinator-only
    * MCP/tools/config. Provider-specific CLI quirks belong here, not in daemon
    * launch code.
    */
   delegatedWorkerIsolation?: MeshCoordinatorDelegatedWorkerIsolation;
+}
+
+export interface MeshCoordinatorDisallowedTools {
+  /** The CLI flag that takes a deny list, e.g. `--disallowedTools`. */
+  flag: string;
+  /** Deny rules in the CLI's own syntax, e.g. `Agent`, `Bash(git reset --hard*)`. */
+  tools: string[];
 }
 
 export interface MeshCoordinatorDelegatedWorkerIsolation {
