@@ -19,6 +19,7 @@ import { compareConversationRecency } from '../../../src/components/dashboard/co
 import { sortMobileInboxItems } from '../../../src/components/dashboard/dashboard-mobile-chat-mode-helpers'
 import {
     ASSISTANT_LAUNCH_CHOICE_STORAGE_KEY,
+    countHostedProjectsByMachine,
     isAssistantConversation,
     listAssistantLaunchMachines,
     pickAssistantLaunchTarget,
@@ -26,7 +27,7 @@ import {
     shouldOfferStartAssistant,
     writeAssistantLaunchChoice,
 } from '../../../src/components/dashboard/assistant-session'
-import { useStartAssistant } from '../../../src/hooks/useStartAssistant'
+import { fetchHostedProjectCounts, useStartAssistant } from '../../../src/hooks/useStartAssistant'
 import { statusPayloadToEntries } from '../../../src/utils/status-transform'
 import type { ActiveConversation } from '../../../src/components/dashboard/types'
 import type { MobileConversationListItem } from '../../../src/components/dashboard/DashboardMobileChatShared'
@@ -168,6 +169,71 @@ describe('Start assistant target and visibility', () => {
             machine('ok', [cliProvider('codex-cli')]),
         ])).toEqual({ machineId: 'ok', cliType: 'codex-cli' })
         expect(pickAssistantLaunchTarget([])).toBeNull()
+    })
+
+    it('defaults to the machine hosting the most projects, and lists machines host-first', () => {
+        const machines = [
+            machine('daemon_mach_aaaa1111', [cliProvider('claude-cli', ok('enforced'))]),
+            machine('daemon_mach_bbbb2222', [cliProvider('claude-cli', ok('enforced')), cliProvider('kimi', ok())]),
+            machine('daemon_mach_cccc3333', [cliProvider('claude-cli', ok('enforced'))]),
+        ]
+        // Host ids arrive in another canonical form (mach_ / standalone_mach_): matched, not raw-compared.
+        const counts = countHostedProjectsByMachine(['mach_bbbb2222', 'standalone_mach_bbbb2222', 'mach_cccc3333', '', 'mach_unknown9'], machines)
+        expect(counts).toEqual({ daemon_mach_bbbb2222: 2, daemon_mach_cccc3333: 1 })
+        expect(pickAssistantLaunchTarget(machines, null, counts)).toEqual({ machineId: 'daemon_mach_bbbb2222', cliType: 'claude-cli' })
+        expect(listAssistantLaunchMachines(machines, counts).map(m => [m.machineId, m.hostedProjects])).toEqual([
+            ['daemon_mach_bbbb2222', 2], ['daemon_mach_cccc3333', 1], ['daemon_mach_aaaa1111', 0],
+        ])
+        // No hosting known yet (or none hosted): the caller's order stands.
+        expect(pickAssistantLaunchTarget(machines)).toEqual({ machineId: 'daemon_mach_aaaa1111', cliType: 'claude-cli' })
+        expect(pickAssistantLaunchTarget(machines, null, {})).toEqual({ machineId: 'daemon_mach_aaaa1111', cliType: 'claude-cli' })
+    })
+
+    it('a remembered choice still wins over the host while eligible; otherwise the host is the default', () => {
+        const machines = [
+            machine('m1', [cliProvider('claude-cli', ok('enforced')), cliProvider('codex-cli', ok())]),
+            machine('m2', [cliProvider('claude-cli', ok('enforced')), cliProvider('antigravity-cli', refused('global'))]),
+        ]
+        const counts = { m2: 3 }
+        expect(pickAssistantLaunchTarget(machines, { machineId: 'm1', cliType: 'codex-cli' }, counts)).toEqual({ machineId: 'm1', cliType: 'codex-cli' })
+        expect(pickAssistantLaunchTarget(machines, { machineId: 'm1', cliType: 'claude-cli' }, counts)).toEqual({ machineId: 'm1', cliType: 'claude-cli' })
+        // A remembered CLI without a machine: the host is tried first.
+        expect(pickAssistantLaunchTarget(machines, { cliType: 'claude-cli' }, counts)).toEqual({ machineId: 'm2', cliType: 'claude-cli' })
+        // Ineligible / vanished choices fall back to the host.
+        expect(pickAssistantLaunchTarget(machines, { machineId: 'm2', cliType: 'antigravity-cli' }, counts)).toEqual({ machineId: 'm2', cliType: 'claude-cli' })
+        expect(pickAssistantLaunchTarget(machines, { machineId: 'gone', cliType: 'codex-cli' }, counts)).toEqual({ machineId: 'm2', cliType: 'claude-cli' })
+        expect(pickAssistantLaunchTarget(machines, { cliType: 'kimi' }, counts)).toEqual({ machineId: 'm2', cliType: 'claude-cli' })
+    })
+
+    it('counts hosted projects from the list_meshes fan-out: host pin, else the host node, host copy first', async () => {
+        const machines = [
+            machine('daemon_mach_aaaa1111', [cliProvider('claude-cli')]),
+            machine('daemon_mach_bbbb2222', [cliProvider('claude-cli')]),
+            machine('daemon_mach_dddd4444', [cliProvider('claude-cli')], 'offline'),
+        ]
+        const answers: Record<string, unknown> = {
+            // A member's copy of mesh-1 plus a mesh it hosts via its host node.
+            daemon_mach_aaaa1111: { success: true, meshes: [
+                { id: 'mesh-1', meshHost: { hostDaemonId: 'mach_bbbb2222' } },
+                { id: 'mesh-2', nodes: [{ id: 'n1', role: 'host', daemonId: 'mach_aaaa1111' }] },
+                // A synthesized pin is not authoritative — counted nowhere.
+                { id: 'mesh-4', meshHost: { hostDaemonId: 'mach_aaaa1111', hostSynthesized: true } },
+            ] },
+            // Wrapped result shape (cloud transport).
+            daemon_mach_bbbb2222: { result: { success: true, meshes: [
+                { id: 'mesh-1', meshHost: { hostDaemonId: 'daemon_mach_bbbb2222' } },
+                { id: 'mesh-3', meshHost: { hostDaemonId: 'standalone_mach_bbbb2222' } },
+            ] } },
+        }
+        const send = vi.fn(async (id: string) => {
+            if (!(id in answers)) throw new Error('unreachable')
+            return answers[id]
+        })
+        const counts = await fetchHostedProjectCounts(machines, send)
+        expect(counts).toEqual({ daemon_mach_aaaa1111: 1, daemon_mach_bbbb2222: 2 })
+        // Offline machines are not asked.
+        expect(send.mock.calls.map(c => c[0]).sort()).toEqual(['daemon_mach_aaaa1111', 'daemon_mach_bbbb2222'])
+        expect(send).toHaveBeenCalledWith('daemon_mach_aaaa1111', 'list_meshes', {})
     })
 
     it('remembers the choice in storage and survives a throwing storage', () => {
@@ -408,6 +474,49 @@ describe('assistant in the dashboard header', () => {
 
         render(<Probe conversations={[conversation(), assistant()]} />)
         expect(state!.visible).toBe(false)
+    })
+
+    it('useStartAssistant defaults to the machine hosting the most projects once list_meshes answers', async () => {
+        const send = vi.fn(async (id: string, type: string) => {
+            if (type === 'list_meshes') {
+                return id === 'm2'
+                    ? { success: true, meshes: [{ id: 'mesh-1', meshHost: { hostDaemonId: 'm2' } }, { id: 'mesh-2', meshHost: { hostDaemonId: 'm2' } }] }
+                    : { success: true, meshes: [{ id: 'mesh-1', meshHost: { hostDaemonId: 'm2' } }] }
+            }
+            return { success: true, sessionId: 'asst-1' }
+        })
+        let state: ReturnType<typeof useStartAssistant> | null = null
+        const entries = [machine('m1', [cliProvider('claude-cli')]), machine('m2', [cliProvider('claude-cli')])]
+        function Probe() {
+            state = useStartAssistant({ machineEntries: entries, conversations: [], sendDaemonCommand: send })
+            return null
+        }
+        render(<Probe />)
+        await act(async () => { await Promise.resolve() })
+        expect(state!.defaultTarget).toEqual({ machineId: 'm2', cliType: 'claude-cli' })
+        expect(state!.machines.map(m => [m.machineId, m.hostedProjects])).toEqual([['m2', 2], ['m1', 0]])
+        await act(async () => { await state!.start() })
+        expect(send).toHaveBeenLastCalledWith('m2', 'launch_assistant', { cliType: 'claude-cli' })
+    })
+
+    it('split button heading says how many projects a machine hosts', () => {
+        const machines = listAssistantLaunchMachines([
+            machine('m1', [cliProvider('claude-cli', ok('enforced'))]),
+            machine('m2', [cliProvider('kimi', ok())]),
+        ], { m2: 2 })
+        renderHeader(conversation(), {
+            onStartAssistant: vi.fn(), onStartAssistantWith: vi.fn(),
+            startAssistantMachines: machines,
+            startAssistantDefault: { machineId: 'm2', cliType: 'kimi' },
+        })
+        act(() => container.querySelector<HTMLButtonElement>('[data-testid="dashboard-start-assistant-menu"]')!.click())
+        const menu = document.querySelector('[data-testid="dashboard-start-assistant-options"]')!
+        const groups = Array.from(menu.querySelectorAll('[role="group"]'))
+        expect(groups.map(g => g.getAttribute('aria-label'))).toEqual(['Machine-m2', 'Machine-m1'])
+        const hints = menu.querySelectorAll('[data-testid="assistant-machine-hosts-projects"]')
+        expect(hints).toHaveLength(1)
+        expect(hints[0].textContent).toBe('hosts 2 projects')
+        expect(groups[0].contains(hints[0])).toBe(true)
     })
 
     it('useStartAssistant surfaces a daemon refusal', async () => {

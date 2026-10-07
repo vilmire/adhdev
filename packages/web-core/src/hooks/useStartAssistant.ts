@@ -6,28 +6,99 @@
  * or a race with another dashboard returns the live session instead of a second one.
  *
  * The main click launches the default target (the remembered choice when still
- * eligible, else claude-cli, else the first eligible CLI); `start(target)` from
+ * eligible, else claude-cli, else the first eligible CLI) on the machine that
+ * hosts the most projects — an assistant can only route work to projects
+ * (meshes) hosted on its own daemon. Hosting comes from a one-shot `list_meshes`
+ * fan-out while the button is on offer (the dashboard state carries no mesh
+ * list); until it answers, machines keep the caller's order. `start(target)` from
  * the dropdown launches that CLI/machine (with its model / thinking level) and
  * remembers it (localStorage).
  */
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { DaemonData } from '../types'
 import type { ActiveConversation } from '../components/dashboard/types'
+import type { MeshEntry } from '../pages/repo-mesh/types'
+import type { RepoMeshDaemonEntry } from '../context/RepoMeshContext'
+import { mergeMeshListAnswers } from '../pages/repo-mesh/useMeshList'
+import { resolveMeshHostDaemonId } from '../pages/repo-mesh/host-seed'
 import {
     LAUNCH_ASSISTANT_COMMAND,
     assistantLaunchArgs,
+    countHostedProjectsByMachine,
+    hasAssistantConversation,
     readAssistantLaunchChoice,
     resolveAssistantLaunchOptions,
     shouldOfferStartAssistant,
     writeAssistantLaunchChoice,
+    type AssistantHostedProjectCounts,
     type AssistantLaunchTarget,
     type AssistantMachineOption,
 } from '../components/dashboard/assistant-session'
 
+type SendDaemonCommand = (id: string, type: string, data?: Record<string, unknown>) => Promise<any>
+
+function isOnline(machine: DaemonData): boolean {
+    const status = String(machine.status || '').toLowerCase()
+    return status !== 'offline' && status !== 'disconnected'
+}
+
+/**
+ * Hosted-project counts per machine: ask every online machine for `list_meshes`,
+ * merge the answers host-first (one record per mesh, as the mesh page does) and
+ * resolve each mesh's host daemon from its authoritative host pin. A machine
+ * that fails to answer contributes nothing; an unresolved host counts nowhere.
+ */
+export async function fetchHostedProjectCounts(
+    machines: ReadonlyArray<DaemonData>,
+    sendDaemonCommand: SendDaemonCommand,
+): Promise<Record<string, number>> {
+    const daemons = machines.filter(m => !!m?.id) as unknown as RepoMeshDaemonEntry[]
+    const online = machines.filter(m => !!m?.id && isOnline(m))
+    const answers = await Promise.all(online.map(async machine => {
+        try {
+            const res: any = await sendDaemonCommand(machine.id, 'list_meshes', {})
+            const result = res?.result && typeof res.result === 'object' && !Array.isArray(res.result) ? res.result : res
+            if (result?.success === false) return null
+            const meshes = (Array.isArray(result?.meshes) ? result.meshes : []).filter((m: any) => m && typeof m.id === 'string' && m.id)
+            return { daemonId: machine.id, meshes: meshes as MeshEntry[] }
+        } catch {
+            return null
+        }
+    }))
+    const merged = mergeMeshListAnswers(answers.filter((a): a is { daemonId: string; meshes: MeshEntry[] } => !!a), daemons)
+    return countHostedProjectsByMachine(merged.map(mesh => resolveMeshHostDaemonId(mesh as any, daemons)), machines)
+}
+
+/** Fetch hosted-project counts once per online-machine set, only while `enabled`. */
+function useHostedProjectCounts(
+    machineEntries: DaemonData[],
+    sendDaemonCommand: SendDaemonCommand,
+    enabled: boolean,
+): AssistantHostedProjectCounts | null {
+    const [counts, setCounts] = useState<{ key: string; counts: Record<string, number> } | null>(null)
+    const key = useMemo(
+        () => machineEntries.filter(m => !!m?.id && isOnline(m)).map(m => m.id).sort().join('|'),
+        [machineEntries],
+    )
+    const machinesRef = useRef(machineEntries)
+    machinesRef.current = machineEntries
+    const sendRef = useRef(sendDaemonCommand)
+    sendRef.current = sendDaemonCommand
+    useEffect(() => {
+        if (!enabled || !key || counts?.key === key) return
+        let cancelled = false
+        void fetchHostedProjectCounts(machinesRef.current, sendRef.current).then(next => {
+            if (!cancelled) setCounts({ key, counts: next })
+        })
+        return () => { cancelled = true }
+    }, [enabled, key, counts?.key])
+    return counts?.counts ?? null
+}
+
 interface UseStartAssistantOptions {
     machineEntries: DaemonData[]
     conversations: ReadonlyArray<ActiveConversation>
-    sendDaemonCommand: (id: string, type: string, data?: Record<string, unknown>) => Promise<any>
+    sendDaemonCommand: SendDaemonCommand
 }
 
 export interface StartAssistantState {
@@ -47,7 +118,11 @@ export function useStartAssistant({ machineEntries, conversations, sendDaemonCom
     const [error, setError] = useState<string | null>(null)
     const [choice, setChoice] = useState(() => readAssistantLaunchChoice())
     const inFlight = useRef(false)
-    const options = useMemo(() => resolveAssistantLaunchOptions(machineEntries, choice), [machineEntries, choice])
+    const hostedCounts = useHostedProjectCounts(machineEntries, sendDaemonCommand, !hasAssistantConversation(conversations))
+    const options = useMemo(
+        () => resolveAssistantLaunchOptions(machineEntries, choice, hostedCounts),
+        [machineEntries, choice, hostedCounts],
+    )
     const defaultTarget = options.defaultTarget
     const visible = shouldOfferStartAssistant(conversations, defaultTarget)
 

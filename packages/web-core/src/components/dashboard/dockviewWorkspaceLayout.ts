@@ -4,6 +4,7 @@ import { getPreferredConversationForIde } from './conversation-sort'
 import { getRemotePanelTitle } from './conversation-presenters'
 import { getDockviewTitle, getRemotePanelId, isRemotePanelId } from './dockviewWorkspaceHelpers'
 import type { DashboardStoredHiddenTabLocation } from '../../utils/dashboardLayoutStorage'
+import { takeAssistantTabsToPin, type AssistantTabPinState } from './assistant-session'
 
 export interface DashboardDockviewPanelParams {
     kind: 'conversation'
@@ -15,10 +16,28 @@ export interface DashboardDockviewRemotePanelParams {
     routeId: string
 }
 
+/**
+ * Move each fresh assistant panel to the first tab of its group, once
+ * (`takeAssistantTabsToPin`) — when it is identified, which in the cloud can be
+ * after the panel was added at the end of the group. Keeps the panel's active
+ * state; never empties a group (a lone panel is already first).
+ */
+export function pinAssistantPanels(api: DockviewApi, visibleConversations: ActiveConversation[], pins?: AssistantTabPinState | null) {
+    if (!pins) return
+    for (const tabKey of takeAssistantTabsToPin(visibleConversations, pins)) {
+        const panel = api.getPanel(tabKey)
+        if (!panel || panel.group.panels.indexOf(panel) <= 0) continue
+        const wasActive = panel.group.activePanel?.id === panel.id
+        panel.api.moveTo({ group: panel.group, position: 'center', index: 0, skipSetActive: true })
+        if (wasActive) panel.api.setActive()
+    }
+}
+
 export function buildInitialDockviewLayout(
     api: DockviewApi,
     visibleConversations: ActiveConversation[],
     requestedActiveTabKey?: string | null,
+    assistantPins?: AssistantTabPinState | null,
 ): string | null {
     const groups = [visibleConversations]
     let previousGroupAnchorId: string | undefined
@@ -38,9 +57,11 @@ export function buildInitialDockviewLayout(
                         : {}),
             })
             if (!groupAnchorId) groupAnchorId = panel.id
+            assistantPins?.fresh.add(panel.id)
         }
         previousGroupAnchorId = groupAnchorId ?? previousGroupAnchorId
     }
+    pinAssistantPanels(api, visibleConversations, assistantPins)
 
     const preferredActiveTabKey = requestedActiveTabKey
         ?? visibleConversations[0]?.tabKey
@@ -54,7 +75,12 @@ export function buildInitialDockviewLayout(
  * layout is then persisted — so a session that shows up a moment later lands as
  * a tab instead of back in its pane.
  */
-export function syncDockviewPanels(api: DockviewApi, visibleConversations: ActiveConversation[], retainIds?: ReadonlySet<string> | null) {
+export function syncDockviewPanels(
+    api: DockviewApi,
+    visibleConversations: ActiveConversation[],
+    retainIds?: ReadonlySet<string> | null,
+    assistantPins?: AssistantTabPinState | null,
+) {
     const visibleKeys = new Set(visibleConversations.map(conversation => conversation.tabKey))
     const tabKeyCounts = new Map<string, number>()
     for (const conversation of visibleConversations) {
@@ -96,7 +122,9 @@ export function syncDockviewPanels(api: DockviewApi, visibleConversations: Activ
                     ? { position: { referencePanel: api.panels[0].id, direction: 'within' as const }, inactive: true }
                     : {}),
         })
+        assistantPins?.fresh.add(conversation.tabKey)
     }
+    pinAssistantPanels(api, visibleConversations, assistantPins)
 }
 
 export function syncRemotePanels(

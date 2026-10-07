@@ -15,6 +15,7 @@
  * same planner `launch_assistant` runs), so the picker never offers a CLI the
  * verb would refuse.
  */
+import { daemonIdsEquivalent } from '@adhdev/mesh-shared'
 import type { DaemonData } from '../../types'
 import type { ActiveConversation } from './types'
 import { isLaunchableMachineProvider } from '../../utils/provider-activation'
@@ -49,6 +50,45 @@ export function compareAssistantFirst(
 
 export function hasAssistantConversation(conversations: ReadonlyArray<Pick<ActiveConversation, 'assistant' | 'settings'>>): boolean {
     return conversations.some(isAssistantConversation)
+}
+
+/**
+ * Per-surface memory for pinning the assistant tab first exactly once (dock
+ * panels, pane-group tab order). `fresh` = tab keys this surface opened itself
+ * (a tab restored from a stored layout is never fresh, so a stored drag order
+ * stands); `pinned` = assistant tabs already moved to the front, after which
+ * the person's own drag order wins.
+ */
+export interface AssistantTabPinState {
+    fresh: Set<string>
+    pinned: Set<string>
+}
+
+export function createAssistantTabPinState(): AssistantTabPinState {
+    return { fresh: new Set(), pinned: new Set() }
+}
+
+/**
+ * Tab keys to move to the front now: fresh tabs identified as the assistant
+ * that were not pinned yet — marked pinned on return. A fresh tab stays
+ * pinnable until it is identified, because the flag can arrive after the tab:
+ * in the cloud the session first lands from the server-WS routing meta, which
+ * carries no `assistant` / `settings`, and the P2P daemon.metadata lane brings
+ * the flag later.
+ */
+export function takeAssistantTabsToPin(
+    conversations: ReadonlyArray<Pick<ActiveConversation, 'tabKey' | 'assistant' | 'settings'>>,
+    state: AssistantTabPinState,
+): string[] {
+    const out: string[] = []
+    for (const conversation of conversations) {
+        const key = conversation.tabKey
+        if (!state.fresh.has(key) || state.pinned.has(key) || !isAssistantConversation(conversation)) continue
+        state.pinned.add(key)
+        state.fresh.delete(key)
+        out.push(key)
+    }
+    return out
 }
 
 export interface AssistantLaunchTarget {
@@ -86,7 +126,12 @@ export interface AssistantMachineOption {
     machineId: string
     label: string
     clis: AssistantCliOption[]
+    /** Projects (meshes) this machine hosts — the only ones its assistant can route work to. */
+    hostedProjects: number
 }
+
+/** Hosted-project count per machine id (from {@link countHostedProjectsByMachine}). */
+export type AssistantHostedProjectCounts = Readonly<Record<string, number>>
 
 export interface AssistantLaunchOptions {
     machines: AssistantMachineOption[]
@@ -137,11 +182,35 @@ export function assistantLaunchArgs(target: AssistantLaunchTarget): Record<strin
 }
 
 /**
+ * How many projects (meshes) each machine hosts, keyed by the machine's own id.
+ * `hostDaemonIds` holds one resolved host daemon id per mesh ('' = unresolved,
+ * skipped); ids are matched with the canonical daemon-id comparison, so the
+ * `daemon_mach_` / `mach_` / `standalone_` forms of one machine all count for it.
+ */
+export function countHostedProjectsByMachine(
+    hostDaemonIds: ReadonlyArray<string>,
+    machines: ReadonlyArray<Pick<DaemonData, 'id'>>,
+): Record<string, number> {
+    const counts: Record<string, number> = {}
+    for (const hostId of hostDaemonIds) {
+        if (!hostId) continue
+        const machine = machines.find(m => !!m?.id && daemonIdsEquivalent(m.id, hostId))
+        if (machine) counts[machine.id] = (counts[machine.id] || 0) + 1
+    }
+    return counts
+}
+
+/**
  * Every online machine with a launchable (enabled) CLI, each listing its CLIs:
  * eligible ones first (claude-cli leading), then the ineligible ones the picker
- * shows disabled with their reason.
+ * shows disabled with their reason. Machines are ordered by how many projects
+ * they host (most first; ties keep the caller's order) — an assistant can only
+ * route work to projects hosted on its own daemon (`project_hosted_elsewhere`).
  */
-export function listAssistantLaunchMachines(machines: ReadonlyArray<DaemonData>): AssistantMachineOption[] {
+export function listAssistantLaunchMachines(
+    machines: ReadonlyArray<DaemonData>,
+    hostedCounts?: AssistantHostedProjectCounts | null,
+): AssistantMachineOption[] {
     const out: AssistantMachineOption[] = []
     for (const machine of machines) {
         if (!machine?.id || !isMachineOnline(machine)) continue
@@ -151,30 +220,38 @@ export function listAssistantLaunchMachines(machines: ReadonlyArray<DaemonData>)
         if (clis.length === 0) continue
         const rank = (o: AssistantCliOption) => (o.supported ? 0 : 2) + (o.cliType === DEFAULT_ASSISTANT_CLI_TYPE ? 0 : 1)
         clis.sort((a, b) => rank(a) - rank(b))
-        out.push({ machineId: machine.id, label: getMachineDisplayName(machine, { fallbackId: machine.id }), clis })
+        out.push({
+            machineId: machine.id,
+            label: getMachineDisplayName(machine, { fallbackId: machine.id }),
+            clis,
+            hostedProjects: hostedCounts?.[machine.id] || 0,
+        })
     }
-    return out
+    // Array.prototype.sort is stable: equal counts keep the caller's order.
+    return out.sort((a, b) => b.hostedProjects - a.hostedProjects)
 }
 
 /**
  * Where the main "Start assistant" click launches: the remembered choice when
  * that machine is still listed and the CLI still eligible, else the first
- * machine (in the caller's order) with an eligible CLI — claude-cli when
- * eligible, else its first eligible CLI. Null when no machine can host one —
- * the affordance is then not shown.
+ * machine — the one hosting the most projects, ties in the caller's order —
+ * with an eligible CLI: claude-cli when eligible, else its first eligible CLI.
+ * Null when no machine can host one — the affordance is then not shown.
  */
 export function pickAssistantLaunchTarget(
     machines: ReadonlyArray<DaemonData>,
     preferred?: Partial<AssistantLaunchTarget> | null,
+    hostedCounts?: AssistantHostedProjectCounts | null,
 ): AssistantLaunchTarget | null {
-    return resolveAssistantLaunchOptions(machines, preferred).defaultTarget
+    return resolveAssistantLaunchOptions(machines, preferred, hostedCounts).defaultTarget
 }
 
 export function resolveAssistantLaunchOptions(
     machines: ReadonlyArray<DaemonData>,
     preferred?: Partial<AssistantLaunchTarget> | null,
+    hostedCounts?: AssistantHostedProjectCounts | null,
 ): AssistantLaunchOptions {
-    const list = listAssistantLaunchMachines(machines)
+    const list = listAssistantLaunchMachines(machines, hostedCounts)
     const eligible = (m: AssistantMachineOption, cliType?: string) => m.clis.find(c => c.supported && (!cliType || c.cliType === cliType))
     if (preferred?.cliType) {
         const candidates = preferred.machineId ? list.filter(m => m.machineId === preferred.machineId) : list

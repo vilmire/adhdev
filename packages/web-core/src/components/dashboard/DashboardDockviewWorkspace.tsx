@@ -62,6 +62,7 @@ import {
     type DashboardDockviewPanelParams,
     type DashboardDockviewRemotePanelParams,
 } from './dockviewWorkspaceLayout'
+import { createAssistantTabPinState } from './assistant-session'
 import {
     DashboardDockviewContext,
     DashboardDockviewRemotePanel,
@@ -257,6 +258,7 @@ export default function DashboardDockviewWorkspace({
     const storedActiveTabIdRef = useRef<string | null>(null)
     const previousVisibleTabKeysRef = useRef<string[]>([])
     const pendingStoredPanelsRef = useRef<PendingStoredPanels | null>(null)
+    const assistantPinsRef = useRef(createAssistantTabPinState()) // assistant tab pinned first once identified (flag may come late)
     const latestVisibleConversationsRef = useRef(visibleConversations)
     latestVisibleConversationsRef.current = visibleConversations
     const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; tabKey: string; sourceDocument: Document } | null>(null)
@@ -875,7 +877,7 @@ export default function DashboardDockviewWorkspace({
                     const api = apiRef.current
                     if (!api || !pendingStoredPanelsRef.current) return
                     pendingStoredPanelsRef.current = null
-                    syncDockviewPanels(api, latestVisibleConversationsRef.current)
+                    syncDockviewPanels(api, latestVisibleConversationsRef.current, null, assistantPinsRef.current)
                 }, STORED_PANEL_ARRIVAL_GRACE_MS + 50)
             }
         }
@@ -888,12 +890,12 @@ export default function DashboardDockviewWorkspace({
         })
 
         if (!awaitingInitialLayoutHydrationRef.current) {
-            syncDockviewPanels(event.api, visibleConversations, retainedStoredPanelIds(visibleConversations))
+            syncDockviewPanels(event.api, visibleConversations, retainedStoredPanelIds(visibleConversations), assistantPinsRef.current)
             syncRemotePanels(event.api, visibleConversations, requestedRemoteIdeId)
         }
 
         if (event.api.totalPanels === 0 && visibleConversations.length > 0) {
-            const preferredActiveTabKey = buildInitialDockviewLayout(event.api, visibleConversations, requestedActiveTabKey)
+            const preferredActiveTabKey = buildInitialDockviewLayout(event.api, visibleConversations, requestedActiveTabKey, assistantPinsRef.current)
             if (preferredActiveTabKey) {
                 const preferredPanel = event.api.getPanel(preferredActiveTabKey)
                 if (preferredPanel) {
@@ -1023,7 +1025,7 @@ export default function DashboardDockviewWorkspace({
         }
 
         if (!shouldSkipPanelPrune) {
-            syncDockviewPanels(api, visibleConversations, retainedStoredPanelIds(visibleConversations))
+            syncDockviewPanels(api, visibleConversations, retainedStoredPanelIds(visibleConversations), assistantPinsRef.current)
             syncRemotePanels(api, visibleConversations, requestedRemoteIdeId)
         }
 
