@@ -829,11 +829,11 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(buildCoordinatorSystemPrompt({ mesh: baseMesh() as any, operatingNotes: [{ text: '  ' }] })).not.toContain(HEADING)
   })
 
-  it('expands {{recentActivity}} and {{operatingNotes}} placeholders in a mesh-level override', () => {
+  it('expands {{recentActivity}} and {{operatingNotes}} placeholders in a mesh-level append', () => {
     const prompt = buildCoordinatorSystemPrompt({
       mesh: {
         ...baseMesh(),
-        coordinator: { systemPromptOverride: 'CUSTOM\n{{recentActivity}}\n{{operatingNotes}}' },
+        coordinator: { systemPromptAppend: 'CUSTOM\n{{recentActivity}}\n{{operatingNotes}}' },
       } as any,
       recentActivity: { pendingTasks: 5, recentFailures: [], recentFailureCount: 0, assignedTasks: 0, stalledTasks: 0, lastActivityAt: null },
       operatingNotes: [{ text: 'a durable lesson', category: 'recovery_lesson' }],
@@ -864,15 +864,29 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(prompt).toContain('current-vs-suggested diff')
   })
 
-  it('expands the {{onboarding}} placeholder in a mesh-level override', () => {
+  it('expands the {{onboarding}} placeholder in a mesh-level append', () => {
     const prompt = buildCoordinatorSystemPrompt({
       mesh: {
         ...baseMesh(),
-        coordinator: { systemPromptOverride: 'HEAD\n{{onboarding}}' },
+        coordinator: { systemPromptAppend: 'HEAD\n{{onboarding}}' },
       } as any,
     })
     expect(prompt).toContain('HEAD')
-    expect(prompt).toContain('## Onboarding / Reinit')
+    expect(prompt.split('## Onboarding / Reinit').length - 1).toBe(2)
+  })
+
+  // 2026-10-08 (assistant-layer design §11 Q2): the full-override layers were
+  // removed. A legacy meshes.json value is ignored — the default base renders.
+  it('ignores a legacy mesh-level systemPromptOverride / systemPromptSuffix', () => {
+    const prompt = buildCoordinatorSystemPrompt({
+      mesh: {
+        ...baseMesh(),
+        coordinator: { systemPromptOverride: 'LEGACY OVERRIDE BASE', systemPromptSuffix: 'LEGACY SUFFIX' },
+      } as any,
+    })
+    expect(prompt).not.toContain('LEGACY OVERRIDE BASE')
+    expect(prompt).not.toContain('LEGACY SUFFIX')
+    expect(prompt).toBe(buildCoordinatorSystemPrompt({ mesh: baseMesh() as any }))
   })
 
   // ── 6-4: prompt-build caps ──
@@ -1102,7 +1116,7 @@ describe('Repo Mesh coordinator prompt', () => {
   // tool keeps its own trigger line under the tool index, led by a bold **When**.
   it('every merged tool has a concrete **When…** trigger line under the tool index', () => {
     const prompt = buildCoordinatorSystemPrompt({ mesh: baseMesh() as any })
-    const merged = ['mesh_node_slots', 'mesh_coordinator_prompt_append', 'mesh_note', 'mesh_config', 'mesh_init', 'mesh_create', 'mesh_cleanup_sessions']
+    const merged = ['mesh_node_slots', 'mesh_note', 'mesh_config', 'mesh_init', 'mesh_create', 'mesh_cleanup_sessions']
     for (const tool of merged) {
       const row = prompt.split('\n').find(line => line.startsWith(`- \`${tool}\` — `))
       expect(row, `${tool} has no trigger line`).toBeTruthy()
@@ -1145,11 +1159,11 @@ describe('Repo Mesh coordinator prompt', () => {
       expect(prompt).toContain("never to check on a running worker's progress")
     })
 
-    it('exposes the Workers section to override templates as {{workers}}', () => {
+    it('exposes the Workers section to append templates as {{workers}}', () => {
       const prompt = buildCoordinatorSystemPrompt({
-        mesh: { ...baseMesh(), coordinator: { systemPromptOverride: 'X\n\n{{workers}}\n\nY' } } as any,
+        mesh: { ...baseMesh(), coordinator: { systemPromptAppend: 'X\n\n{{workers}}\n\nY' } } as any,
       })
-      expect(prompt).toContain(renderCoordinatorWorkerSection())
+      expect(prompt).toContain(`X\n\n${renderCoordinatorWorkerSection()}\n\nY`)
     })
   })
 

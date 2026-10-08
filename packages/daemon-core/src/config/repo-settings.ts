@@ -70,7 +70,7 @@ export interface LoadRepoSettingsOptions {
  * (e.g. for the `sourceType === 'invalid'` warning on coordinator launch).
  */
 export interface RepoSettings {
-    /** Repo-shared coordinator prompt config (override/append) from `.adhdev/mesh.json`. */
+    /** Repo-shared coordinator prompt config (append) from `.adhdev/mesh.json`. */
     coordinator?: RepoMeshDeclarativeCoordinatorConfig;
     /** Repo-declared baseline operating notes from `.adhdev/mesh.json`. */
     operatingNotes?: CoordinatorOperatingNote[];

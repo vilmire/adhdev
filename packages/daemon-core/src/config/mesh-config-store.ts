@@ -9,6 +9,7 @@ import { getConfigDir } from './config.js';
 import { mkdirSync, rmSync, statSync, existsSync, readFileSync, writeFileSync, renameSync, copyFileSync } from 'fs';
 import type { LocalMeshConfig, LocalMeshEntry } from '../repo-mesh-types.js';
 import { migratePolicyToSparseOverrides, MESH_POLICY_STORAGE_VERSION } from '../repo-mesh-policy-resolve.js';
+import { stripRemovedCoordinatorPromptFields } from './mesh-json-config.js';
 import { normalizeDifficultyBrainMap, DEFAULT_DIFFICULTY_BRAINS, normalizeNodeCapabilitySlots, deriveSlotsFromLegacy, type DifficultyBrainMap, type NodeCapabilitySlot } from '@adhdev/mesh-shared';
 
 // ─── Persistence ────────────────────────────────
@@ -200,6 +201,11 @@ function migrateLoadedMeshConfig(config: LocalMeshConfig): boolean {
             changed = true;
         }
         if (migrateMeshPolicyStorage(mesh)) changed = true;
+        // Removed coordinator prompt keys (systemPromptOverride / the
+        // systemPromptSuffix alias, 2026-10-08): ignore them in memory. Not
+        // counted as a migration — the file is not rewritten just for this;
+        // the keys drop off disk on the next save that happens anyway.
+        if (mesh?.coordinator) mesh.coordinator = stripRemovedCoordinatorPromptFields(mesh.coordinator);
         if (!mesh || !Array.isArray(mesh.nodes)) continue;
         // Each node's legacy slot derivation uses ITS OWN mesh's presets. Reading a
         // global map here is what let one mesh's model choice leak into another's

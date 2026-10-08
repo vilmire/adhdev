@@ -50,8 +50,6 @@ const ALLOWED: Record<string, string[]> = {
     'pages/machine/SourcesPanel.tsx': ['main', '@vendor-extra-providers'],
     // Unit suffix next to a number input.
     'components/settings/ChatThemeSection.tsx': ['px'],
-    // A filesystem path and prompt template placeholders shown verbatim.
-    'components/settings/CoordinatorPromptsSection.tsx': ['~/.adhdev/coordinator-prompts/', '{{meshName}}', '{{repo}}', '{{nodes}}', '{{rules}}'],
     // Product name used as a page title / fallback subtitle.
     'pages/RepoMesh.tsx': ['Repo Mesh'],
     'pages/repo-mesh/MeshDetailView.tsx': ['Repo Mesh'],

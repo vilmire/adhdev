@@ -1,6 +1,7 @@
 /**
  * Coverage guard for the coordinator-prompt UI keys added with the repo-layer
- * notice + the mounted CoordinatorPromptsSection.
+ * notice. (The Settings CoordinatorPromptsSection and its keys were removed on
+ * 2026-10-08 together with the per-machine coordinator-prompts/ layer.)
  *
  * A missing key does not crash React — i18next renders the raw key string — so
  * a partially-translated surface ships silently. This pins every new key across
@@ -22,21 +23,8 @@ const REPO_MESH_JSON_KEYS = [
     // repoMeshJsonReadOnly was folded into the title ("From repo file (read-only)").
     'repoMeshJsonTitle',
     'repoMeshJsonHint',
-    'repoMeshJsonOverrideLabel',
     'repoMeshJsonAppendLabel',
     'repoMeshJsonInvalid',
-]
-
-/** Keys naming the Settings section that mounts CoordinatorPromptsSection. */
-const SECTION_KEYS = ['sectionTitle', 'sectionDescription']
-
-/** Keys for the collapsed-by-default + provider-tabs restructure (2026-08-24). */
-const COLLAPSED_TABS_KEYS = [
-    'expandLabel',
-    'collapseLabel',
-    'customizedBadge',
-    'collapsedNone',
-    'tabsAriaLabel',
 ]
 
 describe('coordinator prompt layer i18n', () => {
@@ -56,30 +44,10 @@ describe('coordinator prompt layer i18n', () => {
                 expect(note.trim().length).toBeGreaterThan(0)
             })
 
-            it('defines the coordinator prompts settings section keys', () => {
-                const group = bundle?.settings?.coordinatorPrompts ?? {}
-                for (const key of SECTION_KEYS) {
-                    expect(typeof group[key], `settings.coordinatorPrompts.${key}`).toBe('string')
-                    expect(group[key].trim().length, `settings.coordinatorPrompts.${key}`).toBeGreaterThan(0)
-                }
-            })
-
-            it('defines the collapsed-summary and provider-tab keys', () => {
-                const group = bundle?.settings?.coordinatorPrompts ?? {}
-                for (const key of COLLAPSED_TABS_KEYS) {
-                    expect(typeof group[key], `settings.coordinatorPrompts.${key}`).toBe('string')
-                    expect(group[key].trim().length, `settings.coordinatorPrompts.${key}`).toBeGreaterThan(0)
-                }
-            })
-
-            it('keeps the pre-existing CoordinatorPromptsSection keys intact', () => {
-                // Over-correction guard: the section was already fully translated
-                // before it had a mount site. Adding the section title must not
-                // disturb the keys the component already renders.
-                const group = bundle?.settings?.coordinatorPrompts ?? {}
-                for (const key of ['overrideDesc', 'appendDesc', 'overrideLabel', 'appendLabel']) {
-                    expect(typeof group[key], `settings.coordinatorPrompts.${key}`).toBe('string')
-                }
+            it('no longer ships the removed coordinator-prompts settings keys', () => {
+                expect(bundle?.settings?.coordinatorPrompts).toBeUndefined()
+                expect(bundle?.mesh?.detail?.overrideLabel).toBeUndefined()
+                expect(bundle?.mesh?.detail?.repoMeshJsonOverrideLabel).toBeUndefined()
             })
         })
     }

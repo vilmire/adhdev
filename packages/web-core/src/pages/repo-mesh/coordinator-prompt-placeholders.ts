@@ -1,5 +1,5 @@
 /**
- * Available `{{token}}` placeholders for coordinator prompt override/append text.
+ * Available `{{token}}` placeholders for the mesh-level coordinator prompt append text.
  *
  * Source of truth: expandPromptPlaceholders() in
  * oss/packages/daemon-core/src/mesh/coordinator-prompt.ts — keep this list in sync

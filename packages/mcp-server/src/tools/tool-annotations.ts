@@ -269,8 +269,6 @@ export const TOOL_ANNOTATIONS: Record<string, ToolBehaviorAnnotations> = {
   // kind=refine / change_impact are read-only helpers; kind=mesh_json writes
   // `.adhdev/mesh.json` from the machine-local entry — overwrites the committed file.
   mesh_config: DESTRUCTIVE_LOCAL,
-  // Sets one named value, replacing only that value (action=set); list/get read.
-  mesh_coordinator_prompt_append: WRITE_LOCAL_SAFE,
   // action=set replaces one node's slot list; action=propose probes the node's
   // installed CLIs (open-world read), so the merged tool is open-world.
   mesh_node_slots: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },

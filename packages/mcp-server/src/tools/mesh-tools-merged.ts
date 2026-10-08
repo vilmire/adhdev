@@ -16,7 +16,6 @@ import type { CommandTransport } from '../transports/mode.js';
 import type { MeshContext } from './mesh-tools-internal.js';
 import { meshNodeSlotsList, meshNodeSlotsSet } from './mesh-tools-slots.js';
 import { meshNodeSlotsPropose } from './mesh-tools-slot-autodetect.js';
-import { meshCoordinatorPromptAppendGet, meshCoordinatorPromptAppendSet } from './mesh-tools-coordinator-prompt.js';
 import { meshForgetNote, meshRecordNote } from './mesh-tools-mission.js';
 import { meshChangeImpactConfig, meshInit, meshRefineConfig, meshReinit, meshWriteMeshJsonConfig } from './mesh-tools-refine.js';
 import { meshCreate, meshPlanOnboarding } from './mesh-tools-crud.js';
@@ -51,19 +50,6 @@ export async function meshNodeSlots(ctx: MeshContext, args: Args = {}): Promise<
             return meshNodeSlotsSet(ctx, rest);
         default:
             return invalidDiscriminator('mesh_node_slots', 'action', args.action, ['list', 'propose', 'set']);
-    }
-}
-
-/** `mesh_coordinator_prompt_append` — get / set the per-machine coordinator prompt APPEND. */
-export async function meshCoordinatorPromptAppend(ctx: MeshContext, args: Args = {}): Promise<string> {
-    const rest = without(args, 'action');
-    switch (args.action) {
-        case 'get':
-            return meshCoordinatorPromptAppendGet(ctx, rest);
-        case 'set':
-            return meshCoordinatorPromptAppendSet(ctx, rest);
-        default:
-            return invalidDiscriminator('mesh_coordinator_prompt_append', 'action', args.action, ['get', 'set']);
     }
 }
 

@@ -36,11 +36,12 @@ const published = new Set(ALL_MESH_TOOLS.map(tool => tool.name));
 // 48 after the consolidation; the three graph tools (mesh_graph_view /
 // mesh_graph_gate / mesh_graph_node_patch) left with graph orchestration and the
 // MAGI tools left with MAGI (2026-09-30).
-// 41 after mesh_refine_plan was removed (2026-10-08); 40 once the deprecated
-// mesh_ledger_query alias is dropped next release.
-test('the published surface is 41 tools and contains no retired name', () => {
-    assert.equal(ALL_MESH_TOOLS.length, 41);
-    assert.equal(CANONICAL_MESH_TOOL_NAMES.length, 41);
+// 41 after mesh_refine_plan was removed (2026-10-08); 40 after
+// mesh_coordinator_prompt_append was removed (2026-10-08, assistant-layer §11 Q2);
+// 39 once the deprecated mesh_ledger_query alias is dropped next release.
+test('the published surface is 40 tools and contains no retired name', () => {
+    assert.equal(ALL_MESH_TOOLS.length, 40);
+    assert.equal(CANONICAL_MESH_TOOL_NAMES.length, 40);
     for (const name of Object.keys(RETIRED_MESH_TOOLS)) {
         assert.equal(published.has(name), false, `${name} is retired but still published`);
         assert.equal(resolveMeshToolHandler(name), undefined, `${name} is retired but still silently dispatchable`);
@@ -79,7 +80,6 @@ test('an unrelated unknown tool name still falls through to the dispatcher (null
 
 const STRAY_CASES: Array<{ tool: string; args: Record<string, unknown>; stray: string; owner: string }> = [
     { tool: 'mesh_node_slots', args: { action: 'list', node_id: 'n', slots: [] }, stray: 'slots', owner: 'action=set' },
-    { tool: 'mesh_coordinator_prompt_append', args: { action: 'get', content: 'x' }, stray: 'content', owner: 'action=set' },
     { tool: 'mesh_note', args: { action: 'forget', note_id: 'n', pinned: true }, stray: 'pinned', owner: 'action=record' },
     { tool: 'mesh_note', args: { action: 'record', text: 't', note_id: 'n' }, stray: 'note_id', owner: 'action=forget' },
     { tool: 'mesh_config', args: { kind: 'mesh_json', mode: 'schema' }, stray: 'mode', owner: 'kind=refine | change_impact' },
@@ -120,7 +120,6 @@ test('well-formed calls for every action pass validation (camelCase aliases incl
     const ok: Array<[string, Record<string, unknown>]> = [
         ['mesh_node_slots', { action: 'propose', nodeId: 'n' }],
         ['mesh_node_slots', { action: 'set', node_id: 'n', slots: [{ provider: 'claude-cli' }], write: false, reason: 'r' }],
-        ['mesh_coordinator_prompt_append', { action: 'set', cli_type: 'claude-cli', content: '' }],
         ['mesh_note', { action: 'forget', text: 'stale' }],
         ['mesh_config', { kind: 'refine', mode: 'schema' }],
         ['mesh_config', { kind: 'mesh_json', node_id: 'n', write: true, overwrite: false, workspace: '/w' }],

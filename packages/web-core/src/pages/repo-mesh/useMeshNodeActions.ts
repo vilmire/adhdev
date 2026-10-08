@@ -93,7 +93,7 @@ export function useMeshNodeActions({
     const [savingPolicy, setSavingPolicy] = useState(false)
 
     // Coordinator prompt
-    const [coordinatorPromptDraft, setCoordinatorPromptDraft] = useState({ override: '', append: '' })
+    const [coordinatorPromptDraft, setCoordinatorPromptDraft] = useState({ append: '' })
     const [savingCoordinatorPrompt, setSavingCoordinatorPrompt] = useState(false)
 
     // Per-node system prompt drafts
@@ -309,10 +309,10 @@ export function useMeshNodeActions({
         if (!targetDaemonId) return
         const existingCoord = ((selectedMesh as any)?.coordinator || {}) as Record<string, unknown>
         const nextCoord: Record<string, unknown> = { ...existingCoord }
-        if (coordinatorPromptDraft.override.trim()) nextCoord.systemPromptOverride = coordinatorPromptDraft.override
-        else delete nextCoord.systemPromptOverride
         if (coordinatorPromptDraft.append.trim()) nextCoord.systemPromptAppend = coordinatorPromptDraft.append
         else delete nextCoord.systemPromptAppend
+        // Keys removed on 2026-10-08 that an older meshes.json may still carry.
+        delete nextCoord.systemPromptOverride
         delete nextCoord.systemPromptSuffix
         try {
             setSavingCoordinatorPrompt(true)

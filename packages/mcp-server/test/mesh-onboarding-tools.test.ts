@@ -61,6 +61,15 @@ test('mesh_refine_plan is removed and redirects to mesh_refine_node (its default
   assert.match(error, /mesh_refine_node/);
 });
 
+test('mesh_coordinator_prompt_append is removed with the per-machine coordinator-prompts/ layer (2026-10-08)', () => {
+  for (const name of ['mesh_coordinator_prompt_append', 'mesh_coordinator_prompt_append_get', 'mesh_coordinator_prompt_append_set']) {
+    assert.equal(ALL_MESH_TOOLS.some(t => t.name === name), false, `${name} still registered`);
+    const error = validateMeshToolArgs(name, { action: 'get' }) ?? '';
+    assert.match(error, /was removed/);
+    assert.match(error, /systemPromptAppend/);
+  }
+});
+
 test('onboarding planner core forwards only a read-only planning command', async () => {
   const calls: Array<{ type: string; args: any }> = [];
   const transport = {

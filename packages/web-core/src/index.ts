@@ -256,7 +256,6 @@ export { default as LanguageSelector } from './components/LanguageSelector'
 // ── Settings (shared) ──
 export { ToggleRow } from './components/settings/ToggleRow'
 export type { ToggleRowProps } from './components/settings/ToggleRow'
-export { default as CoordinatorPromptsSection } from './components/settings/CoordinatorPromptsSection'
 export { GeneralThemeSection } from './components/settings/GeneralThemeSection'
 export { ChatThemeSection, initChatTheme, getChatTheme, setChatTheme, CHAT_THEMES } from './components/settings/ChatThemeSection'
 export type { ChatThemePreset } from './components/settings/ChatThemeSection'

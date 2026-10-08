@@ -46,7 +46,7 @@ import {
     meshCleanupSessionsOrPrune, meshTaskHistory, meshLedgerQuery,
     meshNote, meshReconcileLedger,
     meshMissionUpsert, meshMissionList, meshReviewInbox,
-    meshNodeSlots, meshCoordinatorPromptAppend,
+    meshNodeSlots,
 } from './mesh-tools.js';
 
 /**
@@ -103,7 +103,6 @@ export const MESH_TOOL_DISPATCH: Readonly<Record<CanonicalMeshToolName, MeshTool
     mesh_mission_list: (ctx, a) => meshMissionList(ctx, a as any),
     mesh_review_inbox: (ctx, a) => meshReviewInbox(ctx, a as any),
     mesh_node_slots: (ctx, a) => meshNodeSlots(ctx, a),
-    mesh_coordinator_prompt_append: (ctx, a) => meshCoordinatorPromptAppend(ctx, a),
 };
 
 /**

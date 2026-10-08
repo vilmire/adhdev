@@ -59,8 +59,8 @@ interface Props {
     onUpdatePolicy: (patch: Record<string, unknown>) => void
 
     // Coordinator prompt
-    coordinatorPromptDraft: { override: string; append: string }
-    onCoordinatorPromptDraftChange: (draft: { override: string; append: string }) => void
+    coordinatorPromptDraft: { append: string }
+    onCoordinatorPromptDraftChange: (draft: { append: string }) => void
     savingCoordinatorPrompt: boolean
     onSaveCoordinatorPrompt: () => void
 
@@ -487,14 +487,11 @@ export function MeshDetailView({
                 </div>
             </Section>
 
-            {/* Coordinator prompt — stored in this mesh's coordinator config
-                (systemPromptOverride / systemPromptAppend) via update_mesh. Text
-                areas keep an explicit Save. The default base prompt is rendered
-                read-only above the Override field so "leave empty to keep the
-                default" is never a blank guess. There is deliberately no "copy
-                default into Override" button: the preview is the fully-expanded
-                prompt, and copying it would freeze a snapshot that stops tracking
-                node/policy changes. */}
+            {/* Coordinator prompt — the mesh-level append, stored in this mesh's
+                coordinator config (systemPromptAppend) via update_mesh, with an
+                explicit Save. The default base prompt is rendered read-only above
+                it. The full-replacement Override field was removed on 2026-10-08
+                together with the daemon's override layers. */}
             {features.coordinatorPrompt && (
                 <Section title={t('mesh.detail.coordinatorPromptTitle')} collapsible defaultOpen={false}
                     description={t('mesh.detail.thisMeshHint', { name: selectedMesh.name })}>
@@ -506,21 +503,15 @@ export function MeshDetailView({
                         defaultOpen
                     />
 
-                    <FormField label={t('mesh.detail.overrideLabel')} hint={t('mesh.detail.overrideHint')} className="mt-3">
-                        <textarea className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary font-mono"
-                            rows={6} value={coordinatorPromptDraft.override}
-                            onChange={e => onCoordinatorPromptDraftChange({ ...coordinatorPromptDraft, override: e.target.value })}
-                            disabled={savingCoordinatorPrompt} placeholder={t('mesh.detail.overridePlaceholder')} />
-                    </FormField>
-                    <FormField label={t('mesh.detail.appendLabel')} hint={t('mesh.detail.appendHint')}>
+                    <FormField label={t('mesh.detail.appendLabel')} hint={t('mesh.detail.appendHint')} className="mt-3">
                         <textarea className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary font-mono"
                             rows={4} value={coordinatorPromptDraft.append}
                             onChange={e => onCoordinatorPromptDraftChange({ ...coordinatorPromptDraft, append: e.target.value })}
                             disabled={savingCoordinatorPrompt} placeholder={t('mesh.detail.appendPlaceholder')} />
                     </FormField>
 
-                    {/* Repo-committed prompt layer (.adhdev/mesh.json) — the two fields
-                        above are MACHINE-LOCAL; a repo may ALSO declare coordinator prompt
+                    {/* Repo-committed prompt layer (.adhdev/mesh.json) — the field
+                        above is MACHINE-LOCAL; a repo may ALSO declare coordinator prompt
                         text that the launch path stacks in. Read-only on purpose. Renders
                         nothing when the repo declares no prompt. */}
                     <RepoMeshJsonAppendNotice
@@ -553,7 +544,7 @@ export function MeshDetailView({
                         <button type="button" className="btn btn-primary btn-sm" onClick={onSaveCoordinatorPrompt} disabled={savingCoordinatorPrompt}>
                             {savingCoordinatorPrompt ? t('mesh.detail.saving') : t('mesh.detail.saveCoordinatorPrompt')}
                         </button>
-                        <button type="button" className="btn btn-secondary btn-sm" onClick={() => onCoordinatorPromptDraftChange({ override: '', append: '' })} disabled={savingCoordinatorPrompt} title={t('mesh.detail.clearTitle')}>{t('mesh.detail.clear')}</button>
+                        <button type="button" className="btn btn-secondary btn-sm" onClick={() => onCoordinatorPromptDraftChange({ append: '' })} disabled={savingCoordinatorPrompt} title={t('mesh.detail.clearTitle')}>{t('mesh.detail.clear')}</button>
                     </div>
                 </Section>
             )}

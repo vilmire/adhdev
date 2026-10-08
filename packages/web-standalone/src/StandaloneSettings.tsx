@@ -1,7 +1,7 @@
 /**
  * StandaloneSettings — Settings page for self-hosted ADHDev.
  *
- * Uses shared components from web-core (CoordinatorPromptsSection etc.) plus
+ * Uses shared components from web-core (AppearanceSettingsSection etc.) plus
  * standalone-specific sections. Notification/sound settings live on the
  * dedicated /notifications page, not here. Standalone is single-machine, so
  * there is deliberately no per-machine section (cloud keeps its own).
@@ -14,7 +14,6 @@ import {
     AlertBanner,
     Button,
     Input,
-    CoordinatorPromptsSection,
     AppearanceSettingsSection,
     useBaseDaemons,
     useTransport,
@@ -445,20 +444,6 @@ export default function StandaloneSettings() {
                         />
                     </div>
                 </div>
-            </Section>
-
-            {/* ═══ Advanced (collapsed) — coordinator prompts ═══
-                 Edits ~/.adhdev/coordinator-prompts/<cli>.{md,append.md} on this
-                 daemon. Mounted here because those files are per-machine config —
-                 mesh-level prompts stay on the Repo Mesh page. This is also the
-                 only UI for the layer that the
-                 mesh_coordinator_prompt_append MCP tool (action "set") writes. */}
-            <Section title={t('settings.advancedTitle')} collapsible defaultOpen={false}>
-                <div className="mb-2 flex items-center gap-1 text-xs font-medium text-text-secondary">
-                    {t('settings.coordinatorPrompts.sectionTitle')}
-                    <InfoTip content={t('settings.coordinatorPrompts.sectionDescription')} size={12} />
-                </div>
-                <CoordinatorPromptsSection daemonId={daemonEntry?.id} embedded />
             </Section>
         </AppPage>
     )

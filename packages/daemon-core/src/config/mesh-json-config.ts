@@ -4,9 +4,10 @@
  * A repo-committed, machine-independent file carrying ONLY the repo-shared
  * coordinator-prompt config and operating notes:
  *
- *   - coordinator       — systemPromptOverride (local wins, else repo) and
- *                         systemPromptAppend (repo append + local append BOTH
- *                         stack, repo first).
+ *   - coordinator       — systemPromptAppend (repo append + local append BOTH
+ *                         stack, repo first). The former full-replacement
+ *                         `systemPromptOverride` was removed on 2026-10-08;
+ *                         a legacy value in a repo file is ignored.
  *   - operatingNotes    — repo-declared baseline notes merged with the runtime
  *                         ledger notes; on duplicate text the ledger note wins.
  *   - limits            — advisory-only (`maxNoteChars`, `maxNotes`,
@@ -55,9 +56,6 @@ import type { CoordinatorOperatingNote } from '../mesh/coordinator-prompt.js';
 // ─── Types (declarative config zones) ───────────
 
 export interface RepoMeshDeclarativeCoordinatorConfig {
-    /** Full mesh-level system prompt override. Same semantics as
-     *  RepoMeshCoordinatorConfig.systemPromptOverride; LOCAL-WINS. */
-    systemPromptOverride?: string;
     /** Mesh-level append stacked after the base prompt. Both the repo append
      *  and the machine-local append apply; the repo append comes first. */
     systemPromptAppend?: string;
@@ -131,7 +129,6 @@ export const MESH_JSON_CONFIG_SCHEMA = {
             type: 'object',
             additionalProperties: false,
             properties: {
-                systemPromptOverride: { type: 'string' },
                 systemPromptAppend: { type: 'string' },
                 maxPromptChars: { type: 'number', minimum: 1 },
             },
@@ -242,7 +239,6 @@ export function normalizeRepoMeshDeclarativeConfig(parsed: unknown): {
         if (isRecord(parsed.coordinator)) {
             const coord: RepoMeshDeclarativeCoordinatorConfig = {};
             const c = parsed.coordinator;
-            if (typeof c.systemPromptOverride === 'string') coord.systemPromptOverride = c.systemPromptOverride;
             if (typeof c.systemPromptAppend === 'string') coord.systemPromptAppend = c.systemPromptAppend;
             if (Number.isFinite(Number(c.maxPromptChars))) coord.maxPromptChars = Number(c.maxPromptChars);
             config.coordinator = coord;
@@ -357,38 +353,41 @@ export function loadRepoMeshJsonConfig(workspace?: string): RepoMeshJsonConfigLo
 // ─── Declarative config: Merge (coordinator + operating notes) ─────
 
 /**
- * Effective coordinator config. systemPromptOverride: local wins, else repo.
- * systemPromptAppend: repo append + local append BOTH stack (repo first). Other
- * coordinator fields (providerType, preferredNodeId, …) are carried from the
- * machine-local config unchanged.
+ * Coordinator keys removed on 2026-10-08 (assistant-layer design §11 Q2): the
+ * mesh-level full prompt override and the deprecated append alias. A
+ * meshes.json written before then may still carry them; they are ignored and
+ * this helper drops them so a normalised rewrite does not persist them.
+ */
+export const REMOVED_COORDINATOR_PROMPT_KEYS = ['systemPromptOverride', 'systemPromptSuffix'] as const;
+
+export function stripRemovedCoordinatorPromptFields(coord: RepoMeshCoordinatorConfig): RepoMeshCoordinatorConfig;
+export function stripRemovedCoordinatorPromptFields(coord: RepoMeshCoordinatorConfig | undefined): RepoMeshCoordinatorConfig | undefined;
+export function stripRemovedCoordinatorPromptFields(
+    coord: RepoMeshCoordinatorConfig | undefined,
+): RepoMeshCoordinatorConfig | undefined {
+    if (!coord) return coord;
+    const out: Record<string, unknown> = { ...coord };
+    for (const key of REMOVED_COORDINATOR_PROMPT_KEYS) delete out[key];
+    return out as RepoMeshCoordinatorConfig;
+}
+
+/**
+ * Effective coordinator config. systemPromptAppend: repo append + local append
+ * BOTH stack (repo first). Other coordinator fields (providerType,
+ * preferredNodeId, …) are carried from the machine-local config unchanged.
+ * Legacy `systemPromptOverride` / `systemPromptSuffix` keys a pre-2026-10-08
+ * meshes.json may still carry are stripped so nothing downstream sees them.
  */
 export function mergeEffectiveCoordinatorConfig(
     repoCoord: RepoMeshDeclarativeCoordinatorConfig | undefined,
     localCoord: RepoMeshCoordinatorConfig | undefined,
 ): RepoMeshCoordinatorConfig {
-    const out: RepoMeshCoordinatorConfig = { ...(localCoord || {}) };
-
-    const localOverride = localCoord?.systemPromptOverride?.trim();
-    const repoOverride = repoCoord?.systemPromptOverride?.trim();
-    if (localOverride) {
-        out.systemPromptOverride = localCoord!.systemPromptOverride;
-    } else if (repoOverride) {
-        out.systemPromptOverride = repoCoord!.systemPromptOverride;
-    } else {
-        delete out.systemPromptOverride;
-    }
+    const out = stripRemovedCoordinatorPromptFields(localCoord) ?? {};
 
     const repoAppend = repoCoord?.systemPromptAppend?.trim() ? repoCoord!.systemPromptAppend!.trim() : '';
-    // The machine-local append may live on the new field or the legacy alias.
-    const localAppendRaw = (localCoord?.systemPromptAppend ?? localCoord?.systemPromptSuffix);
-    const localAppend = localAppendRaw?.trim() ? localAppendRaw.trim() : '';
+    const localAppend = localCoord?.systemPromptAppend?.trim() ? localCoord.systemPromptAppend.trim() : '';
     const stacked = [repoAppend, localAppend].filter(Boolean).join('\n\n');
-    if (stacked) {
-        out.systemPromptAppend = stacked;
-        // The stacked value already folds in any legacy suffix; drop the alias so
-        // buildCoordinatorSystemPrompt doesn't risk double-applying it.
-        delete out.systemPromptSuffix;
-    }
+    if (stacked) out.systemPromptAppend = stacked;
 
     return out;
 }
@@ -438,7 +437,7 @@ export function applyRepoMeshConfig<T extends Pick<LocalMeshEntry, 'coordinator'
 /**
  * Build a `.adhdev/mesh.json` DRAFT from a machine-local mesh entry. This is a
  * scaffold for the operator to review and commit — NOT an automatic migration.
- * It captures the coordinator prompt override/append so a repo can adopt the
+ * It captures the coordinator prompt append so a repo can adopt the
  * current machine's prompt customization as the shared base. Policy is NOT
  * exported — it is machine-local only and has no place in mesh.json. Operating
  * notes are intentionally NOT exported either: those are runtime ledger lessons,
@@ -464,9 +463,7 @@ export function buildMeshJsonConfigScaffold(
 ): RepoMeshDeclarativeConfig {
     const scaffold: RepoMeshDeclarativeConfig = { version: 1 };
     const coord: RepoMeshDeclarativeCoordinatorConfig = {};
-    const override = mesh.coordinator?.systemPromptOverride;
-    if (typeof override === 'string' && override.trim()) coord.systemPromptOverride = override;
-    const append = mesh.coordinator?.systemPromptAppend ?? mesh.coordinator?.systemPromptSuffix;
+    const append = mesh.coordinator?.systemPromptAppend;
     if (typeof append === 'string' && append.trim()) coord.systemPromptAppend = append;
     if (Object.keys(coord).length) scaffold.coordinator = coord;
     return scaffold;

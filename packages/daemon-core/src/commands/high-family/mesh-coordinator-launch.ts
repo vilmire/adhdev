@@ -186,11 +186,7 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                 // can pass extra context that gets appended to the rendered
                 // default prompt under the "## Additional Context" section.
                 // Going through buildCoordinatorSystemPrompt's userInstruction
-                // means user-level override files (~/.adhdev/coordinator-prompts)
-                // and this per-launch addition compose cleanly: an override
-                // wins outright, but if there's no override, the default
-                // prompt + the optional append.md file + this extra context
-                // all stack in declared order.
+                // stacks it after the default prompt and the mesh-level append.
                 const extraSystemPrompt = typeof args?.extraSystemPrompt === 'string'
                     ? args.extraSystemPrompt.trim()
                     : '';

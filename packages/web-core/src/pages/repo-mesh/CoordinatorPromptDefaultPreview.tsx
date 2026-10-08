@@ -1,21 +1,18 @@
 /**
  * Collapsible "View the default coordinator prompt" preview.
  *
- * The Override textarea replaces the daemon's built-in base prompt, but when it
- * is left empty the operator sees only a blank field with no idea what that
- * default actually contains. This fetches the rendered default via the
- * `coordinator_prompt_preview` daemon command (daemon-core low-family handler)
- * and shows it read-only, on demand, so "leave empty to keep the default" is no
- * longer an invisible choice.
+ * Shows the daemon's built-in base prompt (which the mesh-level Append stacks
+ * after) so the operator knows what the default actually contains. This
+ * fetches the rendered prompt via the `coordinator_prompt_preview` daemon
+ * command (daemon-core low-family handler) and shows it read-only, on demand.
  *
  * There used to be a "Start from default" button here that copied this same
- * rendered text into the Override field. It was removed: the rendered text is
- * fully expanded ({{tokens}} already substituted with live node/policy state),
- * so copying it into Override froze that one-time snapshot — the saved
- * override stopped tracking mesh changes the instant it was written. Override
+ * rendered text into the (since removed, 2026-10-08) Override field. It was
+ * removed: the rendered text is fully expanded ({{tokens}} already substituted
+ * with live node/policy state), so a copy froze that one-time snapshot. Prompt
  * authors write literal {{token}} syntax (see coordinator-prompt-placeholders.ts)
- * so their prompt keeps re-expanding on every render, same as this preview
- * does. This component stays read-only-preview-only for that reason.
+ * so their text keeps re-expanding on every render, same as this preview does.
+ * This component stays read-only-preview-only for that reason.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'

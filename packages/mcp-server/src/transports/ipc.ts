@@ -145,7 +145,6 @@ const IPC_PROBE_RETRYABLE_COMMANDS: ReadonlySet<string> = new Set([
   'read_chat',
   'get_spec_debug',
   'get_chat_debug_bundle',
-  'list_coordinator_prompts',
   'list_provider_availability',
   // P0 (2026-08-28): added alongside the timeout-tier fix above. All four are
   // read-only queries (onboarding plan preview, session-host snapshot/diagnostics

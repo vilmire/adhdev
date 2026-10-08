@@ -23,6 +23,7 @@ import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { mergePolicyOverrides, normalizePolicyOverrides, MESH_POLICY_STORAGE_VERSION } from '../repo-mesh-types.js';
 import { createDefaultMeshHostMetadata } from '../mesh/mesh-host-ownership.js';
 import { withMeshConfigWriteLock, loadMeshConfig, normalizeCapabilityTags, saveMeshConfig, normalizeRepoIdentity } from './mesh-config-store.js';
+import { stripRemovedCoordinatorPromptFields } from './mesh-json-config.js';
 
 // ─── CRUD Operations ────────────────────────────
 
@@ -105,7 +106,7 @@ function createMeshUnlocked(opts: CreateMeshOptions): LocalMeshEntry {
         defaultBranch: opts.defaultBranch,
         policy: normalizePolicyOverrides(opts.policy),
         policyStorage: MESH_POLICY_STORAGE_VERSION,
-        coordinator: opts.coordinator || {},
+        coordinator: stripRemovedCoordinatorPromptFields(opts.coordinator) || {},
         meshHost: opts.meshHost || (() => {
             const base = createDefaultMeshHostMetadata();
             const creatingDaemonId = typeof opts.hostDaemonId === 'string' ? opts.hostDaemonId.trim() : '';
@@ -146,7 +147,7 @@ function updateMeshUnlocked(meshId: string, opts: UpdateMeshOptions): LocalMeshE
         mesh.policy = mergePolicyOverrides(mesh.policy, opts.policy);
         mesh.policyStorage = MESH_POLICY_STORAGE_VERSION;
     }
-    if (opts.coordinator) mesh.coordinator = opts.coordinator;
+    if (opts.coordinator) mesh.coordinator = stripRemovedCoordinatorPromptFields(opts.coordinator);
     if (opts.meshHost) mesh.meshHost = opts.meshHost;
     mesh.updatedAt = new Date().toISOString();
 
