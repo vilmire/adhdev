@@ -50,6 +50,9 @@ const EXPECTED_CLASSES: Record<string, string> = {
     apply_mesh_host_join: 'pairing_member',
     // launch is open, but a coordinator anchor it stamps must be backed by host evidence
     launch_cli: 'mesh_launch',
+    // another daemon's assistant drives a mesh THIS daemon hosts (owner decision
+    // 2026-10-08): the sender must be on that mesh's roster here
+    assistant_remote_project: 'roster',
 };
 
 describe('mesh sender policy — registry', () => {

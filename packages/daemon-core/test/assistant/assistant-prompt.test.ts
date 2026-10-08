@@ -104,7 +104,7 @@ describe('buildAssistantSystemPrompt', () => {
             meshId: `mesh_${i}`,
             name: 'N'.repeat(200),
             repoIdentity: `github.com/${'o'.repeat(60)}/${'r'.repeat(60)}`,
-            hosting: i % 3 === 0 ? 'elsewhere' : 'here',
+            hosting: i % 3 === 0 ? 'remote' : 'here',
             hostLabel: 'H'.repeat(100),
         }));
         const skills = Array.from({ length: 100 }, (_, i) => ({
@@ -149,15 +149,15 @@ describe('buildAssistantSystemPrompt', () => {
 });
 
 describe('renderProjectTable', () => {
-    it('orders here → elsewhere → unmanaged and labels hosting', () => {
+    it('orders here → remote → unmanaged and labels hosting', () => {
         const t = renderProjectTable([
             project({ slug: 'zeta', hosting: 'unmanaged', meshId: 'm3' }),
-            project({ slug: 'beta', hosting: 'elsewhere', hostLabel: 'win-box', meshId: 'm2' }),
+            project({ slug: 'beta', hosting: 'remote', hostLabel: 'win-box', meshId: 'm2' }),
             project({ slug: 'alpha', meshId: 'm1' }),
         ], AT);
         const lines = t.split('\n');
         expect(lines[1]).toMatch(/^- alpha .*this machine$/);
-        expect(lines[2]).toMatch(/^- beta .*hosted on win-box; open it there$/);
+        expect(lines[2]).toMatch(/^- beta .*hosted on win-box \(relayed\)$/);
         expect(lines[3]).toMatch(/^- zeta .*unmanaged/);
     });
 
@@ -190,9 +190,12 @@ describe('routing, notice and tool-boundary rules', () => {
         expect(ASSISTANT_FIXED_RULES).toContain('`duplicate`');
     });
 
-    it('never calls an elsewhere-hosted project read-only; it points the user at the hosting machine', () => {
+    it('drives projects hosted on another machine by relay; an unreachable host is reported, never faked (owner decision 2026-10-08)', () => {
         expect(ASSISTANT_FIXED_RULES).not.toMatch(/read-only/);
-        expect(ASSISTANT_FIXED_RULES).toMatch(/open the project there/);
+        expect(ASSISTANT_FIXED_RULES).not.toMatch(/open the project there|project_hosted_elsewhere/);
+        expect(ASSISTANT_FIXED_RULES).toMatch(/hosted on another machine work the same way/);
+        expect(ASSISTANT_FIXED_RULES).toMatch(/`project_unreachable`[^\n]*never pretend it was sent/);
+        expect(ASSISTANT_FIXED_RULES).toMatch(/outcome `unreachable`/);
     });
 
     it('names only daemon markers that are actually produced', () => {

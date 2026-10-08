@@ -118,6 +118,34 @@ export function buildCoordinatorEndedSignal(slug: string, cause: string): string
     return `[project ${safeSlug(slug)}] the project's agent session ended (${why}). Queued work keeps running; the next project_send starts it again.`;
 }
 
+const UNREACHABLE_REASON_TEXT: Record<string, string> = {
+    host_unknown: 'this machine does not know which machine hosts it',
+    no_mesh_transport: 'this machine has no connection path to other machines',
+    host_offline: 'the host machine is offline',
+    relay_timeout: 'the host machine did not answer in time',
+    relay_failed: 'the connection to the host machine failed',
+    host_refused: 'the host machine refused the request',
+    host_unsupported: 'the host machine runs an ADHDev version without remote projects — update it',
+};
+
+/**
+ * A remote-hosted project's host stopped answering while its thread is open
+ * (owner decision 2026-10-08: remote projects are relayed, failures are never
+ * silent). Same frame as a turn relay, outcome `unreachable`; no project
+ * output inside, only this fixed text.
+ */
+export function buildUnreachableRelay(slug: string, hostLabel: string, reason: string): string {
+    const s = safeSlug(slug);
+    // eslint-disable-next-line no-control-regex
+    const host = String(hostLabel ?? '').replace(/[\u0000-\u001F\u007F[\]`|]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40) || 'its host machine';
+    const why = UNREACHABLE_REASON_TEXT[reason] ?? UNREACHABLE_REASON_TEXT.relay_failed;
+    return [
+        `[ADHDev relay · project ${s} · unreachable]`,
+        `ADHDev cannot reach ${s} on ${host}: ${why}. What was already sent is kept on that machine and its result is relayed once it answers again. Tell the user in one line.`,
+        RELAY_CLOSE,
+    ].join('\n');
+}
+
 export function buildProgressSignal(slug: string, assigned: number | null): string {
     const n = assigned === null ? '' : ` (assigned ${assigned})`;
     return `[project ${safeSlug(slug)}] still working after 30 min without a result${n}.`;

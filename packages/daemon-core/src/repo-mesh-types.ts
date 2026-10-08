@@ -67,6 +67,12 @@ export interface RepoMeshHostMetadata {
     hostNodeId?: string;
     /** Future standalone manual pairing endpoint entered by member daemons. */
     hostAddress?: string;
+    /**
+     * Member only: the id the HOST keys this mesh by, when it differs from the
+     * local id (standalone address + code pairing joins a local mesh to the
+     * host's own). Remote relays address the host with it.
+     */
+    hostMeshId?: string;
     /** Redacted pairing state only; raw join tokens must not be persisted here. */
     pairing?: RepoMeshHostPairingMetadata;
 }

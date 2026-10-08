@@ -285,6 +285,9 @@ const LEGACY_HIGH_FAMILY_COMMANDS = [
     'assistant_project_read', 'assistant_project_add', 'assistant_discover_repos',
     // Assistant session verbs (high-family/assistant-launch.ts, same design §4.4–§4.5).
     'launch_assistant', 'assistant_pending_relays',
+    // Host side of a remote-hosted assistant project (high-family/assistant-remote.ts,
+    // owner decision 2026-10-08); mesh-only + roster, pinned by assistant-remote-verb.test.ts.
+    'assistant_remote_project',
 ];
 
 // ─── Helpers ───────────────────────────────────────────────────────────────

@@ -98,6 +98,16 @@ const GIT_STATUS_PROBE_COMMANDS = new Set<string>([
   'mesh_git_status',
   'plan_mesh_onboarding',
 ]);
+// The host side of a remote-hosted assistant project (daemon-core
+// commands/high-family/assistant-remote.ts). Its `send` op may launch the mesh's
+// coordinator on the host before it answers (tens of seconds), so the default 30s
+// would reject a send the host is still completing. The caller bounds each op
+// itself (assistant/assistant-remote-host.ts REMOTE_OP_TIMEOUT_MS: poll 15s, send
+// 90s), so this is only the transport's ceiling.
+export const ASSISTANT_RELAY_COMMAND_TIMEOUT_MS = readTimeoutEnv('MESH_RPC_ASSISTANT_RELAY_TIMEOUT_MS', 90_000);
+const ASSISTANT_RELAY_COMMANDS = new Set<string>([
+  'assistant_remote_project',
+]);
 // Cheap, frequent status/poll commands whose round trip should be quick — a long
 // deadline here just delays detecting a truly wedged peer.
 const PROBE_COMMANDS = new Set<string>([
@@ -110,6 +120,7 @@ export function resultTimeoutForCommand(command: string): number {
   if (REPO_MUTATION_COMMANDS.has(command)) return REPO_MUTATION_COMMAND_TIMEOUT_MS;
   if (GIT_STATUS_PROBE_COMMANDS.has(command)) return GIT_STATUS_PROBE_TIMEOUT_MS;
   if (PROBE_COMMANDS.has(command)) return PROBE_COMMAND_TIMEOUT_MS;
+  if (ASSISTANT_RELAY_COMMANDS.has(command)) return ASSISTANT_RELAY_COMMAND_TIMEOUT_MS;
   return REQUEST_TIMEOUT_MS;
 }
 

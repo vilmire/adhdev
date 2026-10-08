@@ -16,6 +16,11 @@
  * stats + active missions, and the daemon's one send funnel
  * (`cliManager.input`, origin `assistant`, always `queue` for daemon inputs).
  * Nothing here judges turn completion — it only consumes `turn{committed}`.
+ *
+ * Remote-hosted projects (owner decision 2026-10-08): when the daemon has a
+ * mesh transport, a second timer (`REMOTE_POLL_MS`) polls the host of every
+ * open remote thread (assistant-remote-relay.ts) — the host's ledger commits
+ * those coordinator turns, so they never reach this bus.
  */
 
 import { SESSION_STATUS_CLASS } from '@adhdev/mesh-shared';
@@ -30,13 +35,14 @@ import { InMemoryAssistantRelayStore, type AssistantRelayStore } from './assista
 import { AssistantMetricsStore, SqliteAssistantRelayStore } from './assistant-relay-sqlite-store.js';
 import { ASSISTANT_RELAY_BUS_KINDS, AssistantRelay, type AssistantPulledEvent, type AssistantRelayPorts, type MeshWorkCounts } from './assistant-relay.js';
 import { getAssistantServices } from './assistant-services.js';
-import { setAssistantRelayHooks } from './assistant-project-ports.js';
 import { projectSlugs } from './assistant-projects.js';
 import { compactTranscriptTail } from './project-views.js';
 import { AssistantCurator, startAssistantCuratorTimer } from './skills/skill-curator.js';
 import { liveAssistantQuotaPort, type AssistantQuotaPort } from './assistant-quota.js';
 import { AssistantReviewScheduler } from './assistant-review-scheduler.js';
 import { setAssistantHumanInputSink } from './assistant-human-input.js';
+import { getAssistantProjectPorts, setAssistantRelayHooks, type AssistantProjectPorts } from './assistant-project-ports.js';
+import { AssistantRemoteRelayPoller, REMOTE_POLL_MS } from './assistant-remote-relay.js';
 
 export const ASSISTANT_RELAY_TICK_MS = 60_000;
 const METRICS_PRUNE_EVERY_MS = 60 * 60_000;
@@ -50,6 +56,8 @@ export interface AssistantRuntime {
     readonly metrics: AssistantMetricsStore | null;
     /** Idle review turn trigger (§4.10.7), evaluated on the relay tick. */
     readonly review: AssistantReviewScheduler;
+    /** Remote-hosted project result path (polls hosts of open remote threads). */
+    readonly remotePoller: AssistantRemoteRelayPoller;
     isActive(): boolean;
     activate(reason: AssistantActivationReason): void;
     /** MCP-only pull: activates, then claims queued relays/signals. */
@@ -93,7 +101,12 @@ export interface AssistantRuntimeOptions {
     tickMs?: number;
     /** Quota reading for the review-turn gate; defaults to the daemon's live quota cache. */
     quota?: AssistantQuotaPort;
+    /** Remote-hosted project poll cadence (default `REMOTE_POLL_MS`). */
+    remotePollMs?: number;
 }
+
+type RuntimeComponents = Pick<DaemonComponents, 'instanceManager' | 'router' | 'cliManager' | 'bus'>
+    & Partial<Pick<DaemonComponents, 'dispatchMeshCommand' | 'getMeshPeerConnectionStatus' | 'statusInstanceId'>>;
 
 let current: AssistantRuntime | null = null;
 
@@ -178,7 +191,7 @@ export function buildAssistantRelayPorts(
  * already has an entry).
  */
 export function wireAssistantRuntime(
-    components: Pick<DaemonComponents, 'instanceManager' | 'router' | 'cliManager' | 'bus'>,
+    components: RuntimeComponents,
     opts: AssistantRuntimeOptions = {},
 ): AssistantRuntime {
     const registry = opts.registry ?? getAssistantRegistry();
@@ -221,6 +234,38 @@ export function wireAssistantRuntime(
     });
     const reviewScheduler = review;
 
+    // Remote-hosted projects: poll each open remote thread's host (the
+    // project ports resolve host, reachability and the call; loaded once).
+    let projectPorts: AssistantProjectPorts | null = null;
+    const loadProjectPorts = async (): Promise<AssistantProjectPorts> => {
+        projectPorts ??= await getAssistantProjectPorts({
+            components: () => components as DaemonComponents,
+            execute: (cmd, args) => components.router.execute(cmd, args, 'ipc', { inProcess: true }),
+            selfDaemonId: str(components.statusInstanceId),
+            transport: {
+                ...(components.dispatchMeshCommand ? { dispatch: components.dispatchMeshCommand } : {}),
+                ...(components.getMeshPeerConnectionStatus ? { peerStatus: components.getMeshPeerConnectionStatus } : {}),
+            },
+        });
+        return projectPorts;
+    };
+    const remotePoller = new AssistantRemoteRelayPoller({
+        openThreads: () => store.openThreads().map((t) => ({ meshId: t.meshId, lastSendAt: t.lastSendAt })),
+        remoteTarget: (meshId) => {
+            const ports = projectPorts;
+            const mesh = ports?.listMeshes().find((m) => m.id === meshId);
+            if (!ports || !mesh || ports.isHostedHere(mesh)) return null;
+            return ports.remoteHost(mesh);
+        },
+        poll: async (target, args) => (await loadProjectPorts()).callHost(target, 'poll', args),
+        relay,
+    });
+    const remoteTick = (): void => {
+        void loadProjectPorts()
+            .then(() => remotePoller.tick())
+            .catch((e) => LOG.warn('Assistant', `remote relay poll failed: ${(e as Error)?.message ?? e}`));
+    };
+
     let active = false;
     let disposed = false;
     const offs: Array<() => void> = [];
@@ -257,6 +302,11 @@ export function wireAssistantRuntime(
         tickTimer = setInterval(tick, opts.tickMs ?? ASSISTANT_RELAY_TICK_MS);
         (tickTimer as { unref?: () => void }).unref?.();
         offs.push(() => { if (tickTimer) clearInterval(tickTimer); tickTimer = null; });
+        if (components.dispatchMeshCommand) {
+            const remoteTimer = setInterval(remoteTick, opts.remotePollMs ?? REMOTE_POLL_MS);
+            (remoteTimer as { unref?: () => void }).unref?.();
+            offs.push(() => clearInterval(remoteTimer));
+        }
         const svc = getAssistantServices();
         const curator = startAssistantCuratorTimer(new AssistantCurator(svc.skills, svc.memory), {
             onError: (e) => LOG.warn('Assistant', `curator pass failed: ${(e as Error)?.message ?? e}`),
@@ -285,6 +335,7 @@ export function wireAssistantRuntime(
         isThreadOpen: (meshId) => store.isThreadOpen(meshId),
         lastRelayAt: (meshId) => relay.lastRelayAtFor(meshId),
         recordSkillAttaches: (meshId, count) => metrics?.bump('skill_attaches', meshId, Date.now(), count),
+        remoteSent: (meshId, cursor) => remotePoller.noteSent(meshId, cursor),
     });
 
     const runtime: AssistantRuntime = {
@@ -293,6 +344,7 @@ export function wireAssistantRuntime(
         store,
         metrics,
         review: reviewScheduler,
+        remotePoller,
         isActive: () => active,
         activate,
         async pull(callerSessionId) {

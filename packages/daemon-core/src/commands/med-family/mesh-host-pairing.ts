@@ -423,6 +423,8 @@ export const meshHostPairingHandlers: Record<string, MedFamilyHandler> = {
                 tokenId: hostResult.tokenId || tokenId,
                 hostDaemonId: hostResult.meshHost?.hostDaemonId || hostDaemonId,
                 hostNodeId: hostResult.meshHost?.hostNodeId,
+                // The host's id for this mesh (assistant remote relays address it).
+                ...(secretMeshId && secretMeshId !== meshId ? { hostMeshId: secretMeshId } : {}),
                 joinedAt: hostResult.meshHost?.pairing?.joinedAt,
             });
             if (joined) {

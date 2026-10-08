@@ -10,7 +10,11 @@
  *   - owner verbs (`assistant_staged_resolve`, `assistant_store_admin`,
  *     `assistant_import_skills`) — `p2p` / `ws` / `standalone`, never `ipc`, so
  *     the MCP server cannot reach them;
- *   - none accepts `mesh` (no mesh sender class needed).
+ *   - none accepts `mesh` (no mesh sender class needed). A note on a
+ *     remote-hosted project is relayed to its host as
+ *     `assistant_remote_project {op:'note'}` (assistant-remote.ts) AFTER the
+ *     checks below ran here — origin classification and staging are this
+ *     daemon's; the host only stores.
  *
  * Origin: tool writes classify their origin from the daemon's assistant input
  * log for the calling session (`assistantSessionId` arg, from
@@ -28,6 +32,8 @@ import type { CommandRouterResult } from '../router.js';
 import type { HighFamilyContext, HighFamilyHandler } from './types.js';
 import type { LocalMeshEntry } from '../../repo-mesh-types.js';
 import { getAssistantServices, type AssistantServices } from '../../assistant/assistant-services.js';
+import { getAssistantProjectPorts, type AssistantProjectPorts } from '../../assistant/assistant-project-ports.js';
+import type { RemoteCallOutcome, RemoteHostView } from '../../assistant/assistant-remote-host.js';
 import { reviewTurnVerbDecision } from '../../assistant/assistant-review.js';
 import { resolveAssistantProject } from '../../assistant/assistant-projects.js';
 import { PROJECT_NOTE_CATEGORIES, type ProjectNoteCategory, type ProjectNoteOp, type StagedNoteWrite } from '../../assistant/note-staging.js';
@@ -44,8 +50,25 @@ export const ASSISTANT_OWNER_SOURCES = ['p2p', 'ws', 'standalone'] as const;
 /** Result codes that mean "the verb did its job" (refusal codes → success:false). */
 const OK_RESULTS: ReadonlySet<string> = new Set(['applied', 'staged', 'memory_duplicate', 'ok', 'list', 'discarded']);
 
+/**
+ * The assistant project ports for a router context — the in-process command
+ * runner, this daemon's id and the daemon↔daemon mesh transport (remote-hosted
+ * projects relay over it).
+ */
+export async function projectPortsFor(ctx: HighFamilyContext): Promise<AssistantProjectPorts> {
+    return getAssistantProjectPorts({
+        components: ctx.components,
+        execute: (cmd, args) => ctx.execute(cmd, args, 'ipc', { inProcess: true }),
+        selfDaemonId: str(ctx.deps?.statusInstanceId),
+        transport: {
+            ...(ctx.deps?.dispatchMeshCommand ? { dispatch: ctx.deps.dispatchMeshCommand } : {}),
+            ...(ctx.deps?.getMeshPeerConnectionStatus ? { peerStatus: ctx.deps.getMeshPeerConnectionStatus } : {}),
+        },
+    });
+}
+
 /** `note_secret_rejected` / `note_hidden_chars_rejected` / `note_injection_rejected`, or null. */
-function noteTextRefusal(text: string | undefined): ({ result: string; pattern?: string }) | null {
+export function noteTextRefusal(text: string | undefined): ({ result: string; pattern?: string }) | null {
     if (!text) return null;
     if (detectCredential(text)) return { result: 'note_secret_rejected' };
     const f = scanWriteContent(text);
@@ -95,11 +118,12 @@ export function assistantToolGate(verb: string, args: unknown, svc: AssistantSer
 
 // ── project resolution (project_note) ──────────────────────────────────────
 
+/** `remote` (with the ports to call it) is set when another daemon hosts the mesh. */
 type ProjectResolution =
-    | { ok: true; mesh: LocalMeshEntry; slug: string }
+    | { ok: true; mesh: LocalMeshEntry; slug: string; remote?: { host: RemoteHostView; ports: AssistantProjectPorts } }
     | { ok: false; result: CommandRouterResult };
 
-async function resolveHostedProject(ctx: HighFamilyContext, svc: AssistantServices, ref: unknown): Promise<ProjectResolution> {
+async function resolveNoteProject(ctx: HighFamilyContext, svc: AssistantServices, ref: unknown): Promise<ProjectResolution> {
     const r = resolveAssistantProject(ref, svc.listMeshes());
     if (!r.ok) {
         const detail = r.code === 'project_not_found' ? { projects: r.projects } : { candidates: r.candidates };
@@ -119,13 +143,38 @@ async function resolveHostedProject(ctx: HighFamilyContext, svc: AssistantServic
         }
     }
     if (!hosted) {
-        // Notes live in the host daemon's DB (§4.10.3).
-        return { ok: false, result: { success: false, code: 'project_hosted_elsewhere', error: 'project_hosted_elsewhere', project: r.slug, meshId: r.mesh.id } };
+        // Notes live in the host daemon's DB (§4.10.3): relay the write there.
+        try {
+            const ports = await projectPortsFor(ctx);
+            return { ok: true, mesh: r.mesh, slug: r.slug, remote: { host: ports.remoteHost(r.mesh), ports } };
+        } catch (e) {
+            if (isDaemonComponentsNotReady(e)) return { ok: false, result: componentsNotReadyResult(e) };
+            throw e;
+        }
     }
     return { ok: true, mesh: r.mesh, slug: r.slug };
 }
 
-function parseNoteOp(args: any): ProjectNoteOp | string {
+/** Apply an already-checked note write on the project's host (`assistant_remote_project {op:'note'}`). */
+async function applyRemoteNote(
+    project: Extract<ProjectResolution, { ok: true }>,
+    op: ProjectNoteOp,
+    origin: 'human' | 'owner',
+    callerSessionId?: string,
+): Promise<{ result: string } & Record<string, unknown>> {
+    const remote = project.remote!;
+    const out: RemoteCallOutcome = remote.host.reachable
+        ? await remote.ports.callHost(remote.host, 'note', { ...op, origin, ...(callerSessionId ? { callerSessionId } : {}) })
+        : { ok: false, kind: 'unreachable', code: 'project_unreachable', reason: remote.host.reason ?? 'relay_failed', error: 'host unreachable' };
+    if (out.ok) {
+        const r = out.result;
+        return { result: 'applied', ...(typeof r.noteId === 'string' ? { noteId: r.noteId } : {}), ...(typeof r.matched === 'number' ? { matched: r.matched } : {}), host: remote.host.label, via: 'relay' };
+    }
+    if (out.kind === 'unreachable') return { result: 'project_unreachable', reason: out.reason, host: remote.host.label, error: out.error };
+    return { result: out.code, host: remote.host.label, error: out.error };
+}
+
+export function parseNoteOp(args: any): ProjectNoteOp | string {
     const action = str(args?.action);
     const text = str(args?.text);
     if (action === 'record') {
@@ -144,7 +193,7 @@ function parseNoteOp(args: any): ProjectNoteOp | string {
     return 'action must be record or forget';
 }
 
-async function applyNote(svc: AssistantServices, meshId: string, op: ProjectNoteOp, origin: StoreWriteOrigin, callerSessionId?: string): Promise<{ result: 'applied'; noteId?: string; matched?: number }> {
+export async function applyNote(svc: AssistantServices, meshId: string, op: ProjectNoteOp, origin: StoreWriteOrigin, callerSessionId?: string): Promise<{ result: 'applied'; noteId?: string; matched?: number }> {
     if (op.action === 'record') {
         const entry = await svc.operatingNotes.record(meshId, {
             text: op.text,
@@ -232,7 +281,7 @@ export const assistantStoreHandlers: Record<string, HighFamilyHandler> = {
         if (gate) return gate;
         const op = parseNoteOp(args);
         if (typeof op === 'string') return invalidArgs(op);
-        const project = await resolveHostedProject(ctx, svc, args?.project);
+        const project = await resolveNoteProject(ctx, svc, args?.project);
         if (!project.ok) return project.result;
         const wrap = { project: project.slug, meshId: project.mesh.id };
         const refusal = noteTextRefusal(op.text);
@@ -247,6 +296,7 @@ export const assistantStoreHandlers: Record<string, HighFamilyHandler> = {
             });
             return respond({ result: 'staged', stagedId }, wrap);
         }
+        if (project.remote) return respond(await applyRemoteNote(project, op, origin === 'owner' ? 'owner' : 'human', sid || undefined), wrap);
         return respond(await applyNote(svc, project.mesh.id, op, origin, sid || undefined), wrap);
     },
 
@@ -304,7 +354,7 @@ export const assistantStoreHandlers: Record<string, HighFamilyHandler> = {
         const result = importFromHermes(req, { skills: svc.skills, memory: svc.memory });
         const notes: Array<Record<string, unknown>> = [];
         for (const n of result.operatingNotes) {
-            const project = await resolveHostedProject(ctx, svc, n.project);
+            const project = await resolveNoteProject(ctx, svc, n.project);
             if (!project.ok) {
                 notes.push({ id: n.id, project: n.project, result: project.result.code });
                 continue;
@@ -318,7 +368,9 @@ export const assistantStoreHandlers: Record<string, HighFamilyHandler> = {
                 notes.push({ id: n.id, project: project.slug, meshId: project.mesh.id, result: 'would_record' });
                 continue;
             }
-            const applied = await applyNote(svc, project.mesh.id, { action: 'record', text: n.text }, 'owner');
+            const applied = project.remote
+                ? await applyRemoteNote(project, { action: 'record', text: n.text }, 'owner')
+                : await applyNote(svc, project.mesh.id, { action: 'record', text: n.text }, 'owner');
             notes.push({ id: n.id, project: project.slug, meshId: project.mesh.id, ...applied });
         }
         return { success: true, ...result, operatingNoteResults: notes };
@@ -381,11 +433,19 @@ async function resolveStagedNote(ctx: HighFamilyContext, svc: AssistantServices,
         return respond({ result: 'discarded' });
     }
     // Re-check against the current inventory and text; a failure keeps the staged file.
-    const project = await resolveHostedProject(ctx, svc, rec.meshId);
+    const project = await resolveNoteProject(ctx, svc, rec.meshId);
     if (!project.ok) return project.result;
     const wrap = { project: project.slug, meshId: project.mesh.id };
     const refusal = noteTextRefusal(rec.op.text);
     if (refusal) return respond(refusal, wrap);
+    if (project.remote) {
+        // A host that cannot store it now keeps the staged file here (retry later).
+        const remote = await applyRemoteNote(project, rec.op, 'owner', rec.callerSessionId);
+        if (remote.result !== 'applied') return respond(remote, wrap);
+        svc.notes.remove(id);
+        creditReview(svc, rec.reviewTurnId, remote.result, 'approved');
+        return respond(remote, wrap);
+    }
     const applied = await applyNote(svc, rec.meshId, rec.op, 'owner', rec.callerSessionId);
     svc.notes.remove(id);
     creditReview(svc, rec.reviewTurnId, applied.result, 'approved');

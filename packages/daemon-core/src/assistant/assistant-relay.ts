@@ -33,7 +33,7 @@ import { countTerminalSubmits, TERMINAL_SUBMITS_PER_WRITE_CAP } from './assistan
 import {
     RELAY_BACKLOG_FOLD_AFTER_MS, RELAY_DELIVERY_MAX_CHARS, RELAY_IDLE_CLOSE_GRACE_MS, RELAY_MAX_WAIT_MS, RELAY_PROGRESS_AFTER_MS, RELAY_QUIET_MS,
     RELAY_STALL_AFTER_MS, buildApprovalSignal, buildCoordinatorEndedSignal, buildFoldedBacklogLine, buildProgressSignal,
-    buildRelayEnvelope, buildRestartNote, buildStallSignal, codePoints, relayMessageId, shouldAddRestartNote,
+    buildRelayEnvelope, buildRestartNote, buildStallSignal, buildUnreachableRelay, codePoints, relayMessageId, shouldAddRestartNote,
     type RestartContext,
 } from './assistant-relay-format.js';
 
@@ -44,6 +44,21 @@ export type AssistantRelayBusEvent = EventOf<typeof ASSISTANT_RELAY_BUS_KINDS[nu
 export const PENDING_HUMAN_MAX_AGE_MS = 5 * 60_000;
 
 export interface MeshWorkCounts { activeMissions: number; pending: number; assigned: number }
+
+/**
+ * A remote-hosted project's state as its host's poll answered (content-free;
+ * assistant/assistant-remote-relay.ts). Its turns arrive through
+ * `onRemoteCommitted`, the host's ledger having committed them.
+ */
+export interface RemoteProjectSnapshot {
+    /** A plain attempt is open on the host's coordinator (it is working). */
+    open: boolean;
+    /** The coordinator is parked on an approval or a choice. */
+    modal: boolean;
+    work: MeshWorkCounts | null;
+    /** The host's content-free `[Mesh]` line. */
+    statusLine: string | null;
+}
 
 export interface RelayClock {
     now(): number;
@@ -131,6 +146,10 @@ export class AssistantRelay {
     private readonly stallSent = new Set<string>();
     private readonly lastRelayAt = new Map<string, number>();
     private readonly modalOpen = new Set<string>();
+    /** Remote-hosted projects: the host's last poll answer (work counts, status line). */
+    private readonly remote = new Map<string, RemoteProjectSnapshot>();
+    /** Remote-hosted projects: coordinator tail read by the host with the commit (attemptId → body). */
+    private readonly remoteBodies = new Map<string, string | null>();
     private queue: Item[] = [];
     /** Human inputs parked in the driver FIFO, oldest first (logged when drained). */
     private pendingHuman: Array<{ at: number; messageId: string }> = [];
@@ -312,14 +331,14 @@ export class AssistantRelay {
             if (since !== undefined) {
                 if (now - since >= RELAY_PROGRESS_AFTER_MS && !this.progressSent.has(t.meshId)) {
                     this.progressSent.add(t.meshId);
-                    this.pushLine('progress', buildProgressSignal(slug, this.ports.meshWork(t.meshId)?.assigned ?? null), t.meshId);
+                    this.pushLine('progress', buildProgressSignal(slug, this.workOf(t.meshId)?.assigned ?? null), t.meshId);
                 }
                 continue;
             }
             if (this.batches.has(t.meshId) || this.stallSent.has(t.meshId)) continue;
             const quietSince = Math.max(t.lastSendAt, this.lastRelayAt.get(t.meshId) ?? 0);
             if (now - quietSince < RELAY_STALL_AFTER_MS) continue;
-            const w = this.ports.meshWork(t.meshId);
+            const w = this.workOf(t.meshId);
             if (w && (w.activeMissions > 0 || w.pending > 0) && w.assigned === 0) {
                 this.stallSent.add(t.meshId);
                 this.pushLine('stall', buildStallSignal(slug, w), t.meshId);
@@ -425,18 +444,59 @@ export class AssistantRelay {
     private onCoordinatorTurn(meshId: string, e: EventOf<'turn'>): void {
         if (!e.attemptId.startsWith('plain:')) return;
         if (e.phase === 'started' || e.phase === 'resumed') {
-            if (!this.working.has(meshId)) this.working.set(meshId, e.at);
-            const b = this.batches.get(meshId);
-            if (b && b.quietTimer !== null) {
-                this.clock.clearTimeout(b.quietTimer); // chained turn: wait for its commit (bounded by maxTimer)
-                b.quietTimer = null;
-            }
+            this.markWorking(meshId, e.at);
             return;
         }
         if (e.phase !== 'committed') return;
+        this.commit(meshId, { attemptId: e.attemptId, sessionId: e.sessionId, at: e.at, outcome: e.outcome ?? 'completed' });
+    }
+
+    // ── remote-hosted projects (assistant-remote-relay.ts polls the host) ──
+
+    /** The host's poll answer for a remote-hosted project (call after `onRemoteCommitted` for the same poll). */
+    observeRemote(meshId: string, snap: RemoteProjectSnapshot): void {
+        this.remote.set(meshId, snap);
+        if (snap.open) this.markWorking(meshId, this.clock.now());
+        else this.working.delete(meshId);
+        this.onCoordinatorAttention(meshId, `remote:${meshId}`, snap.modal ? true : null);
+    }
+
+    /**
+     * A coordinator turn the HOST's ledger committed. Same batching, dedupe and
+     * delivery as a local commit; the commit time is this daemon's receive time
+     * (the host clock may be skewed), and the body is the tail the host read.
+     */
+    onRemoteCommitted(meshId: string, c: { attemptId: string; coordinatorSessionId: string; outcome: TurnOutcome; body: string | null }): void {
+        if (!c.attemptId.startsWith('plain:')) return;
+        this.remoteBodies.set(c.attemptId, c.body);
+        this.commit(meshId, { attemptId: c.attemptId, sessionId: c.coordinatorSessionId, at: this.clock.now(), outcome: c.outcome });
+    }
+
+    /** The host of an open remote thread stopped answering: one `unreachable` relay card (never a silent drop). */
+    remoteUnreachable(meshId: string, hostLabel: string, reason: string): void {
+        if (!this.ports.hasAssistant() || !this.ports.store.isThreadOpen(meshId)) return;
+        const slug = this.ports.projectSlug(meshId);
+        if (slug !== null) this.pushLine('relay', buildUnreachableRelay(slug, hostLabel, reason), meshId);
+    }
+
+    private workOf(meshId: string): MeshWorkCounts | null {
+        const r = this.remote.get(meshId);
+        return r ? r.work : this.ports.meshWork(meshId);
+    }
+
+    private markWorking(meshId: string, at: number): void {
+        if (!this.working.has(meshId)) this.working.set(meshId, at);
+        const b = this.batches.get(meshId);
+        if (b && b.quietTimer !== null) {
+            this.clock.clearTimeout(b.quietTimer); // chained turn: wait for its commit (bounded by maxTimer)
+            b.quietTimer = null;
+        }
+    }
+
+    private commit(meshId: string, e: { attemptId: string; sessionId: string; at: number; outcome: TurnOutcome }): void {
         this.working.delete(meshId);
         if (!this.ports.hasAssistant() || !this.ports.store.isThreadOpen(meshId)) return;
-        const outcome = e.outcome ?? 'completed';
+        const outcome = e.outcome;
         const fresh = this.ports.store.recordCommitted({
             attemptId: e.attemptId, meshId, coordinatorSessionId: e.sessionId, committedAt: e.at, kind: 'relay', outcome,
         });
@@ -496,7 +556,7 @@ export class AssistantRelay {
         const b = this.batches.get(meshId);
         if (!b) return;
         this.dropBatch(meshId);
-        const w = this.ports.meshWork(meshId);
+        const w = this.workOf(meshId);
         const idle = !!w && w.activeMissions === 0 && w.pending + w.assigned === 0;
         if (idle) this.idleSince.set(meshId, this.clock.now());
         else this.idleSince.delete(meshId);
@@ -602,6 +662,7 @@ export class AssistantRelay {
         if (sid) for (const p of parts) if (p.source === 'review') this.ports.onReviewDelivered?.(sid, p.messageId, at);
         const relayItems = taken.filter((i): i is Item & { kind: 'relay' } => i.kind === 'relay');
         this.ports.store.markDelivered(relayItems.flatMap((i) => i.attemptIds), at);
+        for (const id of relayItems.flatMap((i) => i.attemptIds)) this.remoteBodies.delete(id);
         const meshes = [...new Set(relayItems.map((i) => i.meshId))];
         for (const m of meshes) {
             this.lastRelayAt.set(m, at);
@@ -617,20 +678,26 @@ export class AssistantRelay {
     }
 
     private async renderRelay(item: Item & { kind: 'relay' }): Promise<Part> {
+        const lastAttempt = item.attemptIds[item.attemptIds.length - 1]!;
+        const remote = this.remote.get(item.meshId);
         let body: string | null = null;
-        try {
-            body = await this.ports.readCoordinatorTail(item.coordinatorSessionId);
-        } catch {
-            body = null;
+        if (this.remoteBodies.has(lastAttempt)) {
+            body = this.remoteBodies.get(lastAttempt) ?? null;
+        } else if (!remote) {
+            try {
+                body = await this.ports.readCoordinatorTail(item.coordinatorSessionId);
+            } catch {
+                body = null;
+            }
         }
         const text = buildRelayEnvelope({
             slug: this.ports.projectSlug(item.meshId) ?? item.meshId,
             outcome: item.outcome,
             body,
-            statusLine: this.ports.meshStatusLine?.(item.meshId) ?? null,
+            statusLine: remote ? remote.statusLine : this.ports.meshStatusLine?.(item.meshId) ?? null,
             earlierTurns: item.attemptIds.length - 1,
             idle: item.idle,
         });
-        return { text, source: 'relay', messageId: relayMessageId(item.meshId, item.attemptIds[item.attemptIds.length - 1]!), meshId: item.meshId };
+        return { text, source: 'relay', messageId: relayMessageId(item.meshId, lastAttempt), meshId: item.meshId };
     }
 }

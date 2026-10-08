@@ -287,6 +287,17 @@ export class TurnStore {
     }
 
     /**
+     * Read-only: a session's newest TERMINAL plain attempts, newest first. The
+     * assistant's remote relay (assistant/assistant-remote-host.ts) reads its
+     * coordinator's committed turns with it — the ledger already decided them.
+     */
+    listTerminalPlainAttemptsForSession(sessionId: string, limit = 5): TurnAttempt[] {
+        const rows = this.stmt(`SELECT * FROM turn_attempts WHERE session_id = ? AND scope = 'plain' AND terminal_outcome IS NOT NULL
+            ORDER BY terminal_at DESC, updated_at DESC LIMIT ?`).all(sessionId, Math.max(1, Math.floor(limit))) as AttemptRow[];
+        return rows.map(attemptFromRow);
+    }
+
+    /**
      * The MESH attempt a session was working on at `atMs`: the latest one accepted at or
      * before that instant. Worker-report delivery (durable outbox) uses it to attribute a
      * report written BEFORE the session was handed its current task to the attempt that was

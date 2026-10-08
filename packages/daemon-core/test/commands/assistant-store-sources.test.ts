@@ -50,6 +50,12 @@ describe('assistant verbs — sources', () => {
         expect(specs.filter((s) => s.meshSender).map((s) => s.name)).toEqual([]);
     });
 
+    it('the host-side relay verb is the one mesh entry: mesh only, roster sender class (owner decision 2026-10-08)', () => {
+        const spec = registry.get('assistant_remote_project');
+        expect(spec?.sources).toEqual(['mesh']);
+        expect(spec?.meshSender).toBe('roster');
+    });
+
     it('no owner verb accepts ipc', () => {
         for (const verb of ASSISTANT_OWNER_VERBS) {
             expect(registry.get(verb)?.sources ?? ['<all>']).not.toContain('ipc');

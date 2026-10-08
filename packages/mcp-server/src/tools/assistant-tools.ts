@@ -66,9 +66,10 @@ interface AssistantToolSchema {
 const PROJECTS_TOOL: AssistantToolSchema = {
   name: 'projects',
   description:
-    'List every project, one line each: slug, repo, whether this machine hosts it or another one does '
-    + '(a hostedElsewhere project is used on its hosting machine — open it there), coordinator state (none / idle / working), whether a thread is '
-    + 'open, queue counts, active missions and pending approvals — plus a machines[] summary (label, OS, online, build).',
+    'List every project, one line each: slug, repo, which machine hosts it (this machine, or another one — '
+    + 'its requests and replies are relayed; `reachability: unreachable` with a reason when that machine cannot be reached now), '
+    + 'whether a thread is open, and for projects this machine hosts the coordinator state (none / idle / working), queue counts, '
+    + 'active missions and pending approvals (project_status asks the other machine for those) — plus a machines[] summary (label, OS, online, build).',
   inputSchema: { type: 'object', properties: {}, required: [] },
 };
 
