@@ -1,3 +1,5 @@
+import { ADHDEV_DAEMON_AUTH_FILE_ENV, ADHDEV_DAEMON_AUTH_FILE_FLAG } from '@adhdev/daemon-core';
+
 import { buildMcpHelpText } from './help.js';
 
 /**
@@ -24,6 +26,7 @@ export function parseArgs(argv: string[], env: NodeJS.ProcessEnv = process.env):
   mode: 'local' | 'ipc';
   port?: number;
   password?: string;
+  daemonAuthFile?: string;
   meshId?: string;
   worker?: boolean;
   assistant?: boolean;
@@ -31,6 +34,9 @@ export function parseArgs(argv: string[], env: NodeJS.ProcessEnv = process.env):
   const args = argv.slice(2);
   let port: number | undefined;
   let password: string | undefined;
+  // Coordinator / assistant scope credential FILE of a token- or
+  // password-gated standalone daemon (daemon-core standalone-mcp-auth.ts).
+  let daemonAuthFile: string | undefined;
   let meshId: string | undefined;
   let explicitMode: 'local' | 'ipc' | undefined;
   // WORKER-MCP: `--worker` selects the minimal delegated-worker toolset.
@@ -58,6 +64,10 @@ export function parseArgs(argv: string[], env: NodeJS.ProcessEnv = process.env):
       port = Number(arg.slice('--port='.length));
     } else if (arg === '--password' && args[i + 1]) {
       password = args[++i];
+    } else if (arg === ADHDEV_DAEMON_AUTH_FILE_FLAG && args[i + 1]) {
+      daemonAuthFile = args[++i];
+    } else if (arg?.startsWith(`${ADHDEV_DAEMON_AUTH_FILE_FLAG}=`)) {
+      daemonAuthFile = arg.slice(ADHDEV_DAEMON_AUTH_FILE_FLAG.length + 1);
     } else if ((arg === '--repo-mesh' || arg === '--mesh') && args[i + 1]) {
       meshId = args[++i];
       meshFromFlag = true;
@@ -76,6 +86,7 @@ export function parseArgs(argv: string[], env: NodeJS.ProcessEnv = process.env):
 
   // Also accept env vars
   if (!password && env.ADHDEV_PASSWORD) password = env.ADHDEV_PASSWORD;
+  if (!daemonAuthFile && env[ADHDEV_DAEMON_AUTH_FILE_ENV]?.trim()) daemonAuthFile = env[ADHDEV_DAEMON_AUTH_FILE_ENV]!.trim();
   if (!meshId && env.ADHDEV_MESH_ID) meshId = env.ADHDEV_MESH_ID;
   if (!explicitMode && env.ADHDEV_MCP_TRANSPORT) {
     const value = env.ADHDEV_MCP_TRANSPORT.trim();
@@ -89,6 +100,8 @@ export function parseArgs(argv: string[], env: NodeJS.ProcessEnv = process.env):
   // otherwise hand the worker the full 60-tool coordinator surface — which is
   // the exact inheritance this feature removes. Dropping meshId here makes that
   // unreachable rather than merely unlikely.
+  // A worker never takes the coordinator-scope credential: it authenticates
+  // with its own session bind, so an auth file it inherited is dropped.
   if (worker) return { mode, port, password, worker: true };
   // --worker > --assistant (checked above): a worker launched with both still
   // gets only the worker toolset. --assistant with an explicit --repo-mesh is
@@ -100,9 +113,9 @@ export function parseArgs(argv: string[], env: NodeJS.ProcessEnv = process.env):
     if (meshFromFlag) {
       throw new McpCliArgsError('--assistant cannot be combined with --repo-mesh: the assistant toolset never includes mesh coordinator tools.');
     }
-    return { mode, port, password, assistant: true };
+    return { mode, port, password, ...(daemonAuthFile ? { daemonAuthFile } : {}), assistant: true };
   }
-  return { mode, port, password, meshId };
+  return { mode, port, password, ...(daemonAuthFile ? { daemonAuthFile } : {}), meshId };
 }
 
 function printHelp(): void {

@@ -22262,7 +22262,7 @@ function renamed(from, to) {
     throw new Error("Function yaml." + from + " is removed in js-yaml 4. Use yaml." + to + " instead, which is now safe by default.");
   };
 }
-var isNothing_1, isObject_1, toArray_1, repeat_1, isNegativeZero_1, extend_1, common, exception, snippet, TYPE_CONSTRUCTOR_OPTIONS, YAML_NODE_KINDS, type, schema, str, seq, map, failsafe, _null, bool2, int, YAML_FLOAT_PATTERN, SCIENTIFIC_WITHOUT_DOT, float, json, core, YAML_DATE_REGEXP, YAML_TIMESTAMP_REGEXP, timestamp, merge, BASE64_MAP, binary, _hasOwnProperty$3, _toString$2, omap, _toString$1, pairs, _hasOwnProperty$2, set, _default, _hasOwnProperty$1, CONTEXT_FLOW_IN, CONTEXT_FLOW_OUT, CONTEXT_BLOCK_IN, CONTEXT_BLOCK_OUT, CHOMPING_CLIP, CHOMPING_STRIP, CHOMPING_KEEP, PATTERN_NON_PRINTABLE, PATTERN_NON_ASCII_LINE_BREAKS, PATTERN_FLOW_INDICATORS, PATTERN_TAG_HANDLE, PATTERN_TAG_URI, simpleEscapeCheck, simpleEscapeMap, i, directiveHandlers, loadAll_1, load_1, loader, _toString, _hasOwnProperty, CHAR_BOM, CHAR_TAB, CHAR_LINE_FEED, CHAR_CARRIAGE_RETURN, CHAR_SPACE, CHAR_EXCLAMATION, CHAR_DOUBLE_QUOTE, CHAR_SHARP, CHAR_PERCENT, CHAR_AMPERSAND, CHAR_SINGLE_QUOTE, CHAR_ASTERISK, CHAR_COMMA, CHAR_MINUS, CHAR_COLON, CHAR_EQUALS, CHAR_GREATER_THAN, CHAR_QUESTION, CHAR_COMMERCIAL_AT, CHAR_LEFT_SQUARE_BRACKET, CHAR_RIGHT_SQUARE_BRACKET, CHAR_GRAVE_ACCENT, CHAR_LEFT_CURLY_BRACKET, CHAR_VERTICAL_LINE, CHAR_RIGHT_CURLY_BRACKET, ESCAPE_SEQUENCES, DEPRECATED_BOOLEANS_SYNTAX, DEPRECATED_BASE60_SYNTAX, QUOTING_TYPE_SINGLE, QUOTING_TYPE_DOUBLE, STYLE_PLAIN, STYLE_SINGLE, STYLE_LITERAL, STYLE_FOLDED, STYLE_DOUBLE, dump_1, dumper, Type, Schema, FAILSAFE_SCHEMA, JSON_SCHEMA, CORE_SCHEMA, DEFAULT_SCHEMA, load, loadAll, dump, YAMLException, types, safeLoad, safeLoadAll, safeDump, jsYaml;
+var isNothing_1, isObject_1, toArray_1, repeat_1, isNegativeZero_1, extend_1, common, exception, snippet, TYPE_CONSTRUCTOR_OPTIONS, YAML_NODE_KINDS, type, schema, str, seq, map, failsafe, _null, bool, int, YAML_FLOAT_PATTERN, SCIENTIFIC_WITHOUT_DOT, float, json, core, YAML_DATE_REGEXP, YAML_TIMESTAMP_REGEXP, timestamp, merge, BASE64_MAP, binary, _hasOwnProperty$3, _toString$2, omap, _toString$1, pairs, _hasOwnProperty$2, set, _default, _hasOwnProperty$1, CONTEXT_FLOW_IN, CONTEXT_FLOW_OUT, CONTEXT_BLOCK_IN, CONTEXT_BLOCK_OUT, CHOMPING_CLIP, CHOMPING_STRIP, CHOMPING_KEEP, PATTERN_NON_PRINTABLE, PATTERN_NON_ASCII_LINE_BREAKS, PATTERN_FLOW_INDICATORS, PATTERN_TAG_HANDLE, PATTERN_TAG_URI, simpleEscapeCheck, simpleEscapeMap, i, directiveHandlers, loadAll_1, load_1, loader, _toString, _hasOwnProperty, CHAR_BOM, CHAR_TAB, CHAR_LINE_FEED, CHAR_CARRIAGE_RETURN, CHAR_SPACE, CHAR_EXCLAMATION, CHAR_DOUBLE_QUOTE, CHAR_SHARP, CHAR_PERCENT, CHAR_AMPERSAND, CHAR_SINGLE_QUOTE, CHAR_ASTERISK, CHAR_COMMA, CHAR_MINUS, CHAR_COLON, CHAR_EQUALS, CHAR_GREATER_THAN, CHAR_QUESTION, CHAR_COMMERCIAL_AT, CHAR_LEFT_SQUARE_BRACKET, CHAR_RIGHT_SQUARE_BRACKET, CHAR_GRAVE_ACCENT, CHAR_LEFT_CURLY_BRACKET, CHAR_VERTICAL_LINE, CHAR_RIGHT_CURLY_BRACKET, ESCAPE_SEQUENCES, DEPRECATED_BOOLEANS_SYNTAX, DEPRECATED_BASE60_SYNTAX, QUOTING_TYPE_SINGLE, QUOTING_TYPE_DOUBLE, STYLE_PLAIN, STYLE_SINGLE, STYLE_LITERAL, STYLE_FOLDED, STYLE_DOUBLE, dump_1, dumper, Type, Schema, FAILSAFE_SCHEMA, JSON_SCHEMA, CORE_SCHEMA, DEFAULT_SCHEMA, load, loadAll, dump, YAMLException, types, safeLoad, safeLoadAll, safeDump, jsYaml;
 var init_js_yaml = __esm({
   "../../node_modules/js-yaml/dist/js-yaml.mjs"() {
     "use strict";
@@ -22392,7 +22392,7 @@ var init_js_yaml = __esm({
       },
       defaultStyle: "lowercase"
     });
-    bool2 = new type("tag:yaml.org,2002:bool", {
+    bool = new type("tag:yaml.org,2002:bool", {
       kind: "scalar",
       resolve: resolveYamlBoolean,
       construct: constructYamlBoolean,
@@ -22454,7 +22454,7 @@ var init_js_yaml = __esm({
     json = failsafe.extend({
       implicit: [
         _null,
-        bool2,
+        bool,
         int,
         float
       ]
@@ -22680,7 +22680,7 @@ var init_js_yaml = __esm({
       pairs,
       set,
       timestamp,
-      bool: bool2,
+      bool,
       int,
       merge,
       omap,
@@ -27978,7 +27978,7 @@ ${renderWorkerProtocolFooter2(input)}`;
             cwd: normalizedWorkspace
           });
         }
-        await (0, import_promises.access)(normalizedWorkspace, import_node_fs.constants.R_OK);
+        await (0, import_promises.access)(normalizedWorkspace, import_node_fs2.constants.R_OK);
       } catch (error) {
         if (error instanceof GitCommandError) throw error;
         throw new GitCommandError("invalid_args", "Workspace must be an existing directory", {
@@ -28076,7 +28076,7 @@ ${renderWorkerProtocolFooter2(input)}`;
       });
     }
     var import_node_child_process;
-    var import_node_fs;
+    var import_node_fs2;
     var import_promises;
     var path2;
     var import_node_util;
@@ -28089,7 +28089,7 @@ ${renderWorkerProtocolFooter2(input)}`;
       "src/git/git-executor.ts"() {
         "use strict";
         import_node_child_process = require("child_process");
-        import_node_fs = require("fs");
+        import_node_fs2 = require("fs");
         import_promises = require("fs/promises");
         path2 = __toESM2(require("path"));
         import_node_util = require("util");
@@ -34497,7 +34497,7 @@ child.on('exit', () => process.exit(0));
       const { repoRoot, branch, baseBranch, meshName } = opts;
       const remote = (opts.remote || "origin").trim() || "origin";
       const targetDir = opts.targetDir || resolveWorktreePath(repoRoot, meshName, branch, opts.worktreeBaseDir);
-      if ((0, import_node_fs2.existsSync)(targetDir)) {
+      if ((0, import_node_fs22.existsSync)(targetDir)) {
         throw new Error(`Worktree target directory already exists: ${targetDir}`);
       }
       await (0, import_promises4.mkdir)(path16.dirname(targetDir), { recursive: true });
@@ -34523,7 +34523,7 @@ child.on('exit', () => process.exit(0));
       } catch (error) {
         const stderr = typeof error.stderr === "string" ? error.stderr : "";
         if (/already exists/i.test(stderr)) {
-          if ((0, import_node_fs2.existsSync)(targetDir)) {
+          if ((0, import_node_fs22.existsSync)(targetDir)) {
             throw new Error(`Worktree target directory was created concurrently: ${targetDir}`);
           }
           throw new Error(`Branch '${branch}' already exists or is checked out in another worktree`);
@@ -34538,7 +34538,7 @@ child.on('exit', () => process.exit(0));
       };
     }
     async function removeWorktree(repoRoot, worktreePath, opts = {}) {
-      if (!(0, import_node_fs2.existsSync)(worktreePath)) {
+      if (!(0, import_node_fs22.existsSync)(worktreePath)) {
         await pruneWorktrees(repoRoot);
         return { success: true, removedPath: worktreePath };
       }
@@ -34701,7 +34701,7 @@ ${error.message || ""}`;
     }
     var path16;
     var import_promises4;
-    var import_node_fs2;
+    var import_node_fs22;
     var import_node_child_process3;
     var import_node_util2;
     var execFileAsync2;
@@ -34714,7 +34714,7 @@ ${error.message || ""}`;
         "use strict";
         path16 = __toESM2(require("path"));
         import_promises4 = require("fs/promises");
-        import_node_fs2 = require("fs");
+        import_node_fs22 = require("fs");
         import_node_child_process3 = require("child_process");
         import_node_util2 = require("util");
         init_config_dir();
@@ -62149,6 +62149,37 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
         GIT_TIMEOUT_MS2 = 15e3;
       }
     });
+    function isWorkerMcpDaemonVerb(type2) {
+      return typeof type2 === "string" && WORKER_VERB_SET.has(type2);
+    }
+    var ADHDEV_INTERNAL_AUTH_HEADER2;
+    var ADHDEV_WORKER_CREDENTIAL_HEADER2;
+    var ADHDEV_DAEMON_AUTH_FILE_ENV2;
+    var ADHDEV_DAEMON_AUTH_FILE_FLAG2;
+    var ADHDEV_COORDINATOR_MCP_AUTH_FILE_ENV;
+    var WORKER_MCP_DAEMON_VERBS;
+    var WORKER_VERB_SET;
+    var init_standalone_mcp_auth = __esm2({
+      "src/standalone-mcp-auth.ts"() {
+        "use strict";
+        ADHDEV_INTERNAL_AUTH_HEADER2 = "x-adhdev-internal-auth";
+        ADHDEV_WORKER_CREDENTIAL_HEADER2 = "x-adhdev-worker-credential";
+        ADHDEV_DAEMON_AUTH_FILE_ENV2 = "ADHDEV_DAEMON_AUTH_FILE";
+        ADHDEV_DAEMON_AUTH_FILE_FLAG2 = "--daemon-auth-file";
+        ADHDEV_COORDINATOR_MCP_AUTH_FILE_ENV = "ADHDEV_COORDINATOR_MCP_AUTH_FILE";
+        WORKER_MCP_DAEMON_VERBS = Object.freeze([
+          "worker_report_completion",
+          "worker_progress_update",
+          "worker_peer_context_pull",
+          "worker_drain_mailbox",
+          "git_status",
+          "git_diff_summary",
+          "git_diff_file",
+          "git_log"
+        ]);
+        WORKER_VERB_SET = new Set(WORKER_MCP_DAEMON_VERBS);
+      }
+    });
     var mesh_coordinator_exports = {};
     __export2(mesh_coordinator_exports, {
       COORDINATOR_INLINE_PROMPT_LIMITS: () => COORDINATOR_INLINE_PROMPT_LIMITS,
@@ -62293,6 +62324,7 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
         const args2 = [directEntryPath, "--mode", transport2, ...toolsetArgs(options.toolset)];
         const port2 = resolveMcpPort(options.adhdevMcpPort);
         if (port2 !== void 0) args2.push("--port", String(port2));
+        args2.push(...resolveCoordinatorMcpAuthFileArgs(transport2));
         return {
           command: resolveNodeExecutable(options.nodeExecutable),
           args: args2
@@ -62308,6 +62340,11 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
         command,
         args
       };
+    }
+    function resolveCoordinatorMcpAuthFileArgs(transport) {
+      if (transport !== "local") return [];
+      const authFile = process.env[ADHDEV_COORDINATOR_MCP_AUTH_FILE_ENV]?.trim();
+      return authFile ? [ADHDEV_DAEMON_AUTH_FILE_FLAG2, authFile] : [];
     }
     function resolveAdhdevCommand(explicitCommand) {
       return explicitCommand?.trim() || process.env.ADHDEV_COORDINATOR_MCP_COMMAND?.trim() || DEFAULT_ADHDEV_MCP_COMMAND;
@@ -62652,6 +62689,7 @@ ${rendered}`, "utf-8");
         import_node_path3 = require("path");
         init_logger();
         init_track_identity();
+        init_standalone_mcp_auth();
         init_embedded_path_health();
         DEFAULT_SERVER_NAME = "adhdev-mesh";
         DEFAULT_ADHDEV_MCP_COMMAND = IDENTITY2.binaryName;
@@ -63497,10 +63535,10 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
         handoffNoteRecorded = true;
       }
       if (!duplicate) {
-        const sink = lateNoticeSinkOverride === void 0 ? queueWorkerLateReportNotice : lateNoticeSinkOverride;
-        if (sink) {
+        const sink2 = lateNoticeSinkOverride === void 0 ? queueWorkerLateReportNotice : lateNoticeSinkOverride;
+        if (sink2) {
           try {
-            sink({
+            sink2({
               meshId: identity.meshId,
               taskId: identity.taskId,
               attemptId: identity.attemptId,
@@ -63701,8 +63739,8 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       if (attempt.terminal && attempt.terminal.outcome !== terminalStatus) return "already_terminal";
       return "ok";
     }
-    function __setHandoffNoteSinkForTests(sink) {
-      handoffSinkOverride = sink;
+    function __setHandoffNoteSinkForTests(sink2) {
+      handoffSinkOverride = sink2;
     }
     function currentHandoffSink() {
       return handoffSinkOverride === void 0 ? storeHandoffNote : handoffSinkOverride;
@@ -70239,6 +70277,10 @@ ${upstream}`;
       const raw = args?.origin;
       return isOutboundMessageOrigin(raw) ? raw : fallback;
     }
+    function readCommandSource(args) {
+      const raw = args?.[COMMAND_SOURCE_ARG];
+      return typeof raw === "string" && raw ? raw : void 0;
+    }
     function resolveDryRunVeto(args) {
       const a = args;
       const dryRun = a?.dryRun;
@@ -70256,10 +70298,14 @@ ${upstream}`;
     function mintLegacyMessageId() {
       return `legacy:${mintMessageId2()}`;
     }
+    var COMMAND_SOURCE_ARG;
+    var COMMAND_SOURCE_STAMPED;
     var init_command_args = __esm2({
       "src/commands/command-args.ts"() {
         "use strict";
         init_dist();
+        COMMAND_SOURCE_ARG = "_commandSource";
+        COMMAND_SOURCE_STAMPED = /* @__PURE__ */ new Set(["send_chat"]);
       }
     });
     function normalizeNodeIdKey(nodeId) {
@@ -75404,20 +75450,20 @@ ${cleanBody}`;
       }
       return `provider_effect:toast:${effect.toast?.message || ""}`;
     }
-    function applyProviderEffects(data, phase, sink) {
+    function applyProviderEffects(data, phase, sink2) {
       for (const effect of normalizeProviderEffects(data)) {
         const effectWhen = effect.when || "immediate";
         if (effectWhen === "turn_completed" && phase !== "turn_completed") continue;
         if (effectWhen === "immediate" && phase === "turn_completed") continue;
         const effectKey = getEffectDedupKey(effect);
-        if (sink.appliedEffectKeys.has(effectKey)) continue;
-        sink.appliedEffectKeys.add(effectKey);
+        if (sink2.appliedEffectKeys.has(effectKey)) continue;
+        sink2.appliedEffectKeys.add(effectKey);
         if (effect.persist !== false) {
           const persistedMessage = buildPersistedProviderEffectMessage(effect);
-          if (persistedMessage) sink.appendRuntimeMessage(persistedMessage, effectKey);
+          if (persistedMessage) sink2.appendRuntimeMessage(persistedMessage, effectKey);
         }
         if (effect.type === "message" && effect.message) {
-          sink.pushEvent({
+          sink2.pushEvent({
             event: "provider:message",
             timestamp: Date.now(),
             content: typeof effect.message.content === "string" ? effect.message.content : JSON.stringify(effect.message.content),
@@ -75426,7 +75472,7 @@ ${cleanBody}`;
             senderName: effect.message.senderName
           });
         } else if (effect.type === "toast" && effect.toast) {
-          sink.pushEvent({
+          sink2.pushEvent({
             event: "provider:toast",
             effectId: effect.id || effectKey,
             timestamp: Date.now(),
@@ -75434,7 +75480,7 @@ ${cleanBody}`;
             level: effect.toast.level || "info"
           });
         } else if (effect.type === "notification" && effect.notification) {
-          sink.pushEvent({
+          sink2.pushEvent({
             event: "provider:notification",
             effectId: effect.id || effectKey,
             timestamp: Date.now(),
@@ -79362,6 +79408,28 @@ ${cleanBody}`;
         globalStore = createDebugTraceStore({ enabled: false, capacity: getDebugRuntimeConfig().traceBufferSize });
       }
     });
+    function isHumanCommandSource(source) {
+      return typeof source === "string" && ASSISTANT_HUMAN_COMMAND_SOURCES.includes(source);
+    }
+    function setAssistantHumanInputSink(next) {
+      sink = next;
+    }
+    function reportSessionChatInput(report) {
+      if (!sink || !isHumanCommandSource(report.source)) return;
+      try {
+        sink(report);
+      } catch {
+      }
+    }
+    var ASSISTANT_HUMAN_COMMAND_SOURCES;
+    var sink;
+    var init_assistant_human_input = __esm2({
+      "src/assistant/assistant-human-input.ts"() {
+        "use strict";
+        ASSISTANT_HUMAN_COMMAND_SOURCES = ["ws", "p2p", "standalone"];
+        sink = null;
+      }
+    });
     function isV4Spec(raw) {
       return !!raw && typeof raw === "object" && raw.$schema === "adhdev:cli/spec@4";
     }
@@ -80814,8 +80882,8 @@ ${detail.join("\n")}` : stripped;
     function buildWorkerProgressNotice(opts) {
       return `[System] ${opts.nodeLabel} progress on task ${opts.taskId}: ${opts.note.trim()} \u2014 this is an informational mid-task update, NOT a completion. The task is still running; do not dispatch it elsewhere and do not poll. Wait for its completion event.`;
     }
-    function __setWorkerProgressNoticeSinkForTests(sink) {
-      progressNoticeSinkOverride = sink;
+    function __setWorkerProgressNoticeSinkForTests(sink2) {
+      progressNoticeSinkOverride = sink2;
     }
     function notifyCoordinatorOfProgress(identity, note, nowMs2) {
       const key2 = summaryKey(identity.meshId, identity.taskId);
@@ -80826,10 +80894,10 @@ ${detail.join("\n")}` : stripped;
       })) {
         return false;
       }
-      const sink = progressNoticeSinkOverride === void 0 ? queueWorkerProgressNotice : progressNoticeSinkOverride;
-      if (!sink) return false;
+      const sink2 = progressNoticeSinkOverride === void 0 ? queueWorkerProgressNotice : progressNoticeSinkOverride;
+      if (!sink2) return false;
       try {
-        sink({
+        sink2({
           meshId: identity.meshId,
           taskId: identity.taskId,
           ...identity.nodeId ? { nodeId: identity.nodeId } : {},
@@ -85828,6 +85896,58 @@ ${body}`;
         current = null;
       }
     });
+    function evaluateReviewTrigger(input, rules = REVIEW_TRIGGER_RULES) {
+      if (input.reviewTurnSetting === false) return { due: false, reason: "disabled" };
+      if (input.mcpOnly) return { due: false, reason: "mcp_only" };
+      if (input.idleSince === null || !Number.isFinite(input.idleSince)) return { due: false, reason: "not_idle" };
+      if (input.now - input.idleSince < rules.minIdleMs) return { due: false, reason: "idle_too_short" };
+      if (input.modalOpen) return { due: false, reason: "modal_open" };
+      if (input.humanInputsSinceLastReview < rules.minHumanInputs) return { due: false, reason: "too_few_inputs" };
+      const reviews = input.reviewAts.filter((t) => Number.isFinite(t));
+      const last = reviews.length ? Math.max(...reviews) : null;
+      if (last !== null && input.now - last < rules.minSinceLastReviewMs) return { due: false, reason: "too_soon" };
+      const inLastDay = reviews.filter((t) => input.now - t < DAY_MS2).length;
+      if (inLastDay >= rules.maxPerDay) return { due: false, reason: "daily_cap" };
+      const q = input.quotaRemainingPct;
+      if (typeof q !== "number" || !Number.isFinite(q) || q < rules.minQuotaRemainingPct) return { due: false, reason: "low_quota" };
+      return { due: true };
+    }
+    function buildReviewInput(now) {
+      return { text: REVIEW_INPUT_TEXT, messageId: `${REVIEW_MESSAGE_ID_PREFIX}${now}`, origin: "assistant", policyMode: "queue" };
+    }
+    function reviewTurnVerbDecision(verb, reviewTurnOpen) {
+      if (!reviewTurnOpen || REVIEW_TURN_VERB_SET.has(verb)) return { allowed: true };
+      return { allowed: false, code: REVIEW_TURN_TOOL_DENIED };
+    }
+    var REVIEW_TRIGGER_RULES;
+    var DAY_MS2;
+    var REVIEW_INPUT_TEXT;
+    var REVIEW_MESSAGE_ID_PREFIX;
+    var REVIEW_TURN_TOOL_DENIED;
+    var REVIEW_TURN_VERB_SET;
+    var init_assistant_review = __esm2({
+      "src/assistant/assistant-review.ts"() {
+        "use strict";
+        init_dist();
+        REVIEW_TRIGGER_RULES = {
+          /** Assistant idle at least this long. */
+          minIdleMs: 10 * 60 * 1e3,
+          /** Human inputs since the last review. */
+          minHumanInputs: 6,
+          /** Since the last review. */
+          minSinceLastReviewMs: 2 * 60 * 60 * 1e3,
+          /** Reviews per rolling 24 h. */
+          maxPerDay: 4,
+          /** Skip below this remaining % of the assistant CLI's tightest quota window. */
+          minQuotaRemainingPct: 20
+        };
+        DAY_MS2 = 24 * 60 * 60 * 1e3;
+        REVIEW_INPUT_TEXT = '[ADHDev review] If the conversation since the last review produced rules, environment facts, user preferences or recurring procedures that the next session will need, save them with memory / skill_manage / project_note. Merge or fix entries that already exist. If there is nothing to save, reply with the single word "nothing". Do not use any other tool.';
+        REVIEW_MESSAGE_ID_PREFIX = "review:";
+        REVIEW_TURN_TOOL_DENIED = "review_turn_tool_denied";
+        REVIEW_TURN_VERB_SET = new Set(ASSISTANT_REVIEW_TURN_VERBS2);
+      }
+    });
     function projectSlugBase(repoIdentity) {
       const parts = String(repoIdentity ?? "").replace(/\.git$/i, "").split(/[/:]+/).filter(Boolean);
       return (parts[parts.length - 1] ?? "").toLowerCase();
@@ -86659,6 +86779,7 @@ ${body}`;
     var assistant_registry_exports = {};
     __export2(assistant_registry_exports, {
       ASSISTANT_REGISTRY_FILE: () => ASSISTANT_REGISTRY_FILE,
+      ASSISTANT_REVIEW_HISTORY_MS: () => ASSISTANT_REVIEW_HISTORY_MS,
       AssistantRegistry: () => AssistantRegistry,
       BUSY_INPUT_MODES: () => BUSY_INPUT_MODES,
       DEFAULT_BUSY_INPUT_MODE: () => DEFAULT_BUSY_INPUT_MODE,
@@ -86694,6 +86815,10 @@ ${body}`;
       if (!r || r.state !== "idle" && r.state !== "working" || !isNum(r.at) || !isStr(r.sessionId)) return null;
       return { state: r.state, at: r.at, sessionId: r.sessionId };
     }
+    function normalizeReviewAts(raw) {
+      if (!Array.isArray(raw)) return [];
+      return raw.filter(isNum).sort((a, b) => a - b).slice(-REVIEW_HISTORY_MAX);
+    }
     function normalizeBudget(raw) {
       const r = raw;
       if (!r || typeof r !== "object") return void 0;
@@ -86708,6 +86833,7 @@ ${body}`;
       if (!isStr(r.cliType) || !isStr(r.workspace) || !isNum(r.createdAt)) return null;
       const mode = BUSY_INPUT_MODES.includes(r.busyInputMode) ? r.busyInputMode : DEFAULT_BUSY_INPUT_MODE;
       const budget = normalizeBudget(r.memoryBudget);
+      const reviewAts = normalizeReviewAts(r.reviewAts);
       return {
         sessionId: isStr(r.sessionId) ? r.sessionId : null,
         cliType: r.cliType,
@@ -86719,7 +86845,8 @@ ${body}`;
         busyInputMode: mode,
         reviewTurn: r.reviewTurn !== false,
         lastTurnState: normalizeTurnState(r.lastTurnState),
-        ...budget ? { memoryBudget: budget } : {}
+        ...budget ? { memoryBudget: budget } : {},
+        ...reviewAts.length ? { reviewAts } : {}
       };
     }
     function matchesAssistantRestore(entry, record2) {
@@ -86758,6 +86885,8 @@ ${body}`;
     var DEFAULT_BUSY_INPUT_MODE;
     var isStr;
     var isNum;
+    var ASSISTANT_REVIEW_HISTORY_MS;
+    var REVIEW_HISTORY_MAX;
     var AssistantRegistry;
     var sharedRegistry;
     var init_assistant_registry = __esm2({
@@ -86773,6 +86902,8 @@ ${body}`;
         DEFAULT_BUSY_INPUT_MODE = "queue";
         isStr = (v) => typeof v === "string" && v.length > 0;
         isNum = (v) => typeof v === "number" && Number.isFinite(v);
+        ASSISTANT_REVIEW_HISTORY_MS = 24 * 60 * 60 * 1e3;
+        REVIEW_HISTORY_MAX = 16;
         AssistantRegistry = class {
           path;
           cache;
@@ -86781,7 +86912,10 @@ ${body}`;
           }
           /** The entry, or null when the assistant was never launched. Corrupt → null (the file is kept aside on the next write). */
           read() {
-            if (this.cache !== void 0) return this.cache ? { ...this.cache, aliases: { ...this.cache.aliases } } : null;
+            if (this.cache !== void 0) {
+              if (!this.cache) return null;
+              return { ...this.cache, aliases: { ...this.cache.aliases }, ...this.cache.reviewAts ? { reviewAts: [...this.cache.reviewAts] } : {} };
+            }
             this.cache = this.load();
             return this.read();
           }
@@ -86852,6 +86986,13 @@ ${body}`;
             const prev = this.read();
             if (!prev || prev.firstRelayAt !== null) return;
             this.write({ ...prev, firstRelayAt: at });
+          }
+          /** An idle review input reached the assistant (§4.10.7). Keeps the last 24 h. */
+          recordReview(at) {
+            const prev = this.read();
+            if (!prev || !isNum(at)) return;
+            const reviewAts = normalizeReviewAts([...prev.reviewAts ?? [], at].filter((t) => at - t < ASSISTANT_REVIEW_HISTORY_MS));
+            this.write({ ...prev, reviewAts });
           }
           /**
            * The session left the registry. `daemon_shutdown` keeps the binding (the
@@ -87563,8 +87704,9 @@ ${body}`;
           lastRelayAt = /* @__PURE__ */ new Map();
           modalOpen = /* @__PURE__ */ new Set();
           queue = [];
+          /** Human inputs parked in the driver FIFO, oldest first (logged when drained). */
           pendingHuman = [];
-          // enqueue times of human inputs parked in the driver FIFO
+          resolvingHuman = null;
           unsubscribe = null;
           flushing = null;
           dirty = false;
@@ -87623,10 +87765,30 @@ ${body}`;
             this.kick();
             return true;
           }
-          /** First-run / review inputs (always queue, held until the assistant is ready). */
+          /**
+           * First-run / review inputs (always queue, held until the assistant is ready).
+           * `forSessionId` pins the input to one assistant session: it is dropped,
+           * never delivered, when a different session (or none) is bound by then.
+           */
           enqueueInput(input) {
             this.queue.push({ kind: "line", ...input });
             this.kick();
+          }
+          /** Whether an input with this message id is still waiting in the queue. */
+          isQueued(messageId) {
+            return this.queue.some((i) => i.kind === "line" && i.messageId === messageId);
+          }
+          /**
+           * Something is already on its way to the assistant: queued items, a human
+           * input parked in the driver FIFO, or a delivery in flight. The idle review
+           * waits for all of these (it must reach an idle assistant on its own).
+           */
+          hasPendingInput() {
+            return this.queue.length > 0 || this.pendingHuman.length > 0 || this.flushing !== null || this.batches.size > 0;
+          }
+          /** Withdraw queued idle review inputs (a human spoke, or the session ended). */
+          dropQueuedReview() {
+            this.queue = this.queue.filter((i) => !(i.kind === "line" && i.source === "review"));
           }
           /**
            * Human input into the assistant under `busyInputMode` (§4.3 table).
@@ -87636,16 +87798,32 @@ ${body}`;
             const sid = this.ports.assistantSessionId();
             if (!sid) return { kind: "refused", reason: "no_target" };
             const outcome = await this.ports.submit(sid, { text, messageId: opts.messageId, policy: busyInputModeToSendPolicy(opts.busyInputMode) });
-            if (outcome.kind === "delivered" || outcome.kind === "queued" && outcome.route === "agent_queue") {
-              this.ports.inputLog.append(sid, "human", { at: this.clock.now(), messageId: opts.messageId });
-            } else if (outcome.kind === "queued") {
-              this.pendingHuman.push(this.clock.now());
-            }
+            this.recordHumanSubmit([sid], opts.messageId, outcome);
             return outcome;
+          }
+          /**
+           * A human chat submit reached the session funnel (`submitHuman`, or the
+           * dashboard `send_chat` via assistant-human-input.ts). Only the bound
+           * assistant session is recorded, once per message, at delivery: written
+           * now (`delivered`, or the agent's own queue) → logged now; parked in the
+           * driver FIFO (`queued`) → logged when the drain writes it. A duplicate or
+           * a refusal wrote nothing and is not logged.
+           */
+          recordHumanSubmit(sessionIds, messageId, outcome) {
+            const sid = this.ports.assistantSessionId();
+            if (!sid || !sessionIds.includes(sid)) return;
+            if (outcome.kind !== "delivered" && outcome.kind !== "queued") return;
+            this.dropQueuedReview();
+            if (outcome.kind === "delivered" || outcome.route === "agent_queue") {
+              this.pendingHuman = this.pendingHuman.filter((p) => p.messageId !== messageId);
+              this.ports.inputLog.append(sid, "human", { at: this.clock.now(), messageId });
+            } else if (!this.pendingHuman.some((p) => p.messageId === messageId)) {
+              this.pendingHuman.push({ at: this.clock.now(), messageId });
+            }
           }
           /** Periodic (≈1 min): progress / stall signals, vanished projects, retention, retries. */
           tick(now = this.clock.now()) {
-            this.pendingHuman = this.pendingHuman.filter((t) => now - t < PENDING_HUMAN_MAX_AGE_MS);
+            this.pendingHuman = this.pendingHuman.filter((p) => now - p.at < PENDING_HUMAN_MAX_AGE_MS);
             for (const t of this.ports.store.openThreads()) {
               const idleAt = this.idleSince.get(t.meshId);
               if (idleAt !== void 0 && now - idleAt >= RELAY_IDLE_CLOSE_GRACE_MS && !this.batches.has(t.meshId)) {
@@ -87679,13 +87857,47 @@ ${body}`;
             this.ports.store.prune(now);
             this.kick();
           }
+          /**
+           * A turn started on the assistant: log, in FIFO order, the parked human
+           * inputs the driver no longer holds (the drain wrote them). Still-parked
+           * ones stay pending; relays keep waiting behind them.
+           */
+          resolveDrainedHuman(sid) {
+            const run2 = async () => {
+              const pending = [...this.pendingHuman];
+              const drained = [];
+              for (const p of pending) {
+                let parked = true;
+                try {
+                  parked = await this.ports.isParked(sid, p.messageId);
+                } catch {
+                  parked = true;
+                }
+                if (!parked) drained.push(p.messageId);
+              }
+              if (!drained.length || this.ports.assistantSessionId() !== sid) return;
+              const at = this.clock.now();
+              for (const p of pending) if (drained.includes(p.messageId)) this.ports.inputLog.append(sid, "human", { at, messageId: p.messageId });
+              this.pendingHuman = this.pendingHuman.filter((p) => !drained.includes(p.messageId));
+              this.kick();
+            };
+            const prev = this.resolvingHuman ?? Promise.resolve();
+            const next = prev.then(run2, run2).finally(() => {
+              if (this.resolvingHuman === next) this.resolvingHuman = null;
+            });
+            this.resolvingHuman = next;
+            return next;
+          }
           /** Test/diagnostic view. */
           snapshot() {
             return { queued: this.queue.length, batches: [...this.batches.keys()], pendingHuman: this.pendingHuman.length };
           }
           /** Resolves when the in-flight delivery (if any) settles. */
           async idle() {
-            while (this.flushing) await this.flushing;
+            while (this.flushing || this.resolvingHuman) {
+              if (this.resolvingHuman) await this.resolvingHuman;
+              if (this.flushing) await this.flushing;
+            }
           }
           // ── bus ─────────────────────────────────────────────────────────────────
           onEvent(e) {
@@ -87716,8 +87928,12 @@ ${body}`;
             if (e.kind === "registered") {
             } else if (e.kind === "turn") {
               if (e.phase === "started" && this.pendingHuman.length) {
-                for (const at of this.pendingHuman) this.ports.inputLog.append(sid, "human", { at });
-                this.pendingHuman = [];
+                if (this.ports.isParked) {
+                  void this.resolveDrainedHuman(sid);
+                } else {
+                  const p = this.pendingHuman.shift();
+                  this.ports.inputLog.append(sid, "human", { at: this.clock.now(), messageId: p.messageId });
+                }
               }
               if (e.phase !== "committed") return;
               this.ports.inputLog.closeTurn(sid);
@@ -87725,6 +87941,7 @@ ${body}`;
               if (SESSION_STATUS_CLASS[e.next] !== "ready") return;
             } else if (e.kind === "terminated") {
               this.pendingHuman = [];
+              this.dropQueuedReview();
               return;
             } else {
               return;
@@ -87841,7 +88058,7 @@ ${body}`;
           async deliverOnce() {
             const sid = this.ports.assistantSessionId();
             if (!sid || this.pendingHuman.length || !this.ports.isAssistantReady(sid)) return;
-            const { taken, parts } = await this.takeParts(this.clock.now());
+            const { taken, parts } = await this.takeParts(this.clock.now(), sid);
             if (!parts.length) {
               this.queue = this.queue.filter((i) => !taken.includes(i));
               return;
@@ -87857,17 +88074,28 @@ ${body}`;
            */
           async pullPending(sessionId) {
             await this.idle();
-            const { taken, parts } = await this.takeParts(this.clock.now());
+            const { taken, parts } = await this.takeParts(this.clock.now(), sessionId);
             this.commitTaken(taken, parts, sessionId);
             return parts.map((p) => ({ source: p.source, messageId: p.messageId, text: p.text, ...p.meshId ? { meshId: p.meshId } : {} }));
           }
           /** Render the head of the queue into parts within the delivery budget (no side effects). */
-          async takeParts(now) {
+          async takeParts(now, sid) {
             const taken = [];
             const parts = [];
             const folded = /* @__PURE__ */ new Map();
             let size = 0;
             for (const item of this.queue) {
+              if (item.kind === "line" && item.forSessionId && item.forSessionId !== sid) {
+                taken.push(item);
+                continue;
+              }
+              if (item.kind === "line" && item.source === "review") {
+                if (!parts.length) {
+                  parts.push({ text: item.text, source: item.source, messageId: item.messageId });
+                  taken.push(item);
+                }
+                break;
+              }
               if (item.kind === "relay" && now - item.committedAt > RELAY_BACKLOG_FOLD_AFTER_MS) {
                 folded.set(item.meshId, (folded.get(item.meshId) ?? 0) + item.attemptIds.length);
                 taken.push(item);
@@ -87891,6 +88119,9 @@ ${body}`;
             this.queue = this.queue.filter((i) => !taken.includes(i));
             const at = this.clock.now();
             if (sid) for (const p of parts) this.ports.inputLog.append(sid, p.source, { at, messageId: p.messageId });
+            if (sid) {
+              for (const p of parts) if (p.source === "review") this.ports.onReviewDelivered?.(sid, p.messageId, at);
+            }
             const relayItems = taken.filter((i) => i.kind === "relay");
             this.ports.store.markDelivered(relayItems.flatMap((i) => i.attemptIds), at);
             const meshes = [...new Set(relayItems.map((i) => i.meshId))];
@@ -88042,6 +88273,64 @@ ${body}`;
         };
       }
     });
+    var AssistantReviewScheduler;
+    var init_assistant_review_scheduler = __esm2({
+      "src/assistant/assistant-review-scheduler.ts"() {
+        "use strict";
+        init_assistant_review();
+        AssistantReviewScheduler = class {
+          constructor(ports, rules = REVIEW_TRIGGER_RULES) {
+            this.ports = ports;
+            this.rules = rules;
+          }
+          inFlight = null;
+          /** Session → input-log human count when its last review was delivered. */
+          humanAtLastReview = /* @__PURE__ */ new Map();
+          /** Evaluate once (relay tick). Enqueues the review input when due. */
+          evaluate(now) {
+            const sid = this.ports.liveSessionId();
+            if (!sid) {
+              this.inFlight = null;
+              return { fired: false, reason: "no_session" };
+            }
+            if (this.stillInFlight(sid)) return { fired: false, reason: "in_flight" };
+            const ready2 = this.ports.isReady(sid);
+            const decision = evaluateReviewTrigger({
+              now,
+              idleSince: ready2 ? this.ports.idleSince(sid) : null,
+              humanInputsSinceLastReview: this.ports.inputLog.humanInputCount(sid) - (this.humanAtLastReview.get(sid) ?? 0),
+              reviewAts: this.ports.reviewAts(),
+              modalOpen: this.ports.modalOpen(sid),
+              reviewTurnSetting: this.ports.reviewTurnSetting(),
+              quotaRemainingPct: this.ports.quotaRemainingPct(now)
+            }, this.rules);
+            if (!decision.due) return { fired: false, reason: decision.reason };
+            if (this.ports.relayBusy()) return { fired: false, reason: "busy" };
+            const input = buildReviewInput(now);
+            this.inFlight = { sessionId: sid, messageId: input.messageId, delivered: false };
+            this.ports.enqueue({ source: "review", text: input.text, messageId: input.messageId, forSessionId: sid });
+            return { fired: true, messageId: input.messageId };
+          }
+          /** Relay delivery hook for a review input. */
+          onDelivered(sessionId, messageId, at) {
+            this.humanAtLastReview.set(sessionId, this.ports.inputLog.humanInputCount(sessionId));
+            if (this.inFlight?.messageId === messageId) this.inFlight.delivered = true;
+            this.ports.recordDelivered(at);
+          }
+          /** Test/diagnostic view. */
+          inFlightMessageId() {
+            return this.inFlight?.messageId ?? null;
+          }
+          stillInFlight(sid) {
+            const f = this.inFlight;
+            if (!f) return false;
+            const alive = f.sessionId === sid && (f.delivered ? this.ports.inputLog.isReviewTurnOpen(sid) : this.ports.isQueued(f.messageId));
+            if (!alive) this.inFlight = null;
+            return alive;
+          }
+        };
+      }
+    });
     var assistant_runtime_exports = {};
     __export2(assistant_runtime_exports, {
       ASSISTANT_RELAY_TICK_MS: () => ASSISTANT_RELAY_TICK_MS,
@@ -88049,6 +88338,19 @@ ${body}`;
       getAssistantRuntime: () => getAssistantRuntime,
       wireAssistantRuntime: () => wireAssistantRuntime
     });
+    function instanceReady(inst) {
+      if (!inst) return false;
+      if (typeof inst.isModalParked === "function" && inst.isModalParked()) return false;
+      const status = str8(inst.getState?.()?.status).toLowerCase();
+      return SESSION_STATUS_CLASS[status] === "ready";
+    }
+    function instanceModalOpen(inst) {
+      if (!inst) return false;
+      if (typeof inst.isModalParked === "function" && inst.isModalParked()) return true;
+      const state = inst.getState?.();
+      const status = str8(state?.status).toLowerCase();
+      return SESSION_STATUS_CLASS[status] === "blocked" || !!state?.activeChat?.activeModal;
+    }
     function str8(v) {
       return typeof v === "string" ? v.trim() : "";
     }
@@ -88096,13 +88398,8 @@ ${body}`;
         },
         hasAssistant: () => registry.read() !== null || deps.sawCaller(),
         assistantSessionId: () => registry.read()?.sessionId ?? null,
-        isAssistantReady: (sessionId) => {
-          const inst = instanceOf(components, sessionId);
-          if (!inst) return false;
-          if (typeof inst.isModalParked === "function" && inst.isModalParked()) return false;
-          const status = str8(inst.getState?.()?.status).toLowerCase();
-          return SESSION_STATUS_CLASS[status] === "ready";
-        },
+        isAssistantReady: (sessionId) => instanceReady(instanceOf(components, sessionId)),
+        isParked: (sessionId, messageId) => components.cliManager.input.isParked(sessionId, messageId),
         submit: (sessionId, input) => components.cliManager.input.submit({
           messageId: input.messageId,
           sessionId,
@@ -88116,7 +88413,8 @@ ${body}`;
         onRelayDelivered: (meshIds, at) => {
           registry.markFirstRelay(at);
           for (const m of meshIds) metrics2?.bump("relays", m, at);
-        }
+        },
+        ...deps.onReviewDelivered ? { onReviewDelivered: deps.onReviewDelivered } : {}
       };
     }
     function wireAssistantRuntime(components, opts = {}) {
@@ -88124,7 +88422,44 @@ ${body}`;
       const opened = opts.store ? { store: opts.store, metrics: opts.metrics ?? null } : openStores();
       const { store: store2, metrics: metrics2 } = opened;
       let sawCaller = false;
-      const relay = new AssistantRelay(buildAssistantRelayPorts(components, { registry, store: store2, metrics: metrics2, sawCaller: () => sawCaller }));
+      let review = null;
+      const relay = new AssistantRelay(buildAssistantRelayPorts(components, {
+        registry,
+        store: store2,
+        metrics: metrics2,
+        sawCaller: () => sawCaller,
+        onReviewDelivered: (sid, messageId, at) => review?.onDelivered(sid, messageId, at)
+      }));
+      const quota = opts.quota ?? liveAssistantQuotaPort;
+      const liveSessionId = () => {
+        const sid = registry.read()?.sessionId ?? null;
+        return sid && instanceOf(components, sid) ? sid : null;
+      };
+      const reviewQuotaRemainingPct = (now) => {
+        const cliType = registry.read()?.cliType;
+        return cliType ? quota.remainingPct(cliType, now) : null;
+      };
+      review = new AssistantReviewScheduler({
+        liveSessionId,
+        isReady: (sid) => instanceReady(instanceOf(components, sid)),
+        modalOpen: (sid) => instanceModalOpen(instanceOf(components, sid)),
+        idleSince: (sid) => {
+          const t = registry.read()?.lastTurnState;
+          return t && t.sessionId === sid && t.state === "idle" ? t.at : null;
+        },
+        reviewTurnSetting: () => registry.read()?.reviewTurn ?? null,
+        reviewAts: () => registry.read()?.reviewAts ?? [],
+        quotaRemainingPct: reviewQuotaRemainingPct,
+        inputLog: getAssistantServices().inputLog,
+        relayBusy: () => relay.hasPendingInput(),
+        isQueued: (messageId) => relay.isQueued(messageId),
+        enqueue: (input) => relay.enqueueInput(input),
+        recordDelivered: (at) => {
+          registry.recordReview(at);
+          metrics2?.bump("review_turns", "", at);
+        }
+      });
+      const reviewScheduler = review;
       let active = false;
       let disposed = false;
       const offs = [];
@@ -88137,6 +88472,8 @@ ${body}`;
         try {
           const now = Date.now();
           relay.tick(now);
+          const r = reviewScheduler.evaluate(now);
+          if (r.fired) LOG.info("Assistant", `idle review turn queued (${r.messageId})`);
           if (metrics2 && now - lastMetricsPrune >= METRICS_PRUNE_EVERY_MS) {
             lastMetricsPrune = now;
             metrics2.prune(now);
@@ -88169,6 +88506,7 @@ ${body}`;
       };
       const services = getAssistantServices();
       services.reviewMetrics = metrics2 ? { creditReviewWrite: (id22, kind, at) => metrics2.creditReviewWrite(id22, kind, at) } : null;
+      setAssistantHumanInputSink((r) => relay.recordHumanSubmit(r.sessionIds, r.messageId, r.outcome));
       setAssistantRelayHooks({
         openThread: (meshId) => {
           activate("project_send");
@@ -88184,6 +88522,7 @@ ${body}`;
         relay,
         store: store2,
         metrics: metrics2,
+        review: reviewScheduler,
         isActive: () => active,
         activate,
         async pull(callerSessionId) {
@@ -88192,18 +88531,15 @@ ${body}`;
           const events = await relay.pullPending(callerSessionId);
           return events.map((e) => e.meshId && slugs.get(e.meshId) ? { ...e, project: slugs.get(e.meshId) } : e);
         },
-        liveSessionId() {
-          const sid = registry.read()?.sessionId ?? null;
-          return sid && instanceOf(components, sid) ? sid : null;
-        },
+        liveSessionId,
         reviewQuotaRemainingPct(now = Date.now()) {
-          const cliType = registry.read()?.cliType;
-          return cliType ? (opts.quota ?? liveAssistantQuotaPort).remainingPct(cliType, now) : null;
+          return reviewQuotaRemainingPct(now);
         },
         dispose() {
           if (disposed) return;
           disposed = true;
           setAssistantRelayHooks(null);
+          setAssistantHumanInputSink(null);
           if (services.reviewMetrics && getAssistantServices() === services) services.reviewMetrics = null;
           for (const off of offs.reverse()) {
             try {
@@ -88240,6 +88576,8 @@ ${body}`;
         init_project_views();
         init_skill_curator();
         init_assistant_quota();
+        init_assistant_review_scheduler();
+        init_assistant_human_input();
         ASSISTANT_RELAY_TICK_MS = 6e4;
         METRICS_PRUNE_EVERY_MS = 60 * 6e4;
         current2 = null;
@@ -91475,6 +91813,11 @@ ${tail}` : ""
     __export2(index_exports2, {
       ACK_TIMEOUT_MS: () => ACK_TIMEOUT_MS,
       ADHDEV_AUTHORITY_ID: () => ADHDEV_AUTHORITY_ID,
+      ADHDEV_COORDINATOR_MCP_AUTH_FILE_ENV: () => ADHDEV_COORDINATOR_MCP_AUTH_FILE_ENV,
+      ADHDEV_DAEMON_AUTH_FILE_ENV: () => ADHDEV_DAEMON_AUTH_FILE_ENV2,
+      ADHDEV_DAEMON_AUTH_FILE_FLAG: () => ADHDEV_DAEMON_AUTH_FILE_FLAG2,
+      ADHDEV_INTERNAL_AUTH_HEADER: () => ADHDEV_INTERNAL_AUTH_HEADER2,
+      ADHDEV_WORKER_CREDENTIAL_HEADER: () => ADHDEV_WORKER_CREDENTIAL_HEADER2,
       ALWAYS_ON_TRACE_CATEGORIES: () => ALWAYS_ON_TRACE_CATEGORIES,
       AgentStreamPoller: () => AgentStreamPoller,
       BUILD_CHANNEL_ENV_VAR: () => BUILD_CHANNEL_ENV_VAR,
@@ -91690,6 +92033,7 @@ ${tail}` : ""
       V2_RETIRED_TABLES: () => V2_RETIRED_TABLES,
       V3_RETIRED_TABLE: () => V3_RETIRED_TABLE,
       VersionArchive: () => VersionArchive,
+      WORKER_MCP_DAEMON_VERBS: () => WORKER_MCP_DAEMON_VERBS,
       WRITER_ID_PREFIX: () => WRITER_ID_PREFIX,
       WS_MESH_CLOSE_DISCONNECTED: () => WS_MESH_CLOSE_DISCONNECTED,
       WS_MESH_CLOSE_REFUSED: () => WS_MESH_CLOSE_REFUSED,
@@ -91974,6 +92318,7 @@ ${tail}` : ""
       isIdeRunning: () => isIdeRunning,
       isIntentionalCleanupStopEntry: () => isIntentionalCleanupStopEntry,
       isInternalChatMessage: () => isInternalChatMessage,
+      isLiveWorkerMcpCredential: () => isLiveWorkerMcpCredential,
       isManagedStatusWaiting: () => isManagedStatusWaiting,
       isManagedStatusWorking: () => isManagedStatusWorking,
       isMeshNodeFreshEnoughToLaunch: () => isMeshNodeFreshEnoughToLaunch2,
@@ -92000,6 +92345,7 @@ ${tail}` : ""
       isTaskReadonly: () => isTaskReadonly3,
       isUserFacingChatMessage: () => isUserFacingChatMessage,
       isWeakCompletionEvidence: () => isWeakCompletionEvidence,
+      isWorkerMcpDaemonVerb: () => isWorkerMcpDaemonVerb,
       isWorkerMcpEnabled: () => isWorkerMcpEnabled,
       killIdeProcess: () => killIdeProcess,
       launchIDE: () => launchIDE,
@@ -116993,6 +117339,7 @@ ${marker}`,
     init_provider_input_support();
     init_logger();
     init_command_args();
+    init_assistant_human_input();
     init_dist();
     init_dist();
     var INTERRUPT_IDLE_TIMEOUT_MS = 15e3;
@@ -117365,6 +117712,15 @@ ${marker}`,
             target = null;
           }
           return candidates.find((id22) => target?.hasQueuedSend?.(id22) === true) ?? candidates[candidates.length - 1];
+        },
+        async isParked(sessionId, messageId) {
+          let target;
+          try {
+            target = await deps.resolveSession(sessionId);
+          } catch {
+            target = null;
+          }
+          return target?.hasQueuedSend?.(messageId) === true;
         }
       };
     }
@@ -117703,6 +118059,8 @@ ${marker}`,
         policy,
         createdAt: Date.now()
       });
+      const requested = typeof args?.targetSessionId === "string" ? args.targetSessionId.trim() : "";
+      reportSessionChatInput({ sessionIds: requested && requested !== sessionKey2 ? [sessionKey2, requested] : [sessionKey2], messageId, source: readCommandSource(args), outcome });
       return sendChatResultFromOutcome(outcome, messageId, transport, provider?.type);
     }
     async function handleSendChat(h, args) {
@@ -128008,26 +128366,7 @@ ${ptyResult.output.slice(-2e3)}`);
     });
     init_dist();
     init_assistant_services();
-    init_dist();
-    var REVIEW_TRIGGER_RULES = {
-      /** Assistant idle at least this long. */
-      minIdleMs: 10 * 60 * 1e3,
-      /** Human inputs since the last review. */
-      minHumanInputs: 6,
-      /** Since the last review. */
-      minSinceLastReviewMs: 2 * 60 * 60 * 1e3,
-      /** Reviews per rolling 24 h. */
-      maxPerDay: 4,
-      /** Skip below this remaining % of the assistant CLI's tightest quota window. */
-      minQuotaRemainingPct: 20
-    };
-    var DAY_MS2 = 24 * 60 * 60 * 1e3;
-    var REVIEW_TURN_TOOL_DENIED = "review_turn_tool_denied";
-    var REVIEW_TURN_VERB_SET = new Set(ASSISTANT_REVIEW_TURN_VERBS2);
-    function reviewTurnVerbDecision(verb, reviewTurnOpen) {
-      if (!reviewTurnOpen || REVIEW_TURN_VERB_SET.has(verb)) return { allowed: true };
-      return { allowed: false, code: REVIEW_TURN_TOOL_DENIED };
-    }
+    init_assistant_review();
     init_assistant_projects();
     init_note_staging();
     init_store_guards();
@@ -132201,6 +132540,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         const normalizedArgs = normalizeCommandArgsWithInteractionId(args);
         const meshRelayed = logSource === "mesh" && opts?.inProcess !== true;
         if (!meshRelayed && MESH_SENDER_DAEMON_ID_ARG in normalizedArgs) delete normalizedArgs[MESH_SENDER_DAEMON_ID_ARG];
+        if (COMMAND_SOURCE_ARG in normalizedArgs) delete normalizedArgs[COMMAND_SOURCE_ARG];
+        if (COMMAND_SOURCE_STAMPED.has(cmd)) normalizedArgs[COMMAND_SOURCE_ARG] = logSource;
         if (spec?.session?.aliasSessionId) applySessionIdAlias(normalizedArgs);
         const interactionId = this.interactionContext.record(normalizedArgs);
         const revealedMeshIds = meshIdsRevealedByCommandArgs(normalizedArgs);
@@ -132599,7 +132940,10 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         const pairingStatus = meshHost.pairing?.status || "not_configured";
         return {
           success: true,
-          code: pairingStatus === "not_configured" ? "mesh_host_pairing_not_configured" : "mesh_host_pairing_pending",
+          // A completed pairing must not read as still pending (2026-10-08
+          // two-machine live run: both sides reported status 'paired' under
+          // code 'mesh_host_pairing_pending').
+          code: pairingStatus === "not_configured" ? "mesh_host_pairing_not_configured" : pairingStatus === "paired" ? "mesh_host_pairing_paired" : "mesh_host_pairing_pending",
           meshId,
           hostAddress: meshHost.hostAddress,
           meshHost,
@@ -134967,8 +135311,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       /** mesh.status: meshes with a build in flight, and those asked again meanwhile. */
       meshFlushInflight = /* @__PURE__ */ new Map();
       meshFlushAgain = /* @__PURE__ */ new Set();
-      constructor(sink, opts = {}) {
-        this.sink = sink;
+      constructor(sink2, opts = {}) {
+        this.sink = sink2;
         this.opts = opts;
         this.now = opts.now ?? Date.now;
         this.gitMonitor = opts.gitMonitor ?? createGitWorkspaceMonitor();
@@ -146043,7 +146387,10 @@ ${buttons.join("\n")}`;
     var DEFAULT_COORDINATOR_DELEGATED_ENV_UNSETS = [
       "ADHDEV_INLINE_MESH",
       "ADHDEV_MCP_TRANSPORT",
-      "ADHDEV_MESH_ID"
+      "ADHDEV_MESH_ID",
+      // Coordinator-scope MCP credential file (standalone-mcp-auth.ts): a worker
+      // authenticates with its own session bind, never the coordinator's file.
+      "ADHDEV_DAEMON_AUTH_FILE"
     ];
     function hasCliArg(args, flag) {
       return args.some((arg) => arg === flag || arg.startsWith(`${flag}=`));
@@ -147714,6 +148061,13 @@ Run 'adhdev doctor' for detailed diagnostics.`
     };
     init_ipc_protocol();
     init_runtime_defaults();
+    init_standalone_mcp_auth();
+    init_worker_session_bind_registry();
+    init_worker_mcp_isolation();
+    function isLiveWorkerMcpCredential(credential) {
+      if (typeof credential !== "string" || !credential.trim()) return false;
+      return !!verifyWorkerSessionBind(credential) || !!verifyWorkerTaskToken(credential);
+    }
     init_chat_history();
     init_async_batch();
     init_control_effects();
@@ -157834,10 +158188,10 @@ ${notice.notice}${supersededHint}`;
     var SessionOutputFanout = class {
       sink = null;
       /** Attach the one sink; returns the detach. A second attach replaces the first. */
-      attach(sink) {
-        this.sink = sink;
+      attach(sink2) {
+        this.sink = sink2;
         return () => {
-          if (this.sink === sink) this.sink = null;
+          if (this.sink === sink2) this.sink = null;
         };
       }
       get attached() {
@@ -161623,6 +161977,9 @@ __export(index_exports, {
 });
 module.exports = __toCommonJS(index_exports);
 
+// src/cli-args.ts
+var import_daemon_core27 = __toESM(require_dist3());
+
 // ../mesh-shared/dist/index.mjs
 function readRecord(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
@@ -162411,7 +162768,7 @@ var NOTIFY_KINDS = [
 ];
 var id = { t: "id" };
 var idOpt = { t: "id", optional: true };
-var bool = { t: "bool" };
+var bool2 = { t: "bool" };
 var boolOpt = { t: "bool", optional: true };
 var ms = { t: "ms" };
 var msOpt = { t: "ms", optional: true };
@@ -162442,10 +162799,10 @@ var TURN_EVIDENCE_FIELD_SPECS = {
   },
   delivered: { messageId: id, outcome: en(DELIVERY_OUTCOMES), via: en(DELIVERY_VIAS) },
   delivery_refused: { messageId: id, reason: en(SEND_REFUSAL_REASONS) },
-  dispatch_failed: { workerAbsent: bool, reason: en(DISPATCH_FAILURE_REASONS), refusalCode: idOpt },
+  dispatch_failed: { workerAbsent: bool2, reason: en(DISPATCH_FAILURE_REASONS), refusalCode: idOpt },
   duplicate_dispatch_refusal: { holderSessionId: id, holderAttemptId: idOpt },
   session_rebound: { toSessionId: id, reason: en(SESSION_REBOUND_REASONS) },
-  turn_started: { retro: bool },
+  turn_started: { retro: bool2 },
   suspension: { modal: en(SUSPENSION_MODALS), modalKey: idOpt },
   suspension_resolved: { resolution: en(SUSPENSION_RESOLUTIONS), via: en(SUSPENSION_RESOLUTION_VIAS) },
   turn_end: {
@@ -162461,27 +162818,27 @@ var TURN_EVIDENCE_FIELD_SPECS = {
     providerFailure: enOpt(PROVIDER_FAILURES)
   },
   transcript_final: {
-    selfAttributing: bool,
-    nativeRead: bool,
+    selfAttributing: bool2,
+    nativeRead: bool2,
     nativeMarker: { t: "native_marker", optional: true },
     live: { t: "live" },
     summary: { t: "summary_ref", optional: true },
     messageAt: msOpt
   },
   transcript_activity: { newestActivityAt: ms },
-  no_progress: { stalledMs: ms, observedStatus: en(NO_PROGRESS_OBSERVED_STATUSES), finalAssistantPresent: bool },
+  no_progress: { stalledMs: ms, observedStatus: en(NO_PROGRESS_OBSERVED_STATUSES), finalAssistantPresent: bool2 },
   liveness: { result: en(LIVENESS_RESULTS) },
   process_exit: { exitCode: { t: "int", nullable: true }, providerFailure: enOpt(PROVIDER_FAILURES) },
   session_error: { reason: en(SESSION_ERROR_REASONS) },
   worker_report: {
     outcome: en(WORKER_REPORT_OUTCOMES),
     summary: { t: "summary_ref", optional: true },
-    hasHandoffNotes: bool,
+    hasHandoffNotes: bool2,
     branchState: enOpt(WORKER_BRANCH_STATES),
     touchedFileCount: intOpt
   },
   worker_progress: { note: { t: "summary_ref", optional: true } },
-  git_side_effect: { dirty: bool, commitsSinceDispatch: { t: "int" }, attributable: bool },
+  git_side_effect: { dirty: bool2, commitsSinceDispatch: { t: "int" }, attributable: bool2 },
   cancel: { reason: en(CANCEL_REASONS) },
   operator_status: { status: en(OPERATOR_STATUSES), reason: en(OPERATOR_STATUS_REASONS) },
   coordinator_ack: { notify: en(NOTIFY_KINDS), outcome: en(COORDINATOR_ACK_OUTCOMES) },
@@ -172528,6 +172885,8 @@ Options:
   --mode <mode>           Transport: local or ipc
   --port <n>              Standalone or IPC daemon port (defaults: local 3847, ipc 19222)
   --password <pass>       Standalone daemon password (if set)
+  --daemon-auth-file <p>  Standalone daemon's per-boot MCP credential file (local mode;
+                          stamped by the daemon into the coordinator/assistant launch)
   --repo-mesh <mesh_id>   Enable mesh mode \u2014 exposes only mesh-scoped coordinator tools
   --worker                Enable worker mode \u2014 the minimal delegated-worker toolset.
                           Overrides --repo-mesh: a worker never gets coordinator tools.
@@ -172537,6 +172896,7 @@ Options:
 
 Environment variables:
   ADHDEV_PASSWORD     Daemon password (local mode)
+  ADHDEV_DAEMON_AUTH_FILE     Same as --daemon-auth-file (ignored in worker mode)
   ADHDEV_MESH_ID      Mesh ID (mesh mode)
   ADHDEV_MCP_TRANSPORT Transport: local or ipc
   ADHDEV_WORKER_SESSION_BIND  Worker session bind (worker mode; written by the daemon)
@@ -172561,6 +172921,7 @@ function parseArgs(argv, env2 = process.env) {
   const args = argv.slice(2);
   let port;
   let password;
+  let daemonAuthFile;
   let meshId;
   let explicitMode;
   let worker = false;
@@ -172580,6 +172941,10 @@ function parseArgs(argv, env2 = process.env) {
       port = Number(arg.slice("--port=".length));
     } else if (arg === "--password" && args[i + 1]) {
       password = args[++i];
+    } else if (arg === import_daemon_core27.ADHDEV_DAEMON_AUTH_FILE_FLAG && args[i + 1]) {
+      daemonAuthFile = args[++i];
+    } else if (arg?.startsWith(`${import_daemon_core27.ADHDEV_DAEMON_AUTH_FILE_FLAG}=`)) {
+      daemonAuthFile = arg.slice(import_daemon_core27.ADHDEV_DAEMON_AUTH_FILE_FLAG.length + 1);
     } else if ((arg === "--repo-mesh" || arg === "--mesh") && args[i + 1]) {
       meshId = args[++i];
       meshFromFlag = true;
@@ -172596,6 +172961,7 @@ function parseArgs(argv, env2 = process.env) {
     }
   }
   if (!password && env2.ADHDEV_PASSWORD) password = env2.ADHDEV_PASSWORD;
+  if (!daemonAuthFile && env2[import_daemon_core27.ADHDEV_DAEMON_AUTH_FILE_ENV]?.trim()) daemonAuthFile = env2[import_daemon_core27.ADHDEV_DAEMON_AUTH_FILE_ENV].trim();
   if (!meshId && env2.ADHDEV_MESH_ID) meshId = env2.ADHDEV_MESH_ID;
   if (!explicitMode && env2.ADHDEV_MCP_TRANSPORT) {
     const value = env2.ADHDEV_MCP_TRANSPORT.trim();
@@ -172607,9 +172973,9 @@ function parseArgs(argv, env2 = process.env) {
     if (meshFromFlag) {
       throw new McpCliArgsError("--assistant cannot be combined with --repo-mesh: the assistant toolset never includes mesh coordinator tools.");
     }
-    return { mode, port, password, assistant: true };
+    return { mode, port, password, ...daemonAuthFile ? { daemonAuthFile } : {}, assistant: true };
   }
-  return { mode, port, password, meshId };
+  return { mode, port, password, ...daemonAuthFile ? { daemonAuthFile } : {}, meshId };
 }
 function printHelp() {
   console.error(buildMcpHelpText());
@@ -172622,9 +172988,17 @@ var import_node_os2 = __toESM(require("os"));
 var import_types2 = require("@modelcontextprotocol/sdk/types.js");
 
 // src/transports/local.ts
-var import_daemon_core27 = __toESM(require_dist3());
-var DEFAULT_PORT = import_daemon_core27.DEFAULT_STANDALONE_PORT;
+var import_node_fs = require("fs");
+var import_daemon_core28 = __toESM(require_dist3());
+var DEFAULT_PORT = import_daemon_core28.DEFAULT_STANDALONE_PORT;
 var STATUS_TIMEOUT_MS = 1e4;
+var LocalDaemonAuthError = class extends Error {
+  constructor(status, what) {
+    super(`${what} failed: ${status} (authentication to the local daemon failed)`);
+    this.status = status;
+    this.name = "LocalDaemonAuthError";
+  }
+};
 function describeFetchFailure(what, timeoutMs, error) {
   const name = error?.name;
   if (name === "TimeoutError" || name === "AbortError") {
@@ -172635,13 +173009,30 @@ function describeFetchFailure(what, timeoutMs, error) {
 var LocalTransport = class {
   baseUrl;
   authHeader;
+  authFile;
+  workerCredential;
+  /** Why the last ping() failed — `auth` when the daemon refused the credential. */
+  lastPingFailure = null;
   constructor(opts = {}) {
     this.baseUrl = `http://localhost:${opts.port ?? DEFAULT_PORT}`;
     this.authHeader = opts.password ? `Bearer ${opts.password}` : null;
+    this.authFile = opts.authFile?.trim() || null;
+    this.workerCredential = opts.workerCredential?.trim() || null;
+  }
+  readInternalToken() {
+    if (!this.authFile) return null;
+    try {
+      return (0, import_node_fs.readFileSync)(this.authFile, "utf8").trim() || null;
+    } catch {
+      return null;
+    }
   }
   headers() {
     const h = { "Content-Type": "application/json" };
     if (this.authHeader) h["Authorization"] = this.authHeader;
+    const internalToken = this.readInternalToken();
+    if (internalToken) h[import_daemon_core28.ADHDEV_INTERNAL_AUTH_HEADER] = internalToken;
+    if (this.workerCredential) h[import_daemon_core28.ADHDEV_WORKER_CREDENTIAL_HEADER] = this.workerCredential;
     return h;
   }
   async getStatus() {
@@ -172654,6 +173045,7 @@ var LocalTransport = class {
     } catch (e) {
       throw describeFetchFailure("Status fetch", STATUS_TIMEOUT_MS, e);
     }
+    if (res.status === 401 || res.status === 403) throw new LocalDaemonAuthError(res.status, "Status fetch");
     if (!res.ok) throw new Error(`Status fetch failed: ${res.status}`);
     return res.json();
   }
@@ -172677,6 +173069,9 @@ var LocalTransport = class {
     }
     if (!res.ok) {
       const text = await res.text().catch(() => res.statusText);
+      if (res.status === 401 || res.status === 403) {
+        throw new Error(`Command ${type2} failed: ${res.status} (authentication to the local daemon failed) ${text}`);
+      }
       throw new Error(`Command ${type2} failed: ${res.status} ${text}`);
     }
     return res.json();
@@ -172699,8 +173094,11 @@ var LocalTransport = class {
   async ping() {
     try {
       await this.getStatus();
+      this.lastPingFailure = null;
       return true;
-    } catch {
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      this.lastPingFailure = { kind: e instanceof LocalDaemonAuthError ? "auth" : "unreachable", message };
       return false;
     }
   }
@@ -174637,10 +175035,20 @@ async function readCoordinatorPromptResourceText(mesh) {
     return `Coordinator system prompt unavailable: ${e?.message ?? String(e)}`;
   }
 }
+function workerTransportCredential() {
+  const credentials = readWorkerCredentials();
+  return credentials.bind || credentials.token || void 0;
+}
 async function startMcpServer(opts) {
-  const transport = opts.mode === "ipc" ? new IpcTransport({ port: opts.port }) : new LocalTransport({ port: opts.port, password: opts.password });
+  const transport = opts.mode === "ipc" ? new IpcTransport({ port: opts.port }) : new LocalTransport(opts.worker ? { port: opts.port, password: opts.password, workerCredential: workerTransportCredential() } : { port: opts.port, password: opts.password, authFile: opts.daemonAuthFile });
   const alive = await transport.ping();
   if (!alive) {
+    if (transport instanceof LocalTransport && transport.lastPingFailure?.kind === "auth") {
+      const credential = opts.worker ? "the worker session bind (is this worker's session still live on the daemon?)" : opts.password ? "the given password/token" : opts.daemonAuthFile ? `the daemon MCP credential in ${opts.daemonAuthFile}` : "no credential (the daemon requires --password / ADHDEV_PASSWORD or a daemon-launched MCP credential)";
+      process.stderr.write(`[adhdev-mcp] Authentication to the local daemon failed (${transport.lastPingFailure.message}). Sent ${credential}.
+`);
+      process.exit(1);
+    }
     const hint = opts.mode === "local" ? `Make sure the standalone daemon is running (adhdev standalone or npx @adhdev/daemon-standalone).` : `Make sure the cloud daemon is running with local IPC enabled (adhdev daemon).`;
     process.stderr.write(`[adhdev-mcp] Cannot reach ${opts.mode} daemon. ${hint}
 `);

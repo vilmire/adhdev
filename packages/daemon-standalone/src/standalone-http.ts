@@ -10,9 +10,17 @@
  */
 
 import type { IncomingMessage } from 'http';
+import * as crypto from 'crypto';
 import * as path from 'path';
 import * as fs from 'fs';
-import { MESH_JOIN_HTTP_PATH, type StatusResponse } from '@adhdev/daemon-core';
+import {
+  ADHDEV_INTERNAL_AUTH_HEADER,
+  ADHDEV_WORKER_CREDENTIAL_HEADER,
+  MESH_JOIN_HTTP_PATH,
+  isLiveWorkerMcpCredential,
+  isWorkerMcpDaemonVerb,
+  type StatusResponse,
+} from '@adhdev/daemon-core';
 import type { SessionHostClient, SessionHostEvent } from '@adhdev/session-host-core';
 import {
   AdhMuxControlClient,
@@ -64,7 +72,19 @@ export interface StandaloneHttpDeps {
   createSessionHostClient(): Promise<SessionHostClient>;
   /** Clock for the mesh-join rate limiter (tests). Default `Date.now`. */
   now?(): number;
+  /**
+   * Worker-scope credential check (a live worker session bind or per-task
+   * token). Default: daemon-core `isLiveWorkerMcpCredential`.
+   */
+  verifyWorkerCredential?(credential: string): boolean;
 }
+
+/**
+ * Scope of a daemon-launched MCP server's loopback credential
+ * (daemon-core standalone-mcp-auth.ts): `coordinator` = the per-boot internal
+ * token (coordinator / assistant MCP), `worker` = a worker's own session bind.
+ */
+export type StandaloneInternalAuthScope = 'coordinator' | 'worker';
 
 /**
  * Member → host pairing endpoint (design 2026-10-07 standalone multi-machine
@@ -124,12 +144,34 @@ function remoteAddressKey(req: IncomingMessage): string {
   return raw.startsWith('::ffff:') ? raw.slice(7) : raw;
 }
 
+/** The socket peer is this machine (never a forwarding header — those are client-controlled). */
+function isLoopbackPeer(req: IncomingMessage): boolean {
+  const addr = remoteAddressKey(req);
+  return addr === '::1' || addr.startsWith('127.');
+}
+
+function singleHeader(req: IncomingMessage, name: string): string {
+  const value = req.headers[name];
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function secretsEqual(presented: string, expected: string): boolean {
+  const a = Buffer.from(presented, 'utf8');
+  const b = Buffer.from(expected, 'utf8');
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
 function readMeshJoinString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
 export class StandaloneHttpApi {
   authToken: string | null = null;
+  /**
+   * Per-boot coordinator-scope token (memory only; the daemon also writes it
+   * to a 0600 file whose PATH the coordinator / assistant MCP launch names).
+   */
+  internalAuthToken: string | null = null;
   passwordConfigPath = getStandalonePasswordConfigPath();
   passwordConfig: StandalonePasswordConfig | null = null;
   authSessions = new StandaloneSessionStore();
@@ -146,6 +188,27 @@ export class StandaloneHttpApi {
 
   hasPasswordAuth(): boolean {
     return !!this.passwordConfig;
+  }
+
+  /**
+   * Loopback-only scope of a daemon-launched MCP server's credential, or null.
+   * Consulted only for a request that failed the dashboard gate, so an
+   * unauthenticated daemon is unaffected.
+   */
+  resolveInternalAuthScope(req: IncomingMessage): StandaloneInternalAuthScope | null {
+    if (!isLoopbackPeer(req)) return null;
+    const internal = singleHeader(req, ADHDEV_INTERNAL_AUTH_HEADER);
+    if (internal && this.internalAuthToken && secretsEqual(internal, this.internalAuthToken)) return 'coordinator';
+    const worker = singleHeader(req, ADHDEV_WORKER_CREDENTIAL_HEADER);
+    if (worker) {
+      const verify = this.deps.verifyWorkerCredential ?? isLiveWorkerMcpCredential;
+      try {
+        if (verify(worker)) return 'worker';
+      } catch {
+        return null;
+      }
+    }
+    return null;
   }
 
   private hasAnyAuth(): boolean {
@@ -464,10 +527,33 @@ export class StandaloneHttpApi {
       return;
     }
 
+    // A daemon-launched MCP server (coordinator / assistant / worker) holds no
+    // dashboard credential; it presents a narrower loopback-only one instead
+    // (daemon-core standalone-mcp-auth.ts). Both scopes reach only the two
+    // routes LocalTransport uses; the worker scope is further limited to its
+    // own verbs (checked in the /command route) and a liveness-only status.
+    let internalScope: StandaloneInternalAuthScope | null = null;
     if (url.startsWith('/api/') && !this.isRequestAuthenticated(req, url)) {
-      res.writeHead(401, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Unauthorized. Provide dashboard session cookie or token auth.' }));
-      return;
+      internalScope = this.resolveInternalAuthScope(req);
+      if (!internalScope) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Unauthorized. Provide dashboard session cookie or token auth.' }));
+        return;
+      }
+      const isStatusRoute = parsedUrl.pathname === '/api/v1/status' && method === 'GET';
+      const isCommandRoute = parsedUrl.pathname === '/api/v1/command' && method === 'POST';
+      if (!isStatusRoute && !isCommandRoute) {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: `Forbidden for the ${internalScope} MCP credential.` }));
+        return;
+      }
+      if (internalScope === 'worker' && isStatusRoute) {
+        // Liveness only: the worker MCP pings at startup and never reads the
+        // daemon snapshot, so it does not get one.
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, scope: 'worker' }));
+        return;
+      }
     }
 
     // ─── API Routes (v1) ───
@@ -701,6 +787,11 @@ export class StandaloneHttpApi {
         try {
           const parsed = JSON.parse(body || '{}');
           const { type, payload } = normalizeCommandEnvelope(parsed);
+          if (internalScope === 'worker' && !isWorkerMcpDaemonVerb(type)) {
+            res.writeHead(403, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, code: 'worker_scope_forbidden', error: `Command ${type} is not available to a worker MCP credential.` }));
+            return;
+          }
           const result = await this.deps.executeCommand(type, payload || {});
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify(result));

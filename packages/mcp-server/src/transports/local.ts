@@ -2,7 +2,13 @@
  * LocalTransport — HTTP client for standalone daemon at localhost:3847
  */
 
-import { DEFAULT_STANDALONE_PORT } from '@adhdev/daemon-core';
+import { readFileSync } from 'node:fs';
+
+import {
+  ADHDEV_INTERNAL_AUTH_HEADER,
+  ADHDEV_WORKER_CREDENTIAL_HEADER,
+  DEFAULT_STANDALONE_PORT,
+} from '@adhdev/daemon-core';
 
 import { getTimeoutMs } from './ipc.js';
 
@@ -28,6 +34,26 @@ const STATUS_TIMEOUT_MS = 10_000;
 interface LocalTransportOptions {
   port?: number;
   password?: string;
+  /**
+   * Coordinator / assistant scope: the standalone daemon's per-boot MCP
+   * credential FILE (daemon-core standalone-mcp-auth.ts). Re-read on every
+   * request, so a daemon restart (which rewrites it) does not strand this
+   * process with a stale token.
+   */
+  authFile?: string;
+  /** Worker scope: the worker's own session bind (or per-task token). */
+  workerCredential?: string;
+}
+
+/**
+ * The daemon answered 401/403: it is up, but refused this process's
+ * credential. Distinct from "unreachable" so startup can say which it is.
+ */
+export class LocalDaemonAuthError extends Error {
+  constructor(readonly status: number, what: string) {
+    super(`${what} failed: ${status} (authentication to the local daemon failed)`);
+    this.name = 'LocalDaemonAuthError';
+  }
 }
 
 /**
@@ -46,15 +72,35 @@ function describeFetchFailure(what: string, timeoutMs: number, error: unknown): 
 export class LocalTransport {
   private baseUrl: string;
   private authHeader: string | null;
+  private readonly authFile: string | null;
+  private readonly workerCredential: string | null;
+  /** Why the last ping() failed — `auth` when the daemon refused the credential. */
+  lastPingFailure: { kind: 'auth' | 'unreachable'; message: string } | null = null;
 
   constructor(opts: LocalTransportOptions = {}) {
     this.baseUrl = `http://localhost:${opts.port ?? DEFAULT_PORT}`;
     this.authHeader = opts.password ? `Bearer ${opts.password}` : null;
+    this.authFile = opts.authFile?.trim() || null;
+    this.workerCredential = opts.workerCredential?.trim() || null;
+  }
+
+  private readInternalToken(): string | null {
+    if (!this.authFile) return null;
+    try {
+      return readFileSync(this.authFile, 'utf8').trim() || null;
+    } catch {
+      // Missing/unreadable (daemon mid-restart, unauthenticated daemon that
+      // never wrote one): send nothing and let the daemon decide.
+      return null;
+    }
   }
 
   private headers(): Record<string, string> {
     const h: Record<string, string> = { 'Content-Type': 'application/json' };
     if (this.authHeader) h['Authorization'] = this.authHeader;
+    const internalToken = this.readInternalToken();
+    if (internalToken) h[ADHDEV_INTERNAL_AUTH_HEADER] = internalToken;
+    if (this.workerCredential) h[ADHDEV_WORKER_CREDENTIAL_HEADER] = this.workerCredential;
     return h;
   }
 
@@ -68,6 +114,7 @@ export class LocalTransport {
     } catch (e) {
       throw describeFetchFailure('Status fetch', STATUS_TIMEOUT_MS, e);
     }
+    if (res.status === 401 || res.status === 403) throw new LocalDaemonAuthError(res.status, 'Status fetch');
     if (!res.ok) throw new Error(`Status fetch failed: ${res.status}`);
     return res.json();
   }
@@ -94,6 +141,9 @@ export class LocalTransport {
     }
     if (!res.ok) {
       const text = await res.text().catch(() => res.statusText);
+      if (res.status === 401 || res.status === 403) {
+        throw new Error(`Command ${type} failed: ${res.status} (authentication to the local daemon failed) ${text}`);
+      }
       throw new Error(`Command ${type} failed: ${res.status} ${text}`);
     }
     return res.json();
@@ -123,8 +173,11 @@ export class LocalTransport {
   async ping(): Promise<boolean> {
     try {
       await this.getStatus();
+      this.lastPingFailure = null;
       return true;
-    } catch {
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      this.lastPingFailure = { kind: e instanceof LocalDaemonAuthError ? 'auth' : 'unreachable', message };
       return false;
     }
   }

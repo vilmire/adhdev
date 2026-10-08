@@ -90,6 +90,10 @@ interface AdhdevMcpServerOptions {
   // local options
   port?: number;
   password?: string;
+  // Coordinator / assistant scope credential file of a gated standalone
+  // daemon (local mode; daemon-core standalone-mcp-auth.ts). Never used in
+  // worker mode — a worker authenticates with its own session bind.
+  daemonAuthFile?: string;
   // mesh mode (optional — restricts tools to mesh-scoped set)
   meshId?: string;
   // worker mode (optional — the MINIMAL delegated-worker toolset). Mutually
@@ -127,15 +131,36 @@ export async function readCoordinatorPromptResourceText(mesh: any): Promise<stri
   }
 }
 
+/** Worker scope HTTP credential: the bind (restart-safe — its hash is persisted), else the per-task token. */
+function workerTransportCredential(): string | undefined {
+  const credentials = readWorkerCredentials();
+  return credentials.bind || credentials.token || undefined;
+}
+
 export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void> {
   const transport: CommandTransport =
     opts.mode === 'ipc'
       ? new IpcTransport({ port: opts.port })
-      : new LocalTransport({ port: opts.port, password: opts.password });
+      : new LocalTransport(opts.worker
+        ? { port: opts.port, password: opts.password, workerCredential: workerTransportCredential() }
+        : { port: opts.port, password: opts.password, authFile: opts.daemonAuthFile });
 
   // Verify connectivity before registering tools
   const alive = await transport.ping();
   if (!alive) {
+    if (transport instanceof LocalTransport && transport.lastPingFailure?.kind === 'auth') {
+      // The daemon IS up and refused us — "cannot reach" sent people hunting
+      // for a daemon that was running fine (2026-10-08, token-gated standalone).
+      const credential = opts.worker
+        ? 'the worker session bind (is this worker\'s session still live on the daemon?)'
+        : opts.password
+          ? 'the given password/token'
+          : opts.daemonAuthFile
+            ? `the daemon MCP credential in ${opts.daemonAuthFile}`
+            : 'no credential (the daemon requires --password / ADHDEV_PASSWORD or a daemon-launched MCP credential)';
+      process.stderr.write(`[adhdev-mcp] Authentication to the local daemon failed (${transport.lastPingFailure.message}). Sent ${credential}.\n`);
+      process.exit(1);
+    }
     const hint =
       opts.mode === 'local'
         ? `Make sure the standalone daemon is running (adhdev standalone or npx @adhdev/daemon-standalone).`
