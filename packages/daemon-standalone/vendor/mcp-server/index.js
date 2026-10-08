@@ -88103,6 +88103,9 @@ ${body}`;
       const lower = r.toLowerCase();
       const steps = [
         (m) => m.id === r,
+        // The id the host dashboard shows for a standalone-paired member mesh (it differs from
+        // the member's local id); without this the host's mesh id answered project_not_found.
+        (m) => !!r && typeof m.meshHost?.hostMeshId === "string" && m.meshHost.hostMeshId.trim() === r,
         (m) => !!m.name && m.name.trim().toLowerCase() === lower,
         (m) => Object.entries(aliases).some(([alias, meshId]) => alias.trim().toLowerCase() === lower && meshId === m.id),
         (m) => slugOf(m) === lower,
@@ -129775,6 +129778,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           hosting: "remote",
           host: remote.label,
           hostLabel: remote.label,
+          ...remote.hostMeshId && remote.hostMeshId !== mesh.id ? { hostMeshId: remote.hostMeshId } : {},
           reachability: remote.reachable ? "relay" : "unreachable",
           ...remote.reachable ? {} : { unreachableReason: remote.reason ?? "relay_failed" },
           threadOpen: ports.relay.isThreadOpen ? ports.relay.isThreadOpen(mesh.id) : null
@@ -165313,6 +165317,9 @@ function findNodeSession(nodes, nodeId, sessionId) {
 }
 function buildQueueTriggerGuidance(queueTrigger) {
   if (!queueTrigger || queueTrigger.claimed === true) return void 0;
+  if (queueTrigger.success !== false && queueTrigger.pendingBefore === 0 && queueTrigger.pendingAfter === 0 && queueTrigger.assignedAfter === 0 && queueTrigger.autoLaunchPending !== true) {
+    return void 0;
+  }
   if (queueTrigger.success === false) {
     return {
       queueClaimed: false,

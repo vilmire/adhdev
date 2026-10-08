@@ -7,7 +7,8 @@
  * `ensureCoordinator` arrive with the registry unit; the resolver already
  * takes an alias map so that unit only has to pass it.
  *
- * Resolution order: exact meshId → `mesh.name` case-insensitive → alias →
+ * Resolution order: exact meshId → the host's mesh id (`meshHost.hostMeshId`) →
+ * `mesh.name` case-insensitive → alias →
  * slug → `repoIdentity` tail. The first step with any match decides; more than
  * one match at that step is `project_ambiguous`. It never guesses.
  */
@@ -16,6 +17,8 @@ export interface AssistantProjectMesh {
     id: string;
     name?: string;
     repoIdentity?: string;
+    /** A standalone member's record of a mesh another daemon hosts keeps the HOST's id here. */
+    meshHost?: { hostMeshId?: string } | null;
 }
 
 /** Last path segment of the repo identity, lowercased (`github.com/o/Repo` → `repo`). */
@@ -67,6 +70,9 @@ export function resolveAssistantProject<T extends AssistantProjectMesh>(
     const lower = r.toLowerCase();
     const steps: Array<(m: T) => boolean> = [
         (m) => m.id === r,
+        // The id the host dashboard shows for a standalone-paired member mesh (it differs from
+        // the member's local id); without this the host's mesh id answered project_not_found.
+        (m) => !!r && typeof m.meshHost?.hostMeshId === 'string' && m.meshHost.hostMeshId.trim() === r,
         (m) => !!m.name && m.name.trim().toLowerCase() === lower,
         (m) => Object.entries(aliases).some(([alias, meshId]) => alias.trim().toLowerCase() === lower && meshId === m.id),
         (m) => slugOf(m) === lower,

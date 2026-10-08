@@ -231,10 +231,12 @@ function OnboardingGate() {
     useEffect(() => {
         let cancelled = false
         if (hasCompletedOnboarding()) return
-        fetch('/api/v1/providers/installed')
-            .then(r => r.ok ? r.json() : { providers: [] })
-            .then((data: { providers?: unknown[] }) => {
-                if (cancelled) return
+        standaloneFetch('/api/v1/providers/installed')
+            // A non-OK reply (e.g. 401 on a token-gated daemon) says nothing about what is
+            // installed — never read it as "zero providers" and pop the first-run dialog.
+            .then(r => r.ok ? r.json() : null)
+            .then((data: { providers?: unknown[] } | null) => {
+                if (cancelled || !data) return
                 if ((data.providers ?? []).length === 0) {
                     window.dispatchEvent(new Event(FIRST_RUN_DIALOG_EVENT))
                     setShow(true)

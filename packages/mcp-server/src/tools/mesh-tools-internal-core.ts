@@ -162,6 +162,14 @@ export function findNodeSession(nodes: any[], nodeId?: string | null, sessionId?
 
 export function buildQueueTriggerGuidance(queueTrigger: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
     if (!queueTrigger || queueTrigger.claimed === true) return undefined;
+    // Nothing was queued before or after this trigger (e.g. the opportunistic drain a
+    // mesh_launch_session runs): there is no task to describe, so emit no guidance rather
+    // than the "The task is queued but…" fallback, which reads as if work were stranded.
+    if (queueTrigger.success !== false
+        && queueTrigger.pendingBefore === 0 && queueTrigger.pendingAfter === 0
+        && queueTrigger.assignedAfter === 0 && queueTrigger.autoLaunchPending !== true) {
+        return undefined;
+    }
     if (queueTrigger.success === false) {
         return {
             queueClaimed: false,

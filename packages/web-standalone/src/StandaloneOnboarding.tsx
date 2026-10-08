@@ -17,6 +17,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { AlertBanner, Button, Dialog } from '@adhdev/web-core'
 import { ProviderLogo } from '@adhdev/web-core'
+import { standaloneFetch } from './standalone-auth-client'
 
 const DEFAULTS = ['claude-cli', 'codex-cli', 'antigravity-cli']
 
@@ -77,7 +78,7 @@ export default function StandaloneOnboarding({ onDone }: StandaloneOnboardingPro
         // screen a fresh install shows. Works identically under the vite dev
         // server (which proxies /api to the daemon) and the daemon-served
         // dashboard on :3847.
-        fetch('/api/v1/providers/catalog?sort=popular&limit=100')
+        standaloneFetch('/api/v1/providers/catalog?sort=popular&limit=100')
             .then(async r => {
                 if (!r.ok) throw new Error(`HTTP ${r.status}`)
                 const text = await r.text()
@@ -122,7 +123,7 @@ export default function StandaloneOnboarding({ onDone }: StandaloneOnboardingPro
         const out: InstallResult[] = []
         for (const type of selected) {
             try {
-                const res = await fetch('/api/v1/providers/install', {
+                const res = await standaloneFetch('/api/v1/providers/install', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ type }),

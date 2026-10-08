@@ -144,6 +144,7 @@ function projectRow(ports: AssistantProjectPorts, mesh: LocalMeshEntry, slug: st
             hosting: 'remote',
             host: remote.label,
             hostLabel: remote.label,
+            ...(remote.hostMeshId && remote.hostMeshId !== mesh.id ? { hostMeshId: remote.hostMeshId } : {}),
             reachability: remote.reachable ? 'relay' : 'unreachable',
             ...(remote.reachable ? {} : { unreachableReason: remote.reason ?? 'relay_failed' }),
             threadOpen: ports.relay.isThreadOpen ? ports.relay.isThreadOpen(mesh.id) : null,
