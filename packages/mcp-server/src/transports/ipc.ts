@@ -74,7 +74,13 @@ const IPC_COMMAND_TIMEOUTS_MS: Record<string, number> = {
   // 30s is therefore a defensive regression floor, not a cost budget: it guards a future
   // change that re-introduces synchronous pre-accept work. It is intentionally BELOW the
   // relay 90s budget because the ack reply is never bounded by the relay deadline.
-  refine_mesh_node: 30_000,
+  //
+  // refine_mesh_node's DEFAULT call is not an async ack, though: without execute:true it
+  // is the synchronous dry-run that returns the plan (the same git probes as
+  // plan_mesh_refine_node above). Since the mesh_refine_plan alias was removed
+  // (2026-10-08) every coordinator plan goes through it, so it carries the same 45s
+  // budget as plan_mesh_refine_node — still below the relay 90s.
+  refine_mesh_node: 45_000,
   batch_refine_mesh_nodes: 30_000,
   // trigger_mesh_queue: previously UNREGISTERED, so a local bare dispatch fell through to
   // the bare 15s default while the responder could far exceed it — triggerMeshQueue's

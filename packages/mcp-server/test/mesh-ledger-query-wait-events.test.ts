@@ -3,7 +3,7 @@ import test from 'node:test';
 import { existsSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { meshLedgerQuery } from '../src/tools/mesh-tools.js';
+import { meshLedgerQuery, meshTaskHistory, ALL_MESH_TOOLS } from '../src/tools/mesh-tools.js';
 import { getLedgerDir, loadConfig } from '@adhdev/daemon-core';
 import { __clearLocalRecordsForTests } from '@adhdev/daemon-core';
 import { __clearMeshPendingEventsForTests } from './helpers/pending-notices.js';
@@ -78,6 +78,63 @@ test('mesh_ledger_query clamps tail to 500 and echoes the resolved query', async
     // default tail when unspecified is 50.
     const res2 = JSON.parse(await meshLedgerQuery(makeCtx(meshId), {}));
     assert.equal(res2.query.tail, 50);
+  } finally {
+    cleanup(meshId);
+  }
+});
+
+// 2026-10-08: mesh_task_history absorbed the kind-list / since / node axes; mesh_ledger_query
+// is a deprecated alias for one release.
+test('mesh_task_history composes kind list + node + since (the absorbed mesh_ledger_query axes)', async () => {
+  const meshId = 'mesh_task_history_axes';
+  cleanup(meshId);
+  try {
+    seedLocalRecord(meshId, { kind: 'task_dispatched', nodeId: 'mach_alpha', payload: { i: 0 } });
+    seedLocalRecord(meshId, { kind: 'task_failed', nodeId: 'mach_alpha', payload: { i: 1 } });
+    seedLocalRecord(meshId, { kind: 'task_failed', nodeId: 'mach_beta', payload: { i: 2 } });
+    seedLocalRecord(meshId, { kind: 'task_completed', nodeId: 'mach_alpha', payload: { i: 3 } });
+
+    const alphaTerminal = JSON.parse(await meshTaskHistory(makeCtx(meshId), {
+      kind: 'task_failed, task_completed',
+      node: 'daemon_mach_alpha',
+    }));
+    assert.equal(alphaTerminal.payloadMode, 'compact');
+    assert.equal(alphaTerminal.count, 2);
+    assert.deepEqual(alphaTerminal.entries.map((e: any) => e.payload.i), [1, 3]);
+    assert.deepEqual(alphaTerminal.query, { kind: ['task_failed', 'task_completed'], node: 'daemon_mach_alpha', tail: 20 });
+
+    // since in the future excludes everything; since in the past keeps everything.
+    const future = JSON.parse(await meshTaskHistory(makeCtx(meshId), { since: new Date(Date.now() + 60_000).toISOString() }));
+    assert.equal(future.count, 0);
+    const past = JSON.parse(await meshTaskHistory(makeCtx(meshId), { since: String(Date.now() - 60_000) }));
+    assert.equal(past.count, 4);
+
+    // Tail clamps: compact 30 (20 past 50), verbose 500.
+    assert.equal(JSON.parse(await meshTaskHistory(makeCtx(meshId), { tail: 40 })).query.tail, 30);
+    assert.equal(JSON.parse(await meshTaskHistory(makeCtx(meshId), { tail: 99999 })).query.tail, 20);
+    assert.equal(JSON.parse(await meshTaskHistory(makeCtx(meshId), { tail: 99999, verbose: true })).query.tail, 500);
+  } finally {
+    cleanup(meshId);
+  }
+});
+
+test('mesh_ledger_query is a published deprecated alias that returns full payloads', async () => {
+  const tool = ALL_MESH_TOOLS.find(t => t.name === 'mesh_ledger_query');
+  assert.ok(tool, 'alias stays published for one release');
+  assert.match(tool!.description, /^Deprecated alias of mesh_task_history/);
+  const history = ALL_MESH_TOOLS.find(t => t.name === 'mesh_task_history')!;
+  // Every alias argument is accepted by the surviving tool.
+  for (const arg of Object.keys((tool!.inputSchema as any).properties)) {
+    assert.ok(Object.prototype.hasOwnProperty.call((history.inputSchema as any).properties, arg), `mesh_task_history lacks ${arg}`);
+  }
+
+  const meshId = 'mesh_ledger_query_alias';
+  cleanup(meshId);
+  try {
+    seedLocalRecord(meshId, { kind: 'task_completed', nodeId: 'mach_alpha', payload: { taskId: 't1', finalSummary: 'x'.repeat(1000) } });
+    const res = JSON.parse(await meshLedgerQuery(makeCtx(meshId), {}));
+    assert.equal(res.payloadMode, 'full');
+    assert.equal(res.entries[0].payload.finalSummary.length, 1000);
   } finally {
     cleanup(meshId);
   }

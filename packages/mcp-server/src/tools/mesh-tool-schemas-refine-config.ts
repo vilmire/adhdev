@@ -102,18 +102,6 @@ export const MESH_INIT_TOOL = {
     },
 };
 
-export const MESH_REFINE_PLAN_TOOL = {
-    name: 'mesh_refine_plan',
-    description: 'Alias of mesh_refine_node\'s default dry-run: the Refinery plan for a worktree node (config source, validation commands, merge/cleanup intent); executes nothing.',
-    inputSchema: {
-        type: 'object' as const,
-        properties: {
-            node_id: { type: 'string', description: 'Worktree node to plan.' },
-        },
-        required: ['node_id'],
-    },
-};
-
 export const MESH_REVIEW_INBOX_TOOL = {
     name: 'mesh_review_inbox',
     description: 'List local worktree nodes that need human review: merge candidates (pushed feature branches ready to merge) and Refinery-blocked review results. Returns evidence summaries, diff stats vs. the default branch, and suggested actions (Refine / Requeue / Dismiss). Remote nodes are excluded in M4.0.',

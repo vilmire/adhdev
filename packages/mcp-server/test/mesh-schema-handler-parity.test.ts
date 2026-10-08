@@ -238,7 +238,8 @@ const MERGED_ACTION_HANDLERS: Record<string, Record<string, string>> = {
 test('A3: the required-arg table agrees with every handler signature on node_id / session_id / task_id', () => {
     const registry = handlerRegistry();
     const argTypes = handlerArgTypes();
-    assert.ok(registry.size >= 48, `registry parse failed (${registry.size} entries)`);
+    // 47 since mesh_refine_plan left the dispatch table (2026-10-08).
+    assert.ok(registry.size >= 47, `registry parse failed (${registry.size} entries)`);
     const schemaByName = new Map<string, any>([...ALL_MESH_TOOLS, MESH_NOTIFY_WORKER_TOOL].map(t => [t.name, t]));
     const audited: string[] = [];
     const untyped: string[] = [];

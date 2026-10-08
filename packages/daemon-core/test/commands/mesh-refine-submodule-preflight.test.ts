@@ -304,7 +304,7 @@ describe('batch_refine_mesh_nodes dry-run submodule preflight', () => {
     return { base: root, localOnly: only }
   }
 
-  // The single-node plan surfaces: mesh_refine_plan and mesh_refine_node(dry_run).
+  // The single-node plan surfaces: plan_mesh_refine_node and refine_mesh_node(dry_run).
   for (const command of ['plan_mesh_refine_node', 'refine_mesh_node'] as const) {
     it(`${command} carries the same preflight warning`, async () => {
       const tmp = makeTmp()

@@ -51,9 +51,12 @@ export const CANONICAL_MESH_TOOL_NAMES = [
     'mesh_refine_batch',
     'mesh_config',
     'mesh_init',
-    'mesh_refine_plan',
     'mesh_cleanup_sessions',
     'mesh_task_history',
+    // Deprecated alias of mesh_task_history (2026-10-08: the kind/since/node query
+    // axes moved onto mesh_task_history). Still published for one release so older
+    // coordinator prompts keep working; drop it — here, in ALL_MESH_TOOLS, the
+    // dispatch table and the prompt index — in the next release.
     'mesh_ledger_query',
     'mesh_note',
     'mesh_reconcile_ledger',
@@ -112,6 +115,8 @@ export const REMOVED_MESH_TOOLS: Readonly<Record<string, string>> = {
     mesh_magi_kind_panel: 'There are no review panels any more; pick the workers per review with mesh_send_task.',
     mesh_magi_kind_panel_set: 'There are no review panels any more; pick the workers per review with mesh_send_task.',
     mesh_magi_kind_panel_list: 'There are no review panels any more; pick the workers per review with mesh_send_task.',
+    // 2026-10-08: was a pure alias — mesh_refine_node's default dry-run returns the same plan.
+    mesh_refine_plan: 'Call mesh_refine_node with the same node_id and no execute: its default dry-run returns the same Refinery plan and executes nothing.',
 };
 
 /**

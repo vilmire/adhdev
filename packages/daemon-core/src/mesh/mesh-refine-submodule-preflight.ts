@@ -10,7 +10,7 @@
  * submodule_reachability gate refused the merge. Minutes of gate work spent to
  * learn the merge was never possible.
  *
- * So the plan surfaces (mesh_refine_plan, mesh_refine_node dry-run,
+ * So the plan surfaces (plan_mesh_refine_node, mesh_refine_node dry-run,
  * mesh_refine_batch dry-run) now run the SAME reachability probe up front —
  * scoped strictly to nodes whose branch touches a submodule gitlink, so the
  * dry-run stays fast and quiet for everything else.
@@ -228,7 +228,7 @@ export async function resolveRefinePlanBaseRef(repoRoot: string): Promise<string
 }
 
 /**
- * Single-node convenience wrapper for the plan surfaces (mesh_refine_plan,
+ * Single-node convenience wrapper for the plan surfaces (plan_mesh_refine_node,
  * mesh_refine_node dry-run): resolves the node's repoRoot / branch / baseRef,
  * then runs {@link runMeshRefineSubmoduleReachabilityPreflight}. Returns
  * UNDEFINED when the node cannot be analyzed or touches no submodule — the

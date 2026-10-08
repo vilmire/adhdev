@@ -272,28 +272,35 @@ export const MESH_CLEANUP_SESSIONS_TOOL = {
 
 export const MESH_TASK_HISTORY_TOOL = {
     name: 'mesh_task_history',
-    description: 'Read the task ledger for this mesh — dispatched tasks, completions, failures, checkpoints, node lifecycle events, and mission lifecycle (mission_created / mission_status_changed / mission_goal_updated). Use to understand what has been done before deciding next steps, to detect repeated failures, to audit mission goal/status changes, and to inform recovery decisions.',
+    description: 'Read this mesh\'s ledger — dispatched tasks, completions, failures, checkpoints, node lifecycle, mission lifecycle (mission_created / mission_status_changed / mission_goal_updated). Use it before deciding next steps, to detect repeated failures, audit mission changes and inform recovery. Filters compose (AND): kind, since and node narrow the entries (e.g. "what happened on node X", "what failed since <time>"), tail keeps the most recent N. Returns entries oldest→newest, count, the resolved query, a summary and per-task taskStats. Read-only.',
     inputSchema: {
         type: 'object' as const,
         properties: {
-            tail: { type: 'number', description: 'Number of recent entries to return (default: 20; clamped to 40 in compact mode, 200 in verbose).' },
-            kind: { type: 'string', description: 'Filter by entry kind: task_dispatched, task_completed, task_failed, task_stalled, session_launched, checkpoint_created, node_cloned, node_removed, direct_fast_forward, mission_created, mission_status_changed, mission_goal_updated.' },
+            tail: { type: 'number', description: 'Most recent N matching entries (default 20; clamped to 30 in compact mode — 20 when more than 50 is requested — and to 500 in verbose).' },
+            kind: { type: 'string', description: 'One entry kind or a comma-separated list (e.g. "task_failed,task_stalled"). Kinds include: task_dispatched, task_completed, task_failed, task_stalled, task_approval_needed, session_launched, session_stopped, checkpoint_created, node_cloned, node_joined, node_removed, direct_fast_forward, ledger_reconciled, event_held, mission_created, mission_status_changed, mission_goal_updated.' },
+            since: { type: 'string', description: 'Only entries at/after this time: ISO-8601 or epoch-milliseconds.' },
+            node: { type: 'string', description: 'Only entries from this node (nodeId); any identifier form (mach_X / daemon_mach_X) resolves.' },
             compact: { type: 'boolean', description: 'Slim payload for LLM callers. Default true. Truncates long payload strings (message/taskSummary ≤200, finalSummary ≤300) and elides any large nested evidence blob (>2KB serialized — e.g. validationSummary/result/patchEquivalence/submoduleReachability) to a {_elided,_kind,_bytes,_hint} placeholder; full evidence stays accessible via mesh_reconcile_ledger. Set false (or verbose=true) for full untruncated payloads.' },
             verbose: { type: 'boolean', description: 'Force the full untruncated payload; overrides compact.' },
         },
     },
 };
 
+// 2026-10-08: the kind / since / node query axes moved onto mesh_task_history.
+// Kept published for ONE release so older coordinator prompts and transcripts that
+// call it still work; it forwards to mesh_task_history with verbose=true and its
+// old tail defaults (50, max 500). Remove it in the next release (mesh-shared
+// CANONICAL_MESH_TOOL_NAMES, ALL_MESH_TOOLS, dispatch, annotations, prompt index).
 export const MESH_LEDGER_QUERY_TOOL = {
     name: 'mesh_ledger_query',
-    description: 'Read-only ledger query along the kind / time / node axes — the complement to mesh_task_history (which is task-axis-centric). Use this to answer "what happened on node X", "what failed since <time>", or "show every checkpoint_created" without scanning transcripts. Filters compose (AND): kind narrows to one or more entry kinds, since bounds the time window, node restricts to one node (identity-form-agnostic), tail caps the returned count to the most recent N. Returns the filtered ledger entries (oldest→newest) plus a small summary. Does not mutate anything.',
+    description: 'Deprecated alias of mesh_task_history (same filters, full payloads, tail default 50); removed next release — call mesh_task_history.',
     inputSchema: {
         type: 'object' as const,
         properties: {
-            kind: { type: 'string', description: 'Filter by entry kind. Accepts one kind, or a comma-separated list (e.g. "task_failed,task_stalled"). Valid kinds include: task_dispatched, task_completed, task_failed, task_stalled, task_approval_needed, session_launched, session_stopped, checkpoint_created, node_cloned, node_joined, node_removed, direct_fast_forward, ledger_reconciled, event_held, mission_created, mission_status_changed, mission_goal_updated.' },
-            since: { type: 'string', description: 'Only return entries at/after this time. ISO-8601 string (e.g. "2026-07-05T00:00:00Z") or epoch-milliseconds. Omit for no lower bound.' },
-            node: { type: 'string', description: 'Only return entries originating from this node (nodeId). Matched by daemon-id equivalence, so any identifier form (mach_X / daemon_mach_X) resolves.' },
-            tail: { type: 'number', description: 'Return only the most recent N matching entries (default 50; clamped to 500).' },
+            kind: { type: 'string' },
+            since: { type: 'string' },
+            node: { type: 'string' },
+            tail: { type: 'number' },
         },
     },
 };
