@@ -2876,6 +2876,7 @@
         "openCoordinatorChat": "コーディネーターのチャットを開く",
         "coordinatorGone": "コーディネーターセッションは終了しました",
         "chatNotFound": "このダッシュボードに該当セッションのチャットタブがありません — 別のマシンで実行中の可能性があります。",
+        "openChatUnavailable": "ここからはこのチャットを開けません — ダッシュボードから開いてください。",
         "openChatHint": "クリックでこのセッションのチャットを開く"
     },
     "sessionInfo": {

@@ -2876,6 +2876,7 @@
         "openCoordinatorChat": "Open coordinator chat",
         "coordinatorGone": "coordinator session ended",
         "chatNotFound": "No chat tab for this session on this dashboard — it may be running on another machine.",
+        "openChatUnavailable": "Can't open this chat from here — open it from the dashboard.",
         "openChatHint": "Click to open this session’s chat"
     },
     "sessionInfo": {

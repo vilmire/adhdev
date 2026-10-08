@@ -15,7 +15,9 @@ import { formatAbsoluteTime, formatDateLocalized } from '../../utils/time'
 import DashboardMeshGraphDialog from '../../components/dashboard/LazyDashboardMeshGraphDialog'
 import { buildMeshGraphLaunchConversation } from './graph-launch'
 import { resolveMeshHostDaemonId } from './host-seed'
-import { groupNodesByMachine } from './MeshNodeList'
+import { summarizeMeshListMachineHealth } from './mesh-list-health'
+import { useMeshStatusSubscription } from '../../hooks/useMeshStatusSubscription'
+import { useCoordinatorMeshStatusSnapshot } from '../../hooks/useCoordinatorMeshStatus'
 import type { MeshEntry, MeshListViewFeatures } from './types'
 
 function daemonLabel(daemon: RepoMeshDaemonEntry | undefined): string {
@@ -62,6 +64,8 @@ interface Props {
     onCancelCreate: () => void
     /** Command seam for the row's "Open" (live view dialog). Without it, Open is hidden. */
     sendCommand?: (daemonId: string, command: string, payload?: any) => Promise<any>
+    /** Subscription seam for each card's coordinator `mesh.status` push (machine health). */
+    sendData?: (daemonId: string, data: any) => boolean
 }
 
 export function MeshListView({
@@ -93,6 +97,7 @@ export function MeshListView({
     onCreate,
     onCancelCreate,
     sendCommand,
+    sendData,
 }: Props) {
     const { t } = useTranslation('common')
     // UI-only presentation state (form values stay in props). The identity/URL block is
@@ -156,63 +161,16 @@ export function MeshListView({
                     action={<button className="btn btn-primary btn-sm" disabled={!daemons.length} onClick={onToggleCreate}>{t('mesh.list.createFirst')}</button>} />
             ) : (
                 <div className="flex flex-col gap-2.5">
-                    {meshes.map(mesh => {
-                        const nodes = Array.isArray(mesh.nodes) ? mesh.nodes : []
-                        // Live health: how many of the mesh's machines are online.
-                        const machines = groupNodesByMachine(nodes.filter(n => n.isLocalWorktree !== true), daemons)
-                            .filter(group => group.key)
-                        const onlineCount = machines.filter(group => group.online).length
-                        const hostDaemonId = resolveMeshHostDaemonId(mesh as any, daemons)
-                        const hostConnected = !!hostDaemonId && daemons.some(d => daemonIdsEquivalent(d.id, hostDaemonId) && (d.status === undefined || d.status === 'online'))
-                        const createdAt = mesh.createdAt || (mesh as any).created_at
-                        const healthTone = machines.length === 0
-                            ? 'bg-neutral-500'
-                            : onlineCount === machines.length ? 'bg-green-400' : onlineCount === 0 ? 'bg-red-400' : 'bg-amber-400'
-                        return (
-                            <div key={mesh.id}
-                                className="flex w-full flex-col gap-3 rounded-xl border border-border-subtle bg-bg-glass px-4 py-3.5 transition-colors hover:border-border-default sm:flex-row sm:items-center">
-                                <button type="button" onClick={() => onSelectMesh(mesh.id)} className="min-w-0 flex-1 cursor-pointer border-none bg-transparent p-0 text-left">
-                                    <div className="mb-1 flex items-center gap-2">
-                                        <IconMesh size={16} />
-                                        <span className="truncate text-sm font-bold text-text-primary">{mesh.name}</span>
-                                    </div>
-                                    <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-text-muted">
-                                        <span className="inline-flex items-center gap-1.5">
-                                            <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${healthTone}`} />
-                                            {machines.length > 0
-                                                ? t('mesh.list.machinesOnline', { online: onlineCount, total: machines.length })
-                                                : t('mesh.list.nodeCount', { count: nodes.length || (mesh as any).nodeCount || 0 })}
-                                        </span>
-                                        <span className="truncate font-mono">{mesh.repoIdentity || (mesh as any).repo_identity || t('mesh.list.noRepoIdentity')}</span>
-                                        {(mesh.defaultBranch || (mesh as any).default_branch) && (
-                                            <span className="inline-flex items-center gap-1"><IconGitBranch size={11} />{mesh.defaultBranch || (mesh as any).default_branch}</span>
-                                        )}
-                                        {createdAt && (
-                                            <Tooltip content={formatAbsoluteTime(createdAt)}>
-                                                <span>{formatDateLocalized(createdAt)}</span>
-                                            </Tooltip>
-                                        )}
-                                    </div>
-                                </button>
-                                <div className="flex shrink-0 items-center gap-2">
-                                    <button type="button" className="btn btn-secondary btn-sm" onClick={() => onSelectMesh(mesh.id)}>
-                                        {t('mesh.list.settings')}
-                                    </button>
-                                    {sendCommand && (
-                                        <button
-                                            type="button"
-                                            className="btn btn-primary btn-sm"
-                                            disabled={!hostConnected}
-                                            title={hostConnected ? undefined : t('mesh.detail.observabilityDisabledTitle')}
-                                            onClick={() => setOpenMesh({ meshId: mesh.id, daemonId: hostDaemonId, meshName: mesh.name })}
-                                        >
-                                            {t('mesh.list.open')}
-                                        </button>
-                                    )}
-                                </div>
-                            </div>
-                        )
-                    })}
+                    {meshes.map(mesh => (
+                        <MeshListRow
+                            key={mesh.id}
+                            mesh={mesh}
+                            daemons={daemons}
+                            sendData={sendData}
+                            onSelectMesh={onSelectMesh}
+                            onOpen={sendCommand ? setOpenMesh : undefined}
+                        />
+                    ))}
                 </div>
             )}
 
@@ -224,5 +182,88 @@ export function MeshListView({
                 />
             )}
         </AppPage>
+    )
+}
+
+/**
+ * One mesh card. Machine health is read from the coordinator's mesh_status (the
+ * same shared store and `mesh.status` push the detail view uses), so a remote
+ * member counts as online when the coordinator reaches it even though this
+ * dashboard's own daemon list (standalone: just the local daemon) never lists it.
+ */
+function MeshListRow({
+    mesh,
+    daemons,
+    sendData,
+    onSelectMesh,
+    onOpen,
+}: {
+    mesh: MeshEntry
+    daemons: RepoMeshDaemonEntry[]
+    sendData?: (daemonId: string, data: any) => boolean
+    onSelectMesh: (id: string) => void
+    onOpen?: (target: { meshId: string; daemonId: string; meshName: string }) => void
+}) {
+    const { t } = useTranslation('common')
+    const nodes = Array.isArray(mesh.nodes) ? mesh.nodes : []
+    const hostDaemonId = resolveMeshHostDaemonId(mesh as any, daemons)
+    const hostConnected = !!hostDaemonId && daemons.some(d => daemonIdsEquivalent(d.id, hostDaemonId) && (d.status === undefined || d.status === 'online'))
+    // Push-only: subscribing shares the detail view's `mesh.status` slot; an
+    // offline host is not subscribed (the daemon-list fallback answers instead).
+    useMeshStatusSubscription({ meshId: mesh.id, daemonId: hostConnected ? hostDaemonId : null, sendData })
+    const statusSnapshot = useCoordinatorMeshStatusSnapshot(mesh.id)
+    const { total: machineCount, online: onlineCount } = summarizeMeshListMachineHealth({
+        nodes,
+        daemons,
+        statusNodes: statusSnapshot?.status?.nodes ?? null,
+        hostDaemonId,
+    })
+    const createdAt = mesh.createdAt || (mesh as any).created_at
+    const healthTone = machineCount === 0
+        ? 'bg-neutral-500'
+        : onlineCount === machineCount ? 'bg-green-400' : onlineCount === 0 ? 'bg-red-400' : 'bg-amber-400'
+    return (
+        <div
+            className="flex w-full flex-col gap-3 rounded-xl border border-border-subtle bg-bg-glass px-4 py-3.5 transition-colors hover:border-border-default sm:flex-row sm:items-center">
+            <button type="button" onClick={() => onSelectMesh(mesh.id)} className="min-w-0 flex-1 cursor-pointer border-none bg-transparent p-0 text-left">
+                <div className="mb-1 flex items-center gap-2">
+                    <IconMesh size={16} />
+                    <span className="truncate text-sm font-bold text-text-primary">{mesh.name}</span>
+                </div>
+                <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-text-muted">
+                    <span className="inline-flex items-center gap-1.5">
+                        <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${healthTone}`} />
+                        {machineCount > 0
+                            ? t('mesh.list.machinesOnline', { online: onlineCount, total: machineCount })
+                            : t('mesh.list.nodeCount', { count: nodes.length || (mesh as any).nodeCount || 0 })}
+                    </span>
+                    <span className="truncate font-mono">{mesh.repoIdentity || (mesh as any).repo_identity || t('mesh.list.noRepoIdentity')}</span>
+                    {(mesh.defaultBranch || (mesh as any).default_branch) && (
+                        <span className="inline-flex items-center gap-1"><IconGitBranch size={11} />{mesh.defaultBranch || (mesh as any).default_branch}</span>
+                    )}
+                    {createdAt && (
+                        <Tooltip content={formatAbsoluteTime(createdAt)}>
+                            <span>{formatDateLocalized(createdAt)}</span>
+                        </Tooltip>
+                    )}
+                </div>
+            </button>
+            <div className="flex shrink-0 items-center gap-2">
+                <button type="button" className="btn btn-secondary btn-sm" onClick={() => onSelectMesh(mesh.id)}>
+                    {t('mesh.list.settings')}
+                </button>
+                {onOpen && (
+                    <button
+                        type="button"
+                        className="btn btn-primary btn-sm"
+                        disabled={!hostConnected}
+                        title={hostConnected ? undefined : t('mesh.detail.observabilityDisabledTitle')}
+                        onClick={() => onOpen({ meshId: mesh.id, daemonId: hostDaemonId, meshName: mesh.name })}
+                    >
+                        {t('mesh.list.open')}
+                    </button>
+                )}
+            </div>
+        </div>
     )
 }

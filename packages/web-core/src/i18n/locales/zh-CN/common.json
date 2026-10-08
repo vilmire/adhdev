@@ -2876,6 +2876,7 @@
         "openCoordinatorChat": "打开协调器聊天",
         "coordinatorGone": "协调器会话已结束",
         "chatNotFound": "此仪表板上没有该会话的聊天标签 — 它可能运行在另一台机器上。",
+        "openChatUnavailable": "无法从此处打开该聊天 — 请在仪表板中打开。",
         "openChatHint": "点击打开此会话的聊天"
     },
     "sessionInfo": {
