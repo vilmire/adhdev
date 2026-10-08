@@ -14,7 +14,6 @@
  * a function-level circular import mirroring the earlier splits from this file.
  */
 import type { DaemonComponents } from '../boot/daemon-components.js';
-import { detectCLI } from '../detection/cli-detector.js';
 import { LOG } from '../logging/logger.js';
 import { spendTaskAutoLaunchSpawnBudget, recordTaskAutoLaunchDispatchFailure } from './mesh-autolaunch-spawn-budget.js';
 import { buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, getQueue, recordTaskAutoLaunch, isTaskReadonly, taskDependenciesSatisfied, meshTaskNotBeforeReady, meshTaskPriorityRank, requeueTask, parkTaskTargetPin, failRetentionExpiredParkedTask } from './mesh-work-queue.js';
@@ -43,6 +42,7 @@ import { selectQuotaBusyFallback, type QuotaFallbackCandidate } from './mesh-quo
 import { autoLaunchWriteWouldClobberWinner, driveExpiredAwaitClaim, autoLaunchAwaitClaimBackoff, claimAfterRemoteAutoLaunch, AUTO_LAUNCH_AWAIT_CLAIM_MS, isAutoLaunchWithinAwaitClaimWindow, __clearAwaitClaimBackoffForTests, __resetAutoLaunchOrphanNotifiedForTests } from './mesh-autolaunch-integrity.js';
 import { autoLaunchWriteWouldClobberDifficultyFloorWaitClock, handleDifficultyFloorSkip, isDifficultyFloorWaitReason, launchSideDifficultyFloorMismatch } from './mesh-difficulty-floor.js';
 import { maybeParkSpawnCappedTask } from './mesh-autolaunch-spawn-cap.js';
+import { slotProviderUnusableReason } from './mesh-slot-provider-usability.js';
 import { normalizeProviderPriority, isLaunchableNode, isLocalAutoLaunchNode, liveSessionCountForNode, nodeHasLiveSessionPendingClaim } from './mesh-candidacy-predicates.js';
 import {
     delegatedWorkerAutoApproveSettingsForNode,
@@ -281,30 +281,11 @@ async function resolveUsableProvider(
             failed.push(`${requestedType}: required_tags_mismatch`);
             continue;
         }
-        if (typeof providerLoader.isMachineProviderEnabled === 'function' && !providerLoader.isMachineProviderEnabled(normalizedType)) {
-            failed.push(`${requestedType}: disabled`);
-            continue;
-        }
-        let detected: any;
-        try {
-            detected = await detectCLI(normalizedType, providerLoader, { includeVersion: false });
-        } catch (e: any) {
-            failed.push(`${requestedType}: detect failed: ${e?.message || e}`);
-            continue;
-        }
-        if (typeof providerLoader.setCliDetectionResults === 'function') {
-            providerLoader.setCliDetectionResults([{
-                id: normalizedType,
-                installed: !!detected,
-                path: detected?.path,
-            }], false);
-        }
-        (components as any).onStatusChange?.();
-        if (detected) {
-            usableSlots.push({ slot, providerType: normalizedType });
-            continue;
-        }
-        failed.push(`${requestedType}: not detected`);
+        // Enablement + detection are judged by the machine that will spawn the CLI — a
+        // remote member is never refused for THIS daemon's config (mesh-slot-provider-usability.ts).
+        const unusable = await slotProviderUnusableReason(components, node, normalizedType, quotaFactsContext?.nodes);
+        if (unusable) { failed.push(`${requestedType}: ${unusable}`); continue; }
+        usableSlots.push({ slot, providerType: normalizedType });
     }
     if (!usableSlots.length) {
         if (difficultyFloorRequired) {
