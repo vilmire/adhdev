@@ -31,6 +31,7 @@ import type { MeshNodeGitStateEntry, MeshNodeGitStateStore } from '../../mesh/me
 import { isHeldRuntimeLive, MESH_NODE_STATE_STALE_MS, type MeshNodeGitRefresher, type MeshNodeHandshakeTarget } from '../../mesh/mesh-node-git-refresher.js';
 import type { MeshNodeRuntimeSession } from '../../mesh/mesh-node-runtime-summary.js';
 import type { RepoMeshNodeGitObservation, RepoMeshNodeHeldRuntime } from '../../repo-mesh-types.js';
+import { applyMeshNodeLinkPresence } from '../../mesh/mesh-node-link-presence.js';
 
 /** node.lastGit.source stamped on truth hydrated from the coordinator store. */
 export const MESH_NODE_STATE_HELD_SOURCE = 'coordinator_node_state';
@@ -121,7 +122,9 @@ export function hydrateMeshNodesFromGitState(args: {
  * Step 1 for mesh_status: a render COPY of the mesh in which every node served
  * by another daemon carries only held state — echoed transient fields stripped,
  * the held git as `lastGit` (remote workspaces), `machineStatus: 'online'` while
- * the member is still pushing. Nodes of this daemon are the same objects (the
+ * the member is still pushing (a presence link — standalone direct WS — then
+ * overrides it with the link state: mesh-node-link-presence.ts). Nodes of this
+ * daemon are the same objects (the
  * render loop's local stamps keep landing on the record). Without a transport
  * (`heldOnly` false) the mesh is returned unchanged.
  */
@@ -365,6 +368,12 @@ export function overlayMeshNodeGitObservations(snapshot: any, args: {
     if (args.locality) snapshot.nodeRuntimeHeld = true;
     for (const status of snapshot.nodes) {
         if (!status || typeof status !== 'object') continue;
+        // Every serve (cached, stale-while-revalidate, live): a node whose link is
+        // its presence (standalone direct WS) reports that link, never a cached
+        // snapshot's or a held push's 'online' over a closed link. The aggregate
+        // cache is dropped on every peer open / close, so the connection here is
+        // current (mesh-node-link-presence.ts).
+        applyMeshNodeLinkPresence(status);
         const nodeId = readText(status.nodeId);
         const daemonId = readText(status.daemonId);
         if (args.locality && status.connection?.state !== 'self' && isForeignDaemonMeshNode(status, args.locality)) {

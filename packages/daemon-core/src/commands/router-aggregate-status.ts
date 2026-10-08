@@ -13,7 +13,7 @@
  * inline-mesh cache cluster, so the move is a pure lift.
  */
 import type { DaemonCommandRouter } from './router.js';
-import { normalizeMeshNodeId } from '@adhdev/mesh-shared';
+import { daemonIdsEquivalent, normalizeMeshNodeId } from '@adhdev/mesh-shared';
 import { getMeshQueueRevision } from '../mesh/mesh-work-queue.js';
 import {
     applyInlineMeshBranchConvergence,
@@ -281,4 +281,27 @@ export function rememberAggregateMeshStatus(
         };
         self.aggregateMeshStatusCache.set(meshId, { builtAt, snapshot: cloneAggregateSnapshot(next), queueRevision: getMeshQueueRevision(meshId) });
         return next;
+}
+
+/**
+ * The mesh link to peer daemon `daemonId` opened or closed: drop every cached
+ * aggregate that renders a node of that daemon (and flush its mesh.status
+ * subscribers), so the next read re-reads the link — a node whose link is its
+ * presence goes offline / online on the edge, not when something unrelated
+ * next invalidates the cache. Returns how many meshes were invalidated.
+ */
+export function invalidateAggregateMeshStatusForPeer(self: DaemonCommandRouter, daemonId: string): number {
+    const wanted = readStringValue(daemonId);
+    if (!wanted) return 0;
+    const meshIds: string[] = [];
+    for (const [meshId, cached] of self.aggregateMeshStatusCache) {
+        const nodes = Array.isArray(cached?.snapshot?.nodes) ? cached.snapshot.nodes : [];
+        const servesPeer = nodes.some((node: any) => {
+            const nodeDaemonId = readStringValue(node?.daemonId);
+            return !!nodeDaemonId && daemonIdsEquivalent(nodeDaemonId, wanted);
+        });
+        if (servesPeer) meshIds.push(meshId);
+    }
+    for (const meshId of meshIds) self.invalidateAggregateMeshStatus(meshId);
+    return meshIds.length;
 }

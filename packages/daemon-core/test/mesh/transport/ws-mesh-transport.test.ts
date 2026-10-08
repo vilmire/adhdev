@@ -152,6 +152,8 @@ describe('WsMeshTransport', () => {
         expect(opened.sort()).toEqual([`host:${MEMBER}`, `member:${HOST}`]);
         expect(member.getPeerConnectionStatus(HOST)).toMatchObject({
             state: 'connected', transport: 'direct', directPeerTruthSatisfied: true, authority: 'live_peer',
+            // One persistent link per paired peer: its state is the peer's presence.
+            linkIsPresence: true,
         });
         expect(harness.host.listPeers()).toEqual([{ daemonId: MEMBER, state: 'connected', role: 'responder', meshIds: [MESH] }]);
         expect(member.listPeers()).toEqual([{ daemonId: HOST, state: 'connected', role: 'initiator', meshIds: [MESH] }]);
@@ -229,6 +231,9 @@ describe('WsMeshTransport', () => {
         const { member, accepted } = harness;
         expect(member.removeHostLink(HOST)).toBe(true);
         await waitFor(() => member.getPeerConnectionStatus(HOST)?.authority !== 'live_peer', 2_000, 'peer torn down');
+        // The retained terminal diagnostic still speaks for presence: not connected.
+        expect(member.getPeerConnectionStatus(HOST)).toMatchObject({ linkIsPresence: true });
+        expect(member.getPeerConnectionStatus(HOST)?.state).not.toBe('connected');
         await new Promise((r) => setTimeout(r, 300));
         expect(accepted.length).toBe(1);
         await expectMeshFailure(member.sendCommand(HOST, 'ping', {}, undefined, 200), 'PEER_NOT_CONNECTED');

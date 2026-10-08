@@ -70,6 +70,7 @@ async function waitFor(predicate: () => boolean, label: string, timeoutMs = 5000
 interface Calls {
   executed: Array<{ command: string; args: Record<string, unknown>; source: string }>;
   opened: string[];
+  closed: string[];
   ready: number;
 }
 
@@ -80,7 +81,7 @@ function makeLink(localDaemonId: string, store: { filePath: string }, seqscribe:
     handshakeTimeoutMs: 1500,
     transport: { retryDelayMs: () => 50 },
   });
-  const calls: Calls = { executed: [], opened: [], ready: 0 };
+  const calls: Calls = { executed: [], opened: [], closed: [], ready: 0 };
   link.attach({
     execute: async (command, args, source) => {
       calls.executed.push({ command, args, source });
@@ -88,6 +89,7 @@ function makeLink(localDaemonId: string, store: { filePath: string }, seqscribe:
     },
     router: {
       noteMeshPeerOpened: (id) => { calls.opened.push(id); },
+      noteMeshPeerClosed: (id) => { calls.closed.push(id); },
       noteMeshTransportReady: () => { calls.ready += 1; },
     },
     seqscribe,
@@ -226,6 +228,8 @@ describe('StandaloneMeshLink — RPC lane', () => {
 
     expect(secrets.removePeerSecret(MESH_ID, MEMBER_ID, hostStore)).toBe(true);
     await waitFor(() => host.link.transport.getPeerConnectionStatus(MEMBER_CANON)?.state !== 'connected', 'host dropped member');
+    // The close edge reaches the router (it drops cached mesh_status renders of the member's nodes).
+    expect(host.calls.closed).toContain(MEMBER_CANON);
     // The member keeps redialing (its record still exists) but the host no
     // longer admits it: with no host-role secret left the lane answers 503.
     await new Promise((r) => setTimeout(r, 300));

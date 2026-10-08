@@ -123,6 +123,7 @@ import {
 // ─── Aggregate mesh-status cache (bodies extracted from this file) ───
 import {
     getCachedAggregateMeshStatus,
+    invalidateAggregateMeshStatusForPeer,
     rememberAggregateMeshStatus,
 } from './router-aggregate-status.js';
 // ─── Remote mesh-session owner resolution (bodies extracted from this file) ───
@@ -1062,8 +1063,20 @@ export class DaemonCommandRouter {
      */
     noteMeshPeerOpened(daemonId: string): void {
         if (typeof daemonId !== 'string' || !daemonId.trim()) return;
+        invalidateAggregateMeshStatusForPeer(this, daemonId);
         void this.resumeMeshNodeStatePushOnStartup().then(() => { this.meshNodeStatePusher.pushNow(daemonId); });
         void handshakeMeshMemberDaemon(this.meshNodeStateLifecyclePort(), daemonId, 'reconnect').catch(() => 0);
+    }
+
+    /**
+     * Host wiring: the mesh link to peer daemon `daemonId` closed (its last
+     * socket went). Cached mesh_status renders of its nodes are dropped so a
+     * presence link (standalone direct WS) reads offline now; the next open
+     * re-handshakes (noteMeshPeerOpened).
+     */
+    noteMeshPeerClosed(daemonId: string): void {
+        if (typeof daemonId !== 'string' || !daemonId.trim()) return;
+        invalidateAggregateMeshStatusForPeer(this, daemonId);
     }
 
     /**

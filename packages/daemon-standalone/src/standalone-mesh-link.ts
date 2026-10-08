@@ -12,7 +12,8 @@
  *   - `attach()`      → inbound commands into the host runtime with source
  *                       `mesh` and the handshake-proven sender stamped
  *                       (cloud `CloudCommandTransports.handleMeshCommand`),
- *                       peer-open → `router.noteMeshPeerOpened`, then
+ *                       peer-open → `router.noteMeshPeerOpened`, peer-close →
+ *                       `router.noteMeshPeerClosed`, then
  *                       `router.noteMeshTransportReady()`;
  *   - member links    → one `WsMeshTransport.addHostLink` + one seqscribe
  *                       replication loop per member-role pairing secret,
@@ -91,6 +92,7 @@ export interface StandaloneMeshLinkAttachDeps {
   /** Router lifecycle hooks (`DaemonCommandRouter`). */
   readonly router: {
     noteMeshPeerOpened(daemonId: string): void;
+    noteMeshPeerClosed(daemonId: string): void;
     noteMeshTransportReady(): void;
   };
   /** The daemon⇄daemon replication link; null when the seqscribe node did not open. */
@@ -211,7 +213,9 @@ export class StandaloneMeshLink {
     });
     this.disposers.push(this.transport.onPeerLifecycle({
       onPeerOpen: (daemonId) => deps.router.noteMeshPeerOpened(daemonId),
-      onPeerClosed: () => { /* the next open re-handshakes */ },
+      // The link is the peer's presence: drop cached mesh_status renders of its
+      // nodes so they read offline now (the next open re-handshakes).
+      onPeerClosed: (daemonId) => deps.router.noteMeshPeerClosed(daemonId),
     }));
     this.disposers.push(onPeerSecretsChanged((change) => this.onSecretsChanged(change)));
     this.reconcileMemberLinks();

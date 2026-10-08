@@ -426,6 +426,7 @@ export class WsMeshTransport extends MeshRpcEndpoint {
                     : {}),
                 attempt: peer.attempt,
                 authEpoch: 0,
+                linkIsPresence: true,
             };
         }
         const diagnostic = this.peerDiagnostics.get(target);
@@ -457,6 +458,7 @@ export class WsMeshTransport extends MeshRpcEndpoint {
                 attempt: link.failures,
                 nextRetryAt: link.nextRetryAt,
                 authEpoch: 0,
+                linkIsPresence: true,
             };
         }
         if (!diagnostic) return null;
@@ -480,6 +482,7 @@ export class WsMeshTransport extends MeshRpcEndpoint {
             attempt: diagnostic.attempt,
             nextRetryAt: diagnostic.nextRetryAt,
             authEpoch: diagnostic.authEpoch,
+            linkIsPresence: true,
         };
     }
 
