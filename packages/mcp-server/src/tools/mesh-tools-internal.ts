@@ -17,7 +17,7 @@
 // re-export hub — every consumer imports a helper from the module that defines it.
 
 import { IpcTransport } from '../transports/ipc.js';
-import type { CommandTransport } from '../transports/mode.js';
+import { supportsMeshRelay, type CommandTransport, type MeshRelayTransport } from '../transports/mode.js';
 import { withStatusProbeMarker, type ActiveWorkQueryResponse, readString } from '@adhdev/mesh-shared';
 import type { LocalMeshEntry, LocalMeshNodeEntry, MeshActiveWorkSummary, MeshToolCallRateResult } from '@adhdev/daemon-core';
 import { daemonIdsEquivalent, meshNodeIdMatches, isP2pRelayTransportFailure } from '@adhdev/daemon-core';
@@ -654,9 +654,11 @@ export async function commandForNode(
     await ensureMeshNodeRoutes(ctx);
     const isLocalNode = isLocalControlPlaneNode(ctx, node);
 
-    if (ctx.transport instanceof IpcTransport && node.daemonId && !isLocalNode) {
+    // Capability, not a transport class: the cloud daemon (IPC) and the
+    // standalone daemon (HTTP) both relay to the node's owner daemon.
+    if (supportsMeshRelay(ctx.transport) && node.daemonId && !isLocalNode) {
         // OFFLINE-NODE-STATUS-REFRESH: a status-origin probe (explicit_refresh /
-        // mesh_status) stamps the marker into the relayed args so the daemon-cloud
+        // mesh_status) stamps the marker into the relayed args so the daemon's
         // relay handler grants the SHORT connect-wait budget — an offline peer is
         // rejected in ~seconds instead of blocking the relay for the full 90s connect
         // deadline. A local-transport call needs no marker (no relay / no connect wait).
@@ -668,8 +670,8 @@ export async function commandForNode(
 
 /**
  * §8 unit 8: the exact condition under which a semantic replica read may be
- * attempted for `node` — a REMOTE node reachable over the coordinator's local
- * IPC. Returns the coordinator transport (the one that owns the replica store),
+ * attempted for `node` — a REMOTE node reachable through the coordinator
+ * daemon's relay (cloud IPC or standalone HTTP). Returns the coordinator transport (the one that owns the replica store),
  * or null when the replica hop must be skipped entirely.
  *
  * Extracted rather than repeated at each of the three call sites because it
@@ -682,9 +684,9 @@ export async function commandForNode(
 export function resolveSemanticReplicaTransport(
     ctx: MeshContext,
     node: LocalMeshNodeEntry | null | undefined,
-): IpcTransport | null {
+): MeshRelayTransport | null {
     if (!node || !node.daemonId) return null;
-    if (!(ctx.transport instanceof IpcTransport)) return null;
+    if (!supportsMeshRelay(ctx.transport)) return null;
     if (isLocalControlPlaneNode(ctx, node)) return null;
     return ctx.transport;
 }

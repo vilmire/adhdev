@@ -20,6 +20,7 @@ import {
   type DaemonHostRuntime,
   type LocalIpcServerHandle,
 } from '@adhdev/daemon-core';
+import { MESH_RELAY_COMMAND } from './standalone-mesh-relay.js';
 
 export function standaloneIpcEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   const value = String(env.ADHDEV_STANDALONE_ENABLE_IPC || '').trim().toLowerCase();
@@ -29,6 +30,8 @@ export function standaloneIpcEnabled(env: NodeJS.ProcessEnv = process.env): bool
 export async function startStandaloneIpcCompatServer(opts: {
   pkgVersion: string;
   host(): DaemonHostRuntime | null;
+  /** `mesh_relay_command` — the standalone relay over the direct-WS mesh link (standalone-mesh-relay.ts). */
+  relayMeshCommand(payload: Record<string, unknown>): Promise<Record<string, unknown>>;
 }): Promise<LocalIpcServerHandle | null> {
   try {
     return await startLocalIpcServer({
@@ -52,14 +55,11 @@ export async function startStandaloneIpcCompatServer(opts: {
       handleCommand: async ({ command, args }) => {
         const host = opts.host();
         if (!host) return { success: false, error: 'daemon not ready' };
-        // Standalone does not implement mesh_relay_command (single-machine only).
-        if (command === 'mesh_relay_command') {
-          return {
-            success: false,
-            error: 'mesh_relay_command not supported in standalone mode (single-machine only)',
-          };
-        }
-        const result = await host.execute(command, args, 'ipc');
+        // Remote-node relay: same contract as the cloud IPC relay (a thrown
+        // error is a failed command; a structured failure is a result).
+        const result: any = command === MESH_RELAY_COMMAND
+          ? await opts.relayMeshCommand(args)
+          : await host.execute(command, args, 'ipc');
         const errVal = (result as any)?.error;
         return {
           success: !!result?.success,

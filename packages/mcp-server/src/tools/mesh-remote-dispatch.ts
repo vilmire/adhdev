@@ -18,7 +18,7 @@ import {
 } from '@adhdev/daemon-core';
 import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared';
 import { type MeshTaskInput } from './mesh-tool-shared.js';
-import { IpcTransport } from '../transports/ipc.js';
+import { supportsMeshRelay, type MeshRelayTransport } from '../transports/mode.js';
 import { readProviderPriority, classifyRemoteDelegateRelaySafety, chooseDispatchableSession } from './mesh-tools-internal-core.js';
 import { resolveSessionProviderType, readSessionRecordId, unwrapCommandPayload } from './mesh-session-helpers.js';
 import { readNodeRuntime } from './mesh-held-node-state.js';
@@ -45,6 +45,15 @@ function buildRelayUnsafeRemoteSessionFailure(ctx: MeshContext, node: LocalMeshN
         nextAction: `Launch a fresh relay-safe session with mesh_launch_session(node_id: '${node.id}'${providerType ? `, type: '${providerType}'` : ''}) or dispatch without session_id so Repo Mesh can choose a valid delegate session.`,
         noFallbackReason: 'Blindly reusing a remote session without mesh relay metadata would silently drop task_completed / generating_completed events.',
     };
+}
+
+
+/** The coordinator transport for a `remote` direct dispatch — only chosen when it can relay. */
+function relayTransport(ctx: MeshContext): MeshRelayTransport {
+    if (!supportsMeshRelay(ctx.transport)) {
+        throw new Error('remote direct dispatch needs a transport that relays to the node\'s daemon');
+    }
+    return ctx.transport;
 }
 
 export function buildMissingCoordinatorDaemonIdFailure(ctx: MeshContext, node: LocalMeshNodeEntry, providerType?: string): ({ success: false; error: string } & Record<string, unknown>) {
@@ -574,7 +583,7 @@ export async function sendDirectAgentTask(
     };
     try {
         const dispatchResult = route === 'remote'
-            ? await (ctx.transport as IpcTransport).meshCommand(node.daemonId!, 'agent_command', body)
+            ? await relayTransport(ctx).meshCommand(node.daemonId!, 'agent_command', body)
             : await ctx.transport.command('agent_command', body);
         const dispatchPayload = unwrapCommandPayload(dispatchResult);
         if (dispatchPayload?.success === false || dispatchResult?.success === false) {

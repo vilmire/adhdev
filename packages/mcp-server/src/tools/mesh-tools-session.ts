@@ -12,7 +12,7 @@ import {
     refreshMeshFromDaemon,
     triggerMeshQueueAndReport,
 } from './mesh-tools-internal.js';
-import { IpcTransport } from '../transports/ipc.js';
+import { supportsMeshRelay } from '../transports/mode.js';
 import {
     SESSION_PROVIDER_METADATA_TTL_MS,
     getSessionMetadata,
@@ -259,7 +259,7 @@ export async function meshReadChat(
     const requestedProviderSessionId = typeof args.provider_session_id === 'string' && args.provider_session_id.trim()
         ? args.provider_session_id.trim()
         : undefined;
-    if (!isLocalNode && ctx.transport instanceof IpcTransport && node.daemonId) {
+    if (!isLocalNode && supportsMeshRelay(ctx.transport) && node.daemonId) {
         const replica = await readTranscriptReplicaForDisplay(ctx.transport, {
             ownerDaemonId: node.daemonId,
             rawSessionId: args.session_id,

@@ -98,7 +98,7 @@ interface DashboardDockviewWorkspaceProps {
     registerActionHandlers?: (handlers: {
         setShortcutForActiveTab: () => void
         restoreHiddenTabToSavedLocation: (tabKey: string) => void
-        activateConversationTab: (tabKey: string) => void
+        activateConversationTab: (tabKey: string) => boolean
         resetAllPanelsToMain: () => void
         activatePreviousTabInGroup: () => void
         activateNextTabInGroup: () => void
@@ -439,10 +439,10 @@ export default function DashboardDockviewWorkspace({
         const api = apiRef.current
         if (api) renderDockviewPopoutChrome(api, conversationsByTabKey, moveTabBackToMain)
     }, [conversationsByTabKey, moveTabBackToMain])
-    const selectTabByShortcut = useCallback((tabKey: string) => {
+    const selectTabByShortcut = useCallback((tabKey: string): boolean => {
         const api = apiRef.current
         const panel = api?.getPanel(tabKey)
-        if (!api || !panel) return
+        if (!api || !panel) return false
         panel.group.model.openPanel(panel)
         panel.api.setActive()
         requestConversationScrollToBottom(tabKey, 'dockview-shortcut')
@@ -454,6 +454,7 @@ export default function DashboardDockviewWorkspace({
                 focusOwnerWindow(panel.group.element?.ownerDocument)
             }
         } catch { /* ignore */ }
+        return true
     }, [requestConversationScrollToBottom])
     const activateRelativeTabInGroup = useCallback((direction: -1 | 1) => {
         const api = apiRef.current

@@ -174,19 +174,25 @@ export class StandaloneMeshLink {
   /** `DaemonBootConfig.mesh` — the same contract cloud fills from its WebRTC mesh manager. */
   bootConfig(): StandaloneMeshBootConfig {
     return {
-      dispatchMeshCommand: (daemonId, command, args) => {
-        // OFFLINE-NODE-FANOUT / STATUS-REFRESH (cloud parity): probes get the
-        // short connect-wait budget; the status marker never reaches the peer.
-        const connectWaitMs = resolveMeshConnectWaitMs(command, args);
-        const dispatchArgs = stripStatusProbeMarker(args);
-        return this.transport.sendCommand(daemonId, command, dispatchArgs, undefined, connectWaitMs);
-      },
+      dispatchMeshCommand: (daemonId, command, args) => this.dispatchCommand(daemonId, command, args),
       getMeshPeerConnectionStatus: (daemonId) => this.transport.getPeerConnectionStatus(daemonId),
       // The host pairing card's address candidates (get_mesh_host_pairing).
       getMeshListenAddress: () => this.listenAddress,
       // Read at call time: the seqscribe link is attached after the boot.
       resolveTranscriptPeer: (daemonId) => this.seqscribe?.resolveTranscriptPeer(daemonId) ?? null,
     };
+  }
+
+  /**
+   * Send one command to a paired daemon — the boot's `dispatchMeshCommand` and
+   * the coordinator's `mesh_relay_command` (standalone-mesh-relay.ts) share it.
+   * OFFLINE-NODE-FANOUT / STATUS-REFRESH (cloud parity): probes get the short
+   * connect-wait budget; the status marker never reaches the peer.
+   */
+  dispatchCommand(daemonId: string, command: string, args: Record<string, unknown>): Promise<unknown> {
+    const connectWaitMs = resolveMeshConnectWaitMs(command, args);
+    const dispatchArgs = stripStatusProbeMarker(args);
+    return this.transport.sendCommand(daemonId, command, dispatchArgs, undefined, connectWaitMs);
   }
 
   /** Record where the HTTP server (and so the mesh lanes) actually listens. */

@@ -86,6 +86,7 @@ import { standaloneIpcEnabled, startStandaloneIpcCompatServer } from './standalo
 import { broadcastToOpenClients, createStandaloneHostTransport, standaloneHelloFrame } from './standalone-host-transport.js';
 import { buildStandaloneStatusResponse } from './standalone-status-payload.js';
 import { StandaloneMeshLink } from './standalone-mesh-link.js';
+import { MESH_RELAY_COMMAND, runStandaloneMeshRelay } from './standalone-mesh-relay.js';
 
 // ─── Constants ───
 const DEFAULT_PORT = DEFAULT_STANDALONE_PORT;
@@ -456,7 +457,11 @@ class StandaloneServer {
     // global daemon by default; standalone stays on HTTP/local MCP unless an
     // operator explicitly opts into compatibility mode.
     if (standaloneIpcEnabled()) {
-      this.ipcServer = await startStandaloneIpcCompatServer({ pkgVersion, host: () => this.host });
+      this.ipcServer = await startStandaloneIpcCompatServer({
+        pkgVersion,
+        host: () => this.host,
+        relayMeshCommand: (payload) => this.relayMeshCommand(payload, 'ipc'),
+      });
     }
 
     console.log('');
@@ -676,7 +681,24 @@ class StandaloneServer {
     if (typeof type !== 'string' || !type.trim()) {
       return { success: false, error: 'command type required' };
     }
+    if (type === MESH_RELAY_COMMAND) return this.relayMeshCommand(args, 'standalone');
     return this.host.execute(type, args, 'standalone');
+  }
+
+  /**
+   * `mesh_relay_command` (the coordinator MCP's remote-node entry): run the verb
+   * on the daemon that owns the node, over the direct-WS mesh link — the
+   * standalone twin of the cloud IPC relay. See standalone-mesh-relay.ts.
+   */
+  private relayMeshCommand(payload: unknown, source: 'standalone' | 'ipc'): Promise<Record<string, unknown>> {
+    const host = this.host;
+    if (!host) return Promise.resolve({ success: false, error: 'Components not initialized' });
+    const link = this.meshLink;
+    return runStandaloneMeshRelay({
+      localDaemonId: this.statusInstanceId,
+      executeLocal: (command, args) => host.execute(command, args, source),
+      dispatchRemote: link ? (daemonId, command, args) => link.dispatchCommand(daemonId, command, args) : null,
+    }, payload);
   }
 
   /** OPEN clients subscribed to this session's terminal output. */
