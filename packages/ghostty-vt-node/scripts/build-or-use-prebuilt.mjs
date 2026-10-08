@@ -27,24 +27,105 @@ function latestSourceMtime() {
   return sourceInputs.reduce((latest, filePath) => Math.max(latest, safeMtime(filePath)), 0);
 }
 
+const PREBUILT_ROOT = path.join(packageDir, 'prebuilt');
+const ADDON_FILE = 'ghostty_vt_node.node';
+// The addon plus its co-located runtime libs (.dylib/.so/.dll) — the addon
+// resolves libghostty-vt next to itself, so it must travel with it.
+const RUNTIME_FILE_PATTERN = /\.(node|dylib|so|so\.\d.*|dll)$/;
+
+// The addon is a pure Node-API binding, so every same `platform-arch`
+// prebuilt is loadable regardless of the `nodeNNN` ABI in its directory name
+// (see index.js, which falls back the same way at runtime). Exact ABI first,
+// then the other same-platform-arch directories, newest ABI first. Accepting
+// only the exact triplet sent e.g. a Node 22 (ABI 127) fresh clone — where
+// only `*-node137` is committed — into a cmake/zig source compile.
+function samePlatformArchTriplets() {
+  const prefix = `${process.platform}-${process.arch}-node`;
+  let names = [];
+  try {
+    names = fs.readdirSync(PREBUILT_ROOT, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name.startsWith(prefix) && entry.name !== triplet)
+      .map((entry) => entry.name);
+  } catch {
+    return [];
+  }
+  const abi = (name) => Number.parseInt(name.slice(prefix.length), 10) || 0;
+  return names.sort((a, b) => abi(b) - abi(a));
+}
+
 function candidatePrebuiltPaths() {
   const candidates = [];
   const explicitDir = process.env.ADHDEV_GHOSTTY_VT_PREBUILT_DIR?.trim();
   if (explicitDir) {
-    candidates.push(path.join(explicitDir, triplet, 'ghostty_vt_node.node'));
-    candidates.push(path.join(explicitDir, 'ghostty_vt_node.node'));
+    candidates.push({ file: path.join(explicitDir, triplet, ADDON_FILE), explicit: true });
+    candidates.push({ file: path.join(explicitDir, ADDON_FILE), explicit: true });
   }
-  candidates.push(path.join(packageDir, 'prebuilt', triplet, 'ghostty_vt_node.node'));
+  for (const name of [triplet, ...samePlatformArchTriplets()]) {
+    candidates.push({ file: path.join(PREBUILT_ROOT, name, ADDON_FILE), explicit: false });
+  }
   return candidates;
 }
 
-function installPrebuiltIfPresent(minMtime = 0) {
+function git(args) {
+  const result = spawnSync('git', ['-C', packageDir, ...args], { encoding: 'utf8', windowsHide: true });
+  if (result.error || result.status === null) return null;
+  return { status: result.status, stdout: result.stdout || '' };
+}
+
+// Staleness of a candidate prebuilt relative to the sources it was built from.
+//
+// The mtime guard only means something for files this machine PRODUCED (a
+// local compile, or a prebuilt emitted from one): their mtimes order
+// genuinely. A git-tracked prebuilt's mtime is just checkout order — in a
+// fresh clone a valid prebuilt often looks "older" than addon.cc and was
+// skipped, and the build then died for lack of cmake. For a tracked prebuilt
+// the question that matters is whether the SOURCES were edited locally since
+// the committed state; only then is the committed binary out of date.
+let sourcesLocallyModifiedMemo;
+function sourcesLocallyModified() {
+  if (sourcesLocallyModifiedMemo !== undefined) return sourcesLocallyModifiedMemo;
+  const rels = sourceInputs.map((filePath) => path.relative(packageDir, filePath));
+  const status = git(['status', '--porcelain', '--', ...rels]);
+  sourcesLocallyModifiedMemo = !!status && status.status === 0 && status.stdout.trim().length > 0;
+  return sourcesLocallyModifiedMemo;
+}
+
+function isGitTracked(filePath) {
+  const result = git(['ls-files', '--error-unmatch', '--', path.relative(packageDir, filePath)]);
+  return !!result && result.status === 0;
+}
+
+function isUsablePrebuilt(candidate, sourceMtime) {
+  // An explicit override dir is the operator's choice — trust it.
+  if (candidate.explicit) return true;
+  if (isGitTracked(candidate.file)) return !sourcesLocallyModified();
+  // Not tracked: either a locally emitted prebuilt (mtime is meaningful) or an
+  // npm-installed package with no git at all, where the shipped sources and
+  // prebuilts are pristine together. Without git metadata there is nothing
+  // local to be stale against, so only a working tree applies the guard.
+  const insideWorkTree = git(['rev-parse', '--is-inside-work-tree']);
+  if (!insideWorkTree || insideWorkTree.status !== 0) return true;
+  return safeMtime(candidate.file) >= sourceMtime;
+}
+
+function installPrebuilt(candidateFile) {
+  fs.mkdirSync(outputDir, { recursive: true });
+  const sourceDir = path.dirname(candidateFile);
+  for (const entry of fs.readdirSync(sourceDir)) {
+    if (RUNTIME_FILE_PATTERN.test(entry)) fs.copyFileSync(path.join(sourceDir, entry), path.join(outputDir, entry));
+  }
+  if (!fs.existsSync(outputFile)) fs.copyFileSync(candidateFile, outputFile);
+}
+
+function installPrebuiltIfPresent(sourceMtime) {
   for (const candidate of candidatePrebuiltPaths()) {
-    if (!fs.existsSync(candidate)) continue;
-    if (safeMtime(candidate) < minMtime) continue;
-    fs.mkdirSync(outputDir, { recursive: true });
-    fs.copyFileSync(candidate, outputFile);
-    console.log(`[ghostty-vt-node] using prebuilt native binding from ${candidate}`);
+    if (!fs.existsSync(candidate.file)) continue;
+    if (!isUsablePrebuilt(candidate, sourceMtime)) {
+      console.log(`[ghostty-vt-node] skipping prebuilt ${candidate.file}: sources were modified locally after it was built`);
+      continue;
+    }
+    installPrebuilt(candidate.file);
+    console.log(`[ghostty-vt-node] using prebuilt native binding from ${candidate.file}`);
     return true;
   }
   return false;
@@ -53,17 +134,19 @@ function installPrebuiltIfPresent(minMtime = 0) {
 const sourceMtime = latestSourceMtime();
 const outputMtime = safeMtime(outputFile);
 
+// A local build output is something this machine compiled, so its mtime
+// against the sources is meaningful: keep it while it is not older.
 if (outputMtime >= sourceMtime && outputMtime > 0) {
   console.log(`[ghostty-vt-node] keeping existing local build at ${outputFile}`);
   process.exit(0);
 }
 
-if (!installPrebuiltIfPresent(sourceMtime) && process.env.ADHDEV_SKIP_GHOSTTY_VT_BUILD === '1') {
-  console.log(`[ghostty-vt-node] skipping native build for ${triplet} (ADHDEV_SKIP_GHOSTTY_VT_BUILD=1)`);
+if (installPrebuiltIfPresent(sourceMtime)) {
   process.exit(0);
 }
 
-if (installPrebuiltIfPresent(sourceMtime)) {
+if (process.env.ADHDEV_SKIP_GHOSTTY_VT_BUILD === '1') {
+  console.log(`[ghostty-vt-node] skipping native build for ${triplet} (ADHDEV_SKIP_GHOSTTY_VT_BUILD=1)`);
   process.exit(0);
 }
 
