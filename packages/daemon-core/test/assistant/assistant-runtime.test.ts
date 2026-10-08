@@ -96,6 +96,18 @@ describe('wireAssistantRuntime', () => {
         expect(hooks.openThread).toBeUndefined();
         runtime = null;
     });
+
+    it('reads the review-turn quota for the bound assistant CLI through the quota port', () => {
+        const seen: string[] = [];
+        const quota = { remainingPct: (cliType: string) => (seen.push(cliType), 42) };
+        runtime = wireAssistantRuntime(components(), { registry, store: new InMemoryAssistantRelayStore(), metrics: null, tickMs: 3_600_000, quota });
+        expect(runtime.reviewQuotaRemainingPct(1)).toBeNull(); // no assistant bound
+        registry.bindSession({ sessionId: 'asst', cliType: 'codex-cli', workspace: dir, at: 1 });
+        expect(runtime.reviewQuotaRemainingPct(1)).toBe(42);
+        expect(seen).toEqual(['codex-cli']);
+        runtime.dispose();
+        runtime = null;
+    });
 });
 
 describe('buildAssistantRelayPorts', () => {

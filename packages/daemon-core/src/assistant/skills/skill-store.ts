@@ -9,11 +9,11 @@
  *    journal in skills/.journal.jsonl, staged writes next to the memory ones in
  *    assistant/staged/ (`kind: 'skill'`). All writes 0600 tmp+rename.
  *  - Write checks: name/format → caps (agent only) → match → size limits →
- *    credential → staging. Any failure means nothing is written. Limits are
+ *    credential → content (hidden chars, injection) → staging. Any failure means nothing is written. Limits are
  *    refusals; nothing is ever truncated.
- *  - "agent" writes are every non-owner StoreWriteOrigin (human/relay/review):
- *    the caps count them; a relay origin, or a patch on an owner/imported
- *    skill, is staged. `owner` writes (dashboard, import, staged resolve)
+ *  - "agent" writes are every non-owner StoreWriteOrigin (human/relay/review/
+ *    review_tainted): the caps count them; a relay or tainted-review origin,
+ *    or a patch on an owner/imported skill, is staged. `owner` writes (dashboard, import, staged resolve)
  *    skip caps and staging but not format/limit/credential checks.
  *  - Synchronous I/O, so one store is serialized within the daemon process.
  */
@@ -21,10 +21,14 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
 import { join } from 'path';
 import { getConfigDir } from '../../config/config.js';
-import { detectCredential, mustStage, writeFileAtomic600, type StoreWriteOrigin } from '../store-guards.js';
+import {
+    detectCredential, mustStage, scanWriteContent, writeFileAtomic600,
+    type HiddenCharId, type InjectionPatternId, type StoreWriteOrigin,
+} from '../store-guards.js';
 import { charCount } from '../memory/memory-store.js';
 import {
-    checkSkillLimits, composeSkillMd, isValidSkillName, normalizeSkillFilePath, readSkillDir, SKILL_FILE, SKILL_LIMITS, type SkillDirRead, type SkillLimitReason,
+    checkSkillLimits, composeSkillMd, isValidSkillName, normalizeSkillFilePath, readSkillDir, LEGACY_SKILL_NAME_RE, RESERVED_SKILL_NAMES, SKILL_FILE, SKILL_LIMITS,
+    type SkillDirRead, type SkillLimitReason,
     type SkillOrigin, type SkillStatus,
 } from './skill-format.js';
 import {
@@ -44,9 +48,14 @@ export type SkillManageOp =
 export interface SkillCallContext {
     sessionId: string;
     turnId: string;
+    /** Set for review-turn writes; carried onto a staged write (batch resolve, metrics). */
+    reviewTurnId?: string;
 }
 
-export type SkillInvalidReason = 'bad_description' | 'empty_body' | 'bad_file_path' | 'bad_patch' | 'missing_context' | 'unparseable_skill_md';
+export type SkillInvalidReason =
+    | 'bad_description' | 'empty_body' | 'bad_file_path' | 'bad_patch' | 'missing_context' | 'unparseable_skill_md'
+    /** The stored description, body or file failed the read-time content re-scan; fix the file by hand. */
+    | 'blocked_content';
 
 export type SkillRefusal =
     | { result: 'skill_invalid_name' }
@@ -63,6 +72,8 @@ export type SkillRefusal =
     | { result: 'skill_patch_limit'; scope: 'session' | 'turn'; limit: number }
     | { result: 'skill_needs_review' }
     | { result: 'skill_secret_rejected' }
+    | { result: 'skill_hidden_chars_rejected'; pattern: HiddenCharId }
+    | { result: 'skill_injection_rejected'; pattern: InjectionPatternId }
     | { result: 'skill_store_unreadable' };
 
 export type SkillManageResult =
@@ -82,7 +93,10 @@ export interface SkillSummary {
     lastViewedAt: string | null;
     patchesSinceReview: number;
     needsReview: boolean;
-    /** SKILL.md problem; such skills are left out of the index. */
+    /**
+     * SKILL.md problem (`SkillFormatProblem`), or `invalid_name` for a directory
+     * named under the pre-2026-10-08 rule; such skills are left out of the index.
+     */
     problem?: string;
 }
 
@@ -153,22 +167,30 @@ export class AssistantSkillStore {
         return isValidSkillName(name) ? readSkillDir(this.skillDir(name), name) : null;
     }
 
+    /**
+     * Skill directories, including ones named under the legacy rule (reported by
+     * `list` as `invalid_name`, never silently dropped).
+     */
     private skillNames(): string[] {
         if (!existsSync(this.skillsDir)) return [];
-        return readdirSync(this.skillsDir).filter((n) => isValidSkillName(n) && existsSync(join(this.skillDir(n), SKILL_FILE))).sort();
+        return readdirSync(this.skillsDir)
+            .filter((n) => (isValidSkillName(n) || (LEGACY_SKILL_NAME_RE.test(n) && !RESERVED_SKILL_NAMES.has(n))) && existsSync(join(this.skillDir(n), SKILL_FILE)))
+            .sort();
     }
 
     list(): SkillSummary[] {
         const { file } = this.loadState();
         const out: SkillSummary[] = [];
         for (const name of this.skillNames()) {
-            const d = this.readDir(name);
+            const legacyName = !isValidSkillName(name);
+            const d = legacyName ? readSkillDir(this.skillDir(name), name) : this.readDir(name);
             if (!d) continue;
             const s = this.stateFor(file, name);
             out.push({
                 name, description: d.description, project: d.project, status: s.status, pinned: s.pinned, origin: s.origin,
                 createdAt: s.createdAt, viewCount: s.viewCount, lastViewedAt: s.lastViewedAt,
-                patchesSinceReview: s.patchesSinceReview, needsReview: needsReview(s), problem: d.problem,
+                patchesSinceReview: s.patchesSinceReview, needsReview: needsReview(s),
+                problem: legacyName ? 'invalid_name' : d.problem,
             });
         }
         return out;
@@ -184,12 +206,14 @@ export class AssistantSkillStore {
         if (!isValidSkillName(name)) return { result: 'skill_invalid_name' };
         const d = this.readDir(name);
         if (!d) return { result: 'skill_not_found' };
-        if (d.problem) return { result: 'skill_invalid_format', reason: 'unparseable_skill_md' };
+        if (d.problem) return { result: 'skill_invalid_format', reason: problemReason(d) };
         let file: { path: string; content: string } | undefined;
         if (opts.file !== undefined) {
             const p = normalizeSkillFilePath(opts.file);
             if (!p || !d.files.some((f) => f.path === p)) return { result: 'skill_file_not_found' };
             file = { path: p, content: readFileSync(join(this.skillDir(name), p), 'utf-8') };
+            // Same re-scan as the body: a hand-edited reference file is not served.
+            if (scanWriteContent(file.content) || detectCredential(file.content)) return { result: 'skill_invalid_format', reason: 'blocked_content' };
         }
         const { file: stateFile, corrupt } = this.loadState();
         let s = this.stateFor(stateFile, name);
@@ -235,6 +259,8 @@ export class AssistantSkillStore {
             const live = this.liveCount();
             if (live >= SKILL_LIMITS.liveSkills) return { result: 'skill_limit', live, limit: SKILL_LIMITS.liveSkills };
             if (prep.scan.some((t) => detectCredential(t))) return { result: 'skill_secret_rejected' };
+            const contentRefusal = contentRefusalOf(prep.scan);
+            if (contentRefusal) return contentRefusal;
             if (agent && mustStage(origin)) return this.stage(op, origin, ctx, 'origin', prep);
             this.writeFiles(name, prep.files);
             stateFile.skills[name] = newSkillState(origin === 'owner' && !resolving ? 'owner' : 'agent', this.now().toISOString());
@@ -245,7 +271,7 @@ export class AssistantSkillStore {
 
         const d = this.readDir(name);
         if (!d) return { result: 'skill_not_found' };
-        if (d.problem) return { result: 'skill_invalid_format', reason: 'unparseable_skill_md' };
+        if (d.problem) return { result: 'skill_invalid_format', reason: problemReason(d) };
         const s = this.stateFor(stateFile, name);
 
         if (op.action === 'archive') {
@@ -269,6 +295,8 @@ export class AssistantSkillStore {
         const prep = preparePatch(op, d, this.skillDir(name));
         if ('result' in prep) return prep;
         if (prep.scan.some((t) => detectCredential(t))) return { result: 'skill_secret_rejected' };
+        const contentRefusal = contentRefusalOf(prep.scan);
+        if (contentRefusal) return contentRefusal;
 
         let next = s;
         if (agent) {
@@ -300,8 +328,9 @@ export class AssistantSkillStore {
         op: SkillManageOp, origin: StoreWriteOrigin, ctx: SkillCallContext | null,
         reason: 'origin' | 'protected_skill', prep: PreparedWrite | null,
     ): SkillManageResult {
-        const stagedId = this.staging.write({ op, origin, reason, ctx });
-        this.journal.append({ action: op.action, name: op.name, origin, result: 'staged', stagedId, ...(prep?.journal ?? {}) });
+        const reviewTurnId = ctx?.reviewTurnId;
+        const stagedId = this.staging.write({ op, origin, reason, ctx, ...(reviewTurnId ? { reviewTurnId } : {}) });
+        this.journal.append({ action: op.action, name: op.name, origin, result: 'staged', stagedId, ...(reviewTurnId ? { reviewTurnId } : {}), ...(prep?.journal ?? {}) });
         return { result: 'staged', stagedId, reason };
     }
 
@@ -408,9 +437,10 @@ export class AssistantSkillStore {
         }
         const over = checkSkillLimits(charCount(input.body), files.map((f) => ({ path: f.path, chars: charCount(f.content) })));
         if (over[0]) return no({ result: 'skill_too_large', ...over[0] });
-        if ([input.frontmatterRaw, input.body, ...files.map((f) => f.content)].some((t) => detectCredential(t))) {
-            return no({ result: 'skill_secret_rejected' });
-        }
+        const texts = [input.frontmatterRaw, input.body, ...files.map((f) => f.content)];
+        if (texts.some((t) => detectCredential(t))) return no({ result: 'skill_secret_rejected' });
+        const contentRefusal = contentRefusalOf(texts);
+        if (contentRefusal) return no(contentRefusal);
         return { refusal: null, files };
     }
 
@@ -428,4 +458,20 @@ export class AssistantSkillStore {
         this.journal.append({ action: 'import', name: input.name, origin: 'owner', result: 'applied', sourceUsage: input.sourceUsage });
         return { result: 'applied' };
     }
+}
+
+function problemReason(d: SkillDirRead): SkillInvalidReason {
+    return d.problem === 'blocked_content' ? 'blocked_content' : 'unparseable_skill_md';
+}
+
+/** First hidden-char / injection finding over the texts being written, as a refusal. */
+function contentRefusalOf(texts: readonly string[]): SkillRefusal | null {
+    for (const t of texts) {
+        const f = scanWriteContent(t);
+        if (!f) continue;
+        return f.kind === 'hidden_chars'
+            ? { result: 'skill_hidden_chars_rejected', pattern: f.pattern }
+            : { result: 'skill_injection_rejected', pattern: f.pattern };
+    }
+    return null;
 }

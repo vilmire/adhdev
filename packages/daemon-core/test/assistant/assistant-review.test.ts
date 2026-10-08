@@ -25,6 +25,7 @@ const due = (over: Partial<ReviewTriggerInput> = {}): ReviewTriggerInput => ({
     humanInputsSinceLastReview: 6,
     reviewAts: [NOW - 3 * HOUR],
     modalOpen: false,
+    quotaRemainingPct: 80,
     ...over,
 });
 
@@ -45,8 +46,17 @@ describe('evaluateReviewTrigger', () => {
             [{ humanInputsSinceLastReview: 5 }, 'too_few_inputs'],
             [{ reviewAts: [NOW - 119 * MIN] }, 'too_soon'],
             [{ reviewAts: [NOW - 23 * HOUR, NOW - 15 * HOUR, NOW - 9 * HOUR, NOW - 3 * HOUR] }, 'daily_cap'],
+            [{ quotaRemainingPct: 19.9 }, 'low_quota'],
+            [{ quotaRemainingPct: null }, 'low_quota'],
+            [{ quotaRemainingPct: Number.NaN }, 'low_quota'],
         ];
         for (const [over, reason] of cases) expect(evaluateReviewTrigger(due(over))).toEqual({ due: false, reason });
+    });
+
+    it('the quota floor is inclusive at exactly 20 % remaining (research 2026-10-08 Q7)', () => {
+        expect(REVIEW_TRIGGER_RULES.minQuotaRemainingPct).toBe(20);
+        expect(evaluateReviewTrigger(due({ quotaRemainingPct: 20 }))).toEqual({ due: true });
+        expect(evaluateReviewTrigger(due({ quotaRemainingPct: 0 }))).toEqual({ due: false, reason: 'low_quota' });
     });
 
     it('boundaries are inclusive at exactly 10 min idle and 2 h since the last review; the day is rolling 24 h', () => {

@@ -15,6 +15,10 @@
  * Origin: tool writes classify their origin from the daemon's assistant input
  * log for the calling session (`assistantSessionId` arg, from
  * ADHDEV_ASSISTANT_SESSION_ID). No log → the write stages (fail-closed).
+ * Review-turn writes (research 2026-10-08 Q8): a clean window applies, a
+ * tainted one stages, a `project_note` always stages; staged writes carry the
+ * review turn id so `assistant_staged_resolve {reviewTurnId, decision}`
+ * resolves them together.
  */
 
 import { ASSISTANT_SESSION_ID_ARG, ASSISTANT_VERB, readOptionalRecord } from '@adhdev/mesh-shared';
@@ -27,7 +31,7 @@ import { getAssistantServices, type AssistantServices } from '../../assistant/as
 import { reviewTurnVerbDecision } from '../../assistant/assistant-review.js';
 import { resolveAssistantProject } from '../../assistant/assistant-projects.js';
 import { PROJECT_NOTE_CATEGORIES, type ProjectNoteCategory, type ProjectNoteOp, type StagedNoteWrite } from '../../assistant/note-staging.js';
-import { detectCredential, mustStage, type StoreWriteOrigin } from '../../assistant/store-guards.js';
+import { detectCredential, isReviewOrigin, mustStage, scanWriteContent, type StoreWriteOrigin } from '../../assistant/store-guards.js';
 import { scanHermesHome, importFromHermes, type HermesImportRequest } from '../../assistant/skills/hermes-import.js';
 import type { MemoryOperation, MemoryTarget } from '../../assistant/memory/memory-store.js';
 import type { SkillManageOp } from '../../assistant/skills/skill-store.js';
@@ -39,6 +43,23 @@ export const ASSISTANT_OWNER_SOURCES = ['p2p', 'ws', 'standalone'] as const;
 
 /** Result codes that mean "the verb did its job" (refusal codes → success:false). */
 const OK_RESULTS: ReadonlySet<string> = new Set(['applied', 'staged', 'memory_duplicate', 'ok', 'list', 'discarded']);
+
+/** `note_secret_rejected` / `note_hidden_chars_rejected` / `note_injection_rejected`, or null. */
+function noteTextRefusal(text: string | undefined): ({ result: string; pattern?: string }) | null {
+    if (!text) return null;
+    if (detectCredential(text)) return { result: 'note_secret_rejected' };
+    const f = scanWriteContent(text);
+    if (!f) return null;
+    return { result: f.kind === 'hidden_chars' ? 'note_hidden_chars_rejected' : 'note_injection_rejected', pattern: f.pattern };
+}
+
+/** M7: credit the review turn when one of its writes landed. */
+function creditReview(svc: AssistantServices, reviewTurnId: string | undefined, result: string, kind: 'applied' | 'approved'): void {
+    if (!reviewTurnId || result !== 'applied') return;
+    try {
+        svc.reviewMetrics?.creditReviewWrite(reviewTurnId, kind, Date.now());
+    } catch { /* metrics never fail a write */ }
+}
 
 function str(v: unknown): string {
     return typeof v === 'string' ? v.trim() : '';
@@ -177,8 +198,10 @@ export const assistantStoreHandlers: Record<string, HighFamilyHandler> = {
         if (gate) return gate;
         const op = parseMemoryOp(args);
         if (typeof op === 'string') return invalidArgs(op);
-        const { origin } = svc.inputLog.writeContext(readAssistantSessionId(args));
-        return respond(svc.memory.apply(op, origin));
+        const w = svc.inputLog.writeContext(readAssistantSessionId(args));
+        const out = svc.memory.apply(op, w.origin, { reviewTurnId: w.reviewTurnId });
+        creditReview(svc, w.reviewTurnId, out.result, 'applied');
+        return respond(out);
     },
 
     [ASSISTANT_VERB.skillView]: async (_ctx, args) => {
@@ -198,7 +221,9 @@ export const assistantStoreHandlers: Record<string, HighFamilyHandler> = {
         const op = parseSkillOp(args);
         if (typeof op === 'string') return invalidArgs(op);
         const w = svc.inputLog.writeContext(readAssistantSessionId(args));
-        return respond(svc.skills.manage(op, w.origin, { sessionId: w.sessionId, turnId: w.turnId }));
+        const out = svc.skills.manage(op, w.origin, { sessionId: w.sessionId, turnId: w.turnId, ...(w.reviewTurnId ? { reviewTurnId: w.reviewTurnId } : {}) });
+        creditReview(svc, w.reviewTurnId, out.result, 'applied');
+        return respond(out);
     },
 
     [ASSISTANT_VERB.projectNote]: async (ctx, args) => {
@@ -210,11 +235,16 @@ export const assistantStoreHandlers: Record<string, HighFamilyHandler> = {
         const project = await resolveHostedProject(ctx, svc, args?.project);
         if (!project.ok) return project.result;
         const wrap = { project: project.slug, meshId: project.mesh.id };
-        if (op.text && detectCredential(op.text)) return respond({ result: 'note_secret_rejected' }, wrap);
+        const refusal = noteTextRefusal(op.text);
+        if (refusal) return respond(refusal, wrap);
         const sid = readAssistantSessionId(args);
-        const { origin } = svc.inputLog.writeContext(sid);
-        if (mustStage(origin)) {
-            const stagedId = svc.notes.write({ origin, meshId: project.mesh.id, project: project.slug, ...(sid ? { callerSessionId: sid } : {}), op });
+        const { origin, reviewTurnId } = svc.inputLog.writeContext(sid);
+        // A note written in a review turn is always held, clean window or not (note-staging.ts).
+        if (mustStage(origin) || isReviewOrigin(origin)) {
+            const stagedId = svc.notes.write({
+                origin, meshId: project.mesh.id, project: project.slug, ...(sid ? { callerSessionId: sid } : {}), op,
+                ...(reviewTurnId ? { reviewTurnId } : {}),
+            });
             return respond({ result: 'staged', stagedId }, wrap);
         }
         return respond(await applyNote(svc, project.mesh.id, op, origin, sid || undefined), wrap);
@@ -230,13 +260,13 @@ export const assistantStoreHandlers: Record<string, HighFamilyHandler> = {
         }
         if (action !== 'resolve') return invalidArgs('action must be list or resolve');
         const id = str(args?.id);
+        const reviewTurnId = str(args?.reviewTurnId);
         const decision = str(args?.decision);
-        if (!id) return invalidArgs('id required');
+        if (!id && !reviewTurnId) return invalidArgs('id or reviewTurnId required');
+        if (id && reviewTurnId) return invalidArgs('pass id or reviewTurnId, not both');
         if (decision !== 'apply' && decision !== 'discard') return invalidArgs('decision must be apply or discard');
-        if (id.startsWith('mem-')) return respond(svc.memory.resolveStaged(id, decision));
-        if (id.startsWith('skl-')) return respond(svc.skills.resolveStaged(id, decision));
-        if (id.startsWith('note-')) return resolveStagedNote(ctx, svc, id, decision);
-        return respond({ result: 'staged_not_found' });
+        if (reviewTurnId) return resolveReviewBatch(ctx, svc, reviewTurnId, decision);
+        return resolveStagedOne(ctx, svc, id, decision);
     },
 
     [ASSISTANT_VERB.storeAdmin]: async (_ctx, args) => {
@@ -279,8 +309,9 @@ export const assistantStoreHandlers: Record<string, HighFamilyHandler> = {
                 notes.push({ id: n.id, project: n.project, result: project.result.code });
                 continue;
             }
-            if (detectCredential(n.text)) {
-                notes.push({ id: n.id, project: project.slug, result: 'note_secret_rejected' });
+            const refusal = noteTextRefusal(n.text);
+            if (refusal) {
+                notes.push({ id: n.id, project: project.slug, ...refusal });
                 continue;
             }
             if (result.dryRun) {
@@ -294,6 +325,54 @@ export const assistantStoreHandlers: Record<string, HighFamilyHandler> = {
     },
 };
 
+/** One staged write by id (prefix picks the store). Credits M7 when an approved write came from a review turn. */
+async function resolveStagedOne(ctx: HighFamilyContext, svc: AssistantServices, id: string, decision: 'apply' | 'discard'): Promise<CommandRouterResult> {
+    if (id.startsWith('mem-')) {
+        const reviewTurnId = decision === 'apply' ? svc.memory.listStaged().find((r) => r.id === id)?.reviewTurnId : undefined;
+        const out = svc.memory.resolveStaged(id, decision);
+        creditReview(svc, reviewTurnId, out.result, 'approved');
+        return respond(out);
+    }
+    if (id.startsWith('skl-')) {
+        const reviewTurnId = decision === 'apply' ? svc.skills.listStaged().find((r) => r.id === id)?.reviewTurnId : undefined;
+        const out = svc.skills.resolveStaged(id, decision);
+        creditReview(svc, reviewTurnId, out.result, 'approved');
+        return respond(out);
+    }
+    if (id.startsWith('note-')) return resolveStagedNote(ctx, svc, id, decision);
+    return respond({ result: 'staged_not_found' });
+}
+
+/**
+ * Every staged write of one review turn, in staging order, with one decision
+ * (research 2026-10-08 Q8 — one card per review). Each write is resolved
+ * exactly as its single-id resolve would be: a failed re-check keeps that
+ * write staged and does not stop the others.
+ */
+async function resolveReviewBatch(ctx: HighFamilyContext, svc: AssistantServices, reviewTurnId: string, decision: 'apply' | 'discard'): Promise<CommandRouterResult> {
+    const ids = [
+        ...svc.memory.listStaged().filter((r) => r.reviewTurnId === reviewTurnId),
+        ...svc.skills.listStaged().filter((r) => r.reviewTurnId === reviewTurnId),
+        ...svc.notes.list().filter((r) => r.reviewTurnId === reviewTurnId),
+    ].sort((a, b) => a.createdAt.localeCompare(b.createdAt)).map((r) => r.id);
+    if (!ids.length) return respond({ result: 'staged_not_found' }, { reviewTurnId });
+    const results: Array<Record<string, unknown>> = [];
+    for (const id of ids) {
+        const r = await resolveStagedOne(ctx, svc, id, decision);
+        results.push({ id, ...r });
+    }
+    const failed = results.filter((r) => r.success !== true).length;
+    return {
+        success: failed === 0,
+        ...(failed ? { code: 'staged_batch_partial' } : {}),
+        result: failed ? 'staged_batch_partial' : decision === 'apply' ? 'applied' : 'discarded',
+        reviewTurnId,
+        resolved: results.length - failed,
+        failed,
+        results,
+    };
+}
+
 async function resolveStagedNote(ctx: HighFamilyContext, svc: AssistantServices, id: string, decision: 'apply' | 'discard'): Promise<CommandRouterResult> {
     const rec: StagedNoteWrite | null = svc.notes.read(id);
     if (!rec) return respond({ result: 'staged_not_found' });
@@ -305,9 +384,11 @@ async function resolveStagedNote(ctx: HighFamilyContext, svc: AssistantServices,
     const project = await resolveHostedProject(ctx, svc, rec.meshId);
     if (!project.ok) return project.result;
     const wrap = { project: project.slug, meshId: project.mesh.id };
-    if (rec.op.text && detectCredential(rec.op.text)) return respond({ result: 'note_secret_rejected' }, wrap);
+    const refusal = noteTextRefusal(rec.op.text);
+    if (refusal) return respond(refusal, wrap);
     const applied = await applyNote(svc, rec.meshId, rec.op, 'owner', rec.callerSessionId);
     svc.notes.remove(id);
+    creditReview(svc, rec.reviewTurnId, applied.result, 'approved');
     return respond(applied, wrap);
 }
 

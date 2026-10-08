@@ -55,6 +55,16 @@ import type { ProviderAssistantEligibility } from '../shared-types.js';
 
 export const DEFAULT_ASSISTANT_CLI_TYPE = 'claude-cli';
 export const ASSISTANT_MCP_SERVER_NAME = 'adhdev-assistant';
+/**
+ * Env every claude-cli assistant launch carries. Claude Code's auto memory
+ * (`~/.claude/projects/<p>/memory/`) is on by default for local sessions and
+ * would be a second, unchecked memory surface next to the daemon's `memory`
+ * tool (research 2026-10-08 F4). Checked against the Claude Code 2.1.220
+ * binary: a truthy CLAUDE_CODE_DISABLE_AUTO_MEMORY makes its auto-memory gate
+ * return false (documented at code.claude.com/docs/en/memory).
+ */
+export const ASSISTANT_CLAUDE_LAUNCH_ENV: Readonly<Record<string, string>> = { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' };
+
 /** claude-cli built-in tool allowlist (B.1). */
 export const ASSISTANT_CLAUDE_BUILTIN_TOOLS = 'Read';
 
@@ -126,6 +136,8 @@ export type AssistantMcpPlan =
         toolRestriction: AssistantToolRestriction;
         /** Present only for a home-rooted provider (see `planAssistantPrivateHome`). */
         privateHome?: AssistantPrivateHome;
+        /** Extra env for the CLI process (claude-cli: auto memory off). */
+        launchEnv?: Record<string, string>;
     }
     | { ok: false; code: string; error: string };
 
@@ -243,6 +255,7 @@ export function planAssistantMcp(input: {
             configWrite: { path, format: setup.configFormat ?? 'claude_mcp_json', serverName, server: mcpServer },
             mcpServer,
             toolRestriction: 'enforced',
+            launchEnv: { ...ASSISTANT_CLAUDE_LAUNCH_ENV },
         };
     }
     if (!isInside(setup.configPath, workspace)) {

@@ -32,7 +32,12 @@ export interface SkillJournalRecord {
     redacted?: Array<'before' | 'after'>;
     /** Hermes counters at import time (they are not copied into .state.json). */
     sourceUsage?: Record<string, unknown>;
+    /** Review turn the write came from (review / review_tainted origins). */
+    reviewTurnId?: string;
 }
+
+/** Refusals whose payload text never reaches the journal. */
+const REDACT_RESULTS: ReadonlySet<string> = new Set(['skill_secret_rejected', 'skill_hidden_chars_rejected', 'skill_injection_rejected']);
 
 export class SkillJournal {
     constructor(
@@ -45,7 +50,7 @@ export class SkillJournal {
         const redacted: Array<'before' | 'after'> = [];
         for (const f of ['before', 'after'] as const) {
             const v = full[f];
-            if (typeof v === 'string' && (detectCredential(v) || rec.result === 'skill_secret_rejected')) {
+            if (typeof v === 'string' && (detectCredential(v) || REDACT_RESULTS.has(rec.result))) {
                 full[f] = null;
                 redacted.push(f);
             }
@@ -76,6 +81,8 @@ export interface StagedSkillWrite {
     reason: 'origin' | 'protected_skill';
     op: SkillManageOp;
     ctx: SkillCallContext | null;
+    /** Review turn that staged it — the owner can resolve one review's writes together. */
+    reviewTurnId?: string;
 }
 
 export class SkillStaging {

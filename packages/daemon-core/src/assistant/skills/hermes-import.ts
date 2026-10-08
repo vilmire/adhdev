@@ -21,7 +21,7 @@
 import { existsSync, lstatSync, readdirSync, readFileSync } from 'fs';
 import { homedir } from 'os';
 import { basename, join, relative } from 'path';
-import { detectCredential } from '../store-guards.js';
+import { detectCredential, scanWriteContent, type StoreContentFinding } from '../store-guards.js';
 import {
     charCount, parseMemoryEntries, MAX_MEMORY_ENTRY_CHARS, MEMORY_ENTRY_SEPARATOR,
     type AssistantMemoryStore, type MemoryTarget,
@@ -57,6 +57,7 @@ export interface HermesSkillCandidate {
     problems: Array<
         | { code: 'skill_invalid_name' }
         | { code: 'skill_invalid_format'; reason: string }
+        | { code: 'skill_secret_rejected' | 'skill_hidden_chars_rejected' | 'skill_injection_rejected'; pattern: string }
         | { code: 'skill_too_large'; reason: string; actual: number; limit: number; path?: string }
         | { code: 'duplicate_name' }
     >;
@@ -138,7 +139,8 @@ function scanSkills(hermesHome: string): ScannedSkill[] {
         if (!isValidSkillName(name)) problems.push({ code: 'skill_invalid_name' });
         if (!read) problems.push({ code: 'skill_invalid_format', reason: 'unreadable' });
         else {
-            if (read.problem) problems.push({ code: 'skill_invalid_format', reason: read.problem });
+            if (read.problem === 'blocked_content' && read.blocked) problems.push({ code: blockedCode(read.blocked), pattern: read.blocked.pattern });
+            else if (read.problem) problems.push({ code: 'skill_invalid_format', reason: read.problem });
             for (const o of read.overLimit) problems.push({ code: 'skill_too_large', ...o });
         }
         out.push({
@@ -166,6 +168,11 @@ function scanMemory(hermesHome: string): HermesMemoryCandidate[] {
         });
     }
     return out;
+}
+
+/** The store's refusal code for a description/body that failed the content scan. */
+function blockedCode(f: StoreContentFinding): 'skill_secret_rejected' | 'skill_hidden_chars_rejected' | 'skill_injection_rejected' {
+    return f.kind === 'credential' ? 'skill_secret_rejected' : f.kind === 'hidden_chars' ? 'skill_hidden_chars_rejected' : 'skill_injection_rejected';
 }
 
 /** Read-only scan of a Hermes home. */
@@ -230,6 +237,13 @@ export function importFromHermes(
         if (matches.length > 1) { result.skills.push({ name, result: 'duplicate_name' }); continue; }
         const { dir, read, candidate } = matches[0]!;
         if (!isValidSkillName(name)) { result.skills.push({ name, result: 'skill_invalid_name' }); continue; }
+        if (read?.problem === 'blocked_content' && read.blocked) {
+            const code = blockedCode(read.blocked);
+            result.skills.push(code === 'skill_secret_rejected'
+                ? { name, result: code }
+                : { name, result: code, pattern: read.blocked.pattern } as HermesSkillImportResult);
+            continue;
+        }
         if (!read || read.problem) {
             result.skills.push({ name, result: 'skill_invalid_format', reason: 'unparseable_skill_md' });
             continue;
@@ -281,7 +295,9 @@ export function importFromHermes(
             }
             const entries = sim[destination];
             const budget = stores.memory.budgets[destination];
+            const finding = scanWriteContent(c.text);
             if (charCount(c.text) > MAX_MEMORY_ENTRY_CHARS) push('memory_invalid_format');
+            else if (finding) push(finding.kind === 'hidden_chars' ? 'memory_hidden_chars_rejected' : 'memory_injection_rejected');
             else if (entries.includes(c.text)) push('memory_duplicate');
             else if (charCount([...entries, c.text].join(MEMORY_ENTRY_SEPARATOR)) > budget) push('memory_budget_exceeded');
             else {

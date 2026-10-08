@@ -16,7 +16,7 @@
  * human entry and makes classification stage — never apply.
  */
 
-import { classifyWriteOrigin, type AssistantInputSource, type StoreWriteOrigin } from './store-guards.js';
+import { classifyWriteOrigin, isReviewOrigin, type AssistantInputSource, type StoreWriteOrigin } from './store-guards.js';
 
 /** Entries kept per session (oldest dropped first). */
 export const ASSISTANT_INPUT_LOG_MAX_ENTRIES = 64;
@@ -45,6 +45,15 @@ interface SessionLog {
     current: { turnId: string; openedBy: AssistantInputSource; open: boolean } | null;
     /** Monotonic count of human inputs ever appended (not reduced by truncation). */
     humanInputs: number;
+    /** True once the oldest entries were dropped (review windows reaching past the cut are tainted). */
+    truncated: boolean;
+    /**
+     * True when the log began with the session itself (`begin` at a fresh
+     * launch). A log created lazily — after a daemon restart re-bound a live
+     * process, whose context still holds pre-restart relays — does not know
+     * what came before its first entry.
+     */
+    fromStart: boolean;
 }
 
 export interface AssistantWriteContext {
@@ -54,6 +63,13 @@ export interface AssistantWriteContext {
     turnId: string;
     /** True when the session has a log at all (false → origin was forced to stage). */
     logged: boolean;
+    /**
+     * Set for a review-turn write (`review` / `review_tainted`): the review
+     * input's message id (`review:<ms>`), or `<session>:<turn>` when it had
+     * none. Staged writes carry it so the owner can resolve one review's
+     * writes in one action, and metrics credit the review turn once.
+     */
+    reviewTurnId?: string;
 }
 
 export class AssistantInputLog {
@@ -75,7 +91,7 @@ export class AssistantInputLog {
         if (log) {
             this.sessions.delete(id); // re-insert → most recently used
         } else {
-            log = { entries: [], turnSeq: 0, current: null, humanInputs: 0 };
+            log = { entries: [], turnSeq: 0, current: null, humanInputs: 0, truncated: false, fromStart: false };
         }
         this.sessions.set(id, log);
         while (this.sessions.size > this.maxSessions) {
@@ -87,9 +103,28 @@ export class AssistantInputLog {
             log.current = { turnId: `t${log.turnSeq}`, openedBy: source, open: true };
         }
         log.entries.push({ source, at: opts.at ?? Date.now(), turnId: log.current.turnId, ...(opts.messageId ? { messageId: opts.messageId } : {}) });
-        if (log.entries.length > this.maxEntries) log.entries.splice(0, log.entries.length - this.maxEntries);
+        if (log.entries.length > this.maxEntries) {
+            log.entries.splice(0, log.entries.length - this.maxEntries);
+            log.truncated = true;
+        }
         if (source === 'human') log.humanInputs += 1;
         return log.current.turnId;
+    }
+
+    /**
+     * A fresh assistant process started (launch_assistant): start an empty log
+     * that knows it covers the whole session, so the first review window can be
+     * judged from the session start.
+     */
+    begin(sessionId: string): void {
+        const id = normalizeId(sessionId);
+        if (!id) return;
+        this.sessions.delete(id);
+        this.sessions.set(id, { entries: [], turnSeq: 0, current: null, humanInputs: 0, truncated: false, fromStart: true });
+        while (this.sessions.size > this.maxSessions) {
+            const oldest = this.sessions.keys().next().value as string;
+            this.sessions.delete(oldest);
+        }
     }
 
     /** The open turn ended (bus `turn{committed}` / interrupted). Idempotent. */
@@ -138,15 +173,22 @@ export class AssistantInputLog {
     writeContext(sessionId: string | null | undefined): AssistantWriteContext {
         const id = normalizeId(sessionId);
         const log = id ? this.sessions.get(id) : undefined;
-        let origin = classifyWriteOrigin(log ? log.entries.map((e) => e.source) : []);
-        // `review` applies only inside the review turn; a write after that turn
-        // closed (and before anything else arrived) has no human behind it.
-        if (origin === 'review' && !(log?.current?.open && log.current.openedBy === 'review')) origin = 'relay';
+        let origin = classifyWriteOrigin(log ? log.entries.map((e) => e.source) : [], { truncated: !log || log.truncated || !log.fromStart });
+        const reviewTurnOpen = !!(log?.current?.open && log.current.openedBy === 'review');
+        // A review origin applies only inside the review turn; a write after that
+        // turn closed (and before anything else arrived) has no human behind it.
+        if (isReviewOrigin(origin) && !reviewTurnOpen) origin = 'relay';
+        let reviewTurnId: string | undefined;
+        if (isReviewOrigin(origin) && log?.current) {
+            const opener = log.entries.find((e) => e.turnId === log.current!.turnId && e.source === 'review');
+            reviewTurnId = opener?.messageId || `${id}:${log.current.turnId}`;
+        }
         return {
             origin,
             sessionId: id || 'unbound',
             turnId: log?.current?.turnId ?? 'no-turn',
             logged: !!log,
+            ...(reviewTurnId ? { reviewTurnId } : {}),
         };
     }
 }

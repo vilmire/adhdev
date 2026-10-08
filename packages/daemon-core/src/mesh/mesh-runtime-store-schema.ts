@@ -234,10 +234,27 @@ export function ensureAssistantRelaySchema(db: MeshRuntimeStore['db']): void {
             skill_attaches INTEGER NOT NULL DEFAULT 0,
             skill_writes INTEGER NOT NULL DEFAULT 0,
             review_turns INTEGER NOT NULL DEFAULT 0,
+            -- M7 numerator: review turns with >= 1 APPLIED or owner-APPROVED
+            -- write, counted once per review turn on the day it first landed.
             review_turns_with_writes INTEGER NOT NULL DEFAULT 0,
+            review_writes_applied INTEGER NOT NULL DEFAULT 0,
+            review_writes_approved INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (day, mesh_id)
         );
+
+        -- Review turns already credited to review_turns_with_writes (dedupe
+        -- across applied + later approvals). Ids and times only; pruned with
+        -- the metric rows.
+        CREATE TABLE IF NOT EXISTS assistant_review_credit (
+            review_turn_id TEXT PRIMARY KEY,
+            credited_at INTEGER NOT NULL
+        );
     `);
+    // Additive columns for tables created before 2026-10-08 (research Q7 / M7).
+    const cols = new Set((db.prepare('PRAGMA table_info(assistant_metric_daily)').all() as Array<{ name: string }>).map((r) => r.name));
+    for (const c of ['review_writes_applied', 'review_writes_approved']) {
+        if (!cols.has(c)) db.exec(`ALTER TABLE assistant_metric_daily ADD COLUMN ${c} INTEGER NOT NULL DEFAULT 0`);
+    }
 }
 
 

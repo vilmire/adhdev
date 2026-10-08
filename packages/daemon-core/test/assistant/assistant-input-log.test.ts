@@ -41,6 +41,7 @@ describe('writeContext — origin', () => {
 
     it('review applies only while the review turn is open', () => {
         const log = new AssistantInputLog();
+        log.begin('a');
         log.append('a', 'human');
         log.closeTurn('a');
         log.append('a', 'review');
@@ -49,6 +50,51 @@ describe('writeContext — origin', () => {
         log.closeTurn('a');
         expect(log.isReviewTurnOpen('a')).toBe(false);
         expect(log.writeContext('a').origin).toBe('relay');
+    });
+
+    // Research 2026-10-08 §5.1 — the four orders, through the log (review turns
+    // opened by the review input, window since the previous review / session start).
+    const replay = (seq: Array<'human' | 'relay' | 'review'>, opts: { begun?: boolean } = {}) => {
+        const log = new AssistantInputLog();
+        if (opts.begun !== false) log.begin('a');
+        seq.forEach((src, i) => {
+            log.append('a', src, src === 'review' ? { messageId: `review:${1000 + i}` } : {});
+            log.closeTurn('a');
+        });
+        return log;
+    };
+    const lastReviewContext = (seq: Array<'human' | 'relay' | 'review'>, opts: { begun?: boolean } = {}) => {
+        const log = replay(seq.slice(0, -1), opts);
+        log.append('a', 'review', { messageId: 'review:9999' }); // open review turn
+        return log.writeContext('a');
+    };
+    it('[human, relay, review] → review_tainted, with the review turn id', () => {
+        expect(lastReviewContext(['human', 'relay', 'review'])).toMatchObject({ origin: 'review_tainted', reviewTurnId: 'review:9999' });
+    });
+    it('[human, human, review] → review', () => {
+        expect(lastReviewContext(['human', 'human', 'review'])).toMatchObject({ origin: 'review', reviewTurnId: 'review:9999' });
+    });
+    it('[review(prev), human, review] → review', () => {
+        expect(lastReviewContext(['review', 'human', 'review']).origin).toBe('review');
+    });
+    it('[relay, review(prev), human, review] → review', () => {
+        expect(lastReviewContext(['relay', 'review', 'human', 'review']).origin).toBe('review');
+    });
+    it('a log that did not begin with the session (daemon restart re-bind) cannot vouch for the first window', () => {
+        expect(lastReviewContext(['human', 'human', 'review'], { begun: false }).origin).toBe('review_tainted');
+        expect(lastReviewContext(['human', 'review', 'human', 'review'], { begun: false }).origin).toBe('review');
+    });
+    it('a non-review write carries no review turn id; a closed review turn degrades to relay', () => {
+        const log = new AssistantInputLog();
+        log.begin('a');
+        log.append('a', 'human');
+        expect(log.writeContext('a').reviewTurnId).toBeUndefined();
+        log.closeTurn('a');
+        log.append('a', 'review');
+        expect(log.writeContext('a')).toMatchObject({ origin: 'review', reviewTurnId: 'a:t2' });
+        log.closeTurn('a');
+        expect(log.writeContext('a')).toMatchObject({ origin: 'relay' });
+        expect(log.writeContext('a').reviewTurnId).toBeUndefined();
     });
 
     it('truncation that drops the last human input stages', () => {

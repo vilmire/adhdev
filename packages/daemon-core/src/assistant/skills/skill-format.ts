@@ -5,7 +5,11 @@
  * Design: docs/design/2026-10-07-assistant-layer.md §4.10.4.
  *
  *  - `<skillsDir>/<name>/SKILL.md` + optional `references/`, `templates/`.
- *    Name `^[a-z0-9][a-z0-9-]{1,63}$`, `list` reserved, no category subdirs.
+ *    Name per the Agent Skills spec: 1–64 of `[a-z0-9-]`, no leading,
+ *    trailing or consecutive hyphen; `list` reserved, no category subdirs.
+ *    A directory named under the older rule (`^[a-z0-9][a-z0-9-]{1,63}$`)
+ *    is still listed — with problem `invalid_name`, out of the index — so the
+ *    owner sees it and can rename it; it is never silently dropped.
  *  - Frontmatter (YAML, js-yaml CORE schema so dates stay strings): required
  *    `name` (= directory name) and one-line `description` (1–300 chars);
  *    optional `version`, `metadata.adhdev.project`. Every other key is
@@ -14,16 +18,24 @@
  *  - Only `.md .txt .json .yaml .yml` under references/ and templates/ are
  *    read; anything else (scripts/, executables) is ignored on read and
  *    refused on write. Symlinks are never followed.
+ *  - The description and body are re-scanned on every read (invisible
+ *    Unicode, injection phrases, credentials); a hit marks the skill
+ *    `blocked_content` — left out of the index, refused by view/attach, files
+ *    untouched — the same handling as an unparseable SKILL.md.
  */
 
 import { existsSync, lstatSync, readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 import * as yaml from 'js-yaml';
 import { charCount } from '../memory/memory-store.js';
+import { scanStoredContent, type StoreContentFinding } from '../store-guards.js';
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
-export const SKILL_NAME_RE = /^[a-z0-9][a-z0-9-]{1,63}$/;
+/** Agent Skills spec (agentskills.io/specification): 1–64 chars, no leading/trailing/consecutive hyphen. */
+export const SKILL_NAME_RE = /^[a-z0-9](?:[a-z0-9]|-(?=[a-z0-9])){0,63}$/;
+/** The rule before 2026-10-08 — only used to keep finding (and reporting) directories named under it. */
+export const LEGACY_SKILL_NAME_RE = /^[a-z0-9][a-z0-9-]{1,63}$/;
 export const RESERVED_SKILL_NAMES: ReadonlySet<string> = new Set(['list']);
 export const SKILL_FILE = 'SKILL.md';
 export const SKILL_SUBDIRS = ['references', 'templates'] as const;
@@ -86,7 +98,9 @@ export type SkillFormatProblem =
     | 'no_frontmatter'
     | 'bad_yaml'
     | 'name_mismatch'
-    | 'bad_description';
+    | 'bad_description'
+    /** Description or body failed the content re-scan; `blocked` says which check. */
+    | 'blocked_content';
 
 /** Split `---\n<yaml>\n---\n<body>`. Returns null when there is no frontmatter block. */
 export function splitSkillMd(text: string): { frontmatterRaw: string; body: string } | null {
@@ -160,6 +174,8 @@ export interface SkillDirRead {
     name: string;
     /** Set when SKILL.md is unusable; the skill is left out of the index. */
     problem?: SkillFormatProblem;
+    /** With problem `blocked_content`: the first finding (pattern id only, never the text). */
+    blocked?: StoreContentFinding;
     frontmatterRaw: string;
     meta: Record<string, unknown>;
     description: string;
@@ -231,8 +247,10 @@ export function readSkillDir(dir: string, expectedName: string): SkillDirRead | 
         const body = splitSkillMd(text)?.body ?? text;
         out = { ...base, problem: parsed.problem, frontmatterRaw: '', meta: {}, description: '', body, bodyChars: charCount(body), overLimit: [] };
     } else {
-        const problem: SkillFormatProblem | undefined =
+        let problem: SkillFormatProblem | undefined =
             parsed.meta.name !== expectedName ? 'name_mismatch' : !validateDescription(parsed.meta.description) ? 'bad_description' : undefined;
+        const blocked = problem ? null : scanStoredContent(String(parsed.meta.description)) ?? scanStoredContent(parsed.body);
+        if (blocked) problem = 'blocked_content';
         out = {
             ...base,
             problem,
@@ -243,6 +261,7 @@ export function readSkillDir(dir: string, expectedName: string): SkillDirRead | 
             body: parsed.body,
             bodyChars: charCount(parsed.body),
             overLimit: [],
+            ...(blocked ? { blocked } : {}),
         };
     }
     out.overLimit = checkSkillLimits(out.bodyChars, files);

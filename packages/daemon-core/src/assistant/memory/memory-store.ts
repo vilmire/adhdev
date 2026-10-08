@@ -9,11 +9,14 @@
  *    Unicode code points; usage = the entries joined by "\n§\n".
  *  - Only the daemon writes; a human may edit the files in an editor. Every
  *    operation re-reads the file, so manual edits are picked up and never
- *    reverted. Entries that fail to parse (oversize, control characters) are
+ *    reverted. Entries that fail to parse (oversize, control characters) or
+ *    fail the content re-scan (invisible Unicode, injection phrases,
+ *    credentials — a hand edit or an older daemon may have let one in) are
  *    left out of the snapshot and reported, but preserved verbatim on write.
  *    A file that cannot be decoded at all is never overwritten.
- *  - Write checks run in design order: format → budget → duplicate →
- *    credential → origin staging. Any failure means nothing is written.
+ *  - Write checks run in design order: USER-target origin → format → budget →
+ *    duplicate → credential → content (hidden chars, injection) → origin
+ *    staging. Any failure means nothing is written.
  *  - Every attempt is journaled to memory/.journal.jsonl. Text that matches a
  *    credential pattern never reaches the journal (the field is redacted).
  *  - All I/O is synchronous, so operations on one store are serialized within
@@ -28,7 +31,12 @@ import {
     appendJsonLine600,
     detectCredential,
     mustStage,
+    scanStoredContent,
+    scanWriteContent,
+    userTargetAllowed,
     writeFileAtomic600,
+    type HiddenCharId,
+    type InjectionPatternId,
     type StoreWriteOrigin,
 } from '../store-guards.js';
 
@@ -76,7 +84,7 @@ function firstChars(s: string, n: number): string {
     return Array.from(s).slice(0, n).join('');
 }
 
-export type MemoryEntryProblem = 'too_long' | 'control_chars';
+export type MemoryEntryProblem = 'too_long' | 'control_chars' | 'hidden_chars' | 'injection' | 'credential';
 
 export interface MemoryFileState {
     target: MemoryTarget;
@@ -97,7 +105,8 @@ const CONTROL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
 function entryProblem(entry: string): MemoryEntryProblem | null {
     if (charCount(entry) > MAX_MEMORY_ENTRY_CHARS) return 'too_long';
     if (CONTROL_CHARS.test(entry)) return 'control_chars';
-    return null;
+    const finding = scanStoredContent(entry);
+    return finding ? finding.kind : null;
 }
 
 export function parseMemoryEntries(text: string): string[] {
@@ -146,6 +155,10 @@ export type MemoryWriteOutcome =
     | { result: 'memory_budget_exceeded'; used: number; budget: number }
     | { result: 'memory_duplicate' }
     | { result: 'memory_secret_rejected' }
+    | { result: 'memory_hidden_chars_rejected'; pattern: HiddenCharId }
+    | { result: 'memory_injection_rejected'; pattern: InjectionPatternId }
+    /** USER.md takes only the person's own word (human, clean review, owner); never staged. */
+    | { result: 'memory_user_requires_human' }
     | { result: 'memory_store_unreadable' };
 
 export type MemoryWriteResult = MemoryWriteOutcome & { usage: { memory: string; user: string } };
@@ -165,8 +178,10 @@ export interface MemoryJournalRecord {
     stagedId?: string;
     /** `owner` when a staged write was resolved; `expiry` when it aged out. */
     resolvedBy?: 'owner' | 'expiry';
-    /** Names of fields blanked because they matched a credential pattern. */
+    /** Names of fields blanked because they matched a credential pattern (or a refused content pattern). */
     redacted?: Array<'before' | 'after'>;
+    /** Review turn the write came from (review / review_tainted origins). */
+    reviewTurnId?: string;
 }
 
 export interface StagedMemoryWrite {
@@ -175,12 +190,24 @@ export interface StagedMemoryWrite {
     createdAt: string;
     origin: StoreWriteOrigin;
     op: MemoryOperation;
+    /** Review turn that staged it — the owner can resolve one review's writes together. */
+    reviewTurnId?: string;
+}
+
+/** Caller facts about a write beyond its origin. */
+export interface MemoryWriteMeta {
+    reviewTurnId?: string;
 }
 
 export type StagedResolveResult =
     | MemoryWriteResult
     | { result: 'discarded'; usage: { memory: string; user: string } }
     | { result: 'staged_not_found'; usage: { memory: string; user: string } };
+
+/** Refusals whose `after` text never reaches the journal. */
+const REDACT_AFTER_RESULTS: ReadonlySet<MemoryJournalResult> = new Set([
+    'memory_secret_rejected', 'memory_hidden_chars_rejected', 'memory_injection_rejected',
+]);
 
 function validateContent(content: unknown): MemoryInvalidFormatReason | null {
     if (typeof content !== 'string' || !content.trim()) return 'empty';
@@ -236,6 +263,9 @@ export class AssistantMemoryStore {
             const bytes = readFileSync(path);
             text = bytes.toString('utf8');
             if (!Buffer.from(text, 'utf8').equals(bytes)) return { ...empty, unreadable: 'invalid utf-8' };
+            // An editor's UTF-8 BOM is not hidden text in the first entry. It is
+            // dropped on the next daemon write of the file.
+            if (text.startsWith('\uFEFF')) text = text.slice(1);
         } catch (err) {
             return { ...empty, unreadable: err instanceof Error ? err.message : String(err) };
         }
@@ -263,8 +293,8 @@ export class AssistantMemoryStore {
     }
 
     /** The `memory` tool. `origin` comes from the caller (classifyWriteOrigin). */
-    apply(op: MemoryOperation, origin: StoreWriteOrigin): MemoryWriteResult {
-        const outcome = this.applyInner(op, origin, undefined);
+    apply(op: MemoryOperation, origin: StoreWriteOrigin, meta: MemoryWriteMeta = {}): MemoryWriteResult {
+        const outcome = this.applyInner(op, origin, undefined, meta.reviewTurnId);
         return { ...outcome, usage: this.usage() };
     }
 
@@ -292,7 +322,7 @@ export class AssistantMemoryStore {
             this.dropStaged(rec, 'owner');
             return { result: 'discarded', usage: this.usage() };
         }
-        const outcome = this.applyInner(rec.op, rec.origin, { stagedId: rec.id, resolvedBy: 'owner' });
+        const outcome = this.applyInner(rec.op, rec.origin, { stagedId: rec.id, resolvedBy: 'owner' }, rec.reviewTurnId);
         if (outcome.result === 'applied' || outcome.result === 'memory_duplicate') this.unlinkStaged(rec.id);
         return { ...outcome, usage: this.usage() };
     }
@@ -317,6 +347,7 @@ export class AssistantMemoryStore {
         op: MemoryOperation,
         origin: StoreWriteOrigin,
         resolving: { stagedId: string; resolvedBy: 'owner' } | undefined,
+        reviewTurnId: string | undefined,
     ): MemoryWriteOutcome {
         const state = this.readFile(op.target);
         const content = op.action === 'remove' ? null : typeof op.content === 'string' ? op.content.trim() : '';
@@ -332,10 +363,15 @@ export class AssistantMemoryStore {
                 result,
                 stagedId: extra?.stagedId ?? resolving?.stagedId,
                 resolvedBy: resolving?.resolvedBy,
+                reviewTurnId,
             });
         const fail = (outcome: Exclude<MemoryWriteOutcome, { result: 'applied' | 'staged' }>) => (journal(outcome.result), outcome);
 
         if (state.unreadable) return fail({ result: 'memory_store_unreadable' });
+
+        // 0. USER.md is about the person: a non-human origin is refused outright,
+        // not staged (resolving an already-staged write is the owner's approval).
+        if (!resolving && op.target === 'user' && !userTargetAllowed(origin)) return fail({ result: 'memory_user_requires_human' });
 
         // 1. format + unique match
         if (content !== null) {
@@ -378,9 +414,17 @@ export class AssistantMemoryStore {
         // 4. credentials (only the text being written; removing is always allowed)
         if (content !== null && detectCredential(content)) return fail({ result: 'memory_secret_rejected' });
 
+        // 4b. invisible Unicode / injection phrases (research 2026-10-08 F3)
+        const finding = content !== null ? scanWriteContent(content) : null;
+        if (finding) {
+            return fail(finding.kind === 'hidden_chars'
+                ? { result: 'memory_hidden_chars_rejected', pattern: finding.pattern }
+                : { result: 'memory_injection_rejected', pattern: finding.pattern });
+        }
+
         // 5. origin staging (resolving an already-staged write is the owner's approval)
         if (!resolving && mustStage(origin)) {
-            const stagedId = this.stage(op, origin);
+            const stagedId = this.stage(op, origin, reviewTurnId);
             journal('staged', { stagedId });
             return { result: 'staged', stagedId };
         }
@@ -405,8 +449,8 @@ export class AssistantMemoryStore {
             before: scrub('before', rec.before),
             after: scrub('after', rec.after),
         };
-        if (rec.result === 'memory_secret_rejected' && !redacted.includes('after')) {
-            // Belt and braces: a rejected secret's text is never journaled.
+        if (REDACT_AFTER_RESULTS.has(rec.result) && !redacted.includes('after')) {
+            // Belt and braces: a rejected secret's (or refused payload's) text is never journaled.
             full.after = null;
             redacted.push('after');
         }
@@ -422,9 +466,9 @@ export class AssistantMemoryStore {
         return join(this.stagedDir, `${id}.json`);
     }
 
-    private stage(op: MemoryOperation, origin: StoreWriteOrigin): string {
+    private stage(op: MemoryOperation, origin: StoreWriteOrigin, reviewTurnId: string | undefined): string {
         const id = `mem-${this.now().getTime()}-${randomBytes(4).toString('hex')}`;
-        const rec: StagedMemoryWrite = { kind: 'memory', id, createdAt: this.now().toISOString(), origin, op };
+        const rec: StagedMemoryWrite = { kind: 'memory', id, createdAt: this.now().toISOString(), origin, op, ...(reviewTurnId ? { reviewTurnId } : {}) };
         writeFileAtomic600(this.stagedPath(id), JSON.stringify(rec, null, 2));
         return id;
     }
@@ -455,6 +499,7 @@ export class AssistantMemoryStore {
             result: 'discarded',
             stagedId: rec.id,
             resolvedBy: by,
+            reviewTurnId: rec.reviewTurnId,
         });
         this.unlinkStaged(rec.id);
     }

@@ -169,8 +169,9 @@ const launchAssistant: HighFamilyHandler = async (ctx, args) => {
     }
 
     const cliArgs: string[] = [];
-    // The private HOME env first; the prompt injection may add its own keys.
-    const launchEnv: Record<string, string> = { ...(mcp.privateHome?.env ?? {}) };
+    // The private HOME env and the plan's own env (claude-cli: auto memory off) first;
+    // the prompt injection may add its own keys.
+    const launchEnv: Record<string, string> = { ...(mcp.privateHome?.env ?? {}), ...(mcp.launchEnv ?? {}) };
     const { applyMeshCoordinatorSystemPromptInjection } = await import('../mesh-coordinator.js');
     const injection = applyMeshCoordinatorSystemPromptInjection(prompt.text, provider?.meshCoordinator?.systemPromptInjection, { cliArgs, launchEnv, workspace, cliType });
     if (injection.error) return fail(injection.errorCode ?? 'assistant_prompt_failed', injection.error, { cliType, workspace });
@@ -214,6 +215,8 @@ const launchAssistant: HighFamilyHandler = async (ctx, args) => {
     const { previous } = registry.bindSession({
         sessionId, cliType, workspace, ...(mcp.configWrite ? { mcpConfigPath: mcp.configWrite.path } : {}), at: Date.now(),
     });
+    // A fresh process: its input log covers the whole session (review windows, §4.10.2).
+    svc.inputLog.begin(sessionId);
     runtime?.activate('launch');
     const restartNote = runtime ? runtime.relay.armRestartNote({ previous }, sessionId) : false;
     LOG.info('Assistant', `Launched ${cliType} assistant ${sessionId} in ${workspace} (prompt ${prompt.length} chars${restartNote ? ', restart note queued' : ''})`);
