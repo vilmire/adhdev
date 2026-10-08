@@ -82,7 +82,12 @@ function assistantVerb(verb: string, run: (ports: AssistantProjectPorts, args: a
 /** `remote` is null when this daemon hosts the mesh. */
 type Resolved = { ok: true; mesh: LocalMeshEntry; slug: string; remote: RemoteHostView | null } | { ok: false; result: CommandRouterResult };
 
-function resolveProject(ports: AssistantProjectPorts, ref: unknown): Resolved {
+/**
+ * Resolve a project ref over the inventory, which includes the meshes this
+ * daemon is a member of (member-meshes.ts) — named once their host answered.
+ */
+async function resolveProject(ports: AssistantProjectPorts, ref: unknown): Promise<Resolved> {
+    await ports.refreshMemberMeshes?.();
     const r = resolveAssistantProject(ref, ports.listMeshes(), ports.aliases());
     if (!r.ok) {
         const detail = r.code === 'project_not_found' ? { projects: r.projects } : { candidates: r.candidates };
@@ -158,13 +163,16 @@ function projectRow(ports: AssistantProjectPorts, mesh: LocalMeshEntry, slug: st
 }
 
 const projects = assistantVerb(ASSISTANT_VERB.projects, async (ports) => {
+    await ports.refreshMemberMeshes?.();
     const meshes = ports.listMeshes();
     const slugs = projectSlugs(meshes);
     const managed: ProjectRow[] = [];
     const unmanaged: ProjectRow[] = [];
     for (const mesh of meshes) {
         const row = projectRow(ports, mesh, slugs.get(mesh.id) ?? mesh.id);
-        (isUnmanagedRepoIdentity(mesh.repoIdentity) ? unmanaged : managed).push(row);
+        // A remote mesh whose host has not told us its repo yet is still a project.
+        const scratch = row.hosting === 'remote' && !str(mesh.repoIdentity) ? false : isUnmanagedRepoIdentity(mesh.repoIdentity);
+        (scratch ? unmanaged : managed).push(row);
     }
     return { success: true, projects: managed, unmanaged, machines: machinesSummary(meshes, ports.selfDaemonId()) };
 });
@@ -184,7 +192,7 @@ export async function localProjectStatus(ports: AssistantProjectPorts, mesh: Loc
 }
 
 const projectStatus = assistantVerb(ASSISTANT_VERB.projectStatus, async (ports, args) => {
-    const p = resolveProject(ports, args.project);
+    const p = await resolveProject(ports, args.project);
     if (!p.ok) return p.result;
     const meshId = p.mesh.id;
     if (!p.remote) return wrap(p.slug, meshId, { ...(await localProjectStatus(ports, p.mesh)), host: 'this machine' });
@@ -217,7 +225,7 @@ const projectSend = assistantVerb(ASSISTANT_VERB.projectSend, async (ports, args
         const { ok: _ok, code, error, ...detail } = composed;
         return fail(code, error, detail);
     }
-    const p = resolveProject(ports, args.project);
+    const p = await resolveProject(ports, args.project);
     if (!p.ok) return p.result;
     const meshId = p.mesh.id;
     const where = { project: p.slug, meshId };
@@ -305,7 +313,7 @@ export async function localProjectRead(ports: AssistantProjectPorts, meshId: str
 }
 
 const projectRead = assistantVerb(ASSISTANT_VERB.projectRead, async (ports, args) => {
-    const p = resolveProject(ports, args.project);
+    const p = await resolveProject(ports, args.project);
     if (!p.ok) return p.result;
     const meshId = p.mesh.id;
     const tail = readTailArg(args.tail);
