@@ -39,6 +39,7 @@ import {
     resetPeerSecretsWarningsForTest,
 } from '../../../src/mesh/transport/mesh-peer-secrets.js';
 import { LOG } from '../../../src/logging/logger.js';
+import { readMeshHostRecord } from '../../../src/mesh/mesh-host-memory.js';
 import { getDaemonCommandRegistry } from '../../../src/commands/router.js';
 
 const HOST_CORE = 'mach_00000000000000000000000000000a01';
@@ -453,5 +454,42 @@ describe('manual pairing — address + code only (dashboard card flow)', () => {
             memberNode: { workspace: '/member/repo', daemonId: MEMBER_CORE },
         });
         expect(miss).toMatchObject({ success: false, error: 'Mesh not found' });
+    });
+});
+
+describe('join_mesh_host_pairing — card flow persists the pairing (inline-cache read)', () => {
+    it('marks meshes.json paired with the HOST id and anchors the sender gate under the host mesh id', async () => {
+        const mesh = memberMesh('192.168.1.5:3847', 'tok-card');
+        // A member's own mesh is created pinned to itself; configure leaves that pin.
+        expect(getMesh(mesh.id)?.meshHost?.pairing?.status).toBe('pairing');
+        vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(200, {
+            success: true,
+            code: 'mesh_host_join_accepted',
+            meshId: 'mesh_on_host',
+            node: { id: 'node_member', workspace: '/member/repo', daemonId: MEMBER_CORE },
+            tokenId: 'tok_card',
+            meshHost: { role: 'host', hostDaemonId: `standalone_${HOST_CORE}` },
+            peerSecret: mintPeerSecret(),
+            hostDaemonId: HOST_CANON,
+        })));
+        // The real router answers from the inline cache that
+        // configure_mesh_host_pairing warmed — `inline: true` with a mesh that
+        // still lives in local config.
+        const ctx = makeCtx({ statusInstanceId: `standalone_${MEMBER_CORE}` });
+        ctx.getMeshForCommand = async (meshId: string) => {
+            const local = getMesh(meshId);
+            return local ? { mesh: local, inline: true, source: 'inline_cache' } : null;
+        };
+
+        const res: any = await meshHostPairingHandlers.join_mesh_host_pairing(ctx, { meshId: mesh.id, token: 'tok-card' });
+
+        expect(res.success).toBe(true);
+        const persisted = getMesh(mesh.id)?.meshHost;
+        expect(persisted?.pairing?.status).toBe('paired');
+        expect(persisted?.hostDaemonId).toBe(`standalone_${HOST_CORE}`);
+        expect(res.meshHost.hostDaemonId).toBe(`standalone_${HOST_CORE}`);
+        expect(ctx.inlineMeshCache.get(mesh.id)?.meshHost?.pairing?.status).toBe('paired');
+        expect(readMeshHostRecord(mesh.id)).toMatchObject({ hostDaemonId: `standalone_${HOST_CORE}`, source: 'pairing' });
+        expect(readMeshHostRecord('mesh_on_host')).toMatchObject({ hostDaemonId: `standalone_${HOST_CORE}`, source: 'pairing' });
     });
 });
