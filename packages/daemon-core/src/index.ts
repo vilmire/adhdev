@@ -990,6 +990,9 @@ export type { LifecycleTraceLog } from './sessions/lifecycle-trace.js';
 // D-prep: the `_meshDirectDispatch` forwarding-loop guard — one reader, one writer
 // (hosts forwarding a mesh command to themselves use the writer too).
 export { readMeshDirectDispatchFlag, withMeshDirectDispatch } from './commands/command-args.js';
+// Assistant input attribution for PTY input that skips the router (cloud P2P
+// `pty_input` frame): the host reports the transport's own source.
+export { reportSessionTerminalInput } from './assistant/assistant-human-input.js';
 export type { MeshDirectDispatchArgs } from './commands/command-args.js';
 // Wiring-unification D2 — the one send funnel (`DaemonCliManager.input`).
 export { createSessionInputService, BUSY_DECISION } from './sessions/session-input-service.js';

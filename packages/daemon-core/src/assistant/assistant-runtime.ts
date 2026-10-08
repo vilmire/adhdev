@@ -269,8 +269,12 @@ export function wireAssistantRuntime(
     const services = getAssistantServices();
     services.reviewMetrics = metrics ? { creditReviewWrite: (id, kind, at) => metrics.creditReviewWrite(id, kind, at) } : null;
 
-    // Dashboard chat into the assistant session → input log (human), at delivery.
-    setAssistantHumanInputSink((r) => relay.recordHumanSubmit(r.sessionIds, r.messageId, r.outcome));
+    // Dashboard chat (at delivery) and dashboard terminal submit keys (at the
+    // PTY write) into the assistant session → input log (human).
+    setAssistantHumanInputSink({
+        chat: (r) => relay.recordHumanSubmit(r.sessionIds, r.messageId, r.outcome),
+        terminal: (r) => relay.recordHumanTerminalInput(r.sessionIds, r.data),
+    });
 
     setAssistantRelayHooks({
         openThread: (meshId) => {

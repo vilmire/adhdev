@@ -15,6 +15,8 @@ import {
     normalizeControlSetResult,
 } from '../providers/control-effects.js';
 import { LOG } from '../logging/logger.js';
+import { reportSessionTerminalInput } from '../assistant/assistant-human-input.js';
+import { readCommandSource } from './command-args.js';
 
 function normalizeOpenPanelCommandResult(result: CommandResult): { opened: boolean; visible: boolean; focused: boolean } {
     const payload = Object.prototype.hasOwnProperty.call(result, 'result') ? result.result : result;
@@ -112,6 +114,13 @@ export async function handlePtyInput(h: CommandHelpers, args: any): Promise<Comm
         return { success: false, error: `CLI adapter not found: ${targetSessionId || cliType || 'unknown'}` };
     }
     await adapter.writeRaw(cleanData);
+    // Assistant input attribution (§4.10.7): a submit key typed by a person at
+    // a dashboard terminal is a human input. The hook keeps only router-stamped
+    // dashboard sources and only the bound assistant session.
+    const requested = typeof targetSessionId === 'string' ? targetSessionId.trim() : '';
+    const resolved = h.currentSession?.sessionId || '';
+    const sessionIds = [...new Set([requested, resolved].filter(Boolean))];
+    if (typeof cleanData === 'string' && sessionIds.length) reportSessionTerminalInput({ sessionIds, data: cleanData, source: readCommandSource(args) });
     return { success: true };
 }
 

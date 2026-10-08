@@ -29,6 +29,7 @@ import type { AssistantInputLog } from './assistant-input-log.js';
 import type { AssistantInputSource } from './store-guards.js';
 import type { AssistantRelayStore } from './assistant-relay-store.js';
 import { busyInputModeToSendPolicy, type BusyInputMode } from './assistant-registry.js';
+import { countTerminalSubmits, TERMINAL_SUBMITS_PER_WRITE_CAP } from './assistant-human-input.js';
 import {
     RELAY_BACKLOG_FOLD_AFTER_MS, RELAY_DELIVERY_MAX_CHARS, RELAY_IDLE_CLOSE_GRACE_MS, RELAY_MAX_WAIT_MS, RELAY_PROGRESS_AFTER_MS, RELAY_QUIET_MS,
     RELAY_STALL_AFTER_MS, buildApprovalSignal, buildCoordinatorEndedSignal, buildFoldedBacklogLine, buildProgressSignal,
@@ -134,6 +135,9 @@ export class AssistantRelay {
     /** Human inputs parked in the driver FIFO, oldest first (logged when drained). */
     private pendingHuman: Array<{ at: number; messageId: string }> = [];
     private resolvingHuman: Promise<void> | null = null;
+    /** Bracketed paste left open by the last terminal write into this assistant session. */
+    private terminalPaste: { sessionId: string; open: boolean } = { sessionId: '', open: false };
+    private terminalSeq = 0;
     private unsubscribe: Unsubscribe | null = null;
     private flushing: Promise<void> | null = null;
     private dirty = false;
@@ -261,6 +265,30 @@ export class AssistantRelay {
             this.ports.inputLog.append(sid, 'human', { at: this.clock.now(), messageId });
         } else if (!this.pendingHuman.some((p) => p.messageId === messageId)) {
             this.pendingHuman.push({ at: this.clock.now(), messageId });
+        }
+    }
+
+    /**
+     * A human dashboard wrote raw terminal input into a session
+     * (assistant-human-input.ts `reportSessionTerminalInput`). The write went
+     * straight into the PTY, so it is logged now, in order: one `human` entry
+     * per write that carries a submit key outside a bracketed paste, capped at
+     * `TERMINAL_SUBMITS_PER_WRITE_CAP`, with a synthetic id
+     * `term:<session>:<ms>:<n>`. Keystrokes without a submit key log nothing.
+     * Only the bound assistant session is recorded.
+     */
+    recordHumanTerminalInput(sessionIds: readonly string[], data: string): void {
+        const sid = this.ports.assistantSessionId();
+        if (!sid || !sessionIds.includes(sid)) return;
+        const prevOpen = this.terminalPaste.sessionId === sid && this.terminalPaste.open;
+        const { submits, inPaste } = countTerminalSubmits(data, prevOpen);
+        this.terminalPaste = { sessionId: sid, open: inPaste };
+        if (submits === 0) return;
+        this.dropQueuedReview();
+        const at = this.clock.now();
+        for (let k = 0; k < Math.min(submits, TERMINAL_SUBMITS_PER_WRITE_CAP); k++) {
+            this.terminalSeq += 1;
+            this.ports.inputLog.append(sid, 'human', { at, messageId: `term:${sid}:${at}:${this.terminalSeq}` });
         }
     }
 
