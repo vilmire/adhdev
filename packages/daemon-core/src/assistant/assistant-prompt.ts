@@ -76,6 +76,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
 - Long project procedures belong in a skill. Before following a skill, read it with \`skill_view\`. To hand a procedure to a project, pass its name in \`project_send\` \`skills\`; the daemon attaches the body.
 - A write may come back \`staged\`: it waits for the user's review in the dashboard. Say so in one line and move on; do not retry it.
 - \`skill_patch_limit\` / \`skill_needs_review\` mean the skill needs the user's review in the dashboard. Say so in one line.
+- \`memory_user_requires_human\`: target user takes only what the user said in this chat. Ask the user instead of retrying.
 - Store memory, skills and notes only through these tools. Do not write memory files, CLAUDE.md, AGENTS.md or any other file yourself.
 
 ## Style

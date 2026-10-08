@@ -7,8 +7,11 @@
  * `queue`); the store verbs call `reviewTurnVerbDecision` with the input log's
  * `isReviewTurnOpen`.
  *
- * The numbers (10 min, 6 inputs, 2 h, 4 per day) are chosen values, not
- * measurements — M7 and the standalone-retirement condition judge them.
+ * The numbers (10 min, 6 inputs, 2 h, 4 per day, 20 % quota) are chosen
+ * values, not measurements — M7 and the standalone-retirement condition judge
+ * them. The quota floor mirrors Codex's `min_rate_limit_remaining_percent`
+ * (research 2026-10-08 Q7): a background review must not spend the last of
+ * the plan the person is working with.
  */
 
 import { ASSISTANT_REVIEW_TURN_VERBS } from '@adhdev/mesh-shared';
@@ -22,6 +25,8 @@ export const REVIEW_TRIGGER_RULES = {
     minSinceLastReviewMs: 2 * 60 * 60 * 1000,
     /** Reviews per rolling 24 h. */
     maxPerDay: 4,
+    /** Skip below this remaining % of the assistant CLI's tightest quota window. */
+    minQuotaRemainingPct: 20,
 } as const;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -39,6 +44,11 @@ export interface ReviewTriggerInput {
     reviewTurnSetting?: boolean | null;
     /** MCP-only assistants have no PTY to deliver into (§4.10.7) — never due. */
     mcpOnly?: boolean;
+    /**
+     * Remaining % of the assistant CLI's quota (`AssistantQuotaPort`,
+     * assistant-quota.ts). null = unknown, which skips (fail-closed).
+     */
+    quotaRemainingPct: number | null;
 }
 
 export type ReviewSkipReason =
@@ -49,7 +59,8 @@ export type ReviewSkipReason =
     | 'modal_open'
     | 'too_few_inputs'
     | 'too_soon'
-    | 'daily_cap';
+    | 'daily_cap'
+    | 'low_quota';
 
 export type ReviewTriggerDecision = { due: true } | { due: false; reason: ReviewSkipReason };
 
@@ -66,6 +77,8 @@ export function evaluateReviewTrigger(input: ReviewTriggerInput, rules: typeof R
     if (last !== null && input.now - last < rules.minSinceLastReviewMs) return { due: false, reason: 'too_soon' };
     const inLastDay = reviews.filter((t) => input.now - t < DAY_MS).length;
     if (inLastDay >= rules.maxPerDay) return { due: false, reason: 'daily_cap' };
+    const q = input.quotaRemainingPct;
+    if (typeof q !== 'number' || !Number.isFinite(q) || q < rules.minQuotaRemainingPct) return { due: false, reason: 'low_quota' };
     return { due: true };
 }
 

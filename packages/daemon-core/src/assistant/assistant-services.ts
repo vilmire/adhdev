@@ -23,6 +23,17 @@ export interface AssistantOperatingNotesPort {
     forget(meshId: string, target: { noteId?: string; text?: string; reason?: string }): Promise<{ matched: number }>;
 }
 
+/**
+ * M7 (design §1, research 2026-10-08 Q7): a review turn counts as productive
+ * only when one of its writes is APPLIED (clean review) or APPROVED by the
+ * owner (staged, then resolved with apply). The assistant runtime installs the
+ * sink when it has the metrics table; tests and a runtime without it leave
+ * it unset.
+ */
+export interface AssistantReviewMetricsPort {
+    creditReviewWrite(reviewTurnId: string, kind: 'applied' | 'approved', at: number): void;
+}
+
 export interface AssistantServices {
     memory: AssistantMemoryStore;
     skills: AssistantSkillStore;
@@ -37,6 +48,8 @@ export interface AssistantServices {
      * asks the live daemon components (`hostedMeshes`). Tests inject it.
      */
     isMeshHostedHere?: (mesh: LocalMeshEntry) => boolean;
+    /** M7 sink, installed by the assistant runtime (`wireAssistantRuntime`). */
+    reviewMetrics?: AssistantReviewMetricsPort | null;
 }
 
 const defaultOperatingNotes: AssistantOperatingNotesPort = {

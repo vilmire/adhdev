@@ -99,6 +99,7 @@ export class SqliteAssistantRelayStore implements AssistantRelayStore {
 export const ASSISTANT_METRIC_COLUMNS = [
     'assistant_sends', 'human_sends', 'relays', 'project_reads', 'memory_writes', 'memory_discards',
     'skill_views', 'skill_attaches', 'skill_writes', 'review_turns', 'review_turns_with_writes',
+    'review_writes_applied', 'review_writes_approved',
 ] as const;
 export type AssistantMetricColumn = typeof ASSISTANT_METRIC_COLUMNS[number];
 
@@ -137,9 +138,26 @@ export class AssistantMetricsStore {
         });
     }
 
+    /**
+     * M7 (research 2026-10-08 Q7): one review-turn write landed — `applied`
+     * directly (clean review window) or `approved` by the owner after staging.
+     * Bumps the per-kind counter, and `review_turns_with_writes` only the first
+     * time this review turn is credited. Global counters (mesh_id '').
+     * A staged write that is discarded or expires never reaches here.
+     */
+    creditReviewWrite(reviewTurnId: string, kind: 'applied' | 'approved', at: number): void {
+        if (!reviewTurnId) return;
+        this.db.transaction(() => {
+            this.bump(kind === 'applied' ? 'review_writes_applied' : 'review_writes_approved', '', at);
+            const first = this.db.prepare('INSERT OR IGNORE INTO assistant_review_credit (review_turn_id, credited_at) VALUES (?, ?)').run(reviewTurnId, at).changes > 0;
+            if (first) this.bump('review_turns_with_writes', '', at);
+        })();
+    }
+
     /** Drop rows older than the retention window (90 days). */
     prune(now: number): number {
-        const cutoff = metricDay(now - ASSISTANT_METRIC_RETENTION_DAYS * 24 * 60 * 60_000);
-        return this.db.prepare('DELETE FROM assistant_metric_daily WHERE day < ?').run(cutoff).changes;
+        const cutoffMs = now - ASSISTANT_METRIC_RETENTION_DAYS * 24 * 60 * 60_000;
+        this.db.prepare('DELETE FROM assistant_review_credit WHERE credited_at < ?').run(cutoffMs);
+        return this.db.prepare('DELETE FROM assistant_metric_daily WHERE day < ?').run(metricDay(cutoffMs)).changes;
     }
 }

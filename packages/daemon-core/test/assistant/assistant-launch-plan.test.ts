@@ -51,7 +51,15 @@ describe('planAssistantMcp', () => {
             configWrite: { path: assistantClaudeMcpConfigPath(CFG), format: 'claude_mcp_json', serverName: ASSISTANT_MCP_SERVER_NAME, server },
             mcpServer: server,
             toolRestriction: 'enforced',
+            // Claude Code auto memory off: no second memory surface (research 2026-10-08 F4).
+            launchEnv: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' },
         });
+    });
+
+    it('only claude-cli gets the auto-memory env; codex-cli is unchanged', () => {
+        const setup: MeshCoordinatorSetup = { kind: 'cli_command', serverName: 'adhdev-mesh', command: 'codex mcp add adhdev-mesh -- adhdev mcp', requiresRestart: true, instructions: 'x', mcpServer: server };
+        const plan = planAssistantMcp({ cliType: 'codex-cli', setup, workspace: WS, configDir: CFG });
+        expect(plan.ok && plan.launchEnv).toBeUndefined();
     });
 
     it('codex-cli: -c overrides, never the global `codex mcp add`', () => {

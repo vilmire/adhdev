@@ -3,7 +3,10 @@
  *
  * `project_note` takes the same origin gate as memory and skills: a write made
  * after a non-human input is held for the owner instead of reaching the mesh's
- * operating notes (which every coordinator of that mesh reads). Same staged
+ * operating notes (which every coordinator of that mesh reads). A note written
+ * during a review turn is ALWAYS held, clean window or not: its blast radius
+ * (every coordinator, which edits the repo) is larger than the assistant's own
+ * memory (research 2026-10-08 Q8). Same staged
  * directory as memory/skills (`<configDir>/assistant/staged/`), file prefix
  * `note-`, `kind: 'note'` — the memory and skill readers reject other kinds.
  *
@@ -35,6 +38,8 @@ export interface StagedNoteWrite {
     project: string;
     callerSessionId?: string;
     op: ProjectNoteOp;
+    /** Review turn that staged it — the owner can resolve one review's writes together. */
+    reviewTurnId?: string;
 }
 
 const ID_RE = /^note-[A-Za-z0-9-]+$/;

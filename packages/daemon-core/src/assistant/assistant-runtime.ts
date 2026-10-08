@@ -34,6 +34,7 @@ import { setAssistantRelayHooks } from './assistant-project-ports.js';
 import { projectSlugs } from './assistant-projects.js';
 import { compactTranscriptTail } from './project-views.js';
 import { AssistantCurator, startAssistantCuratorTimer } from './skills/skill-curator.js';
+import { liveAssistantQuotaPort, type AssistantQuotaPort } from './assistant-quota.js';
 
 export const ASSISTANT_RELAY_TICK_MS = 60_000;
 const METRICS_PRUNE_EVERY_MS = 60 * 60_000;
@@ -51,6 +52,11 @@ export interface AssistantRuntime {
     pull(callerSessionId: string | null): Promise<Array<AssistantPulledEvent & { project?: string }>>;
     /** The bound assistant session when its instance is live on this daemon. */
     liveSessionId(): string | null;
+    /**
+     * `ReviewTriggerInput.quotaRemainingPct` for the bound assistant's CLI
+     * (null when there is no assistant or no usable quota reading).
+     */
+    reviewQuotaRemainingPct(now?: number): number | null;
     dispose(): void;
 }
 
@@ -65,6 +71,8 @@ export interface AssistantRuntimeOptions {
     store?: AssistantRelayStore;
     metrics?: AssistantMetricsStore | null;
     tickMs?: number;
+    /** Quota reading for the review-turn gate; defaults to the daemon's live quota cache. */
+    quota?: AssistantQuotaPort;
 }
 
 let current: AssistantRuntime | null = null;
@@ -202,6 +210,10 @@ export function wireAssistantRuntime(
         LOG.info('Assistant', `assistant layer active (${reason})`);
     };
 
+    // M7 sink for the store verbs (applied / owner-approved review writes).
+    const services = getAssistantServices();
+    services.reviewMetrics = metrics ? { creditReviewWrite: (id, kind, at) => metrics.creditReviewWrite(id, kind, at) } : null;
+
     setAssistantRelayHooks({
         openThread: (meshId) => {
             activate('project_send');
@@ -230,10 +242,15 @@ export function wireAssistantRuntime(
             const sid = registry.read()?.sessionId ?? null;
             return sid && instanceOf(components, sid) ? sid : null;
         },
+        reviewQuotaRemainingPct(now = Date.now()) {
+            const cliType = registry.read()?.cliType;
+            return cliType ? (opts.quota ?? liveAssistantQuotaPort).remainingPct(cliType, now) : null;
+        },
         dispose() {
             if (disposed) return;
             disposed = true;
             setAssistantRelayHooks(null);
+            if (services.reviewMetrics && getAssistantServices() === services) services.reviewMetrics = null;
             for (const off of offs.reverse()) {
                 try { off(); } catch { /* noop */ }
             }

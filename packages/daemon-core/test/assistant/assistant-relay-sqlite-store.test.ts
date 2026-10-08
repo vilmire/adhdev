@@ -87,7 +87,7 @@ describe('SqliteAssistantRelayStore', () => {
     it('schema is idempotent and holds no text/body column', () => {
         const db = openDb();
         ensureAssistantRelaySchema(db);
-        for (const table of ['assistant_threads', 'assistant_relays', 'assistant_metric_daily']) {
+        for (const table of ['assistant_threads', 'assistant_relays', 'assistant_metric_daily', 'assistant_review_credit']) {
             const cols = (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((c) => c.name);
             expect(cols.some((c) => /body|text|message|content|summary/i.test(c))).toBe(false);
         }
@@ -112,5 +112,30 @@ describe('AssistantMetricsStore', () => {
         expect(m.rows()).toHaveLength(2);
         expect(ASSISTANT_METRIC_COLUMNS).toContain('review_turns_with_writes');
         expect(() => m.bump('nope' as never, 'm1', T0)).toThrow(/unknown metric column/);
+    });
+
+    // M7 (research 2026-10-08 Q7): a review turn counts once, when its first
+    // write is applied (clean window) or approved by the owner (staged).
+    it('creditReviewWrite counts applied / approved writes and each review turn once', () => {
+        const m = new AssistantMetricsStore(openDb());
+        m.creditReviewWrite('review:1', 'applied', T0);
+        m.creditReviewWrite('review:1', 'applied', T0 + 1);
+        m.creditReviewWrite('review:2', 'approved', T0 + 2);
+        m.creditReviewWrite('review:1', 'approved', T0 + DAY); // later approval of the same review
+        m.creditReviewWrite('', 'applied', T0);
+        const today = m.rows(metricDay(T0)).find((r) => r.day === metricDay(T0) && r.meshId === '')!;
+        expect(today).toMatchObject({ review_writes_applied: 2, review_writes_approved: 1, review_turns_with_writes: 2 });
+        const next = m.rows().find((r) => r.day === metricDay(T0 + DAY))!;
+        expect(next).toMatchObject({ review_writes_approved: 1, review_turns_with_writes: 0 });
+    });
+
+    it('adds the M7 columns to a table created before them', () => {
+        const db = new Database(':memory:');
+        db.exec(`CREATE TABLE assistant_metric_daily (day TEXT NOT NULL, mesh_id TEXT NOT NULL DEFAULT '', review_turns_with_writes INTEGER NOT NULL DEFAULT 0, assistant_sends INTEGER NOT NULL DEFAULT 0, human_sends INTEGER NOT NULL DEFAULT 0, relays INTEGER NOT NULL DEFAULT 0, project_reads INTEGER NOT NULL DEFAULT 0, memory_writes INTEGER NOT NULL DEFAULT 0, memory_discards INTEGER NOT NULL DEFAULT 0, skill_views INTEGER NOT NULL DEFAULT 0, skill_attaches INTEGER NOT NULL DEFAULT 0, skill_writes INTEGER NOT NULL DEFAULT 0, review_turns INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, mesh_id))`);
+        ensureAssistantRelaySchema(db);
+        ensureAssistantRelaySchema(db);
+        const m = new AssistantMetricsStore(db);
+        m.creditReviewWrite('review:1', 'approved', T0);
+        expect(m.rows()[0]).toMatchObject({ review_writes_approved: 1, review_turns_with_writes: 1 });
     });
 });
