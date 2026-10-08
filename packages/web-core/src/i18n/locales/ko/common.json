@@ -1551,6 +1551,45 @@
         "reviewLabel": "기억 정리",
         "daemonNoticeLabel": "알림"
     },
+    "assistantStaged": {
+        "badge": "대기 {{count}}건",
+        "badgeTitle": "승인을 기다리는 비서의 쓰기",
+        "title": "승인 대기",
+        "hint": "승인하기 전에는 아무것도 쓰지 않습니다.",
+        "close": "닫기",
+        "approve": "승인",
+        "reject": "버림",
+        "approveAll": "모두 승인",
+        "rejectAll": "모두 버림",
+        "reviewGroup": "리뷰 · {{count}}건",
+        "partial": "{{total}}건 중 {{failed}}건 처리 안 됨 — 아래 참조",
+        "failed": "처리 안 됨: {{code}}",
+        "noText": "(내용 없음)",
+        "protectedSkill": "직접 쓴 스킬을 고침",
+        "kind": {
+            "memory": "기억",
+            "user": "사용자",
+            "skill": "스킬",
+            "note": "노트"
+        },
+        "action": {
+            "add": "추가",
+            "replace": "바꿈",
+            "remove": "삭제",
+            "create": "생성",
+            "patch": "수정",
+            "archive": "보관",
+            "record": "기록",
+            "forget": "지움"
+        },
+        "origin": {
+            "relay": "릴레이 뒤",
+            "review": "리뷰",
+            "review_tainted": "신뢰할 수 없는 입력 뒤 리뷰",
+            "human": "직접 입력",
+            "owner": "직접 입력"
+        }
+    },
     "chatPane": {
         "debugBundleFailed": "디버그 정보를 수집하지 못했습니다",
         "connectingToMachine": "머신에 연결 중",

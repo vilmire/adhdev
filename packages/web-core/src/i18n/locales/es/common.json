@@ -1554,6 +1554,45 @@
         "reviewLabel": "Revisión de memoria",
         "daemonNoticeLabel": "Aviso"
     },
+    "assistantStaged": {
+        "badge": "{{count}} pendientes",
+        "badgeTitle": "Escrituras del asistente pendientes de tu aprobación",
+        "title": "Pendiente de tu aprobación",
+        "hint": "No se escribe nada hasta que lo apruebes.",
+        "close": "Cerrar",
+        "approve": "Aprobar",
+        "reject": "Rechazar",
+        "approveAll": "Aprobar todo",
+        "rejectAll": "Rechazar todo",
+        "reviewGroup": "Resultados de revisión · {{count}}",
+        "partial": "{{failed}} de {{total}} sin resolver — ver abajo",
+        "failed": "No hecho: {{code}}",
+        "noText": "(sin texto)",
+        "protectedSkill": "cambia una habilidad que escribiste",
+        "kind": {
+            "memory": "Memoria",
+            "user": "Usuario",
+            "skill": "Habilidad",
+            "note": "Nota"
+        },
+        "action": {
+            "add": "Añadir",
+            "replace": "Reemplazar",
+            "remove": "Quitar",
+            "create": "Crear",
+            "patch": "Editar",
+            "archive": "Archivar",
+            "record": "Registrar",
+            "forget": "Olvidar"
+        },
+        "origin": {
+            "relay": "De un relevo",
+            "review": "De una revisión",
+            "review_tainted": "De una revisión tras entrada no fiable",
+            "human": "Tuyo",
+            "owner": "Tuyo"
+        }
+    },
     "chatPane": {
         "debugBundleFailed": "No se pudo recopilar la información de depuración",
         "connectingToMachine": "Conectando con tu máquina",

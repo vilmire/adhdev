@@ -1551,6 +1551,45 @@
         "reviewLabel": "メモリーの見直し",
         "daemonNoticeLabel": "お知らせ"
     },
+    "assistantStaged": {
+        "badge": "保留 {{count}} 件",
+        "badgeTitle": "承認待ちのアシスタントの書き込み",
+        "title": "承認待ち",
+        "hint": "承認するまで何も書き込まれません。",
+        "close": "閉じる",
+        "approve": "承認",
+        "reject": "破棄",
+        "approveAll": "すべて承認",
+        "rejectAll": "すべて破棄",
+        "reviewGroup": "レビュー · {{count}} 件",
+        "partial": "{{total}} 件中 {{failed}} 件が未処理 — 下を参照",
+        "failed": "未処理: {{code}}",
+        "noText": "(テキストなし)",
+        "protectedSkill": "あなたが書いたスキルを変更",
+        "kind": {
+            "memory": "メモリ",
+            "user": "ユーザー",
+            "skill": "スキル",
+            "note": "ノート"
+        },
+        "action": {
+            "add": "追加",
+            "replace": "置換",
+            "remove": "削除",
+            "create": "作成",
+            "patch": "編集",
+            "archive": "アーカイブ",
+            "record": "記録",
+            "forget": "削除"
+        },
+        "origin": {
+            "relay": "リレー後",
+            "review": "レビュー",
+            "review_tainted": "信頼できない入力後のレビュー",
+            "human": "あなた",
+            "owner": "あなた"
+        }
+    },
     "chatPane": {
         "debugBundleFailed": "デバッグ情報を収集できませんでした",
         "connectingToMachine": "マシンに接続中",
