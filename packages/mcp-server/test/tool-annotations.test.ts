@@ -132,7 +132,7 @@ test('read-only mesh inspection tools are marked read-only and non-destructive',
     'mesh_status', 'mesh_list_nodes', 'mesh_route_preview', 'mesh_view_queue',
     'mesh_read_chat', 'mesh_read_terminal', 'mesh_read_node_logs',
     'mesh_git_status', 'mesh_task_history', 'mesh_ledger_query', 'mesh_mission_list',
-    'mesh_review_inbox', 'mesh_list_pending_approvals', 'mesh_refine_plan',
+    'mesh_review_inbox', 'mesh_list_pending_approvals',
   ];
   for (const name of readOnly) {
     const annotations = TOOL_ANNOTATIONS[name];

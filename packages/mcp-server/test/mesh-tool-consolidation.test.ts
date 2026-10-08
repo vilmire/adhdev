@@ -36,9 +36,11 @@ const published = new Set(ALL_MESH_TOOLS.map(tool => tool.name));
 // 48 after the consolidation; the three graph tools (mesh_graph_view /
 // mesh_graph_gate / mesh_graph_node_patch) left with graph orchestration and the
 // MAGI tools left with MAGI (2026-09-30).
-test('the published surface is 42 tools and contains no retired name', () => {
-    assert.equal(ALL_MESH_TOOLS.length, 42);
-    assert.equal(CANONICAL_MESH_TOOL_NAMES.length, 42);
+// 41 after mesh_refine_plan was removed (2026-10-08); 40 once the deprecated
+// mesh_ledger_query alias is dropped next release.
+test('the published surface is 41 tools and contains no retired name', () => {
+    assert.equal(ALL_MESH_TOOLS.length, 41);
+    assert.equal(CANONICAL_MESH_TOOL_NAMES.length, 41);
     for (const name of Object.keys(RETIRED_MESH_TOOLS)) {
         assert.equal(published.has(name), false, `${name} is retired but still published`);
         assert.equal(resolveMeshToolHandler(name), undefined, `${name} is retired but still silently dispatchable`);

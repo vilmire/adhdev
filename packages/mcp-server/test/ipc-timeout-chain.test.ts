@@ -54,10 +54,14 @@ test('A5: plan_mesh_refine_node (synchronous dry-run) gets a 45s defensive budge
   assert.ok(getTimeoutMs('plan_mesh_refine_node', '') > 15_000);
 });
 
-test('A2: async refine/batch get a 30s defensive floor (intentionally < relay 90s — responder ack is sub-second)', () => {
+test('A2: async refine/batch get a defensive floor (intentionally < relay 90s — responder ack is sub-second)', () => {
   // These are async-job-ack: the responder returns immediately, so a deadline below the
   // relay budget is correct — the relay 90s never bounds the synchronous ack reply.
-  assert.equal(getTimeoutMs('refine_mesh_node', ''), 30_000);
+  // refine_mesh_node's default (no execute) is the SYNCHRONOUS dry-run plan, the only
+  // plan surface since mesh_refine_plan was removed, so it matches plan_mesh_refine_node's 45s.
+  assert.equal(getTimeoutMs('refine_mesh_node', ''), 45_000);
+  assert.equal(getTimeoutMs('refine_mesh_node', ''), getTimeoutMs('plan_mesh_refine_node', ''));
+  assert.ok(getTimeoutMs('refine_mesh_node', '') < RELAY_GIT_MS);
   assert.equal(getTimeoutMs('batch_refine_mesh_nodes', ''), 30_000);
   // Remote refine is still safe: the relay wrapper gives it 120s.
   assert.equal(getTimeoutMs('mesh_relay_command', 'refine_mesh_node'), 120_000);

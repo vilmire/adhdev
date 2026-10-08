@@ -215,19 +215,6 @@ export async function meshWriteMeshJsonConfig(
     return JSON.stringify(result, null, 2);
 }
 
-export async function meshRefinePlan(
-    ctx: MeshContext,
-    args: { node_id: string },
-): Promise<string> {
-    const node = await findNodeWithRefresh(ctx, args.node_id);
-    const result = await commandForNode(ctx, node, 'plan_mesh_refine_node', {
-        meshId: ctx.mesh.id,
-        nodeId: args.node_id,
-        inlineMesh: ctx.mesh,
-    });
-    return JSON.stringify(result, null, 2);
-}
-
 export async function meshRefineNode(
     ctx: MeshContext,
     args: { node_id: string; execute?: boolean; dry_run?: boolean },
@@ -281,7 +268,10 @@ export async function meshRefineNode(
         ...(ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}),
         inlineMesh: ctx.mesh,
     });
-    if (result?.success && result.async !== true && result.removeResult?.removed !== false) {
+    // A dry-run (the default) returns {success:true, dryRun:true} with no async ack
+    // and no removeResult; it removed nothing, so the node must stay in the cached
+    // mesh (it used to be spliced out here until the next refresh).
+    if (result?.success && result.dryRun !== true && result.async !== true && result.removeResult?.removed !== false) {
         const idx = ctx.mesh.nodes.findIndex(n => n.id === args.node_id);
         if (idx >= 0) {
             ctx.mesh.nodes.splice(idx, 1);

@@ -196,8 +196,6 @@ export const TOOL_ANNOTATIONS: Record<string, ToolBehaviorAnnotations> = {
   mesh_ledger_query: READ_LOCAL,
   mesh_mission_list: READ_LOCAL,
   mesh_review_inbox: READ_LOCAL,
-  // Documented read-only planning.
-  mesh_refine_plan: READ_LOCAL,
   // Reads that cross to a (possibly remote) node.
   mesh_read_chat: READ_REMOTE,
   mesh_read_debug: READ_REMOTE,

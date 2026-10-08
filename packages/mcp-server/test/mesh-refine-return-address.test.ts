@@ -106,3 +106,21 @@ test('omits coordinatorDaemonId only when no local identity exists at all (versi
     assert.ok(refine, 'refine_mesh_node was dispatched');
     assert.equal('coordinatorDaemonId' in refine.args, false);
 });
+
+// 2026-10-08: mesh_refine_node's default dry-run is the only plan surface (mesh_refine_plan
+// was removed). A dry-run removes nothing, so the node must stay in the cached mesh — it
+// used to be spliced out because {success:true, dryRun:true} has no async/removeResult.
+test('meshRefineNode dry-run keeps the node in the cached mesh', async () => {
+    const { ctx } = makeCtx({
+        transport: {
+            command: async (command: string) => {
+                if (command === 'get_mesh') return { success: false };
+                if (command === 'refine_mesh_node') return { success: true, dryRun: true, mergeWillRun: false, cleanupWillRun: false };
+                return { success: true };
+            },
+        },
+    });
+    const result = JSON.parse(await meshRefineNode(ctx, { node_id: 'node_wt_remote' }));
+    assert.equal(result.dryRun, true);
+    assert.ok(ctx.mesh.nodes.some((n: any) => n.id === 'node_wt_remote'), 'dry-run must not drop the node');
+});

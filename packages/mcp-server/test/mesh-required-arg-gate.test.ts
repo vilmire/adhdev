@@ -39,7 +39,8 @@ test('every published tool rejects an empty call iff its schema declares require
         }
     }
     // The gate covers a substantial slice of the surface; a drop here means schemas lost their required lists.
-    assert.ok(enforced >= 30, `expected at least 30 tools with required keys, saw ${enforced}`);
+    // 29 since mesh_refine_plan (required node_id) was removed 2026-10-08.
+    assert.ok(enforced >= 29, `expected at least 29 tools with required keys, saw ${enforced}`);
 });
 
 test('the unknown-key gate alone still accepts an empty call (its contract is unchanged)', () => {

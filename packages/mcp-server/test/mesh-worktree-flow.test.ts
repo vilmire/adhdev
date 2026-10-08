@@ -4244,7 +4244,8 @@ test('mesh tool registry documents the exposed mesh tools including queue cancel
   assert.ok(!ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_change_impact_config_schema'));
   assert.ok(!ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_validate_change_impact_config'));
   assert.ok(!ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_suggest_change_impact_config'));
-  assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_refine_plan'));
+  // mesh_refine_plan was a pure alias of mesh_refine_node's default dry-run; removed 2026-10-08.
+  assert.ok(!ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_refine_plan'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_cleanup_sessions'));
   assert.ok(!ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_prune_stale_direct'));
   assert.ok(((ALL_MESH_TOOLS.find(tool => tool.name === 'mesh_cleanup_sessions')!.inputSchema.properties as any).mode.enum as string[]).includes('prune_stale_direct'));

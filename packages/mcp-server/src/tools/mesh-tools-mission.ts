@@ -113,30 +113,50 @@ function coerceBriefArg(value: unknown): CoercedBrief {
     return { brief };
 }
 
+/**
+ * mesh_task_history — the one ledger read. 2026-10-08: absorbed mesh_ledger_query's
+ * kind-list / since / node axes (same `ledger_query` IPC, same AND composition), so
+ * one tool answers both "what happened to task T" and "what happened on node X since
+ * <time>". mesh_ledger_query survives one release as a deprecated alias that calls
+ * this with its old defaults (see meshLedgerQuery below).
+ */
 export async function meshTaskHistory(
     ctx: MeshContext,
-    args: { tail?: number; kind?: string; compact?: boolean; verbose?: boolean },
+    args: { tail?: number; kind?: string; since?: string | number; node?: string; compact?: boolean; verbose?: boolean },
+    defaults: { tail?: number } = {},
 ): Promise<string> {
     const { mesh } = ctx;
     // Default to the slim payload for LLM callers; verbose forces full payloads.
     const compact = args.verbose === true ? false : (args.compact ?? true);
     const pendingEvents = await drainCoordinatorPendingEvents(ctx);
     // Clamp tail so a large default/explicit value can't blow up the payload in
-    // compact mode. Full (verbose) callers may request a deeper window.
-    const requestedTail = typeof args.tail === 'number' && args.tail > 0 ? Math.floor(args.tail) : 20;
+    // compact mode. Full (verbose) callers may request a deeper window (500 — the
+    // bound mesh_ledger_query already allowed for full payloads).
+    const requestedTail = typeof args.tail === 'number' && args.tail > 0 ? Math.floor(args.tail) : (defaults.tail ?? 20);
     // Compact: cap conservatively so even large refine-batch entries can't blow the
     // token limit. slimLedgerPayload is the primary defense (it summarizes large
     // plan/validationPlan/suggestedConfig fields); this clamp is the backstop. A deep
     // explicit request (tail > 50) is clamped harder (20) than a modest one (30).
     const compactCap = requestedTail > 50 ? 20 : 30;
-    const tail = compact ? Math.min(requestedTail, compactCap) : Math.min(requestedTail, 200);
-    const kind = typeof args.kind === 'string' && args.kind.trim() ? [args.kind.trim()] : undefined;
+    const tail = compact ? Math.min(requestedTail, compactCap) : Math.min(requestedTail, 500);
+    // kind accepts one kind or a comma-separated list; empty tokens are dropped.
+    const kind = typeof args.kind === 'string' && args.kind.trim()
+        ? (args.kind.split(',').map(k => k.trim()).filter(Boolean) as any[])
+        : undefined;
+    // since accepts ISO-8601 or epoch-ms; the ledger reader parses via new Date(),
+    // which handles both an ISO string and a numeric ms value (as string or number).
+    const since = typeof args.since === 'string' && args.since.trim()
+        ? args.since.trim()
+        : (typeof args.since === 'number' ? String(args.since) : undefined);
+    const node = typeof args.node === 'string' && args.node.trim() ? args.node.trim() : undefined;
     // C-W9b: was in-process `readLedgerEntries`/`getLedgerSummary`; now one
     // `ledger_query` IPC round trip to the daemon that owns the ledger.
     const { entries: rawEntries, summary: rawSummary } = await ledgerQuery(ctx.transport, {
         meshId: mesh.id,
         tail,
-        ...(kind ? { kind } : {}),
+        ...(kind && kind.length > 0 ? { kind } : {}),
+        ...(since ? { since } : {}),
+        ...(node ? { node } : {}),
         includeSummary: true,
     });
     // Slim large payload fields so coordinator context stays lean. Verbose
@@ -166,48 +186,8 @@ export async function meshTaskHistory(
     return JSON.stringify({
         meshId: mesh.id,
         payloadMode: compact ? 'compact' : 'full',
-        entries,
-        summary,
-        ...(taskStats ? { taskStats } : {}),
-        ...(pendingEvents.length > 0 ? { pendingCoordinatorEvents: pendingEvents } : {}),
-    }, null, 2);
-}
-
-export async function meshLedgerQuery(
-    ctx: MeshContext,
-    args: { kind?: string; since?: string; node?: string; tail?: number },
-): Promise<string> {
-    const { mesh } = ctx;
-    const pendingEvents = await drainCoordinatorPendingEvents(ctx);
-    // kind accepts one kind or a comma-separated list; normalize to the array the
-    // ledger reader expects. Empty tokens are dropped.
-    const kind = typeof args.kind === 'string' && args.kind.trim()
-        ? (args.kind.split(',').map(k => k.trim()).filter(Boolean) as any[])
-        : undefined;
-    // since accepts ISO-8601 or epoch-ms; readLedgerEntries parses via new Date(),
-    // which handles both an ISO string and a numeric ms value (as string or number).
-    const since = typeof args.since === 'string' && args.since.trim()
-        ? args.since.trim()
-        : (typeof args.since === 'number' ? String(args.since) : undefined);
-    const node = typeof args.node === 'string' && args.node.trim() ? args.node.trim() : undefined;
-    // tail default 50, clamped to 500 (read-only query axis — deeper than the
-    // compact task_history window since it isn't payload-heavy by default).
-    const requestedTail = typeof args.tail === 'number' && args.tail > 0 ? Math.floor(args.tail) : 50;
-    const tail = Math.min(requestedTail, 500);
-    // C-W9b: was in-process `readLedgerEntries`/`getLedgerSummary`; now one
-    // `ledger_query` IPC round trip to the daemon that owns the ledger.
-    const { entries, summary } = await ledgerQuery(ctx.transport, {
-        meshId: mesh.id,
-        tail,
-        ...(kind ? { kind } : {}),
-        ...(since ? { since } : {}),
-        ...(node ? { node } : {}),
-        includeSummary: true,
-    });
-    return JSON.stringify({
-        meshId: mesh.id,
         query: {
-            ...(kind ? { kind } : {}),
+            ...(kind && kind.length > 0 ? { kind } : {}),
             ...(since ? { since } : {}),
             ...(node ? { node } : {}),
             tail,
@@ -215,8 +195,27 @@ export async function meshLedgerQuery(
         count: entries.length,
         entries,
         summary,
+        ...(taskStats ? { taskStats } : {}),
         ...(pendingEvents.length > 0 ? { pendingCoordinatorEvents: pendingEvents } : {}),
     }, null, 2);
+}
+
+/**
+ * mesh_ledger_query — DEPRECATED alias of mesh_task_history (2026-10-08), kept for
+ * one release. Preserves the old behaviour: full (unslimmed) payloads, tail default
+ * 50 clamped to 500, and the same `query` / `count` / `entries` / `summary` fields.
+ */
+export async function meshLedgerQuery(
+    ctx: MeshContext,
+    args: { kind?: string; since?: string | number; node?: string; tail?: number },
+): Promise<string> {
+    return meshTaskHistory(ctx, {
+        kind: args.kind,
+        since: args.since,
+        node: args.node,
+        tail: args.tail,
+        verbose: true,
+    }, { tail: 50 });
 }
 
 export async function meshRecordNote(

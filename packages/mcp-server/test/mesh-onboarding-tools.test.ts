@@ -54,6 +54,13 @@ test('the retired MAGI tools are gone from the registry and redirect with guidan
   assert.match(validateMeshToolArgs('mesh_magi_review', {}) ?? '', /mesh_send_task/);
 });
 
+test('mesh_refine_plan is removed and redirects to mesh_refine_node (its default dry-run is the same plan)', () => {
+  assert.equal(ALL_MESH_TOOLS.some(t => t.name === 'mesh_refine_plan'), false);
+  const error = validateMeshToolArgs('mesh_refine_plan', { node_id: 'n' }) ?? '';
+  assert.match(error, /was removed/);
+  assert.match(error, /mesh_refine_node/);
+});
+
 test('onboarding planner core forwards only a read-only planning command', async () => {
   const calls: Array<{ type: string; args: any }> = [];
   const transport = {
