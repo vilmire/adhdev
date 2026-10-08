@@ -196,7 +196,7 @@ test('purely local reads are not marked open-world', () => {
 test('additive writes explicitly opt out of the destructive default', () => {
   // MCP defaults destructiveHint to true for a non-read-only tool, so these
   // must state false rather than omit it.
-  for (const name of ['mesh_mission_upsert', 'mesh_reconcile_ledger', 'mesh_node_slots', 'mesh_coordinator_prompt_append', 'mesh_create', 'git_checkpoint']) {
+  for (const name of ['mesh_mission_upsert', 'mesh_reconcile_ledger', 'mesh_node_slots', 'mesh_create', 'git_checkpoint']) {
     const annotations = TOOL_ANNOTATIONS[name];
     assert.ok(annotations, `${name} missing from TOOL_ANNOTATIONS`);
     assert.equal(annotations.readOnlyHint, false, `${name} writes`);
@@ -229,7 +229,7 @@ test('no classification exists for a tool that is not published anywhere', () =>
 test('a merged tool is classified by its most capable action (2026-09-26 consolidation)', () => {
   // One tool carries one annotation block, so a read-only action beside a
   // writing one must not make the tool look read-only (rule 1: capability, not default).
-  for (const name of ['mesh_node_slots', 'mesh_coordinator_prompt_append', 'mesh_note', 'mesh_config', 'mesh_init', 'mesh_create', 'mesh_cleanup_sessions']) {
+  for (const name of ['mesh_node_slots', 'mesh_note', 'mesh_config', 'mesh_init', 'mesh_create', 'mesh_cleanup_sessions']) {
     const annotations = TOOL_ANNOTATIONS[name];
     assert.ok(annotations, `${name} missing from TOOL_ANNOTATIONS`);
     assert.equal(annotations.readOnlyHint, false, `${name} has a writing action, so it is not read-only`);

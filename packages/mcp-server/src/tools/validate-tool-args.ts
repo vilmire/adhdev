@@ -563,13 +563,6 @@ export const MESH_TOOL_ACTIONS: Readonly<Record<string, MeshActionSpec>> = {
             set: { args: [...NODE_ID, 'slots', 'reason', 'write'], required: ['node_id', 'slots'] },
         },
     },
-    mesh_coordinator_prompt_append: {
-        key: 'action',
-        actions: {
-            get: { args: ['cli_type'] },
-            set: { args: ['cli_type', 'content'] },
-        },
-    },
     mesh_note: {
         key: 'action',
         actions: {

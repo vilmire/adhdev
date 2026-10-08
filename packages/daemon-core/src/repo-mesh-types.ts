@@ -212,28 +212,16 @@ export interface RepoMeshCoordinatorConfig {
     /** Preferred node to run coordinator on (null = auto) */
     preferredNodeId?: string;
     /**
-     * Full mesh-level override for the coordinator system prompt. When set,
-     * replaces the daemon's rendered default and any user-file override
-     * (~/.adhdev/coordinator-prompts/<cli>.md). The per-launch
-     * extraSystemPrompt still composes on top — it always lands last as
-     * Additional Context. Supports the same {{placeholders}} the daemon's
-     * default template uses ({{meshName}}, {{repo}}, {{nodes}}, …).
-     */
-    systemPromptOverride?: string;
-    /**
-     * Mesh-level append. Composes after whichever base prompt won
-     * (override → user-file override → daemon default). Use this when you
-     * want extra rules for THIS mesh but otherwise the standard prompt is
-     * fine. Stacks with the user-file append (`<cli>.append.md`) — both
-     * apply if both are set.
+     * Mesh-level append. Composes after the daemon's rendered default prompt
+     * and before the per-launch extraSystemPrompt (Additional Context).
+     * Supports the same {{placeholders}} as the default template
+     * ({{meshName}}, {{repo}}, {{nodes}}, …).
+     *
+     * The former `systemPromptOverride` (full replacement) and the
+     * `systemPromptSuffix` alias were removed on 2026-10-08; legacy values in
+     * meshes.json are ignored and dropped on the next normalised write.
      */
     systemPromptAppend?: string;
-    /**
-     * @deprecated Use systemPromptAppend. Kept as a fallback alias so
-     * existing meshes.json files keep working without a migration step;
-     * the daemon prefers systemPromptAppend when both are present.
-     */
-    systemPromptSuffix?: string;
 }
 
 // ─── Local Mesh Config (OSS standalone) ─────────

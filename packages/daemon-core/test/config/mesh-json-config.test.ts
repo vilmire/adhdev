@@ -53,6 +53,15 @@ describe('mesh-json-config — normalize', () => {
         expect((config as any).futureUnknown).toBeUndefined();
     });
 
+    it('still loads a repo file carrying the removed coordinator.systemPromptOverride, ignoring it', () => {
+        const { valid, config } = normalizeRepoMeshDeclarativeConfig({
+            version: 1,
+            coordinator: { systemPromptOverride: 'LEGACY FULL BASE', systemPromptAppend: 'extra' },
+        });
+        expect(valid).toBe(true);
+        expect(config!.coordinator).toEqual({ systemPromptAppend: 'extra' });
+    });
+
     it('normalizes providerDefaults.autoApproveModes (shape-only, trims keys/values)', () => {
         const { valid, config } = normalizeRepoMeshDeclarativeConfig({
             version: 1,
@@ -140,10 +149,15 @@ describe('mesh-json-config — loader', () => {
 });
 
 describe('mesh-json-config — coordinator merge', () => {
-    it('systemPromptOverride: local wins, else repo', () => {
-        expect(mergeEffectiveCoordinatorConfig({ systemPromptOverride: 'REPO' }, {}).systemPromptOverride).toBe('REPO');
-        expect(mergeEffectiveCoordinatorConfig({ systemPromptOverride: 'REPO' }, { systemPromptOverride: 'LOCAL' }).systemPromptOverride).toBe('LOCAL');
-        expect(mergeEffectiveCoordinatorConfig(undefined, {}).systemPromptOverride).toBeUndefined();
+    // The full override and the systemPromptSuffix alias were removed on
+    // 2026-10-08 (assistant-layer design §11 Q2): legacy values are ignored.
+    it('ignores and strips the removed systemPromptOverride (repo or local)', () => {
+        const merged = mergeEffectiveCoordinatorConfig(
+            { systemPromptOverride: 'REPO' } as any,
+            { systemPromptOverride: 'LOCAL' } as any,
+        );
+        expect((merged as any).systemPromptOverride).toBeUndefined();
+        expect(merged.systemPromptAppend).toBeUndefined();
     });
 
     it('systemPromptAppend: repo + local both stack, repo first', () => {
@@ -154,13 +168,13 @@ describe('mesh-json-config — coordinator merge', () => {
         expect(merged.systemPromptAppend).toBe('REPO-APPEND\n\nLOCAL-APPEND');
     });
 
-    it('folds the legacy local systemPromptSuffix into the stacked append', () => {
+    it('ignores and strips the removed local systemPromptSuffix alias', () => {
         const merged = mergeEffectiveCoordinatorConfig(
             { systemPromptAppend: 'REPO-APPEND' },
             { systemPromptSuffix: 'LEGACY' } as any,
         );
-        expect(merged.systemPromptAppend).toBe('REPO-APPEND\n\nLEGACY');
-        expect(merged.systemPromptSuffix).toBeUndefined();
+        expect(merged.systemPromptAppend).toBe('REPO-APPEND');
+        expect((merged as any).systemPromptSuffix).toBeUndefined();
     });
 
     it('preserves other coordinator fields (providerType/preferredNodeId)', () => {
@@ -175,12 +189,11 @@ describe('mesh-json-config — coordinator merge', () => {
     // ever expanded {{tokens}} instead of carrying them literally, an editor
     // reopened after a save would show baked-in text instead of the template the
     // user authored, and a re-save would freeze it that way permanently.
-    it('carries {{placeholder}} tokens in override/append literally — never expands them', () => {
+    it('carries {{placeholder}} tokens in the append literally — never expands them', () => {
         const merged = mergeEffectiveCoordinatorConfig(
             { systemPromptAppend: 'Repo append {{nodes}}' },
-            { systemPromptOverride: 'Local override {{meshName}} {{tools}}', systemPromptAppend: 'Local append {{policy}}' },
+            { systemPromptAppend: 'Local append {{policy}}' },
         );
-        expect(merged.systemPromptOverride).toBe('Local override {{meshName}} {{tools}}');
         expect(merged.systemPromptAppend).toBe('Repo append {{nodes}}\n\nLocal append {{policy}}');
     });
 });
@@ -273,7 +286,8 @@ describe('mesh-json-config — export scaffold (coordinator-only)', () => {
         } as any);
         expect(scaffold.version).toBe(1);
         expect((scaffold as any).policy).toBeUndefined();
-        expect(scaffold.coordinator).toEqual({ systemPromptOverride: 'OVR', systemPromptAppend: 'APP' });
+        // the removed systemPromptOverride is never exported
+        expect(scaffold.coordinator).toEqual({ systemPromptAppend: 'APP' });
         // operating notes are intentionally NOT exported
         expect(scaffold.operatingNotes).toBeUndefined();
     });

@@ -17,7 +17,7 @@
 
 export { triggerMeshQueueAndReport } from './mesh-tools-internal.js';
 export { ALL_MESH_TOOLS, MESH_LIST_NODES_TOOL, MESH_STATUS_TOOL, MESH_ROUTE_PREVIEW_TOOL } from './mesh-tool-schemas.js';
-export { MESH_INIT_TOOL, MESH_CONFIG_TOOL, MESH_NODE_SLOTS_TOOL, MESH_COORDINATOR_PROMPT_APPEND_TOOL, MESH_REFINE_BATCH_TOOL, MESH_REFINE_NODE_TOOL, MESH_REVIEW_INBOX_TOOL, MESH_NOTIFY_WORKER_TOOL } from './mesh-tool-schemas-refine-config.js';
+export { MESH_INIT_TOOL, MESH_CONFIG_TOOL, MESH_NODE_SLOTS_TOOL, MESH_REFINE_BATCH_TOOL, MESH_REFINE_NODE_TOOL, MESH_REVIEW_INBOX_TOOL, MESH_NOTIFY_WORKER_TOOL } from './mesh-tool-schemas-refine-config.js';
 export { MESH_APPROVE_TOOL, MESH_ANSWER_QUESTION_TOOL, MESH_CLEANUP_SESSIONS_TOOL, MESH_CLEANUP_WORKTREE_NODES_TOOL, MESH_CREATE_TOOL, MESH_ADD_NODE_TOOL, MESH_CLONE_NODE_TOOL, MESH_LIST_PENDING_APPROVALS_TOOL, MESH_MISSION_LIST_TOOL, MESH_MISSION_UPSERT_TOOL, MESH_RECONCILE_LEDGER_TOOL, MESH_NOTE_TOOL, MESH_REMOVE_NODE_TOOL, MESH_TASK_HISTORY_TOOL } from './mesh-tool-schemas-admin.js';
 export { MESH_CHECKPOINT_TOOL, MESH_FAST_FORWARD_NODE_TOOL, MESH_GIT_STATUS_TOOL, MESH_LAUNCH_SESSION_TOOL, MESH_READ_CHAT_TOOL, MESH_READ_DEBUG_TOOL, MESH_READ_NODE_LOGS_TOOL, MESH_RESTART_DAEMON_TOOL, MESH_SEND_TASK_TOOL } from './mesh-tool-schemas-session.js';
 export { MESH_ENQUEUE_TASK_TOOL, MESH_QUEUE_CANCEL_TOOL, MESH_QUEUE_REQUEUE_TOOL, MESH_VIEW_QUEUE_TOOL } from './mesh-tool-schemas-queue.js';
@@ -93,15 +93,9 @@ export {
     meshAddNode,
 } from './mesh-tools-crud.js';
 
-export {
-    meshCoordinatorPromptAppendGet,
-    meshCoordinatorPromptAppendSet,
-} from './mesh-tools-coordinator-prompt.js';
-
 // 2026-09-26 tool consolidation — the merged-tool dispatchers.
 export {
     meshNodeSlots,
-    meshCoordinatorPromptAppend,
     meshNote,
     meshConfig,
     meshInitOrReinit,

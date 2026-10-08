@@ -64,7 +64,9 @@ const REFINE_CMDS = [
 // above, also `sources: ['p2p']`.
 const DIAGNOSTICS_CMDS = ['get_logs', 'get_debug_trace', 'get_command_history']
 const STATUS_META_CMDS = ['set_user_name', 'get_status_metadata', 'refresh_provider_quota', 'get_machine_runtime_stats', 'get_session_info']
-const COORDINATOR_PROMPT_CMDS = ['coordinator_prompt_preview', 'list_coordinator_prompts', 'write_coordinator_prompt']
+// list_coordinator_prompts / write_coordinator_prompt were removed on 2026-10-08
+// with the per-machine coordinator-prompts/ layer (assistant-layer design §11 Q2).
+const COORDINATOR_PROMPT_CMDS = ['coordinator_prompt_preview']
 const NOTIFICATION_CMDS = ['mark_session_seen', 'delete_notification', 'mark_notification_unread']
 // Order matters: the assertions below compare against Object.keys(handlers),
 // so these must stay in the handler object's declaration order. The quota
@@ -108,7 +110,7 @@ const TURN_LEDGER_IPC_CMDS = [
 ]
 
 describe('low-family registry', () => {
-  it('registers all 86 LOW family commands once, no overlap', () => {
+  it('registers all 84 LOW family commands once, no overlap', () => {
     const all = [
       ...SESSION_HOST_CMDS, ...SPEC_CMDS, ...REFINE_CMDS,
       ...DIAGNOSTICS_CMDS, ...STATUS_META_CMDS, ...COORDINATOR_PROMPT_CMDS,
@@ -123,8 +125,10 @@ describe('low-family registry', () => {
     // (keyed chat resync, 2026-09-28) − report_transcript_transport (removed
     // with the legacy chat push lane, 2026-09-29) − 6 graph commands
     // (graph_audit_record + graph_gate_claim/release/abandon + graph_node_patch
-    // + graph_view_query, retired with graph orchestration 2026-09-30) = 86.
-    expect(all).toHaveLength(86)
+    // + graph_view_query, retired with graph orchestration 2026-09-30)
+    // − list_coordinator_prompts − write_coordinator_prompt (coordinator-prompts/
+    // file layer removed 2026-10-08) = 84.
+    expect(all).toHaveLength(84)
     // no duplicate command names across families
     expect(new Set(all).size).toBe(all.length)
     expect(lowFamilyNames()).toHaveLength(all.length)
@@ -235,9 +239,10 @@ describe('low-family registry', () => {
     expect(notFound).toMatchObject({ success: false, error: 'Session not found', sessionId: 'sess-y' })
   })
 
-  it('write_coordinator_prompt rejects a path-traversal key before touching disk', async () => {
-    const bad: any = await lowCommand('write_coordinator_prompt')({ deps: {} as any }, { key: '../../etc/passwd', content: 'x' })
-    expect(bad).toEqual({ success: false, error: 'key must match [a-zA-Z0-9_.-]+' })
+  it('the removed coordinator-prompts/ file commands are not registered', () => {
+    for (const name of ['list_coordinator_prompts', 'write_coordinator_prompt']) {
+      expect(Object.prototype.hasOwnProperty.call(coordinatorPromptHandlers, name)).toBe(false)
+    }
   })
 
   it('mark_session_seen / delete_notification / mark_notification_unread require a sessionId', async () => {

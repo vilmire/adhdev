@@ -358,9 +358,7 @@ export default function RepoMesh() {
     useEffect(() => {
         const coord = (selectedMesh as any)?.coordinator || {}
         setCoordinatorPromptDraft({
-            override: typeof coord.systemPromptOverride === 'string' ? coord.systemPromptOverride : '',
-            append: typeof coord.systemPromptAppend === 'string' ? coord.systemPromptAppend
-                : typeof coord.systemPromptSuffix === 'string' ? coord.systemPromptSuffix : '',
+            append: typeof coord.systemPromptAppend === 'string' ? coord.systemPromptAppend : '',
         })
         setNodeSystemPromptDrafts(Object.fromEntries(
             (selectedMesh?.nodes || []).map(node => [node.id, typeof (node as any).systemPrompt === 'string' ? (node as any).systemPrompt : '']),

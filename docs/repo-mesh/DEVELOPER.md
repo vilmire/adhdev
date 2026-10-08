@@ -53,7 +53,7 @@ unless their write flag is explicitly enabled.
 
 | File | Responsibility |
 | --- | --- |
-| `coordinator-prompt.ts` | Builds the coordinator system prompt from live mesh state. Expands `{{meshName}}`, `{{nodes}}`, `{{mission}}`, `{{policy}}`, `{{tools}}`, `{{workflow}}`, `{{rules}}` placeholders; supports user overrides in `~/.adhdev/coordinator-prompts/`. |
+| `coordinator-prompt.ts` | Builds the coordinator system prompt from live mesh state. Expands `{{meshName}}`, `{{nodes}}`, `{{mission}}`, `{{policy}}`, `{{tools}}`, `{{workflow}}`, `{{rules}}` placeholders in the mesh-level append (`coordinator.systemPromptAppend`, machine-local or from the repo's `.adhdev/mesh.json`). |
 | `coordinator-registry.ts` | Tracks which daemon/session currently owns the coordinator role for a mesh. |
 | `contracts.ts` | Internal contracts/interfaces shared across mesh modules. |
 | `mesh-ledger.ts` | Append-only event ledger (task dispatch/complete/fail, session/node lifecycle, checkpoints) + completion-evidence builders. JSONL on disk, SQLite at runtime. |
@@ -218,8 +218,6 @@ Everything is rooted at the daemon config dir (`getConfigDir()`, default
   export/import/debug/legacy; the SQLite `mesh_event_ledger` is authoritative.
 - **Legacy queue file** — `~/.adhdev/mesh-ledger/<meshId>.queue.json` (migrated
   into `mesh_queue` on first runtime-store open).
-- **Coordinator prompt overrides** — `~/.adhdev/coordinator-prompts/<cliType>.md`,
-  `<cliType>.append.md`, `default.md`, `default.append.md`.
 - **Refine / bootstrap config** — `.adhdev/refine.{json,yaml,yml}` and the
   worktree-bootstrap config, read from the repo working tree (not `~/.adhdev`).
 
@@ -264,9 +262,12 @@ which transport delivered the data.
 
 ### Customize the coordinator prompt
 
-Per the `{{placeholder}}` system in `coordinator-prompt.ts`, operators can drop
-override/append files under `~/.adhdev/coordinator-prompts/` without code changes.
-CLI-specific files (`<cliType>.md`) take precedence over `default.*`, and the
-node/policy facts are still substituted into overrides via the same placeholders.
-To add a new prompt layer in code, extend `buildCoordinatorSystemPrompt()` and
-register the placeholder so overrides can reference it.
+The daemon's default base prompt can be extended, not replaced: set the
+mesh-level append `coordinator.systemPromptAppend` (machine-local in
+`meshes.json`, or repo-committed in `.adhdev/mesh.json` — both stack, repo
+first). The append supports the same `{{placeholder}}` tokens as
+`coordinator-prompt.ts`. The former full-override layers (mesh
+`systemPromptOverride`, per-machine `~/.adhdev/coordinator-prompts/*.md` files)
+were removed on 2026-10-08; legacy values are ignored. To add a new prompt
+section in code, extend `buildCoordinatorSystemPrompt()` and register the
+placeholder so an append can reference it.

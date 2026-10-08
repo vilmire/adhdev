@@ -9,20 +9,13 @@
  *
  * The prompt is generated dynamically from the current mesh state.
  *
- * User customization:
- *   <configDir>/coordinator-prompts/<cliType>.md         — full override
- *   <configDir>/coordinator-prompts/<cliType>.append.md  — appended to default
- *   <configDir>/coordinator-prompts/default.md           — full override (any CLI)
- *   <configDir>/coordinator-prompts/default.append.md    — appended to default (any CLI)
- *
- * CLI-specific files take precedence over default.* files. The override file
- * still gets the node/policy facts substituted via the same {{placeholders}}
- * the daemon understands; an override that doesn't reference them just gets
- * a static prompt, which is also fine.
+ * The only customization layers are the mesh-level append
+ * (`mesh.coordinator.systemPromptAppend`, also settable from the repo's
+ * `.adhdev/mesh.json`) and the per-launch `extraSystemPrompt`. The former
+ * full-override layers (mesh `systemPromptOverride`, per-machine
+ * `<configDir>/coordinator-prompts/*.md` files) were removed on 2026-10-08;
+ * legacy values are ignored.
  */
-
-import * as fs from 'node:fs';
-import * as path from 'node:path';
 
 import type {
     LocalMeshEntry,
@@ -32,7 +25,6 @@ import type {
 } from '../repo-mesh-types.js';
 import { resolveMeshPolicy, resolveProviderMaxParallel, resolveMaxReadonlyParallelTasks } from '../repo-mesh-types.js';
 import { getDifficultyBrains } from '../config/mesh-config-routing.js';
-import { getConfigDir } from '../config/config.js';
 import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
 import { resolveCoordinatorRules, splitRulesLayer, type CoordinatorRulesResolution } from './coordinator-rules.js';
 import { isNoteExpired, OPERATING_NOTE_CATEGORY_TTL_DAYS } from './mesh-operating-notes.js';
@@ -158,23 +150,13 @@ export interface CoordinatorPromptContext {
 }
 
 /**
- * Compose the final coordinator prompt from four layers, in this precedence:
+ * Compose the final coordinator prompt from three layers, in order:
  *
- *   1. Per-launch `extraSystemPrompt` (always appended, as "## Additional
- *      Context"). Never wins as a base — it's launch-scope context.
- *   2. Mesh-level append (`mesh.coordinator.systemPromptAppend` or the legacy
- *      `systemPromptSuffix`). Stacks after whichever base won.
- *   3. User-file append (`<configDir>/coordinator-prompts/<cli>.append.md` or
- *      `default.append.md`). Also stacks; same placeholder expansion as the
- *      override path.
- *   4. Base prompt, picked in this order:
- *      a. `mesh.coordinator.systemPromptOverride` (mesh-level override)
- *      b. user-file override (`<configDir>/coordinator-prompts/<cli>.md` or
- *         `default.md`)
- *      c. daemon default (assembled from identity/nodes/policy/tools/…)
- *
- * That layering lets a user customize prompts at three increasing scopes
- * (machine, mesh, single launch) without losing the daemon's stock rules.
+ *   1. Base prompt — the daemon default (identity/nodes/policy/tools/…).
+ *   2. Mesh-level append (`mesh.coordinator.systemPromptAppend`), with
+ *      `{{placeholder}}` expansion.
+ *   3. Per-launch `extraSystemPrompt` (always appended, as "## Additional
+ *      Context") — launch-scope context, last so it is read most recently.
  */
 /**
  * 6-4: total prompt soft cap. When the assembled prompt exceeds this, we shed
@@ -184,7 +166,7 @@ export interface CoordinatorPromptContext {
  * ride into the prompt" promise, so it outlives everything else sheddable —
  * a live 60KB overflow was observed dropping every note wholesale, exactly
  * the lessons the next coordinator needed). We NEVER trim user
- * append/override content or the fixed hardcoded sections
+ * append content or the fixed hardcoded sections
  * (identity/nodes/policy/tools/workflow/onboarding/rules): those carry user
  * intent or invariant instructions. If shedding everything sheddable still
  * overflows, we keep the prompt as-is rather than mangling protected content.
@@ -201,9 +183,7 @@ const PROMPT_SOFT_CAP_BYTES = 96 * 1024;
 
 /**
  * Which daemon-generated optional sections to drop from the default base.
- * Used only by the 6-4 soft-cap retry — an override base ignores these
- * because its operating-notes/recent-activity content comes from the user's
- * own {{placeholder}}s and is not ours to trim.
+ * Used only by the 6-4 soft-cap retry.
  */
 interface DefaultPromptDropFlags {
     /** Drop only the unpinned notes; pinned notes still render. */
@@ -218,12 +198,8 @@ export function buildCoordinatorSystemPrompt(ctx: CoordinatorPromptContext): str
     let prompt = assembleCoordinatorPrompt(ctx, {});
     if (byteLength(prompt) <= PROMPT_SOFT_CAP_BYTES) return prompt;
 
-    // Over the soft cap. Only the default base carries daemon-generated
-    // operating-notes / recent-activity sections we're allowed to shed; an
-    // override base is user content and stays whole. If we're on an override
-    // base there's nothing safe to trim, so return the first pass unchanged.
-    if (usesOverrideBase(ctx)) return prompt;
-
+    // Over the soft cap. Shed the daemon-generated operating-notes /
+    // recent-activity sections of the default base.
     const shed: string[] = [];
     const hasPinnedNotes = (ctx.operatingNotes ?? []).some(note => note?.pinned === true);
 
@@ -248,12 +224,6 @@ export function buildCoordinatorSystemPrompt(ctx: CoordinatorPromptContext): str
     return appendTruncationNotice(prompt, shed);
 }
 
-/** True when the base prompt is a mesh-level or user-file override (not the daemon default). */
-function usesOverrideBase(ctx: CoordinatorPromptContext): boolean {
-    if (ctx.mesh.coordinator?.systemPromptOverride?.trim()) return true;
-    return readUserPromptFile(ctx.coordinatorCliType, 'md') !== null;
-}
-
 /** UTF-8 byte length — the cap is a byte budget, not a code-unit count. */
 function byteLength(s: string): number {
     return Buffer.byteLength(s, 'utf8');
@@ -270,33 +240,12 @@ function appendTruncationNotice(prompt: string, shed: string[]): string {
 }
 
 function assembleCoordinatorPrompt(ctx: CoordinatorPromptContext, drop: DefaultPromptDropFlags): string {
-    const { mesh, userInstruction, coordinatorCliType } = ctx;
+    const { mesh, userInstruction } = ctx;
 
-    // ── Pick the base prompt ──
-    const meshOverride = mesh.coordinator?.systemPromptOverride?.trim();
-    let base: string;
-    if (meshOverride) {
-        base = expandPromptPlaceholders(meshOverride, ctx);
-    } else {
-        const userOverride = readUserPromptFile(coordinatorCliType, 'md');
-        if (userOverride !== null) {
-            base = expandPromptPlaceholders(userOverride, ctx);
-        } else {
-            base = buildDefaultCoordinatorPrompt(ctx, drop);
-        }
-    }
+    const sections: string[] = [buildDefaultCoordinatorPrompt(ctx, drop)];
 
-    const sections: string[] = [base];
-
-    // ── User-level append runs after whichever base won ──
-    const userAppend = readUserPromptFile(coordinatorCliType, 'append.md');
-    if (userAppend !== null) {
-        sections.push(expandPromptPlaceholders(userAppend, ctx));
-    }
-
-    // ── Mesh-level append (prefer the new field, fall back to the legacy alias) ──
-    const meshAppend = (mesh.coordinator?.systemPromptAppend
-        ?? mesh.coordinator?.systemPromptSuffix)?.trim();
+    // ── Mesh-level append ──
+    const meshAppend = mesh.coordinator?.systemPromptAppend?.trim();
     if (meshAppend) {
         sections.push(expandPromptPlaceholders(meshAppend, ctx));
     }
@@ -409,33 +358,6 @@ Repository: \`${mesh.repoIdentity}\`${mesh.defaultBranch ? `\nDefault branch: \`
 }
 
 /**
- * Look up a user-customization file under <configDir>/coordinator-prompts/.
- *
- * Lookup order:
- *   1. <cliType>.<suffix>   — provider-specific
- *   2. default.<suffix>     — shared across providers
- *
- * Returns null when neither exists; an empty/whitespace-only file is also
- * treated as "no override" so users can drop in a stub without affecting
- * behavior. Read errors (permission, IO) are swallowed and logged-as-null
- * intentionally: a broken override file should never block coordinator
- * launch, it should just behave as if the file weren't there.
- */
-function readUserPromptFile(cliType: string | undefined, suffix: string): string | null {
-    const dir = path.join(getConfigDir(), 'coordinator-prompts');
-    const candidates: string[] = [];
-    if (cliType) candidates.push(path.join(dir, `${cliType}.${suffix}`));
-    candidates.push(path.join(dir, `default.${suffix}`));
-    for (const p of candidates) {
-        try {
-            const text = fs.readFileSync(p, 'utf8');
-            if (text.trim()) return text;
-        } catch { /* missing file is the common case — keep going */ }
-    }
-    return null;
-}
-
-/**
  * Expand `{{placeholder}}` tokens against current mesh state.
  *
  * Tokens we support today:
@@ -468,7 +390,7 @@ function expandPromptPlaceholders(template: string, ctx: CoordinatorPromptContex
             ? buildNodeConfigSection(mesh)
             : '## Nodes\nNo nodes configured yet. Ask the user to add nodes with `adhdev mesh add-node`.';
     // {{workflow}} / {{rules}} expand from the repo-read rules layer, so an
-    // override template inherits repo rules exactly like the default base.
+    // mesh-level append template inherits repo rules exactly like the default base.
     const rulesLayer = splitRulesLayer((ctx.repoRules ?? resolveCoordinatorRules(undefined)).text);
     const replacements: Record<string, string> = {
         meshName: mesh.name,
@@ -1043,7 +965,7 @@ Index only — each tool's own description carries its parameters and contract.
 - Approvals: \`mesh_approve\` (yes/no), \`mesh_answer_question\` (multi-choice questions — never \`mesh_approve\`), \`mesh_list_pending_approvals\`
 - Missions & ledger: \`mesh_mission_upsert\`, \`mesh_mission_list\` (the authority for "what work remains"), \`mesh_task_history\` (ledger by task, kind, time or node), \`mesh_ledger_query\` (deprecated alias of \`mesh_task_history\`), \`mesh_reconcile_ledger\`, \`mesh_note\`
 - Nodes & convergence: \`mesh_clone_node\`, \`mesh_add_node\`, \`mesh_remove_node\`, \`mesh_checkpoint\`, \`mesh_fast_forward_node\`, \`mesh_refine_node\`, \`mesh_refine_batch\`, \`mesh_review_inbox\`, \`mesh_cleanup_worktree_nodes\`, \`mesh_cleanup_sessions\`, \`mesh_restart_daemon\`
-- Setup & config: \`mesh_create\`, \`mesh_init\`, \`mesh_config\`, \`mesh_node_slots\`, \`mesh_coordinator_prompt_append\`
+- Setup & config: \`mesh_create\`, \`mesh_init\`, \`mesh_config\`, \`mesh_node_slots\`
 
 When to reach for the rarely used ones:
 - \`mesh_note\` — **When** you learn a durable lesson (always before closing a mission that taught one), or an injected note turns out stale/wrong.
@@ -1051,8 +973,7 @@ When to reach for the rarely used ones:
 - \`mesh_config\` — **When** a refine run reports a config error, when deciding whether a landed change needs a daemon restart, or when the user wants the coordinator prompt committed to the repo.
 - \`mesh_create\` — **When** the user asks to set up Repo Mesh for a repo with no mesh yet, or before adding/cloning a node (\`mode: "plan"\` first).
 - \`mesh_init\` — **When** the user asks to onboard (or re-configure) this repo for Repo Mesh.
-- \`mesh_cleanup_sessions\` — **When** a node is cluttered with finished/stuck worker sessions, or \`mesh_status\` keeps listing stale direct dispatches.
-- \`mesh_coordinator_prompt_append\` — **Only when** the user asks for a standing instruction on every coordinator this machine runs.`;
+- \`mesh_cleanup_sessions\` — **When** a node is cluttered with finished/stuck worker sessions, or \`mesh_status\` keeps listing stale direct dispatches.`;
 
 // WIRING-UNIFICATION F1: the coordinator half of the worker protocol, rendered
 // by mesh-shared next to the footer every dispatched task carries so the two

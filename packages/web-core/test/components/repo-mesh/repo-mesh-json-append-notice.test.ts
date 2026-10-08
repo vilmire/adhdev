@@ -28,7 +28,6 @@ describe('extractRepoMeshJsonCoordinatorLayer', () => {
 
         expect(layer).not.toBeNull()
         expect(layer!.append).toBe(APPEND)
-        expect(layer!.override).toBe('')
         expect(layer!.sourceType).toBe('repo_file')
         expect(layer!.path).toBe('/repo/.adhdev/mesh.json')
     })
@@ -50,7 +49,9 @@ describe('extractRepoMeshJsonCoordinatorLayer', () => {
         expect(layer!.append).toBe(APPEND)
     })
 
-    it('surfaces a repo-declared override alongside the append', () => {
+    // The repo-file systemPromptOverride was removed on 2026-10-08; the daemon
+    // ignores a legacy value, so the notice does not show it either.
+    it('ignores a legacy repo-declared override', () => {
         const layer = extractRepoMeshJsonCoordinatorLayer({
             success: true,
             sourceType: 'repo_file',
@@ -60,8 +61,13 @@ describe('extractRepoMeshJsonCoordinatorLayer', () => {
             },
         })
 
-        expect(layer!.override).toBe('FULL BASE')
+        expect((layer as any).override).toBeUndefined()
         expect(layer!.append).toBe(APPEND)
+        expect(extractRepoMeshJsonCoordinatorLayer({
+            success: true,
+            sourceType: 'repo_file',
+            config: { version: 1, coordinator: { systemPromptOverride: 'FULL BASE' } },
+        })).toBeNull()
     })
 
     it('renders nothing when the repo has no mesh.json', () => {

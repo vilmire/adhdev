@@ -280,10 +280,10 @@ describe('M3 — mission persistence', () => {
         expect(getActiveMeshMissionSummaries(meshId)).toHaveLength(0);
     });
 
-    it('{{mission}} placeholder expands in override templates', () => {
+    it('{{mission}} placeholder expands in mesh-level append templates', () => {
         upsertMeshMission(meshId, { title: 'Override mission' });
         const mesh = makeMesh(meshId);
-        (mesh as any).coordinator = { systemPromptOverride: 'CUSTOM PROMPT\n{{mission}}\nEND' };
+        (mesh as any).coordinator = { systemPromptAppend: 'CUSTOM PROMPT\n{{mission}}\nEND' };
         const prompt = buildCoordinatorSystemPrompt({
             mesh,
             missionSection: buildMissionPromptSection(meshId),

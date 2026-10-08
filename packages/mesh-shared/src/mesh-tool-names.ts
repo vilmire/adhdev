@@ -64,7 +64,6 @@ export const CANONICAL_MESH_TOOL_NAMES = [
     'mesh_mission_list',
     'mesh_review_inbox',
     'mesh_node_slots',
-    'mesh_coordinator_prompt_append',
 ] as const;
 
 export type CanonicalMeshToolName = typeof CANONICAL_MESH_TOOL_NAMES[number];
@@ -93,8 +92,6 @@ export const RETIRED_MESH_TOOLS: Readonly<Record<string, {
     mesh_node_slots_set: { tool: 'mesh_node_slots', args: { action: 'set' } },
     mesh_node_slots_list: { tool: 'mesh_node_slots', args: { action: 'list' } },
     mesh_node_slots_propose: { tool: 'mesh_node_slots', args: { action: 'propose' } },
-    mesh_coordinator_prompt_append_get: { tool: 'mesh_coordinator_prompt_append', args: { action: 'get' } },
-    mesh_coordinator_prompt_append_set: { tool: 'mesh_coordinator_prompt_append', args: { action: 'set' } },
     mesh_record_note: { tool: 'mesh_note', args: { action: 'record' } },
     mesh_forget_note: { tool: 'mesh_note', args: { action: 'forget' } },
     mesh_reinit: { tool: 'mesh_init', args: { mode: 'reinit' } },
@@ -104,6 +101,8 @@ export const RETIRED_MESH_TOOLS: Readonly<Record<string, {
     mesh_plan_onboarding: { tool: 'mesh_create', args: { mode: 'plan' } },
     mesh_prune_stale_direct: { tool: 'mesh_cleanup_sessions', args: { mode: 'prune_stale_direct' } },
 };
+
+const COORDINATOR_PROMPT_APPEND_REMOVED = 'Per-machine coordinator prompt files are no longer read. For a standing instruction on this project\'s coordinator, put it in the repo\'s .adhdev/mesh.json coordinator.systemPromptAppend (mesh_config kind "mesh_json"), or record a durable lesson with mesh_note.';
 
 /**
  * Tool names removed outright (no merged replacement), mapped to the guidance a
@@ -117,6 +116,10 @@ export const REMOVED_MESH_TOOLS: Readonly<Record<string, string>> = {
     mesh_magi_kind_panel_list: 'There are no review panels any more; pick the workers per review with mesh_send_task.',
     // 2026-10-08: was a pure alias — mesh_refine_node's default dry-run returns the same plan.
     mesh_refine_plan: 'Call mesh_refine_node with the same node_id and no execute: its default dry-run returns the same Refinery plan and executes nothing.',
+    // 2026-10-08: the per-machine coordinator-prompts/ file layer was removed (assistant-layer design §11 Q2).
+    mesh_coordinator_prompt_append: COORDINATOR_PROMPT_APPEND_REMOVED,
+    mesh_coordinator_prompt_append_get: COORDINATOR_PROMPT_APPEND_REMOVED,
+    mesh_coordinator_prompt_append_set: COORDINATOR_PROMPT_APPEND_REMOVED,
 };
 
 /**

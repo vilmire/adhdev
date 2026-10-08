@@ -57,7 +57,7 @@ export const MESH_CONFIG_TOOL = {
     description: 'Repo-config helper; `kind` (REQUIRED) picks the family, each taking only its own arguments:\n'
         + '• kind="refine" — Refinery config, read-only (use on a refine config error, or to see which validation commands run). `mode` (REQUIRED): schema = JSON schema + supported repo-local locations (the validation authority; heuristic detection only suggests); validate = check a config without running validation or merging; suggest = scaffold from project scripts (never executed until saved). Validation+merge itself is mesh_refine_node.\n'
         + '• kind="change_impact" — read-only, declarative, never executed: which changes between the live daemon build and workspace HEAD need a daemon restart vs a web-only redeploy vs nothing (use when deciding whether a landed change needs a restart). Same modes; validate loads .adhdev/change-impact.{json,yaml,yml} or repo-mesh-change-impact.*; suggest maps web-* → web-only, others → daemon-runtime, docs/license → non-runtime, effective once saved.\n'
-        + '• kind="mesh_json" — gated WRITE of `.adhdev/mesh.json` (repo-committed coordinator prompt override/append + config) from the machine-local mesh entry. REPO-COMMITTED scope, no `mode`; dry-run by default, validated, never clobbers without overwrite=true — show a current-vs-suggested diff and get explicit approval first.',
+        + '• kind="mesh_json" — gated WRITE of `.adhdev/mesh.json` (repo-committed coordinator prompt append + config) from the machine-local mesh entry. REPO-COMMITTED scope, no `mode`; dry-run by default, validated, never clobbers without overwrite=true — show a current-vs-suggested diff and get explicit approval first.',
     inputSchema: {
         type: 'object' as const,
         properties: {
@@ -152,29 +152,6 @@ export const MESH_NODE_SLOTS_TOOL = {
             write: { type: 'boolean', description: 'set: apply (wholesale replacement). Default false (dry-run).' },
         },
         required: ['action', 'node_id'],
-    },
-};
-
-// 2026-09-26 tool consolidation: the coordinator prompt APPEND get/set pair as one tool.
-export const MESH_COORDINATOR_PROMPT_APPEND_TOOL = {
-    name: 'mesh_coordinator_prompt_append',
-    description: 'Read or write the user-level coordinator prompt APPEND text for a CLI type — the per-machine file ~/.adhdev/coordinator-prompts/<cli>.append.md on this MCP server\'s daemon, applied to every mesh this daemon coordinates. '
-        + 'Use it only when the user asks to add a standing instruction to every coordinator on this machine. Select with `action` (REQUIRED):\n'
-        + '• get — read the current append text. Read it before `set` so you know what you would replace.\n'
-        + '• set — write (or, with empty/omitted content, clear) the append file. WHOLESALE REPLACE of the whole file, not an incremental add.\n'
-        + 'APPEND ONLY (a safety boundary, not a missing feature): this always stacks AFTER whichever base prompt wins; it can NEVER replace the daemon\'s base coordinator prompt (the OVERRIDE file) — that stays a dashboard-only, human-gated action, so a coordinator cannot erase its own core operating rules.',
-    inputSchema: {
-        type: 'object' as const,
-        properties: {
-            action: {
-                type: 'string',
-                enum: ['get', 'set'],
-                description: 'get = read the append text; set = replace (or clear) it. Required.',
-            },
-            cli_type: { type: 'string', description: 'CLI type key, e.g. "claude-cli", "codex-cli". Defaults to "default" (applies to every CLI type without its own file).' },
-            content: { type: 'string', description: 'set: the full append text to write. Omit or pass an empty string to clear (delete the file, falling back to no append at this layer).' },
-        },
-        required: ['action'],
     },
 };
 

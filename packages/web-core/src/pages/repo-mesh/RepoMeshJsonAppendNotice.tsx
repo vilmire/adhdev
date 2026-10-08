@@ -2,7 +2,7 @@
  * RepoMeshJsonAppendNotice — read-only display of the coordinator prompt layer
  * that comes from the repo-committed `.adhdev/mesh.json`.
  *
- * WHY THIS EXISTS: the mesh settings editor seeds its Override/Append drafts from
+ * WHY THIS EXISTS: the mesh settings editor seeds its Append draft from
  * the MACHINE-LOCAL mesh entry (meshes.json) only. A repo that declares
  * `coordinator.systemPromptAppend` in `.adhdev/mesh.json` therefore contributes
  * real text to every coordinator prompt while the settings page shows an empty
@@ -13,7 +13,7 @@
  *
  * ★READ-ONLY BY DESIGN — DO NOT ADD AN EDITOR HERE. `.adhdev/mesh.json` is a
  * repo-committed file shared by everyone who clones the repo. The editable
- * Override/Append fields next to this notice write to update_mesh → meshes.json
+ * Append field next to this notice writes to update_mesh → meshes.json
  * (machine-local). Making this writable from the dashboard would turn a settings
  * tweak into an uncommitted working-tree change in the operator's repo. Editing
  * the repo layer is a deliberate commit, made in the repo.
@@ -31,8 +31,6 @@ import { InfoTip } from '../../components/ui/InfoTip'
 export interface RepoMeshJsonCoordinatorLayer {
     /** Repo-declared append text, '' when absent. */
     append: string
-    /** Repo-declared full-prompt override, '' when absent. */
-    override: string
     /** Path of the repo file the values came from, when one was read. */
     path: string
     /** Loader outcome, mirroring RepoMeshJsonConfigLoadResult.sourceType. */
@@ -67,7 +65,6 @@ export function extractRepoMeshJsonCoordinatorLayer(raw: any): RepoMeshJsonCoord
     if (sourceType === 'invalid') {
         return {
             append: '',
-            override: '',
             path: typeof body.path === 'string' ? body.path : '',
             sourceType: 'invalid',
             error: typeof body.error === 'string' ? body.error : '',
@@ -76,12 +73,12 @@ export function extractRepoMeshJsonCoordinatorLayer(raw: any): RepoMeshJsonCoord
 
     const coord = body?.config?.coordinator
     const append = typeof coord?.systemPromptAppend === 'string' ? coord.systemPromptAppend : ''
-    const override = typeof coord?.systemPromptOverride === 'string' ? coord.systemPromptOverride : ''
-    if (!append.trim() && !override.trim()) return null
+    // A legacy coordinator.systemPromptOverride in the repo file is ignored by
+    // the daemon (removed 2026-10-08), so it is not shown either.
+    if (!append.trim()) return null
 
     return {
         append,
-        override,
         path: typeof body.path === 'string' ? body.path : '',
         sourceType: 'repo_file',
         error: '',
@@ -132,21 +129,6 @@ export default function RepoMeshJsonAppendNotice({ daemonId, workspace, sendComm
                 <span className="text-[13px] leading-tight font-semibold">{t('mesh.detail.repoMeshJsonTitle')}</span>
                 <InfoTip content={`${t('mesh.detail.repoMeshJsonHint')}${layer.path ? `\n${layer.path}` : ''}`} size={12} />
             </div>
-
-            {layer.override.trim() && (
-                <div className="mb-2">
-                    <label className="mb-1 block text-2xs uppercase tracking-wide text-text-muted">
-                        {t('mesh.detail.repoMeshJsonOverrideLabel')}
-                    </label>
-                    <textarea
-                        readOnly
-                        value={layer.override}
-                        rows={4}
-                        className="w-full rounded-lg border border-border-subtle bg-bg-secondary px-3 py-2 font-mono text-xs text-text-secondary"
-                        onFocus={e => e.currentTarget.select()}
-                    />
-                </div>
-            )}
 
             {layer.append.trim() && (
                 <div>

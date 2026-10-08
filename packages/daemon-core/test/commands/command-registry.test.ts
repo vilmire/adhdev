@@ -185,7 +185,7 @@ const LEGACY_LOW_FAMILY_COMMANDS = [
     'validate_mesh_refine_config', 'suggest_mesh_refine_config', 'get_mesh_change_impact_config_schema',
     'validate_mesh_change_impact_config', 'suggest_mesh_change_impact_config', 'get_logs', 'get_debug_trace',
     'set_user_name', 'get_status_metadata', 'refresh_provider_quota', 'get_machine_runtime_stats',
-    'get_session_info', 'coordinator_prompt_preview', 'list_coordinator_prompts', 'write_coordinator_prompt',
+    'get_session_info', 'coordinator_prompt_preview',
     'mark_session_seen', 'delete_notification', 'mark_notification_unread', 'daemon_upgrade', 'daemon_restart',
     'set_machine_nickname', 'get_quota_account_label', 'set_quota_account_label', 'get_quota_provider_enabled',
     'set_quota_provider_enabled', 'get_mesh_ledger', 'get_mesh_ledger_slice', 'list_mesh_notes',
