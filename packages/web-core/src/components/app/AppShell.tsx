@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { IconX } from '../Icons'
 import ThemeToggle from '../ThemeToggle'
 import LanguageSelector from '../LanguageSelector'
+import SessionChatDashboardNavigator from './SessionChatDashboardNavigator'
 
 export interface AppShellNavItem {
     id: string
@@ -218,6 +219,9 @@ export default function AppShell({
                 footerActions={footerActions}
                 closeMobileMenu={closeMobileMenu}
             />
+
+            {/* Routes without a dashboard can still open a session's chat. */}
+            <SessionChatDashboardNavigator />
 
             <main className="main-content relative">
                 <div className="main-content-inner">

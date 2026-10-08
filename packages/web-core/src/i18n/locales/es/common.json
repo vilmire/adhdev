@@ -2879,6 +2879,7 @@
         "openCoordinatorChat": "Abrir chat del coordinador",
         "coordinatorGone": "la sesión del coordinador terminó",
         "chatNotFound": "No hay pestaña de chat para esta sesión en este panel — puede estar ejecutándose en otra máquina.",
+        "openChatUnavailable": "No se puede abrir este chat desde aquí — ábrelo desde el panel.",
         "openChatHint": "Clic para abrir el chat de esta sesión"
     },
     "sessionInfo": {

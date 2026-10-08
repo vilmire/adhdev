@@ -555,6 +555,7 @@ export default function RepoMesh() {
                 onCreate={handleCreate}
                 onCancelCreate={cancelCreate}
                 sendCommand={sendCommand}
+                sendData={sendData}
             />
             </>
         )

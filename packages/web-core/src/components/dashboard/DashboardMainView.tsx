@@ -390,9 +390,12 @@ export default function DashboardMainView({
                 || hiddenConversations.find(candidate => conversationMatchesTarget(candidate, target))
             if (conversation) break
         }
+        // A replay held across a navigation (`deferMiss`) may arrive before the
+        // dashboard has its tabs: answer the miss quietly so the bus retries; its
+        // last attempt arrives without the flag and toasts like any other miss.
         if (!conversation) {
-            eventManager.showToast(t('sessionNav.chatNotFound'), 'info')
-            return
+            if (!request.deferMiss) eventManager.showToast(t('sessionNav.chatNotFound'), 'info')
+            return 'not_found'
         }
         const wasHidden = hiddenConversations.some(candidate => candidate.tabKey === conversation!.tabKey)
         if (wasHidden) {
@@ -405,14 +408,15 @@ export default function DashboardMainView({
         // is exempt — its panel is being restored by the call above.
         const activated = dockviewActionHandlersRef.current?.activateConversationTab(conversation.tabKey)
         if (activated === false && !wasHidden) {
-            eventManager.showToast(t('sessionNav.chatNotFound'), 'info')
-            return
+            if (!request.deferMiss) eventManager.showToast(t('sessionNav.chatNotFound'), 'info')
+            return 'not_found'
         }
         // The mesh dialog covers the whole screen — navigating from inside it
         // implies leaving it.
         setMeshGraphConversation(null)
         onDesktopActiveTabChange(conversation.tabKey)
         onRequestScrollToBottom(conversation.tabKey, 'conversation-open')
+        return 'opened'
     }), [
         handleShowHiddenConversationWithRestore,
         hiddenConversations,
