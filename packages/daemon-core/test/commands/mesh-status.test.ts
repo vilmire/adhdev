@@ -270,6 +270,7 @@ describe('mesh_status', () => {
       const reloadedRouter = createRouter().router
       const fetched = await reloadedRouter.execute('get_mesh_host_pairing', { meshId: memberMesh.id }) as any
       expect(fetched.meshHost.pairing.status).toBe('paired')
+      expect(fetched.code).toBe('mesh_host_pairing_paired')
       const status = await reloadedRouter.execute('mesh_status', { meshId: memberMesh.id }) as any
       expect(status.success).toBe(true)
       expect(status.meshHost).toEqual(expect.objectContaining({

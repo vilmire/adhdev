@@ -134,7 +134,12 @@ export const meshHostPairingHandlers: Record<string, MedFamilyHandler> = {
         const pairingStatus = meshHost.pairing?.status || 'not_configured';
         return {
             success: true,
-            code: pairingStatus === 'not_configured' ? 'mesh_host_pairing_not_configured' : 'mesh_host_pairing_pending',
+            // A completed pairing must not read as still pending (2026-10-08
+            // two-machine live run: both sides reported status 'paired' under
+            // code 'mesh_host_pairing_pending').
+            code: pairingStatus === 'not_configured'
+                ? 'mesh_host_pairing_not_configured'
+                : pairingStatus === 'paired' ? 'mesh_host_pairing_paired' : 'mesh_host_pairing_pending',
             meshId,
             hostAddress: meshHost.hostAddress,
             meshHost,
