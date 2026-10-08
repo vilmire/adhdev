@@ -367,6 +367,13 @@ export function stripRemovedCoordinatorPromptFields(
 ): RepoMeshCoordinatorConfig | undefined {
     if (!coord) return coord;
     const out: Record<string, unknown> = { ...coord };
+    // `systemPromptSuffix` was an alias for the append text: carry it into
+    // `systemPromptAppend` when that is empty so a mesh that only set the alias
+    // keeps its text. `systemPromptOverride` replaced the base prompt, which no
+    // longer exists, so it is dropped.
+    const legacySuffix = typeof out.systemPromptSuffix === 'string' ? out.systemPromptSuffix.trim() : '';
+    const append = typeof out.systemPromptAppend === 'string' ? out.systemPromptAppend.trim() : '';
+    if (legacySuffix && !append) out.systemPromptAppend = legacySuffix;
     for (const key of REMOVED_COORDINATOR_PROMPT_KEYS) delete out[key];
     return out as RepoMeshCoordinatorConfig;
 }
@@ -385,7 +392,7 @@ export function mergeEffectiveCoordinatorConfig(
     const out = stripRemovedCoordinatorPromptFields(localCoord) ?? {};
 
     const repoAppend = repoCoord?.systemPromptAppend?.trim() ? repoCoord!.systemPromptAppend!.trim() : '';
-    const localAppend = localCoord?.systemPromptAppend?.trim() ? localCoord.systemPromptAppend.trim() : '';
+    const localAppend = out.systemPromptAppend?.trim() ? out.systemPromptAppend.trim() : '';
     const stacked = [repoAppend, localAppend].filter(Boolean).join('\n\n');
     if (stacked) out.systemPromptAppend = stacked;
 

@@ -168,12 +168,18 @@ describe('mesh-json-config — coordinator merge', () => {
         expect(merged.systemPromptAppend).toBe('REPO-APPEND\n\nLOCAL-APPEND');
     });
 
-    it('ignores and strips the removed local systemPromptSuffix alias', () => {
+    it('carries a legacy local systemPromptSuffix into the append (it was an alias), then strips it', () => {
         const merged = mergeEffectiveCoordinatorConfig(
             { systemPromptAppend: 'REPO-APPEND' },
             { systemPromptSuffix: 'LEGACY' } as any,
         );
-        expect(merged.systemPromptAppend).toBe('REPO-APPEND');
+        expect(merged.systemPromptAppend).toBe('REPO-APPEND\n\nLEGACY');
+        expect((merged as any).systemPromptSuffix).toBeUndefined();
+    });
+
+    it('a set systemPromptAppend wins over a legacy systemPromptSuffix', () => {
+        const merged = mergeEffectiveCoordinatorConfig(undefined, { systemPromptAppend: 'NEW', systemPromptSuffix: 'OLD' } as any);
+        expect(merged.systemPromptAppend).toBe('NEW');
         expect((merged as any).systemPromptSuffix).toBeUndefined();
     });
 
