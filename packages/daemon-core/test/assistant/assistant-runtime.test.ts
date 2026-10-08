@@ -17,7 +17,8 @@ import { AssistantMetricsStore } from '../../src/assistant/assistant-relay-sqlit
 import { ensureAssistantRelaySchema } from '../../src/mesh/mesh-runtime-store-schema.js';
 import { buildAssistantRelayPorts, getAssistantRuntime, wireAssistantRuntime, type AssistantRuntime } from '../../src/assistant/assistant-runtime.js';
 import { createDefaultProjectPorts, preloadAssistantProjectReaders } from '../../src/assistant/assistant-project-ports.js';
-import { createAssistantServices, setAssistantServicesForTests } from '../../src/assistant/assistant-services.js';
+import { createAssistantServices, getAssistantServices, setAssistantServicesForTests } from '../../src/assistant/assistant-services.js';
+import { REVIEW_INPUT_TEXT } from '../../src/assistant/assistant-review.js';
 
 let dir: string;
 let registry: AssistantRegistry;
@@ -107,6 +108,40 @@ describe('wireAssistantRuntime', () => {
         expect(seen).toEqual(['codex-cli']);
         runtime.dispose();
         runtime = null;
+    });
+
+    it('the relay tick queues the idle review turn into the live assistant, records it and bumps review_turns', async () => {
+        const t0 = Date.parse('2026-10-08T09:00:00Z');
+        vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
+        try {
+            vi.setSystemTime(t0);
+            registry.bindSession({ sessionId: 'asst', cliType: 'claude-cli', workspace: dir, at: t0 });
+            instances.asst = { getState: () => ({ status: 'idle', activeChat: null }), isModalParked: () => false };
+            const db = new Database(':memory:');
+            ensureAssistantRelaySchema(db);
+            const metrics = new AssistantMetricsStore(db);
+            const log = getAssistantServices().inputLog;
+            log.begin('asst');
+            for (let i = 0; i < 6; i++) { log.append('asst', 'human', { at: t0 }); log.closeTurn('asst'); }
+            runtime = wireAssistantRuntime(components(), {
+                registry, store: new InMemoryAssistantRelayStore(), metrics, tickMs: 60_000, quota: { remainingPct: () => 50 },
+            });
+            vi.advanceTimersByTime(9 * 60_000);
+            expect(submits).toEqual([]); // idle 9 min < 10 min
+            vi.advanceTimersByTime(2 * 60_000);
+            await runtime.relay.idle();
+            expect(submits).toHaveLength(1);
+            expect(submits[0]).toMatchObject({ sessionId: 'asst', origin: 'assistant', policy: { mode: 'queue' } });
+            expect(submits[0].input.textFallback).toBe(REVIEW_INPUT_TEXT);
+            expect(log.sources('asst').at(-1)).toBe('review');
+            expect(registry.read()!.reviewAts).toHaveLength(1);
+            expect(metrics.rows().find((r) => r.meshId === '')?.review_turns).toBe(1);
+            vi.advanceTimersByTime(30 * 60_000);
+            await runtime.relay.idle();
+            expect(submits).toHaveLength(1); // review turn still open → in flight, no second review
+        } finally {
+            vi.useRealTimers();
+        }
     });
 });
 

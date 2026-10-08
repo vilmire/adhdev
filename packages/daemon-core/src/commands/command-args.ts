@@ -198,6 +198,27 @@ export function readOutboundOrigin(args: unknown, fallback: OutboundMessageOrigi
     return isOutboundMessageOrigin(raw) ? raw : fallback
 }
 
+// ─── Router-stamped command source ─────────────────────────────────────────
+
+/**
+ * The router's trusted record of where a command entered (`CommandSource`),
+ * for handlers that must tell a person at a dashboard from automation
+ * (assistant input attribution, assistant/assistant-human-input.ts). ONE
+ * writer: `DaemonCommandRouter.execute` deletes any caller-supplied value and
+ * stamps it for the commands in `COMMAND_SOURCE_STAMPED`. Never trust it
+ * from anywhere else.
+ */
+export const COMMAND_SOURCE_ARG = '_commandSource'
+
+/** Commands whose handler reads `COMMAND_SOURCE_ARG`. */
+export const COMMAND_SOURCE_STAMPED: ReadonlySet<string> = new Set(['send_chat'])
+
+/** The router-stamped source, or undefined (absent → not human, fail-closed). */
+export function readCommandSource(args: unknown): string | undefined {
+    const raw = (args as Record<string, unknown> | null | undefined)?.[COMMAND_SOURCE_ARG]
+    return typeof raw === 'string' && raw ? raw : undefined
+}
+
 // ─── Refine dry-run/execute precedence ──────────────────────────────────────
 
 /**

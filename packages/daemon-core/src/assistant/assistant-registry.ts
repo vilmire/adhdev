@@ -74,6 +74,13 @@ export interface AssistantRegistryEntry {
     reviewTurn: boolean;
     lastTurnState: AssistantTurnState | null;
     memoryBudget?: Partial<MemoryBudgets>;
+    /**
+     * Epoch ms of idle review inputs delivered in the last 24 h (§4.10.7 "2 h
+     * since the last review", "4 per day"). History, not a setting: kept here
+     * so a daemon restart cannot re-fire a review the previous process already
+     * delivered. Absent when empty.
+     */
+    reviewAts?: number[];
 }
 
 export interface BindAssistantSessionInput {
@@ -109,6 +116,15 @@ function normalizeTurnState(raw: unknown): AssistantTurnState | null {
     return { state: r.state, at: r.at, sessionId: r.sessionId };
 }
 
+/** Review timestamps kept: the last 24 h, at most this many. */
+export const ASSISTANT_REVIEW_HISTORY_MS = 24 * 60 * 60 * 1000;
+const REVIEW_HISTORY_MAX = 16;
+
+function normalizeReviewAts(raw: unknown): number[] {
+    if (!Array.isArray(raw)) return [];
+    return raw.filter(isNum).sort((a, b) => a - b).slice(-REVIEW_HISTORY_MAX);
+}
+
 function normalizeBudget(raw: unknown): Partial<MemoryBudgets> | undefined {
     const r = raw as Partial<MemoryBudgets> | null;
     if (!r || typeof r !== 'object') return undefined;
@@ -125,6 +141,7 @@ export function normalizeAssistantRegistryEntry(raw: unknown): AssistantRegistry
     if (!isStr(r.cliType) || !isStr(r.workspace) || !isNum(r.createdAt)) return null;
     const mode = BUSY_INPUT_MODES.includes(r.busyInputMode as BusyInputMode) ? r.busyInputMode as BusyInputMode : DEFAULT_BUSY_INPUT_MODE;
     const budget = normalizeBudget(r.memoryBudget);
+    const reviewAts = normalizeReviewAts(r.reviewAts);
     return {
         sessionId: isStr(r.sessionId) ? r.sessionId : null,
         cliType: r.cliType,
@@ -137,6 +154,7 @@ export function normalizeAssistantRegistryEntry(raw: unknown): AssistantRegistry
         reviewTurn: r.reviewTurn !== false,
         lastTurnState: normalizeTurnState(r.lastTurnState),
         ...(budget ? { memoryBudget: budget } : {}),
+        ...(reviewAts.length ? { reviewAts } : {}),
     };
 }
 
@@ -172,7 +190,10 @@ export class AssistantRegistry {
 
     /** The entry, or null when the assistant was never launched. Corrupt → null (the file is kept aside on the next write). */
     read(): AssistantRegistryEntry | null {
-        if (this.cache !== undefined) return this.cache ? { ...this.cache, aliases: { ...this.cache.aliases } } : null;
+        if (this.cache !== undefined) {
+            if (!this.cache) return null;
+            return { ...this.cache, aliases: { ...this.cache.aliases }, ...(this.cache.reviewAts ? { reviewAts: [...this.cache.reviewAts] } : {}) };
+        }
         this.cache = this.load();
         return this.read();
     }
@@ -249,6 +270,14 @@ export class AssistantRegistry {
         const prev = this.read();
         if (!prev || prev.firstRelayAt !== null) return;
         this.write({ ...prev, firstRelayAt: at });
+    }
+
+    /** An idle review input reached the assistant (§4.10.7). Keeps the last 24 h. */
+    recordReview(at: number): void {
+        const prev = this.read();
+        if (!prev || !isNum(at)) return;
+        const reviewAts = normalizeReviewAts([...(prev.reviewAts ?? []), at].filter((t) => at - t < ASSISTANT_REVIEW_HISTORY_MS));
+        this.write({ ...prev, reviewAts });
     }
 
     /**

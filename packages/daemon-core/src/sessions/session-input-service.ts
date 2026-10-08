@@ -132,6 +132,11 @@ export interface SessionInputService {
      * that sends send-now / cancel by text only. Logged at DEBUG by the caller.
      */
     findParkedMessageIdByText(sessionId: string, text: string): Promise<string | undefined>;
+    /**
+     * Whether the driver FIFO still holds `messageId` for `sessionId` (read
+     * only). False once the drain wrote it (or it was withdrawn / never parked).
+     */
+    isParked(sessionId: string, messageId: string): Promise<boolean>;
 }
 
 // ─── The busy decision (D3) ──────────────────────────────────────────────────
@@ -531,6 +536,12 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
             try { target = await deps.resolveSession(sessionId); } catch { target = null; }
             // Oldest still-parked copy first — the one the drain would write next.
             return candidates.find((id) => target?.hasQueuedSend?.(id) === true) ?? candidates[candidates.length - 1];
+        },
+
+        async isParked(sessionId: string, messageId: string): Promise<boolean> {
+            let target: SessionInputTarget | null | undefined;
+            try { target = await deps.resolveSession(sessionId); } catch { target = null; }
+            return target?.hasQueuedSend?.(messageId) === true;
         },
     };
 }

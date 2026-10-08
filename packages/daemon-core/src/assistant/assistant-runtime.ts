@@ -35,6 +35,8 @@ import { projectSlugs } from './assistant-projects.js';
 import { compactTranscriptTail } from './project-views.js';
 import { AssistantCurator, startAssistantCuratorTimer } from './skills/skill-curator.js';
 import { liveAssistantQuotaPort, type AssistantQuotaPort } from './assistant-quota.js';
+import { AssistantReviewScheduler } from './assistant-review-scheduler.js';
+import { setAssistantHumanInputSink } from './assistant-human-input.js';
 
 export const ASSISTANT_RELAY_TICK_MS = 60_000;
 const METRICS_PRUNE_EVERY_MS = 60 * 60_000;
@@ -46,6 +48,8 @@ export interface AssistantRuntime {
     readonly relay: AssistantRelay;
     readonly store: AssistantRelayStore;
     readonly metrics: AssistantMetricsStore | null;
+    /** Idle review turn trigger (§4.10.7), evaluated on the relay tick. */
+    readonly review: AssistantReviewScheduler;
     isActive(): boolean;
     activate(reason: AssistantActivationReason): void;
     /** MCP-only pull: activates, then claims queued relays/signals. */
@@ -61,6 +65,22 @@ export interface AssistantRuntime {
 }
 
 type InstanceLike = { getState?: () => any; isModalParked?: () => boolean };
+
+/** Ready status class (the relay's delivery gate and the review's idle gate). */
+function instanceReady(inst: InstanceLike | null): boolean {
+    if (!inst) return false;
+    if (typeof inst.isModalParked === 'function' && inst.isModalParked()) return false;
+    const status = str(inst.getState?.()?.status).toLowerCase();
+    return (SESSION_STATUS_CLASS as Record<string, string>)[status] === 'ready';
+}
+
+function instanceModalOpen(inst: InstanceLike | null): boolean {
+    if (!inst) return false;
+    if (typeof inst.isModalParked === 'function' && inst.isModalParked()) return true;
+    const state = inst.getState?.();
+    const status = str(state?.status).toLowerCase();
+    return (SESSION_STATUS_CLASS as Record<string, string>)[status] === 'blocked' || !!state?.activeChat?.activeModal;
+}
 
 function str(v: unknown): string {
     return typeof v === 'string' ? v.trim() : '';
@@ -103,7 +123,10 @@ function instanceOf(components: Pick<DaemonComponents, 'instanceManager'>, sessi
 
 export function buildAssistantRelayPorts(
     components: Pick<DaemonComponents, 'instanceManager' | 'router' | 'cliManager' | 'bus'>,
-    deps: { registry: AssistantRegistry; store: AssistantRelayStore; metrics: AssistantMetricsStore | null; sawCaller: () => boolean },
+    deps: {
+        registry: AssistantRegistry; store: AssistantRelayStore; metrics: AssistantMetricsStore | null; sawCaller: () => boolean;
+        onReviewDelivered?: (sessionId: string, messageId: string, at: number) => void;
+    },
 ): AssistantRelayPorts {
     const { registry, store, metrics } = deps;
     const svc = getAssistantServices();
@@ -129,13 +152,8 @@ export function buildAssistantRelayPorts(
         },
         hasAssistant: () => registry.read() !== null || deps.sawCaller(),
         assistantSessionId: () => registry.read()?.sessionId ?? null,
-        isAssistantReady: (sessionId) => {
-            const inst = instanceOf(components, sessionId);
-            if (!inst) return false;
-            if (typeof inst.isModalParked === 'function' && inst.isModalParked()) return false;
-            const status = str(inst.getState?.()?.status).toLowerCase();
-            return (SESSION_STATUS_CLASS as Record<string, string>)[status] === 'ready';
-        },
+        isAssistantReady: (sessionId) => instanceReady(instanceOf(components, sessionId)),
+        isParked: (sessionId, messageId) => components.cliManager.input.isParked(sessionId, messageId),
         submit: (sessionId, input) => components.cliManager.input.submit({
             messageId: input.messageId,
             sessionId,
@@ -150,6 +168,7 @@ export function buildAssistantRelayPorts(
             registry.markFirstRelay(at);
             for (const m of meshIds) metrics?.bump('relays', m, at);
         },
+        ...(deps.onReviewDelivered ? { onReviewDelivered: deps.onReviewDelivered } : {}),
     };
 }
 
@@ -166,7 +185,41 @@ export function wireAssistantRuntime(
     const opened = opts.store ? { store: opts.store, metrics: opts.metrics ?? null } : openStores();
     const { store, metrics } = opened;
     let sawCaller = false;
-    const relay = new AssistantRelay(buildAssistantRelayPorts(components, { registry, store, metrics, sawCaller: () => sawCaller }));
+    let review: AssistantReviewScheduler | null = null;
+    const relay = new AssistantRelay(buildAssistantRelayPorts(components, {
+        registry, store, metrics, sawCaller: () => sawCaller,
+        onReviewDelivered: (sid, messageId, at) => review?.onDelivered(sid, messageId, at),
+    }));
+    const quota = opts.quota ?? liveAssistantQuotaPort;
+    const liveSessionId = (): string | null => {
+        const sid = registry.read()?.sessionId ?? null;
+        return sid && instanceOf(components, sid) ? sid : null;
+    };
+    const reviewQuotaRemainingPct = (now: number): number | null => {
+        const cliType = registry.read()?.cliType;
+        return cliType ? quota.remainingPct(cliType, now) : null;
+    };
+    review = new AssistantReviewScheduler({
+        liveSessionId,
+        isReady: (sid) => instanceReady(instanceOf(components, sid)),
+        modalOpen: (sid) => instanceModalOpen(instanceOf(components, sid)),
+        idleSince: (sid) => {
+            const t = registry.read()?.lastTurnState;
+            return t && t.sessionId === sid && t.state === 'idle' ? t.at : null;
+        },
+        reviewTurnSetting: () => registry.read()?.reviewTurn ?? null,
+        reviewAts: () => registry.read()?.reviewAts ?? [],
+        quotaRemainingPct: reviewQuotaRemainingPct,
+        inputLog: getAssistantServices().inputLog,
+        relayBusy: () => relay.hasPendingInput(),
+        isQueued: (messageId) => relay.isQueued(messageId),
+        enqueue: (input) => relay.enqueueInput(input),
+        recordDelivered: (at) => {
+            registry.recordReview(at);
+            metrics?.bump('review_turns', '', at);
+        },
+    });
+    const reviewScheduler = review;
 
     let active = false;
     let disposed = false;
@@ -181,6 +234,8 @@ export function wireAssistantRuntime(
         try {
             const now = Date.now();
             relay.tick(now);
+            const r = reviewScheduler.evaluate(now);
+            if (r.fired) LOG.info('Assistant', `idle review turn queued (${r.messageId})`);
             if (metrics && now - lastMetricsPrune >= METRICS_PRUNE_EVERY_MS) {
                 lastMetricsPrune = now;
                 metrics.prune(now);
@@ -214,6 +269,9 @@ export function wireAssistantRuntime(
     const services = getAssistantServices();
     services.reviewMetrics = metrics ? { creditReviewWrite: (id, kind, at) => metrics.creditReviewWrite(id, kind, at) } : null;
 
+    // Dashboard chat into the assistant session → input log (human), at delivery.
+    setAssistantHumanInputSink((r) => relay.recordHumanSubmit(r.sessionIds, r.messageId, r.outcome));
+
     setAssistantRelayHooks({
         openThread: (meshId) => {
             activate('project_send');
@@ -230,6 +288,7 @@ export function wireAssistantRuntime(
         relay,
         store,
         metrics,
+        review: reviewScheduler,
         isActive: () => active,
         activate,
         async pull(callerSessionId) {
@@ -238,18 +297,15 @@ export function wireAssistantRuntime(
             const events = await relay.pullPending(callerSessionId);
             return events.map((e) => (e.meshId && slugs.get(e.meshId) ? { ...e, project: slugs.get(e.meshId) } : e));
         },
-        liveSessionId() {
-            const sid = registry.read()?.sessionId ?? null;
-            return sid && instanceOf(components, sid) ? sid : null;
-        },
+        liveSessionId,
         reviewQuotaRemainingPct(now = Date.now()) {
-            const cliType = registry.read()?.cliType;
-            return cliType ? (opts.quota ?? liveAssistantQuotaPort).remainingPct(cliType, now) : null;
+            return reviewQuotaRemainingPct(now);
         },
         dispose() {
             if (disposed) return;
             disposed = true;
             setAssistantRelayHooks(null);
+            setAssistantHumanInputSink(null);
             if (services.reviewMetrics && getAssistantServices() === services) services.reviewMetrics = null;
             for (const off of offs.reverse()) {
                 try { off(); } catch { /* noop */ }

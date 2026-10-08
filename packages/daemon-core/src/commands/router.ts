@@ -127,7 +127,7 @@ import {
 } from './router-aggregate-status.js';
 // ─── Remote mesh-session owner resolution (bodies extracted from this file) ───
 import { resolveRemoteMeshSessionOwnerDaemonId } from './router-mesh-session-owner.js';
-import { readMeshDirectDispatchFlag, withMeshDirectDispatch } from './command-args.js';
+import { COMMAND_SOURCE_ARG, COMMAND_SOURCE_STAMPED, readMeshDirectDispatchFlag, withMeshDirectDispatch } from './command-args.js';
 import { evaluateMeshSender, meshSenderRefusalResult, MESH_SENDER_DAEMON_ID_ARG, type MeshSenderGateDeps } from './mesh-sender.js';
 import { listMeshHostRecords, readMeshHostRecord, writeMeshHostRecord } from '../mesh/mesh-host-memory.js';
 import { unwrapMeshRelayResult } from './mesh-relay-result.js';
@@ -825,6 +825,9 @@ export class DaemonCommandRouter {
         // in-process mesh call, which has no remote sender).
         const meshRelayed = logSource === 'mesh' && opts?.inProcess !== true;
         if (!meshRelayed && MESH_SENDER_DAEMON_ID_ARG in normalizedArgs) delete normalizedArgs[MESH_SENDER_DAEMON_ID_ARG];
+        // The command source is the router's to state, never the caller's.
+        if (COMMAND_SOURCE_ARG in normalizedArgs) delete normalizedArgs[COMMAND_SOURCE_ARG];
+        if (COMMAND_SOURCE_STAMPED.has(cmd)) normalizedArgs[COMMAND_SOURCE_ARG] = logSource;
         if (spec?.session?.aliasSessionId) applySessionIdAlias(normalizedArgs);
         const interactionId = this.interactionContext.record(normalizedArgs);
 
