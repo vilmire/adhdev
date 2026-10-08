@@ -27732,13 +27732,16 @@ ${renderWorkerProtocolFooter2(input)}`;
     function stripRemovedCoordinatorPromptFields(coord) {
       if (!coord) return coord;
       const out = { ...coord };
+      const legacySuffix = typeof out.systemPromptSuffix === "string" ? out.systemPromptSuffix.trim() : "";
+      const append = typeof out.systemPromptAppend === "string" ? out.systemPromptAppend.trim() : "";
+      if (legacySuffix && !append) out.systemPromptAppend = legacySuffix;
       for (const key2 of REMOVED_COORDINATOR_PROMPT_KEYS) delete out[key2];
       return out;
     }
     function mergeEffectiveCoordinatorConfig(repoCoord, localCoord) {
       const out = stripRemovedCoordinatorPromptFields(localCoord) ?? {};
       const repoAppend = repoCoord?.systemPromptAppend?.trim() ? repoCoord.systemPromptAppend.trim() : "";
-      const localAppend = localCoord?.systemPromptAppend?.trim() ? localCoord.systemPromptAppend.trim() : "";
+      const localAppend = out.systemPromptAppend?.trim() ? out.systemPromptAppend.trim() : "";
       const stacked = [repoAppend, localAppend].filter(Boolean).join("\n\n");
       if (stacked) out.systemPromptAppend = stacked;
       return out;
