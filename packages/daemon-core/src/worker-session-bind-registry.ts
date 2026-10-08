@@ -336,24 +336,40 @@ export function revokeWorkerSessionBind(bind: string): boolean {
  * persisted binds whose session came back and is live here, prune the rest.
  * `liveSessionIds` is the session host's live-runtime list; the liveness probe
  * additionally requires the session to be registered on THIS daemon.
+ *
+ * ★A row whose session IS in the live-runtime list but is NOT registered here
+ * is KEPT (`deferred`), neither adopted nor pruned. That is a restore that
+ * failed for this daemon (live 2026-10-08, Jupiter: `ghostty-vt binding
+ * unavailable` on the 1.0.77 → 1.0.78-rc.1 upgrade) while the worker process
+ * kept running in the session host. Pruning it there made the worker's
+ * spawn-time bind permanently unknown: a later restore re-registered the
+ * session, and every `report_completion` was refused
+ * `bind_unknown_after_restart`. A kept row is still honoured only once its
+ * session is live here (`workerSessionBindStatus` re-checks), so this never
+ * accepts a bind for a session this daemon does not run; the row goes away on
+ * a later boot whose live list no longer has the session, on a re-mint, or
+ * when the re-registered session terminates.
  */
-export function reconcileWorkerSessionBindsAfterRestore(liveSessionIds: ReadonlySet<string>): { rehydrated: number; pruned: number } {
-    if (!persistence) return { rehydrated: 0, pruned: 0 };
+export function reconcileWorkerSessionBindsAfterRestore(liveSessionIds: ReadonlySet<string>): { rehydrated: number; pruned: number; deferred: number } {
+    if (!persistence) return { rehydrated: 0, pruned: 0, deferred: 0 };
     let rows: PersistedWorkerSessionBind[] = [];
-    try { rows = persistence.list(); } catch { return { rehydrated: 0, pruned: 0 }; }
+    try { rows = persistence.list(); } catch { return { rehydrated: 0, pruned: 0, deferred: 0 }; }
     let rehydrated = 0;
     let pruned = 0;
+    let deferred = 0;
     for (const row of rows) {
         if (LIVE_BINDS.has(row.bindHash)) continue;
-        if (liveSessionIds.has(row.sessionId) && sessionLiveHere(row.sessionId)) {
+        if (!liveSessionIds.has(row.sessionId)) {
+            persistBestEffort((port) => port.delete(row.bindHash));
+            pruned += 1;
+        } else if (sessionLiveHere(row.sessionId)) {
             adoptPersisted(row);
             rehydrated += 1;
         } else {
-            persistBestEffort((port) => port.delete(row.bindHash));
-            pruned += 1;
+            deferred += 1;
         }
     }
-    return { rehydrated, pruned };
+    return { rehydrated, pruned, deferred };
 }
 
 /**

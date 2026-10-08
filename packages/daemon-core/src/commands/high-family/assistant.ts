@@ -45,7 +45,7 @@ import { composeProjectMessage } from '../../assistant/project-message.js';
 import {
     PROJECT_READ_DEFAULT_TAIL, PROJECT_READ_MAX_TAIL,
     compactProjectStatus, compactTranscriptTail, coordinatorState, isUnmanagedRepoIdentity, machinesSummary,
-    type ProjectRow,
+    type ProjectRow, type RemoteHostMachine,
 } from '../../assistant/project-views.js';
 import { defaultDiscoverRoots, discoverRepos, explicitDiscoverRoots } from '../../assistant/discover-repos.js';
 import { normalizeRepoIdentity } from '../../config/mesh-config-store.js';
@@ -134,11 +134,12 @@ export function coordinatorPorts(ports: AssistantProjectPorts): EnsureCoordinato
 
 // ── projects / project_status ──────────────────────────────────────────────
 
-function projectRow(ports: AssistantProjectPorts, mesh: LocalMeshEntry, slug: string): ProjectRow {
+function projectRow(ports: AssistantProjectPorts, mesh: LocalMeshEntry, slug: string, remoteHosts?: RemoteHostMachine[]): ProjectRow {
     const base = { slug, meshId: mesh.id, name: mesh.name, repo: mesh.repoIdentity };
     if (!ports.isHostedHere(mesh)) {
         // Remote: listing stays local and cheap (no call per project); project_status asks the host.
         const remote = ports.remoteHost(mesh);
+        remoteHosts?.push({ daemonId: remote.hostDaemonId, label: remote.label });
         return {
             ...base,
             hosting: 'remote',
@@ -169,13 +170,14 @@ const projects = assistantVerb(ASSISTANT_VERB.projects, async (ports) => {
     const slugs = projectSlugs(meshes);
     const managed: ProjectRow[] = [];
     const unmanaged: ProjectRow[] = [];
+    const remoteHosts: RemoteHostMachine[] = [];
     for (const mesh of meshes) {
-        const row = projectRow(ports, mesh, slugs.get(mesh.id) ?? mesh.id);
+        const row = projectRow(ports, mesh, slugs.get(mesh.id) ?? mesh.id, remoteHosts);
         // A remote mesh whose host has not told us its repo yet is still a project.
         const scratch = row.hosting === 'remote' && !str(mesh.repoIdentity) ? false : isUnmanagedRepoIdentity(mesh.repoIdentity);
         (scratch ? unmanaged : managed).push(row);
     }
-    return { success: true, projects: managed, unmanaged, machines: machinesSummary(meshes, ports.selfDaemonId()) };
+    return { success: true, projects: managed, unmanaged, machines: machinesSummary(meshes, ports.selfDaemonId(), undefined, remoteHosts) };
 });
 
 /** project_status body for a mesh hosted HERE (also the host side of a remote status). */

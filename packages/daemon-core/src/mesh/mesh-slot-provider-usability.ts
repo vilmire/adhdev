@@ -30,6 +30,7 @@ import type { DaemonComponents } from '../boot/daemon-components.js';
 import { detectCLI } from '../detection/cli-detector.js';
 import { isLocalAutoLaunchNode } from './mesh-candidacy-predicates.js';
 import { cloneSourceNodeFor } from './mesh-quota-sources.js';
+import { setLocalNodeProviderFallback } from './mesh-node-slots.js';
 
 function reportedProviderEnabled(node: any, providerType: string): boolean | undefined {
     const enabled = node?.nodeFacts?.providerEnablement?.[providerType]?.enabled;
@@ -72,4 +73,26 @@ export async function slotProviderUnusableReason(
     }
     (components as any).onStatusChange?.();
     return detected ? null : 'not detected';
+}
+
+/** This machine's enabled CLI provider types (the launch-scoped detection list). */
+function localEnabledCliProviders(providerLoader: any): string[] {
+    try {
+        const list = typeof providerLoader?.getCliDetectionList === 'function' ? providerLoader.getCliDetectionList() : [];
+        return Array.isArray(list) ? list.filter((e: any) => e && e.enabled !== false && typeof e.id === 'string').map((e: any) => e.id) : [];
+    } catch {
+        return [];
+    }
+}
+
+/**
+ * Boot (S7): a node hosted HERE with no providerPriority and no slots defaults to
+ * this machine's enabled CLI providers (`resolveNodeCapabilitySlots` step 3) —
+ * its record carries no facts bundle, and the live config is the authority for
+ * this machine anyway. Each defaulted provider still passes the per-slot
+ * enablement + detection check above. Returns the uninstaller.
+ */
+export function installLocalNodeProviderFallback(providerLoader: unknown): () => void {
+    setLocalNodeProviderFallback((node) => (isLocalAutoLaunchNode(node) ? localEnabledCliProviders(providerLoader) : []));
+    return () => setLocalNodeProviderFallback(null);
 }

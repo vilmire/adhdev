@@ -145,6 +145,33 @@ test('readiness: no providerPriority and no slots → still missing_provider_pri
   assert.equal(readiness.launchBlockedReason, 'missing_provider_priority');
 });
 
+// DEFAULT FROM NODE FACTS (2026-10-09): a node with no providerPriority and no
+// slots defaults to the providers it reports enabled — the same rule daemon-core
+// auto-launch applies (mesh-shared defaultProviderPriorityFromNodeFacts), so the
+// node is not launchReady on one surface and missing_provider_priority on another.
+const reportedFacts = {
+  schemaVersion: 1,
+  reportedAt: Date.now(),
+  providerEnablement: { kimi: { enabled: true, quotaEnabled: true }, 'codex-cli': { enabled: true, quotaEnabled: true }, 'cursor-cli': { enabled: false, quotaEnabled: true } },
+};
+
+test('readiness: no providerPriority/slots but reported enabled providers → launchReady with the default order', () => {
+  const node = { id: 'n', policy: {}, nodeFacts: reportedFacts } as any;
+  const readiness = getNodeLaunchReadiness(node);
+  assert.equal(readiness.launchReady, true);
+  assert.deepEqual(readiness.providerPriority, ['codex-cli', 'kimi']);
+});
+
+test('explicit type omitted, no providerPriority/slots → resolves from the node-reported default', async () => {
+  const { ctx, launchCalls, mesh } = makeCtx({});
+  (mesh.nodes[0] as any).nodeFacts = reportedFacts;
+  const result = JSON.parse(await meshLaunchSession(ctx, { node_id: 'node-mac' }));
+  assert.equal(result.success !== false, true, `launch should succeed: ${JSON.stringify(result)}`);
+  const launch = launchCalls.find(c => c.command === 'launch_cli');
+  assert.ok(launch, 'launch_cli was issued');
+  assert.equal(launch!.args.cliType, 'codex-cli');
+});
+
 test('explicit type requested but no slot → fail closed (no silent fallback)', async () => {
   const { ctx, launchCalls } = makeCtx({
     providerPriority: ['claude-cli'],

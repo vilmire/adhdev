@@ -111,7 +111,7 @@ describe('worker session bind — restart survival', () => {
 
     // Full restore: the session came back and is registered here.
     liveHere.add(sessionId)
-    expect(reconcileWorkerSessionBindsAfterRestore(new Set([sessionId]))).toEqual({ rehydrated: 1, pruned: 0 })
+    expect(reconcileWorkerSessionBindsAfterRestore(new Set([sessionId]))).toEqual({ rehydrated: 1, pruned: 0, deferred: 0 })
     // Before the worker's first call — the idle-edge detach gate reads this.
     expect(hasLiveWorkerSessionBind(sessionId)).toBe(true)
 
@@ -154,7 +154,7 @@ describe('worker session bind — restart survival', () => {
 
     simulateRestart()
     liveHere.add(back.sessionId)
-    expect(reconcileWorkerSessionBindsAfterRestore(new Set([back.sessionId]))).toEqual({ rehydrated: 1, pruned: 1 })
+    expect(reconcileWorkerSessionBindsAfterRestore(new Set([back.sessionId]))).toEqual({ rehydrated: 1, pruned: 1, deferred: 0 })
     expect(hasLiveWorkerSessionBind(gone.sessionId)).toBe(false)
     expect(bindRows().map((r) => r.session_id)).toEqual([back.sessionId])
 
@@ -165,6 +165,41 @@ describe('worker session bind — restart survival', () => {
     expect(drain).toMatchObject({ success: false, error: 'bind_unknown_after_restart' })
     const progress: any = await workerReportHandlers.worker_progress_update(ctx, { bind: goneBind, note: 'still here?' })
     expect(progress).toMatchObject({ success: false, error: 'bind_unknown_after_restart' })
+  })
+
+  it('a session still hosted but whose restore failed keeps its persisted bind (no prune), and reports once it is re-registered', async () => {
+    // Live 2026-10-08 (Jupiter, 1.0.77-rc.1 → 1.0.78-rc.1): the boot restore of a
+    // hosted claude worker threw (ghostty-vt binding unavailable) while the worker
+    // kept running in the session host. The reconcile saw the session in the live
+    // runtime list but not registered here and PRUNED its row; when a later restore
+    // re-registered the session, every report was refused bind_unknown_after_restart.
+    const { meshId, sessionId, nodeId } = fresh()
+    const taskId = `${meshId}_task`
+    seedLiveTask(meshId, sessionId, nodeId, taskId)
+    const bind = mintWorkerSessionBind({ meshId, sessionId, nodeId }).bind
+
+    simulateRestart()
+    // Hosted runtime is alive (in the list) but this daemon failed to register it.
+    expect(reconcileWorkerSessionBindsAfterRestore(new Set([sessionId]))).toEqual({ rehydrated: 0, pruned: 0, deferred: 1 })
+    expect(bindRows().map((r) => r.session_id)).toEqual([sessionId])
+    expect(hasLiveWorkerSessionBind(sessionId)).toBe(false)
+
+    // A later restore registers it; the worker's spawn-time bind is honoured again.
+    liveHere.add(sessionId)
+    const report: any = await workerReportHandlers.worker_report_completion(ctx, { bind, report: REPORT })
+    expect(report).toMatchObject({ success: true, taskId })
+  })
+
+  it('the bind_unknown_after_restart hint tells the worker to have its session relaunched', async () => {
+    const { meshId, sessionId, nodeId } = fresh()
+    seedLiveTask(meshId, sessionId, nodeId, `${meshId}_task`)
+    const bind = mintWorkerSessionBind({ meshId, sessionId, nodeId }).bind
+    simulateRestart()
+    MeshRuntimeStore.getInstance().db.prepare('DELETE FROM worker_session_binds').run()
+    const report: any = await workerReportHandlers.worker_report_completion(ctx, { bind, report: REPORT })
+    expect(report).toMatchObject({ success: false, error: 'bind_unknown_after_restart' })
+    expect(String(report.hint)).toMatch(/relaunch/i)
+    expect(String(report.detail)).toMatch(/relaunch/i)
   })
 
   it('a bind revoked in this incarnation stays plain unauthenticated, not "unknown after restart"', async () => {

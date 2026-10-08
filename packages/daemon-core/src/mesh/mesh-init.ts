@@ -48,6 +48,7 @@ import {
     type ChangeImpactConfig,
 } from '../git/change-impact-config.js';
 import type { CLIInfo } from '../detection/cli-detector.js';
+import { BUILTIN_PROVIDER_PREFERENCE } from '@adhdev/mesh-shared';
 
 /** Canonical write targets — the first/preferred location for each config family. */
 export const MESH_INIT_REFINE_CONFIG_PATH = MESH_REFINE_CONFIG_LOCATIONS[0];
@@ -142,7 +143,9 @@ export function suggestMeshWorktreeBootstrapConfig(
  * Ordering preference (most → least preferred) when installed:
  *   claude-cli → codex-cli → gemini-cli → everything else (stable input order).
  */
-const PROVIDER_PRIORITY_PREFERENCE = ['claude-cli', 'codex-cli', 'gemini-cli'];
+// Shared with the runtime default order (mesh-node-slots.ts) so a suggestion and
+// the order a node without providerPriority defaults to start the same way.
+const PROVIDER_PRIORITY_PREFERENCE: readonly string[] = BUILTIN_PROVIDER_PREFERENCE;
 
 export function suggestNodeProviderPriority(detected: CLIInfo[]): {
     providerPriority: string[];

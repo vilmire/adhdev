@@ -237,7 +237,7 @@ export function classifyUnresolvedWorkerCredential(credential: { token?: unknown
         case 'unknown':
             return {
                 refusal: 'bind_unknown_after_restart',
-                detail: 'this daemon has no record of the worker session bind (not live, not persisted) — it was most likely minted before a daemon restart that did not carry it over',
+                detail: 'this daemon has no record of the worker session bind (not live, not persisted) — it was minted before a daemon restart that did not carry it over; the running worker cannot learn a new bind, so relaunch this worker session (stop it and launch a fresh worker)',
                 bindRef,
             };
         case 'session_not_live':

@@ -10,8 +10,10 @@
  * avoid an import cycle between the status builder and the assignment engine.
  */
 import {
+    defaultProviderPriorityFromNodeFacts,
     deriveSlotsFromLegacy,
     normalizeNodeCapabilitySlots,
+    orderProvidersByBuiltinPreference,
     type NodeCapabilitySlot,
 } from '@adhdev/mesh-shared';
 import { getDifficultyBrains } from '../config/mesh-config-routing.js';
@@ -34,6 +36,39 @@ export function normalizeProviderPriority(policy: unknown): string[] {
 }
 
 /**
+ * The provider order a node with NO providerPriority and NO slots defaults to,
+ * from what the node itself reports (mesh-shared `defaultProviderPriorityFromNodeFacts`
+ * — enabled providers, narrowed to detected ones, in the built-in order).
+ *
+ * There is no mesh-level default priority field in RepoMeshPolicy (checked
+ * 2026-10-09; `allowedProviders` is an unenforced allow-list, not an order), so
+ * the built-in order is the only ordering source. The dashboards' add-node
+ * default (web-core `defaultProviderPriorityFromInventory`) applies the same
+ * "what this machine has enabled + detected" rule, stamped at add time; this
+ * covers nodes added by any other path (MCP, pairing, member join).
+ */
+export function defaultProviderPriorityForNode(node: any): string[] {
+    return defaultProviderPriorityFromNodeFacts(node?.nodeFacts);
+}
+
+/**
+ * "Which CLI providers are enabled on THIS machine, if `node` is hosted here?"
+ * Installed at boot (`installLocalNodeProviderFallback`, mesh-slot-provider-usability.ts)
+ * — the local-node test lives in mesh-candidacy-predicates, which imports this
+ * module, so it is injected rather than imported. Returns [] for a remote node.
+ */
+let localNodeProviderFallback: ((node: any) => readonly string[]) | null = null;
+
+export function setLocalNodeProviderFallback(fn: ((node: any) => readonly string[]) | null): void {
+    localNodeProviderFallback = fn;
+}
+
+function localNodeDefaultProviders(node: any): string[] {
+    if (!localNodeProviderFallback) return [];
+    try { return orderProvidersByBuiltinPreference(localNodeProviderFallback(node) ?? []); } catch { return []; }
+}
+
+/**
  * Resolve a node's capability slots — coordinator-owned config is the single source
  * of truth for ALL nodes (REMOTE-NODE-SLOTS-COORDINATOR-LOCAL fix).
  *
@@ -46,6 +81,10 @@ export function normalizeProviderPriority(policy: unknown): string[] {
  * Precedence:
  *   1. `policy.slots` — coordinator-owned, authoritative for self and remote alike.
  *   2. Legacy-derived from `providerPriority` + the OWNING MESH's difficultyBrains.
+ *   3. With no providerPriority: the same derivation over a default order — this
+ *      machine's enabled CLI providers for a node it hosts (the installed
+ *      `setLocalNodeProviderFallback` port), else the providers the node reports
+ *      enabled (`defaultProviderPriorityForNode`).
  *
  * (The former per-provider `providerRoles` cap has been removed; a persisted
  * meshes.json is migrated to slots on load, so by the time a node reaches routing
@@ -54,6 +93,16 @@ export function normalizeProviderPriority(policy: unknown): string[] {
 export function resolveNodeCapabilitySlots(node: any, meshId?: string): NodeCapabilitySlot[] {
     const explicit = normalizeNodeCapabilitySlots(node?.policy?.slots);
     if (explicit.length) return explicit;
+    // 2. explicit providerPriority; 3. with none, a DEFAULT order — this machine's
+    // live enabled CLI providers for a node it hosts (its record carries no facts
+    // bundle), else the node's own reported enabled providers. The default feeds
+    // the same legacy derivation, so difficulty presets fold in exactly as for an
+    // explicit order, and every consumer (claim, launch, caps, route preview,
+    // coordinator prompt) sees the same slots.
+    let providerPriority = normalizeProviderPriority(node?.policy);
+    if (!providerPriority.length) providerPriority = localNodeDefaultProviders(node);
+    if (!providerPriority.length) providerPriority = defaultProviderPriorityForNode(node);
+    if (!providerPriority.length) return [];
     // Legacy derivation folds the difficulty presets into the derived slots' models,
     // so those presets must come from the mesh that OWNS this node — otherwise the
     // derived slot declares a model a different mesh chose, and the slot-model guard
@@ -61,8 +110,5 @@ export function resolveNodeCapabilitySlots(node: any, meshId?: string): NodeCapa
     // it resolves to the sole mesh, which is what every pre-scope caller assumed.
     let difficultyBrains: any;
     try { difficultyBrains = getDifficultyBrains(meshId); } catch { difficultyBrains = undefined; }
-    return deriveSlotsFromLegacy({
-        providerPriority: normalizeProviderPriority(node?.policy),
-        difficultyBrains,
-    });
+    return deriveSlotsFromLegacy({ providerPriority, difficultyBrains });
 }

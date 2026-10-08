@@ -23298,6 +23298,7 @@ var require_dist3 = __commonJS({
       ASSISTANT_TOOL_VERBS: () => ASSISTANT_TOOL_VERBS2,
       ASSISTANT_VERB: () => ASSISTANT_VERB2,
       ASSISTANT_WRITE_TOOLS: () => ASSISTANT_WRITE_TOOLS,
+      BUILTIN_PROVIDER_PREFERENCE: () => BUILTIN_PROVIDER_PREFERENCE2,
       CANCEL_REASONS: () => CANCEL_REASONS2,
       CANONICAL_MESH_TOOL_COUNT: () => CANONICAL_MESH_TOOL_COUNT2,
       CANONICAL_MESH_TOOL_NAMES: () => CANONICAL_MESH_TOOL_NAMES2,
@@ -23479,6 +23480,7 @@ var require_dist3 = __commonJS({
       decodeTypeField: () => decodeTypeField,
       decodeUserSessionToDashboard: () => decodeUserSessionToDashboard,
       decodeViewerToSharedSession: () => decodeViewerToSharedSession,
+      defaultProviderPriorityFromNodeFacts: () => defaultProviderPriorityFromNodeFacts2,
       deriveProviderPriorityFromSlots: () => deriveProviderPriorityFromSlots2,
       deriveSlotsFromLegacy: () => deriveSlotsFromLegacy,
       describeModelSelection: () => describeModelSelection,
@@ -23585,6 +23587,7 @@ var require_dist3 = __commonJS({
       normalizeOwnedPaths: () => normalizeOwnedPaths,
       normalizeSessionStatus: () => normalizeSessionStatus,
       normalizeThinkingLevel: () => normalizeThinkingLevel,
+      orderProvidersByBuiltinPreference: () => orderProvidersByBuiltinPreference2,
       parseJsonRecord: () => parseJsonRecord,
       parseSemver: () => parseSemver,
       parseSessionLaunchRecord: () => parseSessionLaunchRecord,
@@ -23880,6 +23883,26 @@ var require_dist3 = __commonJS({
       const plan = typeof meta?.planType === "string" ? meta.planType.trim() : "";
       const parts = [email, plan].filter(Boolean);
       return parts.length > 0 ? parts.join(" \xB7 ") : null;
+    }
+    function orderProvidersByBuiltinPreference2(types2) {
+      const unique = [...new Set(types2.map((t) => typeof t === "string" ? t.trim() : "").filter(Boolean))];
+      const rank = (t) => {
+        const i = BUILTIN_PROVIDER_PREFERENCE2.indexOf(t);
+        return i < 0 ? BUILTIN_PROVIDER_PREFERENCE2.length : i;
+      };
+      return unique.sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+    }
+    function defaultProviderPriorityFromNodeFacts2(facts) {
+      const f = facts && typeof facts === "object" && !Array.isArray(facts) ? facts : null;
+      const enablement = f?.providerEnablement;
+      if (!enablement || typeof enablement !== "object" || Array.isArray(enablement)) return [];
+      const enabled = Object.entries(enablement).filter(([, v]) => !!v && typeof v === "object" && v.enabled === true).map(([type2]) => type2);
+      const versions = f?.providerVersions;
+      const detected = versions && typeof versions === "object" && !Array.isArray(versions) ? enabled.filter((type2) => {
+        const v = versions[type2];
+        return typeof v === "string" && !!v.trim();
+      }) : [];
+      return orderProvidersByBuiltinPreference2(detected.length ? detected : enabled);
     }
     function normalizeMeshWorkspaceForCompare(dir) {
       if (typeof dir !== "string") return "";
@@ -25975,6 +25998,7 @@ ${renderWorkerProtocolFooter2(input)}`;
       return out;
     }
     var QUOTA_SUPPORTED_PROVIDERS;
+    var BUILTIN_PROVIDER_PREFERENCE2;
     var DAEMON_ID_PREFIXES;
     var MESH_TASK_DIFFICULTIES2;
     var DEFAULT_DIFFICULTY_BRAINS;
@@ -26175,6 +26199,7 @@ ${renderWorkerProtocolFooter2(input)}`;
           "kimi",
           "opencode"
         ];
+        BUILTIN_PROVIDER_PREFERENCE2 = ["claude-cli", "codex-cli", "gemini-cli"];
         DAEMON_ID_PREFIXES = ["daemon_", "standalone_"];
         MESH_TASK_DIFFICULTIES2 = ["easy", "medium", "difficult", "freeform"];
         DEFAULT_DIFFICULTY_BRAINS = {};
@@ -35860,25 +35885,42 @@ ${error.message || ""}`;
         return true;
       });
     }
+    function defaultProviderPriorityForNode(node) {
+      return defaultProviderPriorityFromNodeFacts2(node?.nodeFacts);
+    }
+    function setLocalNodeProviderFallback(fn) {
+      localNodeProviderFallback = fn;
+    }
+    function localNodeDefaultProviders(node) {
+      if (!localNodeProviderFallback) return [];
+      try {
+        return orderProvidersByBuiltinPreference2(localNodeProviderFallback(node) ?? []);
+      } catch {
+        return [];
+      }
+    }
     function resolveNodeCapabilitySlots(node, meshId) {
       const explicit = normalizeNodeCapabilitySlots2(node?.policy?.slots);
       if (explicit.length) return explicit;
+      let providerPriority = normalizeProviderPriority(node?.policy);
+      if (!providerPriority.length) providerPriority = localNodeDefaultProviders(node);
+      if (!providerPriority.length) providerPriority = defaultProviderPriorityForNode(node);
+      if (!providerPriority.length) return [];
       let difficultyBrains;
       try {
         difficultyBrains = getDifficultyBrains(meshId);
       } catch {
         difficultyBrains = void 0;
       }
-      return deriveSlotsFromLegacy({
-        providerPriority: normalizeProviderPriority(node?.policy),
-        difficultyBrains
-      });
+      return deriveSlotsFromLegacy({ providerPriority, difficultyBrains });
     }
+    var localNodeProviderFallback;
     var init_mesh_node_slots = __esm2({
       "src/mesh/mesh-node-slots.ts"() {
         "use strict";
         init_dist();
         init_mesh_config_routing();
+        localNodeProviderFallback = null;
       }
     });
     var DEFAULT_COORDINATOR_RULES;
@@ -39677,26 +39719,29 @@ ${error.message || ""}`;
       return revokeByHash(hashWorkerSessionBind(bind.trim()));
     }
     function reconcileWorkerSessionBindsAfterRestore(liveSessionIds) {
-      if (!persistence) return { rehydrated: 0, pruned: 0 };
+      if (!persistence) return { rehydrated: 0, pruned: 0, deferred: 0 };
       let rows = [];
       try {
         rows = persistence.list();
       } catch {
-        return { rehydrated: 0, pruned: 0 };
+        return { rehydrated: 0, pruned: 0, deferred: 0 };
       }
       let rehydrated = 0;
       let pruned = 0;
+      let deferred = 0;
       for (const row of rows) {
         if (LIVE_BINDS.has(row.bindHash)) continue;
-        if (liveSessionIds.has(row.sessionId) && sessionLiveHere(row.sessionId)) {
+        if (!liveSessionIds.has(row.sessionId)) {
+          persistBestEffort((port) => port.delete(row.bindHash));
+          pruned += 1;
+        } else if (sessionLiveHere(row.sessionId)) {
           adoptPersisted(row);
           rehydrated += 1;
         } else {
-          persistBestEffort((port) => port.delete(row.bindHash));
-          pruned += 1;
+          deferred += 1;
         }
       }
-      return { rehydrated, pruned };
+      return { rehydrated, pruned, deferred };
     }
     function hasLiveWorkerSessionBind(sessionId) {
       const sid = String(sessionId || "").trim();
@@ -61612,6 +61657,7 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
         init_refine_config();
         init_worktree_bootstrap_config();
         init_change_impact_config();
+        init_dist();
         MESH_INIT_REFINE_CONFIG_PATH = MESH_REFINE_CONFIG_LOCATIONS[0];
         MESH_INIT_WORKTREE_BOOTSTRAP_CONFIG_PATH = MESH_WORKTREE_BOOTSTRAP_CONFIG_LOCATIONS[0];
         MESH_INIT_CHANGE_IMPACT_CONFIG_PATH = CHANGE_IMPACT_CONFIG_LOCATIONS[0];
@@ -61625,7 +61671,7 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
           "poetry.lock",
           "requirements.txt"
         ];
-        PROVIDER_PRIORITY_PREFERENCE = ["claude-cli", "codex-cli", "gemini-cli"];
+        PROVIDER_PRIORITY_PREFERENCE = BUILTIN_PROVIDER_PREFERENCE2;
       }
     });
     var mesh_onboarding_plan_exports = {};
@@ -63691,7 +63737,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
         case "unknown":
           return {
             refusal: "bind_unknown_after_restart",
-            detail: "this daemon has no record of the worker session bind (not live, not persisted) \u2014 it was most likely minted before a daemon restart that did not carry it over",
+            detail: "this daemon has no record of the worker session bind (not live, not persisted) \u2014 it was minted before a daemon restart that did not carry it over; the running worker cannot learn a new bind, so relaunch this worker session (stop it and launch a fresh worker)",
             bindRef
           };
         case "session_not_live":
@@ -71909,12 +71955,25 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       components.onStatusChange?.();
       return detected ? null : "not detected";
     }
+    function localEnabledCliProviders(providerLoader) {
+      try {
+        const list = typeof providerLoader?.getCliDetectionList === "function" ? providerLoader.getCliDetectionList() : [];
+        return Array.isArray(list) ? list.filter((e) => e && e.enabled !== false && typeof e.id === "string").map((e) => e.id) : [];
+      } catch {
+        return [];
+      }
+    }
+    function installLocalNodeProviderFallback(providerLoader) {
+      setLocalNodeProviderFallback((node) => isLocalAutoLaunchNode(node) ? localEnabledCliProviders(providerLoader) : []);
+      return () => setLocalNodeProviderFallback(null);
+    }
     var init_mesh_slot_provider_usability = __esm2({
       "src/mesh/mesh-slot-provider-usability.ts"() {
         "use strict";
         init_cli_detector();
         init_mesh_candidacy_predicates();
         init_mesh_quota_sources();
+        init_mesh_node_slots();
       }
     });
     function sweepExpiredCooldowns() {
@@ -88272,15 +88331,20 @@ ${body}`;
       if (views.some((v) => v.modalParked)) return "waiting";
       return views.some((v) => !v.idle) ? "working" : "idle";
     }
-    function machinesSummary(meshes, selfDaemonId, selfLabel) {
+    function machinesSummary(meshes, selfDaemonId, selfLabel, remoteHosts = []) {
       const selfKey = canonicalDaemonId2(selfDaemonId) ?? selfDaemonId;
       const facts = /* @__PURE__ */ new Map();
       if (selfKey) facts.set(selfKey, { daemonId: selfDaemonId || null, nick: selfLabel ?? "", os: process.platform, build: "", self: true });
+      const keyOf = (raw) => {
+        const self = !raw || !!selfDaemonId && daemonIdsEquivalent4(raw, selfDaemonId);
+        if (self) return { key: selfKey, self };
+        const existing = [...facts.keys()].find((k) => daemonIdsEquivalent4(k, raw));
+        return { key: existing ?? canonicalDaemonId2(raw) ?? raw, self };
+      };
       for (const mesh of meshes) {
         for (const node of mesh.nodes ?? []) {
           const raw = readText3(node.daemonId);
-          const self = !raw || !!selfDaemonId && daemonIdsEquivalent4(raw, selfDaemonId);
-          const key2 = self ? selfKey : canonicalDaemonId2(raw) ?? raw;
+          const { key: key2, self } = keyOf(raw);
           if (!key2) continue;
           const f = facts.get(key2) ?? { daemonId: raw || null, nick: "", os: "", build: "", self };
           f.nick ||= readText3(node.machineNickname);
@@ -88288,6 +88352,16 @@ ${body}`;
           f.build ||= readText3(node.reportedDaemonBuildVersion);
           facts.set(key2, f);
         }
+      }
+      for (const host of remoteHosts) {
+        const raw = readText3(host.daemonId);
+        if (!raw) continue;
+        const { key: key2, self } = keyOf(raw);
+        if (!key2 || self) continue;
+        const f = facts.get(key2) ?? { daemonId: raw, nick: "", os: "", build: "", self: false };
+        const label = readText3(host.label);
+        if (!f.nick && label && label !== "unknown host") f.nick = label;
+        facts.set(key2, f);
       }
       return [...facts.entries()].map(([key2, f]) => ({
         label: f.nick || (f.self ? "this machine" : `daemon ${shortId2(key2)}`),
@@ -88301,19 +88375,60 @@ ${body}`;
     function rec2(v) {
       return v && typeof v === "object" && !Array.isArray(v) ? v : null;
     }
+    function firstText(sources, pick) {
+      for (const x of sources) {
+        for (const v of pick(x)) {
+          const t = readText3(v);
+          if (t) return t;
+        }
+      }
+      return "";
+    }
+    function nodeMachineLabel(sources) {
+      const nick = firstText(sources, (x) => [x?.machineNickname, rec2(x?.nodeFacts)?.machineNickname]);
+      if (nick) return nick;
+      for (const x of sources) {
+        const machine = rec2(x?.machine);
+        const ids = new Set([readText3(machine?.daemonId), readText3(machine?.machineId), readText3(x?.daemonId), readText3(x?.machineId)].filter(Boolean));
+        for (const v of [machine?.displayName, machine?.machineName, x?.machineName]) {
+          const t = readText3(v);
+          if (t && !ids.has(t)) return t;
+        }
+      }
+      return "";
+    }
+    function osTag(x) {
+      for (const list of [x?.capabilities, x?.capabilityTags]) {
+        if (!Array.isArray(list)) continue;
+        for (const tag of list) {
+          const m = /^os=(.+)$/.exec(readText3(tag));
+          if (m && m[1].trim()) return m[1].trim();
+        }
+      }
+      return "";
+    }
+    function nodePlatform(sources) {
+      return firstText(sources, (x) => [x?.reportedPlatform, rec2(x?.nodeFacts)?.platform]) || firstText(sources, (x) => [osTag(x)]);
+    }
     function compactProjectStatus(view, extras) {
       const routes = rec2(view.routes) ?? {};
       const statusNodes = Array.isArray(rec2(view.status)?.nodes) ? rec2(view.status).nodes : [];
       const memberNodes = Array.isArray(rec2(rec2(view.membership)?.mesh)?.nodes) ? rec2(rec2(view.membership).mesh).nodes : [];
       const nodes = statusNodes.length > 0 ? statusNodes : memberNodes;
+      const memberById = /* @__PURE__ */ new Map();
+      for (const m of memberNodes) {
+        const id22 = readText3(m?.id) || readText3(m?.nodeId);
+        if (id22 && !memberById.has(id22)) memberById.set(id22, m);
+      }
       const machines = nodes.map((n) => {
         const id22 = readText3(n?.id) || readText3(n?.nodeId);
         const local = rec2(routes[id22])?.route === "local";
+        const sources = [n, memberById.get(id22)].filter(Boolean);
         return {
           node: id22,
-          label: readText3(n?.machineNickname) || null,
-          os: readText3(n?.reportedPlatform) || null,
-          build: readText3(n?.reportedDaemonBuildVersion) || null,
+          label: nodeMachineLabel(sources) || null,
+          os: nodePlatform(sources) || null,
+          build: firstText(sources, (x) => [x?.reportedDaemonBuildVersion, x?.daemonBuildVersion, rec2(rec2(x?.nodeFacts)?.daemonBuild)?.version]) || null,
           online: local || readText3(n?.machineStatus) === "online",
           ...readText3(n?.worktreeBranch) ? { branch: readText3(n.worktreeBranch) } : {}
         };
@@ -123560,7 +123675,7 @@ ${marker}`,
           success: false,
           error: result.refusal,
           ...result.detail ? { detail: result.detail } : {},
-          hint: result.refusal === "unauthenticated" ? "No live task is bound to this worker session \u2014 the task may already be terminal or reassigned." : result.refusal === "bind_unknown_after_restart" ? "This daemon does not recognise the worker session bind \u2014 it was issued before a daemon restart that did not carry it over. A retry will not help; put your result in your final message so the coordinator can read it." : result.refusal === "invalid_for_task_mode" ? "Fix the touchedFiles list to match the task mode and call again." : result.refusal === "storage_failed" ? "Nothing was recorded \u2014 call again." : result.refusal === "stale_report" ? "This report was written for an earlier task of this session and can no longer be filed against it; nothing was recorded." : "The completion was refused by the turn ledger; the task state is authoritative."
+          hint: result.refusal === "unauthenticated" ? "No live task is bound to this worker session \u2014 the task may already be terminal or reassigned." : result.refusal === "bind_unknown_after_restart" ? "This daemon does not recognise the worker session bind \u2014 it was issued before a daemon restart that did not carry it over. A retry will not help: put your result in your final message so the coordinator can read it, and say that this worker session must be relaunched (stopped and launched fresh) before it can report again." : result.refusal === "invalid_for_task_mode" ? "Fix the touchedFiles list to match the task mode and call again." : result.refusal === "storage_failed" ? "Nothing was recorded \u2014 call again." : result.refusal === "stale_report" ? "This report was written for an earlier task of this session and can no longer be filed against it; nothing was recorded." : "The completion was refused by the turn ledger; the task state is authoritative."
         };
       }
       return {
@@ -129769,10 +129884,11 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         }
       };
     }
-    function projectRow(ports, mesh, slug) {
+    function projectRow(ports, mesh, slug, remoteHosts) {
       const base = { slug, meshId: mesh.id, name: mesh.name, repo: mesh.repoIdentity };
       if (!ports.isHostedHere(mesh)) {
         const remote = ports.remoteHost(mesh);
+        remoteHosts?.push({ daemonId: remote.hostDaemonId, label: remote.label });
         return {
           ...base,
           hosting: "remote",
@@ -129802,12 +129918,13 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       const slugs = projectSlugs(meshes);
       const managed = [];
       const unmanaged = [];
+      const remoteHosts = [];
       for (const mesh of meshes) {
-        const row = projectRow(ports, mesh, slugs.get(mesh.id) ?? mesh.id);
+        const row = projectRow(ports, mesh, slugs.get(mesh.id) ?? mesh.id, remoteHosts);
         const scratch = row.hosting === "remote" && !str8(mesh.repoIdentity) ? false : isUnmanagedRepoIdentity(mesh.repoIdentity);
         (scratch ? unmanaged : managed).push(row);
       }
-      return { success: true, projects: managed, unmanaged, machines: machinesSummary(meshes, ports.selfDaemonId()) };
+      return { success: true, projects: managed, unmanaged, machines: machinesSummary(meshes, ports.selfDaemonId(), void 0, remoteHosts) };
     });
     async function localProjectStatus(ports, mesh) {
       const meshId = mesh.id;
@@ -148203,9 +148320,12 @@ Run 'adhdev doctor' for detailed diagnostics.`
       const live = new Set(restoredRuntimeIds);
       for (const r of sessions) if (r?.runtimeId) live.add(r.runtimeId);
       try {
-        const { rehydrated, pruned } = reconcileWorkerSessionBindsAfterRestore(live);
-        if (rehydrated || pruned) {
-          LOG.info("CLI", `\u267B Worker session binds after restore: ${rehydrated} re-adopted for restored session(s), ${pruned} pruned (session did not come back)`);
+        const { rehydrated, pruned, deferred } = reconcileWorkerSessionBindsAfterRestore(live);
+        if (rehydrated || pruned || deferred) {
+          LOG.info(
+            "CLI",
+            `\u267B Worker session binds after restore: ${rehydrated} re-adopted for restored session(s), ${pruned} pruned (session did not come back)` + (deferred ? `, ${deferred} kept for hosted session(s) whose restore did not register here` : "")
+          );
         }
       } catch (e) {
         LOG.warn("CLI", `worker session bind reconcile failed: ${e?.message || e}`);
@@ -160608,6 +160728,7 @@ ${notice.notice}${supersededHint}`;
     init_coordinator_registry();
     init_worker_mcp_isolation();
     init_worker_session_bind_store();
+    init_mesh_slot_provider_usability();
     init_mesh_event_forwarding();
     init_mesh_runtime_store();
     init_mesh_ledger_paths();
@@ -161016,6 +161137,7 @@ ${notice.notice}${supersededHint}`;
       const components = assembleDaemonComponents(s6);
       const { bus } = s6;
       const offBindPersistence = installWorkerSessionBindPersistence(components);
+      const offLocalProviderFallback = installLocalNodeProviderFallback(components.providerLoader);
       const offSubscribers = [
         subscribeMeshTermination(bus),
         subscribeMeshProviderSignals(bus),
@@ -161066,6 +161188,10 @@ ${notice.notice}${supersededHint}`;
         }
         try {
           offBindPersistence();
+        } catch {
+        }
+        try {
+          offLocalProviderFallback();
         } catch {
         }
       };
@@ -162849,6 +162975,27 @@ function readString(...values) {
     if (trimmed) return trimmed;
   }
   return void 0;
+}
+var BUILTIN_PROVIDER_PREFERENCE = ["claude-cli", "codex-cli", "gemini-cli"];
+function orderProvidersByBuiltinPreference(types2) {
+  const unique = [...new Set(types2.map((t) => typeof t === "string" ? t.trim() : "").filter(Boolean))];
+  const rank = (t) => {
+    const i = BUILTIN_PROVIDER_PREFERENCE.indexOf(t);
+    return i < 0 ? BUILTIN_PROVIDER_PREFERENCE.length : i;
+  };
+  return unique.sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+}
+function defaultProviderPriorityFromNodeFacts(facts) {
+  const f = facts && typeof facts === "object" && !Array.isArray(facts) ? facts : null;
+  const enablement = f?.providerEnablement;
+  if (!enablement || typeof enablement !== "object" || Array.isArray(enablement)) return [];
+  const enabled = Object.entries(enablement).filter(([, v]) => !!v && typeof v === "object" && v.enabled === true).map(([type2]) => type2);
+  const versions = f?.providerVersions;
+  const detected = versions && typeof versions === "object" && !Array.isArray(versions) ? enabled.filter((type2) => {
+    const v = versions[type2];
+    return typeof v === "string" && !!v.trim();
+  }) : [];
+  return orderProvidersByBuiltinPreference(detected.length ? detected : enabled);
 }
 function truncateDiffText(text, maxLines) {
   const lines = text.split("\n");
@@ -165543,6 +165690,10 @@ function readProviderPriority(policy) {
   const raw = policy?.providerPriority;
   return Array.isArray(raw) ? raw.map((type2) => typeof type2 === "string" ? type2.trim() : "").filter(Boolean) : [];
 }
+function readNodeProviderPriority(node) {
+  const fromPolicy = readProviderPriority(node?.policy);
+  return fromPolicy.length ? fromPolicy : defaultProviderPriorityFromNodeFacts(node?.nodeFacts);
+}
 function readNodeSupportedProviders(policy) {
   const seen = /* @__PURE__ */ new Set();
   const out = [];
@@ -165575,20 +165726,20 @@ function readSpawnedSessionVisibility(policy) {
   return policy?.spawnedSessionVisibility === "hidden" ? "hidden" : "visible";
 }
 function missingProviderPriorityMessage(nodeId) {
-  return `Node '${nodeId}' has no providerPriority policy; pass type explicitly or configure node.policy.providerPriority`;
+  return `Node '${nodeId}' has no providerPriority policy and reports no enabled provider; pass type explicitly or configure node.policy.providerPriority`;
 }
 function getNodeLaunchReadiness(node) {
   const bootstrap = node.worktreeBootstrap;
   if (node.isLocalWorktree && bootstrap?.status === "failed" && bootstrap?.required !== false) {
     return {
-      providerPriority: readProviderPriority(node.policy),
+      providerPriority: readNodeProviderPriority(node),
       launchReady: false,
       launchBlockedReason: "worktree_bootstrap_failed",
       launchBlockedMessage: typeof bootstrap.error === "string" && bootstrap.error.trim() ? bootstrap.error.trim() : "Required worktree bootstrap failed; resolve it before launching an agent into this node.",
       worktreeBootstrap: bootstrap
     };
   }
-  const providerPriority = readProviderPriority(node.policy);
+  const providerPriority = readNodeProviderPriority(node);
   if (providerPriority.length) {
     return {
       providerPriority,
@@ -171100,13 +171251,13 @@ function buildQuotaExhaustedDispatchFailure(node, providerType, sessionId, gate)
 function resolveRemoteDispatchProvider(node, args) {
   const providerPins = (0, import_daemon_core19.providerPinsFromRequiredTags)(args.requiredTags);
   const providerPriorityList = (0, import_daemon_core19.filterProvidersByRequiredTags)(
-    readProviderPriority(node.policy),
+    readNodeProviderPriority(node),
     args.requiredTags
   );
   const callerProviderType = args.providerType?.trim() || "";
   const callerProviderAllowed = !callerProviderType || providerPins.length === 0 || providerPins.includes(callerProviderType);
   if (providerPins.length && !callerProviderAllowed && !providerPriorityList.length) {
-    return buildProviderPinUnsatisfiableFailure(node, providerPins, readProviderPriority(node.policy));
+    return buildProviderPinUnsatisfiableFailure(node, providerPins, readNodeProviderPriority(node));
   }
   return {
     providerPins,
@@ -171224,7 +171375,7 @@ async function resolveRemoteDispatchTarget(ctx, node, args) {
     return { success: false, error: `Cannot dispatch to remote node '${node.id}': providerType unknown. Set providerPriority on the node policy or call mesh_launch_session first.` };
   }
   if (providerPins.length && !providerPins.includes(resolvedProviderType)) {
-    return buildProviderPinUnsatisfiableFailure(node, providerPins, readProviderPriority(node.policy), resolvedProviderType);
+    return buildProviderPinUnsatisfiableFailure(node, providerPins, readNodeProviderPriority(node), resolvedProviderType);
   }
   if (!args.allowQuotaExhausted) {
     const quotaGate = checkDirectDispatchQuotaGate(node, resolvedProviderType, ctx.mesh.policy?.quotaRouting ?? null);
@@ -172528,7 +172679,7 @@ function checkRequestedLaunchType(ctx, node, nodeId, requestedType) {
   };
 }
 async function detectLaunchProviderType(ctx, node, nodeId) {
-  const providerPriority = readProviderPriority(node.policy);
+  const providerPriority = readNodeProviderPriority(node);
   if (!providerPriority.length) {
     return JSON.stringify({ success: false, error: missingProviderPriorityMessage(nodeId) });
   }
