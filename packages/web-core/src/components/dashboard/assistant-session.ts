@@ -204,8 +204,9 @@ export function countHostedProjectsByMachine(
  * Every online machine with a launchable (enabled) CLI, each listing its CLIs:
  * eligible ones first (claude-cli leading), then the ineligible ones the picker
  * shows disabled with their reason. Machines are ordered by how many projects
- * they host (most first; ties keep the caller's order) — an assistant can only
- * route work to projects hosted on its own daemon (`project_hosted_elsewhere`).
+ * they host (most first; ties keep the caller's order) — an assistant drives
+ * projects hosted elsewhere by relay too, but its own daemon's projects need no
+ * hop, so the machine hosting the most is still the cheapest home.
  */
 export function listAssistantLaunchMachines(
     machines: ReadonlyArray<DaemonData>,

@@ -1,7 +1,8 @@
 /**
  * Assistant project verbs (commands/high-family/assistant.ts; design
  * 2026-10-07-assistant-layer.md §4.2–§4.4, §4.8) over fake ports: the
- * `{project, meshId, result}` wrapping, hosted-elsewhere refusal, the
+ * `{project, meshId, result}` wrapping, remote-hosted projects relayed to their
+ * host (owner decision 2026-10-08) or refused as `project_unreachable`, the
  * project_send path (ensure coordinator → compose → send_chat with origin
  * 'assistant' / queue policy / assistant: messageId), project_read compact
  * tail, project_add (exists check, daemonId stamp, rollback), discover_repos,
@@ -17,6 +18,7 @@ import { createAssistantServices, setAssistantServicesForTests } from '../../src
 import { setAssistantProjectPortsForTests, type AssistantProjectPorts } from '../../src/assistant/assistant-project-ports.js';
 import { ASSISTANT_COORDINATOR_EXTRA_PROMPT, type AssistantCoordinatorView } from '../../src/assistant/coordinator-lifecycle.js';
 import type { LocalMeshEntry } from '../../src/repo-mesh-types.js';
+import type { RemoteCallOutcome, RemoteHostView } from '../../src/assistant/assistant-remote-host.js';
 
 const SELF = 'daemon_mach_self';
 let dir: string;
@@ -25,7 +27,10 @@ let hosted: Set<string>;
 let live: Record<string, AssistantCoordinatorView[]>;
 let responses: Record<string, (args: any) => any>;
 let execute: ReturnType<typeof vi.fn>;
-let relay: { openThread: ReturnType<typeof vi.fn>; recordSkillAttaches: ReturnType<typeof vi.fn>; isThreadOpen: (m: string) => boolean; lastRelayAt: () => number };
+let relay: { openThread: ReturnType<typeof vi.fn>; recordSkillAttaches: ReturnType<typeof vi.fn>; remoteSent: ReturnType<typeof vi.fn>; isThreadOpen: (m: string) => boolean; lastRelayAt: () => number };
+let remoteHosts: Record<string, RemoteHostView>;
+let callHost: ReturnType<typeof vi.fn>;
+let hostAnswers: Record<string, (args: any) => RemoteCallOutcome>;
 
 const mesh = (id: string, name: string, repoIdentity: string, nodes: any[] = []): LocalMeshEntry => ({ id, name, repoIdentity, nodes } as unknown as LocalMeshEntry);
 const run = (verb: string, args: Record<string, unknown> = {}) => assistantProjectHandlers[verb]({} as any, args);
@@ -43,7 +48,14 @@ beforeEach(() => {
     live = {};
     responses = {};
     execute = vi.fn(async (cmd: string, args: any) => (responses[cmd] ? responses[cmd](args) : { success: true }));
-    relay = { openThread: vi.fn(), recordSkillAttaches: vi.fn(), isThreadOpen: (m) => m === 'mesh_a', lastRelayAt: () => Date.UTC(2026, 9, 7) };
+    relay = { openThread: vi.fn(), recordSkillAttaches: vi.fn(), remoteSent: vi.fn(), isThreadOpen: (m) => m === 'mesh_a', lastRelayAt: () => Date.UTC(2026, 9, 7) };
+    remoteHosts = {
+        mesh_b: { label: 'win-box', hostDaemonId: 'daemon_mach_other', hostMeshId: 'mesh_b_on_host', reachable: true },
+    };
+    hostAnswers = {};
+    callHost = vi.fn(async (_target: RemoteHostView, op: string, args: any) => (hostAnswers[op]
+        ? hostAnswers[op](args)
+        : { ok: false, kind: 'unreachable', code: 'project_unreachable', reason: 'relay_timeout', error: 'no answer' }));
     const ports: AssistantProjectPorts = {
         selfDaemonId: () => SELF,
         listMeshes: () => meshes,
@@ -57,6 +69,10 @@ beforeEach(() => {
         pendingApprovals: () => 0,
         relay,
         execute: execute as any,
+        remoteHost: (m) => remoteHosts[m.id] ?? { label: 'unknown host', hostDaemonId: null, hostMeshId: m.id, reachable: false, reason: 'host_unknown' },
+        callHost: callHost as any,
+        coordinatorTurns: (sessionId) => ({ open: false, committed: sessionId === 'human' ? [{ attemptId: 'plain:human:1', outcome: 'completed', at: 1 }] : [] }),
+        meshStatusLine: () => null,
     };
     setAssistantProjectPortsForTests(() => ports);
     const svc = createAssistantServices({ configDir: dir, listMeshes: () => meshes });
@@ -72,14 +88,15 @@ afterEach(() => {
 });
 
 describe('assistant_projects', () => {
-    it('one row per project, hosted-elsewhere read-only, unmanaged apart, plus machines', async () => {
+    it('one row per project with its host and reachability, unmanaged apart, plus machines — no host call', async () => {
         live.mesh_a = [{ sessionId: 'c1', idle: false, modalParked: false, managedByAssistant: true }];
         const r: any = await run(ASSISTANT_VERB.projects);
         expect(r.success).toBe(true);
         expect(r.projects).toEqual([
-            { slug: 'adhdev', meshId: 'mesh_a', name: 'ADHDev', repo: 'github.com/vilmire/adhdev', hosting: 'here', coordinator: 'working', threadOpen: true, queue: { pending: 2, assigned: 1, failed: 3 }, activeMissions: 1, pendingApprovals: 0 },
-            { slug: 'blog', meshId: 'mesh_b', name: 'Blog', repo: 'github.com/vilmire/blog', hosting: 'elsewhere', hostLabel: 'win-box' },
+            { slug: 'adhdev', meshId: 'mesh_a', name: 'ADHDev', repo: 'github.com/vilmire/adhdev', hosting: 'here', host: 'this machine', reachability: 'local', coordinator: 'working', threadOpen: true, queue: { pending: 2, assigned: 1, failed: 3 }, activeMissions: 1, pendingApprovals: 0 },
+            { slug: 'blog', meshId: 'mesh_b', name: 'Blog', repo: 'github.com/vilmire/blog', hosting: 'remote', host: 'win-box', hostLabel: 'win-box', reachability: 'relay', threadOpen: false },
         ]);
+        expect(callHost).not.toHaveBeenCalled();
         expect(r.unmanaged.map((p: any) => p.meshId)).toEqual(['mesh_s']);
         expect(r.machines).toEqual([
             { label: 'mac', daemonId: SELF, os: process.platform, build: null, online: true, self: true },
@@ -113,8 +130,14 @@ describe('assistant_project_status', () => {
         expect(calls('mesh_status_view')).toEqual([{ meshId: 'mesh_a', compact: true }]);
     });
 
-    it('refuses a project hosted on another daemon, unknown and ambiguous refs', async () => {
-        expect(await run(ASSISTANT_VERB.projectStatus, { project: 'blog' })).toMatchObject({ success: false, code: 'project_hosted_elsewhere', project: 'blog', meshId: 'mesh_b', hostLabel: 'win-box' });
+    it('relays a remote-hosted project to its host under the host\'s mesh id; unknown and ambiguous refs refuse', async () => {
+        hostAnswers.status = () => ({ ok: true, result: { success: true, result: { machines: [], queue: { pending: 0, assigned: 1, failed: 0 }, coordinator: 'working', threadOpen: null } } });
+        const r: any = await run(ASSISTANT_VERB.projectStatus, { project: 'blog' });
+        expect(r).toMatchObject({ success: true, project: 'blog', meshId: 'mesh_b' });
+        expect(r.result).toMatchObject({ name: 'Blog', host: 'win-box', via: 'relay', coordinator: 'working', queue: { pending: 0, assigned: 1, failed: 0 }, threadOpen: false });
+        expect(callHost.mock.calls[0]![0]).toMatchObject({ hostDaemonId: 'daemon_mach_other', hostMeshId: 'mesh_b_on_host' });
+        expect(callHost.mock.calls[0]![1]).toBe('status');
+        expect(execute).not.toHaveBeenCalled();
         expect(await run(ASSISTANT_VERB.projectStatus, { project: 'nope' })).toMatchObject({ success: false, code: 'project_not_found' });
         meshes.push(mesh('mesh_c', 'adhdev', 'github.com/fork/adhdev'));
         expect(await run(ASSISTANT_VERB.projectStatus, { project: 'adhdev' })).toMatchObject({ success: false, code: 'project_ambiguous' });
@@ -166,11 +189,57 @@ describe('assistant_project_send', () => {
         expect(relay.openThread).not.toHaveBeenCalled();
     });
 
-    it('refuses before touching the mesh: hosted elsewhere, missing skill, empty message', async () => {
-        expect(await run(ASSISTANT_VERB.projectSend, { project: 'blog', message: 'x' })).toMatchObject({ success: false, code: 'project_hosted_elsewhere' });
+    it('refuses before touching the mesh: missing skill, empty message', async () => {
         expect(await run(ASSISTANT_VERB.projectSend, { project: 'adhdev', message: 'x', skills: ['nope'] })).toMatchObject({ success: false, code: 'skill_not_found' });
+        expect(await run(ASSISTANT_VERB.projectSend, { project: 'blog', message: 'x', skills: ['nope'] })).toMatchObject({ success: false, code: 'skill_not_found' });
         expect(await run(ASSISTANT_VERB.projectSend, { project: 'adhdev', message: '' })).toMatchObject({ success: false, code: 'invalid_args' });
         expect(execute).not.toHaveBeenCalled();
+        expect(callHost).not.toHaveBeenCalled();
+    });
+});
+
+describe('remote-hosted project (relay to the host)', () => {
+    it('project_send composes HERE, sends the text to the host, opens the thread here and arms the poller', async () => {
+        hostAnswers.send = () => ({ ok: true, result: { success: true, result: { status: 'queued', launched: true, coordinatorSessionId: 'host-coord', messageId: 'assistant:mesh_b_on_host:t1', cursor: 'plain:host-coord:9' } } });
+        const r: any = await run(ASSISTANT_VERB.projectSend, { project: 'blog', message: 'Fix the RSS feed', supplement: 'Short.', skills: ['release-steps'], messageId: 't1' });
+        expect(r).toEqual({
+            success: true, project: 'blog', meshId: 'mesh_b',
+            result: { status: 'queued', launched: true, coordinatorSessionId: 'host-coord', messageId: 'assistant:mesh_b_on_host:t1', host: 'win-box', via: 'relay', attachedSkills: ['release-steps'] },
+        });
+        const [target, op, args] = callHost.mock.calls[0]!;
+        expect(target).toMatchObject({ hostDaemonId: 'daemon_mach_other', hostMeshId: 'mesh_b_on_host' });
+        expect(op).toBe('send');
+        expect(args.clientId).toBe('t1');
+        expect(args.text).toContain('Fix the RSS feed\n\nAdded by the user\'s assistant (not the user\'s words):\nShort.');
+        expect(args.text).toContain('## Attached procedure: release-steps');
+        expect(relay.openThread).toHaveBeenCalledWith('mesh_b');
+        expect(relay.remoteSent).toHaveBeenCalledWith('mesh_b', 'plain:host-coord:9');
+        expect(relay.recordSkillAttaches).toHaveBeenCalledWith('mesh_b', 1);
+        expect(execute).not.toHaveBeenCalled(); // nothing runs on this daemon
+    });
+
+    it('an offline host, no transport or a relay timeout answers project_unreachable with the reason; no thread opens', async () => {
+        remoteHosts.mesh_b = { label: 'win-box', hostDaemonId: 'daemon_mach_other', hostMeshId: 'mesh_b', reachable: false, reason: 'host_offline' };
+        expect(await run(ASSISTANT_VERB.projectSend, { project: 'blog', message: 'x' })).toMatchObject({ success: false, code: 'project_unreachable', reason: 'host_offline', host: 'win-box', project: 'blog' });
+        expect(callHost).not.toHaveBeenCalled();
+        remoteHosts.mesh_b = { label: 'win-box', hostDaemonId: 'daemon_mach_other', hostMeshId: 'mesh_b', reachable: false, reason: 'no_mesh_transport' };
+        expect(await run(ASSISTANT_VERB.projectStatus, { project: 'blog' })).toMatchObject({ success: false, code: 'project_unreachable', reason: 'no_mesh_transport' });
+        remoteHosts.mesh_b = { label: 'win-box', hostDaemonId: 'daemon_mach_other', hostMeshId: 'mesh_b', reachable: true };
+        expect(await run(ASSISTANT_VERB.projectSend, { project: 'blog', message: 'x' })).toMatchObject({ success: false, code: 'project_unreachable', reason: 'relay_timeout' });
+        expect(relay.openThread).not.toHaveBeenCalled();
+        expect(relay.remoteSent).not.toHaveBeenCalled();
+    });
+
+    it('a host refusal comes back with the host\'s own code (e.g. the mesh-sender gate)', async () => {
+        hostAnswers.send = () => ({ ok: false, kind: 'refused', code: 'mesh_sender_not_on_roster', error: 'mesh_sender_not_on_roster', result: { success: false } });
+        expect(await run(ASSISTANT_VERB.projectSend, { project: 'blog', message: 'x' })).toMatchObject({ success: false, code: 'mesh_sender_not_on_roster', host: 'win-box' });
+        expect(relay.openThread).not.toHaveBeenCalled();
+    });
+
+    it('project_read relays the tail request', async () => {
+        hostAnswers.read = (a) => ({ ok: true, result: { success: true, result: { coordinatorSessionId: 'host-coord', live: true, messages: [{ role: 'assistant', text: `tail ${a.tail}` }] } } });
+        const r: any = await run(ASSISTANT_VERB.projectRead, { project: 'blog', tail: 3 });
+        expect(r).toMatchObject({ success: true, project: 'blog', result: { coordinatorSessionId: 'host-coord', host: 'win-box', via: 'relay', messages: [{ role: 'assistant', text: 'tail 3' }] } });
     });
 });
 

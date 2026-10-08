@@ -12,6 +12,7 @@ import { ASSISTANT_VERB } from '@adhdev/mesh-shared';
 import { assistantStoreHandlers, assistantToolGate } from '../../src/commands/high-family/assistant-store.js';
 import { createAssistantServices, setAssistantServicesForTests, type AssistantServices } from '../../src/assistant/assistant-services.js';
 import type { LocalMeshEntry } from '../../src/repo-mesh-types.js';
+import { setAssistantProjectPortsForTests, type AssistantProjectPorts } from '../../src/assistant/assistant-project-ports.js';
 
 let dir: string;
 let hermes: string;
@@ -48,6 +49,7 @@ beforeEach(() => {
 });
 afterEach(() => {
     setAssistantServicesForTests(null);
+    setAssistantProjectPortsForTests(null);
     rmSync(dir, { recursive: true, force: true });
 });
 
@@ -189,12 +191,61 @@ describe('assistant_project_note', () => {
     it('rejects credentials, foreign-hosted, unknown and malformed requests', async () => {
         svc.inputLog.append(SID, 'human');
         expect(await note({ project: 'adhdev', action: 'record', text: `use ${fakeToken()}` })).toMatchObject({ success: false, code: 'note_secret_rejected' });
-        expect(await note({ project: 'other', action: 'record', text: 'x' })).toMatchObject({ success: false, code: 'project_hosted_elsewhere', meshId: 'mesh_b' });
+        // Remote-hosted, but no host is known here → unreachable (never stored locally, never dropped silently).
+        expect(await note({ project: 'other', action: 'record', text: 'x' })).toMatchObject({ success: false, code: 'project_unreachable', reason: 'host_unknown', meshId: 'mesh_b' });
+        expect(await note({ project: 'other', action: 'record', text: `use ${fakeToken()}` })).toMatchObject({ success: false, code: 'note_secret_rejected' });
         expect(await note({ project: 'nope', action: 'record', text: 'x' })).toMatchObject({ success: false, code: 'project_not_found', projects: ['adhdev', 'other'] });
         expect(await note({ project: 'adhdev', action: 'record', text: 'x', category: 'misc' })).toMatchObject({ code: 'invalid_args' });
         expect(await note({ project: 'adhdev', action: 'record' })).toMatchObject({ code: 'invalid_args' });
         expect(record).not.toHaveBeenCalled();
         expect(stagedFiles()).toEqual([]);
+    });
+});
+
+describe('assistant_project_note — remote-hosted project (relayed to the host)', () => {
+    const note = (args: Record<string, unknown>) => run(ASSISTANT_VERB.projectNote, { assistantSessionId: SID, ...args });
+    let callHost: ReturnType<typeof vi.fn>;
+    beforeEach(() => {
+        callHost = vi.fn(async (_t: unknown, _op: string, args: any) => ({ ok: true, result: { success: true, result: 'applied', ...(args.action === 'record' ? { noteId: 'host-note-1' } : { matched: 2 }) } }));
+        setAssistantProjectPortsForTests(() => ({
+            remoteHost: (m: LocalMeshEntry) => ({ label: 'win-box', hostDaemonId: 'daemon_mach_other', hostMeshId: `${m.id}_on_host`, reachable: true }),
+            callHost,
+        }) as unknown as AssistantProjectPorts);
+    });
+
+    it('checks and classifies HERE, then stores on the host; nothing is written locally', async () => {
+        svc.inputLog.append(SID, 'human');
+        const r = await note({ project: 'other', action: 'record', text: 'Use pnpm here', category: 'pattern_to_avoid' });
+        expect(r).toMatchObject({ success: true, result: 'applied', noteId: 'host-note-1', host: 'win-box', via: 'relay', project: 'other', meshId: 'mesh_b' });
+        expect(callHost).toHaveBeenCalledTimes(1);
+        const [target, op, args] = callHost.mock.calls[0]!;
+        expect(target).toMatchObject({ hostMeshId: 'mesh_b_on_host' });
+        expect(op).toBe('note');
+        expect(args).toEqual({ action: 'record', text: 'Use pnpm here', category: 'pattern_to_avoid', origin: 'human', callerSessionId: SID });
+        expect(await note({ project: 'other', action: 'forget', note_id: 'host-note-1' })).toMatchObject({ success: true, matched: 2 });
+        expect(record).not.toHaveBeenCalled();
+        expect(stagedFiles()).toEqual([]);
+    });
+
+    it('credential / injection checks and staging run before anything is sent', async () => {
+        svc.inputLog.append(SID, 'human');
+        expect(await note({ project: 'other', action: 'record', text: `token ${fakeToken()}` })).toMatchObject({ code: 'note_secret_rejected' });
+        svc.inputLog.append(SID, 'relay');
+        const staged = await note({ project: 'other', action: 'record', text: 'relay-suggested rule' });
+        expect(staged).toMatchObject({ success: true, result: 'staged' });
+        expect(callHost).not.toHaveBeenCalled();
+        // The owner's approval sends it as origin owner and clears the staged file.
+        expect(await run(ASSISTANT_VERB.stagedResolve, { id: staged.stagedId, decision: 'apply' })).toMatchObject({ success: true, result: 'applied', via: 'relay' });
+        expect(callHost.mock.calls[0]![2]).toMatchObject({ action: 'record', text: 'relay-suggested rule', origin: 'owner' });
+        expect(stagedFiles()).toEqual([]);
+    });
+
+    it('a host refusal or an unreachable host is returned, never swallowed', async () => {
+        svc.inputLog.append(SID, 'human');
+        callHost.mockResolvedValueOnce({ ok: false, kind: 'unreachable', code: 'project_unreachable', reason: 'host_offline', error: 'offline' });
+        expect(await note({ project: 'other', action: 'record', text: 'x' })).toMatchObject({ success: false, code: 'project_unreachable', reason: 'host_offline', host: 'win-box' });
+        callHost.mockResolvedValueOnce({ ok: false, kind: 'refused', code: 'mesh_sender_not_on_roster', error: 'not on roster', result: {} });
+        expect(await note({ project: 'other', action: 'record', text: 'x' })).toMatchObject({ success: false, code: 'mesh_sender_not_on_roster' });
     });
 });
 
@@ -265,10 +316,10 @@ describe('owner verbs', () => {
         expect(credit.mock.calls.map((c) => c[1])).toEqual(['approved']);
     });
 
-    it('a staged note whose project moved elsewhere stays staged', async () => {
+    it('a staged note whose project moved to an unreachable host stays staged', async () => {
         const n = await run(ASSISTANT_VERB.projectNote, { project: 'adhdev', action: 'record', text: 'held note' });
         hosted.clear();
-        expect(await run(ASSISTANT_VERB.stagedResolve, { id: n.stagedId, decision: 'apply' })).toMatchObject({ code: 'project_hosted_elsewhere' });
+        expect(await run(ASSISTANT_VERB.stagedResolve, { id: n.stagedId, decision: 'apply' })).toMatchObject({ code: 'project_unreachable' });
         expect(stagedFiles()).toEqual([`${n.stagedId}.json`]);
         expect(await run(ASSISTANT_VERB.stagedResolve, { id: n.stagedId, decision: 'discard' })).toMatchObject({ success: true, result: 'discarded' });
         expect(stagedFiles()).toEqual([]);

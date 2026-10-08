@@ -14,6 +14,7 @@ import { resolveMeshHostStatus } from '../mesh/mesh-host-ownership.js';
 import type { LocalMeshEntry } from '../repo-mesh-types.js';
 import type { AssistantCoordinatorView } from './coordinator-lifecycle.js';
 import type { QueueCounts } from './assistant-project-ports.js';
+import type { ProjectUnreachableReason } from './assistant-remote-host.js';
 
 /**
  * Scratch meshes (§4.2) are listed apart and not treated as projects:
@@ -58,8 +59,15 @@ export interface ProjectRow {
     meshId: string;
     name: string;
     repo: string;
-    hosting: 'here' | 'elsewhere';
+    /** `here`: this daemon hosts the mesh. `remote`: another daemon does; it is driven by relay (owner decision 2026-10-08). */
+    hosting: 'here' | 'remote';
+    /** `this machine`, or the remote host's label. */
+    host: string;
+    /** Remote only: same as `host`. */
     hostLabel?: string;
+    /** `local` (hosted here), `relay` (remote, reachable now) or `unreachable` (with `unreachableReason`). */
+    reachability: 'local' | 'relay' | 'unreachable';
+    unreachableReason?: ProjectUnreachableReason;
     coordinator?: CoordinatorState;
     threadOpen?: boolean | null;
     queue?: QueueCounts | null;

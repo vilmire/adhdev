@@ -84,7 +84,7 @@ function writeAssistantMcpConfig(w: AssistantMcpConfigWrite): void {
     if (next !== before) writeFileSync(w.path, next, { encoding: 'utf-8', mode: 0o600 });
 }
 
-/** The launch-time project table (hosted here / elsewhere / unmanaged). */
+/** The launch-time project table (hosted here / on another machine, relayed / unmanaged). */
 async function promptProjects(ctx: HighFamilyContext): Promise<AssistantPromptProject[]> {
     const selfDaemonId = str(ctx.deps?.statusInstanceId);
     const ports = await getAssistantProjectPorts({
@@ -102,7 +102,7 @@ async function promptProjects(ctx: HighFamilyContext): Promise<AssistantPromptPr
             meshId: mesh.id,
             ...(mesh.name ? { name: mesh.name } : {}),
             ...(mesh.repoIdentity ? { repoIdentity: mesh.repoIdentity } : {}),
-            hosting: unmanaged ? 'unmanaged' : here ? 'here' : 'elsewhere',
+            hosting: unmanaged ? 'unmanaged' : here ? 'here' : 'remote',
             ...(!unmanaged && !here ? { hostLabel: meshHostLabel(mesh, selfDaemonId) } : {}),
         };
     });

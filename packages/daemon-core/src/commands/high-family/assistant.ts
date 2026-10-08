@@ -12,6 +12,13 @@
  * Project-scoped answers are `{project: <slug>, meshId, result}` so the
  * assistant's transcript always shows which project answered.
  *
+ * Remote-hosted projects (owner decision 2026-10-08, closing design Q4): a
+ * mesh another daemon hosts is driven by relaying to that host —
+ * `assistant_remote_project` (assistant-remote.ts) runs the same local path
+ * there. status/send/read relay; an unreachable host answers
+ * `project_unreachable{reason}`. The relay result comes back through the
+ * remote poller (assistant/assistant-remote-relay.ts).
+ *
  * All mesh effects go through the daemon's existing commands, in-process
  * (`launch_mesh_coordinator`, `set_conversation_prefs`, `send_chat`,
  * `read_chat`, `mesh_status_view`, `plan_mesh_onboarding`, `create_mesh`,
@@ -28,15 +35,16 @@ import { componentsNotReadyResult, isDaemonComponentsNotReady } from '../daemon-
 import type { CommandRouterResult } from '../router.js';
 import type { HighFamilyContext, HighFamilyHandler } from './types.js';
 import type { LocalMeshEntry } from '../../repo-mesh-types.js';
-import { ASSISTANT_TOOL_SOURCES, assistantToolGate } from './assistant-store.js';
+import type { RemoteCallOutcome, RemoteHostView } from '../../assistant/assistant-remote-host.js';
+import { ASSISTANT_TOOL_SOURCES, assistantToolGate, projectPortsFor } from './assistant-store.js';
 import { getAssistantServices } from '../../assistant/assistant-services.js';
 import { projectSlugBase, projectSlugs, resolveAssistantProject } from '../../assistant/assistant-projects.js';
-import { getAssistantProjectPorts, type AssistantProjectPorts } from '../../assistant/assistant-project-ports.js';
+import type { AssistantProjectPorts } from '../../assistant/assistant-project-ports.js';
 import { ensureCoordinator, pickCoordinator, type EnsureCoordinatorPorts } from '../../assistant/coordinator-lifecycle.js';
 import { composeProjectMessage } from '../../assistant/project-message.js';
 import {
     PROJECT_READ_DEFAULT_TAIL, PROJECT_READ_MAX_TAIL,
-    compactProjectStatus, compactTranscriptTail, coordinatorState, isUnmanagedRepoIdentity, machinesSummary, meshHostLabel,
+    compactProjectStatus, compactTranscriptTail, coordinatorState, isUnmanagedRepoIdentity, machinesSummary,
     type ProjectRow,
 } from '../../assistant/project-views.js';
 import { defaultDiscoverRoots, discoverRepos, explicitDiscoverRoots } from '../../assistant/discover-repos.js';
@@ -57,21 +65,13 @@ function wrap(project: string, meshId: string, result: Record<string, unknown>):
     return { success: true, project, meshId, result };
 }
 
-async function portsFor(ctx: HighFamilyContext): Promise<AssistantProjectPorts> {
-    return getAssistantProjectPorts({
-        components: ctx.components,
-        execute: (cmd, args) => ctx.execute(cmd, args, 'ipc', { inProcess: true }),
-        selfDaemonId: str(ctx.deps?.statusInstanceId),
-    });
-}
-
 /** Gate + ports + boot-window handling shared by every verb. */
 function assistantVerb(verb: string, run: (ports: AssistantProjectPorts, args: any, ctx: HighFamilyContext) => Promise<CommandRouterResult>): HighFamilyHandler {
     return async (ctx, args) => {
         const gate = assistantToolGate(verb, args, getAssistantServices());
         if (gate) return gate;
         try {
-            return await run(await portsFor(ctx), args ?? {}, ctx);
+            return await run(await projectPortsFor(ctx), args ?? {}, ctx);
         } catch (e) {
             if (isDaemonComponentsNotReady(e)) return componentsNotReadyResult(e);
             throw e;
@@ -79,26 +79,41 @@ function assistantVerb(verb: string, run: (ports: AssistantProjectPorts, args: a
     };
 }
 
-type Resolved = { ok: true; mesh: LocalMeshEntry; slug: string } | { ok: false; result: CommandRouterResult };
+/** `remote` is null when this daemon hosts the mesh. */
+type Resolved = { ok: true; mesh: LocalMeshEntry; slug: string; remote: RemoteHostView | null } | { ok: false; result: CommandRouterResult };
 
-function resolveProject(ports: AssistantProjectPorts, ref: unknown, opts: { requireHosted: boolean }): Resolved {
+function resolveProject(ports: AssistantProjectPorts, ref: unknown): Resolved {
     const r = resolveAssistantProject(ref, ports.listMeshes(), ports.aliases());
     if (!r.ok) {
         const detail = r.code === 'project_not_found' ? { projects: r.projects } : { candidates: r.candidates };
         return { ok: false, result: fail(r.code, r.code, detail) };
     }
-    if (opts.requireHosted && !ports.isHostedHere(r.mesh)) {
-        return {
-            ok: false,
-            result: fail('project_hosted_elsewhere', 'project_hosted_elsewhere', {
-                project: r.slug, meshId: r.mesh.id, hostLabel: meshHostLabel(r.mesh, ports.selfDaemonId()),
-            }),
-        };
-    }
-    return { ok: true, mesh: r.mesh, slug: r.slug };
+    return { ok: true, mesh: r.mesh, slug: r.slug, remote: ports.isHostedHere(r.mesh) ? null : ports.remoteHost(r.mesh) };
 }
 
-function coordinatorPorts(ports: AssistantProjectPorts): EnsureCoordinatorPorts {
+/** `project_unreachable{reason, host}`, or the host's own refusal, for a remote call that did not succeed. */
+export function remoteFailure(where: { project: string; meshId: string }, remote: RemoteHostView, out: Exclude<RemoteCallOutcome, { ok: true }>): CommandRouterResult {
+    if (out.kind === 'unreachable') {
+        return fail('project_unreachable', out.error, { ...where, host: remote.label, reason: out.reason });
+    }
+    return fail(out.code, out.error, { ...where, host: remote.label, ...(out.code === 'host_unsupported' ? { reason: 'host_unsupported' } : {}) });
+}
+
+/** Call the host of a remote-hosted project; an unreachable host is refused before any call. */
+async function callRemote(ports: AssistantProjectPorts, p: { slug: string; mesh: LocalMeshEntry; remote: RemoteHostView }, op: Parameters<AssistantProjectPorts['callHost']>[1], args: Record<string, unknown>): Promise<RemoteCallOutcome> {
+    if (!p.remote.reachable) {
+        return { ok: false, kind: 'unreachable', code: 'project_unreachable', reason: p.remote.reason ?? 'relay_failed', error: `${p.slug} is hosted on ${p.remote.label}, which cannot be reached now (${p.remote.reason ?? 'relay_failed'})` };
+    }
+    return ports.callHost(p.remote, op, args);
+}
+
+/** Body of a host's answer: `{success, result: {...}}` → `{...}`. */
+function remoteBody(out: Extract<RemoteCallOutcome, { ok: true }>): Record<string, unknown> {
+    const r = out.result.result;
+    return r && typeof r === 'object' && !Array.isArray(r) ? r as Record<string, unknown> : {};
+}
+
+export function coordinatorPorts(ports: AssistantProjectPorts): EnsureCoordinatorPorts {
     return {
         coordinators: (meshId) => ports.coordinators(meshId),
         cliTypeFor: (meshId) => ports.cliTypeFor(meshId),
@@ -116,10 +131,24 @@ function coordinatorPorts(ports: AssistantProjectPorts): EnsureCoordinatorPorts 
 
 function projectRow(ports: AssistantProjectPorts, mesh: LocalMeshEntry, slug: string): ProjectRow {
     const base = { slug, meshId: mesh.id, name: mesh.name, repo: mesh.repoIdentity };
-    if (!ports.isHostedHere(mesh)) return { ...base, hosting: 'elsewhere', hostLabel: meshHostLabel(mesh, ports.selfDaemonId()) };
+    if (!ports.isHostedHere(mesh)) {
+        // Remote: listing stays local and cheap (no call per project); project_status asks the host.
+        const remote = ports.remoteHost(mesh);
+        return {
+            ...base,
+            hosting: 'remote',
+            host: remote.label,
+            hostLabel: remote.label,
+            reachability: remote.reachable ? 'relay' : 'unreachable',
+            ...(remote.reachable ? {} : { unreachableReason: remote.reason ?? 'relay_failed' }),
+            threadOpen: ports.relay.isThreadOpen ? ports.relay.isThreadOpen(mesh.id) : null,
+        };
+    }
     return {
         ...base,
         hosting: 'here',
+        host: 'this machine',
+        reachability: 'local',
         coordinator: coordinatorState(ports.coordinators(mesh.id)),
         threadOpen: ports.relay.isThreadOpen ? ports.relay.isThreadOpen(mesh.id) : null,
         queue: ports.queueCounts(mesh.id),
@@ -140,10 +169,9 @@ const projects = assistantVerb(ASSISTANT_VERB.projects, async (ports) => {
     return { success: true, projects: managed, unmanaged, machines: machinesSummary(meshes, ports.selfDaemonId()) };
 });
 
-const projectStatus = assistantVerb(ASSISTANT_VERB.projectStatus, async (ports, args) => {
-    const p = resolveProject(ports, args.project, { requireHosted: true });
-    if (!p.ok) return p.result;
-    const meshId = p.mesh.id;
+/** project_status body for a mesh hosted HERE (also the host side of a remote status). */
+export async function localProjectStatus(ports: AssistantProjectPorts, mesh: LocalMeshEntry): Promise<Record<string, unknown>> {
+    const meshId = mesh.id;
     const view = await ports.execute('mesh_status_view', { meshId, compact: true });
     const status = compactProjectStatus(view.success ? view : {}, {
         queue: ports.queueCounts(meshId),
@@ -152,7 +180,27 @@ const projectStatus = assistantVerb(ASSISTANT_VERB.projectStatus, async (ports, 
         threadOpen: ports.relay.isThreadOpen ? ports.relay.isThreadOpen(meshId) : null,
         lastRelayAt: ports.relay.lastRelayAt ? ports.relay.lastRelayAt(meshId) : null,
     });
-    return wrap(p.slug, meshId, { name: p.mesh.name, repo: p.mesh.repoIdentity, ...status, ...(view.success ? {} : { statusError: str(view.error) || 'mesh_status_view failed' }) });
+    return { name: mesh.name, repo: mesh.repoIdentity, ...status, ...(view.success ? {} : { statusError: str(view.error) || 'mesh_status_view failed' }) };
+}
+
+const projectStatus = assistantVerb(ASSISTANT_VERB.projectStatus, async (ports, args) => {
+    const p = resolveProject(ports, args.project);
+    if (!p.ok) return p.result;
+    const meshId = p.mesh.id;
+    if (!p.remote) return wrap(p.slug, meshId, { ...(await localProjectStatus(ports, p.mesh)), host: 'this machine' });
+    const out = await callRemote(ports, { ...p, remote: p.remote }, 'status', {});
+    if (!out.ok) return remoteFailure({ project: p.slug, meshId }, p.remote, out);
+    // The thread and relay times live HERE (this daemon's assistant), not on the host.
+    const lastRelayAt = ports.relay.lastRelayAt ? ports.relay.lastRelayAt(meshId) : null;
+    return wrap(p.slug, meshId, {
+        ...remoteBody(out),
+        name: p.mesh.name,
+        repo: p.mesh.repoIdentity,
+        host: p.remote.label,
+        via: 'relay',
+        threadOpen: ports.relay.isThreadOpen ? ports.relay.isThreadOpen(meshId) : null,
+        lastRelayAt: lastRelayAt ? new Date(lastRelayAt).toISOString() : null,
+    });
 });
 
 // ── project_send ────────────────────────────────────────────────────────────
@@ -169,56 +217,106 @@ const projectSend = assistantVerb(ASSISTANT_VERB.projectSend, async (ports, args
         const { ok: _ok, code, error, ...detail } = composed;
         return fail(code, error, detail);
     }
-    const p = resolveProject(ports, args.project, { requireHosted: true });
+    const p = resolveProject(ports, args.project);
     if (!p.ok) return p.result;
     const meshId = p.mesh.id;
     const where = { project: p.slug, meshId };
-
-    const coord = await ensureCoordinator(meshId, coordinatorPorts(ports));
-    if (!coord.ok) return fail(coord.code, coord.error, { ...where, ...coord.detail });
-
     const clientId = str(args.messageId) || randomUUID();
+    const attached = composed.attached.length > 0 ? { attachedSkills: composed.attached } : {};
+
+    if (p.remote) {
+        // The host runs the same local path (ensure coordinator → send_chat) under its own mesh id.
+        const out = await callRemote(ports, { ...p, remote: p.remote }, 'send', { text: composed.text, clientId });
+        if (!out.ok) return remoteFailure(where, p.remote, out);
+        const body = remoteBody(out);
+        ports.relay.openThread?.(meshId);
+        ports.relay.remoteSent?.(meshId, str(body.cursor) || null);
+        if (composed.attached.length > 0) ports.relay.recordSkillAttaches?.(meshId, composed.attached.length);
+        return wrap(p.slug, meshId, {
+            status: str(body.status) || 'accepted',
+            launched: body.launched === true,
+            coordinatorSessionId: str(body.coordinatorSessionId) || null,
+            messageId: str(body.messageId) || null,
+            host: p.remote.label,
+            via: 'relay',
+            ...attached,
+        });
+    }
+
+    const sent = await localProjectSend(ports, p.mesh, composed.text, clientId);
+    if (!sent.ok) return fail(sent.code, sent.error, { ...where, ...sent.detail });
+    ports.relay.openThread?.(meshId);
+    if (composed.attached.length > 0) ports.relay.recordSkillAttaches?.(meshId, composed.attached.length);
+    const { ok: _ok, cursor: _cursor, ...result } = sent;
+    return wrap(p.slug, meshId, { ...result, ...attached });
+});
+
+export type LocalSendResult =
+    | { ok: true; status: 'duplicate' | 'queued' | 'accepted'; launched: boolean; coordinatorSessionId: string; messageId: string; cursor: string | null }
+    | { ok: false; code: string; error: string; detail: Record<string, unknown> };
+
+/**
+ * Ensure a coordinator on THIS daemon and submit the composed text to it
+ * (send_chat, origin `assistant`, always queue). Shared by the local verb and
+ * the host side of a remote send; neither opens a thread here — the caller
+ * does, on the daemon whose assistant asked. `cursor` is the coordinator's
+ * newest committed turn before this send (a remote caller relays only later ones).
+ */
+export async function localProjectSend(ports: AssistantProjectPorts, mesh: LocalMeshEntry, text: string, clientId: string): Promise<LocalSendResult> {
+    const meshId = mesh.id;
+    const coord = await ensureCoordinator(meshId, coordinatorPorts(ports));
+    if (!coord.ok) return { ok: false, code: coord.code, error: coord.error, detail: coord.detail };
+    const cursor = ports.coordinatorTurns(coord.sessionId, 1).committed[0]?.attemptId ?? null;
     const messageId = `assistant:${meshId}:${clientId}`;
     const sent = await ports.execute('send_chat', {
         targetSessionId: coord.sessionId,
-        text: composed.text,
+        text,
         origin: 'assistant',
         policy: { mode: 'queue' },
         messageId,
     });
     if (!sent.success) {
-        return fail(str(sent.reason) || str(sent.code) || 'send_failed', str(sent.error) || 'send_failed', {
-            ...where, launched: coord.launched, coordinatorSessionId: coord.sessionId, messageId,
-        });
+        return {
+            ok: false,
+            code: str(sent.reason) || str(sent.code) || 'send_failed',
+            error: str(sent.error) || 'send_failed',
+            detail: { launched: coord.launched, coordinatorSessionId: coord.sessionId, messageId },
+        };
     }
-    ports.relay.openThread?.(meshId);
-    if (composed.attached.length > 0) ports.relay.recordSkillAttaches?.(meshId, composed.attached.length);
     const status = sent.deduplicated === true ? 'duplicate' : sent.queued === true ? 'queued' : 'accepted';
-    return wrap(p.slug, meshId, {
-        status,
-        launched: coord.launched,
-        coordinatorSessionId: coord.sessionId,
-        messageId,
-        ...(composed.attached.length > 0 ? { attachedSkills: composed.attached } : {}),
-    });
-});
+    return { ok: true, status, launched: coord.launched, coordinatorSessionId: coord.sessionId, messageId, cursor };
+}
 
 // ── project_read ────────────────────────────────────────────────────────────
 
-const projectRead = assistantVerb(ASSISTANT_VERB.projectRead, async (ports, args) => {
-    const p = resolveProject(ports, args.project, { requireHosted: true });
-    if (!p.ok) return p.result;
-    const meshId = p.mesh.id;
-    const rawTail = Number(args.tail);
-    const tail = Number.isFinite(rawTail) && rawTail >= 1 ? Math.min(Math.floor(rawTail), PROJECT_READ_MAX_TAIL) : PROJECT_READ_DEFAULT_TAIL;
+export function readTailArg(raw: unknown): number {
+    const n = Number(raw);
+    return Number.isFinite(n) && n >= 1 ? Math.min(Math.floor(n), PROJECT_READ_MAX_TAIL) : PROJECT_READ_DEFAULT_TAIL;
+}
+
+/** project_read body for a mesh hosted HERE (also the host side of a remote read). */
+export async function localProjectRead(ports: AssistantProjectPorts, meshId: string, tail: number): Promise<{ ok: true; result: Record<string, unknown> } | { ok: false; error: string; coordinatorSessionId: string }> {
     const live = pickCoordinator(ports.coordinators(meshId));
     const sessionId = live?.sessionId ?? ports.lastCoordinatorSessionId(meshId);
-    if (!sessionId) return wrap(p.slug, meshId, { coordinator: 'none', messages: [] });
+    if (!sessionId) return { ok: true, result: { coordinator: 'none', messages: [] } };
     const chat = await ports.execute('read_chat', { targetSessionId: sessionId, limit: Math.max(tail * 4, 40) });
-    if (!chat.success) {
-        return fail('project_read_failed', str(chat.error) || 'read_chat failed', { project: p.slug, meshId, coordinatorSessionId: sessionId });
+    if (!chat.success) return { ok: false, error: str(chat.error) || 'read_chat failed', coordinatorSessionId: sessionId };
+    return { ok: true, result: { coordinatorSessionId: sessionId, live: !!live, ...compactTranscriptTail(chat, tail) } };
+}
+
+const projectRead = assistantVerb(ASSISTANT_VERB.projectRead, async (ports, args) => {
+    const p = resolveProject(ports, args.project);
+    if (!p.ok) return p.result;
+    const meshId = p.mesh.id;
+    const tail = readTailArg(args.tail);
+    if (p.remote) {
+        const out = await callRemote(ports, { ...p, remote: p.remote }, 'read', { tail });
+        if (!out.ok) return remoteFailure({ project: p.slug, meshId }, p.remote, out);
+        return wrap(p.slug, meshId, { ...remoteBody(out), host: p.remote.label, via: 'relay' });
     }
-    return wrap(p.slug, meshId, { coordinatorSessionId: sessionId, live: !!live, ...compactTranscriptTail(chat, tail) });
+    const r = await localProjectRead(ports, meshId, tail);
+    if (!r.ok) return fail('project_read_failed', r.error, { project: p.slug, meshId, coordinatorSessionId: r.coordinatorSessionId });
+    return wrap(p.slug, meshId, r.result);
 });
 
 // ── project_add ─────────────────────────────────────────────────────────────

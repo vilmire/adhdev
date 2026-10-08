@@ -370,4 +370,73 @@ describe('standalone multi-machine mesh — two daemon processes', () => {
       return node?.machineStatus === 'online' && node?.connection?.state === 'connected';
     }, 15_000);
   }, 120_000);
+
+  it('an assistant on the member drives the host-hosted mesh by relay: list, status, read, note — and reports the host offline', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-mesh-assistant-'));
+    roots.push(root);
+    const hostHome = join(root, 'host');
+    const memberHome = join(root, 'member');
+    const hostRepo = join(root, 'host-repo');
+    const memberRepo = join(root, 'member-repo');
+    for (const dir of [hostHome, memberHome, hostRepo, memberRepo]) mkdirSync(dir, { recursive: true });
+    for (const repo of [hostRepo, memberRepo]) {
+      writeFileSync(join(repo, 'README.md'), 'repo\n');
+      execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: repo, windowsHide: true });
+    }
+    const host = await Node.start('host', hostHome);
+    nodes.push(host);
+    const member = await Node.start('member', memberHome);
+    nodes.push(member);
+    const hostId = host.ready.statusInstanceId;
+
+    // Host mesh + member join (address + code: the member keeps its OWN mesh id).
+    const hostMesh = await host.command('create_mesh', { name: 'blog', repoIdentity: 'github.com/acme/blog' });
+    const hostMeshId = hostMesh.mesh.id as string;
+    expect((await host.command('add_mesh_node', { meshId: hostMeshId, workspace: hostRepo })).success).toBe(true);
+    const token = await host.command('create_mesh_host_pairing_token', { meshId: hostMeshId });
+    const memberMesh = await member.command('create_mesh', { name: 'blog', repoIdentity: 'github.com/acme/blog', workspace: memberRepo });
+    const memberMeshId = memberMesh.mesh.id as string;
+    expect(memberMeshId).not.toBe(hostMeshId);
+    expect((await member.command('add_mesh_node', { meshId: memberMeshId, workspace: memberRepo })).success).toBe(true);
+    expect((await member.command('configure_mesh_host_pairing', { meshId: memberMeshId, hostAddress: `127.0.0.1:${host.ready.port}`, token: token.token })).success).toBe(true);
+    const joined = await member.command('join_mesh_host_pairing', { meshId: memberMeshId, token: token.token });
+    expect(joined.success, JSON.stringify(joined)).toBe(true);
+    // The join persists the host's id for the mesh — the relay addresses the host with it.
+    const memberMeshes = JSON.parse(readFileSync(join(member.ready.configDir, 'meshes.json'), 'utf8')).meshes as any[];
+    expect(memberMeshes.find((m) => m.id === memberMeshId)?.meshHost).toMatchObject({ role: 'member', hostMeshId });
+    await waitFor('member → host link connected', async () => (await member.op('peerStatus', { daemonId: hostId }))?.state === 'connected');
+
+    // ── projects: the host's mesh is a first-class row, reachable by relay. ──
+    const listed = await member.command('assistant_projects');
+    expect(listed.success, JSON.stringify(listed).slice(0, 800)).toBe(true);
+    expect(listed.projects.find((p: any) => p.meshId === memberMeshId), JSON.stringify(listed.projects)).toMatchObject({ slug: 'blog', hosting: 'remote', reachability: 'relay' });
+
+    // ── project_status runs on the HOST (sources + roster gate + hosted check pass there). ──
+    const status = await member.command('assistant_project_status', { project: 'blog' });
+    expect(status.success, JSON.stringify(status).slice(0, 800)).toBe(true);
+    expect(status).toMatchObject({ project: 'blog', meshId: memberMeshId, result: { via: 'relay', name: 'blog', repo: 'github.com/acme/blog' } });
+    expect(Array.isArray(status.result.machines)).toBe(true);
+    const read = await member.command('assistant_project_read', { project: 'blog' });
+    expect(read, JSON.stringify(read).slice(0, 800)).toMatchObject({ success: true, result: { coordinator: 'none', messages: [], via: 'relay' } });
+
+    // ── project_note: classified HERE (no assistant session → staged), the owner's
+    //    approval relays the write to the host, which stores it in ITS ledger. ──
+    const staged = await member.command('assistant_project_note', { project: 'blog', action: 'record', text: 'Run the RSS check before merging' });
+    expect(staged, JSON.stringify(staged)).toMatchObject({ success: true, result: 'staged' });
+    const applied = await member.command('assistant_staged_resolve', { id: staged.stagedId, decision: 'apply' });
+    expect(applied, JSON.stringify(applied).slice(0, 800)).toMatchObject({ success: true, result: 'applied', via: 'relay' });
+    const notes = await host.command('list_mesh_notes', { meshId: hostMeshId });
+    expect(JSON.stringify(notes)).toContain('Run the RSS check before merging');
+    const memberNotes = await member.command('list_mesh_notes', { meshId: memberMeshId });
+    expect(JSON.stringify(memberNotes)).not.toContain('Run the RSS check before merging');
+
+    // ── The host goes away: a clear project_unreachable, never a silent drop. ──
+    await host.stop();
+    nodes.splice(nodes.indexOf(host), 1);
+    await waitFor('member sees the host gone', async () => (await member.op('peerStatus', { daemonId: hostId }))?.state !== 'connected', 5_000);
+    const offline = await member.command('assistant_project_send', { project: 'blog', message: 'Fix the RSS feed' });
+    expect(offline, JSON.stringify(offline)).toMatchObject({ success: false, code: 'project_unreachable', reason: 'host_offline', project: 'blog' });
+    const row = (await member.command('assistant_projects')).projects.find((p: any) => p.meshId === memberMeshId);
+    expect(row).toMatchObject({ reachability: 'unreachable', unreachableReason: 'host_offline' });
+  }, 120_000);
 });
