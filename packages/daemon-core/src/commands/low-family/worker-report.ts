@@ -207,7 +207,7 @@ function toReportResponse(result: WorkerReportResult): Record<string, unknown> &
             hint: result.refusal === 'unauthenticated'
                 ? 'No live task is bound to this worker session — the task may already be terminal or reassigned.'
                 : result.refusal === 'bind_unknown_after_restart'
-                    ? 'This daemon does not recognise the worker session bind — it was issued before a daemon restart that did not carry it over. A retry will not help; put your result in your final message so the coordinator can read it.'
+                    ? 'This daemon does not recognise the worker session bind — it was issued before a daemon restart that did not carry it over. A retry will not help: put your result in your final message so the coordinator can read it, and say that this worker session must be relaunched (stopped and launched fresh) before it can report again.'
                     : result.refusal === 'invalid_for_task_mode'
                     ? 'Fix the touchedFiles list to match the task mode and call again.'
                     : result.refusal === 'storage_failed'

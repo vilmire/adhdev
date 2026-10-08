@@ -26,6 +26,7 @@ import { subscribeMeshProviderSignals } from '../../mesh/mesh-signal-bridge.js';
 import { subscribeCoordinatorRegistryRemoval } from '../../mesh/coordinator-registry.js';
 import { hasLiveWorkerSessionBind, setWorkerSessionBindPersistence, subscribeWorkerBindRevocation, subscribeWorkerMcpSharedConfigCleanup } from '../../mesh/worker-mcp-isolation.js';
 import { SqliteWorkerSessionBindStore } from '../../mesh/worker-session-bind-store.js';
+import { installLocalNodeProviderFallback } from '../../mesh/mesh-slot-provider-usability.js';
 import {
     listLocalCoordinatorSessions,
     resolveCoordinatorDrainDaemonIds,
@@ -491,6 +492,8 @@ export function bootMeshRuntime(s6: ProjectionsStage): MeshRuntimeStage {
     const components = assembleDaemonComponents(s6);
     const { bus } = s6;
     const offBindPersistence = installWorkerSessionBindPersistence(components);
+    // A hosted node with no providerPriority/slots defaults to this machine's enabled CLIs.
+    const offLocalProviderFallback = installLocalNodeProviderFallback(components.providerLoader);
 
     // Session-death consumers. Registration order = delivery order on the sync
     // lane; the ledger writer runs on the async lane.
@@ -541,6 +544,7 @@ export function bootMeshRuntime(s6: ProjectionsStage): MeshRuntimeStage {
             try { off(); } catch { /* noop */ }
         }
         try { offBindPersistence(); } catch { /* noop */ }
+        try { offLocalProviderFallback(); } catch { /* noop */ }
     };
 
     return { ...s6, components, disposeMeshRuntime };

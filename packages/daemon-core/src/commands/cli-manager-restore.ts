@@ -298,9 +298,13 @@ function reconcileWorkerBindsAfterRestore(sessions: HostedCliRuntimeDescriptor[]
     const live = new Set<string>(restoredRuntimeIds);
     for (const r of sessions) if (r?.runtimeId) live.add(r.runtimeId);
     try {
-        const { rehydrated, pruned } = reconcileWorkerSessionBindsAfterRestore(live);
-        if (rehydrated || pruned) {
-            LOG.info('CLI', `♻ Worker session binds after restore: ${rehydrated} re-adopted for restored session(s), ${pruned} pruned (session did not come back)`);
+        const { rehydrated, pruned, deferred } = reconcileWorkerSessionBindsAfterRestore(live);
+        if (rehydrated || pruned || deferred) {
+            LOG.info(
+                'CLI',
+                `♻ Worker session binds after restore: ${rehydrated} re-adopted for restored session(s), ${pruned} pruned (session did not come back)`
+                + (deferred ? `, ${deferred} kept for hosted session(s) whose restore did not register here` : ''),
+            );
         }
     } catch (e: any) {
         LOG.warn('CLI', `worker session bind reconcile failed: ${e?.message || e}`);

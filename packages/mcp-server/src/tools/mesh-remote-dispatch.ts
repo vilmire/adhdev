@@ -19,7 +19,7 @@ import {
 import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared';
 import { type MeshTaskInput } from './mesh-tool-shared.js';
 import { supportsMeshRelay, type MeshRelayTransport } from '../transports/mode.js';
-import { readProviderPriority, classifyRemoteDelegateRelaySafety, chooseDispatchableSession } from './mesh-tools-internal-core.js';
+import { readNodeProviderPriority, classifyRemoteDelegateRelaySafety, chooseDispatchableSession } from './mesh-tools-internal-core.js';
 import { resolveSessionProviderType, readSessionRecordId, unwrapCommandPayload } from './mesh-session-helpers.js';
 import { readNodeRuntime } from './mesh-held-node-state.js';
 import { readString } from '@adhdev/mesh-shared';
@@ -262,7 +262,7 @@ interface RemoteDispatchProvider {
  * ── ★PROVIDER-PIN-BYPASS (D2) — the pin must survive provider resolution ──────
  *
  * Resolve provider type: caller arg > node policy providerPriority (slots-derived
- * when unset — readProviderPriority applies the fallback) > empty (fuzzy fallback).
+ * when unset — readNodeProviderPriority applies the fallback, then the node-reported default) > empty (fuzzy fallback).
  *
  * ★The providerPriority[0] fallback is what silently broke required_tags. The
  * caller's node filter asks "could SOME provider here satisfy the pin?" and a node
@@ -275,7 +275,7 @@ interface RemoteDispatchProvider {
 function resolveRemoteDispatchProvider(node: LocalMeshNodeEntry, args: RemoteDispatchTargetArgs): RemoteDispatchProvider | DispatchFailure {
     const providerPins = providerPinsFromRequiredTags(args.requiredTags);
     const providerPriorityList: string[] = filterProvidersByRequiredTags(
-        readProviderPriority(node.policy),
+        readNodeProviderPriority(node),
         args.requiredTags,
     );
     // An explicit caller-supplied providerType is honored ONLY when it satisfies the
@@ -289,7 +289,7 @@ function resolveRemoteDispatchProvider(node: LocalMeshNodeEntry, args: RemoteDis
         // The node advertises no provider satisfying the pin (and the caller's hint does
         // not either). Fail-closed rather than dispatch onto some other provider — the
         // task stays pending for the claim path, which enforces the pin per-session.
-        return buildProviderPinUnsatisfiableFailure(node, providerPins, readProviderPriority(node.policy));
+        return buildProviderPinUnsatisfiableFailure(node, providerPins, readNodeProviderPriority(node));
     }
     return {
         providerPins,
@@ -505,7 +505,7 @@ export async function resolveRemoteDispatchTarget(
     // placed BELOW the unknown-provider refusal so the more specific message wins when
     // nothing resolved at all.
     if (providerPins.length && !providerPins.includes(resolvedProviderType)) {
-        return buildProviderPinUnsatisfiableFailure(node, providerPins, readProviderPriority(node.policy), resolvedProviderType);
+        return buildProviderPinUnsatisfiableFailure(node, providerPins, readNodeProviderPriority(node), resolvedProviderType);
     }
     // QUOTA GATE (direct dispatch) — see checkDirectDispatchQuotaGate's doc comment.
     // Placed after pin resolution (a pin refusal is more specific and should win) and

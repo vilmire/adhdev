@@ -87,19 +87,43 @@ export interface MachineSummary {
     self: boolean;
 }
 
+/** A daemon that hosts a mesh this daemon does not (from the remote-host resolution). */
+export interface RemoteHostMachine {
+    daemonId: string | null;
+    label: string;
+}
+
 /**
  * Machines across every mesh's nodes, one per daemon (canonical id), plus
  * this daemon. Labels and platform come from what the nodes report.
+ *
+ * `meshes` is the project inventory — meshes.json plus the meshes this daemon
+ * is a MEMBER of (member-meshes.ts), so their nodes are walked too.
+ * `remoteHosts` folds in the host of every remote project: a member that holds
+ * only a host record + push subscription knows no host NODE (its member entry
+ * lists only this daemon's node), so without it the list was "this machine"
+ * alone (live 2026-10-09). Dedup is by `daemonIdsEquivalent` (mach_ vs
+ * daemon_mach_ forms).
  */
-export function machinesSummary(meshes: readonly LocalMeshEntry[], selfDaemonId: string, selfLabel?: string): MachineSummary[] {
+export function machinesSummary(
+    meshes: readonly LocalMeshEntry[],
+    selfDaemonId: string,
+    selfLabel?: string,
+    remoteHosts: readonly RemoteHostMachine[] = [],
+): MachineSummary[] {
     const selfKey = canonicalDaemonId(selfDaemonId) ?? selfDaemonId;
     const facts = new Map<string, { daemonId: string | null; nick: string; os: string; build: string; self: boolean }>();
     if (selfKey) facts.set(selfKey, { daemonId: selfDaemonId || null, nick: selfLabel ?? '', os: process.platform, build: '', self: true });
+    const keyOf = (raw: string): { key: string; self: boolean } => {
+        const self = !raw || (!!selfDaemonId && daemonIdsEquivalent(raw, selfDaemonId));
+        if (self) return { key: selfKey, self };
+        const existing = [...facts.keys()].find((k) => daemonIdsEquivalent(k, raw));
+        return { key: existing ?? canonicalDaemonId(raw) ?? raw, self };
+    };
     for (const mesh of meshes) {
         for (const node of mesh.nodes ?? []) {
             const raw = readText(node.daemonId);
-            const self = !raw || (!!selfDaemonId && daemonIdsEquivalent(raw, selfDaemonId));
-            const key = self ? selfKey : canonicalDaemonId(raw) ?? raw;
+            const { key, self } = keyOf(raw);
             if (!key) continue;
             const f = facts.get(key) ?? { daemonId: raw || null, nick: '', os: '', build: '', self };
             f.nick ||= readText(node.machineNickname);
@@ -107,6 +131,17 @@ export function machinesSummary(meshes: readonly LocalMeshEntry[], selfDaemonId:
             f.build ||= readText(node.reportedDaemonBuildVersion);
             facts.set(key, f);
         }
+    }
+    for (const host of remoteHosts) {
+        const raw = readText(host.daemonId);
+        if (!raw) continue;
+        const { key, self } = keyOf(raw);
+        if (!key || self) continue;
+        const f = facts.get(key) ?? { daemonId: raw, nick: '', os: '', build: '', self: false };
+        // A node-reported nickname wins; the resolution's label is a nickname or a short id.
+        const label = readText(host.label);
+        if (!f.nick && label && label !== 'unknown host') f.nick = label;
+        facts.set(key, f);
     }
     return [...facts.entries()]
         .map(([key, f]) => ({
@@ -134,20 +169,76 @@ export interface ProjectStatusExtras {
     lastRelayAt: number | null;
 }
 
+function firstText(sources: readonly any[], pick: (x: any) => unknown[]): string {
+    for (const x of sources) {
+        for (const v of pick(x)) {
+            const t = readText(v);
+            if (t) return t;
+        }
+    }
+    return '';
+}
+
+/**
+ * A node's machine label: the operator nickname (record, or the node's own
+ * facts), else the machine identity's display name — unless that is only an
+ * id (`buildMeshNodeMachineIdentity` falls back to the daemon/machine id) —
+ * else its machine name. Standalone nodes usually carry no nickname, so the
+ * label was null there (live 2026-10-09).
+ */
+function nodeMachineLabel(sources: readonly any[]): string {
+    const nick = firstText(sources, (x) => [x?.machineNickname, rec(x?.nodeFacts)?.machineNickname]);
+    if (nick) return nick;
+    for (const x of sources) {
+        const machine = rec(x?.machine);
+        const ids = new Set([readText(machine?.daemonId), readText(machine?.machineId), readText(x?.daemonId), readText(x?.machineId)].filter(Boolean));
+        for (const v of [machine?.displayName, machine?.machineName, x?.machineName]) {
+            const t = readText(v);
+            if (t && !ids.has(t)) return t;
+        }
+    }
+    return '';
+}
+
+/** `os=<platform>` among a node's capability tags. */
+function osTag(x: any): string {
+    for (const list of [x?.capabilities, x?.capabilityTags]) {
+        if (!Array.isArray(list)) continue;
+        for (const tag of list) {
+            const m = /^os=(.+)$/.exec(readText(tag));
+            if (m && m[1]!.trim()) return m[1]!.trim();
+        }
+    }
+    return '';
+}
+
+/** Reported platform (record, then the node's facts), else the `os=` capability tag. */
+function nodePlatform(sources: readonly any[]): string {
+    return firstText(sources, (x) => [x?.reportedPlatform, rec(x?.nodeFacts)?.platform]) || firstText(sources, (x) => [osTag(x)]);
+}
+
 /** The compact projection of a `mesh_status_view` answer (§4.4 project_status). */
 export function compactProjectStatus(view: Record<string, unknown>, extras: ProjectStatusExtras): Record<string, unknown> {
     const routes = rec(view.routes) ?? {};
     const statusNodes: any[] = Array.isArray(rec(view.status)?.nodes) ? rec(view.status)!.nodes : [];
     const memberNodes: any[] = Array.isArray(rec(rec(view.membership)?.mesh)?.nodes) ? rec(rec(view.membership)!.mesh)!.nodes : [];
     const nodes = statusNodes.length > 0 ? statusNodes : memberNodes;
+    const memberById = new Map<string, any>();
+    for (const m of memberNodes) {
+        const id = readText(m?.id) || readText(m?.nodeId);
+        if (id && !memberById.has(id)) memberById.set(id, m);
+    }
     const machines = nodes.map((n) => {
         const id = readText(n?.id) || readText(n?.nodeId);
         const local = rec(routes[id])?.route === 'local';
+        // A status node carries the machine identity but not the raw record's
+        // platform; the membership record (same id) fills what it lacks.
+        const sources = [n, memberById.get(id)].filter(Boolean);
         return {
             node: id,
-            label: readText(n?.machineNickname) || null,
-            os: readText(n?.reportedPlatform) || null,
-            build: readText(n?.reportedDaemonBuildVersion) || null,
+            label: nodeMachineLabel(sources) || null,
+            os: nodePlatform(sources) || null,
+            build: firstText(sources, (x) => [x?.reportedDaemonBuildVersion, x?.daemonBuildVersion, rec(rec(x?.nodeFacts)?.daemonBuild)?.version]) || null,
             online: local || readText(n?.machineStatus) === 'online',
             ...(readText(n?.worktreeBranch) ? { branch: readText(n.worktreeBranch) } : {}),
         };

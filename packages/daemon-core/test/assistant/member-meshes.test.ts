@@ -158,6 +158,22 @@ describe('a member daemon with no meshes.json entry', () => {
         expect(dispatch.mock.calls.filter((c) => c[1] === 'get_mesh')).toHaveLength(1);
     });
 
+    it('machines on a member list the remote host too, deduped across the mach_ / daemon_mach_ forms', async () => {
+        inline = [hostRecord()];
+        const listed: any = await run(ASSISTANT_VERB.projects);
+        expect(listed.machines.map((m: any) => [m.label, m.self])).toEqual([['jupiter', true], ['mac-studio', false]]);
+    });
+
+    it('machines on a member whose host never answered still list the host (from the remote-host resolution), not only "this machine"', async () => {
+        writeFileSync(join(tmp, 'mesh-host-records.json'), JSON.stringify({ version: 1, meshes: { [MESH]: { hostDaemonId: HOST, source: 'session_stamp' } } }));
+        writeFileSync(join(tmp, 'mesh-node-push-subscriptions.json'), JSON.stringify({ version: 1, subscriptions: [{ coordinatorDaemonId: HOST, meshId: MESH, nodeId: 'node_j', workspace: '/home/vilmire/adhdev' }] }));
+        const listed: any = await run(ASSISTANT_VERB.projects);
+        expect(listed.machines).toHaveLength(2);
+        expect(listed.machines[0]).toMatchObject({ label: 'this machine', self: true });
+        expect(listed.machines[1]).toMatchObject({ daemonId: HOST, self: false });
+        expect(listed.machines[1].label).not.toBe('this machine');
+    });
+
     it('an unreachable host still lists the project (named after the workspace), never as scratch', async () => {
         writeFileSync(join(tmp, 'mesh-host-records.json'), JSON.stringify({ version: 1, meshes: { [MESH]: { hostDaemonId: HOST, source: 'session_stamp' } } }));
         writeFileSync(join(tmp, 'mesh-node-push-subscriptions.json'), JSON.stringify({ version: 1, subscriptions: [{ coordinatorDaemonId: HOST, meshId: MESH, nodeId: 'node_j', workspace: '/home/vilmire/adhdev' }] }));

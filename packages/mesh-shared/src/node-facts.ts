@@ -301,3 +301,50 @@ export function formatQuotaAccount(quota: MeshNodeFactsProviderQuota | undefined
     const parts = [email, plan].filter(Boolean)
     return parts.length > 0 ? parts.join(' · ') : null
 }
+
+/**
+ * Stable built-in provider order for a DEFAULTED node priority (no operator
+ * order known): these first when present, then the rest alphabetically. The
+ * `mesh_init` providerPriority suggestion leads with the same list.
+ */
+export const BUILTIN_PROVIDER_PREFERENCE: readonly string[] = ['claude-cli', 'codex-cli', 'gemini-cli']
+
+/** Order provider types by BUILTIN_PROVIDER_PREFERENCE, then alphabetically (de-duplicated). */
+export function orderProvidersByBuiltinPreference(types: readonly unknown[]): string[] {
+    const unique = [...new Set(types.map((t) => (typeof t === 'string' ? t.trim() : '')).filter(Boolean))]
+    const rank = (t: string) => {
+        const i = BUILTIN_PROVIDER_PREFERENCE.indexOf(t)
+        return i < 0 ? BUILTIN_PROVIDER_PREFERENCE.length : i
+    }
+    return unique.sort((a, b) => rank(a) - rank(b) || a.localeCompare(b))
+}
+
+/**
+ * The provider order a node with NO providerPriority and NO capability slots
+ * defaults to, from its own facts bundle: the providers it reports enabled
+ * (`providerEnablement[type].enabled === true` — the reporting machine's own
+ * verdict), narrowed to the CLIs it reports detected (`providerVersions`, the
+ * detection pass that stamps binary versions) when any enabled one is listed
+ * there. Ordered by BUILTIN_PROVIDER_PREFERENCE.
+ *
+ * The single rule for every reader — daemon-core auto-launch / slot resolution,
+ * the MCP launch readiness + type-omitted launch, the `adhdev mesh` CLI — so a
+ * node is not "launch ready" on one surface and `missing_provider_priority` on
+ * another. Returns [] when nothing usable is reported.
+ */
+export function defaultProviderPriorityFromNodeFacts(facts: unknown): string[] {
+    const f = facts && typeof facts === 'object' && !Array.isArray(facts) ? facts as Record<string, unknown> : null
+    const enablement = f?.providerEnablement
+    if (!enablement || typeof enablement !== 'object' || Array.isArray(enablement)) return []
+    const enabled = Object.entries(enablement as Record<string, unknown>)
+        .filter(([, v]) => !!v && typeof v === 'object' && (v as Record<string, unknown>).enabled === true)
+        .map(([type]) => type)
+    const versions = f?.providerVersions
+    const detected = versions && typeof versions === 'object' && !Array.isArray(versions)
+        ? enabled.filter((type) => {
+            const v = (versions as Record<string, unknown>)[type]
+            return typeof v === 'string' && !!v.trim()
+        })
+        : []
+    return orderProvidersByBuiltinPreference(detected.length ? detected : enabled)
+}

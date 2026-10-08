@@ -9,7 +9,7 @@
 // (dispatch, drain, refresh, probes) stays in mesh-tools-internal.ts; consumers
 // import these helpers from here directly.
 
-import { normalizeNodeCapabilitySlots, deriveProviderPriorityFromSlots, readString } from '@adhdev/mesh-shared';
+import { normalizeNodeCapabilitySlots, deriveProviderPriorityFromSlots, defaultProviderPriorityFromNodeFacts, readString } from '@adhdev/mesh-shared';
 import type { LocalMeshEntry, LocalMeshNodeEntry, RepoMeshRelatedRepo } from '@adhdev/daemon-core';
 import {
     buildMeshNodeCapabilityTags,
@@ -584,6 +584,19 @@ export function readProviderPriority(policy: unknown): string[] {
 }
 
 /**
+ * The node's provider order for a launch: `readProviderPriority(policy)`, else —
+ * a node with no slots and no providerPriority — the providers the node itself
+ * reports enabled (mesh-shared `defaultProviderPriorityFromNodeFacts`, the rule
+ * daemon-core auto-launch applies too). Before, such a node was
+ * `missing_provider_priority` here although its facts said exactly which CLIs
+ * it runs (live 2026-10-08/09: `update_mesh_node providerPriority` by hand).
+ */
+export function readNodeProviderPriority(node: { policy?: unknown; nodeFacts?: unknown } | null | undefined): string[] {
+    const fromPolicy = readProviderPriority(node?.policy);
+    return fromPolicy.length ? fromPolicy : defaultProviderPriorityFromNodeFacts(node?.nodeFacts);
+}
+
+/**
  * Ordered, de-duplicated provider types a node can launch — every provider it could
  * be asked to run. Reads `policy.slots` (the SSOT — node capability slots design, 2026-07-09),
  * unioned with the legacy `policy.providerPriority`. Used to ENUMERATE per-provider
@@ -664,14 +677,14 @@ export function readSpawnedSessionVisibility(policy: unknown): 'visible' | 'hidd
 }
 
 export function missingProviderPriorityMessage(nodeId: string): string {
-    return `Node '${nodeId}' has no providerPriority policy; pass type explicitly or configure node.policy.providerPriority`;
+    return `Node '${nodeId}' has no providerPriority policy and reports no enabled provider; pass type explicitly or configure node.policy.providerPriority`;
 }
 
 export function getNodeLaunchReadiness(node: LocalMeshNodeEntry): Record<string, unknown> {
     const bootstrap = (node as any).worktreeBootstrap;
     if ((node as any).isLocalWorktree && bootstrap?.status === 'failed' && bootstrap?.required !== false) {
         return {
-            providerPriority: readProviderPriority(node.policy),
+            providerPriority: readNodeProviderPriority(node),
             launchReady: false,
             launchBlockedReason: 'worktree_bootstrap_failed',
             launchBlockedMessage: typeof bootstrap.error === 'string' && bootstrap.error.trim()
@@ -681,7 +694,7 @@ export function getNodeLaunchReadiness(node: LocalMeshNodeEntry): Record<string,
         };
     }
 
-    const providerPriority = readProviderPriority(node.policy);
+    const providerPriority = readNodeProviderPriority(node);
     if (providerPriority.length) {
         return {
             providerPriority,

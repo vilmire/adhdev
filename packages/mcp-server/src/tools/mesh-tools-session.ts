@@ -37,7 +37,7 @@ import {
     getWorktreeBootstrapLaunchBlock,
     isMeshOwnedDelegateSession,
     missingProviderPriorityMessage,
-    readProviderPriority,
+    readNodeProviderPriority,
     readSpawnedSessionVisibility,
 } from './mesh-tools-internal-core.js';
 import { compactChatPayload } from './chat-compact.js';
@@ -656,7 +656,7 @@ function checkRequestedLaunchType(
  * token can never be refreshed. See mesh-quota-routing.ts's module header.
  */
 async function detectLaunchProviderType(ctx: MeshContext, node: LocalMeshNodeEntry, nodeId: string): Promise<{ providerType: string } | string> {
-    const providerPriority = readProviderPriority(node.policy);
+    const providerPriority = readNodeProviderPriority(node);
     if (!providerPriority.length) {
         return JSON.stringify({ success: false, error: missingProviderPriorityMessage(nodeId) });
     }
