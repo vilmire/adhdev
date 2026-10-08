@@ -4,7 +4,7 @@
  * §4.2–§4.4, §4.6), behind one port so the verbs stay testable with fakes.
  *
  * Everything here calls an existing function or command — the project
- * inventory (meshes.json via the assistant services), `hostedMeshes`,
+ * inventory (meshes.json + member meshes via the assistant services), `hostedMeshes`,
  * `listLocalCoordinatorSessions` + the coordinator registry, queue stats and
  * missions, and the router's own commands in-process (`launch_mesh_coordinator`,
  * `send_chat`, `read_chat`, `mesh_status_view`, `plan_mesh_onboarding`,
@@ -24,6 +24,7 @@ import {
     callRemoteHost, describeRemoteHost,
     type AssistantRemoteOp, type MeshTransportPort, type RemoteCallOutcome, type RemoteHostView,
 } from './assistant-remote-host.js';
+import { refreshMemberMeshDescriptors } from './member-meshes.js';
 
 export interface AssistantRelayHooks {
     openThread?(meshId: string): void;
@@ -81,6 +82,11 @@ export interface AssistantProjectPorts {
     execute: Execute;
     /** Who hosts a mesh this daemon does not host, and whether it is reachable (remote relay, owner decision 2026-10-08). */
     remoteHost(mesh: LocalMeshEntry): RemoteHostView;
+    /**
+     * Ask the hosts of member meshes known here only by id for their name /
+     * repoIdentity (member-meshes.ts). Bounded; never throws. Optional (fakes).
+     */
+    refreshMemberMeshes?(): Promise<void>;
     /** One `assistant_remote_project` call on the host. */
     callHost(target: RemoteHostView, op: AssistantRemoteOp, args: Record<string, unknown>): Promise<RemoteCallOutcome>;
     /** Host side: a coordinator session's ledger turns. */
@@ -179,6 +185,7 @@ export function createDefaultProjectPorts(ctx: ProjectPortsContext): AssistantPr
         relay: relayHooks,
         execute: ctx.execute,
         remoteHost: (mesh) => describeRemoteHost(mesh, ctx.selfDaemonId, ctx.transport ?? {}, lazy.peerHostMeshIds),
+        refreshMemberMeshes: () => refreshMemberMeshDescriptors(svc.listMeshes(), ctx.transport ?? {}),
         callHost: (target, op, args) => callRemoteHost(ctx.transport ?? {}, target, op, args),
         coordinatorTurns: (sessionId, limit = 5) => {
             try {

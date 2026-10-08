@@ -14,6 +14,7 @@ import { defaultHermesHome } from './skills/hermes-import.js';
 import { AssistantNoteStaging } from './note-staging.js';
 import { AssistantInputLog } from './assistant-input-log.js';
 import { listMeshesReadOnly } from '../config/mesh-config.js';
+import { withMemberMeshes } from './member-meshes.js';
 import type { LocalMeshEntry } from '../repo-mesh-types.js';
 import type { RecordOperatingNoteInput, OperatingNoteEntry } from '../mesh/mesh-operating-notes.js';
 
@@ -41,7 +42,10 @@ export interface AssistantServices {
     inputLog: AssistantInputLog;
     operatingNotes: AssistantOperatingNotesPort;
     hermesHome: string;
-    /** Project inventory (§4.2): this daemon's meshes.json. */
+    /**
+     * Project inventory (§4.2): this daemon's meshes.json plus the meshes it is
+     * a member of but another daemon hosts (member-meshes.ts).
+     */
     listMeshes: () => LocalMeshEntry[];
     /**
      * Whether this daemon hosts the mesh (§4.2 eligibility). Unset → the verb
@@ -83,7 +87,7 @@ export function createAssistantServices(opts: CreateAssistantServicesOptions = {
         inputLog: new AssistantInputLog(),
         operatingNotes: opts.operatingNotes ?? defaultOperatingNotes,
         hermesHome: opts.hermesHome ?? defaultHermesHome(),
-        listMeshes: opts.listMeshes ?? listMeshesReadOnly,
+        listMeshes: opts.listMeshes ?? (() => withMemberMeshes(listMeshesReadOnly())),
         ...(opts.isMeshHostedHere ? { isMeshHostedHere: opts.isMeshHostedHere } : {}),
     };
 }

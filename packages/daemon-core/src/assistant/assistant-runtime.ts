@@ -36,6 +36,7 @@ import { AssistantMetricsStore, SqliteAssistantRelayStore } from './assistant-re
 import { ASSISTANT_RELAY_BUS_KINDS, AssistantRelay, type AssistantPulledEvent, type AssistantRelayPorts, type MeshWorkCounts } from './assistant-relay.js';
 import { getAssistantServices } from './assistant-services.js';
 import { projectSlugs } from './assistant-projects.js';
+import { setAssistantMemberMeshSource } from './member-meshes.js';
 import { compactTranscriptTail } from './project-views.js';
 import { AssistantCurator, startAssistantCuratorTimer } from './skills/skill-curator.js';
 import { liveAssistantQuotaPort, type AssistantQuotaPort } from './assistant-quota.js';
@@ -234,6 +235,16 @@ export function wireAssistantRuntime(
     });
     const reviewScheduler = review;
 
+    // Meshes this daemon is a member of (no meshes.json record here): the
+    // router's inline cache of the hosts' records joins the inventory.
+    setAssistantMemberMeshSource({
+        selfDaemonId: () => str(components.statusInstanceId),
+        inlineMeshes: () => {
+            const cache = (components.router as { inlineMeshCache?: Map<string, unknown> } | undefined)?.inlineMeshCache;
+            return cache instanceof Map ? [...cache.values()] : [];
+        },
+    });
+
     // Remote-hosted projects: poll each open remote thread's host (the
     // project ports resolve host, reachability and the call; loaded once).
     let projectPorts: AssistantProjectPorts | null = null;
@@ -362,6 +373,7 @@ export function wireAssistantRuntime(
             disposed = true;
             setAssistantRelayHooks(null);
             setAssistantHumanInputSink(null);
+            setAssistantMemberMeshSource(null);
             if (services.reviewMetrics && getAssistantServices() === services) services.reviewMetrics = null;
             for (const off of offs.reverse()) {
                 try { off(); } catch { /* noop */ }

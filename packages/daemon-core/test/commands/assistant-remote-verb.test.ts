@@ -136,6 +136,22 @@ describe('assistant_remote_project — gates', () => {
         expect(execute).not.toHaveBeenCalled();
     });
 
+    it('admits a cloud member whose roster node is stored as bare mach_ while the transport stamps daemon_mach_ (and the reverse)', async () => {
+        const memberCore = MEMBER.replace(/^daemon_/, '');
+        const stored = hostMesh();
+        (stored.nodes as any[])[1].daemonId = memberCore;
+        meshes = [stored, meshes[1]!];
+        saveMeshConfig({ ...loadMeshConfig(), meshes: meshes as any });
+        const r: any = await hostRouter().execute('assistant_remote_project', relayed(MEMBER, { meshId: MESH, op: 'poll' }), 'mesh');
+        expect(r).toMatchObject({ success: true, coordinator: 'none' });
+        (stored.nodes as any[])[1].daemonId = MEMBER;
+        saveMeshConfig({ ...loadMeshConfig(), meshes: meshes as any });
+        const r2: any = await hostRouter().execute('assistant_remote_project', relayed(memberCore, { meshId: MESH, op: 'poll' }), 'mesh');
+        expect(r2).toMatchObject({ success: true, coordinator: 'none' });
+        const stranger: any = await hostRouter().execute('assistant_remote_project', relayed(STRANGER.replace(/^daemon_/, ''), { meshId: MESH, op: 'poll' }), 'mesh');
+        expect(stranger).toMatchObject({ success: false, code: 'mesh_sender_not_on_roster' });
+    });
+
     it('a roster member cannot drive a mesh this daemon does not host', async () => {
         const r: any = await hostRouter().execute('assistant_remote_project', relayed(MEMBER, { meshId: OTHER_MESH, op: 'send', text: 'x', clientId: 'c' }), 'mesh');
         expect(r).toMatchObject({ success: false, code: 'project_not_hosted_here' });
