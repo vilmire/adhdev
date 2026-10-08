@@ -99,6 +99,27 @@ export class LocalTransport {
     return res.json();
   }
 
+  /** Remote-node relay capability (transports/mode.ts): the standalone daemon
+   *  answers `mesh_relay_command` over its direct-WS mesh link. */
+  get supportsMeshRelay(): true {
+    return true;
+  }
+
+  /**
+   * Run `command` on another daemon of the mesh through the standalone daemon's
+   * `mesh_relay_command` — the HTTP twin of IpcTransport.meshCommand. Same
+   * payload, same nested-verb timeout (getTimeoutMs resolves the relay wrapper
+   * against the relayed verb). A remote failure comes back as a result
+   * (`success:false`, HTTP 200), a relay that could not run at all as a throw.
+   */
+  async meshCommand(
+    targetDaemonId: string,
+    command: string,
+    args: Record<string, unknown> = {},
+  ): Promise<any> {
+    return this.command('mesh_relay_command', { targetDaemonId, command, args });
+  }
+
   async ping(): Promise<boolean> {
     try {
       await this.getStatus();

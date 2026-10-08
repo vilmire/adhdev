@@ -11,7 +11,7 @@ import {
     refreshMeshFromDaemon,
     syncCoordinatorDaemonMeshCache,
 } from './mesh-tools-internal.js';
-import { IpcTransport } from '../transports/ipc.js';
+import { supportsMeshRelay } from '../transports/mode.js';
 import { buildCoordinatorP2pRelayFailure } from './mesh-remote-dispatch.js';
 import { daemonIdsEquivalent, meshNodeIdMatches } from '@adhdev/daemon-core';
 import {
@@ -522,7 +522,7 @@ export async function meshRemoveNode(
     try {
         result = await commandForNode(ctx, node, 'remove_mesh_node', removeArgs);
     } catch (e: any) {
-        if (ctx.transport instanceof IpcTransport && (node as any).isLocalWorktree && isP2pTransportUnavailableError(e)) {
+        if (supportsMeshRelay(ctx.transport) && (node as any).isLocalWorktree && isP2pTransportUnavailableError(e)) {
             result = await ctx.transport.command('remove_mesh_node', removeArgs);
             transportFallback = {
                 from: 'p2p_mesh_relay',

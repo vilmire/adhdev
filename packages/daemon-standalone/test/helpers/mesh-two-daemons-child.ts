@@ -34,6 +34,7 @@ import { StandaloneHttpApi } from '../../src/standalone-http.js';
 import { routeStandaloneUpgrade, rejectStandaloneUpgrade } from '../../src/standalone-seqscribe-upgrade.js';
 import { StandaloneMeshLink } from '../../src/standalone-mesh-link.js';
 import { createStandaloneHostTransport } from '../../src/standalone-host-transport.js';
+import { MESH_RELAY_COMMAND, runStandaloneMeshRelay } from '../../src/standalone-mesh-relay.js';
 
 type Msg = { id: number; op: string; [k: string]: unknown };
 
@@ -90,7 +91,15 @@ async function main(): Promise<void> {
   const http = new StandaloneHttpApi({
     isReady: () => true,
     getStatus: () => ({}) as any,
-    executeCommand: (type, payload) => host.execute(type, payload ?? {}, 'standalone') as Promise<any>,
+    // As StandaloneServer.executeCommand: the coordinator's remote-node relay
+    // is answered by the standalone relay, everything else by the host runtime.
+    executeCommand: (type, payload) => (type === MESH_RELAY_COMMAND
+      ? runStandaloneMeshRelay({
+        localDaemonId: statusInstanceId,
+        executeLocal: (command, args) => host.execute(command, args, 'standalone'),
+        dispatchRemote: (daemonId, command, args) => meshLink.dispatchCommand(daemonId, command, args),
+      }, payload)
+      : host.execute(type, payload ?? {}, 'standalone')) as Promise<any>,
     rawTerminalService: () => { throw new Error('no session host in this harness'); },
     interactivePromptService: () => { throw new Error('no session host in this harness'); },
     isCliSession: () => false,

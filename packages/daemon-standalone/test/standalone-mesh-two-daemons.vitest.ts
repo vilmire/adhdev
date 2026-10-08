@@ -272,6 +272,26 @@ describe('standalone multi-machine mesh — two daemon processes', () => {
     const memberNode = (status?.nodes ?? status?.status?.nodes ?? []).find((n: any) => typeof n?.daemonId === 'string' && n.daemonId.includes(member.ready.machineId));
     expect(memberNode?.connection?.state, JSON.stringify(status).slice(0, 2000)).toBe('connected');
 
+    // ── The coordinator's routing: the member's checkout path EXISTS on this
+    //    shared filesystem, yet the node is the member's (a live linked peer) —
+    //    so it routes remote, not 'checkout_on_this_machine'. ──
+    const memberNodeId = String(memberNode?.id ?? memberNode?.nodeId ?? '');
+    expect(memberNodeId).toBeTruthy();
+    const routes = await host.command('mesh_node_route', { meshId: hostMeshId });
+    expect(routes?.routes?.[memberNodeId], JSON.stringify(routes)).toMatchObject({ route: 'remote', reason: 'owner_is_linked_peer' });
+
+    // ── mesh_relay_command (the coordinator MCP's remote-node entry, over the
+    //    real HTTP command route): the verb runs on the MEMBER daemon. ──
+    const relayed = await host.command('mesh_relay_command', { targetDaemonId: memberId, command: 'get_status_metadata', args: {} });
+    expect(relayed?.success, JSON.stringify(relayed).slice(0, 1000)).not.toBe(false);
+    expect(JSON.stringify(relayed)).toContain(member.ready.machineId);
+    const relayedGit = await host.command('mesh_relay_command', { targetDaemonId: memberId, command: 'git_status', args: { workspace: memberRepo } });
+    expect(relayedGit?.success, JSON.stringify(relayedGit).slice(0, 1000)).toBe(true);
+    // Self-targeted (any id form) runs on this daemon instead of self-dialing.
+    const selfRelayed = await host.command('mesh_relay_command', { targetDaemonId: `daemon_${host.ready.machineId}`, command: 'get_status_metadata', args: {} });
+    expect(JSON.stringify(selfRelayed)).toContain(host.ready.machineId);
+    expect(JSON.stringify(selfRelayed)).not.toContain('SELF_DIAL');
+
     // ── seqscribe: a register entry written on the member reaches the host. ──
     const marker = { from: 'member', at: Date.now() };
     await member.op('ssSet', { key: 'test.twoDaemons', value: marker });

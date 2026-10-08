@@ -28,7 +28,7 @@ import {
     validateMeshTaskModeRequest,
     buildMeshTaskModeViolationError,
 } from '@adhdev/daemon-core';
-import { IpcTransport } from '../transports/ipc.js';
+import { supportsMeshRelay } from '../transports/mode.js';
 import {
     getSessionMetadata,
     meshSessionCacheKey,
@@ -1044,7 +1044,7 @@ export async function meshSendTask(
         }
         // One direct exit for both routes; only an untargeted send to a node this daemon
         // serves falls through to the queue pull (the local claim picks the session).
-        const directRoute: DirectDispatchRoute | null = route.route === 'remote' && ctx.transport instanceof IpcTransport
+        const directRoute: DirectDispatchRoute | null = route.route === 'remote' && supportsMeshRelay(ctx.transport)
             ? 'remote'
             : args.session_id ? 'local' : null;
         if (directRoute) return await dispatchSendTaskDirect(ctx, node, directRoute, args, req, explicitTargetSession);

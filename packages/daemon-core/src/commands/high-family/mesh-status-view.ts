@@ -221,6 +221,7 @@ export const meshStatusViewHandlers: Record<string, HighFamilyHandler> = {
             localDaemonId: ctx.deps.statusInstanceId,
             localMachineId: getMachineId() || '',
             hasMeshTransport: typeof ctx.deps.dispatchMeshCommand === 'function',
+            isLinkedPeer: (daemonId) => isConnectedMeshPeer(ctx.deps.getMeshPeerConnectionStatus?.(daemonId)),
         }) };
     },
 
@@ -240,9 +241,15 @@ export const meshStatusViewHandlers: Record<string, HighFamilyHandler> = {
             localDaemonId: ctx.deps.statusInstanceId,
             localMachineId: getMachineId() || '',
             hasMeshTransport: typeof ctx.deps.dispatchMeshCommand === 'function',
+            isLinkedPeer: (daemonId) => isConnectedMeshPeer(ctx.deps.getMeshPeerConnectionStatus?.(daemonId)),
         }, wanted) };
     },
 };
+
+/** A peer-status snapshot (`getMeshPeerConnectionStatus`) of an OPEN daemon⇄daemon link. */
+export function isConnectedMeshPeer(snapshot: Record<string, unknown> | null | undefined): boolean {
+    return !!snapshot && snapshot.state === 'connected';
+}
 
 export interface MeshNodeRouteDecision {
     route: 'local' | 'remote' | 'unreachable';
@@ -275,14 +282,32 @@ export function decideNodeRoutes(
  * The routing rule: a node served by ANOTHER daemon whose checkout is not on
  * this machine is `remote` (relayed to its owner over the mesh channel); every
  * other node — this daemon's own, or a checkout on this machine — is `local`.
+ *
+ * Exception to the checkout rule: when the owner is a LIVE mesh peer
+ * (`isLinkedPeer`), the node is `remote` even if a directory at its path exists
+ * here. Path existence cannot tell two machines apart — two checkouts at the
+ * same path (same user, same layout), or two daemons sharing one filesystem —
+ * and the node's sessions, transcripts and runtime live on the owner, so
+ * running its verbs here acts on the wrong daemon. A connected peer proves the
+ * owner is a different, reachable daemon; a stale id of this machine never
+ * connects, so that case keeps the checkout rule.
  */
-export function decideDispatchRoute(node: any, self: { localDaemonId?: string; localMachineId?: string; hasMeshTransport: boolean; workspaceExists?: (path: string) => boolean }):
+export function decideDispatchRoute(node: any, self: {
+    localDaemonId?: string;
+    localMachineId?: string;
+    hasMeshTransport: boolean;
+    workspaceExists?: (path: string) => boolean;
+    isLinkedPeer?: (daemonId: string) => boolean;
+}):
     { route: 'local' | 'remote' | 'unreachable'; ownerDaemonId?: string; reason: string } {
     const ownerDaemonId = readMeshNodeDaemonId(node) ?? '';
     const workspace = readText(node?.workspace);
     const exists = self.workspaceExists ?? ((path: string) => fs.existsSync(path));
     const foreign = !!ownerDaemonId && isForeignDaemonMeshNode(node, { localDaemonId: self.localDaemonId, localMachineId: self.localMachineId || '' });
     if (!foreign) return { route: 'local', reason: 'served_by_this_daemon' };
+    if (self.hasMeshTransport && self.isLinkedPeer?.(ownerDaemonId)) {
+        return { route: 'remote', ownerDaemonId, reason: 'owner_is_linked_peer' };
+    }
     if (workspace && exists(workspace)) return { route: 'local', ownerDaemonId, reason: 'checkout_on_this_machine' };
     if (!self.hasMeshTransport) return { route: 'unreachable', ownerDaemonId, reason: 'no_mesh_transport' };
     if (self.localDaemonId && daemonIdsEquivalent(ownerDaemonId, self.localDaemonId)) return { route: 'local', reason: 'served_by_this_daemon' };

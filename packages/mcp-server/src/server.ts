@@ -335,14 +335,16 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
       } catch { /* best-effort */ }
     }
 
-    if (transport instanceof IpcTransport) {
+    if (transport instanceof IpcTransport || transport instanceof LocalTransport) {
       try {
         const statusResult = await transport.getStatus();
-        const instanceId = typeof statusResult?.status?.instanceId === 'string' ? statusResult.status.instanceId.trim() : '';
-        const hostname = typeof statusResult?.status?.hostname === 'string'
-          ? statusResult.status.hostname.trim()
-          : typeof statusResult?.status?.machine?.hostname === 'string'
-            ? statusResult.status.machine.hostname.trim()
+        // IPC answers `{ status: {...} }`; the standalone REST status is the snapshot itself.
+        const status = transport instanceof LocalTransport ? statusResult : statusResult?.status;
+        const instanceId = typeof status?.instanceId === 'string' ? status.instanceId.trim() : '';
+        const hostname = typeof status?.hostname === 'string'
+          ? status.hostname.trim()
+          : typeof status?.machine?.hostname === 'string'
+            ? status.machine.hostname.trim()
             : '';
         if (instanceId) localDaemonId = instanceId;
         if (hostname) coordinatorHostname = hostname;

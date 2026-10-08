@@ -265,7 +265,8 @@ export default function DashboardMainView({
     const dockviewActionHandlersRef = React.useRef<{
         setShortcutForActiveTab: () => void
         restoreHiddenTabToSavedLocation: (tabKey: string) => void
-        activateConversationTab: (tabKey: string) => void
+        /** False when the dockview holds no panel for the tab (nothing was activated). */
+        activateConversationTab: (tabKey: string) => boolean
         resetAllPanelsToMain: () => void
         activatePreviousTabInGroup: () => void
         activateNextTabInGroup: () => void
@@ -393,14 +394,24 @@ export default function DashboardMainView({
             eventManager.showToast(t('sessionNav.chatNotFound'), 'info')
             return
         }
-        if (hiddenConversations.some(candidate => candidate.tabKey === conversation!.tabKey)) {
+        const wasHidden = hiddenConversations.some(candidate => candidate.tabKey === conversation!.tabKey)
+        if (wasHidden) {
             handleShowHiddenConversationWithRestore(conversation)
+        }
+        // A conversation can match while the workspace has no panel for it (a
+        // session this dashboard only knows by reference, e.g. a mesh worker on
+        // another machine): activation is then a silent no-op, so answer it
+        // like a miss instead of closing the dialog onto nothing. A hidden tab
+        // is exempt — its panel is being restored by the call above.
+        const activated = dockviewActionHandlersRef.current?.activateConversationTab(conversation.tabKey)
+        if (activated === false && !wasHidden) {
+            eventManager.showToast(t('sessionNav.chatNotFound'), 'info')
+            return
         }
         // The mesh dialog covers the whole screen — navigating from inside it
         // implies leaving it.
         setMeshGraphConversation(null)
         onDesktopActiveTabChange(conversation.tabKey)
-        dockviewActionHandlersRef.current?.activateConversationTab(conversation.tabKey)
         onRequestScrollToBottom(conversation.tabKey, 'conversation-open')
     }), [
         handleShowHiddenConversationWithRestore,

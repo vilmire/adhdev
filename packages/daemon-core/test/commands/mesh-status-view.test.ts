@@ -5,7 +5,7 @@
  * routing decision for a direct dispatch is the daemon's, not the tool's.
  */
 import { describe, expect, it, vi } from 'vitest'
-import { composeMeshStatusView, decideDispatchRoute, decideNodeRoutes, meshStatusViewHandlers } from '../../src/commands/high-family/mesh-status-view'
+import { composeMeshStatusView, decideDispatchRoute, decideNodeRoutes, isConnectedMeshPeer, meshStatusViewHandlers } from '../../src/commands/high-family/mesh-status-view'
 
 function fakeExecute(calls: string[]) {
   return vi.fn(async (cmd: string, args: Record<string, unknown>) => {
@@ -75,6 +75,22 @@ describe('mesh_dispatch_route — the daemon decides', () => {
   })
   it('another daemon\'s node without a mesh channel is unreachable (never sent in-process)', () => {
     expect(decideDispatchRoute({ id: 'c', daemonId: 'daemon_peer', workspace: '/there' }, { ...self, hasMeshTransport: false })).toMatchObject({ route: 'unreachable' })
+  })
+  it('a checkout path that exists here does not make a LINKED peer\'s node local (two machines, same path)', () => {
+    const linked = { ...self, isLinkedPeer: (id: string) => id === 'daemon_peer' }
+    expect(decideDispatchRoute({ id: 'b', daemonId: 'daemon_peer', workspace: '/here' }, linked))
+      .toEqual({ route: 'remote', ownerDaemonId: 'daemon_peer', reason: 'owner_is_linked_peer' })
+    // An owner that is not a live peer (e.g. a stale id of this machine) keeps the checkout rule.
+    expect(decideDispatchRoute({ id: 'b2', daemonId: 'daemon_stale', workspace: '/here' }, linked))
+      .toMatchObject({ route: 'local', reason: 'checkout_on_this_machine' })
+    // Without a mesh channel there is nothing to relay over.
+    expect(decideDispatchRoute({ id: 'b3', daemonId: 'daemon_peer', workspace: '/here' }, { ...linked, hasMeshTransport: false }))
+      .toMatchObject({ route: 'local', reason: 'checkout_on_this_machine' })
+  })
+  it('only an OPEN link counts as linked', () => {
+    expect(isConnectedMeshPeer({ state: 'connected' })).toBe(true)
+    expect(isConnectedMeshPeer({ state: 'connecting' })).toBe(false)
+    expect(isConnectedMeshPeer(null)).toBe(false)
   })
 })
 

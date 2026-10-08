@@ -398,6 +398,12 @@ export class IpcTransport {
     this.path = opts.path || DEFAULT_IPC_PATH;
   }
 
+  /** Remote-node relay capability (transports/mode.ts) — a prototype getter so a
+   *  prototype-built test double carries it too. */
+  get supportsMeshRelay(): true {
+    return true;
+  }
+
   async ping(): Promise<boolean> {
     try {
       const res = await fetch(`http://127.0.0.1:${this.port}/health`);
