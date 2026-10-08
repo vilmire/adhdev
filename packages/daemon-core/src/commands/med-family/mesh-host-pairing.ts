@@ -407,16 +407,22 @@ export const meshHostPairingHandlers: Record<string, MedFamilyHandler> = {
                     };
                 }
             }
-            const joined = meshRecord.inline
-                ? null
-                : markMeshHostPairingJoined(meshId, {
-                    tokenId: hostResult.tokenId || tokenId,
-                    hostDaemonId: hostResult.meshHost?.hostDaemonId || hostDaemonId,
-                    hostNodeId: hostResult.meshHost?.hostNodeId,
-                    joinedAt: hostResult.meshHost?.pairing?.joinedAt,
-                });
+            // Persist the pairing whenever the mesh lives in local config, even
+            // when the read above was served from the inline cache:
+            // configure_mesh_host_pairing warms that cache, so the card flow
+            // (configure → join) always resolves `inline` here. Skipping on
+            // `meshRecord.inline` left meshes.json at status 'pairing' with the
+            // member's own id as hostDaemonId (2026-10-08 live check). For a
+            // mesh that is NOT in local config this returns undefined.
+            const joined = markMeshHostPairingJoined(meshId, {
+                tokenId: hostResult.tokenId || tokenId,
+                hostDaemonId: hostResult.meshHost?.hostDaemonId || hostDaemonId,
+                hostNodeId: hostResult.meshHost?.hostNodeId,
+                joinedAt: hostResult.meshHost?.pairing?.joinedAt,
+            });
             if (joined) {
-                ctx.inlineMeshCache.set(meshId, joined.mesh);
+                // Union-warm, not a raw set: keep inline-cache-only nodes.
+                ctx.getCachedInlineMesh(meshId, joined.mesh);
                 ctx.invalidateAggregateMeshStatus(meshId);
             }
             // The host this member just paired with is its mesh host for the
@@ -428,6 +434,13 @@ export const meshHostPairingHandlers: Record<string, MedFamilyHandler> = {
             if (pairedHostDaemonId) {
                 const { writeMeshHostRecord } = await import('../../mesh/mesh-host-memory.js');
                 writeMeshHostRecord(meshId, pairedHostDaemonId, 'pairing');
+                // The host dispatches under ITS mesh id (the one the peer secret
+                // is keyed by), which differs from this member's local mesh id
+                // in the address + code flow. Record it too, so the sender gate
+                // is anchored by the pairing instead of trust-on-first-use.
+                if (secretMeshId && secretMeshId !== meshId) {
+                    writeMeshHostRecord(secretMeshId, pairedHostDaemonId, 'pairing');
+                }
             }
             return {
                 success: true,
