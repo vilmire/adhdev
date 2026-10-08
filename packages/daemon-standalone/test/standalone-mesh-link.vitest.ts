@@ -396,5 +396,7 @@ describe('meshPeerWsUrl', () => {
     const pairing = await import('../../daemon-core/src/commands/med-family/mesh-host-pairing.js');
     expect(core.WS_MESH_RPC_PATH).toBe(pairing.MESH_JOIN_TRANSPORT.wsPath);
     expect(core.STANDALONE_MESH_SEQSCRIBE_WS_PATH).toBe(pairing.MESH_JOIN_TRANSPORT.seqscribePath);
-  });
+    // The cold source import of mesh-host-pairing (and its daemon-core graph) can
+    // exceed the 5s default on a fresh CI runner (v1.0.77 tag run timed out here).
+  }, 60_000);
 });
