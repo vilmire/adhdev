@@ -21,7 +21,9 @@ If you want to contribute to the core ADHDev engine (the daemon or the web dashb
 ### Development Setup
 
 ```bash
-git clone https://github.com/vilmire/adhdev.git
+# vendor/seqscribe is a git submodule the daemon build depends on.
+# In an existing clone: git submodule update --init --recursive
+git clone --recurse-submodules https://github.com/vilmire/adhdev.git
 cd adhdev
 npm install
 

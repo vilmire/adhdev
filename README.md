@@ -304,8 +304,10 @@ Reference: [Self-hosted API docs](docs/self-hosted/local-api.md)
 
 ## Develop from source
 
+`vendor/seqscribe` is a git submodule the daemon build depends on, so clone with `--recurse-submodules` (in an existing clone: `git submodule update --init --recursive`):
+
 ```bash
-git clone https://github.com/vilmire/adhdev.git
+git clone --recurse-submodules https://github.com/vilmire/adhdev.git
 cd adhdev
 npm install
 npm run build

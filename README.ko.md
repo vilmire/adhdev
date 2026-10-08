@@ -304,8 +304,10 @@ provider는 포크해야 하는 코드가 아니라 데이터입니다. provider
 
 ## 소스에서 개발
 
+데몬 빌드가 의존하는 `vendor/seqscribe`가 git 서브모듈이므로 `--recurse-submodules`로 클론하세요 (이미 클론했다면 `git submodule update --init --recursive`):
+
 ```bash
-git clone https://github.com/vilmire/adhdev.git
+git clone --recurse-submodules https://github.com/vilmire/adhdev.git
 cd adhdev
 npm install
 npm run build
