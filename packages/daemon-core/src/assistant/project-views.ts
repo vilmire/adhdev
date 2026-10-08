@@ -65,6 +65,8 @@ export interface ProjectRow {
     host: string;
     /** Remote only: same as `host`. */
     hostLabel?: string;
+    /** Remote only, when it differs from `meshId`: the id the host keys this mesh by (standalone address + code pairing). */
+    hostMeshId?: string;
     /** `local` (hosted here), `relay` (remote, reachable now) or `unreachable` (with `unreachableReason`). */
     reachability: 'local' | 'relay' | 'unreachable';
     unreachableReason?: ProjectUnreachableReason;

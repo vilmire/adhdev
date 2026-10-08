@@ -29,6 +29,14 @@ describe('resolveAssistantProject', () => {
         expect(resolveAssistantProject('acme/prefex', meshes)).toMatchObject({ ok: true, mesh: { id: 'mesh_b' } });
     });
 
+    it("resolves a standalone-paired member mesh by the host's mesh id (live 1.0.78 two-machine test)", () => {
+        // The member keeps its own local id; the host dashboard and mesh tools show the host's id.
+        const member = [...meshes, { id: 'mesh_local', name: 'sa-pub-member', repoIdentity: 'github.com/acme/sa-mm-test', meshHost: { hostMeshId: 'mesh_host' } }];
+        expect(resolveAssistantProject('mesh_host', member)).toMatchObject({ ok: true, mesh: { id: 'mesh_local' } });
+        expect(resolveAssistantProject('mesh_local', member)).toMatchObject({ ok: true, mesh: { id: 'mesh_local' } });
+        expect(resolveAssistantProject('mesh_host', meshes)).toMatchObject({ ok: false, code: 'project_not_found' });
+    });
+
     it('returns project_ambiguous with candidates instead of picking one', () => {
         const r = resolveAssistantProject('prefex', meshes.slice(1).map((m) => ({ ...m, name: undefined })));
         expect(r.ok).toBe(false);

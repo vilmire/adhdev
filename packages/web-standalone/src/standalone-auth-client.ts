@@ -18,9 +18,23 @@ export interface StandalonePreferencesStatus {
   publicHostWarning: boolean
 }
 
+// The dashboard is opened as `/?token=…`, but in-app navigation (sidebar links,
+// "open chat", react-router navigate()) replaces the URL without the query string.
+// Reading the token only from the live URL therefore lost it after the first click:
+// later /api/ fetches went out unauthenticated (401) and a reconnecting transcript
+// WebSocket was refused. Remember the token for the page's lifetime once seen.
+let rememberedToken: string | null = null
+
 export function getStandaloneToken(): string | null {
   if (typeof window === 'undefined') return null
-  return new URLSearchParams(window.location.search).get('token')
+  const fromUrl = new URLSearchParams(window.location.search).get('token')
+  if (fromUrl) rememberedToken = fromUrl
+  return fromUrl || rememberedToken
+}
+
+/** Test seam: forget the remembered token. */
+export function __resetStandaloneTokenForTests(): void {
+  rememberedToken = null
 }
 
 export function buildStandaloneUrl(input: string): string {

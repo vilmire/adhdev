@@ -94,7 +94,7 @@ describe('assistant_projects', () => {
         expect(r.success).toBe(true);
         expect(r.projects).toEqual([
             { slug: 'adhdev', meshId: 'mesh_a', name: 'ADHDev', repo: 'github.com/vilmire/adhdev', hosting: 'here', host: 'this machine', reachability: 'local', coordinator: 'working', threadOpen: true, queue: { pending: 2, assigned: 1, failed: 3 }, activeMissions: 1, pendingApprovals: 0 },
-            { slug: 'blog', meshId: 'mesh_b', name: 'Blog', repo: 'github.com/vilmire/blog', hosting: 'remote', host: 'win-box', hostLabel: 'win-box', reachability: 'relay', threadOpen: false },
+            { slug: 'blog', meshId: 'mesh_b', name: 'Blog', repo: 'github.com/vilmire/blog', hosting: 'remote', host: 'win-box', hostLabel: 'win-box', hostMeshId: 'mesh_b_on_host', reachability: 'relay', threadOpen: false },
         ]);
         expect(callHost).not.toHaveBeenCalled();
         expect(r.unmanaged.map((p: any) => p.meshId)).toEqual(['mesh_s']);
