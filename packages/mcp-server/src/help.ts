@@ -39,6 +39,8 @@ Options:
   --mode <mode>           Transport: local or ipc
   --port <n>              Standalone or IPC daemon port (defaults: local 3847, ipc 19222)
   --password <pass>       Standalone daemon password (if set)
+  --daemon-auth-file <p>  Standalone daemon's per-boot MCP credential file (local mode;
+                          stamped by the daemon into the coordinator/assistant launch)
   --repo-mesh <mesh_id>   Enable mesh mode — exposes only mesh-scoped coordinator tools
   --worker                Enable worker mode — the minimal delegated-worker toolset.
                           Overrides --repo-mesh: a worker never gets coordinator tools.
@@ -48,6 +50,7 @@ Options:
 
 Environment variables:
   ADHDEV_PASSWORD     Daemon password (local mode)
+  ADHDEV_DAEMON_AUTH_FILE     Same as --daemon-auth-file (ignored in worker mode)
   ADHDEV_MESH_ID      Mesh ID (mesh mode)
   ADHDEV_MCP_TRANSPORT Transport: local or ipc
   ADHDEV_WORKER_SESSION_BIND  Worker session bind (worker mode; written by the daemon)

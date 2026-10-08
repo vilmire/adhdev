@@ -42,6 +42,8 @@ import {
   bootSessionHost,
   createDaemonHostRuntime,
   loadConfig,
+  getConfigDir,
+  ADHDEV_COORDINATOR_MCP_AUTH_FILE_ENV,
   maybeRunDaemonUpgradeHelperFromEnv,
   withRawTerminalAttachment,
   shouldAutoRestoreHostedSessionsOnStartup,
@@ -77,6 +79,11 @@ import { SessionHostClient } from '@adhdev/session-host-core';
 import type { RawTerminalHttpService } from './raw-terminal-http.js';
 import { createRouterInteractivePromptService } from './interactive-prompt-http.js';
 import { StandaloneHttpApi } from './standalone-http.js';
+import {
+  mintStandaloneMcpInternalToken,
+  standaloneMcpAuthFilePath,
+  writeStandaloneMcpAuthFile,
+} from './standalone-mcp-internal-auth.js';
 import { normalizeCommandEnvelope } from './standalone-command-envelope.js';
 import {
   rejectStandaloneUpgrade,
@@ -268,6 +275,22 @@ class StandaloneServer {
     if (topics?.hasSubscriptions(topic)) void topics.flushNow(topic);
   }
 
+  private configureMcpInternalAuth(port: number): void {
+    const token = mintStandaloneMcpInternalToken();
+    const authFile = standaloneMcpAuthFilePath(getConfigDir(), port);
+    try {
+      writeStandaloneMcpAuthFile(authFile, token);
+      this.http.internalAuthToken = token;
+      process.env[ADHDEV_COORDINATOR_MCP_AUTH_FILE_ENV] = authFile;
+    } catch (error: any) {
+      // Not fatal: an unauthenticated daemon needs no MCP credential, and a
+      // gated one reports the 401 through the MCP's own startup error.
+      this.http.internalAuthToken = null;
+      delete process.env[ADHDEV_COORDINATOR_MCP_AUTH_FILE_ENV];
+      LOG.warn('Standalone', `Could not write the MCP auth file ${authFile}: ${error?.message || error}`);
+    }
+  }
+
   async start(options: StandaloneOptions = {}): Promise<void> {
     const persistedStandaloneBindHost = loadStandaloneBindHostPreference();
     const cfg = loadConfig();
@@ -309,6 +332,12 @@ class StandaloneServer {
 
     // Auth token setup (opt-in only)
     this.http.configureAuth(options.token || process.env.ADHDEV_TOKEN || null);
+    // Coordinator / assistant MCP credential for a token- or password-gated
+    // daemon (daemon-core standalone-mcp-auth.ts). Minted every boot, even
+    // without auth: a password can be set at runtime from the dashboard, and
+    // MCP servers launched before that must keep working. Before the boot so
+    // MCP servers of restored sessions find this boot's token.
+    this.configureMcpInternalAuth(port);
 
     // Mesh links exist before the boot so the boot's mesh hooks (dispatch,
     // peer status, transcript peer) are wired from the first stage; the hooks

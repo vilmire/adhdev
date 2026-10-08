@@ -398,6 +398,16 @@ export {
   STANDALONE_CDP_SCAN_INTERVAL_MS,
   DEFAULT_STANDALONE_PORT,
 } from './runtime-defaults.js';
+export {
+  ADHDEV_INTERNAL_AUTH_HEADER,
+  ADHDEV_WORKER_CREDENTIAL_HEADER,
+  ADHDEV_DAEMON_AUTH_FILE_ENV,
+  ADHDEV_DAEMON_AUTH_FILE_FLAG,
+  ADHDEV_COORDINATOR_MCP_AUTH_FILE_ENV,
+  WORKER_MCP_DAEMON_VERBS,
+  isWorkerMcpDaemonVerb,
+} from './standalone-mcp-auth.js';
+export { isLiveWorkerMcpCredential } from './standalone-mcp-auth-verify.js';
 
 // ── Chat History ──
 export { readChatHistory } from './config/chat-history.js';

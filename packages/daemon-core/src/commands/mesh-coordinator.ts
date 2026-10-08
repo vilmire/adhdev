@@ -4,6 +4,7 @@ import { DEFAULT_SESSION_HOST_COLS, DEFAULT_SESSION_HOST_ROWS } from '@adhdev/se
 import { basename, dirname, isAbsolute, join } from 'node:path'
 import { LOG } from '../logging/logger.js'
 import { IDENTITY } from '../track-identity.js'
+import { ADHDEV_COORDINATOR_MCP_AUTH_FILE_ENV, ADHDEV_DAEMON_AUTH_FILE_FLAG } from '../standalone-mcp-auth.js'
 import { inspectEmbeddedPath, type EmbeddedPathHealth, type EmbeddedPathState } from '../config/embedded-path-health.js'
 import type { ProviderModule } from '../providers/contracts.js';
 import type { MeshCoordinatorMcpConfigFormat, MeshCoordinatorSystemPromptInjection } from '../providers/mesh-coordinator-contracts.js';
@@ -218,6 +219,7 @@ export function resolveAdhdevMcpServerLaunch(options: {
     const args = [directEntryPath, '--mode', transport, ...toolsetArgs(options.toolset)]
     const port = resolveMcpPort(options.adhdevMcpPort)
     if (port !== undefined) args.push('--port', String(port))
+    args.push(...resolveCoordinatorMcpAuthFileArgs(transport))
     return {
       command: resolveNodeExecutable(options.nodeExecutable),
       args,
@@ -236,6 +238,25 @@ export function resolveAdhdevMcpServerLaunch(options: {
     command,
     args,
   }
+}
+
+/**
+ * Coordinator / assistant scope credential for a token- or password-gated
+ * standalone daemon (standalone-mcp-auth.ts). The launch names the per-boot
+ * token FILE, never the token: the generated config outlives the daemon boot
+ * (and may live in the workspace), and the MCP server re-reads the file on
+ * every request, so the same config keeps working after a daemon restart.
+ *
+ * Only on the direct-entry path: that is the bundled mcp-server, which knows
+ * the flag. The `adhdev mcp` CLI wrapper does not, and it is the cloud (IPC)
+ * route anyway — IPC launches never get it. Worker launches never get it
+ * either (resolveWorkerMcpServerLaunch): a worker authenticates with its own
+ * session bind.
+ */
+function resolveCoordinatorMcpAuthFileArgs(transport: 'local' | 'ipc'): string[] {
+  if (transport !== 'local') return []
+  const authFile = process.env[ADHDEV_COORDINATOR_MCP_AUTH_FILE_ENV]?.trim()
+  return authFile ? [ADHDEV_DAEMON_AUTH_FILE_FLAG, authFile] : []
 }
 
 function resolveAdhdevCommand(explicitCommand?: string): string {

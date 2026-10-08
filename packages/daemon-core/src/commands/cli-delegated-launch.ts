@@ -19,6 +19,9 @@ const DEFAULT_COORDINATOR_DELEGATED_ENV_UNSETS = [
     'ADHDEV_INLINE_MESH',
     'ADHDEV_MCP_TRANSPORT',
     'ADHDEV_MESH_ID',
+    // Coordinator-scope MCP credential file (standalone-mcp-auth.ts): a worker
+    // authenticates with its own session bind, never the coordinator's file.
+    'ADHDEV_DAEMON_AUTH_FILE',
 ] as const;
 
 export interface CoordinatorDelegatedCliLaunchOptionsInput {
