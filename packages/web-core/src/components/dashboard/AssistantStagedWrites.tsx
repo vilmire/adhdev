@@ -170,7 +170,7 @@ function StagedItemRow({ item, state }: { item: AssistantStagedItem; state: Assi
     return (
         <div className="flex flex-col gap-1 px-2.5 py-2 [&+&]:border-t [&+&]:border-border-subtle" data-staged-item={item.id}>
             <div className="flex flex-wrap items-center gap-1.5">
-                <span className="rounded bg-accent-primary/15 px-1.5 py-px text-[10px] font-bold uppercase tracking-wide text-accent-primary">
+                <span className="rounded bg-accent-primary/15 px-1.5 py-px text-[10px] leading-none font-bold uppercase tracking-wide text-accent-primary">
                     {t(`assistantStaged.kind.${item.kind}`)}
                 </span>
                 <span className="font-medium text-text-primary">{action}</span>
