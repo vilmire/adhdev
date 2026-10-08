@@ -369,7 +369,16 @@ jobs:
             find "packages/ghostty-vt-node/prebuilt/${triplet}" -mindepth 2 -maxdepth 2 -type f -exec mv {} "packages/ghostty-vt-node/prebuilt/${triplet}/" \;
             find "packages/ghostty-vt-node/prebuilt/${triplet}" -mindepth 1 -type d -empty -delete
           done <<< "${artifact_names}"
+          # Artifacts drop symlinks, so the Linux SONAME file (libghostty-vt.so.0,
+          # what ghostty_vt_node.node actually asks the loader for) never arrives.
+          # v1.0.77 shipped without it and every Linux CLI launch failed with
+          # "libghostty-vt.so.0: cannot open shared object file". Materialize it.
+          node packages/ghostty-vt-node/scripts/ensure-prebuilt-sonames.mjs
           find packages/ghostty-vt-node/prebuilt -maxdepth 2 -type f -print | sort
+
+      - name: Verify ghostty prebuilts load (release gate)
+        if: steps.ghostty_release.outputs.publish == 'true'
+        run: node packages/ghostty-vt-node/scripts/ensure-prebuilt-sonames.mjs --check --load
 
       - name: Download publish artifacts
         uses: actions/download-artifact@v8
