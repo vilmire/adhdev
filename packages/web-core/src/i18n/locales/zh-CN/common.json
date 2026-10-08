@@ -1551,6 +1551,45 @@
         "reviewLabel": "记忆整理",
         "daemonNoticeLabel": "通知"
     },
+    "assistantStaged": {
+        "badge": "{{count}} 项待批准",
+        "badgeTitle": "等待你批准的助手写入",
+        "title": "等待你批准",
+        "hint": "批准前不会写入任何内容。",
+        "close": "关闭",
+        "approve": "批准",
+        "reject": "拒绝",
+        "approveAll": "全部批准",
+        "rejectAll": "全部拒绝",
+        "reviewGroup": "回顾 · {{count}} 项",
+        "partial": "{{total}} 项中有 {{failed}} 项未处理 — 见下方",
+        "failed": "未完成：{{code}}",
+        "noText": "（无文本）",
+        "protectedSkill": "修改你编写的技能",
+        "kind": {
+            "memory": "记忆",
+            "user": "用户",
+            "skill": "技能",
+            "note": "笔记"
+        },
+        "action": {
+            "add": "添加",
+            "replace": "替换",
+            "remove": "删除",
+            "create": "创建",
+            "patch": "编辑",
+            "archive": "归档",
+            "record": "记录",
+            "forget": "移除"
+        },
+        "origin": {
+            "relay": "来自中继",
+            "review": "来自回顾",
+            "review_tainted": "来自不可信输入后的回顾",
+            "human": "来自你",
+            "owner": "来自你"
+        }
+    },
     "chatPane": {
         "debugBundleFailed": "无法收集调试信息",
         "connectingToMachine": "正在连接到你的机器",

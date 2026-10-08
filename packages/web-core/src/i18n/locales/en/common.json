@@ -1551,6 +1551,45 @@
         "reviewLabel": "Memory review",
         "daemonNoticeLabel": "Notice"
     },
+    "assistantStaged": {
+        "badge": "{{count}} pending",
+        "badgeTitle": "Assistant writes held for your approval",
+        "title": "Held for your approval",
+        "hint": "Nothing is written until you approve.",
+        "close": "Close",
+        "approve": "Approve",
+        "reject": "Reject",
+        "approveAll": "Approve all",
+        "rejectAll": "Reject all",
+        "reviewGroup": "Review results · {{count}}",
+        "partial": "{{failed}} of {{total}} not resolved — see below",
+        "failed": "Not done: {{code}}",
+        "noText": "(no text)",
+        "protectedSkill": "changes a skill you wrote",
+        "kind": {
+            "memory": "Memory",
+            "user": "User",
+            "skill": "Skill",
+            "note": "Note"
+        },
+        "action": {
+            "add": "Add",
+            "replace": "Replace",
+            "remove": "Remove",
+            "create": "Create",
+            "patch": "Edit",
+            "archive": "Archive",
+            "record": "Record",
+            "forget": "Forget"
+        },
+        "origin": {
+            "relay": "From a relay",
+            "review": "From a review",
+            "review_tainted": "From a review after untrusted input",
+            "human": "From you",
+            "owner": "From you"
+        }
+    },
     "chatPane": {
         "debugBundleFailed": "Couldn't collect debug info",
         "connectingToMachine": "Connecting to your machine",

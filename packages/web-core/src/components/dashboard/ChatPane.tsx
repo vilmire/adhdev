@@ -9,6 +9,7 @@ import ChatMessageList, { getChatMessageStableKey, type ToolExpandAddress } from
 import ChatControlsSection, { readSessionLaunchSurface } from './ChatControlsSection';
 import ChatInputBar, { type ImageAttachment } from './ChatInputBar';
 import PendingQueueStrip from './PendingQueueStrip';
+import AssistantStagedWrites from './AssistantStagedWrites';
 import ChatMachineReconnectButton from './ChatMachineReconnectButton';
 import { getVisibleBarControls } from './ControlsBar';
 import { useControlsBarVisibility } from '../../hooks/useControlsBarVisibility';
@@ -702,6 +703,11 @@ export default function ChatPane({
                     info moved into the pane toolbar's "…" menu
                     (ConversationActionsMenu) so this row stays a single control. */}
                 <div className="ml-auto flex items-center gap-1">
+                    {/* Assistant pane only: writes held for the owner's approval
+                        (hidden while none are held). */}
+                    {isAssistantPane && (
+                        <AssistantStagedWrites daemonId={daemonId} status={activeConv.status} sendCommand={sendCommand} />
+                    )}
                     <ChatMachineReconnectButton
                         machineId={chatMachineId}
                         blocked={!!machineRetryStatus?.blocked}
