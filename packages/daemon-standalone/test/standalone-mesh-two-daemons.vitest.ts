@@ -167,7 +167,9 @@ const nodes: Node[] = [];
 afterAll(async () => {
   await Promise.all(nodes.map((n) => n.stop()));
   // Exited children can still have a pending fs write in flight; retry once.
-  for (const root of roots) rmSync(root, { recursive: true, force: true, maxRetries: 3 });
+  for (const root of roots) {
+    try { rmSync(root, { recursive: true, force: true, maxRetries: 3 }); } catch { /* retried below */ }
+  }
   await new Promise((r) => setTimeout(r, 300));
   for (const root of roots) rmSync(root, { recursive: true, force: true });
 }, 30_000);
@@ -327,5 +329,45 @@ describe('standalone multi-machine mesh — two daemon processes', () => {
     await waitFor('member reconnects to the restarted host', async () => (await member.op('peerStatus', { daemonId: hostId }))?.state === 'connected', 15_000);
     const afterRestart = unwrap(await member.op('dispatch', { daemonId: hostId, command: 'get_status_metadata', args: {} }));
     expect(JSON.stringify(afterRestart)).toContain(host.ready.machineId);
-  }, 90_000);
+
+    // ── Member presence on the host's mesh_status follows the link. ──
+    //    A killed member (SIGKILL: no shutdown, the OS closes its sockets) is
+    //    offline as soon as the host sees the socket close — never 'online'
+    //    from its last held push — and online again once it reconnects.
+    const readMemberNode = async (refresh = false): Promise<any> => {
+      const res = await host.command('mesh_status', refresh ? { meshId: hostMeshId, refresh: true } : { meshId: hostMeshId });
+      return (res?.nodes ?? res?.status?.nodes ?? []).find((n: any) => typeof n?.daemonId === 'string' && n.daemonId.includes(member.ready.machineId));
+    };
+    await waitFor('host holds the member online before the kill', async () => {
+      const node = await readMemberNode();
+      return node?.machineStatus === 'online' && node?.connection?.state === 'connected';
+    }, 15_000);
+    const memberHomeRestart = memberHome;
+    const killedMember = member;
+    killedMember.child.kill('SIGKILL');
+    await new Promise<void>((done) => { if (killedMember.child.exitCode !== null || killedMember.child.signalCode) done(); else killedMember.child.once('exit', () => done()); });
+    nodes.splice(nodes.indexOf(killedMember), 1);
+    const killedAt = Date.now();
+    const offline = await waitFor<any>('host reports the killed member offline', async () => {
+      const node = await readMemberNode();
+      return node?.machineStatus === 'offline' ? node : null;
+    }, 3_000);
+    expect(Date.now() - killedAt).toBeLessThan(3_000);
+    expect(offline.connection?.state).not.toBe('connected');
+    expect(offline.health).toBe('offline');
+    expect(offline.launchReady).toBe(false);
+    // An explicit refresh (which queues a nudge → a 'connecting' peer on the
+    // host) must not bring 'online' back either.
+    const refreshed = await readMemberNode(true);
+    expect(refreshed?.machineStatus, JSON.stringify(refreshed?.connection)).toBe('offline');
+    expect((await readMemberNode())?.machineStatus).toBe('offline');
+
+    const revived = await Node.start('member', memberHomeRestart);
+    nodes.push(revived);
+    expect(revived.ready.statusInstanceId).toBe(memberId);
+    await waitFor('host reports the restarted member online', async () => {
+      const node = await readMemberNode();
+      return node?.machineStatus === 'online' && node?.connection?.state === 'connected';
+    }, 15_000);
+  }, 120_000);
 });

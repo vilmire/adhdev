@@ -226,6 +226,8 @@ export interface RepoMeshPeerConnectionStatus {
     lastStateChangeAt?: string;
     lastConnectedAt?: string;
     lastCommandAt?: string;
+    /** The link state is the peer daemon's presence (standalone direct WS) — see MeshPeerSnapshot.linkIsPresence. */
+    linkIsPresence?: boolean;
 }
 
 export interface RepoMeshNodeStatus {

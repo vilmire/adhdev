@@ -58187,6 +58187,27 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         fs14 = __toESM2(require("fs"));
       }
     });
+    function readMeshNodeLinkPresence(connection) {
+      const record2 = readRecord2(connection);
+      if (record2.linkIsPresence !== true || record2.source !== "mesh_peer_status") return null;
+      return record2.state === "connected" ? "online" : "offline";
+    }
+    function applyMeshNodeLinkPresence(status) {
+      const presence = readMeshNodeLinkPresence(status.connection);
+      if (!presence) return null;
+      status.machineStatus = presence;
+      if (presence === "offline") {
+        status.health = "offline";
+        status.launchReady = false;
+      }
+      return presence;
+    }
+    var init_mesh_node_link_presence = __esm2({
+      "src/mesh/mesh-node-link-presence.ts"() {
+        "use strict";
+        init_dist();
+      }
+    });
     function hasGitWorktreeChanges(git3) {
       return countGitWorktreeChanges2(git3) > 0;
     }
@@ -58390,6 +58411,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         const machineStatus = readStringValue(cachedStatus.machineStatus, cachedStatus.machine_status, node?.machineStatus);
         if (machineStatus) status.machineStatus = machineStatus;
       }
+      applyMeshNodeLinkPresence(status);
       synthesizeMeshNodeFreshnessFromConnection(status);
       const liveTruthProbed = readBooleanValue(status[MESH_NODE_LIVE_TRUTH_MARKER]) === true;
       delete status[MESH_NODE_LIVE_TRUTH_MARKER];
@@ -58469,6 +58491,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         init_worktree_bootstrap_config();
         init_mesh_node_sessions();
         init_mesh_node_record_readers();
+        init_mesh_node_link_presence();
         MESH_NODE_LIVE_TRUTH_MARKER = "__liveTruthProbed";
         MESH_FRESHNESS_FRESH_MS = 3e4;
         MESH_FRESHNESS_RECENT_MS = 3e5;
@@ -96503,7 +96526,8 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
             lastCommandAt: peer.lastCommandAt,
             ...peer.state !== "connected" && link?.lastFailureCode ? { lastFailureCode: link.lastFailureCode, lastFailureAt: link.lastFailureAt, nextRetryAt: link.nextRetryAt } : {},
             attempt: peer.attempt,
-            authEpoch: 0
+            authEpoch: 0,
+            linkIsPresence: true
           };
         }
         const diagnostic = this.peerDiagnostics.get(target);
@@ -96530,7 +96554,8 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
             lastFailureAt: link.lastFailureAt,
             attempt: link.failures,
             nextRetryAt: link.nextRetryAt,
-            authEpoch: 0
+            authEpoch: 0,
+            linkIsPresence: true
           };
         }
         if (!diagnostic) return null;
@@ -96553,7 +96578,8 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           lastFailureAt: diagnostic.lastFailureAt,
           attempt: diagnostic.attempt,
           nextRetryAt: diagnostic.nextRetryAt,
-          authEpoch: diagnostic.authEpoch
+          authEpoch: diagnostic.authEpoch,
+          linkIsPresence: true
         };
       }
       /** Every live peer entry (connecting or connected). */
@@ -123987,6 +124013,7 @@ ${marker}`,
     var fs65 = __toESM2(require("fs"));
     init_dist();
     init_mesh_node_git_refresher();
+    init_mesh_node_link_presence();
     var MESH_NODE_STATE_HELD_SOURCE = "coordinator_node_state";
     var MESH_NODE_STATE_REFRESH_MAX_AGE_MS = 3e4;
     function workspaceExistsLocally(workspace) {
@@ -124211,6 +124238,7 @@ ${marker}`,
       if (args.locality) snapshot.nodeRuntimeHeld = true;
       for (const status of snapshot.nodes) {
         if (!status || typeof status !== "object") continue;
+        applyMeshNodeLinkPresence(status);
         const nodeId = readText(status.nodeId);
         const daemonId = readText(status.daemonId);
         if (args.locality && status.connection?.state !== "self" && isForeignDaemonMeshNode(status, args.locality)) {
@@ -131705,6 +131733,21 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       self.aggregateMeshStatusCache.set(meshId, { builtAt, snapshot: cloneAggregateSnapshot(next), queueRevision: getMeshQueueRevision(meshId) });
       return next;
     }
+    function invalidateAggregateMeshStatusForPeer(self, daemonId) {
+      const wanted = readStringValue(daemonId);
+      if (!wanted) return 0;
+      const meshIds = [];
+      for (const [meshId, cached5] of self.aggregateMeshStatusCache) {
+        const nodes = Array.isArray(cached5?.snapshot?.nodes) ? cached5.snapshot.nodes : [];
+        const servesPeer = nodes.some((node) => {
+          const nodeDaemonId = readStringValue(node?.daemonId);
+          return !!nodeDaemonId && daemonIdsEquivalent4(nodeDaemonId, wanted);
+        });
+        if (servesPeer) meshIds.push(meshId);
+      }
+      for (const meshId of meshIds) self.invalidateAggregateMeshStatus(meshId);
+      return meshIds.length;
+    }
     init_dist();
     init_mesh_node_identity();
     function resolveRemoteMeshSessionOwnerDaemonId(self, sessionId, ownerNodeIdHint) {
@@ -132756,10 +132799,21 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
        */
       noteMeshPeerOpened(daemonId) {
         if (typeof daemonId !== "string" || !daemonId.trim()) return;
+        invalidateAggregateMeshStatusForPeer(this, daemonId);
         void this.resumeMeshNodeStatePushOnStartup().then(() => {
           this.meshNodeStatePusher.pushNow(daemonId);
         });
         void handshakeMeshMemberDaemon(this.meshNodeStateLifecyclePort(), daemonId, "reconnect").catch(() => 0);
+      }
+      /**
+       * Host wiring: the mesh link to peer daemon `daemonId` closed (its last
+       * socket went). Cached mesh_status renders of its nodes are dropped so a
+       * presence link (standalone direct WS) reads offline now; the next open
+       * re-handshakes (noteMeshPeerOpened).
+       */
+      noteMeshPeerClosed(daemonId) {
+        if (typeof daemonId !== "string" || !daemonId.trim()) return;
+        invalidateAggregateMeshStatusForPeer(this, daemonId);
       }
       /**
        * This coordinator is restarting / upgrading member daemon `daemonId`

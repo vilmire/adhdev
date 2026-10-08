@@ -14,6 +14,7 @@ import * as fs from 'fs';
 import { isWorktreeBootstrapStaleRunning, isRemoteWorktreeBootstrapStaleRunning } from './worktree-bootstrap-config.js';
 import { readCachedInlineMeshActiveSessions, readCachedInlineMeshActiveSessionDetails } from './mesh-node-sessions.js';
 import { toIsoTimestamp } from './mesh-node-record-readers.js';
+import { applyMeshNodeLinkPresence } from './mesh-node-link-presence.js';
 
 function hasGitWorktreeChanges(git: Record<string, unknown> | null | undefined): boolean {
     return countGitWorktreeChanges(git) > 0;
@@ -406,6 +407,10 @@ export function finalizeMeshNodeStatus(args: {
         const machineStatus = readStringValue(cachedStatus.machineStatus, cachedStatus.machine_status, node?.machineStatus);
         if (machineStatus) status.machineStatus = machineStatus;
     }
+    // A presence link (standalone direct WS) overrides the held machineStatus /
+    // git-derived health: a member whose link is down is offline, not 'online'
+    // from its last push (mesh-node-link-presence.ts).
+    applyMeshNodeLinkPresence(status);
     synthesizeMeshNodeFreshnessFromConnection(status);
     // Stamp the additive freshness/reachability marker before any early return so
     // every node — including bootstrap-blocked ones — carries it. Consume and drop
