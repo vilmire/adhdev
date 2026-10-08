@@ -70289,7 +70289,7 @@ ${upstream}`;
         "use strict";
         init_dist();
         COMMAND_SOURCE_ARG = "_commandSource";
-        COMMAND_SOURCE_STAMPED = /* @__PURE__ */ new Set(["send_chat"]);
+        COMMAND_SOURCE_STAMPED = /* @__PURE__ */ new Set(["send_chat", "pty_input"]);
       }
     });
     function normalizeNodeIdKey(nodeId) {
@@ -79401,17 +79401,61 @@ ${cleanBody}`;
     function reportSessionChatInput(report) {
       if (!sink || !isHumanCommandSource(report.source)) return;
       try {
-        sink(report);
+        sink.chat(report);
+      } catch {
+      }
+    }
+    function countTerminalSubmits(data, inPaste = false) {
+      let submits = 0;
+      let i = 0;
+      let paste = inPaste;
+      while (i < data.length) {
+        if (paste) {
+          const end = data.indexOf(BRACKETED_PASTE_END, i);
+          if (end < 0) return { submits, inPaste: true };
+          paste = false;
+          i = end + BRACKETED_PASTE_END.length;
+          continue;
+        }
+        if (data.startsWith(BRACKETED_PASTE_START, i)) {
+          paste = true;
+          i += BRACKETED_PASTE_START.length;
+          continue;
+        }
+        const ch = data[i];
+        if (ch === "\x1B" && data[i + 1] === "\r") {
+          i += data[i + 2] === "\n" ? 3 : 2;
+          continue;
+        }
+        if (ch === "\r" || ch === "\n") {
+          submits += 1;
+          i += ch === "\r" && data[i + 1] === "\n" ? 2 : 1;
+          continue;
+        }
+        i += 1;
+      }
+      return { submits, inPaste: paste };
+    }
+    function reportSessionTerminalInput(report) {
+      if (!sink || !isHumanCommandSource(report.source) || typeof report.data !== "string" || !report.data) return;
+      try {
+        sink.terminal(report);
       } catch {
       }
     }
     var ASSISTANT_HUMAN_COMMAND_SOURCES;
     var sink;
+    var TERMINAL_SUBMITS_PER_WRITE_CAP;
+    var BRACKETED_PASTE_START;
+    var BRACKETED_PASTE_END;
     var init_assistant_human_input = __esm2({
       "src/assistant/assistant-human-input.ts"() {
         "use strict";
         ASSISTANT_HUMAN_COMMAND_SOURCES = ["ws", "p2p", "standalone"];
         sink = null;
+        TERMINAL_SUBMITS_PER_WRITE_CAP = 1;
+        BRACKETED_PASTE_START = "\x1B[200~";
+        BRACKETED_PASTE_END = "\x1B[201~";
       }
     });
     function isV4Spec(raw) {
@@ -87658,6 +87702,7 @@ ${body}`;
         "use strict";
         init_dist();
         init_assistant_registry();
+        init_assistant_human_input();
         init_assistant_relay_format();
         ASSISTANT_RELAY_BUS_KINDS = ["turn", "modal", "prompt", "terminated", "registered", "status"];
         PENDING_HUMAN_MAX_AGE_MS = 5 * 6e4;
@@ -87691,6 +87736,9 @@ ${body}`;
           /** Human inputs parked in the driver FIFO, oldest first (logged when drained). */
           pendingHuman = [];
           resolvingHuman = null;
+          /** Bracketed paste left open by the last terminal write into this assistant session. */
+          terminalPaste = { sessionId: "", open: false };
+          terminalSeq = 0;
           unsubscribe = null;
           flushing = null;
           dirty = false;
@@ -87803,6 +87851,29 @@ ${body}`;
               this.ports.inputLog.append(sid, "human", { at: this.clock.now(), messageId });
             } else if (!this.pendingHuman.some((p) => p.messageId === messageId)) {
               this.pendingHuman.push({ at: this.clock.now(), messageId });
+            }
+          }
+          /**
+           * A human dashboard wrote raw terminal input into a session
+           * (assistant-human-input.ts `reportSessionTerminalInput`). The write went
+           * straight into the PTY, so it is logged now, in order: one `human` entry
+           * per write that carries a submit key outside a bracketed paste, capped at
+           * `TERMINAL_SUBMITS_PER_WRITE_CAP`, with a synthetic id
+           * `term:<session>:<ms>:<n>`. Keystrokes without a submit key log nothing.
+           * Only the bound assistant session is recorded.
+           */
+          recordHumanTerminalInput(sessionIds, data) {
+            const sid = this.ports.assistantSessionId();
+            if (!sid || !sessionIds.includes(sid)) return;
+            const prevOpen = this.terminalPaste.sessionId === sid && this.terminalPaste.open;
+            const { submits, inPaste } = countTerminalSubmits(data, prevOpen);
+            this.terminalPaste = { sessionId: sid, open: inPaste };
+            if (submits === 0) return;
+            this.dropQueuedReview();
+            const at = this.clock.now();
+            for (let k = 0; k < Math.min(submits, TERMINAL_SUBMITS_PER_WRITE_CAP); k++) {
+              this.terminalSeq += 1;
+              this.ports.inputLog.append(sid, "human", { at, messageId: `term:${sid}:${at}:${this.terminalSeq}` });
             }
           }
           /** Periodic (≈1 min): progress / stall signals, vanished projects, retention, retries. */
@@ -88490,7 +88561,10 @@ ${body}`;
       };
       const services = getAssistantServices();
       services.reviewMetrics = metrics2 ? { creditReviewWrite: (id22, kind, at) => metrics2.creditReviewWrite(id22, kind, at) } : null;
-      setAssistantHumanInputSink((r) => relay.recordHumanSubmit(r.sessionIds, r.messageId, r.outcome));
+      setAssistantHumanInputSink({
+        chat: (r) => relay.recordHumanSubmit(r.sessionIds, r.messageId, r.outcome),
+        terminal: (r) => relay.recordHumanTerminalInput(r.sessionIds, r.data)
+      });
       setAssistantRelayHooks({
         openThread: (meshId) => {
           activate("project_send");
@@ -92500,6 +92574,7 @@ ${tail}` : ""
       removePeerSecret: () => removePeerSecret,
       removeWorktree: () => removeWorktree,
       renderNotice: () => renderNotice,
+      reportSessionTerminalInput: () => reportSessionTerminalInput,
       requeueTask: () => requeueTask,
       requireMeshHostQueueOwner: () => requireMeshHostQueueOwner,
       resetConfig: () => resetConfig,
@@ -119258,6 +119333,8 @@ ${marker}`,
     }
     init_control_effects();
     init_logger();
+    init_assistant_human_input();
+    init_command_args();
     function normalizeOpenPanelCommandResult(result) {
       const payload = Object.prototype.hasOwnProperty.call(result, "result") ? result.result : result;
       if (payload === true) return { opened: true, visible: true, focused: false };
@@ -119337,6 +119414,10 @@ ${marker}`,
         return { success: false, error: `CLI adapter not found: ${targetSessionId || cliType || "unknown"}` };
       }
       await adapter.writeRaw(cleanData);
+      const requested = typeof targetSessionId === "string" ? targetSessionId.trim() : "";
+      const resolved = h.currentSession?.sessionId || "";
+      const sessionIds = [...new Set([requested, resolved].filter(Boolean))];
+      if (typeof cleanData === "string" && sessionIds.length) reportSessionTerminalInput({ sessionIds, data: cleanData, source: readCommandSource(args) });
       return { success: true };
     }
     function handlePtyResize(_h, args) {
@@ -161847,6 +161928,7 @@ ${notice.notice}${supersededHint}`;
       };
     }
     init_command_args();
+    init_assistant_human_input();
   }
 });
 
