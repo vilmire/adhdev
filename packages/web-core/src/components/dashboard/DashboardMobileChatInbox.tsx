@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { MouseEvent } from 'react'
 import { useTranslation } from 'react-i18next'
-import { IconBell, IconBellOff, IconSettings, IconChat, IconEyeOff, IconMesh, IconMoreHorizontal, IconX } from '../Icons'
+import { IconAssistant, IconBell, IconBellOff, IconSettings, IconChat, IconEyeOff, IconMesh, IconMoreHorizontal, IconX } from '../Icons'
 import InstallCommand from '../InstallCommand'
 import { countGeneratingConversations, formatRelativeTime, getConversationViewStates, type MobileConversationListItem, type MobileMachineCard } from './DashboardMobileChatShared'
 import type { ActiveConversation } from './types'
@@ -16,11 +16,23 @@ import { getProviderArgs, getRouteTarget } from '../../hooks/dashboardCommandUti
 import { unwrapCommandResult } from '../../hooks/useDashboardConversationCommands'
 import GitStatusPill from '../git/GitStatusPill'
 import LoadingSpinner from '../ui/LoadingSpinner'
+import { isAssistantConversation } from './assistant-session'
+import { getMobileInboxRowType, type MobileInboxRowType } from './dashboard-mobile-chat-mode-helpers'
+import StartAssistantButton from './StartAssistantButton'
+import type { StartAssistantState } from '../../hooks/useStartAssistant'
 
 type MobileInboxDebugBundleCollector = (conversation: ActiveConversation) => void | Promise<void>
 
 interface DashboardMobileChatInboxProps {
     section: DashboardMobileSection
+    /** The personal assistant, pinned above every bucket (see `groupMobileInboxItems`). */
+    assistantItems?: MobileConversationListItem[]
+    /**
+     * The dashboard's one "Start assistant" state (`useStartAssistant`, owned by
+     * DashboardMainView for desktop header and mobile alike). Its entry is shown
+     * pinned while `visible` — no assistant session yet and a machine can host one.
+     */
+    startAssistant?: StartAssistantState | null
     attentionItems: MobileConversationListItem[]
     unreadItems: MobileConversationListItem[]
     workingItems: MobileConversationListItem[]
@@ -228,7 +240,7 @@ function DashboardMobileChatItem({
     onToggleMute,
 }: {
     item: MobileConversationListItem
-    type: 'needs_attention' | 'task_complete' | 'working' | 'earlier'
+    type: MobileInboxRowType
     getAvatarText: (primary: string) => string
     onOpenConversation: (c: ActiveConversation) => void
     onRequestHideConversation?: () => void
@@ -267,6 +279,7 @@ function DashboardMobileChatItem({
     const timestampClassName = isEarlier ? 'text-text-muted opacity-80' : 'text-text-muted'
     const shouldShowTimestamp = !isWorking && !isTaskComplete
     const meshGraphAvailable = isMeshGraphAvailableFor(item.conversation)
+    const isAssistant = isAssistantConversation(item.conversation)
     const warningTextClassName = 'text-[color:var(--status-warning)]'
     const handleConversationContextMenu = (event: MouseEvent<HTMLButtonElement>) => {
         if (!onCollectChatDebugBundle) return
@@ -297,7 +310,7 @@ function DashboardMobileChatItem({
                         className={`w-11 h-11 rounded-full flex items-center justify-center text-sm font-bold shrink-0 ${avatarClassName}`}
                         style={isUnread ? { color: 'var(--accent-on-primary)' } : undefined}
                     >
-                        {getAvatarText(title)}
+                        {isAssistant ? <IconAssistant size={18} /> : getAvatarText(title)}
                     </span>
                     {meshGraphAvailable && onOpenMeshGraph && (
                         <button
@@ -377,6 +390,42 @@ function DashboardMobileChatItem({
 }
 
 /**
+ * Pinned "Start assistant" entry — the mobile counterpart of the desktop
+ * header's split button, which it reuses as is (same default target, same
+ * CLI / machine / model picker, same `launch_assistant` call).
+ */
+function MobileStartAssistantCard({ startAssistant }: { startAssistant: StartAssistantState }) {
+    const { t } = useTranslation()
+    return (
+        <div className="flex items-start gap-3.5 px-4 py-3.5" data-testid="mobile-inbox-start-assistant">
+            <span className="w-11 h-11 rounded-full flex items-center justify-center shrink-0 border border-accent-primary/22 bg-[color:color-mix(in_oklab,var(--bg-primary)_82%,var(--accent-primary)_18%)] text-accent-primary">
+                <IconAssistant size={18} />
+            </span>
+            <div className="flex min-w-0 flex-1 flex-col gap-2">
+                <div className="flex min-w-0 flex-col gap-0.5">
+                    <span className="text-[15px] leading-[22px] font-bold tracking-tight text-text-primary">{t('dashboard.assistant.label')}</span>
+                    <span className="text-xs text-text-secondary">{t('dashboard.assistant.startHint')}</span>
+                </div>
+                <StartAssistantButton
+                    className="self-start"
+                    onStart={() => { void startAssistant.start() }}
+                    onStartWith={(target) => { void startAssistant.start(target) }}
+                    machines={startAssistant.machines}
+                    defaultTarget={startAssistant.defaultTarget}
+                    pending={startAssistant.pending}
+                    error={startAssistant.error}
+                />
+                {startAssistant.error && (
+                    <span className="text-xxs text-[color:var(--status-error)]" role="alert">
+                        {t('dashboard.assistant.startFailed', { error: startAssistant.error })}
+                    </span>
+                )}
+            </div>
+        </div>
+    )
+}
+
+/**
  * Compact "generating" indicator (pulsing dot + count) used to surface active
  * work on collapsed/hidden surfaces where the chat body itself isn't visible.
  */
@@ -395,6 +444,8 @@ function MobileGeneratingIndicator({ count, label }: { count: number; label: str
 
 export default function DashboardMobileChatInbox({
     section,
+    assistantItems = [],
+    startAssistant = null,
     attentionItems,
     unreadItems,
     workingItems,
@@ -431,7 +482,10 @@ export default function DashboardMobileChatInbox({
     // which lands strictly after the daemon snapshot on cloud.
     const isConversationBootstrapping = !isDisconnected && !(conversationsLoaded ?? initialDataLoaded)
     const hasMachines = machineCards.length > 0
-    const hasAnyConversation = attentionItems.length > 0 || unreadItems.length > 0 || workingItems.length > 0 || completedItems.length > 0
+    const hasAnyConversation = assistantItems.length > 0 || attentionItems.length > 0 || unreadItems.length > 0 || workingItems.length > 0 || completedItems.length > 0
+    const showStartAssistant = !!startAssistant?.visible && assistantItems.length === 0
+    const pinnedNoticeCount = assistantItems.filter(item => item.requiresAction || item.unread).length
+    const noticeCount = attentionItems.length + unreadItems.length + pinnedNoticeCount
     const inboxTitle = section === 'machines'
         ? t('mobileInbox.machines')
         : t('mobileInbox.chats')
@@ -507,10 +561,10 @@ export default function DashboardMobileChatInbox({
                         {inboxTitle}
                     </div>
                     <div className="flex items-center gap-3 shrink-0">
-                        {section === 'chats' && (attentionItems.length > 0 || unreadItems.length > 0) && (
+                        {section === 'chats' && noticeCount > 0 && (
                             <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-accent-primary/16 bg-accent-primary/10 text-accent-primary text-2xs font-bold shadow-[0_8px_20px_rgba(0,0,0,0.05)]">
                                 <IconBell size={13} />
-                                <span>{attentionItems.length + unreadItems.length}</span>
+                                <span>{noticeCount}</span>
                             </div>
                         )}
                         <button onClick={onOpenSettings} className="w-8 h-8 flex items-center justify-center rounded-full border border-border-subtle bg-bg-secondary/70 text-text-secondary hover:text-text-primary hover:border-border-default transition-colors">
@@ -612,6 +666,32 @@ export default function DashboardMobileChatInbox({
                                 ))}
                             </InboxListSection>
                         )}
+                    </section>
+                )}
+
+                {section === 'chats' && (assistantItems.length > 0 || showStartAssistant) && (
+                    <section className="flex w-full min-w-0 flex-col gap-2 self-stretch" data-testid="mobile-inbox-pinned">
+                        <InboxSectionHeader title={t('mobileInbox.pinned')} className="mb-0" />
+                        <InboxListSection>
+                            {showStartAssistant && startAssistant ? (
+                                <MobileStartAssistantCard startAssistant={startAssistant} />
+                            ) : assistantItems.map((item, index) => (
+                                <div key={item.conversation.tabKey} className={index > 0 ? 'border-t border-border-subtle/70' : ''}>
+                                    <DashboardMobileChatItem
+                                        item={item}
+                                        type={getMobileInboxRowType(item)}
+                                        getAvatarText={getAvatarText}
+                                        onOpenConversation={onOpenConversation}
+                                        onRequestHideConversation={onHideConversation ? () => hideConversationWithUndo(item.conversation) : undefined}
+                                        onRequestStopCli={onStopCli ? () => onStopCli(item.conversation) : undefined}
+                                        onOpenMeshGraph={onOpenMeshGraph}
+                                        onCollectChatDebugBundle={effectiveCollectChatDebugBundle}
+                                        isMuted={isConversationMuted?.(item.conversation)}
+                                        onToggleMute={onToggleMuteConversation ? () => onToggleMuteConversation(item.conversation) : undefined}
+                                    />
+                                </div>
+                            ))}
+                        </InboxListSection>
                     </section>
                 )}
 

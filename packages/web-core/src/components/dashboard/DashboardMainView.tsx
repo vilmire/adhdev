@@ -736,6 +736,7 @@ export default function DashboardMainView({
                     onOpenMeshGraph={handleOpenMeshGraph}
                     onOpenNewSession={openNewSession}
                     liveSessionInboxState={liveSessionInboxState}
+                    startAssistant={startAssistant}
                 />
             ) : isMobile ? (
                 <DashboardPaneWorkspace

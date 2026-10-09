@@ -32,6 +32,7 @@ import { useDashboardMobileNavigationController } from './useDashboardMobileNavi
 import { isLaunchableMachineProvider } from '../../utils/provider-activation'
 import { getDaemonUpdateTargetVersion } from '../../utils/daemon-update-policy'
 import { isVersionMismatch } from '../../utils/version-update'
+import type { StartAssistantState } from '../../hooks/useStartAssistant'
 
 declare const __APP_VERSION__: string
 
@@ -65,6 +66,8 @@ interface DashboardMobileChatModeProps {
     onOpenNewSession?: () => void
     liveSessionInboxState: Map<string, LiveSessionInboxState>
     setCliViewModeOverrides: Dispatch<SetStateAction<Record<string, 'chat' | 'terminal'>>>
+    /** The dashboard's one `useStartAssistant` state (shared with the desktop header). */
+    startAssistant?: StartAssistantState | null
 }
 
 function getAvatarText(primary: string) {
@@ -101,6 +104,7 @@ export default function DashboardMobileChatMode({
     onOpenNewSession,
     liveSessionInboxState,
     setCliViewModeOverrides,
+    startAssistant = null,
 }: DashboardMobileChatModeProps) {
     const [selectedTabKey, setSelectedTabKey] = useState<string | null>(() => conversations[0]?.tabKey || null)
     const [screen, setScreen] = useState<'inbox' | 'chat' | 'machine'>(() => (conversations[0] ? 'chat' : 'inbox'))
@@ -216,6 +220,7 @@ export default function DashboardMobileChatMode({
     const { isMuted: isConversationMuted, toggleMute } = useConversationPrefs(liveSessionInboxState, sendDaemonCommand)
 
     const {
+        assistantItems,
         attentionItems,
         unreadItems,
         workingItems,
@@ -227,6 +232,28 @@ export default function DashboardMobileChatMode({
     useEffect(() => {
         liveWorkingOrderRef.current = workingItems.map(item => item.conversation.tabKey)
     }, [workingItems])
+    // "Start assistant" from the inbox opens the assistant's room once its
+    // session lands (the session arrives on the status lane after
+    // `launch_assistant` answers). A failed launch drops the intent.
+    const openAssistantOnArrivalRef = useRef(false)
+    const mobileStartAssistant = useMemo<StartAssistantState | null>(() => startAssistant && {
+        ...startAssistant,
+        start: async (target) => {
+            openAssistantOnArrivalRef.current = true
+            await startAssistant.start(target)
+        },
+    }, [startAssistant])
+    const openConversation = navigation.openConversation
+    const arrivedAssistant = assistantItems[0]?.conversation ?? null
+    const startAssistantError = startAssistant?.error ?? null
+    useEffect(() => {
+        if (startAssistantError) openAssistantOnArrivalRef.current = false
+    }, [startAssistantError])
+    useEffect(() => {
+        if (!arrivedAssistant || !openAssistantOnArrivalRef.current) return
+        openAssistantOnArrivalRef.current = false
+        openConversation(arrivedAssistant)
+    }, [arrivedAssistant, openConversation])
     const selectedMachineConversations = useMemo(
         () => selectedMachineEntry
             ? items.filter(item => getConversationMachineId(item.conversation) === selectedMachineEntry.id)
@@ -327,6 +354,8 @@ export default function DashboardMobileChatMode({
             ) : (
                 <DashboardMobileChatInbox
                     section={section}
+                    assistantItems={assistantItems}
+                    startAssistant={mobileStartAssistant}
                     attentionItems={attentionItems}
                     unreadItems={unreadItems}
                     workingItems={workingItems}

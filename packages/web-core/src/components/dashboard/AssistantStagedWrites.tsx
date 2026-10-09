@@ -90,7 +90,7 @@ export function AssistantStagedWritesView({ state }: { state: AssistantStagedWri
                 <div
                     role="dialog"
                     aria-label={t('assistantStaged.title')}
-                    className="assistant-staged-panel pointer-events-auto absolute right-0 top-full mt-1.5 flex max-h-[min(60vh,520px)] w-[min(420px,calc(100vw-24px))] flex-col overflow-hidden rounded-lg border border-border-default bg-bg-card text-xs text-text-secondary shadow-xl"
+                    className="assistant-staged-panel pointer-events-auto absolute right-0 top-full mt-1.5 flex max-h-[min(60vh,520px)] w-[min(420px,calc(100vw-24px))] flex-col overflow-hidden rounded-lg border border-border-default bg-bg-card text-xs text-text-secondary shadow-xl backdrop-blur-xl"
                 >
                     <div className="flex items-center gap-2 border-b border-border-subtle px-3 py-2">
                         <span className="font-semibold text-text-primary">{t('assistantStaged.title')}</span>

@@ -90,6 +90,12 @@ export interface ChatPaneProps {
     scrollToBottomRequestNonce?: number;
     isInputActive?: boolean;
     isVisible?: boolean;
+    /**
+     * Render the assistant's "N pending" staged-writes pill in the pane's own
+     * control bar (default). Mobile turns it off and shows it in the room header
+     * instead, where it stays reachable in terminal view too.
+     */
+    showAssistantStagedWrites?: boolean;
 }
 
 const LIVE_MESSAGE_PAGE_SIZE = 60;
@@ -176,6 +182,7 @@ export default function ChatPane({
     scrollToBottomRequestNonce,
     isInputActive = true,
     isVisible = true,
+    showAssistantStagedWrites = true,
 }: ChatPaneProps) {
     const { t } = useTranslation('common');
     const receivedAtCache = useRef<Map<string, number>>(new Map());
@@ -705,7 +712,7 @@ export default function ChatPane({
                 <div className="ml-auto flex items-center gap-1">
                     {/* Assistant pane only: writes held for the owner's approval
                         (hidden while none are held). */}
-                    {isAssistantPane && (
+                    {isAssistantPane && showAssistantStagedWrites && (
                         <AssistantStagedWrites daemonId={daemonId} status={activeConv.status} sendCommand={sendCommand} />
                     )}
                     <ChatMachineReconnectButton

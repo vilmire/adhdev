@@ -16,6 +16,10 @@ import { getConversationTitle } from './conversation-presenters'
 import InteractivePromptModal from '../interactive-prompt/InteractivePromptModal'
 import { useInteractivePrompt } from '../../hooks/useInteractivePrompt'
 import { getInteractivePromptScopeId } from './ApprovalBanner'
+import AssistantStagedWrites from './AssistantStagedWrites'
+import { isAssistantConversation } from './assistant-session'
+import { getConversationDaemonRouteId } from './conversation-selectors'
+import { useTransport } from '../../context/TransportContext'
 
 interface DashboardMobileChatRoomProps {
     selectedConversation: ActiveConversation
@@ -61,67 +65,85 @@ export default function DashboardMobileChatRoom({
     const interactivePrompt = useInteractivePrompt(getInteractivePromptScopeId(selectedConversation))
     const isCli = isCliConv(selectedConversation)
     const isCliTerminal = isCli && cliViewMode === 'terminal'
+    const isAssistant = isAssistantConversation(selectedConversation)
+    const { sendCommand } = useTransport()
     const headerPaddingClass = isStandalone
         ? 'px-4 pt-3.5 pb-2.5'
         : 'px-4 pt-[calc(14px+env(safe-area-inset-top,0px))] pb-2.5'
 
     return (
         <>
-            <div className={`flex items-center justify-between gap-3 ${headerPaddingClass} border-b border-border-subtle/70 bg-bg-primary backdrop-blur-md`}>
-                <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                    <button
-                        className="w-[34px] h-[34px] rounded-full border border-border-default bg-surface-primary/70 text-text-secondary shrink-0 inline-flex items-center justify-center hover:bg-surface-primary transition-colors"
-                        onClick={onBack}
-                        type="button"
-                        aria-label={t('common.back')}
-                    >
-                        <IconChevronLeft size={18} />
-                    </button>
-                    <div className="min-w-0 flex-1 flex flex-col gap-0.5">
-                        <div className="flex items-center gap-1.5 min-w-0 text-[17px] leading-[26px] font-extrabold tracking-tight text-text-primary">
-                            <MeshRoleIcon conversation={selectedConversation} size={15} />
-                            <span className="min-w-0 truncate">{getConversationTitle(selectedConversation)}</span>
-                        </div>
-                        <div className="min-w-0 max-w-full text-xs text-text-secondary">
-                            <ConversationMetaChips
-                                conversation={selectedConversation}
-                                className="is-mobile-header"
-                                interactive={false}
-                                onOpenNativeConversation={() => onOpenNativeConversation(selectedConversation)}
-                                onOpenMachine={() => onOpenMachine(selectedConversation)}
-                            />
+            <div className={`relative z-20 flex flex-col gap-2 ${headerPaddingClass} border-b border-border-subtle/70 bg-bg-primary`}>
+                <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                        <button
+                            className="w-[34px] h-[34px] rounded-full border border-border-default bg-surface-primary/70 text-text-secondary shrink-0 inline-flex items-center justify-center hover:bg-surface-primary transition-colors"
+                            onClick={onBack}
+                            type="button"
+                            aria-label={t('common.back')}
+                        >
+                            <IconChevronLeft size={18} />
+                        </button>
+                        <div className="min-w-0 flex-1 flex flex-col gap-0.5">
+                            <div className="flex items-center gap-1.5 min-w-0 text-[17px] leading-[26px] font-extrabold tracking-tight text-text-primary">
+                                <MeshRoleIcon conversation={selectedConversation} size={15} />
+                                <span className="min-w-0 truncate">{getConversationTitle(selectedConversation)}</span>
+                            </div>
+                            <div className="min-w-0 max-w-full text-xs text-text-secondary">
+                                <ConversationMetaChips
+                                    conversation={selectedConversation}
+                                    className="is-mobile-header"
+                                    interactive={false}
+                                    onOpenNativeConversation={() => onOpenNativeConversation(selectedConversation)}
+                                    onOpenMachine={() => onOpenMachine(selectedConversation)}
+                                />
+                            </div>
                         </div>
                     </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                        {isCli && cliViewMode && (
+                            <CliViewModeToggle mode={cliViewMode} onChange={onSetCliViewMode} compact />
+                        )}
+                        {isCli && onStopCli && (
+                            <button
+                                onClick={() => { void onStopCli(selectedConversation) }}
+                                className="btn btn-secondary btn-sm"
+                                title={t('cliStop.stopProcess')}
+                                aria-label={t('cliStop.stopProcess')}
+                                style={{
+                                    color: 'var(--status-error, #ef4444)',
+                                    borderColor: 'color-mix(in srgb, var(--status-error, #ef4444) 25%, transparent)',
+                                }}
+                            >
+                                <IconX size={14} />
+                            </button>
+                        )}
+                        <ConversationMeshGraphButton
+                            conversation={selectedConversation}
+                            onOpenMeshGraph={onOpenMeshGraph}
+                        />
+                        <ConversationActionsMenu
+                            conversation={selectedConversation}
+                            onOpenHistory={onOpenHistory}
+                            onOpenRemote={onOpenRemote}
+                            iconSize={14}
+                        />
+                    </div>
                 </div>
-                <div className="flex items-center gap-2 shrink-0">
-                    {isCli && cliViewMode && (
-                        <CliViewModeToggle mode={cliViewMode} onChange={onSetCliViewMode} compact />
-                    )}
-                    {isCli && onStopCli && (
-                        <button
-                            onClick={() => { void onStopCli(selectedConversation) }}
-                            className="btn btn-secondary btn-sm"
-                            title={t('cliStop.stopProcess')}
-                            aria-label={t('cliStop.stopProcess')}
-                            style={{
-                                color: 'var(--status-error, #ef4444)',
-                                borderColor: 'color-mix(in srgb, var(--status-error, #ef4444) 25%, transparent)',
-                            }}
-                        >
-                            <IconX size={14} />
-                        </button>
-                    )}
-                    <ConversationMeshGraphButton
-                        conversation={selectedConversation}
-                        onOpenMeshGraph={onOpenMeshGraph}
-                    />
-                    <ConversationActionsMenu
-                        conversation={selectedConversation}
-                        onOpenHistory={onOpenHistory}
-                        onOpenRemote={onOpenRemote}
-                        iconSize={14}
-                    />
-                </div>
+                {/* Assistant only: writes held for the owner's approval, on their
+                    own right-aligned header line so the title keeps its width and
+                    the right-anchored list fits the phone. In the header (not the
+                    chat pane) so they stay reachable in terminal view too. The line
+                    collapses while none are held (the pill renders nothing). */}
+                {isAssistant && (
+                    <div className="flex justify-end empty:hidden" data-testid="mobile-room-assistant-staged">
+                        <AssistantStagedWrites
+                            daemonId={getConversationDaemonRouteId(selectedConversation)}
+                            status={selectedConversation.status}
+                            sendCommand={sendCommand}
+                        />
+                    </div>
+                )}
             </div>
             <div className="flex-1 min-h-0 flex flex-col bg-bg-primary relative">
                 <PaneGroupContent
@@ -133,6 +155,7 @@ export default function DashboardMobileChatRoom({
                     commands={commands}
                     actionLogs={actionLogs}
                     userName={userName}
+                    showAssistantStagedWrites={false}
                 />
             </div>
             <InteractivePromptModal
