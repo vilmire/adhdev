@@ -18,6 +18,7 @@ import {
     collectMemberMeshes,
     resetMemberMeshDescriptorsForTests,
     setAssistantMemberMeshSource,
+    withMemberMeshes,
 } from '../../src/assistant/member-meshes.js';
 import { createAssistantServices, setAssistantServicesForTests } from '../../src/assistant/assistant-services.js';
 import { preloadAssistantProjectReaders, setAssistantRelayHooks } from '../../src/assistant/assistant-project-ports.js';
@@ -118,6 +119,21 @@ afterEach(() => {
     if (ORIGINAL_CONFIG_DIR === undefined) delete process.env.ADHDEV_CONFIG_DIR;
     else process.env.ADHDEV_CONFIG_DIR = ORIGINAL_CONFIG_DIR;
     rmSync(tmp, { recursive: true, force: true });
+});
+
+describe('a standalone member (meshes.json record under its own id)', () => {
+    it('does not list the host mesh id a second time when the config record names it in meshHost.hostMeshId', () => {
+        inline.push(hostRecord());
+        const config = [{
+            id: 'mesh_member_local_id',
+            name: 'adhdev-cloud-mesh',
+            repoIdentity: 'github.com/vilmire/adhdev',
+            meshHost: { role: 'member', hostDaemonId: HOST, hostMeshId: MESH },
+            nodes: [],
+        } as any];
+        const listed = withMemberMeshes(config);
+        expect(listed.map((m) => m.id)).toEqual(['mesh_member_local_id']);
+    });
 });
 
 describe('a member daemon with no meshes.json entry', () => {
