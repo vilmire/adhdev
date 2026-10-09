@@ -86596,7 +86596,13 @@ ${body}`;
       try {
         const members = collectMemberMeshes({
           selfDaemonId: source.selfDaemonId(),
-          configMeshIds: new Set(configMeshes.map((m) => m.id)),
+          // A standalone member keeps its own local id in meshes.json and the
+          // host's id in meshHost.hostMeshId; the host's id must not be listed
+          // a second time from the member evidence (same project twice, slug clash).
+          configMeshIds: new Set(configMeshes.flatMap((m) => {
+            const hostMeshId = typeof m.meshHost?.hostMeshId === "string" ? m.meshHost.hostMeshId.trim() : "";
+            return hostMeshId ? [m.id, hostMeshId] : [m.id];
+          })),
           inlineMeshes: source.inlineMeshes(),
           hostRecords: listMeshHostRecords(),
           pushTargets: pushPersistence.load(),
