@@ -486,6 +486,7 @@
         "taskComplete": "Tarea completada",
         "workingNow": "Trabajando ahora",
         "earlier": "Anteriores",
+        "pinned": "Fijado",
         "connecting": "Conectando…",
         "connectingSubtitle": "Esperando la conexión con el servidor antes de cargar las conversaciones.",
         "noMachinesConnected": "No hay máquinas conectadas",

@@ -486,6 +486,7 @@
         "taskComplete": "작업 완료",
         "workingNow": "작업 중",
         "earlier": "이전",
+        "pinned": "고정됨",
         "connecting": "연결 중…",
         "connectingSubtitle": "대화를 불러오기 전에 서버 연결을 기다리는 중입니다.",
         "noMachinesConnected": "연결된 머신 없음",

@@ -33,6 +33,8 @@ interface PaneGroupContentProps {
     scrollToBottomRequestNonce?: number
     isInputActive?: boolean
     isVisible?: boolean
+    /** Forwarded to ChatPane — false where the surface hosts the staged-writes pill itself (mobile room header). */
+    showAssistantStagedWrites?: boolean
 }
 
 export function getPaneGroupContentChildVisibility(parentIsVisible: boolean | undefined, localIsVisible = true): boolean {
@@ -51,6 +53,7 @@ const PaneGroupContent = memo(function PaneGroupContent({
     scrollToBottomRequestNonce,
     isInputActive = true,
     isVisible = true,
+    showAssistantStagedWrites,
 }: PaneGroupContentProps) {
     const {
         handleModalButton,
@@ -101,6 +104,7 @@ const PaneGroupContent = memo(function PaneGroupContent({
             scrollToBottomRequestNonce={scrollToBottomRequestNonce}
             isInputActive={isInputActive && visible}
             isVisible={visible}
+            showAssistantStagedWrites={showAssistantStagedWrites}
         />
     )
     // ONE lane: status, the approval modal and the interactive prompt are all

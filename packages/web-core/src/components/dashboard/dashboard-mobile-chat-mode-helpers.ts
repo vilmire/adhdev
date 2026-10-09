@@ -7,9 +7,15 @@ import type { ActiveConversation } from './types'
 import { getConversationMachineId } from './conversation-selectors'
 import { getConversationMachineCardPreview } from './conversation-presenters'
 import { getSessionChatSnapshotForConversation } from './session-chat-controller'
-import { compareAssistantFirst } from './assistant-session'
+import { compareAssistantFirst, isAssistantConversation } from './assistant-session'
 
 export interface MobileInboxBuckets {
+    /**
+     * The personal assistant, pinned above every bucket (desktop pins it first in
+     * the session list). It leaves its status bucket so it is never listed twice;
+     * the row still shows that status via {@link getMobileInboxRowType}.
+     */
+    assistantItems: MobileConversationListItem[]
     attentionItems: MobileConversationListItem[]
     unreadItems: MobileConversationListItem[]
     workingItems: MobileConversationListItem[]
@@ -42,16 +48,31 @@ export function sortStableMobileLiveItems(
     return sortMobileInboxItems(items)
 }
 
+export type MobileInboxRowType = 'needs_attention' | 'task_complete' | 'working' | 'earlier'
+
+/** The row style a conversation would get in its status bucket. */
+export function getMobileInboxRowType(item: Pick<MobileConversationListItem, 'requiresAction' | 'unread' | 'isWorking'>): MobileInboxRowType {
+    if (item.requiresAction) return 'needs_attention'
+    if (item.unread) return 'task_complete'
+    if (item.isWorking) return 'working'
+    return 'earlier'
+}
+
 export function groupMobileInboxItems(
-    items: MobileConversationListItem[],
+    allItems: MobileConversationListItem[],
     previousLiveOrder: string[] = [],
 ): MobileInboxBuckets {
+    const assistantItems = allItems.filter(item => isAssistantConversation(item.conversation))
+    const items = assistantItems.length > 0
+        ? allItems.filter(item => !isAssistantConversation(item.conversation))
+        : allItems
     const attentionItems = items.filter(item => item.requiresAction)
     const unreadItems = items.filter(item => item.unread && !item.requiresAction)
     const workingCandidates = items.filter(item => !item.unread && !item.requiresAction && item.isWorking)
     const completedItems = items.filter(item => !item.unread && !item.requiresAction && !item.isWorking)
 
     return {
+        assistantItems: sortMobileInboxItems(assistantItems),
         attentionItems: sortMobileInboxItems(attentionItems),
         unreadItems: sortMobileInboxItems(unreadItems),
         workingItems: sortStableMobileLiveItems(workingCandidates, previousLiveOrder),

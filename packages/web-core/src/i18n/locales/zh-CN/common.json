@@ -486,6 +486,7 @@
         "taskComplete": "任务完成",
         "workingNow": "正在处理",
         "earlier": "更早",
+        "pinned": "已置顶",
         "connecting": "正在连接…",
         "connectingSubtitle": "正在等待服务器连接，然后加载会话。",
         "noMachinesConnected": "没有已连接的机器",

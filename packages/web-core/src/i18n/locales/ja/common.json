@@ -486,6 +486,7 @@
         "taskComplete": "タスク完了",
         "workingNow": "実行中",
         "earlier": "これまで",
+        "pinned": "固定",
         "connecting": "接続しています…",
         "connectingSubtitle": "会話を読み込む前にサーバー接続を待機しています。",
         "noMachinesConnected": "接続されているマシンはありません",

@@ -33,6 +33,8 @@ export interface StartAssistantButtonProps {
     defaultTarget?: AssistantLaunchTarget | null
     pending?: boolean
     error?: string | null
+    /** Wrapper classes (default: the header's left gap). */
+    className?: string
 }
 
 const MENU_WIDTH = 280
@@ -44,6 +46,7 @@ export default function StartAssistantButton({
     defaultTarget = null,
     pending = false,
     error = null,
+    className = 'ml-2',
 }: StartAssistantButtonProps) {
     const { t } = useTranslation('common')
     const [open, setOpen] = useState(false)
@@ -134,7 +137,7 @@ export default function StartAssistantButton({
             : t('dashboard.assistant.startHint')
 
     return (
-        <span className="ml-2 inline-flex items-stretch" data-testid="dashboard-start-assistant-group">
+        <span className={cn(className, 'inline-flex items-stretch')} data-testid="dashboard-start-assistant-group">
             <button
                 type="button"
                 onClick={onStart}
