@@ -306,7 +306,17 @@ function resolveRemoteDispatchProvider(node: LocalMeshNodeEntry, args: RemoteDis
  * An explicitly named session must be a relay-safe mesh-owned worker before we
  * dispatch into it. 'safe' or 'self_heal' → null (dispatch; the remote router
  * stamps the relay anchor from meshContext.coordinatorDaemonId when
- * self-healing) and the session's provider is adopted when none resolved yet.
+ * self-healing).
+ *
+ * The named session's OWN provider is authoritative: it is what the dispatch
+ * will actually run on, so it replaces any provider resolved from the caller
+ * hint or the node's providerPriority (live 2026-10-09/10: a dispatch to a
+ * MainPC antigravity-cli session reported — and sent as agentType —
+ * providerPriority[0] `claude-cli`). A session provider outside a provider pin
+ * is still adopted here so the pin assert in resolveRemoteDispatchTarget
+ * refuses it, instead of naming the pinned provider on a session that does not
+ * run it. Only when the session exposes no provider does the earlier
+ * resolution stand.
  */
 function checkExplicitRemoteSession(
     ctx: MeshContext,
@@ -317,10 +327,11 @@ function checkExplicitRemoteSession(
     coordinatorDaemonId: string,
 ): DispatchFailure | null {
     const relaySafety = classifyRemoteDelegateRelaySafety(session, ctx.mesh.id, node.id, coordinatorDaemonId);
-    const providerType = provider.resolvedProviderType || resolveSessionProviderType(session) || undefined;
+    const sessionProviderType = resolveSessionProviderType(session);
+    const providerType = sessionProviderType || provider.resolvedProviderType || undefined;
     if (relaySafety === 'unsafe_alias') return buildRelayUnsafeRemoteSessionFailure(ctx, node, sessionId, providerType);
     if (relaySafety === 'missing_anchor') return buildMissingCoordinatorDaemonIdFailure(ctx, node, providerType);
-    if (!provider.resolvedProviderType) provider.resolvedProviderType = provider.adoptSessionProviderType(session);
+    if (sessionProviderType) provider.resolvedProviderType = sessionProviderType;
     return null;
 }
 
