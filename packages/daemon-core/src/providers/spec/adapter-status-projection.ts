@@ -60,6 +60,12 @@ export interface AdapterStatusInputs {
      */
     lastOutputAt: number | undefined;
     lastScreenChangeAt: number | undefined;
+    /**
+     * The adapter re-attached to a runtime that was already running before this
+     * daemon started (`PtyTransportFactory.attachesExistingRuntime`). Optional:
+     * absent means a fresh process, the historical behaviour.
+     */
+    attachedExistingRuntime?: boolean;
 }
 
 /** A clock is surfaced only once it has ticked: 0 / undefined / non-finite all
@@ -169,6 +175,20 @@ export function projectAdapterStatus(input: AdapterStatusInputs): CliAdapterStat
     // their previous projection.
     const readySeen = input.readySeen();
     if (readySeen === false) {
+        // RESTORED MID-TURN (live 2026-10-09, preview rc.3, Jupiter worker):
+        // a session re-attached after a daemon restart can be in the middle of
+        // a turn, so its FSM goes starting → busy without ever drawing a ready
+        // prompt in this daemon's lifetime. The boot-phase hold above then
+        // reported 'starting' for the WHOLE turn, the instance never saw
+        // generating, and the real turn end surfaced as starting → idle — the
+        // prompt-up edge, which emits no completion. The worker's idle edge
+        // (turn_end) never reached the owner, which closed the task only from
+        // its own transcript probe. The CLI behind an attach booted long ago,
+        // so a generating state there is a real turn, not boot noise: project
+        // it. Idle stays held until the ready latch, exactly as before.
+        if (input.attachedExistingRuntime === true && state.status === 'generating') {
+            return { ...base, status: 'generating' };
+        }
         return { ...base, status: 'starting', fsmReadySeen: false };
     }
     if (state.status === 'generating') {
