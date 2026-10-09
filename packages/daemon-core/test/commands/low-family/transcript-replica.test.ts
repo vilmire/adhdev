@@ -114,6 +114,17 @@ describe('read_transcript_replica', () => {
         expect(result).toEqual({ success: true, available: true, view, identity });
     });
 
+    it('carries stale:true when the store says the SUB transport closed', async () => {
+        const view = { schemaVersion: 2, sessionId: 'sess-1' };
+        const identity = { sessionId: 'sess-1', producerDaemonId: 'daemon-owner' };
+        const store = { getReplica: vi.fn().mockReturnValue({ available: true, view, identity, stale: true }) };
+        const result = await transcriptReplicaHandlers.read_transcript_replica!(
+            ctx({ getTranscriptReplicaStore: () => store as any }),
+            { ownerDaemonId: 'daemon-owner', rawSessionId: 'sess-1' },
+        );
+        expect(result).toEqual({ success: true, available: true, view, identity, stale: true });
+    });
+
     it('accepts sessionId as an alias for rawSessionId', async () => {
         const store = { getReplica: vi.fn().mockReturnValue({ available: false, reason: 'no_subscription' }) };
         await transcriptReplicaHandlers.read_transcript_replica!(

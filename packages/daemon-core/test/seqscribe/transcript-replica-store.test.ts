@@ -139,4 +139,52 @@ describe('TranscriptReplicaStore', () => {
         expect(h.closeCount).toBe(2);
         expect(h.store.ensureSubscription(KEY, h.peer)).toEqual({ ok: false, reason: 'subscribe_failed' });
     });
+
+    // Live 2026-10-09 (1.0.79-rc.2): the owner daemon restarted while a worker
+    // session was generating. The mesh peer detached and a NEW seqscribe
+    // PeerHandle attached ~100 s later, but `ensureSubscription` answered
+    // `alreadySubscribed` for the key bound to the DEAD handle — the SUB was
+    // never re-attached, so the coordinator's `read_chat` kept serving the
+    // pre-restart "generating" view forever while the worker had long finished.
+    it('★ re-attaches the SUB when the peer handle for a key changes (owner restart / redial)', () => {
+        const h = harness();
+        let firstState: 'ready' | 'closed' = 'ready';
+        const first = { peerId: 'daemon_mach_test', state: () => firstState, onStateChange: () => () => {}, detach: () => {} } as unknown as PeerHandle;
+        expect(h.store.ensureSubscription(KEY, first)).toEqual({ ok: true, alreadySubscribed: false });
+        const before = new FrameDriver();
+        h.snapshot(toSubRows(before, before.step(observation(bubbles()))!));
+        const live = h.store.getReplica(KEY);
+        expect(live.available && live.view.messages.map((m) => m.content)).toEqual(['b0', 'b1', 'b2']);
+        expect(live.available && live.stale).toBeUndefined();
+
+        // Owner restart: the old handle closes. The view is still served, but
+        // flagged — it can no longer advance on this SUB.
+        firstState = 'closed';
+        const frozen = h.store.getReplica(KEY);
+        expect(frozen.available && frozen.stale).toBe(true);
+
+        // The old transport is gone; the router now hands out a different handle.
+        const replacement = { peerId: 'daemon_mach_test', state: () => 'ready' as const, onStateChange: () => () => {}, detach: () => {} } as unknown as PeerHandle;
+        expect(h.store.ensureSubscription(KEY, replacement)).toEqual({ ok: true, alreadySubscribed: false });
+        expect(h.subscribeCalls).toHaveLength(2);
+        expect(h.closeCount).toBe(1);
+        // The last verified view keeps serving until the new SNAP verifies.
+        const bridging = h.store.getReplica(KEY);
+        expect(bridging.available && bridging.view.messages.map((m) => m.content)).toEqual(['b0', 'b1', 'b2']);
+
+        // The restarted producer publishes under a fresh epoch; the new SUB's
+        // reset SNAP carries it and the view moves on.
+        const after = new FrameDriver(undefined, 'epoch-b');
+        const grown = [...bubbles(), { id: 'd.r.4', ord: ordOf(3), text: 'final reply' }];
+        h.snapshot(toSubRows(after, after.step(observation(grown))!));
+        const read = h.store.getReplica(KEY);
+        expect(read.available && read.view.messages.map((m) => m.content)).toEqual(['b0', 'b1', 'b2', 'final reply']);
+        expect(read.available && read.identity.epoch).toBe('epoch-b');
+        expect(read.available && read.stale).toBeUndefined();
+        expect(h.store.getCounters()).toMatchObject({ peerRebinds: 1 });
+
+        // Same handle again → still idempotent.
+        expect(h.store.ensureSubscription(KEY, replacement)).toEqual({ ok: true, alreadySubscribed: true });
+        expect(h.subscribeCalls).toHaveLength(2);
+    });
 });

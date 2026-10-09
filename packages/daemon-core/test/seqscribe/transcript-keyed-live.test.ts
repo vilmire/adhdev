@@ -190,6 +190,60 @@ describe('keyed chat lane over real nodes', () => {
         await second.close();
         handles.splice(handles.indexOf(second), 1);
     }, 60_000);
+
+    // Live 2026-10-09 (1.0.79-rc.2): the owner daemon of a generating worker
+    // session was restarted; the session survived and finished its turn, but a
+    // remote reader's replica stayed on the pre-restart "generating" commit.
+    // The producer side resumes fine — the reader's SUB was the one left on
+    // the dead transport. This drives the whole path on real nodes.
+    it('★ a reader follows a restarted producer once the router hands it the new peer handle', async () => {
+        const dir = freshDir('owner-restart');
+        const reader = openNode(freshDir('owner-restart-reader'));
+        const key = { ownerDaemonId: DAEMON, rawSessionId: SESSION };
+        const store = new TranscriptReplicaStore(reader, new TranscriptTopicClaimRegistry());
+
+        const attachPair = async (producer: SeqscribeNodeHandle, peerId: string) => {
+            const [sChan, cChan] = channelPair();
+            producer.node.attach(sChan, { peerId: 'reader', peerClass: 'content', grants: { [TOPIC]: 'serve' } });
+            const peer = reader.node.attach(cChan, { peerId, peerClass: 'content', grants: {} });
+            await waitFor(() => peer.state() === 'ready');
+            return peer;
+        };
+
+        // Before the restart: the user prompt and a streaming reply.
+        const owner1 = openNode(dir);
+        const svc1 = service(owner1, 'epoch-before');
+        await publish(svc1, observation(transcript(5)));
+        const peer1 = await attachPair(owner1, 'owner');
+        expect(store.ensureSubscription(key, peer1)).toEqual({ ok: true, alreadySubscribed: false });
+        await waitFor(() => {
+            const r = store.getReplica(key);
+            return r.available && r.view.messages.length === 5;
+        });
+
+        // Owner restart: same db, new process (new epoch), new transport. The
+        // reader's mesh lane tears the old session down (router detachPeer).
+        await owner1.close();
+        handles.splice(handles.indexOf(owner1), 1);
+        peer1.detach();
+        const owner2 = openNode(dir);
+        const svc2 = service(owner2, 'epoch-after');
+        await publish(svc2, observation([...transcript(5), { id: 'd.live.6', ord: ordOf(5), text: 'final reply' }]));
+        expect(svc2.getCounters().published).toBe(1);
+        const peer2 = await attachPair(owner2, 'owner');
+
+        // What `ensure_transcript_subscription` does on every coordinator read.
+        expect(store.ensureSubscription(key, peer2)).toEqual({ ok: true, alreadySubscribed: false });
+        await waitFor(() => {
+            const r = store.getReplica(key);
+            return r.available && r.view.messages.length === 6;
+        });
+        const read = store.getReplica(key);
+        if (!read.available) throw new Error('replica unavailable');
+        expect(read.view.messages.at(-1)).toMatchObject({ messageId: 'd.live.6', content: 'final reply' });
+        expect(store.getCounters()).toMatchObject({ peerRebinds: 1, digestMismatches: 0 });
+        store.stop();
+    }, 60_000);
 });
 
 describe('selectChatTailSnapshot — latestPerKey(W) ∪ rowsAfter(W)', () => {
