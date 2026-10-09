@@ -67,6 +67,30 @@ export interface MeshStallHost {
     turnEvidencePort?: TurnEvidencePort | null;
     /** Live attempt ref for this session, if the mesh assignment attached one. */
     currentAttemptRef?(): TurnAttemptRef | null;
+    /** The completion this session last emitted (completion-flush.ts latch). */
+    lastEmittedCompletion?: { taskId: string; weak: boolean; emittedAtEpoch: number } | null;
+    /** Busy-episode counter; advances on every generating start. */
+    busyEpoch?: number;
+}
+
+/**
+ * STALL-AFTER-TERMINAL: has this session already emitted a GENUINE completion
+ * for the task it is (still, or was last) stamped with, with no new busy episode
+ * since? Then the task is terminal from the worker's side — the turn ledger owns
+ * it — and a quiet screen is just an idle worker, not a stalled task. Seen live as
+ * `[drop:mesh_worker_stall_transcript_advancing]` ~3 min after a completion on a
+ * remote worker (its attempt row lives on the owner, so the Stage-6 terminal-stage
+ * re-arm below never engages there). A weak completion keeps the watchdog armed:
+ * that is the case the stall backstop still serves.
+ */
+function completedTaskIsQuiet(host: MeshStallHost, turnActive: boolean): boolean {
+    if (turnActive) return false;
+    const latch = host.lastEmittedCompletion;
+    if (!latch || latch.weak || !latch.taskId) return false;
+    if (typeof host.busyEpoch !== 'number' || latch.emittedAtEpoch !== host.busyEpoch) return false;
+    let current: string | undefined;
+    try { current = host.completingTurnTaskId(); } catch { return false; }
+    return !current || current === latch.taskId;
 }
 
 /** Drop the entire stall episode (session no longer a mesh worker / PTY dead). */
@@ -142,6 +166,14 @@ export function runMeshStallTick(host: MeshStallHost, now: number): void {
         : MESH_WORKER_STALL_IDLE_THRESHOLD_MS;
     const stalledMs = now - host.meshStallAnchorAt;
     if (stalledMs < threshold) return;
+
+    // STALL-AFTER-TERMINAL: the task this session ran already completed (genuine
+    // emit, no turn since) — nothing to stall. Re-arm quietly.
+    if (completedTaskIsQuiet(host, turnActive)) {
+        host.meshStallAnchorAt = now;
+        host.meshStallEmittedForAnchor = false;
+        return;
+    }
 
     // A successfully-dispatched approval decision after the last PTY output is
     // independent proof that a still-reported waiting_approval is a stale latch.

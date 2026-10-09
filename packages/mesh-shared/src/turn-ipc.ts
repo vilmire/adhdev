@@ -80,8 +80,17 @@ export * from './turn-ipc-stats';
  *   ledger_not_owner     — the daemon that answered does not own the
  *                           attempt/mesh addressed by the request (routing
  *                           mistake, or the owner changed after a reclaim).
+ *   session_busy_with_task — `turn_observe{dispatch_accepted}` was REFUSED: the
+ *                           target session already holds an open mesh attempt
+ *                           (≤1 open attempt per session). The error message
+ *                           carries the machine token
+ *                           `session_busy_with_task[task=<id> attempt=<id>]`
+ *                           (daemon-core mesh-session-busy-dispatch.ts) naming
+ *                           the attempt in the way. Unlike the codes above this
+ *                           is a definite answer, not "the ledger is not there":
+ *                           the dispatch must not be sent.
  */
-export const TURN_IPC_ERROR_CODES = ['daemon_required', 'turn_ledger_unavailable', 'ledger_not_owner'] as const
+export const TURN_IPC_ERROR_CODES = ['daemon_required', 'turn_ledger_unavailable', 'ledger_not_owner', 'session_busy_with_task'] as const
 export type TurnIpcErrorCode = typeof TURN_IPC_ERROR_CODES[number]
 
 export const isTurnIpcErrorCode = makeGuard(TURN_IPC_ERROR_CODES)

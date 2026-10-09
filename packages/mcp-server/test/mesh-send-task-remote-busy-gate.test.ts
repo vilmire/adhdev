@@ -219,6 +219,63 @@ test('worker-side session_busy_with_task refusal surfaces as a typed dispatch fa
     }
 });
 
+// ORPHANED-UNCORRELATED-DISPATCH (live: task 14147d9b, 2026-10-06). The session reads IDLE,
+// so the admission gate passes, but the coordinator's turn ledger already holds an open
+// mesh attempt for it. The ledger REFUSES dispatch_accepted; mcp-server used to read that
+// as "ledger unavailable", send anyway and save an attempt-less `assigned` row that no
+// reclaim owned. A refusal now stops the dispatch with the same typed answer the worker
+// gives for a busy session.
+test('ledger-side refusal (session already holds an open attempt) → session_busy_with_task; nothing sent, no row, no task_dispatched', async () => {
+    const meshId = `mesh-ledger-refused-${randomUUID().slice(0, 8)}`;
+    cleanupMesh(meshId);
+    const h = createRemoteCtx(meshId, { status: 'idle' });
+    try {
+        await withLedger(async () => {
+            const held: any = await answerTurnIpc('turn_observe', {
+                v: 1,
+                evidence: {
+                    eventId: 'task-held', at: Date.now(), source: 'dispatch', sessionId: SESSION, taskId: 'task-held',
+                    observedBy: COORDINATOR, kind: 'dispatch_accepted', scope: 'mesh_direct', messageId: 'task-held', meshId, nodeId: NODE,
+                },
+            });
+            assert.equal(held.success, true, JSON.stringify(held));
+
+            const res = await send(h.ctx);
+            assert.equal(res.success, false, JSON.stringify(res));
+            assert.equal(res.dispatched, false);
+            assert.equal(res.code, 'session_busy_with_task');
+            assert.equal(res.currentTaskId, 'task-held');
+            assert.equal(res.currentAttemptId, held.attemptRef.attemptId);
+            assert.equal(res.retryRecommended, false);
+            assert.equal(h.sendChats().length, 0, 'a refused dispatch must not be sent');
+            assert.equal(getQueue(meshId).length, 0, 'no attempt-less assigned row is materialised');
+            assert.equal(readLocalRecords(meshId, { kind: ['task_dispatched'] }).length, 0, 'no dispatched-but-never-sent ledger trail');
+        });
+    } finally {
+        cleanupMesh(meshId);
+    }
+});
+
+test('ledger UNAVAILABLE (not armed) still falls through: the dispatch is sent uncorrelated, as before', async () => {
+    const meshId = `mesh-ledger-unavailable-${randomUUID().slice(0, 8)}`;
+    cleanupMesh(meshId);
+    const h = createRemoteCtx(meshId, { status: 'idle' });
+    setActiveTurnLedgerForIpc(null);
+    try {
+        const res = await send(h.ctx);
+        assert.equal(res.success, true, JSON.stringify(res));
+        assert.equal(res.dispatched, true);
+        assert.equal(h.sendChats().length, 1);
+        assert.equal(res.attemptId, undefined, 'no attempt could be opened');
+        const row = getQueue(meshId).find(t => t.id === res.taskId);
+        assert.ok(row);
+        assert.equal(row.status, 'assigned');
+        assert.equal(row.attemptId, undefined);
+    } finally {
+        cleanupMesh(meshId);
+    }
+});
+
 test('(B) untargeted mesh_send_task (queue pull) enqueues and reports an omitted decision', async () => {
     const meshId = `mesh-untargeted-decision-${randomUUID().slice(0, 8)}`;
     cleanupMesh(meshId);
