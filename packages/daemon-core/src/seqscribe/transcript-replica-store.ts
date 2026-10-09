@@ -85,7 +85,9 @@ export type TranscriptReplicaReadResult =
           /**
            * Present (true) when the SUB serving this view sits on a peer
            * handle that has closed — the view is the last verified commit and
-           * can no longer advance until a new handle re-subscribes it.
+           * can no longer advance until a new handle re-subscribes it, or
+           * when the SUB has just moved to a new handle whose first snapshot
+           * has not arrived yet (the view still predates the move).
            */
           readonly stale?: true;
       };
@@ -122,6 +124,12 @@ interface ActiveEntry {
     lastRejectReason: KeyedFoldRejectReason | 'malformed_row' | null;
     resyncStreak: { reason: KeyedFoldRejectReason; count: number } | null;
     resyncScheduled: boolean;
+    /**
+     * Set when the SUB moved to a new peer handle and cleared by that SUB's
+     * first snapshot. Until then the folder still holds the pre-move view, so
+     * reads report it stale even though the new handle is open.
+     */
+    awaitingPeerSnapshot: boolean;
 }
 
 function identityOf(commit: ChatCommitV2, view: ReplicatedTranscriptViewV2): TranscriptReplicaCommitIdentity {
@@ -183,6 +191,7 @@ export class TranscriptReplicaStore {
             existing.peer = peer;
             existing.generation = this.nextGeneration++;
             existing.resyncStreak = null;
+            existing.awaitingPeerSnapshot = true;
             this.counters.peerRebinds++;
             LOG.info('Seqscribe', `transcript replica re-subscribing on a new peer handle topic=${existing.topic}`);
             if (!this.attach(key, existing)) {
@@ -204,6 +213,7 @@ export class TranscriptReplicaStore {
             lastRejectReason: null,
             resyncStreak: null,
             resyncScheduled: false,
+            awaitingPeerSnapshot: false,
         };
         if (!this.attach(key, entry)) return { ok: false, reason: 'subscribe_failed' };
         this.active.set(keyStr, entry);
@@ -248,6 +258,7 @@ export class TranscriptReplicaStore {
             entry.subscription = subscription;
             entry.unsubscribeSnapshot = subscription.onSnapshot((rows) => {
                 if (entry.generation !== generation) return;
+                entry.awaitingPeerSnapshot = false;
                 const before = entry.folder.stats().rejectedRows;
                 entry.folder.ingestSnapshot(parse(rows));
                 after(before);
@@ -325,7 +336,10 @@ export class TranscriptReplicaStore {
         if (!view || !commit) return { available: false, reason: 'no_complete_revision' };
         let closed = false;
         try { closed = entry.peer.state() === 'closed'; } catch { closed = true; }
-        return closed
+        // Live 2026-10-09 (rc.4): the first read after an owner restart moved the
+        // SUB to the new handle and then served the pre-restart view ("generating",
+        // no final reply) as fresh, 79 s after the worker had finished.
+        return closed || entry.awaitingPeerSnapshot
             ? { available: true, view, identity: identityOf(commit, view), stale: true }
             : { available: true, view, identity: identityOf(commit, view) };
     }

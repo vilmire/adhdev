@@ -171,6 +171,10 @@ describe('TranscriptReplicaStore', () => {
         // The last verified view keeps serving until the new SNAP verifies.
         const bridging = h.store.getReplica(KEY);
         expect(bridging.available && bridging.view.messages.map((m) => m.content)).toEqual(['b0', 'b1', 'b2']);
+        // ...but flagged stale even though the new handle is open: the view still
+        // predates the move (live 2026-10-09 rc.4 — the first read after the
+        // worker restart served "generating" as fresh, 79 s after it finished).
+        expect(bridging.available && bridging.stale).toBe(true);
 
         // The restarted producer publishes under a fresh epoch; the new SUB's
         // reset SNAP carries it and the view moves on.
