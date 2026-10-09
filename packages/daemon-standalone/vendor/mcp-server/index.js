@@ -171715,10 +171715,11 @@ function resolveRemoteDispatchProvider(node, args) {
 }
 function checkExplicitRemoteSession(ctx, node, sessionId, session, provider, coordinatorDaemonId) {
   const relaySafety = classifyRemoteDelegateRelaySafety(session, ctx.mesh.id, node.id, coordinatorDaemonId);
-  const providerType = provider.resolvedProviderType || resolveSessionProviderType(session) || void 0;
+  const sessionProviderType = resolveSessionProviderType(session);
+  const providerType = sessionProviderType || provider.resolvedProviderType || void 0;
   if (relaySafety === "unsafe_alias") return buildRelayUnsafeRemoteSessionFailure(ctx, node, sessionId, providerType);
   if (relaySafety === "missing_anchor") return buildMissingCoordinatorDaemonIdFailure(ctx, node, providerType);
-  if (!provider.resolvedProviderType) provider.resolvedProviderType = provider.adoptSessionProviderType(session);
+  if (sessionProviderType) provider.resolvedProviderType = sessionProviderType;
   return null;
 }
 async function resolveRemoteDispatchSession(ctx, node, args, provider, coordinatorDaemonId) {
