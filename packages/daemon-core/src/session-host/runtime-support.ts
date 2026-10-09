@@ -20,6 +20,17 @@ class SessionHostCompatibilityError extends Error {
     }
 }
 
+/** The persisted evidence attempt ref (`meshActiveAttemptRef` record meta), or undefined when absent/cleared/malformed. */
+export function readPersistedAttemptRef(value: unknown): { attemptId: string; generation: number } | undefined {
+    if (!value || typeof value !== 'object') return undefined;
+    const { attemptId, generation } = value as { attemptId?: unknown; generation?: unknown };
+    if (typeof attemptId !== 'string' || !attemptId.trim()) return undefined;
+    return {
+        attemptId: attemptId.trim(),
+        generation: typeof generation === 'number' && Number.isSafeInteger(generation) && generation >= 0 ? generation : 0,
+    };
+}
+
 function getMissingRequestTypes(
     diagnostics: SessionHostDiagnostics | undefined,
     requiredRequestTypes: readonly SessionHostRequestType[],
@@ -132,6 +143,7 @@ export async function listHostedCliRuntimes(endpoint: SessionHostEndpoint): Prom
                     ? String(record.meta.meshNodeId).trim() : undefined,
                 meshCoordinatorDaemonId: typeof record.meta?.meshCoordinatorDaemonId === 'string' && record.meta.meshCoordinatorDaemonId.trim()
                     ? String(record.meta.meshCoordinatorDaemonId).trim() : undefined,
+                meshActiveAttemptRef: readPersistedAttemptRef(record.meta?.meshActiveAttemptRef),
                 launchedByCoordinator: record.meta?.launchedByCoordinator === true ? true : undefined,
                 autoApproveMode: typeof record.meta?.autoApproveMode === 'string' && record.meta.autoApproveMode.trim()
                     ? String(record.meta.autoApproveMode).trim() : undefined,

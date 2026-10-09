@@ -119,6 +119,13 @@ export interface HostedCliRuntimeDescriptor {
      * task marker — the owner re-resolves the task and checks the relaying daemon.
      */
     meshCoordinatorDaemonId?: string;
+    /**
+     * The attempt ref this session's turn evidence was carrying
+     * (`cli-provider-mesh-assignment.ts` PERSISTED_ATTEMPT_REF_META_KEY), restored
+     * with the membership + owner so a turn that spans a restart of THIS daemon
+     * still reaches the owner's ledger. A pointer only — the owner checks it.
+     */
+    meshActiveAttemptRef?: { attemptId: string; generation: number };
     launchedByCoordinator?: boolean;
     /** The session's launch-time auto-approve mode id, re-applied on restore. */
     autoApproveMode?: string;

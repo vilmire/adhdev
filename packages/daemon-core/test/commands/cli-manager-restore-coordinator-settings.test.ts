@@ -382,6 +382,36 @@ describe('DaemonCliManager.restoreHostedSessions re-establishes launch settings'
     expect(plain?.settings.meshCoordinatorDaemonId).toBeUndefined();
   }, 15000);
 
+  // Live 2026-10-09 (preview): the same Jupiter worker restarted MID-TURN. The
+  // restored session had membership + owner but no attempt ref, so its idle edge
+  // was an untagged turn_end the worker ledger refused to forward
+  // (forward_without_attempt_ref) and the Mac logged "no idle edge within 60s of
+  // the worker report". The persisted attempt ref is restored with membership +
+  // owner (never without them), and the task markers still stay out.
+  it('restores the evidence attempt ref with membership + owner, never on its own', async () => {
+    const loader = setupLoader();
+    const addInstance = vi.fn();
+    const ref = { attemptId: 'mesh_direct:task-8e69', generation: 2 };
+    const restored = await createManager(loader, {
+      getInstanceManager: () => ({ addInstance, removeInstance: vi.fn(), getInstance: () => null }),
+      getSessionRegistry: () => ({ register: vi.fn() }),
+    }).restoreHostedSessions([
+      { runtimeId: 'remote-owned-worker-1', cliType: 'sample-cli', workspace: workingDir, meshNodeFor: 'mesh-w', meshNodeId: 'nodeA', meshCoordinatorDaemonId: 'daemon_mach_owner', meshActiveAttemptRef: ref, launchedByCoordinator: true },
+      { runtimeId: 'member-without-owner-2', cliType: 'sample-cli', workspace: workingDir, meshNodeFor: 'mesh-x', meshNodeId: 'nodeB', meshActiveAttemptRef: ref, launchedByCoordinator: true },
+      { runtimeId: 'plain-with-stray-ref-3', cliType: 'sample-cli', workspace: workingDir, meshActiveAttemptRef: ref },
+    ]);
+    expect(restored).toBe(3);
+    const contexts = addInstance.mock.calls.map((c: any[]) => c[2] as any);
+    const worker = contexts.find((c) => c.settings.meshNodeFor === 'mesh-w');
+    expect(worker?.settings).toMatchObject({ meshActiveAttemptId: ref.attemptId, meshActiveAttemptGeneration: 2 });
+    expect(worker?.settings.meshActiveTaskId).toBeUndefined();
+    expect(worker?.settings.meshActiveDispatchNonce).toBeUndefined();
+    const ownerless = contexts.find((c) => c.settings.meshNodeFor === 'mesh-x');
+    expect(ownerless?.settings.meshActiveAttemptId).toBeUndefined();
+    const plain = contexts.find((c) => c.settings.meshNodeFor === undefined);
+    expect(plain?.settings.meshActiveAttemptId).toBeUndefined();
+  }, 15000);
+
   it('RC20 REBOUND RELAY ENVELOPE: does not invent mesh membership for a plain session', async () => {
     const loader = setupLoader();
     const addInstance = vi.fn();
