@@ -26199,7 +26199,7 @@ ${renderWorkerProtocolFooter2(input)}`;
           "kimi",
           "opencode"
         ];
-        BUILTIN_PROVIDER_PREFERENCE2 = ["claude-cli", "codex-cli", "gemini-cli"];
+        BUILTIN_PROVIDER_PREFERENCE2 = ["claude-cli", "codex-cli", "antigravity-cli"];
         DAEMON_ID_PREFIXES = ["daemon_", "standalone_"];
         MESH_TASK_DIFFICULTIES2 = ["easy", "medium", "difficult", "freeform"];
         DEFAULT_DIFFICULTY_BRAINS = {};
@@ -153627,7 +153627,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       const body = await ctx.readBody(req);
       const { type: type2, workingDir, args } = body;
       if (!type2) {
-        ctx.json(res, 400, { error: "type required (e.g. claude-cli, gemini-cli)" });
+        ctx.json(res, 400, { error: "type required (e.g. claude-cli, antigravity-cli)" });
         return;
       }
       try {
@@ -163333,7 +163333,7 @@ function readString(...values) {
   }
   return void 0;
 }
-var BUILTIN_PROVIDER_PREFERENCE = ["claude-cli", "codex-cli", "gemini-cli"];
+var BUILTIN_PROVIDER_PREFERENCE = ["claude-cli", "codex-cli", "antigravity-cli"];
 function orderProvidersByBuiltinPreference(types2) {
   const unique = [...new Set(types2.map((t) => typeof t === "string" ? t.trim() : "").filter(Boolean))];
   const rank = (t) => {

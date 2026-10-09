@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { normalizeMeshNodeFacts } from '../src/node-facts'
+import { BUILTIN_PROVIDER_PREFERENCE, normalizeMeshNodeFacts, orderProvidersByBuiltinPreference } from '../src/node-facts'
 
 describe('normalizeMeshNodeFacts', () => {
     it('passes a valid bundle through wholesale, including unknown future fields', () => {
@@ -31,5 +31,19 @@ describe('normalizeMeshNodeFacts', () => {
         expect(normalizeMeshNodeFacts({ schemaVersion: 0, reportedAt: 5 })).toBeUndefined()
         expect(normalizeMeshNodeFacts({ schemaVersion: 1 })).toBeUndefined()
         expect(normalizeMeshNodeFacts({ schemaVersion: 1, reportedAt: -1 })).toBeUndefined()
+    })
+})
+
+describe('orderProvidersByBuiltinPreference', () => {
+    it('leads with claude-cli, codex-cli, antigravity-cli; the rest alphabetically', () => {
+        expect(BUILTIN_PROVIDER_PREFERENCE).toEqual(['claude-cli', 'codex-cli', 'antigravity-cli'])
+        expect(orderProvidersByBuiltinPreference(['kimi', 'antigravity-cli', 'cursor-cli', 'codex-cli', 'claude-cli', 'kimi']))
+            .toEqual(['claude-cli', 'codex-cli', 'antigravity-cli', 'cursor-cli', 'kimi'])
+    })
+
+    it('does not prefer the retired gemini-cli', () => {
+        expect(BUILTIN_PROVIDER_PREFERENCE).not.toContain('gemini-cli')
+        expect(orderProvidersByBuiltinPreference(['gemini-cli', 'antigravity-cli', 'aider-cli']))
+            .toEqual(['antigravity-cli', 'aider-cli', 'gemini-cli'])
     })
 })

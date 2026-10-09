@@ -307,7 +307,7 @@ export function formatQuotaAccount(quota: MeshNodeFactsProviderQuota | undefined
  * order known): these first when present, then the rest alphabetically. The
  * `mesh_init` providerPriority suggestion leads with the same list.
  */
-export const BUILTIN_PROVIDER_PREFERENCE: readonly string[] = ['claude-cli', 'codex-cli', 'gemini-cli']
+export const BUILTIN_PROVIDER_PREFERENCE: readonly string[] = ['claude-cli', 'codex-cli', 'antigravity-cli']
 
 /** Order provider types by BUILTIN_PROVIDER_PREFERENCE, then alphabetically (de-duplicated). */
 export function orderProvidersByBuiltinPreference(types: readonly unknown[]): string[] {

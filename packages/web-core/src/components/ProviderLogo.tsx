@@ -26,7 +26,6 @@ const BRAND: Record<string, BrandEntry> = {
     // CLI agents
     'claude-cli': { monogram: 'CL', hue: '#D97757' },
     'codex-cli': { monogram: 'CX', hue: '#10A37F' },
-    'gemini-cli': { monogram: 'GM', hue: '#4285F4' },
     'kimi-cli': { monogram: 'KM', hue: '#6366F1' },
     'antigravity-cli': { monogram: 'AG', hue: '#8B5CF6' },
     'cursor-cli': { monogram: 'CU', hue: '#64748B' },

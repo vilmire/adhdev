@@ -477,7 +477,7 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                         LOG.warn('MeshCoordinator', mcpServerPathHealth.warning);
                     }
 
-                    // ─── CLI-command MCP registration (Codex, Gemini CLI) ───────────
+                    // ─── CLI-command MCP registration (e.g. Codex) ──────────────────
                     if (coordinatorSetup.kind === 'cli_command') {
                         // Build coordinator prompt first — fail closed on errors.
                         let cliCmdSystemPrompt = '';

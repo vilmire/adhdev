@@ -634,7 +634,7 @@ export async function handleCliLaunch(ctx: DevServerContext, req: http.IncomingM
   const body = await ctx.readBody(req);
   const { type, workingDir, args } = body;
   if (!type) {
-    ctx.json(res, 400, { error: 'type required (e.g. claude-cli, gemini-cli)' });
+    ctx.json(res, 400, { error: 'type required (e.g. claude-cli, antigravity-cli)' });
     return;
   }
   try {

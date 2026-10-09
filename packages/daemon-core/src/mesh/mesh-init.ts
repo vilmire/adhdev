@@ -141,7 +141,7 @@ export function suggestMeshWorktreeBootstrapConfig(
  * written into mesh policy here.
  *
  * Ordering preference (most → least preferred) when installed:
- *   claude-cli → codex-cli → gemini-cli → everything else (stable input order).
+ *   claude-cli → codex-cli → antigravity-cli → everything else (stable input order).
  */
 // Shared with the runtime default order (mesh-node-slots.ts) so a suggestion and
 // the order a node without providerPriority defaults to start the same way.

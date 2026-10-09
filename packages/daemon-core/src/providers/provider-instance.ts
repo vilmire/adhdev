@@ -70,7 +70,7 @@ export type ProviderErrorReason =
 
 /** Common fields shared by all provider categories */
 interface ProviderStateBase {
- /** Provider type (e.g. 'gemini-cli', 'cursor', 'cline') */
+ /** Provider type (e.g. 'antigravity-cli', 'cursor', 'cline') */
     type: string;
  /** Provider Display name */
     name: string;
