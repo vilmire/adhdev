@@ -518,3 +518,32 @@ describe('chunkPreservingSurrogates', () => {
         expect(chunkPreservingSurrogates('hi', 1024)).toEqual(['hi']);
     });
 });
+
+describe('FsmDriver -- win32 body write is lossless for non-ASCII text', () => {
+    afterEach(() => setPlatform(ORIGINAL_PLATFORM));
+
+    // A delegated agy worker on a win32 node recorded its task prompt with every
+    // em-dash removed ("the authoritative record of this task  your terminal is
+    // not scraped"), while the same prompt on darwin kept them (preview fleet,
+    // 2026-10-09). This pins the daemon's own share of the path: the body the
+    // driver hands the PTY must carry every non-ASCII character unchanged,
+    // across chunk boundaries and inside the bracketed-paste wrapper, so a loss
+    // observed downstream is not ours.
+    const PARA = 'Its summary is recorded verbatim — your terminal is not scraped — café 한글 😀.';
+    const BODY = Array.from({ length: 40 }, (_, i) => `${i}: ${PARA}`).join('\n');
+
+    for (const mode of ['paste', 'soft_newline'] as const) {
+        it(`${mode}: every non-ASCII character reaches the PTY`, async () => {
+            setPlatform('win32');
+            expect(BODY.length).toBeGreaterThan(1024 * 2); // spans several write chunks
+            const { writes } = await sendAndCollectPty({ text: BODY, submitMode: mode, submitAfterMs: 900, totalWaitMs: 1500 });
+            const written = writes
+                .filter(w => w !== '\r')
+                .join('')
+                .replace(/\x1b\[20[01]~/g, '')
+                .split('\x1b[27;2;13~').join('\n');
+            expect(written).toBe(BODY);
+            expect(written.split('—').length - 1).toBe(80);
+        });
+    }
+});
