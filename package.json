@@ -1,6 +1,6 @@
 {
   "name": "adhdev",
-  "version": "1.0.78",
+  "version": "1.0.79",
   "private": true,
   "packageManager": "npm@10.9.2",
   "description": "Agent Dashboard Hub for Dev — control your AI coding agents from anywhere",
