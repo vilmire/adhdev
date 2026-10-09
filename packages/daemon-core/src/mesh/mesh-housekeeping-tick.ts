@@ -7,7 +7,7 @@
 // auto-prune, unresolved-forward retry) are gone — the turn ledger's scheduler
 // (`turn-ledger/scheduler.ts`), the `turn.deliver` cursor and topic replication
 // replace them. What is left here holds NO turn or hold logic: config/cache
-// sync, the queue dependency stall sweep, the DS3 coordinator catch-up, disk + worktree retention and the idle-session reaper.
+// sync, the queue dependency stall sweep, the orphaned uncorrelated-dispatch sweep, the DS3 coordinator catch-up, disk + worktree retention and the idle-session reaper.
 // The queue claim (old PHASE 3) is exported for the scheduler's claim phase,
 // because a ledger reclaim returns a row to `pending` and the claim must run
 // in the same tick.
@@ -32,6 +32,7 @@ import { runIdleSessionReapPass, type IdleSessionReaperDeps } from './mesh-idle-
 import { resolveWorktreeNodeRetentionGraceMs } from './mesh-retention-config.js';
 import { runPendingCoordinatorCatchupScan } from './mesh-auto-fast-forward.js';
 import { sweepQueueDependencyStalls } from './mesh-queue-dependency-notice.js';
+import { runOrphanedDispatchSweep } from './mesh-orphaned-dispatch-sweep.js';
 import { readText } from '@adhdev/mesh-shared';
 
 /** Disk/worktree retention: artifacts age in days and the fs/git walk is heavy — hourly. */
@@ -128,6 +129,18 @@ export async function runMeshHousekeepingTick(
                 sweepQueueDependencyStalls(mesh.id);
             } catch (e: any) {
                 LOG.warn('MeshHousekeeping', `Queue dependency stall sweep failed for mesh ${mesh.id}: ${e?.message || e}`);
+            }
+        }
+        // ── orphaned uncorrelated dispatch sweep ──
+        // An `assigned` row with NO turn-ledger attempt has no reclaim owner (the
+        // turn scheduler only reclaims attempts): once its session is provably not
+        // live and it is 30 min old, fail it (orphaned_uncorrelated_dispatch) so it
+        // stops holding its node's write slot. Rows with an attempt are untouched.
+        for (const { mesh } of hosted) {
+            try {
+                runOrphanedDispatchSweep(components, mesh.id, nowMs);
+            } catch (e: any) {
+                LOG.warn('MeshHousekeeping', `Orphaned dispatch sweep failed for mesh ${mesh.id}: ${e?.message || e}`);
             }
         }
     }

@@ -124,7 +124,7 @@ describe('turn-ipc — command registry', () => {
 
 describe('turn-ipc — error codes', () => {
     it('declares the three-member closed union', () => {
-        expect([...TURN_IPC_ERROR_CODES].sort()).toEqual(['daemon_required', 'ledger_not_owner', 'turn_ledger_unavailable'])
+        expect([...TURN_IPC_ERROR_CODES].sort()).toEqual(['daemon_required', 'ledger_not_owner', 'session_busy_with_task', 'turn_ledger_unavailable'])
     })
 
     it('isTurnIpcError accepts a bare code and a code+detail, rejects an unknown code or extra key', () => {

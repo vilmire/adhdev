@@ -115,6 +115,7 @@ import {
 import { LOG } from '../../logging/logger.js';
 import { forgetOperatingNote, readOperatingNotes, recordOperatingNote } from '../../mesh/mesh-operating-notes.js';
 import { isWorkerMcpEnabled, mintWorkerTaskToken } from '../../mesh/worker-mcp-isolation.js';
+import { formatSessionBusyWithTaskToken, SESSION_BUSY_WITH_TASK_CODE } from '../../mesh/mesh-session-busy-dispatch.js';
 import { meshStoreIpcHandlers } from './mesh-store-ipc.js';
 import { meshStatsIpcHandlers } from './mesh-stats-ipc.js';
 
@@ -154,7 +155,7 @@ export function getActiveTurnLedgerForIpc(): TurnLedger | null {
 interface IpcErrorResult {
     success: false;
     error: string;
-    code: 'daemon_required' | 'turn_ledger_unavailable' | 'ledger_not_owner';
+    code: 'daemon_required' | 'turn_ledger_unavailable' | 'ledger_not_owner' | typeof SESSION_BUSY_WITH_TASK_CODE;
     [key: string]: unknown;
 }
 
@@ -198,6 +199,34 @@ function mintDirectDispatchWorkerToken(
     }
 }
 
+/**
+ * ORPHANED-UNCORRELATED-DISPATCH (a): a `dispatch_accepted` the ledger REFUSED
+ * because the session already holds an open mesh attempt (≤1 open attempt per
+ * session — ledger.ts applyStep's `open_attempt_conflict`) is a definite "this
+ * session is busy", not "no ledger here". Answer it with its own code and the
+ * busy-dispatch machine token naming the attempt in the way, so the dispatcher
+ * does not send (it used to read `ledger_not_owner`, treat the ledger as
+ * unavailable, send anyway and leave an attempt-less `assigned` queue row).
+ */
+function openAttemptConflict(
+    ledger: TurnLedger,
+    evidence: TurnEvidence,
+    result: ReturnType<TurnLedger['observe']>,
+): IpcErrorResult | null {
+    if (evidence.kind !== 'dispatch_accepted' || result.verdict !== 'rejected') return null;
+    if (!result.effects.some((e) => e.kind === 'record' && e.note === 'open_attempt_conflict')) return null;
+    const holder = ledger.openAttemptForSession(evidence.sessionId);
+    const token = formatSessionBusyWithTaskToken({
+        currentTaskId: holder?.taskId || 'unknown',
+        ...(holder?.attemptId ? { currentAttemptId: holder.attemptId } : {}),
+    });
+    return {
+        success: false,
+        error: `turn_observe: session ${evidence.sessionId} already holds open attempt ${holder?.attemptId ?? '?'} (${token}); dispatch refused`,
+        code: SESSION_BUSY_WITH_TASK_CODE,
+    };
+}
+
 const turnObserve: LowFamilyHandler = async (_ctx: LowFamilyContext, args: any) => {
     const req = decodeTurnObserveRequest(args);
     if (!req) return badRequest('turn_observe');
@@ -206,6 +235,8 @@ const turnObserve: LowFamilyHandler = async (_ctx: LowFamilyContext, args: any) 
     try {
         const result = ledger.observe(req.evidence);
         if (!result.attempt) {
+            const busy = openAttemptConflict(ledger, req.evidence, result);
+            if (busy) return busy;
             return { success: false, error: 'turn_observe: evidence did not resolve to an attempt', code: 'ledger_not_owner' };
         }
         mintDirectDispatchWorkerToken(req.evidence, result.verdict, result.attempt);

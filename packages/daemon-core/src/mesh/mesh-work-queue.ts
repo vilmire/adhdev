@@ -884,6 +884,39 @@ export function failRetentionExpiredParkedTask(
     return result ? result.entry : null;
 }
 
+/**
+ * ORPHANED-UNCORRELATED-DISPATCH: fail one `assigned` row that has NO turn-ledger
+ * attempt (`attemptId` absent). Such a row has no reclaim owner — the turn
+ * ledger's scheduler only reclaims attempts — so without this it stays
+ * `assigned` forever and holds its node's write slot. The caller
+ * (mesh-orphaned-dispatch-sweep.ts) has already judged the row's session
+ * not live and the row old enough; this re-checks the row shape under the queue
+ * lock (idempotent: a row that is no longer `assigned`, or that gained an
+ * attempt in the meantime, is left alone and null is returned).
+ */
+export function failOrphanedUncorrelatedDispatch(
+    meshId: string,
+    taskId: string,
+    reason: string,
+    opts?: MeshQueueMutationOptions,
+): MeshWorkQueueEntry | null {
+    requireMeshHostQueueOwner(opts);
+    const result = withQueueLock(meshId, () => {
+        const store = MeshRuntimeStore.getInstance();
+        const entry = store.findQueueEntryById(meshId, taskId);
+        if (!entry || entry.status !== 'assigned') return null;
+        if (typeof entry.attemptId === 'string' && entry.attemptId.trim()) return null;
+        entry.cancelReason = reason;
+        entry.updatedAt = new Date().toISOString();
+        store.updateQueueEntry(entry);
+        const failed = commitQueueTerminal(meshId, taskId, 'failed', 'queue_policy', reason);
+        const cascaded = propagateDependencyFailure(meshId, taskId, reason);
+        return { entry: failed ?? entry, cascaded };
+    });
+    if (result) scheduleMissionCloseCandidateCheck(meshId, [result.entry, ...result.cascaded]);
+    return result ? result.entry : null;
+}
+
 /** Every currently-parked pending task on the mesh (for views + the retention sweep). */
 export function getParkedTasks(meshId: string): MeshWorkQueueEntry[] {
     return getQueue(meshId, { status: ['pending'] }).filter(taskIsParked);

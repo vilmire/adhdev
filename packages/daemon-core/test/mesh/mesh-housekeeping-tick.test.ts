@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
     orphan: vi.fn(async () => {}),
     reap: vi.fn(async () => {}),
     stalls: vi.fn(),
+    orphanedDispatch: vi.fn(() => []),
     trigger: vi.fn(async () => ({})),
     pendingCount: vi.fn(() => 0),
     runtimeRetention: vi.fn(),
@@ -28,6 +29,7 @@ vi.mock('../../src/mesh/mesh-worktree-retention.js', () => ({ runWorktreeNodeRet
 vi.mock('../../src/mesh/mesh-idle-session-reaper.js', () => ({ runIdleSessionReapPass: mocks.reap }));
 vi.mock('../../src/mesh/mesh-retention-config.js', () => ({ resolveWorktreeNodeRetentionGraceMs: () => 0 }));
 vi.mock('../../src/mesh/mesh-queue-dependency-notice.js', () => ({ sweepQueueDependencyStalls: mocks.stalls }));
+vi.mock('../../src/mesh/mesh-orphaned-dispatch-sweep.js', () => ({ runOrphanedDispatchSweep: mocks.orphanedDispatch }));
 vi.mock('../../src/mesh/mesh-events-coordinator.js', () => ({ triggerMeshQueue: mocks.trigger }));
 vi.mock('../../src/mesh/mesh-runtime-store.js', () => ({
     pruneMeshRuntimeRetention: mocks.runtimeRetention,
@@ -74,6 +76,11 @@ describe('mesh housekeeping tick', () => {
         // The queue dependency stall sweep (a dead depends_on nobody announced) runs on the same tick.
         expect(mocks.stalls).toHaveBeenCalledWith('mesh-hosted');
         expect(mocks.stalls).not.toHaveBeenCalledWith('mesh-foreign');
+        // ORPHANED-UNCORRELATED-DISPATCH: the attempt-less assigned-row sweep runs on the
+        // host daemon only — never for a mesh another daemon hosts.
+        expect(mocks.orphanedDispatch).toHaveBeenCalledTimes(1);
+        expect((mocks.orphanedDispatch.mock.calls[0] as any[])[1]).toBe('mesh-hosted');
+        expect((mocks.orphanedDispatch.mock.calls[0] as any[])[2]).toBe(1_000);
     });
 
     it('never claims the queue itself (the turn scheduler owns the claim phase)', async () => {

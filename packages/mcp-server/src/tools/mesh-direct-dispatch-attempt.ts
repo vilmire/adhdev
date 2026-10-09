@@ -6,6 +6,7 @@
 import type { MeshContext } from './mesh-tools-internal.js';
 import { turnObserve, TurnIpcCommandError } from '../ipc/turn-commands.js';
 import { sanitizeRefusalCode } from '@adhdev/mesh-shared';
+import { classifySessionBusyWithTask } from '@adhdev/daemon-core';
 
 /**
  * DISPATCH-ACK-RISK-STALE — compute the dispatch-acknowledgement risk fields for a
@@ -38,24 +39,37 @@ export function computeIdleDispatchAckRisk(
 }
 
 /**
- * C-W6c: open a `mesh_direct` attempt in the NEW turn ledger (C1 reducer) for a
- * direct dispatch, mirroring what `recordDirectDispatchTask`'s in-process
- * `openTurnAttempt`/`recordTurnAck` used to do for the LEGACY ledger
- * (`mesh-turn-ledger.ts`). Both ledgers are bookkeeping-only here — neither
- * call touches the actual transport delivery (`sendDirectAgentTask`'s
- * `agent_command`), which happens independently around this helper.
+ * The outcome of opening a direct dispatch's `mesh_direct` attempt.
  *
- * Returns the `attemptRef` on success (embed in `meshContext` so worker
- * evidence — a remote daemon's forwarded completion, or this daemon's own
- * transcript reconcile — carries a resolvable attempt reference), or `null`
- * on any turn-ledger failure (best-effort: a direct dispatch must not be
- * blocked by the new ledger being mid-boot/unavailable — see the C-W6c
- * report's "Runnable?" section, this path is additive, not load-bearing yet).
+ *   opened      — the ledger opened it; `attemptRef` rides in meshContext.
+ *   refused     — the ledger ANSWERED and said no: the target session already holds
+ *                 an open mesh attempt (`session_busy_with_task`). The dispatch must
+ *                 NOT be sent — sending it is exactly what left task 14147d9b
+ *                 (2026-10-06) as an attempt-less `assigned` queue row that no reclaim
+ *                 owned and that blocked write autolaunch on its node for days.
+ *   unavailable — the ledger could not be asked or could not answer (mid-boot, not
+ *                 armed, transport down, any other failure). Best-effort: the dispatch
+ *                 goes ahead uncorrelated, as it always has.
+ */
+export type DirectDispatchAttemptOpen =
+    | { kind: 'opened'; attemptRef: { attemptId: string; generation: number } }
+    | { kind: 'refused'; code: 'session_busy_with_task'; currentTaskId?: string; currentAttemptId?: string; detail: string }
+    | { kind: 'unavailable' };
+
+/**
+ * C-W6c: open a `mesh_direct` attempt in the NEW turn ledger (C1 reducer) for a
+ * direct dispatch. Bookkeeping only — the transport delivery
+ * (`sendDirectAgentTask`'s `agent_command`) happens independently around this
+ * helper, and only when this does not return `refused`.
+ *
+ * See {@link DirectDispatchAttemptOpen}: a ledger REFUSAL (the session already
+ * holds an open attempt) is distinguished from the ledger being UNAVAILABLE —
+ * the former stops the dispatch, the latter lets it continue uncorrelated.
  */
 export async function openDirectDispatchAttempt(
     ctx: MeshContext,
     opts: { taskId: string; nodeId?: string; sessionId: string; providerType?: string },
-): Promise<{ attemptId: string; generation: number } | null> {
+): Promise<DirectDispatchAttemptOpen> {
     try {
         const accepted = await turnObserve(ctx.transport, {
             evidence: {
@@ -73,10 +87,25 @@ export async function openDirectDispatchAttempt(
                 ...(opts.providerType ? { providerType: opts.providerType } : {}),
             },
         });
-        return accepted.attemptRef;
+        return { kind: 'opened', attemptRef: accepted.attemptRef };
     } catch (e) {
+        if (e instanceof TurnIpcCommandError && e.code === 'session_busy_with_task') {
+            // The refusal message carries the busy-dispatch machine token
+            // (`session_busy_with_task[task=<id> attempt=<id|->]`) — read it back with
+            // the same classifier the worker-side refusal uses.
+            const busy = classifySessionBusyWithTask(e.message);
+            const currentTaskId = busy && busy.currentTaskId !== 'unknown' ? busy.currentTaskId : undefined;
+            const currentAttemptId = busy?.currentAttemptId;
+            return {
+                kind: 'refused',
+                code: 'session_busy_with_task',
+                ...(currentTaskId ? { currentTaskId } : {}),
+                ...(currentAttemptId ? { currentAttemptId } : {}),
+                detail: e.message,
+            };
+        }
         LOG_DIRECT_DISPATCH_TURN_OBSERVE_FAILURE(e, 'dispatch_accepted');
-        return null;
+        return { kind: 'unavailable' };
     }
 }
 

@@ -122,6 +122,8 @@ export type { MeshTaskInputSummary } from './mesh/mesh-task-predicates.js';
 export { normalizeMeshTaskMode, validateMeshTaskModeRequest, buildMeshTaskModeViolationError, formatMeshTaskModeViolations } from './mesh/mesh-task-mode-guardrail.js';
 export { buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, normalizeMeshCapabilityTags, providerPinsFromRequiredTags, filterProvidersByRequiredTags } from './mesh/mesh-node-capability-tags.js';
 export { parkTaskTargetPin, failRetentionExpiredParkedTask, getParkedTasks } from './mesh/mesh-work-queue.js';
+// ORPHANED-UNCORRELATED-DISPATCH: the 30 min stale-assigned age, shared with mcp-server's mesh_view_queue mark.
+export { STALE_ASSIGNED_QUEUE_MS, ORPHANED_UNCORRELATED_DISPATCH_REASON } from './mesh/mesh-orphaned-dispatch-sweep.js';
 export type { MeshWorkQueueEntry, MeshTaskStatus, MeshTaskMode, MeshTaskPriority, MeshWorkQueueStats, MeshQueueMutationOptions, MeshEnqueueTaskOptions, MeshTaskBatchEntrySpec, MeshTaskModeValidationResult, MeshTaskModeViolationDetail, DirectDispatchRecord, MeshToolCallRateResult, MeshTaskParking } from './mesh/mesh-work-queue.js';
 // PIN-PARKING: a stale target pin PARKS the task (held, still addressed, claimable by
 // nobody) instead of silently re-homing a context-bound delta onto another session.

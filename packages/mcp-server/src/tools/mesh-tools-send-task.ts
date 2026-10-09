@@ -831,6 +831,50 @@ async function dispatchSendTaskDirect(
     const taskId = randomUUID();
     const dispatchedAt = new Date().toISOString();
     const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
+    const dispatch = buildWorkerDispatchBody(ctx, node, taskId, args, req);
+    // C-W6c: open the attempt in the NEW turn ledger (C1 reducer) BEFORE the send, so
+    // its attemptRef rides in meshContext — the worker's cli-manager.ts echoes
+    // meshContext.attemptId/attemptGeneration onto its turn evidence. A sessionless
+    // dispatch does not know its session yet, so the taskId stands in: the reducer
+    // keys dispatch_accepted's attempt off `${scope}:${eventId}`, not off sessionId.
+    // Opened BEFORE the task_dispatched record too, so a refused dispatch leaves no
+    // dispatched-but-never-sent ledger trail.
+    const attemptOpen = await openDirectDispatchAttempt(ctx, {
+        taskId,
+        nodeId: args.node_id,
+        sessionId: target.sessionId || taskId,
+        providerType: target.providerType,
+    });
+    if (attemptOpen.kind === 'refused') {
+        // ORPHANED-UNCORRELATED-DISPATCH (a): the ledger answered that this session
+        // already holds an open mesh attempt. Do not send. This is the same answer the
+        // WORKER gives for a session busy with another task (session_busy_with_task,
+        // mesh-remote-dispatch.ts sessionBusyRefusalFields) — reported the same way: a
+        // dispatch failure that names the task in the way, nothing delivered, no queue
+        // row. (Not re-routed to the pinned queue: the session reads idle, so no idle
+        // edge would claim the row, and the claim would hit this same refusal.)
+        const sessionId = target.sessionId || args.session_id;
+        return JSON.stringify({
+            success: false,
+            dispatched: false,
+            code: attemptOpen.code,
+            reason: attemptOpen.code,
+            recoverable: true,
+            retryRecommended: false,
+            nodeId: args.node_id,
+            ...(sessionId ? { sessionId } : {}),
+            ...(attemptOpen.currentTaskId ? { currentTaskId: attemptOpen.currentTaskId } : {}),
+            ...(attemptOpen.currentAttemptId ? { currentAttemptId: attemptOpen.currentAttemptId } : {}),
+            taskMode: req.taskMode,
+            error: `Session '${sessionId}' already holds an open turn-ledger attempt`
+                + `${attemptOpen.currentAttemptId ? ` (${attemptOpen.currentAttemptId})` : ''}`
+                + `${attemptOpen.currentTaskId ? ` for task '${attemptOpen.currentTaskId}'` : ''}; the dispatch was refused and nothing was delivered.`,
+            nextAction: `Session '${sessionId}' is still accounted to ${attemptOpen.currentTaskId ? `task '${attemptOpen.currentTaskId}'` : 'another task'}. `
+                + 'Wait for that task to complete (its completion releases the session), target another idle session, or use mesh_enqueue_task to queue the work.',
+            ...req.deliveryModeWarning,
+        });
+    }
+    const attemptRef = attemptOpen.kind === 'opened' ? attemptOpen.attemptRef : null;
     try {
         await recordTaskDispatched(ctx, req, {
             via, taskId, nodeId: args.node_id, sessionId: target.sessionId || undefined,
@@ -838,7 +882,6 @@ async function dispatchSendTaskDirect(
             ...(explicitTargetSession ? { dispatchedToIdleSession: sessionWasIdle } : {}),
         });
     } catch { /* best-effort */ }
-    const dispatch = buildWorkerDispatchBody(ctx, node, taskId, args, req);
     if (dispatch.dirtyWorkspaceNotice) {
         // Same signal the queue claim records (B5: the continuation rule's sunset metric).
         try {
@@ -851,17 +894,6 @@ async function dispatchSendTaskDirect(
             });
         } catch { /* best-effort */ }
     }
-    // C-W6c: open the attempt in the NEW turn ledger (C1 reducer) BEFORE the send, so
-    // its attemptRef rides in meshContext — the worker's cli-manager.ts echoes
-    // meshContext.attemptId/attemptGeneration onto its turn evidence. A sessionless
-    // dispatch does not know its session yet, so the taskId stands in: the reducer
-    // keys dispatch_accepted's attempt off `${scope}:${eventId}`, not off sessionId.
-    const attemptRef = await openDirectDispatchAttempt(ctx, {
-        taskId,
-        nodeId: args.node_id,
-        sessionId: target.sessionId || taskId,
-        providerType: target.providerType,
-    });
     // DISPATCH-ACK-RISK-STALE (C-W8): the open mesh_direct attempt IS the pre-recorded
     // dispatch row — it is what sessionHasActiveAssignment keys on at completion time,
     // so the prior-terminal dedup gate is skipped. A genuine residual risk remains

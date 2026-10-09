@@ -8,12 +8,14 @@
  * LocalMeshEntry type; mesh-tools.ts imports the exported helpers/constants back, so
  * there is no runtime import cycle.
  */
-import type { LocalMeshEntry } from '@adhdev/daemon-core';
+import { STALE_ASSIGNED_QUEUE_MS, type LocalMeshEntry } from '@adhdev/daemon-core';
 import { elideLargeNestedValue } from './mesh-tool-shared.js';
 import { collectNodeSessionIds } from './mesh-session-helpers.js';
 import { readString } from '@adhdev/mesh-shared';
 
-const STALE_ASSIGNED_QUEUE_MS = 30 * 60_000;
+// STALE_ASSIGNED_QUEUE_MS (30 min) is daemon-core's: the daemon's orphaned-dispatch
+// housekeeping sweep (mesh-orphaned-dispatch-sweep.ts) fails attempt-less assigned rows
+// past the same age, so a row this view flags stale is the row that sweep reclaims.
 const OLD_HISTORICAL_QUEUE_RECORD_MS = 7 * 24 * 60 * 60_000;
 export const ACTIVE_QUEUE_STATUSES = new Set(['pending', 'assigned']);
 export const HISTORICAL_QUEUE_STATUSES = new Set(['completed', 'failed', 'cancelled']);
