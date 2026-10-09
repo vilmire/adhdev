@@ -181,8 +181,11 @@ function takeLastLinesWithinBytes(lines: string[], limitBytes: number): { kept: 
 }
 
 // Parse a leading timestamp from a log line into epoch ms. The unified logger
-// writes `[HH:MM:SS.mmm]` (local time, today's date) and the startup banner uses
-// a full timestamp; we best-effort parse `[HH:MM:SS...]` against the file's date.
+// writes `[HH:MM:SS.mmm]` in UTC (logger.ts: `toISOString().slice(11, 23)`) into a
+// file named by its UTC date, and the startup banner uses a full timestamp; we
+// best-effort parse `[HH:MM:SS...]` as UTC against the file's (UTC) date. Parsing
+// it as LOCAL time shifted every line by the host's UTC offset, so on any non-UTC
+// machine a `sinceMs` floor silently dropped (or kept) hours of lines.
 // Returns null when no timestamp can be extracted (line is then kept by sinceMs).
 function parseLineEpochMs(line: string, fileDate: Date): number | null {
     const m = line.match(/^\[(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?\]/);
@@ -196,7 +199,7 @@ function parseLineEpochMs(line: string, fileDate: Date): number | null {
         return null;
     }
     const d = new Date(fileDate);
-    d.setHours(Number(m[1]), Number(m[2]), Number(m[3]), m[4] ? Number(m[4].padEnd(3, '0')) : 0);
+    d.setUTCHours(Number(m[1]), Number(m[2]), Number(m[3]), m[4] ? Number(m[4].padEnd(3, '0')) : 0);
     return d.getTime();
 }
 

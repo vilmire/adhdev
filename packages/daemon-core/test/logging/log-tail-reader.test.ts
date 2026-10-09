@@ -191,14 +191,33 @@ describe('readDaemonLogTail', () => {
       'continuation without timestamp',
       '[12:00:09] latest',
     ].join('\n') + '\n')
-    const floor = new Date(`${TEST_DATE}T00:00:00.000`)
-    floor.setHours(12, 0, 5, 0)
-    const result = readDaemonLogTail({ date: TEST_DATE, sinceMs: floor.getTime() })
+    // The logger stamps lines in UTC (logger.ts toISOString().slice(11, 23)).
+    const floor = Date.parse(`${TEST_DATE}T12:00:05.000Z`)
+    const result = readDaemonLogTail({ date: TEST_DATE, sinceMs: floor })
     expect(result.success).toBe(true)
     expect(result.lines).toContain('[12:00:05] later')
     expect(result.lines).toContain('[12:00:09] latest')
     expect(result.lines).toContain('continuation without timestamp')
     expect(result.lines).not.toContain('[12:00:01] early')
+  })
+
+  it('sinceMs reads the UTC line stamps as UTC on a non-UTC host (no TZ-offset shift)', () => {
+    // Live repro (2026-10-09): a JST/KST node returned 0 lines for a 10-minute-old
+    // floor because `[07:58:19]` (UTC) was parsed as 07:58 LOCAL = 22:58Z the day before.
+    const prevTz = process.env.TZ
+    process.env.TZ = 'Asia/Tokyo'
+    try {
+      writeTestLog([
+        '[07:50:00.000] [INF] before floor',
+        '[07:58:19.071] [WRN] after floor',
+      ].join('\n') + '\n')
+      const result = readDaemonLogTail({ date: TEST_DATE, sinceMs: Date.parse(`${TEST_DATE}T07:57:30.000Z`) })
+      expect(result.success).toBe(true)
+      expect(result.lines).toEqual(['[07:58:19.071] [WRN] after floor'])
+    } finally {
+      if (prevTz === undefined) delete process.env.TZ
+      else process.env.TZ = prevTz
+    }
   })
 
   it('preserves multibyte UTF-8 across the truncation boundary', () => {
