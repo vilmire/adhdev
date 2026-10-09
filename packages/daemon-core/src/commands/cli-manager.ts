@@ -105,11 +105,20 @@ export interface HostedCliRuntimeDescriptor {
      * resolveWorkerDelegateRouting (no_worker_envelope), detach does a full clear
      * (launchedByCoordinator falsy), and mesh_read_terminal / mesh_send_keys refuse
      * the session as non-worker. TASK-level markers (meshActiveTaskId / attemptId /
-     * dispatchNonce) are deliberately NOT carried here — those are re-derived with
-     * terminal/stale/session/nonce guards by restampReboundMeshWorkerAssignment.
+     * dispatchNonce) are deliberately NOT carried here — the owner re-resolves
+     * the session's task from its own queue row and ledger.
      */
     meshNodeFor?: string;
     meshNodeId?: string;
+    /**
+     * The daemon that owns this worker's mesh work (`settings.meshCoordinatorDaemonId`),
+     * persisted at launch and at every dispatch. Restored with the membership so a
+     * worker whose task another daemon owns can still forward `report_completion`
+     * after a restart of ITS daemon (live 2026-10-08, rc.1: refused "the bind is
+     * live, but its session holds no assigned task here"). An identifier, not a
+     * task marker — the owner re-resolves the task and checks the relaying daemon.
+     */
+    meshCoordinatorDaemonId?: string;
     launchedByCoordinator?: boolean;
     /** The session's launch-time auto-approve mode id, re-applied on restore. */
     autoApproveMode?: string;
@@ -366,12 +375,15 @@ export class DaemonCliManager {
         // updateRuntimeMeta round-trip below. See CliTransportFactoryParams.initialMeta.
         const launchMeshNodeId = typeof settings?.meshNodeId === 'string' ? settings.meshNodeId.trim() : '';
         const launchMeshNodeFor = typeof settings?.meshNodeFor === 'string' ? settings.meshNodeFor.trim() : '';
+        const launchMeshCoordinatorDaemonId = typeof settings?.meshCoordinatorDaemonId === 'string' ? settings.meshCoordinatorDaemonId.trim() : '';
         const launchAutoLaunchedForQueueTaskId = typeof settings?.autoLaunchedForQueueTaskId === 'string'
             ? settings.autoLaunchedForQueueTaskId.trim()
             : '';
         const launchRecordMeta: Record<string, unknown> = {
             ...(launchMeshNodeId ? { meshNodeId: launchMeshNodeId } : {}),
             ...(launchMeshNodeFor ? { meshNodeFor: launchMeshNodeFor } : {}),
+            // The daemon that owns this worker's mesh work (see the descriptor field).
+            ...(launchMeshNodeFor && launchMeshCoordinatorDaemonId ? { meshCoordinatorDaemonId: launchMeshCoordinatorDaemonId } : {}),
             ...(settings?.launchedByCoordinator === true ? { launchedByCoordinator: true } : {}),
             ...(launchAutoLaunchedForQueueTaskId ? { autoLaunchedForQueueTaskId: launchAutoLaunchedForQueueTaskId } : {}),
             // The session's own approval mode (launch dialog / mesh policy). Restore

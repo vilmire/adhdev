@@ -31,7 +31,7 @@ instanceId: string;
 settings: Record<string, any>;
 meshTaskInjectedAt: number;
 meshTaskAttachmentHistory: MeshTaskAttachment[];
-adapter: { updateRuntimeSettings?: (settings: Record<string, any>) => void };
+adapter: { updateRuntimeSettings?: (settings: Record<string, any>) => void; updateRuntimeMeta?: (meta: Record<string, unknown>) => void };
 /** Turn-in-flight markers (CliProviderInstance fields; absent on narrow test hosts ⇒ treated as in flight). */
 generatingStartedAt?: number;
 completedDebouncePending?: unknown;
@@ -130,6 +130,16 @@ export function attachMeshAssignment(host: MeshAssignmentHost, assignment: { mes
     if (taskChanged && !assignment.attemptId) { delete host.settings.meshActiveAttemptId; delete host.settings.meshActiveAttemptGeneration; }
     if (taskChanged && typeof assignment.dispatchNonce !== 'number') delete host.settings.meshActiveDispatchNonce;
     host.adapter.updateRuntimeSettings?.(host.settings);
+    // Settings are in-memory; persist the work-owner daemon to the session-host
+    // record so a restore after a restart of THIS daemon can still forward the
+    // worker's report to the owner (cli-manager-restore.ts). Only the owner id:
+    // membership (meshNodeFor) stays launch-time, so a session that was merely
+    // handed one task is never restored as a worker.
+    if (assignment.coordinatorDaemonId) {
+        try {
+            host.adapter.updateRuntimeMeta?.({ meshCoordinatorDaemonId: assignment.coordinatorDaemonId });
+        } catch { /* best-effort — the live settings above are authoritative */ }
+    }
 }
 
 /**

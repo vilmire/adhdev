@@ -177,7 +177,7 @@ export interface TurnLedger {
     counters(): TurnLedgerCounters;
 }
 
-const REPORT_GATE_RULES: ReadonlySet<string> = new Set(['R9r', 'R12r', 'R13r', 'R17g', 'R9t', 'R13t']);
+const REPORT_GATE_RULES: ReadonlySet<string> = new Set(['R9r', 'R15p', 'R12r', 'R13r', 'R17g', 'R9t', 'R13t']);
 
 const DEFAULT_LOG: TurnLedgerLog = { info: () => {}, warn: () => {}, error: () => {} };
 const PUBLISH_BATCH = 256;
@@ -275,6 +275,7 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
         else if (rule === 'R9t') log.info(`turn-ledger: idle edge after the worker report — ${who} committed from the report`);
         else if (rule === 'R13t') log.info(`turn-ledger: no idle edge within ${Math.round(policy.awaitEndMs / 1000)}s of the worker report — ${who} committed from the report`);
         else if (rule === 'R9r') log.info(`turn-ledger: idle end of ${who} awaits the worker report (await_report hold ${Math.round(policy.awaitReportMs / 1000)}s)`);
+        else if (rule === 'R15p') log.info(`turn-ledger: transcript of ${who} reads finished but the worker has not ended its turn — awaiting the worker report (await_report hold ${Math.round(policy.awaitReportMs / 1000)}s)`);
         else if (rule === 'R12r') log.info(`turn-ledger: false idle: worker resumed — ${who} back to generating (falseIdleCount=${attempt.data.falseIdleCount ?? 0})`);
         else log.info(`turn-ledger: no worker report within ${Math.round(policy.awaitReportMs / 1000)}s — ${who} committed weak`);
     }

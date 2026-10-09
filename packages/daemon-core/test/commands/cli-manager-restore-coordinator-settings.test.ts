@@ -356,6 +356,32 @@ describe('DaemonCliManager.restoreHostedSessions re-establishes launch settings'
     expect(context.settings.meshActiveDispatchNonce).toBeUndefined();
   }, 15000);
 
+  // Live 2026-10-08 (preview 1.0.79-rc.1): a claude-cli worker on Jupiter whose
+  // task the Mac owned survived a forced restart of Jupiter's daemon with its
+  // bind intact, but its report_completion was refused "the bind is live, but its
+  // session holds no assigned task here" — the restored settings had membership
+  // and no meshCoordinatorDaemonId, so the remote-owner forward path could not
+  // name the owner. The owner id persisted in the record meta is restored with
+  // the membership (and never without it).
+  it('restores the work-owner daemon id with the mesh membership, never on its own', async () => {
+    const loader = setupLoader();
+    const addInstance = vi.fn();
+    const restored = await createManager(loader, {
+      getInstanceManager: () => ({ addInstance, removeInstance: vi.fn(), getInstance: () => null }),
+      getSessionRegistry: () => ({ register: vi.fn() }),
+    }).restoreHostedSessions([
+      { runtimeId: 'remote-owned-worker-1', cliType: 'sample-cli', workspace: workingDir, meshNodeFor: 'mesh-w', meshNodeId: 'nodeA', meshCoordinatorDaemonId: 'daemon_mach_owner', launchedByCoordinator: true },
+      { runtimeId: 'plain-with-stray-owner-2', cliType: 'sample-cli', workspace: workingDir, meshCoordinatorDaemonId: 'daemon_mach_owner' },
+    ]);
+    expect(restored).toBe(2);
+    const contexts = addInstance.mock.calls.map((c: any[]) => c[2] as any);
+    const worker = contexts.find((c) => c.settings.meshNodeFor === 'mesh-w');
+    expect(worker?.settings.meshCoordinatorDaemonId).toBe('daemon_mach_owner');
+    expect(worker?.settings.meshActiveTaskId).toBeUndefined();
+    const plain = contexts.find((c) => c.settings.meshNodeFor === undefined);
+    expect(plain?.settings.meshCoordinatorDaemonId).toBeUndefined();
+  }, 15000);
+
   it('RC20 REBOUND RELAY ENVELOPE: does not invent mesh membership for a plain session', async () => {
     const loader = setupLoader();
     const addInstance = vi.fn();

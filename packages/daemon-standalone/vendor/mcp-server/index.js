@@ -42050,6 +42050,7 @@ ${rendered.join("\n\n")}`,
     var AWAITS;
     var livenessExtend;
     var weakCandidate;
+    var awaitReport;
     var TRANSITIONS;
     var NONTERMINAL;
     var TERMINAL;
@@ -42070,6 +42071,11 @@ ${rendered.join("\n\n")}`,
           { e: "act", act: "weak_candidate" },
           { e: "hold", reason: "weak_candidate", until: "weak_confirm", onExpire: "commit" },
           { e: "notify", notify: "candidate", when: "candidate_once" }
+        ];
+        awaitReport = [
+          { e: "act", act: "await_report" },
+          { e: "release", reasons: ["weak_candidate"] },
+          { e: "hold", reason: "await_report", until: "await_report", onExpire: "commit", meshOnly: true }
         ];
         TRANSITIONS = [
           // ── lane none: no attempt resolved ──────────────────────────────────
@@ -42215,6 +42221,18 @@ ${rendered.join("\n\n")}`,
             { e: "commit", outcome: "completed", strength: "genuine", reason: "transcript_final" }
           ] },
           { id: "R15", lane: "current", from: [C, G, S], on: ["transcript_final"], guard: "final_weak", to: F, verdict: "applied", effects: weakCandidate },
+          // R15p (2026-10-08 preview, task 205e5dfa): a weak transcript_final the
+          // OWNER scraped (coordinator_probe / mcp_probe) on a mesh attempt is not the
+          // worker daemon's verdict — the worker emits its own turn_end, and its
+          // completion gate deliberately withholds it while the turn is not over (a
+          // `sleep 150 &` background job holds it up to 5 min, completion-engine
+          // `background_task_active`). Under R15 the scrape committed weak 12 s later
+          // (R13a), 84 s into a 4-minute task; the worker's report then landed late.
+          // A scrape alone therefore waits like an idle end that awaits the report:
+          // the report commits it (R17), the worker's busy edge cancels it (R12r),
+          // the worker's own end commits (R11) or keeps waiting (R9d), and expiry
+          // commits weak (R13r). Worker-side weak evidence keeps R15/R10.
+          { id: "R15p", lane: "current", from: [C, G, S], on: ["transcript_final"], guard: "final_weak_probe", to: F, verdict: "applied", effects: awaitReport },
           // R16 stays live-pending-only even once a report is recorded (guard has no
           // `!reportedThisGeneration`): a hold admission (modal/adapter-pending/
           // trailing-tool/transcript-growing) is genuine ongoing activity, and R16's
@@ -42245,11 +42263,7 @@ ${rendered.join("\n\n")}`,
           // R12r cancels the candidate when the worker goes busy again (false idle),
           // R13r commits weak when the hold expires with no report. Sessions with no
           // bind never set `reportExpected` and keep R9 exactly.
-          { id: "R9r", lane: "current", from: [C, G, S, F], on: ["turn_end"], guard: "end_report_awaited", to: F, verdict: "applied", effects: [
-            { e: "act", act: "await_report" },
-            { e: "release", reasons: ["weak_candidate"] },
-            { e: "hold", reason: "await_report", until: "await_report", onExpire: "commit", meshOnly: true }
-          ] },
+          { id: "R9r", lane: "current", from: [C, G, S, F], on: ["turn_end"], guard: "end_report_awaited", to: F, verdict: "applied", effects: awaitReport },
           { id: "R9d", lane: "current", from: [F], on: ["turn_end"], guard: "end_report_awaited_held", to: "same", verdict: "recorded", effects: [
             { e: "record", note: "await_report_duplicate_end" }
           ] },
@@ -42486,6 +42500,12 @@ ${rendered.join("\n\n")}`,
         return admission?.kind === "strong" || admission?.kind === "weak" || admission?.kind === "decline";
       }
       return ev.kind === "no_progress" && ev.finalAssistantPresent;
+    }
+    function finalWeak(ctx) {
+      return ctx.evidence.kind === "transcript_final" && admissionOf(ctx)?.kind === "weak" && !reportedThisGeneration(ctx);
+    }
+    function ownerScrapedMeshFinal(ctx) {
+      return ctx.evidence.kind === "transcript_final" && OWNER_SCRAPE_SOURCES.has(ctx.evidence.source) && !!ctx.attempt && isMeshScope(ctx.attempt);
     }
     function awaitReportHeld(ctx) {
       const attempt = ctx.attempt;
@@ -42971,6 +42991,7 @@ ${rendered.join("\n\n")}`,
       }));
     }
     var SESSION_PRODUCED_KINDS;
+    var OWNER_SCRAPE_SOURCES;
     var GUARDS;
     var TEXT_CARRYING_HOLDS;
     var RECLAIM_TURN_REASONS;
@@ -42997,6 +43018,7 @@ ${rendered.join("\n\n")}`,
           "worker_report",
           "worker_progress"
         ]);
+        OWNER_SCRAPE_SOURCES = /* @__PURE__ */ new Set(["coordinator_probe", "mcp_probe"]);
         GUARDS = {
           unbound: (ctx) => !ctx.evidence.attemptRef && !ctx.evidence.taskId,
           bound: (ctx) => !!ctx.evidence.attemptRef || !!ctx.evidence.taskId,
@@ -43045,9 +43067,10 @@ ${rendered.join("\n\n")}`,
             return !!e && !!e.hollow && notHeld(ctx) && !reportedThisGeneration(ctx) && ctx.attempt.hollowCount >= ctx.attempt.maxTaskRetries;
           },
           final_strong: (ctx) => ctx.evidence.kind === "transcript_final" && admissionOf(ctx)?.kind === "strong" && !reportedThisGeneration(ctx),
-          final_weak: (ctx) => ctx.evidence.kind === "transcript_final" && admissionOf(ctx)?.kind === "weak" && !reportedThisGeneration(ctx),
+          final_weak: (ctx) => finalWeak(ctx) && !ownerScrapedMeshFinal(ctx),
+          final_weak_probe: (ctx) => finalWeak(ctx) && ownerScrapedMeshFinal(ctx),
           genuine_end_or_strong_final: (ctx) => GUARDS.end_genuine(ctx) || GUARDS.final_strong(ctx) && !awaitReportHeld(ctx),
-          weak_end_or_final: (ctx) => GUARDS.end_weak(ctx) || GUARDS.final_weak(ctx),
+          weak_end_or_final: (ctx) => GUARDS.end_weak(ctx) || finalWeak(ctx),
           admission_hold: (ctx) => admissionOf(ctx)?.kind === "hold",
           // A content decline (no native marker / no final assistant summary) yields
           // to R9t once a report is recorded for this generation: the report already
@@ -123503,6 +123526,12 @@ ${marker}`,
       }
       if (taskChanged && typeof assignment.dispatchNonce !== "number") delete host.settings.meshActiveDispatchNonce;
       host.adapter.updateRuntimeSettings?.(host.settings);
+      if (assignment.coordinatorDaemonId) {
+        try {
+          host.adapter.updateRuntimeMeta?.({ meshCoordinatorDaemonId: assignment.coordinatorDaemonId });
+        } catch {
+        }
+      }
     }
     function currentMeshAttemptRef(settings) {
       const attemptId = settings?.meshActiveAttemptId;
@@ -148290,6 +148319,8 @@ Run 'adhdev doctor' for detailed diagnostics.`
       const recordMeshNodeFor = typeof record2.meshNodeFor === "string" && record2.meshNodeFor.trim() ? record2.meshNodeFor.trim() : "";
       const recordMeshNodeId = typeof record2.meshNodeId === "string" && record2.meshNodeId.trim() ? record2.meshNodeId.trim() : "";
       if (recordMeshNodeFor) restoredSettings.meshNodeFor = recordMeshNodeFor;
+      const recordOwner = typeof record2.meshCoordinatorDaemonId === "string" ? record2.meshCoordinatorDaemonId.trim() : "";
+      if (recordMeshNodeFor && recordOwner) restoredSettings.meshCoordinatorDaemonId = recordOwner;
       if (recordMeshNodeId) {
         restoredSettings.meshNodeId = recordMeshNodeId;
         restoredSettings.meshLastNodeId = recordMeshNodeId;
@@ -148713,10 +148744,13 @@ Run 'adhdev doctor' for detailed diagnostics.`
         if (!instanceManager) throw new Error("InstanceManager not available");
         const launchMeshNodeId = typeof settings?.meshNodeId === "string" ? settings.meshNodeId.trim() : "";
         const launchMeshNodeFor = typeof settings?.meshNodeFor === "string" ? settings.meshNodeFor.trim() : "";
+        const launchMeshCoordinatorDaemonId = typeof settings?.meshCoordinatorDaemonId === "string" ? settings.meshCoordinatorDaemonId.trim() : "";
         const launchAutoLaunchedForQueueTaskId = typeof settings?.autoLaunchedForQueueTaskId === "string" ? settings.autoLaunchedForQueueTaskId.trim() : "";
         const launchRecordMeta = {
           ...launchMeshNodeId ? { meshNodeId: launchMeshNodeId } : {},
           ...launchMeshNodeFor ? { meshNodeFor: launchMeshNodeFor } : {},
+          // The daemon that owns this worker's mesh work (see the descriptor field).
+          ...launchMeshNodeFor && launchMeshCoordinatorDaemonId ? { meshCoordinatorDaemonId: launchMeshCoordinatorDaemonId } : {},
           ...settings?.launchedByCoordinator === true ? { launchedByCoordinator: true } : {},
           ...launchAutoLaunchedForQueueTaskId ? { autoLaunchedForQueueTaskId: launchAutoLaunchedForQueueTaskId } : {},
           // The session's own approval mode (launch dialog / mesh policy). Restore
@@ -154967,6 +155001,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           // instance settings. Task-level markers stay out (see the descriptor).
           meshNodeFor: typeof record2.meta?.meshNodeFor === "string" && record2.meta.meshNodeFor.trim() ? String(record2.meta.meshNodeFor).trim() : void 0,
           meshNodeId: typeof record2.meta?.meshNodeId === "string" && record2.meta.meshNodeId.trim() ? String(record2.meta.meshNodeId).trim() : void 0,
+          meshCoordinatorDaemonId: typeof record2.meta?.meshCoordinatorDaemonId === "string" && record2.meta.meshCoordinatorDaemonId.trim() ? String(record2.meta.meshCoordinatorDaemonId).trim() : void 0,
           launchedByCoordinator: record2.meta?.launchedByCoordinator === true ? true : void 0,
           autoApproveMode: typeof record2.meta?.autoApproveMode === "string" && record2.meta.autoApproveMode.trim() ? String(record2.meta.autoApproveMode).trim() : void 0,
           // Phase E launch provenance written at spawn; validated on restore
@@ -157294,7 +157329,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       }
       return counters4;
     }
-    var REPORT_GATE_RULES = /* @__PURE__ */ new Set(["R9r", "R12r", "R13r", "R17g", "R9t", "R13t"]);
+    var REPORT_GATE_RULES = /* @__PURE__ */ new Set(["R9r", "R15p", "R12r", "R13r", "R17g", "R9t", "R13t"]);
     var DEFAULT_LOG = { info: () => {
     }, warn: () => {
     }, error: () => {
@@ -157385,6 +157420,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         else if (rule === "R9t") log.info(`turn-ledger: idle edge after the worker report \u2014 ${who} committed from the report`);
         else if (rule === "R13t") log.info(`turn-ledger: no idle edge within ${Math.round(policy.awaitEndMs / 1e3)}s of the worker report \u2014 ${who} committed from the report`);
         else if (rule === "R9r") log.info(`turn-ledger: idle end of ${who} awaits the worker report (await_report hold ${Math.round(policy.awaitReportMs / 1e3)}s)`);
+        else if (rule === "R15p") log.info(`turn-ledger: transcript of ${who} reads finished but the worker has not ended its turn \u2014 awaiting the worker report (await_report hold ${Math.round(policy.awaitReportMs / 1e3)}s)`);
         else if (rule === "R12r") log.info(`turn-ledger: false idle: worker resumed \u2014 ${who} back to generating (falseIdleCount=${attempt.data.falseIdleCount ?? 0})`);
         else log.info(`turn-ledger: no worker report within ${Math.round(policy.awaitReportMs / 1e3)}s \u2014 ${who} committed weak`);
       }

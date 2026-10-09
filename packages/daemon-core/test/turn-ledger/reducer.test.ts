@@ -308,6 +308,57 @@ describe('holds', () => {
         expect(resumed.holds.some((h) => h.reason === 'weak_candidate')).toBe(false);
     });
 
+    // 2026-10-08 preview, task 205e5dfa: the worker (antigravity-cli) ran `sleep 150`
+    // in the background and ended its reply; its daemon's completion gate held the
+    // turn_end (background_task_active), but the owner's transcript probe read the
+    // reply as a weak final → R15 → R13a committed weak 12 s later, 84 s into the
+    // task, and the worker's real report landed late against a terminal attempt.
+    describe('R15p — a weak final the owner scraped on a mesh attempt awaits the report', () => {
+        const scrape = (at = NOW) => ev('transcript_final', { selfAttributing: false, nativeRead: false, live: LIVE_IDLE, summary: REF }, { source: 'coordinator_probe', at, eventId: `probe-${at}` });
+
+        it('opens an await_report hold, not a 12 s weak_candidate', () => {
+            const r = step(makeAttempt('generating'), scrape());
+            expect(r.rule).toBe('R15p');
+            expect(r.attempt?.state).toBe('finalizing');
+            expect(r.attempt?.terminal).toBeNull();
+            expect(r.holds.map((h) => h.reason)).not.toContain('weak_candidate');
+            const hold = r.holds.find((h) => h.reason === 'await_report');
+            expect(hold).toMatchObject({ until: NOW + POLICY.awaitReportMs, onExpire: 'commit' });
+            expect(r.effects.some((e) => e.kind === 'commit')).toBe(false);
+        });
+
+        it('the incident sequence: repeat scrape is recorded, the worker resumes (R12r), reports (R17g) and ends (R9t) — one genuine-report commit', () => {
+            const opened = step(makeAttempt('generating'), scrape());
+            const again = step(opened.attempt, scrape(NOW + 8_000), opened.holds, NOW + 8_000);
+            expect(again.rule).toBe('R10a');
+            expect(again.attempt?.terminal).toBeNull();
+            const resumed = step(again.attempt, ev('turn_started', { retro: false }, { at: NOW + 100_000 }), again.holds, NOW + 100_000);
+            expect(resumed.rule).toBe('R12r');
+            expect(resumed.attempt?.state).toBe('generating');
+            const reported = step(resumed.attempt, ev('worker_report', { outcome: 'completed', summary: REF, hasHandoffNotes: false }, { source: 'worker_tool', at: NOW + 102_000 }), resumed.holds, NOW + 102_000);
+            expect(reported.rule).toBe('R17g');
+            const ended = step(reported.attempt, ev('turn_end', { strength: 'genuine', reportExpected: true }, { at: NOW + 106_000 }), reported.holds, NOW + 106_000);
+            expect(ended.rule).toBe('R9t');
+            expect(ended.attempt?.terminal).toMatchObject({ outcome: 'completed', strength: 'tool_report', reason: 'worker_reported' });
+        });
+
+        it('a report while awaiting commits at once (R17); the worker daemon\'s own genuine end commits (R11); expiry commits weak (R13r)', () => {
+            const opened = step(makeAttempt('generating'), scrape());
+            expect(step(opened.attempt, ev('worker_report', { outcome: 'completed', summary: REF, hasHandoffNotes: false }, { source: 'worker_tool' }), opened.holds).rule).toBe('R17');
+            expect(step(opened.attempt, ev('turn_end', { strength: 'genuine' }), opened.holds).rule).toBe('R11');
+            const [expiry] = expireHolds(opened.holds.filter((h) => h.reason === 'await_report'), NOW + POLICY.awaitReportMs, { observedBy: 'dc', sessionIdFor: () => 's1' });
+            const done = step(opened.attempt, expiry!, opened.holds, NOW + POLICY.awaitReportMs);
+            expect(done.rule).toBe('R13r');
+            expect(done.attempt?.terminal).toMatchObject({ outcome: 'completed', strength: 'weak', reason: 'weak_end_confirmed' });
+        });
+
+        it('worker-side weak finals and plain attempts keep R15', () => {
+            const workerSide = ev('transcript_final', { selfAttributing: false, nativeRead: false, live: LIVE_IDLE, summary: REF }, { source: 'monitor_final_summary' });
+            expect(step(makeAttempt('generating'), workerSide).rule).toBe('R15');
+            expect(step(makeAttempt('generating', { scope: 'plain' }), scrape()).rule).toBe('R15');
+        });
+    });
+
     it('the candidate notice goes out once per generation', () => {
         const weak = step(makeAttempt('generating'), ev('turn_end', { strength: 'weak' }));
         const resumed = step(weak.attempt, ev('turn_started', { retro: false }, { at: NOW + 10 }), weak.holds);

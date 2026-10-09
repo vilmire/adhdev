@@ -94,6 +94,8 @@ export function variantsFor(kind: TurnEvidenceKind): Array<{ label: string; evid
         case 'transcript_final': return [
             v('marker', ev(kind, { selfAttributing: false, nativeRead: true, nativeMarker: { outcome: 'completed' }, live: LIVE_IDLE })),
             v('shape', ev(kind, { selfAttributing: false, nativeRead: false, live: LIVE_IDLE, summary: REF })),
+            v('shape-owner-scrape', ev(kind, { selfAttributing: false, nativeRead: false, live: LIVE_IDLE, summary: REF }, { source: 'coordinator_probe' })),
+            v('shape-owner-scrape-await-report', ev(kind, { selfAttributing: false, nativeRead: false, live: LIVE_IDLE, summary: REF }, { source: 'coordinator_probe' }), [makeHold('await_report')]),
             v('growing', ev(kind, { selfAttributing: false, nativeRead: false, live: { ...LIVE_IDLE, newestActivityAt: NOW - 1000 }, summary: REF })),
             v('no-marker', ev(kind, { selfAttributing: false, nativeRead: true, live: LIVE_IDLE, summary: REF })),
             v('marker-await-report', ev(kind, { selfAttributing: false, nativeRead: true, nativeMarker: { outcome: 'completed' }, live: LIVE_IDLE }), [makeHold('await_report')]),

@@ -227,6 +227,24 @@ function finishedAfterReport(ctx: GuardCtx): boolean {
     return ev.kind === 'no_progress' && ev.finalAssistantPresent;
 }
 
+/** A weakly admitted transcript_final (R15 / R15p / R10a). */
+function finalWeak(ctx: GuardCtx): boolean {
+    return ctx.evidence.kind === 'transcript_final' && admissionOf(ctx)?.kind === 'weak' && !reportedThisGeneration(ctx);
+}
+
+/** Evidence the owner read itself — never the worker daemon's turn verdict. */
+const OWNER_SCRAPE_SOURCES: ReadonlySet<string> = new Set(['coordinator_probe', 'mcp_probe']);
+
+/**
+ * R15p: a transcript_final the owner scraped on a mesh attempt. The worker's
+ * daemon emits its own turn_end (and withholds it while its completion gate
+ * holds), so a scrape alone awaits the report instead of committing weak.
+ */
+function ownerScrapedMeshFinal(ctx: GuardCtx): boolean {
+    return ctx.evidence.kind === 'transcript_final' && OWNER_SCRAPE_SOURCES.has(ctx.evidence.source)
+        && !!ctx.attempt && isMeshScope(ctx.attempt);
+}
+
 /** The attempt is inside an R9r window (an active `await_report` hold). */
 function awaitReportHeld(ctx: GuardCtx): boolean {
     const attempt = ctx.attempt;
@@ -265,9 +283,10 @@ const GUARDS: Record<Exclude<GuardId, 'otherwise'>, (ctx: GuardCtx) => boolean> 
     hollow_retry: (ctx) => { const e = completionEnd(ctx); return !!e && !!e.hollow && notHeld(ctx) && !reportedThisGeneration(ctx) && ctx.attempt!.hollowCount < ctx.attempt!.maxTaskRetries; },
     hollow_exhausted: (ctx) => { const e = completionEnd(ctx); return !!e && !!e.hollow && notHeld(ctx) && !reportedThisGeneration(ctx) && ctx.attempt!.hollowCount >= ctx.attempt!.maxTaskRetries; },
     final_strong: (ctx) => ctx.evidence.kind === 'transcript_final' && admissionOf(ctx)?.kind === 'strong' && !reportedThisGeneration(ctx),
-    final_weak: (ctx) => ctx.evidence.kind === 'transcript_final' && admissionOf(ctx)?.kind === 'weak' && !reportedThisGeneration(ctx),
+    final_weak: (ctx) => finalWeak(ctx) && !ownerScrapedMeshFinal(ctx),
+    final_weak_probe: (ctx) => finalWeak(ctx) && ownerScrapedMeshFinal(ctx),
     genuine_end_or_strong_final: (ctx) => GUARDS.end_genuine(ctx) || (GUARDS.final_strong(ctx) && !awaitReportHeld(ctx)),
-    weak_end_or_final: (ctx) => GUARDS.end_weak(ctx) || GUARDS.final_weak(ctx),
+    weak_end_or_final: (ctx) => GUARDS.end_weak(ctx) || finalWeak(ctx),
     admission_hold: (ctx) => admissionOf(ctx)?.kind === 'hold',
     // A content decline (no native marker / no final assistant summary) yields
     // to R9t once a report is recorded for this generation: the report already

@@ -32,6 +32,18 @@ describe('CliProviderInstance detach: launched-member membership vs ad-hoc clear
     expect(instance.settings.meshLastNodeId).toBe('node_base')
   })
 
+  it('attach persists the work-owner daemon (only) to the session-host record meta, so a restart can restore it', () => {
+    const instance = makeInstance({})
+    const metas: Array<Record<string, unknown>> = []
+    instance.adapter = { updateRuntimeSettings() {}, updateRuntimeMeta(meta: Record<string, unknown>) { metas.push(meta) } }
+    instance.attachMeshAssignment({ meshId: 'mesh-abc', nodeId: 'node_base', taskId: 'task-1', coordinatorDaemonId: 'daemon_mach_owner' })
+    expect(metas).toEqual([{ meshCoordinatorDaemonId: 'daemon_mach_owner' }])
+    // No owner on the assignment → nothing written.
+    metas.length = 0
+    instance.attachMeshAssignment({ meshId: 'mesh-abc', nodeId: 'node_base', taskId: 'task-2' })
+    expect(metas).toEqual([])
+  })
+
   it('detach on a LAUNCHED member clears only meshActiveTaskId and PRESERVES membership', () => {
     const instance = makeInstance({
       meshNodeFor: 'mesh-abc',
