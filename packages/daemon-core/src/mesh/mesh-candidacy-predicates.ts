@@ -271,7 +271,7 @@ export function liveSessionCountForNode(components: DaemonComponents, meshId: st
  * on its own via the idle→claim / agent:ready drain, so spawning a NEW session here only
  * races it and yields a duplicate worker that double-stamps the same taskId (the
  * enqueue → drain-miss → auto-launch RCA: the drain skipped a momentarily-non-idle idle
- * session as a candidate, and the write-only nodeHasActiveAssignment gate — which only
+ * session as a candidate, and the write-only nodeHasActiveWriteAssignment gate — which only
  * inspects status='assigned' rows — could not see the about-to-claim session either).
  *
  * A session that already HOLDS an assigned queue task is genuine concurrent work, not a

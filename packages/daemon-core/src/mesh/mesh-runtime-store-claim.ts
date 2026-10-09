@@ -17,7 +17,7 @@ import type { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { dirtyWriteVerdict, describeDirtyWriteRefusal, type DirtyWriteGate } from './mesh-dirty-write-verdict.js';
 
 /** The MeshRuntimeStore members these functions read or call (compiler-checked; no cast). */
-export type MeshRuntimeStoreClaimHost = Pick<MeshRuntimeStore, 'activeProviderAssignmentCount' | 'activeSlotAssignmentCount' | 'assignedRowsMeshWide' | 'db' | 'ensureLegacyQueueMigrated' | 'hasActiveNodeAssignment' | 'hasActiveSessionAssignment' | 'maybeCheckpointWal' | 'transaction'>;
+export type MeshRuntimeStoreClaimHost = Pick<MeshRuntimeStore, 'activeProviderAssignmentCount' | 'activeSlotAssignmentCount' | 'assignedRowsMeshWide' | 'db' | 'ensureLegacyQueueMigrated' | 'hasActiveNodeWriteAssignment' | 'hasActiveSessionAssignment' | 'maybeCheckpointWal' | 'transaction'>;
 
 // O(1) claim: transaction ensures only one session claims a pending task
 export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: string, nodeId: string, sessionId: string, capabilityTags: string[] = [], opts?: {
@@ -75,7 +75,7 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
         // that already has an active assignment, while write tasks keep the
         // one-active-per-node invariant (worktree isolation).
         if (host.hasActiveSessionAssignment(meshId, sessionId)) return refuse('session_already_assigned');
-        const nodeBusy = host.hasActiveNodeAssignment(meshId, nodeId);
+        const nodeWriteBusy = host.hasActiveNodeWriteAssignment(meshId, nodeId);
 
         // Per-(daemon, provider) maxParallel cap (summed slots[].maxParallel).
         // Bounds the (daemon, provider) resource pool — one CLI, one auth file,
@@ -192,13 +192,14 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
         const dependenciesSatisfied = (candidate: MeshWorkQueueEntry): boolean =>
             taskDependenciesSatisfied(candidate, depStatus);
 
-        // Per-candidate node-conflict gate: write tasks require an idle node; read-only
+        // Per-candidate node-conflict gate: write tasks require a node with no other
+        // assigned WRITE row (an assigned read-only row does not count); read-only
         // tasks bypass the node-busy check so N read-only diagnoses can run on one node
         // at once. Read-only classification is decided solely by isTaskReadonly (the
         // single predicate shared with the cap counters / auto-launch / guardrail).
         const nodeConflictAllows = (candidate: MeshWorkQueueEntry): boolean => {
             if (isTaskReadonly(candidate)) return true;
-            return !nodeBusy;
+            return !nodeWriteBusy;
         };
 
         // H1 (path ownership, wiring-unification Phase H — docs/design/2026-09-23-

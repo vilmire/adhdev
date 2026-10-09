@@ -100,7 +100,7 @@ function setMesh(meshId: string, nodePolicy: Record<string, unknown> = {}) {
 // N busy sessions: each live instance holds one assigned queue task so the earlier
 // pending-claim / write-isolation gates don't fire first and the run reaches the
 // session-cap gate. The probe task itself is READ-ONLY for the same reason
-// (nodeHasActiveAssignment applies to write tasks only).
+// (nodeHasActiveWriteAssignment applies to write tasks only).
 function seedBusySessions(meshId: string, count: number): any[] {
   const instances: any[] = []
   for (let i = 0; i < count; i += 1) {

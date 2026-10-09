@@ -10,7 +10,7 @@ import {
     type ProviderSelectionPreviewScore,
 } from './mesh-routing-decision.js';
 import {
-    nodeHasActiveAssignment,
+    nodeHasActiveWriteAssignment,
     orderEligibleNodes,
     orderSlotsForProviderSelection,
     resolveSchedulingStrategy,
@@ -302,7 +302,7 @@ export function buildMeshRoutePreview(args: {
     }));
     const predicted = nodePreviews.find((nodePreview, index) => {
         if (!nodePreview.predictedWinner) return false;
-        if (args.readonly !== true && nodeHasActiveAssignment(meshId, nodePreview.nodeId)) return false;
+        if (args.readonly !== true && nodeHasActiveWriteAssignment(meshId, nodePreview.nodeId)) return false;
         const winnerScore = nodePreview.stages.fitness.find(score =>
             score.providerType === nodePreview.predictedWinner!.providerType
             && score.model === nodePreview.predictedWinner!.model);

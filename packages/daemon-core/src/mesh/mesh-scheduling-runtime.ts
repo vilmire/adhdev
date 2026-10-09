@@ -151,6 +151,8 @@ export function buildMeshSchedulingRuntime(
         const capReasons: string[] = [];
         if (globalWriteCapReached) capReasons.push('global_max_parallel_tasks_reached');
         // Write isolation: a node already holding an assigned write task can't take another.
+        // Same reason string and predicate as the claim / autolaunch write gates
+        // (hasActiveNodeWriteAssignment / nodeHasActiveWriteAssignment) — read-only excluded.
         if ((writeAssignedByNode.get(nodeId) ?? 0) > 0) capReasons.push('node_has_active_assignment');
 
         // Per-(node, provider) caps, with live consumption. Derived from the node's

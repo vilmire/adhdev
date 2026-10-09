@@ -6,8 +6,8 @@
 // and materialised its queue row as `assigned` with no `attemptId`. Reclaim is
 // turn-ledger-only (attempts + holds, turn-ledger/scheduler.ts), so nothing ever
 // moved that row: it stayed `assigned` for days and — because
-// `nodeHasActiveAssignment` / the claim-side `hasActiveNodeAssignment` count
-// every assigned row — blocked write autolaunch on its node with
+// `nodeHasActiveWriteAssignment` / the claim-side `hasActiveNodeWriteAssignment`
+// count every assigned WRITE row — blocked write autolaunch on its node with
 // `node_has_active_assignment`. mcp-server's `staleAssigned` mark on
 // mesh_view_queue saw it but is display-only.
 //
