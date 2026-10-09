@@ -37,15 +37,17 @@ function cli(id: string, installed: boolean, displayName = id, version?: string)
 describe('suggestNodeProviderPriority', () => {
   it('orders preferred providers first, then the rest in input order, dropping uninstalled', () => {
     const detected = [
-      cli('gemini-cli', true),
+      cli('some-other-cli', true),
+      cli('antigravity-cli', true),
       cli('codex-cli', true),
       cli('claude-cli', true, 'Claude Code', '2.1.0'),
-      cli('some-other-cli', true),
+      // Retired provider: no longer builtin-preferred, falls into input order.
+      cli('gemini-cli', true),
       cli('not-installed-cli', false),
     ]
     const result = suggestNodeProviderPriority(detected)
-    expect(result.providerPriority).toEqual(['claude-cli', 'codex-cli', 'gemini-cli', 'some-other-cli'])
-    expect(result.installedProviders).toHaveLength(4)
+    expect(result.providerPriority).toEqual(['claude-cli', 'codex-cli', 'antigravity-cli', 'some-other-cli', 'gemini-cli'])
+    expect(result.installedProviders).toHaveLength(5)
     expect(result.installedProviders.find(p => p.id === 'claude-cli')?.version).toBe('2.1.0')
   })
 

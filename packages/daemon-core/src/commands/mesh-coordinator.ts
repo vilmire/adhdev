@@ -32,7 +32,7 @@ export type MeshCoordinatorSetup =
       template: string
     }
   | {
-      /** Provider registers MCP via its own CLI command (e.g. `codex mcp add` / `gemini mcp add`). */
+      /** Provider registers MCP via its own CLI command (e.g. `codex mcp add`). */
       kind: 'cli_command'
       serverName: string
       /** The rendered shell command to execute before launching the coordinator session. */

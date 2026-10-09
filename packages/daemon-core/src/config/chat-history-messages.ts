@@ -17,7 +17,7 @@ export interface HistoryMessage {
      *  one — distinct from the generic senderName:'Tool'. Currently only
      *  antigravity's native-history reader stamps this. */
     toolName?: string;
-    agent: string;        // e.g. 'antigravity', 'cursor', 'gemini-cli'
+    agent: string;        // e.g. 'antigravity', 'cursor', 'antigravity-cli'
     instanceId?: string;  // IDE instance UUID (distinguishes windows of the same agent type)
     historySessionId?: string; // Persistent provider-side conversation/session key
     sessionTitle?: string;

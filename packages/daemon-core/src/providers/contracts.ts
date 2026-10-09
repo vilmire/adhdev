@@ -400,7 +400,7 @@ export interface AutoApproveModesConfig {
 }
 
 export interface ProviderModule {
- /** Unique identifier (e.g. 'cline', 'cursor', 'gemini-cli') */
+ /** Unique identifier (e.g. 'cline', 'cursor', 'antigravity-cli') */
   type: string;
  /** Display name (e.g. 'Cline', 'Cursor') */
   name: string;
