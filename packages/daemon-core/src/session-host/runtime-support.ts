@@ -130,6 +130,8 @@ export async function listHostedCliRuntimes(endpoint: SessionHostEndpoint): Prom
                     ? String(record.meta.meshNodeFor).trim() : undefined,
                 meshNodeId: typeof record.meta?.meshNodeId === 'string' && record.meta.meshNodeId.trim()
                     ? String(record.meta.meshNodeId).trim() : undefined,
+                meshCoordinatorDaemonId: typeof record.meta?.meshCoordinatorDaemonId === 'string' && record.meta.meshCoordinatorDaemonId.trim()
+                    ? String(record.meta.meshCoordinatorDaemonId).trim() : undefined,
                 launchedByCoordinator: record.meta?.launchedByCoordinator === true ? true : undefined,
                 autoApproveMode: typeof record.meta?.autoApproveMode === 'string' && record.meta.autoApproveMode.trim()
                     ? String(record.meta.autoApproveMode).trim() : undefined,

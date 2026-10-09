@@ -93,6 +93,7 @@ const FIRES: Record<string, Fixture> = {
     R13b: { attempt: G(), evidence: ev('turn_end', { strength: 'weak', afterFinalizationTimeout: true }), state: 'failed', effects: ['commit'] },
     R14: { attempt: G(), evidence: ev('transcript_final', { selfAttributing: false, nativeRead: true, nativeMarker: { outcome: 'completed' }, live: LIVE_IDLE }), state: 'completed', effects: ['commit'] },
     R15: { attempt: G(), evidence: ev('transcript_final', { selfAttributing: false, nativeRead: false, live: LIVE_IDLE, summary: REF }), state: 'finalizing', effects: ['hold', 'notify_coordinator'] },
+    R15p: { attempt: G(), evidence: ev('transcript_final', { selfAttributing: false, nativeRead: false, live: LIVE_IDLE, summary: REF }, { source: 'coordinator_probe' }), state: 'finalizing', effects: ['hold'] },
     R16: { attempt: G(), evidence: ev('turn_end', { strength: 'genuine', live: { ...LIVE_IDLE, trailingTool: true } }), state: 'generating', effects: ['hold'] },
     R16a: { attempt: G(), evidence: ev('transcript_final', { selfAttributing: false, nativeRead: true, live: LIVE_IDLE, summary: REF }), state: 'generating', effects: ['record'] },
     R17: { attempt: makeAttempt('finalizing'), holds: [makeHold('await_report')], evidence: ev('worker_report', { outcome: 'completed', summary: REF, hasHandoffNotes: true }, { source: 'worker_tool' }), state: 'completed', effects: ['commit', 'notify_coordinator'] },
@@ -194,12 +195,12 @@ describe('rule matching is unambiguous', () => {
             }
         }
         expect(ambiguous).toEqual([]);
-        // 61 evidence variants (all 23 kinds; +6 report-gate variants 2026-09-24, +1 await_end expiry 2026-09-25,
-        // +3 auth-failed turn_end variants 2026-10-06 — R9f)
+        // 63 evidence variants (all 23 kinds; +6 report-gate variants 2026-09-24, +1 await_end expiry 2026-09-25,
+        // +3 auth-failed turn_end variants 2026-10-06 — R9f, +2 owner-scraped transcript_final 2026-10-08 — R15p)
         // × (1 no-attempt + 34 attempt variants (+6 reported, 2026-09-25) × 2 lanes).
         const variantCount = TURN_EVIDENCE_KINDS.reduce((n, kind) => n + variantsFor(kind).length, 0);
-        expect(variantCount).toBe(61);
-        expect(visited).toBe(61 * (1 + 34 * 2));
+        expect(variantCount).toBe(63);
+        expect(visited).toBe(63 * (1 + 34 * 2));
     });
 });
 

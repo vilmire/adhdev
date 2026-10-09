@@ -53,7 +53,7 @@ export type GuardId =
     | 'suspension_changed'
     | 'end_genuine' | 'end_provider_failure' | 'end_weak' | 'end_weak_after_timeout' | 'hollow_retry' | 'hollow_exhausted'
     | 'end_report_awaited' | 'end_report_awaited_held' | 'final_strong_report_awaited' | 'false_idle_resumed'
-    | 'final_strong' | 'final_weak'
+    | 'final_strong' | 'final_weak' | 'final_weak_probe'
     | 'genuine_end_or_strong_final' | 'weak_end_or_final'
     | 'admission_hold' | 'admission_decline'
     | 'after_weak_since' | 'activity_keeps_state'
@@ -130,6 +130,17 @@ const weakCandidate: readonly EffectTemplate[] = [
     { e: 'act', act: 'weak_candidate' },
     { e: 'hold', reason: 'weak_candidate', until: 'weak_confirm', onExpire: 'commit' },
     { e: 'notify', notify: 'candidate', when: 'candidate_once' },
+];
+
+/**
+ * The report-awaiting idle candidate (R9r, R15p): the structured report, not
+ * the idle signal, commits the attempt — R17 on the report, R12r cancels it
+ * when the worker goes busy again, R13r commits weak on expiry.
+ */
+const awaitReport: readonly EffectTemplate[] = [
+    { e: 'act', act: 'await_report' },
+    { e: 'release', reasons: ['weak_candidate'] },
+    { e: 'hold', reason: 'await_report', until: 'await_report', onExpire: 'commit', meshOnly: true },
 ];
 
 export const TRANSITIONS: readonly TransitionRule[] = [
@@ -280,6 +291,18 @@ export const TRANSITIONS: readonly TransitionRule[] = [
         { e: 'commit', outcome: 'completed', strength: 'genuine', reason: 'transcript_final' },
     ] },
     { id: 'R15', lane: 'current', from: [C, G, S], on: ['transcript_final'], guard: 'final_weak', to: F, verdict: 'applied', effects: weakCandidate },
+    // R15p (2026-10-08 preview, task 205e5dfa): a weak transcript_final the
+    // OWNER scraped (coordinator_probe / mcp_probe) on a mesh attempt is not the
+    // worker daemon's verdict — the worker emits its own turn_end, and its
+    // completion gate deliberately withholds it while the turn is not over (a
+    // `sleep 150 &` background job holds it up to 5 min, completion-engine
+    // `background_task_active`). Under R15 the scrape committed weak 12 s later
+    // (R13a), 84 s into a 4-minute task; the worker's report then landed late.
+    // A scrape alone therefore waits like an idle end that awaits the report:
+    // the report commits it (R17), the worker's busy edge cancels it (R12r),
+    // the worker's own end commits (R11) or keeps waiting (R9d), and expiry
+    // commits weak (R13r). Worker-side weak evidence keeps R15/R10.
+    { id: 'R15p', lane: 'current', from: [C, G, S], on: ['transcript_final'], guard: 'final_weak_probe', to: F, verdict: 'applied', effects: awaitReport },
     // R16 stays live-pending-only even once a report is recorded (guard has no
     // `!reportedThisGeneration`): a hold admission (modal/adapter-pending/
     // trailing-tool/transcript-growing) is genuine ongoing activity, and R16's
@@ -310,11 +333,7 @@ export const TRANSITIONS: readonly TransitionRule[] = [
     // R12r cancels the candidate when the worker goes busy again (false idle),
     // R13r commits weak when the hold expires with no report. Sessions with no
     // bind never set `reportExpected` and keep R9 exactly.
-    { id: 'R9r', lane: 'current', from: [C, G, S, F], on: ['turn_end'], guard: 'end_report_awaited', to: F, verdict: 'applied', effects: [
-        { e: 'act', act: 'await_report' },
-        { e: 'release', reasons: ['weak_candidate'] },
-        { e: 'hold', reason: 'await_report', until: 'await_report', onExpire: 'commit', meshOnly: true },
-    ] },
+    { id: 'R9r', lane: 'current', from: [C, G, S, F], on: ['turn_end'], guard: 'end_report_awaited', to: F, verdict: 'applied', effects: awaitReport },
     { id: 'R9d', lane: 'current', from: [F], on: ['turn_end'], guard: 'end_report_awaited_held', to: 'same', verdict: 'recorded', effects: [
         { e: 'record', note: 'await_report_duplicate_end' },
     ] },

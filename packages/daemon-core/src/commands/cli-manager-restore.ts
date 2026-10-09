@@ -239,16 +239,21 @@ function buildRestoredSettings(
     // post-restart event, mesh_read_terminal / mesh_send_keys refused it as
     // non-worker, and the post-completion detach did a FULL clear
     // (launchedByCoordinator falsy) — stripping the membership a launched
-    // member is supposed to KEEP. This restores membership ONLY; the
-    // task-level envelope (meshActiveTaskId / attemptId / dispatchNonce /
-    // coordinator ids) is re-derived separately with causal guards by
-    // restampReboundMeshWorkerAssignment, so no terminal/stale/
-    // session-mismatched attempt is ever resurrected here.
+    // member is supposed to KEEP. This restores membership and the work-owner
+    // daemon id ONLY; the task-level envelope (meshActiveTaskId / attemptId /
+    // dispatchNonce) is never resurrected here — the owner re-resolves the
+    // session's task from its own queue row and ledger.
     const recordMeshNodeFor = typeof record.meshNodeFor === 'string' && record.meshNodeFor.trim()
         ? record.meshNodeFor.trim() : '';
     const recordMeshNodeId = typeof record.meshNodeId === 'string' && record.meshNodeId.trim()
         ? record.meshNodeId.trim() : '';
     if (recordMeshNodeFor) restoredSettings.meshNodeFor = recordMeshNodeFor;
+    // The work-owner daemon, with the membership only: the remote-owner report /
+    // progress / mailbox path (worker-report.ts assignmentStampReader) needs
+    // membership + owner to forward, and nothing on this daemon re-derives it
+    // after a restart (a remote-owned task has no queue row here).
+    const recordOwner = typeof record.meshCoordinatorDaemonId === 'string' ? record.meshCoordinatorDaemonId.trim() : '';
+    if (recordMeshNodeFor && recordOwner) restoredSettings.meshCoordinatorDaemonId = recordOwner;
     if (recordMeshNodeId) {
         restoredSettings.meshNodeId = recordMeshNodeId;
         // Keep the sticky last-node marker consistent with the active binding
