@@ -103,6 +103,14 @@ export interface PtyRuntimeTransport {
 
 export interface PtyTransportFactory {
   spawn(command: string, args: string[], options: PtySpawnOptions): PtyRuntimeTransport;
+  /**
+   * True when spawn() re-attaches to a runtime that was already running before
+   * this daemon started (a hosted session restored after a daemon restart),
+   * false/absent for a fresh process. The CLI behind an attach has long since
+   * booted, so boot-phase gating (SpecCliAdapter's "hold at starting until the
+   * first ready prompt") must not hide a turn that is already in flight.
+   */
+  readonly attachesExistingRuntime?: boolean;
 }
 
 class NodePtyRuntimeTransport implements PtyRuntimeTransport {

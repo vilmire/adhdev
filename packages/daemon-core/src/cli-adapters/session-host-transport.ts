@@ -501,6 +501,10 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
 export class SessionHostPtyTransportFactory implements PtyTransportFactory {
     constructor(private readonly options: SessionHostPtyTransportFactoryOptions) {}
 
+    get attachesExistingRuntime(): boolean {
+        return this.options.attachExisting === true;
+    }
+
     spawn(command: string, args: string[], spawnOptions: PtySpawnOptions): PtyRuntimeTransport {
         return new SessionHostRuntimeTransport({
             ...this.options,

@@ -204,6 +204,8 @@ export class SpecCliAdapter implements CliAdapter {
      *  cli-state-engine's lastApprovalResolvedAt for the spec-driven adapter path
      *  (claude-cli specs/4.0.json), which previously stubbed the method to false. */
     private lastApprovalResolvedAt = 0;
+    /** Re-attached to a runtime that predates this daemon (see adapter-status-projection's restored-mid-turn branch). */
+    private attachedExistingRuntime = false;
 
     constructor(
         specPath: string,
@@ -265,6 +267,7 @@ export class SpecCliAdapter implements CliAdapter {
             resolvedTrustPlan,
         });
         this.driver.subscribe((ev) => this.handleEvent(ev));
+        this.attachedExistingRuntime = transportFactory?.attachesExistingRuntime === true;
     }
 
     async spawn(): Promise<void> {
@@ -449,6 +452,7 @@ export class SpecCliAdapter implements CliAdapter {
             // poll stays a pure read and cannot itself move the clocks.
             lastOutputAt: this.driver?.getLastOutputAt?.(),
             lastScreenChangeAt: this.driver?.getLastScreenChangeAt?.(),
+            attachedExistingRuntime: this.attachedExistingRuntime,
         });
     }
 

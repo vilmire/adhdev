@@ -141370,6 +141370,9 @@ ${text}` : text;
       }
       const readySeen = input.readySeen();
       if (readySeen === false) {
+        if (input.attachedExistingRuntime === true && state.status === "generating") {
+          return { ...base, status: "generating" };
+        }
         return { ...base, status: "starting", fsmReadySeen: false };
       }
       if (state.status === "generating") {
@@ -142175,6 +142178,8 @@ ${text}` : text;
        *  cli-state-engine's lastApprovalResolvedAt for the spec-driven adapter path
        *  (claude-cli specs/4.0.json), which previously stubbed the method to false. */
       lastApprovalResolvedAt = 0;
+      /** Re-attached to a runtime that predates this daemon (see adapter-status-projection's restored-mid-turn branch). */
+      attachedExistingRuntime = false;
       constructor(specPath, workingDir, cliArgs, extraEnv, transportFactory, sessionId, manifestTuning, resolvedTrustPlan) {
         const raw = JSON.parse(fs87.readFileSync(specPath, "utf8"));
         this.spec = {
@@ -142204,6 +142209,7 @@ ${text}` : text;
           resolvedTrustPlan
         });
         this.driver.subscribe((ev) => this.handleEvent(ev));
+        this.attachedExistingRuntime = transportFactory?.attachesExistingRuntime === true;
       }
       async spawn() {
         if (this.spawned) return;
@@ -142360,7 +142366,8 @@ ${text}` : text;
           // re-evaluation — so the watchdog's getStatus({ allowParse: false })
           // poll stays a pure read and cannot itself move the clocks.
           lastOutputAt: this.driver?.getLastOutputAt?.(),
-          lastScreenChangeAt: this.driver?.getLastScreenChangeAt?.()
+          lastScreenChangeAt: this.driver?.getLastScreenChangeAt?.(),
+          attachedExistingRuntime: this.attachedExistingRuntime
         });
       }
       /**
@@ -154742,6 +154749,9 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     var SessionHostPtyTransportFactory = class {
       constructor(options) {
         this.options = options;
+      }
+      get attachesExistingRuntime() {
+        return this.options.attachExisting === true;
       }
       spawn(command, args, spawnOptions) {
         return new SessionHostRuntimeTransport({
