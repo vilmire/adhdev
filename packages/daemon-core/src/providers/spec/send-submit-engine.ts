@@ -54,6 +54,7 @@ import {
     MID_GENERATION_SUBMIT_MIN_GAP_MS,
     type QueuedWriteOutcome,
 } from './submit-policy.js';
+import { chunkWin32InputMode } from './win32-input-mode.js';
 import {
     SEND_IN_FLIGHT_MAX_MS,
     WIN32_SUBMIT_RESEND_GAP_MS,
@@ -665,13 +666,19 @@ export class SendSubmitEngine {
 
         const hasNewline = /\r?\n/.test(text);
         const mode = resolveWin32SubmitMode();
+        // Spec opt-in: non-ASCII as win32-input-mode key records (see win32-input-mode.ts).
+        // The encoder's chunker keeps each record group whole, so it replaces the
+        // surrogate-safe split one-for-one; ASCII framing below is unaffected.
+        const chunkBody = this.host.spec.send_message.win32_input_mode_non_ascii === true
+            ? chunkWin32InputMode
+            : chunkPreservingSurrogates;
 
         // Build the ordered list of segments to write. Bracketed-paste markers are
         // their OWN segments so chunking only ever splits the body, never a marker.
         let segments: string[];
         if (!hasNewline) {
             // Single-line: unchanged behaviour — just (chunk and) write the body.
-            segments = chunkPreservingSurrogates(text, WIN32_PTY_WRITE_CHUNK_CHARS);
+            segments = chunkBody(text, WIN32_PTY_WRITE_CHUNK_CHARS);
         } else if (mode === 'soft_newline') {
             // Rewrite embedded newlines as non-submitting soft-newlines, THEN chunk.
             // The soft-newline sequence (ESC[27;2;13~) contains no '\n', so it is
@@ -684,13 +691,13 @@ export class SendSubmitEngine {
             // it did, ConPTY reassembles the byte stream, the composer parses the full
             // sequence across the boundary).
             const rewritten = text.split(/\r?\n/).join(WIN32_SOFT_NEWLINE);
-            segments = chunkPreservingSurrogates(rewritten, WIN32_PTY_WRITE_CHUNK_CHARS);
+            segments = chunkBody(rewritten, WIN32_PTY_WRITE_CHUNK_CHARS);
         } else {
             // paste: [OPEN marker] [body chunks…] [CLOSE marker]. Markers are atomic
             // segments — never merged with body bytes — so they cannot be split.
             segments = [
                 WIN32_BRACKETED_PASTE_OPEN,
-                ...chunkPreservingSurrogates(text, WIN32_PTY_WRITE_CHUNK_CHARS),
+                ...chunkBody(text, WIN32_PTY_WRITE_CHUNK_CHARS),
                 WIN32_BRACKETED_PASTE_CLOSE,
             ];
         }
