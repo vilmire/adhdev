@@ -239,10 +239,10 @@ function buildRestoredSettings(
     // post-restart event, mesh_read_terminal / mesh_send_keys refused it as
     // non-worker, and the post-completion detach did a FULL clear
     // (launchedByCoordinator falsy) — stripping the membership a launched
-    // member is supposed to KEEP. This restores membership and the work-owner
-    // daemon id ONLY; the task-level envelope (meshActiveTaskId / attemptId /
-    // dispatchNonce) is never resurrected here — the owner re-resolves the
-    // session's task from its own queue row and ledger.
+    // member is supposed to KEEP. This restores membership, the work-owner
+    // daemon id and the evidence attempt ref ONLY; the task markers
+    // (meshActiveTaskId / dispatchNonce) are never resurrected here — the owner
+    // re-resolves the session's task from its own queue row and ledger.
     const recordMeshNodeFor = typeof record.meshNodeFor === 'string' && record.meshNodeFor.trim()
         ? record.meshNodeFor.trim() : '';
     const recordMeshNodeId = typeof record.meshNodeId === 'string' && record.meshNodeId.trim()
@@ -254,6 +254,18 @@ function buildRestoredSettings(
     // after a restart (a remote-owned task has no queue row here).
     const recordOwner = typeof record.meshCoordinatorDaemonId === 'string' ? record.meshCoordinatorDaemonId.trim() : '';
     if (recordMeshNodeFor && recordOwner) restoredSettings.meshCoordinatorDaemonId = recordOwner;
+    // The attempt ref this session's turn evidence carried, with membership +
+    // owner only (it is useless without a forward target). A turn that spans a
+    // restart of THIS daemon otherwise ends with an untagged turn_end the worker
+    // ledger cannot forward, and the owner never sees the idle edge (live
+    // 2026-10-09). A pointer, not a verdict: the owner's reducer checks its
+    // generation and state, so a stale ref is recorded, never applied — and the
+    // owner's later release (turn.committed) clears it here as usual.
+    const recordAttemptRef = record.meshActiveAttemptRef;
+    if (recordMeshNodeFor && recordOwner && recordAttemptRef?.attemptId) {
+        restoredSettings.meshActiveAttemptId = recordAttemptRef.attemptId;
+        restoredSettings.meshActiveAttemptGeneration = recordAttemptRef.generation;
+    }
     if (recordMeshNodeId) {
         restoredSettings.meshNodeId = recordMeshNodeId;
         // Keep the sticky last-node marker consistent with the active binding

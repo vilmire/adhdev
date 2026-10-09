@@ -123486,6 +123486,7 @@ ${marker}`,
     function attachMeshAssignment(host, assignment) {
       if (!assignment?.meshId) return;
       const previousTaskId = typeof host.settings?.meshActiveTaskId === "string" ? host.settings.meshActiveTaskId : "";
+      const previousAttemptRef = attemptRefKey(host.settings);
       const taskChanged = !!(assignment.taskId && assignment.taskId.trim() && previousTaskId && previousTaskId !== assignment.taskId);
       if (assignment.taskId && assignment.taskId.trim()) {
         host.meshTaskInjectedAt = Date.now();
@@ -123526,11 +123527,32 @@ ${marker}`,
       }
       if (taskChanged && typeof assignment.dispatchNonce !== "number") delete host.settings.meshActiveDispatchNonce;
       host.adapter.updateRuntimeSettings?.(host.settings);
-      if (assignment.coordinatorDaemonId) {
+      const meta = {
+        ...assignment.coordinatorDaemonId ? { meshCoordinatorDaemonId: assignment.coordinatorDaemonId } : {},
+        ...persistedAttemptRefMeta(host.settings, previousAttemptRef)
+      };
+      if (Object.keys(meta).length > 0) {
         try {
-          host.adapter.updateRuntimeMeta?.({ meshCoordinatorDaemonId: assignment.coordinatorDaemonId });
+          host.adapter.updateRuntimeMeta?.(meta);
         } catch {
         }
+      }
+    }
+    var PERSISTED_ATTEMPT_REF_META_KEY = "meshActiveAttemptRef";
+    function attemptRefKey(settings) {
+      const ref = currentMeshAttemptRef(settings);
+      return ref ? `${ref.attemptId}#${ref.generation}` : "";
+    }
+    function persistedAttemptRefMeta(settings, previousKey) {
+      if (attemptRefKey(settings) === previousKey) return {};
+      return { [PERSISTED_ATTEMPT_REF_META_KEY]: currentMeshAttemptRef(settings) };
+    }
+    function persistAttemptRefChange(host, previousKey) {
+      const meta = persistedAttemptRefMeta(host.settings, previousKey);
+      if (Object.keys(meta).length === 0) return;
+      try {
+        host.adapter.updateRuntimeMeta?.(meta);
+      } catch {
       }
     }
     function currentMeshAttemptRef(settings) {
@@ -123541,17 +123563,20 @@ ${marker}`,
     }
     function releaseMeshAttemptRef(host, attemptId) {
       if (!attemptId || host.settings?.meshActiveAttemptId !== attemptId) return false;
+      const previousAttemptRef = attemptRefKey(host.settings);
       const { meshActiveAttemptId, meshActiveAttemptGeneration, ...rest } = host.settings;
       void meshActiveAttemptId;
       void meshActiveAttemptGeneration;
       host.settings = rest;
       host.adapter.updateRuntimeSettings?.(host.settings);
+      persistAttemptRefChange(host, previousAttemptRef);
       LOG.info("MeshDispatch", `[${host.instanceId}] released attempt ref ${attemptId}`);
       return true;
     }
     function detachMeshAssignment(host) {
       const pending = isWorkerMcpEnabled() ? popCompletedMeshTaskAttachment(meshTaskAttachments(host.meshTaskAttachmentHistory)) : void 0;
       if (!host.settings.meshNodeFor && !host.settings.meshActiveTaskId && !host.settings.meshNodeId) return;
+      const previousAttemptRef = attemptRefKey(host.settings);
       if (host.settings.launchedByCoordinator === true) {
         if (!host.settings.meshActiveTaskId) return;
         const { meshActiveTaskId: meshActiveTaskId2, meshActiveDispatchNonce: meshActiveDispatchNonce2, meshActiveAttemptId: meshActiveAttemptId2, meshActiveAttemptGeneration: meshActiveAttemptGeneration2, ...rest2 } = host.settings;
@@ -123561,6 +123586,7 @@ ${marker}`,
         void meshActiveAttemptGeneration2;
         host.settings = mergePendingMeshTaskAttachment(rest2, pending);
         host.adapter.updateRuntimeSettings?.(host.settings);
+        persistAttemptRefChange(host, previousAttemptRef);
         return;
       }
       const { meshNodeFor, meshNodeId, meshActiveTaskId, meshActiveDispatchNonce, meshActiveAttemptId, meshActiveAttemptGeneration, ...rest } = host.settings;
@@ -123572,6 +123598,7 @@ ${marker}`,
       const lastNodeId = typeof meshNodeId === "string" && meshNodeId.trim() ? meshNodeId.trim() : typeof rest.meshLastNodeId === "string" && rest.meshLastNodeId.trim() ? rest.meshLastNodeId.trim() : void 0;
       host.settings = lastNodeId ? { ...rest, meshLastNodeId: lastNodeId } : rest;
       host.adapter.updateRuntimeSettings?.(host.settings);
+      persistAttemptRefChange(host, previousAttemptRef);
     }
     init_logger();
     init_runtime_defaults();
@@ -148321,6 +148348,11 @@ Run 'adhdev doctor' for detailed diagnostics.`
       if (recordMeshNodeFor) restoredSettings.meshNodeFor = recordMeshNodeFor;
       const recordOwner = typeof record2.meshCoordinatorDaemonId === "string" ? record2.meshCoordinatorDaemonId.trim() : "";
       if (recordMeshNodeFor && recordOwner) restoredSettings.meshCoordinatorDaemonId = recordOwner;
+      const recordAttemptRef = record2.meshActiveAttemptRef;
+      if (recordMeshNodeFor && recordOwner && recordAttemptRef?.attemptId) {
+        restoredSettings.meshActiveAttemptId = recordAttemptRef.attemptId;
+        restoredSettings.meshActiveAttemptGeneration = recordAttemptRef.generation;
+      }
       if (recordMeshNodeId) {
         restoredSettings.meshNodeId = recordMeshNodeId;
         restoredSettings.meshLastNodeId = recordMeshNodeId;
@@ -154926,6 +154958,15 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         this.name = "SessionHostCompatibilityError";
       }
     };
+    function readPersistedAttemptRef(value) {
+      if (!value || typeof value !== "object") return void 0;
+      const { attemptId, generation } = value;
+      if (typeof attemptId !== "string" || !attemptId.trim()) return void 0;
+      return {
+        attemptId: attemptId.trim(),
+        generation: typeof generation === "number" && Number.isSafeInteger(generation) && generation >= 0 ? generation : 0
+      };
+    }
     function getMissingRequestTypes(diagnostics, requiredRequestTypes) {
       const supported = new Set(diagnostics?.supportedRequestTypes || []);
       return requiredRequestTypes.filter((requestType) => !supported.has(requestType));
@@ -155002,6 +155043,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           meshNodeFor: typeof record2.meta?.meshNodeFor === "string" && record2.meta.meshNodeFor.trim() ? String(record2.meta.meshNodeFor).trim() : void 0,
           meshNodeId: typeof record2.meta?.meshNodeId === "string" && record2.meta.meshNodeId.trim() ? String(record2.meta.meshNodeId).trim() : void 0,
           meshCoordinatorDaemonId: typeof record2.meta?.meshCoordinatorDaemonId === "string" && record2.meta.meshCoordinatorDaemonId.trim() ? String(record2.meta.meshCoordinatorDaemonId).trim() : void 0,
+          meshActiveAttemptRef: readPersistedAttemptRef(record2.meta?.meshActiveAttemptRef),
           launchedByCoordinator: record2.meta?.launchedByCoordinator === true ? true : void 0,
           autoApproveMode: typeof record2.meta?.autoApproveMode === "string" && record2.meta.autoApproveMode.trim() ? String(record2.meta.autoApproveMode).trim() : void 0,
           // Phase E launch provenance written at spawn; validated on restore

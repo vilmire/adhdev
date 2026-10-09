@@ -89,6 +89,7 @@ export function attachMeshAssignment(host: MeshAssignmentHost, assignment: { mes
     // its own, so an attempt-less dispatch used to leave task=<new> paired with the prior
     // task's attempt — evidence and reports then named a task/attempt pair that never existed.
     const previousTaskId = typeof host.settings?.meshActiveTaskId === 'string' ? host.settings.meshActiveTaskId : '';
+    const previousAttemptRef = attemptRefKey(host.settings);
     const taskChanged = !!(assignment.taskId && assignment.taskId.trim() && previousTaskId && previousTaskId !== assignment.taskId);
     // ANTIGRAVITY-PREMATURE-COMPLETION gate: stamp the injection moment for a task
     // attach so injectedTaskHasStartedGenerating() can require the producing turn to
@@ -134,12 +135,51 @@ export function attachMeshAssignment(host: MeshAssignmentHost, assignment: { mes
     // record so a restore after a restart of THIS daemon can still forward the
     // worker's report to the owner (cli-manager-restore.ts). Only the owner id:
     // membership (meshNodeFor) stays launch-time, so a session that was merely
-    // handed one task is never restored as a worker.
-    if (assignment.coordinatorDaemonId) {
+    // handed one task is never restored as a worker. The attempt ref rides the
+    // same write (see persistedAttemptRefMeta).
+    const meta: Record<string, unknown> = {
+        ...(assignment.coordinatorDaemonId ? { meshCoordinatorDaemonId: assignment.coordinatorDaemonId } : {}),
+        ...persistedAttemptRefMeta(host.settings, previousAttemptRef),
+    };
+    if (Object.keys(meta).length > 0) {
         try {
-            host.adapter.updateRuntimeMeta?.({ meshCoordinatorDaemonId: assignment.coordinatorDaemonId });
+            host.adapter.updateRuntimeMeta?.(meta);
         } catch { /* best-effort — the live settings above are authoritative */ }
     }
+}
+
+/**
+ * Session-host record meta key holding the attempt ref this session's turn
+ * evidence carries (`{ attemptId, generation }`, or null once released).
+ *
+ * Live 2026-10-09 (preview, Jupiter → Mac): a worker whose task the Mac owned
+ * survived a restart of ITS daemon mid-turn. The restored settings had the
+ * membership and the owner id but no attempt ref, so the session's idle edge
+ * (`turn_end`) was built with no `attemptRef`; the worker's ledger cannot
+ * resolve an attempt another daemon owns, so it refused to forward it
+ * (`forward_without_attempt_ref`) and the owner logged "no idle edge within 60s
+ * of the worker report". Persisting the ref (and clearing it on release /
+ * detach) lets the restore re-attach it, so the evidence names the attempt
+ * again. It is only a pointer: the owner's reducer still checks the attempt's
+ * generation and state, so a stale ref is recorded, never applied.
+ */
+export const PERSISTED_ATTEMPT_REF_META_KEY = 'meshActiveAttemptRef';
+
+function attemptRefKey(settings: Record<string, any> | undefined): string {
+    const ref = currentMeshAttemptRef(settings);
+    return ref ? `${ref.attemptId}#${ref.generation}` : '';
+}
+
+/** The meta write for the current attempt ref, or {} when it did not change since `previousKey`. */
+function persistedAttemptRefMeta(settings: Record<string, any> | undefined, previousKey: string): Record<string, unknown> {
+    if (attemptRefKey(settings) === previousKey) return {};
+    return { [PERSISTED_ATTEMPT_REF_META_KEY]: currentMeshAttemptRef(settings) };
+}
+
+function persistAttemptRefChange(host: MeshAssignmentHost, previousKey: string): void {
+    const meta = persistedAttemptRefMeta(host.settings, previousKey);
+    if (Object.keys(meta).length === 0) return;
+    try { host.adapter.updateRuntimeMeta?.(meta); } catch { /* best-effort */ }
 }
 
 /**
@@ -164,10 +204,12 @@ export function currentMeshAttemptRef(settings: Record<string, any> | undefined)
  */
 export function releaseMeshAttemptRef(host: MeshAssignmentHost, attemptId: string): boolean {
     if (!attemptId || host.settings?.meshActiveAttemptId !== attemptId) return false;
+    const previousAttemptRef = attemptRefKey(host.settings);
     const { meshActiveAttemptId, meshActiveAttemptGeneration, ...rest } = host.settings;
     void meshActiveAttemptId; void meshActiveAttemptGeneration;
     host.settings = rest;
     host.adapter.updateRuntimeSettings?.(host.settings);
+    persistAttemptRefChange(host, previousAttemptRef);
     LOG.info('MeshDispatch', `[${host.instanceId}] released attempt ref ${attemptId}`);
     return true;
 }
@@ -198,6 +240,7 @@ export function releaseMeshAttemptRef(host: MeshAssignmentHost, attemptId: strin
  */
 export function detachMeshAssignment(host: MeshAssignmentHost): void { // WORKER-MCP T2 precursor (mesh-task-attachment.ts): restores a still-pending attachment onto the scalar; flag off is a no-op.
     const pending = isWorkerMcpEnabled() ? popCompletedMeshTaskAttachment(meshTaskAttachments(host.meshTaskAttachmentHistory)) : undefined; if (!host.settings.meshNodeFor && !host.settings.meshActiveTaskId && !host.settings.meshNodeId) return;
+    const previousAttemptRef = attemptRefKey(host.settings);
     // Session-level member: keep membership, drop only the task-level markers.
     if (host.settings.launchedByCoordinator === true) {
         if (!host.settings.meshActiveTaskId) return;
@@ -206,6 +249,7 @@ export function detachMeshAssignment(host: MeshAssignmentHost): void { // WORKER
         void meshActiveTaskId; void meshActiveDispatchNonce; void meshActiveAttemptId; void meshActiveAttemptGeneration;
         host.settings = mergePendingMeshTaskAttachment(rest, pending);
         host.adapter.updateRuntimeSettings?.(host.settings);
+        persistAttemptRefChange(host, previousAttemptRef);
         return;
     }
     const { meshNodeFor, meshNodeId, meshActiveTaskId, meshActiveDispatchNonce, meshActiveAttemptId, meshActiveAttemptGeneration, ...rest } = host.settings;
@@ -219,4 +263,5 @@ export function detachMeshAssignment(host: MeshAssignmentHost): void { // WORKER
         : (typeof rest.meshLastNodeId === 'string' && rest.meshLastNodeId.trim() ? rest.meshLastNodeId.trim() : undefined);
     host.settings = lastNodeId ? { ...rest, meshLastNodeId: lastNodeId } : rest;
     host.adapter.updateRuntimeSettings?.(host.settings);
+    persistAttemptRefChange(host, previousAttemptRef);
 }
