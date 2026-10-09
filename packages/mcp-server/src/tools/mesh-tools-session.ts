@@ -250,6 +250,10 @@ export async function meshReadChat(
     // ForDisplay` never throws and returns null for every non-answer, so the
     // two hops below are reached unchanged.
     let replicaFallbackReason: string | null = null;
+    // A stale replica (owner restarted / link moved, new snapshot not in yet) is not
+    // the answer: the live read is. It is kept only for when that read cannot reach
+    // the node — a last verified view, flagged stale, beats the cached summary.
+    let staleReplicaPayload: Record<string, any> | null = null;
     let providerSessionWarning: Record<string, unknown> = {};
     // An EXPLICIT provider_session_id asks for one provider conversation. The replica is
     // keyed by (owner daemon, runtime session) and always holds that session's CURRENT
@@ -270,6 +274,9 @@ export async function meshReadChat(
             providerSessionWarning = {
                 providerSessionWarning: `The transcript replica holds provider session '${replicaProviderSessionId || 'unknown'}', not the requested '${requestedProviderSessionId}'; read the live session instead.`,
             };
+        } else if (replica.payload && replica.payload.stale === true) {
+            staleReplicaPayload = replica.payload;
+            replicaFallbackReason = 'stale_active_session';
         } else if (replica.payload) {
             return withPending(renderMeshReadChatPayload(replica.payload, args));
         } else {
@@ -294,6 +301,7 @@ export async function meshReadChat(
         // hard-failed at the 30s timeout instead of surfacing the coordinator's cached
         // summary. See buildMeshReadChatCacheFallback.
         if (isLocalNode || !isP2pRelayTransportFailure(e)) throw e;
+        if (staleReplicaPayload) return withPending(renderMeshReadChatPayload(staleReplicaPayload, args));
         return withPending(await buildMeshReadChatCacheFallback(ctx, args, node, e));
     }
     return withPending(renderMeshReadChatPayload({ ...(unwrapCommandPayload(result) as Record<string, any>), ...providerSessionWarning }, args, {

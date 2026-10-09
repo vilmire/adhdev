@@ -160008,6 +160008,7 @@ ${notice.notice}${supersededHint}`;
           existing.peer = peer;
           existing.generation = this.nextGeneration++;
           existing.resyncStreak = null;
+          existing.awaitingPeerSnapshot = true;
           this.counters.peerRebinds++;
           LOG.info("Seqscribe", `transcript replica re-subscribing on a new peer handle topic=${existing.topic}`);
           if (!this.attach(key2, existing)) {
@@ -160027,7 +160028,8 @@ ${notice.notice}${supersededHint}`;
           rejectedRows: 0,
           lastRejectReason: null,
           resyncStreak: null,
-          resyncScheduled: false
+          resyncScheduled: false,
+          awaitingPeerSnapshot: false
         };
         if (!this.attach(key2, entry)) return { ok: false, reason: "subscribe_failed" };
         this.active.set(keyStr, entry);
@@ -160069,6 +160071,7 @@ ${notice.notice}${supersededHint}`;
           entry.subscription = subscription;
           entry.unsubscribeSnapshot = subscription.onSnapshot((rows) => {
             if (entry.generation !== generation) return;
+            entry.awaitingPeerSnapshot = false;
             const before = entry.folder.stats().rejectedRows;
             entry.folder.ingestSnapshot(parse(rows));
             after(before);
@@ -160153,7 +160156,7 @@ ${notice.notice}${supersededHint}`;
         } catch {
           closed = true;
         }
-        return closed ? { available: true, view, identity: identityOf(commit2, view), stale: true } : { available: true, view, identity: identityOf(commit2, view) };
+        return closed || entry.awaitingPeerSnapshot ? { available: true, view, identity: identityOf(commit2, view), stale: true } : { available: true, view, identity: identityOf(commit2, view) };
       }
       /** Diagnostics only — never gates a read. */
       diagnostics(key2) {
@@ -172576,6 +172579,7 @@ async function meshReadChat(ctx, args) {
   await ensureMeshNodeRoutes(ctx);
   const isLocalNode = isLocalControlPlaneNode(ctx, node);
   let replicaFallbackReason = null;
+  let staleReplicaPayload = null;
   let providerSessionWarning = {};
   const requestedProviderSessionId = typeof args.provider_session_id === "string" && args.provider_session_id.trim() ? args.provider_session_id.trim() : void 0;
   if (!isLocalNode && supportsMeshRelay(ctx.transport) && node.daemonId) {
@@ -172589,6 +172593,9 @@ async function meshReadChat(ctx, args) {
       providerSessionWarning = {
         providerSessionWarning: `The transcript replica holds provider session '${replicaProviderSessionId || "unknown"}', not the requested '${requestedProviderSessionId}'; read the live session instead.`
       };
+    } else if (replica.payload && replica.payload.stale === true) {
+      staleReplicaPayload = replica.payload;
+      replicaFallbackReason = "stale_active_session";
     } else if (replica.payload) {
       return withPending(renderMeshReadChatPayload(replica.payload, args));
     } else {
@@ -172607,6 +172614,7 @@ async function meshReadChat(ctx, args) {
     });
   } catch (e) {
     if (isLocalNode || !(0, import_daemon_core24.isP2pRelayTransportFailure)(e)) throw e;
+    if (staleReplicaPayload) return withPending(renderMeshReadChatPayload(staleReplicaPayload, args));
     return withPending(await buildMeshReadChatCacheFallback(ctx, args, node, e));
   }
   return withPending(renderMeshReadChatPayload({ ...unwrapCommandPayload(result), ...providerSessionWarning }, args, {

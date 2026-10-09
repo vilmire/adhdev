@@ -69,7 +69,7 @@ function cleanupMesh(meshId: string): void {
  */
 function createRemoteCtx(
   meshId: string,
-  opts: { replicaAnswers: boolean; ensureReady?: boolean; liveThrows?: Error; readReplicaThrows?: boolean } = { replicaAnswers: false },
+  opts: { replicaAnswers: boolean; ensureReady?: boolean; liveThrows?: Error; readReplicaThrows?: boolean; replicaStale?: boolean } = { replicaAnswers: false },
 ) {
   const calls: string[] = [];
   const transport = new IpcTransport() as IpcTransport & {
@@ -109,7 +109,7 @@ function createRemoteCtx(
     if (command === 'read_transcript_replica') {
       if (opts.readReplicaThrows) throw new Error('ipc down');
       return opts.replicaAnswers
-        ? { success: true, available: true, view: SNAPSHOT, identity: { frame: 12 } }
+        ? { success: true, available: true, view: SNAPSHOT, identity: { frame: 12 }, ...(opts.replicaStale ? { stale: true } : {}) }
         : { success: true, available: false, reason: 'no_subscription' };
     }
     throw new Error(`unexpected direct command: ${command}`);
@@ -203,6 +203,40 @@ test('a throwing replica IPC is not fatal — the live read still serves the tra
     assert.equal(parsed.summary, 'LIVE_ANSWER');
     assert.equal(parsed.transcriptReadSource, 'legacy_read_chat');
     assert.equal(parsed.transcriptFallbackReason, 'ipc_unavailable');
+  } finally {
+    cleanupMesh(meshId);
+  }
+});
+
+// ── stale replica: the live read answers; the stale view only backs a dead link ─
+// Live 2026-10-09 (rc.4): the first read after a worker-daemon restart moved the
+// replica's SUB to the new peer handle and served the pre-restart view
+// ("generating", no final reply) — 79 s after the worker had finished.
+
+test('a STALE replica is not served when the live read can answer — it falls through and says why', async () => {
+  const meshId = 'mesh_replica_stale_live';
+  const { ctx, calls } = createRemoteCtx(meshId, { replicaAnswers: true, replicaStale: true });
+  try {
+    const parsed = JSON.parse(await meshReadChat(ctx, { node_id: 'node-remote', session_id: 'sess-remote' }));
+    assert.equal(parsed.summary, 'LIVE_ANSWER');
+    assert.equal(parsed.transcriptReadSource, 'legacy_read_chat');
+    assert.equal(parsed.transcriptFallbackReason, 'stale_active_session');
+    assert.ok(calls.includes('relay:read_chat'));
+  } finally {
+    cleanupMesh(meshId);
+  }
+});
+
+test('a STALE replica still answers (flagged stale) when the live read hits a transport failure', async () => {
+  const meshId = 'mesh_replica_stale_dead_link';
+  const transportError: any = new Error('P2P connection timeout');
+  transportError.code = 'P2P_TIMEOUT';
+  const { ctx } = createRemoteCtx(meshId, { replicaAnswers: true, replicaStale: true, liveThrows: transportError });
+  try {
+    const parsed = JSON.parse(await meshReadChat(ctx, { node_id: 'node-remote', session_id: 'sess-remote' }));
+    assert.equal(parsed.transcriptReadSource, 'replica');
+    assert.equal(parsed.stale, true);
+    assert.equal(parsed.summary, 'REPLICA_ANSWER');
   } finally {
     cleanupMesh(meshId);
   }
