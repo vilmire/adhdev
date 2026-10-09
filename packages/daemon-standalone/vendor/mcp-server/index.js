@@ -38155,6 +38155,105 @@ ${error.message || ""}`;
         SLOT_MODEL_ABSENT_SKIP_REASON = "no_slot_declares_requested_model";
       }
     });
+    function resolveOnDependencyFailurePolicy(value) {
+      return value === "cancel" ? "cancel" : "block";
+    }
+    function deriveDependencyFailures(dependsOn, statusById, depMetaById) {
+      const deps = Array.isArray(dependsOn) ? dependsOn : [];
+      const failures = [];
+      for (const taskId of deps) {
+        const meta = depMetaById?.get(taskId);
+        const status = statusById.get(taskId) ?? meta?.status;
+        if (status !== "failed" && status !== "cancelled") continue;
+        const reason = meta?.cancelReason;
+        failures.push({
+          taskId,
+          status,
+          ...reason ? { reason } : {}
+        });
+      }
+      return failures;
+    }
+    var MESH_ON_DEPENDENCY_FAILURE_PUBLIC_TEXT;
+    var init_mesh_dependency_failure = __esm2({
+      "src/mesh/mesh-dependency-failure.ts"() {
+        "use strict";
+        MESH_ON_DEPENDENCY_FAILURE_PUBLIC_TEXT = "on_dependency_failure controls downstream tasks when a required worker task fails or is cancelled. `block` (default) keeps downstream pending and automatically recovers if the predecessor is retried and later completes. `cancel` terminally cancels the dependent branch; it is not revived by predecessor retry.";
+      }
+    });
+    function summarizeQueueEntryInputForView2(entry) {
+      if (!entry.input) return entry;
+      const { input, ...rest } = entry;
+      const partTypes = [];
+      for (const part of input.parts) {
+        const type2 = typeof part?.type === "string" ? part.type : "unknown";
+        if (!partTypes.includes(type2)) partTypes.push(type2);
+      }
+      return { ...rest, inputSummary: { partCount: input.parts.length, partTypes } };
+    }
+    function isTaskReadonly3(task) {
+      if (!task) return false;
+      return task.readonly === true || task.taskMode === "live_debug_readonly";
+    }
+    function taskDependenciesSatisfied(entry, statusById) {
+      const deps = Array.isArray(entry.dependsOn) ? entry.dependsOn : [];
+      return deps.every((depId) => statusById.get(depId) === "completed");
+    }
+    function describeTaskDependencyState2(entry, statusById, depMetaById) {
+      const deps = Array.isArray(entry.dependsOn) ? entry.dependsOn : [];
+      const waitingOn = deps.filter((depId) => statusById.get(depId) !== "completed");
+      return {
+        waitingOn,
+        dependenciesSatisfied: taskDependenciesSatisfied(entry, statusById),
+        dependencyFailures: deriveDependencyFailures(entry.dependsOn, statusById, depMetaById)
+      };
+    }
+    function meshTaskPriorityRank(priority) {
+      switch (priority) {
+        case "high":
+          return 2;
+        case "low":
+          return 0;
+        default:
+          return 1;
+      }
+    }
+    function normalizeMeshTaskPriority2(value) {
+      return isMeshTaskPriority2(value) ? value : void 0;
+    }
+    function resolveNotBefore2(value, nowMs2 = Date.now()) {
+      if (value === void 0 || value === null) return void 0;
+      let absMs;
+      if (typeof value === "number" && Number.isFinite(value)) {
+        absMs = value < NOT_BEFORE_RELATIVE_THRESHOLD_MS ? nowMs2 + value : value;
+      } else if (typeof value === "string" && value.trim()) {
+        const parsed = Date.parse(value.trim());
+        if (Number.isNaN(parsed)) return void 0;
+        absMs = parsed;
+      } else {
+        return void 0;
+      }
+      if (absMs <= nowMs2) return new Date(nowMs2).toISOString();
+      return new Date(absMs).toISOString();
+    }
+    function meshTaskNotBeforeReady(task, nowMs2 = Date.now()) {
+      const nb = task?.notBefore;
+      if (!nb) return true;
+      const parsed = Date.parse(nb);
+      if (Number.isNaN(parsed)) return true;
+      return parsed <= nowMs2;
+    }
+    var MESH_TASK_BATCH_MAX_TASKS2;
+    var NOT_BEFORE_RELATIVE_THRESHOLD_MS;
+    var init_mesh_task_predicates = __esm2({
+      "src/mesh/mesh-task-predicates.ts"() {
+        "use strict";
+        init_dist();
+        init_mesh_dependency_failure();
+        MESH_TASK_BATCH_MAX_TASKS2 = 50;
+        NOT_BEFORE_RELATIVE_THRESHOLD_MS = 365 * 24 * 60 * 60 * 1e3;
+      }
+    });
     var import_fs10;
     var DEFAULT_WAL_CHECKPOINT_POLICY;
     var WalCheckpointScheduler;
@@ -41585,32 +41684,6 @@ ${rendered.join("\n\n")}`,
         init_hash();
       }
     });
-    function resolveOnDependencyFailurePolicy(value) {
-      return value === "cancel" ? "cancel" : "block";
-    }
-    function deriveDependencyFailures(dependsOn, statusById, depMetaById) {
-      const deps = Array.isArray(dependsOn) ? dependsOn : [];
-      const failures = [];
-      for (const taskId of deps) {
-        const meta = depMetaById?.get(taskId);
-        const status = statusById.get(taskId) ?? meta?.status;
-        if (status !== "failed" && status !== "cancelled") continue;
-        const reason = meta?.cancelReason;
-        failures.push({
-          taskId,
-          status,
-          ...reason ? { reason } : {}
-        });
-      }
-      return failures;
-    }
-    var MESH_ON_DEPENDENCY_FAILURE_PUBLIC_TEXT;
-    var init_mesh_dependency_failure = __esm2({
-      "src/mesh/mesh-dependency-failure.ts"() {
-        "use strict";
-        MESH_ON_DEPENDENCY_FAILURE_PUBLIC_TEXT = "on_dependency_failure controls downstream tasks when a required worker task fails or is cancelled. `block` (default) keeps downstream pending and automatically recovers if the predecessor is retried and later completes. `cancel` terminally cancels the dependent branch; it is not revived by predecessor retry.";
-      }
-    });
     function formatMeshTaskModeViolations(result) {
       const details = result.violationDetails;
       if (!details?.length) return result.violations.join(", ");
@@ -44854,79 +44927,6 @@ The instruction it carried was never delivered to anyone. If it still matters, r
         PARK_REASON_PIN_EXPIRED = "target_session_pin_expired_parked";
         PARKED_SKIP_REASON = "target_session_pin_parked";
         PARK_RETENTION_EXPIRED_REASON = "parked_task_retention_expired";
-      }
-    });
-    function summarizeQueueEntryInputForView2(entry) {
-      if (!entry.input) return entry;
-      const { input, ...rest } = entry;
-      const partTypes = [];
-      for (const part of input.parts) {
-        const type2 = typeof part?.type === "string" ? part.type : "unknown";
-        if (!partTypes.includes(type2)) partTypes.push(type2);
-      }
-      return { ...rest, inputSummary: { partCount: input.parts.length, partTypes } };
-    }
-    function isTaskReadonly3(task) {
-      if (!task) return false;
-      return task.readonly === true || task.taskMode === "live_debug_readonly";
-    }
-    function taskDependenciesSatisfied(entry, statusById) {
-      const deps = Array.isArray(entry.dependsOn) ? entry.dependsOn : [];
-      return deps.every((depId) => statusById.get(depId) === "completed");
-    }
-    function describeTaskDependencyState2(entry, statusById, depMetaById) {
-      const deps = Array.isArray(entry.dependsOn) ? entry.dependsOn : [];
-      const waitingOn = deps.filter((depId) => statusById.get(depId) !== "completed");
-      return {
-        waitingOn,
-        dependenciesSatisfied: taskDependenciesSatisfied(entry, statusById),
-        dependencyFailures: deriveDependencyFailures(entry.dependsOn, statusById, depMetaById)
-      };
-    }
-    function meshTaskPriorityRank(priority) {
-      switch (priority) {
-        case "high":
-          return 2;
-        case "low":
-          return 0;
-        default:
-          return 1;
-      }
-    }
-    function normalizeMeshTaskPriority2(value) {
-      return isMeshTaskPriority2(value) ? value : void 0;
-    }
-    function resolveNotBefore2(value, nowMs2 = Date.now()) {
-      if (value === void 0 || value === null) return void 0;
-      let absMs;
-      if (typeof value === "number" && Number.isFinite(value)) {
-        absMs = value < NOT_BEFORE_RELATIVE_THRESHOLD_MS ? nowMs2 + value : value;
-      } else if (typeof value === "string" && value.trim()) {
-        const parsed = Date.parse(value.trim());
-        if (Number.isNaN(parsed)) return void 0;
-        absMs = parsed;
-      } else {
-        return void 0;
-      }
-      if (absMs <= nowMs2) return new Date(nowMs2).toISOString();
-      return new Date(absMs).toISOString();
-    }
-    function meshTaskNotBeforeReady(task, nowMs2 = Date.now()) {
-      const nb = task?.notBefore;
-      if (!nb) return true;
-      const parsed = Date.parse(nb);
-      if (Number.isNaN(parsed)) return true;
-      return parsed <= nowMs2;
-    }
-    var MESH_TASK_BATCH_MAX_TASKS2;
-    var NOT_BEFORE_RELATIVE_THRESHOLD_MS;
-    var init_mesh_task_predicates = __esm2({
-      "src/mesh/mesh-task-predicates.ts"() {
-        "use strict";
-        init_dist();
-        init_mesh_dependency_failure();
-        MESH_TASK_BATCH_MAX_TASKS2 = 50;
-        NOT_BEFORE_RELATIVE_THRESHOLD_MS = 365 * 24 * 60 * 60 * 1e3;
       }
     });
     function normalizeMeshCapabilityTags2(value) {
@@ -59519,7 +59519,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           return null;
         };
         if (host.hasActiveSessionAssignment(meshId, sessionId)) return refuse2("session_already_assigned");
-        const nodeBusy = host.hasActiveNodeAssignment(meshId, nodeId);
+        const nodeWriteBusy = host.hasActiveNodeWriteAssignment(meshId, nodeId);
         const providerType = typeof opts?.providerType === "string" ? opts.providerType.trim() : "";
         const providerMaxParallel = opts?.providerMaxParallel;
         const providerCapDeclared = providerType && typeof providerMaxParallel === "number" && Number.isFinite(providerMaxParallel) && providerMaxParallel >= 0;
@@ -59575,7 +59575,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         const dependenciesSatisfied = (candidate) => taskDependenciesSatisfied(candidate, depStatus);
         const nodeConflictAllows = (candidate) => {
           if (isTaskReadonly3(candidate)) return true;
-          return !nodeBusy;
+          return !nodeWriteBusy;
         };
         const inFlightOwnership = host.assignedRowsMeshWide(meshId).map((row) => {
           try {
@@ -59862,6 +59862,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         init_mesh_local_record_store();
         init_slot_model_enforcement();
         init_dist();
+        init_mesh_task_predicates();
         init_mesh_runtime_store_wal();
         init_mesh_runtime_store_queue_reads();
         init_mesh_handoff_note_text();
@@ -60126,17 +60127,22 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         `).get(meshId, sessionId);
             return row !== void 0;
           }
-          /** A node may only execute one write task at a time (worktree isolation). */
-          hasActiveNodeAssignment(meshId, nodeId) {
+          /**
+           * A node may only execute one write task at a time (worktree isolation). Only
+           * WRITE rows count: an assigned read-only row (isTaskReadonly) takes no worktree
+           * isolation, so it never makes the node write-busy. Read-only load is still
+           * bounded by the parallel caps, and auto-fast-forward has its own any-row gate
+           * (nodeHasActiveAssignment).
+           */
+          hasActiveNodeWriteAssignment(meshId, nodeId) {
             const nodeIdForms = expandDaemonIdForms(nodeId);
             if (nodeIdForms.length === 0) return false;
             const placeholders = nodeIdForms.map(() => "?").join(", ");
-            const row = this.db.prepare(`
-            SELECT 1 FROM mesh_queue
+            const rows = this.db.prepare(`
+            SELECT payload FROM mesh_queue
             WHERE mesh_id = ? AND status = 'assigned' AND assigned_node_id IN (${placeholders})
-            LIMIT 1
-        `).get(meshId, ...nodeIdForms);
-            return row !== void 0;
+        `).all(meshId, ...nodeIdForms);
+            return rows.some((row) => !isTaskReadonly3(JSON.parse(row.payload)));
           }
           /**
            * Count active (status='assigned') tasks on a node, regardless of provider or
@@ -69495,6 +69501,9 @@ ${upstream}`;
     function nodeHasActiveAssignment(meshId, nodeId) {
       return getQueue(meshId, { status: ["assigned"] }).some((task) => daemonIdsEquivalent4(task.assignedNodeId, nodeId));
     }
+    function nodeHasActiveWriteAssignment(meshId, nodeId) {
+      return getQueue(meshId, { status: ["assigned"] }).some((task) => !isTaskReadonly3(task) && daemonIdsEquivalent4(task.assignedNodeId, nodeId));
+    }
     function nodeActiveLoad(meshId, nodeId) {
       return MeshRuntimeStore.getInstance().nodeActiveAssignmentCount(meshId, nodeId);
     }
@@ -72335,7 +72344,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         markSkip(nodeId, "node_has_live_session_pending_claim");
         return null;
       }
-      if (!isTaskReadonly3(task) && nodeHasActiveAssignment(meshId, nodeId)) {
+      if (!isTaskReadonly3(task) && nodeHasActiveWriteAssignment(meshId, nodeId)) {
         markSkip(nodeId, "node_has_active_assignment");
         return null;
       }
@@ -96547,7 +96556,7 @@ ${tail}` : ""
       }));
       const predicted = nodePreviews.find((nodePreview, index) => {
         if (!nodePreview.predictedWinner) return false;
-        if (args.readonly !== true && nodeHasActiveAssignment(meshId, nodePreview.nodeId)) return false;
+        if (args.readonly !== true && nodeHasActiveWriteAssignment(meshId, nodePreview.nodeId)) return false;
         const winnerScore = nodePreview.stages.fitness.find((score) => score.providerType === nodePreview.predictedWinner.providerType && score.model === nodePreview.predictedWinner.model);
         return winnerScore?.capacity.available !== false;
       });
@@ -138154,6 +138163,70 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     var WIN32_SUBMIT_SETTLE_POLL_MS = 120;
     var WIN32_ECHO_PROBE_CHARS = 16;
     var WIN32_ECHO_MAX_WAIT_MS = 2e4;
+    var WIN32_VK_PACKET = 231;
+    function keyRecord(unit, down) {
+      return `\x1B[${WIN32_VK_PACKET};0;${unit};${down ? 1 : 0};0;1_`;
+    }
+    function win32InputModeRecordsForCodePoint(char) {
+      const units = [];
+      for (let i = 0; i < char.length; i += 1) units.push(char.charCodeAt(i));
+      return units.map((u) => keyRecord(u, true)).join("") + units.slice().reverse().map((u) => keyRecord(u, false)).join("");
+    }
+    function win32InputModeTokens(text) {
+      const tokens = [];
+      let ascii = "";
+      const pushAscii = () => {
+        if (!ascii) return;
+        let last = 0;
+        for (const m of ascii.matchAll(/\x1b\[[0-9;]*[\x40-\x7e]/g)) {
+          if (m.index > last) tokens.push({ text: ascii.slice(last, m.index), atomic: false });
+          tokens.push({ text: m[0], atomic: true });
+          last = m.index + m[0].length;
+        }
+        if (last < ascii.length) tokens.push({ text: ascii.slice(last), atomic: false });
+        ascii = "";
+      };
+      for (const ch of text) {
+        if (ch.charCodeAt(0) < 128) {
+          ascii += ch;
+          continue;
+        }
+        pushAscii();
+        tokens.push({ text: win32InputModeRecordsForCodePoint(ch), atomic: true });
+      }
+      pushAscii();
+      return tokens;
+    }
+    function chunkWin32InputMode(text, maxChars) {
+      const size = Math.max(1, Math.floor(maxChars));
+      const segments = [];
+      let current4 = "";
+      const flush = () => {
+        if (current4) {
+          segments.push(current4);
+          current4 = "";
+        }
+      };
+      for (const token of win32InputModeTokens(text)) {
+        if (!token.atomic) {
+          let rest = token.text;
+          while (rest) {
+            const room = size - current4.length;
+            if (room <= 0) {
+              flush();
+              continue;
+            }
+            current4 += rest.slice(0, room);
+            rest = rest.slice(room);
+          }
+          continue;
+        }
+        if (current4.length + token.text.length > size) flush();
+        current4 += token.text;
+      }
+      flush();
+      return segments;
+    }
     var PASTE_PLACEHOLDER_RE = /\[Pasted\s*(?:text|Content)[^\]\n]*\]/i;
     var SendSubmitEngine = class {
       constructor(host) {
@@ -138529,16 +138602,17 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         }
         const hasNewline = /\r?\n/.test(text);
         const mode = resolveWin32SubmitMode();
+        const chunkBody = this.host.spec.send_message.win32_input_mode_non_ascii === true ? chunkWin32InputMode : chunkPreservingSurrogates2;
         let segments;
         if (!hasNewline) {
-          segments = chunkPreservingSurrogates2(text, WIN32_PTY_WRITE_CHUNK_CHARS);
+          segments = chunkBody(text, WIN32_PTY_WRITE_CHUNK_CHARS);
         } else if (mode === "soft_newline") {
           const rewritten = text.split(/\r?\n/).join(WIN32_SOFT_NEWLINE);
-          segments = chunkPreservingSurrogates2(rewritten, WIN32_PTY_WRITE_CHUNK_CHARS);
+          segments = chunkBody(rewritten, WIN32_PTY_WRITE_CHUNK_CHARS);
         } else {
           segments = [
             WIN32_BRACKETED_PASTE_OPEN,
-            ...chunkPreservingSurrogates2(text, WIN32_PTY_WRITE_CHUNK_CHARS),
+            ...chunkBody(text, WIN32_PTY_WRITE_CHUNK_CHARS),
             WIN32_BRACKETED_PASTE_CLOSE
           ];
         }

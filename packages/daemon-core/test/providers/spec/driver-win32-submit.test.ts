@@ -27,6 +27,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { FsmDriver } from '../../../src/providers/spec/fsm-driver.js';
 import { chunkPreservingSurrogates } from '../../../src/providers/spec/submit-policy.js';
+import { decodeWin32InputMode } from '../../../src/providers/spec/win32-input-mode.js';
 import type {
     PtyTransportFactory, PtyRuntimeTransport, PtySpawnOptions,
 } from '../../../src/cli-adapters/pty-transport.js';
@@ -119,13 +120,13 @@ class DrivableFactory implements PtyTransportFactory {
 // Minimal spec: starting → idle once the prompt footer is drawn, and idle →
 // generating once the footer shows the interrupt hint (= the agent submitted and
 // is now generating). submit_key is the CR that win32 swallows on multiline.
-function submitSpec(): Record<string, unknown> {
+function submitSpec(sendMessage: Record<string, unknown> = {}): Record<string, unknown> {
     return {
         $schema: 'adhdev:cli/spec@4',
         id: 'test.win32-submit',
         name: 'win32 submit test',
         binary: '/bin/true',
-        send_message: { submit_key: '\r' },
+        send_message: { submit_key: '\r', ...sendMessage },
         sections: { footer: { from_bottom: 1 } },
         states: [
             { id: 'starting', label: 'Starting', initial: true, status: 'idle' },
@@ -184,6 +185,8 @@ interface CollectOpts {
     echoBody?: boolean;
     /** Override ADHDEV_WIN32_SUBMIT_MODE for this dispatch (FIX-B-v2). Default 'paste'. */
     submitMode?: 'paste' | 'soft_newline';
+    /** Extra spec `send_message` fields (e.g. win32_input_mode_non_ascii). */
+    sendMessage?: Record<string, unknown>;
 }
 
 interface CollectResult {
@@ -208,7 +211,7 @@ async function sendAndCollectPty(opts: CollectOpts = {}): Promise<CollectResult>
     else delete process.env.ADHDEV_WIN32_SUBMIT_MODE;
     const factory = new DrivableFactory();
     const driver = new FsmDriver({
-        specPath: writeSpec(submitSpec()),
+        specPath: writeSpec(submitSpec(opts.sendMessage)),
         workingDir: os.tmpdir(),
         hotReload: false,
         transportFactory: factory,
@@ -546,4 +549,63 @@ describe('FsmDriver -- win32 body write is lossless for non-ASCII text', () => {
             expect(written.split('—').length - 1).toBe(80);
         });
     }
+});
+
+describe('FsmDriver -- win32_input_mode_non_ascii (agy drops non-letter non-ASCII from plain UTF-8)', () => {
+    afterEach(() => setPlatform(ORIGINAL_PLATFORM));
+
+    // Live (MainPC, agy, 2026-10-09): plain UTF-8 lost `— – “ ” … € → ✓ · ×` and emoji
+    // in BOTH write shapes (bracketed paste and plain single-line); the same characters
+    // written as win32-input-mode key records arrived intact. The spec opt-in makes the
+    // driver encode every non-ASCII code point that way; ASCII and the paste / submit
+    // framing are unchanged.
+    const PARA = 'a — b – “q” … € → ✓ · × café 한글 中 🙂😀 end';
+    const OPT_IN = { win32_input_mode_non_ascii: true };
+    const hasRawNonAscii = (s: string) => /[^\x00-\x7f]/.test(s);
+
+    it('single-line: no raw non-ASCII reaches the PTY, no paste wrap, decodes to the body, one submit', async () => {
+        setPlatform('win32');
+        const { writes, submits, firstSubmittedText } = await sendAndCollectPty({ text: PARA, sendMessage: OPT_IN, submitAfterMs: 900, totalWaitMs: 1500 });
+        const body = writes.filter(w => w !== '\r');
+        expect(body.some(hasRawNonAscii)).toBe(false);
+        expect(body.join('')).not.toContain(BP_OPEN);
+        expect(decodeWin32InputMode(body.join(''))).toBe(PARA);
+        // The whole encoded body was standing in the composer when the CR fired.
+        expect(submits).toBeGreaterThanOrEqual(1);
+        expect(decodeWin32InputMode(firstSubmittedText ?? '')).toBe(PARA);
+    });
+
+    for (const mode of ['paste', 'soft_newline'] as const) {
+        it(`${mode}: a long multi-line body is encoded, chunk-safe, framed as before, and decodes losslessly`, async () => {
+            setPlatform('win32');
+            const BODY = Array.from({ length: 30 }, (_, i) => `${i}: ${PARA}`).join('\n');
+            const { writes, submits } = await sendAndCollectPty({ text: BODY, submitMode: mode, sendMessage: OPT_IN, submitAfterMs: 900, totalWaitMs: 1500 });
+            const body = writes.filter(w => w !== '\r');
+            expect(body.length).toBeGreaterThan(3); // paced into several writes
+            expect(body.some(hasRawNonAscii)).toBe(false);
+            // No write ends inside a key record: every write's records are complete.
+            for (const w of body) expect(w).not.toMatch(/\x1b\[[0-9;]*$/);
+            for (const w of body) expect(w.length).toBeLessThanOrEqual(1024);
+            const joined = body.join('');
+            if (mode === 'paste') {
+                expect(joined.startsWith(BP_OPEN)).toBe(true);
+                expect(joined.endsWith(BP_CLOSE)).toBe(true);
+            }
+            const decoded = decodeWin32InputMode(joined.replace(/\x1b\[20[01]~/g, '')).split(SOFT_NL).join('\n');
+            expect(decoded).toBe(BODY);
+            expect(submits).toBe(1);
+        });
+    }
+
+    it('flag off: win32 bytes are the raw UTF-8 body (unchanged behaviour)', async () => {
+        setPlatform('win32');
+        const { writes } = await sendAndCollectPty({ text: PARA, submitAfterMs: 400, totalWaitMs: 900 });
+        expect(writes.filter(w => w !== '\r').join('')).toBe(PARA);
+    });
+
+    it('non-win32 ignores the flag (raw UTF-8)', async () => {
+        setPlatform('darwin');
+        const { writes } = await sendAndCollectPty({ text: PARA, sendMessage: OPT_IN, submitAfterMs: 400, totalWaitMs: 900 });
+        expect(writes.filter(w => w !== '\r').join('')).toBe(PARA);
+    });
 });

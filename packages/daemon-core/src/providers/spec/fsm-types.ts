@@ -480,6 +480,17 @@ export interface CliSpecV4 {
          */
         posix_bracketed_paste_text?: boolean;
         /**
+         * win32: write every non-ASCII code point of the body as win32-input-mode
+         * key records (VK_PACKET + the UTF-16 unit) instead of raw UTF-8. For CLIs
+         * whose console-input decoding drops characters ConPTY hands them as plain
+         * text — antigravity-cli lost `— – “ ” … € → ✓ · ×` and emoji in both the
+         * bracketed-paste and the plain write shape (live, 2026-10-09), and got them
+         * all as key records. ASCII, newlines and the paste/submit framing are
+         * unchanged. Ignored off win32; older daemons ignore the field.
+         * See providers/spec/win32-input-mode.ts.
+         */
+        win32_input_mode_non_ascii?: boolean;
+        /**
          * NOTIF-IMMEDIACY opt-in: this CLI holds input typed DURING a turn in its
          * own queue and answers it as the next turn (claude-cli shows "Press up to
          * edit queued messages").
