@@ -82,6 +82,12 @@ export type TranscriptReplicaReadResult =
           readonly available: true;
           readonly view: ReplicatedTranscriptViewV2;
           readonly identity: TranscriptReplicaCommitIdentity;
+          /**
+           * Present (true) when the SUB serving this view sits on a peer
+           * handle that has closed — the view is the last verified commit and
+           * can no longer advance until a new handle re-subscribes it.
+           */
+          readonly stale?: true;
       };
 
 export interface TranscriptReplicaStoreHooks {
@@ -96,6 +102,11 @@ export interface TranscriptReplicaStoreCounters {
     baseRequests: number;
     /** Commits rejected by digest/count verification (`chatDigestMismatch`). */
     digestMismatches: number;
+    /**
+     * Subscriptions moved to a NEW peer handle for an existing key — the
+     * owner's transport was replaced (owner daemon restart, mesh redial).
+     */
+    peerRebinds: number;
 }
 
 interface ActiveEntry {
@@ -128,7 +139,7 @@ export class TranscriptReplicaStore {
     private readonly active = new Map<string, ActiveEntry>();
     private nextGeneration = 1;
     private stopped = false;
-    private readonly counters: TranscriptReplicaStoreCounters = { resubscribes: 0, baseRequests: 0, digestMismatches: 0 };
+    private readonly counters: TranscriptReplicaStoreCounters = { resubscribes: 0, baseRequests: 0, digestMismatches: 0, peerRebinds: 0 };
 
     constructor(
         private readonly node: SeqscribeNodeHandle,
@@ -146,7 +157,17 @@ export class TranscriptReplicaStore {
 
     /**
      * Define the topic locally (both ends must independently define) and attach
-     * a `tail` SUB to `peer` for `key`. Idempotent per key.
+     * a `tail` SUB to `peer` for `key`. Idempotent per (key, peer handle).
+     *
+     * ★ A SUB lives on ONE `PeerHandle`. When the owner's transport is replaced
+     * (the owner daemon restarted, or the mesh link was redialed) the resolver
+     * hands out a NEW handle and the old SUB is dead — it will never deliver
+     * another row. Answering `alreadySubscribed` for the key alone (the
+     * pre-fix behaviour) froze the replica on its last pre-restart commit:
+     * live 2026-10-09, a coordinator's `read_chat` kept reporting a finished
+     * worker as `generating` with no final reply. So a changed handle moves
+     * the SUB to it; the folder is kept, so the last verified view keeps
+     * serving until the new SUB's reset SNAP verifies.
      */
     ensureSubscription(key: TranscriptReplicaKey, peer: PeerHandle): TranscriptSubscribeResult {
         if (this.stopped) return { ok: false, reason: 'subscribe_failed' };
@@ -155,7 +176,21 @@ export class TranscriptReplicaStore {
         if (!activation.ok) return { ok: false, reason: activation.reason };
 
         const keyStr = replicaKeyString(key);
-        if (this.active.has(keyStr)) return { ok: true, alreadySubscribed: true };
+        const existing = this.active.get(keyStr);
+        if (existing) {
+            if (existing.peer === peer) return { ok: true, alreadySubscribed: true };
+            this.detachSub(existing);
+            existing.peer = peer;
+            existing.generation = this.nextGeneration++;
+            existing.resyncStreak = null;
+            this.counters.peerRebinds++;
+            LOG.info('Seqscribe', `transcript replica re-subscribing on a new peer handle topic=${existing.topic}`);
+            if (!this.attach(key, existing)) {
+                this.active.delete(keyStr);
+                return { ok: false, reason: 'subscribe_failed' };
+            }
+            return { ok: true, alreadySubscribed: false };
+        }
 
         const entry: ActiveEntry = {
             generation: this.nextGeneration++,
@@ -288,7 +323,11 @@ export class TranscriptReplicaStore {
         const view = entry.folder.view();
         const commit = entry.folder.lastCommit();
         if (!view || !commit) return { available: false, reason: 'no_complete_revision' };
-        return { available: true, view, identity: identityOf(commit, view) };
+        let closed = false;
+        try { closed = entry.peer.state() === 'closed'; } catch { closed = true; }
+        return closed
+            ? { available: true, view, identity: identityOf(commit, view), stale: true }
+            : { available: true, view, identity: identityOf(commit, view) };
     }
 
     /** Diagnostics only — never gates a read. */

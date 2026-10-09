@@ -84,7 +84,12 @@ export const transcriptReplicaHandlers: Record<string, LowFamilyHandler> = {
 
         const read = store.getReplica(key);
         if (!read.available) return { success: true, available: false, reason: read.reason };
-        return { success: true, available: true, view: read.view, identity: read.identity };
+        // `stale` — the SUB's transport closed (owner restart, link down); the
+        // view is the last verified commit. mcp-server carries it onto the
+        // read_chat payload (`mesh-transcript-replica-read.ts`).
+        return read.stale
+            ? { success: true, available: true, view: read.view, identity: read.identity, stale: true }
+            : { success: true, available: true, view: read.view, identity: read.identity };
     },
 
     request_transcript_base: async (_ctx, args) => {

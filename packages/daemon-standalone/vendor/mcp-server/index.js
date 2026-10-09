@@ -124235,7 +124235,7 @@ ${marker}`,
         if (!store2) return { success: true, available: false, reason: NO_NODE };
         const read = store2.getReplica(key2);
         if (!read.available) return { success: true, available: false, reason: read.reason };
-        return { success: true, available: true, view: read.view, identity: read.identity };
+        return read.stale ? { success: true, available: true, view: read.view, identity: read.identity, stale: true } : { success: true, available: true, view: read.view, identity: read.identity };
       },
       request_transcript_base: async (_ctx, args) => {
         const rawSessionId = typeof args?.rawSessionId === "string" ? args.rawSessionId.trim() : typeof args?.sessionId === "string" ? args.sessionId.trim() : "";
@@ -159922,7 +159922,7 @@ ${notice.notice}${supersededHint}`;
       active = /* @__PURE__ */ new Map();
       nextGeneration = 1;
       stopped = false;
-      counters = { resubscribes: 0, baseRequests: 0, digestMismatches: 0 };
+      counters = { resubscribes: 0, baseRequests: 0, digestMismatches: 0, peerRebinds: 0 };
       /**
        * Late-bind the base-frame requester: the store is built with the node,
        * before the host's mesh dispatch exists (boot S7 binds it).
@@ -159932,14 +159932,38 @@ ${notice.notice}${supersededHint}`;
       }
       /**
        * Define the topic locally (both ends must independently define) and attach
-       * a `tail` SUB to `peer` for `key`. Idempotent per key.
+       * a `tail` SUB to `peer` for `key`. Idempotent per (key, peer handle).
+       *
+       * ★ A SUB lives on ONE `PeerHandle`. When the owner's transport is replaced
+       * (the owner daemon restarted, or the mesh link was redialed) the resolver
+       * hands out a NEW handle and the old SUB is dead — it will never deliver
+       * another row. Answering `alreadySubscribed` for the key alone (the
+       * pre-fix behaviour) froze the replica on its last pre-restart commit:
+       * live 2026-10-09, a coordinator's `read_chat` kept reporting a finished
+       * worker as `generating` with no final reply. So a changed handle moves
+       * the SUB to it; the folder is kept, so the last verified view keeps
+       * serving until the new SUB's reset SNAP verifies.
        */
       ensureSubscription(key2, peer) {
         if (this.stopped) return { ok: false, reason: "subscribe_failed" };
         const activation = ensureSessionChatTopic(this.node, this.claims, key2.rawSessionId, key2.ownerDaemonId);
         if (!activation.ok) return { ok: false, reason: activation.reason };
         const keyStr = replicaKeyString(key2);
-        if (this.active.has(keyStr)) return { ok: true, alreadySubscribed: true };
+        const existing = this.active.get(keyStr);
+        if (existing) {
+          if (existing.peer === peer) return { ok: true, alreadySubscribed: true };
+          this.detachSub(existing);
+          existing.peer = peer;
+          existing.generation = this.nextGeneration++;
+          existing.resyncStreak = null;
+          this.counters.peerRebinds++;
+          LOG.info("Seqscribe", `transcript replica re-subscribing on a new peer handle topic=${existing.topic}`);
+          if (!this.attach(key2, existing)) {
+            this.active.delete(keyStr);
+            return { ok: false, reason: "subscribe_failed" };
+          }
+          return { ok: true, alreadySubscribed: false };
+        }
         const entry = {
           generation: this.nextGeneration++,
           peer,
@@ -160071,7 +160095,13 @@ ${notice.notice}${supersededHint}`;
         const view = entry.folder.view();
         const commit2 = entry.folder.lastCommit();
         if (!view || !commit2) return { available: false, reason: "no_complete_revision" };
-        return { available: true, view, identity: identityOf(commit2, view) };
+        let closed = false;
+        try {
+          closed = entry.peer.state() === "closed";
+        } catch {
+          closed = true;
+        }
+        return closed ? { available: true, view, identity: identityOf(commit2, view), stale: true } : { available: true, view, identity: identityOf(commit2, view) };
       }
       /** Diagnostics only — never gates a read. */
       diagnostics(key2) {
