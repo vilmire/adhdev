@@ -465,7 +465,7 @@ describe('Repo Mesh coordinator prompt', () => {
   })
 
   it('surfaces the read-only exemption from the one-active-session-per-node invariant', () => {
-    // mesh-queue-assignment.ts gates auto-launch on nodeHasActiveAssignment ONLY
+    // mesh-queue-assignment.ts gates auto-launch on nodeHasActiveWriteAssignment ONLY
     // for non-readonly tasks (`if (!isTaskReadonly(task) && ...)`), so a node can
     // hold several concurrent read-only sessions. That exemption was invisible in
     // the prompt, which led coordinators to serialize read-only investigation or

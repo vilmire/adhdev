@@ -7,7 +7,7 @@ import { tmpdir } from 'os'
 // DOUBLE-DISPATCH Layer (a): maybeAutoLaunchOneQueueSession must NOT spawn a second worker
 // when the target node already has a LIVE mesh session on its way to claim (idle / booting /
 // momentary non-idle flip). The enqueue→drain race RCA: the idle drain skipped a
-// momentarily-non-idle session as a candidate, and the write-only nodeHasActiveAssignment
+// momentarily-non-idle session as a candidate, and the write-only nodeHasActiveWriteAssignment
 // gate (status='assigned' rows only) could not see the about-to-claim session either, so a
 // duplicate session spawned and the same taskId was sequentially stamped on two sessions.
 // The new nodeHasLiveSessionPendingClaim gate closes that. It must still allow the legitimate

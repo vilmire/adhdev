@@ -35,7 +35,7 @@ import { isWorkspaceAutoFastForwardInFlight, resolveAutoFastForwardPolicy } from
 import { dirtyWriteVerdict, readDirtyWriteGate } from './mesh-dirty-write-verdict.js';
 import { isActionableSkipReason, isTargetNodeTransientlyUnresolved, resolveDeadTargetVerdict, retractActionableSkipIfPreviouslyNotified, notifyCoordinatorOfActionableSkip, resolveTargetPinTtlVerdict, TARGET_SESSION_PIN_TTL_MS, TRANSIENT_TARGET_NODE_BOOTSTRAP_PENDING_REASON } from './mesh-skip-notify.js';
 import { PARKED_SKIP_REASON, noteTargetPinCleared, parkExpiredTargetPin, settleParkedQueueTask, taskIsParked } from './mesh-task-parking.js';
-import { activeWriteAssignedCount, activeReadonlyAssignedCount, nodeHasActiveAssignment, resolveSchedulingStrategy, orderEligibleNodes, orderSlotsForProviderSelection, activeProviderAssignedCount, slotCoversTaskDifficulty, taskRequiresDifficultyFloor, slotHasCapacity, resolveLaunchAxis, type RankableNode, type FitnessTask } from './mesh-scheduling-fitness.js';
+import { activeWriteAssignedCount, activeReadonlyAssignedCount, nodeHasActiveWriteAssignment, resolveSchedulingStrategy, orderEligibleNodes, orderSlotsForProviderSelection, activeProviderAssignedCount, slotCoversTaskDifficulty, taskRequiresDifficultyFloor, slotHasCapacity, resolveLaunchAxis, type RankableNode, type FitnessTask } from './mesh-scheduling-fitness.js';
 import { logAutoLaunchQuotaFallbackSuccess, recordAutoLaunchEvent } from './mesh-queue-observability.js';
 import { buildAutoLaunchRoutingDecision, selectProviderWithDiagnostics, selectionRationaleFrom, type ResolvedProviderSelection } from './mesh-routing-decision.js';
 import { selectQuotaBusyFallback, type QuotaFallbackCandidate } from './mesh-quota-fallback.js';
@@ -519,7 +519,7 @@ function selectAutoLaunchCandidateNodes(components: DaemonComponents, meshId: st
     // PRIORITY → TIE-BREAK: order the eligible (TAG-filtered) candidate nodes by
     // the mesh scheduling strategy. 'first_eligible' (default) returns them in
     // config/array order unchanged, so distribution is strictly opt-in. The
-    // per-node MAX-ALLOC capacity gate (nodeHasActiveAssignment, provider cap,
+    // per-node MAX-ALLOC capacity gate (nodeHasActiveWriteAssignment, provider cap,
     // maxConcurrentSessions) is still applied inside the loop below; this only
     // chooses which eligible node is *tried first*.
     const strategy = resolveSchedulingStrategy(mesh);
@@ -628,10 +628,10 @@ function screenNodeForAutoLaunch(
         markSkip(nodeId, 'node_has_live_session_pending_claim');
         return null;
     }
-    // Write tasks keep the one-active-per-node invariant (worktree isolation);
-    // read-only diagnoses may auto-launch onto a node that already has an active
-    // assignment. Classified by the shared isTaskReadonly predicate.
-    if (!isTaskReadonly(task) && nodeHasActiveAssignment(meshId, nodeId)) {
+    // Write tasks keep the one-write-per-node invariant (worktree isolation): only an
+    // assigned WRITE row blocks; read-only work neither blocks nor is blocked here.
+    // Classified by the shared isTaskReadonly predicate.
+    if (!isTaskReadonly(task) && nodeHasActiveWriteAssignment(meshId, nodeId)) {
         markSkip(nodeId, 'node_has_active_assignment');
         return null;
     }

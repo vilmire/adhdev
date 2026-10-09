@@ -374,7 +374,12 @@ describe('mesh-runtime-store', () => {
             __clearMeshQueueForTests(meshId);
         });
 
-        it('a write task cannot claim a node already running a read-only task', () => {
+        // Inverted 2026-10-09 (owner decision): this used to assert that a running
+        // read-only task BLOCKED a write claim on its node. That contradicted the gate's
+        // own documented intent ("a node may only execute one WRITE task at a time"):
+        // a reader takes no worktree isolation, so it must not serialize writers. The
+        // write↔write invariant is asserted by the next test.
+        it('a write task CAN claim a node already running a read-only task', () => {
             const meshId = `mesh-mixed-${randomUUID().slice(0, 8)}`;
             const db = MeshRuntimeStore.getInstance();
             // Read-only claimed first, then a write task arrives.
@@ -383,9 +388,23 @@ describe('mesh-runtime-store', () => {
             expect(ro?.id).toBe('ro-first');
 
             insertWrite(db, meshId, 'w-after', 1000);
-            // The node now has an active (read-only) assignment, so the write task is
-            // blocked by the per-candidate node-conflict gate.
-            expect(db.claimNextQueueTask(meshId, 'node1', 'sess2')).toBeNull();
+            // The node's only active assignment is read-only → not write-busy.
+            expect(db.claimNextQueueTask(meshId, 'node1', 'sess2')?.id).toBe('w-after');
+
+            __clearMeshQueueForTests(meshId);
+        });
+
+        it('with a read-only AND a write task running, a second write is still blocked', () => {
+            const meshId = `mesh-mixed3-${randomUUID().slice(0, 8)}`;
+            const db = MeshRuntimeStore.getInstance();
+            insertReadonly(db, meshId, 'ro-1', 3000);
+            insertWrite(db, meshId, 'w-1', 2000);
+            insertWrite(db, meshId, 'w-2', 1000);
+
+            expect(db.claimNextQueueTask(meshId, 'node1', 'sess1')?.id).toBe('ro-1');
+            expect(db.claimNextQueueTask(meshId, 'node1', 'sess2')?.id).toBe('w-1');
+            // The write row (not the read-only one) keeps the node write-busy.
+            expect(db.claimNextQueueTask(meshId, 'node1', 'sess3')).toBeNull();
 
             __clearMeshQueueForTests(meshId);
         });
@@ -452,6 +471,18 @@ describe('mesh-runtime-store', () => {
 
             expect(db.claimNextQueueTask(meshId, 'node1', 'sess1')?.id).toBe('wv-1');
             expect(db.claimNextQueueTask(meshId, 'node1', 'sess2')).toBeNull();
+
+            __clearMeshQueueForTests(meshId);
+        });
+
+        it('an assigned readonly:true row (non-readonly taskMode) does not make the node write-busy', () => {
+            const meshId = `mesh-boolro-nobusy-${randomUUID().slice(0, 8)}`;
+            const db = MeshRuntimeStore.getInstance();
+            insertBoolReadonly(db, meshId, 'bro-1', 2000);
+            insertWrite(db, meshId, 'wv-1', 1000);
+
+            expect(db.claimNextQueueTask(meshId, 'node1', 'sess1')?.id).toBe('bro-1');
+            expect(db.claimNextQueueTask(meshId, 'node1', 'sess2')?.id).toBe('wv-1');
 
             __clearMeshQueueForTests(meshId);
         });

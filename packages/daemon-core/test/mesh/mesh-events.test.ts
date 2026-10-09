@@ -1405,6 +1405,31 @@ const { emit } = components
     }
   })
 
+  it('auto-launches a WRITE task onto a node whose only active assignment is read-only', async () => {
+    // One-write-per-node: a running reader takes no worktree isolation, so it must not
+    // keep a writer from spawning on its node (2026-10-09 owner decision).
+    const meshId = `mesh_auto_launch_ro_busy_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a', health: 'online', policy: { providerPriority: ['hermes-cli'] } }],
+        policy: { maxParallelTasks: 2 },
+      })
+      enqueueTask(meshId, 'running diagnosis', { difficulty: 'medium', taskMode: 'live_debug_readonly' })
+      expect(claimNextTask(meshId, 'node_child_1', 'busy_reader')?.message).toBe('running diagnosis')
+      enqueueTask(meshId, 'pending write', { difficulty: 'medium' })
+      const { components, cliManager } = createQueueAutoLaunchComponents()
+
+      await triggerMeshQueue(components, meshId)
+
+      expect(cliManager.handleCliCommand).toHaveBeenCalledWith('launch_cli', expect.anything())
+      const pending = getQueue(meshId).find(entry => entry.message === 'pending write')
+      expect(pending?.autoLaunch?.reason).not.toBe('node_has_active_assignment')
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
   it('gracefully skips a remote node when no dispatchMeshCommand transport is available', async () => {
     // With no dispatch transport (standalone, or cloud component without the relay),
     // a remote node cannot be reached — fall back to a graceful skip rather than a

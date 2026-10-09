@@ -15,7 +15,7 @@ import { join } from 'path'
 //      a metrics counter — the delta lost its address and will NOT reach the session it
 //      was written for, which no amount of waiting fixes.
 //   3. ★ The write-concurrency invariant is UNCHANGED: a plain write task with no
-//      targetSessionId is still gated by nodeHasActiveAssignment. This is the regression
+//      targetSessionId is still gated by nodeHasActiveWriteAssignment. This is the regression
 //      guard for the fix that was considered and deliberately NOT made — see below.
 
 const SRC = join(import.meta.dirname, '../../src/mesh')
@@ -80,13 +80,16 @@ describe('expired target pin reaches the coordinator (defect A — the real one)
 })
 
 describe('★ write-concurrency invariant is unchanged (regression guard)', () => {
-  it('a plain write task is still gated by nodeHasActiveAssignment', () => {
+  it('a plain write task is still gated by nodeHasActiveWriteAssignment', () => {
+    // 2026-10-09: the gate helper is now the write-only nodeHasActiveWriteAssignment
+    // (an assigned read-only row no longer blocks a write spawn); the invariant this
+    // guards — write↔write serialization, no targetSessionId exemption — is unchanged.
     // A proposed fix would have exempted targeted tasks from this gate. It was NOT made:
     // the gate lives in maybeAutoLaunchOneQueueSession and governs SPAWNING A NEW SESSION,
     // while a targeted task returns earlier at the target_session_constraint branch and is
     // delivered by the claim path instead — so exempting it could not help delivery, and
     // would weaken the one-active-write-per-node invariant (worktree isolation).
-    expect(autolaunch).toContain('if (!isTaskReadonly(task) && nodeHasActiveAssignment(meshId, nodeId)) {')
+    expect(autolaunch).toContain('if (!isTaskReadonly(task) && nodeHasActiveWriteAssignment(meshId, nodeId)) {')
     expect(autolaunch).toContain("markSkip(nodeId, 'node_has_active_assignment')")
   })
 
@@ -95,7 +98,7 @@ describe('★ write-concurrency invariant is unchanged (regression guard)', () =
     // indexOf calls return -1, slice() yields an unrelated region, and the negative
     // assertion below passes against exactly the change it exists to forbid — verified:
     // adding the exemption left this test green until the bounds were asserted.
-    const start = autolaunch.indexOf('if (!isTaskReadonly(task) && nodeHasActiveAssignment(meshId, nodeId)) {')
+    const start = autolaunch.indexOf('if (!isTaskReadonly(task) && nodeHasActiveWriteAssignment(meshId, nodeId)) {')
     expect(start, 'concurrency gate not found in its expected form').toBeGreaterThan(-1)
     const end = autolaunch.indexOf('const maxConcurrentSessions', start)
     expect(end, 'gate terminator not found').toBeGreaterThan(start)
@@ -111,6 +114,6 @@ describe('★ write-concurrency invariant is unchanged (regression guard)', () =
     )
     expect(targeted).toContain("markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'target_session_constraint' })")
     expect(targeted.indexOf('continue;')).toBeGreaterThan(-1)
-    expect(targeted).not.toContain('nodeHasActiveAssignment')
+    expect(targeted).not.toContain('nodeHasActiveWriteAssignment')
   })
 })

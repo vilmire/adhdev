@@ -12,6 +12,7 @@ import { migrateTurnLedgerV3, type TurnLedgerMigrationV3Report } from './turn-le
 import { LocalRecordStore } from './mesh-local-record-store.js';
 import { modelNamesEquivalent } from './slot-model-enforcement.js';
 import { expandDaemonIdForms } from '@adhdev/mesh-shared';
+import { isTaskReadonly } from './mesh-task-predicates.js';
 import type { MeshTaskStatus, MeshWorkQueueEntry } from './mesh-work-queue.js';
 import { type MeshClaimRefusal } from './mesh-claim-refusal.js';
 import type BetterSqlite3 from 'better-sqlite3';
@@ -426,8 +427,14 @@ export class MeshRuntimeStore {
         return row !== undefined;
     }
 
-    /** A node may only execute one write task at a time (worktree isolation). */
-    hasActiveNodeAssignment(meshId: string, nodeId: string): boolean {
+    /**
+     * A node may only execute one write task at a time (worktree isolation). Only
+     * WRITE rows count: an assigned read-only row (isTaskReadonly) takes no worktree
+     * isolation, so it never makes the node write-busy. Read-only load is still
+     * bounded by the parallel caps, and auto-fast-forward has its own any-row gate
+     * (nodeHasActiveAssignment).
+     */
+    hasActiveNodeWriteAssignment(meshId: string, nodeId: string): boolean {
         // The serialization gate (claimNextQueueTask's `!nodeBusy`) must see a node as
         // busy when ANY active row's assigned_node_id matches in ANY equivalent
         // daemon-id form (config-form `daemon_mach_X` vs stamp-form `mach_X`, or the
@@ -440,12 +447,11 @@ export class MeshRuntimeStore {
         const nodeIdForms = expandDaemonIdForms(nodeId);
         if (nodeIdForms.length === 0) return false;
         const placeholders = nodeIdForms.map(() => '?').join(', ');
-        const row = this.db.prepare(`
-            SELECT 1 FROM mesh_queue
+        const rows = this.db.prepare(`
+            SELECT payload FROM mesh_queue
             WHERE mesh_id = ? AND status = 'assigned' AND assigned_node_id IN (${placeholders})
-            LIMIT 1
-        `).get(meshId, ...nodeIdForms);
-        return row !== undefined;
+        `).all(meshId, ...nodeIdForms) as Array<{ payload: string }>;
+        return rows.some(row => !isTaskReadonly(JSON.parse(row.payload) as MeshWorkQueueEntry));
     }
 
     /**

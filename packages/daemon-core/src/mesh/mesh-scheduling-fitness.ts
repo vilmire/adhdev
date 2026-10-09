@@ -40,13 +40,24 @@ export function activeReadonlyAssignedCount(meshId: string): number {
         .filter(isTaskReadonly).length;
 }
 
+/** Any assigned row (write OR read-only) on this node. NOT a write gate — it is the
+ *  "is anything running here" signal auto-fast-forward needs (never move a workspace
+ *  under a running reader). Write gates use nodeHasActiveWriteAssignment. */
 export function nodeHasActiveAssignment(meshId: string, nodeId: string): boolean {
     // Canonical-form match, NOT a raw `===`: an assigned row stamped in one daemon-id
     // form (e.g. `daemon_mach_X`) must still register as this node's active work when
-    // the candidate nodeId arrives bare (`mach_X`). A raw mismatch makes the node look
-    // free, letting a second write task auto-launch onto an already-busy node and
-    // breaking the one-write-per-node (worktree isolation) invariant.
+    // the candidate nodeId arrives bare (`mach_X`). A raw mismatch makes a busy node
+    // look free.
     return getQueue(meshId, { status: ['assigned'] as any }).some(task => daemonIdsEquivalent(task.assignedNodeId, nodeId));
+}
+
+/** One-write-per-node (worktree isolation): does this node already hold an assigned
+ *  WRITE row? Read-only rows are excluded, matching the claim-side
+ *  MeshRuntimeStore.hasActiveNodeWriteAssignment and mesh-scheduling-runtime's
+ *  `node_has_active_assignment` cap reason. Same canonical-form match as above. */
+export function nodeHasActiveWriteAssignment(meshId: string, nodeId: string): boolean {
+    return getQueue(meshId, { status: ['assigned'] as any })
+        .some(task => !isTaskReadonly(task) && daemonIdsEquivalent(task.assignedNodeId, nodeId));
 }
 
 /** Active (status='assigned') task count for a node — the load metric for the
