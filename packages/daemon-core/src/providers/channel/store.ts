@@ -373,8 +373,18 @@ export class ProviderChannelStore {
    * provider type/channel), so anything else in objects/ is either an older
    * generation or a crash orphan and is safe to delete.
    */
-  gc(): { removedObjects: string[]; removedStaging: number } {
-    const referenced = new Set<string>();
+  gc(options?: {
+    /**
+     * Digests to keep even when no pointer references them: objects this
+     * daemon process has LOADED. A running CLI session spawned from an object
+     * keeps reading it (FsmDriver hot-reload watches the spec file;
+     * override_path readers load lazily), so two activations of the same type
+     * during one session's lifetime must not delete the session's tree
+     * (docs/design/2026-10-10-provider-auto-update.md §4).
+     */
+    retainDigests?: ReadonlySet<string>;
+  }): { removedObjects: string[]; removedStaging: number } {
+    const referenced = new Set<string>(options?.retainDigests ?? []);
     for (const channel of ['stable', 'preview'] as const) {
       const dir = this.activeDir(channel);
       let files: string[] = [];

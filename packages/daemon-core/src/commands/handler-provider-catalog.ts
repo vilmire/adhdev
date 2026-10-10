@@ -280,6 +280,10 @@ export async function handleCheckProviderUpdates(host: ProviderCatalogCommandHos
     // reason). Without it, a preview-channel daemon compared its preview
     // pin against the stable row and mis-reported staleness both ways.
     const channel = host._ctx.providerLoader?.channel ?? 'stable';
+    // Auto-update verdicts (docs/design/2026-10-10-provider-auto-update.md §5):
+    // per row, so the dashboard can say "auto-updated a → b" or why an update
+    // is held back. Pure in-memory read.
+    const autoUpdate = host._ctx.providerLoader?.getAutoUpdateStatus?.() ?? null;
     const checks = await Promise.all(
         installedList.map(async (p) => {
             const pin = pins.get(p.type);
@@ -296,6 +300,7 @@ export async function handleCheckProviderUpdates(host: ProviderCatalogCommandHos
                 digest: pin?.active?.digest ?? null,
                 activatedAt: pin?.active?.activatedAt ?? null,
                 previousVersion: pin?.previous?.providerVersion ?? null,
+                autoUpdate: autoUpdate?.types?.[p.type] ?? null,
             };
             try {
                 const remote = await fetchJson(`${REGISTRY}/providers/${encodeURIComponent(p.type)}?channel=${encodeURIComponent(channel)}`);
@@ -343,7 +348,10 @@ export async function handleCheckProviderUpdates(host: ProviderCatalogCommandHos
     try {
         modelStaleness = host._ctx.providerLoader?.getModelDiscoveryStaleness?.() ?? null;
     } catch { /* read-only extra — rows above are still valid without it */ }
-    return { success: true, providers: checks, channelSync: null, channelStaleness, modelStaleness };
+    const autoUpdateSummary = autoUpdate
+        ? { enabled: autoUpdate.enabled, lastRunAt: autoUpdate.lastRunAt, ...(autoUpdate.lastError ? { lastError: autoUpdate.lastError } : {}) }
+        : null;
+    return { success: true, providers: checks, channelSync: null, channelStaleness, modelStaleness, autoUpdate: autoUpdateSummary };
 }
 
 /**
@@ -410,7 +418,12 @@ export async function handleActivateProviderUpdates(host: ProviderCatalogCommand
             activated.push({ type, from: wasVersion, to: nowVersion });
         }
     }
-    return { success: true, activated, channelSync };
+    // Gated skips (e.g. a bundle that needs a newer daemon) are not errors —
+    // surface them so "nothing moved" is explained rather than looking current.
+    const blocked = Array.isArray((channelSync as { blocked?: unknown } | null)?.blocked)
+        ? (channelSync as { blocked: unknown[] }).blocked
+        : [];
+    return { success: true, activated, blocked, channelSync };
 }
 
 /**

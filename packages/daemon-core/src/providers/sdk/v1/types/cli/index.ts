@@ -308,6 +308,8 @@ export interface CliProviderManifest {
   /** Versioning */
   engines?: { adhdev?: string };
   providerVersion?: string;
+  /** Lowest daemon version (x.y.z) the bundle runs correctly on — auto-update gate (design 2026-10-10). */
+  minDaemonVersion?: string;
   contractVersion?: number | string;
   status?: ProviderLifecycleStatus;
   details?: string;

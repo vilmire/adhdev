@@ -47,7 +47,8 @@ export interface ProvidersStage extends PlatformStage {
     refreshProviderAvailability(providerType?: string): Promise<void>;
     /** First-sync → daemon-update sync, ONE promise chain (never concurrent). Never rejects. */
     channelBootSync: Promise<{ activated: number }>;
-    stalenessProbe: { stop: Disposer; onStale(cb: () => void): void };
+    /** Periodic auto-update loop (also the staleness probe). `onActivated` fires after it activated ≥1 provider. */
+    stalenessProbe: { stop: Disposer; onStale(cb: () => void): void; onActivated(cb: () => void): void };
 }
 
 /** S3 — bus, registry, instances, CLI/CDP managers (constructed, loops not started). */

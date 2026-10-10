@@ -46,6 +46,7 @@ import { computeProviderTreeDigest } from './tree-digest.js';
 import type { ActivationRef, ProviderChannelStore } from './store.js';
 import { extractTarballGz } from '../extract-tarball.js';
 import { resolveTransportCandidates } from './pinned-transport.js';
+import { readProviderManifest, type ActivationBlock, type ActivationGate } from './auto-update-gate.js';
 
 export interface ChannelSyncError {
   code: ProviderChannelErrorCode;
@@ -60,6 +61,11 @@ export interface ChannelSyncReport {
   activated: ActivationRef[];
   skipped: SkippedEntry[];
   errors: ChannelSyncError[];
+  /**
+   * Entries a compatibility gate declined (auto-update.gate). NOT errors: the
+   * previous activation stays live and status/stamp logic ignores them.
+   */
+  blocked: ActivationBlock[];
 }
 
 export interface ProviderChannelRuntimeOptions {
@@ -281,14 +287,23 @@ export class ProviderChannelRuntime {
    * typed error in the returned report and the previous activations stay
    * live (last-known-good). Unexpected programming errors still throw.
    */
-  async sync(options: { channel: ProviderChannel; targetTypes: ReadonlySet<string>; bootstrapAll?: boolean }): Promise<ChannelSyncReport> {
-    const { channel, targetTypes, bootstrapAll } = options;
+  async sync(options: {
+    channel: ProviderChannel;
+    targetTypes: ReadonlySet<string>;
+    bootstrapAll?: boolean;
+    /** Compatibility gates (auto-update-gate.ts). Absent = activate every verified pending entry. */
+    gate?: ActivationGate;
+    /** Objects gc() must keep although unreferenced (loaded by this process — see store.gc). */
+    retainDigests?: ReadonlySet<string>;
+  }): Promise<ChannelSyncReport> {
+    const { channel, targetTypes, bootstrapAll, gate } = options;
     const report: ChannelSyncReport = {
       channel,
       status: 'up-to-date',
       activated: [],
       skipped: [],
       errors: [],
+      blocked: [],
     };
 
     // 1. Channel metadata. Failure → abort before touching anything (LKG).
@@ -312,15 +327,23 @@ export class ProviderChannelRuntime {
     // 3. Diff against active pointers.
     const pending: ActivatableEntry[] = [];
     for (const entry of targets) {
-      let activeDigest: string | null = null;
+      let pointer: ReturnType<ProviderChannelStore['getPointer']> = null;
       try {
-        activeDigest = this.store.getPointer(channel, entry.providerType)?.active.digest ?? null;
+        pointer = this.store.getPointer(channel, entry.providerType);
       } catch (e: any) {
         // Corrupt pointer: record and treat as pending — a verified
         // re-activation atomically replaces the corrupt file.
         report.errors.push(toSyncError(e, 'STORE_CORRUPT', entry.providerType));
       }
-      if (activeDigest !== entry.bundleDigest) pending.push(entry);
+      if ((pointer?.active.digest ?? null) === entry.bundleDigest) continue;
+      // Pre-transport gate: decided from the pin alone, so a gated entry
+      // never costs a tarball download.
+      const early = gate?.beforeTransport?.(entry, pointer) ?? null;
+      if (early) {
+        report.blocked.push(early);
+        continue;
+      }
+      pending.push(entry);
     }
 
     if (pending.length === 0) {
@@ -344,6 +367,7 @@ export class ProviderChannelRuntime {
       const isLastCandidate = attempt === candidates.length - 1;
       const attemptErrors: ChannelSyncError[] = [];
       const attemptActivated: ActivationRef[] = [];
+      const attemptBlocked = new Set<string>();
 
       const stagingRoot = this.store.createStagingDir('sync');
       let retryWithOlderCommit = false;
@@ -372,9 +396,12 @@ export class ProviderChannelRuntime {
         //    failures never affect other entries and never touch the previous
         //    activation.
         for (const entry of pending) {
-          const error = await this.tryActivateOne(channel, entry, repoRoot, stagingRoot);
-          if (error) {
-            attemptErrors.push(error);
+          const outcome = await this.tryActivateOne(channel, entry, repoRoot, gate);
+          if (outcome && 'blocked' in outcome) {
+            report.blocked.push(outcome.blocked);
+            attemptBlocked.add(entry.providerType);
+          } else if (outcome) {
+            attemptErrors.push(outcome);
           } else {
             const pointer = this.store.getPointer(channel, entry.providerType);
             if (pointer) attemptActivated.push(pointer.active);
@@ -406,7 +433,7 @@ export class ProviderChannelRuntime {
       if (retryWithOlderCommit) {
         // Drop the types that verified at this commit from the retry set, so
         // an older commit is only asked about what is still unresolved.
-        const resolved = new Set(attemptActivated.map((a) => a.providerType));
+        const resolved = new Set([...attemptActivated.map((a) => a.providerType), ...attemptBlocked]);
         report.activated.push(...attemptActivated);
         for (let i = pending.length - 1; i >= 0; i -= 1) {
           if (resolved.has(pending[i].providerType)) pending.splice(i, 1);
@@ -426,7 +453,7 @@ export class ProviderChannelRuntime {
 
     // 6. N=2 retention + crash-orphan cleanup.
     try {
-      this.store.gc();
+      this.store.gc({ retainDigests: options.retainDigests });
     } catch (e: any) {
       this.log(`gc failed (non-fatal): ${e?.message || e}`);
     }
@@ -448,8 +475,8 @@ export class ProviderChannelRuntime {
     channel: ProviderChannel,
     entry: ActivatableEntry,
     repoRoot: string,
-    stagingRoot: string,
-  ): Promise<ChannelSyncError | null> {
+    gate: ActivationGate | undefined,
+  ): Promise<ChannelSyncError | { blocked: ActivationBlock } | null> {
     const artifactDir = locateArtifactDir(repoRoot, entry);
     if (!artifactDir) {
       return {
@@ -486,6 +513,21 @@ export class ProviderChannelRuntime {
         message: `tree digest mismatch for "${entry.providerType}": channel=${entry.bundleDigest} recomputed=${digest} — refusing activation`,
         providerType: entry.providerType,
       };
+    }
+
+    // Post-verification gate: only now is the manifest trustworthy (its tree
+    // matched the published digest). A block discards the staged object and
+    // leaves the previous activation untouched.
+    if (gate?.afterVerify) {
+      const stagedDir = path.join(objStaging, entry.category, path.basename(artifactDir));
+      let pointer: ReturnType<ProviderChannelStore['getPointer']> = null;
+      try { pointer = this.store.getPointer(channel, entry.providerType); } catch { /* corrupt → treat as none */ }
+      const blocked = gate.afterVerify(entry, { dir: stagedDir, manifest: readProviderManifest(stagedDir) }, pointer);
+      if (blocked) {
+        this.store.removeStagingDir(objStaging);
+        this.log(`activation of ${entry.providerType}@${entry.providerVersion} blocked (${blocked.code}): ${blocked.reason}`);
+        return { blocked };
+      }
     }
 
     try {
@@ -527,7 +569,7 @@ function findTarballRepoRoot(extractDir: string): string | null {
  * manifest has a matching `type`. The directory name is NOT assumed to equal the provider type
  * (mirrors the Stage 1 generator's artifact indexing).
  */
-function locateArtifactDir(repoRoot: string, entry: ActivatableEntry): string | null {
+export function locateArtifactDir(repoRoot: string, entry: Pick<ActivatableEntry, 'category' | 'providerType'>): string | null {
   const categoryDir = path.join(repoRoot, entry.category);
   let candidates: fs.Dirent[];
   try {

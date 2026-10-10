@@ -72,6 +72,8 @@ export const KNOWN_PROVIDER_FIELDS = new Set<string>([
   'contractVersion',
   'capabilities',
   'providerVersion',
+  // Auto-update daemon-compatibility floor (docs/design/2026-10-10-provider-auto-update.md).
+  'minDaemonVersion',
   'status',
   'details',
   'autoApproveModes',

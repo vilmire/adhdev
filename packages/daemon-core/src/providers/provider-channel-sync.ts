@@ -18,7 +18,45 @@ import {
   collectSyncTargetTypes,
   type ChannelSyncReport,
 } from './channel/runtime.js';
-import type { ProviderChannelStalenessSnapshot } from './provider-loader-types.js';
+import type {
+  ProviderAutoUpdateRecord,
+  ProviderAutoUpdateStatus,
+  ProviderChannelStalenessSnapshot,
+} from './provider-loader-types.js';
+import {
+  evaluateCliCompatibility,
+  evaluateDaemonCompatibility,
+  evaluateVersionOrdering,
+  makeActivationBlock,
+  type ActivationBlock,
+  type ActivationGate,
+} from './channel/auto-update-gate.js';
+import { locateArtifactDir } from './channel/runtime.js';
+
+/**
+ * Gate mode for a verified sync (docs/design/2026-10-10-provider-auto-update.md §3.3):
+ *   - 'auto'     — periodic auto-update, daemon-update ride-along, bootstrap:
+ *                  every gate (ordering, rollback pin, override, daemon, CLI);
+ *   - 'explicit' — the user said "now" (activate_provider_updates /
+ *                  provider sync-channel): only the daemon-version gate, since
+ *                  a bundle the daemon cannot run is never what "now" means.
+ */
+export type ChannelSyncMode = 'auto' | 'explicit';
+
+/** Block codes whose verdict depends only on (bundle, daemon version, CLI version) — cacheable. */
+const INPUT_DETERMINED_BLOCKS = new Set(['DAEMON_VERSION_UNSUPPORTED', 'CLI_VERSION_UNSUPPORTED']);
+
+interface AutoUpdateRecordInternal extends ProviderAutoUpdateRecord {
+  digest: string;
+  /** daemon|cli inputs the verdict was taken under (blocked cache key). */
+  inputsKey: string;
+}
+
+export interface AutoUpdateRunResult {
+  probe: ProviderChannelStalenessSnapshot;
+  /** null when no sync ran (disabled, probe failed, nothing stale). */
+  report: ChannelSyncReport | null;
+}
 
 /**
  * ★STORE-RELOAD debounce: minimum gap between two activation-signature
@@ -56,6 +94,10 @@ export interface ProviderChannelSyncHost {
   loadDir(dir: string): number;
   hasLoadedProvider(type: string): boolean;
   hasUpstream(): boolean;
+  /** Dir the loaded provider resolves from (null = not loaded) — USER_OVERRIDE gate. */
+  providerSourceDir(type: string): string | null;
+  /** Last detected CLI version for a type (VersionArchive); null = unknown. */
+  detectedCliVersion(type: string): string | null;
 }
 
 export class ProviderChannelSync {
@@ -72,6 +114,19 @@ export class ProviderChannelSync {
   private activationSignature: string | null = null;
   /** Monotonic timestamp of the last signature sample, for the debounce. */
   private activationCheckedAtMs = 0;
+  /** Tail of the in-process sync queue: verified syncs never overlap (they share staging + gc). */
+  private syncTail: Promise<unknown> = Promise.resolve();
+  /**
+   * Every object digest this process has loaded. gc() keeps them although
+   * unreferenced: a running session spawned from an object keeps reading it
+   * (design doc §4). Resets with the process.
+   */
+  private readonly loadedDigests = new Set<string>();
+  /** Auto-update status (design doc §5). In memory; the log is the history. */
+  private autoUpdateEnabled = true;
+  private autoUpdateLastRunAt: string | null = null;
+  private autoUpdateLastError: string | undefined;
+  private readonly autoUpdateRecords = new Map<string, AutoUpdateRecordInternal>();
 
   constructor(
     private readonly host: ProviderChannelSyncHost,
@@ -139,7 +194,8 @@ export class ProviderChannelSync {
       this.host.log(`⚠ Verified channel: ${err.code}: ${err.message}`);
     }
     let count = 0;
-    for (const { objectDir } of result.activations) {
+    for (const { ref, objectDir } of result.activations) {
+      this.loadedDigests.add(ref.digest);
       count += this.host.loadDir(objectDir);
       this.objectRoots.push(objectDir);
     }
@@ -268,7 +324,18 @@ export class ProviderChannelSync {
      * (maybeSyncVerifiedChannelOnDaemonUpdate) must still run for the rest.
      */
     onlyTargetTypes?: readonly string[];
+    /** Gate mode (default 'explicit'). See ChannelSyncMode. */
+    mode?: ChannelSyncMode;
   }): Promise<ChannelSyncReport> {
+    // Serialize: the periodic auto-update, the boot chain and an explicit
+    // activation can otherwise overlap on one store — and gc() wipes every
+    // staging dir, including the other sync's in-flight extraction.
+    const run = this.syncTail.then(() => this.syncVerifiedChannelNow(options));
+    this.syncTail = run.catch(() => undefined);
+    return run;
+  }
+
+  private async syncVerifiedChannelNow(options?: Parameters<ProviderChannelSync['syncVerifiedChannel']>[0]): Promise<ChannelSyncReport> {
     if (!this.store) {
       return {
         channel: this.channel,
@@ -276,8 +343,10 @@ export class ProviderChannelSync {
         activated: [],
         skipped: [],
         errors: [{ code: 'STORE_CORRUPT', message: 'verified channel store is disabled' }],
+        blocked: [],
       };
     }
+    const mode: ChannelSyncMode = options?.mode ?? 'explicit';
     const runtime = this.runtime(this.store);
     const onlyTypes = (options?.onlyTargetTypes ?? [])
       .filter((t): t is string => typeof t === 'string' && t.trim() !== '')
@@ -291,7 +360,15 @@ export class ProviderChannelSync {
         if (typeof extra === 'string' && extra.trim()) targetTypes.add(extra.trim());
       }
     }
-    const report = await runtime.sync({ channel: this.channel, targetTypes, bootstrapAll: options?.bootstrapAll });
+    const pinsBefore = this.listVerifiedChannelPins();
+    const report = await runtime.sync({
+      channel: this.channel,
+      targetTypes,
+      bootstrapAll: options?.bootstrapAll,
+      gate: this.buildGate(mode),
+      retainDigests: this.loadedDigests,
+    });
+    this.recordGateOutcome(report, pinsBefore, mode);
     for (const skip of report.skipped) {
       this.host.log(`⚠ Verified channel skip: ${skip.reason}`);
     }
@@ -372,7 +449,7 @@ export class ProviderChannelSync {
       if (!this.bootstrapMarkerExists('pending') && this.hasActiveCliPointer()) return null;
       return this.runBootstrapSync();
     }
-    if (this.host.hasUpstream()) return this.syncVerifiedChannel();
+    if (this.host.hasUpstream()) return this.syncVerifiedChannel({ mode: 'auto' });
     // Fresh-install bootstrap: nothing installed, nothing activated. Make
     // sure the providers dir exists (nothing else creates it on this path —
     // the store's own mkdirs only cover providers/.store) and pull the whole
@@ -388,7 +465,7 @@ export class ProviderChannelSync {
    * registry row remains) can never succeed and does not hold the stamp back.
    */
   private async runBootstrapSync(): Promise<ChannelSyncReport> {
-    const report = await this.syncVerifiedChannel({ bootstrapAll: true });
+    const report = await this.syncVerifiedChannel({ bootstrapAll: true, mode: 'auto' });
     const blocking = report.errors.filter((e) => e.code !== 'ENTRY_ARTIFACT_NOT_FOUND');
     const clean = report.status !== 'error' && blocking.length === 0;
     this.writeBootstrapMarker(clean ? 'complete' : 'pending');
@@ -527,7 +604,7 @@ export class ProviderChannelSync {
     const stamp = this.readChannelActivationStamp();
     if (stamp?.daemonVersion === this.daemonVersion && stamp?.channel === this.channel) return null;
     this.host.log(`Daemon version transition detected (stamp=${stamp?.daemonVersion ?? 'none'}@${stamp?.channel ?? '-'} → ${this.daemonVersion}@${this.channel}) — running verified channel sync`);
-    return this.syncVerifiedChannel();
+    return this.syncVerifiedChannel({ mode: 'auto' });
   }
 
  /**
@@ -593,6 +670,147 @@ export class ProviderChannelSync {
     return this.stalenessSnapshot = { checkedAt, channel: this.channel, staleTypes, newTypes };
   }
 
+  /**
+   * PERIODIC AUTO-UPDATE (owner decision 2026-10-10; design doc
+   * docs/design/2026-10-10-provider-auto-update.md). One read-only listing;
+   * when pins are stale and auto-update is enabled, a sync RESTRICTED to the
+   * stale pinned types under the 'auto' gates. Never installs a new type
+   * (newTypes are not targets), never writes the daemon-version stamp (a
+   * restricted sync is partial), never touches running sessions (activation
+   * is a new object + pointer flip; loaded objects are retained by gc).
+   * Disabled → the same read-only probe the 08-10 badge used.
+   */
+  async runAutoUpdate(options: { enabled: boolean }): Promise<AutoUpdateRunResult> {
+    this.autoUpdateEnabled = options.enabled;
+    const probe = await this.checkVerifiedChannelStaleness();
+    this.autoUpdateLastRunAt = probe.checkedAt;
+    if (probe.error) {
+      this.autoUpdateLastError = probe.error;
+      return { probe, report: null };
+    }
+    this.autoUpdateLastError = undefined;
+    // A blocked verdict about a bundle the channel no longer offers is stale.
+    for (const [type, rec] of this.autoUpdateRecords) {
+      if (rec.state === 'blocked' && !probe.staleTypes.includes(type)) this.autoUpdateRecords.delete(type);
+    }
+    if (!options.enabled || probe.staleTypes.length === 0) return { probe, report: null };
+    const report = await this.syncVerifiedChannel({ onlyTargetTypes: probe.staleTypes, mode: 'auto' });
+    if (report.status === 'error') {
+      this.autoUpdateLastError = report.errors.map((e) => `${e.code}: ${e.message}`).join(' | ') || 'sync error';
+    }
+    return { probe, report };
+  }
+
+  /** Auto-update status for the dashboard (check_provider_updates). Pure read. */
+  getAutoUpdateStatus(): ProviderAutoUpdateStatus {
+    const types: Record<string, ProviderAutoUpdateRecord> = {};
+    for (const [type, rec] of this.autoUpdateRecords) {
+      const { digest: _digest, inputsKey: _inputsKey, ...pub } = rec;
+      types[type] = pub;
+    }
+    return {
+      enabled: this.autoUpdateEnabled,
+      lastRunAt: this.autoUpdateLastRunAt,
+      ...(this.autoUpdateLastError ? { lastError: this.autoUpdateLastError } : {}),
+      types,
+    };
+  }
+
+  private gateInputsKey(type: string): string {
+    return `${this.daemonVersion}|${this.host.detectedCliVersion(type) ?? ''}`;
+  }
+
+  /** True when the type loads from outside the channel store / .upstream (user dir, sibling checkout, external). */
+  private isOverriddenOutsideChannel(type: string): boolean {
+    const dir = this.host.providerSourceDir(type);
+    if (!dir || !this.store) return false;
+    const inside = (root: string) => {
+      const rel = path.relative(root, dir);
+      return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+    };
+    return !inside(this.store.rootDir) && !inside(this.host.upstreamDir);
+  }
+
+  /** Provider dir of the CURRENT active object for a pin (CLI-regression baseline), or null. */
+  private activeArtifactDir(pointer: ActivationPointer): string | null {
+    if (!this.store) return null;
+    try {
+      return locateArtifactDir(this.store.getObjectDir(pointer.active.digest), pointer.active);
+    } catch {
+      return null;
+    }
+  }
+
+  private buildGate(mode: ChannelSyncMode): ActivationGate {
+    const afterVerify: ActivationGate['afterVerify'] = (entry, artifact, pointer) => {
+      const daemon = evaluateDaemonCompatibility(entry, artifact.manifest, this.daemonVersion, pointer);
+      if (daemon || mode !== 'auto') return daemon;
+      return evaluateCliCompatibility(
+        entry,
+        artifact,
+        this.host.detectedCliVersion(entry.providerType),
+        pointer ? this.activeArtifactDir(pointer) : null,
+        pointer,
+      );
+    };
+    if (mode !== 'auto') return { afterVerify };
+    return {
+      beforeTransport: (entry, pointer) => {
+        // Every pre-transport gate is about an EXISTING pin; a first
+        // activation (bootstrap / explicit install) has nothing to protect.
+        if (!pointer) return null;
+        const ordering = evaluateVersionOrdering(entry, pointer);
+        if (ordering) return ordering;
+        if (this.isOverriddenOutsideChannel(entry.providerType)) {
+          return makeActivationBlock(entry, pointer, 'USER_OVERRIDE',
+            `${entry.providerType} loads from a local override (${this.host.providerSourceDir(entry.providerType)}) — the channel bundle would not take effect; auto-update skipped`);
+        }
+        // Same bundle, same inputs, same verdict — do not re-download it every run.
+        const prev = this.autoUpdateRecords.get(entry.providerType);
+        if (prev?.state === 'blocked' && prev.code && INPUT_DETERMINED_BLOCKS.has(prev.code)
+          && prev.digest === entry.bundleDigest && prev.inputsKey === this.gateInputsKey(entry.providerType)) {
+          return makeActivationBlock(entry, pointer, prev.code as ActivationBlock['code'], prev.reason ?? '', prev.requires);
+        }
+        return null;
+      },
+      afterVerify,
+    };
+  }
+
+  /** Fold a sync's activations/blocks into the auto-update status and the log. */
+  private recordGateOutcome(report: ChannelSyncReport, pinsBefore: Map<string, ActivationPointer>, mode: ChannelSyncMode): void {
+    const at = new Date().toISOString();
+    for (const ref of report.activated) {
+      const from = pinsBefore.get(ref.providerType)?.active.providerVersion ?? null;
+      if (mode === 'auto') {
+        this.autoUpdateRecords.set(ref.providerType, {
+          state: 'updated', from, to: ref.providerVersion, at, digest: ref.digest, inputsKey: this.gateInputsKey(ref.providerType),
+        });
+        this.host.log(`Provider auto-update: ${ref.providerType} ${from ?? '(none)'} → ${ref.providerVersion} (${this.channel})`);
+      } else {
+        this.autoUpdateRecords.delete(ref.providerType);
+      }
+    }
+    for (const b of report.blocked) {
+      const prev = this.autoUpdateRecords.get(b.providerType);
+      const inputsKey = this.gateInputsKey(b.providerType);
+      if (!(prev?.state === 'blocked' && prev.code === b.code && prev.digest === b.bundleDigest)) {
+        this.host.log(`Provider auto-update: ${b.providerType} ${b.fromVersion ?? '(none)'} → ${b.providerVersion} blocked (${b.code}): ${b.reason}`);
+      }
+      this.autoUpdateRecords.set(b.providerType, {
+        state: 'blocked',
+        from: b.fromVersion,
+        to: b.providerVersion,
+        at: prev?.state === 'blocked' && prev.digest === b.bundleDigest ? prev.at : at,
+        code: b.code,
+        reason: b.reason,
+        ...(b.requires ? { requires: b.requires } : {}),
+        digest: b.bundleDigest,
+        inputsKey,
+      });
+    }
+  }
+
   /** Last probe result (null until the first checkVerifiedChannelStaleness run). Pure read. */
   getChannelStalenessSnapshot(): ProviderChannelStalenessSnapshot | null {
     return this.stalenessSnapshot;
@@ -602,8 +820,9 @@ export class ProviderChannelSync {
   * The verified-channel PIN for each provider: what this daemon actually
   * loads, as opposed to what is sitting in `.upstream`.
   *
-  * Those two diverge by design. The store pin only advances on an explicit
-  * activation (`check_provider_updates` today), so a published fix can be
+  * Those two diverge by design. The store pin only advances on an activation
+  * (explicit, daemon-update ride-along, or the gated 6h auto-update — which
+  * can be off or blocked), so a published fix can be
   * present in the repo and in ~/.adhdev/providers/.upstream while the daemon
   * keeps running an older pinned object — which is exactly how a shipped kimi
   * resume fix stayed invisible on a machine for a full day. Anything that

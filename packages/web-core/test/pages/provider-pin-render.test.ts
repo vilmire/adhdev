@@ -4,9 +4,10 @@ import { describe, expect, it } from 'vitest'
 
 // PROVIDER SPEC PIN on the machine page.
 //
-// A provider fix does not reach a machine on its own: the verified-channel pin
-// advances only on an explicit activation (deliberate — reproducibility,
-// last-known-good, rollback). So a machine can load an old spec indefinitely
+// A provider fix used to reach a machine only on an explicit activation or a
+// daemon update; since 2026-10-10 the daemon also auto-activates gated updates
+// every 6h (docs/design/2026-10-10-provider-auto-update.md), but a blocked or
+// disabled auto-update still leaves the pin behind. So a machine can load an old spec indefinitely
 // with nothing on screen saying so. That is not hypothetical: a published kimi
 // resume fix sat unadopted for a day while `.upstream` showed the new version,
 // which is also why the pin must render SEPARATELY from the manifest/binary
@@ -115,6 +116,8 @@ describe('i18n', () => {
       'labelSpecPin', 'labelActivatedAt', 'labelPreviousPin', 'labelDigest',
       'specPinStale', 'specPinStaleHint', 'updateInline', 'updateInlineHint',
       'specPinUpdating', 'specPinRollback', 'specPinRollbackHint', 'specPinRollingBack',
+      'autoUpdated', 'autoUpdateBlockedDaemon', 'autoUpdateBlockedCli', 'autoUpdateBlockedRollback',
+      'autoUpdateBlockedOverride', 'autoUpdateBlockedDowngrade',
     ]
     for (const lang of ['en', 'ko', 'ja', 'zh-CN', 'es']) {
       const file = path.join(import.meta.dirname, `../../src/i18n/locales/${lang}/common.json`)

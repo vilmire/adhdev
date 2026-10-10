@@ -240,6 +240,7 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
                     digest: row.digest ?? null,
                     activatedAt: row.activatedAt ?? null,
                     previousVersion: row.previousVersion ?? null,
+                    autoUpdate: row.autoUpdate && typeof row.autoUpdate === 'object' ? row.autoUpdate : null,
                 }
             }
             setPins(next)

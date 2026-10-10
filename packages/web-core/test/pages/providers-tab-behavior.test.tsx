@@ -206,6 +206,25 @@ describe('ProvidersTab — no background refetch', () => {
     })
 })
 
+describe('ProvidersTab — auto-update verdict (design 2026-10-10)', () => {
+    it('B-AU: the expanded row says what was auto-updated, or why an update is held back', async () => {
+        ;(h.pins[0] as any).autoUpdate = {
+            state: 'blocked', from: '1.0.0', to: '1.1.0', code: 'DAEMON_VERSION_UNSUPPORTED',
+            reason: 'codex-cli@1.1.0 requires daemon >= 1.0.81 (running 1.0.80)', requires: { daemon: '1.0.81' },
+        }
+        ;(h.pins[1] as any).autoUpdate = { state: 'updated', from: '0.9.0', to: '1.0.0' }
+        const send = makeSend(h)
+        await render({ machineId: 'm1', sendDaemonCommand: send, providers: makeProviders() })
+        expect(container.textContent).not.toContain('held')
+        for (const name of ['Codex CLI', 'Claude Code']) {
+            await act(async () => { (rowCard(name).querySelector('button') as HTMLButtonElement).click() })
+        }
+        await flush()
+        expect(rowCard('Codex CLI').textContent).toContain('Update 1.1.0 held: needs daemon ≥ 1.0.81')
+        expect(rowCard('Claude Code').textContent).toContain('Auto-updated 0.9.0 → 1.0.0')
+    })
+})
+
 describe('ProvidersTab — inline per-provider Update', () => {
     it('B6: a stale provider shows "Update" in its collapsed header; clicking updates ONLY that provider', async () => {
         const send = makeSend(h)

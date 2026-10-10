@@ -171,6 +171,45 @@ export interface ProviderPinInfo {
     activatedAt?: string | null
     /** Rollback target; absent means there is nothing to roll back to. */
     previousVersion?: string | null
+    /**
+     * Daemon auto-update verdict for this provider (docs/design/
+     * 2026-10-10-provider-auto-update.md): what it auto-activated, or why
+     * an available update is held back. Absent on older daemons.
+     */
+    autoUpdate?: ProviderAutoUpdateInfo | null
+}
+
+export interface ProviderAutoUpdateInfo {
+    state: 'updated' | 'blocked'
+    from?: string | null
+    to: string
+    code?: string
+    reason?: string
+    requires?: { daemon?: string; cliVersion?: string; cliRanges?: string[] }
+}
+
+/** One line for the auto-update verdict; null when there is nothing to say. */
+function autoUpdateLine(info: ProviderAutoUpdateInfo | null | undefined, t: (key: string, opts?: any) => string): string | null {
+    if (!info) return null
+    if (info.state === 'updated') return t('machine.providerRow.autoUpdated', { from: info.from ?? '—', to: info.to })
+    switch (info.code) {
+        case 'DAEMON_VERSION_UNSUPPORTED':
+            return t('machine.providerRow.autoUpdateBlockedDaemon', { to: info.to, daemon: info.requires?.daemon ?? '?' })
+        case 'CLI_VERSION_UNSUPPORTED':
+            return t('machine.providerRow.autoUpdateBlockedCli', {
+                to: info.to,
+                cli: info.requires?.cliVersion ?? '?',
+                ranges: (info.requires?.cliRanges ?? []).join(', ') || '—',
+            })
+        case 'ROLLBACK_PINNED':
+            return t('machine.providerRow.autoUpdateBlockedRollback', { to: info.to })
+        case 'USER_OVERRIDE':
+            return t('machine.providerRow.autoUpdateBlockedOverride')
+        case 'NOT_AN_UPGRADE':
+            return t('machine.providerRow.autoUpdateBlockedDowngrade', { to: info.to })
+        default:
+            return info.reason ?? null
+    }
 }
 
 export default function InstalledProviderRow({
@@ -429,6 +468,15 @@ export default function InstalledProviderRow({
                                 onToggle={() => { void onQuotaAccountLabelToggle(!quotaAccountLabelEnabled) }}
                             />
                         </div>
+                    )}
+                    {/* Auto-update verdict (design 2026-10-10): NOT behind Advanced —
+                        it explains why an offered update has not landed. */}
+                    {autoUpdateLine(pin?.autoUpdate, t) && (
+                        <div
+                            className={`text-3xs ${pin?.autoUpdate?.state === 'blocked' ? 'text-amber-400' : 'text-text-muted'}`}
+                            title={pin?.autoUpdate?.reason}
+                            data-testid="provider-row-auto-update"
+                        >{autoUpdateLine(pin?.autoUpdate, t)}</div>
                     )}
                     {/* Details: manifest metadata, spec pin, digest, source identity —
                         developer detail, shown only with the tab's Advanced toggle.

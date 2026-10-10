@@ -8,9 +8,10 @@
  */
 
 import { LOG } from '../../logging/logger.js';
-import { getConfigDir } from '../../config/config.js';
+import { getConfigDir, loadConfig } from '../../config/config.js';
 import { configDirChannelMismatch } from '../../config/config-dir.js';
-import { isPreviewReleaseChannel, PROVIDER_CHANNEL_ENV_VAR } from '../../providers/channel/contract.js';
+import { isPreviewReleaseChannel, PROVIDER_CHANNEL_ENV_VAR, resolveProviderAutoUpdate } from '../../providers/channel/contract.js';
+import { startProviderAutoUpdateLoop } from '../../providers/provider-auto-update-loop.js';
 import { ProviderLoader } from '../../providers/provider-loader.js';
 import { providerLoaderConfigOptions } from '../../providers/provider-loader-config.js';
 import { VersionArchive, detectAllVersions } from '../../providers/version-archive.js';
@@ -18,8 +19,6 @@ import { detectIDEs, type IDEInfo } from '../../detection/ide-detector.js';
 import { detectCLI, detectCLIs, setDefaultProviderLoader } from '../../detection/cli-detector.js';
 import type { PlatformStage, ProvidersStage } from './types.js';
 
-const STALENESS_FIRST_DELAY_MS = 10 * 60_000;
-const STALENESS_INTERVAL_MS = 24 * 60 * 60_000;
 
 type SyncReport = { status: string; activated: unknown[]; errors: Array<{ code: string; message: string }> } | null | undefined;
 
@@ -136,36 +135,47 @@ export async function bootProviders(s1: PlatformStage): Promise<ProvidersStage> 
     // the previous store and retry next boot).
     const channelBootSync = runChannelBootSync(providerLoader, () => refreshProviderAvailability());
 
-    // Verified-channel staleness probe (owner decision 2026-08-10, option A): a
-    // read-only listing 10 minutes after boot and every 24h so dashboards can
-    // badge stale pins. Never on the boot path, never from a status path.
+    // Periodic provider auto-update (owner decision 2026-10-10; replaces the
+    // 08-10 option-A 24h read-only probe in the same slot). Every run refreshes
+    // the badge snapshot; when `providerAutoUpdate` is on (default) it also
+    // activates newer bundles of already-pinned types behind compatibility
+    // gates (docs/design/2026-10-10-provider-auto-update.md). Never on the boot
+    // path, never from a status path, never overlapping the boot sync chain.
     const staleListeners: Array<() => void> = [];
-    const runStalenessProbe = async () => {
-        try {
-            const snap = await providerLoader.checkVerifiedChannelStaleness();
-            if (snap.error) {
-                LOG.debug('Provider', `Channel staleness probe failed (kept previous snapshot): ${snap.error}`);
-            } else if (snap.staleTypes.length > 0 || snap.newTypes.length > 0) {
-                LOG.info('Provider', `Channel staleness: ${snap.staleTypes.length} stale [${snap.staleTypes.join(', ')}], ${snap.newTypes.length} never-installed [${snap.newTypes.join(', ')}] (${snap.channel})`);
-                for (const listener of staleListeners) {
-                    try { listener(); } catch { /* a listener never breaks the probe */ }
-                }
+    const activatedListeners: Array<() => void> = [];
+    const autoUpdateLoop = startProviderAutoUpdateLoop({
+        runAutoUpdate: (options) => providerLoader.runAutoUpdate(options),
+        isEnabled: () => {
+            let configured: boolean | undefined;
+            try { configured = loadConfig().providerAutoUpdate; } catch { configured = appConfig.providerAutoUpdate; }
+            return resolveProviderAutoUpdate(configured);
+        },
+        bootSync: channelBootSync,
+        onActivated: async () => {
+            providerLoader.registerToDetector();
+            await refreshProviderAvailability();
+            for (const listener of activatedListeners) {
+                try { listener(); } catch { /* a listener never breaks the loop */ }
             }
-        } catch (e: any) {
-            LOG.debug('Provider', `Channel staleness probe error: ${e?.message || e}`);
-        }
-    };
-    const stalenessInitialTimer = setTimeout(() => { void runStalenessProbe(); }, STALENESS_FIRST_DELAY_MS);
-    stalenessInitialTimer.unref?.();
-    const stalenessIntervalTimer = setInterval(() => { void runStalenessProbe(); }, STALENESS_INTERVAL_MS);
-    stalenessIntervalTimer.unref?.();
+        },
+        onStale: () => {
+            for (const listener of staleListeners) {
+                try { listener(); } catch { /* a listener never breaks the loop */ }
+            }
+        },
+        log: {
+            info: (msg) => LOG.info('Provider', msg),
+            debug: (msg) => LOG.debug('Provider', msg),
+        },
+    });
     const stalenessProbe = {
         stop() {
-            clearTimeout(stalenessInitialTimer);
-            clearInterval(stalenessIntervalTimer);
+            autoUpdateLoop.stop();
             staleListeners.length = 0;
+            activatedListeners.length = 0;
         },
         onStale(cb: () => void) { staleListeners.push(cb); },
+        onActivated(cb: () => void) { activatedListeners.push(cb); },
     };
 
     // The default loader for loader-less provider-version reads (the self node's

@@ -329,6 +329,47 @@ export function matchesVersion(current: string, range: string): boolean {
   }
 }
 
+/**
+ * The spec-file candidate walk for one CLI version — the SINGLE definition
+ * shared by the loader (provider-loader-spec-wiring.ts, which picks the spec
+ * a launch runs) and the auto-update CLI-compatibility gate
+ * (channel/auto-update-gate.ts, which asks whether a NEW bundle would still
+ * give this machine's installed CLI a spec). Two copies of this walk would be
+ * two answers to "does this bundle run here".
+ *
+ * Order: every `compatibility[i].spec` whose `ideVersion` is unpinned or
+ * matches `version` (all of them when the version is unknown — the runtime
+ * is deliberately permissive there), then `specs/default.json`, then the
+ * legacy `spec.json`. Paths are returned whether or not they exist.
+ */
+export function specCandidatePaths(
+  providerDir: string,
+  compatibility: unknown,
+  version: string | null | undefined,
+): string[] {
+  const candidates: string[] = [];
+  if (Array.isArray(compatibility)) {
+    for (const entry of compatibility as Array<{ spec?: unknown; ideVersion?: unknown }>) {
+      if (typeof entry?.spec !== 'string') continue;
+      const range = typeof entry.ideVersion === 'string' ? entry.ideVersion : '';
+      const matches = !range || !version || matchesVersion(version, range);
+      if (matches) candidates.push(path.join(providerDir, entry.spec));
+    }
+  }
+  candidates.push(path.join(providerDir, 'specs', 'default.json'));
+  candidates.push(path.join(providerDir, 'spec.json'));
+  return candidates;
+}
+
+/** First existing spec file for `version` (see specCandidatePaths), or null — the launch's "no resolvable spec". */
+export function resolveSpecPathForVersion(
+  providerDir: string,
+  compatibility: unknown,
+  version: string | null | undefined,
+): string | null {
+  return specCandidatePaths(providerDir, compatibility, version).find((p) => fs.existsSync(p)) ?? null;
+}
+
 export function compareVersions(a: string, b: string): number {
   const normalize = (v: string) => v.split(/[-_+]/)[0].split('.').map(x => parseInt(x, 10) || 0);
   const pa = normalize(a);

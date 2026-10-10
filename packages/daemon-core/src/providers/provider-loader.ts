@@ -62,7 +62,7 @@ import { applySpecNativeHistoryWiring } from './provider-loader-spec-wiring.js';
 import { ProviderChannelSync } from './provider-channel-sync.js';
 import { ProviderRegistry } from './provider-registry.js';
 import { detectDefaultUserDir } from './provider-loader-sibling.js';
-import type { ProviderChannelStalenessSnapshot } from './provider-loader-types.js';
+import type { ProviderAutoUpdateStatus, ProviderChannelStalenessSnapshot } from './provider-loader-types.js';
 
 
 
@@ -211,6 +211,8 @@ export class ProviderLoader extends ProviderRegistry {
         loadDir: (dir) => this.loadDir(dir),
         hasLoadedProvider: (type) => this.providers.has(type),
         hasUpstream: () => this.hasUpstream(),
+        providerSourceDir: (type) => this.findProviderDirInternal(type),
+        detectedCliVersion: (type) => this.versionArchive?.getLatest(type) ?? null,
       },
       options?.channelStore === null
         ? null
@@ -550,6 +552,9 @@ export class ProviderLoader extends ProviderRegistry {
   }
   checkVerifiedChannelStaleness(): Promise<ProviderChannelStalenessSnapshot> { return this.channelSync.checkVerifiedChannelStaleness(); }
   getChannelStalenessSnapshot(): ProviderChannelStalenessSnapshot | null { return this.channelSync.getChannelStalenessSnapshot(); }
+  /** Periodic gated auto-update (docs/design/2026-10-10-provider-auto-update.md). */
+  runAutoUpdate(options: { enabled: boolean }): ReturnType<ProviderChannelSync['runAutoUpdate']> { return this.channelSync.runAutoUpdate(options); }
+  getAutoUpdateStatus(): ProviderAutoUpdateStatus { return this.channelSync.getAutoUpdateStatus(); }
   listVerifiedChannelPins(): Map<string, ActivationPointer> { return this.channelSync.listVerifiedChannelPins(); }
   rollbackVerifiedChannel(providerType: string): string | null { return this.channelSync.rollbackVerifiedChannel(providerType); }
   deactivateVerifiedChannel(providerType: string): boolean { return this.channelSync.deactivateVerifiedChannel(providerType); }

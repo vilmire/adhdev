@@ -69,6 +69,7 @@ export async function bootSessionCore(s2: ProvidersStage): Promise<SessionCoreSt
         if (outcome.activated > 0) emitFacts('provider_channel_sync');
     });
     s2.stalenessProbe.onStale(() => emitFacts('provider_staleness'));
+    s2.stalenessProbe.onActivated(() => emitFacts('provider_channel_sync'));
 
     // CLI PTY output leaves through the fanout; the host runtime attaches the sink.
     const outputFanout = new SessionOutputFanout();

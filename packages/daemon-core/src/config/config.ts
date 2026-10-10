@@ -197,6 +197,14 @@ export interface ADHDevConfig {
     providerChannel?: string;
 
     /**
+     * Periodic gated auto-update of already-installed provider types
+     * (docs/design/2026-10-10-provider-auto-update.md). Absent = ON (owner
+     * decision 2026-10-10); `false` keeps only the read-only staleness probe.
+     * `ADHDEV_PROVIDER_AUTO_UPDATE=0|false|off` overrides it per process.
+     */
+    providerAutoUpdate?: boolean;
+
+    /**
      * Development-only opt-in: allow the legacy unverified `main.tar.gz`
      * upstream fallback. Refused whenever the resolved provider channel is
      * 'stable' (production mode), regardless of this flag.
@@ -397,6 +405,7 @@ function normalizeConfig(raw: unknown): ADHDevConfig & { activeWorkspaceId?: str
         registryUrl: asOptionalString(parsed.registryUrl),
         providerTarballUrl: asOptionalString(parsed.providerTarballUrl),
         providerChannel: asOptionalString(parsed.providerChannel),
+        ...(typeof parsed.providerAutoUpdate === 'boolean' ? { providerAutoUpdate: parsed.providerAutoUpdate } : {}),
         // Phase 3: legacy runtime channel field, read-only and never written
         // anymore (channel is a build-time identity — track-identity.ts). An
         // explicit preview/next value is still honored so the provider-channel

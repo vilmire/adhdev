@@ -25,6 +25,31 @@ export interface ProviderChannelStalenessSnapshot {
   error?: string;
 }
 
+/**
+ * Per-type outcome of the last gated activation decision
+ * (docs/design/2026-10-10-provider-auto-update.md §5). `updated` is recorded
+ * only for automatic activations; `blocked` for any gated skip.
+ */
+export interface ProviderAutoUpdateRecord {
+  state: 'updated' | 'blocked';
+  /** Active pin version before the decision (null = none). */
+  from: string | null;
+  /** Channel version activated (updated) or declined (blocked). */
+  to: string;
+  at: string;
+  code?: string;
+  reason?: string;
+  requires?: { daemon?: string; cliVersion?: string; cliRanges?: string[] };
+}
+
+export interface ProviderAutoUpdateStatus {
+  enabled: boolean;
+  /** Last periodic check (ISO), null until the first one ran. */
+  lastRunAt: string | null;
+  lastError?: string;
+  types: Record<string, ProviderAutoUpdateRecord>;
+}
+
 export interface MachineProviderCheckResult {
   ok: boolean;
   stage?: 'detection' | 'runnable' | 'verification';

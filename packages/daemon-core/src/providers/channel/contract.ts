@@ -144,6 +144,21 @@ export function resolveProviderChannel(
   return previewByBuildTrack || isPreviewReleaseChannel(releaseChannel) ? 'preview' : DEFAULT_PROVIDER_CHANNEL;
 }
 
+/** Env var that turns the periodic provider auto-update off (0/false/off/no) or on (1/true/on/yes) per process. */
+export const PROVIDER_AUTO_UPDATE_ENV_VAR = 'ADHDEV_PROVIDER_AUTO_UPDATE';
+
+/**
+ * Effective auto-update switch (docs/design/2026-10-10-provider-auto-update.md §6):
+ * env wins when it is a recognizable boolean; otherwise config, where only an
+ * explicit `false` disables (absent = ON, owner decision 2026-10-10).
+ */
+export function resolveProviderAutoUpdate(configured: boolean | undefined, env: NodeJS.ProcessEnv = process.env): boolean {
+  const raw = (env[PROVIDER_AUTO_UPDATE_ENV_VAR] ?? '').trim().toLowerCase();
+  if (raw === '0' || raw === 'false' || raw === 'off' || raw === 'no') return false;
+  if (raw === '1' || raw === 'true' || raw === 'on' || raw === 'yes') return true;
+  return configured !== false;
+}
+
 /**
  * Normalized channel entry consumed by the runtime. This is the intersection
  * of the Stage 1A channel-manifest entry shape and the Stage 1B registry

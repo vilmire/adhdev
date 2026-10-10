@@ -17,7 +17,7 @@ import {
 } from './native-history/dispatcher.js';
 import type { ProviderModule, ResolvedProvider } from './contracts.js';
 import {
-  matchesVersion,
+  specCandidatePaths,
   synthesizeControlsFromControlBar,
   registerProviderScriptRootSafely,
 } from './provider-loader-support.js';
@@ -57,21 +57,7 @@ export function applySpecNativeHistoryWiring(
       //   2. specs/default.json — explicit fallback
       //   3. spec.json — legacy single-spec layout
       // Missing files fall through silently to the next candidate.
-      const candidates: string[] = [];
-      if (Array.isArray((base as any).compatibility)) {
-        for (const entry of (base as any).compatibility) {
-          if (typeof entry?.spec !== 'string') continue;
-          // If currentVersion is unknown (cli-manager hasn't probed yet)
-          // we still let compatibility entries that don't pin a version
-          // through, plus any entry whose pin matches.
-          const matches = !entry.ideVersion
-            || (currentVersion && matchesVersion(currentVersion, entry.ideVersion))
-            || !currentVersion;
-          if (matches) candidates.push(path.join(providerDir, entry.spec));
-        }
-      }
-      candidates.push(path.join(providerDir, 'specs', 'default.json'));
-      candidates.push(path.join(providerDir, 'spec.json'));
+      const candidates = specCandidatePaths(providerDir, (base as any).compatibility, currentVersion);
       const specPath = candidates.find((p: string) => fs.existsSync(p));
       // native_history block, resolved from either the separate spec file
       // (snake_case `native_history`) or — for v1-manifest-only providers that
