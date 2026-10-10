@@ -20,7 +20,8 @@ import StandaloneLayout from './StandaloneLayout'
 import SetupWizardPage from './SetupWizardPage'
 import StandaloneAbout from './StandaloneAbout'
 import StandaloneSettings from './StandaloneSettings'
-import StandaloneOnboarding, { hasCompletedOnboarding } from './StandaloneOnboarding'
+import StandaloneOnboarding from './StandaloneOnboarding'
+import { shouldShowOnboarding } from './onboarding-gate'
 import { resolveInteractivePromptGateScope } from './interactive-prompt-gate-scope'
 import '@adhdev/web-core/index.css'
 
@@ -219,30 +220,23 @@ function SingleMachineRedirect() {
 
 /**
  * Show the first-boot onboarding dialog when:
- *   - the user has not completed onboarding before (localStorage flag), AND
- *   - the daemon currently has 0 installed providers.
+ *   - the user has not dismissed it before (localStorage marker), AND
+ *   - no provider is enabled on this machine yet.
  *
- * If either is false, render nothing. After Done/Skip, the dialog persists
- * the flag and never reopens.
+ * The decision lives in ./onboarding-gate (see its header for why this is
+ * "0 enabled" and no longer "0 installed"). After Done/Skip the dialog persists
+ * the marker and never reopens; enabling a provider anywhere closes it too.
  */
 function OnboardingGate() {
     const [show, setShow] = useState(false)
 
     useEffect(() => {
         let cancelled = false
-        if (hasCompletedOnboarding()) return
-        standaloneFetch('/api/v1/providers/installed')
-            // A non-OK reply (e.g. 401 on a token-gated daemon) says nothing about what is
-            // installed — never read it as "zero providers" and pop the first-run dialog.
-            .then(r => r.ok ? r.json() : null)
-            .then((data: { providers?: unknown[] } | null) => {
-                if (cancelled || !data) return
-                if ((data.providers ?? []).length === 0) {
-                    window.dispatchEvent(new Event(FIRST_RUN_DIALOG_EVENT))
-                    setShow(true)
-                }
-            })
-            .catch(() => { /* ignore — likely no daemon yet */ })
+        void shouldShowOnboarding().then((shouldShow) => {
+            if (cancelled || !shouldShow) return
+            window.dispatchEvent(new Event(FIRST_RUN_DIALOG_EVENT))
+            setShow(true)
+        })
         return () => { cancelled = true }
     }, [])
 

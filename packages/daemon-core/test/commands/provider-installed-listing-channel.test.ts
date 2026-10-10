@@ -18,7 +18,8 @@ import * as path from 'node:path';
 //
 // The listing now merges both sources: `.upstream` rows stay exactly as they
 // were (legacy daemons), and every verified-channel pin without an `.upstream`
-// row is added from the pin itself.
+// row is added from the pin itself — in list_installed_providers as well as in
+// the check_provider_updates rows built from it.
 
 const tmpDirs: string[] = [];
 afterEach(() => {
@@ -130,14 +131,67 @@ describe('check_provider_updates rows — channel store + .upstream merge', () =
         expect(res.kimi).toMatchObject({ activeVersion: '1.0.3', upstreamVersion: '1.0.0', previousVersion: '1.0.0' });
         expect(res['codex-cli']).toMatchObject({ activeVersion: '1.1.28' });
     }, 30000);
+});
 
-    it('list_installed_providers itself stays .upstream-only (standalone onboarding gate reads it)', async () => {
+// This block used to pin the OPPOSITE: "list_installed_providers itself stays
+// .upstream-only (standalone onboarding gate reads it)". The gate read
+// `GET /api/v1/providers/installed` as "0 installed → show onboarding", so the
+// listing had to stay empty on a channel-store daemon or the dialog would have
+// silently disappeared. The gate now keys on provider enablement
+// (web-standalone/src/onboarding-gate.ts), nothing depends on the emptiness any
+// more, and the listing reports what is actually installed.
+describe('list_installed_providers — channel store + .upstream merge', () => {
+    it('channel-store only (.upstream absent): the pins ARE the installed set', async () => {
         const handler = await makeHandler({
             upstream: NO_UPSTREAM,
-            pins: new Map([['antigravity-cli', pin('antigravity-cli', '1.2.18')]]),
+            pins: new Map([
+                ['antigravity-cli', pin('antigravity-cli', '1.2.18')],
+                ['antigravity', pin('antigravity', '1.0.1', 'ide')],
+            ]),
         });
+        expect(handler.handleListInstalledProviders({})).toEqual({
+            success: true,
+            providers: [
+                { type: 'antigravity-cli', category: 'cli', version: '1.2.18', source: 'channel', channel: 'preview' },
+                { type: 'antigravity', category: 'ide', version: '1.0.1', source: 'channel', channel: 'preview' },
+            ],
+        });
+    });
+
+    it('legacy only (no pins): .upstream rows keep their exact shape', async () => {
+        const upstream = upstreamRoot([{ type: 'kimi', version: '1.0.0', modelOptions: ['k2'] }]);
+        const handler = await makeHandler({ upstream, pins: new Map() });
+        expect(handler.handleListInstalledProviders({})).toEqual({
+            success: true,
+            providers: [{
+                type: 'kimi', category: 'cli', version: '1.0.0',
+                path: path.join(upstream, 'cli', 'kimi', 'provider.v1.json'),
+                modelOptions: ['k2'],
+            }],
+        });
+    });
+
+    it('mixed: an .upstream type is listed once (its row wins), pin-only types are added', async () => {
+        const handler = await makeHandler({
+            upstream: upstreamRoot([{ type: 'kimi', version: '1.0.0' }]),
+            pins: new Map([
+                ['kimi', pin('kimi', '1.0.3', 'cli', '1.0.0')],
+                ['codex-cli', pin('codex-cli', '1.1.28')],
+            ]),
+        });
+        const res = handler.handleListInstalledProviders({});
+        expect(res.providers.map((p: any) => [p.type, p.version, p.source])).toEqual([
+            ['kimi', '1.0.0', undefined],
+            ['codex-cli', '1.1.28', 'channel'],
+        ]);
+    });
+
+    it('nothing installed anywhere: an empty listing, and a throwing pin read does not fail it', async () => {
+        const handler = await makeHandler({ upstream: NO_UPSTREAM, pins: new Map() });
         expect(handler.handleListInstalledProviders({})).toEqual({ success: true, providers: [] });
-    }, 30000);
+        handler._ctx.providerLoader.listVerifiedChannelPins = () => { throw new Error('store unreadable'); };
+        expect(handler.handleListInstalledProviders({})).toEqual({ success: true, providers: [] });
+    });
 });
 
 describe('check_provider_updates — rows on a channel-store daemon', () => {

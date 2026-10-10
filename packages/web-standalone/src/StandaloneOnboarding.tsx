@@ -1,23 +1,24 @@
 /**
  * StandaloneOnboarding — first-boot dialog for selecting which providers to
- * install on a fresh daemon.
+ * set up on a fresh daemon.
  *
- * Trigger: shown once when the daemon has 0 installed providers AND
- * localStorage.adhdev_onboarding_done is unset. The user can also dismiss
- * to come back later via Machines > Providers > Add provider.
+ * Trigger: shown when no provider is enabled on this machine yet AND
+ * localStorage.adhdev_onboarding_done is unset (see ./onboarding-gate). The
+ * user can also dismiss to come back later via Machines > Providers.
  *
  * Default selection: the 3 officially supported CLI providers — Claude Code,
  * Codex, Antigravity. Everything else stays unchecked.
  *
- * Install uses the daemon's install_provider_manifest command (POSTed
- * through the localhost HTTP API, same path /api/v1/providers/install
- * the curl test surface uses).
+ * Install = install_provider_manifest (POST /api/v1/providers/install) and
+ * then, for CLI providers, the per-machine enable the Providers tab toggles —
+ * see setUpOnboardingProvider in ./onboarding-gate.
  */
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { AlertBanner, Button, Dialog } from '@adhdev/web-core'
 import { ProviderLogo } from '@adhdev/web-core'
 import { standaloneFetch } from './standalone-auth-client'
+import { markOnboardingCompleted, setUpOnboardingProvider, type OnboardingSetupResult } from './onboarding-gate'
 
 const DEFAULTS = ['claude-cli', 'codex-cli', 'antigravity-cli']
 
@@ -28,18 +29,12 @@ interface RegistryProvider {
     manifest?: { icon?: string; details?: string }
 }
 
-interface InstallResult {
-    type: string
-    ok: boolean
-    error?: string
-}
+type InstallResult = OnboardingSetupResult
 
 interface StandaloneOnboardingProps {
     /** Called after the dialog is dismissed (success or skip). */
     onDone: () => void
 }
-
-const STORAGE_KEY = 'adhdev_onboarding_done'
 
 type CategoryFilter = 'all' | 'cli' | 'ide' | 'extension'
 
@@ -115,36 +110,26 @@ export default function StandaloneOnboarding({ onDone }: StandaloneOnboardingPro
     const handleInstall = useCallback(async () => {
         if (selected.size === 0) {
             // Nothing to install — dismiss
-            localStorage.setItem(STORAGE_KEY, '1')
+            markOnboardingCompleted()
             onDone()
             return
         }
         setInstalling(true)
         const out: InstallResult[] = []
         for (const type of selected) {
-            try {
-                const res = await standaloneFetch('/api/v1/providers/install', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ type }),
-                })
-                const body = await res.json().catch(() => ({})) as { success?: boolean; error?: string }
-                out.push({ type, ok: !!body.success, error: body.error })
-            } catch (e) {
-                out.push({ type, ok: false, error: e instanceof Error ? e.message : String(e) })
-            }
+            out.push(await setUpOnboardingProvider({ type, category: providers.find(p => p.type === type)?.category }))
         }
         setResults(out)
         setInstalling(false)
         // If all succeeded, persist and dismiss. If some failed, keep dialog
         // open so user can retry; clicking Done from there will close.
         if (out.every(r => r.ok)) {
-            localStorage.setItem(STORAGE_KEY, '1')
+            markOnboardingCompleted()
         }
-    }, [selected, onDone])
+    }, [selected, providers, onDone])
 
     const handleSkip = useCallback(() => {
-        localStorage.setItem(STORAGE_KEY, '1')
+        markOnboardingCompleted()
         onDone()
     }, [onDone])
 
@@ -182,7 +167,7 @@ export default function StandaloneOnboarding({ onDone }: StandaloneOnboardingPro
                             onClick={() => {
                                 if (results) {
                                     // Already installed; just close.
-                                    localStorage.setItem(STORAGE_KEY, '1')
+                                    markOnboardingCompleted()
                                     onDone()
                                 } else {
                                     void handleInstall()
@@ -284,8 +269,4 @@ export default function StandaloneOnboarding({ onDone }: StandaloneOnboardingPro
             </div>
         </Dialog>
     )
-}
-
-export function hasCompletedOnboarding(): boolean {
-    try { return localStorage.getItem(STORAGE_KEY) === '1' } catch { return false }
 }

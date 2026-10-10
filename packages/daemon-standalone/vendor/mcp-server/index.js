@@ -136194,10 +136194,13 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       };
     }
     function handleListInstalledProviders(host, _args) {
+      return { success: true, providers: mergeChannelPinRows(host, listUpstreamInstalledProviders(host)) };
+    }
+    function listUpstreamInstalledProviders(host) {
       const fs101 = require("fs");
       const path90 = require("path");
       const installRoot = host.getUpstreamInstallRoot();
-      if (!fs101.existsSync(installRoot)) return { success: true, providers: [] };
+      if (!fs101.existsSync(installRoot)) return [];
       const CATEGORIES = ["cli", "ide", "extension"];
       const items = [];
       for (const category of CATEGORIES) {
@@ -136230,7 +136233,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           }
         }
       }
-      return { success: true, providers: items };
+      return items;
     }
     function mergeChannelPinRows(host, upstreamRows) {
       const items = [...upstreamRows];

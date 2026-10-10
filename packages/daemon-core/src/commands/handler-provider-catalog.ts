@@ -125,26 +125,32 @@ export async function handleInstallProviderManifest(host: ProviderCatalogCommand
 }
 
 /**
- * Return everything currently installed in the upstream cache with its
- * version. This is the "what does this daemon have" answer used both by
- * the UI and by the update checker.
+ * Return everything this daemon has installed, with its version: the
+ * `.upstream` cache rows plus every verified-channel pin that has no
+ * `.upstream` row (see mergeChannelPinRows). This is the "what does this daemon
+ * have" answer used both by the UI (`GET /api/v1/providers/installed`) and by
+ * the update checker.
  */
 export function handleListInstalledProviders(host: ProviderCatalogCommandHost, _args: any): CommandResult {
+    return { success: true, providers: mergeChannelPinRows(host, listUpstreamInstalledProviders(host)) };
+}
+
+type UpstreamInstalledProvider = InstalledProviderRow & {
+    path: string;
+    modelOptions?: string[];
+    thinkingLevelOptions?: string[];
+};
+
+/** The `.upstream` half of the installed listing — legacy (pre channel-store) installs. */
+function listUpstreamInstalledProviders(host: ProviderCatalogCommandHost): UpstreamInstalledProvider[] {
     const fs = require('fs') as typeof import('fs');
     const path = require('path') as typeof import('path');
 
     const installRoot = host.getUpstreamInstallRoot();
-    if (!fs.existsSync(installRoot)) return { success: true, providers: [] };
+    if (!fs.existsSync(installRoot)) return [];
 
     const CATEGORIES = ['cli', 'ide', 'extension'] as const;
-    const items: Array<{
-        type: string;
-        category: string;
-        version: string;
-        path: string;
-        modelOptions?: string[];
-        thinkingLevelOptions?: string[];
-    }> = [];
+    const items: UpstreamInstalledProvider[] = [];
 
     for (const category of CATEGORIES) {
         const categoryDir = path.join(installRoot, category);
@@ -183,7 +189,7 @@ export function handleListInstalledProviders(host: ProviderCatalogCommandHost, _
             }
         }
     }
-    return { success: true, providers: items };
+    return items;
 }
 
 type InstalledProviderRow = {
@@ -196,9 +202,9 @@ type InstalledProviderRow = {
 };
 
 /**
- * The installed set the Providers tab rows are built from: `.upstream` rows
- * (list_installed_providers, unchanged) plus every verified-channel pin that
- * has no `.upstream` row.
+ * The installed set: `.upstream` rows (shape unchanged) plus every
+ * verified-channel pin that has no `.upstream` row. list_installed_providers
+ * returns it, and check_provider_updates builds the Providers tab rows from it.
  *
  * CHANNEL-STORE ROWS (live 2026-10-10): a daemon that installs through the
  * verified channel store — the default for a fresh config — has an EMPTY
@@ -208,13 +214,14 @@ type InstalledProviderRow = {
  * newer bundle, no rollback, and no auto-update line. `.upstream` rows keep
  * their exact legacy shape and win for their type.
  *
- * Deliberately NOT applied to list_installed_providers itself: standalone's
- * first-run onboarding gate reads that listing as "0 installed", and a fresh
- * channel-store daemon bootstraps every channel type — merging there would
- * silently retire the onboarding dialog, which is a product call.
+ * The merge used to be withheld from list_installed_providers because
+ * standalone's first-run onboarding gate read that listing as "0 installed" and
+ * depended on it being empty. The gate now keys on provider ENABLEMENT
+ * (web-standalone/src/onboarding-gate.ts), so the listing can tell the truth:
+ * on a channel-store daemon the installed set is the pins, not `[]`.
  */
-export function mergeChannelPinRows(host: ProviderCatalogCommandHost, upstreamRows: InstalledProviderRow[]): InstalledProviderRow[] {
-    const items = [...upstreamRows];
+export function mergeChannelPinRows<Row extends InstalledProviderRow>(host: ProviderCatalogCommandHost, upstreamRows: Row[]): Array<Row | InstalledProviderRow> {
+    const items: Array<Row | InstalledProviderRow> = [...upstreamRows];
     const listed = new Set(items.map((item) => item.type));
     const loader = host._ctx.providerLoader;
     let pins: Map<string, { active?: { providerVersion?: string; category?: string } }> = new Map();
@@ -318,6 +325,8 @@ export async function handleCheckProviderUpdates(host: ProviderCatalogCommandHos
         });
     }
 
+    // Idempotent over an already-merged listing; kept so a host whose listing
+    // is overridden (tests, older embedders) still gets its channel pins as rows.
     const installedList = mergeChannelPinRows(host, (installed as unknown as { providers: InstalledProviderRow[] }).providers);
     // The pin is what the daemon loads; `.upstream` is only what is on
     // disk. Where a provider has no pin (channel store empty/disabled),
