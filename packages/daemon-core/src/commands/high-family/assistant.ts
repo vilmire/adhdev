@@ -45,7 +45,8 @@ import { composeProjectMessage } from '../../assistant/project-message.js';
 import {
     PROJECT_READ_DEFAULT_TAIL, PROJECT_READ_MAX_TAIL, PROJECT_STATUS_ROUTING_DIFFICULTY,
     compactProjectStatus, compactTranscriptTail, coordinatorState, isUnmanagedRepoIdentity, machinesSummary, projectRoutingView,
-    type ProjectRoutingView, type ProjectRow, type RemoteHostMachine,
+    sessionRows,
+    type ProjectRoutingView, type ProjectRow, type RemoteHostMachine, type SessionRow,
 } from '../../assistant/project-views.js';
 import { defaultDiscoverRoots, discoverRepos, explicitDiscoverRoots } from '../../assistant/discover-repos.js';
 import { normalizeRepoIdentity } from '../../config/mesh-config-store.js';
@@ -204,7 +205,16 @@ export async function localProjectStatus(ports: AssistantProjectPorts, mesh: Loc
     const routing: ProjectRoutingView = preview
         ? projectRoutingView(preview, PROJECT_STATUS_ROUTING_DIFFICULTY, labels)
         : { ...projectRoutingView(null, PROJECT_STATUS_ROUTING_DIFFICULTY, labels), error: 'route_preview_unavailable' };
-    return { name: mesh.name, repo: mesh.repoIdentity, ...status, routing, ...(view.success ? {} : { statusError: str(view.error) || 'mesh_status_view failed' }) };
+    // A2 session visibility: the live sessions of THIS daemon, so the assistant
+    // can spot an orphan (messageCount 0 + spawnedForTaskId null) itself rather
+    // than waiting for the owner to find it. Scoped to this mesh plus sessions
+    // carrying no mesh stamp — see `sessionRows`. Like `routing`, this is
+    // computed wherever localProjectStatus runs, so the HOST's sessions reach
+    // the assistant for a remote project too.
+    const sessions: SessionRow[] = ports.liveSessionStates
+        ? sessionRows(ports.liveSessionStates(), { meshId })
+        : [];
+    return { name: mesh.name, repo: mesh.repoIdentity, ...status, routing, sessions, ...(view.success ? {} : { statusError: str(view.error) || 'mesh_status_view failed' }) };
 }
 
 const projectStatus = assistantVerb(ASSISTANT_VERB.projectStatus, async (ports, args) => {

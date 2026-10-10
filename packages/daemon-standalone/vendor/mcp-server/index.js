@@ -88610,6 +88610,9 @@ ${body}`;
             return null;
           }
         },
+        // A2: the SAME daemon-wide `getByCategory('cli')` read the coordinator
+        // view above narrows — taken unnarrowed here on purpose.
+        liveSessionStates: () => cliInstances(ctx).map((inst) => inst.getState?.()).filter((s2) => !!s2),
         routePreview: async (meshId, difficulty) => {
           try {
             const out = await ctx.execute("mesh_route_preview", { meshId, difficulty });
@@ -89123,6 +89126,41 @@ ${body}`;
         predictedWinner: winnerNode && winnerProvider ? { nodeId: winnerNode, providerType: winnerProvider, ...winnerModel ? { model: winnerModel } : {}, fitnessScore: routingNum(winner?.fitnessScore) ?? 0 } : null,
         perNode: (Array.isArray(p.nodes) ? p.nodes : []).map((n) => routingNodeRow(n, labelOf)).filter((n) => !!n)
       };
+    }
+    function countVisibleBubbles(activeChat) {
+      const messages = rec2(activeChat)?.messages;
+      return Array.isArray(messages) ? messages.length : 0;
+    }
+    function sessionRows(states, opts = {}) {
+      const now = opts.now ?? Date.now();
+      const want = readText3(opts.meshId);
+      const out = [];
+      for (const raw of states) {
+        const state = rec2(raw);
+        if (!state) continue;
+        const sessionId = readText3(state.instanceId);
+        if (!sessionId) continue;
+        const settings = rec2(state.settings) ?? {};
+        const launch = rec2(state.launch);
+        const meshId = readText3(settings.meshNodeFor) || readText3(settings.meshCoordinatorFor);
+        if (want && meshId && meshId !== want) continue;
+        const launchedAt = typeof launch?.launchedAt === "number" && Number.isFinite(launch.launchedAt) ? launch.launchedAt : null;
+        out.push({
+          sessionId,
+          provider: readText3(state.type) || readText3(settings.providerType),
+          status: readText3(state.status),
+          meshId: meshId || null,
+          nodeId: readText3(settings.meshNodeId) || null,
+          ageMs: launchedAt === null ? null : Math.max(0, now - launchedAt),
+          messageCount: countVisibleBubbles(state.activeChat),
+          workspace: readText3(state.workspace) || null,
+          isCoordinator: !!readText3(settings.meshCoordinatorFor),
+          assistant: settings.assistant === true,
+          spawnedForTaskId: readText3(settings.autoLaunchedForQueueTaskId) || null,
+          launchedBy: readText3(launch?.launchedBy) || null
+        });
+      }
+      return out.sort((a, b) => a.sessionId.localeCompare(b.sessionId));
     }
     function messageText(m) {
       const c = m?.content;
@@ -130964,7 +131002,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       );
       const preview = await ports.routePreview(meshId, PROJECT_STATUS_ROUTING_DIFFICULTY);
       const routing = preview ? projectRoutingView(preview, PROJECT_STATUS_ROUTING_DIFFICULTY, labels) : { ...projectRoutingView(null, PROJECT_STATUS_ROUTING_DIFFICULTY, labels), error: "route_preview_unavailable" };
-      return { name: mesh.name, repo: mesh.repoIdentity, ...status, routing, ...view.success ? {} : { statusError: str9(view.error) || "mesh_status_view failed" } };
+      const sessions = ports.liveSessionStates ? sessionRows(ports.liveSessionStates(), { meshId }) : [];
+      return { name: mesh.name, repo: mesh.repoIdentity, ...status, routing, sessions, ...view.success ? {} : { statusError: str9(view.error) || "mesh_status_view failed" } };
     }
     var projectStatus = assistantVerb(ASSISTANT_VERB2.projectStatus, async (ports, args) => {
       const p = await resolveProject(ports, args.project);
@@ -176833,7 +176872,7 @@ var PROJECTS_TOOL = {
 };
 var PROJECT_STATUS_TOOL = {
   name: "project_status",
-  description: 'Compact status of one project: machines online, queue counts, active mission titles, failed tasks, pending approvals, and when its coordinator last reported back. Also `routing`: which provider/model each machine would route a task to right now, which configured slots were excluded and why (`slot_capacity_exhausted`, `difficulty_floor_unavailable`, \u2026), and per-provider quota evidence (`snapshotStatus`, `failureKind`, `zeroReason`, `gateOutcome`) \u2014 the answer to "why is this provider not being used". Read-only: no quota is fetched and nothing is changed.',
+  description: 'Compact status of one project: machines online, queue counts, active mission titles, failed tasks, pending approvals, and when its coordinator last reported back. Also `routing`: which provider/model each machine would route a task to right now, which configured slots were excluded and why (`slot_capacity_exhausted`, `difficulty_floor_unavailable`, \u2026), and per-provider quota evidence (`snapshotStatus`, `failureKind`, `zeroReason`, `gateOutcome`) \u2014 the answer to "why is this provider not being used". Also `sessions`: the live agent sessions on this machine (provider, status, age, message count, which task each was started for) \u2014 a session with `messageCount: 0` and `spawnedForTaskId: null` is an orphan that was started but never given work, worth telling the user about. Read-only: no quota is fetched and nothing is changed.',
   inputSchema: { type: "object", properties: { ...PROJECT_PROP }, required: ["project"] }
 };
 var PROJECT_SEND_TOOL = {

@@ -81,7 +81,10 @@ const PROJECT_STATUS_TOOL: AssistantToolSchema = {
     + 'each machine would route a task to right now, which configured slots were excluded and why '
     + '(`slot_capacity_exhausted`, `difficulty_floor_unavailable`, …), and per-provider quota evidence '
     + '(`snapshotStatus`, `failureKind`, `zeroReason`, `gateOutcome`) — the answer to "why is this provider '
-    + 'not being used". Read-only: no quota is fetched and nothing is changed.',
+    + 'not being used". Also `sessions`: the live agent sessions on this machine (provider, status, age, '
+    + 'message count, which task each was started for) — a session with `messageCount: 0` and '
+    + '`spawnedForTaskId: null` is an orphan that was started but never given work, worth telling the user '
+    + 'about. Read-only: no quota is fetched and nothing is changed.',
   inputSchema: { type: 'object', properties: { ...PROJECT_PROP }, required: ['project'] },
 };
 

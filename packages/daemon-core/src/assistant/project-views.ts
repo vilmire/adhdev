@@ -451,6 +451,105 @@ export function projectRoutingView(
 /** The difficulty tier `project_status` previews routing for (the queue's default tier). */
 export const PROJECT_STATUS_ROUTING_DIFFICULTY = 'medium';
 
+// ── live sessions (A2 session visibility) ──────────────────────────────────
+
+/**
+ * One live CLI session as the assistant may see it (owner decision 2026-10-10).
+ *
+ * Motivation: the assistant could read queue counts, missions and approvals but
+ * NOT the live sessions, so an orphan worker — a session holding no task and no
+ * messages — was invisible to it. The owner found one before the assistant did
+ * (live 2026-10-10). These fields are what makes that detectable:
+ * `messageCount: 0` with `spawnedForTaskId: null` IS the orphan signature.
+ *
+ * ★This interface is the content boundary, declared as a TYPE so it cannot be
+ * widened by accident. It is an ALLOW-LIST: identifiers, enums, booleans,
+ * counters and timestamps only — never free text authored by the user or the
+ * agent. Do NOT rewrite it as a deny-list (`delete` / `Omit` over the live
+ * state): `ProviderState` carries `activeChat.messages`, `errorMessage` and the
+ * neighbouring `SessionEntry` carries `lastMessagePreview`, every one of which
+ * would then leak the moment it is populated. Adding a field here means
+ * asserting it is non-content.
+ */
+export interface SessionRow {
+    sessionId: string;
+    /** Provider type enum (`claude-cli`, `antigravity-cli`, …). */
+    provider: string;
+    /** Live status enum (`idle`, `generating`, `waiting_approval`, …). */
+    status: string;
+    /** Mesh/node this session is stamped to; null for a non-mesh session. */
+    meshId: string | null;
+    nodeId: string | null;
+    /** Session age from its launch record; null when no launch record exists. */
+    ageMs: number | null;
+    /** Visible bubble count. 0 = this session has never been given work. */
+    messageCount: number;
+    /** Workspace ROOT only — never a sub-path or a file name. */
+    workspace: string | null;
+    isCoordinator: boolean;
+    assistant: boolean;
+    /** The queue task this session was auto-launched for; null if none. */
+    spawnedForTaskId: string | null;
+    /** Launch provenance enum; null when no launch record exists. */
+    launchedBy: string | null;
+}
+
+function countVisibleBubbles(activeChat: unknown): number {
+    const messages = rec(activeChat)?.messages;
+    return Array.isArray(messages) ? messages.length : 0;
+}
+
+/**
+ * Project live CLI instance states onto `SessionRow[]`.
+ *
+ * Scope is DAEMON-WIDE by default and that is deliberate: one daemon hosts
+ * several meshes (live: adhdev-cloud + BATRP), and an orphan is found by
+ * looking at the whole daemon, not one mesh — a coordinator that scoped the
+ * question to one mesh was refused outright ("Node '…' is not a member of mesh
+ * '…'"). Passing `meshId` narrows to that mesh plus sessions carrying no mesh
+ * stamp at all (an orphan frequently has none). Same read-wide/write-narrow
+ * asymmetry `machinesSummary` already uses: this is READ ONLY — nothing here
+ * grants the assistant a way to act on another mesh's session.
+ */
+export function sessionRows(
+    states: readonly unknown[],
+    opts: { meshId?: string; now?: number } = {},
+): SessionRow[] {
+    const now = opts.now ?? Date.now();
+    const want = readText(opts.meshId);
+    const out: SessionRow[] = [];
+    for (const raw of states) {
+        const state = rec(raw);
+        if (!state) continue;
+        const sessionId = readText(state.instanceId);
+        if (!sessionId) continue;
+        const settings = rec(state.settings) ?? {};
+        const launch = rec(state.launch);
+        const meshId = readText(settings.meshNodeFor) || readText(settings.meshCoordinatorFor);
+        // Narrowing keeps unstamped sessions: an orphan often carries no mesh
+        // stamp, and dropping it would hide the very thing this surface is for.
+        if (want && meshId && meshId !== want) continue;
+        const launchedAt = typeof launch?.launchedAt === 'number' && Number.isFinite(launch.launchedAt)
+            ? launch.launchedAt
+            : null;
+        out.push({
+            sessionId,
+            provider: readText(state.type) || readText(settings.providerType),
+            status: readText(state.status),
+            meshId: meshId || null,
+            nodeId: readText(settings.meshNodeId) || null,
+            ageMs: launchedAt === null ? null : Math.max(0, now - launchedAt),
+            messageCount: countVisibleBubbles(state.activeChat),
+            workspace: readText(state.workspace) || null,
+            isCoordinator: !!readText(settings.meshCoordinatorFor),
+            assistant: settings.assistant === true,
+            spawnedForTaskId: readText(settings.autoLaunchedForQueueTaskId) || null,
+            launchedBy: readText(launch?.launchedBy) || null,
+        });
+    }
+    return out.sort((a, b) => a.sessionId.localeCompare(b.sessionId));
+}
+
 // ── project_read ───────────────────────────────────────────────────────────
 
 export const PROJECT_READ_DEFAULT_TAIL = 10;

@@ -32,6 +32,7 @@ let remoteHosts: Record<string, RemoteHostView>;
 let callHost: ReturnType<typeof vi.fn>;
 let hostAnswers: Record<string, (args: any) => RemoteCallOutcome>;
 let routePreviews: Record<string, Record<string, unknown> | null>;
+let liveSessionStates: unknown[];
 
 const mesh = (id: string, name: string, repoIdentity: string, nodes: any[] = []): LocalMeshEntry => ({ id, name, repoIdentity, nodes } as unknown as LocalMeshEntry);
 const run = (verb: string, args: Record<string, unknown> = {}) => assistantProjectHandlers[verb]({} as any, args);
@@ -55,6 +56,7 @@ beforeEach(() => {
     };
     hostAnswers = {};
     routePreviews = {};
+    liveSessionStates = [];
     callHost = vi.fn(async (_target: RemoteHostView, op: string, args: any) => (hostAnswers[op]
         ? hostAnswers[op](args)
         : { ok: false, kind: 'unreachable', code: 'project_unreachable', reason: 'relay_timeout', error: 'no answer' }));
@@ -76,6 +78,7 @@ beforeEach(() => {
         coordinatorTurns: (sessionId) => ({ open: false, committed: sessionId === 'human' ? [{ attemptId: 'plain:human:1', outcome: 'completed', at: 1 }] : [] }),
         meshStatusLine: () => null,
         routePreview: async (meshId, difficulty) => routePreviews[`${meshId}:${difficulty}`] ?? null,
+        liveSessionStates: () => liveSessionStates,
     };
     setAssistantProjectPortsForTests(() => ports);
     const svc = createAssistantServices({ configDir: dir, listMeshes: () => meshes });
@@ -175,6 +178,36 @@ describe('assistant_project_status', () => {
                 reordered: false,
             }],
         });
+        expect(JSON.stringify(r)).not.toContain('SHOULD-NOT-LEAK-PROSE');
+    });
+
+    it('carries the live sessions, so the assistant can see an orphan itself (A2)', async () => {
+        liveSessionStates = [
+            // The orphan: started, never given work (the live 2026-10-10 shape).
+            {
+                instanceId: 'bbd6c422', type: 'claude-cli', status: 'idle', workspace: '/w/batrp',
+                activeChat: { messages: [] }, lastMessagePreview: 'SHOULD-NOT-LEAK-PROSE',
+                settings: { meshNodeFor: 'mesh_a', meshNodeId: 'node_1' },
+                launch: { launchedBy: 'mesh_launch_session', launchedAt: Date.now() - 60_000 },
+            },
+            // A worker that does hold a task.
+            {
+                instanceId: 'a34e7359', type: 'antigravity-cli', status: 'generating', workspace: '/w/batrp',
+                activeChat: { messages: [{ role: 'user' }, { role: 'assistant' }] },
+                settings: { meshNodeFor: 'mesh_a', meshNodeId: 'node_1', autoLaunchedForQueueTaskId: 'task_33c4' },
+                launch: { launchedBy: 'auto_launch', launchedAt: Date.now() - 10_000 },
+            },
+        ];
+        const r: any = await run(ASSISTANT_VERB.projectStatus, { project: 'main' });
+        expect(r.result.sessions).toHaveLength(2);
+        const orphan = r.result.sessions.find((s: any) => s.sessionId === 'bbd6c422');
+        expect(orphan).toMatchObject({
+            provider: 'claude-cli', status: 'idle', messageCount: 0, spawnedForTaskId: null,
+            meshId: 'mesh_a', nodeId: 'node_1', launchedBy: 'mesh_launch_session', isCoordinator: false,
+        });
+        expect(r.result.sessions.find((s: any) => s.sessionId === 'a34e7359'))
+            .toMatchObject({ messageCount: 2, spawnedForTaskId: 'task_33c4' });
+        // The content boundary holds through the verb, not just the projection.
         expect(JSON.stringify(r)).not.toContain('SHOULD-NOT-LEAK-PROSE');
     });
 

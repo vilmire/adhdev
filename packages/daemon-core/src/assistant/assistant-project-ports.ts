@@ -101,6 +101,17 @@ export interface AssistantProjectPorts {
      * quota, it reads the facts/cache this daemon already holds.
      */
     routePreview(meshId: string, difficulty: string): Promise<Record<string, unknown> | null>;
+    /**
+     * Live CLI instance states for `project_status.sessions` (A2 session
+     * visibility). Returns the states VERBATIM; the allow-list projection is
+     * `sessionRows()` in project-views.ts, so this port never decides the
+     * content boundary. Deliberately NOT filtered to coordinators — that is
+     * what `coordinators()` is for, and an orphan worker is exactly the thing
+     * a coordinator-only view cannot show. Daemon-wide and read-only.
+     * Optional like `refreshMemberMeshes` so existing fakes stay valid; absent
+     * ⇒ `sessions: []` rather than a throw.
+     */
+    liveSessionStates?(): unknown[];
 }
 
 export interface ProjectPortsContext {
@@ -209,6 +220,9 @@ export function createDefaultProjectPorts(ctx: ProjectPortsContext): AssistantPr
         meshStatusLine: (meshId) => {
             try { return lazy.meshStatusLine(meshId); } catch { return null; }
         },
+        // A2: the SAME daemon-wide `getByCategory('cli')` read the coordinator
+        // view above narrows — taken unnarrowed here on purpose.
+        liveSessionStates: () => cliInstances(ctx).map((inst) => inst.getState?.()).filter((s) => !!s),
         routePreview: async (meshId, difficulty) => {
             try {
                 const out = await ctx.execute('mesh_route_preview', { meshId, difficulty });

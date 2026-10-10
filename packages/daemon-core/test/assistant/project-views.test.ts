@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
     PROJECT_STATUS_ROUTING_DIFFICULTY,
-    compactProjectStatus, isUnmanagedRepoIdentity, machinesSummary, projectRoutingView,
+    compactProjectStatus, isUnmanagedRepoIdentity, machinesSummary, projectRoutingView, sessionRows,
 } from '../../src/assistant/project-views.js';
 
 describe('isUnmanagedRepoIdentity', () => {
@@ -239,5 +239,128 @@ describe('projectRoutingView — routing visibility (A7d)', () => {
     it('answers with an empty view, never a throw, when the preview is missing', () => {
         const out = projectRoutingView(null, PROJECT_STATUS_ROUTING_DIFFICULTY);
         expect(out).toEqual({ strategy: 'unknown', difficulty: 'medium', predictedWinner: null, perNode: [] });
+    });
+});
+
+describe('sessionRows — live session visibility (A2)', () => {
+    const NOW = 1_800_000_000_000;
+
+    /** The orphan the owner found before the assistant did (live 2026-10-10). */
+    const orphan = {
+        instanceId: 'bbd6c422',
+        type: 'claude-cli',
+        status: 'idle',
+        workspace: '/Users/me/Work/BATRP',
+        activeChat: { id: 'c', title: 't', status: 'idle', messages: [], activeModal: null },
+        settings: { meshNodeFor: 'mesh_batrp', meshNodeId: 'node_3922a9ee' },
+        launch: { launchedBy: 'mesh_launch_session', launchedAt: NOW - 90_000 },
+    };
+    const working = {
+        instanceId: 'a34e7359',
+        type: 'antigravity-cli',
+        status: 'generating',
+        workspace: '/Users/me/Work/BATRP',
+        activeChat: { id: 'c', title: 't', status: 'generating', messages: [{ role: 'user' }, { role: 'assistant' }] },
+        settings: { meshNodeFor: 'mesh_batrp', meshNodeId: 'node_3922a9ee', autoLaunchedForQueueTaskId: '33c49fa9' },
+        launch: { launchedBy: 'auto_launch', launchedAt: NOW - 30_000 },
+    };
+    /** Another mesh on the SAME daemon — one daemon hosts several (live: adhdev-cloud + BATRP). */
+    const otherMesh = {
+        instanceId: '423670c4',
+        type: 'claude-cli',
+        status: 'idle',
+        workspace: '/Users/me/Work/adhdev',
+        activeChat: { id: 'c', title: 't', status: 'idle', messages: [{ role: 'user' }] },
+        settings: { meshCoordinatorFor: 'mesh_adhdev' },
+        launch: { launchedBy: 'coordinator', launchedAt: NOW - 600_000 },
+    };
+
+    it('carries the orphan signature: messageCount 0 + spawnedForTaskId null, next to a session that holds work', () => {
+        const rows = sessionRows([orphan, working], { now: NOW });
+        const byId = new Map(rows.map((r) => [r.sessionId, r]));
+
+        const o = byId.get('bbd6c422')!;
+        expect(o.messageCount).toBe(0);
+        expect(o.spawnedForTaskId).toBeNull();
+        expect(o.status).toBe('idle');
+        expect(o.ageMs).toBe(90_000);
+        expect(o.launchedBy).toBe('mesh_launch_session');
+        expect(o.isCoordinator).toBe(false);
+
+        // The contrast that makes the signal usable: same node, but this one has work.
+        const w = byId.get('a34e7359')!;
+        expect(w.messageCount).toBe(2);
+        expect(w.spawnedForTaskId).toBe('33c49fa9');
+    });
+
+    it('is daemon-wide: cross-mesh sessions are READABLE, and narrowing keeps unstamped sessions', () => {
+        // No meshId → every mesh on this daemon. Orphan hunting needs this; a
+        // coordinator scoped to one mesh was refused outright ("not a member of mesh").
+        expect(sessionRows([orphan, working, otherMesh], { now: NOW }).map((r) => r.sessionId))
+            .toEqual(['423670c4', 'a34e7359', 'bbd6c422']);
+        expect(sessionRows([otherMesh], { now: NOW })[0]!.meshId).toBe('mesh_adhdev');
+        expect(sessionRows([otherMesh], { now: NOW })[0]!.isCoordinator).toBe(true);
+
+        // Narrowed → that mesh only…
+        expect(sessionRows([orphan, working, otherMesh], { meshId: 'mesh_batrp', now: NOW }).map((r) => r.sessionId))
+            .toEqual(['a34e7359', 'bbd6c422']);
+        // …but a session with NO mesh stamp is kept: an orphan often has none,
+        // and dropping it would hide the very thing this surface exists for.
+        const unstamped = { instanceId: 'zz99', type: 'kimi', status: 'idle', activeChat: null, settings: {} };
+        expect(sessionRows([unstamped], { meshId: 'mesh_batrp', now: NOW }).map((r) => r.sessionId)).toEqual(['zz99']);
+    });
+
+    it('is an allow-list: no transcript/prose field crosses, and no key outside the declared shape', () => {
+        // Every excluded field populated on the input at once. None may appear.
+        const leaky = {
+            ...working,
+            lastMessagePreview: 'PROSE-LAST-MESSAGE-PREVIEW',
+            errorMessage: 'PROSE-ERROR-MESSAGE',
+            title: 'PROSE-TITLE',
+            activeChat: {
+                ...working.activeChat,
+                title: 'PROSE-CHAT-TITLE',
+                inputContent: 'PROSE-INPUT-CONTENT',
+                messages: [{ role: 'user', content: 'PROSE-MESSAGE-BODY' }],
+                activeModal: { message: 'PROSE-MODAL-MESSAGE', buttons: ['PROSE-BUTTON'] },
+            },
+            summaryMetadata: { note: 'PROSE-SUMMARY-METADATA' },
+            launch: { ...working.launch, cliArgs: ['PROSE-CLI-ARG'] },
+            settings: { ...working.settings, autoApproveMode: 'PROSE-SETTING' },
+        };
+        const out = sessionRows([leaky], { now: NOW });
+        const json = JSON.stringify(out);
+        for (const prose of [
+            'PROSE-LAST-MESSAGE-PREVIEW', 'PROSE-ERROR-MESSAGE', 'PROSE-TITLE', 'PROSE-CHAT-TITLE',
+            'PROSE-INPUT-CONTENT', 'PROSE-MESSAGE-BODY', 'PROSE-MODAL-MESSAGE', 'PROSE-BUTTON',
+            'PROSE-SUMMARY-METADATA', 'PROSE-CLI-ARG', 'PROSE-SETTING',
+        ]) {
+            expect(json, prose).not.toContain(prose);
+        }
+        // The message BODY must not cross, but its COUNT must.
+        expect(out[0]!.messageCount).toBe(1);
+
+        // Every key that crosses, enumerated. A field added to ProviderState /
+        // SessionLaunchRecord upstream cannot appear here without this list
+        // being updated on purpose — this list IS the boundary declaration.
+        const keys = new Set<string>();
+        const walk = (v: unknown): void => {
+            if (Array.isArray(v)) return void v.forEach(walk);
+            if (v && typeof v === 'object') {
+                for (const [k, val] of Object.entries(v)) { keys.add(k); walk(val); }
+            }
+        };
+        walk(out);
+        const ALLOWED = [
+            'ageMs', 'assistant', 'isCoordinator', 'launchedBy', 'meshId', 'messageCount',
+            'nodeId', 'provider', 'sessionId', 'spawnedForTaskId', 'status', 'workspace',
+        ];
+        expect([...keys].sort()).toEqual(ALLOWED);
+    });
+
+    it('never throws on malformed or absent state (no launch record, null chat, junk entries)', () => {
+        const rows = sessionRows([null, undefined, 42, {}, { instanceId: '' }, { instanceId: 'ok', activeChat: null, settings: null }], { now: NOW });
+        expect(rows.map((r) => r.sessionId)).toEqual(['ok']);
+        expect(rows[0]).toMatchObject({ ageMs: null, launchedBy: null, messageCount: 0, workspace: null, assistant: false });
     });
 });
