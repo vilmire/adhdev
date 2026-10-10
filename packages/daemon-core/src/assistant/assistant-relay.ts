@@ -33,7 +33,8 @@ import { countTerminalSubmits, TERMINAL_SUBMITS_PER_WRITE_CAP } from './assistan
 import {
     RELAY_BACKLOG_FOLD_AFTER_MS, RELAY_DELIVERY_MAX_CHARS, RELAY_IDLE_CLOSE_GRACE_MS, RELAY_MAX_WAIT_MS, RELAY_PROGRESS_AFTER_MS, RELAY_QUIET_MS,
     RELAY_STALL_AFTER_MS, buildApprovalSignal, buildCoordinatorEndedSignal, buildFoldedBacklogLine, buildProgressSignal,
-    buildRelayEnvelope, buildRestartNote, buildStallSignal, buildUnreachableRelay, codePoints, relayMessageId, shouldAddRestartNote,
+    buildMissedReportsLine, buildRelayEnvelope, buildRestartNote, buildStallSignal, buildUnreachableRelay, codePoints, relayMessageId,
+    shouldAddRestartNote,
     type RestartContext,
 } from './assistant-relay-format.js';
 
@@ -597,7 +598,14 @@ export class AssistantRelay {
             return;
         }
         const messageId = parts.length === 1 ? parts[0]!.messageId : `${parts[0]!.messageId}+${parts.length - 1}`;
-        const outcome = await this.ports.submit(sid, { text: parts.map((p) => p.text).join('\n\n'), messageId, policy: { mode: 'queue' } });
+        // The gap notice rides along with the delivery (requirement: the
+        // assistant must learn of a loss without asking). It covers gaps this
+        // delivery is itself about to create — its own folded turns — plus any
+        // still unacknowledged from before, so the last relay of a quiet
+        // stretch still reports its fold.
+        const gap = buildMissedReportsLine(this.missedReportsIncluding(taken, parts));
+        const text = [...parts.map((p) => p.text), ...(gap ? [gap] : [])].join('\n\n');
+        const outcome = await this.ports.submit(sid, { text, messageId, policy: { mode: 'queue' } });
         if (outcome.kind === 'refused') return;
         this.commitTaken(taken, parts, sid);
     }
@@ -661,7 +669,19 @@ export class AssistantRelay {
         if (sid) for (const p of parts) this.ports.inputLog.append(sid, p.source, { at, messageId: p.messageId });
         if (sid) for (const p of parts) if (p.source === 'review') this.ports.onReviewDelivered?.(sid, p.messageId, at);
         const relayItems = taken.filter((i): i is Item & { kind: 'relay' } => i.kind === 'relay');
-        this.ports.store.markDelivered(relayItems.flatMap((i) => i.attemptIds), at);
+        // Only the attempts whose own body went out count as relayed. An item's
+        // envelope carries its LAST attempt's tail and folds the earlier ones
+        // into "(+N earlier turns)"; a 24 h-old item is replaced wholesale by a
+        // one-line summary and renders nothing. Both settle without their body —
+        // the loss we now measure instead of hiding it behind `delivered_at`.
+        // Keyed off the parts actually built, so an item dropped by the delivery
+        // budget (it stays queued) is never miscounted as sent.
+        const sentIds = new Set(parts.map((p) => p.messageId));
+        const rendered = relayItems.flatMap((i) => {
+            const last = i.attemptIds[i.attemptIds.length - 1]!;
+            return sentIds.has(relayMessageId(i.meshId, last)) ? [last] : [];
+        });
+        this.ports.store.markDelivered(relayItems.flatMap((i) => i.attemptIds), at, rendered);
         for (const id of relayItems.flatMap((i) => i.attemptIds)) this.remoteBodies.delete(id);
         const meshes = [...new Set(relayItems.map((i) => i.meshId))];
         for (const m of meshes) {
@@ -675,6 +695,49 @@ export class AssistantRelay {
     /** Last relay delivery to the assistant for the mesh (this process), or null. */
     lastRelayAtFor(meshId: string): number | null {
         return this.lastRelayAt.get(meshId) ?? null;
+    }
+
+    /**
+     * Coordinator turns that settled without their own body reaching the
+     * assistant (batch-folded or aged out). Counts and project slugs only.
+     * Surfaced unprompted — on every relay envelope and in `project_status` —
+     * because the 2026-10-10 losses were only ever found by the owner
+     * suspecting them and asking.
+     */
+    missedReports(): Array<{ slug: string; count: number }> {
+        return this.slugCounts(this.unrenderedByMesh());
+    }
+
+    /** Same count for one project (the `project_status` backstop). */
+    missedReportsFor(meshId: string): number {
+        return this.unrenderedByMesh().get(meshId) ?? 0;
+    }
+
+    /** Stored gaps (not yet counted again) per mesh. */
+    private unrenderedByMesh(): Map<string, number> {
+        return new Map(this.ports.store.countUnrendered().byMesh.map((r) => [r.meshId, r.count]));
+    }
+
+    /** Stored gaps plus the ones this pending delivery is about to create. */
+    private missedReportsIncluding(taken: readonly Item[], parts: readonly Part[]): Array<{ slug: string; count: number }> {
+        const counts = this.unrenderedByMesh();
+        const sentIds = new Set(parts.map((p) => p.messageId));
+        for (const item of taken) {
+            if (item.kind !== 'relay') continue;
+            const last = item.attemptIds[item.attemptIds.length - 1]!;
+            // Everything but the rendered last attempt folds; if the item itself
+            // was not rendered at all (aged-out backlog), every attempt folds.
+            const missed = sentIds.has(relayMessageId(item.meshId, last)) ? item.attemptIds.length - 1 : item.attemptIds.length;
+            if (missed > 0) counts.set(item.meshId, (counts.get(item.meshId) ?? 0) + missed);
+        }
+        return this.slugCounts(counts);
+    }
+
+    private slugCounts(counts: ReadonlyMap<string, number>): Array<{ slug: string; count: number }> {
+        return [...counts.entries()]
+            .filter(([, n]) => n > 0)
+            .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+            .map(([meshId, count]) => ({ slug: this.ports.projectSlug(meshId) ?? meshId, count }));
     }
 
     private async renderRelay(item: Item & { kind: 'relay' }): Promise<Part> {

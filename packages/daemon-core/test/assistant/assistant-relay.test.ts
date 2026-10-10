@@ -163,6 +163,71 @@ describe('relay trigger and batching', () => {
         expect(h.submits).toHaveLength(2);
     });
 
+    /**
+     * The 2026-10-10 loss: a batch settles every attempt but sends only the
+     * last turn's body, so the earlier reports vanish. Nothing used to say so —
+     * `delivered_at` was stamped for all of them and the owner had to suspect
+     * the gap by hand. The relay now counts the fold and tells the assistant on
+     * the same delivery, unprompted.
+     */
+    it('counts a folded turn as a missed report and announces it in the delivery', async () => {
+        const h = harness();
+        h.relay.openThread(MESH);
+        // Each committed turn replaces the coordinator's tail, which is why the
+        // send-time re-read cannot recover the earlier body.
+        h.state.tail = 'REPORT ONE: the auth status table';
+        h.emit(turn('committed', COORD, 1, h.clock.now()));
+        h.clock.advance(5_000);
+        h.emit(turn('started', COORD, 2, h.clock.now()));
+        h.state.tail = 'REPORT TWO: the pending decisions';
+        h.emit(turn('committed', COORD, 2, h.clock.now()));
+        h.clock.advance(RELAY_QUIET_MS);
+        await settle(h);
+
+        expect(h.submits).toHaveLength(1);
+        const text = h.submits[0]!.text;
+        expect(text).toContain('REPORT TWO');
+        expect(text).not.toContain('REPORT ONE'); // the loss itself
+        // ...and the assistant is told, with a count and the project, without asking.
+        expect(text).toContain('[ADHDev relay gap]');
+        expect(text).toContain('blog: 1');
+        expect(text).toContain('project_read');
+        expect(h.relay.missedReports()).toEqual([{ slug: 'blog', count: 1 }]);
+        // The row settled, so an undelivered-only check still sees nothing wrong.
+        expect(h.store.listUndelivered()).toEqual([]);
+    });
+
+    it('adds no gap notice when every turn was relayed in full', async () => {
+        const h = harness();
+        h.relay.openThread(MESH);
+        h.emit(turn('committed', COORD, 1, h.clock.now()));
+        h.clock.advance(RELAY_QUIET_MS);
+        await settle(h);
+        expect(h.submits).toHaveLength(1);
+        expect(h.submits[0]!.text).not.toContain('relay gap');
+        expect(h.relay.missedReports()).toEqual([]);
+    });
+
+    it('keeps reporting an earlier gap on later deliveries until it is seen', async () => {
+        const h = harness();
+        h.relay.openThread(MESH);
+        h.emit(turn('committed', COORD, 1, h.clock.now()));
+        h.clock.advance(5_000);
+        h.emit(turn('started', COORD, 2, h.clock.now()));
+        h.emit(turn('committed', COORD, 2, h.clock.now()));
+        h.clock.advance(RELAY_QUIET_MS);
+        await settle(h);
+        expect(h.submits[0]!.text).toContain('blog: 1');
+
+        // a later, clean relay still carries the outstanding count
+        h.emit(turn('committed', COORD, 3, h.clock.now()));
+        h.clock.advance(RELAY_QUIET_MS);
+        await settle(h);
+        expect(h.submits).toHaveLength(2);
+        expect(h.submits[1]!.text).toContain('[ADHDev relay gap]');
+        expect(h.submits[1]!.text).toContain('blog: 1');
+    });
+
     it('dedupes a re-committed attempt id (restart-absorbed plain attempt)', async () => {
         const h = harness();
         h.relay.openThread(MESH);

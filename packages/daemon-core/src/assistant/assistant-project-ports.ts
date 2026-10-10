@@ -30,6 +30,12 @@ export interface AssistantRelayHooks {
     openThread?(meshId: string): void;
     isThreadOpen?(meshId: string): boolean;
     lastRelayAt?(meshId: string): number | null;
+    /**
+     * Coordinator turns of this mesh that settled without their body reaching
+     * the assistant (batch fold / aged-out backlog) — the `project_status`
+     * backstop for a relay notice that itself went missing. A count only.
+     */
+    missedReports?(meshId: string): number;
     /** `assistant_metric_daily.skill_attaches` for the target mesh (§4.6). */
     recordSkillAttaches?(meshId: string, count: number): void;
     /**

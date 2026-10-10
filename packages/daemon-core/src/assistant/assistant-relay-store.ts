@@ -23,10 +23,25 @@ export interface AssistantRelayRow {
     meshId: string;
     coordinatorSessionId: string;
     committedAt: number;
+    /** The row left the queue (settled) — NOT a promise that its body was sent. */
     deliveredAt: number | null;
+    /**
+     * This row's OWN body reached the assistant. Null while `deliveredAt` is
+     * set means the row was folded into another turn's envelope and its body
+     * never went out — see `countUnrendered`.
+     */
+    relayedAt: number | null;
     kind: AssistantRelayKind;
     /** Outcome enum of the commit (content-free). */
     outcome: string;
+}
+
+/** Relay rows that settled without their own body being sent (per project). */
+export interface UnrenderedRelayCounts {
+    /** Total across every mesh. */
+    total: number;
+    /** meshId → count, descending by count. Ids only, never a body. */
+    byMesh: Array<{ meshId: string; count: number }>;
 }
 
 export interface AssistantRelayStore {
@@ -36,16 +51,31 @@ export interface AssistantRelayStore {
     isThreadOpen(meshId: string): boolean;
     openThreads(): AssistantThreadRow[];
     /** Insert a committed coordinator attempt. False when the attempt is already recorded (dedupe). */
-    recordCommitted(row: Omit<AssistantRelayRow, 'deliveredAt'>): boolean;
-    markDelivered(attemptIds: readonly string[], at: number): void;
+    recordCommitted(row: Omit<AssistantRelayRow, 'deliveredAt' | 'relayedAt'>): boolean;
+    /**
+     * Settle rows that left the queue. `rendered` is the subset whose own body
+     * went out in the envelope; the rest settle unrendered and are counted by
+     * `countUnrendered`. Pass the same list twice when every row was rendered.
+     */
+    markDelivered(attemptIds: readonly string[], at: number, rendered?: readonly string[]): void;
     /** Undelivered rows, oldest commit first. */
     listUndelivered(): AssistantRelayRow[];
+    /** Rows that settled without their own body being sent (silent loss). */
+    countUnrendered(): UnrenderedRelayCounts;
     /** Retention: delivered rows after 7 d, closed threads after 30 d. */
     prune(now: number): void;
 }
 
 export const RELAY_DELIVERED_RETENTION_MS = 7 * 24 * 60 * 60_000;
 export const THREAD_CLOSED_RETENTION_MS = 30 * 24 * 60 * 60_000;
+
+/** Shared shaping so both store implementations order the counts the same way. */
+export function toUnrenderedCounts(byMesh: ReadonlyMap<string, number>): UnrenderedRelayCounts {
+    const rows = [...byMesh.entries()]
+        .map(([meshId, count]) => ({ meshId, count }))
+        .sort((a, b) => b.count - a.count || a.meshId.localeCompare(b.meshId));
+    return { total: rows.reduce((n, r) => n + r.count, 0), byMesh: rows };
+}
 
 export class InMemoryAssistantRelayStore implements AssistantRelayStore {
     private readonly threads = new Map<string, AssistantThreadRow>();
@@ -70,16 +100,19 @@ export class InMemoryAssistantRelayStore implements AssistantRelayStore {
         return [...this.threads.values()].filter((t) => t.closedAt === null).map((t) => ({ ...t }));
     }
 
-    recordCommitted(row: Omit<AssistantRelayRow, 'deliveredAt'>): boolean {
+    recordCommitted(row: Omit<AssistantRelayRow, 'deliveredAt' | 'relayedAt'>): boolean {
         if (this.relays.has(row.attemptId)) return false;
-        this.relays.set(row.attemptId, { ...row, deliveredAt: null });
+        this.relays.set(row.attemptId, { ...row, deliveredAt: null, relayedAt: null });
         return true;
     }
 
-    markDelivered(attemptIds: readonly string[], at: number): void {
+    markDelivered(attemptIds: readonly string[], at: number, rendered?: readonly string[]): void {
+        const sent = new Set(rendered ?? attemptIds);
         for (const id of attemptIds) {
             const r = this.relays.get(id);
-            if (r && r.deliveredAt === null) r.deliveredAt = at;
+            if (!r || r.deliveredAt !== null) continue;
+            r.deliveredAt = at;
+            if (sent.has(id)) r.relayedAt = at;
         }
     }
 
@@ -88,6 +121,15 @@ export class InMemoryAssistantRelayStore implements AssistantRelayStore {
             .filter((r) => r.deliveredAt === null)
             .sort((a, b) => a.committedAt - b.committedAt || a.attemptId.localeCompare(b.attemptId))
             .map((r) => ({ ...r }));
+    }
+
+    countUnrendered(): UnrenderedRelayCounts {
+        const byMesh = new Map<string, number>();
+        for (const r of this.relays.values()) {
+            if (r.deliveredAt === null || r.relayedAt !== null) continue;
+            byMesh.set(r.meshId, (byMesh.get(r.meshId) ?? 0) + 1);
+        }
+        return toUnrenderedCounts(byMesh);
     }
 
     prune(now: number): void {

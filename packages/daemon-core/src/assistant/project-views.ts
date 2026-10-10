@@ -169,6 +169,13 @@ export interface ProjectStatusExtras {
     coordinator: CoordinatorState;
     threadOpen: boolean | null;
     lastRelayAt: number | null;
+    /**
+     * Coordinator turns in THIS project that settled without their body
+     * reaching the assistant (relay batch fold / aged-out backlog). The relay
+     * envelope is the primary notice; this is the backstop for when the relay
+     * carrying it is itself the thing that went missing. A count, never a body.
+     */
+    missedReports?: number;
 }
 
 function firstText(sources: readonly any[], pick: (x: any) => unknown[]): string {
@@ -259,6 +266,9 @@ export function compactProjectStatus(view: Record<string, unknown>, extras: Proj
         coordinator: extras.coordinator,
         threadOpen: extras.threadOpen,
         lastRelayAt: extras.lastRelayAt ? new Date(extras.lastRelayAt).toISOString() : null,
+        // Only when there is something to report — a `0` every time is noise
+        // the assistant would learn to skip.
+        ...(extras.missedReports && extras.missedReports > 0 ? { missedReports: extras.missedReports } : {}),
     };
 }
 

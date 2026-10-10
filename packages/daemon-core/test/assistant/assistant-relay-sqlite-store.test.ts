@@ -53,6 +53,19 @@ function exercise(store: AssistantRelayStore) {
     store.markDelivered(['plain:c:1'], T0 + 30);
     store.markDelivered(['plain:c:1'], T0 + 99); // first delivery time wins
     expect(store.listUndelivered().map((r) => r.attemptId)).toEqual(['plain:c:2']);
+    // No `rendered` argument = every id was rendered (back-compatible default).
+    expect(store.countUnrendered()).toEqual({ total: 0, byMesh: [] });
+
+    // A batch delivery: both settle, only the last one's body went out. The
+    // earlier row is the silent loss `delivered_at` alone cannot show.
+    store.recordCommitted({ ...row, attemptId: 'plain:c:3', committedAt: T0 + 3 });
+    store.recordCommitted({ ...row, attemptId: 'plain:c:4', committedAt: T0 + 4, meshId: 'm2' });
+    store.markDelivered(['plain:c:2', 'plain:c:3', 'plain:c:4'], T0 + 50, ['plain:c:3']);
+    expect(store.listUndelivered()).toEqual([]);
+    expect(store.countUnrendered()).toEqual({
+        total: 2,
+        byMesh: [{ meshId: 'm1', count: 1 }, { meshId: 'm2', count: 1 }],
+    });
 
     store.closeThread('m1', T0 + 40);
     store.prune(T0 + 30 + RELAY_DELIVERED_RETENTION_MS + 1);
@@ -80,8 +93,48 @@ describe('SqliteAssistantRelayStore', () => {
         const s2 = new SqliteAssistantRelayStore(openDb(file));
         expect(s2.isThreadOpen('m1')).toBe(true);
         expect(s2.listUndelivered()).toEqual([
-            { attemptId: 'plain:c:1', meshId: 'm1', coordinatorSessionId: 'c', committedAt: T0, deliveredAt: null, kind: 'relay', outcome: 'failed' },
+            { attemptId: 'plain:c:1', meshId: 'm1', coordinatorSessionId: 'c', committedAt: T0, deliveredAt: null, relayedAt: null, kind: 'relay', outcome: 'failed' },
         ]);
+    });
+
+    /**
+     * `relayed_at` was added on 2026-10-10 to tell a rendered relay from a
+     * folded one. Every daemon in the field already has the table without it,
+     * so the upgrade is exercised against a pre-migration schema — a fresh
+     * `CREATE TABLE` cannot catch an ALTER/index ordering mistake, and an
+     * earlier revision of this change crashed every existing database by
+     * indexing the column before adding it.
+     */
+    it('upgrades a pre-relayed_at database: adds the column, backfills history, idempotent', () => {
+        const db = new Database(':memory:');
+        db.exec(`
+            CREATE TABLE assistant_relays (
+                attempt_id TEXT PRIMARY KEY,
+                mesh_id TEXT NOT NULL,
+                coordinator_session_id TEXT NOT NULL,
+                committed_at INTEGER NOT NULL,
+                delivered_at INTEGER,
+                kind TEXT NOT NULL,
+                outcome TEXT NOT NULL
+            );
+        `);
+        const ins = db.prepare('INSERT INTO assistant_relays VALUES (?, ?, ?, ?, ?, ?, ?)');
+        ins.run('plain:c:1', 'm1', 'c', T0, T0 + 10, 'relay', 'completed'); // historic, delivered
+        ins.run('plain:c:2', 'm1', 'c', T0 + 1, null, 'relay', 'completed'); // historic, still queued
+
+        ensureAssistantRelaySchema(db);
+
+        const cols = (db.prepare('PRAGMA table_info(assistant_relays)').all() as Array<{ name: string }>).map((c) => c.name);
+        expect(cols).toContain('relayed_at');
+        const store = new SqliteAssistantRelayStore(db);
+        // Pre-upgrade rows cannot be judged after the fact, so a delivered one is
+        // backfilled as relayed: reporting it as loss would be a false alarm the
+        // assistant could do nothing about.
+        expect(store.countUnrendered()).toEqual({ total: 0, byMesh: [] });
+        expect(store.listUndelivered().map((r) => r.attemptId)).toEqual(['plain:c:2']);
+        ensureAssistantRelaySchema(db); // idempotent
+        expect(store.countUnrendered().total).toBe(0);
+        db.close();
     });
 
     it('schema is idempotent and holds no text/body column', () => {

@@ -16,15 +16,17 @@ import type { Database as DatabaseHandle } from 'better-sqlite3';
 import {
     RELAY_DELIVERED_RETENTION_MS,
     THREAD_CLOSED_RETENTION_MS,
+    toUnrenderedCounts,
     type AssistantRelayRow,
     type AssistantRelayStore,
     type AssistantThreadRow,
+    type UnrenderedRelayCounts,
 } from './assistant-relay-store.js';
 
 interface ThreadDbRow { mesh_id: string; opened_at: number; last_send_at: number; closed_at: number | null }
 interface RelayDbRow {
     attempt_id: string; mesh_id: string; coordinator_session_id: string;
-    committed_at: number; delivered_at: number | null; kind: string; outcome: string;
+    committed_at: number; delivered_at: number | null; relayed_at: number | null; kind: string; outcome: string;
 }
 
 function toThread(r: ThreadDbRow): AssistantThreadRow {
@@ -38,6 +40,7 @@ function toRelay(r: RelayDbRow): AssistantRelayRow {
         coordinatorSessionId: r.coordinator_session_id,
         committedAt: r.committed_at,
         deliveredAt: r.delivered_at ?? null,
+        relayedAt: r.relayed_at ?? null,
         kind: 'relay',
         outcome: r.outcome,
     };
@@ -70,22 +73,32 @@ export class SqliteAssistantRelayStore implements AssistantRelayStore {
         return (this.db.prepare('SELECT * FROM assistant_threads WHERE closed_at IS NULL ORDER BY mesh_id').all() as ThreadDbRow[]).map(toThread);
     }
 
-    recordCommitted(row: Omit<AssistantRelayRow, 'deliveredAt'>): boolean {
+    recordCommitted(row: Omit<AssistantRelayRow, 'deliveredAt' | 'relayedAt'>): boolean {
         const r = this.db.prepare(`
-            INSERT OR IGNORE INTO assistant_relays (attempt_id, mesh_id, coordinator_session_id, committed_at, delivered_at, kind, outcome)
-            VALUES (?, ?, ?, ?, NULL, ?, ?)
+            INSERT OR IGNORE INTO assistant_relays (attempt_id, mesh_id, coordinator_session_id, committed_at, delivered_at, relayed_at, kind, outcome)
+            VALUES (?, ?, ?, ?, NULL, NULL, ?, ?)
         `).run(row.attemptId, row.meshId, row.coordinatorSessionId, row.committedAt, row.kind, row.outcome);
         return r.changes > 0;
     }
 
-    markDelivered(attemptIds: readonly string[], at: number): void {
+    markDelivered(attemptIds: readonly string[], at: number, rendered?: readonly string[]): void {
         if (!attemptIds.length) return;
-        const stmt = this.db.prepare('UPDATE assistant_relays SET delivered_at = ? WHERE attempt_id = ? AND delivered_at IS NULL');
-        this.db.transaction((ids: readonly string[]) => { for (const id of ids) stmt.run(at, id); })(attemptIds);
+        const sent = new Set(rendered ?? attemptIds);
+        const stmt = this.db.prepare('UPDATE assistant_relays SET delivered_at = ?, relayed_at = ? WHERE attempt_id = ? AND delivered_at IS NULL');
+        this.db.transaction((ids: readonly string[]) => {
+            for (const id of ids) stmt.run(at, sent.has(id) ? at : null, id);
+        })(attemptIds);
     }
 
     listUndelivered(): AssistantRelayRow[] {
         return (this.db.prepare('SELECT * FROM assistant_relays WHERE delivered_at IS NULL ORDER BY committed_at, attempt_id').all() as RelayDbRow[]).map(toRelay);
+    }
+
+    countUnrendered(): UnrenderedRelayCounts {
+        const rows = this.db.prepare(
+            'SELECT mesh_id, COUNT(*) AS n FROM assistant_relays WHERE delivered_at IS NOT NULL AND relayed_at IS NULL GROUP BY mesh_id',
+        ).all() as Array<{ mesh_id: string; n: number }>;
+        return toUnrenderedCounts(new Map(rows.map((r) => [r.mesh_id, Number(r.n)])));
     }
 
     prune(now: number): void {

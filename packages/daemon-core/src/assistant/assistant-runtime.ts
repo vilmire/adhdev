@@ -345,6 +345,7 @@ export function wireAssistantRuntime(
         },
         isThreadOpen: (meshId) => store.isThreadOpen(meshId),
         lastRelayAt: (meshId) => relay.lastRelayAtFor(meshId),
+        missedReports: (meshId) => relay.missedReportsFor(meshId),
         recordSkillAttaches: (meshId, count) => metrics?.bump('skill_attaches', meshId, Date.now(), count),
         remoteSent: (meshId, cursor) => remotePoller.noteSent(meshId, cursor),
     });

@@ -103,6 +103,23 @@ export function buildRelayEnvelope(input: RelayEnvelopeInput): string {
     return lines.join('\n');
 }
 
+/**
+ * Coordinator turns that settled without their own body ever being sent
+ * (batch-folded, or aged out of the backlog). Emitted as its own part next to
+ * the relay — NOT inside `buildRelayEnvelope`'s header — so the assistant is
+ * told about the loss without being asked, and so this stays independent of
+ * the envelope's own header fields. Counts and slugs only, never a body.
+ * Returns '' when nothing was missed, so a healthy relay adds no noise.
+ */
+export function buildMissedReportsLine(missed: readonly { slug: string; count: number }[]): string {
+    const rows = missed.filter((m) => m.count > 0);
+    if (!rows.length) return '';
+    const per = rows.map((m) => `${safeSlug(m.slug)}: ${m.count}`).join(', ');
+    const total = rows.reduce((n, m) => n + m.count, 0);
+    return `[ADHDev relay gap] ${total} coordinator ${total === 1 ? 'report' : 'reports'} did not reach you in full (${per}). `
+        + 'Use project_read for a project listed here before assuming nothing happened in it.';
+}
+
 /** 24 h+ undelivered relays of one project, folded (§4.3 backlog). */
 export function buildFoldedBacklogLine(slug: string, count: number): string {
     const s = safeSlug(slug);

@@ -207,12 +207,20 @@ export function ensureAssistantRelaySchema(db: MeshRuntimeStore['db']): void {
             closed_at INTEGER
         );
 
+        -- delivered_at = the row left the queue (settled). relayed_at = its OWN
+        -- body reached the assistant. The two differ: a batch of commits is
+        -- delivered as one envelope carrying only the last turn's body, so the
+        -- earlier rows settle without ever being rendered. Hence
+        -- "delivered_at IS NOT NULL AND relayed_at IS NULL" is the
+        -- silently-dropped count (the loss the owner had to suspect by hand on
+        -- 2026-10-10).
         CREATE TABLE IF NOT EXISTS assistant_relays (
             attempt_id TEXT PRIMARY KEY,
             mesh_id TEXT NOT NULL,
             coordinator_session_id TEXT NOT NULL,
             committed_at INTEGER NOT NULL,
             delivered_at INTEGER,
+            relayed_at INTEGER,
             kind TEXT NOT NULL,
             outcome TEXT NOT NULL
         );
@@ -255,6 +263,20 @@ export function ensureAssistantRelaySchema(db: MeshRuntimeStore['db']): void {
     for (const c of ['review_writes_applied', 'review_writes_approved']) {
         if (!cols.has(c)) db.exec(`ALTER TABLE assistant_metric_daily ADD COLUMN ${c} INTEGER NOT NULL DEFAULT 0`);
     }
+    // Additive column for relay tables created before 2026-10-10. Existing rows
+    // get relayed_at = delivered_at: pre-upgrade history cannot tell a rendered
+    // row from a folded one, and reporting it as loss would be a false alarm.
+    const relayCols = new Set((db.prepare('PRAGMA table_info(assistant_relays)').all() as Array<{ name: string }>).map((r) => r.name));
+    if (!relayCols.has('relayed_at')) {
+        db.exec('ALTER TABLE assistant_relays ADD COLUMN relayed_at INTEGER');
+        db.exec('UPDATE assistant_relays SET relayed_at = delivered_at WHERE delivered_at IS NOT NULL');
+    }
+    // After the column exists on both fresh and upgraded databases — indexing it
+    // inside the CREATE block above would fail on every pre-2026-10-10 db.
+    db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_assistant_relays_unrendered
+            ON assistant_relays(relayed_at, committed_at);
+    `);
 }
 
 

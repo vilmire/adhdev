@@ -195,6 +195,7 @@ export async function localProjectStatus(ports: AssistantProjectPorts, mesh: Loc
         coordinator: coordinatorState(ports.coordinators(meshId)),
         threadOpen: ports.relay.isThreadOpen ? ports.relay.isThreadOpen(meshId) : null,
         lastRelayAt: ports.relay.lastRelayAt ? ports.relay.lastRelayAt(meshId) : null,
+        ...(ports.relay.missedReports ? { missedReports: ports.relay.missedReports(meshId) } : {}),
     });
     // Routing visibility (A7d): reuse the labels project_status already resolved
     // so the assistant reads machine names, not node ids.
