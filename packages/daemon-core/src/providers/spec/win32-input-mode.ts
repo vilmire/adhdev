@@ -85,11 +85,15 @@ export function encodeWin32InputMode(text: string): string {
  * keeps each ConPTY write under the same input-pipe budget as an unencoded body.
  */
 export function chunkWin32InputMode(text: string, maxChars: number): string[] {
+    return chunkWin32Tokens(win32InputModeTokens(text), maxChars);
+}
+
+function chunkWin32Tokens(tokens: Win32InputToken[], maxChars: number): string[] {
     const size = Math.max(1, Math.floor(maxChars));
     const segments: string[] = [];
     let current = '';
     const flush = () => { if (current) { segments.push(current); current = ''; } };
-    for (const token of win32InputModeTokens(text)) {
+    for (const token of tokens) {
         if (!token.atomic) {
             // ASCII run: fill the current segment, spill the rest into new ones.
             let rest = token.text;
@@ -106,6 +110,54 @@ export function chunkWin32InputMode(text: string, maxChars: number): string[] {
     }
     flush();
     return segments;
+}
+
+// ─── Raw terminal input (dashboard xterm `pty_input`) ─────────────────────────
+//
+// Keystrokes and pastes typed into the dashboard terminal reach the PTY as raw
+// terminal input, which — unlike a chat body — is full of escape sequences the
+// terminal emulator generated: arrow keys / Ctrl combos (CSI, SS3), bracketed-
+// paste markers, focus events, mouse reports, OSC replies, Alt/Meta-prefixed
+// keys (ESC + char). Those must reach the TUI byte-for-byte, so every escape
+// sequence is an ATOMIC, UNENCODED token. Two of them can legitimately carry a
+// non-ASCII code unit, and re-encoding it would corrupt the sequence:
+//  - X10 / UTF-8 (1005) mouse reports `ESC [ M Cb Cx Cy` — each coordinate is a
+//    char of value 32+n, i.e. ≥ 0x80 once the column/row passes 95;
+//  - Meta-prefixed keys `ESC <char>` (Alt+é, Alt+emoji).
+// Everything between escape sequences is ordinary typed/pasted text and is
+// encoded exactly like a chat body (ASCII unchanged, other code points as key
+// records). The xterm.js client hands over whole strings per onData event and
+// the transports carry them as JSON strings, so a surrogate pair is never split
+// across two `pty_input` frames (a lone surrogate, if one ever arrived, is still
+// encoded as its own record rather than dropped).
+// Alternatives, in priority order:
+//   X10 / 1005 mouse report (payload chars may be >= 0x80)
+//   CSI: arrows, F-keys, Ctrl/Shift combos, SGR mouse, focus, paste markers
+//   OSC / DCS / APC / PM / SOS string, BEL- or ST-terminated (e.g. colour-query replies)
+//   SS3: application-mode arrows / F1-F4
+//   Meta/Alt-prefixed key (ESC + one code point)
+const TERMINAL_ESCAPE_RE = /\x1b\[M[\s\S]{3}|\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\x1b[\]P_^X][\s\S]*?(?:\x07|\x1b\\)|\x1bO[\s\S]|\x1b[\s\S]/gu;
+
+function win32TerminalInputTokens(data: string): Win32InputToken[] {
+    const tokens: Win32InputToken[] = [];
+    let last = 0;
+    for (const m of data.matchAll(TERMINAL_ESCAPE_RE)) {
+        if (m.index! > last) tokens.push(...win32InputModeTokens(data.slice(last, m.index)));
+        tokens.push({ text: m[0], atomic: true });
+        last = m.index! + m[0].length;
+    }
+    if (last < data.length) tokens.push(...win32InputModeTokens(data.slice(last)));
+    return tokens;
+}
+
+/** Encode raw terminal input: escape sequences verbatim, text between them as for a chat body. */
+export function encodeWin32TerminalInput(data: string): string {
+    return win32TerminalInputTokens(data).map(t => t.text).join('');
+}
+
+/** encodeWin32TerminalInput, paced into write segments of at most `maxChars` (escape sequences and record groups never cut). */
+export function chunkWin32TerminalInput(data: string, maxChars: number): string[] {
+    return chunkWin32Tokens(win32TerminalInputTokens(data), maxChars);
 }
 
 /** Inverse of encodeWin32InputMode — test/diagnostic helper. Key-UP records are ignored. */

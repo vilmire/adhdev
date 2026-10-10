@@ -74,6 +74,7 @@ import type { ProviderFailure } from './provider-failure-classifier.js';
 import { authBillingLatchLogLine, classifyAuthBillingOutput, createLiveAuthState, exitClassificationAllowed, noteLiveAuthMatch, resolveLiveAuthSuspect, TAIL_BYTES, type LiveAuthContext, type LiveAuthState } from './live-auth-advisory.js';
 import { RawTail } from './raw-tail.js';
 import { recordSentPrompt } from '../native-history/sent-prompt-registry.js';
+import { Win32RawInputWriter } from './win32-raw-input-writer.js';
 
 /** What the adapter reports on PTY death (replaces the deleted shared/session-termination-sink). */
 export interface SpecAdapterExitReport { termination?: SessionTermination; runtimeSettings: Readonly<Record<string, unknown>> }
@@ -102,7 +103,11 @@ export class SpecCliAdapter implements CliAdapter {
         control_bar?: Control[];
         native_history?: NativeHistoryConfig;
         interactive_prompts?: InteractivePrompts;
+        /** `send_message.win32_input_mode_non_ascii` — also governs raw terminal input (writeRaw). */
+        win32_input_mode_non_ascii?: boolean;
     };
+    /** Lazy: paced win32-input-mode writer for raw terminal input (writeRaw), win32 + spec flag only. */
+    private win32RawInputWriter?: Win32RawInputWriter;
     /** Owning session id (session registry / read-path targetSessionId) —
      *  the sidecar-claim owner token for wire-based prompt detection. */
     private owningSessionId?: string;
@@ -239,6 +244,7 @@ export class SpecCliAdapter implements CliAdapter {
             control_bar: raw.control_bar,
             native_history: raw.native_history,
             interactive_prompts: raw.interactive_prompts,
+            win32_input_mode_non_ascii: raw.send_message?.win32_input_mode_non_ascii === true,
         };
         this.owningSessionId = sessionId;
         this.cliType = this.spec.id;
@@ -538,6 +544,7 @@ export class SpecCliAdapter implements CliAdapter {
 
     shutdown(): void {
         (this.liveAuth ??= createLiveAuthState()).stopRequested = true;
+        this.win32RawInputWriter?.dispose();
         try { this.driver.dispatch({ kind: 'shutdown' }); } catch { /* ignore */ }
     }
 
@@ -663,6 +670,16 @@ export class SpecCliAdapter implements CliAdapter {
                 this.claudeTuiCaptureSuppressed = true;
             }
         } catch { /* snapshot best-effort */ }
+        // win32 + `send_message.win32_input_mode_non_ascii` (agy): non-ASCII text
+        // as win32-input-mode key records, escape sequences verbatim, paced and
+        // ordered — the same encoding chat sends get (win32-raw-input-writer.ts).
+        // This is the one raw-write seam both the standalone `pty_input` command
+        // and the cloud P2P `pty_input` frame go through.
+        if (this.spec?.win32_input_mode_non_ascii === true && process.platform === 'win32') {
+            (this.win32RawInputWriter ??= new Win32RawInputWriter(segment => this.driver.dispatch({ kind: 'pty_write', data: segment })))
+                .write(data);
+            return;
+        }
         this.driver.dispatch({ kind: 'pty_write', data });
     }
 
