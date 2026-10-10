@@ -66,7 +66,7 @@ export const ASSISTANT_MCP_SERVER_NAME = 'adhdev-assistant';
 export const ASSISTANT_CLAUDE_LAUNCH_ENV: Readonly<Record<string, string>> = { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' };
 
 /** claude-cli built-in tool allowlist (B.1). */
-export const ASSISTANT_CLAUDE_BUILTIN_TOOLS = 'Read';
+export const ASSISTANT_CLAUDE_BUILTIN_TOOLS = 'Read,WebSearch,WebFetch';
 
 export function assistantWorkspaceDir(configDir: string): string {
     return join(configDir, 'assistant');

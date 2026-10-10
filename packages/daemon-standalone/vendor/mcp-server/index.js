@@ -61692,10 +61692,7 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
     }
     function suggestNodeProviderPriority(detected) {
       const installed = detected.filter((cli) => cli.installed);
-      const installedIds = installed.map((cli) => cli.id);
-      const preferred = PROVIDER_PRIORITY_PREFERENCE.filter((id22) => installedIds.includes(id22));
-      const rest = installedIds.filter((id22) => !preferred.includes(id22));
-      const providerPriority = [...preferred, ...rest];
+      const providerPriority = installed.map((cli) => cli.id).sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
       return {
         providerPriority,
         installedProviders: installed.map((cli) => ({
@@ -61783,7 +61780,6 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
     var MESH_INIT_WORKTREE_BOOTSTRAP_CONFIG_PATH;
     var MESH_INIT_CHANGE_IMPACT_CONFIG_PATH;
     var CANDIDATE_STALE_INPUTS;
-    var PROVIDER_PRIORITY_PREFERENCE;
     var init_mesh_init = __esm2({
       "src/mesh/mesh-init.ts"() {
         "use strict";
@@ -61792,7 +61788,6 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
         init_refine_config();
         init_worktree_bootstrap_config();
         init_change_impact_config();
-        init_dist();
         MESH_INIT_REFINE_CONFIG_PATH = MESH_REFINE_CONFIG_LOCATIONS[0];
         MESH_INIT_WORKTREE_BOOTSTRAP_CONFIG_PATH = MESH_WORKTREE_BOOTSTRAP_CONFIG_LOCATIONS[0];
         MESH_INIT_CHANGE_IMPACT_CONFIG_PATH = CHANGE_IMPACT_CONFIG_LOCATIONS[0];
@@ -61806,7 +61801,6 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
           "poetry.lock",
           "requirements.txt"
         ];
-        PROVIDER_PRIORITY_PREFERENCE = BUILTIN_PROVIDER_PREFERENCE2;
       }
     });
     var mesh_onboarding_plan_exports = {};
@@ -75495,7 +75489,7 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
         DEFAULT_ASSISTANT_CLI_TYPE = "claude-cli";
         ASSISTANT_MCP_SERVER_NAME = "adhdev-assistant";
         ASSISTANT_CLAUDE_LAUNCH_ENV = { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" };
-        ASSISTANT_CLAUDE_BUILTIN_TOOLS = "Read";
+        ASSISTANT_CLAUDE_BUILTIN_TOOLS = "Read,WebSearch,WebFetch";
       }
     });
     function deferredRestartScheduleKey(meshId, nodeId) {

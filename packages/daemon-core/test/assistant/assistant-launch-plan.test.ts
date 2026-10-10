@@ -9,14 +9,17 @@ import { buildMeshCoordinatorMcpServerEntry, getMcpServersKey } from '../../src/
 import { findWorkerPrivateHomeSpec } from '../../src/mesh/worker-home-specs.js';
 import { resolveAdhdevMcpServerLaunch, resolveMeshCoordinatorSetup, type MeshCoordinatorSetup } from '../../src/commands/mesh-coordinator.js';
 import {
+    ASSISTANT_CLAUDE_BUILTIN_TOOLS,
     ASSISTANT_MCP_SERVER_NAME,
     assistantClaudeMcpConfigPath,
     assistantPrivateHomeDir,
     assistantSessionSettings,
     assistantWorkspaceDir,
+    buildAssistantClaudeArgs,
     planAssistantMcp,
     resolveAssistantApprovalSettings,
 } from '../../src/assistant/assistant-launch-plan.js';
+import { ASSISTANT_TOOLS } from '@adhdev/mesh-shared';
 
 const CFG = '/tmp/adhdev-cfg';
 const WS = assistantWorkspaceDir(CFG);
@@ -42,18 +45,44 @@ describe('resolveAdhdevMcpServerLaunch toolset', () => {
 });
 
 describe('planAssistantMcp', () => {
-    it('claude-cli: daemon-owned config, strict MCP, pre-allowed assistant server, --tools=Read', () => {
+    it('claude-cli: daemon-owned config, strict MCP, pre-allowed assistant server, --tools includes Read/WebSearch/WebFetch', () => {
         const setup: MeshCoordinatorSetup = { kind: 'auto_import', serverName: 'adhdev-mesh', configPath: `${WS}/.mcp.json`, configFormat: 'claude_mcp_json', mcpServer: server };
         const plan = planAssistantMcp({ cliType: 'claude-cli', setup, workspace: WS, configDir: CFG });
         expect(plan).toEqual({
             ok: true,
-            cliArgs: ['--mcp-config', assistantClaudeMcpConfigPath(CFG), '--strict-mcp-config', `--allowedTools=mcp__${ASSISTANT_MCP_SERVER_NAME}`, '--tools=Read'],
+            cliArgs: ['--mcp-config', assistantClaudeMcpConfigPath(CFG), '--strict-mcp-config', `--allowedTools=mcp__${ASSISTANT_MCP_SERVER_NAME}`, `--tools=${ASSISTANT_CLAUDE_BUILTIN_TOOLS}`],
             configWrite: { path: assistantClaudeMcpConfigPath(CFG), format: 'claude_mcp_json', serverName: ASSISTANT_MCP_SERVER_NAME, server },
             mcpServer: server,
             toolRestriction: 'enforced',
             // Claude Code auto memory off: no second memory surface (research 2026-10-08 F4).
             launchEnv: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' },
         });
+    });
+
+    it('ASSISTANT_CLAUDE_BUILTIN_TOOLS carries WebSearch/WebFetch alongside Read (read-only web access, B.1 follow-up)', () => {
+        expect(ASSISTANT_CLAUDE_BUILTIN_TOOLS).toBe('Read,WebSearch,WebFetch');
+        expect(buildAssistantClaudeArgs('/cfg/mcp-configs/assistant.json')).toEqual([
+            '--mcp-config', '/cfg/mcp-configs/assistant.json',
+            '--strict-mcp-config',
+            `--allowedTools=mcp__${ASSISTANT_MCP_SERVER_NAME}`,
+            '--tools=Read,WebSearch,WebFetch',
+        ]);
+    });
+
+    it('the claude-cli built-in tool allowlist is independent of the MCP allowlist (--allowedTools untouched)', () => {
+        const args = buildAssistantClaudeArgs('/cfg/mcp-configs/assistant.json', 'custom-server');
+        expect(args).toContain('--allowedTools=mcp__custom-server');
+        expect(args).toContain(`--tools=${ASSISTANT_CLAUDE_BUILTIN_TOOLS}`);
+        // The MCP allowlist names only the assistant server, never the built-in tools.
+        const allowedTools = args.find((a) => a.startsWith('--allowedTools='))!;
+        expect(allowedTools).not.toContain('WebSearch');
+        expect(allowedTools).not.toContain('WebFetch');
+    });
+
+    it('ASSISTANT_TOOLS (the D5 MCP tool contract) stays a fixed 10-entry tuple, unaffected by the claude-cli built-in allowlist', () => {
+        expect(ASSISTANT_TOOLS).toHaveLength(10);
+        expect(ASSISTANT_TOOLS).not.toContain('WebSearch');
+        expect(ASSISTANT_TOOLS).not.toContain('WebFetch');
     });
 
     it('only claude-cli gets the auto-memory env; codex-cli is unchanged', () => {
