@@ -231,3 +231,42 @@ describe('statuslineSetupFailure binary name — IDENTITY, not hardcoded', () =>
         expect(quota.error).toContain('re-run `adhdev-preview quota claude:install` to repair');
     });
 });
+
+describe('statusline wrapper uninstall hint — IDENTITY, not hardcoded', () => {
+    // The on-disk wrapper comment is the uninstall counterpart of the
+    // statuslineSetupFailure install hint: a preview install must not tell the
+    // user to run `adhdev quota claude:uninstall`.
+    const ORIGINAL_BUILD_CHANNEL = process.env.ADHDEV_BUILD_CHANNEL;
+
+    afterEach(() => {
+        if (ORIGINAL_BUILD_CHANNEL === undefined) delete process.env.ADHDEV_BUILD_CHANNEL;
+        else process.env.ADHDEV_BUILD_CHANNEL = ORIGINAL_BUILD_CHANNEL;
+    });
+
+    async function renderWithTrack(track: 'stable' | 'preview'): Promise<string> {
+        if (track === 'preview') process.env.ADHDEV_BUILD_CHANNEL = 'preview';
+        else delete process.env.ADHDEV_BUILD_CHANNEL;
+        vi.resetModules();
+        const mod = await import('../../src/quota/statusline/wrapper-source.js');
+        return mod.renderWrapperScript({
+            snapshotPath: '/tmp/snapshot.json',
+            originalCommand: null,
+            snapshotVersion: 1,
+            minWriteIntervalMs: 15_000,
+            maxWriteIntervalMs: 30_000,
+        });
+    }
+
+    it('says `adhdev quota claude:uninstall` on the stable track', async () => {
+        const script = await renderWithTrack('stable');
+        expect(script).toContain('Remove with: adhdev quota claude:uninstall');
+        expect(script).not.toContain('__ADHDEV_BINARY_NAME__');
+    });
+
+    it('says `adhdev-preview quota claude:uninstall` on the preview track', async () => {
+        const script = await renderWithTrack('preview');
+        expect(script).toContain('Remove with: adhdev-preview quota claude:uninstall');
+        expect(script).not.toContain('Remove with: adhdev quota claude:uninstall');
+        expect(script).not.toContain('__ADHDEV_BINARY_NAME__');
+    });
+});

@@ -29,6 +29,7 @@ import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
 import { resolveCoordinatorRules, splitRulesLayer, type CoordinatorRulesResolution } from './coordinator-rules.js';
 import { isNoteExpired, OPERATING_NOTE_CATEGORY_TTL_DAYS } from './mesh-operating-notes.js';
 import { MESH_TASK_DIFFICULTIES, renderCoordinatorWorkerSection } from '@adhdev/mesh-shared';
+import { IDENTITY } from '../track-identity.js';
 
 /**
  * Cheap, locally-derived "what just happened" snapshot for the coordinator
@@ -275,7 +276,7 @@ Repository: \`${mesh.repoIdentity}\`${mesh.defaultBranch ? `\nDefault branch: \`
     } else if (mesh.nodes.length) {
         sections.push(buildNodeConfigSection(mesh));
     } else {
-        sections.push('## Nodes\nNo nodes configured yet. Ask the user to add nodes with `adhdev mesh add-node`.');
+        sections.push(`## Nodes\nNo nodes configured yet. Ask the user to add nodes with \`${IDENTITY.binaryName} mesh add-node\`.`);
     }
 
     // ── Active Mission (M3) — only present when one exists ──
@@ -388,7 +389,7 @@ function expandPromptPlaceholders(template: string, ctx: CoordinatorPromptContex
         ? buildNodeStatusSection(status.nodes)
         : mesh.nodes.length
             ? buildNodeConfigSection(mesh)
-            : '## Nodes\nNo nodes configured yet. Ask the user to add nodes with `adhdev mesh add-node`.';
+            : `## Nodes\nNo nodes configured yet. Ask the user to add nodes with \`${IDENTITY.binaryName} mesh add-node\`.`;
     // {{workflow}} / {{rules}} expand from the repo-read rules layer, so an
     // mesh-level append template inherits repo rules exactly like the default base.
     const rulesLayer = splitRulesLayer((ctx.repoRules ?? resolveCoordinatorRules(undefined)).text);
