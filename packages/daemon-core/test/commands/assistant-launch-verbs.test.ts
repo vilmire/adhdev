@@ -117,7 +117,7 @@ describe('launch_assistant', () => {
         expect(prompt.endsWith(ASSISTANT_SAFETY_TAIL)).toBe(true);
         expect(prompt).toContain('adhdev');
         const cfgPath = join(dir, 'mcp-configs', 'assistant.json');
-        expect(args).toEqual(expect.arrayContaining(['--mcp-config', cfgPath, '--strict-mcp-config', '--allowedTools=mcp__adhdev-assistant', '--tools=Read']));
+        expect(args).toEqual(expect.arrayContaining(['--mcp-config', cfgPath, '--strict-mcp-config', '--allowedTools=mcp__adhdev-assistant', '--tools=Read,WebSearch,WebFetch']));
         const cfg = JSON.parse(readFileSync(cfgPath, 'utf-8'));
         expect(cfg.mcpServers['adhdev-assistant'].args).toContain('--assistant');
         expect(cfg.mcpServers['adhdev-assistant'].args).not.toContain('--repo-mesh');

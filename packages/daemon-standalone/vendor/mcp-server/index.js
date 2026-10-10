@@ -138958,7 +138958,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       return ".bin";
     }
     var MID_GENERATION_SUBMIT_MIN_GAP_MS = 400;
-    var SEND_IN_FLIGHT_MAX_MS = 3e4;
+    var SEND_IN_FLIGHT_MAX_MS = 6e4;
     var WIN32_SUBMIT_RESEND_GAP_MS = 350;
     var WIN32_SUBMIT_MAX_RESENDS = 14;
     function resolveMaxSubmitResends(specMaxResends) {

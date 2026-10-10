@@ -132,12 +132,16 @@ describe('FsmDriver — queued sends behind a send the CLI never consumed', () =
             await vi.advanceTimersByTimeAsync(1_000);
             expect(driver.sendMessageWithDisposition('SECOND-BODY', false, 'm2').status).toBe('queued');
 
-            // Echo-gate blind fire (20 s) + the 14-attempt resend net (≈4.6 s): the
-            // submit is abandoned at ≈24.6 s, before the 30 s latch expiry.
-            await vi.advanceTimersByTimeAsync(22_000);
+            // Echo-gate blind fire (20 s) + the 14-attempt resend net (≈33.25 s): the
+            // submit is abandoned at ≈53.25 s, before the 60 s latch expiry.
+            for (let i = 0; i < 48; i++) {
+                await vi.advanceTimersByTimeAsync(1_000);
+            }
             expect(pty.writes.join('')).not.toContain('SECOND-BODY');
 
-            await vi.advanceTimersByTimeAsync(3_500);
+            for (let i = 0; i < 5; i++) {
+                await vi.advanceTimersByTimeAsync(1_000);
+            }
             expect(pty.writes.join('')).toContain('SECOND-BODY');
             expect(driver.hasQueuedSend('m2')).toBe(false);
         } finally {

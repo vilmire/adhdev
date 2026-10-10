@@ -366,7 +366,7 @@ export const MID_GENERATION_MAX_BODY_CHARS = VERIFIED_SUBMIT_MIN_CHARS;
  *  change would otherwise wedge the queue forever, so the latch self-expires.
  *  Generous: it must outlast the win32 echo-gate + resend budget (~20s) so a slow
  *  but legitimate submit is never treated as abandoned. */
-export const SEND_IN_FLIGHT_MAX_MS = 30_000;
+export const SEND_IN_FLIGHT_MAX_MS = 60_000;
 
 /* Wiring-unification D2: the 60 s content-hash pre-write duplicate gate
  * (`DUPLICATE_RESEND_WINDOW_MS` / `hashSendText`) is deleted. Identity is the
