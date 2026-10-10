@@ -228,6 +228,13 @@ export interface QuotaMetadata {
      * a stale number as freshly measured.
      */
     lastGoodWindows?: boolean;
+    /**
+     * Set by `updateFailureRetry` (./refresh.ts) once the bounded transient
+     * retry budget is spent: the daemon is no longer retrying this failure, so
+     * a reader must not render retained numbers as "refreshing". Cleared
+     * implicitly — every fetch builds a fresh entry without it.
+     */
+    retryExhausted?: boolean;
 }
 
 /** Normalized quota snapshot for a single provider. */

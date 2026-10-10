@@ -57,6 +57,7 @@ import { assignWindows } from './codex-windows.js';
 import type { QuotaFetchDeps } from './deps.js';
 import { resolveDeps } from './deps.js';
 import { toEpochResetMs as toResetMs, toNumber } from './coerce.js';
+import { FILE_AXIS_REREAD_NOTE, quotaReadNowClause } from '../refresh-command-hint.js';
 
 /**
  * How old a rollout reading may be and still count as current.
@@ -341,7 +342,7 @@ export function fetchCodexQuotaFromRollout(overrides: QuotaFetchDeps = {}): Prov
             session: reading.session,
             weekly: reading.weekly,
             updatedAt: reading.capturedAt,
-            error: `Codex quota reading is stale (${hours}h old) — run codex to refresh`,
+            error: `Codex quota reading is stale (${hours}h old) — run codex to refresh; ${FILE_AXIS_REREAD_NOTE} — ${quotaReadNowClause()}`,
             status: 'error',
             // lastGoodWindows, exactly as the Claude aged-out branch marks it:
             // these windows were genuinely MEASURED — read off the rollout log

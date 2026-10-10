@@ -98,6 +98,20 @@ export interface MeshNodeFactsProviderQuota {
          */
         lastGoodWindows?: boolean
         /**
+         * Unix ms the reporting node's NEXT scheduled retry of this transient
+         * failure is due (HTTP Retry-After wins when later). Re-stamped to the
+         * real backoff time on every failure — see daemon-core
+         * `updateFailureRetry`. Absent on persistent failures and on daemons
+         * predating the stamp.
+         */
+        retryAtMs?: number
+        /**
+         * True once the node has spent its bounded transient-retry budget and
+         * stopped retrying; the next look is the hourly backfill. Readers must
+         * stop calling retained numbers "refreshing" (`assessQuotaFreshness`).
+         */
+        retryExhausted?: boolean
+        /**
          * Unix ms when the reporting node last ATTEMPTED a refresh of this
          * provider — deliberately distinct from `updatedAt`, which dates the
          * DATA. They differ for file-source providers (claude-cli reports its

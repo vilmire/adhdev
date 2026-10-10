@@ -949,6 +949,9 @@ export type {
   SessionLaunchRecord,
   SessionLaunchedBy,
 } from '@adhdev/mesh-shared';
+// Quota freshness: one decision for the CLI, dashboards and the mesh_status fold (mcp-server imports it from here).
+export { assessQuotaFreshness, minutesUntilQuotaCheck, QUOTA_BACKFILL_HORIZON_MS } from '@adhdev/mesh-shared';
+export type { QuotaFreshness, QuotaFreshnessCue } from '@adhdev/mesh-shared';
 export { resolveModelLaunchValue } from './commands/model-launch-args.js';
 export { nativeHistoryObservedModel } from './providers/native-history/observed-model.js';
 export type { ObservedModel } from './providers/native-history/observed-model.js';

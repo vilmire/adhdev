@@ -120,6 +120,9 @@ describe('fetchClaudeQuota', () => {
 
         expect(quota.status).toBe('error');
         expect(quota.error).toContain('stale');
+        expect(quota.error).toContain('open a Claude Code session to refresh');
+        expect(quota.error).toContain('~1 min while a CLI is active');
+        expect(quota.error).toContain('quota --refresh');
         expect(quota.metadata?.failureKind).toBe('no-data');
         // The last known values stay visible — they are better than nothing,
         // as long as they are not labelled current.

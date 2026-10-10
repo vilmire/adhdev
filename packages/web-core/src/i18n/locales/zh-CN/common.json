@@ -3398,6 +3398,7 @@
                 "windowReset": "已重置 · 等待刷新",
                 "cue": {
                     "stale": "已过时",
+                    "staleNextCheck": "已过时 · {{minutes}} 分钟内重新检查",
                     "refreshing": "刷新中"
                 },
                 "resetsInDays": "{{days}} 天 {{hours}} 小时后重置",

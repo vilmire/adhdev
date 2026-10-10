@@ -3398,6 +3398,7 @@
                 "windowReset": "reset · awaiting refresh",
                 "cue": {
                     "stale": "stale",
+                    "staleNextCheck": "stale, next check within ~{{minutes}}m",
                     "refreshing": "refreshing"
                 },
                 "resetsInDays": "resets in {{days}}d {{hours}}h",

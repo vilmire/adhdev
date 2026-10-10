@@ -617,3 +617,67 @@ describe('event-driven refresh (turn ledger commits — wiring-unification C-W5 
         handle.stop()
     })
 })
+
+describe('transient-failure retry window — timer and refresh-loop chain agree on ONE schedule', () => {
+    // Regression for the 2026-10-10 "recovery window is 6 min, not 29" defect.
+    // quotaFailure stamps entry.metadata.retryAtMs = fetchTime + 120s on EVERY
+    // fetch, while the backoff (2→4→8→15m) lived only in the retry TIMER. The
+    // loop's chain wake / backfill gate read the entry's flat 120s stamp, so it
+    // re-probed every 2 minutes (and fired in parallel with the timer), burning
+    // the 4-retry budget in ~6 minutes. The tests above call refreshQuotaCacheOnce
+    // directly and never start the loop, which is why they stayed green.
+    it('with the loop running, a persistent transient failure is probed at +0/+2/+6/+14/+29 min, once each', async () => {
+        vi.useFakeTimers()
+        const t0 = Date.now()
+        const callTimes: number[] = []
+        const dueWhileInFlight: boolean[] = []
+        fetchKimiQuota.mockImplementation(async () => {
+            callTimes.push(Math.round((Date.now() - t0) / 10_000) * 10)
+            // A real fetch takes time: that in-flight window is where the retry
+            // timer and the loop's chain wake used to double-fire (2 ms apart in
+            // the field log). Any parallel probe shows up as an extra entry.
+            // While a probe is in flight the backfill gate must not call the same retry "due".
+            dueWhileInFlight.push(isFailureRetryDue('kimi', Date.now() + 60 * 60_000))
+            await new Promise((resolve) => setTimeout(resolve, 500))
+            return quotaFailure('kimi', 'error', 'Kimi access token expired', { failureKind: 'expired-token' })
+        })
+
+        const first = refreshQuotaCacheOnce([{ provider: 'kimi', fetch: fetchKimiQuota }], allEnabled)
+        await vi.advanceTimersByTimeAsync(500) // the fake-clock fetch latency
+        await first
+        const loop = startQuotaRefreshLoop({
+            hasRecentCliActivity: () => false,
+            isEnabled: allEnabled,
+            fetchers: [{ provider: 'kimi', fetch: fetchKimiQuota }] as any,
+        })
+        try {
+            // Just past the last scheduled retry (2+4+8+15 = 29 min).
+            await vi.advanceTimersByTimeAsync(29 * 60_000 + 5_000)
+            expect(callTimes).toEqual([0, 120, 360, 840, 1740])
+            expect(dueWhileInFlight.slice(1).every((due) => due === false)).toBe(true)
+            // Budget spent -> the entry says so, so no surface keeps saying "refreshing".
+            expect(readQuotaCache()?.['kimi']?.metadata?.retryExhausted).toBe(true)
+            // Budget spent: no further probes inside the next 30 minutes.
+            await vi.advanceTimersByTimeAsync(30 * 60_000)
+            expect(callTimes).toHaveLength(5)
+        } finally {
+            loop.stop()
+        }
+    })
+
+    it('the cached entry\'s retryAtMs follows the backoff (4m after the 2nd failure), so isFailureRetryDue agrees with the timer', async () => {
+        vi.useFakeTimers()
+        fetchKimiQuota.mockResolvedValue(quotaFailure('kimi', 'error', 'boom', { failureKind: 'network' }))
+        const fetchers = [{ provider: 'kimi' as const, fetch: fetchKimiQuota }]
+
+        await refreshQuotaCacheOnce(fetchers, allEnabled) // failure #1
+        const t1 = Date.now()
+        expect(readQuotaCache()?.['kimi']?.metadata?.retryAtMs).toBe(t1 + 2 * 60_000)
+        expect(readQuotaCache()?.['kimi']?.metadata?.retryExhausted).toBeUndefined() // budget not spent yet
+        await vi.advanceTimersByTimeAsync(2 * 60_000) // retry #1 → failure #2
+        const t2 = Date.now()
+        expect(readQuotaCache()?.['kimi']?.metadata?.retryAtMs).toBe(t2 + 4 * 60_000)
+        // 2 min after failure #2 the entry must NOT read as due (it did before the fix).
+        expect(isFailureRetryDue('kimi', t2 + 2 * 60_000 + 1)).toBe(false)
+    })
+})

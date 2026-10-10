@@ -3398,6 +3398,7 @@
                 "windowReset": "リセット済み・更新待ち",
                 "cue": {
                     "stale": "古い値",
+                    "staleNextCheck": "古い値・{{minutes}}分以内に再確認",
                     "refreshing": "更新中"
                 },
                 "resetsInDays": "{{days}}日{{hours}}時間後にリセット",

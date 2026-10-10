@@ -3401,6 +3401,7 @@
                 "windowReset": "reiniciado · esperando actualización",
                 "cue": {
                     "stale": "desactualizado",
+                    "staleNextCheck": "desactualizado, próxima comprobación en ~{{minutes}} min",
                     "refreshing": "actualizando"
                 },
                 "resetsInDays": "se reinicia en {{days}} d {{hours}} h",

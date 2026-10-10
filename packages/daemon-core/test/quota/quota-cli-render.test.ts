@@ -185,8 +185,8 @@ describe('printQuota — no-data stale marker', () => {
 
 // ★ANTIGRAVITY EXPIRED TOKEN IS STALE, NOT REFRESHING (owner report
 // 2026-09-13) — and the CLI must agree with the dashboard, since windowCue
-// here is a deliberate hand-copy of web-core's quotaWindowCue (daemon-core
-// cannot import web-core). The daemon never redeems this provider's refresh
+// here delegates to the shared assessQuotaFreshness (mesh-shared), the same
+// function web-core's quotaWindowCue and mcp-server's summarizeNodeQuota call. The daemon never redeems this provider's refresh
 // token, so nothing is in flight; only the user running `agy` renews it.
 // Kimi's expired-token stays "(refreshing)" above — its CLI really does
 // refresh on its own cadence — so this is provider-scoped on purpose.
@@ -206,6 +206,42 @@ describe('printQuota — antigravity expired token', () => {
         expect(joined).toMatch(/44\.5%.*\(stale\)/);
         expect(joined).toMatch(/9\.0%.*\(stale\)/);
         expect(joined).not.toContain('(refreshing)');
+    });
+});
+
+// ★HONEST FRESHNESS AFTER THE RETRY BUDGET (2026-10-10). "(refreshing)" used to
+// stay on for up to ~60 min after the daemon had stopped retrying. Spent budget
+// now reads "(stale, next check within ~Nm)"; codex no-data (the daemon
+// re-reads rollouts itself) gets the same wording, Claude no-data (a session
+// must run) does not promise a daemon check.
+describe('printQuota — stale readings the daemon re-checks by itself', () => {
+    const base = (provider: ProviderQuota['provider'], metadata: Record<string, unknown>): ProviderQuota => ({
+        provider,
+        session: { usedPercent: 31, windowMinutes: 300, resetsAt: null },
+        weekly: { usedPercent: 12, windowMinutes: 10080, resetsAt: null },
+        updatedAt: Date.now() - 10 * 60_000,
+        error: 'boom',
+        status: 'error',
+        metadata: { fetchedAt: Date.now() - 2 * 60_000, lastGoodWindows: true, ...metadata } as any,
+    });
+
+    it('spent retry budget: "(stale, next check within ~58m)", not "(refreshing)"', () => {
+        const joined = captureLogs(() => printQuota('Kimi', base('kimi', { failureKind: 'expired-token', retryAtMs: Date.now() - 600_000, retryExhausted: true }))).join('\n');
+        expect(joined).toMatch(/31\.0%.*\(stale, next check within ~5[78]m\)/);
+        expect(joined).not.toContain('(refreshing)');
+    });
+
+    it('retry still pending keeps "(refreshing)"', () => {
+        const joined = captureLogs(() => printQuota('Kimi', base('kimi', { failureKind: 'expired-token', retryAtMs: Date.now() + 240_000 }))).join('\n');
+        expect(joined).toMatch(/31\.0%.*\(refreshing\)/);
+    });
+
+    it('codex no-data: stale WITH a daemon next check; claude no-data: stale without one', () => {
+        const codex = captureLogs(() => printQuota('Codex', base('codex-cli', { failureKind: 'no-data' }))).join('\n');
+        expect(codex).toMatch(/\(stale, next check within ~\d+m\)/);
+        const claude = captureLogs(() => printQuota('Claude', base('claude-cli', { failureKind: 'no-data' }))).join('\n');
+        expect(claude).toMatch(/\(stale\)/);
+        expect(claude).not.toContain('next check');
     });
 });
 

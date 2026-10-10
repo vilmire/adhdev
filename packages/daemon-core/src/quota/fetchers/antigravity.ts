@@ -314,6 +314,7 @@ import {
 import type { QuotaChildProcess, QuotaFetchDeps } from './deps.js';
 import { assertInjectedNetworkFetchInTest, resolveDeps } from './deps.js';
 import { isCredentialExpired, retryAfterMs, toIsoResetMs as toResetMs, toNumber } from './coerce.js';
+import { quotaReadNowClause } from '../refresh-command-hint.js';
 
 /**
  * Default Cloud Code host — the one `agy` itself uses.
@@ -1101,7 +1102,7 @@ export async function fetchAntigravityQuota(overrides: QuotaFetchDeps = {}): Pro
         return quotaFailure(
             'antigravity-cli',
             'error',
-            'Antigravity access token expired — run `agy` once to refresh it, then quota will report again.',
+            `Antigravity access token expired — run \`agy\` once to refresh it, then quota will report again (within ~60 min on its own, ${quotaReadNowClause()}).`,
             { source, failureKind: 'expired-token' },
         );
     }

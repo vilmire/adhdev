@@ -9,7 +9,7 @@
 
 import * as fs from 'node:fs';
 import chalk from 'chalk';
-import { formatQuotaAccount, type MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared';
+import { assessQuotaFreshness, formatQuotaAccount, minutesUntilQuotaCheck, type MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared';
 import type { ProviderQuota, QuotaWindow } from './types.js';
 import type { InstallResult, UninstallResult, StatuslineStatus } from './statusline/install.js';
 // `IDENTITY.binaryName` is the SAME resolver every other CLI surface in this
@@ -31,41 +31,31 @@ const CLAUDE_NO_API_LINE = `Claude has no quota API — ${IDENTITY.binaryName} b
 const CLAUDE_WRAP_NOT_REPLACE_LINE = 'Install wraps (not replaces) your statusline, so nothing is lost.';
 
 /**
- * Mirrors web-core's `quotaWindowCue` / `formatQuotaWindow`. daemon-core cannot
- * import web-core, so the cue decision is duplicated here on purpose — ★keep
- * the two in step, or `adhdev quota` and the dashboard disagree about the same
- * snapshot:
- *  - `refreshing` — retained numbers the daemon is expected to replace by itself
- *  - `stale` — retained numbers nothing will refresh without the USER:
- *      · `no-data` (Claude statusline aged out — a session must run)
- *      · antigravity `expired-token` — the daemon deliberately does not redeem
- *        the refresh token, so only the user running `agy` renews it. Kimi's
- *        expired-token is excluded: its CLI does refresh on its own cadence,
- *        which is what "refreshing" is meant to describe.
+ * The cue decision is shared, not mirrored: `assessQuotaFreshness`
+ * (@adhdev/mesh-shared) is the one implementation behind this CLI, the
+ * dashboards (web-core `quotaWindowCue`) and the `mesh_status` fold
+ * (mcp-server `summarizeNodeQuota`), so the three can no longer disagree about
+ * the same snapshot. Only the wording below is CLI-local.
  */
-function windowCue(quota: ProviderQuota): 'refreshing' | 'stale' | undefined {
-    // Order matters: the aged-out Claude shape and the retained antigravity
-    // shape both ALSO mark lastGoodWindows (so mesh routing keeps trusting the
-    // retained numbers until reset), so this test must come first or they
-    // would read 'refreshing'.
-    const kind = quota.metadata?.failureKind;
-    const userMustAct = kind === 'no-data'
-        || (kind === 'expired-token' && quota.provider === 'antigravity-cli');
-    const hasReading = !!quota.session || !!quota.weekly
-        || (Array.isArray(quota.buckets) && quota.buckets.length > 0);
-    if (userMustAct && hasReading) return 'stale';
-    if (quota.metadata?.lastGoodWindows === true) return 'refreshing';
-    return undefined;
+function windowCue(quota: ProviderQuota, now: number = Date.now()): { cue?: 'refreshing' | 'stale'; nextCheckAt?: number } {
+    const { cue, nextCheckAt } = assessQuotaFreshness(quota as unknown as MeshNodeFactsProviderQuota, now);
+    return { cue, nextCheckAt };
 }
 
-function formatWindow(label: string, window: QuotaWindow | null, cue: 'refreshing' | 'stale' | undefined = undefined): string {
+function formatWindow(
+    label: string,
+    window: QuotaWindow | null,
+    freshness: { cue?: 'refreshing' | 'stale'; nextCheckAt?: number } = {},
+): string {
+    const { cue, nextCheckAt } = freshness;
     if (!window) {
         return `  ${label.padEnd(8)} ${chalk.gray('not reported')}`;
     }
     const percent = `${window.usedPercent.toFixed(1)}%`;
     const bar = renderBar(window.usedPercent);
     const reset = window.resetsAt === null ? '' : chalk.gray(`  resets ${formatRelative(window.resetsAt)}`);
-    const marker = cue === 'refreshing' ? chalk.gray('  (refreshing)') : cue === 'stale' ? chalk.gray('  (stale)') : '';
+    const nextCheck = nextCheckAt === undefined ? '' : `, next check within ~${minutesUntilQuotaCheck(nextCheckAt)}m`;
+    const marker = cue === 'refreshing' ? chalk.gray('  (refreshing)') : cue === 'stale' ? chalk.gray(`  (stale${nextCheck})`) : '';
     return `  ${label.padEnd(8)} ${bar} ${percent.padStart(6)} used${reset}${marker}`;
 }
 

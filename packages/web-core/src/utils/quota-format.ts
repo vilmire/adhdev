@@ -17,6 +17,7 @@
  * not a mesh node/status object.
  */
 import type { TFunction } from 'i18next'
+import { assessQuotaFreshness, minutesUntilQuotaCheck } from '@adhdev/mesh-shared'
 import type { MeshNodeFactsProviderQuota, MeshNodeFactsQuotaWindow } from '@adhdev/mesh-shared'
 
 /**
@@ -36,7 +37,8 @@ export interface QuotaTextFormatter {
     resetsInMinutes(minutes: number): string
     resetsInHours(hours: number, minutes: number): string
     resetsInDays(days: number, hours: number): string
-    cue(cue: QuotaWindowCue): string
+    /** `nextCheckMinutes` is set only for a `stale` reading the daemon re-checks by itself. */
+    cue(cue: QuotaWindowCue, nextCheckMinutes?: number): string
     /** A window whose reset boundary passed with no new reading yet. */
     windowReset(): string
     /** "184.2K tok" — `count` is already formatted. */
@@ -60,7 +62,7 @@ export const ENGLISH_QUOTA_TEXT: QuotaTextFormatter = {
     resetsInMinutes: (m) => `resets in ${m}m`,
     resetsInHours: (h, m) => `resets in ${h}h ${m}m`,
     resetsInDays: (d, h) => `resets in ${d}d ${h}h`,
-    cue: (cue) => cue,
+    cue: (cue, nextCheckMinutes) => (cue === 'stale' && nextCheckMinutes !== undefined ? `stale, next check within ~${nextCheckMinutes}m` : cue),
     windowReset: () => 'reset · awaiting refresh',
     usageTokens: (count) => `${count} tok`,
     usageSessions: (count) => `${count} sess`,
@@ -89,7 +91,9 @@ export function createQuotaTextFormatter(t: TFunction): QuotaTextFormatter {
         resetsInMinutes: (minutes) => t(`${K}resetsInMinutes`, { minutes }),
         resetsInHours: (hours, minutes) => t(`${K}resetsInHours`, { hours, minutes }),
         resetsInDays: (days, hours) => t(`${K}resetsInDays`, { days, hours }),
-        cue: (cue) => t(`${K}cue.${cue}`),
+        cue: (cue, nextCheckMinutes) => (cue === 'stale' && nextCheckMinutes !== undefined
+            ? t(`${K}cue.staleNextCheck`, { minutes: nextCheckMinutes })
+            : t(`${K}cue.${cue}`)),
         windowReset: () => t(`${K}windowReset`),
         usageTokens: (count) => t(`${K}usageTokens`, { count }),
         usageSessions: (count) => t(`${K}usageSessions`, { count }),
@@ -190,63 +194,31 @@ export function isQuotaWindowReset(window: MeshNodeFactsQuotaWindow | null | und
 /** Chip text (English default) for a window whose reset has passed but no new reading has arrived. */
 export const QUOTA_WINDOW_RESET_TEXT = ENGLISH_QUOTA_TEXT.windowReset()
 
-function hasUsableQuotaWindow(window: MeshNodeFactsQuotaWindow | null | undefined): boolean {
-    return !!window && typeof window.usedPercent === 'number' && Number.isFinite(window.usedPercent)
-}
-
-/**
- * Failure kinds whose retained numbers must read `stale`, never `refreshing`.
- *
- * The distinction is not "is the failure transient?" but "will the daemon fix
- * this on its own?". Both of these answer no, and each needs a user action:
- *  - `no-data` — the capture channel produced nothing new (Claude's statusline
- *    aged out). The daemon may poll again, but this snapshot is a historical
- *    capture, not an in-flight refresh.
- *  - `expired-token` on antigravity — the daemon deliberately does NOT redeem
- *    the stored refresh token (fetchers/antigravity.ts), so no amount of
- *    retrying renews it; only the user running `agy` does. Labelling it
- *    "refreshing" promised a self-heal that cannot happen, which is the
- *    opposite of the one thing the user needed to be told (owner report
- *    2026-09-13). Kimi's expired-token is NOT here on purpose: its CLI
- *    refreshes the token on its own cadence, so "refreshing" is literally true.
- */
-function isSelfHealingFailure(quota: MeshNodeFactsProviderQuota): boolean {
-    const kind = quota.metadata?.failureKind
-    if (kind === 'no-data') return false
-    if (kind === 'expired-token' && quota.provider === 'antigravity-cli') return false
-    return true
-}
-
-/** Does the snapshot carry any renderable number — windows OR per-pool buckets? */
-function hasAnyUsableQuotaReading(quota: MeshNodeFactsProviderQuota): boolean {
-    if (hasUsableQuotaWindow(quota.session) || hasUsableQuotaWindow(quota.weekly)) return true
-    // Antigravity's reading can live entirely on the bucket axis (session/weekly
-    // are only a worst-bucket collapse and may both be null), and those chips
-    // are exactly what the user sees — so a cue is owed even with no window.
-    return Array.isArray(quota.buckets)
-        && quota.buckets.some((b) => !!b && typeof b.usedPercent === 'number' && Number.isFinite(b.usedPercent))
-}
-
 /**
  * Which freshness cue a snapshot's windows should carry.
  *
- * `refreshing` — last-good carry-forward after a failure the daemon is
- * expected to resolve by itself; another fetch will replace the numbers.
- * `stale` — numbers are present but nothing is going to refresh them without
- * the user (see isSelfHealingFailure). Distinct from `refreshing` on purpose:
- * mixing them tells a reader a reading is about to update itself when it is
- * not, and suppresses the action that would actually fix it.
+ * The decision itself is `assessQuotaFreshness` (@adhdev/mesh-shared), shared
+ * with `adhdev quota` and the coordinator's `mesh_status` fold so the three
+ * surfaces cannot disagree about one snapshot:
+ *
+ * `refreshing` — retained numbers after a transient failure with a retry
+ * actually pending (the daemon will replace them by itself).
+ * `stale` — numbers are present but no retry is pending: either only the user
+ * can renew them (aged-out Claude statusline, expired antigravity token), or
+ * the daemon has spent its retry budget / re-reads on a slower schedule (see
+ * `quotaNextCheckAt`). Distinct from `refreshing` on purpose: mixing them
+ * tells a reader a reading is about to update itself when it is not.
  */
-export function quotaWindowCue(quota: MeshNodeFactsProviderQuota): QuotaWindowCue | undefined {
-    // Order matters: the aged-out Claude shape and the retained antigravity
-    // shape both ALSO mark lastGoodWindows (mesh routing trusts retained
-    // numbers until their reset), so the non-self-healing test must come
-    // first or they would all read 'refreshing'.
-    if (!isSelfHealingFailure(quota) && hasAnyUsableQuotaReading(quota)) {
-        return 'stale'
-    }
-    if (quota.metadata?.lastGoodWindows === true) return 'refreshing'
-    return undefined
+export function quotaWindowCue(quota: MeshNodeFactsProviderQuota, now: number = Date.now()): QuotaWindowCue | undefined {
+    return assessQuotaFreshness(quota, now).cue
+}
+
+/**
+ * Unix ms by which the daemon will have looked again, for a `stale` reading the
+ * daemon re-checks on its own; undefined when the user must act or none is due.
+ */
+export function quotaNextCheckAt(quota: MeshNodeFactsProviderQuota, now: number = Date.now()): number | undefined {
+    return assessQuotaFreshness(quota, now).nextCheckAt
 }
 
 /**
@@ -255,15 +227,17 @@ export function quotaWindowCue(quota: MeshNodeFactsProviderQuota): QuotaWindowCu
  * `cue` marks a window that is visible but not a fresh measurement:
  *  - `true` / `'refreshing'` — last-good carry-forward after a TRANSIENT
  *    fetch failure (`metadata.lastGoodWindows`). Appends "· refreshing".
- *  - `'stale'` — numbers present with `failureKind: 'no-data'` (Claude
- *    statusline aged out). Appends "· stale". Not the same state as
- *    refreshing: nothing is retrying this reading.
+ *  - `'stale'` — numbers present but no retry is pending (Claude statusline
+ *    aged out, antigravity expired token, spent retry budget). Appends
+ *    "· stale"; with `nextCheckAt` (the daemon re-checks by itself) it reads
+ *    "· stale, next check within ~Nm". Not the same state as refreshing.
  */
 export function formatQuotaWindow(
     window: MeshNodeFactsQuotaWindow | null | undefined,
     now: number = Date.now(),
     cue: boolean | QuotaWindowCue | undefined = false,
     fmt: QuotaTextFormatter = ENGLISH_QUOTA_TEXT,
+    nextCheckAt?: number,
 ): string | null {
     if (!window || typeof window.usedPercent !== 'number' || !Number.isFinite(window.usedPercent)) return null
     if (isQuotaWindowReset(window, now)) return fmt.windowReset()
@@ -271,7 +245,8 @@ export function formatQuotaWindow(
     const resets = formatQuotaReset(window.resetsAt, now, fmt)
     const base = resets ? `${used} · ${resets}` : used
     const marker: QuotaWindowCue | null = cue === true || cue === 'refreshing' ? 'refreshing' : cue === 'stale' ? 'stale' : null
-    return marker ? `${base} · ${fmt.cue(marker)}` : base
+    const nextCheckMinutes = marker === 'stale' && nextCheckAt !== undefined ? minutesUntilQuotaCheck(nextCheckAt, now) : undefined
+    return marker ? `${base} · ${fmt.cue(marker, nextCheckMinutes)}` : base
 }
 
 /** One renderable per-pool quota bucket (antigravity's Gemini vs Claude/GPT). */
@@ -434,8 +409,9 @@ export function buildQuotaDisplayModel(
     fmt: QuotaTextFormatter = ENGLISH_QUOTA_TEXT,
 ): QuotaDisplayModel {
     const cue = quotaWindowCue(quota)
+    const nextCheckAt = cue === 'stale' ? quotaNextCheckAt(quota, now) : undefined
     const axisChip = (window: MeshNodeFactsQuotaWindow | null | undefined, hint: 'session' | 'weekly' | 'monthly', prefix: string): QuotaDisplayChip | null => {
-        const text = formatQuotaWindow(window, now, cue, fmt)
+        const text = formatQuotaWindow(window, now, cue, fmt, nextCheckAt)
         if (!text) return null
         const usedPercent = window!.usedPercent
         const reset = isQuotaWindowReset(window, now)
@@ -450,7 +426,7 @@ export function buildQuotaDisplayModel(
     // numbers twice.
     const bucketChips: QuotaDisplayChip[] = collectQuotaBucketChips(quota, fmt).map(chip => ({
         key: chip.label,
-        label: `${chip.label} ${formatQuotaWindow(chip.window, now, cue, fmt)}`,
+        label: `${chip.label} ${formatQuotaWindow(chip.window, now, cue, fmt, nextCheckAt)}`,
         usedPercent: isQuotaWindowReset(chip.window, now) ? null : chip.usedPercent,
         hint: 'bucket' as const,
         tone: isQuotaWindowReset(chip.window, now) ? 'default' as const : quotaUsageTone(chip.usedPercent),

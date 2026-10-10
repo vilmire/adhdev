@@ -231,3 +231,38 @@ test('a snapshot with no numbers on ANY axis still degrades to status:failureKin
   };
   assert.equal(summarizeNodeQuota(none)?.['antigravity-cli'], 'error:expired-token');
 });
+
+// ★HONEST FRESHNESS AFTER THE RETRY BUDGET (2026-10-10): the cue comes from the
+// shared assessQuotaFreshness (same as the dashboards and `adhdev quota`).
+// "refreshing" only while a retry is pending; a spent budget reads stale with
+// the daemon's next check; codex no-data is a daemon re-read (next check), the
+// aged-out Claude statusline needs a session (no daemon check promised).
+const FRESH_NOW = 1_800_000_000_000;
+const retainedKimi = (metadata: Record<string, unknown>, provider = 'kimi') => ({
+  [provider]: {
+    provider,
+    status: 'error',
+    session: { usedPercent: 31, windowMinutes: 300, resetsAt: null },
+    weekly: { usedPercent: 12, windowMinutes: 10080, resetsAt: null },
+    updatedAt: FRESH_NOW - 10 * 60_000,
+    metadata: { fetchedAt: FRESH_NOW - 2 * 60_000, lastGoodWindows: true, failureKind: 'expired-token', ...metadata },
+  },
+});
+
+test('retry pending keeps "refreshing"', () => {
+  const line = summarizeNodeQuota(retainedKimi({ retryAtMs: FRESH_NOW + 240_000 }), FRESH_NOW)?.kimi ?? '';
+  assert.match(line, /· refreshing$/);
+});
+
+test('a spent retry budget reads stale with the next check, never refreshing', () => {
+  const line = summarizeNodeQuota(retainedKimi({ retryAtMs: FRESH_NOW - 20 * 60_000, retryExhausted: true }), FRESH_NOW)?.kimi ?? '';
+  assert.match(line, /· stale · next check ≤58m$/, line);
+  assert.ok(!line.includes('refreshing'), line);
+});
+
+test('codex no-data is stale with a daemon next check; claude no-data is plain stale', () => {
+  const codex = summarizeNodeQuota(retainedKimi({ failureKind: 'no-data' }, 'codex-cli'), FRESH_NOW)?.['codex-cli'] ?? '';
+  assert.match(codex, /· stale · next check ≤\d+m$/, codex);
+  const claude = summarizeNodeQuota(retainedKimi({ failureKind: 'no-data' }, 'claude-cli'), FRESH_NOW)?.['claude-cli'] ?? '';
+  assert.match(claude, /· stale$/, claude);
+});

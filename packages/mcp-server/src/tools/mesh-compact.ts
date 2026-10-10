@@ -11,7 +11,7 @@
  * there is no runtime import cycle.
  */
 import { elideLargeNestedValue } from './mesh-tool-shared.js';
-import { DEFAULT_QUOTA_ROUTING_POLICY } from '@adhdev/daemon-core';
+import { DEFAULT_QUOTA_ROUTING_POLICY, assessQuotaFreshness, minutesUntilQuotaCheck } from '@adhdev/daemon-core';
 
 // Staleness threshold for quota readings, single-sourced from the daemon-core
 // routing gate (DEFAULT_QUOTA_ROUTING_POLICY.staleAfterMs) — NEVER re-declared
@@ -170,7 +170,6 @@ export function summarizeNodeQuota(quota: any, now: number = Date.now()): Record
     for (const [provider, snapshot] of Object.entries(quota as Record<string, any>)) {
         if (!snapshot || typeof snapshot !== 'object') continue;
         const status = typeof snapshot.status === 'string' ? snapshot.status : 'unknown';
-        const lastGood = snapshot.metadata?.lastGoodWindows === true;
         const failureKind = typeof snapshot.metadata?.failureKind === 'string' ? snapshot.metadata.failureKind : undefined;
         const pct = (w: any): string | undefined => (w && Number.isFinite(w.usedPercent) ? `${Math.round(w.usedPercent)}%` : undefined);
         const weekly = pct(snapshot.weekly);
@@ -202,16 +201,16 @@ export function summarizeNodeQuota(quota: any, now: number = Date.now()): Record
         if (weekly === undefined && session === undefined && worstBucket !== undefined) {
             line = `pool ${worstBucket} (${buckets.length}) · ${age}${stale ? ' stale' : ''}`;
         }
-        // `no-data` means the source did not produce a new measurement; an
-        // expired antigravity token is the same class — the daemon will not
-        // renew it (only the user running `agy` does), so "refreshing" would
-        // falsely claim an active refresh. Avoid duplicating "stale" when age
-        // already did it.
-        const userMustAct = failureKind === 'no-data'
-            || (failureKind === 'expired-token' && provider === 'antigravity-cli');
-        if (userMustAct) {
+        // The cue decision is shared with the dashboards and `adhdev quota`
+        // (assessQuotaFreshness in mesh-shared) — do not re-derive it here.
+        // `stale` = nothing is retrying it (aged-out Claude statusline, expired
+        // antigravity token, or a spent retry budget); `refreshing` only while a
+        // retry is actually pending. Avoid duplicating "stale" when age did it.
+        const { cue, nextCheckAt } = assessQuotaFreshness(snapshot, now);
+        if (cue === 'stale') {
             if (!stale) line += ' · stale';
-        } else if (lastGood) line += ' · refreshing';
+            if (nextCheckAt !== undefined) line += ` · next check ≤${minutesUntilQuotaCheck(nextCheckAt, now)}m`;
+        } else if (cue === 'refreshing') line += ' · refreshing';
         else if (status !== 'ok') line += ` · ${status}`;
         out[provider] = line;
     }

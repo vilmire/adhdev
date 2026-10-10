@@ -43,6 +43,7 @@ import { parseSnapshotFile, type StatuslineSnapshot } from '../statusline/snapsh
 import { readStatuslineStatus, resolveInstallPaths } from '../statusline/install.js';
 import type { QuotaFetchDeps } from './deps.js';
 import { resolveDeps } from './deps.js';
+import { FILE_AXIS_REREAD_NOTE, quotaReadNowClause } from '../refresh-command-hint.js';
 
 /**
  * How old a reading may be and still count as current.
@@ -134,7 +135,7 @@ export async function fetchClaudeQuota(overrides: QuotaFetchDeps = {}): Promise<
             session,
             weekly,
             updatedAt: snapshot.capturedAt,
-            error: `Claude quota reading is stale (${minutes} min old) — open a Claude Code session to refresh`,
+            error: `Claude quota reading is stale (${minutes} min old) — open a Claude Code session to refresh; ${FILE_AXIS_REREAD_NOTE} — ${quotaReadNowClause()}`,
             status: 'error',
             // 'no-data' (not 'unsupported'): the channel works, the reading
             // just aged out — same ordinary wait-for-a-session state as the

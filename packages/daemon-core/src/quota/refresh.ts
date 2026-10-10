@@ -719,8 +719,9 @@ export async function refreshQuotaCacheOnce(
  * Why it cannot run away: each consecutive transient failure doubles the delay
  * (2m → 4m → 8m → 15m, capped at the normal refresh interval), and after
  * QUOTA_FAILURE_MAX_RETRIES consecutive failures the scheduler stops entirely
- * — the entry keeps its (past) retryAtMs but `isFailureRetryDue` then reports
- * false, so the loop's backfill gate stops firing on it too. Recovery from
+ * — the entry keeps its last advertised retryAtMs (now past) and gains
+ * `metadata.retryExhausted`, and `isFailureRetryDue` reports false, so the
+ * loop's backfill gate stops firing on it too. Recovery from
  * that state comes from the ordinary activity-gated tick or an event-driven
  * refresh, both of which reset the counter on success. A persistent failure
  * (no retryAtMs) never schedules anything, matching the pre-existing "a
@@ -735,6 +736,13 @@ interface FailureRetryState {
     /** Consecutive transient failures since the last success. */
     failures: number;
     timer: NodeJS.Timeout | null;
+    /**
+     * True from the moment the retry timer fires until its refresh settles. The
+     * timer handler nulls `timer` before probing, so without this flag the
+     * loop's backfill gate (retryAtMs just passed, no timer) saw the retry as
+     * "due" and probed in parallel with it.
+     */
+    retryInFlight?: boolean;
     /**
      * Credential-store mtime observed when this failure episode was last
      * recorded, for the renewal detector below. Undefined on every provider
@@ -911,7 +919,21 @@ export function isFailureRetryDue(provider: QuotaProvider, now: number = Date.no
     if (!entry || entry.status === 'ok') return false;
     const retryAtMs = entry.metadata?.retryAtMs;
     if (typeof retryAtMs !== 'number' || retryAtMs > now) return false;
+    // An armed retry timer owns this episode's next probe — firing the loop's
+    // backfill gate as well would double-probe the same retry.
+    if (hasArmedFailureRetryTimer(provider)) return false;
     return (failureRetries.get(provider)?.failures ?? 0) <= QUOTA_FAILURE_MAX_RETRIES;
+}
+
+/**
+ * True while updateFailureRetry has a backoff timer pending for this provider.
+ * That timer is the single owner of the next retry: the refresh loop's chain
+ * wake and backfill gate must stand down (they remain the safety net for the
+ * no-timer states — hydrated-from-disk entries, a spent budget, a lost timer).
+ */
+export function hasArmedFailureRetryTimer(provider: QuotaProvider): boolean {
+    const state = failureRetries.get(provider);
+    return !!state && (!!state.timer || state.retryInFlight === true);
 }
 
 /**
@@ -1055,6 +1077,11 @@ function updateFailureRetry(
     const credentialMtimeMs = previous?.credentialMtimeMs;
     if (failures > QUOTA_FAILURE_MAX_RETRIES) {
         failureRetries.set(provider, { failures, timer: null, credentialMtimeMs });
+        // Tell every reader the daemon has stopped retrying: retained numbers
+        // must stop reading "refreshing" (assessQuotaFreshness in mesh-shared).
+        if (entry && entry.metadata) {
+            cache.set(provider, { ...entry, metadata: { ...entry.metadata, retryExhausted: true } });
+        }
         // Budget just went from spendable to spent — this is exactly the state
         // a later re-login has to be able to rescue, so make sure a baseline
         // stamp exists to compare future reads against.
@@ -1069,14 +1096,26 @@ function updateFailureRetry(
     );
     // A server-dictated retry time (HTTP Retry-After) wins when it is later.
     const delayMs = Math.max(retryAtMs - Date.now(), backoffMs, 0);
+    // ★Advertise the REAL next-retry time on the entry. quotaFailure stamps
+    // retryAtMs = fetchTime + 120s on every fetch; without this re-stamp the
+    // 2→4→8→15m backoff lived only in the timer while isFailureRetryDue and the
+    // loop's chain wake kept reading the flat 120s stamp, re-probing every 2
+    // minutes and spending the 4-retry budget in ~6 min instead of ~29.
+    if (entry && entry.metadata) {
+        cache.set(provider, { ...entry, metadata: { ...entry.metadata, retryAtMs: Date.now() + delayMs } });
+    }
     const timer = setTimeout(() => {
         const state = failureRetries.get(provider);
         if (state) state.timer = null;
         // The enable gate is re-evaluated at fire time: a provider disabled
         // since the failure was recorded is never re-probed.
         if (isEnabled && !isEnabled(provider)) return;
+        if (state) state.retryInFlight = true;
         void refreshQuotaCacheOnce([{ provider, fetch }], isEnabled)
-            .catch((e: any) => LOG.warn('Quota', `${provider}: scheduled retry failed: ${e?.message || e}`));
+            .catch((e: any) => LOG.warn('Quota', `${provider}: scheduled retry failed: ${e?.message || e}`))
+            // updateFailureRetry normally replaced `state` already; this only
+            // matters when the refresh threw before it could.
+            .finally(() => { if (state) state.retryInFlight = false; });
     }, delayMs);
     if (typeof timer.unref === 'function') timer.unref();
     failureRetries.set(provider, { failures, timer, credentialMtimeMs });

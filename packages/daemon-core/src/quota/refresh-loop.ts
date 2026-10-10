@@ -17,6 +17,7 @@ import {
     setQuotaCacheChangedListener,
     setAmbientQuotaEnableGate,
     isFailureRetryDue,
+    hasArmedFailureRetryTimer,
     isSnapshotStaleForRouting,
     isBackfillDueByAttemptClock,
     isDueByAxisTtl,
@@ -152,6 +153,7 @@ function computeNextWakeDelayMs(
         if (entry.status !== 'ok') {
             const retryAtMs = entry.metadata?.retryAtMs;
             if (typeof retryAtMs === 'number'
+                && !hasArmedFailureRetryTimer(provider) // the armed timer owns this retry
                 && (failureRetries.get(provider)?.failures ?? 0) <= QUOTA_FAILURE_MAX_RETRIES) {
                 nextAt = Math.min(nextAt, retryAtMs);
             }

@@ -186,3 +186,40 @@ describe('quotaWindowCue — antigravity expired token reads stale, not refreshi
     ])
   })
 })
+
+// ★HONEST FRESHNESS AFTER THE RETRY BUDGET (2026-10-10): the shared decision
+// (mesh-shared assessQuotaFreshness) drops "refreshing" once the daemon has
+// stopped retrying, and names when it will look again.
+describe('quotaWindowCue — spent retry budget and daemon-rechecked no-data', () => {
+  const NOW = 1_800_000_000_000
+  const MIN = 60_000
+  const kimi = (metadata: Record<string, unknown>) => ({
+    provider: 'kimi',
+    status: 'error',
+    session: { usedPercent: 31, windowMinutes: 300, resetsAt: null },
+    weekly: { usedPercent: 12, windowMinutes: 10080, resetsAt: null },
+    updatedAt: NOW - 10 * MIN,
+    error: 'boom',
+    metadata: { fetchedAt: NOW - 2 * MIN, lastGoodWindows: true, failureKind: 'expired-token', ...metadata },
+  })
+
+  it('retry pending -> refreshing', () => {
+    expect(quotaWindowCue(kimi({ retryAtMs: NOW + 4 * MIN }) as never, NOW)).toBe('refreshing')
+  })
+
+  it('budget spent -> stale + "next check within ~58m" on the chip', () => {
+    const q = kimi({ retryAtMs: NOW - 20 * MIN, retryExhausted: true }) as never
+    expect(quotaWindowCue(q, NOW)).toBe('stale')
+    const model = buildQuotaDisplayModel(q, NOW)
+    expect(model.compactChip?.label).toContain('stale, next check within ~')
+    expect(model.compactChip?.label).not.toContain('refreshing')
+  })
+
+  it('codex no-data -> stale with a next check; claude no-data -> plain stale', () => {
+    const codex = { ...kimi({ failureKind: 'no-data' }), provider: 'codex-cli' } as never
+    expect(buildQuotaDisplayModel(codex, NOW).compactChip?.label).toContain('stale, next check within ~')
+    const claude = { ...kimi({ failureKind: 'no-data' }), provider: 'claude-cli' } as never
+    const label = buildQuotaDisplayModel(claude, NOW).compactChip?.label ?? ''
+    expect(label).toMatch(/· stale$/)
+  })
+})

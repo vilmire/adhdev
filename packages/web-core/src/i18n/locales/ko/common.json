@@ -3398,6 +3398,7 @@
                 "windowReset": "초기화됨 · 새 값 대기 중",
                 "cue": {
                     "stale": "오래된 값",
+                    "staleNextCheck": "오래된 값 · {{minutes}}분 이내 재확인",
                     "refreshing": "새로 고치는 중"
                 },
                 "resetsInDays": "{{days}}일 {{hours}}시간 후 초기화",
