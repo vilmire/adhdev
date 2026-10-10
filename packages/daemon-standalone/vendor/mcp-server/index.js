@@ -72218,59 +72218,6 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         init_mesh_node_slots();
       }
     });
-    function sweepExpiredCooldowns() {
-      const now = Date.now();
-      for (const [key2, until] of autoLaunchCooldownUntil) {
-        if (now >= until) autoLaunchCooldownUntil.delete(key2);
-      }
-    }
-    function resolveAutoLaunchTarget(components, node) {
-      if (isLocalAutoLaunchNode(node)) return { mode: "local" };
-      const daemonId = readMeshNodeDaemonId(node ?? {});
-      if (!daemonId) return { mode: "skip", reason: "remote_auto_launch_unsupported" };
-      if (!components.dispatchMeshCommand) return { mode: "skip", reason: "remote_auto_launch_unsupported" };
-      const coordinatorDaemonId = localCoordinatorDaemonId2();
-      if (!coordinatorDaemonId) return { mode: "skip", reason: "remote_auto_launch_no_coordinator_daemon_id" };
-      return { mode: "remote", daemonId, coordinatorDaemonId };
-    }
-    function markAutoLaunch(meshId, taskId, args) {
-      const reason = args.reason || args.error;
-      const difficultyFloorSkip = args.status === "skipped" && isDifficultyFloorWaitReason(reason);
-      if (difficultyFloorSkip) {
-        handleDifficultyFloorSkip({ meshId, taskId, reason, nodeId: args.nodeId, coordinatorDaemonId: localCoordinatorDaemonId2() });
-      } else if (!autoLaunchWriteWouldClobberWinner(meshId, taskId, args, AUTO_LAUNCH_AWAIT_CLAIM_MS) && !autoLaunchWriteWouldClobberDifficultyFloorWaitClock(meshId, taskId, args.status)) {
-        recordTaskAutoLaunch(meshId, taskId, {
-          status: args.status,
-          reason,
-          nodeId: args.nodeId,
-          providerType: args.providerType,
-          sessionId: args.sessionId
-        }, { spendSpawnBudget: args.spendSpawnBudget });
-      } else if (args.spendSpawnBudget) {
-        spendTaskAutoLaunchSpawnBudget(meshId, taskId);
-      }
-      if (args.dispatchFailedInTransport) recordTaskAutoLaunchDispatchFailure(meshId, taskId);
-      recordAutoLaunchEvent(meshId, {
-        phase: args.status,
-        taskId,
-        nodeId: args.nodeId,
-        providerType: args.providerType,
-        sessionId: args.sessionId,
-        reason: args.reason,
-        error: args.error,
-        ...args.model ? { model: args.model } : {},
-        ...args.thinkingLevel ? { thinkingLevel: args.thinkingLevel } : {}
-      });
-      if (args.status === "skipped") {
-        if (isActionableSkipReason(args.reason)) {
-          notifyCoordinatorOfActionableSkip(meshId, taskId, args.reason, args.nodeId);
-        } else if (!difficultyFloorSkip && args.reason === TRANSIENT_TARGET_NODE_BOOTSTRAP_PENDING_REASON) {
-          retractActionableSkipIfPreviouslyNotified(meshId, taskId);
-        }
-      } else {
-        retractActionableSkipIfPreviouslyNotified(meshId, taskId);
-      }
-    }
     async function resolveUsableProvider(components, nodeId, node, meshId, requiredTags, task, quotaRouting, quotaFactsContext, taskId) {
       const providerLoader = components.providerLoader;
       if (!providerLoader) return { reason: "provider_loader_unavailable" };
@@ -72365,6 +72312,73 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         slot: selectedWinner.slot,
         ...routingDiagnostics
       };
+    }
+    var init_mesh_autolaunch_usable_provider = __esm2({
+      "src/mesh/mesh-autolaunch-usable-provider.ts"() {
+        "use strict";
+        init_logger();
+        init_mesh_node_slots();
+        init_mesh_quota_routing();
+        init_mesh_quota_ranking_records();
+        init_mesh_work_queue();
+        init_mesh_scheduling_fitness();
+        init_mesh_routing_decision();
+        init_mesh_slot_provider_usability();
+        init_mesh_scheduling_fitness();
+      }
+    });
+    function sweepExpiredCooldowns() {
+      const now = Date.now();
+      for (const [key2, until] of autoLaunchCooldownUntil) {
+        if (now >= until) autoLaunchCooldownUntil.delete(key2);
+      }
+    }
+    function resolveAutoLaunchTarget(components, node) {
+      if (isLocalAutoLaunchNode(node)) return { mode: "local" };
+      const daemonId = readMeshNodeDaemonId(node ?? {});
+      if (!daemonId) return { mode: "skip", reason: "remote_auto_launch_unsupported" };
+      if (!components.dispatchMeshCommand) return { mode: "skip", reason: "remote_auto_launch_unsupported" };
+      const coordinatorDaemonId = localCoordinatorDaemonId2();
+      if (!coordinatorDaemonId) return { mode: "skip", reason: "remote_auto_launch_no_coordinator_daemon_id" };
+      return { mode: "remote", daemonId, coordinatorDaemonId };
+    }
+    function markAutoLaunch(meshId, taskId, args) {
+      const reason = args.reason || args.error;
+      const difficultyFloorSkip = args.status === "skipped" && isDifficultyFloorWaitReason(reason);
+      if (difficultyFloorSkip) {
+        handleDifficultyFloorSkip({ meshId, taskId, reason, nodeId: args.nodeId, coordinatorDaemonId: localCoordinatorDaemonId2() });
+      } else if (!autoLaunchWriteWouldClobberWinner(meshId, taskId, args, AUTO_LAUNCH_AWAIT_CLAIM_MS) && !autoLaunchWriteWouldClobberDifficultyFloorWaitClock(meshId, taskId, args.status)) {
+        recordTaskAutoLaunch(meshId, taskId, {
+          status: args.status,
+          reason,
+          nodeId: args.nodeId,
+          providerType: args.providerType,
+          sessionId: args.sessionId
+        }, { spendSpawnBudget: args.spendSpawnBudget });
+      } else if (args.spendSpawnBudget) {
+        spendTaskAutoLaunchSpawnBudget(meshId, taskId);
+      }
+      if (args.dispatchFailedInTransport) recordTaskAutoLaunchDispatchFailure(meshId, taskId);
+      recordAutoLaunchEvent(meshId, {
+        phase: args.status,
+        taskId,
+        nodeId: args.nodeId,
+        providerType: args.providerType,
+        sessionId: args.sessionId,
+        reason: args.reason,
+        error: args.error,
+        ...args.model ? { model: args.model } : {},
+        ...args.thinkingLevel ? { thinkingLevel: args.thinkingLevel } : {}
+      });
+      if (args.status === "skipped") {
+        if (isActionableSkipReason(args.reason)) {
+          notifyCoordinatorOfActionableSkip(meshId, taskId, args.reason, args.nodeId);
+        } else if (!difficultyFloorSkip && args.reason === TRANSIENT_TARGET_NODE_BOOTSTRAP_PENDING_REASON) {
+          retractActionableSkipIfPreviouslyNotified(meshId, taskId);
+        }
+      } else {
+        retractActionableSkipIfPreviouslyNotified(meshId, taskId);
+      }
     }
     function pruneAwaitClaimBackoff(meshId, pending) {
       const pendingIds = new Set(pending.map((t) => t.id));
@@ -72871,8 +72885,6 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         init_dist();
         init_mesh_node_slots();
         init_mesh_daemon_slot_axis();
-        init_mesh_quota_routing();
-        init_mesh_quota_ranking_records();
         init_mesh_quota_sources();
         init_mesh_node_identity();
         init_model_provider_compat();
@@ -72890,9 +72902,10 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         init_mesh_difficulty_floor();
         init_mesh_autolaunch_spawn_cap();
         init_mesh_autolaunch_dispatch_cap();
-        init_mesh_slot_provider_usability();
         init_mesh_candidacy_predicates();
         init_mesh_queue_assignment();
+        init_mesh_autolaunch_usable_provider();
+        init_mesh_autolaunch_usable_provider();
         autoLaunchInProgress = /* @__PURE__ */ new Set();
         autoLaunchTaskInProgress = /* @__PURE__ */ new Set();
         autoLaunchCooldownUntil = /* @__PURE__ */ new Map();
