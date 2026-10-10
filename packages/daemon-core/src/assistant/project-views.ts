@@ -7,6 +7,8 @@
  * counts, labels the operator set (machine nickname, mesh name), mission
  * titles and timestamps — no transcript text. `project_read` is the one verb
  * that returns coordinator transcript text, as its tool contract says.
+ * `project_status.routing` (below) is the same rule applied to the routing
+ * diagnostics: enums and numbers only, by allow-list.
  */
 
 import { canonicalDaemonId, daemonIdsEquivalent } from '@adhdev/mesh-shared';
@@ -259,6 +261,195 @@ export function compactProjectStatus(view: Record<string, unknown>, extras: Proj
         lastRelayAt: extras.lastRelayAt ? new Date(extras.lastRelayAt).toISOString() : null,
     };
 }
+
+// ── project_status: routing ────────────────────────────────────────────────
+/**
+ * Routing visibility (A7d, owner 2026-10-10): "모델선택 이런것에 대해서 비서가
+ * 가시적으로 확인이 항상 가능하고" — the assistant must be able to see WHY a
+ * provider is or is not the one a project would route to, without asking a
+ * coordinator. The data already exists in `mesh_route_preview`
+ * (mesh/mesh-route-preview.ts), which is fetch-free and read-only; this is its
+ * projection down to the assistant's content boundary.
+ *
+ * Read-only in both senses: no quota is fetched (the preview reads cached
+ * facts only), and nothing here changes routing. Changing/removing a route is
+ * deliberately NOT part of this surface.
+ *
+ * ALLOW-LIST, not a deny-list (the same discipline as the server status
+ * boundary): the types below enumerate every field that crosses, so a field
+ * added upstream to `NodeRoutePreview` or `ProviderQuotaGateDiagnostic` cannot
+ * leak by default. Everything listed is an identifier, enum, boolean or
+ * number — never free text. In particular the preview's prose fields
+ * (`note`, `availabilityAssumption`, `warning`, `limitations`) are omitted.
+ */
+
+/** Why a configured slot did not reach the ranking. Enum from the preview's difficulty-floor stage. */
+export interface RoutingExcludedSlot {
+    providerType: string;
+    model?: string;
+    /** e.g. `slot_capacity_exhausted`, `higher_difficulty_tier_deferred`, `difficulty_floor_unavailable`. */
+    reason: string;
+}
+
+export interface RoutingSlot {
+    providerType: string;
+    model?: string;
+}
+
+/** One provider's quota evidence: why its bonus is what it is, and how the gate ruled. */
+export interface RoutingQuotaRow {
+    providerType: string;
+    /** The cached snapshot's status (e.g. `ok`, `error`, `stale`); absent when no snapshot exists. */
+    snapshotStatus?: string;
+    /** How the last quota read failed, when it did. */
+    failureKind?: string;
+    /** Why the spread bonus is 0 — `no-data`, `stale`, `opted-out`, `provider-disabled`, `snapshot-error`. */
+    zeroReason?: string;
+    /** `clear` | `skip` | `hard-block` | `fail-open` | `not-evaluated-floor`. */
+    gateOutcome: string;
+    /** The gate's own reason enum, when it blocked or skipped. */
+    gateReason?: string;
+    bonusValue: number;
+    /** Headroom on the ranked axis; absent when the axis had no readable reading. */
+    remainingPercent?: number;
+    /** The window axis this candidate was measured on. */
+    axis?: 'weekly' | 'session';
+}
+
+export interface RoutingNodeRow {
+    nodeId: string;
+    /** The node's machine label when `project_status` knows one, else null. */
+    machineName: string | null;
+    /** What this node would route to now, or null (then `reason` says why). */
+    predictedWinner: { providerType: string; model?: string; fitnessScore: number } | null;
+    /** The node-level refusal enum (e.g. `provider_priority_unusable`, `task_difficulty_floor_unavailable:<d>`). */
+    reason?: string;
+    admitted: RoutingSlot[];
+    excluded: RoutingExcludedSlot[];
+    quota: RoutingQuotaRow[];
+    /** True when quota ranking displaced the fitness stage's first choice. */
+    reordered: boolean;
+    displacedFitnessWinner?: string;
+}
+
+export interface ProjectRoutingView {
+    /** The mesh's scheduling strategy (`fitness`, `first_eligible`, …). */
+    strategy: string;
+    /** The difficulty tier this preview was computed for. */
+    difficulty: string;
+    /** Mesh-wide prediction: the node+provider a task of this difficulty would land on. */
+    predictedWinner: { nodeId: string; providerType: string; model?: string; fitnessScore: number } | null;
+    perNode: RoutingNodeRow[];
+    /** Set instead of the rows when the preview could not be computed here. */
+    error?: string;
+}
+
+function routingNum(v: unknown): number | undefined {
+    return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+}
+
+function routingSlot(v: unknown): RoutingSlot | null {
+    const r = rec(v);
+    const providerType = readText(r?.providerType);
+    if (!providerType) return null;
+    const model = readText(r?.model);
+    return { providerType, ...(model ? { model } : {}) };
+}
+
+function axisOf(v: unknown): 'weekly' | 'session' | undefined {
+    const t = readText(v);
+    return t === 'weekly' || t === 'session' ? t : undefined;
+}
+
+function quotaRow(v: unknown): RoutingQuotaRow | null {
+    const r = rec(v);
+    const providerType = readText(r?.providerType);
+    if (!providerType) return null;
+    const bonus = rec(r?.bonus) ?? {};
+    const gate = rec(r?.gate) ?? {};
+    const ranking = rec(r?.ranking);
+    const snapshotStatus = readText(bonus.snapshotStatus);
+    const failureKind = readText(bonus.failureKind);
+    const zeroReason = readText(bonus.zeroReason);
+    const gateReason = readText(gate.reason);
+    const remainingPercent = routingNum(ranking?.remainingPercent);
+    const axis = axisOf(ranking?.axis);
+    return {
+        providerType,
+        ...(snapshotStatus ? { snapshotStatus } : {}),
+        ...(failureKind ? { failureKind } : {}),
+        ...(zeroReason ? { zeroReason } : {}),
+        gateOutcome: readText(gate.outcome) || 'unknown',
+        ...(gateReason ? { gateReason } : {}),
+        bonusValue: routingNum(bonus.value) ?? 0,
+        ...(remainingPercent !== undefined ? { remainingPercent } : {}),
+        ...(axis ? { axis } : {}),
+    };
+}
+
+function routingNodeRow(v: unknown, labelOf: (nodeId: string) => string | null): RoutingNodeRow | null {
+    const r = rec(v);
+    const nodeId = readText(r?.nodeId);
+    if (!nodeId) return null;
+    const stages = rec(r?.stages) ?? {};
+    const floor = rec(stages.difficultyFloor) ?? {};
+    const quotaStage = rec(stages.quota) ?? {};
+    const winner = rec(r?.predictedWinner);
+    const winnerProvider = readText(winner?.providerType);
+    const winnerModel = readText(winner?.model);
+    const reason = readText(r?.reason);
+    const displaced = readText(quotaStage.displacedFitnessWinner);
+    return {
+        nodeId,
+        machineName: labelOf(nodeId),
+        predictedWinner: winnerProvider
+            ? { providerType: winnerProvider, ...(winnerModel ? { model: winnerModel } : {}), fitnessScore: routingNum(winner?.fitnessScore) ?? 0 }
+            : null,
+        ...(reason ? { reason } : {}),
+        admitted: (Array.isArray(floor.admittedSlots) ? floor.admittedSlots : []).map(routingSlot).filter((s): s is RoutingSlot => !!s),
+        excluded: (Array.isArray(floor.excludedSlots) ? floor.excludedSlots : [])
+            .map((e: unknown) => {
+                const s = routingSlot(e);
+                const er = readText(rec(e)?.reason);
+                return s && er ? { ...s, reason: er } : null;
+            })
+            .filter((e): e is RoutingExcludedSlot => !!e),
+        quota: (Array.isArray(r?.quotaDiagnostics) ? r!.quotaDiagnostics : []).map(quotaRow).filter((q): q is RoutingQuotaRow => !!q),
+        reordered: quotaStage.reordered === true,
+        ...(displaced ? { displacedFitnessWinner: displaced } : {}),
+    };
+}
+
+/**
+ * Project a `mesh_route_preview` answer onto the assistant's routing view.
+ * `machineLabels` maps nodeId → the label `project_status` already resolved,
+ * so the assistant reads "mac-studio", not a node id.
+ */
+export function projectRoutingView(
+    preview: Record<string, unknown> | null | undefined,
+    difficulty: string,
+    machineLabels: ReadonlyMap<string, string | null> = new Map(),
+): ProjectRoutingView {
+    const p = rec(preview) ?? {};
+    const labelOf = (nodeId: string): string | null => machineLabels.get(nodeId) ?? null;
+    const winner = rec(p.predictedWinner);
+    const winnerNode = readText(winner?.nodeId);
+    const winnerProvider = readText(winner?.providerType);
+    const winnerModel = readText(winner?.model);
+    return {
+        strategy: readText(p.schedulingStrategy) || 'unknown',
+        difficulty,
+        predictedWinner: winnerNode && winnerProvider
+            ? { nodeId: winnerNode, providerType: winnerProvider, ...(winnerModel ? { model: winnerModel } : {}), fitnessScore: routingNum(winner?.fitnessScore) ?? 0 }
+            : null,
+        perNode: (Array.isArray(p.nodes) ? p.nodes : [])
+            .map((n: unknown) => routingNodeRow(n, labelOf))
+            .filter((n): n is RoutingNodeRow => !!n),
+    };
+}
+
+/** The difficulty tier `project_status` previews routing for (the queue's default tier). */
+export const PROJECT_STATUS_ROUTING_DIFFICULTY = 'medium';
 
 // ── project_read ───────────────────────────────────────────────────────────
 

@@ -88609,6 +88609,15 @@ ${body}`;
           } catch {
             return null;
           }
+        },
+        routePreview: async (meshId, difficulty) => {
+          try {
+            const out = await ctx.execute("mesh_route_preview", { meshId, difficulty });
+            const preview = out.success ? out.preview : null;
+            return preview && typeof preview === "object" && !Array.isArray(preview) ? preview : null;
+          } catch {
+            return null;
+          }
         }
       };
     }
@@ -89034,6 +89043,87 @@ ${body}`;
         lastRelayAt: extras.lastRelayAt ? new Date(extras.lastRelayAt).toISOString() : null
       };
     }
+    function routingNum(v) {
+      return typeof v === "number" && Number.isFinite(v) ? v : void 0;
+    }
+    function routingSlot(v) {
+      const r = rec2(v);
+      const providerType = readText3(r?.providerType);
+      if (!providerType) return null;
+      const model = readText3(r?.model);
+      return { providerType, ...model ? { model } : {} };
+    }
+    function axisOf(v) {
+      const t = readText3(v);
+      return t === "weekly" || t === "session" ? t : void 0;
+    }
+    function quotaRow(v) {
+      const r = rec2(v);
+      const providerType = readText3(r?.providerType);
+      if (!providerType) return null;
+      const bonus = rec2(r?.bonus) ?? {};
+      const gate = rec2(r?.gate) ?? {};
+      const ranking = rec2(r?.ranking);
+      const snapshotStatus = readText3(bonus.snapshotStatus);
+      const failureKind = readText3(bonus.failureKind);
+      const zeroReason = readText3(bonus.zeroReason);
+      const gateReason = readText3(gate.reason);
+      const remainingPercent2 = routingNum(ranking?.remainingPercent);
+      const axis = axisOf(ranking?.axis);
+      return {
+        providerType,
+        ...snapshotStatus ? { snapshotStatus } : {},
+        ...failureKind ? { failureKind } : {},
+        ...zeroReason ? { zeroReason } : {},
+        gateOutcome: readText3(gate.outcome) || "unknown",
+        ...gateReason ? { gateReason } : {},
+        bonusValue: routingNum(bonus.value) ?? 0,
+        ...remainingPercent2 !== void 0 ? { remainingPercent: remainingPercent2 } : {},
+        ...axis ? { axis } : {}
+      };
+    }
+    function routingNodeRow(v, labelOf) {
+      const r = rec2(v);
+      const nodeId = readText3(r?.nodeId);
+      if (!nodeId) return null;
+      const stages = rec2(r?.stages) ?? {};
+      const floor = rec2(stages.difficultyFloor) ?? {};
+      const quotaStage = rec2(stages.quota) ?? {};
+      const winner = rec2(r?.predictedWinner);
+      const winnerProvider = readText3(winner?.providerType);
+      const winnerModel = readText3(winner?.model);
+      const reason = readText3(r?.reason);
+      const displaced = readText3(quotaStage.displacedFitnessWinner);
+      return {
+        nodeId,
+        machineName: labelOf(nodeId),
+        predictedWinner: winnerProvider ? { providerType: winnerProvider, ...winnerModel ? { model: winnerModel } : {}, fitnessScore: routingNum(winner?.fitnessScore) ?? 0 } : null,
+        ...reason ? { reason } : {},
+        admitted: (Array.isArray(floor.admittedSlots) ? floor.admittedSlots : []).map(routingSlot).filter((s2) => !!s2),
+        excluded: (Array.isArray(floor.excludedSlots) ? floor.excludedSlots : []).map((e) => {
+          const s2 = routingSlot(e);
+          const er = readText3(rec2(e)?.reason);
+          return s2 && er ? { ...s2, reason: er } : null;
+        }).filter((e) => !!e),
+        quota: (Array.isArray(r?.quotaDiagnostics) ? r.quotaDiagnostics : []).map(quotaRow).filter((q) => !!q),
+        reordered: quotaStage.reordered === true,
+        ...displaced ? { displacedFitnessWinner: displaced } : {}
+      };
+    }
+    function projectRoutingView(preview, difficulty, machineLabels = /* @__PURE__ */ new Map()) {
+      const p = rec2(preview) ?? {};
+      const labelOf = (nodeId) => machineLabels.get(nodeId) ?? null;
+      const winner = rec2(p.predictedWinner);
+      const winnerNode = readText3(winner?.nodeId);
+      const winnerProvider = readText3(winner?.providerType);
+      const winnerModel = readText3(winner?.model);
+      return {
+        strategy: readText3(p.schedulingStrategy) || "unknown",
+        difficulty,
+        predictedWinner: winnerNode && winnerProvider ? { nodeId: winnerNode, providerType: winnerProvider, ...winnerModel ? { model: winnerModel } : {}, fitnessScore: routingNum(winner?.fitnessScore) ?? 0 } : null,
+        perNode: (Array.isArray(p.nodes) ? p.nodes : []).map((n) => routingNodeRow(n, labelOf)).filter((n) => !!n)
+      };
+    }
     function messageText(m) {
       const c = m?.content;
       if (typeof c === "string") return c;
@@ -89070,6 +89160,7 @@ ${body}`;
         ...typeof readChat2.status === "string" ? { status: readChat2.status } : {}
       };
     }
+    var PROJECT_STATUS_ROUTING_DIFFICULTY;
     var PROJECT_READ_DEFAULT_TAIL;
     var PROJECT_READ_MAX_TAIL;
     var PROJECT_READ_MESSAGE_MAX_CHARS;
@@ -89078,6 +89169,7 @@ ${body}`;
         "use strict";
         init_dist();
         init_mesh_host_ownership();
+        PROJECT_STATUS_ROUTING_DIFFICULTY = "medium";
         PROJECT_READ_DEFAULT_TAIL = 10;
         PROJECT_READ_MAX_TAIL = 50;
         PROJECT_READ_MESSAGE_MAX_CHARS = 4e3;
@@ -130867,7 +130959,12 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         threadOpen: ports.relay.isThreadOpen ? ports.relay.isThreadOpen(meshId) : null,
         lastRelayAt: ports.relay.lastRelayAt ? ports.relay.lastRelayAt(meshId) : null
       });
-      return { name: mesh.name, repo: mesh.repoIdentity, ...status, ...view.success ? {} : { statusError: str9(view.error) || "mesh_status_view failed" } };
+      const labels = new Map(
+        (Array.isArray(status.machines) ? status.machines : []).map((m) => [str9(m?.node), m?.label ?? null])
+      );
+      const preview = await ports.routePreview(meshId, PROJECT_STATUS_ROUTING_DIFFICULTY);
+      const routing = preview ? projectRoutingView(preview, PROJECT_STATUS_ROUTING_DIFFICULTY, labels) : { ...projectRoutingView(null, PROJECT_STATUS_ROUTING_DIFFICULTY, labels), error: "route_preview_unavailable" };
+      return { name: mesh.name, repo: mesh.repoIdentity, ...status, routing, ...view.success ? {} : { statusError: str9(view.error) || "mesh_status_view failed" } };
     }
     var projectStatus = assistantVerb(ASSISTANT_VERB2.projectStatus, async (ports, args) => {
       const p = await resolveProject(ports, args.project);
@@ -176736,7 +176833,7 @@ var PROJECTS_TOOL = {
 };
 var PROJECT_STATUS_TOOL = {
   name: "project_status",
-  description: "Compact status of one project: machines online, queue counts, active mission titles, failed tasks, pending approvals, and when its coordinator last reported back.",
+  description: 'Compact status of one project: machines online, queue counts, active mission titles, failed tasks, pending approvals, and when its coordinator last reported back. Also `routing`: which provider/model each machine would route a task to right now, which configured slots were excluded and why (`slot_capacity_exhausted`, `difficulty_floor_unavailable`, \u2026), and per-provider quota evidence (`snapshotStatus`, `failureKind`, `zeroReason`, `gateOutcome`) \u2014 the answer to "why is this provider not being used". Read-only: no quota is fetched and nothing is changed.',
   inputSchema: { type: "object", properties: { ...PROJECT_PROP }, required: ["project"] }
 };
 var PROJECT_SEND_TOOL = {

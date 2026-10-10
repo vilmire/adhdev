@@ -93,6 +93,14 @@ export interface AssistantProjectPorts {
     coordinatorTurns(sessionId: string, limit?: number): CoordinatorTurns;
     /** Host side: the content-free `[Mesh]` status line. */
     meshStatusLine(meshId: string): string | null;
+    /**
+     * The mesh's routing snapshot for `project_status.routing` (A7d): the same
+     * `mesh_route_preview` the coordinator and the blueprint tab read. Null when
+     * the mesh is unknown here or the preview failed — the view then says so
+     * rather than guessing. Read-only and fetch-free: the preview never fetches
+     * quota, it reads the facts/cache this daemon already holds.
+     */
+    routePreview(meshId: string, difficulty: string): Promise<Record<string, unknown> | null>;
 }
 
 export interface ProjectPortsContext {
@@ -200,6 +208,13 @@ export function createDefaultProjectPorts(ctx: ProjectPortsContext): AssistantPr
         },
         meshStatusLine: (meshId) => {
             try { return lazy.meshStatusLine(meshId); } catch { return null; }
+        },
+        routePreview: async (meshId, difficulty) => {
+            try {
+                const out = await ctx.execute('mesh_route_preview', { meshId, difficulty });
+                const preview = out.success ? out.preview : null;
+                return preview && typeof preview === 'object' && !Array.isArray(preview) ? preview as Record<string, unknown> : null;
+            } catch { return null; }
         },
     };
 }

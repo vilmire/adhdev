@@ -77,7 +77,11 @@ const PROJECT_STATUS_TOOL: AssistantToolSchema = {
   name: 'project_status',
   description:
     'Compact status of one project: machines online, queue counts, active mission titles, failed tasks, '
-    + 'pending approvals, and when its coordinator last reported back.',
+    + 'pending approvals, and when its coordinator last reported back. Also `routing`: which provider/model '
+    + 'each machine would route a task to right now, which configured slots were excluded and why '
+    + '(`slot_capacity_exhausted`, `difficulty_floor_unavailable`, …), and per-provider quota evidence '
+    + '(`snapshotStatus`, `failureKind`, `zeroReason`, `gateOutcome`) — the answer to "why is this provider '
+    + 'not being used". Read-only: no quota is fetched and nothing is changed.',
   inputSchema: { type: 'object', properties: { ...PROJECT_PROP }, required: ['project'] },
 };
 

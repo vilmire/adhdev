@@ -31,6 +31,7 @@ let relay: { openThread: ReturnType<typeof vi.fn>; recordSkillAttaches: ReturnTy
 let remoteHosts: Record<string, RemoteHostView>;
 let callHost: ReturnType<typeof vi.fn>;
 let hostAnswers: Record<string, (args: any) => RemoteCallOutcome>;
+let routePreviews: Record<string, Record<string, unknown> | null>;
 
 const mesh = (id: string, name: string, repoIdentity: string, nodes: any[] = []): LocalMeshEntry => ({ id, name, repoIdentity, nodes } as unknown as LocalMeshEntry);
 const run = (verb: string, args: Record<string, unknown> = {}) => assistantProjectHandlers[verb]({} as any, args);
@@ -53,6 +54,7 @@ beforeEach(() => {
         mesh_b: { label: 'win-box', hostDaemonId: 'daemon_mach_other', hostMeshId: 'mesh_b_on_host', reachable: true },
     };
     hostAnswers = {};
+    routePreviews = {};
     callHost = vi.fn(async (_target: RemoteHostView, op: string, args: any) => (hostAnswers[op]
         ? hostAnswers[op](args)
         : { ok: false, kind: 'unreachable', code: 'project_unreachable', reason: 'relay_timeout', error: 'no answer' }));
@@ -73,6 +75,7 @@ beforeEach(() => {
         callHost: callHost as any,
         coordinatorTurns: (sessionId) => ({ open: false, committed: sessionId === 'human' ? [{ attemptId: 'plain:human:1', outcome: 'completed', at: 1 }] : [] }),
         meshStatusLine: () => null,
+        routePreview: async (meshId, difficulty) => routePreviews[`${meshId}:${difficulty}`] ?? null,
     };
     setAssistantProjectPortsForTests(() => ports);
     const svc = createAssistantServices({ configDir: dir, listMeshes: () => meshes });
@@ -128,13 +131,61 @@ describe('assistant_project_status', () => {
         expect(JSON.stringify(r)).not.toContain('SHOULD-NOT-LEAK');
         expect(JSON.stringify(r)).not.toContain('long goal');
         expect(calls('mesh_status_view')).toEqual([{ meshId: 'mesh_a', compact: true }]);
+        // No preview available from this daemon → the view says so, it does not guess.
+        expect(r.result.routing).toEqual({ strategy: 'unknown', difficulty: 'medium', predictedWinner: null, perNode: [], error: 'route_preview_unavailable' });
+    });
+
+    it('carries the routing view, labelled with the machine names project_status already resolved (A7d)', async () => {
+        responses.mesh_status_view = () => ({
+            success: true,
+            routes: { n1: { route: 'local' } },
+            status: { nodes: [{ id: 'n1', machineNickname: 'mac', reportedPlatform: 'darwin' }] },
+        });
+        routePreviews['mesh_a:medium'] = {
+            schedulingStrategy: 'fitness',
+            predictedWinner: { nodeId: 'n1', providerType: 'claude-cli', model: 'opus', fitnessScore: 7 },
+            nodes: [{
+                nodeId: 'n1',
+                predictedWinner: { providerType: 'claude-cli', model: 'opus', fitnessScore: 7 },
+                availabilityAssumption: 'SHOULD-NOT-LEAK-PROSE',
+                stages: {
+                    difficultyFloor: {
+                        required: true,
+                        admittedSlots: [{ providerType: 'claude-cli', model: 'opus' }],
+                        excludedSlots: [{ providerType: 'codex-cli', reason: 'slot_capacity_exhausted' }],
+                    },
+                    quota: { reordered: false, note: 'SHOULD-NOT-LEAK-PROSE' },
+                },
+                quotaDiagnostics: [{ providerType: 'codex-cli', bonus: { value: 0, zeroReason: 'snapshot-error', snapshotStatus: 'error', failureKind: 'auth_expired' }, gate: { outcome: 'skip', reason: 'provider_quota_weekly_low' } }],
+            }],
+            limitations: ['SHOULD-NOT-LEAK-PROSE'],
+        };
+        const r: any = await run(ASSISTANT_VERB.projectStatus, { project: 'main' });
+        expect(r.result.routing).toEqual({
+            strategy: 'fitness',
+            difficulty: 'medium',
+            predictedWinner: { nodeId: 'n1', providerType: 'claude-cli', model: 'opus', fitnessScore: 7 },
+            perNode: [{
+                nodeId: 'n1',
+                machineName: 'mac',
+                predictedWinner: { providerType: 'claude-cli', model: 'opus', fitnessScore: 7 },
+                admitted: [{ providerType: 'claude-cli', model: 'opus' }],
+                excluded: [{ providerType: 'codex-cli', reason: 'slot_capacity_exhausted' }],
+                quota: [{ providerType: 'codex-cli', snapshotStatus: 'error', failureKind: 'auth_expired', zeroReason: 'snapshot-error', gateOutcome: 'skip', gateReason: 'provider_quota_weekly_low', bonusValue: 0 }],
+                reordered: false,
+            }],
+        });
+        expect(JSON.stringify(r)).not.toContain('SHOULD-NOT-LEAK-PROSE');
     });
 
     it('relays a remote-hosted project to its host under the host\'s mesh id; unknown and ambiguous refs refuse', async () => {
-        hostAnswers.status = () => ({ ok: true, result: { success: true, result: { machines: [], queue: { pending: 0, assigned: 1, failed: 0 }, coordinator: 'working', threadOpen: null } } });
+        // The host computed `routing` with ITS slots and quota facts; the relay carries it through unchanged.
+        const hostRouting = { strategy: 'fitness', difficulty: 'medium', predictedWinner: null, perNode: [{ nodeId: 'n2', machineName: 'win-box', predictedWinner: null, reason: 'provider_priority_unusable', admitted: [], excluded: [], quota: [], reordered: false }] };
+        hostAnswers.status = () => ({ ok: true, result: { success: true, result: { machines: [], queue: { pending: 0, assigned: 1, failed: 0 }, coordinator: 'working', threadOpen: null, routing: hostRouting } } });
         const r: any = await run(ASSISTANT_VERB.projectStatus, { project: 'blog' });
         expect(r).toMatchObject({ success: true, project: 'blog', meshId: 'mesh_b' });
         expect(r.result).toMatchObject({ name: 'Blog', host: 'win-box', via: 'relay', coordinator: 'working', queue: { pending: 0, assigned: 1, failed: 0 }, threadOpen: false });
+        expect(r.result.routing).toEqual(hostRouting);
         expect(callHost.mock.calls[0]![0]).toMatchObject({ hostDaemonId: 'daemon_mach_other', hostMeshId: 'mesh_b_on_host' });
         expect(callHost.mock.calls[0]![1]).toBe('status');
         expect(execute).not.toHaveBeenCalled();

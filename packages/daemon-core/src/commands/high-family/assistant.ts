@@ -43,9 +43,9 @@ import type { AssistantProjectPorts } from '../../assistant/assistant-project-po
 import { ensureCoordinator, pickCoordinator, type EnsureCoordinatorPorts } from '../../assistant/coordinator-lifecycle.js';
 import { composeProjectMessage } from '../../assistant/project-message.js';
 import {
-    PROJECT_READ_DEFAULT_TAIL, PROJECT_READ_MAX_TAIL,
-    compactProjectStatus, compactTranscriptTail, coordinatorState, isUnmanagedRepoIdentity, machinesSummary,
-    type ProjectRow, type RemoteHostMachine,
+    PROJECT_READ_DEFAULT_TAIL, PROJECT_READ_MAX_TAIL, PROJECT_STATUS_ROUTING_DIFFICULTY,
+    compactProjectStatus, compactTranscriptTail, coordinatorState, isUnmanagedRepoIdentity, machinesSummary, projectRoutingView,
+    type ProjectRoutingView, type ProjectRow, type RemoteHostMachine,
 } from '../../assistant/project-views.js';
 import { defaultDiscoverRoots, discoverRepos, explicitDiscoverRoots } from '../../assistant/discover-repos.js';
 import { normalizeRepoIdentity } from '../../config/mesh-config-store.js';
@@ -180,7 +180,11 @@ const projects = assistantVerb(ASSISTANT_VERB.projects, async (ports) => {
     return { success: true, projects: managed, unmanaged, machines: machinesSummary(meshes, ports.selfDaemonId(), undefined, remoteHosts) };
 });
 
-/** project_status body for a mesh hosted HERE (also the host side of a remote status). */
+/**
+ * project_status body for a mesh hosted HERE (also the host side of a remote
+ * status — so `routing` reaches the assistant for remote projects too, computed
+ * by the daemon that actually owns the slots and the quota facts).
+ */
 export async function localProjectStatus(ports: AssistantProjectPorts, mesh: LocalMeshEntry): Promise<Record<string, unknown>> {
     const meshId = mesh.id;
     const view = await ports.execute('mesh_status_view', { meshId, compact: true });
@@ -191,7 +195,16 @@ export async function localProjectStatus(ports: AssistantProjectPorts, mesh: Loc
         threadOpen: ports.relay.isThreadOpen ? ports.relay.isThreadOpen(meshId) : null,
         lastRelayAt: ports.relay.lastRelayAt ? ports.relay.lastRelayAt(meshId) : null,
     });
-    return { name: mesh.name, repo: mesh.repoIdentity, ...status, ...(view.success ? {} : { statusError: str(view.error) || 'mesh_status_view failed' }) };
+    // Routing visibility (A7d): reuse the labels project_status already resolved
+    // so the assistant reads machine names, not node ids.
+    const labels = new Map<string, string | null>(
+        (Array.isArray(status.machines) ? status.machines : []).map((m: any) => [str(m?.node), (m?.label ?? null) as string | null]),
+    );
+    const preview = await ports.routePreview(meshId, PROJECT_STATUS_ROUTING_DIFFICULTY);
+    const routing: ProjectRoutingView = preview
+        ? projectRoutingView(preview, PROJECT_STATUS_ROUTING_DIFFICULTY, labels)
+        : { ...projectRoutingView(null, PROJECT_STATUS_ROUTING_DIFFICULTY, labels), error: 'route_preview_unavailable' };
+    return { name: mesh.name, repo: mesh.repoIdentity, ...status, routing, ...(view.success ? {} : { statusError: str(view.error) || 'mesh_status_view failed' }) };
 }
 
 const projectStatus = assistantVerb(ASSISTANT_VERB.projectStatus, async (ports, args) => {
