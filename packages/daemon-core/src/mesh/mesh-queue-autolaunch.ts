@@ -261,6 +261,19 @@ async function resolveUsableProvider(
     }
 
     const failed: string[] = [];
+    // ★PRE-SCORE EXCLUSIONS (prescore-exclusions-visibility): every slot this loop
+    // rejects BEFORE it reaches usableSlots — required-tags mismatch or
+    // slotProviderUnusableReason — is recorded here unconditionally, not only when
+    // `failed` ends up being the sole evidence (the old `!usableSlots.length` branch
+    // below). A rejected slot never reaches selectProviderWithDiagnostics, so it never
+    // appears in `selectionTrajectory.candidates` or `intraNodeLosers` either — those
+    // only ever see slots that survived THIS loop. Without this, claude-cli passing
+    // made codex/kimi/grok's rejection reasons here get built then silently discarded
+    // every single call, with zero log line and zero ledger trace (live 2026-10-10:
+    // 5 difficult-task dispatches in a row showed `candidates=[claude-cli]` only, while
+    // mesh_route_preview — which does not run this filter — admitted all 4).
+    // Diagnostic only: does not change which slot becomes usable or wins.
+    const preScoreExclusions: Array<{ providerType: string; model?: string; reason: string }> = [];
     // DYNAMIC PROVIDER PRIORITY BY QUOTA: the loop no longer returns the FIRST
     // detected slot. It enumerates EVERY usable (detected) candidate so the
     // quota gate can be applied INSIDE the selection loop — a quota-gated first
@@ -279,19 +292,24 @@ async function resolveUsableProvider(
         // means only kimi qualifies, not any other slot's provider).
         if (requiredTags?.length && !nodeSatisfiesRequiredTags(requiredTags, buildMeshNodeCapabilityTags(node, normalizedType))) {
             failed.push(`${requestedType}: required_tags_mismatch`);
+            preScoreExclusions.push({ providerType: requestedType, ...(slot.model ? { model: slot.model } : {}), reason: 'required_tags_mismatch' });
             continue;
         }
         // Enablement + detection are judged by the machine that will spawn the CLI — a
         // remote member is never refused for THIS daemon's config (mesh-slot-provider-usability.ts).
         const unusable = await slotProviderUnusableReason(components, node, normalizedType, quotaFactsContext?.nodes);
-        if (unusable) { failed.push(`${requestedType}: ${unusable}`); continue; }
+        if (unusable) {
+            failed.push(`${requestedType}: ${unusable}`);
+            preScoreExclusions.push({ providerType: requestedType, ...(slot.model ? { model: slot.model } : {}), reason: unusable });
+            continue;
+        }
         usableSlots.push({ slot, providerType: normalizedType });
     }
     if (!usableSlots.length) {
         if (difficultyFloorRequired) {
-            return { reason: `task_difficulty_floor_unavailable:${task!.difficulty}` };
+            return { reason: `task_difficulty_floor_unavailable:${task!.difficulty}`, preScoreExclusions };
         }
-        return { reason: `provider_priority_unusable: ${failed.join('; ') || nodeId}` };
+        return { reason: `provider_priority_unusable: ${failed.join('; ') || nodeId}`, preScoreExclusions };
     }
 
     // QUOTA GATE, inside the loop: split the usable candidates by the gate and
@@ -306,9 +324,9 @@ async function resolveUsableProvider(
     // reason so a quota WAIT is never conflated with a slot config error.
     const selection = selectProviderWithDiagnostics({
         node, nodeId, meshId, task: task!, taskId, quotaRouting, quotaFactsContext,
-        quotaBonusByProvider, difficultyFloorRequired, usableSlots,
+        quotaBonusByProvider, difficultyFloorRequired, usableSlots, preScoreExclusions,
     });
-    if (selection.reason) return { reason: selection.reason };
+    if (selection.reason) return { reason: selection.reason, preScoreExclusions };
     const { ranked, winner } = selection;
     const { riskSnapshot, allLosers, ...routingDiagnostics } = selection.diagnostics;
     // `allLosers` is destructured OUT: the rationale's input, not durable.
@@ -321,7 +339,7 @@ async function resolveUsableProvider(
             clear: riskSnapshot,
             gated: ranked.gated.map(g => ({ providerType: g.providerType, reason: g.block.reason })), ...(taskId ? { taskId } : {}),
         });
-        return { reason: `${ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON}: ${detail}` };
+        return { reason: `${ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON}: ${detail}`, preScoreExclusions };
     }
     const selectedWinner = winner!;
     LOG.debug('MeshQueue', `QUOTA RANK: node ${nodeId} clear=[${riskSnapshot.map(s => `${s.providerType}:${s.risk?.toFixed(1) ?? '?'}`).join(',')}] gated=[${ranked.gated.map(g => `${g.providerType}:${g.block.reason}`).join(',')}] winner=${selectedWinner.providerType}`);

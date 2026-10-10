@@ -14,6 +14,16 @@ interface MeshIntraNodeLoser {
     reason: string;
 }
 
+/** A declared slot rejected BEFORE it ever reached scoring (required-tags mismatch,
+ *  or slotProviderUnusableReason's enablement/detection gates) — see the
+ *  PRE-SCORE EXCLUSIONS note in mesh-queue-autolaunch.ts for why this is distinct
+ *  from MeshIntraNodeLoser (which only ever sees slots that passed this filter). */
+export interface MeshPreScoreExclusion {
+    providerType: string;
+    model?: string;
+    reason: string;
+}
+
 interface MeshRoutingCandidate {
     providerType: string;
     model?: string;
@@ -29,6 +39,11 @@ interface MeshQuotaOrderEntry {
 }
 
 interface MeshSelectionTrajectory {
+    /** Slots rejected before scoring (required-tags mismatch, enablement/detection
+     *  gate) — never scored, so they appear ONLY here, never in `candidates` or
+     *  `intraNodeLosers`. See the PRE-SCORE EXCLUSIONS note in mesh-queue-autolaunch.ts. */
+    preScoreExclusions?: MeshPreScoreExclusion[];
+    preScoreExclusionsOmitted?: number;
     /** Detected slots admitted by the hard floor, before capacity-tier/quota narrowing. */
     candidates: MeshRoutingCandidate[];
     candidatesOmitted?: number;
@@ -58,6 +73,10 @@ export interface ResolvedProviderSelection {
     intraNodeLosers?: MeshIntraNodeLoser[];
     intraNodeLosersOmitted?: number;
     selectionTrajectory?: MeshSelectionTrajectory;
+    /** Mirrors selectionTrajectory.preScoreExclusions at the top level so a caller
+     *  that returns early (before a trajectory is ever built — e.g. all slots
+     *  pre-score-excluded) still carries the diagnostic. */
+    preScoreExclusions?: MeshPreScoreExclusion[];
 }
 
 interface ProviderSlotCandidate {
@@ -129,6 +148,7 @@ interface ProviderSelectionDiagnostics {
     intraNodeLosers?: MeshIntraNodeLoser[];
     intraNodeLosersOmitted?: number;
     selectionTrajectory?: MeshSelectionTrajectory;
+    preScoreExclusions?: MeshPreScoreExclusion[];
     /** The UNBOUNDED loser list, before `intraNodeLosers`' 2-entry durable-payload
      *  cap. Not part of any persisted payload — it exists so an in-memory reader
      *  (the mesh_status selection rationale) can apply its own, looser bound
@@ -159,6 +179,7 @@ export interface MeshTaskRoutingDecision {
     intraNodeLosersOmitted?: number;
     selectionTrajectory?: MeshSelectionTrajectory;
     reason?: string;
+    preScoreExclusions?: MeshPreScoreExclusion[];
 }
 
 const ROUTING_ARRAY_MAX = 5;
@@ -181,6 +202,9 @@ export function buildProviderSelectionDiagnostics(args: {
     candidateSlots: ProviderSlotCandidate[];
     ranked: ProviderQuotaRanking;
     winner?: ProviderSlotCandidate;
+    /** Slots rejected before scoring on THIS call (never reached usableSlots).
+     *  Diagnostic passthrough only — does not affect ranking/selection. */
+    preScoreExclusions?: MeshPreScoreExclusion[];
     /** Preview-only: do not apply durable payload array caps, and expose the
      * full score/quota explanation used to build the selection. */
     unbounded?: boolean;
@@ -222,7 +246,7 @@ export function buildProviderSelectionDiagnostics(args: {
         ...args.ranked.gated.map(entry => ({ providerType: entry.providerType, ...(riskByProvider.get(entry.providerType)?.risk !== undefined ? { quotaRisk: riskByProvider.get(entry.providerType)!.risk } : {}), gated: true })),
     ];
     if (args.taskId) {
-        LOG.info('MeshQueue', `ROUTING DECISION taskId=${args.taskId} nodeId=${args.nodeId} candidates=${JSON.stringify(scoreDetails)} quotaOrder=${JSON.stringify(quotaOrder)} winner=${args.ranked.clear[0] ?? 'none'}`);
+        LOG.info('MeshQueue', `ROUTING DECISION taskId=${args.taskId} nodeId=${args.nodeId} candidates=${JSON.stringify(scoreDetails)} quotaOrder=${JSON.stringify(quotaOrder)} winner=${args.ranked.clear[0] ?? 'none'} preScoreExclusions=${JSON.stringify(args.preScoreExclusions ?? [])}`);
     }
     const bonusDiagnostics = args.task && args.unbounded
         ? quotaSpreadBonusDiagnosticsByProvider(
@@ -279,7 +303,13 @@ export function buildProviderSelectionDiagnostics(args: {
         previewScores: scoreDetails,
         quotaDiagnostics,
     } : {};
-    if (!args.winner || !args.task) return { riskSnapshot, ...previewOnly };
+    if (!args.winner || !args.task) {
+        return {
+            riskSnapshot,
+            ...(args.preScoreExclusions?.length ? { preScoreExclusions: args.preScoreExclusions } : {}),
+            ...previewOnly,
+        };
+    }
 
     const winner = args.winner;
     const losers = args.usableSlots.filter(candidate => candidate.slot !== winner.slot).map(candidate => {
@@ -307,6 +337,8 @@ export function buildProviderSelectionDiagnostics(args: {
         difficultyEligible: detail.difficultyEligible,
     }));
     const winnerRisk = riskByProvider.get(winner.providerType)?.risk;
+    const preScoreExclusions = args.preScoreExclusions ?? [];
+    const boundedPreScoreExclusions = args.unbounded ? preScoreExclusions : preScoreExclusions.slice(0, ROUTING_ARRAY_MAX);
     return {
         riskSnapshot,
         ...(losers.length ? { allLosers: losers } : {}),
@@ -314,7 +346,10 @@ export function buildProviderSelectionDiagnostics(args: {
         ...(!args.unbounded && riskSnapshot.length > ROUTING_ARRAY_MAX ? { quotaRisksOmitted: riskSnapshot.length - ROUTING_ARRAY_MAX } : {}),
         ...(losers.length ? { intraNodeLosers: args.unbounded ? losers : losers.slice(0, INTRA_NODE_LOSERS_MAX) } : {}),
         ...(!args.unbounded && losers.length > INTRA_NODE_LOSERS_MAX ? { intraNodeLosersOmitted: losers.length - INTRA_NODE_LOSERS_MAX } : {}),
+        ...(preScoreExclusions.length ? { preScoreExclusions: boundedPreScoreExclusions } : {}),
         selectionTrajectory: {
+            ...(boundedPreScoreExclusions.length ? { preScoreExclusions: boundedPreScoreExclusions } : {}),
+            ...(!args.unbounded && preScoreExclusions.length > boundedPreScoreExclusions.length ? { preScoreExclusionsOmitted: preScoreExclusions.length - boundedPreScoreExclusions.length } : {}),
             candidates: args.unbounded ? candidates : candidates.slice(0, ROUTING_ARRAY_MAX),
             ...(!args.unbounded && candidates.length > ROUTING_ARRAY_MAX ? { candidatesOmitted: candidates.length - ROUTING_ARRAY_MAX } : {}),
             quotaOrder: args.unbounded ? quotaOrder : quotaOrder.slice(0, ROUTING_ARRAY_MAX),
@@ -357,6 +392,9 @@ export function selectProviderWithDiagnostics(args: {
     quotaBonusByProvider?: Record<string, number>;
     difficultyFloorRequired: boolean;
     usableSlots: ProviderSlotCandidate[];
+    /** Slots rejected before scoring on THIS call (never reached usableSlots).
+     *  Diagnostic passthrough only — does not affect ranking/selection. */
+    preScoreExclusions?: MeshPreScoreExclusion[];
     unbounded?: boolean;
     now?: number;
     meshNodes?: readonly unknown[];
@@ -373,7 +411,7 @@ export function selectProviderWithDiagnostics(args: {
                 ...args,
                 candidateSlots: [],
                 ranked,
-            }) : { riskSnapshot: [] };
+            }) : { riskSnapshot: [], ...(args.preScoreExclusions?.length ? { preScoreExclusions: args.preScoreExclusions } : {}) };
             return {
                 reason: `task_difficulty_floor_wait:${args.task.difficulty}`,
                 candidateSlots: [],
