@@ -48,7 +48,6 @@ import {
     type ChangeImpactConfig,
 } from '../git/change-impact-config.js';
 import type { CLIInfo } from '../detection/cli-detector.js';
-import { BUILTIN_PROVIDER_PREFERENCE } from '@adhdev/mesh-shared';
 
 /** Canonical write targets — the first/preferred location for each config family. */
 export const MESH_INIT_REFINE_CONFIG_PATH = MESH_REFINE_CONFIG_LOCATIONS[0];
@@ -140,23 +139,26 @@ export function suggestMeshWorktreeBootstrapConfig(
  * Suggestion only: returned for the coordinator to apply to node policy, never
  * written into mesh policy here.
  *
- * Ordering preference (most → least preferred) when installed:
- *   claude-cli → codex-cli → antigravity-cli → everything else (stable input order).
+ * Ordering: plain alphabetical by id, codepoint order (not `localeCompare`,
+ * whose result is locale-dependent and therefore not deterministic across
+ * environments). Intentionally neutral — no provider is special-cased here.
+ * Do NOT encode a preference into this list; that is the whole point of this
+ * function reading as "whatever shows up first", not an endorsement.
+ *
+ * This is independent of the DEFAULTED-node fallback order in
+ * mesh-node-slots.ts / BUILTIN_PROVIDER_PREFERENCE (mesh-shared/node-facts.ts):
+ * that fallback governs what a node with no providerPriority and no slots can
+ * actually run, which is a different concern from what onboarding suggests —
+ * the two are deliberately decoupled.
  */
-// Shared with the runtime default order (mesh-node-slots.ts) so a suggestion and
-// the order a node without providerPriority defaults to start the same way.
-const PROVIDER_PRIORITY_PREFERENCE: readonly string[] = BUILTIN_PROVIDER_PREFERENCE;
-
 export function suggestNodeProviderPriority(detected: CLIInfo[]): {
     providerPriority: string[];
     installedProviders: Array<{ id: string; displayName: string; version?: string }>;
 } {
     const installed = detected.filter((cli) => cli.installed);
-    const installedIds = installed.map((cli) => cli.id);
-
-    const preferred = PROVIDER_PRIORITY_PREFERENCE.filter((id) => installedIds.includes(id));
-    const rest = installedIds.filter((id) => !preferred.includes(id));
-    const providerPriority = [...preferred, ...rest];
+    const providerPriority = installed
+        .map((cli) => cli.id)
+        .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 
     return {
         providerPriority,

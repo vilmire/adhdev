@@ -35,24 +35,30 @@ function cli(id: string, installed: boolean, displayName = id, version?: string)
 }
 
 describe('suggestNodeProviderPriority', () => {
-  it('orders preferred providers first, then the rest in input order, dropping uninstalled', () => {
+  it('orders providers alphabetically by id, dropping uninstalled — no provider is special-cased', () => {
     const detected = [
       cli('some-other-cli', true),
       cli('antigravity-cli', true),
       cli('codex-cli', true),
       cli('claude-cli', true, 'Claude Code', '2.1.0'),
-      // Retired provider: no longer builtin-preferred, falls into input order.
       cli('gemini-cli', true),
       cli('not-installed-cli', false),
     ]
     const result = suggestNodeProviderPriority(detected)
-    expect(result.providerPriority).toEqual(['claude-cli', 'codex-cli', 'antigravity-cli', 'some-other-cli', 'gemini-cli'])
+    expect(result.providerPriority).toEqual(['antigravity-cli', 'claude-cli', 'codex-cli', 'gemini-cli', 'some-other-cli'])
     expect(result.installedProviders).toHaveLength(5)
     expect(result.installedProviders.find(p => p.id === 'claude-cli')?.version).toBe('2.1.0')
   })
 
   it('returns an empty priority when nothing is installed', () => {
     expect(suggestNodeProviderPriority([cli('claude-cli', false)]).providerPriority).toEqual([])
+  })
+
+  it('sorts by codepoint, not locale — deterministic regardless of environment locale', () => {
+    // Uppercase sorts before lowercase in codepoint order; localeCompare would differ by locale.
+    const detected = [cli('zebra-cli', true), cli('Apple-cli', true), cli('apple-cli', true)]
+    const result = suggestNodeProviderPriority(detected)
+    expect(result.providerPriority).toEqual(['Apple-cli', 'apple-cli', 'zebra-cli'])
   })
 })
 
