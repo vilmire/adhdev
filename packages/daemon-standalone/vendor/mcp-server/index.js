@@ -23367,6 +23367,8 @@ var require_dist3 = __commonJS({
       OUTBOUND_MESSAGE_ORIGINS: () => OUTBOUND_MESSAGE_ORIGINS,
       P2P_SIGNAL_TYPES: () => P2P_SIGNAL_TYPES2,
       PROVIDER_FAILURES: () => PROVIDER_FAILURES2,
+      QUOTA_BACKFILL_HORIZON_MS: () => QUOTA_BACKFILL_HORIZON_MS2,
+      QUOTA_RETRY_INFLIGHT_GRACE_MS: () => QUOTA_RETRY_INFLIGHT_GRACE_MS,
       QUOTA_SUPPORTED_PROVIDERS: () => QUOTA_SUPPORTED_PROVIDERS,
       RECENT_SESSION_BUCKETS: () => RECENT_SESSION_BUCKETS,
       RECLAIMING_SEND_REFUSALS: () => RECLAIMING_SEND_REFUSALS,
@@ -23415,6 +23417,7 @@ var require_dist3 = __commonJS({
       WORKER_TOOLS: () => WORKER_TOOLS2,
       appendWorkerProtocolFooter: () => appendWorkerProtocolFooter2,
       argsCarryStatusProbeMarker: () => argsCarryStatusProbeMarker,
+      assessQuotaFreshness: () => assessQuotaFreshness2,
       buildSlotProposal: () => buildSlotProposal2,
       canonicalDaemonId: () => canonicalDaemonId2,
       classifySessionStatus: () => classifySessionStatus,
@@ -23573,6 +23576,7 @@ var require_dist3 = __commonJS({
       meshUtf8ByteLength: () => meshUtf8ByteLength,
       meshWorkspacesEquivalent: () => meshWorkspacesEquivalent,
       mintMessageId: () => mintMessageId2,
+      minutesUntilQuotaCheck: () => minutesUntilQuotaCheck2,
       normalizeAuthOkLimits: () => normalizeAuthOkLimits,
       normalizeBrainSlot: () => normalizeBrainSlot,
       normalizeDifficultyBrainMap: () => normalizeDifficultyBrainMap,
@@ -23903,6 +23907,40 @@ var require_dist3 = __commonJS({
         return typeof v === "string" && !!v.trim();
       }) : [];
       return orderProvidersByBuiltinPreference2(detected.length ? detected : enabled);
+    }
+    function hasUsableWindow(window) {
+      return !!window && typeof window.usedPercent === "number" && Number.isFinite(window.usedPercent);
+    }
+    function hasReading(quota) {
+      if (hasUsableWindow(quota.session) || hasUsableWindow(quota.weekly)) return true;
+      return Array.isArray(quota.buckets) && quota.buckets.some((b) => !!b && typeof b.usedPercent === "number" && Number.isFinite(b.usedPercent));
+    }
+    function finiteMs(value) {
+      return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : void 0;
+    }
+    function backfillCheckAt(quota, now) {
+      const dataDue = finiteMs(quota.updatedAt);
+      const attempted = finiteMs(quota.metadata?.fetchedAt);
+      const dueAt = Math.max(
+        dataDue === void 0 ? Number.NEGATIVE_INFINITY : dataDue + QUOTA_BACKFILL_HORIZON_MS2,
+        attempted === void 0 ? Number.NEGATIVE_INFINITY : attempted + QUOTA_BACKFILL_HORIZON_MS2
+      );
+      return Number.isFinite(dueAt) && dueAt > now ? dueAt : void 0;
+    }
+    function assessQuotaFreshness2(quota, now = Date.now()) {
+      const meta = quota.metadata;
+      const kind = meta?.failureKind;
+      const userMustAct = kind === "no-data" && quota.provider !== "codex-cli" || kind === "expired-token" && quota.provider === "antigravity-cli";
+      if (userMustAct && hasReading(quota)) return { cue: "stale", userMustAct: true };
+      if (meta?.lastGoodWindows !== true) return { userMustAct };
+      const retryAtMs = finiteMs(meta?.retryAtMs);
+      const retryStopped = meta?.retryExhausted === true || retryAtMs !== void 0 && retryAtMs + QUOTA_RETRY_INFLIGHT_GRACE_MS < now;
+      if (kind !== "no-data" && !retryStopped) return { cue: "refreshing", userMustAct: false };
+      const nextCheckAt = backfillCheckAt(quota, now);
+      return nextCheckAt === void 0 ? { cue: "stale", userMustAct: false } : { cue: "stale", userMustAct: false, nextCheckAt };
+    }
+    function minutesUntilQuotaCheck2(nextCheckAt, now = Date.now()) {
+      return Math.max(1, Math.round((nextCheckAt - now) / 6e4));
     }
     function normalizeMeshWorkspaceForCompare(dir) {
       if (typeof dir !== "string") return "";
@@ -25999,6 +26037,8 @@ ${renderWorkerProtocolFooter2(input)}`;
     }
     var QUOTA_SUPPORTED_PROVIDERS;
     var BUILTIN_PROVIDER_PREFERENCE2;
+    var QUOTA_RETRY_INFLIGHT_GRACE_MS;
+    var QUOTA_BACKFILL_HORIZON_MS2;
     var DAEMON_ID_PREFIXES;
     var MESH_TASK_DIFFICULTIES2;
     var DEFAULT_DIFFICULTY_BRAINS;
@@ -26200,6 +26240,8 @@ ${renderWorkerProtocolFooter2(input)}`;
           "opencode"
         ];
         BUILTIN_PROVIDER_PREFERENCE2 = ["claude-cli", "codex-cli", "antigravity-cli"];
+        QUOTA_RETRY_INFLIGHT_GRACE_MS = 6e4;
+        QUOTA_BACKFILL_HORIZON_MS2 = 60 * 60 * 1e3;
         DAEMON_ID_PREFIXES = ["daemon_", "standalone_"];
         MESH_TASK_DIFFICULTIES2 = ["easy", "medium", "difficult", "freeform"];
         DEFAULT_DIFFICULTY_BRAINS = {};
@@ -30467,6 +30509,17 @@ ${renderWorkerProtocolFooter2(input)}`;
         "use strict";
       }
     });
+    function quotaReadNowClause() {
+      return `or run \`${IDENTITY2.binaryName} quota --refresh\` to re-read now`;
+    }
+    var FILE_AXIS_REREAD_NOTE;
+    var init_refresh_command_hint = __esm2({
+      "src/quota/refresh-command-hint.ts"() {
+        "use strict";
+        init_track_identity();
+        FILE_AXIS_REREAD_NOTE = "the daemon re-reads within ~1 min while a CLI is active, up to ~60 min when idle";
+      }
+    });
     function antigravityUserAgent() {
       const os43 = process.platform === "win32" ? "windows" : process.platform;
       const arch2 = process.arch === "x64" ? "amd64" : process.arch;
@@ -30844,7 +30897,7 @@ ${res.stderr}`);
         return quotaFailure(
           "antigravity-cli",
           "error",
-          "Antigravity access token expired \u2014 run `agy` once to refresh it, then quota will report again.",
+          `Antigravity access token expired \u2014 run \`agy\` once to refresh it, then quota will report again (within ~60 min on its own, ${quotaReadNowClause()}).`,
           { source: source2, failureKind: "expired-token" }
         );
       }
@@ -30916,6 +30969,7 @@ ${res.stderr}`);
         init_types();
         init_deps();
         init_coerce();
+        init_refresh_command_hint();
         DEFAULT_BASE_URL = "https://daily-cloudcode-pa.googleapis.com/v1internal";
         ANTIGRAVITY_USER_AGENT_VERSION = "1.1.19";
         REQUEST_TIMEOUT_MS = 1e4;
@@ -31627,7 +31681,7 @@ child.on('exit', () => process.exit(0));
           session,
           weekly,
           updatedAt: snapshot.capturedAt,
-          error: `Claude quota reading is stale (${minutes} min old) \u2014 open a Claude Code session to refresh`,
+          error: `Claude quota reading is stale (${minutes} min old) \u2014 open a Claude Code session to refresh; ${FILE_AXIS_REREAD_NOTE} \u2014 ${quotaReadNowClause()}`,
           status: "error",
           // 'no-data' (not 'unsupported'): the channel works, the reading
           // just aged out — same ordinary wait-for-a-session state as the
@@ -31689,6 +31743,7 @@ child.on('exit', () => process.exit(0));
         init_snapshot();
         init_install();
         init_deps();
+        init_refresh_command_hint();
         STALE_AFTER_MS = 10 * 60 * 1e3;
         SOURCE = "statusline";
       }
@@ -31858,7 +31913,7 @@ child.on('exit', () => process.exit(0));
           session: reading.session,
           weekly: reading.weekly,
           updatedAt: reading.capturedAt,
-          error: `Codex quota reading is stale (${hours}h old) \u2014 run codex to refresh`,
+          error: `Codex quota reading is stale (${hours}h old) \u2014 run codex to refresh; ${FILE_AXIS_REREAD_NOTE} \u2014 ${quotaReadNowClause()}`,
           status: "error",
           // lastGoodWindows, exactly as the Claude aged-out branch marks it:
           // these windows were genuinely MEASURED — read off the rollout log
@@ -31915,6 +31970,7 @@ child.on('exit', () => process.exit(0));
         init_codex_windows();
         init_deps();
         init_coerce();
+        init_refresh_command_hint();
         CODEX_ROLLOUT_STALE_AFTER_MS = 6 * 60 * 60 * 1e3;
         MAX_LOOKBACK_DAYS = 14;
         TAIL_CHUNK_BYTES = 256 * 1024;
@@ -33690,7 +33746,12 @@ child.on('exit', () => process.exit(0));
       if (!entry || entry.status === "ok") return false;
       const retryAtMs = entry.metadata?.retryAtMs;
       if (typeof retryAtMs !== "number" || retryAtMs > now) return false;
+      if (hasArmedFailureRetryTimer(provider)) return false;
       return (failureRetries.get(provider)?.failures ?? 0) <= QUOTA_FAILURE_MAX_RETRIES;
+    }
+    function hasArmedFailureRetryTimer(provider) {
+      const state = failureRetries.get(provider);
+      return !!state && (!!state.timer || state.retryInFlight === true);
     }
     function isSnapshotStaleForRouting(provider, now = Date.now()) {
       const entry = cache.get(provider);
@@ -33719,6 +33780,9 @@ child.on('exit', () => process.exit(0));
       const credentialMtimeMs = previous?.credentialMtimeMs;
       if (failures > QUOTA_FAILURE_MAX_RETRIES) {
         failureRetries.set(provider, { failures, timer: null, credentialMtimeMs });
+        if (entry && entry.metadata) {
+          cache.set(provider, { ...entry, metadata: { ...entry.metadata, retryExhausted: true } });
+        }
         void resetFailureBudgetOnCredentialRenewal(provider).catch(() => {
         });
         LOG.info("Quota", `${provider}: transient failure persists after ${QUOTA_FAILURE_MAX_RETRIES} retries \u2014 back to the normal refresh cadence`);
@@ -33729,11 +33793,17 @@ child.on('exit', () => process.exit(0));
         QUOTA_REFRESH_INTERVAL_MS
       );
       const delayMs = Math.max(retryAtMs - Date.now(), backoffMs, 0);
+      if (entry && entry.metadata) {
+        cache.set(provider, { ...entry, metadata: { ...entry.metadata, retryAtMs: Date.now() + delayMs } });
+      }
       const timer = setTimeout(() => {
         const state = failureRetries.get(provider);
         if (state) state.timer = null;
         if (isEnabled && !isEnabled(provider)) return;
-        void refreshQuotaCacheOnce([{ provider, fetch: fetch2 }], isEnabled).catch((e) => LOG.warn("Quota", `${provider}: scheduled retry failed: ${e?.message || e}`));
+        if (state) state.retryInFlight = true;
+        void refreshQuotaCacheOnce([{ provider, fetch: fetch2 }], isEnabled).catch((e) => LOG.warn("Quota", `${provider}: scheduled retry failed: ${e?.message || e}`)).finally(() => {
+          if (state) state.retryInFlight = false;
+        });
       }, delayMs);
       if (typeof timer.unref === "function") timer.unref();
       failureRetries.set(provider, { failures, timer, credentialMtimeMs });
@@ -39483,12 +39553,20 @@ ${error.message || ""}`;
             closed_at INTEGER
         );
 
+        -- delivered_at = the row left the queue (settled). relayed_at = its OWN
+        -- body reached the assistant. The two differ: a batch of commits is
+        -- delivered as one envelope carrying only the last turn's body, so the
+        -- earlier rows settle without ever being rendered. Hence
+        -- "delivered_at IS NOT NULL AND relayed_at IS NULL" is the
+        -- silently-dropped count (the loss the owner had to suspect by hand on
+        -- 2026-10-10).
         CREATE TABLE IF NOT EXISTS assistant_relays (
             attempt_id TEXT PRIMARY KEY,
             mesh_id TEXT NOT NULL,
             coordinator_session_id TEXT NOT NULL,
             committed_at INTEGER NOT NULL,
             delivered_at INTEGER,
+            relayed_at INTEGER,
             kind TEXT NOT NULL,
             outcome TEXT NOT NULL
         );
@@ -39530,6 +39608,15 @@ ${error.message || ""}`;
       for (const c of ["review_writes_applied", "review_writes_approved"]) {
         if (!cols.has(c)) db.exec(`ALTER TABLE assistant_metric_daily ADD COLUMN ${c} INTEGER NOT NULL DEFAULT 0`);
       }
+      const relayCols = new Set(db.prepare("PRAGMA table_info(assistant_relays)").all().map((r) => r.name));
+      if (!relayCols.has("relayed_at")) {
+        db.exec("ALTER TABLE assistant_relays ADD COLUMN relayed_at INTEGER");
+        db.exec("UPDATE assistant_relays SET relayed_at = delivered_at WHERE delivered_at IS NOT NULL");
+      }
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_assistant_relays_unrendered
+            ON assistant_relays(relayed_at, committed_at);
+    `);
     }
     function tableColumns(self, table) {
       const rows = self.db.prepare(`PRAGMA table_info(${table})`).all();
@@ -88826,6 +88913,13 @@ ${body}`;
       lines.push(RELAY_CLOSE);
       return lines.join("\n");
     }
+    function buildMissedReportsLine(missed) {
+      const rows = missed.filter((m) => m.count > 0);
+      if (!rows.length) return "";
+      const per = rows.map((m) => `${safeSlug(m.slug)}: ${m.count}`).join(", ");
+      const total = rows.reduce((n, m) => n + m.count, 0);
+      return `[ADHDev relay gap] ${total} coordinator ${total === 1 ? "report" : "reports"} did not reach you in full (${per}). Use project_read for a project listed here before assuming nothing happened in it.`;
+    }
     function buildFoldedBacklogLine(slug, count) {
       const s2 = safeSlug(slug);
       return `[project ${s2}] ${count} earlier turn${count === 1 ? "" : "s"} older than 24 h were not relayed \u2014 use project_read ${s2} if they matter.`;
@@ -89043,7 +89137,10 @@ ${body}`;
         pendingApprovals: extras.pendingApprovals,
         coordinator: extras.coordinator,
         threadOpen: extras.threadOpen,
-        lastRelayAt: extras.lastRelayAt ? new Date(extras.lastRelayAt).toISOString() : null
+        lastRelayAt: extras.lastRelayAt ? new Date(extras.lastRelayAt).toISOString() : null,
+        // Only when there is something to report — a `0` every time is noise
+        // the assistant would learn to skip.
+        ...extras.missedReports && extras.missedReports > 0 ? { missedReports: extras.missedReports } : {}
       };
     }
     function routingNum(v) {
@@ -89213,6 +89310,10 @@ ${body}`;
         PROJECT_READ_MESSAGE_MAX_CHARS = 4e3;
       }
     });
+    function toUnrenderedCounts(byMesh) {
+      const rows = [...byMesh.entries()].map(([meshId, count]) => ({ meshId, count })).sort((a, b) => b.count - a.count || a.meshId.localeCompare(b.meshId));
+      return { total: rows.reduce((n, r) => n + r.count, 0), byMesh: rows };
+    }
     var RELAY_DELIVERED_RETENTION_MS;
     var THREAD_CLOSED_RETENTION_MS;
     var InMemoryAssistantRelayStore;
@@ -89241,17 +89342,28 @@ ${body}`;
           }
           recordCommitted(row) {
             if (this.relays.has(row.attemptId)) return false;
-            this.relays.set(row.attemptId, { ...row, deliveredAt: null });
+            this.relays.set(row.attemptId, { ...row, deliveredAt: null, relayedAt: null });
             return true;
           }
-          markDelivered(attemptIds, at) {
+          markDelivered(attemptIds, at, rendered) {
+            const sent = new Set(rendered ?? attemptIds);
             for (const id22 of attemptIds) {
               const r = this.relays.get(id22);
-              if (r && r.deliveredAt === null) r.deliveredAt = at;
+              if (!r || r.deliveredAt !== null) continue;
+              r.deliveredAt = at;
+              if (sent.has(id22)) r.relayedAt = at;
             }
           }
           listUndelivered() {
             return [...this.relays.values()].filter((r) => r.deliveredAt === null).sort((a, b) => a.committedAt - b.committedAt || a.attemptId.localeCompare(b.attemptId)).map((r) => ({ ...r }));
+          }
+          countUnrendered() {
+            const byMesh = /* @__PURE__ */ new Map();
+            for (const r of this.relays.values()) {
+              if (r.deliveredAt === null || r.relayedAt !== null) continue;
+              byMesh.set(r.meshId, (byMesh.get(r.meshId) ?? 0) + 1);
+            }
+            return toUnrenderedCounts(byMesh);
           }
           prune(now) {
             for (const [id22, r] of this.relays) {
@@ -89274,6 +89386,7 @@ ${body}`;
         coordinatorSessionId: r.coordinator_session_id,
         committedAt: r.committed_at,
         deliveredAt: r.delivered_at ?? null,
+        relayedAt: r.relayed_at ?? null,
         kind: "relay",
         outcome: r.outcome
       };
@@ -89315,20 +89428,27 @@ ${body}`;
           }
           recordCommitted(row) {
             const r = this.db.prepare(`
-            INSERT OR IGNORE INTO assistant_relays (attempt_id, mesh_id, coordinator_session_id, committed_at, delivered_at, kind, outcome)
-            VALUES (?, ?, ?, ?, NULL, ?, ?)
+            INSERT OR IGNORE INTO assistant_relays (attempt_id, mesh_id, coordinator_session_id, committed_at, delivered_at, relayed_at, kind, outcome)
+            VALUES (?, ?, ?, ?, NULL, NULL, ?, ?)
         `).run(row.attemptId, row.meshId, row.coordinatorSessionId, row.committedAt, row.kind, row.outcome);
             return r.changes > 0;
           }
-          markDelivered(attemptIds, at) {
+          markDelivered(attemptIds, at, rendered) {
             if (!attemptIds.length) return;
-            const stmt = this.db.prepare("UPDATE assistant_relays SET delivered_at = ? WHERE attempt_id = ? AND delivered_at IS NULL");
+            const sent = new Set(rendered ?? attemptIds);
+            const stmt = this.db.prepare("UPDATE assistant_relays SET delivered_at = ?, relayed_at = ? WHERE attempt_id = ? AND delivered_at IS NULL");
             this.db.transaction((ids) => {
-              for (const id22 of ids) stmt.run(at, id22);
+              for (const id22 of ids) stmt.run(at, sent.has(id22) ? at : null, id22);
             })(attemptIds);
           }
           listUndelivered() {
             return this.db.prepare("SELECT * FROM assistant_relays WHERE delivered_at IS NULL ORDER BY committed_at, attempt_id").all().map(toRelay);
+          }
+          countUnrendered() {
+            const rows = this.db.prepare(
+              "SELECT mesh_id, COUNT(*) AS n FROM assistant_relays WHERE delivered_at IS NOT NULL AND relayed_at IS NULL GROUP BY mesh_id"
+            ).all();
+            return toUnrenderedCounts(new Map(rows.map((r) => [r.mesh_id, Number(r.n)])));
           }
           prune(now) {
             this.db.prepare("DELETE FROM assistant_relays WHERE delivered_at IS NOT NULL AND ? - delivered_at > ?").run(now, RELAY_DELIVERED_RETENTION_MS);
@@ -89860,7 +89980,9 @@ ${body}`;
               return;
             }
             const messageId = parts.length === 1 ? parts[0].messageId : `${parts[0].messageId}+${parts.length - 1}`;
-            const outcome = await this.ports.submit(sid, { text: parts.map((p) => p.text).join("\n\n"), messageId, policy: { mode: "queue" } });
+            const gap = buildMissedReportsLine(this.missedReportsIncluding(taken, parts));
+            const text = [...parts.map((p) => p.text), ...gap ? [gap] : []].join("\n\n");
+            const outcome = await this.ports.submit(sid, { text, messageId, policy: { mode: "queue" } });
             if (outcome.kind === "refused") return;
             this.commitTaken(taken, parts, sid);
           }
@@ -89919,7 +90041,12 @@ ${body}`;
               for (const p of parts) if (p.source === "review") this.ports.onReviewDelivered?.(sid, p.messageId, at);
             }
             const relayItems = taken.filter((i) => i.kind === "relay");
-            this.ports.store.markDelivered(relayItems.flatMap((i) => i.attemptIds), at);
+            const sentIds = new Set(parts.map((p) => p.messageId));
+            const rendered = relayItems.flatMap((i) => {
+              const last = i.attemptIds[i.attemptIds.length - 1];
+              return sentIds.has(relayMessageId(i.meshId, last)) ? [last] : [];
+            });
+            this.ports.store.markDelivered(relayItems.flatMap((i) => i.attemptIds), at, rendered);
             for (const id22 of relayItems.flatMap((i) => i.attemptIds)) this.remoteBodies.delete(id22);
             const meshes = [...new Set(relayItems.map((i) => i.meshId))];
             for (const m of meshes) {
@@ -89932,6 +90059,39 @@ ${body}`;
           /** Last relay delivery to the assistant for the mesh (this process), or null. */
           lastRelayAtFor(meshId) {
             return this.lastRelayAt.get(meshId) ?? null;
+          }
+          /**
+           * Coordinator turns that settled without their own body reaching the
+           * assistant (batch-folded or aged out). Counts and project slugs only.
+           * Surfaced unprompted — on every relay envelope and in `project_status` —
+           * because the 2026-10-10 losses were only ever found by the owner
+           * suspecting them and asking.
+           */
+          missedReports() {
+            return this.slugCounts(this.unrenderedByMesh());
+          }
+          /** Same count for one project (the `project_status` backstop). */
+          missedReportsFor(meshId) {
+            return this.unrenderedByMesh().get(meshId) ?? 0;
+          }
+          /** Stored gaps (not yet counted again) per mesh. */
+          unrenderedByMesh() {
+            return new Map(this.ports.store.countUnrendered().byMesh.map((r) => [r.meshId, r.count]));
+          }
+          /** Stored gaps plus the ones this pending delivery is about to create. */
+          missedReportsIncluding(taken, parts) {
+            const counts = this.unrenderedByMesh();
+            const sentIds = new Set(parts.map((p) => p.messageId));
+            for (const item of taken) {
+              if (item.kind !== "relay") continue;
+              const last = item.attemptIds[item.attemptIds.length - 1];
+              const missed = sentIds.has(relayMessageId(item.meshId, last)) ? item.attemptIds.length - 1 : item.attemptIds.length;
+              if (missed > 0) counts.set(item.meshId, (counts.get(item.meshId) ?? 0) + missed);
+            }
+            return this.slugCounts(counts);
+          }
+          slugCounts(counts) {
+            return [...counts.entries()].filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([meshId, count]) => ({ slug: this.ports.projectSlug(meshId) ?? meshId, count }));
           }
           async renderRelay(item) {
             const lastAttempt = item.attemptIds[item.attemptIds.length - 1];
@@ -90478,6 +90638,7 @@ ${body}`;
         },
         isThreadOpen: (meshId) => store2.isThreadOpen(meshId),
         lastRelayAt: (meshId) => relay.lastRelayAtFor(meshId),
+        missedReports: (meshId) => relay.missedReportsFor(meshId),
         recordSkillAttaches: (meshId, count) => metrics2?.bump("skill_attaches", meshId, Date.now(), count),
         remoteSent: (meshId, cursor) => remotePoller.noteSent(meshId, cursor)
       });
@@ -93880,6 +94041,7 @@ ${tail}` : ""
       ProviderLoader: () => ProviderLoader,
       QUOTA_AXIS: () => QUOTA_AXIS,
       QUOTA_AXIS_TTL_MS: () => QUOTA_AXIS_TTL_MS,
+      QUOTA_BACKFILL_HORIZON_MS: () => QUOTA_BACKFILL_HORIZON_MS2,
       RECENT_TERMINAL_REFINE_CAP: () => RECENT_TERMINAL_REFINE_CAP,
       REDACTED_PEER_SECRET: () => REDACTED_PEER_SECRET,
       REPO_MUTATION_COMMAND_TIMEOUT_MS: () => REPO_MUTATION_COMMAND_TIMEOUT_MS,
@@ -93951,6 +94113,7 @@ ${tail}` : ""
       argsCarryStatusProbeMarker: () => argsCarryStatusProbeMarker,
       armMeshTurnConsumer: () => armMeshTurnConsumer,
       assertNoDependencyCycle: () => assertNoDependencyCycle,
+      assessQuotaFreshness: () => assessQuotaFreshness2,
       baseTopicDefinitions: () => baseTopicDefinitions,
       bindMeshNoticeRuntime: () => bindMeshNoticeRuntime,
       bindSeqscribeRuntime: () => bindSeqscribeRuntime,
@@ -94295,6 +94458,7 @@ ${tail}` : ""
       migrateTurnLedgerV2: () => migrateTurnLedgerV2,
       migrateTurnLedgerV3: () => migrateTurnLedgerV3,
       mintPeerSecret: () => mintPeerSecret,
+      minutesUntilQuotaCheck: () => minutesUntilQuotaCheck2,
       missionSetHash: () => missionSetHash,
       namedKeyToAnsi: () => namedKeyToAnsi,
       namedKeysToAnsi: () => namedKeysToAnsi,
@@ -122625,7 +122789,7 @@ ${marker}`,
         if (!entry) return 0;
         if (entry.status !== "ok") {
           const retryAtMs = entry.metadata?.retryAtMs;
-          if (typeof retryAtMs === "number" && (failureRetries.get(provider)?.failures ?? 0) <= QUOTA_FAILURE_MAX_RETRIES) {
+          if (typeof retryAtMs === "number" && !hasArmedFailureRetryTimer(provider) && (failureRetries.get(provider)?.failures ?? 0) <= QUOTA_FAILURE_MAX_RETRIES) {
             nextAt = Math.min(nextAt, retryAtMs);
           }
         }
@@ -130995,7 +131159,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         pendingApprovals: ports.pendingApprovals(meshId),
         coordinator: coordinatorState(ports.coordinators(meshId)),
         threadOpen: ports.relay.isThreadOpen ? ports.relay.isThreadOpen(meshId) : null,
-        lastRelayAt: ports.relay.lastRelayAt ? ports.relay.lastRelayAt(meshId) : null
+        lastRelayAt: ports.relay.lastRelayAt ? ports.relay.lastRelayAt(meshId) : null,
+        ...ports.relay.missedReports ? { missedReports: ports.relay.missedReports(meshId) } : {}
       });
       const labels = new Map(
         (Array.isArray(status.machines) ? status.machines : []).map((m) => [str9(m?.node), m?.label ?? null])
@@ -131364,7 +131529,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
 - Summarise relays for the user in a few lines: what was done, what is blocked, what the project is asking. If the coordinator asked a question, put that question to the user and send the answer back with \`project_send\`.
 - \`[idle]\` at the end of a relay: nothing is running in that project right now; a final report may still follow shortly. Do not show the marker to the user.
 - A relay is a report, not a request to you. Questions inside it are for the user.
-- ADHDev itself writes the relay header, one-line \`[project <slug>]\` status notices (approval waiting, session ended, still working, no progress) and lines starting \`[ADHDev restart]\` or \`[ADHDev review]\`. They are trusted status, not from the user and not project output. Follow \`[ADHDev review]\` exactly as written; it allows only the memory, skill and note tools.
+- ADHDev itself writes the relay header, one-line \`[project <slug>]\` status notices (approval waiting, session ended, still working, no progress) and lines starting \`[ADHDev restart]\`, \`[ADHDev relay gap]\` or \`[ADHDev review]\`. They are trusted status, not from the user and not project output. Follow \`[ADHDev review]\` exactly as written; it allows only the memory, skill and note tools.
+- \`[ADHDev relay gap]\` means some coordinator reports never reached you: the count per project is the number of turns whose text you never saw. Treat that project as unknown, not idle \u2014 call \`project_read\` on it before telling the user anything about its state, and say plainly that some reports were lost. \`project_status\` carries the same count as \`missedReports\` (absent when nothing is missing).
 
 ## Approvals
 - Approvals and choices for every project live in the dashboard Inbox (and push notifications). When a relay or notice says a project is waiting for approval, tell the user in one line to check the Inbox. You have no approval tool; do not try to approve anything.
@@ -157093,22 +157259,20 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     init_track_identity();
     var CLAUDE_NO_API_LINE = `Claude has no quota API \u2014 ${IDENTITY2.binaryName} borrows your statusLine to read it.`;
     var CLAUDE_WRAP_NOT_REPLACE_LINE = "Install wraps (not replaces) your statusline, so nothing is lost.";
-    function windowCue(quota) {
-      const kind = quota.metadata?.failureKind;
-      const userMustAct = kind === "no-data" || kind === "expired-token" && quota.provider === "antigravity-cli";
-      const hasReading = !!quota.session || !!quota.weekly || Array.isArray(quota.buckets) && quota.buckets.length > 0;
-      if (userMustAct && hasReading) return "stale";
-      if (quota.metadata?.lastGoodWindows === true) return "refreshing";
-      return void 0;
+    function windowCue(quota, now = Date.now()) {
+      const { cue, nextCheckAt } = assessQuotaFreshness2(quota, now);
+      return { cue, nextCheckAt };
     }
-    function formatWindow(label, window, cue = void 0) {
+    function formatWindow(label, window, freshness = {}) {
+      const { cue, nextCheckAt } = freshness;
       if (!window) {
         return `  ${label.padEnd(8)} ${import_chalk2.default.gray("not reported")}`;
       }
       const percent = `${window.usedPercent.toFixed(1)}%`;
       const bar = renderBar(window.usedPercent);
       const reset = window.resetsAt === null ? "" : import_chalk2.default.gray(`  resets ${formatRelative(window.resetsAt)}`);
-      const marker = cue === "refreshing" ? import_chalk2.default.gray("  (refreshing)") : cue === "stale" ? import_chalk2.default.gray("  (stale)") : "";
+      const nextCheck = nextCheckAt === void 0 ? "" : `, next check within ~${minutesUntilQuotaCheck2(nextCheckAt)}m`;
+      const marker = cue === "refreshing" ? import_chalk2.default.gray("  (refreshing)") : cue === "stale" ? import_chalk2.default.gray(`  (stale${nextCheck})`) : "";
       return `  ${label.padEnd(8)} ${bar} ${percent.padStart(6)} used${reset}${marker}`;
     }
     function renderBar(usedPercent) {
@@ -163168,6 +163332,7 @@ ${notice.notice}${supersededHint}`;
     }
     init_launch_record();
     init_dist();
+    init_dist();
     init_builders();
     init_logger();
     init_debug_trace();
@@ -164108,6 +164273,7 @@ function defaultProviderPriorityFromNodeFacts(facts) {
   }) : [];
   return orderProvidersByBuiltinPreference(detected.length ? detected : enabled);
 }
+var QUOTA_BACKFILL_HORIZON_MS = 60 * 60 * 1e3;
 function truncateDiffText(text, maxLines) {
   const lines = text.split("\n");
   const truncated = lines.length > maxLines;
@@ -169267,7 +169433,6 @@ function summarizeNodeQuota(quota, now = Date.now()) {
   for (const [provider, snapshot] of Object.entries(quota)) {
     if (!snapshot || typeof snapshot !== "object") continue;
     const status = typeof snapshot.status === "string" ? snapshot.status : "unknown";
-    const lastGood = snapshot.metadata?.lastGoodWindows === true;
     const failureKind = typeof snapshot.metadata?.failureKind === "string" ? snapshot.metadata.failureKind : void 0;
     const pct = (w) => w && Number.isFinite(w.usedPercent) ? `${Math.round(w.usedPercent)}%` : void 0;
     const weekly = pct(snapshot.weekly);
@@ -169284,10 +169449,11 @@ function summarizeNodeQuota(quota, now = Date.now()) {
     if (weekly === void 0 && session === void 0 && worstBucket !== void 0) {
       line = `pool ${worstBucket} (${buckets.length}) \xB7 ${age}${stale ? " stale" : ""}`;
     }
-    const userMustAct = failureKind === "no-data" || failureKind === "expired-token" && provider === "antigravity-cli";
-    if (userMustAct) {
+    const { cue, nextCheckAt } = (0, import_daemon_core9.assessQuotaFreshness)(snapshot, now);
+    if (cue === "stale") {
       if (!stale) line += " \xB7 stale";
-    } else if (lastGood) line += " \xB7 refreshing";
+      if (nextCheckAt !== void 0) line += ` \xB7 next check \u2264${(0, import_daemon_core9.minutesUntilQuotaCheck)(nextCheckAt, now)}m`;
+    } else if (cue === "refreshing") line += " \xB7 refreshing";
     else if (status !== "ok") line += ` \xB7 ${status}`;
     out[provider] = line;
   }
