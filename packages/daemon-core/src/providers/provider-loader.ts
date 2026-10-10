@@ -46,7 +46,7 @@ import {
   PROVIDER_CHANNEL_ENV_VAR,
   type ProviderChannel,
 } from './channel/contract.js';
-import { resolveBuildTrack } from '../track-identity.js';
+import { IDENTITY, resolveBuildTrack } from '../track-identity.js';
 import { ProviderChannelStore, type ActivationPointer } from './channel/store.js';
 import type { ChannelSyncReport } from './channel/runtime.js';
 import {
@@ -532,7 +532,7 @@ export class ProviderLoader extends ProviderRegistry {
 
  // ❌ Error: no providers found
     if (this.providers.size === 0) {
-      this.log(`❌ No providers loaded! Run 'adhdev daemon' with internet to download providers.`);
+      this.log(`❌ No providers loaded! Run '${IDENTITY.binaryName} daemon' with internet to download providers.`);
     }
   }
 

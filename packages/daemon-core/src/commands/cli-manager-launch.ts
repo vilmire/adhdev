@@ -35,6 +35,7 @@ import {
     applyAutoApproveModeLaunchArgs, expandThinkingLaunchArgs, resolveCliSessionBinding,
 } from './cli-session-binding.js';
 import type { DaemonCliManager } from './cli-manager.js';
+import { IDENTITY } from '../track-identity.js';
 
 /** The DaemonCliManager members these functions read or call (compiler-checked; no cast). */
 export type CliLaunchHost = Pick<DaemonCliManager, 'adapters' | 'createAdapter' | 'deps' | 'persistRecentActivity' | 'providerLoader' | 'readProviderChannel' | 'registerCliInstance' | 'scheduleAutoClean' | 'startSession'>;
@@ -168,7 +169,7 @@ async function startCliPtySession(
             `${displayName} is not installed.\n` +
             `Command '${spawnCmd}' is not available.\n` +
             (installHint ? `\n${installHint}\n` : '') +
-            `\nRun 'adhdev doctor' for detailed diagnostics.`
+            `\nRun '${IDENTITY.binaryName} doctor' for detailed diagnostics.`
         );
     }
 

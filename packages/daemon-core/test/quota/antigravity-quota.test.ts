@@ -843,7 +843,7 @@ describe('fetchAntigravityQuota', () => {
         expect(quota.error).toContain('run `agy` once');
         // ...and say how long the wait is and the manual lever that skips it.
         expect(quota.error).toContain('within ~60 min');
-        expect(quota.error).toContain('quota --refresh');
+        expect(quota.error).toContain('quota refresh');
     });
 
     it('classifies an expired token as TRANSIENT so last-good windows survive', async () => {

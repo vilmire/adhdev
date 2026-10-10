@@ -29,6 +29,7 @@
 
 import { statfsSync } from 'fs';
 import { LOG } from '../logging/logger.js';
+import { IDENTITY } from '../track-identity.js';
 
 // ─── Thresholds ─────────────────────────────────────────────────────────────
 //
@@ -164,7 +165,7 @@ export class LowDiskSpaceError extends Error {
         super(
             `Refusing to ${operation}: ${status.summary}. ` +
                 'Writes would fail with ENOSPC mid-operation. Free space and retry ' +
-                '(see `adhdev doctor` for the largest reclaimable paths).',
+                `(see \`${IDENTITY.binaryName} doctor\` for the largest reclaimable paths).`,
         );
         this.name = 'LowDiskSpaceError';
         this.status = status;

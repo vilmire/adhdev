@@ -259,7 +259,7 @@ describe('fetchCodexQuotaFromRollout', () => {
         expect(quota?.error).toContain('stale');
         expect(quota?.error).toContain('run codex to refresh');
         expect(quota?.error).toContain('~1 min while a CLI is active');
-        expect(quota?.error).toContain('quota --refresh');
+        expect(quota?.error).toContain('quota refresh');
         expect(quota?.metadata?.failureKind).toBe('no-data');
         // The measured number is still reported — with its true age — because
         // a real dated reading beats no information. What must never happen is

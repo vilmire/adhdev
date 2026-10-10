@@ -44,6 +44,7 @@ import { readStatuslineStatus, resolveInstallPaths } from '../statusline/install
 import type { QuotaFetchDeps } from './deps.js';
 import { resolveDeps } from './deps.js';
 import { FILE_AXIS_REREAD_NOTE, quotaReadNowClause } from '../refresh-command-hint.js';
+import { IDENTITY } from '../../track-identity.js';
 
 /**
  * How old a reading may be and still count as current.
@@ -184,7 +185,7 @@ function statuslineSetupFailure(env: NodeJS.ProcessEnv): ProviderQuota | null {
         return quotaFailure(
             'claude-cli',
             'unavailable',
-            `Claude statusline wrapper is missing (${danglingPath}) — re-run \`adhdev quota claude:install\` to repair`,
+            `Claude statusline wrapper is missing (${danglingPath}) — re-run \`${IDENTITY.binaryName} quota claude:install\` to repair`,
             { source: SOURCE, failureKind: 'setup-required' },
         );
     }
@@ -192,7 +193,7 @@ function statuslineSetupFailure(env: NodeJS.ProcessEnv): ProviderQuota | null {
         return quotaFailure(
             'claude-cli',
             'unavailable',
-            'Claude quota reporting is not set up — run `adhdev quota claude:install`',
+            `Claude quota reporting is not set up — run \`${IDENTITY.binaryName} quota claude:install\``,
             { source: SOURCE, failureKind: 'setup-required' },
         );
     }
