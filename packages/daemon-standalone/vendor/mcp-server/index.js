@@ -138585,6 +138585,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     function chunkWin32TerminalInput(data, maxChars) {
       return chunkWin32Tokens(win32TerminalInputTokens(data), maxChars);
     }
+    var LATCH_WATCHDOG_SLACK_MS = 50;
+    var UNCONFIRMED_SUBMIT_DRAIN_DELAY_MS = 350;
     var PASTE_PLACEHOLDER_RE = /\[Pasted\s*(?:text|Content)[^\]\n]*\]/i;
     var SendSubmitEngine = class {
       constructor(host) {
@@ -138607,6 +138609,10 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       /** Pending queued-send drain timer, tracked so shutdown() can cancel it and
        *  a torn-down driver never writes a queued body into a dead PTY. */
       pendingSendDrainTimer = null;
+      /** QUEUE-WEDGE: wakes the drain when the in-flight latch is due to release.
+       *  See armLatchWatchdog(). Deliberately NOT part of hasInFlightSubmit():
+       *  nothing of this timer's is in the composer. */
+      latchWatchdogTimer = null;
       /** SUBMIT-SILENT-FAILURE latch — see lastSubmitUnconfirmed(). */
       submitUnconfirmed = false;
       /** Most recent win32 body write, for the submit settle-gate. */
@@ -138645,6 +138651,10 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         if (this.pendingSendDrainTimer) {
           clearTimeout(this.pendingSendDrainTimer);
           this.pendingSendDrainTimer = null;
+        }
+        if (this.latchWatchdogTimer) {
+          clearTimeout(this.latchWatchdogTimer);
+          this.latchWatchdogTimer = null;
         }
       }
       /** SEND-NOW-AGENT-QUEUE: see ISpecDriver.sendMessageDuringGeneration. */
@@ -138782,7 +138792,32 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       beginSend(text, bracketedPaste) {
         this.sendInFlight = true;
         this.sendInFlightAt = Date.now();
+        this.armLatchWatchdog(SEND_IN_FLIGHT_MAX_MS + LATCH_WATCHDOG_SLACK_MS);
         this.actuallySendMessage(text, bracketedPaste);
+      }
+      /**
+       * QUEUE-WEDGE (live 2026-10-10, claude-cli/win32). The in-flight latch
+       * releases in two ways — the FSM leaves idle, or the latch outlives
+       * SEND_IN_FLIGHT_MAX_MS — and both were only ever NOTICED inside
+       * drainPendingSends(), which the driver calls from its evaluation loop, i.e.
+       * on a PTY frame. A send the CLI never consumed produces no frame: the
+       * terminal sits at a quiet prompt, so the expired latch was never observed
+       * and every body queued behind it stayed parked for good ("ㅇㅇ", "ㅇㅇ?"
+       * behind a submit that was typed into a startup dialog; the session read
+       * idle, the dashboard showed nothing wrong, and only an unrelated keystroke
+       * — a frame — finally drained them).
+       *
+       * So the engine wakes itself: one timer, re-armed per send, that runs the
+       * same drain at the moment the latch is due. It decides nothing new — the
+       * drain still gates on the driver's status and on the latch — it only
+       * guarantees the gate is CONSULTED when there is no frame to do it.
+       */
+      armLatchWatchdog(delayMs) {
+        if (this.latchWatchdogTimer) clearTimeout(this.latchWatchdogTimer);
+        this.latchWatchdogTimer = setTimeout(() => {
+          this.latchWatchdogTimer = null;
+          this.drainPendingSends();
+        }, Math.max(0, delayMs));
       }
       /**
        * Release the in-flight latch and write the next queued send, if the machine
@@ -138816,6 +138851,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         }, 50);
         this.sendInFlight = true;
         this.sendInFlightAt = Date.now();
+        this.armLatchWatchdog(SEND_IN_FLIGHT_MAX_MS + LATCH_WATCHDOG_SLACK_MS);
       }
       /** SUBMIT-SILENT-FAILURE: true when the most recent send exhausted its submit
        *  resend budget without the agent ever leaving the composer. A caller seeing
@@ -139041,6 +139077,14 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
                 "FsmDriver",
                 `[${this.host.specTag()}] SUBMIT NOT CONFIRMED after ${WIN32_SUBMIT_MAX_RESENDS} submit-key attempts (len=${body.length}, echoed=${bodyEchoed()}, waited=${Date.now() - startedAt}ms). The message is likely still sitting unsent in the composer \u2014 the agent is NOT working on it.`
               );
+              this.sendInFlight = false;
+              if (this.pendingSends.length > 0) {
+                LOG.warn(
+                  "FsmDriver",
+                  `[${this.host.specTag()}] releasing the in-flight slot after an unconfirmed submit \u2014 ${this.pendingSends.length} queued send(s) will be attempted next`
+                );
+              }
+              this.armLatchWatchdog(UNCONFIRMED_SUBMIT_DRAIN_DELAY_MS);
             }
             return;
           }
@@ -139252,8 +139296,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     }
     init_logger();
     var import_session_host_core9 = require_dist();
-    var fs84 = __toESM2(require("fs"));
-    var path75 = __toESM2(require("path"));
+    var fs85 = __toESM2(require("fs"));
+    var path76 = __toESM2(require("path"));
     var fs81 = __toESM2(require("fs"));
     var os33 = __toESM2(require("os"));
     var path72 = __toESM2(require("path"));
@@ -139434,26 +139478,96 @@ trust_level = "trusted"
         return null;
       }
     }
+    var fs84 = __toESM2(require("fs"));
+    var os36 = __toESM2(require("os"));
+    var path75 = __toESM2(require("path"));
+    var crypto11 = __toESM2(require("crypto"));
+    init_logger();
+    function claudeConfigDir2(env2 = process.env, platform10 = process.platform) {
+      const override = env2.CLAUDE_CONFIG_DIR?.trim();
+      if (override) return override;
+      const home = platform10 === "win32" ? env2.USERPROFILE?.trim() || env2.HOME?.trim() : env2.HOME?.trim();
+      return path75.join(home || os36.homedir(), ".claude");
+    }
+    function claudeProjectKey(real, platform10 = process.platform) {
+      if (platform10 !== "win32") return real;
+      return path75.win32.normalize(real).replace(/\\/g, "/");
+    }
+    function claudeTrustStorePath(env2 = process.env, platform10 = process.platform) {
+      return path75.join(path75.dirname(claudeConfigDir2(env2, platform10)), ".claude.json");
+    }
+    function readJsonObject(storePath) {
+      try {
+        const text = fs84.readFileSync(storePath, "utf8");
+        if (!text.trim()) return {};
+        const parsed = JSON.parse(text);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          return parsed;
+        }
+        return {};
+      } catch (err) {
+        if (err?.code === "ENOENT") return {};
+        throw err;
+      }
+    }
+    function writeJsonObjectAtomic(storePath, data) {
+      fs84.mkdirSync(path75.dirname(storePath), { recursive: true });
+      const tmp = `${storePath}.${process.pid}.${crypto11.randomUUID()}.tmp`;
+      fs84.writeFileSync(tmp, `${JSON.stringify(data, null, 2)}
+`, "utf8");
+      fs84.renameSync(tmp, storePath);
+    }
+    function applyClaudeWorkspaceTrust(workingDir, env2 = process.env, platform10 = process.platform) {
+      const real = realWorkspacePath(workingDir);
+      if (isOverBroadTrustRoot(real)) {
+        LOG.warn("claude-workspace-trust", `refusing to pre-trust over-broad root ${real}`);
+        return null;
+      }
+      const storePath = claudeTrustStorePath(env2, platform10);
+      const key2 = claudeProjectKey(real, platform10);
+      try {
+        const root = readJsonObject(storePath);
+        const projectsRaw = root.projects;
+        const projects2 = projectsRaw && typeof projectsRaw === "object" && !Array.isArray(projectsRaw) ? projectsRaw : {};
+        const existingRaw = projects2[key2];
+        const existing = existingRaw && typeof existingRaw === "object" && !Array.isArray(existingRaw) ? existingRaw : {};
+        if (existing.hasTrustDialogAccepted === true) {
+          LOG.debug("claude-workspace-trust", `${real} already trusted \u2014 no change`);
+          return null;
+        }
+        projects2[key2] = { ...existing, hasTrustDialogAccepted: true };
+        root.projects = projects2;
+        writeJsonObjectAtomic(storePath, root);
+        LOG.info("claude-workspace-trust", `pre-trusted workspace ${real}`);
+        return real;
+      } catch (err) {
+        LOG.warn("claude-workspace-trust", `failed to pre-trust workspace ${real}: ${err.message}`);
+        return null;
+      }
+    }
+    function applyPreLaunchTrustForClaude(workingDir, extraEnv) {
+      return applyClaudeWorkspaceTrust(workingDir, { ...process.env, ...extraEnv || {} });
+    }
     init_logger();
     function applyPreLaunchTrust(trust, plan) {
       const settingsPath = plan.storePath;
       const real = plan.workspaceRealpath;
-      if (!path75.isAbsolute(settingsPath) || !path75.isAbsolute(real)) {
+      if (!path76.isAbsolute(settingsPath) || !path76.isAbsolute(real)) {
         LOG.warn("pre-launch-trust", "refusing unresolved trust plan with non-absolute paths");
         return null;
       }
       try {
         if ("scheme" in trust) {
           if (trust.scheme === "kimi_workspace_file") {
-            if (fs84.existsSync(settingsPath)) return null;
-            fs84.mkdirSync(path75.dirname(settingsPath), { recursive: true });
-            fs84.writeFileSync(settingsPath, serializeKimiWorkspaceTrust(real), "utf8");
+            if (fs85.existsSync(settingsPath)) return null;
+            fs85.mkdirSync(path76.dirname(settingsPath), { recursive: true });
+            fs85.writeFileSync(settingsPath, serializeKimiWorkspaceTrust(real), "utf8");
             return real;
           }
           if (trust.scheme === "grok_toml_file") {
             let existing2 = "";
             try {
-              existing2 = fs84.readFileSync(settingsPath, "utf8");
+              existing2 = fs85.readFileSync(settingsPath, "utf8");
             } catch (err) {
               if (err?.code !== "ENOENT") throw err;
             }
@@ -139463,8 +139577,8 @@ trust_level = "trusted"
               return null;
             }
             const separator = existing2.length === 0 || existing2.endsWith("\n") ? "" : "\n";
-            fs84.mkdirSync(path75.dirname(settingsPath), { recursive: true });
-            fs84.appendFileSync(
+            fs85.mkdirSync(path76.dirname(settingsPath), { recursive: true });
+            fs85.appendFileSync(
               settingsPath,
               `${separator}${serializeGrokWorkspaceTrust(real)}`,
               { encoding: "utf8", mode: 384 }
@@ -139475,7 +139589,7 @@ trust_level = "trusted"
           if (trust.scheme === "codex_toml_file") {
             let existing2 = "";
             try {
-              existing2 = fs84.readFileSync(settingsPath, "utf8");
+              existing2 = fs85.readFileSync(settingsPath, "utf8");
             } catch (err) {
               if (err?.code !== "ENOENT") throw err;
             }
@@ -139485,8 +139599,8 @@ trust_level = "trusted"
               return null;
             }
             const separator = existing2.length === 0 || existing2.endsWith("\n") ? "" : "\n";
-            fs84.mkdirSync(path75.dirname(settingsPath), { recursive: true });
-            fs84.appendFileSync(
+            fs85.mkdirSync(path76.dirname(settingsPath), { recursive: true });
+            fs85.appendFileSync(
               settingsPath,
               `${separator}${serializeCodexWorkspaceTrust(real)}`,
               { encoding: "utf8", mode: 384 }
@@ -139497,7 +139611,7 @@ trust_level = "trusted"
           if (trust.scheme === "claude_json_projects") {
             let root = {};
             try {
-              const text = fs84.readFileSync(settingsPath, "utf8");
+              const text = fs85.readFileSync(settingsPath, "utf8");
               if (text.trim().length > 0) {
                 const parsed2 = JSON.parse(text);
                 if (parsed2 && typeof parsed2 === "object" && !Array.isArray(parsed2)) {
@@ -139509,19 +139623,20 @@ trust_level = "trusted"
             }
             const projectsRaw = root.projects;
             const projects2 = projectsRaw && typeof projectsRaw === "object" && !Array.isArray(projectsRaw) ? projectsRaw : {};
-            const existingRaw = projects2[real];
+            const projectKey = claudeProjectKey(real);
+            const existingRaw = projects2[projectKey];
             const existing2 = existingRaw && typeof existingRaw === "object" && !Array.isArray(existingRaw) ? existingRaw : {};
             if (existing2.hasTrustDialogAccepted === true) {
               LOG.debug("pre-launch-trust", `[${settingsPath}] ${real} already trusted \u2014 no change`);
               return null;
             }
-            projects2[real] = { ...existing2, hasTrustDialogAccepted: true };
+            projects2[projectKey] = { ...existing2, hasTrustDialogAccepted: true };
             root.projects = projects2;
-            fs84.mkdirSync(path75.dirname(settingsPath), { recursive: true });
+            fs85.mkdirSync(path76.dirname(settingsPath), { recursive: true });
             const tmp = `${settingsPath}.${process.pid}.${Date.now()}.tmp`;
-            fs84.writeFileSync(tmp, `${JSON.stringify(root, null, 2)}
+            fs85.writeFileSync(tmp, `${JSON.stringify(root, null, 2)}
 `, "utf8");
-            fs84.renameSync(tmp, settingsPath);
+            fs85.renameSync(tmp, settingsPath);
             LOG.info("pre-launch-trust", `materialized ${plan.origin} claude project trust in ${settingsPath}`);
             return real;
           }
@@ -139529,8 +139644,8 @@ trust_level = "trusted"
         }
         const key2 = trust.key;
         let parsed = {};
-        if (fs84.existsSync(settingsPath)) {
-          const text = fs84.readFileSync(settingsPath, "utf8");
+        if (fs85.existsSync(settingsPath)) {
+          const text = fs85.readFileSync(settingsPath, "utf8");
           if (text.trim().length > 0) {
             const json2 = JSON.parse(text);
             if (json2 && typeof json2 === "object" && !Array.isArray(json2)) {
@@ -139546,8 +139661,8 @@ trust_level = "trusted"
         }
         list.push(real);
         parsed[key2] = list;
-        fs84.mkdirSync(path75.dirname(settingsPath), { recursive: true });
-        fs84.writeFileSync(settingsPath, `${JSON.stringify(parsed, null, 2)}
+        fs85.mkdirSync(path76.dirname(settingsPath), { recursive: true });
+        fs85.writeFileSync(settingsPath, `${JSON.stringify(parsed, null, 2)}
 `, "utf8");
         LOG.info("pre-launch-trust", `materialized ${plan.origin} workspace trust in ${settingsPath} (key="${key2}")`);
         return real;
@@ -139555,71 +139670,6 @@ trust_level = "trusted"
         LOG.warn("pre-launch-trust", `failed to materialize workspace trust in ${settingsPath}: ${err.message}`);
         return null;
       }
-    }
-    var fs85 = __toESM2(require("fs"));
-    var os36 = __toESM2(require("os"));
-    var path76 = __toESM2(require("path"));
-    var crypto11 = __toESM2(require("crypto"));
-    init_logger();
-    function claudeConfigDir2(env2 = process.env) {
-      const override = env2.CLAUDE_CONFIG_DIR?.trim();
-      if (override) return override;
-      const home = env2.HOME?.trim();
-      return path76.join(home || os36.homedir(), ".claude");
-    }
-    function claudeTrustStorePath(env2 = process.env) {
-      return path76.join(path76.dirname(claudeConfigDir2(env2)), ".claude.json");
-    }
-    function readJsonObject(storePath) {
-      try {
-        const text = fs85.readFileSync(storePath, "utf8");
-        if (!text.trim()) return {};
-        const parsed = JSON.parse(text);
-        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-          return parsed;
-        }
-        return {};
-      } catch (err) {
-        if (err?.code === "ENOENT") return {};
-        throw err;
-      }
-    }
-    function writeJsonObjectAtomic(storePath, data) {
-      fs85.mkdirSync(path76.dirname(storePath), { recursive: true });
-      const tmp = `${storePath}.${process.pid}.${crypto11.randomUUID()}.tmp`;
-      fs85.writeFileSync(tmp, `${JSON.stringify(data, null, 2)}
-`, "utf8");
-      fs85.renameSync(tmp, storePath);
-    }
-    function applyClaudeWorkspaceTrust(workingDir, env2 = process.env) {
-      const real = realWorkspacePath(workingDir);
-      if (isOverBroadTrustRoot(real)) {
-        LOG.warn("claude-workspace-trust", `refusing to pre-trust over-broad root ${real}`);
-        return null;
-      }
-      const storePath = claudeTrustStorePath(env2);
-      try {
-        const root = readJsonObject(storePath);
-        const projectsRaw = root.projects;
-        const projects2 = projectsRaw && typeof projectsRaw === "object" && !Array.isArray(projectsRaw) ? projectsRaw : {};
-        const existingRaw = projects2[real];
-        const existing = existingRaw && typeof existingRaw === "object" && !Array.isArray(existingRaw) ? existingRaw : {};
-        if (existing.hasTrustDialogAccepted === true) {
-          LOG.debug("claude-workspace-trust", `${real} already trusted \u2014 no change`);
-          return null;
-        }
-        projects2[real] = { ...existing, hasTrustDialogAccepted: true };
-        root.projects = projects2;
-        writeJsonObjectAtomic(storePath, root);
-        LOG.info("claude-workspace-trust", `pre-trusted workspace ${real}`);
-        return real;
-      } catch (err) {
-        LOG.warn("claude-workspace-trust", `failed to pre-trust workspace ${real}: ${err.message}`);
-        return null;
-      }
-    }
-    function applyPreLaunchTrustForClaude(workingDir, extraEnv) {
-      return applyClaudeWorkspaceTrust(workingDir, { ...process.env, ...extraEnv || {} });
     }
     init_logger();
     function applySpecPreLaunchTrust(spec, opts, specTag) {
@@ -140664,11 +140714,13 @@ trust_level = "trusted"
           this.maybeMarkReady();
           this.emitStateChanged(forceEmit);
           this.scheduleWakeForState();
+          this.armPostTransitionReevaluate();
           this.focusPrimer.scheduleStallWatchdog();
           this.redrawNudge.schedule();
           this.sends.drainPendingSends();
           return;
         }
+        this.postTransitionBudget = _FsmDriver.POST_TRANSITION_REEVALUATE_BUDGET;
         this.maybeMarkReady();
         this.emitStateChanged(forceEmit);
         this.scheduleWakeForState();
@@ -140806,6 +140858,35 @@ trust_level = "trusted"
           this.reevaluate();
         }, Math.max(soonest + 30, 50));
       }
+      /**
+       * `lastFsmEval` on the frame a transition fires describes the state just
+       * LEFT, so scheduleWakeForState() above arms a wake for the wrong state's
+       * time conditions — and none at all when that state had no pending one. A
+       * state entered on the last frame before the PTY goes quiet, whose exit is
+       * time-based, then never leaves (claude-cli `trust → starting`: the 8 s
+       * startup-grace was never scheduled, so the session sat in `starting` and
+       * the first message stayed queued). One evaluation of the NEW state on the
+       * unchanged screen is what the next PTY frame would have done; it arms the
+       * right wake and lets an already-satisfied chain proceed.
+       *
+       * Bounded: the budget refills only on an evaluation that fires nothing, so
+       * a spec whose states ping-pong cannot turn this into a 20 Hz loop.
+       */
+      armPostTransitionReevaluate() {
+        if (this.postTransitionBudget <= 0) return;
+        this.postTransitionBudget -= 1;
+        if (this.wakeTimer) {
+          clearTimeout(this.wakeTimer);
+          this.wakeTimer = null;
+        }
+        this.wakeTimer = setTimeout(() => {
+          this.wakeTimer = null;
+          this.reevaluate();
+        }, _FsmDriver.POST_TRANSITION_REEVALUATE_MS);
+      }
+      static POST_TRANSITION_REEVALUATE_MS = 50;
+      static POST_TRANSITION_REEVALUATE_BUDGET = 3;
+      postTransitionBudget = _FsmDriver.POST_TRANSITION_REEVALUATE_BUDGET;
       /** @see scheduleWakeForState — floor poll interval while parked at a modal. */
       static APPROVAL_LATCH_REFRESH_FLOOR_MS = 2e3;
       /** Wall-clock time the screen last changed IN THE CURRENT STATE, falling

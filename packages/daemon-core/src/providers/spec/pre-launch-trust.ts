@@ -29,6 +29,7 @@ import type { PreLaunchTrust } from './fsm-types.js';
 import { serializeKimiWorkspaceTrust } from '../kimi-workspace-trust.js';
 import { serializeGrokWorkspaceTrust } from '../grok-workspace-trust.js';
 import { serializeCodexWorkspaceTrust } from '../codex-workspace-trust.js';
+import { claudeProjectKey } from '../claude-workspace-trust.js';
 import type { ResolvedTrustPlan } from '../trust-provenance-ledger.js';
 import { LOG } from '../../logging/logger.js';
 
@@ -160,7 +161,9 @@ export function applyPreLaunchTrust(trust: PreLaunchTrust, plan: ResolvedTrustPl
                 const projects: Record<string, unknown> = (projectsRaw && typeof projectsRaw === 'object' && !Array.isArray(projectsRaw))
                     ? projectsRaw as Record<string, unknown>
                     : {};
-                const existingRaw = projects[real];
+                // win32: the CLI's own key is forward-slashed — see claudeProjectKey.
+                const projectKey = claudeProjectKey(real);
+                const existingRaw = projects[projectKey];
                 const existing: Record<string, unknown> = (existingRaw && typeof existingRaw === 'object' && !Array.isArray(existingRaw))
                     ? existingRaw as Record<string, unknown>
                     : {};
@@ -168,7 +171,7 @@ export function applyPreLaunchTrust(trust: PreLaunchTrust, plan: ResolvedTrustPl
                     LOG.debug('pre-launch-trust', `[${settingsPath}] ${real} already trusted — no change`);
                     return null;
                 }
-                projects[real] = { ...existing, hasTrustDialogAccepted: true };
+                projects[projectKey] = { ...existing, hasTrustDialogAccepted: true };
                 root.projects = projects;
                 fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
                 const tmp = `${settingsPath}.${process.pid}.${Date.now()}.tmp`;

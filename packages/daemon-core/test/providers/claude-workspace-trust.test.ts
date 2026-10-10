@@ -184,3 +184,52 @@ describe('helpers', () => {
         expect(isOverBroadRoot('/private/tmp/a-real-project')).toBe(false);
     });
 });
+
+/**
+ * Live defect 2026-10-10 (MainPC, win32, Claude Code 2.1.295): the daemon logged
+ * "pre-trusted workspace C:\Users\…\assistant" and the CLI still opened its
+ * folder-trust dialog. Claude Code keys `projects` by the forward-slashed path
+ * on Windows; `~/.claude.json` ended up with both `C:\\Users\\…` (ours, one
+ * field) and `C:/Users/…` (the CLI's, written when the owner accepted by hand).
+ */
+describe('win32 project key', () => {
+    const { claudeProjectKey, claudeConfigDir } = __test__;
+
+    it('uses the forward-slashed key Claude Code looks up on Windows', () => {
+        expect(claudeProjectKey('C:\\Users\\vilmi\\.adhdev-preview\\assistant', 'win32'))
+            .toBe('C:/Users/vilmi/.adhdev-preview/assistant');
+        expect(claudeProjectKey('C:\\Users\\vilmi\\repo\\', 'win32')).toBe('C:/Users/vilmi/repo/');
+        expect(claudeProjectKey('\\\\server\\share\\repo', 'win32')).toBe('//server/share/repo');
+    });
+
+    it('leaves POSIX paths untouched (a backslash is a legal filename character there)', () => {
+        expect(claudeProjectKey('/Users/me/we\\ird', 'darwin')).toBe('/Users/me/we\\ird');
+        expect(claudeProjectKey('/home/me/repo', 'linux')).toBe('/home/me/repo');
+    });
+
+    it('writes the grant under that key, not the native path', () => {
+        const home = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-home-w32-'));
+        const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-ws-w32-'));
+        try {
+            const real = fs.realpathSync(ws);
+            const env = { ...process.env, HOME: home, USERPROFILE: home, CLAUDE_CONFIG_DIR: undefined };
+            expect(applyClaudeWorkspaceTrust(ws, env, 'win32')).toBe(real);
+            const json = JSON.parse(fs.readFileSync(path.join(home, '.claude.json'), 'utf8'));
+            const key = claudeProjectKey(real, 'win32');
+            expect(Object.keys(json.projects)).toEqual([key]);
+            expect(key).not.toContain('\\');
+            expect(json.projects[key]).toEqual({ hasTrustDialogAccepted: true });
+            // Idempotent on the CLI's own key.
+            expect(applyClaudeWorkspaceTrust(ws, env, 'win32')).toBeNull();
+        } finally {
+            fs.rmSync(home, { recursive: true, force: true });
+            fs.rmSync(ws, { recursive: true, force: true });
+        }
+    });
+
+    it('resolves the store from USERPROFILE on Windows, HOME elsewhere', () => {
+        const env = { HOME: '/c/Users/gitbash', USERPROFILE: 'C:\\Users\\me' } as NodeJS.ProcessEnv;
+        expect(claudeConfigDir(env, 'win32')).toBe(path.join('C:\\Users\\me', '.claude'));
+        expect(claudeConfigDir(env, 'darwin')).toBe(path.join('/c/Users/gitbash', '.claude'));
+    });
+});

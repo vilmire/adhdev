@@ -69,16 +69,37 @@ import { isOverBroadTrustRoot, realWorkspacePath } from './workspace-trust-share
  * resolves to the real home — but resolving env first keeps this module
  * correct if that ever changes, exactly like codex's CODEX_HOME-first note.
  */
-function claudeConfigDir(env: NodeJS.ProcessEnv = process.env): string {
+function claudeConfigDir(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): string {
     const override = env.CLAUDE_CONFIG_DIR?.trim();
     if (override) return override;
-    const home = env.HOME?.trim();
+    // win32: Claude Code resolves its home from USERPROFILE (Node's
+    // os.homedir()); a HOME exported by Git Bash / MSYS is not what it reads.
+    const home = platform === 'win32'
+        ? (env.USERPROFILE?.trim() || env.HOME?.trim())
+        : env.HOME?.trim();
     return path.join(home || os.homedir(), '.claude');
 }
 
+/**
+ * The `projects` key Claude Code itself uses for a workspace path.
+ *
+ * ★win32: Claude Code normalizes the path and rewrites every backslash to a
+ * forward slash before using it as a config key (`C:/Users/me/repo`). A grant
+ * written under the native `C:\Users\me\repo` form is a key the CLI never
+ * looks up, so the folder-trust dialog still appears. Measured live on Claude
+ * Code 2.1.295/2.1.296 (2026-10-10): after ADHDev "pre-trusted" a workspace
+ * and the owner then accepted the dialog by hand, `~/.claude.json` held BOTH
+ * keys — ours with the one field we wrote, the CLI's own with its ten.
+ * POSIX paths are used as they are.
+ */
+export function claudeProjectKey(real: string, platform: NodeJS.Platform = process.platform): string {
+    if (platform !== 'win32') return real;
+    return path.win32.normalize(real).replace(/\\/g, '/');
+}
+
 /** The store claude-cli reads project trust from — sibling of `.claude/settings.json`'s dir. */
-export function claudeTrustStorePath(env: NodeJS.ProcessEnv = process.env): string {
-    return path.join(path.dirname(claudeConfigDir(env)), '.claude.json');
+export function claudeTrustStorePath(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): string {
+    return path.join(path.dirname(claudeConfigDir(env, platform)), '.claude.json');
 }
 
 /** Read `~/.claude.json` as a plain object; tolerant of a missing/malformed file. */
@@ -109,8 +130,9 @@ function writeJsonObjectAtomic(storePath: string, data: Record<string, unknown>)
  * Idempotently pre-trust `workingDir` for claude-cli so the first-run folder
  * -trust prompt never appears.
  *
- * - Registers EXACTLY `workingDir`'s realpath as a `projects` key — never a
- *   parent, never a wildcard.
+ * - Registers EXACTLY `workingDir`'s realpath as a `projects` key (in the
+ *   form the CLI looks up — see claudeProjectKey) — never a parent, never a
+ *   wildcard.
  * - Sparse write: a brand-new key gets `{ hasTrustDialogAccepted: true }` and
  *   nothing else; an EXISTING key has only `hasTrustDialogAccepted` set,
  *   every other field left untouched.
@@ -125,13 +147,18 @@ function writeJsonObjectAtomic(storePath: string, data: Record<string, unknown>)
  * trusted, over-broad, or an error occurred) — purely so callers/tests can
  * assert the effect.
  */
-export function applyClaudeWorkspaceTrust(workingDir: string, env: NodeJS.ProcessEnv = process.env): string | null {
+export function applyClaudeWorkspaceTrust(
+    workingDir: string,
+    env: NodeJS.ProcessEnv = process.env,
+    platform: NodeJS.Platform = process.platform,
+): string | null {
     const real = realWorkspacePath(workingDir);
     if (isOverBroadTrustRoot(real)) {
         LOG.warn('claude-workspace-trust', `refusing to pre-trust over-broad root ${real}`);
         return null;
     }
-    const storePath = claudeTrustStorePath(env);
+    const storePath = claudeTrustStorePath(env, platform);
+    const key = claudeProjectKey(real, platform);
     try {
         const root = readJsonObject(storePath);
         const projectsRaw = root.projects;
@@ -139,7 +166,7 @@ export function applyClaudeWorkspaceTrust(workingDir: string, env: NodeJS.Proces
             ? projectsRaw as Record<string, unknown>
             : {};
 
-        const existingRaw = projects[real];
+        const existingRaw = projects[key];
         const existing: Record<string, unknown> = (existingRaw && typeof existingRaw === 'object' && !Array.isArray(existingRaw))
             ? existingRaw as Record<string, unknown>
             : {};
@@ -150,7 +177,7 @@ export function applyClaudeWorkspaceTrust(workingDir: string, env: NodeJS.Proces
         }
 
         // Sparse merge: only ever touch this ONE field on this ONE entry.
-        projects[real] = { ...existing, hasTrustDialogAccepted: true };
+        projects[key] = { ...existing, hasTrustDialogAccepted: true };
         root.projects = projects;
 
         writeJsonObjectAtomic(storePath, root);
@@ -186,4 +213,4 @@ export function applyPreLaunchTrustForClaude(workingDir: string, extraEnv?: Reco
 }
 
 // Exposed for tests only — not part of the module's public contract.
-export const __test__ = { realWorkspacePath, claudeConfigDir, isOverBroadRoot: isOverBroadTrustRoot };
+export const __test__ = { realWorkspacePath, claudeConfigDir, claudeProjectKey, isOverBroadRoot: isOverBroadTrustRoot };

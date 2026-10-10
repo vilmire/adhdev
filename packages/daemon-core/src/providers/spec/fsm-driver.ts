@@ -688,6 +688,7 @@ export class FsmDriver implements ISpecDriver {
             // that's already satisfied doesn't wait for the next PTY frame.
             this.emitStateChanged(forceEmit);
             this.scheduleWakeForState();
+            this.armPostTransitionReevaluate();
             this.focusPrimer.scheduleStallWatchdog();
             this.redrawNudge.schedule();
             // Drain queued sends on the SAME frame the machine reaches "ready".
@@ -708,6 +709,7 @@ export class FsmDriver implements ISpecDriver {
 
         // No transition — refresh modal/controls (content inside the same
         // state can still change, e.g. modal title/buttons) and emit if changed.
+        this.postTransitionBudget = FsmDriver.POST_TRANSITION_REEVALUATE_BUDGET;
         this.maybeMarkReady();
         this.emitStateChanged(forceEmit);
         // Schedule a wake for the soonest pending time-condition.
@@ -900,6 +902,30 @@ export class FsmDriver implements ISpecDriver {
         if (!Number.isFinite(soonest)) return;
         this.wakeTimer = setTimeout(() => { this.wakeTimer = null; this.reevaluate(); }, Math.max(soonest + 30, 50));
     }
+
+    /**
+     * `lastFsmEval` on the frame a transition fires describes the state just
+     * LEFT, so scheduleWakeForState() above arms a wake for the wrong state's
+     * time conditions — and none at all when that state had no pending one. A
+     * state entered on the last frame before the PTY goes quiet, whose exit is
+     * time-based, then never leaves (claude-cli `trust → starting`: the 8 s
+     * startup-grace was never scheduled, so the session sat in `starting` and
+     * the first message stayed queued). One evaluation of the NEW state on the
+     * unchanged screen is what the next PTY frame would have done; it arms the
+     * right wake and lets an already-satisfied chain proceed.
+     *
+     * Bounded: the budget refills only on an evaluation that fires nothing, so
+     * a spec whose states ping-pong cannot turn this into a 20 Hz loop.
+     */
+    private armPostTransitionReevaluate(): void {
+        if (this.postTransitionBudget <= 0) return;
+        this.postTransitionBudget -= 1;
+        if (this.wakeTimer) { clearTimeout(this.wakeTimer); this.wakeTimer = null; }
+        this.wakeTimer = setTimeout(() => { this.wakeTimer = null; this.reevaluate(); }, FsmDriver.POST_TRANSITION_REEVALUATE_MS);
+    }
+    private static readonly POST_TRANSITION_REEVALUATE_MS = 50;
+    private static readonly POST_TRANSITION_REEVALUATE_BUDGET = 3;
+    private postTransitionBudget = FsmDriver.POST_TRANSITION_REEVALUATE_BUDGET;
 
     /** @see scheduleWakeForState — floor poll interval while parked at a modal. */
     private static readonly APPROVAL_LATCH_REFRESH_FLOOR_MS = 2000;

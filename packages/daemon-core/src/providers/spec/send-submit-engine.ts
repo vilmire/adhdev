@@ -65,6 +65,13 @@ import {
     WIN32_ECHO_MAX_WAIT_MS,
 } from './submit-policy.js';
 
+/** QUEUE-WEDGE: margin past SEND_IN_FLIGHT_MAX_MS before the latch watchdog
+ *  drains, so the latch's own `>` expiry test has certainly passed. */
+const LATCH_WATCHDOG_SLACK_MS = 50;
+/** QUEUE-WEDGE: gap between giving up on an unconfirmed submit and writing the
+ *  next queued body — one resend gap, so the last submit key has landed. */
+const UNCONFIRMED_SUBMIT_DRAIN_DELAY_MS = 350;
+
 /** A CLI's collapsed-paste chip in the composer (Claude Code / Codex). */
 export const PASTE_PLACEHOLDER_RE = /\[Pasted\s*(?:text|Content)[^\]\n]*\]/i;
 import type { SendDisposition } from './submit-policy.js';
@@ -184,6 +191,10 @@ export class SendSubmitEngine {
     /** Pending queued-send drain timer, tracked so shutdown() can cancel it and
      *  a torn-down driver never writes a queued body into a dead PTY. */
     private pendingSendDrainTimer: ReturnType<typeof setTimeout> | null = null;
+    /** QUEUE-WEDGE: wakes the drain when the in-flight latch is due to release.
+     *  See armLatchWatchdog(). Deliberately NOT part of hasInFlightSubmit():
+     *  nothing of this timer's is in the composer. */
+    private latchWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
     /** SUBMIT-SILENT-FAILURE latch — see lastSubmitUnconfirmed(). */
     private submitUnconfirmed = false;
     /** Most recent win32 body write, for the submit settle-gate. */
@@ -211,6 +222,7 @@ export class SendSubmitEngine {
         if (this.win32WriteTimer) { clearTimeout(this.win32WriteTimer); this.win32WriteTimer = null; }
         if (this.plainSubmitTimer) { clearTimeout(this.plainSubmitTimer); this.plainSubmitTimer = null; }
         if (this.pendingSendDrainTimer) { clearTimeout(this.pendingSendDrainTimer); this.pendingSendDrainTimer = null; }
+        if (this.latchWatchdogTimer) { clearTimeout(this.latchWatchdogTimer); this.latchWatchdogTimer = null; }
     }
 
     /** SEND-NOW-AGENT-QUEUE: see ISpecDriver.sendMessageDuringGeneration. */
@@ -390,7 +402,33 @@ export class SendSubmitEngine {
     private beginSend(text: string, bracketedPaste?: boolean): void {
         this.sendInFlight = true;
         this.sendInFlightAt = Date.now();
+        this.armLatchWatchdog(SEND_IN_FLIGHT_MAX_MS + LATCH_WATCHDOG_SLACK_MS);
         this.actuallySendMessage(text, bracketedPaste);
+    }
+
+    /**
+     * QUEUE-WEDGE (live 2026-10-10, claude-cli/win32). The in-flight latch
+     * releases in two ways — the FSM leaves idle, or the latch outlives
+     * SEND_IN_FLIGHT_MAX_MS — and both were only ever NOTICED inside
+     * drainPendingSends(), which the driver calls from its evaluation loop, i.e.
+     * on a PTY frame. A send the CLI never consumed produces no frame: the
+     * terminal sits at a quiet prompt, so the expired latch was never observed
+     * and every body queued behind it stayed parked for good ("ㅇㅇ", "ㅇㅇ?"
+     * behind a submit that was typed into a startup dialog; the session read
+     * idle, the dashboard showed nothing wrong, and only an unrelated keystroke
+     * — a frame — finally drained them).
+     *
+     * So the engine wakes itself: one timer, re-armed per send, that runs the
+     * same drain at the moment the latch is due. It decides nothing new — the
+     * drain still gates on the driver's status and on the latch — it only
+     * guarantees the gate is CONSULTED when there is no frame to do it.
+     */
+    private armLatchWatchdog(delayMs: number): void {
+        if (this.latchWatchdogTimer) clearTimeout(this.latchWatchdogTimer);
+        this.latchWatchdogTimer = setTimeout(() => {
+            this.latchWatchdogTimer = null;
+            this.drainPendingSends();
+        }, Math.max(0, delayMs));
     }
 
     /**
@@ -433,6 +471,7 @@ export class SendSubmitEngine {
         // cannot write a second body into the same composer line.
         this.sendInFlight = true;
         this.sendInFlightAt = Date.now();
+        this.armLatchWatchdog(SEND_IN_FLIGHT_MAX_MS + LATCH_WATCHDOG_SLACK_MS);
     }
 
     /** SUBMIT-SILENT-FAILURE: true when the most recent send exhausted its submit
@@ -804,6 +843,21 @@ export class SendSubmitEngine {
                         `(len=${body.length}, echoed=${bodyEchoed()}, waited=${Date.now() - startedAt}ms). ` +
                         'The message is likely still sitting unsent in the composer — the agent is NOT working on it.',
                     );
+                    // QUEUE-WEDGE: this send is over — nothing will ever confirm
+                    // it. Holding its latch until the 30 s expiry only delays the
+                    // bodies queued behind it, and on a quiet terminal nothing
+                    // would notice the expiry at all (see armLatchWatchdog). Give
+                    // the slot back now and let the next queued body take its own
+                    // verified attempt.
+                    this.sendInFlight = false;
+                    if (this.pendingSends.length > 0) {
+                        LOG.warn(
+                            'FsmDriver',
+                            `[${this.host.specTag()}] releasing the in-flight slot after an unconfirmed submit — `
+                            + `${this.pendingSends.length} queued send(s) will be attempted next`,
+                        );
+                    }
+                    this.armLatchWatchdog(UNCONFIRMED_SUBMIT_DRAIN_DELAY_MS);
                 }
                 return;
             }
