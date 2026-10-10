@@ -491,6 +491,27 @@ export interface CliSpecV4 {
          */
         win32_input_mode_non_ascii?: boolean;
         /**
+         * BLANK-ENTER-PILEUP (2026-10-10, Jupiter live sample): the verified-submit
+         * resend loop (scheduleVerifiedSubmit) used to fire a FIXED
+         * WIN32_SUBMIT_MAX_RESENDS(14) submit-key attempts on a flat
+         * WIN32_SUBMIT_RESEND_GAP_MS(350) cadence regardless of how long this CLI
+         * actually takes to ingest a large pasted body. agy took ~29s to echo a
+         * 4485-char body; the resend horizon (14×350ms = 4.9s) expired long before
+         * that, so the engine "fired submit key blind" and then exhausted all 14
+         * resends as fast blind CRs — which land as blank Enter presses in agy's
+         * composer (it doesn't absorb extra CRs into history the way claude-cli's
+         * queued-input does). 13 blank rows = 14 resends − 1 actual submit.
+         *
+         * Per-provider override of WIN32_SUBMIT_MAX_RESENDS. Omitted → the
+         * historical default (14) applies unchanged. A CLI whose composer visibly
+         * accumulates unconsumed CRs (agy) should declare a small budget (2-3) so a
+         * body that never echoes in time produces at most a couple of stray
+         * keystrokes instead of over a dozen. This governs ONLY the blind-fire
+         * resend count — see submit-policy.ts resolveMaxSubmitResends. Older
+         * daemons ignore the field and keep the global default.
+         */
+        max_submit_resends?: number;
+        /**
          * NOTIF-IMMEDIACY opt-in: this CLI holds input typed DURING a turn in its
          * own queue and answers it as the next turn (claude-cli shows "Press up to
          * edit queued messages").

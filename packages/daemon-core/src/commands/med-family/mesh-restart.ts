@@ -69,6 +69,7 @@ import { daemonIdsEquivalent, meshNodeIdMatches } from '@adhdev/mesh-shared';
 import { readMeshDirectDispatchFlag, withMeshDirectDispatch } from '../command-args.js';
 import { rosterEvidenceExtra } from '../mesh-sender.js';
 import { unwrapMeshRelayResult } from '../mesh-relay-result.js';
+import { dispatchMeshOneshotWithAckRetry } from '../mesh-oneshot-retry.js';
 import { daemonLifecycleHandlers } from '../low-family/daemon-lifecycle.js';
 import { LOG } from '../../logging/logger.js';
 import { IDENTITY, TRACK } from '../../track-identity.js';
@@ -456,7 +457,17 @@ export const meshRestartHandlers: Record<string, MedFamilyHandler> = {
         // call has landed on the owning daemon.
         const isRemote = nodeDaemonId && selfDaemonId && !daemonIdsEquivalent(nodeDaemonId, selfDaemonId);
         if (isRemote && ctx.deps.dispatchMeshCommand && !readMeshDirectDispatchFlag(args)) {
-            const forwarded = await ctx.deps.dispatchMeshCommand(nodeDaemonId!, 'restart_daemon_node', withMeshDirectDispatch(args, rosterEvidenceExtra(args, resolvedMesh)));
+            // RETRY-BOUNDS (0-retry extreme): restart_daemon_node is NOT idempotent
+            // — resending into a peer that already started restarting risks a
+            // double-restart. So retries are limited to the ONE provably-safe case
+            // (ACK_TIMEOUT: the peer never acknowledged, so it never started), and
+            // only after waiting for the peer to actually reconnect rather than
+            // firing blind into the 10-30s ICE-recovery blackhole. See
+            // mesh-oneshot-retry.ts for the full rationale.
+            const forwarded = await dispatchMeshOneshotWithAckRetry(
+                () => ctx.deps.dispatchMeshCommand!(nodeDaemonId!, 'restart_daemon_node', withMeshDirectDispatch(args, rosterEvidenceExtra(args, resolvedMesh))),
+                { command: 'restart_daemon_node', daemonId: nodeDaemonId!, getConnectionStatus: ctx.deps.getMeshPeerConnectionStatus },
+            );
             const result = unwrapMeshRelayResult(forwarded, { command: 'restart_daemon_node', peerDaemonId: nodeDaemonId }) as CommandRouterResult;
             // The member is about to restart / upgrade: its held build (and sessions)
             // are pending until the NEW process reports — taken at once when it

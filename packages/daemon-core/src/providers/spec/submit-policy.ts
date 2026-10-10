@@ -411,6 +411,43 @@ export const SEND_IN_FLIGHT_MAX_MS = 30_000;
 export const WIN32_SUBMIT_RESEND_GAP_MS = 350;
 export const WIN32_SUBMIT_MAX_RESENDS = 14;
 
+/**
+ * BLANK-ENTER-PILEUP: resolve the per-provider resend budget (see
+ * CliSpecV4.send_message.max_submit_resends). A spec value wins only when it
+ * is a finite integer in (0, WIN32_SUBMIT_MAX_RESENDS] — a 0/negative/NaN/huge
+ * value would either defeat the resend net entirely or widen it past the
+ * measured-safe default, so both are rejected back to the global default
+ * rather than silently clamped (a silently clamped huge value would hide a
+ * spec typo instead of surfacing it).
+ */
+export function resolveMaxSubmitResends(specMaxResends?: number): number {
+    if (
+        typeof specMaxResends === 'number'
+        && Number.isInteger(specMaxResends)
+        && specMaxResends > 0
+        && specMaxResends <= WIN32_SUBMIT_MAX_RESENDS
+    ) {
+        return specMaxResends;
+    }
+    return WIN32_SUBMIT_MAX_RESENDS;
+}
+
+/**
+ * BLANK-ENTER-PILEUP: backoff for the verified-submit resend cadence, replacing
+ * the flat WIN32_SUBMIT_RESEND_GAP_MS(350) spacing between every attempt. A
+ * flat cadence fires its whole budget in a fixed, short horizon no matter how
+ * slow this specific CLI is to ingest a body — that fixed horizon (4.9s at the
+ * default 14×350ms) was the gap that let agy's ~29s ingestion time run out the
+ * clock before a single resend could help, so the loop's only remaining effect
+ * was spraying blind CRs once it gave up and fired. Backing off (capped at 10×
+ * the base gap) buys the SAME attempt count more wall-clock time to land before
+ * the budget is spent, without changing when the gate first decides to fire.
+ */
+export function resolveResendBackoffMs(attempt: number, baseGapMs: number = WIN32_SUBMIT_RESEND_GAP_MS): number {
+    const factor = Math.min(10, attempt + 1);
+    return baseGapMs * factor;
+}
+
 // Quiet window the win32 echo-gate (below) requires AFTER the body is seen in the
 // composer, so a CR fires only once the FULL (possibly multi-KB / multiline) body has
 // finished arriving and echoing — not mid-arrival. POLL_MS is the gate's recheck

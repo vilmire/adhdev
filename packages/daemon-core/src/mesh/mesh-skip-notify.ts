@@ -13,6 +13,7 @@ import { isLocalAutoLaunchNode, resolveSessionBusyVerdict } from './mesh-queue-a
 import { AUTO_LAUNCH_LEDGER_DEDUP_MAX } from './mesh-queue-observability.js';
 import { PARKED_SKIP_REASON, PARKED_TASK_RETENTION_MS } from './mesh-task-parking.js';
 import { AUTO_LAUNCH_UNCLAIMED_SPAWN_CAP, SPAWN_CAP_PARK_REASON } from './mesh-autolaunch-spawn-cap.js';
+import { AUTO_LAUNCH_DISPATCH_FAILURE_CAP, DISPATCH_FAILURE_CAP_PARK_REASON } from './mesh-autolaunch-dispatch-cap.js';
 import { isWithinForeignFreshnessWindow, FOREIGN_TIMESTAMP_FUTURE_SKEW_TOLERANCE_MS } from './mesh-autolaunch-integrity.js';
 
 // Fix (1): actionable dispatch-skip notification.
@@ -63,6 +64,13 @@ const ACTIONABLE_SKIP_REASON_PREFIXES = [
     // Like the pin park above, nothing in the daemon will ever move it again;
     // silence here is loss, so it must page.
     SPAWN_CAP_PARK_REASON,
+    // AUTOLAUNCH-DISPATCH-CAP: sibling of the spawn cap above, on the pure
+    // transport-failure axis — every launch for this task died inside this
+    // coordinator's own transport layer before a session ever existed
+    // anywhere, so it never touched the spawn cap (which only counts launches
+    // that produced a session). Also terminal-until-touched: nothing in the
+    // daemon will retry it again once parked, so silence here is loss too.
+    DISPATCH_FAILURE_CAP_PARK_REASON,
     // SLOT MODEL GUARD (absent): no slot on the node declares the task's model.
     // Permanent — no amount of waiting produces a slot, so the coordinator must
     // re-drive (adjust difficulty, target another node, ask the owner). Its
@@ -541,6 +549,16 @@ function actionableSkipGuidance(
             nextAction: `Diagnose why launched sessions cannot claim it — check mesh_view_queue (parkedTasks) and the claim-refusal reasons in the node logs (mesh_read_node_logs): typical causes are a difficulty/model floor the launched sessions cannot satisfy, a provider/tag mismatch, or a claim gate refusing every candidate. Fix the mismatch, then mesh_queue_requeue(task_id='...') — any requeue unparks it and resets the spawn budget — or mesh_queue_cancel it if no longer wanted. Do NOT just requeue without changing anything: the same mismatch will burn the fresh budget the same way.`,
         };
     }
+    if (reason === DISPATCH_FAILURE_CAP_PARK_REASON) {
+        // AUTOLAUNCH-DISPATCH-CAP: always the pure transport-failure case by
+        // construction — this reason only fires from maybeParkDispatchFailureCappedTask,
+        // which checks autoLaunchDispatchFailedCount alone. No session was ever created,
+        // so (unlike the spawn cap above) there is no claim-side evidence to branch on.
+        return {
+            summary: `it accumulated ${AUTO_LAUNCH_DISPATCH_FAILURE_CAP}+ launch dispatch failures inside THIS coordinator's own transport layer (P2P/signalling), so its durable dispatch-failure cap PARKED it — NO session was ever created for any of those attempts, so there is nothing to find on a target node`,
+            nextAction: `Diagnose the COORDINATOR's transport, not any target node — check this coordinator's auto-launch ledger for 'remote_launch_dispatch_failed' records (they carry the real transport error) and whether this daemon's P2P/WS connection was cycling during that window. Once the transport is healthy again, mesh_queue_requeue(task_id='...') unparks it and resets the budget — no other configuration change is needed, because the task itself was never the problem.`,
+        };
+    }
     if (reason === PARKED_SKIP_REASON) {
         // PIN-PARKING. Unlike the cleared-pin reason below, there is no ambiguity to
         // resolve about claimability: nothing will move this task until the
@@ -682,8 +700,8 @@ export function notifyCoordinatorOfActionableSkip(meshId: string, taskId: string
     // (a genuinely offline node does need a human), so the reason stays actionable — only
     // the certainty of the wording is corrected to match what the code actually knows.
     const reachabilityResult = reason!.startsWith('remote_auto_launch');
-    const closing = reason === PARKED_SKIP_REASON || reason === SPAWN_CAP_PARK_REASON
-        // PIN-PARKING + SPAWN-CAP: the strongest closing clause in this function, because
+    const closing = reason === PARKED_SKIP_REASON || reason === SPAWN_CAP_PARK_REASON || reason === DISPATCH_FAILURE_CAP_PARK_REASON
+        // PIN-PARKING + SPAWN-CAP + DISPATCH-CAP: the strongest closing clause in this function, because
         // parking is the one state where NOTHING in the daemon will ever advance the task —
         // no retry, no timeout, no other session. Silence here is loss.
         ? `This task is claimable by NOBODY until you act on it — no session will pick it up and no timer will re-home it. It is held for ${Math.round(PARKED_TASK_RETENTION_MS / 3_600_000)}h and then failed (with another notification), so it is never silently discarded. Parked rows are listed under parkedTasks in mesh_view_queue, and any mesh_queue_requeue unparks it — including one that only rewrites its message.`

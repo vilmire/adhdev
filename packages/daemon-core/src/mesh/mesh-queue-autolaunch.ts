@@ -16,7 +16,7 @@
 import type { DaemonComponents } from '../boot/daemon-components.js';
 import { LOG } from '../logging/logger.js';
 import { spendTaskAutoLaunchSpawnBudget, recordTaskAutoLaunchDispatchFailure } from './mesh-autolaunch-spawn-budget.js';
-import { buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, getQueue, recordTaskAutoLaunch, isTaskReadonly, taskDependenciesSatisfied, meshTaskNotBeforeReady, meshTaskPriorityRank, requeueTask, parkTaskTargetPin, failRetentionExpiredParkedTask } from './mesh-work-queue.js';
+import { buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, getQueue, getQueueEntryById, recordTaskAutoLaunch, isTaskReadonly, taskDependenciesSatisfied, meshTaskNotBeforeReady, meshTaskPriorityRank, requeueTask, parkTaskTargetPin, failRetentionExpiredParkedTask } from './mesh-work-queue.js';
 import { clearClaimDeferralForNode, noteClaimDeferredForNode, shouldRedriveDeferredClaim } from './mesh-claim-refusal.js';
 import { waitForRemoteSessionReady } from './mesh-remote-ready-wait.js';
 import { resolveProviderMaxParallel, resolveMaxReadonlyParallelTasks, resolveQuotaRoutingPolicy, resolveNodeMaxConcurrentSessions, resolveMeshPolicy } from '../repo-mesh-types.js';
@@ -42,6 +42,7 @@ import { selectQuotaBusyFallback, type QuotaFallbackCandidate } from './mesh-quo
 import { autoLaunchWriteWouldClobberWinner, driveExpiredAwaitClaim, autoLaunchAwaitClaimBackoff, claimAfterRemoteAutoLaunch, AUTO_LAUNCH_AWAIT_CLAIM_MS, isAutoLaunchWithinAwaitClaimWindow, __clearAwaitClaimBackoffForTests, __resetAutoLaunchOrphanNotifiedForTests } from './mesh-autolaunch-integrity.js';
 import { autoLaunchWriteWouldClobberDifficultyFloorWaitClock, handleDifficultyFloorSkip, isDifficultyFloorWaitReason, launchSideDifficultyFloorMismatch } from './mesh-difficulty-floor.js';
 import { maybeParkSpawnCappedTask } from './mesh-autolaunch-spawn-cap.js';
+import { maybeParkDispatchFailureCappedTask, resolveCooldownUntilAfterDispatchFailure } from './mesh-autolaunch-dispatch-cap.js';
 import { slotProviderUnusableReason } from './mesh-slot-provider-usability.js';
 import { normalizeProviderPriority, isLaunchableNode, isLocalAutoLaunchNode, liveSessionCountForNode, nodeHasLiveSessionPendingClaim } from './mesh-candidacy-predicates.js';
 import {
@@ -72,6 +73,13 @@ export function __resetAutoLaunchAwaitClaimBackoffForTests(): void {
     autoLaunchTaskInProgress.clear();
     autoLaunchInProgress.clear();
     __resetAutoLaunchOrphanNotifiedForTests();
+    // AUTOLAUNCH-DISPATCH-CAP: the per-(mesh,node) launch cooldown (including its
+    // new dispatch-failure backoff) is another in-memory brake with the same
+    // "reset between test iterations" need as the others cleared above — a test
+    // simulating N wall-clock-separated attempts in a tight synchronous loop must
+    // not have attempt 2+ silently skipped by a cooldown only real wall-clock time
+    // would have cleared.
+    autoLaunchCooldownUntil.clear();
 }
 /** @internal Test-only: is the per-task auto-launch lock held? The AUTOLAUNCH-TASK-RACE suite
  *  asserts it is released on every exit path (a leak would wedge the task pending forever). */
@@ -997,7 +1005,10 @@ async function launchQueueTaskOnRemoteNode(
         // the dispatch-failure axis instead, which is what lets the park page
         // point the coordinator at its own ledger rather than at this node.
         markAutoLaunch(meshId, task.id, { status: 'failed', reason: `remote_launch_dispatch_failed: ${e?.message || String(e)}`, nodeId, providerType: effectiveProviderType, dispatchFailedInTransport: true });
-        autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS); sweepExpiredCooldowns();
+        // AUTOLAUNCH-DISPATCH-CAP: flat-cooldown backoff is what let 106 failures
+        // accumulate in 21min (see mesh-autolaunch-dispatch-cap.ts for the fix).
+        autoLaunchCooldownUntil.set(launchKey, resolveCooldownUntilAfterDispatchFailure(meshId, task.id, AUTO_LAUNCH_COOLDOWN_MS, getQueueEntryById, task));
+        sweepExpiredCooldowns();
         return false;
     }
     const payload = (launchResult && typeof launchResult === 'object' && 'payload' in launchResult && launchResult.payload && typeof launchResult.payload === 'object')
@@ -1248,6 +1259,13 @@ export async function maybeAutoLaunchOneQueueSession(components: DaemonComponent
             // await-claim guard (an in-flight claim is never parked mid-wait) and BEFORE node
             // selection — the alternative here is another launch. See mesh-autolaunch-spawn-cap.ts.
             if (maybeParkSpawnCappedTask(meshId, task, parkTaskTargetPin, reason => markAutoLaunch(meshId, task.id, { status: 'skipped', reason }))) continue;
+
+            // AUTOLAUNCH-DISPATCH-CAP: sibling breaker on the transport-failure axis — a
+            // task whose every launch dies in THIS coordinator's own transport layer never
+            // creates a session, so it never reaches the spawn cap above (which counts only
+            // launches that spent spawn budget). Not gated behind the await-claim guard: a
+            // dispatch failure creates nothing to await a claim for.
+            if (maybeParkDispatchFailureCappedTask(meshId, task, parkTaskTargetPin, reason => markAutoLaunch(meshId, task.id, { status: 'skipped', reason }))) continue;
 
             const orderedCandidateNodes = selectAutoLaunchCandidateNodes(components, meshId, mesh, task);
             if (!orderedCandidateNodes) continue;

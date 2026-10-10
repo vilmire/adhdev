@@ -58,11 +58,12 @@ import { chunkWin32InputMode } from './win32-input-mode.js';
 import {
     SEND_IN_FLIGHT_MAX_MS,
     WIN32_SUBMIT_RESEND_GAP_MS,
-    WIN32_SUBMIT_MAX_RESENDS,
     WIN32_SUBMIT_SETTLE_MS,
     WIN32_SUBMIT_SETTLE_POLL_MS,
     WIN32_ECHO_PROBE_CHARS,
     WIN32_ECHO_MAX_WAIT_MS,
+    resolveMaxSubmitResends,
+    resolveResendBackoffMs,
 } from './submit-policy.js';
 
 /** QUEUE-WEDGE: margin past SEND_IN_FLIGHT_MAX_MS before the latch watchdog
@@ -784,6 +785,9 @@ export class SendSubmitEngine {
     private scheduleVerifiedSubmit(submitKey: string, initialDelayMs: number, body: string, opts?: { skipEchoGate?: boolean }): void {
         if (this.win32SubmitTimer) { clearTimeout(this.win32SubmitTimer); this.win32SubmitTimer = null; }
         const startedAt = Date.now();
+        // BLANK-ENTER-PILEUP: per-provider resend budget (default unchanged at
+        // WIN32_SUBMIT_MAX_RESENDS=14) — see CliSpecV4.send_message.max_submit_resends.
+        const maxResends = resolveMaxSubmitResends(this.host.spec.send_message?.max_submit_resends);
 
         // FULL-BODY echo confirmation. A tail-only probe (slice(-N)) was insufficient
         // for multi-line prompts: a multiline body echoes line-by-line, so its TAIL can
@@ -824,10 +828,23 @@ export class SendSubmitEngine {
             return full.includes(headProbe);
         };
 
-        const fire = (attempt: number): void => {
+        // BLANK-ENTER-PILEUP: the resend loop used to fire the SAME fast flat
+        // cadence whether the echo-gate had actually CONFIRMED the body or was
+        // giving up blind — but those are different failure classes. A confirmed
+        // body with no state transition means the CR itself was likely swallowed
+        // (a real "enter dropped"), which a fast resend can plausibly fix. A body
+        // that never echoed at all means the CLI probably never ingested it yet
+        // (agy took ~29s for 4485 chars, far past the old 4.9s resend horizon) —
+        // resending fast there does not make the CLI ingest faster, it just spends
+        // the whole budget as blank Enter presses into a composer that either has
+        // nothing yet or is still mid-arrival. So an unconfirmed fire uses the
+        // SAME attempt budget but backed-off cadence (resolveResendBackoffMs),
+        // giving the slow-ingesting CLI more wall-clock time to catch up between
+        // attempts instead of spraying them in under 5 seconds.
+        const fire = (attempt: number, bodyConfirmed: boolean): void => {
             this.win32SubmitTimer = null;
             this.host.adapter.send_keys(submitKey);
-            if (attempt + 1 >= WIN32_SUBMIT_MAX_RESENDS) {
+            if (attempt + 1 >= maxResends) {
                 // SUBMIT-SILENT-FAILURE detection. We have spent the entire resend
                 // budget and the FSM never left 'idle' — the body is sitting unsent in
                 // the composer. This is precisely the state that previously presented
@@ -839,7 +856,7 @@ export class SendSubmitEngine {
                     this.submitUnconfirmed = true;
                     LOG.error(
                         'FsmDriver',
-                        `[${this.host.specTag()}] SUBMIT NOT CONFIRMED after ${WIN32_SUBMIT_MAX_RESENDS} submit-key attempts ` +
+                        `[${this.host.specTag()}] SUBMIT NOT CONFIRMED after ${maxResends} submit-key attempts ` +
                         `(len=${body.length}, echoed=${bodyEchoed()}, waited=${Date.now() - startedAt}ms). ` +
                         'The message is likely still sitting unsent in the composer — the agent is NOT working on it.',
                     );
@@ -861,6 +878,9 @@ export class SendSubmitEngine {
                 }
                 return;
             }
+            const gapMs = bodyConfirmed
+                ? WIN32_SUBMIT_RESEND_GAP_MS
+                : resolveResendBackoffMs(attempt, WIN32_SUBMIT_RESEND_GAP_MS);
             this.win32SubmitTimer = setTimeout(() => {
                 // Left the idle composer → it submitted; stop resending.
                 if (this.host.currentStatus() !== 'idle') {
@@ -870,8 +890,12 @@ export class SendSubmitEngine {
                     }
                     return;
                 }
-                fire(attempt + 1);
-            }, WIN32_SUBMIT_RESEND_GAP_MS);
+                // Re-check confirmation on every attempt, not just the first: the
+                // body may echo in LATER while resends are already underway (a slow
+                // CLI that is still ingesting), at which point remaining attempts
+                // should speed back up to the fast cadence.
+                fire(attempt + 1, bodyConfirmed || bodyEchoed());
+            }, gapMs);
         };
 
         // Echo-gate: hold the first CR until the body is CONFIRMED in the composer, not
@@ -896,15 +920,15 @@ export class SendSubmitEngine {
             // the verified-resend net below carries a CR eaten mid-paste.
             // Default: body present in the composer AND output quiet (full body
             // arrived) → submit.
-            if (opts?.skipEchoGate ? true : (bodyEchoed() && settled)) { fire(0); return; }
+            if (opts?.skipEchoGate ? true : (bodyEchoed() && settled)) { fire(0, true); return; }
             // Last-resort blind fire so a body that truly never confirms cannot hang.
             if (waited >= WIN32_ECHO_MAX_WAIT_MS) {
                 LOG.warn(
                     'FsmDriver',
                     `[${this.host.specTag()}] body never confirmed in composer after ${waited}ms (len=${body.length}) — ` +
-                    'firing submit key blind; resend net will verify.',
+                    'firing submit key blind; resend net will back off and verify rather than fast-fire.',
                 );
-                fire(0);
+                fire(0, false);
                 return;
             }
             this.win32SubmitTimer = setTimeout(waitForEcho, WIN32_SUBMIT_SETTLE_POLL_MS);

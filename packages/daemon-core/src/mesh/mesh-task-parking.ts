@@ -3,6 +3,7 @@ import { notifyMeshCoordinator } from './turn-ledger/deliver.js';
 import { traceMeshEventDrop } from '../shared/mesh-event-trace.js';
 import { getMachineId } from '../config/config.js';
 import { SPAWN_CAP_PARK_REASON } from './mesh-autolaunch-spawn-cap.js';
+import { DISPATCH_FAILURE_CAP_PARK_REASON } from './mesh-autolaunch-dispatch-cap.js';
 import type { MeshWorkQueueEntry, MeshTaskParking } from './mesh-work-queue.js';
 import { readText } from '@adhdev/mesh-shared';
 
@@ -179,10 +180,13 @@ export function notifyCoordinatorOfParkedTaskDropped(
     const taskId = task.id;
     const addressee = readText(task.parked?.targetSessionId);
     const hours = Math.round(PARKED_TASK_RETENTION_MS / 3_600_000);
-    // AUTOLAUNCH-SPAWN-CAP (P3): the park cause differs, so the drop notice must too —
-    // the pin wording ("addressed to session X") is false for a spawn-cap park.
+    // AUTOLAUNCH-SPAWN-CAP (P3) / AUTOLAUNCH-DISPATCH-CAP: the park cause differs, so
+    // the drop notice must too — the pin wording ("addressed to session X") is false
+    // for either cap park.
     const parkCause = task.parked?.reason === SPAWN_CAP_PARK_REASON
         ? 'it exhausted its auto-launch spawn budget: every session launched for it failed to claim it (a launch/claim mismatch), so launching was stopped to break the loop'
+        : task.parked?.reason === DISPATCH_FAILURE_CAP_PARK_REASON
+        ? 'it exhausted its auto-launch dispatch-failure budget: every launch attempt for it died inside the coordinator\'s own transport layer before a session was ever created, so launching was stopped to break the loop'
         : `its delta was addressed to session '${addressee || '(unknown)'}' and that pin went stale`;
     const coordinatorMessage = `[System] A PARKED mesh task was dropped after ${hours}h with no coordinator decision.\n`
         + `Task ${taskId} was parked because ${parkCause}. `
@@ -295,11 +299,17 @@ export function settleParkedQueueTask(
         notifyCoordinatorOfParkedTaskDropped(meshId, task);
         return 'swept';
     }
-    // AUTOLAUNCH-SPAWN-CAP (P3): a spawn-cap park re-asserts its OWN skip reason,
-    // not the pin one — the coordinator guidance for the two is different (a stale
-    // addressee vs. a launch/claim mismatch), and the pin wording would misdirect
-    // diagnosis of a task that may never have had a target at all.
-    markSkip(task.parked?.reason === SPAWN_CAP_PARK_REASON ? SPAWN_CAP_PARK_REASON : PARKED_SKIP_REASON);
+    // AUTOLAUNCH-SPAWN-CAP (P3) / AUTOLAUNCH-DISPATCH-CAP: a capped park re-asserts
+    // its OWN skip reason, not the pin one — the coordinator guidance differs per
+    // cause (a stale addressee vs. a launch/claim mismatch vs. a transport failure),
+    // and the pin wording would misdirect diagnosis of a task that may never have
+    // had a target at all.
+    const parkedReason = task.parked?.reason;
+    markSkip(
+        parkedReason === SPAWN_CAP_PARK_REASON ? SPAWN_CAP_PARK_REASON
+        : parkedReason === DISPATCH_FAILURE_CAP_PARK_REASON ? DISPATCH_FAILURE_CAP_PARK_REASON
+        : PARKED_SKIP_REASON,
+    );
     return 'held';
 }
 
