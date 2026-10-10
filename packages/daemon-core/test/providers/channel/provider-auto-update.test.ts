@@ -172,6 +172,16 @@ describe('provider auto-update (gated)', () => {
     expect(loader.getChannelStalenessSnapshot()?.staleTypes).toEqual([]);
   });
 
+  it('U1b: the first-install bootstrap is not reported as an auto-update (no "auto-updated — → x" on every row)', async () => {
+    // Live (isolated fresh standalone, 2026-10-10): once check_provider_updates
+    // listed channel-store rows, every provider of a fresh install carried
+    // { state: 'updated', from: null } from the bootstrap sync, so the Providers
+    // tab would read "auto-updated — → x" on all 19 rows. An activation with no
+    // prior pin is an install, not an update.
+    const loader = await bootstrapped();
+    expect(loader.getAutoUpdateStatus().types).toEqual({});
+  });
+
   it('U2: a type this machine never activated is never auto-installed', async () => {
     const loader = await bootstrapped();
     publish('gamma-cli', '1.0.0');

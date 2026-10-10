@@ -108242,7 +108242,7 @@ ${output}` : "";
         const at = (/* @__PURE__ */ new Date()).toISOString();
         for (const ref of report.activated) {
           const from = pinsBefore.get(ref.providerType)?.active.providerVersion ?? null;
-          if (mode === "auto") {
+          if (mode === "auto" && from !== null) {
             this.autoUpdateRecords.set(ref.providerType, {
               state: "updated",
               from,
@@ -136232,6 +136232,29 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       }
       return { success: true, providers: items };
     }
+    function mergeChannelPinRows(host, upstreamRows) {
+      const items = [...upstreamRows];
+      const listed = new Set(items.map((item) => item.type));
+      const loader2 = host._ctx.providerLoader;
+      let pins = /* @__PURE__ */ new Map();
+      try {
+        pins = loader2?.listVerifiedChannelPins?.() ?? /* @__PURE__ */ new Map();
+      } catch {
+      }
+      for (const [type2, pointer] of pins) {
+        const active = pointer?.active;
+        if (listed.has(type2) || !active?.providerVersion) continue;
+        items.push({
+          type: type2,
+          category: active.category || "cli",
+          version: active.providerVersion,
+          source: "channel",
+          ...loader2?.channel ? { channel: loader2.channel } : {}
+        });
+        listed.add(type2);
+      }
+      return items;
+    }
     async function handleRegistryCatalog(host, args) {
       const https = require("https");
       const cfg = loadConfig();
@@ -136298,9 +136321,17 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           });
         });
       }
-      const installedList = installed.providers;
+      const installedList = mergeChannelPinRows(host, installed.providers);
       const pins = host._ctx.providerLoader?.listVerifiedChannelPins?.() ?? /* @__PURE__ */ new Map();
       const channel = host._ctx.providerLoader?.channel ?? "stable";
+      let channelStaleness = null;
+      try {
+        channelStaleness = await host._ctx.providerLoader?.checkVerifiedChannelStaleness?.() ?? null;
+      } catch {
+      }
+      const listedStale = new Set(
+        Array.isArray(channelStaleness?.staleTypes) ? channelStaleness.staleTypes.filter((t) => typeof t === "string") : []
+      );
       const autoUpdate = host._ctx.providerLoader?.getAutoUpdateStatus?.() ?? null;
       const checks = await Promise.all(
         installedList.map(async (p) => {
@@ -136326,21 +136357,17 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
             const stale = latestVersion !== "" && latestVersion !== activeVersion;
             return { ...base, latestVersion, updateAvailable: stale, stale };
           } catch (e) {
+            const listed = listedStale.has(p.type);
             return {
               ...base,
               latestVersion: null,
-              updateAvailable: false,
-              stale: false,
+              updateAvailable: listed,
+              stale: listed,
               error: e?.message ?? String(e)
             };
           }
         })
       );
-      let channelStaleness = null;
-      try {
-        channelStaleness = await host._ctx.providerLoader?.checkVerifiedChannelStaleness?.() ?? null;
-      } catch {
-      }
       let modelStaleness = null;
       try {
         modelStaleness = host._ctx.providerLoader?.getModelDiscoveryStaleness?.() ?? null;

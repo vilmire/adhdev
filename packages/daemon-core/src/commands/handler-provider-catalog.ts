@@ -186,6 +186,54 @@ export function handleListInstalledProviders(host: ProviderCatalogCommandHost, _
     return { success: true, providers: items };
 }
 
+type InstalledProviderRow = {
+    type: string;
+    category: string;
+    version: string;
+    /** 'channel' = a verified-channel pin with no `.upstream` manifest. */
+    source?: 'upstream' | 'channel';
+    channel?: string;
+};
+
+/**
+ * The installed set the Providers tab rows are built from: `.upstream` rows
+ * (list_installed_providers, unchanged) plus every verified-channel pin that
+ * has no `.upstream` row.
+ *
+ * CHANNEL-STORE ROWS (live 2026-10-10): a daemon that installs through the
+ * verified channel store — the default for a fresh config — has an EMPTY
+ * `.upstream`, so check_provider_updates (built on that listing alone)
+ * returned `providers: []` (MainPC, MoltBook). The Providers tab then had no
+ * pin for any row: no active version, no inline Update when the channel had a
+ * newer bundle, no rollback, and no auto-update line. `.upstream` rows keep
+ * their exact legacy shape and win for their type.
+ *
+ * Deliberately NOT applied to list_installed_providers itself: standalone's
+ * first-run onboarding gate reads that listing as "0 installed", and a fresh
+ * channel-store daemon bootstraps every channel type — merging there would
+ * silently retire the onboarding dialog, which is a product call.
+ */
+export function mergeChannelPinRows(host: ProviderCatalogCommandHost, upstreamRows: InstalledProviderRow[]): InstalledProviderRow[] {
+    const items = [...upstreamRows];
+    const listed = new Set(items.map((item) => item.type));
+    const loader = host._ctx.providerLoader;
+    let pins: Map<string, { active?: { providerVersion?: string; category?: string } }> = new Map();
+    try { pins = loader?.listVerifiedChannelPins?.() ?? new Map(); } catch { /* rows stay .upstream-only */ }
+    for (const [type, pointer] of pins) {
+        const active = pointer?.active;
+        if (listed.has(type) || !active?.providerVersion) continue;
+        items.push({
+            type,
+            category: active.category || 'cli',
+            version: active.providerVersion,
+            source: 'channel',
+            ...(loader?.channel ? { channel: loader.channel } : {}),
+        });
+        listed.add(type);
+    }
+    return items;
+}
+
 /**
  * Report, for each installed provider, what this daemon is actually
  * PINNED to and what the registry currently offers.
@@ -270,7 +318,7 @@ export async function handleCheckProviderUpdates(host: ProviderCatalogCommandHos
         });
     }
 
-    const installedList = (installed as unknown as { providers: Array<{ type: string; category: string; version: string }> }).providers;
+    const installedList = mergeChannelPinRows(host, (installed as unknown as { providers: InstalledProviderRow[] }).providers);
     // The pin is what the daemon loads; `.upstream` is only what is on
     // disk. Where a provider has no pin (channel store empty/disabled),
     // fall back to the upstream version so the row is still meaningful.
@@ -283,6 +331,29 @@ export async function handleCheckProviderUpdates(host: ProviderCatalogCommandHos
     // Auto-update verdicts (docs/design/2026-10-10-provider-auto-update.md §5):
     // per row, so the dashboard can say "auto-updated a → b" or why an update
     // is held back. Pure in-memory read.
+    // NO sync here. Activation moved to `activate_provider_updates` so
+    // this command — and the GET that exposes it — cannot change state.
+    // `channelSync: null` is kept so existing readers of the field see a
+    // shape they already handle rather than an absent key.
+    //
+    // channelStaleness: one extra READ-ONLY channel listing so the caller
+    // also learns about channel types this machine has never activated
+    // nor installed (newTypes — the kimi class, invisible in the
+    // installed-set rows above). Refreshes the badge snapshot as a side
+    // effect of the same read; still zero pointer writes.
+    //
+    // Read BEFORE the rows: a row whose own registry read fails falls back to
+    // this listing's verdict for updateAvailable instead of reporting "current".
+    let channelStaleness: unknown = null;
+    try {
+        channelStaleness = await host._ctx.providerLoader?.checkVerifiedChannelStaleness?.() ?? null;
+    } catch { /* read-only extra — the rows are still valid without it */ }
+    const listedStale = new Set<string>(
+        Array.isArray((channelStaleness as { staleTypes?: unknown } | null)?.staleTypes)
+            ? ((channelStaleness as { staleTypes: unknown[] }).staleTypes.filter((t): t is string => typeof t === 'string'))
+            : [],
+    );
+
     const autoUpdate = host._ctx.providerLoader?.getAutoUpdateStatus?.() ?? null;
     const checks = await Promise.all(
         installedList.map(async (p) => {
@@ -308,31 +379,17 @@ export async function handleCheckProviderUpdates(host: ProviderCatalogCommandHos
                 const stale = latestVersion !== '' && latestVersion !== activeVersion;
                 return { ...base, latestVersion, updateAvailable: stale, stale };
             } catch (e: any) {
+                const listed = listedStale.has(p.type);
                 return {
                     ...base,
                     latestVersion: null,
-                    updateAvailable: false,
-                    stale: false,
+                    updateAvailable: listed,
+                    stale: listed,
                     error: e?.message ?? String(e),
                 };
             }
         })
     );
-
-    // NO sync here. Activation moved to `activate_provider_updates` so
-    // this command — and the GET that exposes it — cannot change state.
-    // `channelSync: null` is kept so existing readers of the field see a
-    // shape they already handle rather than an absent key.
-    //
-    // channelStaleness: one extra READ-ONLY channel listing so the caller
-    // also learns about channel types this machine has never activated
-    // nor installed (newTypes — the kimi class, invisible in the
-    // installed-set rows above). Refreshes the badge snapshot as a side
-    // effect of the same read; still zero pointer writes.
-    let channelStaleness: unknown = null;
-    try {
-        channelStaleness = await host._ctx.providerLoader?.checkVerifiedChannelStaleness?.() ?? null;
-    } catch { /* read-only extra — rows above are still valid without it */ }
 
     // modelStaleness: the same badge treatment for the MODEL-list axis,
     // reusing this payload rather than inventing a second convention.

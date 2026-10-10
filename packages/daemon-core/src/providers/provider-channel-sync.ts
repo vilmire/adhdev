@@ -782,7 +782,10 @@ export class ProviderChannelSync {
     const at = new Date().toISOString();
     for (const ref of report.activated) {
       const from = pinsBefore.get(ref.providerType)?.active.providerVersion ?? null;
-      if (mode === 'auto') {
+      // No prior pin = an install (fresh-install bootstrap, first activation of
+      // an .upstream type), not an update: recording it made a fresh daemon's
+      // Providers tab read "auto-updated — → x" on every row.
+      if (mode === 'auto' && from !== null) {
         this.autoUpdateRecords.set(ref.providerType, {
           state: 'updated', from, to: ref.providerVersion, at, digest: ref.digest, inputsKey: this.gateInputsKey(ref.providerType),
         });
