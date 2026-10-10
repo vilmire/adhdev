@@ -80,8 +80,10 @@ export const MESH_ENQUEUE_TASK_TOOL = {
         properties: {
             message: { type: 'string', description: 'The task instruction.' },
             input: MESH_TASK_INPUT_SCHEMA,
-            task_mode: { ...enumOf(MESH_TASK_MODES), description: 'live_debug_readonly rejects write/push/deploy instructions and may run in parallel on a busy node (cheap for investigation).' },
-            readonly: { type: 'boolean', description: 'Read-only, composable with task_mode: no write isolation; write instructions rejected.' },
+            task_mode: { ...enumOf(MESH_TASK_MODES), description: 'live_debug_readonly lints the instruction TEXT and rejects write/push/deploy wording before dispatch, and may run in parallel on a busy node (cheap for investigation). '
+                + 'It does NOT remove the worker\'s Edit/Write/Bash tools — the worker stays read-only only if it follows the instruction; verify with mesh_git_status afterward.' },
+            readonly: { type: 'boolean', description: 'Read-only axis, composable with task_mode: separate parallel cap, no write isolation, exempt from the per-node write limit and the dirty/stale gates. '
+                + 'Instruction text is linted; the worker\'s own tools are NOT restricted.' },
             required_tags: { type: 'array', items: { type: 'string' }, description: 'Capability tags every eligible node must have, e.g. os=darwin, provider=codex-cli.' },
             owned_paths: { type: 'array', items: { type: 'string' }, description: 'code_change only: repo-relative files/dirs this task will touch (dir/** = subtree). A claim overlapping another in-flight code_change task\'s paths is refused (owned_paths_conflict).' },
             target_node_id: { type: 'string', description: 'HARD pin: only this node may claim. Beats prefer_worktree; unresolvable id rejected.' },

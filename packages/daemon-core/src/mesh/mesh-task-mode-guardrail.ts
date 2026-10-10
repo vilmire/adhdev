@@ -10,6 +10,17 @@
  * The queue module re-exports every public symbol declared here, so existing
  * `from './mesh-work-queue.js'` imports keep working unchanged.
  *
+ * ★NOT A SANDBOX. This guardrail is a pre-dispatch text lint only: it rejects
+ * instructions that look like writes but does not restrict what the worker's
+ * CLI can do: the readonly classification (`isTaskReadonly`) feeds the
+ * scheduling gates only — it never reaches the CLI's launch arguments, so no
+ * tool-level restriction is applied to the worker. Whether a readonly worker
+ * stays read-only therefore depends on the worker following the instruction.
+ * Negation, quoting and prose phrasing deliberately pass the lint. The real
+ * benefits are the lint itself plus readonly scheduling (separate parallel cap,
+ * exemption from the per-node write limit and dirty/stale gates). See
+ * docs/guides/REPO_MESH_GUIDE.md §3 for the full guarantee list.
+ *
  * OSS code (AGPL-3.0). Must not import from packages/ (proprietary).
  */
 import { isTaskReadonly, type MeshTaskMode } from './mesh-work-queue.js';
