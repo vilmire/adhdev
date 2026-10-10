@@ -23,6 +23,7 @@ const GUARDED_FILES = [
   'mesh/mesh-onboarding-plan.ts',
   'mesh/mesh-queue-assignment.ts',
   'mesh/mesh-queue-autolaunch.ts',
+  'mesh/mesh-autolaunch-usable-provider.ts',
   'mesh/mesh-runtime-store-claim.ts',
   'mesh/mesh-candidacy-predicates.ts',
   'mesh/mesh-dirty-write-verdict.ts',
