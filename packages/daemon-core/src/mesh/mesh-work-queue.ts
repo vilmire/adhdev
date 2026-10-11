@@ -885,27 +885,35 @@ export function failRetentionExpiredParkedTask(
 }
 
 /**
- * ORPHANED-UNCORRELATED-DISPATCH: fail one `assigned` row that has NO turn-ledger
- * attempt (`attemptId` absent). Such a row has no reclaim owner — the turn
+ * ORPHANED-UNCORRELATED-DISPATCH: fail one `assigned` row with no open
+ * turn-ledger attempt (absent, dangling, or terminal `attemptId`). It has no
+ * reclaim owner — the turn
  * ledger's scheduler only reclaims attempts — so without this it stays
  * `assigned` forever and holds its node's write slot. The caller
  * (mesh-orphaned-dispatch-sweep.ts) has already judged the row's session
  * not live and the row old enough; this re-checks the row shape under the queue
  * lock (idempotent: a row that is no longer `assigned`, or that gained an
- * attempt in the meantime, is left alone and null is returned).
+ * open attempt in the meantime, is left alone and null is returned).
  */
 export function failOrphanedUncorrelatedDispatch(
     meshId: string,
     taskId: string,
     reason: string,
-    opts?: MeshQueueMutationOptions,
+    opts?: MeshQueueMutationOptions & { orphanedAttemptId?: string },
 ): MeshWorkQueueEntry | null {
     requireMeshHostQueueOwner(opts);
     const result = withQueueLock(meshId, () => {
         const store = MeshRuntimeStore.getInstance();
         const entry = store.findQueueEntryById(meshId, taskId);
         if (!entry || entry.status !== 'assigned') return null;
-        if (typeof entry.attemptId === 'string' && entry.attemptId.trim()) return null;
+        const attemptId = entry.attemptId?.trim();
+        if (attemptId) {
+            // A stale reference is not a reclaim owner. Re-check under the queue
+            // lock; never take an open attempt away from the turn ledger.
+            if (attemptId !== opts?.orphanedAttemptId) return null;
+            const attempt = store.turnStore().getAttempt(attemptId);
+            if (attempt && !attempt.terminal) return null;
+        } else if (opts?.orphanedAttemptId) return null;
         entry.cancelReason = reason;
         entry.updatedAt = new Date().toISOString();
         store.updateQueueEntry(entry);

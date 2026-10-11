@@ -132,10 +132,10 @@ export async function runMeshHousekeepingTick(
             }
         }
         // ── orphaned uncorrelated dispatch sweep ──
-        // An `assigned` row with NO turn-ledger attempt has no reclaim owner (the
-        // turn scheduler only reclaims attempts): once its session is provably not
-        // live and it is 30 min old, fail it (orphaned_uncorrelated_dispatch) so it
-        // stops holding its node's write slot. Rows with an attempt are untouched.
+        // Confirmed dead assignments older than 30 min: ask the ledger to probe
+        // open attempts (including suspended workers). Rows with no open reclaim
+        // owner, including dangling attempt references, are failed with an audit
+        // notice so they stop holding the node slot and can be operator-requeued.
         for (const { mesh } of hosted) {
             try {
                 runOrphanedDispatchSweep(components, mesh.id, nowMs);

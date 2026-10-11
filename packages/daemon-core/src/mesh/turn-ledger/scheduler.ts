@@ -44,6 +44,7 @@ import { probeEvidence, type ProbeLocation, type TranscriptObservation, type Tur
 import type { TurnStore } from './store.js';
 import { selectProbeTargets, type ProbeTarget } from './targets.js';
 import type { TurnAttempt } from './types.js';
+import { createWorkerSessionHealthMonitor } from './worker-session-health.js';
 
 /** C10-4: terminal plain attempts are pruned after 7 days. */
 export const PLAIN_ATTEMPT_RETENTION_MS = 7 * 24 * 60 * 60_000;
@@ -144,6 +145,7 @@ export function createTurnScheduler(deps: TurnSchedulerDeps): TurnScheduler & { 
     const now = deps.now ?? (() => Date.now());
     const tickMs = deps.intervalMs ?? policy.tickMs;
     const forced = new Set<string>();
+    const sessionHealth = createWorkerSessionHealthMonitor();
     let lastPruneAt: number | null = null;
     let inFlight: Promise<TurnTickReport> | null = null;
     let again = false;
@@ -196,6 +198,8 @@ export function createTurnScheduler(deps: TurnSchedulerDeps): TurnScheduler & { 
         // the current generation and the stale-generation lane stays honest.
         const current = store.getAttempt(attempt.attemptId);
         if (!current || current.terminal) return;
+        try { sessionHealth.observe(current, read, at, policy.stallNoticeMs); }
+        catch (error) { log.warn(`turn-scheduler: session health notice failed: ${describe(error)}`); }
         let evidence = probeEvidence(current, read, { nowMs: at, observedBy: selfDaemonId, policy });
         const t = read.transcript;
         if (t && t.finalSummary && probe.handoff && current.meshId && evidence.some((e) => e.kind === 'transcript_final')) {

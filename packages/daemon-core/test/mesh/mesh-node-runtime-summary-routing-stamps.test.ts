@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildMeshNodeRuntimeSummary,
   sanitizeMeshNodeRuntimeSummary,
+  MESH_NODE_RUNTIME_MAX_SESSIONS,
 } from '../../src/mesh/mesh-node-runtime-summary'
 
 const rawSession = {
@@ -57,5 +58,16 @@ describe('runtime summary routing stamps', () => {
       sessions: [{ id: 's', settings: { meshLastNodeId: 'line one\nline two', meshCoordinatorDaemonId: 'x'.repeat(500) } }],
     })!
     expect(summary.sessions[0].settings).toBeUndefined()
+  })
+})
+
+
+describe('runtime summary completeness survives replication', () => {
+  it('keeps the truncation marker when a capped member summary is sanitized again', () => {
+    const member = sanitizeMeshNodeRuntimeSummary({ sessions: Array.from({ length: MESH_NODE_RUNTIME_MAX_SESSIONS + 1 }, (_, i) => ({ id: `s-${i}` })) })!
+    expect(member.sessionsTruncated).toBe(true)
+    expect(sanitizeMeshNodeRuntimeSummary(member)).toEqual(member)
+    expect(sanitizeMeshNodeRuntimeSummary({ sessions: [], sessionsTruncated: true })?.sessionsTruncated).toBe(true)
+    expect(sanitizeMeshNodeRuntimeSummary({ sessions: [] })?.sessionsTruncated).toBeUndefined()
   })
 })

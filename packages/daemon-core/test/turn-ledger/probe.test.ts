@@ -5,6 +5,7 @@ import { isTurnEvidence } from '@adhdev/mesh-shared';
 import { DEFAULT_TURN_POLICY } from '../../src/mesh/turn-ledger/policy.js';
 import {
     createComponentsProbeReader,
+    EMPTY_HELD_ABSENCE_GRACE_MS,
     probeEvidence,
     wantsTranscript,
     type TranscriptObservation,
@@ -285,7 +286,7 @@ describe('remote presence from the coordinator-held runtime', () => {
         expect(dispatchMeshCommand).not.toHaveBeenCalled();
     });
 
-    it('an empty or truncated held list never proves absence → unknown, no live call', async () => {
+    it('an empty startup list or truncated held list cannot prove absence → unknown, no live call', async () => {
         const { comps, dispatchMeshCommand } = components();
         for (const held of [
             { sessions: [], observedAt: T0 + 50_000 },
@@ -294,6 +295,24 @@ describe('remote presence from the coordinator-held runtime', () => {
             const reader = createComponentsProbeReader(comps, { analyzer: () => obs(), readHeldSessions: () => held });
             expect(await reader.read(attempt(), loc, [])).toEqual({ presence: 'unknown' });
         }
+        expect(dispatchMeshCommand).not.toHaveBeenCalled();
+    });
+
+    it('a complete empty remote session list after startup grace proves death; a listed worker stays live', async () => {
+        const { comps, dispatchMeshCommand } = components();
+        const held = { sessions: [] as { id: string; status: string }[], observedAt: T0 + EMPTY_HELD_ABSENCE_GRACE_MS + 1000 };
+        const reader = createComponentsProbeReader(comps, { analyzer: () => obs(), readHeldSessions: () => held });
+        expect(await reader.read(attempt(), loc, [])).toEqual({ presence: 'absent' });
+        const r = ledgerOn(memDb());
+        r.observe(dispatch({ scope: 'mesh_queue' }));
+        r.observe(evd('delivered', { messageId: 'msg-1', outcome: 'delivered', via: 'local' }, { source: 'input_service' }));
+        r.observe(evd('turn_started', { retro: false }));
+        const a = r.getAttempt('a1')!;
+        const read = await reader.read(a, loc, []);
+        for (const e of probeEvidence(a, read, { ...ctx, nowMs: held.observedAt })) r.observe(e);
+        expect(r.getAttempt('a1')).toMatchObject({ generation: 1, reclaimCount: 1, state: 'accepted' });
+        held.sessions = [{ id: 's1', status: 'generating' }];
+        expect(await reader.read(attempt(), loc, [])).toEqual({ presence: 'present', status: 'generating' });
         expect(dispatchMeshCommand).not.toHaveBeenCalled();
     });
 

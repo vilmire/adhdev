@@ -319,7 +319,9 @@ export function sanitizeMeshNodeRuntimeSummary(raw: unknown): MeshNodeRuntimeSum
     const nodeFacts = normalizeMeshNodeFacts(record.nodeFacts);
     const daemonId = readId(record.daemonId);
     const daemonBootId = readId(record.daemonBootId);
-    const truncated = rawSessions.length > sessions.length && sessions.length >= MESH_NODE_RUNTIME_MAX_SESSIONS;
+    // Member summaries are sanitized again on receipt; truncation must survive.
+    const truncated = record.sessionsTruncated === true
+        || (rawSessions.length > sessions.length && sessions.length >= MESH_NODE_RUNTIME_MAX_SESSIONS);
     const providers = sanitizeProviders(record.providers);
     return {
         schemaVersion: MESH_NODE_RUNTIME_SUMMARY_SCHEMA_VERSION,

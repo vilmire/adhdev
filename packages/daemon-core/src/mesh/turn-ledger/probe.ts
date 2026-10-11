@@ -324,6 +324,8 @@ interface HeldRemoteSessions {
  * the launch → push debounce, must not turn into a false `dead`).
  */
 export const HELD_ABSENCE_MARGIN_MS = 10_000;
+/** Empty lists can precede session restore at boot; require the launch grace too. */
+export const EMPTY_HELD_ABSENCE_GRACE_MS = 2 * 60_000;
 
 interface ComponentsProbeReaderOptions {
     analyzer: TranscriptAnalyzer;
@@ -404,8 +406,8 @@ export function createComponentsProbeReader(components: ProbeComponents, options
         // Presence / status from the coordinator-HELD runtime (member-pushed, still
         // pushing) — the only source. "Absent" is trusted only when the observation
         // postdates this attempt's dispatch (a session just launched may not have been
-        // pushed yet), the list is non-empty (a member's boot push may precede its
-        // session restore) and was not truncated; otherwise this tick is `unknown`.
+        // pushed yet), the list was not truncated, and an empty list has cleared the
+        // startup grace (a boot push may precede session restore); otherwise this tick is `unknown`.
         // Nothing live held → ask the member to push, answer `unknown`.
         const held = options.readHeldSessions?.(attempt, daemonId) ?? null;
         if (!held) {
@@ -414,8 +416,9 @@ export function createComponentsProbeReader(components: ProbeComponents, options
         }
         const row = held.sessions.find((s) => str(s.id) === attempt.sessionId || str(s.sessionId) === attempt.sessionId || str(s.instanceId) === attempt.sessionId);
         if (!row) {
-            return !held.truncated && held.sessions.length > 0
-                && held.observedAt > turnStartBoundary(attempt) + HELD_ABSENCE_MARGIN_MS
+            const margin = held.sessions.length > 0 ? HELD_ABSENCE_MARGIN_MS : EMPTY_HELD_ABSENCE_GRACE_MS;
+            return !held.truncated
+                && held.observedAt > turnStartBoundary(attempt) + margin
                 ? { presence: 'absent' }
                 : { presence: 'unknown' };
         }
