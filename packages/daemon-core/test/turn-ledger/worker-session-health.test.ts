@@ -51,17 +51,75 @@ describe('worker session health advisory consumer', () => {
         monitor.observe(a, failed, T0 + 6000, P.stallNoticeMs);
         expect(emit.mock.calls.filter(([, event]) => event.signal === 'deteriorating')).toHaveLength(2);
     });
-    it('four transitions within five minutes emit flapping; stable or modal workers do not emit stalled', () => {
+    it('four generating/idle transitions spanning 30s emit flapping; stable or modal workers do not emit stalled', () => {
         const a = rig().getAttempt('a1')!;
         const emit = vi.fn();
         const monitor = createWorkerSessionHealthMonitor(emit);
-        for (let i = 0; i < 6; i++) monitor.observe(a, { presence: i % 2 ? 'unknown' : 'present', status: 'generating' }, T0 + i * 1000, P.stallNoticeMs);
+        for (let i = 0; i < 5; i++) monitor.transition(a, i % 2 ? 'idle' : 'generating', i % 2 ? 'generating' : 'idle', T0 + i * 15_000);
         expect(emit).toHaveBeenCalledTimes(1);
-        expect(emit.mock.calls[0][1]).toMatchObject({ signal: 'flapping', transitions: 4 });
+        expect(emit.mock.calls[0][1]).toMatchObject({ signal: 'flapping', transitions: 4, taskId: 't1', nodeId: 'n1', sessionId: 's1' });
         emit.mockClear();
         const stable = createWorkerSessionHealthMonitor(emit);
         stable.observe(a, { presence: 'present', transcript: { ...transcript, activeModal: true } }, T0 + P.stallNoticeMs * 2, P.stallNoticeMs);
         stable.observe(a, { presence: 'present', transcript: { ...transcript, newestActivityAt: T0 + P.stallNoticeMs * 2 } }, T0 + P.stallNoticeMs * 2, P.stallNoticeMs);
+        expect(emit).not.toHaveBeenCalled();
+    });
+});
+
+
+describe('raw worker observations', () => {
+    it('normal short idle edges, repaint bursts and expired cycles produce no alert', () => {
+        const a = rig().getAttempt('a1')!;
+        const emit = vi.fn();
+        const monitor = createWorkerSessionHealthMonitor(emit);
+        for (let i = 0; i < 4; i++) monitor.transition(a, i % 2 ? 'idle' : 'generating', i % 2 ? 'generating' : 'idle', T0 + i * 1000);
+        expect(emit).not.toHaveBeenCalled();
+        monitor.noProgress(a, 180_000, 'idle', T0 + 180_000);
+        expect(emit.mock.calls.map(([, event]) => event.signal)).toEqual(['stalled']);
+        emit.mockClear();
+        monitor.transition(a, 'generating', 'idle', T0 + 6 * 60_000);
+        expect(emit).not.toHaveBeenCalled();
+        monitor.observe(a, { presence: 'present', status: 'generating', transcript: { ...transcript, newestActivityAt: T0 + 6 * 60_000 } }, T0 + 6 * 60_000 + 1, P.stallNoticeMs);
+        expect(emit).not.toHaveBeenCalled();
+    });
+    it('short idle pulses separated by normal work do not accumulate a flap alert', () => {
+        const a = rig().getAttempt('a1')!;
+        const emit = vi.fn();
+        const monitor = createWorkerSessionHealthMonitor(emit);
+        for (let i = 0; i < 4; i++) {
+            monitor.transition(a, 'generating', 'idle', T0 + i * 60_000);
+            monitor.transition(a, 'idle', 'generating', T0 + i * 60_000 + 1000);
+        }
+        expect(emit).not.toHaveBeenCalled();
+    });
+    it('a sustained no_progress is consumed once, preserving identity and observation time', () => {
+        const a = rig().getAttempt('a1')!;
+        const emit = vi.fn();
+        const monitor = createWorkerSessionHealthMonitor(emit);
+        monitor.noProgress(a, 1000, 'idle', T0 + 1000);
+        expect(emit).not.toHaveBeenCalled();
+        monitor.noProgress(a, 180_000, 'idle', T0 + 180_000);
+        monitor.noProgress(a, 200_000, 'idle', T0 + 200_000);
+        expect(emit).toHaveBeenCalledTimes(1);
+        expect(emit.mock.calls[0][1]).toMatchObject({ taskId: 't1', nodeId: 'n1', sessionId: 's1', attemptId: 'a1', generation: 0,
+            at: T0 + 180_000, quietMs: 180_000, signal: 'stalled', source: 'monitor:no_progress' });
+        expect(a.terminal).toBeNull();
+        // Output at 210s follows the first alert, so a new 180s quiet episode
+        // at 390s can produce a fresh advisory rather than being hidden forever.
+        monitor.noProgress(a, 180_000, 'idle', T0 + 390_000);
+        expect(emit).toHaveBeenCalledTimes(2);
+    });
+    it('generation/task changes reset accumulated cycles; stale edges and human waits do not create flapping', () => {
+        const a = rig().getAttempt('a1')!;
+        const emit = vi.fn();
+        const monitor = createWorkerSessionHealthMonitor(emit);
+        monitor.transition(a, 'generating', 'idle', T0);
+        monitor.transition(a, 'idle', 'generating', T0 + 15_000);
+        monitor.transition(a, 'generating', 'idle', T0 + 30_000);
+        monitor.transition({ ...a, generation: 1 }, 'idle', 'generating', T0 + 45_000);
+        monitor.transition(a, 'idle', 'generating', T0 - 1);
+        monitor.transition(a, 'idle', 'waiting_approval', T0 + 40_000);
+        monitor.noProgress(a, 360_000, 'waiting_approval', T0 + 400_000);
         expect(emit).not.toHaveBeenCalled();
     });
 });

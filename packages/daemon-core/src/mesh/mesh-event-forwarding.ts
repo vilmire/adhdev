@@ -59,6 +59,7 @@ import { resolveEventSessionId, readWorkerResultMetadata, resolveMeshSurfacedSes
 import { isMeshCoordinatorEvent } from './mesh-event-classify.js';
 import type { CoordinatorSessionView } from './turn-ledger/routing.js';
 import { meshNoticeRuntime, notifyMeshCoordinator, type CoordinatorNotice } from './turn-ledger/deliver.js';
+import { workerSessionHealthFor, type WorkerSessionHealthOwner } from './turn-ledger/worker-session-health.js';
 import { resolveMeshPolicy } from '../repo-mesh-types.js';
 
 // ---------------------------------------------------------------------------
@@ -509,6 +510,45 @@ export interface MeshEventResult {
     error?: string;
 }
 
+/** Read active assignment identity; do not attach a delayed event to a newer task. */
+function consumeWorkerSessionHealth(components: DaemonComponents, input: MeshEventInput): void {
+    const { eventName, event, settings, meshId, sessionId, nodeId } = input;
+    if (!sessionId || !['monitor:no_progress', 'worker:status_changed'].includes(eventName)) return;
+    const taskId = readText(event.taskId) || readText(event.meshActiveTaskId) || readText(settings.meshActiveTaskId);
+    if (!taskId) return; // A quiet unassigned session is not an in-progress task.
+    const ref = isTurnAttemptRef(event.attemptRef) ? event.attemptRef : undefined;
+    const ledger = components.turnLedger;
+    const current = ledger?.openAttemptForSession(sessionId);
+    if (current && (current.taskId !== taskId || (ref && (current.attemptId !== ref.attemptId || current.generation !== ref.generation)))) return;
+    const attempt = ref ? ledger?.getAttempt(ref.attemptId) : current;
+    let owner: WorkerSessionHealthOwner;
+    if (attempt) {
+        if (attempt.terminal || attempt.meshId !== meshId || attempt.taskId !== taskId || attempt.sessionId !== sessionId
+            || (ref && attempt.generation !== ref.generation)) return;
+        owner = attempt;
+    } else {
+        // A remote worker need not hold the host's ledger. Use its dispatch stamps
+        // and the established delegate route, never a guessed task/session match.
+        const stampedTask = readText(settings.meshActiveTaskId);
+        if (stampedTask && stampedTask !== taskId) return;
+        owner = {
+            meshId, taskId, sessionId, nodeId,
+            attemptId: ref?.attemptId || readText(event.attemptId) || readText(settings.meshActiveAttemptId),
+            generation: ref?.generation ?? (typeof settings.meshActiveAttemptGeneration === 'number' ? settings.meshActiveAttemptGeneration : 0),
+            coordinator: { daemonId: input.coordinatorDaemonId, sessionId: input.coordinatorSessionId },
+        };
+    }
+    const at = typeof event.timestamp === 'number' ? event.timestamp : Date.now();
+    const monitor = workerSessionHealthFor(components);
+    if (eventName === 'worker:status_changed') {
+        monitor.transition(owner, readText(event.prevStatus), readText(event.nextStatus), at);
+    } else {
+        const stalledMs = typeof event.stalledMs === 'number' ? event.stalledMs
+            : typeof event.elapsedSec === 'number' ? event.elapsedSec * 1000 : NaN;
+        monitor.noProgress(owner, stalledMs, readText(event.observedStatus), at);
+    }
+}
+
 /**
  * Notice / queue edges for one mesh event. Never throws. Evidence
  * construction is gone (C-W5c): a mesh session's `agent:*` events now reach
@@ -548,6 +588,7 @@ export function processMeshEvent(components: DaemonComponents, input: MeshEventI
             return result;
         }
 
+        consumeWorkerSessionHealth(components, input);
         applyQueueEdges(components, meshId, nodeId, eventName, event, sessionId);
     } catch (e: any) {
         LOG.warn('MeshEvents', `mesh event ${eventName} (mesh ${meshId}, session ${sessionId || '-'}) failed: ${e?.message || e}`);
@@ -670,6 +711,11 @@ export function buildRelayMetadataEvent(payload: Record<string, unknown>): Recor
         ...(readOptionalRecord(payload.meshWorkerResult) ? { meshWorkerResult: payload.meshWorkerResult } : {}),
         ...(readOptionalRecord(payload.structuredResult) ? { structuredResult: payload.structuredResult } : {}),
         ...(payload.timestamp !== undefined ? { timestamp: payload.timestamp } : {}),
+        ...(typeof payload.stalledMs === 'number' ? { stalledMs: payload.stalledMs } : {}),
+        ...(typeof payload.elapsedSec === 'number' ? { elapsedSec: payload.elapsedSec } : {}),
+        ...(readText(payload.observedStatus) ? { observedStatus: readText(payload.observedStatus) } : {}),
+        ...(readText(payload.prevStatus) ? { prevStatus: readText(payload.prevStatus) } : {}),
+        ...(readText(payload.nextStatus) ? { nextStatus: readText(payload.nextStatus) } : {}),
         ...(readText(payload.worktreePath) ? { worktreePath: readText(payload.worktreePath) } : {}),
         ...(typeof payload.durationMs === 'number' ? { durationMs: payload.durationMs } : {}),
         ...(readText(payload.error) ? { error: readText(payload.error) } : {}),
@@ -807,5 +853,18 @@ export function setupMeshEventForwarding(components: DaemonComponents): () => vo
     if (!components.bus) {
         throw new Error('setupMeshEventForwarding requires components.bus');
     }
-    return components.bus.on('provider_event', (e) => onProviderEvent(e.event), { name: 'mesh.forwarding' });
+    return components.bus.on(['provider_event', 'status'], (e) => {
+        if (e.kind === 'provider_event') onProviderEvent(e.event);
+        else if (e.kind === 'status') {
+            const settings = components.instanceManager.getInstance(e.sessionId)?.getState?.().settings as Record<string, unknown> | undefined;
+            if (!readText(settings?.meshActiveTaskId)) return;
+            onProviderEvent({
+                event: 'worker:status_changed', instanceId: e.sessionId, providerType: e.providerType,
+                timestamp: e.at, prevStatus: e.prev, nextStatus: e.next,
+                taskId: settings?.meshActiveTaskId,
+                ...(typeof settings?.meshActiveAttemptGeneration === 'number' && readText(settings?.meshActiveAttemptId)
+                    ? { attemptRef: { attemptId: settings?.meshActiveAttemptId, generation: settings?.meshActiveAttemptGeneration } } : {}),
+            });
+        }
+    }, { name: 'mesh.forwarding' });
 }

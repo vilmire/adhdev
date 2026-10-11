@@ -38,6 +38,7 @@ import { resolveTurnPolicy } from '../../mesh/turn-ledger/policy.js';
 import { createComponentsProbeReader, type TranscriptAnalyzer, type TranscriptObservation } from '../../mesh/turn-ledger/probe.js';
 import { resolveProbeLocation } from '../../mesh/turn-ledger/targets.js';
 import { readLiveHeldRuntime } from '../../mesh/mesh-node-git-refresher.js';
+import { workerSessionHealthFor } from '../../mesh/turn-ledger/worker-session-health.js';
 import { startTurnScheduler } from '../../mesh/turn-ledger/scheduler.js';
 import { closeInterruptedPlainAttemptsOnBoot, reconcileOrphanedPlainAttemptsOnBoot } from './mesh-runtime.js';
 
@@ -171,6 +172,7 @@ export function startTurnLoops(components: TurnWiredComponents, env: NodeJS.Proc
             ledger,
             policy,
             bus: components.bus,
+            sessionHealth: workerSessionHealthFor(components),
             probe: {
                 reader,
                 locate: (attempt) => resolveProbeLocation({

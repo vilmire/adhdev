@@ -44,7 +44,7 @@ import { probeEvidence, type ProbeLocation, type TranscriptObservation, type Tur
 import type { TurnStore } from './store.js';
 import { selectProbeTargets, type ProbeTarget } from './targets.js';
 import type { TurnAttempt } from './types.js';
-import { createWorkerSessionHealthMonitor } from './worker-session-health.js';
+import { createWorkerSessionHealthMonitor, type WorkerSessionHealthMonitor } from './worker-session-health.js';
 
 /** C10-4: terminal plain attempts are pruned after 7 days. */
 export const PLAIN_ATTEMPT_RETENTION_MS = 7 * 24 * 60 * 60_000;
@@ -76,6 +76,8 @@ export interface TurnSchedulerDeps {
     /** Defaults to `ledger.selfDaemonId`. */
     selfDaemonId?: string;
     probe?: TurnSchedulerProbe | null;
+    /** Shared raw-status/watchdog consumer; defaults to a scheduler-local monitor. */
+    sessionHealth?: WorkerSessionHealthMonitor;
     /** Phase 3: the host's queue claim. */
     claim?: () => Promise<void> | void;
     /**
@@ -145,7 +147,7 @@ export function createTurnScheduler(deps: TurnSchedulerDeps): TurnScheduler & { 
     const now = deps.now ?? (() => Date.now());
     const tickMs = deps.intervalMs ?? policy.tickMs;
     const forced = new Set<string>();
-    const sessionHealth = createWorkerSessionHealthMonitor();
+    const sessionHealth = deps.sessionHealth ?? createWorkerSessionHealthMonitor();
     let lastPruneAt: number | null = null;
     let inFlight: Promise<TurnTickReport> | null = null;
     let again = false;
