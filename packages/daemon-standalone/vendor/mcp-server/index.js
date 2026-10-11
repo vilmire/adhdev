@@ -25993,7 +25993,15 @@ ${renderWorkerProtocolFooter2(input)}`;
         const heldList = heldCollections.get(path90);
         if (change?.absent) {
           const [head2, tail2] = splitPath(path90);
-          if (!tail2) delete next[head2];
+          if (!tail2) {
+            delete next[head2];
+            continue;
+          }
+          const parent2 = next[head2];
+          if (!isRecord3(parent2) || !(tail2 in parent2)) continue;
+          const copy = { ...parent2 };
+          delete copy[tail2];
+          next[head2] = copy;
           continue;
         }
         if (!change && heldList === void 0) continue;

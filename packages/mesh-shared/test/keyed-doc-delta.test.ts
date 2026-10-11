@@ -129,6 +129,32 @@ describe('keyed document delta — daemon.metadata spec', () => {
             expect(strip(held), `step ${i}`).toEqual(strip(states[i]))
         }
     })
+
+    it('folds absent nested collections (status.sessions) and flat collections', () => {
+        const baseMeta = body([a, b])
+        // To strictly prove the absent block does the deletion, we craft a delta that
+        // artificially introduces the nested collection via objects.set, simulating
+        // a race or un-stripped injection, and expect absent: true to eradicate it.
+        const deltaMeta: any = {
+            collections: { 'status.sessions': { absent: true } },
+            objects: { status: { set: { sessions: [{ id: 'z' }] } } }
+        }
+        let foldedMeta = foldKeyedDoc(baseMeta, deltaMeta, M)
+        expect((foldedMeta.status as any).sessions).toBeUndefined()
+        
+        // verify normal folding works without absent (③ normal fold still works)
+        let deltaMeta2 = diff(foldedMeta, baseMeta)
+        let foldedMeta2 = foldKeyedDoc(foldedMeta, deltaMeta2!, M)
+        expect((foldedMeta2.status as any).sessions).toBeDefined()
+        expect((foldedMeta2.status as any).sessions.length).toBe(2)
+
+        // ② flat collection absent
+        const SPEC = { collections: { flat: 'id' } }
+        const baseFlat = { flat: [{ id: 'a' }] }
+        let deltaFlat: any = { collections: { flat: { absent: true } }, set: { flat: [{ id: 'z' }] } }
+        let foldedFlat = foldKeyedDoc(baseFlat, deltaFlat, SPEC)
+        expect(foldedFlat.flat).toBeUndefined()
+    })
 })
 
 describe('keyed document delta — both lanes round-trip through one engine', () => {
