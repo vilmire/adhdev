@@ -88021,7 +88021,7 @@ ${body}`;
         const sessionId = readStringValue2(record2?.sessionId);
         if (!sessionId) continue;
         const meta = record2?.meta && typeof record2.meta === "object" ? record2.meta : {};
-        const skip = (reason) => plan.skipped.push({ sessionId, reason });
+        const skip = (reason, idleMs2) => plan.skipped.push({ sessionId, reason, ...idleMs2 !== void 0 ? { idleMs: idleMs2 } : {} });
         const surfaceKind = readStringValue2(record2?.surfaceKind);
         const lifecycle = readStringValue2(record2?.lifecycle);
         if (surfaceKind && surfaceKind !== "live_runtime" || lifecycle && lifecycle !== "running" && lifecycle !== "starting") {
@@ -88052,12 +88052,28 @@ ${body}`;
           continue;
         }
         if (heldByActiveWork(sessionId, activeWorkSessionIds)) {
-          skip("holds_active_task");
+          skip("holds_active_task", idleMs);
           continue;
         }
         plan.reap.push({ sessionId, idleMs });
       }
       return plan;
+    }
+    function reportIdlePastTtlHolders(args) {
+      const reported = [];
+      for (const entry of args.plan.skipped) {
+        if (entry.reason !== "holds_active_task" || typeof entry.idleMs !== "number") continue;
+        const key2 = `${args.meshId}:${entry.sessionId}`;
+        const last = idleHolderReportedAt.get(key2);
+        if (last !== void 0 && args.now - last < IDLE_HOLDER_REPORT_INTERVAL_MS) continue;
+        idleHolderReportedAt.set(key2, args.now);
+        reported.push(entry.sessionId);
+        LOG.warn(
+          "MeshIdleSessionReaper",
+          `Kept idle delegated session ${entry.sessionId} (mesh ${args.meshId}): idle ${Math.round(entry.idleMs / 6e4)}m \u2265 TTL ${Math.round(args.ttlMs / 6e4)}m but a non-terminal task is still assigned to it (reason=holds_active_task). A task that is really running keeps the session active, so this is likely a stuck assignment \u2014 check the task with mesh_view_queue and cancel or requeue it; the runtime is reclaimed once the task is terminal.`
+        );
+      }
+      return reported;
     }
     async function runIdleSessionReapPass(deps, args) {
       const empty = {
@@ -88082,6 +88098,7 @@ ${body}`;
         ttlMs,
         now
       });
+      if (!args.dryRun) reportIdlePastTtlHolders({ meshId: args.meshId, plan, ttlMs, now });
       if (plan.reap.length === 0) return { ...empty, plan };
       if (args.dryRun) {
         return { plan, stoppedSessionIds: [], totalStopped: reapedSessionCount };
@@ -88112,6 +88129,8 @@ ${body}`;
       }
       return { plan, stoppedSessionIds, totalStopped: reapedSessionCount };
     }
+    var IDLE_HOLDER_REPORT_INTERVAL_MS;
+    var idleHolderReportedAt;
     var reapedSessionCount;
     var init_mesh_idle_session_reaper = __esm2({
       "src/mesh/mesh-idle-session-reaper.ts"() {
@@ -88120,6 +88139,8 @@ ${body}`;
         init_repo_mesh_types();
         init_mesh_work_queue();
         init_dist();
+        IDLE_HOLDER_REPORT_INTERVAL_MS = 30 * 6e4;
+        idleHolderReportedAt = /* @__PURE__ */ new Map();
         reapedSessionCount = 0;
       }
     });

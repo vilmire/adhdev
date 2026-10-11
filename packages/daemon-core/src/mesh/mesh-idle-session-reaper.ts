@@ -88,7 +88,7 @@ interface IdleSessionReapPlan {
     /** Sessions whose CLI runtime should be stopped (record preserved). */
     reap: Array<{ sessionId: string; idleMs: number }>;
     /** Every non-reaped candidate with the reason it was kept. */
-    skipped: Array<{ sessionId: string; reason: IdleSessionReapSkipReason }>;
+    skipped: Array<{ sessionId: string; reason: IdleSessionReapSkipReason; idleMs?: number }>;
 }
 
 function readStringValue(value: unknown): string {
@@ -165,7 +165,8 @@ export function planIdleSessionReap(args: {
         const sessionId = readStringValue(record?.sessionId);
         if (!sessionId) continue;
         const meta = (record?.meta && typeof record.meta === 'object') ? record.meta : {};
-        const skip = (reason: IdleSessionReapSkipReason) => plan.skipped.push({ sessionId, reason });
+        const skip = (reason: IdleSessionReapSkipReason, idleMs?: number) =>
+            plan.skipped.push({ sessionId, reason, ...(idleMs !== undefined ? { idleMs } : {}) });
 
         // Only a live CLI runtime has anything to reclaim. A recovery_snapshot /
         // inactive_record is already runtime-free — stopping it is a no-op that would
@@ -219,13 +220,59 @@ export function planIdleSessionReap(args: {
 
         // (b) No non-terminal task bound to this session.
         if (heldByActiveWork(sessionId, activeWorkSessionIds)) {
-            skip('holds_active_task');
+            // Reached only past the TTL: carry the age so the pass can report it.
+            skip('holds_active_task', idleMs);
             continue;
         }
 
         plan.reap.push({ sessionId, idleMs });
     }
     return plan;
+}
+
+/** A kept-past-TTL holder is re-reported at most this often per (mesh, session). */
+export const IDLE_HOLDER_REPORT_INTERVAL_MS = 30 * 60_000;
+const idleHolderReportedAt = new Map<string, number>();
+
+/** Test-only reset of the kept-past-TTL report de-dup. */
+export function resetIdleHolderReports(): void {
+    idleHolderReportedAt.clear();
+}
+
+/**
+ * Report delegates the reaper KEPT although they are idle past the TTL, because a
+ * non-terminal task is still bound to them. A healthy session never sits there:
+ * a task that is really running keeps the PTY (and so the idle clock) moving. The
+ * shape seen live (2026-10-11) is a task that can no longer be closed — its
+ * completion report was refused — pinning a finished worker's runtime for hours
+ * with nothing in the log saying why the reaper left it alone.
+ *
+ * Content-free (ids + durations). Returns the session ids reported this call.
+ */
+export function reportIdlePastTtlHolders(args: {
+    meshId: string;
+    plan: IdleSessionReapPlan;
+    ttlMs: number;
+    now: number;
+}): string[] {
+    const reported: string[] = [];
+    for (const entry of args.plan.skipped) {
+        if (entry.reason !== 'holds_active_task' || typeof entry.idleMs !== 'number') continue;
+        const key = `${args.meshId}:${entry.sessionId}`;
+        const last = idleHolderReportedAt.get(key);
+        if (last !== undefined && (args.now - last) < IDLE_HOLDER_REPORT_INTERVAL_MS) continue;
+        idleHolderReportedAt.set(key, args.now);
+        reported.push(entry.sessionId);
+        LOG.warn(
+            'MeshIdleSessionReaper',
+            `Kept idle delegated session ${entry.sessionId} (mesh ${args.meshId}): idle ${Math.round(entry.idleMs / 60_000)}m `
+            + `≥ TTL ${Math.round(args.ttlMs / 60_000)}m but a non-terminal task is still assigned to it `
+            + `(reason=holds_active_task). A task that is really running keeps the session active, so this is `
+            + `likely a stuck assignment — check the task with mesh_view_queue and cancel or requeue it; `
+            + `the runtime is reclaimed once the task is terminal.`,
+        );
+    }
+    return reported;
 }
 
 /** Injected side effects, so the orchestrator is testable without a router. */
@@ -304,6 +351,7 @@ export async function runIdleSessionReapPass(
         ttlMs,
         now,
     });
+    if (!args.dryRun) reportIdlePastTtlHolders({ meshId: args.meshId, plan, ttlMs, now });
     if (plan.reap.length === 0) return { ...empty, plan };
 
     if (args.dryRun) {

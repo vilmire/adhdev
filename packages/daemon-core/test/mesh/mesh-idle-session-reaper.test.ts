@@ -7,6 +7,9 @@ import {
     getIdleSessionReapCount,
     type ReapableSessionRecord,
     type IdleSessionReaperDeps,
+    reportIdlePastTtlHolders,
+    resetIdleHolderReports,
+    IDLE_HOLDER_REPORT_INTERVAL_MS,
 } from '../../src/mesh/mesh-idle-session-reaper.js';
 import {
     resolveDelegatedSessionIdleTtlMinutes,
@@ -218,6 +221,33 @@ describe('reuse-pool exclusion after a reap', () => {
 
     it('a live idle session IS still a drain candidate (the reaper does not over-exclude)', () => {
         expect(isIdleSessionState({ status: 'idle' })).toBe(true);
+    });
+});
+
+describe('reportIdlePastTtlHolders — a kept-past-TTL holder is not silent', () => {
+    beforeEach(() => resetIdleHolderReports());
+    const stuck = () => plan([delegate({ sessionId: 'sess_stuck', lastActivityAt: NOW - 70 * 60_000 })], ['sess_stuck']);
+
+    it('reports a delegate idle past the TTL that still holds a task, with its idle age', () => {
+        const p = stuck();
+        expect(p.reap).toEqual([]);
+        expect(p.skipped).toEqual([{ sessionId: 'sess_stuck', reason: 'holds_active_task', idleMs: 70 * 60_000 }]);
+        expect(reportIdlePastTtlHolders({ meshId: MESH_ID, plan: p, ttlMs: TTL_MS, now: NOW })).toEqual(['sess_stuck']);
+    });
+
+    it('does not report a holder still inside the TTL, nor any other skip reason', () => {
+        const fresh = plan([delegate({ sessionId: 'sess_busy', lastActivityAt: NOW - 60_000 })], ['sess_busy']);
+        expect(fresh.skipped[0].reason).toBe('within_ttl');
+        expect(reportIdlePastTtlHolders({ meshId: MESH_ID, plan: fresh, ttlMs: TTL_MS, now: NOW })).toEqual([]);
+        const owner = plan([delegate({ meta: { meshNodeFor: MESH_ID } })]);
+        expect(reportIdlePastTtlHolders({ meshId: MESH_ID, plan: owner, ttlMs: TTL_MS, now: NOW })).toEqual([]);
+    });
+
+    it('re-reports the same holder only after the report interval', () => {
+        const args = { meshId: MESH_ID, plan: stuck(), ttlMs: TTL_MS };
+        expect(reportIdlePastTtlHolders({ ...args, now: NOW })).toEqual(['sess_stuck']);
+        expect(reportIdlePastTtlHolders({ ...args, now: NOW + 5 * 60_000 })).toEqual([]);
+        expect(reportIdlePastTtlHolders({ ...args, now: NOW + IDLE_HOLDER_REPORT_INTERVAL_MS })).toEqual(['sess_stuck']);
     });
 });
 
