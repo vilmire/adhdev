@@ -176,7 +176,7 @@ export interface LiveAuthResolution {
 export function resolveLiveAuthSuspect(
     state: LiveAuthState,
     ctx: LiveAuthContext,
-    input: { midTurn: boolean; readScreen: () => string; tail: string; now?: number },
+    input: { midTurn: boolean; readScreen: () => string; tail: string; now?: number; submitInFlight?: boolean },
 ): LiveAuthResolution {
     const suspect = state.suspect;
     if (!suspect) return {};
@@ -184,6 +184,12 @@ export function resolveLiveAuthSuspect(
     const now = input.now ?? Date.now();
     const ageMs = now - suspect.suspectedAtMs;
     if (ageMs < MIN_SUSPECT_AGE_MS) return {};
+    // A prompt still being written into the composer is on screen at `idle`, and
+    // its own wording can carry an auth phrase. MIN_SUSPECT_AGE_MS assumes the
+    // body leaves the composer within a second or two; a CLI that ingests a
+    // multi-KB body over tens of seconds (antigravity) kept re-raising and
+    // re-resolving the suspicion against the task text. Wait for the submit.
+    if (input.submitInFlight) return {};
     if (input.midTurn && ageMs < STUCK_BUSY_ESCAPE_MS) return {};
     state.suspect = null;
     // Re-check at confirm time too — the relay stamp path can mark a session as a

@@ -140753,6 +140753,8 @@ trust_level = "trusted"
       /** Timer that re-runs evaluate() when a time-condition would flip true
        *  with no PTY frame to trigger it. */
       wakeTimer = null;
+      /** Set by teardown(); reevaluate() is a no-op afterwards. */
+      tornDown = false;
       /** APPROVE-LATCH-STALE: how many times reevaluate() has run. The single
        *  observable that distinguishes "the latch is fresh" from "the latch is
        *  whatever the entry frame parsed" — a stale latch is invisible in every
@@ -140986,6 +140988,7 @@ trust_level = "trusted"
         this.teardown("detach");
       }
       teardown(mode) {
+        this.tornDown = true;
         for (const t of this.delegateTimers.values()) clearTimeout(t);
         this.delegateTimers.clear();
         if (this.wakeTimer) {
@@ -141194,6 +141197,7 @@ trust_level = "trusted"
         }
       }
       reevaluate(forceEmit = false) {
+        if (this.tornDown) return;
         this.evalCount += 1;
         const now = Date.now();
         const screen = this.adapter.snapshot();
@@ -143500,6 +143504,7 @@ ${text}` : text;
       const now = input.now ?? Date.now();
       const ageMs2 = now - suspect.suspectedAtMs;
       if (ageMs2 < MIN_SUSPECT_AGE_MS) return {};
+      if (input.submitInFlight) return {};
       if (input.midTurn && ageMs2 < STUCK_BUSY_ESCAPE_MS) return {};
       state.suspect = null;
       if (ctx.isCoordinator) return {};
@@ -144400,7 +144405,8 @@ ${text}` : text;
           // FSM status is idle | generating | approval — anything but idle is mid-turn.
           midTurn: !!this.latestState && this.latestState.status !== "idle",
           readScreen: () => typeof this.driver?.snapshot === "function" ? this.driver.snapshot() : "",
-          tail: this.rawTail.strippedTail(TAIL_BYTES4)
+          tail: this.rawTail.strippedTail(TAIL_BYTES4),
+          submitInFlight: typeof this.driver?.hasInFlightSubmit === "function" && this.driver.hasInFlightSubmit()
         });
         if (outcome.clearTail) this.rawTail.clearStrippedTail();
         if (outcome.advisory) this.reportSignal(outcome.advisory);

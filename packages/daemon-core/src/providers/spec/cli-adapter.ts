@@ -995,6 +995,7 @@ export class SpecCliAdapter implements CliAdapter {
             midTurn: !!this.latestState && this.latestState.status !== 'idle',
             readScreen: () => (typeof this.driver?.snapshot === 'function' ? this.driver.snapshot() : ''),
             tail: this.rawTail.strippedTail(TAIL_BYTES),
+            submitInFlight: typeof this.driver?.hasInFlightSubmit === 'function' && this.driver.hasInFlightSubmit(),
         });
         if (outcome.clearTail) this.rawTail.clearStrippedTail();
         if (outcome.advisory) this.reportSignal(outcome.advisory);

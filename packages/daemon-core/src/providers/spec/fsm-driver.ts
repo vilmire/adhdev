@@ -109,6 +109,8 @@ export class FsmDriver implements ISpecDriver {
     /** Timer that re-runs evaluate() when a time-condition would flip true
      *  with no PTY frame to trigger it. */
     private wakeTimer: ReturnType<typeof setTimeout> | null = null;
+    /** Set by teardown(); reevaluate() is a no-op afterwards. */
+    private tornDown = false;
     /** APPROVE-LATCH-STALE: how many times reevaluate() has run. The single
      *  observable that distinguishes "the latch is fresh" from "the latch is
      *  whatever the entry frame parsed" — a stale latch is invisible in every
@@ -379,6 +381,7 @@ export class FsmDriver implements ISpecDriver {
     detach(): void { this.teardown('detach'); }
 
     private teardown(mode: 'kill' | 'detach'): void {
+        this.tornDown = true;
         for (const t of this.delegateTimers.values()) clearTimeout(t);
         this.delegateTimers.clear();
         if (this.wakeTimer) { clearTimeout(this.wakeTimer); this.wakeTimer = null; }
@@ -643,6 +646,12 @@ export class FsmDriver implements ISpecDriver {
     }
 
     private reevaluate(forceEmit = false): void {
+        // A torn-down driver has no PTY and no owner. Without this, a frame or
+        // timer callback already in flight re-armed the wake timer, and the dead
+        // driver kept evaluating a blank screen: stall-refocus writes into no PTY
+        // and a busy→approval timeout 8 s after the session was stopped
+        // (2026-10-11, antigravity).
+        if (this.tornDown) return;
         this.evalCount += 1;
         const now = Date.now();
         const screen = this.adapter.snapshot();
