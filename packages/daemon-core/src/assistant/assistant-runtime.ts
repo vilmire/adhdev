@@ -37,6 +37,7 @@ import { ASSISTANT_RELAY_BUS_KINDS, AssistantRelay, type AssistantPulledEvent, t
 import { getAssistantServices } from './assistant-services.js';
 import { projectSlugs } from './assistant-projects.js';
 import { setAssistantMemberMeshSource } from './member-meshes.js';
+import { compactTranscriptTail } from './project-views.js';
 import { AssistantCurator, startAssistantCuratorTimer } from './skills/skill-curator.js';
 import { liveAssistantQuotaPort, type AssistantQuotaPort } from './assistant-quota.js';
 import { AssistantReviewScheduler } from './assistant-review-scheduler.js';
@@ -149,18 +150,11 @@ export function buildAssistantRelayPorts(
         projectSlug: (meshId) => projectSlugs(svc.listMeshes()).get(meshId) ?? null,
         readCoordinatorTail: async (sessionId) => {
             const chat = await components.router.execute('read_chat', { targetSessionId: sessionId, limit: 40 }, 'ipc', { inProcess: true });
-            if (!chat?.success || !Array.isArray(chat.messages)) return null;
-            // Fetch raw text, bypassing compactTranscriptTail's 4,000 char limit,
+            if (!chat?.success) return null;
+            // Bypass compactTranscriptTail's 4,000 char limit by passing Infinity,
             // so compactRelayBody can properly apply its 4,096 char limit + explicit warning.
-            for (let i = chat.messages.length - 1; i >= 0; i--) {
-                const m = chat.messages[i];
-                if (m && typeof m.role === 'string' && m.role.toLowerCase() === 'assistant') {
-                    const c = m.content;
-                    if (typeof c === 'string') return c;
-                    if (Array.isArray(c)) return c.map((p: any) => (typeof p === 'string' ? p : typeof p?.text === 'string' ? p.text : '')).join('');
-                    return typeof m.text === 'string' ? m.text : '';
-                }
-            }
+            const messages = (compactTranscriptTail(chat, 20, Infinity).messages as Array<{ role: string; text: string }>) ?? [];
+            for (let i = messages.length - 1; i >= 0; i--) if (messages[i]!.role === 'assistant') return messages[i]!.text;
             return null;
         },
         meshStatusLine: (meshId) => buildMeshStatusLineForNotification(meshId),

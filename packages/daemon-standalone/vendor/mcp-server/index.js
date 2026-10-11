@@ -89088,6 +89088,315 @@ ${body}`;
         };
       }
     });
+    function isUnmanagedRepoIdentity(repoIdentity) {
+      const id22 = String(repoIdentity ?? "").trim();
+      if (!id22) return true;
+      if (/^test-repo$/i.test(id22) || /^scratch\//i.test(id22) || /^local:/i.test(id22)) return true;
+      return /^(?:\/private)?\/tmp\//.test(id22) || /^\/var\/folders\//.test(id22) || /^[A-Za-z]:[\\/].*[\\/](?:Temp|tmp)[\\/]/i.test(id22);
+    }
+    function readText3(v) {
+      return typeof v === "string" ? v.trim() : "";
+    }
+    function shortId2(id22) {
+      return id22.length > 16 ? `${id22.slice(0, 16)}\u2026` : id22;
+    }
+    function meshHostLabel(mesh, selfDaemonId) {
+      const host = resolveMeshHostStatus(mesh, { localDaemonId: selfDaemonId });
+      const hostId = readText3(host.hostDaemonId);
+      const node = (mesh.nodes ?? []).find((n) => hostId && daemonIdsEquivalent4(readText3(n.daemonId), hostId) || !!host.hostNodeId && n.id === host.hostNodeId);
+      return readText3(node?.machineNickname) || (hostId ? shortId2(canonicalDaemonId2(hostId) ?? hostId) : "unknown host");
+    }
+    function coordinatorState(views) {
+      if (views.length === 0) return "none";
+      if (views.some((v) => v.modalParked)) return "waiting";
+      return views.some((v) => !v.idle) ? "working" : "idle";
+    }
+    function machinesSummary(meshes, selfDaemonId, selfLabel, remoteHosts = []) {
+      const selfKey = canonicalDaemonId2(selfDaemonId) ?? selfDaemonId;
+      const facts = /* @__PURE__ */ new Map();
+      if (selfKey) facts.set(selfKey, { daemonId: selfDaemonId || null, nick: selfLabel ?? "", os: process.platform, build: "", self: true });
+      const keyOf = (raw) => {
+        const self = !raw || !!selfDaemonId && daemonIdsEquivalent4(raw, selfDaemonId);
+        if (self) return { key: selfKey, self };
+        const existing = [...facts.keys()].find((k) => daemonIdsEquivalent4(k, raw));
+        return { key: existing ?? canonicalDaemonId2(raw) ?? raw, self };
+      };
+      for (const mesh of meshes) {
+        for (const node of mesh.nodes ?? []) {
+          const raw = readText3(node.daemonId);
+          const { key: key2, self } = keyOf(raw);
+          if (!key2) continue;
+          const f = facts.get(key2) ?? { daemonId: raw || null, nick: "", os: "", build: "", self };
+          f.nick ||= readText3(node.machineNickname);
+          f.os ||= readText3(node.reportedPlatform);
+          f.build ||= readText3(node.reportedDaemonBuildVersion);
+          facts.set(key2, f);
+        }
+      }
+      for (const host of remoteHosts) {
+        const raw = readText3(host.daemonId);
+        if (!raw) continue;
+        const { key: key2, self } = keyOf(raw);
+        if (!key2 || self) continue;
+        const f = facts.get(key2) ?? { daemonId: raw, nick: "", os: "", build: "", self: false };
+        const label = readText3(host.label);
+        if (!f.nick && label && label !== "unknown host") f.nick = label;
+        facts.set(key2, f);
+      }
+      return [...facts.entries()].map(([key2, f]) => ({
+        label: f.nick || (f.self ? "this machine" : `daemon ${shortId2(key2)}`),
+        daemonId: f.daemonId,
+        os: f.os || null,
+        build: f.build || null,
+        online: f.self ? true : null,
+        self: f.self
+      })).sort((a, b) => Number(b.self) - Number(a.self) || a.label.localeCompare(b.label));
+    }
+    function rec2(v) {
+      return v && typeof v === "object" && !Array.isArray(v) ? v : null;
+    }
+    function firstText(sources, pick) {
+      for (const x of sources) {
+        for (const v of pick(x)) {
+          const t = readText3(v);
+          if (t) return t;
+        }
+      }
+      return "";
+    }
+    function nodeMachineLabel(sources) {
+      const nick = firstText(sources, (x) => [x?.machineNickname, rec2(x?.nodeFacts)?.machineNickname]);
+      if (nick) return nick;
+      for (const x of sources) {
+        const machine = rec2(x?.machine);
+        const ids = new Set([readText3(machine?.daemonId), readText3(machine?.machineId), readText3(x?.daemonId), readText3(x?.machineId)].filter(Boolean));
+        for (const v of [machine?.displayName, machine?.machineName, x?.machineName]) {
+          const t = readText3(v);
+          if (t && !ids.has(t)) return t;
+        }
+      }
+      return "";
+    }
+    function osTag(x) {
+      for (const list of [x?.capabilities, x?.capabilityTags]) {
+        if (!Array.isArray(list)) continue;
+        for (const tag of list) {
+          const m = /^os=(.+)$/.exec(readText3(tag));
+          if (m && m[1].trim()) return m[1].trim();
+        }
+      }
+      return "";
+    }
+    function nodePlatform(sources) {
+      return firstText(sources, (x) => [x?.reportedPlatform, rec2(x?.nodeFacts)?.platform]) || firstText(sources, (x) => [osTag(x)]);
+    }
+    function compactProjectStatus(view, extras) {
+      const routes = rec2(view.routes) ?? {};
+      const statusNodes = Array.isArray(rec2(view.status)?.nodes) ? rec2(view.status).nodes : [];
+      const memberNodes = Array.isArray(rec2(rec2(view.membership)?.mesh)?.nodes) ? rec2(rec2(view.membership).mesh).nodes : [];
+      const nodes = statusNodes.length > 0 ? statusNodes : memberNodes;
+      const memberById = /* @__PURE__ */ new Map();
+      for (const m of memberNodes) {
+        const id22 = readText3(m?.id) || readText3(m?.nodeId);
+        if (id22 && !memberById.has(id22)) memberById.set(id22, m);
+      }
+      const machines = nodes.map((n) => {
+        const id22 = readText3(n?.id) || readText3(n?.nodeId);
+        const local = rec2(routes[id22])?.route === "local";
+        const sources = [n, memberById.get(id22)].filter(Boolean);
+        return {
+          node: id22,
+          label: nodeMachineLabel(sources) || null,
+          os: nodePlatform(sources) || null,
+          build: firstText(sources, (x) => [x?.reportedDaemonBuildVersion, x?.daemonBuildVersion, rec2(rec2(x?.nodeFacts)?.daemonBuild)?.version]) || null,
+          online: local || readText3(n?.machineStatus) === "online",
+          ...readText3(n?.worktreeBranch) ? { branch: readText3(n.worktreeBranch) } : {}
+        };
+      });
+      const missionList = Array.isArray(rec2(rec2(view.missions)?.list)?.missions) ? rec2(rec2(view.missions).list).missions : [];
+      const activeMissions = missionList.filter((m) => readText3(m?.status) === "active" || readText3(m?.status) === "paused").map((m) => ({ id: readText3(m?.id), title: readText3(m?.title), status: readText3(m?.status) }));
+      return {
+        machines,
+        machinesOnline: machines.filter((m) => m.online).length,
+        queue: extras.queue,
+        activeMissions,
+        failedTasks: extras.queue?.failed ?? null,
+        pendingApprovals: extras.pendingApprovals,
+        coordinator: extras.coordinator,
+        threadOpen: extras.threadOpen,
+        lastRelayAt: extras.lastRelayAt ? new Date(extras.lastRelayAt).toISOString() : null,
+        // Only when there is something to report — a `0` every time is noise
+        // the assistant would learn to skip.
+        ...extras.missedReports && extras.missedReports > 0 ? { missedReports: extras.missedReports } : {}
+      };
+    }
+    function routingNum(v) {
+      return typeof v === "number" && Number.isFinite(v) ? v : void 0;
+    }
+    function routingSlot(v) {
+      const r = rec2(v);
+      const providerType = readText3(r?.providerType);
+      if (!providerType) return null;
+      const model = readText3(r?.model);
+      return { providerType, ...model ? { model } : {} };
+    }
+    function axisOf(v) {
+      const t = readText3(v);
+      return t === "weekly" || t === "session" ? t : void 0;
+    }
+    function quotaRow(v) {
+      const r = rec2(v);
+      const providerType = readText3(r?.providerType);
+      if (!providerType) return null;
+      const bonus = rec2(r?.bonus) ?? {};
+      const gate = rec2(r?.gate) ?? {};
+      const ranking = rec2(r?.ranking);
+      const snapshotStatus = readText3(bonus.snapshotStatus);
+      const failureKind = readText3(bonus.failureKind);
+      const zeroReason = readText3(bonus.zeroReason);
+      const gateReason = readText3(gate.reason);
+      const remainingPercent2 = routingNum(ranking?.remainingPercent);
+      const axis = axisOf(ranking?.axis);
+      return {
+        providerType,
+        ...snapshotStatus ? { snapshotStatus } : {},
+        ...failureKind ? { failureKind } : {},
+        ...zeroReason ? { zeroReason } : {},
+        gateOutcome: readText3(gate.outcome) || "unknown",
+        ...gateReason ? { gateReason } : {},
+        bonusValue: routingNum(bonus.value) ?? 0,
+        ...remainingPercent2 !== void 0 ? { remainingPercent: remainingPercent2 } : {},
+        ...axis ? { axis } : {}
+      };
+    }
+    function routingNodeRow(v, labelOf) {
+      const r = rec2(v);
+      const nodeId = readText3(r?.nodeId);
+      if (!nodeId) return null;
+      const stages = rec2(r?.stages) ?? {};
+      const floor = rec2(stages.difficultyFloor) ?? {};
+      const quotaStage = rec2(stages.quota) ?? {};
+      const winner = rec2(r?.predictedWinner);
+      const winnerProvider = readText3(winner?.providerType);
+      const winnerModel = readText3(winner?.model);
+      const reason = readText3(r?.reason);
+      const displaced = readText3(quotaStage.displacedFitnessWinner);
+      return {
+        nodeId,
+        machineName: labelOf(nodeId),
+        predictedWinner: winnerProvider ? { providerType: winnerProvider, ...winnerModel ? { model: winnerModel } : {}, fitnessScore: routingNum(winner?.fitnessScore) ?? 0 } : null,
+        ...reason ? { reason } : {},
+        admitted: (Array.isArray(floor.admittedSlots) ? floor.admittedSlots : []).map(routingSlot).filter((s2) => !!s2),
+        excluded: (Array.isArray(floor.excludedSlots) ? floor.excludedSlots : []).map((e) => {
+          const s2 = routingSlot(e);
+          const er = readText3(rec2(e)?.reason);
+          return s2 && er ? { ...s2, reason: er } : null;
+        }).filter((e) => !!e),
+        quota: (Array.isArray(r?.quotaDiagnostics) ? r.quotaDiagnostics : []).map(quotaRow).filter((q) => !!q),
+        reordered: quotaStage.reordered === true,
+        ...displaced ? { displacedFitnessWinner: displaced } : {}
+      };
+    }
+    function projectRoutingView(preview, difficulty, machineLabels = /* @__PURE__ */ new Map()) {
+      const p = rec2(preview) ?? {};
+      const labelOf = (nodeId) => machineLabels.get(nodeId) ?? null;
+      const winner = rec2(p.predictedWinner);
+      const winnerNode = readText3(winner?.nodeId);
+      const winnerProvider = readText3(winner?.providerType);
+      const winnerModel = readText3(winner?.model);
+      return {
+        strategy: readText3(p.schedulingStrategy) || "unknown",
+        difficulty,
+        predictedWinner: winnerNode && winnerProvider ? { nodeId: winnerNode, providerType: winnerProvider, ...winnerModel ? { model: winnerModel } : {}, fitnessScore: routingNum(winner?.fitnessScore) ?? 0 } : null,
+        perNode: (Array.isArray(p.nodes) ? p.nodes : []).map((n) => routingNodeRow(n, labelOf)).filter((n) => !!n)
+      };
+    }
+    function countVisibleBubbles(activeChat) {
+      const messages = rec2(activeChat)?.messages;
+      return Array.isArray(messages) ? messages.length : 0;
+    }
+    function sessionRows(states, opts = {}) {
+      const now = opts.now ?? Date.now();
+      const want = readText3(opts.meshId);
+      const out = [];
+      for (const raw of states) {
+        const state = rec2(raw);
+        if (!state) continue;
+        const sessionId = readText3(state.instanceId);
+        if (!sessionId) continue;
+        const settings = rec2(state.settings) ?? {};
+        const launch = rec2(state.launch);
+        const meshId = readText3(settings.meshNodeFor) || readText3(settings.meshCoordinatorFor);
+        if (want && meshId && meshId !== want) continue;
+        const launchedAt = typeof launch?.launchedAt === "number" && Number.isFinite(launch.launchedAt) ? launch.launchedAt : null;
+        out.push({
+          sessionId,
+          provider: readText3(state.type) || readText3(settings.providerType),
+          status: readText3(state.status),
+          meshId: meshId || null,
+          nodeId: readText3(settings.meshNodeId) || null,
+          ageMs: launchedAt === null ? null : Math.max(0, now - launchedAt),
+          messageCount: countVisibleBubbles(state.activeChat),
+          workspace: readText3(state.workspace) || null,
+          isCoordinator: !!readText3(settings.meshCoordinatorFor),
+          assistant: settings.assistant === true,
+          spawnedForTaskId: readText3(settings.autoLaunchedForQueueTaskId) || null,
+          launchedBy: readText3(launch?.launchedBy) || null
+        });
+      }
+      return out.sort((a, b) => a.sessionId.localeCompare(b.sessionId));
+    }
+    function messageText(m) {
+      const c = m?.content;
+      if (typeof c === "string") return c;
+      if (Array.isArray(c)) return c.map((p) => typeof p === "string" ? p : readText3(p?.text) ? p.text : "").join("");
+      return typeof m?.text === "string" ? m.text : "";
+    }
+    function isVisible(m) {
+      if (!m || typeof m !== "object") return false;
+      const role = readText3(m.role).toLowerCase();
+      if (role !== "user" && role !== "assistant" && role !== "agent") return false;
+      const kind = readText3(m.kind ?? m.type ?? m.messageKind).toLowerCase();
+      if (["tool", "tool_call", "tool_result", "terminal", "internal", "control", "debug", "status"].includes(kind)) return false;
+      const meta = m.meta ?? m.metadata;
+      return !(meta?.internal === true || meta?.debug === true || meta?.control === true || meta?.userVisible === false);
+    }
+    function compactTranscriptTail(readChat2, tail, maxChars = PROJECT_READ_MESSAGE_MAX_CHARS) {
+      const messages = Array.isArray(readChat2.messages) ? readChat2.messages : [];
+      const visible = messages.filter(isVisible);
+      const picked = visible.slice(-tail).map((m) => {
+        const text = messageText(m);
+        const truncated = text.length > maxChars;
+        const at = typeof m.timestamp === "number" ? new Date(m.timestamp).toISOString() : readText3(m.timestamp) || readText3(m.createdAt) || void 0;
+        return {
+          role: readText3(m.role).toLowerCase() === "user" ? "user" : "assistant",
+          text: truncated ? `${text.slice(0, maxChars)}\u2026` : text,
+          ...truncated ? { truncated: true } : {},
+          ...at ? { at } : {}
+        };
+      });
+      return {
+        messages: picked,
+        visibleCount: visible.length,
+        omitted: Math.max(0, visible.length - picked.length),
+        ...typeof readChat2.status === "string" ? { status: readChat2.status } : {}
+      };
+    }
+    var PROJECT_STATUS_ROUTING_DIFFICULTY;
+    var PROJECT_READ_DEFAULT_TAIL;
+    var PROJECT_READ_MAX_TAIL;
+    var PROJECT_READ_MESSAGE_MAX_CHARS;
+    var init_project_views = __esm2({
+      "src/assistant/project-views.ts"() {
+        "use strict";
+        init_dist();
+        init_mesh_host_ownership();
+        PROJECT_STATUS_ROUTING_DIFFICULTY = "medium";
+        PROJECT_READ_DEFAULT_TAIL = 10;
+        PROJECT_READ_MAX_TAIL = 50;
+        PROJECT_READ_MESSAGE_MAX_CHARS = 4e3;
+      }
+    });
     function toUnrenderedCounts(byMesh) {
       const rows = [...byMesh.entries()].map(([meshId, count]) => ({ meshId, count })).sort((a, b) => b.count - a.count || a.meshId.localeCompare(b.meshId));
       return { total: rows.reduce((n, r) => n + r.count, 0), byMesh: rows };
@@ -90275,16 +90584,9 @@ ${body}`;
         projectSlug: (meshId) => projectSlugs(svc.listMeshes()).get(meshId) ?? null,
         readCoordinatorTail: async (sessionId) => {
           const chat = await components.router.execute("read_chat", { targetSessionId: sessionId, limit: 40 }, "ipc", { inProcess: true });
-          if (!chat?.success || !Array.isArray(chat.messages)) return null;
-          for (let i = chat.messages.length - 1; i >= 0; i--) {
-            const m = chat.messages[i];
-            if (m && typeof m.role === "string" && m.role.toLowerCase() === "assistant") {
-              const c = m.content;
-              if (typeof c === "string") return c;
-              if (Array.isArray(c)) return c.map((p) => typeof p === "string" ? p : typeof p?.text === "string" ? p.text : "").join("");
-              return typeof m.text === "string" ? m.text : "";
-            }
-          }
+          if (!chat?.success) return null;
+          const messages = compactTranscriptTail(chat, 20, Infinity).messages ?? [];
+          for (let i = messages.length - 1; i >= 0; i--) if (messages[i].role === "assistant") return messages[i].text;
           return null;
         },
         meshStatusLine: (meshId) => buildMeshStatusLineForNotification(meshId),
@@ -90519,6 +90821,7 @@ ${body}`;
         init_assistant_services();
         init_assistant_projects();
         init_member_meshes();
+        init_project_views();
         init_skill_curator();
         init_assistant_quota();
         init_assistant_review_scheduler();
@@ -130736,306 +131039,7 @@ ${ptyResult.output.slice(-2e3)}`);
 ${supplement}`] : [], ...blocks].join("\n\n");
       return { ok: true, text, attached: names };
     }
-    init_dist();
-    init_mesh_host_ownership();
-    function isUnmanagedRepoIdentity(repoIdentity) {
-      const id22 = String(repoIdentity ?? "").trim();
-      if (!id22) return true;
-      if (/^test-repo$/i.test(id22) || /^scratch\//i.test(id22) || /^local:/i.test(id22)) return true;
-      return /^(?:\/private)?\/tmp\//.test(id22) || /^\/var\/folders\//.test(id22) || /^[A-Za-z]:[\\/].*[\\/](?:Temp|tmp)[\\/]/i.test(id22);
-    }
-    function readText3(v) {
-      return typeof v === "string" ? v.trim() : "";
-    }
-    function shortId2(id22) {
-      return id22.length > 16 ? `${id22.slice(0, 16)}\u2026` : id22;
-    }
-    function meshHostLabel(mesh, selfDaemonId) {
-      const host = resolveMeshHostStatus(mesh, { localDaemonId: selfDaemonId });
-      const hostId = readText3(host.hostDaemonId);
-      const node = (mesh.nodes ?? []).find((n) => hostId && daemonIdsEquivalent4(readText3(n.daemonId), hostId) || !!host.hostNodeId && n.id === host.hostNodeId);
-      return readText3(node?.machineNickname) || (hostId ? shortId2(canonicalDaemonId2(hostId) ?? hostId) : "unknown host");
-    }
-    function coordinatorState(views) {
-      if (views.length === 0) return "none";
-      if (views.some((v) => v.modalParked)) return "waiting";
-      return views.some((v) => !v.idle) ? "working" : "idle";
-    }
-    function machinesSummary(meshes, selfDaemonId, selfLabel, remoteHosts = []) {
-      const selfKey = canonicalDaemonId2(selfDaemonId) ?? selfDaemonId;
-      const facts = /* @__PURE__ */ new Map();
-      if (selfKey) facts.set(selfKey, { daemonId: selfDaemonId || null, nick: selfLabel ?? "", os: process.platform, build: "", self: true });
-      const keyOf = (raw) => {
-        const self = !raw || !!selfDaemonId && daemonIdsEquivalent4(raw, selfDaemonId);
-        if (self) return { key: selfKey, self };
-        const existing = [...facts.keys()].find((k) => daemonIdsEquivalent4(k, raw));
-        return { key: existing ?? canonicalDaemonId2(raw) ?? raw, self };
-      };
-      for (const mesh of meshes) {
-        for (const node of mesh.nodes ?? []) {
-          const raw = readText3(node.daemonId);
-          const { key: key2, self } = keyOf(raw);
-          if (!key2) continue;
-          const f = facts.get(key2) ?? { daemonId: raw || null, nick: "", os: "", build: "", self };
-          f.nick ||= readText3(node.machineNickname);
-          f.os ||= readText3(node.reportedPlatform);
-          f.build ||= readText3(node.reportedDaemonBuildVersion);
-          facts.set(key2, f);
-        }
-      }
-      for (const host of remoteHosts) {
-        const raw = readText3(host.daemonId);
-        if (!raw) continue;
-        const { key: key2, self } = keyOf(raw);
-        if (!key2 || self) continue;
-        const f = facts.get(key2) ?? { daemonId: raw, nick: "", os: "", build: "", self: false };
-        const label = readText3(host.label);
-        if (!f.nick && label && label !== "unknown host") f.nick = label;
-        facts.set(key2, f);
-      }
-      return [...facts.entries()].map(([key2, f]) => ({
-        label: f.nick || (f.self ? "this machine" : `daemon ${shortId2(key2)}`),
-        daemonId: f.daemonId,
-        os: f.os || null,
-        build: f.build || null,
-        online: f.self ? true : null,
-        self: f.self
-      })).sort((a, b) => Number(b.self) - Number(a.self) || a.label.localeCompare(b.label));
-    }
-    function rec2(v) {
-      return v && typeof v === "object" && !Array.isArray(v) ? v : null;
-    }
-    function firstText(sources, pick) {
-      for (const x of sources) {
-        for (const v of pick(x)) {
-          const t = readText3(v);
-          if (t) return t;
-        }
-      }
-      return "";
-    }
-    function nodeMachineLabel(sources) {
-      const nick = firstText(sources, (x) => [x?.machineNickname, rec2(x?.nodeFacts)?.machineNickname]);
-      if (nick) return nick;
-      for (const x of sources) {
-        const machine = rec2(x?.machine);
-        const ids = new Set([readText3(machine?.daemonId), readText3(machine?.machineId), readText3(x?.daemonId), readText3(x?.machineId)].filter(Boolean));
-        for (const v of [machine?.displayName, machine?.machineName, x?.machineName]) {
-          const t = readText3(v);
-          if (t && !ids.has(t)) return t;
-        }
-      }
-      return "";
-    }
-    function osTag(x) {
-      for (const list of [x?.capabilities, x?.capabilityTags]) {
-        if (!Array.isArray(list)) continue;
-        for (const tag of list) {
-          const m = /^os=(.+)$/.exec(readText3(tag));
-          if (m && m[1].trim()) return m[1].trim();
-        }
-      }
-      return "";
-    }
-    function nodePlatform(sources) {
-      return firstText(sources, (x) => [x?.reportedPlatform, rec2(x?.nodeFacts)?.platform]) || firstText(sources, (x) => [osTag(x)]);
-    }
-    function compactProjectStatus(view, extras) {
-      const routes = rec2(view.routes) ?? {};
-      const statusNodes = Array.isArray(rec2(view.status)?.nodes) ? rec2(view.status).nodes : [];
-      const memberNodes = Array.isArray(rec2(rec2(view.membership)?.mesh)?.nodes) ? rec2(rec2(view.membership).mesh).nodes : [];
-      const nodes = statusNodes.length > 0 ? statusNodes : memberNodes;
-      const memberById = /* @__PURE__ */ new Map();
-      for (const m of memberNodes) {
-        const id22 = readText3(m?.id) || readText3(m?.nodeId);
-        if (id22 && !memberById.has(id22)) memberById.set(id22, m);
-      }
-      const machines = nodes.map((n) => {
-        const id22 = readText3(n?.id) || readText3(n?.nodeId);
-        const local = rec2(routes[id22])?.route === "local";
-        const sources = [n, memberById.get(id22)].filter(Boolean);
-        return {
-          node: id22,
-          label: nodeMachineLabel(sources) || null,
-          os: nodePlatform(sources) || null,
-          build: firstText(sources, (x) => [x?.reportedDaemonBuildVersion, x?.daemonBuildVersion, rec2(rec2(x?.nodeFacts)?.daemonBuild)?.version]) || null,
-          online: local || readText3(n?.machineStatus) === "online",
-          ...readText3(n?.worktreeBranch) ? { branch: readText3(n.worktreeBranch) } : {}
-        };
-      });
-      const missionList = Array.isArray(rec2(rec2(view.missions)?.list)?.missions) ? rec2(rec2(view.missions).list).missions : [];
-      const activeMissions = missionList.filter((m) => readText3(m?.status) === "active" || readText3(m?.status) === "paused").map((m) => ({ id: readText3(m?.id), title: readText3(m?.title), status: readText3(m?.status) }));
-      return {
-        machines,
-        machinesOnline: machines.filter((m) => m.online).length,
-        queue: extras.queue,
-        activeMissions,
-        failedTasks: extras.queue?.failed ?? null,
-        pendingApprovals: extras.pendingApprovals,
-        coordinator: extras.coordinator,
-        threadOpen: extras.threadOpen,
-        lastRelayAt: extras.lastRelayAt ? new Date(extras.lastRelayAt).toISOString() : null,
-        // Only when there is something to report — a `0` every time is noise
-        // the assistant would learn to skip.
-        ...extras.missedReports && extras.missedReports > 0 ? { missedReports: extras.missedReports } : {}
-      };
-    }
-    function routingNum(v) {
-      return typeof v === "number" && Number.isFinite(v) ? v : void 0;
-    }
-    function routingSlot(v) {
-      const r = rec2(v);
-      const providerType = readText3(r?.providerType);
-      if (!providerType) return null;
-      const model = readText3(r?.model);
-      return { providerType, ...model ? { model } : {} };
-    }
-    function axisOf(v) {
-      const t = readText3(v);
-      return t === "weekly" || t === "session" ? t : void 0;
-    }
-    function quotaRow(v) {
-      const r = rec2(v);
-      const providerType = readText3(r?.providerType);
-      if (!providerType) return null;
-      const bonus = rec2(r?.bonus) ?? {};
-      const gate = rec2(r?.gate) ?? {};
-      const ranking = rec2(r?.ranking);
-      const snapshotStatus = readText3(bonus.snapshotStatus);
-      const failureKind = readText3(bonus.failureKind);
-      const zeroReason = readText3(bonus.zeroReason);
-      const gateReason = readText3(gate.reason);
-      const remainingPercent2 = routingNum(ranking?.remainingPercent);
-      const axis = axisOf(ranking?.axis);
-      return {
-        providerType,
-        ...snapshotStatus ? { snapshotStatus } : {},
-        ...failureKind ? { failureKind } : {},
-        ...zeroReason ? { zeroReason } : {},
-        gateOutcome: readText3(gate.outcome) || "unknown",
-        ...gateReason ? { gateReason } : {},
-        bonusValue: routingNum(bonus.value) ?? 0,
-        ...remainingPercent2 !== void 0 ? { remainingPercent: remainingPercent2 } : {},
-        ...axis ? { axis } : {}
-      };
-    }
-    function routingNodeRow(v, labelOf) {
-      const r = rec2(v);
-      const nodeId = readText3(r?.nodeId);
-      if (!nodeId) return null;
-      const stages = rec2(r?.stages) ?? {};
-      const floor = rec2(stages.difficultyFloor) ?? {};
-      const quotaStage = rec2(stages.quota) ?? {};
-      const winner = rec2(r?.predictedWinner);
-      const winnerProvider = readText3(winner?.providerType);
-      const winnerModel = readText3(winner?.model);
-      const reason = readText3(r?.reason);
-      const displaced = readText3(quotaStage.displacedFitnessWinner);
-      return {
-        nodeId,
-        machineName: labelOf(nodeId),
-        predictedWinner: winnerProvider ? { providerType: winnerProvider, ...winnerModel ? { model: winnerModel } : {}, fitnessScore: routingNum(winner?.fitnessScore) ?? 0 } : null,
-        ...reason ? { reason } : {},
-        admitted: (Array.isArray(floor.admittedSlots) ? floor.admittedSlots : []).map(routingSlot).filter((s2) => !!s2),
-        excluded: (Array.isArray(floor.excludedSlots) ? floor.excludedSlots : []).map((e) => {
-          const s2 = routingSlot(e);
-          const er = readText3(rec2(e)?.reason);
-          return s2 && er ? { ...s2, reason: er } : null;
-        }).filter((e) => !!e),
-        quota: (Array.isArray(r?.quotaDiagnostics) ? r.quotaDiagnostics : []).map(quotaRow).filter((q) => !!q),
-        reordered: quotaStage.reordered === true,
-        ...displaced ? { displacedFitnessWinner: displaced } : {}
-      };
-    }
-    function projectRoutingView(preview, difficulty, machineLabels = /* @__PURE__ */ new Map()) {
-      const p = rec2(preview) ?? {};
-      const labelOf = (nodeId) => machineLabels.get(nodeId) ?? null;
-      const winner = rec2(p.predictedWinner);
-      const winnerNode = readText3(winner?.nodeId);
-      const winnerProvider = readText3(winner?.providerType);
-      const winnerModel = readText3(winner?.model);
-      return {
-        strategy: readText3(p.schedulingStrategy) || "unknown",
-        difficulty,
-        predictedWinner: winnerNode && winnerProvider ? { nodeId: winnerNode, providerType: winnerProvider, ...winnerModel ? { model: winnerModel } : {}, fitnessScore: routingNum(winner?.fitnessScore) ?? 0 } : null,
-        perNode: (Array.isArray(p.nodes) ? p.nodes : []).map((n) => routingNodeRow(n, labelOf)).filter((n) => !!n)
-      };
-    }
-    var PROJECT_STATUS_ROUTING_DIFFICULTY = "medium";
-    function countVisibleBubbles(activeChat) {
-      const messages = rec2(activeChat)?.messages;
-      return Array.isArray(messages) ? messages.length : 0;
-    }
-    function sessionRows(states, opts = {}) {
-      const now = opts.now ?? Date.now();
-      const want = readText3(opts.meshId);
-      const out = [];
-      for (const raw of states) {
-        const state = rec2(raw);
-        if (!state) continue;
-        const sessionId = readText3(state.instanceId);
-        if (!sessionId) continue;
-        const settings = rec2(state.settings) ?? {};
-        const launch = rec2(state.launch);
-        const meshId = readText3(settings.meshNodeFor) || readText3(settings.meshCoordinatorFor);
-        if (want && meshId && meshId !== want) continue;
-        const launchedAt = typeof launch?.launchedAt === "number" && Number.isFinite(launch.launchedAt) ? launch.launchedAt : null;
-        out.push({
-          sessionId,
-          provider: readText3(state.type) || readText3(settings.providerType),
-          status: readText3(state.status),
-          meshId: meshId || null,
-          nodeId: readText3(settings.meshNodeId) || null,
-          ageMs: launchedAt === null ? null : Math.max(0, now - launchedAt),
-          messageCount: countVisibleBubbles(state.activeChat),
-          workspace: readText3(state.workspace) || null,
-          isCoordinator: !!readText3(settings.meshCoordinatorFor),
-          assistant: settings.assistant === true,
-          spawnedForTaskId: readText3(settings.autoLaunchedForQueueTaskId) || null,
-          launchedBy: readText3(launch?.launchedBy) || null
-        });
-      }
-      return out.sort((a, b) => a.sessionId.localeCompare(b.sessionId));
-    }
-    var PROJECT_READ_DEFAULT_TAIL = 10;
-    var PROJECT_READ_MAX_TAIL = 50;
-    var PROJECT_READ_MESSAGE_MAX_CHARS = 4e3;
-    function messageText(m) {
-      const c = m?.content;
-      if (typeof c === "string") return c;
-      if (Array.isArray(c)) return c.map((p) => typeof p === "string" ? p : readText3(p?.text) ? p.text : "").join("");
-      return typeof m?.text === "string" ? m.text : "";
-    }
-    function isVisible(m) {
-      if (!m || typeof m !== "object") return false;
-      const role = readText3(m.role).toLowerCase();
-      if (role !== "user" && role !== "assistant" && role !== "agent") return false;
-      const kind = readText3(m.kind ?? m.type ?? m.messageKind).toLowerCase();
-      if (["tool", "tool_call", "tool_result", "terminal", "internal", "control", "debug", "status"].includes(kind)) return false;
-      const meta = m.meta ?? m.metadata;
-      return !(meta?.internal === true || meta?.debug === true || meta?.control === true || meta?.userVisible === false);
-    }
-    function compactTranscriptTail(readChat2, tail) {
-      const messages = Array.isArray(readChat2.messages) ? readChat2.messages : [];
-      const visible = messages.filter(isVisible);
-      const picked = visible.slice(-tail).map((m) => {
-        const text = messageText(m);
-        const truncated = text.length > PROJECT_READ_MESSAGE_MAX_CHARS;
-        const at = typeof m.timestamp === "number" ? new Date(m.timestamp).toISOString() : readText3(m.timestamp) || readText3(m.createdAt) || void 0;
-        return {
-          role: readText3(m.role).toLowerCase() === "user" ? "user" : "assistant",
-          text: truncated ? `${text.slice(0, PROJECT_READ_MESSAGE_MAX_CHARS)}\u2026` : text,
-          ...truncated ? { truncated: true } : {},
-          ...at ? { at } : {}
-        };
-      });
-      return {
-        messages: picked,
-        visibleCount: visible.length,
-        omitted: Math.max(0, visible.length - picked.length),
-        ...typeof readChat2.status === "string" ? { status: readChat2.status } : {}
-      };
-    }
+    init_project_views();
     var import_fs41 = require("fs");
     var import_os6 = require("os");
     var import_path41 = require("path");
@@ -131528,6 +131532,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
     init_dist();
     init_logger();
     init_assistant_services();
+    init_project_views();
     init_assistant_remote_host();
     var REMOTE_SEND_MAX_CHARS = 64e3;
     var REMOTE_POLL_MAX_COMMITS = 5;
@@ -131794,6 +131799,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     }
     init_assistant_project_ports();
     init_assistant_projects();
+    init_project_views();
     init_assistant_launch_plan();
     var LAUNCH_ASSISTANT_SOURCES = ASSISTANT_PROJECTS_SOURCES;
     function str13(v) {

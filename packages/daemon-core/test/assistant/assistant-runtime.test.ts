@@ -157,7 +157,35 @@ describe('buildAssistantRelayPorts', () => {
 
     const tail = await p.readCoordinatorTail('session-1');
     expect(tail).toBe(longText);
-    expect(tail.length).toBe(5000); // Must return the raw long text without 4000 char slice
+    expect(tail?.length).toBe(5000); // Must return the raw long text without 4000 char slice
+  });
+
+  it('readCoordinatorTail skips tool and non-userVisible bubbles', async () => {
+      const deps = components();
+      const p = buildAssistantRelayPorts(deps, { registry, store: new InMemoryAssistantRelayStore(), metrics: null, sawCaller: () => false });
+      vi.mocked(deps.router.execute).mockResolvedValueOnce({
+          success: true,
+          messages: [
+              { role: 'assistant', text: 'visible answer' },
+              { role: 'assistant', kind: 'tool', text: 'tool noise' },
+              { role: 'assistant', meta: { userVisible: false }, text: 'hidden noise' }
+          ]
+      });
+      const tail = await p.readCoordinatorTail('session-1');
+      expect(tail).toBe('visible answer');
+  });
+
+  it('readCoordinatorTail finds role agent', async () => {
+      const deps = components();
+      const p = buildAssistantRelayPorts(deps, { registry, store: new InMemoryAssistantRelayStore(), metrics: null, sawCaller: () => false });
+      vi.mocked(deps.router.execute).mockResolvedValueOnce({
+          success: true,
+          messages: [
+              { role: 'agent', text: 'agent answer' }
+          ]
+      });
+      const tail = await p.readCoordinatorTail('session-1');
+      expect(tail).toBe('agent answer');
   });
 
     function ports(metrics: AssistantMetricsStore | null = null) {

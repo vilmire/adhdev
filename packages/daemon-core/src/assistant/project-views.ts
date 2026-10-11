@@ -584,16 +584,16 @@ function isVisible(m: any): boolean {
     return !(meta?.internal === true || meta?.debug === true || meta?.control === true || meta?.userVisible === false);
 }
 
-export function compactTranscriptTail(readChat: Record<string, unknown>, tail: number): Record<string, unknown> {
+export function compactTranscriptTail(readChat: Record<string, unknown>, tail: number, maxChars = PROJECT_READ_MESSAGE_MAX_CHARS): Record<string, unknown> {
     const messages: any[] = Array.isArray(readChat.messages) ? readChat.messages : [];
     const visible = messages.filter(isVisible);
     const picked = visible.slice(-tail).map((m) => {
         const text = messageText(m);
-        const truncated = text.length > PROJECT_READ_MESSAGE_MAX_CHARS;
+        const truncated = text.length > maxChars;
         const at = typeof m.timestamp === 'number' ? new Date(m.timestamp).toISOString() : readText(m.timestamp) || readText(m.createdAt) || undefined;
         return {
             role: readText(m.role).toLowerCase() === 'user' ? 'user' : 'assistant',
-            text: truncated ? `${text.slice(0, PROJECT_READ_MESSAGE_MAX_CHARS)}…` : text,
+            text: truncated ? `${text.slice(0, maxChars)}…` : text,
             ...(truncated ? { truncated: true } : {}),
             ...(at ? { at } : {}),
         };

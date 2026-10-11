@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
     PROJECT_STATUS_ROUTING_DIFFICULTY,
     compactProjectStatus, isUnmanagedRepoIdentity, machinesSummary, projectRoutingView, sessionRows,
+    compactTranscriptTail
 } from '../../src/assistant/project-views.js';
 
 describe('isUnmanagedRepoIdentity', () => {
@@ -362,5 +363,17 @@ describe('sessionRows — live session visibility (A2)', () => {
         const rows = sessionRows([null, undefined, 42, {}, { instanceId: '' }, { instanceId: 'ok', activeChat: null, settings: null }], { now: NOW });
         expect(rows.map((r) => r.sessionId)).toEqual(['ok']);
         expect(rows[0]).toMatchObject({ ageMs: null, launchedBy: null, messageCount: 0, workspace: null, assistant: false });
+    });
+});
+
+describe('compactTranscriptTail', () => {
+    it('truncates messages exceeding 4,000 characters by default, keeping explicit limit', () => {
+        const longText = 'A'.repeat(5000);
+        const chat = { messages: [{ role: 'assistant', content: longText }] };
+        const result = compactTranscriptTail(chat, 10);
+        
+        expect(result.messages[0].text.length).toBe(4001); // 4000 + ellipsis
+        expect(result.messages[0].text.endsWith('…')).toBe(true);
+        expect(result.messages[0].truncated).toBe(true);
     });
 });
