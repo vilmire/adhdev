@@ -287,7 +287,7 @@ export function readOwnTaskLifecycle(
         ? index.query(meshId, { writer: { scope: 'own', writer: opts.ownWriter }, kinds: ['task_dispatched'], tail })
         : [];
     const terminals = (turnStore.db.prepare(`SELECT attempt_id, task_id, session_id, node_id, provider_type, terminal_outcome, terminal_at
-            FROM turn_attempts WHERE mesh_id = ? AND task_id IS NOT NULL AND terminal_outcome IN ('completed', 'failed')
+            FROM turn_attempts WHERE mesh_id = ? AND task_id IS NOT NULL AND terminal_outcome IN ('completed', 'failed', 'cancelled')
             ORDER BY terminal_at DESC LIMIT ?`).all(meshId, tail) as Array<{
         attempt_id: string; task_id: string; session_id: string; node_id: string | null; provider_type: string | null;
         terminal_outcome: string; terminal_at: number | null;
@@ -299,7 +299,7 @@ export function readOwnTaskLifecycle(
             id: `${row.attempt_id}#committed`,
             timestamp: new Date(atMs).toISOString(),
             atMs,
-            kind: row.terminal_outcome === 'completed' ? 'task_completed' : 'task_failed',
+            kind: row.terminal_outcome === 'completed' ? 'task_completed' : (row.terminal_outcome === 'cancelled' ? 'task_cancelled' : 'task_failed'),
             sessionId: row.session_id,
             nodeId: row.node_id ?? undefined,
             providerType: row.provider_type ?? undefined,
@@ -313,9 +313,10 @@ export function readOwnTaskLifecycle(
 // ─── fleet task activity (C3: worker-peer-context reads `fleet`) ───────────
 
 /** The ledger kind a committed turn projects to for lifecycle readers. */
-function committedKind(outcome: unknown): 'task_completed' | 'task_failed' | null {
+function committedKind(outcome: unknown): 'task_completed' | 'task_failed' | 'task_cancelled' | null {
     if (outcome === 'completed') return 'task_completed';
-    if (outcome === 'failed' || outcome === 'cancelled') return 'task_failed';
+    if (outcome === 'failed') return 'task_failed';
+    if (outcome === 'cancelled') return 'task_cancelled';
     return null;
 }
 

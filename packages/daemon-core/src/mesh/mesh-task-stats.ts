@@ -29,7 +29,7 @@ export interface MeshTaskStats {
     status: string;
     dispatchedAt: string | null;
     terminalAt: string | null;
-    terminalKind: 'task_completed' | 'task_failed' | null;
+    terminalKind: 'task_completed' | 'task_failed' | 'task_cancelled' | null;
     /** dispatched → terminal wall clock; null when evidence is incomplete. */
     durationMs: number | null;
     /** Number of task_dispatched ledger entries observed for this task. */
@@ -100,7 +100,7 @@ function taskStatsFromFacts(queue: readonly MeshQueueFacts[], entries: readonly 
     const queueById = new Map(queue.map(task => [task.id, task]));
     const targetSet = new Set(targetIds);
     const dispatches = new Map<string, { first: string; count: number }>();
-    const terminals = new Map<string, { at: string; kind: 'task_completed' | 'task_failed' }>();
+    const terminals = new Map<string, { at: string; kind: 'task_completed' | 'task_failed' | 'task_cancelled' }>();
     for (const entry of entries) {
         const taskId = readPayloadTaskId(entry);
         if (!taskId || !targetSet.has(taskId)) continue;
@@ -108,7 +108,7 @@ function taskStatsFromFacts(queue: readonly MeshQueueFacts[], entries: readonly 
             const existing = dispatches.get(taskId);
             if (existing) existing.count += 1;
             else dispatches.set(taskId, { first: entry.timestamp, count: 1 });
-        } else if (entry.kind === 'task_completed' || entry.kind === 'task_failed') {
+        } else if (entry.kind === 'task_completed' || entry.kind === 'task_failed' || entry.kind === 'task_cancelled') {
             // Last terminal wins (requeued tasks can have multiple terminals).
             terminals.set(taskId, { at: entry.timestamp, kind: entry.kind });
         }

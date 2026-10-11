@@ -55120,7 +55120,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       const tail = opts.tail && opts.tail > 0 ? Math.floor(opts.tail) : 1e3;
       const dispatched = opts.ownWriter ? index.query(meshId, { writer: { scope: "own", writer: opts.ownWriter }, kinds: ["task_dispatched"], tail }) : [];
       const terminals = turnStore2.db.prepare(`SELECT attempt_id, task_id, session_id, node_id, provider_type, terminal_outcome, terminal_at
-            FROM turn_attempts WHERE mesh_id = ? AND task_id IS NOT NULL AND terminal_outcome IN ('completed', 'failed')
+            FROM turn_attempts WHERE mesh_id = ? AND task_id IS NOT NULL AND terminal_outcome IN ('completed', 'failed', 'cancelled')
             ORDER BY terminal_at DESC LIMIT ?`).all(meshId, tail).map((row) => {
         const atMs = row.terminal_at ?? 0;
         return {
@@ -55129,7 +55129,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           id: `${row.attempt_id}#committed`,
           timestamp: new Date(atMs).toISOString(),
           atMs,
-          kind: row.terminal_outcome === "completed" ? "task_completed" : "task_failed",
+          kind: row.terminal_outcome === "completed" ? "task_completed" : row.terminal_outcome === "cancelled" ? "task_cancelled" : "task_failed",
           sessionId: row.session_id,
           nodeId: row.node_id ?? void 0,
           providerType: row.provider_type ?? void 0,
@@ -55141,7 +55141,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     }
     function committedKind(outcome) {
       if (outcome === "completed") return "task_completed";
-      if (outcome === "failed" || outcome === "cancelled") return "task_failed";
+      if (outcome === "failed") return "task_failed";
+      if (outcome === "cancelled") return "task_cancelled";
       return null;
     }
     function readFleetTaskActivity(index, meshId, kinds, tail) {
@@ -55332,7 +55333,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           const existing = dispatches.get(taskId);
           if (existing) existing.count += 1;
           else dispatches.set(taskId, { first: entry.timestamp, count: 1 });
-        } else if (entry.kind === "task_completed" || entry.kind === "task_failed") {
+        } else if (entry.kind === "task_completed" || entry.kind === "task_failed" || entry.kind === "task_cancelled") {
           terminals.set(taskId, { at: entry.timestamp, kind: entry.kind });
         }
       }
@@ -61578,7 +61579,7 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
       };
     }
     function isTerminalLedgerKind(kind) {
-      return kind === "task_completed" || kind === "task_failed";
+      return kind === "task_completed" || kind === "task_failed" || kind === "task_cancelled";
     }
     function resolveNodeEvidence(nodeId, ledgerEntries) {
       let evidence = { available: false };
@@ -63086,9 +63087,9 @@ ${rendered}`, "utf-8");
       return typeof fromPayload === "string" && fromPayload.trim() ? fromPayload.trim() : void 0;
     }
     function isIntentionalCleanupStopEntry(entry) {
-      if (entry.kind !== "session_stopped" && entry.kind !== "task_failed" && entry.kind !== "task_stalled") return false;
+      if (entry.kind !== "session_stopped" && entry.kind !== "task_failed" && entry.kind !== "task_cancelled" && entry.kind !== "task_stalled") return false;
       const payload = entry.payload && typeof entry.payload === "object" && !Array.isArray(entry.payload) ? entry.payload : {};
-      return payload.intentional === true && (payload.reason === "operator_cleanup" || payload.intentionalStopReason === "operator_cleanup" || payload.source === "mesh_cleanup_sessions" || payload.source === "mesh_remove_node");
+      return payload.intentional === true && (payload.reason === "operator_cleanup" || payload.reason === "intentional_cleanup" || payload.intentionalStopReason === "operator_cleanup" || payload.source === "mesh_cleanup_sessions" || payload.source === "mesh_remove_node");
     }
     function buildWorkerTaskFooter() {
       return `
@@ -63311,7 +63312,8 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       if (opts.kinds && opts.kinds.length > 0) {
         const outcomes = [
           ...opts.kinds.includes("task_completed") ? ["completed"] : [],
-          ...opts.kinds.includes("task_failed") ? ["failed", "cancelled"] : []
+          ...opts.kinds.includes("task_failed") ? ["failed"] : [],
+          ...opts.kinds.includes("task_cancelled") ? ["cancelled"] : []
         ];
         if (outcomes.length === 0) return [];
         where.push(`terminal_outcome IN (${outcomes.map(() => "?").join(", ")})`);
@@ -63338,7 +63340,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
           id: `${row.attempt_id}#committed`,
           meshId,
           timestamp: new Date(row.terminal_at ?? 0).toISOString(),
-          kind: completed ? "task_completed" : "task_failed",
+          kind: completed ? "task_completed" : cancelled ? "task_cancelled" : "task_failed",
           sessionId: row.session_id,
           ...row.node_id ? { nodeId: row.node_id } : {},
           ...row.provider_type ? { providerType: row.provider_type } : {},
@@ -63362,7 +63364,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       return a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0;
     }
     function withTurnTerminals(meshId, local, kinds, opts) {
-      const wanted = kinds && kinds.length > 0 ? kinds.filter((k) => TERMINAL_KINDS.has(k)) : ["task_completed", "task_failed"];
+      const wanted = kinds && kinds.length > 0 ? kinds.filter((k) => TERMINAL_KINDS.has(k)) : ["task_completed", "task_failed", "task_cancelled"];
       if (wanted.length === 0) return local;
       let views;
       try {
@@ -63618,7 +63620,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
         DEFAULT_LOCAL_RECORD_SLICE_LIMIT = 100;
         MAX_LOCAL_RECORD_SLICE_LIMIT = 500;
         RECENT_FAILURE_WINDOW_MS = 30 * 60 * 1e3;
-        TERMINAL_KINDS = /* @__PURE__ */ new Set(["task_completed", "task_failed"]);
+        TERMINAL_KINDS = /* @__PURE__ */ new Set(["task_completed", "task_failed", "task_cancelled"]);
         CLEANUP_STOP_PROJECTION = {
           name: "cleanup_stop",
           paths: ["$.intentional", "$.reason", "$.intentionalStopReason", "$.source"]
@@ -74617,7 +74619,7 @@ Check whether the work actually happened (mesh_task_history / git); if it still 
     }
     function hasTerminalLedgerAuthorityForTask(ledgerEntries, taskId) {
       for (const entry of ledgerEntries || []) {
-        if (entry.kind !== "task_completed" && entry.kind !== "task_failed") continue;
+        if (entry.kind !== "task_completed" && entry.kind !== "task_failed" && entry.kind !== "task_cancelled") continue;
         if (readString2(entry.payload?.taskId) !== taskId) continue;
         if (entry.kind === "task_completed" && isWeakCompletionEvidence(entry.payload || {})) continue;
         return true;
@@ -74630,7 +74632,7 @@ Check whether the work actually happened (mesh_task_history / git); if it still 
     function hasSessionTerminalAfterApproval(ledgerEntries, sessionId, approvalAtMs) {
       if (!sessionId || !Number.isFinite(approvalAtMs)) return false;
       for (const entry of ledgerEntries || []) {
-        if (entry.kind !== "task_completed" && entry.kind !== "task_failed" && entry.kind !== "session_stopped") continue;
+        if (entry.kind !== "task_completed" && entry.kind !== "task_failed" && entry.kind !== "task_cancelled" && entry.kind !== "session_stopped") continue;
         if (!sessionIdsEquivalent(readString2(entry.sessionId), sessionId)) continue;
         if (entry.kind === "task_completed" && isWeakCompletionEvidence(entry.payload || {})) continue;
         const terminalAtMs = new Date(entry.timestamp).getTime();
@@ -75020,7 +75022,7 @@ Check whether the work actually happened (mesh_task_history / git); if it still 
         init_mesh_turn_presentation();
         init_mesh_events_utils();
         DIRECT_DISPATCH_VIA = /* @__PURE__ */ new Set(["p2p_direct", "local_direct", "mesh_send_task"]);
-        TERMINAL_LEDGER_KINDS = /* @__PURE__ */ new Set(["task_completed", "task_failed", "task_stalled"]);
+        TERMINAL_LEDGER_KINDS = /* @__PURE__ */ new Set(["task_completed", "task_failed", "task_cancelled", "task_stalled"]);
         LEDGER_ONLY_STALE_REASON = "direct task dispatch has no provider acknowledgement, transcript append, or active runtime transition";
         PRUNABLE_ORPHAN_STALE_REASONS = /* @__PURE__ */ new Set([
           "direct task node is no longer in the live mesh",
@@ -75100,6 +75102,7 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
           "task_dispatched",
           "task_completed",
           "task_failed",
+          "task_cancelled",
           "task_stalled",
           "task_approval_needed",
           "task_approval_resolved",
@@ -132805,8 +132808,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const completedAt = (/* @__PURE__ */ new Date()).toISOString();
       const summary = result.summary && typeof result.summary === "object" ? result.summary : void 0;
       const allConverged = result.allConverged === true;
-      const isTerminalSuccess = result.success === true && allConverged;
-      const nextStep = typeof result.nextStep === "string" && result.nextStep ? result.nextStep : isTerminalSuccess ? "All batched nodes converged onto base. Continue from the updated mesh state." : "Resolve blocked_review / not_mergeable nodes (see per-node code/stage/error in result.results), then re-run mesh_refine_batch for the remaining nodes.";
+      const someConverged = summary ? (summary.merged || 0) > 0 || (summary.skipped || 0) > 0 : false;
+      const isTerminalSuccess = result.success === true && (allConverged || someConverged);
+      const nextStep = typeof result.nextStep === "string" && result.nextStep ? result.nextStep : result.success && allConverged ? "All batched nodes converged onto base. Continue from the updated mesh state." : "Resolve blocked_review / not_mergeable nodes (see per-node code/stage/error in result.results), then re-run mesh_refine_batch for the remaining nodes.";
       const normalizedResult = {
         ...result,
         batch: true,

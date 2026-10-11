@@ -310,6 +310,7 @@ export async function maybeInjectIdleActiveMissionReminder(
             'task_dispatched',
             'task_completed',
             'task_failed',
+            'task_cancelled',
             'task_stalled',
             'task_approval_needed',
             'task_approval_resolved',

@@ -127,7 +127,7 @@ interface BuildMeshActiveWorkOptions {
 }
 
 const DIRECT_DISPATCH_VIA = new Set(['p2p_direct', 'local_direct', 'mesh_send_task']);
-const TERMINAL_LEDGER_KINDS = new Set(['task_completed', 'task_failed', 'task_stalled']);
+const TERMINAL_LEDGER_KINDS = new Set(['task_completed', 'task_failed', 'task_cancelled', 'task_stalled']);
 
 interface IndexedTerminal {
     entry: MeshLedgerEntry;
@@ -388,7 +388,7 @@ function isDirectDispatch(entry: MeshLedgerEntry): boolean {
  */
 function hasTerminalLedgerAuthorityForTask(ledgerEntries: MeshLedgerEntry[] | undefined, taskId: string): boolean {
     for (const entry of ledgerEntries || []) {
-        if (entry.kind !== 'task_completed' && entry.kind !== 'task_failed') continue;
+        if (entry.kind !== 'task_completed' && entry.kind !== 'task_failed' && entry.kind !== 'task_cancelled') continue;
         if (readString(entry.payload?.taskId) !== taskId) continue;
         if (entry.kind === 'task_completed' && isWeakCompletionEvidence(entry.payload || {})) continue;
         return true;
@@ -437,7 +437,7 @@ function hasSessionTerminalAfterApproval(
 ): boolean {
     if (!sessionId || !Number.isFinite(approvalAtMs)) return false;
     for (const entry of ledgerEntries || []) {
-        if (entry.kind !== 'task_completed' && entry.kind !== 'task_failed' && entry.kind !== 'session_stopped') continue;
+        if (entry.kind !== 'task_completed' && entry.kind !== 'task_failed' && entry.kind !== 'task_cancelled' && entry.kind !== 'session_stopped') continue;
         if (!sessionIdsEquivalent(readString(entry.sessionId), sessionId)) continue;
         if (entry.kind === 'task_completed' && isWeakCompletionEvidence(entry.payload || {})) continue;
         const terminalAtMs = new Date(entry.timestamp).getTime();
@@ -512,7 +512,7 @@ function buildLedgerDirectDispatchRecord(
 ): { record: MeshActiveWorkRecord; terminalRow: boolean } {
     const taskId = directDispatchTaskId(dispatch);
     // APPROVAL-Q1-REALTIME (stale level state): prefer a REAL terminal (task_completed /
-    // task_failed) over an earlier task_approval_needed for the same dispatch. An approval
+    // task_failed/task_cancelled) over an earlier task_approval_needed for the same dispatch. An approval
     // that was subsequently resolved — the worker went on to complete or fail — must NOT keep
     // the node pinned to awaiting_approval, which would falsely tell the coordinator (via
     // mesh_status/read_chat) the worker is still blocked (the UX inversion this fix avoids).

@@ -43,7 +43,7 @@ export const MAX_LOCAL_RECORD_SLICE_LIMIT = 500;
 const RECENT_FAILURE_WINDOW_MS = 30 * 60 * 1000;
 
 
-const TERMINAL_KINDS: ReadonlySet<string> = new Set(['task_completed', 'task_failed']);
+const TERMINAL_KINDS: ReadonlySet<string> = new Set(['task_completed', 'task_failed', 'task_cancelled']);
 
 function sinceToMs(since: string | undefined): number | undefined {
     if (typeof since !== 'string') return undefined;
@@ -77,7 +77,8 @@ export function readTurnTerminalViews(meshId: string, opts: { sinceMs?: number; 
         // kind → outcomes BEFORE the tail, so completions never crowd failures out.
         const outcomes = [
             ...(opts.kinds.includes('task_completed') ? ['completed'] : []),
-            ...(opts.kinds.includes('task_failed') ? ['failed', 'cancelled'] : []),
+            ...(opts.kinds.includes('task_failed') ? ['failed'] : []),
+            ...(opts.kinds.includes('task_cancelled') ? ['cancelled'] : []),
         ];
         if (outcomes.length === 0) return [];
         where.push(`terminal_outcome IN (${outcomes.map(() => '?').join(', ')})`);
@@ -98,7 +99,7 @@ export function readTurnTerminalViews(meshId: string, opts: { sinceMs?: number; 
             id: `${row.attempt_id}#committed`,
             meshId,
             timestamp: new Date(row.terminal_at ?? 0).toISOString(),
-            kind: completed ? 'task_completed' : 'task_failed',
+            kind: completed ? 'task_completed' : (cancelled ? 'task_cancelled' : 'task_failed'),
             sessionId: row.session_id,
             ...(row.node_id ? { nodeId: row.node_id } : {}),
             ...(row.provider_type ? { providerType: row.provider_type } : {}),
@@ -129,7 +130,7 @@ function byTime(a: MeshLedgerEntry, b: MeshLedgerEntry): number {
  * same kind (refine jobs / the dispatch-failure auto-fail still write one).
  */
 function withTurnTerminals(meshId: string, local: MeshLedgerEntry[], kinds: readonly string[] | undefined, opts: { sinceMs?: number; tail?: number }): MeshLedgerEntry[] {
-    const wanted = kinds && kinds.length > 0 ? kinds.filter((k) => TERMINAL_KINDS.has(k)) : ['task_completed', 'task_failed'];
+    const wanted = kinds && kinds.length > 0 ? kinds.filter((k) => TERMINAL_KINDS.has(k)) : ['task_completed', 'task_failed', 'task_cancelled'];
     if (wanted.length === 0) return local;
     let views: MeshLedgerEntry[];
     try {

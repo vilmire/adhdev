@@ -26,7 +26,7 @@ export interface MeshReviewInboxConvergence {
 export interface MeshReviewInboxEvidence {
     available: boolean;
     /** Ledger kind of the entry the evidence came from. */
-    kind?: 'task_completed' | 'task_failed';
+    kind?: 'task_completed' | 'task_failed' | 'task_cancelled';
     /** 'task_completion' = ordinary worker completion envelope; 'refine_job' = Refinery result. */
     source?: 'task_completion' | 'refine_job';
     timestamp?: string;
@@ -154,8 +154,8 @@ function readWorkerArtifact(value: unknown): MeshReviewInboxEvidence['worker'] {
     };
 }
 
-function isTerminalLedgerKind(kind: string): kind is 'task_completed' | 'task_failed' {
-    return kind === 'task_completed' || kind === 'task_failed';
+function isTerminalLedgerKind(kind: string): kind is 'task_completed' | 'task_failed' | 'task_cancelled' {
+    return kind === 'task_completed' || kind === 'task_failed' || kind === 'task_cancelled';
 }
 
 /**

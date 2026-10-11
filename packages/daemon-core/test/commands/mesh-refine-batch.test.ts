@@ -480,10 +480,11 @@ describe('batch_refine_mesh_nodes', () => {
       const router = createRouter()
 
       // Force order so node-a merges first, then node-conflict (must conflict), then node-d.
-      const { result } = await executeBatchAndAwait(router, mesh.id, {
+      const { result, terminal } = await executeBatchAndAwait(router, mesh.id, {
         nodeIds: ['node-a', 'node-conflict', 'node-d'], inlineMesh: mesh,
       }, ['node-a', 'node-conflict', 'node-d'])
       expect(result).toMatchObject({ success: true, batch: true, dryRun: false, allConverged: false })
+      expect(terminal.kind).toBe('task_completed') // Regression test: partial success -> task_completed
       const byId = Object.fromEntries(result.results.map((r: any) => [r.nodeId, r]))
       expect(byId['node-a'].convergence).toBe('merged_to_main')
       expect(byId['node-conflict'].convergence).toBe('blocked_review')
@@ -494,6 +495,40 @@ describe('batch_refine_mesh_nodes', () => {
       // conflict.txt retains node-a's content; node-conflict was not merged.
       expect(readFileSync(join(repo, 'conflict.txt'), 'utf-8')).toBe('changed-by-a\n')
       expect(readFileSync(join(repo, 'untouched.txt'), 'utf-8')).toBe('d\n')
+    } finally {
+      if (prev === undefined) delete process.env.ADHDEV_CONFIG_DIR; else process.env.ADHDEV_CONFIG_DIR = prev
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('records fully failed batches as task_failed (regression)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-batch-full-fail-'))
+    const prev = process.env.ADHDEV_CONFIG_DIR
+    try {
+      withConfigDir(root)
+      const repo = join(root, 'repo')
+      initRepo(repo)
+      // Force validation failure so no nodes converge.
+      writeFileSync(join(repo, 'typecheck.js'), 'process.exit(1)\n', 'utf-8')
+      git(repo, 'add', 'typecheck.js'); git(repo, 'commit', '-q', '-m', 'break typecheck')
+
+      const a = addWorktreeNode(root, repo, 'node-a', 'feat/a', wt => {
+        writeFileSync(join(wt, 'a.txt'), 'a\n', 'utf-8'); git(wt, 'add', '.'); git(wt, 'commit', '-q', '-m', 'a')
+      })
+      const b = addWorktreeNode(root, repo, 'node-b', 'feat/b', wt => {
+        writeFileSync(join(wt, 'b.txt'), 'b\n', 'utf-8'); git(wt, 'add', '.'); git(wt, 'commit', '-q', '-m', 'b')
+      })
+      const mesh = meshWith(repo, [a.node, b.node])
+      const router = createRouter()
+
+      const { result, terminal } = await executeBatchAndAwait(router, mesh.id, {
+        nodeIds: ['node-a', 'node-b'], inlineMesh: mesh,
+      }, ['node-a', 'node-b'])
+
+      expect(result).toMatchObject({ success: false, batch: true, dryRun: false, allConverged: false })
+      expect(result.summary.merged).toBe(0)
+      expect(result.summary.blocked).toBe(2) // Both failed validation -> blocked_review
+      expect(terminal.kind).toBe('task_failed') // Regression test: full failure -> task_failed
     } finally {
       if (prev === undefined) delete process.env.ADHDEV_CONFIG_DIR; else process.env.ADHDEV_CONFIG_DIR = prev
       rmSync(root, { recursive: true, force: true })

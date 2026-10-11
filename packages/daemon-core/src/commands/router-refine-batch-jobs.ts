@@ -676,16 +676,18 @@ export async function finishMeshRefineBatchJob(self: DaemonCommandRouter,
         }
         const completedAt = new Date().toISOString();
 
-        // The batch as a whole "completed" only when every node converged (no blocked /
-        // not_mergeable). A partial batch is reported as a terminal failure so the
-        // coordinator inspects the per-node blockers rather than assuming a clean merge.
+        // A partial batch is no longer forced to a terminal failure: partial convergence
+        // is recorded as a success (with convergenceStatus: 'partial' in the payload) so
+        // the ledger does not artificially inflate failed counts, and the coordinator
+        // checks convergenceStatus rather than the binary event status.
         const summary = (result.summary && typeof result.summary === 'object') ? result.summary as Record<string, number> : undefined;
         const allConverged = result.allConverged === true;
-        const isTerminalSuccess = result.success === true && allConverged;
+        const someConverged = summary ? ((summary.merged || 0) > 0 || (summary.skipped || 0) > 0) : false;
+        const isTerminalSuccess = result.success === true && (allConverged || someConverged);
 
         const nextStep = typeof result.nextStep === 'string' && result.nextStep
             ? result.nextStep
-            : isTerminalSuccess
+            : (result.success && allConverged)
                 ? 'All batched nodes converged onto base. Continue from the updated mesh state.'
                 : 'Resolve blocked_review / not_mergeable nodes (see per-node code/stage/error in result.results), then re-run mesh_refine_batch for the remaining nodes.';
         const normalizedResult = {

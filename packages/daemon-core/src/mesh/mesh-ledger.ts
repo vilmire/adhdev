@@ -38,6 +38,7 @@ export type MeshLedgerKind =
     | 'task_claimed'
     | 'task_completed'
     | 'task_failed'
+    | 'task_cancelled'
     | 'task_stalled'
     | 'task_approval_needed'
     // Retraction for the task_approval_needed LEVEL assertion. Emitted only after
@@ -272,12 +273,13 @@ export function ledgerEntryTaskId(entry: Pick<MeshLedgerEntry, 'taskId' | 'paylo
 export function isIntentionalCleanupStopEntry(
     entry: { kind: string; payload?: Record<string, unknown> | undefined },
 ): boolean {
-    if (entry.kind !== 'session_stopped' && entry.kind !== 'task_failed' && entry.kind !== 'task_stalled') return false;
+    if (entry.kind !== 'session_stopped' && entry.kind !== 'task_failed' && entry.kind !== 'task_cancelled' && entry.kind !== 'task_stalled') return false;
     const payload = entry.payload && typeof entry.payload === 'object' && !Array.isArray(entry.payload)
         ? entry.payload as Record<string, unknown>
         : {};
     return payload.intentional === true
         && (payload.reason === 'operator_cleanup'
+            || payload.reason === 'intentional_cleanup'
             || payload.intentionalStopReason === 'operator_cleanup'
             || payload.source === 'mesh_cleanup_sessions'
             || payload.source === 'mesh_remove_node');

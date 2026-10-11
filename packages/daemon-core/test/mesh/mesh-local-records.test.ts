@@ -276,6 +276,13 @@ describe('mesh-local-records (C-W9a: meshRecord local leg + readers)', () => {
             expect(summary.taskFailed).toBe(1);
             expect(summary.recentFailures).toBe(1);
         });
+
+        it('does not count intentional_cleanup cancellations as taskFailed (regression)', () => {
+            // "intentional_cleanup 이 task_failed 로 집계된다" bug fix
+            seedMeshAttempt({ meshId: testMeshId, taskId: 't-cxl-clean', sessionId: 's-clean', stage: 'cancelled', terminalReason: 'intentional_cleanup' });
+            const summary = getLocalRecordSummary(testMeshId);
+            expect(summary.taskFailed).toBe(0);
+        });
     });
 
     describe('getLedgerDir', () => {
@@ -345,9 +352,12 @@ describe('mesh-local-records (C-W9a: meshRecord local leg + readers)', () => {
             seedLocalRecord(testMeshId, { kind: 'task_failed', payload: { taskId: 't-local', error: 'boom' } });
 
             const failed = readLocalRecords(testMeshId, { kind: ['task_failed'] });
-            expect(failed.map((e) => e.taskId)).toEqual(['t-bad', 't-cxl', 't-local']);
+            expect(failed.map((e) => e.taskId)).toEqual(['t-bad', 't-local']);
             expect(failed[0].payload).toMatchObject({ source: 'turn_ledger', outcome: 'failed', reason: 'session_error', error: 'session_error' });
-            expect(isIntentionalCleanupStopEntry(failed[1])).toBe(true);
+
+            const cancelled = readLocalRecords(testMeshId, { kind: ['task_cancelled'] });
+            expect(cancelled.map((e) => e.taskId)).toEqual(['t-cxl']);
+            expect(isIntentionalCleanupStopEntry(cancelled[0])).toBe(true);
 
             const completed = readLocalRecords(testMeshId, { kind: ['task_completed'] });
             expect(completed.map((e) => e.taskId)).toEqual(['t-ok']);
