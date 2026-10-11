@@ -146,6 +146,20 @@ describe('wireAssistantRuntime', () => {
 });
 
 describe('buildAssistantRelayPorts', () => {
+  it('readCoordinatorTail bypasses compactTranscriptTail 4000 char limit to preserve explicit truncation markers', async () => {
+    const deps = components();
+    const p = buildAssistantRelayPorts(deps, { registry, store: new InMemoryAssistantRelayStore(), metrics: null, sawCaller: () => false });
+    const longText = 'A'.repeat(5000);
+    vi.mocked(deps.router.execute).mockResolvedValueOnce({
+      success: true,
+      messages: [{ role: 'assistant', text: longText }]
+    });
+
+    const tail = await p.readCoordinatorTail('session-1');
+    expect(tail).toBe(longText);
+    expect(tail.length).toBe(5000); // Must return the raw long text without 4000 char slice
+  });
+
     function ports(metrics: AssistantMetricsStore | null = null) {
         return buildAssistantRelayPorts(components(), { registry, store: new InMemoryAssistantRelayStore(), metrics, sawCaller: () => false });
     }
