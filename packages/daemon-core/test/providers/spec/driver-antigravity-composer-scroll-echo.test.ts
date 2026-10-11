@@ -135,7 +135,7 @@ const SCROLLED_COMPOSER_FRAME =
 
 /** Dispatch BODY from idle, echo agy's scrolled composer, and report how long
  *  the first submit key took. */
-async function firstSubmitDelayMs(specPath: string, waitMs: number): Promise<number | null> {
+async function firstSubmitDelayMs(specPath: string, waitMs: number, seen?: { writes: string[] }): Promise<number | null> {
     const factory = new DrivableFactory();
     const driver = new FsmDriver({
         specPath,
@@ -155,6 +155,7 @@ async function firstSubmitDelayMs(specPath: string, waitMs: number): Promise<num
         setTimeout(() => pty.feed(SCROLLED_COMPOSER_FRAME), 0);
         const deadline = Date.now() + waitMs;
         while (Date.now() < deadline) {
+            if (seen) seen.writes = pty.writes.slice(before);
             if (pty.writes.slice(before).some(w => w === '\r')) return Date.now() - bodyAt;
             await sleep(25);
         }
@@ -163,6 +164,15 @@ async function firstSubmitDelayMs(specPath: string, waitMs: number): Promise<num
         driver.shutdown();
     }
 }
+
+/**
+ * The echo gate only runs for a body that is TYPED into the composer. Since
+ * provider 1.2.20 the shipping spec pastes on POSIX (`posix_bracketed_paste_text`),
+ * which skips the gate, so the two echo cases below pin the typed path — the one
+ * win32 still takes — by clearing that flag. `echo_confirm: "tail"` stays in the
+ * spec for exactly that path.
+ */
+const withoutPosixPaste = (spec: any): void => { delete spec.send_message.posix_bracketed_paste_text; };
 
 describe('antigravity-cli spec — long sends confirm on the composer tail', () => {
     it('the shipping spec declares echo_confirm "tail"', () => {
@@ -173,15 +183,25 @@ describe('antigravity-cli spec — long sends confirm on the composer tail', () 
     it('a body agy scrolls inside its composer submits without the 20 s blind wait', async () => {
         setPlatform('darwin');
         expect(BODY.length).toBeGreaterThanOrEqual(512); // verified-submit path, as live
-        const delay = await firstSubmitDelayMs(writeSpec(), 4000);
+        const delay = await firstSubmitDelayMs(writeSpec(withoutPosixPaste), 4000);
         expect(delay).not.toBeNull();
         expect(delay!).toBeLessThan(4000);
+    }, 15_000);
+
+    // provider 1.2.20: on POSIX the shipping spec no longer types the body at all.
+    it('POSIX: the shipping spec delivers the body as ONE bracketed-paste region and submits', async () => {
+        setPlatform('darwin');
+        const seen = { writes: [] as string[] };
+        const delay = await firstSubmitDelayMs(writeSpec(), 4000, seen);
+        expect(delay).not.toBeNull();
+        expect(seen.writes).toContain(`\x1b[200~${BODY}\x1b[201~`);
+        expect(seen.writes).not.toContain(BODY);
     }, 15_000);
 
     it('control: with the default head+tail check the same screen never confirms', async () => {
         setPlatform('darwin');
         const delay = await firstSubmitDelayMs(
-            writeSpec(spec => { delete spec.send_message.echo_confirm; }),
+            writeSpec(spec => { withoutPosixPaste(spec); delete spec.send_message.echo_confirm; }),
             3000,
         );
         expect(delay).toBeNull();
