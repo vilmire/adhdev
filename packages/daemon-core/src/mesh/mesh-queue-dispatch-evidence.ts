@@ -64,9 +64,17 @@ export function openOrResumeQueueAttempt(ledger: Pick<TurnLedger, 'store' | 'obs
     const coordinatorDaemonId = args.coordinatorDaemonId;
     const coordinatorSessionId = typeof args.task.sourceCoordinatorSessionId === 'string' ? args.task.sourceCoordinatorSessionId.trim() : '';
     const ref = { attemptId, generation: 0 };
+    // No open attempt exists here, so an already-recorded `dispatch:<attemptId>` can
+    // only be an earlier open the reducer REJECTED (e.g. the session still held the
+    // previous task's attempt). Reusing that id would dedupe this retry away and
+    // leave the claim holding a ref to an attempt that was never opened.
+    const baseEventId = `dispatch:${attemptId}`;
+    const at = args.now ?? Date.now();
+    let eventId = baseEventId;
+    for (let retry = 1; ledger.store.hasEvent(eventId); retry++) eventId = `${baseEventId}:retry${retry}`;
     const result = ledger.observe({
-        eventId: `dispatch:${attemptId}`,
-        at: args.now ?? Date.now(),
+        eventId,
+        at,
         source: 'dispatch',
         sessionId: args.sessionId,
         attemptRef: ref,
@@ -95,5 +103,8 @@ export function openOrResumeQueueAttempt(ledger: Pick<TurnLedger, 'store' | 'obs
         } : {}),
     });
     if (result.verdict === 'rejected') throw new Error(`dispatch_accepted rejected (${result.rejection ?? 'unknown'})`);
+    // Only an applied open creates the row. Any other verdict means there is no
+    // attempt behind `ref`, and a dispatch without one can never be closed.
+    if (result.verdict !== 'applied') throw new Error(`dispatch_accepted not applied (${result.verdict})`);
     return { ref };
 }

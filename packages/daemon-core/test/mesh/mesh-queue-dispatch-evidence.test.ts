@@ -69,6 +69,42 @@ describe('openOrResumeQueueAttempt', () => {
     });
 });
 
+describe('openOrResumeQueueAttempt — retry after a rejected open', () => {
+    const OTHER = { id: 't0', dispatchNonce: 1, sourceCoordinatorSessionId: 'coord-s' };
+    const openTask = (ledger: ReturnType<typeof ledgerOn>, task: typeof TASK) => openOrResumeQueueAttempt(ledger, {
+        meshId: MESH, task, nodeId: 'n1', sessionId: 's1', providerType: 'claude-cli',
+        consumeProfile: 'default', maxTaskRetries: 1, coordinatorDaemonId: 'daemon_mach_c', now: T0,
+    });
+
+    // Live 2026-10-11: the first claim of a task was rejected (the session still
+    // held the previous task's open attempt). The claim retried 4 s later with the
+    // SAME `dispatch:<attemptId>` event id, the ledger answered `duplicate`, and the
+    // task was dispatched with a ref to an attempt that was never opened — every
+    // worker report then failed `unknown_attempt` and the queue row stayed assigned.
+    it('never returns a ref for an attempt the ledger did not open', () => {
+        const db = memDb();
+        const ledger = ledgerOn(db, { selfDaemonId: 'daemon_mach_c', host: recordingHost() });
+        const held = openTask(ledger, OTHER) as { ref: { attemptId: string; generation: number } };
+        expect(() => openTask(ledger, TASK)).toThrow(/dispatch_accepted rejected/);
+        expect(ledger.getAttempt(queueAttemptId(MESH, 't1', 0))).toBeFalsy();
+
+        // The session frees up; the claim path retries the same task.
+        ledger.observe(evd('session_error', { reason: 'spawn_failed' }, { source: 'dispatch', attemptRef: held.ref, observedBy: 'daemon_mach_c' }));
+        const retried = openTask(ledger, TASK);
+        expect(retried).toEqual({ ref: { attemptId: queueAttemptId(MESH, 't1', 0), generation: 0 } });
+        expect(ledger.getAttempt(queueAttemptId(MESH, 't1', 0))).toMatchObject({ state: 'accepted', taskId: 't1', sessionId: 's1' });
+    });
+
+    it('a retry that is rejected again still throws (task stays pending, no phantom ref)', () => {
+        const db = memDb();
+        const ledger = ledgerOn(db, { selfDaemonId: 'daemon_mach_c', host: recordingHost() });
+        openTask(ledger, OTHER);
+        expect(() => openTask(ledger, TASK)).toThrow(/dispatch_accepted rejected/);
+        expect(() => openTask(ledger, TASK)).toThrow(/dispatch_accepted/);
+        expect(ledger.getAttempt(queueAttemptId(MESH, 't1', 0))).toBeFalsy();
+    });
+});
+
 describe('claim/dispatch path source shape (C-W4 retirements)', () => {
     // The dispatch delivery lifecycle (deliverTaskToSession / handleDispatchFailure —
     // where the transport-outcome evidence is reported) moved out of
