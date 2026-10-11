@@ -34,7 +34,7 @@
 
 /** One normalized ownership entry: a repo-relative path, optionally a `**` subtree prefix. */
 export interface OwnedPathEntry {
-    /** Repo-relative path with forward slashes, no leading `./`, no trailing slash. */
+    /** Repo-relative path with forward slashes, no leading `./`, no trailing slash; empty for the whole-repo subtree. */
     readonly path: string
     /** True when this entry was declared as `<path>/**` (owns the whole subtree). */
     readonly subtree: boolean
@@ -159,16 +159,14 @@ export function normalizeOwnedPaths(input: unknown): NormalizeOwnedPathsResult {
 /** True when `path` is exactly `base`, or (when `base` is a subtree entry) nested under it. */
 function entryContains(base: OwnedPathEntry, path: string): boolean {
     if (path === base.path) return true
-    if (base.subtree && (path === base.path || path.startsWith(`${base.path}/`))) return true
+    // An empty subtree prefix is the repo root, so it contains every normalized path.
+    if (base.subtree && (base.path === '' || path.startsWith(`${base.path}/`))) return true
     return false
 }
 
 /** True when two normalized entries' claimed sets intersect (exact match, or one contains the other's directory). */
 function entriesOverlap(a: OwnedPathEntry, b: OwnedPathEntry): boolean {
-    if (a.path === b.path) return true
-    if (a.subtree && (b.path === a.path || b.path.startsWith(`${a.path}/`))) return true
-    if (b.subtree && (a.path === b.path || a.path.startsWith(`${b.path}/`))) return true
-    return false
+    return entryContains(a, b.path) || entryContains(b, a.path)
 }
 
 /** True when two declarations claim any overlapping path. Pure set comparison — no policy (refuse vs warn) here. */

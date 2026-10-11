@@ -36,6 +36,11 @@ describe('normalizeOwnedPaths', () => {
         expect(declaration.paths).toEqual([{ path: 'src/mesh', subtree: true }])
     })
 
+    it('normalizes and deduplicates whole-repository subtree spellings', () => {
+        const result = normalizeOwnedPaths(['**', './**', '  .\\**/  ', './/**//'])
+        expect(result).toEqual({ declaration: { paths: [{ path: '', subtree: true }] }, rejected: [] })
+    })
+
     it('treats a bare directory (no /**) as an exact single-path entry, not a subtree', () => {
         const { declaration } = normalizeOwnedPaths(['src/mesh'])
         expect(declaration.paths).toEqual([{ path: 'src/mesh', subtree: false }])
@@ -102,6 +107,16 @@ describe('normalizeOwnedPaths', () => {
 })
 
 describe('pathsOverlap', () => {
+    it.each(['**', './**'])('%s overlaps files and subtrees in both directions', root => {
+        const wholeRepo = decl([root])
+        for (const path of ['README.md', './src/a.ts', 'src/**', 'src', '**', './**']) {
+            expect(pathsOverlap(wholeRepo, decl([path]))).toBe(true)
+            expect(pathsOverlap(decl([path]), wholeRepo)).toBe(true)
+        }
+        expect(pathsOverlap(wholeRepo, decl([]))).toBe(false)
+        expect(pathsOverlap(decl([]), wholeRepo)).toBe(false)
+    })
+
     it('is false when either side is empty (opt-in only)', () => {
         expect(pathsOverlap(decl([]), decl(['src/foo.ts']))).toBe(false)
         expect(pathsOverlap(decl(['src/foo.ts']), decl([]))).toBe(false)
@@ -141,6 +156,24 @@ describe('pathsOverlap', () => {
 })
 
 describe('findOwnershipConflicts', () => {
+    it.each(['**', './**'])('%s conflicts with ordinary ownership in either role', root => {
+        const ordinary = decl(['README.md', './src/a.ts', 'docs/**'])
+        const expectedPaths = ['README.md', 'src/a.ts', 'docs']
+        expect(findOwnershipConflicts(decl([root]), [
+            { taskId: 'ordinary', paths: ordinary },
+            { taskId: 'empty', paths: decl([]) },
+        ])).toEqual([{ taskId: 'ordinary', overlappingPaths: expectedPaths }])
+        expect(findOwnershipConflicts(ordinary, [
+            { taskId: 'root', paths: decl([root]) },
+        ])).toEqual([{ taskId: 'root', overlappingPaths: expectedPaths }])
+        expect(findOwnershipConflicts(decl([root]), [
+            { taskId: 'root', paths: decl(['**']) },
+        ])).toEqual([{ taskId: 'root', overlappingPaths: [''] }])
+        expect(findOwnershipConflicts(decl([]), [
+            { taskId: 'root', paths: decl([root]) },
+        ])).toEqual([])
+    })
+
     it('returns no conflicts when the candidate declaration is empty', () => {
         expect(findOwnershipConflicts(decl([]), [{ taskId: 't1', paths: decl(['src/foo.ts']) }])).toEqual([])
     })
@@ -174,6 +207,29 @@ describe('findOwnershipConflicts', () => {
 })
 
 describe('touchedFilesOutsideOwnership', () => {
+    it.each(['**', './**'])('%s contains normalized repo-relative files', root => {
+        expect(touchedFilesOutsideOwnership(
+            ['README.md', 'src/a.ts', './src/b.ts', 'src\\nested\\c.ts', ' src//d.ts/ '],
+            decl([root]),
+        )).toEqual({ undeclaredTouched: [], unusedDeclarations: [] })
+        expect(touchedFilesOutsideOwnership([], decl([root]))).toEqual({
+            undeclaredTouched: [], unusedDeclarations: [''],
+        })
+    })
+
+    it.each(['**', './**'])('%s still rejects invalid touched paths', root => {
+        const invalid = ['/outside.ts', 'C:\\outside.ts', '../outside.ts', 'src/../a.ts', '', './', 'src/*.ts']
+        expect(touchedFilesOutsideOwnership(invalid, decl([root]))).toEqual({
+            undeclaredTouched: invalid, unusedDeclarations: [''],
+        })
+    })
+
+    it('keeps non-root subtree containment within separator boundaries', () => {
+        expect(touchedFilesOutsideOwnership(['src', 'src/a.ts', 'src-other/a.ts'], decl(['src/**']))).toEqual({
+            undeclaredTouched: ['src-other/a.ts'], unusedDeclarations: [],
+        })
+    })
+
     it('reports no undeclared touches when every touched file matches the declaration', () => {
         const result = touchedFilesOutsideOwnership(['src/foo.ts', 'src/mesh/bar.ts'], decl(['src/foo.ts', 'src/mesh/**']))
         expect(result.undeclaredTouched).toEqual([])
