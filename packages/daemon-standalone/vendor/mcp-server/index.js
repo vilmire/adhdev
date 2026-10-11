@@ -27966,16 +27966,6 @@ ${renderWorkerProtocolFooter2(input)}`;
         GIT_LOCAL_TIMEOUT_MS = 15e3;
       }
     });
-    var git_executor_exports = {};
-    __export2(git_executor_exports, {
-      GIT_STATUS_TIMEOUT_MS: () => GIT_STATUS_TIMEOUT_MS,
-      GitCommandError: () => GitCommandError,
-      execGitStdout: () => execGitStdout,
-      isPathInside: () => isPathInside,
-      normalizeGitOutput: () => normalizeGitOutput,
-      resolveGitRepository: () => resolveGitRepository,
-      runGit: () => runGit
-    });
     async function resolveGitRepository(workspace, options = {}) {
       const normalizedWorkspace = await validateWorkspace(workspace);
       const result = await execGitRaw(normalizedWorkspace, ["rev-parse", "--show-toplevel"], options, {
@@ -30509,8 +30499,8 @@ ${renderWorkerProtocolFooter2(input)}`;
         "use strict";
       }
     });
-    function quotaReadNowClause() {
-      return `or run \`${IDENTITY2.binaryName} quota refresh\` to re-read now`;
+    function quotaReadNowClause(provider) {
+      return `or run \`${IDENTITY2.binaryName} quota refresh${provider ? ` ${provider}` : ""}\` to re-read now`;
     }
     var FILE_AXIS_REREAD_NOTE;
     var init_refresh_command_hint = __esm2({
@@ -33104,7 +33094,7 @@ child.on('exit', () => process.exit(0));
         return quotaFailure(
           "kimi",
           "error",
-          "Kimi access token expired (they last ~15 min) \u2014 the kimi CLI refreshes it on next use; quota will report again after that.",
+          `Kimi access token expired normally (~15 min lifespan) \u2014 it auto-recovers on your next kimi CLI use, so no action is needed. Quota will report again after that (within ~60 min on its own, ${quotaReadNowClause("kimi")}).`,
           { source: "oauth", failureKind: "expired-token" }
         );
       }
@@ -33181,6 +33171,7 @@ child.on('exit', () => process.exit(0));
         init_types();
         init_deps();
         init_coerce();
+        init_refresh_command_hint();
         DEFAULT_BASE_URL4 = "https://api.kimi.com/coding/v1";
         REQUEST_TIMEOUT_MS5 = 1e4;
         EXPIRY_SKEW_SECONDS = 5;
@@ -127044,6 +127035,7 @@ ${marker}`,
     };
     init_dist();
     init_worktree_bootstrap_config();
+    init_git_executor();
     init_logger();
     init_mesh_events();
     init_mesh_clone_grace();
@@ -127165,7 +127157,8 @@ ${marker}`,
         policy: clonedPolicy
       };
       if (meshRecord2.inline) {
-        const { randomUUID: randomUUID29 } = await import("crypto");
+        const crypto16 = await import("crypto");
+        const randomUUID29 = crypto16.randomUUID || crypto16.default && crypto16.default.randomUUID;
         const node2 = {
           id: `node_${randomUUID29().replace(/-/g, "")}`,
           workspace: fields.workspace,
@@ -127266,18 +127259,27 @@ ${marker}`,
       } catch {
       }
     }
-    async function initClonedWorktreeSubmodules(worktreePath, sourceNode) {
+    async function initClonedWorktreeSubmodules(worktreePath, sourceNode, gitUserName, gitUserEmail) {
       let submodulesInitialized = false;
       try {
-        const { runGit: runGit4 } = await Promise.resolve().then(() => (init_git_executor(), git_executor_exports));
-        await runGit4(
+        await runGit(
           { workspace: worktreePath, repoRoot: worktreePath, isGitRepo: true },
           ["submodule", "update", "--init", "--recursive"],
           { timeoutMs: 12e4 }
         );
         submodulesInitialized = true;
+        if (gitUserName && gitUserEmail) {
+          console.log("gitUserName is", gitUserName);
+          console.log("gitUserEmail is", gitUserEmail);
+          const escapedName = gitUserName.replace(/'/g, "'\\''");
+          const escapedEmail = gitUserEmail.replace(/'/g, "'\\''");
+          await runGit(
+            { workspace: worktreePath, repoRoot: worktreePath, isGitRepo: true },
+            ["submodule", "foreach", "--recursive", `git config user.name '${escapedName}' && git config user.email '${escapedEmail}' || true`]
+          ).catch((err) => console.warn("[mesh] Failed to set submodule identity:", err?.message));
+        }
         const sourceWorkspace = sourceNode.repoRoot || sourceNode.workspace;
-        if (sourceWorkspace) await syncClonedWorktreeSubmodules(worktreePath, sourceWorkspace, runGit4);
+        if (sourceWorkspace) await syncClonedWorktreeSubmodules(worktreePath, sourceWorkspace, runGit);
       } catch (subErr) {
         console.warn("[mesh] Submodule init failed for worktree:", subErr.message);
       }
@@ -127335,6 +127337,23 @@ ${marker}`,
               })() || void 0
             };
             const worktreeBaseDir = typeof mesh2.policy?.worktreeBaseDir === "string" && mesh2.policy.worktreeBaseDir.trim() ? mesh2.policy.worktreeBaseDir.trim() : void 0;
+            const sourceRepo = sourceNode2.repoRoot || sourceNode2.workspace;
+            let gitUserName2 = "";
+            let gitUserEmail2 = "";
+            try {
+              gitUserName2 = (await execGitStdout(sourceRepo, ["config", "user.name"])).trim();
+              gitUserEmail2 = (await execGitStdout(sourceRepo, ["config", "user.email"])).trim();
+            } catch {
+            }
+            if (!gitUserName2 || !gitUserEmail2) {
+              return {
+                ready: false,
+                done: {
+                  success: false,
+                  error: "Cannot clone: source repository lacks an explicit user.name or user.email. To prevent falling back to the OS real name (gecos) in submodules, you must set these explicitly in the source repository before cloning."
+                }
+              };
+            }
             const { createWorktree: createWorktree2 } = await Promise.resolve().then(() => (init_git_worktree(), git_worktree_exports));
             const result2 = await createWorktree2({
               repoRoot: sourceNode2.repoRoot || sourceNode2.workspace,
@@ -127373,7 +127392,7 @@ ${marker}`,
               await rollbackWorktree("registration returned no node");
               return { ready: false, done: { success: false, error: "Failed to register worktree node" } };
             }
-            return { ready: true, meshRecord: meshRecord3, mesh: mesh2, sourceNode: sourceNode2, result: result2, node: node2, identity: identity2 };
+            return { ready: true, meshRecord: meshRecord3, mesh: mesh2, sourceNode: sourceNode2, result: result2, node: node2, identity: identity2, gitUserName: gitUserName2, gitUserEmail: gitUserEmail2 };
           });
           if (!prepared.ready) {
             if ("forward" in prepared && prepared.forward) {
@@ -127381,7 +127400,7 @@ ${marker}`,
             }
             return prepared.done;
           }
-          const { meshRecord: meshRecord2, mesh, sourceNode, result, node, identity } = prepared;
+          const { meshRecord: meshRecord2, mesh, sourceNode, result, node, identity, gitUserName, gitUserEmail } = prepared;
           if (typeof node?.id === "string" && node.id) noteRecentlyClonedNode(node.id);
           const target = { meshId, mesh, node, worktreePath: result.worktreePath, daemonId: identity.daemonId, machineId: identity.machineId };
           const persistWorktreeSetupState = (state) => persistNodeBootstrapState(ctx, meshId, meshRecord2, node, state);
@@ -127398,7 +127417,13 @@ ${marker}`,
           await persistWorktreeSetupState(runningBootstrapState);
           let queuedBehind;
           const finishWorktreeSetup = async () => {
-            const submodulesInitialized2 = initSubmodules ? await initClonedWorktreeSubmodules(result.worktreePath, sourceNode) : false;
+            if (gitUserName && gitUserEmail) {
+              await runGit({ workspace: result.worktreePath, repoRoot: result.worktreePath, isGitRepo: true }, ["config", "user.name", gitUserName]).catch(() => {
+              });
+              await runGit({ workspace: result.worktreePath, repoRoot: result.worktreePath, isGitRepo: true }, ["config", "user.email", gitUserEmail]).catch(() => {
+              });
+            }
+            const submodulesInitialized2 = initSubmodules ? await initClonedWorktreeSubmodules(result.worktreePath, sourceNode, gitUserName, gitUserEmail) : false;
             const started = startMeshWorktreeBootstrap(mesh, result.worktreePath);
             queuedBehind = started.queuePosition;
             const bootstrapState2 = await started.result;
