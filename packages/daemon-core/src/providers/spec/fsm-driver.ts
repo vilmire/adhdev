@@ -643,6 +643,25 @@ export class FsmDriver implements ISpecDriver {
     }
 
     private reevaluate(forceEmit = false): void {
+        // DEAD-PTY-APPROVAL-WEDGE (live 2026-10-11, antigravity-cli session
+        // a82e5031): with no active PTY the screen is frozen, so a wake-timer /
+        // on-demand (refreshNow) evaluation can only fire TIME conditions
+        // (elapsed_ms / stable_ms) against a stale frame. The observed wedge:
+        // the PTY died mid-turn, and the busy→approval-timeout edge still fired
+        // on the frozen screen, synthesizing an approval state on a dead session
+        // — the adapter projected waiting_approval from a disposed instance and
+        // the mesh task sat 'assigned' for 15 minutes with no live session
+        // behind it. No PTY means no new information can ever arrive, so the
+        // machine does not run at all: no transition commit, no re-armed wake
+        // (returning here also breaks the dead-driver wake loop). A normal exit
+        // clears these timers via teardown; this gate covers every path where
+        // the transport is gone but the driver was never torn down — including
+        // the mesh_approve recovery poke (refreshModalNow → refreshNow) landing
+        // after disposal.
+        if (!this.adapter.hasActivePty()) {
+            LOG.debug('FsmDriver', `[${this.specTag()}] reevaluate skipped — no active PTY (state=${this.currentStateId})`);
+            return;
+        }
         this.evalCount += 1;
         const now = Date.now();
         const screen = this.adapter.snapshot();

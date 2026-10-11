@@ -138683,6 +138683,14 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       getScreenSize() {
         return { cols: this.cols, rows: this.rows };
       }
+      /** True while a runtime transport is attached — false before start() and
+       *  after exit/kill/detach. The FSM driver gates state evaluation on this:
+       *  with no PTY the screen is frozen forever, so any transition a timer or
+       *  an on-demand refresh could fire is time-synthesized from a stale frame
+       *  (the DEAD-PTY-APPROVAL-WEDGE defect), never a real screen change. */
+      hasActivePty() {
+        return this.pty !== null;
+      }
       send_keys(text, primeContext) {
         this.recordEvent("input", capPreview(escapeControl(text)), text.length);
         if (!primeContext) {
@@ -141201,6 +141209,10 @@ trust_level = "trusted"
         }
       }
       reevaluate(forceEmit = false) {
+        if (!this.adapter.hasActivePty()) {
+          LOG.debug("FsmDriver", `[${this.specTag()}] reevaluate skipped \u2014 no active PTY (state=${this.currentStateId})`);
+          return;
+        }
         this.evalCount += 1;
         const now = Date.now();
         const screen = this.adapter.snapshot();
