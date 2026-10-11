@@ -8,9 +8,9 @@
  */
 import { IDENTITY } from '../track-identity.js';
 
-/** "re-read now" clause: `or run \`adhdev quota refresh\` to re-read now`. */
-export function quotaReadNowClause(): string {
-    return `or run \`${IDENTITY.binaryName} quota refresh\` to re-read now`;
+/** "re-read now" clause: `or run \`adhdev quota refresh [provider]\` to re-read now`. */
+export function quotaReadNowClause(provider?: string): string {
+    return `or run \`${IDENTITY.binaryName} quota refresh${provider ? ` ${provider}` : ''}\` to re-read now`;
 }
 
 /**
