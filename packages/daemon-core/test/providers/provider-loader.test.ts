@@ -1270,3 +1270,45 @@ describe('CLI provider.schema.json — modelDiscovery coverage', () => {
     },
   );
 });
+
+describe('Manifest scanner', () => {
+  let tmpRoot = '';
+
+  beforeEach(() => {
+    tmpRoot = mkdtempSync(join(tmpdir(), 'adhdev-loader-scan-'));
+  });
+
+  afterEach(() => {
+    if (existsSync(tmpRoot)) {
+      rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('skips the legacy acp directory to prevent errors', () => {
+    // Setup a mock provider root with an acp directory containing a broken manifest
+    const acpDir = join(tmpRoot, 'acp');
+    mkdirSync(join(acpDir, 'some-agent'), { recursive: true });
+    writeFileSync(join(acpDir, 'some-agent', 'provider.json'), '{ "invalid JSON }', 'utf-8');
+
+    // Also set up a valid CLI provider to ensure scanning still works
+    const cliDir = join(tmpRoot, 'cli');
+    mkdirSync(join(cliDir, 'valid-agent'), { recursive: true });
+    writeFileSync(join(cliDir, 'valid-agent', 'provider.json'), JSON.stringify({
+      type: 'valid-agent',
+      category: 'cli',
+      name: 'Valid Agent',
+      version: '1.0.0',
+      description: 'Valid',
+      executable: 'echo'
+    }), 'utf-8');
+
+    const loader = new TestProviderLoader(tmpRoot, {});
+    const logs: string[] = [];
+    loader['log'] = (m: string) => logs.push(m);
+    
+    loader['loadDir'](tmpRoot);
+
+    
+    expect(logs.some(m => m.includes('Failed to load'))).toBe(false);
+  });
+});

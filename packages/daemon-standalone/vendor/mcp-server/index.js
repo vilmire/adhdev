@@ -103216,6 +103216,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
             if (!entry.isDirectory()) continue;
             if (entry.name.startsWith("_") || entry.name.startsWith(".")) continue;
             if (d === dir && entry.name === "examples") continue;
+            if (d === dir && entry.name === "acp") continue;
             if (excludeDirs && d === dir && excludeDirs.includes(entry.name)) continue;
             scan(path36.join(d, entry.name));
           }

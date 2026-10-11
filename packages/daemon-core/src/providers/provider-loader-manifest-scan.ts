@@ -254,6 +254,11 @@ export function loadProviderDir(ctx: ManifestScanContext, dir: string, excludeDi
         // writing a new provider; daemon-core tests reference the
         // manifest by path. Keep it off the dashboard's provider list.
         if (d === dir && entry.name === 'examples') continue;
+        
+        // `acp` is a deprecated provider category; skip it to prevent
+        // manifest validation errors from legacy user data.
+        if (d === dir && entry.name === 'acp') continue;
+        
         if (excludeDirs && d === dir && excludeDirs.includes(entry.name)) continue;
         scan(path.join(d, entry.name));
       }
