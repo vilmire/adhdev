@@ -278,10 +278,23 @@ describe('mesh-local-records (C-W9a: meshRecord local leg + readers)', () => {
         });
 
         it('does not count intentional_cleanup cancellations as taskFailed (regression)', () => {
-            // "intentional_cleanup 이 task_failed 로 집계된다" bug fix
+            // An intentional cleanup was being tallied as a failed task.
             seedMeshAttempt({ meshId: testMeshId, taskId: 't-cxl-clean', sessionId: 's-clean', stage: 'cancelled', terminalReason: 'intentional_cleanup' });
             const summary = getLocalRecordSummary(testMeshId);
             expect(summary.taskFailed).toBe(0);
+        });
+
+        it('still counts a genuine failure as taskFailed alongside a cancellation (regression)', () => {
+            // Guards the OTHER direction of the same fix: splitting 'cancelled' out of the
+            // task_failed bucket must not silence real failures (under-counting is worse
+            // than the over-count it replaced). Both arms are asserted together so a change
+            // that drops the whole turn-attempt path cannot pass by returning 0 for each.
+            seedMeshAttempt({ meshId: testMeshId, taskId: 't-cxl-both', sessionId: 's-cxl', stage: 'cancelled', terminalReason: 'intentional_cleanup' });
+            seedMeshAttempt({ meshId: testMeshId, taskId: 't-fail-both', sessionId: 's-fail', stage: 'failed', terminalReason: 'session_error' });
+
+            const summary = getLocalRecordSummary(testMeshId);
+            expect(summary.taskFailed).toBe(1);
+            expect(summary.recentFailures).toBe(1);
         });
     });
 

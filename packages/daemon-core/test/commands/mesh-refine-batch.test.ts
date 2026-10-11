@@ -525,8 +525,11 @@ describe('batch_refine_mesh_nodes', () => {
         nodeIds: ['node-a', 'node-b'], inlineMesh: mesh,
       }, ['node-a', 'node-b'])
 
-      expect(result).toMatchObject({ success: false, batch: true, dryRun: false, allConverged: false })
+      // `success` reports that the batch RAN (it is false only for errors such as an
+      // unknown mesh); convergence is reported separately via allConverged/summary.
+      expect(result).toMatchObject({ success: true, batch: true, dryRun: false, allConverged: false })
       expect(result.summary.merged).toBe(0)
+      expect(result.summary.skipped).toBe(0) // nothing converged, so not even a partial success
       expect(result.summary.blocked).toBe(2) // Both failed validation -> blocked_review
       expect(terminal.kind).toBe('task_failed') // Regression test: full failure -> task_failed
     } finally {

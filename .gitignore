@@ -59,6 +59,17 @@ coverage/
 __screenshots__/
 .vitest-attachments/
 
+# SQLite artifacts from tests that resolve a store path relative to cwd
+# (a stray 0-byte packages/daemon-core/test/mesh-runtime.db was tracked once)
+mesh-runtime.db
+mesh-runtime.db-journal
+mesh-runtime.db-wal
+mesh-runtime.db-shm
+seqscribe.db
+seqscribe.db-journal
+seqscribe.db-wal
+seqscribe.db-shm
+
 # Debug / temp files
 *.patch
 codex_*
