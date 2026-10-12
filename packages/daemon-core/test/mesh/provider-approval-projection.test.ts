@@ -43,6 +43,17 @@ describe('typed provider approval projection', () => {
         expect(matchesProviderApprovalTarget(next, { ...target, modalKey: next.modalKey!, generation: 2 })).toBe(true);
     });
 
+    it('attaching a task to an already visible startup gate re-emits setup for the exact attempt', () => {
+        const lifecycle = new ProviderApprovalLifecycle(); lifecycle.observe({ ...state, id: 'trust' }, { ...modal, kind: 'confirm' }, 1000);
+        const adapter = Object.assign(Object.create(SpecCliAdapter.prototype), { approvalLifecycle: lifecycle, runtimeSettings: {}, driver: { updateMeta: vi.fn() }, notifyChange: vi.fn() });
+        const settings = { meshActiveTaskId: 't', meshActiveAttemptId: 'a', meshActiveAttemptGeneration: 2 };
+        adapter.updateRuntimeSettings(settings);
+        expect(adapter.notifyChange).toHaveBeenCalledWith('fsm_state');
+        expect(adapter.driver.updateMeta.mock.calls[0][0].providerApproval).toMatchObject({ type: 'provider_setup', attemptId: 'a', generation: 2, createdAt: 1000, actionable: false });
+        adapter.updateRuntimeSettings(settings);
+        expect(adapter.notifyChange).toHaveBeenCalledTimes(1);
+    });
+
     it('pre-claim startup trust is setup, never an actionable tool command', () => {
         const lifecycle = new ProviderApprovalLifecycle();
         lifecycle.observe({ ...state, id: 'trust' }, { ...modal, kind: 'confirm' }, 1000);
@@ -56,6 +67,10 @@ describe('typed provider approval projection', () => {
         expect(surfaceStageOfAttempt(setup.attempt!)).toBe('waiting_approval');
         expect(setup.holds.map(h => h.reason)).toEqual(['suspension_before_consumed']);
         expect(setup.effects.some(e => e.kind === 'redeliver' || e.kind === 'reclaim')).toBe(false);
+        const beforeDelivery = reduce({ attempt: makeAttempt('accepted'), holds: [makeHold('await_delivery')], evidence: ev('suspension', { modal: 'approval', modalKey: 'modal:setup', providerSetup: true }), policy: POLICY, nowMs: NOW });
+        const delivered = reduce({ attempt: beforeDelivery.attempt, holds: beforeDelivery.holds, evidence: ev('delivered', { messageId: 'msg1', outcome: 'delivered', via: 'local' }), policy: POLICY, nowMs: NOW });
+        expect(delivered.attempt).toMatchObject({ state: 'delivered', consumedAt: null });
+        expect(delivered.holds.map(h => h.reason)).toEqual(['suspension_before_consumed']);
         const closed = reduce({ attempt: setup.attempt, holds: setup.holds, evidence: ev('suspension_resolved', { resolution: 'dismissed', via: 'modal_disappeared', modalKey: 'modal:setup' }, { at: NOW + 1000 }), policy: POLICY, nowMs: NOW + 1000 });
         expect(closed.attempt).toMatchObject({ state: 'delivered', consumedAt: null });
         expect(surfaceStageOfAttempt(closed.attempt!)).toBe('delivered');

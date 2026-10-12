@@ -808,8 +808,13 @@ export class SpecCliAdapter implements CliAdapter {
     }
     clearHistory(): void { /* no transcript buffer yet */ }
     updateRuntimeSettings(settings?: Record<string, unknown>): void {
+        const previousAttempt = this.runtimeSettings?.meshActiveAttemptId;
+        const previousGeneration = this.runtimeSettings?.meshActiveAttemptGeneration;
         this.runtimeSettings = { ...(settings ?? {}) };
-        try { this.driver?.updateMeta({ providerApproval: bindProviderApprovalAssignment(this.approvalLifecycle?.read(), this.runtimeSettings) }); } catch { /* Optional host metadata transport. */ }
+        const approval = bindProviderApprovalAssignment(this.approvalLifecycle?.read(), this.runtimeSettings);
+        try { this.driver?.updateMeta({ providerApproval: approval }); } catch { /* Optional host metadata transport. */ }
+        if (approval?.type === 'provider_setup' && approval.lifecycle === 'pending' && approval.evidence === 'live'
+            && (previousAttempt !== this.runtimeSettings.meshActiveAttemptId || previousGeneration !== this.runtimeSettings.meshActiveAttemptGeneration)) this.notifyChange('fsm_state');
     }
     setServerConn(_conn?: unknown): void { /* server conn unused by SpecDriver */ }
     /** Map an invokeScript(name, args) call onto a control_bar entry — see invokeSpecControl. */

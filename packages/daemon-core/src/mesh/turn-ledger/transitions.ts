@@ -183,7 +183,11 @@ export const TRANSITIONS: readonly TransitionRule[] = [
     ] },
 
     // ── dispatch / delivery ─────────────────────────────────────────────
-    { id: 'R2', lane: 'current', from: [A, D], on: ['delivered'], to: D, verdict: 'applied', effects: [
+    { id: 'R2s', lane: 'current', from: [A, D], on: ['delivered'], guard: 'held_provider_setup', to: D, verdict: 'applied', effects: [
+        { e: 'act', act: 'mark_delivered' },
+        { e: 'release', reasons: AWAITS },
+    ] },
+    { id: 'R2', lane: 'current', from: [A, D], on: ['delivered'], guard: 'otherwise', to: D, verdict: 'applied', effects: [
         { e: 'act', act: 'mark_delivered' },
         { e: 'release', reasons: ['await_delivery'] },
         { e: 'hold', reason: 'await_consume', until: 'await_consume', onExpire: 'redeliver', meshOnly: true },

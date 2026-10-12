@@ -42274,7 +42274,11 @@ ${rendered.join("\n\n")}`,
             { e: "record", note: "stale_generation" }
           ] },
           // ── dispatch / delivery ─────────────────────────────────────────────
-          { id: "R2", lane: "current", from: [A, D], on: ["delivered"], to: D, verdict: "applied", effects: [
+          { id: "R2s", lane: "current", from: [A, D], on: ["delivered"], guard: "held_provider_setup", to: D, verdict: "applied", effects: [
+            { e: "act", act: "mark_delivered" },
+            { e: "release", reasons: AWAITS }
+          ] },
+          { id: "R2", lane: "current", from: [A, D], on: ["delivered"], guard: "otherwise", to: D, verdict: "applied", effects: [
             { e: "act", act: "mark_delivered" },
             { e: "release", reasons: ["await_delivery"] },
             { e: "hold", reason: "await_consume", until: "await_consume", onExpire: "redeliver", meshOnly: true },
@@ -144734,11 +144738,15 @@ ${text}` : text;
       clearHistory() {
       }
       updateRuntimeSettings(settings) {
+        const previousAttempt = this.runtimeSettings?.meshActiveAttemptId;
+        const previousGeneration = this.runtimeSettings?.meshActiveAttemptGeneration;
         this.runtimeSettings = { ...settings ?? {} };
+        const approval = bindProviderApprovalAssignment(this.approvalLifecycle?.read(), this.runtimeSettings);
         try {
-          this.driver?.updateMeta({ providerApproval: bindProviderApprovalAssignment(this.approvalLifecycle?.read(), this.runtimeSettings) });
+          this.driver?.updateMeta({ providerApproval: approval });
         } catch {
         }
+        if (approval?.type === "provider_setup" && approval.lifecycle === "pending" && approval.evidence === "live" && (previousAttempt !== this.runtimeSettings.meshActiveAttemptId || previousGeneration !== this.runtimeSettings.meshActiveAttemptGeneration)) this.notifyChange("fsm_state");
       }
       setServerConn(_conn) {
       }
@@ -146417,7 +146425,9 @@ ${buttons.join("\n")}`;
           const approvalFingerprint = JSON.stringify({
             message: typeof modal?.message === "string" ? modal.message.trim() : "",
             buttons: Array.isArray(modal?.buttons) ? modal.buttons.map((button) => String(button).trim()) : [],
-            seq: approvalEntrySeq
+            seq: approvalEntrySeq,
+            // A pre-claim setup modal must suspend a newly attached attempt too.
+            setupIdentity: adapterStatus?.providerApproval?.type === "provider_setup" ? [adapterStatus.providerApproval.modalKey, adapterStatus.providerApproval.attemptId, adapterStatus.providerApproval.generation] : void 0
           });
           if (approvalFingerprint !== host.lastApprovalEventFingerprint) {
             host.lastApprovalEventFingerprint = approvalFingerprint;
@@ -146439,7 +146449,7 @@ ${buttons.join("\n")}`;
                 observedBy: "cli_fsm",
                 source: "fsm_edge",
                 attemptRef: host.currentAttemptRef?.() ?? void 0,
-                at: now,
+                at: adapterStatus?.providerApproval?.createdAt ?? now,
                 modal: "approval",
                 // Reuse the fingerprint already computed above (message +
                 // buttons + approvalEntrySeq) — never recompute one.
