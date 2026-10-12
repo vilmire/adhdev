@@ -1,3 +1,5 @@
+import { readProviderDecision, providerApprovalSnapshot } from '@adhdev/mesh-shared';
+import { projectProviderApproval } from '../status/provider-approval.js';
 // Mesh node session views: hosted/active session ids from the inline cache, the
 // live session records attributed to a node, and the historical-session summary.
 // Split out of mesh-node-identity.ts (re-exported there).
@@ -162,6 +164,7 @@ export function readCachedInlineMeshActiveSessionDetails(node: any): Array<Recor
             ? { userHidden: readBooleanValue(fallbackSession.userHidden, fallbackSession.user_hidden) } : {}),
         ...(readBooleanValue(fallbackSession.userMuted, fallbackSession.user_muted) !== undefined
             ? { userMuted: readBooleanValue(fallbackSession.userMuted, fallbackSession.user_muted) } : {}),
+        providerApproval: fallbackSession.providerApproval === undefined ? undefined : providerApprovalSnapshot(fallbackSession.providerApproval),
         isCached: true,
     }];
 }
@@ -206,11 +209,21 @@ export function summarizeMeshSessionRecord(record: any): Record<string, unknown>
         surface: 'mesh_status',
     });
     if (turn.authority === 'turn_reducer') chatStatus = turn.status;
+    const stopped = /stopped|exited|terminated|failed/.test(`${state || ''} ${record?.lifecycle || ''}`);
+    // A live suppression (including auto-approve) outranks all stored metadata.
+    const liveApproval = record?.activeChat?.providerApproval !== undefined
+        ? record.activeChat.providerApproval : record?.providerApproval;
+    const rawApproval = liveApproval !== undefined ? liveApproval
+        : meta.providerApproval === undefined ? undefined : providerApprovalSnapshot(meta.providerApproval);
+    const providerApproval = stopped || record?.activeInteractivePrompt || record?.activeChat?.activeInteractivePrompt ? null
+        : projectProviderApproval(readProviderDecision(rawApproval, /approval/.test(chatStatus || state || ''),
+            !!record?.activeChat?.activeModal?.buttons?.length), sessionId, readStringValue(record?.providerType) || '');
     return {
         sessionId,
         providerType: readStringValue(record?.providerType),
         state,
         chatStatus,
+        providerApproval,
         ...(turn.authority === 'turn_reducer' ? { turn, attemptId: turn.attemptId, turnStage: turn.stage } : {}),
         lifecycle: readStringValue(record?.lifecycle),
         surfaceKind: getSessionHostSurfaceKind(record as any),

@@ -1,9 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { buildConversations } from '../../src/components/dashboard/buildConversations'
-import { dedupeChatIdes } from '../../src/hooks/useDashboardConversations'
-import { deriveApprovalsFromConversations } from '../../src/components/MeshGraph/PendingApprovalsInbox'
+import { deriveProviderApprovalInbox } from '../../src/components/MeshGraph/providerApprovalInbox'
 import type { DaemonData } from '../../src/types'
 
 function readSource(relativePath: string): string {
@@ -17,12 +15,12 @@ function session(o: Partial<DaemonData> & { id: string }): DaemonData {
 
 /**
  * Exercise the exact pipeline the Approvals page runs:
- *   ides → dedupeChatIdes → buildConversations → deriveApprovalsFromConversations
+ *   roster-authorized ides → deriveProviderApprovalInbox
  * This is what proves the page aggregates across machines from real daemon entries,
  * rather than only that the leaf component renders a hand-made list.
  */
 function approvalsFrom(ides: DaemonData[]) {
-    return deriveApprovalsFromConversations(buildConversations(dedupeChatIdes(ides), ides, {}))
+    return deriveProviderApprovalInbox(ides, { 'daemon-mac': 'connected', 'daemon-win': 'connected' })
 }
 
 describe('Approvals page pipeline', () => {
@@ -47,10 +45,10 @@ describe('Approvals page pipeline', () => {
         expect(items).toHaveLength(2)
         expect(new Set(items.map(i => i.nodeId))).toEqual(new Set(['daemon-mac', 'daemon-win']))
 
-        // The hydrated modal carries the question text and its button labels through.
+        // Legacy modals remain visible with a session route and truthful compatibility.
         const mac = items.find(i => i.nodeId === 'daemon-mac')!
-        expect(mac.detail).toBe('Run rm -rf /tmp?')
-        expect(mac.options).toEqual(['Yes', 'No'])
+        expect(mac).toMatchObject({ sessionId: 's1', actionable: false, compatibility: 'session_only', approvalType: 'unknown', detail: null })
+        expect(mac.approvalTarget).toBeUndefined()
     })
 
     it('yields nothing when no session is awaiting approval', () => {

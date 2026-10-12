@@ -137,6 +137,7 @@ export interface MeshNodeIdentified {
 }
 
 export interface RepoMeshSessionStatus {
+    providerApproval?: import('./provider-approval').ProviderApproval | null;
     sessionId: string
     providerType?: string
     state?: string

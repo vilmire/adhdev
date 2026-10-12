@@ -56,6 +56,7 @@ export interface CliAdapterStatus {
          */
         kind?: 'approval' | 'picker' | 'confirm' | null;
     } | null;
+    providerApproval?: import('@adhdev/mesh-shared').ProviderApproval | null;
     activeInteractivePrompt?: InteractivePrompt | null;
     providerSessionId?: string;
     errorMessage?: string;

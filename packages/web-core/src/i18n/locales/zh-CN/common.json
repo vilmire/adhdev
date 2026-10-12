@@ -744,7 +744,28 @@
             "sessionFallback": "会话 {{id}}",
             "approve": "批准",
             "reject": "拒绝",
-            "waitingFor": "已等待 {{duration}}"
+            "waitingFor": "已等待 {{duration}}",
+            "types": {
+                "tool_permission": "提供方工具权限",
+                "provider_setup": "提供方设置决策",
+                "unknown": "未经确认的提供方状态"
+            },
+            "evidence": {
+                "live": "实时弹窗",
+                "cached": "缓存 / 已断开",
+                "unavailable": "弹窗不可用"
+            },
+            "needsAttention": "需要处理 — 打开对应会话",
+            "compatibility": {
+                "exact": "精确 Inbox 目标",
+                "session_only": "旧版提供者 · 在会话中处理",
+                "unknown": "兼容性未知 · 检查会话"
+            },
+            "counts": "（等待 {{waiting}} · 可操作 {{actionable}}）",
+            "runtimeDirectory": "运行目录",
+            "displayedDirectory": "请求信任的目录",
+            "directoryUnknown": "实时弹窗未提供",
+            "openSession": "打开对应会话"
         },
         "difficulty": {
             "easy": "简单",

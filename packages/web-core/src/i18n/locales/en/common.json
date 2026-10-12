@@ -744,7 +744,28 @@
             "sessionFallback": "session {{id}}",
             "approve": "Approve",
             "reject": "Reject",
-            "waitingFor": "Waiting for {{duration}}"
+            "waitingFor": "Waiting for {{duration}}",
+            "types": {
+                "tool_permission": "Provider tool permission",
+                "provider_setup": "Provider setup decision",
+                "unknown": "Unconfirmed provider state"
+            },
+            "evidence": {
+                "live": "Live modal",
+                "cached": "Cached / disconnected",
+                "unavailable": "Modal unavailable"
+            },
+            "needsAttention": "Needs attention — open the exact session",
+            "compatibility": {
+                "exact": "Exact Inbox target",
+                "session_only": "Legacy provider · use session handler",
+                "unknown": "Compatibility unknown · inspect session"
+            },
+            "counts": "({{waiting}} waiting · {{actionable}} actionable)",
+            "runtimeDirectory": "Runtime directory",
+            "displayedDirectory": "Directory requested for trust",
+            "directoryUnknown": "Not provided by the live modal",
+            "openSession": "Open exact session"
         },
         "difficulty": {
             "easy": "Easy",

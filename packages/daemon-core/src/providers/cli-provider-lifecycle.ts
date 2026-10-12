@@ -13,6 +13,7 @@ import { releaseSentPrompts } from './native-history/sent-prompt-registry.js';
 import { closeSqliteProbeCache } from './completion/transcript-probe.js';
 import type { CliProviderInstance } from './cli-provider-instance.js';
 import type { InstanceContext } from './provider-instance.js';
+import { emitSuspensionResolved } from './turn-evidence-port.js';
 import { isNegativeApprovalLabel } from './approval-utils.js';
 
 /** The CliProviderInstance members these functions read or call (compiler-checked; no cast). */
@@ -85,7 +86,7 @@ export async function applyInitialThinkingLevelViaControl(host: LaunchStepsHost)
 }
 
 /** What wireAdapterCallbacks reads (compiler-checked; no cast). */
-export type LifecycleWiringHost = Pick<CliProviderInstance, 'adapter' | 'detectStatusTransition' | 'lifecyclePort' | 'instanceId' | 'pushEvent'>;
+export type LifecycleWiringHost = Pick<CliProviderInstance, 'adapter' | 'detectStatusTransition' | 'lifecyclePort' | 'instanceId' | 'pushEvent' | 'turnEvidencePort' | 'currentAttemptRef'>;
 
 /**
  * Register every adapter → instance callback (server conn, PTY output, status
@@ -105,7 +106,19 @@ export function wireAdapterCallbacks(host: LifecycleWiringHost, context: Instanc
 
     // Emit event on status change through the cause-carrying hook (B2). The
     // cause-less setOnStatusChange must NOT also be registered — it would tick twice.
-    host.adapter.setOnChange((cause) => host.detectStatusTransition(cause));
+    let resolvedSetupKey: string | null = null;
+    host.adapter.setOnChange((cause) => {
+        const approval = host.adapter.getStatus().providerApproval;
+        if (approval?.type === 'provider_setup' && approval.lifecycle === 'resolved' && approval.modalKey !== resolvedSetupKey) {
+            resolvedSetupKey = approval.modalKey;
+            if (host.turnEvidencePort) emitSuspensionResolved(host.turnEvidencePort, {
+                sessionId: host.instanceId, observedBy: 'cli_fsm', source: 'fsm_edge',
+                attemptRef: host.currentAttemptRef?.() ?? undefined, at: approval.resolvedAt ?? Date.now(),
+                resolution: 'dismissed', via: 'modal_disappeared', ...(approval.modalKey ? { modalKey: approval.modalKey } : {}),
+            });
+        }
+        host.detectStatusTransition(cause);
+    });
 
     // PTY death + screen signals → lifecycle port (wiring-unification B4; replaces
     // the shared termination/signal sinks). `exited` routes through
@@ -123,8 +136,14 @@ export function wireAdapterCallbacks(host: LifecycleWiringHost, context: Instanc
     // the normal provider-event pipeline so mesh_approve, dashboard/manual
     // resolution, rejection, and worker auto-approve all emit the same durable
     // task_approval_resolved ledger event. A failed/missing button emits nothing.
-    host.adapter.setOnApprovalResolved(({ resolvedAt, buttonLabel }) => {
+    host.adapter.setOnApprovalResolved(({ resolvedAt, buttonLabel, modalKey }) => {
         const resolution = isNegativeApprovalLabel(String(buttonLabel || '')) ? 'rejected' : 'approved';
+        if (host.turnEvidencePort) emitSuspensionResolved(host.turnEvidencePort, {
+            sessionId: host.instanceId, observedBy: 'cli_fsm', source: 'fsm_edge',
+            attemptRef: host.currentAttemptRef?.() ?? undefined, at: resolvedAt,
+            ...(modalKey ? { modalKey } : {}),
+            resolution: resolution === 'rejected' ? 'rejected' : 'approved', via: 'modal_button',
+        });
         host.pushEvent({
             event: 'agent:approval_resolved',
             timestamp: resolvedAt,

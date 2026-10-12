@@ -510,13 +510,15 @@ export function emitSessionError(
  *  B2's `modalFingerprint()`/an approval fingerprint, never recompute one. */
 export function emitSuspension(
     port: TurnEvidencePort | null | undefined,
-    opts: EmitCommonOpts & { source: TurnEvidence['source']; modal: Extract<TurnEvidence, { kind: 'suspension' }>['modal']; modalKey?: string },
+    opts: EmitCommonOpts & { source: TurnEvidence['source']; modal: Extract<TurnEvidence, { kind: 'suspension' }>['modal']; modalKey?: string; providerSetup?: boolean; clockUnknown?: boolean },
 ): void {
     guardEmit(port, 'suspension', opts.sessionId, () => ({
         ...makeEnvelope('suspension', opts.sessionId, opts.observedBy, opts.attemptRef, opts.taskId, opts.at ?? nowMs()),
         source: opts.source,
         kind: 'suspension',
         modal: opts.modal,
+        ...(opts.providerSetup ? { providerSetup: true } : {}),
+        ...(opts.clockUnknown ? { clockUnknown: true } : {}),
         ...(opts.modalKey ? { modalKey: toModalKeyIdentifier(opts.modalKey) } : {}),
     }) as TurnEvidence, opts.envelope);
 }
@@ -541,6 +543,7 @@ export function emitSuspensionResolved(
     port: TurnEvidencePort | null | undefined,
     opts: EmitCommonOpts & {
         source: TurnEvidence['source'];
+        modalKey?: string;
         resolution: Extract<TurnEvidence, { kind: 'suspension_resolved' }>['resolution'];
         via: Extract<TurnEvidence, { kind: 'suspension_resolved' }>['via'];
     },
@@ -551,6 +554,7 @@ export function emitSuspensionResolved(
         kind: 'suspension_resolved',
         resolution: opts.resolution,
         via: opts.via,
+        ...(opts.modalKey ? { modalKey: toModalKeyIdentifier(opts.modalKey) } : {}),
     }) as TurnEvidence);
 }
 

@@ -339,6 +339,7 @@ export function buildProviderState(host: ProviderStateHost): ProviderState {
             activeModal: (autoApproveActive || autoApproveHoldIdle)
                 ? null
                 : resolveCliActiveModal(parsedStatus?.activeModal, adapterStatus.activeModal),
+            providerApproval: (autoApproveActive || autoApproveHoldIdle || hasInteractivePrompt) ? null : adapterStatus.providerApproval,
             activeInteractivePrompt: host.activeInteractivePrompt,
             inputContent: '',
         },

@@ -60,7 +60,7 @@ export type GuardId =
     | 'liveness_unknown' | 'liveness_fatal' | 'liveness_failed_nonfatal'
     | 'reported_terminal'
     | 'provider_failure' | 'no_provider_failure'
-    | 'holder_is_this_attempt'
+    | 'holder_is_this_attempt' | 'confirmed_provider_setup' | 'held_provider_setup' | 'stale_modal_resolution'
     | 'final_present'
     | 'hold_await_delivery' | 'hold_await_consume_redrive' | 'hold_await_consume_exhausted' | 'hold_await_turn'
     | 'hold_liveness' | 'hold_hard_ceiling' | 'hold_suspension_before_consumed' | 'hold_weak_candidate' | 'hold_admission'
@@ -183,7 +183,11 @@ export const TRANSITIONS: readonly TransitionRule[] = [
     ] },
 
     // ── dispatch / delivery ─────────────────────────────────────────────
-    { id: 'R2', lane: 'current', from: [A, D], on: ['delivered'], to: D, verdict: 'applied', effects: [
+    { id: 'R2s', lane: 'current', from: [A, D], on: ['delivered'], guard: 'held_provider_setup', to: D, verdict: 'applied', effects: [
+        { e: 'act', act: 'mark_delivered' },
+        { e: 'release', reasons: AWAITS },
+    ] },
+    { id: 'R2', lane: 'current', from: [A, D], on: ['delivered'], guard: 'otherwise', to: D, verdict: 'applied', effects: [
         { e: 'act', act: 'mark_delivered' },
         { e: 'release', reasons: ['await_delivery'] },
         { e: 'hold', reason: 'await_consume', until: 'await_consume', onExpire: 'redeliver', meshOnly: true },
@@ -223,10 +227,27 @@ export const TRANSITIONS: readonly TransitionRule[] = [
         { e: 'bus', phase: 'started' },
         { e: 'act', act: 'apply_held_suspension' },
     ] },
-    { id: 'R5', lane: 'current', from: [A, D], on: ['suspension'], to: 'same', verdict: 'applied', effects: [
+    // Confirmed provider setup is a human gate before consumption, not a lost delivery.
+    { id: 'R5s', lane: 'current', from: [A, D], on: ['suspension'], guard: 'confirmed_provider_setup', to: 'same', verdict: 'applied', effects: [
+        { e: 'act', act: 'suspend' },
+        { e: 'release', reasons: AWAITS },
+        { e: 'hold', reason: 'suspension_before_consumed', until: 'none', onExpire: 'release' },
+        { e: 'bus', phase: 'suspended' },
+        { e: 'notify', notify: 'from_modal' },
+    ] },
+    { id: 'R5', lane: 'current', from: [A, D], on: ['suspension'], guard: 'otherwise', to: 'same', verdict: 'applied', effects: [
         { e: 'hold', reason: 'suspension_before_consumed', until: 'none', onExpire: 'release' },
     ] },
-    { id: 'R5b', lane: 'current', from: [A, D], on: ['suspension_resolved'], to: 'same', verdict: 'applied', effects: [
+    { id: 'R5stale', lane: 'current', from: [A, D, S], on: ['suspension_resolved'], guard: 'stale_modal_resolution', to: 'same', verdict: 'recorded', effects: [
+        { e: 'record', note: 'stale_modal_resolution' },
+    ] },
+    { id: 'R5bs', lane: 'current', from: [A, D], on: ['suspension_resolved'], guard: 'held_provider_setup', to: 'same', verdict: 'applied', effects: [
+        { e: 'release', reasons: ['suspension_before_consumed'] },
+        { e: 'act', act: 'resume' },
+        { e: 'hold', reason: 'await_consume', until: 'await_consume', onExpire: 'redeliver', meshOnly: true },
+        { e: 'hold', reason: 'await_turn', until: 'await_turn', onExpire: 'reclaim', meshOnly: true },
+    ] },
+    { id: 'R5b', lane: 'current', from: [A, D], on: ['suspension_resolved'], guard: 'otherwise', to: 'same', verdict: 'applied', effects: [
         { e: 'release', reasons: ['suspension_before_consumed'] },
     ] },
     { id: 'R6', lane: 'current', from: [C, G, F], on: ['suspension'], to: S, verdict: 'applied', effects: [
@@ -243,7 +264,7 @@ export const TRANSITIONS: readonly TransitionRule[] = [
     { id: 'R6d', lane: 'current', from: [S], on: ['suspension'], guard: 'otherwise', to: 'same', verdict: 'recorded', effects: [
         { e: 'record', note: 'duplicate_suspension' },
     ] },
-    { id: 'R7', lane: 'current', from: [S], on: ['suspension_resolved'], to: G, verdict: 'applied', effects: [
+    { id: 'R7', lane: 'current', from: [S], on: ['suspension_resolved'], guard: 'otherwise', to: G, verdict: 'applied', effects: [
         { e: 'act', act: 'resume' },
         { e: 'bus', phase: 'resumed' },
         { e: 'notify', notify: 'approval_resolved' },

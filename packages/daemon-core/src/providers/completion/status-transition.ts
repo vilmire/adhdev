@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 /**
  * FSM status-transition tick (Phase 4 of the completion-engine rewrite —
  * verbatim move of CliProviderInstance.detectStatusTransition).
@@ -490,6 +491,10 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
                 message: typeof modal?.message === 'string' ? modal.message.trim() : '',
                 buttons: Array.isArray(modal?.buttons) ? modal.buttons.map((button: unknown) => String(button).trim()) : [],
                 seq: approvalEntrySeq,
+                // A pre-claim setup modal must suspend a newly attached attempt too.
+                setupIdentity: adapterStatus?.providerApproval?.type === 'provider_setup'
+                    ? [adapterStatus.providerApproval.modalKey, adapterStatus.providerApproval.attemptId, adapterStatus.providerApproval.generation]
+                    : undefined,
             });
             // PTY redraws repeat the same modal content; fingerprint dedup prevents duplicate events.
             // Do NOT also gate on lastStatus: consecutive approvals can arrive waiting_approval→waiting_approval
@@ -512,11 +517,13 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
                         observedBy: 'cli_fsm',
                         source: 'fsm_edge',
                         attemptRef: host.currentAttemptRef?.() ?? undefined,
-                        at: now,
+                        at: adapterStatus?.providerApproval?.createdAt ?? now,
                         modal: 'approval',
-                        // Reuse the fingerprint already computed above (message +
-                        // buttons + approvalEntrySeq) — never recompute one.
-                        modalKey: approvalFingerprint,
+                        // Legacy adapters have no modal identity; persist only a digest of
+                        // their live fingerprint, never prompt text or button labels.
+                        modalKey: adapterStatus?.providerApproval?.modalKey ?? `modal-digest:${createHash('sha256').update(approvalFingerprint).digest('hex')}`,
+                        clockUnknown: adapterStatus?.providerApproval?.createdAt === null,
+                        providerSetup: adapterStatus?.providerApproval?.type === 'provider_setup' && adapterStatus.providerApproval.evidence === 'live',
                     });
                 }
             }

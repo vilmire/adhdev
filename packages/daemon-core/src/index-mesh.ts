@@ -152,7 +152,7 @@ export { isDirtyNode, resolveAutoFastForwardPolicy } from './mesh/mesh-auto-fast
 // send all decide through this one verdict.
 export { resolveDirtyWriteVerdict, dirtyWriteVerdict, readDirtyWriteGate, readWorktreeNodeBranch, isTaskBoundToWorktree, describeDirtyWriteRefusal, buildBranchContinuationNotice, type DirtyWriteVerdict, type DirtyWriteGate, type DirtyWriteTask } from './mesh/mesh-dirty-write-verdict.js';
 export { countGitWorktreeChanges } from './mesh/mesh-node-identity.js';
-export { buildCompactStaleDirectWorkSummary, buildMeshActiveWork, buildMeshActiveWorkSummary, collectPendingApprovals, classifyStaleDirectForPrune, pruneStaleDirectDispatches, PRUNABLE_ORPHAN_STALE_REASONS } from './mesh/mesh-active-work.js';
+export { buildCompactStaleDirectWorkSummary, buildMeshActiveWork, buildMeshActiveWorkSummary, collectPendingApprovals, collectProviderDecisionAttention, classifyStaleDirectForPrune, pruneStaleDirectDispatches, PRUNABLE_ORPHAN_STALE_REASONS } from './mesh/mesh-active-work.js';
 export type { StaleDirectPruneClassification, StaleDirectPruneResult, PruneStaleDirectDispatchesOptions } from './mesh/mesh-active-work.js';
 export type { MeshActiveWorkRecord, MeshActiveWorkStatus, MeshActiveWorkSummary, MeshActiveWorkSource, MeshStaleDirectWorkSummary, MeshPendingApproval } from './mesh/mesh-active-work.js';
 export { maybeInjectIdleActiveMissionReminder, shouldFireIdleReminder, buildIdleReminderMessage, missionSetHash, IDLE_REMINDER_DEBOUNCE_MS } from './mesh/mesh-idle-reminder.js';

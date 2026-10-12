@@ -50,6 +50,7 @@ export interface ActiveChatData {
     status: string;
     messages: ChatMessage[];
     activeModal: { message: string; buttons: string[] } | null;
+    providerApproval?: import('@adhdev/mesh-shared').ProviderApproval | null;
     activeInteractivePrompt?: InteractivePrompt | null;
     inputContent?: string;
 }

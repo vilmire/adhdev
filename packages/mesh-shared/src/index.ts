@@ -42,3 +42,5 @@ export * from './turn-ipc'
 export * from './path-ownership'
 export * from './mission-brief'
 export * from './keyed-doc-delta'
+
+export * from './provider-approval'

@@ -83,9 +83,9 @@ export type SessionReboundReason = typeof SESSION_REBOUND_REASONS[number]
 
 export const SUSPENSION_MODALS = ['approval', 'choice'] as const
 export type SuspensionModal = typeof SUSPENSION_MODALS[number]
-export const SUSPENSION_RESOLUTIONS = ['approved', 'rejected', 'answered'] as const
+export const SUSPENSION_RESOLUTIONS = ['approved', 'rejected', 'answered', 'dismissed'] as const
 export type SuspensionResolution = typeof SUSPENSION_RESOLUTIONS[number]
-export const SUSPENSION_RESOLUTION_VIAS = ['modal_button', 'auto_approve', 'prompt_answer'] as const
+export const SUSPENSION_RESOLUTION_VIAS = ['modal_button', 'auto_approve', 'prompt_answer', 'modal_disappeared'] as const
 export type SuspensionResolutionVia = typeof SUSPENSION_RESOLUTION_VIAS[number]
 
 export const TURN_END_STRENGTHS = ['genuine', 'weak'] as const
@@ -250,8 +250,8 @@ export type TurnEvidenceBody =
     | { kind: 'session_rebound'; toSessionId: string; reason: SessionReboundReason }
     // ── worker turn lifecycle ──
     | { kind: 'turn_started'; retro: boolean }
-    | { kind: 'suspension'; modal: SuspensionModal; modalKey?: string }
-    | { kind: 'suspension_resolved'; resolution: SuspensionResolution; via: SuspensionResolutionVia }
+    | { kind: 'suspension'; modal: SuspensionModal; modalKey?: string; providerSetup?: boolean; clockUnknown?: boolean }
+    | { kind: 'suspension_resolved'; resolution: SuspensionResolution; via: SuspensionResolutionVia; modalKey?: string }
     | { kind: 'turn_end'; strength: TurnEndStrength; afterFinalizationTimeout?: boolean; hollow?: boolean; summary?: SummaryRef
         blockReason?: TurnEndBlockReason; releasedByHardCap?: boolean; nativeOutcome?: NativeTurnOutcome; live?: LiveTurnPending
         /**
@@ -352,8 +352,8 @@ export const TURN_EVIDENCE_FIELD_SPECS: TurnEvidenceFieldSpecs = {
     duplicate_dispatch_refusal: { holderSessionId: id, holderAttemptId: idOpt },
     session_rebound: { toSessionId: id, reason: en(SESSION_REBOUND_REASONS) },
     turn_started: { retro: bool },
-    suspension: { modal: en(SUSPENSION_MODALS), modalKey: idOpt },
-    suspension_resolved: { resolution: en(SUSPENSION_RESOLUTIONS), via: en(SUSPENSION_RESOLUTION_VIAS) },
+    suspension: { modal: en(SUSPENSION_MODALS), modalKey: idOpt, providerSetup: boolOpt, clockUnknown: boolOpt },
+    suspension_resolved: { resolution: en(SUSPENSION_RESOLUTIONS), via: en(SUSPENSION_RESOLUTION_VIAS), modalKey: idOpt },
     turn_end: {
         strength: en(TURN_END_STRENGTHS), afterFinalizationTimeout: boolOpt, hollow: boolOpt,
         summary: { t: 'summary_ref', optional: true }, blockReason: enOpt(TURN_END_BLOCK_REASONS),

@@ -225,7 +225,8 @@ describe('waiting_approval vs waiting_choice stay distinct', () => {
         const choice = resolveSessionTurnPresentation({ sessionId: choiceSession, providerStatus: 'idle', surface: 'dashboard' });
         expect(approval.status).toBe('waiting_approval');
         expect(approval.stage).toBe('waiting_approval');
-        expect(approval.approvalAgeMs).not.toBeNull();
+        // This seeded status has no recorded suspension event/clock.
+        expect(approval.approvalAgeMs).toBeNull();
         expect(choice.status).toBe('waiting_choice');
         expect(choice.stage).toBe('waiting_choice');
         expect(choice.choiceAgeMs).not.toBeNull();

@@ -1,19 +1,8 @@
-/**
- * PendingApprovalsInbox — mesh-wide approval inbox.
- *
- * The per-session ApprovalBanner (components/dashboard/ApprovalBanner) only surfaces the
- * approval for the ONE conversation a user is looking at. This component aggregates EVERY
- * session across the mesh that is awaiting an approval decision into a single list, so an
- * operator can see and clear the whole pending set from the mesh dashboard — the UI peer of
- * the mesh_list_pending_approvals coordinator tool.
- *
- * Data source: the dashboard's existing RepoMeshStatus node/session snapshot. `derivePendingApprovals`
- * filters each node's activeSessionDetails to the sessions whose reported state indicates an
- * approval is blocking (mirrors the daemon-side `awaiting_approval` classification). No new fetch
- * path — the parent already holds the status. Each row routes its Approve/Reject through the
- * injected `onResolve(nodeId, sessionId, action)` seam (typically a mesh resolve_action / mesh_approve
- * call), so this file imports no daemon-core VALUE — only presentation + a props-injected callback.
- */
+import { readProviderDecision, isActionableProviderApproval } from '@adhdev/mesh-shared'
+import type { ProviderApproval, ProviderApprovalTarget } from '@adhdev/mesh-shared'
+/** Provider decisions are a separate Inbox lane. Only confirmed live tool
+ * modals with an exact target offer actions; setup and incomplete evidence
+ * remain attention rows. Ordinary conversations retain their visibility policy. */
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { RepoMeshNodeStatus, RepoMeshSessionStatus } from '@adhdev/daemon-core'
@@ -25,6 +14,13 @@ export type PendingApprovalAction = 'approve' | 'reject'
 
 /** One session awaiting an approval decision — the self-contained shape this inbox renders. */
 export interface PendingApprovalItem {
+    compatibility?: ProviderApproval['compatibility']
+    actionable?: boolean
+    approvalTarget?: ProviderApprovalTarget
+    approvalType?: ProviderApproval['type']
+    evidence?: ProviderApproval['evidence']
+    runtimeDirectory?: string
+    displayedDirectory?: string | null
     nodeId: string
     sessionId: string
     providerType?: string
@@ -65,13 +61,6 @@ function sessionStatusText(session: RepoMeshSessionStatus): string {
     return `${session.state ?? ''} ${session.chatStatus ?? ''} ${session.lifecycle ?? ''}`.toLowerCase()
 }
 
-/**
- * Pure derivation: pull every session awaiting an approval decision out of the mesh node
- * snapshot. Mirrors the daemon-side signal (a session whose status text contains "approval")
- * so the inbox and the coordinator's mesh_list_pending_approvals agree on what is pending.
- * Skips sessions without a resolvable sessionId — an approval that cannot be routed to a
- * concrete node+session is not actionable inbox content.
- */
 export function derivePendingApprovals(nodes: RepoMeshNodeStatus[] | undefined | null): PendingApprovalItem[] {
     if (!Array.isArray(nodes)) return []
     const items: PendingApprovalItem[] = []
@@ -80,13 +69,22 @@ export function derivePendingApprovals(nodes: RepoMeshNodeStatus[] | undefined |
         if (!Array.isArray(sessions)) continue
         for (const session of sessions) {
             if (!session?.sessionId) continue
-            if (!sessionStatusText(session).includes('approval')) continue
+            const status = sessionStatusText(session)
+            if (/choice|stopped|exited|terminated|failed|interrupted/.test(status)) continue
+            if (!(session.chatStatus || session.state || '').toLowerCase().includes('approval')) continue
+            const approval = readProviderDecision(session.providerApproval, true)
+            if (!approval || approval.lifecycle !== 'pending') continue
+            const actionable = isActionableProviderApproval(approval) && !session.isCached && node.health === 'online'
             items.push({
+                compatibility: approval.compatibility, actionable, approvalType: approval.type, evidence: session.isCached ? 'cached' : approval.evidence,
+                runtimeDirectory: approval.runtimeDirectory, displayedDirectory: approval.displayedDirectory,
+                approvalTarget: actionable ? { modalKey: approval.modalKey!, attemptId: approval.attemptId ?? null, generation: approval.generation ?? null } : undefined,
+                waitingSince: approval.createdAt,
                 nodeId: node.nodeId,
                 sessionId: session.sessionId,
                 providerType: session.providerType,
                 machineLabel: nodeDisplayName(node) || node.nodeId,
-                detail: session.statusNote ?? session.title ?? null,
+                detail: null,
             })
         }
     }
@@ -98,6 +96,10 @@ export function derivePendingApprovals(nodes: RepoMeshNodeStatus[] | undefined |
  * importing the dashboard type so the mesh component keeps no dependency on dashboard internals.
  */
 export interface ApprovalConversationSource {
+    providerApproval?: ProviderApproval | null
+    connectionState?: string
+    transport?: string
+    activeInteractivePrompt?: unknown
     routeId?: string
     sessionId?: string
     daemonId?: string
@@ -111,19 +113,6 @@ export interface ApprovalConversationSource {
     lastUpdated?: number
 }
 
-/**
- * Cross-machine derivation: pull every session awaiting an approval out of the dashboard's
- * flattened conversation list, which already spans EVERY connected daemon (buildConversations
- * folds all machines' sessions into one array). This is what makes the inbox account-wide
- * rather than mesh-scoped — `derivePendingApprovals` above only sees one selected mesh.
- *
- * Status is matched exactly against the normalized `waiting_approval` managed status rather
- * than by substring, so a session is listed iff the daemon classifies it as blocking. (The
- * mesh path substring-matches because its snapshot carries no normalized status.)
- *
- * `nodeId` is filled from daemonId so the resolve seam can route the command back to the
- * owning daemon; sessions without a routable id are skipped as unactionable.
- */
 export function deriveApprovalsFromConversations(
     conversations: ApprovalConversationSource[] | undefined | null,
 ): PendingApprovalItem[] {
@@ -131,8 +120,11 @@ export function deriveApprovalsFromConversations(
     const items: PendingApprovalItem[] = []
     const seen = new Set<string>()
     for (const conv of conversations) {
-        if (!conv) continue
+        if (!conv || conv.activeInteractivePrompt) continue
         if (String(conv.status ?? '').trim().toLowerCase() !== 'waiting_approval') continue
+        const approval = readProviderDecision(conv.providerApproval, true, !!conv.modalButtons?.length)
+        if (!approval || approval.lifecycle !== 'pending') continue
+        const actionable = conv.transport === 'pty' && ['connected', 'ready'].includes(conv.connectionState || '') && isActionableProviderApproval(approval)
         const sessionId = conv.sessionId || conv.routeId
         const nodeId = conv.daemonId || conv.routeId
         if (!sessionId || !nodeId) continue
@@ -142,14 +134,12 @@ export function deriveApprovalsFromConversations(
         items.push({
             nodeId,
             sessionId,
+            compatibility: approval.compatibility, actionable, approvalType: approval.type, evidence: !['connected', 'ready'].includes(conv.connectionState || '') ? 'cached' : approval.evidence,
+            approvalTarget: actionable ? { modalKey: approval.modalKey!, attemptId: approval.attemptId ?? null, generation: approval.generation ?? null } : undefined,
             providerType: conv.agentType,
             machineLabel: conv.machineName || conv.workspaceName || nodeId,
-            // modalMessage is only present once the session's modal detail has been
-            // hydrated (the live status profile strips it); fall back to the title so a
-            // not-yet-opened session still shows an identifiable row.
-            detail: conv.modalMessage ?? conv.title ?? null,
-            options: conv.modalButtons,
-            waitingSince: conv.lastUpdated ?? null,
+            detail: null,
+            waitingSince: approval.createdAt,
         })
     }
     // Longest-waiting first — mirrors mesh_list_pending_approvals' ordering so the coordinator
@@ -166,7 +156,7 @@ interface Props {
     /** Alternative to `approvals`: the raw mesh node snapshot; the component derives the list. */
     nodes?: RepoMeshNodeStatus[] | null
     /** Resolve a single pending approval. Returns a promise so the row can show a pending state. */
-    onResolve: (nodeId: string, sessionId: string, action: PendingApprovalAction) => void | Promise<unknown>
+    onResolve: (nodeId: string, sessionId: string, action: PendingApprovalAction, target?: ProviderApprovalTarget) => void | Promise<unknown>
     /** Hide the whole component when there is nothing pending (default true). */
     hideWhenEmpty?: boolean
     /**
@@ -190,12 +180,13 @@ export default function PendingApprovalsInbox({ approvals, nodes, onResolve, hid
     if (hideWhenEmpty && items.length === 0) return null
 
     const handle = (item: PendingApprovalItem, action: PendingApprovalAction) => {
-        if (pending[item.sessionId]) return
-        setPending(prev => ({ ...prev, [item.sessionId]: action }))
-        void Promise.resolve(onResolve(item.nodeId, item.sessionId, action)).finally(() => {
+        if (!item.actionable || !item.approvalTarget || pending[`${item.nodeId}:${item.sessionId}:${item.approvalTarget.modalKey}`]) return
+        const key = `${item.nodeId}:${item.sessionId}:${item.approvalTarget.modalKey}`
+        setPending(prev => ({ ...prev, [key]: action }))
+        void Promise.resolve(onResolve(item.nodeId, item.sessionId, action, item.approvalTarget)).finally(() => {
             setPending(prev => {
                 const next = { ...prev }
-                delete next[item.sessionId]
+                delete next[key]
                 return next
             })
         })
@@ -212,7 +203,7 @@ export default function PendingApprovalsInbox({ approvals, nodes, onResolve, hid
             <div className="flex items-center gap-2 mb-2 font-black text-xs" style={{ color: 'var(--status-warning)' }}>
                 <IconWarning size={14} />
                 {t('mesh.approvals.title')}
-                <span className="opacity-70 font-semibold">({items.length})</span>
+                <span className="opacity-70 font-semibold">{t('mesh.approvals.counts', { waiting: items.length, actionable: items.filter(item => item.actionable).length })}</span>
             </div>
 
             {items.length === 0 ? (
@@ -220,7 +211,7 @@ export default function PendingApprovalsInbox({ approvals, nodes, onResolve, hid
             ) : (
                 <ul className="flex flex-col gap-2">
                     {items.map(item => {
-                        const active = pending[item.sessionId] ?? null
+                        const active = pending[`${item.nodeId}:${item.sessionId}:${item.approvalTarget?.modalKey}`] ?? null
                         const disabled = active !== null
                         const waitLabel = formatApprovalWait(item.waitingSince, resolvedNow)
                         return (
@@ -245,11 +236,16 @@ export default function PendingApprovalsInbox({ approvals, nodes, onResolve, hid
                                             </span>
                                         )}
                                     </div>
+                                    {item.compatibility && <div className="text-3xs opacity-70">{t(`mesh.approvals.compatibility.${item.compatibility}`)}</div>}
+                                    {item.approvalType && <div className="text-3xs opacity-70">{t(`mesh.approvals.types.${item.approvalType}`)} · {t(`mesh.approvals.evidence.${item.evidence || 'unavailable'}`)}</div>}
                                     <div className="text-3xs opacity-60 truncate">
                                         {item.detail
                                             ? item.detail.replace(/[\n\r]+/g, ' ').slice(0, 120)
                                             : t('mesh.approvals.sessionFallback', { id: item.sessionId })}
                                     </div>
+                                    {item.runtimeDirectory && <div className="text-3xs break-all">{t('mesh.approvals.runtimeDirectory')}: {item.runtimeDirectory}</div>}
+                                    {item.approvalType === 'provider_setup' && <div className="text-3xs break-all">{t('mesh.approvals.displayedDirectory')}: {item.displayedDirectory || t('mesh.approvals.directoryUnknown')}</div>}
+                                    <a className="text-3xs underline" href={`/dashboard?activeTab=${encodeURIComponent(`session:${item.sessionId}`)}`}>{t('mesh.approvals.openSession')}</a>
                                     {item.options && item.options.length > 0 && (
                                         <div className="mt-1 flex flex-wrap gap-1">
                                             {item.options.slice(0, 4).map((option, i) => (
@@ -264,7 +260,7 @@ export default function PendingApprovalsInbox({ approvals, nodes, onResolve, hid
                                         </div>
                                     )}
                                 </div>
-                                <div className="flex gap-2 shrink-0">
+                                {item.actionable && item.approvalTarget ? <div className="flex gap-2 shrink-0">
                                     <button
                                         onClick={() => handle(item, 'approve')}
                                         disabled={disabled}
@@ -280,7 +276,7 @@ export default function PendingApprovalsInbox({ approvals, nodes, onResolve, hid
                                     >
                                         {active === 'reject' ? <IconSpinner size={12} /> : t('mesh.approvals.reject')}
                                     </button>
-                                </div>
+                                </div> : <span className="text-3xs opacity-60">{t('mesh.approvals.needsAttention')}</span>}
                             </li>
                         )
                     })}
