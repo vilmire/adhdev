@@ -13,7 +13,7 @@
  * ★Storage format — read live from this machine's own `~/.claude.json`
  * (`kjs0116@dstrict.com`'s Claude Code account, read-only, no values printed):
  * top-level key `projects`, a JSON OBJECT keyed by the ABSOLUTE real project
- * path (verified: `/Users/vilmire` and `/Users/vilmire/Work/adhdev` are both
+ * path (verified: `/Users/example` and `/Users/example/Work/adhdev` are both
  * present as keys), each value an object carrying (among many session-stat
  * fields) a boolean `hasTrustDialogAccepted`. The live adhdev entry reads
  * `hasTrustDialogAccepted: true`. This is NOT an array-of-strings store (the

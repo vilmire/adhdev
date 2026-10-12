@@ -42,7 +42,7 @@ afterEach(() => {
     container.remove()
 })
 
-function machine(): DaemonData {
+function machine(providerType = 'claude'): DaemonData {
     return {
         id: 'machine-1',
         machineId: 'machine-1',
@@ -51,7 +51,7 @@ function machine(): DaemonData {
         nickname: 'Machine 1',
         platform: 'darwin',
         availableProviders: [{
-            type: 'claude',
+            type: providerType,
             name: 'Claude',
             displayName: 'Claude',
             icon: 'claude',
@@ -68,10 +68,10 @@ function machine(): DaemonData {
     } as DaemonData
 }
 
-function render(onLaunchProvider: ReturnType<typeof vi.fn>) {
+function render(onLaunchProvider: ReturnType<typeof vi.fn>, providerType = 'claude') {
     act(() => {
         root.render(React.createElement(DashboardNewSessionDialog, {
-            machines: [machine()],
+            machines: [machine(providerType)],
             ides: [],
             onClose: () => {},
             onBrowseDirectory: async () => ({ path: '/', directories: [] }),
@@ -111,6 +111,19 @@ async function launch(): Promise<void> {
 }
 
 describe('DashboardNewSessionDialog — launch provenance (Phase E)', () => {
+    it('opts in a new Codex session without changing defaults or other providers', async () => {
+        const onLaunchProvider = vi.fn(async () => ({ ok: true }))
+        render(onLaunchProvider, 'codex-cli')
+        const label = [...document.body.querySelectorAll('label')].find(node => node.textContent?.includes('Managed Codex questions'))!
+        expect(label.textContent).toContain('No terminal or existing-session migration')
+        expect(label.textContent).toContain('permission grants are currently unsupported')
+        const checkbox = label.querySelector<HTMLInputElement>('input')!
+        expect(checkbox.checked).toBe(false)
+        act(() => checkbox.click())
+        await launch()
+        expect(onLaunchProvider.mock.calls[0][3]).toMatchObject({ settings: { codexTransport: 'app-server' }, resumeSessionId: null })
+    })
+
     it('a model picked in the dialog is sent as modelSource user', async () => {
         const onLaunchProvider = vi.fn(async () => ({ ok: true }))
         render(onLaunchProvider)

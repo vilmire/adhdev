@@ -16,7 +16,6 @@ import {
     type AppliedInteractivePromptAnswer,
     type ActiveInteractivePromptDescription,
 } from './interactive-prompt-apply.js';
-import { SpecCliAdapter } from './spec/cli-adapter.js';
 import { sendMessageEvent } from './cli-provider-send-event.js';
 
 import type { CliProviderModule } from '../cli-adapters/provider-cli-shared.js';
@@ -27,7 +26,7 @@ import {
 import { TranscriptSignalSource } from './transcript-signal-source.js';
 import { resolveBusyLeaseGate } from './busy-lease-gate.js';
 import type { SignalSnapshot } from './spec/signal-envelope.js';
-import { createCliAdapter } from './spec/route.js';
+import { createCliAdapter, type ManagedCliAdapter } from './spec/route.js';
 import type { PtyRuntimeMetadata, PtyTransportFactory } from '../cli-adapters/pty-transport.js';
 import { StatusMonitor } from './status-monitor.js';
 import { ChatHistoryWriter } from '../config/chat-history.js';
@@ -105,7 +104,7 @@ export class CliProviderInstance implements ProviderInstance {
     // cli-provider-*-projection, mesh-assignment, ...). The instance is passed
     // as `this` with NO cast, so the compiler checks structural conformance to
     // every host interface at each call site.
-    adapter: SpecCliAdapter;
+    adapter: ManagedCliAdapter;
     context: InstanceContext | null = null;
     lastStatus: string = 'starting';
     // Idempotency guard for the queue-claim agent:ready event. agent:ready is the
@@ -323,6 +322,7 @@ export class CliProviderInstance implements ProviderInstance {
              *  the list itself travels on so the spec path can filter the SPEC's spawn_args,
              *  which declare the same flag with a possibly different value. */
             removeSpawnArgs?: string[]; resolvedTrustPlan?: Parameters<typeof createCliAdapter>[7];
+            structuredCodex?: boolean;
             onProviderSessionResolved?: (info: {
                 instanceId: string;
                 providerType: string;
@@ -342,7 +342,8 @@ export class CliProviderInstance implements ProviderInstance {
         this.onProviderSessionResolved = options?.onProviderSessionResolved;
         // FSMLOG-SESSION-ATTRIBUTION (D3): hand the resolved session id (assigned just above) to
         // the adapter so a spec-driven FSM tags its log lines with the owning session.
-        this.adapter = createCliAdapter(provider as CliProviderModule, workingDir, cliArgs, options?.extraEnv || {}, transportFactory, this.instanceId, options?.removeSpawnArgs, options?.resolvedTrustPlan);
+        if (options?.structuredCodex && (this.launchMode !== 'new' || this.providerSessionId)) throw new Error('Managed Codex transport cannot migrate or resume existing sessions');
+        this.adapter = createCliAdapter(provider as CliProviderModule, workingDir, cliArgs, options?.extraEnv || {}, transportFactory, this.instanceId, options?.removeSpawnArgs, options?.resolvedTrustPlan, options?.structuredCodex);
         if (this.providerSessionId) {
             this.adapter.updateRuntimeMeta({ providerSessionId: this.providerSessionId });
         }
@@ -369,7 +370,7 @@ export class CliProviderInstance implements ProviderInstance {
 
  // PTY spawn
         await this.adapter.spawn();
-        await enforceFreshSessionLaunchIfNeeded(this);
+        if (!this.adapter.nativeTransport) await enforceFreshSessionLaunchIfNeeded(this);
         await applyInitialThinkingLevelViaControl(this);
         this.maybeAppendRuntimeRecoveryMessage(this.adapter.getRuntimeMetadata());
         if (this.providerSessionId && this.shouldHydrateExistingProviderHistory()) {
@@ -1066,7 +1067,7 @@ export class CliProviderInstance implements ProviderInstance {
     }
  // ─── Adapter access (backward compat) ──────────────────
 
-    getAdapter(): SpecCliAdapter {
+    getAdapter(): ManagedCliAdapter {
         return this.adapter;
     }
 

@@ -456,7 +456,9 @@
         "errorStartSession": "无法启动会话",
         "errorResumeSession": "无法恢复会话",
         "errorWorkspaceContextRequired": "启动前请选择一个工作区 — 目录、已保存/默认工作区，或你的主目录。",
-        "defaultWorkspace": "默认工作区"
+        "defaultWorkspace": "默认工作区",
+        "codexManagedQuestions": "管理 Codex 问题",
+        "codexManagedQuestionsDescription": "使用 Codex app-server 的新仪表盘专用会话。原生问题绑定请求，异步回答是当前轮次的普通输入。不支持终端或迁移现有会话。 目前不支持授予原生权限，此类请求将保持待处理且不会获得批准。"
     },
     "mobileInbox": {
         "undo": "撤销",
@@ -4064,7 +4066,13 @@
         "answersRequired_one": "还有{{count}}个问题需要回答",
         "answersRequired_other": "还有{{count}}个问题需要回答",
         "errorReviewPageNotFocused": "终端正在显示其他画面，回答未能提交——请检查终端画面，或关闭此窗口后重试。",
-        "errorReviewUnconfirmed": "回答按键已送达终端，但问题仍显示在屏幕上——回答可能尚未提交。请检查终端：如果未提交，请直接在终端中回答；从这里重新发送可能会提交两次。"
+        "errorReviewUnconfirmed": "回答按键已送达终端，但问题仍显示在屏幕上——回答可能尚未提交。请检查终端：如果未提交，请直接在终端中回答；从这里重新发送可能会提交两次。",
+        "codexRequestBound": "此回答针对当前 Codex 原生请求。",
+        "codexAsyncLocal": "异步回答是当前轮次的普通输入。关闭仅适用于此仪表盘会话，无法观察仅在终端执行的跳过操作。",
+        "codexAwaitingResolution": "已提交，正在等待原生请求解决。解决原因可能未知。",
+        "codexUncertain": "无法确认当前原生问题状态，暂时无法回答。",
+        "codexDismissLocal": "仅在本地关闭",
+        "oneAnswerRequired": "请至少回答一个问题。"
     },
     "git": {
         "diffPreview": {

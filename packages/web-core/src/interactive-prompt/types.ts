@@ -1,4 +1,5 @@
-export interface InteractivePrompt {
+import type { ProviderQuestionBinding, ProviderQuestionEpisode } from '@adhdev/mesh-shared'
+export interface InteractivePrompt extends ProviderQuestionEpisode {
   promptId: string
   origin: 'cli' | 'mcp' | 'agent'
   providerType: string
@@ -13,6 +14,8 @@ export interface InteractiveQuestion {
   multiSelect: boolean
   options: InteractiveOption[]
   allowFreeform?: boolean
+  required?: boolean
+  isSecret?: boolean
 }
 
 export interface InteractiveOption {
@@ -24,6 +27,8 @@ export interface InteractiveOption {
 export interface InteractivePromptResponse {
   promptId: string
   answers: Record<string, InteractiveAnswer>
+  binding?: ProviderQuestionBinding
+  action?: 'dismiss'
 }
 
 export interface InteractiveAnswer {

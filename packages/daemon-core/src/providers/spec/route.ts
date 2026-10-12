@@ -21,6 +21,15 @@ import { SpecCliAdapter } from './cli-adapter.js';
 import { LOG } from '../../logging/logger.js';
 import { IDENTITY } from '../../track-identity.js';
 import type { ResolvedTrustPlan } from '../trust-provenance-ledger.js';
+import type { CliAdapter } from '../../cli-adapter-types.js';
+import { CodexAppServerAdapter } from '../codex-app-server/adapter.js';
+
+type ManagedMethods = Pick<SpecCliAdapter,
+    'setOnChange' | 'setOnExit' | 'setOnSignal' | 'setOnApprovalResolved' | 'setServerConn' |
+    'setOnPtyData' | 'updateRuntimeMeta' | 'getRuntimeMetadata' | 'refreshProviderDefinition' |
+    'invokeScript' | 'writeRaw' | 'resolveAction' | 'getLastApprovalResolvedAt' | 'getScriptParsedStatus' |
+    'getTerminalScreenSnapshot' | 'injectKeys' | 'isApprovalRecentlyResolved' | 'setSignalObservation'>;
+export type ManagedCliAdapter = Omit<CliAdapter, keyof ManagedMethods> & ManagedMethods;
 
 /**
  * Recovery copy when a CLI provider has no resolvable spec.
@@ -66,7 +75,8 @@ export function createCliAdapter(
      *  overwrite the spec's own base args with a different provider's-eye-view of them. */
     removeArgs?: string[],
     resolvedTrustPlan?: ResolvedTrustPlan | null,
-): SpecCliAdapter {
+    structuredCodex = false,
+): ManagedCliAdapter {
     // Prefer the path provider-loader already resolved (it walks the
     // compatibility[i].spec → specs/default.json → spec.json chain).
     // Fall back to the legacy spec.json-in-provider-dir lookup if the
@@ -81,6 +91,19 @@ export function createCliAdapter(
     }
     if (!specPath) {
         throw new Error(formatNoResolvableSpecError(provider.type, dir));
+    }
+    if (structuredCodex) {
+        if (provider.type !== 'codex-cli' || !sessionId || transportFactory?.attachesExistingRuntime) {
+            throw new Error('Codex app-server transport is available only for new managed Codex sessions');
+        }
+        // Retain declared launch configuration, but never turn an arbitrary CLI command,
+        // resume, auth operation, remote endpoint or bypass flag into a managed launch.
+        for (let i = 0; i < cliArgs.length; i += 2) {
+            if (!['-c', '--config', '-s', '--sandbox', '-a', '--ask-for-approval'].includes(cliArgs[i]) || !cliArgs[i + 1]) {
+                throw new Error('Unsupported startup arguments for Codex app-server transport');
+            }
+        }
+        return new CodexAppServerAdapter(workingDir, sessionId, provider.spawn.command || 'codex', cliArgs, { ...process.env, ...extraEnv }, undefined, extraEnv);
     }
     LOG.info('spec-route', `[${provider.type}] routing through SpecCliAdapter (${path.relative(dir || '', specPath) || specPath})`);
     // MANIFEST-SEND-DELAY: hand the manifest's own submit tuning to the adapter. Until

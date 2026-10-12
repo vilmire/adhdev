@@ -456,7 +456,9 @@
         "errorStartSession": "セッションを開始できませんでした",
         "errorResumeSession": "セッションを再開できませんでした",
         "errorWorkspaceContextRequired": "起動する前にワークスペースを選択してください — ディレクトリ、保存済み/デフォルトのワークスペース、またはホームディレクトリのいずれか。",
-        "defaultWorkspace": "デフォルトのワークスペース"
+        "defaultWorkspace": "デフォルトのワークスペース",
+        "codexManagedQuestions": "Codex の質問を管理",
+        "codexManagedQuestionsDescription": "Codex app-server を使用する新しいダッシュボード専用セッションです。ネイティブ質問は要求に紐付き、非同期回答は現在のターンへの通常入力です。ターミナルと既存セッションの移行には対応しません。 ネイティブ権限の付与には現在対応しておらず、その要求は承認されずに待機します。"
     },
     "mobileInbox": {
         "undo": "元に戻す",
@@ -4064,7 +4066,13 @@
         "answersRequired_one": "回答が必要な質問が{{count}}件あります",
         "answersRequired_other": "回答が必要な質問が{{count}}件あります",
         "errorReviewPageNotFocused": "ターミナルが別の画面を表示しているため、回答は送信されませんでした — ターミナル画面を確認するか、これを閉じてもう一度お試しください。",
-        "errorReviewUnconfirmed": "回答キーはターミナルに届きましたが、質問がまだ画面に残っています — 回答は送信されていない可能性があります。ターミナルを確認してください: 送信されていなければターミナルで直接回答してください。ここから再送信すると二重送信になる可能性があります。"
+        "errorReviewUnconfirmed": "回答キーはターミナルに届きましたが、質問がまだ画面に残っています — 回答は送信されていない可能性があります。ターミナルを確認してください: 送信されていなければターミナルで直接回答してください。ここから再送信すると二重送信になる可能性があります。",
+        "codexRequestBound": "現在の Codex ネイティブ要求に回答します。",
+        "codexAsyncLocal": "非同期回答は現在のターンへの通常入力です。閉じる操作はこのダッシュボードセッション内のみで、ターミナルでのスキップは確認できません。",
+        "codexAwaitingResolution": "送信済み。ネイティブ要求の解決を待っています。解決理由は不明な場合があります。",
+        "codexUncertain": "現在のネイティブ質問状態を確認できないため、回答できません。",
+        "codexDismissLocal": "ローカルで閉じる",
+        "oneAnswerRequired": "少なくとも一つの質問に回答してください。"
     },
     "git": {
         "diffPreview": {

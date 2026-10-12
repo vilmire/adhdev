@@ -4,7 +4,7 @@
  * codex gates the first run in any new config root behind an interactive TUI
  * prompt. Captured live (codex 0.154.0, 80x32, through ghostty-vt):
  *
- *   > You are in /Users/vilmire/Work/adhdev
+ *   > You are in /Users/example/Work/adhdev
  *
  *     Do you trust the contents of this directory? Working with untrusted
  *     contents comes with higher risk of prompt injection. Trusting the
@@ -32,7 +32,7 @@
  * ★Storage format — verified live, not inferred. Answering "1. Yes, continue"
  * with `CODEX_HOME` pointed at an empty directory writes exactly:
  *
- *   [projects."/Users/vilmire/Work/adhdev"]
+ *   [projects."/Users/example/Work/adhdev"]
  *   trust_level = "trusted"
  *
  * into `$CODEX_HOME/config.toml`. Note the differences from grok, which is why

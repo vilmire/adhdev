@@ -263,6 +263,9 @@ async function startCliPtySession(
 
  // If InstanceManager exists, manage as CliProviderInstance unified
     const instanceManager = host.deps.getInstanceManager();
+    if (launchSettings.codexTransport === 'app-server' && (!instanceManager || normalizedType !== 'codex-cli' || sessionBinding.launchMode !== 'new')) {
+        throw new Error('Codex app-server transport requires a new managed Codex session; existing sessions cannot be migrated');
+    }
     if (launchProvider && instanceManager) {
         const resolvedProvider = launchProvider;
         await host.registerCliInstance(

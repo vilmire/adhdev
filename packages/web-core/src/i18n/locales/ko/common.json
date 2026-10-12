@@ -456,7 +456,9 @@
         "errorStartSession": "세션을 시작할 수 없습니다",
         "errorResumeSession": "세션을 재개할 수 없습니다",
         "errorWorkspaceContextRequired": "실행하기 전에 워크스페이스를 선택하세요 — 디렉터리, 저장된/기본 워크스페이스, 또는 홈 디렉터리 중 하나.",
-        "defaultWorkspace": "기본 워크스페이스"
+        "defaultWorkspace": "기본 워크스페이스",
+        "codexManagedQuestions": "Codex 질문 관리",
+        "codexManagedQuestionsDescription": "Codex app-server를 사용하는 새 대시보드 전용 세션입니다. 기본 질문은 요청에 연결되며 비동기 응답은 현재 턴의 일반 입력입니다. 터미널과 기존 세션 이전은 지원하지 않습니다. 기본 권한 부여는 현재 지원하지 않으며 해당 요청은 승인 없이 대기합니다."
     },
     "mobileInbox": {
         "undo": "실행 취소",
@@ -4064,7 +4066,13 @@
         "answersRequired_one": "답변이 필요한 질문이 {{count}}개 있습니다",
         "answersRequired_other": "답변이 필요한 질문이 {{count}}개 있습니다",
         "errorReviewPageNotFocused": "터미널이 다른 화면을 표시 중이라 답변이 제출되지 않았습니다 — 화면을 확인하거나 닫고 다시 시도하세요",
-        "errorReviewUnconfirmed": "답변 키는 터미널에 전달됐지만 질문이 아직 화면에 남아 있습니다 — 답변이 제출되지 않았을 수 있습니다. 터미널을 확인하세요: 제출되지 않았다면 터미널에서 직접 답하세요. 여기서 재전송하면 두 번 제출될 수 있습니다"
+        "errorReviewUnconfirmed": "답변 키는 터미널에 전달됐지만 질문이 아직 화면에 남아 있습니다 — 답변이 제출되지 않았을 수 있습니다. 터미널을 확인하세요: 제출되지 않았다면 터미널에서 직접 답하세요. 여기서 재전송하면 두 번 제출될 수 있습니다",
+        "codexRequestBound": "현재 Codex 기본 요청에 응답합니다.",
+        "codexAsyncLocal": "비동기 응답은 현재 턴의 일반 입력입니다. 닫기는 이 대시보드 세션에만 적용되며 터미널에서 건너뛴 질문은 확인할 수 없습니다.",
+        "codexAwaitingResolution": "전송됨: 기본 요청의 처리를 기다립니다. 처리 사유는 알 수 없을 수 있습니다.",
+        "codexUncertain": "현재 기본 질문 상태를 확인할 수 없어 응답할 수 없습니다.",
+        "codexDismissLocal": "로컬에서 닫기",
+        "oneAnswerRequired": "하나 이상의 질문에 답해 주세요."
     },
     "git": {
         "diffPreview": {

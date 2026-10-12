@@ -26,10 +26,11 @@ interface InteractivePromptModalProps {
   error?: string | null
   onSubmit: (selection: InteractivePromptSelection) => void | Promise<void>
   onCancel: () => void
+  onDismissLocal?: () => void | Promise<void>
 }
 
 function defaultSelection(promptSession: InteractivePromptSession | null): InteractivePromptSelection {
-  const selection: InteractivePromptSelection = {}
+  const selection: InteractivePromptSelection = Object.create(null)
   for (const question of promptSession?.prompt.questions || []) {
     selection[question.questionId] = { selectedLabels: [], freeformText: '' }
   }
@@ -37,7 +38,7 @@ function defaultSelection(promptSession: InteractivePromptSession | null): Inter
 }
 
 function hasAnswer(question: InteractiveQuestion, answer: InteractivePromptSelection[string] | undefined): boolean {
-  return !!answer?.freeformText?.trim() || (answer?.selectedLabels?.length || 0) > 0 || (question.options.length === 0 && !!question.allowFreeform)
+  return !!answer?.freeformText?.trim() || (answer?.selectedLabels?.length || 0) > 0 || (question.required === undefined && question.options.length === 0 && !!question.allowFreeform)
 }
 
 function OptionButton({
@@ -96,6 +97,7 @@ export default function InteractivePromptModal({
   error,
   onSubmit,
   onCancel,
+  onDismissLocal,
 }: InteractivePromptModalProps) {
   const { t } = useTranslation('common')
   const [selection, setSelection] = useState<InteractivePromptSelection>(() => defaultSelection(promptSession))
@@ -175,18 +177,22 @@ export default function InteractivePromptModal({
     ;(focusable[0] || surface).focus()
   }, [promptId, sessionId, daemonId])
 
-  const questions = promptSession?.prompt.questions || []
+  const questions = useMemo(() => promptSession?.prompt.support === 'uncertain' ? [] : promptSession?.prompt.questions || [], [promptSession?.prompt])
+  const canEdit = promptSession?.prompt.support !== 'uncertain' && (!promptSession?.prompt.binding || promptSession.prompt.lifecycle === 'pending')
   // A single question needs no section header/numbering; multiple questions are listed
   // top-to-bottom, each as its own titled section on one screen (no step wizard).
   const isSingleQuestion = questions.length === 1
 
   const canSubmit = useMemo(() => {
     if (!promptSession) return false
-    return promptSession.prompt.questions.every(question => hasAnswer(question, selection[question.questionId]))
+    const prompt = promptSession.prompt
+    if (prompt.support === 'uncertain' || (prompt.lifecycle && prompt.lifecycle !== 'pending')) return false
+    return prompt.questions.every(question => question.required === false || hasAnswer(question, selection[question.questionId]))
+      && (!prompt.binding || prompt.questions.some(question => hasAnswer(question, selection[question.questionId])))
   }, [promptSession, selection])
 
   const unansweredQuestionCount = useMemo(
-    () => questions.filter(question => !hasAnswer(question, selection[question.questionId])).length,
+    () => questions.filter(question => question.required !== false && !hasAnswer(question, selection[question.questionId])).length,
     [questions, selection],
   )
 
@@ -206,6 +212,7 @@ export default function InteractivePromptModal({
         [question.questionId]: {
           ...current,
           selectedLabels: nextLabels,
+          ...(promptSession.prompt.binding ? { freeformText: '' } : {}),
         },
       }
     })
@@ -217,6 +224,7 @@ export default function InteractivePromptModal({
       [questionId]: {
         ...(prev[questionId] || { selectedLabels: [] }),
         freeformText,
+        ...(promptSession.prompt.binding ? { selectedLabels: [] } : {}),
       },
     }))
   }
@@ -265,6 +273,10 @@ export default function InteractivePromptModal({
         {/* Body — every question is listed here on one screen and scrolls independently
             so the header and footer stay pinned. */}
         <div className="interactive-prompt-question-list min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-4">
+          {(promptSession.prompt.binding || promptSession.prompt.support === 'uncertain') && <p className="text-sm text-text-muted">
+            {t(promptSession.prompt.support === 'uncertain' ? 'interactivePrompt.codexUncertain' : promptSession.prompt.support === 'product_local' ? 'interactivePrompt.codexAsyncLocal' : 'interactivePrompt.codexRequestBound')}
+            {promptSession.prompt.lifecycle === 'submitted' && ` ${t('interactivePrompt.codexAwaitingResolution')}`}
+          </p>}
           {questions.map((question, index) => {
             const selectedLabels = answerPreview.answers[question.questionId]?.selectedLabels || []
             const typeLabel = question.multiSelect
@@ -307,7 +319,7 @@ export default function InteractivePromptModal({
                       description={option.description || option.preview}
                       selected={selectedLabels.includes(option.label)}
                       multiSelect={question.multiSelect}
-                      disabled={isSubmitting}
+                      disabled={isSubmitting || !canEdit}
                       onClick={() => toggleOption(question, option.label)}
                     />
                   ))}
@@ -316,12 +328,15 @@ export default function InteractivePromptModal({
                 {question.allowFreeform && (
                   <label className="block">
                     <span className="mb-1 block text-xs font-semibold text-text-muted">{t('interactivePrompt.other')}</span>
-                    <textarea
+                    {question.isSecret ? <input type="password" autoComplete="off"
+                      value={selection[question.questionId]?.freeformText || ''} disabled={isSubmitting || !canEdit}
+                      onChange={event => setFreeformText(question.questionId, event.currentTarget.value)}
+                      className="w-full rounded-md border border-border-default bg-surface-secondary px-3 py-2 text-sm" /> : <textarea
                       value={selection[question.questionId]?.freeformText || ''}
-                      disabled={isSubmitting}
+                      disabled={isSubmitting || !canEdit}
                       onChange={(event) => setFreeformText(question.questionId, event.currentTarget.value)}
                       className="w-full min-h-20 rounded-md border border-border-default bg-surface-secondary px-3 py-2 text-sm text-text-primary outline-none focus:border-accent-primary"
-                    />
+                    />}
                   </label>
                 )}
               </section>
@@ -337,11 +352,17 @@ export default function InteractivePromptModal({
 
         {/* Footer */}
         <div className="flex shrink-0 items-center justify-end gap-2 border-t border-border-default px-5 pt-4 pb-[calc(16px+env(safe-area-inset-bottom,0px))]">
+          {promptSession.prompt.support === 'product_local' && onDismissLocal && <button type="button" className="btn btn-ghost btn-sm" disabled={isSubmitting || !canEdit} onClick={() => { void onDismissLocal() }}>
+            {t('interactivePrompt.codexDismissLocal')}
+          </button>}
           {!canSubmit && unansweredQuestionCount > 0 && (
             <span className="mr-auto text-xs text-text-muted">
               {t('interactivePrompt.answersRequired', { count: unansweredQuestionCount })}
             </span>
           )}
+          {!canSubmit && canEdit && promptSession.prompt.binding && unansweredQuestionCount === 0 && <span className="mr-auto text-xs text-text-muted">
+            {t('interactivePrompt.oneAnswerRequired')}
+          </span>}
           <button type="button" className="btn btn-ghost btn-sm" onClick={onCancel} disabled={isSubmitting}>
             {t('common.cancel')}
           </button>

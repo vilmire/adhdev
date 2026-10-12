@@ -284,7 +284,7 @@ function InteractivePromptGate() {
         searchParams.get('activeTab'),
     )
     // Called before any early return so hook order stays stable across routes.
-    const { promptSession, hasActivePrompt, responseError, isSubmitting, submit, cancel, reopen } = useInteractivePrompt(sessionId)
+    const { promptSession, hasActivePrompt, responseError, isSubmitting, submit, cancel, reopen, dismissLocal } = useInteractivePrompt(sessionId)
 
     if (suppressed) return null
     if (!hasActivePrompt) return null
@@ -306,6 +306,7 @@ function InteractivePromptGate() {
                 error={responseError}
                 onSubmit={submit}
                 onCancel={cancel}
+                onDismissLocal={dismissLocal}
             />
         </div>
     )

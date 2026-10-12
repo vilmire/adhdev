@@ -1,5 +1,6 @@
-import { readString } from '@adhdev/mesh-shared';
-export interface InteractivePrompt {
+import { readString, isProviderQuestionBinding } from '@adhdev/mesh-shared';
+import type { ProviderQuestionBinding, ProviderQuestionEpisode } from '@adhdev/mesh-shared';
+export interface InteractivePrompt extends ProviderQuestionEpisode {
   promptId: string;
   origin: 'cli' | 'mcp' | 'agent';
   providerType: string;
@@ -14,6 +15,8 @@ export interface InteractiveQuestion {
   multiSelect: boolean;
   options: InteractiveOption[];
   allowFreeform?: boolean;
+  required?: boolean;
+  isSecret?: boolean;
 }
 
 export interface InteractiveOption {
@@ -25,6 +28,8 @@ export interface InteractiveOption {
 export interface InteractivePromptResponse {
   promptId: string;
   answers: Record<string, InteractiveAnswer>;
+  binding?: ProviderQuestionBinding;
+  action?: 'dismiss';
 }
 
 export interface InteractiveAnswer {
@@ -92,26 +97,53 @@ export function normalizeInteractivePrompt(raw: unknown): InteractivePrompt | nu
   return { promptId, origin, providerType, createdAt, questions };
 }
 
+/** Validate native shapes before legacy normalization can discard unsupported fields. */
+export function assertNativeInteractivePromptResponse(raw: unknown): asserts raw is InteractivePromptResponse {
+  const isRecord = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
+  const hasUnknownKeys = (value: object, keys: string[]) => Reflect.ownKeys(value).some(key => typeof key !== 'string' || !keys.includes(key));
+  if (!isRecord(raw) || hasUnknownKeys(raw, ['promptId', 'answers', 'binding', 'action'])
+    || typeof raw.promptId !== 'string' || !raw.promptId.trim() || !isProviderQuestionBinding(raw.binding)
+    || !isRecord(raw.answers) || (raw.action !== undefined && raw.action !== 'dismiss')) {
+    throw new Error('Malformed or unsupported native question response');
+  }
+  if (raw.action === 'dismiss' && raw.binding.transport !== 'codex_async') throw new Error('Native RPC dismissal is unsupported');
+  for (const key of Reflect.ownKeys(raw.answers)) {
+    if (typeof key !== 'string' || !key.trim()) throw new Error('Malformed native question id');
+    const answer = raw.answers[key];
+    if (!isRecord(answer) || hasUnknownKeys(answer, ['selectedLabels', 'freeformText'])
+      || !Array.isArray(answer.selectedLabels) || answer.selectedLabels.some(label => typeof label !== 'string')
+      || new Set(answer.selectedLabels).size !== answer.selectedLabels.length
+      || (answer.freeformText !== undefined && typeof answer.freeformText !== 'string')) {
+      throw new Error('Malformed or unsupported native answer');
+    }
+  }
+}
+
 export function normalizeInteractivePromptResponse(raw: unknown): InteractivePromptResponse {
   if (!raw || typeof raw !== 'object') throw new Error('Interactive prompt response must be an object');
   const record = raw as Record<string, unknown>;
+  if ('binding' in record) assertNativeInteractivePromptResponse(raw);
   const promptId = readString(record.promptId);
   if (!promptId) throw new Error('promptId must be a non-empty string');
   if (!record.answers || typeof record.answers !== 'object' || Array.isArray(record.answers)) {
     throw new Error('answers must be an object');
   }
-  const answers: Record<string, InteractiveAnswer> = {};
+  const answers: Record<string, InteractiveAnswer> = Object.create(null);
   for (const [questionId, answerRaw] of Object.entries(record.answers as Record<string, unknown>)) {
     if (!answerRaw || typeof answerRaw !== 'object' || Array.isArray(answerRaw)) continue;
     const answer = answerRaw as Record<string, unknown>;
-    const selectedLabels = readStringArray(answer.selectedLabels);
+    const selectedLabels = record.binding && Array.isArray(answer.selectedLabels)
+      ? answer.selectedLabels.slice() as string[] : readStringArray(answer.selectedLabels);
     const freeformText = readString(answer.freeformText);
     answers[questionId] = {
       selectedLabels,
       ...(freeformText ? { freeformText } : {}),
     };
   }
-  return { promptId, answers };
+  return { promptId, answers,
+    ...(record.binding ? { binding: record.binding as ProviderQuestionBinding } : {}),
+    ...(record.action === 'dismiss' ? { action: 'dismiss' as const } : {}),
+  };
 }
 
 /**
@@ -141,6 +173,11 @@ export function resolveInteractivePromptResponse(
   prompt: InteractivePrompt,
   raw: unknown,
 ): InteractivePromptResponse {
+  if (prompt.binding) {
+    assertNativeInteractivePromptResponse(raw);
+    if (raw.promptId !== prompt.promptId) throw new Error('Interactive prompt response does not match active prompt');
+    return normalizeInteractivePromptResponse(raw);
+  }
   if (!raw || typeof raw !== 'object') throw new Error('Interactive prompt response must be an object');
   const record = raw as Record<string, unknown>;
   const promptId = readString(record.promptId);

@@ -181,7 +181,9 @@ export const meshEventsHandlers: Record<string, HighFamilyHandler> = {
                 submitted: true,
                 promptId: applied.promptId,
                 answers: applied.answers,
-                note: 'Answer resolved against the active prompt and the submit keystrokes were dispatched to the TUI. Verify the session left awaiting_choice on the next status read.',
+                note: (payload as { binding?: unknown }).binding
+                    ? 'Response dispatched through the managed Codex transport. RPC resolution or ordinary async input delivery must be distinguished from native answer completion.'
+                    : 'Answer resolved against the active prompt and the submit keystrokes were dispatched to the TUI. Verify the session left awaiting_choice on the next status read.',
             };
         } catch (e: any) {
             const describeActive = (instance as unknown as {

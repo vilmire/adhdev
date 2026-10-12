@@ -1,4 +1,5 @@
 import type { DaemonData } from '../types'
+import { isProviderQuestionBinding } from '@adhdev/mesh-shared'
 import type { InteractivePrompt, InteractivePromptResponse } from './types'
 
 export interface InteractivePromptSession {
@@ -21,6 +22,19 @@ export function normalizeInteractivePromptPrompt(value: unknown): InteractivePro
   if (typeof record.promptId !== 'string' || !record.promptId.trim()) return null
   if (typeof record.providerType !== 'string' || !record.providerType.trim()) return null
   if (!Array.isArray(record.questions) || record.questions.length === 0) return null
+  if (record.providerType === 'codex-cli') {
+    const validQuestions = record.questions.every(q => q && typeof q.questionId === 'string' && !!q.questionId
+      && typeof q.question === 'string' && typeof q.multiSelect === 'boolean' && Array.isArray(q.options)
+      && q.options.every(o => o && typeof o.label === 'string' && !!o.label.trim() && (o.description === undefined || typeof o.description === 'string'))
+      && new Set(q.options.map(o => o.label)).size === q.options.length)
+      && new Set(record.questions.map(q => q?.questionId)).size === record.questions.length
+    const validLifecycle = record.lifecycle === 'pending' || record.lifecycle === 'submitted'
+    const expectedSupport = record.binding?.transport === 'codex_rpc' ? 'request_bound' : 'product_local'
+    if (!validQuestions || !isProviderQuestionBinding(record.binding) || !validLifecycle || typeof record.blocking !== 'boolean'
+      || record.support !== expectedSupport) {
+      return { ...record, questions: [], support: 'uncertain', lifecycle: 'unknown' } as InteractivePrompt
+    }
+  }
   return record as InteractivePrompt
 }
 
@@ -95,9 +109,17 @@ export function findInteractivePromptSession(
   const normalizedSessionId = typeof resolved.sessionId === 'string' ? resolved.sessionId.trim() : ''
   const includeHidden = resolved.includeHidden === true
   for (const entry of entries) {
-    const prompt = readPromptFromEntry(entry)
+    let prompt = readPromptFromEntry(entry)
     if (!prompt) continue
     const entrySessionId = getEntrySessionId(entry)
+    if (prompt.binding) {
+      const runtime = (entry as unknown as { runtime?: { runtimeKey?: string; surfaceKind?: string } }).runtime
+      if (prompt.binding.sessionId !== entrySessionId || ['offline', 'stopped', 'error'].includes(entry.status)
+        || (runtime?.runtimeKey && runtime.runtimeKey !== prompt.binding.generation)
+        || (runtime?.surfaceKind && runtime.surfaceKind !== 'live_runtime')) {
+        prompt = { ...prompt, support: 'uncertain', lifecycle: 'unknown' }
+      }
+    }
     if (normalizedSessionId && normalizedSessionId !== entrySessionId && normalizedSessionId !== entry.id) {
       continue
     }
@@ -121,11 +143,11 @@ export function buildInteractivePromptResponse(
   prompt: InteractivePrompt,
   selection: InteractivePromptSelection,
 ): InteractivePromptResponse {
-  const answers: InteractivePromptResponse['answers'] = {}
+  const answers: InteractivePromptResponse['answers'] = Object.create(null)
   for (const question of prompt.questions) {
     const selected = selection[question.questionId] || {}
     const selectedLabels = Array.from(new Set((selected.selectedLabels || [])
-      .map(label => label.trim())
+      .map(label => prompt.binding ? label : label.trim())
       .filter(Boolean)))
     const freeformText = selected.freeformText?.trim()
     answers[question.questionId] = {
@@ -135,6 +157,7 @@ export function buildInteractivePromptResponse(
   }
   return {
     promptId: prompt.promptId,
+    ...(prompt.binding ? { binding: prompt.binding } : {}),
     answers,
   }
 }
