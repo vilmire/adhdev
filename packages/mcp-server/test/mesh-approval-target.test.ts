@@ -61,9 +61,14 @@ describe('pending approval compatibility protocol', () => {
         assert.equal(result.attentionCount, 2);
         assert.equal(result.actionableCount, 0);
         assert.equal(result.approvals[0].sessionId, 'ledger');
+        assert.equal(result.approvals[0].waitingSince, new Date(8000).toISOString());
         assert.equal(result.approvals[0].actionable, false);
+        assert.equal(result.approvals[0].providerApproval.source, 'ledger_approval');
+        assert.equal(result.approvals[0].providerApproval.evidence, 'unavailable');
         assert.equal(result.needsAttention[0].nodeId, 'n');
         assert.equal(result.needsAttention[0].sessionId, 'ide');
+        assert.equal(result.needsAttention[0].source, 'legacy_provider');
+        assert.equal(result.needsAttention[0].compatibility, 'session_only');
         assert.equal(result.needsAttention[0].actionable, false);
         assert.equal(result.nextStep, undefined);
     });
