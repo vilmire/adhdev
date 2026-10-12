@@ -54618,9 +54618,12 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         REFUSED_KINDS = /* @__PURE__ */ new Set(["coordinator_operating_note", "coordinator_operating_note_tombstone"]);
       }
     });
+    function getActiveDirectDispatchesStrict(meshId) {
+      return MeshRuntimeStore.getInstance().getActiveDirectDispatches(meshId);
+    }
     function getActiveDirectDispatches(meshId) {
       try {
-        return MeshRuntimeStore.getInstance().getActiveDirectDispatches(meshId);
+        return getActiveDirectDispatchesStrict(meshId);
       } catch {
         return [];
       }
@@ -88418,19 +88421,13 @@ ${body}`;
     }
     function collectSessionIdsWithActiveWork(meshId) {
       const ids = /* @__PURE__ */ new Set();
-      try {
-        for (const task of getQueue(meshId, { status: ["pending", "assigned"] })) {
-          const sessionId = readStringValue2(task?.assignedSessionId);
-          if (sessionId) ids.add(sessionId);
-        }
-      } catch {
+      for (const task of getQueue(meshId, { status: ["pending", "assigned"] })) {
+        const sessionId = readStringValue2(task?.assignedSessionId);
+        if (sessionId) ids.add(sessionId);
       }
-      try {
-        for (const dispatch2 of getActiveDirectDispatches(meshId)) {
-          const sessionId = readStringValue2(dispatch2?.sessionId);
-          if (sessionId) ids.add(sessionId);
-        }
-      } catch {
+      for (const dispatch2 of getActiveDirectDispatchesStrict(meshId)) {
+        const sessionId = readStringValue2(dispatch2?.sessionId);
+        if (sessionId) ids.add(sessionId);
       }
       return ids;
     }
@@ -88502,6 +88499,16 @@ ${body}`;
       }
       return reported;
     }
+    function reportReapAborted(meshId, now, error) {
+      const last = reapAbortReportedAt.get(meshId);
+      if (last !== void 0 && now - last < REAP_ABORT_REPORT_INTERVAL_MS) return;
+      reapAbortReportedAt.set(meshId, now);
+      const message = error instanceof Error ? error.message : String(error);
+      LOG.warn(
+        "MeshIdleSessionReaper",
+        `Idle session reap ABORTED for mesh ${meshId}: the active-work enumeration (queue/direct dispatches) could not be read (${message}). An unreadable queue is not an empty queue \u2014 no session was stopped. Legitimate reaping resumes on the next tick once the read succeeds.`
+      );
+    }
     async function runIdleSessionReapPass(deps, args) {
       const empty = {
         plan: { reap: [], skipped: [] },
@@ -88518,10 +88525,17 @@ ${body}`;
         LOG.warn("MeshIdleSessionReaper", `listSessions failed for mesh ${args.meshId}: ${e?.message || e}`);
         return empty;
       }
+      let activeWorkSessionIds;
+      try {
+        activeWorkSessionIds = collectSessionIdsWithActiveWork(args.meshId);
+      } catch (e) {
+        reportReapAborted(args.meshId, now, e);
+        return { ...empty, abortedReason: "active_work_unreadable" };
+      }
       const plan = planIdleSessionReap({
         meshId: args.meshId,
         records,
-        activeWorkSessionIds: collectSessionIdsWithActiveWork(args.meshId),
+        activeWorkSessionIds,
         ttlMs,
         now
       });
@@ -88558,6 +88572,8 @@ ${body}`;
     }
     var IDLE_HOLDER_REPORT_INTERVAL_MS;
     var idleHolderReportedAt;
+    var REAP_ABORT_REPORT_INTERVAL_MS;
+    var reapAbortReportedAt;
     var reapedSessionCount;
     var init_mesh_idle_session_reaper = __esm2({
       "src/mesh/mesh-idle-session-reaper.ts"() {
@@ -88565,9 +88581,12 @@ ${body}`;
         init_logger();
         init_repo_mesh_types();
         init_mesh_work_queue();
+        init_mesh_direct_dispatch();
         init_dist();
         IDLE_HOLDER_REPORT_INTERVAL_MS = 30 * 6e4;
         idleHolderReportedAt = /* @__PURE__ */ new Map();
+        REAP_ABORT_REPORT_INTERVAL_MS = 15 * 6e4;
+        reapAbortReportedAt = /* @__PURE__ */ new Map();
         reapedSessionCount = 0;
       }
     });
@@ -168997,13 +169016,13 @@ var MESH_SEND_KEYS_TOOL = {
 };
 var MESH_LAUNCH_SESSION_TOOL = {
   name: "mesh_launch_session",
-  description: "Launch a new agent session on a mesh node. Returns the session ID for subsequent send_task/read_chat calls. If the user names a provider, preserve it exactly: Claude Code/Claude = claude-cli, Codex = codex-cli, Cursor = cursor-cli, Kimi = kimi, OpenCode = opencode, Grok = grok-cli, Antigravity = antigravity-cli. If type is omitted, resolve strictly from the node policy providerPriority and provider detection; fail closed when no configured provider is usable. Do not default to claude-cli.",
+  description: "Launch a new agent session on a mesh node. Returns the session ID for subsequent send_task/read_chat calls. If the user names a provider, preserve it exactly: Claude Code/Claude = claude-cli, Codex = codex-cli, Cursor = cursor-cli, Kimi = kimi, OpenCode = opencode, Grok = grok-cli, Antigravity = antigravity-cli. If type is omitted, resolve strictly from the node policy providerPriority and provider detection; fail closed when no configured provider is usable. Do not default to claude-cli. Duplicate guard (default, force not set): when the node already has a live mesh-owned worker session whose provider MATCHES the resolved launch type \u2014 or whose provider is unknown \u2014 that session is returned idempotently (success with reused:true, launched:false) instead of spawning an empty duplicate. A live session with a definitely DIFFERENT provider does NOT block the launch: a fresh session of the requested provider is started alongside it (intended cross-provider behavior, not a refusal). Pass force=true to bypass the guard entirely and always launch an additional session.",
   inputSchema: {
     type: "object",
     properties: {
       node_id: { type: "string", description: "Target node ID." },
       type: { type: "string", description: "Optional provider type to launch. Use claude-cli for Claude Code, codex-cli for Codex, cursor-cli for Cursor, kimi for Kimi, opencode for OpenCode, grok-cli for Grok, antigravity-cli for Antigravity. When omitted, node.policy.providerPriority is probed in order." },
-      force: { type: "boolean", description: "Set true to launch an ADDITIONAL session even when this node already has a live mesh-owned worker session. Default false: if a live worker session for this mesh+node already exists (e.g. an enqueue auto-launch just spawned one), the existing session is returned idempotently instead of creating an empty duplicate. Only pass force when you intentionally want a second concurrent provider/session on the node." }
+      force: { type: "boolean", description: "Set true to launch an ADDITIONAL session even when this node already has a live mesh-owned worker session. Default false: a live mesh-owned worker session for this mesh+node is returned idempotently (reused:true) when its provider matches the resolved type or is unknown; a session with a definitely different provider does NOT trigger reuse \u2014 a fresh session of the requested provider is launched. Only pass force when you intentionally want a second concurrent session on the node regardless of what already exists." }
     },
     required: ["node_id"]
   }
@@ -175088,6 +175107,63 @@ async function recordLaunchedSession(ctx, nodeId, providerType, launchPayload) {
   return providerSessionId;
 }
 async function meshLaunchSession(ctx, args) {
+  await recordMeshCoordinatorToolCall(ctx, "mesh_launch_session");
+  const audit = {};
+  let responseText;
+  try {
+    responseText = await meshLaunchSessionImpl(ctx, args, audit);
+  } catch (e) {
+    await recordMeshLaunchAudit(ctx, args, "failed", null);
+    throw e;
+  }
+  await recordMeshLaunchAudit(ctx, args, audit.outcome ?? null, responseText);
+  return responseText;
+}
+function classifyMeshLaunchOutcome(payload) {
+  if (!payload || typeof payload !== "object") return "failed";
+  if (payload.reused === true || payload.duplicate === true) return "reused";
+  if (payload.success === false) return "refused";
+  return "launched";
+}
+async function recordMeshLaunchAudit(ctx, args, outcomeOverride, responseText) {
+  let payload = null;
+  if (typeof responseText === "string") {
+    try {
+      const parsed = JSON.parse(responseText);
+      if (parsed && typeof parsed === "object") payload = parsed;
+    } catch {
+    }
+  }
+  const outcome = outcomeOverride ?? classifyMeshLaunchOutcome(payload);
+  const caller = buildMeshCoordinatorToolCallArgs(ctx, "mesh_launch_session");
+  const providerId = (value) => typeof value === "string" && /^[a-z][a-z0-9_-]{0,63}$/i.test(value.trim()) ? value.trim() : void 0;
+  const requestedType = providerId(args.type);
+  const resolvedProviderType = providerId(payload?.resolvedProviderType) || providerId(payload?.providerType);
+  const sessionId = readString(payload?.sessionId) || void 0;
+  const code = readString(payload?.code) || void 0;
+  const reason = readString(payload?.reason) || void 0;
+  try {
+    await recordLocal(ctx.transport, {
+      meshId: ctx.mesh.id,
+      kind: "session_launch_requested",
+      nodeId: args.node_id,
+      ...sessionId ? { sessionId } : {},
+      ...resolvedProviderType ? { providerType: resolvedProviderType } : {},
+      payload: {
+        outcome,
+        force: args.force === true,
+        ...requestedType ? { requestedType } : {},
+        ...resolvedProviderType ? { resolvedProviderType } : {},
+        ...code ? { code } : {},
+        ...reason ? { reason } : {},
+        callerRole: caller.callerRole,
+        ...caller.sessionId ? { coordinatorSessionId: caller.sessionId } : {}
+      }
+    });
+  } catch {
+  }
+}
+async function meshLaunchSessionImpl(ctx, args, audit) {
   const node = await findNodeWithRefresh(ctx, args.node_id);
   const bootstrapBlock = getWorktreeBootstrapLaunchBlock(node, ctx.mesh.policy);
   if (bootstrapBlock) return JSON.stringify(bootstrapBlock, null, 2);
@@ -175149,11 +175225,13 @@ async function meshLaunchSession(ctx, args) {
       }
     });
   } catch (e) {
+    audit.outcome = "failed";
     return JSON.stringify(await recordRecoverableLaunchFailure(ctx, node, resolvedProviderType, e), null, 2);
   }
   const launchPayload = extractLaunchPayload(result);
   if (launchPayload?.success === false || result?.success === false) {
     const launchError = new Error(launchPayload?.error || result?.error || "launch_cli rejected the session launch");
+    audit.outcome = "failed";
     return JSON.stringify(await recordRecoverableLaunchFailure(ctx, node, resolvedProviderType, launchError), null, 2);
   }
   const providerSessionId = await recordLaunchedSession(ctx, args.node_id, resolvedProviderType, launchPayload);

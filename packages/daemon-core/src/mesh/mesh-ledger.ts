@@ -74,6 +74,18 @@ export type MeshLedgerKind =
     // payload: { taskId, deliveryId, transport, attemptedSessionId, holderSessionId, attemptId?, rebound }
     | 'dispatch_duplicate_rebound'
     | 'session_launched'
+    // MESH-LAUNCH-AUDIT: one coordinator-side record per mesh_launch_session tool
+    // call, written by the mcp-server handler (recordMeshLaunchAudit) AFTER the
+    // outcome is known. Complements, never replaces, the daemon-side
+    // 'session_launched' accounting row: that row exists only for an actual spawn,
+    // while this one covers EVERY outcome — including the duplicate-guard reuse and
+    // the gate refusals that previously left no trace (the 2026-10-10 orphan
+    // investigation could not attribute a manual launch to its caller).
+    // Identifiers + enums only — never task text, prompts, or config bodies.
+    // payload: { outcome: 'launched'|'reused'|'refused'|'failed', force: boolean,
+    //            requestedType?, resolvedProviderType?,
+    //            code?, reason?, callerRole?, coordinatorSessionId? }
+    | 'session_launch_requested'
     | 'session_auto_launch'
     | 'session_stopped'
     | 'checkpoint_created'

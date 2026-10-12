@@ -18,11 +18,24 @@ function makeCtx(nodePolicy: Record<string, unknown>, existingSessions: any[] = 
     meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
   };
   const launchCalls: Array<{ command: string; args: Record<string, unknown> }> = [];
+  // MESH-LAUNCH-AUDIT capture: every mesh_launch_session call must produce exactly
+  // one tool_call_record row (caller identity) and one record_local ledger audit
+  // (outcome + safe fields).
+  const toolCallRecords: Array<Record<string, unknown>> = [];
+  const localRecords: Array<Record<string, unknown>> = [];
   transport.command = async (command, args = {}) => {
     // MESH-LAUNCH-DUP-GUARD probes live status before launch; tests may seed existing sessions.
     if (command === 'get_status_metadata') return { success: true, status: { sessions: existingSessions } };
     if (command === 'get_mesh') return { success: true, mesh: (args as any).inlineMesh || mesh };
     if (command === 'trigger_mesh_queue') return { success: true, trigger: { success: true } };
+    if (command === 'tool_call_record') {
+      toolCallRecords.push(args);
+      return { success: true, rateLimitExceeded: false, callsInWindow: 1, advisory: null };
+    }
+    if (command === 'record_local') {
+      localRecords.push(args);
+      return { success: true, eventId: 'evt-1', timestamp: new Date().toISOString(), storedLocally: true, published: false };
+    }
     if (command === 'launch_cli') {
       launchCalls.push({ command, args });
       return { success: true, sessionId: 'session-1' };
@@ -62,7 +75,7 @@ function makeCtx(nodePolicy: Record<string, unknown>, existingSessions: any[] = 
     }],
   };
   const ctx = { mesh, transport, localDaemonId: 'daemon-mac' } as any;
-  return { ctx, launchCalls, mesh };
+  return { ctx, launchCalls, toolCallRecords, localRecords, mesh };
 }
 
 test('explicit type is honored when the node has a slot for it', async () => {
@@ -298,4 +311,170 @@ test('dup-guard: force=true bypasses the guard entirely (always launches)', asyn
   const launch = launchCalls.find(c => c.command === 'launch_cli');
   assert.ok(launch, 'force=true always issues a launch');
   assert.equal(launch!.args.cliType, 'claude-cli');
+});
+
+// ── MESH-LAUNCH-AUDIT ─────────────────────────────────────────────────────────
+// Every mesh_launch_session call must land in the structured audit path:
+//   - ONE mesh_tool_call_log row via tool_call_record (caller identity from the
+//     trusted ctx.coordinatorSessionId, never from a tool argument), and
+//   - ONE session_launch_requested ledger record with the outcome + safe fields.
+// Previously neither fired for launches, so a manual duplicate launch (the
+// 2026-10-10 orphan incident) was unattributable after the fact.
+
+function launchAudit(records: Array<Record<string, unknown>>) {
+  const found = records.filter(r => r.kind === 'session_launch_requested');
+  assert.equal(found.length, 1, `exactly one session_launch_requested record, got ${found.length}`);
+  return found[0];
+}
+
+test('audit: a fresh launch records tool_call_record + session_launch_requested(launched)', async () => {
+  const { ctx, toolCallRecords, localRecords } = makeCtx({
+    providerPriority: ['claude-cli'],
+    slots: [{ provider: 'claude-cli' }],
+  });
+  ctx.coordinatorSessionId = 'coord-session-1';
+  const result = JSON.parse(await meshLaunchSession(ctx, { node_id: 'node-mac', type: 'claude-cli' }));
+  assert.equal(result.success !== false, true, `launch should succeed: ${JSON.stringify(result)}`);
+
+  assert.deepEqual(toolCallRecords.map(r => r.tool), ['mesh_launch_session']);
+  assert.equal(toolCallRecords[0].meshId, 'mesh-cursor');
+  assert.equal(toolCallRecords[0].sessionId, 'coord-session-1');
+  assert.equal(toolCallRecords[0].callerRole, 'coordinator');
+
+  const audit = launchAudit(localRecords);
+  assert.equal(audit.meshId, 'mesh-cursor');
+  assert.equal(audit.nodeId, 'node-mac');
+  assert.equal(audit.providerType, 'claude-cli');
+  assert.equal(audit.sessionId, 'session-1');
+  const payload = audit.payload as Record<string, unknown>;
+  assert.equal(payload.outcome, 'launched');
+  assert.equal(payload.force, false);
+  assert.equal(payload.requestedType, 'claude-cli');
+  assert.equal(payload.resolvedProviderType, 'claude-cli');
+  assert.equal(payload.callerRole, 'coordinator');
+  assert.equal(payload.coordinatorSessionId, 'coord-session-1');
+});
+
+test('audit: dup-guard reuse records outcome reused (and no launch_cli)', async () => {
+  const { ctx, launchCalls, toolCallRecords, localRecords } = makeCtx(
+    { providerPriority: ['claude-cli'], slots: [{ provider: 'claude-cli' }] },
+    [idleMeshSession('mesh-cursor', 'node-mac', 'claude-cli', 'claude-1')],
+  );
+  const result = JSON.parse(await meshLaunchSession(ctx, { node_id: 'node-mac', type: 'claude-cli' }));
+  assert.equal(result.reused, true);
+  assert.equal(launchCalls.some(c => c.command === 'launch_cli'), false);
+
+  assert.deepEqual(toolCallRecords.map(r => r.tool), ['mesh_launch_session']);
+  // No coordinator session in ctx → callerRole is 'unknown', never fabricated.
+  assert.equal(toolCallRecords[0].callerRole, 'unknown');
+  assert.equal('sessionId' in toolCallRecords[0], false);
+
+  const audit = launchAudit(localRecords);
+  const payload = audit.payload as Record<string, unknown>;
+  assert.equal(payload.outcome, 'reused');
+  assert.equal(payload.force, false);
+  assert.equal(audit.sessionId, 'claude-1');
+});
+
+test('audit: force=true bypass records outcome launched with force:true', async () => {
+  const { ctx, localRecords } = makeCtx(
+    { providerPriority: ['claude-cli'], slots: [{ provider: 'claude-cli' }] },
+    [idleMeshSession('mesh-cursor', 'node-mac', 'claude-cli', 'claude-1')],
+  );
+  const result = JSON.parse(await meshLaunchSession(ctx, { node_id: 'node-mac', type: 'claude-cli', force: true }));
+  assert.notEqual(result.reused, true);
+  const payload = launchAudit(localRecords).payload as Record<string, unknown>;
+  assert.equal(payload.outcome, 'launched');
+  assert.equal(payload.force, true);
+});
+
+test('audit: an unsupported-provider refusal records outcome refused with its code', async () => {
+  const { ctx, launchCalls, localRecords } = makeCtx({
+    providerPriority: ['claude-cli'],
+    slots: [{ provider: 'claude-cli' }, { provider: 'codex-cli' }],
+  });
+  const result = JSON.parse(await meshLaunchSession(ctx, { node_id: 'node-mac', type: 'cursor-cli' }));
+  assert.equal(result.success, false);
+  assert.equal(launchCalls.some(c => c.command === 'launch_cli'), false);
+
+  const audit = launchAudit(localRecords);
+  const payload = audit.payload as Record<string, unknown>;
+  assert.equal(payload.outcome, 'refused');
+  assert.equal(payload.code, 'mesh_provider_type_unsupported');
+  assert.equal(payload.requestedType, 'cursor-cli');
+});
+
+test('audit: a failed launch_cli records outcome failed (not launched)', async () => {
+  const { ctx, localRecords, mesh } = makeCtx({
+    providerPriority: ['claude-cli'],
+    slots: [{ provider: 'claude-cli' }],
+  });
+  ctx.transport.command = (async (command: string, args: Record<string, unknown> = {}) => {
+    if (command === 'launch_cli') throw new Error('daemon mesh transport unavailable');
+    if (command === 'tool_call_record') return { success: true, rateLimitExceeded: false, callsInWindow: 1, advisory: null };
+    if (command === 'record_local') {
+      localRecords.push(args);
+      return { success: true, eventId: 'evt-1', timestamp: new Date().toISOString(), storedLocally: true, published: false };
+    }
+    if (command === 'get_status_metadata') return { success: true, status: { sessions: [] } };
+    if (command === 'get_mesh') return { success: true, mesh };
+    throw new Error(`unexpected direct command: ${command}`);
+  }) as any;
+  const result = JSON.parse(await meshLaunchSession(ctx, { node_id: 'node-mac', type: 'claude-cli' }));
+  assert.equal(result.success, false);
+  assert.equal(result.recoverable !== undefined, true, 'recoverable classification present');
+
+  const audits = localRecords.filter(r => r.kind === 'session_launch_requested');
+  assert.equal(audits.length, 1, `exactly one session_launch_requested record, got ${audits.length}`);
+  assert.equal((audits[0].payload as Record<string, unknown>).outcome, 'failed');
+  // The detailed failure classification still lands under its existing kind —
+  // the audit row supplements it, never replaces it.
+  assert.ok(localRecords.some(r => r.kind === 'recovery_attempted'), 'existing failure ledger row preserved');
+});
+
+
+test('audit: invalid provider input keeps the refusal but omits unsafe requestedType', async () => {
+  for (const type of ['claude-cli\nprivate prompt text', '/private/example/credentials', 'x'.repeat(65)]) {
+    const { ctx, launchCalls, toolCallRecords, localRecords } = makeCtx({
+      providerPriority: ['claude-cli'], slots: [{ provider: 'claude-cli' }],
+    });
+    ctx.coordinatorSessionId = 'coord-session-1';
+    const result = JSON.parse(await meshLaunchSession(ctx, { node_id: 'node-mac', type }));
+    assert.equal(result.success, false);
+    assert.equal(result.code, 'mesh_provider_type_unsupported');
+    assert.equal(result.requestedType, type, 'existing error response is preserved');
+    assert.equal(launchCalls.some(c => c.command === 'launch_cli'), false);
+    assert.deepEqual(toolCallRecords.map(r => r.tool), ['mesh_launch_session']);
+    assert.equal(toolCallRecords[0].sessionId, 'coord-session-1');
+    const audit = launchAudit(localRecords);
+    const payload = audit.payload as Record<string, unknown>;
+    assert.equal(payload.outcome, 'refused');
+    assert.equal(payload.code, 'mesh_provider_type_unsupported');
+    assert.equal(payload.callerRole, 'coordinator');
+    assert.equal(payload.coordinatorSessionId, 'coord-session-1');
+    assert.equal('requestedType' in payload, false);
+    assert.equal(JSON.stringify(audit).includes(type), false);
+  }
+});
+
+
+test('audit: a legacy-node failed launch cannot echo unsafe resolvedProviderType', async () => {
+  const type = '/private/example/credentials\nprivate prompt text';
+  const { ctx, toolCallRecords, localRecords } = makeCtx({ providerPriority: ['claude-cli'] });
+  const command = ctx.transport.command;
+  ctx.transport.command = async (name: string, args: Record<string, unknown> = {}) => {
+    if (name === 'launch_cli') return { success: false, error: 'unsupported provider' };
+    return command(name, args);
+  };
+  const result = JSON.parse(await meshLaunchSession(ctx, { node_id: 'node-mac', type }));
+  assert.equal(result.success, false);
+  assert.equal(result.resolvedProviderType, type, 'existing error response is preserved');
+  assert.deepEqual(toolCallRecords.map(r => r.tool), ['mesh_launch_session']);
+  const audit = launchAudit(localRecords);
+  const payload = audit.payload as Record<string, unknown>;
+  assert.equal(payload.outcome, 'failed');
+  assert.equal('requestedType' in payload, false);
+  assert.equal('resolvedProviderType' in payload, false);
+  assert.equal('providerType' in audit, false);
+  assert.equal(JSON.stringify(audit).includes(type), false);
 });

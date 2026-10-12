@@ -9,6 +9,7 @@ import {
     findNodeWithRefresh,
     findOptionalNodeWithRefresh,
     readActiveWorkFromDaemon,
+    buildMeshCoordinatorToolCallArgs,
     recordMeshCoordinatorToolCall,
     refreshMeshFromDaemon,
     triggerMeshQueueAndReport,
@@ -853,6 +854,102 @@ export async function meshLaunchSession(
     ctx: MeshContext,
     args: { node_id: string; type?: string; force?: boolean },
 ): Promise<string> {
+    // MESH-TOOL-CALL-CALLER-INSTRUMENTATION: mesh_launch_session was the one
+    // dispatch-class tool with NO mesh_tool_call_log row (only mesh_status /
+    // mesh_view_queue / mesh_list_pending_approvals recorded), so the 2026-10-10
+    // orphan investigation could not attribute a manual launch to its caller.
+    // Caller identity comes from ctx (ADHDEV_COORDINATOR_SESSION_ID, injected at
+    // coordinator launch) — never from tool arguments.
+    await recordMeshCoordinatorToolCall(ctx, 'mesh_launch_session');
+    // audit.outcome is set by the impl ONLY on a genuinely attempted-and-failed
+    // launch_cli; everything else is classified from the response payload.
+    const audit: { outcome?: MeshLaunchOutcome } = {};
+    let responseText: string;
+    try {
+        responseText = await meshLaunchSessionImpl(ctx, args, audit);
+    } catch (e) {
+        await recordMeshLaunchAudit(ctx, args, 'failed', null);
+        throw e;
+    }
+    await recordMeshLaunchAudit(ctx, args, audit.outcome ?? null, responseText);
+    return responseText;
+}
+
+type MeshLaunchOutcome = 'launched' | 'reused' | 'refused' | 'failed';
+
+function classifyMeshLaunchOutcome(payload: Record<string, unknown> | null): MeshLaunchOutcome {
+    if (!payload || typeof payload !== 'object') return 'failed';
+    if (payload.reused === true || payload.duplicate === true) return 'reused';
+    // success:false without an impl marker = a pre-launch gate refusal
+    // (bootstrap block, unsupported provider, quota gate, no usable provider,
+    // missing coordinator daemon id) — the launch was never attempted.
+    if (payload.success === false) return 'refused';
+    return 'launched';
+}
+
+/**
+ * MESH-LAUNCH-AUDIT: one structured ledger record per mesh_launch_session call
+ * (kind 'session_launch_requested'), covering the outcomes the daemon-side
+ * 'session_launched' accounting row never sees — duplicate-guard reuse and gate
+ * refusals. Identifiers + short codes ONLY: node/session/provider ids, the
+ * requested force flag, outcome, and the refusal/failure code. Never the error
+ * message body, task text, prompts, or config.
+ *
+ * Best-effort: an audit failure must never turn a decided launch call into a
+ * tool error, exactly like the send_keys audit above.
+ */
+async function recordMeshLaunchAudit(
+    ctx: MeshContext,
+    args: { node_id: string; type?: string; force?: boolean },
+    outcomeOverride: MeshLaunchOutcome | null,
+    responseText: string | null,
+): Promise<void> {
+    let payload: Record<string, unknown> | null = null;
+    if (typeof responseText === 'string') {
+        try {
+            const parsed = JSON.parse(responseText);
+            if (parsed && typeof parsed === 'object') payload = parsed;
+        } catch { /* unparsable response — audit with no detail */ }
+    }
+    const outcome = outcomeOverride ?? classifyMeshLaunchOutcome(payload);
+    const caller = buildMeshCoordinatorToolCallArgs(ctx, 'mesh_launch_session');
+    // Audit identifiers only. Keep validation separate from launch semantics:
+    // unsupported input still receives the existing refusal/error response.
+    const providerId = (value: unknown): string | undefined =>
+        typeof value === 'string' && /^[a-z][a-z0-9_-]{0,63}$/i.test(value.trim()) ? value.trim() : undefined;
+    const requestedType = providerId(args.type);
+    // A legacy node without capability slots may pass the requested value on to
+    // launch_cli; do not reintroduce unsafe input through the response field.
+    const resolvedProviderType = providerId(payload?.resolvedProviderType) || providerId(payload?.providerType);
+    const sessionId = readString(payload?.sessionId) || undefined;
+    const code = readString(payload?.code) || undefined;
+    const reason = readString(payload?.reason) || undefined;
+    try {
+        await recordLocal(ctx.transport, {
+            meshId: ctx.mesh.id,
+            kind: 'session_launch_requested',
+            nodeId: args.node_id,
+            ...(sessionId ? { sessionId } : {}),
+            ...(resolvedProviderType ? { providerType: resolvedProviderType } : {}),
+            payload: {
+                outcome,
+                force: args.force === true,
+                ...(requestedType ? { requestedType } : {}),
+                ...(resolvedProviderType ? { resolvedProviderType } : {}),
+                ...(code ? { code } : {}),
+                ...(reason ? { reason } : {}),
+                callerRole: caller.callerRole,
+                ...(caller.sessionId ? { coordinatorSessionId: caller.sessionId } : {}),
+            },
+        });
+    } catch { /* ledger append is best-effort */ }
+}
+
+async function meshLaunchSessionImpl(
+    ctx: MeshContext,
+    args: { node_id: string; type?: string; force?: boolean },
+    audit: { outcome?: MeshLaunchOutcome },
+): Promise<string> {
     const node = await findNodeWithRefresh(ctx, args.node_id);
     const bootstrapBlock = getWorktreeBootstrapLaunchBlock(node, ctx.mesh.policy);
     if (bootstrapBlock) return JSON.stringify(bootstrapBlock, null, 2);
@@ -923,11 +1020,13 @@ export async function meshLaunchSession(
             }
         });
     } catch (e: any) {
+        audit.outcome = 'failed';
         return JSON.stringify(await recordRecoverableLaunchFailure(ctx, node, resolvedProviderType, e), null, 2);
     }
     const launchPayload = extractLaunchPayload(result);
     if (launchPayload?.success === false || result?.success === false) {
         const launchError = new Error(launchPayload?.error || result?.error || 'launch_cli rejected the session launch');
+        audit.outcome = 'failed';
         return JSON.stringify(await recordRecoverableLaunchFailure(ctx, node, resolvedProviderType, launchError), null, 2);
     }
     const providerSessionId = await recordLaunchedSession(ctx, args.node_id, resolvedProviderType, launchPayload);
