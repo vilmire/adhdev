@@ -365,7 +365,7 @@ function cloneAttempt(attempt: TurnAttempt): TurnAttempt {
         prevGeneration: attempt.prevGeneration ? { ...attempt.prevGeneration } : null,
         coordinator: { ...attempt.coordinator },
         terminal: attempt.terminal ? { ...attempt.terminal } : null,
-        data: { ...attempt.data, ...(attempt.data.gitSideEffect ? { gitSideEffect: { ...attempt.data.gitSideEffect } } : {}) },
+        data: { ...attempt.data, ...(attempt.data.providerSuspension ? { providerSuspension: { ...attempt.data.providerSuspension } } : {}), ...(attempt.data.gitSideEffect ? { gitSideEffect: { ...attempt.data.gitSideEffect } } : {}) },
     };
 }
 

@@ -115,6 +115,7 @@ describe('typed provider approval projection', () => {
         expect(suspended.attempt?.data.providerSuspension).toMatchObject({ at: NOW + 2000, modalKey: 'modal:first', resolvedAt: null });
         const resolved = reduce({ attempt: suspended.attempt, holds: suspended.holds, evidence: ev('suspension_resolved', { resolution: 'approved', via: 'modal_button' }, { at: NOW + 3000 }), policy: POLICY, nowMs: NOW + 3000 });
         expect(resolved.attempt?.data.providerSuspension?.resolvedAt).toBe(NOW + 3000);
+        expect(suspended.attempt?.data.providerSuspension?.resolvedAt).toBeNull();
         const resumedByActivity = reduce({ attempt: suspended.attempt, holds: suspended.holds, evidence: ev('turn_started', { retro: false }, { at: NOW + 3500 }), policy: POLICY, nowMs: NOW + 3500 });
         expect(resumedByActivity.attempt?.data.providerSuspension?.resolvedAt).toBe(NOW + 3500);
         const replay = reduce({ attempt: makeAttempt('suspended', { generation: 2, suspension: 'approval' }), holds: [], evidence: ev('suspension_resolved', { resolution: 'approved', via: 'modal_button' }), policy: POLICY, nowMs: NOW });
