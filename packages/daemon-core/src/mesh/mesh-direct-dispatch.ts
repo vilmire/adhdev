@@ -25,9 +25,14 @@ import { meshRecord } from './mesh-record.js';
 
 export type DirectDispatchRecord = DirectDispatchView;
 
+/** Strict read for reclamation: unreadable holders must never authorize a stop. */
+export function getActiveDirectDispatchesStrict(meshId: string): DirectDispatchRecord[] {
+    return MeshRuntimeStore.getInstance().getActiveDirectDispatches(meshId);
+}
+
 export function getActiveDirectDispatches(meshId: string): DirectDispatchRecord[] {
     try {
-        return MeshRuntimeStore.getInstance().getActiveDirectDispatches(meshId);
+        return getActiveDirectDispatchesStrict(meshId);
     } catch {
         return [];
     }

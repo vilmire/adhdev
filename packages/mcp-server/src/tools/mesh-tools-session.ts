@@ -911,8 +911,14 @@ async function recordMeshLaunchAudit(
     }
     const outcome = outcomeOverride ?? classifyMeshLaunchOutcome(payload);
     const caller = buildMeshCoordinatorToolCallArgs(ctx, 'mesh_launch_session');
-    const requestedType = typeof args.type === 'string' && args.type.trim() ? args.type.trim() : undefined;
-    const resolvedProviderType = readString(payload?.resolvedProviderType) || readString(payload?.providerType) || undefined;
+    // Audit identifiers only. Keep validation separate from launch semantics:
+    // unsupported input still receives the existing refusal/error response.
+    const providerId = (value: unknown): string | undefined =>
+        typeof value === 'string' && /^[a-z][a-z0-9_-]{0,63}$/i.test(value.trim()) ? value.trim() : undefined;
+    const requestedType = providerId(args.type);
+    // A legacy node without capability slots may pass the requested value on to
+    // launch_cli; do not reintroduce unsafe input through the response field.
+    const resolvedProviderType = providerId(payload?.resolvedProviderType) || providerId(payload?.providerType);
     const sessionId = readString(payload?.sessionId) || undefined;
     const code = readString(payload?.code) || undefined;
     const reason = readString(payload?.reason) || undefined;

@@ -58,7 +58,8 @@
 import { LOG } from '../logging/logger.js';
 import type { RepoMeshPolicy } from '../repo-mesh-types.js';
 import { resolveDelegatedSessionIdleTtlMs } from '../repo-mesh-types.js';
-import { getQueue, getActiveDirectDispatches } from './mesh-work-queue.js';
+import { getQueue } from './mesh-work-queue.js';
+import { getActiveDirectDispatchesStrict } from './mesh-direct-dispatch.js';
 import { sessionIdsEquivalent } from '@adhdev/mesh-shared';
 
 /**
@@ -122,7 +123,7 @@ export function collectSessionIdsWithActiveWork(meshId: string): Set<string> {
         const sessionId = readStringValue((task as any)?.assignedSessionId);
         if (sessionId) ids.add(sessionId);
     }
-    for (const dispatch of getActiveDirectDispatches(meshId)) {
+    for (const dispatch of getActiveDirectDispatchesStrict(meshId)) {
         const sessionId = readStringValue((dispatch as any)?.sessionId);
         if (sessionId) ids.add(sessionId);
     }

@@ -54516,9 +54516,12 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         REFUSED_KINDS = /* @__PURE__ */ new Set(["coordinator_operating_note", "coordinator_operating_note_tombstone"]);
       }
     });
+    function getActiveDirectDispatchesStrict(meshId) {
+      return MeshRuntimeStore.getInstance().getActiveDirectDispatches(meshId);
+    }
     function getActiveDirectDispatches(meshId) {
       try {
-        return MeshRuntimeStore.getInstance().getActiveDirectDispatches(meshId);
+        return getActiveDirectDispatchesStrict(meshId);
       } catch {
         return [];
       }
@@ -88207,7 +88210,7 @@ ${body}`;
         const sessionId = readStringValue2(task?.assignedSessionId);
         if (sessionId) ids.add(sessionId);
       }
-      for (const dispatch2 of getActiveDirectDispatches(meshId)) {
+      for (const dispatch2 of getActiveDirectDispatchesStrict(meshId)) {
         const sessionId = readStringValue2(dispatch2?.sessionId);
         if (sessionId) ids.add(sessionId);
       }
@@ -88363,6 +88366,7 @@ ${body}`;
         init_logger();
         init_repo_mesh_types();
         init_mesh_work_queue();
+        init_mesh_direct_dispatch();
         init_dist();
         IDLE_HOLDER_REPORT_INTERVAL_MS = 30 * 6e4;
         idleHolderReportedAt = /* @__PURE__ */ new Map();
@@ -174665,8 +174669,9 @@ async function recordMeshLaunchAudit(ctx, args, outcomeOverride, responseText) {
   }
   const outcome = outcomeOverride ?? classifyMeshLaunchOutcome(payload);
   const caller = buildMeshCoordinatorToolCallArgs(ctx, "mesh_launch_session");
-  const requestedType = typeof args.type === "string" && args.type.trim() ? args.type.trim() : void 0;
-  const resolvedProviderType = readString(payload?.resolvedProviderType) || readString(payload?.providerType) || void 0;
+  const providerId = (value) => typeof value === "string" && /^[a-z][a-z0-9_-]{0,63}$/i.test(value.trim()) ? value.trim() : void 0;
+  const requestedType = providerId(args.type);
+  const resolvedProviderType = providerId(payload?.resolvedProviderType) || providerId(payload?.providerType);
   const sessionId = readString(payload?.sessionId) || void 0;
   const code = readString(payload?.code) || void 0;
   const reason = readString(payload?.reason) || void 0;

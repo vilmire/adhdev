@@ -431,3 +431,50 @@ test('audit: a failed launch_cli records outcome failed (not launched)', async (
   // the audit row supplements it, never replaces it.
   assert.ok(localRecords.some(r => r.kind === 'recovery_attempted'), 'existing failure ledger row preserved');
 });
+
+
+test('audit: invalid provider input keeps the refusal but omits unsafe requestedType', async () => {
+  for (const type of ['claude-cli\nprivate prompt text', '/private/example/credentials', 'x'.repeat(65)]) {
+    const { ctx, launchCalls, toolCallRecords, localRecords } = makeCtx({
+      providerPriority: ['claude-cli'], slots: [{ provider: 'claude-cli' }],
+    });
+    ctx.coordinatorSessionId = 'coord-session-1';
+    const result = JSON.parse(await meshLaunchSession(ctx, { node_id: 'node-mac', type }));
+    assert.equal(result.success, false);
+    assert.equal(result.code, 'mesh_provider_type_unsupported');
+    assert.equal(result.requestedType, type, 'existing error response is preserved');
+    assert.equal(launchCalls.some(c => c.command === 'launch_cli'), false);
+    assert.deepEqual(toolCallRecords.map(r => r.tool), ['mesh_launch_session']);
+    assert.equal(toolCallRecords[0].sessionId, 'coord-session-1');
+    const audit = launchAudit(localRecords);
+    const payload = audit.payload as Record<string, unknown>;
+    assert.equal(payload.outcome, 'refused');
+    assert.equal(payload.code, 'mesh_provider_type_unsupported');
+    assert.equal(payload.callerRole, 'coordinator');
+    assert.equal(payload.coordinatorSessionId, 'coord-session-1');
+    assert.equal('requestedType' in payload, false);
+    assert.equal(JSON.stringify(audit).includes(type), false);
+  }
+});
+
+
+test('audit: a legacy-node failed launch cannot echo unsafe resolvedProviderType', async () => {
+  const type = '/private/example/credentials\nprivate prompt text';
+  const { ctx, toolCallRecords, localRecords } = makeCtx({ providerPriority: ['claude-cli'] });
+  const command = ctx.transport.command;
+  ctx.transport.command = async (name: string, args: Record<string, unknown> = {}) => {
+    if (name === 'launch_cli') return { success: false, error: 'unsupported provider' };
+    return command(name, args);
+  };
+  const result = JSON.parse(await meshLaunchSession(ctx, { node_id: 'node-mac', type }));
+  assert.equal(result.success, false);
+  assert.equal(result.resolvedProviderType, type, 'existing error response is preserved');
+  assert.deepEqual(toolCallRecords.map(r => r.tool), ['mesh_launch_session']);
+  const audit = launchAudit(localRecords);
+  const payload = audit.payload as Record<string, unknown>;
+  assert.equal(payload.outcome, 'failed');
+  assert.equal('requestedType' in payload, false);
+  assert.equal('resolvedProviderType' in payload, false);
+  assert.equal('providerType' in audit, false);
+  assert.equal(JSON.stringify(audit).includes(type), false);
+});
