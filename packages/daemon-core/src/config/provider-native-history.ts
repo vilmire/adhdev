@@ -8,6 +8,7 @@
  * re-exports the public surface so call sites are unchanged.
  */
 
+import type { NativeTurnTerminalMarker } from '../chat/native-turn-signal.js';
 import * as fs from 'fs';
 import type { ProviderCanonicalHistoryConfig, ProviderHistoryBehavior } from '../providers/contracts.js';
 import { readChatHistory, readExistingSessionStartRecord, rewriteCanonicalSavedHistory } from './chat-history.js';
@@ -22,7 +23,7 @@ export type ProviderNativeHistoryScripts = Record<string, ((input: any) => any) 
 type ProviderNativeHistoryReadResult = {
     records: HistoryMessage[];
     /** (NATIVE-TURN-SIGNAL) provider-native turn-terminal records, when the reader surfaces them. */
-    turnTerminalMarkers?: Array<{ receivedAt: number; outcome: 'completed' | 'aborted'; summary: string; turnId?: string }>;
+    turnTerminalMarkers?: NativeTurnTerminalMarker[];
     sourcePath: string;
     sourceMtimeMs: number;
     providerSessionId?: string;
@@ -334,7 +335,7 @@ export function readProviderChatHistory(
     ownerConfirmed?: boolean;
     attribution?: string;
     /** (NATIVE-TURN-SIGNAL) provider-native turn-terminal records, when the reader surfaces them. */
-    turnTerminalMarkers?: Array<{ receivedAt: number; outcome: 'completed' | 'aborted'; summary: string; turnId?: string }>;
+    turnTerminalMarkers?: NativeTurnTerminalMarker[];
 } {
     if (isNativeSourceCanonicalHistory(options.canonicalHistory) && (options.historySessionId || options.workspace)) {
         const nativeResult = buildNativeHistoryReadResult(agentType, options.canonicalHistory, options.scripts, options.historySessionId, options.workspace, options.excludeInProgressTurn, options.sessionStartedAtMs, options.envOverrides, options.forceRefresh, options.instanceId);

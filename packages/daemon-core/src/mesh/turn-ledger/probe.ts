@@ -149,7 +149,8 @@ export interface TranscriptObservation {
     /** A native history read happened for a provider with a native turn signal. */
     nativeRead: boolean;
     /** Scoped native turn-terminal marker, when one was found. */
-    nativeMarker?: { outcome: 'completed' | 'aborted'; turnId?: string };
+    nativeMarker?: import('@adhdev/mesh-shared').NativeTurnMarkerRef;
+    nativeFailure?: import('@adhdev/mesh-shared').ProviderFailure;
 }
 
 export type TranscriptAnalyzer = (
@@ -240,6 +241,9 @@ export function probeEvidence(attempt: TurnAttempt, read: TurnProbeRead, ctx: Pr
     }
 
     if (t && status === 'idle') {
+        if (t.nativeMarker?.outcome === 'failed') return [{ ...base, eventId: eventId('native_failure'),
+            kind: 'turn_end', strength: 'genuine', nativeOutcome: 'failed', nativeMarker: t.nativeMarker, providerFailure: t.nativeFailure ?? 'provider_error',
+            live: { modal: t.activeModal, adapterPending: false, trailingTool: false } }];
         const finalThisTurn = t.finalAssistantAt !== undefined && t.finalAssistantAt >= boundary;
         if (finalThisTurn || t.nativeMarker) {
             return [{

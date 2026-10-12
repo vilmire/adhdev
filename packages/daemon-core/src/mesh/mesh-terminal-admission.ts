@@ -141,6 +141,7 @@ export function evaluateTerminalAdmission(input: TerminalAdmissionInput): Termin
     //    through to the legacy rules below — never fabricate marker evidence.
     if (input.providerHasNativeMarker && input.nativeMarkersFieldPresent) {
         const marker = selectTurnTerminalMarker(input.nativeMarkers, input.turnStartedAtMs);
+        if (marker?.outcome === 'failed') return { admit: false, reason: 'native_marker_absent', detail: 'Provider recorded a failed turn' };
         if (marker) {
             return {
                 admit: true,

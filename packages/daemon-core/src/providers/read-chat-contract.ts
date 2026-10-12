@@ -1,3 +1,4 @@
+import { PROVIDER_FAILURES } from '@adhdev/mesh-shared'
 import type { MessagePart, ModalInfo, ReadChatResult } from './contracts.js'
 import { normalizeMessageParts } from './contracts.js'
 import type { NativeTurnTerminalMarker } from '../chat/native-turn-signal.js'
@@ -158,8 +159,8 @@ function validateTurnTerminalMarkers(value: unknown, source: string): NativeTurn
     if (!isFiniteNumber(marker.receivedAt)) {
       throw new Error(`${source}: turnTerminalMarkers[${index}].receivedAt must be a finite number`)
     }
-    if (marker.outcome !== 'completed' && marker.outcome !== 'aborted') {
-      throw new Error(`${source}: turnTerminalMarkers[${index}].outcome must be 'completed' or 'aborted'`)
+    if (marker.outcome !== 'completed' && marker.outcome !== 'aborted' && marker.outcome !== 'failed') {
+      throw new Error(`${source}: turnTerminalMarkers[${index}].outcome must be 'completed', 'aborted', or 'failed'`)
     }
     if (typeof marker.summary !== 'string') {
       throw new Error(`${source}: turnTerminalMarkers[${index}].summary must be a string`)
@@ -170,6 +171,16 @@ function validateTurnTerminalMarkers(value: unknown, source: string): NativeTurn
       summary: marker.summary,
     }
     if (typeof marker.turnId === 'string') normalized.turnId = marker.turnId
+    for (const key of ['startedAt', 'errorAt'] as const) {
+      if (marker[key] !== undefined) {
+        if (!isFiniteNumber(marker[key])) throw new Error(`${source}: invalid ${key}`)
+        normalized[key] = marker[key]
+      }
+    }
+    if (marker.providerFailure !== undefined) {
+      if (!(PROVIDER_FAILURES as readonly unknown[]).includes(marker.providerFailure)) throw new Error(`${source}: invalid providerFailure`)
+      normalized.providerFailure = marker.providerFailure as NativeTurnTerminalMarker['providerFailure']
+    }
     return normalized
   })
 }

@@ -16,6 +16,8 @@
  * per-incident regression suites that drive the flush directly are unchanged.
  */
 
+import type { NativeTurnTerminalMarker } from '../../chat/native-turn-signal.js';
+import { isNativeMarkerRef, PROVIDER_FAILURES, type ProviderFailure } from '@adhdev/mesh-shared';
 import { LOG } from '../../logging/logger.js';
 import type { CompletedDebouncePending, CompletedFinalizationBlock } from '../cli-provider-instance-types.js';
 import type { CompletionArmPatch, CompletionFlushDecision, CompletionPolicy, CompletionSignalReader } from './completion-engine.js';
@@ -46,13 +48,14 @@ function asTurnEndBlockReason(value: unknown): TurnEndBlockReason | undefined {
     return typeof value === 'string' && TURN_END_BLOCK_REASON_SET.has(value) ? (value as TurnEndBlockReason) : undefined;
 }
 
-const NATIVE_TURN_OUTCOME_SET: ReadonlySet<string> = new Set(['completed', 'aborted']);
+const NATIVE_TURN_OUTCOME_SET: ReadonlySet<string> = new Set(['completed', 'aborted', 'failed']);
 function asNativeTurnOutcome(value: unknown): NativeTurnOutcome | undefined {
     return typeof value === 'string' && NATIVE_TURN_OUTCOME_SET.has(value) ? (value as NativeTurnOutcome) : undefined;
 }
 
 /** The narrow surface of CliProviderInstance the flush interpreter reads/writes. */
 export interface CompletionFlushHost {
+    nativeTurnTerminalMarker?(startedAt?: number): NativeTurnTerminalMarker | null;
     type: string;
     instanceId: string;
     provider: ProviderModule;
@@ -149,6 +152,11 @@ export function flushCompletedDebounceIfFinalized(host: CompletionFlushHost): vo
 
     host.applyCompletionArmPatch(pending, decision.armPatch);
 
+    const nativeMarker = host.nativeTurnTerminalMarker?.(pending.turnStartedAt);
+    const nativeFailureDiagnostic = nativeMarker?.outcome === 'failed'
+        ? { nativeTurnOutcome: 'failed', nativeProviderFailure: nativeMarker.providerFailure ?? 'provider_error',
+            nativeMarker: { outcome: nativeMarker.outcome, turnId: nativeMarker.turnId, receivedAt: nativeMarker.receivedAt, startedAt: nativeMarker.startedAt, errorAt: nativeMarker.errorAt } } : {};
+
     if (decision.kind === 'hold') {
         host.logCompletionHold(decision);
         if (host.completionTraceOn()) host.recordCompletionGateTrace('hold', {
@@ -174,6 +182,7 @@ export function flushCompletedDebounceIfFinalized(host: CompletionFlushHost): vo
         });
         // Surface the CANON-C immediate-emit path distinctly so a delegated worker's idle
         // notification (transcript still pending) is not mistaken for a 30s-timeout fallback.
+        Object.assign(completionDiagnostic, nativeFailureDiagnostic);
         (completionDiagnostic as Record<string, unknown>).decoupledImmediateEmit = decision.decoupledImmediateEmit;
         // (INFINITE-GENERATING) A hard-cap release means the terminal block's reason never
         // cleared — the session would previously have wedged in generating forever. Log it
@@ -206,7 +215,7 @@ export function flushCompletedDebounceIfFinalized(host: CompletionFlushHost): vo
         // (SUMMARY-SCRAPE-FALLBACK, part B) Resolved into a local FIRST so the provenance
         // completionFinalSummary just recorded can be stamped onto the diagnostic below —
         // reading it before the chain runs would stamp the previous turn's source.
-        const weakFinalSummary = (host.nativeTurnTerminalSummary(pending.turnStartedAt)
+        const weakFinalSummary = nativeMarker?.outcome === 'failed' ? nativeMarker.summary : (host.nativeTurnTerminalSummary(pending.turnStartedAt)
             || host.snapshotExternalNativeCompletionSummary(pending)
             || host.completionFinalSummary(host.adapter?.getScriptParsedStatus()?.messages, pending.turnStartedAt)
             || host.cachedInTurnCompletionSummaryContent(pending.turnStartedAt)
@@ -246,7 +255,7 @@ export function flushCompletedDebounceIfFinalized(host: CompletionFlushHost): vo
         duration: pending.duration,
         busyEpoch: host.busyEpoch,
     });
-    const finalSummary = host.cleanCompletionFinalSummary(pending);
+    const finalSummary = nativeMarker?.outcome === 'failed' ? nativeMarker.summary : host.cleanCompletionFinalSummary(pending);
     const transcriptProfile = resolveTranscriptAuthorityProfile(host.provider);
     const finalContentLength = typeof finalSummary === 'string' ? finalSummary.trim().length : 0;
     host.emitGeneratingCompleted({
@@ -257,6 +266,7 @@ export function flushCompletedDebounceIfFinalized(host: CompletionFlushHost): vo
         finalSummary,
         evidenceLevel: 'reported',
         completionDiagnostic: {
+            ...nativeFailureDiagnostic,
             source: 'clean_final_assistant',
             cleanPath: true,
             evidenceWeak: false,
@@ -391,13 +401,16 @@ export function emitGeneratingCompleted(host: CompletionEmitHost, opts: {
             // native-marker reconcile) — `turn_end`'s closed `nativeOutcome`
             // enum, never a free-text passthrough.
             nativeOutcome: asNativeTurnOutcome(opts.completionDiagnostic?.nativeTurnOutcome),
+            nativeMarker: isNativeMarkerRef(opts.completionDiagnostic?.nativeMarker) ? opts.completionDiagnostic!.nativeMarker : undefined,
             // A turn whose whole reply is an auth-failure banner (claude-cli
             // "Login expired · Please run /login", 2026-10-06 preview incident:
             // the idle edge was committed task_completed / weak_end_confirmed)
             // is not a completion. The closed enum rides the evidence; the owner's
             // reducer commits it failed / provider_auth_failed (R9f). Whole-reply
             // match only — a summary that merely mentions the banner is untouched.
-            providerFailure: summary && detectAuthFailureOnlyReply(summary) ? 'auth_failed' : undefined,
+            providerFailure: PROVIDER_FAILURES.includes(opts.completionDiagnostic?.nativeProviderFailure as ProviderFailure)
+                ? opts.completionDiagnostic!.nativeProviderFailure as ProviderFailure
+                : summary && detectAuthFailureOnlyReply(summary) ? 'auth_failed' : undefined,
             // `nodeLabel` is intentionally omitted — `turn-ledger/deliver.ts`'s
             // `nodeLabelFor` already falls back to the attempt's own
             // `nodeId`/`providerType` (dispatch-time facts the ledger has),

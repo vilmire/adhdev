@@ -18,6 +18,7 @@
  */
 'use strict';
 
+import { createCodexTurnProvenance } from '../native-history/codex-turn-provenance.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { LOG } from '../../logging/logger.js';
@@ -350,9 +351,8 @@ function executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput):
             messages.push(msg);
         }
     }
-    if (messages.length === 0) return null;
-
     const turnTerminalMarkers = extractBuiltinTurnTerminalMarkers(input.agentType, lines);
+    if (messages.length === 0 && turnTerminalMarkers.length === 0) return null;
 
     return {
         messages,
@@ -397,6 +397,7 @@ function extractBuiltinTurnTerminalMarkers(agentType: string | undefined, lines:
     if (agentType === 'kimi') return extractKimiTurnTerminalMarkers(lines);
     if (agentType !== 'codex-cli') return [];
     const markers: NativeTurnTerminalMarker[] = [];
+    const provenance = createCodexTurnProvenance();
     for (const rec of lines) {
         if (String(rec?.type ?? '') !== 'event_msg') continue;
         const payload = rec?.payload;
@@ -404,17 +405,18 @@ function extractBuiltinTurnTerminalMarkers(agentType: string | undefined, lines:
         const payloadType = String(payload.type ?? '').trim();
         const isComplete = payloadType === 'task_complete';
         const isAbort = payloadType === 'turn_aborted';
-        if (!isComplete && !isAbort) continue;
-        const receivedAt = parseTimestamp(rec?.timestamp) ?? Date.now();
+        const receivedAt = parseTimestamp(rec?.timestamp) ?? 0;
+        if (!isComplete && !isAbort) { provenance(payload, receivedAt); continue; }
         const summary = flattenJsonlText(payload.last_agent_message);
         const rawTurnId = payload.turn_id;
         const turnId = typeof rawTurnId === 'string' && rawTurnId.trim() ? rawTurnId.trim() : '';
-        markers.push({
+        const marker = provenance(payload, receivedAt, {
             receivedAt,
             outcome: isAbort ? 'aborted' : 'completed',
             summary,
             ...(turnId ? { turnId } : {}),
         });
+        if (marker) markers.push(marker);
     }
     return markers;
 }

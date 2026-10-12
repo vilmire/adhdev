@@ -125,6 +125,7 @@ function fromVerdict(verdict: TerminalAdmissionVerdict): EvidenceAdmission {
 }
 
 export function admitTranscriptFinal(ev: TurnEvidenceOf<'transcript_final'>, policy: TurnPolicy): EvidenceAdmission {
+    if (ev.nativeMarker?.outcome === 'failed') return { kind: 'decline', reason: 'native_marker_absent' };
     return fromVerdict(evaluateTerminalAdmission({
         activeModalPresent: ev.live.modal,
         providerObservedStatus: ev.live.adapterPending ? 'generating' : 'idle',

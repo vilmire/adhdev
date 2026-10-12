@@ -55,8 +55,14 @@ export interface NativeCompletionSignalSpec {
 export interface NativeTurnTerminalMarker {
     /** When the provider recorded the turn end. */
     receivedAt: number;
-    /** 'completed' (normal end) or 'aborted' (cancelled/interrupted). */
-    outcome: 'completed' | 'aborted';
+    /** Provider terminal disposition, including structured native failures. */
+    outcome: 'completed' | 'aborted' | 'failed';
+    /** Native task_started timestamp; 0 means ambiguous turn identity. */
+    startedAt?: number;
+    /** Timestamp of the structured error that caused this terminal. */
+    errorAt?: number;
+    /** Closed error cause; provider/user message text is never classified here. */
+    providerFailure?: import('@adhdev/mesh-shared').ProviderFailure;
     /** The turn's final text; EMPTY STRING is valid and means a tool-terminated / empty-reply turn. */
     summary: string;
     /** Provider-native turn identity, when declared and present. */
@@ -145,7 +151,9 @@ export function selectTurnTerminalMarker(
     for (let i = markers.length - 1; i >= 0; i--) {
         const m = markers[i];
         if (!m) continue;
-        if (typeof m.receivedAt === 'number' && m.receivedAt >= startedAt) return m;
+        if (!Number.isFinite(m.receivedAt) || m.receivedAt < startedAt) continue;
+        if (m.startedAt !== undefined && (!Number.isFinite(m.startedAt) || m.startedAt < startedAt)) continue;
+        return m;
     }
     return null;
 }

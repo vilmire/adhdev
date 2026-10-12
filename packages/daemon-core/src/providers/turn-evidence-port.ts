@@ -374,6 +374,7 @@ export function emitTurnEnd(
         blockReason?: Extract<TurnEvidence, { kind: 'turn_end' }>['blockReason'];
         releasedByHardCap?: boolean;
         nativeOutcome?: Extract<TurnEvidence, { kind: 'turn_end' }>['nativeOutcome'];
+        nativeMarker?: Extract<TurnEvidence, { kind: 'turn_end' }>['nativeMarker'];
         live?: Extract<TurnEvidence, { kind: 'turn_end' }>['live'];
         providerFailure?: Extract<TurnEvidence, { kind: 'turn_end' }>['providerFailure'];
     },
@@ -389,6 +390,7 @@ export function emitTurnEnd(
         ...(opts.blockReason ? { blockReason: opts.blockReason } : {}),
         ...(opts.releasedByHardCap !== undefined ? { releasedByHardCap: opts.releasedByHardCap } : {}),
         ...(opts.nativeOutcome ? { nativeOutcome: opts.nativeOutcome } : {}),
+        ...(opts.nativeMarker ? { nativeMarker: opts.nativeMarker } : {}),
         ...(opts.live ? { live: opts.live } : {}),
         ...(opts.providerFailure ? { providerFailure: opts.providerFailure } : {}),
     }) as TurnEvidence, opts.envelope);
