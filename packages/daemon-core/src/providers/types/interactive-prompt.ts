@@ -1,5 +1,6 @@
 import { readString } from '@adhdev/mesh-shared';
-export interface InteractivePrompt {
+import type { ProviderQuestionBinding, ProviderQuestionEpisode } from '@adhdev/mesh-shared';
+export interface InteractivePrompt extends ProviderQuestionEpisode {
   promptId: string;
   origin: 'cli' | 'mcp' | 'agent';
   providerType: string;
@@ -14,6 +15,8 @@ export interface InteractiveQuestion {
   multiSelect: boolean;
   options: InteractiveOption[];
   allowFreeform?: boolean;
+  required?: boolean;
+  isSecret?: boolean;
 }
 
 export interface InteractiveOption {
@@ -25,6 +28,8 @@ export interface InteractiveOption {
 export interface InteractivePromptResponse {
   promptId: string;
   answers: Record<string, InteractiveAnswer>;
+  binding?: ProviderQuestionBinding;
+  action?: 'dismiss';
 }
 
 export interface InteractiveAnswer {
@@ -100,18 +105,32 @@ export function normalizeInteractivePromptResponse(raw: unknown): InteractivePro
   if (!record.answers || typeof record.answers !== 'object' || Array.isArray(record.answers)) {
     throw new Error('answers must be an object');
   }
-  const answers: Record<string, InteractiveAnswer> = {};
+  const answers: Record<string, InteractiveAnswer> = Object.create(null);
   for (const [questionId, answerRaw] of Object.entries(record.answers as Record<string, unknown>)) {
     if (!answerRaw || typeof answerRaw !== 'object' || Array.isArray(answerRaw)) continue;
     const answer = answerRaw as Record<string, unknown>;
-    const selectedLabels = readStringArray(answer.selectedLabels);
+    const selectedLabels = record.binding && Array.isArray(answer.selectedLabels)
+      ? answer.selectedLabels.slice() as string[] : readStringArray(answer.selectedLabels);
     const freeformText = readString(answer.freeformText);
     answers[questionId] = {
       selectedLabels,
       ...(freeformText ? { freeformText } : {}),
     };
   }
-  return { promptId, answers };
+  if (record.binding) {
+    if (!record.answers || Array.isArray(record.answers)) throw new Error('Native answers must be keyed by question id');
+    for (const raw of Object.values(record.answers as Record<string, unknown>)) {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('Malformed native answer');
+      const answer = raw as Record<string, unknown>;
+      if (!Array.isArray(answer.selectedLabels) || answer.selectedLabels.some(label => typeof label !== 'string')
+        || new Set(answer.selectedLabels).size !== answer.selectedLabels.length
+        || (answer.freeformText !== undefined && typeof answer.freeformText !== 'string')) throw new Error('Malformed or duplicate native answer');
+    }
+  }
+  return { promptId, answers,
+    ...(record.binding ? { binding: record.binding as ProviderQuestionBinding } : {}),
+    ...(record.action === 'dismiss' ? { action: 'dismiss' as const } : {}),
+  };
 }
 
 /**

@@ -456,7 +456,9 @@
         "errorStartSession": "No se pudo iniciar la sesión",
         "errorResumeSession": "No se pudo reanudar la sesión",
         "errorWorkspaceContextRequired": "Elige un espacio de trabajo — un directorio, un espacio guardado/predeterminado o tu directorio de inicio — antes de lanzar.",
-        "defaultWorkspace": "Espacio de trabajo predeterminado"
+        "defaultWorkspace": "Espacio de trabajo predeterminado",
+        "codexManagedQuestions": "Gestionar preguntas de Codex",
+        "codexManagedQuestionsDescription": "Nueva sesión exclusiva del panel con Codex app-server. Las preguntas nativas están vinculadas a solicitudes; las respuestas asíncronas son entradas ordinarias del turno actual. Sin terminal ni migración de sesiones existentes. Actualmente no se admiten concesiones de permisos nativos; estas solicitudes quedan pendientes sin aprobación."
     },
     "mobileInbox": {
         "undo": "Deshacer",
@@ -4024,7 +4026,13 @@
         "answersRequired_one": "{{count}} pregunta aún necesita respuesta",
         "answersRequired_other": "{{count}} preguntas aún necesitan respuesta",
         "errorReviewPageNotFocused": "La terminal está mostrando otra pantalla, así que la respuesta no se envió — revisa la pantalla de la terminal o cierra esto e inténtalo de nuevo.",
-        "errorReviewUnconfirmed": "Las teclas de tu respuesta llegaron a la terminal, pero la pregunta sigue en pantalla — puede que la respuesta no se haya enviado. Revisa la terminal: si no se envió, responde allí; reenviarla desde aquí podría enviarla dos veces."
+        "errorReviewUnconfirmed": "Las teclas de tu respuesta llegaron a la terminal, pero la pregunta sigue en pantalla — puede que la respuesta no se haya enviado. Revisa la terminal: si no se envió, responde allí; reenviarla desde aquí podría enviarla dos veces.",
+        "codexRequestBound": "Esta respuesta corresponde a la solicitud nativa actual de Codex.",
+        "codexAsyncLocal": "La respuesta asíncrona es una entrada ordinaria de este turno. Descartar solo afecta a esta sesión del panel; no se pueden observar omisiones realizadas únicamente en el terminal.",
+        "codexAwaitingResolution": "Enviado; esperando resolución nativa. El motivo de resolución puede ser desconocido.",
+        "codexUncertain": "No se puede confirmar el estado de la pregunta nativa actual. No es posible responder.",
+        "codexDismissLocal": "Descartar localmente",
+        "oneAnswerRequired": "Responde al menos una pregunta."
     },
     "git": {
         "diffPreview": {

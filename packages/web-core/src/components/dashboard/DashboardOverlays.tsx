@@ -163,6 +163,7 @@ export default function DashboardOverlays({
                     error={interactivePrompt?.responseError ?? null}
                     onSubmit={interactivePrompt?.submit ?? (async () => {})}
                     onCancel={interactivePrompt?.cancel ?? (() => {})}
+                    onDismissLocal={interactivePrompt?.dismissLocal}
                 />
             )}
 

@@ -11,6 +11,7 @@ import SavedHistoryInlinePanel from './SavedHistoryInlinePanel'
 import { shouldRefreshSavedHistoryOnModalOpen } from '../../utils/saved-history-load-state'
 import SavedHistoryLaunchSection from '../SavedHistoryLaunchSection'
 import LaunchSectionCard from '../LaunchSectionCard'
+import CodexTransportChoice from './new-session/CodexTransportChoice'
 import { isLaunchableMachineProvider } from '../../utils/provider-activation'
 import { modelOptionsForProvider, thinkingOptionsForProvider } from '../../utils/provider-priority'
 import type { MeshLaunchOption } from '../../hooks/useDashboardCommandActions'
@@ -111,6 +112,7 @@ export default function DashboardNewSessionDialog({
     const [activeKind, setActiveKind] = useState<LaunchKind | null>(getDefaultLaunchKind(sortedMachines[0]))
     const [selectedTarget, setSelectedTarget] = useState('')
     const [launchArgs, setLaunchArgs] = useState('')
+    const [codexManagedQuestions, setCodexManagedQuestions] = useState(false)
     const [legacyAutoApprove, setLegacyAutoApprove] = useState(false)
     const [selectedAutoApproveModeId, setSelectedAutoApproveModeId] = useState('')
     const [pendingDangerousMode, setPendingDangerousMode] = useState<AutoApproveMode | null>(null)
@@ -853,7 +855,9 @@ export default function DashboardNewSessionDialog({
                 initialModel: initialModel.trim() ? initialModel.trim() : null,
                 initialThinkingLevel: initialThinkingLevel.trim() ? initialThinkingLevel.trim() : null,
                 ...launchValueSources(modelChoice, thinkingChoice),
-                settings: launchAutoApproveSettings,
+                settings: { ...launchAutoApproveSettings,
+                    ...(activeKind === 'cli' && selectedTarget === 'codex-cli' && !selectedResumeSessionId && codexManagedQuestions ? { codexTransport: 'app-server' } : {}),
+                },
             })
         setBusy(false)
         if (!result.ok) {
@@ -883,6 +887,7 @@ export default function DashboardNewSessionDialog({
     }, [
         activeKind,
         launchArgs,
+        codexManagedQuestions,
         initialModel,
         initialThinkingLevel,
         modelChoice,
@@ -1113,6 +1118,9 @@ export default function DashboardNewSessionDialog({
                             }}
                         />
 
+                        {workspaceMode !== 'mesh' && activeKind === 'cli' && selectedTarget === 'codex-cli' && !selectedResumeSessionId && (
+                            <CodexTransportChoice checked={codexManagedQuestions} disabled={busy} onChange={setCodexManagedQuestions} />
+                        )}
                         {workspaceMode === 'mesh' && visibleMeshManualSetup && (
                             <MeshCoordinatorManualSetupPanel
                                 setup={visibleMeshManualSetup}

@@ -456,7 +456,9 @@
         "errorStartSession": "Could not start session",
         "errorResumeSession": "Could not resume session",
         "errorWorkspaceContextRequired": "Choose a workspace — a directory, a saved/default workspace, or your home directory — before launching.",
-        "defaultWorkspace": "Default workspace"
+        "defaultWorkspace": "Default workspace",
+        "codexManagedQuestions": "Managed Codex questions",
+        "codexManagedQuestionsDescription": "New dashboard-only session using Codex app-server. Native questions are request-bound; async replies are ordinary turn-fenced input. No terminal or existing-session migration. Native permission grants are currently unsupported; such requests remain pending without approval."
     },
     "mobileInbox": {
         "undo": "Undo",
@@ -4021,7 +4023,13 @@
         "answersRequired_one": "{{count}} question still needs an answer",
         "answersRequired_other": "{{count}} questions still need answers",
         "errorReviewPageNotFocused": "The terminal is showing a different screen, so the answer was not submitted — check the terminal screen or close this and try again.",
-        "errorReviewUnconfirmed": "The answer keys reached the terminal, but the question is still on screen — the answer may not have been submitted. Check the terminal: if it was not submitted, answer there; resending from here could submit it twice."
+        "errorReviewUnconfirmed": "The answer keys reached the terminal, but the question is still on screen — the answer may not have been submitted. Check the terminal: if it was not submitted, answer there; resending from here could submit it twice.",
+        "codexRequestBound": "This answer targets the current native Codex request.",
+        "codexAsyncLocal": "Async reply is ordinary input for this turn. Dismissal is local to this dashboard session; terminal-only skips cannot be observed.",
+        "codexAwaitingResolution": "Submitted; awaiting native resolution. The resolution reason may be unknown.",
+        "codexUncertain": "Current native question state cannot be established. Answering is unavailable.",
+        "codexDismissLocal": "Dismiss locally",
+        "oneAnswerRequired": "Choose at least one answer."
     },
     "git": {
         "diffPreview": {

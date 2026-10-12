@@ -404,7 +404,11 @@ export class DaemonCliManager {
             ...(!attachExisting && options?.launchRecord ? { launchRecord: options.launchRecord } : {}),
         };
 
-        const transportFactory = this.getTransportFactory(
+        const structuredCodex = settings?.codexTransport === 'app-server';
+        if (structuredCodex && (normalizedType !== 'codex-cli' || attachExisting || options?.providerSessionId || options?.launchMode === 'resume')) {
+            throw new Error('Managed Codex transport requires a new Codex session');
+        }
+        const transportFactory = structuredCodex ? undefined : this.getTransportFactory(
             key,
             normalizedType,
             resolvedDir,
@@ -415,7 +419,7 @@ export class DaemonCliManager {
             // existing record whose meta is already stamped; re-seeding could clobber.
             attachExisting ? undefined : launchRecordMeta,
         );
-        const cliInstance = new CliProviderInstance(provider, resolvedDir, cliArgs, key, transportFactory, options);
+        const cliInstance = new CliProviderInstance(provider, resolvedDir, cliArgs, key, transportFactory, { ...options, structuredCodex });
         try {
             await instanceManager.addInstance(key, cliInstance, {
                 settings,

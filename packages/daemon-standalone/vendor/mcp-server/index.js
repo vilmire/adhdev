@@ -23539,6 +23539,7 @@ var require_dist3 = __commonJS({
       isOutboundMessageOrigin: () => isOutboundMessageOrigin,
       isP2PSignalType: () => isP2PSignalType2,
       isPhantomDaemonEntry: () => isPhantomDaemonEntry,
+      isProviderQuestionBinding: () => isProviderQuestionBinding,
       isRawDaemonDoId: () => isRawDaemonDoId,
       isReadyStatus: () => isReadyStatus,
       isRecord: () => isRecord2,
@@ -23817,15 +23818,15 @@ var require_dist3 = __commonJS({
       }
       return best?.git;
     }
-    function deriveSyntheticSessionId(record2) {
+    function deriveSyntheticSessionId(record3) {
       const parts = [
-        readString2(record2.workspace),
-        readString2(record2.providerType, record2.provider),
-        readString2(record2.role),
-        readString2(record2.state, record2.status),
-        readString2(record2.title),
-        readString2(record2.createdAt, record2.created_at),
-        readString2(record2.startedAt, record2.started_at)
+        readString2(record3.workspace),
+        readString2(record3.providerType, record3.provider),
+        readString2(record3.role),
+        readString2(record3.state, record3.status),
+        readString2(record3.title),
+        readString2(record3.createdAt, record3.created_at),
+        readString2(record3.startedAt, record3.started_at)
       ].filter((part) => Boolean(part));
       if (parts.length === 0) return void 0;
       return `synthetic:${parts.join("|")}`;
@@ -23837,31 +23838,31 @@ var require_dist3 = __commonJS({
       return idA === idB;
     }
     function normalizeMeshSessionRecord(entry) {
-      const record2 = readRecord2(entry);
-      const sessionId = readString2(record2.sessionId, record2.session_id, record2.id) ?? deriveSyntheticSessionId(record2);
+      const record3 = readRecord2(entry);
+      const sessionId = readString2(record3.sessionId, record3.session_id, record3.id) ?? deriveSyntheticSessionId(record3);
       if (!sessionId) return null;
       return {
         sessionId,
-        ...readString2(record2.providerType, record2.provider) ? { providerType: readString2(record2.providerType, record2.provider) } : {},
-        ...readString2(record2.state, record2.status) ? { state: readString2(record2.state, record2.status) } : {},
-        ...readString2(record2.chatStatus, record2.chat_status) ? { chatStatus: readString2(record2.chatStatus, record2.chat_status) } : {},
-        ...readString2(record2.lifecycle) ? { lifecycle: readString2(record2.lifecycle) } : {},
-        ...readString2(record2.surfaceKind, record2.surface_kind) ? { surfaceKind: readString2(record2.surfaceKind, record2.surface_kind) } : {},
-        ...readString2(record2.recoveryState, record2.recovery_state) ? { recoveryState: readString2(record2.recoveryState, record2.recovery_state) } : {},
-        ...readString2(record2.workspace) ? { workspace: readString2(record2.workspace) } : {},
-        ...readString2(record2.title) ? { title: readString2(record2.title) } : {},
-        ...readString2(record2.role) ? { role: readString2(record2.role) } : {},
-        ...readBoolean(record2.isSelfCoordinator, record2.is_self_coordinator) !== void 0 ? { isSelfCoordinator: readBoolean(record2.isSelfCoordinator, record2.is_self_coordinator) } : {},
-        ...readString2(record2.statusNote, record2.status_note) ? { statusNote: readString2(record2.statusNote, record2.status_note) } : {},
-        ...readString2(record2.createdAt, record2.created_at) ? { createdAt: readString2(record2.createdAt, record2.created_at) } : {},
-        ...readString2(record2.startedAt, record2.started_at) ? { startedAt: readString2(record2.startedAt, record2.started_at) } : {},
-        ...readString2(record2.lastActivityAt, record2.last_activity_at) ? { lastActivityAt: readString2(record2.lastActivityAt, record2.last_activity_at) } : {},
-        ...readBoolean(record2.isCached, record2.is_cached) !== void 0 ? { isCached: readBoolean(record2.isCached, record2.is_cached) } : {}
+        ...readString2(record3.providerType, record3.provider) ? { providerType: readString2(record3.providerType, record3.provider) } : {},
+        ...readString2(record3.state, record3.status) ? { state: readString2(record3.state, record3.status) } : {},
+        ...readString2(record3.chatStatus, record3.chat_status) ? { chatStatus: readString2(record3.chatStatus, record3.chat_status) } : {},
+        ...readString2(record3.lifecycle) ? { lifecycle: readString2(record3.lifecycle) } : {},
+        ...readString2(record3.surfaceKind, record3.surface_kind) ? { surfaceKind: readString2(record3.surfaceKind, record3.surface_kind) } : {},
+        ...readString2(record3.recoveryState, record3.recovery_state) ? { recoveryState: readString2(record3.recoveryState, record3.recovery_state) } : {},
+        ...readString2(record3.workspace) ? { workspace: readString2(record3.workspace) } : {},
+        ...readString2(record3.title) ? { title: readString2(record3.title) } : {},
+        ...readString2(record3.role) ? { role: readString2(record3.role) } : {},
+        ...readBoolean(record3.isSelfCoordinator, record3.is_self_coordinator) !== void 0 ? { isSelfCoordinator: readBoolean(record3.isSelfCoordinator, record3.is_self_coordinator) } : {},
+        ...readString2(record3.statusNote, record3.status_note) ? { statusNote: readString2(record3.statusNote, record3.status_note) } : {},
+        ...readString2(record3.createdAt, record3.created_at) ? { createdAt: readString2(record3.createdAt, record3.created_at) } : {},
+        ...readString2(record3.startedAt, record3.started_at) ? { startedAt: readString2(record3.startedAt, record3.started_at) } : {},
+        ...readString2(record3.lastActivityAt, record3.last_activity_at) ? { lastActivityAt: readString2(record3.lastActivityAt, record3.last_activity_at) } : {},
+        ...readBoolean(record3.isCached, record3.is_cached) !== void 0 ? { isCached: readBoolean(record3.isCached, record3.is_cached) } : {}
       };
     }
     function normalizeMeshNodeId(node) {
-      const record2 = node && typeof node === "object" ? node : {};
-      return readString2(record2.id, record2.nodeId, record2.node_id);
+      const record3 = node && typeof node === "object" ? node : {};
+      return readString2(record3.id, record3.nodeId, record3.node_id);
     }
     function meshNodeIdMatches7(node, candidateId) {
       if (!candidateId) return false;
@@ -23871,12 +23872,12 @@ var require_dist3 = __commonJS({
     }
     function normalizeMeshNodeFacts(raw) {
       if (!raw || typeof raw !== "object" || Array.isArray(raw)) return void 0;
-      const record2 = raw;
-      const schemaVersion = Number(record2.schemaVersion);
-      const reportedAt = Number(record2.reportedAt);
+      const record3 = raw;
+      const schemaVersion = Number(record3.schemaVersion);
+      const reportedAt = Number(record3.reportedAt);
       if (!Number.isFinite(schemaVersion) || schemaVersion < 1) return void 0;
       if (!Number.isFinite(reportedAt) || reportedAt <= 0) return void 0;
-      return { ...record2, schemaVersion, reportedAt };
+      return { ...record3, schemaVersion, reportedAt };
     }
     function supportsQuota(providerType) {
       return !!providerType && QUOTA_SUPPORTED_PROVIDERS.includes(providerType);
@@ -24006,9 +24007,9 @@ var require_dist3 = __commonJS({
       return out;
     }
     function summarizeGitShape(status) {
-      const record2 = readRecord2(status);
-      if (!Object.keys(record2).length) return null;
-      const submodules = Array.isArray(record2.submodules) ? record2.submodules.map((entry) => {
+      const record3 = readRecord2(status);
+      if (!Object.keys(record3).length) return null;
+      const submodules = Array.isArray(record3.submodules) ? record3.submodules.map((entry) => {
         const sub = readRecord2(entry);
         return {
           path: readString2(sub.path) ?? null,
@@ -24018,40 +24019,40 @@ var require_dist3 = __commonJS({
         };
       }) : [];
       return {
-        isGitRepo: readBoolean(record2.isGitRepo),
-        workspace: readString2(record2.workspace) ?? null,
-        repoRoot: readString2(record2.repoRoot, record2.repo_root) ?? null,
-        branch: readString2(record2.branch) ?? null,
-        upstream: readString2(record2.upstream) ?? null,
-        upstreamStatus: readString2(record2.upstreamStatus, record2.upstream_status) ?? null,
-        headCommit: readString2(record2.headCommit, record2.head_commit)?.slice(0, 12) ?? null,
-        ahead: readNumber(record2.ahead) ?? null,
-        behind: readNumber(record2.behind) ?? null,
+        isGitRepo: readBoolean(record3.isGitRepo),
+        workspace: readString2(record3.workspace) ?? null,
+        repoRoot: readString2(record3.repoRoot, record3.repo_root) ?? null,
+        branch: readString2(record3.branch) ?? null,
+        upstream: readString2(record3.upstream) ?? null,
+        upstreamStatus: readString2(record3.upstreamStatus, record3.upstream_status) ?? null,
+        headCommit: readString2(record3.headCommit, record3.head_commit)?.slice(0, 12) ?? null,
+        ahead: readNumber(record3.ahead) ?? null,
+        behind: readNumber(record3.behind) ?? null,
         dirtyCounts: {
-          staged: readNumber(record2.staged) ?? 0,
-          modified: readNumber(record2.modified) ?? 0,
-          untracked: readNumber(record2.untracked) ?? 0,
-          deleted: readNumber(record2.deleted) ?? 0,
-          renamed: readNumber(record2.renamed) ?? 0
+          staged: readNumber(record3.staged) ?? 0,
+          modified: readNumber(record3.modified) ?? 0,
+          untracked: readNumber(record3.untracked) ?? 0,
+          deleted: readNumber(record3.deleted) ?? 0,
+          renamed: readNumber(record3.renamed) ?? 0
         },
-        lastCheckedAt: readNumber(record2.lastCheckedAt, record2.last_checked_at) ?? null,
+        lastCheckedAt: readNumber(record3.lastCheckedAt, record3.last_checked_at) ?? null,
         submoduleCount: submodules.length,
         submodules
       };
     }
-    function truncateDiffText2(text, maxLines) {
-      const lines = text.split("\n");
+    function truncateDiffText2(text2, maxLines) {
+      const lines = text2.split("\n");
       const truncated = lines.length > maxLines;
       return {
-        diff: truncated ? lines.slice(0, maxLines).join("\n") + "\n... (truncated)" : text,
+        diff: truncated ? lines.slice(0, maxLines).join("\n") + "\n... (truncated)" : text2,
         truncated
       };
     }
     function projectFileDiffRow2(file, rawResult, maxLines) {
       const raw = readRecord2(rawResult);
       const d = readRecord2(raw.diff ?? rawResult);
-      const text = typeof d.diff === "string" ? d.diff : "";
-      const { diff, truncated } = truncateDiffText2(text, maxLines);
+      const text2 = typeof d.diff === "string" ? d.diff : "";
+      const { diff, truncated } = truncateDiffText2(text2, maxLines);
       return {
         path: file.path,
         old_path: file.oldPath ?? null,
@@ -24562,10 +24563,10 @@ var require_dist3 = __commonJS({
       return typeof raw === "string" && TERMINAL_SESSION_RECORD_STATUSES.includes(raw.trim().toLowerCase());
     }
     function isIdleSessionState(state) {
-      const record2 = state && typeof state === "object" ? state : {};
-      const status = typeof record2.status === "string" ? record2.status.trim().toLowerCase() : "";
+      const record3 = state && typeof state === "object" ? state : {};
+      const status = typeof record3.status === "string" ? record3.status.trim().toLowerCase() : "";
       if (isTerminalSessionRecordStatus(status) || isDeadStatus(status)) return false;
-      return isReadyStatus(status) || record2.activeChat?.status === "waiting_input";
+      return isReadyStatus(status) || record3.activeChat?.status === "waiting_input";
     }
     function makeGuard4(values) {
       const set2 = new Set(values);
@@ -24963,10 +24964,10 @@ ${renderWorkerProtocolFooter2(input)}`;
     }
     function parseModelSelection(raw) {
       if (!raw || typeof raw !== "object") return void 0;
-      const record2 = raw;
+      const record3 = raw;
       const history = [];
-      if (Array.isArray(record2.history)) {
-        for (const entry of record2.history) {
+      if (Array.isArray(record3.history)) {
+        for (const entry of record3.history) {
           if (!entry || typeof entry !== "object") continue;
           const e = entry;
           const value = readString2(e.value);
@@ -24975,14 +24976,14 @@ ${renderWorkerProtocolFooter2(input)}`;
           if (value && at !== void 0 && via) history.push({ at, value, via });
         }
       }
-      const requested = readString2(record2.requested);
-      const launchValue = readString2(record2.launchValue);
-      const resolvedDefault = readString2(record2.resolvedDefault);
-      const current4 = readString2(record2.current);
-      const observed = readString2(record2.observed);
-      const observedAt = readFiniteNumber(record2.observedAt);
+      const requested = readString2(record3.requested);
+      const launchValue = readString2(record3.launchValue);
+      const resolvedDefault = readString2(record3.resolvedDefault);
+      const current4 = readString2(record3.current);
+      const observed = readString2(record3.observed);
+      const observedAt = readFiniteNumber(record3.observedAt);
       return {
-        source: isModelAxisSource(record2.source) ? record2.source : "unspecified",
+        source: isModelAxisSource(record3.source) ? record3.source : "unspecified",
         ...requested ? { requested } : {},
         ...launchValue ? { launchValue } : {},
         ...resolvedDefault ? { resolvedDefault } : {},
@@ -24994,22 +24995,22 @@ ${renderWorkerProtocolFooter2(input)}`;
     }
     function parseSessionLaunchRecord(raw) {
       if (!raw || typeof raw !== "object") return void 0;
-      const record2 = raw;
-      const sessionId = readString2(record2.sessionId);
-      const providerType = readString2(record2.providerType);
-      const launchedAt = readFiniteNumber(record2.launchedAt);
-      const model = parseModelSelection(record2.model);
-      const thinkingLevel = parseModelSelection(record2.thinkingLevel);
+      const record3 = raw;
+      const sessionId = readString2(record3.sessionId);
+      const providerType = readString2(record3.providerType);
+      const launchedAt = readFiniteNumber(record3.launchedAt);
+      const model = parseModelSelection(record3.model);
+      const thinkingLevel = parseModelSelection(record3.thinkingLevel);
       if (!sessionId || !providerType || launchedAt === void 0 || !model || !thinkingLevel) return void 0;
-      const providerVersion = readString2(record2.providerVersion);
-      const workspace = readString2(record2.workspace);
-      const autoApproveModeId = readString2(record2.autoApproveModeId);
+      const providerVersion = readString2(record3.providerVersion);
+      const workspace = readString2(record3.workspace);
+      const autoApproveModeId = readString2(record3.autoApproveModeId);
       return {
         sessionId,
         providerType,
         ...providerVersion ? { providerVersion } : {},
-        ...record2.providerChannel === "stable" || record2.providerChannel === "preview" ? { providerChannel: record2.providerChannel } : {},
-        launchedBy: isSessionLaunchedBy(record2.launchedBy) ? record2.launchedBy : "api",
+        ...record3.providerChannel === "stable" || record3.providerChannel === "preview" ? { providerChannel: record3.providerChannel } : {},
+        launchedBy: isSessionLaunchedBy(record3.launchedBy) ? record3.launchedBy : "api",
         launchedAt,
         ...workspace ? { workspace } : {},
         model,
@@ -26039,6 +26040,13 @@ ${renderWorkerProtocolFooter2(input)}`;
         out.gitObservation = without2(observation, ["observedAt"]);
       }
       return out;
+    }
+    function isProviderQuestionBinding(value) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+      const b = value;
+      if (b.transport !== "codex_rpc" && b.transport !== "codex_async") return false;
+      if (["sessionId", "generation", "threadId", "turnId", "itemId"].some((key2) => typeof b[key2] !== "string" || !b[key2].trim())) return false;
+      return b.transport === "codex_async" ? b.requestId === void 0 : typeof b.requestId === "string" || typeof b.requestId === "number" && Number.isFinite(b.requestId);
     }
     var QUOTA_SUPPORTED_PROVIDERS;
     var BUILTIN_PROVIDER_PREFERENCE2;
@@ -27221,28 +27229,28 @@ ${renderWorkerProtocolFooter2(input)}`;
     }
     function normalizeQuotaRoutingPolicy(value) {
       if (!value || typeof value !== "object" || Array.isArray(value)) return void 0;
-      const record2 = value;
-      const resolved = resolveQuotaRoutingPolicy(record2);
+      const record3 = value;
+      const resolved = resolveQuotaRoutingPolicy(record3);
       const out = {};
-      if (record2.staleAfterMs !== void 0 && resolved.staleAfterMs !== DEFAULT_QUOTA_ROUTING_POLICY2.staleAfterMs) {
+      if (record3.staleAfterMs !== void 0 && resolved.staleAfterMs !== DEFAULT_QUOTA_ROUTING_POLICY2.staleAfterMs) {
         out.staleAfterMs = resolved.staleAfterMs;
       }
-      if (record2.sessionMinRemainingPercent !== void 0 && resolved.sessionMinRemainingPercent !== DEFAULT_QUOTA_ROUTING_POLICY2.sessionMinRemainingPercent) {
+      if (record3.sessionMinRemainingPercent !== void 0 && resolved.sessionMinRemainingPercent !== DEFAULT_QUOTA_ROUTING_POLICY2.sessionMinRemainingPercent) {
         out.sessionMinRemainingPercent = resolved.sessionMinRemainingPercent;
       }
-      if (record2.sessionResetImminentMs !== void 0 && resolved.sessionResetImminentMs !== DEFAULT_QUOTA_ROUTING_POLICY2.sessionResetImminentMs) {
+      if (record3.sessionResetImminentMs !== void 0 && resolved.sessionResetImminentMs !== DEFAULT_QUOTA_ROUTING_POLICY2.sessionResetImminentMs) {
         out.sessionResetImminentMs = resolved.sessionResetImminentMs;
       }
-      if (record2.weeklyMinRemainingPercent !== void 0 && resolved.weeklyMinRemainingPercent !== DEFAULT_QUOTA_ROUTING_POLICY2.weeklyMinRemainingPercent) {
+      if (record3.weeklyMinRemainingPercent !== void 0 && resolved.weeklyMinRemainingPercent !== DEFAULT_QUOTA_ROUTING_POLICY2.weeklyMinRemainingPercent) {
         out.weeklyMinRemainingPercent = resolved.weeklyMinRemainingPercent;
       }
-      if (record2.spreadBonusMax !== void 0 && resolved.spreadBonusMax !== DEFAULT_QUOTA_ROUTING_POLICY2.spreadBonusMax) {
+      if (record3.spreadBonusMax !== void 0 && resolved.spreadBonusMax !== DEFAULT_QUOTA_ROUTING_POLICY2.spreadBonusMax) {
         out.spreadBonusMax = resolved.spreadBonusMax;
       }
-      if (record2.sessionAxisWeeklyHeadroomPercent !== void 0 && resolved.sessionAxisWeeklyHeadroomPercent !== DEFAULT_QUOTA_ROUTING_POLICY2.sessionAxisWeeklyHeadroomPercent) {
+      if (record3.sessionAxisWeeklyHeadroomPercent !== void 0 && resolved.sessionAxisWeeklyHeadroomPercent !== DEFAULT_QUOTA_ROUTING_POLICY2.sessionAxisWeeklyHeadroomPercent) {
         out.sessionAxisWeeklyHeadroomPercent = resolved.sessionAxisWeeklyHeadroomPercent;
       }
-      if (record2.quotaBusyFallback !== void 0 && resolved.quotaBusyFallback !== DEFAULT_QUOTA_ROUTING_POLICY2.quotaBusyFallback) {
+      if (record3.quotaBusyFallback !== void 0 && resolved.quotaBusyFallback !== DEFAULT_QUOTA_ROUTING_POLICY2.quotaBusyFallback) {
         out.quotaBusyFallback = resolved.quotaBusyFallback;
       }
       return Object.keys(out).length ? out : void 0;
@@ -27406,14 +27414,14 @@ ${renderWorkerProtocolFooter2(input)}`;
       return resolveDelegatedSessionIdleTtlMinutes(value) * 6e4;
     }
     function normalizeAutoFastForwardPolicy(value) {
-      const record2 = value && typeof value === "object" && !Array.isArray(value) ? value : {};
-      const maxBehind = Number(record2.maxBehind);
+      const record3 = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+      const maxBehind = Number(record3.maxBehind);
       return {
-        enabled: record2.enabled !== false,
+        enabled: record3.enabled !== false,
         ...Number.isFinite(maxBehind) && maxBehind >= 0 ? { maxBehind: Math.floor(maxBehind) } : {},
-        requireCleanSubmodules: record2.requireCleanSubmodules !== false,
-        ...record2.remoteNodes === true ? { remoteNodes: true } : {},
-        ...record2.mode === "continuous" ? { mode: "continuous" } : {}
+        requireCleanSubmodules: record3.requireCleanSubmodules !== false,
+        ...record3.remoteNodes === true ? { remoteNodes: true } : {},
+        ...record3.mode === "continuous" ? { mode: "continuous" } : {}
       };
     }
     function policyRecord(value) {
@@ -27469,13 +27477,13 @@ ${renderWorkerProtocolFooter2(input)}`;
       return normalizePolicyOverrides2(merged);
     }
     function migratePolicyToSparseOverrides(stored) {
-      const record2 = { ...policyRecord(stored) };
-      if (record2.sessionCleanupOnNodeRemove === "preserve") delete record2.sessionCleanupOnNodeRemove;
+      const record3 = { ...policyRecord(stored) };
+      if (record3.sessionCleanupOnNodeRemove === "preserve") delete record3.sessionCleanupOnNodeRemove;
       try {
-        return normalizePolicyOverrides2(record2);
+        return normalizePolicyOverrides2(record3);
       } catch {
         const out = {};
-        for (const [key2, raw] of Object.entries(record2)) {
+        for (const [key2, raw] of Object.entries(record3)) {
           if (RETIRED_KEYS.has(key2) || raw === void 0 || raw === null) continue;
           try {
             const one = normalizePolicyOverrides2({ [key2]: raw });
@@ -27661,9 +27669,9 @@ ${renderWorkerProtocolFooter2(input)}`;
         init_repo_mesh_status_types();
       }
     });
-    function parseConfigText(path90, text) {
-      if (/\.json$/i.test(path90)) return JSON.parse(text);
-      return yaml.load(text);
+    function parseConfigText(path90, text2) {
+      if (/\.json$/i.test(path90)) return JSON.parse(text2);
+      return yaml.load(text2);
     }
     var yaml;
     var init_config_text = __esm2({
@@ -27691,11 +27699,11 @@ ${renderWorkerProtocolFooter2(input)}`;
     }
     function normalizeOperatingNote(value) {
       if (!isRecord4(value)) return null;
-      const text = typeof value.text === "string" ? value.text.trim() : "";
-      if (!text) return null;
+      const text2 = typeof value.text === "string" ? value.text.trim() : "";
+      if (!text2) return null;
       const category = value.category === "provider_quirk" || value.category === "pattern_to_avoid" || value.category === "recovery_lesson" ? value.category : void 0;
       return {
-        text,
+        text: text2,
         ...category ? { category } : {},
         ...typeof value.createdAt === "string" ? { createdAt: value.createdAt } : {},
         ...typeof value.sourceCoordinator === "string" ? { sourceCoordinator: value.sourceCoordinator } : {},
@@ -28272,14 +28280,14 @@ ${renderWorkerProtocolFooter2(input)}`;
         const configPath = (0, import_path2.join)(repoRoot, relative13);
         if (!(0, import_fs2.existsSync)(configPath)) continue;
         try {
-          const text = (0, import_fs2.readFileSync)(configPath, "utf-8");
+          const text2 = (0, import_fs2.readFileSync)(configPath, "utf-8");
           let mtimeMs = 0;
           try {
             mtimeMs = (0, import_fs2.statSync)(configPath).mtimeMs;
           } catch {
-            mtimeMs = text.length;
+            mtimeMs = text2.length;
           }
-          const parsed = parseConfigText(configPath, text);
+          const parsed = parseConfigText(configPath, text2);
           const validation = validateChangeImpactConfig(parsed, relative13);
           if (!validation.valid) {
             return {
@@ -28911,9 +28919,9 @@ ${renderWorkerProtocolFooter2(input)}`;
     async function readHead(repo, options) {
       try {
         const result = await runGit(repo, ["log", "-1", "--pretty=%h%x00%s"], options);
-        const text = result.stdout.trimEnd();
-        if (!text) return { commit: null, message: null };
-        const [commit2, ...messageParts] = text.split("\0");
+        const text2 = result.stdout.trimEnd();
+        if (!text2) return { commit: null, message: null };
+        const [commit2, ...messageParts] = text2.split("\0");
         return {
           commit: commit2 || null,
           message: messageParts.join("\0") || null
@@ -29349,12 +29357,12 @@ ${renderWorkerProtocolFooter2(input)}`;
         plusLines
       ].filter((line) => line.length > 0).join("\n");
     }
-    function truncateText(text, maxBytes) {
-      if (byteLength(text) <= maxBytes) return { text, truncated: false };
-      return { text: Buffer.from(text, "utf8").subarray(0, maxBytes).toString("utf8"), truncated: true };
+    function truncateText(text2, maxBytes) {
+      if (byteLength(text2) <= maxBytes) return { text: text2, truncated: false };
+      return { text: Buffer.from(text2, "utf8").subarray(0, maxBytes).toString("utf8"), truncated: true };
     }
-    function byteLength(text) {
-      return Buffer.byteLength(text, "utf8");
+    function byteLength(text2) {
+      return Buffer.byteLength(text2, "utf8");
     }
     function normalizePositiveInteger(value, fallback) {
       if (!Number.isFinite(value) || value == null || value <= 0) return fallback;
@@ -31031,16 +31039,16 @@ try {
       if (typeof parsed !== "object" || parsed === null) {
         return null;
       }
-      const record2 = parsed;
-      if (record2.version !== SNAPSHOT_VERSION) {
+      const record3 = parsed;
+      if (record3.version !== SNAPSHOT_VERSION) {
         return null;
       }
-      const capturedAt = toNumber(record2.capturedAt);
+      const capturedAt = toNumber(record3.capturedAt);
       if (capturedAt === null) {
         return null;
       }
-      const fiveHour = parseRecordedWindow(record2.fiveHour);
-      const sevenDay = parseRecordedWindow(record2.sevenDay);
+      const fiveHour = parseRecordedWindow(record3.fiveHour);
+      const sevenDay = parseRecordedWindow(record3.sevenDay);
       if (fiveHour === null && sevenDay === null) {
         return null;
       }
@@ -31049,20 +31057,20 @@ try {
         capturedAt,
         fiveHour,
         sevenDay,
-        ...typeof record2.cliVersion === "string" ? { cliVersion: record2.cliVersion } : {},
-        ...typeof record2.model === "string" && record2.model.trim() ? { model: record2.model.trim() } : {}
+        ...typeof record3.cliVersion === "string" ? { cliVersion: record3.cliVersion } : {},
+        ...typeof record3.model === "string" && record3.model.trim() ? { model: record3.model.trim() } : {}
       };
     }
     function parseRecordedWindow(raw) {
       if (typeof raw !== "object" || raw === null) {
         return null;
       }
-      const record2 = raw;
-      const usedPercent = toNumber(record2.usedPercent);
+      const record3 = raw;
+      const usedPercent = toNumber(record3.usedPercent);
       if (usedPercent === null) {
         return null;
       }
-      const resetsAt = toNumber(record2.resetsAt);
+      const resetsAt = toNumber(record3.resetsAt);
       return { usedPercent, resetsAt: resetsAt === null ? null : resetsAt };
     }
     var SNAPSHOT_VERSION;
@@ -31515,11 +31523,11 @@ child.on('exit', () => process.exit(0));
       if (result.kind !== "ok") {
         return null;
       }
-      const record2 = result.value;
-      if (record2.version !== 1) {
+      const record3 = result.value;
+      if (record3.version !== 1) {
         return null;
       }
-      const statusLine = record2.statusLine;
+      const statusLine = record3.statusLine;
       if (statusLine === null) {
         return { version: 1, savedAt: 0, statusLine: null };
       }
@@ -31528,7 +31536,7 @@ child.on('exit', () => process.exit(0));
       }
       return {
         version: 1,
-        savedAt: typeof record2.savedAt === "number" ? record2.savedAt : 0,
+        savedAt: typeof record3.savedAt === "number" ? record3.savedAt : 0,
         statusLine
       };
     }
@@ -31623,11 +31631,11 @@ child.on('exit', () => process.exit(0));
         };
       }
     });
-    function toWindow(record2, windowMinutes3) {
-      if (record2 === null) {
+    function toWindow(record3, windowMinutes3) {
+      if (record3 === null) {
         return null;
       }
-      return windowFromPercent(record2.usedPercent, windowMinutes3, record2.resetsAt);
+      return windowFromPercent(record3.usedPercent, windowMinutes3, record3.resetsAt);
     }
     async function fetchClaudeQuota(overrides = {}) {
       const deps = resolveDeps(overrides);
@@ -31776,23 +31784,23 @@ child.on('exit', () => process.exit(0));
     }
     function mapRolloutWindow(raw, fallbackMinutes) {
       if (typeof raw !== "object" || raw === null) return null;
-      const record2 = raw;
-      const minutes = toNumber(record2.window_minutes) ?? fallbackMinutes;
-      return windowFromPercent(toNumber(record2.used_percent), minutes, toEpochResetMs(record2.resets_at));
+      const record3 = raw;
+      const minutes = toNumber(record3.window_minutes) ?? fallbackMinutes;
+      return windowFromPercent(toNumber(record3.used_percent), minutes, toEpochResetMs(record3.resets_at));
     }
     function parseRolloutLine(line) {
       const trimmed2 = line.trim();
       if (trimmed2 === "" || !trimmed2.startsWith("{")) return null;
       if (!trimmed2.includes('"rate_limits"')) return null;
-      let record2;
+      let record3;
       try {
         const parsed = JSON.parse(trimmed2);
         if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
-        record2 = parsed;
+        record3 = parsed;
       } catch {
         return null;
       }
-      const payload = record2.payload;
+      const payload = record3.payload;
       if (typeof payload !== "object" || payload === null) return null;
       const limits = payload.rate_limits;
       if (typeof limits !== "object" || limits === null) return null;
@@ -31804,7 +31812,7 @@ child.on('exit', () => process.exit(0));
       if (secondary) reported.push(secondary);
       if (reported.length === 0) return null;
       const { session, weekly } = assignWindows(reported);
-      const capturedAt = Date.parse(typeof record2.timestamp === "string" ? record2.timestamp : "");
+      const capturedAt = Date.parse(typeof record3.timestamp === "string" ? record3.timestamp : "");
       if (!Number.isFinite(capturedAt)) {
         return null;
       }
@@ -31834,8 +31842,8 @@ child.on('exit', () => process.exit(0));
           consumed += length;
           const buffer = Buffer.alloc(length);
           fs6.readSync(fd, buffer, 0, length, position);
-          const text = buffer.toString("utf-8") + carry;
-          const lines = text.split("\n");
+          const text2 = buffer.toString("utf-8") + carry;
+          const lines = text2.split("\n");
           carry = position > 0 ? lines.shift() ?? "" : "";
           for (let i = lines.length - 1; i >= 0; i -= 1) {
             const parsed = parseRolloutLine(lines[i]);
@@ -31991,8 +31999,8 @@ child.on('exit', () => process.exit(0));
       if (status >= 500 && status <= 599) return "server";
       return null;
     }
-    function extractEmbeddedHttpStatus(text) {
-      const bodyEq = text.match(/\bbody\s*=\s*(\{[\s\S]*\})\s*;?/);
+    function extractEmbeddedHttpStatus(text2) {
+      const bodyEq = text2.match(/\bbody\s*=\s*(\{[\s\S]*\})\s*;?/);
       if (bodyEq?.[1]) {
         try {
           const parsed = JSON.parse(bodyEq[1]);
@@ -32002,48 +32010,48 @@ child.on('exit', () => process.exit(0));
         } catch {
         }
       }
-      const jsonStatus = text.match(/"status"\s*:\s*(\d{3})/);
+      const jsonStatus = text2.match(/"status"\s*:\s*(\d{3})/);
       if (jsonStatus) {
         const n = Number(jsonStatus[1]);
         if (kindFromHttpStatus(n)) return n;
       }
-      const labelled = text.match(/\b(?:HTTP\s+|failed:\s*)(401|403|429|5\d{2})\b/i);
+      const labelled = text2.match(/\b(?:HTTP\s+|failed:\s*)(401|403|429|5\d{2})\b/i);
       if (labelled) return Number(labelled[1]);
-      const phrase = text.match(/\b(401|403)\s+Unauthorized\b/i) ?? text.match(/\b(429)\s+Too Many Requests\b/i);
+      const phrase = text2.match(/\b(401|403)\s+Unauthorized\b/i) ?? text2.match(/\b(429)\s+Too Many Requests\b/i);
       if (phrase) return Number(phrase[1]);
       return null;
     }
-    function extractEmbeddedErrorCode(text) {
-      const match = text.match(/"code"\s*:\s*"([^"]+)"/);
+    function extractEmbeddedErrorCode(text2) {
+      const match = text2.match(/"code"\s*:\s*"([^"]+)"/);
       return match?.[1] ?? null;
     }
     function classifyCodexAppServerError(message) {
-      const text = message.trim();
-      const http4 = extractEmbeddedHttpStatus(text);
+      const text2 = message.trim();
+      const http4 = extractEmbeddedHttpStatus(text2);
       if (http4 !== null) {
         const kind = kindFromHttpStatus(http4);
         if (kind) return kind;
       }
-      const code = extractEmbeddedErrorCode(text);
+      const code = extractEmbeddedErrorCode(text2);
       if (code && UNAUTHORIZED_ERROR_CODES.has(code)) return "unauthorized";
-      if (/\bunauthorized\b/i.test(text)) return "unauthorized";
-      if (NETWORK_PATTERN.test(text)) return "network";
-      if (RATE_LIMIT_TEXT_PATTERN.test(text)) return "rate-limited";
-      if (MISSING_CREDENTIALS_PATTERN.test(text)) return "missing-credentials";
+      if (/\bunauthorized\b/i.test(text2)) return "unauthorized";
+      if (NETWORK_PATTERN.test(text2)) return "network";
+      if (RATE_LIMIT_TEXT_PATTERN.test(text2)) return "rate-limited";
+      if (MISSING_CREDENTIALS_PATTERN.test(text2)) return "missing-credentials";
       return "server";
     }
-    function describeCodexRateLimitFailure(kind, text) {
+    function describeCodexRateLimitFailure(kind, text2) {
       switch (kind) {
         case "missing-credentials":
-          return `Not signed in to Codex (${text}) \u2014 run codex on this machine to sign in, then retry`;
+          return `Not signed in to Codex (${text2}) \u2014 run codex on this machine to sign in, then retry`;
         case "unauthorized":
-          return `Codex declined the rate-limit lookup for this account (${text}) \u2014 the sign-in itself is fine; usage numbers are read from local Codex logs instead`;
+          return `Codex declined the rate-limit lookup for this account (${text2}) \u2014 the sign-in itself is fine; usage numbers are read from local Codex logs instead`;
         case "rate-limited":
-          return `Codex rate-limit lookup was rate limited: ${text}`;
+          return `Codex rate-limit lookup was rate limited: ${text2}`;
         case "network":
-          return `Codex rate-limit lookup failed: ${text}`;
+          return `Codex rate-limit lookup failed: ${text2}`;
         default:
-          return `Codex rate-limit request failed: ${text}`;
+          return `Codex rate-limit request failed: ${text2}`;
       }
     }
     function codexCommand(env2) {
@@ -32054,9 +32062,9 @@ child.on('exit', () => process.exit(0));
       if (typeof raw !== "object" || raw === null) {
         return null;
       }
-      const record2 = raw;
-      const minutes = toNumber(record2.windowDurationMins) ?? fallbackMinutes;
-      return windowFromPercent(toNumber(record2.usedPercent), minutes, toEpochResetMs(record2.resetsAt));
+      const record3 = raw;
+      const minutes = toNumber(record3.windowDurationMins) ?? fallbackMinutes;
+      return windowFromPercent(toNumber(record3.usedPercent), minutes, toEpochResetMs(record3.resetsAt));
     }
     function withAccountEmail(quota, accountResult) {
       const root = typeof accountResult === "object" && accountResult !== null ? accountResult : {};
@@ -32204,13 +32212,13 @@ child.on('exit', () => process.exit(0));
           }
           if (message.id === RATE_LIMITS_ID) {
             if (message.error) {
-              const text = message.error.message ?? "unknown error";
-              const failureKind = classifyCodexAppServerError(text);
+              const text2 = message.error.message ?? "unknown error";
+              const failureKind = classifyCodexAppServerError(text2);
               finish(
                 quotaFailure(
                   "codex-cli",
                   failureKind === "missing-credentials" ? "unavailable" : "error",
-                  describeCodexRateLimitFailure(failureKind, text),
+                  describeCodexRateLimitFailure(failureKind, text2),
                   { source: "app-server", failureKind }
                 )
               );
@@ -32404,8 +32412,8 @@ child.on('exit', () => process.exit(0));
       if (typeof parsed !== "object" || parsed === null) {
         return { kind: "invalid", reason: "Cursor auth file is not an object" };
       }
-      const record2 = parsed;
-      const token = record2.accessToken ?? record2.access_token;
+      const record3 = parsed;
+      const token = record3.accessToken ?? record3.access_token;
       if (typeof token !== "string" || token.trim() === "") {
         return { kind: "invalid", reason: "Cursor auth file has no access token" };
       }
@@ -32503,8 +32511,8 @@ child.on('exit', () => process.exit(0));
     function asRecord2(value) {
       return typeof value === "object" && value !== null ? value : null;
     }
-    function field(record2, snake, camel) {
-      return record2?.[snake] ?? record2?.[camel];
+    function field(record3, snake, camel) {
+      return record3?.[snake] ?? record3?.[camel];
     }
     function toOptionalNumber(value) {
       return value === void 0 || value === null ? void 0 : toNumber(value) ?? void 0;
@@ -32728,12 +32736,12 @@ child.on('exit', () => process.exit(0));
         if (typeof entry !== "object" || entry === null) {
           continue;
         }
-        const record2 = entry;
-        const token = typeof record2.key === "string" && record2.key.length > 0 ? record2.key : typeof record2.access_token === "string" && record2.access_token.length > 0 ? record2.access_token : null;
+        const record3 = entry;
+        const token = typeof record3.key === "string" && record3.key.length > 0 ? record3.key : typeof record3.access_token === "string" && record3.access_token.length > 0 ? record3.access_token : null;
         if (token === null) {
           continue;
         }
-        const expiresRaw = record2.expires_at;
+        const expiresRaw = record3.expires_at;
         let expiresAtMs = null;
         if (typeof expiresRaw === "string" && expiresRaw.trim() !== "") {
           const ms3 = new Date(expiresRaw).getTime();
@@ -32968,12 +32976,12 @@ child.on('exit', () => process.exit(0));
       if (typeof parsed !== "object" || parsed === null) {
         return { kind: "invalid", reason: "Kimi credentials file is not an object" };
       }
-      const record2 = parsed;
-      const accessToken = record2.access_token;
+      const record3 = parsed;
+      const accessToken = record3.access_token;
       if (typeof accessToken !== "string" || accessToken.length === 0) {
         return { kind: "invalid", reason: "Kimi credentials file has no access token" };
       }
-      const expiresAtRaw = record2.expires_at;
+      const expiresAtRaw = record3.expires_at;
       const expiresAt = typeof expiresAtRaw === "number" && Number.isFinite(expiresAtRaw) ? expiresAtRaw : null;
       return { kind: "ok", credentials: { accessToken, expiresAt } };
     }
@@ -33006,12 +33014,12 @@ child.on('exit', () => process.exit(0));
       if (typeof window !== "object" || window === null) {
         return null;
       }
-      const record2 = window;
-      const duration = toNumber(record2.duration);
+      const record3 = window;
+      const duration = toNumber(record3.duration);
       if (duration === null) {
         return null;
       }
-      const unit = String(record2.timeUnit ?? "").toUpperCase();
+      const unit = String(record3.timeUnit ?? "").toUpperCase();
       if (unit.includes("SECOND")) return Math.round(duration / 60);
       if (unit.includes("MINUTE")) return duration;
       if (unit.includes("HOUR")) return duration * 60;
@@ -33022,23 +33030,23 @@ child.on('exit', () => process.exit(0));
       if (typeof detail !== "object" || detail === null) {
         return null;
       }
-      const record2 = detail;
-      const limit = toNumber(record2.limit);
-      let used = toNumber(record2.used);
+      const record3 = detail;
+      const limit = toNumber(record3.limit);
+      let used = toNumber(record3.used);
       if (used === null) {
-        const remaining = toNumber(record2.remaining);
+        const remaining = toNumber(record3.remaining);
         if (remaining !== null && limit !== null) {
           used = limit - remaining;
         }
       }
-      const resetsAt = toIsoResetMs(record2.resetTime) ?? toIsoResetMs(record2.resetAt);
+      const resetsAt = toIsoResetMs(record3.resetTime) ?? toIsoResetMs(record3.resetAt);
       return windowFromUsage(used, limit, minutes, resetsAt);
     }
     function mapUsageResponse2(data) {
-      const record2 = typeof data === "object" && data !== null ? data : {};
-      const weekly = mapDetail(record2.usage, WEEKLY_WINDOW_MINUTES);
+      const record3 = typeof data === "object" && data !== null ? data : {};
+      const weekly = mapDetail(record3.usage, WEEKLY_WINDOW_MINUTES);
       let session = null;
-      const limits = Array.isArray(record2.limits) ? record2.limits : [];
+      const limits = Array.isArray(record3.limits) ? record3.limits : [];
       for (const entry of limits) {
         if (typeof entry !== "object" || entry === null) {
           continue;
@@ -33384,12 +33392,12 @@ child.on('exit', () => process.exit(0));
         return void 0;
       }
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return void 0;
-      const record2 = parsed;
-      if (record2.version !== QUOTA_CACHE_VERSION) {
-        LOG.info("Quota", `Ignoring quota cache written by a different version (${String(record2.version)})`);
+      const record3 = parsed;
+      if (record3.version !== QUOTA_CACHE_VERSION) {
+        LOG.info("Quota", `Ignoring quota cache written by a different version (${String(record3.version)})`);
         return void 0;
       }
-      const providers = record2.providers;
+      const providers = record3.providers;
       if (!providers || typeof providers !== "object" || Array.isArray(providers)) return void 0;
       const restored = {};
       for (const [provider, value] of Object.entries(providers)) {
@@ -33930,12 +33938,12 @@ child.on('exit', () => process.exit(0));
       let textBytes = 0;
       for (const item of items) {
         if (item && typeof item.text === "string") {
-          const text = item.text;
-          textBytes += Buffer.byteLength(text, "utf8");
+          const text2 = item.text;
+          textBytes += Buffer.byteLength(text2, "utf8");
           if (textBytes > MESH_SEND_KEYS_MAX_TEXT_BYTES) {
             throw new Error(`send_keys: total literal text exceeds ${MESH_SEND_KEYS_MAX_TEXT_BYTES} bytes`);
           }
-          parts.push(text);
+          parts.push(text2);
           submits = false;
           continue;
         }
@@ -33951,8 +33959,8 @@ child.on('exit', () => process.exit(0));
       }
       return { sequence: parts.join(""), keys, hasDestructive, submits };
     }
-    function truncateToByteTailByLine(text, maxBytes) {
-      const input = String(text ?? "");
+    function truncateToByteTailByLine(text2, maxBytes) {
+      const input = String(text2 ?? "");
       const originalBytes = Buffer.byteLength(input, "utf8");
       if (originalBytes <= maxBytes) {
         return { text: input, truncated: false, originalBytes, returnedBytes: originalBytes };
@@ -35287,8 +35295,8 @@ ${error.message || ""}`;
       let hostSynthesized = false;
       const nodes = Array.isArray(meshRecord2?.nodes) ? meshRecord2.nodes : [];
       const nodeDaemonIdOf = (node) => {
-        const record2 = readObject(node);
-        return readString2(record2?.daemonId) ?? readString2(record2?.daemon_id);
+        const record3 = readObject(node);
+        return readString2(record3?.daemonId) ?? readString2(record3?.daemon_id);
       };
       if (role === "host" && !hostDaemonId) {
         const declaredHostNode = nodes.find((n) => normalizeMeshDaemonRole(readObject(n)?.role) === "host");
@@ -36005,24 +36013,24 @@ ${error.message || ""}`;
       if (!workspace) return bundled;
       const rulesPath = path21.join(workspace, ".adhdev", "coordinator-rules.md");
       try {
-        const text = fs12.readFileSync(rulesPath, "utf8");
-        if (text.trim().length < MIN_MEANINGFUL_RULES_CHARS) return bundled;
+        const text2 = fs12.readFileSync(rulesPath, "utf8");
+        if (text2.trim().length < MIN_MEANINGFUL_RULES_CHARS) return bundled;
         return {
-          text,
+          text: text2,
           source: "repo",
           path: rulesPath,
-          differsFromBundled: text !== DEFAULT_COORDINATOR_RULES
+          differsFromBundled: text2 !== DEFAULT_COORDINATOR_RULES
         };
       } catch {
         return bundled;
       }
     }
-    function splitRulesLayer(text) {
-      const match = /^## Rules\b/m.exec(text);
-      if (!match || match.index === void 0) return { workflow: "", rules: text.trim() };
+    function splitRulesLayer(text2) {
+      const match = /^## Rules\b/m.exec(text2);
+      if (!match || match.index === void 0) return { workflow: "", rules: text2.trim() };
       return {
-        workflow: text.slice(0, match.index).trim(),
-        rules: text.slice(match.index).trim()
+        workflow: text2.slice(0, match.index).trim(),
+        rules: text2.slice(match.index).trim()
       };
     }
     var fs12;
@@ -36187,18 +36195,18 @@ ${error.message || ""}`;
         ];
       }
     });
-    function parseJsonObject(text) {
-      if (!text) return {};
+    function parseJsonObject(text2) {
+      if (!text2) return {};
       try {
-        const parsed = JSON.parse(text);
+        const parsed = JSON.parse(text2);
         return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
       } catch {
         return {};
       }
     }
-    function parseSummary(text) {
-      if (!text) return void 0;
-      const parsed = parseJsonObject(text);
+    function parseSummary(text2) {
+      if (!text2) return void 0;
+      const parsed = parseJsonObject(text2);
       return typeof parsed.topic === "string" && typeof parsed.writer === "string" && typeof parsed.seq === "number" ? { topic: parsed.topic, writer: parsed.writer, seq: parsed.seq } : void 0;
     }
     function attemptFromRow(row) {
@@ -37213,18 +37221,18 @@ ${error.message || ""}`;
             result.linesSkipped++;
             continue;
           }
-          const text = (v) => typeof v === "string" && v ? v : null;
+          const text2 = (v) => typeof v === "string" && v ? v : null;
           try {
             insert.run(
               (0, import_crypto4.randomUUID)(),
               meshId,
-              text(event.targetCoordinatorDaemonId),
+              text2(event.targetCoordinatorDaemonId),
               eventName,
               JSON.stringify(event),
               typeof event.queuedAt === "number" ? event.queuedAt : Date.now(),
-              text(event.protocolVersion),
-              text(event.eventId),
-              text(event.scope),
+              text2(event.protocolVersion),
+              text2(event.eventId),
+              text2(event.scope),
               event.dispatchedBy ? JSON.stringify(event.dispatchedBy) : null,
               event.intendedFor ? JSON.stringify(event.intendedFor) : null
             );
@@ -37252,10 +37260,10 @@ ${error.message || ""}`;
     function turnLedgerExportPath(ledgerDir, nowMs2) {
       return `${ledgerDir.replace(/[\\/]+$/, "")}/turn-ledger-premigrate-${nowMs2}.jsonl`;
     }
-    function parseObject(text) {
-      if (typeof text !== "string" || !text) return {};
+    function parseObject(text2) {
+      if (typeof text2 !== "string" || !text2) return {};
       try {
-        const parsed = JSON.parse(text);
+        const parsed = JSON.parse(text2);
         return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
       } catch {
         return {};
@@ -37569,11 +37577,11 @@ ${error.message || ""}`;
           const payload = parseObject(row.payload);
           const at = ms22(row.timestamp) ?? nowMs2;
           if (row.kind === OPERATOR_CANCEL_KIND) {
-            const text = typeof payload.text === "string" ? payload.text.trim() : "";
-            if (!text) continue;
-            if (store2.insertOperatingNote({ noteId: row.id, meshId, text, category: typeof payload.category === "string" ? payload.category : null, callerSessionId: row.session_id, createdAt: at })) {
+            const text2 = typeof payload.text === "string" ? payload.text.trim() : "";
+            if (!text2) continue;
+            if (store2.insertOperatingNote({ noteId: row.id, meshId, text: text2, category: typeof payload.category === "string" ? payload.category : null, callerSessionId: row.session_id, createdAt: at })) {
               report.operatingNotes++;
-              byText.set(text, [...byText.get(text) ?? [], row.id]);
+              byText.set(text2, [...byText.get(text2) ?? [], row.id]);
             }
           } else {
             report.operatingNoteTombstones++;
@@ -37649,10 +37657,10 @@ ${error.message || ""}`;
         PENDING_EVENTS_JSONL_SUFFIX = ".pending-events.jsonl";
       }
     });
-    function parseObject2(text) {
-      if (typeof text !== "string" || !text) return {};
+    function parseObject2(text2) {
+      if (typeof text2 !== "string" || !text2) return {};
       try {
-        const v = JSON.parse(text);
+        const v = JSON.parse(text2);
         return v && typeof v === "object" && !Array.isArray(v) ? v : {};
       } catch {
         return {};
@@ -37695,8 +37703,8 @@ ${error.message || ""}`;
         const at = Date.parse(row.timestamp);
         const atMs = Number.isFinite(at) ? at : Date.now();
         if (row.kind === NOTE_KIND) {
-          const text = str2(payload.text);
-          if (!text) continue;
+          const text2 = str2(payload.text);
+          if (!text2) continue;
           const meta = {
             ...payload.pinned === true ? { pinned: true } : {},
             ...str2(payload.expiresAt) ? { expiresAt: str2(payload.expiresAt) } : {},
@@ -37708,14 +37716,14 @@ ${error.message || ""}`;
           if (store2.insertOperatingNote({
             noteId: row.id,
             meshId: row.mesh_id,
-            text,
+            text: text2,
             category: str2(payload.category) ?? null,
             callerSessionId: row.session_id,
             createdAt: Number.isFinite(created) ? created : atMs,
             meta
           })) {
             report.notesFolded++;
-            const key2 = `${row.mesh_id}\0${text}`;
+            const key2 = `${row.mesh_id}\0${text2}`;
             idsByText.set(key2, [...idsByText.get(key2) ?? [], row.id]);
           }
         } else {
@@ -37797,10 +37805,10 @@ ${error.message || ""}`;
         NOTE_TOMBSTONE_KIND = "coordinator_operating_note_tombstone";
       }
     });
-    function parsePayload(text) {
-      if (!text) return {};
+    function parsePayload(text2) {
+      if (!text2) return {};
       try {
-        const value = JSON.parse(text);
+        const value = JSON.parse(text2);
         return value && typeof value === "object" && !Array.isArray(value) ? value : {};
       } catch {
         return {};
@@ -37975,10 +37983,10 @@ ${error.message || ""}`;
         };
       }
     });
-    function parseObject3(text) {
-      if (typeof text !== "string" || !text) return {};
+    function parseObject3(text2) {
+      if (typeof text2 !== "string" || !text2) return {};
       try {
-        const v = JSON.parse(text);
+        const v = JSON.parse(text2);
         return v && typeof v === "object" && !Array.isArray(v) ? v : {};
       } catch {
         return {};
@@ -38002,13 +38010,13 @@ ${error.message || ""}`;
           continue;
         }
         report.jsonlFilesScanned++;
-        let text = "";
+        let text2 = "";
         try {
-          text = (0, import_fs9.readFileSync)(path90, "utf8");
+          text2 = (0, import_fs9.readFileSync)(path90, "utf8");
         } catch {
           continue;
         }
-        for (const line of text.split("\n")) {
+        for (const line of text2.split("\n")) {
           if (!line.trim()) continue;
           let entry;
           try {
@@ -38660,9 +38668,9 @@ ${error.message || ""}`;
     function readTimestamp(value) {
       return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : void 0;
     }
-    function compact(record2) {
+    function compact(record3) {
       const out = {};
-      for (const [key2, value] of Object.entries(record2)) if (value !== void 0) out[key2] = value;
+      for (const [key2, value] of Object.entries(record3)) if (value !== void 0) out[key2] = value;
       return Object.keys(out).length > 0 ? out : void 0;
     }
     function sanitizeMeshNodeRuntimeSession(raw) {
@@ -38763,10 +38771,10 @@ ${error.message || ""}`;
     function buildMeshNodeRuntimeProviders(rows, providerVersions) {
       if (!Array.isArray(rows)) return void 0;
       return sanitizeProviders(rows.map((row) => {
-        const record2 = readOptionalRecord2(row);
-        const type2 = readId(record2?.type);
+        const record3 = readOptionalRecord2(row);
+        const type2 = readId(record3?.type);
         const version = type2 && providerVersions ? readId(providerVersions[type2]) : void 0;
-        return record2 ? { ...record2, version } : row;
+        return record3 ? { ...record3, version } : row;
       }));
     }
     function sanitizeDaemonBuild(raw) {
@@ -38796,9 +38804,9 @@ ${error.message || ""}`;
       }) ?? {};
     }
     function sanitizeMeshNodeRuntimeSummary(raw) {
-      const record2 = readOptionalRecord2(raw);
-      if (!record2) return null;
-      const rawSessions = Array.isArray(record2.sessions) ? record2.sessions : null;
+      const record3 = readOptionalRecord2(raw);
+      if (!record3) return null;
+      const rawSessions = Array.isArray(record3.sessions) ? record3.sessions : null;
       if (!rawSessions) return null;
       const sessions = [];
       for (const entry of rawSessions) {
@@ -38807,13 +38815,13 @@ ${error.message || ""}`;
         if (sessions.length >= MESH_NODE_RUNTIME_MAX_SESSIONS) break;
         sessions.push(session);
       }
-      const daemonBuild = sanitizeDaemonBuild(record2.daemonBuild);
-      const upgradeFailure = sanitizeUpgradeFailure(record2.upgradeFailure);
-      const nodeFacts = normalizeMeshNodeFacts(record2.nodeFacts);
-      const daemonId = readId(record2.daemonId);
-      const daemonBootId = readId(record2.daemonBootId);
-      const truncated = record2.sessionsTruncated === true || rawSessions.length > sessions.length && sessions.length >= MESH_NODE_RUNTIME_MAX_SESSIONS;
-      const providers = sanitizeProviders(record2.providers);
+      const daemonBuild = sanitizeDaemonBuild(record3.daemonBuild);
+      const upgradeFailure = sanitizeUpgradeFailure(record3.upgradeFailure);
+      const nodeFacts = normalizeMeshNodeFacts(record3.nodeFacts);
+      const daemonId = readId(record3.daemonId);
+      const daemonBootId = readId(record3.daemonBootId);
+      const truncated = record3.sessionsTruncated === true || rawSessions.length > sessions.length && sessions.length >= MESH_NODE_RUNTIME_MAX_SESSIONS;
+      const providers = sanitizeProviders(record3.providers);
       return {
         schemaVersion: MESH_NODE_RUNTIME_SUMMARY_SCHEMA_VERSION,
         ...daemonId ? { daemonId } : {},
@@ -38846,12 +38854,12 @@ ${error.message || ""}`;
       if (!summary) return "none";
       const stripTimes = (value) => {
         if (Array.isArray(value)) return value.map(stripTimes);
-        const record2 = readOptionalRecord2(value);
-        if (!record2) return value;
+        const record3 = readOptionalRecord2(value);
+        if (!record3) return value;
         const out = {};
-        for (const key2 of Object.keys(record2).sort()) {
+        for (const key2 of Object.keys(record3).sort()) {
           if (/At$/.test(key2) || key2 === "ageMs") continue;
-          out[key2] = stripTimes(record2[key2]);
+          out[key2] = stripTimes(record3[key2]);
         }
         return out;
       };
@@ -38902,25 +38910,25 @@ ${error.message || ""}`;
       return false;
     }
     function sanitizeObservedGit(git3) {
-      const record2 = readOptionalRecord2(git3);
-      if (!record2) return null;
+      const record3 = readOptionalRecord2(git3);
+      if (!record3) return null;
       const next = {};
-      for (const [key2, value] of Object.entries(record2)) {
+      for (const [key2, value] of Object.entries(record3)) {
         if (key2.startsWith("reporter")) continue;
         next[key2] = value;
       }
       return next;
     }
     function computeMeshNodeGitSignature(git3) {
-      const record2 = readOptionalRecord2(git3);
-      if (!record2) return "none";
+      const record3 = readOptionalRecord2(git3);
+      if (!record3) return "none";
       const head = {};
-      for (const key2 of SIGNATURE_GIT_KEYS) head[key2] = record2[key2] ?? null;
-      const submodules = Array.isArray(record2.submodules) ? record2.submodules.map((entry) => {
+      for (const key2 of SIGNATURE_GIT_KEYS) head[key2] = record3[key2] ?? null;
+      const submodules = Array.isArray(record3.submodules) ? record3.submodules.map((entry) => {
         const sub = readOptionalRecord2(entry) ?? {};
         return [sub.path ?? null, sub.commit ?? null, sub.dirty ?? null, sub.outOfSync ?? null, sub.error ?? null];
       }) : [];
-      const buildBehind = readOptionalRecord2(record2.daemonBuildBehind);
+      const buildBehind = readOptionalRecord2(record3.daemonBuildBehind);
       const buildKey = buildBehind ? [buildBehind.buildCommit ?? null, buildBehind.head ?? null] : null;
       return JSON.stringify([head, submodules, buildKey]);
     }
@@ -39709,9 +39717,9 @@ ${error.message || ""}`;
       if (format === "opencode_json") return "mcp";
       return "mcpServers";
     }
-    function parseMeshCoordinatorMcpConfig(text, _format) {
-      if (!text.trim()) return {};
-      return JSON.parse(text);
+    function parseMeshCoordinatorMcpConfig(text2, _format) {
+      if (!text2.trim()) return {};
+      return JSON.parse(text2);
     }
     function serializeMeshCoordinatorMcpConfig(config, _format) {
       return JSON.stringify(config, null, 2);
@@ -40287,9 +40295,9 @@ ${pattern}
     }
     function recordSharedWorkerMcpEntry(input) {
       const key2 = sharedEntryKey(input.target, input.serverName);
-      let record2 = SHARED_ENTRIES.get(key2);
-      if (!record2) {
-        record2 = {
+      let record3 = SHARED_ENTRIES.get(key2);
+      if (!record3) {
+        record3 = {
           target: input.target,
           format: input.format,
           serverName: input.serverName,
@@ -40300,10 +40308,10 @@ ${pattern}
           original: input.previousEntry,
           holders: []
         };
-        SHARED_ENTRIES.set(key2, record2);
+        SHARED_ENTRIES.set(key2, record3);
       }
-      record2.holders = record2.holders.filter((holder) => holder.sessionId !== input.sessionId);
-      record2.holders.push({ sessionId: input.sessionId, entry: input.entry });
+      record3.holders = record3.holders.filter((holder) => holder.sessionId !== input.sessionId);
+      record3.holders.push({ sessionId: input.sessionId, entry: input.entry });
     }
     function isDeadWorkerEntry(entry) {
       const env2 = entry || null;
@@ -40315,17 +40323,17 @@ ${pattern}
       const sid = String(sessionId || "").trim();
       if (!sid) return 0;
       let changed = 0;
-      for (const [key2, record2] of [...SHARED_ENTRIES.entries()]) {
-        const mine = record2.holders.find((holder) => holder.sessionId === sid);
+      for (const [key2, record3] of [...SHARED_ENTRIES.entries()]) {
+        const mine = record3.holders.find((holder) => holder.sessionId === sid);
         if (!mine) continue;
-        record2.holders = record2.holders.filter((holder) => holder.sessionId !== sid);
-        const survivor = record2.holders[record2.holders.length - 1];
-        const restoreEntry = survivor ? survivor.entry : record2.original !== void 0 && !isDeadWorkerEntry(record2.original) ? record2.original : void 0;
+        record3.holders = record3.holders.filter((holder) => holder.sessionId !== sid);
+        const survivor = record3.holders[record3.holders.length - 1];
+        const restoreEntry = survivor ? survivor.entry : record3.original !== void 0 && !isDeadWorkerEntry(record3.original) ? record3.original : void 0;
         if (removeWorkerMcpConfigEntry({
-          declaredPath: record2.target,
-          format: record2.format,
-          serverName: record2.serverName,
-          workspace: record2.workspace,
+          declaredPath: record3.target,
+          format: record3.format,
+          serverName: record3.serverName,
+          workspace: record3.workspace,
           expectedEntry: mine.entry,
           ...restoreEntry !== void 0 ? { restoreEntry } : {}
         })) changed += 1;
@@ -41456,15 +41464,15 @@ ${pattern}
     function depositWorkerMailboxMessage(input) {
       const meshId = String(input.meshId || "").trim();
       const taskId = String(input.taskId || "").trim();
-      const text = String(input.text || "").trim();
-      if (!meshId || !taskId || !text) {
+      const text2 = String(input.text || "").trim();
+      if (!meshId || !taskId || !text2) {
         return { ok: false, error: "invalid_input", detail: "meshId, taskId and text are all required" };
       }
-      if (text.length > MAILBOX_TEXT_MAX_CHARS) {
+      if (text2.length > MAILBOX_TEXT_MAX_CHARS) {
         return {
           ok: false,
           error: "text_too_long",
-          detail: `message is ${text.length} chars, over the ${MAILBOX_TEXT_MAX_CHARS} limit \u2014 shorten it`
+          detail: `message is ${text2.length} chars, over the ${MAILBOX_TEXT_MAX_CHARS} limit \u2014 shorten it`
         };
       }
       const key2 = mailboxKey(meshId, taskId);
@@ -41476,7 +41484,7 @@ ${pattern}
           detail: `task ${taskId} already holds ${list.length} undelivered message(s) \u2014 it is not reading its tool responses`
         };
       }
-      const message = { id: (0, import_crypto6.randomUUID)(), meshId, taskId, text, mintedAtMs: Date.now() };
+      const message = { id: (0, import_crypto6.randomUUID)(), meshId, taskId, text: text2, mintedAtMs: Date.now() };
       list.push(message);
       PENDING.set(key2, list);
       return { ok: true, id: message.id, pending: list.length };
@@ -41624,8 +41632,8 @@ ${lines.join("\n")}
       const keys = Object.keys(obj).filter((k) => obj[k] !== void 0).sort();
       return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJson(obj[k])}`).join(",")}}`;
     }
-    function stripControlCharacters(text) {
-      return text.replace(/\r\n?/g, "\n").replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "");
+    function stripControlCharacters(text2) {
+      return text2.replace(/\r\n?/g, "\n").replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "");
     }
     function escapeAttribute(value) {
       return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -41778,19 +41786,19 @@ ${rendered.join("\n\n")}`,
     function buildMeshTaskModeViolationError2(result) {
       return `live_debug_readonly_guardrail_violation: forbidden operations (${result.violations.join(", ")}) \u2014 ${formatMeshTaskModeViolations(result)}`;
     }
-    function locateOffset(text, index) {
-      const before = text.slice(0, index);
+    function locateOffset(text2, index) {
+      const before = text2.slice(0, index);
       const line = before.split("\n").length;
       const lastNl = before.lastIndexOf("\n");
       return { line, column: index - lastNl };
     }
-    function buildViolationDetail(label, text, start, end) {
-      const raw = text.slice(start, end);
+    function buildViolationDetail(label, text2, start, end) {
+      const raw = text2.slice(start, end);
       const match = raw.length > MAX_REPORTED_MATCH_LEN ? `${raw.slice(0, MAX_REPORTED_MATCH_LEN)}\u2026` : raw;
-      return { label, match, ...locateOffset(text, start) };
+      return { label, match, ...locateOffset(text2, start) };
     }
-    function hasNegationBefore(text, matchIndex) {
-      const before = text.slice(0, matchIndex);
+    function hasNegationBefore(text2, matchIndex) {
+      const before = text2.slice(0, matchIndex);
       const clauseStart = Math.max(
         before.lastIndexOf("\n"),
         before.lastIndexOf(". "),
@@ -41813,8 +41821,8 @@ ${rendered.join("\n\n")}`,
       }
       return false;
     }
-    function hasTrailingNegation(text, matchEnd) {
-      const after = text.slice(matchEnd);
+    function hasTrailingNegation(text2, matchEnd) {
+      const after = text2.slice(matchEnd);
       const clauseEnd = (() => {
         const stops = [after.indexOf("\n"), after.indexOf(". "), after.indexOf("; ")].filter((i) => i >= 0);
         return stops.length ? Math.min(...stops) : after.length;
@@ -41860,11 +41868,11 @@ ${rendered.join("\n\n")}`,
       if (sawEvidenceOnlyWrapper && !sawEvidence) return null;
       return head + rest;
     }
-    function isMutationKeywordInCommandContext(text, matchStart, matchEnd) {
-      if (isInsideBackticksOrFence(text, matchStart, matchEnd)) return true;
-      const lineStart = text.lastIndexOf("\n", matchStart - 1) + 1;
-      const linePrefix = text.slice(lineStart, matchStart);
-      if (/^\s*[$>]\s/.test(text.slice(lineStart))) return true;
+    function isMutationKeywordInCommandContext(text2, matchStart, matchEnd) {
+      if (isInsideBackticksOrFence(text2, matchStart, matchEnd)) return true;
+      const lineStart = text2.lastIndexOf("\n", matchStart - 1) + 1;
+      const linePrefix = text2.slice(lineStart, matchStart);
+      if (/^\s*[$>]\s/.test(text2.slice(lineStart))) return true;
       if (/^\s*$/.test(linePrefix)) return true;
       const unwrapped = stripCommandWrappers(linePrefix);
       if (unwrapped !== null) {
@@ -41872,28 +41880,28 @@ ${rendered.join("\n\n")}`,
         if (/(?:&&|\|\||\||;)\s*$/.test(unwrapped)) return true;
       }
       let tokStart = matchStart;
-      while (tokStart > lineStart && !/\s/.test(text[tokStart - 1])) tokStart--;
-      const beforeToken = text.slice(lineStart, tokStart);
-      const tokenLead = text.slice(tokStart, matchStart);
+      while (tokStart > lineStart && !/\s/.test(text2[tokStart - 1])) tokStart--;
+      const beforeToken = text2.slice(lineStart, tokStart);
+      const tokenLead = text2.slice(tokStart, matchStart);
       const atCmdPos = /^\s*$/.test(beforeToken) || /(?:&&|\|\||\||;)\s*$/.test(beforeToken);
       if (atCmdPos && /^(?:\.\/|\.\.\/|~\/|\/)/.test(tokenLead)) return true;
       if (/(?:&&|\|\||\||;)\s*$/.test(linePrefix)) return true;
       if (/(?:^|[\s,])(?:then|run|first)\s+$/i.test(linePrefix)) return true;
       return false;
     }
-    function isInsideBackticksOrFence(text, matchStart, matchEnd) {
+    function isInsideBackticksOrFence(text2, matchStart, matchEnd) {
       const fenceRe = /```/g;
       let fenceCount = 0;
       let m;
-      while ((m = fenceRe.exec(text)) !== null) {
+      while ((m = fenceRe.exec(text2)) !== null) {
         if (m.index >= matchStart) break;
         fenceCount++;
       }
       if (fenceCount % 2 === 1) return true;
       let inlineCount = 0;
       for (let i = 0; i < matchStart; i++) {
-        if (text[i] === "`") {
-          if (text[i + 1] === "`" && text[i + 2] === "`") {
+        if (text2[i] === "`") {
+          if (text2[i + 1] === "`" && text2[i + 2] === "`") {
             i += 2;
             continue;
           }
@@ -41902,25 +41910,25 @@ ${rendered.join("\n\n")}`,
       }
       return inlineCount % 2 === 1;
     }
-    function isInsidePathSegment(text, matchStart, matchEnd) {
-      const prev = matchStart > 0 ? text[matchStart - 1] : "";
-      const next = matchEnd < text.length ? text[matchEnd] : "";
+    function isInsidePathSegment(text2, matchStart, matchEnd) {
+      const prev = matchStart > 0 ? text2[matchStart - 1] : "";
+      const next = matchEnd < text2.length ? text2[matchEnd] : "";
       const isSep = (c) => c === "/" || c === "\\";
       const segChar = (c) => /[A-Za-z0-9._~-]/.test(c);
       const inPath = isSep(prev) && (next === "" || isSep(next) || segChar(next) || /\s/.test(next)) || isSep(next) && (prev === "" || isSep(prev) || segChar(prev) || /\s/.test(prev));
       if (!inPath) return false;
-      const lineStart = text.lastIndexOf("\n", matchStart - 1) + 1;
+      const lineStart = text2.lastIndexOf("\n", matchStart - 1) + 1;
       let tokStart = matchStart;
-      while (tokStart > lineStart && !/\s/.test(text[tokStart - 1])) tokStart--;
-      const linePrefixBeforeToken = text.slice(lineStart, tokStart);
-      const tokenPrefix = text.slice(tokStart, matchStart);
+      while (tokStart > lineStart && !/\s/.test(text2[tokStart - 1])) tokStart--;
+      const linePrefixBeforeToken = text2.slice(lineStart, tokStart);
+      const tokenPrefix = text2.slice(tokStart, matchStart);
       const atLineStart = /^\s*$/.test(linePrefixBeforeToken);
       const afterConnective = /(?:&&|\|\||\||;)\s*$/.test(linePrefixBeforeToken);
       const isRunPrefixPath = /^(?:\.\/|\.\.\/|~\/|\/)/.test(tokenPrefix);
       if ((atLineStart || afterConnective) && isRunPrefixPath) return false;
       return true;
     }
-    function isInsideQuotedSpan(text, matchStart, matchEnd) {
+    function isInsideQuotedSpan(text2, matchStart, matchEnd) {
       const pairs2 = [
         ["\u201C", "\u201D"],
         ["\u2018", "\u2019"],
@@ -41929,54 +41937,54 @@ ${rendered.join("\n\n")}`,
         ["\u300A", "\u300B"]
       ];
       for (const [open, close] of pairs2) {
-        const openIdx = text.lastIndexOf(open, matchStart - 1);
+        const openIdx = text2.lastIndexOf(open, matchStart - 1);
         if (openIdx < 0) continue;
-        if (text.indexOf(close, openIdx + open.length) >= matchEnd) return true;
+        if (text2.indexOf(close, openIdx + open.length) >= matchEnd) return true;
       }
-      const lineStart = text.lastIndexOf("\n", matchStart - 1) + 1;
+      const lineStart = text2.lastIndexOf("\n", matchStart - 1) + 1;
       const lineEnd = (() => {
-        const i = text.indexOf("\n", matchEnd);
-        return i < 0 ? text.length : i;
+        const i = text2.indexOf("\n", matchEnd);
+        return i < 0 ? text2.length : i;
       })();
       for (const q of ['"', "'"]) {
         let count = 0;
-        for (let i = lineStart; i < matchStart; i++) if (text[i] === q) count++;
-        if (count % 2 === 1 && text.indexOf(q, matchEnd) >= 0 && text.indexOf(q, matchEnd) < lineEnd) {
+        for (let i = lineStart; i < matchStart; i++) if (text2[i] === q) count++;
+        if (count % 2 === 1 && text2.indexOf(q, matchEnd) >= 0 && text2.indexOf(q, matchEnd) < lineEnd) {
           if (q === '"') return true;
           let openPos = -1, c = 0;
           for (let i = lineStart; i < matchStart; i++) {
-            if (text[i] === q) {
+            if (text2[i] === q) {
               c++;
               if (c % 2 === 1) openPos = i;
             }
           }
-          const beforeOpen = openPos > lineStart ? text[openPos - 1] : " ";
+          const beforeOpen = openPos > lineStart ? text2[openPos - 1] : " ";
           if (/[\s(\[{>]/.test(beforeOpen) || openPos === lineStart) return true;
         }
       }
       return false;
     }
-    function isGluedToLetterSuffix(text, matchStart, matchEnd) {
+    function isGluedToLetterSuffix(text2, matchStart, matchEnd) {
       const letterOrMark = /[\p{L}\p{M}]/u;
-      const next = matchEnd < text.length ? text[matchEnd] : "";
-      const prev = matchStart > 0 ? text[matchStart - 1] : "";
+      const next = matchEnd < text2.length ? text2[matchEnd] : "";
+      const prev = matchStart > 0 ? text2[matchStart - 1] : "";
       return letterOrMark.test(next) || letterOrMark.test(prev);
     }
-    function isRealMutationMatch(text, matchStart, matchEnd) {
-      if (hasNegationBefore(text, matchStart)) return false;
-      if (hasTrailingNegation(text, matchEnd)) return false;
-      if (isGluedToLetterSuffix(text, matchStart, matchEnd)) return false;
-      if (isInsidePathSegment(text, matchStart, matchEnd)) return false;
-      if (isInsideQuotedSpan(text, matchStart, matchEnd)) return false;
-      return isMutationKeywordInCommandContext(text, matchStart, matchEnd);
+    function isRealMutationMatch(text2, matchStart, matchEnd) {
+      if (hasNegationBefore(text2, matchStart)) return false;
+      if (hasTrailingNegation(text2, matchEnd)) return false;
+      if (isGluedToLetterSuffix(text2, matchStart, matchEnd)) return false;
+      if (isInsidePathSegment(text2, matchStart, matchEnd)) return false;
+      if (isInsideQuotedSpan(text2, matchStart, matchEnd)) return false;
+      return isMutationKeywordInCommandContext(text2, matchStart, matchEnd);
     }
-    function findRealMutation(pattern, text) {
+    function findRealMutation(pattern, text2) {
       const re = new RegExp(pattern.source, pattern.flags.includes("g") ? pattern.flags : pattern.flags + "g");
       let match;
-      while ((match = re.exec(text)) !== null) {
+      while ((match = re.exec(text2)) !== null) {
         const start = match.index;
         const end = match.index + match[0].length;
-        if (isRealMutationMatch(text, start, end)) return { start, end };
+        if (isRealMutationMatch(text2, start, end)) return { start, end };
         if (match.index === re.lastIndex) re.lastIndex++;
       }
       return null;
@@ -42025,15 +42033,15 @@ ${rendered.join("\n\n")}`,
       if (!isReadonly) {
         return taskMode ? { valid: true, taskMode, violations: [] } : { valid: true, violations: [] };
       }
-      const text = message || "";
+      const text2 = message || "";
       const violationDetails = [];
       for (const rule of LIVE_DEBUG_READONLY_FORBIDDEN) {
-        const hit = findRealMutation(rule.pattern, text);
-        if (hit) violationDetails.push(buildViolationDetail(rule.label, text, hit.start, hit.end));
+        const hit = findRealMutation(rule.pattern, text2);
+        if (hit) violationDetails.push(buildViolationDetail(rule.label, text2, hit.start, hit.end));
       }
-      const gitHit = detectGitMutation(text);
+      const gitHit = detectGitMutation(text2);
       if (gitHit) {
-        violationDetails.push(buildViolationDetail("git_mutation", text, gitHit.start, gitHit.end));
+        violationDetails.push(buildViolationDetail("git_mutation", text2, gitHit.start, gitHit.end));
       }
       const violations = violationDetails.map((d) => d.label);
       return {
@@ -42783,11 +42791,11 @@ ${rendered.join("\n\n")}`,
       if (!report) return {};
       return { ...report.summary ? { summary: report.summary } : {}, textEventId: report.eventId };
     }
-    function commit(draft, outcome, strength, reason, text) {
+    function commit(draft, outcome, strength, reason, text2) {
       const attempt = draft.attempt;
       const ev = draft.ctx.evidence;
-      const held = text ?? heldText(draft);
-      const summary = text ? text.summary : summaryOf(ev) ?? held.summary;
+      const held = text2 ?? heldText(draft);
+      const summary = text2 ? text2.summary : summaryOf(ev) ?? held.summary;
       attempt.state = outcome;
       attempt.suspension = null;
       attempt.terminal = { outcome, reason, source: ev.source, strength, at: ev.at, ...summary ? { summary } : {} };
@@ -43418,15 +43426,15 @@ ${rendered.join("\n\n")}`,
     }
     function resolve14(ref, resolveRef, missing) {
       if (!ref) return null;
-      const text = resolveRef(ref);
-      if (text === null) missing.push(ref);
-      return text;
+      const text2 = resolveRef(ref);
+      if (text2 === null) missing.push(ref);
+      return text2;
     }
-    function truncate(text, maxChars, suffix) {
-      return text.length > maxChars ? `${text.slice(0, maxChars - suffix.length)}${suffix}` : text;
+    function truncate(text2, maxChars, suffix) {
+      return text2.length > maxChars ? `${text2.slice(0, maxChars - suffix.length)}${suffix}` : text2;
     }
-    function truncateAppend(text, maxChars, suffix) {
-      return text.length > maxChars ? `${text.slice(0, maxChars)}${suffix}` : text;
+    function truncateAppend(text2, maxChars, suffix) {
+      return text2.length > maxChars ? `${text2.slice(0, maxChars)}${suffix}` : text2;
     }
     function formatMetadataSuffix(s2) {
       const m = s2.completionMetadata;
@@ -43441,9 +43449,9 @@ ${rendered.join("\n\n")}`,
       ].filter(Boolean);
       return parts.length > 0 ? ` (${parts.join("; ")})` : "";
     }
-    function appendStatusLine(text, statusLine) {
-      return statusLine ? `${text}
-${statusLine}` : text;
+    function appendStatusLine(text2, statusLine) {
+      return statusLine ? `${text2}
+${statusLine}` : text2;
     }
     function renderCompleted(input, missing) {
       const s2 = input.scalars;
@@ -43684,8 +43692,8 @@ ${summary}`;
       const missing = [];
       const renderer = RENDERERS[input.notify];
       const rendered = renderer(input, missing);
-      const text = input.notify === "approval_resolved" ? rendered : appendStatusLine(rendered, input.statusLine);
-      return { text, kind: input.notify, contentRefsMissing: missing };
+      const text2 = input.notify === "approval_resolved" ? rendered : appendStatusLine(rendered, input.statusLine);
+      return { text: text2, kind: input.notify, contentRefsMissing: missing };
     }
     var MESH_COMPLETION_SURFACE_MAX_CHARS;
     var RECOVERY_PROMPT_TRUNCATE_CHARS;
@@ -43826,9 +43834,9 @@ ${summary}`;
       const resultRecord = readOptionalRecord2(metadataEvent.result);
       return readText(metadataEvent.finalSummary) || readText(workerResult?.summary) || readText(workerResult?.finalSummary) || readText(resultRecord?.summary) || readText(resultRecord?.finalSummary);
     }
-    function truncateSurfacedPreview(text) {
+    function truncateSurfacedPreview(text2) {
       const truncationSuffix = "...[truncated]";
-      return text.length > MESH_SURFACED_PREVIEW_MAX_CHARS ? `${text.slice(0, MESH_SURFACED_PREVIEW_MAX_CHARS - truncationSuffix.length)}${truncationSuffix}` : text;
+      return text2.length > MESH_SURFACED_PREVIEW_MAX_CHARS ? `${text2.slice(0, MESH_SURFACED_PREVIEW_MAX_CHARS - truncationSuffix.length)}${truncationSuffix}` : text2;
     }
     function resolveMeshSurfacedSessionPreview2(metadataEvent) {
       const summaryText = readMeshCompletionSummary(metadataEvent);
@@ -43860,19 +43868,19 @@ ${summary}`;
       }
       return 0;
     }
-    function isMissingFinalAssistantDiagnostic(record2) {
-      const diag = readOptionalRecord2(record2?.completionDiagnostic);
+    function isMissingFinalAssistantDiagnostic(record3) {
+      const diag = readOptionalRecord2(record3?.completionDiagnostic);
       return diag?.finalAssistantPresent === false || diag?.transcriptFinalAssistantPresent === false || diag?.blockReason === "missing_final_assistant";
     }
-    function isFalseIdleCompletion(record2) {
-      return isMissingFinalAssistantDiagnostic(record2);
+    function isFalseIdleCompletion(record3) {
+      return isMissingFinalAssistantDiagnostic(record3);
     }
-    function isWeakCompletionEvidence(record2) {
-      if (!record2) return false;
-      const evidenceLevel = readText(record2.evidenceLevel);
+    function isWeakCompletionEvidence(record3) {
+      if (!record3) return false;
+      const evidenceLevel = readText(record3.evidenceLevel);
       if (evidenceLevel === "insufficient" || evidenceLevel === "weak") return true;
-      if (record2.reviewRecommended === true) return true;
-      return isMissingFinalAssistantDiagnostic(record2);
+      if (record3.reviewRecommended === true) return true;
+      return isMissingFinalAssistantDiagnostic(record3);
     }
     function isWeakCompletionMetadata(metadataEvent) {
       return isWeakCompletionEvidence(metadataEvent);
@@ -43952,10 +43960,10 @@ ${surfaced}`;
             }
             const options = Array.isArray(q.options) ? q.options : [];
             options.forEach((opt, i) => {
-              const record2 = opt && typeof opt === "object" ? opt : {};
-              const label = readText(record2.label);
+              const record3 = opt && typeof opt === "object" ? opt : {};
+              const label = readText(record3.label);
               if (!label) return;
-              const description = readText(record2.description);
+              const description = readText(record3.description);
               lines.push(`  ${i + 1}. ${label}${description ? ` \u2014 ${description}` : ""}`);
             });
           }
@@ -44369,25 +44377,25 @@ Next step: ${nextStep}`;
         const source2 = localPayload2 && !str3(localPayload2.relayedFrom) ? localPayload2 : handoff;
         const eventName = str3(source2?.event) ?? (event && event !== "relayed" ? event : null);
         const nodeLabel = str3(source2?.nodeLabel) ?? "Mesh";
-        let text = str3(source2?.coordinatorMessage) ?? null;
-        if (!text && source2 && eventName) {
-          text = buildMeshSystemMessage({
+        let text2 = str3(source2?.coordinatorMessage) ?? null;
+        if (!text2 && source2 && eventName) {
+          text2 = buildMeshSystemMessage({
             event: eventName,
             nodeLabel,
             metadataEvent: isRecord6(source2.metadataEvent) ? source2.metadataEvent : {},
             worktreeHasQueuedTask: source2.worktreeHasQueuedTask === true
           }) || null;
         }
-        if (!text) {
-          text = missing ? `[System] A mesh notice${str3(entry.taskId) ? ` for task ${str3(entry.taskId)}` : ""} is not yet available on this daemon \u2014 call mesh_task_report once it replicates; do not poll repeatedly.` : `[System] ${nodeLabel} reported a mesh event${str3(entry.taskId) ? ` for task ${str3(entry.taskId)}` : ""}. Use mesh_status or mesh_read_chat once if you need details.`;
+        if (!text2) {
+          text2 = missing ? `[System] A mesh notice${str3(entry.taskId) ? ` for task ${str3(entry.taskId)}` : ""} is not yet available on this daemon \u2014 call mesh_task_report once it replicates; do not poll repeatedly.` : `[System] ${nodeLabel} reported a mesh event${str3(entry.taskId) ? ` for task ${str3(entry.taskId)}` : ""}. Use mesh_status or mesh_read_chat once if you need details.`;
         }
         if (eventName && shouldForceInjectMeshEvent(eventName)) {
           const line = ctx.statusLine?.(meshId);
-          if (line) text = `${text}
+          if (line) text2 = `${text2}
 
 ${line}`;
         }
-        return { text, notify: notify2, event: eventName, missing };
+        return { text: text2, notify: notify2, event: eventName, missing };
       }
       const attemptId = str3(entry.attemptId);
       const attempt = attemptId ? ctx.ledger.getAttempt(attemptId) : null;
@@ -45064,7 +45072,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       });
     }
     function readNodeProviderTypes(policy) {
-      const record2 = policy && typeof policy === "object" && !Array.isArray(policy) ? policy : {};
+      const record3 = policy && typeof policy === "object" && !Array.isArray(policy) ? policy : {};
       const seen = /* @__PURE__ */ new Set();
       const out = [];
       const push = (type2) => {
@@ -45073,9 +45081,9 @@ The instruction it carried was never delivered to anyone. If it still matters, r
         seen.add(trimmed2);
         out.push(trimmed2);
       };
-      for (const slot of normalizeNodeCapabilitySlots2(record2.slots)) push(slot.provider);
-      if (Array.isArray(record2.providerPriority)) {
-        for (const type2 of record2.providerPriority) push(type2);
+      for (const slot of normalizeNodeCapabilitySlots2(record3.slots)) push(slot.provider);
+      if (Array.isArray(record3.providerPriority)) {
+        for (const type2 of record3.providerPriority) push(type2);
       }
       return out;
     }
@@ -55098,8 +55106,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         if (value && typeof value === "object" && !Array.isArray(value)) parsed = value;
       } catch {
       }
-      const record2 = row.kind === MESH_RECORD_APPEND_KIND;
-      const scalars = record2 ? scalarPayload(parsed.payload) : scalarPayload(parsed);
+      const record3 = row.kind === MESH_RECORD_APPEND_KIND;
+      const scalars = record3 ? scalarPayload(parsed.payload) : scalarPayload(parsed);
       return {
         writer: row.writer,
         seq: row.seq,
@@ -55109,7 +55117,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         kind: row.ledger_kind ?? row.kind,
         nodeId: row.node_id ?? void 0,
         sessionId: row.session_id ?? void 0,
-        providerType: record2 ? str4(parsed.providerType) : void 0,
+        providerType: record3 ? str4(parsed.providerType) : void 0,
         taskId: row.task_id ?? void 0,
         payload: scalars
       };
@@ -55483,7 +55491,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       const prevGoal = existing?.goal ?? "";
       const normalizedBrief = input.brief === void 0 ? void 0 : normalizeMissionBrief(input.brief).brief;
       const briefJson = input.brief === void 0 ? void 0 : normalizedBrief ? JSON.stringify(normalizedBrief) : null;
-      const record2 = {
+      const record3 = {
         id: id22,
         meshId,
         title,
@@ -55491,7 +55499,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         status: normalizeMissionStatus(input.status ?? existing?.status),
         briefJson
       };
-      store2.upsertMission(record2);
+      store2.upsertMission(record3);
       const saved = store2.getMission(meshId, id22);
       const result = {
         ...saved,
@@ -55507,38 +55515,38 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       return result;
     }
     function appendMissionLedgerEntries(meshId, args) {
-      const { isCreate, record: record2, prevStatus, prevGoal } = args;
+      const { isCreate, record: record3, prevStatus, prevGoal } = args;
       try {
         if (isCreate) {
-          const goal = record2.goal ?? "";
+          const goal = record3.goal ?? "";
           meshRecord(meshId, "mission_created", {
             payload: {
-              missionId: record2.id,
-              title: record2.title,
+              missionId: record3.id,
+              title: record3.title,
               goalSummary: summarizeGoalForLedger(goal),
               goalLength: goal.length,
               goalTruncated: goal.length > LEDGER_GOAL_SUMMARY_MAX,
-              status: record2.status
+              status: record3.status
             }
           }, { local: true });
           return;
         }
-        if (prevStatus !== null && prevStatus !== record2.status) {
+        if (prevStatus !== null && prevStatus !== record3.status) {
           meshRecord(meshId, "mission_status_changed", {
             payload: {
-              missionId: record2.id,
-              title: record2.title,
+              missionId: record3.id,
+              title: record3.title,
               fromStatus: prevStatus,
-              toStatus: record2.status
+              toStatus: record3.status
             }
           }, { local: true });
         }
-        const nextGoal = record2.goal ?? "";
+        const nextGoal = record3.goal ?? "";
         if (nextGoal !== prevGoal) {
           meshRecord(meshId, "mission_goal_updated", {
             payload: {
-              missionId: record2.id,
-              title: record2.title,
+              missionId: record3.id,
+              title: record3.title,
               prevGoalSummary: summarizeGoalForLedger(prevGoal),
               nextGoalSummary: summarizeGoalForLedger(nextGoal),
               prevGoalLength: prevGoal.length,
@@ -55554,8 +55562,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       return MeshRuntimeStore.getInstance().getMissions(meshId, statuses).map((m) => ({ ...m, status: normalizeMissionStatus(m.status), brief: parseStoredMissionBrief(m.briefJson) }));
     }
     function getMeshMission(meshId, missionId) {
-      const record2 = MeshRuntimeStore.getInstance().getMission(meshId, missionId);
-      return record2 ? { ...record2, status: normalizeMissionStatus(record2.status), brief: parseStoredMissionBrief(record2.briefJson) } : null;
+      const record3 = MeshRuntimeStore.getInstance().getMission(meshId, missionId);
+      return record3 ? { ...record3, status: normalizeMissionStatus(record3.status), brief: parseStoredMissionBrief(record3.briefJson) } : null;
     }
     function emptyMissionTaskAggregate() {
       return { total: 0, pending: 0, assigned: 0, completed: 0, failed: 0, cancelled: 0, blocked: 0, lastActivityAt: null };
@@ -56935,6 +56943,10 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         windowsVerbatimArguments: true
       };
     }
+    function resolveWin32ExecFileSpawn(command, args) {
+      const resolvedCommand = resolveWin32Executable(command);
+      return { resolvedCommand, ...buildWin32ExecFileSpawn(resolvedCommand, args) };
+    }
     var import_child_process4;
     var import_fs15;
     var path26;
@@ -57132,11 +57144,11 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       const baseRefs = (options?.baseRefs || []).filter((ref) => typeof ref === "string" && ref.trim().length > 0);
       for (const ref of baseRefs) {
         for (const relative13 of MESH_REFINE_CONFIG_LOCATIONS) {
-          const text = readConfigFromBaseRef(options?.gitCwd || workspace, ref.trim(), relative13);
-          if (text === void 0) continue;
+          const text2 = readConfigFromBaseRef(options?.gitCwd || workspace, ref.trim(), relative13);
+          if (text2 === void 0) continue;
           const source2 = `${ref.trim()}:${relative13}`;
           try {
-            const parsed = parseConfigText(relative13, text);
+            const parsed = parseConfigText(relative13, text2);
             const validation = validateMeshRefineConfig(parsed, source2);
             if (!validation.valid) return { source: source2, sourceType: "invalid", baseRef: ref.trim(), error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
             return { config: parsed, source: source2, sourceType: "repo_file", baseRef: ref.trim() };
@@ -57527,10 +57539,10 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       return !(isWorktreeBootstrapStaleRunning(node, nowMs2) || isRemoteWorktreeBootstrapStaleRunning(node, nowMs2));
     }
     function truncateOutput(value) {
-      const text = typeof value === "string" ? value : value == null ? "" : String(value);
-      if (text.length <= OUTPUT_SUMMARY_CHARS) return text;
-      return `${text.slice(0, OUTPUT_SUMMARY_CHARS)}
-[truncated ${text.length - OUTPUT_SUMMARY_CHARS} chars]`;
+      const text2 = typeof value === "string" ? value : value == null ? "" : String(value);
+      if (text2.length <= OUTPUT_SUMMARY_CHARS) return text2;
+      return `${text2.slice(0, OUTPUT_SUMMARY_CHARS)}
+[truncated ${text2.length - OUTPUT_SUMMARY_CHARS} chars]`;
     }
     function validateMeshWorktreeBootstrapConfig(config, source2 = "inline") {
       const errors = [];
@@ -57690,16 +57702,16 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         const startedAt = Date.now();
         state.lastCommand = command.displayCommand;
         const resolvedCommand = resolveWin32Executable(command.command);
-        const spawn8 = buildWin32ExecFileSpawn(resolvedCommand, command.args);
+        const spawn9 = buildWin32ExecFileSpawn(resolvedCommand, command.args);
         try {
-          const result = await execFileAsync6(spawn8.file, spawn8.args, {
+          const result = await execFileAsync6(spawn9.file, spawn9.args, {
             cwd,
             encoding: "utf8",
             timeout: command.timeoutMs || DEFAULT_TIMEOUT_MS2,
             maxBuffer: command.outputLimitBytes || DEFAULT_OUTPUT_LIMIT_BYTES,
             env: { ...process.env, CI: process.env.CI || "1", ...command.env || {} },
             windowsHide: true,
-            ...spawn8.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}
+            ...spawn9.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}
           });
           state.commandsRun?.push({
             command: command.command,
@@ -58188,18 +58200,18 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             if (id3) ids.add(id3);
             continue;
           }
-          const record2 = readObjectRecord(item);
-          const id22 = readStringValue(record2.id, record2.sessionId, record2.session_id, record2.runtimeSessionId, record2.instanceId);
+          const record3 = readObjectRecord(item);
+          const id22 = readStringValue(record3.id, record3.sessionId, record3.session_id, record3.runtimeSessionId, record3.instanceId);
           if (id22) ids.add(id22);
         }
       }
       return ids;
     }
     function resolveMeshNodeAttribution(node) {
-      const record2 = readObjectRecord(node);
+      const record3 = readObjectRecord(node);
       return {
-        daemonId: readMeshNodeDaemonId(record2),
-        machineName: readMeshNodeDisplayMachineName(record2)
+        daemonId: readMeshNodeDaemonId(record3),
+        machineName: readMeshNodeDisplayMachineName(record3)
       };
     }
     function readCachedInlineMeshActiveSessionDetails(node) {
@@ -58269,65 +58281,65 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       const reason = rawReason && WORKER_MCP_DELIVERY_REASONS.includes(rawReason) ? rawReason : void 0;
       return { delivered, ...reason ? { reason } : {} };
     }
-    function summarizeMeshSessionRecord(record2) {
-      const meta = readObjectRecord(record2?.meta);
+    function summarizeMeshSessionRecord(record3) {
+      const meta = readObjectRecord(record3?.meta);
       const workerMcp = readWorkerMcpDeliveryFromMeta(meta);
       const isSelfCoordinator = Boolean(readStringValue(meta.meshCoordinatorFor));
-      let chatStatus = readStringValue(record2?.chatStatus, record2?.activeChat?.status, meta.chatStatus, meta.sessionStatus);
-      const state = readLiveMeshSessionState(record2);
+      let chatStatus = readStringValue(record3?.chatStatus, record3?.activeChat?.status, meta.chatStatus, meta.sessionStatus);
+      const state = readLiveMeshSessionState(record3);
       const statusNote = isSelfCoordinator && (!chatStatus || chatStatus === "idle" || state === "idle") ? "Coordinator self status is sampled from the session host and may read idle while the coordinator is generating this response." : null;
-      const sessionId = readStringValue(record2?.sessionId) || "unknown";
+      const sessionId = readStringValue(record3?.sessionId) || "unknown";
       const turn = resolveSessionTurnPresentation({
         sessionId: sessionId === "unknown" ? void 0 : sessionId,
         providerStatus: chatStatus || state,
-        providerType: readStringValue(record2?.providerType) || void 0,
+        providerType: readStringValue(record3?.providerType) || void 0,
         surface: "mesh_status"
       });
       if (turn.authority === "turn_reducer") chatStatus = turn.status;
       return {
         sessionId,
-        providerType: readStringValue(record2?.providerType),
+        providerType: readStringValue(record3?.providerType),
         state,
         chatStatus,
         ...turn.authority === "turn_reducer" ? { turn, attemptId: turn.attemptId, turnStage: turn.stage } : {},
-        lifecycle: readStringValue(record2?.lifecycle),
-        surfaceKind: (0, import_session_host_core3.getSessionHostSurfaceKind)(record2),
+        lifecycle: readStringValue(record3?.lifecycle),
+        surfaceKind: (0, import_session_host_core3.getSessionHostSurfaceKind)(record3),
         recoveryState: readStringValue(meta.runtimeRecoveryState) ?? null,
-        workspace: readStringValue(record2?.workspace) ?? null,
-        title: readStringValue(record2?.displayName, record2?.workspaceLabel) ?? null,
+        workspace: readStringValue(record3?.workspace) ?? null,
+        title: readStringValue(record3?.displayName, record3?.workspaceLabel) ?? null,
         role: isSelfCoordinator ? "coordinator" : readStringValue(meta.meshRole, meta.role) ?? null,
         isSelfCoordinator,
         statusNote,
-        createdAt: toIsoTimestamp(record2?.createdAt ?? record2?.created_at),
-        startedAt: toIsoTimestamp(record2?.startedAt ?? record2?.started_at ?? record2?.spawnedAtMs ?? record2?.spawned_at_ms),
-        lastActivityAt: toIsoTimestamp(record2?.updatedAt ?? record2?.lastActivityAt ?? record2?.last_activity_at),
+        createdAt: toIsoTimestamp(record3?.createdAt ?? record3?.created_at),
+        startedAt: toIsoTimestamp(record3?.startedAt ?? record3?.started_at ?? record3?.spawnedAtMs ?? record3?.spawned_at_ms),
+        lastActivityAt: toIsoTimestamp(record3?.updatedAt ?? record3?.lastActivityAt ?? record3?.last_activity_at),
         isCached: false,
         ...workerMcp ? { workerMcp } : {}
       };
     }
-    function liveSessionRecordMatchesMeshNode(record2, meshId, nodeId, nodeWorkspace = "", nodeIsMissingLocalWorktree = false) {
-      const recordNodeId = readStringValue(record2?.meta?.meshNodeId);
+    function liveSessionRecordMatchesMeshNode(record3, meshId, nodeId, nodeWorkspace = "", nodeIsMissingLocalWorktree = false) {
+      const recordNodeId = readStringValue(record3?.meta?.meshNodeId);
       if (!recordNodeId || !daemonIdsEquivalent4(recordNodeId, nodeId)) return false;
       if (nodeIsMissingLocalWorktree) return false;
-      const recordWorkspace = readStringValue(record2?.workspace);
+      const recordWorkspace = readStringValue(record3?.workspace);
       if (nodeWorkspace && recordWorkspace && !meshWorkspacesEquivalent(recordWorkspace, nodeWorkspace)) return false;
-      const recordMeshId = readStringValue(record2?.meta?.meshNodeFor);
+      const recordMeshId = readStringValue(record3?.meta?.meshNodeFor);
       return !recordMeshId || recordMeshId === meshId;
     }
-    function liveSessionRecordMatchesMeshWorkspace(record2, meshId, workspace) {
-      const recordWorkspace = readStringValue(record2?.workspace);
+    function liveSessionRecordMatchesMeshWorkspace(record3, meshId, workspace) {
+      const recordWorkspace = readStringValue(record3?.workspace);
       if (!recordWorkspace || !workspace || !meshWorkspacesEquivalent(recordWorkspace, workspace)) return false;
-      const recordMeshId = readStringValue(record2?.meta?.meshNodeFor);
+      const recordMeshId = readStringValue(record3?.meta?.meshNodeFor);
       if (recordMeshId) return recordMeshId === meshId;
-      return record2?.meta?.launchedByCoordinator === true || !!readStringValue(record2?.meta?.meshNodeId);
+      return record3?.meta?.launchedByCoordinator === true || !!readStringValue(record3?.meta?.meshNodeId);
     }
     function readLiveMeshNodeWorkspace(args) {
-      const directNodeWorkspace = args.liveSessionRecords.find((record2) => liveSessionRecordMatchesMeshNode(record2, args.meshId, args.nodeId) && readStringValue(record2?.workspace));
+      const directNodeWorkspace = args.liveSessionRecords.find((record3) => liveSessionRecordMatchesMeshNode(record3, args.meshId, args.nodeId) && readStringValue(record3?.workspace));
       if (directNodeWorkspace) {
         return readStringValue(directNodeWorkspace.workspace) || "";
       }
       if (args.allowCoordinatorSession) {
-        const coordinatorWorkspace = args.liveSessionRecords.find((record2) => readStringValue(record2?.meta?.meshCoordinatorFor) === args.meshId && readStringValue(record2?.workspace));
+        const coordinatorWorkspace = args.liveSessionRecords.find((record3) => readStringValue(record3?.meta?.meshCoordinatorFor) === args.meshId && readStringValue(record3?.workspace));
         if (coordinatorWorkspace) {
           return readStringValue(coordinatorWorkspace.workspace) || "";
         }
@@ -58337,19 +58349,19 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     function collectLiveMeshSessionRecords(args) {
       const nodeWorkspace = readStringValue(args.node?.workspace);
       const nodeIsMissingLocalWorktree = args.node?.isLocalWorktree === true && !!nodeWorkspace && !fs14.existsSync(nodeWorkspace);
-      const matches = args.liveSessionRecords.filter((record2) => {
-        const recordNodeId = readStringValue(record2?.meta?.meshNodeId);
+      const matches = args.liveSessionRecords.filter((record3) => {
+        const recordNodeId = readStringValue(record3?.meta?.meshNodeId);
         if (recordNodeId && !daemonIdsEquivalent4(recordNodeId, args.nodeId)) return false;
-        if (liveSessionRecordMatchesMeshNode(record2, args.meshId, args.nodeId, nodeWorkspace || "", nodeIsMissingLocalWorktree)) return true;
+        if (liveSessionRecordMatchesMeshNode(record3, args.meshId, args.nodeId, nodeWorkspace || "", nodeIsMissingLocalWorktree)) return true;
         if (nodeIsMissingLocalWorktree) return false;
-        return !!nodeWorkspace && liveSessionRecordMatchesMeshWorkspace(record2, args.meshId, nodeWorkspace);
+        return !!nodeWorkspace && liveSessionRecordMatchesMeshWorkspace(record3, args.meshId, nodeWorkspace);
       });
       if (args.allowCoordinatorSession) {
-        for (const record2 of args.liveSessionRecords) {
-          if (readStringValue(record2?.meta?.meshCoordinatorFor) !== args.meshId) continue;
-          const sessionId = readStringValue(record2?.sessionId);
+        for (const record3 of args.liveSessionRecords) {
+          if (readStringValue(record3?.meta?.meshCoordinatorFor) !== args.meshId) continue;
+          const sessionId = readStringValue(record3?.sessionId);
           if (sessionId && matches.some((entry) => sessionIdsEquivalent(readStringValue(entry?.sessionId), sessionId))) continue;
-          matches.push(record2);
+          matches.push(record3);
         }
       }
       return matches;
@@ -58368,17 +58380,17 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         }
       }
       const sessions = [];
-      for (const record2 of args.liveSessionRecords || []) {
-        const meta = readObjectRecord(record2?.meta);
+      for (const record3 of args.liveSessionRecords || []) {
+        const meta = readObjectRecord(record3?.meta);
         const recordMeshId = readStringValue(meta.meshNodeFor, meta.meshCoordinatorFor);
         if (recordMeshId !== args.meshId) continue;
         const recordNodeId = readStringValue(meta.meshNodeId);
-        const workspace = readStringValue(record2?.workspace);
+        const workspace = readStringValue(record3?.workspace);
         const removedNode = !!recordNodeId && (!liveNodeIds.has(recordNodeId) || missingLocalWorktreeNodeIds.has(recordNodeId));
         const orphanedWorkspace = !!workspace && !liveWorkspaces.has(workspace) && meta.meshCoordinatorFor !== args.meshId;
         if (!removedNode && !orphanedWorkspace) continue;
         sessions.push({
-          ...summarizeMeshSessionRecord(record2),
+          ...summarizeMeshSessionRecord(record3),
           classification: removedNode ? "removedNode" : "orphanedSession",
           historical: true,
           meshNodeId: recordNodeId || null,
@@ -58392,14 +58404,14 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         instruction: "These sessions are separated from normal node activeSessions because their mesh node/workspace is no longer live. Use mesh_cleanup_sessions only if cleanup is intended."
       };
     }
-    function readLiveMeshSessionState(record2) {
+    function readLiveMeshSessionState(record3) {
       return readStringValue(
-        record2?.meta?.sessionStatus,
-        record2?.meta?.status,
-        record2?.meta?.providerStatus,
-        record2?.status,
-        record2?.state,
-        record2?.lifecycle
+        record3?.meta?.sessionStatus,
+        record3?.meta?.status,
+        record3?.meta?.providerStatus,
+        record3?.status,
+        record3?.state,
+        record3?.lifecycle
       );
     }
     var fs14;
@@ -58417,9 +58429,9 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       }
     });
     function readMeshNodeLinkPresence(connection) {
-      const record2 = readRecord2(connection);
-      if (record2.linkIsPresence !== true || record2.source !== "mesh_peer_status") return null;
-      return record2.state === "connected" ? "online" : "offline";
+      const record3 = readRecord2(connection);
+      if (record3.linkIsPresence !== true || record3.source !== "mesh_peer_status") return null;
+      return record3.state === "connected" ? "online" : "offline";
     }
     function applyMeshNodeLinkPresence(status) {
       const presence = readMeshNodeLinkPresence(status.connection);
@@ -59194,10 +59206,10 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       summarizeRepoMeshStatusDebug: () => summarizeRepoMeshStatusDebug
     });
     function readProviderPriorityFromPolicy(policy) {
-      const record2 = policy && typeof policy === "object" && !Array.isArray(policy) ? policy : {};
-      const derived = deriveProviderPriorityFromSlots2(record2.slots);
+      const record3 = policy && typeof policy === "object" && !Array.isArray(policy) ? policy : {};
+      const derived = deriveProviderPriorityFromSlots2(record3.slots);
       if (derived.length) return derived;
-      const raw = record2.providerPriority;
+      const raw = record3.providerPriority;
       if (Array.isArray(raw)) {
         const seen = /* @__PURE__ */ new Set();
         const explicit = raw.map((type2) => typeof type2 === "string" ? type2.trim() : "").filter(Boolean).filter((type2) => {
@@ -59436,8 +59448,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     }
     function directDaemonKey(node) {
       if (!node || typeof node !== "object") return void 0;
-      const record2 = node;
-      const declared = readNonEmpty(readMeshNodeDaemonId(record2)) || readNonEmpty(readMeshNodeMachineId(record2));
+      const record3 = node;
+      const declared = readNonEmpty(readMeshNodeDaemonId(record3)) || readNonEmpty(readMeshNodeMachineId(record3));
       if (!declared) return void 0;
       return machineCoreFromDaemonId(declared);
     }
@@ -59558,15 +59570,15 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     }
     function readRecentSessionClaimRefusal(meshId, sessionId, nowMs2 = Date.now()) {
       if (!meshId || !sessionId) return null;
-      const record2 = recentSessionClaimRefusals.get(sessionRefusalKey(meshId, sessionId));
-      if (!record2) return null;
-      const age = nowMs2 - record2.atMs;
+      const record3 = recentSessionClaimRefusals.get(sessionRefusalKey(meshId, sessionId));
+      if (!record3) return null;
+      const age = nowMs2 - record3.atMs;
       if (!(age >= 0 && age <= SESSION_CLAIM_REFUSAL_FRESH_MS)) return null;
-      return record2;
+      return record3;
     }
     function sessionClaimRefusalReleasesSpawnGate(meshId, sessionId, nowMs2 = Date.now()) {
-      const record2 = readRecentSessionClaimRefusal(meshId, sessionId, nowMs2);
-      return !!record2 && SPAWN_GATE_RELEASING_CLAIM_REFUSALS.has(record2.reason);
+      const record3 = readRecentSessionClaimRefusal(meshId, sessionId, nowMs2);
+      return !!record3 && SPAWN_GATE_RELEASING_CLAIM_REFUSALS.has(record3.reason);
     }
     var claimDeferredByFastForward;
     var MAX_FAST_FORWARD_CLAIM_REDRIVES;
@@ -60770,11 +60782,11 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       return rows.map(toEntry);
     }
     function recordOperatingNote(meshId, input) {
-      const text = input.text.trim();
-      if (!text) throw new Error("recordOperatingNote requires non-empty text");
+      const text2 = input.text.trim();
+      if (!text2) throw new Error("recordOperatingNote requires non-empty text");
       const store2 = turnStore();
       const live = store2.listOperatingNotes(meshId).filter((r) => !r.meta.textTombstone);
-      const existing = live.slice(-OPERATING_NOTE_DEDUPE_WINDOW).find((r) => r.text.trim() === text);
+      const existing = live.slice(-OPERATING_NOTE_DEDUPE_WINDOW).find((r) => r.text.trim() === text2);
       if (existing) return toEntry(existing);
       const nowMs2 = input.createdAtMs ?? Date.now();
       const meta = {
@@ -60787,14 +60799,14 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       const row = {
         noteId: (0, import_crypto12.randomUUID)(),
         meshId,
-        text,
+        text: text2,
         category: input.category ?? null,
         callerSessionId: input.callerSessionId ?? null,
         createdAt: nowMs2,
         meta
       };
       store2.insertOperatingNote(row);
-      const retracted = store2.listOperatingNotes(meshId, { includeTombstoned: true }).some((r) => r.meta.textTombstone && r.text.trim() === text);
+      const retracted = store2.listOperatingNotes(meshId, { includeTombstoned: true }).some((r) => r.meta.textTombstone && r.text.trim() === text2);
       if (retracted) store2.tombstoneOperatingNote(meshId, row.noteId, nowMs2);
       try {
         pruneOperatingNotes(meshId);
@@ -60804,23 +60816,23 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     }
     function forgetOperatingNote(meshId, target) {
       const noteId = typeof target.noteId === "string" ? target.noteId.trim() : "";
-      const text = typeof target.text === "string" ? target.text.trim() : "";
-      if (!noteId && !text) throw new Error("forgetOperatingNote requires a noteId or text target");
+      const text2 = typeof target.text === "string" ? target.text.trim() : "";
+      if (!noteId && !text2) throw new Error("forgetOperatingNote requires a noteId or text target");
       const store2 = turnStore();
       const nowMs2 = Date.now();
       let matched = 0;
       for (const note2 of store2.listOperatingNotes(meshId)) {
         if (note2.meta.textTombstone) continue;
-        if (noteId && note2.noteId === noteId || text && note2.text.trim() === text) {
+        if (noteId && note2.noteId === noteId || text2 && note2.text.trim() === text2) {
           if (store2.tombstoneOperatingNote(meshId, note2.noteId, nowMs2)) matched += 1;
         }
       }
       const tombstoneId = (0, import_crypto12.randomUUID)();
-      if (text) {
+      if (text2) {
         store2.insertOperatingNote({
           noteId: tombstoneId,
           meshId,
-          text,
+          text: text2,
           category: null,
           callerSessionId: null,
           createdAt: nowMs2,
@@ -61098,8 +61110,8 @@ ${buildSafetyTailSection(coordinatorCliType)}`,
       lines.push("", "_Use `mesh_status` for node health and capacity before delegating work \u2014 never to check on a running worker's progress; completion, progress and blocked reports arrive as events (see Workers)._");
       return lines.join("\n");
     }
-    function indentFollowing(text, pad) {
-      const lines = text.split("\n");
+    function indentFollowing(text2, pad) {
+      const lines = text2.split("\n");
       if (lines.length === 1) return lines[0];
       return [lines[0], ...lines.slice(1).map((l) => pad + l)].join("\n");
     }
@@ -61145,8 +61157,8 @@ ${buildSafetyTailSection(coordinatorCliType)}`,
     function deriveSubjectKey(note2) {
       const explicit = typeof note2.subjectKey === "string" ? note2.subjectKey.trim().toLowerCase() : "";
       if (explicit) return explicit;
-      const text = typeof note2.text === "string" ? note2.text.trimStart() : "";
-      const m = /^\[([^\]]{1,80})\]/.exec(text);
+      const text2 = typeof note2.text === "string" ? note2.text.trimStart() : "";
+      const m = /^\[([^\]]{1,80})\]/.exec(text2);
       const tag = m ? m[1].trim().toLowerCase() : "";
       return tag || void 0;
     }
@@ -61252,9 +61264,9 @@ ${buildSafetyTailSection(coordinatorCliType)}`,
       }
       return lines.join("\n");
     }
-    function truncateNote(text) {
-      if (text.length <= OPERATING_NOTE_MAX_CHARS) return text;
-      return `${text.slice(0, OPERATING_NOTE_MAX_CHARS).trimEnd()}\u2026 [truncated]`;
+    function truncateNote(text2) {
+      if (text2.length <= OPERATING_NOTE_MAX_CHARS) return text2;
+      return `${text2.slice(0, OPERATING_NOTE_MAX_CHARS).trimEnd()}\u2026 [truncated]`;
     }
     function buildBrainPresetsSection() {
       let brains;
@@ -62753,16 +62765,16 @@ ${rendered}`, "utf-8");
       const [before, after] = w.split("{prompt}");
       return { open: (before ?? "").trim(), close: (after ?? "").trim() };
     }
-    function escapeRegExp(text) {
-      return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    function escapeRegExp(text2) {
+      return text2.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     }
     function wrapperBlockPattern(sentinels) {
       const open = escapeRegExp(sentinels.open);
       return sentinels.close ? new RegExp(`${open}[\\s\\S]*?${escapeRegExp(sentinels.close)}`, "g") : new RegExp(`${open}[\\s\\S]*$`, "g");
     }
-    function removeWrapperBlock(text, sentinels) {
-      if (!sentinels.open) return text;
-      return text.replace(wrapperBlockPattern(sentinels), "");
+    function removeWrapperBlock(text2, sentinels) {
+      if (!sentinels.open) return text2;
+      return text2.replace(wrapperBlockPattern(sentinels), "");
     }
     function stripCoordinatorWrapperFile(filePath2, owned = false, sentinels = LEGACY_COORDINATOR_WRAPPER_SENTINELS) {
       try {
@@ -63030,10 +63042,10 @@ ${rendered}`, "utf-8");
       }
     });
     function extractJsonObjectFromSummary(summary) {
-      const text = readString2(summary);
-      if (!text) return void 0;
-      const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-      const candidates = [fenced?.[1], text].filter(Boolean);
+      const text2 = readString2(summary);
+      if (!text2) return void 0;
+      const fenced = text2.match(/```(?:json)?\s*([\s\S]*?)```/i);
+      const candidates = [fenced?.[1], text2].filter(Boolean);
       for (const candidate of candidates) {
         const trimmed2 = candidate.trim();
         if (!trimmed2.startsWith("{") || !trimmed2.endsWith("}")) continue;
@@ -63163,10 +63175,10 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       };
     }
     function summaryHasParseableJsonAnswer(summary) {
-      const text = readString2(summary);
-      if (!text) return false;
-      const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-      const candidates = [fenced?.[1], text].filter(Boolean);
+      const text2 = readString2(summary);
+      if (!text2) return false;
+      const fenced = text2.match(/```(?:json)?\s*([\s\S]*?)```/i);
+      const candidates = [fenced?.[1], text2].filter(Boolean);
       for (const candidate of candidates) {
         const trimmed2 = candidate.trim();
         if (!trimmed2.startsWith("{") || !trimmed2.endsWith("}")) continue;
@@ -64507,9 +64519,9 @@ ${block2.text}`,
       }
       return { taskId, atMs };
     }
-    function truncateChars(text, max) {
-      const chars = Array.from(text);
-      if (chars.length <= max) return { text, truncated: false };
+    function truncateChars(text2, max) {
+      const chars = Array.from(text2);
+      if (chars.length <= max) return { text: text2, truncated: false };
       return { text: `${chars.slice(0, max - 1).join("")}\u2026`, truncated: true };
     }
     function render(taskId, items, omitted) {
@@ -64518,7 +64530,7 @@ ${block2.text}`,
       const segmentKinds = [];
       for (const item of items) {
         if (item.summary) {
-          const { text, truncated } = truncateChars(item.summary, UPSTREAM_RESULT_MAX_CHARS);
+          const { text: text2, truncated } = truncateChars(item.summary, UPSTREAM_RESULT_MAX_CHARS);
           blocks.push({
             attributes: {
               kind: "upstream_result",
@@ -64528,7 +64540,7 @@ ${block2.text}`,
               sha256: sha256Hex(item.summary),
               ...truncated ? { truncated: true } : {}
             },
-            text
+            text: text2
           });
           segmentKinds.push("block");
         } else {
@@ -64558,8 +64570,8 @@ ${preamble ? `${preamble}
       const all = predecessorIds.map((id22) => loadPredecessor(meshId, id22)).sort((a, b) => a.atMs - b.atMs || a.taskId.localeCompare(b.taskId));
       for (let drop = 0; drop < all.length; drop += 1) {
         const kept = all.slice(drop);
-        const text = render(task.id, kept, drop);
-        if (Buffer.byteLength(text, "utf8") <= UPSTREAM_RESULTS_MAX_BYTES || kept.length === 1) return text;
+        const text2 = render(task.id, kept, drop);
+        if (Buffer.byteLength(text2, "utf8") <= UPSTREAM_RESULTS_MAX_BYTES || kept.length === 1) return text2;
       }
       return null;
     }
@@ -65455,8 +65467,8 @@ ${upstream}`;
       if (!input || typeof input !== "object") {
         return { parts: [], textFallback: "" };
       }
-      const record2 = input;
-      const nestedInput = record2.input;
+      const record3 = input;
+      const nestedInput = record3.input;
       if (nestedInput && typeof nestedInput === "object") {
         const nested = nestedInput;
         return {
@@ -65465,26 +65477,26 @@ ${upstream}`;
           metadata: normalizeInputMetadata(nested.metadata)
         };
       }
-      const directText = typeof record2.text === "string" ? record2.text : typeof record2.message === "string" ? record2.message : void 0;
+      const directText = typeof record3.text === "string" ? record3.text : typeof record3.message === "string" ? record3.message : void 0;
       if (directText !== void 0) {
         return { parts: [{ type: "text", text: directText }], textFallback: directText };
       }
-      const directParts = normalizeInputParts(record2.parts ?? record2.prompt);
+      const directParts = normalizeInputParts(record3.parts ?? record3.prompt);
       return {
         parts: directParts,
-        textFallback: typeof record2.textFallback === "string" ? record2.textFallback : void 0,
-        metadata: normalizeInputMetadata(record2.metadata)
+        textFallback: typeof record3.textFallback === "string" ? record3.textFallback : void 0,
+        metadata: normalizeInputMetadata(record3.metadata)
       };
     }
     function normalizeInputMetadata(value) {
       if (!value || typeof value !== "object") return void 0;
-      const record2 = value;
+      const record3 = value;
       const metadata = {};
-      if (record2.source === "dashboard" || record2.source === "shortcut_api" || record2.source === "provider_script" || record2.source === "session_replay") {
-        metadata.source = record2.source;
+      if (record3.source === "dashboard" || record3.source === "shortcut_api" || record3.source === "provider_script" || record3.source === "session_replay") {
+        metadata.source = record3.source;
       }
-      if (typeof record2.clientTimestamp === "number" && Number.isFinite(record2.clientTimestamp)) {
-        metadata.clientTimestamp = record2.clientTimestamp;
+      if (typeof record3.clientTimestamp === "number" && Number.isFinite(record3.clientTimestamp)) {
+        metadata.clientTimestamp = record3.clientTimestamp;
       }
       return Object.keys(metadata).length > 0 ? metadata : void 0;
     }
@@ -65640,14 +65652,14 @@ ${upstream}`;
     }
     function normalizeAnnotationsProperty(value) {
       if (!value || typeof value !== "object") return {};
-      const record2 = value;
+      const record3 = value;
       const annotations = {};
-      if (Array.isArray(record2.audience)) {
-        const audience = record2.audience.filter((item) => item === "user" || item === "assistant");
+      if (Array.isArray(record3.audience)) {
+        const audience = record3.audience.filter((item) => item === "user" || item === "assistant");
         if (audience.length > 0) annotations.audience = audience;
       }
-      if (typeof record2.priority === "number" && Number.isFinite(record2.priority)) {
-        annotations.priority = record2.priority;
+      if (typeof record3.priority === "number" && Number.isFinite(record3.priority)) {
+        annotations.priority = record3.priority;
       }
       return Object.keys(annotations).length > 0 ? { annotations } : {};
     }
@@ -65674,16 +65686,16 @@ ${upstream}`;
         if (!msg) continue;
         const classification = classifyChatMessageVisibility(msg);
         if (classification.isUserFacing && (msg.role === "assistant" || msg.role === "model")) {
-          const text = flattenContent(msg.content).trim();
-          if (text) return text.slice(0, maxChars);
+          const text2 = flattenContent(msg.content).trim();
+          if (text2) return text2.slice(0, maxChars);
         }
       }
       return "";
     }
     function readChatMessageTimestampMs(message) {
       if (!message) return void 0;
-      const record2 = message;
-      for (const value of [record2.timestamp, record2.createdAt, record2.created_at, record2.updatedAt, record2.time, record2.receivedAt]) {
+      const record3 = message;
+      for (const value of [record3.timestamp, record3.createdAt, record3.created_at, record3.updatedAt, record3.time, record3.receivedAt]) {
         if (typeof value === "number" && Number.isFinite(value)) {
           return value > 1e10 ? value : value * 1e3;
         }
@@ -65710,8 +65722,8 @@ ${upstream}`;
         }
         const classification = classifyChatMessageVisibility(msg);
         if (classification.isUserFacing && (msg.role === "assistant" || msg.role === "model")) {
-          const text = flattenContent(msg.content).trim();
-          if (text) return text.slice(0, maxChars);
+          const text2 = flattenContent(msg.content).trim();
+          if (text2) return text2.slice(0, maxChars);
         }
       }
       return "";
@@ -65733,9 +65745,9 @@ ${upstream}`;
         const classification = classifyChatMessageVisibility(msg);
         if (!classification.isUserFacing) continue;
         if (msg.role === "assistant" || msg.role === "model") {
-          const text = flattenContent(msg.content).trim();
-          if (!text) return null;
-          if (chromeFallbacks < FINAL_SUMMARY_CHROME_FALLBACK_MAX_DEPTH && isTranscriptChromeOnlyText(text)) {
+          const text2 = flattenContent(msg.content).trim();
+          if (!text2) return null;
+          if (chromeFallbacks < FINAL_SUMMARY_CHROME_FALLBACK_MAX_DEPTH && isTranscriptChromeOnlyText(text2)) {
             chromeFallbacks++;
             continue;
           }
@@ -65752,8 +65764,8 @@ ${upstream}`;
       }
       return null;
     }
-    function isTranscriptChromeOnlyText(text) {
-      const lines = (typeof text === "string" ? text : "").split("\n").map((line) => line.trim()).filter((line) => line.length > 0);
+    function isTranscriptChromeOnlyText(text2) {
+      const lines = (typeof text2 === "string" ? text2 : "").split("\n").map((line) => line.trim()).filter((line) => line.length > 0);
       if (lines.length === 0) return false;
       let sawHardChrome = false;
       let previousWasPanelLine = false;
@@ -65944,19 +65956,19 @@ ${upstream}`;
       return typeof value === "string" ? value.trim().toLowerCase() : "";
     }
     function readRecordField(message, meta, key2) {
-      const record2 = message;
-      return record2[key2] ?? meta?.[key2];
+      const record3 = message;
+      return record3[key2] ?? meta?.[key2];
     }
     function readVisibilityField(message, meta) {
       return readStringField(readRecordField(message, meta, "visibility"));
     }
     function readTranscriptVisibilityField(message, meta) {
-      const record2 = message;
-      return readStringField(record2.transcriptVisibility ?? meta?.transcriptVisibility ?? record2.visibility ?? meta?.visibility);
+      const record3 = message;
+      return readStringField(record3.transcriptVisibility ?? meta?.transcriptVisibility ?? record3.visibility ?? meta?.visibility);
     }
     function hasBooleanMarker(message, meta, keys) {
-      const record2 = message;
-      return keys.some((key2) => record2[key2] === true || meta?.[key2] === true);
+      const record3 = message;
+      return keys.some((key2) => record3[key2] === true || meta?.[key2] === true);
     }
     function isActivityKind(kind) {
       return kind === "thought" || kind === "tool" || kind === "terminal";
@@ -66863,8 +66875,8 @@ ${upstream}`;
         savedHistoryRollupInFlight = /* @__PURE__ */ new Set();
       }
     });
-    function normalizeHistoryComparable(text) {
-      return String(text || "").replace(/\s+/g, " ").trim();
+    function normalizeHistoryComparable(text2) {
+      return String(text2 || "").replace(/\s+/g, " ").trim();
     }
     function cleanupHistoryContent(agentType, role, content, historyBehavior) {
       let value = String(content || "").replace(/\r\n/g, "\n").trim();
@@ -66997,11 +67009,11 @@ ${upstream}`;
       return -1;
     }
     function buildHistoryMessageIdentity(message) {
-      const record2 = message;
-      if (record2.providerUnitKey) return `unit:${record2.providerUnitKey}`;
-      if (record2.bubbleId) return `bubble:${record2.bubbleId}`;
-      if (typeof record2.sequence === "number" && Number.isFinite(record2.sequence)) {
-        return `seq:${record2.sequence}`;
+      const record3 = message;
+      if (record3.providerUnitKey) return `unit:${record3.providerUnitKey}`;
+      if (record3.bubbleId) return `bubble:${record3.bubbleId}`;
+      if (typeof record3.sequence === "number" && Number.isFinite(record3.sequence)) {
+        return `seq:${record3.sequence}`;
       }
       return "";
     }
@@ -67311,7 +67323,7 @@ ${upstream}`;
         }
         const targetDate = new Date(records[records.length - 1].receivedAt || Date.now()).toISOString().slice(0, 10);
         const filePath2 = path30.join(dir, `${prefix}${targetDate}.jsonl`);
-        fs21.writeFileSync(filePath2, `${records.map((record2) => JSON.stringify(record2)).join("\n")}
+        fs21.writeFileSync(filePath2, `${records.map((record3) => JSON.stringify(record3)).join("\n")}
 `, "utf-8");
         invalidatePersistedSavedHistoryIndex(agentType, dir);
         savedHistorySessionCache.delete(agentType.replace(/[^a-zA-Z0-9_-]/g, "_"));
@@ -67531,7 +67543,7 @@ ${upstream}`;
               const date = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
               const fileName = `${this.sanitize(id22)}_${date}.jsonl`;
               const filePath2 = path30.join(dir, fileName);
-              const record2 = {
+              const record3 = {
                 ts: (/* @__PURE__ */ new Date()).toISOString(),
                 receivedAt: Date.now(),
                 role: "system",
@@ -67542,7 +67554,7 @@ ${upstream}`;
                 historySessionId: id22,
                 workspace: ws
               };
-              fs21.appendFileSync(filePath2, JSON.stringify(record2) + "\n", "utf-8");
+              fs21.appendFileSync(filePath2, JSON.stringify(record3) + "\n", "utf-8");
               updateSavedHistoryIndexForSessionStart(agentType, dir, fileName, id22, ws);
             } catch {
             }
@@ -67709,8 +67721,8 @@ ${upstream}`;
     }
     function normalizeNativeIdToken(raw) {
       if (typeof raw !== "string" && typeof raw !== "number") return "";
-      const text = String(raw).trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "_");
-      return text.slice(0, NATIVE_ID_TOKEN_MAX_BYTES);
+      const text2 = String(raw).trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "_");
+      return text2.slice(0, NATIVE_ID_TOKEN_MAX_BYTES);
     }
     function nativeSourceAddress(historySessionId, addr) {
       const session = typeof historySessionId === "string" ? historySessionId.trim() : "";
@@ -67736,16 +67748,16 @@ ${upstream}`;
     }
     function readMessageSourceAddress(value) {
       if (!value || typeof value !== "object" || Array.isArray(value)) return void 0;
-      const record2 = value;
-      switch (record2.cls) {
+      const record3 = value;
+      switch (record3.cls) {
         case "n": {
-          const L = typeof record2.L === "string" ? record2.L : "";
-          const addr = typeof record2.addr === "string" ? record2.addr : "";
+          const L = typeof record3.L === "string" ? record3.L : "";
+          const addr = typeof record3.addr === "string" ? record3.addr : "";
           if (!LINEAGE_RE.test(L) || !ADDR_RE.test(addr)) return void 0;
           return { cls: "n", L, addr };
         }
         case "rt":
-          return runtimeSourceAddress(record2.key);
+          return runtimeSourceAddress(record3.key);
         default:
           return void 0;
       }
@@ -67794,40 +67806,40 @@ ${upstream}`;
     function normalizeProviderNativeHistoryRecords(agentType, historySessionId, records) {
       if (!Array.isArray(records)) return [];
       const normalizedSessionId = normalizeSavedHistorySessionId(historySessionId);
-      return records.map((record2) => {
+      return records.map((record3) => {
         const base = {
-          ts: typeof record2?.ts === "string" ? record2.ts : new Date(Number(record2?.receivedAt) || Date.now()).toISOString(),
-          receivedAt: Number(record2?.receivedAt) || Date.parse(record2?.ts || "") || Date.now(),
-          role: record2?.role,
-          content: String(record2?.content || ""),
-          kind: record2?.kind || (record2?.role === "system" ? "session_start" : "standard"),
-          senderName: record2?.senderName,
+          ts: typeof record3?.ts === "string" ? record3.ts : new Date(Number(record3?.receivedAt) || Date.now()).toISOString(),
+          receivedAt: Number(record3?.receivedAt) || Date.parse(record3?.ts || "") || Date.now(),
+          role: record3?.role,
+          content: String(record3?.content || ""),
+          kind: record3?.kind || (record3?.role === "system" ? "session_start" : "standard"),
+          senderName: record3?.senderName,
           // The specific tool being invoked (e.g. 'read_file'), when the
           // reader resolves one — distinct from the generic
           // senderName:'Tool'. See dispatcher.ts toNativeHistoryMessage.
-          toolName: typeof record2?.toolName === "string" && record2.toolName ? record2.toolName : void 0,
+          toolName: typeof record3?.toolName === "string" && record3.toolName ? record3.toolName : void 0,
           agent: agentType,
-          instanceId: record2?.instanceId,
-          historySessionId: normalizeSavedHistorySessionId(record2?.historySessionId || normalizedSessionId),
-          sessionTitle: record2?.sessionTitle,
-          workspace: record2?.workspace
+          instanceId: record3?.instanceId,
+          historySessionId: normalizeSavedHistorySessionId(record3?.historySessionId || normalizedSessionId),
+          sessionTitle: record3?.sessionTitle,
+          workspace: record3?.workspace
         };
-        if (typeof record2?.providerUnitKey === "string" && record2.providerUnitKey) {
-          base.providerUnitKey = record2.providerUnitKey;
+        if (typeof record3?.providerUnitKey === "string" && record3.providerUnitKey) {
+          base.providerUnitKey = record3.providerUnitKey;
         }
-        if (typeof record2?.bubbleId === "string" && record2.bubbleId) {
-          base.bubbleId = record2.bubbleId;
+        if (typeof record3?.bubbleId === "string" && record3.bubbleId) {
+          base.bubbleId = record3.bubbleId;
         }
-        if (typeof record2?.sequence === "number" && Number.isFinite(record2.sequence)) {
-          base.sequence = record2.sequence;
+        if (typeof record3?.sequence === "number" && Number.isFinite(record3.sequence)) {
+          base.sequence = record3.sequence;
         }
-        if (typeof record2?._turnKey === "string" && record2._turnKey) {
-          base._turnKey = record2._turnKey;
+        if (typeof record3?._turnKey === "string" && record3._turnKey) {
+          base._turnKey = record3._turnKey;
         }
-        if (typeof record2?.bubbleState === "string" && record2.bubbleState) {
-          base.bubbleState = record2.bubbleState;
+        if (typeof record3?.bubbleState === "string" && record3.bubbleState) {
+          base.bubbleState = record3.bubbleState;
         }
-        const ref = record2?.toolBlockRef;
+        const ref = record3?.toolBlockRef;
         if (ref && typeof ref === "object" && typeof ref.sourceMtimeMs === "number" && typeof ref.recordIndex === "number" && typeof ref.blockIndex === "number") {
           base.toolBlockRef = {
             sourceMtimeMs: ref.sourceMtimeMs,
@@ -67835,7 +67847,7 @@ ${upstream}`;
             blockIndex: ref.blockIndex
           };
         }
-        const src = readMessageSourceAddress(record2?._src);
+        const src = readMessageSourceAddress(record3?._src);
         if (src) base._src = src;
         return sanitizeHistoryMessage(agentType, base);
       }).filter(Boolean);
@@ -67917,8 +67929,8 @@ ${upstream}`;
       const nativeResult = callProviderNativeHistoryRead(agentType, canonicalHistory, scripts, normalizedSessionId, workspace);
       const nativeRecords = nativeResult?.records || [];
       if (nativeRecords.length === 0) return false;
-      const normalizedRecords = nativeRecords.map((record2) => ({
-        ...record2,
+      const normalizedRecords = nativeRecords.map((record3) => ({
+        ...record3,
         agent: agentType,
         historySessionId: normalizedSessionId
       }));
@@ -68491,9 +68503,9 @@ ${upstream}`;
         ...losers.length > RATIONALE_LOSERS_MAX ? { losersOmitted: losers.length - RATIONALE_LOSERS_MAX } : {}
       };
     }
-    function recordLastQuotaRanking(nodeId, record2) {
+    function recordLastQuotaRanking(nodeId, record3) {
       if (!nodeId) return;
-      lastQuotaRankingByNode.set(nodeId, record2);
+      lastQuotaRankingByNode.set(nodeId, record3);
     }
     function getLastQuotaRanking(nodeId) {
       return lastQuotaRankingByNode.get(nodeId);
@@ -68776,10 +68788,10 @@ ${upstream}`;
       return trimmed2;
     }
     function readPlainObject(value) {
-      const record2 = readOptionalRecord2(value);
-      if (!record2) return void 0;
+      const record3 = readOptionalRecord2(value);
+      if (!record3) return void 0;
       try {
-        return JSON.parse(JSON.stringify(record2));
+        return JSON.parse(JSON.stringify(record3));
       } catch {
         return void 0;
       }
@@ -70641,17 +70653,17 @@ ${upstream}`;
       autoFastForwardWorkspaceLease.clear();
     }
     function resolveAutoFastForwardPolicy2(mesh) {
-      const record2 = mesh?.policy?.autoFastForward && typeof mesh.policy.autoFastForward === "object" && !Array.isArray(mesh.policy.autoFastForward) ? mesh.policy.autoFastForward : {};
-      const maxBehind = Number(record2.maxBehind);
+      const record3 = mesh?.policy?.autoFastForward && typeof mesh.policy.autoFastForward === "object" && !Array.isArray(mesh.policy.autoFastForward) ? mesh.policy.autoFastForward : {};
+      const maxBehind = Number(record3.maxBehind);
       return {
-        enabled: record2.enabled !== false,
+        enabled: record3.enabled !== false,
         ...Number.isFinite(maxBehind) && maxBehind >= 0 ? { maxBehind: Math.floor(maxBehind) } : {},
-        requireCleanSubmodules: record2.requireCleanSubmodules !== false,
+        requireCleanSubmodules: record3.requireCleanSubmodules !== false,
         // Strict opt-in: absent/false → self-only (historical behavior). Only an
         // explicit `true` extends auto ff to remote owning-daemon nodes.
-        remoteNodes: record2.remoteNodes === true,
+        remoteNodes: record3.remoteNodes === true,
         // Absent/anything-but-continuous → 'idle' (historical idle-edge-only detection).
-        mode: record2.mode === "continuous" ? "continuous" : "idle"
+        mode: record3.mode === "continuous" ? "continuous" : "idle"
       };
     }
     function dryRunSatisfiesAutoFastForwardPolicy(dryRun, policy) {
@@ -71732,11 +71744,11 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       return "mesh_slot";
     }
     function readLaunchProvenanceArgs(args) {
-      const record2 = args && typeof args === "object" ? args : {};
+      const record3 = args && typeof args === "object" ? args : {};
       return {
-        ...isSessionLaunchedBy(record2.launchedBy) && record2.launchedBy !== "restore" ? { launchedBy: record2.launchedBy } : {},
-        ...isModelAxisSource(record2.modelSource) ? { modelSource: record2.modelSource } : {},
-        ...isModelAxisSource(record2.thinkingLevelSource) ? { thinkingLevelSource: record2.thinkingLevelSource } : {}
+        ...isSessionLaunchedBy(record3.launchedBy) && record3.launchedBy !== "restore" ? { launchedBy: record3.launchedBy } : {},
+        ...isModelAxisSource(record3.modelSource) ? { modelSource: record3.modelSource } : {},
+        ...isModelAxisSource(record3.thinkingLevelSource) ? { thinkingLevelSource: record3.thinkingLevelSource } : {}
       };
     }
     function inferLaunchedBy(settings) {
@@ -71803,9 +71815,9 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         thinkingLevel: {}
       });
     }
-    function cloneLaunchRecord(record2) {
+    function cloneLaunchRecord(record3) {
       const cloneAxis = (axis) => ({ ...axis, history: axis.history.map((entry) => ({ ...entry })) });
-      return { ...record2, model: cloneAxis(record2.model), thinkingLevel: cloneAxis(record2.thinkingLevel) };
+      return { ...record3, model: cloneAxis(record3.model), thinkingLevel: cloneAxis(record3.thinkingLevel) };
     }
     function appendAxisHistory(axis, entry) {
       axis.history.push(entry);
@@ -74103,18 +74115,18 @@ ${continuationNotice}` } : task,
     function unwrapReadChatPayload(raw) {
       let cursor = raw;
       for (let depth = 0; depth < 4 && cursor && typeof cursor === "object"; depth++) {
-        const record2 = cursor;
-        if (Array.isArray(record2.messages)) return record2;
-        if (record2.payload && typeof record2.payload === "object") {
-          cursor = record2.payload;
+        const record3 = cursor;
+        if (Array.isArray(record3.messages)) return record3;
+        if (record3.payload && typeof record3.payload === "object") {
+          cursor = record3.payload;
           continue;
         }
-        if (record2.result && typeof record2.result === "object") {
-          cursor = record2.result;
+        if (record3.result && typeof record3.result === "object") {
+          cursor = record3.result;
           continue;
         }
-        if (record2.data && typeof record2.data === "object") {
-          cursor = record2.data;
+        if (record3.data && typeof record3.data === "object") {
+          cursor = record3.data;
           continue;
         }
         break;
@@ -74708,7 +74720,7 @@ Check mesh_task_history / git, then use mesh_requeue_task with this task_id and 
       });
       const message = readString2(dispatch2.payload?.message) || readString2(dispatch2.payload?.summary) || "";
       const { title, summary } = summarizeMessage(message);
-      const record2 = {
+      const record3 = {
         taskId,
         source: "direct",
         status,
@@ -74729,24 +74741,24 @@ Check mesh_task_history / git, then use mesh_requeue_task with this task_id and 
         staleReason: live.staleReason || ledgerOnlyStaleReason,
         ...isFreshUnacknowledged ? { staleDispatchUnacknowledged: true } : {}
       };
-      return { record: record2, terminalRow };
+      return { record: record3, terminalRow };
     }
     function collectPendingApprovals2(activeWork) {
       const approvals = [];
-      for (const record2 of activeWork) {
-        if (record2.status !== "awaiting_approval") continue;
-        if (!record2.nodeId || !record2.sessionId) continue;
-        const blockedAt = record2.terminalKind === "task_approval_needed" ? record2.terminalAt : void 0;
-        const dispatchAnchor = record2.dispatchedAt || record2.createdAt;
+      for (const record3 of activeWork) {
+        if (record3.status !== "awaiting_approval") continue;
+        if (!record3.nodeId || !record3.sessionId) continue;
+        const blockedAt = record3.terminalKind === "task_approval_needed" ? record3.terminalAt : void 0;
+        const dispatchAnchor = record3.dispatchedAt || record3.createdAt;
         const waitingSince = blockedAt || dispatchAnchor;
         const anchorShiftMs = blockedAt && dispatchAnchor ? new Date(blockedAt).getTime() - new Date(dispatchAnchor).getTime() : 0;
-        const waitingMs = Number.isFinite(anchorShiftMs) && anchorShiftMs > 0 ? Math.max(0, record2.elapsedMs - anchorShiftMs) : record2.elapsedMs;
+        const waitingMs = Number.isFinite(anchorShiftMs) && anchorShiftMs > 0 ? Math.max(0, record3.elapsedMs - anchorShiftMs) : record3.elapsedMs;
         approvals.push({
-          nodeId: record2.nodeId,
-          sessionId: record2.sessionId,
-          providerType: record2.providerType,
-          taskId: record2.taskId,
-          taskTitle: record2.taskTitle,
+          nodeId: record3.nodeId,
+          sessionId: record3.sessionId,
+          providerType: record3.providerType,
+          taskId: record3.taskId,
+          taskTitle: record3.taskTitle,
           status: "awaiting_approval",
           waitingSince,
           waitingMs
@@ -74853,7 +74865,7 @@ Check mesh_task_history / git, then use mesh_requeue_task with this task_id and 
             dispatchedToIdleSession: dispatch2.dispatchedToIdleSession === true
           });
           const { title, summary: summary2 } = summarizeMessage(dispatch2.message || "");
-          const record2 = {
+          const record3 = {
             taskId: dispatch2.taskId,
             source: "direct",
             status,
@@ -74876,46 +74888,46 @@ Check mesh_task_history / git, then use mesh_requeue_task with this task_id and 
             ...isFreshUnacknowledged ? { staleDispatchUnacknowledged: true } : {}
           };
           if (isTerminal) {
-            terminalDirectWork.push(record2);
+            terminalDirectWork.push(record3);
             if (opts.includeTerminalDirect !== true) continue;
           }
           if ((live.staleReason || ledgerOnlyStaleReason) && !isTerminal) {
-            staleDirectWork.push(record2);
+            staleDirectWork.push(record3);
             continue;
           }
-          records.push(record2);
+          records.push(record3);
         }
         const ledgerDispatches = ledgerEntries.filter(isDirectDispatch);
         const terminalByDispatch = ledgerSnapshot.matchDirectDispatchTerminals(ledgerDispatches);
         for (const dispatch2 of ledgerDispatches) {
           if (dbTaskIds.has(directDispatchTaskId(dispatch2))) continue;
           if (queueTaskIds.has(directDispatchTaskId(dispatch2))) continue;
-          const { record: record2, terminalRow } = buildLedgerDirectDispatchRecord(dispatch2, { terminal: terminalByDispatch.get(dispatch2), nodes: opts.nodes, now, ledgerEntries });
+          const { record: record3, terminalRow } = buildLedgerDirectDispatchRecord(dispatch2, { terminal: terminalByDispatch.get(dispatch2), nodes: opts.nodes, now, ledgerEntries });
           if (terminalRow) {
-            terminalDirectWork.push(record2);
+            terminalDirectWork.push(record3);
             if (opts.includeTerminalDirect !== true) continue;
           }
-          if (record2.staleReason && !terminalRow) {
-            staleDirectWork.push(record2);
+          if (record3.staleReason && !terminalRow) {
+            staleDirectWork.push(record3);
             continue;
           }
-          records.push(record2);
+          records.push(record3);
         }
       } else {
         const ledgerDispatches = ledgerEntries.filter(isDirectDispatch);
         const terminalByDispatch = ledgerSnapshot.matchDirectDispatchTerminals(ledgerDispatches);
         for (const dispatch2 of ledgerDispatches) {
           if (queueTaskIds.has(directDispatchTaskId(dispatch2))) continue;
-          const { record: record2, terminalRow } = buildLedgerDirectDispatchRecord(dispatch2, { terminal: terminalByDispatch.get(dispatch2), nodes: opts.nodes, now, ledgerEntries });
+          const { record: record3, terminalRow } = buildLedgerDirectDispatchRecord(dispatch2, { terminal: terminalByDispatch.get(dispatch2), nodes: opts.nodes, now, ledgerEntries });
           if (terminalRow) {
-            terminalDirectWork.push(record2);
+            terminalDirectWork.push(record3);
             if (opts.includeTerminalDirect !== true) continue;
           }
-          if (record2.staleReason && !terminalRow) {
-            staleDirectWork.push(record2);
+          if (record3.staleReason && !terminalRow) {
+            staleDirectWork.push(record3);
             continue;
           }
-          records.push(record2);
+          records.push(record3);
         }
       }
       records.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
@@ -74933,10 +74945,10 @@ Check mesh_task_history / git, then use mesh_requeue_task with this task_id and 
       }
       return { activeWork: records, staleDirectWork, staleDirectWorkNote, terminalDirectWork, summary };
     }
-    function classifyStaleDirectForPrune(record2, opts = {}) {
-      if (record2.staleDispatchUnacknowledged === true) return "preserve_unacknowledged";
-      if (record2.terminal === true) return opts.includeTerminal ? "prunable_terminal" : "preserve_active";
-      if (record2.staleReason && PRUNABLE_ORPHAN_STALE_REASONS.has(record2.staleReason)) return "prunable_orphan";
+    function classifyStaleDirectForPrune(record3, opts = {}) {
+      if (record3.staleDispatchUnacknowledged === true) return "preserve_unacknowledged";
+      if (record3.terminal === true) return opts.includeTerminal ? "prunable_terminal" : "preserve_active";
+      if (record3.staleReason && PRUNABLE_ORPHAN_STALE_REASONS.has(record3.staleReason)) return "prunable_orphan";
       return "preserve_active";
     }
     async function pruneStaleDirectDispatches(opts) {
@@ -74964,29 +74976,29 @@ Check mesh_task_history / git, then use mesh_requeue_task with this task_id and 
       const preservedUnacknowledged = [];
       const preservedLedgerOnly = [];
       const preservedNotOrphan = [];
-      for (const record2 of candidates) {
-        const classification = classifyStaleDirectForPrune(record2, { includeTerminal });
+      for (const record3 of candidates) {
+        const classification = classifyStaleDirectForPrune(record3, { includeTerminal });
         if (classification === "preserve_unacknowledged") {
-          preservedUnacknowledged.push(record2);
+          preservedUnacknowledged.push(record3);
           continue;
         }
         if (classification === "preserve_active") {
-          preservedNotOrphan.push(record2);
+          preservedNotOrphan.push(record3);
           continue;
         }
-        if (!storeTaskIds.has(record2.taskId)) {
-          preservedLedgerOnly.push(record2);
+        if (!storeTaskIds.has(record3.taskId)) {
+          preservedLedgerOnly.push(record3);
           continue;
         }
         if (minAgeMs > 0) {
-          const ageRef = record2.dispatchedAt || record2.createdAt;
+          const ageRef = record3.dispatchedAt || record3.createdAt;
           const ageMs2 = elapsedSince(ageRef, now);
           if (ageMs2 < minAgeMs) {
-            skippedTooYoung.push(record2);
+            skippedTooYoung.push(record3);
             continue;
           }
         }
-        prunable.push(record2);
+        prunable.push(record3);
       }
       let prunedCount = 0;
       if (execute && prunable.length) {
@@ -75705,14 +75717,14 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
     function loadDeferredRestartSchedules() {
       return { ...loadState().deferredRestartSchedules };
     }
-    function recordDeferredRestartSchedule(record2) {
-      const key2 = deferredRestartScheduleKey(record2.meshId, record2.nodeId);
+    function recordDeferredRestartSchedule(record3) {
+      const key2 = deferredRestartScheduleKey(record3.meshId, record3.nodeId);
       const state = loadState();
       const existing = state.deferredRestartSchedules[key2];
-      if (existing && existing.mode === record2.mode && existing.killSessionHost === record2.killSessionHost && existing.allowDowngrade === record2.allowDowngrade && existing.channel === record2.channel && existing.npmTag === record2.npmTag && existing.scheduledAt === record2.scheduledAt && existing.expiresAt === record2.expiresAt) return;
+      if (existing && existing.mode === record3.mode && existing.killSessionHost === record3.killSessionHost && existing.allowDowngrade === record3.allowDowngrade && existing.channel === record3.channel && existing.npmTag === record3.npmTag && existing.scheduledAt === record3.scheduledAt && existing.expiresAt === record3.expiresAt) return;
       saveState({
         ...state,
-        deferredRestartSchedules: { ...state.deferredRestartSchedules, [key2]: record2 }
+        deferredRestartSchedules: { ...state.deferredRestartSchedules, [key2]: record3 }
       });
     }
     function clearDeferredRestartSchedule(meshId, nodeId) {
@@ -76220,13 +76232,13 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
         return { value: option, label: option };
       }
       if (!option || typeof option !== "object") return null;
-      const record2 = option;
-      const value = typeof record2.value === "string" ? record2.value : typeof record2.id === "string" ? record2.id : typeof record2.name === "string" ? record2.name : null;
+      const record3 = option;
+      const value = typeof record3.value === "string" ? record3.value : typeof record3.id === "string" ? record3.id : typeof record3.name === "string" ? record3.name : null;
       if (!value) return null;
-      const label = typeof record2.label === "string" ? record2.label : typeof record2.name === "string" ? record2.name : value;
+      const label = typeof record3.label === "string" ? record3.label : typeof record3.name === "string" ? record3.name : value;
       const normalized = { value, label };
-      if (typeof record2.description === "string") normalized.description = record2.description;
-      if (typeof record2.group === "string") normalized.group = record2.group;
+      if (typeof record3.description === "string") normalized.description = record3.description;
+      if (typeof record3.group === "string") normalized.group = record3.group;
       return normalized;
     }
     function isScalarControlValue(value) {
@@ -76453,16 +76465,16 @@ ${cleanBody}`;
       const result = [];
       for (const entry of raw) {
         if (!entry || typeof entry !== "object") continue;
-        const record2 = entry;
-        const mediaType = record2.mediaType;
+        const record3 = entry;
+        const mediaType = record3.mediaType;
         if (typeof mediaType !== "string" || !VALID_INPUT_MEDIA_TYPES.has(mediaType)) continue;
-        const strategies = Array.isArray(record2.strategies) ? record2.strategies.filter((value) => typeof value === "string" && VALID_INPUT_STRATEGIES.has(value)) : [];
-        const degradation = Array.isArray(record2.degradation) ? record2.degradation.filter((value) => typeof value === "string" && VALID_INPUT_STRATEGIES.has(value)) : [];
+        const strategies = Array.isArray(record3.strategies) ? record3.strategies.filter((value) => typeof value === "string" && VALID_INPUT_STRATEGIES.has(value)) : [];
+        const degradation = Array.isArray(record3.degradation) ? record3.degradation.filter((value) => typeof value === "string" && VALID_INPUT_STRATEGIES.has(value)) : [];
         if (strategies.length === 0 && degradation.length === 0) continue;
         result.push({
           mediaType,
           strategies,
-          ...typeof record2.native === "boolean" ? { native: record2.native } : {},
+          ...typeof record3.native === "boolean" ? { native: record3.native } : {},
           ...degradation.length > 0 ? { degradation } : {}
         });
       }
@@ -78457,11 +78469,11 @@ ${cleanBody}`;
       const found = readRecords(resolvePeerSecretsPath(opts)).find((rec3) => rec3.meshId === mesh && daemonIdsEquivalent4(rec3.peerDaemonId, canonical));
       return found ? { ...found } : null;
     }
-    function putPeerSecret(record2, opts = {}) {
-      if (!isValidRecord(record2)) {
+    function putPeerSecret(record3, opts = {}) {
+      if (!isValidRecord(record3)) {
         throw new Error("putPeerSecret requires { meshId, peerDaemonId, role, secret, createdAt } with non-empty strings");
       }
-      const normalized = normalizeRecord(record2);
+      const normalized = normalizeRecord(record3);
       const path90 = resolvePeerSecretsPath(opts);
       const others = readRecords(path90).filter((rec3) => !(rec3.meshId === normalized.meshId && daemonIdsEquivalent4(rec3.peerDaemonId, normalized.peerDaemonId)));
       writeRecords(path90, [...others, normalized]);
@@ -81264,8 +81276,8 @@ ${cleanBody}`;
           }
         }
         if (toLine < fromLine) toLine = fromLine;
-        const text = lines.slice(fromLine, toLine).join("\n");
-        resolved.push({ id: id22, fromLine, toLine, text });
+        const text2 = lines.slice(fromLine, toLine).join("\n");
+        resolved.push({ id: id22, fromLine, toLine, text: text2 });
       }
       return resolved;
     }
@@ -81513,9 +81525,9 @@ ${detail.join("\n")}` : stripped;
       }
       return entries.slice(start);
     }
-    function hasCursorMarker(text, markerClass) {
+    function hasCursorMarker(text2, markerClass) {
       const cls = markerClass ?? DEFAULT_CURSOR_MARKER_CLASS;
-      return new RegExp("^\\s*[" + cls + "]").test(text);
+      return new RegExp("^\\s*[" + cls + "]").test(text2);
     }
     var TITLE_DETAIL_MAX_LINES;
     var SIDE_PANEL_COLUMN_RE;
@@ -82731,11 +82743,11 @@ ${detail.join("\n")}` : stripped;
       }
     });
     function truncateValidationOutput(value) {
-      const text = typeof value === "string" ? value : value == null ? "" : String(value);
-      if (text.length <= REFINE_VALIDATION_SUMMARY_CHARS) return text;
-      const head = text.slice(0, REFINE_VALIDATION_SUMMARY_HEAD_CHARS);
-      const tail = text.slice(text.length - REFINE_VALIDATION_SUMMARY_TAIL_CHARS);
-      const omitted = text.length - REFINE_VALIDATION_SUMMARY_HEAD_CHARS - REFINE_VALIDATION_SUMMARY_TAIL_CHARS;
+      const text2 = typeof value === "string" ? value : value == null ? "" : String(value);
+      if (text2.length <= REFINE_VALIDATION_SUMMARY_CHARS) return text2;
+      const head = text2.slice(0, REFINE_VALIDATION_SUMMARY_HEAD_CHARS);
+      const tail = text2.slice(text2.length - REFINE_VALIDATION_SUMMARY_TAIL_CHARS);
+      const omitted = text2.length - REFINE_VALIDATION_SUMMARY_HEAD_CHARS - REFINE_VALIDATION_SUMMARY_TAIL_CHARS;
       return `${head}
 [... ${omitted} chars omitted ...]
 ${tail}`;
@@ -83046,8 +83058,8 @@ ${tail}`;
           return void 0;
         };
         const treeOutput = await runGit4(repoRoot, ["ls-tree", "-r", "-z", mergedTree]);
-        const gitlinks = treeOutput.split("\0").filter(Boolean).map((record2) => {
-          const match = /^160000\s+commit\s+([0-9a-f]{40})\t(.+)$/.exec(record2);
+        const gitlinks = treeOutput.split("\0").filter(Boolean).map((record3) => {
+          const match = /^160000\s+commit\s+([0-9a-f]{40})\t(.+)$/.exec(record3);
           return match ? { commit: match[1], path: match[2] } : null;
         }).filter((entry) => !!entry);
         for (const gitlink of gitlinks) {
@@ -84710,15 +84722,15 @@ ${asText(streams.stderr)}
       return commandsToRun;
     }
     async function execRefineCommand(execFileAsync6, candidate, cwd, resolvedCommand) {
-      const spawn8 = buildWin32ExecFileSpawn(resolvedCommand, candidate.args);
-      return execFileAsync6(spawn8.file, spawn8.args, {
+      const spawn9 = buildWin32ExecFileSpawn(resolvedCommand, candidate.args);
+      return execFileAsync6(spawn9.file, spawn9.args, {
         cwd,
         encoding: "utf8",
         windowsHide: true,
         timeout: candidate.timeoutMs || REFINE_VALIDATION_TIMEOUT_MS,
         maxBuffer: candidate.outputLimitBytes || REFINE_VALIDATION_OUTPUT_LIMIT_BYTES,
         env: { ...sanitizeRefineGateChildEnv(), CI: process.env.CI || "1", ...refineGateChildEnv(), ...candidate.env || {} },
-        ...spawn8.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}
+        ...spawn9.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}
       });
     }
     function refineExecFailureExtras(error) {
@@ -84960,11 +84972,11 @@ ${asText(streams.stderr)}
     function acquireWorktreeRetentionLease(args) {
       const state = loadRetentionState();
       const key2 = stateKey(args.meshId, args.nodeId);
-      const record2 = state.nodes[key2];
-      const lease = record2?.lease;
+      const record3 = state.nodes[key2];
+      const lease = record3?.lease;
       if (lease && lease.owner !== args.owner && lease.expiresAt > args.nowMs) return false;
       state.nodes[key2] = {
-        ...record2 ?? { firstPassAt: args.nowMs, lastPassAt: args.nowMs, lastTickId: "", passCount: 0 },
+        ...record3 ?? { firstPassAt: args.nowMs, lastPassAt: args.nowMs, lastTickId: "", passCount: 0 },
         lease: { owner: args.owner, expiresAt: args.nowMs + args.leaseMs }
       };
       saveRetentionState(state);
@@ -84973,9 +84985,9 @@ ${asText(streams.stderr)}
     function releaseWorktreeRetentionLease(args) {
       const state = loadRetentionState();
       const key2 = stateKey(args.meshId, args.nodeId);
-      const record2 = state.nodes[key2];
-      if (record2?.lease && record2.lease.owner === args.owner) {
-        delete record2.lease;
+      const record3 = state.nodes[key2];
+      if (record3?.lease && record3.lease.owner === args.owner) {
+        delete record3.lease;
         saveRetentionState(state);
       }
     }
@@ -85008,12 +85020,12 @@ ${asText(streams.stderr)}
     function isCoordinatorIdentityNode(node) {
       return node?.coordinator === true || node?.isCoordinator === true || typeof node?.coordinatorFor === "string" || typeof node?.meshCoordinatorFor === "string" || typeof node?.meta?.meshCoordinatorFor === "string";
     }
-    function sessionMatchesNode(record2, node, nodeId) {
-      const sessionId = typeof record2?.sessionId === "string" ? record2.sessionId : "";
+    function sessionMatchesNode(record3, node, nodeId) {
+      const sessionId = typeof record3?.sessionId === "string" ? record3.sessionId : "";
       if (!sessionId) return false;
       const workspace = typeof node?.workspace === "string" ? node.workspace : "";
-      if (workspace && record2?.workspace === workspace) return true;
-      if (record2?.meta?.meshNodeId === nodeId) return true;
+      if (workspace && record3?.workspace === workspace) return true;
+      if (record3?.meta?.meshNodeId === nodeId) return true;
       return false;
     }
     function resolveSourceRepoRoot(mesh, node) {
@@ -85065,7 +85077,7 @@ ${asText(streams.stderr)}
       if (ctx.sessions === void 0) {
         return skip("live_session", "Session inventory unavailable; refusing to plan removal without a liveness check (fail-closed).");
       }
-      const liveSession = ctx.sessions.find((record2) => sessionMatchesNode(record2, node, nodeId) && (0, import_session_host_core3.getSessionHostSurfaceKind)(record2) === "live_runtime");
+      const liveSession = ctx.sessions.find((record3) => sessionMatchesNode(record3, node, nodeId) && (0, import_session_host_core3.getSessionHostSurfaceKind)(record3) === "live_runtime");
       if (liveSession) {
         return skip("live_session", "A live/starting/generating/waiting/idle retained session is still attached to this node.");
       }
@@ -85331,8 +85343,8 @@ ${asText(streams.stderr)}
           if (!key2.startsWith(meshPrefix)) continue;
           const nodeId = key2.slice(meshPrefix.length);
           if (liveNodeIds.has(nodeId)) continue;
-          const record2 = state.nodes[key2];
-          if (record2?.lease && record2.lease.expiresAt > opts.nowMs) continue;
+          const record3 = state.nodes[key2];
+          if (record3?.lease && record3.lease.expiresAt > opts.nowMs) continue;
           delete state.nodes[key2];
           orphansPruned++;
           stateDirty = true;
@@ -85352,41 +85364,41 @@ ${asText(streams.stderr)}
         }
         const now = opts.nowMs;
         const existing = state.nodes[key2];
-        let record2;
+        let record3;
         if (!existing) {
           if (recordPasses) {
-            record2 = { firstPassAt: now, lastPassAt: now, lastTickId: opts.tickId, passCount: 1 };
-            state.nodes[key2] = record2;
+            record3 = { firstPassAt: now, lastPassAt: now, lastTickId: opts.tickId, passCount: 1 };
+            state.nodes[key2] = record3;
             stateDirty = true;
           } else {
-            record2 = { firstPassAt: now, lastPassAt: now, lastTickId: opts.tickId, passCount: 0 };
+            record3 = { firstPassAt: now, lastPassAt: now, lastTickId: opts.tickId, passCount: 0 };
           }
         } else {
-          record2 = existing;
+          record3 = existing;
           if (recordPasses) {
-            if (record2.lastTickId !== opts.tickId) {
-              record2.passCount += 1;
-              record2.lastTickId = opts.tickId;
+            if (record3.lastTickId !== opts.tickId) {
+              record3.passCount += 1;
+              record3.lastTickId = opts.tickId;
               stateDirty = true;
             }
-            if (record2.lastPassAt !== now) {
-              record2.lastPassAt = now;
+            if (record3.lastPassAt !== now) {
+              record3.lastPassAt = now;
               stateDirty = true;
             }
-            if (record2.convergenceStatus !== entry.convergence?.status) {
-              record2.convergenceStatus = entry.convergence?.status;
+            if (record3.convergenceStatus !== entry.convergence?.status) {
+              record3.convergenceStatus = entry.convergence?.status;
               stateDirty = true;
             }
           }
         }
-        const eligibleAt = record2.firstPassAt + graceMs;
-        const lease = record2.lease;
+        const eligibleAt = record3.firstPassAt + graceMs;
+        const lease = record3.lease;
         const leaseHeld = !!lease && lease.owner !== owner && lease.expiresAt > now;
         entry.auto = {
-          passCount: record2.passCount,
-          firstPassAt: record2.firstPassAt,
+          passCount: record3.passCount,
+          firstPassAt: record3.firstPassAt,
           eligibleAt,
-          autoEligible: record2.passCount >= 2 && now >= eligibleAt && !leaseHeld,
+          autoEligible: record3.passCount >= 2 && now >= eligibleAt && !leaseHeld,
           ...leaseHeld ? { leaseHeld: true, leaseOwner: lease?.owner } : {}
         };
         if (leaseHeld) metrics.leaseConflicts++;
@@ -85559,36 +85571,36 @@ ${asText(streams.stderr)}
       if (!/[0-9]/.test(run3) || !/[A-Za-z]/.test(run3)) return false;
       return /[A-Za-z0-9]{20,}/.test(run3);
     }
-    function detectCredential(text) {
+    function detectCredential(text2) {
       for (const p of CREDENTIAL_PATTERNS) {
-        if (p.re.test(text)) return p.id;
+        if (p.re.test(text2)) return p.id;
       }
-      for (const m of text.matchAll(BASE64_RUN)) {
+      for (const m of text2.matchAll(BASE64_RUN)) {
         if (looksLikeBase64Secret(m[0])) return "long_base64";
       }
       return null;
     }
-    function detectHiddenChars(text) {
-      if (BIDI_CONTROL.test(text)) return "bidi_control";
-      if (TAG_CHAR.test(text)) return "tag_char";
-      if (ZERO_WIDTH.test(text.replace(EMOJI_ZWJ, ""))) return "zero_width";
+    function detectHiddenChars(text2) {
+      if (BIDI_CONTROL.test(text2)) return "bidi_control";
+      if (TAG_CHAR.test(text2)) return "tag_char";
+      if (ZERO_WIDTH.test(text2.replace(EMOJI_ZWJ, ""))) return "zero_width";
       return null;
     }
-    function detectInjection(text) {
-      for (const p of INJECTION_PATTERNS) if (p.re.test(text)) return p.id;
+    function detectInjection(text2) {
+      for (const p of INJECTION_PATTERNS) if (p.re.test(text2)) return p.id;
       return null;
     }
-    function scanWriteContent(text) {
-      const hidden = detectHiddenChars(text);
+    function scanWriteContent(text2) {
+      const hidden = detectHiddenChars(text2);
       if (hidden) return { kind: "hidden_chars", pattern: hidden };
-      const inj = detectInjection(text);
+      const inj = detectInjection(text2);
       if (inj) return { kind: "injection", pattern: inj };
       return null;
     }
-    function scanStoredContent(text) {
-      const w = scanWriteContent(text);
+    function scanStoredContent(text2) {
+      const w = scanWriteContent(text2);
       if (w) return w;
-      const cred = detectCredential(text);
+      const cred = detectCredential(text2);
       return cred ? { kind: "credential", pattern: cred } : null;
     }
     function classifyWriteOrigin(delivered, opts = {}) {
@@ -85636,10 +85648,10 @@ ${asText(streams.stderr)}
       }
       forceMode600(path90);
     }
-    function appendJsonLine600(path90, record2) {
+    function appendJsonLine600(path90, record3) {
       ensureDir((0, import_path27.dirname)(path90));
       const existed = (0, import_fs26.existsSync)(path90);
-      (0, import_fs26.appendFileSync)(path90, `${JSON.stringify(record2)}
+      (0, import_fs26.appendFileSync)(path90, `${JSON.stringify(record3)}
 `, { encoding: "utf-8", mode: 384 });
       if (!existed) forceMode600(path90);
     }
@@ -85711,7 +85723,7 @@ ${asText(streams.stderr)}
       const finding = scanStoredContent(entry);
       return finding ? finding.kind : null;
     }
-    function parseMemoryEntries(text) {
+    function parseMemoryEntries(text2) {
       const entries = [];
       let current4 = [];
       const flush = () => {
@@ -85719,7 +85731,7 @@ ${asText(streams.stderr)}
         if (e) entries.push(e);
         current4 = [];
       };
-      for (const line of text.replace(/\r\n?/g, "\n").split("\n")) {
+      for (const line of text2.replace(/\r\n?/g, "\n").split("\n")) {
         if (line.trim() === "\xA7") flush();
         else current4.push(line);
       }
@@ -85830,16 +85842,16 @@ ${asText(streams.stderr)}
             const empty = { target, entries: [], invalid: [], used: 0, budget };
             const path90 = this.filePath(target);
             if (!(0, import_fs27.existsSync)(path90)) return empty;
-            let text;
+            let text2;
             try {
               const bytes = (0, import_fs27.readFileSync)(path90);
-              text = bytes.toString("utf8");
-              if (!Buffer.from(text, "utf8").equals(bytes)) return { ...empty, unreadable: "invalid utf-8" };
-              if (text.startsWith("\uFEFF")) text = text.slice(1);
+              text2 = bytes.toString("utf8");
+              if (!Buffer.from(text2, "utf8").equals(bytes)) return { ...empty, unreadable: "invalid utf-8" };
+              if (text2.startsWith("\uFEFF")) text2 = text2.slice(1);
             } catch (err) {
               return { ...empty, unreadable: err instanceof Error ? err.message : String(err) };
             }
-            const entries = parseMemoryEntries(text);
+            const entries = parseMemoryEntries(text2);
             const invalid = [];
             entries.forEach((e, index) => {
               const problem = entryProblem(e);
@@ -86054,8 +86066,8 @@ ${asText(streams.stderr)}
       const lower = fileName.toLowerCase();
       return SKILL_ALLOWED_EXTENSIONS.some((ext) => lower.endsWith(ext));
     }
-    function splitSkillMd(text) {
-      const t = text.replace(/\r\n?/g, "\n");
+    function splitSkillMd(text2) {
+      const t = text2.replace(/\r\n?/g, "\n");
       if (!t.startsWith("---\n")) return null;
       const end = t.indexOf("\n---", 3);
       if (end < 0) return null;
@@ -86063,8 +86075,8 @@ ${asText(streams.stderr)}
       if (after !== "" && !after.startsWith("\n")) return null;
       return { frontmatterRaw: t.slice(4, end), body: after.replace(/^\n/, "") };
     }
-    function parseSkillMd(text) {
-      const split = splitSkillMd(text);
+    function parseSkillMd(text2) {
+      const split = splitSkillMd(text2);
       if (!split) return { problem: "no_frontmatter" };
       let meta;
       try {
@@ -86139,7 +86151,7 @@ ${body}`;
       } catch {
         return null;
       }
-      const text = (0, import_fs28.readFileSync)(mdPath, "utf-8");
+      const text2 = (0, import_fs28.readFileSync)(mdPath, "utf-8");
       const files = [];
       const ignoredFiles = [];
       for (const sub of SKILL_SUBDIRS) {
@@ -86148,11 +86160,11 @@ ${body}`;
       for (const n of (0, import_fs28.readdirSync)(dir)) {
         if (n !== SKILL_FILE && !SKILL_SUBDIRS.includes(n)) ignoredFiles.push(n);
       }
-      const parsed = parseSkillMd(text);
+      const parsed = parseSkillMd(text2);
       const base = { name: expectedName, files, ignoredFiles };
       let out;
       if ("problem" in parsed) {
-        const body = splitSkillMd(text)?.body ?? text;
+        const body = splitSkillMd(text2)?.body ?? text2;
         out = { ...base, problem: parsed.problem, frontmatterRaw: "", meta: {}, description: "", body, bodyChars: charCount(body), overLimit: [] };
       } else {
         let problem = parsed.meta.name !== expectedName ? "name_mismatch" : !validateDescription(parsed.meta.description) ? "bad_description" : void 0;
@@ -86360,12 +86372,12 @@ ${body}`;
         };
       }
       if (!isStr2(op.new)) return bad2;
-      const replace = (text) => {
+      const replace = (text2) => {
         if (!isStr2(op.old) || !op.old) return bad2;
-        const count = text.split(op.old).length - 1;
+        const count = text2.split(op.old).length - 1;
         if (count === 0) return { result: "skill_no_match" };
         if (count > 1) return { result: "skill_ambiguous", count };
-        return text.replace(op.old, () => op.new);
+        return text2.replace(op.old, () => op.new);
       };
       if (op.file === void 0) {
         const body = replace(d.body);
@@ -86941,13 +86953,13 @@ ${body}`;
     function scanMemory(hermesHome) {
       const out = [];
       for (const [source2, file] of [["memory", "MEMORY.md"], ["user", "USER.md"]]) {
-        let text;
+        let text2;
         try {
-          text = (0, import_fs33.readFileSync)((0, import_path33.join)(hermesHome, "memories", file), "utf-8");
+          text2 = (0, import_fs33.readFileSync)((0, import_path33.join)(hermesHome, "memories", file), "utf-8");
         } catch {
           continue;
         }
-        parseMemoryEntries(text).forEach((entry, i) => {
+        parseMemoryEntries(text2).forEach((entry, i) => {
           out.push({ id: `${source2}:${i}`, source: source2, text: entry, forcedDiscard: detectCredential(entry) !== null });
         });
       }
@@ -87365,13 +87377,13 @@ ${body}`;
       }
     });
     function readTarget(value) {
-      const record2 = value && typeof value === "object" && !Array.isArray(value) ? value : null;
-      if (!record2) return null;
+      const record3 = value && typeof value === "object" && !Array.isArray(value) ? value : null;
+      if (!record3) return null;
       const target = {
-        coordinatorDaemonId: readText(record2.coordinatorDaemonId),
-        meshId: readText(record2.meshId),
-        nodeId: readText(record2.nodeId),
-        workspace: readText(record2.workspace)
+        coordinatorDaemonId: readText(record3.coordinatorDaemonId),
+        meshId: readText(record3.meshId),
+        nodeId: readText(record3.nodeId),
+        workspace: readText(record3.workspace)
       };
       return target.coordinatorDaemonId && target.meshId && target.nodeId && target.workspace ? target : null;
     }
@@ -87412,9 +87424,9 @@ ${body}`;
         }
       });
       const out = [];
-      for (const record2 of args.hostRecords) {
-        const meshId = readText(record2?.meshId);
-        const host = readText(record2?.hostDaemonId);
+      for (const record3 of args.hostRecords) {
+        const meshId = readText(record3?.meshId);
+        const host = readText(record3?.hostDaemonId);
         if (!meshId || !host || daemonIdsEquivalent4(host, self)) continue;
         let nodes = [];
         try {
@@ -88058,15 +88070,15 @@ ${body}`;
         if (!(0, import_fs39.existsSync)(runtimesDir)) continue;
         for (const f of listDirFiles(runtimesDir)) {
           if (!f.path.endsWith(".json")) continue;
-          let record2 = null;
+          let record3 = null;
           try {
             const parsed = JSON.parse((0, import_fs39.readFileSync)(f.path, "utf-8"));
             const rec3 = parsed && typeof parsed === "object" ? parsed.record : null;
-            record2 = rec3 && typeof rec3 === "object" ? rec3 : null;
+            record3 = rec3 && typeof rec3 === "object" ? rec3 : null;
           } catch {
-            record2 = null;
+            record3 = null;
           }
-          candidates.push({ path: f.path, mtimeMs: f.mtimeMs, record: record2 });
+          candidates.push({ path: f.path, mtimeMs: f.mtimeMs, record: record3 });
         }
       }
       const expired = selectExpiredSessionHostRuntimes(candidates, now);
@@ -88229,13 +88241,13 @@ ${body}`;
       const { meshId, records, activeWorkSessionIds, ttlMs, now } = args;
       const plan = { reap: [], skipped: [] };
       if (!Array.isArray(records) || ttlMs <= 0) return plan;
-      for (const record2 of records) {
-        const sessionId = readStringValue2(record2?.sessionId);
+      for (const record3 of records) {
+        const sessionId = readStringValue2(record3?.sessionId);
         if (!sessionId) continue;
-        const meta = record2?.meta && typeof record2.meta === "object" ? record2.meta : {};
+        const meta = record3?.meta && typeof record3.meta === "object" ? record3.meta : {};
         const skip = (reason, idleMs2) => plan.skipped.push({ sessionId, reason, ...idleMs2 !== void 0 ? { idleMs: idleMs2 } : {} });
-        const surfaceKind = readStringValue2(record2?.surfaceKind);
-        const lifecycle = readStringValue2(record2?.lifecycle);
+        const surfaceKind = readStringValue2(record3?.surfaceKind);
+        const lifecycle = readStringValue2(record3?.lifecycle);
         if (surfaceKind && surfaceKind !== "live_runtime" || lifecycle && lifecycle !== "running" && lifecycle !== "starting") {
           skip("not_live_runtime");
           continue;
@@ -88253,7 +88265,7 @@ ${body}`;
           skip("other_mesh");
           continue;
         }
-        const lastActivityAt = typeof record2?.lastActivityAt === "number" && Number.isFinite(record2.lastActivityAt) ? record2.lastActivityAt : void 0;
+        const lastActivityAt = typeof record3?.lastActivityAt === "number" && Number.isFinite(record3.lastActivityAt) ? record3.lastActivityAt : void 0;
         if (lastActivityAt === void 0) {
           skip("missing_last_activity");
           continue;
@@ -88626,9 +88638,9 @@ ${body}`;
         ...reviewAts.length ? { reviewAts } : {}
       };
     }
-    function matchesAssistantRestore(entry, record2) {
+    function matchesAssistantRestore(entry, record3) {
       const sid = entry?.sessionId;
-      const rid = record2?.runtimeId;
+      const rid = record3?.runtimeId;
       return typeof sid === "string" && sid.length > 0 && typeof rid === "string" && rid === sid;
     }
     function findAssistantRestoreRecord(entry, records) {
@@ -88846,10 +88858,10 @@ ${body}`;
       }
       const head = parts.length > 0 ? `[Mesh] active ${total}: ${parts.join(", ")}` : `[Mesh] active ${total}`;
       const entries = [];
-      const sorted = inputs.activeWork.filter((record2) => typeof record2?.taskId === "string" && record2.taskId.trim()).slice().sort((a, b) => (STATUS_ACTIONABILITY_RANK[a.status] ?? 99) - (STATUS_ACTIONABILITY_RANK[b.status] ?? 99));
-      for (const record2 of sorted) {
-        const id22 = record2.taskId.trim().slice(0, TASK_ID_PREFIX_CHARS);
-        entries.push(`${id22} ${record2.status}`);
+      const sorted = inputs.activeWork.filter((record3) => typeof record3?.taskId === "string" && record3.taskId.trim()).slice().sort((a, b) => (STATUS_ACTIONABILITY_RANK[a.status] ?? 99) - (STATUS_ACTIONABILITY_RANK[b.status] ?? 99));
+      for (const record3 of sorted) {
+        const id22 = record3.taskId.trim().slice(0, TASK_ID_PREFIX_CHARS);
+        entries.push(`${id22} ${record3.status}`);
       }
       if (entries.length === 0) return clampToBound(head);
       let line = head;
@@ -89205,11 +89217,11 @@ ${body}`;
       const s2 = String(slug ?? "").toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64);
       return s2 || "project";
     }
-    function defangRelayBody(text) {
-      return text.replace(/\[\s*\/\s*relay\s*\]/gi, "[/relay (quoted)]").replace(/\[(\s*)(ADHDev)\b/gi, "[$1quoted $2").replace(/^\[(\s*)project\b/gim, "[$1quoted project");
+    function defangRelayBody(text2) {
+      return text2.replace(/\[\s*\/\s*relay\s*\]/gi, "[/relay (quoted)]").replace(/\[(\s*)(ADHDev)\b/gi, "[$1quoted $2").replace(/^\[(\s*)project\b/gim, "[$1quoted project");
     }
-    function compactRelayBody(text, max = RELAY_BODY_MAX_CHARS) {
-      const body = String(text ?? "").replace(/\r\n?/g, "\n").trim();
+    function compactRelayBody(text2, max = RELAY_BODY_MAX_CHARS) {
+      const body = String(text2 ?? "").replace(/\r\n?/g, "\n").trim();
       if (!body) return "(no coordinator message found \u2014 use project_read)";
       const points = Array.from(body);
       if (points.length <= max) return body;
@@ -89603,12 +89615,12 @@ ${body}`;
       const messages = Array.isArray(readChat2.messages) ? readChat2.messages : [];
       const visible = messages.filter(isVisible);
       const picked = visible.slice(-tail).map((m) => {
-        const text = messageText(m);
-        const truncated = text.length > maxChars;
+        const text2 = messageText(m);
+        const truncated = text2.length > maxChars;
         const at = typeof m.timestamp === "number" ? new Date(m.timestamp).toISOString() : readText3(m.timestamp) || readText3(m.createdAt) || void 0;
         return {
           role: readText3(m.role).toLowerCase() === "user" ? "user" : "assistant",
-          text: truncated ? `${text.slice(0, maxChars)}\u2026` : text,
+          text: truncated ? `${text2.slice(0, maxChars)}\u2026` : text2,
           ...truncated ? { truncated: true } : {},
           ...at ? { at } : {}
         };
@@ -89990,10 +90002,10 @@ ${body}`;
            * Human input into the assistant under `busyInputMode` (§4.3 table).
            * Refusals are returned as is — never retried under another mode.
            */
-          async submitHuman(text, opts) {
+          async submitHuman(text2, opts) {
             const sid = this.ports.assistantSessionId();
             if (!sid) return { kind: "refused", reason: "no_target" };
-            const outcome = await this.ports.submit(sid, { text, messageId: opts.messageId, policy: busyInputModeToSendPolicy(opts.busyInputMode) });
+            const outcome = await this.ports.submit(sid, { text: text2, messageId: opts.messageId, policy: busyInputModeToSendPolicy(opts.busyInputMode) });
             this.recordHumanSubmit([sid], opts.messageId, outcome);
             return outcome;
           }
@@ -90311,8 +90323,8 @@ ${body}`;
             this.kick();
           }
           // ── delivery ────────────────────────────────────────────────────────────
-          pushLine(source2, text, meshId) {
-            this.queue.push({ kind: "line", source: source2, text, messageId: `signal:${source2}:${meshId ?? "-"}:${this.clock.now()}:${++this.seq}`, ...meshId ? { meshId } : {} });
+          pushLine(source2, text2, meshId) {
+            this.queue.push({ kind: "line", source: source2, text: text2, messageId: `signal:${source2}:${meshId ?? "-"}:${this.clock.now()}:${++this.seq}`, ...meshId ? { meshId } : {} });
             this.kick();
           }
           kick() {
@@ -90340,8 +90352,8 @@ ${body}`;
             const messageId = parts.length === 1 ? parts[0].messageId : `${parts[0].messageId}+${parts.length - 1}`;
             const missed = this.missedReportsIncluding(taken, parts);
             const gap = parts.some((p) => p.source === "review") ? "" : this.newGapLine(sid, missed, taken, parts);
-            const text = [...parts.map((p) => p.text), ...gap ? [gap] : []].join("\n\n");
-            const outcome = await this.ports.submit(sid, { text, messageId, policy: { mode: "queue" } });
+            const text2 = [...parts.map((p) => p.text), ...gap ? [gap] : []].join("\n\n");
+            const outcome = await this.ports.submit(sid, { text: text2, messageId, policy: { mode: "queue" } });
             if (outcome.kind === "refused") return;
             this.commitTaken(taken, parts, sid);
             if (gap) this.rememberGaps(sid, missed);
@@ -90391,8 +90403,8 @@ ${body}`;
               size += cost;
             }
             for (const [meshId, count] of folded) {
-              const text = buildFoldedBacklogLine(this.ports.projectSlug(meshId) ?? meshId, count);
-              parts.push({ text, source: "relay", messageId: `fold:${meshId}:${now}`, meshId });
+              const text2 = buildFoldedBacklogLine(this.ports.projectSlug(meshId) ?? meshId, count);
+              parts.push({ text: text2, source: "relay", messageId: `fold:${meshId}:${now}`, meshId });
             }
             return { taken, parts };
           }
@@ -90495,14 +90507,14 @@ ${body}`;
             const lastAttempt = item.attemptIds[item.attemptIds.length - 1];
             const remote = this.remote.get(item.meshId);
             const bodies = await this.bodiesFor(item);
-            const text = buildRelayEnvelope({
+            const text2 = buildRelayEnvelope({
               slug: this.ports.projectSlug(item.meshId) ?? item.meshId,
               outcome: item.outcome,
               bodies,
               statusLine: remote ? remote.statusLine : this.ports.meshStatusLine?.(item.meshId) ?? null,
               idle: item.idle
             });
-            return { text, source: "relay", messageId: relayMessageId(item.meshId, lastAttempt), meshId: item.meshId };
+            return { text: text2, source: "relay", messageId: relayMessageId(item.meshId, lastAttempt), meshId: item.meshId };
           }
         };
       }
@@ -91621,18 +91633,18 @@ ${body}`;
       selectOpenRefineDispatches: () => selectOpenRefineDispatches,
       shouldNotifyRefineCloseOut: () => shouldNotifyRefineCloseOut
     });
-    function classifyRefineDispatch(record2, opts) {
-      if (opts.isRunning(record2.nodeId)) return void 0;
-      const dispatchedAtMs = new Date(record2.timestamp).getTime();
+    function classifyRefineDispatch(record3, opts) {
+      if (opts.isRunning(record3.nodeId)) return void 0;
+      const dispatchedAtMs = new Date(record3.timestamp).getTime();
       const ageMs2 = Number.isFinite(dispatchedAtMs) ? opts.nowMs - dispatchedAtMs : void 0;
-      const base = { nodeId: record2.nodeId, jobId: record2.jobId, ...ageMs2 !== void 0 ? { ageMs: ageMs2 } : {} };
-      if (!opts.nodeExists(record2.nodeId)) {
+      const base = { nodeId: record3.nodeId, jobId: record3.jobId, ...ageMs2 !== void 0 ? { ageMs: ageMs2 } : {} };
+      if (!opts.nodeExists(record3.nodeId)) {
         return { ...base, disposition: "close_removed_node" };
       }
       if (opts.executorLiveness) {
         let liveness;
         try {
-          liveness = opts.executorLiveness(record2);
+          liveness = opts.executorLiveness(record3);
         } catch {
           liveness = "unknown";
         }
@@ -91796,15 +91808,15 @@ ${body}`;
         args.entries
       );
       let newest = null;
-      for (const record2 of open) {
-        if (record2.nodeId !== nodeId) continue;
-        if (args.excludeJobId && record2.jobId === args.excludeJobId) continue;
-        const dispatchedAt = Date.parse(record2.timestamp);
+      for (const record3 of open) {
+        if (record3.nodeId !== nodeId) continue;
+        if (args.excludeJobId && record3.jobId === args.excludeJobId) continue;
+        const dispatchedAt = Date.parse(record3.timestamp);
         if (!Number.isFinite(dispatchedAt)) continue;
         const ageMs2 = args.nowMs - dispatchedAt;
         if (ageMs2 > freshnessMs) continue;
         if (!newest || dispatchedAt > Date.parse(newest.timestamp)) {
-          newest = { nodeId: record2.nodeId, jobId: record2.jobId, timestamp: record2.timestamp, ageMs: ageMs2 };
+          newest = { nodeId: record3.nodeId, jobId: record3.jobId, timestamp: record3.timestamp, ageMs: ageMs2 };
         }
       }
       return newest;
@@ -93508,14 +93520,14 @@ ${e?.stderr || ""}`;
         try {
           const liveSessions = await self.deps.sessionHostControl.listSessions();
           const workspace = typeof node.workspace === "string" ? node.workspace : "";
-          refineSessionIds = liveSessions.filter((record2) => {
-            const sid = typeof record2?.sessionId === "string" ? record2.sessionId : "";
+          refineSessionIds = liveSessions.filter((record3) => {
+            const sid = typeof record3?.sessionId === "string" ? record3.sessionId : "";
             if (!sid) return false;
-            if (readStringValue(record2?.meta?.meshCoordinatorFor) === meshId) return false;
-            const boundToNode = readStringValue(record2?.meta?.meshNodeId) === nodeId;
-            const matchedByWorkspace = !!workspace && record2?.workspace === workspace;
+            if (readStringValue(record3?.meta?.meshCoordinatorFor) === meshId) return false;
+            const boundToNode = readStringValue(record3?.meta?.meshNodeId) === nodeId;
+            const matchedByWorkspace = !!workspace && record3?.workspace === workspace;
             return boundToNode || matchedByWorkspace;
-          }).map((record2) => String(record2.sessionId));
+          }).map((record3) => String(record3.sessionId));
         } catch {
           refineSessionIds = void 0;
         }
@@ -95117,11 +95129,11 @@ ${tail}` : ""
         return label2 ? { label: label2 } : null;
       }
       if (!raw || typeof raw !== "object") return null;
-      const record2 = raw;
-      const label = readString2(record2.label);
+      const record3 = raw;
+      const label = readString2(record3.label);
       if (!label) return null;
-      const description = readString2(record2.description);
-      const preview = readString2(record2.preview);
+      const description = readString2(record3.description);
+      const preview = readString2(record3.preview);
       return {
         label,
         ...description ? { description } : {},
@@ -95130,63 +95142,76 @@ ${tail}` : ""
     }
     function normalizeQuestion(raw, index) {
       if (!raw || typeof raw !== "object") return null;
-      const record2 = raw;
-      const question = readString2(record2.question);
+      const record3 = raw;
+      const question = readString2(record3.question);
       if (!question) return null;
-      const questionId = readString2(record2.questionId) || readString2(record2.id) || `q${index + 1}`;
-      const options = Array.isArray(record2.options) ? record2.options.map(normalizeOption).filter((item) => !!item) : [];
-      const header = readString2(record2.header);
+      const questionId = readString2(record3.questionId) || readString2(record3.id) || `q${index + 1}`;
+      const options = Array.isArray(record3.options) ? record3.options.map(normalizeOption).filter((item) => !!item) : [];
+      const header = readString2(record3.header);
       return {
         questionId,
         question,
         ...header ? { header } : {},
-        multiSelect: record2.multiSelect === true,
+        multiSelect: record3.multiSelect === true,
         options,
-        ...record2.allowFreeform === true ? { allowFreeform: true } : {}
+        ...record3.allowFreeform === true ? { allowFreeform: true } : {}
       };
     }
     function normalizeInteractivePrompt(raw) {
       if (!raw || typeof raw !== "object") return null;
-      const record2 = raw;
-      const promptId = readString2(record2.promptId);
-      const providerType = readString2(record2.providerType);
-      const origin = record2.origin === "mcp" || record2.origin === "agent" ? record2.origin : "cli";
-      const questions = Array.isArray(record2.questions) ? record2.questions.map(normalizeQuestion).filter((item) => !!item) : [];
+      const record3 = raw;
+      const promptId = readString2(record3.promptId);
+      const providerType = readString2(record3.providerType);
+      const origin = record3.origin === "mcp" || record3.origin === "agent" ? record3.origin : "cli";
+      const questions = Array.isArray(record3.questions) ? record3.questions.map(normalizeQuestion).filter((item) => !!item) : [];
       if (!promptId || !providerType || questions.length === 0) return null;
-      const createdAt = typeof record2.createdAt === "number" && Number.isFinite(record2.createdAt) ? record2.createdAt : Date.now();
+      const createdAt = typeof record3.createdAt === "number" && Number.isFinite(record3.createdAt) ? record3.createdAt : Date.now();
       return { promptId, origin, providerType, createdAt, questions };
     }
     function normalizeInteractivePromptResponse(raw) {
       if (!raw || typeof raw !== "object") throw new Error("Interactive prompt response must be an object");
-      const record2 = raw;
-      const promptId = readString2(record2.promptId);
+      const record3 = raw;
+      const promptId = readString2(record3.promptId);
       if (!promptId) throw new Error("promptId must be a non-empty string");
-      if (!record2.answers || typeof record2.answers !== "object" || Array.isArray(record2.answers)) {
+      if (!record3.answers || typeof record3.answers !== "object" || Array.isArray(record3.answers)) {
         throw new Error("answers must be an object");
       }
-      const answers = {};
-      for (const [questionId, answerRaw] of Object.entries(record2.answers)) {
+      const answers = /* @__PURE__ */ Object.create(null);
+      for (const [questionId, answerRaw] of Object.entries(record3.answers)) {
         if (!answerRaw || typeof answerRaw !== "object" || Array.isArray(answerRaw)) continue;
         const answer = answerRaw;
-        const selectedLabels = readStringArray2(answer.selectedLabels);
+        const selectedLabels = record3.binding && Array.isArray(answer.selectedLabels) ? answer.selectedLabels.slice() : readStringArray2(answer.selectedLabels);
         const freeformText = readString2(answer.freeformText);
         answers[questionId] = {
           selectedLabels,
           ...freeformText ? { freeformText } : {}
         };
       }
-      return { promptId, answers };
+      if (record3.binding) {
+        if (!record3.answers || Array.isArray(record3.answers)) throw new Error("Native answers must be keyed by question id");
+        for (const raw2 of Object.values(record3.answers)) {
+          if (!raw2 || typeof raw2 !== "object" || Array.isArray(raw2)) throw new Error("Malformed native answer");
+          const answer = raw2;
+          if (!Array.isArray(answer.selectedLabels) || answer.selectedLabels.some((label) => typeof label !== "string") || new Set(answer.selectedLabels).size !== answer.selectedLabels.length || answer.freeformText !== void 0 && typeof answer.freeformText !== "string") throw new Error("Malformed or duplicate native answer");
+        }
+      }
+      return {
+        promptId,
+        answers,
+        ...record3.binding ? { binding: record3.binding } : {},
+        ...record3.action === "dismiss" ? { action: "dismiss" } : {}
+      };
     }
     function resolveInteractivePromptResponse(prompt, raw) {
       if (!raw || typeof raw !== "object") throw new Error("Interactive prompt response must be an object");
-      const record2 = raw;
-      const promptId = readString2(record2.promptId);
+      const record3 = raw;
+      const promptId = readString2(record3.promptId);
       if (!promptId) throw new Error("promptId must be a non-empty string");
       if (promptId !== prompt.promptId) throw new Error("Interactive prompt response does not match active prompt");
-      if (record2.answers && typeof record2.answers === "object" && !Array.isArray(record2.answers)) {
-        return normalizeInteractivePromptResponse(record2);
+      if (record3.answers && typeof record3.answers === "object" && !Array.isArray(record3.answers)) {
+        return normalizeInteractivePromptResponse(record3);
       }
-      if (!Array.isArray(record2.answers)) throw new Error("answers must be an array or a questionId-keyed object");
+      if (!Array.isArray(record3.answers)) throw new Error("answers must be an array or a questionId-keyed object");
       const resolveOneLabel = (question, sel) => {
         if (typeof sel === "number" && Number.isFinite(sel)) {
           const idx = Math.trunc(sel) - 1;
@@ -95206,7 +95231,7 @@ ${tail}` : ""
         throw new Error(`Unknown option for ${question.questionId}: ${label}`);
       };
       const answers = {};
-      const entries = record2.answers;
+      const entries = record3.answers;
       entries.forEach((entryRaw, index) => {
         const entry = entryRaw && typeof entryRaw === "object" && !Array.isArray(entryRaw) ? entryRaw : { select: entryRaw };
         const questionId = readString2(entry.questionId);
@@ -95233,9 +95258,9 @@ ${tail}` : ""
     }
     function interactivePromptContentFingerprint(questions) {
       let hash = 2166136261;
-      const mix = (text) => {
-        for (let i = 0; i < text.length; i += 1) {
-          hash ^= text.charCodeAt(i);
+      const mix = (text2) => {
+        for (let i = 0; i < text2.length; i += 1) {
+          hash ^= text2.charCodeAt(i);
           hash = Math.imul(hash, 16777619) >>> 0;
         }
       };
@@ -95332,9 +95357,9 @@ ${tail}` : ""
       }
       return headers;
     }
-    function isClaudeTuiSelectFooter(text) {
-      if (/Enter to select/i.test(text)) return true;
-      return claudeTuiChecklistOptionPattern().test(text);
+    function isClaudeTuiSelectFooter(text2) {
+      if (/Enter to select/i.test(text2)) return true;
+      return claudeTuiChecklistOptionPattern().test(text2);
     }
     function claudeTuiChecklistOptionPattern() {
       const optionCheckbox = "(?:\\[[ xX]\\]|[\u2610\u2612\u25FB\u25FC])";
@@ -95609,8 +95634,8 @@ ${tail}` : ""
     }
     function interactivePromptFromClaudeAskUserQuestion(input, options) {
       if (!input || typeof input !== "object") return null;
-      const record2 = input;
-      const questions = Array.isArray(record2.questions) ? record2.questions.map(normalizeQuestion).filter((item) => !!item) : [];
+      const record3 = input;
+      const questions = Array.isArray(record3.questions) ? record3.questions.map(normalizeQuestion).filter((item) => !!item) : [];
       if (questions.length === 0) return null;
       return {
         promptId: options.promptId,
@@ -95622,20 +95647,20 @@ ${tail}` : ""
     }
     function detectClaudeAskUserQuestionPromptFromJson(value, providerType = "claude-cli") {
       if (!value || typeof value !== "object") return null;
-      const record2 = value;
+      const record3 = value;
       const blocks = [];
-      if (Array.isArray(record2.content)) blocks.push(...record2.content);
-      const message = record2.message;
+      if (Array.isArray(record3.content)) blocks.push(...record3.content);
+      const message = record3.message;
       if (message && typeof message === "object" && Array.isArray(message.content)) {
         blocks.push(...message.content);
       }
-      if (record2.type === "tool_use") blocks.push(record2);
+      if (record3.type === "tool_use") blocks.push(record3);
       for (const block2 of blocks) {
         if (!block2 || typeof block2 !== "object") continue;
         const b = block2;
         const name = readString2(b.name);
         if (b.type !== "tool_use" || name !== "AskUserQuestion") continue;
-        const id22 = readString2(b.id) || readString2(record2.id) || `ask-user-${Date.now()}`;
+        const id22 = readString2(b.id) || readString2(record3.id) || `ask-user-${Date.now()}`;
         const prompt = interactivePromptFromClaudeAskUserQuestion(b.input, {
           promptId: id22,
           providerType,
@@ -96774,18 +96799,18 @@ ${tail}` : ""
       let lastUsageAt = 0;
       let model;
       for (let i = 0; i < records.length; i += 1) {
-        const record2 = records[i];
-        if (record2.receivedAt > lastUsageAt) lastUsageAt = record2.receivedAt;
-        if (record2.model) model = record2.model;
-        if (record2.mode === "cumulative") {
-          const newer = latestCumulative === null || record2.receivedAt > latestCumulative.receivedAt || record2.receivedAt === latestCumulative.receivedAt && i > latestCumulativeIndex;
+        const record3 = records[i];
+        if (record3.receivedAt > lastUsageAt) lastUsageAt = record3.receivedAt;
+        if (record3.model) model = record3.model;
+        if (record3.mode === "cumulative") {
+          const newer = latestCumulative === null || record3.receivedAt > latestCumulative.receivedAt || record3.receivedAt === latestCumulative.receivedAt && i > latestCumulativeIndex;
           if (newer) {
-            latestCumulative = record2;
+            latestCumulative = record3;
             latestCumulativeIndex = i;
           }
           continue;
         }
-        addInto(deltas, record2);
+        addInto(deltas, record3);
       }
       const total = { ...ZERO };
       if (latestCumulative) replaceWith(total, latestCumulative);
@@ -97546,8 +97571,8 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           };
         }
       }
-      const text = typeof err === "string" ? err : typeof err.message === "string" ? err.message : typeof err.error === "string" ? err.error : "";
-      const match = TOKEN_RE.exec(text);
+      const text2 = typeof err === "string" ? err : typeof err.message === "string" ? err.message : typeof err.error === "string" ? err.error : "";
+      const match = TOKEN_RE.exec(text2);
       if (!match) return null;
       return {
         currentTaskId: match[1],
@@ -97602,13 +97627,13 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     }
     function summarizeMeshCommandResult(command, result) {
       if (command === "git_status") return summarizeMeshCommandGitResult(result);
-      const record2 = asRecord4(result);
+      const record3 = asRecord4(result);
       if (command === "mesh_status") {
-        const nodes = Array.isArray(record2.nodes) ? record2.nodes : [];
+        const nodes = Array.isArray(record3.nodes) ? record3.nodes : [];
         return {
-          success: record2.success,
-          meshId: record2.meshId ?? null,
-          sourceOfTruth: record2.sourceOfTruth ?? null,
+          success: record3.success,
+          meshId: record3.meshId ?? null,
+          sourceOfTruth: record3.sourceOfTruth ?? null,
           nodeCount: nodes.length,
           nodes: nodes.map((node) => ({
             nodeId: node?.nodeId ?? node?.id ?? null,
@@ -98505,12 +98530,12 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           machine.start?.();
         };
         const onMessage = (data) => {
-          const text = rawDataToString(data);
-          if (text === null) {
+          const text2 = rawDataToString(data);
+          if (text2 === null) {
             applyStep(machine.onFrame({}));
             return;
           }
-          applyStep(machine.onFrame(text));
+          applyStep(machine.onFrame(text2));
         };
         const onClose = () => {
           settleFail("socket_closed");
@@ -99815,7 +99840,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       * 2. Insert text via Input.insertText
       * 3. Send Enter via Input.dispatchKeyEvent
       */
-      async typeAndSend(selector, text) {
+      async typeAndSend(selector, text2) {
         if (!this.isConnected) return false;
         const focusResult = await this.evaluate(`(() => {
             const e = document.querySelector(${JSON.stringify(selector)});
@@ -99844,7 +99869,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           clickCount: 1
         });
         await new Promise((r) => setTimeout(r, 150));
-        const lines = text.split("\n");
+        const lines = text2.split("\n");
         for (let i = 0; i < lines.length; i++) {
           if (lines[i].length > 0) {
             await this.sendInternal("Input.insertText", { text: lines[i] });
@@ -99880,14 +99905,14 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           code: "Enter",
           windowsVirtualKeyCode: 13
         });
-        this.log(`[CDP] typeAndSend: sent "${text.substring(0, 50)}..."`);
+        this.log(`[CDP] typeAndSend: sent "${text2.substring(0, 50)}..."`);
         return true;
       }
       /**
       * Coordinate-based typeAndSend — for input fields inside webview iframe
       * Receives coordinates directly instead of selector for click+input+Enter
       */
-      async typeAndSendAt(x, y, text) {
+      async typeAndSendAt(x, y, text2) {
         if (!this.isConnected) return false;
         await this.sendInternal("Input.dispatchMouseEvent", {
           type: "mousePressed",
@@ -99932,7 +99957,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           windowsVirtualKeyCode: 8
         });
         await new Promise((r) => setTimeout(r, 150));
-        const lines = text.split("\n");
+        const lines = text2.split("\n");
         for (let i = 0; i < lines.length; i++) {
           if (lines[i].length > 0) {
             await this.sendInternal("Input.insertText", { text: lines[i] });
@@ -99968,7 +99993,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           code: "Enter",
           windowsVirtualKeyCode: 13
         });
-        this.log(`[CDP] typeAndSendAt(${Math.round(x)},${Math.round(y)}): sent "${text.substring(0, 50)}..."`);
+        this.log(`[CDP] typeAndSendAt(${Math.round(x)},${Math.round(y)}): sent "${text2.substring(0, 50)}..."`);
         return true;
       }
       /**
@@ -100727,12 +100752,12 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           const owner = isRemoteOwner ? resolvedOwner : void 0;
           const envelope = callerOpts?.envelope;
           const opts = owner || envelope ? { ...owner ? { owner } : {}, ...envelope ? { envelope } : {} } : void 0;
-          const text = isRemoteOwner && SUMMARY_REF_KINDS.has(withAttempt.kind) ? handoffTextOf(envelope) : void 0;
-          if (!text || !deps.appendHandoff) {
+          const text2 = isRemoteOwner && SUMMARY_REF_KINDS.has(withAttempt.kind) ? handoffTextOf(envelope) : void 0;
+          if (!text2 || !deps.appendHandoff) {
             runObserve(withAttempt, opts);
             return;
           }
-          deps.appendHandoff(owner.meshId, TURN_EVIDENCE_HANDOFF_KIND, { text, notice: envelope?.notice ?? {} }).then(
+          deps.appendHandoff(owner.meshId, TURN_EVIDENCE_HANDOFF_KIND, { text: text2, notice: envelope?.notice ?? {} }).then(
             (ref) => runObserve({ ...withAttempt, summary: ref }, opts),
             () => runObserve(withAttempt, opts)
           );
@@ -101435,16 +101460,16 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       return lines.join("\n");
     }
     function looksLikeActiveApprovalPromptText(content) {
-      const text = content.trim();
-      if (!text || text.length > 2e3) return false;
-      const hasApprovalQuestion = /do you want to (?:proceed|allow|run|make this edit|create)/i.test(text) || /this command requires approval/i.test(text) || /quick safety check/i.test(text) || /is this a project you trust/i.test(text);
-      const hasNumberedChoices = /^\s*[❯›>]?\s*1[.)]\s+(?:yes|allow|proceed|run)/im.test(text) || /^\s*1[.)]\s+yes\b/im.test(text);
+      const text2 = content.trim();
+      if (!text2 || text2.length > 2e3) return false;
+      const hasApprovalQuestion = /do you want to (?:proceed|allow|run|make this edit|create)/i.test(text2) || /this command requires approval/i.test(text2) || /quick safety check/i.test(text2) || /is this a project you trust/i.test(text2);
+      const hasNumberedChoices = /^\s*[❯›>]?\s*1[.)]\s+(?:yes|allow|proceed|run)/im.test(text2) || /^\s*1[.)]\s+yes\b/im.test(text2);
       if (hasApprovalQuestion && hasNumberedChoices) return true;
-      const lastLines = text.split(/\r?\n/).slice(-12).join("\n");
+      const lastLines = text2.split(/\r?\n/).slice(-12).join("\n");
       const hasDontAskAgain = /yes.*don'?t ask again/i.test(lastLines) || /yes.*always allow/i.test(lastLines);
       const hasNoOption = /^\s*[❯›>]?\s*\d+[.)]\s+no\b/im.test(lastLines);
       if (hasDontAskAgain && hasNoOption) return true;
-      if (/what do you want to do\?/i.test(text) && /^\s*\d+[.)]\s+\S/m.test(text)) return true;
+      if (/what do you want to do\?/i.test(text2) && /^\s*\d+[.)]\s+\S/m.test(text2)) return true;
       return false;
     }
     init_provider_patch_state();
@@ -102942,9 +102967,9 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       const typedProvider = provider;
       const controls = Array.isArray(provider.controls) ? provider.controls : [];
       if (category === "cli") {
-        const spawn8 = provider.spawn;
-        const command = spawn8 && typeof spawn8 === "object" ? spawn8.command : void 0;
-        if (!spawn8 || typeof spawn8 !== "object") {
+        const spawn9 = provider.spawn;
+        const command = spawn9 && typeof spawn9 === "object" ? spawn9.command : void 0;
+        if (!spawn9 || typeof spawn9 !== "object") {
           errors.push(`${String(category).toUpperCase()}/CLI providers must have spawn config`);
         } else if (typeof command !== "string" || !command.trim()) {
           errors.push("spawn.command is required");
@@ -103592,10 +103617,10 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       if (stat2.size < cached5.committedBytes) return false;
       return true;
     }
-    function parseJsonlInto(out, text) {
-      const lastNewline = text.lastIndexOf("\n");
-      const settled = lastNewline >= 0 ? text.slice(0, lastNewline + 1) : "";
-      const fragment = lastNewline >= 0 ? text.slice(lastNewline + 1) : text;
+    function parseJsonlInto(out, text2) {
+      const lastNewline = text2.lastIndexOf("\n");
+      const settled = lastNewline >= 0 ? text2.slice(0, lastNewline + 1) : "";
+      const fragment = lastNewline >= 0 ? text2.slice(lastNewline + 1) : text2;
       for (const line of settled.split("\n")) {
         const trimmed2 = line.trim();
         if (!trimmed2) continue;
@@ -103671,16 +103696,16 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
           return lines;
         }
       }
-      let text;
+      let text2;
       try {
-        text = fs28.readFileSync(p, "utf8");
+        text2 = fs28.readFileSync(p, "utf8");
         parsedJsonlCacheStats.fileReads++;
       } catch {
         return [];
       }
       parsedJsonlCacheStats.parsePasses++;
       const out = [];
-      const parsed = parseJsonlInto(out, text);
+      const parsed = parseJsonlInto(out, text2);
       storeParsedJsonlCache(p, {
         signature,
         sourceBytes: stat2.size,
@@ -104117,9 +104142,9 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
           const buf = Buffer.alloc(8192);
           const bytes = fs29.readSync(fd, buf, 0, buf.length, 0);
           if (bytes <= 0) return null;
-          const text = buf.subarray(0, bytes).toString("utf8");
-          const nl = text.indexOf("\n");
-          const firstLine = (nl >= 0 ? text.slice(0, nl) : text).trim();
+          const text2 = buf.subarray(0, bytes).toString("utf8");
+          const nl = text2.indexOf("\n");
+          const firstLine = (nl >= 0 ? text2.slice(0, nl) : text2).trim();
           if (!firstLine) return null;
           const parsed = JSON.parse(firstLine);
           if (String(parsed.type ?? "") !== "session_meta") return null;
@@ -104214,13 +104239,13 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
     var MIN_SNIPPET_CHARS = 8;
     var MAX_SNIPPET_CHARS = 80;
     var promptsByInstance = /* @__PURE__ */ new Map();
-    function promptSnippet(text) {
-      const line = String(text || "").split("\n").map((l) => l.replace(/\s+/g, " ").trim()).find(Boolean) || "";
+    function promptSnippet(text2) {
+      const line = String(text2 || "").split("\n").map((l) => l.replace(/\s+/g, " ").trim()).find(Boolean) || "";
       return line.length >= MIN_SNIPPET_CHARS ? line.slice(0, MAX_SNIPPET_CHARS) : "";
     }
-    function recordSentPrompt(instanceId, text) {
+    function recordSentPrompt(instanceId, text2) {
       const id22 = typeof instanceId === "string" ? instanceId.trim() : "";
-      const snippet2 = promptSnippet(text);
+      const snippet2 = promptSnippet(text2);
       if (!id22 || !snippet2) return;
       const list = promptsByInstance.get(id22) ?? [];
       if (list[list.length - 1] !== snippet2) list.push(snippet2);
@@ -104243,17 +104268,17 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
     var fs30 = __toESM2(require("fs"));
     init_load_better_sqlite3();
     init_message_source_address();
-    function jsonPathGet(record2, expr) {
+    function jsonPathGet(record3, expr) {
       if (typeof expr !== "string") return void 0;
       if (expr.includes("||")) {
         for (const alt of expr.split("||")) {
-          const v = jsonPathGet(record2, alt.trim());
+          const v = jsonPathGet(record3, alt.trim());
           if (v != null && v !== "") return v;
         }
         return void 0;
       }
       if (!expr.startsWith("$")) return expr;
-      let cur = record2;
+      let cur = record3;
       let i = 1;
       while (i < expr.length && cur != null) {
         const ch = expr[i];
@@ -104347,19 +104372,19 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
     function formatToolCallArgs(input) {
       if (input == null) return "";
       if (typeof input !== "object" || Array.isArray(input)) return stringifyContent(input);
-      const record2 = input;
+      const record3 = input;
       const primaryText = (value) => {
         if (typeof value === "string") return value.trim();
         if (Array.isArray(value) && value.length && value.every((v) => typeof v === "string")) return value.join(" ").trim();
         return "";
       };
-      const primaryKey = PRIMARY_TOOL_ARG_KEYS.find((key2) => primaryText(record2[key2]));
+      const primaryKey = PRIMARY_TOOL_ARG_KEYS.find((key2) => primaryText(record3[key2]));
       if (primaryKey) {
-        const primary = primaryText(record2[primaryKey]);
-        const description = typeof record2.description === "string" ? record2.description.trim() : "";
+        const primary = primaryText(record3[primaryKey]);
+        const description = typeof record3.description === "string" ? record3.description.trim() : "";
         return description ? `${primary} \u2014 ${description}` : primary;
       }
-      const pairs2 = Object.entries(record2).filter(([, value]) => value !== void 0 && value !== null && value !== "").map(([key2, value]) => `${key2}=${typeof value === "string" ? value : JSON.stringify(value)}`);
+      const pairs2 = Object.entries(record3).filter(([, value]) => value !== void 0 && value !== null && value !== "").map(([key2, value]) => `${key2}=${typeof value === "string" ? value : JSON.stringify(value)}`);
       return pairs2.join(" ");
     }
     function oneLine(s2, max) {
@@ -104374,9 +104399,9 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
           map: r.message_map
         }));
         return {
-          pick: (record2) => {
+          pick: (record3) => {
             for (const shape of compiled) {
-              if (!shape.where || shape.where(record2)) return { map: shape.map };
+              if (!shape.where || shape.where(record3)) return { map: shape.map };
             }
             return null;
           }
@@ -104385,9 +104410,9 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       const filter = src.message_filter ? compileWhere(src.message_filter.where) : null;
       const map2 = src.message_map;
       return {
-        pick: (record2) => {
+        pick: (record3) => {
           if (!map2) return null;
-          if (filter && !filter(record2)) return null;
+          if (filter && !filter(record3)) return null;
           return { map: map2 };
         }
       };
@@ -104398,15 +104423,15 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         where: r.where ? compileWhere(r.where) : null,
         map: r.usage_map
       }));
-      return (record2) => {
+      return (record3) => {
         for (const shape of compiled) {
-          if (!shape.where || shape.where(record2)) return shape.map;
+          if (!shape.where || shape.where(record3)) return shape.map;
         }
         return null;
       };
     }
-    function projectUsageRecord(record2, map2, sourceMtimeMs) {
-      const read = (p) => p ? jsonPathGet(record2, p) : void 0;
+    function projectUsageRecord(record3, map2, sourceMtimeMs) {
+      const read = (p) => p ? jsonPathGet(record3, p) : void 0;
       const input = read(map2.input_tokens);
       const output = read(map2.output_tokens);
       const cacheRead = read(map2.cache_read_tokens);
@@ -104429,20 +104454,20 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         receivedAt: parsedTs == null ? sourceMtimeMs : parsedTs
       };
     }
-    function projectMessages(record2, map2, index, total, sourceMtimeMs, sourceLineage) {
-      const roleRaw = jsonPathGet(record2, map2.role);
+    function projectMessages(record3, map2, index, total, sourceMtimeMs, sourceLineage) {
+      const roleRaw = jsonPathGet(record3, map2.role);
       const role = normalizeRole(roleRaw);
       let receivedAt = sourceMtimeMs - (total - 1 - index) * 1e3;
       if (map2.timestamp_ms) {
-        const tsRaw = jsonPathGet(record2, map2.timestamp_ms);
+        const tsRaw = jsonPathGet(record3, map2.timestamp_ms);
         const parsed = parseTimestamp(tsRaw);
         if (parsed != null) receivedAt = parsed;
       }
-      const kindRaw = map2.kind ? jsonPathGet(record2, map2.kind) : void 0;
+      const kindRaw = map2.kind ? jsonPathGet(record3, map2.kind) : void 0;
       const kind = typeof kindRaw === "string" && kindRaw ? kindRaw : "standard";
       const out = [];
       if (map2.tools) {
-        const recordTool = projectToolBlock(record2, map2.tools, {
+        const recordTool = projectToolBlock(record3, map2.tools, {
           sourceMtimeMs,
           recordIndex: index,
           blockIndex: -1
@@ -104452,9 +104477,9 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
           return out;
         }
       }
-      const workspaceRaw = map2.workspace ? jsonPathGet(record2, map2.workspace) : void 0;
+      const workspaceRaw = map2.workspace ? jsonPathGet(record3, map2.workspace) : void 0;
       const workspace = typeof workspaceRaw === "string" && workspaceRaw.trim() ? workspaceRaw.trim() : void 0;
-      const contentRaw = jsonPathGet(record2, map2.content);
+      const contentRaw = jsonPathGet(record3, map2.content);
       const content = cleanContent(stringifyContent(contentRaw), map2);
       if (content) {
         out.push(withRecordSource(
@@ -104542,7 +104567,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         }
         if (ands.length > 0) ors.push(ands);
       }
-      return (record2) => ors.some((ands) => ands.every((t) => evalTerm(t, record2)));
+      return (record3) => ors.some((ands) => ands.every((t) => evalTerm(t, record3)));
     }
     function parseTerm(src) {
       let s2 = src.trim();
@@ -104572,8 +104597,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       if (!Number.isNaN(n)) return n;
       return src;
     }
-    function evalTerm(t, record2) {
-      const lhs = jsonPathGet(record2, t.path);
+    function evalTerm(t, record3) {
+      const lhs = jsonPathGet(record3, t.path);
       const lit = t.lit;
       let result;
       switch (t.op) {
@@ -105155,9 +105180,9 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       return out;
     }
     function readSessionMetaWorkspace(lines) {
-      for (const record2 of lines.slice(0, 5)) {
-        if (String(record2?.type ?? "") !== "session_meta") continue;
-        const cwd = typeof record2?.payload?.cwd === "string" ? record2.payload.cwd.trim() : "";
+      for (const record3 of lines.slice(0, 5)) {
+        if (String(record3?.type ?? "") !== "session_meta") continue;
+        const cwd = typeof record3?.payload?.cwd === "string" ? record3.payload.cwd.trim() : "";
         if (cwd) return cwd;
       }
       return void 0;
@@ -105273,8 +105298,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         if (!block2 || typeof block2 !== "object") continue;
         const type2 = String(block2.type || "").trim();
         if (type2 === "text") {
-          const text = String(block2.text || "").trim();
-          if (text) parts.push({ content: text, kind: "standard", blockIndex, truncated: false });
+          const text2 = String(block2.text || "").trim();
+          if (text2) parts.push({ content: text2, kind: "standard", blockIndex, truncated: false });
         } else if (type2 === "tool_use") {
           const name = String(block2.name || "").trim() || "Tool";
           const { text: args, truncated } = summarizeToolUseInput(block2);
@@ -105302,18 +105327,18 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         if (!block2 || typeof block2 !== "object") continue;
         const type2 = String(block2.type || "").trim();
         if (type2 === "text") {
-          const text = String(block2.text || "").trim();
-          if (text) {
-            parts.push({ role: "user", content: text, kind: "standard", blockIndex, truncated: false });
+          const text2 = String(block2.text || "").trim();
+          if (text2) {
+            parts.push({ role: "user", content: text2, kind: "standard", blockIndex, truncated: false });
           }
         } else if (type2 === "tool_result") {
           const raw = flattenToolResultContent(block2.content);
           if (!raw) continue;
-          const { text, truncated } = oneLine(raw, TOOL_RESULT_SUMMARY_MAX);
-          if (!text) continue;
+          const { text: text2, truncated } = oneLine(raw, TOOL_RESULT_SUMMARY_MAX);
+          if (!text2) continue;
           parts.push({
             role: "assistant",
-            content: text,
+            content: text2,
             kind: "tool",
             senderName: "Tool",
             blockIndex,
@@ -105354,8 +105379,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       if (!(sourceMtimeMs > 0) || part.blockIndex < 0 || recordIndex < 0) return;
       msg.toolBlockRef = { sourceMtimeMs, recordIndex, blockIndex: part.blockIndex };
     }
-    function readClaudeToolBlockAt(record2, blockIndex) {
-      const message = record2.message && typeof record2.message === "object" ? record2.message : null;
+    function readClaudeToolBlockAt(record3, blockIndex) {
+      const message = record3.message && typeof record3.message === "object" ? record3.message : null;
       if (!message) return null;
       const content = message.content;
       if (!Array.isArray(content)) return null;
@@ -105406,12 +105431,12 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         }
         if (!parsed || typeof parsed !== "object") continue;
         recordIndex++;
-        const record2 = parsed;
-        const lineSessionId = String(record2.sessionId || "").trim();
+        const record3 = parsed;
+        const lineSessionId = String(record3.sessionId || "").trim();
         if (lineSessionId && lineSessionId !== sessionId) continue;
-        const receivedAt = extractTimestampValue(record2.timestamp) || fallbackTs;
+        const receivedAt = extractTimestampValue(record3.timestamp) || fallbackTs;
         fallbackTs = receivedAt + 1;
-        const lineCwd = String(record2.cwd || "").trim();
+        const lineCwd = String(record3.cwd || "").trim();
         if (!detectedWorkspace && lineCwd) detectedWorkspace = lineCwd;
         if (records.length === 0 && detectedWorkspace) {
           records.push({
@@ -105426,8 +105451,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
             _src: nativeSourceAddress(sessionId, SESSION_START_ADDRESS)
           });
         }
-        const type2 = String(record2.type || "").trim();
-        const message = record2.message && typeof record2.message === "object" ? record2.message : null;
+        const type2 = String(record3.type || "").trim();
+        const message = record3.message && typeof record3.message === "object" ? record3.message : null;
         if (!message) continue;
         const usageRecord = extractClaudeUsage(message, receivedAt);
         if (usageRecord) {
@@ -105437,7 +105462,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
             usageRecords.push(usageRecord);
           }
         }
-        if (type2 === "user" && record2.isMeta === true) continue;
+        if (type2 === "user" && record3.isMeta === true) continue;
         if (type2 === "user") {
           for (const part of extractUserContentParts(message.content)) {
             const msg = {
@@ -105580,8 +105605,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       const name = String(payload.name ?? payload.type ?? "tool").trim() || "tool";
       const argumentValue = codexToolCallArguments(payload);
       if (!argumentValue) return { content: name, truncated: false, toolName: name };
-      const { text, truncated } = oneLine(argumentValue, TOOL_CALL_SUMMARY_MAX);
-      return { content: text ? `${name}: ${text}` : name, truncated, toolName: name };
+      const { text: text2, truncated } = oneLine(argumentValue, TOOL_CALL_SUMMARY_MAX);
+      return { content: text2 ? `${name}: ${text2}` : name, truncated, toolName: name };
     }
     function codexToolCallArguments(payload) {
       const rawArguments = payload.arguments ?? payload.input;
@@ -105598,13 +105623,13 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
     function extractToolOutputContent(payload) {
       const raw = codexToolOutputText(payload);
       if (!raw) return { content: "", truncated: false };
-      const { text, truncated } = oneLine(raw, TOOL_RESULT_SUMMARY_MAX);
-      return { content: text, truncated };
+      const { text: text2, truncated } = oneLine(raw, TOOL_RESULT_SUMMARY_MAX);
+      return { content: text2, truncated };
     }
     function codexToolOutputText(payload) {
       const output = payload.output ?? payload.result ?? payload.content;
-      const text = flattenCodexContent(output);
-      if (text) return text;
+      const text2 = flattenCodexContent(output);
+      if (text2) return text2;
       if (output && typeof output === "object") {
         try {
           return JSON.stringify(output, null, 2).trim();
@@ -105614,9 +105639,9 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       }
       return "";
     }
-    function readCodexToolBlockAt(record2) {
-      if (String(record2.type || "").trim() !== "response_item") return null;
-      const payload = record2.payload && typeof record2.payload === "object" ? record2.payload : null;
+    function readCodexToolBlockAt(record3) {
+      if (String(record3.type || "").trim() !== "response_item") return null;
+      const payload = record3.payload && typeof record3.payload === "object" ? record3.payload : null;
       if (!payload) return null;
       const payloadType = String(payload.type || "").trim();
       if (payloadType === "function_call" || payloadType === "custom_tool_call") {
@@ -105648,24 +105673,24 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       const normalized = content.trim();
       if (!normalized) return false;
       for (let i = records.length - 1; i >= 0; i--) {
-        const record2 = records[i];
-        if (record2.kind === "session_start") continue;
-        if (record2.role === "user") return false;
-        if (record2.role === "assistant" && record2.kind === "standard" && record2.content.trim() === normalized) {
+        const record3 = records[i];
+        if (record3.kind === "session_start") continue;
+        if (record3.role === "user") return false;
+        if (record3.role === "assistant" && record3.kind === "standard" && record3.content.trim() === normalized) {
           return true;
         }
       }
       return false;
     }
     function pushAssistantStandardMessage(records, sessionId, receivedAt, content, workspace, recordIndex = -1) {
-      const text = content.trim();
-      if (!text) return;
-      if (hasAssistantStandardMessageSinceLastUser(records, text)) return;
+      const text2 = content.trim();
+      if (!text2) return;
+      if (hasAssistantStandardMessageSinceLastUser(records, text2)) return;
       const msg = {
         ts: new Date(receivedAt).toISOString(),
         receivedAt,
         role: "assistant",
-        content: text,
+        content: text2,
         kind: "standard",
         agent: "codex-cli",
         historySessionId: sessionId
@@ -105701,8 +105726,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         const buffer = Buffer.alloc(SESSION_META_PREFIX_BYTES);
         const bytes = fs35.readSync(fd, buffer, 0, buffer.length, 0);
         if (bytes <= 0) return null;
-        const text = buffer.subarray(0, bytes).toString("utf8");
-        const lines = text.split("\n");
+        const text2 = buffer.subarray(0, bytes).toString("utf8");
+        const lines = text2.split("\n");
         const idx = lines.findIndex(Boolean);
         if (idx >= 0 && idx < lines.length - 1) return lines[idx];
         if (bytes < buffer.length) return idx >= 0 ? lines[idx] : null;
@@ -105745,11 +105770,11 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         }
         if (!parsed || typeof parsed !== "object") continue;
         recordIndex++;
-        const record2 = parsed;
-        const receivedAt = extractTimestampValue(record2.timestamp) || fallbackTs;
+        const record3 = parsed;
+        const receivedAt = extractTimestampValue(record3.timestamp) || fallbackTs;
         fallbackTs = receivedAt + 1;
-        const type2 = String(record2.type ?? "").trim();
-        const payload = record2.payload && typeof record2.payload === "object" ? record2.payload : null;
+        const type2 = String(record3.type ?? "").trim();
+        const payload = record3.payload && typeof record3.payload === "object" ? record3.payload : null;
         if (!payload) continue;
         if (type2 === "session_meta") {
           const metaId = String(payload.id ?? "").trim();
@@ -106032,8 +106057,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       }
       return printable / buf.length >= 0.9;
     }
-    function stripAnswerMarker(text) {
-      return text.replace(/^\s*MARKER_V1\s*/, "");
+    function stripAnswerMarker(text2) {
+      return text2.replace(/^\s*MARKER_V1\s*/, "");
     }
     function extractModelAnswer(payload) {
       const inner = firstLenField(payload, 20);
@@ -106047,9 +106072,9 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       if (!inner) return "";
       const raw = firstLenField(inner, 2) ?? firstLenField(inner, 3);
       if (!raw || !looksLikeText(raw)) return "";
-      const text = raw.toString("utf-8").trim();
-      if (!text) return "";
-      return extractUserRequestContent(text);
+      const text2 = raw.toString("utf-8").trim();
+      if (!text2) return "";
+      return extractUserRequestContent(text2);
     }
     function extractModelReasoning(payload) {
       const inner = firstLenField(payload, 20);
@@ -106159,8 +106184,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       }
       return fields.length > 0 ? fields : null;
     }
-    function isBareUri(text) {
-      return /^file:\/\/\S*$/.test(text);
+    function isBareUri(text2) {
+      return /^file:\/\/\S*$/.test(text2);
     }
     function isBetterLeaf(candidate, best) {
       if (!candidate) return false;
@@ -106173,8 +106198,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       const fields = depth < 8 ? decodeProtoStrict(buf) : null;
       if (!fields) {
         if (!looksLikeText(buf)) return "";
-        const text = buf.toString("utf-8").trim();
-        return exclude.has(text) ? "" : text;
+        const text2 = buf.toString("utf-8").trim();
+        return exclude.has(text2) ? "" : text2;
       }
       let best = "";
       for (const f of fields) {
@@ -106253,8 +106278,8 @@ ${output}` : "";
       const body = firstLenField(note2, 2);
       const title = (textField(body, 1) ?? "").trim();
       const detail = body ? longestTextLeaf(body, new Set(title ? [title] : [])) : "";
-      const text = [title, detail].filter(Boolean).join("\n") || (textField(note2, 1) ?? "").trim();
-      return text ? { name, text } : null;
+      const text2 = [title, detail].filter(Boolean).join("\n") || (textField(note2, 1) ?? "").trim();
+      return text2 ? { name, text: text2 } : null;
     }
     function isSettledToolStatus(status, errorDetails) {
       if (status === null) return true;
@@ -106608,8 +106633,8 @@ ${output}` : "";
           continue;
         }
         if (row.step_type === AGY_STEP_TYPE_TASK_MESSAGE) {
-          const text = row.step_payload ? row.step_payload.toString("utf8") : "";
-          for (const match of text.matchAll(/Task id "([0-9a-f-]{36}\/task-\d+)"[^:]{0,80}?\bwith result\b/gi)) {
+          const text2 = row.step_payload ? row.step_payload.toString("utf8") : "";
+          for (const match of text2.matchAll(/Task id "([0-9a-f-]{36}\/task-\d+)"[^:]{0,80}?\bwith result\b/gi)) {
             out.push({ idx: row.idx, kind: "notification", taskId: match[1], terminal: true });
           }
           continue;
@@ -106940,10 +106965,10 @@ ${output}` : "";
       return null;
     }
     var USER_QUERY_RE = /<user_query>\s*([\s\S]*?)\s*<\/user_query>/;
-    function unwrapUserQuery(text) {
-      const match = USER_QUERY_RE.exec(text);
+    function unwrapUserQuery(text2) {
+      const match = USER_QUERY_RE.exec(text2);
       if (match) return match[1].trim();
-      return text.trim();
+      return text2.trim();
     }
     function blocksToText(content) {
       if (typeof content === "string") return content;
@@ -106951,9 +106976,9 @@ ${output}` : "";
       const parts = [];
       for (const block2 of content) {
         if (!block2 || typeof block2 !== "object") continue;
-        const record2 = block2;
-        if (typeof record2.text === "string") parts.push(record2.text);
-        else if (record2.type === "image") parts.push("[image]");
+        const record3 = block2;
+        if (typeof record3.text === "string") parts.push(record3.text);
+        else if (record3.type === "image") parts.push("[image]");
       }
       return parts.join("\n");
     }
@@ -106979,10 +107004,10 @@ ${output}` : "";
       }
       return parts.filter(Boolean).join("\n");
     }
-    function readGrokToolBlockAt(record2) {
-      const type2 = typeof record2.type === "string" ? record2.type : "";
+    function readGrokToolBlockAt(record3) {
+      const type2 = typeof record3.type === "string" ? record3.type : "";
       if (type2 === "assistant") {
-        const toolCalls = Array.isArray(record2.tool_calls) ? record2.tool_calls : [];
+        const toolCalls = Array.isArray(record3.tool_calls) ? record3.tool_calls : [];
         if (toolCalls.length === 0) return null;
         const names = toolCalls.map((call) => call && typeof call === "object" ? call.name : null).filter((name) => typeof name === "string" && name.length > 0);
         return {
@@ -106991,28 +107016,28 @@ ${output}` : "";
         };
       }
       if (type2 === "tool_result") {
-        return { result: blocksToText(record2.content).trim() };
+        return { result: blocksToText(record3.content).trim() };
       }
       return null;
     }
     function parseGrokRecord(raw) {
       if (!raw || typeof raw !== "object") return null;
-      const record2 = raw;
-      const type2 = typeof record2.type === "string" ? record2.type : "";
+      const record3 = raw;
+      const type2 = typeof record3.type === "string" ? record3.type : "";
       if (type2 === "system") return null;
       if (type2 === "reasoning") return null;
       if (type2 === "user") {
-        if (typeof record2.synthetic_reason === "string" && record2.synthetic_reason) return null;
-        const rawText = blocksToText(record2.content);
+        if (typeof record3.synthetic_reason === "string" && record3.synthetic_reason) return null;
+        const rawText = blocksToText(record3.content);
         if (/^\s*<user_info>/.test(rawText) && !USER_QUERY_RE.test(rawText)) return null;
-        const text = unwrapUserQuery(rawText);
-        if (!text) return null;
-        return { role: "user", content: text, kind: "standard" };
+        const text2 = unwrapUserQuery(rawText);
+        if (!text2) return null;
+        return { role: "user", content: text2, kind: "standard" };
       }
       if (type2 === "assistant") {
-        const text = blocksToText(record2.content).trim();
-        const toolCalls = Array.isArray(record2.tool_calls) ? record2.tool_calls : [];
-        if (!text) {
+        const text2 = blocksToText(record3.content).trim();
+        const toolCalls = Array.isArray(record3.tool_calls) ? record3.tool_calls : [];
+        if (!text2) {
           if (toolCalls.length === 0) return null;
           const names = toolCalls.map((call) => call && typeof call === "object" ? call.name : null).filter((name) => typeof name === "string" && name.length > 0);
           const label = names.length > 0 ? names.join(", ") : "tool";
@@ -107021,14 +107046,14 @@ ${output}` : "";
           const { text: summary, truncated } = oneLine(args, TOOL_CALL_SUMMARY_MAX);
           return { role: "assistant", content: `[tool: ${label}] ${summary}`, kind: "tool", truncated, toolName: label };
         }
-        return { role: "assistant", content: text, kind: "standard" };
+        return { role: "assistant", content: text2, kind: "standard" };
       }
       if (type2 === "tool_result") {
-        const raw2 = blocksToText(record2.content).trim();
+        const raw2 = blocksToText(record3.content).trim();
         if (!raw2) return null;
-        const { text, truncated } = oneLine(raw2, TOOL_RESULT_SUMMARY_MAX);
-        if (!text) return null;
-        return { role: "assistant", content: text, kind: "tool", truncated };
+        const { text: text2, truncated } = oneLine(raw2, TOOL_RESULT_SUMMARY_MAX);
+        if (!text2) return null;
+        return { role: "assistant", content: text2, kind: "tool", truncated };
       }
       return null;
     }
@@ -107067,9 +107092,9 @@ ${output}` : "";
       return out;
     }
     function readSession4(sourcePath, sessionId, workspace) {
-      let text;
+      let text2;
       try {
-        text = fs38.readFileSync(sourcePath, "utf8");
+        text2 = fs38.readFileSync(sourcePath, "utf8");
       } catch {
         return null;
       }
@@ -107078,18 +107103,18 @@ ${output}` : "";
       const sourceMtimeMs = statMtimeMs(sourcePath);
       const parsed = [];
       let recordIndex = -1;
-      for (const line of text.split("\n")) {
+      for (const line of text2.split("\n")) {
         const trimmed2 = line.trim();
         if (!trimmed2) continue;
-        let record2;
+        let record3;
         try {
-          record2 = JSON.parse(trimmed2);
+          record3 = JSON.parse(trimmed2);
         } catch {
           continue;
         }
-        if (!record2 || typeof record2 !== "object") continue;
+        if (!record3 || typeof record3 !== "object") continue;
         recordIndex++;
-        const message = parseGrokRecord(record2);
+        const message = parseGrokRecord(record3);
         if (message) parsed.push({ ...message, recordIndex });
       }
       const startMs = readSessionCreatedAtMs(sessionDir) || sourceMtimeMs;
@@ -107425,12 +107450,12 @@ ${output}` : "";
           const buffer = Buffer.alloc(8192);
           const bytes = fs39.readSync(fd, buffer, 0, buffer.length, 0);
           if (bytes <= 0) return null;
-          const text = buffer.subarray(0, bytes).toString("utf8");
-          const firstLine = text.slice(0, text.indexOf("\n") >= 0 ? text.indexOf("\n") : text.length).trim();
+          const text2 = buffer.subarray(0, bytes).toString("utf8");
+          const firstLine = text2.slice(0, text2.indexOf("\n") >= 0 ? text2.indexOf("\n") : text2.length).trim();
           if (!firstLine) return null;
-          const record2 = JSON.parse(firstLine);
-          if (record2.type !== "session_meta" || !record2.payload || typeof record2.payload !== "object") return null;
-          const payload = record2.payload;
+          const record3 = JSON.parse(firstLine);
+          if (record3.type !== "session_meta" || !record3.payload || typeof record3.payload !== "object") return null;
+          const payload = record3.payload;
           const timestampRaw = payload.timestamp;
           const timestampMs = typeof timestampRaw === "string" ? Date.parse(timestampRaw) : typeof timestampRaw === "number" ? timestampRaw < 1e12 ? timestampRaw * 1e3 : timestampRaw : NaN;
           return {
@@ -107926,7 +107951,7 @@ ${output}` : "";
           const rendered2 = parts.length > 0 ? parts.join(" ") : sub?.message || String(sub);
           counts.set(rendered2, (counts.get(rendered2) ?? 0) + 1);
         }
-        const rendered = [...counts.entries()].map(([text, n]) => n > 1 ? `${text} (x${n})` : text).join("; ");
+        const rendered = [...counts.entries()].map(([text2, n]) => n > 1 ? `${text2} (x${n})` : text2).join("; ");
         const name = e?.name || "AggregateError";
         return `${name}: ${rendered}`;
       }
@@ -109055,10 +109080,10 @@ ${output}` : "";
       }
       return current4;
     }
-    function passesFilter(record2, filter) {
+    function passesFilter(record3, filter) {
       if (!filter) return true;
       for (const [field3, expected] of Object.entries(filter)) {
-        if (record2[field3] !== expected) return false;
+        if (record3[field3] !== expected) return false;
       }
       return true;
     }
@@ -109075,12 +109100,12 @@ ${output}` : "";
       const rows = [];
       items.forEach((item, index) => {
         if (!item || typeof item !== "object" || Array.isArray(item)) return;
-        const record2 = item;
-        if (!passesFilter(record2, parse.filter)) return;
-        const slug = cleanToken(record2[slugField]);
+        const record3 = item;
+        if (!passesFilter(record3, parse.filter)) return;
+        const slug = cleanToken(record3[slugField]);
         if (!slug) return;
-        const label = parse.labelField ? cleanToken(record2[parse.labelField]) : "";
-        const rawPriority = parse.priorityField ? record2[parse.priorityField] : void 0;
+        const label = parse.labelField ? cleanToken(record3[parse.labelField]) : "";
+        const rawPriority = parse.priorityField ? record3[parse.priorityField] : void 0;
         const priority = typeof rawPriority === "number" && Number.isFinite(rawPriority) ? rawPriority : Number.MAX_SAFE_INTEGER;
         rows.push({ model: label ? { slug, label } : { slug }, priority, index });
       });
@@ -109166,14 +109191,14 @@ ${output}` : "";
       return filePath2;
     }
     function classifyFailure(output, exitCode) {
-      const text = output.toLowerCase();
-      if (/\b(not logged in|log ?in|sign ?in|unauthenticated|unauthorized|authentication|auth token|expired)\b/.test(text)) {
+      const text2 = output.toLowerCase();
+      if (/\b(not logged in|log ?in|sign ?in|unauthenticated|unauthorized|authentication|auth token|expired)\b/.test(text2)) {
         return "unauthenticated";
       }
-      if (/\b(enotfound|econnrefused|etimedout|network|offline|dns|socket hang up|fetch failed)\b/.test(text)) {
+      if (/\b(enotfound|econnrefused|etimedout|network|offline|dns|socket hang up|fetch failed)\b/.test(text2)) {
         return "network";
       }
-      if (exitCode === 127 || /\b(command not found|no such file or directory)\b/.test(text)) {
+      if (exitCode === 127 || /\b(command not found|no such file or directory)\b/.test(text2)) {
         return "cli-unavailable";
       }
       return "unknown";
@@ -109334,12 +109359,12 @@ ${result.stderr}`, result.code);
         return void 0;
       }
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return void 0;
-      const record2 = parsed;
-      if (record2.version !== MODEL_CACHE_VERSION) {
-        LOG.info("Models", `Ignoring model cache written by a different version (${String(record2.version)})`);
+      const record3 = parsed;
+      if (record3.version !== MODEL_CACHE_VERSION) {
+        LOG.info("Models", `Ignoring model cache written by a different version (${String(record3.version)})`);
         return void 0;
       }
-      const providers = record2.providers;
+      const providers = record3.providers;
       if (!providers || typeof providers !== "object" || Array.isArray(providers)) return void 0;
       const restored = {};
       for (const [provider, value] of Object.entries(providers)) {
@@ -112213,8 +112238,8 @@ ${result.stderr}`, result.code);
         const meshId = readText(args?.meshId);
         const nodeId = readText(args?.nodeId);
         if (!meshId || !nodeId) return { success: false, error: "meshId and nodeId required" };
-        const record2 = await ctx.getMeshForCommand(meshId, void 0, { preferInline: true });
-        const rostered = Array.isArray(record2?.mesh?.nodes) ? record2.mesh.nodes.find((n) => meshNodeIdMatches7(n, nodeId)) : void 0;
+        const record3 = await ctx.getMeshForCommand(meshId, void 0, { preferInline: true });
+        const rostered = Array.isArray(record3?.mesh?.nodes) ? record3.mesh.nodes.find((n) => meshNodeIdMatches7(n, nodeId)) : void 0;
         const described = readOptionalRecord2(args?.node);
         const node = rostered ?? (described && meshNodeIdMatches7(described, nodeId) ? described : void 0);
         if (!node) return { success: false, code: "mesh_node_unknown", error: `Node ${nodeId} is not on mesh ${meshId}` };
@@ -112238,8 +112263,8 @@ ${result.stderr}`, result.code);
         if (callerDaemonId && selfId && !daemonIdsEquivalent4(callerDaemonId, selfId)) {
           return { success: false, code: "mesh_node_route_wrong_daemon", error: `This is daemon ${selfId}, not ${callerDaemonId}` };
         }
-        const record2 = await ctx.getMeshForCommand(meshId, void 0, { preferInline: true });
-        const roster = Array.isArray(record2?.mesh?.nodes) ? record2.mesh.nodes : [];
+        const record3 = await ctx.getMeshForCommand(meshId, void 0, { preferInline: true });
+        const roster = Array.isArray(record3?.mesh?.nodes) ? record3.mesh.nodes : [];
         const described = Array.isArray(args?.nodes) ? args.nodes.filter((n) => !!readOptionalRecord2(n) && !!readText(n.id)) : [];
         const wanted = Array.isArray(args?.nodeIds) ? new Set(args.nodeIds.map(readText).filter(Boolean)) : null;
         return { success: true, meshId, routes: decideNodeRoutes(roster, described, {
@@ -112354,8 +112379,8 @@ ${result.stderr}`, result.code);
           "-Command",
           `(Get-CimInstance Win32_Process -Filter "${pidFilter}").CommandLine`
         ], { encoding: "utf8", timeout: 5e3, stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
-        const text = String(psOut).trim();
-        if (text) return text;
+        const text2 = String(psOut).trim();
+        if (text2) return text2;
         failures.push("powershell Get-CimInstance returned no CommandLine");
       } catch (error) {
         failures.push(`powershell Get-CimInstance failed: ${errorText(error)}`);
@@ -112368,8 +112393,8 @@ ${result.stderr}`, result.code);
           "get",
           "CommandLine"
         ], { encoding: "utf8", timeout: 3e3, stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
-        const text = String(wmicOut).trim();
-        if (text) return text;
+        const text2 = String(wmicOut).trim();
+        if (text2) return text2;
         failures.push("wmic returned no CommandLine");
       } catch (error) {
         failures.push(`wmic failed: ${errorText(error)}`);
@@ -112394,12 +112419,12 @@ ${result.stderr}`, result.code);
         return getWindowsProcessCommandLine(pid, exec6);
       }
       try {
-        const text = String(exec6("ps", ["-o", "command=", "-p", String(pid)], {
+        const text2 = String(exec6("ps", ["-o", "command=", "-p", String(pid)], {
           encoding: "utf8",
           timeout: 3e3,
           stdio: ["ignore", "pipe", "ignore"]
         })).trim();
-        return text || null;
+        return text2 || null;
       } catch (error) {
         LOG.debug("ProcessLifecycle", `ps lookup failed for pid ${pid}: ${errorText(error)}`);
         return null;
@@ -113753,8 +113778,8 @@ ${marker}`,
     function isRetriableInstallLockError(error) {
       const code = error?.code;
       if (code === "EBUSY" || code === "EPERM") return true;
-      const text = `${error?.message || ""} ${error?.stderr || ""}`;
-      return /\bEBUSY\b|\bEPERM\b|resource busy or locked/i.test(text);
+      const text2 = `${error?.message || ""} ${error?.stderr || ""}`;
+      return /\bEBUSY\b|\bEPERM\b|resource busy or locked/i.test(text2);
     }
     function removeDaemonPidFile(configDir = getConfigDir()) {
       const pidFile = path61.join(configDir, "daemon.pid");
@@ -114797,26 +114822,26 @@ ${marker}`,
     }
     var pendingDeferredRestarts = /* @__PURE__ */ new Map();
     function deferredRestartInfo(key2) {
-      const record2 = pendingDeferredRestarts.get(key2);
-      if (!record2) return null;
+      const record3 = pendingDeferredRestarts.get(key2);
+      if (!record3) return null;
       return {
-        meshId: record2.meshId,
-        nodeId: record2.nodeId,
-        mode: record2.mode,
-        killSessionHost: record2.killSessionHost,
-        ...record2.upgradeOptions,
-        scheduledAt: new Date(record2.scheduledAt).toISOString(),
-        expiresAt: new Date(record2.expiresAt).toISOString(),
+        meshId: record3.meshId,
+        nodeId: record3.nodeId,
+        mode: record3.mode,
+        killSessionHost: record3.killSessionHost,
+        ...record3.upgradeOptions,
+        scheduledAt: new Date(record3.scheduledAt).toISOString(),
+        expiresAt: new Date(record3.expiresAt).toISOString(),
         runCondition: "executes automatically once no session is generating / waiting_approval / starting and no outbound coordinator message is queued"
       };
     }
     function clearPendingDeferredRestart(key2) {
-      const record2 = pendingDeferredRestarts.get(key2);
-      if (!record2) return;
-      clearInterval(record2.timer);
+      const record3 = pendingDeferredRestarts.get(key2);
+      if (!record3) return;
+      clearInterval(record3.timer);
       pendingDeferredRestarts.delete(key2);
       try {
-        clearDeferredRestartSchedule(record2.meshId, record2.nodeId);
+        clearDeferredRestartSchedule(record3.meshId, record3.nodeId);
       } catch {
       }
     }
@@ -114875,7 +114900,7 @@ ${marker}`,
       clearPendingDeferredRestart(key2);
       const requestedTimeout = typeof args?.timeoutMs === "number" && Number.isFinite(args.timeoutMs) ? args.timeoutMs : DEFERRED_RESTART_DEFAULT_TIMEOUT_MS;
       const timeoutMs = Math.min(Math.max(requestedTimeout, DEFERRED_RESTART_POLL_MS), DEFERRED_RESTART_MAX_TIMEOUT_MS);
-      const record2 = {
+      const record3 = {
         meshId,
         nodeId,
         mode: normalizeRestartMode(args?.mode),
@@ -114887,22 +114912,22 @@ ${marker}`,
           void deferredRestartTick(deps, key2);
         }, DEFERRED_RESTART_POLL_MS)
       };
-      record2.timer.unref?.();
-      pendingDeferredRestarts.set(key2, record2);
+      record3.timer.unref?.();
+      pendingDeferredRestarts.set(key2, record3);
       try {
         recordDeferredRestartSchedule({
-          meshId: record2.meshId,
-          nodeId: record2.nodeId,
-          mode: record2.mode,
-          killSessionHost: record2.killSessionHost,
-          ...record2.upgradeOptions,
-          scheduledAt: record2.scheduledAt,
-          expiresAt: record2.expiresAt
+          meshId: record3.meshId,
+          nodeId: record3.nodeId,
+          mode: record3.mode,
+          killSessionHost: record3.killSessionHost,
+          ...record3.upgradeOptions,
+          scheduledAt: record3.scheduledAt,
+          expiresAt: record3.expiresAt
         });
       } catch (e) {
         LOG.warn("MeshRestart", `Failed to persist deferred restart for node ${nodeId} \u2014 it will NOT survive a daemon restart: ${e?.message || String(e)}`);
       }
-      LOG.info("MeshRestart", `Deferred restart scheduled for node ${nodeId} (mode=${record2.mode}${record2.upgradeOptions.allowDowngrade ? ", allowDowngrade" : ""}, expires in ${Math.round(timeoutMs / 6e4)}min)`);
+      LOG.info("MeshRestart", `Deferred restart scheduled for node ${nodeId} (mode=${record3.mode}${record3.upgradeOptions.allowDowngrade ? ", allowDowngrade" : ""}, expires in ${Math.round(timeoutMs / 6e4)}min)`);
       return {
         success: true,
         restarted: false,
@@ -114913,27 +114938,27 @@ ${marker}`,
       };
     }
     async function deferredRestartTick(deps, key2) {
-      const record2 = pendingDeferredRestarts.get(key2);
-      if (!record2) return;
-      if (Date.now() >= record2.expiresAt) {
-        LOG.warn("MeshRestart", `Deferred restart for node ${record2.nodeId} expired without reaching an idle point; dropping the schedule`);
+      const record3 = pendingDeferredRestarts.get(key2);
+      if (!record3) return;
+      if (Date.now() >= record3.expiresAt) {
+        LOG.warn("MeshRestart", `Deferred restart for node ${record3.nodeId} expired without reaching an idle point; dropping the schedule`);
         clearPendingDeferredRestart(key2);
         return;
       }
-      const blocking = collectBlockingSessions(deps, record2.meshId);
+      const blocking = collectBlockingSessions(deps, record3.meshId);
       if (blocking.length > 0) return;
-      LOG.info("MeshRestart", `Deferred restart for node ${record2.nodeId} executing \u2014 daemon is idle`);
+      LOG.info("MeshRestart", `Deferred restart for node ${record3.nodeId} executing \u2014 daemon is idle`);
       clearPendingDeferredRestart(key2);
       try {
         const result = await executeRestart(deps, {
-          meshId: record2.meshId,
-          nodeId: record2.nodeId,
-          mode: record2.mode,
-          killSessionHost: record2.killSessionHost,
-          ...record2.upgradeOptions
+          meshId: record3.meshId,
+          nodeId: record3.nodeId,
+          mode: record3.mode,
+          killSessionHost: record3.killSessionHost,
+          ...record3.upgradeOptions
         }, { forced: false });
         if (result?.success === false) {
-          LOG.warn("MeshRestart", `Deferred restart for node ${record2.nodeId} was refused when it fired: ${result.code || result.error || "unknown"}${result.reason ? ` \u2014 ${result.reason}` : ""}`);
+          LOG.warn("MeshRestart", `Deferred restart for node ${record3.nodeId} was refused when it fired: ${result.code || result.error || "unknown"}${result.reason ? ` \u2014 ${result.reason}` : ""}`);
         }
       } catch (e) {
         LOG.error("MeshRestart", `Deferred restart execution failed: ${e?.message || String(e)}`);
@@ -114948,40 +114973,40 @@ ${marker}`,
         return;
       }
       const now = Date.now();
-      for (const [key2, record2] of Object.entries(persisted)) {
+      for (const [key2, record3] of Object.entries(persisted)) {
         if (pendingDeferredRestarts.has(key2)) continue;
-        if (now >= record2.expiresAt) {
-          LOG.warn("MeshRestart", `Persisted deferred restart for node ${record2.nodeId} (mesh ${record2.meshId}) expired while the daemon was down (scheduled ${new Date(record2.scheduledAt).toISOString()}, expired ${new Date(record2.expiresAt).toISOString()}); dropping it without executing`);
+        if (now >= record3.expiresAt) {
+          LOG.warn("MeshRestart", `Persisted deferred restart for node ${record3.nodeId} (mesh ${record3.meshId}) expired while the daemon was down (scheduled ${new Date(record3.scheduledAt).toISOString()}, expired ${new Date(record3.expiresAt).toISOString()}); dropping it without executing`);
           try {
-            clearDeferredRestartSchedule(record2.meshId, record2.nodeId);
+            clearDeferredRestartSchedule(record3.meshId, record3.nodeId);
           } catch {
           }
           continue;
         }
         const rearmed = {
-          meshId: record2.meshId,
-          nodeId: record2.nodeId,
-          mode: record2.mode === "restart" ? "restart" : "upgrade",
-          killSessionHost: record2.killSessionHost === true,
-          upgradeOptions: readUpgradeOptions(record2),
-          scheduledAt: record2.scheduledAt,
-          expiresAt: record2.expiresAt,
+          meshId: record3.meshId,
+          nodeId: record3.nodeId,
+          mode: record3.mode === "restart" ? "restart" : "upgrade",
+          killSessionHost: record3.killSessionHost === true,
+          upgradeOptions: readUpgradeOptions(record3),
+          scheduledAt: record3.scheduledAt,
+          expiresAt: record3.expiresAt,
           timer: setInterval(() => {
             void deferredRestartTick(deps, key2);
           }, DEFERRED_RESTART_POLL_MS)
         };
         rearmed.timer.unref?.();
         pendingDeferredRestarts.set(key2, rearmed);
-        LOG.info("MeshRestart", `Re-armed persisted deferred restart for node ${record2.nodeId} (mode=${rearmed.mode}, expires ${new Date(record2.expiresAt).toISOString()})`);
+        LOG.info("MeshRestart", `Re-armed persisted deferred restart for node ${record3.nodeId} (mode=${rearmed.mode}, expires ${new Date(record3.expiresAt).toISOString()})`);
       }
     }
     function restartWillHappen(result, args) {
       if (!result || result.success === false) return false;
       if (args?.cancelWhenIdle === true || args?.whenIdleStatus === true) return false;
-      const record2 = result;
-      if (record2.restarted === false) return false;
-      const deferred = record2.deferredRestart;
-      if (deferred && typeof deferred === "object" && record2.restarted !== true) return false;
+      const record3 = result;
+      if (record3.restarted === false) return false;
+      const deferred = record3.deferredRestart;
+      if (deferred && typeof deferred === "object" && record3.restarted !== true) return false;
       return true;
     }
     var meshRestartHandlers = {
@@ -115113,9 +115138,9 @@ ${marker}`,
     function hashSignatureParts(parts) {
       let hash = 2166136261;
       for (const part of parts) {
-        const text = String(part || "");
-        for (let i = 0; i < text.length; i += 1) {
-          hash ^= text.charCodeAt(i);
+        const text2 = String(part || "");
+        for (let i = 0; i < text2.length; i += 1) {
+          hash ^= text2.charCodeAt(i);
           hash = Math.imul(hash, 16777619) >>> 0;
         }
         hash ^= 255;
@@ -115220,11 +115245,11 @@ ${marker}`,
     init_logger();
     function nativeHistoryObservedModel(result) {
       if (!result || typeof result !== "object") return null;
-      const record2 = result;
-      const model = typeof record2.usage?.model === "string" ? record2.usage.model.trim() : "";
+      const record3 = result;
+      const model = typeof record3.usage?.model === "string" ? record3.usage.model.trim() : "";
       if (!model) return null;
-      const lastUsageAt = typeof record2.usage?.lastUsageAt === "number" && Number.isFinite(record2.usage.lastUsageAt) && record2.usage.lastUsageAt > 0 ? record2.usage.lastUsageAt : void 0;
-      const mtime = typeof record2.sourceMtimeMs === "number" && Number.isFinite(record2.sourceMtimeMs) && record2.sourceMtimeMs > 0 ? record2.sourceMtimeMs : void 0;
+      const lastUsageAt = typeof record3.usage?.lastUsageAt === "number" && Number.isFinite(record3.usage.lastUsageAt) && record3.usage.lastUsageAt > 0 ? record3.usage.lastUsageAt : void 0;
+      const mtime = typeof record3.sourceMtimeMs === "number" && Number.isFinite(record3.sourceMtimeMs) && record3.sourceMtimeMs > 0 ? record3.sourceMtimeMs : void 0;
       const at = lastUsageAt ?? mtime;
       return at === void 0 ? null : { value: model, at };
     }
@@ -115234,9 +115259,9 @@ ${marker}`,
     init_provider_native_history();
     var HOT_TAIL_MIN_LIMIT = 60;
     function normalizeComparableWorkspace(value) {
-      const text = typeof value === "string" ? value.trim() : "";
-      if (!text) return "";
-      const lexical = path62.resolve(text);
+      const text2 = typeof value === "string" ? value.trim() : "";
+      if (!text2) return "";
+      const lexical = path62.resolve(text2);
       try {
         return fs57.realpathSync.native(lexical);
       } catch {
@@ -115272,8 +115297,8 @@ ${marker}`,
     }
     function hasSafeNativeHistoryMapping(args) {
       const isCoordinatorTranscript = args.nativeMessages.some((m) => {
-        const text = typeof m?.content === "string" ? m.content : JSON.stringify(m?.content || "");
-        return text.includes("mesh_send_task") || text.includes("mesh_status") || text.includes("mesh_read_chat") || text.includes("mesh_launch_session");
+        const text2 = typeof m?.content === "string" ? m.content : JSON.stringify(m?.content || "");
+        return text2.includes("mesh_send_task") || text2.includes("mesh_status") || text2.includes("mesh_read_chat") || text2.includes("mesh_launch_session");
       });
       const explicitSessionId = String(args.historySessionId || args.providerSessionId || "").trim();
       if (explicitSessionId) {
@@ -115288,8 +115313,8 @@ ${marker}`,
         }
         if (isCoordinatorTranscript && args.ptyMessages && args.ptyMessages.length > 0) {
           const ptyHasCoordinator = args.ptyMessages.some((m) => {
-            const text = typeof m?.content === "string" ? m.content : JSON.stringify(m?.content || "");
-            return text.includes("mesh_send_task") || text.includes("mesh_status") || text.includes("mesh_read_chat");
+            const text2 = typeof m?.content === "string" ? m.content : JSON.stringify(m?.content || "");
+            return text2.includes("mesh_send_task") || text2.includes("mesh_status") || text2.includes("mesh_read_chat");
           });
           return ptyHasCoordinator;
         }
@@ -115301,8 +115326,8 @@ ${marker}`,
       if (!workspaceMatches) return false;
       if (isCoordinatorTranscript && args.ptyMessages && args.ptyMessages.length > 0) {
         const ptyHasCoordinator = args.ptyMessages.some((m) => {
-          const text = typeof m?.content === "string" ? m.content : JSON.stringify(m?.content || "");
-          return text.includes("mesh_send_task") || text.includes("mesh_status") || text.includes("mesh_read_chat");
+          const text2 = typeof m?.content === "string" ? m.content : JSON.stringify(m?.content || "");
+          return text2.includes("mesh_send_task") || text2.includes("mesh_status") || text2.includes("mesh_read_chat");
         });
         if (!ptyHasCoordinator) {
           return false;
@@ -116355,8 +116380,8 @@ ${marker}`,
     function newEpochToken() {
       return (0, import_crypto21.randomBytes)(4).readUInt32BE(0).toString(36).padStart(6, "0").slice(-6);
     }
-    function contentKey(role, kind, text) {
-      return `${role}\0${kind}\0${text}`;
+    function contentKey(role, kind, text2) {
+      return `${role}\0${kind}\0${text2}`;
     }
     function sameContent(a, b) {
       return a.role === b.role && a.kind === b.kind && a.text === b.text;
@@ -117001,8 +117026,8 @@ ${marker}`,
         body: stamp2.body
       };
     }
-    function encodeChatPart(id22, k, rev, epoch, frame2, text) {
-      return { v: 2, id: id22, k, rev, epoch, frame: frame2, text };
+    function encodeChatPart(id22, k, rev, epoch, frame2, text2) {
+      return { v: 2, id: id22, k, rev, epoch, frame: frame2, text: text2 };
     }
     function encodeChatDel(id22, k, rev, epoch, frame2) {
       return { v: 2, id: id22, k, rev, epoch, frame: frame2 };
@@ -117109,12 +117134,12 @@ ${marker}`,
       if (cp < 65536) return 3;
       return 4;
     }
-    function chatJcsTextBytes(text) {
+    function chatJcsTextBytes(text2) {
       let bytes = 0;
-      for (let i = 0; i < text.length; i += 1) {
-        const c = text.charCodeAt(i);
-        if (c >= 55296 && c <= 56319 && i + 1 < text.length) {
-          const d = text.charCodeAt(i + 1);
+      for (let i = 0; i < text2.length; i += 1) {
+        const c = text2.charCodeAt(i);
+        if (c >= 55296 && c <= 56319 && i + 1 < text2.length) {
+          const d = text2.charCodeAt(i + 1);
           if (d >= 56320 && d <= 57343) {
             bytes += 4;
             i += 1;
@@ -117125,16 +117150,16 @@ ${marker}`,
       }
       return bytes;
     }
-    function splitChatBody(text, maxBytes = CHAT_PART_MAX_JCS_BYTES) {
+    function splitChatBody(text2, maxBytes = CHAT_PART_MAX_JCS_BYTES) {
       const parts = [];
       let start = 0;
       let bytes = 0;
-      for (let i = 0; i < text.length; ) {
-        const c = text.charCodeAt(i);
+      for (let i = 0; i < text2.length; ) {
+        const c = text2.charCodeAt(i);
         let width = 1;
         let cpBytes;
-        if (c >= 55296 && c <= 56319 && i + 1 < text.length) {
-          const d = text.charCodeAt(i + 1);
+        if (c >= 55296 && c <= 56319 && i + 1 < text2.length) {
+          const d = text2.charCodeAt(i + 1);
           if (d >= 56320 && d <= 57343) {
             width = 2;
             cpBytes = 4;
@@ -117145,14 +117170,14 @@ ${marker}`,
           cpBytes = jcsCodePointBytes(c);
         }
         if (bytes + cpBytes > maxBytes && i > start) {
-          parts.push(text.slice(start, i));
+          parts.push(text2.slice(start, i));
           start = i;
           bytes = 0;
         }
         bytes += cpBytes;
         i += width;
       }
-      parts.push(text.slice(start));
+      parts.push(text2.slice(start));
       return parts;
     }
     function isRev(value) {
@@ -117223,10 +117248,10 @@ ${marker}`,
     }
     var import_node_crypto4 = require("crypto");
     init_dist2();
-    function sha1(text) {
-      return (0, import_node_crypto4.createHash)("sha1").update(text).digest("base64");
+    function sha1(text2) {
+      return (0, import_node_crypto4.createHash)("sha1").update(text2).digest("base64");
     }
-    function headChangeKey(head, text) {
+    function headChangeKey(head, text2) {
       const fields = {
         ord: head.ord,
         role: head.role,
@@ -117241,13 +117266,13 @@ ${marker}`,
         expandable: head.expandable,
         srcId: head.srcId
       };
-      return sha1(`${jcs(fields)}\0${text}`);
+      return sha1(`${jcs(fields)}\0${text2}`);
     }
     function metaChangeKey(meta) {
       return sha1(jcs({ ...meta, rev: 0, epoch: "", frame: 0 }));
     }
-    function utf8Bytes(text) {
-      return Buffer.byteLength(text, "utf8");
+    function utf8Bytes(text2) {
+      return Buffer.byteLength(text2, "utf8");
     }
     var HEAD_OVERHEAD_BYTES = 256;
     var TRIPWIRE_REWRITE_SHARE = 0.5;
@@ -117325,11 +117350,11 @@ ${marker}`,
         }
         for (const { head, writer } of heads.values()) {
           if (writer !== writerId) this.otherWriterRows = true;
-          let text;
+          let text2;
           let partHashes = [];
           let partRevs = [];
           if ("text" in head.body) {
-            text = head.body.text;
+            text2 = head.body.text;
           } else {
             const map2 = parts.get(head.id);
             const pieces = [];
@@ -117339,18 +117364,18 @@ ${marker}`,
               if (!piece || piece.rev !== head.body.partRevs[k]) complete = false;
               pieces.push(piece?.text ?? "");
             }
-            text = pieces.join("");
+            text2 = pieces.join("");
             partHashes = pieces.map((piece) => sha1(piece));
             partRevs = [...head.body.partRevs];
             if (!complete) this.markTorn(head.id, head.rev, map2 ? Array.from(map2.keys()) : []);
           }
           this.bubbles.set(head.id, {
             rev: head.rev,
-            hash: headChangeKey(head, text),
+            hash: headChangeKey(head, text2),
             ord: head.ord,
             partHashes,
             partRevs,
-            bytes: utf8Bytes(text) + HEAD_OVERHEAD_BYTES,
+            bytes: utf8Bytes(text2) + HEAD_OVERHEAD_BYTES,
             final: head.bubbleState === "final"
           });
         }
@@ -117403,8 +117428,8 @@ ${marker}`,
           if (!id22 || !ord) return { status: "unidentified" };
           if (seen.has(id22)) continue;
           seen.add(id22);
-          const text = typeof message.content === "string" ? message.content : "";
-          observed.push({ message, id: id22, ord, text, bytes: utf8Bytes(text) + HEAD_OVERHEAD_BYTES });
+          const text2 = typeof message.content === "string" ? message.content : "";
+          observed.push({ message, id: id22, ord, text: text2, bytes: utf8Bytes(text2) + HEAD_OVERHEAD_BYTES });
         }
         const retained = /* @__PURE__ */ new Set();
         for (const id22 of observation.coverage.retainedMessageIds ?? []) {
@@ -118358,12 +118383,12 @@ ${marker}`,
         return "";
       }
     }
-    function messageIdentityRevisionKey(message, text = flattenedText(message)) {
+    function messageIdentityRevisionKey(message, text2 = flattenedText(message)) {
       const meta = message.meta && typeof message.meta === "object" ? message.meta : void 0;
       return JSON.stringify([
         normalizedRole(message),
         normalizedKind(message),
-        text,
+        text2,
         message.bubbleState ?? null,
         message._turnKey ?? null,
         message.senderName ?? null,
@@ -118374,14 +118399,14 @@ ${marker}`,
       ]);
     }
     function toMessageIdentityInput(message) {
-      const text = flattenedText(message);
+      const text2 = flattenedText(message);
       const src = readMessageSourceAddress(message._src);
       return {
         role: normalizedRole(message),
         kind: normalizedKind(message),
-        text,
+        text: text2,
         ...src ? { src } : {},
-        revisionKey: messageIdentityRevisionKey(message, text),
+        revisionKey: messageIdentityRevisionKey(message, text2),
         // The tool-block ref an expand request resolves by `messageId` (design
         // §5.9). Kept on the ledger entry, refreshed every read, never emitted.
         ...message.toolBlockRef ? { locator: message.toolBlockRef } : {}
@@ -118411,12 +118436,12 @@ ${marker}`,
     }
     function stampDomScriptMessageSources(parsed, lineageSeed) {
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return parsed;
-      const record2 = parsed;
-      if (!Array.isArray(record2.messages)) return parsed;
-      const seed = [record2.providerSessionId, record2.id, lineageSeed].find((value) => typeof value === "string" && value.trim());
+      const record3 = parsed;
+      if (!Array.isArray(record3.messages)) return parsed;
+      const seed = [record3.providerSessionId, record3.id, lineageSeed].find((value) => typeof value === "string" && value.trim());
       if (!seed) return parsed;
       let stamped = false;
-      const messages = record2.messages.map((message) => {
+      const messages = record3.messages.map((message) => {
         if (!message || typeof message !== "object" || Array.isArray(message)) return message;
         const nativeId = message.messageId;
         const src = nativeSourceAddress(seed, keyedNativeAddress(nativeId, 0));
@@ -118424,7 +118449,7 @@ ${marker}`,
         stamped = true;
         return { ...message, _src: src };
       });
-      return stamped ? { ...record2, messages } : parsed;
+      return stamped ? { ...record3, messages } : parsed;
     }
     function shouldPreserveReadChatPayloadField(key2) {
       return key2 === "messageSource" || key2 === "transcriptProvenance";
@@ -118449,11 +118474,11 @@ ${marker}`,
     }
     function updateMessageSourceReturnedCount(value, returnedMessageCount) {
       if (!value || typeof value !== "object" || Array.isArray(value)) return value;
-      const record2 = value;
-      const coverage = record2.coverage && typeof record2.coverage === "object" && !Array.isArray(record2.coverage) ? record2.coverage : void 0;
+      const record3 = value;
+      const coverage = record3.coverage && typeof record3.coverage === "object" && !Array.isArray(record3.coverage) ? record3.coverage : void 0;
       if (!coverage) return value;
       return {
-        ...record2,
+        ...record3,
         coverage: {
           ...coverage,
           returnedMessageCount
@@ -119875,13 +119900,13 @@ ${marker}`,
         }
         return items;
       }
-      const record2 = value;
+      const record3 = value;
       const result = {};
-      const entries = Object.entries(record2).slice(0, normalizedOptions.maxObjectKeys);
+      const entries = Object.entries(record3).slice(0, normalizedOptions.maxObjectKeys);
       for (const [key2, item] of entries) {
         result[key2] = sanitizeDebugBundleValue(item, normalizedOptions, depth + 1, key2);
       }
-      const remaining = Object.keys(record2).length - entries.length;
+      const remaining = Object.keys(record3).length - entries.length;
       if (remaining > 0) result.__truncatedKeys = remaining;
       return result;
     }
@@ -120434,9 +120459,9 @@ ${marker}`,
           if (hasNonTextParts(msg.input)) {
             return refuse2("unsupported_input", { message: `${target.label || "This session"} only supports text input.` });
           }
-          const text = msg.input.textFallback;
-          if (!text || !text.trim()) return refuse2("unsupported_input", { message: "No input to send." });
-          return { text };
+          const text2 = msg.input.textFallback;
+          if (!text2 || !text2.trim()) return refuse2("unsupported_input", { message: "No input to send." });
+          return { text: text2 };
         } catch (e) {
           return refuse2("unsupported_input", { message: e?.message || String(e) });
         }
@@ -120632,8 +120657,8 @@ ${marker}`,
           log("info", `withdraw(${messageId}) session ${sessionId} \u2192 ${claimed ? "removed" : "not parked"}`);
           return { removed: !!claimed };
         },
-        async findParkedMessageIdByText(sessionId, text) {
-          const wanted = text.trim();
+        async findParkedMessageIdByText(sessionId, text2) {
+          const wanted = text2.trim();
           if (!wanted) return void 0;
           const candidates = [];
           for (const [messageId, entry] of parkedText) {
@@ -120767,13 +120792,13 @@ ${marker}`,
     }
     function buildCliStructuredInputPrompt(input, options = {}) {
       const materializeDir = options.materializeDir || path64.join(os28.tmpdir(), "adhdev-input-media");
-      const { text, imageRefs, resourceRefs } = buildStructuredInputText(input, (part, index) => {
+      const { text: text2, imageRefs, resourceRefs } = buildStructuredInputText(input, (part, index) => {
         const localPath = typeof part.uri === "string" ? filePathFromUri(part.uri) : null;
         const materializedPath = !localPath && part.data ? materializeImageDataPart(part, index, materializeDir) : null;
         return localPath || materializedPath || part.uri || "";
       });
       LOG.debug("CLI", `buildCliStructuredInputPrompt parts=${input.parts.length} images=${imageRefs.length} resources=${resourceRefs.length}`);
-      return text;
+      return text2;
     }
     function buildCliInputAckText(input) {
       return buildStructuredInputText(input, (part) => {
@@ -120804,9 +120829,9 @@ ${marker}`,
         return envelope.textFallback ? { text: envelope.textFallback } : null;
       }
       assertProviderSupportsDeclaredInput(provider, envelope);
-      const text = buildCliStructuredInputPrompt(envelope);
-      if (!text) return null;
-      return { text, ...shouldUseBracketedPasteForEnvelope(envelope) ? { bracketedPaste: true } : {} };
+      const text2 = buildCliStructuredInputPrompt(envelope);
+      if (!text2) return null;
+      return { text: text2, ...shouldUseBracketedPasteForEnvelope(envelope) ? { bracketedPaste: true } : {} };
     }
     function buildSessionInputTarget(args) {
       const { adapter, instance, provider } = args;
@@ -120815,7 +120840,7 @@ ${marker}`,
         label: adapter.cliType,
         getStatus: (o) => adapter.getStatus?.(o),
         buildBody: (input) => buildCliInputBody(provider, input),
-        sendMessage: (text, options) => adapter.sendMessage(text, options)
+        sendMessage: (text2, options) => adapter.sendMessage(text2, options)
       };
       if (typeof adapter.sendMessageDuringGeneration === "function") target.sendMessageDuringGeneration = (t, b) => adapter.sendMessageDuringGeneration(t, b);
       if (typeof adapter.interruptTurn === "function") target.interruptTurn = () => adapter.interruptTurn();
@@ -120832,9 +120857,9 @@ ${marker}`,
     function getSendChatInputEnvelope(args) {
       return normalizeInputEnvelope(args?.input ? { input: args.input } : args);
     }
-    function callLegacyTextScript(script, text) {
+    function callLegacyTextScript(script, text2) {
       if (typeof script !== "function") return null;
-      return script(text);
+      return script(text2);
     }
     function didProviderConfirmSend(result) {
       const parsed = parseMaybeJson(result);
@@ -121000,8 +121025,8 @@ ${marker}`,
     }
     async function handleSendChat(h, args) {
       const input = getSendChatInputEnvelope(args);
-      const text = input.textFallback;
-      const hasInput = input.parts.length > 0 || typeof text === "string" && text.trim().length > 0;
+      const text2 = input.textFallback;
+      const hasInput = input.parts.length > 0 || typeof text2 === "string" && text2.trim().length > 0;
       if (!hasInput) return { success: false, error: "input required" };
       const _log = (msg) => LOG.debug("Command", `[send_chat] ${msg}`);
       const provider = h.getProvider(args?.agentType);
@@ -121013,12 +121038,12 @@ ${marker}`,
         return submitCliChat(h, args, input, provider, transport);
       }
       assertTextOnlyInput(provider, input);
-      if (!text) return { success: false, error: "text required" };
+      if (!text2) return { success: false, error: "text required" };
       if (isExtensionTransport(transport)) {
         _log(`Extension: ${provider?.type || "unknown_extension"}`);
         try {
           const beforeState = await getStableExtensionBaseline(h);
-          const evalResult = await h.evaluateProviderScript("sendMessage", { message: text }, 3e4);
+          const evalResult = await h.evaluateProviderScript("sendMessage", { message: text2 }, 3e4);
           if (evalResult?.result) {
             const parsed = parseMaybeJson(evalResult.result);
             if (didProviderConfirmSend(parsed)) {
@@ -121038,7 +121063,7 @@ ${marker}`,
         }
         const extensionSessionId = h.currentSession?.sessionId;
         if (h.agentStream && h.getCdp() && extensionSessionId) {
-          const ok = await h.agentStream.sendToSession(h.getCdp(), extensionSessionId, text);
+          const ok = await h.agentStream.sendToSession(h.getCdp(), extensionSessionId, text2);
           if (ok) {
             _log(`AgentStreamManager sent OK`);
             return _logSendSuccess("agent-stream");
@@ -121053,7 +121078,7 @@ ${marker}`,
         return { success: false, error: `CDP for ${managerKey || "unknown"} not connected` };
       }
       _log(`Targeting IDE: ${getCurrentManagerKey(h)}`);
-      const sendScript = h.getProviderScript("sendMessage", { message: text });
+      const sendScript = h.getProviderScript("sendMessage", { message: text2 });
       if (sendScript) {
         try {
           const result = await targetCdp.evaluate(sendScript, 3e4);
@@ -121064,7 +121089,7 @@ ${marker}`,
           }
           if (parsed?.needsTypeAndSend && parsed?.selector) {
             try {
-              const sent = await targetCdp.typeAndSend(parsed.selector, text);
+              const sent = await targetCdp.typeAndSend(parsed.selector, text2);
               if (sent) {
                 _log(`typeAndSend(script.selector=${parsed.selector}) success`);
                 return _logSendSuccess("typeAndSend-script");
@@ -121076,7 +121101,7 @@ ${marker}`,
           if (parsed?.needsTypeAndSend && parsed?.clickCoords) {
             try {
               const { x, y } = parsed.clickCoords;
-              const sent = await targetCdp.typeAndSendAt(x, y, text);
+              const sent = await targetCdp.typeAndSendAt(x, y, text2);
               if (sent) {
                 _log(`typeAndSendAt(${x},${y}) success`);
                 return _logSendSuccess("typeAndSendAt-script");
@@ -121087,7 +121112,7 @@ ${marker}`,
           }
           if (parsed?.needsTypeAndSend && provider?.inputMethod === "cdp-type-and-send" && provider.inputSelector) {
             try {
-              const sent = await targetCdp.typeAndSend(provider.inputSelector, text);
+              const sent = await targetCdp.typeAndSend(provider.inputSelector, text2);
               if (sent) {
                 _log(`typeAndSend(provider.inputSelector=${provider.inputSelector}) success`);
                 return _logSendSuccess("typeAndSend-provider");
@@ -121098,7 +121123,7 @@ ${marker}`,
           }
           if (parsed?.needsTypeAndSend && provider?.webviewMatchText && provider?.scripts?.webviewSendMessage) {
             try {
-              const webviewScript = callLegacyTextScript(provider.scripts.webviewSendMessage, text);
+              const webviewScript = callLegacyTextScript(provider.scripts.webviewSendMessage, text2);
               if (webviewScript && targetCdp.evaluateInWebviewFrame) {
                 const matchText = provider.webviewMatchText;
                 const matchFn = matchText ? (body) => body.includes(matchText) : void 0;
@@ -121121,7 +121146,7 @@ ${marker}`,
       }
       if (provider?.webviewMatchText && provider?.scripts?.webviewSendMessage) {
         try {
-          const webviewScript = callLegacyTextScript(provider.scripts.webviewSendMessage, text);
+          const webviewScript = callLegacyTextScript(provider.scripts.webviewSendMessage, text2);
           if (webviewScript && targetCdp.evaluateInWebviewFrame) {
             const matchText = provider.webviewMatchText;
             const matchFn = matchText ? (body) => body.includes(matchText) : void 0;
@@ -121138,7 +121163,7 @@ ${marker}`,
       }
       if (provider?.inputMethod === "cdp-type-and-send" && provider.inputSelector) {
         try {
-          const sent = await targetCdp.typeAndSend(provider.inputSelector, text);
+          const sent = await targetCdp.typeAndSend(provider.inputSelector, text2);
           if (sent) {
             _log(`typeAndSend(provider.inputSelector=${provider.inputSelector}) success`);
             return _logSendSuccess("typeAndSend-provider");
@@ -121151,9 +121176,9 @@ ${marker}`,
       return { success: false, error: "No provider method could send the message" };
     }
     async function handleCancelQueuedChat(h, args) {
-      const text = typeof args?.message === "string" ? args.message : "";
+      const text2 = typeof args?.message === "string" ? args.message : "";
       let messageId = readMessageId(args);
-      if (!messageId && !text.trim()) return { success: false, error: "messageId required" };
+      if (!messageId && !text2.trim()) return { success: false, error: "messageId required" };
       const _log = (msg) => LOG.debug("Command", `[cancel_queued_chat] ${msg}`);
       const provider = h.getProvider(args?.agentType);
       const transport = getTargetTransport(h, provider);
@@ -121166,7 +121191,7 @@ ${marker}`,
       }
       const service = sessionInputFor(h);
       if (!messageId) {
-        messageId = await service.findParkedMessageIdByText(sessionKey2, text);
+        messageId = await service.findParkedMessageIdByText(sessionKey2, text2);
         _log(`legacy text-keyed cancel resolved to ${messageId || "nothing parked"}`);
         if (!messageId) return { success: true, cancelled: 0, removed: false };
       }
@@ -121875,7 +121900,7 @@ ${marker}`,
       try {
         switch (action) {
           case "input_key": {
-            const { type: evType, key: key2, code, text, unmodifiedText, modifiers } = params;
+            const { type: evType, key: key2, code, text: text2, unmodifiedText, modifiers } = params;
             const mod = typeof modifiers === "number" ? modifiers : 0;
             const vk = KEY_TO_VK[key2] || (key2.length === 1 ? key2.charCodeAt(0) : 0);
             if (evType === "char") {
@@ -121883,8 +121908,8 @@ ${marker}`,
                 type: "char",
                 key: key2,
                 code,
-                text: text || key2,
-                unmodifiedText: unmodifiedText || text || key2,
+                text: text2 || key2,
+                unmodifiedText: unmodifiedText || text2 || key2,
                 ...vk ? { windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk } : {},
                 ...mod ? { modifiers: mod } : {}
               });
@@ -121893,7 +121918,7 @@ ${marker}`,
                 type: "rawKeyDown",
                 key: key2,
                 code,
-                ...text ? { text } : {},
+                ...text2 ? { text: text2 } : {},
                 ...vk ? { windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk } : {},
                 ...mod ? { modifiers: mod } : {}
               });
@@ -121938,8 +121963,8 @@ ${marker}`,
             return { success: true, x, y };
           }
           case "input_type": {
-            const { text } = params;
-            for (const char of text || "") {
+            const { text: text2 } = params;
+            for (const char of text2 || "") {
               await h.getCdp().send("Input.dispatchKeyEvent", {
                 type: "char",
                 text: char,
@@ -122199,10 +122224,10 @@ ${marker}`,
       const command = payload.command;
       if (!command || typeof command !== "object") return null;
       if (command.type !== "send_message" && command.type !== "pty_write") return null;
-      const text = typeof command.text === "string" ? command.text.trim() : typeof command.message === "string" ? command.message.trim() : "";
-      if (!text) return null;
+      const text2 = typeof command.text === "string" ? command.text.trim() : typeof command.message === "string" ? command.message.trim() : "";
+      if (!text2) return null;
       const enterCount = Number.isInteger(command.enterCount) && command.enterCount > 0 && command.enterCount <= 5 ? command.enterCount : void 0;
-      return { type: command.type, text, ...enterCount ? { enterCount } : {} };
+      return { type: command.type, text: text2, ...enterCount ? { enterCount } : {} };
     }
     init_control_effects();
     init_logger();
@@ -122222,11 +122247,11 @@ ${marker}`,
         return { opened: false, visible: false, focused: false };
       }
       if (typeof payload === "object") {
-        const record2 = payload;
+        const record3 = payload;
         return {
-          opened: record2.opened === true,
-          visible: record2.visible === true || record2.opened === true || record2.focused === true,
-          focused: record2.focused === true
+          opened: record3.opened === true,
+          visible: record3.visible === true || record3.opened === true || record3.focused === true,
+          focused: record3.focused === true
         };
       }
       return { opened: false, visible: false, focused: false };
@@ -122240,8 +122265,8 @@ ${marker}`,
         return { focused: normalized === "focused" || normalized === "visible" || normalized === "true" || normalized === "ok" || normalized === "success" };
       }
       if (typeof payload === "object") {
-        const record2 = payload;
-        return { focused: record2.focused === true || record2.visible === true || record2.success === true || record2.ok === true };
+        const record3 = payload;
+        return { focused: record3.focused === true || record3.visible === true || record3.success === true || record3.ok === true };
       }
       return { focused: false };
     }
@@ -122939,29 +122964,29 @@ ${marker}`,
     }));
     init_debug_trace();
     init_runtime_surface();
-    function toHostedCliRuntimeDescriptor(record2) {
-      if (!record2 || typeof record2 !== "object") return null;
-      const runtimeId = typeof record2.sessionId === "string" ? record2.sessionId : "";
-      const cliType = typeof record2.providerType === "string" ? record2.providerType : "";
-      const workspace = typeof record2.workspace === "string" ? record2.workspace : "";
+    function toHostedCliRuntimeDescriptor(record3) {
+      if (!record3 || typeof record3 !== "object") return null;
+      const runtimeId = typeof record3.sessionId === "string" ? record3.sessionId : "";
+      const cliType = typeof record3.providerType === "string" ? record3.providerType : "";
+      const workspace = typeof record3.workspace === "string" ? record3.workspace : "";
       if (!runtimeId || !cliType || !workspace) return null;
       return {
         runtimeId,
-        runtimeKey: typeof record2.runtimeKey === "string" ? record2.runtimeKey : void 0,
-        displayName: typeof record2.displayName === "string" ? record2.displayName : void 0,
-        workspaceLabel: typeof record2.workspaceLabel === "string" ? record2.workspaceLabel : void 0,
-        lifecycle: typeof record2.lifecycle === "string" ? record2.lifecycle : void 0,
-        recoveryState: typeof record2.meta?.runtimeRecoveryState === "string" ? String(record2.meta.runtimeRecoveryState) : null,
+        runtimeKey: typeof record3.runtimeKey === "string" ? record3.runtimeKey : void 0,
+        displayName: typeof record3.displayName === "string" ? record3.displayName : void 0,
+        workspaceLabel: typeof record3.workspaceLabel === "string" ? record3.workspaceLabel : void 0,
+        lifecycle: typeof record3.lifecycle === "string" ? record3.lifecycle : void 0,
+        recoveryState: typeof record3.meta?.runtimeRecoveryState === "string" ? String(record3.meta.runtimeRecoveryState) : null,
         cliType,
         workspace,
-        cliArgs: Array.isArray(record2.meta?.cliArgs) ? record2.meta.cliArgs : [],
-        providerSessionId: typeof record2.meta?.providerSessionId === "string" ? String(record2.meta.providerSessionId) : void 0,
+        cliArgs: Array.isArray(record3.meta?.cliArgs) ? record3.meta.cliArgs : [],
+        providerSessionId: typeof record3.meta?.providerSessionId === "string" ? String(record3.meta.providerSessionId) : void 0,
         // Real spawn time (PAST timestamp) of the underlying runtime — startedAt is
         // stamped on markStarted; fall back to createdAt (record creation). Threaded
         // through so an attach restores the native-history session-floor to the
         // runtime's actual birth instead of collapsing spawnedAtMs to 0 (which broke
         // the antigravity per-session birth-floor for co-located runtimes).
-        startedAtMs: typeof record2.startedAt === "number" && record2.startedAt > 0 ? record2.startedAt : typeof record2.createdAt === "number" && record2.createdAt > 0 ? record2.createdAt : void 0
+        startedAtMs: typeof record3.startedAt === "number" && record3.startedAt > 0 ? record3.startedAt : typeof record3.createdAt === "number" && record3.createdAt > 0 ? record3.createdAt : void 0
       };
     }
     function getWriteConflictOwnerClientId(error) {
@@ -122971,14 +122996,14 @@ ${marker}`,
     }
     function summarizeSessionHostRecord(result) {
       if (!result || typeof result !== "object") return {};
-      const record2 = result;
+      const record3 = result;
       return {
-        runtimeKey: typeof record2.runtimeKey === "string" ? record2.runtimeKey : void 0,
-        lifecycle: typeof record2.lifecycle === "string" ? record2.lifecycle : void 0,
-        surfaceKind: (0, import_session_host_core3.getSessionHostSurfaceKind)(record2),
-        attachedClientCount: Array.isArray(record2.attachedClients) ? record2.attachedClients.length : void 0,
-        hasWriteOwner: !!record2.writeOwner,
-        writeOwnerClientId: typeof record2.writeOwner?.clientId === "string" ? record2.writeOwner.clientId : void 0
+        runtimeKey: typeof record3.runtimeKey === "string" ? record3.runtimeKey : void 0,
+        lifecycle: typeof record3.lifecycle === "string" ? record3.lifecycle : void 0,
+        surfaceKind: (0, import_session_host_core3.getSessionHostSurfaceKind)(record3),
+        attachedClientCount: Array.isArray(record3.attachedClients) ? record3.attachedClients.length : void 0,
+        hasWriteOwner: !!record3.writeOwner,
+        writeOwnerClientId: typeof record3.writeOwner?.clientId === "string" ? record3.writeOwner.clientId : void 0
       };
     }
     function summarizeSessionHostRecords(result) {
@@ -123079,14 +123104,14 @@ ${marker}`,
         if (!ctx.deps.sessionHostControl) return { success: false, error: "Session host control unavailable" };
         const sessionId = typeof args?.sessionId === "string" ? args.sessionId : "";
         if (!sessionId) return { success: false, error: "sessionId required" };
-        const record2 = await traceSessionHostAction("session_host_stop_session", args, () => ctx.deps.sessionHostControl.stopSession(sessionId), (result) => summarizeSessionHostRecord(result));
-        return { success: true, record: record2 };
+        const record3 = await traceSessionHostAction("session_host_stop_session", args, () => ctx.deps.sessionHostControl.stopSession(sessionId), (result) => summarizeSessionHostRecord(result));
+        return { success: true, record: record3 };
       },
       session_host_resume_session: async (ctx, args) => {
         if (!ctx.deps.sessionHostControl) return { success: false, error: "Session host control unavailable" };
         const sessionId = typeof args?.sessionId === "string" ? args.sessionId : "";
         if (!sessionId) return { success: false, error: "sessionId required" };
-        const record2 = await traceSessionHostAction("session_host_resume_session", args, async () => {
+        const record3 = await traceSessionHostAction("session_host_resume_session", args, async () => {
           const nextRecord = await ctx.deps.sessionHostControl.resumeSession(sessionId);
           const hosted = toHostedCliRuntimeDescriptor(nextRecord);
           if (hosted) {
@@ -123097,13 +123122,13 @@ ${marker}`,
           ...summarizeSessionHostRecord(result),
           restoredHostedSession: !!toHostedCliRuntimeDescriptor(result)
         }));
-        return { success: true, record: record2 };
+        return { success: true, record: record3 };
       },
       session_host_restart_session: async (ctx, args) => {
         if (!ctx.deps.sessionHostControl) return { success: false, error: "Session host control unavailable" };
         const sessionId = typeof args?.sessionId === "string" ? args.sessionId : "";
         if (!sessionId) return { success: false, error: "sessionId required" };
-        const record2 = await traceSessionHostAction("session_host_restart_session", args, async () => {
+        const record3 = await traceSessionHostAction("session_host_restart_session", args, async () => {
           const nextRecord = await ctx.deps.sessionHostControl.restartSession(sessionId);
           const hosted = toHostedCliRuntimeDescriptor(nextRecord);
           if (hosted) {
@@ -123114,7 +123139,7 @@ ${marker}`,
           ...summarizeSessionHostRecord(result),
           restoredHostedSession: !!toHostedCliRuntimeDescriptor(result)
         }));
-        return { success: true, record: record2 };
+        return { success: true, record: record3 };
       },
       session_host_send_signal: async (ctx, args) => {
         if (!ctx.deps.sessionHostControl) return { success: false, error: "Session host control unavailable" };
@@ -123122,8 +123147,8 @@ ${marker}`,
         const signal = typeof args?.signal === "string" ? args.signal : "";
         if (!sessionId) return { success: false, error: "sessionId required" };
         if (!signal) return { success: false, error: "signal required" };
-        const record2 = await traceSessionHostAction("session_host_send_signal", args, () => ctx.deps.sessionHostControl.sendSignal(sessionId, signal), (result) => summarizeSessionHostRecord(result));
-        return { success: true, record: record2 };
+        const record3 = await traceSessionHostAction("session_host_send_signal", args, () => ctx.deps.sessionHostControl.sendSignal(sessionId, signal), (result) => summarizeSessionHostRecord(result));
+        return { success: true, record: record3 };
       },
       session_host_force_detach_client: async (ctx, args) => {
         if (!ctx.deps.sessionHostControl) return { success: false, error: "Session host control unavailable" };
@@ -123131,8 +123156,8 @@ ${marker}`,
         const clientId = typeof args?.clientId === "string" ? args.clientId : "";
         if (!sessionId) return { success: false, error: "sessionId required" };
         if (!clientId) return { success: false, error: "clientId required" };
-        const record2 = await traceSessionHostAction("session_host_force_detach_client", args, () => ctx.deps.sessionHostControl.forceDetachClient(sessionId, clientId), (result) => summarizeSessionHostRecord(result));
-        return { success: true, record: record2 };
+        const record3 = await traceSessionHostAction("session_host_force_detach_client", args, () => ctx.deps.sessionHostControl.forceDetachClient(sessionId, clientId), (result) => summarizeSessionHostRecord(result));
+        return { success: true, record: record3 };
       },
       session_host_prune_duplicate_sessions: async (ctx, args) => {
         if (!ctx.deps.sessionHostControl) return { success: false, error: "Session host control unavailable" };
@@ -123150,7 +123175,7 @@ ${marker}`,
         const ownerType = args?.ownerType === "agent" ? "agent" : "user";
         if (!sessionId) return { success: false, error: "sessionId required" };
         if (!clientId) return { success: false, error: "clientId required" };
-        const record2 = await traceSessionHostAction("session_host_acquire_write", args, () => ctx.deps.sessionHostControl.acquireWrite({
+        const record3 = await traceSessionHostAction("session_host_acquire_write", args, () => ctx.deps.sessionHostControl.acquireWrite({
           sessionId,
           clientId,
           ownerType,
@@ -123159,7 +123184,7 @@ ${marker}`,
           ...summarizeSessionHostRecord(result),
           ownerType
         }));
-        return { success: true, record: record2 };
+        return { success: true, record: record3 };
       },
       session_host_release_write: async (ctx, args) => {
         if (!ctx.deps.sessionHostControl) return { success: false, error: "Session host control unavailable" };
@@ -123167,11 +123192,11 @@ ${marker}`,
         const clientId = typeof args?.clientId === "string" ? args.clientId : "";
         if (!sessionId) return { success: false, error: "sessionId required" };
         if (!clientId) return { success: false, error: "clientId required" };
-        const record2 = await traceSessionHostAction("session_host_release_write", args, () => ctx.deps.sessionHostControl.releaseWrite({
+        const record3 = await traceSessionHostAction("session_host_release_write", args, () => ctx.deps.sessionHostControl.releaseWrite({
           sessionId,
           clientId
         }), (result) => summarizeSessionHostRecord(result));
-        return { success: true, record: record2 };
+        return { success: true, record: record3 };
       },
       /**
        * `get_runtime_snapshot`: a PTY snapshot for a CLI session, over the
@@ -124261,13 +124286,13 @@ ${marker}`,
       record_mesh_note: async (_ctx, args) => {
         const meshId = typeof args?.meshId === "string" ? args.meshId.trim() : "";
         if (!meshId) return { success: false, error: "meshId required" };
-        const text = typeof args?.text === "string" ? args.text.trim() : "";
-        if (!text) return { success: false, error: "text required" };
+        const text2 = typeof args?.text === "string" ? args.text.trim() : "";
+        if (!text2) return { success: false, error: "text required" };
         try {
           const { recordOperatingNote: recordOperatingNote2 } = await Promise.resolve().then(() => (init_mesh_operating_notes(), mesh_operating_notes_exports));
           const category = typeof args?.category === "string" ? args.category : void 0;
           const entry = recordOperatingNote2(meshId, {
-            text,
+            text: text2,
             ...category ? { category } : {},
             sourceCoordinator: "dashboard"
           });
@@ -124280,14 +124305,14 @@ ${marker}`,
         const meshId = typeof args?.meshId === "string" ? args.meshId.trim() : "";
         if (!meshId) return { success: false, error: "meshId required" };
         const noteId = typeof args?.noteId === "string" ? args.noteId.trim() : "";
-        const text = typeof args?.text === "string" ? args.text.trim() : "";
-        if (!noteId && !text) return { success: false, error: "noteId or text required" };
+        const text2 = typeof args?.text === "string" ? args.text.trim() : "";
+        if (!noteId && !text2) return { success: false, error: "noteId or text required" };
         try {
           const { forgetOperatingNote: forgetOperatingNote2 } = await Promise.resolve().then(() => (init_mesh_operating_notes(), mesh_operating_notes_exports));
           const reason = typeof args?.reason === "string" && args.reason.trim() ? args.reason.trim() : "dashboard_manual";
           const result = forgetOperatingNote2(meshId, {
             ...noteId ? { noteId } : {},
-            ...text ? { text } : {},
+            ...text2 ? { text: text2 } : {},
             reason
           });
           return { success: true, matched: result.matched };
@@ -124469,8 +124494,8 @@ ${marker}`,
     };
     async function ownQueueRole(ctx, meshId) {
       try {
-        const record2 = await ctx?.getMeshForCommand?.(meshId, void 0, { preferInline: true });
-        return record2?.mesh ? resolveMeshHostStatus(record2.mesh).role : void 0;
+        const record3 = await ctx?.getMeshForCommand?.(meshId, void 0, { preferInline: true });
+        return record3?.mesh ? resolveMeshHostStatus(record3.mesh).role : void 0;
       } catch {
         return void 0;
       }
@@ -124587,8 +124612,8 @@ ${marker}`,
     var DEFAULT_ACTIVE_WORK_RECORD_TAIL = 200;
     async function ownMeshRecord(ctx, meshId) {
       try {
-        const record2 = await ctx?.getMeshForCommand?.(meshId, void 0, { preferInline: true });
-        return record2?.mesh ? record2.mesh : void 0;
+        const record3 = await ctx?.getMeshForCommand?.(meshId, void 0, { preferInline: true });
+        return record3?.mesh ? record3.mesh : void 0;
       } catch {
         return void 0;
       }
@@ -125035,23 +125060,23 @@ ${marker}`,
         return { success: false, error: e?.message ?? String(e) };
       }
     };
-    function toWireMission(record2) {
+    function toWireMission(record3) {
       return {
-        id: record2.id,
-        meshId: record2.meshId,
-        title: record2.title,
-        goal: record2.goal,
-        status: record2.status,
+        id: record3.id,
+        meshId: record3.meshId,
+        title: record3.title,
+        goal: record3.goal,
+        status: record3.status,
         // H2: `record.brief` is already normalized (mesh-missions.ts) — a structural
         // mirror is enough for the wire, not a re-normalize.
-        ...record2.brief ? { brief: record2.brief } : {}
+        ...record3.brief ? { brief: record3.brief } : {}
       };
     }
     var missionUpsert2 = async (_ctx, args) => {
       const req = decodeMissionUpsertRequest(args);
       if (!req) return badRequest3("mission_upsert");
       try {
-        const record2 = upsertMeshMission(req.meshId, {
+        const record3 = upsertMeshMission(req.meshId, {
           ...req.id ? { id: req.id } : {},
           title: req.title,
           ...req.goal !== void 0 ? { goal: req.goal } : {},
@@ -125061,7 +125086,7 @@ ${marker}`,
           // upsertMeshMission's own normalizeMissionBrief call does the real work.
           ...req.brief !== void 0 ? { brief: req.brief } : {}
         });
-        const response = { mission: toWireMission(record2) };
+        const response = { mission: toWireMission(record3) };
         return { success: true, ...response };
       } catch (e) {
         return { success: false, error: e?.message ?? String(e) };
@@ -125072,8 +125097,8 @@ ${marker}`,
       if (!req) return badRequest3("mission_query");
       try {
         if (req.id) {
-          const record2 = getMeshMission(req.meshId, req.id);
-          const response2 = { missions: record2 ? [toWireMission(record2)] : [] };
+          const record3 = getMeshMission(req.meshId, req.id);
+          const response2 = { missions: record3 ? [toWireMission(record3)] : [] };
           return { success: true, ...response2 };
         }
         const records = getMeshMissions(req.meshId, req.statuses ? [...req.statuses] : void 0);
@@ -125248,8 +125273,8 @@ ${marker}`,
         fs66.closeSync(fd);
       }
     }
-    function splitLogLines(text) {
-      const lines = text.split("\n");
+    function splitLogLines(text2) {
+      const lines = text2.split("\n");
       if (lines.length && lines[lines.length - 1] === "") lines.pop();
       return lines;
     }
@@ -125784,8 +125809,8 @@ ${marker}`,
     async function ownerRosterNodeDaemonLookup(ctx, meshId) {
       let nodes = [];
       try {
-        const record2 = await ctx?.getMeshForCommand?.(meshId, void 0, { preferInline: true });
-        nodes = Array.isArray(record2?.mesh?.nodes) ? record2.mesh.nodes : [];
+        const record3 = await ctx?.getMeshForCommand?.(meshId, void 0, { preferInline: true });
+        nodes = Array.isArray(record3?.mesh?.nodes) ? record3.mesh.nodes : [];
       } catch {
         nodes = [];
       }
@@ -125898,19 +125923,19 @@ ${marker}`,
     function decodeForwardedClaim(args, allowedKeys) {
       const input = stripRouterInternalArgs(args);
       if (!input || typeof input !== "object" || Array.isArray(input)) return null;
-      const record2 = input;
-      for (const key2 of Object.keys(record2)) if (!allowedKeys.has(key2)) return null;
-      const meshId = readNonEmpty3(record2.meshId);
-      const sessionId = readNonEmpty3(record2.sessionId);
+      const record3 = input;
+      for (const key2 of Object.keys(record3)) if (!allowedKeys.has(key2)) return null;
+      const meshId = readNonEmpty3(record3.meshId);
+      const sessionId = readNonEmpty3(record3.sessionId);
       if (!meshId || !sessionId) return null;
       for (const key2 of ["taskId", "attemptId", "nodeId"]) {
-        if (record2[key2] !== void 0 && !readNonEmpty3(record2[key2])) return null;
+        if (record3[key2] !== void 0 && !readNonEmpty3(record3[key2])) return null;
       }
-      const taskId = readNonEmpty3(record2.taskId);
-      const attemptId = readNonEmpty3(record2.attemptId);
+      const taskId = readNonEmpty3(record3.taskId);
+      const attemptId = readNonEmpty3(record3.attemptId);
       return {
         claim: { meshId, sessionId, ...taskId ? { taskId } : {}, ...attemptId ? { attemptId } : {} },
-        record: record2
+        record: record3
       };
     }
     function decodeForwardedWorkerReport(args) {
@@ -126148,8 +126173,8 @@ ${marker}`,
           }
           const meshId = typeof args?.meshId === "string" ? args.meshId.trim() : "";
           const taskId = typeof args?.taskId === "string" ? args.taskId.trim() : "";
-          const text = typeof args?.text === "string" ? args.text.trim() : "";
-          if (!meshId || !taskId || !text) {
+          const text2 = typeof args?.text === "string" ? args.text.trim() : "";
+          if (!meshId || !taskId || !text2) {
             return { success: false, error: "invalid_input", detail: "meshId, taskId and text are all required" };
           }
           const { MeshRuntimeStore: MeshRuntimeStore2 } = await Promise.resolve().then(() => (init_mesh_runtime_store(), mesh_runtime_store_exports));
@@ -126169,7 +126194,7 @@ ${marker}`,
             if (dropped > 0) LOG.info("WorkerMailbox", `Dropped ${dropped} undelivered memo(s) for remote-owned task(s) no local worker holds any more`);
             LOG.info("WorkerMailbox", `Memo for remote-owned task ${taskId} (owner ${worker.ownerDaemonId.slice(0, 16)}) held for its local worker session ${worker.sessionId}`);
           }
-          const result = depositWorkerMailboxMessage2({ meshId, taskId, text });
+          const result = depositWorkerMailboxMessage2({ meshId, taskId, text: text2 });
           if (!result.ok) {
             return { success: false, error: result.error, detail: result.detail };
           }
@@ -127434,9 +127459,9 @@ ${marker}`,
       };
       if (meshRecord2.inline) {
         const crypto16 = await import("crypto");
-        const randomUUID29 = crypto16.randomUUID || crypto16.default && crypto16.default.randomUUID;
+        const randomUUID31 = crypto16.randomUUID || crypto16.default && crypto16.default.randomUUID;
         const node2 = {
-          id: `node_${randomUUID29().replace(/-/g, "")}`,
+          id: `node_${randomUUID31().replace(/-/g, "")}`,
           workspace: fields.workspace,
           repoRoot: fields.repoRoot,
           daemonId: fields.daemonId,
@@ -128168,8 +128193,8 @@ ${marker}`,
             const candidate = join111(workspace, relative13);
             if (!existsSync114(candidate)) continue;
             try {
-              const text = readFileSync92(candidate, "utf-8");
-              const parsed = /\.json$/i.test(candidate) ? JSON.parse(text) : yaml3.load(text);
+              const text2 = readFileSync92(candidate, "utf-8");
+              const parsed = /\.json$/i.test(candidate) ? JSON.parse(text2) : yaml3.load(text2);
               if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
                 baseDoc = parsed;
                 existingPath = candidate;
@@ -129172,7 +129197,7 @@ ${marker}`,
             submitted: true,
             promptId: applied.promptId,
             answers: applied.answers,
-            note: "Answer resolved against the active prompt and the submit keystrokes were dispatched to the TUI. Verify the session left awaiting_choice on the next status read."
+            note: payload.binding ? "Response dispatched through the managed Codex transport. RPC resolution or ordinary async input delivery must be distinguished from native answer completion." : "Answer resolved against the active prompt and the submit keystrokes were dispatched to the TUI. Verify the session left awaiting_choice on the next status read."
           };
         } catch (e) {
           const describeActive = instance.describeActiveInteractivePrompt;
@@ -129386,11 +129411,11 @@ ${marker}`,
               const noteEntries = readOperatingNotes2(id22, { tail: 100 });
               const notes = noteEntries.map((e) => {
                 const p = e.payload || {};
-                const text = typeof p.text === "string" ? p.text.trim() : "";
-                if (!text) return null;
+                const text2 = typeof p.text === "string" ? p.text.trim() : "";
+                if (!text2) return null;
                 const category = p.category === "provider_quirk" || p.category === "pattern_to_avoid" || p.category === "recovery_lesson" ? p.category : void 0;
                 return {
-                  text,
+                  text: text2,
                   category,
                   createdAt: typeof p.createdAt === "string" ? p.createdAt : e.timestamp,
                   sourceCoordinator: typeof p.sourceCoordinator === "string" ? p.sourceCoordinator : void 0,
@@ -130015,8 +130040,8 @@ ${ptyResult.output.slice(-2e3)}`);
     function normalizeCommit(value) {
       return typeof value === "string" && /^[0-9a-f]{7,40}$/i.test(value.trim()) ? value.trim() : null;
     }
-    function readTargetFreshness(record2, currentCommit) {
-      const targets = record2?.targets && typeof record2.targets === "object" && !Array.isArray(record2.targets) ? record2.targets : {};
+    function readTargetFreshness(record3, currentCommit) {
+      const targets = record3?.targets && typeof record3.targets === "object" && !Array.isArray(record3.targets) ? record3.targets : {};
       const result = {};
       for (const targetName of ["npm", "server", "web"]) {
         const targetRecord = targets[targetName] && typeof targets[targetName] === "object" && !Array.isArray(targets[targetName]) ? targets[targetName] : {};
@@ -130043,9 +130068,9 @@ ${ptyResult.output.slice(-2e3)}`);
     function buildPreviewFreshness(repoRoot) {
       if (!isPreviewPipelineConfigured(repoRoot)) return null;
       const current4 = readCurrentMainCommit(repoRoot);
-      const record2 = readRecord3(repoRoot);
-      const lastPreviewCommit = normalizeCommit(record2?.lastPreviewCommit);
-      const targets = readTargetFreshness(record2, current4.currentMainCommit);
+      const record3 = readRecord3(repoRoot);
+      const lastPreviewCommit = normalizeCommit(record3?.lastPreviewCommit);
+      const targets = readTargetFreshness(record3, current4.currentMainCommit);
       let status = "unknown";
       let nextAction = "Run npm run deploy:preview from the current main commit, then smoke preview.";
       if (lastPreviewCommit && current4.currentMainCommit) {
@@ -130060,9 +130085,9 @@ ${ptyResult.output.slice(-2e3)}`);
         currentMainCommit: current4.currentMainCommit,
         currentMainCommitSource: current4.currentMainCommitSource,
         recordPath: PREVIEW_DEPLOY_RECORD,
-        lastDeployedAt: typeof record2?.updatedAt === "string" ? record2.updatedAt : void 0,
-        lastTarget: typeof record2?.target === "string" ? record2.target : void 0,
-        previewVersion: typeof record2?.previewVersion === "string" ? record2.previewVersion : void 0,
+        lastDeployedAt: typeof record3?.updatedAt === "string" ? record3.updatedAt : void 0,
+        lastTarget: typeof record3?.target === "string" ? record3.target : void 0,
+        previewVersion: typeof record3?.previewVersion === "string" ? record3.previewVersion : void 0,
         targets,
         nextAction
       };
@@ -130384,8 +130409,8 @@ ${ptyResult.output.slice(-2e3)}`);
             }) || (typeof node.workspace === "string" ? node.workspace : "");
             status.workspace = workspace || node.workspace;
             if (matchedLiveSessionRecords.length > 0) {
-              const sessionIds = matchedLiveSessionRecords.map((record2) => typeof record2?.sessionId === "string" ? record2.sessionId : "").filter(Boolean);
-              const providerTypes = matchedLiveSessionRecords.map((record2) => readStringValue(record2?.providerType)).filter(Boolean);
+              const sessionIds = matchedLiveSessionRecords.map((record3) => typeof record3?.sessionId === "string" ? record3.sessionId : "").filter(Boolean);
+              const providerTypes = matchedLiveSessionRecords.map((record3) => readStringValue(record3?.providerType)).filter(Boolean);
               status.activeSessions = sessionIds;
               status.activeSessionDetails = matchedLiveSessionRecords.map(summarizeMeshSessionRecord);
               if (providerTypes.length > 0) {
@@ -130682,8 +130707,8 @@ ${ptyResult.output.slice(-2e3)}`);
     init_mesh_relay_result();
     var MESH_NODE_GIT_LOG_TIMEOUT_MS = 15e3;
     async function resolveMeshNode(ctx, meshId, nodeId) {
-      const record2 = await ctx.getMeshForCommand(meshId, void 0, { preferInline: true });
-      const mesh = record2?.mesh;
+      const record3 = await ctx.getMeshForCommand(meshId, void 0, { preferInline: true });
+      const mesh = record3?.mesh;
       if (!mesh) return { ok: false, result: { success: false, code: "mesh_not_found", error: "Mesh not found", accepted: false } };
       const node = Array.isArray(mesh.nodes) ? mesh.nodes.find((n) => meshNodeIdMatches7(n, nodeId)) : void 0;
       if (!node) return { ok: false, result: { success: false, code: "mesh_node_unknown", error: `Node ${nodeId} is not on mesh ${meshId}`, accepted: false } };
@@ -130876,10 +130901,10 @@ ${ptyResult.output.slice(-2e3)}`);
         }
       });
     }
-    function noteTextRefusal(text) {
-      if (!text) return null;
-      if (detectCredential(text)) return { result: "note_secret_rejected" };
-      const f = scanWriteContent(text);
+    function noteTextRefusal(text2) {
+      if (!text2) return null;
+      if (detectCredential(text2)) return { result: "note_secret_rejected" };
+      const f = scanWriteContent(text2);
       if (!f) return null;
       return { result: f.kind === "hidden_chars" ? "note_hidden_chars_rejected" : "note_injection_rejected", pattern: f.pattern };
     }
@@ -130954,19 +130979,19 @@ ${ptyResult.output.slice(-2e3)}`);
     }
     function parseNoteOp(args) {
       const action = str8(args?.action);
-      const text = str8(args?.text);
+      const text2 = str8(args?.text);
       if (action === "record") {
-        if (!text) return "text required for record";
+        if (!text2) return "text required for record";
         const category = str8(args?.category);
         if (category && !PROJECT_NOTE_CATEGORIES.includes(category)) {
           return `category must be one of ${PROJECT_NOTE_CATEGORIES.join(", ")}`;
         }
-        return { action, text, ...category ? { category } : {} };
+        return { action, text: text2, ...category ? { category } : {} };
       }
       if (action === "forget") {
         const noteId = str8(args?.note_id) || str8(args?.noteId);
-        if (!noteId && !text) return "note_id or text required for forget";
-        return { action, ...noteId ? { noteId } : {}, ...text ? { text } : {} };
+        if (!noteId && !text2) return "note_id or text required for forget";
+        return { action, ...noteId ? { noteId } : {}, ...text2 ? { text: text2 } : {} };
       }
       return "action must be record or forget";
     }
@@ -130987,10 +131012,10 @@ ${ptyResult.output.slice(-2e3)}`);
       const action = str8(args?.action);
       const target = str8(args?.target);
       if (target !== "memory" && target !== "user") return "target must be memory or user";
-      const text = rawStr(args?.text);
+      const text2 = rawStr(args?.text);
       const match = rawStr(args?.match);
-      if (action === "add") return { action, target, content: text ?? "" };
-      if (action === "replace") return { action, target, match: match ?? "", content: text ?? "" };
+      if (action === "add") return { action, target, content: text2 ?? "" };
+      if (action === "replace") return { action, target, match: match ?? "", content: text2 ?? "" };
       if (action === "remove") return { action, target, match: match ?? "" };
       return "action must be add, replace or remove";
     }
@@ -131336,9 +131361,9 @@ ${ptyResult.output.slice(-2e3)}`);
         return { ok: false, code: "skill_attach_too_large", error: "skill_attach_too_large", chars, limit: PROJECT_SEND_ATTACH_MAX_CHARS };
       }
       const supplement = input.supplement?.trim();
-      const text = [input.message, ...supplement ? [`${SUPPLEMENT_LABEL}
+      const text2 = [input.message, ...supplement ? [`${SUPPLEMENT_LABEL}
 ${supplement}`] : [], ...blocks].join("\n\n");
-      return { ok: true, text, attached: names };
+      return { ok: true, text: text2, attached: names };
     }
     init_project_views();
     var import_fs41 = require("fs");
@@ -131397,15 +131422,15 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       }
     }
     function readRepoIdentity(commonDir) {
-      let text;
+      let text2;
       try {
-        text = (0, import_fs41.readFileSync)((0, import_path41.join)(commonDir, "config"), "utf-8");
+        text2 = (0, import_fs41.readFileSync)((0, import_path41.join)(commonDir, "config"), "utf-8");
       } catch {
         return null;
       }
       let section2 = "";
       const urls = [];
-      for (const line of text.split(/\r?\n/)) {
+      for (const line of text2.split(/\r?\n/)) {
         const head = /^\s*\[\s*remote\s+"([^"]+)"\s*\]/.exec(line);
         if (head) {
           section2 = head[1];
@@ -131455,7 +131480,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       const visited = /* @__PURE__ */ new Set();
       let dirsScanned = 0;
       let truncated;
-      const record2 = (path90) => {
+      const record3 = (path90) => {
         if (repos.has(path90)) return;
         const git3 = gitCommonDir(path90);
         if (!git3) return;
@@ -131480,7 +131505,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         if (visited.has(path90)) continue;
         visited.add(path90);
         if ((0, import_fs41.existsSync)((0, import_path41.join)(path90, ".git"))) {
-          record2(path90);
+          record3(path90);
           continue;
         }
         if (left <= 0) continue;
@@ -131500,7 +131525,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           } catch {
             continue;
           }
-          if ((0, import_fs41.existsSync)((0, import_path41.join)(child, ".git"))) record2(child);
+          if ((0, import_fs41.existsSync)((0, import_path41.join)(child, ".git"))) record3(child);
           else if (left > 1) queue.push({ path: child, left: left - 1 });
         }
       }
@@ -131694,7 +131719,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       const { ok: _ok, cursor: _cursor, ...result } = sent;
       return wrap(p.slug, meshId, { ...result, ...attached });
     });
-    async function localProjectSend(ports, mesh, text, clientId) {
+    async function localProjectSend(ports, mesh, text2, clientId) {
       const meshId = mesh.id;
       const coord = await ensureCoordinator(meshId, coordinatorPorts(ports));
       if (!coord.ok) return { ok: false, code: coord.code, error: coord.error, detail: coord.detail };
@@ -131702,7 +131727,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       const messageId = `assistant:${meshId}:${clientId}`;
       const sent = await ports.execute("send_chat", {
         targetSessionId: coord.sessionId,
-        text,
+        text: text2,
         origin: "assistant",
         policy: { mode: "queue" },
         messageId
@@ -131898,12 +131923,12 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         case "status":
           return { success: true, result: await localProjectStatus(ports, mesh) };
         case "send": {
-          const text = typeof args.text === "string" ? args.text : "";
-          if (!text.trim()) return fail2("invalid_args", "text required");
-          if (text.length > REMOTE_SEND_MAX_CHARS) return fail2("invalid_args", `text over ${REMOTE_SEND_MAX_CHARS} characters`);
+          const text2 = typeof args.text === "string" ? args.text : "";
+          if (!text2.trim()) return fail2("invalid_args", "text required");
+          if (text2.length > REMOTE_SEND_MAX_CHARS) return fail2("invalid_args", `text over ${REMOTE_SEND_MAX_CHARS} characters`);
           const clientId = str10(args.clientId);
           if (!clientId || clientId.length > 200) return fail2("invalid_args", "clientId required (at most 200 characters)");
-          const sent = await localProjectSend(ports, mesh, text, clientId);
+          const sent = await localProjectSend(ports, mesh, text2, clientId);
           if (!sent.ok) return fail2(sent.code, sent.error, sent.detail);
           const { ok: _ok, ...result } = sent;
           return { success: true, result };
@@ -132031,8 +132056,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         skills: renderSkillIndex(input.skills, SKILL_INDEX_BUDGET_CHARS),
         safetyTail: ASSISTANT_SAFETY_TAIL
       };
-      const text = [sections.rules, sections.projects, sections.memory, sections.skills].join(SECTION_JOIN) + SECTION_JOIN + sections.safetyTail;
-      return { text, length: text.length, withinLimit: text.length <= ASSISTANT_PROMPT_MAX_LENGTH, sections };
+      const text2 = [sections.rules, sections.projects, sections.memory, sections.skills].join(SECTION_JOIN) + SECTION_JOIN + sections.safetyTail;
+      return { text: text2, length: text2.length, withinLimit: text2.length <= ASSISTANT_PROMPT_MAX_LENGTH, sections };
     }
     var HOSTING_RANK = { here: 0, remote: 1, unmanaged: 2 };
     function field2(value, max = PROJECT_FIELD_MAX_CHARS) {
@@ -133340,8 +133365,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           })();
           const nodeExists = (nodeId) => meshNodes.length === 0 || meshNodes.some((n) => meshNodeIdMatches7(n, nodeId));
           const openDispatches = selectOpenRefineDispatches2(entries);
-          for (const record2 of openDispatches) {
-            const decision = classifyRefineDispatch2(record2, {
+          for (const record3 of openDispatches) {
+            const decision = classifyRefineDispatch2(record3, {
               nowMs: nowMs2,
               graceMs: dispatchGraceMs,
               zombieCutoffMs,
@@ -133359,9 +133384,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
             const node = sourceEntry?.payload?.refineJob;
             const coordinatorDaemonId = node?.targetCoordinatorDaemonId;
             const coordinatorSessionId = node?.targetCoordinatorSessionId;
-            const dispatchedAt = sourceEntry?.timestamp ?? record2.timestamp;
+            const dispatchedAt = sourceEntry?.timestamp ?? record3.timestamp;
             if (decision.disposition === "defer_executor_alive") {
-              const detail = evaluateRefineExecutorLiveness(record2.executor);
+              const detail = evaluateRefineExecutorLiveness(record3.executor);
               LOG.info("Mesh", `[Refinery] Deferring resume of refine job for node ${nodeId} (jobId=${jobId}) \u2014 the dispatching process is still alive (${detail.reason}); dispatched ${ageMs2}ms ago. Not resuming: a second execution of one jobId is a ghost dispatch.`);
               continue;
             }
@@ -133472,10 +133497,10 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         return { state: "unknown", error: String(e?.message || e || "listSessions failed") };
       }
       if (!Array.isArray(sessions)) return { state: "unknown", error: "session inventory was not a list" };
-      for (const record2 of sessions) {
-        if (!sessionMatchesMeshNode(self, record2, node, nodeId)) continue;
-        if ((0, import_session_host_core3.getSessionHostSurfaceKind)(record2) !== "live_runtime") continue;
-        return { state: "occupied", sessionId: String(record2?.sessionId || "") };
+      for (const record3 of sessions) {
+        if (!sessionMatchesMeshNode(self, record3, node, nodeId)) continue;
+        if ((0, import_session_host_core3.getSessionHostSurfaceKind)(record3) !== "live_runtime") continue;
+        return { state: "occupied", sessionId: String(record3?.sessionId || "") };
       }
       return { state: "idle" };
     }
@@ -133502,13 +133527,13 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         return { unpushed: false };
       }
     }
-    function sessionMatchesMeshNode(self, record2, node, nodeId, sessionIds) {
-      const sessionId = typeof record2?.sessionId === "string" ? record2.sessionId : "";
+    function sessionMatchesMeshNode(self, record3, node, nodeId, sessionIds) {
+      const sessionId = typeof record3?.sessionId === "string" ? record3.sessionId : "";
       if (!sessionId) return false;
       if (sessionIds?.size) return sessionIds.has(sessionId);
       const workspace = typeof node?.workspace === "string" ? node.workspace : "";
-      if (workspace && record2?.workspace === workspace) return true;
-      if (record2?.meta?.meshNodeId === nodeId) return true;
+      if (workspace && record3?.workspace === workspace) return true;
+      if (record3?.meta?.meshNodeId === nodeId) return true;
       return false;
     }
     async function bestEffortRemoveWorktreeDir(self, dir) {
@@ -133982,8 +134007,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         error: checkedRefs.length ? `worktree HEAD is not contained in checked refs: ${checkedRefs.join(", ")}` : "no default/main refs were available for convergence verification"
       };
     }
-    function isCompletedHostedSession(self, record2) {
-      return record2?.lifecycle === "stopped" || record2?.lifecycle === "failed" || record2?.lifecycle === "interrupted";
+    function isCompletedHostedSession(self, record3) {
+      return record3?.lifecycle === "stopped" || record3?.lifecycle === "failed" || record3?.lifecycle === "interrupted";
     }
     async function recordIntentionalMeshSessionStop(self, args) {
       try {
@@ -134019,7 +134044,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       };
       const reclaimedOrphanSessionIds = [];
       const sessions = await self.deps.sessionHostControl.listSessions();
-      const matched = sessions.filter((record2) => self.sessionMatchesMeshNode(record2, args.node, args.nodeId, requestedSessionIds));
+      const matched = sessions.filter((record3) => self.sessionMatchesMeshNode(record3, args.node, args.nodeId, requestedSessionIds));
       const hasExplicitSessionIds = !!requestedSessionIds?.size;
       const stoppedSessionIds = [];
       const deletedSessionIds = [];
@@ -134051,18 +134076,18 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         recovery_snapshot: 0,
         inactive_record: 0
       };
-      for (const record2 of matched) {
-        const surfaceKind = (0, import_session_host_core3.getSessionHostSurfaceKind)(record2);
+      for (const record3 of matched) {
+        const surfaceKind = (0, import_session_host_core3.getSessionHostSurfaceKind)(record3);
         matchedBySurfaceKind[surfaceKind] += 1;
       }
-      for (const record2 of matched) {
-        const sessionId = String(record2.sessionId);
-        const completed = self.isCompletedHostedSession(record2);
-        const surfaceKind = (0, import_session_host_core3.getSessionHostSurfaceKind)(record2);
+      for (const record3 of matched) {
+        const sessionId = String(record3.sessionId);
+        const completed = self.isCompletedHostedSession(record3);
+        const surfaceKind = (0, import_session_host_core3.getSessionHostSurfaceKind)(record3);
         const liveRuntime = surfaceKind === "live_runtime";
-        const coordinatorSession = readStringValue(record2?.meta?.meshCoordinatorFor) === args.meshId;
-        const recordNodeId = readStringValue(record2?.meta?.meshNodeId);
-        const recordMeshNodeFor = readStringValue(record2?.meta?.meshNodeFor);
+        const coordinatorSession = readStringValue(record3?.meta?.meshCoordinatorFor) === args.meshId;
+        const recordNodeId = readStringValue(record3?.meta?.meshNodeId);
+        const recordMeshNodeFor = readStringValue(record3?.meta?.meshNodeFor);
         const delegateBoundToThisNode = !!recordNodeId && meshNodeIdMatches7({ nodeId: recordNodeId }, args.nodeId) && (!recordMeshNodeFor || recordMeshNodeFor === args.meshId);
         if (!hasExplicitSessionIds && coordinatorSession) {
           skippedSessionIds.push(sessionId);
@@ -134203,8 +134228,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       let changed = false;
       const nodes = snapshot.nodes.map((statusNode) => {
         const nodeId = normalizeMeshNodeId(statusNode);
-        const record2 = nodeId ? recordsById.get(nodeId) : void 0;
-        const facts = record2?.nodeFacts;
+        const record3 = nodeId ? recordsById.get(nodeId) : void 0;
+        const facts = record3?.nodeFacts;
         if (!facts || typeof facts !== "object") return statusNode;
         const recordAt = typeof facts.reportedAt === "number" ? facts.reportedAt : 0;
         const heldAt = typeof statusNode?.nodeFacts?.reportedAt === "number" ? statusNode.nodeFacts.reportedAt : 0;
@@ -134213,8 +134238,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         return {
           ...statusNode,
           nodeFacts: facts,
-          ...typeof record2.reportedDaemonBuildVersion === "string" && record2.reportedDaemonBuildVersion ? { daemonBuildVersion: record2.reportedDaemonBuildVersion } : {},
-          ...record2.reportedProviderVersions && typeof record2.reportedProviderVersions === "object" ? { providerVersions: record2.reportedProviderVersions } : {}
+          ...typeof record3.reportedDaemonBuildVersion === "string" && record3.reportedDaemonBuildVersion ? { daemonBuildVersion: record3.reportedDaemonBuildVersion } : {},
+          ...record3.reportedProviderVersions && typeof record3.reportedProviderVersions === "object" ? { providerVersions: record3.reportedProviderVersions } : {}
         };
       });
       return changed ? { ...snapshot, nodes } : snapshot;
@@ -134647,9 +134672,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const result = { adopted: [], healed: [], rejected: [] };
       const reported = sanitizeMemberWorktreeNodes(input.reported);
       if (!meshId || reported.length === 0) return result;
-      const record2 = await getMeshForCommand(host, meshId, void 0, { preferInline: true });
-      if (!record2?.mesh) return result;
-      const hostStatus = resolveMeshHostStatus(record2.mesh);
+      const record3 = await getMeshForCommand(host, meshId, void 0, { preferInline: true });
+      if (!record3?.mesh) return result;
+      const hostStatus = resolveMeshHostStatus(record3.mesh);
       if (!hostStatus.canOwnCoordinator || !hostStatus.canOwnQueue) {
         result.rejected = reported.map((node) => ({ nodeId: node.id, reason: "not_mesh_host" }));
         return result;
@@ -134663,7 +134688,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         if (local) meshNodes.push(...local.nodes);
       } catch {
       }
-      if (record2.mesh !== cached5 && Array.isArray(record2.mesh.nodes)) meshNodes.push(...record2.mesh.nodes);
+      if (record3.mesh !== cached5 && Array.isArray(record3.mesh.nodes)) meshNodes.push(...record3.mesh.nodes);
       const plan = planMemberWorktreeAdoption({
         meshNodes,
         reported,
@@ -134959,11 +134984,11 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       /** Config self-heal (platform / nickname / versions / facts) from a member-pushed facts bundle. */
       async selfHealNodeFromFacts(meshId, nodeId, nodeFacts) {
         try {
-          const record2 = await this.getMeshForCommand(meshId, void 0, { preferInline: true });
-          const node = record2?.mesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId));
-          if (!record2 || !node) return;
+          const record3 = await this.getMeshForCommand(meshId, void 0, { preferInline: true });
+          const node = record3?.mesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId));
+          if (!record3 || !node) return;
           const reporter = recordReportedNodeFacts(node, nodeFacts);
-          if (reporter) persistNodeReporterPlatform(record2.source, record2.mesh, nodeId, reporter);
+          if (reporter) persistNodeReporterPlatform(record3.source, record3.mesh, nodeId, reporter);
         } catch {
         }
       }
@@ -135142,8 +135167,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       // cleanupLocalWorktreeNode / precheckLocalWorktreeRemovable are bound into
       // MedFamilyContext; bestEffortRemoveWorktreeDir is overridden on the instance
       // by a unit test, so callers reach these via `self.` for correct dispatch.
-      sessionMatchesMeshNode(record2, node, nodeId, sessionIds) {
-        return sessionMatchesMeshNode(this, record2, node, nodeId, sessionIds);
+      sessionMatchesMeshNode(record3, node, nodeId, sessionIds) {
+        return sessionMatchesMeshNode(this, record3, node, nodeId, sessionIds);
       }
       async bestEffortRemoveWorktreeDir(dir) {
         return bestEffortRemoveWorktreeDir(this, dir);
@@ -135157,8 +135182,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       async getWorktreeForceCleanupConvergence(args) {
         return getWorktreeForceCleanupConvergence(this, args);
       }
-      isCompletedHostedSession(record2) {
-        return isCompletedHostedSession(this, record2);
+      isCompletedHostedSession(record3) {
+        return isCompletedHostedSession(this, record3);
       }
       async recordIntentionalMeshSessionStop(args) {
         return recordIntentionalMeshSessionStop(this, args);
@@ -135565,9 +135590,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     }
     function redactHostJoinResult(hostResult) {
       if (!hostResult || typeof hostResult !== "object" || Array.isArray(hostResult)) return hostResult;
-      const record2 = hostResult;
-      if (!Object.prototype.hasOwnProperty.call(record2, "peerSecret")) return hostResult;
-      return { ...record2, peerSecret: REDACTED_PEER_SECRET };
+      const record3 = hostResult;
+      if (!Object.prototype.hasOwnProperty.call(record3, "peerSecret")) return hostResult;
+      return { ...record3, peerSecret: REDACTED_PEER_SECRET };
     }
     function readTrimmed(value) {
       return typeof value === "string" ? value.trim() : "";
@@ -138853,8 +138878,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     init_logger();
     var MAX_PTY_EVENTS = 300;
     var EVENT_CONTENT_CAP = 240;
-    function escapeControl(text) {
-      return String(text).replace(/[\x00-\x1f\x7f]/g, (ch) => {
+    function escapeControl(text2) {
+      return String(text2).replace(/[\x00-\x1f\x7f]/g, (ch) => {
         const code = ch.charCodeAt(0);
         if (ch === "\r") return "\\r";
         if (ch === "\n") return "\\n";
@@ -138863,8 +138888,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         return "\\x" + code.toString(16).padStart(2, "0");
       });
     }
-    function capPreview(text) {
-      return text.length > EVENT_CONTENT_CAP ? text.slice(0, EVENT_CONTENT_CAP) + `\u2026(+${text.length - EVENT_CONTENT_CAP})` : text;
+    function capPreview(text2) {
+      return text2.length > EVENT_CONTENT_CAP ? text2.slice(0, EVENT_CONTENT_CAP) + `\u2026(+${text2.length - EVENT_CONTENT_CAP})` : text2;
     }
     var TerminalAdapter = class {
       constructor(opts, handlers) {
@@ -138960,16 +138985,16 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       hasActivePty() {
         return this.pty !== null;
       }
-      send_keys(text, primeContext) {
-        this.recordEvent("input", capPreview(escapeControl(text)), text.length);
+      send_keys(text2, primeContext) {
+        this.recordEvent("input", capPreview(escapeControl(text2)), text2.length);
         if (!primeContext) {
-          this.pty?.write(text);
+          this.pty?.write(text2);
           return;
         }
-        return this.writeInput(text, primeContext);
+        return this.writeInput(text2, primeContext);
       }
-      async writeInput(text, primeContext) {
-        const bytes = Buffer.byteLength(text, "utf8");
+      async writeInput(text2, primeContext) {
+        const bytes = Buffer.byteLength(text2, "utf8");
         const source2 = primeContext.source;
         const prefix = `[${primeContext.specTag}] `;
         const afterSpawnMs = Math.max(0, Date.now() - this.spawnedAtMs);
@@ -138980,7 +139005,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         }
         LOG.debug("FsmDriver", `${prefix}PTY write before source=${source2} bytes=${bytes} afterSpawnMs=${afterSpawnMs}`);
         try {
-          const result = await pty.write(text);
+          const result = await pty.write(text2);
           const completedAfterSpawnMs = Math.max(0, Date.now() - this.spawnedAtMs);
           if (result === false) {
             LOG.warn("FsmDriver", `${prefix}PTY write after source=${source2} bytes=${bytes} afterSpawnMs=${completedAfterSpawnMs} outcome=false`);
@@ -139165,8 +139190,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       }
       return compiled;
     }
-    function matchSignalRule(rule, text) {
-      const candidates = rule.multiline ? [text] : text.split("\n");
+    function matchSignalRule(rule, text2) {
+      const candidates = rule.multiline ? [text2] : text2.split("\n");
       for (const candidate of candidates) {
         const m = rule.regex.exec(candidate);
         if (!m) continue;
@@ -139203,10 +139228,10 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       if (rules.length === 0) return [];
       const out = [];
       for (const rule of rules) {
-        let text = fullScreen;
-        if (rule.section) text = sectionText2(rule.section);
-        if (!text) continue;
-        const params = matchSignalRule(rule, text);
+        let text2 = fullScreen;
+        if (rule.section) text2 = sectionText2(rule.section);
+        if (!text2) continue;
+        const params = matchSignalRule(rule, text2);
         if (!params) continue;
         if (!gate.shouldEmit(rule, params, now)) continue;
         out.push({ ruleId: rule.id, kind: rule.kind, params, detectedAt: now });
@@ -139218,17 +139243,17 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     init_logger();
     var WIN32_PTY_WRITE_CHUNK_CHARS = 1024;
     var WIN32_PTY_WRITE_CHUNK_GAP_MS = 8;
-    function chunkPreservingSurrogates(text, size) {
+    function chunkPreservingSurrogates(text2, size) {
       const chunks = [];
       let offset = 0;
-      while (offset < text.length) {
-        let end = Math.min(text.length, offset + size);
-        if (end < text.length) {
-          const code = text.charCodeAt(end - 1);
+      while (offset < text2.length) {
+        let end = Math.min(text2.length, offset + size);
+        if (end < text2.length) {
+          const code = text2.charCodeAt(end - 1);
           if (code >= 55296 && code <= 56319) end -= 1;
         }
-        if (end <= offset) end = Math.min(text.length, offset + size);
-        chunks.push(text.slice(offset, end));
+        if (end <= offset) end = Math.min(text2.length, offset + size);
+        chunks.push(text2.slice(offset, end));
         offset = end;
       }
       return chunks;
@@ -139241,9 +139266,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     var SUBMIT_DELAY_FLOOR_MS = 200;
     var SUBMIT_DRAIN_SHUTDOWN_MAX_WAIT_MS = 3e4;
     var VERIFIED_SUBMIT_MIN_CHARS = 512;
-    function shouldUseVerifiedSubmit(text, platform10 = process.platform) {
+    function shouldUseVerifiedSubmit(text2, platform10 = process.platform) {
       if (platform10 === "win32") return true;
-      return text.length >= VERIFIED_SUBMIT_MIN_CHARS;
+      return text2.length >= VERIFIED_SUBMIT_MIN_CHARS;
     }
     var WIN32_BRACKETED_PASTE_OPEN = "\x1B[200~";
     var WIN32_BRACKETED_PASTE_CLOSE = "\x1B[201~";
@@ -139256,10 +139281,10 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     function normalizeForEcho(s2) {
       return s2.replace(/\s+/g, "");
     }
-    function resolveSubmitDelayMs(specBeforeSubmit, text, manifestSendDelayMs) {
-      const lines = countNewlines(text);
+    function resolveSubmitDelayMs(specBeforeSubmit, text2, manifestSendDelayMs) {
+      const lines = countNewlines(text2);
       const linesBonus = Math.min(800, lines * 80);
-      const lengthBonus = Math.min(800, Math.floor(text.length / 1e3) * 200);
+      const lengthBonus = Math.min(800, Math.floor(text2.length / 1e3) * 200);
       const spec = typeof specBeforeSubmit === "number" && specBeforeSubmit > 0 ? specBeforeSubmit : 0;
       const manifest = typeof manifestSendDelayMs === "number" && Number.isFinite(manifestSendDelayMs) && manifestSendDelayMs > 0 ? manifestSendDelayMs : 0;
       return Math.max(spec, manifest, SUBMIT_DELAY_FLOOR_MS + linesBonus + lengthBonus);
@@ -139299,7 +139324,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       for (let i = 0; i < char.length; i += 1) units.push(char.charCodeAt(i));
       return units.map((u) => keyRecord(u, true)).join("") + units.slice().reverse().map((u) => keyRecord(u, false)).join("");
     }
-    function win32InputModeTokens(text) {
+    function win32InputModeTokens(text2) {
       const tokens = [];
       let ascii = "";
       const pushAscii = () => {
@@ -139313,7 +139338,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         if (last < ascii.length) tokens.push({ text: ascii.slice(last), atomic: false });
         ascii = "";
       };
-      for (const ch of text) {
+      for (const ch of text2) {
         if (ch.charCodeAt(0) < 128) {
           ascii += ch;
           continue;
@@ -139324,8 +139349,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       pushAscii();
       return tokens;
     }
-    function chunkWin32InputMode(text, maxChars) {
-      return chunkWin32Tokens(win32InputModeTokens(text), maxChars);
+    function chunkWin32InputMode(text2, maxChars) {
+      return chunkWin32Tokens(win32InputModeTokens(text2), maxChars);
     }
     function chunkWin32Tokens(tokens, maxChars) {
       const size = Math.max(1, Math.floor(maxChars));
@@ -139445,7 +139470,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         }
       }
       /** SEND-NOW-AGENT-QUEUE: see ISpecDriver.sendMessageDuringGeneration. */
-      sendMessageDuringGeneration(text, bracketedPaste) {
+      sendMessageDuringGeneration(text2, bracketedPaste) {
         if (process.platform === "win32") {
           LOG.info("FsmDriver", `[${this.host.specTag()}] mid-generation send refused \u2014 win32 split write unverified`);
           return { accepted: false, reason: "platform_unsupported" };
@@ -139455,9 +139480,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         if (this.isSendInFlight()) return { accepted: false, reason: "send_in_flight" };
         LOG.info(
           "FsmDriver",
-          `[${this.host.specTag()}] mid-generation split write \u2014 agent input queue (len=${text.length})`
+          `[${this.host.specTag()}] mid-generation split write \u2014 agent input queue (len=${text2.length})`
         );
-        this.actuallySendMessage(text, bracketedPaste, { midGeneration: true });
+        this.actuallySendMessage(text2, bracketedPaste, { midGeneration: true });
         return { accepted: true };
       }
       /** SEND-NOW-WRONG-ITEM: see ISpecDriver.reserveDrain. */
@@ -139538,18 +139563,18 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
        * on top of a still-generating turn, braiding the two bodies in the composer
        * (see the SEND-OVERLAP note above the constants).
        */
-      handleSendMessage(text, bracketedPaste, messageId) {
+      handleSendMessage(text2, bracketedPaste, messageId) {
         if (!this.canSendNow()) {
           const id22 = messageId || `anon:${++this.anonymousSendCounter}`;
-          this.pendingSends.push({ messageId: id22, text, bracketedPaste });
+          this.pendingSends.push({ messageId: id22, text: text2, bracketedPaste });
           const reason = this.sendBlockedReason();
           LOG.info(
             "FsmDriver",
-            `[${this.host.specTag()}] send queued \u2014 ${reason} (len=${text.length}, queued=${this.pendingSends.length})`
+            `[${this.host.specTag()}] send queued \u2014 ${reason} (len=${text2.length}, queued=${this.pendingSends.length})`
           );
           return { status: "queued", queueDepth: this.pendingSends.length, reason };
         }
-        this.beginSend(text, bracketedPaste);
+        this.beginSend(text2, bracketedPaste);
         return { status: "delivered" };
       }
       /** True when a send can be written to the PTY right now. */
@@ -139576,11 +139601,11 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         return true;
       }
       /** Mark a send as in flight and write it. */
-      beginSend(text, bracketedPaste) {
+      beginSend(text2, bracketedPaste) {
         this.sendInFlight = true;
         this.sendInFlightAt = Date.now();
         this.armLatchWatchdog(SEND_IN_FLIGHT_MAX_MS + LATCH_WATCHDOG_SLACK_MS);
-        this.actuallySendMessage(text, bracketedPaste);
+        this.actuallySendMessage(text2, bracketedPaste);
       }
       /**
        * QUEUE-WEDGE (live 2026-10-10, claude-cli/win32). The in-flight latch
@@ -139699,49 +139724,49 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           setTimeout(poll2, 100);
         });
       }
-      actuallySendMessage(text, bracketedPaste, opts) {
+      actuallySendMessage(text2, bracketedPaste, opts) {
         const sm = this.host.spec.send_message;
         this.submitUnconfirmed = false;
         const perChar = sm.delay_ms_per_char ?? 0;
-        const beforeSubmit = resolveSubmitDelayMs(sm.delay_ms_before_submit, text, this.host.opts.manifestSendDelayMs);
+        const beforeSubmit = resolveSubmitDelayMs(sm.delay_ms_before_submit, text2, this.host.opts.manifestSendDelayMs);
         const wrapInPaste = process.platform !== "win32" && (bracketedPaste === true && sm.posix_bracketed_paste_for_images === true || sm.posix_bracketed_paste_text === true);
         if (opts?.midGeneration) {
-          const body = wrapInPaste ? `${BRACKETED_PASTE_OPEN}${text}${BRACKETED_PASTE_CLOSE}` : text;
+          const body = wrapInPaste ? `${BRACKETED_PASTE_OPEN}${text2}${BRACKETED_PASTE_CLOSE}` : text2;
           this.host.adapter.send_keys(body);
           this.schedulePlainSubmit(sm.submit_key, Math.max(beforeSubmit, MID_GENERATION_SUBMIT_MIN_GAP_MS));
           return;
         }
         if (wrapInPaste) {
-          this.host.adapter.send_keys(`${BRACKETED_PASTE_OPEN}${text}${BRACKETED_PASTE_CLOSE}`);
+          this.host.adapter.send_keys(`${BRACKETED_PASTE_OPEN}${text2}${BRACKETED_PASTE_CLOSE}`);
           this.markBodyWrite();
-          this.scheduleVerifiedSubmit(sm.submit_key, beforeSubmit, text, { skipEchoGate: true });
+          this.scheduleVerifiedSubmit(sm.submit_key, beforeSubmit, text2, { skipEchoGate: true });
           return;
         }
         if (process.platform === "win32") {
-          this.writeWin32Body(text);
-          this.scheduleVerifiedSubmit(sm.submit_key, beforeSubmit, text);
+          this.writeWin32Body(text2);
+          this.scheduleVerifiedSubmit(sm.submit_key, beforeSubmit, text2);
           return;
         }
-        if (perChar === 0 && shouldUseVerifiedSubmit(text)) {
-          this.host.adapter.send_keys(text);
+        if (perChar === 0 && shouldUseVerifiedSubmit(text2)) {
+          this.host.adapter.send_keys(text2);
           this.markBodyWrite();
-          this.scheduleVerifiedSubmit(sm.submit_key, beforeSubmit, text);
+          this.scheduleVerifiedSubmit(sm.submit_key, beforeSubmit, text2);
           return;
         }
         if (perChar === 0) {
-          this.host.adapter.send_keys(text);
+          this.host.adapter.send_keys(text2);
           if (beforeSubmit > 0) this.schedulePlainSubmit(sm.submit_key, beforeSubmit);
           else this.host.adapter.send_keys(sm.submit_key);
           return;
         }
         let i = 0;
         const iv = setInterval(() => {
-          if (i >= text.length) {
+          if (i >= text2.length) {
             clearInterval(iv);
             this.schedulePlainSubmit(sm.submit_key, beforeSubmit);
             return;
           }
-          this.host.adapter.send_keys(text[i]);
+          this.host.adapter.send_keys(text2[i]);
           i += 1;
         }, perChar);
       }
@@ -139776,30 +139801,30 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
        * written as their own atomic segments (never chunked), so chunking can never
        * split ESC[200~ / ESC[201~ mid-sequence regardless of body length.
        */
-      writeWin32Body(text) {
+      writeWin32Body(text2) {
         if (this.win32WriteTimer) {
           clearTimeout(this.win32WriteTimer);
           this.win32WriteTimer = null;
         }
-        const hasNewline = /\r?\n/.test(text);
+        const hasNewline = /\r?\n/.test(text2);
         const mode = resolveWin32SubmitMode();
         const chunkBody = this.host.spec.send_message.win32_input_mode_non_ascii === true ? chunkWin32InputMode : chunkPreservingSurrogates2;
         let segments;
         if (!hasNewline) {
-          segments = chunkBody(text, WIN32_PTY_WRITE_CHUNK_CHARS);
+          segments = chunkBody(text2, WIN32_PTY_WRITE_CHUNK_CHARS);
         } else if (mode === "soft_newline") {
-          const rewritten = text.split(/\r?\n/).join(WIN32_SOFT_NEWLINE);
+          const rewritten = text2.split(/\r?\n/).join(WIN32_SOFT_NEWLINE);
           segments = chunkBody(rewritten, WIN32_PTY_WRITE_CHUNK_CHARS);
         } else {
           segments = [
             WIN32_BRACKETED_PASTE_OPEN,
-            ...chunkBody(text, WIN32_PTY_WRITE_CHUNK_CHARS),
+            ...chunkBody(text2, WIN32_PTY_WRITE_CHUNK_CHARS),
             WIN32_BRACKETED_PASTE_CLOSE
           ];
         }
         if (segments.length <= 1) {
           this.markBodyWrite();
-          this.host.adapter.send_keys(segments[0] ?? text);
+          this.host.adapter.send_keys(segments[0] ?? text2);
           return;
         }
         let idx = 0;
@@ -140052,9 +140077,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const key2 = typeof config.key === "string" && config.key.length > 0 ? config.key : null;
       const patternsRaw = Array.isArray(config.patterns) ? config.patterns : [];
       const patterns = patternsRaw.map((entry) => {
-        const record2 = entry && typeof entry === "object" ? entry : {};
-        const regex = typeof record2.regex === "string" ? record2.regex : "";
-        const flags = typeof record2.flags === "string" ? record2.flags : void 0;
+        const record3 = entry && typeof entry === "object" ? entry : {};
+        const regex = typeof record3.regex === "string" ? record3.regex : "";
+        const flags = typeof record3.flags === "string" ? record3.flags : void 0;
         return regex ? { regex, ...flags !== void 0 ? { flags } : {} } : null;
       }).filter((entry) => entry !== null);
       if (!key2 || patterns.length === 0) return null;
@@ -140287,9 +140312,9 @@ trust_level = "trusted"
     }
     function readJsonObject(storePath) {
       try {
-        const text = fs84.readFileSync(storePath, "utf8");
-        if (!text.trim()) return {};
-        const parsed = JSON.parse(text);
+        const text2 = fs84.readFileSync(storePath, "utf8");
+        if (!text2.trim()) return {};
+        const parsed = JSON.parse(text2);
         if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
           return parsed;
         }
@@ -140400,9 +140425,9 @@ trust_level = "trusted"
           if (trust.scheme === "claude_json_projects") {
             let root = {};
             try {
-              const text = fs85.readFileSync(settingsPath, "utf8");
-              if (text.trim().length > 0) {
-                const parsed2 = JSON.parse(text);
+              const text2 = fs85.readFileSync(settingsPath, "utf8");
+              if (text2.trim().length > 0) {
+                const parsed2 = JSON.parse(text2);
                 if (parsed2 && typeof parsed2 === "object" && !Array.isArray(parsed2)) {
                   root = parsed2;
                 }
@@ -140434,9 +140459,9 @@ trust_level = "trusted"
         const key2 = trust.key;
         let parsed = {};
         if (fs85.existsSync(settingsPath)) {
-          const text = fs85.readFileSync(settingsPath, "utf8");
-          if (text.trim().length > 0) {
-            const json2 = JSON.parse(text);
+          const text2 = fs85.readFileSync(settingsPath, "utf8");
+          if (text2.trim().length > 0) {
+            const json2 = JSON.parse(text2);
             if (json2 && typeof json2 === "object" && !Array.isArray(json2)) {
               parsed = json2;
             }
@@ -141185,12 +141210,12 @@ trust_level = "trusted"
         }
       }
       /** QUEUED-SEND-LOSS: see ISpecDriver.sendMessageWithDisposition. */
-      sendMessageWithDisposition(text, bracketedPaste, messageId) {
-        return this.sends.handleSendMessage(text, bracketedPaste, messageId);
+      sendMessageWithDisposition(text2, bracketedPaste, messageId) {
+        return this.sends.handleSendMessage(text2, bracketedPaste, messageId);
       }
       /** SEND-NOW-AGENT-QUEUE: see ISpecDriver.sendMessageDuringGeneration. */
-      sendMessageDuringGeneration(text, bracketedPaste) {
-        return this.sends.sendMessageDuringGeneration(text, bracketedPaste);
+      sendMessageDuringGeneration(text2, bracketedPaste) {
+        return this.sends.sendMessageDuringGeneration(text2, bracketedPaste);
       }
       /** NOTIF-IMMEDIACY: see ISpecDriver.supportsMidGenerationQueue. */
       supportsMidGenerationQueue() {
@@ -142067,9 +142092,9 @@ trust_level = "trusted"
     function extractPickerChoices(driver, action) {
       const ec = action.extract_choices;
       if (!ec?.pattern) return [];
-      const text = readScreenSectionText(driver, ec.section);
+      const text2 = readScreenSectionText(driver, ec.section);
       const all = [];
-      for (const rawLine of text.split("\n")) {
+      for (const rawLine of text2.split("\n")) {
         const line = rawLine.replace(/\r$/, "");
         const m = new RegExp(ec.pattern, ec.flags ?? "").exec(line);
         if (!m) continue;
@@ -142149,9 +142174,9 @@ trust_level = "trusted"
           return { ok: false, reason: "source_unavailable" };
         }
         if (ref.recordIndex >= records.length) return { ok: false, reason: "block_not_found" };
-        const record2 = records[ref.recordIndex];
-        if (record2 == null || typeof record2 !== "object") return { ok: false, reason: "block_not_found" };
-        block2 = readBlock(reader, record2, ref.blockIndex);
+        const record3 = records[ref.recordIndex];
+        if (record3 == null || typeof record3 !== "object") return { ok: false, reason: "block_not_found" };
+        block2 = readBlock(reader, record3, ref.blockIndex);
       }
       if (!block2) return { ok: false, reason: "not_a_tool_block" };
       if (block2.callArgs !== void 0) {
@@ -142183,18 +142208,18 @@ trust_level = "trusted"
           return [];
       }
     }
-    function readBlock(reader, record2, blockIndex) {
+    function readBlock(reader, record3, blockIndex) {
       switch (reader) {
         // claude nests tool blocks in `message.content[]`, so the ref carries a
         // real array position.
         case "claude-cli":
-          return readClaudeToolBlockAt(record2, blockIndex);
+          return readClaudeToolBlockAt(record3, blockIndex);
         // codex and grok persist each tool call/result as its own record; the
         // record IS the block, which the ref marks with blockIndex -1.
         case "codex-cli":
-          return readCodexToolBlockAt(record2);
+          return readCodexToolBlockAt(record3);
         case "grok-cli":
-          return readGrokToolBlockAt(record2);
+          return readGrokToolBlockAt(record3);
         default:
           return null;
       }
@@ -142229,16 +142254,16 @@ trust_level = "trusted"
         return { ok: false, reason: "source_unavailable" };
       }
       if (ref.recordIndex >= lines.length) return { ok: false, reason: "block_not_found" };
-      const record2 = lines[ref.recordIndex];
-      if (record2 == null || typeof record2 !== "object") return { ok: false, reason: "block_not_found" };
-      const shape = compileRecordShapes(src).pick(record2);
+      const record3 = lines[ref.recordIndex];
+      if (record3 == null || typeof record3 !== "object") return { ok: false, reason: "block_not_found" };
+      const shape = compileRecordShapes(src).pick(record3);
       const tmap = shape?.map.tools;
       if (!tmap) return { ok: false, reason: "unsupported_source" };
       let block2;
       if (ref.blockIndex === -1) {
-        block2 = record2;
+        block2 = record3;
       } else {
-        const contentRaw = jsonPathGet(record2, shape.map.content);
+        const contentRaw = jsonPathGet(record3, shape.map.content);
         if (!Array.isArray(contentRaw)) return { ok: false, reason: "block_not_found" };
         if (ref.blockIndex >= contentRaw.length) return { ok: false, reason: "block_not_found" };
         block2 = contentRaw[ref.blockIndex];
@@ -142359,9 +142384,9 @@ trust_level = "trusted"
       const launched = /* @__PURE__ */ new Map();
       for (const rec3 of records) {
         if (!rec3 || typeof rec3 !== "object") continue;
-        const record2 = rec3;
-        const type2 = String(record2.type ?? "").trim();
-        const message = record2.message && typeof record2.message === "object" ? record2.message : null;
+        const record3 = rec3;
+        const type2 = String(record3.type ?? "").trim();
+        const message = record3.message && typeof record3.message === "object" ? record3.message : null;
         if (!message) continue;
         const content = message.content;
         if (!Array.isArray(content)) continue;
@@ -142402,13 +142427,13 @@ trust_level = "trusted"
       for (let i = 0; i < records.length; i++) {
         const rec3 = records[i];
         if (!rec3 || typeof rec3 !== "object") continue;
-        const record2 = rec3;
-        const type2 = String(record2.type ?? "").trim();
+        const record3 = rec3;
+        const type2 = String(record3.type ?? "").trim();
         if (type2 === "turn.prompt") {
           lastPromptIdx = i;
           continue;
         }
-        const event = record2.event && typeof record2.event === "object" ? record2.event : null;
+        const event = record3.event && typeof record3.event === "object" ? record3.event : null;
         if (event) {
           const eventType = String(event.type ?? "").trim();
           if (eventType === "content.part") {
@@ -142448,8 +142473,8 @@ trust_level = "trusted"
           continue;
         }
         if (type2 === "turn.steer" || type2 === "context.append_message") {
-          for (const text of kimiRecordTextParts(record2)) {
-            for (const match of text.matchAll(/<notification\b[^>]*>/g)) {
+          for (const text2 of kimiRecordTextParts(record3)) {
+            for (const match of text2.matchAll(/<notification\b[^>]*>/g)) {
               const attrs = parseNotificationAttrs(match[0]);
               if (attrs.get("category") !== "task") continue;
               const sourceId = attrs.get("source_id") ?? "";
@@ -142530,18 +142555,18 @@ trust_level = "trusted"
       const match = output.match(new RegExp(`(?:^|\\n)\\s*${key2}:\\s*(\\S+)`));
       return match ? match[1].trim() : "";
     }
-    function kimiRecordTextParts(record2) {
+    function kimiRecordTextParts(record3) {
       const out = [];
       const collect = (parts) => {
         if (!Array.isArray(parts)) return;
         for (const part of parts) {
           if (!part || typeof part !== "object") continue;
-          const text = part.text;
-          if (typeof text === "string" && text) out.push(text);
+          const text2 = part.text;
+          if (typeof text2 === "string" && text2) out.push(text2);
         }
       };
-      collect(record2.input);
-      const message = record2.message && typeof record2.message === "object" ? record2.message : null;
+      collect(record3.input);
+      const message = record3.message && typeof record3.message === "object" ? record3.message : null;
       if (message) collect(message.content);
       return out;
     }
@@ -142599,18 +142624,18 @@ trust_level = "trusted"
         storeTailJsonlCache(filePath2, { signature, maxBytes, sourceBytes: size, lines: out2 });
         return out2;
       }
-      let text;
+      let text2;
       const fd = fs87.openSync(filePath2, "r");
       try {
         const buf = Buffer.alloc(length);
         const bytes = fs87.readSync(fd, buf, 0, length, start);
-        text = buf.subarray(0, bytes).toString("utf8");
+        text2 = buf.subarray(0, bytes).toString("utf8");
         tailJsonlCacheStats.fileReads++;
       } finally {
         fs87.closeSync(fd);
       }
       tailJsonlCacheStats.parsePasses++;
-      const rawLines = text.split("\n");
+      const rawLines = text2.split("\n");
       if (start > 0 && rawLines.length > 0) rawLines.shift();
       const out = [];
       for (const line of rawLines) {
@@ -142672,13 +142697,13 @@ trust_level = "trusted"
       let inUser = false;
       let inThought = false;
       let seenRole = false;
-      const pushOrAppendAssistant = (text) => {
+      const pushOrAppendAssistant = (text2) => {
         const last = messages[messages.length - 1];
         if (last && last.role === "assistant" && typeof last.content === "string") {
           last.content = last.content ? `${last.content}
-${text}` : text;
+${text2}` : text2;
         } else {
-          messages.push(assistantMessage(text));
+          messages.push(assistantMessage(text2));
         }
       };
       for (const line of lines) {
@@ -142708,9 +142733,9 @@ ${text}` : text;
         if (inUser && isIndented(line)) continue;
         if (inThought && isIndented(line) && !JSON_START_RE.test(line) && !afterTool) continue;
         if (afterTool || inThought && JSON_START_RE.test(line)) {
-          const text = line.replace(/^\s+/, "");
-          if (text) {
-            pushOrAppendAssistant(text);
+          const text2 = line.replace(/^\s+/, "");
+          if (text2) {
+            pushOrAppendAssistant(text2);
             inThought = false;
             inUser = false;
           }
@@ -142720,23 +142745,23 @@ ${text}` : text;
     }
     var ANSI_OSC_DCS_RE = /\x1B\][^\x07]*(?:\x07|\x1B\\)|\x1B[P^_X][\s\S]*?(?:\x07|\x1B\\)/g;
     var ANSI_CSI_RE = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
-    function stripAnsi(text) {
-      const s2 = String(text || "");
+    function stripAnsi(text2) {
+      const s2 = String(text2 || "");
       if (s2.indexOf("\x1B") === -1) return s2;
       return s2.replace(ANSI_OSC_DCS_RE, "").replace(ANSI_CSI_RE, "");
     }
     var AUTH_FAILURE_MESSAGE = "Provider credential was rejected by the CLI. Re-authenticate this CLI in this environment before retrying.";
-    function hasProviderFailureEnvelope(text) {
-      return /\bprovider\.[a-z_]*error\b/.test(text) || /\b(?:http\s*)?(?:40[23])\b\s*(?:[-:—]|\bforbidden\b|\bpayment\b|you\b|your\b)/.test(text) || /\bstatus(?:\s+code)?\s*[:=]?\s*40[23]\b/.test(text);
+    function hasProviderFailureEnvelope(text2) {
+      return /\bprovider\.[a-z_]*error\b/.test(text2) || /\b(?:http\s*)?(?:40[23])\b\s*(?:[-:—]|\bforbidden\b|\bpayment\b|you\b|your\b)/.test(text2) || /\bstatus(?:\s+code)?\s*[:=]?\s*40[23]\b/.test(text2);
     }
     function detectProviderFailure(output, _exitCode) {
-      const text = stripAnsi(output).replace(/\s+/g, " ").trim().toLowerCase();
-      if (!text) return null;
-      const quota = hasProviderFailureEnvelope(text) && [
+      const text2 = stripAnsi(output).replace(/\s+/g, " ").trim().toLowerCase();
+      if (!text2) return null;
+      const quota = hasProviderFailureEnvelope(text2) && [
         /\b(?:usage|quota|credit)\s+limit\b/,
         /\bquota\s*(?:exhausted|refresh)/,
         /\bbilling\s+cycle\b/
-      ].some((pattern) => pattern.test(text));
+      ].some((pattern) => pattern.test(text2));
       if (quota) {
         return {
           errorReason: "quota_exceeded",
@@ -142749,7 +142774,7 @@ ${text}` : text;
         /\b(?:payment|billing)\s+(?:is\s+)?(?:required|failed|overdue)\b/,
         /\bpayment_required\b/,
         /\binsufficient\s+(?:balance|credits?)\b/
-      ].some((pattern) => pattern.test(text));
+      ].some((pattern) => pattern.test(text2));
       if (billing) {
         return {
           errorReason: "billing_failed",
@@ -142785,7 +142810,7 @@ ${text}` : text;
         // adapted to wording that carries no HTTP status.
         /(?:^|[.!?·:;]\s*|\breason:\s*)(?:your\s+|the\s+)?(?:login|session|credential)s?\s+(?:has\s+|have\s+|is\s+|are\s+)?expired\b/,
         /(?:^|[.!?·:;]\s*)(?:please\s+)?(?:run|use)\s+\/login\b/
-      ].some((pattern) => pattern.test(text));
+      ].some((pattern) => pattern.test(text2));
       if (auth) {
         return {
           errorReason: "auth_failed",
@@ -142823,11 +142848,11 @@ ${text}` : text;
     ].join("|") + ")$");
     var AUTH_ONLY_REPLY_MAX_CHARS = 600;
     function detectAuthFailureOnlyReply(reply) {
-      const text = stripAnsi(reply).replace(/\s+/g, " ").trim().toLowerCase();
-      if (!text || text.length > AUTH_ONLY_REPLY_MAX_CHARS) return null;
-      const segments = (/^api\s+error:\s*401\b/.test(text) ? text.split(/\s*·\s*/) : text.split(/\s*[.!?·;\n]\s*/)).map((segment) => segment.replace(/^[\s:,-]+|[\s:,.!-]+$/g, "")).filter(Boolean);
+      const text2 = stripAnsi(reply).replace(/\s+/g, " ").trim().toLowerCase();
+      if (!text2 || text2.length > AUTH_ONLY_REPLY_MAX_CHARS) return null;
+      const segments = (/^api\s+error:\s*401\b/.test(text2) ? text2.split(/\s*·\s*/) : text2.split(/\s*[.!?·;\n]\s*/)).map((segment) => segment.replace(/^[\s:,-]+|[\s:,.!-]+$/g, "")).filter(Boolean);
       if (segments.length === 0 || !segments.every((segment) => AUTH_ONLY_SEGMENT_RE.test(segment))) return null;
-      const failure6 = detectProviderFailure(text);
+      const failure6 = detectProviderFailure(text2);
       return failure6?.failureKind === "auth" ? failure6 : { errorReason: "auth_failed", failureKind: "auth", message: AUTH_FAILURE_MESSAGE };
     }
     function buildSpecDebugSnapshot(v, driver) {
@@ -143040,11 +143065,11 @@ ${text}` : text;
       }
       if (latestCallIdx < 0 || !latestCallId) return null;
       for (let i = latestCallIdx + 1; i < records.length; i++) {
-        const record2 = records[i];
-        if (record2 && typeof record2 === "object" && String(record2.type ?? "") === "turn.prompt") {
+        const record3 = records[i];
+        if (record3 && typeof record3 === "object" && String(record3.type ?? "") === "turn.prompt") {
           return null;
         }
-        const event = loopEvent(record2);
+        const event = loopEvent(record3);
         if (!event || event.type !== "tool.result") continue;
         const resultCallId = typeof event.toolCallId === "string" ? event.toolCallId.trim() : "";
         if (resultCallId === latestCallId) return null;
@@ -143071,9 +143096,9 @@ ${text}` : text;
       }
       return prompt;
     }
-    function loopEvent(record2) {
-      if (!record2 || typeof record2 !== "object") return null;
-      const r = record2;
+    function loopEvent(record3) {
+      if (!record3 || typeof record3 !== "object") return null;
+      const r = record3;
       if (String(r.type ?? "") !== "context.append_loop_event") return null;
       const event = r.event;
       if (!event || typeof event !== "object") return null;
@@ -143246,8 +143271,8 @@ ${text}` : text;
       }
       return { ...base, status: "idle", fsmReadySeen: readySeen === true };
     }
-    function normalizeClaudeTuiIdentity(text) {
-      return text.replace(/\s+/g, " ").trim();
+    function normalizeClaudeTuiIdentity(text2) {
+      return text2.replace(/\s+/g, " ").trim();
     }
     function claudeTuiQuestionMatches(expected, focused) {
       const expectedQuestion = normalizeClaudeTuiIdentity(expected.question);
@@ -143296,14 +143321,14 @@ ${text}` : text;
     }
     function readClaudeToolResultIds(value) {
       if (!value || typeof value !== "object") return [];
-      const record2 = value;
+      const record3 = value;
       const blocks = [];
-      if (Array.isArray(record2.content)) blocks.push(...record2.content);
-      const message = record2.message;
+      if (Array.isArray(record3.content)) blocks.push(...record3.content);
+      const message = record3.message;
       if (message && typeof message === "object" && Array.isArray(message.content)) {
         blocks.push(...message.content);
       }
-      if (record2.type === "tool_result") blocks.push(record2);
+      if (record3.type === "tool_result") blocks.push(record3);
       const ids = [];
       for (const block2 of blocks) {
         if (!block2 || typeof block2 !== "object") continue;
@@ -143360,9 +143385,9 @@ ${text}` : text;
     function applyClaudeFreeformEscape(prompt) {
       for (const question of prompt.questions) question.allowFreeform = true;
     }
-    function readClaudeToolResultIds2(record2) {
-      if (!record2 || typeof record2 !== "object") return [];
-      const r = record2;
+    function readClaudeToolResultIds2(record3) {
+      if (!record3 || typeof record3 !== "object") return [];
+      const r = record3;
       const blocks = [];
       if (Array.isArray(r.content)) blocks.push(...r.content);
       const message = r.message;
@@ -143380,9 +143405,9 @@ ${text}` : text;
       }
       return ids;
     }
-    function readRecordTimestamp(record2) {
-      if (!record2 || typeof record2 !== "object") return 0;
-      const value = record2.timestamp;
+    function readRecordTimestamp(record3) {
+      if (!record3 || typeof record3 !== "object") return 0;
+      const value = record3.timestamp;
       if (typeof value === "number" && Number.isFinite(value) && value > 0) return value;
       if (typeof value !== "string") return 0;
       const parsed = Date.parse(value);
@@ -143444,14 +143469,14 @@ ${text}` : text;
         if (!history?.sourcePath) return false;
         let boundToolUseId = null;
         let resolved = false;
-        for (const record2 of readJsonlLines(history.sourcePath)) {
-          const observedPrompt = detectClaudeAskUserQuestionPromptFromJson(record2, cliType);
+        for (const record3 of readJsonlLines(history.sourcePath)) {
+          const observedPrompt = detectClaudeAskUserQuestionPromptFromJson(record3, cliType);
           if (observedPrompt && (observedPrompt.promptId === prompt.promptId || claudeAskUserQuestionPromptsMatch(prompt, observedPrompt))) {
             boundToolUseId = observedPrompt.promptId;
             resolved = false;
           }
           if (!boundToolUseId) continue;
-          if (readClaudeToolResultIds(record2).includes(boundToolUseId)) resolved = true;
+          if (readClaudeToolResultIds(record3).includes(boundToolUseId)) resolved = true;
         }
         return resolved;
       } catch {
@@ -143751,8 +143776,8 @@ ${text}` : text;
     function createLiveAuthState() {
       return { suspect: null, advisoryNotifiedAtMs: 0, coordinatorMarkerLogged: false, stopRequested: false };
     }
-    function classifyAuthBillingOutput(cliType, text, exitCode) {
-      const failure6 = detectProviderFailure(text, exitCode);
+    function classifyAuthBillingOutput(cliType, text2, exitCode) {
+      const failure6 = detectProviderFailure(text2, exitCode);
       if (!failure6) return null;
       if (cliType !== "kimi" && failure6.failureKind !== "auth") return null;
       return failure6;
@@ -144148,17 +144173,17 @@ ${text}` : text;
        * data-loss path (oss 6cca365b); a busy session is reached only through
        * `sendMessageDuringGeneration` (split write) or `interruptTurn`.
        */
-      async sendMessage(text, opts) {
-        LOG.info("SpecAdapter", `[${this.cliType}] sendMessage(len=${text.length}${opts?.messageId ? ` id=${opts.messageId}` : ""})`);
-        LOG.debug("SpecAdapter", `[${this.cliType}] sendMessage body=${JSON.stringify(text.slice(0, 80))}${text.length > 80 ? "\u2026" : ""}`);
-        recordSentPrompt(this.owningSessionId, text);
+      async sendMessage(text2, opts) {
+        LOG.info("SpecAdapter", `[${this.cliType}] sendMessage(len=${text2.length}${opts?.messageId ? ` id=${opts.messageId}` : ""})`);
+        LOG.debug("SpecAdapter", `[${this.cliType}] sendMessage body=${JSON.stringify(text2.slice(0, 80))}${text2.length > 80 ? "\u2026" : ""}`);
+        recordSentPrompt(this.owningSessionId, text2);
         if (typeof this.driver.sendMessageWithDisposition !== "function") {
-          this.driver.dispatch({ kind: "send_message", text, bracketedPaste: opts?.bracketedPaste });
+          this.driver.dispatch({ kind: "send_message", text: text2, bracketedPaste: opts?.bracketedPaste });
           return;
         }
-        const disposition = this.driver.sendMessageWithDisposition(text, opts?.bracketedPaste, opts?.messageId);
+        const disposition = this.driver.sendMessageWithDisposition(text2, opts?.bracketedPaste, opts?.messageId);
         if (disposition.status === "queued") {
-          LOG.info("SpecAdapter", `[${this.cliType}] send QUEUED not submitted \u2014 ${disposition.reason} (len=${text.length}, queueDepth=${disposition.queueDepth})`);
+          LOG.info("SpecAdapter", `[${this.cliType}] send QUEUED not submitted \u2014 ${disposition.reason} (len=${text2.length}, queueDepth=${disposition.queueDepth})`);
           return { status: "queued", position: disposition.queueDepth };
         }
         return { status: "delivered" };
@@ -144175,14 +144200,14 @@ ${text}` : text;
        * the caller's whole contract here is that `accepted: false` means nothing
        * was written and its previous fallback is safe to take.
        */
-      sendMessageDuringGeneration(text, bracketedPaste) {
+      sendMessageDuringGeneration(text2, bracketedPaste) {
         if (typeof this.driver.sendMessageDuringGeneration !== "function") {
           return { accepted: false, reason: "not_supported" };
         }
-        LOG.info("SpecAdapter", `[${this.cliType}] sendMessageDuringGeneration(len=${text.length})`);
-        const outcome = this.driver.sendMessageDuringGeneration(text, bracketedPaste);
+        LOG.info("SpecAdapter", `[${this.cliType}] sendMessageDuringGeneration(len=${text2.length})`);
+        const outcome = this.driver.sendMessageDuringGeneration(text2, bracketedPaste);
         if (!outcome.accepted) {
-          LOG.info("SpecAdapter", `[${this.cliType}] mid-generation send refused \u2014 ${outcome.reason} (len=${text.length})`);
+          LOG.info("SpecAdapter", `[${this.cliType}] mid-generation send refused \u2014 ${outcome.reason} (len=${text2.length})`);
         }
         return outcome;
       }
@@ -144909,11 +144934,739 @@ ${text}` : text;
     };
     init_logger();
     init_track_identity();
+    var import_node_child_process13 = require("child_process");
+    var import_node_crypto8 = require("crypto");
+    init_resolve_executable();
+    var CodexStdioTransport = class {
+      constructor(options) {
+        this.options = options;
+      }
+      child;
+      pending = /* @__PURE__ */ new Map();
+      buffer = "";
+      closed = true;
+      generation = (0, import_node_crypto8.randomUUID)();
+      start() {
+        if (this.child) throw new Error("Codex runtime already started");
+        this.closed = false;
+        const launch = resolveWin32ExecFileSpawn(this.options.command, this.options.args);
+        this.child = (0, import_node_child_process13.spawn)(launch.file, launch.args, {
+          cwd: this.options.cwd,
+          env: this.options.env,
+          stdio: "pipe",
+          windowsHide: true,
+          ...launch.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}
+        });
+        this.child.stdout.setEncoding("utf8");
+        this.child.stdout.on("data", (chunk) => this.read(chunk));
+        this.child.stderr.resume();
+        this.child.on("error", () => this.close(new Error("Codex app-server process failed"), "transport_error"));
+        this.child.on("exit", () => this.close(new Error("Codex app-server runtime exited"), "process_exit"));
+        this.child.stdin.on("error", () => this.close(new Error("Codex app-server input closed"), "transport_error"));
+      }
+      read(chunk) {
+        if (this.closed) return;
+        this.buffer += chunk;
+        if (this.buffer.length > 8 * 1024 * 1024) {
+          this.stop("protocol_error");
+          return;
+        }
+        let newline;
+        while ((newline = this.buffer.indexOf("\n")) >= 0) {
+          const line = this.buffer.slice(0, newline);
+          this.buffer = this.buffer.slice(newline + 1);
+          let message;
+          try {
+            message = JSON.parse(line);
+          } catch {
+            this.stop("protocol_error");
+            return;
+          }
+          if (!message || typeof message !== "object" || Array.isArray(message)) {
+            this.stop("protocol_error");
+            return;
+          }
+          if (message.id !== void 0 && !(typeof message.id === "string" || typeof message.id === "number" && Number.isFinite(message.id)) || message.method !== void 0 && typeof message.method !== "string") {
+            this.stop("protocol_error");
+            return;
+          }
+          if (message.method) this.options.onMessage(message);
+          else if (message.id !== void 0) {
+            const pending = this.pending.get(message.id);
+            if (!pending) continue;
+            this.pending.delete(message.id);
+            clearTimeout(pending.timer);
+            if (message.error) pending.reject(new Error(message.error.message || "Codex request failed"));
+            else pending.resolve(message.result);
+          }
+        }
+      }
+      write(message) {
+        if (this.closed || !this.child?.stdin.writable) throw new Error("Codex runtime unavailable");
+        this.child.stdin.write(JSON.stringify(message) + "\n");
+      }
+      request(method, params) {
+        const id22 = `adhdev:${this.generation}:${(0, import_node_crypto8.randomUUID)()}`;
+        return new Promise((resolve39, reject) => {
+          const timer = setTimeout(() => {
+            this.pending.delete(id22);
+            reject(new Error(`Codex ${method} timed out`));
+            if (["initialize", "thread/start", "turn/start", "turn/steer", "turn/interrupt"].includes(method)) this.stop("timeout");
+          }, 15e3);
+          this.pending.set(id22, { resolve: resolve39, reject, timer });
+          try {
+            this.write({ id: id22, method, params });
+          } catch (error) {
+            clearTimeout(timer);
+            this.pending.delete(id22);
+            reject(error);
+          }
+        });
+      }
+      isAlive() {
+        return !this.closed && !!this.child;
+      }
+      stop(reason = "requested") {
+        this.child?.kill();
+        this.close(new Error(reason === "protocol_error" ? "Codex emitted an invalid native protocol frame" : "Codex app-server runtime closed"), reason);
+      }
+      close(error, reason) {
+        if (this.closed) return;
+        this.closed = true;
+        this.buffer = "";
+        for (const pending of this.pending.values()) {
+          clearTimeout(pending.timer);
+          pending.reject(error);
+        }
+        this.pending.clear();
+        this.options.onExit(error, reason);
+      }
+    };
+    var import_node_crypto9 = require("crypto");
+    init_dist();
+    function record2(value) {
+      return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+    }
+    var text = (value) => typeof value === "string" && !!value.trim() && value.length <= 64e3;
+    var rpcKey = (id22) => `${typeof id22}:${id22}`;
+    function parseAsyncQuestionReply(input) {
+      if (!Array.isArray(input)) return null;
+      const content = input.filter((value) => !["skill", "mention"].includes(String(record2(value)?.type)));
+      if (content.length !== 1) return null;
+      const part = record2(content[0]);
+      if (part?.type !== "text" || typeof part.text !== "string") return null;
+      let replyText = part.text.trim();
+      if (replyText.startsWith("# Context from my IDE setup:\n")) {
+        const delimiter5 = "\n## My request for Codex:\n";
+        const index = replyText.lastIndexOf(delimiter5);
+        if (index < 0) return null;
+        replyText = replyText.slice(index + delimiter5.length).trim();
+      }
+      const match = /^<send_user_message_question_reply>([\s\S]*)<\/send_user_message_question_reply>$/.exec(replyText);
+      if (!match) return null;
+      let replies;
+      try {
+        replies = JSON.parse(match[1]);
+      } catch {
+        return null;
+      }
+      const values = Array.isArray(replies) ? replies : [replies];
+      if (!values.length || values.some((value) => {
+        const r = record2(value);
+        return !r || !text(r.questionItemId) || typeof r.question !== "string" || typeof r.answer !== "string";
+      })) return null;
+      return values;
+    }
+    var CodexQuestionLedger = class {
+      constructor(sessionId, generation) {
+        this.sessionId = sessionId;
+        this.generation = generation;
+      }
+      entries = /* @__PURE__ */ new Map();
+      seen = /* @__PURE__ */ new Set();
+      threadId = "";
+      turnId = "";
+      beginTurn(turnId) {
+        if (this.turnId !== turnId) this.invalidate();
+        this.turnId = turnId;
+      }
+      invalidate() {
+        this.entries.clear();
+        this.turnId = "";
+      }
+      active() {
+        return [...this.entries.values()].find((prompt) => prompt.binding?.transport === "codex_rpc") ?? this.entries.values().next().value ?? null;
+      }
+      capture(requestId, raw) {
+        if (this.entries.size >= 32 || this.seen.size >= 4096) return false;
+        const p = record2(raw);
+        if (!p || p.threadId !== this.threadId || p.turnId !== this.turnId || !text(p.itemId) || typeof p.isBlocking !== "boolean" || !Array.isArray(p.questions) || !p.questions.length || p.questions.length > 32) return false;
+        const key2 = `rpc:${rpcKey(requestId)}`;
+        if (this.seen.has(key2)) return false;
+        const questions = [];
+        for (const value of p.questions) {
+          const q = record2(value);
+          if (!q || !text(q.id) || !text(q.question) || typeof q.header !== "string" || typeof q.isOther !== "boolean" || typeof q.isSecret !== "boolean" || !(q.options === null || Array.isArray(q.options))) return false;
+          const options = [];
+          for (const value2 of q.options ?? []) {
+            const option = record2(value2);
+            if (!option || !text(option.label) || typeof option.description !== "string") return false;
+            options.push({ label: option.label, description: option.description });
+          }
+          if (options.length > 32 || new Set(options.map((o) => o.label)).size !== options.length) return false;
+          questions.push({
+            questionId: q.id,
+            question: q.question,
+            header: q.header,
+            multiSelect: false,
+            options,
+            allowFreeform: q.isOther || !options.length,
+            isSecret: q.isSecret,
+            required: p.isBlocking
+          });
+        }
+        if (new Set(questions.map((q) => q.questionId)).size !== questions.length) return false;
+        const binding = {
+          transport: "codex_rpc",
+          sessionId: this.sessionId,
+          generation: this.generation,
+          threadId: this.threadId,
+          turnId: this.turnId,
+          itemId: p.itemId,
+          requestId
+        };
+        this.seen.add(key2);
+        this.entries.set(key2, this.prompt(binding, questions, p.isBlocking));
+        return true;
+      }
+      captureAsync(itemId, turnId, raw) {
+        if (this.entries.size >= 32 || this.seen.size >= 4096) return false;
+        const key2 = `async:${itemId}`;
+        if (turnId !== this.turnId || this.seen.has(key2) || !Array.isArray(raw) || !raw.length || raw.length > 32) return false;
+        const questions = [];
+        for (const [index, value] of raw.entries()) {
+          const q = record2(value);
+          if (!q || !text(q.title) || !(q.options === null || Array.isArray(q.options))) return false;
+          const labels = q.options ?? [];
+          if (labels.length > 32 || labels.some((label) => !text(label)) || new Set(labels).size !== labels.length) return false;
+          const questionId = JSON.stringify(["request_user_input_async", itemId, index]);
+          if (Buffer.byteLength(questionId) > 512) return false;
+          questions.push({
+            questionId,
+            question: q.title,
+            options: labels.map((label) => ({ label })),
+            multiSelect: false,
+            allowFreeform: true,
+            required: false
+          });
+        }
+        this.seen.add(key2);
+        this.entries.set(key2, this.prompt({
+          transport: "codex_async",
+          sessionId: this.sessionId,
+          generation: this.generation,
+          threadId: this.threadId,
+          turnId,
+          itemId
+        }, questions));
+        return true;
+      }
+      prompt(binding, questions, blocking = binding.transport === "codex_rpc") {
+        return {
+          promptId: (0, import_node_crypto9.randomUUID)(),
+          origin: "cli",
+          providerType: "codex-cli",
+          createdAt: Date.now(),
+          binding,
+          questions,
+          blocking,
+          lifecycle: "pending",
+          support: binding.transport === "codex_rpc" ? "request_bound" : "product_local"
+        };
+      }
+      resolve(threadId, requestId) {
+        if (threadId !== this.threadId || typeof requestId !== "string" && typeof requestId !== "number") return;
+        this.entries.delete(`rpc:${rpcKey(requestId)}`);
+      }
+      /** Ordinary reply evidence retracts only identified async questions. */
+      observeReply(input) {
+        const replies = parseAsyncQuestionReply(input);
+        if (!replies) return;
+        const ids = new Set(replies.map((value) => value.questionItemId));
+        for (const [key2, prompt] of this.entries) {
+          if (prompt.binding?.transport !== "codex_async") continue;
+          const remaining = prompt.questions.filter((q) => !ids.has(q.questionId));
+          if (!remaining.length) this.entries.delete(key2);
+          else if (remaining.length !== prompt.questions.length) this.entries.set(key2, this.prompt(prompt.binding, remaining));
+        }
+      }
+      prepare(response) {
+        const pair = [...this.entries].find(([, prompt2]) => prompt2.promptId === response.promptId);
+        if (!pair) throw new Error("No current Codex question request");
+        const [key2, prompt] = pair;
+        if (prompt.promptId !== this.active()?.promptId) throw new Error("Codex response is not for the current presented request");
+        const binding = prompt.binding;
+        if (prompt.lifecycle !== "pending" || binding.turnId !== this.turnId || binding.threadId !== this.threadId || !isProviderQuestionBinding(response.binding) || Object.keys(binding).some((k) => binding[k] !== response.binding[k])) {
+          throw new Error("Stale or foreign Codex question episode");
+        }
+        if (response.action === "dismiss" && binding.transport !== "codex_async") throw new Error("Native RPC dismissal is unsupported");
+        if (Object.keys(response.answers).some((id22) => !prompt.questions.some((q) => q.questionId === id22))) throw new Error("Unknown question id");
+        const answers = /* @__PURE__ */ Object.create(null);
+        for (const q of prompt.questions) {
+          const answer = response.answers[q.questionId];
+          const labels = answer?.selectedLabels ?? [];
+          const free = answer?.freeformText?.trim();
+          if (free && free.length > 64e3) throw new Error("Codex answer exceeds the supported input limit");
+          if (labels.length > 1 || new Set(labels).size !== labels.length || labels.some((label) => !q.options.some((o) => o.label === label)) || free && !q.allowFreeform || free && labels.length) throw new Error("Invalid Codex answer");
+          if (!labels.length && !free && q.required && response.action !== "dismiss") throw new Error("Required Codex answer missing");
+          if (labels.length || free) answers[q.questionId] = { answers: free ? [free] : labels };
+        }
+        if (!Object.keys(answers).length && response.action !== "dismiss") throw new Error("At least one answer required");
+        return { key: key2, prompt, answers };
+      }
+      reserve(key2) {
+        const prompt = this.entries.get(key2);
+        if (!prompt || prompt.lifecycle !== "pending") throw new Error("Question already submitted");
+        this.entries.set(key2, { ...prompt, lifecycle: "submitted" });
+      }
+      dismiss(key2) {
+        this.entries.delete(key2);
+      }
+      uncertain(key2) {
+        const prompt = this.entries.get(key2);
+        if (prompt) this.entries.set(key2, { ...prompt, lifecycle: "unknown", support: "uncertain" });
+      }
+      asyncKeys() {
+        return [...this.entries.keys()].filter((key2) => key2.startsWith("async:"));
+      }
+      clearAsync(keys) {
+        for (const key2 of keys) this.entries.delete(key2);
+      }
+    };
+    var CodexItemHistory = class {
+      items = /* @__PURE__ */ new Map();
+      questionKeys = /* @__PURE__ */ new Set();
+      read() {
+        return [...this.items.values()].sort((a, b) => (a.receivedAt ?? 0) - (b.receivedAt ?? 0));
+      }
+      ephemeralQuestionMessageKeys() {
+        return [...this.questionKeys];
+      }
+      clear() {
+        this.items.clear();
+        this.questionKeys.clear();
+      }
+      item(threadId, turnId, value, receivedAt = Date.now()) {
+        const item = record2(value);
+        if (!item || typeof item.id !== "string") return;
+        const key2 = JSON.stringify(["codex", threadId, turnId, item.id]);
+        const prior = this.items.get(key2);
+        let role = "assistant";
+        let kind = "standard";
+        let content = "";
+        switch (item.type) {
+          case "agentMessage":
+            content = typeof item.text === "string" ? item.text : "";
+            if (item.delivery === "async" && Array.isArray(item.questions)) this.questionKeys.add(key2);
+            break;
+          case "userMessage": {
+            role = "user";
+            content = Array.isArray(item.content) ? item.content.map((part) => {
+              const p = record2(part);
+              return p?.type === "text" && typeof p.text === "string" ? p.text : "";
+            }).filter(Boolean).join("\n") : "";
+            const replies = parseAsyncQuestionReply(item.content);
+            if (replies) {
+              this.questionKeys.add(key2);
+              content = replies.map((reply) => `> ${reply.question}
+
+${reply.answer}`).join("\n\n");
+            }
+            break;
+          }
+          case "reasoning":
+            kind = "thought";
+            content = Array.isArray(item.summary) ? item.summary.join("\n") : "";
+            break;
+          case "functionCallOutput":
+            if (item.name === "request_user_input" || item.name === "request_user_input_async") this.questionKeys.add(key2);
+            kind = "tool";
+            content = typeof item.output === "string" ? item.output : Array.isArray(item.output) ? item.output.map((part) => {
+              const p = record2(part);
+              return p?.type === "input_text" && typeof p.text === "string" ? p.text : "";
+            }).filter(Boolean).join("\n") : "";
+            break;
+          case "commandExecution":
+            kind = "tool";
+            content = typeof item.aggregatedOutput === "string" ? item.aggregatedOutput : String(item.command ?? "");
+            break;
+          case "plan":
+            content = typeof item.text === "string" ? item.text : "";
+            break;
+          default:
+            return;
+        }
+        this.items.set(key2, {
+          role,
+          kind,
+          content,
+          providerUnitKey: key2,
+          _turnKey: turnId,
+          receivedAt: prior?.receivedAt ?? receivedAt,
+          timestamp: prior?.timestamp ?? receivedAt
+        });
+      }
+      delta(threadId, turnId, itemId, delta) {
+        const key2 = JSON.stringify(["codex", threadId, turnId, itemId]);
+        const prior = this.items.get(key2);
+        this.item(threadId, turnId, { id: itemId, type: "agentMessage", text: String(prior?.content ?? "") + delta });
+      }
+      hydrate(thread) {
+        const t = record2(thread);
+        if (!t || typeof t.id !== "string" || !Array.isArray(t.turns)) throw new Error("Invalid Codex history");
+        for (const value of t.turns) {
+          const turn = record2(value);
+          if (!turn || typeof turn.id !== "string" || !Array.isArray(turn.items)) throw new Error("Invalid Codex history turn");
+          for (const item of turn.items) {
+            const key2 = JSON.stringify(["codex", t.id, turn.id, record2(item)?.id]);
+            if (!this.items.has(key2)) this.item(t.id, turn.id, item, typeof turn.startedAt === "number" ? turn.startedAt * 1e3 : Date.now());
+          }
+        }
+      }
+    };
+    var CodexAppServerAdapter = class {
+      constructor(workingDir, sessionId, command = "codex", args = [], env2 = process.env, processArgs, envOverrides = {}) {
+        this.workingDir = workingDir;
+        this.sessionId = sessionId;
+        this.command = command;
+        this.args = args;
+        this.envOverrides = envOverrides;
+        this.transport = new CodexStdioTransport({
+          command,
+          args: processArgs ?? [...args, "app-server", "--listen", "stdio://"],
+          cwd: workingDir,
+          env: env2,
+          onMessage: (message) => this.onMessage(message),
+          onExit: (error, reason) => {
+            this.questions.invalidate();
+            this.approvals.clear();
+            this.status = this.nativeFailure || reason !== "requested" ? "error" : "stopped";
+            if (reason !== "requested" && !this.errorMessage) this.errorMessage = error.message;
+            this.notify("pty_exit");
+            this.exit?.({ runtimeSettings: this.settings });
+          }
+        });
+        this.questions = new CodexQuestionLedger(sessionId, this.transport.generation);
+      }
+      nativeTransport = "codex-app-server";
+      cliType = "codex-cli";
+      cliName = "Codex CLI";
+      transport;
+      questions;
+      history = new CodexItemHistory();
+      status = "starting";
+      errorMessage;
+      nativeFailure = false;
+      settings = {};
+      change;
+      exit;
+      approvals = /* @__PURE__ */ new Map();
+      lastApprovalResolvedAt = 0;
+      started = false;
+      observedTurns = /* @__PURE__ */ new Set();
+      endedTurns = /* @__PURE__ */ new Set();
+      async spawn() {
+        if (this.started) throw new Error("Codex managed session already started");
+        this.started = true;
+        this.transport.start();
+        try {
+          await this.transport.request("initialize", { clientInfo: { name: "adhdev", title: "ADHDev", version: "1" }, capabilities: { experimentalApi: true } });
+          this.transport.write({ method: "initialized" });
+          const result = record2(await this.transport.request("thread/start", { cwd: this.workingDir }));
+          const thread = record2(result?.thread);
+          if (!thread || typeof thread.id !== "string" || !thread.id) throw new Error("Invalid Codex thread/start response");
+          this.questions.threadId = thread.id;
+          this.status = "idle";
+          this.notify("fsm_state");
+        } catch (error) {
+          this.transport.stop();
+          throw error;
+        }
+      }
+      notify(cause) {
+        this.change?.(cause);
+      }
+      onMessage(message) {
+        const p = record2(message.params);
+        if (!p || this.nativeFailure) return;
+        if (message.id !== void 0) {
+          if (message.method === "item/tool/requestUserInput") {
+            if (this.questions.capture(message.id, p)) this.notify("prompt_captured");
+            else if (p.threadId === this.questions.threadId && p.turnId === this.questions.turnId) {
+              this.errorMessage = "Codex question is malformed or already known; no answer dispatched";
+              this.notify("fsm_state");
+            }
+          } else if (["item/commandExecution/requestApproval", "item/fileChange/requestApproval", "item/permissions/requestApproval", "mcpServer/elicitation/request"].includes(message.method ?? "") && p.threadId === this.questions.threadId && p.turnId === this.questions.turnId && typeof p.itemId === "string" && !this.approvals.has(message.id)) {
+            this.approvals.set(message.id, { method: message.method ?? "", params: p });
+            this.notify("fsm_state");
+          }
+          return;
+        }
+        if (p.threadId !== this.questions.threadId) return;
+        switch (message.method) {
+          case "turn/started": {
+            const turn = record2(p.turn);
+            if (typeof turn?.id !== "string" || this.endedTurns.has(turn.id)) return;
+            this.observedTurns.add(turn.id);
+            if (turn.id !== this.questions.turnId) this.approvals.clear();
+            this.questions.beginTurn(turn.id);
+            this.status = "generating";
+            break;
+          }
+          case "turn/completed": {
+            const turn = record2(p.turn);
+            if (typeof turn?.id !== "string") return;
+            this.observedTurns.add(turn.id);
+            this.endedTurns.add(turn.id);
+            if (turn?.id !== this.questions.turnId) return;
+            this.questions.invalidate();
+            this.approvals.clear();
+            this.status = turn?.status === "failed" ? "error" : "idle";
+            this.nativeFailure = turn.status === "failed";
+            this.errorMessage = turn?.status === "failed" ? "Codex native turn failed" : void 0;
+            break;
+          }
+          case "serverRequest/resolved":
+            this.questions.resolve(p.threadId, p.requestId);
+            if (typeof p.requestId === "string" || typeof p.requestId === "number") this.approvals.delete(p.requestId);
+            break;
+          case "item/started":
+          case "item/completed": {
+            if (typeof p.turnId !== "string") return;
+            const timestamp2 = typeof p.startedAtMs === "number" ? p.startedAtMs : typeof p.completedAtMs === "number" ? p.completedAtMs : Date.now();
+            this.history.item(this.questions.threadId, p.turnId, p.item, timestamp2);
+            if (p.turnId !== this.questions.turnId) break;
+            const item = record2(p.item);
+            if (item?.type === "userMessage") this.questions.observeReply(item.content);
+            if (message.method === "item/completed" && item?.type === "agentMessage" && item.delivery === "async" && typeof item.id === "string") {
+              this.questions.captureAsync(item.id, p.turnId, item.questions);
+            }
+            break;
+          }
+          case "item/agentMessage/delta":
+            if (typeof p.turnId === "string" && typeof p.itemId === "string" && typeof p.delta === "string") this.history.delta(this.questions.threadId, p.turnId, p.itemId, p.delta);
+            break;
+          case "error":
+            this.errorMessage = "Codex reported a native error";
+            if (p.willRetry === false) {
+              this.nativeFailure = true;
+              this.status = "error";
+              this.questions.invalidate();
+            }
+            break;
+          case "thread/status/changed": {
+            const state = record2(p.status);
+            if (state?.type === "systemError") {
+              this.nativeFailure = true;
+              this.status = "error";
+              this.questions.invalidate();
+              this.approvals.clear();
+            } else if (state?.type === "active" && Array.isArray(state.activeFlags) && state.activeFlags.includes("waitingOnUserInput") && !this.questions.active()) {
+              this.errorMessage = "Codex is waiting for input without an authoritative question request. Answering is unavailable.";
+            }
+            break;
+          }
+          default:
+            return;
+        }
+        this.notify("fsm_state");
+      }
+      async sendMessage(text2) {
+        if (!this.isReady()) throw new Error("Codex managed runtime unavailable");
+        const prompt = this.questions.active();
+        if (prompt?.binding?.transport === "codex_rpc" && prompt.blocking !== false) throw new Error("Resolve the current native question before sending another input");
+        const priorAsync = this.questions.asyncKeys();
+        const input = [{ type: "text", text: text2, textElements: [] }];
+        if (this.questions.turnId) await this.transport.request("turn/steer", { threadId: this.questions.threadId, expectedTurnId: this.questions.turnId, input });
+        else {
+          const result = record2(await this.transport.request("turn/start", { threadId: this.questions.threadId, input }));
+          const turn = record2(result?.turn);
+          if (typeof turn?.id !== "string") throw new Error("Invalid Codex turn response");
+          if (!this.observedTurns.has(turn.id)) {
+            this.questions.beginTurn(turn.id);
+            this.status = "generating";
+          }
+        }
+        this.questions.clearAsync(priorAsync);
+        this.notify("fsm_state");
+        return { status: "delivered" };
+      }
+      async setInteractivePromptResponse(response) {
+        if (!this.isReady()) throw new Error("Codex runtime unavailable");
+        const prepared = this.questions.prepare(response);
+        this.questions.reserve(prepared.key);
+        if (response.action === "dismiss") {
+          this.questions.dismiss(prepared.key);
+          this.notify("prompt_cleared");
+          return;
+        }
+        const binding = prepared.prompt.binding;
+        if (binding.transport === "codex_rpc") {
+          this.transport.write({ id: binding.requestId, result: { answers: prepared.answers } });
+        } else {
+          const replies = prepared.prompt.questions.filter((q) => prepared.answers[q.questionId]).map((q) => ({
+            questionItemId: q.questionId,
+            question: boundedTitle(q.question),
+            answer: prepared.answers[q.questionId].answers[0]
+          }));
+          const text2 = `<send_user_message_question_reply>
+${JSON.stringify(replies)}
+</send_user_message_question_reply>`;
+          try {
+            await this.transport.request("turn/steer", { threadId: binding.threadId, expectedTurnId: binding.turnId, input: [{ type: "text", text: text2, textElements: [] }] });
+          } catch (error) {
+            this.questions.uncertain(prepared.key);
+            this.notify("prompt_updated");
+            throw error;
+          }
+          this.questions.observeReply([{ type: "text", text: text2 }]);
+        }
+        this.notify("prompt_updated");
+      }
+      getStatus() {
+        const approval = this.approvals.values().next().value;
+        const prompt = this.questions.active();
+        return {
+          status: approval ? "waiting_approval" : prompt?.binding?.transport === "codex_rpc" && prompt.blocking !== false ? "waiting_choice" : this.status,
+          providerSessionId: this.questions.threadId || void 0,
+          activeInteractivePrompt: this.questions.active(),
+          errorMessage: this.errorMessage,
+          activeModal: approval ? { kind: "confirm", message: "Native permission grants are unavailable in this dashboard-only transport. No approval was sent.", buttons: [] } : null
+        };
+      }
+      getScriptParsedStatus() {
+        return {
+          ...this.getStatus(),
+          messages: this.history.read(),
+          title: this.cliName,
+          ephemeralQuestionMessageKeys: this.history.ephemeralQuestionMessageKeys()
+        };
+      }
+      async readHistoryPage(threadId, cursor) {
+        if (!this.isReady() || threadId !== this.questions.threadId) throw new Error("Cannot switch managed Codex history to another thread");
+        const page = record2(await this.transport.request("thread/turns/list", { threadId, cursor, limit: 20, sortDirection: "asc", itemsView: "full" }));
+        if (!page || !Array.isArray(page.data) || !(page.nextCursor === null || typeof page.nextCursor === "string")) throw new Error("Invalid Codex history page");
+        this.history.hydrate({ id: threadId, turns: page.data });
+        this.notify("fsm_state");
+        return page.nextCursor;
+      }
+      getRuntimeMetadata() {
+        return {
+          runtimeId: this.sessionId,
+          runtimeKey: this.transport.generation,
+          surfaceKind: "live_runtime",
+          lifecycle: this.status,
+          spawnedEnv: this.envOverrides,
+          attachedClients: [{ clientId: this.sessionId, type: "daemon", readOnly: false }]
+        };
+      }
+      getLaunchInfo() {
+        return { command: this.command, args: [...this.args, "app-server", "--listen", "stdio://"], extraArgs: this.args, cwd: this.workingDir, extraEnvKeys: Object.keys(this.envOverrides), providerSessionId: this.questions.threadId };
+      }
+      getInteractivePromptTransport() {
+        return "wire";
+      }
+      isReady() {
+        return this.transport.isAlive() && !!this.questions.threadId && !this.nativeFailure && this.status !== "error";
+      }
+      isAlive() {
+        return this.transport.isAlive();
+      }
+      isProcessing() {
+        return this.status === "generating";
+      }
+      setOnChange(callback) {
+        this.change = callback;
+      }
+      setOnStatusChange(callback) {
+        this.change = callback;
+      }
+      setOnExit(callback) {
+        this.exit = callback ?? void 0;
+      }
+      setOnSignal(_callback) {
+      }
+      setOnApprovalResolved(_callback) {
+      }
+      getLastApprovalResolvedAt() {
+        return this.lastApprovalResolvedAt;
+      }
+      isApprovalRecentlyResolved() {
+        return false;
+      }
+      updateRuntimeSettings(settings) {
+        this.settings = { ...settings };
+      }
+      updateRuntimeMeta(meta) {
+        if (meta.providerSessionId && meta.providerSessionId !== this.questions.threadId) throw new Error("Managed Codex cannot switch or resume a native thread");
+      }
+      refreshProviderDefinition(_provider) {
+      }
+      setServerConn(_connection) {
+      }
+      setOnPtyData(_callback) {
+      }
+      getTerminalScreenSnapshot(_maxBytes) {
+        throw new Error("Managed Codex sessions have no terminal");
+      }
+      injectKeys() {
+        return Promise.reject(new Error("Managed Codex sessions have no terminal input"));
+      }
+      setSignalObservation(_snapshot) {
+      }
+      writeRaw(_data) {
+        throw new Error("Managed Codex stdio sessions do not support terminal input");
+      }
+      resize(_cols, _rows) {
+      }
+      invokeScript(_script, _args) {
+        return Promise.reject(new Error("PTY controls are unavailable for managed Codex sessions"));
+      }
+      resolveAction(_data) {
+        return Promise.reject(new Error("Native permission grants require a supported exact owner approval path"));
+      }
+      async interruptTurn() {
+        if (!this.questions.turnId) return { ok: false, reason: "no_active_turn", message: "No active Codex turn" };
+        await this.transport.request("turn/interrupt", { threadId: this.questions.threadId, turnId: this.questions.turnId });
+        this.questions.invalidate();
+        this.notify("prompt_cleared");
+        return { ok: true, keyName: "turn/interrupt", bytes: 0, confidence: "proven" };
+      }
+      cancel() {
+        void this.interruptTurn().catch(() => {
+        });
+      }
+      shutdown() {
+        this.transport.stop();
+      }
+      detach() {
+        this.shutdown();
+      }
+      clearHistory() {
+        this.history.clear();
+      }
+    };
+    function boundedTitle(question) {
+      const bytes = Buffer.from(question);
+      let end = Math.min(bytes.length, 512);
+      if (end < bytes.length) while ((bytes[end] & 192) === 128) end--;
+      return bytes.subarray(0, end).toString("utf8").replace(/[\r\n]/g, " ");
+    }
     function formatNoResolvableSpecError(providerType, dir) {
       const cli = `${IDENTITY2.binaryName} provider sync-channel`;
       return `CLI provider '${providerType}' has no resolvable spec (checked compatibility[].spec, specs/default.json, spec.json under ${dir || "the resolved provider dir"}). The legacy scripts/tui-manifest CLI engine was removed; update the provider bundle with \`${cli}\` (no extra arguments), or click the stale provider badge on the machine Providers tab in the dashboard, or add a spec.json to the provider.`;
     }
-    function createCliAdapter(provider, workingDir, cliArgs, extraEnv, transportFactory, sessionId, removeArgs, resolvedTrustPlan) {
+    function createCliAdapter(provider, workingDir, cliArgs, extraEnv, transportFactory, sessionId, removeArgs, resolvedTrustPlan, structuredCodex = false) {
       const resolvedSpecPath = provider._resolvedSpecPath;
       const dir = provider._resolvedProviderDir;
       let specPath = resolvedSpecPath && fs89.existsSync(resolvedSpecPath) ? resolvedSpecPath : void 0;
@@ -144923,6 +145676,17 @@ ${text}` : text;
       }
       if (!specPath) {
         throw new Error(formatNoResolvableSpecError(provider.type, dir));
+      }
+      if (structuredCodex) {
+        if (provider.type !== "codex-cli" || !sessionId || transportFactory?.attachesExistingRuntime) {
+          throw new Error("Codex app-server transport is available only for new managed Codex sessions");
+        }
+        for (let i = 0; i < cliArgs.length; i += 2) {
+          if (!["-c", "--config", "-s", "--sandbox", "-a", "--ask-for-approval"].includes(cliArgs[i]) || !cliArgs[i + 1]) {
+            throw new Error("Unsupported startup arguments for Codex app-server transport");
+          }
+        }
+        return new CodexAppServerAdapter(workingDir, sessionId, provider.spawn.command || "codex", cliArgs, { ...process.env, ...extraEnv }, void 0, extraEnv);
       }
       LOG.info("spec-route", `[${provider.type}] routing through SpecCliAdapter (${path78.relative(dir || "", specPath) || specPath})`);
       return new SpecCliAdapter(specPath, workingDir, cliArgs, extraEnv, transportFactory, sessionId, {
@@ -144964,6 +145728,9 @@ ${text}` : text;
       const incomingPromptId = typeof data?.promptId === "string" ? data.promptId.trim() : "";
       if (!held) {
         throw new Error(incomingPromptId ? `No active interactive prompt for this session \u2014 nothing to answer (received promptId "${incomingPromptId}"). The question may already have been answered or cancelled.` : "No active interactive prompt for this session \u2014 nothing to answer.");
+      }
+      if (held.binding && Array.isArray(data?.answers)) {
+        throw new Error("Native question responses require exact question-id-keyed answers and episode binding");
       }
       if (incomingPromptId && incomingPromptId !== held.promptId) {
         throw new Error(`Stale promptId "${incomingPromptId}" \u2014 the session's active question is "${held.promptId}". The answer was NOT applied; re-answer against the active promptId.`);
@@ -145070,8 +145837,8 @@ ${text}` : text;
     }
     function getMessageTime(message) {
       if (!message || typeof message !== "object") return 0;
-      const record2 = message;
-      const value = Number(record2.receivedAt ?? record2.timestamp ?? 0);
+      const record3 = message;
+      const value = Number(record3.receivedAt ?? record3.timestamp ?? 0);
       return Number.isFinite(value) ? value : 0;
     }
     function hasNonEmptyCliModalButtons(activeModal) {
@@ -146607,13 +147374,13 @@ ${buttons.join("\n")}`;
       keyFor(message) {
         const role = typeof message.role === "string" ? message.role.trim().toLowerCase() : "";
         const kind = typeof message.kind === "string" ? message.kind.trim().toLowerCase() : "";
-        let text = "";
+        let text2 = "";
         try {
-          text = flattenContent(message.content);
+          text2 = flattenContent(message.content);
         } catch {
-          text = String(message.content ?? "");
+          text2 = String(message.content ?? "");
         }
-        return `${role}|${kind}|${text.replace(/\s+/g, " ").trim()}`;
+        return `${role}|${kind}|${text2.replace(/\s+/g, " ").trim()}`;
       }
       remember(key2, firstSeenAt) {
         this.firstSeenAtByKey.set(key2, firstSeenAt);
@@ -147207,7 +147974,8 @@ ${buttons.join("\n")}`;
       const suppressStaleParsedBusyStatus = host.shouldSuppressStaleParsedBusyStatus(parsedStatus, adapterStatus);
       if (parsedMessages.length > 0) {
         const shouldSkipReplayPersist = host.suppressIdleHistoryReplay && adapterStatus.status === "idle" && parsedStatus?.status === "idle";
-        let messagesToSave = parsedMessages;
+        const ephemeralQuestionKeys = new Set(Array.isArray(parsedStatus?.ephemeralQuestionMessageKeys) ? parsedStatus.ephemeralQuestionMessageKeys.filter((key2) => typeof key2 === "string") : []);
+        let messagesToSave = parsedMessages.filter((message) => !ephemeralQuestionKeys.has(message.providerUnitKey || ""));
         if (!suppressStaleParsedBusyStatus && (parsedChatStatus === "generating" || parsedChatStatus === "no_progress" || parsedChatStatus === "long_generating")) {
           const lastIdx = messagesToSave.length - 1;
           if (lastIdx >= 0 && messagesToSave[lastIdx]?.role === "assistant") {
@@ -147240,7 +148008,8 @@ ${buttons.join("\n")}`;
         controlValues: host.controlValues
       });
       const activeChatStatus = parseErrorMessage ? "error" : autoApproveActive && parsedStatus?.status === "waiting_approval" || autoApproveHoldIdle ? "generating" : adapterStatus.status !== "idle" ? visibleStatus : suppressStaleParsedBusyStatus ? visibleStatus : parsedChatStatus || visibleStatus;
-      const hasInteractivePrompt = !!host.activeInteractivePrompt;
+      const nativeQuestion = host.activeInteractivePrompt?.binding?.transport;
+      const hasInteractivePrompt = !!host.activeInteractivePrompt && host.activeInteractivePrompt.blocking !== false && nativeQuestion !== "codex_async" && !(nativeQuestion === "codex_rpc" && adapterStatus.status === "waiting_approval");
       const finalStatus = hasInteractivePrompt ? "waiting_choice" : visibleStatus;
       const finalChatStatus = hasInteractivePrompt ? "waiting_choice" : activeChatStatus;
       return {
@@ -148229,8 +148998,8 @@ ${buttons.join("\n")}`;
     }
     function nativeTurnTerminalSummary(host, turnStartedAt) {
       const marker = host.nativeTurnTerminalMarker(turnStartedAt);
-      const text = typeof marker?.summary === "string" ? marker.summary.trim() : "";
-      return text || void 0;
+      const text2 = typeof marker?.summary === "string" ? marker.summary.trim() : "";
+      return text2 || void 0;
     }
     function hasEmittedGenuineCompletionForCurrentEpoch(host) {
       const latch = host.lastEmittedCompletion;
@@ -148248,7 +149017,8 @@ ${buttons.join("\n")}`;
         this.launchMode = options?.launchMode || "new";
         this.initialThinkingLevel = options?.initialThinkingLevel;
         this.onProviderSessionResolved = options?.onProviderSessionResolved;
-        this.adapter = createCliAdapter(provider, workingDir, cliArgs, options?.extraEnv || {}, transportFactory, this.instanceId, options?.removeSpawnArgs, options?.resolvedTrustPlan);
+        if (options?.structuredCodex && (this.launchMode !== "new" || this.providerSessionId)) throw new Error("Managed Codex transport cannot migrate or resume existing sessions");
+        this.adapter = createCliAdapter(provider, workingDir, cliArgs, options?.extraEnv || {}, transportFactory, this.instanceId, options?.removeSpawnArgs, options?.resolvedTrustPlan, options?.structuredCodex);
         if (this.providerSessionId) {
           this.adapter.updateRuntimeMeta({ providerSessionId: this.providerSessionId });
         }
@@ -148467,7 +149237,7 @@ ${buttons.join("\n")}`;
         this.applySettingsToRuntime();
         wireAdapterCallbacks(this, context);
         await this.adapter.spawn();
-        await enforceFreshSessionLaunchIfNeeded(this);
+        if (!this.adapter.nativeTransport) await enforceFreshSessionLaunchIfNeeded(this);
         await applyInitialThinkingLevelViaControl(this);
         this.maybeAppendRuntimeRecoveryMessage(this.adapter.getRuntimeMetadata());
         if (this.providerSessionId && this.shouldHydrateExistingProviderHistory()) {
@@ -149832,6 +150602,9 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         autoApproveModeId: typeof launchSettings?.autoApproveMode === "string" ? launchSettings.autoApproveMode : void 0
       });
       const instanceManager = host.deps.getInstanceManager();
+      if (launchSettings.codexTransport === "app-server" && (!instanceManager || normalizedType !== "codex-cli" || sessionBinding.launchMode !== "new")) {
+        throw new Error("Codex app-server transport requires a new managed Codex session; existing sessions cannot be migrated");
+      }
       if (launchProvider && instanceManager) {
         const resolvedProvider = launchProvider;
         await host.registerCliInstance(
@@ -150015,16 +150788,16 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
     }
     var chalkModule = import_chalk.default;
     var chalkApi = typeof chalkModule.yellow === "function" ? chalkModule : chalkModule.default || null;
-    function colorize(color, text) {
+    function colorize(color, text2) {
       const fn = chalkApi?.[color];
-      return typeof fn === "function" ? fn(text) : text;
+      return typeof fn === "function" ? fn(text2) : text2;
     }
     function resolveLaunchProvenance(args, settings) {
       const declared = readLaunchProvenanceArgs(args);
       return { ...declared, launchedBy: declared.launchedBy ?? inferLaunchedBy(settings) };
     }
-    function launchSummaryMetadata(record2) {
-      return buildLegacyModelModeSummaryMetadata({ model: record2.model.requested });
+    function launchSummaryMetadata(record3) {
+      return buildLegacyModelModeSummaryMetadata({ model: record3.model.requested });
     }
     function prepareDelegatedLaunch(host, args, cliType, dir, providerType, provLookup) {
       let settingsOverride = args?.settings && typeof args.settings === "object" ? args.settings : void 0;
@@ -150148,9 +150921,9 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
     init_runtime_defaults();
     init_assistant_registry();
     init_launch_record();
-    function shouldRestoreHostedRuntime(record2, managerTag) {
+    function shouldRestoreHostedRuntime(record3, managerTag) {
       if (!managerTag) return true;
-      const managedBy = typeof record2.managedBy === "string" ? record2.managedBy.trim() : "";
+      const managedBy = typeof record3.managedBy === "string" ? record3.managedBy.trim() : "";
       if (!managedBy) return true;
       return managedBy === managerTag;
     }
@@ -150170,46 +150943,46 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         workspaceTypeCounts.set(key2, (workspaceTypeCounts.get(key2) || 0) + 1);
       }
       const rebindAdoptedSessionIds = /* @__PURE__ */ new Set();
-      for (const record2 of sessions) {
-        if (!record2?.runtimeId || !record2?.cliType || !record2?.workspace) continue;
-        if (!shouldRestoreHostedRuntime(record2, managerTag)) {
+      for (const record3 of sessions) {
+        if (!record3?.runtimeId || !record3?.cliType || !record3?.workspace) continue;
+        if (!shouldRestoreHostedRuntime(record3, managerTag)) {
           LOG.info(
             "CLI",
-            `\u21B7 Skipping hosted runtime restore owned by ${record2.managedBy}: ${record2.runtimeKey || record2.runtimeId}`
+            `\u21B7 Skipping hosted runtime restore owned by ${record3.managedBy}: ${record3.runtimeKey || record3.runtimeId}`
           );
           continue;
         }
-        if (host.adapters.has(record2.runtimeId) || instanceManager.getInstance(record2.runtimeId)) continue;
-        const normalizedType = host.providerLoader.resolveAlias(record2.cliType);
+        if (host.adapters.has(record3.runtimeId) || instanceManager.getInstance(record3.runtimeId)) continue;
+        const normalizedType = host.providerLoader.resolveAlias(record3.cliType);
         const providerMeta = host.providerLoader.getMeta(normalizedType);
         if (!providerMeta || providerMeta.category !== "cli") continue;
         const resolvedProvider = host.providerLoader.resolve(normalizedType) || providerMeta;
         const sessionBinding = resolveCliSessionBinding(
           resolvedProvider,
           normalizedType,
-          record2.cliArgs,
-          record2.providerSessionId
+          record3.cliArgs,
+          record3.providerSessionId
         );
         const bindingKey = [
           normalizedType,
-          record2.workspace,
-          sessionBinding.providerSessionId || record2.runtimeId
+          record3.workspace,
+          sessionBinding.providerSessionId || record3.runtimeId
         ].join("::");
         if (restoredBindings.has(bindingKey)) {
           LOG.info(
             "CLI",
-            `\u21B7 Skipping duplicate hosted runtime restore: ${record2.runtimeKey || record2.runtimeId} (${normalizedType} @ ${record2.workspace}) binding=${sessionBinding.providerSessionId || "runtime"}`
+            `\u21B7 Skipping duplicate hosted runtime restore: ${record3.runtimeKey || record3.runtimeId} (${normalizedType} @ ${record3.workspace}) binding=${sessionBinding.providerSessionId || "runtime"}`
           );
           continue;
         }
-        const restoredSettings = buildRestoredSettings(host, record2, normalizedType, restoredRuntimeIds, workspaceTypeCounts, rebindAdoptedSessionIds);
+        const restoredSettings = buildRestoredSettings(host, record3, normalizedType, restoredRuntimeIds, workspaceTypeCounts, rebindAdoptedSessionIds);
         try {
           await host.registerCliInstance(
-            record2.runtimeId,
+            record3.runtimeId,
             normalizedType,
-            record2.cliType,
-            record2.workspace,
-            record2.cliArgs,
+            record3.cliType,
+            record3.workspace,
+            record3.cliArgs,
             resolvedProvider,
             restoredSettings,
             true,
@@ -150221,22 +150994,22 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
               // to spawnedAtMs:0 (which disabled the antigravity per-session floor
               // and let co-located workers claim the coordinator's own conversation).
               // Undefined → registerCliInstance keeps the 0 fallback.
-              attachStartedAtMs: record2.startedAtMs,
+              attachStartedAtMs: record3.startedAtMs,
               // Phase E: the provenance stored at spawn, launchedBy → 'restore'
               // with the axis sources preserved (see buildRestoredLaunchRecord).
-              launchRecord: buildRestoredLaunchRecord(record2.launchRecord, {
-                sessionId: record2.runtimeId,
+              launchRecord: buildRestoredLaunchRecord(record3.launchRecord, {
+                sessionId: record3.runtimeId,
                 providerType: normalizedType,
-                workspace: record2.workspace,
-                launchedAt: record2.startedAtMs ?? Date.now()
+                workspace: record3.workspace,
+                launchedAt: record3.startedAtMs ?? Date.now()
               })
             }
           );
           restoredBindings.add(bindingKey);
           restored += 1;
-          LOG.info("CLI", `\u267B Restored hosted runtime: ${record2.runtimeKey || record2.runtimeId} (${record2.displayName || record2.workspace})`);
+          LOG.info("CLI", `\u267B Restored hosted runtime: ${record3.runtimeKey || record3.runtimeId} (${record3.displayName || record3.workspace})`);
         } catch (error) {
-          LOG.warn("CLI", `Failed to restore hosted runtime ${record2.runtimeId}: ${error?.message || error}`);
+          LOG.warn("CLI", `Failed to restore hosted runtime ${record3.runtimeId}: ${error?.message || error}`);
         }
       }
       if (!records && typeof host.deps.listHostedCliRuntimes === "function") {
@@ -150246,44 +151019,44 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
       }
       return restored;
     }
-    function buildRestoredSettings(host, record2, normalizedType, restoredRuntimeIds, workspaceTypeCounts, rebindAdoptedSessionIds) {
+    function buildRestoredSettings(host, record3, normalizedType, restoredRuntimeIds, workspaceTypeCounts, rebindAdoptedSessionIds) {
       const restoredSettings = { ...host.providerLoader.getSettings(normalizedType) };
-      let coordinatorEntry = getCoordinatorForSession(record2.runtimeId);
-      if (!coordinatorEntry?.meshId && record2.workspace) {
-        const workspaceCoordinators = listCoordinatorsForWorkspace(record2.workspace).filter((e) => e.meshId && (!e.cliType || e.cliType === record2.cliType));
+      let coordinatorEntry = getCoordinatorForSession(record3.runtimeId);
+      if (!coordinatorEntry?.meshId && record3.workspace) {
+        const workspaceCoordinators = listCoordinatorsForWorkspace(record3.workspace).filter((e) => e.meshId && (!e.cliType || e.cliType === record3.cliType));
         if (workspaceCoordinators.length === 1) {
           const candidate = workspaceCoordinators[0];
           const coordinatorPresentById = !!candidate.sessionId && restoredRuntimeIds.has(candidate.sessionId);
-          const siblingCount = workspaceTypeCounts.get(`${record2.workspace}::${record2.cliType}`) || 1;
+          const siblingCount = workspaceTypeCounts.get(`${record3.workspace}::${record3.cliType}`) || 1;
           if (!coordinatorPresentById && siblingCount === 1) {
             coordinatorEntry = candidate;
             if (candidate.sessionId) rebindAdoptedSessionIds.add(candidate.sessionId);
             LOG.info(
               "CLI",
-              `\u21BB Rebound coordinator mark by workspace for ${record2.runtimeKey || record2.runtimeId} (mesh ${candidate.meshId} @ ${record2.workspace}); registry key did not match runtimeId`
+              `\u21BB Rebound coordinator mark by workspace for ${record3.runtimeKey || record3.runtimeId} (mesh ${candidate.meshId} @ ${record3.workspace}); registry key did not match runtimeId`
             );
           } else {
             LOG.info(
               "CLI",
-              `\u21B7 Skipping workspace coordinator rebind for ${record2.runtimeKey || record2.runtimeId} (${record2.cliType} @ ${record2.workspace}): ${coordinatorPresentById ? "registered coordinator is restoring under its own id \u2014 this is a delegated worker" : `ambiguous (${siblingCount} sessions share this workspace+cliType)`}`
+              `\u21B7 Skipping workspace coordinator rebind for ${record3.runtimeKey || record3.runtimeId} (${record3.cliType} @ ${record3.workspace}): ${coordinatorPresentById ? "registered coordinator is restoring under its own id \u2014 this is a delegated worker" : `ambiguous (${siblingCount} sessions share this workspace+cliType)`}`
             );
           }
         } else if (workspaceCoordinators.length === 0) {
           LOG.debug(
             "CLI",
-            `No registered coordinator for workspace ${record2.workspace} \u2014 workspace rebind fallback empty for ${record2.runtimeKey || record2.runtimeId} (${record2.cliType}); the session stays unmarked`
+            `No registered coordinator for workspace ${record3.workspace} \u2014 workspace rebind fallback empty for ${record3.runtimeKey || record3.runtimeId} (${record3.cliType}); the session stays unmarked`
           );
         }
       }
       if (coordinatorEntry?.meshId) {
         restoredSettings.meshCoordinatorFor = coordinatorEntry.meshId;
       }
-      const recordMeshNodeFor = typeof record2.meshNodeFor === "string" && record2.meshNodeFor.trim() ? record2.meshNodeFor.trim() : "";
-      const recordMeshNodeId = typeof record2.meshNodeId === "string" && record2.meshNodeId.trim() ? record2.meshNodeId.trim() : "";
+      const recordMeshNodeFor = typeof record3.meshNodeFor === "string" && record3.meshNodeFor.trim() ? record3.meshNodeFor.trim() : "";
+      const recordMeshNodeId = typeof record3.meshNodeId === "string" && record3.meshNodeId.trim() ? record3.meshNodeId.trim() : "";
       if (recordMeshNodeFor) restoredSettings.meshNodeFor = recordMeshNodeFor;
-      const recordOwner = typeof record2.meshCoordinatorDaemonId === "string" ? record2.meshCoordinatorDaemonId.trim() : "";
+      const recordOwner = typeof record3.meshCoordinatorDaemonId === "string" ? record3.meshCoordinatorDaemonId.trim() : "";
       if (recordMeshNodeFor && recordOwner) restoredSettings.meshCoordinatorDaemonId = recordOwner;
-      const recordAttemptRef = record2.meshActiveAttemptRef;
+      const recordAttemptRef = record3.meshActiveAttemptRef;
       if (recordMeshNodeFor && recordOwner && recordAttemptRef?.attemptId) {
         restoredSettings.meshActiveAttemptId = recordAttemptRef.attemptId;
         restoredSettings.meshActiveAttemptGeneration = recordAttemptRef.generation;
@@ -150292,27 +151065,27 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         restoredSettings.meshNodeId = recordMeshNodeId;
         restoredSettings.meshLastNodeId = recordMeshNodeId;
       }
-      if (record2.launchedByCoordinator === true) restoredSettings.launchedByCoordinator = true;
-      if (typeof record2.autoApproveMode === "string" && record2.autoApproveMode.trim()) {
-        restoredSettings.autoApproveMode = record2.autoApproveMode.trim();
+      if (record3.launchedByCoordinator === true) restoredSettings.launchedByCoordinator = true;
+      if (typeof record3.autoApproveMode === "string" && record3.autoApproveMode.trim()) {
+        restoredSettings.autoApproveMode = record3.autoApproveMode.trim();
       }
-      applyAssistantRestoreMark(record2, restoredSettings);
+      applyAssistantRestoreMark(record3, restoredSettings);
       return restoredSettings;
     }
-    function applyAssistantRestoreMark(record2, restoredSettings) {
+    function applyAssistantRestoreMark(record3, restoredSettings) {
       let entry;
       try {
         entry = getAssistantRegistry().read();
       } catch {
         return;
       }
-      if (!findAssistantRestoreRecord(entry, [record2])) return;
+      if (!findAssistantRestoreRecord(entry, [record3])) return;
       restoredSettings.assistant = true;
       if (typeof restoredSettings.autoApproveMode !== "string") {
         restoredSettings.autoApprove = false;
         delete restoredSettings.autoApproveMode;
       }
-      LOG.info("CLI", `\u21BB Re-bound assistant session ${record2.runtimeId}`);
+      LOG.info("CLI", `\u21BB Re-bound assistant session ${record3.runtimeId}`);
     }
     function reconcileWorkerBindsAfterRestore(sessions, restoredRuntimeIds) {
       const live = new Set(restoredRuntimeIds);
@@ -150729,7 +151502,11 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
           // restart keeps its model provenance (read back by listHostedCliRuntimes).
           ...!attachExisting && options?.launchRecord ? { launchRecord: options.launchRecord } : {}
         };
-        const transportFactory = this.getTransportFactory(
+        const structuredCodex = settings?.codexTransport === "app-server";
+        if (structuredCodex && (normalizedType !== "codex-cli" || attachExisting || options?.providerSessionId || options?.launchMode === "resume")) {
+          throw new Error("Managed Codex transport requires a new Codex session");
+        }
+        const transportFactory = structuredCodex ? void 0 : this.getTransportFactory(
           key2,
           normalizedType,
           resolvedDir,
@@ -150740,7 +151517,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
           // existing record whose meta is already stamped; re-seeding could clobber.
           attachExisting ? void 0 : launchRecordMeta
         );
-        const cliInstance = new CliProviderInstance(provider, resolvedDir, cliArgs, key2, transportFactory, options);
+        const cliInstance = new CliProviderInstance(provider, resolvedDir, cliArgs, key2, transportFactory, { ...options, structuredCodex });
         try {
           await instanceManager.addInstance(key2, cliInstance, {
             settings,
@@ -151267,15 +152044,15 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
           return state;
         }
       }
-      async sendMessage(evaluate, text) {
+      async sendMessage(evaluate, text2) {
         let beforeState = null;
         try {
           beforeState = await this.readStableBaselineState(evaluate);
         } catch {
           beforeState = null;
         }
-        const params = { message: text };
-        const script = this.callScript("sendMessage", params) || this.callScript("sendMessage", text);
+        const params = { message: text2 };
+        const script = this.callScript("sendMessage", params) || this.callScript("sendMessage", text2);
         if (!script) throw new Error(`[${this.agentName}] sendMessage script not available`);
         const result = await evaluate(script);
         if (result && typeof result === "string" && result.startsWith("error:")) {
@@ -151586,7 +152363,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
           };
         }
       }
-      async sendToSession(cdp, sessionId, text) {
+      async sendToSession(cdp, sessionId, text2) {
         await this.ensureSessionPanelOpen(sessionId);
         const target = this.getSessionTarget(sessionId);
         if (!target?.parentSessionId) return false;
@@ -151596,7 +152373,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         if (!agent) return false;
         try {
           const evaluate = (expr, timeout) => cdp.evaluateInSessionFrame(agent.cdpSessionId, expr, timeout);
-          await agent.adapter.sendMessage(evaluate, text);
+          await agent.adapter.sendMessage(evaluate, text2);
           return true;
         } catch (e) {
           this.logFn(`[AgentStream] sendToSession(${sessionId}) error: ${e.message}`);
@@ -152633,10 +153410,10 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
        * Returns false (and emits nothing) when the session is unknown or the
        * record names another session.
        */
-      setLaunchRecord(sessionId, record2, cause = "launch") {
+      setLaunchRecord(sessionId, record3, cause = "launch") {
         const target = sessionId ? this.bySessionId.get(sessionId) : void 0;
-        if (!target || record2.sessionId !== target.sessionId) return false;
-        target.launch = cloneLaunchRecord(record2);
+        if (!target || record3.sessionId !== target.sessionId) return false;
+        target.launch = cloneLaunchRecord(record3);
         this.emitLaunchUpdated(target, cause);
         return true;
       }
@@ -153628,8 +154405,8 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     }
     async function handleTypeAndSend(ctx, type2, req, res) {
       const body = await ctx.readBody(req);
-      const { selector, text } = body;
-      if (!selector || typeof selector !== "string" || !text || typeof text !== "string") {
+      const { selector, text: text2 } = body;
+      if (!selector || typeof selector !== "string" || !text2 || typeof text2 !== "string") {
         ctx.json(res, 400, { error: "selector and text strings required" });
         return;
       }
@@ -153639,7 +154416,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         return;
       }
       try {
-        const sent = await cdp.typeAndSend(selector, text);
+        const sent = await cdp.typeAndSend(selector, text2);
         ctx.json(res, 200, { sent });
       } catch (e) {
         ctx.json(res, 500, { error: e.message });
@@ -153647,8 +154424,8 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     }
     async function handleTypeAndSendAt(ctx, type2, req, res) {
       const body = await ctx.readBody(req);
-      const { x, y, text } = body;
-      if (typeof x !== "number" || typeof y !== "number" || !text || typeof text !== "string") {
+      const { x, y, text: text2 } = body;
+      if (typeof x !== "number" || typeof y !== "number" || !text2 || typeof text2 !== "string") {
         ctx.json(res, 400, { error: "x, y numbers and text string required" });
         return;
       }
@@ -153658,7 +154435,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         return;
       }
       try {
-        const sent = await cdp.typeAndSendAt(x, y, text);
+        const sent = await cdp.typeAndSendAt(x, y, text2);
         ctx.json(res, 200, { sent });
       } catch (e) {
         ctx.json(res, 500, { error: e.message });
@@ -154245,8 +155022,8 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     }
     async function handleFindByText(ctx, req, res) {
       const body = await ctx.readBody(req);
-      const { text, ideType, containerSelector } = body;
-      if (!text || typeof text !== "string") {
+      const { text: text2, ideType, containerSelector } = body;
+      if (!text2 || typeof text2 !== "string") {
         ctx.json(res, 400, { error: "text is required" });
         return;
       }
@@ -154281,7 +155058,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       return parts.join(' < ');
     }
 
-    const searchText = ${JSON.stringify(text)}.toLowerCase();
+    const searchText = ${JSON.stringify(text2)}.toLowerCase();
     const container = ${containerArg} ? document.querySelector(${containerArg}) : document.body;
     if (!container) return JSON.stringify({ error: 'Container not found' });
 
@@ -154353,7 +155130,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       return (bMax - aMax) || (a.depth - b.depth);
     });
 
-    return JSON.stringify({ query: ${JSON.stringify(text)}, matches, total: matches.length });
+    return JSON.stringify({ query: ${JSON.stringify(text2)}, matches, total: matches.length });
   })()`;
       try {
         const raw = await cdp.evaluate(script, 1e4);
@@ -154719,7 +155496,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       }
       const {
         type: type2,
-        text,
+        text: text2,
         instanceId: requestedInstanceId,
         workingDir,
         args,
@@ -154736,7 +155513,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       if (!type2) {
         throw new Error("type required (e.g. claude-cli, codex-cli)");
       }
-      if (!text || typeof text !== "string") {
+      if (!text2 || typeof text2 !== "string") {
         throw new Error("text required (prompt to send to the CLI)");
       }
       let resolvedInstanceId = requestedInstanceId;
@@ -154831,7 +155608,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         if (status === "idle") break;
         await sleep2(150);
       }
-      ctx.instanceManager.sendEvent(bundle.target.instanceId, "send_message", { text });
+      ctx.instanceManager.sendEvent(bundle.target.instanceId, "send_message", { text: text2 });
       while (Date.now() - startAt < Math.max(1e3, timeoutMs)) {
         await sleep2(150);
         bundle = getCliTargetBundle(ctx, type2, bundle.target.instanceId);
@@ -154993,8 +155770,8 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         return;
       }
       const body = await ctx.readBody(req);
-      const { type: type2, text, instanceId } = body;
-      if (!text) {
+      const { type: type2, text: text2, instanceId } = body;
+      if (!text2) {
         ctx.json(res, 400, { error: "text required" });
         return;
       }
@@ -155010,9 +155787,9 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
             ctx.json(res, 404, { error: `No running CLI adapter found for: ${type2 || instanceId}` });
             return;
           }
-          await bundle.adapter.sendMessage(text);
+          await bundle.adapter.sendMessage(text2);
         } else {
-          ctx.instanceManager.sendEvent(target.instanceId, "send_message", { text });
+          ctx.instanceManager.sendEvent(target.instanceId, "send_message", { text: text2 });
         }
         ctx.json(res, 200, { sent: true, type: target.type, instanceId: target.instanceId });
       } catch (e) {
@@ -155602,16 +156379,16 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           this.json(res, 404, { error: `Provider not found: ${type2}` });
           return;
         }
-        const spawn8 = provider.spawn;
-        if (!spawn8) {
+        const spawn9 = provider.spawn;
+        if (!spawn9) {
           this.json(res, 400, { error: `Provider ${type2} has no spawn config` });
           return;
         }
         const { spawn: spawnFn } = await import("child_process");
         const start = Date.now();
         try {
-          const child = spawnFn(spawn8.command, [...spawn8.args || []], {
-            shell: spawn8.shell ?? false,
+          const child = spawnFn(spawn9.command, [...spawn9.args || []], {
+            shell: spawn9.shell ?? false,
             windowsHide: true,
             timeout: 5e3,
             stdio: ["pipe", "pipe", "pipe"]
@@ -155644,7 +156421,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           const elapsed = Date.now() - start;
           this.json(res, 200, {
             success: true,
-            command: `${spawn8.command} ${(spawn8.args || []).join(" ")}`,
+            command: `${spawn9.command} ${(spawn9.args || []).join(" ")}`,
             elapsed,
             stdout: stdout.trim(),
             stderr: stderr.trim(),
@@ -155654,7 +156431,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           const elapsed = Date.now() - start;
           this.json(res, 200, {
             success: false,
-            command: `${spawn8.command} ${(spawn8.args || []).join(" ")}`,
+            command: `${spawn9.command} ${(spawn9.args || []).join(" ")}`,
             elapsed,
             error: e.message
           });
@@ -156252,12 +157029,12 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     var import_session_host_core10 = require_dist();
     init_logger();
     init_resolve_executable();
-    function shouldResumeAttachedSession(record2) {
-      if (!record2) return false;
-      if (record2.lifecycle === "interrupted") return true;
-      if (record2.lifecycle !== "stopped") return false;
-      if (record2.meta?.restoredFromStorage === true) return true;
-      return typeof record2.meta?.runtimeRecoveryState === "string" && String(record2.meta.runtimeRecoveryState).trim().length > 0;
+    function shouldResumeAttachedSession(record3) {
+      if (!record3) return false;
+      if (record3.lifecycle === "interrupted") return true;
+      if (record3.lifecycle !== "stopped") return false;
+      if (record3.meta?.restoredFromStorage === true) return true;
+      return typeof record3.meta?.runtimeRecoveryState === "string" && String(record3.meta.runtimeRecoveryState).trim().length > 0;
     }
     var SessionHostRuntimeTransport = class {
       constructor(options) {
@@ -156472,7 +157249,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           await this.client.connect();
         }
         this.unsubscribe = this.client.onEvent((event) => this.handleEvent(event));
-        let record2 = null;
+        let record3 = null;
         if (this.options.attachExisting) {
           const existingRecords = await this.client.request({
             type: "list_sessions",
@@ -156502,7 +157279,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           if (!attachResponse.success || !attachResponse.result) {
             throw new Error(attachResponse.error || `Failed to attach runtime ${this.options.runtimeId}`);
           }
-          record2 = attachResponse.result;
+          record3 = attachResponse.result;
         } else {
           const createResponse = await this.client.request({
             type: "create_session",
@@ -156526,10 +157303,10 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           if (!createResponse.success || !createResponse.result) {
             throw new Error(createResponse.error || `Failed to create runtime ${this.options.runtimeId}`);
           }
-          record2 = createResponse.result;
+          record3 = createResponse.result;
         }
-        this.currentPid = record2.osPid || 0;
-        this.updateMetadata(record2);
+        this.currentPid = record3.osPid || 0;
+        this.updateMetadata(record3);
         const ownerResponse = await this.client.request({
           type: "acquire_write",
           payload: {
@@ -156558,9 +157335,9 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           if (!snapshotResponse.success) {
             throw new Error(snapshotResponse.error || `Failed to load snapshot for ${this.options.runtimeId}`);
           }
-          const text = snapshotResponse.result?.text || "";
-          if (text) {
-            this.emitData(text);
+          const text2 = snapshotResponse.result?.text || "";
+          if (text2) {
+            this.emitData(text2);
           }
         }
       }
@@ -156630,26 +157407,26 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           callback(data);
         }
       }
-      updateMetadata(record2) {
+      updateMetadata(record3) {
         this.metadata = {
-          runtimeId: record2.sessionId,
-          runtimeKey: record2.runtimeKey,
-          displayName: record2.displayName,
-          workspaceLabel: record2.workspaceLabel,
-          lifecycle: typeof record2.lifecycle === "string" ? record2.lifecycle : null,
-          surfaceKind: record2.surfaceKind,
-          writeOwner: record2.writeOwner ? {
-            clientId: record2.writeOwner.clientId,
-            ownerType: record2.writeOwner.ownerType
+          runtimeId: record3.sessionId,
+          runtimeKey: record3.runtimeKey,
+          displayName: record3.displayName,
+          workspaceLabel: record3.workspaceLabel,
+          lifecycle: typeof record3.lifecycle === "string" ? record3.lifecycle : null,
+          surfaceKind: record3.surfaceKind,
+          writeOwner: record3.writeOwner ? {
+            clientId: record3.writeOwner.clientId,
+            ownerType: record3.writeOwner.ownerType
           } : null,
-          attachedClients: record2.attachedClients.map((client) => ({
+          attachedClients: record3.attachedClients.map((client) => ({
             clientId: client.clientId,
             type: client.type,
             readOnly: client.readOnly
           })),
-          restoredFromStorage: record2.meta?.restoredFromStorage === true,
-          recoveryState: typeof record2.meta?.runtimeRecoveryState === "string" ? String(record2.meta.runtimeRecoveryState) : null,
-          recoveryError: typeof record2.meta?.runtimeRecoveryError === "string" ? String(record2.meta.runtimeRecoveryError) : null
+          restoredFromStorage: record3.meta?.restoredFromStorage === true,
+          recoveryState: typeof record3.meta?.runtimeRecoveryState === "string" ? String(record3.meta.runtimeRecoveryState) : null,
+          recoveryError: typeof record3.meta?.runtimeRecoveryError === "string" ? String(record3.meta.runtimeRecoveryError) : null
         };
       }
       enqueue(action) {
@@ -156846,14 +157623,14 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       async readState() {
         return (await this.readSnapshot()).state;
       }
-      async writeInput(text) {
+      async writeInput(text2) {
         if (this.mode !== "write") throw new Error("Raw terminal attachment is read-only");
         const response = await this.client.request({
           type: "send_input",
           payload: {
             sessionId: this.sessionId,
             clientId: this.clientId,
-            data: text
+            data: text2
           }
         });
         if (!response.success) throw new Error(response.error || `Failed to write terminal input to ${this.sessionId}`);
@@ -156963,30 +157740,30 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         if (!response.success || !response.result) {
           return [];
         }
-        return response.result.filter((record2) => record2.category === "cli" && ["running", "interrupted"].includes(record2.lifecycle)).sort((a, b) => b.lastActivityAt - a.lastActivityAt).map((record2) => ({
-          runtimeId: record2.sessionId,
-          runtimeKey: record2.runtimeKey,
-          displayName: record2.displayName,
-          workspaceLabel: record2.workspaceLabel,
-          lifecycle: record2.lifecycle,
-          recoveryState: typeof record2.meta?.runtimeRecoveryState === "string" ? String(record2.meta.runtimeRecoveryState) : null,
-          cliType: record2.providerType,
-          workspace: record2.workspace,
-          cliArgs: Array.isArray(record2.meta?.cliArgs) ? record2.meta.cliArgs : [],
-          providerSessionId: typeof record2.meta?.providerSessionId === "string" ? String(record2.meta.providerSessionId) : void 0,
-          managedBy: typeof record2.meta?.managedBy === "string" ? String(record2.meta.managedBy) : void 0,
+        return response.result.filter((record3) => record3.category === "cli" && ["running", "interrupted"].includes(record3.lifecycle)).sort((a, b) => b.lastActivityAt - a.lastActivityAt).map((record3) => ({
+          runtimeId: record3.sessionId,
+          runtimeKey: record3.runtimeKey,
+          displayName: record3.displayName,
+          workspaceLabel: record3.workspaceLabel,
+          lifecycle: record3.lifecycle,
+          recoveryState: typeof record3.meta?.runtimeRecoveryState === "string" ? String(record3.meta.runtimeRecoveryState) : null,
+          cliType: record3.providerType,
+          workspace: record3.workspace,
+          cliArgs: Array.isArray(record3.meta?.cliArgs) ? record3.meta.cliArgs : [],
+          providerSessionId: typeof record3.meta?.providerSessionId === "string" ? String(record3.meta.providerSessionId) : void 0,
+          managedBy: typeof record3.meta?.managedBy === "string" ? String(record3.meta.managedBy) : void 0,
           // Session-level mesh membership (rc.20 rebound relay envelope) —
           // surfaced so restoreHostedSessions can re-apply it to the rebuilt
           // instance settings. Task-level markers stay out (see the descriptor).
-          meshNodeFor: typeof record2.meta?.meshNodeFor === "string" && record2.meta.meshNodeFor.trim() ? String(record2.meta.meshNodeFor).trim() : void 0,
-          meshNodeId: typeof record2.meta?.meshNodeId === "string" && record2.meta.meshNodeId.trim() ? String(record2.meta.meshNodeId).trim() : void 0,
-          meshCoordinatorDaemonId: typeof record2.meta?.meshCoordinatorDaemonId === "string" && record2.meta.meshCoordinatorDaemonId.trim() ? String(record2.meta.meshCoordinatorDaemonId).trim() : void 0,
-          meshActiveAttemptRef: readPersistedAttemptRef(record2.meta?.meshActiveAttemptRef),
-          launchedByCoordinator: record2.meta?.launchedByCoordinator === true ? true : void 0,
-          autoApproveMode: typeof record2.meta?.autoApproveMode === "string" && record2.meta.autoApproveMode.trim() ? String(record2.meta.autoApproveMode).trim() : void 0,
+          meshNodeFor: typeof record3.meta?.meshNodeFor === "string" && record3.meta.meshNodeFor.trim() ? String(record3.meta.meshNodeFor).trim() : void 0,
+          meshNodeId: typeof record3.meta?.meshNodeId === "string" && record3.meta.meshNodeId.trim() ? String(record3.meta.meshNodeId).trim() : void 0,
+          meshCoordinatorDaemonId: typeof record3.meta?.meshCoordinatorDaemonId === "string" && record3.meta.meshCoordinatorDaemonId.trim() ? String(record3.meta.meshCoordinatorDaemonId).trim() : void 0,
+          meshActiveAttemptRef: readPersistedAttemptRef(record3.meta?.meshActiveAttemptRef),
+          launchedByCoordinator: record3.meta?.launchedByCoordinator === true ? true : void 0,
+          autoApproveMode: typeof record3.meta?.autoApproveMode === "string" && record3.meta.autoApproveMode.trim() ? String(record3.meta.autoApproveMode).trim() : void 0,
           // Phase E launch provenance written at spawn; validated on restore
           // (buildRestoredLaunchRecord), so it is passed through raw here.
-          ...record2.meta?.launchRecord !== void 0 ? { launchRecord: record2.meta.launchRecord } : {}
+          ...record3.meta?.launchRecord !== void 0 ? { launchRecord: record3.meta.launchRecord } : {}
         }));
       } finally {
         await client.close().catch(() => {
@@ -160445,13 +161222,13 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       if (!epoch && heads.length === 0) return null;
       const entries = heads.map((h) => {
         const body = h.body;
-        let text = typeof body.text === "string" ? body.text : "";
+        let text2 = typeof body.text === "string" ? body.text : "";
         if (typeof body.parts === "number") {
           const map2 = parts.get(h.id);
-          text = "";
-          for (let k = 0; k < body.parts; k += 1) text += map2?.get(k) ?? "";
+          text2 = "";
+          for (let k = 0; k < body.parts; k += 1) text2 += map2?.get(k) ?? "";
         }
-        return { messageId: h.id, ord: h.ord, rev: h.rev, role: h.role, kind: h.kind, text, srcId: h.srcId };
+        return { messageId: h.id, ord: h.ord, rev: h.rev, role: h.role, kind: h.kind, text: text2, srcId: h.srcId };
       });
       return { epoch, entries };
     }
@@ -161558,9 +162335,9 @@ ${notice.notice}${supersededHint}`;
       bodyOf(head) {
         if ("text" in head.body) return head.body.text;
         const map2 = this.state.parts.get(head.id);
-        let text = "";
-        for (let k = 0; k < head.body.parts; k += 1) text += map2?.get(k)?.text ?? "";
-        return text;
+        let text2 = "";
+        for (let k = 0; k < head.body.parts; k += 1) text2 += map2?.get(k)?.text ?? "";
+        return text2;
       }
       materializeMessage(id22) {
         const head = this.state.heads.get(id22);

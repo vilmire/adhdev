@@ -22,6 +22,7 @@ export interface UseInteractivePromptResult {
   isSubmitting: boolean
   submit: (selection: InteractivePromptSelection) => Promise<void>
   cancel: () => void
+  dismissLocal?: () => Promise<void>
   reopen: () => void
 }
 
@@ -101,8 +102,12 @@ export function useInteractivePrompt(
 
   const promptSession = useMemo(() => {
     if (!foundSession) return null
-    return foundSession.prompt.promptId === dismissedPromptId ? null : foundSession
-  }, [dismissedPromptId, foundSession])
+    if (foundSession.prompt.promptId === dismissedPromptId) return null
+    const connection = p2pStates?.[foundSession.daemonId]
+    return foundSession.prompt.binding && connection && connection !== 'connected'
+      ? { ...foundSession, prompt: { ...foundSession.prompt, support: 'uncertain' as const, lifecycle: 'unknown' as const } }
+      : foundSession
+  }, [dismissedPromptId, foundSession, p2pStates])
 
   // STALE-BANNER GUARD (live defect 2026-08-29): responseError previously
   // stayed set until the next submit() call or an explicit reopen(). A failed
@@ -118,7 +123,7 @@ export function useInteractivePrompt(
   }, [activePromptId])
 
   const submit = useCallback(async (selection: InteractivePromptSelection) => {
-    if (!promptSession) return
+    if (!promptSession || promptSession.prompt.support === 'uncertain') return
     // Reject re-entrant submits synchronously (before any await / state settle).
     if (submitInFlightRef.current) return
     submitInFlightRef.current = true
@@ -189,6 +194,20 @@ export function useInteractivePrompt(
     setResponseError(null)
   }, [foundSession, t])
 
+  const dismissLocal = useCallback(async () => {
+    if (!promptSession || promptSession.prompt.support !== 'product_local' || submitInFlightRef.current) return
+    submitInFlightRef.current = true
+    setIsSubmitting(true)
+    try {
+      await submitInteractivePromptResponse({ promptSession,
+        response: { promptId: promptSession.prompt.promptId, binding: promptSession.prompt.binding, answers: {}, action: 'dismiss' },
+        useP2PCommand: p2pStates?.[promptSession.daemonId] === 'connected' || isP2PActive === true, sendCommand,
+      })
+      setSharedDismissedPromptId(promptSession.prompt.promptId)
+    } catch (error) { setResponseError(error instanceof Error ? error.message : String(error)) }
+    finally { submitInFlightRef.current = false; setIsSubmitting(false) }
+  }, [promptSession, p2pStates, isP2PActive, sendCommand])
+
   return {
     promptSession,
     hasActivePrompt,
@@ -196,6 +215,7 @@ export function useInteractivePrompt(
     isSubmitting,
     submit,
     cancel,
+    dismissLocal,
     reopen,
   }
 }

@@ -144,6 +144,7 @@ export interface CliLaunchInfo {
 }
 
 export interface CliAdapter {
+    readonly nativeTransport?: 'codex-app-server';
     cliType: string;
     cliName: string;
     workingDir: string;

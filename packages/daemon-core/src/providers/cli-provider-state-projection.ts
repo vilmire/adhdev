@@ -274,7 +274,12 @@ export function buildProviderState(host: ProviderStateHost): ProviderState {
             host.suppressIdleHistoryReplay
             && adapterStatus.status === 'idle'
             && parsedStatus?.status === 'idle';
-        let messagesToSave = parsedMessages;
+        // Managed questions remain ephemeral in this projection. Codex retains
+        // their original records in its own native history; do not create another
+        // durable copy of question bodies/reply envelopes in the daemon tail.
+        const ephemeralQuestionKeys = new Set<string>(Array.isArray(parsedStatus?.ephemeralQuestionMessageKeys)
+            ? parsedStatus.ephemeralQuestionMessageKeys.filter((key: unknown) => typeof key === 'string') : []);
+        let messagesToSave = parsedMessages.filter((message: { providerUnitKey?: string }) => !ephemeralQuestionKeys.has(message.providerUnitKey || ''));
         if (!suppressStaleParsedBusyStatus && (parsedChatStatus === 'generating' || parsedChatStatus === 'no_progress' || parsedChatStatus === 'long_generating')) {
             const lastIdx = messagesToSave.length - 1;
             if (lastIdx >= 0 && messagesToSave[lastIdx]?.role === 'assistant') {
@@ -321,7 +326,9 @@ export function buildProviderState(host: ProviderStateHost): ProviderState {
     // waiting_choice. This is distinct from waiting_approval (tool-use consent)
     // — the engine's isWaitingForResponse state is unchanged, so completion
     // tracking continues normally once the user responds.
-    const hasInteractivePrompt = !!host.activeInteractivePrompt;
+    const nativeQuestion = host.activeInteractivePrompt?.binding?.transport;
+    const hasInteractivePrompt = !!host.activeInteractivePrompt && host.activeInteractivePrompt.blocking !== false && nativeQuestion !== 'codex_async'
+        && !(nativeQuestion === 'codex_rpc' && adapterStatus.status === 'waiting_approval');
     const finalStatus = hasInteractivePrompt ? 'waiting_choice' : visibleStatus;
     const finalChatStatus = hasInteractivePrompt ? 'waiting_choice' : activeChatStatus;
 
