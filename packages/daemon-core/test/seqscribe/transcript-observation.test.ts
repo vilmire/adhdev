@@ -70,11 +70,11 @@ describe('isEmptyTranscriptObservation (design §3.4 empty-guard)', () => {
         expect(isEmptyTranscriptObservation(observation())).toBe(false);
     });
 
-    it('false when a modal is staged even with no messages', () => {
+    it('true when a modal is staged with no messages — controls do not establish a transcript clear', () => {
         expect(
             isEmptyTranscriptObservation(
                 observation({ messages: [], activeModal: { message: 'approve?', buttons: ['yes', 'no'] } }),
             ),
-        ).toBe(false);
+        ).toBe(true);
     });
 });

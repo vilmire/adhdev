@@ -182,8 +182,10 @@ describe('(b) attempt-less assigned rows are reclaimed by housekeeping', () => {
         before.dependsOn = ['prerequisite'];
         before.requeueCount = 1;
         store.updateQueueEntry(before);
+        // Updating the row refreshes updatedAt; age from that persisted write.
+        const sweepAt = Date.parse(status(owned)!.updatedAt) + STALE_ASSIGNED_QUEUE_MS + 1000;
         expect(nodeHasActiveWriteAssignment(meshId, NODE)).toBe(true);
-        expect(sweep(liveness, NOW + STALE_ASSIGNED_QUEUE_MS + 1000).map((r) => r.id)).toEqual([owned]);
+        expect(sweep(liveness, sweepAt).map((r) => r.id)).toEqual([owned]);
         expect(nodeHasActiveWriteAssignment(meshId, NODE)).toBe(false);
         expect(status(owned)).toMatchObject({ id: owned, status: 'failed', message: 'direct work', dependsOn: ['prerequisite'], requeueCount: 1 });
         // Automatic passes cannot reopen this row or loop around the retry cap.
@@ -204,12 +206,13 @@ describe('(b) attempt-less assigned rows are reclaimed by housekeeping', () => {
         const row = status(id)!;
         row.attemptId = attemptId;
         MeshRuntimeStore.getInstance().updateQueueEntry(row);
+        const sweepAt = Date.parse(status(id)!.updatedAt) + STALE_ASSIGNED_QUEUE_MS + 1000;
         const requestProbe = vi.fn();
-        expect(sweepOrphanedUncorrelatedDispatches(meshId, { now: NOW + STALE_ASSIGNED_QUEUE_MS + 1000, liveness: () => 'not_live', requestProbe })).toEqual([]);
+        expect(sweepOrphanedUncorrelatedDispatches(meshId, { now: sweepAt, liveness: () => 'not_live', requestProbe })).toEqual([]);
         expect(requestProbe).toHaveBeenCalledWith(attemptId);
         expect(status(id)?.status).toBe('assigned');
         requestProbe.mockClear();
-        sweepOrphanedUncorrelatedDispatches(meshId, { now: NOW + STALE_ASSIGNED_QUEUE_MS + 1000, liveness: () => 'live', requestProbe });
+        sweepOrphanedUncorrelatedDispatches(meshId, { now: sweepAt, liveness: () => 'live', requestProbe });
         expect(requestProbe).not.toHaveBeenCalled();
     });
 

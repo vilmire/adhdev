@@ -744,8 +744,15 @@ describe('collectPendingApprovals', () => {
             createdAt: overrides.createdAt ?? '2026-05-26T00:00:00.000Z',
             updatedAt: overrides.updatedAt ?? '2026-05-26T00:00:00.000Z',
             dispatchedAt: overrides.dispatchedAt,
+            terminalKind: overrides.terminalKind,
+            terminalAt: overrides.terminalAt,
             elapsedMs: overrides.elapsedMs ?? 0,
         };
+    }
+
+    // Waiting age needs evidence of suspension, rather than task dispatch age.
+    function ledgerApprovalRecord(overrides: Partial<MeshActiveWorkRecord>): MeshActiveWorkRecord {
+        return record({ terminalKind: 'task_approval_needed', terminalAt: '2026-05-26T00:00:00.000Z', ...overrides });
     }
 
     it('returns only awaiting_approval records, projected to the inbox shape', () => {
@@ -761,6 +768,9 @@ describe('collectPendingApprovals', () => {
             sessionId: 'sess-a',
             providerType: 'codex-cli',
             status: 'awaiting_approval',
+            waitingSince: null,
+            waitingMs: null,
+            actionable: false,
         });
     });
 
@@ -773,23 +783,24 @@ describe('collectPendingApprovals', () => {
         expect(approvals.map(a => a.taskId)).toEqual(['ok']);
     });
 
-    it('orders longest-waiting first and anchors waitingSince to dispatchedAt when present', () => {
+    it('orders longest-waiting first and anchors waitingSince to the recorded approval suspension', () => {
         const approvals = collectPendingApprovals([
-            record({ taskId: 'short', sessionId: 's1', elapsedMs: 500, dispatchedAt: '2026-05-26T00:00:10.000Z' }),
-            record({ taskId: 'long', sessionId: 's2', elapsedMs: 9000, createdAt: '2026-05-26T00:00:01.000Z' }),
+            ledgerApprovalRecord({ taskId: 'short', sessionId: 's1', elapsedMs: 10500, dispatchedAt: '2026-05-26T00:00:00.000Z', terminalAt: '2026-05-26T00:00:10.000Z' }),
+            ledgerApprovalRecord({ taskId: 'long', sessionId: 's2', elapsedMs: 10000, terminalAt: '2026-05-26T00:00:01.000Z' }),
         ]);
         expect(approvals.map(a => a.taskId)).toEqual(['long', 'short']);
         expect(approvals[0].waitingSince).toBe('2026-05-26T00:00:01.000Z');
         expect(approvals[1].waitingSince).toBe('2026-05-26T00:00:10.000Z');
+        expect(approvals.map(a => a.waitingMs)).toEqual([9000, 500]);
     });
 
     it('dedups the same session appearing twice (queue record + direct record) — deterministic by node/session identity', () => {
         // rc.19 live defect: mesh_list_pending_approvals returned the SAME session
         // twice. One session exposes one modal — duplicate rows are never actionable.
         const approvals = collectPendingApprovals([
-            record({ taskId: 'queue-task', source: 'queue', nodeId: 'node-1', sessionId: 'sess-1', elapsedMs: 4000 }),
-            record({ taskId: 'direct-task', source: 'direct', nodeId: 'node-1', sessionId: 'sess-1', elapsedMs: 9000 }),
-            record({ taskId: 'other', source: 'direct', nodeId: 'node-1', sessionId: 'sess-2', elapsedMs: 100 }),
+            ledgerApprovalRecord({ taskId: 'queue-task', source: 'queue', nodeId: 'node-1', sessionId: 'sess-1', elapsedMs: 4000 }),
+            ledgerApprovalRecord({ taskId: 'direct-task', source: 'direct', nodeId: 'node-1', sessionId: 'sess-1', elapsedMs: 9000 }),
+            ledgerApprovalRecord({ taskId: 'other', source: 'direct', nodeId: 'node-1', sessionId: 'sess-2', elapsedMs: 100 }),
         ]);
         expect(approvals).toHaveLength(2);
         // The longest-waiting binding for sess-1 wins; order stays longest-first.
@@ -797,9 +808,9 @@ describe('collectPendingApprovals', () => {
         expect(approvals[1]).toMatchObject({ sessionId: 'sess-2', taskId: 'other' });
         // Deterministic: identical input → identical output.
         const again = collectPendingApprovals([
-            record({ taskId: 'queue-task', source: 'queue', nodeId: 'node-1', sessionId: 'sess-1', elapsedMs: 4000 }),
-            record({ taskId: 'direct-task', source: 'direct', nodeId: 'node-1', sessionId: 'sess-1', elapsedMs: 9000 }),
-            record({ taskId: 'other', source: 'direct', nodeId: 'node-1', sessionId: 'sess-2', elapsedMs: 100 }),
+            ledgerApprovalRecord({ taskId: 'queue-task', source: 'queue', nodeId: 'node-1', sessionId: 'sess-1', elapsedMs: 4000 }),
+            ledgerApprovalRecord({ taskId: 'direct-task', source: 'direct', nodeId: 'node-1', sessionId: 'sess-1', elapsedMs: 9000 }),
+            ledgerApprovalRecord({ taskId: 'other', source: 'direct', nodeId: 'node-1', sessionId: 'sess-2', elapsedMs: 100 }),
         ]);
         expect(again).toEqual(approvals);
     });
