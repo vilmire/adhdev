@@ -458,7 +458,7 @@
         "errorWorkspaceContextRequired": "Elige un espacio de trabajo — un directorio, un espacio guardado/predeterminado o tu directorio de inicio — antes de lanzar.",
         "defaultWorkspace": "Espacio de trabajo predeterminado",
         "codexManagedQuestions": "Gestionar preguntas de Codex",
-        "codexManagedQuestionsDescription": "Nueva sesión exclusiva del panel con Codex app-server. Las preguntas nativas están vinculadas a solicitudes; las respuestas asíncronas son entradas ordinarias del turno actual. Sin terminal ni migración de sesiones existentes. Actualmente no se admiten concesiones de permisos nativos; estas solicitudes quedan pendientes sin aprobación."
+        "codexManagedQuestionsDescription": "Nueva sesión exclusiva del panel con Codex app-server. Las preguntas nativas están vinculadas a solicitudes; las respuestas asíncronas son entradas ordinarias del turno actual. Sin terminal ni migración de sesiones existentes. Actualmente no se admiten concesiones de permisos nativos; estas solicitudes quedan pendientes sin aprobación. Las respuestas nativas requieren el panel local del propietario autenticado; no se admiten respuestas desde la nube ni remotas."
     },
     "mobileInbox": {
         "undo": "Deshacer",

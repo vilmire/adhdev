@@ -7,7 +7,7 @@ import { CodexAppServerAdapter } from '../../../daemon-core/src/providers/codex-
 import { buildProviderState, type ProviderStateHost } from '../../../daemon-core/src/providers/cli-provider-state-projection'
 import { ParsedIngestTimestampStamper } from '../../../daemon-core/src/providers/cli-provider-ingest-times'
 import { applyInteractivePromptAnswer } from '../../../daemon-core/src/providers/interactive-prompt-apply'
-import { meshEventsHandlers } from '../../../daemon-core/src/commands/high-family/mesh-events'
+import { nativeQuestionHost } from '../../../daemon-core/test/fixtures/native-question-host'
 import InteractivePromptModal from '../../src/components/interactive-prompt/InteractivePromptModal'
 import { buildInteractivePromptResponse, findInteractivePromptSession, normalizeInteractivePromptPrompt } from '../../src/interactive-prompt/interactive-prompt-utils'
 import { submitInteractivePromptResponse } from '../../src/interactive-prompt/interactive-prompt-transport'
@@ -57,8 +57,7 @@ describe('native JSON-RPC producer → daemon projection → common React UI →
     await adapter.spawn(); await adapter.sendMessage('rpc'); await wait(() => !!adapter!.questions.active())
     const state = projection(adapter)
     const session = () => findInteractivePromptSession([{ ...state(), id: 'synthetic-route', daemonId: 'synthetic-daemon', sessionId: 'synthetic-session' } as unknown as DaemonData], { sessionId: 'synthetic-session' })
-    const instance = { getState: state, applyInteractivePromptResponse: (data: unknown) => applyInteractivePromptAnswer({ held: state().activeInteractivePrompt ?? null, data, adapter: adapter!, providerType: 'codex-cli' }) }
-    const ctx = { deps: { instanceManager: { getInstance: (id: string) => id === 'synthetic-session' ? instance : undefined } } } as any
+    const { host } = nativeQuestionHost(adapter, state)
     const native = adapter
     const errors: unknown[] = []
     const mount = document.createElement('div'); document.body.appendChild(mount); root = createRoot(mount)
@@ -69,7 +68,7 @@ describe('native JSON-RPC producer → daemon projection → common React UI →
           try {
             await submitInteractivePromptResponse({ promptSession: current,
               response: buildInteractivePromptResponse(current.prompt, selection), useP2PCommand: true,
-              sendCommand: (_route, _type, payload) => meshEventsHandlers.interactive_prompt_response(ctx, payload),
+              sendCommand: (_route, _type, payload) => host.execute('interactive_prompt_response', payload, 'standalone'),
             })
           } catch (error) { errors.push(error) }
         }} />))

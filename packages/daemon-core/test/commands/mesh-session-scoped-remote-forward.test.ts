@@ -64,6 +64,17 @@ function meshWithRemoteWorkerSession(daemonId: string) {
 }
 
 describe('session-scoped command — remote mesh worker forward ([Z])', () => {
+    it('refuses native question forwarding before remote dispatch even for local owner ingress', async () => {
+        const dispatch = vi.fn(async () => ({ success: true }));
+        const router = createRouter({ statusInstanceId: 'daemon-coordinator', dispatchMeshCommand: dispatch });
+        router.getCachedInlineMesh('mesh-session-forward', meshWithRemoteWorkerSession('daemon-remote-worker'));
+        const result = await router.execute('interactive_prompt_response', { targetSessionId: REMOTE_SESSION_ID,
+            response: { promptId: 'synthetic-prompt', binding: { transport: 'codex_rpc', sessionId: REMOTE_SESSION_ID,
+                generation: 'synthetic-generation', threadId: 'synthetic-thread', turnId: 'synthetic-turn',
+                itemId: 'synthetic-item', requestId: 17 }, answers: { q: { selectedLabels: ['One'] } } } }, 'standalone');
+        expect(result).toMatchObject({ success: false, code: 'native_question_remote_unsupported' });
+        expect(dispatch).not.toHaveBeenCalled();
+    });
     // read_terminal (MESH-READ-TERMINAL feature 2) + send_keys (MESH-SEND-KEYS feature 3) +
     // interactive_prompt_response (mesh_answer_question, mission f1d25e11): each daemon verb
     // must be in MESH_FORWARDABLE_SESSION_COMMANDS so a read/inject/answer against a REMOTE

@@ -70784,7 +70784,7 @@ ${upstream}`;
         "use strict";
         init_dist();
         COMMAND_SOURCE_ARG = "_commandSource";
-        COMMAND_SOURCE_STAMPED = /* @__PURE__ */ new Set(["send_chat", "pty_input"]);
+        COMMAND_SOURCE_STAMPED = /* @__PURE__ */ new Set(["send_chat", "pty_input", "interactive_prompt_response"]);
       }
     });
     function resolveTunedReconcileMs(envName, def, min, max) {
@@ -131451,6 +131451,7 @@ ${marker}`,
     init_deliver();
     init_command_registry();
     init_daemon_components_port();
+    init_command_args();
     var meshEventsHandlers = {
       mesh_forward_event: async (ctx, args) => {
         let components;
@@ -131518,8 +131519,6 @@ ${marker}`,
         const rawResponse = args?.response ?? args;
         const instance = ctx.deps.instanceManager.getInstance(sessionId);
         if (!instance) return { success: false, error: `No running instance for session ${sessionId}` };
-        const isFriendlyArrayForm = rawResponse && typeof rawResponse === "object" && Array.isArray(rawResponse.answers);
-        const payload = isFriendlyArrayForm ? rawResponse : normalizeInteractivePromptResponse(rawResponse);
         const heldPrompt = (() => {
           try {
             const state2 = instance.getState?.();
@@ -131528,6 +131527,17 @@ ${marker}`,
             return null;
           }
         })();
+        if ((heldPrompt?.binding || rawResponse?.binding) && readCommandSource(args) !== "standalone") {
+          return {
+            success: false,
+            delivered: false,
+            submitted: false,
+            code: "native_question_owner_required",
+            error: "Native Codex questions require the authenticated local owner dashboard. Remote native question authorization is unsupported."
+          };
+        }
+        const isFriendlyArrayForm = rawResponse && typeof rawResponse === "object" && Array.isArray(rawResponse.answers);
+        const payload = isFriendlyArrayForm ? rawResponse : normalizeInteractivePromptResponse(rawResponse);
         const heldPromptId = typeof heldPrompt?.promptId === "string" && heldPrompt.promptId.trim() ? heldPrompt.promptId.trim() : "";
         const incomingPromptId = typeof payload?.promptId === "string" ? payload.promptId.trim() : "";
         if (heldPromptId && incomingPromptId && incomingPromptId !== heldPromptId) {
@@ -137042,6 +137052,13 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         const ownerNodeIdHint = readStringValue(meshContext.nodeId);
         const ownerDaemonId = this.resolveRemoteMeshSessionOwnerDaemonId(targetSessionId, ownerNodeIdHint);
         if (!ownerDaemonId) return null;
+        if (cmd === "interactive_prompt_response" && (args.response ?? args)?.binding) {
+          return {
+            success: false,
+            code: "native_question_remote_unsupported",
+            error: "Remote native question authorization is unsupported; use the authenticated owner dashboard on the session host."
+          };
+        }
         LOG.info("Mesh", `[Mesh] Forwarding session-scoped '${cmd}' for remote worker session ${targetSessionId.split("_")[0]} \u2192 daemon ${ownerDaemonId.slice(0, 12)}`);
         const forwarded = await this.deps.dispatchMeshCommand(ownerDaemonId, cmd, withMeshDirectDispatch(args));
         return unwrapMeshRelayResult(forwarded, { command: cmd, peerDaemonId: ownerDaemonId });

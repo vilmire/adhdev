@@ -5,7 +5,7 @@ import { readJsonBody, writeJson } from './http-body.js';
 
 export interface InteractivePromptHttpService {
   getPrompt(sessionId: string): Promise<InteractivePrompt | null>;
-  resolvePrompt(sessionId: string, response: InteractivePromptResponse): Promise<void>;
+  resolvePrompt(sessionId: string, response: InteractivePromptResponse, source?: 'standalone' | 'ipc'): Promise<void>;
 }
 
 type InteractivePromptAction = 'get' | 'resolve';
@@ -48,6 +48,7 @@ export async function handleInteractivePromptHttpRequest(options: {
   res: ServerResponse;
   parsedUrl: URL;
   service: InteractivePromptHttpService;
+  commandSource?: 'standalone' | 'ipc';
 }): Promise<boolean> {
   const { req, res, parsedUrl, service } = options;
   const route = parseInteractivePromptPath(parsedUrl.pathname);
@@ -68,7 +69,7 @@ export async function handleInteractivePromptHttpRequest(options: {
     if (route.action === 'resolve' && method === 'POST') {
       const body = await readJsonBody(req);
       const response = assertInteractivePromptResponse(body);
-      await service.resolvePrompt(route.sessionId, response);
+      await service.resolvePrompt(route.sessionId, response, options.commandSource ?? 'ipc');
       writeJson(res, 200, { success: true });
       return true;
     }
@@ -121,10 +122,10 @@ export function createRouterInteractivePromptService(host: DaemonHostRuntime): I
       const state = findState(sessionId);
       return (state?.activeInteractivePrompt || state?.activeChat?.activeInteractivePrompt || null) as InteractivePrompt | null;
     },
-    resolvePrompt: async (sessionId, response) => {
+    resolvePrompt: async (sessionId, response, source = 'ipc') => {
       const targetSessionId = resolveSessionId(sessionId);
       if (!targetSessionId) throw new Error(`Unknown session: ${sessionId}`);
-      const result = await host.execute('interactive_prompt_response', { targetSessionId, response }, 'standalone');
+      const result = await host.execute('interactive_prompt_response', { targetSessionId, response }, source);
       if (result.success === false) {
         const error = typeof result.error === 'string' && result.error ? result.error : 'interactive prompt response failed';
         throw new Error(/No running instance/i.test(error) ? `Unknown session: ${sessionId}` : error);

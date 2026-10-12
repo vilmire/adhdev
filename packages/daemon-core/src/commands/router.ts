@@ -1153,6 +1153,10 @@ export class DaemonCommandRouter {
         const ownerNodeIdHint = readStringValue(meshContext.nodeId);
         const ownerDaemonId = this.resolveRemoteMeshSessionOwnerDaemonId(targetSessionId, ownerNodeIdHint);
         if (!ownerDaemonId) return null;
+        if (cmd === 'interactive_prompt_response' && ((args.response ?? args) as { binding?: unknown })?.binding) {
+            return { success: false, code: 'native_question_remote_unsupported',
+                error: 'Remote native question authorization is unsupported; use the authenticated owner dashboard on the session host.' };
+        }
         LOG.info('Mesh', `[Mesh] Forwarding session-scoped '${cmd}' for remote worker session ${targetSessionId.split('_')[0]} → daemon ${ownerDaemonId.slice(0, 12)}`);
         const forwarded = await this.deps.dispatchMeshCommand(ownerDaemonId, cmd, withMeshDirectDispatch(args));
         return unwrapMeshRelayResult(forwarded, { command: cmd, peerDaemonId: ownerDaemonId });

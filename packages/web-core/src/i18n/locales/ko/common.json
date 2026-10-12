@@ -458,7 +458,7 @@
         "errorWorkspaceContextRequired": "실행하기 전에 워크스페이스를 선택하세요 — 디렉터리, 저장된/기본 워크스페이스, 또는 홈 디렉터리 중 하나.",
         "defaultWorkspace": "기본 워크스페이스",
         "codexManagedQuestions": "Codex 질문 관리",
-        "codexManagedQuestionsDescription": "Codex app-server를 사용하는 새 대시보드 전용 세션입니다. 기본 질문은 요청에 연결되며 비동기 응답은 현재 턴의 일반 입력입니다. 터미널과 기존 세션 이전은 지원하지 않습니다. 기본 권한 부여는 현재 지원하지 않으며 해당 요청은 승인 없이 대기합니다."
+        "codexManagedQuestionsDescription": "Codex app-server를 사용하는 새 대시보드 전용 세션입니다. 기본 질문은 요청에 연결되며 비동기 응답은 현재 턴의 일반 입력입니다. 터미널과 기존 세션 이전은 지원하지 않습니다. 기본 권한 부여는 현재 지원하지 않으며 해당 요청은 승인 없이 대기합니다. 기본 질문 응답에는 인증된 로컬 소유자 대시보드가 필요하며 클라우드 및 원격 응답은 지원하지 않습니다."
     },
     "mobileInbox": {
         "undo": "실행 취소",

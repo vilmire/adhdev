@@ -13,6 +13,7 @@ import { normalizeInteractivePromptResponse } from '../../providers/types/intera
 import type { HighFamilyContext, HighFamilyHandler } from './types.js';
 import { defineCommandSpecs } from '../command-registry.js';
 import { componentsNotReadyResult, isDaemonComponentsNotReady } from '../daemon-components-port.js';
+import { readCommandSource } from '../command-args.js';
 
 export const meshEventsHandlers: Record<string, HighFamilyHandler> = {
     mesh_forward_event: async (ctx: HighFamilyContext, args: any) => {
@@ -96,6 +97,19 @@ export const meshEventsHandlers: Record<string, HighFamilyHandler> = {
         const rawResponse = args?.response ?? args;
         const instance = ctx.deps.instanceManager.getInstance(sessionId);
         if (!instance) return { success: false, error: `No running instance for session ${sessionId}` };
+        const heldPrompt = (() => {
+            try {
+                const state = instance.getState?.();
+                return state?.activeChat?.activeInteractivePrompt ?? state?.activeInteractivePrompt ?? null;
+            } catch { return null; }
+        })();
+        // The exact native tuple proves episode membership, never owner authority.
+        // Only the authenticated local dashboard ingress currently has an owner
+        // contract. Cloud/mesh source names carry no verifiable account identity.
+        if ((heldPrompt?.binding || rawResponse?.binding) && readCommandSource(args) !== 'standalone') {
+            return { success: false, delivered: false, submitted: false, code: 'native_question_owner_required',
+                error: 'Native Codex questions require the authenticated local owner dashboard. Remote native question authorization is unsupported.' };
+        }
         // mesh_answer_question (mission f1d25e11) sends a coordinator-friendly answer array
         // that is resolved against the AUTHORITATIVE active prompt inside the instance
         // (resolveInteractivePromptResponse). Forward that shape RAW. The legacy strict
@@ -116,17 +130,6 @@ export const meshEventsHandlers: Record<string, HighFamilyHandler> = {
         // wrong option row). Fail closed with the active promptId so the caller can
         // re-answer against it. No answer is applied and no default/index fallback
         // is taken on this path.
-        const heldPrompt = (() => {
-            try {
-                const state = instance.getState?.() as {
-                    activeInteractivePrompt?: { promptId?: unknown } | null;
-                    activeChat?: { activeInteractivePrompt?: { promptId?: unknown } | null };
-                } | undefined;
-                return state?.activeChat?.activeInteractivePrompt ?? state?.activeInteractivePrompt ?? null;
-            } catch {
-                return null;
-            }
-        })();
         const heldPromptId = typeof heldPrompt?.promptId === 'string' && heldPrompt.promptId.trim()
             ? heldPrompt.promptId.trim()
             : '';

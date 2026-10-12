@@ -91,7 +91,7 @@ describe('interactive prompt HTTP → router', () => {
     expect(res.status).toBe(400);
     expect(((await res.json()) as any).error).toMatch(/Stale promptId "prompt-old"/);
     expect(applied).toEqual([]);
-    expect(executed).toEqual([{ cmd: 'interactive_prompt_response', args: expect.objectContaining({ targetSessionId: 'sess-1' }), source: 'standalone' }]);
+    expect(executed).toEqual([{ cmd: 'interactive_prompt_response', args: expect.objectContaining({ targetSessionId: 'sess-1' }), source: 'ipc' }]);
   });
 
   it('applies the current prompt answer, resolving the session through its provider-native alias', async () => {

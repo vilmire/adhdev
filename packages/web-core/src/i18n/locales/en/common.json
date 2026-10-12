@@ -458,7 +458,7 @@
         "errorWorkspaceContextRequired": "Choose a workspace — a directory, a saved/default workspace, or your home directory — before launching.",
         "defaultWorkspace": "Default workspace",
         "codexManagedQuestions": "Managed Codex questions",
-        "codexManagedQuestionsDescription": "New dashboard-only session using Codex app-server. Native questions are request-bound; async replies are ordinary turn-fenced input. No terminal or existing-session migration. Native permission grants are currently unsupported; such requests remain pending without approval."
+        "codexManagedQuestionsDescription": "New dashboard-only session using Codex app-server. Native questions are request-bound; async replies are ordinary turn-fenced input. No terminal or existing-session migration. Native permission grants are currently unsupported; such requests remain pending without approval. Native answers require the authenticated local owner dashboard; cloud and remote replies are unsupported."
     },
     "mobileInbox": {
         "undo": "Undo",

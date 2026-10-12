@@ -74,7 +74,7 @@ describe('interactive prompt HTTP routes', () => {
     expect(service.resolvePrompt).toHaveBeenCalledWith('session-1', {
       promptId: 'prompt-1',
       answers: { q1: { selectedLabels: ['A'] } },
-    });
+    }, 'ipc');
   });
 
   it('rejects malformed resolve bodies before service resolve', async () => {

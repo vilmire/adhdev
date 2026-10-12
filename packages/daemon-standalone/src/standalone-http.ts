@@ -582,6 +582,7 @@ export class StandaloneHttpApi {
         res,
         parsedUrl,
         service: this.deps.interactivePromptService(),
+        commandSource: this.isOwnerRequestAuthenticated(req, url) ? 'standalone' : 'ipc',
       }).catch((error: any) => {
         if (res.headersSent) return;
         res.writeHead(500, { 'Content-Type': 'application/json' });
