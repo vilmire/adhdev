@@ -1573,6 +1573,28 @@
         "reviewLabel": "记忆整理",
         "daemonNoticeLabel": "通知"
     },
+    "assistantExecution": {
+        "toggleLabel": "执行{{state}}",
+        "on": "已开启",
+        "off": "已关闭",
+        "unavailable": "不可用",
+        "controlsLabel": "助手执行控制",
+        "restrictionSummary": "限制：{{restriction}}。执行{{availability}}。",
+        "available": "可用",
+        "closed": "已阻止",
+        "stateUnavailable": "执行状态不可用。需要经过身份验证的所有者访问。",
+        "limitations": "读取、路由和中继仍然可用。执行需要确认当前工具限制确实已生效。",
+        "turnOff": "关闭执行",
+        "turnOn": "开启执行",
+        "refreshPermissions": "刷新权限请求",
+        "currentPermission": "当前确切的权限请求",
+        "selectTargetAndButton": "选择目标和按钮",
+        "sendDirection": "发送所有者指令",
+        "chatInstructions": "在聊天中，可以使用“approve”或“reject the request for [target]”，但操作和目标必须明确指向一个当前权限请求。含糊的请求需要在此处选择。",
+        "ownerAuthenticationRequired": "需要验证所有者身份",
+        "directionSent": "指令已发送。同意将在 {{expiresAt}} 到期。如果向忙碌会话的交付或执行期限到期，请刷新并重新选择当前权限请求；不会自动续期。",
+        "directionUnauthorized": "无法授权该指令。请刷新后重试。"
+    },
     "assistantStaged": {
         "badge": "{{count}} 项待批准",
         "badgeTitle": "等待你批准的助手写入",

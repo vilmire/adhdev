@@ -1573,6 +1573,28 @@
         "reviewLabel": "기억 정리",
         "daemonNoticeLabel": "알림"
     },
+    "assistantExecution": {
+        "toggleLabel": "실행 {{state}}",
+        "on": "켜짐",
+        "off": "꺼짐",
+        "unavailable": "사용 불가",
+        "controlsLabel": "어시스턴트 실행 제어",
+        "restrictionSummary": "제한: {{restriction}}. 실행 {{availability}}.",
+        "available": "가능",
+        "closed": "차단됨",
+        "stateUnavailable": "실행 상태를 확인할 수 없습니다. 인증된 소유자의 접근이 필요합니다.",
+        "limitations": "읽기, 라우팅 및 릴레이는 계속 사용할 수 있습니다. 실행하려면 현재 도구 제한이 실제로 적용되고 있음이 확인되어야 합니다.",
+        "turnOff": "실행 끄기",
+        "turnOn": "실행 켜기",
+        "refreshPermissions": "권한 요청 새로고침",
+        "currentPermission": "정확한 현재 권한 요청",
+        "selectTargetAndButton": "대상과 버튼 선택",
+        "sendDirection": "소유자 지시 보내기",
+        "chatInstructions": "채팅에서 “approve” 또는 “reject the request for [target]”이라고 지시할 수 있습니다. 동작과 대상이 현재 권한 요청 하나를 명확히 지정해야 합니다. 모호한 요청은 여기에서 선택해야 합니다.",
+        "ownerAuthenticationRequired": "소유자 인증이 필요합니다",
+        "directionSent": "지시를 보냈습니다. 동의는 {{expiresAt}}에 만료됩니다. 사용 중인 세션으로의 전달 또는 실행 기한이 만료되면 새로고침하고 현재 권한 요청을 다시 선택하세요. 자동으로 갱신되지 않습니다.",
+        "directionUnauthorized": "지시를 승인할 수 없습니다. 새로고침한 후 다시 시도하세요."
+    },
     "assistantStaged": {
         "badge": "대기 {{count}}건",
         "badgeTitle": "승인을 기다리는 비서의 쓰기",

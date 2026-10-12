@@ -1576,6 +1576,28 @@
         "reviewLabel": "Revisión de memoria",
         "daemonNoticeLabel": "Aviso"
     },
+    "assistantExecution": {
+        "toggleLabel": "Ejecución {{state}}",
+        "on": "ACTIVADA",
+        "off": "DESACTIVADA",
+        "unavailable": "no disponible",
+        "controlsLabel": "Controles de ejecución del asistente",
+        "restrictionSummary": "Restricción: {{restriction}}. Ejecución {{availability}}.",
+        "available": "disponible",
+        "closed": "bloqueada",
+        "stateUnavailable": "El estado de ejecución no está disponible. Se requiere acceso del propietario autenticado.",
+        "limitations": "La lectura, el enrutamiento y la retransmisión siguen disponibles. La ejecución requiere verificar que la restricción de herramientas está aplicada en ese momento.",
+        "turnOff": "Desactivar ejecución",
+        "turnOn": "Activar ejecución",
+        "refreshPermissions": "Actualizar solicitudes de permiso",
+        "currentPermission": "Solicitud de permiso actual exacta",
+        "selectTargetAndButton": "Seleccionar destino y botón",
+        "sendDirection": "Enviar instrucción del propietario",
+        "chatInstructions": "En el chat, «approve» o «reject the request for [target]» funciona cuando la acción y el destino identifican una única solicitud de permiso actual. Las solicitudes ambiguas requieren una selección aquí.",
+        "ownerAuthenticationRequired": "Se requiere autenticación del propietario",
+        "directionSent": "Instrucción enviada. El consentimiento caduca a las {{expiresAt}}. Si caduca la entrega a una sesión ocupada o la ejecución, actualiza y vuelve a seleccionar la solicitud de permiso actual; no se renueva automáticamente.",
+        "directionUnauthorized": "No se pudo autorizar la instrucción. Actualiza y vuelve a intentarlo."
+    },
     "assistantStaged": {
         "badge": "{{count}} pendientes",
         "badgeTitle": "Escrituras del asistente pendientes de tu aprobación",

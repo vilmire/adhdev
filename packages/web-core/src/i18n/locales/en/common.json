@@ -1573,6 +1573,28 @@
         "reviewLabel": "Memory review",
         "daemonNoticeLabel": "Notice"
     },
+    "assistantExecution": {
+        "toggleLabel": "Execution {{state}}",
+        "on": "ON",
+        "off": "OFF",
+        "unavailable": "unavailable",
+        "controlsLabel": "Assistant execution controls",
+        "restrictionSummary": "Restriction: {{restriction}}. Execution {{availability}}.",
+        "available": "available",
+        "closed": "closed",
+        "stateUnavailable": "Execution state unavailable. Authenticated owner access is required.",
+        "limitations": "Reads, routing and relay remain available. Execution requires verified live tool restriction.",
+        "turnOff": "Turn execution OFF",
+        "turnOn": "Turn execution ON",
+        "refreshPermissions": "Refresh permissions",
+        "currentPermission": "Exact current permission",
+        "selectTargetAndButton": "Select target and button",
+        "sendDirection": "Send owner direction",
+        "chatInstructions": "In chat, “approve” or “reject the request for [target]” works when the action and target identify one current permission. Ambiguous requests require selection here.",
+        "ownerAuthenticationRequired": "Owner authentication required",
+        "directionSent": "Direction sent. Consent expires at {{expiresAt}}. If busy delivery or execution expires, refresh and select the current permission again; no automatic renewal.",
+        "directionUnauthorized": "Direction could not be authorized. Refresh and retry."
+    },
     "assistantStaged": {
         "badge": "{{count}} pending",
         "badgeTitle": "Assistant writes held for your approval",

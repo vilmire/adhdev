@@ -1573,6 +1573,28 @@
         "reviewLabel": "メモリーの見直し",
         "daemonNoticeLabel": "お知らせ"
     },
+    "assistantExecution": {
+        "toggleLabel": "実行 {{state}}",
+        "on": "オン",
+        "off": "オフ",
+        "unavailable": "利用不可",
+        "controlsLabel": "アシスタントの実行制御",
+        "restrictionSummary": "制限: {{restriction}}。実行 {{availability}}。",
+        "available": "可能",
+        "closed": "停止中",
+        "stateUnavailable": "実行状態を取得できません。認証された所有者のアクセスが必要です。",
+        "limitations": "読み取り、ルーティング、リレーは引き続き利用できます。実行には、現在のツール制限が実際に適用されていることの確認が必要です。",
+        "turnOff": "実行をオフにする",
+        "turnOn": "実行をオンにする",
+        "refreshPermissions": "権限リクエストを更新",
+        "currentPermission": "現在の正確な権限リクエスト",
+        "selectTargetAndButton": "対象とボタンを選択",
+        "sendDirection": "所有者の指示を送信",
+        "chatInstructions": "チャットでは「approve」または「reject the request for [target]」と指示できます。操作と対象が現在の権限リクエストを一つに特定する必要があります。曖昧なリクエストはここで選択してください。",
+        "ownerAuthenticationRequired": "所有者の認証が必要です",
+        "directionSent": "指示を送信しました。同意は {{expiresAt}} に失効します。使用中のセッションへの配信または実行の期限が切れた場合は、更新して現在の権限リクエストを再選択してください。自動更新は行われません。",
+        "directionUnauthorized": "指示を認可できませんでした。更新して再試行してください。"
+    },
     "assistantStaged": {
         "badge": "保留 {{count}} 件",
         "badgeTitle": "承認待ちのアシスタントの書き込み",
