@@ -326,7 +326,15 @@ export function foldKeyedDoc<T extends Record<string, unknown>>(held: T, delta: 
         const heldList = heldCollections.get(path)
         if (change?.absent) {
             const [head, tail] = splitPath(path)
-            if (!tail) delete next[head]
+            if (!tail) {
+                delete next[head]
+                continue
+            }
+            const parent = next[head]
+            if (!isRecord(parent) || !(tail in parent)) continue
+            const copy = { ...parent }
+            delete copy[tail]
+            next[head] = copy
             continue
         }
         if (!change && heldList === undefined) continue

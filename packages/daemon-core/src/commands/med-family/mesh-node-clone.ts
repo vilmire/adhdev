@@ -12,6 +12,7 @@ import {
     startMeshWorktreeBootstrap,
     type WorktreeBootstrapState,
 } from '../../mesh/worktree-bootstrap-config.js';
+import { runGit, execGitStdout } from '../../git/git-executor.js';
 import { LOG } from '../../logging/logger.js';
 import { loadRepoSettings } from '../../config/repo-settings.js';
 import { handleMeshForwardEvent, notifyMeshCoordinator } from '../../mesh/mesh-events.js';
@@ -279,7 +280,8 @@ async function registerClonedWorktreeNode(
         policy: clonedPolicy as any,
     };
     if (meshRecord.inline) {
-        const { randomUUID } = await import('crypto');
+        const crypto = await import('crypto');
+        const randomUUID = crypto.randomUUID || (crypto.default && crypto.default.randomUUID);
         const node = {
             id: `node_${randomUUID().replace(/-/g, '')}`,
             workspace: fields.workspace,
@@ -421,16 +423,27 @@ async function appendCloneLedger(
  * generic over .gitmodules — the rewind guard is applied per submodule). A failure
  * never fails the clone.
  */
-async function initClonedWorktreeSubmodules(worktreePath: string, sourceNode: any): Promise<boolean> {
+async function initClonedWorktreeSubmodules(worktreePath: string, sourceNode: any, gitUserName?: string, gitUserEmail?: string): Promise<boolean> {
     let submodulesInitialized = false;
     try {
-        const { runGit } = await import('../../git/git-executor.js');
         await runGit(
             { workspace: worktreePath, repoRoot: worktreePath, isGitRepo: true },
             ['submodule', 'update', '--init', '--recursive'],
             { timeoutMs: 120000 },
         );
         submodulesInitialized = true;
+
+        if (gitUserName && gitUserEmail) {
+            console.log('gitUserName is', gitUserName);
+            console.log('gitUserEmail is', gitUserEmail);
+            const escapedName = gitUserName.replace(/'/g, "'\\''");
+            const escapedEmail = gitUserEmail.replace(/'/g, "'\\''");
+            await runGit(
+                { workspace: worktreePath, repoRoot: worktreePath, isGitRepo: true },
+                ['submodule', 'foreach', '--recursive', `git config user.name '${escapedName}' && git config user.email '${escapedEmail}' || true`]
+            ).catch(err => console.warn('[mesh] Failed to set submodule identity:', err?.message));
+        }
+
         const sourceWorkspace = sourceNode.repoRoot || sourceNode.workspace;
         if (sourceWorkspace) await syncClonedWorktreeSubmodules(worktreePath, sourceWorkspace, runGit);
     } catch (subErr: any) {
@@ -531,6 +544,27 @@ export const meshNodeCloneHandlers: Record<string, MedFamilyHandler> = {
                 const worktreeBaseDir = typeof mesh.policy?.worktreeBaseDir === 'string' && mesh.policy.worktreeBaseDir.trim()
                     ? mesh.policy.worktreeBaseDir.trim()
                     : undefined;
+
+                const sourceRepo = sourceNode.repoRoot || sourceNode.workspace;
+                let gitUserName = '';
+                let gitUserEmail = '';
+                try {
+                    gitUserName = (await execGitStdout(sourceRepo, ['config', 'user.name'])).trim();
+                    gitUserEmail = (await execGitStdout(sourceRepo, ['config', 'user.email'])).trim();
+                } catch {
+                    // git config returns exit code 1 if not found
+                }
+                
+                if (!gitUserName || !gitUserEmail) {
+                    return { 
+                        ready: false as const, 
+                        done: { 
+                            success: false, 
+                            error: 'Cannot clone: source repository lacks an explicit user.name or user.email. To prevent falling back to the OS real name (gecos) in submodules, you must set these explicitly in the source repository before cloning.' 
+                        } as CommandRouterResult 
+                    };
+                }
+
                 const { createWorktree } = await import('../../git/git-worktree.js');
                 const result = await createWorktree({
                     repoRoot: sourceNode.repoRoot || sourceNode.workspace,
@@ -568,7 +602,7 @@ export const meshNodeCloneHandlers: Record<string, MedFamilyHandler> = {
                     await rollbackWorktree('registration returned no node');
                     return { ready: false as const, done: { success: false, error: 'Failed to register worktree node' } as CommandRouterResult };
                 }
-                return { ready: true as const, meshRecord, mesh, sourceNode, result, node, identity };
+                return { ready: true as const, meshRecord, mesh, sourceNode, result, node, identity, gitUserName, gitUserEmail };
             });
             if (!prepared.ready) {
                 if ('forward' in prepared && prepared.forward) {
@@ -576,7 +610,7 @@ export const meshNodeCloneHandlers: Record<string, MedFamilyHandler> = {
                 }
                 return prepared.done as CommandRouterResult;
             }
-            const { meshRecord, mesh, sourceNode, result, node, identity } = prepared;
+            const { meshRecord, mesh, sourceNode, result, node, identity, gitUserName, gitUserEmail } = prepared;
 
             // FALSE-BLOCKER-CLONE-QUEUE: open the transient grace window for the freshly cloned
             // node. A queue task pinned to it (target_node pin) enqueued before bootstrap
@@ -608,7 +642,12 @@ export const meshNodeCloneHandlers: Record<string, MedFamilyHandler> = {
             let queuedBehind: number | undefined;
 
             const finishWorktreeSetup = async (): Promise<{ submodulesInitialized: boolean; bootstrapState: WorktreeBootstrapState }> => {
-                const submodulesInitialized = initSubmodules ? await initClonedWorktreeSubmodules(result.worktreePath, sourceNode) : false;
+                if (gitUserName && gitUserEmail) {
+                    await runGit({ workspace: result.worktreePath, repoRoot: result.worktreePath, isGitRepo: true }, ['config', 'user.name', gitUserName]).catch(() => {});
+                    await runGit({ workspace: result.worktreePath, repoRoot: result.worktreePath, isGitRepo: true }, ['config', 'user.email', gitUserEmail]).catch(() => {});
+                }
+
+                const submodulesInitialized = initSubmodules ? await initClonedWorktreeSubmodules(result.worktreePath, sourceNode, gitUserName, gitUserEmail) : false;
                 // WORKTREE-BOOTSTRAP-SERIAL-QUEUE: bootstraps run one at a time per
                 // daemon (they contend on the machine-wide npm cache), so this may sit
                 // queued behind another clone before it starts. Record the position it

@@ -205,9 +205,10 @@ describe('fetchKimiQuota', () => {
 
         expect(quota.metadata?.failureKind).toBe('expired-token');
         expect(stub.calls).toEqual([]); // still never refreshes/calls out itself
-        expect(quota.error).not.toMatch(/session expired|run kimi|log ?in/i);
-        expect(quota.error).toMatch(/access token/i);
-        expect(quota.error).toMatch(/refresh/i); // still explains recovery is automatic
+        expect(quota.error).not.toMatch(/session expired|log ?in/i);
+        expect(quota.error).toMatch(/auto-recovers on your next kimi CLI use/);
+        expect(quota.error).toMatch(/so no action is needed/);
+        expect(quota.error).toMatch(/Quota will report again after that/);
     });
 
     it('classifies 401 as unauthorized', async () => {

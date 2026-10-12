@@ -646,12 +646,10 @@ export class FsmDriver implements ISpecDriver {
     }
 
     private reevaluate(forceEmit = false): void {
-        // A torn-down driver has no PTY and no owner. Without this, a frame or
-        // timer callback already in flight re-armed the wake timer, and the dead
-        // driver kept evaluating a blank screen: stall-refocus writes into no PTY
-        // and a busy→approval timeout 8 s after the session was stopped
-        // (2026-10-11, antigravity).
-        if (this.tornDown) return;
+        // Teardown and a detached PTY both freeze the screen. Timer/refresh
+        // callbacks must not invent approval transitions or rearm wake timers
+        // after either condition, even when transport loss preceded teardown.
+        if (this.tornDown || !this.adapter.hasActivePty()) return;
         this.evalCount += 1;
         const now = Date.now();
         const screen = this.adapter.snapshot();

@@ -201,6 +201,15 @@ export class TerminalAdapter {
         return { cols: this.cols, rows: this.rows };
     }
 
+    /** True while a runtime transport is attached — false before start() and
+     *  after exit/kill/detach. The FSM driver gates state evaluation on this:
+     *  with no PTY the screen is frozen forever, so any transition a timer or
+     *  an on-demand refresh could fire is time-synthesized from a stale frame
+     *  (the DEAD-PTY-APPROVAL-WEDGE defect), never a real screen change. */
+    hasActivePty(): boolean {
+        return this.pty !== null;
+    }
+
     send_keys(text: string, primeContext?: PrimeWriteContext): void | Promise<boolean> {
         this.recordEvent('input', capPreview(escapeControl(text)), text.length);
         if (!primeContext) {
