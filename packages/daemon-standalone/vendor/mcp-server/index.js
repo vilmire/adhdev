@@ -23534,6 +23534,7 @@ var require_dist3 = __commonJS({
       isMessageId: () => isMessageId,
       isMissionUpsertResponse: () => isMissionUpsertResponse2,
       isModelAxisSource: () => isModelAxisSource,
+      isNativeMarkerRef: () => isNativeMarkerRef,
       isNonEmptyString: () => isNonEmptyString,
       isNotifyKind: () => isNotifyKind2,
       isOutboundMessage: () => isOutboundMessage,
@@ -24810,7 +24811,7 @@ ${renderWorkerProtocolFooter2(input)}`;
       return isRecord22(value) && hasOnlyKeys(value, ["modal", "adapterPending", "trailingTool", "newestActivityAt"]) && typeof value.modal === "boolean" && typeof value.adapterPending === "boolean" && typeof value.trailingTool === "boolean" && (value.newestActivityAt === void 0 || isFiniteNumber2(value.newestActivityAt));
     }
     function isNativeMarkerRef(value) {
-      return isRecord22(value) && hasOnlyKeys(value, ["outcome", "turnId"]) && NATIVE_TURN_OUTCOMES2.includes(value.outcome) && (value.turnId === void 0 || isEvidenceIdentifier2(value.turnId));
+      return isRecord22(value) && hasOnlyKeys(value, ["outcome", "turnId", "receivedAt", "startedAt", "errorAt"]) && NATIVE_TURN_OUTCOMES2.includes(value.outcome) && (value.turnId === void 0 || isEvidenceIdentifier2(value.turnId)) && ["receivedAt", "startedAt", "errorAt"].every((key2) => value[key2] === void 0 || isFiniteNumber2(value[key2]));
     }
     function isCoordinatorIdentity(value) {
       return isRecord22(value) && hasOnlyKeys(value, ["daemonId", "coordinatorRunId", "sessionId"]) && isEvidenceIdentifier2(value.daemonId) && isEvidenceIdentifier2(value.coordinatorRunId) && (value.sessionId === void 0 || isEvidenceIdentifier2(value.sessionId));
@@ -26897,9 +26898,9 @@ ${renderWorkerProtocolFooter2(input)}`;
           "terminal_block_hard_cap",
           "decoupled_completion"
         ];
-        NATIVE_TURN_OUTCOMES2 = ["completed", "aborted"];
+        NATIVE_TURN_OUTCOMES2 = ["completed", "aborted", "failed"];
         LIVENESS_RESULTS2 = ["alive", "unknown", "read_failed", "dead"];
-        PROVIDER_FAILURES2 = ["auth_failed", "billing_failed"];
+        PROVIDER_FAILURES2 = ["auth_failed", "billing_failed", "usage_limit_exceeded", "server_overloaded", "provider_error"];
         SESSION_ERROR_REASONS2 = ["provider_error", "adapter_error", "spawn_failed", "auth_failed", "billing_failed", "unknown", "daemon_restart"];
         CANCEL_REASONS2 = ["operator_cancel", "intentional_cleanup", "task_removed", "mission_abandoned", "superseded"];
         OPERATOR_STATUSES2 = ["completed", "failed"];
@@ -26940,6 +26941,9 @@ ${renderWorkerProtocolFooter2(input)}`;
           "session_error",
           "provider_auth_failed",
           "provider_billing_failed",
+          "provider_usage_limit_exceeded",
+          "provider_server_overloaded",
+          "provider_error",
           "operator_cancel",
           "intentional_cleanup",
           "task_removed",
@@ -27027,6 +27031,7 @@ ${renderWorkerProtocolFooter2(input)}`;
             releasedByHardCap: boolOpt2,
             nativeOutcome: enOpt2(NATIVE_TURN_OUTCOMES2),
             live: { t: "live", optional: true },
+            nativeMarker: { t: "native_marker", optional: true },
             reportExpected: boolOpt2,
             providerFailure: enOpt2(PROVIDER_FAILURES2)
           },
@@ -42212,6 +42217,7 @@ ${rendered.join("\n\n")}`,
       return holdReason ? { kind: "hold", reason: verdict.reason, holdReason } : { kind: "decline", reason: verdict.reason };
     }
     function admitTranscriptFinal(ev, policy) {
+      if (ev.nativeMarker?.outcome === "failed") return { kind: "decline", reason: "native_marker_absent" };
       return fromVerdict(evaluateTerminalAdmission({
         activeModalPresent: ev.live.modal,
         providerObservedStatus: ev.live.adapterPending ? "generating" : "idle",
@@ -42719,7 +42725,7 @@ ${rendered.join("\n\n")}`,
     }
     function completionEnd(ctx) {
       const e = turnEnd(ctx);
-      return e && !e.providerFailure ? e : null;
+      return e && !e.providerFailure && e.nativeOutcome !== "failed" ? e : null;
     }
     function notHeld(ctx) {
       return admissionOf(ctx)?.kind !== "hold";
@@ -43099,7 +43105,8 @@ ${rendered.join("\n\n")}`,
           if (template.reason === "from_cancel") reason = ev.reason;
           else if (template.reason === "from_operator") reason = ev.reason;
           else if (template.reason === "from_provider_failure") {
-            reason = ev.providerFailure === "billing_failed" ? "provider_billing_failed" : "provider_auth_failed";
+            const failure6 = ev.providerFailure ?? "provider_error";
+            reason = failure6 === "provider_error" ? failure6 : `provider_${failure6}`;
           } else reason = template.reason;
           commit(draft, outcome, template.strength, reason, template.text === "recorded_report" ? recordedReportText(draft) : void 0);
           return;
@@ -43273,7 +43280,7 @@ ${rendered.join("\n\n")}`,
             if (!sessionIdsEquivalent(ctx.evidence.sessionId, attempt.prevGeneration.sessionId)) return false;
             const ev = ctx.evidence;
             if (ev.kind === "worker_report") return true;
-            if (ev.kind === "turn_end") return ev.strength === "genuine" && !ev.hollow && !ev.providerFailure;
+            if (ev.kind === "turn_end") return ev.strength === "genuine" && !ev.hollow && !ev.providerFailure && ev.nativeOutcome !== "failed";
             if (ev.kind === "transcript_final") return admitTranscriptFinal(ev, ctx.policy).kind === "strong";
             return false;
           },
@@ -43295,7 +43302,7 @@ ${rendered.join("\n\n")}`,
           finished_after_report: finishedAfterReport,
           end_provider_failure: (ctx) => {
             const e = turnEnd(ctx);
-            return !!e?.providerFailure && notHeld(ctx) && !reportedThisGeneration(ctx);
+            return !!e && (!!e.providerFailure || e.nativeOutcome === "failed") && notHeld(ctx) && !reportedThisGeneration(ctx);
           },
           false_idle_resumed: (ctx) => (ctx.evidence.kind === "turn_started" || ctx.evidence.kind === "transcript_activity") && afterWeakSince(ctx) && awaitReportHeld(ctx),
           end_weak: (ctx) => {
@@ -74307,6 +74314,16 @@ ${continuationNotice}` } : task,
         return out;
       }
       if (t && status === "idle") {
+        if (t.nativeMarker?.outcome === "failed") return [{
+          ...base,
+          eventId: eventId("native_failure"),
+          kind: "turn_end",
+          strength: "genuine",
+          nativeOutcome: "failed",
+          nativeMarker: t.nativeMarker,
+          providerFailure: t.nativeFailure ?? "provider_error",
+          live: { modal: t.activeModal, adapterPending: false, trailingTool: false }
+        }];
         const finalThisTurn = t.finalAssistantAt !== void 0 && t.finalAssistantAt >= boundary;
         if (finalThisTurn || t.nativeMarker) {
           return [{
@@ -100984,6 +101001,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         ...opts.blockReason ? { blockReason: opts.blockReason } : {},
         ...opts.releasedByHardCap !== void 0 ? { releasedByHardCap: opts.releasedByHardCap } : {},
         ...opts.nativeOutcome ? { nativeOutcome: opts.nativeOutcome } : {},
+        ...opts.nativeMarker ? { nativeMarker: opts.nativeMarker } : {},
         ...opts.live ? { live: opts.live } : {},
         ...opts.providerFailure ? { providerFailure: opts.providerFailure } : {}
       }), opts.envelope);
@@ -101379,6 +101397,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     init_chat_history();
     init_logger();
     init_control_effects();
+    init_dist();
     init_contracts2();
     init_message_source_address();
     var VALID_STATUSES = ["idle", "generating", "waiting_approval", "waiting_choice", "finalizing", "error", "panel_hidden", "starting", "streaming", "no_progress", "long_generating"];
@@ -101504,8 +101523,8 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         if (!isFiniteNumber4(marker.receivedAt)) {
           throw new Error(`${source2}: turnTerminalMarkers[${index}].receivedAt must be a finite number`);
         }
-        if (marker.outcome !== "completed" && marker.outcome !== "aborted") {
-          throw new Error(`${source2}: turnTerminalMarkers[${index}].outcome must be 'completed' or 'aborted'`);
+        if (marker.outcome !== "completed" && marker.outcome !== "aborted" && marker.outcome !== "failed") {
+          throw new Error(`${source2}: turnTerminalMarkers[${index}].outcome must be 'completed', 'aborted', or 'failed'`);
         }
         if (typeof marker.summary !== "string") {
           throw new Error(`${source2}: turnTerminalMarkers[${index}].summary must be a string`);
@@ -101516,6 +101535,16 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           summary: marker.summary
         };
         if (typeof marker.turnId === "string") normalized.turnId = marker.turnId;
+        for (const key2 of ["startedAt", "errorAt"]) {
+          if (marker[key2] !== void 0) {
+            if (!isFiniteNumber4(marker[key2])) throw new Error(`${source2}: invalid ${key2}`);
+            normalized[key2] = marker[key2];
+          }
+        }
+        if (marker.providerFailure !== void 0) {
+          if (!PROVIDER_FAILURES2.includes(marker.providerFailure)) throw new Error(`${source2}: invalid providerFailure`);
+          normalized.providerFailure = marker.providerFailure;
+        }
         return normalized;
       });
     }
@@ -103703,6 +103732,40 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       scan(dir);
       return count;
     }
+    function createCodexTurnProvenance() {
+      let current4;
+      return (payload, at, marker) => {
+        const id22 = marker?.turnId ?? (typeof payload.turn_id === "string" ? payload.turn_id.trim() : "");
+        if (payload.type === "task_started") {
+          current4 = { id: id22, startedAt: at };
+        }
+        if (marker && current4 && (id22 && current4.id && id22 !== current4.id || !id22 && current4.id)) return { ...marker, startedAt: 0 };
+        if (payload.type === "error" && current4 && at < current4.startedAt) {
+          if (at <= 0) current4.startedAt = 0;
+          else return void 0;
+        }
+        const error = payload.error;
+        if ((payload.type === "error" || marker) && error && typeof error === "object") {
+          const code = error.type;
+          const failure6 = code === "usage_limit_exceeded" ? "usage_limit_exceeded" : code === "server_overloaded" ? "server_overloaded" : code === "auth_failed" || code === "authentication_error" || code === "unauthorized" ? "auth_failed" : "provider_error";
+          if (current4 && (!id22 || id22 === current4.id)) {
+            current4.failure = failure6;
+            current4.errorAt = at;
+          } else if (!marker && !current4) {
+            current4 = { id: id22, startedAt: 0, failure: failure6, errorAt: at };
+          } else if (marker) {
+            return { ...marker, outcome: "failed", providerFailure: failure6, errorAt: at };
+          }
+        }
+        if (!marker) return void 0;
+        const result = {
+          ...marker,
+          ...current4 ? { startedAt: current4.startedAt } : {},
+          ...current4?.failure && (!marker.summary || payload.error) ? { outcome: "failed", providerFailure: current4.failure, errorAt: current4.errorAt } : {}
+        };
+        return result;
+      };
+    }
     var fs31 = __toESM2(require("fs"));
     var path38 = __toESM2(require("path"));
     init_logger();
@@ -105092,8 +105155,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
           messages.push(msg);
         }
       }
-      if (messages.length === 0) return null;
       const turnTerminalMarkers = extractBuiltinTurnTerminalMarkers(input.agentType, lines);
+      if (messages.length === 0 && turnTerminalMarkers.length === 0) return null;
       return {
         messages,
         providerSessionId,
@@ -105116,6 +105179,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       if (agentType === "kimi") return extractKimiTurnTerminalMarkers(lines);
       if (agentType !== "codex-cli") return [];
       const markers = [];
+      const provenance = createCodexTurnProvenance();
       for (const rec3 of lines) {
         if (String(rec3?.type ?? "") !== "event_msg") continue;
         const payload = rec3?.payload;
@@ -105123,17 +105187,21 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         const payloadType = String(payload.type ?? "").trim();
         const isComplete = payloadType === "task_complete";
         const isAbort = payloadType === "turn_aborted";
-        if (!isComplete && !isAbort) continue;
-        const receivedAt = parseTimestamp(rec3?.timestamp) ?? Date.now();
+        const receivedAt = parseTimestamp(rec3?.timestamp) ?? 0;
+        if (!isComplete && !isAbort) {
+          provenance(payload, receivedAt);
+          continue;
+        }
         const summary = flattenJsonlText(payload.last_agent_message);
         const rawTurnId = payload.turn_id;
         const turnId = typeof rawTurnId === "string" && rawTurnId.trim() ? rawTurnId.trim() : "";
-        markers.push({
+        const marker = provenance(payload, receivedAt, {
           receivedAt,
           outcome: isAbort ? "aborted" : "completed",
           summary,
           ...turnId ? { turnId } : {}
         });
+        if (marker) markers.push(marker);
       }
       return markers;
     }
@@ -105750,7 +105818,9 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       for (let i = markers.length - 1; i >= 0; i--) {
         const m = markers[i];
         if (!m) continue;
-        if (typeof m.receivedAt === "number" && m.receivedAt >= startedAt) return m;
+        if (!Number.isFinite(m.receivedAt) || m.receivedAt < startedAt) continue;
+        if (m.startedAt !== void 0 && (!Number.isFinite(m.startedAt) || m.startedAt < startedAt)) continue;
+        return m;
       }
       return null;
     }
@@ -105944,6 +106014,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       const records = [];
       const usageRecords = [];
       const turnTerminalMarkers = [];
+      const provenance = createCodexTurnProvenance();
       let fallbackTs = Date.now();
       let detectedWorkspace = typeof workspaceFallback === "string" ? workspaceFallback.trim() : "";
       let recordIndex = -1;
@@ -105984,6 +106055,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         }
         const payloadType = String(payload.type ?? "").trim();
         if (type2 === "event_msg") {
+          const nativeAt = extractTimestampValue(record2.timestamp) || 0;
+          if (payloadType === "task_started" || payloadType === "error") provenance(payload, nativeAt);
           if (completionSignal) {
             const isComplete = payloadType === completionSignal.recordType;
             const isAbort = !!completionSignal.abortRecordType && payloadType === completionSignal.abortRecordType;
@@ -105991,12 +106064,13 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
               const summary = completionSignal.summaryField ? flattenCodexContent(payload[completionSignal.summaryField]).trim() : "";
               const rawTurnId = completionSignal.turnIdField ? payload[completionSignal.turnIdField] : void 0;
               const turnId = typeof rawTurnId === "string" && rawTurnId.trim() ? rawTurnId.trim() : "";
-              turnTerminalMarkers.push({
-                receivedAt,
+              const marker = provenance(payload, nativeAt, {
+                receivedAt: nativeAt,
                 outcome: isAbort ? "aborted" : "completed",
                 summary,
                 ...turnId ? { turnId } : {}
               });
+              if (marker) turnTerminalMarkers.push(marker);
             }
           }
           if (payloadType === "task_complete") {
@@ -106108,7 +106182,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         // this read validates against the same number.
         sourceMtimeMs
       );
-      if (messages.length === 0) return null;
+      if (messages.length === 0 && turnTerminalMarkers.length === 0) return null;
       const firstSystem = messages.find((m) => m.kind === "session_start");
       const workspace = firstSystem?.workspace || firstSystem?.content || void 0;
       const session = {
@@ -147711,6 +147785,7 @@ ${buttons.join("\n")}`;
         host.appliedEffectKeys = new Set(Array.from(host.appliedEffectKeys).slice(-100));
       }
     }
+    init_dist();
     init_logger();
     init_mesh_event_trace();
     init_worker_result_parse();
@@ -147725,7 +147800,7 @@ ${buttons.join("\n")}`;
     function asTurnEndBlockReason(value) {
       return typeof value === "string" && TURN_END_BLOCK_REASON_SET.has(value) ? value : void 0;
     }
-    var NATIVE_TURN_OUTCOME_SET = /* @__PURE__ */ new Set(["completed", "aborted"]);
+    var NATIVE_TURN_OUTCOME_SET = /* @__PURE__ */ new Set(["completed", "aborted", "failed"]);
     function asNativeTurnOutcome(value) {
       return typeof value === "string" && NATIVE_TURN_OUTCOME_SET.has(value) ? value : void 0;
     }
@@ -147758,6 +147833,12 @@ ${buttons.join("\n")}`;
         return;
       }
       host.applyCompletionArmPatch(pending, decision.armPatch);
+      const nativeMarker = host.nativeTurnTerminalMarker?.(pending.turnStartedAt);
+      const nativeFailureDiagnostic = nativeMarker?.outcome === "failed" ? {
+        nativeTurnOutcome: "failed",
+        nativeProviderFailure: nativeMarker.providerFailure ?? "provider_error",
+        nativeMarker: { outcome: nativeMarker.outcome, turnId: nativeMarker.turnId, receivedAt: nativeMarker.receivedAt, startedAt: nativeMarker.startedAt, errorAt: nativeMarker.errorAt }
+      } : {};
       if (decision.kind === "hold") {
         host.logCompletionHold(decision);
         if (host.completionTraceOn()) host.recordCompletionGateTrace("hold", {
@@ -147780,6 +147861,7 @@ ${buttons.join("\n")}`;
           pending,
           emittedAfterFinalizationTimeout
         });
+        Object.assign(completionDiagnostic, nativeFailureDiagnostic);
         completionDiagnostic.decoupledImmediateEmit = decision.decoupledImmediateEmit;
         completionDiagnostic.releasedByTerminalBlockHardCap = decision.releasedByTerminalBlockHardCap;
         const emitCause = decision.releasedByTerminalBlockHardCap ? `terminal block never cleared, released at ${waitedMs}ms hard cap` : decision.decoupledImmediateEmit ? "CANON-C decoupled-immediate, transcript pending" : `after ${waitedMs}ms`;
@@ -147800,7 +147882,7 @@ ${buttons.join("\n")}`;
           waitedMs,
           busyEpoch: host.busyEpoch
         });
-        const weakFinalSummary = host.nativeTurnTerminalSummary(pending.turnStartedAt) || host.snapshotExternalNativeCompletionSummary(pending) || host.completionFinalSummary(host.adapter?.getScriptParsedStatus()?.messages, pending.turnStartedAt) || host.cachedInTurnCompletionSummaryContent(pending.turnStartedAt) || (blockReason.startsWith("parsed_status:") ? "" : void 0);
+        const weakFinalSummary = nativeMarker?.outcome === "failed" ? nativeMarker.summary : host.nativeTurnTerminalSummary(pending.turnStartedAt) || host.snapshotExternalNativeCompletionSummary(pending) || host.completionFinalSummary(host.adapter?.getScriptParsedStatus()?.messages, pending.turnStartedAt) || host.cachedInTurnCompletionSummaryContent(pending.turnStartedAt) || (blockReason.startsWith("parsed_status:") ? "" : void 0);
         Object.assign(
           completionDiagnostic,
           host.finalSummaryProvenanceDiagnostic(weakFinalSummary)
@@ -147832,7 +147914,7 @@ ${buttons.join("\n")}`;
         duration: pending.duration,
         busyEpoch: host.busyEpoch
       });
-      const finalSummary = host.cleanCompletionFinalSummary(pending);
+      const finalSummary = nativeMarker?.outcome === "failed" ? nativeMarker.summary : host.cleanCompletionFinalSummary(pending);
       const transcriptProfile = resolveTranscriptAuthorityProfile(host.provider);
       const finalContentLength = typeof finalSummary === "string" ? finalSummary.trim().length : 0;
       host.emitGeneratingCompleted({
@@ -147843,6 +147925,7 @@ ${buttons.join("\n")}`;
         finalSummary,
         evidenceLevel: "reported",
         completionDiagnostic: {
+          ...nativeFailureDiagnostic,
           source: "clean_final_assistant",
           cleanPath: true,
           evidenceWeak: false,
@@ -147912,13 +147995,14 @@ ${buttons.join("\n")}`;
           // native-marker reconcile) — `turn_end`'s closed `nativeOutcome`
           // enum, never a free-text passthrough.
           nativeOutcome: asNativeTurnOutcome(opts.completionDiagnostic?.nativeTurnOutcome),
+          nativeMarker: isNativeMarkerRef(opts.completionDiagnostic?.nativeMarker) ? opts.completionDiagnostic.nativeMarker : void 0,
           // A turn whose whole reply is an auth-failure banner (claude-cli
           // "Login expired · Please run /login", 2026-10-06 preview incident:
           // the idle edge was committed task_completed / weak_end_confirmed)
           // is not a completion. The closed enum rides the evidence; the owner's
           // reducer commits it failed / provider_auth_failed (R9f). Whole-reply
           // match only — a summary that merely mentions the banner is untouched.
-          providerFailure: summary && detectAuthFailureOnlyReply(summary) ? "auth_failed" : void 0,
+          providerFailure: PROVIDER_FAILURES2.includes(opts.completionDiagnostic?.nativeProviderFailure) ? opts.completionDiagnostic.nativeProviderFailure : summary && detectAuthFailureOnlyReply(summary) ? "auth_failed" : void 0,
           // `nodeLabel` is intentionally omitted — `turn-ledger/deliver.ts`'s
           // `nodeLabelFor` already falls back to the attempt's own
           // `nodeId`/`providerType` (dispatch-time facts the ledger has),
@@ -163821,7 +163905,9 @@ ${notice.notice}${supersededHint}`;
       const markersPresent = "turnTerminalMarkers" in payload && Array.isArray(payload.turnTerminalMarkers);
       const nativeRead = markersPresent && providerHasNativeTurnSignal({ type: ctx.providerType });
       const marker = nativeRead ? selectTurnTerminalMarker(payload.turnTerminalMarkers, turnStartedAtMs) : null;
-      const finalSummary = evidence.finalSummary || "";
+      if (marker && (newestAgentActivityAt === void 0 || marker.receivedAt > newestAgentActivityAt)) newestAgentActivityAt = marker.receivedAt;
+      const finalThisTurn = Number.isFinite(finalAssistantAt) && typeof turnStartedAtMs === "number" && finalAssistantAt >= turnStartedAtMs;
+      const finalSummary = finalThisTurn ? evidence.finalSummary || "" : "";
       const selfAttributing = !!finalSummary && !!extractJsonObjectFromSummary(finalSummary);
       const observed = typeof payload.providerObservedStatus === "string" && payload.providerObservedStatus.trim() ? payload.providerObservedStatus : payload.status;
       const out = {
@@ -163830,11 +163916,18 @@ ${notice.notice}${supersededHint}`;
         selfAttributing,
         trailingActivity: countTrailingToolActivityAfterFinalAssistant(messages),
         nativeRead,
-        ...Number.isFinite(finalAssistantAt) ? { finalAssistantAt } : {},
+        ...finalThisTurn ? { finalAssistantAt } : {},
         ...finalSummary ? { finalSummary } : {},
         ...newestActivityAt !== void 0 ? { newestActivityAt } : {},
         ...newestAgentActivityAt !== void 0 ? { newestAgentActivityAt } : {},
-        ...marker ? { nativeMarker: { outcome: marker.outcome, ...marker.turnId ? { turnId: marker.turnId } : {} } } : {}
+        ...marker?.providerFailure ? { nativeFailure: marker.providerFailure } : {},
+        ...marker ? { nativeMarker: {
+          outcome: marker.outcome,
+          receivedAt: marker.receivedAt,
+          ...marker.startedAt !== void 0 ? { startedAt: marker.startedAt } : {},
+          ...marker.errorAt !== void 0 ? { errorAt: marker.errorAt } : {},
+          ...marker.turnId ? { turnId: marker.turnId } : {}
+        } } : {}
       };
       return out;
     };
@@ -165837,9 +165930,9 @@ var TURN_END_BLOCK_REASONS = [
   "terminal_block_hard_cap",
   "decoupled_completion"
 ];
-var NATIVE_TURN_OUTCOMES = ["completed", "aborted"];
+var NATIVE_TURN_OUTCOMES = ["completed", "aborted", "failed"];
 var LIVENESS_RESULTS = ["alive", "unknown", "read_failed", "dead"];
-var PROVIDER_FAILURES = ["auth_failed", "billing_failed"];
+var PROVIDER_FAILURES = ["auth_failed", "billing_failed", "usage_limit_exceeded", "server_overloaded", "provider_error"];
 var SESSION_ERROR_REASONS = ["provider_error", "adapter_error", "spawn_failed", "auth_failed", "billing_failed", "unknown", "daemon_restart"];
 var CANCEL_REASONS = ["operator_cancel", "intentional_cleanup", "task_removed", "mission_abandoned", "superseded"];
 var OPERATOR_STATUSES = ["completed", "failed"];
@@ -165880,6 +165973,9 @@ var TURN_REASONS = [
   "session_error",
   "provider_auth_failed",
   "provider_billing_failed",
+  "provider_usage_limit_exceeded",
+  "provider_server_overloaded",
+  "provider_error",
   "operator_cancel",
   "intentional_cleanup",
   "task_removed",
@@ -165967,6 +166063,7 @@ var TURN_EVIDENCE_FIELD_SPECS = {
     releasedByHardCap: boolOpt,
     nativeOutcome: enOpt(NATIVE_TURN_OUTCOMES),
     live: { t: "live", optional: true },
+    nativeMarker: { t: "native_marker", optional: true },
     reportExpected: boolOpt,
     providerFailure: enOpt(PROVIDER_FAILURES)
   },

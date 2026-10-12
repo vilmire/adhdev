@@ -97,13 +97,13 @@ export const TURN_END_BLOCK_REASONS = [
 ] as const
 export type TurnEndBlockReason = typeof TURN_END_BLOCK_REASONS[number]
 
-export const NATIVE_TURN_OUTCOMES = ['completed', 'aborted'] as const
+export const NATIVE_TURN_OUTCOMES = ['completed', 'aborted', 'failed'] as const
 export type NativeTurnOutcome = typeof NATIVE_TURN_OUTCOMES[number]
 
 export const LIVENESS_RESULTS = ['alive', 'unknown', 'read_failed', 'dead'] as const
 export type LivenessResult = typeof LIVENESS_RESULTS[number]
 
-export const PROVIDER_FAILURES = ['auth_failed', 'billing_failed'] as const
+export const PROVIDER_FAILURES = ['auth_failed', 'billing_failed', 'usage_limit_exceeded', 'server_overloaded', 'provider_error'] as const
 export type ProviderFailure = typeof PROVIDER_FAILURES[number]
 
 /**
@@ -164,7 +164,7 @@ export type CommitStrength = typeof COMMIT_STRENGTHS[number]
 export const TURN_REASONS = [
     // commits
     'turn_end', 'weak_end_confirmed', 'transcript_final', 'worker_reported',
-    'finalization_timeout_no_response', 'session_error', 'provider_auth_failed', 'provider_billing_failed',
+    'finalization_timeout_no_response', 'session_error', 'provider_auth_failed', 'provider_billing_failed', 'provider_usage_limit_exceeded', 'provider_server_overloaded', 'provider_error',
     'operator_cancel', 'intentional_cleanup', 'task_removed', 'mission_abandoned', 'superseded',
     'operator_update', 'refine_terminal', 'validation_terminal',
     'hard_ceiling', 'reclaim_budget_exhausted', 'hollow_max_retries', 'migration_orphan',
@@ -207,7 +207,7 @@ export interface LiveTurnPending { modal: boolean; adapterPending: boolean; trai
 /** Structural copy of daemon-core's `CoordinatorIdentity` (this package cannot import daemon-core). */
 export interface EvidenceCoordinatorIdentity { daemonId: string; coordinatorRunId: string; sessionId?: string }
 
-export interface NativeTurnMarkerRef { outcome: NativeTurnOutcome; turnId?: string }
+export interface NativeTurnMarkerRef { outcome: NativeTurnOutcome; turnId?: string; receivedAt?: number; startedAt?: number; errorAt?: number }
 
 export interface EvidenceEnvelope {
     /** Stable id of this observation; dedupe key across republish/replication. */
@@ -253,7 +253,7 @@ export type TurnEvidenceBody =
     | { kind: 'suspension'; modal: SuspensionModal; modalKey?: string; providerSetup?: boolean; clockUnknown?: boolean }
     | { kind: 'suspension_resolved'; resolution: SuspensionResolution; via: SuspensionResolutionVia; modalKey?: string }
     | { kind: 'turn_end'; strength: TurnEndStrength; afterFinalizationTimeout?: boolean; hollow?: boolean; summary?: SummaryRef
-        blockReason?: TurnEndBlockReason; releasedByHardCap?: boolean; nativeOutcome?: NativeTurnOutcome; live?: LiveTurnPending
+        blockReason?: TurnEndBlockReason; releasedByHardCap?: boolean; nativeOutcome?: NativeTurnOutcome; nativeMarker?: NativeTurnMarkerRef; live?: LiveTurnPending
         /**
          * Stamped (true only) by the WORKER's daemon when the session holds a live
          * worker-MCP session bind, i.e. the worker can call report_completion. The
@@ -358,7 +358,7 @@ export const TURN_EVIDENCE_FIELD_SPECS: TurnEvidenceFieldSpecs = {
         strength: en(TURN_END_STRENGTHS), afterFinalizationTimeout: boolOpt, hollow: boolOpt,
         summary: { t: 'summary_ref', optional: true }, blockReason: enOpt(TURN_END_BLOCK_REASONS),
         releasedByHardCap: boolOpt, nativeOutcome: enOpt(NATIVE_TURN_OUTCOMES), live: { t: 'live', optional: true },
-        reportExpected: boolOpt, providerFailure: enOpt(PROVIDER_FAILURES),
+        nativeMarker: { t: 'native_marker', optional: true }, reportExpected: boolOpt, providerFailure: enOpt(PROVIDER_FAILURES),
     },
     transcript_final: {
         selfAttributing: bool, nativeRead: bool, nativeMarker: { t: 'native_marker', optional: true },
@@ -440,11 +440,12 @@ function isLiveTurnPending(value: unknown): value is LiveTurnPending {
         && (value.newestActivityAt === undefined || isFiniteNumber(value.newestActivityAt))
 }
 
-function isNativeMarkerRef(value: unknown): value is NativeTurnMarkerRef {
+export function isNativeMarkerRef(value: unknown): value is NativeTurnMarkerRef {
     return isRecord(value)
-        && hasOnlyKeys(value, ['outcome', 'turnId'])
+        && hasOnlyKeys(value, ['outcome', 'turnId', 'receivedAt', 'startedAt', 'errorAt'])
         && (NATIVE_TURN_OUTCOMES as readonly string[]).includes(value.outcome as string)
         && (value.turnId === undefined || isEvidenceIdentifier(value.turnId))
+        && ['receivedAt', 'startedAt', 'errorAt'].every((key) => value[key] === undefined || isFiniteNumber(value[key]))
 }
 
 function isCoordinatorIdentity(value: unknown): value is EvidenceCoordinatorIdentity {

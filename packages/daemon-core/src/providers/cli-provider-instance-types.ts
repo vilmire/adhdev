@@ -105,7 +105,7 @@ export type CompletionFinalAssistantEvidence = {
     /** Final text carried by the terminal record; '' is valid (tool-terminated turn). */
     nativeSummary?: string;
     /** Whether the provider reported a normal end or an abort. */
-    nativeOutcome?: 'completed' | 'aborted';
+    nativeOutcome?: 'completed' | 'aborted' | 'failed';
 };
 
 export type ExternalTranscriptProbe = {

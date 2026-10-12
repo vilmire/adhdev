@@ -177,7 +177,7 @@ function turnEnd(ctx: GuardCtx): TurnEvidenceOf<'turn_end'> | null {
  */
 function completionEnd(ctx: GuardCtx): TurnEvidenceOf<'turn_end'> | null {
     const e = turnEnd(ctx);
-    return e && !e.providerFailure ? e : null;
+    return e && !e.providerFailure && e.nativeOutcome !== 'failed' ? e : null;
 }
 
 function notHeld(ctx: GuardCtx): boolean {
@@ -260,7 +260,7 @@ const GUARDS: Record<Exclude<GuardId, 'otherwise'>, (ctx: GuardCtx) => boolean> 
         if (!sessionIdsEquivalent(ctx.evidence.sessionId, attempt.prevGeneration.sessionId)) return false;
         const ev = ctx.evidence;
         if (ev.kind === 'worker_report') return true;
-        if (ev.kind === 'turn_end') return ev.strength === 'genuine' && !ev.hollow && !ev.providerFailure;
+        if (ev.kind === 'turn_end') return ev.strength === 'genuine' && !ev.hollow && !ev.providerFailure && ev.nativeOutcome !== 'failed';
         if (ev.kind === 'transcript_final') return admitTranscriptFinal(ev, ctx.policy).kind === 'strong';
         return false;
     },
@@ -278,7 +278,7 @@ const GUARDS: Record<Exclude<GuardId, 'otherwise'>, (ctx: GuardCtx) => boolean> 
     end_report_awaited_held: (ctx) => reportAwaitedEnd(ctx) && notHeld(ctx) && awaitReportHeld(ctx) && !reportedThisGeneration(ctx),
     final_strong_report_awaited: (ctx) => ctx.evidence.kind === 'transcript_final' && admissionOf(ctx)?.kind === 'strong' && awaitReportHeld(ctx) && !reportedThisGeneration(ctx),
     finished_after_report: finishedAfterReport,
-    end_provider_failure: (ctx) => { const e = turnEnd(ctx); return !!e?.providerFailure && notHeld(ctx) && !reportedThisGeneration(ctx); },
+    end_provider_failure: (ctx) => { const e = turnEnd(ctx); return !!e && (!!e.providerFailure || e.nativeOutcome === 'failed') && notHeld(ctx) && !reportedThisGeneration(ctx); },
     false_idle_resumed: (ctx) => (ctx.evidence.kind === 'turn_started' || ctx.evidence.kind === 'transcript_activity')
         && afterWeakSince(ctx) && awaitReportHeld(ctx),
     end_weak: (ctx) => { const e = completionEnd(ctx); return !!e && e.strength === 'weak' && !e.afterFinalizationTimeout && !e.hollow && notHeld(ctx) && !reportedThisGeneration(ctx); },
@@ -874,7 +874,8 @@ function applyTemplate(template: EffectTemplate, draft: Draft): void {
             if (template.reason === 'from_cancel') reason = (ev as TurnEvidenceOf<'cancel'>).reason;
             else if (template.reason === 'from_operator') reason = (ev as TurnEvidenceOf<'operator_status'>).reason;
             else if (template.reason === 'from_provider_failure') {
-                reason = (ev as TurnEvidenceOf<'process_exit' | 'turn_end'>).providerFailure === 'billing_failed' ? 'provider_billing_failed' : 'provider_auth_failed';
+                const failure = (ev as TurnEvidenceOf<'process_exit' | 'turn_end'>).providerFailure ?? 'provider_error';
+                reason = failure === 'provider_error' ? failure : `provider_${failure}`;
             } else reason = template.reason;
             commit(draft, outcome, template.strength, reason, template.text === 'recorded_report' ? recordedReportText(draft) : undefined);
             return;

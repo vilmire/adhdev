@@ -15,6 +15,7 @@
  * OSS code (AGPL-3.0). Must not import from packages/ (proprietary).
  */
 
+import { createCodexTurnProvenance } from './codex-turn-provenance.js';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -439,6 +440,7 @@ function parseSessionFile(
   const records: NativeHistoryMessage[] = [];
   const usageRecords: NativeUsageRecord[] = [];
   const turnTerminalMarkers: NativeTurnTerminalMarker[] = [];
+  const provenance = createCodexTurnProvenance();
   let fallbackTs = Date.now();
   let detectedWorkspace = typeof workspaceFallback === 'string' ? workspaceFallback.trim() : '';
 
@@ -489,6 +491,8 @@ function parseSessionFile(
     const payloadType = String(payload.type ?? '').trim();
 
     if (type === 'event_msg') {
+      const nativeAt = extractTimestampValue(record.timestamp) || 0;
+      if (payloadType === 'task_started' || payloadType === 'error') provenance(payload, nativeAt);
       // (NATIVE-TURN-SIGNAL) Record the provider's own turn-terminal marker BEFORE
       // the message-building below. This runs for EVERY terminal record, including
       // one whose summary field is empty — that turn (tool-terminated or empty
@@ -503,12 +507,13 @@ function parseSessionFile(
             : '';
           const rawTurnId = completionSignal.turnIdField ? payload[completionSignal.turnIdField] : undefined;
           const turnId = typeof rawTurnId === 'string' && rawTurnId.trim() ? rawTurnId.trim() : '';
-          turnTerminalMarkers.push({
-            receivedAt,
+          const marker = provenance(payload, nativeAt, {
+            receivedAt: nativeAt,
             outcome: isAbort ? 'aborted' : 'completed',
             summary,
             ...(turnId ? { turnId } : {}),
           });
+          if (marker) turnTerminalMarkers.push(marker);
         }
       }
 
@@ -658,7 +663,7 @@ export function readSession(
     // this read validates against the same number.
     sourceMtimeMs,
   );
-  if (messages.length === 0) return null;
+  if (messages.length === 0 && turnTerminalMarkers.length === 0) return null;
 
   const firstSystem = messages.find((m) => m.kind === 'session_start');
   const workspace = firstSystem?.workspace || firstSystem?.content || undefined;

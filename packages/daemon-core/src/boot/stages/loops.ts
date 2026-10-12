@@ -123,7 +123,10 @@ export const analyzeProbeTranscript: TranscriptAnalyzer = (payload, ctx) => {
     const marker = nativeRead
         ? selectTurnTerminalMarker(payload.turnTerminalMarkers as readonly NativeTurnTerminalMarker[], turnStartedAtMs)
         : null;
-    const finalSummary = evidence.finalSummary || '';
+    if (marker && (newestAgentActivityAt === undefined || marker.receivedAt > newestAgentActivityAt)) newestAgentActivityAt = marker.receivedAt;
+    const finalThisTurn = Number.isFinite(finalAssistantAt)
+        && typeof turnStartedAtMs === 'number' && finalAssistantAt >= turnStartedAtMs;
+    const finalSummary = finalThisTurn ? evidence.finalSummary || '' : '';
     // Self-attributing = the summary parses as a worker-result JSON object (the
     // ledger's `final_summary_json` source) — the provider emitted it for THIS turn.
     const selfAttributing = !!finalSummary && !!extractJsonObjectFromSummary(finalSummary);
@@ -136,11 +139,14 @@ export const analyzeProbeTranscript: TranscriptAnalyzer = (payload, ctx) => {
         selfAttributing,
         trailingActivity: countTrailingToolActivityAfterFinalAssistant(messages),
         nativeRead,
-        ...(Number.isFinite(finalAssistantAt) ? { finalAssistantAt } : {}),
+        ...(finalThisTurn ? { finalAssistantAt } : {}),
         ...(finalSummary ? { finalSummary } : {}),
         ...(newestActivityAt !== undefined ? { newestActivityAt } : {}),
         ...(newestAgentActivityAt !== undefined ? { newestAgentActivityAt } : {}),
-        ...(marker ? { nativeMarker: { outcome: marker.outcome, ...(marker.turnId ? { turnId: marker.turnId } : {}) } } : {}),
+        ...(marker?.providerFailure ? { nativeFailure: marker.providerFailure } : {}),
+        ...(marker ? { nativeMarker: { outcome: marker.outcome, receivedAt: marker.receivedAt,
+            ...(marker.startedAt !== undefined ? { startedAt: marker.startedAt } : {}),
+            ...(marker.errorAt !== undefined ? { errorAt: marker.errorAt } : {}), ...(marker.turnId ? { turnId: marker.turnId } : {}) } } : {}),
     };
     return out;
 };
