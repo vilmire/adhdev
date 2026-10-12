@@ -654,7 +654,7 @@ export class TranscriptProjectionService {
         // complete snapshot을 빈 값으로 덮지 않는다." Published bubbles exist, the
         // new observation is empty, and the caller has NOT positively confirmed
         // a clear — hold, do not tombstone everything.
-        if (state.liveCount > 0 && isEmptyTranscriptObservation(observation) && !verifiedClear) {
+        if (state.liveCount > 0 && isEmptyTranscriptObservation(observation) && !verifiedClear && !state.isLineageSwitch(observation)) {
             this.counters.emptyGuarded++;
             return;
         }

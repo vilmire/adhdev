@@ -117279,6 +117279,10 @@ ${marker}`,
       get liveCount() {
         return this.bubbles.size;
       }
+      /** Only two positively identified, different histories establish a switch. */
+      isLineageSwitch(observation) {
+        return typeof this.historySessionId === "string" && !!this.historySessionId && typeof observation.historySessionId === "string" && !!observation.historySessionId && observation.historySessionId !== this.historySessionId;
+      }
       get frame() {
         return this.frameNo;
       }
@@ -117410,7 +117414,7 @@ ${marker}`,
         for (const id22 of observation.coverage.retainedMessageIds ?? []) {
           if (!seen.has(id22) && this.bubbles.has(id22)) retained.add(id22);
         }
-        if (ctx.verifiedClear) retained.clear();
+        if (ctx.verifiedClear || this.isLineageSwitch(observation)) retained.clear();
         const byOrd = [
           ...observed.map((b) => ({ id: b.id, ord: b.ord, bytes: b.bytes })),
           ...Array.from(retained, (id22) => {
@@ -117430,7 +117434,7 @@ ${marker}`,
         const omittedBefore = capped.size > 0 || retained.size > 0 || observation.coverage.omittedBefore === true;
         const nextHistory = typeof observation.historySessionId === "string" ? observation.historySessionId : null;
         let baseReason = this.pendingBase;
-        if (!baseReason && this.historySessionId !== void 0 && this.historySessionId !== null && nextHistory !== null && nextHistory !== this.historySessionId) {
+        if (!baseReason && this.isLineageSwitch(observation)) {
           baseReason = "lineage_switch";
         }
         const forceAll = baseReason === "resync_request" || baseReason === "writer_change";
@@ -117678,7 +117682,7 @@ ${marker}`,
       return utf8Bytes(jcs(payload));
     }
     function isEmptyTranscriptObservation(observation) {
-      return observation.messages.length === 0 && !observation.title && !observation.activeModal && !observation.activeInteractivePrompt;
+      return observation.messages.length === 0;
     }
     var TRANSCRIPT_TRIGGER_SOURCES = [
       "pty_output",
@@ -118213,7 +118217,7 @@ ${marker}`,
       }
       async publishObservation(sessionId, observation, verifiedClear) {
         const state = this.stateFor(sessionId);
-        if (state.liveCount > 0 && isEmptyTranscriptObservation(observation) && !verifiedClear) {
+        if (state.liveCount > 0 && isEmptyTranscriptObservation(observation) && !verifiedClear && !state.isLineageSwitch(observation)) {
           this.counters.emptyGuarded++;
           return;
         }
@@ -118394,7 +118398,11 @@ ${marker}`,
     }
     function assignReadChatMessageIds(sessionKey2, messages, coverage) {
       const ledger = getMessageIdentityLedger(sessionKey2);
-      const frame2 = ledger.observe(messages.map(toMessageIdentityInput), { coverage });
+      const frame2 = ledger.observe(messages.map(toMessageIdentityInput), {
+        // An unverified zero-row read must not retire every id before the
+        // publisher can guard it. Keep alignment for the subsequent restore.
+        coverage: messages.length === 0 ? "window" : coverage
+      });
       const ids = /* @__PURE__ */ new Map();
       const assignments = /* @__PURE__ */ new Map();
       for (let i = 0; i < messages.length; i += 1) {

@@ -248,6 +248,13 @@ export class KeyedChatSessionState {
         return this.bubbles.size;
     }
 
+    /** Only two positively identified, different histories establish a switch. */
+    isLineageSwitch(observation: TranscriptObservation): boolean {
+        return typeof this.historySessionId === 'string' && !!this.historySessionId
+            && typeof observation.historySessionId === 'string' && !!observation.historySessionId
+            && observation.historySessionId !== this.historySessionId;
+    }
+
     get frame(): number {
         return this.frameNo;
     }
@@ -390,7 +397,7 @@ export class KeyedChatSessionState {
         for (const id of observation.coverage.retainedMessageIds ?? []) {
             if (!seen.has(id) && this.bubbles.has(id)) retained.add(id);
         }
-        if (ctx.verifiedClear) retained.clear();
+        if (ctx.verifiedClear || this.isLineageSwitch(observation)) retained.clear();
 
         // ── §11 Q1 live cap: tombstone the oldest bubbles beyond 16 MiB ──────
         const byOrd: Array<{ id: string; ord: string; bytes: number }> = [
@@ -415,13 +422,7 @@ export class KeyedChatSessionState {
         // ── base frame decision ─────────────────────────────────────────────
         const nextHistory = typeof observation.historySessionId === 'string' ? observation.historySessionId : null;
         let baseReason: ChatBaseReason | null = this.pendingBase;
-        if (
-            !baseReason &&
-            this.historySessionId !== undefined &&
-            this.historySessionId !== null &&
-            nextHistory !== null &&
-            nextHistory !== this.historySessionId
-        ) {
+        if (!baseReason && this.isLineageSwitch(observation)) {
             baseReason = 'lineage_switch';
         }
         const forceAll = baseReason === 'resync_request' || baseReason === 'writer_change';
