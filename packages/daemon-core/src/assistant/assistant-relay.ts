@@ -146,6 +146,8 @@ export class AssistantRelay {
     private readonly progressSent = new Set<string>();
     private readonly stallSent = new Set<string>();
     private readonly lastRelayAt = new Map<string, number>();
+    /** Historical gaps already surfaced to each assistant session in this process. */
+    private readonly notifiedGaps = new Map<string, Map<string, number>>();
     private readonly modalOpen = new Set<string>();
     /** Remote-hosted projects: the host's last poll answer (work counts, status line). */
     private readonly remote = new Map<string, RemoteProjectSnapshot>();
@@ -632,11 +634,13 @@ export class AssistantRelay {
         // delivery is itself about to create — its own folded turns — plus any
         // still unacknowledged from before, so the last relay of a quiet
         // stretch still reports its fold.
-        const gap = buildMissedReportsLine(this.missedReportsIncluding(taken, parts));
+        const missed = this.missedReportsIncluding(taken, parts);
+        const gap = parts.some((p) => p.source === 'review') ? '' : this.newGapLine(sid, missed, taken, parts);
         const text = [...parts.map((p) => p.text), ...(gap ? [gap] : [])].join('\n\n');
         const outcome = await this.ports.submit(sid, { text, messageId, policy: { mode: 'queue' } });
         if (outcome.kind === 'refused') return;
         this.commitTaken(taken, parts, sid);
+        if (gap) this.rememberGaps(sid, missed);
     }
 
     /**
@@ -646,7 +650,11 @@ export class AssistantRelay {
     async pullPending(sessionId: string | null): Promise<AssistantPulledEvent[]> {
         await this.idle();
         const { taken, parts } = await this.takeParts(this.clock.now(), sessionId);
+        const missed = this.missedReportsIncluding(taken, parts);
+        const gap = parts.some((p) => p.source === 'review') ? '' : this.newGapLine(sessionId, missed, taken, parts);
+        if (gap && parts.length) parts.push({ text: gap, source: 'relay', messageId: `gap:${this.clock.now()}:${++this.seq}` });
         this.commitTaken(taken, parts, sessionId);
+        if (gap && parts.length) this.rememberGaps(sessionId, missed);
         return parts.map((p) => ({ source: p.source, messageId: p.messageId, text: p.text, ...(p.meshId ? { meshId: p.meshId } : {}) }));
     }
 
@@ -698,18 +706,14 @@ export class AssistantRelay {
         if (sid) for (const p of parts) this.ports.inputLog.append(sid, p.source, { at, messageId: p.messageId });
         if (sid) for (const p of parts) if (p.source === 'review') this.ports.onReviewDelivered?.(sid, p.messageId, at);
         const relayItems = taken.filter((i): i is Item & { kind: 'relay' } => i.kind === 'relay');
-        // `renderRelay` now puts EVERY attempt's own captured body into the
-        // envelope (owner decision 2026-10-10, fix for the 2026-10-10 loss) —
-        // so once an item's envelope went out, every attempt it folded counts
-        // as rendered, not just the last. A 24 h-old item is still replaced
-        // wholesale by `buildFoldedBacklogLine` and renders nothing: that is
-        // the one remaining, measured loss (`countUnrendered`). Keyed off the
-        // parts actually built, so an item dropped by the delivery budget (it
-        // stays queued) is never miscounted as sent.
+        // Only captured bodies actually sent count as rendered. An aged-out
+        // backlog or a missing-body placeholder settles without claiming its
+        // report arrived. Items outside the delivery budget stay queued.
         const sentIds = new Set(parts.map((p) => p.messageId));
         const rendered = relayItems.flatMap((i) => {
             const last = i.attemptIds[i.attemptIds.length - 1]!;
-            return sentIds.has(relayMessageId(i.meshId, last)) ? i.attemptIds : [];
+            return sentIds.has(relayMessageId(i.meshId, last))
+                ? i.attemptIds.filter((id) => this.hasCapturedBody(id)) : [];
         });
         this.ports.store.markDelivered(relayItems.flatMap((i) => i.attemptIds), at, rendered);
         for (const id of relayItems.flatMap((i) => i.attemptIds)) this.attemptBodies.delete(id);
@@ -743,6 +747,29 @@ export class AssistantRelay {
         return this.unrenderedByMesh().get(meshId) ?? 0;
     }
 
+    private newGapLine(sessionId: string | null, missed: readonly { slug: string; count: number }[], taken: readonly Item[], parts: readonly Part[]): string {
+        const seen = this.notifiedGaps.get(sessionId ?? '');
+        const sentIds = new Set(parts.map((p) => p.messageId));
+        const newLosses = new Set<string>();
+        for (const item of taken) {
+            if (item.kind !== 'relay') continue;
+            if (!sentIds.has(relayMessageId(item.meshId, item.attemptIds[item.attemptIds.length - 1]!))
+                || item.attemptIds.some((id) => !this.hasCapturedBody(id))) {
+                newLosses.add(this.ports.projectSlug(item.meshId) ?? item.meshId);
+            }
+        }
+        // Retention can lower the historical total: a newly lost body still
+        // needs a notice even when its count equals an older, pruned total.
+        return buildMissedReportsLine(missed.filter((m) => newLosses.has(m.slug) || m.count > (seen?.get(m.slug) ?? 0)));
+    }
+
+    private rememberGaps(sessionId: string | null, missed: readonly { slug: string; count: number }[]): void {
+        const key = sessionId ?? '';
+        const seen = this.notifiedGaps.get(key) ?? new Map<string, number>();
+        for (const m of missed) seen.set(m.slug, m.count);
+        this.notifiedGaps.set(key, seen);
+    }
+
     /** Stored gaps (not yet counted again) per mesh. */
     private unrenderedByMesh(): Map<string, number> {
         return new Map(this.ports.store.countUnrendered().byMesh.map((r) => [r.meshId, r.count]));
@@ -755,14 +782,16 @@ export class AssistantRelay {
         for (const item of taken) {
             if (item.kind !== 'relay') continue;
             const last = item.attemptIds[item.attemptIds.length - 1]!;
-            // A rendered item's envelope now carries every attempt's own body
-            // (`renderRelay`) — nothing is missed. Only an item that did not go
-            // out at all (aged-out backlog, replaced by `buildFoldedBacklogLine`)
-            // folds every attempt.
-            const missed = sentIds.has(relayMessageId(item.meshId, last)) ? 0 : item.attemptIds.length;
+            // Missing captures and aged-out items do not deliver their reports.
+            const missed = sentIds.has(relayMessageId(item.meshId, last))
+                ? item.attemptIds.filter((id) => !this.hasCapturedBody(id)).length : item.attemptIds.length;
             if (missed > 0) counts.set(item.meshId, (counts.get(item.meshId) ?? 0) + missed);
         }
         return this.slugCounts(counts);
+    }
+
+    private hasCapturedBody(attemptId: string): boolean {
+        return !!this.attemptBodies.get(attemptId)?.trim();
     }
 
     private slugCounts(counts: ReadonlyMap<string, number>): Array<{ slug: string; count: number }> {

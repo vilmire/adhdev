@@ -125,7 +125,7 @@ export function buildMissedReportsLine(missed: readonly { slug: string; count: n
     const per = rows.map((m) => `${safeSlug(m.slug)}: ${m.count}`).join(', ');
     const total = rows.reduce((n, m) => n + m.count, 0);
     return `[ADHDev relay gap] ${total} coordinator ${total === 1 ? 'report' : 'reports'} did not reach you in full (${per}). `
-        + 'Use project_read for a project listed here before assuming nothing happened in it.';
+        + 'These are cumulative earlier losses, not new losses on every notice. Use project_read for a project listed here before assuming nothing happened in it.';
 }
 
 /** 24 h+ undelivered relays of one project, folded (§4.3 backlog). */
@@ -177,7 +177,7 @@ export function buildProgressSignal(slug: string, assigned: number | null): stri
 }
 
 export function buildStallSignal(slug: string, work: { pending: number; activeMissions: number }): string {
-    return `[project ${safeSlug(slug)}] no progress for 30 min: ${work.pending} pending, 0 assigned, ${work.activeMissions} active mission${work.activeMissions === 1 ? '' : 's'}. Check project_status and tell the user.`;
+    return `[project ${safeSlug(slug)}] no progress for 30 min: ${work.pending} pending, 0 assigned, ${work.activeMissions} active mission${work.activeMissions === 1 ? '' : 's'}. Check project_status and project_read. Continue unfinished work only within the user's existing request and authorization, or report the specific blocker to the user.`;
 }
 
 export interface RestartContext {

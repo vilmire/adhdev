@@ -268,7 +268,7 @@ describe('relay trigger and batching', () => {
         expect(h.relay.missedReports()).toEqual([{ slug: 'blog', count: 1 }]);
     });
 
-    it('keeps reporting an earlier (backlog-aged) gap on later deliveries until it is seen', async () => {
+    it('announces a historical gap once per assistant session while retaining its status count', async () => {
         const h = harness();
         h.state.assistant = null;
         h.relay.openThread(MESH);
@@ -280,13 +280,90 @@ describe('relay trigger and batching', () => {
         expect(h.submits[0]!.text).toMatch(/^\[project blog\]/);
         expect(h.relay.missedReports()).toEqual([{ slug: 'blog', count: 1 }]);
 
-        // a later, clean relay still carries the outstanding count
+        expect(h.submits[0]!.text).toContain('[ADHDev relay gap]');
+        // A later clean relay must not restart the same project_read loop.
         h.emit(turn('committed', COORD, 2, h.clock.now()));
         h.clock.advance(RELAY_QUIET_MS);
         await settle(h);
         expect(h.submits).toHaveLength(2);
-        expect(h.submits[1]!.text).toContain('[ADHDev relay gap]');
+        expect(h.submits[1]!.text).not.toContain('[ADHDev relay gap]');
+        expect(h.relay.missedReports()).toEqual([{ slug: 'blog', count: 1 }]);
+        h.state.assistant = 'asst_2';
+        h.emit(turn('committed', COORD, 3, h.clock.now()));
+        h.clock.advance(RELAY_QUIET_MS);
+        await settle(h);
+        expect(h.submits[2]!.text).toContain('blog: 1');
+    });
+
+    it('counts a missing captured body as a gap and only announces increases', async () => {
+        const h = harness();
+        h.relay.openThread(MESH);
+        h.state.tail = null;
+        h.emit(turn('committed', COORD, 1, h.clock.now()));
+        h.clock.advance(RELAY_QUIET_MS);
+        await settle(h);
+        expect(h.submits[0]!.text).toContain('blog: 1');
+        expect(h.relay.missedReportsFor(MESH)).toBe(1);
+        h.state.tail = 'Complete report';
+        h.emit(turn('committed', COORD, 2, h.clock.now()));
+        h.clock.advance(RELAY_QUIET_MS);
+        await settle(h);
+        expect(h.submits[1]!.text).not.toContain('[ADHDev relay gap]');
+        h.state.tail = null;
+        h.emit(turn('committed', COORD, 3, h.clock.now()));
+        h.clock.advance(RELAY_QUIET_MS);
+        await settle(h);
+        expect(h.submits[2]!.text).toContain('blog: 2');
+        expect(h.relay.missedReportsFor(MESH)).toBe(2);
+    });
+
+    it('does not consume a gap notice when submission is refused', async () => {
+        const h = harness();
+        h.relay.openThread(MESH);
+        h.state.tail = null;
+        h.state.outcome = { kind: 'refused', reason: 'session_busy' } as SubmitOutcome;
+        h.emit(turn('committed', COORD, 1, h.clock.now()));
+        h.clock.advance(RELAY_QUIET_MS);
+        await settle(h);
+        expect(h.submits[0]!.text).toContain('blog: 1');
+        expect(h.relay.missedReportsFor(MESH)).toBe(0);
+        h.state.outcome = { kind: 'delivered' };
+        h.relay.tick();
+        await settle(h);
         expect(h.submits[1]!.text).toContain('blog: 1');
+        expect(h.relay.missedReportsFor(MESH)).toBe(1);
+    });
+
+    it('announces a new loss even when retention removes the previous loss', async () => {
+        const h = harness();
+        h.relay.openThread(MESH);
+        h.state.tail = null;
+        h.emit(turn('committed', COORD, 1, h.clock.now()));
+        h.clock.advance(RELAY_QUIET_MS);
+        await settle(h);
+        h.store.prune(h.clock.now() + 8 * 24 * 60 * MIN);
+        h.emit(turn('committed', COORD, 2, h.clock.now()));
+        h.clock.advance(RELAY_QUIET_MS);
+        await settle(h);
+        expect(h.submits[1]!.text).toContain('blog: 1');
+    });
+
+    it('includes a gap notice in MCP pull delivery without repeating it', async () => {
+        const h = harness();
+        h.state.assistant = null;
+        h.relay.openThread(MESH);
+        h.state.tail = null;
+        h.emit(turn('committed', COORD, 1, h.clock.now()));
+        h.clock.advance(RELAY_QUIET_MS);
+        await settle(h);
+        const first = await h.relay.pullPending('mcp_client');
+        expect(first.map((e) => e.text).join('\n')).toContain('blog: 1');
+        h.state.tail = 'Complete report';
+        h.emit(turn('committed', COORD, 2, h.clock.now()));
+        h.clock.advance(RELAY_QUIET_MS);
+        await settle(h);
+        const second = await h.relay.pullPending('mcp_client');
+        expect(second.map((e) => e.text).join('\n')).not.toContain('[ADHDev relay gap]');
     });
 
     it('dedupes a re-committed attempt id (restart-absorbed plain attempt)', async () => {
