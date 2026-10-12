@@ -1,3 +1,4 @@
+import type { ProviderApprovalTarget } from '@adhdev/mesh-shared'
 import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next'
 import { queueTaskDisplayText } from '../../utils/queue-task-label';
@@ -125,13 +126,14 @@ export default function MeshOverviewCards({
     // coordinator's mesh_approve, which forwards resolve_action to the target node+session.
     // Null seam (no daemon connection) → no-op; the inbox stays read-only in that case.
     const resolveApproval = useCallback(
-        async (nodeId: string, sessionId: string, action: PendingApprovalAction) => {
-            if (!daemonId || !sendDaemonCommand) return
+        async (nodeId: string, sessionId: string, action: PendingApprovalAction, approvalTarget?: ProviderApprovalTarget) => {
+            if (!daemonId || !sendDaemonCommand || !approvalTarget) return
             await sendDaemonCommand(daemonId, 'mesh_approve', {
                 meshId: meshId ?? undefined,
                 node_id: nodeId,
                 session_id: sessionId,
                 action,
+                approval_target: approvalTarget,
             })
         },
         [daemonId, meshId, sendDaemonCommand],

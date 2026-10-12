@@ -267,7 +267,10 @@ const GUARDS: Record<Exclude<GuardId, 'otherwise'>, (ctx: GuardCtx) => boolean> 
     stale_session_distinct: (ctx) => !!ctx.attempt && !sessionIdsEquivalent(ctx.evidence.sessionId, ctx.attempt.sessionId),
     reclaiming_refusal: (ctx) => ctx.evidence.kind === 'delivery_refused'
         && (RECLAIMING_SEND_REFUSALS as readonly string[]).includes(ctx.evidence.reason),
-    suspension_changed: (ctx) => ctx.evidence.kind === 'suspension' && ctx.attempt?.suspension !== ctx.evidence.modal,
+    stale_modal_resolution: (ctx) => ctx.evidence.kind === 'suspension_resolved' && !!ctx.evidence.modalKey && !!ctx.attempt?.data.providerSuspension?.modalKey && ctx.evidence.modalKey !== ctx.attempt.data.providerSuspension.modalKey,
+    held_provider_setup: (ctx) => !(ctx.evidence.kind === 'suspension_resolved' && ctx.evidence.modalKey && ctx.evidence.modalKey !== ctx.attempt?.data.providerSuspension?.modalKey) && ctx.attempt?.data.providerSuspension?.providerSetup === true && ctx.attempt.data.providerSuspension.generation === ctx.attempt.generation && ctx.attempt.data.providerSuspension.resolvedAt === null,
+    confirmed_provider_setup: (ctx) => ctx.evidence.kind === 'suspension' && ctx.evidence.providerSetup === true && !!ctx.evidence.modalKey,
+    suspension_changed: (ctx) => ctx.evidence.kind === 'suspension' && (ctx.attempt?.suspension !== ctx.evidence.modal || (!!ctx.evidence.modalKey && ctx.attempt?.data.providerSuspension?.modalKey !== ctx.evidence.modalKey)),
     // Every idle-signal guard below yields to R9t once a report is recorded for
     // this generation (`!reportedThisGeneration`): the report is the verdict.
     end_genuine: (ctx) => { const e = completionEnd(ctx); return !!e && e.strength === 'genuine' && !e.hollow && notHeld(ctx) && !reportAwaitedEnd(ctx) && !reportedThisGeneration(ctx); },
@@ -680,6 +683,7 @@ const ACTIONS: Record<ActionId, (draft: Draft) => void> = {
         const held = draft.holds.get(holdId(attempt.attemptId, 'suspension_before_consumed'));
         if (!held) return;
         const modal = held.data.modal === 'choice' ? 'choice' : 'approval';
+        attempt.data.providerSuspension = { generation: attempt.generation, modalKey: typeof held.data.modalKey === 'string' ? held.data.modalKey : null, providerSetup: held.data.providerSetup === true, at: held.data.suspendedAt === null ? null : Number(held.data.suspendedAt ?? held.createdAt), resolvedAt: null };
         releaseHolds(draft, ['suspension_before_consumed']);
         attempt.state = 'suspended';
         attempt.suspension = modal;
@@ -688,11 +692,15 @@ const ACTIONS: Record<ActionId, (draft: Draft) => void> = {
     },
     suspend: (draft) => {
         const attempt = draft.attempt!;
-        attempt.suspension = (draft.ctx.evidence as TurnEvidenceOf<'suspension'>).modal;
+        const ev = draft.ctx.evidence as TurnEvidenceOf<'suspension'>;
+        attempt.suspension = ev.modal;
+        attempt.data.providerSuspension = { generation: attempt.generation, modalKey: ev.modalKey ?? null, providerSetup: ev.providerSetup === true, at: ev.clockUnknown ? null : ev.at, resolvedAt: null };
         attempt.weakSince = null;
     },
     resume: (draft) => {
-        draft.attempt!.suspension = null;
+        const attempt = draft.attempt!;
+        attempt.suspension = null;
+        if (attempt.data.providerSuspension?.generation === attempt.generation) attempt.data.providerSuspension.resolvedAt = draft.ctx.evidence.at;
     },
     resume_by_activity: (draft) => {
         const attempt = draft.attempt!;
@@ -823,7 +831,7 @@ function applyTemplate(template: EffectTemplate, draft: Draft): void {
             } else {
                 reason = template.reason;
             }
-            if (reason === 'suspension_before_consumed' && ev.kind === 'suspension') data.modal = ev.modal;
+            if (reason === 'suspension_before_consumed' && ev.kind === 'suspension') { data.modal = ev.modal; data.modalKey = ev.modalKey ?? null; data.suspendedAt = ev.clockUnknown ? null : ev.at; data.providerSetup = ev.providerSetup === true; }
             if (TEXT_CARRYING_HOLDS.includes(reason)) {
                 data.textEventId = ev.eventId;
                 const opener = summaryOf(ev);

@@ -1,3 +1,4 @@
+import { projectProviderApproval } from './provider-approval.js';
 /**
  * Status Builders — shared conversion functions for ProviderState → ManagedEntry
  *
@@ -456,6 +457,7 @@ function buildCliSession(state: CliProviderState, options: SessionEntryBuildOpti
     const meshQueueStats = effectiveMeshId ? getMeshQueueStats(effectiveMeshId) : undefined;
     const resolved = resolveSessionStatusUnified({ sessionId: state.instanceId, providerType: state.type, activeChat, providerStatus: state.status });
     const resolvedStatus = resolved.status;
+    if (activeChat) activeChat.providerApproval = projectProviderApproval(state.activeChat?.providerApproval, state.instanceId!, state.type, resolvedStatus === 'waiting_approval');
     return {
         id: state.instanceId,
         parentId: null,

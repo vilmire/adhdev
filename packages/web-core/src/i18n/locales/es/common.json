@@ -744,7 +744,22 @@
             "sessionFallback": "sesión {{id}}",
             "approve": "Aprobar",
             "reject": "Rechazar",
-            "waitingFor": "Esperando {{duration}}"
+            "waitingFor": "Esperando {{duration}}",
+            "types": {
+                "tool_permission": "Permiso de herramienta del proveedor",
+                "provider_setup": "Decisión de configuración",
+                "unknown": "Estado del proveedor sin confirmar"
+            },
+            "evidence": {
+                "live": "Diálogo en vivo",
+                "cached": "En caché / desconectado",
+                "unavailable": "Diálogo no disponible"
+            },
+            "needsAttention": "Requiere atención — abrir la sesión",
+            "runtimeDirectory": "Directorio de ejecución",
+            "displayedDirectory": "Directorio solicitado para confianza",
+            "directoryUnknown": "No indicado en el diálogo",
+            "openSession": "Abrir sesión exacta"
         },
         "difficulty": {
             "easy": "Fácil",

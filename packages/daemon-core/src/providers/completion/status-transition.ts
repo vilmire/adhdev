@@ -516,7 +516,9 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
                         modal: 'approval',
                         // Reuse the fingerprint already computed above (message +
                         // buttons + approvalEntrySeq) — never recompute one.
-                        modalKey: approvalFingerprint,
+                        modalKey: adapterStatus?.providerApproval?.modalKey ?? approvalFingerprint,
+                        clockUnknown: adapterStatus?.providerApproval?.createdAt === null,
+                        providerSetup: adapterStatus?.providerApproval?.type === 'provider_setup' && adapterStatus.providerApproval.evidence === 'live',
                     });
                 }
             }

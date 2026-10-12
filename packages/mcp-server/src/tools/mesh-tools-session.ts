@@ -1,3 +1,4 @@
+import type { ProviderApprovalTarget } from '@adhdev/mesh-shared';
 // Mesh tool implementations — session domain.
 // Pure move out of mesh-tools.ts (no behavior change). Helpers are imported from the
 // modules that define them; mesh-tools.ts is the tool barrel.
@@ -23,6 +24,7 @@ import {
 import { annotateRapidReadChatAdvisory } from './read-chat-polling-advisory.js';
 import {
     collectPendingApprovals,
+    collectProviderDecisionAttention,
     isP2pRelayTransportFailure,
     resolveAllowSendKeysDestructive,
     resolveDelegatedWorkerAutoApprove,
@@ -947,7 +949,7 @@ export async function meshLaunchSession(
 
 export async function meshApprove(
     ctx: MeshContext,
-    args: { node_id: string; session_id: string; action: string },
+    args: { node_id: string; session_id: string; action: string; approval_target?: ProviderApprovalTarget },
 ): Promise<string> {
     const node = await findNodeWithRefresh(ctx, args.node_id); // membership check
 
@@ -960,6 +962,7 @@ export async function meshApprove(
         ...(cached?.providerType ? { agentType: cached.providerType, providerType: cached.providerType } : {}),
         ...(providerSessionId ? { providerSessionId } : {}),
         action: args.action === 'reject' ? 'reject' : 'approve',
+        ...(args.approval_target ? { approvalTarget: args.approval_target } : {}),
     });
     return JSON.stringify(result, null, 2);
 }
@@ -1038,8 +1041,9 @@ export async function meshListPendingApprovals(
     return JSON.stringify({
         count: approvals.length,
         approvals,
+        needsAttention: collectProviderDecisionAttention(liveNodes),
         ...(approvals.length === 0
-            ? { note: 'No sessions are currently awaiting an approval decision.' }
+            ? { note: 'No confirmed live tool permissions are actionable. Setup/incomplete decisions are listed separately.' }
             : { nextStep: 'Resolve each with mesh_approve(node_id, session_id, action: "approve" | "reject").' }),
     }, null, 2);
 }

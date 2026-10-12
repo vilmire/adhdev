@@ -744,7 +744,22 @@
             "sessionFallback": "セッション {{id}}",
             "approve": "承認",
             "reject": "却下",
-            "waitingFor": "{{duration}} 待機中"
+            "waitingFor": "{{duration}} 待機中",
+            "types": {
+                "tool_permission": "プロバイダーツール権限",
+                "provider_setup": "プロバイダー設定の判断",
+                "unknown": "未確認のプロバイダー状態"
+            },
+            "evidence": {
+                "live": "ライブモーダル",
+                "cached": "キャッシュ / 未接続",
+                "unavailable": "モーダル取得不可"
+            },
+            "needsAttention": "確認が必要 — 対象セッションを開く",
+            "runtimeDirectory": "実行ディレクトリ",
+            "displayedDirectory": "信頼を求めるディレクトリ",
+            "directoryUnknown": "ライブモーダルに表示なし",
+            "openSession": "対象セッションを開く"
         },
         "difficulty": {
             "easy": "簡単",

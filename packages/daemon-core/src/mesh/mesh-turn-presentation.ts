@@ -70,6 +70,8 @@ interface TurnPresentationRow {
     taskId: string | null;
     /** 1-based attempt ordinal (ledger `attempt_no` + 1 — the graph output `attempt` field's convention). */
     attemptSeq: number;
+    generation?: number;
+    providerSuspension?: TurnAttempt['data']['providerSuspension'];
     sessionId: string | null;
     nodeId: string | null;
     providerType: string | null;
@@ -88,7 +90,9 @@ function isoOrNull(ms: number | null | undefined): string | null {
 }
 
 /** Surface stage of a ledger attempt (`suspended` → approval / choice by its suspension). */
-export function surfaceStageOfAttempt(attempt: Pick<TurnAttempt, 'state' | 'suspension'>): TurnStage {
+export function surfaceStageOfAttempt(attempt: Pick<TurnAttempt, 'state' | 'suspension'> & Partial<Pick<TurnAttempt, 'data' | 'generation'>>): TurnStage {
+    const setup = attempt.data?.providerSuspension;
+    if (setup?.providerSetup && setup.generation === attempt.generation && setup.resolvedAt === null && (attempt.state === 'accepted' || attempt.state === 'delivered')) return 'waiting_approval';
     if (attempt.state === 'suspended') return attempt.suspension === 'choice' ? 'waiting_choice' : 'waiting_approval';
     return attempt.state;
 }
@@ -100,6 +104,8 @@ export function presentationRowFromAttempt(attempt: TurnAttempt, updatedAtMs: nu
         meshId: attempt.meshId,
         taskId: attempt.taskId,
         attemptSeq: attempt.attemptNo + 1,
+        generation: attempt.generation,
+        providerSuspension: attempt.data.providerSuspension,
         sessionId: attempt.sessionId || null,
         nodeId: attempt.nodeId,
         providerType: attempt.providerType,
@@ -318,7 +324,7 @@ export function presentationFromAttemptRow(row: TurnPresentationRow, nowMs: numb
         terminalAt: row.terminalAt ?? null,
         updatedAt: row.updatedAt ?? null,
         projectionAgeMs: ageMs(nowMs, row.updatedAt),
-        approvalAgeMs: stage === 'waiting_approval' ? ageMs(nowMs, row.updatedAt) : null,
+        approvalAgeMs: stage === 'waiting_approval' && row.providerSuspension?.generation === row.generation ? ageMs(nowMs, isoOrNull(row.providerSuspension?.at)) : null,
         choiceAgeMs: stage === 'waiting_choice' ? ageMs(nowMs, row.updatedAt) : null,
         finalizingAgeMs: stage === 'finalizing' ? ageMs(nowMs, row.updatedAt) : null,
     };

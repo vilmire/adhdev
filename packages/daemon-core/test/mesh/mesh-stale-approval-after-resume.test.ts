@@ -52,7 +52,7 @@ function nodes(status: string) {
     return [{
         id: NODE_ID,
         nodeId: NODE_ID,
-        sessions: [{ id: SESSION_ID, status }],
+        sessions: [{ id: SESSION_ID, status, providerApproval: { source: 'provider_modal', type: 'tool_permission', evidence: 'live', lifecycle: 'pending', modalKey: 'modal:fixture', createdAt: Date.parse(APPROVAL_AT), resolvedAt: null, actionable: true, buttons: ['Yes', 'No'], description: '' } }],
     }] as any[]
 }
 
@@ -114,7 +114,7 @@ describe('stale approval after the worker resumes', () => {
         expect(approvals[0]).toMatchObject({ nodeId: NODE_ID, sessionId: SESSION_ID, status: 'awaiting_approval' })
     })
 
-    it('KEEPS it when the live session status is unreadable (no live evidence the modal closed)', () => {
+    it('does not offer an action when only a ledger approval and unreadable status remain)', () => {
         // Session present but with a status this projection cannot classify —
         // absence of contradicting evidence must not clear a blocked row.
         const { activeWork } = buildMeshActiveWork({
@@ -125,7 +125,7 @@ describe('stale approval after the worker resumes', () => {
             nodes: [{ id: NODE_ID, nodeId: NODE_ID, sessions: [{ id: SESSION_ID, status: 'something-unknown' }] }] as any,
             now: NOW,
         })
-        expect(collectPendingApprovals(activeWork)).toHaveLength(1)
+        expect(collectPendingApprovals(activeWork)).toHaveLength(0)
     })
 
     it('REGRESSION: a real terminal still wins over a live blocked sniff', () => {

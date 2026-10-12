@@ -77,6 +77,7 @@ export const MESH_APPROVE_TOOL = {
     inputSchema: {
         type: 'object' as const,
         properties: {
+            approval_target: { type: 'object', description: 'Exact live provider permission identity from the Inbox. Never grants owner staged-write consent.', properties: { modalKey: { type: 'string' }, attemptId: { type: ['string', 'null'] }, generation: { type: ['integer', 'null'] } }, required: ['modalKey', 'attemptId', 'generation'], additionalProperties: false },
             node_id: { type: 'string', description: 'Target node ID.' },
             session_id: { type: 'string', description: 'Agent session ID with pending approval.' },
             action: { type: 'string', enum: ['approve', 'reject'], description: 'Action to take.' },
@@ -128,7 +129,7 @@ export const MESH_ANSWER_QUESTION_TOOL = {
 
 export const MESH_LIST_PENDING_APPROVALS_TOOL = {
     name: 'mesh_list_pending_approvals',
-    description: 'List every session across the mesh that is currently awaiting an approval decision (status awaiting_approval) — the mesh-wide approval inbox. '
+    description: 'List confirmed live provider tool permissions across the mesh. Count excludes status-only waits, setup gates, cached evidence and owner staged-write ratification. '
         + 'mesh_approve resolves ONE (node_id, session_id) at a time; this read-only tool enumerates the full pending set so you can see all blocked sessions at once and drive a mesh_approve for each. '
         + 'Each row carries nodeId, sessionId, providerType, taskTitle, and how long it has been waiting (waitingSince/waitingMs), longest-waiting first. Does not mutate anything.',
     inputSchema: {

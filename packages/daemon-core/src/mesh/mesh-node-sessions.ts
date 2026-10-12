@@ -1,3 +1,4 @@
+import { projectProviderApproval } from '../status/provider-approval.js';
 // Mesh node session views: hosted/active session ids from the inline cache, the
 // live session records attributed to a node, and the historical-session summary.
 // Split out of mesh-node-identity.ts (re-exported there).
@@ -211,6 +212,7 @@ export function summarizeMeshSessionRecord(record: any): Record<string, unknown>
         providerType: readStringValue(record?.providerType),
         state,
         chatStatus,
+        providerApproval: projectProviderApproval(record?.providerApproval ?? record?.activeChat?.providerApproval ?? meta.providerApproval ?? null, sessionId, readStringValue(record?.providerType) || ''),
         ...(turn.authority === 'turn_reducer' ? { turn, attemptId: turn.attemptId, turnStage: turn.stage } : {}),
         lifecycle: readStringValue(record?.lifecycle),
         surfaceKind: getSessionHostSurfaceKind(record as any),

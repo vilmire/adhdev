@@ -17,6 +17,7 @@
  * without pretending to implement anything.
  */
 'use strict';
+import { ProviderApprovalLifecycle, readDisplayedTrustDirectory, bindProviderApprovalAssignment, providerApprovalAssignment } from './provider-approval-lifecycle.js';
 import { FsmDriver } from './fsm-driver.js';
 import type { DashboardEvent, ISpecDriver } from './fsm-driver-types.js';
 import type { ClaimedQueuedSend } from './send-submit-engine.js';
@@ -116,12 +117,13 @@ export class SpecCliAdapter implements CliAdapter {
      *  the owning provider instance is disposed. */
     private runtimeSettings: Record<string, unknown> = {};
     private latestState: { id: string; label: string; title: string | null; status: FsmStatus } | null = null;
+    private approvalLifecycle = new ProviderApprovalLifecycle();
     private latestModal: { title: string | null; buttons: { index: number; label: string }[]; kind?: 'approval' | 'picker' | 'confirm' | null } | null = null;
     private statusCallback: (() => void) | null = null;
     private changeCallback: ((cause: AdapterChangeCause) => void) | null = null;
     private exitCallback: ((report: SpecAdapterExitReport) => void) | null = null;
     private signalCallback: ((report: SpecAdapterSignalReport) => void) | null = null;
-    private approvalResolvedCallback: ((event: { resolvedAt: number; buttonLabel?: string }) => void) | null = null;
+    private approvalResolvedCallback: ((event: { resolvedAt: number; buttonLabel?: string; modalKey?: string }) => void) | null = null;
     private ptyDataCallback: ((data: string) => void) | null = null;
     private activeInteractivePrompt: InteractivePrompt | null = null;
     private interactivePromptTransport: 'stream-json' | 'tui' | null = null;
@@ -444,7 +446,7 @@ export class SpecCliAdapter implements CliAdapter {
         if (!this.providerFailure && !this.exited && this.spawned) {
             this.refreshWirePendingQuestion();
         }
-        return projectAdapterStatus({
+        const projected = projectAdapterStatus({
             providerSessionId: this.providerSessionId,
             providerFailure: this.providerFailure,
             exited: this.exited,
@@ -460,6 +462,7 @@ export class SpecCliAdapter implements CliAdapter {
             lastScreenChangeAt: this.driver?.getLastScreenChangeAt?.(),
             attachedExistingRuntime: this.attachedExistingRuntime,
         });
+        return { ...projected, providerApproval: bindProviderApprovalAssignment(this.approvalLifecycle?.read(), this.runtimeSettings) };
     }
 
     /**
@@ -697,6 +700,7 @@ export class SpecCliAdapter implements CliAdapter {
     }
 
     resolveModalMatched(buttonIndex: number): boolean {
+        const resolvingModalKey = this.approvalLifecycle?.read()?.modalKey;
         // BUTTON-INDEX-MISMAP (Fix C): `buttonIndex` is an ARRAY POSITION into the
         // label list this adapter surfaced via getStatus().activeModal.buttons (the
         // same order pickApprovalButton / mesh_approve pick from). The FSM matches a
@@ -726,15 +730,18 @@ export class SpecCliAdapter implements CliAdapter {
         if (pressed && this.latestState?.status === 'approval') {
             const resolvedAt = Date.now();
             this.lastApprovalResolvedAt = resolvedAt;
+            this.approvalLifecycle?.resolve(resolvedAt);
+            try { this.driver.updateMeta({ providerApproval: bindProviderApprovalAssignment(this.approvalLifecycle?.read(), this.runtimeSettings) }); } catch { /* Optional host metadata transport. */ }
             this.approvalResolvedCallback?.({
                 resolvedAt,
+                ...(resolvingModalKey ? { modalKey: resolvingModalKey } : {}),
                 buttonLabel: buttons[buttonIndex]?.label,
             });
         }
         return pressed;
     }
 
-    setOnApprovalResolved(callback: ((event: { resolvedAt: number; buttonLabel?: string }) => void) | null): void {
+    setOnApprovalResolved(callback: ((event: { resolvedAt: number; buttonLabel?: string; modalKey?: string }) => void) | null): void {
         this.approvalResolvedCallback = callback;
     }
 
@@ -798,6 +805,7 @@ export class SpecCliAdapter implements CliAdapter {
     clearHistory(): void { /* no transcript buffer yet */ }
     updateRuntimeSettings(settings?: Record<string, unknown>): void {
         this.runtimeSettings = { ...(settings ?? {}) };
+        try { this.driver?.updateMeta({ providerApproval: bindProviderApprovalAssignment(this.approvalLifecycle?.read(), this.runtimeSettings) }); } catch { /* Optional host metadata transport. */ }
     }
     setServerConn(_conn?: unknown): void { /* server conn unused by SpecDriver */ }
     /** Map an invokeScript(name, args) call onto a control_bar entry — see invokeSpecControl. */
@@ -879,6 +887,8 @@ export class SpecCliAdapter implements CliAdapter {
     private handleEvent(ev: DashboardEvent): void {
         switch (ev.kind) {
             case 'state_changed':
+                this.approvalLifecycle?.observe(ev.state, ev.modal, !this.latestState && this.attachedExistingRuntime ? null : Date.now(), /trust/i.test(ev.state.id) ? { runtimeDirectory: this.workingDir, displayedDirectory: readDisplayedTrustDirectory(this.driver.snapshot() || '') } : undefined, providerApprovalAssignment(this.runtimeSettings));
+                try { this.driver.updateMeta({ providerApproval: bindProviderApprovalAssignment(this.approvalLifecycle?.read(), this.runtimeSettings) }); } catch { /* Optional host metadata transport. */ }
                 this.latestState = ev.state;
                 this.latestModal = ev.modal;
                 // info-level keeps only spec-defined identifiers (state.id /

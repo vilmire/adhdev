@@ -1,3 +1,4 @@
+import { matchesProviderApprovalTarget, projectProviderApproval } from '../status/provider-approval.js';
 /**
  * Chat Commands — write side: handleSendChat, handleListChats, handleNewChat,
  * handleSwitchChat, handleSetMode, handleChangeModel,
@@ -796,6 +797,7 @@ export async function handleResolveAction(h: CommandHelpers, args: any): Promise
     const provider = h.getProvider(args?.agentType);
     const transport = getTargetTransport(h, provider);
     const action = args?.action || 'approve';
+    if (args?.approvalTarget && transport !== 'pty') return { success: false, error: 'Exact provider permission target requires its live CLI session' };
     const button = args?.button || args?.buttonText
         || (action === 'approve' ? 'Accept' : action === 'reject' ? 'Reject' : 'Accept');
 
@@ -805,6 +807,12 @@ export async function handleResolveAction(h: CommandHelpers, args: any): Promise
     if (transport === 'pty') {
         const adapter = getTargetedCliAdapter(h, args, provider?.type);
         if (!adapter) return { success: false, error: 'CLI adapter not running' };
+
+        if (args?.approvalTarget) {
+            const approval = projectProviderApproval(adapter.getStatus()?.providerApproval, args.targetSessionId || h.currentSession?.sessionId || '', provider?.type || '');
+            if (!matchesProviderApprovalTarget(approval, args.approvalTarget)) return { success: false, stalePrompt: true, error: 'Approval target is no longer live or does not match the current modal/attempt' };
+            if (args.data || args.buttonIndex !== undefined || args.button || args.buttonText || !['approve', 'reject'].includes(action)) return { success: false, error: 'Inbox permission actions require ordinary approve/reject' };
+        }
 
         // Handle data-driven resolve actions (like from the dashboard 'Fix' button)
         if (args?.data && typeof adapter.resolveAction === 'function') {

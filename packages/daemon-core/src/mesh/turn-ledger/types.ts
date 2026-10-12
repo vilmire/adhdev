@@ -49,6 +49,7 @@ interface TurnTerminal {
 
 /** Content-free annotations stored on the attempt (`data_json`). */
 export interface TurnAttemptData {
+    providerSuspension?: { generation: number; modalKey: string | null; providerSetup?: boolean; at: number | null; resolvedAt: number | null };
     gitSideEffect?: { dirty: boolean; commitsSinceDispatch: number; attributable: boolean; at: number };
     /** R12r: how many report-awaiting idle ends the worker resumed from (false idles). Diagnostics only. */
     falseIdleCount?: number;

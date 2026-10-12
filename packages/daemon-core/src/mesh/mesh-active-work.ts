@@ -1,3 +1,4 @@
+import type { ProviderApproval } from '@adhdev/mesh-shared';
 import type { MeshLedgerEntry } from './mesh-ledger.js';
 import { meshRecord } from './mesh-record.js';
 import type { MeshWorkQueueEntry, DirectDispatchRecord } from './mesh-work-queue.js';
@@ -72,6 +73,7 @@ export interface MeshActiveWorkRecord {
     /** Stage 6: attempt identity + causal stage when the reducer projection is authoritative. */
     attemptId?: string;
     turnStage?: string;
+    providerApproval?: ProviderApproval | null;
 }
 
 export interface MeshActiveWorkSummary {
@@ -323,7 +325,7 @@ function elapsedSince(value: string | undefined, now: number): number {
     return Number.isFinite(started) ? Math.max(0, now - started) : 0;
 }
 
-export function sessionStatusFromNodes(nodes: any[] | undefined, nodeId?: string, sessionId?: string): { status?: MeshActiveWorkStatus; staleReason?: string } {
+export function sessionStatusFromNodes(nodes: any[] | undefined, nodeId?: string, sessionId?: string): { status?: MeshActiveWorkStatus; staleReason?: string; providerApproval?: ProviderApproval | null } {
     if (!Array.isArray(nodes)) return {};
     if (!nodeId) return { staleReason: 'direct task has no node id' };
     const node = nodes.find(item => meshNodeIdMatches(item, nodeId));
@@ -360,7 +362,7 @@ export function sessionStatusFromNodes(nodes: any[] | undefined, nodeId?: string
     // Check it first so a question worker is not mislabeled awaiting_approval and
     // pulled into the approval inbox (mission f1d25e11).
     if (raw.includes('waiting_choice') || raw.includes('choice')) return { status: 'awaiting_choice' };
-    if (raw.includes('approval')) return { status: 'awaiting_approval' };
+    if (raw.includes('approval')) return { status: 'awaiting_approval', providerApproval: session.isCached || (node.health && node.health !== 'online') ? null : session.providerApproval ?? session.activeChat?.providerApproval };
     if (raw.includes('generating') || raw.includes('running') || raw.includes('busy')) return { status: 'generating' };
     if (raw.includes('failed') || raw.includes('stopped') || raw.includes('terminated') || raw.includes('exited')) return { status: 'failed' };
     if (raw.includes('idle') || raw.includes('waiting_input') || raw.includes('ready')) return { status: 'idle' };
@@ -612,6 +614,7 @@ function buildLedgerDirectDispatchRecord(
         dispatchedAt: dispatch.timestamp,
         elapsedMs: elapsedSince(dispatch.timestamp, ctx.now),
         terminal: terminalRow,
+        providerApproval: live.providerApproval,
         terminalKind: terminal?.kind,
         terminalAt: terminal?.timestamp,
         staleReason: live.staleReason || ledgerOnlyStaleReason,
@@ -635,10 +638,11 @@ export interface MeshPendingApproval {
     taskTitle: string;
     /** Always 'awaiting_approval' — kept explicit so consumers can render/assert on it. */
     status: 'awaiting_approval';
-    /** ISO timestamp the underlying task was created/dispatched — the "waiting since" anchor. */
-    waitingSince: string;
-    /** Milliseconds the record has been outstanding (elapsed from dispatch/create). */
-    waitingMs: number;
+    /** Actual recorded approval or modal suspension time; null when unknown. */
+    waitingSince: string | null;
+    providerApproval: ProviderApproval;
+    /** Milliseconds blocked on this modal; null when the suspension clock is unknown. */
+    waitingMs: number | null;
 }
 
 /**
@@ -650,35 +654,42 @@ export interface MeshPendingApproval {
  * without a node/session are skipped: an approval that cannot be routed to a live
  * node+session via mesh_approve is not actionable inbox content.
  */
+/** Setup/incomplete evidence is attention, never a tool permission or owner consent. */
+export function collectProviderDecisionAttention(nodes: any[] | null | undefined): ProviderApproval[] {
+    const items = new Map<string, ProviderApproval>();
+    for (const node of nodes ?? []) {
+        for (const session of node.activeSessionDetails ?? []) {
+            const approval: ProviderApproval | null = session.providerApproval ?? session.activeChat?.providerApproval ?? null;
+            if (!approval || approval.source !== 'provider_modal' || approval.lifecycle !== 'pending') continue;
+            const evidence = session.isCached || node.health !== 'online' ? 'cached' : approval.evidence;
+            if (approval.type === 'tool_permission' && approval.actionable && evidence === 'live') continue;
+            const nodeId = node.nodeId || node.id;
+            const sessionId = session.sessionId || session.id;
+            if (!nodeId || !sessionId) continue;
+            items.set(`${nodeId}:${sessionId}`, { ...approval, nodeId, sessionId, evidence, actionable: false });
+        }
+    }
+    return [...items.values()];
+}
+
 export function collectPendingApprovals(activeWork: MeshActiveWorkRecord[]): MeshPendingApproval[] {
     const approvals: MeshPendingApproval[] = [];
     for (const record of activeWork) {
         if (record.status !== 'awaiting_approval') continue;
         if (!record.nodeId || !record.sessionId) continue;
-        // WAITING-SINCE ANCHOR (live defect, 2026-09-02): this used to report
-        // the task's original DISPATCH time — a moment before the modal existed,
-        // often by many minutes — so "waiting 41m" described the task's whole
-        // lifetime rather than how long the approval had actually been blocked,
-        // and the inbox sorted on that inflated figure. When the record's
-        // terminal row IS the approval event, its timestamp is the real moment
-        // the session became blocked; prefer it. Fall back to dispatch/creation
-        // for records whose blocked state came from a live-session sniff with no
-        // ledger row to date it (unchanged behaviour for that case).
-        const blockedAt = record.terminalKind === 'task_approval_needed' ? record.terminalAt : undefined;
+        const approval = record.providerApproval;
+        if (!approval || approval.source !== 'provider_modal' || approval.type !== 'tool_permission' || approval.evidence !== 'live'
+            || approval.lifecycle !== 'pending' || !approval.actionable || !approval.modalKey
+            || !Array.isArray(approval.buttons) || !approval.buttons.some(button => typeof button === 'string' && button.trim())) continue;
+        if (approval.taskId && approval.taskId !== record.taskId) continue;
+        if (record.attemptId && approval.attemptId && record.attemptId !== approval.attemptId) continue;
+        const recordedAt = record.terminalKind === 'task_approval_needed' ? record.terminalAt : undefined;
+        const blockedAt = recordedAt && (approval.createdAt === null || Date.parse(recordedAt) >= approval.createdAt) ? recordedAt : undefined;
+        const suspensionAt = approval.createdAt === null ? null : new Date(approval.createdAt).toISOString();
+        const waitingSince = blockedAt || suspensionAt;
         const dispatchAnchor = record.dispatchedAt || record.createdAt;
-        const waitingSince = blockedAt || dispatchAnchor;
-        // waitingMs must stay consistent with the anchor, or the inbox would
-        // sort on a dispatch-anchored figure while displaying a modal-anchored
-        // timestamp. `elapsedMs` is measured from `dispatchAnchor` against the
-        // build's `now`, so shifting the anchor forward subtracts exactly the
-        // gap between dispatch and the modal opening — no second clock read,
-        // which keeps every row comparable against the same `now`.
-        const anchorShiftMs = blockedAt && dispatchAnchor
-            ? new Date(blockedAt).getTime() - new Date(dispatchAnchor).getTime()
-            : 0;
-        const waitingMs = Number.isFinite(anchorShiftMs) && anchorShiftMs > 0
-            ? Math.max(0, record.elapsedMs - anchorShiftMs)
-            : record.elapsedMs;
+        const now = new Date(dispatchAnchor).getTime() + record.elapsedMs;
+        const waitingMs = waitingSince ? Math.max(0, now - new Date(waitingSince).getTime()) : null;
         approvals.push({
             nodeId: record.nodeId,
             sessionId: record.sessionId,
@@ -688,6 +699,7 @@ export function collectPendingApprovals(activeWork: MeshActiveWorkRecord[]): Mes
             status: 'awaiting_approval',
             waitingSince,
             waitingMs,
+            providerApproval: approval,
         });
     }
     // DETERMINISTIC DEDUP (rc.19 live defect: mesh_list_pending_approvals returned the
@@ -703,13 +715,13 @@ export function collectPendingApprovals(activeWork: MeshActiveWorkRecord[]): Mes
     for (const approval of approvals) {
         const key = `${approval.nodeId}::${approval.sessionId}`;
         const existing = bySession.get(key);
-        if (!existing || approval.waitingMs > existing.waitingMs) {
+        if (!existing || (approval.waitingMs ?? -1) > (existing.waitingMs ?? -1)) {
             bySession.set(key, approval);
         }
     }
     const deduped = [...bySession.values()];
     // Longest-waiting first — the coordinator/inbox should address the most-stalled approval first.
-    deduped.sort((a, b) => b.waitingMs - a.waitingMs);
+    deduped.sort((a, b) => (b.waitingMs ?? -1) - (a.waitingMs ?? -1));
     return deduped;
 }
 
@@ -735,7 +747,7 @@ export function buildMeshActiveWorkSummary(activeWork: MeshActiveWorkRecord[]): 
         totalActiveCount: activeWork.length,
         queueActiveCount: sourceCounts.queue,
         directActiveCount: sourceCounts.direct,
-        awaitingApprovalCount: statusCounts.awaiting_approval,
+        awaitingApprovalCount: collectPendingApprovals(activeWork).length,
         generatingCount: statusCounts.generating,
         failedCount: statusCounts.failed,
         idleCount: statusCounts.idle,
@@ -807,6 +819,7 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
             taskId: task.id,
             source: 'queue',
             status: queueStatus,
+            providerApproval: queueLive.providerApproval,
             ...(turnOverlay ? { attemptId: turnOverlay.attemptId, turnStage: turnOverlay.stage } : {}),
             nodeId: queueNodeId,
             sessionId: queueSessionId,
@@ -858,6 +871,7 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
                 taskId: dispatch.taskId,
                 source: 'direct',
                 status,
+                providerApproval: live.providerApproval,
                 ...(turnOverlay ? { attemptId: turnOverlay.attemptId, turnStage: turnOverlay.stage } : {}),
                 nodeId: dispatch.nodeId ?? undefined,
                 sessionId: dispatch.sessionId ?? undefined,
