@@ -10,6 +10,11 @@ import { getDaemonCommandRegistry } from '../../src/commands/router.js';
 import { specAcceptsMeshSource } from '../../src/commands/command-registry.js';
 
 const EXPECTED_SOURCES: Record<string, string[]> = {
+    assistant_environment: ['ipc', 'standalone'],
+    assistant_action: ['ipc', 'standalone'],
+    assistant_execution_state: ['ipc', 'p2p', 'standalone', 'ws'],
+    assistant_execution_settings: ['p2p', 'standalone', 'ws'],
+    assistant_project_watch: ['ipc', 'standalone'],
     assistant_projects: ['ipc', 'p2p', 'standalone', 'ws'],
     assistant_project_status: ['ipc', 'standalone'],
     assistant_project_send: ['ipc', 'standalone'],

@@ -14,7 +14,7 @@
 import type { MeshNodeFacts } from '@adhdev/mesh-shared';
 import { getDaemonBuildInfo } from '../build-info.js';
 import { readQuotaCache } from '../quota/refresh.js';
-import { getProviderSpecPins, getProviderEnablementFacts } from '../detection/cli-detector.js';
+import { getProviderSpecPins, getProviderEnablementFacts, readCachedProviderInventory } from '../detection/cli-detector.js';
 
 /**
  * ★PERFORMANCE CONTRACT: this function must stay CHEAP and SYNCHRONOUS.
@@ -104,6 +104,7 @@ export function buildLocalNodeFacts(deps?: {
     })();
     return {
         schemaVersion: 1,
+        providerInventory: readCachedProviderInventory(),
         reportedAt: Date.now(),
         ...(build ? { daemonBuild: build } : {}),
         ...(providerVersions ? { providerVersions } : {}),

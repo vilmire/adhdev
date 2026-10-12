@@ -36,6 +36,9 @@ const EMPTY_ENV = {} as NodeJS.ProcessEnv;
 /** Minimal valid arguments per tool, so the arg gate passes and the verb is reached. */
 const MINIMAL_ARGS: Record<string, Record<string, unknown>> = {
   projects: {},
+  environment: {},
+  assistant_action: { authorization: 'cap', meshId: 'm', targetSessionId: 's', action: 'approve', button: 'Accept' },
+  project_watch: { project: 'adhdev', action: 'list' },
   project_status: { project: 'adhdev' },
   project_send: { project: 'adhdev', message: 'run the tests' },
   project_read: { project: 'adhdev' },
@@ -53,7 +56,7 @@ function fakeTransport(reply: (type: string, args: Record<string, unknown>) => a
     calls,
     async command(type: string, args: Record<string, unknown> = {}) {
       calls.push({ type, args });
-      return reply(type, args);
+      return type === ASSISTANT_VERB.executionState ? { success: true, executionEnabled: true, executionAvailable: true } : reply(type, args);
     },
   };
 }
@@ -114,7 +117,7 @@ test('each tool calls ASSISTANT_TOOL_VERBS[tool] and forwards assistantSessionId
     const transport = fakeTransport();
     const res = await handleAssistantToolCall(transport, tools, 'sess-assistant-1', name, MINIMAL_ARGS[name]);
     assert.equal(res.isError, undefined, `${name}: ${res.content[0]?.text}`);
-    const toolCall = transport.calls[0];
+    const toolCall = transport.calls.find(c => c.type === ASSISTANT_TOOL_VERBS[name]);
     assert.ok(toolCall, `${name} made no daemon call`);
     assert.equal(toolCall.type, ASSISTANT_TOOL_VERBS[name], `${name} must call its verb`);
     assert.equal(toolCall.args[ASSISTANT_SESSION_ID_ARG], 'sess-assistant-1', `${name} must forward the session id`);

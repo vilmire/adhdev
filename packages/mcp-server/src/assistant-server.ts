@@ -12,6 +12,7 @@
  * `ADHDEV_ASSISTANT_SESSION_ID` is optional. It is routing/ownership only.
  */
 
+import { AssistantToolRefresh } from './assistant-tool-refresh.js';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
@@ -20,6 +21,7 @@ import { isAssistantTool } from '@adhdev/mesh-shared';
 import type { CommandTransport } from './transports/mode.js';
 import {
   attachAssistantEvents,
+  availableAssistantTools,
   callAssistantTool,
   readAssistantSessionIdFromEnv,
   resolveAssistantModeTools,
@@ -75,19 +77,29 @@ export async function startAssistantServer(opts: {
 
   const server = new Server(
     { name: 'adhdev-mcp-server', version: opts.serverVersion },
-    { capabilities: { tools: {} } },
+    { capabilities: { tools: { listChanged: true } } },
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
+  const refresh = new AssistantToolRefresh(opts.transport, assistantSessionId, tools, () => server.sendToolListChanged());
+  server.setRequestHandler(ListToolsRequestSchema, async () => {
+    const available = await availableAssistantTools(opts.transport, assistantSessionId, tools);
+    refresh.recordListed(available);
+    return { tools: available };
+  });
   server.setRequestHandler(CallToolRequestSchema, async (req) => handleAssistantToolCall(
     opts.transport,
-    tools,
+    await availableAssistantTools(opts.transport, assistantSessionId, tools),
     assistantSessionId,
     req.params.name,
     req.params.arguments as Record<string, unknown> | undefined,
   ));
 
   await server.connect(new StdioServerTransport());
+  await refresh.refresh();
+  const timer = setInterval(() => { void refresh.refresh().catch(() => {}); }, 3_000);
+  timer.unref();
+  const previousClose = server.onclose;
+  server.onclose = () => { clearInterval(timer); previousClose?.(); };
   process.stderr.write(
     `[adhdev-mcp] Server running in ${opts.mode} ASSISTANT mode — ${tools.length} tools`
       + `${assistantSessionId ? '' : ' (no ADHDEV_ASSISTANT_SESSION_ID: MCP-only assistant)'}.\n`,

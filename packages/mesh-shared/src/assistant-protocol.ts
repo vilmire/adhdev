@@ -18,6 +18,9 @@
 
 export const ASSISTANT_TOOLS = [
     'projects',
+    'environment',
+    'assistant_action',
+    'project_watch',
     'project_status',
     'project_send',
     'project_read',
@@ -41,6 +44,11 @@ export function isAssistantTool(value: unknown): value is AssistantTool {
 export const ASSISTANT_VERB = {
     // tool verbs
     projects: 'assistant_projects',
+    environment: 'assistant_environment',
+    action: 'assistant_action',
+    watch: 'assistant_project_watch',
+    executionState: 'assistant_execution_state',
+    executionSettings: 'assistant_execution_settings',
     projectStatus: 'assistant_project_status',
     projectSend: 'assistant_project_send',
     projectRead: 'assistant_project_read',
@@ -64,6 +72,9 @@ export type AssistantVerb = typeof ASSISTANT_VERB[keyof typeof ASSISTANT_VERB]
 /** The daemon verb each assistant tool calls. */
 export const ASSISTANT_TOOL_VERBS: Readonly<Record<AssistantTool, AssistantVerb>> = {
     projects: ASSISTANT_VERB.projects,
+    environment: ASSISTANT_VERB.environment,
+    assistant_action: ASSISTANT_VERB.action,
+    project_watch: ASSISTANT_VERB.watch,
     project_status: ASSISTANT_VERB.projectStatus,
     project_send: ASSISTANT_VERB.projectSend,
     project_read: ASSISTANT_VERB.projectRead,
@@ -81,10 +92,11 @@ export const ASSISTANT_TOOL_VERBS: Readonly<Record<AssistantTool, AssistantVerb>
  * because they cause effects (a coordinator message or launch, a new
  * project), and MCP clients use readOnlyHint to skip confirmation.
  */
-export const ASSISTANT_WRITE_TOOLS: readonly AssistantTool[] = ['memory', 'skill_manage', 'project_note', 'project_send', 'project_add']
+export const ASSISTANT_WRITE_TOOLS: readonly AssistantTool[] = ['project_watch', 'assistant_action', 'memory', 'skill_manage', 'project_note', 'project_send', 'project_add']
 
 /** Owner-only verbs: never reachable from the assistant's MCP server (no `ipc`). */
 export const ASSISTANT_OWNER_VERBS: readonly AssistantVerb[] = [
+    ASSISTANT_VERB.executionSettings,
     ASSISTANT_VERB.stagedResolve,
     ASSISTANT_VERB.storeAdmin,
     ASSISTANT_VERB.importSkills,

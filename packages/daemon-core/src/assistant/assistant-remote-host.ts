@@ -26,7 +26,7 @@ import type { LocalMeshEntry } from '../repo-mesh-types.js';
 /** The host verb (daemon↔daemon only; source `mesh`). */
 export const ASSISTANT_REMOTE_PROJECT_COMMAND = 'assistant_remote_project';
 
-export const ASSISTANT_REMOTE_OPS = ['status', 'send', 'read', 'poll', 'note'] as const;
+export const ASSISTANT_REMOTE_OPS = ['status', 'send', 'read', 'poll', 'note', 'terminal', 'inventory', 'report'] as const;
 export type AssistantRemoteOp = typeof ASSISTANT_REMOTE_OPS[number];
 
 /** Why a remote-hosted project cannot be driven right now. */
@@ -117,6 +117,9 @@ export const REMOTE_OP_TIMEOUT_MS: Record<AssistantRemoteOp, number> = {
     read: 30_000,
     poll: 15_000,
     note: 20_000,
+    terminal: 15_000,
+    inventory: 15_000,
+    report: 30_000,
 };
 
 export type RemoteCallOutcome =

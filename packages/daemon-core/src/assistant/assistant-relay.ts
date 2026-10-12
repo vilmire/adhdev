@@ -1,3 +1,4 @@
+import { reportBodyId } from './report-continuation.js';
 /**
  * Assistant relay (design 2026-10-07-assistant-layer.md §4.3 "수신", §4.8;
  * appendix B). Pure core with injected ports; boot wiring is a later unit.
@@ -86,6 +87,8 @@ export interface AssistantRelayPorts {
     projectSlug(meshId: string): string | null;
     /** The coordinator's latest assistant-role bubble, via the read_chat projection, at send time. */
     readCoordinatorTail(sessionId: string): Promise<string | null>;
+    /** Existing evidence only; exact attempt/session/mesh, never the newest tail. */
+    rehydrateAttemptReport?(meshId: string, sessionId: string, attemptId: string): Promise<string | null>;
     /** Content-free `[Mesh]` line (`buildMeshStatusLineForNotification`). */
     meshStatusLine?(meshId: string): string | null;
     meshWork(meshId: string): MeshWorkCounts | null;
@@ -109,6 +112,8 @@ export interface AssistantRelayPorts {
     onRelayDelivered?(meshIds: readonly string[], at: number): void;
     /** An idle review input (§4.10.7) reached the assistant (review history, `review_turns`). */
     onReviewDelivered?(sessionId: string, messageId: string, at: number): void;
+    /** Native submit confirmation only; MCP pulls need their own receipt acknowledgement. */
+    onInputsSubmitted?(sessionId: string, messageIds: readonly string[], at: number): void;
     clock?: RelayClock;
 }
 
@@ -175,6 +180,8 @@ export class AssistantRelay {
     private dirty = false;
     private seq = 0;
 
+    private readonly restoredAttempts = new Map<string, { meshId: string; sessionId: string }>();
+
     constructor(private readonly ports: AssistantRelayPorts) {
         this.clock = ports.clock ?? realClock;
     }
@@ -185,6 +192,7 @@ export class AssistantRelay {
         const rows = this.ports.store.listUndelivered();
         const byMesh = new Map<string, Item & { kind: 'relay' }>();
         for (const r of rows) {
+            this.restoredAttempts.set(r.attemptId, { meshId: r.meshId, sessionId: r.coordinatorSessionId });
             const item = byMesh.get(r.meshId);
             if (item) {
                 item.attemptIds.push(r.attemptId);
@@ -639,7 +647,8 @@ export class AssistantRelay {
         const text = [...parts.map((p) => p.text), ...(gap ? [gap] : [])].join('\n\n');
         const outcome = await this.ports.submit(sid, { text, messageId, policy: { mode: 'queue' } });
         if (outcome.kind === 'refused') return;
-        this.commitTaken(taken, parts, sid);
+        const submitted = outcome.kind === 'delivered' || (outcome.kind === 'duplicate' && !!this.ports.isParked && !await this.ports.isParked(sid, messageId));
+        this.commitTaken(taken, parts, sid, submitted);
         if (gap) this.rememberGaps(sid, missed);
     }
 
@@ -700,7 +709,7 @@ export class AssistantRelay {
     }
 
     /** The taken items reached the assistant: dequeue, log, mark rows delivered, reset signals. */
-    private commitTaken(taken: Item[], parts: Part[], sid: string | null): void {
+    private commitTaken(taken: Item[], parts: Part[], sid: string | null, submitted = false): void {
         this.queue = this.queue.filter((i) => !taken.includes(i));
         const at = this.clock.now();
         if (sid) for (const p of parts) this.ports.inputLog.append(sid, p.source, { at, messageId: p.messageId });
@@ -716,7 +725,7 @@ export class AssistantRelay {
                 ? i.attemptIds.filter((id) => this.hasCapturedBody(id)) : [];
         });
         this.ports.store.markDelivered(relayItems.flatMap((i) => i.attemptIds), at, rendered);
-        for (const id of relayItems.flatMap((i) => i.attemptIds)) this.attemptBodies.delete(id);
+        for (const id of relayItems.flatMap((i) => i.attemptIds)) { this.attemptBodies.delete(id); this.restoredAttempts.delete(id); }
         const meshes = [...new Set(relayItems.map((i) => i.meshId))];
         for (const m of meshes) {
             this.lastRelayAt.set(m, at);
@@ -724,6 +733,7 @@ export class AssistantRelay {
             this.stallSent.delete(m);
         }
         if (meshes.length) this.ports.onRelayDelivered?.(meshes, at);
+        if (sid && submitted) this.ports.onInputsSubmitted?.(sid, parts.map(p => p.messageId), at);
     }
 
     /** Last relay delivery to the assistant for the mesh (this process), or null. */
@@ -812,6 +822,14 @@ export class AssistantRelay {
     private async bodiesFor(item: Item & { kind: 'relay' }): Promise<Array<string | null>> {
         const pending = item.attemptIds.map((id) => this.attemptBodyCapture.get(id)).filter((p): p is Promise<void> => !!p);
         if (pending.length) await Promise.all(pending);
+        for (const id of item.attemptIds) {
+            const ref = this.restoredAttempts.get(id);
+            if (!ref || this.attemptBodies.has(id)) continue;
+            // Authorization is checked by the runtime reader for every attempt. Bodies remain memory-only.
+            let body: string | null = null;
+            try { body = await this.ports.rehydrateAttemptReport?.(ref.meshId, ref.sessionId, id) ?? null; } catch { /* exact evidence unavailable */ }
+            if (body) this.attemptBodies.set(id, body);
+        }
         return item.attemptIds.map((id) => this.attemptBodies.get(id) ?? null);
     }
 
@@ -819,13 +837,23 @@ export class AssistantRelay {
         const lastAttempt = item.attemptIds[item.attemptIds.length - 1]!;
         const remote = this.remote.get(item.meshId);
         const bodies = await this.bodiesFor(item);
-        const text = buildRelayEnvelope({
+        const unavailable = item.attemptIds.filter((id, index) => this.restoredAttempts.has(id) && !bodies[index]);
+        const refs = item.attemptIds.slice(-12).map(attemptId => {
+            const index = item.attemptIds.indexOf(attemptId); const body = bodies[index];
+            return { attemptId, coordinatorSessionId: this.restoredAttempts.get(attemptId)?.sessionId ?? item.coordinatorSessionId,
+                reportId: body ? reportBodyId(body) : null, totalChars: body?.length ?? null };
+        });
+        const references = `[ADHDev report references] ${JSON.stringify({ meshId: item.meshId, reports: refs, omittedReferences: Math.max(0, item.attemptIds.length - refs.length) })}\n`;
+        const envelope = buildRelayEnvelope({
             slug: this.ports.projectSlug(item.meshId) ?? item.meshId,
             outcome: item.outcome,
             bodies,
             statusLine: remote ? remote.statusLine : this.ports.meshStatusLine?.(item.meshId) ?? null,
             idle: item.idle,
         });
+        const headerEnd = envelope.indexOf('\n') + 1;
+        const missing = unavailable.length ? `[ADHDev original report unavailable] Exact authorized attempt evidence could not rehydrate: ${unavailable.join(', ')}. A new report would be regeneration.\n` : '';
+        const text = envelope.slice(0, headerEnd) + references + missing + envelope.slice(headerEnd);
         return { text, source: 'relay', messageId: relayMessageId(item.meshId, lastAttempt), meshId: item.meshId };
     }
 }

@@ -1,3 +1,5 @@
+import { buildLocalNodeFacts } from '../mesh/node-facts.js';
+import type { MeshNodeFacts } from '@adhdev/mesh-shared';
 /**
  * The daemon reads/writes the assistant project verbs need
  * (commands/high-family/assistant.ts; design 2026-10-07-assistant-layer.md
@@ -71,6 +73,8 @@ export interface CoordinatorTurns {
 
 export interface AssistantProjectPorts {
     selfDaemonId(): string;
+    localNodeFacts?(): MeshNodeFacts;
+    coordinatorSessionAuthorized?(meshId: string, sessionId: string): boolean;
     listMeshes(): LocalMeshEntry[];
     isHostedHere(mesh: LocalMeshEntry): boolean;
     aliases(): Record<string, string>;
@@ -164,6 +168,8 @@ export function createDefaultProjectPorts(ctx: ProjectPortsContext): AssistantPr
     const lazy = loadMeshReaders();
     return {
         selfDaemonId: () => ctx.selfDaemonId,
+        localNodeFacts: () => buildLocalNodeFacts(),
+        coordinatorSessionAuthorized: (meshId, sid) => lazy.listCoordinatorsForMesh(meshId).some(e => e.sessionId === sid),
         listMeshes: () => svc.listMeshes(),
         isHostedHere: (mesh) => (svc.isMeshHostedHere ? svc.isMeshHostedHere(mesh) : lazy.hostedMeshes(ctx.components(), [mesh]).length > 0),
         aliases: () => lazy.assistantAliases(),

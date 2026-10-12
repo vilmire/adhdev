@@ -151,6 +151,8 @@ export interface MeshNodeFactsProviderEnablement {
 
 export interface MeshNodeFacts {
     schemaVersion: number
+    /** Cached CLI detection only; no paths or account data. */
+    providerInventory?: { observedAt: number; providers: Record<string, { installed: boolean }> }
     reportedAt: number
     daemonBuild?: MeshNodeFactsDaemonBuild
     providerVersions?: Record<string, string>

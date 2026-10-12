@@ -1,3 +1,4 @@
+import AssistantExecutionControls from './AssistantExecutionControls';
 
 /**
  * ChatPane — Chat view for IDE and CLI chat-mode sessions.
@@ -712,6 +713,7 @@ export default function ChatPane({
                 <div className="ml-auto flex items-center gap-1">
                     {/* Assistant pane only: writes held for the owner's approval
                         (hidden while none are held). */}
+                    {isAssistantPane && <AssistantExecutionControls daemonId={daemonId} sessionId={activeConv.sessionId} status={activeConv.status} sendCommand={sendCommand} />}
                     {isAssistantPane && showAssistantStagedWrites && (
                         <AssistantStagedWrites daemonId={daemonId} status={activeConv.status} sendCommand={sendCommand} />
                     )}

@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 /**
  * Compact projections for the assistant project verbs (design
  * 2026-10-07-assistant-layer.md §4.2, §4.4, §4.6). Pure functions — the
@@ -566,7 +567,7 @@ export const PROJECT_READ_DEFAULT_TAIL = 10;
 export const PROJECT_READ_MAX_TAIL = 50;
 export const PROJECT_READ_MESSAGE_MAX_CHARS = 4_000;
 
-function messageText(m: any): string {
+export function messageText(m: any): string {
     const c = m?.content;
     if (typeof c === 'string') return c;
     if (Array.isArray(c)) return c.map((p: any) => (typeof p === 'string' ? p : readText(p?.text) ? p.text : '')).join('');
@@ -574,7 +575,7 @@ function messageText(m: any): string {
 }
 
 /** Same visibility rule as the MCP read_chat compact mode: user/assistant bubbles, no tool/terminal/system chatter. */
-function isVisible(m: any): boolean {
+export function isVisible(m: any): boolean {
     if (!m || typeof m !== 'object') return false;
     const role = readText(m.role).toLowerCase();
     if (role !== 'user' && role !== 'assistant' && role !== 'agent') return false;
@@ -592,6 +593,10 @@ export function compactTranscriptTail(readChat: Record<string, unknown>, tail: n
         const truncated = text.length > maxChars;
         const at = typeof m.timestamp === 'number' ? new Date(m.timestamp).toISOString() : readText(m.timestamp) || readText(m.createdAt) || undefined;
         return {
+            messageId: reportMessageId(m),
+            totalChars: text.length,
+            complete: !truncated,
+            nextOffset: truncated ? maxChars : null,
             role: readText(m.role).toLowerCase() === 'user' ? 'user' : 'assistant',
             text: truncated ? `${text.slice(0, maxChars)}…` : text,
             ...(truncated ? { truncated: true } : {}),
@@ -604,4 +609,13 @@ export function compactTranscriptTail(readChat: Record<string, unknown>, tail: n
         omitted: Math.max(0, visible.length - picked.length),
         ...(typeof readChat.status === 'string' ? { status: readChat.status } : {}),
     };
+}
+
+/** Content-bound identity: a changed/growing bubble cannot silently splice pages. */
+export function reportMessageId(message: unknown): string {
+    const m = message as any;
+    return createHash('sha256').update(JSON.stringify([
+        m?.messageId ?? m?.bubbleId ?? m?.id ?? null, m?.role,
+        m?.timestamp ?? m?.createdAt ?? null, messageText(m),
+    ])).digest('hex');
 }

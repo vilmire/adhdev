@@ -1,4 +1,6 @@
 import { matchesProviderApprovalTarget, projectProviderApproval } from '../status/provider-approval.js';
+import { prepareOwnerActionChat } from '../assistant/assistant-action-ingress.js';
+import { modalIdentity, checkAssistantExecutionGuard } from '../assistant/assistant-execution.js';
 /**
  * Chat Commands — write side: handleSendChat, handleListChats, handleNewChat,
  * handleSwitchChat, handleSetMode, handleChangeModel,
@@ -251,10 +253,13 @@ async function submitCliChat(h: CommandHelpers, args: any, input: InputEnvelope,
         }
     }
     if (!messageId) messageId = mintLegacyMessageId();
+    const prepared = prepareOwnerActionChat({ sessionRegistry: h.ctx.sessionRegistry, instanceManager: h.ctx.instanceManager, cliManager: h.ctx.adapters ? { adapters: h.ctx.adapters } : undefined }, readCommandSource(args), sessionKey, input.textFallback ?? '', args?.assistantOwnerAction, args?.expectedOwnerModalIdentity);
+    if (!prepared.success) return { ...prepared, error: prepared.code };
+    const actionInput = prepared.text === input.textFallback ? input : normalizeInputEnvelope({ text: prepared.text });
     const outcome = await service.submit({
         messageId,
         sessionId: sessionKey,
-        input,
+        input: actionInput,
         origin: readOutboundOrigin(args, 'dashboard'),
         policy,
         createdAt: Date.now(),
@@ -263,7 +268,8 @@ async function submitCliChat(h: CommandHelpers, args: any, input: InputEnvelope,
     // router-stamped dashboard sources and only the bound assistant session.
     const requested = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '';
     reportSessionChatInput({ sessionIds: requested && requested !== sessionKey ? [sessionKey, requested] : [sessionKey], messageId, source: readCommandSource(args), outcome });
-    return sendChatResultFromOutcome(outcome, messageId, transport, provider?.type);
+    return { ...sendChatResultFromOutcome(outcome, messageId, transport, provider?.type),
+        ...('expiresAt' in prepared ? { ownerActionExpiresAt: prepared.expiresAt, ownerActionRetry: 'If execution expires while queued or busy, select the current permission again. Consent is never renewed automatically.' } : {}) };
 }
 
 export async function handleSendChat(h: CommandHelpers, args: any): Promise<CommandResult> {
@@ -796,6 +802,10 @@ export async function handleChangeModel(h: CommandHelpers, args: any): Promise<C
 export async function handleResolveAction(h: CommandHelpers, args: any): Promise<CommandResult> {
     const provider = h.getProvider(args?.agentType);
     const transport = getTargetTransport(h, provider);
+    if (transport !== 'pty' && (args?.expectedModalIdentity !== undefined || args?.assistantExecutionGuard !== undefined)) {
+        return { success: false, code: 'assistant_action_transport_unsupported' };
+    }
+    if (args?.data && (args?.expectedModalIdentity !== undefined || args?.assistantExecutionGuard !== undefined)) return { success: false, code: 'assistant_action_payload_unsupported' };
     const action = args?.action || 'approve';
     if (args?.approvalTarget && transport !== 'pty') return { success: false, error: 'Exact provider permission target requires its live CLI session' };
     const button = args?.button || args?.buttonText
@@ -957,6 +967,7 @@ export async function handleResolveAction(h: CommandHelpers, args: any): Promise
             }
             return { success: false, error: 'Not in approval state' };
         }
+        if (args?.expectedModalIdentity && modalIdentity(effectiveModal) !== args.expectedModalIdentity) return { success: false, code: 'consent_modal_changed', error: 'Authorized approval modal changed' };
         const buttons: string[] = Array.isArray(effectiveModal.buttons) ? effectiveModal.buttons : [];
         // Resolve button index: explicit buttonIndex arg → exact text match → explicit action mapping
         let buttonIndex = typeof args?.buttonIndex === 'number' ? args.buttonIndex : -1;
@@ -995,6 +1006,13 @@ export async function handleResolveAction(h: CommandHelpers, args: any): Promise
         // adapter tells us no button matched, report failure so mesh_approve / the coordinator
         // sees the miss instead of a false success. Legacy adapters without resolveModalMatched
         // keep the prior void-resolveModal behaviour.
+        if (args?.assistantExecutionGuard !== undefined && !checkAssistantExecutionGuard(args.assistantExecutionGuard)) return { success: false, code: 'assistant_execution_revoked', error: 'Assistant execution authority expired or changed' };
+        if (args?.assistantExecutionGuard !== undefined && typeof adapter.resolveModalMatched !== 'function') return { success: false, code: 'assistant_action_transport_unsupported' };
+        // Revalidate the approval episode after live modal refresh and execution checks.
+        if (args?.approvalTarget) {
+            const approval = projectProviderApproval(adapter.getStatus()?.providerApproval, args.targetSessionId || h.currentSession?.sessionId || '', provider?.type || '');
+            if (!matchesProviderApprovalTarget(approval, args.approvalTarget)) return { success: false, stalePrompt: true, error: 'Approval target changed before dispatch' };
+        }
         if (typeof adapter.resolveModalMatched === 'function') {
             const matched = adapter.resolveModalMatched(buttonIndex);
             if (!matched) {

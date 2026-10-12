@@ -1,0 +1,21 @@
+import { afterEach, expect, it } from 'vitest';
+import Database from 'better-sqlite3';
+import { readTaskReportPage } from '../../src/assistant/task-report-continuation.js';
+import { parseReportContinuation } from '../../src/assistant/report-continuation.js';
+const dbs: Database.Database[] = [];
+afterEach(() => { for (const db of dbs.splice(0)) db.close(); });
+it('recovers exact mesh_task_outputs content before regeneration, pins output version and preserves source completeness', () => {
+    const db = new Database(':memory:'); dbs.push(db);
+    db.exec('CREATE TABLE mesh_task_outputs(task_id TEXT,mesh_id TEXT,version INTEGER,attempt INTEGER,status TEXT,created_at TEXT,envelope_json TEXT)');
+    const insert = (version: number, body: string, complete = true) => db.prepare('INSERT INTO mesh_task_outputs VALUES (?,?,?,?,?,?,?)').run('task', 'mesh', version, version, 'completed', '2026-10-12', JSON.stringify({ final_summary: body, evidence: { mayBeTruncated: !complete }, source: { session_id: 'worker', node_id: 'node' } }));
+    const original = 'x'.repeat(4229); insert(1, original);
+    const first: any = readTaskReportPage(db, 'mesh', { taskId: 'task', offset: 0 });
+    expect(first).toMatchObject({ source: 'mesh_task_outputs', totalChars: 4229, nextOffset: 4000, outputVersion: 1, sourceComplete: true, sourceSessionId: 'worker', sourceNodeId: 'node' });
+    insert(2, 'different later attempt');
+    const suffix: any = readTaskReportPage(db, 'mesh', { taskId: 'task', offset: 4000, reportId: first.reportId, outputVersion: 1 });
+    expect(first.text + suffix.text).toBe(original); expect(suffix.complete).toBe(true);
+    expect(readTaskReportPage(db, 'foreign', { taskId: 'task', offset: 0 })).toMatchObject({ code: 'original_report_unavailable', reason: 'exact_task_output_not_found' });
+    expect(parseReportContinuation({ taskId: 'task', offset: 4000 })).toBeTypeOf('string');
+    insert(3, 'saved partial', false);
+    expect(readTaskReportPage(db, 'mesh', { taskId: 'task', offset: 0 })).toMatchObject({ complete: false, sourceComplete: false, originalCompleteness: 'truncated_at_source' });
+});

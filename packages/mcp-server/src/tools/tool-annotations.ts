@@ -296,6 +296,9 @@ export const TOOL_ANNOTATIONS: Record<string, ToolBehaviorAnnotations> = {
   // by assistant-tools-parity.test.ts: the three store writes plus project_send
   // (sends to a coordinator, may launch one) and project_add (creates a project).
   projects: READ_LOCAL,
+  environment: READ_REMOTE,
+  project_watch: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  assistant_action: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
   project_status: READ_REMOTE,
   project_send: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   project_read: READ_LOCAL,

@@ -16,6 +16,10 @@ import { InMemoryAssistantRelayStore } from '../../src/assistant/assistant-relay
 import { AssistantMetricsStore } from '../../src/assistant/assistant-relay-sqlite-store.js';
 import { ensureAssistantRelaySchema } from '../../src/mesh/mesh-runtime-store-schema.js';
 import { buildAssistantRelayPorts, getAssistantRuntime, wireAssistantRuntime, type AssistantRuntime } from '../../src/assistant/assistant-runtime.js';
+import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
+import { TerminalWatchStore } from '../../src/assistant/terminal-watch.js';
+import { memDb, ledgerOn, dispatch, evd } from '../turn-ledger/ledger-harness.js';
+import { setAssistantProjectPortsForTests } from '../../src/assistant/assistant-project-ports.js';
 import { createDefaultProjectPorts, preloadAssistantProjectReaders } from '../../src/assistant/assistant-project-ports.js';
 import { createAssistantServices, getAssistantServices, setAssistantServicesForTests } from '../../src/assistant/assistant-services.js';
 import { REVIEW_INPUT_TEXT } from '../../src/assistant/assistant-review.js';
@@ -237,4 +241,44 @@ describe('buildAssistantRelayPorts', () => {
         expect(metrics.rows().map((r) => [r.meshId, r.relays])).toEqual([['mesh_a', 2], ['mesh_b', 1]]);
         expect(p.hasAssistant()).toBe(true);
     });
+});
+
+it('real runtime relay delivers recreation uncertainty once and resumes ordered reducer terminals only after explicit retry and native receipts', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
+    const db = memDb(); const ledger = ledgerOn(db);
+    try {
+        vi.setSystemTime(Date.parse('2026-10-12T07:00:00Z'));
+        for (let i = 0; i < 2; i++) {
+            const attemptId = `attempt-${i}`;
+            ledger.observe({ ...dispatch({ meshId: 'mesh_a', attemptId }), messageId: `msg-${i}`, attemptNo: i } as any);
+            ledger.observe(evd('turn_started', { retro: false }, { attemptRef: { attemptId, generation: 0 } }));
+            ledger.observe(evd('turn_end', { strength: 'genuine' }, { attemptRef: { attemptId, generation: 0 } }));
+        }
+        const store = new TerminalWatchStore(db); const sub: any = store.subscribe('mesh_a', 'task', 't1', 'assistant');
+        store.beginDelivery(sub.watchId, 'attempt-0#committed', 'old-assistant');
+        vi.spyOn(MeshRuntimeStore, 'getInstance').mockReturnValue({ db } as any);
+        setAssistantProjectPortsForTests(() => ({ listMeshes: () => [{ id: 'mesh_a' }], isHostedHere: () => true,
+            execute: async () => { throw Error('original session unavailable'); } }) as any);
+        registry.bindSession({ sessionId: 'new-assistant', cliType: 'claude-cli', workspace: dir });
+        registry.updateSettings({ reviewTurn: false });
+        instances['new-assistant'] = { getState: () => ({ status: 'idle' }) };
+        const deps = components();
+        deps.cliManager.input.submit = async (input: any) => { submits.push(input); return { kind: 'delivered' }; };
+        runtime = wireAssistantRuntime(deps, { registry, store: new InMemoryAssistantRelayStore(), metrics: null });
+        await vi.advanceTimersByTimeAsync(60_000); await runtime.relay.idle();
+        expect(submits).toHaveLength(1); expect(submits[0].sessionId).toBe('new-assistant');
+        expect(submits[0].input.textFallback).toContain('unconfirmed_original_recipient');
+        expect(submits[0].input.textFallback).toContain('"project":"mesh_a"');
+        expect(store.receipts(sub.watchId)).toEqual([]);
+        await vi.advanceTimersByTimeAsync(120_000); await runtime.relay.idle();
+        expect(submits).toHaveLength(1); // actual native enqueue returns pending for terminals, accepted for metadata
+        store.retryDelivery(sub.watchId, 'attempt-0#committed');
+        await vi.advanceTimersByTimeAsync(60_000); await runtime.relay.idle();
+        expect(store.receipts(sub.watchId)).toEqual(['attempt-0#committed']);
+        await vi.advanceTimersByTimeAsync(60_000); await runtime.relay.idle();
+        expect(store.receipts(sub.watchId)).toEqual(['attempt-0#committed','attempt-1#committed']);
+        expect(submits).toHaveLength(3); expect(getAssistantServices().inputLog.sources('new-assistant').at(-1)).toBe('relay');
+    } finally {
+        runtime?.dispose(); runtime = null; setAssistantProjectPortsForTests(null); vi.restoreAllMocks(); vi.useRealTimers(); db.close();
+    }
 });
