@@ -84,7 +84,7 @@ export class CodexAppServerAdapter implements CliAdapter {
         switch (message.method) {
             case 'turn/started': {
                 const turn = record(p.turn);
-                if (typeof turn?.id !== 'string' || this.endedTurns.has(turn.id)) return;
+                if (typeof turn?.id !== 'string' || this.endedTurns.has(turn.id) || this.observedTurns.has(turn.id)) return;
                 this.observedTurns.add(turn.id);
                 if (turn.id !== this.questions.turnId) this.approvals.clear();
                 this.questions.beginTurn(turn.id); this.status = 'generating'; break;
@@ -149,7 +149,7 @@ export class CodexAppServerAdapter implements CliAdapter {
             if (typeof turn?.id !== 'string') throw new Error('Invalid Codex turn response');
             // A native terminal event can arrive in the same chunk as this response.
             // The response must never resurrect a turn already completed by the stream.
-            if (!this.observedTurns.has(turn.id)) { this.questions.beginTurn(turn.id); this.status = 'generating'; }
+            if (!this.observedTurns.has(turn.id)) { this.observedTurns.add(turn.id); this.questions.beginTurn(turn.id); this.status = 'generating'; }
         }
         this.questions.clearAsync(priorAsync);
         this.notify('fsm_state'); return { status: 'delivered' };

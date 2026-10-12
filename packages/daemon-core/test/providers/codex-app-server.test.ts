@@ -58,9 +58,28 @@ describe('managed Codex native process transport', () => {
             { ...valid, answers: { ...valid.answers, track: { selectedLabels: ['Beta', 'Beta'] } } },
             { ...valid, answers: { ...valid.answers, track: null } }, { ...valid, answers: { ...valid.answers, track: { selectedLabels: ['Unknown'] } } },
             { ...valid, answers: [{ select: 'Beta' }] },
-        ]) await expect(dispatch(adapter, data)).rejects.toThrow();
-        expect((await adapter.transport.request('test/observations', {}) as any[]).filter(o => o.id === 'request-1')).toEqual([]);
+            { ...valid, action: 'cancel' }, { ...valid, action: 'arbitrary' }, { ...valid, action: null },
+            { ...valid, action: {} }, { ...valid, action: 'dismiss' }, { ...valid, unexpected: true },
+            { ...valid, binding: { ...valid.binding, owner: 'untrusted' } },
+            { ...valid, answers: { ...valid.answers, track: { selectedLabels: ['Beta'], unexpected: true } } },
+            { ...valid, answers: { ...valid.answers, track: { selectedLabels: 'Beta' } } },
+            { ...valid, answers: { ...valid.answers, track: { selectedLabels: [1] } } },
+            { ...valid, answers: { ...valid.answers, note: { selectedLabels: [], freeformText: 1 } } },
+            { ...valid, answers: null }, { ...valid, binding: [] }, { ...valid, binding: null },
+            null, [],
+
+        ]) {
+            const held = adapter.questions.active();
+            await expect(dispatch(adapter, data)).rejects.toThrow();
+            await expect(adapter.setInteractivePromptResponse(data as any)).rejects.toThrow();
+            expect(adapter.questions.active()).toBe(held);
+            expect(held?.lifecycle).toBe('pending');
+        }
+        const observations = await adapter.transport.request('test/observations', {}) as any[];
+        expect(observations.filter(o => o.id === 'request-1' || o.method === 'turn/steer')).toEqual([]);
         expect(() => normalizeInteractivePromptResponse({ ...valid, answers: { track: null } })).toThrow();
+        await dispatch(adapter, valid); await wait(() => !adapter.questions.active());
+        expect((await adapter.transport.request('test/observations', {}) as any[]).filter(o => o.id === 'request-1')).toHaveLength(1);
     });
 
     it('retracts only matching direct native resolution and rejects old runtime generations', async () => {
@@ -133,6 +152,39 @@ describe('managed Codex native process transport', () => {
         await adapter.transport.request('test/emit', { method: 'turn/started', params: { threadId: adapter.questions.threadId, turn: { id: 'new-turn' } } });
         expect(adapter.questions.active()).toBeNull();
         await expect(dispatch(adapter, old)).rejects.toThrow();
+    });
+
+    it('keeps B authoritative through delayed A starts and previously unseen A requests', async () => {
+        const adapter = await start(); await adapter.sendMessage('rpc'); await wait(() => !!adapter.questions.active());
+        const a = answer(adapter); const promptA = adapter.questions.active()!;
+        const threadId = adapter.questions.threadId; const turnA = adapter.questions.turnId; const turnB = 'synthetic-turn-B';
+        const emit = (message: unknown) => adapter.transport.request('test/emit', message);
+        const started = (id: string) => emit({ method: 'turn/started', params: { threadId, turn: { id } } });
+        const request = (id: string, turnId: string) => emit({ id, method: 'item/tool/requestUserInput', params: {
+            threadId, turnId, itemId: id, isBlocking: true, autoResolutionMs: null,
+            questions: promptA.questions.map(q => ({ id: q.questionId, header: q.header || '', question: q.question,
+                isOther: !!q.allowFreeform, isSecret: false, options: q.options.length ? q.options : null })),
+        } });
+        await started(turnB); await request('request-B', turnB);
+        const promptB = adapter.questions.active()!; const b = answer(adapter);
+        expect(promptB.binding?.turnId).toBe(turnB);
+        await started(turnA); await request('late-unseen-A', turnA);
+        expect(adapter.questions.turnId).toBe(turnB); expect(adapter.questions.active()).toBe(promptB);
+        await started(turnB); expect(adapter.questions.active()).toBe(promptB); // Repeated current start is inert.
+        await expect(dispatch(adapter, a)).rejects.toThrow();
+        await expect(dispatch(adapter, { ...b, binding: { ...b.binding, turnId: turnA, requestId: 'late-unseen-A' } })).rejects.toThrow();
+        expect(promptB.lifecycle).toBe('pending');
+        const before = await adapter.transport.request('test/observations', {}) as any[];
+        expect(before.filter(o => ['request-1', 'late-unseen-A', 'request-B'].includes(o.id) || o.method === 'turn/steer')).toEqual([]);
+        await dispatch(adapter, b); await wait(() => !adapter.questions.active());
+        expect((await adapter.transport.request('test/observations', {}) as any[]).filter(o => o.id === 'request-B')).toHaveLength(1);
+        await emit({ method: 'turn/completed', params: { threadId, turn: { id: turnB, status: 'completed' } } });
+        await started(turnB); await started(turnA); await request('late-ended-B', turnB);
+        expect(adapter.questions.turnId).toBe(''); expect(adapter.questions.active()).toBeNull();
+        adapter.shutdown(); await expect(adapter.setInteractivePromptResponse(b)).rejects.toThrow('unavailable');
+        const next = await start(); await next.sendMessage('rpc'); await wait(() => !!next.questions.active());
+        await expect(dispatch(next, { ...b, promptId: next.questions.active()!.promptId })).rejects.toThrow();
+        expect(next.questions.active()?.lifecycle).toBe('pending');
     });
 
     it('rejects malformed native requests and observes only exact current-turn async reply evidence', async () => {

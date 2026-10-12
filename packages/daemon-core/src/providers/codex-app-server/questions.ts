@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { isProviderQuestionBinding, type ProviderQuestionBinding } from '@adhdev/mesh-shared';
 import type { InteractivePrompt, InteractivePromptResponse, InteractiveQuestion } from '../types/interactive-prompt.js';
+import { assertNativeInteractivePromptResponse } from '../types/interactive-prompt.js';
 import type { RpcId } from './transport.js';
 
 type RecordValue = Record<string, unknown>;
@@ -129,6 +130,7 @@ export class CodexQuestionLedger {
     }
 
     prepare(response: InteractivePromptResponse): { key: string; prompt: InteractivePrompt; answers: Record<string, { answers: string[] }> } {
+        assertNativeInteractivePromptResponse(response);
         const pair = [...this.entries].find(([, prompt]) => prompt.promptId === response.promptId);
         if (!pair) throw new Error('No current Codex question request');
         const [key, prompt] = pair;

@@ -23,7 +23,9 @@ export function isProviderQuestionBinding(value: unknown): value is ProviderQues
     if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
     const b = value as Record<string, unknown>;
     if (b.transport !== 'codex_rpc' && b.transport !== 'codex_async') return false;
+    const keys = ['transport', 'sessionId', 'generation', 'threadId', 'turnId', 'itemId', ...(b.transport === 'codex_rpc' ? ['requestId'] : [])];
+    if (Reflect.ownKeys(b).some(key => typeof key !== 'string' || !keys.includes(key))) return false;
     if (['sessionId', 'generation', 'threadId', 'turnId', 'itemId'].some(key => typeof b[key] !== 'string' || !(b[key] as string).trim())) return false;
     return b.transport === 'codex_async' ? b.requestId === undefined
-        : typeof b.requestId === 'string' || (typeof b.requestId === 'number' && Number.isFinite(b.requestId));
+        : (typeof b.requestId === 'string' && !!b.requestId.trim()) || (typeof b.requestId === 'number' && Number.isFinite(b.requestId));
 }

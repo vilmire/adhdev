@@ -26045,8 +26045,10 @@ ${renderWorkerProtocolFooter2(input)}`;
       if (!value || typeof value !== "object" || Array.isArray(value)) return false;
       const b = value;
       if (b.transport !== "codex_rpc" && b.transport !== "codex_async") return false;
+      const keys = ["transport", "sessionId", "generation", "threadId", "turnId", "itemId", ...b.transport === "codex_rpc" ? ["requestId"] : []];
+      if (Reflect.ownKeys(b).some((key2) => typeof key2 !== "string" || !keys.includes(key2))) return false;
       if (["sessionId", "generation", "threadId", "turnId", "itemId"].some((key2) => typeof b[key2] !== "string" || !b[key2].trim())) return false;
-      return b.transport === "codex_async" ? b.requestId === void 0 : typeof b.requestId === "string" || typeof b.requestId === "number" && Number.isFinite(b.requestId);
+      return b.transport === "codex_async" ? b.requestId === void 0 : typeof b.requestId === "string" && !!b.requestId.trim() || typeof b.requestId === "number" && Number.isFinite(b.requestId);
     }
     var QUOTA_SUPPORTED_PROVIDERS;
     var BUILTIN_PROVIDER_PREFERENCE2;
@@ -95168,9 +95170,25 @@ ${tail}` : ""
       const createdAt = typeof record3.createdAt === "number" && Number.isFinite(record3.createdAt) ? record3.createdAt : Date.now();
       return { promptId, origin, providerType, createdAt, questions };
     }
+    function assertNativeInteractivePromptResponse(raw) {
+      const isRecord8 = (value) => !!value && typeof value === "object" && !Array.isArray(value);
+      const hasUnknownKeys = (value, keys) => Reflect.ownKeys(value).some((key2) => typeof key2 !== "string" || !keys.includes(key2));
+      if (!isRecord8(raw) || hasUnknownKeys(raw, ["promptId", "answers", "binding", "action"]) || typeof raw.promptId !== "string" || !raw.promptId.trim() || !isProviderQuestionBinding(raw.binding) || !isRecord8(raw.answers) || raw.action !== void 0 && raw.action !== "dismiss") {
+        throw new Error("Malformed or unsupported native question response");
+      }
+      if (raw.action === "dismiss" && raw.binding.transport !== "codex_async") throw new Error("Native RPC dismissal is unsupported");
+      for (const key2 of Reflect.ownKeys(raw.answers)) {
+        if (typeof key2 !== "string" || !key2.trim()) throw new Error("Malformed native question id");
+        const answer = raw.answers[key2];
+        if (!isRecord8(answer) || hasUnknownKeys(answer, ["selectedLabels", "freeformText"]) || !Array.isArray(answer.selectedLabels) || answer.selectedLabels.some((label) => typeof label !== "string") || new Set(answer.selectedLabels).size !== answer.selectedLabels.length || answer.freeformText !== void 0 && typeof answer.freeformText !== "string") {
+          throw new Error("Malformed or unsupported native answer");
+        }
+      }
+    }
     function normalizeInteractivePromptResponse(raw) {
       if (!raw || typeof raw !== "object") throw new Error("Interactive prompt response must be an object");
       const record3 = raw;
+      if ("binding" in record3) assertNativeInteractivePromptResponse(raw);
       const promptId = readString2(record3.promptId);
       if (!promptId) throw new Error("promptId must be a non-empty string");
       if (!record3.answers || typeof record3.answers !== "object" || Array.isArray(record3.answers)) {
@@ -95187,14 +95205,6 @@ ${tail}` : ""
           ...freeformText ? { freeformText } : {}
         };
       }
-      if (record3.binding) {
-        if (!record3.answers || Array.isArray(record3.answers)) throw new Error("Native answers must be keyed by question id");
-        for (const raw2 of Object.values(record3.answers)) {
-          if (!raw2 || typeof raw2 !== "object" || Array.isArray(raw2)) throw new Error("Malformed native answer");
-          const answer = raw2;
-          if (!Array.isArray(answer.selectedLabels) || answer.selectedLabels.some((label) => typeof label !== "string") || new Set(answer.selectedLabels).size !== answer.selectedLabels.length || answer.freeformText !== void 0 && typeof answer.freeformText !== "string") throw new Error("Malformed or duplicate native answer");
-        }
-      }
       return {
         promptId,
         answers,
@@ -95203,6 +95213,11 @@ ${tail}` : ""
       };
     }
     function resolveInteractivePromptResponse(prompt, raw) {
+      if (prompt.binding) {
+        assertNativeInteractivePromptResponse(raw);
+        if (raw.promptId !== prompt.promptId) throw new Error("Interactive prompt response does not match active prompt");
+        return normalizeInteractivePromptResponse(raw);
+      }
       if (!raw || typeof raw !== "object") throw new Error("Interactive prompt response must be an object");
       const record3 = raw;
       const promptId = readString2(record3.promptId);
@@ -145201,6 +145216,7 @@ ${text2}` : text2;
         }
       }
       prepare(response) {
+        assertNativeInteractivePromptResponse(response);
         const pair = [...this.entries].find(([, prompt2]) => prompt2.promptId === response.promptId);
         if (!pair) throw new Error("No current Codex question request");
         const [key2, prompt] = pair;
@@ -145416,7 +145432,7 @@ ${reply.answer}`).join("\n\n");
         switch (message.method) {
           case "turn/started": {
             const turn = record2(p.turn);
-            if (typeof turn?.id !== "string" || this.endedTurns.has(turn.id)) return;
+            if (typeof turn?.id !== "string" || this.endedTurns.has(turn.id) || this.observedTurns.has(turn.id)) return;
             this.observedTurns.add(turn.id);
             if (turn.id !== this.questions.turnId) this.approvals.clear();
             this.questions.beginTurn(turn.id);
@@ -145493,6 +145509,7 @@ ${reply.answer}`).join("\n\n");
           const turn = record2(result?.turn);
           if (typeof turn?.id !== "string") throw new Error("Invalid Codex turn response");
           if (!this.observedTurns.has(turn.id)) {
+            this.observedTurns.add(turn.id);
             this.questions.beginTurn(turn.id);
             this.status = "generating";
           }
@@ -145729,9 +145746,7 @@ ${JSON.stringify(replies)}
       if (!held) {
         throw new Error(incomingPromptId ? `No active interactive prompt for this session \u2014 nothing to answer (received promptId "${incomingPromptId}"). The question may already have been answered or cancelled.` : "No active interactive prompt for this session \u2014 nothing to answer.");
       }
-      if (held.binding && Array.isArray(data?.answers)) {
-        throw new Error("Native question responses require exact question-id-keyed answers and episode binding");
-      }
+      if (held.binding) assertNativeInteractivePromptResponse(data);
       if (incomingPromptId && incomingPromptId !== held.promptId) {
         throw new Error(`Stale promptId "${incomingPromptId}" \u2014 the session's active question is "${held.promptId}". The answer was NOT applied; re-answer against the active promptId.`);
       }
@@ -145746,6 +145761,7 @@ ${JSON.stringify(replies)}
       const { held, data, adapter, providerType } = options;
       let nextHeld = held;
       try {
+        if (held?.binding) assertNativeInteractivePromptResponse(data);
         const heldPromptId = typeof held?.promptId === "string" && held.promptId ? held.promptId : "";
         const incomingPromptId = typeof data?.promptId === "string" ? data.promptId.trim() : "";
         if (heldPromptId && incomingPromptId && incomingPromptId !== heldPromptId) {

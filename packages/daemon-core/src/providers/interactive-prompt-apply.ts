@@ -25,6 +25,7 @@
  */
 import { LOG } from '../logging/logger.js';
 import {
+    assertNativeInteractivePromptResponse,
     normalizeInteractivePromptResponse,
     resolveInteractivePromptResponse,
     type InteractivePrompt,
@@ -88,9 +89,7 @@ export async function applyInteractivePromptAnswer(options: {
             ? `No active interactive prompt for this session — nothing to answer (received promptId "${incomingPromptId}"). The question may already have been answered or cancelled.`
             : 'No active interactive prompt for this session — nothing to answer.');
     }
-    if (held.binding && Array.isArray((data as { answers?: unknown })?.answers)) {
-        throw new Error('Native question responses require exact question-id-keyed answers and episode binding');
-    }
+    if (held.binding) assertNativeInteractivePromptResponse(data);
     // Same fail-closed stale-promptId rule as the onEvent path: never resolve a
     // foreign promptId against the held prompt's option rows (rc.20 rebind
     // option fidelity — an index could otherwise bind to the wrong row).
@@ -132,6 +131,7 @@ export function applyInteractivePromptAnswerFireAndForget(options: {
     const { held, data, adapter, providerType } = options;
     let nextHeld = held;
     try {
+        if (held?.binding) assertNativeInteractivePromptResponse(data);
         // STALE-PROMPT-ANSWER guard (rc.20 rebind option fidelity): an answer
         // naming a promptId OTHER than the currently held prompt is rejected
         // outright — it is NEVER resolved against (or defaulted into) the
