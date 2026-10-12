@@ -462,6 +462,10 @@ export class SpecCliAdapter implements CliAdapter {
             lastScreenChangeAt: this.driver?.getLastScreenChangeAt?.(),
             attachedExistingRuntime: this.attachedExistingRuntime,
         });
+        if (projected.status !== 'waiting_approval' && this.approvalLifecycle?.read()?.lifecycle === 'pending') {
+            this.approvalLifecycle.resolve(Date.now());
+            try { this.driver?.updateMeta({ providerApproval: bindProviderApprovalAssignment(this.approvalLifecycle.read(), this.runtimeSettings) }); } catch { /* Optional host metadata transport. */ }
+        }
         return { ...projected, providerApproval: bindProviderApprovalAssignment(this.approvalLifecycle?.read(), this.runtimeSettings) };
     }
 

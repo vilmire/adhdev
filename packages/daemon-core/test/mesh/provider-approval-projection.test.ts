@@ -6,11 +6,24 @@ import { handleResolveAction } from '../../src/commands/chat-commands.js';
 import { reduce } from '../../src/mesh/turn-ledger/reducer.js';
 import { ev, makeAttempt, makeHold, POLICY, NOW } from '../turn-ledger/fixtures.js';
 import { surfaceStageOfAttempt } from '../../src/mesh/mesh-turn-presentation.js';
+import { SpecCliAdapter } from '../../src/providers/spec/cli-adapter.js';
 
 const state = { id: 'approval', label: 'Tool permission', title: null, status: 'approval' as const };
 const modal = { title: 'always-approve', kind: 'approval' as const, buttons: [{ index: 1, label: 'Yes, proceed' }, { index: 2, label: 'No' }] };
 
 describe('typed provider approval projection', () => {
+    it('stopped or failed runtime retracts its live permission resource', () => {
+        for (const providerFailure of [null, { message: 'Provider unavailable' }]) {
+            const lifecycle = new ProviderApprovalLifecycle(); lifecycle.observe(state, modal, 1000);
+            const adapter = Object.assign(Object.create(SpecCliAdapter.prototype), {
+                approvalLifecycle: lifecycle, runtimeSettings: {}, latestState: state, latestModal: modal,
+                providerFailure, exited: !providerFailure, spawned: true, driver: { updateMeta: vi.fn() },
+                maybeConfirmLiveAuthBillingSuspect: vi.fn(), refreshWirePendingQuestion: vi.fn(),
+            });
+            expect(adapter.getStatus().providerApproval).toMatchObject({ lifecycle: 'resolved', actionable: false, createdAt: 1000 });
+            expect(adapter.driver.updateMeta).toHaveBeenCalledTimes(1);
+        }
+    });
     it('retains actual modal time across repaint; resolution and replacement fence replay', () => {
         const lifecycle = new ProviderApprovalLifecycle();
         lifecycle.observe(state, modal, 1000);
@@ -102,6 +115,8 @@ describe('typed provider approval projection', () => {
         expect(suspended.attempt?.data.providerSuspension).toMatchObject({ at: NOW + 2000, modalKey: 'modal:first', resolvedAt: null });
         const resolved = reduce({ attempt: suspended.attempt, holds: suspended.holds, evidence: ev('suspension_resolved', { resolution: 'approved', via: 'modal_button' }, { at: NOW + 3000 }), policy: POLICY, nowMs: NOW + 3000 });
         expect(resolved.attempt?.data.providerSuspension?.resolvedAt).toBe(NOW + 3000);
+        const resumedByActivity = reduce({ attempt: suspended.attempt, holds: suspended.holds, evidence: ev('turn_started', { retro: false }, { at: NOW + 3500 }), policy: POLICY, nowMs: NOW + 3500 });
+        expect(resumedByActivity.attempt?.data.providerSuspension?.resolvedAt).toBe(NOW + 3500);
         const replay = reduce({ attempt: makeAttempt('suspended', { generation: 2, suspension: 'approval' }), holds: [], evidence: ev('suspension_resolved', { resolution: 'approved', via: 'modal_button' }), policy: POLICY, nowMs: NOW });
         expect(replay.attempt?.state).toBe('suspended');
         const staleModal = reduce({ attempt: { ...suspended.attempt!, data: { providerSuspension: { generation: 1, modalKey: 'modal:new', at: NOW + 2500, resolvedAt: null } } }, holds: [], evidence: ev('suspension_resolved', { resolution: 'approved', via: 'modal_button', modalKey: 'modal:first' }), policy: POLICY, nowMs: NOW + 3000 });

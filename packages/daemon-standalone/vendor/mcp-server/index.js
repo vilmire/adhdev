@@ -43368,6 +43368,7 @@ ${rendered.join("\n\n")}`,
           resume_by_activity: (draft) => {
             const attempt = draft.attempt;
             attempt.suspension = null;
+            if (attempt.data.providerSuspension?.generation === attempt.generation && attempt.data.providerSuspension.resolvedAt === null) attempt.data.providerSuspension.resolvedAt = draft.ctx.evidence.at;
             attempt.lastActivityAt = activityAt(draft.ctx.evidence);
             attempt.livenessFailStreak = 0;
           },
@@ -144474,6 +144475,13 @@ ${text}` : text;
           lastScreenChangeAt: this.driver?.getLastScreenChangeAt?.(),
           attachedExistingRuntime: this.attachedExistingRuntime
         });
+        if (projected.status !== "waiting_approval" && this.approvalLifecycle?.read()?.lifecycle === "pending") {
+          this.approvalLifecycle.resolve(Date.now());
+          try {
+            this.driver?.updateMeta({ providerApproval: bindProviderApprovalAssignment(this.approvalLifecycle.read(), this.runtimeSettings) });
+          } catch {
+          }
+        }
         return { ...projected, providerApproval: bindProviderApprovalAssignment(this.approvalLifecycle?.read(), this.runtimeSettings) };
       }
       /**

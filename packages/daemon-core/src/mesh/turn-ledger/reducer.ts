@@ -705,6 +705,7 @@ const ACTIONS: Record<ActionId, (draft: Draft) => void> = {
     resume_by_activity: (draft) => {
         const attempt = draft.attempt!;
         attempt.suspension = null;
+        if (attempt.data.providerSuspension?.generation === attempt.generation && attempt.data.providerSuspension.resolvedAt === null) attempt.data.providerSuspension.resolvedAt = draft.ctx.evidence.at;
         attempt.lastActivityAt = activityAt(draft.ctx.evidence);
         attempt.livenessFailStreak = 0;
     },
