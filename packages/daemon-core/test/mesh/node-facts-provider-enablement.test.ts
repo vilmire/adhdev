@@ -19,7 +19,8 @@ afterEach(() => { vi.resetModules(); vi.restoreAllMocks(); });
 
 async function factsWith(enablement: Record<string, any> | 'throws') {
     vi.resetModules();
-    vi.doMock('../../src/detection/cli-detector.js', () => ({
+    vi.doMock('../../src/detection/cli-detector.js', async (importOriginal) => ({
+        ...await importOriginal<typeof import('../../src/detection/cli-detector.js')>(),
         getProviderSpecPins: () => ({}),
         getProviderEnablementFacts: () => {
             if (enablement === 'throws') throw new Error('loader unreadable');

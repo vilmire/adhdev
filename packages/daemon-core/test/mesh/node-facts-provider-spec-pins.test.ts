@@ -18,7 +18,8 @@ afterEach(() => { vi.resetModules(); vi.restoreAllMocks(); });
 
 async function factsWith(pins: Map<string, any> | null) {
     vi.resetModules();
-    vi.doMock('../../src/detection/cli-detector.js', () => ({
+    vi.doMock('../../src/detection/cli-detector.js', async (importOriginal) => ({
+        ...await importOriginal<typeof import('../../src/detection/cli-detector.js')>(),
         getProviderSpecPins: () => {
             if (!pins) throw new Error('store unreadable');
             const out: Record<string, string> = {};
