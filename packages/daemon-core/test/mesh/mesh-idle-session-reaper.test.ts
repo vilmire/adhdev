@@ -1,16 +1,44 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest';
 
+// D2 fail-closed control: the reaper's active-work enumeration goes through
+// mesh-work-queue (getQueue / getActiveDirectDispatches). Mock just those two
+// so a test can make the queue read throw or return holders, while every other
+// export keeps its real implementation.
+const queueStub = vi.hoisted(() => ({
+    throwQueue: null as Error | null,
+    throwDirect: null as Error | null,
+    queueRows: [] as any[],
+    directRows: [] as any[],
+}));
+vi.mock('../../src/mesh/mesh-work-queue.js', async (importOriginal) => {
+    const mod = await importOriginal<typeof import('../../src/mesh/mesh-work-queue.js')>();
+    return {
+        ...mod,
+        getQueue: (...args: any[]) => {
+            if (queueStub.throwQueue) throw queueStub.throwQueue;
+            return queueStub.queueRows;
+        },
+        getActiveDirectDispatches: (...args: any[]) => {
+            if (queueStub.throwDirect) throw queueStub.throwDirect;
+            return queueStub.directRows;
+        },
+    };
+});
+
 import {
     planIdleSessionReap,
     runIdleSessionReapPass,
     resetIdleSessionReapCounter,
     getIdleSessionReapCount,
+    resetReapAbortReports,
+    REAP_ABORT_REPORT_INTERVAL_MS,
     type ReapableSessionRecord,
     type IdleSessionReaperDeps,
     reportIdlePastTtlHolders,
     resetIdleHolderReports,
     IDLE_HOLDER_REPORT_INTERVAL_MS,
 } from '../../src/mesh/mesh-idle-session-reaper.js';
+import { LOG } from '../../src/logging/logger.js';
 import {
     resolveDelegatedSessionIdleTtlMinutes,
     resolveDelegatedSessionIdleTtlMs,
@@ -265,6 +293,11 @@ describe('runIdleSessionReapPass', () => {
 
     beforeEach(() => {
         resetIdleSessionReapCounter();
+        resetReapAbortReports();
+        queueStub.throwQueue = null;
+        queueStub.throwDirect = null;
+        queueStub.queueRows = [];
+        queueStub.directRows = [];
         stopCalls = [];
         deps = makeDeps([delegate()]);
     });
@@ -333,5 +366,106 @@ describe('runIdleSessionReapPass', () => {
         );
         expect(out.stoppedSessionIds).toEqual([]);
         expect(stopCalls).toEqual([]);
+    });
+});
+
+// ── D2 fail-closed: an unreadable queue is NOT an empty queue ─────────────────
+// Before this fix, collectSessionIdsWithActiveWork caught a getQueue throw and
+// returned an EMPTY active-work set — so the pass reaped sessions that might be
+// holding live work, directly contradicting its own "an unreadable queue must
+// not authorize a reap" comment. The pass must now abort (stop nobody) instead.
+describe('runIdleSessionReapPass — unreadable active-work aborts the pass', () => {
+    let stopCalls: Array<{ sessionIds: string[]; mode: string }>;
+    let deps: IdleSessionReaperDeps;
+
+    const makeDeps = (records: ReapableSessionRecord[]): IdleSessionReaperDeps => ({
+        listSessions: async () => records,
+        cleanupMeshSessions: async (args: any) => {
+            stopCalls.push({ sessionIds: args.sessionIds, mode: args.mode });
+            return { success: true };
+        },
+    });
+
+    beforeEach(() => {
+        resetIdleSessionReapCounter();
+        resetReapAbortReports();
+        queueStub.throwQueue = null;
+        queueStub.throwDirect = null;
+        queueStub.queueRows = [];
+        queueStub.directRows = [];
+        stopCalls = [];
+        deps = makeDeps([delegate()]);
+    });
+
+    it('stops NOBODY when getQueue throws — no stop call, abortedReason set', async () => {
+        queueStub.throwQueue = new Error('mesh-runtime store locked');
+        const out = await runIdleSessionReapPass(deps, { meshId: MESH_ID, policy: undefined, now: NOW });
+        expect(out.stoppedSessionIds).toEqual([]);
+        expect(out.plan.reap).toEqual([]);
+        expect(out.abortedReason).toBe('active_work_unreadable');
+        expect(stopCalls).toEqual([]);
+        expect(getIdleSessionReapCount()).toBe(0);
+    });
+
+    it('stops NOBODY when the direct-dispatch read throws', async () => {
+        queueStub.throwDirect = new Error('store locked');
+        const out = await runIdleSessionReapPass(deps, { meshId: MESH_ID, policy: undefined, now: NOW });
+        expect(out.stoppedSessionIds).toEqual([]);
+        expect(out.abortedReason).toBe('active_work_unreadable');
+        expect(stopCalls).toEqual([]);
+    });
+
+    it('also refuses to dry-run a plan on untrusted active-work data', async () => {
+        queueStub.throwQueue = new Error('store locked');
+        const out = await runIdleSessionReapPass(deps, { meshId: MESH_ID, policy: undefined, now: NOW, dryRun: true });
+        expect(out.plan.reap).toEqual([]);
+        expect(out.abortedReason).toBe('active_work_unreadable');
+    });
+
+    it('still reaps a legitimately empty queue + past-TTL delegate (no over-suppression)', async () => {
+        // Queue reads fine and is genuinely empty → the normal reap runs.
+        const out = await runIdleSessionReapPass(deps, { meshId: MESH_ID, policy: undefined, now: NOW });
+        expect(out.abortedReason).toBeUndefined();
+        expect(out.stoppedSessionIds).toEqual(['sess_delegate']);
+        expect(stopCalls).toHaveLength(1);
+    });
+
+    it('recovers on the next pass once the queue read succeeds again', async () => {
+        queueStub.throwQueue = new Error('transient lock');
+        const aborted = await runIdleSessionReapPass(deps, { meshId: MESH_ID, policy: undefined, now: NOW });
+        expect(aborted.stoppedSessionIds).toEqual([]);
+        queueStub.throwQueue = null;
+        const recovered = await runIdleSessionReapPass(deps, { meshId: MESH_ID, policy: undefined, now: NOW + 60_000 });
+        expect(recovered.stoppedSessionIds).toEqual(['sess_delegate']);
+    });
+
+    it('excludes a session whose queue assignment the enumeration returns', async () => {
+        queueStub.queueRows = [{ id: 'task_1', status: 'assigned', assignedSessionId: 'sess_delegate' }];
+        const out = await runIdleSessionReapPass(deps, { meshId: MESH_ID, policy: undefined, now: NOW });
+        expect(out.stoppedSessionIds).toEqual([]);
+        expect(stopCalls).toEqual([]);
+    });
+
+    it('excludes a session holding an active direct dispatch', async () => {
+        queueStub.directRows = [{ sessionId: 'sess_delegate', status: 'acked' }];
+        const out = await runIdleSessionReapPass(deps, { meshId: MESH_ID, policy: undefined, now: NOW });
+        expect(out.stoppedSessionIds).toEqual([]);
+        expect(stopCalls).toEqual([]);
+    });
+
+    it('emits the abort diagnostic at a bounded cadence (once per interval per mesh)', async () => {
+        const warn = vi.spyOn(LOG, 'warn').mockImplementation(() => {});
+        try {
+            queueStub.throwQueue = new Error('store locked');
+            await runIdleSessionReapPass(deps, { meshId: MESH_ID, policy: undefined, now: NOW });
+            await runIdleSessionReapPass(deps, { meshId: MESH_ID, policy: undefined, now: NOW + 60_000 });
+            const abortWarns = () => warn.mock.calls.filter(c => String(c[1]).includes('reap ABORTED'));
+            expect(abortWarns()).toHaveLength(1);
+            // After the interval the diagnostic is emitted again (not suppressed forever).
+            await runIdleSessionReapPass(deps, { meshId: MESH_ID, policy: undefined, now: NOW + REAP_ABORT_REPORT_INTERVAL_MS });
+            expect(abortWarns()).toHaveLength(2);
+        } finally {
+            warn.mockRestore();
+        }
     });
 });

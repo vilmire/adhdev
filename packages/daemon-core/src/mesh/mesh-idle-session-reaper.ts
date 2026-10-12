@@ -107,23 +107,25 @@ function readStringValue(value: unknown): string {
  * A pending queue row that is not yet assigned to any session contributes no id —
  * correctly, since it pins no particular session.
  *
+ * ★THROWS when either source cannot be read (fail-closed). An unreadable queue is
+ * NOT an empty queue: an empty holder set returned after a failed read would let
+ * the pass reap sessions that are actively holding work (the 2026-10-10 orphan RCA,
+ * finding D2). runIdleSessionReapPass catches the throw and aborts the whole pass —
+ * it stops nobody — rather than reaping on untrusted data.
+ *
  * Exported for direct testing: this set is the "(b) no assigned/generating/waiting
  * task" condition, and getting it wrong reaps a session mid-task.
  */
 export function collectSessionIdsWithActiveWork(meshId: string): Set<string> {
     const ids = new Set<string>();
-    try {
-        for (const task of getQueue(meshId, { status: ['pending', 'assigned'] as any })) {
-            const sessionId = readStringValue((task as any)?.assignedSessionId);
-            if (sessionId) ids.add(sessionId);
-        }
-    } catch { /* best-effort: an unreadable queue must not authorize a reap */ }
-    try {
-        for (const dispatch of getActiveDirectDispatches(meshId)) {
-            const sessionId = readStringValue((dispatch as any)?.sessionId);
-            if (sessionId) ids.add(sessionId);
-        }
-    } catch { /* best-effort — see above */ }
+    for (const task of getQueue(meshId, { status: ['pending', 'assigned'] as any })) {
+        const sessionId = readStringValue((task as any)?.assignedSessionId);
+        if (sessionId) ids.add(sessionId);
+    }
+    for (const dispatch of getActiveDirectDispatches(meshId)) {
+        const sessionId = readStringValue((dispatch as any)?.sessionId);
+        if (sessionId) ids.add(sessionId);
+    }
     return ids;
 }
 
@@ -275,6 +277,35 @@ export function reportIdlePastTtlHolders(args: {
     return reported;
 }
 
+/** An aborted pass (unreadable active-work) is re-reported at most this often per mesh. */
+export const REAP_ABORT_REPORT_INTERVAL_MS = 15 * 60_000;
+const reapAbortReportedAt = new Map<string, number>();
+
+/** Test-only reset of the aborted-pass report de-dup. */
+export function resetReapAbortReports(): void {
+    reapAbortReportedAt.clear();
+}
+
+/**
+ * Bounded-cadence diagnostic for an aborted reap pass. One warn per mesh per
+ * interval: the pass rides the 5-minute housekeeping tick, so an unbounded log
+ * would spam the daemon log for as long as the queue store stays unreadable,
+ * while zero log lines is exactly the "reaper silently never runs" blindness
+ * this pass exists to close.
+ */
+function reportReapAborted(meshId: string, now: number, error: unknown): void {
+    const last = reapAbortReportedAt.get(meshId);
+    if (last !== undefined && (now - last) < REAP_ABORT_REPORT_INTERVAL_MS) return;
+    reapAbortReportedAt.set(meshId, now);
+    const message = error instanceof Error ? error.message : String(error);
+    LOG.warn(
+        'MeshIdleSessionReaper',
+        `Idle session reap ABORTED for mesh ${meshId}: the active-work enumeration (queue/direct dispatches) `
+        + `could not be read (${message}). An unreadable queue is not an empty queue — no session was stopped. `
+        + `Legitimate reaping resumes on the next tick once the read succeeds.`,
+    );
+}
+
 /** Injected side effects, so the orchestrator is testable without a router. */
 export interface IdleSessionReaperDeps {
     listSessions(): Promise<ReapableSessionRecord[]>;
@@ -295,6 +326,12 @@ interface IdleSessionReapOutcome {
     stoppedSessionIds: string[];
     /** Cumulative count of runtimes this daemon has stopped, for observability. */
     totalStopped: number;
+    /**
+     * Set when the pass deliberately stopped NOBODY because the active-work
+     * enumeration could not be read. Distinct from an empty plan (nothing to
+     * reap): here the pass never computed a plan at all.
+     */
+    abortedReason?: 'active_work_unreadable';
 }
 
 /** Process-lifetime count of reaped sessions (observability requirement 4). */
@@ -344,10 +381,23 @@ export async function runIdleSessionReapPass(
         return empty;
     }
 
+    // FAIL-CLOSED on an unreadable active-work enumeration: an unreadable queue is
+    // NOT an empty queue. collectSessionIdsWithActiveWork throws (see its contract);
+    // abort the whole pass — stop nobody, compute no plan — and emit one bounded
+    // diagnostic. The next tick retries, so a transient store failure delays
+    // reaping by one interval instead of killing sessions that hold live work.
+    let activeWorkSessionIds: Set<string>;
+    try {
+        activeWorkSessionIds = collectSessionIdsWithActiveWork(args.meshId);
+    } catch (e: any) {
+        reportReapAborted(args.meshId, now, e);
+        return { ...empty, abortedReason: 'active_work_unreadable' };
+    }
+
     const plan = planIdleSessionReap({
         meshId: args.meshId,
         records,
-        activeWorkSessionIds: collectSessionIdsWithActiveWork(args.meshId),
+        activeWorkSessionIds,
         ttlMs,
         now,
     });
