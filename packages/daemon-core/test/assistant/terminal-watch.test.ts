@@ -91,3 +91,27 @@ it('native relay submission records terminal receipt and relay attribution; an M
         expect(log.sources('bound').at(-1)).toBe('relay'); relay.stop();
     }
 });
+it('recreated recipient gets bounded uncertainty once, can explicitly resume, and original native evidence settles without duplication', async () => {
+    for (const confirmed of [false, true]) {
+        const { store, add } = fixture(); const sub: any = store.subscribe('mesh', 'task', 'task', 'assistant');
+        add('first', 'mesh', 1); add('second', 'mesh', 2);
+        const intent = store.beginDelivery(sub.watchId, 'first', 'old-assistant');
+        const text = `[ADHDev task/mission terminal] {"deliveryToken":"${intent.token}"}`;
+        const execute = vi.fn(async () => ({ success: true, messages: confirmed ? [{ role: 'user', content: text }] : [], hasMore: false }));
+        const ports: any = { listMeshes: () => [{ id: 'mesh' }], isHostedHere: () => true, execute };
+        const submit = vi.fn(async () => true);
+        const delivery = new TerminalWatchDelivery(store, async () => ports, () => 'new-assistant', () => true, submit);
+        await delivery.tick(); await delivery.tick();
+        expect(execute.mock.calls.every((c: any) => c[1].targetSessionId === 'old-assistant')).toBe(true);
+        if (confirmed) {
+            expect(store.receipts(sub.watchId)).toEqual(['first','second']); expect(submit).toHaveBeenCalledTimes(1);
+            expect(submit.mock.calls[0][2]).toContain('"eventId":"second"');
+        } else {
+            expect(store.receipts(sub.watchId)).toEqual([]); expect(submit).toHaveBeenCalledTimes(1);
+            expect(submit.mock.calls[0][0]).toBe('new-assistant'); expect(submit.mock.calls[0][2]).toContain('unconfirmed_original_recipient');
+            expect(submit.mock.calls[0][2]).not.toContain(intent.token);
+            store.retryDelivery(sub.watchId, 'first'); await delivery.tick();
+            expect(store.receipts(sub.watchId)).toEqual(['first','second']); expect(submit).toHaveBeenCalledTimes(3);
+        }
+    }
+});

@@ -308,6 +308,8 @@ export function wireAssistantRuntime(
             sid => instanceReady(instanceOf(components, sid)) && !relay.hasPendingInput(), async (sid, messageId, text) => {
                 // Reuse relay batching, busy gates and delivery-time input attribution.
                 if (!relay.isQueued(messageId)) relay.enqueueInput({ source: 'relay', text, messageId, forSessionId: sid });
+                // Uncertainty metadata has no terminal receipt; dedupe its enqueue in memory.
+                if (messageId.startsWith('assistant-terminal-uncertain:')) return true;
                 return false; // durable intent stays pending until onInputsSubmitted or exact native evidence
             });
     } catch (e) { LOG.warn('Assistant', `terminal watch store unavailable: ${(e as Error).message}`); }

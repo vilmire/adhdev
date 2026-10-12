@@ -36,6 +36,7 @@ import {
     type ReadLedgerSliceOptions,
     type SessionRecoveryContext,
 } from './mesh-ledger.js';
+import type { Database } from 'better-sqlite3';
 import type { LocalRecordProjection } from './mesh-local-record-store.js';
 
 export const DEFAULT_LOCAL_RECORD_SLICE_LIMIT = 100;
@@ -70,7 +71,7 @@ interface TerminalRow {
  * (`isWeakCompletionEvidence`) and `intentional` + `intentionalStopReason` for
  * a cancel (`isIntentionalCleanupStopEntry` — a cancel is not a failure).
  */
-export function readTurnTerminalViews(meshId: string, opts: { sinceMs?: number; taskId?: string; tail?: number; kinds?: readonly string[] } = {}): MeshLedgerEntry[] {
+export function readTurnTerminalViews(meshId: string, opts: { sinceMs?: number; taskId?: string; tail?: number; kinds?: readonly string[]; db?: Database; excludeIds?: readonly string[]; oldestFirst?: boolean } = {}): MeshLedgerEntry[] {
     const where = ['mesh_id = ?', 'task_id IS NOT NULL', 'terminal_outcome IS NOT NULL'];
     const args: unknown[] = [meshId];
     if (opts.kinds && opts.kinds.length > 0) {
@@ -86,13 +87,17 @@ export function readTurnTerminalViews(meshId: string, opts: { sinceMs?: number; 
     }
     if (opts.sinceMs !== undefined) { where.push('terminal_at >= ?'); args.push(opts.sinceMs); }
     if (opts.taskId) { where.push('task_id = ?'); args.push(opts.taskId); }
+    if (opts.excludeIds?.length) {
+        where.push(`attempt_id || '#committed' NOT IN (${opts.excludeIds.map(() => '?').join(',')})`);
+        args.push(...opts.excludeIds);
+    }
     const tail = opts.tail && opts.tail > 0 ? Math.floor(opts.tail) : null;
-    const rows = MeshRuntimeStore.getInstance().db.prepare(
+    const rows = (opts.db ?? MeshRuntimeStore.getInstance().db).prepare(
         `SELECT attempt_id, task_id, session_id, node_id, provider_type, terminal_outcome, terminal_reason, terminal_strength,
                 terminal_source, terminal_at
-         FROM turn_attempts WHERE ${where.join(' AND ')} ORDER BY terminal_at DESC${tail ? ` LIMIT ${tail}` : ''}`,
+         FROM turn_attempts WHERE ${where.join(' AND ')} ORDER BY terminal_at ${opts.oldestFirst ? 'ASC, attempt_id ASC' : 'DESC, attempt_id DESC'}${tail ? ` LIMIT ${tail}` : ''}`,
     ).all(...args) as TerminalRow[];
-    return rows.reverse().map((row): MeshLedgerEntry => {
+    return (opts.oldestFirst ? rows : rows.reverse()).map((row): MeshLedgerEntry => {
         const completed = row.terminal_outcome === 'completed';
         const cancelled = row.terminal_outcome === 'cancelled';
         return {

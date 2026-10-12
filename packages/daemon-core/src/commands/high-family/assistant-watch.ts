@@ -4,7 +4,7 @@ import { assistantToolGate, ASSISTANT_TOOL_SOURCES, projectPortsFor, readAssista
 import { resolveAssistantProject } from '../../assistant/assistant-projects.js';
 import { getAssistantRegistry } from '../../assistant/assistant-registry.js';
 import { MeshRuntimeStore } from '../../mesh/mesh-runtime-store.js';
-import { TerminalWatchStore } from '../../assistant/terminal-watch.js';
+import { terminalRetryIdentity, TerminalWatchStore } from '../../assistant/terminal-watch.js';
 import { pendingTerminalEvents } from '../../assistant/terminal-watch-runtime.js';
 import type { HighFamilyHandler } from './types.js';
 
@@ -35,13 +35,15 @@ const watch: HighFamilyHandler = async (ctx, args) => {
     }
     if (args.action === 'retry_delivery') {
         if (typeof args.eventId !== 'string' || !store.intent(owned.watch_id, args.eventId)) return { success: false, code: 'terminal_delivery_intent_not_found' };
+        if (args.retryIdentity !== terminalRetryIdentity(store.intent(owned.watch_id, args.eventId)!)) return { success: false, code: 'terminal_delivery_intent_changed' };
         store.retryDelivery(owned.watch_id, args.eventId);
         return { success: true, warning: 'Delivery was unconfirmed; retry retains the same event identity and may repeat a notice.' };
     }
     if (args.action === 'unsubscribe') { store.unsubscribe(owned.watch_id); return { success: true }; }
     // Reading pending events NEVER consumes them. Native delivery writes receipts after submission.
     if (args.action === 'pending') {
-        try { return { success: true, watchId: owned.watch_id, events: (await pendingTerminalEvents(store, ports, owned)).map(event => ({ ...event, deliveryState: store.intent(owned.watch_id, event.eventId) ? 'unconfirmed_native_delivery' : 'pending' })) }; }
+        try { return { success: true, watchId: owned.watch_id, events: (await pendingTerminalEvents(store, ports, owned)).map(event => ({ ...event, deliveryState: store.intent(owned.watch_id, event.eventId) ? 'unconfirmed_native_delivery' : 'pending',
+                ...(store.intent(owned.watch_id, event.eventId) ? { originalRecipient: store.intent(owned.watch_id, event.eventId)!.recipient_session_id, startedAt: store.intent(owned.watch_id, event.eventId)!.started_at, retryAction: 'retry_delivery', retryIdentity: terminalRetryIdentity(store.intent(owned.watch_id, event.eventId)!) } : {}) })) }; }
         catch (e) { return { success: false, code: 'terminal_watch_unavailable', error: (e as Error).message }; }
     }
     return { success: false, code: 'invalid_args' };

@@ -1,6 +1,6 @@
 import { isVisible, messageText } from './project-views.js';
 import type { AssistantProjectPorts } from './assistant-project-ports.js';
-import { readTerminalEvents, TerminalWatchStore, deliverTerminalEvents, type TerminalEvent, type TerminalWatch, type TerminalDeliveryIntent } from './terminal-watch.js';
+import { terminalRetryIdentity, readTerminalEvents, TerminalWatchStore, deliverTerminalEvents, type TerminalEvent, type TerminalWatch, type TerminalDeliveryIntent } from './terminal-watch.js';
 
 export async function pendingTerminalEvents(store: TerminalWatchStore, ports: AssistantProjectPorts, watch: TerminalWatch): Promise<TerminalEvent[]> {
     const mesh = ports.listMeshes().find(m => m.id === watch.mesh_id);
@@ -24,13 +24,17 @@ export async function pendingTerminalEvents(store: TerminalWatchStore, ports: As
                 : r.missionId !== watch.entity_id || !['mission_status_changed','mission_created'].includes(r.kind) || !['completed','abandoned'].includes(r.outcome ?? ''))) throw new Error('terminal_watch_invalid_remote_identity');
         return { eventId: r.eventId, meshId: mesh.id, taskId: id(r.taskId), missionId: id(r.missionId),
             sessionId: id(r.sessionId), nodeId: id(r.nodeId), kind: r.kind, at: r.at, sourceMeshId: remote.hostMeshId, sourceDaemonId: remote.hostDaemonId,
-            outcome: watch.kind === 'task' ? r.kind.slice(5) : r.outcome };
+            outcome: watch.kind === 'task' ? r.kind.slice(5) : r.outcome,
+            ...(id(r.attemptId) ? { attemptId: r.attemptId } : {}),
+            ...(['genuine','weak','tool_report','operator','unknown'].includes(r.strength ?? '') ? { strength: r.strength } : {}),
+            evidenceLevel: r.evidenceLevel === 'strong' && ['genuine','tool_report','operator'].includes(r.strength ?? '') ? 'strong' : 'weak' };
     }).filter(e => !receipts.includes(e.eventId));
     return [...new Map(normalized.map(e => [e.eventId, e])).values()].sort((a, b) => a.at - b.at || a.eventId.localeCompare(b.eventId));
 }
 
 export class TerminalWatchDelivery {
     private running = false;
+    private uncertaintyNotices = new Map<string, number>();
     constructor(private store: TerminalWatchStore, private ports: () => Promise<AssistantProjectPorts>,
         private recipient: () => string | null, private ready: (sid: string) => boolean,
         private submit: (sid: string, messageId: string, text: string) => Promise<boolean>) {}
@@ -47,7 +51,14 @@ export class TerminalWatchDelivery {
                 await deliverTerminalEvents(events, watch, async (id, text) => {
                     if (!this.ready(sid) || this.recipient() !== sid) return false;
                     return this.submit(sid, id, text);
-                }, this.store, { recipient: sid, confirm: intent => confirmTerminalDelivery(ports, intent) });
+                }, this.store, { recipient: sid, confirm: intent => confirmTerminalDelivery(ports, intent), uncertain: async intent => {
+                    const key = JSON.stringify([intent.watch_id, intent.event_id, sid, intent.token]);
+                    for (const [stamp, at] of this.uncertaintyNotices) if (Date.now() - at >= 24 * 60 * 60_000) this.uncertaintyNotices.delete(stamp);
+                    if (this.uncertaintyNotices.has(key) || this.recipient() !== sid || !this.ready(sid)) return;
+                    if (this.uncertaintyNotices.size >= 256) this.uncertaintyNotices.delete(this.uncertaintyNotices.keys().next().value!);
+                    const text = `[ADHDev terminal delivery uncertainty] ${JSON.stringify({ project: watch.mesh_id, watchId: intent.watch_id, eventId: intent.event_id, originalRecipient: intent.recipient_session_id, startedAt: intent.started_at, deliveryState: 'unconfirmed_original_recipient', retryAction: 'project_watch retry_delivery', retryIdentity: terminalRetryIdentity(intent), warning: 'Original delivery could not be confirmed. Read pending metadata and explicitly retry this exact watch/event only if needed; retry may repeat the notice. Later notices remain ordered behind this event.' })}`;
+                    if (await this.submit(sid, `assistant-terminal-uncertain:${intent.watch_id}:${intent.event_id}:${sid}`, text)) this.uncertaintyNotices.set(key, Date.now());
+                } });
             }
         } finally { this.running = false; }
     }
@@ -58,13 +69,15 @@ export async function confirmTerminalDelivery(ports: AssistantProjectPorts, inte
     const matches = (chat: Record<string, unknown>) => (Array.isArray(chat.messages) ? chat.messages : []).some((m: any) =>
         m?.role === 'user' && isVisible(m)
         && messageText(m).includes('[ADHDev task/mission terminal]') && messageText(m).includes(`"deliveryToken":"${intent.token}"`));
-    const chat = await ports.execute('read_chat', { targetSessionId: intent.recipient_session_id, limit: 200 });
-    if (chat.success && matches(chat)) return true;
-    for (let offset = 0; offset < 400; offset += 100) {
-        const history = await ports.execute('chat_history', { targetSessionId: intent.recipient_session_id, offset, limit: 100, excludeRecentCount: 0 });
-        if (!history.success) return false;
-        if (matches(history)) return true;
-        if (history.hasMore !== true) break;
-    }
-    return false;
+    try {
+        const chat = await ports.execute('read_chat', { targetSessionId: intent.recipient_session_id, limit: 200 });
+        if (chat.success && matches(chat)) return true;
+        for (let offset = 0; offset < 400; offset += 100) {
+            const history = await ports.execute('chat_history', { targetSessionId: intent.recipient_session_id, offset, limit: 100, excludeRecentCount: 0 });
+            if (!history.success) return false;
+            if (matches(history)) return true;
+            if (history.hasMore !== true) break;
+        }
+        return false;
+    } catch { return false; }
 }
