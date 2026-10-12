@@ -91522,7 +91522,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
               for (const raw of observed.slice(0, 64)) {
                 const machine = observedInventoryMachine(raw);
                 if (!machine || !(p.mesh.nodes ?? []).some((n) => daemonIdsEquivalent4(n.daemonId, machine.daemonId)) && !daemonIdsEquivalent4(p.remote.hostDaemonId, machine.daemonId)) continue;
-                const row = result.machines.find((m) => m.daemonId === machine.daemonId);
+                const row = result.machines.find((m) => daemonIdsEquivalent4(m.daemonId, machine.daemonId));
                 if (row && typeof machine.reportedAt === "number" && (row.reportedAt === null || machine.reportedAt > row.reportedAt)) {
                   Object.assign(row, { reportedAt: machine.reportedAt, freshness: machine.freshness, providers: machine.providers });
                 }

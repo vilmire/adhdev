@@ -130,12 +130,17 @@ describe('read chat contract validation', () => {
       status: 'idle',
       messages: [],
       turnTerminalMarkers: [{ receivedAt: 1720000000000, outcome: 'finished', summary: 'done' }],
-    }, 'test')).toThrow("turnTerminalMarkers[0].outcome must be 'completed' or 'aborted'")
+    }, 'test')).toThrow("turnTerminalMarkers[0].outcome must be 'completed', 'aborted', or 'failed'")
 
     expect(() => validateReadChatResultPayload({
       status: 'idle',
       messages: [],
       turnTerminalMarkers: [{ outcome: 'completed', summary: 'done' }],
     }, 'test')).toThrow('turnTerminalMarkers[0].receivedAt must be a finite number')
+  })
+
+  it('preserves identified native history for lineage fencing and omits malformed identity', () => {
+    expect(validateReadChatResultPayload({ status: 'idle', messages: [], historySessionId: 'native-history' }, 'test').historySessionId).toBe('native-history')
+    expect(validateReadChatResultPayload({ status: 'idle', messages: [], historySessionId: { id: 'foreign' } }, 'test').historySessionId).toBeUndefined()
   })
 })
