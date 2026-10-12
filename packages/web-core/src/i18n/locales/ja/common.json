@@ -756,6 +756,12 @@
                 "unavailable": "モーダル取得不可"
             },
             "needsAttention": "確認が必要 — 対象セッションを開く",
+            "compatibility": {
+                "exact": "Inbox の正確な対象",
+                "session_only": "旧プロバイダー · セッションで操作",
+                "unknown": "互換性不明 · セッションを確認"
+            },
+            "counts": "（待機 {{waiting}} · 操作可能 {{actionable}}）",
             "runtimeDirectory": "実行ディレクトリ",
             "displayedDirectory": "信頼を求めるディレクトリ",
             "directoryUnknown": "ライブモーダルに表示なし",

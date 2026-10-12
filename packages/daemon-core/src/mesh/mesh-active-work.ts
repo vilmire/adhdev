@@ -1,3 +1,4 @@
+import { readProviderDecision, isActionableProviderApproval } from '@adhdev/mesh-shared';
 import type { ProviderApproval } from '@adhdev/mesh-shared';
 import type { MeshLedgerEntry } from './mesh-ledger.js';
 import { meshRecord } from './mesh-record.js';
@@ -80,7 +81,11 @@ export interface MeshActiveWorkSummary {
     totalActiveCount: number;
     queueActiveCount: number;
     directActiveCount: number;
+    /** Confirmed live tool permissions; excludes compatibility/uncertain rows. */
     awaitingApprovalCount: number;
+    /** All routed waiting resources, including non-actionable uncertainty. */
+    waitingApprovalCount: number;
+    approvalAttentionCount: number;
     generatingCount: number;
     failedCount: number;
     idleCount: number;
@@ -357,14 +362,17 @@ export function sessionStatusFromNodes(nodes: any[] | undefined, nodeId?: string
     });
     if (!session) return { staleReason: 'direct task session is not present in live session records' };
     if (typeof session === 'string') return {};
-    const raw = `${readString(session.status) || ''} ${readString(session.lifecycle) || ''} ${readString(session.state) || ''} ${readString(session.activeChat?.status) || ''}`.toLowerCase();
+    const raw = `${readString(session.status) || ''} ${readString(session.chatStatus) || ''} ${readString(session.lifecycle) || ''} ${readString(session.state) || ''} ${readString(session.activeChat?.status) || ''}`.toLowerCase();
     // A question picker surfaces as waiting_choice — distinct from an approval modal.
     // Check it first so a question worker is not mislabeled awaiting_approval and
     // pulled into the approval inbox (mission f1d25e11).
     if (raw.includes('waiting_choice') || raw.includes('choice')) return { status: 'awaiting_choice' };
-    if (raw.includes('approval')) return { status: 'awaiting_approval', providerApproval: session.isCached || (node.health && node.health !== 'online') ? null : session.providerApproval ?? session.activeChat?.providerApproval };
+    if (/failed|stopped|terminated|exited/.test(raw)) return { status: 'failed' };
+    if (raw.includes('approval')) {
+        const approval = readProviderDecision(session.activeChat?.providerApproval !== undefined ? session.activeChat.providerApproval : session.providerApproval, true, !!session.activeChat?.activeModal?.buttons?.length);
+        return { status: 'awaiting_approval', providerApproval: approval && (session.isCached || (node.health && node.health !== 'online')) ? { ...approval, evidence: 'cached', actionable: false } : approval };
+    }
     if (raw.includes('generating') || raw.includes('running') || raw.includes('busy')) return { status: 'generating' };
-    if (raw.includes('failed') || raw.includes('stopped') || raw.includes('terminated') || raw.includes('exited')) return { status: 'failed' };
     if (raw.includes('idle') || raw.includes('waiting_input') || raw.includes('ready')) return { status: 'idle' };
     return {};
 }
@@ -626,8 +634,8 @@ function buildLedgerDirectDispatchRecord(
 /**
  * One session awaiting an approval decision — the derived row `mesh_list_pending_approvals`
  * returns and the UI approvals inbox renders. A thin projection of the `awaiting_approval`
- * MeshActiveWorkRecord: it carries exactly what a coordinator needs to route a follow-up
- * mesh_approve(node_id, session_id) and what the inbox needs to label the item. No new
+ * MeshActiveWorkRecord: it carries the exact Inbox target or existing session route
+ * and labels compatibility/uncertainty truthfully. No new
  * store or data source — derived from the same buildMeshActiveWork records.
  */
 export interface MeshPendingApproval {
@@ -641,28 +649,24 @@ export interface MeshPendingApproval {
     /** Actual recorded approval or modal suspension time; null when unknown. */
     waitingSince: string | null;
     providerApproval: ProviderApproval;
+    actionable: boolean;
     /** Milliseconds blocked on this modal; null when the suspension clock is unknown. */
     waitingMs: number | null;
 }
 
-/**
- * Derive the mesh-wide pending-approval inbox from already-built active-work records.
- * Filter+projection over `status === 'awaiting_approval'`, then a deterministic dedup
- * keyed by (nodeId, sessionId) — no new store, no probe;
- * the caller supplies the records (typically buildMeshActiveWork(...).activeWork so the
- * enumeration reuses the exact classification `mesh_status` already computes). Records
- * without a node/session are skipped: an approval that cannot be routed to a live
- * node+session via mesh_approve is not actionable inbox content.
- */
 /** Setup/incomplete evidence is attention, never a tool permission or owner consent. */
 export function collectProviderDecisionAttention(nodes: any[] | null | undefined): ProviderApproval[] {
     const items = new Map<string, ProviderApproval>();
     for (const node of nodes ?? []) {
-        for (const session of node.activeSessionDetails ?? []) {
-            const approval: ProviderApproval | null = session.providerApproval ?? session.activeChat?.providerApproval ?? null;
-            if (!approval || approval.source !== 'provider_modal' || approval.lifecycle !== 'pending') continue;
-            const evidence = session.isCached || node.health !== 'online' ? 'cached' : approval.evidence;
-            if (approval.type === 'tool_permission' && approval.actionable && evidence === 'live') continue;
+        const sessions = [node.activeSessionDetails, node.sessions, node.activeSessions, node.lastProbe?.sessions].filter(Array.isArray).flat();
+        for (const session of sessions) {
+            if (!session || typeof session !== 'object' || session.activeInteractivePrompt || session.activeChat?.activeInteractivePrompt) continue;
+            const raw = `${session.status ?? ''} ${session.chatStatus ?? ''} ${session.state ?? ''} ${session.lifecycle ?? ''} ${session.activeChat?.status ?? ''}`;
+            if (/choice|stopped|exited|terminated|failed/.test(raw)) continue;
+            const approval = readProviderDecision(session.activeChat?.providerApproval !== undefined ? session.activeChat.providerApproval : session.providerApproval, /approval/.test(raw), !!session.activeChat?.activeModal?.buttons?.length);
+            if (!approval || approval.lifecycle !== 'pending') continue;
+            const evidence = session.isCached || node.health !== 'online' ? 'cached' : /approval/.test(raw) ? approval.evidence : 'unavailable';
+            if (isActionableProviderApproval({ ...approval, evidence })) continue;
             const nodeId = node.nodeId || node.id;
             const sessionId = session.sessionId || session.id;
             if (!nodeId || !sessionId) continue;
@@ -672,17 +676,34 @@ export function collectProviderDecisionAttention(nodes: any[] | null | undefined
     return [...items.values()];
 }
 
+/**
+ * Derive the mesh-wide pending-approval inbox from already-built active-work records.
+ * Filter+projection over `status === 'awaiting_approval'`, then a deterministic dedup
+ * keyed by (nodeId, sessionId) — no new store, no probe;
+ * the caller supplies the records (typically buildMeshActiveWork(...).activeWork so the
+ * enumeration reuses the exact classification `mesh_status` already computes). Records
+ * without a node/session are skipped. Compatibility and uncertain rows remain visible
+ * with actionable=false; only confirmed exact live permissions count as actionable.
+ */
 export function collectPendingApprovals(activeWork: MeshActiveWorkRecord[]): MeshPendingApproval[] {
     const approvals: MeshPendingApproval[] = [];
     for (const record of activeWork) {
         if (record.status !== 'awaiting_approval') continue;
         if (!record.nodeId || !record.sessionId) continue;
-        const approval = record.providerApproval;
-        if (!approval || approval.source !== 'provider_modal' || approval.type !== 'tool_permission' || approval.evidence !== 'live'
-            || approval.lifecycle !== 'pending' || !approval.actionable || !approval.modalKey
-            || !Array.isArray(approval.buttons) || !approval.buttons.some(button => typeof button === 'string' && button.trim())) continue;
-        if (approval.taskId && approval.taskId !== record.taskId) continue;
-        if (record.attemptId && approval.attemptId && record.attemptId !== approval.attemptId) continue;
+        if (record.providerApproval?.lifecycle === 'resolved') continue;
+        const recorded = readProviderDecision(record.providerApproval, false);
+        if (record.providerApproval && !recorded) continue;
+        const hasLedgerPrompt = record.terminalKind === 'task_approval_needed';
+        if (record.providerApproval === null && !hasLedgerPrompt) continue;
+        const approval = recorded ?? { ...readProviderDecision(undefined, true)!,
+            source: hasLedgerPrompt ? 'ledger_approval' as const : 'status_only' as const,
+            nodeId: record.nodeId, sessionId: record.sessionId, taskId: record.taskId,
+            attemptId: record.attemptId ?? null,
+            createdAt: hasLedgerPrompt && record.terminalAt && Number.isFinite(Date.parse(record.terminalAt)) ? Date.parse(record.terminalAt) : null };
+        const identityMatches = (!approval.taskId || approval.taskId === record.taskId)
+            && (!record.attemptId || !approval.attemptId || record.attemptId === approval.attemptId);
+        const actionable = identityMatches && isActionableProviderApproval(approval);
+        const resource = identityMatches ? approval : { ...approval, evidence: 'unavailable' as const, actionable: false };
         const recordedAt = record.terminalKind === 'task_approval_needed' ? record.terminalAt : undefined;
         const blockedAt = recordedAt && (approval.createdAt === null || Date.parse(recordedAt) >= approval.createdAt) ? recordedAt : undefined;
         const suspensionAt = approval.createdAt === null ? null : new Date(approval.createdAt).toISOString();
@@ -699,7 +720,8 @@ export function collectPendingApprovals(activeWork: MeshActiveWorkRecord[]): Mes
             status: 'awaiting_approval',
             waitingSince,
             waitingMs,
-            providerApproval: approval,
+            providerApproval: resource,
+            actionable,
         });
     }
     // DETERMINISTIC DEDUP (rc.19 live defect: mesh_list_pending_approvals returned the
@@ -707,7 +729,8 @@ export function collectPendingApprovals(activeWork: MeshActiveWorkRecord[]): Mes
     // (nodeId, sessionId) pair can never need two inbox rows — yet the active-work build
     // can yield two records for it (a queue-assigned task record AND a direct-dispatch
     // record bound to the same session, or the MeshRuntimeStore + remote-ledger paths
-    // overlapping). Keyed by node/session identity; the longest-waiting row wins (it is
+    // overlapping). Keyed by node/session identity; confirmed actionability wins over
+    // uncertainty, then the longest-waiting row wins (it is
     // the most-stalled binding and the one the coordinator should act on first). Ties
     // keep the first-seen row — activeWork arrives createdAt-sorted, so the outcome is
     // deterministic across identical inputs.
@@ -715,7 +738,7 @@ export function collectPendingApprovals(activeWork: MeshActiveWorkRecord[]): Mes
     for (const approval of approvals) {
         const key = `${approval.nodeId}::${approval.sessionId}`;
         const existing = bySession.get(key);
-        if (!existing || (approval.waitingMs ?? -1) > (existing.waitingMs ?? -1)) {
+        if (!existing || (approval.actionable && !existing.actionable) || (approval.actionable === existing.actionable && (approval.waitingMs ?? -1) > (existing.waitingMs ?? -1))) {
             bySession.set(key, approval);
         }
     }
@@ -741,13 +764,16 @@ export function buildMeshActiveWorkSummary(activeWork: MeshActiveWorkRecord[]): 
         sourceCounts[item.source] += 1;
         statusCounts[item.status] += 1;
     }
+    const approvals = collectPendingApprovals(activeWork);
     const staleDirectCount = activeWork.filter(item => item.source === 'direct' && item.staleReason).length;
     const staleDirectUnacknowledgedCount = activeWork.filter(item => item.source === 'direct' && item.staleDispatchUnacknowledged).length;
     return {
         totalActiveCount: activeWork.length,
         queueActiveCount: sourceCounts.queue,
         directActiveCount: sourceCounts.direct,
-        awaitingApprovalCount: collectPendingApprovals(activeWork).length,
+        awaitingApprovalCount: approvals.filter(item => item.actionable).length,
+        waitingApprovalCount: approvals.length,
+        approvalAttentionCount: approvals.filter(item => !item.actionable).length,
         generatingCount: statusCounts.generating,
         failedCount: statusCounts.failed,
         idleCount: statusCounts.idle,

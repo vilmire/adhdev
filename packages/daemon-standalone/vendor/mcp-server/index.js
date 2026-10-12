@@ -23498,6 +23498,7 @@ var require_dist3 = __commonJS({
       hasGitStatusEvidence: () => hasGitStatusEvidence,
       hasWorkerProtocolFooter: () => hasWorkerProtocolFooter2,
       interpolateString: () => interpolateString,
+      isActionableProviderApproval: () => isActionableProviderApproval,
       isAssistantTool: () => isAssistantTool2,
       isBlockedStatus: () => isBlockedStatus,
       isBusyStatus: () => isBusyStatus,
@@ -23599,11 +23600,13 @@ var require_dist3 = __commonJS({
       pickBestTransitGitStatus: () => pickBestTransitGitStatus,
       projectFileDiffRow: () => projectFileDiffRow2,
       projectTurnEvidenceEntry: () => projectTurnEvidenceEntry,
+      providerApprovalSnapshot: () => providerApprovalSnapshot,
       readBoolean: () => readBoolean,
       readEnvelopeFields: () => readEnvelopeFields,
       readGitSubmodules: () => readGitSubmodules,
       readNumber: () => readNumber,
       readOptionalRecord: () => readOptionalRecord2,
+      readProviderDecision: () => readProviderDecision,
       readRecord: () => readRecord2,
       readString: () => readString2,
       readStringArray: () => readStringArray,
@@ -26039,6 +26042,63 @@ ${renderWorkerProtocolFooter2(input)}`;
         out.gitObservation = without2(observation, ["observedAt"]);
       }
       return out;
+    }
+    function isActionableProviderApproval(approval) {
+      return !!approval && approval.source === "provider_modal" && approval.type === "tool_permission" && approval.lifecycle === "pending" && approval.evidence === "live" && approval.actionable && !!approval.modalKey && Array.isArray(approval.buttons) && approval.buttons.some((button) => typeof button === "string" && !!button.trim());
+    }
+    function readProviderDecision(approval, waiting, hasModal = false) {
+      if (approval !== void 0) return approval && ["provider_modal", "legacy_provider", "status_only", "ledger_approval"].includes(approval.source) ? approval : null;
+      if (!waiting) return null;
+      return {
+        source: hasModal ? "legacy_provider" : "status_only",
+        type: "unknown",
+        compatibility: hasModal ? "session_only" : "unknown",
+        evidence: "unavailable",
+        lifecycle: "pending",
+        modalKey: null,
+        createdAt: null,
+        resolvedAt: null,
+        description: "",
+        buttons: [],
+        actionable: false
+      };
+    }
+    function providerApprovalSnapshot(approval) {
+      if (!approval) return null;
+      const {
+        source: source2,
+        type: type2,
+        lifecycle,
+        modalKey,
+        createdAt,
+        resolvedAt,
+        providerType,
+        sessionId,
+        nodeId,
+        meshId,
+        taskId,
+        attemptId,
+        generation
+      } = approval;
+      return {
+        source: source2,
+        type: type2,
+        lifecycle,
+        modalKey,
+        createdAt,
+        resolvedAt,
+        providerType,
+        sessionId,
+        nodeId,
+        meshId,
+        taskId,
+        attemptId,
+        generation,
+        evidence: "cached",
+        actionable: false,
+        description: "",
+        buttons: []
+      };
     }
     var QUOTA_SUPPORTED_PROVIDERS;
     var BUILTIN_PROVIDER_PREFERENCE2;
@@ -58187,9 +58247,10 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       }
     });
     function projectProviderApproval(approval, sessionId, providerType, waiting = false) {
-      if (!approval) return waiting ? { source: "provider_modal", type: "unknown", evidence: "unavailable", lifecycle: "pending", modalKey: null, createdAt: null, resolvedAt: null, description: "", buttons: [], actionable: false, sessionId, providerType } : null;
+      if (approval === null) return null;
+      if (!approval) return waiting ? { source: "status_only", compatibility: "unknown", type: "unknown", evidence: "unavailable", lifecycle: "pending", modalKey: null, createdAt: null, resolvedAt: null, description: "", buttons: [], actionable: false, sessionId, providerType } : null;
       const candidate = resolveTurnAttemptRow({ sessionId });
-      const row = approval.attemptId && candidate?.attemptId !== approval.attemptId || approval.type === "provider_setup" && candidate && ["completed", "failed", "cancelled"].includes(candidate.stage) ? null : candidate;
+      const row = approval.attemptId && candidate?.attemptId !== approval.attemptId || approval.type === "provider_setup" && !approval.attemptId && candidate && ["completed", "failed", "cancelled"].includes(candidate.stage) ? null : candidate;
       const suspended = row?.providerSuspension;
       const current4 = suspended?.generation === row?.generation && suspended?.modalKey === approval.modalKey;
       const boundElsewhere = row?.providerSuspension && !current4;
@@ -58330,6 +58391,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         ...readBooleanValue(fallbackSession.muted) !== void 0 ? { muted: readBooleanValue(fallbackSession.muted) } : {},
         ...readBooleanValue(fallbackSession.userHidden, fallbackSession.user_hidden) !== void 0 ? { userHidden: readBooleanValue(fallbackSession.userHidden, fallbackSession.user_hidden) } : {},
         ...readBooleanValue(fallbackSession.userMuted, fallbackSession.user_muted) !== void 0 ? { userMuted: readBooleanValue(fallbackSession.userMuted, fallbackSession.user_muted) } : {},
+        providerApproval: fallbackSession.providerApproval === void 0 ? void 0 : providerApprovalSnapshot(fallbackSession.providerApproval),
         isCached: true
       }];
     }
@@ -58355,12 +58417,20 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         surface: "mesh_status"
       });
       if (turn.authority === "turn_reducer") chatStatus = turn.status;
+      const stopped = /stopped|exited|terminated|failed/.test(`${state || ""} ${record2?.lifecycle || ""}`);
+      const liveApproval = record2?.activeChat?.providerApproval !== void 0 ? record2.activeChat.providerApproval : record2?.providerApproval;
+      const rawApproval = liveApproval !== void 0 ? liveApproval : meta.providerApproval === void 0 ? void 0 : providerApprovalSnapshot(meta.providerApproval);
+      const providerApproval = stopped || record2?.activeInteractivePrompt || record2?.activeChat?.activeInteractivePrompt ? null : projectProviderApproval(readProviderDecision(
+        rawApproval,
+        /approval/.test(chatStatus || state || ""),
+        !!record2?.activeChat?.activeModal?.buttons?.length
+      ), sessionId, readStringValue(record2?.providerType) || "");
       return {
         sessionId,
         providerType: readStringValue(record2?.providerType),
         state,
         chatStatus,
-        providerApproval: projectProviderApproval(record2?.providerApproval ?? record2?.activeChat?.providerApproval ?? meta.providerApproval ?? null, sessionId, readStringValue(record2?.providerType) || ""),
+        providerApproval,
         ...turn.authority === "turn_reducer" ? { turn, attemptId: turn.attemptId, turnStage: turn.stage } : {},
         lifecycle: readStringValue(record2?.lifecycle),
         surfaceKind: (0, import_session_host_core3.getSessionHostSurfaceKind)(record2),
@@ -58478,6 +58548,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     var init_mesh_node_sessions = __esm2({
       "src/mesh/mesh-node-sessions.ts"() {
         "use strict";
+        init_dist();
         init_provider_approval();
         init_mesh_node_record_readers();
         init_mesh_node_identity();
@@ -74703,11 +74774,14 @@ Check mesh_task_history / git, then use mesh_requeue_task with this task_id and 
       });
       if (!session) return { staleReason: "direct task session is not present in live session records" };
       if (typeof session === "string") return {};
-      const raw = `${readString2(session.status) || ""} ${readString2(session.lifecycle) || ""} ${readString2(session.state) || ""} ${readString2(session.activeChat?.status) || ""}`.toLowerCase();
+      const raw = `${readString2(session.status) || ""} ${readString2(session.chatStatus) || ""} ${readString2(session.lifecycle) || ""} ${readString2(session.state) || ""} ${readString2(session.activeChat?.status) || ""}`.toLowerCase();
       if (raw.includes("waiting_choice") || raw.includes("choice")) return { status: "awaiting_choice" };
-      if (raw.includes("approval")) return { status: "awaiting_approval", providerApproval: session.isCached || node.health && node.health !== "online" ? null : session.providerApproval ?? session.activeChat?.providerApproval };
+      if (/failed|stopped|terminated|exited/.test(raw)) return { status: "failed" };
+      if (raw.includes("approval")) {
+        const approval = readProviderDecision(session.activeChat?.providerApproval !== void 0 ? session.activeChat.providerApproval : session.providerApproval, true, !!session.activeChat?.activeModal?.buttons?.length);
+        return { status: "awaiting_approval", providerApproval: approval && (session.isCached || node.health && node.health !== "online") ? { ...approval, evidence: "cached", actionable: false } : approval };
+      }
       if (raw.includes("generating") || raw.includes("running") || raw.includes("busy")) return { status: "generating" };
-      if (raw.includes("failed") || raw.includes("stopped") || raw.includes("terminated") || raw.includes("exited")) return { status: "failed" };
       if (raw.includes("idle") || raw.includes("waiting_input") || raw.includes("ready")) return { status: "idle" };
       return {};
     }
@@ -74808,11 +74882,15 @@ Check mesh_task_history / git, then use mesh_requeue_task with this task_id and 
     function collectProviderDecisionAttention2(nodes) {
       const items = /* @__PURE__ */ new Map();
       for (const node of nodes ?? []) {
-        for (const session of node.activeSessionDetails ?? []) {
-          const approval = session.providerApproval ?? session.activeChat?.providerApproval ?? null;
-          if (!approval || approval.source !== "provider_modal" || approval.lifecycle !== "pending") continue;
-          const evidence = session.isCached || node.health !== "online" ? "cached" : approval.evidence;
-          if (approval.type === "tool_permission" && approval.actionable && evidence === "live") continue;
+        const sessions = [node.activeSessionDetails, node.sessions, node.activeSessions, node.lastProbe?.sessions].filter(Array.isArray).flat();
+        for (const session of sessions) {
+          if (!session || typeof session !== "object" || session.activeInteractivePrompt || session.activeChat?.activeInteractivePrompt) continue;
+          const raw = `${session.status ?? ""} ${session.chatStatus ?? ""} ${session.state ?? ""} ${session.lifecycle ?? ""} ${session.activeChat?.status ?? ""}`;
+          if (/choice|stopped|exited|terminated|failed/.test(raw)) continue;
+          const approval = readProviderDecision(session.activeChat?.providerApproval !== void 0 ? session.activeChat.providerApproval : session.providerApproval, /approval/.test(raw), !!session.activeChat?.activeModal?.buttons?.length);
+          if (!approval || approval.lifecycle !== "pending") continue;
+          const evidence = session.isCached || node.health !== "online" ? "cached" : /approval/.test(raw) ? approval.evidence : "unavailable";
+          if (isActionableProviderApproval({ ...approval, evidence })) continue;
           const nodeId = node.nodeId || node.id;
           const sessionId = session.sessionId || session.id;
           if (!nodeId || !sessionId) continue;
@@ -74826,10 +74904,23 @@ Check mesh_task_history / git, then use mesh_requeue_task with this task_id and 
       for (const record2 of activeWork) {
         if (record2.status !== "awaiting_approval") continue;
         if (!record2.nodeId || !record2.sessionId) continue;
-        const approval = record2.providerApproval;
-        if (!approval || approval.source !== "provider_modal" || approval.type !== "tool_permission" || approval.evidence !== "live" || approval.lifecycle !== "pending" || !approval.actionable || !approval.modalKey || !Array.isArray(approval.buttons) || !approval.buttons.some((button) => typeof button === "string" && button.trim())) continue;
-        if (approval.taskId && approval.taskId !== record2.taskId) continue;
-        if (record2.attemptId && approval.attemptId && record2.attemptId !== approval.attemptId) continue;
+        if (record2.providerApproval?.lifecycle === "resolved") continue;
+        const recorded = readProviderDecision(record2.providerApproval, false);
+        if (record2.providerApproval && !recorded) continue;
+        const hasLedgerPrompt = record2.terminalKind === "task_approval_needed";
+        if (record2.providerApproval === null && !hasLedgerPrompt) continue;
+        const approval = recorded ?? {
+          ...readProviderDecision(void 0, true),
+          source: hasLedgerPrompt ? "ledger_approval" : "status_only",
+          nodeId: record2.nodeId,
+          sessionId: record2.sessionId,
+          taskId: record2.taskId,
+          attemptId: record2.attemptId ?? null,
+          createdAt: hasLedgerPrompt && record2.terminalAt && Number.isFinite(Date.parse(record2.terminalAt)) ? Date.parse(record2.terminalAt) : null
+        };
+        const identityMatches = (!approval.taskId || approval.taskId === record2.taskId) && (!record2.attemptId || !approval.attemptId || record2.attemptId === approval.attemptId);
+        const actionable = identityMatches && isActionableProviderApproval(approval);
+        const resource = identityMatches ? approval : { ...approval, evidence: "unavailable", actionable: false };
         const recordedAt = record2.terminalKind === "task_approval_needed" ? record2.terminalAt : void 0;
         const blockedAt = recordedAt && (approval.createdAt === null || Date.parse(recordedAt) >= approval.createdAt) ? recordedAt : void 0;
         const suspensionAt = approval.createdAt === null ? null : new Date(approval.createdAt).toISOString();
@@ -74846,14 +74937,15 @@ Check mesh_task_history / git, then use mesh_requeue_task with this task_id and 
           status: "awaiting_approval",
           waitingSince,
           waitingMs,
-          providerApproval: approval
+          providerApproval: resource,
+          actionable
         });
       }
       const bySession = /* @__PURE__ */ new Map();
       for (const approval of approvals) {
         const key2 = `${approval.nodeId}::${approval.sessionId}`;
         const existing = bySession.get(key2);
-        if (!existing || (approval.waitingMs ?? -1) > (existing.waitingMs ?? -1)) {
+        if (!existing || approval.actionable && !existing.actionable || approval.actionable === existing.actionable && (approval.waitingMs ?? -1) > (existing.waitingMs ?? -1)) {
           bySession.set(key2, approval);
         }
       }
@@ -74877,13 +74969,16 @@ Check mesh_task_history / git, then use mesh_requeue_task with this task_id and 
         sourceCounts[item.source] += 1;
         statusCounts[item.status] += 1;
       }
+      const approvals = collectPendingApprovals2(activeWork);
       const staleDirectCount = activeWork.filter((item) => item.source === "direct" && item.staleReason).length;
       const staleDirectUnacknowledgedCount = activeWork.filter((item) => item.source === "direct" && item.staleDispatchUnacknowledged).length;
       return {
         totalActiveCount: activeWork.length,
         queueActiveCount: sourceCounts.queue,
         directActiveCount: sourceCounts.direct,
-        awaitingApprovalCount: collectPendingApprovals2(activeWork).length,
+        awaitingApprovalCount: approvals.filter((item) => item.actionable).length,
+        waitingApprovalCount: approvals.length,
+        approvalAttentionCount: approvals.filter((item) => !item.actionable).length,
         generatingCount: statusCounts.generating,
         failedCount: statusCounts.failed,
         idleCount: statusCounts.idle,
@@ -75143,6 +75238,7 @@ Check mesh_task_history / git, then use mesh_requeue_task with this task_id and 
     var init_mesh_active_work = __esm2({
       "src/mesh/mesh-active-work.ts"() {
         "use strict";
+        init_dist();
         init_mesh_record();
         init_mesh_work_queue();
         init_dist();
@@ -76837,7 +76933,7 @@ ${cleanBody}`;
       const meshQueueStats = effectiveMeshId ? getMeshQueueStats(effectiveMeshId) : void 0;
       const resolved = resolveSessionStatusUnified({ sessionId: state.instanceId, providerType: state.type, activeChat, providerStatus: state.status });
       const resolvedStatus = resolved.status;
-      if (activeChat) activeChat.providerApproval = projectProviderApproval(state.activeChat?.providerApproval, state.instanceId, state.type, resolvedStatus === "waiting_approval");
+      if (activeChat) activeChat.providerApproval = projectProviderApproval(readProviderDecision(state.activeChat?.providerApproval, resolvedStatus === "waiting_approval", !!activeChat.activeModal?.buttons?.length), state.instanceId, state.type);
       return {
         id: state.instanceId,
         parentId: null,
@@ -76931,6 +77027,7 @@ ${cleanBody}`;
     var init_builders = __esm2({
       "src/status/builders.ts"() {
         "use strict";
+        init_dist();
         init_provider_approval();
         init_normalize();
         init_mesh_turn_presentation();
@@ -138966,6 +139063,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     init_debug_trace();
     var fs89 = __toESM2(require("fs"));
     var path78 = __toESM2(require("path"));
+    init_dist();
     var import_node_crypto7 = require("crypto");
     var ProviderApprovalLifecycle = class {
       current = null;
@@ -144482,7 +144580,7 @@ ${text}` : text;
         if (projected.status !== "waiting_approval" && this.approvalLifecycle?.read()?.lifecycle === "pending") {
           this.approvalLifecycle.resolve(Date.now());
           try {
-            this.driver?.updateMeta({ providerApproval: bindProviderApprovalAssignment(this.approvalLifecycle.read(), this.runtimeSettings) });
+            this.driver?.updateMeta({ providerApproval: providerApprovalSnapshot(bindProviderApprovalAssignment(this.approvalLifecycle.read(), this.runtimeSettings)) });
           } catch {
           }
         }
@@ -144676,7 +144774,7 @@ ${text}` : text;
           this.lastApprovalResolvedAt = resolvedAt;
           this.approvalLifecycle?.resolve(resolvedAt);
           try {
-            this.driver.updateMeta({ providerApproval: bindProviderApprovalAssignment(this.approvalLifecycle?.read(), this.runtimeSettings) });
+            this.driver.updateMeta({ providerApproval: providerApprovalSnapshot(bindProviderApprovalAssignment(this.approvalLifecycle?.read(), this.runtimeSettings)) });
           } catch {
           }
           this.approvalResolvedCallback?.({
@@ -144741,9 +144839,12 @@ ${text}` : text;
         const previousAttempt = this.runtimeSettings?.meshActiveAttemptId;
         const previousGeneration = this.runtimeSettings?.meshActiveAttemptGeneration;
         this.runtimeSettings = { ...settings ?? {} };
+        if (this.approvalLifecycle?.read()?.type === "tool_permission" && (previousAttempt !== this.runtimeSettings.meshActiveAttemptId || previousGeneration !== this.runtimeSettings.meshActiveAttemptGeneration)) {
+          this.approvalLifecycle.resolve(Date.now());
+        }
         const approval = bindProviderApprovalAssignment(this.approvalLifecycle?.read(), this.runtimeSettings);
         try {
-          this.driver?.updateMeta({ providerApproval: approval });
+          this.driver?.updateMeta({ providerApproval: providerApprovalSnapshot(approval) });
         } catch {
         }
         if (approval?.type === "provider_setup" && approval.lifecycle === "pending" && approval.evidence === "live" && (previousAttempt !== this.runtimeSettings.meshActiveAttemptId || previousGeneration !== this.runtimeSettings.meshActiveAttemptGeneration)) this.notifyChange("fsm_state");
@@ -144827,7 +144928,7 @@ ${text}` : text;
           case "state_changed":
             this.approvalLifecycle?.observe(ev.state, ev.modal, !this.latestState && this.attachedExistingRuntime ? null : Date.now(), /trust/i.test(ev.state.id) ? { runtimeDirectory: this.workingDir, displayedDirectory: readDisplayedTrustDirectory(this.driver.snapshot() || "") } : void 0, providerApprovalAssignment(this.runtimeSettings));
             try {
-              this.driver.updateMeta({ providerApproval: bindProviderApprovalAssignment(this.approvalLifecycle?.read(), this.runtimeSettings) });
+              this.driver.updateMeta({ providerApproval: providerApprovalSnapshot(bindProviderApprovalAssignment(this.approvalLifecycle?.read(), this.runtimeSettings)) });
             } catch {
             }
             this.latestState = ev.state;
@@ -146256,6 +146357,7 @@ ${buttons.join("\n")}`;
       const fromSnapshot = extractFinalSummaryFromMessagesAfter(pending.resolvedFinalMessages, pending.turnStartedAt);
       return fromSnapshot || void 0;
     }
+    var import_node_crypto9 = require("crypto");
     init_logger();
     function normalizeProviderSessionId(provider, providerSessionId) {
       const normalizedId = typeof providerSessionId === "string" ? providerSessionId.trim() : "";
@@ -146451,9 +146553,9 @@ ${buttons.join("\n")}`;
                 attemptRef: host.currentAttemptRef?.() ?? void 0,
                 at: adapterStatus?.providerApproval?.createdAt ?? now,
                 modal: "approval",
-                // Reuse the fingerprint already computed above (message +
-                // buttons + approvalEntrySeq) — never recompute one.
-                modalKey: adapterStatus?.providerApproval?.modalKey ?? approvalFingerprint,
+                // Legacy adapters have no modal identity; persist only a digest of
+                // their live fingerprint, never prompt text or button labels.
+                modalKey: adapterStatus?.providerApproval?.modalKey ?? `modal-digest:${(0, import_node_crypto9.createHash)("sha256").update(approvalFingerprint).digest("hex")}`,
                 clockUnknown: adapterStatus?.providerApproval?.createdAt === null,
                 providerSetup: adapterStatus?.providerApproval?.type === "provider_setup" && adapterStatus.providerApproval.evidence === "live"
               });
@@ -168993,7 +169095,7 @@ var MESH_ANSWER_QUESTION_TOOL = {
 };
 var MESH_LIST_PENDING_APPROVALS_TOOL = {
   name: "mesh_list_pending_approvals",
-  description: "List confirmed live provider tool permissions across the mesh. Count excludes status-only waits, setup gates, cached evidence and owner staged-write ratification. mesh_approve resolves ONE (node_id, session_id) at a time; this read-only tool enumerates the full pending set so you can see all blocked sessions at once and drive a mesh_approve for each. Each row carries nodeId, sessionId, providerType, taskTitle, and how long it has been waiting (waitingSince/waitingMs), longest-waiting first. Does not mutate anything.",
+  description: "List waiting provider decisions and compatibility/attention resources across the mesh. Only actionableCount represents confirmed live tool permissions; status-only waits, setup gates and cached evidence never grant consent. Owner staged-write ratification remains a separate resource. mesh_approve resolves ONE (node_id, session_id) at a time; this read-only tool enumerates the full pending set so you can see all blocked sessions at once and inspect compatibility and unavailable resources without losing waiting visibility. Only actionable rows support the exact Inbox path with approval_target. Each row carries nodeId, sessionId, providerType, taskTitle, and how long it has been waiting (waitingSince/waitingMs), longest-waiting first. count enumerates rows; waitingCount includes taskless attention; actionableCount requires confirmed live permission evidence. Unknown/legacy/cached rows route to the existing session handler and never grant consent. Does not mutate anything.",
   inputSchema: {
     type: "object",
     properties: {}
@@ -175011,11 +175113,19 @@ async function meshListPendingApprovals(ctx, _args = {}) {
   scheduleBackgroundDirectReconcile(ctx, liveNodes, activeWorkView.directDispatches, activeWorkView.records);
   const activeWorkEvidence = activeWorkView.activeWork;
   const approvals = (0, import_daemon_core26.collectPendingApprovals)(activeWorkEvidence.activeWork);
+  const needsAttention = (0, import_daemon_core26.collectProviderDecisionAttention)(liveNodes);
+  const actionableCount = approvals.filter((item) => item.actionable).length;
+  const waitingKeys = /* @__PURE__ */ new Set([...approvals.map((item) => `${item.nodeId}:${item.sessionId}`), ...needsAttention.map((item) => `${item.nodeId}:${item.sessionId}`)]);
   return JSON.stringify({
+    // count retains enumeration semantics; actionableCount alone indicates safe Inbox actions.
     count: approvals.length,
+    actionableCount,
+    waitingCount: waitingKeys.size,
+    attentionCount: waitingKeys.size - actionableCount,
     approvals,
-    needsAttention: (0, import_daemon_core26.collectProviderDecisionAttention)(liveNodes),
-    ...approvals.length === 0 ? { note: "No confirmed live tool permissions are actionable. Setup/incomplete decisions are listed separately." } : { nextStep: 'Resolve each with mesh_approve(node_id, session_id, action: "approve" | "reject").' }
+    needsAttention,
+    note: "Only actionable rows carry confirmed live permission authority. Compatibility and unknown rows require the existing exact-session handler or refreshed evidence; waiting does not imply consent.",
+    ...actionableCount > 0 ? { nextStep: "Use mesh_approve only for actionable rows, forwarding providerApproval modalKey/attemptId/generation as approval_target." } : {}
   }, null, 2);
 }
 async function meshCleanupSessions(ctx, args) {

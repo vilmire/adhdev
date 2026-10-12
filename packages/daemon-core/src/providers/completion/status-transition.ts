@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 /**
  * FSM status-transition tick (Phase 4 of the completion-engine rewrite —
  * verbatim move of CliProviderInstance.detectStatusTransition).
@@ -518,9 +519,9 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
                         attemptRef: host.currentAttemptRef?.() ?? undefined,
                         at: adapterStatus?.providerApproval?.createdAt ?? now,
                         modal: 'approval',
-                        // Reuse the fingerprint already computed above (message +
-                        // buttons + approvalEntrySeq) — never recompute one.
-                        modalKey: adapterStatus?.providerApproval?.modalKey ?? approvalFingerprint,
+                        // Legacy adapters have no modal identity; persist only a digest of
+                        // their live fingerprint, never prompt text or button labels.
+                        modalKey: adapterStatus?.providerApproval?.modalKey ?? `modal-digest:${createHash('sha256').update(approvalFingerprint).digest('hex')}`,
                         clockUnknown: adapterStatus?.providerApproval?.createdAt === null,
                         providerSetup: adapterStatus?.providerApproval?.type === 'provider_setup' && adapterStatus.providerApproval.evidence === 'live',
                     });

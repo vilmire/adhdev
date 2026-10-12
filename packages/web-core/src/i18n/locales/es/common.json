@@ -756,6 +756,12 @@
                 "unavailable": "Diálogo no disponible"
             },
             "needsAttention": "Requiere atención — abrir la sesión",
+            "compatibility": {
+                "exact": "Destino exacto de Inbox",
+                "session_only": "Proveedor anterior · usar la sesión",
+                "unknown": "Compatibilidad desconocida · revisar la sesión"
+            },
+            "counts": "({{waiting}} en espera · {{actionable}} disponibles)",
             "runtimeDirectory": "Directorio de ejecución",
             "displayedDirectory": "Directorio solicitado para confianza",
             "directoryUnknown": "No indicado en el diálogo",

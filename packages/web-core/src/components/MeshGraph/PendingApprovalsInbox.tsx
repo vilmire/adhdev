@@ -1,3 +1,4 @@
+import { readProviderDecision, isActionableProviderApproval } from '@adhdev/mesh-shared'
 import type { ProviderApproval, ProviderApprovalTarget } from '@adhdev/mesh-shared'
 /** Provider decisions are a separate Inbox lane. Only confirmed live tool
  * modals with an exact target offer actions; setup and incomplete evidence
@@ -13,6 +14,7 @@ export type PendingApprovalAction = 'approve' | 'reject'
 
 /** One session awaiting an approval decision — the self-contained shape this inbox renders. */
 export interface PendingApprovalItem {
+    compatibility?: ProviderApproval['compatibility']
     actionable?: boolean
     approvalTarget?: ProviderApprovalTarget
     approvalType?: ProviderApproval['type']
@@ -67,12 +69,14 @@ export function derivePendingApprovals(nodes: RepoMeshNodeStatus[] | undefined |
         if (!Array.isArray(sessions)) continue
         for (const session of sessions) {
             if (!session?.sessionId) continue
-            if (!sessionStatusText(session).includes('approval')) continue
-            const approval = session.providerApproval
-            if (!approval || approval.source !== 'provider_modal' || approval.lifecycle !== 'pending') continue
-            const actionable = Array.isArray(approval.buttons) && approval.buttons.some(button => typeof button === 'string' && button.trim()) && approval.type === 'tool_permission' && approval.evidence === 'live' && approval.actionable && !!approval.modalKey && !session.isCached && node.health === 'online'
+            const status = sessionStatusText(session)
+            if (/choice|stopped|exited|terminated|failed|interrupted/.test(status)) continue
+            if (!(session.chatStatus || session.state || '').toLowerCase().includes('approval')) continue
+            const approval = readProviderDecision(session.providerApproval, true)
+            if (!approval || approval.lifecycle !== 'pending') continue
+            const actionable = isActionableProviderApproval(approval) && !session.isCached && node.health === 'online'
             items.push({
-                actionable, approvalType: approval.type, evidence: session.isCached ? 'cached' : approval.evidence,
+                compatibility: approval.compatibility, actionable, approvalType: approval.type, evidence: session.isCached ? 'cached' : approval.evidence,
                 runtimeDirectory: approval.runtimeDirectory, displayedDirectory: approval.displayedDirectory,
                 approvalTarget: actionable ? { modalKey: approval.modalKey!, attemptId: approval.attemptId ?? null, generation: approval.generation ?? null } : undefined,
                 waitingSince: approval.createdAt,
@@ -93,6 +97,9 @@ export function derivePendingApprovals(nodes: RepoMeshNodeStatus[] | undefined |
  */
 export interface ApprovalConversationSource {
     providerApproval?: ProviderApproval | null
+    connectionState?: string
+    transport?: string
+    activeInteractivePrompt?: unknown
     routeId?: string
     sessionId?: string
     daemonId?: string
@@ -113,10 +120,11 @@ export function deriveApprovalsFromConversations(
     const items: PendingApprovalItem[] = []
     const seen = new Set<string>()
     for (const conv of conversations) {
-        if (!conv) continue
+        if (!conv || conv.activeInteractivePrompt) continue
         if (String(conv.status ?? '').trim().toLowerCase() !== 'waiting_approval') continue
-        const approval = conv.providerApproval
-        if (!approval || approval.source !== 'provider_modal' || approval.lifecycle !== 'pending' || approval.type !== 'tool_permission' || approval.evidence !== 'live' || !approval.actionable || !approval.modalKey || !Array.isArray(approval.buttons) || !approval.buttons.some(button => typeof button === 'string' && button.trim())) continue
+        const approval = readProviderDecision(conv.providerApproval, true, !!conv.modalButtons?.length)
+        if (!approval || approval.lifecycle !== 'pending') continue
+        const actionable = conv.transport === 'pty' && ['connected', 'ready'].includes(conv.connectionState || '') && isActionableProviderApproval(approval)
         const sessionId = conv.sessionId || conv.routeId
         const nodeId = conv.daemonId || conv.routeId
         if (!sessionId || !nodeId) continue
@@ -126,8 +134,8 @@ export function deriveApprovalsFromConversations(
         items.push({
             nodeId,
             sessionId,
-            actionable: true, approvalType: approval.type, evidence: approval.evidence,
-            approvalTarget: { modalKey: approval.modalKey, attemptId: approval.attemptId ?? null, generation: approval.generation ?? null },
+            compatibility: approval.compatibility, actionable, approvalType: approval.type, evidence: !['connected', 'ready'].includes(conv.connectionState || '') ? 'cached' : approval.evidence,
+            approvalTarget: actionable ? { modalKey: approval.modalKey!, attemptId: approval.attemptId ?? null, generation: approval.generation ?? null } : undefined,
             providerType: conv.agentType,
             machineLabel: conv.machineName || conv.workspaceName || nodeId,
             detail: null,
@@ -195,7 +203,7 @@ export default function PendingApprovalsInbox({ approvals, nodes, onResolve, hid
             <div className="flex items-center gap-2 mb-2 font-black text-xs" style={{ color: 'var(--status-warning)' }}>
                 <IconWarning size={14} />
                 {t('mesh.approvals.title')}
-                <span className="opacity-70 font-semibold">({items.filter(item => item.actionable).length})</span>
+                <span className="opacity-70 font-semibold">{t('mesh.approvals.counts', { waiting: items.length, actionable: items.filter(item => item.actionable).length })}</span>
             </div>
 
             {items.length === 0 ? (
@@ -228,6 +236,7 @@ export default function PendingApprovalsInbox({ approvals, nodes, onResolve, hid
                                             </span>
                                         )}
                                     </div>
+                                    {item.compatibility && <div className="text-3xs opacity-70">{t(`mesh.approvals.compatibility.${item.compatibility}`)}</div>}
                                     {item.approvalType && <div className="text-3xs opacity-70">{t(`mesh.approvals.types.${item.approvalType}`)} · {t(`mesh.approvals.evidence.${item.evidence || 'unavailable'}`)}</div>}
                                     <div className="text-3xs opacity-60 truncate">
                                         {item.detail

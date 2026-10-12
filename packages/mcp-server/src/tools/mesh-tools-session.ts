@@ -1010,7 +1010,8 @@ export async function meshAnswerQuestion(
  * no way to enumerate which sessions are currently blocked awaiting an approval decision —
  * the coordinator had to page mesh_status and eyeball each node's sessions. This lists every
  * session in `awaiting_approval` across the mesh so a coordinator (or the UI approvals inbox)
- * can see the full pending set and drive a follow-up mesh_approve for each.
+ * can see waiting and attention truth. Only confirmed actionable rows carry an exact
+ * Inbox target; legacy/unknown rows require the existing session handler or fresh evidence.
  *
  * No new store or DB: it reuses the exact derivation mesh_status/mesh_view_queue already run
  * (buildMeshActiveWork over the live-session-decorated nodes + queue + ledger + direct
@@ -1038,13 +1039,19 @@ export async function meshListPendingApprovals(
 
     const approvals = collectPendingApprovals(activeWorkEvidence.activeWork);
 
+    const needsAttention = collectProviderDecisionAttention(liveNodes);
+    const actionableCount = approvals.filter(item => item.actionable).length;
+    const waitingKeys = new Set([...approvals.map(item => `${item.nodeId}:${item.sessionId}`), ...needsAttention.map(item => `${item.nodeId}:${item.sessionId}`)]);
     return JSON.stringify({
+        // count retains enumeration semantics; actionableCount alone indicates safe Inbox actions.
         count: approvals.length,
+        actionableCount,
+        waitingCount: waitingKeys.size,
+        attentionCount: waitingKeys.size - actionableCount,
         approvals,
-        needsAttention: collectProviderDecisionAttention(liveNodes),
-        ...(approvals.length === 0
-            ? { note: 'No confirmed live tool permissions are actionable. Setup/incomplete decisions are listed separately.' }
-            : { nextStep: 'Resolve each with mesh_approve(node_id, session_id, action: "approve" | "reject").' }),
+        needsAttention,
+        note: 'Only actionable rows carry confirmed live permission authority. Compatibility and unknown rows require the existing exact-session handler or refreshed evidence; waiting does not imply consent.',
+        ...(actionableCount > 0 ? { nextStep: 'Use mesh_approve only for actionable rows, forwarding providerApproval modalKey/attemptId/generation as approval_target.' } : {}),
     }, null, 2);
 }
 

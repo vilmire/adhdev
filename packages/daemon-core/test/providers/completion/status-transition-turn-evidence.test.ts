@@ -105,6 +105,8 @@ describe('runStatusTransitionTick — turn-evidence emission', () => {
         const ev = observed.find((e) => e.kind === 'suspension') as Extract<TurnEvidence, { kind: 'suspension' }> | undefined;
         expect(ev).toBeDefined();
         expect(ev!.modal).toBe('approval');
+        expect(ev!.modalKey).toMatch(/^modal-digest:[a-f0-9]{64}$/);
+        expect(JSON.stringify(ev)).not.toMatch(/Allow\?|Yes|No/);
         expect(ev!.sessionId).toBe('inst-1');
         expect(ev!.attemptRef).toEqual({ attemptId: 'attempt_1', generation: 0 });
     });

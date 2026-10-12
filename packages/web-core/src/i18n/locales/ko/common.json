@@ -756,6 +756,12 @@
                 "unavailable": "모달 확인 불가"
             },
             "needsAttention": "확인 필요 — 해당 세션 열기",
+            "compatibility": {
+                "exact": "정확한 Inbox 대상",
+                "session_only": "기존 제공자 · 세션에서 처리",
+                "unknown": "호환성 알 수 없음 · 세션 확인"
+            },
+            "counts": "(대기 {{waiting}} · 처리 가능 {{actionable}})",
             "runtimeDirectory": "실행 디렉터리",
             "displayedDirectory": "신뢰를 요청한 디렉터리",
             "directoryUnknown": "실시간 모달에서 제공되지 않음",

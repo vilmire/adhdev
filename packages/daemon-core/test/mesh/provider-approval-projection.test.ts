@@ -1,3 +1,8 @@
+import * as turnPresentation from '../../src/mesh/mesh-turn-presentation.js';
+import { buildSessionEntries } from '../../src/status/builders.js';
+import { providerApprovalSnapshot } from '@adhdev/mesh-shared';
+import { summarizeMeshSessionRecord, readCachedInlineMeshActiveSessionDetails } from '../../src/mesh/mesh-node-sessions.js';
+import { sessionStatusFromNodes } from '../../src/mesh/mesh-active-work.js';
 import { describe, expect, it, vi } from 'vitest';
 import { ProviderApprovalLifecycle, readDisplayedTrustDirectory, bindProviderApprovalAssignment, providerApprovalAssignment } from '../../src/providers/spec/provider-approval-lifecycle.js';
 import { collectPendingApprovals, collectProviderDecisionAttention, buildMeshActiveWorkSummary } from '../../src/mesh/mesh-active-work.js';
@@ -23,6 +28,94 @@ describe('typed provider approval projection', () => {
             expect(adapter.getStatus().providerApproval).toMatchObject({ lifecycle: 'resolved', actionable: false, createdAt: 1000 });
             expect(adapter.driver.updateMeta).toHaveBeenCalledTimes(1);
         }
+    });
+    it('writes only content-free host metadata on FSM changes and task attachment', () => {
+        const lifecycle = new ProviderApprovalLifecycle();
+        lifecycle.observe({ ...state, id: 'trust' }, { ...modal, title: 'secret command', kind: 'confirm', buttons: [{ index: 1, label: 'Run private-command' }] }, 1000, { runtimeDirectory: '/private/owner', displayedDirectory: '/private/project' });
+        const adapter = Object.assign(Object.create(SpecCliAdapter.prototype), { approvalLifecycle: lifecycle, runtimeSettings: {}, driver: { updateMeta: vi.fn() }, notifyChange: vi.fn() });
+        adapter.updateRuntimeSettings({ meshActiveTaskId: 't', meshActiveAttemptId: 'a', meshActiveAttemptGeneration: 1 });
+        const saved = adapter.driver.updateMeta.mock.calls[0][0].providerApproval;
+        expect(saved).toMatchObject({ createdAt: 1000, evidence: 'cached', actionable: false, buttons: [], description: '', attemptId: 'a' });
+        expect(JSON.stringify(saved)).not.toMatch(/private|command/);
+        expect(lifecycle.read()).toMatchObject({ runtimeDirectory: '/private/owner', buttons: ['Run private-command'] });
+        expect(providerApprovalSnapshot(lifecycle.read())).toEqual(expect.objectContaining({ modalKey: lifecycle.read()!.modalKey, createdAt: 1000 }));
+    });
+    it('the real metadata builder retains legacy CLI and extension modals and explicit suppression', () => {
+        const activeChat = { id: 'chat', title: 'Permission', status: 'waiting_approval', messages: [], activeModal: { message: 'real legacy modal', buttons: ['Run', 'Cancel'] } };
+        const base = { status: 'waiting_approval', activeChat, workspace: null, settings: {}, lastUpdated: 1, pendingEvents: [] };
+        const sessions = buildSessionEntries([
+            { ...base, category: 'cli', type: 'claude-cli', name: 'Claude', instanceId: 'legacy-cli' },
+            { ...base, category: 'cli', type: 'claude-cli', name: 'Claude', instanceId: 'suppressed-cli', activeChat: { ...activeChat, providerApproval: null } },
+            { ...base, category: 'ide', type: 'cursor', name: 'Cursor', instanceId: 'legacy-ide', extensions: [{ ...base, category: 'extension', type: 'claude-code-vscode', name: 'Claude', instanceId: 'legacy-ext', agentStreams: [] }] },
+        ] as any, new Map(), { profile: 'metadata' });
+        const byId = new Map(sessions.map(session => [session.id, session]));
+        expect(byId.get('legacy-cli')!.activeChat!.providerApproval).toMatchObject({ source: 'legacy_provider', compatibility: 'session_only', actionable: false });
+        expect(byId.get('suppressed-cli')!.activeChat!.providerApproval).toBeNull();
+        for (const id of ['legacy-ide', 'legacy-ext']) {
+            expect(byId.get(id)!.status).toBe('waiting_approval');
+            expect(byId.get(id)!.activeChat!.activeModal).toMatchObject({ buttons: ['Run', 'Cancel'] });
+        }
+    });
+    it('actual FSM metadata writes omit live labels and absolute trust directories', () => {
+        const adapter = Object.assign(Object.create(SpecCliAdapter.prototype), {
+            approvalLifecycle: new ProviderApprovalLifecycle(), runtimeSettings: {}, workingDir: '/private/runtime', cliType: 'claude-cli',
+            driver: { updateMeta: vi.fn(), snapshot: () => 'Do you trust the contents of this directory?\n/private/displayed' },
+            maybeClearResolvedClaudeTuiPrompt: vi.fn(), maybeCaptureClaudeTuiPrompt: vi.fn(), maybeUpgradeClaudeTuiMultiSelect: vi.fn(), notifyChange: vi.fn(),
+        });
+        (adapter as any).handleEvent({ kind: 'state_changed', state: { ...state, id: 'trust' }, modal: { ...modal, kind: 'confirm', buttons: [{ index: 1, label: 'private-command' }] } });
+        const saved = adapter.driver.updateMeta.mock.calls[0][0].providerApproval;
+        expect(saved).toMatchObject({ type: 'provider_setup', evidence: 'cached', buttons: [], actionable: false });
+        expect(JSON.stringify(saved)).not.toMatch(/private/);
+        expect(adapter.approvalLifecycle.read()).toMatchObject({ runtimeDirectory: '/private/runtime', displayedDirectory: '/private/displayed', buttons: ['private-command'] });
+    });
+    it('suppression null overrides durable raw metadata, while host-only metadata stays non-actionable', () => {
+        const lifecycle = new ProviderApprovalLifecycle(); lifecycle.observe(state, modal, 1000);
+        const raw = lifecycle.read()!;
+        const record = { sessionId: 's', providerType: 'claude-cli', status: 'awaiting_approval', activeChat: { status: 'waiting_approval', providerApproval: null }, meta: { providerApproval: raw } };
+        expect(summarizeMeshSessionRecord(record).providerApproval).toBeNull();
+        expect(projectProviderApproval(null, 's', 'claude-cli', true)).toBeNull();
+        const hostOnly = summarizeMeshSessionRecord({ ...record, activeChat: undefined });
+        expect(hostOnly.providerApproval).toMatchObject({ evidence: 'cached', actionable: false, buttons: [], createdAt: 1000 });
+        expect(summarizeMeshSessionRecord({ ...record, status: 'stopped', lifecycle: 'stopped', activeChat: undefined }).providerApproval).toBeNull();
+        const [cached] = readCachedInlineMeshActiveSessionDetails({ cachedStatus: { activeSession: { id: 's', providerApproval: raw } } });
+        expect(cached.providerApproval).toMatchObject({ createdAt: 1000, evidence: 'cached', actionable: false });
+    });
+    it('retracts a tool modal when assignment changes without rebinding it to a new attempt', () => {
+        const lifecycle = new ProviderApprovalLifecycle(); lifecycle.observe(state, modal, 1000, undefined, { attemptId: 'old', generation: 1 });
+        const adapter = Object.assign(Object.create(SpecCliAdapter.prototype), { approvalLifecycle: lifecycle, runtimeSettings: { meshActiveAttemptId: 'old', meshActiveAttemptGeneration: 1 }, driver: { updateMeta: vi.fn() }, notifyChange: vi.fn() });
+        adapter.updateRuntimeSettings({ meshActiveAttemptId: 'new', meshActiveAttemptGeneration: 2 });
+        expect(lifecycle.read()).toMatchObject({ lifecycle: 'resolved', actionable: false, attemptId: 'old', generation: 1 });
+    });
+    it('live modal metadata with unreadable status remains attention, and stopped legacy resources retract', () => {
+        const lifecycle = new ProviderApprovalLifecycle(); lifecycle.observe(state, modal, 1000);
+        const session = { sessionId: 's', state: 'unreadable', providerApproval: lifecycle.read() };
+        const node = { nodeId: 'n', health: 'online', activeSessionDetails: [session] };
+        expect(collectProviderDecisionAttention([node])[0]).toMatchObject({ sessionId: 's', evidence: 'unavailable', actionable: false, createdAt: 1000 });
+        expect(collectProviderDecisionAttention([{ ...node, activeSessionDetails: [{ ...session, state: 'waiting_approval', lifecycle: 'stopped' }] }])).toEqual([]);
+    });
+    it('older peers and real IDE/extension modals remain typed compatibility resources', () => {
+        for (const providerType of ['cursor', 'antigravity', 'claude-cli']) {
+            const session = { id: 's', providerType, status: 'waiting_approval', activeChat: { status: 'waiting_approval', activeModal: { message: 'private command', buttons: ['Run', 'Cancel'] } } };
+            const live = sessionStatusFromNodes([{ nodeId: 'n', health: 'online', sessions: [session] }], 'n', 's');
+            expect(live).toMatchObject({ status: 'awaiting_approval', providerApproval: { source: 'legacy_provider', compatibility: 'session_only', actionable: false, createdAt: null } });
+            expect(collectProviderDecisionAttention([{ nodeId: 'n', health: 'online', activeSessionDetails: [{ ...session, sessionId: 's' }] }])[0]).toMatchObject({ nodeId: 'n', sessionId: 's', source: 'legacy_provider' });
+        }
+    });
+    it('a bound expired setup resolves while an unbound new startup gate remains independent', () => {
+        const lookup = vi.spyOn(turnPresentation, 'resolveTurnAttemptRow').mockReturnValue({ attemptId: 'expired', generation: 1, stage: 'failed', sessionId: 's' } as any);
+        try {
+            const lifecycle = new ProviderApprovalLifecycle(); lifecycle.observe({ ...state, id: 'trust' }, { ...modal, kind: 'confirm' }, 1000);
+            expect(projectProviderApproval({ ...lifecycle.read()!, attemptId: 'expired', generation: 1 }, 's', 'claude-cli')).toMatchObject({ lifecycle: 'resolved', actionable: false });
+            expect(projectProviderApproval(lifecycle.read(), 's', 'claude-cli')).toMatchObject({ lifecycle: 'pending', taskId: null, attemptId: null });
+        } finally { lookup.mockRestore(); }
+    });
+    it('setup waiting remains subject to the existing hard ceiling', () => {
+        const setup = reduce({ attempt: makeAttempt('delivered'), holds: [makeHold('hard_ceiling'), makeHold('await_consume')], evidence: ev('suspension', { modal: 'approval', modalKey: 'modal:setup', providerSetup: true }), policy: POLICY, nowMs: NOW });
+        const ceiling = setup.holds.find(h => h.reason === 'hard_ceiling')!;
+        expect(ceiling).toBeDefined();
+        const expired = reduce({ attempt: setup.attempt, holds: setup.holds, evidence: ev('hold_expired', { holdId: ceiling.holdId, reason: 'hard_ceiling' }), policy: POLICY, nowMs: NOW + POLICY.hardCeilingMs });
+        expect(expired.attempt?.state).toBe('failed');
+        expect(surfaceStageOfAttempt(expired.attempt!)).toBe('failed');
     });
     it('retains actual modal time across repaint; resolution and replacement fence replay', () => {
         const lifecycle = new ProviderApprovalLifecycle();
@@ -111,8 +204,8 @@ describe('typed provider approval projection', () => {
 
     it('status-only waiting has no user-approval count; uses suspension clock without dispatch fallback', () => {
         const record = { taskId: 't', taskTitle: 'Worker', source: 'queue', status: 'awaiting_approval', nodeId: 'n', sessionId: 's', createdAt: new Date(1000).toISOString(), dispatchedAt: new Date(1000).toISOString(), elapsedMs: 9000 } as any;
-        expect(collectPendingApprovals([record])).toEqual([]);
-        expect(buildMeshActiveWorkSummary([record]).awaitingApprovalCount).toBe(0);
+        expect(collectPendingApprovals([record])[0].actionable).toBe(false);
+        expect(buildMeshActiveWorkSummary([record])).toMatchObject({ awaitingApprovalCount: 0, waitingApprovalCount: 1, approvalAttentionCount: 1 });
         const lifecycle = new ProviderApprovalLifecycle();
         lifecycle.observe(state, modal, 8000);
         record.providerApproval = lifecycle.read();
@@ -120,9 +213,9 @@ describe('typed provider approval projection', () => {
         record.providerApproval.createdAt = null;
         expect(collectPendingApprovals([record])[0]).toMatchObject({ waitingSince: null, waitingMs: null });
         record.providerApproval.buttons = [];
-        expect(collectPendingApprovals([record])).toEqual([]);
+        expect(collectPendingApprovals([record])[0].actionable).toBe(false);
         record.providerApproval.evidence = 'cached';
-        expect(collectPendingApprovals([record])).toEqual([]);
+        expect(collectPendingApprovals([record])[0].actionable).toBe(false);
     });
 
     it('records content-free suspension clock and resolved lifecycle on the exact generation', () => {

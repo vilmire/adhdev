@@ -1,3 +1,4 @@
+import { providerApprovalSnapshot } from '@adhdev/mesh-shared';
 /**
  * SpecCliAdapter — bridges SpecDriver into the daemon's CliAdapter
  * interface so an existing CliProviderInstance can drive a spec-backed
@@ -464,7 +465,7 @@ export class SpecCliAdapter implements CliAdapter {
         });
         if (projected.status !== 'waiting_approval' && this.approvalLifecycle?.read()?.lifecycle === 'pending') {
             this.approvalLifecycle.resolve(Date.now());
-            try { this.driver?.updateMeta({ providerApproval: bindProviderApprovalAssignment(this.approvalLifecycle.read(), this.runtimeSettings) }); } catch { /* Optional host metadata transport. */ }
+            try { this.driver?.updateMeta({ providerApproval: providerApprovalSnapshot(bindProviderApprovalAssignment(this.approvalLifecycle.read(), this.runtimeSettings)) }); } catch { /* Optional host metadata transport. */ }
         }
         return { ...projected, providerApproval: bindProviderApprovalAssignment(this.approvalLifecycle?.read(), this.runtimeSettings) };
     }
@@ -735,7 +736,7 @@ export class SpecCliAdapter implements CliAdapter {
             const resolvedAt = Date.now();
             this.lastApprovalResolvedAt = resolvedAt;
             this.approvalLifecycle?.resolve(resolvedAt);
-            try { this.driver.updateMeta({ providerApproval: bindProviderApprovalAssignment(this.approvalLifecycle?.read(), this.runtimeSettings) }); } catch { /* Optional host metadata transport. */ }
+            try { this.driver.updateMeta({ providerApproval: providerApprovalSnapshot(bindProviderApprovalAssignment(this.approvalLifecycle?.read(), this.runtimeSettings)) }); } catch { /* Optional host metadata transport. */ }
             this.approvalResolvedCallback?.({
                 resolvedAt,
                 ...(resolvingModalKey ? { modalKey: resolvingModalKey } : {}),
@@ -811,8 +812,12 @@ export class SpecCliAdapter implements CliAdapter {
         const previousAttempt = this.runtimeSettings?.meshActiveAttemptId;
         const previousGeneration = this.runtimeSettings?.meshActiveAttemptGeneration;
         this.runtimeSettings = { ...(settings ?? {}) };
+        if (this.approvalLifecycle?.read()?.type === 'tool_permission'
+            && (previousAttempt !== this.runtimeSettings.meshActiveAttemptId || previousGeneration !== this.runtimeSettings.meshActiveAttemptGeneration)) {
+            this.approvalLifecycle.resolve(Date.now());
+        }
         const approval = bindProviderApprovalAssignment(this.approvalLifecycle?.read(), this.runtimeSettings);
-        try { this.driver?.updateMeta({ providerApproval: approval }); } catch { /* Optional host metadata transport. */ }
+        try { this.driver?.updateMeta({ providerApproval: providerApprovalSnapshot(approval) }); } catch { /* Optional host metadata transport. */ }
         if (approval?.type === 'provider_setup' && approval.lifecycle === 'pending' && approval.evidence === 'live'
             && (previousAttempt !== this.runtimeSettings.meshActiveAttemptId || previousGeneration !== this.runtimeSettings.meshActiveAttemptGeneration)) this.notifyChange('fsm_state');
     }
@@ -897,7 +902,7 @@ export class SpecCliAdapter implements CliAdapter {
         switch (ev.kind) {
             case 'state_changed':
                 this.approvalLifecycle?.observe(ev.state, ev.modal, !this.latestState && this.attachedExistingRuntime ? null : Date.now(), /trust/i.test(ev.state.id) ? { runtimeDirectory: this.workingDir, displayedDirectory: readDisplayedTrustDirectory(this.driver.snapshot() || '') } : undefined, providerApprovalAssignment(this.runtimeSettings));
-                try { this.driver.updateMeta({ providerApproval: bindProviderApprovalAssignment(this.approvalLifecycle?.read(), this.runtimeSettings) }); } catch { /* Optional host metadata transport. */ }
+                try { this.driver.updateMeta({ providerApproval: providerApprovalSnapshot(bindProviderApprovalAssignment(this.approvalLifecycle?.read(), this.runtimeSettings)) }); } catch { /* Optional host metadata transport. */ }
                 this.latestState = ev.state;
                 this.latestModal = ev.modal;
                 // info-level keeps only spec-defined identifiers (state.id /

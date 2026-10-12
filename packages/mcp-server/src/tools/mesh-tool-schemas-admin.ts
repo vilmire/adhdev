@@ -129,9 +129,9 @@ export const MESH_ANSWER_QUESTION_TOOL = {
 
 export const MESH_LIST_PENDING_APPROVALS_TOOL = {
     name: 'mesh_list_pending_approvals',
-    description: 'List confirmed live provider tool permissions across the mesh. Count excludes status-only waits, setup gates, cached evidence and owner staged-write ratification. '
-        + 'mesh_approve resolves ONE (node_id, session_id) at a time; this read-only tool enumerates the full pending set so you can see all blocked sessions at once and drive a mesh_approve for each. '
-        + 'Each row carries nodeId, sessionId, providerType, taskTitle, and how long it has been waiting (waitingSince/waitingMs), longest-waiting first. Does not mutate anything.',
+    description: 'List waiting provider decisions and compatibility/attention resources across the mesh. Only actionableCount represents confirmed live tool permissions; status-only waits, setup gates and cached evidence never grant consent. Owner staged-write ratification remains a separate resource. '
+        + 'mesh_approve resolves ONE (node_id, session_id) at a time; this read-only tool enumerates the full pending set so you can see all blocked sessions at once and inspect compatibility and unavailable resources without losing waiting visibility. Only actionable rows support the exact Inbox path with approval_target. '
+        + 'Each row carries nodeId, sessionId, providerType, taskTitle, and how long it has been waiting (waitingSince/waitingMs), longest-waiting first. count enumerates rows; waitingCount includes taskless attention; actionableCount requires confirmed live permission evidence. Unknown/legacy/cached rows route to the existing session handler and never grant consent. Does not mutate anything.',
     inputSchema: {
         type: 'object' as const,
         properties: {},

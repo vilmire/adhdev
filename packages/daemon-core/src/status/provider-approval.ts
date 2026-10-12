@@ -3,9 +3,10 @@ import { resolveTurnAttemptRow } from '../mesh/mesh-turn-presentation.js';
 
 /** Attach current turn authority without fabricating tasks for pre-claim setup gates. */
 export function projectProviderApproval(approval: ProviderApproval | null | undefined, sessionId: string, providerType: string, waiting = false): ProviderApproval | null {
-    if (!approval) return waiting ? { source: 'provider_modal', type: 'unknown', evidence: 'unavailable', lifecycle: 'pending', modalKey: null, createdAt: null, resolvedAt: null, description: '', buttons: [], actionable: false, sessionId, providerType } : null;
+    if (approval === null) return null;
+    if (!approval) return waiting ? { source: 'status_only', compatibility: 'unknown', type: 'unknown', evidence: 'unavailable', lifecycle: 'pending', modalKey: null, createdAt: null, resolvedAt: null, description: '', buttons: [], actionable: false, sessionId, providerType } : null;
     const candidate = resolveTurnAttemptRow({ sessionId });
-    const row = (approval.attemptId && candidate?.attemptId !== approval.attemptId) || approval.type === 'provider_setup' && candidate && ['completed', 'failed', 'cancelled'].includes(candidate.stage) ? null : candidate;
+    const row = (approval.attemptId && candidate?.attemptId !== approval.attemptId) || approval.type === 'provider_setup' && !approval.attemptId && candidate && ['completed', 'failed', 'cancelled'].includes(candidate.stage) ? null : candidate;
     const suspended = row?.providerSuspension;
     const current = suspended?.generation === row?.generation && suspended?.modalKey === approval.modalKey;
     const boundElsewhere = row?.providerSuspension && !current;

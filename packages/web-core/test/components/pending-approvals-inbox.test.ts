@@ -21,10 +21,29 @@ describe('approvals-only provider Inbox', () => {
     expect(html).not.toContain('always-approve')
     expect(html).toContain('/dashboard?activeTab=session%3As')
   })
-  it('status-only waiting has no approval row or count in any derivation', () => {
+  it('explicit suppression stays absent; old status-only peers remain non-actionable attention', () => {
     expect(deriveProviderApprovalInbox([worker(null)], { d: 'connected' })).toEqual([])
-    expect(derivePendingApprovals([{ nodeId: 'n', activeSessionDetails: [{ sessionId: 's', state: 'awaiting_approval' }] }] as any)).toEqual([])
-    expect(deriveApprovalsFromConversations([{ sessionId: 's', daemonId: 'd', status: 'waiting_approval' }])).toEqual([])
+    expect(derivePendingApprovals([{ nodeId: 'n', activeSessionDetails: [{ sessionId: 's', state: 'awaiting_approval' }] }] as any)[0]).toMatchObject({ approvalType: 'unknown', actionable: false, waitingSince: null })
+    expect(deriveApprovalsFromConversations([{ sessionId: 's', daemonId: 'd', status: 'waiting_approval' }])[0]).toMatchObject({ approvalType: 'unknown', actionable: false })
+  })
+  it('preserves real IDE/extension and older CLI approvals through their exact session link', () => {
+    for (const type of ['cursor', 'antigravity', 'claude-cli']) {
+      const ide = { ...worker(), type, transport: type === 'claude-cli' ? 'pty' : 'cdp-webview', sessionId: 'legacy/s', activeChat: { ...worker().activeChat, providerApproval: undefined } }
+      const items = deriveProviderApprovalInbox([ide], { d: 'connected' })
+      expect(items).toHaveLength(1)
+      expect(items[0]).toMatchObject({ sessionId: 'legacy/s', approvalType: 'unknown', compatibility: 'session_only', actionable: false, waitingSince: null })
+      const html = renderToStaticMarkup(createElement(PendingApprovalsInbox, { approvals: items, onResolve: () => { throw new Error('blind action') } }))
+      expect(html).toContain('/dashboard?activeTab=session%3Alegacy%2Fs')
+      expect(html).toContain('use session handler')
+      expect(html).not.toContain('<button')
+    }
+  })
+  it('never enables the exact CLI Inbox target on an unsupported transport', () => {
+    expect(deriveProviderApprovalInbox([{ ...worker(), transport: 'cdp-webview' }], { d: 'connected' })[0].actionable).toBe(false)
+  })
+  it('keeps real unhidden CLI permissions actionable and unknown clocks honest', () => {
+    const ide = { ...worker({ ...permission, createdAt: null }), surfaceHidden: false, muted: false }
+    expect(deriveProviderApprovalInbox([ide], { d: 'connected' })[0]).toMatchObject({ actionable: true, waitingSince: null })
   })
   it('cached/disconnected evidence is explicit and offers no blind buttons', () => {
     for (const [approval, connections] of [[permission, {}], [{ ...permission, evidence: 'cached' }, { d: 'connected' }], [{ ...permission, evidence: 'unavailable' }, { d: 'connected' }], [{ ...permission, buttons: [] }, { d: 'connected' }]] as any) {
@@ -33,7 +52,7 @@ describe('approvals-only provider Inbox', () => {
       expect(items[0].approvalTarget).toBeUndefined()
       const html = renderToStaticMarkup(createElement(PendingApprovalsInbox, { approvals: items, onResolve: () => {} }))
       expect(html).not.toContain('<button')
-      expect(html).toContain('(0)')
+      expect(html).toContain('1 waiting · 0 actionable')
     }
   })
   it('pre-claim trust remains visible as setup with no tool action or fabricated task', () => {
@@ -49,6 +68,15 @@ describe('approvals-only provider Inbox', () => {
     expect(deriveProviderApprovalInbox([worker({ ...permission, source: 'owner_staged_proposal' })], { d: 'connected' })).toEqual([])
     expect(deriveProviderApprovalInbox([worker({ ...permission, lifecycle: 'resolved', resolvedAt: 9000 })], { d: 'connected' })).toEqual([])
     expect(deriveProviderApprovalInbox([{ ...worker(null), status: 'waiting_choice', activeInteractivePrompt: { promptId: 'q' } }, { ...worker(null), stagedProposal: { ownerOnly: true } }], { d: 'connected' })).toEqual([])
+  })
+  it('retracts stopped/resumed/question rows in the mesh consumer and cached conversation actions', () => {
+    for (const chatStatus of ['stopped', 'idle', 'waiting_choice']) {
+      expect(derivePendingApprovals([{ nodeId: 'n', health: 'online', activeSessionDetails: [{ sessionId: 's', state: 'waiting_approval', chatStatus, providerApproval: permission }] }] as any)).toEqual([])
+    }
+    const conv = { sessionId: 's', daemonId: 'd', status: 'waiting_approval', transport: 'pty', providerApproval: permission as any }
+    expect(deriveApprovalsFromConversations([{ ...conv, connectionState: 'disconnected' }])[0]).toMatchObject({ actionable: false, evidence: 'cached' })
+    expect(deriveApprovalsFromConversations([{ ...conv, connectionState: 'connected' }])[0].actionable).toBe(true)
+    expect(deriveProviderApprovalInbox([{ ...worker(), status: 'starting', activeChat: { ...worker().activeChat, status: 'starting' } }], { d: 'connected' })[0].actionable).toBe(false)
   })
   it('dedupes exact daemon/session and keeps independently actionable identities', () => {
     const items = deriveProviderApprovalInbox([worker({ ...permission, evidence: 'cached' }), worker()], { d: 'connected' })
