@@ -52,6 +52,17 @@ test('mesh_launch_session schema maps providers, keeps type optional, and has no
   assert.doesNotMatch(description, /default to claude-cli unless/i);
 });
 
+test('mesh_launch_session description documents the provider-aware duplicate guard accurately', () => {
+  const description = `${MESH_LAUNCH_SESSION_TOOL.description} ${MESH_LAUNCH_SESSION_TOOL.inputSchema.properties.force.description}`;
+  // Same-provider or unknown-provider reuse (idempotent), …
+  assert.match(description, /MATCHES the resolved launch type — or whose provider is unknown/);
+  assert.match(description, /reused:true/);
+  // … but a definite provider mismatch launches FRESH — never a refusal, and
+  // force=true bypasses the guard entirely (owner contract 71603dc10).
+  assert.match(description, /DIFFERENT provider does NOT block the launch/);
+  assert.match(description, /force=true to bypass the guard entirely/);
+});
+
 test('mesh_read_chat schema exposes provider_session_id and compact mode for completed session history', () => {
   assert.equal(MESH_READ_CHAT_TOOL.inputSchema.properties.provider_session_id.type, 'string');
   assert.equal(MESH_READ_CHAT_TOOL.inputSchema.properties.compact.type, 'boolean');
