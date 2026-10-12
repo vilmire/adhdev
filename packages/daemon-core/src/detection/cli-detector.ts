@@ -264,6 +264,11 @@ export function buildProviderVersions(detected: CLIInfo[]): Record<string, strin
 const PROVIDER_VERSIONS_TTL_MS = 5 * 60 * 1000; // 5 min — provider installs change rarely
 let cachedProviderVersions: Record<string, string> = {};
 let cachedProviderVersionsAt = 0;
+let cachedProviderInventory: { observedAt: number; providers: Record<string, { installed: boolean }> } | undefined;
+/** Observation-only: never triggers detection or a refresh. */
+export function readCachedProviderInventory() {
+    return cachedProviderInventory ? { observedAt: cachedProviderInventory.observedAt, providers: { ...cachedProviderInventory.providers } } : undefined;
+}
 let providerVersionsRefreshInFlight: Promise<void> | null = null;
 
 // The daemon's active ProviderLoader, registered once at boot. detectCLIs only
@@ -293,6 +298,7 @@ function refreshProviderVersionsSnapshot(providerLoader?: ProviderLoader): Promi
             const detected = await detectCLIs(loader, { includeVersion: true });
             cachedProviderVersions = buildProviderVersions(detected);
             cachedProviderVersionsAt = Date.now();
+            cachedProviderInventory = { observedAt: cachedProviderVersionsAt, providers: Object.fromEntries(detected.map(cli => [cli.id, { installed: cli.installed }])) };
         } catch {
             // Best-effort: keep the last good snapshot on failure.
         } finally {
