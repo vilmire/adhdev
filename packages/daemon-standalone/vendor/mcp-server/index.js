@@ -40195,7 +40195,7 @@ ${error.message || ""}`;
       const nodeFacts = normalizeMeshNodeFacts(record2.nodeFacts);
       const daemonId = readId(record2.daemonId);
       const daemonBootId = readId(record2.daemonBootId);
-      const truncated = rawSessions.length > sessions.length && sessions.length >= MESH_NODE_RUNTIME_MAX_SESSIONS;
+      const truncated = record2.sessionsTruncated === true || rawSessions.length > sessions.length && sessions.length >= MESH_NODE_RUNTIME_MAX_SESSIONS;
       const providers = sanitizeProviders(record2.providers);
       return {
         schemaVersion: MESH_NODE_RUNTIME_SUMMARY_SCHEMA_VERSION,
@@ -45527,6 +45527,8 @@ Next step: ${nextStep}`;
           "agent:stopped",
           "agent:ready",
           "monitor:no_progress",
+          // Raw lifecycle status edges feed advisory session health, never completion.
+          "worker:status_changed",
           "refine:accepted",
           "refine:completed",
           "refine:failed",
@@ -57542,7 +57544,12 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         const store2 = MeshRuntimeStore.getInstance();
         const entry = store2.findQueueEntryById(meshId, taskId);
         if (!entry || entry.status !== "assigned") return null;
-        if (typeof entry.attemptId === "string" && entry.attemptId.trim()) return null;
+        const attemptId = entry.attemptId?.trim();
+        if (attemptId) {
+          if (attemptId !== opts?.orphanedAttemptId) return null;
+          const attempt = store2.turnStore().getAttempt(attemptId);
+          if (attempt && !attempt.terminal) return null;
+        } else if (opts?.orphanedAttemptId) return null;
         entry.cancelReason = reason;
         entry.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
         store2.updateQueueEntry(entry);
@@ -75636,7 +75643,8 @@ ${continuationNotice}` } : task,
         }
         const row = held.sessions.find((s2) => str5(s2.id) === attempt.sessionId || str5(s2.sessionId) === attempt.sessionId || str5(s2.instanceId) === attempt.sessionId);
         if (!row) {
-          return !held.truncated && held.sessions.length > 0 && held.observedAt > turnStartBoundary(attempt) + HELD_ABSENCE_MARGIN_MS ? { presence: "absent" } : { presence: "unknown" };
+          const margin = held.sessions.length > 0 ? HELD_ABSENCE_MARGIN_MS : EMPTY_HELD_ABSENCE_GRACE_MS;
+          return !held.truncated && held.observedAt > turnStartBoundary(attempt) + margin ? { presence: "absent" } : { presence: "unknown" };
         }
         const status = str5(row.status).toLowerCase() || void 0;
         if (!wantsTranscript(attempt, holds, status)) return { presence: "present", ...status ? { status } : {} };
@@ -75668,6 +75676,7 @@ ${continuationNotice}` } : task,
     var BUSY_STATUSES2;
     var TRANSCRIPT_PROBE_HOLDS;
     var HELD_ABSENCE_MARGIN_MS;
+    var EMPTY_HELD_ABSENCE_GRACE_MS;
     var init_probe = __esm2({
       "src/mesh/turn-ledger/probe.ts"() {
         "use strict";
@@ -75676,11 +75685,9 @@ ${continuationNotice}` } : task,
         BUSY_STATUSES2 = /* @__PURE__ */ new Set(["generating", "waiting_approval", "waiting_choice", "starting", "thinking", "busy"]);
         TRANSCRIPT_PROBE_HOLDS = ["weak_candidate", "live_pending", "transcript_quiet"];
         HELD_ABSENCE_MARGIN_MS = 1e4;
+        EMPTY_HELD_ABSENCE_GRACE_MS = 2 * 6e4;
       }
     });
-    function isUncorrelatedAssignedRow(row) {
-      return row.status === "assigned" && !readText(row.attemptId);
-    }
     function rowNodeId(row) {
       return readText(row.assignedNodeId) || readText(row.targetNodeId);
     }
@@ -75693,10 +75700,19 @@ ${continuationNotice}` } : task,
       if (!sessionId) return "not_live";
       if (!mesh) return "unknown";
       const dead = resolveDeadTargetVerdict(components, meshId, mesh, { ...row, targetNodeId: nodeId || void 0, targetSessionId: sessionId });
-      if (dead.dead) return "not_live";
+      if (dead.nodeDead) return "not_live";
       const node = nodeId && Array.isArray(mesh?.nodes) ? mesh.nodes.find((n) => meshNodeIdMatches7(n, nodeId)) : void 0;
-      if (!node || isLocalAutoLaunchNode(node)) {
-        return node ? "live" : "unknown";
+      if (!node) return "unknown";
+      if (isLocalAutoLaunchNode(node)) {
+        try {
+          if (components.sessionRegistry?.has(sessionId) || components.instanceManager?.getInstance?.(sessionId)) return "live";
+          if (typeof components.instanceManager?.getByCategory !== "function") return "unknown";
+          const instances = components.instanceManager.getByCategory("cli");
+          if (!Array.isArray(instances)) return "unknown";
+          return instances.some((instance) => sessionIdsEquivalent(readText(instance.getState()?.instanceId), sessionId)) ? "live" : "not_live";
+        } catch {
+          return "unknown";
+        }
       }
       const daemonId = readMeshNodeDaemonId(node);
       if (!daemonId) return "unknown";
@@ -75705,7 +75721,7 @@ ${continuationNotice}` } : task,
       const listed = held.runtime.sessions.some((s2) => [s2.id, s2.sessionId, s2.instanceId].some((id22) => !!readText(id22) && sessionIdsEquivalent(readText(id22), sessionId)));
       if (listed) return "live";
       const rowUpdatedMs = Date.parse(row.updatedAt || row.createdAt || "");
-      const complete = !held.runtime.sessionsTruncated && held.runtime.sessions.length > 0;
+      const complete = !held.runtime.sessionsTruncated;
       const observedAfterRow = Number.isFinite(rowUpdatedMs) && held.observedAt > rowUpdatedMs + HELD_ABSENCE_MARGIN_MS;
       return complete && observedAfterRow ? "not_live" : "unknown";
     }
@@ -75713,9 +75729,9 @@ ${continuationNotice}` } : task,
       const taskId = row.id;
       const nodeId = rowNodeId(row);
       const sessionId = rowSessionId(row);
-      const coordinatorMessage = `[System] A mesh task was stuck 'assigned' with no delivery attempt behind it and has been marked FAILED (${ORPHANED_UNCORRELATED_DISPATCH_REASON}).
-Task ${taskId}${nodeId ? ` on node ${nodeId}` : ""}${sessionId ? ` (session ${sessionId})` : ""} was recorded as dispatched, but no turn-ledger attempt was ever opened for it, and its session is no longer live \u2014 so no completion can arrive and nothing would ever release it. While it sat 'assigned' it counted as an active assignment on its node and could block auto-launch there.
-Check whether the work actually happened (mesh_task_history / git); if it still matters, re-send it with mesh_send_task or mesh_enqueue_task. The failed row stays in the queue as the audit record.`;
+      const coordinatorMessage = `[System] A mesh task was stuck 'assigned' with no open delivery attempt behind it and has been marked FAILED (${ORPHANED_UNCORRELATED_DISPATCH_REASON}).
+Task ${taskId}${nodeId ? ` on node ${nodeId}` : ""}${sessionId ? ` (session ${sessionId})` : ""} was recorded as dispatched, but no open turn-ledger attempt owns it, and its session is no longer live \u2014 so no completion can arrive and nothing would ever release it. While it sat 'assigned' it counted as an active assignment on its node and could block auto-launch there.
+Check mesh_task_history / git, then use mesh_requeue_task with this task_id and force:true if recovery is needed. This preserves the original instruction, dependencies and retry history. The failed row remains the audit record.`;
       try {
         const targetCoordinatorDaemonId = readText(getMachineId());
         const targetCoordinatorSessionId = readText(row.sourceCoordinatorSessionId);
@@ -75748,7 +75764,8 @@ Check whether the work actually happened (mesh_task_history / git); if it still 
       const failed = [];
       const rows = MeshRuntimeStore.getInstance().getQueueEntries(meshId, ["assigned"]);
       for (const row of rows) {
-        if (!isUncorrelatedAssignedRow(row)) continue;
+        const attemptId = readText(row.attemptId);
+        const attempt = attemptId ? MeshRuntimeStore.getInstance().turnStore().getAttempt(attemptId) : null;
         const updatedMs = Date.parse(row.updatedAt || row.createdAt || "");
         if (!Number.isFinite(updatedMs) || now - updatedMs < minAgeMs) continue;
         let liveness;
@@ -75758,7 +75775,16 @@ Check whether the work actually happened (mesh_task_history / git); if it still 
           liveness = "unknown";
         }
         if (liveness !== "not_live") continue;
-        const entry = failOrphanedUncorrelatedDispatch(meshId, row.id, ORPHANED_UNCORRELATED_DISPATCH_REASON);
+        if (attempt && !attempt.terminal) {
+          deps.requestProbe?.(attemptId);
+          continue;
+        }
+        const entry = failOrphanedUncorrelatedDispatch(
+          meshId,
+          row.id,
+          ORPHANED_UNCORRELATED_DISPATCH_REASON,
+          attemptId ? { orphanedAttemptId: attemptId } : void 0
+        );
         if (!entry) continue;
         failed.push(entry);
         const nodeId = rowNodeId(row);
@@ -75774,7 +75800,7 @@ Check whether the work actually happened (mesh_task_history / git); if it still 
             ageMs: now - updatedMs
           }
         }, { local: true });
-        LOG.warn("MeshQueue", `ORPHANED-DISPATCH: task ${row.id} (mesh ${meshId}) was 'assigned' with no turn-ledger attempt and its session ${sessionId || "(none)"} is not live on node ${nodeId || "(none)"}; failed it (${ORPHANED_UNCORRELATED_DISPATCH_REASON}).`);
+        LOG.warn("MeshQueue", `ORPHANED-DISPATCH: task ${row.id} (mesh ${meshId}) was 'assigned' with no open turn-ledger attempt and its session ${sessionId || "(none)"} is not live on node ${nodeId || "(none)"}; failed it (${ORPHANED_UNCORRELATED_DISPATCH_REASON}).`);
         notifyOrphanedDispatchFailed(meshId, row);
       }
       return failed;
@@ -75783,6 +75809,7 @@ Check whether the work actually happened (mesh_task_history / git); if it still 
       let mesh;
       return sweepOrphanedUncorrelatedDispatches(meshId, {
         now,
+        requestProbe: (attemptId) => components.turnScheduler?.requestProbe(attemptId),
         liveness: (row) => {
           if (mesh === void 0) mesh = getMeshWithCache(components, meshId) ?? null;
           return resolveAssignedSessionLiveness(components, meshId, mesh, row);
@@ -78633,6 +78660,136 @@ ${cleanBody}`;
         recentReadDebugSignatureBySession = /* @__PURE__ */ new Map();
       }
     });
+    function createWorkerSessionHealthMonitor(emit2 = notifyWorkerSessionHealth) {
+      const states = /* @__PURE__ */ new Map();
+      function stateFor(owner) {
+        const key2 = JSON.stringify([owner.meshId, owner.taskId, owner.sessionId, owner.attemptId, owner.generation]);
+        let state = states.get(key2);
+        if (!state) {
+          state = { status: "", lastAt: 0, edges: [], failures: 0, active: /* @__PURE__ */ new Set() };
+          states.set(key2, state);
+          if (states.size > 500) states.delete(states.keys().next().value);
+        }
+        return state;
+      }
+      function statusEdge(state, status, at) {
+        if (!Number.isFinite(at) || at < state.lastAt) return false;
+        state.edges = state.edges.filter((edge) => at - edge.at < WORKER_FLAP_WINDOW_MS);
+        if (state.status === "idle" && status === "generating" && state.statusAt !== void 0 && at - state.statusAt < WORKER_FLAP_MIN_IDLE_MS) {
+          if (state.edges[state.edges.length - 1]?.at === state.statusAt) state.edges.pop();
+        } else if (state.status === "generating" && status === "idle" || state.status === "idle" && status === "generating") {
+          state.edges.push({ from: state.status, to: status, at });
+          state.edges = state.edges.slice(-64);
+        } else if (status !== state.status && !["idle", "generating"].includes(status)) {
+          state.edges = [];
+        }
+        if (state.status !== status) state.statusAt = at;
+        state.status = status;
+        state.lastAt = at;
+        return true;
+      }
+      function publish(owner, state, signals, at, quietMs, source2) {
+        if (state.edges.length >= WORKER_FLAP_TRANSITIONS && state.edges[state.edges.length - 1].at - state.edges[0].at >= WORKER_FLAP_MIN_SPAN_MS) signals.add("flapping");
+        for (const signal of signals) {
+          if (!state.active.has(signal)) emit2(owner, {
+            signal,
+            attemptId: owner.attemptId,
+            generation: owner.generation,
+            sessionId: owner.sessionId,
+            ...owner.taskId ? { taskId: owner.taskId } : {},
+            ...owner.nodeId ? { nodeId: owner.nodeId } : {},
+            at,
+            quietMs,
+            readFailureStreak: state.failures,
+            transitions: state.edges.length,
+            transitionHistory: state.edges.map((edge) => ({ ...edge })),
+            source: source2
+          });
+        }
+        state.active = signals;
+      }
+      return {
+        transition(owner, prev, next, at) {
+          if (!owner.meshId || !owner.taskId || prev === next) return;
+          const state = stateFor(owner);
+          if (!state.status) {
+            state.status = prev;
+            state.statusAt = at;
+          }
+          if (!statusEdge(state, next, at)) return;
+          const signals = new Set(state.active);
+          signals.delete("flapping");
+          publish(owner, state, signals, at, 0, "status");
+        },
+        noProgress(owner, stalledMs, status, at) {
+          if (!owner.meshId || !owner.taskId || !Number.isFinite(stalledMs) || stalledMs < WORKER_NO_PROGRESS_MIN_MS || ["waiting_approval", "waiting_choice"].includes(status)) return;
+          const state = stateFor(owner);
+          if (at < state.lastAt || !Number.isFinite(at)) return;
+          state.edges = state.edges.filter((edge) => at - edge.at < WORKER_FLAP_WINDOW_MS);
+          const signals = new Set(state.active);
+          if (state.lastStallAt !== void 0 && at - stalledMs > state.lastStallAt) state.active.delete("stalled");
+          if (!state.active.has("stalled")) state.lastStallAt = at;
+          state.lastAt = at;
+          signals.add("stalled");
+          publish(owner, state, signals, at, stalledMs, "monitor:no_progress");
+        },
+        observe(attempt, read, now, stallMs) {
+          if (!attempt.meshId || attempt.scope === "plain" || attempt.terminal) return;
+          const state = stateFor(attempt);
+          const status = read.presence === "present" ? read.transcript === null ? "read_failed" : (read.transcript?.providerObservedStatus || read.status || "present").toLowerCase() : read.presence;
+          if (!statusEdge(state, status, now)) return;
+          state.failures = read.presence === "present" && read.transcript === null ? state.failures + 1 : 0;
+          const quietMs = Math.max(0, now - Math.max(turnStartBoundary(attempt), attempt.lastActivityAt ?? 0, read.transcript?.newestActivityAt ?? 0));
+          const signals = /* @__PURE__ */ new Set();
+          if (state.failures >= 2) signals.add("deteriorating");
+          if (read.presence === "present" && read.transcript !== null && !read.transcript?.activeModal && !["waiting_approval", "waiting_choice", "starting"].includes(status) && !read.transcript?.finalSummary && quietMs >= stallMs) signals.add("stalled");
+          publish(attempt, state, signals, now, quietMs, "probe");
+        }
+      };
+    }
+    function workerSessionHealthFor(components) {
+      let monitor = monitors.get(components);
+      if (!monitor) {
+        monitor = createWorkerSessionHealthMonitor();
+        monitors.set(components, monitor);
+      }
+      return monitor;
+    }
+    function notifyWorkerSessionHealth(owner, event) {
+      const trail = event.transitionHistory.map((edge) => `${edge.from}\u2192${edge.to}@${new Date(edge.at).toISOString()}`).join(", ");
+      const coordinatorMessage = `[System] Worker session ${event.sessionId} on node ${owner.nodeId || "unknown"} is ${event.signal} while holding task ${owner.taskId || owner.attemptId} at ${new Date(event.at).toISOString()}. ` + (event.signal === "stalled" ? `No observed progress for ${Math.round(event.quietMs / 1e3)}s. ` : "") + `Consecutive transcript read failures: ${event.readFailureStreak}; generating/idle transitions in 5m: ${event.transitions}. ` + (trail ? `Observed transitions: ${trail}. ` : "") + "This is an advisory session signal; inspect the worker transcript and task history. It does not establish a failure or its cause.";
+      notifyMeshCoordinator({
+        event: "mesh:dispatch_blocked",
+        meshId: owner.meshId,
+        nodeLabel: owner.nodeId || event.sessionId,
+        ...owner.nodeId ? { nodeId: owner.nodeId } : {},
+        eventId: `worker_session_health:${owner.meshId}:${owner.taskId}:${event.sessionId}:${event.attemptId}:g${event.generation}:${event.signal}:${event.at}`,
+        metadataEvent: { ...event, source: "worker_session_health", observationSource: event.source, coordinatorMessage },
+        coordinatorMessage,
+        queuedAt: event.at,
+        ...owner.coordinator?.daemonId ? { targetCoordinatorDaemonId: owner.coordinator.daemonId } : {},
+        ...owner.coordinator?.sessionId ? { targetCoordinatorSessionId: owner.coordinator.sessionId } : {}
+      });
+    }
+    var WORKER_FLAP_WINDOW_MS;
+    var WORKER_FLAP_MIN_SPAN_MS;
+    var WORKER_FLAP_TRANSITIONS;
+    var WORKER_FLAP_MIN_IDLE_MS;
+    var WORKER_NO_PROGRESS_MIN_MS;
+    var monitors;
+    var init_worker_session_health = __esm2({
+      "src/mesh/turn-ledger/worker-session-health.ts"() {
+        "use strict";
+        init_probe();
+        init_deliver();
+        WORKER_FLAP_WINDOW_MS = 5 * 6e4;
+        WORKER_FLAP_MIN_SPAN_MS = 3e4;
+        WORKER_FLAP_TRANSITIONS = 4;
+        WORKER_FLAP_MIN_IDLE_MS = 5e3;
+        WORKER_NO_PROGRESS_MIN_MS = 18e4;
+        monitors = /* @__PURE__ */ new WeakMap();
+      }
+    });
     var mesh_event_forwarding_exports = {};
     __export2(mesh_event_forwarding_exports, {
       __resetMeshWorkspaceCacheForTests: () => __resetMeshWorkspaceCacheForTests,
@@ -78903,6 +79060,42 @@ ${cleanBody}`;
         });
       });
     }
+    function consumeWorkerSessionHealth(components, input) {
+      const { eventName, event, settings, meshId, sessionId, nodeId } = input;
+      if (!sessionId || !["monitor:no_progress", "worker:status_changed"].includes(eventName)) return;
+      const taskId = readText(event.taskId) || readText(event.meshActiveTaskId) || readText(settings.meshActiveTaskId);
+      if (!taskId) return;
+      const ref = isTurnAttemptRef(event.attemptRef) ? event.attemptRef : void 0;
+      const ledger = components.turnLedger;
+      const current4 = ledger?.openAttemptForSession(sessionId);
+      if (current4 && (current4.taskId !== taskId || ref && (current4.attemptId !== ref.attemptId || current4.generation !== ref.generation))) return;
+      const attempt = ref ? ledger?.getAttempt(ref.attemptId) : current4;
+      let owner;
+      if (attempt) {
+        if (attempt.terminal || attempt.meshId !== meshId || attempt.taskId !== taskId || attempt.sessionId !== sessionId || ref && attempt.generation !== ref.generation) return;
+        owner = attempt;
+      } else {
+        const stampedTask = readText(settings.meshActiveTaskId);
+        if (stampedTask && stampedTask !== taskId) return;
+        owner = {
+          meshId,
+          taskId,
+          sessionId,
+          nodeId,
+          attemptId: ref?.attemptId || readText(event.attemptId) || readText(settings.meshActiveAttemptId),
+          generation: ref?.generation ?? (typeof settings.meshActiveAttemptGeneration === "number" ? settings.meshActiveAttemptGeneration : 0),
+          coordinator: { daemonId: input.coordinatorDaemonId, sessionId: input.coordinatorSessionId }
+        };
+      }
+      const at = typeof event.timestamp === "number" ? event.timestamp : Date.now();
+      const monitor = workerSessionHealthFor(components);
+      if (eventName === "worker:status_changed") {
+        monitor.transition(owner, readText(event.prevStatus), readText(event.nextStatus), at);
+      } else {
+        const stalledMs = typeof event.stalledMs === "number" ? event.stalledMs : typeof event.elapsedSec === "number" ? event.elapsedSec * 1e3 : NaN;
+        monitor.noProgress(owner, stalledMs, readText(event.observedStatus), at);
+      }
+    }
     function processMeshEvent(components, input) {
       const { meshId, eventName, event, nodeId, sessionId } = input;
       const traceCtx = { taskId: event.taskId ?? event.meshActiveTaskId, sessionId, nodeId, meshId, event: eventName };
@@ -78933,6 +79126,7 @@ ${cleanBody}`;
           result.notice = eventName;
           return result;
         }
+        consumeWorkerSessionHealth(components, input);
         applyQueueEdges(components, meshId, nodeId, eventName, event, sessionId);
       } catch (e) {
         LOG.warn("MeshEvents", `mesh event ${eventName} (mesh ${meshId}, session ${sessionId || "-"}) failed: ${e?.message || e}`);
@@ -79029,6 +79223,11 @@ ${cleanBody}`;
         ...readOptionalRecord2(payload.meshWorkerResult) ? { meshWorkerResult: payload.meshWorkerResult } : {},
         ...readOptionalRecord2(payload.structuredResult) ? { structuredResult: payload.structuredResult } : {},
         ...payload.timestamp !== void 0 ? { timestamp: payload.timestamp } : {},
+        ...typeof payload.stalledMs === "number" ? { stalledMs: payload.stalledMs } : {},
+        ...typeof payload.elapsedSec === "number" ? { elapsedSec: payload.elapsedSec } : {},
+        ...readText(payload.observedStatus) ? { observedStatus: readText(payload.observedStatus) } : {},
+        ...readText(payload.prevStatus) ? { prevStatus: readText(payload.prevStatus) } : {},
+        ...readText(payload.nextStatus) ? { nextStatus: readText(payload.nextStatus) } : {},
         ...readText(payload.worktreePath) ? { worktreePath: readText(payload.worktreePath) } : {},
         ...typeof payload.durationMs === "number" ? { durationMs: payload.durationMs } : {},
         ...readText(payload.error) ? { error: readText(payload.error) } : {},
@@ -79148,7 +79347,23 @@ ${cleanBody}`;
       if (!components.bus) {
         throw new Error("setupMeshEventForwarding requires components.bus");
       }
-      return components.bus.on("provider_event", (e) => onProviderEvent(e.event), { name: "mesh.forwarding" });
+      return components.bus.on(["provider_event", "status"], (e) => {
+        if (e.kind === "provider_event") onProviderEvent(e.event);
+        else if (e.kind === "status") {
+          const settings = components.instanceManager.getInstance(e.sessionId)?.getState?.().settings;
+          if (!readText(settings?.meshActiveTaskId)) return;
+          onProviderEvent({
+            event: "worker:status_changed",
+            instanceId: e.sessionId,
+            providerType: e.providerType,
+            timestamp: e.at,
+            prevStatus: e.prev,
+            nextStatus: e.next,
+            taskId: settings?.meshActiveTaskId,
+            ...typeof settings?.meshActiveAttemptGeneration === "number" && readText(settings?.meshActiveAttemptId) ? { attemptRef: { attemptId: settings?.meshActiveAttemptId, generation: settings?.meshActiveAttemptGeneration } } : {}
+          });
+        }
+      }, { name: "mesh.forwarding" });
     }
     var REMOTE_IDLE_SESSION_TTL_MS;
     var meshByWorkspaceCache;
@@ -79175,6 +79390,7 @@ ${cleanBody}`;
         init_mesh_events_utils();
         init_mesh_event_classify();
         init_deliver();
+        init_worker_session_health();
         init_repo_mesh_types();
         REMOTE_IDLE_SESSION_TTL_MS = 5 * 60 * 1e3;
         meshByWorkspaceCache = /* @__PURE__ */ new Map();
@@ -160992,6 +161208,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       const workspace = typeof node.workspace === "string" ? node.workspace : void 0;
       return { kind: "remote", daemonId, ...workspace ? { workspace } : {} };
     }
+    init_worker_session_health();
     var PLAIN_ATTEMPT_RETENTION_MS = 7 * 24 * 60 * 6e4;
     var PLAIN_ATTEMPT_PRUNE_INTERVAL_MS = 60 * 6e4;
     var PROBE_CONCURRENCY = 8;
@@ -161023,6 +161240,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       const now = deps.now ?? (() => Date.now());
       const tickMs = deps.intervalMs ?? policy.tickMs;
       const forced = /* @__PURE__ */ new Set();
+      const sessionHealth = deps.sessionHealth ?? createWorkerSessionHealthMonitor();
       let lastPruneAt = null;
       let inFlight3 = null;
       let again = false;
@@ -161069,6 +161287,11 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         const at = now();
         const current4 = store2.getAttempt(attempt.attemptId);
         if (!current4 || current4.terminal) return;
+        try {
+          sessionHealth.observe(current4, read, at, policy.stallNoticeMs);
+        } catch (error) {
+          log.warn(`turn-scheduler: session health notice failed: ${describe2(error)}`);
+        }
         let evidence = probeEvidence(current4, read, { nowMs: at, observedBy: selfDaemonId, policy });
         const t = read.transcript;
         if (t && t.finalSummary && probe.handoff && current4.meshId && evidence.some((e) => e.kind === "transcript_final")) {
@@ -164524,6 +164747,7 @@ ${notice.notice}${supersededHint}`;
     init_policy();
     init_probe();
     init_mesh_node_git_refresher();
+    init_worker_session_health();
     function scheduleQuotaBootRefresh(components) {
       setImmediate(() => {
         const isQuotaProviderEnabled = quotaProviderEnabledFromLoader(components.providerLoader);
@@ -164621,6 +164845,7 @@ ${notice.notice}${supersededHint}`;
           ledger,
           policy,
           bus: components.bus,
+          sessionHealth: workerSessionHealthFor(components),
           probe: {
             reader,
             locate: (attempt) => resolveProbeLocation({

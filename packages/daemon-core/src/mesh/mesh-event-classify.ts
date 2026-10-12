@@ -19,6 +19,8 @@ const MESH_COORDINATOR_EVENTS = new Set([
     'agent:stopped',
     'agent:ready',
     'monitor:no_progress',
+    // Raw lifecycle status edges feed advisory session health, never completion.
+    'worker:status_changed',
     'refine:accepted',
     'refine:completed',
     'refine:failed',

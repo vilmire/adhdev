@@ -2218,3 +2218,89 @@ describe('handleMeshForwardEvent — meshId recovery by nodeId (CANON-D)', () =>
     }
   })
 })
+
+
+describe('worker session deterioration coordinator consumer', () => {
+  const meshId = 'mesh_worker_deterioration';
+  const settings = { meshNodeFor: meshId, meshNodeId: 'node_child_1', meshActiveTaskId: 'task-still-running',
+    meshActiveAttemptId: 'attempt-running', meshActiveAttemptGeneration: 2, meshCoordinatorSessionId: 'coordinator-session-1' };
+  function fixture() {
+    cleanupMeshFiles(meshId);
+    const mesh = { id: meshId, nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }] };
+    meshConfigMocks.getMesh.mockReturnValue(mesh);
+    meshConfigMocks.getMeshByRepo.mockReturnValue(mesh);
+    meshConfigMocks.listMeshes.mockReturnValue([mesh]);
+    const at = new Date().toISOString();
+    MeshRuntimeStore.getInstance().insertQueueEntry({ id: 'task-still-running', meshId, message: 'original task instruction',
+      status: 'assigned', difficulty: 'medium', assignedNodeId: 'node_child_1', assignedSessionId: 'runtime-session-1',
+      attemptId: 'attempt-running', createdAt: at, updatedAt: at });
+    const f = createComponents(meshId, settings);
+    const stop = setupMeshEventForwarding(f.components);
+    return { ...f, stop };
+  }
+  it('normal session status edges and a short no_progress do not page the coordinator', () => {
+    const f = fixture();
+    try {
+      f.components.bus.emit({ kind: 'status', sessionId: 'runtime-session-1', at: 1_000_000, providerType: 'cursor-cli', prev: 'generating', next: 'idle', cause: 'fsm_state' });
+      f.components.bus.emit({ kind: 'status', sessionId: 'runtime-session-1', at: 1_001_000, providerType: 'cursor-cli', prev: 'idle', next: 'generating', cause: 'fsm_state' });
+      f.emit({ event: 'monitor:no_progress', instanceId: 'runtime-session-1', taskId: 'task-still-running', timestamp: 1_002_000, stalledMs: 2000, observedStatus: 'generating' });
+      expect(drainPendingMeshCoordinatorEvents(meshId)).toHaveLength(0);
+    } finally { f.stop(); cleanupMeshFiles(meshId); }
+  });
+  it('watchdog no_progress reaches pending coordinator notices before any terminal report', () => {
+    const f = fixture();
+    try {
+      const at = Date.now();
+      f.emit({ event: 'monitor:no_progress', instanceId: 'runtime-session-1', taskId: 'task-still-running', timestamp: at,
+        meshWorkerStall: true, stalledMs: 360_000, observedStatus: 'generating' });
+      f.emit({ event: 'monitor:no_progress', instanceId: 'runtime-session-1', taskId: 'task-still-running', timestamp: at + 1,
+        meshWorkerStall: true, stalledMs: 360_001, observedStatus: 'generating' });
+      const notices = drainPendingMeshCoordinatorEvents(meshId);
+      expect(notices).toHaveLength(1);
+      expect(notices[0].metadataEvent).toMatchObject({ source: 'worker_session_health', observationSource: 'monitor:no_progress', signal: 'stalled',
+        taskId: 'task-still-running', sessionId: 'runtime-session-1', nodeId: 'node_child_1', attemptId: 'attempt-running', generation: 2, at, quietMs: 360_000 });
+      expect(notices[0].coordinatorMessage).toContain('advisory');
+      expect(getQueue(meshId)[0]).toMatchObject({ id: 'task-still-running', status: 'assigned', message: 'original task instruction', assignedSessionId: 'runtime-session-1' });
+    } finally { f.stop(); cleanupMeshFiles(meshId); }
+  });
+  it('raw FSM edges preserve a repeated generating/idle cycle with identity and timestamps', () => {
+    const f = fixture();
+    try {
+      const at = Date.now();
+      for (let i = 0; i < 4; i++) f.components.bus.emit({ kind: 'status', sessionId: 'runtime-session-1', at: at + i * 15_000,
+        providerType: 'cursor-cli', prev: i % 2 ? 'idle' : 'generating', next: i % 2 ? 'generating' : 'idle', cause: 'fsm_state' });
+      const notices = drainPendingMeshCoordinatorEvents(meshId);
+      expect(notices).toHaveLength(1);
+      expect(notices[0].metadataEvent).toMatchObject({ signal: 'flapping', taskId: 'task-still-running', sessionId: 'runtime-session-1',
+        nodeId: 'node_child_1', attemptId: 'attempt-running', generation: 2, transitions: 4,
+        transitionHistory: Array.from({ length: 4 }, (_, i) => ({ from: i % 2 ? 'idle' : 'generating', to: i % 2 ? 'generating' : 'idle', at: at + i * 15_000 })) });
+      expect(notices[0].coordinatorMessage).toContain(new Date(at + 45_000).toISOString());
+      expect(getQueue(meshId)[0]).toMatchObject({ id: 'task-still-running', status: 'assigned', assignedSessionId: 'runtime-session-1' });
+    } finally { f.stop(); cleanupMeshFiles(meshId); }
+  });
+  it('a delayed watchdog event cannot be attributed to the task now holding the session', () => {
+    const f = fixture();
+    try {
+      f.emit({ event: 'monitor:no_progress', instanceId: 'runtime-session-1', taskId: 'previous-task', timestamp: Date.now(), stalledMs: 360_000, observedStatus: 'generating' });
+      expect(drainPendingMeshCoordinatorEvents(meshId)).toHaveLength(0);
+      const current = { meshId, nodeId: 'node_child_1', taskId: 'task-still-running', sessionId: 'runtime-session-1', attemptId: 'attempt-running', generation: 3 };
+      f.components.turnLedger = { openAttemptForSession: () => current, getAttempt: () => current };
+      handleMeshForwardEvent(f.components, { event: 'monitor:no_progress', meshId, nodeId: 'node_child_1',
+        targetSessionId: 'runtime-session-1', taskId: 'task-still-running', attemptRef: { attemptId: 'attempt-running', generation: 2 },
+        timestamp: Date.now(), stalledMs: 360_000, observedStatus: 'generating' });
+      expect(drainPendingMeshCoordinatorEvents(meshId)).toHaveLength(0);
+    } finally { f.stop(); cleanupMeshFiles(meshId); }
+  });
+  it('relayed watchdog fields survive the allow-list and keep their original task identity', () => {
+    const f = fixture();
+    try {
+      const at = Date.now();
+      const result = handleMeshForwardEvent(f.components, { event: 'monitor:no_progress', meshId, nodeId: 'node_child_1',
+        targetSessionId: 'runtime-session-1', taskId: 'task-still-running', attemptRef: { attemptId: 'attempt-running', generation: 2 },
+        timestamp: at, stalledMs: 360_000, observedStatus: 'generating' });
+      expect(result.success).toBe(true);
+      const notices = drainPendingMeshCoordinatorEvents(meshId);
+      expect(notices[0].metadataEvent).toMatchObject({ taskId: 'task-still-running', sessionId: 'runtime-session-1', at, quietMs: 360_000, generation: 2 });
+    } finally { f.stop(); cleanupMeshFiles(meshId); }
+  });
+});

@@ -41,6 +41,7 @@ vi.mock('../../src/config/mesh-config.js', () => ({
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 import {
     getQueue,
+    requeueTask,
     __clearMeshQueueForTests,
     __resetMeshRuntimeStoreForTests,
 } from '../../src/mesh/mesh-work-queue.js';
@@ -55,6 +56,9 @@ import {
     type AssignedSessionLiveness,
 } from '../../src/mesh/mesh-orphaned-dispatch-sweep.js';
 import { readLocalRecords } from '../../src/mesh/mesh-local-records.js';
+import { createTurnScheduler } from '../../src/mesh/turn-ledger/scheduler.js';
+import { MeshNodeGitStateStore } from '../../src/mesh/mesh-node-git-state.js';
+import { nodeHasActiveWriteAssignment } from '../../src/mesh/mesh-scheduling-fitness.js';
 import { fakePublisher } from '../turn-ledger/ledger-harness.js';
 import { drainPendingMeshCoordinatorEvents } from '../helpers/pending-notices.js';
 
@@ -170,21 +174,78 @@ describe('(b) attempt-less assigned rows are reclaimed by housekeeping', () => {
         expect(status(young)?.status).toBe('assigned');
     });
 
-    it('never touches a row WITH an attempt (the turn ledger owns it) — liveness is not even asked', () => {
+    it('a dangling attempt reference is recoverable and releases the node gate without losing the task', () => {
         const owned = assignedRow({ ageMs: STALE_ASSIGNED_QUEUE_MS * 4, sessionId: 'sess_gone', attemptId: 'mesh_direct:owned' });
         const liveness = vi.fn(() => 'not_live' as const);
+        const store = MeshRuntimeStore.getInstance();
+        const before = status(owned)!;
+        before.dependsOn = ['prerequisite'];
+        before.requeueCount = 1;
+        store.updateQueueEntry(before);
+        expect(nodeHasActiveWriteAssignment(meshId, NODE)).toBe(true);
+        expect(sweep(liveness, NOW + STALE_ASSIGNED_QUEUE_MS + 1000).map((r) => r.id)).toEqual([owned]);
+        expect(nodeHasActiveWriteAssignment(meshId, NODE)).toBe(false);
+        expect(status(owned)).toMatchObject({ id: owned, status: 'failed', message: 'direct work', dependsOn: ['prerequisite'], requeueCount: 1 });
+        // Automatic passes cannot reopen this row or loop around the retry cap.
         expect(sweep(liveness)).toEqual([]);
-        expect(liveness).not.toHaveBeenCalled();
-        expect(status(owned)?.status).toBe('assigned');
+        expect(requeueTask(meshId, owned)?.cancelReason).toContain('max_retries_exceeded');
+        expect(requeueTask(meshId, owned, { force: true })).toMatchObject({ id: owned, status: 'pending', message: 'direct work', dependsOn: ['prerequisite'], requeueCount: 2 });
+    });
+
+    it('an open attempt stays ledger-owned and gets a forced probe when its session is gone', () => {
+        const ledger = createMeshRuntimeTurnLedger({ selfDaemonId: 'test-machine', publisher: fakePublisher() });
+        const id = assignedRow({ ageMs: STALE_ASSIGNED_QUEUE_MS * 4, sessionId: 'sess_gone' });
+        const opened = ledger.observe({
+            eventId: 'open', at: NOW - STALE_ASSIGNED_QUEUE_MS * 4, source: 'dispatch',
+            sessionId: 'sess_gone', taskId: id, observedBy: 'test-machine', kind: 'dispatch_accepted',
+            scope: 'mesh_queue', messageId: id, meshId, nodeId: NODE,
+        });
+        const attemptId = opened.attempt!.attemptId;
+        const row = status(id)!;
+        row.attemptId = attemptId;
+        MeshRuntimeStore.getInstance().updateQueueEntry(row);
+        const requestProbe = vi.fn();
+        expect(sweepOrphanedUncorrelatedDispatches(meshId, { now: NOW + STALE_ASSIGNED_QUEUE_MS + 1000, liveness: () => 'not_live', requestProbe })).toEqual([]);
+        expect(requestProbe).toHaveBeenCalledWith(attemptId);
+        expect(status(id)?.status).toBe('assigned');
+        requestProbe.mockClear();
+        sweepOrphanedUncorrelatedDispatches(meshId, { now: NOW + STALE_ASSIGNED_QUEUE_MS + 1000, liveness: () => 'live', requestProbe });
+        expect(requestProbe).not.toHaveBeenCalled();
+    });
+
+    it('a confirmed dead correlated worker is reclaimed through the ledger and releases the node write gate', async () => {
+        let now = NOW;
+        const ledger = createMeshRuntimeTurnLedger({ selfDaemonId: 'test-machine', publisher: fakePublisher(), now: () => now });
+        const id = assignedRow({ ageMs: STALE_ASSIGNED_QUEUE_MS + 1000, sessionId: 'sess_gone' });
+        const opened = ledger.observe({ eventId: 'correlated-open', at: NOW, source: 'dispatch',
+            sessionId: 'sess_gone', taskId: id, observedBy: 'test-machine', kind: 'dispatch_accepted',
+            scope: 'mesh_queue', messageId: id, meshId, nodeId: NODE });
+        const attemptId = opened.attempt!.attemptId;
+        const base = { at: NOW, sessionId: 'sess_gone', observedBy: 'test-machine', attemptRef: { attemptId, generation: 0 } };
+        ledger.observe({ ...base, eventId: 'delivered', source: 'input_service', kind: 'delivered', messageId: id, outcome: 'delivered', via: 'local' });
+        ledger.observe({ ...base, eventId: 'started', source: 'fsm_edge', kind: 'turn_started', retro: false });
+        const row = status(id)!;
+        row.attemptId = attemptId;
+        MeshRuntimeStore.getInstance().updateQueueEntry(row);
+        now += STALE_ASSIGNED_QUEUE_MS + 1000;
+        const scheduler = createTurnScheduler({ ledger, now: () => now,
+            probe: { locate: () => ({ kind: 'local' }), reader: { read: async () => ({ presence: 'absent' }) } } });
+        sweepOrphanedUncorrelatedDispatches(meshId, { now, liveness: () => 'not_live', requestProbe: (id) => scheduler.requestProbe(id) });
+        await scheduler.tick();
+        expect(status(id)).toMatchObject({ id, status: 'pending', message: 'direct work', requeueReason: 'session_dead' });
+        expect(ledger.getAttempt(attemptId)).toMatchObject({ generation: 1, reclaimCount: 1 });
+        expect(nodeHasActiveWriteAssignment(meshId, NODE)).toBe(false);
+        scheduler.stop();
     });
 
     it('never touches a row whose session is live, or whose liveness is unknown', () => {
-        const live = assignedRow({ ageMs: STALE_ASSIGNED_QUEUE_MS * 4, sessionId: 'sess_live' });
+        const live = assignedRow({ ageMs: STALE_ASSIGNED_QUEUE_MS * 4, sessionId: 'sess_live', attemptId: 'dangling-but-live' });
         const unknown = assignedRow({ ageMs: STALE_ASSIGNED_QUEUE_MS * 4, sessionId: 'sess_unknown' });
         const failed = sweep((row) => (row.assignedSessionId === 'sess_live' ? 'live' : 'unknown'));
         expect(failed).toEqual([]);
         expect(status(live)?.status).toBe('assigned');
         expect(status(unknown)?.status).toBe('assigned');
+        expect(nodeHasActiveWriteAssignment(meshId, NODE)).toBe(true);
     });
 
     describe('resolveAssignedSessionLiveness (local node)', () => {
@@ -205,6 +266,28 @@ describe('(b) attempt-less assigned rows are reclaimed by housekeeping', () => {
         });
         it('a session present on the local node is live', () => {
             expect(resolveAssignedSessionLiveness(components(['sess_here']), 'm', mesh, row('sess_here'))).toBe('live');
+        });
+        it('a failed local list is unknown and a registry worker stays protected', () => {
+            const c = components([]);
+            c.instanceManager.getByCategory = () => { throw new Error('list unavailable'); };
+            expect(resolveAssignedSessionLiveness(c, 'm', mesh, row('sess_gone'))).toBe('unknown');
+            c.sessionRegistry = { has: () => true };
+            expect(resolveAssignedSessionLiveness(c, 'm', mesh, row('sess_here'))).toBe('live');
+        });
+        it('a fresh complete empty member push proves absence; truncated or missing pushes do not', () => {
+            const store = new MeshNodeGitStateStore();
+            const c = { ...components([]), router: { meshNodeGitState: store } };
+            const remoteMesh = { id: 'm', nodes: [{ id: NODE, workspace: '/repo', daemonId: 'remote-daemon', machineId: 'remote-daemon' }] };
+            const push = (sessions: any[], sessionsTruncated = false) => store.recordRuntimeObservation({
+                meshId: 'm', nodeId: NODE, workspace: '/repo', source: 'member_push', daemonId: 'remote-daemon',
+                runtime: { schemaVersion: 1, daemonId: 'remote-daemon', sessions, sessionsTruncated },
+            });
+            push([]);
+            expect(resolveAssignedSessionLiveness(c, 'm', remoteMesh, row('sess_gone'))).toBe('not_live');
+            push([], true);
+            expect(resolveAssignedSessionLiveness(c, 'm', remoteMesh, row('sess_gone'))).toBe('unknown');
+            push([{ id: 'sess_here' }]);
+            expect(resolveAssignedSessionLiveness(c, 'm', remoteMesh, row('sess_here'))).toBe('live');
         });
         it('a remote node with no held runtime is unknown (never convicted)', () => {
             const remoteMesh = { id: 'm', nodes: [{ id: NODE, workspace: '/repo', daemonId: 'remote-daemon', machineId: 'remote-daemon' }] };
