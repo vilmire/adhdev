@@ -36,3 +36,31 @@ it('guarded PTY approvals cannot bypass modal matching through data payloads or 
     expect(await handleResolveAction(helper, args)).toMatchObject({ success: false, code: 'assistant_action_transport_unsupported' });
     expect(dispatch).not.toHaveBeenCalled();
 });
+
+it('combined exact Inbox and assistant authority reject changed episodes even with identical modal text', async () => {
+    const { ProviderApprovalLifecycle } = await import('../../src/providers/spec/provider-approval-lifecycle.js');
+    const modal = { message: 'Apply change?', buttons: ['Accept', 'Reject'] };
+    const lifecycle = new ProviderApprovalLifecycle();
+    const state: any = { id: 'permission', status: 'approval' };
+    const parsed: any = { kind: 'approval', message: modal.message, buttons: modal.buttons.map((label, index) => ({ label, index })) };
+    lifecycle.observe(state, parsed, 1000);
+    const resolveModalMatched = vi.fn(() => true);
+    let refresh = false;
+    const adapter = { getStatus: () => ({ status: 'waiting_approval', activeModal: refresh ? null : modal, providerApproval: lifecycle.read() }),
+        refreshModalNow: () => { lifecycle.resolve(2000); lifecycle.observe({ ...state, id: 'busy', status: 'busy' }, null, 2100); lifecycle.observe(state, parsed, 3000); refresh = false; return true; }, resolveModalMatched };
+    const helper: any = { getProvider: () => ({ type: 'claude-cli', category: 'cli' }), getCliAdapter: () => adapter,
+        currentSession: { transport: 'pty', sessionId: 'worker', providerType: 'claude-cli' }, ctx: { instanceManager: { getInstance: () => null } } };
+    const target = () => ({ modalKey: lifecycle.read()!.modalKey!, attemptId: null, generation: null });
+    let enabled = true;
+    const args = { targetSessionId: 'worker', action: 'approve', approvalTarget: target(), expectedModalIdentity: modalIdentity(modal), assistantExecutionGuard: createAssistantExecutionGuard(() => enabled) };
+    enabled = false;
+    expect(await handleResolveAction(helper, args)).toMatchObject({ success: false, code: 'assistant_execution_revoked' });
+    enabled = true; refresh = true;
+    expect(await handleResolveAction(helper, args)).toMatchObject({ success: false, stalePrompt: true });
+    expect(resolveModalMatched).not.toHaveBeenCalled();
+    expect(await handleResolveAction(helper, { ...args, approvalTarget: target(), assistantExecutionGuard: { enabled: true } })).toMatchObject({ success: false, code: 'assistant_execution_revoked' });
+    expect(await handleResolveAction(helper, { ...args, approvalTarget: target(), expectedModalIdentity: modalIdentity({ ...modal, message: 'Other action?' }) })).toMatchObject({ success: false, code: 'consent_modal_changed' });
+    expect(resolveModalMatched).not.toHaveBeenCalled();
+    expect(await handleResolveAction(helper, { ...args, approvalTarget: target() })).toMatchObject({ success: true });
+    expect(resolveModalMatched).toHaveBeenCalledExactlyOnceWith(0);
+});

@@ -80,17 +80,7 @@ export interface TranscriptObservation {
     readonly [extra: string]: unknown;
 }
 
-/**
- * An observation with no messages and no title/modal/prompt is the "transient
- * empty read" shape that must not silently replace previously published
- * content — see the `verifiedClear` guard in
- * `TranscriptProjectionService.publishObservation`.
- */
+/** A title or live control is not evidence that an empty transcript is a clear. */
 export function isEmptyTranscriptObservation(observation: TranscriptObservation): boolean {
-    return (
-        observation.messages.length === 0 &&
-        !observation.title &&
-        !observation.activeModal &&
-        !observation.activeInteractivePrompt
-    );
+    return observation.messages.length === 0;
 }

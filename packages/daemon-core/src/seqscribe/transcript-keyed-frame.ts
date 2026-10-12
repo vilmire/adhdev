@@ -136,6 +136,8 @@ export interface KeyedChatBuildContext {
     readonly nowMs: number;
     /** A positively confirmed clear/new session (the empty-guard is the caller's job). */
     readonly verifiedClear?: boolean;
+    /** A transient empty read updates controls without deleting committed history. */
+    readonly retainMessages?: boolean;
 }
 
 export type KeyedChatBuildResult =
@@ -225,6 +227,7 @@ export class KeyedChatSessionState {
     private bubbles = new Map<string, PublishedBubble>();
     private metaRev = 0;
     private metaHash: string | null = null;
+    private coverage: ChatMetaV2['coverage'] | null = null;
     private historySessionId: string | null | undefined = undefined;
     private frameNo = 0;
     private readonly deletedRevs = new Map<string, number>();
@@ -246,6 +249,13 @@ export class KeyedChatSessionState {
 
     get liveCount(): number {
         return this.bubbles.size;
+    }
+
+    /** Only two positively identified, different histories establish a switch. */
+    isLineageSwitch(observation: TranscriptObservation): boolean {
+        return typeof this.historySessionId === 'string' && !!this.historySessionId
+            && typeof observation.historySessionId === 'string' && !!observation.historySessionId
+            && observation.historySessionId !== this.historySessionId;
     }
 
     get frame(): number {
@@ -284,6 +294,7 @@ export class KeyedChatSessionState {
                 if (meta) {
                     this.metaRev = meta.rev;
                     this.metaHash = metaChangeKey(meta);
+                    this.coverage = meta.coverage;
                     this.historySessionId = meta.historySessionId;
                 }
             } else if (row.kind === CHAT_COMMIT_KIND) {
@@ -374,6 +385,9 @@ export class KeyedChatSessionState {
      * failed.
      */
     build(observation: TranscriptObservation, ctx: KeyedChatBuildContext): KeyedChatBuildResult {
+        // A writer-change/resync base must rewrite bodies before pruning old rows.
+        // Wait for a readable transcript rather than claiming a metadata-only base.
+        if (ctx.retainMessages && (this.pendingBase === 'writer_change' || this.pendingBase === 'resync_request')) return { status: 'unchanged' };
         // ── desired live set ────────────────────────────────────────────────
         const observed: EncodedBubble[] = [];
         const seen = new Set<string>();
@@ -387,10 +401,11 @@ export class KeyedChatSessionState {
             observed.push({ message, id, ord, text, bytes: utf8Bytes(text) + HEAD_OVERHEAD_BYTES });
         }
         const retained = new Set<string>();
+        if (ctx.retainMessages) for (const id of this.bubbles.keys()) retained.add(id);
         for (const id of observation.coverage.retainedMessageIds ?? []) {
             if (!seen.has(id) && this.bubbles.has(id)) retained.add(id);
         }
-        if (ctx.verifiedClear) retained.clear();
+        if (ctx.verifiedClear || this.isLineageSwitch(observation)) retained.clear();
 
         // ── §11 Q1 live cap: tombstone the oldest bubbles beyond 16 MiB ──────
         const byOrd: Array<{ id: string; ord: string; bytes: number }> = [
@@ -409,19 +424,14 @@ export class KeyedChatSessionState {
                 total -= byOrd[i].bytes;
             }
         }
-        const omittedBefore =
-            capped.size > 0 || retained.size > 0 || observation.coverage.omittedBefore === true;
+        const omittedBefore = ctx.retainMessages && this.coverage
+            ? this.coverage.omittedBefore
+            : capped.size > 0 || retained.size > 0 || observation.coverage.omittedBefore === true;
 
         // ── base frame decision ─────────────────────────────────────────────
         const nextHistory = typeof observation.historySessionId === 'string' ? observation.historySessionId : null;
         let baseReason: ChatBaseReason | null = this.pendingBase;
-        if (
-            !baseReason &&
-            this.historySessionId !== undefined &&
-            this.historySessionId !== null &&
-            nextHistory !== null &&
-            nextHistory !== this.historySessionId
-        ) {
+        if (!baseReason && this.isLineageSwitch(observation)) {
             baseReason = 'lineage_switch';
         }
         const forceAll = baseReason === 'resync_request' || baseReason === 'writer_change';
@@ -559,8 +569,8 @@ export class KeyedChatSessionState {
         }
 
         // ── meta ────────────────────────────────────────────────────────────
-        const coverageMode = chatCoverageModeField(observation.coverage.mode);
-        const metaProbe = encodeChatMeta(observation, {
+        const coverageMode = ctx.retainMessages && this.coverage ? this.coverage.mode : chatCoverageModeField(observation.coverage.mode);
+        const metaProbe = encodeChatMeta(ctx.retainMessages ? { ...observation, historySessionId: nextHistory || this.historySessionId } : observation, {
             rev: 0,
             epoch: '',
             frame: 0,
@@ -667,6 +677,8 @@ export class KeyedChatSessionState {
         }
         this.metaRev = staging.metaRev;
         this.metaHash = staging.metaHash;
+        const metaRow = frame.rows.find(row => row.key === CHAT_META_KEY);
+        if (metaRow) this.coverage = readChatMeta(metaRow.payload)?.coverage ?? this.coverage;
         this.historySessionId = staging.historySessionId;
         this.frameNo = frame.frame;
         this.tornIds.clear();

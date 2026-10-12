@@ -235,6 +235,7 @@ export function validateReadChatResultPayload(raw: unknown, source = 'read_chat'
   if (raw.summaryMetadata !== undefined) normalized.summaryMetadata = raw.summaryMetadata as any
   if (Array.isArray(raw.effects)) normalized.effects = raw.effects as any
   if (typeof raw.providerSessionId === 'string') normalized.providerSessionId = raw.providerSessionId
+  if (typeof raw.historySessionId === 'string') normalized.historySessionId = raw.historySessionId
   if (raw.transcriptAuthority === 'provider' || raw.transcriptAuthority === 'daemon') normalized.transcriptAuthority = raw.transcriptAuthority
   if (raw.coverage === 'full' || raw.coverage === 'tail' || raw.coverage === 'current-turn') normalized.coverage = raw.coverage
   // (NATIVE-TURN-SIGNAL) Provider-native turn-terminal markers extracted by the

@@ -115,6 +115,41 @@ describe('TranscriptProjectionService.observe — changed-only frames', () => {
         expect(service.getCounters().emptyGuarded).toBe(1);
     });
 
+    it.each([
+        { title: 'synthetic title' },
+        { activeModal: { message: 'synthetic modal', buttons: ['continue'] } },
+        { activeInteractivePrompt: { message: 'synthetic prompt', options: ['continue'] } },
+    ])('metadata does not authorize a zero-bubble replacement: %j', async (metadata) => {
+        const { deps, published } = makeDeps();
+        const service = new TranscriptProjectionService(deps);
+        service.observe('sess-1', obs());
+        await flush();
+        service.observe('sess-1', obs({ messages: [], ...metadata }));
+        await flush();
+        expect(published).toHaveLength(2);
+        expect(published[1]!.frame.rows.map(row => row.key)).toEqual(['meta', 'commit']);
+        expect(published[1]!.frame.commit.liveCount).toBe(1);
+        expect(service.getCounters().emptyGuarded).toBe(1);
+    });
+
+    it('initial empty and positively identified history switch remain renderable', async () => {
+        const { deps, published } = makeDeps();
+        const service = new TranscriptProjectionService(deps);
+        service.observe('sess-1', obs({ messages: [], historySessionId: 'history-a', title: 'new' }));
+        await flush();
+        expect(published[0]!.frame.commit.liveCount).toBe(0);
+        service.observe('sess-1', obs({ historySessionId: 'history-a' }));
+        await flush();
+        // Missing identity on a failed read is not a switch.
+        service.observe('sess-1', obs({ messages: [], historySessionId: null, title: 'unavailable' }));
+        await flush();
+        expect(published).toHaveLength(3);
+        service.observe('sess-1', obs({ messages: [], historySessionId: 'history-b', title: 'new native conversation', coverage: { mode: 'window', retainedMessageIds: ['d.t.1'] } }));
+        await flush();
+        expect(published[3]!.frame.commit).toMatchObject({ liveCount: 0, baseReason: 'lineage_switch' });
+        service.dispose();
+    });
+
     it('a VERIFIED clear tombstones every bubble', async () => {
         const collectObservation = vi.fn(
             async (): Promise<TranscriptObservationCollectResult> => ({ observation: obs({ messages: [] }), verifiedClear: true }),

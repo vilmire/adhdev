@@ -108,7 +108,11 @@ export function assignReadChatMessageIds(
     retainedIds: string[];
 } {
     const ledger = getMessageIdentityLedger(sessionKey);
-    const frame = ledger.observe(messages.map(toMessageIdentityInput), { coverage });
+    const frame = ledger.observe(messages.map(toMessageIdentityInput), {
+        // An unverified zero-row read must not retire every id before the
+        // publisher can guard it. Keep alignment for the subsequent restore.
+        coverage: messages.length === 0 ? 'window' : coverage,
+    });
     const ids = new Map<ChatMessage, string>();
     const assignments = new Map<ChatMessage, MessageIdentityAssignment>();
     for (let i = 0; i < messages.length; i += 1) {

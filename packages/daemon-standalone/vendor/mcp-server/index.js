@@ -103527,6 +103527,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       if (raw.summaryMetadata !== void 0) normalized.summaryMetadata = raw.summaryMetadata;
       if (Array.isArray(raw.effects)) normalized.effects = raw.effects;
       if (typeof raw.providerSessionId === "string") normalized.providerSessionId = raw.providerSessionId;
+      if (typeof raw.historySessionId === "string") normalized.historySessionId = raw.historySessionId;
       if (raw.transcriptAuthority === "provider" || raw.transcriptAuthority === "daemon") normalized.transcriptAuthority = raw.transcriptAuthority;
       if (raw.coverage === "full" || raw.coverage === "tail" || raw.coverage === "current-turn") normalized.coverage = raw.coverage;
       if (raw.turnTerminalMarkers !== void 0) normalized.turnTerminalMarkers = validateTurnTerminalMarkers(raw.turnTerminalMarkers, source2);
@@ -119397,6 +119398,7 @@ ${marker}`,
       bubbles = /* @__PURE__ */ new Map();
       metaRev = 0;
       metaHash = null;
+      coverage = null;
       historySessionId = void 0;
       frameNo = 0;
       deletedRevs = /* @__PURE__ */ new Map();
@@ -119412,6 +119414,10 @@ ${marker}`,
       otherWriterRows = false;
       get liveCount() {
         return this.bubbles.size;
+      }
+      /** Only two positively identified, different histories establish a switch. */
+      isLineageSwitch(observation) {
+        return typeof this.historySessionId === "string" && !!this.historySessionId && typeof observation.historySessionId === "string" && !!observation.historySessionId && observation.historySessionId !== this.historySessionId;
       }
       get frame() {
         return this.frameNo;
@@ -119447,6 +119453,7 @@ ${marker}`,
             if (meta) {
               this.metaRev = meta.rev;
               this.metaHash = metaChangeKey(meta);
+              this.coverage = meta.coverage;
               this.historySessionId = meta.historySessionId;
             }
           } else if (row.kind === CHAT_COMMIT_KIND) {
@@ -119529,6 +119536,7 @@ ${marker}`,
        * failed.
        */
       build(observation, ctx) {
+        if (ctx.retainMessages && (this.pendingBase === "writer_change" || this.pendingBase === "resync_request")) return { status: "unchanged" };
         const observed = [];
         const seen = /* @__PURE__ */ new Set();
         for (const message of observation.messages) {
@@ -119541,10 +119549,11 @@ ${marker}`,
           observed.push({ message, id: id22, ord, text, bytes: utf8Bytes(text) + HEAD_OVERHEAD_BYTES });
         }
         const retained = /* @__PURE__ */ new Set();
+        if (ctx.retainMessages) for (const id22 of this.bubbles.keys()) retained.add(id22);
         for (const id22 of observation.coverage.retainedMessageIds ?? []) {
           if (!seen.has(id22) && this.bubbles.has(id22)) retained.add(id22);
         }
-        if (ctx.verifiedClear) retained.clear();
+        if (ctx.verifiedClear || this.isLineageSwitch(observation)) retained.clear();
         const byOrd = [
           ...observed.map((b) => ({ id: b.id, ord: b.ord, bytes: b.bytes })),
           ...Array.from(retained, (id22) => {
@@ -119561,10 +119570,10 @@ ${marker}`,
             total -= byOrd[i].bytes;
           }
         }
-        const omittedBefore = capped.size > 0 || retained.size > 0 || observation.coverage.omittedBefore === true;
+        const omittedBefore = ctx.retainMessages && this.coverage ? this.coverage.omittedBefore : capped.size > 0 || retained.size > 0 || observation.coverage.omittedBefore === true;
         const nextHistory = typeof observation.historySessionId === "string" ? observation.historySessionId : null;
         let baseReason = this.pendingBase;
-        if (!baseReason && this.historySessionId !== void 0 && this.historySessionId !== null && nextHistory !== null && nextHistory !== this.historySessionId) {
+        if (!baseReason && this.isLineageSwitch(observation)) {
           baseReason = "lineage_switch";
         }
         const forceAll = baseReason === "resync_request" || baseReason === "writer_change";
@@ -119688,8 +119697,8 @@ ${marker}`,
           if (staged.has(id22) || deleted.has(id22) || this.bubbles.has(id22) || seen.has(id22) && !capped.has(id22)) continue;
           tombstone(id22, void 0);
         }
-        const coverageMode = chatCoverageModeField(observation.coverage.mode);
-        const metaProbe = encodeChatMeta(observation, {
+        const coverageMode = ctx.retainMessages && this.coverage ? this.coverage.mode : chatCoverageModeField(observation.coverage.mode);
+        const metaProbe = encodeChatMeta(ctx.retainMessages ? { ...observation, historySessionId: nextHistory || this.historySessionId } : observation, {
           rev: 0,
           epoch: "",
           frame: 0,
@@ -119785,6 +119794,8 @@ ${marker}`,
         }
         this.metaRev = staging.metaRev;
         this.metaHash = staging.metaHash;
+        const metaRow = frame2.rows.find((row) => row.key === CHAT_META_KEY);
+        if (metaRow) this.coverage = readChatMeta(metaRow.payload)?.coverage ?? this.coverage;
         this.historySessionId = staging.historySessionId;
         this.frameNo = frame2.frame;
         this.tornIds.clear();
@@ -119812,7 +119823,7 @@ ${marker}`,
       return utf8Bytes(jcs(payload));
     }
     function isEmptyTranscriptObservation(observation) {
-      return observation.messages.length === 0 && !observation.title && !observation.activeModal && !observation.activeInteractivePrompt;
+      return observation.messages.length === 0;
     }
     var TRANSCRIPT_TRIGGER_SOURCES = [
       "pty_output",
@@ -120347,9 +120358,9 @@ ${marker}`,
       }
       async publishObservation(sessionId, observation, verifiedClear) {
         const state2 = this.stateFor(sessionId);
-        if (state2.liveCount > 0 && isEmptyTranscriptObservation(observation) && !verifiedClear) {
+        const retainMessages = state2.liveCount > 0 && isEmptyTranscriptObservation(observation) && !verifiedClear && !state2.isLineageSwitch(observation);
+        if (retainMessages) {
           this.counters.emptyGuarded++;
-          return;
         }
         if (verifiedClear) {
           try {
@@ -120364,7 +120375,8 @@ ${marker}`,
           producerDaemonId: this.deps.daemonId(),
           observedAt: nowIso,
           nowMs: nowMs2,
-          verifiedClear
+          verifiedClear,
+          retainMessages
         });
         if (built.status === "unchanged") {
           this.counters.deduped++;
@@ -120528,7 +120540,11 @@ ${marker}`,
     }
     function assignReadChatMessageIds(sessionKey2, messages, coverage) {
       const ledger = getMessageIdentityLedger(sessionKey2);
-      const frame2 = ledger.observe(messages.map(toMessageIdentityInput), { coverage });
+      const frame2 = ledger.observe(messages.map(toMessageIdentityInput), {
+        // An unverified zero-row read must not retire every id before the
+        // publisher can guard it. Keep alignment for the subsequent restore.
+        coverage: messages.length === 0 ? "window" : coverage
+      });
       const ids = /* @__PURE__ */ new Map();
       const assignments = /* @__PURE__ */ new Map();
       for (let i = 0; i < messages.length; i += 1) {

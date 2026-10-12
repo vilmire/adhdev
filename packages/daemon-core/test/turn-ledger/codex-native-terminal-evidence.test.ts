@@ -23,6 +23,8 @@ import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 import { isTurnEvidence } from '@adhdev/mesh-shared';
 import { POLICY, REF, ev, makeAttempt } from './fixtures.js';
 import { dispatch, evd, ledgerOn, memDb } from './ledger-harness.js';
+import { readTerminalEvents, TerminalWatchStore, terminalRetryIdentity } from '../../src/assistant/terminal-watch.js';
+import { pendingTerminalEvents, TerminalWatchDelivery } from '../../src/assistant/terminal-watch-runtime.js';
 
 const START = 1_750_000_000_000;
 const SID = '019feb8e-cf2d-7241-9e00-9eb1f199c5af';
@@ -143,6 +145,100 @@ describe('Codex native producer terminal truth', () => {
         for (const result of readers([start(), event('error', START + 1000, { error: { type: 'usage_limit_exceeded' } }), complete()])) {
             const r = reduce({ attempt: report.attempt, holds: [], evidence: evidence(result), policy: POLICY, nowMs: START + 10_000 });
             expect(r.attempt?.terminal).toMatchObject({ outcome: 'completed', strength: 'tool_report', reason: 'worker_reported' });
+        }
+    });
+});
+
+describe('combined Codex producer to assistant terminal watch', () => {
+    function emitToLedger(result: ReturnType<typeof readers>[number], ledger: ReturnType<typeof ledgerOn>, attemptId: string) {
+        const marker = selectTurnTerminalMarker(result.turnTerminalMarkers, START)!;
+        const emitted: any[] = [];
+        const legacyWire = vi.fn();
+        emitGeneratingCompleted({ instanceId: 's1', settings: {}, busyEpoch: 1, lastCompletionSummary: null, lastEmittedCompletion: null,
+            pushEvent: legacyWire, updateSettings: () => {}, currentAttemptRef: () => ({ attemptId, generation: 0 }),
+            turnEvidencePort: createTurnEvidencePort({ observe: (e, opts) => { emitted.push(e); ledger.observe(e, opts); } }) },
+        { chatTitle: 'fixture', timestamp: marker.receivedAt, duration: 2, finalSummary: marker.summary,
+            completionDiagnostic: { nativeTurnOutcome: marker.outcome, nativeProviderFailure: marker.providerFailure,
+                nativeMarker: { outcome: marker.outcome, turnId: marker.turnId, receivedAt: marker.receivedAt, startedAt: marker.startedAt, errorAt: marker.errorAt } } });
+        expect(emitted).toHaveLength(1);
+        expect(isTurnEvidence(emitted[0])).toBe(true);
+        expect(legacyWire).not.toHaveBeenCalled();
+        return emitted[0];
+    }
+
+    it.each(['usage_limit_exceeded', 'server_overloaded', 'authentication_error'])('%s failed null + prior final reaches only failed watch notices; recreation preserves exact ordering and receipts', async code => {
+        for (const result of readers([message('old completed result', START - 1000), start(), event('error', START + 1000, { error: { type: code } }), complete()])) {
+            const db = memDb();
+            try {
+                const ledger = ledgerOn(db, { now: () => START + 10_000 });
+                ledger.observe(dispatch({ scope: 'mesh_queue' }));
+                ledger.observe(evd('turn_started', { retro: false }, { at: START }));
+                const emitted = emitToLedger(result, ledger, 'a1');
+                expect(emitted.nativeOutcome).toBe('failed');
+                expect(ledger.getAttempt('a1')?.terminal).toMatchObject({ outcome: 'failed', strength: 'genuine' });
+                // A new attempt must ignore the old generation's successful evidence.
+                ledger.observe({ ...dispatch({ attemptId: 'a2', scope: 'mesh_queue' }), messageId: 'msg-2', attemptNo: 2 } as any);
+                ledger.observe(evd('turn_started', { retro: false }, { at: START + 3000, attemptRef: { attemptId: 'a2', generation: 0 } }));
+                ledger.observe({ ...emitted, eventId: 'stale-old-generation', nativeOutcome: 'completed', providerFailure: undefined,
+                    attemptRef: { attemptId: 'a2', generation: 1 } });
+                expect(ledger.getAttempt('a2')?.terminal).toBeNull();
+                const empty = readers([event('task_started', START + 3000, { turn_id: 'new-turn' }), complete('new-turn', START + 4000)])[0];
+                emitToLedger(empty, ledger, 'a2');
+                expect(ledger.getAttempt('a2')?.terminal?.outcome).toBe('completed');
+                expect(readTurnTerminalViews('m1', { db, oldestFirst: true }).map(v => v.kind)).toEqual(['task_failed', 'task_completed']);
+                const store = new TerminalWatchStore(db);
+                const sub: any = store.subscribe('m1', 'task', 't1', 'assistant');
+                const ports: any = { listMeshes: () => [{ id: 'm1' }], isHostedHere: () => true,
+                    execute: vi.fn(async () => ({ success: true, messages: [], hasMore: false })) };
+                const events = await pendingTerminalEvents(store, ports, store.get(sub.watchId)!);
+                expect(events.map(e => [e.eventId, e.outcome, e.strength])).toEqual([['a1#committed', 'failed', 'genuine'], ['a2#committed', 'completed', 'genuine']]);
+                expect(store.receipts(sub.watchId)).toEqual([]); // pending MCP-style reads never consume
+                let recipient = 'old-assistant';
+                const sent: { sid: string; id: string; text: string }[] = [];
+                const first = new TerminalWatchDelivery(store, async () => ports, () => recipient, () => true,
+                    async (sid, id, text) => { sent.push({ sid, id, text }); return false; });
+                await first.tick();
+                expect(sent).toHaveLength(1);
+                expect(JSON.parse(sent[0].text.slice(sent[0].text.indexOf('{')))).toMatchObject({ eventId: 'a1#committed', kind: 'task_failed', outcome: 'failed', sessionId: 's1' });
+                expect(sent[0].text).not.toContain('old completed result');
+                expect(store.receipts(sub.watchId)).toEqual([]);
+                const intent = store.intent(sub.watchId, 'a1#committed')!;
+                const retryIdentity = terminalRetryIdentity(intent);
+                recipient = 'new-assistant';
+                const recreated = new TerminalWatchStore(db);
+                const resumed = new TerminalWatchDelivery(recreated, async () => ports, () => recipient, () => true,
+                    async (sid, id, text) => { sent.push({ sid, id, text }); return true; });
+                await resumed.tick(); await resumed.tick();
+                expect(sent).toHaveLength(2); // only one uncertainty notice, later terminal remains ordered behind it
+                expect(sent[1]).toMatchObject({ sid: 'new-assistant' });
+                expect(sent[1].text).toContain(retryIdentity);
+                expect(sent[1].text).not.toContain(intent.token);
+                expect(recreated.receipts(sub.watchId)).toEqual([]);
+                expect(ports.execute.mock.calls.every((c: any) => c[1].targetSessionId === 'old-assistant')).toBe(true);
+                recreated.retryDelivery(sub.watchId, 'a1#committed'); // command-level exact retry checks covered by terminal-producers
+                await resumed.tick(); await resumed.tick();
+                expect(sent.slice(2).map(s => [s.sid, s.id])).toEqual([
+                    ['new-assistant', `assistant-terminal:${sub.watchId}:a1#committed`],
+                    ['new-assistant', `assistant-terminal:${sub.watchId}:a2#committed`],
+                ]);
+                expect(recreated.receipts(sub.watchId)).toEqual(['a1#committed', 'a2#committed']);
+                expect(readTerminalEvents(db, 'm1', 'task', 't1', 0, recreated.receipts(sub.watchId))).toEqual([]);
+            } finally { db.close(); }
+        }
+    });
+
+    it('an accepted tool report retains completed watch authority; previous final alone cannot create a terminal notice', () => {
+        for (const result of readers([message('{"status":"completed","summary":"old"}', START - 1000), start()])) {
+            const db = memDb();
+            try {
+                const ledger = ledgerOn(db, { now: () => START + 10_000 });
+                ledger.observe(dispatch()); ledger.observe(evd('turn_started', { retro: false }, { at: START }));
+                ledger.observe(evidence(result));
+                expect(readTerminalEvents(db, 'm1', 'task', 't1', 0, [])).toEqual([]);
+                ledger.observe(evd('worker_report', { outcome: 'completed', summary: REF, hasHandoffNotes: true }, { source: 'worker_tool', at: START + 1000 }));
+                for (const failed of readers([start(), event('error', START + 1000, { error: { type: 'usage_limit_exceeded' } }), complete()])) emitToLedger(failed, ledger, 'a1');
+                expect(readTerminalEvents(db, 'm1', 'task', 't1', 0, [])).toEqual([expect.objectContaining({ eventId: 'a1#committed', outcome: 'completed', strength: 'tool_report' })]);
+            } finally { db.close(); }
         }
     });
 });

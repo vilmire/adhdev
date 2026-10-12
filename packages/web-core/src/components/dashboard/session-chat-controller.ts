@@ -217,6 +217,8 @@ export class SessionChatController {
     private listeners = new Set<(snapshot: SessionChatSnapshot) => void>()
     private retainCount = 0
     private loadHistoryPromise: Promise<void> | null = null
+    private historyGeneration = 0
+    private historySessionId: string | null = null
     /** Bubble-identity cache for direct `applyTranscriptView` callers. */
     private readonly bubbleCache = new TranscriptBubbleCache()
     /** Status of the last applied view — the lane's own claim about the session. */
@@ -249,6 +251,8 @@ export class SessionChatController {
      * than the stale status-meta list.
      */
     clearLiveSnapshot(): void {
+        this.historyGeneration += 1
+        this.loadHistoryPromise = null
         this.snapshot = {
             ...buildEmptySnapshot(),
             hasLiveSnapshot: true,
@@ -267,7 +271,16 @@ export class SessionChatController {
         view: ReplicatedTranscriptViewV2,
         options: { mapped?: TranscriptChatView } = {},
     ): void {
-        if (!isMappableTranscriptView(view)) return
+        if (!isMappableTranscriptView(view) || view.sessionId !== this.sessionId) return
+        const nextHistory = view.historySessionId
+        if (this.historySessionId && nextHistory && nextHistory !== this.historySessionId) {
+            // A new native conversation must not inherit pages (or responses
+            // still in flight) from the prior conversation on this runtime.
+            this.historyGeneration += 1
+            this.loadHistoryPromise = null
+            this.snapshot = buildEmptySnapshot()
+        }
+        if (nextHistory) this.historySessionId = nextHistory
         const mapped = options.mapped ?? mapTranscriptViewToChatView(view, { cache: this.bubbleCache })
         this.lastViewStatus = mapped.status
         const current = this.snapshot
@@ -338,6 +351,7 @@ export class SessionChatController {
         if (this.loadHistoryPromise) return this.loadHistoryPromise
         this.snapshot = { ...this.snapshot, historyError: null }
         this.emit()
+        const generation = this.historyGeneration
         const run = (async () => {
             try {
                 const hadLiveSnapshot = this.snapshot.hasLiveSnapshot
@@ -349,6 +363,7 @@ export class SessionChatController {
                     excludeRecentCount,
                     excludeFromIdentity: buildHistoryBoundaryIdentity(this.snapshot.liveMessages[0]),
                 })
+                if (generation !== this.historyGeneration) return
                 const nextMessages = Array.isArray(result.messages) ? result.messages : []
                 const mergedHistory = [...nextMessages, ...this.snapshot.historyMessages]
                 const cappedHistory = mergedHistory.length > DEFAULT_MAX_RETAINED_HISTORY_MESSAGES
@@ -362,6 +377,7 @@ export class SessionChatController {
                     historyError: null,
                 }
             } catch (error) {
+                if (generation !== this.historyGeneration) return
                 this.snapshot = {
                     ...this.snapshot,
                     historyError: error instanceof Error ? error.message : 'Failed to load history',
@@ -369,7 +385,7 @@ export class SessionChatController {
             }
             this.emit()
         })().finally(() => {
-            this.loadHistoryPromise = null
+            if (generation === this.historyGeneration) this.loadHistoryPromise = null
         })
         this.loadHistoryPromise = run
         return run
@@ -413,6 +429,7 @@ export class SessionChatController {
     }
 
     dispose(): void {
+        this.historyGeneration += 1
         this.listeners.clear()
         this.retainCount = 0
         this.loadHistoryPromise = null

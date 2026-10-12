@@ -654,9 +654,9 @@ export class TranscriptProjectionService {
         // complete snapshot을 빈 값으로 덮지 않는다." Published bubbles exist, the
         // new observation is empty, and the caller has NOT positively confirmed
         // a clear — hold, do not tombstone everything.
-        if (state.liveCount > 0 && isEmptyTranscriptObservation(observation) && !verifiedClear) {
+        const retainMessages = state.liveCount > 0 && isEmptyTranscriptObservation(observation) && !verifiedClear && !state.isLineageSwitch(observation);
+        if (retainMessages) {
             this.counters.emptyGuarded++;
-            return;
         }
         if (verifiedClear) {
             // §3.5: a verified clear starts a new identity epoch, so daemon-issued
@@ -672,6 +672,7 @@ export class TranscriptProjectionService {
             observedAt: nowIso,
             nowMs,
             verifiedClear,
+            retainMessages,
         });
         if (built.status === 'unchanged') {
             this.counters.deduped++;
