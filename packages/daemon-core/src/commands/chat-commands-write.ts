@@ -1,3 +1,5 @@
+import { prepareOwnerActionChat } from '../assistant/assistant-action-ingress.js';
+import { modalIdentity, checkAssistantExecutionGuard } from '../assistant/assistant-execution.js';
 /**
  * Chat Commands — write side: handleSendChat, handleListChats, handleNewChat,
  * handleSwitchChat, handleSetMode, handleChangeModel,
@@ -250,10 +252,13 @@ async function submitCliChat(h: CommandHelpers, args: any, input: InputEnvelope,
         }
     }
     if (!messageId) messageId = mintLegacyMessageId();
+    const prepared = prepareOwnerActionChat({ instanceManager: h.ctx.instanceManager, cliManager: h.ctx.adapters ? { adapters: h.ctx.adapters } : undefined }, readCommandSource(args), sessionKey, input.textFallback ?? '');
+    if (!prepared.success) return { ...prepared, error: prepared.code };
+    const actionInput = prepared.text === input.textFallback ? input : normalizeInputEnvelope({ text: prepared.text });
     const outcome = await service.submit({
         messageId,
         sessionId: sessionKey,
-        input,
+        input: actionInput,
         origin: readOutboundOrigin(args, 'dashboard'),
         policy,
         createdAt: Date.now(),
@@ -949,6 +954,7 @@ export async function handleResolveAction(h: CommandHelpers, args: any): Promise
             }
             return { success: false, error: 'Not in approval state' };
         }
+        if (args?.expectedModalIdentity && modalIdentity(effectiveModal) !== args.expectedModalIdentity) return { success: false, code: 'consent_modal_changed', error: 'Authorized approval modal changed' };
         const buttons: string[] = Array.isArray(effectiveModal.buttons) ? effectiveModal.buttons : [];
         // Resolve button index: explicit buttonIndex arg → exact text match → explicit action mapping
         let buttonIndex = typeof args?.buttonIndex === 'number' ? args.buttonIndex : -1;
@@ -987,6 +993,7 @@ export async function handleResolveAction(h: CommandHelpers, args: any): Promise
         // adapter tells us no button matched, report failure so mesh_approve / the coordinator
         // sees the miss instead of a false success. Legacy adapters without resolveModalMatched
         // keep the prior void-resolveModal behaviour.
+        if (args?.assistantExecutionGuard !== undefined && !checkAssistantExecutionGuard(args.assistantExecutionGuard)) return { success: false, code: 'assistant_execution_revoked', error: 'Assistant execution authority expired or changed' };
         if (typeof adapter.resolveModalMatched === 'function') {
             const matched = adapter.resolveModalMatched(buttonIndex);
             if (!matched) {

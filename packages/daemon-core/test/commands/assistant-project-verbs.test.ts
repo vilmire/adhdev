@@ -343,7 +343,8 @@ describe('assistant_project_read', () => {
         const r: any = await run(ASSISTANT_VERB.projectRead, { project: 'adhdev', tail: 2 });
         expect(r).toMatchObject({ success: true, project: 'adhdev', meshId: 'mesh_a' });
         expect(r.result).toMatchObject({ coordinatorSessionId: 'coord-1', live: true, visibleCount: 3, omitted: 1 });
-        expect(r.result.messages).toEqual([{ role: 'assistant', text: 'second' }, { role: 'assistant', text: 'third' }]);
+        expect(r.result.messages).toMatchObject([{ role: 'assistant', text: 'second', complete: true, nextOffset: null }, { role: 'assistant', text: 'third', complete: true, nextOffset: null }]);
+        expect(r.result.messages.every((m: any) => /^[a-f0-9]{64}$/.test(m.messageId))).toBe(true);
         expect(calls('read_chat')).toEqual([{ targetSessionId: 'coord-1', limit: 40 }]);
     });
 
@@ -418,5 +419,26 @@ describe('review-turn gate', () => {
             expect(await run(verb, { assistantSessionId: 'a1', project: 'adhdev', message: 'x', path: dir })).toMatchObject({ success: false, code: 'review_turn_tool_denied' });
         }
         expect(execute).not.toHaveBeenCalled();
+    });
+});
+
+describe('fleet environment consumer', () => {
+    it('probes authorized roster members, preserves unavailable observations and drops foreign/nested content', async () => {
+        const now = Date.now();
+        // mesh_a is hosted here: member inventory must still be included, independent of host status.
+        meshes[0].nodes!.push({ id: 'member', daemonId: 'daemon_mach_member', workspace: '/w', machineLabel: 'member' } as any);
+        callHost.mockImplementation(async (target: RemoteHostView, op: string) => {
+            expect(op).toBe('inventory');
+            if (target.hostDaemonId?.includes('other')) return { ok: false, kind: 'unreachable', reason: 'host_offline', error: 'offline' };
+            return { ok: true, result: { success: true, result: { machines: [
+                { daemonId: 'daemon_mach_member', reportedAt: now, freshness: 'current', providers: [{ provider: 'cli', installed: true, quota: { status: 'error', state: 'error', error: 'secret body' }, prompt: 'secret body' }] },
+                { daemonId: 'daemon_mach_foreign', reportedAt: now, providers: [{ text: 'foreign secret' }] },
+            ] } } };
+        });
+        const r: any = await run(ASSISTANT_VERB.environment);
+        expect(r.success).toBe(true); expect(callHost).toHaveBeenCalledTimes(2);
+        expect(r.machines.some((m: any) => m.daemonId.includes('member') && m.providers[0].quota.state === 'error')).toBe(true);
+        expect(r.errors).toEqual([expect.objectContaining({ reason: 'host_offline' })]);
+        expect(JSON.stringify(r)).not.toMatch(/secret body|foreign secret|daemon_mach_foreign/);
     });
 });

@@ -1,3 +1,4 @@
+import { assistantExecution } from '../../assistant/assistant-execution.js';
 /**
  * Assistant session verbs (design docs/design/2026-10-07-assistant-layer.md
  * §4.4 "데몬 verb", §4.5): `launch_assistant` and `assistant_pending_relays`.
@@ -212,6 +213,9 @@ const launchAssistant: HighFamilyHandler = async (ctx, args) => {
         return fail(str(launched?.code) || 'assistant_launch_failed', str(launched?.error) || 'Failed to launch the assistant session', { cliType, workspace });
     }
 
+    const instance = ctx.components().instanceManager?.getInstance?.(sessionId);
+    const adapter = ctx.components().cliManager?.adapters?.get(sessionId);
+    assistantExecution.attest(sessionId, instance ?? null, adapter ?? null, cliType, cliArgs, mcp.toolRestriction);
     const { previous } = registry.bindSession({
         sessionId, cliType, workspace, ...(mcp.configWrite ? { mcpConfigPath: mcp.configWrite.path } : {}), at: Date.now(),
     });

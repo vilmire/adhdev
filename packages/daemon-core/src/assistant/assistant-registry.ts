@@ -72,6 +72,9 @@ export interface AssistantRegistryEntry {
     busyInputMode: BusyInputMode;
     /** `false` disables the idle review turn (§4.10.7). */
     reviewTurn: boolean;
+    /** D6 owner-chat execution; absence migrates to ON. */
+    executionEnabled?: boolean;
+    executionRevision?: number;
     lastTurnState: AssistantTurnState | null;
     memoryBudget?: Partial<MemoryBudgets>;
     /**
@@ -91,7 +94,7 @@ export interface BindAssistantSessionInput {
     at: number;
 }
 
-export type AssistantSettingsPatch = Partial<Pick<AssistantRegistryEntry, 'aliases' | 'busyInputMode' | 'reviewTurn' | 'memoryBudget'>>;
+export type AssistantSettingsPatch = Partial<Pick<AssistantRegistryEntry, 'aliases' | 'busyInputMode' | 'reviewTurn' | 'memoryBudget' | 'executionEnabled'>>;
 
 export interface AssistantRegistryOptions {
     configDir?: string;
@@ -152,6 +155,8 @@ export function normalizeAssistantRegistryEntry(raw: unknown): AssistantRegistry
         firstRelayAt: isNum(r.firstRelayAt) ? r.firstRelayAt : null,
         busyInputMode: mode,
         reviewTurn: r.reviewTurn !== false,
+        executionEnabled: r.executionEnabled !== false,
+        executionRevision: typeof r.executionRevision === 'number' && Number.isSafeInteger(r.executionRevision) ? r.executionRevision : 0,
         lastTurnState: normalizeTurnState(r.lastTurnState),
         ...(budget ? { memoryBudget: budget } : {}),
         ...(reviewAts.length ? { reviewAts } : {}),
@@ -225,6 +230,8 @@ export class AssistantRegistry {
                 firstRelayAt: null,
                 busyInputMode: DEFAULT_BUSY_INPUT_MODE,
                 reviewTurn: true,
+                executionEnabled: true,
+                executionRevision: 0,
                 lastTurnState: null,
             }),
             sessionId: input.sessionId,
@@ -248,6 +255,10 @@ export class AssistantRegistry {
         const next: AssistantRegistryEntry = { ...prev };
         if (patch.aliases !== undefined) next.aliases = normalizeAliases(patch.aliases);
         if (patch.busyInputMode !== undefined) next.busyInputMode = patch.busyInputMode;
+        if (patch.executionEnabled !== undefined) {
+            next.executionEnabled = patch.executionEnabled !== false;
+            next.executionRevision = (next.executionRevision ?? 0) + 1;
+        }
         if (patch.reviewTurn !== undefined) next.reviewTurn = patch.reviewTurn !== false;
         if (patch.memoryBudget !== undefined) {
             const b = normalizeBudget(patch.memoryBudget);

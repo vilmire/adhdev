@@ -1,3 +1,6 @@
+import { localAttemptReport } from '../commands/high-family/assistant.js';
+import { TerminalWatchStore } from './terminal-watch.js';
+import { TerminalWatchDelivery } from './terminal-watch-runtime.js';
 /**
  * Boot wiring of the assistant layer (design docs/design/2026-10-07-assistant-layer.md
  * §4.3 "수신", §4.5, §4.8). Built by S7 (`boot/stages/mesh-runtime.ts`) next to
@@ -140,6 +143,7 @@ export function buildAssistantRelayPorts(
     deps: {
         registry: AssistantRegistry; store: AssistantRelayStore; metrics: AssistantMetricsStore | null; sawCaller: () => boolean;
         onReviewDelivered?: (sessionId: string, messageId: string, at: number) => void;
+        onInputsSubmitted?: (sessionId: string, messageIds: readonly string[], at: number) => void;
     },
 ): AssistantRelayPorts {
     const { registry, store, metrics } = deps;
@@ -148,6 +152,20 @@ export function buildAssistantRelayPorts(
         subscribe: (handler) => components.bus.on(ASSISTANT_RELAY_BUS_KINDS, handler, { name: 'assistant.relay' }),
         coordinatorMeshOf: (sessionId) => str(instanceOf(components, sessionId)?.getState?.()?.settings?.meshCoordinatorFor) || null,
         projectSlug: (meshId) => projectSlugs(svc.listMeshes()).get(meshId) ?? null,
+        rehydrateAttemptReport: async (meshId, sessionId, attemptId) => {
+            const ports = await getAssistantProjectPorts({ components: () => components as DaemonComponents, selfDaemonId: str((components as any).statusInstanceId),
+                execute: (cmd, args) => components.router.execute(cmd, args, 'ipc', { inProcess: true }),
+                transport: { dispatch: (components as any).dispatchMeshCommand, peerStatus: (components as any).getMeshPeerConnectionStatus } });
+            const mesh = ports.listMeshes().find(m => m.id === meshId);
+            if (!mesh) return null;
+            if (ports.isHostedHere(mesh)) return (await localAttemptReport(ports, meshId, sessionId, attemptId)).body;
+            const target = ports.remoteHost(mesh);
+            if (!target.reachable) return null;
+            const out = await ports.callHost(target, 'report', { coordinatorSessionId: sessionId, attemptId });
+            if (!out.ok) return null;
+            const result = out.result.result as { body?: unknown } | undefined;
+            return typeof result?.body === 'string' ? result.body : null;
+        },
         readCoordinatorTail: async (sessionId) => {
             const chat = await components.router.execute('read_chat', { targetSessionId: sessionId, limit: 40 }, 'ipc', { inProcess: true });
             if (!chat?.success) return null;
@@ -185,6 +203,7 @@ export function buildAssistantRelayPorts(
             for (const m of meshIds) metrics?.bump('relays', m, at);
         },
         ...(deps.onReviewDelivered ? { onReviewDelivered: deps.onReviewDelivered } : {}),
+        ...(deps.onInputsSubmitted ? { onInputsSubmitted: deps.onInputsSubmitted } : {}),
     };
 }
 
@@ -202,9 +221,18 @@ export function wireAssistantRuntime(
     const { store, metrics } = opened;
     let sawCaller = false;
     let review: AssistantReviewScheduler | null = null;
+    let terminalWatchStore: TerminalWatchStore | null = null;
     const relay = new AssistantRelay(buildAssistantRelayPorts(components, {
         registry, store, metrics, sawCaller: () => sawCaller,
         onReviewDelivered: (sid, messageId, at) => review?.onDelivered(sid, messageId, at),
+        onInputsSubmitted: (sid, ids, at) => {
+            for (const id of ids) {
+                const match = /^assistant-terminal:([a-f0-9]{64}):(.+)$/.exec(id);
+                if (!match) continue;
+                const intent = terminalWatchStore?.intent(match[1]!, match[2]!);
+                if (intent?.recipient_session_id === sid) terminalWatchStore?.acknowledge(match[1]!, match[2]!, at);
+            }
+        },
     }));
     const quota = opts.quota ?? liveAssistantQuotaPort;
     const liveSessionId = (): string | null => {
@@ -273,6 +301,16 @@ export function wireAssistantRuntime(
         poll: async (target, args) => (await loadProjectPorts()).callHost(target, 'poll', args),
         relay,
     });
+    let terminalDelivery: TerminalWatchDelivery | null = null;
+    try {
+        terminalWatchStore = new TerminalWatchStore(MeshRuntimeStore.getInstance().db);
+        terminalDelivery = new TerminalWatchDelivery(terminalWatchStore, loadProjectPorts, liveSessionId,
+            sid => instanceReady(instanceOf(components, sid)) && !relay.hasPendingInput(), async (sid, messageId, text) => {
+                // Reuse relay batching, busy gates and delivery-time input attribution.
+                if (!relay.isQueued(messageId)) relay.enqueueInput({ source: 'relay', text, messageId, forSessionId: sid });
+                return false; // durable intent stays pending until onInputsSubmitted or exact native evidence
+            });
+    } catch (e) { LOG.warn('Assistant', `terminal watch store unavailable: ${(e as Error).message}`); }
     const remoteTick = (): void => {
         void loadProjectPorts()
             .then(() => remotePoller.tick())
@@ -292,6 +330,7 @@ export function wireAssistantRuntime(
         try {
             const now = Date.now();
             relay.tick(now);
+            void terminalDelivery?.tick().catch(e => LOG.warn('Assistant', `terminal watch delivery failed: ${(e as Error).message}`));
             const r = reviewScheduler.evaluate(now);
             if (r.fired) LOG.info('Assistant', `idle review turn queued (${r.messageId})`);
             if (metrics && now - lastMetricsPrune >= METRICS_PRUNE_EVERY_MS) {

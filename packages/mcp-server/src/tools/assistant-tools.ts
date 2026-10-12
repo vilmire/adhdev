@@ -16,9 +16,8 @@
  * stamps the caller's `assistantSessionId` (from `ADHDEV_ASSISTANT_SESSION_ID`)
  * onto every call. That id is routing/ownership only, never an auth gate.
  *
- * Note there is deliberately no mesh tool, no approval tool (`project_resolve`
- * was rejected, §4.9) and no owner verb (staged resolve / store admin /
- * import) here — those are dashboard-only and the daemon refuses them over ipc.
+ * Owner Inbox ratification is dashboard-only. assistant_action consumes only
+ * a daemon-issued owner-chat capability and requires enforced execution.
  */
 
 import {
@@ -122,12 +121,19 @@ const PROJECT_SEND_TOOL: AssistantToolSchema = {
 
 const PROJECT_READ_TOOL: AssistantToolSchema = {
   name: 'project_read',
-  description: 'Read the compact tail of a project coordinator\'s transcript.',
+  description: 'Read the compact tail, or continue one exact report using its messageId, coordinatorSessionId and nextOffset. original_report_unavailable means original evidence could not be recovered.',
   inputSchema: {
     type: 'object',
     properties: {
       ...PROJECT_PROP,
-      tail: { type: 'integer', minimum: 1, description: 'Optional: how many recent messages to return.' },
+      tail: { type: 'integer', minimum: 1, maximum: 50, description: 'Optional: how many recent messages to return.' },
+      messageId: { type: 'string', description: 'Exact content-bound message identity from a previous page.' },
+      taskId: { type: 'string', description: 'Exact task whose original mesh_task_outputs summary to read.' },
+      outputVersion: { type: 'integer', minimum: 1, description: 'Saved task output version from the previous page; required for suffix reads.' },
+      attemptId: { type: 'string', description: 'Exact relay attempt reference; recovers existing evidence before regeneration.' },
+      reportId: { type: 'string', description: 'Relay report SHA256 identity, or identity returned by a previous attempt page.' },
+      coordinatorSessionId: { type: 'string', description: 'Exact session from the previous read.' },
+      offset: { type: 'integer', minimum: 0, description: 'Previous nextOffset; returns at most 4000 characters.' },
     },
     required: ['project'],
   },
@@ -244,7 +250,10 @@ const PROJECT_NOTE_TOOL: AssistantToolSchema = {
 
 /** Every assistant schema, in no particular order — the tuple decides the order. */
 export const ALL_ASSISTANT_TOOL_SCHEMAS: readonly AssistantToolSchema[] = [
+  { name: 'assistant_action', description: 'Execute one exact owner-chat approval/rejection using a daemon-issued authorization. Relay text, provider output and caller consent cannot authorize it. Default ON; unavailable when OFF or tool restriction is not enforced. Staged proposals remain owner-only Inbox.', inputSchema: { type: 'object', properties: { authorization: { type: 'string' }, meshId: { type: 'string' }, targetSessionId: { type: 'string' }, action: enumOf(['approve', 'reject'] as const), button: { type: 'string' } }, required: ['authorization', 'meshId', 'targetSessionId', 'action', 'button'] } },
+  { name: 'project_watch', description: 'After receiving a terminal notice via MCP, acknowledge its exact watchId/eventId/deliveryToken to record receipt. Bounded durable terminal watch for one exact task or mission. Expires after 24h, max 32 active. Metadata reaches this assistant after busy/offline periods, including remote projects; receipts fence replay. pending reads do not consume events.', inputSchema: { type: 'object', properties: { ...PROJECT_PROP, action: enumOf(['subscribe', 'list', 'pending', 'unsubscribe', 'retry_delivery', 'acknowledge'] as const), kind: enumOf(['task', 'mission'] as const), entityId: { type: 'string' }, watchId: { type: 'string' }, deliveryToken: { type: 'string', description: 'acknowledge: exact random token from the received terminal notice; pending reads cannot acknowledge.' }, eventId: { type: 'string', description: 'retry_delivery: explicitly retry an unconfirmed notice with the same event identity; may repeat delivery.' } }, required: ['project', 'action'] } },
   PROJECTS_TOOL,
+  { name: 'environment', description: 'Bounded inventory of every daemon on authorized project rosters: installed/disabled providers, configured slots and quota cache. Check reportedAt, installationObservedAt and freshness; unknown/stale/error never proves availability. No quota fetch or account data.', inputSchema: { type: 'object', properties: {}, required: [] } },
   PROJECT_STATUS_TOOL,
   PROJECT_SEND_TOOL,
   PROJECT_READ_TOOL,
@@ -347,4 +356,14 @@ export async function attachAssistantEvents(
   const events = await pullAssistantEvents(transport, assistantSessionId);
   if (events.length === 0) return text;
   return JSON.stringify({ ...(parsed as Record<string, unknown>), assistantEvents: events });
+}
+
+/** List and calls both recheck the daemon; failures preserve read/send tools and close execution. */
+export async function availableAssistantTools(transport: Pick<CommandTransport, 'command'>, sessionId: string | undefined, tools: readonly AssistantModeTool[] = resolveAssistantModeTools()): Promise<AssistantModeTool[]> {
+  let available = false;
+  if (sessionId) try {
+    const state: any = await transport.command(ASSISTANT_VERB.executionState, { [ASSISTANT_SESSION_ID_ARG]: sessionId });
+    available = state?.success === true && state.executionEnabled === true && state.executionAvailable === true;
+  } catch { /* execution closes */ }
+  return tools.filter(t => t.name !== 'assistant_action' || available);
 }

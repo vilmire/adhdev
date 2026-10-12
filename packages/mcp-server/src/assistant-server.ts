@@ -20,6 +20,7 @@ import { isAssistantTool } from '@adhdev/mesh-shared';
 import type { CommandTransport } from './transports/mode.js';
 import {
   attachAssistantEvents,
+  availableAssistantTools,
   callAssistantTool,
   readAssistantSessionIdFromEnv,
   resolveAssistantModeTools,
@@ -78,10 +79,10 @@ export async function startAssistantServer(opts: {
     { capabilities: { tools: {} } },
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: await availableAssistantTools(opts.transport, assistantSessionId, tools) }));
   server.setRequestHandler(CallToolRequestSchema, async (req) => handleAssistantToolCall(
     opts.transport,
-    tools,
+    await availableAssistantTools(opts.transport, assistantSessionId, tools),
     assistantSessionId,
     req.params.name,
     req.params.arguments as Record<string, unknown> | undefined,

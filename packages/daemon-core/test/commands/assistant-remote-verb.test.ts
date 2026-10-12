@@ -210,3 +210,16 @@ describe('assistant_remote_project — ops for a roster member', () => {
         expect(record).toHaveBeenCalledTimes(1);
     });
 });
+
+it('inventory-only roster read can answer on a member daemon; forged/foreign mesh senders remain rejected', async () => {
+    const router = hostRouter();
+    // OTHER_MESH is in the inventory but is not hosted here. Inventory does not grant send/status/approval authority.
+    const known: any = await router.execute('assistant_remote_project', relayed(MEMBER, { meshId: MESH, op: 'inventory' }), 'mesh');
+    expect(known.success).toBe(true); expect(known.result.source).toBe('authorized_roster_cache');
+    const member: any = await router.execute('assistant_remote_project', relayed(MEMBER, { meshId: OTHER_MESH, op: 'inventory' }), 'mesh');
+    expect(member.success).toBe(true);
+    const write: any = await router.execute('assistant_remote_project', relayed(MEMBER, { meshId: OTHER_MESH, op: 'send', text: 'x', clientId: 'c' }), 'mesh');
+    expect(write.code).toBe('project_not_hosted_here');
+    const forged: any = await router.execute('assistant_remote_project', relayed(STRANGER, { meshId: MESH, op: 'inventory', inlineMesh: hostMesh() }), 'mesh');
+    expect(forged.success).toBe(false); expect(forged.code).toBe('mesh_sender_not_on_roster');
+});

@@ -17,9 +17,9 @@ import { WORKER_TOOLS } from '../src/worker-protocol'
  * pins the tuple itself and its relation to the other tool sets.
  */
 describe('ASSISTANT_TOOLS', () => {
-    it('is the ten §4.4 tools, in table order, without duplicates', () => {
+    it('includes the additive assistant surface in contract order without duplicates', () => {
         expect([...ASSISTANT_TOOLS]).toEqual([
-            'projects', 'project_status', 'project_send', 'project_read', 'project_add',
+            'projects', 'environment', 'assistant_action', 'project_watch', 'project_status', 'project_send', 'project_read', 'project_add',
             'discover_repos', 'memory', 'skill_view', 'skill_manage', 'project_note',
         ])
         expect(new Set(ASSISTANT_TOOLS).size).toBe(ASSISTANT_TOOLS.length)
@@ -37,23 +37,23 @@ describe('ASSISTANT_TOOLS', () => {
 
     it('maps every tool to an assistant_<tool> verb, one verb per tool', () => {
         expect(Object.keys(ASSISTANT_TOOL_VERBS).sort()).toEqual([...ASSISTANT_TOOLS].sort())
-        for (const t of ASSISTANT_TOOLS) expect(ASSISTANT_TOOL_VERBS[t]).toBe(`assistant_${t}`)
+        for (const t of ASSISTANT_TOOLS) expect(ASSISTANT_TOOL_VERBS[t]).toBe(t === 'assistant_action' ? t : `assistant_${t}`)
     })
 
     it('write tools are memory, skill_manage and project_note', () => {
-        expect([...ASSISTANT_WRITE_TOOLS].sort()).toEqual(['memory', 'project_add', 'project_note', 'project_send', 'skill_manage'])
+        expect([...ASSISTANT_WRITE_TOOLS].sort()).toEqual(['assistant_action', 'memory', 'project_add', 'project_note', 'project_send', 'project_watch', 'skill_manage'])
     })
 })
 
 describe('assistant verbs', () => {
     const all = Object.values(ASSISTANT_VERB)
 
-    it('are fifteen distinct names: ten tool verbs + launch + pending relays + three owner verbs', () => {
-        expect(all.length).toBe(15)
-        expect(new Set(all).size).toBe(15)
+    it('are twenty distinct names: thirteen tool verbs + launch/pull/state + four owner verbs', () => {
+        expect(all.length).toBe(20)
+        expect(new Set(all).size).toBe(20)
         const toolVerbs = new Set<string>(Object.values(ASSISTANT_TOOL_VERBS))
         expect(all.filter((v) => !toolVerbs.has(v)).sort()).toEqual([
-            'assistant_import_skills', 'assistant_pending_relays', 'assistant_staged_resolve',
+            'assistant_execution_settings', 'assistant_execution_state', 'assistant_import_skills', 'assistant_pending_relays', 'assistant_staged_resolve',
             'assistant_store_admin', 'launch_assistant',
         ])
     })
@@ -61,7 +61,7 @@ describe('assistant verbs', () => {
     it('owner verbs are not tool verbs (the MCP server never calls them)', () => {
         const toolVerbs = new Set<string>(Object.values(ASSISTANT_TOOL_VERBS))
         expect(ASSISTANT_OWNER_VERBS.filter((v) => toolVerbs.has(v))).toEqual([])
-        expect([...ASSISTANT_OWNER_VERBS].sort()).toEqual(['assistant_import_skills', 'assistant_staged_resolve', 'assistant_store_admin'])
+        expect([...ASSISTANT_OWNER_VERBS].sort()).toEqual(['assistant_execution_settings', 'assistant_import_skills', 'assistant_staged_resolve', 'assistant_store_admin'])
     })
 
     it('the review-turn whitelist is the four store tool verbs', () => {

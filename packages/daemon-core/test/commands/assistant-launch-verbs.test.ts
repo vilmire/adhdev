@@ -46,7 +46,7 @@ function ctx(): any {
             instanceManager: { getInstance: (id: string) => (live.has(id) ? { getState: () => ({ status: 'idle', settings: { assistant: true } }) } : undefined) },
             providerLoader: { resolveAlias: (t: string) => (t === 'claude' ? 'claude-cli' : t), resolve: () => provider, getMeta: () => provider },
         },
-        components: () => { throw new Error('not used'); },
+        components: () => ({ instanceManager: { getInstance: () => undefined }, cliManager: { adapters: new Map() } }),
         execute,
     };
 }

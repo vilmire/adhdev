@@ -36,6 +36,9 @@ const EMPTY_ENV = {} as NodeJS.ProcessEnv;
 /** Minimal valid arguments per tool, so the arg gate passes and the verb is reached. */
 const MINIMAL_ARGS: Record<string, Record<string, unknown>> = {
   projects: {},
+  environment: {},
+  assistant_action: { authorization: 'cap', meshId: 'm', targetSessionId: 's', action: 'approve', button: 'Accept' },
+  project_watch: { project: 'adhdev', action: 'list' },
   project_status: { project: 'adhdev' },
   project_send: { project: 'adhdev', message: 'run the tests' },
   project_read: { project: 'adhdev' },

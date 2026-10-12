@@ -1,3 +1,7 @@
+import { environmentInventory } from '../../assistant/environment-inventory.js';
+import { readTerminalEvents } from '../../assistant/terminal-watch.js';
+import { MeshRuntimeStore } from '../../mesh/mesh-runtime-store.js';
+import { parseReportContinuation } from '../../assistant/report-continuation.js';
 /**
  * Host side of a remote-hosted assistant project (owner decision 2026-10-08,
  * closing design Q4 of docs/design/2026-10-07-assistant-layer.md): another
@@ -23,7 +27,7 @@
  * transport-stamped (authenticated) sender must be on the roster of the named
  * mesh in THIS daemon's own mesh record — the host's meshes.json, which is
  * authoritative; ids in the payload are claims. The handler then requires that
- * this daemon actually hosts that mesh (a roster from an `inlineMesh` the
+ * this daemon actually hosts that mesh (inventory-only reads may answer from a roster member) (a roster from an `inlineMesh` the
  * payload carried is never enough). It never takes a session id: the only
  * session it writes to is the coordinator of that one mesh, picked here
  * (`ensureCoordinator`), so a roster member cannot reach any other session.
@@ -50,7 +54,7 @@ import { pickCoordinator } from '../../assistant/coordinator-lifecycle.js';
 import { compactTranscriptTail, coordinatorState } from '../../assistant/project-views.js';
 import { ASSISTANT_REMOTE_PROJECT_COMMAND, ASSISTANT_REMOTE_OPS, type AssistantRemoteOp } from '../../assistant/assistant-remote-host.js';
 import type { AssistantProjectPorts } from '../../assistant/assistant-project-ports.js';
-import { localProjectRead, localProjectSend, localProjectStatus, readTailArg } from './assistant.js';
+import { localProjectRead, localProjectSend, localProjectStatus, localAttemptReport, readTailArg } from './assistant.js';
 import { applyNote, noteTextRefusal, parseNoteOp, projectPortsFor } from './assistant-store.js';
 
 /** Largest composed text a remote send carries (the caller composes; skills are capped at 12 k there). */
@@ -137,8 +141,21 @@ async function run(ports: AssistantProjectPorts, op: AssistantRemoteOp, meshId: 
             return { success: true, result };
         }
         case 'read': {
-            const r = await localProjectRead(ports, meshId, readTailArg(args.tail));
+            const continuation = parseReportContinuation(args);
+            if (typeof continuation === 'string') return fail('invalid_args', continuation);
+            const r = await localProjectRead(ports, meshId, readTailArg(args.tail), continuation);
             return r.ok ? { success: true, result: r.result } : fail('project_read_failed', r.error, { coordinatorSessionId: r.coordinatorSessionId });
+        }
+        case 'report': {
+            if (typeof args.attemptId !== 'string' || !args.attemptId || args.attemptId.length > 200 || typeof args.coordinatorSessionId !== 'string' || !args.coordinatorSessionId || args.coordinatorSessionId.length > 200) return fail('invalid_args');
+            return { success: true, result: await localAttemptReport(ports, meshId, args.coordinatorSessionId, args.attemptId) };
+        }
+        case 'inventory':
+            return { success: true, result: environmentInventory([mesh], Date.now(), ports.localNodeFacts ? { daemonId: ports.selfDaemonId(), facts: ports.localNodeFacts() } : undefined) };
+        case 'terminal': {
+            if (!['task', 'mission'].includes(String(args.kind)) || typeof args.entityId !== 'string' || !args.entityId || args.entityId.length > 200
+                || !Array.isArray(args.receipts) || args.receipts.length > 256 || args.receipts.some(id => typeof id !== 'string' || id.length > 200)) return fail('invalid_args');
+            return { success: true, result: { events: readTerminalEvents(MeshRuntimeStore.getInstance().db, meshId, args.kind as 'task' | 'mission', args.entityId, 0, args.receipts as string[]) } };
         }
         case 'poll':
             return poll(ports, meshId, args);
@@ -157,7 +174,7 @@ const assistantRemoteProject: HighFamilyHandler = async (ctx: HighFamilyContext,
         const ports = await projectPortsFor(ctx);
         const mesh = ports.listMeshes().find((m) => m.id === meshId);
         if (!mesh) return fail('project_not_found', `mesh ${meshId} is not in this daemon's project inventory`);
-        if (!ports.isHostedHere(mesh)) return fail('project_not_hosted_here', `this daemon does not host mesh ${meshId}`);
+        if (op !== 'inventory' && !ports.isHostedHere(mesh)) return fail('project_not_hosted_here', `this daemon does not host mesh ${meshId}`);
         const sender = readMeshSender(args);
         const self = ports.selfDaemonId();
         if (op === 'send' || op === 'note') {
