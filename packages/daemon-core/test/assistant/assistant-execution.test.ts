@@ -62,8 +62,8 @@ it('authenticated owner CHAT issues action token and actual command consumer dis
     const registry = new AssistantRegistry({ configDir: dir }); registry.bindSession({ sessionId: 'assistant', cliType: 'claude-cli', workspace: dir, at: 1 });
     setAssistantRegistryForTests(registry); setAssistantServicesForTests(createAssistantServices({ configDir: dir, listMeshes: () => [{ id: 'mesh' } as any] }));
     const runtime = { getState: () => ({ type: 'claude-cli', settings: { assistant: true } }) };
-    const adapter = {}; const worker = { getState: () => ({ settings: { meshNodeFor: 'mesh' }, activeChat: { activeModal: modal } }) };
-    const components = { instanceManager: { getInstance: (id: string) => id === 'assistant' ? runtime : id === 'worker' ? worker : null }, cliManager: { adapters: new Map<string, any>([['assistant', adapter], ['worker', { getStatus: () => ({ activeModal: modal }) }]]) } };
+    const adapter = {}; const worker = { getState: () => ({ category: 'cli', settings: { meshNodeFor: 'mesh' }, activeChat: { activeModal: modal } }) };
+    const components = { sessionRegistry: { get: () => ({ transport: 'pty' }) }, instanceManager: { getInstance: (id: string) => id === 'assistant' ? runtime : id === 'worker' ? worker : null }, cliManager: { adapters: new Map<string, any>([['assistant', adapter], ['worker', { getStatus: () => ({ activeModal: modal }) }]]) } };
     assistantExecution.attest('assistant', runtime, adapter, 'claude-cli', args, 'enforced');
     const directive = '/assistant-action ' + JSON.stringify(action);
     expect(prepareOwnerActionChat(components, 'mesh', 'assistant', directive)).toEqual({ success: true, text: directive });
@@ -83,4 +83,21 @@ it('authenticated owner CHAT issues action token and actual command consumer dis
     expect(checkAssistantExecutionGuard(calls[0][1].assistantExecutionGuard)).toBe(false);
     registry.updateSettings({ executionEnabled: true });
     expect(checkAssistantExecutionGuard(calls[0][1].assistantExecutionGuard)).toBe(false); // OFF→ON cannot restore old consent
+});
+it('owner language asks for ambiguous choices, exact UI snapshots fence modal changes, non-PTY and missing adapters cannot mint grants', () => {
+    dir = mkdtempSync(join(tmpdir(), 'assistant-owner-choice-'));
+    const registry = new AssistantRegistry({ configDir: dir }); registry.bindSession({ sessionId: 'assistant', cliType: 'claude-cli', workspace: dir, at: 1 });
+    setAssistantRegistryForTests(registry); setAssistantServicesForTests(createAssistantServices({ configDir: dir, listMeshes: () => [{ id: 'mesh' } as any] }));
+    const runtime = { getState: () => ({ type: 'claude-cli', settings: { assistant: true } }) }; const adapter = {};
+    let transport = 'pty'; let liveModal = modal;
+    const worker = { getState: () => ({ category: 'cli', settings: { meshNodeFor: 'mesh', meshNodeId: 'worker' } }) };
+    const adapters = new Map<string, any>([['assistant', adapter], ['worker', { getStatus: () => ({ activeModal: liveModal }) }]]);
+    const components = { sessionRegistry: { get: () => ({ transport }) }, instanceManager: { getInstance: (id: string) => id === 'assistant' ? runtime : worker }, cliManager: { adapters } };
+    assistantExecution.attest('assistant', runtime, adapter, 'claude-cli', args, 'enforced');
+    expect(prepareOwnerActionChat(components, 'ws', 'assistant', 'Please approve the request for worker')).toMatchObject({ success: true, expiresAt: expect.any(Number) });
+    liveModal = { message: 'Pick permission', buttons: ['Accept','Accept once','Reject'] };
+    expect(prepareOwnerActionChat(components, 'ws', 'assistant', 'approve')).toMatchObject({ success: false, code: 'assistant_action_needs_selection' });
+    expect(prepareOwnerActionChat(components, 'ws', 'assistant', 'approve', action, 'stale')).toMatchObject({ success: false, code: 'owner_modal_selection_changed' });
+    transport = 'cdp-webview'; expect(prepareOwnerActionChat(components, 'ws', 'assistant', '/assistant-action ' + JSON.stringify(action))).toMatchObject({ success: false, code: 'assistant_action_target_unavailable' });
+    transport = 'pty'; adapters.delete('worker'); expect(prepareOwnerActionChat(components, 'ws', 'assistant', '/assistant-action ' + JSON.stringify(action))).toMatchObject({ success: false, code: 'assistant_action_target_unavailable' });
 });

@@ -210,7 +210,7 @@ class StandaloneServer {
   private readonly http = new StandaloneHttpApi({
     isReady: () => !!this.host,
     getStatus: () => buildStandaloneStatusResponse(this.host!.buildSnapshot('full')),
-    executeCommand: (type, payload) => this.executeCommand(type, payload),
+    executeCommand: (type, payload, source) => this.executeCommand(type, payload, source),
     rawTerminalService: () => this.rawTerminalService(),
     interactivePromptService: () => createRouterInteractivePromptService(this.host!),
     isCliSession: (sessionId) => this.host?.isCliSession(sessionId) ?? false,
@@ -420,7 +420,7 @@ class StandaloneServer {
       switch (route.kind) {
         case 'dashboard':
           this.wss!.handleUpgrade(req, socket, head, (ws) => {
-            this.handleWsConnection(ws);
+            this.handleWsConnection(ws, this.http.isOwnerRequestAuthenticated(req, req.url || '/') ? 'standalone' : 'ipc');
           });
           return;
         case 'seqscribe':
@@ -561,7 +561,7 @@ class StandaloneServer {
 
   // ─── WebSocket Handler ───
 
-  private handleWsConnection(ws: WebSocket): void {
+  private handleWsConnection(ws: WebSocket, source: 'standalone' | 'ipc'): void {
     // Max client limit to prevent connection storms
     const MAX_WS_CLIENTS = 10;
     if (this.clients.size >= MAX_WS_CLIENTS) {
@@ -604,7 +604,7 @@ class StandaloneServer {
             : (msg as any);
           const { type, payload } = normalizeCommandEnvelope(envelope);
           const requestId = msg.requestId;
-          const result = await this.executeCommand(type, payload || {});
+          const result = await this.executeCommand(type, payload || {}, source);
           ws.send(JSON.stringify({ type: 'command_result', requestId, data: result }));
         }
       } catch (e: any) {
@@ -703,15 +703,15 @@ class StandaloneServer {
    * Interaction id, invalidation and the metadata push all ride the host
    * runtime / router now (`command_executed` → `buildTransport().onCommandExecuted`).
    */
-  private async executeCommand(type: string, args: any): Promise<any> {
+  private async executeCommand(type: string, args: any, source: 'standalone' | 'ipc'): Promise<any> {
     if (!this.host) {
       return { success: false, error: 'Components not initialized' };
     }
     if (typeof type !== 'string' || !type.trim()) {
       return { success: false, error: 'command type required' };
     }
-    if (type === MESH_RELAY_COMMAND) return this.relayMeshCommand(args, 'standalone');
-    return this.host.execute(type, args, 'standalone');
+    if (type === MESH_RELAY_COMMAND) return this.relayMeshCommand(args, source);
+    return this.host.execute(type, args, source);
   }
 
   /**

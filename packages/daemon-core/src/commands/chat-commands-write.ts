@@ -252,7 +252,7 @@ async function submitCliChat(h: CommandHelpers, args: any, input: InputEnvelope,
         }
     }
     if (!messageId) messageId = mintLegacyMessageId();
-    const prepared = prepareOwnerActionChat({ instanceManager: h.ctx.instanceManager, cliManager: h.ctx.adapters ? { adapters: h.ctx.adapters } : undefined }, readCommandSource(args), sessionKey, input.textFallback ?? '');
+    const prepared = prepareOwnerActionChat({ sessionRegistry: h.ctx.sessionRegistry, instanceManager: h.ctx.instanceManager, cliManager: h.ctx.adapters ? { adapters: h.ctx.adapters } : undefined }, readCommandSource(args), sessionKey, input.textFallback ?? '', args?.assistantOwnerAction, args?.expectedOwnerModalIdentity);
     if (!prepared.success) return { ...prepared, error: prepared.code };
     const actionInput = prepared.text === input.textFallback ? input : normalizeInputEnvelope({ text: prepared.text });
     const outcome = await service.submit({
@@ -267,7 +267,8 @@ async function submitCliChat(h: CommandHelpers, args: any, input: InputEnvelope,
     // router-stamped dashboard sources and only the bound assistant session.
     const requested = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '';
     reportSessionChatInput({ sessionIds: requested && requested !== sessionKey ? [sessionKey, requested] : [sessionKey], messageId, source: readCommandSource(args), outcome });
-    return sendChatResultFromOutcome(outcome, messageId, transport, provider?.type);
+    return { ...sendChatResultFromOutcome(outcome, messageId, transport, provider?.type),
+        ...('expiresAt' in prepared ? { ownerActionExpiresAt: prepared.expiresAt, ownerActionRetry: 'If execution expires while queued or busy, select the current permission again. Consent is never renewed automatically.' } : {}) };
 }
 
 export async function handleSendChat(h: CommandHelpers, args: any): Promise<CommandResult> {
@@ -800,6 +801,10 @@ export async function handleChangeModel(h: CommandHelpers, args: any): Promise<C
 export async function handleResolveAction(h: CommandHelpers, args: any): Promise<CommandResult> {
     const provider = h.getProvider(args?.agentType);
     const transport = getTargetTransport(h, provider);
+    if (transport !== 'pty' && (args?.expectedModalIdentity !== undefined || args?.assistantExecutionGuard !== undefined)) {
+        return { success: false, code: 'assistant_action_transport_unsupported' };
+    }
+    if (args?.data && (args?.expectedModalIdentity !== undefined || args?.assistantExecutionGuard !== undefined)) return { success: false, code: 'assistant_action_payload_unsupported' };
     const action = args?.action || 'approve';
     const button = args?.button || args?.buttonText
         || (action === 'approve' ? 'Accept' : action === 'reject' ? 'Reject' : 'Accept');
@@ -994,6 +999,7 @@ export async function handleResolveAction(h: CommandHelpers, args: any): Promise
         // sees the miss instead of a false success. Legacy adapters without resolveModalMatched
         // keep the prior void-resolveModal behaviour.
         if (args?.assistantExecutionGuard !== undefined && !checkAssistantExecutionGuard(args.assistantExecutionGuard)) return { success: false, code: 'assistant_execution_revoked', error: 'Assistant execution authority expired or changed' };
+        if (args?.assistantExecutionGuard !== undefined && typeof adapter.resolveModalMatched !== 'function') return { success: false, code: 'assistant_action_transport_unsupported' };
         if (typeof adapter.resolveModalMatched === 'function') {
             const matched = adapter.resolveModalMatched(buttonIndex);
             if (!matched) {

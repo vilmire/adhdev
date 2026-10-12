@@ -1,3 +1,4 @@
+import AssistantExecutionControls from './AssistantExecutionControls'
 import { useTranslation } from 'react-i18next'
 import type { DaemonData } from '../../types'
 import { IconChevronLeft, IconX } from '../Icons'
@@ -137,6 +138,7 @@ export default function DashboardMobileChatRoom({
                     collapses while none are held (the pill renders nothing). */}
                 {isAssistant && (
                     <div className="flex justify-end empty:hidden" data-testid="mobile-room-assistant-staged">
+                        <AssistantExecutionControls daemonId={getConversationDaemonRouteId(selectedConversation)} sessionId={selectedConversation.sessionId} status={selectedConversation.status} sendCommand={sendCommand} />
                         <AssistantStagedWrites
                             daemonId={getConversationDaemonRouteId(selectedConversation)}
                             status={selectedConversation.status}

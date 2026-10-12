@@ -12,6 +12,7 @@
  * `ADHDEV_ASSISTANT_SESSION_ID` is optional. It is routing/ownership only.
  */
 
+import { AssistantToolRefresh } from './assistant-tool-refresh.js';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
@@ -76,10 +77,15 @@ export async function startAssistantServer(opts: {
 
   const server = new Server(
     { name: 'adhdev-mcp-server', version: opts.serverVersion },
-    { capabilities: { tools: {} } },
+    { capabilities: { tools: { listChanged: true } } },
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: await availableAssistantTools(opts.transport, assistantSessionId, tools) }));
+  const refresh = new AssistantToolRefresh(opts.transport, assistantSessionId, tools, () => server.sendToolListChanged());
+  server.setRequestHandler(ListToolsRequestSchema, async () => {
+    const available = await availableAssistantTools(opts.transport, assistantSessionId, tools);
+    refresh.recordListed(available);
+    return { tools: available };
+  });
   server.setRequestHandler(CallToolRequestSchema, async (req) => handleAssistantToolCall(
     opts.transport,
     await availableAssistantTools(opts.transport, assistantSessionId, tools),
@@ -89,6 +95,11 @@ export async function startAssistantServer(opts: {
   ));
 
   await server.connect(new StdioServerTransport());
+  await refresh.refresh();
+  const timer = setInterval(() => { void refresh.refresh().catch(() => {}); }, 3_000);
+  timer.unref();
+  const previousClose = server.onclose;
+  server.onclose = () => { clearInterval(timer); previousClose?.(); };
   process.stderr.write(
     `[adhdev-mcp] Server running in ${opts.mode} ASSISTANT mode — ${tools.length} tools`
       + `${assistantSessionId ? '' : ' (no ADHDEV_ASSISTANT_SESSION_ID: MCP-only assistant)'}.\n`,

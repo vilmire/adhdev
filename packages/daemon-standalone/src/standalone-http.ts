@@ -64,8 +64,8 @@ export interface StandaloneHttpDeps {
   /** Components are up (the provider REST routes answer 503 before that). */
   isReady(): boolean;
   getStatus(): StatusResponse;
-  /** `hostRuntime.execute(type, payload, 'standalone')`. */
-  executeCommand(type: string, payload: Record<string, unknown>): Promise<any>;
+  /** Source is derived here from credentials, never from the command envelope. */
+  executeCommand(type: string, payload: Record<string, unknown>, source: 'standalone' | 'ipc'): Promise<any>;
   rawTerminalService(): RawTerminalHttpService;
   interactivePromptService(): InteractivePromptHttpService;
   isCliSession(sessionId: string): boolean;
@@ -192,8 +192,8 @@ export class StandaloneHttpApi {
 
   /**
    * Loopback-only scope of a daemon-launched MCP server's credential, or null.
-   * Consulted only for a request that failed the dashboard gate, so an
-   * unauthenticated daemon is unaffected.
+   * Internal scope takes precedence even when dashboard authentication is also
+   * presented. Disabling dashboard authentication never upgrades MCP authority.
    */
   resolveInternalAuthScope(req: IncomingMessage): StandaloneInternalAuthScope | null {
     if (!isLoopbackPeer(req)) return null;
@@ -240,6 +240,10 @@ export class StandaloneHttpApi {
       cookieHeader: typeof req.headers.cookie === 'string' ? req.headers.cookie : undefined,
       sessionStore: this.authSessions,
     });
+  }
+
+  isOwnerRequestAuthenticated(req: IncomingMessage, rawUrl: string): boolean {
+    return this.hasAnyAuth() && !this.resolveInternalAuthScope(req) && this.isRequestAuthenticated(req, rawUrl);
   }
 
   private getRequestSessionId(req: IncomingMessage): string | null {
@@ -532,9 +536,8 @@ export class StandaloneHttpApi {
     // (daemon-core standalone-mcp-auth.ts). Both scopes reach only the two
     // routes LocalTransport uses; the worker scope is further limited to its
     // own verbs (checked in the /command route) and a liveness-only status.
-    let internalScope: StandaloneInternalAuthScope | null = null;
-    if (url.startsWith('/api/') && !this.isRequestAuthenticated(req, url)) {
-      internalScope = this.resolveInternalAuthScope(req);
+    const internalScope = this.resolveInternalAuthScope(req);
+    if (url.startsWith('/api/') && (internalScope || !this.isRequestAuthenticated(req, url))) {
       if (!internalScope) {
         res.writeHead(401, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Unauthorized. Provide dashboard session cookie or token auth.' }));
@@ -649,7 +652,7 @@ export class StandaloneHttpApi {
             res.end(JSON.stringify({ error: 'unknown provider endpoint' }));
             return;
           }
-          const result = await this.deps.executeCommand(cmdType, body);
+          const result = await this.deps.executeCommand(cmdType, body, this.isOwnerRequestAuthenticated(req, url) ? 'standalone' : 'ipc');
           const ok = (result as { success?: boolean })?.success !== false;
           res.writeHead(ok ? 200 : 400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify(result));
@@ -792,7 +795,7 @@ export class StandaloneHttpApi {
             res.end(JSON.stringify({ success: false, code: 'worker_scope_forbidden', error: `Command ${type} is not available to a worker MCP credential.` }));
             return;
           }
-          const result = await this.deps.executeCommand(type, payload || {});
+          const result = await this.deps.executeCommand(type, payload || {}, this.isOwnerRequestAuthenticated(req, url) ? 'standalone' : 'ipc');
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify(result));
         } catch (e: any) {
@@ -916,7 +919,7 @@ export class StandaloneHttpApi {
         token,
         memberNode: memberNode as Record<string, unknown>,
         ...(memberMeshId ? { memberMeshId } : {}),
-      });
+      }, 'ipc');
       const ok = (result as { success?: boolean } | null)?.success === true;
       const rejected = (result as { code?: string } | null)?.code === 'mesh_host_join_rejected';
       sendJson(ok ? 200 : rejected ? 403 : 400, result ?? { success: false, error: 'empty result' });
