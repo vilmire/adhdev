@@ -173,8 +173,15 @@ export class WorkerOutboxStore {
     try {
       const file = this.fileFor(entry.id);
       const tmp = `${file}.${process.pid}.tmp`;
-      fs.writeFileSync(tmp, JSON.stringify(entry), { mode: 0o600 });
+      const fd = fs.openSync(tmp, 'w', 0o600);
+      try { fs.writeFileSync(fd, JSON.stringify(entry)); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
       fs.renameSync(tmp, file);
+      // Persist the rename before claiming write-ahead durability. Windows
+      // cannot fsync directories; file fsync + atomic rename covers process death.
+      if (process.platform !== 'win32') {
+        const parent = fs.openSync(this.dir!, 'r');
+        try { fs.fsyncSync(parent); } finally { fs.closeSync(parent); }
+      }
     } catch (e: any) {
       this.diskOk = false;
       this.log(`could not persist outbox entry ${entry.id} (${e?.message || e}); it is kept in memory only`);

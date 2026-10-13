@@ -109,8 +109,8 @@ export const workerBridgeHandlers: Record<string, LowFamilyHandler> = {
         const db = MeshRuntimeStore.getInstance().db;
         ensureBridgeSchema(db);
         const policy = readBridgePolicy(db, args?.meshId);
-        const pending = db.prepare("SELECT COUNT(*) AS n FROM worker_bridge_delivery WHERE mesh_id=? AND state!='receipted'").get(args?.meshId) as { n: number };
-        return { success: true, policy, ...bridgeDrainState(db, args?.meshId), pendingDeliveries: pending.n, identity: identity(_ctx), launchNonceDigest: process.env.ADHDEV_WORKER_BRIDGE_LAUNCH_NONCE ? (await import('node:crypto')).createHash('sha256').update(process.env.ADHDEV_WORKER_BRIDGE_LAUNCH_NONCE).digest('hex') : null };
+
+        return { success: true, policy, ...bridgeDrainState(db, args?.meshId), identity: identity(_ctx), launchNonceDigest: process.env.ADHDEV_WORKER_BRIDGE_LAUNCH_NONCE ? (await import('node:crypto')).createHash('sha256').update(process.env.ADHDEV_WORKER_BRIDGE_LAUNCH_NONCE).digest('hex') : null };
     },
 };
 export const workerBridgeSpecs = defineCommandSpecs('low', workerBridgeHandlers, {

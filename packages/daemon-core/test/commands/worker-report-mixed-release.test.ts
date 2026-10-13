@@ -19,6 +19,8 @@ import { mintWorkerSessionBind, mintWorkerTaskToken, __resetWorkerSessionBindsFo
 import { __setHandoffNoteSinkForTests } from '../../src/mesh/worker-report.js'
 import { __setWorkerProgressNoticeSinkForTests } from '../../src/mesh/worker-report-progress.js'
 import { WorkerReportDelivery } from '../../../mcp-server/src/tools/worker-report-outbox.js'
+import { resumeBridgeProgressNotices, __resetProgressSurfaceForTest } from '../../src/mesh/worker-report-progress.js'
+import { createCoordinatorNotifier } from '../../src/mesh/turn-ledger/deliver.js'
 import { fakePublisher } from '../turn-ledger/ledger-harness.js'
 
 // Opt-in artifact integration test. Extract package/dist/index.js from the exact
@@ -63,6 +65,7 @@ afterEach(() => {
     runtime.__setHandoffNoteSinkForTests(undefined)
     runtime.__setWorkerProgressNoticeSinkForTests(undefined)
   }
+  __resetProgressSurfaceForTest()
   vi.restoreAllMocks()
 })
 
@@ -123,7 +126,7 @@ function rig(memberVersion: 'rc12' | 'rc13', ownerVersion: 'rc12' | 'rc13', brid
   observe({ kind: 'delivered', messageId: 'test-message', outcome: 'delivered', via: 'p2p' })
   observe({ kind: 'turn_started', retro: false, source: 'fsm_edge' })
   observe({ kind: 'turn_end', strength: 'genuine', reportExpected: true, source: 'completion_flush_genuine' })
-  ownerRuntime.mintWorkerTaskToken({ meshId, taskId, sessionId, attemptId, nodeId })
+  const localToken = ownerRuntime.mintWorkerTaskToken({ meshId, taskId, sessionId, attemptId, nodeId }).token
   location = 'member'
   const bind = memberRuntime.mintWorkerSessionBind({ meshId, sessionId, nodeId }).bind
   const handler = new ownerRuntime.DaemonCommandHandler({ cdpManagers: new Map(), adapters: new Map(), ideType: 'test' })
@@ -165,8 +168,13 @@ function rig(memberVersion: 'rc12' | 'rc13', ownerVersion: 'rc12' | 'rc13', brid
     } else { member.close(); member = new memberRuntime.MeshRuntimeStore(join(dir, 'member.db')) }
     location = previous
   }
+  const localCommand = async (name: string, args: any) => {
+    const previous = location; location = 'owner'
+    try { return await ownerRuntime.workerReportHandlers[name]({ deps: { statusInstanceId: 'daemon_mach_test_owner', statusVersion: '1.0.82-bridge', instanceManager: { getInstance: () => undefined } } }, args) }
+    finally { location = previous }
+  }
   const pump = () => resumeBridgeDeliveries(wire.dispatch)
-  return { get owner() { return owner }, get member() { return member }, get ledger() { return ledger }, reboot, pump, taskId, meshId, attemptId, bind, settings, wire, transport, delivery, report, offline: (value: boolean) => { offline = value } }
+  return { get owner() { return owner }, get member() { return member }, get ledger() { return ledger }, reboot, pump, taskId, meshId, attemptId, bind, localToken, localCommand, settings, wire, transport, delivery, report, offline: (value: boolean) => { offline = value } }
 }
 
 describe.skipIf(!artifact)('exact packaged rc12 ↔ candidate rc13 worker protocol', () => {
@@ -332,6 +340,84 @@ describe.skipIf(!artifact)('strict B delivery and restart recovery', () => {
     expect(await sendBridgeDelivery(r.member.db, envelope, r.wire.dispatch)).toMatchObject({ success: true })
     expect(r.ledger.getAttempt(r.attemptId).terminal).toMatchObject({ strength: 'tool_report' })
     expect(r.owner.turnStore().listWorkerEventsForTask(r.meshId, r.taskId, 'worker_tool_report')).toHaveLength(1)
+    await r.ledger.flushPublish()
+  })
+  it.each(['progress', 'refusal'] as const)('local %s retains exact prepared identity through storage failure and credential-map restart', async (kind) => {
+    const r = rig('rc13', 'rc13', true)
+    const args = { token: r.localToken, deliveryId: `local-${kind}`, reportedAtMs: Date.now() }
+    const preparation = await r.localCommand('worker_bridge_prepare', args)
+    expect(preparation).toMatchObject({ success: true, protocol: 1 })
+    const command = kind === 'progress' ? 'worker_progress_update' : 'worker_report_completion'
+    const payload = kind === 'progress' ? { note: 'Synthetic durable local progress retained across restart.' } : { report: { ...r.report, summary: 'x'.repeat(8001) } }
+    r.owner.db.exec(`CREATE TRIGGER local_receipt_failure BEFORE UPDATE OF receipt_json ON worker_bridge_delivery WHEN NEW.side='local' BEGIN SELECT RAISE(ABORT, 'local receipt storage failure'); END`)
+    expect(await r.localCommand(command, { ...args, ...payload, prepared: preparation.prepared })).toMatchObject({ success: false, error: 'storage_failed' })
+    const eventKind = kind === 'progress' ? 'worker_progress_update' : 'worker_report_refused'
+    expect(r.owner.turnStore().listWorkerEventsForTask(r.meshId, r.taskId, eventKind)).toHaveLength(0)
+    r.owner.db.exec('DROP TRIGGER local_receipt_failure')
+    r.reboot('owner')
+    current.__resetWorkerTaskTokensForTest()
+    const answer = await r.localCommand(command, { ...args, ...payload, prepared: preparation.prepared })
+    expect(answer).toMatchObject(kind === 'progress' ? { success: true } : { success: false, error: 'invalid_report', receipt: { recorded: true } })
+    expect(await r.localCommand(command, { ...args, ...payload, prepared: preparation.prepared })).toEqual(answer)
+    expect(r.owner.turnStore().listWorkerEventsForTask(r.meshId, r.taskId, eventKind)).toHaveLength(1)
+    expect(r.ledger.getAttempt(r.attemptId).terminal).toBeNull()
+    await r.ledger.flushPublish()
+  })
+  it.each(['progress', 'refusal'] as const)('%s receipt write failure rolls back real evidence and side effects before restart retry', async (kind) => {
+    const r = rig('rc13', 'rc13', true)
+    const notifier = () => createCoordinatorNotifier({ ledger: r.ledger, selfDaemonIds: () => ['daemon_mach_test_owner'] })
+    current.__setWorkerProgressNoticeSinkForTests((notice: any) => {
+      notifier().notify({ eventId: notice.eventId, event: 'mesh:worker_progress', meshId: notice.meshId, coordinatorMessage: notice.coordinatorMessage, metadataEvent: { taskId: notice.taskId, note: notice.note, terminal: false } })
+      return true
+    })
+    r.offline(true)
+    const payload = kind === 'progress' ? { note: 'Synthetic durable progress sufficient to notify the real coordinator consumer.' } : { report: { ...r.report, summary: 'PRIVATE-REJECTED-BODY' + 'x'.repeat(8001) } }
+    await r.delivery.submit(kind === 'progress' ? 'progress' : 'report', payload)
+    const saved: any = r.member.db.prepare("SELECT envelope_json FROM worker_bridge_delivery WHERE side='member'").get()
+    const envelope = JSON.parse(saved.envelope_json)
+    r.owner.db.exec(`CREATE TRIGGER synthetic_receipt_failure BEFORE UPDATE OF receipt_json ON worker_bridge_delivery
+      WHEN NEW.side='owner' BEGIN SELECT RAISE(ABORT, 'synthetic receipt disk failure'); END`)
+    r.offline(false)
+    expect(await sendBridgeDelivery(r.member.db, envelope, r.wire.dispatch)).toMatchObject({ success: false })
+    const eventKind = kind === 'progress' ? 'worker_progress_update' : 'worker_report_refused'
+    expect(r.owner.turnStore().listWorkerEventsForTask(r.meshId, r.taskId, eventKind)).toHaveLength(0)
+    expect(r.ledger.getAttempt(r.attemptId).data.reportCorrection).toBeUndefined()
+    expect(r.owner.db.prepare("SELECT * FROM turn_events WHERE kind='notify'").all()).toHaveLength(0)
+    r.owner.db.exec('DROP TRIGGER synthetic_receipt_failure')
+    r.reboot('owner'); r.reboot('member')
+    await sendBridgeDelivery(r.member.db, envelope, r.wire.dispatch)
+    const deadline = r.ledger.getAttempt(r.attemptId).data.reportCorrection?.until
+    await r.ledger.flushPublish()
+    r.reboot('owner'); r.reboot('member')
+    await sendBridgeDelivery(r.member.db, envelope, r.wire.dispatch)
+    expect(r.owner.turnStore().listWorkerEventsForTask(r.meshId, r.taskId, eventKind)).toHaveLength(1)
+    expect(r.ledger.getAttempt(r.attemptId).data.reportCorrection?.until).toBe(deadline)
+    expect(r.ledger.getAttempt(r.attemptId).terminal).toBeNull()
+    if (kind === 'progress') expect(r.owner.db.prepare("SELECT * FROM turn_events WHERE kind='notify'").all()).toHaveLength(1)
+    else expect(JSON.stringify(r.wire.packets)).not.toContain('PRIVATE-REJECTED-BODY')
+    await r.ledger.flushPublish()
+  })
+  it('progress consumer failure survives receipt, restart and lost notification acknowledgement with stable id', async () => {
+    const r = rig('rc13', 'rc13', true)
+    current.__setWorkerProgressNoticeSinkForTests(() => { throw new Error('synthetic consumer storage failure') })
+    expect(await r.delivery.submit('progress', { note: 'Synthetic durable progress sufficient to notify the real coordinator consumer.' })).toMatchObject({ status: 'answered', result: { success: true } })
+    expect(r.owner.db.prepare("SELECT * FROM worker_bridge_progress_notice WHERE state='pending'").all()).toHaveLength(1)
+    r.reboot('owner')
+    const notifier = () => createCoordinatorNotifier({ ledger: r.ledger, selfDaemonIds: () => ['daemon_mach_test_owner'] })
+    current.__setWorkerProgressNoticeSinkForTests((notice: any) => {
+      notifier().notify({ eventId: notice.eventId, event: 'mesh:worker_progress', meshId: notice.meshId, coordinatorMessage: notice.coordinatorMessage, metadataEvent: { taskId: notice.taskId, note: notice.note, terminal: false } })
+      return true
+    })
+    r.owner.db.exec(`CREATE TRIGGER synthetic_notice_ack_failure BEFORE UPDATE OF state ON worker_bridge_progress_notice BEGIN SELECT RAISE(ABORT, 'notice ack lost'); END`)
+    resumeBridgeProgressNotices(r.owner.db)
+    expect(r.owner.db.prepare("SELECT * FROM worker_bridge_progress_notice WHERE state='pending'").all()).toHaveLength(1)
+    r.owner.db.exec('DROP TRIGGER synthetic_notice_ack_failure')
+    await r.ledger.flushPublish()
+    r.reboot('owner')
+    resumeBridgeProgressNotices(r.owner.db)
+    expect(r.owner.db.prepare("SELECT * FROM turn_events WHERE kind='notify'").all()).toHaveLength(1)
+    expect(r.owner.db.prepare("SELECT * FROM worker_bridge_progress_notice WHERE state='pending'").all()).toHaveLength(0)
+    expect(r.ledger.getAttempt(r.attemptId).terminal).toBeNull()
     await r.ledger.flushPublish()
   })
   it('refusals remain content-free with durable exact receipts and immutable deadlines after restart', async () => {

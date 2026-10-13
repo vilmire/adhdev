@@ -42,7 +42,7 @@
 import { LOG } from '../logging/logger.js';
 import { getMachineId } from '../config/config.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
-import { notifyMeshCoordinator } from './turn-ledger/deliver.js';
+import { notifyMeshCoordinator, meshNoticeRuntime } from './turn-ledger/deliver.js';
 import type { WorkerProgressNoticeSink } from './worker-report-progress.js';
 import { readText } from '@adhdev/mesh-shared';
 
@@ -78,7 +78,9 @@ export const queueWorkerProgressNotice: WorkerProgressNoticeSink = (notice) => {
 
     const nodeLabel = notice.nodeId || notice.sessionId || notice.taskId;
     try {
+        if (!meshNoticeRuntime.current()) return false;
         notifyMeshCoordinator({
+            ...(notice.eventId ? { eventId: notice.eventId } : {}),
             event: WORKER_PROGRESS_EVENT_NAME,
             meshId: notice.meshId,
             nodeLabel,
@@ -103,7 +105,9 @@ export const queueWorkerProgressNotice: WorkerProgressNoticeSink = (notice) => {
             ...(targetCoordinatorDaemonId ? { targetCoordinatorDaemonId } : {}),
             ...(targetCoordinatorSessionId ? { targetCoordinatorSessionId } : {}),
         });
+        return true; // A stable-id duplicate is already durably queued.
     } catch (e: any) {
         LOG.warn('WorkerProgress', `Failed to queue progress notice for task ${notice.taskId}: ${e?.message || e}`);
+        return false;
     }
 };

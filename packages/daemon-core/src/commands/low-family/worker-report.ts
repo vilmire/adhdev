@@ -31,7 +31,7 @@
  */
 import { rememberPreparedDelivery, validatePreparedDelivery, readPreparedDelivery } from '../../mesh/worker-bridge-prepared.js';
 import { MeshRuntimeStore } from '../../mesh/mesh-runtime-store.js';
-import { readBridgePolicy, bridgeIdentity, sendBridgeDelivery, findBridgeMemberDelivery, stableBridgeJson, commitLocalBridgeDelivery, type BridgeEnvelope } from '../../mesh/worker-bridge.js';
+import { readBridgePolicy, bridgeIdentity, sendBridgeDelivery, findBridgeMemberDelivery, stableBridgeJson, commitLocalBridgeDelivery, BRIDGE_MAX_AGE_MS, type BridgeEnvelope } from '../../mesh/worker-bridge.js';
 import { daemonIdsEquivalent, meshNodeIdMatches } from '@adhdev/mesh-shared';
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
 import { defineCommandSpecs } from '../command-registry.js';
@@ -284,7 +284,7 @@ async function refuseInvalidReport(
                 if (!attempt || attempt.generation !== prepared.generation || attempt.sessionId !== prepared.sessionId || !daemonIdsEquivalent(attempt.ownerDaemonId, self.daemonId)) return { success: false, error: 'stale_report' };
                 const receipt = recordRefusedWorkerReportForIdentity({ token: '', ...prepared }, { fields, summaryLength },
                     { generation: prepared.generation, deliveryId: prepared.deliveryId, reportedAtMs: prepared.reportedAtMs });
-                return { ...answer, ...(receipt ? { receipt } : { receiptPending: true }) };
+                return receipt?.recorded ? { ...answer, receipt } : { success: false, error: 'storage_failed', receiptPending: true };
             });
             return { ...handled, success: false };
         }
@@ -685,7 +685,7 @@ export const workerReportHandlers: Record<string, LowFamilyHandler> = {
         if (!note) return { success: false, error: 'note required' };
         try {
             const { hasLocalWorkerIdentity } = await import('../../mesh/worker-report.js');
-            const { acceptWorkerProgressUpdate } = await import('../../mesh/worker-report-progress.js');
+            const { acceptWorkerProgressUpdate, acceptWorkerProgressUpdateForIdentity } = await import('../../mesh/worker-report-progress.js');
             const credential = { token: args?.token, bind: args?.bind };
             // Durable delivery: an already-accepted note re-sent after a transport timeout
             // is answered from the replay record — it must not page the coordinator twice.
@@ -711,7 +711,9 @@ export const workerReportHandlers: Record<string, LowFamilyHandler> = {
                     senderVersion: self.version, ...prepared, payload: { note } }, () => {
                     const attempt = MeshRuntimeStore.getInstance().turnStore().getAttempt(prepared.attemptId);
                     if (!attempt || attempt.generation !== prepared.generation || attempt.sessionId !== prepared.sessionId) return { success: false, error: 'stale_report' };
-                    return toProgressResponse(acceptWorkerProgressUpdate(credential, note, { reportedAtMs, deliveryId }));
+                    if (!daemonIdsEquivalent(attempt.ownerDaemonId, self.daemonId) || attempt.meshId !== prepared.meshId || attempt.taskId !== prepared.taskId || attempt.nodeId !== prepared.nodeId) return { success: false, error: 'unauthenticated' };
+                    if (Date.now() - prepared.reportedAtMs > BRIDGE_MAX_AGE_MS || prepared.reportedAtMs > Date.now() + 60_000) return { success: false, error: 'stale_report' };
+                    return toProgressResponse(acceptWorkerProgressUpdateForIdentity({ token: '', ...prepared }, note, { deliveryId }));
                 });
             }
             const result = acceptWorkerProgressUpdate(credential, note, { reportedAtMs });

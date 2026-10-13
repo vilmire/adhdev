@@ -66,7 +66,8 @@ export function ensureBridgeSchema(db: Database): void {
         side TEXT NOT NULL, sender_id TEXT NOT NULL, delivery_id TEXT NOT NULL,
         mesh_id TEXT NOT NULL, envelope_json TEXT NOT NULL, digest TEXT NOT NULL,
         state TEXT NOT NULL CHECK(state IN ('pending','quarantined','receipted')),
-        receipt_json TEXT, reason TEXT, PRIMARY KEY(side,sender_id,delivery_id));`);
+        receipt_json TEXT, reason TEXT, PRIMARY KEY(side,sender_id,delivery_id));
+      CREATE TABLE IF NOT EXISTS worker_bridge_progress_notice(event_id TEXT PRIMARY KEY,mesh_id TEXT NOT NULL,notice_json TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN ('pending','delivered')));`);
 }
 export function readBridgePolicy(db: Database, meshId: string): BridgePolicy | null {
     ensureBridgeSchema(db);
@@ -105,14 +106,14 @@ export function bridgeCapability(db: Database, self: BridgeIdentity, meshId: str
     if (!policy || !admitted(policy, self) || !id(nonce)) return { success: false, error: 'worker_protocol_unsupported' };
     const open = db.prepare('SELECT COUNT(*) AS n FROM turn_attempts WHERE mesh_id=? AND terminal_outcome IS NULL').get(meshId) as { n: number };
     const holds = db.prepare("SELECT COUNT(*) AS n FROM turn_holds h JOIN turn_attempts a ON a.attempt_id=h.attempt_id WHERE a.mesh_id=? AND h.status='active'").get(meshId) as { n: number };
-    const pending = db.prepare("SELECT COUNT(*) AS n FROM worker_bridge_delivery WHERE mesh_id=? AND state!='receipted'").get(meshId) as { n: number };
+    const pending = db.prepare("SELECT (SELECT COUNT(*) FROM worker_bridge_delivery WHERE mesh_id=? AND state!='receipted') + (SELECT COUNT(*) FROM worker_bridge_progress_notice WHERE mesh_id=? AND state='pending') AS n").get(meshId, meshId) as { n: number };
     return { success: true, protocol: BRIDGE_PROTOCOL, ...self, meshId, nonce, rolloutId: policy.rolloutId, frozen: policy.frozen, openAttempts: open.n, correctionOrLivenessHolds: holds.n, pendingDeliveries: pending.n };
 }
 export function bridgeDrainState(db: Database, meshId: string) {
     ensureBridgeSchema(db);
     const attempts = db.prepare('SELECT attempt_id,scope,task_id,node_id,session_id,owner_daemon_id,generation,terminal_outcome,terminal_source,terminal_strength,terminal_at FROM turn_attempts WHERE mesh_id=? ORDER BY attempt_id').all(meshId) as Array<{ terminal_outcome: string | null }>;
     const holds = db.prepare("SELECT h.hold_id,h.generation,h.reason,h.on_expire,h.status,h.until_ms FROM turn_holds h JOIN turn_attempts a ON a.attempt_id=h.attempt_id WHERE a.mesh_id=? AND h.status='active' ORDER BY h.hold_id").all(meshId);
-    const pending = db.prepare("SELECT COUNT(*) AS n FROM worker_bridge_delivery WHERE mesh_id=? AND state!='receipted'").get(meshId) as { n: number };
+    const pending = db.prepare("SELECT (SELECT COUNT(*) FROM worker_bridge_delivery WHERE mesh_id=? AND state!='receipted') + (SELECT COUNT(*) FROM worker_bridge_progress_notice WHERE mesh_id=? AND state='pending') AS n").get(meshId, meshId) as { n: number };
     return { openAttempts: attempts.filter((a) => a.terminal_outcome === null).length, correctionOrLivenessHolds: holds.length, pendingDeliveries: pending.n,
         ledgerDigest: createHash('sha256').update(stableBridgeJson({ attempts, holds })).digest('hex') };
 }
@@ -219,6 +220,7 @@ export async function receiveBridgeDelivery(db: Database, raw: unknown, senderId
  * deliveries stay queryable and drain-blocking. No bodies are logged. */
 export async function resumeBridgeDeliveries(dispatch: BridgeDispatch): Promise<void> {
     const db = MeshRuntimeStore.getInstance().db;
+    (await import('./worker-report-progress.js')).resumeBridgeProgressNotices(db);
     ensureBridgeSchema(db);
     const pending = db.prepare("SELECT envelope_json FROM worker_bridge_delivery WHERE side='member' AND state!='receipted' AND (reason IS NULL OR reason!='delivery_time_expired')").all() as Array<{ envelope_json: string }>;
     for (const item of pending) await sendBridgeDelivery(db, JSON.parse(item.envelope_json), dispatch);

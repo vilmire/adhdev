@@ -39808,6 +39808,9 @@ ${error.message || ""}`;
         loggedMigrationFailureFlag = false;
       }
     });
+    function inBridgeReceiptTransaction(db) {
+      return scopes.has(db);
+    }
     function afterBridgeCommit(db, action2) {
       const pending = scopes.get(db);
       if (pending) pending.push(action2);
@@ -39940,205 +39943,195 @@ ${error.message || ""}`;
         BRIDGE_PROTOCOL = 1;
       }
     });
-    function bridgeIdentity(daemonId, statusVersion) {
-      const build = getDaemonBuildInfo();
-      return { daemonId, commit: build.commit, version: statusVersion ?? build.version };
-    }
-    function stableBridgeJson(value) {
-      if (Array.isArray(value)) return `[${value.map(stableBridgeJson).join(",")}]`;
-      if (value && typeof value === "object") return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${stableBridgeJson(value[k])}`).join(",")}}`;
-      return JSON.stringify(value) ?? "null";
-    }
-    function bridgeDigest(envelope) {
-      return (0, import_node_crypto4.createHash)("sha256").update(stableBridgeJson(envelope)).digest("hex");
-    }
-    function ensureBridgeSchema(db) {
-      db.exec(`CREATE TABLE IF NOT EXISTS worker_bridge_policy (mesh_id TEXT PRIMARY KEY, policy_json TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS worker_bridge_delivery (
-        side TEXT NOT NULL, sender_id TEXT NOT NULL, delivery_id TEXT NOT NULL,
-        mesh_id TEXT NOT NULL, envelope_json TEXT NOT NULL, digest TEXT NOT NULL,
-        state TEXT NOT NULL CHECK(state IN ('pending','quarantined','receipted')),
-        receipt_json TEXT, reason TEXT, PRIMARY KEY(side,sender_id,delivery_id));`);
-    }
-    function readBridgePolicy(db, meshId) {
-      ensureBridgeSchema(db);
-      const row2 = db.prepare("SELECT policy_json FROM worker_bridge_policy WHERE mesh_id=?").get(meshId);
-      return row2 ? JSON.parse(row2.policy_json) : null;
-    }
-    function setBridgePolicy(db, policy) {
-      if (!id22(policy.meshId) || !id22(policy.rolloutId) || typeof policy.frozen !== "boolean" || !Array.isArray(policy.builds) || !policy.builds.length || policy.builds.some((b) => !sha.test(b.commit) || !version.test(b.version))) throw new Error("invalid_bridge_policy");
-      if (policy.roster && (!id22(policy.ownerDaemonId) || !policy.roster.length || policy.roster.some((node) => !id22(node.nodeId) || !id22(node.daemonId)) || new Set(policy.roster.map((node) => node.nodeId)).size !== policy.roster.length)) throw new Error("invalid_bridge_roster");
-      const previous = readBridgePolicy(db, policy.meshId);
-      if (previous?.roster && (stableBridgeJson(previous.roster) !== stableBridgeJson(policy.roster) || previous.ownerDaemonId !== policy.ownerDaemonId)) throw new Error("bridge_roster_identity_conflict");
-      if (previous && previous.rolloutId !== policy.rolloutId) throw new Error("bridge_rollout_identity_conflict");
-      if (previous && previous.builds.some((b) => !policy.builds.some((next) => next.commit === b.commit && next.version === b.version))) throw new Error("bridge_rollback_floor_cannot_be_removed");
-      db.prepare("INSERT INTO worker_bridge_policy VALUES (?,?) ON CONFLICT(mesh_id) DO UPDATE SET policy_json=excluded.policy_json").run(policy.meshId, JSON.stringify(policy));
-    }
-    function bridgeDispatchFrozen(db, meshId) {
-      return readBridgePolicy(db, meshId)?.frozen === true;
-    }
-    function decodeBridgeEnvelope(value) {
-      if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-      const e = value;
-      const keys = ["protocol", "kind", "ownerDaemonId", "senderDaemonId", "senderCommit", "senderVersion", "meshId", "nodeId", "taskId", "sessionId", "attemptId", "generation", "deliveryId", "reportedAtMs", "payload"];
-      if (Object.keys(e).length !== keys.length || Object.keys(e).some((k) => !keys.includes(k)) || e.protocol !== BRIDGE_PROTOCOL || !["report", "progress", "refusal"].includes(e.kind) || ![e.ownerDaemonId, e.senderDaemonId, e.meshId, e.nodeId, e.taskId, e.sessionId, e.attemptId].every(id22) || !sha.test(e.senderCommit) || !version.test(e.senderVersion) || !Number.isSafeInteger(e.generation) || e.generation < 0 || normalizeWorkerDeliveryId(e.deliveryId) !== e.deliveryId || !Number.isSafeInteger(e.reportedAtMs) || e.reportedAtMs <= 0 || !e.payload || typeof e.payload !== "object" || Array.isArray(e.payload)) return null;
-      return e;
-    }
-    function admitted(policy, identity2) {
-      return policy.builds.some((b) => b.commit === identity2.commit && b.version === identity2.version);
-    }
-    function bridgeCapability(db, self, meshId, nonce) {
-      const policy = readBridgePolicy(db, meshId);
-      if (!policy || !admitted(policy, self) || !id22(nonce)) return { success: false, error: "worker_protocol_unsupported" };
-      const open = db.prepare("SELECT COUNT(*) AS n FROM turn_attempts WHERE mesh_id=? AND terminal_outcome IS NULL").get(meshId);
-      const holds = db.prepare("SELECT COUNT(*) AS n FROM turn_holds h JOIN turn_attempts a ON a.attempt_id=h.attempt_id WHERE a.mesh_id=? AND h.status='active'").get(meshId);
-      const pending = db.prepare("SELECT COUNT(*) AS n FROM worker_bridge_delivery WHERE mesh_id=? AND state!='receipted'").get(meshId);
-      return { success: true, protocol: BRIDGE_PROTOCOL, ...self, meshId, nonce, rolloutId: policy.rolloutId, frozen: policy.frozen, openAttempts: open.n, correctionOrLivenessHolds: holds.n, pendingDeliveries: pending.n };
-    }
-    function bridgeDrainState(db, meshId) {
-      ensureBridgeSchema(db);
-      const attempts = db.prepare("SELECT attempt_id,scope,task_id,node_id,session_id,owner_daemon_id,generation,terminal_outcome,terminal_source,terminal_strength,terminal_at FROM turn_attempts WHERE mesh_id=? ORDER BY attempt_id").all(meshId);
-      const holds = db.prepare("SELECT h.hold_id,h.generation,h.reason,h.on_expire,h.status,h.until_ms FROM turn_holds h JOIN turn_attempts a ON a.attempt_id=h.attempt_id WHERE a.mesh_id=? AND h.status='active' ORDER BY h.hold_id").all(meshId);
-      const pending = db.prepare("SELECT COUNT(*) AS n FROM worker_bridge_delivery WHERE mesh_id=? AND state!='receipted'").get(meshId);
+    var worker_handoff_notes_exports = {};
+    __export2(worker_handoff_notes_exports, {
+      HANDOFF_ENCLOSE_MAX_BYTES: () => HANDOFF_ENCLOSE_MAX_BYTES,
+      HANDOFF_ENCLOSE_MAX_NOTES: () => HANDOFF_ENCLOSE_MAX_NOTES,
+      HANDOFF_RETENTION_DAYS: () => HANDOFF_RETENTION_DAYS,
+      HANDOFF_RETENTION_MS: () => HANDOFF_RETENTION_MS,
+      composeTaskDispatchBody: () => composeTaskDispatchBody,
+      getStoredHandoffNote: () => getStoredHandoffNote,
+      pruneExpiredHandoffNotes: () => pruneExpiredHandoffNotes,
+      renderHandoffNotesBlock: () => renderHandoffNotesBlock,
+      selectRelevantHandoffNotes: () => selectRelevantHandoffNotes,
+      storeHandoffNote: () => storeHandoffNote
+    });
+    function loadNoteText(meshId, taskId) {
+      let row2;
+      try {
+        row2 = MeshRuntimeStore.getInstance().getHandoffNoteText(meshId, taskId);
+      } catch (e) {
+        LOG.warn("HandoffNotes", `Handoff note text lookup failed for task ${taskId}: ${e?.message || e}`);
+        return null;
+      }
+      if (!row2) return null;
+      let notes;
+      try {
+        notes = JSON.parse(row2.notesJson);
+      } catch (e) {
+        LOG.warn("HandoffNotes", `Handoff note text for task ${taskId} is unparseable: ${e?.message || e}`);
+        return null;
+      }
+      if (!notes?.intent || !Array.isArray(notes.touchedFiles)) return null;
       return {
-        openAttempts: attempts.filter((a) => a.terminal_outcome === null).length,
-        correctionOrLivenessHolds: holds.length,
-        pendingDeliveries: pending.n,
-        ledgerDigest: (0, import_node_crypto4.createHash)("sha256").update(stableBridgeJson({ attempts, holds })).digest("hex")
+        meshId: row2.meshId,
+        taskId: row2.taskId,
+        ...row2.attemptId ? { attemptId: row2.attemptId } : {},
+        ...row2.nodeId ? { nodeId: row2.nodeId } : {},
+        notes,
+        recordedAtIso: row2.recordedAt
       };
     }
-    function findBridgeMemberDelivery(db, senderId, deliveryId) {
-      ensureBridgeSchema(db);
-      const saved = row(db, "member", senderId, deliveryId);
-      return saved ? JSON.parse(saved.envelope_json) : null;
+    function storeHandoffNote(note2) {
+      MeshRuntimeStore.getInstance().upsertHandoffNoteText({
+        meshId: note2.meshId,
+        taskId: note2.taskId,
+        ...note2.attemptId ? { attemptId: note2.attemptId } : {},
+        ...note2.nodeId ? { nodeId: note2.nodeId } : {},
+        notesJson: JSON.stringify(note2.notes),
+        recordedAt: note2.recordedAtIso
+      });
     }
-    function commitLocalBridgeDelivery(db, e, apply) {
-      ensureBridgeSchema(db);
-      const prior = row(db, "local", e.senderDaemonId, e.deliveryId);
-      if (prior) {
-        const original = JSON.parse(prior.envelope_json);
-        if (stableBridgeJson({ ...e, senderCommit: original.senderCommit, senderVersion: original.senderVersion }) !== stableBridgeJson(original)) return { success: false, error: "worker_delivery_identity_conflict" };
-        e = original;
-      }
-      if (prior && prior.digest !== bridgeDigest(e)) return { success: false, error: "worker_delivery_identity_conflict" };
+    function getStoredHandoffNote(meshId, taskId) {
+      return loadNoteText(meshId, taskId);
+    }
+    function selectRelevantHandoffNotes(input) {
+      const store2 = MeshRuntimeStore.getInstance();
+      let rows;
       try {
-        return bridgeReceiptTransaction(db, () => {
-          const saved = put(db, "local", e);
-          if (saved.receipt_json) return JSON.parse(saved.receipt_json);
-          const reply = apply();
-          if (["storage_failed", "forward_failed", "worker_protocol_unsupported"].includes(String(reply.error))) throw new Error("bridge_apply_not_durable");
-          if (reply.success !== true && !(reply.error === "invalid_report" && reply.receipt?.recorded === true)) return reply;
-          db.prepare("UPDATE worker_bridge_delivery SET state='receipted',receipt_json=? WHERE side='local' AND sender_id=? AND delivery_id=?").run(JSON.stringify(reply), e.senderDaemonId, e.deliveryId);
-          return reply;
-        });
-      } catch {
-        return { success: false, error: "storage_failed" };
+        rows = store2.turnStore().listWorkerEventsByKind(input.meshId, WORKER_HANDOFF_EVENT_KIND, 200);
+      } catch (e) {
+        LOG.warn("HandoffNotes", `Handoff note lookup failed for mesh ${input.meshId}: ${e?.message || e}`);
+        return [];
       }
-    }
-    async function queryBridgePeer(dispatch2, peerId, meshId, policy) {
-      const nonce = (0, import_node_crypto4.randomUUID)();
-      const reply = unwrapMeshRelayResult(await dispatch2(peerId, BRIDGE_CAPABILITY_COMMAND, { meshId, nonce }), { command: BRIDGE_CAPABILITY_COMMAND, peerDaemonId: peerId });
-      const valid = reply.success === true && reply.protocol === BRIDGE_PROTOCOL && reply.meshId === meshId && reply.nonce === nonce && reply.rolloutId === policy.rolloutId && typeof reply.daemonId === "string" && daemonIdsEquivalent4(reply.daemonId, peerId) && admitted(policy, reply);
-      return valid ? reply : null;
-    }
-    function row(db, side, senderId, deliveryId) {
-      return db.prepare("SELECT * FROM worker_bridge_delivery WHERE side=? AND sender_id=? AND delivery_id=?").get(side, senderId, deliveryId);
-    }
-    function put(db, side, envelope) {
-      ensureBridgeSchema(db);
-      const digest = bridgeDigest(envelope), existing = row(db, side, envelope.senderDaemonId, envelope.deliveryId);
-      if (existing) {
-        if (existing.digest !== digest) throw new Error("worker_delivery_identity_conflict");
-        return existing;
+      const wantedFiles = new Set((input.touchedFiles || []).map(normalizeFilePath).filter(Boolean));
+      const cutoffMs = (input.nowMs ?? Date.now()) - HANDOFF_RETENTION_MS;
+      const byFiles = [];
+      const byMission = [];
+      const byBranch = [];
+      const seenTasks = /* @__PURE__ */ new Set([input.taskId]);
+      for (const row2 of rows) {
+        if (seenTasks.has(row2.taskId)) continue;
+        const recordedMs = row2.atMs;
+        if (Number.isFinite(recordedMs) && recordedMs < cutoffMs) continue;
+        const stored = loadNoteText(input.meshId, row2.taskId);
+        if (!stored) {
+          LOG.debug("HandoffNotes", `Handoff note index row for task ${row2.taskId} has no local text \u2014 peer-originated note, skipping enclosure.`);
+          continue;
+        }
+        const meta = row2.payload;
+        const noteFiles = Array.isArray(meta.touchedFiles) ? meta.touchedFiles.filter((f) => typeof f === "string") : stored.notes.touchedFiles;
+        const overlap = wantedFiles.size ? noteFiles.filter((f) => wantedFiles.has(normalizeFilePath(f))) : [];
+        if (overlap.length) {
+          seenTasks.add(row2.taskId);
+          byFiles.push({ ...stored, reason: "touched_files", overlap });
+          continue;
+        }
+        if (input.missionId && input.lookupMissionId?.(row2.taskId) === input.missionId) {
+          seenTasks.add(row2.taskId);
+          byMission.push({ ...stored, reason: "same_mission" });
+          continue;
+        }
+        if (input.branch && input.lookupBranch?.(row2.taskId) === input.branch) {
+          seenTasks.add(row2.taskId);
+          byBranch.push({ ...stored, reason: "same_branch" });
+        }
       }
-      db.prepare("INSERT INTO worker_bridge_delivery(side,sender_id,delivery_id,mesh_id,envelope_json,digest,state) VALUES (?,?,?,?,?,?,'pending')").run(side, envelope.senderDaemonId, envelope.deliveryId, envelope.meshId, stableBridgeJson(envelope), digest);
-      return row(db, side, envelope.senderDaemonId, envelope.deliveryId);
+      return [...byFiles, ...byMission, ...byBranch];
     }
-    function quarantine(db, e, reason) {
-      db.prepare("UPDATE worker_bridge_delivery SET state='quarantined',reason=? WHERE side='member' AND sender_id=? AND delivery_id=?").run(reason, e.senderDaemonId, e.deliveryId);
-      return { success: false, error: "worker_protocol_unsupported", quarantined: true, deliveryId: e.deliveryId, envelopeDigest: bridgeDigest(e), reason };
+    function normalizeFilePath(value) {
+      return String(value || "").trim().replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase();
     }
-    async function sendBridgeDelivery(db, e, dispatch2, nowMs2 = Date.now()) {
-      if (!decodeBridgeEnvelope(e)) return { success: false, error: "worker_protocol_provenance_required" };
-      const saved = put(db, "member", e);
-      if (saved.receipt_json) return JSON.parse(saved.receipt_json);
-      if (nowMs2 - e.reportedAtMs > BRIDGE_MAX_AGE_MS || e.reportedAtMs > nowMs2 + 6e4) return quarantine(db, e, "delivery_time_expired");
-      const policy = readBridgePolicy(db, e.meshId);
-      if (!policy || !admitted(policy, { daemonId: e.senderDaemonId, commit: e.senderCommit, version: e.senderVersion })) return quarantine(db, e, "build_not_admitted");
+    function renderHandoffNotesBlock(notes, opts = {}) {
+      if (!notes.length) return null;
+      const maxNotes = opts.maxNotes ?? HANDOFF_ENCLOSE_MAX_NOTES;
+      const maxBytes = opts.maxBytes ?? HANDOFF_ENCLOSE_MAX_BYTES;
+      const header = "## Handoff notes from related work\n\n_Left by earlier agents whose changes overlap yours. They cannot be asked follow-up questions._\n";
+      const parts = [];
+      let used = Buffer.byteLength(header, "utf8");
+      let included = 0;
+      for (const note2 of notes) {
+        if (included >= maxNotes) break;
+        const rendered = renderOneNote(note2);
+        const cost = Buffer.byteLength(rendered, "utf8");
+        if (included > 0 && used + cost > maxBytes) break;
+        parts.push(rendered);
+        used += cost;
+        included += 1;
+      }
+      const omitted = notes.length - included;
+      const omissionLine = omitted > 0 ? `
+_${omitted} further related note(s) omitted to fit the enclosure budget \u2014 the most relevant are shown first._
+` : "";
+      return { text: `${header}${parts.join("")}${omissionLine}`, included, omitted };
+    }
+    function renderOneNote(note2) {
+      const why = note2.reason === "touched_files" ? `overlapping files: ${(note2.overlap || []).join(", ")}` : note2.reason === "same_mission" ? "same mission" : "same branch";
+      const lines = [`
+### From task ${note2.taskId} (${why})
+`];
+      lines.push(`- **Intent:** ${note2.notes.intent}
+`);
+      if (note2.notes.conflictGuidance) {
+        lines.push(`- **If you conflict with this:** ${note2.notes.conflictGuidance}
+`);
+      }
+      if (note2.notes.touchedFiles.length) {
+        lines.push(`- **Touched:** ${note2.notes.touchedFiles.join(", ")}
+`);
+      }
+      if (note2.notes.followUps?.length) {
+        lines.push(`- **Left undone:** ${note2.notes.followUps.join("; ")}
+`);
+      }
+      return lines.join("");
+    }
+    function composeTaskDispatchBody(message, input) {
+      let selected = [];
       try {
-        if (!await queryBridgePeer(dispatch2, e.ownerDaemonId, e.meshId, policy)) return quarantine(db, e, "owner_capability_unconfirmed");
-        const reply = unwrapMeshRelayResult(await dispatch2(e.ownerDaemonId, BRIDGE_DELIVERY_COMMAND, { meshId: e.meshId, envelope: e }), { command: BRIDGE_DELIVERY_COMMAND, peerDaemonId: e.ownerDaemonId });
-        const receipt = reply.deliveryReceipt;
-        if (!receipt || receipt.digest !== saved.digest || receipt.deliveryId !== e.deliveryId || receipt.protocol !== BRIDGE_PROTOCOL || receipt.ownerDaemonId !== e.ownerDaemonId || receipt.taskId !== e.taskId || receipt.attemptId !== e.attemptId || receipt.generation !== e.generation || receipt.sessionId !== e.sessionId || receipt.senderDaemonId !== e.senderDaemonId) return quarantine(db, e, "owner_receipt_unconfirmed");
-        db.prepare("UPDATE worker_bridge_delivery SET state='receipted',receipt_json=?,reason=NULL WHERE side='member' AND sender_id=? AND delivery_id=?").run(JSON.stringify(reply), e.senderDaemonId, e.deliveryId);
-        return reply;
-      } catch {
-        return { success: false, error: "forward_failed", deliveryId: e.deliveryId };
+        selected = selectRelevantHandoffNotes(input);
+      } catch (e) {
+        LOG.warn("HandoffNotes", `Handoff selection failed for task ${input.taskId}: ${e?.message || e}`);
+        return { body: message, enclosedNotes: 0, omittedNotes: 0 };
       }
+      const block2 = renderHandoffNotesBlock(selected);
+      if (!block2) return { body: message, enclosedNotes: 0, omittedNotes: 0 };
+      return {
+        body: `${message}
+
+---
+
+${block2.text}`,
+        enclosedNotes: block2.included,
+        omittedNotes: block2.omitted
+      };
     }
-    async function receiveBridgeDelivery(db, raw, senderId, self, dispatch2, apply, nowMs2 = Date.now()) {
-      const e = decodeBridgeEnvelope(raw);
-      if (!e || !daemonIdsEquivalent4(e.senderDaemonId, senderId) || !daemonIdsEquivalent4(e.ownerDaemonId, self.daemonId)) return { success: false, error: "invalid_worker_bridge_envelope" };
-      const policy = readBridgePolicy(db, e.meshId);
-      if (!policy || !admitted(policy, self) || !admitted(policy, { daemonId: senderId, commit: e.senderCommit, version: e.senderVersion })) return { success: false, error: "worker_protocol_unsupported" };
+    function pruneExpiredHandoffNotes(nowMs2 = Date.now()) {
+      const cutoffIso = new Date(nowMs2 - HANDOFF_RETENTION_MS).toISOString();
+      let removed = 0;
       try {
-        if (!await queryBridgePeer(dispatch2, senderId, e.meshId, policy)) return { success: false, error: "worker_protocol_unsupported" };
-        return bridgeReceiptTransaction(db, () => {
-          const saved = put(db, "owner", e);
-          if (saved.receipt_json) return JSON.parse(saved.receipt_json);
-          if (nowMs2 - e.reportedAtMs > BRIDGE_MAX_AGE_MS || e.reportedAtMs > nowMs2 + 6e4) return { success: false, error: "stale_report" };
-          const reply = apply(e);
-          if (["storage_failed", "forward_failed", "worker_protocol_unsupported"].includes(String(reply.error))) throw new Error("bridge_apply_not_durable");
-          const receipt = {
-            protocol: BRIDGE_PROTOCOL,
-            digest: saved.digest,
-            deliveryId: e.deliveryId,
-            ownerDaemonId: e.ownerDaemonId,
-            senderDaemonId: e.senderDaemonId,
-            taskId: e.taskId,
-            attemptId: e.attemptId,
-            generation: e.generation,
-            sessionId: e.sessionId
-          };
-          const answer = { ...reply, deliveryReceipt: receipt };
-          db.prepare("UPDATE worker_bridge_delivery SET state='receipted',receipt_json=? WHERE side='owner' AND sender_id=? AND delivery_id=?").run(JSON.stringify(answer), e.senderDaemonId, e.deliveryId);
-          return answer;
-        });
-      } catch {
-        return { success: false, error: "storage_failed" };
+        const store2 = MeshRuntimeStore.getInstance();
+        removed = store2.turnStore().deleteWorkerEventsOlderThan(WORKER_HANDOFF_EVENT_KIND, nowMs2 - HANDOFF_RETENTION_MS);
+        store2.deleteHandoffNoteTextOlderThan(cutoffIso);
+      } catch (e) {
+        LOG.warn("HandoffNotes", `Handoff retention sweep failed: ${e?.message || e}`);
       }
+      return removed;
     }
-    async function resumeBridgeDeliveries(dispatch2) {
-      const db = MeshRuntimeStore.getInstance().db;
-      ensureBridgeSchema(db);
-      const pending = db.prepare("SELECT envelope_json FROM worker_bridge_delivery WHERE side='member' AND state!='receipted' AND (reason IS NULL OR reason!='delivery_time_expired')").all();
-      for (const item of pending) await sendBridgeDelivery(db, JSON.parse(item.envelope_json), dispatch2);
-    }
-    var import_node_crypto4;
-    var BRIDGE_CAPABILITY_COMMAND;
-    var BRIDGE_DELIVERY_COMMAND;
-    var BRIDGE_MAX_AGE_MS;
-    var sha;
-    var version;
-    var id22;
-    var init_worker_bridge = __esm2({
-      "src/mesh/worker-bridge.ts"() {
+    var HANDOFF_RETENTION_DAYS;
+    var HANDOFF_RETENTION_MS;
+    var HANDOFF_ENCLOSE_MAX_NOTES;
+    var HANDOFF_ENCLOSE_MAX_BYTES;
+    var init_worker_handoff_notes = __esm2({
+      "src/mesh/worker-handoff-notes.ts"() {
         "use strict";
-        init_worker_bridge_transaction();
-        import_node_crypto4 = require("crypto");
-        init_dist();
+        init_logger();
         init_mesh_runtime_store();
-        init_build_info();
-        init_worker_report_idempotency();
-        init_mesh_relay_result();
-        init_worker_bridge_protocol();
-        init_worker_bridge_protocol();
-        BRIDGE_CAPABILITY_COMMAND = "worker_bridge_capabilities";
-        BRIDGE_DELIVERY_COMMAND = "worker_bridge_delivery";
-        BRIDGE_MAX_AGE_MS = 2 * 60 * 60 * 1e3;
-        sha = /^[a-f0-9]{40}$/;
-        version = /^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/;
-        id22 = (v) => typeof v === "string" && !!v.trim() && v === v.trim();
+        init_worker_report();
+        HANDOFF_RETENTION_DAYS = 30;
+        HANDOFF_RETENTION_MS = HANDOFF_RETENTION_DAYS * 24 * 60 * 60 * 1e3;
+        HANDOFF_ENCLOSE_MAX_NOTES = 5;
+        HANDOFF_ENCLOSE_MAX_BYTES = 8 * 1024;
       }
     });
     function key(meshId, taskId) {
@@ -41383,16 +41376,16 @@ ${pattern}
       }
     });
     function sha256Hex(input) {
-      return (0, import_node_crypto22.createHash)("sha256").update(input).digest("hex");
+      return (0, import_node_crypto4.createHash)("sha256").update(input).digest("hex");
     }
     function shortHash(input, length = 16) {
       return sha256Hex(input).slice(0, length);
     }
-    var import_node_crypto22;
+    var import_node_crypto4;
     var init_hash = __esm2({
       "src/system/hash.ts"() {
         "use strict";
-        import_node_crypto22 = require("crypto");
+        import_node_crypto4 = require("crypto");
       }
     });
     function materializeWorkerHomeLink(source2, target) {
@@ -56944,6 +56937,1385 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         };
       }
     });
+    function observeAcceptedWorkerReport(ledger, report) {
+      const attempt = report.attemptId ? ledger.getAttempt(report.attemptId) : ledger.store.findLatestAttemptForTask(report.meshId, report.taskId);
+      if (!attempt || attempt.taskId !== report.taskId) return null;
+      const evidence = {
+        eventId: `worker_report:${attempt.attemptId}:g${attempt.generation}:${report.outcome}`,
+        at: report.atMs,
+        source: "worker_tool",
+        sessionId: report.sessionId ?? attempt.sessionId,
+        attemptRef: { attemptId: attempt.attemptId, generation: attempt.generation },
+        taskId: report.taskId,
+        observedBy: ledger.selfDaemonId,
+        kind: "worker_report",
+        outcome: report.outcome,
+        hasHandoffNotes: report.hasHandoffNotes,
+        ...typeof report.touchedFileCount === "number" ? { touchedFileCount: report.touchedFileCount } : {},
+        ...report.branchState ? { branchState: report.branchState } : {}
+      };
+      return ledger.observe(evidence, { envelope: { finalSummary: report.summary } });
+    }
+    var init_worker_report_evidence = __esm2({
+      "src/mesh/turn-ledger/worker-report-evidence.ts"() {
+        "use strict";
+      }
+    });
+    function resolveRecentlyTerminalAttempt(meshId, sessionId, nowMs2, isSelfDaemon, reportedAtMs) {
+      try {
+        const turns = MeshRuntimeStore.getInstance().turnStore();
+        const attempt = reportedAtMs !== void 0 ? turns.findMeshAttemptForSessionAt(sessionId, reportedAtMs) : turns.findPresentationAttemptForSession(sessionId)?.attempt;
+        if (!attempt?.terminal || attempt.meshId !== meshId || !attempt.taskId) return null;
+        if (!sessionIdsEquivalent(attempt.sessionId, sessionId)) return null;
+        if (isSelfDaemon && !isSelfDaemon(attempt.ownerDaemonId)) return null;
+        if (reportedAtMs !== void 0) {
+          if (reportedAtMs - attempt.terminal.at > WORKER_LATE_REPORT_GRACE_MS) return null;
+        } else {
+          const age = nowMs2 - attempt.terminal.at;
+          if (!(age >= 0 && age <= WORKER_LATE_REPORT_GRACE_MS)) return null;
+        }
+        if (turns.findLatestAttemptForTask(meshId, attempt.taskId)?.attemptId !== attempt.attemptId) return null;
+        return {
+          attemptId: attempt.attemptId,
+          taskId: attempt.taskId,
+          ...attempt.nodeId ? { nodeId: attempt.nodeId } : {},
+          terminalOutcome: attempt.terminal.outcome,
+          terminalAtMs: attempt.terminal.at
+        };
+      } catch {
+        return null;
+      }
+    }
+    function resolveLateWorkerIdentity(credential, nowMs2 = Date.now(), isSelfDaemon, reportedAtMs) {
+      const binding = verifyWorkerSessionBind(credential.bind);
+      if (!binding) return null;
+      const attempt = resolveRecentlyTerminalAttempt(binding.meshId, binding.sessionId, nowMs2, isSelfDaemon, reportedAtMs);
+      if (!attempt) return null;
+      const nodeId = attempt.nodeId || binding.nodeId;
+      return {
+        token: "",
+        meshId: binding.meshId,
+        taskId: attempt.taskId,
+        attemptId: attempt.attemptId,
+        sessionId: binding.sessionId,
+        ...nodeId ? { nodeId } : {},
+        terminalOutcome: attempt.terminalOutcome,
+        terminalAtMs: attempt.terminalAtMs
+      };
+    }
+    function buildWorkerLateReportNotice(opts) {
+      const r = opts.report;
+      const parts = [
+        `[System] ${opts.nodeLabel} filed its structured report for task ${opts.taskId} AFTER the task was already marked ${opts.terminalOutcome} \u2014 reported outcome: ${r.outcome}.`,
+        `Summary: ${r.summary}`
+      ];
+      if (r.blockers?.length) parts.push(`Blockers: ${r.blockers.join("; ")}`);
+      if (r.branchState) parts.push(`Branch state: ${r.branchState}`);
+      if (r.handoffNotes) parts.push(`Handoff intent: ${r.handoffNotes.intent}`);
+      const agrees = r.outcome === "completed" === (opts.terminalOutcome === "completed");
+      parts.push(agrees ? "This supersedes the earlier completion summary for the same turn; the task state is unchanged." : `\u2605The reported outcome differs from the recorded terminal (${opts.terminalOutcome}); the task state was NOT changed \u2014 decide whether follow-up work is needed.`);
+      return parts.join("\n");
+    }
+    function acceptLateWorkerCompletionReport(identity2, report, nowMs2) {
+      const attempt = MeshRuntimeStore.getInstance().turnStore().getAttempt(identity2.attemptId);
+      if (attempt?.terminal && ["report_correction_expired", "weak_end_liveness_unconfirmed", "weak_end_probe_unobserved"].includes(attempt.terminal.reason)) {
+        return { accepted: false, refusal: "correction_too_late", detail: "The bounded report/probe recovery window ended; this attempt remains failed. The report was not accepted as a recovery." };
+      }
+      const taskModeError = checkReportAgainstTaskMode(identity2, report);
+      if (taskModeError) return { accepted: false, refusal: "invalid_for_task_mode", detail: taskModeError };
+      const nowIso = new Date(nowMs2).toISOString();
+      const turns = MeshRuntimeStore.getInstance().turnStore();
+      REPORTED_SUMMARY_STORE.set(summaryKey(identity2.meshId, identity2.taskId), { summary: report.summary, recordedAtMs: nowMs2 });
+      let inserted = false;
+      try {
+        inserted = turns.insertWorkerEvent({
+          eventId: (0, import_crypto12.randomUUID)(),
+          attemptId: identity2.attemptId,
+          sessionId: identity2.sessionId || null,
+          kind: WORKER_REPORT_EVENT_KIND,
+          dedupeKey: report.outcome,
+          payload: {
+            outcome: report.outcome,
+            summaryLength: report.summary.length,
+            touchedFileCount: report.touchedFiles?.length ?? 0,
+            blockerCount: report.blockers?.length ?? 0,
+            hasHandoffNotes: !!report.handoffNotes,
+            ...report.branchState ? { branchState: report.branchState } : {},
+            late: true,
+            terminalOutcome: identity2.terminalOutcome,
+            lateByMs: Math.max(0, nowMs2 - identity2.terminalAtMs)
+          },
+          atMs: nowMs2
+        });
+      } catch (e) {
+        LOG.error("WorkerReport", `Failed to record late report evidence for task ${identity2.taskId}: ${e?.message || e}`);
+        return { accepted: false, refusal: "storage_failed", detail: `could not persist the report evidence row for task ${identity2.taskId}` };
+      }
+      const duplicate = !inserted;
+      let handoffNoteRecorded = false;
+      let handoffNoteError = null;
+      if (report.handoffNotes && !duplicate) {
+        const noteResult = recordHandoffNote(identity2, report.handoffNotes, nowMs2, nowIso);
+        handoffNoteRecorded = noteResult.recorded;
+        handoffNoteError = noteResult.error;
+      } else if (report.handoffNotes) {
+        handoffNoteRecorded = true;
+      }
+      if (!duplicate) {
+        const sink2 = lateNoticeSinkOverride === void 0 ? queueWorkerLateReportNotice : lateNoticeSinkOverride;
+        if (sink2) {
+          try {
+            sink2({
+              meshId: identity2.meshId,
+              taskId: identity2.taskId,
+              attemptId: identity2.attemptId,
+              ...identity2.nodeId ? { nodeId: identity2.nodeId } : {},
+              ...identity2.sessionId ? { sessionId: identity2.sessionId } : {},
+              coordinatorMessage: buildWorkerLateReportNotice({
+                taskId: identity2.taskId,
+                nodeLabel: identity2.nodeId || identity2.sessionId || identity2.taskId,
+                terminalOutcome: identity2.terminalOutcome,
+                report
+              }),
+              nowMs: nowMs2
+            });
+          } catch (e) {
+            LOG.warn("WorkerReport", `Failed to queue late-report notice for task ${identity2.taskId}: ${e?.message || e}`);
+          }
+        }
+      }
+      LOG.info(
+        "WorkerReport",
+        `Accepted LATE ${report.outcome} report for task ${identity2.taskId} attempt ${identity2.attemptId} (already ${identity2.terminalOutcome} ${Math.round((nowMs2 - identity2.terminalAtMs) / 1e3)}s ago)` + (duplicate ? " (duplicate replay)" : "") + (handoffNoteRecorded ? " with handoff note" : "")
+      );
+      return {
+        accepted: true,
+        taskId: identity2.taskId,
+        attemptId: identity2.attemptId,
+        outcome: report.outcome,
+        duplicate,
+        handoffNoteRecorded,
+        ...handoffNoteError ? { handoffNoteError } : {},
+        late: { terminalOutcome: identity2.terminalOutcome }
+      };
+    }
+    var import_crypto12;
+    var WORKER_LATE_REPORT_GRACE_MS;
+    var WORKER_LATE_REPORT_EVENT_NAME;
+    var lateNoticeSinkOverride;
+    var queueWorkerLateReportNotice;
+    var init_worker_report_late = __esm2({
+      "src/mesh/worker-report-late.ts"() {
+        "use strict";
+        init_worker_mcp_isolation();
+        init_mesh_runtime_store();
+        init_dist();
+        init_deliver();
+        init_worker_report();
+        import_crypto12 = require("crypto");
+        init_logger();
+        WORKER_LATE_REPORT_GRACE_MS = 15 * 60 * 1e3;
+        WORKER_LATE_REPORT_EVENT_NAME = "mesh:worker_late_report";
+        queueWorkerLateReportNotice = (notice) => {
+          let targetCoordinatorSessionId = "";
+          try {
+            const task = MeshRuntimeStore.getInstance().findQueueEntryById(notice.meshId, notice.taskId);
+            const sid = task?.sourceCoordinatorSessionId;
+            if (typeof sid === "string" && sid.trim()) targetCoordinatorSessionId = sid.trim();
+          } catch {
+          }
+          notifyMeshCoordinator({
+            event: WORKER_LATE_REPORT_EVENT_NAME,
+            meshId: notice.meshId,
+            nodeLabel: notice.nodeId || notice.sessionId || notice.taskId,
+            ...notice.nodeId ? { nodeId: notice.nodeId } : {},
+            metadataEvent: {
+              source: WORKER_REPORT_EVENT_KIND,
+              taskId: notice.taskId,
+              attemptId: notice.attemptId,
+              ...notice.sessionId ? { sessionId: notice.sessionId } : {},
+              // Never terminal: the ledger already committed; this is evidence.
+              terminal: false,
+              coordinatorMessage: notice.coordinatorMessage
+            },
+            coordinatorMessage: notice.coordinatorMessage,
+            // One notice per attempt, however often the worker re-calls.
+            eventId: `worker_late_report:${notice.attemptId}`,
+            queuedAt: notice.nowMs,
+            ...targetCoordinatorSessionId ? { targetCoordinatorSessionId } : {}
+          });
+        };
+      }
+    });
+    var worker_report_exports = {};
+    __export2(worker_report_exports, {
+      REPORTED_SUMMARY_STORE: () => REPORTED_SUMMARY_STORE,
+      WORKER_BRANCH_STATES: () => WORKER_BRANCH_STATES2,
+      WORKER_HANDOFF_EVENT_KIND: () => WORKER_HANDOFF_EVENT_KIND,
+      WORKER_PROGRESS_EVENT_KIND: () => WORKER_PROGRESS_EVENT_KIND,
+      WORKER_REPORT_EVENT_KIND: () => WORKER_REPORT_EVENT_KIND,
+      WORKER_REPORT_MAX_DELIVERY_DELAY_MS: () => WORKER_REPORT_MAX_DELIVERY_DELAY_MS,
+      WORKER_REPORT_REFUSED_EVENT_KIND: () => WORKER_REPORT_REFUSED_EVENT_KIND,
+      __resetReportedSummariesForTest: () => __resetReportedSummariesForTest,
+      __setHandoffNoteSinkForTests: () => __setHandoffNoteSinkForTests,
+      acceptWorkerCompletionReport: () => acceptWorkerCompletionReport,
+      acceptWorkerCompletionReportForIdentity: () => acceptWorkerCompletionReportForIdentity,
+      checkReportAgainstTaskMode: () => checkReportAgainstTaskMode,
+      classifyUnresolvedWorkerCredential: () => classifyUnresolvedWorkerCredential,
+      fenceWorkerReportOnLedger: () => fenceWorkerReportOnLedger,
+      findPriorWorkerReport: () => findPriorWorkerReport,
+      hasLocalWorkerIdentity: () => hasLocalWorkerIdentity,
+      normalizeWorkerReportedAtMs: () => normalizeWorkerReportedAtMs,
+      recordHandoffNote: () => recordHandoffNote,
+      recordRefusedWorkerReport: () => recordRefusedWorkerReport,
+      recordRefusedWorkerReportForIdentity: () => recordRefusedWorkerReportForIdentity,
+      resolveWorkerIdentity: () => resolveWorkerIdentity,
+      safeRefusalFields: () => safeRefusalFields,
+      summaryKey: () => summaryKey,
+      workerIdentityPostdates: () => workerIdentityPostdates
+    });
+    function findPriorWorkerReport(meshId, taskId) {
+      if (!meshId || !taskId) return null;
+      let rows;
+      try {
+        rows = MeshRuntimeStore.getInstance().turnStore().listWorkerEventsForTask(meshId, taskId, WORKER_REPORT_EVENT_KIND);
+      } catch {
+        return null;
+      }
+      const row2 = rows.pop();
+      if (!row2 || !row2.attemptId) return null;
+      const payload = row2.payload;
+      const outcome = payload.outcome === "completed" || payload.outcome === "blocked" || payload.outcome === "failed" ? payload.outcome : "completed";
+      const summary = readReportedSummary(meshId, taskId);
+      return {
+        taskId,
+        attemptId: row2.attemptId,
+        outcome,
+        ...summary ? { summary } : {},
+        recordedAt: new Date(row2.atMs).toISOString()
+      };
+    }
+    function summaryKey(meshId, taskId) {
+      return `${meshId}\0${taskId}`;
+    }
+    function readReportedSummary(meshId, taskId) {
+      return REPORTED_SUMMARY_STORE.get(summaryKey(meshId, taskId))?.summary;
+    }
+    function __resetReportedSummariesForTest() {
+      REPORTED_SUMMARY_STORE.clear();
+    }
+    function resolveWorkerIdentity(credential) {
+      const direct = verifyWorkerTaskToken(credential.token);
+      if (direct) {
+        return {
+          token: direct.token,
+          meshId: direct.meshId,
+          taskId: direct.taskId,
+          ...direct.attemptId ? { attemptId: direct.attemptId } : {},
+          sessionId: direct.sessionId || "",
+          ...direct.nodeId ? { nodeId: direct.nodeId } : {}
+        };
+      }
+      return exchangeWorkerSessionBind(credential.bind, resolveCurrentTaskForSession);
+    }
+    function classifyUnresolvedWorkerCredential(credential) {
+      const bind = typeof credential.bind === "string" ? credential.bind.trim() : "";
+      if (!bind) return { refusal: "unauthenticated", detail: "no worker session bind or task token was presented" };
+      const bindRef = hashWorkerSessionBind(bind).slice(0, 12);
+      if (!bind.startsWith(WORKER_BIND_CANARY_PREFIX)) return { refusal: "unauthenticated", bindRef };
+      const { status } = workerSessionBindStatus(bind);
+      switch (status) {
+        case "unknown":
+          return {
+            refusal: "bind_unknown_after_restart",
+            detail: "this daemon has no record of the worker session bind (not live, not persisted) \u2014 it was minted before a daemon restart that did not carry it over; the running worker cannot learn a new bind, so relaunch this worker session (stop it and launch a fresh worker)",
+            bindRef
+          };
+        case "session_not_live":
+          return { refusal: "unauthenticated", detail: "the bind is known, but its session is not live on this daemon", bindRef };
+        case "revoked":
+          return { refusal: "unauthenticated", detail: "the bind was revoked (session ended, reclaimed, or re-spawned)", bindRef };
+        default:
+          return { refusal: "unauthenticated", detail: "the bind is live, but its session holds no assigned task here", bindRef };
+      }
+    }
+    function resolveCurrentTaskForSession(meshId, sessionId) {
+      try {
+        const store2 = MeshRuntimeStore.getInstance();
+        const entry = store2.findAssignedBySession(meshId, sessionId);
+        if (!entry?.id) return null;
+        let attemptId = entry.attemptId || void 0;
+        if (!attemptId) {
+          try {
+            const latest = store2.turnStore().findLatestAttemptForTask(meshId, entry.id);
+            if (latest && !latest.terminal && (!latest.sessionId || sessionIdsEquivalent(latest.sessionId, sessionId))) attemptId = latest.attemptId;
+          } catch {
+          }
+        }
+        return {
+          taskId: entry.id,
+          ...attemptId ? { attemptId } : {}
+        };
+      } catch {
+        return null;
+      }
+    }
+    function fenceWorkerReportOnLedger(store2, identity2, terminalStatus) {
+      const turns = store2.turnStore();
+      const current4 = turns.findLatestAttemptForTask(identity2.meshId, identity2.taskId);
+      const attempt = identity2.attemptId ? turns.getAttempt(identity2.attemptId) : current4;
+      if (!attempt || attempt.meshId !== identity2.meshId || attempt.taskId !== identity2.taskId) return "unknown_attempt";
+      if (current4 && current4.attemptId !== attempt.attemptId) return "stale_attempt";
+      if (identity2.sessionId && attempt.sessionId && !sessionIdsEquivalent(identity2.sessionId, attempt.sessionId)) return "session_mismatch";
+      if (attempt.terminal && attempt.terminal.outcome !== terminalStatus) return "already_terminal";
+      return "ok";
+    }
+    function __setHandoffNoteSinkForTests(sink2) {
+      handoffSinkOverride = sink2;
+    }
+    function currentHandoffSink() {
+      return handoffSinkOverride === void 0 ? storeHandoffNote : handoffSinkOverride;
+    }
+    function checkReportAgainstTaskMode(identity2, report) {
+      let task;
+      try {
+        task = MeshRuntimeStore.getInstance().findQueueEntryById(identity2.meshId, identity2.taskId);
+      } catch {
+        return null;
+      }
+      if (!task) return null;
+      const readonly = isTaskReadonly3(task);
+      const declaredFiles = [
+        ...report.touchedFiles || [],
+        ...report.handoffNotes?.touchedFiles || []
+      ];
+      if (readonly) {
+        if (declaredFiles.length) {
+          return `task ${identity2.taskId} is read-only (taskMode=${task.taskMode || "readonly"}) but the report declares ${declaredFiles.length} touched file(s) \u2014 a read-only task must report an empty touchedFiles. If you did change files, this task was the wrong place to do it; say so in \`summary\` and report \`blocked\`.`;
+        }
+        return null;
+      }
+      if (report.outcome !== "completed") return null;
+      const topLevelProvided = report.touchedFiles !== void 0;
+      const noteFilesProvided = report.handoffNotes !== void 0;
+      if (!topLevelProvided && !noteFilesProvided) {
+        return `task ${identity2.taskId} changes code, so it must report touchedFiles \u2014 send the wire field \`touched_files\` (top-level array; \`[]\` is acceptable if you changed nothing) and call again.`;
+      }
+      return null;
+    }
+    function acceptWorkerCompletionReport(credential, report, opts = {}) {
+      const nowMs2 = opts.nowMs ?? Date.now();
+      const reportedAt = normalizeWorkerReportedAtMs(opts.reportedAtMs, nowMs2);
+      if (reportedAt === "too_old") {
+        return {
+          accepted: false,
+          refusal: "stale_report",
+          detail: `the report was written more than ${Math.round(WORKER_REPORT_MAX_DELIVERY_DELAY_MS / 6e4)} min ago`
+        };
+      }
+      const live = resolveWorkerIdentity(credential);
+      const liveIsNewer = !!live && reportedAt !== void 0 && workerIdentityPostdates(live, reportedAt);
+      if (live && !liveIsNewer) return acceptWorkerCompletionReportForIdentity(live, report, { ...opts, nowMs: nowMs2 });
+      const late = resolveLateWorkerIdentity(credential, nowMs2, opts.isSelfDaemon, reportedAt);
+      if (late) return acceptLateWorkerCompletionReport(late, report, nowMs2);
+      if (liveIsNewer) {
+        return {
+          accepted: false,
+          refusal: "stale_report",
+          detail: `the report predates task ${live.taskId}, which this session holds now, and the attempt it was written for is no longer open to a late report`
+        };
+      }
+      const unresolved = classifyUnresolvedWorkerCredential(credential);
+      return { accepted: false, refusal: unresolved.refusal, ...unresolved.detail ? { detail: unresolved.detail } : {} };
+    }
+    function safeRefusalFields(fields) {
+      const out = /* @__PURE__ */ new Set();
+      for (const field3 of fields) {
+        out.add(REFUSAL_FIELD_ALLOWLIST.has(field3) ? field3 || "(root)" : "(unknown_field)");
+        if (out.size >= REFUSAL_FIELDS_MAX) break;
+      }
+      return [...out].sort();
+    }
+    function recordRefusedWorkerReport(credential, refusal, opts = {}) {
+      const nowMs2 = opts.nowMs ?? Date.now();
+      const reportedAt = normalizeWorkerReportedAtMs(opts.reportedAtMs, nowMs2);
+      if (reportedAt === "too_old") return null;
+      const live = resolveWorkerIdentity(credential);
+      const liveIsNewer = !!live && reportedAt !== void 0 && workerIdentityPostdates(live, reportedAt);
+      const identity2 = live && !liveIsNewer ? live : resolveLateWorkerIdentity(credential, nowMs2, opts.isSelfDaemon, reportedAt);
+      if (!identity2) return null;
+      return recordRefusedWorkerReportForIdentity(identity2, refusal, { ...opts, nowMs: nowMs2 });
+    }
+    function recordRefusedWorkerReportForIdentity(identity2, refusal, opts = {}) {
+      const nowMs2 = opts.nowMs ?? Date.now();
+      const reportedAt = normalizeWorkerReportedAtMs(opts.reportedAtMs, nowMs2);
+      if (reportedAt === "too_old" || typeof reportedAt === "number" && workerIdentityPostdates(identity2, reportedAt)) return null;
+      let attemptId;
+      let generation = null;
+      try {
+        const turns = MeshRuntimeStore.getInstance().turnStore();
+        attemptId = identity2.attemptId ?? turns.findLatestAttemptForTask(identity2.meshId, identity2.taskId)?.attemptId;
+        if (!attemptId) return null;
+        const attempt = turns.getAttempt(attemptId);
+        if (!attempt || attempt.meshId !== identity2.meshId || attempt.taskId !== identity2.taskId || attempt.sessionId !== identity2.sessionId || opts.generation !== void 0 && opts.generation !== attempt.generation || turns.findLatestAttemptForTask(identity2.meshId, identity2.taskId)?.attemptId !== attemptId) return null;
+        generation = attempt.generation;
+      } catch {
+        return null;
+      }
+      const fields = safeRefusalFields(refusal.fields);
+      const summaryLength = typeof refusal.summaryLength === "number" && Number.isFinite(refusal.summaryLength) ? refusal.summaryLength : null;
+      const outcome = refusal.outcome === "completed" || refusal.outcome === "blocked" || refusal.outcome === "failed" ? refusal.outcome : void 0;
+      let recorded = false;
+      try {
+        MeshRuntimeStore.getInstance().turnStore().insertWorkerEvent({
+          eventId: (0, import_crypto13.randomUUID)(),
+          attemptId,
+          sessionId: identity2.sessionId || null,
+          kind: WORKER_REPORT_REFUSED_EVENT_KIND,
+          // One row per delivery: re-sending the same refused entry must not
+          // multiply it; a different (still invalid) call gets its own row.
+          dedupeKey: opts.deliveryId ? `delivery:${opts.deliveryId}` : `fields:${fields.join(",")}:len:${summaryLength ?? "-"}:at:${typeof reportedAt === "number" ? reportedAt : nowMs2}`,
+          payload: {
+            refusal: "invalid_report",
+            fields,
+            ...summaryLength !== null ? { summaryLength } : {},
+            ...outcome ? { outcome } : {},
+            ...opts.deliveryId ? { deliveryId: opts.deliveryId } : {},
+            ...typeof reportedAt === "number" ? { reportedAtMs: reportedAt } : {}
+          },
+          atMs: nowMs2
+        });
+        const ledger = getActiveTurnLedger();
+        const attempt = ledger?.getAttempt(attemptId);
+        if (ledger && attempt && !attempt.terminal && daemonIdsEquivalent4(ledger.selfDaemonId, attempt.ownerDaemonId)) {
+          ledger.observe({
+            eventId: `report_refusal:${attemptId}:g${generation}:${opts.deliveryId ?? nowMs2}`,
+            at: nowMs2,
+            source: "worker_tool",
+            observedBy: ledger.selfDaemonId,
+            sessionId: identity2.sessionId,
+            attemptRef: { attemptId, generation },
+            kind: "worker_report_correction_requested",
+            ...opts.deliveryId ? { deliveryId: opts.deliveryId } : {}
+          });
+        }
+        recorded = true;
+      } catch (e) {
+        LOG.error("WorkerReport", `Failed to record the invalid-report refusal for task ${identity2.taskId} attempt ${attemptId}: ${e?.message || e}`);
+        recorded = false;
+      }
+      return {
+        taskId: identity2.taskId,
+        attemptId,
+        generation,
+        ...opts.deliveryId ? { deliveryId: opts.deliveryId } : {},
+        recorded,
+        ...getActiveTurnLedger()?.getAttempt(attemptId)?.data.reportCorrection?.generation === generation ? { correctionUntilMs: getActiveTurnLedger().getAttempt(attemptId).data.reportCorrection.until } : {}
+      };
+    }
+    function normalizeWorkerReportedAtMs(raw, nowMs2) {
+      if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) return void 0;
+      if (raw > nowMs2 + WORKER_REPORT_CLOCK_SKEW_MS) return void 0;
+      if (nowMs2 - raw > WORKER_REPORT_MAX_DELIVERY_DELAY_MS) return "too_old";
+      return raw;
+    }
+    function workerIdentityPostdates(identity2, atMs) {
+      try {
+        const turns = MeshRuntimeStore.getInstance().turnStore();
+        const attempt = identity2.attemptId ? turns.getAttempt(identity2.attemptId) : turns.findLatestAttemptForTask(identity2.meshId, identity2.taskId);
+        return !!attempt && attempt.acceptedAt > atMs;
+      } catch {
+        return false;
+      }
+    }
+    function hasLocalWorkerIdentity(credential, opts = {}) {
+      const nowMs2 = opts.nowMs ?? Date.now();
+      const reportedAt = normalizeWorkerReportedAtMs(opts.reportedAtMs, nowMs2);
+      return !!resolveWorkerIdentity(credential) || !!resolveLateWorkerIdentity(credential, nowMs2, opts.isSelfDaemon, reportedAt === "too_old" ? void 0 : reportedAt);
+    }
+    function acceptWorkerCompletionReportForIdentity(identity2, report, opts) {
+      const taskModeError = checkReportAgainstTaskMode(identity2, report);
+      if (taskModeError) {
+        return { accepted: false, refusal: "invalid_for_task_mode", detail: taskModeError };
+      }
+      const nowMs2 = opts.nowMs ?? Date.now();
+      const nowIso = new Date(nowMs2).toISOString();
+      const store2 = MeshRuntimeStore.getInstance();
+      const recoveryAttempt = identity2.attemptId ? store2.turnStore().getAttempt(identity2.attemptId) : void 0;
+      const correction = recoveryAttempt?.data.reportCorrection;
+      if (correction && recoveryAttempt?.data.report?.generation !== recoveryAttempt?.generation && correction.generation === recoveryAttempt?.generation && nowMs2 >= correction.until) {
+        return { accepted: false, refusal: "correction_too_late", detail: "The bounded correction deadline expired; no recovery was accepted." };
+      }
+      afterBridgeCommit(MeshRuntimeStore.getInstance().db, () => REPORTED_SUMMARY_STORE.set(summaryKey(identity2.meshId, identity2.taskId), {
+        summary: report.summary,
+        recordedAtMs: nowMs2
+      }));
+      const terminalStatus = report.outcome === "completed" ? "completed" : "failed";
+      let fence;
+      try {
+        fence = fenceWorkerReportOnLedger(store2, identity2, terminalStatus);
+      } catch (e) {
+        return { accepted: false, refusal: "rejected_by_reducer", detail: e?.message || String(e) };
+      }
+      if (fence === "unknown_attempt") return { accepted: false, refusal: "rejected_by_reducer", detail: fence };
+      const evidenceAttemptId = identity2.attemptId ?? store2.turnStore().findLatestAttemptForTask(identity2.meshId, identity2.taskId)?.attemptId;
+      let evidenceRecorded = !evidenceAttemptId;
+      if (evidenceAttemptId) {
+        try {
+          evidenceRecorded = store2.turnStore().insertWorkerEvent({
+            eventId: (0, import_crypto13.randomUUID)(),
+            attemptId: evidenceAttemptId,
+            sessionId: identity2.sessionId ?? null,
+            kind: WORKER_REPORT_EVENT_KIND,
+            // UNIQUE(attempt_id, generation, kind, dedupe_key) makes a re-call for
+            // the same outcome insert-once, matching the reducer's own idempotency.
+            dedupeKey: report.outcome,
+            payload: {
+              outcome: report.outcome,
+              summaryLength: report.summary.length,
+              touchedFileCount: report.touchedFiles?.length ?? 0,
+              blockerCount: report.blockers?.length ?? 0,
+              hasHandoffNotes: !!report.handoffNotes,
+              ...report.branchState ? { branchState: report.branchState } : {}
+            },
+            atMs: nowMs2
+          });
+        } catch (e) {
+          LOG.error("WorkerReport", `Failed to record report evidence for task ${identity2.taskId}: ${e?.message || e}`);
+          evidenceRecorded = false;
+        }
+        if (!evidenceRecorded) {
+          const existing = findPriorWorkerReport(identity2.meshId, identity2.taskId);
+          if (!existing) {
+            return {
+              accepted: false,
+              refusal: "storage_failed",
+              detail: `could not persist the report evidence row for task ${identity2.taskId}`
+            };
+          }
+          evidenceRecorded = true;
+        }
+      }
+      let handoffNoteRecorded = false;
+      let handoffNoteError = null;
+      if (report.handoffNotes) {
+        const noteResult = recordHandoffNote(identity2, report.handoffNotes, nowMs2, nowIso);
+        handoffNoteRecorded = noteResult.recorded;
+        handoffNoteError = noteResult.error;
+      }
+      if (fence !== "ok") return { accepted: false, refusal: "rejected_by_reducer", detail: fence };
+      let commit2;
+      try {
+        commit2 = commitTaskTerminal({
+          meshId: identity2.meshId,
+          taskId: identity2.taskId,
+          status: terminalStatus,
+          ...identity2.sessionId ? { sessionId: identity2.sessionId } : {},
+          ...identity2.attemptId ? { attemptId: identity2.attemptId } : {},
+          occurredAtMs: nowMs2,
+          // The causal checks ran above (fenceWorkerReportOnLedger) — a valid
+          // token buys no exemption from stale-attempt or session-mismatch.
+          source: "worker_tool_report",
+          reason: report.outcome === "blocked" ? `worker_reported_blocked:${(report.blockers || []).length}` : `worker_reported:${report.outcome}`,
+          envelope: {
+            finalSummary: report.summary,
+            ...report.touchedFiles?.length ? { artifacts: { touchedFiles: report.touchedFiles } } : {},
+            evidence: {
+              // The grade this report earns (design §4 등급표): declared by
+              // the worker, so it is complete by construction and carries
+              // no truncation risk the way a screen scrape does.
+              summarySource: "tool_report",
+              mayBeTruncated: false,
+              reportedOutcome: report.outcome,
+              ...report.branchState ? { branchState: report.branchState } : {},
+              ...report.blockers?.length ? { blockers: report.blockers.join("; ") } : {}
+            },
+            ...identity2.nodeId ? { nodeId: identity2.nodeId } : {},
+            completedAt: nowIso
+          }
+        });
+      } catch (e) {
+        LOG.warn("WorkerReport", `Terminal commit threw for task ${identity2.taskId}: ${e?.message || e}`);
+        return { accepted: false, refusal: "rejected_by_reducer", detail: e?.message || String(e) };
+      }
+      if (!commit2.committed) {
+        return { accepted: false, refusal: "unknown_task", detail: `no queue row for task ${identity2.taskId}` };
+      }
+      const ledger = getActiveTurnLedger();
+      if (ledger) {
+        try {
+          observeAcceptedWorkerReport(ledger, {
+            meshId: identity2.meshId,
+            taskId: identity2.taskId,
+            ...identity2.attemptId ? { attemptId: identity2.attemptId } : {},
+            ...identity2.sessionId ? { sessionId: identity2.sessionId } : {},
+            outcome: report.outcome,
+            summary: report.summary,
+            hasHandoffNotes: !!report.handoffNotes,
+            touchedFileCount: report.touchedFiles?.length ?? 0,
+            ...report.branchState ? { branchState: report.branchState } : {},
+            atMs: nowMs2
+          });
+        } catch (e) {
+          LOG.warn("WorkerReport", `Turn-ledger observe of the report for task ${identity2.taskId} failed: ${e?.message || e}`);
+        }
+      }
+      let ownedPathsMismatch;
+      try {
+        const taskEntry = store2.findQueueEntryById(identity2.meshId, identity2.taskId);
+        const owned = taskEntry?.ownedPaths;
+        if (owned && owned.paths.length > 0) {
+          const touched = [...report.touchedFiles || [], ...report.handoffNotes?.touchedFiles || []];
+          const { undeclaredTouched } = touchedFilesOutsideOwnership(touched, owned);
+          if (undeclaredTouched.length > 0) {
+            ownedPathsMismatch = {
+              declared: owned.paths.map((p) => p.subtree ? `${p.path}/**` : p.path),
+              touched,
+              undeclaredTouched: [...undeclaredTouched]
+            };
+            try {
+              meshRecord(identity2.meshId, "ownership_violation", {
+                ...identity2.nodeId ? { nodeId: identity2.nodeId } : {},
+                ...identity2.sessionId ? { sessionId: identity2.sessionId } : {},
+                payload: {
+                  taskId: identity2.taskId,
+                  declaredCount: ownedPathsMismatch.declared.length,
+                  touchedCount: ownedPathsMismatch.touched.length,
+                  undeclaredTouchedCount: ownedPathsMismatch.undeclaredTouched.length
+                }
+              }, { local: true });
+            } catch {
+            }
+          }
+        }
+      } catch {
+      }
+      afterBridgeCommit(store2.db, () => LOG.info(
+        "WorkerReport",
+        `Accepted ${report.outcome} report for task ${identity2.taskId}` + (identity2.attemptId ? ` attempt ${identity2.attemptId}` : "") + (commit2.duplicate ? " (duplicate replay)" : "") + (handoffNoteRecorded ? " with handoff note" : "")
+      ));
+      return {
+        accepted: true,
+        taskId: identity2.taskId,
+        ...identity2.attemptId ? { attemptId: identity2.attemptId } : {},
+        outcome: report.outcome,
+        duplicate: commit2.duplicate,
+        handoffNoteRecorded,
+        // ★The completion itself still stands — the terminal committed, and
+        // discarding a valid completion because its optional note failed would
+        // trade a small loss for a large one. But the worker is TOLD, so it can
+        // put the context somewhere else rather than believing it was filed.
+        ...handoffNoteError ? { handoffNoteError } : {},
+        ...ownedPathsMismatch ? { ownedPathsMismatch } : {}
+      };
+    }
+    function recordHandoffNote(identity2, notes, nowMs2, nowIso) {
+      if (!identity2.attemptId) {
+        return {
+          recorded: false,
+          error: `task ${identity2.taskId} has no active attempt, so the note has no index row and could never be delivered`
+        };
+      }
+      {
+        try {
+          MeshRuntimeStore.getInstance().turnStore().insertWorkerEvent({
+            eventId: (0, import_crypto13.randomUUID)(),
+            attemptId: identity2.attemptId,
+            sessionId: identity2.sessionId ?? null,
+            kind: WORKER_HANDOFF_EVENT_KIND,
+            dedupeKey: "",
+            payload: {
+              touchedFiles: notes.touchedFiles,
+              intentLength: notes.intent.length,
+              hasConflictGuidance: !!notes.conflictGuidance,
+              followUpCount: notes.followUps?.length ?? 0,
+              ...identity2.sessionId ? { sessionId: identity2.sessionId } : {},
+              ...identity2.nodeId ? { nodeId: identity2.nodeId } : {}
+            },
+            atMs: nowMs2
+          });
+        } catch (e) {
+          LOG.error("WorkerReport", `Failed to index handoff note for task ${identity2.taskId}: ${e?.message || e}`);
+          return { recorded: false, error: `handoff note index write failed: ${e?.message || e}` };
+        }
+      }
+      const handoffSink = currentHandoffSink();
+      if (handoffSink) {
+        try {
+          handoffSink({
+            meshId: identity2.meshId,
+            taskId: identity2.taskId,
+            ...identity2.attemptId ? { attemptId: identity2.attemptId } : {},
+            ...identity2.sessionId ? { sessionId: identity2.sessionId } : {},
+            ...identity2.nodeId ? { nodeId: identity2.nodeId } : {},
+            notes,
+            recordedAtIso: nowIso
+          });
+        } catch (e) {
+          LOG.error("WorkerReport", `Handoff note sink threw for task ${identity2.taskId}: ${e?.message || e}`);
+          return { recorded: false, error: `handoff note text could not be stored: ${e?.message || e}` };
+        }
+      }
+      return { recorded: true, error: null };
+    }
+    var import_crypto13;
+    var WORKER_REPORT_EVENT_KIND;
+    var WORKER_PROGRESS_EVENT_KIND;
+    var WORKER_HANDOFF_EVENT_KIND;
+    var REPORTED_SUMMARY_STORE;
+    var handoffSinkOverride;
+    var WORKER_REPORT_REFUSED_EVENT_KIND;
+    var REFUSAL_FIELD_ALLOWLIST;
+    var REFUSAL_FIELDS_MAX;
+    var WORKER_REPORT_MAX_DELIVERY_DELAY_MS;
+    var WORKER_REPORT_CLOCK_SKEW_MS;
+    var init_worker_report = __esm2({
+      "src/mesh/worker-report.ts"() {
+        "use strict";
+        init_worker_bridge_transaction();
+        import_crypto13 = require("crypto");
+        init_dist();
+        init_logger();
+        init_mesh_runtime_store();
+        init_worker_handoff_notes();
+        init_mesh_task_terminal();
+        init_mesh_work_queue();
+        init_mesh_record();
+        init_active_ledger();
+        init_worker_report_evidence();
+        init_worker_mcp_isolation();
+        init_worker_report_late();
+        WORKER_REPORT_EVENT_KIND = "worker_tool_report";
+        WORKER_PROGRESS_EVENT_KIND = "worker_progress_update";
+        WORKER_HANDOFF_EVENT_KIND = "worker_handoff_note";
+        REPORTED_SUMMARY_STORE = /* @__PURE__ */ new Map();
+        WORKER_REPORT_REFUSED_EVENT_KIND = "worker_report_refused";
+        REFUSAL_FIELD_ALLOWLIST = /* @__PURE__ */ new Set([
+          "",
+          "(root)",
+          "(unknown_field)",
+          "outcome",
+          "summary",
+          "touchedFiles",
+          "branchState",
+          "blockers",
+          "handoffNotes",
+          "handoffNotes.intent",
+          "handoffNotes.conflictGuidance",
+          "handoffNotes.touchedFiles",
+          "handoffNotes.followUps"
+        ]);
+        REFUSAL_FIELDS_MAX = 16;
+        WORKER_REPORT_MAX_DELIVERY_DELAY_MS = 2 * 60 * 60 * 1e3;
+        WORKER_REPORT_CLOCK_SKEW_MS = 5e3;
+      }
+    });
+    var worker_report_forwarded_exports = {};
+    __export2(worker_report_forwarded_exports, {
+      acceptForwardedWorkerCompletionReport: () => acceptForwardedWorkerCompletionReport,
+      resolveForwardedWorkerIdentity: () => resolveForwardedWorkerIdentity,
+      resolveRemoteWorkerIdentity: () => resolveRemoteWorkerIdentity
+    });
+    function resolveRemoteWorkerIdentity(credential, deps) {
+      const binding = verifyWorkerSessionBind(credential.bind);
+      if (!binding) return null;
+      let stamp2 = null;
+      try {
+        stamp2 = deps.readAssignmentStamp(binding.sessionId);
+      } catch {
+        return null;
+      }
+      if (!stamp2) return null;
+      const trim = (v) => typeof v === "string" ? v.trim() : "";
+      const meshId = trim(stamp2.meshId);
+      const ownerDaemonId = trim(stamp2.ownerDaemonId);
+      if (!meshId || !ownerDaemonId) return null;
+      if (meshId !== binding.meshId) return null;
+      if (deps.isSelfDaemon(ownerDaemonId)) return null;
+      const taskId = trim(stamp2.taskId);
+      const attemptId = trim(stamp2.attemptId);
+      const nodeId = trim(stamp2.nodeId) || binding.nodeId;
+      return {
+        meshId,
+        sessionId: binding.sessionId,
+        ownerDaemonId,
+        ...taskId ? { taskId } : {},
+        ...attemptId ? { attemptId } : {},
+        ...Number.isInteger(stamp2.generation) ? { generation: stamp2.generation } : {},
+        ...nodeId ? { nodeId } : {}
+      };
+    }
+    function resolveForwardedWorkerIdentity(claim, sender, nowMs2 = Date.now(), isSelfDaemon) {
+      const refuse2 = (reason, detail) => ({ refused: reason, detail });
+      const senderDaemonId = typeof sender.senderDaemonId === "string" ? sender.senderDaemonId.trim() : "";
+      if (!senderDaemonId) return refuse2("sender_unknown", "the mesh transport did not identify the relaying daemon");
+      const senderOwnsNode = (nodeId) => {
+        if (!nodeId) return refuse2("node_unresolved", "the owner's record of this task names no node");
+        let owner;
+        try {
+          owner = sender.nodeDaemonId(nodeId);
+        } catch {
+          owner = void 0;
+        }
+        if (!owner) return refuse2("node_unresolved", `node ${nodeId} is not on the owner's mesh roster`);
+        if (!daemonIdsEquivalent4(owner, senderDaemonId)) {
+          return refuse2("sender_not_node_owner", `node ${nodeId} belongs to daemon ${owner}, not the relaying daemon ${senderDaemonId}`);
+        }
+        return null;
+      };
+      const store2 = MeshRuntimeStore.getInstance();
+      let row2 = null;
+      try {
+        row2 = store2.findAssignedBySession(claim.meshId, claim.sessionId, void 0, claim.taskId);
+      } catch {
+        row2 = null;
+      }
+      if (row2?.id) {
+        if (claim.taskId && claim.taskId !== row2.id) {
+          return refuse2("task_mismatch", `the owner has task ${row2.id} assigned to session ${claim.sessionId}, not ${claim.taskId}${describeOwnerRow(store2, claim.meshId, claim.taskId)}`);
+        }
+        const nodeRefusal2 = senderOwnsNode(row2.assignedNodeId);
+        if (nodeRefusal2) return nodeRefusal2;
+        let attemptId = row2.attemptId;
+        if (!attemptId) {
+          try {
+            attemptId = store2.turnStore().findLatestAttemptForTask(claim.meshId, row2.id)?.attemptId;
+          } catch {
+            attemptId = void 0;
+          }
+        }
+        if (claim.attemptId && claim.attemptId !== attemptId) {
+          return refuse2("attempt_mismatch", `task ${row2.id}'s attempt on the owner is ${attemptId ?? "(none)"}, not ${claim.attemptId}`);
+        }
+        const attempt2 = attemptId ? store2.turnStore().getAttempt(attemptId) : null;
+        if (claim.generation !== void 0 && claim.generation !== attempt2?.generation) return refuse2("generation_mismatch", "the claimed generation is no longer current");
+        if (attempt2 && (attempt2.sessionId !== claim.sessionId || isSelfDaemon && !isSelfDaemon(attempt2.ownerDaemonId))) return refuse2("attempt_mismatch", "the attempt is not owned here for this session");
+        const token = findWorkerTaskTokenForSession(claim.meshId, row2.id, claim.sessionId);
+        return {
+          live: {
+            token: token?.token ?? "",
+            meshId: claim.meshId,
+            taskId: row2.id,
+            ...attemptId ? { attemptId } : {},
+            sessionId: claim.sessionId,
+            nodeId: row2.assignedNodeId
+          }
+        };
+      }
+      const attempt = resolveRecentlyTerminalAttempt(claim.meshId, claim.sessionId, nowMs2, isSelfDaemon);
+      if (!attempt) {
+        return refuse2("no_live_task", `the owner has no task assigned to session ${claim.sessionId} and no attempt of it that ended in the last ${Math.round(WORKER_LATE_REPORT_GRACE_MS / 6e4)} min${claim.taskId ? describeOwnerRow(store2, claim.meshId, claim.taskId) : ""}`);
+      }
+      if (claim.taskId && claim.taskId !== attempt.taskId) {
+        return refuse2("task_mismatch", `session ${claim.sessionId}'s latest attempt on the owner is for task ${attempt.taskId}, not ${claim.taskId}${describeOwnerRow(store2, claim.meshId, claim.taskId)}`);
+      }
+      if (claim.attemptId && claim.attemptId !== attempt.attemptId) {
+        return refuse2("attempt_mismatch", `task ${attempt.taskId}'s attempt on the owner is ${attempt.attemptId}, not ${claim.attemptId}`);
+      }
+      if (claim.generation !== void 0 && claim.generation !== store2.turnStore().getAttempt(attempt.attemptId)?.generation) return refuse2("generation_mismatch", "the terminal generation does not match");
+      const nodeRefusal = senderOwnsNode(attempt.nodeId);
+      if (nodeRefusal) return nodeRefusal;
+      return {
+        late: {
+          token: "",
+          meshId: claim.meshId,
+          taskId: attempt.taskId,
+          attemptId: attempt.attemptId,
+          sessionId: claim.sessionId,
+          ...attempt.nodeId ? { nodeId: attempt.nodeId } : {},
+          terminalOutcome: attempt.terminalOutcome,
+          terminalAtMs: attempt.terminalAtMs
+        }
+      };
+    }
+    function describeOwnerRow(store2, meshId, taskId) {
+      try {
+        const entry = store2.findQueueEntryById(meshId, taskId);
+        if (!entry) return ` (task ${taskId} is unknown to the owner)`;
+        const session = entry.assignedSessionId ? `, assigned to session ${entry.assignedSessionId}` : ", never claimed by a session";
+        return ` (task ${taskId} is ${entry.status} on the owner${session})`;
+      } catch {
+        return "";
+      }
+    }
+    function acceptForwardedWorkerCompletionReport(claim, report, opts) {
+      const nowMs2 = opts.nowMs ?? Date.now();
+      const reportedAt = normalizeWorkerReportedAtMs(opts.reportedAtMs, nowMs2);
+      if (reportedAt === "too_old") return { accepted: false, refusal: "stale_report" };
+      const resolved = resolveForwardedWorkerIdentity(claim, opts.sender, nowMs2, opts.isSelfDaemon);
+      if ("refused" in resolved) return { accepted: false, refusal: "unauthenticated", detail: `${resolved.refused}: ${resolved.detail}` };
+      if ("late" in resolved) return acceptLateWorkerCompletionReport(resolved.late, report, nowMs2);
+      if (typeof reportedAt === "number" && workerIdentityPostdates(resolved.live, reportedAt)) return { accepted: false, refusal: "stale_report" };
+      return acceptWorkerCompletionReportForIdentity(resolved.live, report, { nowMs: nowMs2 });
+    }
+    var init_worker_report_forwarded = __esm2({
+      "src/mesh/worker-report-forwarded.ts"() {
+        "use strict";
+        init_worker_mcp_isolation();
+        init_worker_report_late();
+        init_dist();
+        init_mesh_runtime_store();
+        init_worker_report();
+      }
+    });
+    var WORKER_PROGRESS_EVENT_NAME;
+    var queueWorkerProgressNotice;
+    var init_worker_progress_notify = __esm2({
+      "src/mesh/worker-progress-notify.ts"() {
+        "use strict";
+        init_logger();
+        init_config();
+        init_mesh_runtime_store();
+        init_deliver();
+        init_dist();
+        WORKER_PROGRESS_EVENT_NAME = "mesh:worker_progress";
+        queueWorkerProgressNotice = (notice) => {
+          let targetCoordinatorSessionId = "";
+          try {
+            const task = MeshRuntimeStore.getInstance().findQueueEntryById(notice.meshId, notice.taskId);
+            if (task) targetCoordinatorSessionId = readText(task.sourceCoordinatorSessionId);
+          } catch (e) {
+            LOG.warn("WorkerProgress", `Could not resolve coordinator for task ${notice.taskId}: ${e?.message || e}`);
+          }
+          const targetCoordinatorDaemonId = readText(getMachineId());
+          const nodeLabel = notice.nodeId || notice.sessionId || notice.taskId;
+          try {
+            if (!meshNoticeRuntime.current()) return false;
+            notifyMeshCoordinator({
+              ...notice.eventId ? { eventId: notice.eventId } : {},
+              event: WORKER_PROGRESS_EVENT_NAME,
+              meshId: notice.meshId,
+              nodeLabel,
+              ...notice.nodeId ? { nodeId: notice.nodeId } : {},
+              metadataEvent: {
+                source: "worker_progress_update",
+                taskId: notice.taskId,
+                ...notice.sessionId ? { sessionId: notice.sessionId } : {},
+                // ★The note TEXT rides here. This is a local daemon→coordinator
+                // queue, not the cloud status path — the server content boundary
+                // is not in play. The `turn_events` row for the same note
+                // stays content-free (length only), which is what keeps the
+                // LEDGER meta-only per design §9.1.
+                note: notice.note,
+                // Never terminal. Named explicitly so a future drain-side reader
+                // cannot mistake this for a completion by its shape.
+                terminal: false,
+                coordinatorMessage: notice.coordinatorMessage
+              },
+              coordinatorMessage: notice.coordinatorMessage,
+              queuedAt: notice.nowMs,
+              ...targetCoordinatorDaemonId ? { targetCoordinatorDaemonId } : {},
+              ...targetCoordinatorSessionId ? { targetCoordinatorSessionId } : {}
+            });
+            return true;
+          } catch (e) {
+            LOG.warn("WorkerProgress", `Failed to queue progress notice for task ${notice.taskId}: ${e?.message || e}`);
+            return false;
+          }
+        };
+      }
+    });
+    var worker_report_progress_exports = {};
+    __export2(worker_report_progress_exports, {
+      WORKER_PROGRESS_SURFACE_MIN_CHARS: () => WORKER_PROGRESS_SURFACE_MIN_CHARS,
+      WORKER_PROGRESS_SURFACE_MIN_GAP_MS: () => WORKER_PROGRESS_SURFACE_MIN_GAP_MS,
+      __resetProgressSurfaceForTest: () => __resetProgressSurfaceForTest,
+      __setWorkerProgressNoticeSinkForTests: () => __setWorkerProgressNoticeSinkForTests,
+      acceptForwardedWorkerProgressUpdate: () => acceptForwardedWorkerProgressUpdate,
+      acceptWorkerProgressUpdate: () => acceptWorkerProgressUpdate,
+      acceptWorkerProgressUpdateForIdentity: () => acceptWorkerProgressUpdateForIdentity,
+      buildWorkerProgressNotice: () => buildWorkerProgressNotice,
+      resumeBridgeProgressNotices: () => resumeBridgeProgressNotices,
+      shouldSurfaceProgressToCoordinator: () => shouldSurfaceProgressToCoordinator
+    });
+    function acceptWorkerProgressUpdate(credential, note2, opts = {}) {
+      const identity2 = resolveWorkerIdentity(credential);
+      if (!identity2) {
+        const unresolved = classifyUnresolvedWorkerCredential(credential);
+        return { accepted: false, refusal: unresolved.refusal, ...unresolved.detail ? { detail: unresolved.detail } : {} };
+      }
+      const reportedAt = normalizeWorkerReportedAtMs(opts.reportedAtMs, opts.nowMs ?? Date.now());
+      if (reportedAt === "too_old" || reportedAt !== void 0 && workerIdentityPostdates(identity2, reportedAt)) {
+        return {
+          accepted: false,
+          taskId: identity2.taskId,
+          refusal: "stale_report",
+          detail: `the note was written before task ${identity2.taskId} was dispatched to this session (or is past the delivery window) \u2014 not recorded`
+        };
+      }
+      return acceptWorkerProgressUpdateForIdentity(identity2, note2, opts);
+    }
+    function acceptForwardedWorkerProgressUpdate(claim, note2, opts) {
+      const nowMs2 = opts.nowMs ?? Date.now();
+      const resolved = resolveForwardedWorkerIdentity(claim, opts.sender, nowMs2, opts.isSelfDaemon);
+      if ("refused" in resolved) return { accepted: false, refusal: "unauthenticated", detail: `${resolved.refused}: ${resolved.detail}` };
+      if ("late" in resolved) {
+        const reason = "no_live_task";
+        return {
+          accepted: false,
+          taskId: resolved.late.taskId,
+          refusal: "unauthenticated",
+          detail: `${reason}: task ${resolved.late.taskId}'s attempt ${resolved.late.attemptId} already ended (${resolved.late.terminalOutcome}) on the owner \u2014 progress is only recorded against a live attempt`
+        };
+      }
+      const reportedAt = normalizeWorkerReportedAtMs(opts.reportedAtMs, nowMs2);
+      if (reportedAt === "too_old" || reportedAt !== void 0 && workerIdentityPostdates(resolved.live, reportedAt)) return { accepted: false, refusal: "stale_report" };
+      return acceptWorkerProgressUpdateForIdentity(resolved.live, note2, { nowMs: nowMs2, deliveryId: opts.deliveryId });
+    }
+    function acceptWorkerProgressUpdateForIdentity(identity2, note2, opts = {}) {
+      if (!identity2.attemptId) {
+        return {
+          accepted: false,
+          taskId: identity2.taskId,
+          refusal: "storage_failed",
+          detail: `task ${identity2.taskId} has no active attempt to record progress against`
+        };
+      }
+      const nowMs2 = opts.nowMs ?? Date.now();
+      let recorded = false;
+      try {
+        recorded = MeshRuntimeStore.getInstance().turnStore().insertWorkerEvent({
+          eventId: (0, import_crypto14.randomUUID)(),
+          attemptId: identity2.attemptId,
+          sessionId: identity2.sessionId ?? null,
+          kind: WORKER_PROGRESS_EVENT_KIND,
+          // Distinct per call — progress updates are a SEQUENCE, unlike the
+          // completion report where the UNIQUE constraint provides idempotency.
+          dedupeKey: opts.deliveryId ? `delivery:${opts.deliveryId}` : `${nowMs2}`,
+          payload: { noteLength: note2.length },
+          atMs: nowMs2
+        });
+      } catch (e) {
+        LOG.error("WorkerReport", `Failed to record progress update for task ${identity2.taskId}: ${e?.message || e}`);
+        return {
+          accepted: false,
+          taskId: identity2.taskId,
+          refusal: "storage_failed",
+          detail: e?.message || String(e)
+        };
+      }
+      if (!recorded && !MeshRuntimeStore.getInstance().turnStore().getAttempt(identity2.attemptId)) {
+        return {
+          accepted: false,
+          taskId: identity2.taskId,
+          refusal: "storage_failed",
+          detail: `task ${identity2.taskId} has no active attempt to record progress against`
+        };
+      }
+      if (!recorded && opts.deliveryId) return { accepted: true, taskId: identity2.taskId, surfacedToCoordinator: false };
+      if (!recorded) {
+        return {
+          accepted: false,
+          taskId: identity2.taskId,
+          refusal: "storage_failed",
+          detail: "a progress update for this attempt already exists at this timestamp \u2014 retry"
+        };
+      }
+      const surfaced = notifyCoordinatorOfProgress(identity2, note2, nowMs2, opts.deliveryId);
+      return { accepted: true, taskId: identity2.taskId, surfacedToCoordinator: surfaced };
+    }
+    function __resetProgressSurfaceForTest() {
+      PROGRESS_SURFACE_LAST_MS.clear();
+    }
+    function shouldSurfaceProgressToCoordinator(opts) {
+      const note2 = opts.note.trim();
+      if (note2.length < WORKER_PROGRESS_SURFACE_MIN_CHARS) return false;
+      if (opts.lastSurfacedAtMs === void 0) return true;
+      return opts.nowMs - opts.lastSurfacedAtMs >= WORKER_PROGRESS_SURFACE_MIN_GAP_MS;
+    }
+    function buildWorkerProgressNotice(opts) {
+      return `[System] ${opts.nodeLabel} progress on task ${opts.taskId}: ${opts.note.trim()} \u2014 this is an informational mid-task update, NOT a completion. The task is still running; do not dispatch it elsewhere and do not poll. Wait for its completion event.`;
+    }
+    function __setWorkerProgressNoticeSinkForTests(sink2) {
+      progressNoticeSinkOverride = sink2;
+    }
+    function notifyCoordinatorOfProgress(identity2, note2, nowMs2, deliveryId) {
+      const key3 = summaryKey(identity2.meshId, identity2.taskId);
+      if (!shouldSurfaceProgressToCoordinator({
+        note: note2,
+        nowMs: nowMs2,
+        lastSurfacedAtMs: PROGRESS_SURFACE_LAST_MS.get(key3)
+      })) {
+        return false;
+      }
+      const sink2 = progressNoticeSinkOverride === void 0 ? queueWorkerProgressNotice : progressNoticeSinkOverride;
+      if (!sink2) return false;
+      const notice = {
+        meshId: identity2.meshId,
+        taskId: identity2.taskId,
+        ...identity2.nodeId ? { nodeId: identity2.nodeId } : {},
+        ...identity2.sessionId ? { sessionId: identity2.sessionId } : {},
+        note: note2.trim(),
+        coordinatorMessage: buildWorkerProgressNotice({
+          taskId: identity2.taskId,
+          nodeLabel: identity2.nodeId || identity2.sessionId || identity2.taskId,
+          note: note2
+        }),
+        nowMs: nowMs2,
+        ...deliveryId ? { eventId: `worker-progress:${identity2.attemptId}:delivery:${deliveryId}` } : {}
+      };
+      const db = MeshRuntimeStore.getInstance().db;
+      if (inBridgeReceiptTransaction(db)) {
+        if (!deliveryId) throw new Error("bridge_progress_requires_delivery_identity");
+        ensureProgressNoticeSchema(db);
+        db.prepare("INSERT OR IGNORE INTO worker_bridge_progress_notice(event_id,mesh_id,notice_json,state) VALUES (?,?,?,'pending')").run(notice.eventId, identity2.meshId, JSON.stringify(notice));
+        afterBridgeCommit(db, () => {
+          resumeBridgeProgressNotices(db);
+        });
+        return false;
+      }
+      try {
+        if (sink2(notice) === false) return false;
+      } catch (e) {
+        LOG.warn("WorkerReport", `Failed to surface progress for task ${identity2.taskId}: ${e?.message || e}`);
+        return false;
+      }
+      PROGRESS_SURFACE_LAST_MS.set(key3, nowMs2);
+      return true;
+    }
+    function ensureProgressNoticeSchema(db) {
+      db.exec(`CREATE TABLE IF NOT EXISTS worker_bridge_progress_notice (
+        event_id TEXT PRIMARY KEY, mesh_id TEXT NOT NULL, notice_json TEXT NOT NULL,
+        state TEXT NOT NULL CHECK(state IN ('pending','delivered')))`);
+    }
+    function resumeBridgeProgressNotices(db) {
+      ensureProgressNoticeSchema(db);
+      const sink2 = progressNoticeSinkOverride === void 0 ? queueWorkerProgressNotice : progressNoticeSinkOverride;
+      if (!sink2) return;
+      const pending = db.prepare("SELECT event_id,notice_json FROM worker_bridge_progress_notice WHERE state='pending'").all();
+      for (const row2 of pending) {
+        try {
+          const notice = JSON.parse(row2.notice_json);
+          if (sink2(notice) === false) continue;
+          db.prepare("UPDATE worker_bridge_progress_notice SET state='delivered' WHERE event_id=?").run(row2.event_id);
+          PROGRESS_SURFACE_LAST_MS.set(summaryKey(notice.meshId, notice.taskId), notice.nowMs);
+        } catch {
+        }
+      }
+    }
+    var import_crypto14;
+    var WORKER_PROGRESS_SURFACE_MIN_GAP_MS;
+    var WORKER_PROGRESS_SURFACE_MIN_CHARS;
+    var PROGRESS_SURFACE_LAST_MS;
+    var progressNoticeSinkOverride;
+    var init_worker_report_progress = __esm2({
+      "src/mesh/worker-report-progress.ts"() {
+        "use strict";
+        init_worker_bridge_transaction();
+        init_worker_report();
+        init_worker_report_forwarded();
+        init_mesh_runtime_store();
+        import_crypto14 = require("crypto");
+        init_logger();
+        init_worker_progress_notify();
+        WORKER_PROGRESS_SURFACE_MIN_GAP_MS = 5 * 60 * 1e3;
+        WORKER_PROGRESS_SURFACE_MIN_CHARS = 40;
+        PROGRESS_SURFACE_LAST_MS = /* @__PURE__ */ new Map();
+      }
+    });
+    function bridgeIdentity(daemonId, statusVersion) {
+      const build = getDaemonBuildInfo();
+      return { daemonId, commit: build.commit, version: statusVersion ?? build.version };
+    }
+    function stableBridgeJson(value) {
+      if (Array.isArray(value)) return `[${value.map(stableBridgeJson).join(",")}]`;
+      if (value && typeof value === "object") return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${stableBridgeJson(value[k])}`).join(",")}}`;
+      return JSON.stringify(value) ?? "null";
+    }
+    function bridgeDigest(envelope) {
+      return (0, import_node_crypto22.createHash)("sha256").update(stableBridgeJson(envelope)).digest("hex");
+    }
+    function ensureBridgeSchema(db) {
+      db.exec(`CREATE TABLE IF NOT EXISTS worker_bridge_policy (mesh_id TEXT PRIMARY KEY, policy_json TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS worker_bridge_delivery (
+        side TEXT NOT NULL, sender_id TEXT NOT NULL, delivery_id TEXT NOT NULL,
+        mesh_id TEXT NOT NULL, envelope_json TEXT NOT NULL, digest TEXT NOT NULL,
+        state TEXT NOT NULL CHECK(state IN ('pending','quarantined','receipted')),
+        receipt_json TEXT, reason TEXT, PRIMARY KEY(side,sender_id,delivery_id));
+      CREATE TABLE IF NOT EXISTS worker_bridge_progress_notice(event_id TEXT PRIMARY KEY,mesh_id TEXT NOT NULL,notice_json TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN ('pending','delivered')));`);
+    }
+    function readBridgePolicy(db, meshId) {
+      ensureBridgeSchema(db);
+      const row2 = db.prepare("SELECT policy_json FROM worker_bridge_policy WHERE mesh_id=?").get(meshId);
+      return row2 ? JSON.parse(row2.policy_json) : null;
+    }
+    function setBridgePolicy(db, policy) {
+      if (!id22(policy.meshId) || !id22(policy.rolloutId) || typeof policy.frozen !== "boolean" || !Array.isArray(policy.builds) || !policy.builds.length || policy.builds.some((b) => !sha.test(b.commit) || !version.test(b.version))) throw new Error("invalid_bridge_policy");
+      if (policy.roster && (!id22(policy.ownerDaemonId) || !policy.roster.length || policy.roster.some((node) => !id22(node.nodeId) || !id22(node.daemonId)) || new Set(policy.roster.map((node) => node.nodeId)).size !== policy.roster.length)) throw new Error("invalid_bridge_roster");
+      const previous = readBridgePolicy(db, policy.meshId);
+      if (previous?.roster && (stableBridgeJson(previous.roster) !== stableBridgeJson(policy.roster) || previous.ownerDaemonId !== policy.ownerDaemonId)) throw new Error("bridge_roster_identity_conflict");
+      if (previous && previous.rolloutId !== policy.rolloutId) throw new Error("bridge_rollout_identity_conflict");
+      if (previous && previous.builds.some((b) => !policy.builds.some((next) => next.commit === b.commit && next.version === b.version))) throw new Error("bridge_rollback_floor_cannot_be_removed");
+      db.prepare("INSERT INTO worker_bridge_policy VALUES (?,?) ON CONFLICT(mesh_id) DO UPDATE SET policy_json=excluded.policy_json").run(policy.meshId, JSON.stringify(policy));
+    }
+    function bridgeDispatchFrozen(db, meshId) {
+      return readBridgePolicy(db, meshId)?.frozen === true;
+    }
+    function decodeBridgeEnvelope(value) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+      const e = value;
+      const keys = ["protocol", "kind", "ownerDaemonId", "senderDaemonId", "senderCommit", "senderVersion", "meshId", "nodeId", "taskId", "sessionId", "attemptId", "generation", "deliveryId", "reportedAtMs", "payload"];
+      if (Object.keys(e).length !== keys.length || Object.keys(e).some((k) => !keys.includes(k)) || e.protocol !== BRIDGE_PROTOCOL || !["report", "progress", "refusal"].includes(e.kind) || ![e.ownerDaemonId, e.senderDaemonId, e.meshId, e.nodeId, e.taskId, e.sessionId, e.attemptId].every(id22) || !sha.test(e.senderCommit) || !version.test(e.senderVersion) || !Number.isSafeInteger(e.generation) || e.generation < 0 || normalizeWorkerDeliveryId(e.deliveryId) !== e.deliveryId || !Number.isSafeInteger(e.reportedAtMs) || e.reportedAtMs <= 0 || !e.payload || typeof e.payload !== "object" || Array.isArray(e.payload)) return null;
+      return e;
+    }
+    function admitted(policy, identity2) {
+      return policy.builds.some((b) => b.commit === identity2.commit && b.version === identity2.version);
+    }
+    function bridgeCapability(db, self, meshId, nonce) {
+      const policy = readBridgePolicy(db, meshId);
+      if (!policy || !admitted(policy, self) || !id22(nonce)) return { success: false, error: "worker_protocol_unsupported" };
+      const open = db.prepare("SELECT COUNT(*) AS n FROM turn_attempts WHERE mesh_id=? AND terminal_outcome IS NULL").get(meshId);
+      const holds = db.prepare("SELECT COUNT(*) AS n FROM turn_holds h JOIN turn_attempts a ON a.attempt_id=h.attempt_id WHERE a.mesh_id=? AND h.status='active'").get(meshId);
+      const pending = db.prepare("SELECT (SELECT COUNT(*) FROM worker_bridge_delivery WHERE mesh_id=? AND state!='receipted') + (SELECT COUNT(*) FROM worker_bridge_progress_notice WHERE mesh_id=? AND state='pending') AS n").get(meshId, meshId);
+      return { success: true, protocol: BRIDGE_PROTOCOL, ...self, meshId, nonce, rolloutId: policy.rolloutId, frozen: policy.frozen, openAttempts: open.n, correctionOrLivenessHolds: holds.n, pendingDeliveries: pending.n };
+    }
+    function bridgeDrainState(db, meshId) {
+      ensureBridgeSchema(db);
+      const attempts = db.prepare("SELECT attempt_id,scope,task_id,node_id,session_id,owner_daemon_id,generation,terminal_outcome,terminal_source,terminal_strength,terminal_at FROM turn_attempts WHERE mesh_id=? ORDER BY attempt_id").all(meshId);
+      const holds = db.prepare("SELECT h.hold_id,h.generation,h.reason,h.on_expire,h.status,h.until_ms FROM turn_holds h JOIN turn_attempts a ON a.attempt_id=h.attempt_id WHERE a.mesh_id=? AND h.status='active' ORDER BY h.hold_id").all(meshId);
+      const pending = db.prepare("SELECT (SELECT COUNT(*) FROM worker_bridge_delivery WHERE mesh_id=? AND state!='receipted') + (SELECT COUNT(*) FROM worker_bridge_progress_notice WHERE mesh_id=? AND state='pending') AS n").get(meshId, meshId);
+      return {
+        openAttempts: attempts.filter((a) => a.terminal_outcome === null).length,
+        correctionOrLivenessHolds: holds.length,
+        pendingDeliveries: pending.n,
+        ledgerDigest: (0, import_node_crypto22.createHash)("sha256").update(stableBridgeJson({ attempts, holds })).digest("hex")
+      };
+    }
+    function findBridgeMemberDelivery(db, senderId, deliveryId) {
+      ensureBridgeSchema(db);
+      const saved = row(db, "member", senderId, deliveryId);
+      return saved ? JSON.parse(saved.envelope_json) : null;
+    }
+    function commitLocalBridgeDelivery(db, e, apply) {
+      ensureBridgeSchema(db);
+      const prior = row(db, "local", e.senderDaemonId, e.deliveryId);
+      if (prior) {
+        const original = JSON.parse(prior.envelope_json);
+        if (stableBridgeJson({ ...e, senderCommit: original.senderCommit, senderVersion: original.senderVersion }) !== stableBridgeJson(original)) return { success: false, error: "worker_delivery_identity_conflict" };
+        e = original;
+      }
+      if (prior && prior.digest !== bridgeDigest(e)) return { success: false, error: "worker_delivery_identity_conflict" };
+      try {
+        return bridgeReceiptTransaction(db, () => {
+          const saved = put(db, "local", e);
+          if (saved.receipt_json) return JSON.parse(saved.receipt_json);
+          const reply = apply();
+          if (["storage_failed", "forward_failed", "worker_protocol_unsupported"].includes(String(reply.error))) throw new Error("bridge_apply_not_durable");
+          if (reply.success !== true && !(reply.error === "invalid_report" && reply.receipt?.recorded === true)) return reply;
+          db.prepare("UPDATE worker_bridge_delivery SET state='receipted',receipt_json=? WHERE side='local' AND sender_id=? AND delivery_id=?").run(JSON.stringify(reply), e.senderDaemonId, e.deliveryId);
+          return reply;
+        });
+      } catch {
+        return { success: false, error: "storage_failed" };
+      }
+    }
+    async function queryBridgePeer(dispatch2, peerId, meshId, policy) {
+      const nonce = (0, import_node_crypto22.randomUUID)();
+      const reply = unwrapMeshRelayResult(await dispatch2(peerId, BRIDGE_CAPABILITY_COMMAND, { meshId, nonce }), { command: BRIDGE_CAPABILITY_COMMAND, peerDaemonId: peerId });
+      const valid = reply.success === true && reply.protocol === BRIDGE_PROTOCOL && reply.meshId === meshId && reply.nonce === nonce && reply.rolloutId === policy.rolloutId && typeof reply.daemonId === "string" && daemonIdsEquivalent4(reply.daemonId, peerId) && admitted(policy, reply);
+      return valid ? reply : null;
+    }
+    function row(db, side, senderId, deliveryId) {
+      return db.prepare("SELECT * FROM worker_bridge_delivery WHERE side=? AND sender_id=? AND delivery_id=?").get(side, senderId, deliveryId);
+    }
+    function put(db, side, envelope) {
+      ensureBridgeSchema(db);
+      const digest = bridgeDigest(envelope), existing = row(db, side, envelope.senderDaemonId, envelope.deliveryId);
+      if (existing) {
+        if (existing.digest !== digest) throw new Error("worker_delivery_identity_conflict");
+        return existing;
+      }
+      db.prepare("INSERT INTO worker_bridge_delivery(side,sender_id,delivery_id,mesh_id,envelope_json,digest,state) VALUES (?,?,?,?,?,?,'pending')").run(side, envelope.senderDaemonId, envelope.deliveryId, envelope.meshId, stableBridgeJson(envelope), digest);
+      return row(db, side, envelope.senderDaemonId, envelope.deliveryId);
+    }
+    function quarantine(db, e, reason) {
+      db.prepare("UPDATE worker_bridge_delivery SET state='quarantined',reason=? WHERE side='member' AND sender_id=? AND delivery_id=?").run(reason, e.senderDaemonId, e.deliveryId);
+      return { success: false, error: "worker_protocol_unsupported", quarantined: true, deliveryId: e.deliveryId, envelopeDigest: bridgeDigest(e), reason };
+    }
+    async function sendBridgeDelivery(db, e, dispatch2, nowMs2 = Date.now()) {
+      if (!decodeBridgeEnvelope(e)) return { success: false, error: "worker_protocol_provenance_required" };
+      const saved = put(db, "member", e);
+      if (saved.receipt_json) return JSON.parse(saved.receipt_json);
+      if (nowMs2 - e.reportedAtMs > BRIDGE_MAX_AGE_MS || e.reportedAtMs > nowMs2 + 6e4) return quarantine(db, e, "delivery_time_expired");
+      const policy = readBridgePolicy(db, e.meshId);
+      if (!policy || !admitted(policy, { daemonId: e.senderDaemonId, commit: e.senderCommit, version: e.senderVersion })) return quarantine(db, e, "build_not_admitted");
+      try {
+        if (!await queryBridgePeer(dispatch2, e.ownerDaemonId, e.meshId, policy)) return quarantine(db, e, "owner_capability_unconfirmed");
+        const reply = unwrapMeshRelayResult(await dispatch2(e.ownerDaemonId, BRIDGE_DELIVERY_COMMAND, { meshId: e.meshId, envelope: e }), { command: BRIDGE_DELIVERY_COMMAND, peerDaemonId: e.ownerDaemonId });
+        const receipt = reply.deliveryReceipt;
+        if (!receipt || receipt.digest !== saved.digest || receipt.deliveryId !== e.deliveryId || receipt.protocol !== BRIDGE_PROTOCOL || receipt.ownerDaemonId !== e.ownerDaemonId || receipt.taskId !== e.taskId || receipt.attemptId !== e.attemptId || receipt.generation !== e.generation || receipt.sessionId !== e.sessionId || receipt.senderDaemonId !== e.senderDaemonId) return quarantine(db, e, "owner_receipt_unconfirmed");
+        db.prepare("UPDATE worker_bridge_delivery SET state='receipted',receipt_json=?,reason=NULL WHERE side='member' AND sender_id=? AND delivery_id=?").run(JSON.stringify(reply), e.senderDaemonId, e.deliveryId);
+        return reply;
+      } catch {
+        return { success: false, error: "forward_failed", deliveryId: e.deliveryId };
+      }
+    }
+    async function receiveBridgeDelivery(db, raw, senderId, self, dispatch2, apply, nowMs2 = Date.now()) {
+      const e = decodeBridgeEnvelope(raw);
+      if (!e || !daemonIdsEquivalent4(e.senderDaemonId, senderId) || !daemonIdsEquivalent4(e.ownerDaemonId, self.daemonId)) return { success: false, error: "invalid_worker_bridge_envelope" };
+      const policy = readBridgePolicy(db, e.meshId);
+      if (!policy || !admitted(policy, self) || !admitted(policy, { daemonId: senderId, commit: e.senderCommit, version: e.senderVersion })) return { success: false, error: "worker_protocol_unsupported" };
+      try {
+        if (!await queryBridgePeer(dispatch2, senderId, e.meshId, policy)) return { success: false, error: "worker_protocol_unsupported" };
+        return bridgeReceiptTransaction(db, () => {
+          const saved = put(db, "owner", e);
+          if (saved.receipt_json) return JSON.parse(saved.receipt_json);
+          if (nowMs2 - e.reportedAtMs > BRIDGE_MAX_AGE_MS || e.reportedAtMs > nowMs2 + 6e4) return { success: false, error: "stale_report" };
+          const reply = apply(e);
+          if (["storage_failed", "forward_failed", "worker_protocol_unsupported"].includes(String(reply.error))) throw new Error("bridge_apply_not_durable");
+          const receipt = {
+            protocol: BRIDGE_PROTOCOL,
+            digest: saved.digest,
+            deliveryId: e.deliveryId,
+            ownerDaemonId: e.ownerDaemonId,
+            senderDaemonId: e.senderDaemonId,
+            taskId: e.taskId,
+            attemptId: e.attemptId,
+            generation: e.generation,
+            sessionId: e.sessionId
+          };
+          const answer = { ...reply, deliveryReceipt: receipt };
+          db.prepare("UPDATE worker_bridge_delivery SET state='receipted',receipt_json=? WHERE side='owner' AND sender_id=? AND delivery_id=?").run(JSON.stringify(answer), e.senderDaemonId, e.deliveryId);
+          return answer;
+        });
+      } catch {
+        return { success: false, error: "storage_failed" };
+      }
+    }
+    async function resumeBridgeDeliveries(dispatch2) {
+      const db = MeshRuntimeStore.getInstance().db;
+      (await Promise.resolve().then(() => (init_worker_report_progress(), worker_report_progress_exports))).resumeBridgeProgressNotices(db);
+      ensureBridgeSchema(db);
+      const pending = db.prepare("SELECT envelope_json FROM worker_bridge_delivery WHERE side='member' AND state!='receipted' AND (reason IS NULL OR reason!='delivery_time_expired')").all();
+      for (const item of pending) await sendBridgeDelivery(db, JSON.parse(item.envelope_json), dispatch2);
+    }
+    var import_node_crypto22;
+    var BRIDGE_CAPABILITY_COMMAND;
+    var BRIDGE_DELIVERY_COMMAND;
+    var BRIDGE_MAX_AGE_MS;
+    var sha;
+    var version;
+    var id22;
+    var init_worker_bridge = __esm2({
+      "src/mesh/worker-bridge.ts"() {
+        "use strict";
+        init_worker_bridge_transaction();
+        import_node_crypto22 = require("crypto");
+        init_dist();
+        init_mesh_runtime_store();
+        init_build_info();
+        init_worker_report_idempotency();
+        init_mesh_relay_result();
+        init_worker_bridge_protocol();
+        init_worker_bridge_protocol();
+        BRIDGE_CAPABILITY_COMMAND = "worker_bridge_capabilities";
+        BRIDGE_DELIVERY_COMMAND = "worker_bridge_delivery";
+        BRIDGE_MAX_AGE_MS = 2 * 60 * 60 * 1e3;
+        sha = /^[a-f0-9]{40}$/;
+        version = /^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/;
+        id22 = (v) => typeof v === "string" && !!v.trim() && v === v.trim();
+      }
+    });
     function awaitWithWarmupDeadline(work, opts) {
       const pollMs = Math.max(1, Math.min(opts.pollIntervalMs ?? 200, opts.connectTimeoutMs));
       return new Promise((resolve39, reject) => {
@@ -61447,7 +62819,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         ...input.sourceCoordinator ? { sourceCoordinator: input.sourceCoordinator } : {}
       };
       const row2 = {
-        noteId: (0, import_crypto12.randomUUID)(),
+        noteId: (0, import_crypto15.randomUUID)(),
         meshId,
         text: text2,
         category: input.category ?? null,
@@ -61477,7 +62849,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           if (store2.tombstoneOperatingNote(meshId, note2.noteId, nowMs2)) matched += 1;
         }
       }
-      const tombstoneId = (0, import_crypto12.randomUUID)();
+      const tombstoneId = (0, import_crypto15.randomUUID)();
       if (text2) {
         store2.insertOperatingNote({
           noteId: tombstoneId,
@@ -61522,7 +62894,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       const deadline = created + ttlDays * MS_PER_DAY;
       return { effectiveExpiresAt: new Date(deadline).toISOString(), expired: now >= deadline };
     }
-    var import_crypto12;
+    var import_crypto15;
     var OPERATING_NOTE_KIND;
     var OPERATING_NOTE_DEDUPE_WINDOW;
     var OPERATING_NOTE_KEEP_LATEST;
@@ -61531,7 +62903,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     var init_mesh_operating_notes = __esm2({
       "src/mesh/mesh-operating-notes.ts"() {
         "use strict";
-        import_crypto12 = require("crypto");
+        import_crypto15 = require("crypto");
         init_mesh_runtime_store();
         OPERATING_NOTE_KIND = "coordinator_operating_note";
         OPERATING_NOTE_DEDUPE_WINDOW = 40;
@@ -64294,970 +65666,6 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
           name: "cleanup_stop",
           paths: ["$.intentional", "$.reason", "$.intentionalStopReason", "$.source"]
         };
-      }
-    });
-    function observeAcceptedWorkerReport(ledger, report) {
-      const attempt = report.attemptId ? ledger.getAttempt(report.attemptId) : ledger.store.findLatestAttemptForTask(report.meshId, report.taskId);
-      if (!attempt || attempt.taskId !== report.taskId) return null;
-      const evidence = {
-        eventId: `worker_report:${attempt.attemptId}:g${attempt.generation}:${report.outcome}`,
-        at: report.atMs,
-        source: "worker_tool",
-        sessionId: report.sessionId ?? attempt.sessionId,
-        attemptRef: { attemptId: attempt.attemptId, generation: attempt.generation },
-        taskId: report.taskId,
-        observedBy: ledger.selfDaemonId,
-        kind: "worker_report",
-        outcome: report.outcome,
-        hasHandoffNotes: report.hasHandoffNotes,
-        ...typeof report.touchedFileCount === "number" ? { touchedFileCount: report.touchedFileCount } : {},
-        ...report.branchState ? { branchState: report.branchState } : {}
-      };
-      return ledger.observe(evidence, { envelope: { finalSummary: report.summary } });
-    }
-    var init_worker_report_evidence = __esm2({
-      "src/mesh/turn-ledger/worker-report-evidence.ts"() {
-        "use strict";
-      }
-    });
-    function resolveRecentlyTerminalAttempt(meshId, sessionId, nowMs2, isSelfDaemon, reportedAtMs) {
-      try {
-        const turns = MeshRuntimeStore.getInstance().turnStore();
-        const attempt = reportedAtMs !== void 0 ? turns.findMeshAttemptForSessionAt(sessionId, reportedAtMs) : turns.findPresentationAttemptForSession(sessionId)?.attempt;
-        if (!attempt?.terminal || attempt.meshId !== meshId || !attempt.taskId) return null;
-        if (!sessionIdsEquivalent(attempt.sessionId, sessionId)) return null;
-        if (isSelfDaemon && !isSelfDaemon(attempt.ownerDaemonId)) return null;
-        if (reportedAtMs !== void 0) {
-          if (reportedAtMs - attempt.terminal.at > WORKER_LATE_REPORT_GRACE_MS) return null;
-        } else {
-          const age = nowMs2 - attempt.terminal.at;
-          if (!(age >= 0 && age <= WORKER_LATE_REPORT_GRACE_MS)) return null;
-        }
-        if (turns.findLatestAttemptForTask(meshId, attempt.taskId)?.attemptId !== attempt.attemptId) return null;
-        return {
-          attemptId: attempt.attemptId,
-          taskId: attempt.taskId,
-          ...attempt.nodeId ? { nodeId: attempt.nodeId } : {},
-          terminalOutcome: attempt.terminal.outcome,
-          terminalAtMs: attempt.terminal.at
-        };
-      } catch {
-        return null;
-      }
-    }
-    function resolveLateWorkerIdentity(credential, nowMs2 = Date.now(), isSelfDaemon, reportedAtMs) {
-      const binding = verifyWorkerSessionBind(credential.bind);
-      if (!binding) return null;
-      const attempt = resolveRecentlyTerminalAttempt(binding.meshId, binding.sessionId, nowMs2, isSelfDaemon, reportedAtMs);
-      if (!attempt) return null;
-      const nodeId = attempt.nodeId || binding.nodeId;
-      return {
-        token: "",
-        meshId: binding.meshId,
-        taskId: attempt.taskId,
-        attemptId: attempt.attemptId,
-        sessionId: binding.sessionId,
-        ...nodeId ? { nodeId } : {},
-        terminalOutcome: attempt.terminalOutcome,
-        terminalAtMs: attempt.terminalAtMs
-      };
-    }
-    function buildWorkerLateReportNotice(opts) {
-      const r = opts.report;
-      const parts = [
-        `[System] ${opts.nodeLabel} filed its structured report for task ${opts.taskId} AFTER the task was already marked ${opts.terminalOutcome} \u2014 reported outcome: ${r.outcome}.`,
-        `Summary: ${r.summary}`
-      ];
-      if (r.blockers?.length) parts.push(`Blockers: ${r.blockers.join("; ")}`);
-      if (r.branchState) parts.push(`Branch state: ${r.branchState}`);
-      if (r.handoffNotes) parts.push(`Handoff intent: ${r.handoffNotes.intent}`);
-      const agrees = r.outcome === "completed" === (opts.terminalOutcome === "completed");
-      parts.push(agrees ? "This supersedes the earlier completion summary for the same turn; the task state is unchanged." : `\u2605The reported outcome differs from the recorded terminal (${opts.terminalOutcome}); the task state was NOT changed \u2014 decide whether follow-up work is needed.`);
-      return parts.join("\n");
-    }
-    function acceptLateWorkerCompletionReport(identity2, report, nowMs2) {
-      const attempt = MeshRuntimeStore.getInstance().turnStore().getAttempt(identity2.attemptId);
-      if (attempt?.terminal && ["report_correction_expired", "weak_end_liveness_unconfirmed", "weak_end_probe_unobserved"].includes(attempt.terminal.reason)) {
-        return { accepted: false, refusal: "correction_too_late", detail: "The bounded report/probe recovery window ended; this attempt remains failed. The report was not accepted as a recovery." };
-      }
-      const taskModeError = checkReportAgainstTaskMode(identity2, report);
-      if (taskModeError) return { accepted: false, refusal: "invalid_for_task_mode", detail: taskModeError };
-      const nowIso = new Date(nowMs2).toISOString();
-      const turns = MeshRuntimeStore.getInstance().turnStore();
-      REPORTED_SUMMARY_STORE.set(summaryKey(identity2.meshId, identity2.taskId), { summary: report.summary, recordedAtMs: nowMs2 });
-      let inserted = false;
-      try {
-        inserted = turns.insertWorkerEvent({
-          eventId: (0, import_crypto13.randomUUID)(),
-          attemptId: identity2.attemptId,
-          sessionId: identity2.sessionId || null,
-          kind: WORKER_REPORT_EVENT_KIND,
-          dedupeKey: report.outcome,
-          payload: {
-            outcome: report.outcome,
-            summaryLength: report.summary.length,
-            touchedFileCount: report.touchedFiles?.length ?? 0,
-            blockerCount: report.blockers?.length ?? 0,
-            hasHandoffNotes: !!report.handoffNotes,
-            ...report.branchState ? { branchState: report.branchState } : {},
-            late: true,
-            terminalOutcome: identity2.terminalOutcome,
-            lateByMs: Math.max(0, nowMs2 - identity2.terminalAtMs)
-          },
-          atMs: nowMs2
-        });
-      } catch (e) {
-        LOG.error("WorkerReport", `Failed to record late report evidence for task ${identity2.taskId}: ${e?.message || e}`);
-        return { accepted: false, refusal: "storage_failed", detail: `could not persist the report evidence row for task ${identity2.taskId}` };
-      }
-      const duplicate = !inserted;
-      let handoffNoteRecorded = false;
-      let handoffNoteError = null;
-      if (report.handoffNotes && !duplicate) {
-        const noteResult = recordHandoffNote(identity2, report.handoffNotes, nowMs2, nowIso);
-        handoffNoteRecorded = noteResult.recorded;
-        handoffNoteError = noteResult.error;
-      } else if (report.handoffNotes) {
-        handoffNoteRecorded = true;
-      }
-      if (!duplicate) {
-        const sink2 = lateNoticeSinkOverride === void 0 ? queueWorkerLateReportNotice : lateNoticeSinkOverride;
-        if (sink2) {
-          try {
-            sink2({
-              meshId: identity2.meshId,
-              taskId: identity2.taskId,
-              attemptId: identity2.attemptId,
-              ...identity2.nodeId ? { nodeId: identity2.nodeId } : {},
-              ...identity2.sessionId ? { sessionId: identity2.sessionId } : {},
-              coordinatorMessage: buildWorkerLateReportNotice({
-                taskId: identity2.taskId,
-                nodeLabel: identity2.nodeId || identity2.sessionId || identity2.taskId,
-                terminalOutcome: identity2.terminalOutcome,
-                report
-              }),
-              nowMs: nowMs2
-            });
-          } catch (e) {
-            LOG.warn("WorkerReport", `Failed to queue late-report notice for task ${identity2.taskId}: ${e?.message || e}`);
-          }
-        }
-      }
-      LOG.info(
-        "WorkerReport",
-        `Accepted LATE ${report.outcome} report for task ${identity2.taskId} attempt ${identity2.attemptId} (already ${identity2.terminalOutcome} ${Math.round((nowMs2 - identity2.terminalAtMs) / 1e3)}s ago)` + (duplicate ? " (duplicate replay)" : "") + (handoffNoteRecorded ? " with handoff note" : "")
-      );
-      return {
-        accepted: true,
-        taskId: identity2.taskId,
-        attemptId: identity2.attemptId,
-        outcome: report.outcome,
-        duplicate,
-        handoffNoteRecorded,
-        ...handoffNoteError ? { handoffNoteError } : {},
-        late: { terminalOutcome: identity2.terminalOutcome }
-      };
-    }
-    var import_crypto13;
-    var WORKER_LATE_REPORT_GRACE_MS;
-    var WORKER_LATE_REPORT_EVENT_NAME;
-    var lateNoticeSinkOverride;
-    var queueWorkerLateReportNotice;
-    var init_worker_report_late = __esm2({
-      "src/mesh/worker-report-late.ts"() {
-        "use strict";
-        init_worker_mcp_isolation();
-        init_mesh_runtime_store();
-        init_dist();
-        init_deliver();
-        init_worker_report();
-        import_crypto13 = require("crypto");
-        init_logger();
-        WORKER_LATE_REPORT_GRACE_MS = 15 * 60 * 1e3;
-        WORKER_LATE_REPORT_EVENT_NAME = "mesh:worker_late_report";
-        queueWorkerLateReportNotice = (notice) => {
-          let targetCoordinatorSessionId = "";
-          try {
-            const task = MeshRuntimeStore.getInstance().findQueueEntryById(notice.meshId, notice.taskId);
-            const sid = task?.sourceCoordinatorSessionId;
-            if (typeof sid === "string" && sid.trim()) targetCoordinatorSessionId = sid.trim();
-          } catch {
-          }
-          notifyMeshCoordinator({
-            event: WORKER_LATE_REPORT_EVENT_NAME,
-            meshId: notice.meshId,
-            nodeLabel: notice.nodeId || notice.sessionId || notice.taskId,
-            ...notice.nodeId ? { nodeId: notice.nodeId } : {},
-            metadataEvent: {
-              source: WORKER_REPORT_EVENT_KIND,
-              taskId: notice.taskId,
-              attemptId: notice.attemptId,
-              ...notice.sessionId ? { sessionId: notice.sessionId } : {},
-              // Never terminal: the ledger already committed; this is evidence.
-              terminal: false,
-              coordinatorMessage: notice.coordinatorMessage
-            },
-            coordinatorMessage: notice.coordinatorMessage,
-            // One notice per attempt, however often the worker re-calls.
-            eventId: `worker_late_report:${notice.attemptId}`,
-            queuedAt: notice.nowMs,
-            ...targetCoordinatorSessionId ? { targetCoordinatorSessionId } : {}
-          });
-        };
-      }
-    });
-    var worker_report_exports = {};
-    __export2(worker_report_exports, {
-      REPORTED_SUMMARY_STORE: () => REPORTED_SUMMARY_STORE,
-      WORKER_BRANCH_STATES: () => WORKER_BRANCH_STATES2,
-      WORKER_HANDOFF_EVENT_KIND: () => WORKER_HANDOFF_EVENT_KIND,
-      WORKER_PROGRESS_EVENT_KIND: () => WORKER_PROGRESS_EVENT_KIND,
-      WORKER_REPORT_EVENT_KIND: () => WORKER_REPORT_EVENT_KIND,
-      WORKER_REPORT_MAX_DELIVERY_DELAY_MS: () => WORKER_REPORT_MAX_DELIVERY_DELAY_MS,
-      WORKER_REPORT_REFUSED_EVENT_KIND: () => WORKER_REPORT_REFUSED_EVENT_KIND,
-      __resetReportedSummariesForTest: () => __resetReportedSummariesForTest,
-      __setHandoffNoteSinkForTests: () => __setHandoffNoteSinkForTests,
-      acceptWorkerCompletionReport: () => acceptWorkerCompletionReport,
-      acceptWorkerCompletionReportForIdentity: () => acceptWorkerCompletionReportForIdentity,
-      checkReportAgainstTaskMode: () => checkReportAgainstTaskMode,
-      classifyUnresolvedWorkerCredential: () => classifyUnresolvedWorkerCredential,
-      fenceWorkerReportOnLedger: () => fenceWorkerReportOnLedger,
-      findPriorWorkerReport: () => findPriorWorkerReport,
-      hasLocalWorkerIdentity: () => hasLocalWorkerIdentity,
-      normalizeWorkerReportedAtMs: () => normalizeWorkerReportedAtMs,
-      recordHandoffNote: () => recordHandoffNote,
-      recordRefusedWorkerReport: () => recordRefusedWorkerReport,
-      recordRefusedWorkerReportForIdentity: () => recordRefusedWorkerReportForIdentity,
-      resolveWorkerIdentity: () => resolveWorkerIdentity,
-      safeRefusalFields: () => safeRefusalFields,
-      summaryKey: () => summaryKey,
-      workerIdentityPostdates: () => workerIdentityPostdates
-    });
-    function findPriorWorkerReport(meshId, taskId) {
-      if (!meshId || !taskId) return null;
-      let rows;
-      try {
-        rows = MeshRuntimeStore.getInstance().turnStore().listWorkerEventsForTask(meshId, taskId, WORKER_REPORT_EVENT_KIND);
-      } catch {
-        return null;
-      }
-      const row2 = rows.pop();
-      if (!row2 || !row2.attemptId) return null;
-      const payload = row2.payload;
-      const outcome = payload.outcome === "completed" || payload.outcome === "blocked" || payload.outcome === "failed" ? payload.outcome : "completed";
-      const summary = readReportedSummary(meshId, taskId);
-      return {
-        taskId,
-        attemptId: row2.attemptId,
-        outcome,
-        ...summary ? { summary } : {},
-        recordedAt: new Date(row2.atMs).toISOString()
-      };
-    }
-    function summaryKey(meshId, taskId) {
-      return `${meshId}\0${taskId}`;
-    }
-    function readReportedSummary(meshId, taskId) {
-      return REPORTED_SUMMARY_STORE.get(summaryKey(meshId, taskId))?.summary;
-    }
-    function __resetReportedSummariesForTest() {
-      REPORTED_SUMMARY_STORE.clear();
-    }
-    function resolveWorkerIdentity(credential) {
-      const direct = verifyWorkerTaskToken(credential.token);
-      if (direct) {
-        return {
-          token: direct.token,
-          meshId: direct.meshId,
-          taskId: direct.taskId,
-          ...direct.attemptId ? { attemptId: direct.attemptId } : {},
-          sessionId: direct.sessionId || "",
-          ...direct.nodeId ? { nodeId: direct.nodeId } : {}
-        };
-      }
-      return exchangeWorkerSessionBind(credential.bind, resolveCurrentTaskForSession);
-    }
-    function classifyUnresolvedWorkerCredential(credential) {
-      const bind = typeof credential.bind === "string" ? credential.bind.trim() : "";
-      if (!bind) return { refusal: "unauthenticated", detail: "no worker session bind or task token was presented" };
-      const bindRef = hashWorkerSessionBind(bind).slice(0, 12);
-      if (!bind.startsWith(WORKER_BIND_CANARY_PREFIX)) return { refusal: "unauthenticated", bindRef };
-      const { status } = workerSessionBindStatus(bind);
-      switch (status) {
-        case "unknown":
-          return {
-            refusal: "bind_unknown_after_restart",
-            detail: "this daemon has no record of the worker session bind (not live, not persisted) \u2014 it was minted before a daemon restart that did not carry it over; the running worker cannot learn a new bind, so relaunch this worker session (stop it and launch a fresh worker)",
-            bindRef
-          };
-        case "session_not_live":
-          return { refusal: "unauthenticated", detail: "the bind is known, but its session is not live on this daemon", bindRef };
-        case "revoked":
-          return { refusal: "unauthenticated", detail: "the bind was revoked (session ended, reclaimed, or re-spawned)", bindRef };
-        default:
-          return { refusal: "unauthenticated", detail: "the bind is live, but its session holds no assigned task here", bindRef };
-      }
-    }
-    function resolveCurrentTaskForSession(meshId, sessionId) {
-      try {
-        const store2 = MeshRuntimeStore.getInstance();
-        const entry = store2.findAssignedBySession(meshId, sessionId);
-        if (!entry?.id) return null;
-        let attemptId = entry.attemptId || void 0;
-        if (!attemptId) {
-          try {
-            const latest = store2.turnStore().findLatestAttemptForTask(meshId, entry.id);
-            if (latest && !latest.terminal && (!latest.sessionId || sessionIdsEquivalent(latest.sessionId, sessionId))) attemptId = latest.attemptId;
-          } catch {
-          }
-        }
-        return {
-          taskId: entry.id,
-          ...attemptId ? { attemptId } : {}
-        };
-      } catch {
-        return null;
-      }
-    }
-    function fenceWorkerReportOnLedger(store2, identity2, terminalStatus) {
-      const turns = store2.turnStore();
-      const current4 = turns.findLatestAttemptForTask(identity2.meshId, identity2.taskId);
-      const attempt = identity2.attemptId ? turns.getAttempt(identity2.attemptId) : current4;
-      if (!attempt || attempt.meshId !== identity2.meshId || attempt.taskId !== identity2.taskId) return "unknown_attempt";
-      if (current4 && current4.attemptId !== attempt.attemptId) return "stale_attempt";
-      if (identity2.sessionId && attempt.sessionId && !sessionIdsEquivalent(identity2.sessionId, attempt.sessionId)) return "session_mismatch";
-      if (attempt.terminal && attempt.terminal.outcome !== terminalStatus) return "already_terminal";
-      return "ok";
-    }
-    function __setHandoffNoteSinkForTests(sink2) {
-      handoffSinkOverride = sink2;
-    }
-    function currentHandoffSink() {
-      return handoffSinkOverride === void 0 ? storeHandoffNote : handoffSinkOverride;
-    }
-    function checkReportAgainstTaskMode(identity2, report) {
-      let task;
-      try {
-        task = MeshRuntimeStore.getInstance().findQueueEntryById(identity2.meshId, identity2.taskId);
-      } catch {
-        return null;
-      }
-      if (!task) return null;
-      const readonly = isTaskReadonly3(task);
-      const declaredFiles = [
-        ...report.touchedFiles || [],
-        ...report.handoffNotes?.touchedFiles || []
-      ];
-      if (readonly) {
-        if (declaredFiles.length) {
-          return `task ${identity2.taskId} is read-only (taskMode=${task.taskMode || "readonly"}) but the report declares ${declaredFiles.length} touched file(s) \u2014 a read-only task must report an empty touchedFiles. If you did change files, this task was the wrong place to do it; say so in \`summary\` and report \`blocked\`.`;
-        }
-        return null;
-      }
-      if (report.outcome !== "completed") return null;
-      const topLevelProvided = report.touchedFiles !== void 0;
-      const noteFilesProvided = report.handoffNotes !== void 0;
-      if (!topLevelProvided && !noteFilesProvided) {
-        return `task ${identity2.taskId} changes code, so it must report touchedFiles \u2014 send the wire field \`touched_files\` (top-level array; \`[]\` is acceptable if you changed nothing) and call again.`;
-      }
-      return null;
-    }
-    function acceptWorkerCompletionReport(credential, report, opts = {}) {
-      const nowMs2 = opts.nowMs ?? Date.now();
-      const reportedAt = normalizeWorkerReportedAtMs(opts.reportedAtMs, nowMs2);
-      if (reportedAt === "too_old") {
-        return {
-          accepted: false,
-          refusal: "stale_report",
-          detail: `the report was written more than ${Math.round(WORKER_REPORT_MAX_DELIVERY_DELAY_MS / 6e4)} min ago`
-        };
-      }
-      const live = resolveWorkerIdentity(credential);
-      const liveIsNewer = !!live && reportedAt !== void 0 && workerIdentityPostdates(live, reportedAt);
-      if (live && !liveIsNewer) return acceptWorkerCompletionReportForIdentity(live, report, { ...opts, nowMs: nowMs2 });
-      const late = resolveLateWorkerIdentity(credential, nowMs2, opts.isSelfDaemon, reportedAt);
-      if (late) return acceptLateWorkerCompletionReport(late, report, nowMs2);
-      if (liveIsNewer) {
-        return {
-          accepted: false,
-          refusal: "stale_report",
-          detail: `the report predates task ${live.taskId}, which this session holds now, and the attempt it was written for is no longer open to a late report`
-        };
-      }
-      const unresolved = classifyUnresolvedWorkerCredential(credential);
-      return { accepted: false, refusal: unresolved.refusal, ...unresolved.detail ? { detail: unresolved.detail } : {} };
-    }
-    function safeRefusalFields(fields) {
-      const out = /* @__PURE__ */ new Set();
-      for (const field3 of fields) {
-        out.add(REFUSAL_FIELD_ALLOWLIST.has(field3) ? field3 || "(root)" : "(unknown_field)");
-        if (out.size >= REFUSAL_FIELDS_MAX) break;
-      }
-      return [...out].sort();
-    }
-    function recordRefusedWorkerReport(credential, refusal, opts = {}) {
-      const nowMs2 = opts.nowMs ?? Date.now();
-      const reportedAt = normalizeWorkerReportedAtMs(opts.reportedAtMs, nowMs2);
-      if (reportedAt === "too_old") return null;
-      const live = resolveWorkerIdentity(credential);
-      const liveIsNewer = !!live && reportedAt !== void 0 && workerIdentityPostdates(live, reportedAt);
-      const identity2 = live && !liveIsNewer ? live : resolveLateWorkerIdentity(credential, nowMs2, opts.isSelfDaemon, reportedAt);
-      if (!identity2) return null;
-      return recordRefusedWorkerReportForIdentity(identity2, refusal, { ...opts, nowMs: nowMs2 });
-    }
-    function recordRefusedWorkerReportForIdentity(identity2, refusal, opts = {}) {
-      const nowMs2 = opts.nowMs ?? Date.now();
-      const reportedAt = normalizeWorkerReportedAtMs(opts.reportedAtMs, nowMs2);
-      if (reportedAt === "too_old" || typeof reportedAt === "number" && workerIdentityPostdates(identity2, reportedAt)) return null;
-      let attemptId;
-      let generation = null;
-      try {
-        const turns = MeshRuntimeStore.getInstance().turnStore();
-        attemptId = identity2.attemptId ?? turns.findLatestAttemptForTask(identity2.meshId, identity2.taskId)?.attemptId;
-        if (!attemptId) return null;
-        const attempt = turns.getAttempt(attemptId);
-        if (!attempt || attempt.meshId !== identity2.meshId || attempt.taskId !== identity2.taskId || attempt.sessionId !== identity2.sessionId || opts.generation !== void 0 && opts.generation !== attempt.generation || turns.findLatestAttemptForTask(identity2.meshId, identity2.taskId)?.attemptId !== attemptId) return null;
-        generation = attempt.generation;
-      } catch {
-        return null;
-      }
-      const fields = safeRefusalFields(refusal.fields);
-      const summaryLength = typeof refusal.summaryLength === "number" && Number.isFinite(refusal.summaryLength) ? refusal.summaryLength : null;
-      const outcome = refusal.outcome === "completed" || refusal.outcome === "blocked" || refusal.outcome === "failed" ? refusal.outcome : void 0;
-      let recorded = false;
-      try {
-        MeshRuntimeStore.getInstance().turnStore().insertWorkerEvent({
-          eventId: (0, import_crypto14.randomUUID)(),
-          attemptId,
-          sessionId: identity2.sessionId || null,
-          kind: WORKER_REPORT_REFUSED_EVENT_KIND,
-          // One row per delivery: re-sending the same refused entry must not
-          // multiply it; a different (still invalid) call gets its own row.
-          dedupeKey: opts.deliveryId ? `delivery:${opts.deliveryId}` : `fields:${fields.join(",")}:len:${summaryLength ?? "-"}:at:${typeof reportedAt === "number" ? reportedAt : nowMs2}`,
-          payload: {
-            refusal: "invalid_report",
-            fields,
-            ...summaryLength !== null ? { summaryLength } : {},
-            ...outcome ? { outcome } : {},
-            ...opts.deliveryId ? { deliveryId: opts.deliveryId } : {},
-            ...typeof reportedAt === "number" ? { reportedAtMs: reportedAt } : {}
-          },
-          atMs: nowMs2
-        });
-        const ledger = getActiveTurnLedger();
-        const attempt = ledger?.getAttempt(attemptId);
-        if (ledger && attempt && !attempt.terminal && daemonIdsEquivalent4(ledger.selfDaemonId, attempt.ownerDaemonId)) {
-          ledger.observe({
-            eventId: `report_refusal:${attemptId}:g${generation}:${opts.deliveryId ?? nowMs2}`,
-            at: nowMs2,
-            source: "worker_tool",
-            observedBy: ledger.selfDaemonId,
-            sessionId: identity2.sessionId,
-            attemptRef: { attemptId, generation },
-            kind: "worker_report_correction_requested",
-            ...opts.deliveryId ? { deliveryId: opts.deliveryId } : {}
-          });
-        }
-        recorded = true;
-      } catch (e) {
-        LOG.error("WorkerReport", `Failed to record the invalid-report refusal for task ${identity2.taskId} attempt ${attemptId}: ${e?.message || e}`);
-        recorded = false;
-      }
-      return {
-        taskId: identity2.taskId,
-        attemptId,
-        generation,
-        ...opts.deliveryId ? { deliveryId: opts.deliveryId } : {},
-        recorded,
-        ...getActiveTurnLedger()?.getAttempt(attemptId)?.data.reportCorrection?.generation === generation ? { correctionUntilMs: getActiveTurnLedger().getAttempt(attemptId).data.reportCorrection.until } : {}
-      };
-    }
-    function normalizeWorkerReportedAtMs(raw, nowMs2) {
-      if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) return void 0;
-      if (raw > nowMs2 + WORKER_REPORT_CLOCK_SKEW_MS) return void 0;
-      if (nowMs2 - raw > WORKER_REPORT_MAX_DELIVERY_DELAY_MS) return "too_old";
-      return raw;
-    }
-    function workerIdentityPostdates(identity2, atMs) {
-      try {
-        const turns = MeshRuntimeStore.getInstance().turnStore();
-        const attempt = identity2.attemptId ? turns.getAttempt(identity2.attemptId) : turns.findLatestAttemptForTask(identity2.meshId, identity2.taskId);
-        return !!attempt && attempt.acceptedAt > atMs;
-      } catch {
-        return false;
-      }
-    }
-    function hasLocalWorkerIdentity(credential, opts = {}) {
-      const nowMs2 = opts.nowMs ?? Date.now();
-      const reportedAt = normalizeWorkerReportedAtMs(opts.reportedAtMs, nowMs2);
-      return !!resolveWorkerIdentity(credential) || !!resolveLateWorkerIdentity(credential, nowMs2, opts.isSelfDaemon, reportedAt === "too_old" ? void 0 : reportedAt);
-    }
-    function acceptWorkerCompletionReportForIdentity(identity2, report, opts) {
-      const taskModeError = checkReportAgainstTaskMode(identity2, report);
-      if (taskModeError) {
-        return { accepted: false, refusal: "invalid_for_task_mode", detail: taskModeError };
-      }
-      const nowMs2 = opts.nowMs ?? Date.now();
-      const nowIso = new Date(nowMs2).toISOString();
-      const store2 = MeshRuntimeStore.getInstance();
-      const recoveryAttempt = identity2.attemptId ? store2.turnStore().getAttempt(identity2.attemptId) : void 0;
-      const correction = recoveryAttempt?.data.reportCorrection;
-      if (correction && recoveryAttempt?.data.report?.generation !== recoveryAttempt?.generation && correction.generation === recoveryAttempt?.generation && nowMs2 >= correction.until) {
-        return { accepted: false, refusal: "correction_too_late", detail: "The bounded correction deadline expired; no recovery was accepted." };
-      }
-      afterBridgeCommit(MeshRuntimeStore.getInstance().db, () => REPORTED_SUMMARY_STORE.set(summaryKey(identity2.meshId, identity2.taskId), {
-        summary: report.summary,
-        recordedAtMs: nowMs2
-      }));
-      const terminalStatus = report.outcome === "completed" ? "completed" : "failed";
-      let fence;
-      try {
-        fence = fenceWorkerReportOnLedger(store2, identity2, terminalStatus);
-      } catch (e) {
-        return { accepted: false, refusal: "rejected_by_reducer", detail: e?.message || String(e) };
-      }
-      if (fence === "unknown_attempt") return { accepted: false, refusal: "rejected_by_reducer", detail: fence };
-      const evidenceAttemptId = identity2.attemptId ?? store2.turnStore().findLatestAttemptForTask(identity2.meshId, identity2.taskId)?.attemptId;
-      let evidenceRecorded = !evidenceAttemptId;
-      if (evidenceAttemptId) {
-        try {
-          evidenceRecorded = store2.turnStore().insertWorkerEvent({
-            eventId: (0, import_crypto14.randomUUID)(),
-            attemptId: evidenceAttemptId,
-            sessionId: identity2.sessionId ?? null,
-            kind: WORKER_REPORT_EVENT_KIND,
-            // UNIQUE(attempt_id, generation, kind, dedupe_key) makes a re-call for
-            // the same outcome insert-once, matching the reducer's own idempotency.
-            dedupeKey: report.outcome,
-            payload: {
-              outcome: report.outcome,
-              summaryLength: report.summary.length,
-              touchedFileCount: report.touchedFiles?.length ?? 0,
-              blockerCount: report.blockers?.length ?? 0,
-              hasHandoffNotes: !!report.handoffNotes,
-              ...report.branchState ? { branchState: report.branchState } : {}
-            },
-            atMs: nowMs2
-          });
-        } catch (e) {
-          LOG.error("WorkerReport", `Failed to record report evidence for task ${identity2.taskId}: ${e?.message || e}`);
-          evidenceRecorded = false;
-        }
-        if (!evidenceRecorded) {
-          const existing = findPriorWorkerReport(identity2.meshId, identity2.taskId);
-          if (!existing) {
-            return {
-              accepted: false,
-              refusal: "storage_failed",
-              detail: `could not persist the report evidence row for task ${identity2.taskId}`
-            };
-          }
-          evidenceRecorded = true;
-        }
-      }
-      let handoffNoteRecorded = false;
-      let handoffNoteError = null;
-      if (report.handoffNotes) {
-        const noteResult = recordHandoffNote(identity2, report.handoffNotes, nowMs2, nowIso);
-        handoffNoteRecorded = noteResult.recorded;
-        handoffNoteError = noteResult.error;
-      }
-      if (fence !== "ok") return { accepted: false, refusal: "rejected_by_reducer", detail: fence };
-      let commit2;
-      try {
-        commit2 = commitTaskTerminal({
-          meshId: identity2.meshId,
-          taskId: identity2.taskId,
-          status: terminalStatus,
-          ...identity2.sessionId ? { sessionId: identity2.sessionId } : {},
-          ...identity2.attemptId ? { attemptId: identity2.attemptId } : {},
-          occurredAtMs: nowMs2,
-          // The causal checks ran above (fenceWorkerReportOnLedger) — a valid
-          // token buys no exemption from stale-attempt or session-mismatch.
-          source: "worker_tool_report",
-          reason: report.outcome === "blocked" ? `worker_reported_blocked:${(report.blockers || []).length}` : `worker_reported:${report.outcome}`,
-          envelope: {
-            finalSummary: report.summary,
-            ...report.touchedFiles?.length ? { artifacts: { touchedFiles: report.touchedFiles } } : {},
-            evidence: {
-              // The grade this report earns (design §4 등급표): declared by
-              // the worker, so it is complete by construction and carries
-              // no truncation risk the way a screen scrape does.
-              summarySource: "tool_report",
-              mayBeTruncated: false,
-              reportedOutcome: report.outcome,
-              ...report.branchState ? { branchState: report.branchState } : {},
-              ...report.blockers?.length ? { blockers: report.blockers.join("; ") } : {}
-            },
-            ...identity2.nodeId ? { nodeId: identity2.nodeId } : {},
-            completedAt: nowIso
-          }
-        });
-      } catch (e) {
-        LOG.warn("WorkerReport", `Terminal commit threw for task ${identity2.taskId}: ${e?.message || e}`);
-        return { accepted: false, refusal: "rejected_by_reducer", detail: e?.message || String(e) };
-      }
-      if (!commit2.committed) {
-        return { accepted: false, refusal: "unknown_task", detail: `no queue row for task ${identity2.taskId}` };
-      }
-      const ledger = getActiveTurnLedger();
-      if (ledger) {
-        try {
-          observeAcceptedWorkerReport(ledger, {
-            meshId: identity2.meshId,
-            taskId: identity2.taskId,
-            ...identity2.attemptId ? { attemptId: identity2.attemptId } : {},
-            ...identity2.sessionId ? { sessionId: identity2.sessionId } : {},
-            outcome: report.outcome,
-            summary: report.summary,
-            hasHandoffNotes: !!report.handoffNotes,
-            touchedFileCount: report.touchedFiles?.length ?? 0,
-            ...report.branchState ? { branchState: report.branchState } : {},
-            atMs: nowMs2
-          });
-        } catch (e) {
-          LOG.warn("WorkerReport", `Turn-ledger observe of the report for task ${identity2.taskId} failed: ${e?.message || e}`);
-        }
-      }
-      let ownedPathsMismatch;
-      try {
-        const taskEntry = store2.findQueueEntryById(identity2.meshId, identity2.taskId);
-        const owned = taskEntry?.ownedPaths;
-        if (owned && owned.paths.length > 0) {
-          const touched = [...report.touchedFiles || [], ...report.handoffNotes?.touchedFiles || []];
-          const { undeclaredTouched } = touchedFilesOutsideOwnership(touched, owned);
-          if (undeclaredTouched.length > 0) {
-            ownedPathsMismatch = {
-              declared: owned.paths.map((p) => p.subtree ? `${p.path}/**` : p.path),
-              touched,
-              undeclaredTouched: [...undeclaredTouched]
-            };
-            try {
-              meshRecord(identity2.meshId, "ownership_violation", {
-                ...identity2.nodeId ? { nodeId: identity2.nodeId } : {},
-                ...identity2.sessionId ? { sessionId: identity2.sessionId } : {},
-                payload: {
-                  taskId: identity2.taskId,
-                  declaredCount: ownedPathsMismatch.declared.length,
-                  touchedCount: ownedPathsMismatch.touched.length,
-                  undeclaredTouchedCount: ownedPathsMismatch.undeclaredTouched.length
-                }
-              }, { local: true });
-            } catch {
-            }
-          }
-        }
-      } catch {
-      }
-      afterBridgeCommit(store2.db, () => LOG.info(
-        "WorkerReport",
-        `Accepted ${report.outcome} report for task ${identity2.taskId}` + (identity2.attemptId ? ` attempt ${identity2.attemptId}` : "") + (commit2.duplicate ? " (duplicate replay)" : "") + (handoffNoteRecorded ? " with handoff note" : "")
-      ));
-      return {
-        accepted: true,
-        taskId: identity2.taskId,
-        ...identity2.attemptId ? { attemptId: identity2.attemptId } : {},
-        outcome: report.outcome,
-        duplicate: commit2.duplicate,
-        handoffNoteRecorded,
-        // ★The completion itself still stands — the terminal committed, and
-        // discarding a valid completion because its optional note failed would
-        // trade a small loss for a large one. But the worker is TOLD, so it can
-        // put the context somewhere else rather than believing it was filed.
-        ...handoffNoteError ? { handoffNoteError } : {},
-        ...ownedPathsMismatch ? { ownedPathsMismatch } : {}
-      };
-    }
-    function recordHandoffNote(identity2, notes, nowMs2, nowIso) {
-      if (!identity2.attemptId) {
-        return {
-          recorded: false,
-          error: `task ${identity2.taskId} has no active attempt, so the note has no index row and could never be delivered`
-        };
-      }
-      {
-        try {
-          MeshRuntimeStore.getInstance().turnStore().insertWorkerEvent({
-            eventId: (0, import_crypto14.randomUUID)(),
-            attemptId: identity2.attemptId,
-            sessionId: identity2.sessionId ?? null,
-            kind: WORKER_HANDOFF_EVENT_KIND,
-            dedupeKey: "",
-            payload: {
-              touchedFiles: notes.touchedFiles,
-              intentLength: notes.intent.length,
-              hasConflictGuidance: !!notes.conflictGuidance,
-              followUpCount: notes.followUps?.length ?? 0,
-              ...identity2.sessionId ? { sessionId: identity2.sessionId } : {},
-              ...identity2.nodeId ? { nodeId: identity2.nodeId } : {}
-            },
-            atMs: nowMs2
-          });
-        } catch (e) {
-          LOG.error("WorkerReport", `Failed to index handoff note for task ${identity2.taskId}: ${e?.message || e}`);
-          return { recorded: false, error: `handoff note index write failed: ${e?.message || e}` };
-        }
-      }
-      const handoffSink = currentHandoffSink();
-      if (handoffSink) {
-        try {
-          handoffSink({
-            meshId: identity2.meshId,
-            taskId: identity2.taskId,
-            ...identity2.attemptId ? { attemptId: identity2.attemptId } : {},
-            ...identity2.sessionId ? { sessionId: identity2.sessionId } : {},
-            ...identity2.nodeId ? { nodeId: identity2.nodeId } : {},
-            notes,
-            recordedAtIso: nowIso
-          });
-        } catch (e) {
-          LOG.error("WorkerReport", `Handoff note sink threw for task ${identity2.taskId}: ${e?.message || e}`);
-          return { recorded: false, error: `handoff note text could not be stored: ${e?.message || e}` };
-        }
-      }
-      return { recorded: true, error: null };
-    }
-    var import_crypto14;
-    var WORKER_REPORT_EVENT_KIND;
-    var WORKER_PROGRESS_EVENT_KIND;
-    var WORKER_HANDOFF_EVENT_KIND;
-    var REPORTED_SUMMARY_STORE;
-    var handoffSinkOverride;
-    var WORKER_REPORT_REFUSED_EVENT_KIND;
-    var REFUSAL_FIELD_ALLOWLIST;
-    var REFUSAL_FIELDS_MAX;
-    var WORKER_REPORT_MAX_DELIVERY_DELAY_MS;
-    var WORKER_REPORT_CLOCK_SKEW_MS;
-    var init_worker_report = __esm2({
-      "src/mesh/worker-report.ts"() {
-        "use strict";
-        init_worker_bridge_transaction();
-        import_crypto14 = require("crypto");
-        init_dist();
-        init_logger();
-        init_mesh_runtime_store();
-        init_worker_handoff_notes();
-        init_mesh_task_terminal();
-        init_mesh_work_queue();
-        init_mesh_record();
-        init_active_ledger();
-        init_worker_report_evidence();
-        init_worker_mcp_isolation();
-        init_worker_report_late();
-        WORKER_REPORT_EVENT_KIND = "worker_tool_report";
-        WORKER_PROGRESS_EVENT_KIND = "worker_progress_update";
-        WORKER_HANDOFF_EVENT_KIND = "worker_handoff_note";
-        REPORTED_SUMMARY_STORE = /* @__PURE__ */ new Map();
-        WORKER_REPORT_REFUSED_EVENT_KIND = "worker_report_refused";
-        REFUSAL_FIELD_ALLOWLIST = /* @__PURE__ */ new Set([
-          "",
-          "(root)",
-          "(unknown_field)",
-          "outcome",
-          "summary",
-          "touchedFiles",
-          "branchState",
-          "blockers",
-          "handoffNotes",
-          "handoffNotes.intent",
-          "handoffNotes.conflictGuidance",
-          "handoffNotes.touchedFiles",
-          "handoffNotes.followUps"
-        ]);
-        REFUSAL_FIELDS_MAX = 16;
-        WORKER_REPORT_MAX_DELIVERY_DELAY_MS = 2 * 60 * 60 * 1e3;
-        WORKER_REPORT_CLOCK_SKEW_MS = 5e3;
-      }
-    });
-    var worker_handoff_notes_exports = {};
-    __export2(worker_handoff_notes_exports, {
-      HANDOFF_ENCLOSE_MAX_BYTES: () => HANDOFF_ENCLOSE_MAX_BYTES,
-      HANDOFF_ENCLOSE_MAX_NOTES: () => HANDOFF_ENCLOSE_MAX_NOTES,
-      HANDOFF_RETENTION_DAYS: () => HANDOFF_RETENTION_DAYS,
-      HANDOFF_RETENTION_MS: () => HANDOFF_RETENTION_MS,
-      composeTaskDispatchBody: () => composeTaskDispatchBody,
-      getStoredHandoffNote: () => getStoredHandoffNote,
-      pruneExpiredHandoffNotes: () => pruneExpiredHandoffNotes,
-      renderHandoffNotesBlock: () => renderHandoffNotesBlock,
-      selectRelevantHandoffNotes: () => selectRelevantHandoffNotes,
-      storeHandoffNote: () => storeHandoffNote
-    });
-    function loadNoteText(meshId, taskId) {
-      let row2;
-      try {
-        row2 = MeshRuntimeStore.getInstance().getHandoffNoteText(meshId, taskId);
-      } catch (e) {
-        LOG.warn("HandoffNotes", `Handoff note text lookup failed for task ${taskId}: ${e?.message || e}`);
-        return null;
-      }
-      if (!row2) return null;
-      let notes;
-      try {
-        notes = JSON.parse(row2.notesJson);
-      } catch (e) {
-        LOG.warn("HandoffNotes", `Handoff note text for task ${taskId} is unparseable: ${e?.message || e}`);
-        return null;
-      }
-      if (!notes?.intent || !Array.isArray(notes.touchedFiles)) return null;
-      return {
-        meshId: row2.meshId,
-        taskId: row2.taskId,
-        ...row2.attemptId ? { attemptId: row2.attemptId } : {},
-        ...row2.nodeId ? { nodeId: row2.nodeId } : {},
-        notes,
-        recordedAtIso: row2.recordedAt
-      };
-    }
-    function storeHandoffNote(note2) {
-      MeshRuntimeStore.getInstance().upsertHandoffNoteText({
-        meshId: note2.meshId,
-        taskId: note2.taskId,
-        ...note2.attemptId ? { attemptId: note2.attemptId } : {},
-        ...note2.nodeId ? { nodeId: note2.nodeId } : {},
-        notesJson: JSON.stringify(note2.notes),
-        recordedAt: note2.recordedAtIso
-      });
-    }
-    function getStoredHandoffNote(meshId, taskId) {
-      return loadNoteText(meshId, taskId);
-    }
-    function selectRelevantHandoffNotes(input) {
-      const store2 = MeshRuntimeStore.getInstance();
-      let rows;
-      try {
-        rows = store2.turnStore().listWorkerEventsByKind(input.meshId, WORKER_HANDOFF_EVENT_KIND, 200);
-      } catch (e) {
-        LOG.warn("HandoffNotes", `Handoff note lookup failed for mesh ${input.meshId}: ${e?.message || e}`);
-        return [];
-      }
-      const wantedFiles = new Set((input.touchedFiles || []).map(normalizeFilePath).filter(Boolean));
-      const cutoffMs = (input.nowMs ?? Date.now()) - HANDOFF_RETENTION_MS;
-      const byFiles = [];
-      const byMission = [];
-      const byBranch = [];
-      const seenTasks = /* @__PURE__ */ new Set([input.taskId]);
-      for (const row2 of rows) {
-        if (seenTasks.has(row2.taskId)) continue;
-        const recordedMs = row2.atMs;
-        if (Number.isFinite(recordedMs) && recordedMs < cutoffMs) continue;
-        const stored = loadNoteText(input.meshId, row2.taskId);
-        if (!stored) {
-          LOG.debug("HandoffNotes", `Handoff note index row for task ${row2.taskId} has no local text \u2014 peer-originated note, skipping enclosure.`);
-          continue;
-        }
-        const meta = row2.payload;
-        const noteFiles = Array.isArray(meta.touchedFiles) ? meta.touchedFiles.filter((f) => typeof f === "string") : stored.notes.touchedFiles;
-        const overlap = wantedFiles.size ? noteFiles.filter((f) => wantedFiles.has(normalizeFilePath(f))) : [];
-        if (overlap.length) {
-          seenTasks.add(row2.taskId);
-          byFiles.push({ ...stored, reason: "touched_files", overlap });
-          continue;
-        }
-        if (input.missionId && input.lookupMissionId?.(row2.taskId) === input.missionId) {
-          seenTasks.add(row2.taskId);
-          byMission.push({ ...stored, reason: "same_mission" });
-          continue;
-        }
-        if (input.branch && input.lookupBranch?.(row2.taskId) === input.branch) {
-          seenTasks.add(row2.taskId);
-          byBranch.push({ ...stored, reason: "same_branch" });
-        }
-      }
-      return [...byFiles, ...byMission, ...byBranch];
-    }
-    function normalizeFilePath(value) {
-      return String(value || "").trim().replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase();
-    }
-    function renderHandoffNotesBlock(notes, opts = {}) {
-      if (!notes.length) return null;
-      const maxNotes = opts.maxNotes ?? HANDOFF_ENCLOSE_MAX_NOTES;
-      const maxBytes = opts.maxBytes ?? HANDOFF_ENCLOSE_MAX_BYTES;
-      const header = "## Handoff notes from related work\n\n_Left by earlier agents whose changes overlap yours. They cannot be asked follow-up questions._\n";
-      const parts = [];
-      let used = Buffer.byteLength(header, "utf8");
-      let included = 0;
-      for (const note2 of notes) {
-        if (included >= maxNotes) break;
-        const rendered = renderOneNote(note2);
-        const cost = Buffer.byteLength(rendered, "utf8");
-        if (included > 0 && used + cost > maxBytes) break;
-        parts.push(rendered);
-        used += cost;
-        included += 1;
-      }
-      const omitted = notes.length - included;
-      const omissionLine = omitted > 0 ? `
-_${omitted} further related note(s) omitted to fit the enclosure budget \u2014 the most relevant are shown first._
-` : "";
-      return { text: `${header}${parts.join("")}${omissionLine}`, included, omitted };
-    }
-    function renderOneNote(note2) {
-      const why = note2.reason === "touched_files" ? `overlapping files: ${(note2.overlap || []).join(", ")}` : note2.reason === "same_mission" ? "same mission" : "same branch";
-      const lines = [`
-### From task ${note2.taskId} (${why})
-`];
-      lines.push(`- **Intent:** ${note2.notes.intent}
-`);
-      if (note2.notes.conflictGuidance) {
-        lines.push(`- **If you conflict with this:** ${note2.notes.conflictGuidance}
-`);
-      }
-      if (note2.notes.touchedFiles.length) {
-        lines.push(`- **Touched:** ${note2.notes.touchedFiles.join(", ")}
-`);
-      }
-      if (note2.notes.followUps?.length) {
-        lines.push(`- **Left undone:** ${note2.notes.followUps.join("; ")}
-`);
-      }
-      return lines.join("");
-    }
-    function composeTaskDispatchBody(message, input) {
-      let selected = [];
-      try {
-        selected = selectRelevantHandoffNotes(input);
-      } catch (e) {
-        LOG.warn("HandoffNotes", `Handoff selection failed for task ${input.taskId}: ${e?.message || e}`);
-        return { body: message, enclosedNotes: 0, omittedNotes: 0 };
-      }
-      const block2 = renderHandoffNotesBlock(selected);
-      if (!block2) return { body: message, enclosedNotes: 0, omittedNotes: 0 };
-      return {
-        body: `${message}
-
----
-
-${block2.text}`,
-        enclosedNotes: block2.included,
-        omittedNotes: block2.omitted
-      };
-    }
-    function pruneExpiredHandoffNotes(nowMs2 = Date.now()) {
-      const cutoffIso = new Date(nowMs2 - HANDOFF_RETENTION_MS).toISOString();
-      let removed = 0;
-      try {
-        const store2 = MeshRuntimeStore.getInstance();
-        removed = store2.turnStore().deleteWorkerEventsOlderThan(WORKER_HANDOFF_EVENT_KIND, nowMs2 - HANDOFF_RETENTION_MS);
-        store2.deleteHandoffNoteTextOlderThan(cutoffIso);
-      } catch (e) {
-        LOG.warn("HandoffNotes", `Handoff retention sweep failed: ${e?.message || e}`);
-      }
-      return removed;
-    }
-    var HANDOFF_RETENTION_DAYS;
-    var HANDOFF_RETENTION_MS;
-    var HANDOFF_ENCLOSE_MAX_NOTES;
-    var HANDOFF_ENCLOSE_MAX_BYTES;
-    var init_worker_handoff_notes = __esm2({
-      "src/mesh/worker-handoff-notes.ts"() {
-        "use strict";
-        init_logger();
-        init_mesh_runtime_store();
-        init_worker_report();
-        HANDOFF_RETENTION_DAYS = 30;
-        HANDOFF_RETENTION_MS = HANDOFF_RETENTION_DAYS * 24 * 60 * 60 * 1e3;
-        HANDOFF_ENCLOSE_MAX_NOTES = 5;
-        HANDOFF_ENCLOSE_MAX_BYTES = 8 * 1024;
       }
     });
     function readIds(value) {
@@ -68480,7 +68888,7 @@ ${upstream}`;
       }
     });
     function lineageToken(historySessionId) {
-      return (0, import_crypto15.createHash)("sha256").update(String(historySessionId)).digest("hex").slice(0, 8);
+      return (0, import_crypto16.createHash)("sha256").update(String(historySessionId)).digest("hex").slice(0, 8);
     }
     function recordBlockAddress(recordIndex, blockIndex) {
       if (!Number.isInteger(recordIndex) || recordIndex < 0) return void 0;
@@ -68549,7 +68957,7 @@ ${upstream}`;
     function recordBlockSource(historySessionId, recordIndex, blockIndex) {
       return nativeSourceAddress(historySessionId, recordBlockAddress(recordIndex, blockIndex));
     }
-    var import_crypto15;
+    var import_crypto16;
     var NATIVE_ID_TOKEN_MAX_BYTES;
     var SESSION_START_ADDRESS;
     var ADDR_RE;
@@ -68558,7 +68966,7 @@ ${upstream}`;
     var init_message_source_address = __esm2({
       "src/chat/message-source-address.ts"() {
         "use strict";
-        import_crypto15 = require("crypto");
+        import_crypto16 = require("crypto");
         NATIVE_ID_TOKEN_MAX_BYTES = 40;
         SESSION_START_ADDRESS = "s";
         ADDR_RE = /^[a-z0-9._-]{1,48}$/;
@@ -72161,7 +72569,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       }
     }
     function deliverTaskToSession(dispatchThunk, ctx, warmup) {
-      const delivery = { id: `dlv-${(0, import_crypto16.randomUUID)()}` };
+      const delivery = { id: `dlv-${(0, import_crypto17.randomUUID)()}` };
       try {
         recordTaskDispatchedLedger(ctx, delivery.id);
       } catch {
@@ -72366,7 +72774,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       }
       return true;
     }
-    var import_crypto16;
+    var import_crypto17;
     var DISPATCH_CONFIRM_TIMEOUT_MS;
     var DISPATCH_CONNECT_TIMEOUT_MS;
     var dispatchWarmupGetterMissingWarned;
@@ -72384,7 +72792,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         init_mesh_redrive_provenance();
         init_mesh_record();
         init_mesh_event_trace();
-        import_crypto16 = require("crypto");
+        import_crypto17 = require("crypto");
         init_mesh_warmup_deadline();
         init_mesh_relay_result();
         init_mesh_queue_dispatch_evidence();
@@ -79148,7 +79556,7 @@ ${cleanBody}`;
       return (0, import_path18.join)(getConfigDir(opts.env), MESH_PEER_SECRETS_FILE);
     }
     function mintPeerSecret() {
-      return (0, import_crypto18.randomBytes)(32).toString("base64");
+      return (0, import_crypto19.randomBytes)(32).toString("base64");
     }
     function canonicalOrThrow(id3, what) {
       const canonical = canonicalDaemonId2(id3);
@@ -79298,7 +79706,7 @@ ${cleanBody}`;
     function resetPeerSecretsWarningsForTest() {
       warnedPaths.clear();
     }
-    var import_crypto18;
+    var import_crypto19;
     var import_fs24;
     var import_path18;
     var MESH_PEER_SECRETS_FILE;
@@ -79308,7 +79716,7 @@ ${cleanBody}`;
     var init_mesh_peer_secrets = __esm2({
       "src/mesh/transport/mesh-peer-secrets.ts"() {
         "use strict";
-        import_crypto18 = require("crypto");
+        import_crypto19 = require("crypto");
         import_fs24 = require("fs");
         import_path18 = require("path");
         init_dist();
@@ -81920,7 +82328,7 @@ ${cleanBody}`;
     }
     var import_fs27;
     var import_path20;
-    var import_crypto23;
+    var import_crypto24;
     var MEMORY_FILE_NAMES;
     var MEMORY_JOURNAL_FILE;
     var DEFAULT_MEMORY_BUDGETS;
@@ -81939,7 +82347,7 @@ ${cleanBody}`;
         "use strict";
         import_fs27 = require("fs");
         import_path20 = require("path");
-        import_crypto23 = require("crypto");
+        import_crypto24 = require("crypto");
         init_config();
         init_store_guards();
         MEMORY_FILE_NAMES = {
@@ -82149,7 +82557,7 @@ ${cleanBody}`;
             return (0, import_path20.join)(this.stagedDir, `${id3}.json`);
           }
           stage(op, origin, reviewTurnId) {
-            const id3 = `mem-${this.now().getTime()}-${(0, import_crypto23.randomBytes)(4).toString("hex")}`;
+            const id3 = `mem-${this.now().getTime()}-${(0, import_crypto24.randomBytes)(4).toString("hex")}`;
             const rec4 = { kind: "memory", id: id3, createdAt: this.now().toISOString(), origin, op, ...reviewTurnId ? { reviewTurnId } : {} };
             writeFileAtomic600(this.stagedPath(id3), JSON.stringify(rec4, null, 2));
             return id3;
@@ -82847,7 +83255,7 @@ ${body}`;
     });
     var import_fs32;
     var import_path24;
-    var import_crypto24;
+    var import_crypto25;
     var REDACT_RESULTS;
     var SkillJournal;
     var SkillStaging;
@@ -82856,7 +83264,7 @@ ${body}`;
         "use strict";
         import_fs32 = require("fs");
         import_path24 = require("path");
-        import_crypto24 = require("crypto");
+        import_crypto25 = require("crypto");
         init_store_guards();
         REDACT_RESULTS = /* @__PURE__ */ new Set(["skill_secret_rejected", "skill_hidden_chars_rejected", "skill_injection_rejected"]);
         SkillJournal = class {
@@ -82902,7 +83310,7 @@ ${body}`;
             return (0, import_path24.join)(this.dir, `${id3}.json`);
           }
           write(rec4) {
-            const id3 = `skl-${this.now().getTime()}-${(0, import_crypto24.randomBytes)(4).toString("hex")}`;
+            const id3 = `skl-${this.now().getTime()}-${(0, import_crypto25.randomBytes)(4).toString("hex")}`;
             const full = { kind: "skill", id: id3, createdAt: this.now().toISOString(), ...rec4 };
             writeFileAtomic600(this.path(id3), JSON.stringify(full, null, 2));
             return id3;
@@ -83535,7 +83943,7 @@ ${body}`;
     });
     var import_fs35;
     var import_path27;
-    var import_crypto25;
+    var import_crypto26;
     var PROJECT_NOTE_CATEGORIES;
     var ID_RE;
     var AssistantNoteStaging;
@@ -83544,7 +83952,7 @@ ${body}`;
         "use strict";
         import_fs35 = require("fs");
         import_path27 = require("path");
-        import_crypto25 = require("crypto");
+        import_crypto26 = require("crypto");
         init_config();
         init_store_guards();
         PROJECT_NOTE_CATEGORIES = ["provider_quirk", "pattern_to_avoid", "recovery_lesson"];
@@ -83560,7 +83968,7 @@ ${body}`;
             return (0, import_path27.join)(this.dir, `${id3}.json`);
           }
           write(rec4) {
-            const id3 = `note-${this.now().getTime()}-${(0, import_crypto25.randomBytes)(4).toString("hex")}`;
+            const id3 = `note-${this.now().getTime()}-${(0, import_crypto26.randomBytes)(4).toString("hex")}`;
             const full = { kind: "note", id: id3, createdAt: this.now().toISOString(), ...rec4 };
             writeFileAtomic600(this.path(id3), JSON.stringify(full, null, 2));
             return id3;
@@ -85158,154 +85566,6 @@ ${detail.join("\n")}` : stripped;
         BOOT_ID = `${process.pid}-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e9).toString(36)}`;
       }
     });
-    var worker_report_forwarded_exports = {};
-    __export2(worker_report_forwarded_exports, {
-      acceptForwardedWorkerCompletionReport: () => acceptForwardedWorkerCompletionReport,
-      resolveForwardedWorkerIdentity: () => resolveForwardedWorkerIdentity,
-      resolveRemoteWorkerIdentity: () => resolveRemoteWorkerIdentity
-    });
-    function resolveRemoteWorkerIdentity(credential, deps) {
-      const binding = verifyWorkerSessionBind(credential.bind);
-      if (!binding) return null;
-      let stamp2 = null;
-      try {
-        stamp2 = deps.readAssignmentStamp(binding.sessionId);
-      } catch {
-        return null;
-      }
-      if (!stamp2) return null;
-      const trim = (v) => typeof v === "string" ? v.trim() : "";
-      const meshId = trim(stamp2.meshId);
-      const ownerDaemonId = trim(stamp2.ownerDaemonId);
-      if (!meshId || !ownerDaemonId) return null;
-      if (meshId !== binding.meshId) return null;
-      if (deps.isSelfDaemon(ownerDaemonId)) return null;
-      const taskId = trim(stamp2.taskId);
-      const attemptId = trim(stamp2.attemptId);
-      const nodeId = trim(stamp2.nodeId) || binding.nodeId;
-      return {
-        meshId,
-        sessionId: binding.sessionId,
-        ownerDaemonId,
-        ...taskId ? { taskId } : {},
-        ...attemptId ? { attemptId } : {},
-        ...Number.isInteger(stamp2.generation) ? { generation: stamp2.generation } : {},
-        ...nodeId ? { nodeId } : {}
-      };
-    }
-    function resolveForwardedWorkerIdentity(claim, sender, nowMs2 = Date.now(), isSelfDaemon) {
-      const refuse2 = (reason, detail) => ({ refused: reason, detail });
-      const senderDaemonId = typeof sender.senderDaemonId === "string" ? sender.senderDaemonId.trim() : "";
-      if (!senderDaemonId) return refuse2("sender_unknown", "the mesh transport did not identify the relaying daemon");
-      const senderOwnsNode = (nodeId) => {
-        if (!nodeId) return refuse2("node_unresolved", "the owner's record of this task names no node");
-        let owner;
-        try {
-          owner = sender.nodeDaemonId(nodeId);
-        } catch {
-          owner = void 0;
-        }
-        if (!owner) return refuse2("node_unresolved", `node ${nodeId} is not on the owner's mesh roster`);
-        if (!daemonIdsEquivalent4(owner, senderDaemonId)) {
-          return refuse2("sender_not_node_owner", `node ${nodeId} belongs to daemon ${owner}, not the relaying daemon ${senderDaemonId}`);
-        }
-        return null;
-      };
-      const store2 = MeshRuntimeStore.getInstance();
-      let row2 = null;
-      try {
-        row2 = store2.findAssignedBySession(claim.meshId, claim.sessionId, void 0, claim.taskId);
-      } catch {
-        row2 = null;
-      }
-      if (row2?.id) {
-        if (claim.taskId && claim.taskId !== row2.id) {
-          return refuse2("task_mismatch", `the owner has task ${row2.id} assigned to session ${claim.sessionId}, not ${claim.taskId}${describeOwnerRow(store2, claim.meshId, claim.taskId)}`);
-        }
-        const nodeRefusal2 = senderOwnsNode(row2.assignedNodeId);
-        if (nodeRefusal2) return nodeRefusal2;
-        let attemptId = row2.attemptId;
-        if (!attemptId) {
-          try {
-            attemptId = store2.turnStore().findLatestAttemptForTask(claim.meshId, row2.id)?.attemptId;
-          } catch {
-            attemptId = void 0;
-          }
-        }
-        if (claim.attemptId && claim.attemptId !== attemptId) {
-          return refuse2("attempt_mismatch", `task ${row2.id}'s attempt on the owner is ${attemptId ?? "(none)"}, not ${claim.attemptId}`);
-        }
-        const attempt2 = attemptId ? store2.turnStore().getAttempt(attemptId) : null;
-        if (claim.generation !== void 0 && claim.generation !== attempt2?.generation) return refuse2("generation_mismatch", "the claimed generation is no longer current");
-        if (attempt2 && (attempt2.sessionId !== claim.sessionId || isSelfDaemon && !isSelfDaemon(attempt2.ownerDaemonId))) return refuse2("attempt_mismatch", "the attempt is not owned here for this session");
-        const token = findWorkerTaskTokenForSession(claim.meshId, row2.id, claim.sessionId);
-        return {
-          live: {
-            token: token?.token ?? "",
-            meshId: claim.meshId,
-            taskId: row2.id,
-            ...attemptId ? { attemptId } : {},
-            sessionId: claim.sessionId,
-            nodeId: row2.assignedNodeId
-          }
-        };
-      }
-      const attempt = resolveRecentlyTerminalAttempt(claim.meshId, claim.sessionId, nowMs2, isSelfDaemon);
-      if (!attempt) {
-        return refuse2("no_live_task", `the owner has no task assigned to session ${claim.sessionId} and no attempt of it that ended in the last ${Math.round(WORKER_LATE_REPORT_GRACE_MS / 6e4)} min${claim.taskId ? describeOwnerRow(store2, claim.meshId, claim.taskId) : ""}`);
-      }
-      if (claim.taskId && claim.taskId !== attempt.taskId) {
-        return refuse2("task_mismatch", `session ${claim.sessionId}'s latest attempt on the owner is for task ${attempt.taskId}, not ${claim.taskId}${describeOwnerRow(store2, claim.meshId, claim.taskId)}`);
-      }
-      if (claim.attemptId && claim.attemptId !== attempt.attemptId) {
-        return refuse2("attempt_mismatch", `task ${attempt.taskId}'s attempt on the owner is ${attempt.attemptId}, not ${claim.attemptId}`);
-      }
-      if (claim.generation !== void 0 && claim.generation !== store2.turnStore().getAttempt(attempt.attemptId)?.generation) return refuse2("generation_mismatch", "the terminal generation does not match");
-      const nodeRefusal = senderOwnsNode(attempt.nodeId);
-      if (nodeRefusal) return nodeRefusal;
-      return {
-        late: {
-          token: "",
-          meshId: claim.meshId,
-          taskId: attempt.taskId,
-          attemptId: attempt.attemptId,
-          sessionId: claim.sessionId,
-          ...attempt.nodeId ? { nodeId: attempt.nodeId } : {},
-          terminalOutcome: attempt.terminalOutcome,
-          terminalAtMs: attempt.terminalAtMs
-        }
-      };
-    }
-    function describeOwnerRow(store2, meshId, taskId) {
-      try {
-        const entry = store2.findQueueEntryById(meshId, taskId);
-        if (!entry) return ` (task ${taskId} is unknown to the owner)`;
-        const session = entry.assignedSessionId ? `, assigned to session ${entry.assignedSessionId}` : ", never claimed by a session";
-        return ` (task ${taskId} is ${entry.status} on the owner${session})`;
-      } catch {
-        return "";
-      }
-    }
-    function acceptForwardedWorkerCompletionReport(claim, report, opts) {
-      const nowMs2 = opts.nowMs ?? Date.now();
-      const reportedAt = normalizeWorkerReportedAtMs(opts.reportedAtMs, nowMs2);
-      if (reportedAt === "too_old") return { accepted: false, refusal: "stale_report" };
-      const resolved = resolveForwardedWorkerIdentity(claim, opts.sender, nowMs2, opts.isSelfDaemon);
-      if ("refused" in resolved) return { accepted: false, refusal: "unauthenticated", detail: `${resolved.refused}: ${resolved.detail}` };
-      if ("late" in resolved) return acceptLateWorkerCompletionReport(resolved.late, report, nowMs2);
-      if (typeof reportedAt === "number" && workerIdentityPostdates(resolved.live, reportedAt)) return { accepted: false, refusal: "stale_report" };
-      return acceptWorkerCompletionReportForIdentity(resolved.live, report, { nowMs: nowMs2 });
-    }
-    var init_worker_report_forwarded = __esm2({
-      "src/mesh/worker-report-forwarded.ts"() {
-        "use strict";
-        init_worker_mcp_isolation();
-        init_worker_report_late();
-        init_dist();
-        init_mesh_runtime_store();
-        init_worker_report();
-      }
-    });
     var worker_report_validation_exports = {};
     __export2(worker_report_validation_exports, {
       WORKER_BLOCKERS_MAX: () => WORKER_BLOCKERS_MAX,
@@ -85461,223 +85721,6 @@ ${detail.join("\n")}` : stripped;
         WORKER_LIST_ITEM_MAX_CHARS = 500;
         WORKER_BLOCKERS_MAX = 50;
         WORKER_FOLLOW_UPS_MAX = 50;
-      }
-    });
-    var WORKER_PROGRESS_EVENT_NAME;
-    var queueWorkerProgressNotice;
-    var init_worker_progress_notify = __esm2({
-      "src/mesh/worker-progress-notify.ts"() {
-        "use strict";
-        init_logger();
-        init_config();
-        init_mesh_runtime_store();
-        init_deliver();
-        init_dist();
-        WORKER_PROGRESS_EVENT_NAME = "mesh:worker_progress";
-        queueWorkerProgressNotice = (notice) => {
-          let targetCoordinatorSessionId = "";
-          try {
-            const task = MeshRuntimeStore.getInstance().findQueueEntryById(notice.meshId, notice.taskId);
-            if (task) targetCoordinatorSessionId = readText(task.sourceCoordinatorSessionId);
-          } catch (e) {
-            LOG.warn("WorkerProgress", `Could not resolve coordinator for task ${notice.taskId}: ${e?.message || e}`);
-          }
-          const targetCoordinatorDaemonId = readText(getMachineId());
-          const nodeLabel = notice.nodeId || notice.sessionId || notice.taskId;
-          try {
-            notifyMeshCoordinator({
-              event: WORKER_PROGRESS_EVENT_NAME,
-              meshId: notice.meshId,
-              nodeLabel,
-              ...notice.nodeId ? { nodeId: notice.nodeId } : {},
-              metadataEvent: {
-                source: "worker_progress_update",
-                taskId: notice.taskId,
-                ...notice.sessionId ? { sessionId: notice.sessionId } : {},
-                // ★The note TEXT rides here. This is a local daemon→coordinator
-                // queue, not the cloud status path — the server content boundary
-                // is not in play. The `turn_events` row for the same note
-                // stays content-free (length only), which is what keeps the
-                // LEDGER meta-only per design §9.1.
-                note: notice.note,
-                // Never terminal. Named explicitly so a future drain-side reader
-                // cannot mistake this for a completion by its shape.
-                terminal: false,
-                coordinatorMessage: notice.coordinatorMessage
-              },
-              coordinatorMessage: notice.coordinatorMessage,
-              queuedAt: notice.nowMs,
-              ...targetCoordinatorDaemonId ? { targetCoordinatorDaemonId } : {},
-              ...targetCoordinatorSessionId ? { targetCoordinatorSessionId } : {}
-            });
-          } catch (e) {
-            LOG.warn("WorkerProgress", `Failed to queue progress notice for task ${notice.taskId}: ${e?.message || e}`);
-          }
-        };
-      }
-    });
-    var worker_report_progress_exports = {};
-    __export2(worker_report_progress_exports, {
-      WORKER_PROGRESS_SURFACE_MIN_CHARS: () => WORKER_PROGRESS_SURFACE_MIN_CHARS,
-      WORKER_PROGRESS_SURFACE_MIN_GAP_MS: () => WORKER_PROGRESS_SURFACE_MIN_GAP_MS,
-      __resetProgressSurfaceForTest: () => __resetProgressSurfaceForTest,
-      __setWorkerProgressNoticeSinkForTests: () => __setWorkerProgressNoticeSinkForTests,
-      acceptForwardedWorkerProgressUpdate: () => acceptForwardedWorkerProgressUpdate,
-      acceptWorkerProgressUpdate: () => acceptWorkerProgressUpdate,
-      buildWorkerProgressNotice: () => buildWorkerProgressNotice,
-      shouldSurfaceProgressToCoordinator: () => shouldSurfaceProgressToCoordinator
-    });
-    function acceptWorkerProgressUpdate(credential, note2, opts = {}) {
-      const identity2 = resolveWorkerIdentity(credential);
-      if (!identity2) {
-        const unresolved = classifyUnresolvedWorkerCredential(credential);
-        return { accepted: false, refusal: unresolved.refusal, ...unresolved.detail ? { detail: unresolved.detail } : {} };
-      }
-      const reportedAt = normalizeWorkerReportedAtMs(opts.reportedAtMs, opts.nowMs ?? Date.now());
-      if (reportedAt === "too_old" || reportedAt !== void 0 && workerIdentityPostdates(identity2, reportedAt)) {
-        return {
-          accepted: false,
-          taskId: identity2.taskId,
-          refusal: "stale_report",
-          detail: `the note was written before task ${identity2.taskId} was dispatched to this session (or is past the delivery window) \u2014 not recorded`
-        };
-      }
-      return acceptWorkerProgressUpdateForIdentity(identity2, note2, opts);
-    }
-    function acceptForwardedWorkerProgressUpdate(claim, note2, opts) {
-      const nowMs2 = opts.nowMs ?? Date.now();
-      const resolved = resolveForwardedWorkerIdentity(claim, opts.sender, nowMs2, opts.isSelfDaemon);
-      if ("refused" in resolved) return { accepted: false, refusal: "unauthenticated", detail: `${resolved.refused}: ${resolved.detail}` };
-      if ("late" in resolved) {
-        const reason = "no_live_task";
-        return {
-          accepted: false,
-          taskId: resolved.late.taskId,
-          refusal: "unauthenticated",
-          detail: `${reason}: task ${resolved.late.taskId}'s attempt ${resolved.late.attemptId} already ended (${resolved.late.terminalOutcome}) on the owner \u2014 progress is only recorded against a live attempt`
-        };
-      }
-      const reportedAt = normalizeWorkerReportedAtMs(opts.reportedAtMs, nowMs2);
-      if (reportedAt === "too_old" || reportedAt !== void 0 && workerIdentityPostdates(resolved.live, reportedAt)) return { accepted: false, refusal: "stale_report" };
-      return acceptWorkerProgressUpdateForIdentity(resolved.live, note2, { nowMs: nowMs2, deliveryId: opts.deliveryId });
-    }
-    function acceptWorkerProgressUpdateForIdentity(identity2, note2, opts = {}) {
-      if (!identity2.attemptId) {
-        return {
-          accepted: false,
-          taskId: identity2.taskId,
-          refusal: "storage_failed",
-          detail: `task ${identity2.taskId} has no active attempt to record progress against`
-        };
-      }
-      const nowMs2 = opts.nowMs ?? Date.now();
-      let recorded = false;
-      try {
-        recorded = MeshRuntimeStore.getInstance().turnStore().insertWorkerEvent({
-          eventId: (0, import_crypto27.randomUUID)(),
-          attemptId: identity2.attemptId,
-          sessionId: identity2.sessionId ?? null,
-          kind: WORKER_PROGRESS_EVENT_KIND,
-          // Distinct per call — progress updates are a SEQUENCE, unlike the
-          // completion report where the UNIQUE constraint provides idempotency.
-          dedupeKey: opts.deliveryId ? `delivery:${opts.deliveryId}` : `${nowMs2}`,
-          payload: { noteLength: note2.length },
-          atMs: nowMs2
-        });
-      } catch (e) {
-        LOG.error("WorkerReport", `Failed to record progress update for task ${identity2.taskId}: ${e?.message || e}`);
-        return {
-          accepted: false,
-          taskId: identity2.taskId,
-          refusal: "storage_failed",
-          detail: e?.message || String(e)
-        };
-      }
-      if (!recorded && !MeshRuntimeStore.getInstance().turnStore().getAttempt(identity2.attemptId)) {
-        return {
-          accepted: false,
-          taskId: identity2.taskId,
-          refusal: "storage_failed",
-          detail: `task ${identity2.taskId} has no active attempt to record progress against`
-        };
-      }
-      if (!recorded && opts.deliveryId) return { accepted: true, taskId: identity2.taskId, surfacedToCoordinator: false };
-      if (!recorded) {
-        return {
-          accepted: false,
-          taskId: identity2.taskId,
-          refusal: "storage_failed",
-          detail: "a progress update for this attempt already exists at this timestamp \u2014 retry"
-        };
-      }
-      const surfaced = notifyCoordinatorOfProgress(identity2, note2, nowMs2);
-      return { accepted: true, taskId: identity2.taskId, surfacedToCoordinator: surfaced };
-    }
-    function __resetProgressSurfaceForTest() {
-      PROGRESS_SURFACE_LAST_MS.clear();
-    }
-    function shouldSurfaceProgressToCoordinator(opts) {
-      const note2 = opts.note.trim();
-      if (note2.length < WORKER_PROGRESS_SURFACE_MIN_CHARS) return false;
-      if (opts.lastSurfacedAtMs === void 0) return true;
-      return opts.nowMs - opts.lastSurfacedAtMs >= WORKER_PROGRESS_SURFACE_MIN_GAP_MS;
-    }
-    function buildWorkerProgressNotice(opts) {
-      return `[System] ${opts.nodeLabel} progress on task ${opts.taskId}: ${opts.note.trim()} \u2014 this is an informational mid-task update, NOT a completion. The task is still running; do not dispatch it elsewhere and do not poll. Wait for its completion event.`;
-    }
-    function __setWorkerProgressNoticeSinkForTests(sink2) {
-      progressNoticeSinkOverride = sink2;
-    }
-    function notifyCoordinatorOfProgress(identity2, note2, nowMs2) {
-      const key3 = summaryKey(identity2.meshId, identity2.taskId);
-      if (!shouldSurfaceProgressToCoordinator({
-        note: note2,
-        nowMs: nowMs2,
-        lastSurfacedAtMs: PROGRESS_SURFACE_LAST_MS.get(key3)
-      })) {
-        return false;
-      }
-      const sink2 = progressNoticeSinkOverride === void 0 ? queueWorkerProgressNotice : progressNoticeSinkOverride;
-      if (!sink2) return false;
-      try {
-        sink2({
-          meshId: identity2.meshId,
-          taskId: identity2.taskId,
-          ...identity2.nodeId ? { nodeId: identity2.nodeId } : {},
-          ...identity2.sessionId ? { sessionId: identity2.sessionId } : {},
-          note: note2.trim(),
-          coordinatorMessage: buildWorkerProgressNotice({
-            taskId: identity2.taskId,
-            nodeLabel: identity2.nodeId || identity2.sessionId || identity2.taskId,
-            note: note2
-          }),
-          nowMs: nowMs2
-        });
-      } catch (e) {
-        LOG.warn("WorkerReport", `Failed to surface progress for task ${identity2.taskId}: ${e?.message || e}`);
-        return false;
-      }
-      afterBridgeCommit(MeshRuntimeStore.getInstance().db, () => PROGRESS_SURFACE_LAST_MS.set(key3, nowMs2));
-      return true;
-    }
-    var import_crypto27;
-    var WORKER_PROGRESS_SURFACE_MIN_GAP_MS;
-    var WORKER_PROGRESS_SURFACE_MIN_CHARS;
-    var PROGRESS_SURFACE_LAST_MS;
-    var progressNoticeSinkOverride;
-    var init_worker_report_progress = __esm2({
-      "src/mesh/worker-report-progress.ts"() {
-        "use strict";
-        init_worker_bridge_transaction();
-        init_worker_report();
-        init_worker_report_forwarded();
-        init_mesh_runtime_store();
-        import_crypto27 = require("crypto");
-        init_logger();
-        init_worker_progress_notify();
-        WORKER_PROGRESS_SURFACE_MIN_GAP_MS = 5 * 60 * 1e3;
-        WORKER_PROGRESS_SURFACE_MIN_CHARS = 40;
-        PROGRESS_SURFACE_LAST_MS = /* @__PURE__ */ new Map();
       }
     });
     var mesh_membership_projection_exports = {};
@@ -100979,7 +101022,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     init_logger();
     init_config();
     init_p2p_relay_failure();
-    var import_crypto17 = require("crypto");
+    var import_crypto18 = require("crypto");
     init_dist();
     init_logger();
     var MESH_HANDSHAKE_PROTOCOL_VERSION = 1;
@@ -100995,7 +101038,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       "timeout"
     ]);
     function mintHandshakeNonce() {
-      return (0, import_crypto17.randomBytes)(NONCE_BYTES).toString("base64");
+      return (0, import_crypto18.randomBytes)(NONCE_BYTES).toString("base64");
     }
     function isNonce(value) {
       if (typeof value !== "string" || value.length === 0) return false;
@@ -101009,7 +101052,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       return canonicalDaemonId2(id3) ?? id3.trim();
     }
     function hmacBase64(secret, message) {
-      return (0, import_crypto17.createHmac)("sha256", secret).update(message, "utf8").digest("base64");
+      return (0, import_crypto18.createHmac)("sha256", secret).update(message, "utf8").digest("base64");
     }
     function computeServerProof(input) {
       return hmacBase64(
@@ -101028,7 +101071,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       const a = Buffer.from(expected, "base64");
       const b = Buffer.from(actual, "base64");
       if (a.length === 0 || a.length !== b.length) return false;
-      return (0, import_crypto17.timingSafeEqual)(a, b);
+      return (0, import_crypto18.timingSafeEqual)(a, b);
     }
     function parseHandshakeFrame(raw) {
       let value = raw;
@@ -101139,7 +101182,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     function createHandshakeResponder(opts) {
       let state2 = "awaiting_hello";
       let step = PENDING2;
-      const decoySecret = (0, import_crypto17.randomBytes)(32).toString("base64");
+      const decoySecret = (0, import_crypto18.randomBytes)(32).toString("base64");
       let expectedClientProof = "";
       let meshId = "";
       let peerDaemonId = "";
@@ -103421,7 +103464,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       return "fsm_state";
     }
     init_dist();
-    var import_crypto19 = require("crypto");
+    var import_crypto20 = require("crypto");
     init_logger();
     var SUMMARY_REF_KINDS = /* @__PURE__ */ new Set(["turn_end", "transcript_final"]);
     var TURN_EVIDENCE_HANDOFF_KIND = "turn.evidence.text";
@@ -103589,7 +103632,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     var MODAL_KEY_IDENTIFIER_RE = /^[^\s\u0000-\u001f\u007f]{1,256}$/;
     function toModalKeyIdentifier(key3) {
       if (MODAL_KEY_IDENTIFIER_RE.test(key3)) return key3;
-      return `fp:${(0, import_crypto19.createHash)("sha256").update(key3).digest("hex").slice(0, 32)}`;
+      return `fp:${(0, import_crypto20.createHash)("sha256").update(key3).digest("hex").slice(0, 32)}`;
     }
     function emitSuspensionResolved(port, opts) {
       guardEmit(port, "suspension_resolved", opts.sessionId, () => ({
@@ -110547,7 +110590,7 @@ ${output}` : "";
     init_contract();
     var fs40 = __toESM2(require("fs"));
     var path46 = __toESM2(require("path"));
-    var import_crypto20 = require("crypto");
+    var import_crypto21 = require("crypto");
     init_contract();
     var TREE_DIGEST_ALGORITHM = "adhdev-provider-tree-sha256-v1";
     function computeProviderTreeDigest(rootDir, providerType) {
@@ -110561,7 +110604,7 @@ ${output}` : "";
         );
       }
       relPaths.sort();
-      const hash = (0, import_crypto20.createHash)("sha256");
+      const hash = (0, import_crypto21.createHash)("sha256");
       for (const relPath of relPaths) {
         const absPath = path46.join(rootDir, ...relPath.split("/"));
         const bytes = fs40.readFileSync(absPath);
@@ -118931,7 +118974,7 @@ ${marker}`,
     var fs58 = __toESM2(require("fs"));
     var import_node_crypto6 = require("crypto");
     init_logger();
-    var import_crypto21 = require("crypto");
+    var import_crypto22 = require("crypto");
     var BASE_62_DIGITS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
     var ZERO2 = BASE_62_DIGITS[0];
     var SMALLEST_INTEGER = `A${ZERO2.repeat(26)}`;
@@ -119095,7 +119138,7 @@ ${marker}`,
       return m ? { cls: "n", L: m[1], addr: m[2] } : void 0;
     }
     function newEpochToken() {
-      return (0, import_crypto21.randomBytes)(4).readUInt32BE(0).toString(36).padStart(6, "0").slice(-6);
+      return (0, import_crypto22.randomBytes)(4).readUInt32BE(0).toString(36).padStart(6, "0").slice(-6);
     }
     function contentKey(role, kind, text2) {
       return `${role}\0${kind}\0${text2}`;
@@ -123183,9 +123226,9 @@ ${marker}`,
     };
     init_config_dir();
     init_provider_approval();
-    var import_crypto22 = require("crypto");
+    var import_crypto23 = require("crypto");
     function modalIdentity(modal) {
-      return (0, import_crypto22.createHash)("sha256").update(JSON.stringify(modal)).digest("hex");
+      return (0, import_crypto23.createHash)("sha256").update(JSON.stringify(modal)).digest("hex");
     }
     function parseAssistantAction(raw) {
       if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
@@ -123215,7 +123258,7 @@ ${marker}`,
         if (!this.available(state2)) return { success: false, code: state2.enabled ? "assistant_execution_not_enforced" : "assistant_execution_off" };
         for (const [token, c] of this.consents) if (c.expiresAt <= now) this.consents.delete(token);
         if (this.consents.size >= 32) return { success: false, code: "assistant_consent_capacity" };
-        const authorization = (0, import_crypto22.randomBytes)(32).toString("hex");
+        const authorization = (0, import_crypto23.randomBytes)(32).toString("hex");
         const expiresAt = now + 2 * 6e4;
         this.consents.set(authorization, { origin: "OWNER", sessionId: state2.sessionId, action: { ...action2 }, modal: modalIdentity(modal), expiresAt, policyRevision: state2.policyRevision ?? 0 });
         return { success: true, authorization, expiresAt };
@@ -127471,7 +127514,7 @@ ${marker}`,
       }
     };
     var meshLedgerSpecs = defineCommandSpecs("low", meshLedgerHandlers, {}, { meshSender: "authenticated_peer" });
-    var import_crypto26 = require("crypto");
+    var import_crypto27 = require("crypto");
     init_dist();
     init_dist();
     var ROUTER_INTERNAL_ARG_PREFIX = "_";
@@ -128047,7 +128090,7 @@ ${marker}`,
           return { success: false, error: "turn_cancel: no attempt found for the given attemptId/taskId", code: "ledger_not_owner" };
         }
         const evidence = {
-          eventId: (0, import_crypto26.randomUUID)(),
+          eventId: (0, import_crypto27.randomUUID)(),
           at: Date.now(),
           source: "mcp_probe",
           sessionId: attempt.sessionId,
@@ -128081,7 +128124,7 @@ ${marker}`,
           return { success: true, ...response2 };
         }
         const evidence = {
-          eventId: (0, import_crypto26.randomUUID)(),
+          eventId: (0, import_crypto27.randomUUID)(),
           at: Date.now(),
           source: "mcp_probe",
           sessionId: attempt.sessionId,
@@ -129044,7 +129087,7 @@ ${marker}`,
               { fields, summaryLength },
               { generation: prepared.generation, deliveryId: prepared.deliveryId, reportedAtMs: prepared.reportedAtMs }
             );
-            return { ...answer, ...receipt2 ? { receipt: receipt2 } : { receiptPending: true } };
+            return receipt2?.recorded ? { ...answer, receipt: receipt2 } : { success: false, error: "storage_failed", receiptPending: true };
           });
           return { ...handled, success: false };
         }
@@ -129408,7 +129451,7 @@ ${marker}`,
         if (!note2) return { success: false, error: "note required" };
         try {
           const { hasLocalWorkerIdentity: hasLocalWorkerIdentity2 } = await Promise.resolve().then(() => (init_worker_report(), worker_report_exports));
-          const { acceptWorkerProgressUpdate: acceptWorkerProgressUpdate2 } = await Promise.resolve().then(() => (init_worker_report_progress(), worker_report_progress_exports));
+          const { acceptWorkerProgressUpdate: acceptWorkerProgressUpdate2, acceptWorkerProgressUpdateForIdentity: acceptWorkerProgressUpdateForIdentity2 } = await Promise.resolve().then(() => (init_worker_report_progress(), worker_report_progress_exports));
           const credential = { token: args?.token, bind: args?.bind };
           const deliveryId = normalizeWorkerDeliveryId(args?.deliveryId);
           const replay = prepared ? void 0 : recallWorkerDelivery("progress", credential, deliveryId);
@@ -129436,7 +129479,9 @@ ${marker}`,
             }, () => {
               const attempt = MeshRuntimeStore.getInstance().turnStore().getAttempt(prepared.attemptId);
               if (!attempt || attempt.generation !== prepared.generation || attempt.sessionId !== prepared.sessionId) return { success: false, error: "stale_report" };
-              return toProgressResponse(acceptWorkerProgressUpdate2(credential, note2, { reportedAtMs, deliveryId }));
+              if (!daemonIdsEquivalent4(attempt.ownerDaemonId, self.daemonId) || attempt.meshId !== prepared.meshId || attempt.taskId !== prepared.taskId || attempt.nodeId !== prepared.nodeId) return { success: false, error: "unauthenticated" };
+              if (Date.now() - prepared.reportedAtMs > BRIDGE_MAX_AGE_MS || prepared.reportedAtMs > Date.now() + 6e4) return { success: false, error: "stale_report" };
+              return toProgressResponse(acceptWorkerProgressUpdateForIdentity2({ token: "", ...prepared }, note2, { deliveryId }));
             });
           }
           const result = acceptWorkerProgressUpdate2(credential, note2, { reportedAtMs });
@@ -129600,8 +129645,7 @@ ${marker}`,
         const db = MeshRuntimeStore.getInstance().db;
         ensureBridgeSchema(db);
         const policy = readBridgePolicy(db, args?.meshId);
-        const pending = db.prepare("SELECT COUNT(*) AS n FROM worker_bridge_delivery WHERE mesh_id=? AND state!='receipted'").get(args?.meshId);
-        return { success: true, policy, ...bridgeDrainState(db, args?.meshId), pendingDeliveries: pending.n, identity: identity(_ctx), launchNonceDigest: process.env.ADHDEV_WORKER_BRIDGE_LAUNCH_NONCE ? (await import("crypto")).createHash("sha256").update(process.env.ADHDEV_WORKER_BRIDGE_LAUNCH_NONCE).digest("hex") : null };
+        return { success: true, policy, ...bridgeDrainState(db, args?.meshId), identity: identity(_ctx), launchNonceDigest: process.env.ADHDEV_WORKER_BRIDGE_LAUNCH_NONCE ? (await import("crypto")).createHash("sha256").update(process.env.ADHDEV_WORKER_BRIDGE_LAUNCH_NONCE).digest("hex") : null };
       }
     };
     var workerBridgeSpecs = defineCommandSpecs("low", workerBridgeHandlers, {
@@ -163417,7 +163461,9 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           atMs: at,
           recordedAt: now()
         }));
-        if (inserted && autoFlush) void flushPublish();
+        if (inserted && autoFlush) afterBridgeCommit(deps.db, () => {
+          void flushPublish();
+        });
         return { eventId, inserted };
       }
       function claimDelivery(input) {
@@ -181021,8 +181067,22 @@ var WorkerOutboxStore = class {
     try {
       const file = this.fileFor(entry.id);
       const tmp = `${file}.${process.pid}.tmp`;
-      fs.writeFileSync(tmp, JSON.stringify(entry), { mode: 384 });
+      const fd = fs.openSync(tmp, "w", 384);
+      try {
+        fs.writeFileSync(fd, JSON.stringify(entry));
+        fs.fsyncSync(fd);
+      } finally {
+        fs.closeSync(fd);
+      }
       fs.renameSync(tmp, file);
+      if (process.platform !== "win32") {
+        const parent = fs.openSync(this.dir, "r");
+        try {
+          fs.fsyncSync(parent);
+        } finally {
+          fs.closeSync(parent);
+        }
+      }
     } catch (e) {
       this.diskOk = false;
       this.log(`could not persist outbox entry ${entry.id} (${e?.message || e}); it is kept in memory only`);

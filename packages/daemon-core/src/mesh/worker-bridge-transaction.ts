@@ -2,6 +2,7 @@ import type { Database } from 'better-sqlite3';
 // Bridge receipts add an OUTER transaction around existing nested ledger writes.
 // Their post-commit effects must wait for the outer commit, not a savepoint.
 const scopes = new WeakMap<Database, Array<() => void>>();
+export function inBridgeReceiptTransaction(db: Database): boolean { return scopes.has(db); }
 export function afterBridgeCommit(db: Database, action: () => void): void {
     const pending = scopes.get(db);
     if (pending) pending.push(action);

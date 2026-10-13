@@ -495,7 +495,7 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
             atMs: at,
             recordedAt: now(),
         }));
-        if (inserted && autoFlush) void flushPublish();
+        if (inserted && autoFlush) afterBridgeCommit(deps.db, () => { void flushPublish(); });
         return { eventId, inserted };
     }
 

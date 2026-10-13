@@ -3,7 +3,7 @@
  * attempt, recorded on the ledger, and surfaced to the coordinator only when enough
  * time and text have accumulated since the last surfaced update.
  */
-import { afterBridgeCommit } from './worker-bridge-transaction.js';
+import { afterBridgeCommit, inBridgeReceiptTransaction } from './worker-bridge-transaction.js';
 import { resolveWorkerIdentity, classifyUnresolvedWorkerCredential, normalizeWorkerReportedAtMs, workerIdentityPostdates, WORKER_PROGRESS_EVENT_KIND, summaryKey, type WorkerReportRefusal } from './worker-report.js';
 import { resolveForwardedWorkerIdentity, type ForwardedWorkerReportClaim, type ForwardedReportSender, type ForwardedReportRefusalReason } from './worker-report-forwarded.js';
 import type { WorkerTokenExchangeResult } from './worker-mcp-isolation.js';
@@ -87,7 +87,7 @@ export function acceptForwardedWorkerProgressUpdate(
 }
 
 /** The progress body, once identity is PROVEN (local bind/token, or a forwarded claim the owner re-resolved). */
-function acceptWorkerProgressUpdateForIdentity(
+export function acceptWorkerProgressUpdateForIdentity(
     identity: WorkerTokenExchangeResult,
     note: string,
     opts: { nowMs?: number; deliveryId?: string } = {},
@@ -154,7 +154,7 @@ function acceptWorkerProgressUpdateForIdentity(
     // ★F3: surface the note to the coordinator. The ledger row above is
     // content-free (length only), so the TEXT rides this call and nothing else.
     // Filtered, not firehosed — see shouldSurfaceProgressToCoordinator.
-    const surfaced = notifyCoordinatorOfProgress(identity, note, nowMs);
+    const surfaced = notifyCoordinatorOfProgress(identity, note, nowMs, opts.deliveryId);
     return { accepted: true, taskId: identity.taskId, surfacedToCoordinator: surfaced };
 }
 
@@ -228,7 +228,8 @@ export type WorkerProgressNoticeSink = (notice: {
     note: string;
     coordinatorMessage: string;
     nowMs: number;
-}) => void;
+    eventId?: string;
+}) => boolean | void;
 
 /** `undefined` = the production sink (`queueWorkerProgressNotice`); `null` = disabled. TESTS set it. */
 let progressNoticeSinkOverride: WorkerProgressNoticeSink | null | undefined;
@@ -242,6 +243,7 @@ function notifyCoordinatorOfProgress(
     identity: WorkerTokenExchangeResult,
     note: string,
     nowMs: number,
+    deliveryId?: string,
 ): boolean {
     const key = summaryKey(identity.meshId, identity.taskId);
     if (!shouldSurfaceProgressToCoordinator({
@@ -253,26 +255,55 @@ function notifyCoordinatorOfProgress(
     }
     const sink = progressNoticeSinkOverride === undefined ? queueWorkerProgressNotice : progressNoticeSinkOverride;
     if (!sink) return false;
+    const notice = {
+        meshId: identity.meshId, taskId: identity.taskId,
+        ...(identity.nodeId ? { nodeId: identity.nodeId } : {}),
+        ...(identity.sessionId ? { sessionId: identity.sessionId } : {}),
+        note: note.trim(), coordinatorMessage: buildWorkerProgressNotice({
+            taskId: identity.taskId, nodeLabel: identity.nodeId || identity.sessionId || identity.taskId, note,
+        }), nowMs,
+        ...(deliveryId ? { eventId: `worker-progress:${identity.attemptId}:delivery:${deliveryId}` } : {}),
+    };
+    const db = MeshRuntimeStore.getInstance().db;
+    if (inBridgeReceiptTransaction(db)) {
+        if (!deliveryId) throw new Error('bridge_progress_requires_delivery_identity');
+        ensureProgressNoticeSchema(db);
+        // Content stays local. This intent and the worker evidence commit with
+        // the exact receipt, so neither a crash nor an unbound consumer loses it.
+        db.prepare("INSERT OR IGNORE INTO worker_bridge_progress_notice(event_id,mesh_id,notice_json,state) VALUES (?,?,?,'pending')")
+            .run(notice.eventId, identity.meshId, JSON.stringify(notice));
+        afterBridgeCommit(db, () => { resumeBridgeProgressNotices(db); });
+        return false; // Durably queued; never claim an external side effect yet.
+    }
     try {
-        sink({
-            meshId: identity.meshId,
-            taskId: identity.taskId,
-            ...(identity.nodeId ? { nodeId: identity.nodeId } : {}),
-            ...(identity.sessionId ? { sessionId: identity.sessionId } : {}),
-            note: note.trim(),
-            coordinatorMessage: buildWorkerProgressNotice({
-                taskId: identity.taskId,
-                nodeLabel: identity.nodeId || identity.sessionId || identity.taskId,
-                note,
-            }),
-            nowMs,
-        });
+        if (sink(notice) === false) return false;
     } catch (e: any) {
-        // Surfacing is an enhancement over the ledger row, which is already
-        // written. It must never turn an accepted progress update into a refusal.
         LOG.warn('WorkerReport', `Failed to surface progress for task ${identity.taskId}: ${e?.message || e}`);
         return false;
     }
-    afterBridgeCommit(MeshRuntimeStore.getInstance().db, () => PROGRESS_SURFACE_LAST_MS.set(key, nowMs));
+    PROGRESS_SURFACE_LAST_MS.set(key, nowMs);
     return true;
+}
+
+
+function ensureProgressNoticeSchema(db: import('better-sqlite3').Database): void {
+    db.exec(`CREATE TABLE IF NOT EXISTS worker_bridge_progress_notice (
+        event_id TEXT PRIMARY KEY, mesh_id TEXT NOT NULL, notice_json TEXT NOT NULL,
+        state TEXT NOT NULL CHECK(state IN ('pending','delivered')))`);
+}
+/** Retry after daemon restart or consumer/storage failure. The stable event id
+ * deduplicates a crash after enqueue but before marking the local intent done. */
+export function resumeBridgeProgressNotices(db: import('better-sqlite3').Database): void {
+    ensureProgressNoticeSchema(db);
+    const sink = progressNoticeSinkOverride === undefined ? queueWorkerProgressNotice : progressNoticeSinkOverride;
+    if (!sink) return;
+    const pending = db.prepare("SELECT event_id,notice_json FROM worker_bridge_progress_notice WHERE state='pending'").all() as Array<{ event_id: string; notice_json: string }>;
+    for (const row of pending) {
+        try {
+            const notice = JSON.parse(row.notice_json) as Parameters<WorkerProgressNoticeSink>[0];
+            if (sink(notice) === false) continue;
+            db.prepare("UPDATE worker_bridge_progress_notice SET state='delivered' WHERE event_id=?").run(row.event_id);
+            PROGRESS_SURFACE_LAST_MS.set(summaryKey(notice.meshId, notice.taskId), notice.nowMs);
+        } catch { /* Original intent remains pending; retry unchanged. */ }
+    }
 }
