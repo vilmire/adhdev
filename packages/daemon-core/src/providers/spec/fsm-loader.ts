@@ -205,6 +205,12 @@ export function collectFsmSpecWarnings(raw: unknown): string[] {
 function warnCondition(c: FsmCondition, path: string): string[] {
     const warns: string[] = [];
     const w = c as any;
+    if (('all' in w || 'any' in w || 'not' in w) && 'section' in w) {
+        warns.push(
+            `${path}.section is ignored on all/any/not composites — ` +
+            `set "section" on each screen-content leaf instead; composite sections are not inherited.`,
+        );
+    }
     if ('all' in w && Array.isArray(w.all)) { w.all.forEach((x: FsmCondition, i: number) => warns.push(...warnCondition(x, `${path}.all[${i}]`))); return warns; }
     if ('any' in w && Array.isArray(w.any)) { w.any.forEach((x: FsmCondition, i: number) => warns.push(...warnCondition(x, `${path}.any[${i}]`))); return warns; }
     if ('not' in w && w.not) { warns.push(...warnCondition(w.not, `${path}.not`)); return warns; }

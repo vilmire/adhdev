@@ -84050,6 +84050,11 @@ ${body}`;
     function warnCondition(c, path91) {
       const warns = [];
       const w = c;
+      if (("all" in w || "any" in w || "not" in w) && "section" in w) {
+        warns.push(
+          `${path90}.section is ignored on all/any/not composites \u2014 set "section" on each screen-content leaf instead; composite sections are not inherited.`
+        );
+      }
       if ("all" in w && Array.isArray(w.all)) {
         w.all.forEach((x, i) => warns.push(...warnCondition(x, `${path91}.all[${i}]`)));
         return warns;
