@@ -16,10 +16,11 @@ const image = { mimeType: 'image/png', data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCA
 it('settles only exact acknowledged image-inclusive writes through producer/adapter/codec and real mobile consumer, including reconnect', async () => {
     localStorage.clear(); localStorage.setItem('lang', 'en');initI18n()
     ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
-    for (const width of [375, 390]) for (const mode of ['queued', 'immediate', 'void', 'late_ack']) {
+    for (const width of [375, 390]) for (const mode of ['queued', 'immediate', 'void', 'late_ack', 'authorized', 'refusal']) {
         await page.viewport(width, 844)
         const sessionId = `synthetic-session-${width}-${mode}`, tabKey = `synthetic-tab-${width}-${mode}`, daemonId = 'synthetic-daemon'
-        await remote({ action: 'init', sessionId, immediate: mode === 'immediate', confirmed: mode !== 'void' })
+        await remote({ action: 'init', sessionId, immediate: mode === 'immediate', confirmed: mode !== 'void', authorized: mode === 'authorized' })
+        const text = ['authorized', 'refusal'].includes(mode) ? 'approve' : 'Public text and image'
         const conversation: any = { routeId: daemonId, daemonId, sessionId, tabKey, assistant: true,
             transport: 'pty', mode: 'chat', status: 'idle', title: 'Assistant', displayPrimary: 'Assistant', agentName: 'Codex',
             agentType: 'codex-cli', connectionState: 'connected', messages: [] }
@@ -65,10 +66,34 @@ it('settles only exact acknowledged image-inclusive writes through producer/adap
         try {
             await render()
             let sending: Promise<boolean>
-            await act(async () => { sending = latest.handleSendChat('Public text and image', [image]);if (mode !== 'late_ack') await sending })
+            await act(async () => { sending = latest.handleSendChat(text, [image]);if (mode !== 'late_ack') await sending })
             if (mode === 'late_ack') await expect.poll(() => !!queuedReply).toBe(true)
-            const id = lastPayload.messageId
+            let id = lastPayload.messageId
             let state = await remote({ action: 'peek', sessionId, ids: [id] })
+            if (mode === 'refusal') {
+                expect(await sending!).toBe(false) // Caller retains its draft and images.
+                expect(state.writes).toBe(0); expect(state.messages).toEqual([])
+                expect(state.receipts[0]).toMatchObject({ state: 'failed', proof: 'not_written', inputDigest: latest.pendingLocalMessages[0].inputDigest })
+                expect(host.querySelector('[data-testid="pending-queue-strip"]')?.textContent).toContain('Not sent')
+                const failed = state.receipts[0]
+                // Immediate explicit retry uses a fresh ID even in this same mount.
+                await act(async () => { expect(await latest.handleSendChat(text, [image])).toBe(false) })
+                const secondFailedId = lastPayload.messageId
+                expect(secondFailedId).not.toBe(id)
+                await act(async () => { expect(await latest.handleCancelQueued(secondFailedId)).toBe(true) })
+                await remote({ action: 'restart', sessionId })
+                const replay = await remote({ action: 'submit', sessionId, message: { ...lastPayload, messageId: id } })
+                expect(replay.deduplicated).toBe(true); expect(replay.outgoingReceipt).toEqual(failed)
+                await act(async () => root.unmount()); root = createRoot(host); await render()
+                await expect.poll(() => latest.pendingLocalMessages[0]?.outgoingReceipt?.state).toBe('failed')
+                await act(async () => { expect(await latest.handleCancelQueued(id)).toBe(true) })
+                expect(latest.pendingLocalMessages).toHaveLength(0)
+                expect(send.mock.calls.filter(([, type]) => type === 'cancel_queued_chat')).toHaveLength(0)
+                await remote({ action: 'authorize', sessionId })
+                await act(async () => { expect(await latest.handleSendChat(text, [image])).toBe(true) })
+                expect(lastPayload.messageId).not.toBe(id); id = lastPayload.messageId
+                state = await remote({ action: 'peek', sessionId, ids: [id] })
+            }
             if (mode !== 'immediate') { expect(state.writes).toBe(0);expect(state.receipts[0].state).toBe('accepted') }
             else expect(state.receipts[0].state).not.toBe('submitted')
             expect(state.messages[0].sourceMessageId).toBe(id)
@@ -83,7 +108,7 @@ it('settles only exact acknowledged image-inclusive writes through producer/adap
             await publish(state.messages)
             expect(latest.pendingLocalMessages[0].deliveryUncertain).toBe(true)
             expect(await latest.handleSendNowQueued(id)).toBe(false)
-            expect(await latest.handleSendChat('Public text and image', [image])).toBe(false)
+            expect(await latest.handleSendChat(text, [image])).toBe(false)
             const card = host.querySelector('[data-testid="pending-queue-strip"]')!
             const bounds = card.getBoundingClientRect(), input = host.querySelector('textarea')!.getBoundingClientRect()
             expect(bounds.x).toBeGreaterThanOrEqual(0);expect(bounds.right).toBeLessThanOrEqual(width)
@@ -121,7 +146,7 @@ it('settles only exact acknowledged image-inclusive writes through producer/adap
             const duplicate = await remote({ action: 'submit', sessionId, message: lastPayload })
             expect(duplicate.deduplicated).toBe(true)
             expect((await remote({ action: 'peek', sessionId, ids: [id] })).writes).toBe(2)
-            expect(send.mock.calls.filter(([, type]) => type === 'send_chat')).toHaveLength(1)
+            expect(send.mock.calls.filter(([, type]) => type === 'send_chat')).toHaveLength(mode === 'refusal' ? 3 : 1)
             await act(async () => { await page.screenshot({ path: `/tmp/assistant-queue-contract-settled-${width}-${mode}.png` }) })
             console.log(JSON.stringify({ width, mode, sessionId, ...state.receipts[0], nativeWrites: state.writes, nativeBodyCopies: 1 }))
         } finally { await act(async () => root.unmount());host.remove();await remote({ action: 'close', sessionId }) }

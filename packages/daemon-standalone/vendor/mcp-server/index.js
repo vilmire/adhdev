@@ -123183,17 +123183,17 @@ ${marker}`,
           log("warn", `submit(${msg.messageId}) ack failed: ${e?.message ?? e}`);
         }
       }
-      function freshBody(target, msg) {
+      function freshBody(target, msg, input = msg.input) {
         try {
           if (target.buildBody) {
-            const body = target.buildBody(msg.input);
+            const body = target.buildBody(input);
             if (body && body.text.trim()) return body;
             return refuse2("unsupported_input", { message: "No input to send." });
           }
-          if (hasNonTextParts(msg.input)) {
+          if (hasNonTextParts(input)) {
             return refuse2("unsupported_input", { message: `${target.label || "This session"} only supports text input.` });
           }
-          const text2 = msg.input.textFallback;
+          const text2 = input.textFallback;
           if (!text2 || !text2.trim()) return refuse2("unsupported_input", { message: "No input to send." });
           return { text: text2 };
         } catch (e) {
@@ -123225,7 +123225,7 @@ ${marker}`,
         log("info", `submit(${msg.messageId}) ${msg.origin}/${msg.policy.mode} \u2192 delivered (session ${msg.sessionId}, route=${opts.route}, len=${body.text.length})`);
         return { kind: "delivered", route: opts.route, ...detail };
       }
-      async function splitWrite(target, msg, parked) {
+      async function splitWrite(target, msg, parked, input = msg.input) {
         if (typeof target.sendMessageDuringGeneration !== "function") {
           return refuse2("not_supported", { restored: true });
         }
@@ -123236,7 +123236,7 @@ ${marker}`,
           if (!claimed) return { kind: "duplicate", of: msg.messageId };
           body = { text: claimed.entry.text, ...claimed.entry.bracketedPaste ? { bracketedPaste: true } : {} };
         } else {
-          const built = freshBody(target, msg);
+          const built = freshBody(target, msg, input);
           if ("kind" in built) return built;
           body = built;
         }
@@ -123266,11 +123266,11 @@ ${marker}`,
         log("info", `submit(${msg.messageId}) send_now refused ${outcome.reason} (session ${msg.sessionId}, promoted=${parked}, restored=${restored})`);
         return refuse2(reason, { restored });
       }
-      async function interruptThenWrite(target, msg, parked) {
+      async function interruptThenWrite(target, msg, parked, input = msg.input) {
         if (typeof target.interruptTurn !== "function") return refuse2("interrupt_not_implemented");
         let fresh = null;
         if (!parked) {
-          const built = freshBody(target, msg);
+          const built = freshBody(target, msg, input);
           if ("kind" in built) return built;
           fresh = built;
         }
@@ -123325,8 +123325,8 @@ ${marker}`,
           target.releaseDrain?.();
         }
       }
-      async function run3(msg) {
-        if (msg.origin === "dashboard" || receiptStore.get(msg.messageId)) {
+      async function run3(msg, prepareInput) {
+        if (prepareInput || msg.origin === "dashboard" || receiptStore.get(msg.messageId)) {
           const { receipt, fresh } = receiptStore.accept(msg.messageId, msg.sessionId, msg.input);
           if (fresh) freshOutgoing.add(msg.messageId);
           if (!fresh) {
@@ -123358,8 +123358,14 @@ ${marker}`,
         if (typeof strategy === "object") {
           return refuse2(strategy.refuse, parked ? { restored: true } : void 0);
         }
-        if (strategy === "split_write") return splitWrite(target, msg, parked);
-        if (strategy === "interrupt") return interruptThenWrite(target, msg, parked);
+        let input = msg.input;
+        if (!parked && prepareInput) {
+          const prepared = prepareInput();
+          if ("refusal" in prepared) return refuse2("unsupported_input", { message: prepared.refusal });
+          input = prepared;
+        }
+        if (strategy === "split_write") return splitWrite(target, msg, parked, input);
+        if (strategy === "interrupt") return interruptThenWrite(target, msg, parked, input);
         if (parked) {
           const claimed = target.claimQueuedSend?.(msg.messageId) ?? null;
           if (!claimed) return { kind: "duplicate", of: msg.messageId };
@@ -123368,7 +123374,7 @@ ${marker}`,
             ...claimed.entry.bracketedPaste ? { bracketedPaste: true } : {}
           }, { fresh: false, route: "pty" });
         }
-        const body = freshBody(target, msg);
+        const body = freshBody(target, msg, input);
         if ("kind" in body) return body;
         return writeAndReport(target, msg, body, { fresh: true, route: "pty" });
       }
@@ -123376,15 +123382,20 @@ ${marker}`,
         getReceipts: (sessionId, ids) => receiptStore.list(sessionId, ids).map((receipt) => {
           return receipt.state === "accepted" && !outgoingAttempts.has(receipt.messageId) ? { ...receipt, state: "uncertain", proof: "none", revision: receipt.revision + 1 } : receipt;
         }),
-        async submit(msg) {
+        async submit(msg, prepareInput) {
           if (!msg || typeof msg.messageId !== "string" || !msg.messageId.trim()) return refuse2("internal_error", { message: "messageId required" });
           if (typeof msg.sessionId !== "string" || !msg.sessionId.trim()) return refuse2("no_target");
           const pending = inFlight3.get(msg.messageId);
           if (pending) {
             await pending.catch(() => void 0);
+            try {
+              if (receiptStore.get(msg.messageId)) receiptStore.accept(msg.messageId, msg.sessionId, msg.input);
+            } catch {
+              return refuse2("internal_error", { message: "Outgoing message identity conflict" });
+            }
             return { kind: "duplicate", of: msg.messageId };
           }
-          const promise = run3(msg).catch((e) => {
+          const promise = run3(msg, prepareInput).catch((e) => {
             log("error", `submit(${msg.messageId}) threw: ${e?.message ?? e}`);
             return refuse2("internal_error", { message: e?.message || String(e) });
           });
@@ -123781,23 +123792,38 @@ ${marker}`,
         }
       }
       if (!messageId) messageId = mintLegacyMessageId();
-      const prepared = prepareOwnerActionChat({ sessionRegistry: h.ctx.sessionRegistry, instanceManager: h.ctx.instanceManager, cliManager: h.ctx.adapters ? { adapters: h.ctx.adapters } : void 0 }, readCommandSource(args), sessionKey2, input.textFallback ?? "", args?.assistantOwnerAction, args?.expectedOwnerModalIdentity);
-      if (!prepared.success) return { ...prepared, error: prepared.code };
-      const actionInput = prepared.text === input.textFallback ? input : normalizeInputEnvelope({ text: prepared.text });
+      let prepared;
       const outcome = await service.submit({
         messageId,
         sessionId: sessionKey2,
-        input: actionInput,
+        input,
         origin: readOutboundOrigin(args, "dashboard"),
         policy,
         createdAt: Date.now()
+      }, () => {
+        prepared = prepareOwnerActionChat({ sessionRegistry: h.ctx.sessionRegistry, instanceManager: h.ctx.instanceManager, cliManager: h.ctx.adapters ? { adapters: h.ctx.adapters } : void 0 }, readCommandSource(args), sessionKey2, input.textFallback ?? "", args?.assistantOwnerAction, args?.expectedOwnerModalIdentity);
+        if (!prepared.success) return { refusal: prepared.code };
+        if (prepared.text === input.textFallback) return input;
+        const hasTextPart = input.parts.some((part) => part.type === "text" && part.text.trim());
+        return {
+          ...input,
+          textFallback: prepared.text,
+          parts: [...input.parts, { type: "text", text: hasTextPart ? prepared.text.slice(input.textFallback.length) : prepared.text }]
+        };
       });
+      if (prepared && !prepared.success) return {
+        ...prepared,
+        error: prepared.code,
+        sent: false,
+        messageId,
+        outgoingReceipt: service.getReceipts(sessionKey2, [messageId])[0]
+      };
       const requested = typeof args?.targetSessionId === "string" ? args.targetSessionId.trim() : "";
       reportSessionChatInput({ sessionIds: requested && requested !== sessionKey2 ? [sessionKey2, requested] : [sessionKey2], messageId, source: readCommandSource(args), outcome });
       return {
         ...sendChatResultFromOutcome(outcome, messageId, transport, provider?.type),
         outgoingReceipt: service.getReceipts(sessionKey2, [messageId])[0],
-        ..."expiresAt" in prepared ? { ownerActionExpiresAt: prepared.expiresAt, ownerActionRetry: "If execution expires while queued or busy, select the current permission again. Consent is never renewed automatically." } : {}
+        ...prepared && "expiresAt" in prepared ? { ownerActionExpiresAt: prepared.expiresAt, ownerActionRetry: "If execution expires while queued or busy, select the current permission again. Consent is never renewed automatically." } : {}
       };
     }
     async function handleSendChat(h, args) {

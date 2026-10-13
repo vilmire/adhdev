@@ -72,3 +72,61 @@ it('records explicit pre-write failure durably and never replays that identity o
     expect((await service.submit(message)).kind).toBe('duplicate');
     expect(f.writes).toHaveLength(0);
 });
+
+it.each([true, false])('real handler reserves original images before enrichment and replays without minting consent or writing twice (explicit text part: %s)', async hasTextPart => {
+    const { assistantExecution } = await import('../../src/assistant/assistant-execution.js');
+    const { vi } = await import('vitest');
+    const f = outgoingContractFixture(message.sessionId); fixtures.push(f); f.authorizeAction();
+    const original = { ...input, textFallback: 'approve', parts: hasTextPart ? [{ type: 'text', text: 'approve' }, input.parts[0]] : [input.parts[0]] };
+    const args = { ...message, input: original };
+    const realIssue = assistantExecution.issue;
+    const issue = vi.spyOn(assistantExecution, 'issue');
+    issue.mockImplementation(function (...params) {
+        expect(f.store.get(args.messageId)).toMatchObject({ state: 'accepted', inputDigest: outgoingInputDigest(original) });
+        expect(f.writes).toHaveLength(0);
+        return realIssue.apply(assistantExecution, params);
+    });
+    try {
+        const [result, concurrentReplay] = await Promise.all([f.submitHandler(args), f.submitHandler(args)]);
+        expect(concurrentReplay).toMatchObject({ deduplicated: true });
+        expect(result).toMatchObject({ success: true, queued: true, outgoingReceipt: { inputDigest: outgoingInputDigest(original) } });
+        expect(issue).toHaveBeenCalledTimes(1);
+        expect(f.wire()[0].content).not.toContain('[ADHDev owner action]');
+        expect(f.wire()[0].content).toContain('approve');
+        expect(f.wire()[0].content).toContain('[image: image/png]');
+        expect(await f.submitHandler(args)).toMatchObject({ deduplicated: true });
+        expect(issue).toHaveBeenCalledTimes(1);
+        f.drain(); await expect.poll(() => f.writes.length).toBe(2);
+        expect(f.writes[0]).toContain('approve');
+        expect(f.writes[0]).toContain('[ADHDev owner action]');
+        expect(f.writes[0]).toContain('adhdev-input-image-');
+        expect(f.receipts([args.messageId])[0].state).toBe('uncertain');
+        f.acknowledge(); await sleep(0);
+        const submitted = f.receipts([args.messageId])[0];
+        expect(submitted).toMatchObject({ state: 'submitted', inputDigest: outgoingInputDigest(original) });
+        expect(f.wire()[0].outgoingReceipt).toEqual(submitted);
+        f.restartService();
+        expect(await f.submitHandler(args)).toMatchObject({ deduplicated: true, outgoingReceipt: submitted });
+        expect(await f.submitHandler({ ...args, input: { ...original, parts: [{ ...input.parts[0], data: 'different-image' }, original.parts[0]] } })).toMatchObject({ success: false });
+        expect(await f.submitHandler({ ...args, input: { ...original, textFallback: 'reject', parts: [{ type: 'text', text: 'reject' }, input.parts[0]] } })).toMatchObject({ success: false });
+        expect(issue).toHaveBeenCalledTimes(1); expect(f.writes).toHaveLength(2);
+    } finally { issue.mockRestore(); }
+});
+
+it('real handler journals selection refusal as exact not_written, replays it after restart, and permits only fresh-ID retry', async () => {
+    const f = outgoingContractFixture(message.sessionId); fixtures.push(f);
+    const args = { ...message, input: { ...input, textFallback: 'approve', parts: [{ type: 'text', text: 'approve' }, input.parts[0]] } };
+    const refused = await f.submitHandler(args);
+    expect(refused).toMatchObject({ success: false, code: 'assistant_action_needs_selection', sent: false,
+        outgoingReceipt: { messageId: args.messageId, sessionId: args.sessionId, state: 'failed', proof: 'not_written', inputDigest: outgoingInputDigest(args.input) } });
+    expect(f.writes).toHaveLength(0); expect(f.wire()).toEqual([]);
+    f.restartService(); f.authorizeAction();
+    expect(await f.submitHandler(args)).toMatchObject({ deduplicated: true, outgoingReceipt: refused.outgoingReceipt });
+    expect(f.writes).toHaveLength(0);
+    const retry = await f.submitHandler({ ...args, messageId: 'synthetic-fresh-retry' });
+    expect(retry).toMatchObject({ success: true, queued: true, outgoingReceipt: { state: 'accepted' } });
+    expect((retry.outgoingReceipt as any).attemptId).not.toBe((refused.outgoingReceipt as any).attemptId);
+    f.drain(); await expect.poll(() => f.writes.length).toBe(2); f.acknowledge(); await sleep(0);
+    expect(f.receipts(['synthetic-fresh-retry'])[0].state).toBe('submitted');
+    expect(f.receipts([args.messageId])[0]).toEqual(refused.outgoingReceipt);
+});

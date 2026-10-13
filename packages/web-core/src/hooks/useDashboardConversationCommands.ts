@@ -606,6 +606,8 @@ export function useDashboardConversationCommands({
             const receipt = readOutgoingReceipt(res?.outgoingReceipt)
             if (receipt?.state === 'failed' && receipt.messageId === pendingId
                 && receipt.sessionId === activeConv.sessionId && receipt.inputDigest === inputDigest) {
+                lastSendRef.current = clearRecentSendOnFailure(lastSendRef.current, attempt)
+                setLastSendQueued(false)
                 setSendFeedbackMessage('Not sent — rejected before writing.')
                 return false
             }

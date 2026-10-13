@@ -256,24 +256,33 @@ async function submitCliChat(h: CommandHelpers, args: any, input: InputEnvelope,
         }
     }
     if (!messageId) messageId = mintLegacyMessageId();
-    const prepared = prepareOwnerActionChat({ sessionRegistry: h.ctx.sessionRegistry, instanceManager: h.ctx.instanceManager, cliManager: h.ctx.adapters ? { adapters: h.ctx.adapters } : undefined }, readCommandSource(args), sessionKey, input.textFallback ?? '', args?.assistantOwnerAction, args?.expectedOwnerModalIdentity);
-    if (!prepared.success) return { ...prepared, error: prepared.code };
-    const actionInput = prepared.text === input.textFallback ? input : normalizeInputEnvelope({ text: prepared.text });
+    let prepared: ReturnType<typeof prepareOwnerActionChat> | undefined;
     const outcome = await service.submit({
         messageId,
         sessionId: sessionKey,
-        input: actionInput,
+        input,
         origin: readOutboundOrigin(args, 'dashboard'),
         policy,
         createdAt: Date.now(),
+    }, () => {
+        prepared = prepareOwnerActionChat({ sessionRegistry: h.ctx.sessionRegistry, instanceManager: h.ctx.instanceManager, cliManager: h.ctx.adapters ? { adapters: h.ctx.adapters } : undefined }, readCommandSource(args), sessionKey, input.textFallback ?? '', args?.assistantOwnerAction, args?.expectedOwnerModalIdentity);
+        if (!prepared.success) return { refusal: prepared.code };
+        if (prepared.text === input.textFallback) return input;
+        // Keep every original image/part. Only the native delivery body receives
+        // the daemon-issued authorization; logical receipt identity stays original.
+        const hasTextPart = input.parts.some(part => part.type === 'text' && part.text.trim());
+        return { ...input, textFallback: prepared.text,
+            parts: [...input.parts, { type: 'text' as const, text: hasTextPart ? prepared.text.slice(input.textFallback.length) : prepared.text }] };
     });
+    if (prepared && !prepared.success) return { ...prepared, error: prepared.code, sent: false,
+        messageId, outgoingReceipt: service.getReceipts(sessionKey, [messageId])[0] };
     // Assistant input attribution (§4.10.2 check 5): the hook keeps only
     // router-stamped dashboard sources and only the bound assistant session.
     const requested = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '';
     reportSessionChatInput({ sessionIds: requested && requested !== sessionKey ? [sessionKey, requested] : [sessionKey], messageId, source: readCommandSource(args), outcome });
     return { ...sendChatResultFromOutcome(outcome, messageId, transport, provider?.type),
         outgoingReceipt: service.getReceipts(sessionKey, [messageId])[0],
-        ...('expiresAt' in prepared ? { ownerActionExpiresAt: prepared.expiresAt, ownerActionRetry: 'If execution expires while queued or busy, select the current permission again. Consent is never renewed automatically.' } : {}) };
+        ...(prepared && 'expiresAt' in prepared ? { ownerActionExpiresAt: prepared.expiresAt, ownerActionRetry: 'If execution expires while queued or busy, select the current permission again. Consent is never renewed automatically.' } : {}) };
 }
 
 export async function handleSendChat(h: CommandHelpers, args: any): Promise<CommandResult> {

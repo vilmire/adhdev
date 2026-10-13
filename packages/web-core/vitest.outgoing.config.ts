@@ -12,16 +12,15 @@ export default defineConfig({
                     if (request.action === 'init') {
                         const fixture = outgoingContractFixture(request.sessionId, request.confirmed !== false)
                         if (request.immediate) fixture.idle()
+                        if (request.authorized) fixture.authorizeAction()
                         fixtures.set(request.sessionId, fixture)
                         return {}
                     }
                     const f = fixtures.get(request.sessionId)!
                     if (request.action === 'submit') {
-                        const outcome = await f.submit({ ...request.message, sessionId: request.sessionId, origin: 'dashboard', createdAt: 1 })
-                        return { success: outcome.kind !== 'refused', sent: outcome.kind === 'delivered', queued: outcome.kind === 'queued',
-                            submitted: outcome.kind === 'delivered', deduplicated: outcome.kind === 'duplicate',
-                            outgoingReceipt: f.receipts([request.message.messageId])[0] }
+                        return f.submitHandler(request.message)
                     }
+                    if (request.action === 'authorize') { f.authorizeAction(); return {} }
                     if (request.action === 'drain') {
                         f.drain()
                         const deadline = Date.now() + 3000

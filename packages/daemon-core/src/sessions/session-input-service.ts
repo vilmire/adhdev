@@ -122,9 +122,13 @@ export interface SessionInputServiceDeps {
     interrupt?: { timeoutMs?: number; pollMs?: number; secondPressAfterMs?: number; minBusyDwellMs?: number };
 }
 
+/** Trusted daemon preparation runs only after original-input reservation/dedupe.
+ * The transformed input builds the native body; receipts and ACKs retain the original. */
+export type PrepareSessionInput = () => OutboundMessage['input'] | { refusal: string };
+
 export interface SessionInputService {
     getReceipts(sessionId: string, ids: readonly string[]): OutgoingReceipt[];
-    submit(msg: OutboundMessage): Promise<SubmitOutcome>;
+    submit(msg: OutboundMessage, prepareInput?: PrepareSessionInput): Promise<SubmitOutcome>;
     /**
      * Withdraw a parked body (dashboard cancel). `removed: false` is the honest
      * answer when the FIFO had already drained it — the caller must not clear
@@ -288,17 +292,17 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
     }
 
     /** Resolve the body a fresh (never parked) message is written as. */
-    function freshBody(target: SessionInputTarget, msg: OutboundMessage): SessionInputBody | SubmitOutcome {
+    function freshBody(target: SessionInputTarget, msg: OutboundMessage, input = msg.input): SessionInputBody | SubmitOutcome {
         try {
             if (target.buildBody) {
-                const body = target.buildBody(msg.input);
+                const body = target.buildBody(input);
                 if (body && body.text.trim()) return body;
                 return refuse('unsupported_input', { message: 'No input to send.' });
             }
-            if (hasNonTextParts(msg.input)) {
+            if (hasNonTextParts(input)) {
                 return refuse('unsupported_input', { message: `${target.label || 'This session'} only supports text input.` });
             }
-            const text = msg.input.textFallback;
+            const text = input.textFallback;
             if (!text || !text.trim()) return refuse('unsupported_input', { message: 'No input to send.' });
             return { text };
         } catch (e) {
@@ -339,7 +343,7 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
     }
 
     /** send_now while generating: claim (if parked) → split write → restore on refusal. */
-    async function splitWrite(target: SessionInputTarget, msg: OutboundMessage, parked: boolean): Promise<SubmitOutcome> {
+    async function splitWrite(target: SessionInputTarget, msg: OutboundMessage, parked: boolean, input = msg.input): Promise<SubmitOutcome> {
         if (typeof target.sendMessageDuringGeneration !== 'function') {
             return refuse('not_supported', { restored: true });
         }
@@ -352,7 +356,7 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
             if (!claimed) return { kind: 'duplicate', of: msg.messageId };
             body = { text: claimed.entry.text, ...(claimed.entry.bracketedPaste ? { bracketedPaste: true } : {}) };
         } else {
-            const built = freshBody(target, msg);
+            const built = freshBody(target, msg, input);
             if ('kind' in built) return built;
             body = built;
         }
@@ -394,11 +398,11 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
      * parked copy keeps its place and its ordinary drain. Only once the stop key
      * HAS been written does this call own the delivery.
      */
-    async function interruptThenWrite(target: SessionInputTarget, msg: OutboundMessage, parked: boolean): Promise<SubmitOutcome> {
+    async function interruptThenWrite(target: SessionInputTarget, msg: OutboundMessage, parked: boolean, input = msg.input): Promise<SubmitOutcome> {
         if (typeof target.interruptTurn !== 'function') return refuse('interrupt_not_implemented');
         let fresh: SessionInputBody | null = null;
         if (!parked) {
-            const built = freshBody(target, msg);
+            const built = freshBody(target, msg, input);
             if ('kind' in built) return built;
             fresh = built;
         }
@@ -457,8 +461,8 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
         }
     }
 
-    async function run(msg: OutboundMessage): Promise<SubmitOutcome> {
-        if (msg.origin === 'dashboard' || receiptStore.get(msg.messageId)) {
+    async function run(msg: OutboundMessage, prepareInput?: PrepareSessionInput): Promise<SubmitOutcome> {
+        if (prepareInput || msg.origin === 'dashboard' || receiptStore.get(msg.messageId)) {
             const { receipt, fresh } = receiptStore.accept(msg.messageId, msg.sessionId, msg.input);
             if (fresh) freshOutgoing.add(msg.messageId);
             if (!fresh) {
@@ -494,8 +498,15 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
         if (typeof strategy === 'object') {
             return refuse(strategy.refuse, parked ? { restored: true } : undefined);
         }
-        if (strategy === 'split_write') return splitWrite(target, msg, parked);
-        if (strategy === 'interrupt') return interruptThenWrite(target, msg, parked);
+        let input = msg.input;
+        // Parked promotions use their already authorized body, never renew consent.
+        if (!parked && prepareInput) {
+            const prepared = prepareInput();
+            if ('refusal' in prepared) return refuse('unsupported_input', { message: prepared.refusal });
+            input = prepared;
+        }
+        if (strategy === 'split_write') return splitWrite(target, msg, parked, input);
+        if (strategy === 'interrupt') return interruptThenWrite(target, msg, parked, input);
 
         // write
         if (parked) {
@@ -508,7 +519,7 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
                 ...(claimed.entry.bracketedPaste ? { bracketedPaste: true } : {}),
             }, { fresh: false, route: 'pty' });
         }
-        const body = freshBody(target, msg);
+        const body = freshBody(target, msg, input);
         if ('kind' in body) return body;
         return writeAndReport(target, msg, body, { fresh: true, route: 'pty' });
     }
@@ -520,15 +531,18 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
             return receipt.state === 'accepted' && !outgoingAttempts.has(receipt.messageId)
                 ? { ...receipt, state: 'uncertain', proof: 'none', revision: receipt.revision + 1 } : receipt;
         }),
-        async submit(msg: OutboundMessage): Promise<SubmitOutcome> {
+        async submit(msg: OutboundMessage, prepareInput?: PrepareSessionInput): Promise<SubmitOutcome> {
             if (!msg || typeof msg.messageId !== 'string' || !msg.messageId.trim()) return refuse('internal_error', { message: 'messageId required' });
             if (typeof msg.sessionId !== 'string' || !msg.sessionId.trim()) return refuse('no_target');
             const pending = inFlight.get(msg.messageId);
             if (pending) {
                 await pending.catch(() => undefined);
+                // Concurrent replay must still match the full original identity.
+                try { if (receiptStore.get(msg.messageId)) receiptStore.accept(msg.messageId, msg.sessionId, msg.input); }
+                catch { return refuse('internal_error', { message: 'Outgoing message identity conflict' }); }
                 return { kind: 'duplicate', of: msg.messageId };
             }
-            const promise = run(msg).catch((e): SubmitOutcome => {
+            const promise = run(msg, prepareInput).catch((e): SubmitOutcome => {
                 log('error', `submit(${msg.messageId}) threw: ${(e as Error)?.message ?? e}`);
                 return refuse('internal_error', { message: (e as Error)?.message || String(e) });
             });

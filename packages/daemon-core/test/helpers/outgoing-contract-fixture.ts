@@ -1,3 +1,7 @@
+import { handleSendChat } from '../../src/commands/chat-commands-write.js';
+import { AssistantRegistry, setAssistantRegistryForTests } from '../../src/assistant/assistant-registry.js';
+import { createAssistantServices, setAssistantServicesForTests } from '../../src/assistant/assistant-services.js';
+import { assistantExecution } from '../../src/assistant/assistant-execution.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -35,9 +39,34 @@ export function outgoingContractFixture(sessionId: string, confirmed = true) {
     const store = new OutgoingReceiptStore(path.join(directory, 'receipts'));
     let service = createSessionInputService({ resolveSession: id => id === sessionId ? target : null, receiptStore: store });
     let frame = 0;
+    // All action ingress dependencies are synthetic and stored under this temp dir.
+    const registry = new AssistantRegistry({ configDir: directory });
+    registry.bindSession({ sessionId, cliType: 'claude-cli', workspace: directory, at: 1 });
+    const services = createAssistantServices({ configDir: directory, listMeshes: () => [{ id: 'synthetic-mesh' } as any] });
+    const runtime = { getState: () => ({ type: 'claude-cli', settings: { assistant: true } }) };
+    const sessionAdapter = { getStatus: () => ({ status }) };
+    const modal = { message: 'Synthetic permission?', buttons: ['Accept', 'Reject'] };
+    let actionAvailable = false;
+    const worker = { getState: () => ({ category: 'cli', settings: { meshNodeFor: 'synthetic-mesh' }, activeChat: { activeModal: modal } }) };
+    const helper: any = { getProvider: () => ({ type: 'claude-cli', category: 'cli' }), getCliAdapter: () => sessionAdapter,
+        currentSession: { sessionId, transport: 'pty' }, ctx: { sessionInput: service,
+            adapters: new Map([[sessionId, sessionAdapter], ['synthetic-worker', { getStatus: () => ({ activeModal: actionAvailable ? modal : null }) }]]),
+            sessionRegistry: { get: () => ({ transport: 'pty' }) },
+            instanceManager: { getInstance: (id: string) => id === sessionId ? runtime : actionAvailable && id === 'synthetic-worker' ? worker : null } } };
+
     return {
         sessionId, directory, writes, engine, store,
         submit: (message: any) => service.submit(message),
+        authorizeAction() {
+            actionAvailable = true;
+            assistantExecution.attest(sessionId, runtime, sessionAdapter, 'claude-cli',
+                ['--strict-mcp-config', '--tools=Read,WebSearch,WebFetch'], 'enforced');
+        },
+        submitHandler(message: any) {
+            setAssistantRegistryForTests(registry); setAssistantServicesForTests(services);
+            helper.ctx.sessionInput = service;
+            return handleSendChat(helper, { ...message, targetSessionId: sessionId, _commandSource: 'standalone' });
+        },
         receipts: (ids: string[]) => service.getReceipts(sessionId, ids),
         drain() { status = 'idle'; engine.drainPendingSends(); },
         idle() { status = 'idle'; },
@@ -52,6 +81,6 @@ export function outgoingContractFixture(sessionId: string, confirmed = true) {
                 return chatMessageFromWire(head, row.message.content);
             });
         },
-        close() { engine.cancelTimers(); adapter.detach(); },
+        close() { engine.cancelTimers(); adapter.detach(); setAssistantRegistryForTests(null); setAssistantServicesForTests(null); },
     };
 }
