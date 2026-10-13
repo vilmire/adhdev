@@ -215,4 +215,3 @@ it('keeps assistant policy, staged approval and transcript folding distinct at i
         host.remove()
     }
 })
-
