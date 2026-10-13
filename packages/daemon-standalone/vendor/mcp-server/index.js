@@ -162901,8 +162901,12 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           if (deadline) clearTimeout(deadline);
         }
         const at = now();
-        const current4 = store2.getAttempt(attempt.attemptId);
-        if (!current4 || current4.terminal || current4.generation !== attempt.generation || !sessionIdsEquivalent(current4.sessionId, attempt.sessionId) || current4.data.livenessSessionCut?.revision !== attempt.data.livenessSessionCut?.revision) return;
+        const readCurrent = () => {
+          const latest2 = store2.getAttempt(attempt.attemptId);
+          return latest2 && !latest2.terminal && latest2.generation === attempt.generation && sessionIdsEquivalent(latest2.sessionId, attempt.sessionId) && latest2.data.livenessSessionCut?.revision === attempt.data.livenessSessionCut?.revision ? latest2 : null;
+        };
+        const current4 = readCurrent();
+        if (!current4) return;
         try {
           sessionHealth.observe(current4, read, at, policy.stallNoticeMs);
         } catch (error) {
@@ -162910,12 +162914,21 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         }
         let evidence = probeEvidence(current4, read, { nowMs: at, observedBy: selfDaemonId, policy, probeStartedAtMs });
         const t = read.transcript;
+        let summary;
         if (t && t.finalSummary && probe.handoff && current4.meshId && evidence.some((e) => e.kind === "transcript_final")) {
-          const key2 = `${current4.attemptId}:g${current4.generation}:${t.finalAssistantAt ?? "marker"}`;
-          let summary = handoffRefs.get(key2);
+          const key2 = JSON.stringify([
+            current4.attemptId,
+            current4.generation,
+            current4.sessionId,
+            current4.data.livenessSessionCut?.revision ?? 0,
+            t.finalAssistantAt ?? "marker"
+          ]);
+          if (!readCurrent()) return;
+          summary = handoffRefs.get(key2);
           if (!summary) {
             try {
               summary = await probe.handoff(current4, t) ?? void 0;
+              if (!readCurrent()) return;
               if (summary) {
                 handoffRefs.set(key2, summary);
                 if (handoffRefs.size > HANDOFF_MEMO_MAX) handoffRefs.delete(handoffRefs.keys().next().value);
@@ -162924,8 +162937,11 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
               log.warn(`turn-scheduler: handoff append for ${current4.attemptId} failed: ${describe2(error)} \u2014 transcript_final carries no summary ref`);
             }
           }
-          if (summary) evidence = probeEvidence(current4, read, { nowMs: at, observedBy: selfDaemonId, policy, probeStartedAtMs, summary });
         }
+        const latest = readCurrent();
+        if (!latest) return;
+        evidence = probeEvidence(latest, read, { nowMs: at, observedBy: selfDaemonId, policy, probeStartedAtMs, ...summary ? { summary } : {} });
+        if (!readCurrent()) return;
         observeAll(evidence);
         try {
           store2.markProbed(current4.attemptId, at);

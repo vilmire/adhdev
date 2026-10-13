@@ -209,22 +209,33 @@ export function createTurnScheduler(deps: TurnSchedulerDeps): TurnScheduler & { 
         // The attempt may have moved while the read was in flight (a provider
         // turn_end landed). A read begun for a cut generation/session cannot be
         // re-labelled as fresh evidence for its replacement.
-        const current = store.getAttempt(attempt.attemptId);
-        if (!current || current.terminal || current.generation !== attempt.generation
-            || !sessionIdsEquivalent(current.sessionId, attempt.sessionId)
-            || current.data.livenessSessionCut?.revision !== attempt.data.livenessSessionCut?.revision) return;
+        const readCurrent = (): TurnAttempt | null => {
+            const latest = store.getAttempt(attempt.attemptId);
+            return latest && !latest.terminal && latest.generation === attempt.generation
+                && sessionIdsEquivalent(latest.sessionId, attempt.sessionId)
+                && latest.data.livenessSessionCut?.revision === attempt.data.livenessSessionCut?.revision
+                ? latest : null;
+        };
+        const current = readCurrent();
+        if (!current) return;
         try { sessionHealth.observe(current, read, at, policy.stallNoticeMs); }
         catch (error) { log.warn(`turn-scheduler: session health notice failed: ${describe(error)}`); }
         let evidence = probeEvidence(current, read, { nowMs: at, observedBy: selfDaemonId, policy, probeStartedAtMs });
         const t = read.transcript;
+        let summary: SummaryRef | undefined;
         if (t && t.finalSummary && probe.handoff && current.meshId && evidence.some((e) => e.kind === 'transcript_final')) {
-            // One handoff entry per (attempt, generation, final bubble): a weak
-            // candidate is re-read every tick and must not append each time.
-            const key = `${current.attemptId}:g${current.generation}:${t.finalAssistantAt ?? 'marker'}`;
-            let summary = handoffRefs.get(key);
+            // A final bubble's memo belongs to the exact session incarnation.
+            // Re-reading it in that incarnation must not append each tick.
+            const key = JSON.stringify([current.attemptId, current.generation, current.sessionId,
+                current.data.livenessSessionCut?.revision ?? 0, t.finalAssistantAt ?? 'marker']);
+            if (!readCurrent()) return;
+            summary = handoffRefs.get(key);
             if (!summary) {
                 try {
                     summary = (await probe.handoff(current, t)) ?? undefined;
+                    // Handoff append can yield to a cut, even with the same ID
+                    // and timestamp. Never memoize its old incarnation's ref.
+                    if (!readCurrent()) return;
                     if (summary) {
                         handoffRefs.set(key, summary);
                         if (handoffRefs.size > HANDOFF_MEMO_MAX) handoffRefs.delete(handoffRefs.keys().next().value!);
@@ -233,8 +244,13 @@ export function createTurnScheduler(deps: TurnSchedulerDeps): TurnScheduler & { 
                     log.warn(`turn-scheduler: handoff append for ${current.attemptId} failed: ${describe(error)} — transcript_final carries no summary ref`);
                 }
             }
-            if (summary) evidence = probeEvidence(current, read, { nowMs: at, observedBy: selfDaemonId, policy, probeStartedAtMs, summary });
         }
+        // Also fences rejected handoff promises and memo hits. Map against the
+        // latest row so an accepted report during the await keeps its authority.
+        const latest = readCurrent();
+        if (!latest) return;
+        evidence = probeEvidence(latest, read, { nowMs: at, observedBy: selfDaemonId, policy, probeStartedAtMs, ...(summary ? { summary } : {}) });
+        if (!readCurrent()) return;
         observeAll(evidence);
         try {
             store.markProbed(current.attemptId, at);

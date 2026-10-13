@@ -612,3 +612,122 @@ describe('production ledger/scheduler session rebound fencing', () => {
         expect(r.ledger.getAttempt('a1')).toMatchObject({ generation: 0, terminal: null, lastLiveness: null });
     });
 });
+
+
+describe('async handoff respects session cuts in the production SQLite scheduler', () => {
+    for (const reason of ['await_report', 'weak_candidate'] as const) {
+        it.each(['unknown', 'alive', 'dead'] as const)(`${reason}: same-id same-millisecond rebound during handoff discards old evidence; fresh %s stays authoritative`, async (control) => {
+            let r: Rig;
+            let firstRead = true;
+            const read = vi.fn(async (): Promise<TurnProbeRead> => {
+                if (firstRead) {
+                    firstRead = false;
+                    return { presence: 'present', status: 'idle', transcript: {
+                        providerObservedStatus: 'idle', activeModal: false, selfAttributing: false,
+                        trailingActivity: 0, nativeRead: false, finalAssistantAt: T0 + 1,
+                        finalSummary: 'Synthetic handoff before the session cut.',
+                    } };
+                }
+                return control === 'dead' ? { presence: 'absent' }
+                    : control === 'unknown' ? { presence: 'unknown' }
+                    : { presence: 'present', status: 'generating' };
+            });
+            const handoff = vi.fn(async () => {
+                // The clock and session ID are unchanged; only cut revision fences this await.
+                r.ledger.observe(evd('session_rebound', { toSessionId: 's1', reason: 'restart' }, { at: r.now }));
+                return { topic: 'mesh.m1.handoff', writer: 'old-session', seq: 1 };
+            });
+            r = rig({ probe: { locate: () => ({ kind: 'local' }), reader: { read }, handoff } });
+            toGenerating(r);
+            r.ledger.observe(evd('turn_end', reason === 'await_report'
+                ? { strength: 'genuine', reportExpected: true } : { strength: 'weak' }));
+            r.advance(2);
+            r.scheduler.requestProbe('a1');
+            const stale = await r.scheduler.tick();
+            expect(handoff).toHaveBeenCalledOnce();
+            expect(stale.probeEvidence).toBe(0);
+            expect(stale.probed).toBe(0);
+            expect(rowsOf(r.db, 'transcript_final', 'a1')).toHaveLength(0);
+            expect(rowsOf(r.db, 'liveness', 'a1')).toHaveLength(0);
+            expect(r.ledger.getAttempt('a1')).toMatchObject({ terminal: null, lastLiveness: null });
+            r.advance((reason === 'await_report' ? P.awaitReportMs : weakConfirmMs(P)) - 1);
+            await r.scheduler.tick();
+            expect(r.host.calls).not.toContain('terminal:t1:completed');
+            if (control === 'dead') {
+                expect(r.ledger.getAttempt('a1')).toMatchObject({ generation: 1, state: 'accepted', terminal: null });
+                expect(r.host.calls).toContain('requeue:t1');
+            } else {
+                expect(r.ledger.getAttempt('a1')!.terminal).toBeNull();
+                r.advance(endProbeGraceMs(P));
+                await r.scheduler.tick();
+                expect(r.ledger.getAttempt('a1')!.terminal).toMatchObject(control === 'alive'
+                    ? { outcome: 'completed', strength: 'weak' }
+                    : { outcome: 'failed', reason: 'weak_end_liveness_unconfirmed' });
+                expect(r.host.calls.filter(c => c === 'terminal:t1:completed')).toHaveLength(control === 'alive' ? 1 : 0);
+            }
+        });
+    }
+
+    it.each(['rejected_restart', 'reclaim', 'accepted_report'] as const)('handoff boundary fences %s and preserves report/correction authority', async (change) => {
+        let r: Rig;
+        const handoff = vi.fn(async () => {
+            if (change === 'accepted_report') r.ledger.observe(evd('worker_report', { outcome: 'completed', hasHandoffNotes: false }, { source: 'worker_tool', at: r.now }));
+            else if (change === 'reclaim') r.ledger.observe(evd('process_exit', { exitCode: 1 }, { at: r.now }));
+            else {
+                r.ledger.observe(evd('session_rebound', { toSessionId: 's1', reason: 'restart' }, { at: r.now }));
+                throw new Error('Synthetic handoff rejection after the cut');
+            }
+            return { topic: 'mesh.m1.handoff', writer: 'pre-cut', seq: 1 };
+        });
+        const read = vi.fn(async (): Promise<TurnProbeRead> => ({ presence: 'present', status: 'idle', transcript: {
+            providerObservedStatus: 'idle', activeModal: false, selfAttributing: false, trailingActivity: 0,
+            nativeRead: false, finalAssistantAt: T0 + 1, finalSummary: 'Synthetic handoff boundary.',
+        } }));
+        r = rig({ probe: { locate: () => ({ kind: 'local' }), reader: { read }, handoff } });
+        toGenerating(r);
+        r.ledger.observe(evd('turn_end', { strength: 'genuine', reportExpected: true }));
+        r.ledger.observe(evd('worker_report_correction_requested', { deliveryId: 'synthetic-refusal' }, { source: 'worker_tool', at: r.now }));
+        const correction = r.ledger.getAttempt('a1')!.data.reportCorrection;
+        r.advance(2);
+        r.scheduler.requestProbe('a1');
+        expect((await r.scheduler.tick()).probeEvidence).toBe(0);
+        expect(rowsOf(r.db, 'transcript_final', 'a1')).toHaveLength(0);
+        expect(rowsOf(r.db, 'liveness', 'a1')).toHaveLength(0);
+        if (change === 'accepted_report') expect(r.ledger.getAttempt('a1')!.terminal).toMatchObject({ outcome: 'completed', strength: 'tool_report' });
+        else if (change === 'reclaim') expect(r.ledger.getAttempt('a1')).toMatchObject({ generation: 1, state: 'accepted', terminal: null });
+        else {
+            expect(r.ledger.getAttempt('a1')!.terminal).toBeNull();
+            expect(r.ledger.getAttempt('a1')!.data.reportCorrection).toEqual(correction);
+        }
+    });
+
+    it.each([false, true])('a post-cut probe cannot reuse a %s pre-cut memo (false = handoff returned after cut)', async (warmMemo) => {
+        let r: Rig;
+        let calls = 0;
+        const summary = { topic: 'mesh.m1.handoff', writer: 'fresh-session', seq: 2 };
+        const handoff = vi.fn(async () => {
+            calls++;
+            if (!warmMemo && calls === 1) r.ledger.observe(evd('session_rebound', { toSessionId: 's1', reason: 'restart' }, { at: r.now }));
+            return calls === 1 ? { ...summary, writer: 'old-session', seq: 1 } : summary;
+        });
+        const read = vi.fn(async (): Promise<TurnProbeRead> => ({ presence: 'present', status: 'idle', transcript: {
+            providerObservedStatus: 'idle', activeModal: false, selfAttributing: false, trailingActivity: 0,
+            nativeRead: false, finalAssistantAt: T0 + 1, finalSummary: 'Synthetic identical bubble across cut.',
+        } }));
+        r = rig({ probe: { locate: () => ({ kind: 'local' }), reader: { read }, handoff } });
+        toGenerating(r);
+        r.ledger.observe(evd('turn_end', { strength: 'genuine', reportExpected: true }));
+        r.advance(2);
+        r.scheduler.requestProbe('a1');
+        await r.scheduler.tick();
+        if (warmMemo) r.ledger.observe(evd('session_rebound', { toSessionId: 's1', reason: 'restart' }, { at: r.now }));
+        // Keep the final bubble timestamp identical; only the cut distinguishes memo ownership.
+        r.advance(1);
+        r.scheduler.requestProbe('a1');
+        await r.scheduler.tick();
+        expect(handoff).toHaveBeenCalledTimes(2);
+        const events = rowsOf(r.db, 'transcript_final', 'a1');
+        expect(events).toHaveLength(warmMemo ? 2 : 1);
+        expect(JSON.parse(String(events.at(-1)!.payload_json))).toMatchObject({ evidence: { summary } });
+    });
+});
