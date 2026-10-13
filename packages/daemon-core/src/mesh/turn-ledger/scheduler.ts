@@ -211,7 +211,8 @@ export function createTurnScheduler(deps: TurnSchedulerDeps): TurnScheduler & { 
         // re-labelled as fresh evidence for its replacement.
         const current = store.getAttempt(attempt.attemptId);
         if (!current || current.terminal || current.generation !== attempt.generation
-            || !sessionIdsEquivalent(current.sessionId, attempt.sessionId)) return;
+            || !sessionIdsEquivalent(current.sessionId, attempt.sessionId)
+            || current.data.livenessSessionCut?.revision !== attempt.data.livenessSessionCut?.revision) return;
         try { sessionHealth.observe(current, read, at, policy.stallNoticeMs); }
         catch (error) { log.warn(`turn-scheduler: session health notice failed: ${describe(error)}`); }
         let evidence = probeEvidence(current, read, { nowMs: at, observedBy: selfDaemonId, policy, probeStartedAtMs });

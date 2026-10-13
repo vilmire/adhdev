@@ -42764,6 +42764,10 @@ ${rendered.join("\n\n")}`,
         if (generation !== null && generation !== attempt.generation) return { lane: "stale", effectiveGeneration: generation };
         return { lane: "current", effectiveGeneration: attempt.generation };
       }
+      const cut = attempt.data.livenessSessionCut;
+      if (evidence.kind === "liveness" && cut?.generation === attempt.generation && (evidence.attemptRef?.generation ?? attempt.generation) === attempt.generation && (evidence.at < cut.at || (evidence.probeStartedAtMs ?? evidence.at) < cut.at)) {
+        return { rejection: "session_mismatch" };
+      }
       const sessionProduced = SESSION_PRODUCED_KINDS.has(evidence.kind);
       const ref = evidence.attemptRef;
       if (ref) {
@@ -42845,7 +42849,9 @@ ${rendered.join("\n\n")}`,
       const o = a?.data.livenessObservation;
       const request = a?.data.unconfirmedEndDeferral;
       const boundary = request?.generation === a?.generation && request?.requestedAt !== void 0 ? request.requestedAt : expiredHold(ctx)?.createdAt;
-      return !!a && !!o && o.generation === a.generation && boundary !== void 0 && o.probeStartedAt >= boundary && o.at >= boundary && o.at <= ctx.nowMs && ctx.nowMs - o.at <= endProbeGraceMs(ctx.policy);
+      const cut = a?.data.livenessSessionCut;
+      const since = Math.max(boundary ?? 0, cut && cut.generation === a?.generation ? cut.at : 0);
+      return !!a && !!o && o.generation === a.generation && !!o.sessionId && sessionIdsEquivalent(o.sessionId, a.sessionId) && boundary !== void 0 && o.probeStartedAt >= since && o.at >= since && o.at <= ctx.nowMs && ctx.nowMs - o.at <= endProbeGraceMs(ctx.policy);
     }
     function correctionPending(ctx) {
       const r = ctx.attempt?.data.reportCorrection;
@@ -43101,6 +43107,20 @@ ${rendered.join("\n\n")}`,
       }
       if (ev.kind === "transcript_final") return { outcome: "completed", strength: "genuine", reason: "transcript_final" };
       return { outcome: "completed", strength: "genuine", reason: "turn_end" };
+    }
+    function bindLivenessSession(draft, sessionId, rebound = false) {
+      const a = draft.attempt;
+      if (rebound || !sessionIdsEquivalent(a.sessionId, sessionId)) {
+        a.lastLiveness = null;
+        a.livenessFailStreak = 0;
+        a.data.livenessObservation = void 0;
+        a.data.livenessSessionCut = {
+          generation: a.generation,
+          at: draft.ctx.nowMs,
+          revision: (a.data.livenessSessionCut?.revision ?? 0) + 1
+        };
+      }
+      a.sessionId = sessionId;
     }
     function resolveNote(note2, draft) {
       if (note2 === "from_admission") {
@@ -43372,7 +43392,8 @@ ${rendered.join("\n\n")}`,
           "process_exit",
           "session_error",
           "worker_report",
-          "worker_progress"
+          "worker_progress",
+          "liveness"
         ]);
         OWNER_SCRAPE_SOURCES = /* @__PURE__ */ new Set(["coordinator_probe", "mcp_probe"]);
         GUARDS = {
@@ -43510,7 +43531,7 @@ ${rendered.join("\n\n")}`,
             const attempt = draft.attempt;
             const ev = draft.ctx.evidence;
             attempt.deliveredAt = attempt.deliveredAt ?? ev.at;
-            attempt.sessionId = ev.sessionId;
+            bindLivenessSession(draft, ev.sessionId);
             attempt.messageId = ev.messageId;
           },
           consume: (draft) => {
@@ -43577,20 +43598,20 @@ ${rendered.join("\n\n")}`,
             attempt.livenessFailStreak = 0;
             if (ev.kind === "liveness") {
               attempt.lastLiveness = ev.result;
-              attempt.data.livenessObservation = { generation: attempt.generation, at: ev.at, probeStartedAt: ev.probeStartedAtMs ?? ev.at };
+              attempt.data.livenessObservation = { generation: attempt.generation, sessionId: ev.sessionId, at: ev.at, probeStartedAt: ev.probeStartedAtMs ?? ev.at };
             }
           },
           liveness_unknown: (draft) => {
             draft.attempt.lastLiveness = "unknown";
             const ev = draft.ctx.evidence;
-            draft.attempt.data.livenessObservation = { generation: draft.attempt.generation, at: ev.at, probeStartedAt: ev.probeStartedAtMs ?? ev.at };
+            draft.attempt.data.livenessObservation = { generation: draft.attempt.generation, sessionId: ev.sessionId, at: ev.at, probeStartedAt: ev.probeStartedAtMs ?? ev.at };
           },
           liveness_failure: (draft) => {
             const attempt = draft.attempt;
             attempt.livenessFailStreak += 1;
             const ev = draft.ctx.evidence;
             attempt.lastLiveness = ev.result;
-            attempt.data.livenessObservation = { generation: attempt.generation, at: ev.at, probeStartedAt: ev.probeStartedAtMs ?? ev.at };
+            attempt.data.livenessObservation = { generation: attempt.generation, sessionId: ev.sessionId, at: ev.at, probeStartedAt: ev.probeStartedAtMs ?? ev.at };
           },
           defer_unconfirmed_end: (draft) => {
             const attempt = draft.attempt;
@@ -43612,10 +43633,10 @@ ${rendered.join("\n\n")}`,
             if (draft.ctx.evidence.workerAbsent) draft.attempt.livenessFailStreak += 1;
           },
           rebind_to_holder: (draft) => {
-            draft.attempt.sessionId = draft.ctx.evidence.holderSessionId;
+            bindLivenessSession(draft, draft.ctx.evidence.holderSessionId);
           },
           rebind: (draft) => {
-            draft.attempt.sessionId = draft.ctx.evidence.toSessionId;
+            bindLivenessSession(draft, draft.ctx.evidence.toSessionId, true);
           },
           hollow: (draft) => {
             draft.attempt.hollowCount += 1;
@@ -162881,7 +162902,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         }
         const at = now();
         const current4 = store2.getAttempt(attempt.attemptId);
-        if (!current4 || current4.terminal || current4.generation !== attempt.generation || !sessionIdsEquivalent(current4.sessionId, attempt.sessionId)) return;
+        if (!current4 || current4.terminal || current4.generation !== attempt.generation || !sessionIdsEquivalent(current4.sessionId, attempt.sessionId) || current4.data.livenessSessionCut?.revision !== attempt.data.livenessSessionCut?.revision) return;
         try {
           sessionHealth.observe(current4, read, at, policy.stallNoticeMs);
         } catch (error) {

@@ -534,3 +534,81 @@ describe('liveness probe backoff during await_report (rc.43 run 10)', () => {
         expect(hold.until).toBe(r.now + P.livenessProbeIntervalFinalizingMs);
     });
 });
+
+
+describe('production ledger/scheduler session rebound fencing', () => {
+    it.each(['await_report', 'weak_candidate'] as const)('%s does not complete s2 from stored s1 alive, then accepts fresh s2 alive', async (reason) => {
+        const r = rig();
+        toGenerating(r);
+        r.ledger.observe(evd('turn_end', reason === 'await_report'
+            ? { strength: 'genuine', reportExpected: true } : { strength: 'weak' }));
+        const window = reason === 'await_report' ? P.awaitReportMs : weakConfirmMs(P);
+        r.advance(window - 10);
+        r.ledger.observe(evd('liveness', { result: 'alive', probeStartedAtMs: r.now }, { at: r.now }));
+        r.advance(1);
+        expect(r.ledger.observe(evd('session_rebound', { toSessionId: 's2', reason: 'restart' }, { at: r.now })).rule).toBe('R26');
+        r.advance(10);
+        await r.scheduler.tick();
+        expect(r.ledger.getAttempt('a1')).toMatchObject({ sessionId: 's2', terminal: null, lastLiveness: null });
+        expect(r.host.calls).not.toContain('terminal:t1:completed');
+        expect(r.ledger.getAttempt('a1')!.data.unconfirmedEndDeferral?.count).toBe(1);
+        const late = r.ledger.observe(evd('liveness', { result: 'dead', probeStartedAtMs: r.now - 11 }, { at: r.now }));
+        expect(late.verdict).toBe('rejected');
+        expect(r.host.calls.some(c => c.startsWith('requeue:'))).toBe(false);
+        r.advance(endProbeGraceMs(P) - 1);
+        const read = vi.fn(async (attempt) => {
+            expect(attempt.sessionId).toBe('s2');
+            return { presence: 'present' as const, status: 'generating' };
+        });
+        const scheduler = createTurnScheduler({ ledger: r.ledger, now: () => r.now,
+            probe: { locate: () => ({ kind: 'local' }), reader: { read } } });
+        scheduler.requestProbe('a1');
+        await scheduler.tick();
+        expect(read).toHaveBeenCalledOnce();
+        r.advance(1);
+        await scheduler.tick();
+        expect(r.ledger.getAttempt('a1')!.terminal).toMatchObject({ outcome: 'completed', strength: 'weak' });
+        expect(r.host.calls.filter(c => c === 'terminal:t1:completed')).toHaveLength(1);
+    });
+
+    it.each(['alive', 'dead'] as const)('an in-flight s1 %s read is discarded after rebound; fresh s2 read remains valid', async (verdict) => {
+        let r: Rig;
+        let rebind = true;
+        const read = vi.fn(async () => {
+            if (rebind) {
+                rebind = false;
+                r.advance(1);
+                r.ledger.observe(evd('session_rebound', { toSessionId: 's2', reason: 'restart' }, { at: r.now }));
+                return { presence: verdict === 'dead' ? 'absent' as const : 'present' as const, status: 'generating' };
+            }
+            return { presence: 'present' as const, status: 'generating' };
+        });
+        r = rig({ probe: { locate: () => ({ kind: 'local' }), reader: { read } } });
+        toGenerating(r);
+        r.ledger.observe(evd('turn_end', { strength: 'genuine', reportExpected: true }));
+        r.scheduler.requestProbe('a1');
+        const tick = await r.scheduler.tick();
+        expect(tick.probeEvidence).toBe(0);
+        expect(r.ledger.getAttempt('a1')).toMatchObject({ sessionId: 's2', generation: 0, lastLiveness: null, terminal: null });
+        r.advance(P.awaitReportMs + 1);
+        await r.scheduler.tick();
+        expect(r.ledger.getAttempt('a1')!.terminal).toBeNull();
+        expect(r.ledger.getAttempt('a1')!.lastLiveness).toBe('alive');
+        r.advance(endProbeGraceMs(P));
+        await r.scheduler.tick();
+        expect(r.ledger.getAttempt('a1')!.terminal).toMatchObject({ outcome: 'completed', strength: 'weak' });
+    });
+
+    it('a restart that returns to the same session id still cuts an in-flight read', async () => {
+        let r: Rig;
+        const read = vi.fn(async () => {
+            r.ledger.observe(evd('session_rebound', { toSessionId: 's1', reason: 'restart' }, { at: r.now }));
+            return { presence: 'absent' as const };
+        });
+        r = rig({ probe: { locate: () => ({ kind: 'local' }), reader: { read } } });
+        toGenerating(r);
+        r.scheduler.requestProbe('a1');
+        expect((await r.scheduler.tick()).probeEvidence).toBe(0);
+        expect(r.ledger.getAttempt('a1')).toMatchObject({ generation: 0, terminal: null, lastLiveness: null });
+    });
+});

@@ -88,10 +88,10 @@ export interface ReduceResult {
     rejection?: ReduceRejection;
 }
 
-/** Kinds produced BY the worker session itself; their sessionId must match the attempt's. */
+/** Evidence about a worker session must name the session currently bound to the attempt. */
 const SESSION_PRODUCED_KINDS: ReadonlySet<TurnEvidenceKind> = new Set<TurnEvidenceKind>([
     'turn_started', 'suspension', 'suspension_resolved', 'turn_end', 'transcript_final',
-    'transcript_activity', 'no_progress', 'process_exit', 'session_error', 'worker_report', 'worker_progress',
+    'transcript_activity', 'no_progress', 'process_exit', 'session_error', 'worker_report', 'worker_progress', 'liveness',
 ]);
 
 // ─── lane classification ─────────────────────────────────────────────────
@@ -112,6 +112,12 @@ export function classifyLane(attempt: TurnAttempt | null, evidence: TurnEvidence
         return { lane: 'current', effectiveGeneration: attempt.generation };
     }
 
+    const cut = attempt.data.livenessSessionCut;
+    if (evidence.kind === 'liveness' && cut?.generation === attempt.generation
+        && (evidence.attemptRef?.generation ?? attempt.generation) === attempt.generation
+        && (evidence.at < cut.at || (evidence.probeStartedAtMs ?? evidence.at) < cut.at)) {
+        return { rejection: 'session_mismatch' };
+    }
     const sessionProduced = SESSION_PRODUCED_KINDS.has(evidence.kind);
     const ref = evidence.attemptRef;
     if (ref) {
@@ -261,8 +267,11 @@ function freshEndProbe(ctx: GuardCtx): boolean {
     const request = a?.data.unconfirmedEndDeferral;
     const boundary = request?.generation === a?.generation && request?.requestedAt !== undefined
         ? request.requestedAt : expiredHold(ctx)?.createdAt;
-    return !!a && !!o && o.generation === a.generation && boundary !== undefined
-        && o.probeStartedAt >= boundary && o.at >= boundary && o.at <= ctx.nowMs
+    const cut = a?.data.livenessSessionCut;
+    const since = Math.max(boundary ?? 0, cut && cut.generation === a?.generation ? cut.at : 0);
+    return !!a && !!o && o.generation === a.generation && !!o.sessionId
+        && sessionIdsEquivalent(o.sessionId, a.sessionId) && boundary !== undefined
+        && o.probeStartedAt >= since && o.at >= since && o.at <= ctx.nowMs
         && ctx.nowMs - o.at <= endProbeGraceMs(ctx.policy);
 }
 function correctionPending(ctx: GuardCtx): boolean {
@@ -678,6 +687,21 @@ function adoptedTerminal(ev: TurnEvidence): { outcome: TurnOutcome; strength: Tu
     return { outcome: 'completed', strength: 'genuine', reason: 'turn_end' };
 }
 
+/** Keep report evidence/deadlines intact; only the session's liveness is cut. */
+function bindLivenessSession(draft: Draft, sessionId: string, rebound = false): void {
+    const a = draft.attempt!;
+    if (rebound || !sessionIdsEquivalent(a.sessionId, sessionId)) {
+        a.lastLiveness = null;
+        a.livenessFailStreak = 0;
+        a.data.livenessObservation = undefined;
+        a.data.livenessSessionCut = {
+            generation: a.generation, at: draft.ctx.nowMs,
+            revision: (a.data.livenessSessionCut?.revision ?? 0) + 1,
+        };
+    }
+    a.sessionId = sessionId;
+}
+
 const ACTIONS: Record<ActionId, (draft: Draft) => void> = {
     open_dispatch: (draft) => {
         const ev = draft.ctx.evidence as TurnEvidenceOf<'dispatch_accepted'>;
@@ -703,7 +727,7 @@ const ACTIONS: Record<ActionId, (draft: Draft) => void> = {
         const attempt = draft.attempt!;
         const ev = draft.ctx.evidence as TurnEvidenceOf<'delivered'>;
         attempt.deliveredAt = attempt.deliveredAt ?? ev.at;
-        attempt.sessionId = ev.sessionId;
+        bindLivenessSession(draft, ev.sessionId);
         attempt.messageId = ev.messageId;
     },
     consume: (draft) => {
@@ -770,20 +794,20 @@ const ACTIONS: Record<ActionId, (draft: Draft) => void> = {
         attempt.livenessFailStreak = 0;
         if (ev.kind === 'liveness') {
             attempt.lastLiveness = ev.result;
-            attempt.data.livenessObservation = { generation: attempt.generation, at: ev.at, probeStartedAt: ev.probeStartedAtMs ?? ev.at };
+            attempt.data.livenessObservation = { generation: attempt.generation, sessionId: ev.sessionId, at: ev.at, probeStartedAt: ev.probeStartedAtMs ?? ev.at };
         }
     },
     liveness_unknown: (draft) => {
         draft.attempt!.lastLiveness = 'unknown';
         const ev = draft.ctx.evidence as TurnEvidenceOf<'liveness'>;
-        draft.attempt!.data.livenessObservation = { generation: draft.attempt!.generation, at: ev.at, probeStartedAt: ev.probeStartedAtMs ?? ev.at };
+        draft.attempt!.data.livenessObservation = { generation: draft.attempt!.generation, sessionId: ev.sessionId, at: ev.at, probeStartedAt: ev.probeStartedAtMs ?? ev.at };
     },
     liveness_failure: (draft) => {
         const attempt = draft.attempt!;
         attempt.livenessFailStreak += 1;
         const ev = draft.ctx.evidence as TurnEvidenceOf<'liveness'>;
         attempt.lastLiveness = ev.result;
-        attempt.data.livenessObservation = { generation: attempt.generation, at: ev.at, probeStartedAt: ev.probeStartedAtMs ?? ev.at };
+        attempt.data.livenessObservation = { generation: attempt.generation, sessionId: ev.sessionId, at: ev.at, probeStartedAt: ev.probeStartedAtMs ?? ev.at };
     },
     defer_unconfirmed_end: (draft) => {
         // R13u: the timer ran out while the last probe could not confirm the worker.
@@ -808,10 +832,10 @@ const ACTIONS: Record<ActionId, (draft: Draft) => void> = {
         if ((draft.ctx.evidence as TurnEvidenceOf<'dispatch_failed'>).workerAbsent) draft.attempt!.livenessFailStreak += 1;
     },
     rebind_to_holder: (draft) => {
-        draft.attempt!.sessionId = (draft.ctx.evidence as TurnEvidenceOf<'duplicate_dispatch_refusal'>).holderSessionId;
+        bindLivenessSession(draft, (draft.ctx.evidence as TurnEvidenceOf<'duplicate_dispatch_refusal'>).holderSessionId);
     },
     rebind: (draft) => {
-        draft.attempt!.sessionId = (draft.ctx.evidence as TurnEvidenceOf<'session_rebound'>).toSessionId;
+        bindLivenessSession(draft, (draft.ctx.evidence as TurnEvidenceOf<'session_rebound'>).toSessionId, true);
     },
     hollow: (draft) => {
         draft.attempt!.hollowCount += 1;

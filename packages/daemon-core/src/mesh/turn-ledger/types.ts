@@ -58,7 +58,10 @@ export interface TurnAttemptData {
      * verdict was unconfirmed (re-probe + short re-arm). Scoped to `generation`.
      */
     unconfirmedEndDeferral?: { generation: number; count: number; requestedAt?: number };
-    livenessObservation?: { generation: number; at: number; probeStartedAt: number };
+    /** Legacy observations without a session identity cannot authorize weak completion. */
+    livenessObservation?: { generation: number; sessionId?: string; at: number; probeStartedAt: number };
+    /** Session changes cut liveness without changing report ownership or its deadline. */
+    livenessSessionCut?: { generation: number; at: number; revision: number };
     /** Fixed first-refusal deadline; repeated invalid calls never extend it. */
     reportCorrection?: { generation: number; until: number };
     /**

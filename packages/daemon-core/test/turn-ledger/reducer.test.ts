@@ -627,3 +627,53 @@ describe('unconfirmed liveness — a weak end / report-await expiry never mints 
         expect(step(held.attempt, expire(held.holds, 'await_report', at), held.holds, at).rule).toBe('R13u');
     });
 });
+
+
+describe('session rebound cuts weak-completion liveness', () => {
+    it.each(['await_report', 'weak_candidate'] as const)('%s cannot use s1 liveness after rebinding to s2; a fresh s2 probe can complete', (reason) => {
+        const hold = makeHold(reason, { until: NOW + 20 });
+        const alive = step(makeAttempt('finalizing'), ev('liveness', { result: 'alive', probeStartedAtMs: NOW - 10 }, { at: NOW - 10 }), [hold], NOW - 10);
+        const rebound = step(alive.attempt, ev('session_rebound', { toSessionId: 's2', reason: 'restart' }), alive.holds);
+        expect(rebound.rule).toBe('R26');
+        expect(rebound.attempt?.lastLiveness).toBeNull();
+        const late = step(rebound.attempt, ev('liveness', { result: 'dead', probeStartedAtMs: NOW - 1 }, { sessionId: 's1', at: NOW + 1 }), rebound.holds, NOW + 1);
+        expect(late.verdict).toBe('rejected');
+        expect(late.effects.some(e => e.kind === 'reclaim' || e.kind === 'commit')).toBe(false);
+        // A re-labelled read or cached sample from before the cut also cannot count.
+        for (const evidence of [
+            ev('liveness', { result: 'alive', probeStartedAtMs: NOW - 1 }, { sessionId: 's2', at: NOW + 1 }),
+            ev('liveness', { result: 'alive', probeStartedAtMs: NOW + 1 }, { sessionId: 's2', at: NOW - 1 }),
+        ]) expect(step(rebound.attempt, evidence, rebound.holds, NOW + 1).verdict).toBe('rejected');
+        const expiry = (at: number) => ev('hold_expired', { holdId: hold.holdId, reason }, { sessionId: 's2', at, source: 'scheduler' });
+        const deferred = step(rebound.attempt, expiry(NOW + 20), rebound.holds, NOW + 20);
+        expect(deferred.rule).toBe('R13u');
+        expect(deferred.attempt?.terminal).toBeNull();
+        const until = NOW + 20 + endProbeGraceMs(POLICY);
+        expect(step(deferred.attempt, expiry(until), deferred.holds, until).rule).toBe('R13z');
+        const fresh = step(deferred.attempt, ev('liveness', { result: 'alive', probeStartedAtMs: until - 1 }, { sessionId: 's2', at: until - 1 }), deferred.holds, until - 1);
+        const completed = step(fresh.attempt, expiry(until), fresh.holds, until);
+        expect(completed.rule).toBe(reason === 'await_report' ? 'R13r' : 'R13a');
+        expect(completed.attempt?.terminal).toMatchObject({ outcome: 'completed', strength: 'weak' });
+    });
+
+    it('a fresh dead verdict for the replacement session still reclaims through R31', () => {
+        const rebound = step(makeAttempt('generating'), ev('session_rebound', { toSessionId: 's2', reason: 'restart' }));
+        const dead = step(rebound.attempt, ev('liveness', { result: 'dead', probeStartedAtMs: NOW + 1 }, { sessionId: 's2', at: NOW + 1 }), rebound.holds, NOW + 1);
+        expect(dead.rule).toBe('R31');
+        expect(dead.effects.some(e => e.kind === 'reclaim')).toBe(true);
+        expect(dead.attempt?.generation).toBe(2);
+    });
+
+    it('rebind preserves the accepted report and fixed correction deadline', () => {
+        const attempt = makeAttempt('generating', { data: {
+            report: { generation: 1, outcome: 'completed', eventId: 'accepted-report', at: NOW - 10 },
+            reportCorrection: { generation: 1, until: NOW + 100 },
+        } });
+        const rebound = step(attempt, ev('session_rebound', { toSessionId: 's2', reason: 'restart' }));
+        expect(rebound.attempt?.data.report).toEqual(attempt.data.report);
+        expect(rebound.attempt?.data.reportCorrection).toEqual(attempt.data.reportCorrection);
+        const completed = step(rebound.attempt, ev('turn_end', { strength: 'genuine' }, { sessionId: 's2' }), rebound.holds);
+        expect(completed.rule).toBe('R9t');
+        expect(completed.attempt?.terminal).toMatchObject({ outcome: 'completed', strength: 'tool_report' });
+    });
+});
