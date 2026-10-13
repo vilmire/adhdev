@@ -58161,13 +58161,16 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     function admitted(policy, identity2) {
       return policy.builds.some((b) => b.commit === identity2.commit && b.version === identity2.version);
     }
-    function bridgeCapability(db, self, meshId, nonce) {
+    function bridgeCapability(db, self, meshId, nonce, deliveryClaim) {
       const policy = readBridgePolicy(db, meshId);
       if (!policy || !admitted(policy, self) || !id22(nonce)) return { success: false, error: "worker_protocol_unsupported" };
       const open = db.prepare("SELECT COUNT(*) AS n FROM turn_attempts WHERE mesh_id=? AND terminal_outcome IS NULL").get(meshId);
       const holds = db.prepare("SELECT COUNT(*) AS n FROM turn_holds h JOIN turn_attempts a ON a.attempt_id=h.attempt_id WHERE a.mesh_id=? AND h.status='active'").get(meshId);
       const pending = db.prepare("SELECT (SELECT COUNT(*) FROM worker_bridge_delivery WHERE mesh_id=? AND state!='receipted') + (SELECT COUNT(*) FROM worker_bridge_progress_notice WHERE mesh_id=? AND state='pending') AS n").get(meshId, meshId);
-      return { success: true, protocol: BRIDGE_PROTOCOL, ...self, meshId, nonce, rolloutId: policy.rolloutId, frozen: policy.frozen, openAttempts: open.n, correctionOrLivenessHolds: holds.n, pendingDeliveries: pending.n };
+      const claim = deliveryClaim;
+      const stored = typeof claim?.deliveryId === "string" ? row(db, "member", self.daemonId, claim.deliveryId) : void 0;
+      const attestedDigest = stored && stored.digest === claim?.digest && JSON.parse(stored.envelope_json).meshId === meshId ? stored.digest : null;
+      return { success: true, deliveryDigest: attestedDigest, protocol: BRIDGE_PROTOCOL, ...self, meshId, nonce, rolloutId: policy.rolloutId, frozen: policy.frozen, openAttempts: open.n, correctionOrLivenessHolds: holds.n, pendingDeliveries: pending.n };
     }
     function bridgeDrainState(db, meshId) {
       ensureBridgeSchema(db);
@@ -58209,9 +58212,9 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         return { success: false, error: "storage_failed" };
       }
     }
-    async function queryBridgePeer(dispatch2, peerId, meshId, policy) {
+    async function queryBridgePeer(dispatch2, peerId, meshId, policy, deliveryClaim) {
       const nonce = (0, import_node_crypto22.randomUUID)();
-      const reply = unwrapMeshRelayResult(await dispatch2(peerId, BRIDGE_CAPABILITY_COMMAND, { meshId, nonce }), { command: BRIDGE_CAPABILITY_COMMAND, peerDaemonId: peerId });
+      const reply = unwrapMeshRelayResult(await dispatch2(peerId, BRIDGE_CAPABILITY_COMMAND, { meshId, nonce, ...deliveryClaim ? { deliveryClaim } : {} }), { command: BRIDGE_CAPABILITY_COMMAND, peerDaemonId: peerId });
       const valid = reply.success === true && reply.protocol === BRIDGE_PROTOCOL && reply.meshId === meshId && reply.nonce === nonce && reply.rolloutId === policy.rolloutId && typeof reply.daemonId === "string" && daemonIdsEquivalent4(reply.daemonId, peerId) && admitted(policy, reply);
       return valid ? reply : null;
     }
@@ -58256,7 +58259,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       const policy = readBridgePolicy(db, e.meshId);
       if (!policy || !admitted(policy, self) || !admitted(policy, { daemonId: senderId, commit: e.senderCommit, version: e.senderVersion })) return { success: false, error: "worker_protocol_unsupported" };
       try {
-        if (!await queryBridgePeer(dispatch2, senderId, e.meshId, policy)) return { success: false, error: "worker_protocol_unsupported" };
+        const peer = await queryBridgePeer(dispatch2, senderId, e.meshId, policy, { deliveryId: e.deliveryId, digest: bridgeDigest(e) });
+        if (!peer || (peer.commit !== e.senderCommit || peer.version !== e.senderVersion) && peer.deliveryDigest !== bridgeDigest(e)) return { success: false, error: "worker_protocol_unsupported" };
         return bridgeReceiptTransaction(db, () => {
           const saved = put(db, "owner", e);
           if (saved.receipt_json) return JSON.parse(saved.receipt_json);
@@ -129576,7 +129580,7 @@ ${marker}`,
       return JSON.stringify(value);
     }
     var workerBridgeHandlers = {
-      [BRIDGE_CAPABILITY_COMMAND]: async (ctx, args) => bridgeCapability(MeshRuntimeStore.getInstance().db, identity(ctx), args?.meshId, args?.nonce),
+      [BRIDGE_CAPABILITY_COMMAND]: async (ctx, args) => bridgeCapability(MeshRuntimeStore.getInstance().db, identity(ctx), args?.meshId, args?.nonce, args?.deliveryClaim),
       [BRIDGE_DELIVERY_COMMAND]: async (ctx, args) => {
         if (!ctx.deps.dispatchMeshCommand || args?.meshId !== args?.envelope?.meshId) return { success: false, error: "worker_protocol_unsupported" };
         const envelope = decodeBridgeEnvelope(args.envelope);

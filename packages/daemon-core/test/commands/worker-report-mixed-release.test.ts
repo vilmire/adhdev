@@ -452,6 +452,23 @@ describe.skipIf(!artifact)('strict B delivery and restart recovery', () => {
       expect(r.ledger.getAttempt(r.attemptId).terminal).toBeNull()
       await r.ledger.flushPublish()
     })
+  it('build mismatch requires an exact stored-envelope capability attestation', async () => {
+    const r = rig('rc13','rc13',true)
+    const policy = { meshId:r.meshId,rolloutId:'offline-rollout',frozen:true,builds:[{commit:'b'.repeat(40),version:'1.0.82-bridge'},{commit:'c'.repeat(40),version:'1.0.82-bridge'}] }
+    setBridgePolicy(r.owner.db,policy); setBridgePolicy(r.member.db,policy)
+    r.offline(true); await r.delivery.submit('report',{report:r.report})
+    const saved: any = r.member.db.prepare("SELECT envelope_json FROM worker_bridge_delivery WHERE side='member'").get()
+    const original = JSON.parse(saved.envelope_json)
+    const historical = {...original,deliveryId:original.deliveryId+'-historical',senderCommit:'c'.repeat(40)}
+    r.offline(false)
+    expect(await r.wire.dispatch('daemon_mach_test_owner',BRIDGE_DELIVERY_COMMAND,{meshId:r.meshId,envelope:historical})).toMatchObject({success:false})
+    expect(r.ledger.getAttempt(r.attemptId).terminal).toBeNull()
+    // Retry journals the historical ORIGINAL claim before the reverse challenge;
+    // the new build attests that exact digest without stripping the old stamp.
+    expect(await sendBridgeDelivery(r.member.db,historical,r.wire.dispatch)).toMatchObject({success:true})
+    expect(r.ledger.getAttempt(r.attemptId).terminal).toMatchObject({strength:'tool_report'})
+    await r.ledger.flushPublish()
+  })
   it('does not retarget a prepared report after member assignment generation changes', async () => {
     const r = rig('rc13', 'rc13', true)
     r.offline(true)

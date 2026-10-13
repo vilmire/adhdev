@@ -43,7 +43,7 @@ function applyEnvelope(ctx: LowFamilyContext, e: BridgeEnvelope, nodeOwner: (nod
 function stableFields(value: unknown) { return JSON.stringify(value); }
 
 export const workerBridgeHandlers: Record<string, LowFamilyHandler> = {
-    [BRIDGE_CAPABILITY_COMMAND]: async (ctx, args) => bridgeCapability(MeshRuntimeStore.getInstance().db, identity(ctx), args?.meshId, args?.nonce),
+    [BRIDGE_CAPABILITY_COMMAND]: async (ctx, args) => bridgeCapability(MeshRuntimeStore.getInstance().db, identity(ctx), args?.meshId, args?.nonce, args?.deliveryClaim),
     [BRIDGE_DELIVERY_COMMAND]: async (ctx, args) => {
         if (!ctx.deps.dispatchMeshCommand || args?.meshId !== args?.envelope?.meshId) return { success: false, error: 'worker_protocol_unsupported' };
         const envelope = decodeBridgeEnvelope(args.envelope);
