@@ -129634,17 +129634,21 @@ ${marker}`,
       },
       worker_bridge_verify: async (ctx, args) => {
         const policy = readBridgePolicy(MeshRuntimeStore.getInstance().db, args?.meshId);
-        if (!policy || policy.ownerDaemonId !== args?.expectedHostDaemonId || !policy.roster || !Array.isArray(args?.peerBuilds) || !ctx.deps.dispatchMeshCommand) return { success: false, error: "bridge_verification_manifest_required" };
+        if (typeof args?.nonce !== "string" || args.nonce.length < 8 || !policy || policy.ownerDaemonId !== args?.expectedHostDaemonId || !policy.roster || !Array.isArray(args?.peerBuilds) || !ctx.deps.dispatchMeshCommand) return { success: false, error: "bridge_verification_manifest_required" };
+        if (args.peerBuilds.some((peer) => !peer || typeof peer.daemonId !== "string" || typeof peer.bootId !== "string" || !peer.bootId)) return { success: false, error: "bridge_peer_manifest_mismatch" };
+        if (args.peerBuilds.some((peer, index) => args.peerBuilds.some((prior, other) => other < index && daemonIdsEquivalent4(peer.daemonId, prior.daemonId)))) return { success: false, error: "bridge_peer_manifest_mismatch" };
         const native = (await ctx.getMeshForCommand?.(args.meshId, void 0, { preferInline: true }))?.mesh;
         if (native?.meshHost?.hostDaemonId && native.meshHost.hostDaemonId !== policy.ownerDaemonId) return { success: false, error: "bridge_coordinator_identity_mismatch" };
         for (const expected of args.peerBuilds) {
-          if (!policy.roster.some((node) => daemonIdsEquivalent4(node.daemonId, expected.daemonId)) || !policy.builds.some((build2) => build2.commit === expected.commit && build2.version === expected.version)) return { success: false, error: "bridge_peer_manifest_mismatch" };
+          if (typeof expected.bootId !== "string" || !expected.bootId || !policy.roster.some((node) => daemonIdsEquivalent4(node.daemonId, expected.daemonId)) || !policy.builds.some((build2) => build2.commit === expected.commit && build2.version === expected.version)) return { success: false, error: "bridge_peer_manifest_mismatch" };
+          const capability = await queryBridgePeer(ctx.deps.dispatchMeshCommand, expected.daemonId, policy.meshId, policy);
+          if (!capability || capability.commit !== expected.commit || capability.version !== expected.version || capability.frozen !== true) return { success: false, error: "bridge_peer_reconnect_unconfirmed" };
           const raw = await ctx.deps.dispatchMeshCommand(expected.daemonId, "get_status_metadata", {});
           const peer = unwrapMeshRelayResult(raw, { command: "get_status_metadata", peerDaemonId: expected.daemonId });
           const status = peer.status, build = peer.daemonBuild;
-          if (peer.success !== true || !daemonIdsEquivalent4(String(status?.instanceId ?? ""), expected.daemonId) || build?.commit !== expected.commit || status?.version !== expected.version) return { success: false, error: "bridge_peer_identity_unconfirmed" };
+          if (expected.bootId && peer.bootId !== expected.bootId || peer.success !== true || !daemonIdsEquivalent4(String(status?.instanceId ?? ""), expected.daemonId) || build?.commit !== expected.commit || status?.version !== expected.version) return { success: false, error: "bridge_peer_identity_unconfirmed" };
         }
-        return { success: true, p2p: true, coordinator: true, verifiedPeers: args.peerBuilds.map((peer) => peer.daemonId) };
+        return { success: true, nonce: args.nonce, p2p: args.peerBuilds.length > 0, coordinator: true, verifiedPeers: args.peerBuilds.map((peer) => peer.daemonId) };
       },
       worker_bridge_status: async (_ctx, args) => {
         const db = MeshRuntimeStore.getInstance().db;
