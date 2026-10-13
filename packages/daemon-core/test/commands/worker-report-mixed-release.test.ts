@@ -342,6 +342,17 @@ describe.skipIf(!artifact)('strict B delivery and restart recovery', () => {
     expect(r.owner.turnStore().listWorkerEventsForTask(r.meshId, r.taskId, 'worker_tool_report')).toHaveLength(1)
     await r.ledger.flushPublish()
   })
+  it('prepared local progress cannot first record against a terminal attempt', async () => {
+    const r = rig('rc13','rc13',true)
+    const progressArgs = { token:r.localToken,deliveryId:'prepared-before-terminal',reportedAtMs:Date.now() }
+    const progress = await r.localCommand('worker_bridge_prepare',progressArgs)
+    const reportArgs = {...progressArgs,deliveryId:'accepted-terminal-report'}
+    const report = await r.localCommand('worker_bridge_prepare',reportArgs)
+    expect(await r.localCommand('worker_report_completion',{...reportArgs,prepared:report.prepared,report:r.report})).toMatchObject({success:true})
+    expect(await r.localCommand('worker_progress_update',{...progressArgs,prepared:progress.prepared,note:'Synthetic old progress must not first record after task completion.'})).toMatchObject({success:false,error:'stale_report'})
+    expect(r.owner.turnStore().listWorkerEventsForTask(r.meshId,r.taskId,'worker_progress_update')).toHaveLength(0)
+    await r.ledger.flushPublish()
+  })
   it.each(['progress', 'refusal'] as const)('local %s retains exact prepared identity through storage failure and credential-map restart', async (kind) => {
     const r = rig('rc13', 'rc13', true)
     const args = { token: r.localToken, deliveryId: `local-${kind}`, reportedAtMs: Date.now() }

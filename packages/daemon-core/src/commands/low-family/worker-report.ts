@@ -711,6 +711,8 @@ export const workerReportHandlers: Record<string, LowFamilyHandler> = {
                     senderVersion: self.version, ...prepared, payload: { note } }, () => {
                     const attempt = MeshRuntimeStore.getInstance().turnStore().getAttempt(prepared.attemptId);
                     if (!attempt || attempt.generation !== prepared.generation || attempt.sessionId !== prepared.sessionId) return { success: false, error: 'stale_report' };
+                    if (attempt.terminal || MeshRuntimeStore.getInstance().turnStore().findLatestAttemptForTask(prepared.meshId, prepared.taskId)?.attemptId !== prepared.attemptId) return { success: false, error: 'stale_report' };
+                    // eslint-disable-next-line no-restricted-syntax -- Prepared node id is an immutable snapshot of this stored attempt; require exact equality.
                     if (!daemonIdsEquivalent(attempt.ownerDaemonId, self.daemonId) || attempt.meshId !== prepared.meshId || attempt.taskId !== prepared.taskId || attempt.nodeId !== prepared.nodeId) return { success: false, error: 'unauthenticated' };
                     if (Date.now() - prepared.reportedAtMs > BRIDGE_MAX_AGE_MS || prepared.reportedAtMs > Date.now() + 60_000) return { success: false, error: 'stale_report' };
                     return toProgressResponse(acceptWorkerProgressUpdateForIdentity({ token: '', ...prepared }, note, { deliveryId }));
