@@ -1,0 +1,23 @@
+{
+  "rc12": {
+    "commit": "903540f7dfbb9fe4f4285d9de96c2421404c21a7",
+    "version": "1.0.82-rc.12",
+    "tarSha256": "8c1d8f3f6b35757955c731a91166167aabcf584e108c61a3df01435df0bf9ddd",
+    "daemonSha256": "fed191d5b0e09a9851b0fc8e8c8068da566f0b2e64e972d27be9e24a3132e291",
+    "outboxSha256": "3012607712fadef2beb1525c95cfb9b9f3008c3d3f529495e561e7dfaf4e9640"
+  },
+  "B": {
+    "commit": "ca5157c196190438782d6b048599e241bfa665ba",
+    "version": "1.0.81",
+    "tarSha256": "4c957f900efdfbafe1783414f41c239dfd634ee2dc8642c706658ba74814d79d",
+    "daemonSha256": "3abb41316c0822021d72e12af9610706a29316cd789e05cc84d97a8ca9be47fc",
+    "outboxSha256": "d1ac6ae8e6b0eb93f94b3d243fa6380b6429d3c3424686bdd90afdbf47a0ed83"
+  },
+  "F": {
+    "commit": "a1029fdec07f553f583f283d32d1c130cab83271",
+    "version": "1.0.81",
+    "tarSha256": "b56dc80560f91cc494d22255f1e693be8d3df258575162d98470f21202877c11",
+    "daemonSha256": "f8e64ba1e6cf1a80bb437aff4f6df288dadbf1d520a20ff16396d4041e72526e",
+    "outboxSha256": "3230d11ac33ba9c1705b35bb6f891975c7ab221cbb0ef69a8533e8a4004c20c0"
+  }
+}
