@@ -67,27 +67,15 @@ export const workerBridgeHandlers: Record<string, LowFamilyHandler> = {
         return receiveBridgeDelivery(MeshRuntimeStore.getInstance().db, args.envelope, readMeshSender(args), identity(ctx), ctx.deps.dispatchMeshCommand,
             (e) => applyEnvelope(ctx, e, nodeOwner));
     },
-    // Local operator surface only. Remote workers cannot arm/unfreeze a rollout.
+    // Local freeze/arm surface only. Reopening is unavailable for every caller.
     worker_bridge_control: async (ctx, args) => {
+        const policy = args?.policy as BridgePolicy;
+        // IPC/standalone reachability is not native release authority. No
+        // enforceable supervisor transaction/lease contract exists yet, so
+        // caller assertions, drained samples and peer counts cannot reopen.
+        if (policy?.frozen === false) return { success: false, error: 'bridge_reopen_native_supervisor_authority_unavailable' };
         const store = MeshRuntimeStore.getInstance();
         ensureBridgeSchema(store.db);
-        const policy = args?.policy as BridgePolicy;
-        if (policy?.frozen === false) {
-            const existing = readBridgePolicy(store.db, policy.meshId), drain = bridgeDrainState(store.db, policy.meshId);
-            if (!existing || existing.rolloutId !== policy.rolloutId || drain.openAttempts || drain.correctionOrLivenessHolds || drain.pendingDeliveries
-                || args?.verification?.ledgerDigest !== drain.ledgerDigest || !ctx.deps.dispatchMeshCommand) return { success: false, error: 'bridge_reopen_requires_staged_verification' };
-            const states = ctx.deps.instanceManager.collectAllStates();
-            if (states.some((state) => ['generating','starting','finalizing','waiting_approval','waiting_choice'].includes(String(state.status)) || Number((state as unknown as Record<string, unknown>).pendingOutboundCount) > 0)) return { success: false, error: 'bridge_reopen_not_idle' };
-            const mesh = (await ctx.getMeshForCommand?.(policy.meshId, undefined, { preferInline: true }))?.mesh;
-            if (!Array.isArray(mesh?.nodes) || !mesh.nodes.length) return { success: false, error: 'bridge_roster_unresolved' };
-            for (const node of mesh.nodes) {
-                const daemonId = readMeshNodeDaemonId(node);
-                if (!daemonId) return { success: false, error: 'bridge_roster_unresolved' };
-                if (daemonIdsEquivalent(daemonId, ctx.deps.statusInstanceId ?? '')) continue;
-                const peer = await queryBridgePeer(ctx.deps.dispatchMeshCommand, daemonId, policy.meshId, existing);
-                if (!peer || peer.openAttempts !== 0 || peer.correctionOrLivenessHolds !== 0 || peer.pendingDeliveries !== 0) return { success: false, error: 'bridge_peer_not_drained' };
-            }
-        }
         try { setBridgePolicy(store.db, policy); return { success: true, frozen: policy.frozen, rolloutId: policy.rolloutId }; }
         catch { return { success: false, error: 'invalid_bridge_policy' }; }
     },

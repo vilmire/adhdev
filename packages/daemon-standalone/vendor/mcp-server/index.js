@@ -129608,26 +129608,12 @@ ${marker}`,
           (e) => applyEnvelope(ctx, e, nodeOwner)
         );
       },
-      // Local operator surface only. Remote workers cannot arm/unfreeze a rollout.
+      // Local freeze/arm surface only. Reopening is unavailable for every caller.
       worker_bridge_control: async (ctx, args) => {
+        const policy = args?.policy;
+        if (policy?.frozen === false) return { success: false, error: "bridge_reopen_native_supervisor_authority_unavailable" };
         const store2 = MeshRuntimeStore.getInstance();
         ensureBridgeSchema(store2.db);
-        const policy = args?.policy;
-        if (policy?.frozen === false) {
-          const existing = readBridgePolicy(store2.db, policy.meshId), drain = bridgeDrainState(store2.db, policy.meshId);
-          if (!existing || existing.rolloutId !== policy.rolloutId || drain.openAttempts || drain.correctionOrLivenessHolds || drain.pendingDeliveries || args?.verification?.ledgerDigest !== drain.ledgerDigest || !ctx.deps.dispatchMeshCommand) return { success: false, error: "bridge_reopen_requires_staged_verification" };
-          const states = ctx.deps.instanceManager.collectAllStates();
-          if (states.some((state2) => ["generating", "starting", "finalizing", "waiting_approval", "waiting_choice"].includes(String(state2.status)) || Number(state2.pendingOutboundCount) > 0)) return { success: false, error: "bridge_reopen_not_idle" };
-          const mesh = (await ctx.getMeshForCommand?.(policy.meshId, void 0, { preferInline: true }))?.mesh;
-          if (!Array.isArray(mesh?.nodes) || !mesh.nodes.length) return { success: false, error: "bridge_roster_unresolved" };
-          for (const node of mesh.nodes) {
-            const daemonId = readMeshNodeDaemonId(node);
-            if (!daemonId) return { success: false, error: "bridge_roster_unresolved" };
-            if (daemonIdsEquivalent4(daemonId, ctx.deps.statusInstanceId ?? "")) continue;
-            const peer = await queryBridgePeer(ctx.deps.dispatchMeshCommand, daemonId, policy.meshId, existing);
-            if (!peer || peer.openAttempts !== 0 || peer.correctionOrLivenessHolds !== 0 || peer.pendingDeliveries !== 0) return { success: false, error: "bridge_peer_not_drained" };
-          }
-        }
         try {
           setBridgePolicy(store2.db, policy);
           return { success: true, frozen: policy.frozen, rolloutId: policy.rolloutId };
