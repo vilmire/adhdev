@@ -17,18 +17,11 @@ import {
     collectQuotaEntries,
     formatQuotaAccount,
     quotaProviderLabel,
+    selectMachineQuotaChips,
     type QuotaChipHint,
 } from '../../utils/quota-format'
 import type { MachineData, IdeSessionEntry, CliSessionEntry } from './types'
-
-/** Badge tone → the page's existing colour vocabulary. */
-const QUOTA_TONE_CLASS: Record<string, string> = {
-    good: 'bg-emerald-500/10 text-emerald-500',
-    warn: 'bg-amber-500/10 text-amber-500',
-    danger: 'bg-red-500/10 text-red-500',
-    default: 'bg-white/5 text-text-secondary',
-    info: 'bg-blue-500/10 text-blue-500',
-}
+import { MachineQuotaChip } from './MachineQuotaChip'
 
 /** Hover-title i18n key per chip kind — page styling; chip CONTENT comes from the shared model. */
 const QUOTA_CHIP_TITLE_KEYS: Record<QuotaChipHint, string> = {
@@ -37,14 +30,6 @@ const QUOTA_CHIP_TITLE_KEYS: Record<QuotaChipHint, string> = {
     weekly: 'machine.quota.weeklyHint',
     monthly: 'machine.quota.monthlyHint',
     usage: 'machine.quota.usageHint',
-}
-
-function QuotaChip({ label, tone, title }: { label: string; tone: string; title?: string }) {
-    return (
-        <span title={title} className={`rounded-full px-2 py-0.5 text-3xs font-medium ${QUOTA_TONE_CLASS[tone] ?? QUOTA_TONE_CLASS.default}`}>
-            {label}
-        </span>
-    )
 }
 
 /**
@@ -58,9 +43,10 @@ function QuotaChip({ label, tone, title }: { label: string; tone: string; title?
  * us" and "looked and could not tell" are different facts.
  */
 function PlanQuotaCard({ machine }: { machine: MachineData }) {
-    const { t } = useTranslation('common')
+    const { t, i18n } = useTranslation('common')
     // Localized binding; keeps the one-argument model call the drift guard pins.
-    const buildQuotaDisplayModel = bindQuotaDisplayModel(createQuotaTextFormatter(t))
+    const fmt = createQuotaTextFormatter(t)
+    const buildQuotaDisplayModel = bindQuotaDisplayModel(fmt)
     const entries = collectQuotaEntries(machine.quota)
     if (entries.length === 0) return null
     return (
@@ -74,6 +60,7 @@ function PlanQuotaCard({ machine }: { machine: MachineData }) {
                     // usage fallback, ok-without-windows vs failure) is the
                     // shared view-model's job; this card only styles it.
                     const model = buildQuotaDisplayModel(quota)
+                    const chips = selectMachineQuotaChips(model, 'all')
                     return (
                         <div key={provider} className="flex flex-wrap items-center gap-2">
                             <span className="text-xs text-text-primary min-w-[92px]">{quotaProviderLabel(provider)}</span>
@@ -84,14 +71,16 @@ function PlanQuotaCard({ machine }: { machine: MachineData }) {
                                     {formatQuotaAccount(quota)}
                                 </span>
                             )}
-                            {model.kind === 'chips' && model.chips.map(chip => (
-                                <QuotaChip key={chip.key} label={chip.label} tone={chip.tone} title={t(QUOTA_CHIP_TITLE_KEYS[chip.hint])} />
+                            {(model.kind === 'chips' || model.kind === 'usage') && chips.map(chip => (
+                                <MachineQuotaChip
+                                    key={chip.key}
+                                    chip={chip}
+                                    kindHint={t(QUOTA_CHIP_TITLE_KEYS[chip.hint])}
+                                    fmt={fmt}
+                                    locale={i18n.language}
+                                    className="px-2"
+                                />
                             ))}
-                            {/* Usage-shaped provider (opencode): absolute tokens/cost,
-                                no percent windows to chip. */}
-                            {model.kind === 'usage' && (
-                                <QuotaChip label={model.usageLabel!} tone="info" title={t('machine.quota.usageHint')} />
-                            )}
                             {/* 'ok' with no windows at all = a successful reading whose
                                 provider has no percentage axis (cursor included-usage) —
                                 its own message, never the failure line. */}

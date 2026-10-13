@@ -3450,6 +3450,8 @@
                 "resetsInHours": "{{hours}}時間{{minutes}}分後にリセット",
                 "resetsInMinutes": "{{minutes}}分後にリセット",
                 "resetsNow": "まもなくリセット",
+                "resetUnknown": "リセット時刻不明",
+                "resetAtAbsolute": "{{when}} にリセット",
                 "used": "{{percent}}% 使用"
             },
             "title": "プラン使用量",

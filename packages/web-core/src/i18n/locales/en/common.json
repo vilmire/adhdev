@@ -3450,6 +3450,8 @@
                 "resetsInHours": "resets in {{hours}}h {{minutes}}m",
                 "resetsInMinutes": "resets in {{minutes}}m",
                 "resetsNow": "resets now",
+                "resetUnknown": "reset time unknown",
+                "resetAtAbsolute": "resets {{when}}",
                 "used": "{{percent}}% used"
             },
             "title": "Plan quota",

@@ -3453,6 +3453,8 @@
                 "resetsInHours": "se reinicia en {{hours}} h {{minutes}} min",
                 "resetsInMinutes": "se reinicia en {{minutes}} min",
                 "resetsNow": "se reinicia ahora",
+                "resetUnknown": "hora de reinicio desconocida",
+                "resetAtAbsolute": "se reinicia {{when}}",
                 "used": "{{percent}}% usado"
             },
             "title": "Cuota del plan",

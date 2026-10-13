@@ -6,8 +6,9 @@
  * detail page, the chat session-info dialog — can format the same
  * MeshNodeFactsProviderQuota values without importing from the MeshGraph
  * subtree, which is scoped to mesh observability UI, not machine/session
- * screens. Everything here depends only on `@adhdev/mesh-shared` types
- * (type-only), so it carries zero MeshGraph or daemon-core coupling.
+ * screens. Content assembly depends on `@adhdev/mesh-shared` types (type-only)
+ * plus the local absolute-time helper for reset tooltips — zero MeshGraph or
+ * daemon-core coupling.
  *
  * What stayed behind in meshSurfaceHelpers.ts: collectNodeQuotaEntries and
  * collectMachineQuotaGroups, because both take mesh-status-shaped input
@@ -19,6 +20,7 @@
 import type { TFunction } from 'i18next'
 import { assessQuotaFreshness, minutesUntilQuotaCheck } from '@adhdev/mesh-shared'
 import type { MeshNodeFactsProviderQuota, MeshNodeFactsQuotaWindow } from '@adhdev/mesh-shared'
+import { formatAbsoluteTime } from './time'
 
 /**
  * Every user-visible word this module produces, behind one seam so the helpers
@@ -54,6 +56,10 @@ export interface QuotaTextFormatter {
     agoMinutes(minutes: number): string
     agoHours(hours: number, minutes: number): string
     agoDays(days: number, hours: number): string
+    /** Explicit when the provider reported no usable resetsAt. */
+    resetUnknown(): string
+    /** Absolute local-timezone reset line — `when` is already localized. */
+    resetAtAbsolute(when: string): string
 }
 
 export const ENGLISH_QUOTA_TEXT: QuotaTextFormatter = {
@@ -74,6 +80,8 @@ export const ENGLISH_QUOTA_TEXT: QuotaTextFormatter = {
     agoMinutes: (m) => `${m}m ago`,
     agoHours: (h, m) => `${h}h ${m}m ago`,
     agoDays: (d, h) => `${d}d ${h}h ago`,
+    resetUnknown: () => 'reset time unknown',
+    resetAtAbsolute: (when) => `resets ${when}`,
 }
 
 /** Failure kinds with a translated label (`machine.quota.text.failureKind.<kind>`). */
@@ -105,6 +113,8 @@ export function createQuotaTextFormatter(t: TFunction): QuotaTextFormatter {
         agoMinutes: (minutes) => t(`${K}agoMinutes`, { minutes }),
         agoHours: (hours, minutes) => t(`${K}agoHours`, { hours, minutes }),
         agoDays: (days, hours) => t(`${K}agoDays`, { days, hours }),
+        resetUnknown: () => t(`${K}resetUnknown`),
+        resetAtAbsolute: (when) => t(`${K}resetAtAbsolute`, { when }),
     }
 }
 
@@ -175,6 +185,50 @@ export function formatQuotaReset(resetsAt: number | null | undefined, now: numbe
     const hours = Math.floor(minutes / 60)
     if (hours < 24) return fmt.resetsInHours(hours, minutes % 60)
     return fmt.resetsInDays(Math.floor(hours / 24), hours % 24)
+}
+
+/**
+ * Absolute local-timezone reset timestamp for tooltips. Empty when resetsAt is
+ * missing — callers must prefer {@link describeQuotaResetDetail} so unknown
+ * stays explicit rather than a blank line.
+ */
+export function formatAbsoluteQuotaReset(resetsAt: number | null | undefined, locale?: string): string | null {
+    if (typeof resetsAt !== 'number' || !Number.isFinite(resetsAt) || resetsAt <= 0) return null
+    const absolute = formatAbsoluteTime(resetsAt, { locale })
+    return absolute === '' ? null : absolute
+}
+
+/**
+ * Reset detail for hover/focus/tap tooltips: absolute local time PLUS relative
+ * remaining, or an explicit "reset time unknown" when resetsAt is absent.
+ * Never invents a reset from windowMinutes alone.
+ */
+export function describeQuotaResetDetail(
+    resetsAt: number | null | undefined,
+    now: number = Date.now(),
+    fmt: QuotaTextFormatter = ENGLISH_QUOTA_TEXT,
+    locale?: string,
+): string {
+    const absolute = formatAbsoluteQuotaReset(resetsAt, locale)
+    if (!absolute) return fmt.resetUnknown()
+    const relative = formatQuotaReset(resetsAt, now, fmt)
+    const absoluteLine = fmt.resetAtAbsolute(absolute)
+    return relative ? `${absoluteLine} · ${relative}` : absoluteLine
+}
+
+/**
+ * Full chip tooltip: kind hint on the first line, then absolute+relative reset
+ * (or explicit unknown). Usage chips have no reset axis.
+ */
+export function describeQuotaChipTooltip(
+    chip: QuotaDisplayChip,
+    kindHint: string,
+    now: number = Date.now(),
+    fmt: QuotaTextFormatter = ENGLISH_QUOTA_TEXT,
+    locale?: string,
+): string {
+    if (chip.hint === 'usage') return kindHint
+    return `${kindHint}\n${describeQuotaResetDetail(chip.resetsAt, now, fmt, locale)}`
 }
 
 export type QuotaWindowCue = 'refreshing' | 'stale'
@@ -361,6 +415,12 @@ export interface QuotaDisplayChip {
     hint: QuotaChipHint
     /** Same 70/90 thresholds as the `adhdev quota` CLI ('info' for usage chips). */
     tone: QuotaTone
+    /**
+     * Window reset boundary (unix ms) when the provider reported one.
+     * `null` = explicitly unknown (tooltip must say so); omitted only for
+     * usage chips that have no reset axis.
+     */
+    resetsAt?: number | null
 }
 
 export interface QuotaDisplayModel {
@@ -381,12 +441,12 @@ export interface QuotaDisplayModel {
     /** okNoWindows: provider message or null; failure: never null. */
     message: string | null
     /**
-     * The single "smallest useful reading" for tight surfaces (the provider-row
-     * header chip): the 5h axis, else the 7d axis, else the usage summary, else
-     * null. Deliberately built from the collapsed AXES even when per-pool
-     * buckets replace them in `chips` — a one-chip surface wants the worst-of-
-     * pools headline, not one arbitrary pool. Never a monthly-only reading:
-     * a 30d billing axis alone is not a "how am I doing right now" number.
+     * Worst-of-pools headline (5h axis, else 7d, else usage) for routing-safe
+     * one-number consumers. Machine Fleet / Overview / provider-row that need
+     * per-pool truth must use {@link selectMachineQuotaChips} instead — they
+     * must not invent a second pool when buckets are absent. Never a
+     * monthly-only reading: a 30d billing axis alone is not a "how am I doing
+     * right now" number.
      */
     compactChip: QuotaDisplayChip | null
 }
@@ -415,7 +475,8 @@ export function buildQuotaDisplayModel(
         if (!text) return null
         const usedPercent = window!.usedPercent
         const reset = isQuotaWindowReset(window, now)
-        return { key: hint, label: `${prefix} ${text}`, usedPercent: reset ? null : usedPercent, hint, tone: reset ? 'default' : quotaUsageTone(usedPercent) }
+        const resetsAt = typeof window!.resetsAt === 'number' && Number.isFinite(window!.resetsAt) ? window!.resetsAt : null
+        return { key: hint, label: `${prefix} ${text}`, usedPercent: reset ? null : usedPercent, hint, tone: reset ? 'default' : quotaUsageTone(usedPercent), resetsAt }
     }
     const session = axisChip(quota.session, 'session', '5h')
     const weekly = axisChip(quota.weekly, 'weekly', '7d')
@@ -423,13 +484,14 @@ export function buildQuotaDisplayModel(
 
     // Multi-pool providers (antigravity): the per-pool buckets REPLACE the
     // collapsed worst-of-pools axes — showing both would render the same
-    // numbers twice.
+    // numbers twice. Fewer than two buckets keeps the axes (never invent a pool).
     const bucketChips: QuotaDisplayChip[] = collectQuotaBucketChips(quota, fmt).map(chip => ({
         key: chip.label,
         label: `${chip.label} ${formatQuotaWindow(chip.window, now, cue, fmt, nextCheckAt)}`,
         usedPercent: isQuotaWindowReset(chip.window, now) ? null : chip.usedPercent,
         hint: 'bucket' as const,
         tone: isQuotaWindowReset(chip.window, now) ? 'default' as const : quotaUsageTone(chip.usedPercent),
+        resetsAt: typeof chip.window.resetsAt === 'number' && Number.isFinite(chip.window.resetsAt) ? chip.window.resetsAt : null,
     }))
     const chips = bucketChips.length > 0
         ? bucketChips
@@ -470,6 +532,48 @@ export function buildQuotaDisplayModel(
 export function bindQuotaDisplayModel(fmt: QuotaTextFormatter) {
     return (quota: MeshNodeFactsProviderQuota, now: number = Date.now()): QuotaDisplayModel =>
         buildQuotaDisplayModel(quota, now, fmt)
+}
+
+/**
+ * Which chips a machine-page surface should render.
+ *
+ * - `all` — Overview / full cards: every chip the model assembled.
+ * - `fleet` — grid cells: per-pool buckets when present, else session/weekly axes
+ *   (never falls back to a single compactChip while buckets exist).
+ * - `row` — provider-settings header: per-pool buckets when present, else the
+ *   worst-headline compactChip. Does not invent a second pool.
+ */
+export function selectMachineQuotaChips(
+    model: QuotaDisplayModel,
+    mode: 'all' | 'fleet' | 'row',
+): QuotaDisplayChip[] {
+    if (model.kind === 'chips') {
+        const buckets = model.chips.filter((chip) => chip.hint === 'bucket')
+        if (buckets.length > 0) return buckets
+        if (mode === 'all') return model.chips
+        if (mode === 'fleet') {
+            const axes = model.chips.filter((chip) => chip.hint === 'session' || chip.hint === 'weekly')
+            if (axes.length > 0) return axes
+            return model.compactChip ? [model.compactChip] : []
+        }
+        return model.compactChip ? [model.compactChip] : []
+    }
+    if (model.kind === 'usage' && model.compactChip) return [model.compactChip]
+    return []
+}
+
+/** Compact grid/row label — "Gemini 5h 45%", full text stays in the tooltip. */
+export function shortQuotaChipLabel(chip: QuotaDisplayChip): string {
+    const axis = chip.hint === 'session'
+        ? '5h'
+        : chip.hint === 'weekly'
+            ? '7d'
+            : chip.hint === 'monthly'
+                ? '30d'
+                : chip.key
+    if (chip.usedPercent === null) return chip.hint === 'usage' ? chip.label : `${axis} —`
+    if (chip.hint === 'usage') return chip.label
+    return `${axis} ${Math.round(chip.usedPercent)}%`
 }
 
 export type ClaudeQuotaHint = 'setup' | 'refresh' | null

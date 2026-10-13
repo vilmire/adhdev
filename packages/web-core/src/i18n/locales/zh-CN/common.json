@@ -3450,6 +3450,8 @@
                 "resetsInHours": "{{hours}} 小时 {{minutes}} 分钟后重置",
                 "resetsInMinutes": "{{minutes}} 分钟后重置",
                 "resetsNow": "即将重置",
+                "resetUnknown": "重置时间未知",
+                "resetAtAbsolute": "{{when}} 重置",
                 "used": "已用 {{percent}}%"
             },
             "title": "套餐用量",

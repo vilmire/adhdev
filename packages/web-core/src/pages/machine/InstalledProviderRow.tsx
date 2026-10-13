@@ -16,13 +16,14 @@ import { Switch } from '../../components/ui/Switch'
 import type { ProviderInfo, ProviderSettingsEntry } from './types'
 import TrustBadge, { type ProviderTrust } from './TrustBadge'
 import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared'
-import { bindQuotaDisplayModel, createQuotaTextFormatter, type QuotaChipHint } from '../../utils/quota-format'
+import { bindQuotaDisplayModel, createQuotaTextFormatter, selectMachineQuotaChips, shortQuotaChipLabel, type QuotaChipHint } from '../../utils/quota-format'
 import { PROVIDER_CATEGORY_COLOR, type ProviderCategory } from './providerCategoryConfig'
 import { ProviderLogo } from '../../components/ProviderLogo'
 import { localizeProviderSetting, localizeProviderSettingOption } from '../../utils/provider-setting-copy'
 import { InfoTip } from '../../components/ui/InfoTip'
 import { formatAbsoluteTime } from '../../utils/time'
 import type { TFunction } from 'i18next'
+import { MachineQuotaChip } from './MachineQuotaChip'
 
 /**
  * Validate a provider-manifest URL before rendering it as an anchor.
@@ -49,22 +50,13 @@ const STATUS_CLASS: Record<string, string> = {
     disabled: 'bg-white/[0.04] border-white/[0.10] text-text-muted',
 }
 
-/** Hover-title i18n key per chip kind — the compactChip only ever carries session/weekly/usage. */
+/** Hover-title i18n key per chip kind — buckets when present, else compact session/weekly/usage. */
 const QUOTA_CHIP_TITLE_KEYS: Record<QuotaChipHint, string> = {
     bucket: 'machine.quota.bucketHint',
     session: 'machine.quota.sessionHint',
     weekly: 'machine.quota.weeklyHint',
     monthly: 'machine.quota.monthlyHint',
     usage: 'machine.quota.usageHint',
-}
-
-/** Quota chip tones — same palette as the Overview quota chips. */
-const QUOTA_CHIP_TONE: Record<string, string> = {
-    default: 'bg-white/[0.04] border-white/[0.10] text-text-muted',
-    good: 'bg-green-500/[0.10] border-green-500/25 text-green-400',
-    warn: 'bg-yellow-500/[0.10] border-yellow-500/25 text-yellow-400',
-    danger: 'bg-red-500/[0.10] border-red-500/25 text-red-400',
-    info: 'bg-sky-500/[0.10] border-sky-500/25 text-sky-300',
 }
 
 function formatCheck(t: TFunction, check?: ProviderMachineCheck): string {
@@ -237,7 +229,7 @@ export default function InstalledProviderRow({
     // asks first. Disabling, and codex/kimi in both directions, never confirm —
     // only claude has a user-file side effect.
     const [confirmQuotaEnable, setConfirmQuotaEnable] = useState(false)
-    const { t } = useTranslation('common')
+    const { t, i18n } = useTranslation('common')
     const STATUS_LABEL_I18N: Record<string, string> = {
         detected: t('machine.providerRow.statusDetected'),
         not_detected: t('machine.providerRow.statusNotDetected'),
@@ -256,18 +248,20 @@ export default function InstalledProviderRow({
             ? 'enabled_unchecked'
             : (rawStatus || (enabled ? 'enabled_unchecked' : 'disabled'))
     const isRuntime = isMachineRuntimeProvider(prov.category)
-    // Inline plan-quota chip (owner feedback 2026-08-10): the smallest useful
-    // reading — the shared view-model's compactChip (session window, else
-    // weekly, else the usage summary). Content selection lives in
-    // buildQuotaDisplayModel; only the tone classes and hover titles are this
-    // row's styling.
-    const quotaChip = (() => {
-        if (!quota) return null
-        // Localized binding; keeps the one-argument model call the drift guard pins.
-        const buildQuotaDisplayModel = bindQuotaDisplayModel(createQuotaTextFormatter(t))
-        const chip = buildQuotaDisplayModel(quota).compactChip
-        if (!chip) return null
-        return { label: chip.label, tone: QUOTA_CHIP_TONE[chip.tone], title: t(QUOTA_CHIP_TITLE_KEYS[chip.hint]) }
+    // Inline plan-quota chips: Antigravity per-pool buckets when the API
+    // returned them (Gemini vs Claude/GPT), otherwise the worst-headline
+    // compactChip. Content selection lives in buildQuotaDisplayModel +
+    // selectMachineQuotaChips — never invent a second pool.
+    const quotaChips = (() => {
+        if (!quota) return []
+        const fmt = createQuotaTextFormatter(t)
+        const buildQuotaDisplayModel = bindQuotaDisplayModel(fmt)
+        return selectMachineQuotaChips(buildQuotaDisplayModel(quota), 'row').map(chip => ({
+            chip,
+            kindHint: t(QUOTA_CHIP_TITLE_KEYS[chip.hint]),
+            label: shortQuotaChipLabel(chip),
+            fmt,
+        }))
     })()
 
     return (
@@ -324,12 +318,26 @@ export default function InstalledProviderRow({
                             {updating ? t('machine.providerRow.specPinUpdating') : t('machine.providerRow.updateInline')}
                         </span>
                     )}
-                    {/* Machine plan quota, inline (owner feedback 2026-08-10):
-                        percent windows chip for quota providers, usage chip for
-                        usage-shaped ones (opencode). */}
-                    {quotaChip && (
-                        <span className={`text-4xs font-semibold px-1.5 py-px rounded border shrink-0 ${quotaChip.tone}`} title={quotaChip.title}>
-                            {quotaChip.label}
+                    {/* Machine plan quota, inline: per-pool chips when present
+                        (Antigravity Gemini vs Claude/GPT), else one headline. */}
+                    {quotaChips.length > 0 && (
+                        <span
+                            className="flex max-w-[min(100%,16rem)] flex-wrap items-center justify-end gap-1 shrink min-w-0"
+                            onClick={(e) => { e.stopPropagation() }}
+                            onKeyDown={(e) => { e.stopPropagation() }}
+                        >
+                            {quotaChips.map(({ chip, kindHint, label, fmt }) => (
+                                <MachineQuotaChip
+                                    key={chip.key}
+                                    chip={chip}
+                                    kindHint={kindHint}
+                                    label={label}
+                                    fmt={fmt}
+                                    locale={i18n.language}
+                                    stopPropagation
+                                    className="text-4xs font-semibold"
+                                />
+                            ))}
                         </span>
                     )}
                     {/* Enable is a SWITCH, not a red/green text button (owner

@@ -3,8 +3,10 @@
  *
  * The per-machine Overview card answers "how is this box doing"; the queue's
  * routing question is "which subscription, on which machine, still has room".
- * Each cell shows the 5h and weekly axes of one provider on one machine, built
- * by the same shared display model as the Overview card so the two agree.
+ * Each cell shows the shared display model's chips: Antigravity per-pool
+ * buckets when the API returned them, otherwise the 5h/weekly axes — never a
+ * fabricated second pool. Compact worst-headline stays available for routing
+ * consumers; this grid must not collapse pools back to one compactChip.
  *
  * Renders nothing until at least one machine has reported a quota reading.
  */
@@ -16,16 +18,19 @@ import {
     collectQuotaEntries,
     createQuotaTextFormatter,
     quotaProviderLabel,
-    type QuotaDisplayChip,
+    selectMachineQuotaChips,
+    shortQuotaChipLabel,
+    type QuotaChipHint,
 } from '../../utils/quota-format'
 import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared'
+import { MachineQuotaChip } from './MachineQuotaChip'
 
-const TONE_CLASS: Record<string, string> = {
-    good: 'bg-emerald-500/10 text-emerald-500',
-    warn: 'bg-amber-500/10 text-amber-500',
-    danger: 'bg-red-500/10 text-red-500',
-    default: 'bg-white/5 text-text-secondary',
-    info: 'bg-blue-500/10 text-blue-500',
+const QUOTA_CHIP_TITLE_KEYS: Record<QuotaChipHint, string> = {
+    bucket: 'machine.quota.bucketHint',
+    session: 'machine.quota.sessionHint',
+    weekly: 'machine.quota.weeklyHint',
+    monthly: 'machine.quota.monthlyHint',
+    usage: 'machine.quota.usageHint',
 }
 
 export interface FleetQuotaMachine {
@@ -34,19 +39,11 @@ export interface FleetQuotaMachine {
     quota: Record<string, MeshNodeFactsProviderQuota> | undefined
 }
 
-/** "5h 26.0% used · resets in 2h" → "5h 26%": the full text stays in the hover title. */
-function shortChipLabel(chip: QuotaDisplayChip): string {
-    const axis = chip.key === 'session' ? '5h' : chip.key === 'weekly' ? '7d' : chip.key === 'monthly' ? '30d' : chip.key
-    // A window that just reset (or is awaiting its first reading) has no number
-    // yet; the long cue text stays in the hover title, the grid shows a dash.
-    if (chip.usedPercent === null) return chip.key === 'usage' ? chip.label : `${axis} —`
-    return `${axis} ${Math.round(chip.usedPercent)}%`
-}
-
 export default function FleetQuotaCard({ machines }: { machines: FleetQuotaMachine[] }) {
-    const { t } = useTranslation('common')
+    const { t, i18n } = useTranslation('common')
     const navigate = useNavigate()
-    const buildModel = bindQuotaDisplayModel(createQuotaTextFormatter(t))
+    const fmt = createQuotaTextFormatter(t)
+    const buildModel = bindQuotaDisplayModel(fmt)
 
     const rows = machines
         .map(machine => ({ machine, entries: collectQuotaEntries(machine.quota) }))
@@ -95,19 +92,19 @@ export default function FleetQuotaCard({ machines }: { machines: FleetQuotaMachi
                                             return <td key={provider} className="px-2 align-top text-3xs text-text-muted">·</td>
                                         }
                                         const model = buildModel(quota)
-                                        const chips = model.chips.filter(chip => chip.key === 'session' || chip.key === 'weekly')
-                                        const shown = chips.length > 0 ? chips : model.compactChip ? [model.compactChip] : []
+                                        const shown = selectMachineQuotaChips(model, 'fleet')
                                         return (
                                             <td key={provider} className="px-2 align-top">
-                                                <div className="flex flex-wrap gap-1">
+                                                <div className="flex max-w-[18rem] flex-wrap gap-1">
                                                     {shown.map(chip => (
-                                                        <span
+                                                        <MachineQuotaChip
                                                             key={chip.key}
-                                                            title={chip.label}
-                                                            className={`whitespace-nowrap rounded-full px-1.5 py-0.5 text-3xs font-medium ${TONE_CLASS[chip.tone] ?? TONE_CLASS.default}`}
-                                                        >
-                                                            {shortChipLabel(chip)}
-                                                        </span>
+                                                            chip={chip}
+                                                            kindHint={t(QUOTA_CHIP_TITLE_KEYS[chip.hint])}
+                                                            label={shortQuotaChipLabel(chip)}
+                                                            fmt={fmt}
+                                                            locale={i18n.language}
+                                                        />
                                                     ))}
                                                     {shown.length === 0 && (
                                                         <span
