@@ -15,7 +15,10 @@ export default defineConfig({
     },
     oxc: { jsx: { runtime: 'automatic' } },
     test: {
-        include: ['test-browser/components/assistant-mobile-controls.browser.test.tsx'],
+        include: [
+            'test-browser/components/assistant-mobile-controls.browser.test.tsx',
+            'test-browser/components/mobile-approvals-entry.browser.test.tsx',
+        ],
         testTimeout: 30_000,
         browser: {
             enabled: true,
