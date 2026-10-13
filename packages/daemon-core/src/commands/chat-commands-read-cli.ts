@@ -553,7 +553,6 @@ function readCliNativeHistoryForReadChat(
                 // aliased session out.
                 allowWorkspaceLatestFallback: !pinnedProviderSessionIdForRead,
             });
-            maybePinResolvedProviderSessionId(h, targetSessionId, nativeHistory);
         } catch (error: any) {
             nativeHistoryError = error;
             nativeHistory = null;
@@ -570,7 +569,7 @@ function readCliNativeHistoryForReadChat(
         ? nativeHistory.providerSessionId
         : readHistorySessionIdFromMessages(nativeMessages) || nativeHistoryReadSessionId || historySessionId;
     let lookup = nativeHistory?.lookup === 'workspace' ? 'workspace' : 'session';
-    // Owner-confirmed uuid for THIS read (antigravity): the dispatcher resolved a
+    // Owner-confirmed uuid for THIS read: the dispatcher resolved a
     // conversation and confirmed it is this session's own via the owner token
     // (exact uuid bind, or a spawn-floor/birth pick) — NOT a bare recency pick.
     // When present it is the authoritative conversation identity for the
@@ -582,7 +581,7 @@ function readCliNativeHistoryForReadChat(
     // the user echo → fail-closed → regress to pty-parser (user-echo only).
     // Trusting the owner-confirmed uuid lets the assistant answer reach the
     // dashboard on the FIRST read.
-    const ownerConfirmedUuid = adapter.cliType === 'antigravity-cli'
+    const ownerConfirmedUuid = (adapter.cliType === 'antigravity-cli' || adapter.cliType === 'codex-cli')
         && (nativeHistory as any)?.ownerConfirmed === true
         && typeof historyProviderSessionId === 'string'
         && historyProviderSessionId.trim()
@@ -601,6 +600,7 @@ function readCliNativeHistoryForReadChat(
     // session-branch identity test runs uuid-to-uuid (messages carry the uuid as
     // historySessionId) and trusts the assistant in this same pass.
     let safeMapping = supportsNative && nativeHistory
+        && (agentStr !== 'codex-cli' || lookup !== 'workspace' || Boolean(ownerConfirmedUuid))
         ? hasSafeNativeHistoryMapping({
             historySessionId: ownerConfirmedUuid || (lookup === 'workspace' ? undefined : nativeHistorySessionForMapping),
             providerSessionId: ownerConfirmedUuid || (lookup === 'workspace' ? undefined : historyProviderSessionId || snap.providerSessionId),
@@ -638,6 +638,7 @@ function readCliNativeHistoryForReadChat(
                 : readHistorySessionIdFromMessages(nativeMessages);
             lookup = nativeHistory?.lookup === 'workspace' ? 'workspace' : 'session';
             safeMapping = supportsNative && nativeHistory
+                && (lookup !== 'workspace' || nativeHistory.ownerConfirmed === true)
                 ? hasSafeNativeHistoryMapping({
                     historySessionId: lookup === 'workspace' ? undefined : historyProviderSessionId,
                     providerSessionId: lookup === 'workspace' ? undefined : historyProviderSessionId,
@@ -673,12 +674,12 @@ function readCliNativeHistoryForReadChat(
 }
 
 /**
- * Refresh the per-mesh-session pin whenever a native read resolves a concrete
- * provider-native session id. A later post-turn read (live binding gone) can
+ * Persist a resolved native id only after safe mapping and native selection.
+ * Discovery alone never authorizes a pin. A later post-turn read (live binding gone) can
  * then reuse it instead of fail-closing. Only a non-empty resolved id updates
  * the pin; an empty result never clears a known one.
  *
- * Pin gating for the antigravity workspace-latest branch: a coordinator session
+ * Pin gating for unconfirmed workspace candidates (Codex and antigravity): a coordinator session
  * has no pin (agy takes no --session-id) and spawnedAtMs=0 after
  * attach-restore, so the read resolves via the workspace-latest fallback
  * (lookup === 'workspace') rather than an exact bind. The dispatcher STILL
@@ -749,6 +750,9 @@ function selectCliReadChatMessages(
     };
 
     if (primary.nativeSelected) {
+        if (native.safeMapping) {
+            maybePinResolvedProviderSessionId(h, String(args?.targetSessionId || ''), native.nativeHistory);
+        }
         selection.messages = finalizeStreamingMessagesWhenIdle(primary.nativeMessages, snap.returnedStatus);
         selection.providerSessionId = native.historyProviderSessionId || snap.providerSessionId;
         selection.transcriptAuthority = 'provider';
@@ -844,8 +848,10 @@ function applyNativeNotSelectedFallbacks(
     const liveWorkspaceNativeProviderSessionId = typeof liveWorkspaceNativeHistory?.providerSessionId === 'string'
         ? liveWorkspaceNativeHistory.providerSessionId
         : readHistorySessionIdFromMessages(liveWorkspaceNativeMessages);
-    const liveWorkspaceNativeSafeMapping = liveWorkspaceNativeMessages.length > 0
+    const liveWorkspaceNativeSafeMapping = liveWorkspaceNativeHistory.ownerConfirmed === true
+        && liveWorkspaceNativeMessages.length > 0
         && hasSafeNativeHistoryMapping({
+            historySessionId: liveWorkspaceNativeProviderSessionId,
             workspace: snap.sessionWorkspace,
             nativeMessages: liveWorkspaceNativeMessages,
             ptyMessages: snap.returnedMessages,

@@ -215,3 +215,26 @@ test('local read_chat fallback session omits turn fields consistently', async ()
   assert.equal(parsed.attemptId, undefined);
   assert.equal(parsed.turnStage, undefined);
 });
+
+
+test('mesh_read_chat compact pending response preserves requested and result identities', async () => {
+  const meshId = 'synthetic_mesh_native_identity';
+  cleanupMesh(meshId);
+  const provenance = { selected: 'pty-parser', identityStatus: 'ambiguous_session_identity', runtimeMappingSafe: false };
+  const { ctx } = createLocalCtx(meshId, {
+    success: true, pending: true, sessionId: 'synthetic-result-runtime',
+    reason: 'native_history_not_safely_available', code: 'native_history_not_safely_available',
+    messages: [], messageSource: provenance, transcriptProvenance: provenance,
+  });
+  try {
+    const result = JSON.parse(await meshReadChat(ctx, { node_id: 'node-local', session_id: 'sess-local' }));
+    assert.equal(result.sessionId, 'sess-local');
+    assert.equal(result.resultSessionId, 'synthetic-result-runtime');
+    assert.equal(result.providerSessionId, null);
+    assert.equal(result.pending, true);
+    assert.equal(result.reason, 'native_history_not_safely_available');
+    assert.deepEqual(result.messageSource, provenance);
+    assert.deepEqual(result.transcriptProvenance, provenance);
+    assert.deepEqual(result.messages, []);
+  } finally { cleanupMesh(meshId); }
+});

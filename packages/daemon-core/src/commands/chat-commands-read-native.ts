@@ -312,12 +312,13 @@ export function readCliProviderNativeHistory(agentStr: string, args: {
     const boundProviderSessionId = typeof (sessionHistory as any)?.providerSessionId === 'string'
         ? (sessionHistory as any).providerSessionId.trim()
         : '';
-    // A fresh live session can be bound without a provider id when the native
-    // reader matched both cwd and session_meta.timestamp to spawnedAtMs. A
-    // pin-bound read is always session-scoped (we passed an explicit id).
+    // Codex cwd/spawn/mtime matches are discovery candidates only. Session
+    // scope requires an explicit native id or independent ownership evidence;
+    // a resolved candidate UUID cannot promote itself into proof.
     return {
         ...(sessionHistory as any),
-        lookup: effectiveHistorySessionId || (canBindFromLiveSession && boundProviderSessionId)
+        lookup: effectiveHistorySessionId || (canBindFromLiveSession && boundProviderSessionId
+            && (agentStr !== 'codex-cli' || sessionHistory.ownerConfirmed === true))
             ? 'session'
             : 'workspace',
     };

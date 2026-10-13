@@ -278,7 +278,7 @@ describe('read_chat STICKY-NATIVE empty-hold guard (coordinator zero-bubble fix)
     ])
   })
 
-  it('leaves non-exact (live-bound) sessions on the normal machine path — no sticky hold, PTY renders on a native gap', async () => {
+  it('keeps unconfirmed live candidates on PTY before and during a native gap', async () => {
     const runtimeSessionId = 'runtime-nonexact-native-gap'
     const liveProviderSessionId = '019ea400-0000-7000-8000-000000000004'
     let readCount = 0
@@ -305,7 +305,7 @@ describe('read_chat STICKY-NATIVE empty-hold guard (coordinator zero-bubble fix)
     })
 
     // No explicit historySessionId / providerSessionId args and no parsed
-    // provider id: the read live-binds via spawn floor (non-exact identity).
+    // provider id: a spawn-floor candidate cannot establish native ownership.
     const adapter = createAdapter(runtimeSessionId, undefined, ptyMessages(6))
     const helpers = createSessionHelpers(runtimeSessionId, adapter)
     const args = {
@@ -315,7 +315,8 @@ describe('read_chat STICKY-NATIVE empty-hold guard (coordinator zero-bubble fix)
     }
 
     const first = await handleReadChat(helpers as any, args)
-    expect((first.messageSource as any)?.selected).toBe('native-history')
+    expect((first.messageSource as any)?.selected).toBe('pty-parser')
+    expect((first.messages as any[]).map(message => message.content)).toContain('pty row 1')
 
     const second = await handleReadChat(helpers as any, args)
     expect((second.messageSource as any)?.selected).toBe('pty-parser')

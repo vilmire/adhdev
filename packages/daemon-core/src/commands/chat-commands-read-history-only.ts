@@ -144,34 +144,27 @@ function readHistoryOnlyNative(h: CommandHelpers, args: any, req: CliReadChatReq
     //     (else it saw undefined identity → workspace-overlap branch → the PTY
     //     snapshot has only the user echo → fail-closed → regress to pty-parser).
     const historyLookupIsWorkspace = lookup === 'workspace';
-    const historyOwnerConfirmed = agentStr === 'antigravity-cli' && (history as any)?.ownerConfirmed === true;
+    const historyOwnerConfirmed = (agentStr === 'antigravity-cli' || agentStr === 'codex-cli') && (history as any)?.ownerConfirmed === true;
     const historyOwnerConfirmedUuid = historyOwnerConfirmed
         && typeof historyProviderSessionId === 'string' && historyProviderSessionId.trim()
         ? historyProviderSessionId.trim()
         : '';
-    // Refresh the pin whenever this path resolves a real provider id — but for
-    // a workspace-latest antigravity read, only when the uuid is owner-confirmed.
-    if (typeof (history as any)?.providerSessionId === 'string'
-        && (history as any).providerSessionId.trim()
-        && (!historyLookupIsWorkspace || !agentStr || agentStr !== 'antigravity-cli' || historyOwnerConfirmed)) {
-        recordBoundProviderSessionId(h, effectiveReadSessionId(h, targetSid), (history as any).providerSessionId.trim());
-    }
     // Use the id we actually read with (pin / real provider id), NOT the
     // raw runtime-fallback historySessionId — otherwise the mapping guard
     // compares the stamped messages' real id against the runtime id and
     // fails closed, undoing the pin reuse.
     const mappingSessionId = historyOwnerConfirmedUuid || effectiveHistorySessionIdForRead;
-    // Fail closed for an antigravity workspace-latest read whose uuid was NOT
+    // Fail closed for a Codex/antigravity workspace candidate whose uuid was NOT
     // owner-confirmed: it is a bare recency/newest-by-mtime pick that could be
     // a co-located concurrent session's (replica's) conversation. Without an
     // owner-token confirmation we cannot prove ownership, so refuse it rather
     // than surface a sibling's transcript (the coordinator↔replica crosswire
     // guard). This is the same fail-closed default the design study protects —
     // only an owner-confirmed uuid escapes it above.
-    const antigravityWorkspaceLatestUnconfirmed = agentStr === 'antigravity-cli'
+    const workspaceLatestUnconfirmed = (agentStr === 'antigravity-cli' || agentStr === 'codex-cli')
         && historyLookupIsWorkspace
         && !historyOwnerConfirmedUuid;
-    const safeMapping = supportsNative && !antigravityWorkspaceLatestUnconfirmed
+    const safeMapping = supportsNative && !workspaceLatestUnconfirmed
         ? hasSafeNativeHistoryMapping({
             historySessionId: historyOwnerConfirmedUuid || (lookup === 'workspace' ? undefined : mappingSessionId),
             providerSessionId: historyOwnerConfirmedUuid || (lookup === 'workspace' ? undefined : historyProviderSessionId),
@@ -203,6 +196,11 @@ function readHistoryOnlyNative(h: CommandHelpers, args: any, req: CliReadChatReq
         ptyMessages: [],
         ptyStatusApprovalOnly: false,
     });
+
+    if (safeMapping && decision.nativeSelected && historyProviderSessionId
+        && (!historyLookupIsWorkspace || historyOwnerConfirmed)) {
+        recordBoundProviderSessionId(h, effectiveReadSessionId(h, targetSid), historyProviderSessionId);
+    }
 
     // (NATIVE-TURN-SIGNAL) marker selection — same rule as the adapter
     // path; see chat-commands-read-turn-markers.ts.
@@ -293,7 +291,7 @@ function buildHistoryOnlyResult(h: CommandHelpers, args: any, req: CliReadChatRe
             code: 'native_history_not_safely_available',
             messages: [],
             status: 'idle',
-            providerSessionId: historyProviderSessionId,
+            providerSessionId: undefined,
             messageSource: decision.messageSource,
             transcriptProvenance: decision.messageSource,
         };

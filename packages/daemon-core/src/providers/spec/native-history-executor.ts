@@ -362,7 +362,10 @@ function executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput):
         nativeHistoryCoverage: 'full',
         workspace: transcriptWorkspace,
         attribution: outcome?.attribution,
-        ownerConfirmed: outcome?.ownerConfirmed,
+        // A timestamp/mtime pick is a candidate, not runtime ownership proof.
+        ownerConfirmed: input.agentType === 'codex-cli'
+            ? Boolean(requested && providerSessionId && sameSessionUuid(providerSessionId, requested)) || outcome?.ownerConfirmed === true
+            : outcome?.ownerConfirmed,
         ...(usageRecords.length > 0
             ? {
                 usage: foldUsageRecords(usageRecords, {

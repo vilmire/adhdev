@@ -107163,7 +107163,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         nativeHistoryCoverage: "full",
         workspace: transcriptWorkspace,
         attribution: outcome?.attribution,
-        ownerConfirmed: outcome?.ownerConfirmed,
+        // A timestamp/mtime pick is a candidate, not runtime ownership proof.
+        ownerConfirmed: input.agentType === "codex-cli" ? Boolean(requested && providerSessionId && sameSessionUuid(providerSessionId, requested)) || outcome?.ownerConfirmed === true : outcome?.ownerConfirmed,
         ...usageRecords.length > 0 ? {
           usage: foldUsageRecords(usageRecords, {
             providerSessionId: providerSessionId || "",
@@ -117560,7 +117561,7 @@ ${marker}`,
       const boundProviderSessionId = typeof sessionHistory?.providerSessionId === "string" ? sessionHistory.providerSessionId.trim() : "";
       return {
         ...sessionHistory,
-        lookup: effectiveHistorySessionId || canBindFromLiveSession && boundProviderSessionId ? "session" : "workspace"
+        lookup: effectiveHistorySessionId || canBindFromLiveSession && boundProviderSessionId && (agentStr !== "codex-cli" || sessionHistory.ownerConfirmed === true) ? "session" : "workspace"
       };
     }
     init_contracts2();
@@ -121258,7 +121259,6 @@ ${marker}`,
             // aliased session out.
             allowWorkspaceLatestFallback: !pinnedProviderSessionIdForRead
           });
-          maybePinResolvedProviderSessionId(h, targetSessionId, nativeHistory);
         } catch (error) {
           nativeHistoryError = error;
           nativeHistory = null;
@@ -121268,9 +121268,9 @@ ${marker}`,
       const sessionStartedAtMs = sessionStartedAtMsFromRegistry(h, args?.targetSessionId);
       let historyProviderSessionId = typeof nativeHistory?.providerSessionId === "string" ? nativeHistory.providerSessionId : readHistorySessionIdFromMessages(nativeMessages) || nativeHistoryReadSessionId || historySessionId;
       let lookup = nativeHistory?.lookup === "workspace" ? "workspace" : "session";
-      const ownerConfirmedUuid = adapter.cliType === "antigravity-cli" && nativeHistory?.ownerConfirmed === true && typeof historyProviderSessionId === "string" && historyProviderSessionId.trim() ? historyProviderSessionId.trim() : "";
+      const ownerConfirmedUuid = (adapter.cliType === "antigravity-cli" || adapter.cliType === "codex-cli") && nativeHistory?.ownerConfirmed === true && typeof historyProviderSessionId === "string" && historyProviderSessionId.trim() ? historyProviderSessionId.trim() : "";
       const nativeHistorySessionForMapping = ownerConfirmedUuid ? ownerConfirmedUuid : adapter.cliType === "antigravity-cli" && historyProviderSessionId && nativeHistoryReadSessionId && historyProviderSessionId !== nativeHistoryReadSessionId ? void 0 : nativeHistoryReadSessionId;
-      let safeMapping = supportsNative && nativeHistory ? hasSafeNativeHistoryMapping({
+      let safeMapping = supportsNative && nativeHistory && (agentStr !== "codex-cli" || lookup !== "workspace" || Boolean(ownerConfirmedUuid)) ? hasSafeNativeHistoryMapping({
         historySessionId: ownerConfirmedUuid || (lookup === "workspace" ? void 0 : nativeHistorySessionForMapping),
         providerSessionId: ownerConfirmedUuid || (lookup === "workspace" ? void 0 : historyProviderSessionId || snap.providerSessionId),
         workspace,
@@ -121297,7 +121297,7 @@ ${marker}`,
           nativeMessages = nativeHistory && Array.isArray(nativeHistory.messages) ? normalizeAndFilterNativeHistory(h, agentStr, args, nativeHistory.messages, nativeHistory.providerSessionId) : [];
           historyProviderSessionId = typeof nativeHistory?.providerSessionId === "string" ? nativeHistory.providerSessionId : readHistorySessionIdFromMessages(nativeMessages);
           lookup = nativeHistory?.lookup === "workspace" ? "workspace" : "session";
-          safeMapping = supportsNative && nativeHistory ? hasSafeNativeHistoryMapping({
+          safeMapping = supportsNative && nativeHistory && (lookup !== "workspace" || nativeHistory.ownerConfirmed === true) ? hasSafeNativeHistoryMapping({
             historySessionId: lookup === "workspace" ? void 0 : historyProviderSessionId,
             providerSessionId: lookup === "workspace" ? void 0 : historyProviderSessionId,
             workspace,
@@ -121364,6 +121364,9 @@ ${marker}`,
         primaryNativeSelected: primary.nativeSelected
       };
       if (primary.nativeSelected) {
+        if (native.safeMapping) {
+          maybePinResolvedProviderSessionId(h, String(args?.targetSessionId || ""), native.nativeHistory);
+        }
         selection.messages = finalizeStreamingMessagesWhenIdle(primary.nativeMessages, snap.returnedStatus);
         selection.providerSessionId = native.historyProviderSessionId || snap.providerSessionId;
         selection.transcriptAuthority = "provider";
@@ -121432,7 +121435,8 @@ ${marker}`,
       }
       const liveWorkspaceNativeMessages = Array.isArray(liveWorkspaceNativeHistory?.messages) ? normalizeAndFilterNativeHistory(h, native.agentStr, args, liveWorkspaceNativeHistory.messages, liveWorkspaceNativeHistory?.providerSessionId) : [];
       const liveWorkspaceNativeProviderSessionId = typeof liveWorkspaceNativeHistory?.providerSessionId === "string" ? liveWorkspaceNativeHistory.providerSessionId : readHistorySessionIdFromMessages(liveWorkspaceNativeMessages);
-      const liveWorkspaceNativeSafeMapping = liveWorkspaceNativeMessages.length > 0 && hasSafeNativeHistoryMapping({
+      const liveWorkspaceNativeSafeMapping = liveWorkspaceNativeHistory.ownerConfirmed === true && liveWorkspaceNativeMessages.length > 0 && hasSafeNativeHistoryMapping({
+        historySessionId: liveWorkspaceNativeProviderSessionId,
         workspace: snap.sessionWorkspace,
         nativeMessages: liveWorkspaceNativeMessages,
         ptyMessages: snap.returnedMessages,
@@ -121571,14 +121575,11 @@ ${marker}`,
       const historyMessages = Array.isArray(history?.messages) ? normalizeAndFilterNativeHistory(h, agentStr, args, history.messages, history?.providerSessionId) : [];
       const historyProviderSessionId = typeof history?.providerSessionId === "string" ? history.providerSessionId : readHistorySessionIdFromMessages(historyMessages) || effectiveHistorySessionIdForRead;
       const historyLookupIsWorkspace = lookup === "workspace";
-      const historyOwnerConfirmed = agentStr === "antigravity-cli" && history?.ownerConfirmed === true;
+      const historyOwnerConfirmed = (agentStr === "antigravity-cli" || agentStr === "codex-cli") && history?.ownerConfirmed === true;
       const historyOwnerConfirmedUuid = historyOwnerConfirmed && typeof historyProviderSessionId === "string" && historyProviderSessionId.trim() ? historyProviderSessionId.trim() : "";
-      if (typeof history?.providerSessionId === "string" && history.providerSessionId.trim() && (!historyLookupIsWorkspace || !agentStr || agentStr !== "antigravity-cli" || historyOwnerConfirmed)) {
-        recordBoundProviderSessionId(h, effectiveReadSessionId(h, targetSid), history.providerSessionId.trim());
-      }
       const mappingSessionId = historyOwnerConfirmedUuid || effectiveHistorySessionIdForRead;
-      const antigravityWorkspaceLatestUnconfirmed = agentStr === "antigravity-cli" && historyLookupIsWorkspace && !historyOwnerConfirmedUuid;
-      const safeMapping = supportsNative && !antigravityWorkspaceLatestUnconfirmed ? hasSafeNativeHistoryMapping({
+      const workspaceLatestUnconfirmed = (agentStr === "antigravity-cli" || agentStr === "codex-cli") && historyLookupIsWorkspace && !historyOwnerConfirmedUuid;
+      const safeMapping = supportsNative && !workspaceLatestUnconfirmed ? hasSafeNativeHistoryMapping({
         historySessionId: historyOwnerConfirmedUuid || (lookup === "workspace" ? void 0 : mappingSessionId),
         providerSessionId: historyOwnerConfirmedUuid || (lookup === "workspace" ? void 0 : historyProviderSessionId),
         workspace,
@@ -121600,6 +121601,9 @@ ${marker}`,
         ptyMessages: [],
         ptyStatusApprovalOnly: false
       });
+      if (safeMapping && decision.nativeSelected && historyProviderSessionId && (!historyLookupIsWorkspace || historyOwnerConfirmed)) {
+        recordBoundProviderSessionId(h, effectiveReadSessionId(h, targetSid), historyProviderSessionId);
+      }
       const historyTurnTerminalMarkers = selectHistoryTurnTerminalMarkers({
         nativeSelected: decision.nativeSelected,
         safeMapping,
@@ -121663,7 +121667,7 @@ ${marker}`,
           code: "native_history_not_safely_available",
           messages: [],
           status: "idle",
-          providerSessionId: historyProviderSessionId,
+          providerSessionId: void 0,
           messageSource: decision.messageSource,
           transcriptProvenance: decision.messageSource
         };
@@ -169759,6 +169763,13 @@ function compactChatPayload(payload, opts = {}) {
     compact: true,
     ...opts.nodeId ? { nodeId: opts.nodeId } : {},
     ...opts.sessionId !== void 0 ? { sessionId: opts.sessionId } : {},
+    ...payload?.sessionId !== void 0 ? { resultSessionId: payload.sessionId } : {},
+    ...payload?.pending !== void 0 ? { pending: payload.pending } : {},
+    ...payload?.reason !== void 0 ? { reason: payload.reason } : {},
+    ...payload?.reasons !== void 0 ? { reasons: payload.reasons } : {},
+    ...payload?.code !== void 0 ? { code: payload.code } : {},
+    ...payload?.messageSource !== void 0 ? { messageSource: payload.messageSource } : {},
+    ...payload?.transcriptProvenance !== void 0 ? { transcriptProvenance: payload.transcriptProvenance } : {},
     status: payload?.status ?? null,
     providerSessionId: payload?.providerSessionId ?? null,
     ...slimTurn ? { turn: slimTurn } : {},
