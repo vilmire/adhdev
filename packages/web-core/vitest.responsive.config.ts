@@ -19,7 +19,8 @@ export default defineConfig({
         testTimeout: 30_000,
         browser: {
             enabled: true,
-            provider: playwright(),
+            // Match the largest tested iframe so screenshots are saved at scale 1.
+            provider: playwright({ contextOptions: { viewport: { width: 1280, height: 844 } } }),
             headless: true,
             instances: [{ browser: 'chromium' }],
         },
