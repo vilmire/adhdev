@@ -130,3 +130,19 @@ it('real handler journals selection refusal as exact not_written, replays it aft
     expect(f.receipts(['synthetic-fresh-retry'])[0].state).toBe('submitted');
     expect(f.receipts([args.messageId])[0]).toEqual(refused.outgoingReceipt);
 });
+
+it('real send_chat carries exact original text/image acceptance through keyed codec without handled-turn authority', async () => {
+    const f = outgoingContractFixture(message.sessionId); fixtures.push(f);
+    const result = await f.submitHandler(message);
+    const receipt = f.receipts([message.messageId])[0];
+    expect(result).toMatchObject({ success: true, queued: true, submitted: false, outgoingReceipt: receipt });
+    expect(receipt).toMatchObject({ messageId: message.messageId, sessionId: message.sessionId,
+        inputDigest: outgoingInputDigest(input), state: 'accepted', proof: 'acceptance' });
+    expect(f.wire()[0]).toMatchObject({ sourceMessageId: message.messageId, runtimeInputAck: true, outgoingReceipt: receipt });
+    expect(Object.keys(f.wire()[0].outgoingReceipt!).sort()).toEqual([
+        'version', 'messageId', 'sessionId', 'attemptId', 'generation', 'inputDigest', 'state', 'revision', 'proof',
+    ].sort());
+    expect(f.writes).toHaveLength(0);
+    expect(await f.submitHandler(message)).toMatchObject({ deduplicated: true, outgoingReceipt: receipt });
+    expect(f.writes).toHaveLength(0);
+});

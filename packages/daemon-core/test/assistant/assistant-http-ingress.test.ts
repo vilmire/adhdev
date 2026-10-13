@@ -12,6 +12,8 @@ import { createSessionLifecycleBus } from '../../src/sessions/lifecycle-bus.js';
 import { SessionOutputFanout } from '../../src/boot/session-output-fanout.js';
 import { AssistantRegistry, setAssistantRegistryForTests } from '../../src/assistant/assistant-registry.js';
 import { createAssistantServices, setAssistantServicesForTests } from '../../src/assistant/assistant-services.js';
+import { createSessionInputService } from '../../src/sessions/session-input-service.js';
+import { OutgoingReceiptStore } from '../../src/sessions/outgoing-receipt-store.js';
 import { assistantExecution } from '../../src/assistant/assistant-execution.js';
 
 let server: Server | undefined, host: DaemonHostRuntime | undefined, dir: string | undefined;
@@ -35,9 +37,18 @@ it('real HTTP scope → host → router → send_chat never grants owner authori
     const bus = createSessionLifecycleBus(); const sessionRegistry = new SessionRegistry(bus);
     for (const id of ['assistant','worker']) sessionRegistry.register({ sessionId: id, instanceKey: id, adapterKey: id, providerType: 'claude-cli', transport: 'pty' } as any);
     const submitted: string[] = [];
+    // Exercise reservation, preparation and receipt lookup through the real service.
+    // This synthetic target supplies no native write ACK, so delivery stays uncertain.
+    const sessionInput = createSessionInputService({
+        receiptStore: new OutgoingReceiptStore(join(dir, 'outgoing-receipts')),
+        resolveSession: id => id === 'assistant' ? {
+            getStatus: () => ({ status: 'idle' }),
+            sendMessage: async text => { submitted.push(text); return { status: 'delivered' }; },
+        } : null,
+    });
     const helper: any = { getProvider: () => ({ type: 'claude-cli', category: 'cli' }), getCliAdapter: (id: string) => adapters.get(id),
         currentSession: sessionRegistry.get('assistant'), ctx: { adapters, instanceManager, sessionRegistry,
-            sessionInput: { submit: async (request: any) => { submitted.push(request.input.textFallback); return { kind: 'delivered' }; } } } };
+            sessionInput } };
     const commandHandler: any = { handleSpec: async (_spec: unknown, args: any) => handleSendChat(helper, args) };
     const providerLoader: any = { getAll: () => [], resolve: () => null };
     const deps: any = { commandHandler, cliManager: { adapters }, cdpManagers: new Map(), providerLoader, instanceManager, detectedIdes: { value: [] }, sessionRegistry };
@@ -54,7 +65,11 @@ it('real HTTP scope → host → router → send_chat never grants owner authori
     const message = '/assistant-action ' + JSON.stringify(action);
     const internal = { 'x-adhdev-internal-auth': 'internal-token' };
     expect(await call('assistant_execution_settings', internal, { enabled: false })).toMatchObject({ success: false, code: 'COMMAND_SOURCE_REJECTED' });
-    expect(await call('send_chat', internal, { targetSessionId: 'assistant', message, _commandSource: 'standalone', promptSource: 'OWNER' })).toMatchObject({ success: true });
+    const internalPayload = { targetSessionId: 'assistant', messageId: 'synthetic-internal', message, _commandSource: 'standalone', promptSource: 'OWNER' };
+    const internalResult = await call('send_chat', internal, internalPayload);
+    expect(internalResult).toMatchObject({ success: true, outgoingReceipt: { messageId: internalPayload.messageId, sessionId: 'assistant', state: 'uncertain', proof: 'none' } });
+    expect(await call('send_chat', internal, internalPayload)).toMatchObject({ success: true, deduplicated: true, outgoingReceipt: internalResult.outgoingReceipt });
+    expect(submitted).toHaveLength(1);
     expect(submitted[0]).toBe(message);
     expect(await call('send_chat', { 'x-adhdev-worker-credential': 'worker-bind' }, { targetSessionId: 'assistant', message })).toMatchObject({ success: false, code: 'worker_scope_forbidden' });
     expect(await call('send_chat', { Authorization: 'Bearer owner-token' }, { targetSessionId: 'assistant', message })).toMatchObject({ success: true, ownerActionExpiresAt: expect.any(Number) });

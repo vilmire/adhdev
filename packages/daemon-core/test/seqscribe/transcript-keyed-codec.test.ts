@@ -119,6 +119,30 @@ describe('keyed codec — head encoder is a by-name allow-list', () => {
         }
     });
 
+    it('carries only validated receipt evidence and omits absent or invalid optional fields', () => {
+        const receipt = { version: 1, messageId: 'synthetic-input', sessionId: 'synthetic-session',
+            attemptId: 'attempt', generation: 'generation', inputDigest: 'digest',
+            state: 'submitted', revision: 2, proof: 'native_write_ack' } as const;
+        const stamp = { id: 'bubble', ord: 'a1', rev: 2, epoch: 'epoch', frame: 1, srcId: null, body: { text: 'synthetic' } };
+        const head = encodeChatMessageHead({ role: 'user', meta: {
+            sourceMessageId: receipt.messageId, runtimeInputAck: true,
+            outgoingReceipt: { ...receipt, sourcePath: '/synthetic-private', extra: 'private' },
+            extra: 'private',
+        } }, stamp);
+        expect(head.sourceMessageId).toBe(receipt.messageId);
+        expect(head.runtimeInputAck).toBe(true);
+        expect(head.outgoingReceipt).toEqual(receipt);
+        expect(chatMessageFromWire(head, 'synthetic').outgoingReceipt).toEqual(receipt);
+        expect(JSON.stringify(head)).not.toContain('private');
+        for (const meta of [{}, { sourceMessageId: 7, runtimeInputAck: false,
+            outgoingReceipt: { ...receipt, proof: 'acceptance' } }]) {
+            const invalid = encodeChatMessageHead({ role: 'user', meta }, stamp);
+            expect(invalid).not.toHaveProperty('sourceMessageId');
+            expect(invalid).not.toHaveProperty('runtimeInputAck');
+            expect(invalid).not.toHaveProperty('outgoingReceipt');
+        }
+    });
+
     it('meta keeps only the scalar provenance selector and bounds presentation strings', () => {
         const meta = encodeChatMeta(
             {

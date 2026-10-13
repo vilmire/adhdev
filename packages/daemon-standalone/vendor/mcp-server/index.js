@@ -119449,7 +119449,7 @@ ${marker}`,
     }
     function encodeChatMessageHead(candidate, stamp2) {
       const meta = recordField(candidate.meta);
-      return {
+      const head = {
         v: 2,
         id: stamp2.id,
         rev: stamp2.rev,
@@ -119463,15 +119463,17 @@ ${marker}`,
         streaming: meta ? booleanField(meta.streaming) : null,
         senderName: stringField(candidate.senderName),
         toolName: stringField(candidate.toolName),
-        ...meta && typeof meta.sourceMessageId === "string" ? { sourceMessageId: meta.sourceMessageId } : {},
-        ...meta?.runtimeInputAck === true ? { runtimeInputAck: true } : {},
-        ...readOutgoingReceipt(meta?.outgoingReceipt) ? { outgoingReceipt: readOutgoingReceipt(meta?.outgoingReceipt) } : {},
         receivedAt: numberField(candidate.receivedAt),
         timestamp: numberField(candidate.timestamp),
         expandable: candidate.expandable === true,
         srcId: stamp2.srcId,
         body: stamp2.body
       };
+      if (typeof meta?.sourceMessageId === "string") head.sourceMessageId = meta.sourceMessageId;
+      if (meta?.runtimeInputAck === true) head.runtimeInputAck = true;
+      const outgoingReceipt = readOutgoingReceipt(meta?.outgoingReceipt);
+      if (outgoingReceipt) head.outgoingReceipt = outgoingReceipt;
+      return head;
     }
     function encodeChatPart(id22, k, rev, epoch, frame2, text2) {
       return { v: 2, id: id22, k, rev, epoch, frame: frame2, text: text2 };

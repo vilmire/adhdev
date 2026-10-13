@@ -446,7 +446,7 @@ function boundedStringList(value: unknown): string[] {
  */
 export function encodeChatMessageHead(candidate: ChatMessageCandidate, stamp: ChatMessageStamp): ChatMsgV2 {
     const meta = recordField(candidate.meta);
-    return {
+    const head: { -readonly [K in keyof ChatMsgV2]: ChatMsgV2[K] } = {
         v: 2,
         id: stamp.id,
         rev: stamp.rev,
@@ -460,15 +460,17 @@ export function encodeChatMessageHead(candidate: ChatMessageCandidate, stamp: Ch
         streaming: meta ? booleanField(meta.streaming) : null,
         senderName: stringField(candidate.senderName),
         toolName: stringField(candidate.toolName),
-        ...(meta && typeof meta.sourceMessageId === 'string' ? { sourceMessageId: meta.sourceMessageId } : {}),
-        ...(meta?.runtimeInputAck === true ? { runtimeInputAck: true } : {}),
-        ...(readOutgoingReceipt(meta?.outgoingReceipt) ? { outgoingReceipt: readOutgoingReceipt(meta?.outgoingReceipt) } : {}),
         receivedAt: numberField(candidate.receivedAt),
         timestamp: numberField(candidate.timestamp),
         expandable: candidate.expandable === true,
         srcId: stamp.srcId,
         body: stamp.body,
     };
+    if (typeof meta?.sourceMessageId === 'string') head.sourceMessageId = meta.sourceMessageId;
+    if (meta?.runtimeInputAck === true) head.runtimeInputAck = true;
+    const outgoingReceipt = readOutgoingReceipt(meta?.outgoingReceipt);
+    if (outgoingReceipt) head.outgoingReceipt = outgoingReceipt;
+    return head;
 }
 
 export function encodeChatPart(id: string, k: number, rev: number, epoch: string, frame: number, text: string): ChatPartV2 {
