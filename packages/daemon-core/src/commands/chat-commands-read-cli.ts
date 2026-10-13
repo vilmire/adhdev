@@ -317,6 +317,8 @@ export interface CliReadChatRequest {
     provider: ProviderModule | undefined;
     transport: string | null;
     historySessionId: string | undefined;
+    /** Confirmed by the dispatcher; caller/current-session workspace cannot replace it. */
+    targetWorkspace?: string;
 }
 
 /** Stage 1 output: the adapter's parsed snapshot plus the read's workspace scope. */
@@ -417,9 +419,6 @@ function readCliAdapterSnapshot(
         ? runtimeMessageMerger.mergeRuntimeChatMessages(parsedMessages)
         : parsedMessages;
     const targetSid = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '';
-    const registryWs = targetSid
-        ? (h.ctx?.sessionRegistry?.get?.(targetSid) as any)?.workspace
-        : undefined;
     const currentSessionWs = typeof (h.currentSession as any)?.workspace === 'string'
         ? (h.currentSession as any).workspace
         : typeof adapter.workingDir === 'string'
@@ -442,9 +441,7 @@ function readCliAdapterSnapshot(
         returnedStatus,
         returnedMessages,
         providerType: req.provider?.type || adapter.cliType,
-        sessionWorkspace: targetSid
-            ? (typeof registryWs === 'string' ? registryWs : (typeof args?.workspace === 'string' ? args.workspace : undefined) ?? currentSessionWs)
-            : currentSessionWs,
+        sessionWorkspace: targetSid ? req.targetWorkspace : currentSessionWs,
         intendedWorkspace: typeof args?.workspace === 'string' ? args.workspace : undefined,
     };
 }

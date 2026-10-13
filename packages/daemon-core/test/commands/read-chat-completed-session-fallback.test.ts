@@ -18,7 +18,7 @@ vi.mock('../../src/config/provider-native-history.js', async (importOriginal) =>
   },
 }))
 
-import { __resetProviderSessionPinsForTest, handleReadChat } from '../../src/commands/chat-commands.js'
+import { __getProviderSessionPinForTest, __resetProviderSessionPinsForTest, handleReadChat } from '../../src/commands/chat-commands.js'
 import { DaemonCommandHandler } from '../../src/commands/handler.js'
 import { recordPersistedProviderSessionPin } from '../../src/config/state-store.js'
 
@@ -138,14 +138,16 @@ describe('read_chat completed runtime provider fallback', () => {
     expect(keyedIds).not.toContain(runtimeSessionId)
   })
 
-  it('uses explicit providerType and providerSessionId when target runtime session is gone', async () => {
+  it('uses explicit providerType and providerSessionId for a completed runtime with confirmed workspace', async () => {
     mocks.readProviderChatHistory.mockReturnValue({
       messages: [{ role: 'assistant', content: 'completed answer', receivedAt: 1 }],
       hasMore: false,
       providerSessionId: 'provider-history-1',
     })
 
-    const result = await handleReadChat(createHelpers() as any, {
+    const result = await handleReadChat({ ...createHelpers(), ctx: { sessionRegistry: {
+      get: () => ({ sessionId: 'runtime-that-is-no-longer-active', workspace: '/tmp/synthetic-completed' }),
+    } } } as any, {
       providerType: 'hermes-cli',
       targetSessionId: 'runtime-that-is-no-longer-active',
       providerSessionId: 'provider-history-1',
@@ -161,7 +163,7 @@ describe('read_chat completed runtime provider fallback', () => {
     }))
   })
 
-  it('keeps explicit agentType/providerSessionId available when target runtime session is already gone', async () => {
+  it('keeps explicit agentType/providerSessionId available for a completed registered runtime', async () => {
     mocks.readProviderChatHistory.mockReturnValue({
       messages: [
         { role: 'assistant', content: 'saved completed transcript', receivedAt: 1 },
@@ -184,7 +186,7 @@ describe('read_chat completed runtime provider fallback', () => {
         listInstanceIds: () => [],
       } as any,
       sessionRegistry: {
-        get: () => undefined,
+        get: () => ({ sessionId: 'runtime-session-gone', workspace: '/tmp/synthetic-completed' }),
       } as any,
     })
 
@@ -206,11 +208,8 @@ describe('read_chat completed runtime provider fallback', () => {
     }))
   })
 
-  it('allows read_chat to fall through to history when only targetSessionId is provided for a missing session', async () => {
-    // Regression: mesh coordinator calls read_chat with targetSessionId of a Codex CLI
-    // session that has since been stopped/destroyed. No explicit providerSessionId is
-    // passed. The handler must not hard-fail; it should serve persisted history using
-    // the targetSessionId as the historySessionId key.
+  it('refuses a missing targeted session with no confirmed workspace before history lookup', async () => {
+    // A runtime id alone cannot establish the owner of a saved provider transcript.
     mocks.readProviderChatHistory.mockReturnValue({
       messages: [{ role: 'assistant', content: 'final codex answer', receivedAt: 1 }],
       hasMore: false,
@@ -241,12 +240,10 @@ describe('read_chat completed runtime provider fallback', () => {
       tailLimit: 20,
     })
 
-    expect(result.success).toBe(true)
-    expect(result.error).toBeUndefined()
-    expect((result.messages as any[]).length).toBeGreaterThan(0)
-    expect(mocks.readProviderChatHistory).toHaveBeenCalledWith('codex-cli', expect.objectContaining({
-      historySessionId: '25e40a0f-2dce-4e5a-9d0d-8fbf63bf7016',
-    }))
+    expect(result.success).toBe(false)
+    expect(result.code).toBe('read_chat_target_workspace_unconfirmed')
+    expect(mocks.readProviderChatHistory).not.toHaveBeenCalled()
+    expect(__getProviderSessionPinForTest('25e40a0f-2dce-4e5a-9d0d-8fbf63bf7016')).toBeUndefined()
   })
 
   it('does not leak unmatched native history for a live codex runtime without providerSessionId', async () => {
@@ -309,7 +306,7 @@ describe('read_chat completed runtime provider fallback', () => {
     }))
   })
 
-  it('binds a live codex runtime to its spawn-matched native transcript and promotes the provider session id', async () => {
+  it('keeps spawn-matched Codex discovery unconfirmed and serves only owned PTY rows', async () => {
     const runtimeSessionId = 'runtime-live-without-provider-id-spawn-match'
     const providerSessionId = '019ea359-e438-7be2-b24e-88aedb6cd87c'
     mocks.readProviderChatHistory.mockReturnValue({
@@ -320,6 +317,7 @@ describe('read_chat completed runtime provider fallback', () => {
       hasMore: false,
       source: 'provider-native',
       providerSessionId,
+      ownerConfirmed: false,
     })
     const updateRuntimeMeta = vi.fn()
     const adapter = {
@@ -366,12 +364,12 @@ describe('read_chat completed runtime provider fallback', () => {
     })
 
     expect(result.success).toBe(true)
-    expect((result.messages as any[]).map(message => message.content)).toEqual([
-      'unique prompt',
-      'unique answer',
-    ])
-    expect(result.providerSessionId).toBe(providerSessionId)
-    expect(updateRuntimeMeta).toHaveBeenCalledWith({ providerSessionId })
+    expect((result.messages as any[]).map(message => message.content)).toEqual(['unique prompt'])
+    expect(result.providerSessionId).not.toBe(providerSessionId)
+    expect((result.messageSource as any)?.selected).toBe('pty-parser')
+    expect((result.messageSource as any)?.coverage?.safeMapping).toBe(false)
+    expect(updateRuntimeMeta).not.toHaveBeenCalled()
+    expect(__getProviderSessionPinForTest(runtimeSessionId)).toBeUndefined()
   })
 
   it('does not use same-workspace Codex native history when an exact provider session is still empty', async () => {
@@ -679,7 +677,7 @@ describe('read_chat completed runtime provider fallback', () => {
     expect((result.messageSource as any)?.coverage?.safeMapping).toBe(false)
   })
 
-  it('rebinds an auto-detected Codex id when its rollout workspace is wrong', async () => {
+  it('rejects a wrong-workspace Codex id without rebinding to an unconfirmed workspace candidate', async () => {
     const runtimeSessionId = 'runtime-worktree-auto-rebind'
     const staleProviderSessionId = '019ea36e-5bbb-7202-800b-54e0c57ee987'
     const correctProviderSessionId = '019ea36e-5bfe-7952-aa6f-4407b7f8aec7'
@@ -758,12 +756,12 @@ describe('read_chat completed runtime provider fallback', () => {
       tailLimit: 20,
     })
 
-    expect(result.providerSessionId).toBe(correctProviderSessionId)
-    expect((result.messages as any[]).map(message => message.content)).toEqual([
-      'worktree prompt',
-      'worktree answer',
-    ])
-    expect(updateRuntimeMeta).toHaveBeenCalledWith({ providerSessionId: correctProviderSessionId })
+    expect(result.providerSessionId).not.toBe(correctProviderSessionId)
+    expect((result.messages as any[]).map(message => message.content)).toEqual(['worktree prompt'])
+    expect((result.messageSource as any)?.selected).toBe('pty-parser')
+    expect((result.messageSource as any)?.coverage?.safeMapping).toBe(false)
+    expect(updateRuntimeMeta).not.toHaveBeenCalled()
+    expect(__getProviderSessionPinForTest(runtimeSessionId)).toBeUndefined()
     expect(mocks.readProviderChatHistory).toHaveBeenLastCalledWith('codex-cli', expect.objectContaining({
       historySessionId: undefined,
       workspace: '/tmp/worktree-project',

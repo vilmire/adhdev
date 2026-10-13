@@ -133,17 +133,8 @@ function getCliVisibleTranscriptCount(adapter: any): number {
 }
 
 export async function handleChatHistory(h: CommandHelpers, args: any): Promise<CommandResult> {
-    const targetSessionId = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '';
-    const targetWorkspace = targetSessionId ? resolveTargetSessionActualWorkspace(h, targetSessionId, true) : '';
-    const scopeRefusal = refuseCrossWorktreeRead(h, args, targetWorkspace);
-    if (scopeRefusal) return scopeRefusal;
-    if (targetSessionId && !targetWorkspace) {
-        return {
-            success: false,
-            code: 'chat_history_target_workspace_unconfirmed',
-            error: 'Cannot confirm the target session workspace. Refusing to select or pin native history.',
-        };
-    }
+    const { targetWorkspace, refusal } = resolveTargetReadWorkspace(h, args, 'chat_history');
+    if (refusal) return refusal;
     // chat_history pages native-history rows straight to the caller without
     // passing the read_chat choke point, so the daemon-internal `_src` reader
     // stamp is dropped here instead (design 2026-09-28 §3.3).
@@ -320,15 +311,15 @@ async function readChatHistoryPage(h: CommandHelpers, args: any, targetWorkspace
  *   extension / IDE DOM scripts → chat-commands-read-dom.ts
  */
 export async function handleReadChat(h: CommandHelpers, args: any): Promise<CommandResult> {
-    const scopeRefusal = refuseCrossWorktreeRead(h, args);
-    if (scopeRefusal) return scopeRefusal;
+    const { targetWorkspace, refusal } = resolveTargetReadWorkspace(h, args, 'read_chat');
+    if (refusal) return refusal;
     const provider = h.getProvider(resolveReadChatProviderHint(h, args));
     const transport = getTargetTransport(h, provider);
     const historySessionId = getHistorySessionId(h, args);
 
     // PTY / ACP transport: read from adapter
     if (isCliLikeTransport(transport)) {
-        const req = { provider, transport, historySessionId };
+        const req = { provider, transport, historySessionId, targetWorkspace: targetWorkspace || undefined };
         const adapter = getTargetedCliAdapter(h, args, provider?.type);
         return adapter ? readChatFromCliAdapter(h, args, adapter, req) : readChatFromHistoryOnly(h, args, req);
     }
@@ -338,6 +329,25 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
     return readChatFromIde(h, args, { provider, historySessionId });
 }
 
+/** Both targeted consumers require an independently confirmed workspace before lookup or pinning. */
+function resolveTargetReadWorkspace(h: CommandHelpers, args: any, command: 'read_chat' | 'chat_history'): {
+    targetWorkspace: string;
+    refusal: CommandResult | null;
+} {
+    const targetSessionId = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '';
+    const targetWorkspace = targetSessionId ? resolveTargetSessionActualWorkspace(h, targetSessionId) : '';
+    const scopeRefusal = refuseCrossWorktreeRead(h, args, targetWorkspace);
+    if (scopeRefusal) return { targetWorkspace, refusal: scopeRefusal };
+    if (targetSessionId && !targetWorkspace) {
+        return { targetWorkspace, refusal: {
+            success: false,
+            code: `${command}_target_workspace_unconfirmed`,
+            error: 'Cannot confirm the target session workspace. Refusing to select or pin native history.',
+        } };
+    }
+    return { targetWorkspace, refusal: null };
+}
+
 /**
  * Node scope guard: a daemon hosting a base node + several worktree nodes must
  * not serve worktree A's transcript (or splice sibling worktree turns via the
@@ -345,13 +355,13 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
  * worktree B. mesh_read_chat always passes the requested node's workspace as
  * args.workspace; refuse a CONFIRMED cross-workspace read rather than mix.
  */
-function refuseCrossWorktreeRead(h: CommandHelpers, args: any, actualWorkspace?: string): CommandResult | null {
+function refuseCrossWorktreeRead(h: CommandHelpers, args: any, actualWorkspace: string): CommandResult | null {
     const guardSessionId = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '';
     if (!guardSessionId || typeof args?.workspace !== 'string' || !args.workspace.trim()) return null;
     const verdict = evaluateReadChatNodeWorkspaceScope({
         targetSessionId: guardSessionId,
         intendedWorkspace: args.workspace,
-        sessionWorkspace: actualWorkspace ?? resolveTargetSessionActualWorkspace(h, guardSessionId),
+        sessionWorkspace: actualWorkspace,
     });
     if (!verdict.scoped) return null;
     LOG.info('Command', `[read_chat] node scope mismatch: session ${guardSessionId} workspace "${verdict.actual}" ≠ requested node workspace "${verdict.intended}" — refusing cross-worktree transcript`);

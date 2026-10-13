@@ -57,20 +57,13 @@ function readHistoryOnlyNative(h: CommandHelpers, args: any, req: CliReadChatReq
     const historyLimit = normalizeReadChatTailLimit(args);
     const agentStr = provider?.type || args?.agentType || getCurrentProviderType(h);
     const targetSid = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '';
-    const registrySessionWorkspace = targetSid
-        ? (h.ctx?.sessionRegistry?.get?.(targetSid) as any)?.workspace
-        : undefined;
     const currentSessionWorkspace = typeof (h.currentSession as any)?.workspace === 'string'
         ? (h.currentSession as any).workspace
         : undefined;
     const argsWorkspace = typeof args?.workspace === 'string' ? args.workspace : undefined;
-    // When reading a different session (targetSid), prefer that session's registered
-    // workspace (or the caller-supplied args.workspace) over the current (coordinator)
-    // session's workspace — otherwise the coordinator's cwd shadows the worker's cwd
-    // and history lookups find the wrong files.
-    const workspace = targetSid
-        ? (typeof registrySessionWorkspace === 'string' ? registrySessionWorkspace : argsWorkspace ?? currentSessionWorkspace)
-        : (typeof currentSessionWorkspace === 'string' ? currentSessionWorkspace : undefined);
+    // Targeted reads receive independently confirmed ownership from the dispatcher.
+    // Caller or unrelated coordinator cwd must not establish that ownership.
+    const workspace = targetSid ? req.targetWorkspace : currentSessionWorkspace;
     const intendedWorkspace = argsWorkspace;
     const supportsNative = supportsCliNativeTranscript(agentStr, provider)
         && isNativeSourceCanonicalHistory(provider?.nativeHistory);

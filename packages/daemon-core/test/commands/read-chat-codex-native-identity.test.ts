@@ -56,6 +56,68 @@ beforeEach(() => {
 });
 afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
 describe('targeted Codex native identity through real JSONL read consumer', () => {
+  it.each(['no-owner', 'unrelated-current', 'fallback-adapter', 'inactive_record', 'recovery_snapshot'] as const)(
+    'refuses unknown targeted ownership in %s mode across both consumers and subsequent reads', async (mode) => {
+      const foreignWorkspace = path.join(root, 'foreign-workspace'); fs.mkdirSync(foreignWorkspace);
+      rollout(foreignWorkspace);
+      const h: any = helpers(mode !== 'no-owner' && mode !== 'unrelated-current');
+      h.ctx.sessionRegistry.get = () => undefined;
+      if (mode === 'unrelated-current') h.currentSession = {
+        sessionId: 'synthetic-unrelated-B', providerType: 'codex-cli', transport: 'pty', workspace: foreignWorkspace,
+      };
+      if (mode !== 'no-owner' && mode !== 'unrelated-current') {
+        const adapter = h.getCliAdapter();
+        h.getCliAdapter = () => ({ ...adapter, workingDir: foreignWorkspace,
+          getRuntimeMetadata: () => ({ runtimeId: mode === 'fallback-adapter' ? 'synthetic-other-B' : RUNTIME,
+            surfaceKind: mode === 'fallback-adapter' ? undefined : mode }),
+        });
+      }
+      const nativeLookup = vi.spyOn(provider.scripts, 'readNativeHistory');
+      const history = await page(h, { workspace: undefined, providerSessionId: UUID });
+      expect(history.code).toBe('chat_history_target_workspace_unconfirmed');
+      for (const args of [{ workspace: undefined, providerSessionId: UUID },
+        { workspace: foreignWorkspace, providerSessionId: UUID }, { workspace: undefined }]) {
+        const result = await read(h, args);
+        expect(result.success).toBe(false); expect(result.code).toBe('read_chat_target_workspace_unconfirmed');
+        expect((result.messages || []).map((m: any) => m.content)).not.toContain('SYNTHETIC_FOREIGN_ANSWER');
+        expect(result.providerSessionId).toBeUndefined();
+        expect(__getProviderSessionPinForTest(RUNTIME)).toBeUndefined(); expect(writes).not.toHaveBeenCalled();
+      }
+      expect(nativeLookup).not.toHaveBeenCalled();
+    });
+  it.each([false, true])('uses the registry workspace for omitted-workspace read_chat with unrelated coordinator=%s', async (coordinator) => {
+    const foreignWorkspace = path.join(root, 'foreign-workspace'); fs.mkdirSync(foreignWorkspace);
+    rollout(foreignWorkspace);
+    const h: any = helpers();
+    if (coordinator) h.currentSession = {
+      sessionId: 'synthetic-unrelated-B', providerType: 'codex-cli', transport: 'pty', workspace: foreignWorkspace,
+    };
+    const nativeLookup = vi.spyOn(provider.scripts, 'readNativeHistory');
+    const result = await read(h, { workspace: undefined, providerSessionId: UUID });
+    expect(result.pending).toBe(true); expect(result.messages).toEqual([]);
+    expect(nativeLookup).toHaveBeenCalledWith(expect.objectContaining({ workspace }));
+    expect(__getProviderSessionPinForTest(RUNTIME)).toBeUndefined(); expect(writes).not.toHaveBeenCalled();
+    rollout();
+    const own = await read(h, { workspace: undefined, providerSessionId: UUID });
+    expect(own.success).toBe(true);
+    expect((own.messages as any[]).map(m => m.content)).toContain('SYNTHETIC_FOREIGN_ANSWER');
+    expect(__getProviderSessionPinForTest(RUNTIME)).toBe(UUID);
+  });
+  it('preserves untargeted explicit native read_chat without a runtime owner or pin', async () => {
+    const result = await read(helpers(), { targetSessionId: undefined, providerSessionId: UUID });
+    expect(result.success).toBe(true);
+    expect((result.messages as any[]).map(m => m.content)).toContain('SYNTHETIC_FOREIGN_ANSWER');
+    expect(__getProviderSessionPinForTest(RUNTIME)).toBeUndefined(); expect(writes).not.toHaveBeenCalled();
+  });
+  it('uses the confirmed active adapter workspace for exact read_chat with omitted caller workspace', async () => {
+    const h = helpers(true); h.ctx.sessionRegistry.get = () => undefined;
+    const nativeLookup = vi.spyOn(provider.scripts, 'readNativeHistory');
+    const result = await read(h, { workspace: undefined, providerSessionId: UUID });
+    expect(result.success).toBe(true);
+    expect((result.messages as any[]).map(m => m.content)).toContain('SYNTHETIC_FOREIGN_ANSWER');
+    expect(nativeLookup).toHaveBeenCalledWith(expect.objectContaining({ workspace }));
+    expect(__getProviderSessionPinForTest(RUNTIME)).toBe(UUID);
+  });
   it.each(['override', 'omitted', 'unrelated-current'] as const)(
     'rejects a foreign exact UUID page with %s workspace input and leaves subsequent read_chat unpinned', async (mode) => {
       const foreignWorkspace = path.join(root, 'foreign-workspace'); fs.mkdirSync(foreignWorkspace);

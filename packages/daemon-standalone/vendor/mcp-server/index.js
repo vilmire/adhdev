@@ -117393,19 +117393,13 @@ ${marker}`,
       if (intended === actual) return { scoped: false };
       return { scoped: true, intended, actual };
     }
-    function resolveTargetSessionActualWorkspace(h, targetSessionId, requireConfirmedOwner = false) {
+    function resolveTargetSessionActualWorkspace(h, targetSessionId) {
       const registryWorkspace = h.ctx?.sessionRegistry?.get?.(targetSessionId)?.workspace;
       if (typeof registryWorkspace === "string" && registryWorkspace.trim()) return registryWorkspace;
       const adapter = h.getCliAdapter?.(targetSessionId);
-      if (requireConfirmedOwner) {
-        const runtimeMeta = adapter && typeof adapter.getRuntimeMetadata === "function" ? adapter.getRuntimeMetadata() : null;
-        if (typeof runtimeMeta?.runtimeId !== "string" || runtimeMeta.runtimeId.trim() !== targetSessionId || runtimeMeta.surfaceKind === "inactive_record" || runtimeMeta.surfaceKind === "recovery_snapshot") return "";
-      }
-      if (adapter && typeof adapter.workingDir === "string" && adapter.workingDir.trim()) return adapter.workingDir;
-      if (requireConfirmedOwner) return "";
-      const instanceWorkspace = getTargetInstance(h, { targetSessionId })?.getState?.()?.workspace;
-      if (typeof instanceWorkspace === "string" && instanceWorkspace.trim()) return instanceWorkspace;
-      return "";
+      const runtimeMeta = adapter && typeof adapter.getRuntimeMetadata === "function" ? adapter.getRuntimeMetadata() : null;
+      if (typeof runtimeMeta?.runtimeId !== "string" || runtimeMeta.runtimeId.trim() !== targetSessionId || runtimeMeta.surfaceKind === "inactive_record" || runtimeMeta.surfaceKind === "recovery_snapshot") return "";
+      return adapter && typeof adapter.workingDir === "string" && adapter.workingDir.trim() ? adapter.workingDir : "";
     }
     var fs59 = __toESM2(require("fs"));
     var path63 = __toESM2(require("path"));
@@ -121194,7 +121188,6 @@ ${marker}`,
       );
       const returnedMessages = runtimeMessageMerger?.category === "cli" && runtimeMessageMerger.type === adapter.cliType && typeof runtimeMessageMerger.mergeRuntimeChatMessages === "function" ? runtimeMessageMerger.mergeRuntimeChatMessages(parsedMessages) : parsedMessages;
       const targetSid = typeof args?.targetSessionId === "string" ? args.targetSessionId.trim() : "";
-      const registryWs = targetSid ? h.ctx?.sessionRegistry?.get?.(targetSid)?.workspace : void 0;
       const currentSessionWs = typeof h.currentSession?.workspace === "string" ? h.currentSession.workspace : typeof adapter.workingDir === "string" ? adapter.workingDir : void 0;
       return {
         parsedRecord,
@@ -121207,7 +121200,7 @@ ${marker}`,
         returnedStatus,
         returnedMessages,
         providerType: req.provider?.type || adapter.cliType,
-        sessionWorkspace: targetSid ? typeof registryWs === "string" ? registryWs : (typeof args?.workspace === "string" ? args.workspace : void 0) ?? currentSessionWs : currentSessionWs,
+        sessionWorkspace: targetSid ? req.targetWorkspace : currentSessionWs,
         intendedWorkspace: typeof args?.workspace === "string" ? args.workspace : void 0
       };
     }
@@ -121539,10 +121532,9 @@ ${marker}`,
       const historyLimit = normalizeReadChatTailLimit(args);
       const agentStr = provider?.type || args?.agentType || getCurrentProviderType(h);
       const targetSid = typeof args?.targetSessionId === "string" ? args.targetSessionId.trim() : "";
-      const registrySessionWorkspace = targetSid ? h.ctx?.sessionRegistry?.get?.(targetSid)?.workspace : void 0;
       const currentSessionWorkspace = typeof h.currentSession?.workspace === "string" ? h.currentSession.workspace : void 0;
       const argsWorkspace = typeof args?.workspace === "string" ? args.workspace : void 0;
-      const workspace = targetSid ? typeof registrySessionWorkspace === "string" ? registrySessionWorkspace : argsWorkspace ?? currentSessionWorkspace : typeof currentSessionWorkspace === "string" ? currentSessionWorkspace : void 0;
+      const workspace = targetSid ? req.targetWorkspace : currentSessionWorkspace;
       const intendedWorkspace = argsWorkspace;
       const supportsNative = supportsCliNativeTranscript(agentStr, provider) && isNativeSourceCanonicalHistory(provider?.nativeHistory);
       const {
@@ -121913,17 +121905,8 @@ ${marker}`,
       }
     }
     async function handleChatHistory(h, args) {
-      const targetSessionId = typeof args?.targetSessionId === "string" ? args.targetSessionId.trim() : "";
-      const targetWorkspace = targetSessionId ? resolveTargetSessionActualWorkspace(h, targetSessionId, true) : "";
-      const scopeRefusal = refuseCrossWorktreeRead(h, args, targetWorkspace);
-      if (scopeRefusal) return scopeRefusal;
-      if (targetSessionId && !targetWorkspace) {
-        return {
-          success: false,
-          code: "chat_history_target_workspace_unconfirmed",
-          error: "Cannot confirm the target session workspace. Refusing to select or pin native history."
-        };
-      }
+      const { targetWorkspace, refusal } = resolveTargetReadWorkspace(h, args, "chat_history");
+      if (refusal) return refusal;
       const result = await readChatHistoryPage(h, args, targetWorkspace || void 0);
       return Array.isArray(result?.messages) ? { ...result, messages: stripMessageSourceAddresses(result.messages) } : result;
     }
@@ -122037,18 +122020,32 @@ ${marker}`,
       }
     }
     async function handleReadChat(h, args) {
-      const scopeRefusal = refuseCrossWorktreeRead(h, args);
-      if (scopeRefusal) return scopeRefusal;
+      const { targetWorkspace, refusal } = resolveTargetReadWorkspace(h, args, "read_chat");
+      if (refusal) return refusal;
       const provider = h.getProvider(resolveReadChatProviderHint2(h, args));
       const transport = getTargetTransport(h, provider);
       const historySessionId = getHistorySessionId(h, args);
       if (isCliLikeTransport(transport)) {
-        const req = { provider, transport, historySessionId };
+        const req = { provider, transport, historySessionId, targetWorkspace: targetWorkspace || void 0 };
         const adapter = getTargetedCliAdapter(h, args, provider?.type);
         return adapter ? readChatFromCliAdapter(h, args, adapter, req) : readChatFromHistoryOnly(h, args, req);
       }
       if (isExtensionTransport(transport)) return readChatFromExtension(h, args, { provider, historySessionId });
       return readChatFromIde(h, args, { provider, historySessionId });
+    }
+    function resolveTargetReadWorkspace(h, args, command) {
+      const targetSessionId = typeof args?.targetSessionId === "string" ? args.targetSessionId.trim() : "";
+      const targetWorkspace = targetSessionId ? resolveTargetSessionActualWorkspace(h, targetSessionId) : "";
+      const scopeRefusal = refuseCrossWorktreeRead(h, args, targetWorkspace);
+      if (scopeRefusal) return { targetWorkspace, refusal: scopeRefusal };
+      if (targetSessionId && !targetWorkspace) {
+        return { targetWorkspace, refusal: {
+          success: false,
+          code: `${command}_target_workspace_unconfirmed`,
+          error: "Cannot confirm the target session workspace. Refusing to select or pin native history."
+        } };
+      }
+      return { targetWorkspace, refusal: null };
     }
     function refuseCrossWorktreeRead(h, args, actualWorkspace) {
       const guardSessionId = typeof args?.targetSessionId === "string" ? args.targetSessionId.trim() : "";
@@ -122056,7 +122053,7 @@ ${marker}`,
       const verdict = evaluateReadChatNodeWorkspaceScope({
         targetSessionId: guardSessionId,
         intendedWorkspace: args.workspace,
-        sessionWorkspace: actualWorkspace ?? resolveTargetSessionActualWorkspace(h, guardSessionId)
+        sessionWorkspace: actualWorkspace
       });
       if (!verdict.scoped) return null;
       LOG.info("Command", `[read_chat] node scope mismatch: session ${guardSessionId} workspace "${verdict.actual}" \u2260 requested node workspace "${verdict.intended}" \u2014 refusing cross-worktree transcript`);
