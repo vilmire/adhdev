@@ -6,6 +6,7 @@
  * `assigned`. Same `self`-delegate pattern as the other mesh-runtime-store-*
  * modules; the class keeps the delegating method.
  */
+import { bridgeDispatchFrozen } from './worker-bridge.js';
 import { LOG } from '../logging/logger.js';
 import { nodeSatisfiesRequiredTags, isTaskReadonly, taskDependenciesSatisfied, meshTaskNotBeforeReady, meshTaskPriorityRank } from './mesh-work-queue.js';
 import { taskIsParked } from './mesh-task-parking.js';
@@ -53,6 +54,7 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
             outRefusal?: MeshClaimRefusal;
         }): MeshWorkQueueEntry | null {
     return host.transaction(() => {
+        if (bridgeDispatchFrozen(host.db, meshId)) return null;
         host.ensureLegacyQueueMigrated(meshId);
         const refuse = (reason: MeshClaimRefusalReason, detail?: string, deepest?: MeshWorkQueueEntry): null => {
             if (opts?.outRefusal) {

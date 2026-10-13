@@ -3,6 +3,7 @@
  * attempt, recorded on the ledger, and surfaced to the coordinator only when enough
  * time and text have accumulated since the last surfaced update.
  */
+import { afterBridgeCommit } from './worker-bridge-transaction.js';
 import { resolveWorkerIdentity, classifyUnresolvedWorkerCredential, normalizeWorkerReportedAtMs, workerIdentityPostdates, WORKER_PROGRESS_EVENT_KIND, summaryKey, type WorkerReportRefusal } from './worker-report.js';
 import { resolveForwardedWorkerIdentity, type ForwardedWorkerReportClaim, type ForwardedReportSender, type ForwardedReportRefusalReason } from './worker-report-forwarded.js';
 import type { WorkerTokenExchangeResult } from './worker-mcp-isolation.js';
@@ -19,7 +20,7 @@ import { queueWorkerProgressNotice } from './worker-progress-notify.js';
 export function acceptWorkerProgressUpdate(
     credential: { token?: unknown; bind?: unknown },
     note: string,
-    opts: { nowMs?: number; reportedAtMs?: unknown } = {},
+    opts: { nowMs?: number; reportedAtMs?: unknown; deliveryId?: string } = {},
 ): WorkerProgressUpdateResult {
     const identity = resolveWorkerIdentity(credential);
     if (!identity) {
@@ -66,7 +67,7 @@ export interface WorkerProgressUpdateResult {
 export function acceptForwardedWorkerProgressUpdate(
     claim: ForwardedWorkerReportClaim,
     note: string,
-    opts: { sender: ForwardedReportSender; nowMs?: number; isSelfDaemon?: (daemonId: string) => boolean },
+    opts: { sender: ForwardedReportSender; nowMs?: number; isSelfDaemon?: (daemonId: string) => boolean; reportedAtMs?: number; deliveryId?: string },
 ): WorkerProgressUpdateResult {
     const nowMs = opts.nowMs ?? Date.now();
     const resolved = resolveForwardedWorkerIdentity(claim, opts.sender, nowMs, opts.isSelfDaemon);
@@ -80,14 +81,16 @@ export function acceptForwardedWorkerProgressUpdate(
             detail: `${reason}: task ${resolved.late.taskId}'s attempt ${resolved.late.attemptId} already ended (${resolved.late.terminalOutcome}) on the owner — progress is only recorded against a live attempt`,
         };
     }
-    return acceptWorkerProgressUpdateForIdentity(resolved.live, note, { nowMs });
+    const reportedAt = normalizeWorkerReportedAtMs(opts.reportedAtMs, nowMs);
+    if (reportedAt === 'too_old' || (reportedAt !== undefined && workerIdentityPostdates(resolved.live, reportedAt))) return { accepted: false, refusal: 'stale_report' };
+    return acceptWorkerProgressUpdateForIdentity(resolved.live, note, { nowMs, deliveryId: opts.deliveryId });
 }
 
 /** The progress body, once identity is PROVEN (local bind/token, or a forwarded claim the owner re-resolved). */
 function acceptWorkerProgressUpdateForIdentity(
     identity: WorkerTokenExchangeResult,
     note: string,
-    opts: { nowMs?: number } = {},
+    opts: { nowMs?: number; deliveryId?: string } = {},
 ): WorkerProgressUpdateResult {
     // ★F4: previously `return { accepted: true }` without writing a single row.
     // The worker was told "Progress noted for task …" and nothing existed to
@@ -112,7 +115,7 @@ function acceptWorkerProgressUpdateForIdentity(
             kind: WORKER_PROGRESS_EVENT_KIND,
             // Distinct per call — progress updates are a SEQUENCE, unlike the
             // completion report where the UNIQUE constraint provides idempotency.
-            dedupeKey: `${nowMs}`,
+            dedupeKey: opts.deliveryId ? `delivery:${opts.deliveryId}` : `${nowMs}`,
             payload: { noteLength: note.length },
             atMs: nowMs,
         });
@@ -135,6 +138,7 @@ function acceptWorkerProgressUpdateForIdentity(
             detail: `task ${identity.taskId} has no active attempt to record progress against`,
         };
     }
+    if (!recorded && opts.deliveryId) return { accepted: true, taskId: identity.taskId, surfacedToCoordinator: false };
     if (!recorded) {
         // dedupeKey is the millisecond timestamp, so a false here means two
         // updates landed in the same millisecond on one attempt — the note IS
@@ -269,6 +273,6 @@ function notifyCoordinatorOfProgress(
         LOG.warn('WorkerReport', `Failed to surface progress for task ${identity.taskId}: ${e?.message || e}`);
         return false;
     }
-    PROGRESS_SURFACE_LAST_MS.set(key, nowMs);
+    afterBridgeCommit(MeshRuntimeStore.getInstance().db, () => PROGRESS_SURFACE_LAST_MS.set(key, nowMs));
     return true;
 }

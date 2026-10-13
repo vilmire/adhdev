@@ -11,6 +11,7 @@ import { notificationHandlers } from '../../src/commands/low-family/notification
 import { daemonLifecycleHandlers } from '../../src/commands/low-family/daemon-lifecycle.js'
 import { meshLedgerHandlers } from '../../src/commands/low-family/mesh-ledger.js'
 import { meshNodeLogsHandlers } from '../../src/commands/low-family/mesh-node-logs.js'
+import { workerBridgeHandlers } from '../../src/commands/low-family/worker-bridge.js'
 import { workerReportHandlers } from '../../src/commands/low-family/worker-report.js'
 import { workerMailboxHandlers } from '../../src/commands/low-family/worker-mailbox.js'
 import { workerPeerContextHandlers } from '../../src/commands/low-family/worker-peer-context.js'
@@ -84,7 +85,8 @@ const MESH_NODE_LOGS_CMDS = ['get_mesh_node_logs']
 // WORKER-MCP Phase B: the worker's own reporting surface (design §4/§5).
 // + worker_report_forwarded (F7, 2026-09-25): a remote worker daemon relays its report to the attempt owner.
 // + worker_progress_forwarded (F7 progress axis, 2026-09-25): same relay for progress notes.
-const WORKER_REPORT_CMDS = ['worker_resolve_task', 'worker_report_completion', 'worker_report_refusal_forwarded', 'worker_report_forwarded', 'worker_progress_update', 'worker_progress_forwarded']
+const WORKER_BRIDGE_CMDS = ['worker_bridge_capabilities', 'worker_bridge_delivery', 'worker_bridge_control', 'worker_bridge_verify', 'worker_bridge_status']
+const WORKER_REPORT_CMDS = ['worker_bridge_prepare', 'worker_resolve_task', 'worker_report_completion', 'worker_report_refusal_forwarded', 'worker_report_forwarded', 'worker_progress_update', 'worker_progress_forwarded']
 // WORKER-MCP E-T0: the mailbox piggyback (design §7.1) — coordinator-side deposit
 // (routed cross-daemon via mesh_notify_worker) and the worker-side drain.
 const WORKER_MAILBOX_CMDS = ['deposit_worker_mailbox', 'worker_drain_mailbox']
@@ -110,12 +112,12 @@ const TURN_LEDGER_IPC_CMDS = [
 ]
 
 describe('low-family registry', () => {
-  it('registers all 85 LOW family commands once, no overlap', () => {
+  it('registers all 91 LOW family commands once, no overlap', () => {
     const all = [
       ...SESSION_HOST_CMDS, ...SPEC_CMDS, ...REFINE_CMDS,
       ...DIAGNOSTICS_CMDS, ...STATUS_META_CMDS, ...COORDINATOR_PROMPT_CMDS,
       ...NOTIFICATION_CMDS, ...DAEMON_LIFECYCLE_CMDS, ...MESH_LEDGER_CMDS, ...MESH_NODE_LOGS_CMDS,
-      ...WORKER_REPORT_CMDS, ...WORKER_MAILBOX_CMDS, ...WORKER_PEER_CONTEXT_CMDS,
+      ...WORKER_REPORT_CMDS, ...WORKER_BRIDGE_CMDS, ...WORKER_MAILBOX_CMDS, ...WORKER_PEER_CONTEXT_CMDS,
       ...TRANSCRIPT_REPLICA_CMDS, ...TURN_LEDGER_IPC_CMDS,
     ]
     // 69 − import_mesh_ledger_slice (C-W9a) + 13 store IPC commands + 1
@@ -127,8 +129,8 @@ describe('low-family registry', () => {
     // (graph_audit_record + graph_gate_claim/release/abandon + graph_node_patch
     // + graph_view_query, retired with graph orchestration 2026-09-30)
     // − list_coordinator_prompts − write_coordinator_prompt (coordinator-prompts/
-    // file layer removed 2026-10-08) + content-free worker_report_refusal_forwarded = 85.
-    expect(all).toHaveLength(85)
+    // file layer removed 2026-10-08) + content-free worker_report_refusal_forwarded = 85; strict B adds six = 91.
+    expect(all).toHaveLength(91)
     // no duplicate command names across families
     expect(new Set(all).size).toBe(all.length)
     expect(lowFamilyNames()).toHaveLength(all.length)
@@ -145,6 +147,7 @@ describe('low-family registry', () => {
     expect(Object.keys(meshLedgerHandlers)).toEqual(MESH_LEDGER_CMDS)
     expect(Object.keys(meshNodeLogsHandlers)).toEqual(MESH_NODE_LOGS_CMDS)
     expect(Object.keys(workerReportHandlers)).toEqual(WORKER_REPORT_CMDS)
+    expect(Object.keys(workerBridgeHandlers)).toEqual(WORKER_BRIDGE_CMDS)
     expect(Object.keys(workerMailboxHandlers)).toEqual(WORKER_MAILBOX_CMDS)
     expect(Object.keys(workerPeerContextHandlers)).toEqual(WORKER_PEER_CONTEXT_CMDS)
     expect(Object.keys(transcriptReplicaHandlers)).toEqual(TRANSCRIPT_REPLICA_CMDS)
@@ -166,7 +169,7 @@ describe('low-family registry', () => {
       sessionHostHandlers, specProviderDevHandlers, refineConfigHandlers,
       diagnosticsHandlers, statusMetaHandlers, coordinatorPromptHandlers,
       notificationHandlers, daemonLifecycleHandlers, meshLedgerHandlers,
-      meshNodeLogsHandlers, workerReportHandlers, workerMailboxHandlers,
+      meshNodeLogsHandlers, workerReportHandlers, workerBridgeHandlers, workerMailboxHandlers,
       workerPeerContextHandlers, transcriptReplicaHandlers,
       turnLedgerIpcHandlers,
     ].flatMap((handlers) => Object.keys(handlers))

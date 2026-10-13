@@ -2,7 +2,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import Module, { createRequire } from 'node:module'
-import { resolve } from 'node:path'
+import { resolve, join } from 'node:path'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { workerBridgeHandlers } from '../../src/commands/low-family/worker-bridge.js'
+import { setBridgePolicy, bridgeCapability, sendBridgeDelivery, resumeBridgeDeliveries, BRIDGE_DELIVERY_COMMAND } from '../../src/mesh/worker-bridge.js'
+vi.mock('../../src/build-info.js', () => ({ getDaemonBuildInfo: () => ({ commit: 'b'.repeat(40), commitShort: 'bbbbbbb', version: '1.0.82-bridge' }) }))
 import { DaemonCommandRouter } from '../../src/commands/router.js'
 import { DaemonCommandHandler } from '../../src/commands/handler.js'
 import { workerReportHandlers } from '../../src/commands/low-family/worker-report.js'
@@ -20,7 +25,7 @@ import { fakePublisher } from '../turn-ledger/ledger-harness.js'
 // rc12 npm tarball; never import/start an installed daemon or read live state.
 // The hash pins executable bytes, not a hand-reimplemented legacy decoder.
 const artifact = process.env.ADHDEV_RC12_TEST_BUNDLE
-const current: any = { DaemonCommandRouter, DaemonCommandHandler, workerReportHandlers, MeshRpcEndpoint, MeshRuntimeStore, createMeshRuntimeTurnLedger, setActiveTurnLedger, mintWorkerSessionBind, mintWorkerTaskToken, __resetWorkerSessionBindsForTest, __resetWorkerTaskTokensForTest, __setHandoffNoteSinkForTests, __setWorkerProgressNoticeSinkForTests }
+const current: any = { DaemonCommandRouter, DaemonCommandHandler, workerReportHandlers, MeshRpcEndpoint, workerBridgeHandlers, MeshRuntimeStore, createMeshRuntimeTurnLedger, setActiveTurnLedger, mintWorkerSessionBind, mintWorkerTaskToken, __resetWorkerSessionBindsForTest, __resetWorkerTaskTokensForTest, __setHandoffNoteSinkForTests, __setWorkerProgressNoticeSinkForTests }
 let legacy: any
 function rc12() {
   if (legacy) return legacy
@@ -94,9 +99,11 @@ function link(memberRuntime: any, ownerRuntime: any, receive: any) {
   return { dispatch, packets, responses }
 }
 
-function rig(memberVersion: 'rc12' | 'rc13', ownerVersion: 'rc12' | 'rc13') {
+function rig(memberVersion: 'rc12' | 'rc13', ownerVersion: 'rc12' | 'rc13', bridge = false) {
   const old = rc12(), memberRuntime = memberVersion === 'rc12' ? old : current, ownerRuntime = ownerVersion === 'rc12' ? old : current
-  const owner = new ownerRuntime.MeshRuntimeStore(':memory:'), member = new memberRuntime.MeshRuntimeStore(':memory:')
+  const dir = mkdtempSync(join(tmpdir(), 'worker-bridge-runtime-'))
+  cleanup.push(() => rmSync(dir, { recursive: true, force: true }))
+  let owner = new ownerRuntime.MeshRuntimeStore(join(dir, 'owner.db')), member = new memberRuntime.MeshRuntimeStore(join(dir, 'member.db'))
   cleanup.push(() => owner.close(), () => member.close())
   let location: 'owner' | 'member' = 'owner'
   for (const runtime of new Set([ownerRuntime, memberRuntime])) {
@@ -104,7 +111,7 @@ function rig(memberVersion: 'rc12' | 'rc13', ownerVersion: 'rc12' | 'rc13') {
   }
   const meshId = 'synthetic_release_mesh', taskId = 'synthetic_release_task', sessionId = 'synthetic_release_session', nodeId = 'synthetic_release_node'
   const attemptId = `mesh_direct:${taskId}`
-  const ledger = ownerRuntime.createMeshRuntimeTurnLedger({ selfDaemonId: 'daemon_mach_test_owner', publisher: fakePublisher() })
+  let ledger = ownerRuntime.createMeshRuntimeTurnLedger({ selfDaemonId: 'daemon_mach_test_owner', publisher: fakePublisher() })
   ownerRuntime.setActiveTurnLedger(ledger)
   ownerRuntime.__setHandoffNoteSinkForTests(() => {})
   ownerRuntime.__setWorkerProgressNoticeSinkForTests(() => {})
@@ -124,6 +131,16 @@ function rig(memberVersion: 'rc12' | 'rc13', ownerVersion: 'rc12' | 'rc13') {
   router.inlineMeshCache.set(meshId, { id: meshId, nodes: [{ id: nodeId, daemonId: 'daemon_mach_test_member' }] })
   cleanup.push(() => { router.meshNodeStatePusher.stop(); router.localMeshNodeGitWatch.stop() })
   const receiver = new old.CloudCommandTransports({ getHost: () => router })
+  if (bridge) {
+    const policy = { meshId, rolloutId: 'offline-rollout', frozen: true, builds: [{ commit: 'b'.repeat(40), version: '1.0.82-bridge' }] }
+    setBridgePolicy(owner.db, policy); setBridgePolicy(member.db, policy)
+    router.deps.statusVersion = '1.0.82-bridge'
+    router.deps.dispatchMeshCommand = async (_id: string, name: string, args: any) => {
+      const previous = location; location = 'member'
+      try { return await workerBridgeHandlers[name]({ deps: { statusInstanceId: 'daemon_mach_test_member', statusVersion: '1.0.82-bridge' } } as any, args) }
+      finally { location = previous }
+    }
+  }
   const wire = link(memberRuntime, ownerRuntime, async (sender: string, command: string, args: any) => {
     location = 'owner'
     try { return await receiver.handleMeshCommand(sender, command, args) }
@@ -131,24 +148,34 @@ function rig(memberVersion: 'rc12' | 'rc13', ownerVersion: 'rc12' | 'rc13') {
   })
   let offline = false
   const settings = { meshNodeFor: meshId, meshNodeId: nodeId, meshActiveTaskId: taskId, meshActiveAttemptId: attemptId, meshActiveAttemptGeneration: 0, meshCoordinatorDaemonId: 'daemon_mach_test_owner' }
-  const ctx: any = { deps: { statusInstanceId: 'daemon_mach_test_member', instanceManager: { getInstance: () => ({ getState: () => ({ settings }) }) }, dispatchMeshCommand: (...args: any[]) => {
+  const ctx: any = { deps: { statusInstanceId: 'daemon_mach_test_member', statusVersion: '1.0.82-bridge', instanceManager: { getInstance: () => ({ getState: () => ({ settings }) }) }, dispatchMeshCommand: (...args: any[]) => {
     if (offline) throw new Error('synthetic connection closed')
     return (wire.dispatch as any)(...args)
   } } }
   const transport: any = { command: (name: string, args: any) => memberRuntime.workerReportHandlers[name](ctx, args) }
-  const delivery = new WorkerReportDelivery({ transport, credentials: { bind }, dir: null, autoSchedule: false, inlineAttempts: 1 })
+  const delivery = new WorkerReportDelivery({ transport, credentials: { bind }, strictProtocol: bridge, dir: bridge ? join(dir, 'outbox') : null, autoSchedule: false, inlineAttempts: 1 })
   cleanup.push(() => delivery.dispose())
   const report = { outcome: 'completed', summary: 'Synthetic accepted report.', touchedFiles: [] }
-  return { owner, ledger, taskId, meshId, attemptId, bind, settings, wire, transport, delivery, report, offline: (value: boolean) => { offline = value } }
+  const reboot = (side: 'owner' | 'member') => {
+    const previous = location; location = side
+    if (side === 'owner') {
+      owner.close(); owner = new ownerRuntime.MeshRuntimeStore(join(dir, 'owner.db'))
+      ledger = ownerRuntime.createMeshRuntimeTurnLedger({ selfDaemonId: 'daemon_mach_test_owner', publisher: fakePublisher() })
+      ownerRuntime.setActiveTurnLedger(ledger)
+    } else { member.close(); member = new memberRuntime.MeshRuntimeStore(join(dir, 'member.db')) }
+    location = previous
+  }
+  const pump = () => resumeBridgeDeliveries(wire.dispatch)
+  return { get owner() { return owner }, get member() { return member }, get ledger() { return ledger }, reboot, pump, taskId, meshId, attemptId, bind, settings, wire, transport, delivery, report, offline: (value: boolean) => { offline = value } }
 }
 
 describe.skipIf(!artifact)('exact packaged rc12 ↔ candidate rc13 worker protocol', () => {
-  it('rc13 → rc12: valid report/progress are refused and removed from the outbox', async () => {
+  it('rc13 → rc12: unsupported report/progress stay in the outbox', async () => {
     const r = rig('rc13', 'rc12')
     for (const [kind, payload, command] of [['progress', { note: 'Synthetic progress.' }, 'worker_progress_forwarded'], ['report', { report: r.report }, 'worker_report_forwarded']] as const) {
       const result = await r.delivery.submit(kind, payload)
-      expect(result).toMatchObject({ status: 'answered', result: { success: false, error: `${command}: request failed decode (bad shape)` } })
-      expect(r.delivery.pendingCount()).toBe(0)
+      expect(result).toMatchObject({ status: 'queued' })
+      expect(r.delivery.pendingCount()).toBeGreaterThan(0)
       expect(r.ledger.getAttempt(r.attemptId).terminal).toBeNull()
       expect(r.owner.findQueueEntryById(r.meshId, r.taskId).status).toBe('assigned')
     }
@@ -205,18 +232,18 @@ describe.skipIf(!artifact)('exact packaged rc12 ↔ candidate rc13 worker protoc
     await r.ledger.flushPublish()
   })
 
-  it('rc13 → rc12: reconnecting does not recover a report after the decode refusal', async () => {
+  it('rc13 → rc12: reconnecting retains unsupported entries for review', async () => {
     const r = rig('rc13', 'rc12')
     r.offline(true)
     expect(await r.delivery.submit('report', { report: r.report })).toMatchObject({ status: 'queued' })
     expect(r.delivery.pendingCount()).toBe(1)
     r.offline(false)
     await r.delivery.flush()
-    expect(r.delivery.pendingCount()).toBe(0)
-    expect(r.delivery.takeNotices().join('\n')).toContain('request failed decode')
+    expect(r.delivery.pendingCount()).toBe(1)
+    expect(r.delivery.takeNotices()).toEqual([])
     expect(r.ledger.getAttempt(r.attemptId).terminal).toBeNull()
     await r.delivery.flush()
-    expect(r.wire.packets).toHaveLength(1)
+    expect(r.wire.packets).toHaveLength(2)
     await r.ledger.flushPublish()
   })
 
@@ -232,6 +259,124 @@ describe.skipIf(!artifact)('exact packaged rc12 ↔ candidate rc13 worker protoc
     // Negative control only: this is precisely the unsafe fallback we must not ship.
     expect(await r.wire.dispatch('daemon_mach_test_owner', 'worker_report_forwarded', downgraded)).toMatchObject({ success: true })
     expect(r.ledger.getAttempt(r.attemptId).terminal).toMatchObject({ outcome: 'completed', strength: 'tool_report' })
+    await r.ledger.flushPublish()
+  })
+})
+
+
+describe.skipIf(!artifact)('strict B delivery and restart recovery', () => {
+  it('new member cannot bypass the rc12 capability admission; its outbox stays pending', async () => {
+    const r = rig('rc13', 'rc12', true)
+    expect(await r.delivery.submit('report', { report: r.report })).toMatchObject({ status: 'queued' })
+    expect(r.delivery.pendingCount()).toBe(1)
+    expect(r.wire.packets.every((packet) => packet.command === 'worker_bridge_capabilities')).toBe(true)
+    expect(r.ledger.getAttempt(r.attemptId).terminal).toBeNull()
+    await r.ledger.flushPublish()
+  })
+  it('old member cannot send provenance-free reports to an armed B owner', async () => {
+    const r = rig('rc12', 'rc13', true)
+    const result: any = await r.transport.command('worker_report_completion', { bind: r.bind, report: r.report })
+    expect(result).toMatchObject({ success: false, error: 'worker_protocol_provenance_required' })
+    expect(r.ledger.getAttempt(r.attemptId).terminal).toBeNull()
+    await r.ledger.flushPublish()
+  })
+  it('receipts survive both daemon restarts and duplicate progress/report calls', async () => {
+    const r = rig('rc13', 'rc13', true)
+    expect(await r.delivery.submit('progress', { note: 'Durable synthetic progress.' })).toMatchObject({ status: 'answered', result: { success: true } })
+    const progress = r.wire.packets.find((p) => p.command === BRIDGE_DELIVERY_COMMAND).args.envelope
+    r.reboot('owner'); r.reboot('member')
+    expect(await sendBridgeDelivery(r.member.db, progress, r.wire.dispatch)).toMatchObject({ success: true })
+    expect(r.owner.turnStore().listWorkerEventsForTask(r.meshId, r.taskId, 'worker_progress_update')).toHaveLength(1)
+    expect(await r.delivery.submit('report', { report: r.report })).toMatchObject({ status: 'answered', result: { success: true } })
+    const report = r.wire.packets.filter((p) => p.command === BRIDGE_DELIVERY_COMMAND).at(-1).args.envelope
+    r.reboot('owner'); r.reboot('member')
+    expect(await sendBridgeDelivery(r.member.db, report, r.wire.dispatch)).toMatchObject({ success: true })
+    expect(r.owner.turnStore().listWorkerEventsForTask(r.meshId, r.taskId, 'worker_tool_report')).toHaveLength(1)
+    expect(r.ledger.getAttempt(r.attemptId).terminal).toMatchObject({ strength: 'tool_report' })
+    await r.ledger.flushPublish()
+  })
+  it('lost final ACK recovers the exact owner receipt after both daemons restart', async () => {
+    const r = rig('rc13', 'rc13', true)
+    r.offline(true)
+    await r.delivery.submit('report', { report: r.report })
+    const saved: any = r.member.db.prepare("SELECT envelope_json FROM worker_bridge_delivery WHERE side='member'").get()
+    const envelope = JSON.parse(saved.envelope_json)
+    r.offline(false)
+    const loseAck = async (peer: string, command: string, args: any) => {
+      const reply = await r.wire.dispatch(peer, command, args)
+      if (command === BRIDGE_DELIVERY_COMMAND) throw new Error('synthetic lost final ACK')
+      return reply
+    }
+    expect(await sendBridgeDelivery(r.member.db, envelope, loseAck)).toMatchObject({ success: false, error: 'forward_failed' })
+    expect(r.ledger.getAttempt(r.attemptId).terminal).toMatchObject({ strength: 'tool_report' })
+    r.reboot('owner'); r.reboot('member')
+    expect(await sendBridgeDelivery(r.member.db, envelope, r.wire.dispatch)).toMatchObject({ success: true })
+    expect(r.owner.turnStore().listWorkerEventsForTask(r.meshId, r.taskId, 'worker_tool_report')).toHaveLength(1)
+    await r.ledger.flushPublish()
+  })
+  it('receipt write failure rolls back report authority and recovers on unchanged retry', async () => {
+    const r = rig('rc13', 'rc13', true)
+    r.offline(true)
+    await r.delivery.submit('report', { report: r.report })
+    const saved: any = r.member.db.prepare("SELECT envelope_json FROM worker_bridge_delivery WHERE side='member'").get()
+    const envelope = JSON.parse(saved.envelope_json)
+    r.owner.db.exec(`CREATE TRIGGER synthetic_receipt_failure BEFORE UPDATE OF receipt_json ON worker_bridge_delivery
+      WHEN NEW.side='owner' BEGIN SELECT RAISE(ABORT, 'synthetic receipt disk failure'); END`)
+    r.offline(false)
+    expect(await sendBridgeDelivery(r.member.db, envelope, r.wire.dispatch)).toMatchObject({ success: false })
+    expect(r.ledger.getAttempt(r.attemptId).terminal).toBeNull()
+    expect(r.owner.turnStore().listWorkerEventsForTask(r.meshId, r.taskId, 'worker_tool_report')).toHaveLength(0)
+    expect(r.owner.findQueueEntryById(r.meshId, r.taskId).status).toBe('assigned')
+    r.owner.db.exec('DROP TRIGGER synthetic_receipt_failure')
+    r.reboot('owner'); r.reboot('member')
+    expect(await sendBridgeDelivery(r.member.db, envelope, r.wire.dispatch)).toMatchObject({ success: true })
+    expect(r.ledger.getAttempt(r.attemptId).terminal).toMatchObject({ strength: 'tool_report' })
+    expect(r.owner.turnStore().listWorkerEventsForTask(r.meshId, r.taskId, 'worker_tool_report')).toHaveLength(1)
+    await r.ledger.flushPublish()
+  })
+  it('refusals remain content-free with durable exact receipts and immutable deadlines after restart', async () => {
+    const r = rig('rc13', 'rc13', true)
+    const invalid = { ...r.report, summary: 'PRIVATE-BODY' + 'x'.repeat(8001) }
+    const result = await r.delivery.submit('report', { report: invalid })
+    expect(result).toMatchObject({ status: 'answered', result: { success: false, error: 'invalid_report', receipt: { recorded: true } } })
+    const envelope = r.wire.packets.find((p) => p.command === BRIDGE_DELIVERY_COMMAND).args.envelope
+    expect(envelope.kind).toBe('refusal')
+    expect(JSON.stringify(r.wire.packets)).not.toContain('PRIVATE-BODY')
+    expect(JSON.stringify(r.wire.packets)).not.toContain(r.bind)
+    const deadline = r.ledger.getAttempt(r.attemptId).data.reportCorrection.until
+    r.reboot('owner'); r.reboot('member')
+    await sendBridgeDelivery(r.member.db, envelope, r.wire.dispatch)
+    expect(r.ledger.getAttempt(r.attemptId).data.reportCorrection.until).toBe(deadline)
+    expect(r.owner.turnStore().listWorkerEventsForTask(r.meshId, r.taskId, 'worker_report_refused')).toHaveLength(1)
+    expect(r.ledger.getAttempt(r.attemptId).terminal).toBeNull()
+    await r.ledger.flushPublish()
+  })
+  it.each(['senderDaemonId','ownerDaemonId','meshId','nodeId','taskId','sessionId','attemptId','generation','reportedAtMs'])(
+    'refuses changed %s without false completion', async (field) => {
+      const r = rig('rc13', 'rc13', true)
+      r.offline(true)
+      await r.delivery.submit('report', { report: r.report })
+      const saved: any = r.member.db.prepare("SELECT envelope_json FROM worker_bridge_delivery WHERE side='member'").get()
+      const envelope = JSON.parse(saved.envelope_json)
+      envelope.deliveryId += '-negative'
+      envelope[field] = field === 'generation' ? 1 : field === 'reportedAtMs' ? Date.now() - 3 * 60 * 60 * 1000 : 'impostor'
+      r.offline(false)
+      const result = await r.wire.dispatch('daemon_mach_test_owner', BRIDGE_DELIVERY_COMMAND, { meshId: envelope.meshId, envelope })
+      expect(result.success).toBe(false)
+      expect(r.ledger.getAttempt(r.attemptId).terminal).toBeNull()
+      await r.ledger.flushPublish()
+    })
+  it('does not retarget a prepared report after member assignment generation changes', async () => {
+    const r = rig('rc13', 'rc13', true)
+    r.offline(true)
+    await r.delivery.submit('report', { report: r.report })
+    r.settings.meshActiveAttemptGeneration = 1
+    r.reboot('member')
+    r.offline(false)
+    await r.delivery.flush()
+    const envelope = r.wire.packets.find((p) => p.command === BRIDGE_DELIVERY_COMMAND).args.envelope
+    expect(envelope.generation).toBe(0)
+    expect(r.ledger.getAttempt(r.attemptId).terminal).toMatchObject({ strength: 'tool_report' })
     await r.ledger.flushPublish()
   })
 })

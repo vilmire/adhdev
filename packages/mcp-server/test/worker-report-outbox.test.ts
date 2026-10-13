@@ -161,17 +161,21 @@ test('re-calling report_completion with the same report reuses the queued delive
   assert.ok(d.daemonRecentlyUnreachable());
 });
 
-test('an entry past the delivery window is dropped with a notice telling the worker to restate it', async () => {
+test('an entry past the delivery window is retained with a quarantine notice', async () => {
   let now = 1_000_000;
   const down = { async command() { throw timeoutError(); }, async ping() { return true; } } as any;
   const d = new WorkerReportDelivery({ transport: down, credentials: { bind: 'wsb_d' }, dir: null, sleep: noSleep, autoSchedule: false, inlineAttempts: 1, now: () => now, log: () => {} });
   await d.submit('report', { report: { outcome: 'completed', summary: 'late' } });
   now += WORKER_OUTBOX_MAX_AGE_MS + 1;
   await d.flush();
-  assert.equal(d.pendingCount(), 0);
+  assert.equal(d.pendingCount(), 1);
   const [notice] = d.takeNotices();
   assert.match(notice, /could not be delivered/);
-  assert.match(notice, /final message/);
+  assert.match(notice, /quarantined locally/);
+  assert.match(notice, /not dropped or accepted/);
+  await d.flush();
+  assert.equal(d.pendingCount(), 1);
+  assert.deepEqual(d.takeNotices(), []);
 });
 
 test('progress_update is queued, not failed, when the daemon does not answer', async () => {

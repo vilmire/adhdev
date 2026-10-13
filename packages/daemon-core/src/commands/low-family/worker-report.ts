@@ -29,6 +29,9 @@
  * `taskId` argument on purpose, because an argument can be wrong and a lookup
  * cannot (design §4: "워커가 taskId 를 인자로 넣지 않는다").
  */
+import { rememberPreparedDelivery, validatePreparedDelivery, readPreparedDelivery } from '../../mesh/worker-bridge-prepared.js';
+import { MeshRuntimeStore } from '../../mesh/mesh-runtime-store.js';
+import { readBridgePolicy, bridgeIdentity, sendBridgeDelivery, findBridgeMemberDelivery, stableBridgeJson, commitLocalBridgeDelivery, type BridgeEnvelope } from '../../mesh/worker-bridge.js';
 import { daemonIdsEquivalent, meshNodeIdMatches } from '@adhdev/mesh-shared';
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
 import { defineCommandSpecs } from '../command-registry.js';
@@ -144,6 +147,8 @@ function selfDaemonPredicate(ctx: LowFamilyContext): ((daemonId: string) => bool
 export async function resolveRemoteWorker(ctx: LowFamilyContext, args: any): Promise<RemoteWorkerIdentity | null> {
     const selfDaemonId = readNonEmpty(ctx?.deps?.statusInstanceId);
     if (!selfDaemonId) return null;
+    const prepared = validatePreparedDelivery(MeshRuntimeStore.getInstance().db, args ?? {});
+    if (prepared && !daemonIdsEquivalent(prepared.ownerDaemonId, selfDaemonId)) return prepared;
     const { resolveRemoteWorkerIdentity } = await import('../../mesh/worker-report-forwarded.js');
     return resolveRemoteWorkerIdentity({ bind: args?.bind }, {
         readAssignmentStamp: assignmentStampReader(ctx),
@@ -199,7 +204,7 @@ export function logLocalWorkerRefusal(
 }
 
 /** The command-layer answer for a report result — identical for local and forwarded reports. */
-function toReportResponse(result: WorkerReportResult): Record<string, unknown> & { success: boolean } {
+export function toReportResponse(result: WorkerReportResult): Record<string, unknown> & { success: boolean } {
     if (!result.accepted) {
         return {
             success: false,
@@ -253,7 +258,7 @@ async function refuseInvalidReport(
 ): Promise<Record<string, unknown> & { success: false }> {
     const answer = { success: false as const, error: 'invalid_report', validationErrors: errors };
     try {
-        const { recordRefusedWorkerReport, safeRefusalFields, hasLocalWorkerIdentity } = await import('../../mesh/worker-report.js');
+        const { recordRefusedWorkerReport, recordRefusedWorkerReportForIdentity, safeRefusalFields, hasLocalWorkerIdentity } = await import('../../mesh/worker-report.js');
         const credential = { token: args?.token, bind: args?.bind };
         const raw = args?.report && typeof args.report === 'object' ? args.report as Record<string, unknown> : {};
         const summaryLength = typeof raw.summary === 'string' ? raw.summary.trim().length : null;
@@ -267,8 +272,21 @@ async function refuseInvalidReport(
                     ...(deliveryId ? { deliveryId } : {}),
                     ...(typeof args?.reportedAtMs === 'number' ? { reportedAtMs: args.reportedAtMs } : {}),
                 }, 'report refusal');
-                return { ...answer, ...(owner.receipt ? { receipt: owner.receipt } : {}) };
+                return { ...answer, ...(owner.receipt ? { receipt: owner.receipt } : { receiptPending: true }), ...(owner.error === 'worker_protocol_unsupported' || owner.error === 'forward_failed' ? { provenanceError: owner.error } : {}) };
             }
+        }
+        const prepared = args?.prepared ? validatePreparedDelivery(MeshRuntimeStore.getInstance().db, args) : null;
+        if (prepared && daemonIdsEquivalent(prepared.ownerDaemonId, ctx.deps.statusInstanceId ?? '')) {
+            const db = MeshRuntimeStore.getInstance().db, self = bridgeIdentity(ctx.deps.statusInstanceId ?? '', ctx.deps.statusVersion);
+            const handled = commitLocalBridgeDelivery(db, { protocol: 1, kind: 'refusal', senderDaemonId: self.daemonId, senderCommit: self.commit,
+                senderVersion: self.version, ...prepared, payload: { fields: safeRefusalFields(fields), summaryLength } }, () => {
+                const attempt = MeshRuntimeStore.getInstance().turnStore().getAttempt(prepared.attemptId);
+                if (!attempt || attempt.generation !== prepared.generation || attempt.sessionId !== prepared.sessionId || !daemonIdsEquivalent(attempt.ownerDaemonId, self.daemonId)) return { success: false, error: 'stale_report' };
+                const receipt = recordRefusedWorkerReportForIdentity({ token: '', ...prepared }, { fields, summaryLength },
+                    { generation: prepared.generation, deliveryId: prepared.deliveryId, reportedAtMs: prepared.reportedAtMs });
+                return { ...answer, ...(receipt ? { receipt } : { receiptPending: true }) };
+            });
+            return { ...handled, success: false };
         }
         const receipt = recordRefusedWorkerReport(
             credential,
@@ -288,7 +306,7 @@ async function refuseInvalidReport(
 }
 
 /** The command-layer answer for a progress update — identical for local and forwarded notes. */
-function toProgressResponse(result: WorkerProgressUpdateResult): Record<string, unknown> & { success: boolean } {
+export function toProgressResponse(result: WorkerProgressUpdateResult): Record<string, unknown> & { success: boolean } {
     if (!result.accepted) {
         return {
             success: false,
@@ -350,6 +368,19 @@ async function forwardToOwner(
         ...(remote.attemptId ? { attemptId: remote.attemptId } : {}),
         ...(remote.generation !== undefined ? { generation: remote.generation } : {}),
     };
+    const db = MeshRuntimeStore.getInstance().db;
+    if (readBridgePolicy(db, remote.meshId)) {
+        const self = bridgeIdentity(ctx.deps.statusInstanceId ?? '', ctx.deps.statusVersion);
+        const kind = command === WORKER_REPORT_FORWARD_COMMAND ? 'report' : command === WORKER_PROGRESS_FORWARD_COMMAND ? 'progress' : 'refusal';
+        const content = kind === 'report' ? { report: payload.report } : kind === 'progress' ? { note: payload.note } : { fields: payload.fields, summaryLength: payload.summaryLength };
+        const envelope = { protocol: 1, kind, ownerDaemonId: remote.ownerDaemonId, senderDaemonId: self.daemonId,
+            senderCommit: self.commit, senderVersion: self.version, ...claim, nodeId: remote.nodeId,
+            deliveryId: payload.deliveryId, reportedAtMs: payload.reportedAtMs, payload: content } as BridgeEnvelope;
+        const saved = typeof payload.deliveryId === 'string' ? findBridgeMemberDelivery(db, self.daemonId, payload.deliveryId) : null;
+        if (saved && (saved.sessionId !== remote.sessionId || saved.meshId !== remote.meshId || saved.reportedAtMs !== payload.reportedAtMs || stableBridgeJson(saved.payload) !== stableBridgeJson(content))) return { success: false, error: 'worker_delivery_identity_conflict' };
+        try { return await sendBridgeDelivery(db, saved ?? envelope, dispatch); }
+        catch { return { success: false, error: 'worker_delivery_identity_conflict' }; }
+    }
     let raw: unknown;
     try {
         raw = await dispatch(remote.ownerDaemonId, command, {
@@ -373,12 +404,13 @@ async function forwardToOwner(
     const line = `Forwarded ${what} for session ${remote.sessionId} (task ${remote.taskId ?? '?'} attempt ${remote.attemptId ?? '?'}) to owner ${remote.ownerDaemonId.slice(0, 16)} → ${answer.success === true ? 'accepted' : `refused (${String(answer.error)}${typeof answer.detail === 'string' && answer.detail ? ` — ${answer.detail}` : ''})`}`;
     if (answer.success === true) LOG.info('WorkerReport', line);
     else LOG.warn('WorkerReport', line);
+    if (answer.success !== true && (String(answer.error).includes('request failed decode') || String(answer.error).startsWith('Unknown command:'))) return { ...answer, error: 'worker_protocol_unsupported', detail: 'Owner has not admitted this worker protocol; retry is retained.' };
     return answer;
 }
 
 const CLAIM_KEYS = ['meshId', 'taskId', 'attemptId', 'sessionId', 'nodeId', 'generation'] as const;
 const FORWARD_KEYS = new Set<string>([...CLAIM_KEYS, 'report', 'deliveryId', 'reportedAtMs']);
-const PROGRESS_FORWARD_KEYS = new Set<string>([...CLAIM_KEYS, 'note']);
+const PROGRESS_FORWARD_KEYS = new Set<string>([...CLAIM_KEYS, 'note', 'deliveryId', 'reportedAtMs']);
 
 /**
  * The claim half of a forwarded request, strict: only `allowedKeys` present
@@ -427,15 +459,39 @@ export function decodeForwardedWorkerReport(args: unknown): { claim: ForwardedWo
  * an optional nodeId, and a non-empty `note` string (trimmed, as the local
  * update trims it). Router-internal `_` keys stripped.
  */
-export function decodeForwardedWorkerProgress(args: unknown): { claim: ForwardedWorkerReportClaim; note: string } | null {
+export function decodeForwardedWorkerProgress(args: unknown): { claim: ForwardedWorkerReportClaim; note: string; reportedAtMs?: number; deliveryId?: string } | null {
     const decoded = decodeForwardedClaim(args, PROGRESS_FORWARD_KEYS);
     if (!decoded) return null;
     const note = readNonEmpty(decoded.record.note);
     if (!note) return null;
-    return { claim: decoded.claim, note };
+    if (decoded.record.reportedAtMs !== undefined && !Number.isSafeInteger(decoded.record.reportedAtMs)) return null;
+    if (decoded.record.deliveryId !== undefined && normalizeWorkerDeliveryId(decoded.record.deliveryId) !== decoded.record.deliveryId) return null;
+    return { claim: decoded.claim, note, ...(decoded.record.reportedAtMs !== undefined ? { reportedAtMs: decoded.record.reportedAtMs as number } : {}), ...(decoded.record.deliveryId !== undefined ? { deliveryId: decoded.record.deliveryId as string } : {}) };
 }
 
 export const workerReportHandlers: Record<string, LowFamilyHandler> = {
+    worker_bridge_prepare: async (ctx, args) => {
+        const cached = readPreparedDelivery(MeshRuntimeStore.getInstance().db, args ?? {}, args?.deliveryId);
+        if (cached) return cached.reportedAtMs === args?.reportedAtMs ? { success: true, protocol: 1, prepared: cached } : { success: false, error: 'worker_delivery_identity_conflict' };
+        if (args?.resume === true) return { success: false, error: 'worker_protocol_provenance_unconfirmed' };
+        const { resolveWorkerIdentity, workerIdentityPostdates } = await import('../../mesh/worker-report.js');
+        const local = resolveWorkerIdentity(args);
+        const remote = local ? null : await resolveRemoteWorker(ctx, { bind: args?.bind });
+        const proven = local ?? remote;
+        const db = MeshRuntimeStore.getInstance().db;
+        if (proven && !readBridgePolicy(db, proven.meshId)) return { success: true, protocol: 0, legacy: true };
+        if (!proven || !proven.taskId || !proven.attemptId || !proven.sessionId || !proven.nodeId
+            || !Number.isSafeInteger(args?.reportedAtMs) || args.reportedAtMs > Date.now() + 60_000 || Date.now() - args.reportedAtMs > 60_000
+            || (local && workerIdentityPostdates(local, args.reportedAtMs))) return { success: false, error: 'worker_protocol_provenance_required' };
+        const generation = remote?.generation ?? db.prepare('SELECT generation FROM turn_attempts WHERE attempt_id=?').get(proven.attemptId) as { generation: number } | number | undefined;
+        const exactGeneration = typeof generation === 'number' ? generation : generation?.generation;
+        try {
+            const prepared = rememberPreparedDelivery(db, args, { meshId: proven.meshId, taskId: proven.taskId, attemptId: proven.attemptId,
+                generation: exactGeneration!, sessionId: proven.sessionId, nodeId: proven.nodeId,
+                ownerDaemonId: remote?.ownerDaemonId ?? ctx.deps.statusInstanceId ?? '', deliveryId: args.deliveryId, reportedAtMs: args.reportedAtMs });
+            return { success: true, protocol: 1, prepared };
+        } catch { return { success: false, error: 'worker_delivery_identity_conflict' }; }
+    },
     /**
      * Exchange a session bind for the caller's current task identity.
      *
@@ -492,6 +548,13 @@ export const workerReportHandlers: Record<string, LowFamilyHandler> = {
      * at the tool layer instead of being parsed out of prose.
      */
     worker_report_completion: async (_ctx: LowFamilyContext, args: any) => {
+        if (!args?.prepared) {
+            const { resolveWorkerIdentity } = await import('../../mesh/worker-report.js');
+            const bound = resolveWorkerIdentity(args ?? {}) ?? await resolveRemoteWorker(_ctx, args ?? {});
+            if (bound && readBridgePolicy(MeshRuntimeStore.getInstance().db, bound.meshId)) return { success: false, error: 'worker_protocol_provenance_required' };
+        }
+        const prepared = args?.prepared ? validatePreparedDelivery(MeshRuntimeStore.getInstance().db, args) : null;
+        if (args?.prepared && !prepared) return { success: false, error: 'worker_protocol_provenance_required' };
         try {
             const { acceptWorkerCompletionReport, hasLocalWorkerIdentity } = await import('../../mesh/worker-report.js');
             const { validateWorkerCompletionReport } = await import('../../mesh/worker-report-validation.js');
@@ -504,7 +567,7 @@ export const workerReportHandlers: Record<string, LowFamilyHandler> = {
             // already accepted — the transport timed out on the answer, not the work —
             // gets the same answer back instead of being processed a second time.
             const deliveryId = normalizeWorkerDeliveryId(args?.deliveryId);
-            const replay = recallWorkerDelivery('report', credential, deliveryId);
+            const replay = prepared ? undefined : recallWorkerDelivery('report', credential, deliveryId);
             if (replay) {
                 LOG.info('WorkerReport', `Report delivery ${deliveryId} re-sent after it was already accepted (task ${String(replay.taskId ?? '?')}) — answered from the replay record`);
                 return { ...replay, success: true, duplicate: true };
@@ -524,6 +587,16 @@ export const workerReportHandlers: Record<string, LowFamilyHandler> = {
                     return response;
                 }
             }
+            const apply = () => {
+                const attempt = prepared ? MeshRuntimeStore.getInstance().turnStore().getAttempt(prepared.attemptId) : null;
+                if (prepared && (!attempt || attempt.generation !== prepared.generation || attempt.sessionId !== prepared.sessionId)) return { success: false, error: 'stale_report' };
+                return toReportResponse(acceptWorkerCompletionReport(credential, report, { isSelfDaemon, reportedAtMs }));
+            };
+            if (prepared) {
+                const self = bridgeIdentity(_ctx.deps.statusInstanceId ?? '', _ctx.deps.statusVersion);
+                return commitLocalBridgeDelivery(MeshRuntimeStore.getInstance().db, { protocol: 1, kind: 'report', senderDaemonId: self.daemonId, senderCommit: self.commit,
+                    senderVersion: self.version, ...prepared, payload: { report } }, apply);
+            }
             const result = acceptWorkerCompletionReport(credential, report, { isSelfDaemon, reportedAtMs });
             if (!result.accepted) logLocalWorkerRefusal(`${report.outcome} report`, credential, result.refusal, result.detail);
             response = toReportResponse(result);
@@ -535,6 +608,7 @@ export const workerReportHandlers: Record<string, LowFamilyHandler> = {
     },
 
     [WORKER_REFUSAL_FORWARD_COMMAND]: async (_ctx: LowFamilyContext, args: any) => {
+        if (readBridgePolicy(MeshRuntimeStore.getInstance().db, args?.meshId)) return { success: false, error: 'worker_protocol_provenance_required' };
         const decoded = decodeForwardedClaim(args, new Set([...CLAIM_KEYS, 'generation', 'fields', 'summaryLength', 'deliveryId', 'reportedAtMs']));
         if (!decoded || !decoded.claim.taskId || !decoded.claim.attemptId) return { success: false, error: 'invalid_refusal_envelope' };
         const raw = decoded.record;
@@ -566,6 +640,7 @@ export const workerReportHandlers: Record<string, LowFamilyHandler> = {
      * report then takes the local acceptance body verbatim.
      */
     [WORKER_REPORT_FORWARD_COMMAND]: async (_ctx: LowFamilyContext, args: any) => {
+        if (readBridgePolicy(MeshRuntimeStore.getInstance().db, args?.meshId)) return { success: false, error: 'worker_protocol_provenance_required' };
         const decoded = decodeForwardedWorkerReport(args);
         if (!decoded) return { success: false, error: `${WORKER_REPORT_FORWARD_COMMAND}: request failed decode (bad shape)` };
         const { claim } = decoded;
@@ -599,6 +674,13 @@ export const workerReportHandlers: Record<string, LowFamilyHandler> = {
 
     /** Record a mid-task progress note. Never terminal. */
     worker_progress_update: async (_ctx: LowFamilyContext, args: any) => {
+        if (!args?.prepared) {
+            const { resolveWorkerIdentity } = await import('../../mesh/worker-report.js');
+            const bound = resolveWorkerIdentity(args ?? {}) ?? await resolveRemoteWorker(_ctx, args ?? {});
+            if (bound && readBridgePolicy(MeshRuntimeStore.getInstance().db, bound.meshId)) return { success: false, error: 'worker_protocol_provenance_required' };
+        }
+        const prepared = args?.prepared ? validatePreparedDelivery(MeshRuntimeStore.getInstance().db, args) : null;
+        if (args?.prepared && !prepared) return { success: false, error: 'worker_protocol_provenance_required' };
         const note = typeof args?.note === 'string' ? args.note.trim() : '';
         if (!note) return { success: false, error: 'note required' };
         try {
@@ -608,7 +690,7 @@ export const workerReportHandlers: Record<string, LowFamilyHandler> = {
             // Durable delivery: an already-accepted note re-sent after a transport timeout
             // is answered from the replay record — it must not page the coordinator twice.
             const deliveryId = normalizeWorkerDeliveryId(args?.deliveryId);
-            const replay = recallWorkerDelivery('progress', credential, deliveryId);
+            const replay = prepared ? undefined : recallWorkerDelivery('progress', credential, deliveryId);
             if (replay) return { ...replay, success: true, duplicate: true };
             const reportedAtMs = args?.reportedAtMs;
             let response: Record<string, unknown> & { success: boolean };
@@ -618,10 +700,19 @@ export const workerReportHandlers: Record<string, LowFamilyHandler> = {
             if (!hasLocalWorkerIdentity(credential, { isSelfDaemon: selfDaemonPredicate(_ctx), reportedAtMs })) {
                 const remote = await resolveRemoteWorker(_ctx, args);
                 if (remote) {
-                    response = await forwardToOwner(_ctx, remote, WORKER_PROGRESS_FORWARD_COMMAND, { note }, 'progress note');
+                    response = await forwardToOwner(_ctx, remote, WORKER_PROGRESS_FORWARD_COMMAND, { note, ...(deliveryId ? { deliveryId } : {}), ...(typeof reportedAtMs === 'number' ? { reportedAtMs } : {}) }, 'progress note');
                     rememberWorkerDelivery('progress', credential, deliveryId, response);
                     return response;
                 }
+            }
+            if (prepared) {
+                const self = bridgeIdentity(_ctx.deps.statusInstanceId ?? '', _ctx.deps.statusVersion);
+                return commitLocalBridgeDelivery(MeshRuntimeStore.getInstance().db, { protocol: 1, kind: 'progress', senderDaemonId: self.daemonId, senderCommit: self.commit,
+                    senderVersion: self.version, ...prepared, payload: { note } }, () => {
+                    const attempt = MeshRuntimeStore.getInstance().turnStore().getAttempt(prepared.attemptId);
+                    if (!attempt || attempt.generation !== prepared.generation || attempt.sessionId !== prepared.sessionId) return { success: false, error: 'stale_report' };
+                    return toProgressResponse(acceptWorkerProgressUpdate(credential, note, { reportedAtMs, deliveryId }));
+                });
             }
             const result = acceptWorkerProgressUpdate(credential, note, { reportedAtMs });
             if (!result.accepted) logLocalWorkerRefusal('progress note', credential, result.refusal ?? 'unauthenticated', result.detail);
@@ -640,6 +731,7 @@ export const workerReportHandlers: Record<string, LowFamilyHandler> = {
      * recorded by the local progress body.
      */
     [WORKER_PROGRESS_FORWARD_COMMAND]: async (_ctx: LowFamilyContext, args: any) => {
+        if (readBridgePolicy(MeshRuntimeStore.getInstance().db, args?.meshId)) return { success: false, error: 'worker_protocol_provenance_required' };
         const decoded = decodeForwardedWorkerProgress(args);
         if (!decoded) return { success: false, error: `${WORKER_PROGRESS_FORWARD_COMMAND}: request failed decode (bad shape)` };
         const { claim, note } = decoded;
@@ -651,7 +743,7 @@ export const workerReportHandlers: Record<string, LowFamilyHandler> = {
                 senderDaemonId,
                 nodeDaemonId: await ownerRosterNodeDaemonLookup(_ctx, claim.meshId),
             };
-            const result = acceptForwardedWorkerProgressUpdate(claim, note, { sender, isSelfDaemon: selfDaemonPredicate(_ctx) });
+            const result = acceptForwardedWorkerProgressUpdate(claim, note, { sender, isSelfDaemon: selfDaemonPredicate(_ctx), reportedAtMs: decoded.reportedAtMs, deliveryId: decoded.deliveryId });
             // ONE owner-side line per forwarded progress note.
             if (result.accepted) {
                 LOG.info('WorkerReport', `Forwarded progress note for ${claimLabel} → accepted for task ${result.taskId ?? '?'}${result.surfacedToCoordinator ? ' (surfaced to coordinator)' : ''}`);
@@ -667,6 +759,7 @@ export const workerReportHandlers: Record<string, LowFamilyHandler> = {
 };
 
 export const workerReportSpecs = defineCommandSpecs('low', workerReportHandlers, {
+    worker_bridge_prepare: { sources: ['ipc', 'standalone'] },
     // Only another daemon's relay may present a forwarded report or progress
     // note (never a dashboard, the API, or a local worker MCP over IPC).
     // The router additionally requires the sender on the claimed mesh's roster;

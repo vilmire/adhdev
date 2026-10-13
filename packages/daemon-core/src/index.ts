@@ -295,6 +295,7 @@ export type { CurrentGlobalInstallSurface, PinnedGlobalInstallCommand, NpmExecOp
 export { DaemonStatusReporter, buildCloudStatusReportPayload, observeP2PStatusSummary } from './status/reporter.js';
 export { buildSessionEntries, findCdpManager, isCdpConnected, isCoordinatorSpawnedHiddenWorker, resolveSurfaceHidden, resolveMuted, resolveSpawnedSessionHideMute } from './status/builders.js';
 export { buildStatusSnapshot, buildMachineInfo, buildAvailableProviders, getLastDisplayMessage } from './status/snapshot.js';
+export { BRIDGE_PROTOCOL } from './mesh/worker-bridge-protocol.js';
 export { getDaemonBuildInfo } from './build-info.js';
 export type { DaemonBuildInfo } from './build-info.js';
 export {

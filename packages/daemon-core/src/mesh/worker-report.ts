@@ -45,6 +45,7 @@
  *     out here would create a second truth about what "already terminal" means.
  */
 
+import { afterBridgeCommit } from './worker-bridge-transaction.js';
 import { randomUUID } from 'crypto';
 import {
     WORKER_BRANCH_STATES,
@@ -802,10 +803,10 @@ export function acceptWorkerCompletionReportForIdentity(
     // Written BEFORE the terminal commit: the commit can synchronously trigger
     // downstream dispatch, and a late PTY completion for this same turn must find
     // the authoritative text already present rather than racing it.
-    REPORTED_SUMMARY_STORE.set(summaryKey(identity.meshId, identity.taskId), {
+    afterBridgeCommit(MeshRuntimeStore.getInstance().db, () => REPORTED_SUMMARY_STORE.set(summaryKey(identity.meshId, identity.taskId), {
         summary: report.summary,
         recordedAtMs: nowMs,
-    });
+    }));
 
     // (1b) C-W8: the causal fence on the TURN LEDGER (the legacy Stage-5
     // proposeTurnCompletion fence is retired). A report is a better SUMMARY,
@@ -995,13 +996,13 @@ export function acceptWorkerCompletionReportForIdentity(
         }
     } catch { /* best-effort — see comment above */ }
 
-    LOG.info(
+    afterBridgeCommit(store.db, () => LOG.info(
         'WorkerReport',
         `Accepted ${report.outcome} report for task ${identity.taskId}`
         + (identity.attemptId ? ` attempt ${identity.attemptId}` : '')
         + (commit.duplicate ? ' (duplicate replay)' : '')
         + (handoffNoteRecorded ? ' with handoff note' : ''),
-    );
+    ));
 
     return {
         accepted: true,

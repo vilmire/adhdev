@@ -20,6 +20,8 @@ const EXPECTED_CLASSES: Record<string, string> = {
     mesh_forward_event: 'node_owner',
     // member → coordinator: its own node's git state (coordinator-held node state)
     mesh_node_git_report: 'node_owner',
+    worker_bridge_capabilities: 'roster',
+    worker_bridge_delivery: 'roster',
     worker_report_forwarded: 'roster',
     worker_report_refusal_forwarded: 'roster',
     worker_progress_forwarded: 'roster',

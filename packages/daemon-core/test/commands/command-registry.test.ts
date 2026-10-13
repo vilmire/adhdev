@@ -193,6 +193,7 @@ const LEGACY_LOW_FAMILY_COMMANDS = [
     'set_machine_nickname', 'get_quota_account_label', 'set_quota_account_label', 'get_quota_provider_enabled',
     'set_quota_provider_enabled', 'get_mesh_ledger', 'get_mesh_ledger_slice', 'list_mesh_notes',
     'record_mesh_note', 'forget_mesh_note', 'get_mesh_node_logs',
+    'worker_bridge_prepare', 'worker_bridge_capabilities', 'worker_bridge_delivery', 'worker_bridge_control', 'worker_bridge_status', 'worker_bridge_verify',
     'worker_resolve_task', 'worker_report_completion',
     // NOT a legacy-table migration: F7 (2026-09-25) — a remote worker daemon
     // relays a worker report to the attempt's owner daemon (mesh source only).

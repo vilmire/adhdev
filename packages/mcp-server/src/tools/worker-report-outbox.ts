@@ -25,8 +25,8 @@
  *  4. BACKGROUND DELIVERY. Queued entries are re-sent with exponential backoff, on every
  *     later worker tool call, and on MCP-server shutdown; entries a previous MCP-server
  *     process left behind (same bind ⇒ same directory) are picked up at startup. An entry is
- *     removed only on a DEFINITIVE daemon answer (accepted, or a non-retryable refusal) or
- *     when it ages past {@link WORKER_OUTBOX_MAX_AGE_MS}. Outcomes reached in the background
+ *     removed only on a DEFINITIVE daemon answer (accepted, or a non-retryable refusal); it is
+ *     quarantined, without deletion, when it ages past {@link WORKER_OUTBOX_MAX_AGE_MS}. Outcomes reached in the background
  *     are appended to the worker's next tool response.
  *
  * ─── Why re-sending is safe ─────────────────────────────────────────────
@@ -68,8 +68,8 @@ const DAEMON_COMMAND: Record<WorkerDeliveryKind, string> = {
  * it means "no active attempt to record against", which a retry cannot fix.
  */
 const RETRYABLE_REFUSALS: Record<WorkerDeliveryKind, ReadonlySet<string>> = {
-  report: new Set(['forward_failed', 'storage_failed', 'relay_result_malformed']),
-  progress: new Set(['forward_failed', 'relay_result_malformed']),
+  report: new Set(['forward_failed', 'storage_failed', 'relay_result_malformed', 'worker_protocol_unsupported', 'worker_protocol_provenance_required', 'worker_delivery_identity_conflict']),
+  progress: new Set(['forward_failed', 'storage_failed', 'relay_result_malformed', 'worker_protocol_unsupported', 'worker_protocol_provenance_required', 'worker_delivery_identity_conflict']),
 };
 
 /** A handler-level catch-all (`{ success:false, error: e.message }`) that names a transient condition. */
@@ -86,6 +86,10 @@ interface WorkerOutboxEntry {
   createdAtMs: number;
   attempts: number;
   lastError?: string;
+  quarantined?: string;
+  prepared?: Record<string, unknown>;
+  preparationIntent?: boolean;
+  legacyMode?: boolean;
   /** The daemon command's payload minus credentials: `{ report }` or `{ note }`. */
   payload: Record<string, unknown>;
 }
@@ -125,6 +129,7 @@ export function resolveWorkerOutboxDir(
 export class WorkerOutboxStore {
   private readonly entries = new Map<string, WorkerOutboxEntry>();
   private diskOk: boolean;
+  private corruptFiles = 0;
 
   constructor(private readonly dir: string | null, private readonly log: (line: string) => void = () => {}) {
     this.diskOk = !!dir;
@@ -140,11 +145,13 @@ export class WorkerOutboxStore {
             && typeof parsed.createdAtMs === 'number' && parsed.payload && typeof parsed.payload === 'object') {
             this.entries.set(parsed.id, parsed);
           } else {
-            fs.rmSync(file, { force: true });
+            this.corruptFiles += 1;
+            this.log(`quarantined unreadable outbox file ${name}; preserved on disk`);
           }
         } catch {
           // A torn write from a crashed predecessor: unreadable, so unrecoverable.
-          try { fs.rmSync(file, { force: true }); } catch { /* ignore */ }
+          this.corruptFiles += 1;
+          this.log(`quarantined unreadable outbox file ${name}; preserved on disk`);
         }
       }
     } catch (e: any) {
@@ -157,6 +164,9 @@ export class WorkerOutboxStore {
     return path.join(this.dir!, `${id}.json`);
   }
 
+  get quarantinedFileCount(): number { return this.corruptFiles; }
+  get durable(): boolean { return this.diskOk; }
+
   put(entry: WorkerOutboxEntry): void {
     this.entries.set(entry.id, entry);
     if (!this.diskOk) return;
@@ -166,6 +176,7 @@ export class WorkerOutboxStore {
       fs.writeFileSync(tmp, JSON.stringify(entry), { mode: 0o600 });
       fs.renameSync(tmp, file);
     } catch (e: any) {
+      this.diskOk = false;
       this.log(`could not persist outbox entry ${entry.id} (${e?.message || e}); it is kept in memory only`);
     }
   }
@@ -205,6 +216,7 @@ interface WorkerReportDeliveryOptions {
   sleep?: (ms: number) => Promise<void>;
   /** Sends made while the tool call is still open. Default 2 (≈ 2 × 15s IPC budget). */
   inlineAttempts?: number;
+  strictProtocol?: boolean;
   inlineBackoffMs?: number;
   retryBaseMs?: number;
   retryMaxMs?: number;
@@ -252,7 +264,7 @@ export class WorkerReportDelivery {
 
   /** Entries still awaiting a definitive daemon answer. */
   pendingCount(): number {
-    return this.store.list().length;
+    return this.store.list().length + this.store.quarantinedFileCount;
   }
 
   /** True shortly after a send failed at the transport — callers skip optional round trips. */
@@ -285,13 +297,28 @@ export class WorkerReportDelivery {
         payload,
       };
     }
+    const resumePreparation = entry.preparationIntent === true;
+    if (this.opts.strictProtocol) { entry.preparationIntent = true; this.store.put(entry); }
+    if (this.opts.strictProtocol && !this.store.durable) return { status: 'answered', result: { success: false, error: 'outbox_storage_failed', hint: 'No report was sent; repair local durable storage and call again.' }, attempts: entry.attempts };
+    if (this.opts.strictProtocol && !entry.prepared && !entry.legacyMode && !entry.quarantined) {
+      try {
+        const proof: any = await this.opts.transport.command('worker_bridge_prepare', { ...this.opts.credentials, deliveryId: entry.id, reportedAtMs: entry.createdAtMs, resume: resumePreparation });
+        if (proof?.success === true && proof?.protocol === 0 && proof?.legacy === true) entry.legacyMode = true;
+        else {
+          if (proof?.success !== true || proof?.protocol !== 1 || !proof?.prepared) throw new Error('worker_protocol_provenance_required');
+          entry.prepared = proof.prepared;
+        }
+      } catch { entry.quarantined = 'provenance_unavailable_at_creation'; }
+    }
     this.store.put(entry);
+    if (entry.quarantined) { this.schedule(); return { status: 'answered', result: { success: false, error: 'worker_delivery_quarantined', detail: entry.quarantined }, attempts: entry.attempts }; }
 
     let lastError = '';
     for (let i = 0; i < this.inlineAttempts; i += 1) {
       const attempt = await this.sendOnce(entry);
       if (attempt.kind === 'answered') {
-        this.store.remove(entry.id);
+        if (!attempt.result?.receiptPending) this.store.remove(entry.id);
+        else this.schedule();
         return { status: 'answered', result: attempt.result, attempts: entry.attempts };
       }
       lastError = attempt.error;
@@ -317,18 +344,29 @@ export class WorkerReportDelivery {
     this.flushing = (async () => {
       try {
         for (const entry of this.store.list()) {
+          if (entry.quarantined === 'provenance_unavailable_at_creation' && this.now() - entry.createdAtMs <= this.maxAgeMs) {
+            try {
+              const proof: any = await this.opts.transport.command('worker_bridge_prepare', { ...this.opts.credentials, deliveryId: entry.id, reportedAtMs: entry.createdAtMs, resume: true });
+              if (proof?.success === true && proof?.protocol === 1 && proof?.prepared) { entry.prepared = proof.prepared; delete entry.quarantined; this.store.put(entry); }
+            } catch { /* retain the unbound report; never infer a new attempt */ }
+          }
+          if (entry.quarantined && entry.quarantined !== 'provenance_unavailable_at_creation') continue;
           if (this.now() - entry.createdAtMs > this.maxAgeMs) {
-            this.store.remove(entry.id);
+            if (entry.quarantined === 'expired_undelivered') continue;
+            entry.quarantined = 'expired_undelivered';
+            this.store.put(entry);
             const what = entry.kind === 'report' ? 'completion report' : 'progress note';
             this.notices.push(
               `A queued ${what} (${entry.id}) could not be delivered within ${Math.round(this.maxAgeMs / 60_000)} min `
-              + `(last error: ${entry.lastError || 'unknown'}) and was dropped. Put its content in your final message.`,
+              + `(last error: ${entry.lastError || 'unknown'}) is quarantined locally for review; it was not dropped or accepted.`,
             );
             this.log(`${entry.kind} ${entry.id} expired undelivered`);
             continue;
           }
+          if (entry.quarantined) continue;
           const attempt = await this.sendOnce(entry);
           if (attempt.kind === 'answered') {
+            if (attempt.result?.receiptPending) { this.store.put(entry); continue; }
             this.store.remove(entry.id);
             const rendered = this.opts.describeAnswer?.(entry.kind, attempt.result)
               ?? (attempt.result?.success === true ? 'delivered' : `refused (${attempt.result?.error || 'unknown_error'})`);
@@ -341,7 +379,7 @@ export class WorkerReportDelivery {
         }
       } finally {
         this.flushing = null;
-        if (this.store.list().length) this.schedule();
+        if (this.store.list().some((entry) => !entry.quarantined || entry.quarantined === 'provenance_unavailable_at_creation')) this.schedule();
       }
     })();
     return this.flushing;
@@ -374,6 +412,7 @@ export class WorkerReportDelivery {
       result = await this.opts.transport.command(DAEMON_COMMAND[entry.kind], {
         ...this.opts.credentials,
         ...entry.payload,
+        ...(entry.prepared ? { prepared: entry.prepared } : {}),
         deliveryId: entry.id,
         reportedAtMs: entry.createdAtMs,
       });
@@ -382,7 +421,7 @@ export class WorkerReportDelivery {
     }
     const error = typeof result?.error === 'string' ? result.error : '';
     if (result?.success !== true
-      && (RETRYABLE_REFUSALS[entry.kind].has(error) || TRANSIENT_ERROR_TEXT.test(error))) {
+      && (RETRYABLE_REFUSALS[entry.kind].has(error) || error.includes('request failed decode') || error.startsWith('Unknown command: worker_') || TRANSIENT_ERROR_TEXT.test(error))) {
       const detail = typeof result?.detail === 'string' && result.detail ? ` — ${result.detail}` : '';
       return this.retryable(entry, `${error}${detail}`, false);
     }

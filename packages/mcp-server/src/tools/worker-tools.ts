@@ -458,6 +458,7 @@ export function renderReportResult(result: any, ignoredHandoffKeys: string[] = [
       .map((e: any) => `  - ${e.field || '(root)'}: ${e.message}`)
       .join('\n');
     const receipt = result.receipt && typeof result.receipt === 'object' ? result.receipt : null;
+    const pendingLine = result.receiptPending === true ? '\nOwner refusal receipt is pending; content-free provenance will retry. Correct these fields now; no task completion was recorded.' : '';
     const receiptLine = receipt && typeof receipt.taskId === 'string' && typeof receipt.attemptId === 'string'
       ? `\nThis refusal was ${receipt.recorded === false ? 'attributed (but its audit row could not be written)' : 'recorded'} against task ${receipt.taskId} `
         + `(attempt ${receipt.attemptId}${typeof receipt.generation === 'number' ? `, generation ${receipt.generation}` : ''}). `
@@ -468,7 +469,7 @@ export function renderReportResult(result: any, ignoredHandoffKeys: string[] = [
           : 'No open correction window was confirmed; the owner will revalidate a corrected call.')
       : '';
     return {
-      text: `report_completion rejected — fix these and call again:\n${details}${receiptLine}`,
+      text: `report_completion rejected — fix these and call again:\n${details}${receiptLine}${pendingLine}`,
       isError: true,
     };
   }

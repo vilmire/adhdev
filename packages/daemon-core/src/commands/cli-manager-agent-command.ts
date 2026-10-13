@@ -5,6 +5,8 @@
  *
  * Split out of cli-manager.ts (file-size gate).
  */
+import { bridgeDispatchFrozen } from '../mesh/worker-bridge.js';
+import { MeshRuntimeStore } from '../mesh/mesh-runtime-store.js';
 import type { SubmitOutcome } from '@adhdev/mesh-shared';
 import { DuplicateMeshDispatchError } from '../mesh/mesh-duplicate-dispatch.js';
 import { SessionBusyWithTaskError } from '../mesh/mesh-session-busy-dispatch.js';
@@ -27,6 +29,8 @@ export type CliAgentCommandHost = Pick<DaemonCliManager, 'deps' | 'findAdapter' 
 export async function agentCommand(host: CliAgentCommandHost, args: AgentCommandArgs): Promise<CommandResult> {
     const agentType = args?.agentType || args?.cliType;
     const action = args?.action;
+    const bridgeMesh = readMeshContext(args)?.meshId;
+    if (action === 'send_chat' && bridgeMesh && bridgeDispatchFrozen(MeshRuntimeStore.getInstance().db, bridgeMesh)) throw new Error('worker_bridge_dispatch_frozen');
     if (!agentType || !action) throw new Error('agentType and action required');
 
     // WTCLAIM (B): a mesh dispatch that named a node (meshContext.nodeId)

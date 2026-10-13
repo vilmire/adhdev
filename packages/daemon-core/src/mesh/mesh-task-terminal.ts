@@ -22,6 +22,7 @@
  * (mesh-work-queue.ts propagateDependencyFailure).
  */
 
+import { afterBridgeCommit } from './worker-bridge-transaction.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { endTaskDispatchInFlight } from './mesh-task-inflight.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue-types.js';
@@ -92,7 +93,7 @@ export function commitTaskTerminal(terminal: MeshTerminalCommitInput): MeshTermi
     });
     // Idempotent post-commit cleanup: the replay fence re-enters with
     // duplicate:true for an already-terminal row, so this may run more than once.
-    if (result.committed) afterTaskTerminalCommitted(terminal.meshId, terminal.taskId);
+    if (result.committed) afterBridgeCommit(store.db, () => afterTaskTerminalCommitted(terminal.meshId, terminal.taskId));
     return result;
 }
 

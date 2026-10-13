@@ -209,7 +209,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
     // Durable report delivery (worker-report-outbox.ts): a report/note the daemon does not
     // answer in time is kept and re-sent instead of being lost. Entries a previous MCP
     // process for this same worker left behind are flushed right away.
-    const delivery = new WorkerReportDelivery({ transport, credentials, describeAnswer: describeWorkerDeliveryAnswer });
+    const delivery = new WorkerReportDelivery({ transport, credentials, strictProtocol: true, describeAnswer: describeWorkerDeliveryAnswer });
     delivery.kick();
     server.onclose = () => {
       // Best-effort final attempt; anything still undelivered stays on disk for a successor.

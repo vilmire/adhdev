@@ -40,6 +40,8 @@ import { daemonLifecycleSpecs } from './low-family/daemon-lifecycle.js';
 import { meshLedgerSpecs } from './low-family/mesh-ledger.js';
 import { turnLedgerIpcSpecs } from './low-family/turn-ledger-ipc.js';
 import { meshNodeLogsSpecs } from './low-family/mesh-node-logs.js';
+import { workerBridgeSpecs } from './low-family/worker-bridge.js';
+import { resumeBridgeDeliveries, readBridgePolicy, BRIDGE_CAPABILITY_COMMAND, BRIDGE_DELIVERY_COMMAND, bridgeDispatchFrozen } from '../mesh/worker-bridge.js';
 import { workerReportSpecs } from './low-family/worker-report.js';
 import { workerMailboxSpecs } from './low-family/worker-mailbox.js';
 import { workerPeerContextSpecs } from './low-family/worker-peer-context.js';
@@ -73,6 +75,7 @@ import { LocalMeshNodeGitWatch } from '../mesh/local-mesh-node-git-watch.js';
 import { createFileMeshNodeStatePushPersistence } from '../mesh/mesh-node-state-push-store.js';
 import { handshakeMeshMemberDaemon, restoreMemberNodeStatePush, type MeshNodeStateLifecyclePort } from './mesh-node-state-lifecycle.js';
 import { collectMemberWorktreeNodes, type MemberWorktreeAdoptionResult, type PersistRemoteWorktreeNodeOutcome } from '../mesh/mesh-remote-worktree-membership.js';
+import { MeshRuntimeStore } from '../mesh/mesh-runtime-store.js';
 import { randomUUID } from 'crypto';
 import { MESH_NODE_STATE_NUDGE_TIMEOUT_MS, nudgeMeshNodeStatePush, readLocalMeshNodeRuntime, subscribeMeshNodeRuntimePush } from './mesh-node-runtime-io.js';
 import { getGitRepoStatus } from '../git/git-status.js';
@@ -313,6 +316,7 @@ export function getDaemonCommandRegistry(): CommandRegistry {
             ...turnLedgerIpcSpecs,
             ...meshNodeLogsSpecs,
             ...workerReportSpecs,
+            ...workerBridgeSpecs,
             ...workerMailboxSpecs,
             ...workerPeerContextSpecs,
             ...transcriptReplicaSpecs,
@@ -513,6 +517,15 @@ export class DaemonCommandRouter {
 
     constructor(deps: CommandRouterDeps) {
         this.deps = deps;
+        if (deps.dispatchMeshCommand) {
+            let running = false;
+            const pump = setInterval(() => {
+                if (running) return;
+                running = true;
+                void resumeBridgeDeliveries(deps.dispatchMeshCommand!).catch(() => {}).finally(() => { running = false; });
+            }, 10_000);
+            pump.unref();
+        }
         this.meshNodeGitState = deps.meshNodeGitStateStore ?? new MeshNodeGitStateStore();
         this.meshNodeGitRefresher = new MeshNodeGitRefresher({
             store: this.meshNodeGitState,
@@ -844,6 +857,8 @@ export class DaemonCommandRouter {
         // both per-mesh topics as soon as that existing identifier arrives; the
         // seqscribe activation hook re-advertises grants on live peer sessions.
         const revealedMeshIds = meshIdsRevealedByCommandArgs(normalizedArgs);
+        const newMeshDispatch = ['launch_cli','launch_mesh_coordinator'].includes(cmd) || (['agent_command','send_chat'].includes(cmd) && (!normalizedArgs.action || normalizedArgs.action === 'send_chat'));
+        if (newMeshDispatch && revealedMeshIds.some((meshId) => bridgeDispatchFrozen(MeshRuntimeStore.getInstance().db, meshId))) return { success: false, error: 'worker_bridge_dispatch_frozen' };
         if (revealedMeshIds.length > 0) {
             const activated = activateKnownMeshTopics(revealedMeshIds);
             if (activated > 0) {
@@ -945,7 +960,17 @@ export class DaemonCommandRouter {
      * or null to proceed.
      */
     private async gateMeshSender(cmd: string, spec: CommandSpec, args: Record<string, unknown>): Promise<CommandRouterResult | null> {
-        const verdict = await evaluateMeshSender(spec.meshSender, args, this.meshSenderGateDeps());
+        const gateDeps = this.meshSenderGateDeps();
+        // Only B's two new commands can use the explicit staged operator roster
+        // to bootstrap an idle member whose legacy inline cache died on restart.
+        if (cmd === BRIDGE_CAPABILITY_COMMAND || cmd === BRIDGE_DELIVERY_COMMAND) {
+            const policy = readBridgePolicy(MeshRuntimeStore.getInstance().db, String(args.meshId ?? ''));
+            if (policy?.roster) {
+                const nativeLookup = gateDeps.getLocalMesh;
+                gateDeps.getLocalMesh = async (meshId) => await nativeLookup(meshId) ?? { id: policy.meshId, nodes: policy.roster!.map((node) => ({ id: node.nodeId, daemonId: node.daemonId })) };
+            }
+        }
+        const verdict = await evaluateMeshSender(spec.meshSender, args, gateDeps);
         return verdict.ok ? null : meshSenderRefusalResult(cmd, verdict);
     }
 

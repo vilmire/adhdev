@@ -24,6 +24,7 @@
 // consumer (C-W3) through this same `observe`.
 // ---------------------------------------------------------------------------
 
+import { afterBridgeCommit } from '../worker-bridge-transaction.js';
 import { randomUUID } from 'crypto';
 import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import type { Database as DatabaseHandle } from 'better-sqlite3';
@@ -380,7 +381,7 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
         const entry = buildForwardedEvidenceEntry(evidence, { attemptId: ref.attemptId, generation: ref.generation, ownerDaemonId: owner.daemonId });
         txn(() => store.insertEvent(evidenceRow(evidence, { verdict: 'forwarded', fromState: null, toState: null, attempt: null, notes: [] }, nowMs, opts, { meshId: owner.meshId, entry })));
         counters.forwarded++;
-        if (autoFlush) void flushPublish();
+        if (autoFlush) afterBridgeCommit(deps.db, () => { void flushPublish(); });
         return { verdict: 'forwarded', attempt: null, effects: [] };
     }
 
@@ -424,6 +425,7 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
         for (const step of steps) {
             if (step.result.verdict === 'rejected') continue;
             logReportGate(step.result.rule, step.result.attempt);
+            afterBridgeCommit(deps.db, () => {
             const post = runPostCommitEffects(ports, step.result.effects, {
                 attempt: step.result.attempt,
                 nowMs,
@@ -437,6 +439,7 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
                 },
             });
             counters.missingPorts += post.missingPort;
+            });
             if (isPublishableAttempt(step.result.attempt)) publish = true;
             for (const effect of step.result.effects) {
                 if (effect.kind !== 'reevaluate' || !effect.evidenceId) continue;
@@ -445,7 +448,7 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
                 if (again) observe(again, opts);
             }
         }
-        if (autoFlush && publish) void flushPublish();
+        if (autoFlush && publish) afterBridgeCommit(deps.db, () => { void flushPublish(); });
         return {
             verdict: result.verdict,
             ...(result.rule ? { rule: result.rule } : {}),
