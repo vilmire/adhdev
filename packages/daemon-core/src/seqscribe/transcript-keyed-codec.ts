@@ -1,3 +1,5 @@
+import { readOutgoingReceipt, type OutgoingReceipt } from './outgoing-receipt.js';
+export { readOutgoingReceipt, sameOutgoingAttempt, outgoingInputDigest, type OutgoingReceipt } from './outgoing-receipt.js';
 /**
  * `session.<safeSessionId>.chat` keyed wire contract — design 2026-09-28
  * (message-keyed storage) §4.2–§4.6.
@@ -124,6 +126,9 @@ export interface ChatMsgV2 {
     readonly streaming: boolean | null;
     readonly senderName: string | null;
     readonly toolName: string | null;
+    readonly sourceMessageId?: string | null;
+    readonly runtimeInputAck?: boolean;
+    readonly outgoingReceipt?: OutgoingReceipt | null;
     readonly receivedAt: number | null;
     readonly timestamp: number | null;
     /** A truncated tool bubble the daemon can expand by `messageId` (§5.9). */
@@ -264,6 +269,9 @@ export interface ReplicatedTranscriptMessageV2 {
     readonly bubbleState: ChatBubbleState | null;
     readonly senderName: string | null;
     readonly toolName: string | null;
+    readonly sourceMessageId?: string | null;
+    readonly runtimeInputAck?: boolean;
+    readonly outgoingReceipt?: OutgoingReceipt | null;
     readonly streaming: boolean | null;
     readonly expandable: boolean;
     readonly srcId: string | null;
@@ -452,6 +460,9 @@ export function encodeChatMessageHead(candidate: ChatMessageCandidate, stamp: Ch
         streaming: meta ? booleanField(meta.streaming) : null,
         senderName: stringField(candidate.senderName),
         toolName: stringField(candidate.toolName),
+        ...(meta && typeof meta.sourceMessageId === 'string' ? { sourceMessageId: meta.sourceMessageId } : {}),
+        ...(meta?.runtimeInputAck === true ? { runtimeInputAck: true } : {}),
+        ...(readOutgoingReceipt(meta?.outgoingReceipt) ? { outgoingReceipt: readOutgoingReceipt(meta?.outgoingReceipt) } : {}),
         receivedAt: numberField(candidate.receivedAt),
         timestamp: numberField(candidate.timestamp),
         expandable: candidate.expandable === true,
@@ -726,6 +737,9 @@ export function chatMessageFromWire(head: ChatMsgV2, content: string): Replicate
         bubbleState: head.bubbleState,
         senderName: head.senderName,
         toolName: head.toolName,
+        ...(typeof head.sourceMessageId === 'string' ? { sourceMessageId: head.sourceMessageId } : {}),
+        ...(head.runtimeInputAck === true ? { runtimeInputAck: true } : {}),
+        ...(readOutgoingReceipt(head.outgoingReceipt) ? { outgoingReceipt: readOutgoingReceipt(head.outgoingReceipt) } : {}),
         streaming: head.streaming,
         expandable: head.expandable === true,
         srcId: head.srcId,

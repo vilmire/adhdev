@@ -1,3 +1,4 @@
+import type { OutgoingReceipt } from '../seqscribe/outgoing-receipt.js';
 /**
  * CliProviderInstance — Runtime instance for CLI Provider
  *
@@ -583,8 +584,8 @@ export class CliProviderInstance implements ProviderInstance {
         }
     }
 
-    recordAcknowledgedUserInput(input: InputEnvelope | string, sourceMessageId?: string): void {
-        runtimeMessages.recordAcknowledgedUserInput(this, input, sourceMessageId);
+    recordAcknowledgedUserInput(input: InputEnvelope | string, sourceMessageId?: string, receipt?: OutgoingReceipt): void {
+        runtimeMessages.recordAcknowledgedUserInput(this, input, sourceMessageId, receipt);
     }
     antigravityClaimOwner(): string { return antigravityClaimOwner(this); }
 

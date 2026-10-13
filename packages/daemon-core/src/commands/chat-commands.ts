@@ -17,6 +17,7 @@ export { __resetProviderSessionPinsForTest, __getProviderSessionPinForTest } fro
 export { handleExpandToolBlock, resolveToolBlockRefByMessageId } from './chat-commands-expand-tool.js';
 export {
     handleSendChat,
+    handleOutgoingReceipts,
     handleCancelQueuedChat,
     handleListChats,
     handleNewChat,

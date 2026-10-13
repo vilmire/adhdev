@@ -80,17 +80,15 @@ function PendingQueueStripImpl({
 }: PendingQueueStripProps) {
     const { t } = useTranslation();
 
-    // Only bodies the daemon confirmed it PARKED. An entry whose send is still
-    // in its round trip is shown by the optimistic transcript bubble instead —
-    // it may yet turn out to have been delivered outright, and pinning it would
-    // claim a wait that is not happening.
+    // Show parked bodies and unresolved native submissions. Explicit uncertainty
+    // prevents this placement from claiming the body is still in the FIFO.
     //
     // An entry without an id is skipped rather than rendered action-less: both
     // controls address exactly one FIFO entry by id, and Cancel in particular is
     // destructive, so a row that cannot name its target would be a button that
     // acts on "whatever is current". Only the legacy single-entry prop can
     // produce one, and that path keeps its in-transcript bubble.
-    const waiting = entries.filter(entry => entry.queued === true && !!entry.id);
+    const waiting = entries.filter(entry => (entry.queued === true || entry.deliveryUncertain === true) && !!entry.id);
     if (waiting.length === 0) return null;
 
     // The region's own label must not out-live the claim its rows are making: a
@@ -98,7 +96,7 @@ function PendingQueueStripImpl({
     // would tell a screen-reader user the exact thing this change exists to stop
     // saying. Any still-waiting row keeps the waiting label, since that is then
     // true of the region as a whole.
-    const hasLiveWait = waiting.some(entry => entry.stale !== true);
+    const hasLiveWait = waiting.some(entry => entry.stale !== true && !entry.deliveryUncertain);
     const regionLabel = hasLiveWait ? t('chat.waitingToSendAria') : t('chat.notDeliveredAria');
 
     return (
@@ -117,6 +115,7 @@ function PendingQueueStripImpl({
                     // ★ (QUEUED-SEND-STUCK-FOREVER) Marks a body that has waited past
                     // the window in which "waiting to send" is still a true statement.
                     // See the marker below for what changes when it is set.
+                    data-chat-delivery-uncertain={entry.deliveryUncertain ? 'true' : undefined}
                     data-chat-queued-stale={entry.stale === true ? 'true' : undefined}
                 >
                     {/* `.chat-bubble` + `.chat-bubble-user` is the transcript's own
@@ -128,6 +127,7 @@ function PendingQueueStripImpl({
                         title={entry.content}
                     >
                         <div className="chat-pending-queue-body">{entry.content}</div>
+                        {entry.deliveryUncertain && <div className="text-2xs" role="status">{t(entry.outgoingReceipt?.state === 'failed' ? 'chat.deliveryFailed' : 'chat.deliveryUncertain')}</div>}
                         {/* The undelivered marker. A glyph rather than a sentence:
                             it has to sit on EVERY waiting line, and a sentence
                             repeated down the strip is what made the queue read as a
@@ -152,10 +152,10 @@ function PendingQueueStripImpl({
                                 ? 'chat-pending-queue-clock chat-pending-queue-stale'
                                 : 'chat-pending-queue-clock'}
                             role="img"
-                            aria-label={entry.stale === true ? t('chat.notDeliveredAria') : t('chat.waitingToSendAria')}
-                            title={entry.stale === true ? t('chat.notDelivered') : t('chat.waitingToSendAria')}
+                            aria-label={entry.deliveryUncertain ? t('chat.deliveryUncertain') : entry.stale === true ? t('chat.notDeliveredAria') : t('chat.waitingToSendAria')}
+                            title={entry.deliveryUncertain ? t('chat.deliveryUncertain') : entry.stale === true ? t('chat.notDelivered') : t('chat.waitingToSendAria')}
                         >
-                            {entry.stale === true ? '⚠' : '⏱'}
+                            {entry.deliveryUncertain || entry.stale === true ? '⚠' : '⏱'}
                         </span>
                     </div>
                     {onSendNow && (
@@ -169,7 +169,7 @@ function PendingQueueStripImpl({
                         <button
                             type="button"
                             onClick={() => onSendNow(entry.id)}
-                            disabled={isSendingNow}
+                            disabled={isSendingNow || entry.deliveryUncertain || (entry.requiresReceipt && !entry.outgoingReceipt)}
                             className="chat-pending-queue-send"
                             aria-label={t('chat.sendNowAria')}
                             title={t('chat.sendNowTitle')}
@@ -190,7 +190,7 @@ function PendingQueueStripImpl({
                         <button
                             type="button"
                             onClick={() => onCancelQueued(entry.id)}
-                            disabled={isSendingNow}
+                            disabled={isSendingNow || (entry.deliveryUncertain && entry.outgoingReceipt?.state !== 'failed') || (entry.requiresReceipt && !entry.outgoingReceipt)}
                             className="chat-pending-queue-cancel"
                             aria-label={t('chat.cancelQueuedAria')}
                             title={t('chat.cancelQueuedTitle')}
@@ -225,7 +225,9 @@ export const PendingQueueStrip = memo(PendingQueueStripImpl, (prev, next) => (
             // ★ `stale` selects the row's label, so omitting it here would let the
             // strip keep rendering "Waiting to send" after the entry had already
             // been marked undelivered — the memo would report no visible change.
-            && entry.stale === other.stale;
+            && entry.stale === other.stale
+            && entry.deliveryUncertain === other.deliveryUncertain
+            && entry.outgoingReceipt === other.outgoingReceipt;
     })
 ));
 

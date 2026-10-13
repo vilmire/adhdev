@@ -38,6 +38,7 @@ const handlerCommands: Record<string, HandlerRun> = {
     }),
     get_chat_debug_bundle: run((h, a) => Chat.handleGetChatDebugBundle(h, a)),
     chat_history: run((h, a) => Chat.handleChatHistory(h, a)),
+    outgoing_receipts: run((h, a) => Chat.handleOutgoingReceipts(h, a)),
     send_chat: run((h, a) => Chat.handleSendChat(h, a)),
     cancel_queued_chat: run((h, a) => Chat.handleCancelQueuedChat(h, a)),
     list_chats: run((h, a) => Chat.handleListChats(h, a)),
@@ -132,6 +133,7 @@ export const handlerSpecs: CommandSpec<'handler'>[] = defineCommandSpecs('handle
     // instead would expand the wrong transcript.
     expand_tool_block: { session: { scope: 'required', aliasSessionId: true } },
     chat_history: { session: { scope: 'optional', aliasSessionId: true } },
+    outgoing_receipts: { session: { scope: 'required', aliasSessionId: true }, forwardToOwner: true },
     send_chat: {
         session: { ...REQUIRED_ROUTED, aliasSessionId: true },
         // The session row (status, approval modal) moves: push it now.

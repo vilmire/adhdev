@@ -92,6 +92,12 @@ function mapTranscriptMessage(message: ReplicatedTranscriptMessageV2): Dashboard
         // senderName:'Tool' marker) so both lanes label the card identically.
         mapped.meta = { ...(mapped.meta ?? {}), label: message.toolName }
     }
+    if (message.sourceMessageId || message.runtimeInputAck || message.outgoingReceipt) {
+        mapped.meta = { ...(mapped.meta ?? {}),
+            ...(message.sourceMessageId ? { sourceMessageId: message.sourceMessageId } : {}),
+            ...(message.runtimeInputAck ? { runtimeInputAck: true } : {}),
+            ...(message.outgoingReceipt ? { outgoingReceipt: message.outgoingReceipt } : {}) };
+    }
     if (message.expandable) mapped._expandable = true
     if (message.turnKey !== null) mapped._turnKey = message.turnKey
     return mapped

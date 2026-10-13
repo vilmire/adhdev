@@ -1,3 +1,5 @@
+import { OutgoingReceiptStore } from '../sessions/outgoing-receipt-store.js';
+import { resolveConfigDir } from '../config/config-dir.js';
 import { matchesProviderApprovalTarget, projectProviderApproval } from '../status/provider-approval.js';
 import { prepareOwnerActionChat } from '../assistant/assistant-action-ingress.js';
 import { modalIdentity, checkAssistantExecutionGuard } from '../assistant/assistant-execution.js';
@@ -116,6 +118,7 @@ function sessionInputFor(h: CommandHelpers): SessionInputService {
     if (!service) {
         const ctx = h.ctx;
         service = createSessionInputService({
+            receiptStore: new OutgoingReceiptStore(`${resolveConfigDir()}/outgoing-receipts`),
             resolveSession: (sessionId) => {
                 const adapter = ctx.adapters?.get(sessionId) ?? null;
                 const instance = ctx.instanceManager?.getInstance(sessionId) ?? null;
@@ -269,6 +272,7 @@ async function submitCliChat(h: CommandHelpers, args: any, input: InputEnvelope,
     const requested = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '';
     reportSessionChatInput({ sessionIds: requested && requested !== sessionKey ? [sessionKey, requested] : [sessionKey], messageId, source: readCommandSource(args), outcome });
     return { ...sendChatResultFromOutcome(outcome, messageId, transport, provider?.type),
+        outgoingReceipt: service.getReceipts(sessionKey, [messageId])[0],
         ...('expiresAt' in prepared ? { ownerActionExpiresAt: prepared.expiresAt, ownerActionRetry: 'If execution expires while queued or busy, select the current permission again. Consent is never renewed automatically.' } : {}) };
 }
 
@@ -1116,4 +1120,12 @@ export async function handleResolveAction(h: CommandHelpers, args: any): Promise
     }
 
     return { success: false, error: 'resolveAction script not available for this provider' };
+}
+
+/** Read-only replay of content-free send evidence, under the same owner/session routing as send_chat. */
+export async function handleOutgoingReceipts(h: CommandHelpers, args: any): Promise<CommandResult> {
+    const sessionKey = resolveInputSessionKey(h, args, h.getProvider(args?.agentType)?.type);
+    if (!sessionKey) return { success: false, error: 'Session not found' };
+    const ids = Array.isArray(args?.messageIds) ? args.messageIds.filter((id: unknown) => typeof id === 'string' && id.length <= 256).slice(0, 32) : [];
+    return { success: true, receipts: sessionInputFor(h).getReceipts(sessionKey, ids) };
 }

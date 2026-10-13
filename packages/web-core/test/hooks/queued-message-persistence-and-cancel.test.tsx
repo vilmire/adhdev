@@ -26,6 +26,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { createElement } from 'react'
 import { act } from 'react-dom/test-utils'
 import { createRoot } from 'react-dom/client'
+import { receiptAwareTransport, resetOutgoingReceiptFixture, postWriteFixtureEcho } from '../helpers/outgoing-receipt-transport'
 import { useDashboardConversationCommands } from '../../src/hooks/useDashboardConversationCommands'
 import { readPendingQueuedMessages } from '../../src/utils/pendingQueuedMessages'
 
@@ -60,6 +61,7 @@ function installMemoryLocalStorage(): void {
 }
 
 beforeEach(() => {
+    resetOutgoingReceiptFixture()
     installMemoryLocalStorage()
     window.localStorage.clear()
 })
@@ -75,12 +77,14 @@ function renderHarness(sendDaemonCommand: ReturnType<typeof vi.fn>) {
         routeId: 'daemon-1:sess-1',
         daemonId: 'daemon-1',
         sessionId: 'sess-1',
+        transport: 'pty',
         status: 'generating',
     }
 
+    const receiptTransport = receiptAwareTransport(sendDaemonCommand)
     function Harness() {
         latest = useDashboardConversationCommands({
-            sendDaemonCommand,
+            sendDaemonCommand: receiptTransport,
             activeConv,
             setActionLogs: () => {},
             isStandalone: false,
@@ -103,6 +107,7 @@ describe('MULTI-QUEUE — the UI keeps every parked body', () => {
     it('★ a second queued send does NOT overwrite the first (the single-slot defect)', async () => {
         const send = vi.fn().mockResolvedValue(DAEMON_QUEUED_RESULT)
         const h = renderHarness(send)
+        await act(async () => { await Promise.resolve() })
 
         await queueBodies(h, ['first body', 'second body', 'third body'])
 
@@ -114,6 +119,7 @@ describe('MULTI-QUEUE — the UI keeps every parked body', () => {
     it('★ preserves FIFO order, matching the daemon drain order', async () => {
         const send = vi.fn().mockResolvedValue(DAEMON_QUEUED_RESULT)
         const h = renderHarness(send)
+        await act(async () => { await Promise.resolve() })
         await queueBodies(h, ['alpha', 'beta', 'gamma'])
 
         expect(h.get().pendingLocalMessages.map((e: any) => e.content)).toEqual(['alpha', 'beta', 'gamma'])
@@ -122,6 +128,7 @@ describe('MULTI-QUEUE — the UI keeps every parked body', () => {
     it('gives every entry a distinct id, so per-item actions can address one', async () => {
         const send = vi.fn().mockResolvedValue(DAEMON_QUEUED_RESULT)
         const h = renderHarness(send)
+        await act(async () => { await Promise.resolve() })
         await queueBodies(h, ['one', 'two'])
 
         const ids = h.get().pendingLocalMessages.map((e: any) => e.id)
@@ -132,6 +139,7 @@ describe('MULTI-QUEUE — the UI keeps every parked body', () => {
     it('exposes the newest entry as pendingLocalMessage for unmigrated surfaces', async () => {
         const send = vi.fn().mockResolvedValue(DAEMON_QUEUED_RESULT)
         const h = renderHarness(send)
+        await act(async () => { await Promise.resolve() })
         await queueBodies(h, ['older', 'newest'])
 
         expect(h.get().pendingLocalMessage).toMatchObject({ content: 'newest', queued: true })
@@ -156,19 +164,22 @@ describe('RESTART — the queue is restored from durable storage', () => {
     it('★ the bodies really are written to durable storage, not just React state', async () => {
         const send = vi.fn().mockResolvedValue(DAEMON_QUEUED_RESULT)
         const h = renderHarness(send)
+        await act(async () => { await Promise.resolve() })
         await queueBodies(h, ['persisted body'])
 
         // Read the store directly — independent of the hook's own state.
         expect(readPendingQueuedMessages(TAB_KEY).map(e => e.content)).toEqual(['persisted body'])
     })
 
-    it('a failed send leaves nothing behind to restore', async () => {
+    it('a transport timeout preserves an uncertain send and original identity', async () => {
         const send = vi.fn().mockRejectedValue(new Error('daemon unreachable'))
         const h = renderHarness(send)
+        await act(async () => { await Promise.resolve() })
         await act(async () => { await h.get().handleSendChat('never delivered') })
 
-        expect(h.get().pendingLocalMessages).toEqual([])
-        expect(readPendingQueuedMessages(TAB_KEY)).toEqual([])
+        expect(h.get().pendingLocalMessages).toHaveLength(1)
+        expect(h.get().pendingLocalMessage.deliveryUncertain).toBe(true)
+        expect(readPendingQueuedMessages(TAB_KEY)).toHaveLength(1)
     })
 })
 
@@ -176,6 +187,7 @@ describe('CANCEL — per-item withdrawal', () => {
     it('★ cancels ONE entry and leaves the others queued', async () => {
         const send = vi.fn().mockResolvedValue(DAEMON_QUEUED_RESULT)
         const h = renderHarness(send)
+        await act(async () => { await Promise.resolve() })
         await queueBodies(h, ['keep me', 'cancel me', 'keep me too'])
 
         const target = h.get().pendingLocalMessages.find((e: any) => e.content === 'cancel me')
@@ -188,6 +200,7 @@ describe('CANCEL — per-item withdrawal', () => {
     it('★ asks the DAEMON to drop the body — a local-only removal would be a lie', async () => {
         const send = vi.fn().mockResolvedValue(DAEMON_QUEUED_RESULT)
         const h = renderHarness(send)
+        await act(async () => { await Promise.resolve() })
         await queueBodies(h, ['withdraw this'])
 
         const target = h.get().pendingLocalMessages[0]
@@ -204,6 +217,7 @@ describe('CANCEL — per-item withdrawal', () => {
     it('★ clears the durable store too, so a restart cannot resurrect it', async () => {
         const send = vi.fn().mockResolvedValue(DAEMON_QUEUED_RESULT)
         const h = renderHarness(send)
+        await act(async () => { await Promise.resolve() })
         await queueBodies(h, ['cancel me'])
         expect(readPendingQueuedMessages(TAB_KEY)).toHaveLength(1)
 
@@ -223,6 +237,7 @@ describe('CANCEL — per-item withdrawal', () => {
         // Removing the bubble here would hide a message the agent is answering.
         const send = vi.fn().mockResolvedValue(DAEMON_QUEUED_RESULT)
         const h = renderHarness(send)
+        await act(async () => { await Promise.resolve() })
         await queueBodies(h, ['too late to stop'])
 
         const target = h.get().pendingLocalMessages[0]
@@ -238,6 +253,7 @@ describe('CANCEL — per-item withdrawal', () => {
     it('keeps the bubble when the cancel command itself fails', async () => {
         const send = vi.fn().mockResolvedValue(DAEMON_QUEUED_RESULT)
         const h = renderHarness(send)
+        await act(async () => { await Promise.resolve() })
         await queueBodies(h, ['body'])
 
         const target = h.get().pendingLocalMessages[0]
@@ -247,7 +263,7 @@ describe('CANCEL — per-item withdrawal', () => {
         expect(h.get().pendingLocalMessages).toHaveLength(1)
     })
 
-    it('a RESOLVED not-parked entry is dropped locally without a daemon call', async () => {
+    it('a disposition without native-write proof cannot authorize a local cancel', async () => {
         // The send has answered "submitted": nothing is in the daemon FIFO, so
         // there is no remote state to contradict and no command should issue.
         //
@@ -256,22 +272,24 @@ describe('CANCEL — per-item withdrawal', () => {
         // the CANCEL-INFLIGHT-LEAK block below.
         const send = vi.fn().mockResolvedValue({ success: true, sent: true, submitted: true })
         const h = renderHarness(send)
+        await act(async () => { await Promise.resolve() })
         await queueBodies(h, ['delivered immediately'])
 
         const entry = h.get().pendingLocalMessages[0]
-        expect(entry.queued).toBeFalsy()
+        expect(entry.queued).toBe(true)
         expect(entry.settled).toBe(true)
 
         send.mockClear()
         await act(async () => { await h.get().handleCancelQueued(entry.id) })
 
-        expect(h.get().pendingLocalMessages).toEqual([])
+        expect(h.get().pendingLocalMessages).toHaveLength(1)
         expect(send.mock.calls.some(call => call[1] === 'cancel_queued_chat')).toBe(false)
     })
 
     it('ignores a cancel for an unknown id', async () => {
         const send = vi.fn().mockResolvedValue(DAEMON_QUEUED_RESULT)
         const h = renderHarness(send)
+        await act(async () => { await Promise.resolve() })
         await queueBodies(h, ['still here'])
 
         let outcome: boolean | undefined
@@ -313,6 +331,7 @@ describe('CANCEL-INFLIGHT-LEAK — a cancel during an unresolved send still reac
     it('★ issues cancel_queued_chat for a body whose send has not answered yet', async () => {
         const { send, release } = deferredSend()
         const h = renderHarness(send)
+        await act(async () => { await Promise.resolve() })
 
         // Submit without awaiting: the round trip is still open.
         let sendPromise: Promise<boolean> | undefined
@@ -355,6 +374,7 @@ describe('CANCEL-INFLIGHT-LEAK — a cancel during an unresolved send still reac
             return Promise.resolve(DAEMON_CANCEL_OK)
         })
         const h = renderHarness(send)
+        await act(async () => { await Promise.resolve() })
 
         let sendPromise: Promise<boolean> | undefined
         await act(async () => {
@@ -375,7 +395,7 @@ describe('CANCEL-INFLIGHT-LEAK — a cancel during an unresolved send still reac
         expect(order).toEqual(['send_chat:resolved', 'cancel_queued_chat:issued'])
     })
 
-    it('★ a send that resolves as DELIVERED needs no claim — and the bubble still goes', async () => {
+    it('an in-flight disposition without native proof remains tracked', async () => {
         // The other side of the wait: once the send answers "submitted", nothing
         // is parked, so a cancel command would be noise. Guards against
         // over-correcting into a claim on every cancel.
@@ -386,6 +406,7 @@ describe('CANCEL-INFLIGHT-LEAK — a cancel during an unresolved send still reac
             return Promise.resolve(DAEMON_CANCEL_OK)
         })
         const h = renderHarness(send)
+        await act(async () => { await Promise.resolve() })
 
         let sendPromise: Promise<boolean> | undefined
         await act(async () => {
@@ -404,7 +425,7 @@ describe('CANCEL-INFLIGHT-LEAK — a cancel during an unresolved send still reac
         })
 
         expect(send.mock.calls.some(call => call[1] === 'cancel_queued_chat')).toBe(false)
-        expect(h.get().pendingLocalMessages).toEqual([])
+        expect(h.get().pendingLocalMessages).toHaveLength(1)
     })
 
     it('★ a restored entry is settled, so cancelling it never waits on a promise that cannot exist', async () => {
@@ -430,6 +451,7 @@ describe('SEND-NOW stays correct with several entries queued', () => {
     it('★ targets the pressed entry, not merely the first queued one', async () => {
         const send = vi.fn().mockResolvedValue(DAEMON_QUEUED_RESULT)
         const h = renderHarness(send)
+        await act(async () => { await Promise.resolve() })
         await queueBodies(h, ['first', 'second'])
 
         const second = h.get().pendingLocalMessages.find((e: any) => e.content === 'second')
@@ -446,6 +468,7 @@ describe('SEND-NOW stays correct with several entries queued', () => {
     it('falls back to the oldest queued entry when no id is given (legacy callers)', async () => {
         const send = vi.fn().mockResolvedValue(DAEMON_QUEUED_RESULT)
         const h = renderHarness(send)
+        await act(async () => { await Promise.resolve() })
         await queueBodies(h, ['oldest', 'newest'])
 
         send.mockResolvedValueOnce({ success: true, sent: true, queuedWithAgent: true })
@@ -473,6 +496,7 @@ describe('dedupe by messageId — inFlightSendsRef keys on the exact wire id', (
         let resolveSend: (value: any) => void = () => {}
         const send = vi.fn(() => new Promise(resolve => { resolveSend = resolve }))
         const h = renderHarness(send)
+        await act(async () => { await Promise.resolve() })
 
         const sendPromise = act(async () => {
             await Promise.resolve() // let the optimistic append flush
@@ -493,6 +517,7 @@ describe('dedupe by messageId — inFlightSendsRef keys on the exact wire id', (
         const send = vi.fn()
             .mockImplementationOnce(() => new Promise(resolve => { resolveSend = resolve }))
         const h = renderHarness(send)
+        await act(async () => { await Promise.resolve() })
 
         act(() => { h.get().handleSendChat('racing cancel') })
         await act(async () => { await Promise.resolve() })
@@ -516,6 +541,7 @@ describe('dedupe by messageId — inFlightSendsRef keys on the exact wire id', (
     it('two distinct sends mint two distinct messageIds (no accidental id collision)', async () => {
         const send = vi.fn().mockResolvedValue(DAEMON_QUEUED_RESULT)
         const h = renderHarness(send)
+        await act(async () => { await Promise.resolve() })
         await queueBodies(h, ['alpha', 'beta'])
 
         const ids = h.get().pendingLocalMessages.map((e: any) => e.id)

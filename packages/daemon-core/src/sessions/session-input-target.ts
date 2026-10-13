@@ -1,3 +1,4 @@
+import type { OutgoingReceipt } from '../seqscribe/outgoing-receipt.js';
 /**
  * session-input-target — the daemon's live objects as a `SessionInputTarget`.
  *
@@ -26,6 +27,7 @@ import type { ClaimedSessionInput, SessionInputBody, SessionInputTarget } from '
 export interface SessionInputAdapterLike {
     cliType: string;
     getStatus?(options?: { allowParse?: boolean }): { status?: string } | undefined;
+    observeSendWrite?(messageId: string, observer: (state: 'started' | 'submitted' | 'uncertain') => void): void;
     sendMessage(text: string, options?: { bracketedPaste?: boolean; messageId?: string }): Promise<{ status: 'queued'; position?: number } | { status: 'delivered' } | void>;
     sendMessageDuringGeneration?(text: string, bracketedPaste?: boolean): { accepted: boolean; reason?: string };
     interruptTurn?: SessionInputTarget['interruptTurn'];
@@ -38,7 +40,7 @@ export interface SessionInputAdapterLike {
 
 /** The instance surface the projection reads. */
 export interface SessionInputInstanceLike {
-    recordAcknowledgedUserInput?(input: InputEnvelope | string, sourceMessageId?: string): void;
+    recordAcknowledgedUserInput?(input: InputEnvelope | string, sourceMessageId?: string, receipt?: OutgoingReceipt): void;
 }
 
 export function toInputEnvelope(input: OutboundMessage['input']): InputEnvelope {
@@ -85,13 +87,14 @@ export function buildSessionInputTarget(args: {
     };
     if (typeof adapter.sendMessageDuringGeneration === 'function') target.sendMessageDuringGeneration = (t, b) => adapter.sendMessageDuringGeneration!(t, b);
     if (typeof adapter.interruptTurn === 'function') target.interruptTurn = () => adapter.interruptTurn!();
+    if (typeof adapter.observeSendWrite === 'function') target.observeSendWrite = (id, observer) => adapter.observeSendWrite!(id, observer);
     if (typeof adapter.hasQueuedSend === 'function') target.hasQueuedSend = (id) => adapter.hasQueuedSend!(id);
     if (typeof adapter.claimQueuedSend === 'function') target.claimQueuedSend = (id) => adapter.claimQueuedSend!(id);
     if (typeof adapter.restoreQueuedSend === 'function') target.restoreQueuedSend = (c) => adapter.restoreQueuedSend!(c);
     if (typeof adapter.reserveDrain === 'function') target.reserveDrain = (ms) => adapter.reserveDrain!(ms);
     if (typeof adapter.releaseDrain === 'function') target.releaseDrain = () => adapter.releaseDrain!();
     if (instance && typeof instance.recordAcknowledgedUserInput === 'function') {
-        target.recordAcknowledgedUserInput = (input, sourceMessageId) => instance.recordAcknowledgedUserInput!(toInputEnvelope(input), sourceMessageId);
+        target.recordAcknowledgedUserInput = (input, sourceMessageId, receipt) => instance.recordAcknowledgedUserInput!(toInputEnvelope(input), sourceMessageId, receipt);
     }
     return target;
 }

@@ -341,14 +341,14 @@ export default function ChatPane({
     const hasPendingEntries = (pendingLocalMessages?.length ?? 0) > 0;
     useEffect(() => {
         if (!retireEchoedPendingMessages) return;
-        retireEchoedPendingMessages(daemonLiveMessages);
+        retireEchoedPendingMessages([...historyMessages, ...daemonLiveMessages]);
         if (!hasPendingEntries) return;
         const timer = setInterval(
-            () => retireEchoedPendingMessages(daemonLiveMessages),
+            () => retireEchoedPendingMessages([...historyMessages, ...daemonLiveMessages]),
             PENDING_QUEUE_STALE_SWEEP_INTERVAL_MS,
         );
         return () => clearInterval(timer);
-    }, [retireEchoedPendingMessages, daemonLiveMessages, hasPendingEntries]);
+    }, [retireEchoedPendingMessages, daemonLiveMessages, historyMessages, hasPendingEntries]);
     // Only the COUNT is consumed (activity-toggle affordance), but the filter
     // classifies every live message. Memoized on `liveMessages` so it runs when
     // the tail actually changes rather than on every render of this pane.

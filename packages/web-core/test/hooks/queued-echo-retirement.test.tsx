@@ -30,6 +30,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { createElement } from 'react'
 import { act } from 'react-dom/test-utils'
 import { createRoot } from 'react-dom/client'
+import { receiptAwareTransport, resetOutgoingReceiptFixture, postWriteFixtureEcho } from '../helpers/outgoing-receipt-transport'
 import { useDashboardConversationCommands } from '../../src/hooks/useDashboardConversationCommands'
 import {
     readPendingQueuedMessages,
@@ -69,13 +70,14 @@ function installMemoryLocalStorage(): void {
 }
 
 beforeEach(() => {
+    resetOutgoingReceiptFixture()
     installMemoryLocalStorage()
     window.localStorage.clear()
 })
 
 /** A daemon transcript row — the echo shape the retirement matches against. */
 function userEcho(content: string) {
-    return { id: `echo-${content}`, role: 'user', kind: 'standard', content }
+    return postWriteFixtureEcho(content)
 }
 
 function renderHarness(sendDaemonCommand: ReturnType<typeof vi.fn>) {
@@ -89,12 +91,14 @@ function renderHarness(sendDaemonCommand: ReturnType<typeof vi.fn>) {
         routeId: 'daemon-1:sess-1',
         daemonId: 'daemon-1',
         sessionId: 'sess-1',
+        transport: 'pty',
         status: 'generating',
     }
 
+    const receiptTransport = receiptAwareTransport(sendDaemonCommand)
     function Harness() {
         latest = useDashboardConversationCommands({
-            sendDaemonCommand,
+            sendDaemonCommand: receiptTransport,
             activeConv,
             setActionLogs: () => {},
             isStandalone: false,
@@ -121,6 +125,7 @@ describe('(a) echo retirement removes the entry from STATE, not just from the re
     it('★ a daemon echo retires a PARKED entry from state AND localStorage', async () => {
         const send = vi.fn().mockResolvedValue(DAEMON_QUEUED_RESULT)
         const h = renderHarness(send)
+        await act(async () => { await Promise.resolve() })
         await queueBodies(h, ['deliver me'])
 
         // Precondition: parked, rendered, and persisted.
@@ -140,6 +145,7 @@ describe('(a) echo retirement removes the entry from STATE, not just from the re
     it('★ covers QUEUED rows — the ones the render-time path excluded entirely', async () => {
         const send = vi.fn().mockResolvedValue(DAEMON_QUEUED_RESULT)
         const h = renderHarness(send)
+        await act(async () => { await Promise.resolve() })
         await queueBodies(h, ['parked body'])
         expect(h.get().pendingLocalMessages[0].queued).toBe(true)
 
@@ -154,6 +160,7 @@ describe('(a) echo retirement removes the entry from STATE, not just from the re
     it('retires only the entries the echoes account for, leaving the rest parked', async () => {
         const send = vi.fn().mockResolvedValue(DAEMON_QUEUED_RESULT)
         const h = renderHarness(send)
+        await act(async () => { await Promise.resolve() })
         await queueBodies(h, ['first', 'second', 'third'])
 
         act(() => { h.get().retireEchoedPendingMessages([userEcho('first'), userEcho('third')]) })
@@ -174,6 +181,7 @@ describe('(a) echo retirement removes the entry from STATE, not just from the re
         ])
         const send = vi.fn().mockResolvedValue(DAEMON_QUEUED_RESULT)
         const h = renderHarness(send)
+        await act(async () => { await Promise.resolve() })
         expect(h.get().pendingLocalMessages).toHaveLength(2)
 
         act(() => { h.get().retireEchoedPendingMessages([userEcho('continue')]) })
@@ -190,6 +198,7 @@ describe('(a) echo retirement removes the entry from STATE, not just from the re
     it('does not retire on an unrelated transcript, and writes nothing when nothing matched', async () => {
         const send = vi.fn().mockResolvedValue(DAEMON_QUEUED_RESULT)
         const h = renderHarness(send)
+        await act(async () => { await Promise.resolve() })
         await queueBodies(h, ['still waiting'])
         const before = h.get().pendingLocalMessages
 
@@ -350,15 +359,16 @@ describe('(b) age cutoff — a body stops claiming it is still on its way', () =
         expect(twice.entries).toBe(once.entries)
     })
 
-    it('★ an echo still wins over staleness — a late delivery retires, never lingers as stale', () => {
+    it('an uncorrelated late echo cannot settle a legacy queued send', () => {
         const sentAt = 1_000_000
         const result = retirePendingLocalMessages(
             [{ id: 'e1', content: 'late but delivered', sentAt, queued: true }],
             [userEcho('late but delivered') as any],
             sentAt + PENDING_QUEUED_MESSAGE_STALE_AFTER_MS + 1,
         )
-        expect(result.retiredByEcho).toBe(1)
-        expect(result.entries).toHaveLength(0)
+        expect(result.retiredByEcho).toBe(0)
+        expect(result.entries).toHaveLength(1)
+        expect(result.entries[0].deliveryUncertain).toBe(true)
     })
 
     it('★ stale is DERIVED on read, so an already-pinned body is honest the moment the pane mounts', () => {
@@ -375,23 +385,24 @@ describe('(b) age cutoff — a body stops claiming it is still on its way', () =
         expect(readPendingQueuedMessages(TAB_KEY)[0].stale).toBe(true)
     })
 
-    it('the 24h store bound still applies on top of the stale mark', () => {
+    it('age alone never discards an unsettled outgoing body', () => {
         const sentAt = Date.now() - (25 * 60 * 60 * 1000)
         writePendingQueuedMessages(TAB_KEY, [
             { id: 'ancient', content: 'a day old', sentAt, queued: true } as any,
         ])
-        expect(readPendingQueuedMessages(TAB_KEY)).toHaveLength(0)
+        expect(readPendingQueuedMessages(TAB_KEY)).toHaveLength(1)
     })
 })
 
 describe('(c) cancelled:0 — a body the daemon does not hold must drop locally', () => {
-    it('★ drops a STALE entry when the daemon reports nothing queued', async () => {
+    it('keeps a stale entry when absence from the FIFO cannot prove delivery', async () => {
         const sentAt = Date.now() - PENDING_QUEUED_MESSAGE_STALE_AFTER_MS - 60_000
         writePendingQueuedMessages(TAB_KEY, [
             { id: 'orphan-1', content: 'ghost body', sentAt, queued: true } as any,
         ])
         const send = vi.fn().mockResolvedValue(DAEMON_CANCEL_NOTHING_HELD)
         const h = renderHarness(send)
+        await act(async () => { await Promise.resolve() })
 
         // Restored on mount, and already honest about not being delivered.
         expect(h.get().pendingLocalMessages).toHaveLength(1)
@@ -404,11 +415,11 @@ describe('(c) cancelled:0 — a body the daemon does not hold must drop locally'
         // so the owner pressed Cancel on a message that existed nowhere and it
         // refused to go away. With no FIFO holding it, there is no remote state a
         // local drop can contradict.
-        expect(ok).toBe(true)
-        expect(h.get().pendingLocalMessages).toHaveLength(0)
-        expect(persisted()).toHaveLength(0)
-        expect(h.get().sendFeedbackMessage).not.toBe(
-            'Too late to cancel — this message was already sent to the agent.',
+        expect(ok).toBe(false)
+        expect(h.get().pendingLocalMessages).toHaveLength(1)
+        expect(persisted()).toHaveLength(1)
+        expect(h.get().sendFeedbackMessage).toBe(
+            'Delivery unconfirmed — do not resend.',
         )
     })
 
@@ -417,6 +428,7 @@ describe('(c) cancelled:0 — a body the daemon does not hold must drop locally'
             .mockResolvedValueOnce(DAEMON_QUEUED_RESULT)
             .mockResolvedValueOnce(DAEMON_CANCEL_NOTHING_HELD)
         const h = renderHarness(send)
+        await act(async () => { await Promise.resolve() })
         await queueBodies(h, ['just drained'])
         const id = h.get().pendingLocalMessages[0].id
 
@@ -429,7 +441,7 @@ describe('(c) cancelled:0 — a body the daemon does not hold must drop locally'
         expect(ok).toBe(false)
         expect(h.get().pendingLocalMessages).toHaveLength(1)
         expect(h.get().sendFeedbackMessage).toBe(
-            'Too late to cancel — this message was already sent to the agent.',
+            'Delivery unconfirmed — do not resend.',
         )
     })
 
@@ -438,6 +450,7 @@ describe('(c) cancelled:0 — a body the daemon does not hold must drop locally'
             .mockResolvedValueOnce(DAEMON_QUEUED_RESULT)
             .mockResolvedValueOnce(DAEMON_CANCEL_OK)
         const h = renderHarness(send)
+        await act(async () => { await Promise.resolve() })
         await queueBodies(h, ['withdraw me'])
         const id = h.get().pendingLocalMessages[0].id
 
@@ -456,6 +469,7 @@ describe('(c) cancelled:0 — a body the daemon does not hold must drop locally'
         // A long but REAL wait: the daemon still has it, and answers cancelled:1.
         const send = vi.fn().mockResolvedValue(DAEMON_CANCEL_OK)
         const h = renderHarness(send)
+        await act(async () => { await Promise.resolve() })
 
         await act(async () => { await h.get().handleCancelQueued('old-but-real') })
 
@@ -481,6 +495,7 @@ describe('the deployed fix cleans up what is already stuck', () => {
 
         const send = vi.fn().mockResolvedValue(DAEMON_QUEUED_RESULT)
         const h = renderHarness(send)
+        await act(async () => { await Promise.resolve() })
         expect(h.get().pendingLocalMessages).toHaveLength(1)
 
         // The pane loads the transcript, which contains the owner's turn.
@@ -498,6 +513,7 @@ describe('the deployed fix cleans up what is already stuck', () => {
 
         const send = vi.fn().mockResolvedValue(DAEMON_QUEUED_RESULT)
         const h = renderHarness(send)
+        await act(async () => { await Promise.resolve() })
 
         // The session was torn down mid-queue, so its transcript is empty and will
         // never move again. Age is the only signal left.

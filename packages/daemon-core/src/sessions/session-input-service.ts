@@ -1,3 +1,5 @@
+import { OutgoingReceiptStore } from './outgoing-receipt-store.js';
+import type { OutgoingReceipt } from '../seqscribe/outgoing-receipt.js';
 /**
  * SessionInputService — the ONE path from any origin into a session's input.
  *
@@ -96,7 +98,8 @@ export interface SessionInputTarget {
     reserveDrain?(ttlMs: number): void;
     releaseDrain?(): void;
     /** TASKBUBBLE-DUP ack; `sourceMessageId` lands on the ack's `meta.sourceMessageId`. */
-    recordAcknowledgedUserInput?(input: OutboundMessage['input'], sourceMessageId?: string): void;
+    observeSendWrite?(messageId: string, observer: (state: 'started' | 'submitted' | 'uncertain') => void): void;
+    recordAcknowledgedUserInput?(input: OutboundMessage['input'], sourceMessageId?: string, receipt?: OutgoingReceipt): void;
 }
 
 /**
@@ -110,6 +113,7 @@ export interface SessionInputPort {
 }
 
 export interface SessionInputServiceDeps {
+    receiptStore?: OutgoingReceiptStore;
     resolveSession(sessionId: string): SessionInputTarget | null | undefined | Promise<SessionInputTarget | null | undefined>;
     clock?: () => number;
     /** Never receives bodies — ids, lengths, reasons only (content boundary). */
@@ -119,6 +123,7 @@ export interface SessionInputServiceDeps {
 }
 
 export interface SessionInputService {
+    getReceipts(sessionId: string, ids: readonly string[]): OutgoingReceipt[];
     submit(msg: OutboundMessage): Promise<SubmitOutcome>;
     /**
      * Withdraw a parked body (dashboard cancel). `removed: false` is the honest
@@ -225,6 +230,9 @@ function hasNonTextParts(input: OutboundMessage['input']): boolean {
 // ─── Factory ────────────────────────────────────────────────────────────────
 
 export function createSessionInputService(deps: SessionInputServiceDeps): SessionInputService {
+    const receiptStore = deps.receiptStore ?? new OutgoingReceiptStore();
+    const freshOutgoing = new Set<string>();
+    const outgoingAttempts = new Map<string, OutgoingReceipt>();
     const now = deps.clock ?? Date.now;
     const log = deps.log ?? (() => {});
     const tuning = deps.interrupt ?? {};
@@ -273,7 +281,7 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
 
     function ack(target: SessionInputTarget, msg: OutboundMessage): void {
         try {
-            target.recordAcknowledgedUserInput?.(msg.input, msg.messageId);
+            target.recordAcknowledgedUserInput?.(msg.input, msg.messageId, receiptStore.get(msg.messageId));
         } catch (e) {
             log('warn', `submit(${msg.messageId}) ack failed: ${(e as Error)?.message ?? e}`);
         }
@@ -305,6 +313,15 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
         body: SessionInputBody,
         opts: { fresh: boolean; route: SubmitRoute; interrupt?: { keyName: string; confidence: 'proven' | 'declared' } },
     ): Promise<SubmitOutcome> {
+        const receipt = outgoingAttempts.get(msg.messageId);
+        if (receipt) target.observeSendWrite?.(msg.messageId, state => {
+            try {
+                const updated = receiptStore.advance(receipt, state === 'submitted' ? 'submitted' : 'uncertain');
+                if (updated) target.recordAcknowledgedUserInput?.(msg.input, msg.messageId, updated);
+                if (state !== 'started') outgoingAttempts.delete(msg.messageId);
+            }
+            catch { /* Native write is never retried when receipt persistence is uncertain. */ }
+        });
         const result = await target.sendMessage(body.text, {
             ...(body.bracketedPaste ? { bracketedPaste: true } : {}),
             messageId: msg.messageId,
@@ -441,6 +458,17 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
     }
 
     async function run(msg: OutboundMessage): Promise<SubmitOutcome> {
+        if (msg.origin === 'dashboard' || receiptStore.get(msg.messageId)) {
+            const { receipt, fresh } = receiptStore.accept(msg.messageId, msg.sessionId, msg.input);
+            if (fresh) freshOutgoing.add(msg.messageId);
+            if (!fresh) {
+                const liveTarget = await deps.resolveSession(msg.sessionId);
+                if (msg.policy.mode === 'queue' || receipt.state !== 'accepted' || !liveTarget?.hasQueuedSend?.(msg.messageId)) {
+                    return { kind: 'duplicate', of: msg.messageId };
+                }
+            }
+            outgoingAttempts.set(msg.messageId, receipt);
+        }
         if (settledKind(msg.messageId) === 'delivered') return { kind: 'duplicate', of: msg.messageId };
 
         let target: SessionInputTarget | null | undefined;
@@ -486,6 +514,12 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
     }
 
     return {
+        getReceipts: (sessionId, ids) => receiptStore.list(sessionId, ids).map(receipt => {
+            // A restored write-ahead acceptance has no surviving FIFO/observer
+            // authority. Replay explicit uncertainty, never infer delivery or retry.
+            return receipt.state === 'accepted' && !outgoingAttempts.has(receipt.messageId)
+                ? { ...receipt, state: 'uncertain', proof: 'none', revision: receipt.revision + 1 } : receipt;
+        }),
         async submit(msg: OutboundMessage): Promise<SubmitOutcome> {
             if (!msg || typeof msg.messageId !== 'string' || !msg.messageId.trim()) return refuse('internal_error', { message: 'messageId required' });
             if (typeof msg.sessionId !== 'string' || !msg.sessionId.trim()) return refuse('no_target');
@@ -501,11 +535,21 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
             inFlight.set(msg.messageId, promise);
             try {
                 const outcome = await promise;
+                const receipt = outgoingAttempts.get(msg.messageId);
+                if (receipt && outcome.kind === 'refused') {
+                    const notWritten = freshOutgoing.has(msg.messageId) && receiptStore.get(msg.messageId)?.state === 'accepted'
+                        && ['no_target', 'unsupported_input', 'session_exited', 'paused', 'waiting_external'].includes(outcome.reason);
+                    receiptStore.advance(receipt, notWritten ? 'failed' : 'uncertain');
+                }
+                if (receipt && outcome.kind === 'delivered' && receiptStore.get(msg.messageId)?.state === 'accepted') {
+                    receiptStore.advance(receipt, 'uncertain');
+                }
                 if (outcome.kind === 'delivered' || outcome.kind === 'queued') remember(msg.messageId, outcome.kind);
                 if (outcome.kind === 'delivered') parkedText.delete(msg.messageId);
                 return outcome;
             } finally {
                 inFlight.delete(msg.messageId);
+                freshOutgoing.delete(msg.messageId);
             }
         },
 
@@ -516,6 +560,8 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
             const claimed = target?.claimQueuedSend?.(messageId) ?? null;
             if (claimed) {
                 parkedText.delete(messageId);
+                const receipt = receiptStore.get(messageId);
+                if (receipt?.sessionId === sessionId) receiptStore.advance(receipt, 'failed');
                 // A withdrawn body was never written: forget it so the same
                 // messageId can be sent again as a fresh message.
                 settled.delete(messageId);

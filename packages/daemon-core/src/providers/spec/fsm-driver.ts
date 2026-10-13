@@ -305,6 +305,10 @@ export class FsmDriver implements ISpecDriver {
     }
 
     /** QUEUED-SEND-LOSS: see ISpecDriver.sendMessageWithDisposition. */
+    observeSendWrite(messageId: string, observer: (state: 'started' | 'submitted' | 'uncertain') => void): void {
+        this.sends.observeSendWrite(messageId, observer);
+    }
+
     sendMessageWithDisposition(text: string, bracketedPaste?: boolean, messageId?: string): SendDisposition {
         return this.sends.handleSendMessage(text, bracketedPaste, messageId);
     }

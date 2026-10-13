@@ -210,11 +210,10 @@ export class TerminalAdapter {
         return this.pty !== null;
     }
 
-    send_keys(text: string, primeContext?: PrimeWriteContext): void | Promise<boolean> {
+    send_keys(text: string, primeContext?: PrimeWriteContext): boolean | void | Promise<boolean | void> {
         this.recordEvent('input', capPreview(escapeControl(text)), text.length);
         if (!primeContext) {
-            this.pty?.write(text);
-            return;
+            return this.pty?.write(text);
         }
         return this.writeInput(text, primeContext);
     }

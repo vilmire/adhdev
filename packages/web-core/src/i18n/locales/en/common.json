@@ -1551,6 +1551,8 @@
         "toolExpandUnavailable": "Full output could not be fetched for this step.",
         "toolExpandStale": "Full output has moved — the transcript changed since this was read. Reload the conversation to fetch it.",
         "waitingToSend": "Waiting to send — the agent is still working.",
+        "deliveryFailed": "Not sent — rejected before writing.",
+        "deliveryUncertain": "Delivery unconfirmed — do not resend.",
         "waitingToSendAria": "Waiting to send",
         "notDelivered": "Not delivered — the agent never received this.",
         "notDeliveredAria": "Not delivered",

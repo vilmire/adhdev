@@ -1,3 +1,5 @@
+import { OutgoingReceiptStore } from '../sessions/outgoing-receipt-store.js';
+import { resolveConfigDir } from '../config/config-dir.js';
 /**
  * DaemonCliManager — CLI session creation, management, and command handling
  *
@@ -163,6 +165,7 @@ export class DaemonCliManager {
         this.deps = deps;
         this.providerLoader = providerLoader;
         this.input = createSessionInputService({
+            receiptStore: new OutgoingReceiptStore(`${resolveConfigDir()}/outgoing-receipts`),
             resolveSession: (sessionId) => this.resolveSessionInputTarget(sessionId),
             log: (level, msg) => {
                 if (level === 'debug') LOG.debug('SessionInput', msg);

@@ -174,7 +174,47 @@ export interface ClaimedQueuedSend {
     index: number;
 }
 
+type WriteAttempt = { messageId: string; bodyWrites: Array<Promise<boolean>>; bodyFinished: boolean; observer?: SendWriteObserver };
+export type SendWriteObserver = (state: 'started' | 'submitted' | 'uncertain') => void;
+
 export class SendSubmitEngine {
+    private writeAttempt: WriteAttempt | undefined;
+    private readonly writeObservers = new Map<string, SendWriteObserver>();
+    observeSendWrite(messageId: string, observer: SendWriteObserver): void {
+        this.writeObservers.set(messageId, observer);
+    }
+    private notifyWrite(attempt: WriteAttempt, state: 'started' | 'submitted' | 'uncertain'): void {
+        attempt.observer?.(state);
+        if (state === 'submitted' && this.writeObservers.get(attempt.messageId) === attempt.observer) this.writeObservers.delete(attempt.messageId);
+    }
+    private writeKeys(text: string, submit = false, attempt: WriteAttempt | null | undefined = this.writeAttempt): void {
+        let result: ReturnType<TerminalAdapter['send_keys']>;
+        try { result = this.host.adapter.send_keys(text); }
+        catch (error) {
+            if (attempt) this.notifyWrite(attempt, 'uncertain');
+            throw error;
+        }
+        if (!attempt) return;
+        // Promise<void> is the session-host send_input acknowledgment. Plain
+        // void is an unacknowledged direct write and never becomes proof.
+        const confirmed = result && typeof (result as Promise<unknown>).then === 'function'
+            ? Promise.resolve(result).then(value => value !== false, () => false)
+            : Promise.resolve(result === true);
+        if (!submit) attempt.bodyWrites.push(confirmed);
+        if (submit && !attempt.bodyFinished) {
+            this.notifyWrite(attempt, 'uncertain');
+            return;
+        }
+        if (submit) {
+            void Promise.all([...attempt.bodyWrites, confirmed]).then(writes => {
+                this.notifyWrite(attempt, writes.every(Boolean) ? 'submitted' : 'uncertain');
+                // An unconfirmed body cannot be proven by another CR. A failed
+                // CR with a confirmed body may still get a later submit ACK.
+                if (writes.slice(0, -1).some(written => !written) && this.writeObservers.get(attempt.messageId) === attempt.observer) this.writeObservers.delete(attempt.messageId);
+            });
+        }
+    }
+
     /** Queued send bodies — see QueuedSendEntry. */
     private pendingSends: QueuedSendEntry[] = [];
     /** True while a send is written but the FSM has not yet left idle, i.e. the
@@ -219,6 +259,8 @@ export class SendSubmitEngine {
     /** Cancel every armed write/submit timer. Called from FsmDriver.shutdown()
      *  so a torn-down driver never fires a CR into a dead PTY. */
     cancelTimers(): void {
+        this.writeObservers.clear();
+        this.writeAttempt = undefined;
         if (this.win32SubmitTimer) { clearTimeout(this.win32SubmitTimer); this.win32SubmitTimer = null; }
         if (this.win32WriteTimer) { clearTimeout(this.win32WriteTimer); this.win32WriteTimer = null; }
         if (this.plainSubmitTimer) { clearTimeout(this.plainSubmitTimer); this.plainSubmitTimer = null; }
@@ -369,7 +411,7 @@ export class SendSubmitEngine {
             );
             return { status: 'queued', queueDepth: this.pendingSends.length, reason };
         }
-        this.beginSend(text, bracketedPaste);
+        this.beginSend(text, bracketedPaste, messageId);
         return { status: 'delivered' };
     }
 
@@ -400,7 +442,9 @@ export class SendSubmitEngine {
     }
 
     /** Mark a send as in flight and write it. */
-    private beginSend(text: string, bracketedPaste?: boolean): void {
+    private beginSend(text: string, bracketedPaste?: boolean, messageId?: string): void {
+        this.writeAttempt = messageId ? { messageId, bodyWrites: [], bodyFinished: false, observer: this.writeObservers.get(messageId) } : undefined;
+        if (this.writeAttempt) this.notifyWrite(this.writeAttempt, 'started');
         this.sendInFlight = true;
         this.sendInFlightAt = Date.now();
         this.armLatchWatchdog(SEND_IN_FLIGHT_MAX_MS + LATCH_WATCHDOG_SLACK_MS);
@@ -466,7 +510,7 @@ export class SendSubmitEngine {
         if (this.pendingSendDrainTimer) clearTimeout(this.pendingSendDrainTimer);
         this.pendingSendDrainTimer = setTimeout(() => {
             this.pendingSendDrainTimer = null;
-            this.beginSend(next.text, next.bracketedPaste);
+            this.beginSend(next.text, next.bracketedPaste, next.messageId);
         }, 50);
         // Hold the latch immediately so a second drain on the very next frame
         // cannot write a second body into the same composer line.
@@ -485,11 +529,12 @@ export class SendSubmitEngine {
     /** ENTER-LOSS layer ①: schedule the short-body / perChar submit key through a
      *  tracked timer so the shutdown drain gate can see it and shutdown() can
      *  cancel it instead of letting it fire into a killed PTY. */
-    private schedulePlainSubmit(submitKey: string, delayMs: number): void {
+    private schedulePlainSubmit(submitKey: string, delayMs: number, receiptAttempt: WriteAttempt | null | undefined = this.writeAttempt): void {
+        const attempt = receiptAttempt;
         if (this.plainSubmitTimer) clearTimeout(this.plainSubmitTimer);
         this.plainSubmitTimer = setTimeout(() => {
             this.plainSubmitTimer = null;
-            this.host.adapter.send_keys(submitKey);
+            this.writeKeys(submitKey, true, attempt);
         }, delayMs);
     }
 
@@ -537,6 +582,7 @@ export class SendSubmitEngine {
 
 
     private actuallySendMessage(text: string, bracketedPaste?: boolean, opts?: { midGeneration?: boolean }): void {
+        const attempt = opts?.midGeneration ? null : this.writeAttempt;
         const sm = this.host.spec.send_message;
         this.submitUnconfirmed = false;
         const perChar = sm.delay_ms_per_char ?? 0;
@@ -584,14 +630,14 @@ export class SendSubmitEngine {
             // only the BODY bytes, and the submit key remains its own later
             // write. The paste CLOSE marker is not a submit — the CR still is.
             const body = wrapInPaste ? `${BRACKETED_PASTE_OPEN}${text}${BRACKETED_PASTE_CLOSE}` : text;
-            this.host.adapter.send_keys(body);
+            this.writeKeys(body, false, attempt);
             // ★ The CR MUST be a separate, later write. An atomic `text + '\r'`
             // is the retired force-inject shape and is NOT consumed mid-turn
             // (see ISpecDriver.sendMessageDuringGeneration for the A/B).
             // schedulePlainSubmit is used unconditionally — never the
             // `beforeSubmit === 0` immediate branch below — so the gap always
             // exists even if a spec declares no delay.
-            this.schedulePlainSubmit(sm.submit_key, Math.max(beforeSubmit, MID_GENERATION_SUBMIT_MIN_GAP_MS));
+            this.schedulePlainSubmit(sm.submit_key, Math.max(beforeSubmit, MID_GENERATION_SUBMIT_MIN_GAP_MS), null);
             return;
         }
 
@@ -614,7 +660,8 @@ export class SendSubmitEngine {
         // (The `wrapInPaste` gate itself is computed at the top of this method so
         // the mid-generation branch above can consult the same answer.)
         if (wrapInPaste) {
-            this.host.adapter.send_keys(`${BRACKETED_PASTE_OPEN}${text}${BRACKETED_PASTE_CLOSE}`);
+            this.writeKeys(`${BRACKETED_PASTE_OPEN}${text}${BRACKETED_PASTE_CLOSE}`, false, attempt);
+            if (attempt) attempt.bodyFinished = true;
             this.markBodyWrite();
             this.scheduleVerifiedSubmit(sm.submit_key, beforeSubmit, text, { skipEchoGate: true });
             return;
@@ -643,26 +690,29 @@ export class SendSubmitEngine {
         // an unvalidated behaviour change); only the CR is now effect-verified
         // instead of blind-timed. Short bodies keep the original immediate path.
         if (perChar === 0 && shouldUseVerifiedSubmit(text)) {
-            this.host.adapter.send_keys(text);
+            this.writeKeys(text, false, attempt);
+            if (attempt) attempt.bodyFinished = true;
             this.markBodyWrite();
             this.scheduleVerifiedSubmit(sm.submit_key, beforeSubmit, text);
             return;
         }
 
         if (perChar === 0) {
-            this.host.adapter.send_keys(text);
+            this.writeKeys(text, false, attempt);
+            if (attempt) attempt.bodyFinished = true;
             if (beforeSubmit > 0) this.schedulePlainSubmit(sm.submit_key, beforeSubmit);
-            else this.host.adapter.send_keys(sm.submit_key);
+            else this.writeKeys(sm.submit_key, true, attempt);
             return;
         }
         let i = 0;
         const iv = setInterval(() => {
             if (i >= text.length) {
                 clearInterval(iv);
-                this.schedulePlainSubmit(sm.submit_key, beforeSubmit);
+                if (attempt) attempt.bodyFinished = true;
+                this.schedulePlainSubmit(sm.submit_key, beforeSubmit, attempt);
                 return;
             }
-            this.host.adapter.send_keys(text[i]);
+            this.writeKeys(text[i], false, attempt);
             i += 1;
         }, perChar);
     }
@@ -702,6 +752,7 @@ export class SendSubmitEngine {
      * split ESC[200~ / ESC[201~ mid-sequence regardless of body length.
      */
     private writeWin32Body(text: string): void {
+        const attempt = this.writeAttempt;
         if (this.win32WriteTimer) { clearTimeout(this.win32WriteTimer); this.win32WriteTimer = null; }
 
         const hasNewline = /\r?\n/.test(text);
@@ -744,7 +795,8 @@ export class SendSubmitEngine {
 
         if (segments.length <= 1) {
             this.markBodyWrite();
-            this.host.adapter.send_keys(segments[0] ?? text);
+            this.writeKeys(segments[0] ?? text, false, attempt);
+            if (attempt) attempt.bodyFinished = true;
             return;
         }
         let idx = 0;
@@ -752,11 +804,11 @@ export class SendSubmitEngine {
             this.win32WriteTimer = null;
             if (idx >= segments.length) return;
             this.markBodyWrite();
-            this.host.adapter.send_keys(segments[idx]);
+            this.writeKeys(segments[idx], false, attempt);
             idx += 1;
             if (idx < segments.length) {
                 this.win32WriteTimer = setTimeout(writeNext, WIN32_PTY_WRITE_CHUNK_GAP_MS);
-            }
+            } else if (attempt) attempt.bodyFinished = true;
         };
         writeNext();
     }
@@ -783,6 +835,7 @@ export class SendSubmitEngine {
      *  approval). This preserves the win32 lone-CR-swallow handling.
      */
     private scheduleVerifiedSubmit(submitKey: string, initialDelayMs: number, body: string, opts?: { skipEchoGate?: boolean }): void {
+        const writeAttempt = this.writeAttempt;
         if (this.win32SubmitTimer) { clearTimeout(this.win32SubmitTimer); this.win32SubmitTimer = null; }
         const startedAt = Date.now();
         // BLANK-ENTER-PILEUP: per-provider resend budget (default unchanged at
@@ -843,7 +896,7 @@ export class SendSubmitEngine {
         // attempts instead of spraying them in under 5 seconds.
         const fire = (attempt: number, bodyConfirmed: boolean): void => {
             this.win32SubmitTimer = null;
-            this.host.adapter.send_keys(submitKey);
+            this.writeKeys(submitKey, true, writeAttempt);
             if (attempt + 1 >= maxResends) {
                 // SUBMIT-SILENT-FAILURE detection. We have spent the entire resend
                 // budget and the FSM never left 'idle' — the body is sitting unsent in

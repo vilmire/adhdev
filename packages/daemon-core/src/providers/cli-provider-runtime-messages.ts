@@ -1,3 +1,4 @@
+import type { OutgoingReceipt } from '../seqscribe/outgoing-receipt.js';
 /**
  * Runtime-authored chat messages (verbatim move out of CliProviderInstance —
  * M-FILE-SIZE-DEBT decomposition).
@@ -132,7 +133,15 @@ export function recordAcknowledgedUserInput(
     host: RuntimeMessagesHost,
     input: InputEnvelope | string,
     sourceMessageId?: string,
+    receipt?: OutgoingReceipt,
 ): void {
+    if (sourceMessageId && receipt) {
+        const prior = host.runtimeMessages.find(row => (row.message.meta as Record<string, unknown> | undefined)?.sourceMessageId === sourceMessageId);
+        if (prior) {
+            prior.message = { ...prior.message, meta: { ...prior.message.meta, outgoingReceipt: receipt } };
+            return;
+        }
+    }
     // (IMAGE-TRIPLE-BUBBLE ③) The ack DESCRIBES the send, it must not re-perform
     // it: running the delivery prompt builder here re-materialized every base64
     // image into a second temp file (1ms twin files per send, observed live) and
@@ -193,6 +202,7 @@ export function recordAcknowledgedUserInput(
             // ack echoes, so the dashboard reconciles its optimistic bubble with
             // the ack by id instead of by content.
             ...(sourceId ? { sourceMessageId: sourceId } : {}),
+            ...(receipt ? { outgoingReceipt: receipt } : {}),
         },
     } as ChatMessage), dedupKey);
 }
