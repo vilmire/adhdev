@@ -1,6 +1,7 @@
 import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as net from 'net';
+import * as path from 'node:path';
 import {
   SessionHostRegistry,
   classifyTermination,
@@ -26,6 +27,7 @@ import type {
   SessionTermination,
 } from '@adhdev/session-host-core';
 import { PtySessionRuntime } from './runtime.js';
+import { HostUpgradeLease, type HostUpgradeBinding } from './upgrade-lease.js';
 import { SessionHostStorage } from './storage.js';
 import {
   buildHostDiagnostics,
@@ -44,6 +46,8 @@ import {
 
 export interface SessionHostServerOptions {
   endpoint?: SessionHostEndpoint;
+  /** Opt-in pinned native binding; absent hosts cannot attest an upgrade idle lease. */
+  upgradeBinding?: HostUpgradeBinding;
   appName?: string;
   /** Explicit session-host state root (runtime records + tombstones). */
   storageRootDir?: string;
@@ -54,6 +58,10 @@ export class SessionHostServer extends EventEmitter {
   readonly registry = new SessionHostRegistry();
   private runtimes = new Map<string, PtySessionRuntime>();
   private readonly storage: SessionHostStorage;
+  private readonly upgradeLease: HostUpgradeLease | null;
+  private restorePending = true;
+  private mutatingRequests = 0;
+  private endpointInode: bigint | null = null;
   private ipcServer: net.Server | null = null;
   private sockets = new Set<net.Socket>();
   // Tracks which sessionIds each socket has subscribed to (via create/attach).
@@ -77,6 +85,15 @@ export class SessionHostServer extends EventEmitter {
   constructor(options: SessionHostServerOptions = {}) {
     super();
     this.endpoint = options.endpoint || getDefaultSessionHostEndpoint(options.appName || 'adhdev');
+    if (options.upgradeBinding) {
+      const relative = options.storageRootDir && path.relative(options.upgradeBinding.stateDir, options.storageRootDir);
+      if (this.endpoint.kind !== 'unix' || !options.storageRootDir || !path.isAbsolute(options.storageRootDir) ||
+          !path.isAbsolute(options.upgradeBinding.stateDir) || relative === '..' || relative?.startsWith(`..${path.sep}`) || path.isAbsolute(relative || '')) {
+        throw new Error('native_host_instance_storage_binding_required');
+      }
+    }
+    this.upgradeLease = options.upgradeBinding
+      ? new HostUpgradeLease(options.upgradeBinding, this.endpoint.path) : null;
     this.storage = new SessionHostStorage({
       appName: options.appName || 'adhdev',
       rootDir: options.storageRootDir,
@@ -84,7 +101,15 @@ export class SessionHostServer extends EventEmitter {
   }
 
   async start(): Promise<void> {
-    if (this.endpoint.kind === 'unix') {
+    if (this.upgradeLease) {
+      await this.upgradeLease.start();
+      // A stale socket requires separate native ownership recovery; never unlink on assertion.
+      if (fs.existsSync(this.endpoint.path)) {
+        await this.upgradeLease.close();
+        throw new Error('native_host_endpoint_owner_unproved');
+      }
+    }
+    if (!this.upgradeLease && this.endpoint.kind === 'unix') {
       try {
         fs.unlinkSync(this.endpoint.path);
       } catch {
@@ -150,21 +175,30 @@ export class SessionHostServer extends EventEmitter {
       socket.on('data', parser);
     });
 
-    await new Promise<void>((resolve, reject) => {
-      this.ipcServer?.once('listening', () => resolve());
-      this.ipcServer?.once('error', reject);
-      this.ipcServer?.listen(this.endpoint.path);
-    });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        this.ipcServer?.once('listening', () => resolve());
+        this.ipcServer?.once('error', reject);
+        this.ipcServer?.listen(this.endpoint.path);
+      });
+    } catch (error) {
+      await this.upgradeLease?.close();
+      throw error;
+    }
 
+    if (this.upgradeLease && this.endpoint.kind === 'unix') {
+      fs.chmodSync(this.endpoint.path, 0o600);
+      this.endpointInode = fs.lstatSync(this.endpoint.path, { bigint: true }).ino;
+    }
     this.recordHostLog('info', `session host endpoint ready: ${this.endpoint.path}`);
     // Do not block readiness on restoring/resuming persisted runtimes.
     // Startup callers only need the IPC endpoint to accept connections.
     setTimeout(() => {
       try {
-        this.restorePersistedRuntimes();
+        if (!this.upgradeLease?.proof().held) this.restorePersistedRuntimes();
       } catch (error: any) {
         this.recordHostLog('error', `session host restore failed: ${error?.message || String(error)}`);
-      }
+      } finally { this.restorePending = false; }
     }, 0);
   }
 
@@ -200,17 +234,36 @@ export class SessionHostServer extends EventEmitter {
     }
     if (this.endpoint.kind === 'unix') {
       try {
-        fs.unlinkSync(this.endpoint.path);
+        if (!this.upgradeLease || fs.lstatSync(this.endpoint.path, { bigint: true }).ino === this.endpointInode) fs.unlinkSync(this.endpoint.path);
       } catch {
-        // noop
+        // A replacement endpoint belongs to someone else.
       }
     }
+    await this.upgradeLease?.close();
     this.removeAllListeners();
   }
 
   async handleRequest(request: SessionHostRequest): Promise<SessionHostResponse> {
+    const readOnly = ['get_upgrade_lease', 'acquire_upgrade_lease', 'release_upgrade_lease', 'get_host_diagnostics', 'list_sessions', 'get_snapshot', 'get_terminal_snapshot'].includes(request.type);
+    let counted = false;
     try {
+      if (!readOnly) {
+        this.upgradeLease?.assertMutable();
+        this.mutatingRequests++;
+        counted = true;
+      }
       switch (request.type) {
+        case 'get_upgrade_lease':
+          if (!this.upgradeLease) throw new Error('native_host_upgrade_binding_unavailable');
+          return { success: true, result: this.upgradeLease.proof() };
+        case 'acquire_upgrade_lease':
+          if (!this.upgradeLease) throw new Error('native_host_upgrade_binding_unavailable');
+          return { success: true, result: this.upgradeLease.acquire(request.payload,
+            !this.restorePending && this.mutatingRequests === 0 && this.runtimes.size === 0 &&
+            this.registry.listSessions().length === 0 && !this.storage.hasRuntimeEntries()) };
+        case 'release_upgrade_lease':
+          if (!this.upgradeLease) throw new Error('native_host_upgrade_binding_unavailable');
+          return { success: true, result: this.upgradeLease.release(request.payload) };
         case 'create_session': {
           const record = this.registry.createSession(request.payload);
           this.schedulePersist(record.sessionId);
@@ -409,6 +462,8 @@ export class SessionHostServer extends EventEmitter {
       }
     } catch (error: any) {
       return { success: false, error: error?.message || String(error) };
+    } finally {
+      if (counted) this.mutatingRequests--;
     }
   }
 

@@ -18,6 +18,7 @@ import { SessionHostServer } from './server.js';
 
 export { SessionHostServer } from './server.js';
 export type { SessionHostServerOptions } from './server.js';
+export type { HostUpgradeBinding } from './upgrade-lease.js';
 
 const SESSION_HOST_APP_NAME = process.env.ADHDEV_SESSION_HOST_NAME || 'adhdev';
 

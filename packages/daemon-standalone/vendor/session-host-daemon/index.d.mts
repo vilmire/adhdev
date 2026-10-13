@@ -2,8 +2,17 @@
 import { EventEmitter } from 'events';
 import { SessionHostEndpoint, SessionHostRegistry, SessionHostRequest, SessionHostResponse } from '@adhdev/session-host-core';
 
+interface HostUpgradeBinding {
+    /** Trusted packaged helper; supplied hash must come from an immutable artifact pin. */
+    helperPath: string;
+    helperSha256: string;
+    stateDir: string;
+}
+
 interface SessionHostServerOptions {
     endpoint?: SessionHostEndpoint;
+    /** Opt-in pinned native binding; absent hosts cannot attest an upgrade idle lease. */
+    upgradeBinding?: HostUpgradeBinding;
     appName?: string;
     /** Explicit session-host state root (runtime records + tombstones). */
     storageRootDir?: string;
@@ -13,6 +22,10 @@ declare class SessionHostServer extends EventEmitter {
     readonly registry: SessionHostRegistry;
     private runtimes;
     private readonly storage;
+    private readonly upgradeLease;
+    private restorePending;
+    private mutatingRequests;
+    private endpointInode;
     private ipcServer;
     private sockets;
     private socketSessions;
@@ -71,4 +84,4 @@ declare function createUncaughtExceptionLimiter(windowMs?: number, limit?: numbe
     countInWindow: number;
 };
 
-export { SessionHostServer, type SessionHostServerOptions, createUncaughtExceptionLimiter };
+export { type HostUpgradeBinding, SessionHostServer, type SessionHostServerOptions, createUncaughtExceptionLimiter };

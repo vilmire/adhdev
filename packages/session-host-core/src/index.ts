@@ -1,4 +1,5 @@
 export type {
+  HostUpgradeLeasePayload,
   AcquireWritePayload,
   AttachSessionPayload,
   ClearSessionBufferPayload,

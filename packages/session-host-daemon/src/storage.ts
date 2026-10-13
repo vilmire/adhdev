@@ -40,6 +40,14 @@ export class SessionHostStorage {
     this.tombstonesDir = path.join(this.rootDir, 'tombstones');
   }
 
+  /** Unknown/corrupt recovery files also veto idle admission; reads names only. */
+  hasRuntimeEntries(): boolean {
+    if (!fs.existsSync(this.runtimesDir)) return false;
+    const stat = fs.lstatSync(this.runtimesDir);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('native_host_runtime_storage_untrusted');
+    return fs.readdirSync(this.runtimesDir).length > 0;
+  }
+
   loadAll(): PersistedRuntimeState[] {
     if (!fs.existsSync(this.runtimesDir)) return [];
     const entries = fs.readdirSync(this.runtimesDir, { withFileTypes: true });

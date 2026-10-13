@@ -2901,6 +2901,9 @@ var require_dist = __commonJS({
     });
     module2.exports = __toCommonJS2(index_exports2);
     var SESSION_HOST_SUPPORTED_REQUEST_TYPES = [
+      "get_upgrade_lease",
+      "acquire_upgrade_lease",
+      "release_upgrade_lease",
       "create_session",
       "attach_session",
       "detach_session",

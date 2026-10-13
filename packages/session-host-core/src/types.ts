@@ -298,7 +298,17 @@ export interface SessionHostDiagnostics {
   recentTransitions: SessionHostRuntimeTransition[];
 }
 
+export interface HostUpgradeLeasePayload {
+  bootId: string;
+  epoch: number;
+  owner: string;
+  token: string;
+}
+
 export type SessionHostRequest =
+  | { type: 'get_upgrade_lease'; payload?: {} }
+  | { type: 'acquire_upgrade_lease'; payload: HostUpgradeLeasePayload }
+  | { type: 'release_upgrade_lease'; payload: HostUpgradeLeasePayload }
   | { type: 'create_session'; payload: CreateSessionPayload }
   | { type: 'attach_session'; payload: AttachSessionPayload }
   | { type: 'detach_session'; payload: DetachSessionPayload }
@@ -323,6 +333,9 @@ export type SessionHostRequest =
 export type SessionHostRequestType = SessionHostRequest['type'];
 
 export const SESSION_HOST_SUPPORTED_REQUEST_TYPES: readonly SessionHostRequestType[] = [
+  'get_upgrade_lease',
+  'acquire_upgrade_lease',
+  'release_upgrade_lease',
   'create_session',
   'attach_session',
   'detach_session',
