@@ -7,7 +7,7 @@
  * the adapter, which supplies provider type and workspace — so the dashboard and
  * the transcript projection's final internal pull (which passes ONLY
  * targetSessionId) still get the transcript. After auto-clean the ordinary
- * history fallback applies (it needs a provider type from the caller).
+ * targeted reads fail closed unless independent workspace ownership remains.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -94,18 +94,21 @@ describe('read_chat inside the PTY-exit → auto-clean window', () => {
     expect(mocks.readProviderChatHistory.mock.calls.every(c => c[0] === 'hermes-cli')).toBe(true)
   })
 
-  it('after auto-clean (adapter gone too) an id-only read fails closed, and a typed read falls back to history', async () => {
+  it('after auto-clean (adapter gone too) both id-only and typed reads fail closed', async () => {
     const { registry, adapters, handler } = setup()
     registry.terminate(SESSION, 'pty_exit')
     adapters.delete(SESSION)
 
+    mocks.readProviderChatHistory.mockClear()
     const bare: any = await handler.handle('read_chat', { targetSessionId: SESSION })
     expect(bare.success).toBe(false)
     expect(bare.error).toBe(`Live session not found for targetSessionId: ${SESSION}`)
 
     const typed: any = await handler.handle('read_chat', { targetSessionId: SESSION, agentType: 'hermes-cli' })
-    expect(typed.success).toBe(true)
-    expect((typed.messages as any[]).map(m => m.content)).toContain('final answer before the crash')
+    expect(typed.success).toBe(false)
+    expect(typed.code).toBe('read_chat_target_workspace_unconfirmed')
+    expect(typed.messages).toBeUndefined()
+    expect(mocks.readProviderChatHistory).not.toHaveBeenCalled()
   })
 
   it('a non-history command does NOT resolve a dead session through its adapter', async () => {

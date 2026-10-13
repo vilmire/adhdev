@@ -18,9 +18,9 @@ vi.mock('../../src/config/provider-native-history.js', async (importOriginal) =>
   },
 }))
 
-import { handleReadChat } from '../../src/commands/chat-commands.js'
+import { __resetProviderSessionPinsForTest, handleReadChat } from '../../src/commands/chat-commands.js'
 
-function createHelpers() {
+function createHelpers(ownedWorkspace: string | null = '/tmp/requested-workspace') {
   return {
     getCdp: () => null,
     getProvider: (type?: string) => {
@@ -39,7 +39,9 @@ function createHelpers() {
     agentStream: null,
     ctx: {
       instanceManager: { getInstance: () => null },
-      sessionRegistry: { get: () => undefined },
+      sessionRegistry: { get: (sessionId: string) => ownedWorkspace && sessionId === 'dead-end-runtime-session'
+        ? { sessionId, providerType: 'codex-cli', transport: 'pty', workspace: ownedWorkspace }
+        : undefined },
     },
     historyWriter: { appendNewMessages: () => {} },
   }
@@ -47,7 +49,21 @@ function createHelpers() {
 
 describe('read_chat dead-end soft response (no live adapter + native not safely mappable)', () => {
   beforeEach(() => {
+    __resetProviderSessionPinsForTest()
     mocks.readProviderChatHistory.mockReset()
+  })
+
+  it('refuses an unknown target before native lookup despite caller workspace and explicit identity', async () => {
+    for (let read = 0; read < 2; read++) {
+      const result = await handleReadChat(createHelpers(null) as any, {
+        agentType: 'codex-cli', targetSessionId: 'unknown-runtime-session',
+        historySessionId: 'explicit-requested-session-id', workspace: '/tmp/requested-workspace',
+      })
+      expect(result.success).toBe(false)
+      expect((result as any).code).toBe('read_chat_target_workspace_unconfirmed')
+      expect(result.messages).toBeUndefined()
+    }
+    expect(mocks.readProviderChatHistory).not.toHaveBeenCalled()
   })
 
   it('returns success:true + empty + pending + reason instead of a hard error when native history cannot be safely mapped', async () => {
@@ -119,10 +135,11 @@ describe('read_chat dead-end soft response (no live adapter + native not safely 
     expect((result.messages as any[]).map((m) => m.content)).toEqual(['matched session answer'])
   })
 
-  it('returns live messages (not a soft pending) when a live adapter is present', async () => {
+  it.each([true, false])('preserves owned live messages with exact native binding=%s', async (exactNativeBinding) => {
     // Regression guard: the live-adapter path must be untouched. With a live
     // PTY adapter bound to the runtime session, read_chat returns the live/native
     // messages normally — it never enters the history-only dead-end branch.
+    // An unconfirmed workspace candidate must leave the owned PTY selected.
     const runtimeSessionId = 'live-runtime-session'
     const providerSessionId = '019ea359-e438-7be2-b24e-88aedb6cd87c'
     mocks.readProviderChatHistory.mockReturnValue({
@@ -133,6 +150,8 @@ describe('read_chat dead-end soft response (no live adapter + native not safely 
       hasMore: false,
       source: 'provider-native',
       providerSessionId,
+      workspace: '/tmp/adhdev-project',
+      lookup: 'session',
     })
     const adapter = {
       cliType: 'codex-cli',
@@ -141,7 +160,10 @@ describe('read_chat dead-end soft response (no live adapter + native not safely 
       getStatus: () => ({ status: 'idle' }),
       getScriptParsedStatus: () => ({
         status: 'idle',
-        messages: [{ role: 'user', content: 'live prompt', receivedAt: 1100 }],
+        messages: [
+          { role: 'user', content: 'live prompt', receivedAt: 1100 },
+          ...(!exactNativeBinding ? [{ role: 'assistant', content: 'owned PTY answer', receivedAt: 1200 }] : []),
+        ],
       }),
       getRuntimeMetadata: () => ({
         runtimeId: runtimeSessionId,
@@ -166,6 +188,7 @@ describe('read_chat dead-end soft response (no live adapter + native not safely 
               sessionId: runtimeSessionId,
               providerType: 'codex-cli',
               transport: 'pty',
+              workspace: '/tmp/adhdev-project',
               spawnedAtMs: 1000,
             }
             : undefined,
@@ -174,11 +197,17 @@ describe('read_chat dead-end soft response (no live adapter + native not safely 
     } as any, {
       agentType: 'codex-cli',
       targetSessionId: runtimeSessionId,
+      ...(exactNativeBinding ? { historySessionId: providerSessionId } : {}),
       tailLimit: 20,
     })
 
     expect(result.success).toBe(true)
     expect((result as any).pending).toBeUndefined()
-    expect((result.messages as any[]).map((m) => m.content)).toEqual(['live prompt', 'live answer'])
+    expect((result.messages as any[]).map((m) => m.content)).toEqual(['live prompt', exactNativeBinding ? 'live answer' : 'owned PTY answer'])
+    expect(mocks.readProviderChatHistory).toHaveBeenCalledWith('codex-cli', expect.objectContaining({
+      workspace: '/tmp/adhdev-project',
+      ...(exactNativeBinding ? { historySessionId: providerSessionId } : {}),
+    }))
+    if (!exactNativeBinding) expect(adapter.updateRuntimeMeta).not.toHaveBeenCalled()
   })
 })
