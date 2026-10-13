@@ -29,7 +29,7 @@ import { resolveTranscriptAuthorityProfile } from '../transcript-evidence.js';
 import { isWeakCompletionEvidence } from '../../mesh/mesh-events-utils.js';
 import type { ProviderModule } from '../contracts.js';
 import { emitTurnEnd, type TurnEvidencePort } from '../turn-evidence-port.js';
-import { detectAuthFailureOnlyReply } from '../spec/provider-failure-classifier.js';
+import { classifyOwnAuthFailureOnlyReply } from '../spec/provider-output-attribution.js';
 import type { TurnAttemptRef, TurnEndBlockReason, NativeTurnOutcome } from '@adhdev/mesh-shared';
 
 /**
@@ -304,6 +304,8 @@ export function flushCompletedDebounceIfFinalized(host: CompletionFlushHost): vo
 
 /** The narrow surface of CliProviderInstance the completion emit reads/writes. */
 export interface CompletionEmitHost {
+    /** Owning CLI, never inferred from the final assistant reply. */
+    type: string;
     instanceId: string;
     settings: Record<string, any>;
     busyEpoch: number;
@@ -410,7 +412,7 @@ export function emitGeneratingCompleted(host: CompletionEmitHost, opts: {
             // match only — a summary that merely mentions the banner is untouched.
             providerFailure: PROVIDER_FAILURES.includes(opts.completionDiagnostic?.nativeProviderFailure as ProviderFailure)
                 ? opts.completionDiagnostic!.nativeProviderFailure as ProviderFailure
-                : summary && detectAuthFailureOnlyReply(summary) ? 'auth_failed' : undefined,
+                : summary && classifyOwnAuthFailureOnlyReply(host.type, summary) ? 'auth_failed' : undefined,
             // `nodeLabel` is intentionally omitted — `turn-ledger/deliver.ts`'s
             // `nodeLabelFor` already falls back to the attempt's own
             // `nodeId`/`providerType` (dispatch-time facts the ledger has),

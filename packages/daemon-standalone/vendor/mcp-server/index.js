@@ -145426,14 +145426,6 @@ ${text2}` : text2;
       host.notifyChange("prompt_cleared");
     }
     init_logger();
-    var TAIL_BYTES4 = 16 * 1024;
-    var STUCK_BUSY_ESCAPE_MS = 6e4;
-    var MIN_SUSPECT_AGE_MS = 5e3;
-    var ADVISORY_COOLDOWN_MS = 10 * 6e4;
-    var LIVE_AUTH_ADVISORY_RULE_ID = "builtin.live_auth_marker";
-    function createLiveAuthState() {
-      return { suspect: null, advisoryNotifiedAtMs: 0, coordinatorMarkerLogged: false, stopRequested: false };
-    }
     var PROVIDER_MARKERS = {
       "codex-cli": /chatgpt\.com|backend-api\/|wham\/usage|\bcodex(?:-cli)?\b|\bopenai\b/i,
       "claude-cli": /\banthropic\b|\bclaude(?:-cli)?\b|claude\.ai/i,
@@ -145443,52 +145435,129 @@ ${text2}` : text2;
       "grok-cli": /\bgrok(?:-cli)?\b|\bx\.ai\b/i,
       "opencode": /\bopencode\b/i
     };
-    var FOREIGN_CONTEXT_LINES = 2;
-    var FOREIGN_CONTEXT_CHARS = 240;
-    var LONG_LINE_CHARS = 2 * FOREIGN_CONTEXT_CHARS;
-    function foreignMarkerFor(cliType) {
-      if (!(cliType in PROVIDER_MARKERS)) return null;
-      const sources = Object.entries(PROVIDER_MARKERS).filter(([provider]) => provider !== cliType).map(([, re]) => `(?:${re.source})`);
-      return new RegExp(sources.join("|"), "gi");
-    }
-    function maskForeignProviderText(cliType, text2) {
-      const marker = foreignMarkerFor(cliType);
-      if (!marker || !text2) return text2;
-      const lines = text2.split("\n");
-      const masked = new Array(lines.length).fill(false);
-      const out = lines.slice();
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        marker.lastIndex = 0;
-        if (!marker.test(line)) continue;
-        if (line.length > LONG_LINE_CHARS) {
-          let result = "";
-          let cursor = 0;
-          marker.lastIndex = 0;
-          for (let m = marker.exec(line); m; m = marker.exec(line)) {
-            const start = Math.max(cursor, m.index - FOREIGN_CONTEXT_CHARS);
-            const end = Math.min(line.length, m.index + m[0].length + FOREIGN_CONTEXT_CHARS);
-            result += line.slice(cursor, start) + "\n";
-            cursor = Math.max(cursor, end);
-            if (m[0].length === 0) marker.lastIndex++;
+    var PROVIDER_LABEL = /\b(?:codex(?:-cli)?|openai|claude(?:-cli)?|anthropic|antigravity(?:-cli)?|agy|kimi(?:-cli)?|moonshot|cursor-(?:agent|cli)|grok(?:-cli)?|opencode)\b/gi;
+    function logicalBlocks(text2) {
+      const blocks = [];
+      let pending = [];
+      let fence;
+      let quoted = false;
+      const flush = () => {
+        if (pending.length) blocks.push(pending.join("\n"));
+        pending = [];
+      };
+      const attachIntroduction = () => {
+        const prior = blocks[blocks.length - 1];
+        if (!pending.length && prior?.trimEnd().endsWith(":") && Object.values(PROVIDER_MARKERS).some((marker) => marker.test(prior))) pending.push(blocks.pop());
+      };
+      for (const line of text2.split("\n")) {
+        const delimiter5 = line.match(/^\s*(`{3,}|~{3,})/);
+        if (fence) {
+          pending.push(line);
+          if (delimiter5 && delimiter5[1][0] === fence[0] && delimiter5[1].length >= fence.length) {
+            fence = void 0;
+            flush();
           }
-          out[i] = result + line.slice(cursor);
           continue;
         }
-        masked[i] = true;
-        for (let d = 1; d <= FOREIGN_CONTEXT_LINES && i - d >= 0 && lines[i - d].trim() !== ""; d++) masked[i - d] = true;
-        for (let d = 1; d <= FOREIGN_CONTEXT_LINES && i + d < lines.length && lines[i + d].trim() !== ""; d++) masked[i + d] = true;
+        if (quoted && !/^\s*>/.test(line)) {
+          flush();
+          quoted = false;
+        }
+        if (delimiter5) {
+          attachIntroduction();
+          fence = delimiter5[1];
+          pending.push(line);
+          continue;
+        }
+        if (!line.trim()) {
+          flush();
+          continue;
+        }
+        quoted = /^\s*>/.test(line);
+        if (quoted) attachIntroduction();
+        pending.push(line);
       }
-      for (let i = 0; i < out.length; i++) if (masked[i]) out[i] = "";
-      return out.join("\n");
+      flush();
+      return blocks;
+    }
+    function labelledStatements(cliType, block2) {
+      const boundaries = [0];
+      let quotedBy = "";
+      let fence;
+      let offset = 0;
+      for (const line of block2.split("\n")) {
+        const delimiter5 = line.match(/^\s*(`{3,}|~{3,})/);
+        if (delimiter5) {
+          if (!fence) fence = delimiter5[1];
+          else if (delimiter5[1][0] === fence[0] && delimiter5[1].length >= fence.length) fence = void 0;
+          offset += line.length + 1;
+          continue;
+        }
+        if (fence || /^\s*>/.test(line)) {
+          offset += line.length + 1;
+          continue;
+        }
+        const prior = block2.slice(boundaries[boundaries.length - 1], offset).trimStart();
+        const ownAtStart = prior.match(PROVIDER_MARKERS[cliType]);
+        if (!quotedBy && offset > 0 && ownAtStart?.index === 0 && Object.entries(PROVIDER_MARKERS).some(([provider, marker]) => provider !== cliType && marker.test(line))) {
+          boundaries.push(offset);
+        }
+        PROVIDER_LABEL.lastIndex = 0;
+        const labels = [...line.matchAll(PROVIDER_LABEL)];
+        let scanned = 0;
+        for (const label2 of labels) {
+          const index = label2.index;
+          for (; scanned < index; scanned++) {
+            const c = line[scanned];
+            if (c === "\\") {
+              scanned++;
+              continue;
+            }
+            if (quotedBy) {
+              if (c === quotedBy) quotedBy = "";
+            } else if (c === '"' || c === "`" || c === "'" && (scanned === 0 || !/[a-z0-9]/i.test(line[scanned - 1]))) quotedBy = c;
+          }
+          const before = line.slice(0, index);
+          const after = line.slice(index + label2[0].length);
+          const declaration = /^\s*(?:[-*]\s*)?$/.test(before) || /[;·]\s*$/.test(before) || /^\s*:\s+/.test(after) && /\s$/.test(before);
+          const prefix = block2.slice(boundaries[boundaries.length - 1], offset + index);
+          if (!quotedBy && declaration && offset + index > 0 && Object.values(PROVIDER_MARKERS).some((marker) => marker.test(prefix))) boundaries.push(offset + index);
+        }
+        for (; scanned < line.length; scanned++) {
+          const c = line[scanned];
+          if (c === "\\") {
+            scanned++;
+            continue;
+          }
+          if (quotedBy) {
+            if (c === quotedBy) quotedBy = "";
+          } else if (c === '"' || c === "`" || c === "'" && (scanned === 0 || !/[a-z0-9]/i.test(line[scanned - 1]))) quotedBy = c;
+        }
+        offset += line.length + 1;
+      }
+      return boundaries.map((start, i) => block2.slice(start, boundaries[i + 1] ?? block2.length));
+    }
+    function maskForeignProviderText(cliType, text2) {
+      if (!(cliType in PROVIDER_MARKERS) || !text2) return text2;
+      const clean2 = stripAnsi(text2);
+      const foreign = Object.entries(PROVIDER_MARKERS).filter(([provider]) => provider !== cliType);
+      if (!foreign.some(([, marker]) => marker.test(clean2))) return text2;
+      return logicalBlocks(clean2).flatMap((block2) => labelledStatements(cliType, block2)).map((statement) => foreign.some(([, marker]) => marker.test(statement)) ? "" : statement).join("\n");
+    }
+    function classifyOwnAuthFailureOnlyReply(cliType, reply) {
+      if (!detectAuthFailureOnlyReply(reply)) return null;
+      return detectAuthFailureOnlyReply(maskForeignProviderText(cliType, reply));
+    }
+    var TAIL_BYTES4 = 16 * 1024;
+    var STUCK_BUSY_ESCAPE_MS = 6e4;
+    var MIN_SUSPECT_AGE_MS = 5e3;
+    var ADVISORY_COOLDOWN_MS = 10 * 6e4;
+    var LIVE_AUTH_ADVISORY_RULE_ID = "builtin.live_auth_marker";
+    function createLiveAuthState() {
+      return { suspect: null, advisoryNotifiedAtMs: 0, coordinatorMarkerLogged: false, stopRequested: false };
     }
     function classifyAuthBillingOutput(cliType, text2, exitCode) {
-      const failure6 = detectProviderFailure(text2, exitCode);
-      if (!failure6) return null;
-      if (cliType !== "kimi" && failure6.failureKind !== "auth") return null;
-      const own = maskForeignProviderText(cliType, text2);
-      if (own === text2) return failure6;
-      const ownFailure = detectProviderFailure(own, exitCode);
+      const ownFailure = detectProviderFailure(maskForeignProviderText(cliType, text2), exitCode);
       if (!ownFailure) return null;
       if (cliType !== "kimi" && ownFailure.failureKind !== "auth") return null;
       return ownFailure;
@@ -150105,7 +150174,7 @@ ${buttons.join("\n")}`;
           // is not a completion. The closed enum rides the evidence; the owner's
           // reducer commits it failed / provider_auth_failed (R9f). Whole-reply
           // match only — a summary that merely mentions the banner is untouched.
-          providerFailure: PROVIDER_FAILURES2.includes(opts.completionDiagnostic?.nativeProviderFailure) ? opts.completionDiagnostic.nativeProviderFailure : summary && detectAuthFailureOnlyReply(summary) ? "auth_failed" : void 0,
+          providerFailure: PROVIDER_FAILURES2.includes(opts.completionDiagnostic?.nativeProviderFailure) ? opts.completionDiagnostic.nativeProviderFailure : summary && classifyOwnAuthFailureOnlyReply(host.type, summary) ? "auth_failed" : void 0,
           // `nodeLabel` is intentionally omitted — `turn-ledger/deliver.ts`'s
           // `nodeLabelFor` already falls back to the attempt's own
           // `nodeId`/`providerType` (dispatch-time facts the ledger has),

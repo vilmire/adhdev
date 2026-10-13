@@ -66,7 +66,7 @@ describe('Codex native producer terminal truth', () => {
                 expect(validateReadChatResultPayload({ id: SID, title: 'fixture', status: 'idle', messages: [], turnTerminalMarkers: result.turnTerminalMarkers }, 'fixture').turnTerminalMarkers).toEqual(result.turnTerminalMarkers);
                 for (const weak of [false, true]) {
                     const emitted: any[] = [];
-                    emitGeneratingCompleted({ instanceId: 's1', settings: {}, busyEpoch: 1, lastCompletionSummary: null, lastEmittedCompletion: null, pushEvent: () => {}, updateSettings: () => {},
+                    emitGeneratingCompleted({ type: 'codex-cli', instanceId: 's1', settings: {}, busyEpoch: 1, lastCompletionSummary: null, lastEmittedCompletion: null, pushEvent: () => {}, updateSettings: () => {},
                         currentAttemptRef: () => ({ attemptId: 'a1', generation: 1 }),
                         turnEvidencePort: createTurnEvidencePort({ observe: (e) => { emitted.push(e); } }) },
                     { chatTitle: 'fixture', timestamp: START + 2000, duration: 2, completionDiagnostic: { nativeTurnOutcome: marker.outcome, nativeProviderFailure: marker.providerFailure, nativeMarker: { outcome: marker.outcome, turnId: marker.turnId, receivedAt: marker.receivedAt, startedAt: marker.startedAt, errorAt: marker.errorAt }, ...(weak ? { blockReason: 'missing_final_assistant' } : {}) } });
@@ -154,7 +154,7 @@ describe('combined Codex producer to assistant terminal watch', () => {
         const marker = selectTurnTerminalMarker(result.turnTerminalMarkers, START)!;
         const emitted: any[] = [];
         const legacyWire = vi.fn();
-        emitGeneratingCompleted({ instanceId: 's1', settings: {}, busyEpoch: 1, lastCompletionSummary: null, lastEmittedCompletion: null,
+        emitGeneratingCompleted({ type: 'codex-cli', instanceId: 's1', settings: {}, busyEpoch: 1, lastCompletionSummary: null, lastEmittedCompletion: null,
             pushEvent: legacyWire, updateSettings: () => {}, currentAttemptRef: () => ({ attemptId, generation: 0 }),
             turnEvidencePort: createTurnEvidencePort({ observe: (e, opts) => { emitted.push(e); ledger.observe(e, opts); } }) },
         { chatTitle: 'fixture', timestamp: marker.receivedAt, duration: 2, finalSummary: marker.summary,

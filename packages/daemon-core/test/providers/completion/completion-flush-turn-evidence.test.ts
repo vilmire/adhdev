@@ -21,7 +21,7 @@ function makeHost(overrides: Partial<CompletionEmitHost> = {}): { host: Completi
     const pushed: any[] = [];
     const port = createTurnEvidencePort({ observe: (e, opts) => { observed.push(e); observedOpts.push(opts); } });
     const host: CompletionEmitHost = {
-        instanceId: 'sess_1',
+        type: 'claude-cli', instanceId: 'sess_1',
         settings: {},
         busyEpoch: 0,
         lastCompletionSummary: null,
@@ -130,7 +130,7 @@ describe('completion-flush emitGeneratingCompleted -> turn_end evidence (chokepo
     it('a throwing sink does not break emitGeneratingCompleted (guarded, never throws)', () => {
         const port = createTurnEvidencePort({ observe: () => { throw new Error('ledger down'); } });
         const host: CompletionEmitHost = {
-            instanceId: 'sess_1', settings: {}, busyEpoch: 0, lastCompletionSummary: null, lastEmittedCompletion: null,
+            type: 'claude-cli', instanceId: 'sess_1', settings: {}, busyEpoch: 0, lastCompletionSummary: null, lastEmittedCompletion: null,
             pushEvent: () => {}, updateSettings: () => {}, turnEvidencePort: port,
         };
         expect(() => emitGeneratingCompleted(host, { chatTitle: 'x', duration: 1, timestamp: 7000 })).not.toThrow();

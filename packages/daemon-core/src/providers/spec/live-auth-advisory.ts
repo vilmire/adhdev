@@ -80,6 +80,7 @@
 
 import { LOG } from '../../logging/logger.js';
 import { detectProviderFailure, type ProviderFailure } from './provider-failure-classifier.js';
+import { maskForeignProviderText } from './provider-output-attribution.js';
 import type { SignalDetection } from './signal-rules.js';
 
 /** Exported so `cli-adapter.ts` can pass the same window to `RawTail.strippedTail()`
@@ -123,98 +124,13 @@ export interface LiveAuthContext {
     isCoordinator: boolean;
 }
 
-/**
- * ── PROVIDER ATTRIBUTION (rc12 finding 2026-10-13) ───────────────────────────
- * The classifier's patterns are provider-agnostic, but the session they would
- * flag is not. A mesh session routinely QUOTES another provider's auth error:
- * an antigravity worker investigating a codex quota bug printed codex's
- * `wham/usage failed: 401 Unauthorized … token_revoked` line, the `unauthorized`
- * rule matched, and the antigravity session got an auth advisory (and would
- * have been latched auth_failed on an unexpected exit) for a credential it
- * does not even use.
- *
- * So before the AUTH axis may speak for `cliType`, every region of the tail
- * that names ANOTHER provider (its host, CLI name or vendor) is masked out, and
- * the remainder is classified again. If the auth evidence lived only in the
- * foreign region, the result is null — "no evidence about THIS provider", which
- * is unknown, never a verdict either way. A genuine banner from the owning CLI
- * does not name a competitor and is untouched, so own-provider detection is
- * unchanged. Providers absent from the marker table (unknown cliType) keep the
- * old behaviour: nothing is masked.
- *
- * Granularity: a marker masks its own line plus up to FOREIGN_CONTEXT_LINES
- * neighbouring lines on each side (a wrapped error body: the URL and the
- * `401 Unauthorized` often land on adjacent lines), never crossing a blank
- * line. A single over-long line is masked only within FOREIGN_CONTEXT_CHARS of
- * each marker, so a tail without newlines cannot hide an unrelated banner.
- */
-const PROVIDER_MARKERS: Record<string, RegExp> = {
-    'codex-cli': /chatgpt\.com|backend-api\/|wham\/usage|\bcodex(?:-cli)?\b|\bopenai\b/i,
-    'claude-cli': /\banthropic\b|\bclaude(?:-cli)?\b|claude\.ai/i,
-    'antigravity-cli': /\bantigravity(?:-cli)?\b|\bagy\b|cloudcode-pa\.googleapis/i,
-    'kimi': /\bkimi(?:-cli)?\b|\bmoonshot\b/i,
-    'cursor-cli': /\bcursor-(?:agent|cli)\b|cursor\.(?:com|sh)\b/i,
-    'grok-cli': /\bgrok(?:-cli)?\b|\bx\.ai\b/i,
-    'opencode': /\bopencode\b/i,
-};
-const FOREIGN_CONTEXT_LINES = 2;
-const FOREIGN_CONTEXT_CHARS = 240;
-const LONG_LINE_CHARS = 2 * FOREIGN_CONTEXT_CHARS;
-
-function foreignMarkerFor(cliType: string): RegExp | null {
-    if (!(cliType in PROVIDER_MARKERS)) return null;
-    const sources = Object.entries(PROVIDER_MARKERS)
-        .filter(([provider]) => provider !== cliType)
-        .map(([, re]) => `(?:${re.source})`);
-    return new RegExp(sources.join('|'), 'gi');
-}
-
-/**
- * The tail with every region attributed to a provider OTHER than `cliType`
- * blanked (see PROVIDER ATTRIBUTION). Exported for tests.
- */
-export function maskForeignProviderText(cliType: string, text: string): string {
-    const marker = foreignMarkerFor(cliType);
-    if (!marker || !text) return text;
-    const lines = text.split('\n');
-    const masked = new Array<boolean>(lines.length).fill(false);
-    const out = lines.slice();
-    for (let i = 0; i < lines.length; i++) {
-        const line = lines[i]!;
-        marker.lastIndex = 0;
-        if (!marker.test(line)) continue;
-        if (line.length > LONG_LINE_CHARS) {
-            // Mask only the neighbourhood of each marker inside this one line.
-            let result = '';
-            let cursor = 0;
-            marker.lastIndex = 0;
-            for (let m = marker.exec(line); m; m = marker.exec(line)) {
-                const start = Math.max(cursor, m.index - FOREIGN_CONTEXT_CHARS);
-                const end = Math.min(line.length, m.index + m[0].length + FOREIGN_CONTEXT_CHARS);
-                result += line.slice(cursor, start) + '\n';
-                cursor = Math.max(cursor, end);
-                if (m[0].length === 0) marker.lastIndex++;
-            }
-            out[i] = result + line.slice(cursor);
-            continue;
-        }
-        masked[i] = true;
-        for (let d = 1; d <= FOREIGN_CONTEXT_LINES && i - d >= 0 && lines[i - d]!.trim() !== ''; d++) masked[i - d] = true;
-        for (let d = 1; d <= FOREIGN_CONTEXT_LINES && i + d < lines.length && lines[i + d]!.trim() !== ''; d++) masked[i + d] = true;
-    }
-    for (let i = 0; i < out.length; i++) if (masked[i]) out[i] = '';
-    return out.join('\n');
-}
+// Keep the public test seam; completion verdicts share the same attribution.
+export { maskForeignProviderText } from './provider-output-attribution.js';
 
 /** Classify, admitting only the AUTH axis for non-kimi providers (see D4 above),
- *  and only on evidence attributable to `cliType` itself (PROVIDER ATTRIBUTION). */
+ *  and only on evidence attributable to `cliType` itself (provider-output-attribution.ts). */
 export function classifyAuthBillingOutput(cliType: string, text: string, exitCode?: number): ProviderFailure | null {
-    const failure = detectProviderFailure(text, exitCode);
-    if (!failure) return null;
-    if (cliType !== 'kimi' && failure.failureKind !== 'auth') return null;
-    const own = maskForeignProviderText(cliType, text);
-    if (own === text) return failure;
-    const ownFailure = detectProviderFailure(own, exitCode);
+    const ownFailure = detectProviderFailure(maskForeignProviderText(cliType, text), exitCode);
     if (!ownFailure) return null;
     if (cliType !== 'kimi' && ownFailure.failureKind !== 'auth') return null;
     return ownFailure;

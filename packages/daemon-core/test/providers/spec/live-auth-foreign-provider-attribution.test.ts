@@ -74,9 +74,9 @@ describe('classifyAuthBillingOutput — provider attribution', () => {
     expect(masked).toContain('Next I will read refresh.ts')
   })
 
-  it('a long single line masks only the neighbourhood of the foreign marker', () => {
+  it('a long single line preserves a separately labelled own banner', () => {
     const filler = 'x'.repeat(600)
-    const line = `codex said 401 Unauthorized ${filler} Authentication required.`
+    const line = `codex said 401 Unauthorized ${filler}; Antigravity: Authentication required.`
     const masked = maskForeignProviderText('antigravity-cli', line)
     expect(masked).not.toMatch(/codex|unauthorized/i)
     expect(masked).toContain('Authentication required.')
@@ -114,5 +114,58 @@ describe('antigravity-cli consumer paths with a quoted codex 401', () => {
     const agy = make('antigravity-cli', 'Authentication required. Not signed in.')
     agy.handleEvent({ kind: 'exit', exit_code: 1 })
     expect(agy.getStatus()).toMatchObject({ status: 'error', errorReason: 'auth_failed' })
+  })
+})
+
+const FOREIGN_BLOCKS = [
+  'API Error: 401 Unauthorized\nCodex collector returned the error',
+  'Codex collector returned:\n\n```text\nresponse header\n\n401 Unauthorized\n```',
+  'Codex collector returned:\n\n> response header\n>\n> 401 Unauthorized',
+  'Codex collector returned:\nresponse header\nresponse detail\n401 Unauthorized',
+  `Codex collector returned: ${'response detail '.repeat(60)}401 Unauthorized`,
+  'API Error: 401 {"provider":"codex","url":"https://chatgpt.com/backend-api/wham/usage","error":"token_revoked"}',
+  'Codex collector returned:\n```text\nresponse header\n\nresponse detail\n401 Unauthorized\n```',
+  'Codex collector returned:\n> response header\n>\n> response detail\n> 401 Unauthorized',
+  'Codex collector returned:\n{"message":"Antigravity: Authentication required. Not signed in."}',
+  "Codex collector returned: 'the error is Antigravity: Authentication required. Not signed in.'",
+]
+const OWN_BANNER = 'Antigravity: Authentication required. Not signed in.'
+const MIXED_BANNERS = [
+  `Codex collector failed: 401 Unauthorized\n${OWN_BANNER}`,
+  `Codex collector failed: 401 Unauthorized; ${OWN_BANNER}`,
+  `Codex collector failed: 401 Unauthorized ${OWN_BANNER}`,
+  `${OWN_BANNER}\nInvestigating Codex quota.`,
+  `${OWN_BANNER}; Codex collector failed: 401 Unauthorized`,
+]
+
+describe('logical error block attribution through live and unexpected-exit consumers', () => {
+  it.each(FOREIGN_BLOCKS)('foreign block cannot create live suspicion or an exit latch: %s', tail => {
+    expect(classifyAuthBillingOutput('antigravity-cli', tail)).toBeNull()
+    const agy = make('antigravity-cli', tail)
+    agy.observeProviderFailureOutput('', undefined)
+    expect(agy.liveAuth?.suspect ?? null).toBeNull()
+    agy.handleEvent({ kind: 'exit', exit_code: 1 })
+    expect(agy.getStatus().errorReason).toBeUndefined()
+    expect(agy.getStatus().status).toBe('stopped')
+  })
+
+  it.each(MIXED_BANNERS)('explicit own auth survives adjacent foreign evidence: %s', tail => {
+    expect(classifyAuthBillingOutput('antigravity-cli', tail)).toMatchObject({ failureKind: 'auth' })
+    const agy = make('antigravity-cli', tail)
+    agy.observeProviderFailureOutput('', undefined)
+    expect(agy.liveAuth?.suspect?.failure.failureKind).toBe('auth')
+    agy.handleEvent({ kind: 'exit', exit_code: 1 })
+    expect(agy.getStatus()).toMatchObject({ status: 'error', errorReason: 'auth_failed' })
+  })
+
+  it('quote end bounds foreign evidence and preserves an unlabelled own banner afterwards', () => {
+    for (const quote of FOREIGN_BLOCKS.filter(block => block.includes('```') || block.includes('>'))) {
+      const tail = `${quote}\nAuthentication required. Not signed in.`
+      expect(classifyAuthBillingOutput('antigravity-cli', tail)).toMatchObject({ failureKind: 'auth' })
+    }
+  })
+
+  it('attribution remains unknown if a foreign error and an unlabelled banner share one block', () => {
+    expect(classifyAuthBillingOutput('antigravity-cli', 'Codex said 401 Unauthorized\nAuthentication required.')).toBeNull()
   })
 })
