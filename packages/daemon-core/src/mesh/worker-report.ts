@@ -551,6 +551,135 @@ export function acceptWorkerCompletionReport(
     return { accepted: false, refusal: unresolved.refusal, ...(unresolved.detail ? { detail: unresolved.detail } : {}) };
 }
 
+// ─── Invalid-report provenance ──────────────────────────────────────────
+
+/**
+ * Audit kind for a report the validator refused (`invalid_report`: over-limit
+ * summary, unknown key, bad enum …). A SEPARATE kind from
+ * {@link WORKER_REPORT_EVENT_KIND} on purpose: `findPriorWorkerReport` and the
+ * shadowing guard read that kind as "the worker DID report", and a refused
+ * report must never look like one — nor may its row make the corrected re-call
+ * a UNIQUE-key duplicate.
+ */
+export const WORKER_REPORT_REFUSED_EVENT_KIND = 'worker_report_refused';
+
+/** What the daemon tells the worker (and the audit row records) about a refused report. */
+export interface WorkerReportRefusalReceipt {
+    taskId: string;
+    attemptId: string;
+    /** The attempt's generation the refusal was filed against. */
+    generation: number | null;
+    deliveryId?: string;
+    /** False = identity resolved, but the audit row could not be written. */
+    recorded: boolean;
+}
+
+/**
+ * Validator field paths that may be echoed into the audit row and the log. An
+ * unknown top-level key is the WORKER's string (it can carry anything), so it is
+ * recorded only as `(unknown_field)` — never verbatim.
+ */
+const REFUSAL_FIELD_ALLOWLIST: ReadonlySet<string> = new Set([
+    '', 'outcome', 'summary', 'touchedFiles', 'branchState', 'blockers', 'handoffNotes',
+    'handoffNotes.intent', 'handoffNotes.conflictGuidance', 'handoffNotes.touchedFiles', 'handoffNotes.followUps',
+]);
+const REFUSAL_FIELDS_MAX = 16;
+
+export function safeRefusalFields(fields: readonly string[]): string[] {
+    const out = new Set<string>();
+    for (const field of fields) {
+        out.add(REFUSAL_FIELD_ALLOWLIST.has(field) ? (field || '(root)') : '(unknown_field)');
+        if (out.size >= REFUSAL_FIELDS_MAX) break;
+    }
+    return [...out].sort();
+}
+
+/**
+ * File a validator refusal against the EXACT attempt the worker's credential
+ * names, content-free. Nothing is committed and no coordinator notice is sent:
+ * the attempt stays open, so a corrected report re-called for the same attempt
+ * is accepted exactly as a first report would be, and a worker that dies after
+ * the refusal leaves the attempt to the ledger's own death handling (it is not
+ * completed by the refusal, and the refusal row survives a reclaim with the
+ * generation it was filed under).
+ *
+ * Identity resolution mirrors {@link acceptWorkerCompletionReport}: a report
+ * written before the session's current task (`reportedAtMs`) is attributed to
+ * the attempt that was live then (late window), never to the current one.
+ * Returns null when no attempt can be proven — the refusal is then only logged.
+ *
+ * ★Never stores or logs the rejected body: field paths (allow-listed), the
+ * summary LENGTH, the outcome enum, the delivery id and the claimed write time.
+ */
+export function recordRefusedWorkerReport(
+    credential: { token?: unknown; bind?: unknown },
+    refusal: { fields: readonly string[]; summaryLength: number | null; outcome?: unknown },
+    opts: { nowMs?: number; isSelfDaemon?: (daemonId: string) => boolean; reportedAtMs?: unknown; deliveryId?: string } = {},
+): WorkerReportRefusalReceipt | null {
+    const nowMs = opts.nowMs ?? Date.now();
+    const reportedAt = normalizeWorkerReportedAtMs(opts.reportedAtMs, nowMs);
+    if (reportedAt === 'too_old') return null;
+    const live = resolveWorkerIdentity(credential);
+    const liveIsNewer = !!live && reportedAt !== undefined && workerIdentityPostdates(live, reportedAt);
+    const identity: WorkerTokenExchangeResult | null = live && !liveIsNewer
+        ? live
+        : resolveLateWorkerIdentity(credential, nowMs, opts.isSelfDaemon, reportedAt);
+    if (!identity) return null;
+
+    let attemptId: string | undefined;
+    let generation: number | null = null;
+    try {
+        const turns = MeshRuntimeStore.getInstance().turnStore();
+        attemptId = identity.attemptId ?? turns.findLatestAttemptForTask(identity.meshId, identity.taskId)?.attemptId;
+        if (!attemptId) return null;
+        const attempt = turns.getAttempt(attemptId);
+        if (!attempt || attempt.meshId !== identity.meshId || attempt.taskId !== identity.taskId) return null;
+        generation = attempt.generation;
+    } catch {
+        return null;
+    }
+
+    const fields = safeRefusalFields(refusal.fields);
+    const summaryLength = typeof refusal.summaryLength === 'number' && Number.isFinite(refusal.summaryLength) ? refusal.summaryLength : null;
+    const outcome = refusal.outcome === 'completed' || refusal.outcome === 'blocked' || refusal.outcome === 'failed' ? refusal.outcome : undefined;
+    let recorded = false;
+    try {
+        // `false` = INSERT OR IGNORE hit the UNIQUE key: the row already exists,
+        // which is still "recorded" (the outbox re-sent the same delivery).
+        MeshRuntimeStore.getInstance().turnStore().insertWorkerEvent({
+            eventId: randomUUID(),
+            attemptId,
+            sessionId: identity.sessionId || null,
+            kind: WORKER_REPORT_REFUSED_EVENT_KIND,
+            // One row per delivery: re-sending the same refused entry must not
+            // multiply it; a different (still invalid) call gets its own row.
+            dedupeKey: opts.deliveryId
+                ? `delivery:${opts.deliveryId}`
+                : `fields:${fields.join(',')}:len:${summaryLength ?? '-'}:at:${typeof reportedAt === 'number' ? reportedAt : nowMs}`,
+            payload: {
+                refusal: 'invalid_report',
+                fields,
+                ...(summaryLength !== null ? { summaryLength } : {}),
+                ...(outcome ? { outcome } : {}),
+                ...(opts.deliveryId ? { deliveryId: opts.deliveryId } : {}),
+                ...(typeof reportedAt === 'number' ? { reportedAtMs: reportedAt } : {}),
+            },
+            atMs: nowMs,
+        });
+        recorded = true;
+    } catch (e: any) {
+        LOG.error('WorkerReport', `Failed to record the invalid-report refusal for task ${identity.taskId} attempt ${attemptId}: ${e?.message || e}`);
+        recorded = false;
+    }
+    return {
+        taskId: identity.taskId,
+        attemptId,
+        generation,
+        ...(opts.deliveryId ? { deliveryId: opts.deliveryId } : {}),
+        recorded,
+    };
+}
+
 /**
  * How long after it was WRITTEN a queued worker report is still accepted. The mcp-server's
  * durable outbox (mcp-server worker-report-outbox.ts, same value) stops retrying at this

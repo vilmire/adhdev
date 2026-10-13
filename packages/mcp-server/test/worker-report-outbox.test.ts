@@ -181,3 +181,54 @@ test('progress_update is queued, not failed, when the daemon does not answer', a
   assert.equal(result.isError, undefined);
   assert.match(result.text, /queued for delivery/);
 });
+
+// 2026-10-13: an over-limit summary went through the outbox, the worker was told "QUEUED —
+// NOT lost", and the daemon could only ever refuse it. An over-limit report is a definite
+// field error: one direct send (so the daemon can file attempt-owned provenance and answer
+// with a receipt), never the outbox, and never a "queued" answer.
+test('an over-limit summary is never queued: the daemon refusal (with its attempt receipt) is shown as an error', async () => {
+  const dir = tmpDir();
+  const calls: any[] = [];
+  const transport = {
+    async command(command: string, args: any) {
+      calls.push({ command, args });
+      return {
+        success: false, error: 'invalid_report',
+        validationErrors: [{ field: 'summary', message: `summary is ${args.report.summary.length} chars, over the 8000 limit` }],
+        receipt: { taskId: 'task_1', attemptId: 'attempt_1', generation: 2, deliveryId: args.deliveryId, recorded: true },
+      };
+    },
+    async ping() { return true; },
+  } as any;
+  const delivery = new WorkerReportDelivery({ transport, credentials: { bind: 'wsb_over' }, dir, sleep: noSleep, autoSchedule: false, log: () => {} });
+  const result = await reportCompletion(transport, { bind: 'wsb_over' }, { outcome: 'completed', summary: 'y'.repeat(8_001), touched_files: [] }, delivery);
+  assert.equal(result.isError, true);
+  assert.doesNotMatch(result.text, /QUEUED|NOT lost/);
+  assert.match(result.text, /summary is 8001 chars, over the 8000 limit/);
+  assert.match(result.text, /recorded against task task_1 \(attempt attempt_1, generation 2\)/);
+  assert.equal(delivery.pendingCount(), 0);
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].args.deliveryId, /^wr_[0-9a-f]{16}_[0-9a-f]{12}$/);
+  assert.equal(typeof calls[0].args.reportedAtMs, 'number');
+});
+
+test('an over-limit summary with the daemon unreachable is a local field error — nothing queued', async () => {
+  const dir = tmpDir();
+  const transport = { async command() { throw timeoutError(); }, async ping() { return false; } } as any;
+  const delivery = new WorkerReportDelivery({ transport, credentials: { bind: 'wsb_over2' }, dir, sleep: noSleep, autoSchedule: false, log: () => {} });
+  const result = await reportCompletion(transport, { bind: 'wsb_over2' }, { outcome: 'completed', summary: `  ${'z'.repeat(8_001)}  `, touched_files: [] }, delivery);
+  assert.equal(result.isError, true);
+  assert.match(result.text, /summary is 8001 chars, over the 8000 limit/);
+  assert.match(result.text, /Nothing was recorded or queued/);
+  assert.equal(delivery.pendingCount(), 0);
+});
+
+test('a summary of exactly 8000 chars still goes through the outbox as before', async () => {
+  const dir = tmpDir();
+  const daemon = overloadedDaemon(0);
+  const delivery = new WorkerReportDelivery({ transport: daemon.transport, credentials: { bind: 'wsb_at' }, dir, sleep: noSleep, autoSchedule: false, log: () => {} });
+  const result = await reportCompletion(daemon.transport, { bind: 'wsb_at' }, { outcome: 'completed', summary: 'a'.repeat(8_000), touched_files: [] }, delivery);
+  assert.equal(result.isError, undefined);
+  assert.equal(daemon.effects.length, 1);
+  assert.equal(delivery.pendingCount(), 0);
+});

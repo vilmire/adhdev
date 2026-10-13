@@ -3,7 +3,7 @@
  * `report_completion`, its field limits, and the validator that turns a raw tool
  * payload into a typed WorkerCompletionReport or a list of field errors.
  */
-import { isWorkerReportOutcome, WORKER_REPORT_OUTCOMES, WORKER_BRANCH_STATES, type WorkerReportOutcome, type WorkerBranchState } from '@adhdev/mesh-shared';
+import { isWorkerReportOutcome, WORKER_REPORT_OUTCOMES, WORKER_BRANCH_STATES, WORKER_REPORT_SUMMARY_MAX_CHARS, type WorkerReportOutcome, type WorkerBranchState } from '@adhdev/mesh-shared';
 
 export interface WorkerHandoffNotes {
     /** What the change was FOR — the thing a diff cannot say. */
@@ -24,7 +24,7 @@ export interface WorkerCompletionReport {
 }
 
 /** Caps. Oversized input is REJECTED, never silently clipped (see validate below). */
-export const WORKER_SUMMARY_MAX_CHARS = 8_000;
+export const WORKER_SUMMARY_MAX_CHARS = WORKER_REPORT_SUMMARY_MAX_CHARS;
 export const WORKER_INTENT_MAX_CHARS = 4_000;
 export const WORKER_GUIDANCE_MAX_CHARS = 4_000;
 export const WORKER_TOUCHED_FILES_MAX = 200;

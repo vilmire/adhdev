@@ -92,6 +92,12 @@ export const RECLAIM_BUDGET = 3;                 // was MAX_STRANDED_RECLAIMS
 export const MAX_REDRIVES_PER_GENERATION = 1;    // was MAX_REDRIVES_PER_ATTEMPT
 export const LIVENESS_FAIL_STREAK_LIMIT = 3;     // was ACKED_DEATH_CONSECUTIVE_READ_FAILURES
 export const DEFAULT_MAX_TASK_RETRIES = 1;       // mesh policy maxTaskRetries default
+/**
+ * R13u: how many times a weak_candidate / await_report expiry that finds the last
+ * liveness verdict unconfirmed re-probes and re-arms (for `unknownLivenessGraceMs`)
+ * before R13x fails the attempt. One re-probe absorbs a single transient `unknown`.
+ */
+export const MAX_UNCONFIRMED_END_DEFERRALS = 1;
 
 // ─── derived values (never stored) ───────────────────────────────────────
 

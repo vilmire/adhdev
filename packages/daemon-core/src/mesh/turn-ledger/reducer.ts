@@ -39,6 +39,7 @@ import {
     DEFAULT_MAX_TASK_RETRIES,
     LIVENESS_FAIL_STREAK_LIMIT,
     MAX_REDRIVES_PER_GENERATION,
+    MAX_UNCONFIRMED_END_DEFERRALS,
     RECLAIM_BUDGET,
     awaitDeliveryMs,
     consumeGraceFor,
@@ -251,6 +252,23 @@ function awaitReportHeld(ctx: GuardCtx): boolean {
     return !!attempt && ctx.holds.some((h) => h.reason === 'await_report' && h.attemptId === attempt.attemptId);
 }
 
+/**
+ * The most recent liveness verdict leaves the worker's survival in doubt. Only a
+ * probe sets `lastLiveness` (R32 alive, R32u unknown, R31a read_failed; a dead
+ * verdict reclaims at once), so `null` = never probed, which keeps the old
+ * timer behaviour; `alive` confirms it.
+ */
+function livenessUnconfirmed(ctx: GuardCtx): boolean {
+    const last = ctx.attempt?.lastLiveness;
+    return last === 'unknown' || last === 'read_failed' || last === 'dead';
+}
+
+/** How many times R13u already deferred a weak/await_report expiry in this generation. */
+function unconfirmedEndDeferrals(ctx: GuardCtx): number {
+    const d = ctx.attempt?.data.unconfirmedEndDeferral;
+    return d && d.generation === ctx.attempt!.generation ? d.count : 0;
+}
+
 const GUARDS: Record<Exclude<GuardId, 'otherwise'>, (ctx: GuardCtx) => boolean> = {
     unbound: (ctx) => !ctx.evidence.attemptRef && !ctx.evidence.taskId,
     bound: (ctx) => !!ctx.evidence.attemptRef || !!ctx.evidence.taskId,
@@ -323,9 +341,13 @@ const GUARDS: Record<Exclude<GuardId, 'otherwise'>, (ctx: GuardCtx) => boolean> 
     hold_liveness: (ctx) => holdIs(ctx, 'liveness'),
     hold_hard_ceiling: (ctx) => holdIs(ctx, 'hard_ceiling'),
     hold_suspension_before_consumed: (ctx) => holdIs(ctx, 'suspension_before_consumed'),
-    hold_weak_candidate: (ctx) => holdIs(ctx, 'weak_candidate'),
+    hold_weak_candidate: (ctx) => holdIs(ctx, 'weak_candidate') && !livenessUnconfirmed(ctx),
     hold_admission: (ctx) => holdIs(ctx, 'live_pending', 'transcript_quiet'),
-    hold_await_report: (ctx) => holdIs(ctx, 'await_report'),
+    hold_await_report: (ctx) => holdIs(ctx, 'await_report') && !livenessUnconfirmed(ctx),
+    hold_end_unconfirmed_defer: (ctx) => holdIs(ctx, 'weak_candidate', 'await_report') && livenessUnconfirmed(ctx)
+        && unconfirmedEndDeferrals(ctx) < MAX_UNCONFIRMED_END_DEFERRALS,
+    hold_end_unconfirmed_exhausted: (ctx) => holdIs(ctx, 'weak_candidate', 'await_report') && livenessUnconfirmed(ctx)
+        && unconfirmedEndDeferrals(ctx) >= MAX_UNCONFIRMED_END_DEFERRALS,
     hold_await_end: (ctx) => holdIs(ctx, 'await_end') && reportedThisGeneration(ctx),
 };
 
@@ -740,6 +762,18 @@ const ACTIONS: Record<ActionId, (draft: Draft) => void> = {
         const attempt = draft.attempt!;
         attempt.livenessFailStreak += 1;
         attempt.lastLiveness = (draft.ctx.evidence as TurnEvidenceOf<'liveness'>).result;
+    },
+    defer_unconfirmed_end: (draft) => {
+        // R13u: the timer ran out while the last probe could not confirm the worker.
+        // Re-arm the SAME hold (same reason/id, opener's text pointer in `data`) for a
+        // short liveness grace; the paired `probe` effect asks for a fresh verdict.
+        const attempt = draft.attempt!;
+        const hold = expiredHold(draft.ctx);
+        if (!hold) return;
+        const prior = attempt.data.unconfirmedEndDeferral;
+        const count = prior && prior.generation === attempt.generation ? prior.count : 0;
+        attempt.data = { ...attempt.data, unconfirmedEndDeferral: { generation: attempt.generation, count: count + 1 } };
+        addHold(draft, { ...hold, until: draft.ctx.nowMs + unknownLivenessGraceMs(draft.ctx.policy), createdAt: draft.ctx.nowMs });
     },
     worker_absent: (draft) => {
         if ((draft.ctx.evidence as TurnEvidenceOf<'dispatch_failed'>).workerAbsent) draft.attempt!.livenessFailStreak += 1;

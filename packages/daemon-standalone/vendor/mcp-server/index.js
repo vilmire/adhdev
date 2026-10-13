@@ -13713,7 +13713,7 @@ var require_websocket = __commonJS({
     var http = require("http");
     var net = require("net");
     var tls = require("tls");
-    var { randomBytes: randomBytes2, createHash: createHash2 } = require("crypto");
+    var { randomBytes: randomBytes3, createHash: createHash3 } = require("crypto");
     var { Duplex, Readable } = require("stream");
     var { URL: URL2 } = require("url");
     var PerMessageDeflate = require_permessage_deflate();
@@ -14251,7 +14251,7 @@ var require_websocket = __commonJS({
         }
       }
       const defaultPort = isSecure ? 443 : 80;
-      const key = randomBytes2(16).toString("base64");
+      const key = randomBytes3(16).toString("base64");
       const request = isSecure ? https.request : http.request;
       const protocolSet = /* @__PURE__ */ new Set();
       let perMessageDeflate;
@@ -14381,7 +14381,7 @@ var require_websocket = __commonJS({
           abortHandshake(websocket, socket, "Invalid Upgrade header");
           return;
         }
-        const digest = createHash2("sha1").update(key + GUID).digest("base64");
+        const digest = createHash3("sha1").update(key + GUID).digest("base64");
         if (res.headers["sec-websocket-accept"] !== digest) {
           abortHandshake(websocket, socket, "Invalid Sec-WebSocket-Accept header");
           return;
@@ -14750,7 +14750,7 @@ var require_websocket_server = __commonJS({
     var EventEmitter = require("events");
     var http = require("http");
     var { Duplex } = require("stream");
-    var { createHash: createHash2 } = require("crypto");
+    var { createHash: createHash3 } = require("crypto");
     var extension = require_extension();
     var PerMessageDeflate = require_permessage_deflate();
     var subprotocol = require_subprotocol();
@@ -15057,7 +15057,7 @@ var require_websocket_server = __commonJS({
           );
         }
         if (this._state > RUNNING) return abortHandshake(socket, 503);
-        const digest = createHash2("sha1").update(key + GUID).digest("base64");
+        const digest = createHash3("sha1").update(key + GUID).digest("base64");
         const headers = [
           "HTTP/1.1 101 Switching Protocols",
           "Upgrade: websocket",
@@ -23414,6 +23414,7 @@ var require_dist3 = __commonJS({
       WORKER_BRANCH_STATES: () => WORKER_BRANCH_STATES2,
       WORKER_PROTOCOL_FOOTER_MARKER: () => WORKER_PROTOCOL_FOOTER_MARKER2,
       WORKER_REPORT_OUTCOMES: () => WORKER_REPORT_OUTCOMES2,
+      WORKER_REPORT_SUMMARY_MAX_CHARS: () => WORKER_REPORT_SUMMARY_MAX_CHARS2,
       WORKER_TOOLS: () => WORKER_TOOLS2,
       appendWorkerProtocolFooter: () => appendWorkerProtocolFooter2,
       argsCarryStatusProbeMarker: () => argsCarryStatusProbeMarker,
@@ -26190,6 +26191,7 @@ ${renderWorkerProtocolFooter2(input)}`;
     var MESH_DELIVERY_MODES2;
     var MESH_SESSION_CLEANUP_MODES2;
     var WORKER_REPORT_OUTCOMES2;
+    var WORKER_REPORT_SUMMARY_MAX_CHARS2;
     var WORKER_BRANCH_STATES2;
     var isMeshTaskStatus2;
     var isMeshTerminalTaskStatus2;
@@ -26754,6 +26756,7 @@ ${renderWorkerProtocolFooter2(input)}`;
         MESH_DELIVERY_MODES2 = ["when_idle", "interrupt"];
         MESH_SESSION_CLEANUP_MODES2 = ["preserve", "stop", "delete_stopped", "stop_and_delete"];
         WORKER_REPORT_OUTCOMES2 = ["completed", "blocked", "failed"];
+        WORKER_REPORT_SUMMARY_MAX_CHARS2 = 8e3;
         WORKER_BRANCH_STATES2 = [
           "merged_to_main",
           "pushed_feature_branch_needs_merge",
@@ -26960,6 +26963,7 @@ ${renderWorkerProtocolFooter2(input)}`;
           "transcript_final",
           "worker_reported",
           "finalization_timeout_no_response",
+          "weak_end_liveness_unconfirmed",
           "session_error",
           "provider_auth_failed",
           "provider_billing_failed",
@@ -36899,6 +36903,7 @@ ${error.message || ""}`;
     var MAX_REDRIVES_PER_GENERATION;
     var LIVENESS_FAIL_STREAK_LIMIT;
     var DEFAULT_MAX_TASK_RETRIES;
+    var MAX_UNCONFIRMED_END_DEFERRALS;
     var HOUR;
     var TURN_POLICY_ENV_BINDINGS;
     var RETIRED_TURN_ENV_NAMES;
@@ -36922,6 +36927,7 @@ ${error.message || ""}`;
         MAX_REDRIVES_PER_GENERATION = 1;
         LIVENESS_FAIL_STREAK_LIMIT = 3;
         DEFAULT_MAX_TASK_RETRIES = 1;
+        MAX_UNCONFIRMED_END_DEFERRALS = 1;
         HOUR = 60 * 6e4;
         TURN_POLICY_ENV_BINDINGS = [
           {
@@ -41034,16 +41040,16 @@ ${pattern}
       }
     });
     function sha256Hex(input) {
-      return (0, import_node_crypto3.createHash)("sha256").update(input).digest("hex");
+      return (0, import_node_crypto4.createHash)("sha256").update(input).digest("hex");
     }
     function shortHash(input, length = 16) {
       return sha256Hex(input).slice(0, length);
     }
-    var import_node_crypto3;
+    var import_node_crypto4;
     var init_hash = __esm2({
       "src/system/hash.ts"() {
         "use strict";
-        import_node_crypto3 = require("crypto");
+        import_node_crypto4 = require("crypto");
       }
     });
     function materializeWorkerHomeLink(source2, target) {
@@ -42698,11 +42704,29 @@ ${rendered.join("\n\n")}`,
             { e: "release", reasons: "expired_hold" },
             { e: "reevaluate" }
           ] },
+          // R13a/R13r commit weak only when the last liveness verdict does not leave the
+          // worker's survival in doubt (guards exclude lastLiveness unknown/read_failed/
+          // dead). A timer is not proof the worker finished: when the most recent probe
+          // could not confirm the session (2026-10-13, worker died after a refused
+          // over-limit report, probe answered `unknown`, await_report expired → the old
+          // R13r committed task_completed / weak_end_confirmed for a dead worker), the
+          // expiry instead re-probes and re-arms the SAME hold (text pointer kept) once
+          // for a short grace (R13u); a confirming `alive` probe (R32) lets the next
+          // expiry commit weak as before, a `dead` one reclaims (R31), and an expiry that
+          // still finds liveness unconfirmed fails the attempt with a typed reason
+          // (R13x) — never completed. Attempts never probed (lastLiveness null) keep R13a/R13r.
           { id: "R13a", lane: "current", from: [F], on: ["hold_expired"], guard: "hold_weak_candidate", to: "completed", verdict: "applied", effects: [
             { e: "commit", outcome: "completed", strength: "weak", reason: "weak_end_confirmed" }
           ] },
           { id: "R13r", lane: "current", from: [F], on: ["hold_expired"], guard: "hold_await_report", to: "completed", verdict: "applied", effects: [
             { e: "commit", outcome: "completed", strength: "weak", reason: "weak_end_confirmed" }
+          ] },
+          { id: "R13u", lane: "current", from: [F], on: ["hold_expired"], guard: "hold_end_unconfirmed_defer", to: "same", verdict: "applied", effects: [
+            { e: "act", act: "defer_unconfirmed_end" },
+            { e: "probe" }
+          ] },
+          { id: "R13x", lane: "current", from: [F], on: ["hold_expired"], guard: "hold_end_unconfirmed_exhausted", to: "failed", verdict: "applied", effects: [
+            { e: "commit", outcome: "failed", strength: "weak", reason: "weak_end_liveness_unconfirmed" }
           ] },
           { id: "H0", lane: "current", from: "any", on: ["hold_expired"], guard: "otherwise", to: "same", verdict: "recorded", effects: [
             { e: "record", note: "hold_stale" }
@@ -42806,6 +42830,14 @@ ${rendered.join("\n\n")}`,
     function awaitReportHeld(ctx) {
       const attempt = ctx.attempt;
       return !!attempt && ctx.holds.some((h) => h.reason === "await_report" && h.attemptId === attempt.attemptId);
+    }
+    function livenessUnconfirmed(ctx) {
+      const last = ctx.attempt?.lastLiveness;
+      return last === "unknown" || last === "read_failed" || last === "dead";
+    }
+    function unconfirmedEndDeferrals(ctx) {
+      const d = ctx.attempt?.data.unconfirmedEndDeferral;
+      return d && d.generation === ctx.attempt.generation ? d.count : 0;
     }
     function laneCandidates(lane, state2, kind) {
       return TRANSITIONS.filter((rule) => rule.lane === lane && ruleAdmitsState(rule.from, state2) && rule.on.includes(kind));
@@ -43407,9 +43439,11 @@ ${rendered.join("\n\n")}`,
           hold_liveness: (ctx) => holdIs(ctx, "liveness"),
           hold_hard_ceiling: (ctx) => holdIs(ctx, "hard_ceiling"),
           hold_suspension_before_consumed: (ctx) => holdIs(ctx, "suspension_before_consumed"),
-          hold_weak_candidate: (ctx) => holdIs(ctx, "weak_candidate"),
+          hold_weak_candidate: (ctx) => holdIs(ctx, "weak_candidate") && !livenessUnconfirmed(ctx),
           hold_admission: (ctx) => holdIs(ctx, "live_pending", "transcript_quiet"),
-          hold_await_report: (ctx) => holdIs(ctx, "await_report"),
+          hold_await_report: (ctx) => holdIs(ctx, "await_report") && !livenessUnconfirmed(ctx),
+          hold_end_unconfirmed_defer: (ctx) => holdIs(ctx, "weak_candidate", "await_report") && livenessUnconfirmed(ctx) && unconfirmedEndDeferrals(ctx) < MAX_UNCONFIRMED_END_DEFERRALS,
+          hold_end_unconfirmed_exhausted: (ctx) => holdIs(ctx, "weak_candidate", "await_report") && livenessUnconfirmed(ctx) && unconfirmedEndDeferrals(ctx) >= MAX_UNCONFIRMED_END_DEFERRALS,
           hold_await_end: (ctx) => holdIs(ctx, "await_end") && reportedThisGeneration(ctx)
         };
         TEXT_CARRYING_HOLDS = ["weak_candidate", "await_report", "await_end"];
@@ -43524,6 +43558,15 @@ ${rendered.join("\n\n")}`,
             const attempt = draft.attempt;
             attempt.livenessFailStreak += 1;
             attempt.lastLiveness = draft.ctx.evidence.result;
+          },
+          defer_unconfirmed_end: (draft) => {
+            const attempt = draft.attempt;
+            const hold = expiredHold(draft.ctx);
+            if (!hold) return;
+            const prior = attempt.data.unconfirmedEndDeferral;
+            const count = prior && prior.generation === attempt.generation ? prior.count : 0;
+            attempt.data = { ...attempt.data, unconfirmedEndDeferral: { generation: attempt.generation, count: count + 1 } };
+            addHold(draft, { ...hold, until: draft.ctx.nowMs + unknownLivenessGraceMs(draft.ctx.policy), createdAt: draft.ctx.nowMs });
           },
           worker_absent: (draft) => {
             if (draft.ctx.evidence.workerAbsent) draft.attempt.livenessFailStreak += 1;
@@ -64056,6 +64099,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       WORKER_PROGRESS_EVENT_KIND: () => WORKER_PROGRESS_EVENT_KIND,
       WORKER_REPORT_EVENT_KIND: () => WORKER_REPORT_EVENT_KIND,
       WORKER_REPORT_MAX_DELIVERY_DELAY_MS: () => WORKER_REPORT_MAX_DELIVERY_DELAY_MS,
+      WORKER_REPORT_REFUSED_EVENT_KIND: () => WORKER_REPORT_REFUSED_EVENT_KIND,
       __resetReportedSummariesForTest: () => __resetReportedSummariesForTest,
       __setHandoffNoteSinkForTests: () => __setHandoffNoteSinkForTests,
       acceptWorkerCompletionReport: () => acceptWorkerCompletionReport,
@@ -64067,7 +64111,9 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       hasLocalWorkerIdentity: () => hasLocalWorkerIdentity,
       normalizeWorkerReportedAtMs: () => normalizeWorkerReportedAtMs,
       recordHandoffNote: () => recordHandoffNote,
+      recordRefusedWorkerReport: () => recordRefusedWorkerReport,
       resolveWorkerIdentity: () => resolveWorkerIdentity,
+      safeRefusalFields: () => safeRefusalFields,
       summaryKey: () => summaryKey,
       workerIdentityPostdates: () => workerIdentityPostdates
     });
@@ -64224,6 +64270,70 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       }
       const unresolved = classifyUnresolvedWorkerCredential(credential);
       return { accepted: false, refusal: unresolved.refusal, ...unresolved.detail ? { detail: unresolved.detail } : {} };
+    }
+    function safeRefusalFields(fields) {
+      const out = /* @__PURE__ */ new Set();
+      for (const field3 of fields) {
+        out.add(REFUSAL_FIELD_ALLOWLIST.has(field3) ? field3 || "(root)" : "(unknown_field)");
+        if (out.size >= REFUSAL_FIELDS_MAX) break;
+      }
+      return [...out].sort();
+    }
+    function recordRefusedWorkerReport(credential, refusal, opts = {}) {
+      const nowMs2 = opts.nowMs ?? Date.now();
+      const reportedAt = normalizeWorkerReportedAtMs(opts.reportedAtMs, nowMs2);
+      if (reportedAt === "too_old") return null;
+      const live = resolveWorkerIdentity(credential);
+      const liveIsNewer = !!live && reportedAt !== void 0 && workerIdentityPostdates(live, reportedAt);
+      const identity = live && !liveIsNewer ? live : resolveLateWorkerIdentity(credential, nowMs2, opts.isSelfDaemon, reportedAt);
+      if (!identity) return null;
+      let attemptId;
+      let generation = null;
+      try {
+        const turns = MeshRuntimeStore.getInstance().turnStore();
+        attemptId = identity.attemptId ?? turns.findLatestAttemptForTask(identity.meshId, identity.taskId)?.attemptId;
+        if (!attemptId) return null;
+        const attempt = turns.getAttempt(attemptId);
+        if (!attempt || attempt.meshId !== identity.meshId || attempt.taskId !== identity.taskId) return null;
+        generation = attempt.generation;
+      } catch {
+        return null;
+      }
+      const fields = safeRefusalFields(refusal.fields);
+      const summaryLength = typeof refusal.summaryLength === "number" && Number.isFinite(refusal.summaryLength) ? refusal.summaryLength : null;
+      const outcome = refusal.outcome === "completed" || refusal.outcome === "blocked" || refusal.outcome === "failed" ? refusal.outcome : void 0;
+      let recorded = false;
+      try {
+        MeshRuntimeStore.getInstance().turnStore().insertWorkerEvent({
+          eventId: (0, import_crypto14.randomUUID)(),
+          attemptId,
+          sessionId: identity.sessionId || null,
+          kind: WORKER_REPORT_REFUSED_EVENT_KIND,
+          // One row per delivery: re-sending the same refused entry must not
+          // multiply it; a different (still invalid) call gets its own row.
+          dedupeKey: opts.deliveryId ? `delivery:${opts.deliveryId}` : `fields:${fields.join(",")}:len:${summaryLength ?? "-"}:at:${typeof reportedAt === "number" ? reportedAt : nowMs2}`,
+          payload: {
+            refusal: "invalid_report",
+            fields,
+            ...summaryLength !== null ? { summaryLength } : {},
+            ...outcome ? { outcome } : {},
+            ...opts.deliveryId ? { deliveryId: opts.deliveryId } : {},
+            ...typeof reportedAt === "number" ? { reportedAtMs: reportedAt } : {}
+          },
+          atMs: nowMs2
+        });
+        recorded = true;
+      } catch (e) {
+        LOG.error("WorkerReport", `Failed to record the invalid-report refusal for task ${identity.taskId} attempt ${attemptId}: ${e?.message || e}`);
+        recorded = false;
+      }
+      return {
+        taskId: identity.taskId,
+        attemptId,
+        generation,
+        ...opts.deliveryId ? { deliveryId: opts.deliveryId } : {},
+        recorded
+      };
     }
     function normalizeWorkerReportedAtMs(raw, nowMs2) {
       if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) return void 0;
@@ -64471,6 +64581,9 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
     var WORKER_HANDOFF_EVENT_KIND;
     var REPORTED_SUMMARY_STORE;
     var handoffSinkOverride;
+    var WORKER_REPORT_REFUSED_EVENT_KIND;
+    var REFUSAL_FIELD_ALLOWLIST;
+    var REFUSAL_FIELDS_MAX;
     var WORKER_REPORT_MAX_DELIVERY_DELAY_MS;
     var WORKER_REPORT_CLOCK_SKEW_MS;
     var init_worker_report = __esm2({
@@ -64492,6 +64605,21 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
         WORKER_PROGRESS_EVENT_KIND = "worker_progress_update";
         WORKER_HANDOFF_EVENT_KIND = "worker_handoff_note";
         REPORTED_SUMMARY_STORE = /* @__PURE__ */ new Map();
+        WORKER_REPORT_REFUSED_EVENT_KIND = "worker_report_refused";
+        REFUSAL_FIELD_ALLOWLIST = /* @__PURE__ */ new Set([
+          "",
+          "outcome",
+          "summary",
+          "touchedFiles",
+          "branchState",
+          "blockers",
+          "handoffNotes",
+          "handoffNotes.intent",
+          "handoffNotes.conflictGuidance",
+          "handoffNotes.touchedFiles",
+          "handoffNotes.followUps"
+        ]);
+        REFUSAL_FIELDS_MAX = 16;
         WORKER_REPORT_MAX_DELIVERY_DELAY_MS = 2 * 60 * 60 * 1e3;
         WORKER_REPORT_CLOCK_SKEW_MS = 5e3;
       }
@@ -84914,7 +85042,7 @@ ${detail.join("\n")}` : stripped;
       "src/mesh/worker-report-validation.ts"() {
         "use strict";
         init_dist();
-        WORKER_SUMMARY_MAX_CHARS = 8e3;
+        WORKER_SUMMARY_MAX_CHARS = WORKER_REPORT_SUMMARY_MAX_CHARS2;
         WORKER_INTENT_MAX_CHARS = 4e3;
         WORKER_GUIDANCE_MAX_CHARS = 4e3;
         WORKER_TOUCHED_FILES_MAX = 200;
@@ -119418,10 +119546,10 @@ ${marker}`,
       if (a.ord !== b.ord) return a.ord < b.ord ? -1 : 1;
       return a.messageId < b.messageId ? -1 : a.messageId > b.messageId ? 1 : 0;
     }
-    var import_node_crypto4 = require("crypto");
+    var import_node_crypto42 = require("crypto");
     init_dist2();
     function sha1(text2) {
-      return (0, import_node_crypto4.createHash)("sha1").update(text2).digest("base64");
+      return (0, import_node_crypto42.createHash)("sha1").update(text2).digest("base64");
     }
     function headChangeKey(head, text2) {
       const fields = {
@@ -128244,6 +128372,32 @@ ${marker}`,
         ...result.late ? { late: true, terminalOutcome: result.late.terminalOutcome } : {}
       };
     }
+    async function refuseInvalidReport(ctx, args, errors) {
+      const answer = { success: false, error: "invalid_report", validationErrors: errors };
+      try {
+        const { recordRefusedWorkerReport: recordRefusedWorkerReport2, safeRefusalFields: safeRefusalFields2 } = await Promise.resolve().then(() => (init_worker_report(), worker_report_exports));
+        const credential = { token: args?.token, bind: args?.bind };
+        const raw = args?.report && typeof args.report === "object" ? args.report : {};
+        const summaryLength = typeof raw.summary === "string" ? raw.summary.trim().length : null;
+        const deliveryId = normalizeWorkerDeliveryId(args?.deliveryId);
+        const fields = errors.map((e) => e.field);
+        const receipt = recordRefusedWorkerReport2(
+          credential,
+          { fields, summaryLength, outcome: raw.outcome },
+          { isSelfDaemon: selfDaemonPredicate(ctx), reportedAtMs: args?.reportedAtMs, ...deliveryId ? { deliveryId } : {} }
+        );
+        const where = receipt ? `task ${receipt.taskId} attempt ${receipt.attemptId} g${receipt.generation ?? "?"}${receipt.recorded ? "" : " (audit row NOT written)"}` : "no provable attempt";
+        logLocalWorkerRefusal(
+          "report",
+          credential,
+          "invalid_report",
+          `${where}; fields=${safeRefusalFields2(fields).join(",")}; summaryLength=${summaryLength ?? "-"}${deliveryId ? `; delivery=${deliveryId}` : ""}`
+        );
+        return receipt ? { ...answer, receipt } : answer;
+      } catch {
+        return answer;
+      }
+    }
     function toProgressResponse(result) {
       if (!result.accepted) {
         return {
@@ -128400,7 +128554,7 @@ ${marker}`,
           const { validateWorkerCompletionReport: validateWorkerCompletionReport2 } = await Promise.resolve().then(() => (init_worker_report_validation(), worker_report_validation_exports));
           const { report, errors } = validateWorkerCompletionReport2(args?.report);
           if (!report) {
-            return { success: false, error: "invalid_report", validationErrors: errors };
+            return refuseInvalidReport(_ctx, args, errors);
           }
           const credential = { token: args?.token, bind: args?.bind };
           const deliveryId = normalizeWorkerDeliveryId(args?.deliveryId);
@@ -161968,7 +162122,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       }
       return counters4;
     }
-    var REPORT_GATE_RULES = /* @__PURE__ */ new Set(["R9r", "R15p", "R12r", "R13r", "R17g", "R9t", "R13t"]);
+    var REPORT_GATE_RULES = /* @__PURE__ */ new Set(["R9r", "R15p", "R12r", "R13r", "R13u", "R13x", "R17g", "R9t", "R13t"]);
     var DEFAULT_LOG = { info: () => {
     }, warn: () => {
     }, error: () => {
@@ -162061,6 +162215,8 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         else if (rule === "R9r") log.info(`turn-ledger: idle end of ${who} awaits the worker report (await_report hold ${Math.round(policy.awaitReportMs / 1e3)}s)`);
         else if (rule === "R15p") log.info(`turn-ledger: transcript of ${who} reads finished but the worker has not ended its turn \u2014 awaiting the worker report (await_report hold ${Math.round(policy.awaitReportMs / 1e3)}s)`);
         else if (rule === "R12r") log.info(`turn-ledger: false idle: worker resumed \u2014 ${who} back to generating (falseIdleCount=${attempt.data.falseIdleCount ?? 0})`);
+        else if (rule === "R13u") log.info(`turn-ledger: weak/await_report window of ${who} expired with liveness ${attempt.lastLiveness ?? "?"} \u2014 re-probing instead of committing (deferral ${attempt.data.unconfirmedEndDeferral?.count ?? 0})`);
+        else if (rule === "R13x") log.info(`turn-ledger: weak/await_report window of ${who} expired and liveness stayed ${attempt.lastLiveness ?? "?"} \u2014 failed (weak_end_liveness_unconfirmed), not completed`);
         else log.info(`turn-ledger: no worker report within ${Math.round(policy.awaitReportMs / 1e3)}s \u2014 ${who} committed weak`);
       }
       function applyStep(evidence, attempt, opts, nowMs2, nested = false) {
@@ -167877,6 +168033,7 @@ var MESH_THINKING_LEVELS = ["low", "medium", "high"];
 var MESH_DELIVERY_MODES = ["when_idle", "interrupt"];
 var MESH_SESSION_CLEANUP_MODES = ["preserve", "stop", "delete_stopped", "stop_and_delete"];
 var WORKER_REPORT_OUTCOMES = ["completed", "blocked", "failed"];
+var WORKER_REPORT_SUMMARY_MAX_CHARS = 8e3;
 var WORKER_BRANCH_STATES = [
   "merged_to_main",
   "pushed_feature_branch_needs_merge",
@@ -168191,6 +168348,7 @@ var TURN_REASONS = [
   "transcript_final",
   "worker_reported",
   "finalization_timeout_no_response",
+  "weak_end_liveness_unconfirmed",
   "session_error",
   "provider_auth_failed",
   "provider_billing_failed",
@@ -179731,6 +179889,9 @@ async function runMeshToolWithPendingEvents(ctx, run) {
   return attachPendingCoordinatorEventsToResponse(ctx, text, before);
 }
 
+// src/tools/worker-tools.ts
+var import_node_crypto3 = require("crypto");
+
 // src/tools/worker-report-outbox.ts
 var import_node_crypto2 = require("crypto");
 var fs = __toESM(require("fs"));
@@ -180146,6 +180307,8 @@ function toDaemonReport(a) {
 }
 async function reportCompletion(transport, credentials, args, delivery) {
   const { report, ignoredHandoffKeys } = toDaemonReport(args);
+  const overLimit = overLimitSummaryLength(report.summary);
+  if (overLimit !== null) return refuseOverLimitReport(transport, credentials, report, overLimit);
   if (delivery) {
     const outcome = await delivery.submit("report", { report });
     if (outcome.status === "queued") return { text: renderQueued("report", outcome, ignoredHandoffKeys) };
@@ -180156,6 +180319,28 @@ async function reportCompletion(transport, credentials, args, delivery) {
     report
   });
   return renderReportResult(result, ignoredHandoffKeys);
+}
+function overLimitSummaryLength(summary) {
+  if (typeof summary !== "string") return null;
+  const length = summary.trim().length;
+  return length > WORKER_REPORT_SUMMARY_MAX_CHARS ? length : null;
+}
+async function refuseOverLimitReport(transport, credentials, report, length) {
+  const reportedAtMs = Date.now();
+  const deliveryId = `wr_${(0, import_node_crypto3.createHash)("sha256").update(`refused\0${reportedAtMs}\0${length}`).digest("hex").slice(0, 16)}_${(0, import_node_crypto3.randomBytes)(6).toString("hex")}`;
+  let result = null;
+  try {
+    result = await transport.command("worker_report_completion", { ...credentials, report, deliveryId, reportedAtMs });
+  } catch {
+    result = null;
+  }
+  if (result?.success === true || result?.error === "invalid_report" && Array.isArray(result.validationErrors)) return renderReportResult(result);
+  const lines = [
+    "report_completion rejected \u2014 fix these and call again:",
+    `  - summary: summary is ${length} chars, over the ${WORKER_REPORT_SUMMARY_MAX_CHARS} limit \u2014 shorten it rather than relying on truncation`,
+    "Nothing was recorded or queued for delivery. Shorten the summary (put long detail in handoff_notes or your final message) and call report_completion again."
+  ];
+  return { text: lines.join("\n"), isError: true };
 }
 function ignoredKeysWarning(ignoredHandoffKeys) {
   return `WARNING: handoff_notes had unrecognized key(s) that were ignored: ${ignoredHandoffKeys.join(", ")}. Recognized keys: intent, conflict_guidance, touched_files, follow_ups (camelCase also accepted).`;
@@ -180201,9 +180386,12 @@ function renderReportResult(result, ignoredHandoffKeys = []) {
   }
   if (result?.error === "invalid_report" && Array.isArray(result.validationErrors)) {
     const details = result.validationErrors.map((e) => `  - ${e.field || "(root)"}: ${e.message}`).join("\n");
+    const receipt = result.receipt && typeof result.receipt === "object" ? result.receipt : null;
+    const receiptLine = receipt && typeof receipt.taskId === "string" && typeof receipt.attemptId === "string" ? `
+This refusal was ${receipt.recorded === false ? "attributed (but its audit row could not be written)" : "recorded"} against task ${receipt.taskId} (attempt ${receipt.attemptId}${typeof receipt.generation === "number" ? `, generation ${receipt.generation}` : ""}). Nothing was committed by this call \u2014 correct the field(s) and call report_completion again; the corrected report is filed against this same attempt.` : "";
     return {
       text: `report_completion rejected \u2014 fix these and call again:
-${details}`,
+${details}${receiptLine}`,
       isError: true
     };
   }

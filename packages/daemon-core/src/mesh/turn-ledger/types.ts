@@ -54,6 +54,11 @@ export interface TurnAttemptData {
     /** R12r: how many report-awaiting idle ends the worker resumed from (false idles). Diagnostics only. */
     falseIdleCount?: number;
     /**
+     * R13u: weak_candidate / await_report expiries deferred because the last liveness
+     * verdict was unconfirmed (re-probe + short re-arm). Scoped to `generation`.
+     */
+    unconfirmedEndDeferral?: { generation: number; count: number };
+    /**
      * R17g: the worker report recorded while the session was still generating —
      * content-free (outcome enum, the local evidence id whose envelope holds the
      * text, the handoff pointer when one was published). Scoped to `generation`:

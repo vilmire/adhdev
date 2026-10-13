@@ -56,6 +56,14 @@ export type MeshSessionCleanupMode = typeof MESH_SESSION_CLEANUP_MODES[number]
 export const WORKER_REPORT_OUTCOMES = ['completed', 'blocked', 'failed'] as const
 export type WorkerReportOutcome = typeof WORKER_REPORT_OUTCOMES[number]
 
+/**
+ * Hard cap on a `report_completion` summary (characters, after trim). Over-limit
+ * summaries are REJECTED, never truncated. Declared once so the daemon validator
+ * and the mcp-server's pre-send check (which keeps an over-limit report out of the
+ * durable outbox) cannot drift apart.
+ */
+export const WORKER_REPORT_SUMMARY_MAX_CHARS = 8_000
+
 /** Final branch state a worker reports (see coordinator convergence rules). */
 export const WORKER_BRANCH_STATES = [
     'merged_to_main',

@@ -164,7 +164,7 @@ export type CommitStrength = typeof COMMIT_STRENGTHS[number]
 export const TURN_REASONS = [
     // commits
     'turn_end', 'weak_end_confirmed', 'transcript_final', 'worker_reported',
-    'finalization_timeout_no_response', 'session_error', 'provider_auth_failed', 'provider_billing_failed', 'provider_usage_limit_exceeded', 'provider_server_overloaded', 'provider_error',
+    'finalization_timeout_no_response', 'weak_end_liveness_unconfirmed', 'session_error', 'provider_auth_failed', 'provider_billing_failed', 'provider_usage_limit_exceeded', 'provider_server_overloaded', 'provider_error',
     'operator_cancel', 'intentional_cleanup', 'task_removed', 'mission_abandoned', 'superseded',
     'operator_update', 'refine_terminal', 'validation_terminal',
     'hard_ceiling', 'reclaim_budget_exhausted', 'hollow_max_retries', 'migration_orphan',

@@ -94,6 +94,8 @@ const FIRES: Record<string, Fixture> = {
     R12r: { attempt: makeAttempt('finalizing'), holds: [makeHold('await_report')], evidence: ev('turn_started', { retro: false }), state: 'generating', effects: ['release_hold', 'hold', 'bus', 'record'] },
     R13r: { attempt: makeAttempt('finalizing'), holds: [makeHold('await_report')], evidence: expired('await_report'), state: 'completed', effects: ['commit', 'notify_coordinator'] },
     R13a: { attempt: makeAttempt('finalizing'), holds: [makeHold('weak_candidate')], evidence: expired('weak_candidate'), state: 'completed', effects: ['commit'] },
+    R13u: { attempt: makeAttempt('finalizing', { lastLiveness: 'unknown' }), holds: [makeHold('await_report')], evidence: expired('await_report'), state: 'finalizing', effects: ['hold', 'probe'] },
+    R13x: { attempt: makeAttempt('finalizing', { lastLiveness: 'unknown', data: { unconfirmedEndDeferral: { generation: 1, count: 1 } } }), holds: [makeHold('weak_candidate')], evidence: expired('weak_candidate'), state: 'failed', effects: ['commit', 'notify_coordinator'] },
     R13b: { attempt: G(), evidence: ev('turn_end', { strength: 'weak', afterFinalizationTimeout: true }), state: 'failed', effects: ['commit'] },
     R14: { attempt: G(), evidence: ev('transcript_final', { selfAttributing: false, nativeRead: true, nativeMarker: { outcome: 'completed' }, live: LIVE_IDLE }), state: 'completed', effects: ['commit'] },
     R15: { attempt: G(), evidence: ev('transcript_final', { selfAttributing: false, nativeRead: false, live: LIVE_IDLE, summary: REF }), state: 'finalizing', effects: ['hold', 'notify_coordinator'] },
@@ -175,6 +177,9 @@ describe('rule matching is unambiguous', () => {
         ...(state === 'completed' ? [makeAttempt(state, { terminal: { outcome: 'completed', reason: 'worker_reported', source: 'worker_tool', strength: 'tool_report', at: NOW } })] : []),
         // R17g recorded a report for this generation (2026-09-25): every idle-signal guard yields to R9t/R13t.
         ...(['accepted', 'delivered', 'consumed', 'generating', 'suspended', 'finalizing'].includes(state) ? [makeAttempt(state, REPORTED)] : []),
+        // 2026-10-13: an unconfirmed last liveness verdict gates R13a/R13r → R13u (re-probe) / R13x (deferral spent).
+        makeAttempt(state, { lastLiveness: 'unknown' }),
+        makeAttempt(state, { lastLiveness: 'read_failed', data: { unconfirmedEndDeferral: { generation: 1, count: 1 } } }),
     ];
 
     it('at most one rule matches any (state, kind, guard variant, attempt variant)', () => {
@@ -201,10 +206,10 @@ describe('rule matching is unambiguous', () => {
         expect(ambiguous).toEqual([]);
         // 63 evidence variants (all 23 kinds; +6 report-gate variants 2026-09-24, +1 await_end expiry 2026-09-25,
         // +3 auth-failed turn_end variants 2026-10-06 — R9f, +2 owner-scraped transcript_final 2026-10-08 — R15p)
-        // × (1 no-attempt + 34 attempt variants (+6 reported, 2026-09-25) × 2 lanes).
+        // × (1 no-attempt + 52 attempt variants (+6 reported, 2026-09-25; +18 liveness-gated, 2026-10-13) × 2 lanes).
         const variantCount = TURN_EVIDENCE_KINDS.reduce((n, kind) => n + variantsFor(kind).length, 0);
         expect(variantCount).toBe(63);
-        expect(visited).toBe(63 * (1 + 34 * 2));
+        expect(visited).toBe(63 * (1 + 52 * 2));
     });
 });
 

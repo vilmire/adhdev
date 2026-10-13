@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { TurnEvidence } from '@adhdev/mesh-shared';
 import { classifyLane, expireHolds, isUnredeliveredDirectFailure, reduce, type ReduceInput, type ReduceResult } from '../../src/mesh/turn-ledger/reducer.js';
-import { MAX_REDRIVES_PER_GENERATION, RECLAIM_BUDGET } from '../../src/mesh/turn-ledger/policy.js';
+import { MAX_REDRIVES_PER_GENERATION, RECLAIM_BUDGET, unknownLivenessGraceMs } from '../../src/mesh/turn-ledger/policy.js';
 import { TRANSITIONS } from '../../src/mesh/turn-ledger/transitions.js';
 import type { TurnAttempt, TurnHold } from '../../src/mesh/turn-ledger/types.js';
 import { NOW, POLICY, REF, ev, expired, makeAttempt, makeHold } from './fixtures.js';
@@ -490,5 +490,107 @@ describe('report gate — a report-capable worker\'s idle end awaits its report 
         const modal = step(held.attempt, ev('suspension', { modal: 'approval' }, { at: NOW + 1_000 }), held.holds);
         expect(modal.rule).toBe('R6');
         expect(modal.holds.some((h) => h.reason === 'await_report')).toBe(false);
+    });
+});
+
+// 2026-10-13: a worker's over-limit report was refused, the worker died, the owner's
+// liveness probe answered `unknown`, and the await_report timer ran out — the old
+// R13r committed task_completed / weak_end_confirmed for a dead worker. A timer is
+// not proof of completion: with liveness unconfirmed the expiry re-probes and re-arms
+// once (R13u); only a confirming probe lets the weak commit through, and a second
+// unconfirmed expiry fails the attempt with a typed reason (R13x) — never completed.
+describe('unconfirmed liveness — a weak end / report-await expiry never mints completed from a timer (R13u/R13x)', () => {
+    const idleEnd = (at = NOW) => ev('turn_end', { strength: 'genuine', summary: REF, reportExpected: true }, { at, eventId: `ev-turn_end-${at}` });
+    const expire = (holds: readonly TurnHold[], reason: 'await_report' | 'weak_candidate', at: number) =>
+        expireHolds(holds.filter((h) => h.reason === reason).map((h) => ({ ...h, until: at })), at, { observedBy: 'dc', sessionIdFor: () => 's1' })[0]!;
+    const GRACE = unknownLivenessGraceMs(POLICY);
+
+    function heldWithLiveness(result: 'unknown' | 'read_failed') {
+        const held = step(makeAttempt('generating'), idleEnd());
+        expect(held.rule).toBe('R9r');
+        const probed = step(held.attempt, ev('liveness', { result }, { at: NOW + 1_000 }), held.holds, NOW + 1_000);
+        expect(probed.attempt?.lastLiveness).toBe(result);
+        expect(probed.attempt?.terminal).toBeNull();
+        return probed;
+    }
+
+    it('await_report expiry with liveness unknown defers: no commit, the same hold re-armed (text kept) and a fresh probe', () => {
+        const probed = heldWithLiveness('unknown');
+        const at = NOW + POLICY.awaitReportMs;
+        const deferred = step(probed.attempt, expire(probed.holds, 'await_report', at), probed.holds, at);
+        expect(deferred.rule).toBe('R13u');
+        expect(deferred.attempt?.state).toBe('finalizing');
+        expect(deferred.attempt?.terminal).toBeNull();
+        expect(deferred.effects.some((e) => e.kind === 'commit' || e.kind === 'notify_coordinator')).toBe(false);
+        expect(deferred.effects.some((e) => e.kind === 'probe')).toBe(true);
+        expect(deferred.attempt?.data.unconfirmedEndDeferral).toEqual({ generation: 1, count: 1 });
+        const rearmed = deferred.holds.find((h) => h.reason === 'await_report');
+        expect(rearmed).toMatchObject({ until: at + GRACE, onExpire: 'commit', generation: 1 });
+        expect(rearmed?.data).toMatchObject({ textEventId: `ev-turn_end-${NOW}` });
+    });
+
+    it('a confirming alive probe inside the grace lets the next expiry commit weak exactly as before (R32 → R13r), text preserved', () => {
+        const probed = heldWithLiveness('unknown');
+        const at = NOW + POLICY.awaitReportMs;
+        const deferred = step(probed.attempt, expire(probed.holds, 'await_report', at), probed.holds, at);
+        const alive = step(deferred.attempt, ev('liveness', { result: 'alive' }, { at: at + 1_000 }), deferred.holds, at + 1_000);
+        expect(alive.attempt?.lastLiveness).toBe('alive');
+        const done = step(alive.attempt, expire(alive.holds, 'await_report', at + GRACE), alive.holds, at + GRACE);
+        expect(done.rule).toBe('R13r');
+        expect(done.attempt?.terminal).toMatchObject({ outcome: 'completed', strength: 'weak', reason: 'weak_end_confirmed', summary: REF });
+        expect(done.effects.filter((e) => e.kind === 'notify_coordinator')).toEqual([
+            expect.objectContaining({ notify: 'completed', summary: REF, textEventId: `ev-turn_end-${NOW}` }),
+        ]);
+    });
+
+    it('a second expiry still unconfirmed fails the attempt with weak_end_liveness_unconfirmed — never completed', () => {
+        const probed = heldWithLiveness('unknown');
+        const at = NOW + POLICY.awaitReportMs;
+        const deferred = step(probed.attempt, expire(probed.holds, 'await_report', at), probed.holds, at);
+        const stillUnknown = step(deferred.attempt, ev('liveness', { result: 'unknown' }, { at: at + 1_000 }), deferred.holds, at + 1_000);
+        const failed = step(stillUnknown.attempt, expire(stillUnknown.holds, 'await_report', at + GRACE), stillUnknown.holds, at + GRACE);
+        expect(failed.rule).toBe('R13x');
+        expect(failed.attempt?.state).toBe('failed');
+        expect(failed.attempt?.terminal).toMatchObject({ outcome: 'failed', strength: 'weak', reason: 'weak_end_liveness_unconfirmed' });
+        expect(failed.effects.some((e) => e.kind === 'commit' && e.outcome === 'completed')).toBe(false);
+    });
+
+    it('a dead verdict reclaims (R31) — the expiry never gets to commit', () => {
+        const probed = heldWithLiveness('unknown');
+        const dead = step(probed.attempt, ev('liveness', { result: 'dead' }, { at: NOW + 2_000 }), probed.holds, NOW + 2_000);
+        expect(dead.rule).toBe('R31');
+        expect(dead.attempt?.terminal).toBeNull();
+        expect(dead.effects.some((e) => e.kind === 'commit')).toBe(false);
+    });
+
+    it('a weak_candidate with read_failed liveness follows the same defer → fail path (R13u → R13x)', () => {
+        const weak = step(makeAttempt('generating'), ev('turn_end', { strength: 'weak' }));
+        expect(weak.attempt?.state).toBe('finalizing');
+        const probed = step(weak.attempt, ev('liveness', { result: 'read_failed' }, { at: NOW + 1_000 }), weak.holds, NOW + 1_000);
+        expect(probed.attempt?.lastLiveness).toBe('read_failed');
+        const at = NOW + 20_000;
+        const deferred = step(probed.attempt, expire(probed.holds, 'weak_candidate', at), probed.holds, at);
+        expect(deferred.rule).toBe('R13u');
+        expect(deferred.attempt?.terminal).toBeNull();
+        const failed = step(deferred.attempt, expire(deferred.holds, 'weak_candidate', at + GRACE), deferred.holds, at + GRACE);
+        expect(failed.rule).toBe('R13x');
+        expect(failed.attempt?.terminal).toMatchObject({ outcome: 'failed', reason: 'weak_end_liveness_unconfirmed' });
+    });
+
+    it('a (corrected) worker report inside the re-armed window still commits tool_report (R17)', () => {
+        const probed = heldWithLiveness('unknown');
+        const at = NOW + POLICY.awaitReportMs;
+        const deferred = step(probed.attempt, expire(probed.holds, 'await_report', at), probed.holds, at);
+        const reported = step(deferred.attempt, ev('worker_report', { outcome: 'completed', summary: REF, hasHandoffNotes: false }, { source: 'worker_tool', at: at + 2_000 }), deferred.holds, at + 2_000);
+        expect(reported.rule).toBe('R17');
+        expect(reported.attempt?.terminal).toMatchObject({ outcome: 'completed', strength: 'tool_report', reason: 'worker_reported' });
+        expect(reported.holds).toEqual([]);
+    });
+
+    it('a never-probed attempt (lastLiveness null) keeps R13r unchanged', () => {
+        const held = step(makeAttempt('generating'), idleEnd());
+        expect(held.attempt?.lastLiveness ?? null).toBeNull();
+        const at = NOW + POLICY.awaitReportMs;
+        expect(step(held.attempt, expire(held.holds, 'await_report', at), held.holds, at).rule).toBe('R13r');
     });
 });

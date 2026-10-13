@@ -29,10 +29,13 @@
 import {
   WORKER_BRANCH_STATES,
   WORKER_REPORT_OUTCOMES,
+  WORKER_REPORT_SUMMARY_MAX_CHARS,
   WORKER_TOOLS,
   enumOf,
   type WorkerTool,
 } from '@adhdev/mesh-shared';
+
+import { createHash, randomBytes } from 'node:crypto';
 
 import type { CommandTransport } from '../transports/mode.js';
 import { annotateAll, type ToolBehaviorAnnotations } from './tool-annotations.js';
@@ -319,6 +322,8 @@ export async function reportCompletion(
   delivery?: WorkerReportDelivery,
 ): Promise<WorkerToolResult> {
   const { report, ignoredHandoffKeys } = toDaemonReport(args);
+  const overLimit = overLimitSummaryLength(report.summary);
+  if (overLimit !== null) return refuseOverLimitReport(transport, credentials, report, overLimit);
   if (delivery) {
     const outcome = await delivery.submit('report', { report });
     if (outcome.status === 'queued') return { text: renderQueued('report', outcome, ignoredHandoffKeys) };
@@ -329,6 +334,48 @@ export async function reportCompletion(
     report,
   });
   return renderReportResult(result, ignoredHandoffKeys);
+}
+
+/** The trimmed summary length when it is over the shared cap, else null (absent/valid is the daemon's call). */
+function overLimitSummaryLength(summary: unknown): number | null {
+  if (typeof summary !== 'string') return null;
+  const length = summary.trim().length;
+  return length > WORKER_REPORT_SUMMARY_MAX_CHARS ? length : null;
+}
+
+/**
+ * An over-limit summary is a DEFINITE refusal the worker must fix — so it never goes
+ * through the durable outbox, whose "queued, your work is NOT lost, do not call again"
+ * answer would park a report the daemon is certain to refuse (and, if the worker died
+ * meanwhile, drop it with no attempt-owned trace). Instead: one direct send, so the
+ * daemon can file content-free refusal provenance against the exact attempt and return
+ * its receipt; if the daemon cannot be reached, the same field error is answered locally.
+ * Either way the answer is an error naming the limit, and nothing is queued.
+ */
+async function refuseOverLimitReport(
+  transport: CommandTransport,
+  credentials: WorkerCredentials,
+  report: Record<string, unknown>,
+  length: number,
+): Promise<WorkerToolResult> {
+  const reportedAtMs = Date.now();
+  const deliveryId = `wr_${createHash('sha256').update(`refused\u0000${reportedAtMs}\u0000${length}`).digest('hex').slice(0, 16)}_${randomBytes(6).toString('hex')}`;
+  let result: any = null;
+  try {
+    result = await transport.command('worker_report_completion', { ...credentials, report, deliveryId, reportedAtMs });
+  } catch {
+    result = null;
+  }
+  // The daemon's own answer wins whenever it gave a definite one on the report itself
+  // (its refusal carries the receipt; an acceptance — a daemon with a different cap —
+  // must never be shown to the worker as a rejection).
+  if (result?.success === true || (result?.error === 'invalid_report' && Array.isArray(result.validationErrors))) return renderReportResult(result);
+  const lines = [
+    'report_completion rejected — fix these and call again:',
+    `  - summary: summary is ${length} chars, over the ${WORKER_REPORT_SUMMARY_MAX_CHARS} limit — shorten it rather than relying on truncation`,
+    'Nothing was recorded or queued for delivery. Shorten the summary (put long detail in handoff_notes or your final message) and call report_completion again.',
+  ];
+  return { text: lines.join('\n'), isError: true };
 }
 
 function ignoredKeysWarning(ignoredHandoffKeys: string[]): string {
@@ -410,8 +457,14 @@ export function renderReportResult(result: any, ignoredHandoffKeys: string[] = [
     const details = result.validationErrors
       .map((e: any) => `  - ${e.field || '(root)'}: ${e.message}`)
       .join('\n');
+    const receipt = result.receipt && typeof result.receipt === 'object' ? result.receipt : null;
+    const receiptLine = receipt && typeof receipt.taskId === 'string' && typeof receipt.attemptId === 'string'
+      ? `\nThis refusal was ${receipt.recorded === false ? 'attributed (but its audit row could not be written)' : 'recorded'} against task ${receipt.taskId} `
+        + `(attempt ${receipt.attemptId}${typeof receipt.generation === 'number' ? `, generation ${receipt.generation}` : ''}). `
+        + 'Nothing was committed by this call — correct the field(s) and call report_completion again; the corrected report is filed against this same attempt.'
+      : '';
     return {
-      text: `report_completion rejected — fix these and call again:\n${details}`,
+      text: `report_completion rejected — fix these and call again:\n${details}${receiptLine}`,
       isError: true,
     };
   }

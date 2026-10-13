@@ -235,6 +235,46 @@ function toReportResponse(result: WorkerReportResult): Record<string, unknown> &
     };
 }
 
+/**
+ * The answer to a report the validator refused. The refusal itself is unchanged
+ * (`invalid_report` + field-level `validationErrors`, nothing committed); what is
+ * added is provenance: the refusal is filed content-free against the EXACT
+ * attempt the credential names (`worker_report_refused` row: allow-listed field
+ * paths, summary length, delivery id) and the worker gets a `receipt` naming
+ * that task/attempt/generation, so a corrected re-call — or the coordinator,
+ * if the worker dies first — can tie the refusal to the turn it belonged to.
+ * Never the rejected body: not in the row, not in the log, not to the Inbox.
+ */
+async function refuseInvalidReport(
+    ctx: LowFamilyContext,
+    args: any,
+    errors: Array<{ field: string; message: string }>,
+): Promise<Record<string, unknown> & { success: false }> {
+    const answer = { success: false as const, error: 'invalid_report', validationErrors: errors };
+    try {
+        const { recordRefusedWorkerReport, safeRefusalFields } = await import('../../mesh/worker-report.js');
+        const credential = { token: args?.token, bind: args?.bind };
+        const raw = args?.report && typeof args.report === 'object' ? args.report as Record<string, unknown> : {};
+        const summaryLength = typeof raw.summary === 'string' ? raw.summary.trim().length : null;
+        const deliveryId = normalizeWorkerDeliveryId(args?.deliveryId);
+        const fields = errors.map((e) => e.field);
+        const receipt = recordRefusedWorkerReport(
+            credential,
+            { fields, summaryLength, outcome: raw.outcome },
+            { isSelfDaemon: selfDaemonPredicate(ctx), reportedAtMs: args?.reportedAtMs, ...(deliveryId ? { deliveryId } : {}) },
+        );
+        const where = receipt
+            ? `task ${receipt.taskId} attempt ${receipt.attemptId} g${receipt.generation ?? '?'}${receipt.recorded ? '' : ' (audit row NOT written)'}`
+            : 'no provable attempt';
+        logLocalWorkerRefusal('report', credential, 'invalid_report',
+            `${where}; fields=${safeRefusalFields(fields).join(',')}; summaryLength=${summaryLength ?? '-'}${deliveryId ? `; delivery=${deliveryId}` : ''}`);
+        return receipt ? { ...answer, receipt } : answer;
+    } catch {
+        // Provenance is additive: it must never change the refusal itself.
+        return answer;
+    }
+}
+
 /** The command-layer answer for a progress update — identical for local and forwarded notes. */
 function toProgressResponse(result: WorkerProgressUpdateResult): Record<string, unknown> & { success: boolean } {
     if (!result.accepted) {
@@ -442,7 +482,7 @@ export const workerReportHandlers: Record<string, LowFamilyHandler> = {
             const { validateWorkerCompletionReport } = await import('../../mesh/worker-report-validation.js');
             const { report, errors } = validateWorkerCompletionReport(args?.report);
             if (!report) {
-                return { success: false, error: 'invalid_report', validationErrors: errors };
+                return refuseInvalidReport(_ctx, args, errors);
             }
             const credential = { token: args?.token, bind: args?.bind };
             // Durable delivery (mcp-server outbox): a re-send of a report this daemon

@@ -65,6 +65,7 @@ export type GuardId =
     | 'hold_await_delivery' | 'hold_await_consume_redrive' | 'hold_await_consume_exhausted' | 'hold_await_turn'
     | 'hold_liveness' | 'hold_hard_ceiling' | 'hold_suspension_before_consumed' | 'hold_weak_candidate' | 'hold_admission'
     | 'hold_await_report'
+    | 'hold_end_unconfirmed_defer' | 'hold_end_unconfirmed_exhausted'
     | 'finished_after_report' | 'hold_await_end';
 
 /** Named attempt mutations (reducer.ts ACTIONS). */
@@ -76,7 +77,7 @@ export type ActionId =
     | 'activity' | 'liveness_unknown' | 'liveness_failure' | 'worker_absent'
     | 'rebind_to_holder' | 'rebind'
     | 'hollow' | 'mark_notified' | 'store_git' | 'redrive' | 'stamp_no_progress_notice'
-    | 'record_report';
+    | 'record_report' | 'defer_unconfirmed_end';
 
 /** Hold deadline expressions, resolved against policy + ledger clock. */
 export type UntilExpr =
@@ -498,11 +499,29 @@ export const TRANSITIONS: readonly TransitionRule[] = [
         { e: 'release', reasons: 'expired_hold' },
         { e: 'reevaluate' },
     ] },
+    // R13a/R13r commit weak only when the last liveness verdict does not leave the
+    // worker's survival in doubt (guards exclude lastLiveness unknown/read_failed/
+    // dead). A timer is not proof the worker finished: when the most recent probe
+    // could not confirm the session (2026-10-13, worker died after a refused
+    // over-limit report, probe answered `unknown`, await_report expired → the old
+    // R13r committed task_completed / weak_end_confirmed for a dead worker), the
+    // expiry instead re-probes and re-arms the SAME hold (text pointer kept) once
+    // for a short grace (R13u); a confirming `alive` probe (R32) lets the next
+    // expiry commit weak as before, a `dead` one reclaims (R31), and an expiry that
+    // still finds liveness unconfirmed fails the attempt with a typed reason
+    // (R13x) — never completed. Attempts never probed (lastLiveness null) keep R13a/R13r.
     { id: 'R13a', lane: 'current', from: [F], on: ['hold_expired'], guard: 'hold_weak_candidate', to: 'completed', verdict: 'applied', effects: [
         { e: 'commit', outcome: 'completed', strength: 'weak', reason: 'weak_end_confirmed' },
     ] },
     { id: 'R13r', lane: 'current', from: [F], on: ['hold_expired'], guard: 'hold_await_report', to: 'completed', verdict: 'applied', effects: [
         { e: 'commit', outcome: 'completed', strength: 'weak', reason: 'weak_end_confirmed' },
+    ] },
+    { id: 'R13u', lane: 'current', from: [F], on: ['hold_expired'], guard: 'hold_end_unconfirmed_defer', to: 'same', verdict: 'applied', effects: [
+        { e: 'act', act: 'defer_unconfirmed_end' },
+        { e: 'probe' },
+    ] },
+    { id: 'R13x', lane: 'current', from: [F], on: ['hold_expired'], guard: 'hold_end_unconfirmed_exhausted', to: 'failed', verdict: 'applied', effects: [
+        { e: 'commit', outcome: 'failed', strength: 'weak', reason: 'weak_end_liveness_unconfirmed' },
     ] },
     { id: 'H0', lane: 'current', from: 'any', on: ['hold_expired'], guard: 'otherwise', to: 'same', verdict: 'recorded', effects: [
         { e: 'record', note: 'hold_stale' },
