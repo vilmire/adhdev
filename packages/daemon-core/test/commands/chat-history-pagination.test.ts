@@ -43,6 +43,7 @@ describe('handleChatHistory', () => {
       getCliAdapter: () => adapter as any,
       currentProviderType: undefined,
       currentSession: undefined,
+      ctx: { sessionRegistry: { get: () => ({ sessionId: 'session-1', workspace: '/tmp/synthetic-pagination' }) } },
     } as any, {
       agentType: 'hermes-cli',
       targetSessionId: 'session-1',
@@ -54,7 +55,7 @@ describe('handleChatHistory', () => {
     expect(mocks.readProviderChatHistory).toHaveBeenCalledWith('hermes-cli', {
       canonicalHistory: undefined,
       historySessionId: 'history-1',
-      workspace: undefined,
+      workspace: '/tmp/synthetic-pagination',
       offset: 0,
       limit: 30,
       excludeRecentCount: 0,
@@ -94,6 +95,7 @@ describe('handleChatHistory', () => {
       getCliAdapter: () => adapter as any,
       currentProviderType: undefined,
       currentSession: undefined,
+      ctx: { sessionRegistry: { get: () => ({ sessionId: 'session-1', workspace: '/tmp/synthetic-pagination' }) } },
     } as any, {
       agentType: 'hermes-cli',
       targetSessionId: 'session-1',
@@ -106,7 +108,7 @@ describe('handleChatHistory', () => {
     expect(mocks.readProviderChatHistory).toHaveBeenCalledWith('hermes-cli', {
       canonicalHistory: undefined,
       historySessionId: 'history-1',
-      workspace: undefined,
+      workspace: '/tmp/synthetic-pagination',
       offset: 0,
       limit: 30,
       excludeRecentCount: 1000,
@@ -149,6 +151,7 @@ describe('handleChatHistory', () => {
       getCliAdapter: () => adapter as any,
       currentProviderType: undefined,
       currentSession: undefined,
+      ctx: { sessionRegistry: { get: () => ({ sessionId: 'session-1', workspace: '/tmp/synthetic-pagination' }) } },
     } as any, {
       agentType: 'hermes-cli',
       targetSessionId: 'session-1',
@@ -170,6 +173,7 @@ describe('handleChatHistory', () => {
       getCliAdapter: () => ({ getStatus: () => ({ status: 'idle', messages: [] }) }) as any,
       currentProviderType: undefined,
       currentSession: undefined,
+      ctx: { sessionRegistry: { get: () => ({ sessionId: 'session-1', workspace: '/tmp/synthetic-pagination' }) } },
     } as any, {
       agentType: 'hermes-cli',
       targetSessionId: 'session-1',
@@ -196,7 +200,7 @@ describe('chat_history native source eligibility', () => {
     const result = await handleChatHistory({
       getProvider: () => ({ type: 'codex-cli', category: 'cli', nativeHistory: { mode: 'canonical' } }),
       getCliAdapter: () => null,
-      ctx: { sessionRegistry: { get: () => undefined, setProviderSessionId: writes } },
+      ctx: { sessionRegistry: { get: () => ({ sessionId: 'synthetic-runtime', workspace: '/tmp/synthetic-source' }), setProviderSessionId: writes } },
     } as any, {
       agentType: 'codex-cli', targetSessionId: 'synthetic-runtime', providerSessionId: 'synthetic-uuid',
       workspace: '/tmp/synthetic-source', excludeRecentCount: 0,

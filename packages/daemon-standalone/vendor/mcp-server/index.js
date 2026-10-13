@@ -117393,11 +117393,16 @@ ${marker}`,
       if (intended === actual) return { scoped: false };
       return { scoped: true, intended, actual };
     }
-    function resolveTargetSessionActualWorkspace(h, targetSessionId) {
+    function resolveTargetSessionActualWorkspace(h, targetSessionId, requireConfirmedOwner = false) {
       const registryWorkspace = h.ctx?.sessionRegistry?.get?.(targetSessionId)?.workspace;
       if (typeof registryWorkspace === "string" && registryWorkspace.trim()) return registryWorkspace;
       const adapter = h.getCliAdapter?.(targetSessionId);
+      if (requireConfirmedOwner) {
+        const runtimeMeta = adapter && typeof adapter.getRuntimeMetadata === "function" ? adapter.getRuntimeMetadata() : null;
+        if (typeof runtimeMeta?.runtimeId !== "string" || runtimeMeta.runtimeId.trim() !== targetSessionId || runtimeMeta.surfaceKind === "inactive_record" || runtimeMeta.surfaceKind === "recovery_snapshot") return "";
+      }
       if (adapter && typeof adapter.workingDir === "string" && adapter.workingDir.trim()) return adapter.workingDir;
+      if (requireConfirmedOwner) return "";
       const instanceWorkspace = getTargetInstance(h, { targetSessionId })?.getState?.()?.workspace;
       if (typeof instanceWorkspace === "string" && instanceWorkspace.trim()) return instanceWorkspace;
       return "";
@@ -121908,10 +121913,21 @@ ${marker}`,
       }
     }
     async function handleChatHistory(h, args) {
-      const result = await readChatHistoryPage(h, args);
+      const targetSessionId = typeof args?.targetSessionId === "string" ? args.targetSessionId.trim() : "";
+      const targetWorkspace = targetSessionId ? resolveTargetSessionActualWorkspace(h, targetSessionId, true) : "";
+      const scopeRefusal = refuseCrossWorktreeRead(h, args, targetWorkspace);
+      if (scopeRefusal) return scopeRefusal;
+      if (targetSessionId && !targetWorkspace) {
+        return {
+          success: false,
+          code: "chat_history_target_workspace_unconfirmed",
+          error: "Cannot confirm the target session workspace. Refusing to select or pin native history."
+        };
+      }
+      const result = await readChatHistoryPage(h, args, targetWorkspace || void 0);
       return Array.isArray(result?.messages) ? { ...result, messages: stripMessageSourceAddresses(result.messages) } : result;
     }
-    async function readChatHistoryPage(h, args) {
+    async function readChatHistoryPage(h, args, targetWorkspace) {
       const { agentType, offset, limit } = args;
       const historySessionId = getHistorySessionId(h, args);
       const includeActivity = args?.includeActivity === true || args?.includeActivity === "true";
@@ -121927,7 +121943,7 @@ ${marker}`,
           if (visibleCount > excludeRecentCount) excludeRecentCount = visibleCount;
         }
         const excludeFromIdentity = typeof args?.excludeFromIdentity === "string" && args.excludeFromIdentity ? args.excludeFromIdentity : void 0;
-        const workspace = typeof args?.workspace === "string" ? args.workspace : typeof h.currentSession?.workspace === "string" ? h.currentSession.workspace : void 0;
+        const workspace = targetWorkspace || (typeof args?.workspace === "string" ? args.workspace : typeof h.currentSession?.workspace === "string" ? h.currentSession.workspace : void 0);
         const {
           isRuntimeFallback: historySessionIdIsRuntimeFallback,
           pinnedProviderSessionId: pinnedProviderSessionIdForHistory,
@@ -122034,13 +122050,13 @@ ${marker}`,
       if (isExtensionTransport(transport)) return readChatFromExtension(h, args, { provider, historySessionId });
       return readChatFromIde(h, args, { provider, historySessionId });
     }
-    function refuseCrossWorktreeRead(h, args) {
+    function refuseCrossWorktreeRead(h, args, actualWorkspace) {
       const guardSessionId = typeof args?.targetSessionId === "string" ? args.targetSessionId.trim() : "";
       if (!guardSessionId || typeof args?.workspace !== "string" || !args.workspace.trim()) return null;
       const verdict = evaluateReadChatNodeWorkspaceScope({
         targetSessionId: guardSessionId,
         intendedWorkspace: args.workspace,
-        sessionWorkspace: resolveTargetSessionActualWorkspace(h, guardSessionId)
+        sessionWorkspace: actualWorkspace ?? resolveTargetSessionActualWorkspace(h, guardSessionId)
       });
       if (!verdict.scoped) return null;
       LOG.info("Command", `[read_chat] node scope mismatch: session ${guardSessionId} workspace "${verdict.actual}" \u2260 requested node workspace "${verdict.intended}" \u2014 refusing cross-worktree transcript`);

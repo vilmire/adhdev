@@ -56,6 +56,75 @@ beforeEach(() => {
 });
 afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
 describe('targeted Codex native identity through real JSONL read consumer', () => {
+  it.each(['override', 'omitted', 'unrelated-current'] as const)(
+    'rejects a foreign exact UUID page with %s workspace input and leaves subsequent read_chat unpinned', async (mode) => {
+      const foreignWorkspace = path.join(root, 'foreign-workspace'); fs.mkdirSync(foreignWorkspace);
+      rollout(foreignWorkspace);
+      const h: any = helpers();
+      if (mode === 'unrelated-current') h.currentSession = {
+        sessionId: 'synthetic-coordinator-B', providerType: 'codex-cli', transport: 'pty', workspace: foreignWorkspace,
+      };
+      const nativeLookup = vi.spyOn(provider.scripts, 'readNativeHistory');
+      const result = await page(h, { providerSessionId: UUID,
+        workspace: mode === 'override' ? foreignWorkspace : undefined });
+      expect((result.messages || []).map((m: any) => m.content)).not.toContain('SYNTHETIC_FOREIGN_ANSWER');
+      if (mode === 'override') {
+        expect(result.code).toBe('read_chat_session_node_scope_mismatch');
+        expect(nativeLookup).not.toHaveBeenCalled();
+        expect((await read(h, { workspace: foreignWorkspace, providerSessionId: UUID })).code)
+          .toBe('read_chat_session_node_scope_mismatch');
+      } else {
+        expect(result.messages).toEqual([]); expect(result.source).toBe('native-unavailable');
+        expect(nativeLookup).toHaveBeenCalledWith(expect.objectContaining({ workspace }));
+      }
+      expect(__getProviderSessionPinForTest(RUNTIME)).toBeUndefined(); expect(writes).not.toHaveBeenCalled();
+      const next = await read(h);
+      expect(next.pending).toBe(true); expect(next.messages).toEqual([]);
+      expect(next.providerSessionId).toBeUndefined();
+      expect(__getProviderSessionPinForTest(RUNTIME)).toBeUndefined(); expect(writes).not.toHaveBeenCalled();
+    });
+  it('fails closed before lookup when targeted workspace ownership is unconfirmed', async () => {
+    const h = helpers(); h.ctx.sessionRegistry.get = () => undefined;
+    const nativeLookup = vi.spyOn(provider.scripts, 'readNativeHistory');
+    const result = await page(h, { providerSessionId: UUID });
+    expect(result.success).toBe(false); expect(result.code).toBe('chat_history_target_workspace_unconfirmed');
+    expect(nativeLookup).not.toHaveBeenCalled(); expect(writes).not.toHaveBeenCalled();
+    expect(__getProviderSessionPinForTest(RUNTIME)).toBeUndefined();
+  });
+  it('rejects an unrelated adapter workspace as targeted ownership evidence', async () => {
+    const h: any = helpers(true); h.ctx.sessionRegistry.get = () => undefined;
+    const adapter = h.getCliAdapter();
+    h.getCliAdapter = () => ({ ...adapter, getRuntimeMetadata: () => ({ runtimeId: 'synthetic-other-runtime' }) });
+    const nativeLookup = vi.spyOn(provider.scripts, 'readNativeHistory');
+    const result = await page(h, { providerSessionId: UUID });
+    expect(result.code).toBe('chat_history_target_workspace_unconfirmed');
+    expect(nativeLookup).not.toHaveBeenCalled(); expect(writes).not.toHaveBeenCalled();
+    expect(__getProviderSessionPinForTest(RUNTIME)).toBeUndefined();
+  });
+  it('uses a runtime-owned adapter workspace when the target registry is unavailable', async () => {
+    const h = helpers(true); h.ctx.sessionRegistry.get = () => undefined;
+    const result = await page(h, { workspace: undefined, providerSessionId: UUID });
+    expect(result.source).toBe('provider-native');
+    expect((result.messages as any[]).map(m => m.content)).toContain('SYNTHETIC_FOREIGN_ANSWER');
+    expect(__getProviderSessionPinForTest(RUNTIME)).toBe(UUID);
+  });
+  it('uses the target registry for valid exact paging with omitted or unrelated coordinator workspace', async () => {
+    for (const currentSession of [undefined, {
+      sessionId: 'synthetic-coordinator-B', providerType: 'codex-cli', transport: 'pty', workspace: path.join(root, 'coordinator-B'),
+    }]) {
+      const h: any = helpers(); h.currentSession = currentSession;
+      const result = await page(h, { workspace: undefined, providerSessionId: UUID });
+      expect(result.source).toBe('provider-native');
+      expect((result.messages as any[]).map(m => m.content)).toContain('SYNTHETIC_FOREIGN_ANSWER');
+      expect(__getProviderSessionPinForTest(RUNTIME)).toBe(UUID);
+    }
+  });
+  it('preserves untargeted explicit history reads without inferring a runtime pin', async () => {
+    const result = await page(helpers(), { targetSessionId: undefined, providerSessionId: UUID });
+    expect(result.source).toBe('provider-native');
+    expect((result.messages as any[]).map(m => m.content)).toContain('SYNTHETIC_FOREIGN_ANSWER');
+    expect(__getProviderSessionPinForTest(RUNTIME)).toBeUndefined(); expect(writes).not.toHaveBeenCalled();
+  });
   it('rejects unconfirmed workspace mtime/timestamp pages and keeps subsequent read_chat unpinned', async () => {
     for (const floor of [spawn, spawn - 3600_000, 0]) {
       spawn = floor;

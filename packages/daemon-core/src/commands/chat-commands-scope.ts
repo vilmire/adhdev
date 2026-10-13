@@ -41,13 +41,24 @@ export function evaluateReadChatNodeWorkspaceScope(args: {
  * available on this daemon: the session registry record (stamped at register
  * time), then the live CLI adapter's working directory, then the bound instance
  * state. Returns '' when nothing knows the session's workspace — the caller treats
- * that as "unknown" and does not block.
+ * that as "unknown" and does not block. Paging requests requireConfirmedOwner:
+ * only a registry workspace or a live runtime-matched adapter may confirm the
+ * target workspace; provider/current-session and instance fallbacks are excluded.
  */
-export function resolveTargetSessionActualWorkspace(h: CommandHelpers, targetSessionId: string): string {
+export function resolveTargetSessionActualWorkspace(h: CommandHelpers, targetSessionId: string, requireConfirmedOwner = false): string {
     const registryWorkspace = (h.ctx?.sessionRegistry?.get?.(targetSessionId) as any)?.workspace;
     if (typeof registryWorkspace === 'string' && registryWorkspace.trim()) return registryWorkspace;
     const adapter = h.getCliAdapter?.(targetSessionId);
+    // Paging must not infer ownership from a provider/current-session adapter
+    // returned as a fallback for an unknown target. Only its runtime can prove it.
+    if (requireConfirmedOwner) {
+        const runtimeMeta = adapter && typeof (adapter as any).getRuntimeMetadata === 'function'
+            ? (adapter as any).getRuntimeMetadata() : null;
+        if (typeof runtimeMeta?.runtimeId !== 'string' || runtimeMeta.runtimeId.trim() !== targetSessionId
+            || runtimeMeta.surfaceKind === 'inactive_record' || runtimeMeta.surfaceKind === 'recovery_snapshot') return '';
+    }
     if (adapter && typeof adapter.workingDir === 'string' && adapter.workingDir.trim()) return adapter.workingDir;
+    if (requireConfirmedOwner) return '';
     const instanceWorkspace = (getTargetInstance(h, { targetSessionId })?.getState?.() as any)?.workspace;
     if (typeof instanceWorkspace === 'string' && instanceWorkspace.trim()) return instanceWorkspace;
     return '';

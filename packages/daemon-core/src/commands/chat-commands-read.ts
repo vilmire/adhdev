@@ -133,16 +133,27 @@ function getCliVisibleTranscriptCount(adapter: any): number {
 }
 
 export async function handleChatHistory(h: CommandHelpers, args: any): Promise<CommandResult> {
+    const targetSessionId = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '';
+    const targetWorkspace = targetSessionId ? resolveTargetSessionActualWorkspace(h, targetSessionId, true) : '';
+    const scopeRefusal = refuseCrossWorktreeRead(h, args, targetWorkspace);
+    if (scopeRefusal) return scopeRefusal;
+    if (targetSessionId && !targetWorkspace) {
+        return {
+            success: false,
+            code: 'chat_history_target_workspace_unconfirmed',
+            error: 'Cannot confirm the target session workspace. Refusing to select or pin native history.',
+        };
+    }
     // chat_history pages native-history rows straight to the caller without
     // passing the read_chat choke point, so the daemon-internal `_src` reader
     // stamp is dropped here instead (design 2026-09-28 §3.3).
-    const result = await readChatHistoryPage(h, args);
+    const result = await readChatHistoryPage(h, args, targetWorkspace || undefined);
     return Array.isArray((result as any)?.messages)
         ? { ...result, messages: stripMessageSourceAddresses((result as any).messages) }
         : result;
 }
 
-async function readChatHistoryPage(h: CommandHelpers, args: any): Promise<CommandResult> {
+async function readChatHistoryPage(h: CommandHelpers, args: any, targetWorkspace?: string): Promise<CommandResult> {
     const { agentType, offset, limit } = args;
     const historySessionId = getHistorySessionId(h, args);
     // Same opt-in contract as read_chat (read-chat-presentation.ts): prose-only
@@ -167,11 +178,13 @@ async function readChatHistoryPage(h: CommandHelpers, args: any): Promise<Comman
         const excludeFromIdentity = typeof args?.excludeFromIdentity === 'string' && args.excludeFromIdentity
             ? args.excludeFromIdentity
             : undefined;
-        const workspace = typeof args?.workspace === 'string'
+        // Targeted pages use the actual owner's workspace, never a caller or
+        // unrelated coordinator workspace that would make safeMapping circular.
+        const workspace = targetWorkspace || (typeof args?.workspace === 'string'
             ? args.workspace
             : typeof (h.currentSession as any)?.workspace === 'string'
                 ? (h.currentSession as any).workspace
-                : undefined;
+                : undefined);
         // Same runtime-fallback poison guard as the subscribe / history-only
         // paths (see resolveNativeHistoryReadSession): getHistorySessionId falls
         // back to targetSessionId (the ADHDev id) for an agy coordinator, and the
@@ -332,13 +345,13 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
  * worktree B. mesh_read_chat always passes the requested node's workspace as
  * args.workspace; refuse a CONFIRMED cross-workspace read rather than mix.
  */
-function refuseCrossWorktreeRead(h: CommandHelpers, args: any): CommandResult | null {
+function refuseCrossWorktreeRead(h: CommandHelpers, args: any, actualWorkspace?: string): CommandResult | null {
     const guardSessionId = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '';
     if (!guardSessionId || typeof args?.workspace !== 'string' || !args.workspace.trim()) return null;
     const verdict = evaluateReadChatNodeWorkspaceScope({
         targetSessionId: guardSessionId,
         intendedWorkspace: args.workspace,
-        sessionWorkspace: resolveTargetSessionActualWorkspace(h, guardSessionId),
+        sessionWorkspace: actualWorkspace ?? resolveTargetSessionActualWorkspace(h, guardSessionId),
     });
     if (!verdict.scoped) return null;
     LOG.info('Command', `[read_chat] node scope mismatch: session ${guardSessionId} workspace "${verdict.actual}" ≠ requested node workspace "${verdict.intended}" — refusing cross-worktree transcript`);
