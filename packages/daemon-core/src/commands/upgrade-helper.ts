@@ -1,6 +1,7 @@
-import { execFileSync } from 'child_process';
-import { spawn, type ChildProcess } from 'child_process';
-import { hiddenExecFileSync } from '../process/hidden-spawn.js';
+import { assertWorkerBridgeLifecycleAdmission } from './worker-bridge-lifecycle-admission.js';
+import { execFileSync as nativeExecFileSync } from 'child_process';
+import { spawn as nativeSpawn, type ChildProcess } from 'child_process';
+import { hiddenExecFileSync as nativeHiddenExecFileSync } from '../process/hidden-spawn.js';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -30,12 +31,25 @@ import {
   type PosixUpgradeJournal,
   type SpawnedDaemonHandle,
 } from './posix-upgrade-health-gate.js';
-import { buildPinnedGlobalInstallCommand, buildInstallEnvWithNodeOnPath, execNpmCommandSync, type CurrentGlobalInstallSurface, type PinnedGlobalInstallCommand } from './upgrade-install-surface.js';
+import { buildPinnedGlobalInstallCommand, buildInstallEnvWithNodeOnPath, execNpmCommandSync as nativeExecNpmCommandSync, type CurrentGlobalInstallSurface, type PinnedGlobalInstallCommand } from './upgrade-install-surface.js';
 import { stopSessionHostProcesses, listForeignNativeAddonHolders, stopForeignNativeAddonHolders } from './upgrade-process-stop.js';
 import { buildManualRecoveryCommand, emitUpgradeFailureNotice, clearUpgradeFailureNotice } from './upgrade-failure-notice.js';
 import { resolveInstanceDir, getUpgradeLogPath, appendUpgradeLog } from './upgrade-log.js';
 
 const UPGRADE_HELPER_ENV = 'ADHDEV_DAEMON_UPGRADE_HELPER';
+
+const execFileSync: typeof nativeExecFileSync = ((...args: any[]) => {
+  assertWorkerBridgeLifecycleAdmission('helper_exec'); return (nativeExecFileSync as any)(...args);
+}) as typeof nativeExecFileSync;
+const hiddenExecFileSync: typeof nativeHiddenExecFileSync = ((...args: any[]) => {
+  assertWorkerBridgeLifecycleAdmission('helper_exec'); return (nativeHiddenExecFileSync as any)(...args);
+}) as typeof nativeHiddenExecFileSync;
+const execNpmCommandSync: typeof nativeExecNpmCommandSync = (...args) => {
+  assertWorkerBridgeLifecycleAdmission('helper_npm'); return nativeExecNpmCommandSync(...args);
+};
+const spawn: typeof nativeSpawn = ((...args: any[]) => {
+  assertWorkerBridgeLifecycleAdmission('helper_spawn'); return (nativeSpawn as any)(...args);
+}) as typeof nativeSpawn;
 
 export interface DaemonUpgradeHelperPayload {
   packageName: string;
@@ -87,6 +101,7 @@ function isRetriableInstallLockError(error: any): boolean {
 }
 
 function removeDaemonPidFile(configDir: string = getConfigDir()): void {
+  assertWorkerBridgeLifecycleAdmission('helper_pid_cleanup',configDir);
   const pidFile = path.join(configDir, 'daemon.pid');
   try {
     fs.unlinkSync(pidFile);
@@ -106,6 +121,7 @@ function removeDaemonPidFile(configDir: string = getConfigDir()): void {
  * the upgrade. Log and continue instead of letting the error propagate.
  */
 export function safeRemoveStaleEntry(target: string, label: string): void {
+  assertWorkerBridgeLifecycleAdmission('helper_cleanup');
   try {
     fs.rmSync(target, { recursive: true, force: true });
     appendUpgradeLog(`${label}: ${target}`);
@@ -115,6 +131,7 @@ export function safeRemoveStaleEntry(target: string, label: string): void {
 }
 
 export function cleanupStaleGlobalInstallDirs(pkgName: string, surface: CurrentGlobalInstallSurface): void {
+  assertWorkerBridgeLifecycleAdmission('helper_cleanup');
   // The whole routine is housekeeping — never let it throw out and abort the
   // upgrade (npm root/prefix probing or readdir can fail for unrelated reasons).
   try {
@@ -301,6 +318,7 @@ function preservePinnedShebangs(backup: PosixInstallBackup): void {
 
 /** Restore a backupPosixInstall snapshot over the live prefix. Throws on failure. */
 function restorePosixInstall(backup: PosixInstallBackup): void {
+  assertWorkerBridgeLifecycleAdmission('helper_rollback');
   // Verify the snapshot BEFORE deleting the live tree: removing the live
   // package and then failing to copy a missing snapshot would turn a
   // recoverable state into no install at all.
@@ -356,12 +374,14 @@ function retargetInstallCommand(
 /** Graceful stop, then forced — POSIX only (this path never runs on win32). */
 async function stopPosixPid(pid: number): Promise<boolean> {
   try {
+    assertWorkerBridgeLifecycleAdmission('helper_signal');
     process.kill(pid, 'SIGTERM');
   } catch (error: any) {
     return error?.code === 'ESRCH';
   }
   if (await waitForPidExit(pid, 10_000)) return true;
   try {
+    assertWorkerBridgeLifecycleAdmission('helper_signal');
     process.kill(pid, 'SIGKILL');
   } catch {
     // noop — it may have exited between the checks
@@ -529,8 +549,10 @@ async function runPosixInPlaceUpgrade(options: {
   // whereas an unverified install left behind by a killed helper is exactly
   // the rc.62 dead-machine state.
   const onSignal = (signal: NodeJS.Signals): void => {
+    try { assertWorkerBridgeLifecycleAdmission('helper_signal_recovery'); } catch { return; }
     appendUpgradeLog(`Upgrade helper received ${signal} during "${journal.phase}" — restoring the previous install before exiting`);
     if (journal.spawnedPid && journal.spawnedPid !== process.pid) {
+      assertWorkerBridgeLifecycleAdmission('helper_recovery');
       try { process.kill(journal.spawnedPid, 'SIGKILL'); } catch { /* already gone */ }
     }
     let restored = false;
@@ -624,6 +646,7 @@ async function runPosixInPlaceUpgrade(options: {
 
     const liveBackup = backup;
     const rollbackAndRestart = (cause: string): void => {
+      assertWorkerBridgeLifecycleAdmission('helper_rollback');
       if (liveBackup) {
         try {
           restorePosixInstall(liveBackup);
@@ -757,6 +780,7 @@ async function runPosixInPlaceUpgrade(options: {
 }
 
 export function spawnDetachedDaemonUpgradeHelper(payload: DaemonUpgradeHelperPayload): void {
+  assertWorkerBridgeLifecycleAdmission('helper_schedule', payload.configDir);
   const env = buildUpgradeHelperChildEnv(payload);
   const child = spawn(process.execPath, process.argv.slice(1), {
     detached: true,
@@ -790,6 +814,7 @@ export function buildUpgradeHelperChildEnv(
 }
 
 async function runDaemonUpgradeHelper(payload: DaemonUpgradeHelperPayload): Promise<void> {
+  assertWorkerBridgeLifecycleAdmission('helper_execute', payload.configDir);
   const restartArgv = Array.isArray(payload.restartArgv) ? payload.restartArgv : [];
   // Falls back to THIS build's namespace, not a hardcoded 'adhdev'. This value
   // feeds stopSessionHostProcesses() below — a preview upgrade that lost
@@ -1098,6 +1123,10 @@ function spawnDetachedDaemonRestart(restartArgv: string[], cwd?: string): ChildP
 export async function maybeRunDaemonUpgradeHelperFromEnv(): Promise<boolean> {
   const raw = process.env[UPGRADE_HELPER_ENV];
   if (!raw) return false;
+  // Refuse outside the legacy catch/rollback/notice fallback, preserving payload.
+  let requestedConfigDir: string | undefined;
+  try { const decoded=JSON.parse(raw); if(typeof decoded?.configDir==='string')requestedConfigDir=decoded.configDir; } catch { /* legacy parse error handling follows, after current state admission */ }
+  assertWorkerBridgeLifecycleAdmission('helper_env_execute',requestedConfigDir);
   delete process.env[UPGRADE_HELPER_ENV];
 
   let targetVersion: string | null = null;
@@ -1115,9 +1144,11 @@ export async function maybeRunDaemonUpgradeHelperFromEnv(): Promise<boolean> {
         + `ADHDEV_CONFIG_DIR "${envConfigDir}" — refusing to run across instances`,
       );
     }
+    assertWorkerBridgeLifecycleAdmission('helper_env_payload', payload.configDir);
     await runDaemonUpgradeHelper(payload);
     process.exit(0);
   } catch (error: any) {
+    if(error?.code==='strict_bridge_lifecycle_authority_unavailable')throw error;
     const detail = error?.stack || error?.message || String(error);
     appendUpgradeLog(`Upgrade helper failed: ${detail}`);
     // A path that already wrote a specific notice (the POSIX boot health gate's

@@ -1,3 +1,4 @@
+import { assertWorkerBridgeLifecycleAdmission } from '../commands/worker-bridge-lifecycle-admission.js';
 import { spawn, type StdioOptions } from 'child_process';
 import { hiddenExecFileSync } from '../process/hidden-spawn.js';
 import * as fs from 'fs';
@@ -278,6 +279,7 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
     }
 
     function spawnHost(): void {
+        assertWorkerBridgeLifecycleAdmission('session_host_spawn', instance().configDir);
         const entry = resolveEntry();
         verifyConptyPrebuildBeforeSpawn(entry);
         // Fail loudly on a full volume BEFORE spawning. A session host started
@@ -349,6 +351,7 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
      * our purposes, and a pid we could not have killed anyway.
      */
     function stopManagedSessionHostProcess(): boolean {
+        assertWorkerBridgeLifecycleAdmission('session_host_stop', instance().configDir);
         let stopped = false;
         const pidFile = getPidFile();
         // Keep the pidfile when a tracked host is still alive but we failed to

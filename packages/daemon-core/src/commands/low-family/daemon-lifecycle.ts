@@ -26,6 +26,8 @@
  * how a node on 1.0.49-rc.2 was put back on 1.0.48 and left unable to launch
  * sessions. Direction is now checked explicitly, with semver precedence.
  */
+import { assertWorkerBridgeLifecycleAdmission } from '../worker-bridge-lifecycle-admission.js';
+import { MeshRuntimeStore } from '../../mesh/mesh-runtime-store.js';
 import { loadConfig, updateConfig, setQuotaShowAccountEmail } from '../../config/config.js';
 import { installClaudeStatusline } from '../../quota/statusline/install.js';
 import { spawnDetachedDaemonUpgradeHelper } from '../upgrade-helper.js';
@@ -63,6 +65,7 @@ export const daemonLifecycleHandlers: Record<string, (ctx: DepsOnlyLowFamilyCont
     daemon_upgrade: async (ctx: DepsOnlyLowFamilyContext, args: any) => {
         LOG.info('Upgrade', 'Remote upgrade requested from dashboard');
         try {
+            assertWorkerBridgeLifecycleAdmission('daemon_upgrade', undefined, MeshRuntimeStore.getInstance().db);
             // Detect package name for upgrade
             const isStandalone = ctx.deps.packageName === '@adhdev/daemon-standalone'
                 || isStandaloneArgv(process.argv[1]);
@@ -221,6 +224,7 @@ export const daemonLifecycleHandlers: Record<string, (ctx: DepsOnlyLowFamilyCont
             // Exit after the command response has been sent so the helper can replace the package cleanly.
             setTimeout(() => {
                 LOG.info('Upgrade', 'Exiting daemon so detached upgrader can continue...');
+                try { assertWorkerBridgeLifecycleAdmission('scheduled_exit'); } catch { return; }
                 process.exit(0);
             }, 3000);
 
@@ -267,6 +271,7 @@ export const daemonLifecycleHandlers: Record<string, (ctx: DepsOnlyLowFamilyCont
     daemon_restart: async (ctx: DepsOnlyLowFamilyContext, args: any) => {
         LOG.info('Restart', 'Restart-only requested (no package reinstall)');
         try {
+            assertWorkerBridgeLifecycleAdmission('daemon_restart', undefined, MeshRuntimeStore.getInstance().db);
             const isStandalone = ctx.deps.packageName === '@adhdev/daemon-standalone'
                 || isStandaloneArgv(process.argv[1]);
             const pkgName = isStandalone ? '@adhdev/daemon-standalone' : 'adhdev';
@@ -290,6 +295,7 @@ export const daemonLifecycleHandlers: Record<string, (ctx: DepsOnlyLowFamilyCont
             // Exit after the command response has been sent so the helper can re-spawn cleanly.
             setTimeout(() => {
                 LOG.info('Restart', 'Exiting daemon so detached helper can re-spawn it...');
+                try { assertWorkerBridgeLifecycleAdmission('scheduled_exit'); } catch { return; }
                 process.exit(0);
             }, 3000);
 

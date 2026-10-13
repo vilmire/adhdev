@@ -300,3 +300,32 @@ describe('F. whenIdle carries the full upgrade option set (allowDowngrade / chan
     expect((daemonUpgrade.mock.calls[0] as any[])[1]).not.toHaveProperty('allowDowngrade')
   })
 })
+
+describe('strict bridge lifecycle containment', () => {
+  it('mesh/deferred admission rejects forged authority before resolving or forwarding peers', async () => {
+    const { setBridgePolicy } = await import('../../src/mesh/worker-bridge.js')
+    setBridgePolicy(MeshRuntimeStore.getInstance().db, { meshId: MESH_ID, rolloutId: 'synthetic-blocked', frozen: true, builds: [{ commit: 'b'.repeat(40), version: '1.0.81-test' }] })
+    const ctx = makeCtx([])
+    expect(await call(ctx, baseArgs({ whenIdle: true, killSessionHost: true, bridgeAuthority: { ready: true } }))).toMatchObject({ success: false, error: 'strict_bridge_lifecycle_authority_unavailable' })
+    expect(ctx.getMeshForCommand).not.toHaveBeenCalled()
+    expect(daemonRestart).not.toHaveBeenCalled()
+    expect(daemonUpgrade).not.toHaveBeenCalled()
+    expect(loadDeferredRestartSchedules()).toEqual({})
+  })
+  it('persisted ordinary schedule remains pending after strict policy appears, including rearm', async () => {
+    vi.useFakeTimers()
+    const states: any[] = [foreignWorkerSession]
+    const ctx = makeCtx(states)
+    await call(ctx, baseArgs({ whenIdle: true, mode: 'restart', killSessionHost: true }))
+    const persisted = loadDeferredRestartSchedules()
+    const { setBridgePolicy } = await import('../../src/mesh/worker-bridge.js')
+    setBridgePolicy(MeshRuntimeStore.getInstance().db, { meshId: MESH_ID, rolloutId: 'synthetic-blocked', frozen: true, builds: [{ commit: 'b'.repeat(40), version: '1.0.81-test' }] })
+    states.length = 0
+    __clearDeferredRestartsForTests()
+    rearmPersistedDeferredRestarts(ctx.deps)
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(daemonRestart).not.toHaveBeenCalled()
+    expect(daemonUpgrade).not.toHaveBeenCalled()
+    expect(loadDeferredRestartSchedules()).toEqual(persisted)
+  })
+})

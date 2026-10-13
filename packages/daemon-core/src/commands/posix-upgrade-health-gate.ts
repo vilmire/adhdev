@@ -1,3 +1,4 @@
+import { assertWorkerBridgeLifecycleAdmission } from './worker-bridge-lifecycle-admission.js';
 /**
  * POSIX (macOS/Linux) post-upgrade boot health gate + automatic rollback.
  *
@@ -206,6 +207,7 @@ async function stopFailedDaemons(
   for (const pid of pids) {
     if (!Number.isFinite(pid) || pid <= 0 || excludePids.has(pid)) continue;
     hooks.log(`Stopping failed replacement daemon pid ${pid} before rollback`);
+    assertWorkerBridgeLifecycleAdmission('posix_stop');
     const stopped = await hooks.stopPid(pid);
     if (!stopped) hooks.log(`Pid ${pid} did not exit after the stop request; continuing the rollback anyway`);
   }
@@ -221,12 +223,14 @@ async function stopFailedDaemons(
  * wrong version is recoverable remotely; no daemon at all is not.
  */
 export async function gatePosixUpgradeRestart(options: PosixUpgradeGateOptions): Promise<PosixUpgradeGateResult> {
+  assertWorkerBridgeLifecycleAdmission('posix_restart_or_rollback');
   const { hooks, port, targetVersion, previousVersion, restartArgv } = options;
   const healthTimeoutMs = options.healthTimeoutMs ?? DEFAULT_HEALTH_TIMEOUT_MS;
   const rollbackHealthTimeoutMs = options.rollbackHealthTimeoutMs ?? healthTimeoutMs;
   const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   const excludePids = new Set<number>([process.pid, ...(options.excludePids ?? [])]);
 
+  assertWorkerBridgeLifecycleAdmission('posix_spawn');
   const spawned = hooks.spawnDaemon(restartArgv);
   options.onPhase?.('gating', spawned?.pid ?? null);
   hooks.log(
@@ -253,9 +257,11 @@ export async function gatePosixUpgradeRestart(options: PosixUpgradeGateOptions):
   let restoredVia: PosixRestoreMethod | null = null;
   let rollbackError: string | null = null;
   try {
+    assertWorkerBridgeLifecycleAdmission('posix_rollback');
     restoredVia = await hooks.restorePrevious();
     hooks.log(`Rollback: previous install restored via ${restoredVia}`);
   } catch (error: any) {
+    if (error?.code === 'strict_bridge_lifecycle_authority_unavailable') throw error;
     rollbackError = `could not restore the previous install: ${error?.message || String(error)}`;
     hooks.log(`ROLLBACK RESTORE FAILED: ${rollbackError} — restarting whatever is installed so the machine is not left without a daemon`);
   }
@@ -265,6 +271,7 @@ export async function gatePosixUpgradeRestart(options: PosixUpgradeGateOptions):
   const expectVersion = restoredVia ? previousVersion : null;
   let lastReason = '';
   for (let attempt = 1; attempt <= ROLLBACK_RESTART_ATTEMPTS; attempt++) {
+    assertWorkerBridgeLifecycleAdmission('posix_spawn');
     const child = hooks.spawnDaemon(restartArgv);
     const result = await waitForDaemonHealth(hooks, {
       port,
@@ -416,6 +423,7 @@ export function readPosixUpgradeJournal(configDir: string): PosixUpgradeJournal 
 
 /** Atomic replace (tmp + rename) so an interrupted write never leaves half a journal. */
 export function writePosixUpgradeJournal(configDir: string, journal: PosixUpgradeJournal): void {
+  assertWorkerBridgeLifecycleAdmission('legacy_journal_write',configDir);
   const target = getPosixUpgradeJournalPath(configDir);
   const tmp = `${target}.${process.pid}.tmp`;
   try {
@@ -429,6 +437,7 @@ export function writePosixUpgradeJournal(configDir: string, journal: PosixUpgrad
 
 /** Remove the journal, but only when this process owns it. */
 export function clearPosixUpgradeJournal(configDir: string, ownerPid: number = process.pid): void {
+  assertWorkerBridgeLifecycleAdmission('legacy_journal_clear',configDir);
   const current = readPosixUpgradeJournal(configDir);
   if (current && current.helperPid !== ownerPid) return;
   try { fs.rmSync(getPosixUpgradeJournalPath(configDir), { force: true }); } catch { /* noop */ }

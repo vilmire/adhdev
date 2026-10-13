@@ -1,3 +1,5 @@
+import { assertWorkerBridgeLifecycleAdmission } from '../worker-bridge-lifecycle-admission.js';
+import { MeshRuntimeStore } from '../../mesh/mesh-runtime-store.js';
 /**
  * RF-ROUTER MED family — coordinator-triggered daemon restart.
  *
@@ -348,6 +350,7 @@ function scheduleDeferredRestart(deps: CommandRouterDeps, args: any, meshId: str
 }
 
 async function deferredRestartTick(deps: CommandRouterDeps, key: string): Promise<void> {
+    try { assertWorkerBridgeLifecycleAdmission('deferred_restart',undefined,MeshRuntimeStore.getInstance().db); } catch { return; }
     const record = pendingDeferredRestarts.get(key);
     if (!record) return;
     if (Date.now() >= record.expiresAt) {
@@ -432,6 +435,7 @@ function restartWillHappen(result: CommandRouterResult, args: any): boolean {
 
 export const meshRestartHandlers: Record<string, MedFamilyHandler> = {
     restart_daemon_node: async (ctx: MedFamilyContext, args: any): Promise<CommandRouterResult> => {
+        try { assertWorkerBridgeLifecycleAdmission('mesh_restart_schedule', undefined, MeshRuntimeStore.getInstance().db); } catch { return {success:false,error:'strict_bridge_lifecycle_authority_unavailable'}; }
         const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
         const nodeId = typeof args?.nodeId === 'string' ? args.nodeId.trim() : '';
 

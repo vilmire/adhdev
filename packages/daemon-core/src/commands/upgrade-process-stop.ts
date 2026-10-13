@@ -1,3 +1,4 @@
+import { assertWorkerBridgeLifecycleAdmission } from './worker-bridge-lifecycle-admission.js';
 /**
  * Stopping the processes that hold the installed package open before an upgrade
  * replaces it: the session-host daemons (which pin conpty.node on Windows) and any
@@ -90,6 +91,7 @@ export async function stopSessionHostProcesses(
   appName: string,
   configDir: string = getConfigDir(),
 ): Promise<SessionHostStopOutcome> {
+  assertWorkerBridgeLifecycleAdmission('upgrade_process_stop', configDir);
   const pidFile = path.join(configDir, `${appName}-session-host.pid`);
   const outcome: SessionHostStopOutcome = { pid: null, identity: null, stopped: false, survived: false };
   let killedPid: number | null = null;
@@ -119,6 +121,7 @@ export async function stopSessionHostProcesses(
               configDir,
             );
           }
+          assertWorkerBridgeLifecycleAdmission('upgrade_host_signal', configDir);
           if (killProcess(pid)) killedPid = pid;
         }
       }
@@ -152,6 +155,7 @@ export async function stopSessionHostProcesses(
     outcome.survived = isPidAlive(outcome.pid);
   }
 
+  assertWorkerBridgeLifecycleAdmission('upgrade_host_cleanup', configDir);
   keepPidFile = outcome.survived;
   if (!keepPidFile) {
     try {
@@ -254,6 +258,7 @@ export async function stopForeignNativeAddonHolders(
   packageRoot: string | null | undefined,
   options: { parentPid?: number } = {},
 ): Promise<Array<{ pid: number; commandLine: string | null; killed: boolean }>> {
+  assertWorkerBridgeLifecycleAdmission('upgrade_process_stop');
   if (process.platform !== 'win32' || !packageRoot) return [];
   const parentPid = Number.isFinite(options.parentPid) ? Number(options.parentPid) : -1;
   const holders = listForeignNativeAddonHolders(packageRoot);
@@ -265,6 +270,7 @@ export async function stopForeignNativeAddonHolders(
     appendUpgradeLog(
       `Foreign native-addon holder found: pid ${holder.pid}${holder.commandLine ? ` — ${holder.commandLine}` : ''}`,
     );
+    assertWorkerBridgeLifecycleAdmission('upgrade_holder_signal');
     const killed = killProcess(holder.pid);
     if (killed) {
       await waitForPidExit(holder.pid, 15000);

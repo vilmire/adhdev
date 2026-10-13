@@ -1,3 +1,4 @@
+import { assertWorkerBridgeLifecycleAdmission } from './worker-bridge-lifecycle-admission.js';
 import { execFileSync, spawn, spawnSync, type ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as http from 'http';
@@ -544,6 +545,7 @@ function removeFailedStagedPrefix(
 }
 
 export async function performWindowsAtomicUpgrade(options: WindowsAtomicUpgradeOptions): Promise<WindowsAtomicUpgradeResult> {
+  assertWorkerBridgeLifecycleAdmission('windows_upgrade_or_rollback');
   const { layout, packageName, targetVersion, portableNode, hooks } = options;
   const versionName = `version-${Date.now()}-${process.pid}-${Math.random().toString(16).slice(2)}`;
   const stagedPrefix = path.join(layout.installRoot, versionName);
@@ -554,6 +556,7 @@ export async function performWindowsAtomicUpgrade(options: WindowsAtomicUpgradeO
   try {
     hooks.log(`Installing ${packageName}@${targetVersion} into inactive prefix ${stagedPrefix}`);
     await hooks.install(stagedPrefix, portableNode);
+    assertWorkerBridgeLifecycleAdmission('windows_post_install');
     verifyStagedConptyPrebuild(stagedPrefix, hooks.log);
     const stagedCliEntry = readPackageCliEntry(stagedPrefix, packageName, targetVersion);
     pinStagedShims(stagedPrefix, portableNode, stagedCliEntry);
@@ -566,6 +569,7 @@ export async function performWindowsAtomicUpgrade(options: WindowsAtomicUpgradeO
     // the old tree and resolves lazy requires against a deleted prefix after
     // activation. Survivors block activation so the pointer is never corrupted.
     const excludedPids = new Set([process.pid, ...(options.excludePids ?? [])].filter((n) => Number.isFinite(n) && n > 0));
+    assertWorkerBridgeLifecycleAdmission('windows_pre_stop');
     const preStop = await stopOwnedProcessesForPrefixes({
       prefixes: [layout.activePrefix, layout.stablePrefix],
       excludePids: Array.from(excludedPids),
@@ -579,9 +583,11 @@ export async function performWindowsAtomicUpgrade(options: WindowsAtomicUpgradeO
       );
     }
 
+    assertWorkerBridgeLifecycleAdmission('windows_activate');
     activated = true;
     publishStableShimsAndPointer(layout, versionName);
     hooks.log(`Atomically activated ${versionName}`);
+    assertWorkerBridgeLifecycleAdmission('windows_restart');
     restarted = hooks.restart(portableNode, stagedCliEntry);
     // A null restart means the caller asked for no daemon respawn. Activation
     // has already completed, so the upgrade SUCCEEDED — skip the health gate
@@ -589,6 +595,7 @@ export async function performWindowsAtomicUpgrade(options: WindowsAtomicUpgradeO
     // install) and fall through to the normal post-success cleanup.
     if (restarted === null) {
       hooks.log(`Activated ${targetVersion} without restarting a daemon (none was running)`);
+      assertWorkerBridgeLifecycleAdmission('windows_cleanup');
       await hooks.cleanup(layout, stagedPrefix);
       return { stagedPrefix, stagedCliEntry, daemonPid: null };
     }
@@ -597,9 +604,12 @@ export async function performWindowsAtomicUpgrade(options: WindowsAtomicUpgradeO
       throw new Error('replacement daemon did not pass the health/version gate');
     }
     hooks.log(`Replacement daemon pid ${daemonPid} passed health for ${targetVersion}`);
+    assertWorkerBridgeLifecycleAdmission('windows_cleanup');
     await hooks.cleanup(layout, stagedPrefix);
     return { stagedPrefix, stagedCliEntry, daemonPid };
   } catch (error) {
+    // Do not invoke legacy rollback/cleanup once strict state appears. Preserve evidence.
+    assertWorkerBridgeLifecycleAdmission('windows_rollback');
     if (restarted?.pid) hooks.stopProcess(restarted.pid);
     if (activated) {
       try {

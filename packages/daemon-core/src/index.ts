@@ -1005,3 +1005,5 @@ export type { SessionInputService, SessionInputTarget } from './sessions/session
 // ── Tool answers composed by the coordinator daemon (mesh_status_view / mesh_dispatch_route) ──
 export { composeMeshStatusView, decideDispatchRoute, decideNodeRoutes, type MeshNodeRouteDecision } from './commands/high-family/mesh-status-view.js';
 export type { MeshStatusViewArgs } from './commands/high-family/mesh-status-view.js';
+
+export { assertWorkerBridgeLifecycleAdmission } from './commands/worker-bridge-lifecycle-admission.js';
