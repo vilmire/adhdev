@@ -206,6 +206,10 @@ export function acceptLateWorkerCompletionReport(
     report: WorkerCompletionReport,
     nowMs: number,
 ): WorkerReportResult {
+    const attempt = MeshRuntimeStore.getInstance().turnStore().getAttempt(identity.attemptId);
+    if (attempt?.terminal && ['report_correction_expired', 'weak_end_liveness_unconfirmed', 'weak_end_probe_unobserved'].includes(attempt.terminal.reason)) {
+        return { accepted: false, refusal: 'correction_too_late', detail: 'The bounded report/probe recovery window ended; this attempt remains failed. The report was not accepted as a recovery.' };
+    }
     const taskModeError = checkReportAgainstTaskMode(identity, report);
     if (taskModeError) return { accepted: false, refusal: 'invalid_for_task_mode', detail: taskModeError };
 

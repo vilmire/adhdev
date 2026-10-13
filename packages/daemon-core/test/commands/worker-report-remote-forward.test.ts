@@ -194,6 +194,7 @@ describe('F7 — worker daemon: remote-owned task', () => {
       sessionId: ids.sessionId,
       nodeId: ids.nodeId,
       report: REPORT,
+      generation: 0,
     })
     // Nothing on the worker daemon: the owner is the only writer.
     expect(workerEventKinds(ids.meshId, ids.taskId)).toEqual([])
@@ -603,7 +604,7 @@ describe('F7 progress axis — a remote worker\'s progress note is forwarded to 
     const [daemonId, cmd, args] = relay.mock.calls[0] as unknown as [string, string, Record<string, any>]
     expect(daemonId).toBe(OWNER_DAEMON)
     expect(cmd).toBe(WORKER_PROGRESS_FORWARD_COMMAND)
-    expect(args).toEqual({ meshId: ids.meshId, taskId: ids.taskId, attemptId, sessionId: ids.sessionId, nodeId: ids.nodeId, note: NOTE })
+    expect(args).toEqual({ meshId: ids.meshId, taskId: ids.taskId, attemptId, sessionId: ids.sessionId, nodeId: ids.nodeId, generation: 0, note: NOTE })
     expect(res).toMatchObject({ success: true, taskId: ids.taskId, surfacedToCoordinator: true })
     const rows = progressRows(ids.meshId, ids.taskId)
     expect(rows).toHaveLength(1)

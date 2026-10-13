@@ -57,7 +57,10 @@ export interface TurnAttemptData {
      * R13u: weak_candidate / await_report expiries deferred because the last liveness
      * verdict was unconfirmed (re-probe + short re-arm). Scoped to `generation`.
      */
-    unconfirmedEndDeferral?: { generation: number; count: number };
+    unconfirmedEndDeferral?: { generation: number; count: number; requestedAt?: number };
+    livenessObservation?: { generation: number; at: number; probeStartedAt: number };
+    /** Fixed first-refusal deadline; repeated invalid calls never extend it. */
+    reportCorrection?: { generation: number; until: number };
     /**
      * R17g: the worker report recorded while the session was still generating —
      * content-free (outcome enum, the local evidence id whose envelope holds the

@@ -21,7 +21,7 @@
  *     refusal row survives with its generation.
  */
 import { randomUUID } from 'node:crypto'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { TurnEvidence } from '@adhdev/mesh-shared'
 import { reportCompletion } from '../../../mcp-server/src/tools/worker-tools.js'
@@ -44,7 +44,7 @@ import {
 } from '../../src/mesh/worker-mcp-isolation.js'
 import { createMeshRuntimeTurnLedger } from '../../src/mesh/turn-ledger/runtime-ledger.js'
 import { setActiveTurnLedger } from '../../src/mesh/turn-ledger/active-ledger.js'
-import { DEFAULT_TURN_POLICY, unknownLivenessGraceMs } from '../../src/mesh/turn-ledger/policy.js'
+import { DEFAULT_TURN_POLICY, endProbeGraceMs } from '../../src/mesh/turn-ledger/policy.js'
 import type { TurnLedger } from '../../src/mesh/turn-ledger/ledger.js'
 import { fakePublisher } from '../turn-ledger/ledger-harness.js'
 
@@ -66,6 +66,7 @@ beforeEach(() => {
   __setWorkerLateReportNoticeSinkForTests(() => {})
 })
 afterEach(async () => {
+  vi.restoreAllMocks()
   setActiveTurnLedger(null)
   if (ledger) await ledger.flushPublish().catch(() => {})
   ledger = null
@@ -176,33 +177,110 @@ describe('over-limit report_completion — real path (mcp outbox → daemon → 
     const out = await reportCompletion(dead, { bind: r.bind }, { outcome: 'completed', summary: OVERSIZE }, r.delivery)
     expect(out.isError).toBe(true)
     expect(out.text).toContain('over the 8000 limit')
-    expect(out.text).toContain('Nothing was recorded or queued')
+    expect(out.text).toContain('Not queued; owner recording unconfirmed')
     expect(out.text).not.toContain(MARKER)
     expect(r.delivery.pendingCount()).toBe(0)
     expect(r.refusedRows()).toHaveLength(0)
     expect(r.attempt()?.terminal).toBeNull()
   })
 
-  it('worker dies after the refusal (liveness unknown): the await_report expiry re-probes, then FAILS — never task_completed; refusal row survives', async () => {
+  it('a timeout after the owner wrote its refusal does not claim nothing was recorded', async () => {
     const r = rig()
+    const ambiguous: any = { async command(name: string, args: any) {
+      await r.transport.command(name, args)
+      throw new Error('response lost after the write')
+    } }
+    const out = await reportCompletion(ambiguous, { bind: r.bind }, { outcome: 'completed', summary: OVERSIZE }, r.delivery)
+    expect(out.isError).toBe(true)
+    expect(out.text).toContain('Not queued; owner recording unconfirmed')
+    expect(out.text).not.toContain('Nothing was recorded')
+    expect(r.refusedRows()).toHaveLength(1)
+    expect(r.delivery.pendingCount()).toBe(0)
+  })
+
+  it('an overdue correction is refused before the scheduler sweeps its deadline', async () => {
+    const r = rig()
+    let clock = Date.now()
+    vi.spyOn(Date, 'now').mockImplementation(() => clock)
     await refuseOversize(r)
+    clock = r.attempt()!.data.reportCorrection!.until + 1
+    const out = await r.report('A correction received after the fixed deadline.')
+    expect(out.isError).toBe(true)
+    expect(out.text).toContain('correction_too_late')
+    expect(r.reportRows()).toHaveLength(0)
+    expect(ledger!.sweepExpiredHolds(clock).map(x => x.rule)).toContain('R13c')
+    expect(r.queueStatus()).toBe('failed')
+  })
 
-    expect(r.observe({ kind: 'liveness', result: 'unknown' }, { source: 'coordinator_probe' }).rule).toBe('R32u')
-    const firstExpiry = Date.now() + P.awaitReportMs + 1
-    const deferred = ledger!.sweepExpiredHolds(firstExpiry)
-    expect(deferred.map((x) => x.rule)).toContain('R13u')
-    expect(r.attempt()).toMatchObject({ state: 'finalizing', terminal: null })
-    expect(r.queueStatus()).toBe('assigned')
+  it('the fixed correction hold accepts a correction during grace; invalid retries cannot extend it', async () => {
+    const r = rig()
+    const now = Date.now()
+    let clock = now
+    vi.spyOn(Date, 'now').mockImplementation(() => clock)
+    await refuseOversize(r)
+    const deadline = r.attempt()!.data.reportCorrection!.until
+    expect(ledger!.store.activeHolds(r.attemptId)).toContainEqual(expect.objectContaining({ reason: 'report_correction', generation: 0, until: deadline }))
+    r.observe({ kind: 'liveness', result: 'unknown' }, { source: 'coordinator_probe' })
+    clock = deadline - 1
+    await r.report(OVERSIZE)
+    expect(r.attempt()!.data.reportCorrection!.until).toBe(deadline)
+    const corrected = await r.report('Corrected during the bounded correction grace.')
+    expect(corrected.isError).toBeFalsy()
+    expect(r.attempt()!.terminal).toMatchObject({ outcome: 'completed', strength: 'tool_report' })
+    expect(r.queueStatus()).toBe('completed')
+    expect(r.refusedRows()).toHaveLength(2)
+  })
 
-    expect(r.observe({ kind: 'liveness', result: 'unknown' }, { source: 'coordinator_probe', at: firstExpiry + 1 }).rule).toBe('R32u')
-    const failed = ledger!.sweepExpiredHolds(firstExpiry + unknownLivenessGraceMs(P) + 1)
-    expect(failed.map((x) => x.rule)).toContain('R13x')
-    expect(r.attempt()?.terminal).toMatchObject({ outcome: 'failed', strength: 'weak', reason: 'weak_end_liveness_unconfirmed' })
+  it('worker remains unknown after refusal: correction deadline fails explicitly; corrected late report is refused', async () => {
+    const r = rig()
+    let clock = Date.now()
+    vi.spyOn(Date, 'now').mockImplementation(() => clock)
+    await refuseOversize(r)
+    r.observe({ kind: 'liveness', result: 'unknown' }, { source: 'coordinator_probe' })
+    clock = r.attempt()!.data.reportCorrection!.until + 1
+    expect(ledger!.sweepExpiredHolds(clock).map(x => x.rule)).toContain('R13c')
+    expect(r.attempt()!.terminal).toMatchObject({ outcome: 'failed', reason: 'report_correction_expired' })
+    const corrected = await r.report('Late correction must not claim recovery.')
+    expect(corrected.isError).toBe(true)
+    expect(corrected.text).toContain('correction_too_late')
     expect(r.queueStatus()).toBe('failed')
     expect(r.reportRows()).toHaveLength(0)
-    const rows = r.refusedRows()
-    expect(rows).toHaveLength(1)
-    expect(rows[0]).toMatchObject({ attemptId: r.attemptId, generation: 0 })
+    expect(r.refusedRows()).toHaveLength(1)
+  })
+
+  it('R13x final failure explicitly refuses a corrected late report rather than accepting only its summary', async () => {
+    const r = rig()
+    let clock = Date.now()
+    vi.spyOn(Date, 'now').mockImplementation(() => clock)
+    r.observe({ kind: 'liveness', result: 'unknown' }, { source: 'coordinator_probe' })
+    clock += P.awaitReportMs + 1
+    expect(ledger!.sweepExpiredHolds(clock).map(x => x.rule)).toContain('R13u')
+    r.observe({ kind: 'liveness', result: 'unknown', probeStartedAtMs: clock + 1 }, { source: 'coordinator_probe', at: clock + 1 })
+    clock += endProbeGraceMs(P) + 1
+    expect(ledger!.sweepExpiredHolds(clock).map(x => x.rule)).toContain('R13x')
+    const refused = await r.report(OVERSIZE)
+    expect(refused.isError).toBe(true)
+    expect(refused.text).toContain(`attempt ${r.attemptId}`)
+    const corrected = await r.report('Late correction after R13x.')
+    expect(corrected.isError).toBe(true)
+    expect(corrected.text).toContain('correction_too_late')
+    expect(r.attempt()!.terminal).toMatchObject({ outcome: 'failed', reason: 'weak_end_liveness_unconfirmed' })
+    expect(r.queueStatus()).toBe('failed')
+    expect(r.reportRows()).toHaveLength(0)
+  })
+
+  it('a refusal inside the liveness re-probe grace grants a bounded correction window on that same attempt', async () => {
+    const r = rig()
+    let clock = Date.now()
+    vi.spyOn(Date, 'now').mockImplementation(() => clock)
+    r.observe({ kind: 'liveness', result: 'unknown' }, { source: 'coordinator_probe' })
+    clock += P.awaitReportMs + 1
+    expect(ledger!.sweepExpiredHolds(clock).map(x => x.rule)).toContain('R13u')
+    await refuseOversize(r)
+    clock += endProbeGraceMs(P) + 1
+    expect(ledger!.sweepExpiredHolds(clock).some(x => x.rule === 'R13x' || x.rule === 'R13z')).toBe(false)
+    expect((await r.report('Correction during recovery after the old probe grace.')).isError).toBeFalsy()
+    expect(r.attempt()!.terminal).toMatchObject({ outcome: 'completed', strength: 'tool_report' })
   })
 
   it('worker confirmed dead after the refusal: reclaimed (R31), not completed; refusal row keeps its generation', async () => {
@@ -215,12 +293,17 @@ describe('over-limit report_completion — real path (mcp outbox → daemon → 
     expect(r.refusedRows()[0]).toMatchObject({ attemptId: r.attemptId, generation: 0 })
   })
 
-  it('a worker that stays alive keeps today\'s behaviour: confirmed alive → the expiry commits weak (R13r)', async () => {
+  it('stale alive never commits weak; absent new probe result ends as an explicit inconclusive timeout', () => {
     const r = rig()
-    await refuseOversize(r)
-    expect(r.observe({ kind: 'liveness', result: 'alive' }, { source: 'coordinator_probe' }).rule).toBe('R32')
-    const done = ledger!.sweepExpiredHolds(Date.now() + P.awaitReportMs + 1)
-    expect(done.map((x) => x.rule)).toContain('R13r')
-    expect(r.attempt()?.terminal).toMatchObject({ outcome: 'completed', strength: 'weak', reason: 'weak_end_confirmed' })
+    let clock = Date.now()
+    vi.spyOn(Date, 'now').mockImplementation(() => clock)
+    r.observe({ kind: 'liveness', result: 'alive' }, { source: 'coordinator_probe' })
+    clock += P.awaitReportMs + 1
+    expect(ledger!.sweepExpiredHolds(clock).map(x => x.rule)).toContain('R13u')
+    expect(r.attempt()!.terminal).toBeNull()
+    clock += endProbeGraceMs(P) + 1
+    expect(ledger!.sweepExpiredHolds(clock).map(x => x.rule)).toContain('R13z')
+    expect(r.attempt()!.terminal).toMatchObject({ outcome: 'failed', reason: 'weak_end_probe_unobserved' })
+    expect(r.queueStatus()).toBe('failed')
   })
 })

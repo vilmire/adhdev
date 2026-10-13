@@ -8,7 +8,7 @@ import { resolveRecentlyTerminalAttempt, WORKER_LATE_REPORT_GRACE_MS, acceptLate
 import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import type { WorkerCompletionReport } from './worker-report-validation.js';
-import { acceptWorkerCompletionReportForIdentity, type WorkerReportResult } from './worker-report.js';
+import { acceptWorkerCompletionReportForIdentity, normalizeWorkerReportedAtMs, workerIdentityPostdates, type WorkerReportResult } from './worker-report.js';
 
 // ─── Remote worker (F7): the report is owned by another daemon ─────────
 
@@ -31,6 +31,7 @@ export interface WorkerAssignmentStamp {
     taskId?: string;
     attemptId?: string;
     nodeId?: string;
+    generation?: number;
 }
 
 /** A worker whose task lives on ANOTHER daemon's ledger (the attempt's owner). */
@@ -41,6 +42,7 @@ export interface RemoteWorkerIdentity {
     taskId?: string;
     attemptId?: string;
     nodeId?: string;
+    generation?: number;
 }
 
 /**
@@ -97,6 +99,7 @@ export function resolveRemoteWorkerIdentity(
         ownerDaemonId,
         ...(taskId ? { taskId } : {}),
         ...(attemptId ? { attemptId } : {}),
+        ...(Number.isInteger(stamp.generation) ? { generation: stamp.generation } : {}),
         ...(nodeId ? { nodeId } : {}),
     };
 }
@@ -111,6 +114,7 @@ export interface ForwardedWorkerReportClaim {
     sessionId: string;
     taskId?: string;
     attemptId?: string;
+    generation?: number;
 }
 
 /**
@@ -136,6 +140,7 @@ export type ForwardedReportRefusalReason =
     | 'task_mismatch'
     /** The claim names an attempt other than the task's attempt on the owner. */
     | 'attempt_mismatch'
+    | 'generation_mismatch'
     /** The owner's row/attempt carries no node, or the owner's roster cannot place it. */
     | 'node_unresolved'
     /** The node the owner assigned the task to belongs to a different daemon than the sender. */
@@ -211,6 +216,9 @@ export function resolveForwardedWorkerIdentity(
         if (claim.attemptId && claim.attemptId !== attemptId) {
             return refuse('attempt_mismatch', `task ${row.id}'s attempt on the owner is ${attemptId ?? '(none)'}, not ${claim.attemptId}`);
         }
+        const attempt = attemptId ? store.turnStore().getAttempt(attemptId) : null;
+        if (claim.generation !== undefined && claim.generation !== attempt?.generation) return refuse('generation_mismatch', 'the claimed generation is no longer current');
+        if (attempt && (attempt.sessionId !== claim.sessionId || (isSelfDaemon && !isSelfDaemon(attempt.ownerDaemonId)))) return refuse('attempt_mismatch', 'the attempt is not owned here for this session');
         const token = findWorkerTaskTokenForSession(claim.meshId, row.id, claim.sessionId);
         return {
             live: {
@@ -234,6 +242,7 @@ export function resolveForwardedWorkerIdentity(
     if (claim.attemptId && claim.attemptId !== attempt.attemptId) {
         return refuse('attempt_mismatch', `task ${attempt.taskId}'s attempt on the owner is ${attempt.attemptId}, not ${claim.attemptId}`);
     }
+    if (claim.generation !== undefined && claim.generation !== store.turnStore().getAttempt(attempt.attemptId)?.generation) return refuse('generation_mismatch', 'the terminal generation does not match');
     const nodeRefusal = senderOwnsNode(attempt.nodeId);
     if (nodeRefusal) return nodeRefusal;
     return {
@@ -272,11 +281,14 @@ function describeOwnerRow(store: MeshRuntimeStore, meshId: string, taskId: strin
 export function acceptForwardedWorkerCompletionReport(
     claim: ForwardedWorkerReportClaim,
     report: WorkerCompletionReport,
-    opts: { sender: ForwardedReportSender; nowMs?: number; isSelfDaemon?: (daemonId: string) => boolean },
+    opts: { sender: ForwardedReportSender; nowMs?: number; isSelfDaemon?: (daemonId: string) => boolean; reportedAtMs?: unknown },
 ): WorkerReportResult {
     const nowMs = opts.nowMs ?? Date.now();
+    const reportedAt = normalizeWorkerReportedAtMs(opts.reportedAtMs, nowMs);
+    if (reportedAt === 'too_old') return { accepted: false, refusal: 'stale_report' };
     const resolved = resolveForwardedWorkerIdentity(claim, opts.sender, nowMs, opts.isSelfDaemon);
     if ('refused' in resolved) return { accepted: false, refusal: 'unauthenticated', detail: `${resolved.refused}: ${resolved.detail}` };
     if ('late' in resolved) return acceptLateWorkerCompletionReport(resolved.late, report, nowMs);
+    if (typeof reportedAt === 'number' && workerIdentityPostdates(resolved.live, reportedAt)) return { accepted: false, refusal: 'stale_report' };
     return acceptWorkerCompletionReportForIdentity(resolved.live, report, { nowMs });
 }

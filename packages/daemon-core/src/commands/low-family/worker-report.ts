@@ -50,6 +50,7 @@ import type { WorkerCompletionReport } from '../../mesh/worker-report-validation
  * (`dispatchMeshCommand` → the owner's `handleMeshCommand`, source `mesh`).
  */
 export const WORKER_REPORT_FORWARD_COMMAND = 'worker_report_forwarded';
+export const WORKER_REFUSAL_FORWARD_COMMAND = 'worker_report_refusal_forwarded';
 
 /**
  * F7 (progress axis): the owner-side command a REMOTE worker daemon relays a
@@ -101,7 +102,7 @@ function assignmentStampReader(ctx: LowFamilyContext): (sessionId: string) => Wo
             meshId,
             ownerDaemonId,
             ...(taskId ? { taskId } : {}),
-            ...(attemptRef ? { attemptId: attemptRef.attemptId } : {}),
+            ...(attemptRef ? { attemptId: attemptRef.attemptId, generation: attemptRef.generation } : {}),
             ...(nodeId ? { nodeId } : {}),
         };
     };
@@ -252,12 +253,23 @@ async function refuseInvalidReport(
 ): Promise<Record<string, unknown> & { success: false }> {
     const answer = { success: false as const, error: 'invalid_report', validationErrors: errors };
     try {
-        const { recordRefusedWorkerReport, safeRefusalFields } = await import('../../mesh/worker-report.js');
+        const { recordRefusedWorkerReport, safeRefusalFields, hasLocalWorkerIdentity } = await import('../../mesh/worker-report.js');
         const credential = { token: args?.token, bind: args?.bind };
         const raw = args?.report && typeof args.report === 'object' ? args.report as Record<string, unknown> : {};
         const summaryLength = typeof raw.summary === 'string' ? raw.summary.trim().length : null;
         const deliveryId = normalizeWorkerDeliveryId(args?.deliveryId);
         const fields = errors.map((e) => e.field);
+        if (!hasLocalWorkerIdentity(credential, { isSelfDaemon: selfDaemonPredicate(ctx), reportedAtMs: args?.reportedAtMs })) {
+            const remote = await resolveRemoteWorker(ctx, args);
+            if (remote && remote.taskId && remote.attemptId && Number.isInteger(remote.generation)) {
+                const owner = await forwardToOwner(ctx, remote, WORKER_REFUSAL_FORWARD_COMMAND, {
+                    generation: remote.generation, fields: safeRefusalFields(fields), summaryLength,
+                    ...(deliveryId ? { deliveryId } : {}),
+                    ...(typeof args?.reportedAtMs === 'number' ? { reportedAtMs: args.reportedAtMs } : {}),
+                }, 'report refusal');
+                return { ...answer, ...(owner.receipt ? { receipt: owner.receipt } : {}) };
+            }
+        }
         const receipt = recordRefusedWorkerReport(
             credential,
             { fields, summaryLength, outcome: raw.outcome },
@@ -305,8 +317,9 @@ async function forwardReportToOwner(
     ctx: LowFamilyContext,
     remote: RemoteWorkerIdentity,
     report: WorkerCompletionReport,
+    delivery: { deliveryId?: string; reportedAtMs?: unknown } = {},
 ): Promise<Record<string, unknown> & { success: boolean }> {
-    return forwardToOwner(ctx, remote, WORKER_REPORT_FORWARD_COMMAND, { report }, `${report.outcome} report`);
+    return forwardToOwner(ctx, remote, WORKER_REPORT_FORWARD_COMMAND, { report, ...(delivery.deliveryId ? { deliveryId: delivery.deliveryId } : {}), ...(typeof delivery.reportedAtMs === 'number' ? { reportedAtMs: delivery.reportedAtMs } : {}) }, `${report.outcome} report`);
 }
 
 /**
@@ -335,6 +348,7 @@ async function forwardToOwner(
         sessionId: remote.sessionId,
         ...(remote.taskId ? { taskId: remote.taskId } : {}),
         ...(remote.attemptId ? { attemptId: remote.attemptId } : {}),
+        ...(remote.generation !== undefined ? { generation: remote.generation } : {}),
     };
     let raw: unknown;
     try {
@@ -362,8 +376,8 @@ async function forwardToOwner(
     return answer;
 }
 
-const CLAIM_KEYS = ['meshId', 'taskId', 'attemptId', 'sessionId', 'nodeId'] as const;
-const FORWARD_KEYS = new Set<string>([...CLAIM_KEYS, 'report']);
+const CLAIM_KEYS = ['meshId', 'taskId', 'attemptId', 'sessionId', 'nodeId', 'generation'] as const;
+const FORWARD_KEYS = new Set<string>([...CLAIM_KEYS, 'report', 'deliveryId', 'reportedAtMs']);
 const PROGRESS_FORWARD_KEYS = new Set<string>([...CLAIM_KEYS, 'note']);
 
 /**
@@ -386,10 +400,11 @@ function decodeForwardedClaim(
     for (const key of ['taskId', 'attemptId', 'nodeId'] as const) {
         if (record[key] !== undefined && !readNonEmpty(record[key])) return null;
     }
+    if (record.generation !== undefined && (!Number.isSafeInteger(record.generation) || (record.generation as number) < 0)) return null;
     const taskId = readNonEmpty(record.taskId);
     const attemptId = readNonEmpty(record.attemptId);
     return {
-        claim: { meshId, sessionId, ...(taskId ? { taskId } : {}), ...(attemptId ? { attemptId } : {}) },
+        claim: { meshId, sessionId, ...(taskId ? { taskId } : {}), ...(attemptId ? { attemptId } : {}), ...(record.generation !== undefined ? { generation: record.generation as number } : {}) },
         record,
     };
 }
@@ -399,12 +414,12 @@ function decodeForwardedClaim(
  * an optional nodeId, and the report object (validated separately by the same
  * validator a local report goes through). Router-internal `_` keys stripped.
  */
-export function decodeForwardedWorkerReport(args: unknown): { claim: ForwardedWorkerReportClaim; report: unknown } | null {
+export function decodeForwardedWorkerReport(args: unknown): { claim: ForwardedWorkerReportClaim; report: unknown; reportedAtMs?: unknown } | null {
     const decoded = decodeForwardedClaim(args, FORWARD_KEYS);
     if (!decoded) return null;
     const { report } = decoded.record;
     if (!report || typeof report !== 'object' || Array.isArray(report)) return null;
-    return { claim: decoded.claim, report };
+    return { claim: decoded.claim, report, ...(decoded.record.reportedAtMs !== undefined ? { reportedAtMs: decoded.record.reportedAtMs } : {}) };
 }
 
 /**
@@ -504,7 +519,7 @@ export const workerReportHandlers: Record<string, LowFamilyHandler> = {
             if (!hasLocalWorkerIdentity(credential, { isSelfDaemon, reportedAtMs })) {
                 const remote = await resolveRemoteWorker(_ctx, args);
                 if (remote) {
-                    response = await forwardReportToOwner(_ctx, remote, report);
+                    response = await forwardReportToOwner(_ctx, remote, report, { deliveryId, reportedAtMs });
                     rememberWorkerDelivery('report', credential, deliveryId, response);
                     return response;
                 }
@@ -517,6 +532,30 @@ export const workerReportHandlers: Record<string, LowFamilyHandler> = {
         } catch (e: any) {
             return { success: false, error: e?.message || String(e) };
         }
+    },
+
+    [WORKER_REFUSAL_FORWARD_COMMAND]: async (_ctx: LowFamilyContext, args: any) => {
+        const decoded = decodeForwardedClaim(args, new Set([...CLAIM_KEYS, 'generation', 'fields', 'summaryLength', 'deliveryId', 'reportedAtMs']));
+        if (!decoded || !decoded.claim.taskId || !decoded.claim.attemptId) return { success: false, error: 'invalid_refusal_envelope' };
+        const raw = decoded.record;
+        const { safeRefusalFields, recordRefusedWorkerReportForIdentity, normalizeWorkerReportedAtMs } = await import('../../mesh/worker-report.js');
+        if (!Number.isSafeInteger(raw.generation) || (raw.generation as number) < 0 || !Array.isArray(raw.fields)
+            || raw.fields.length > 16 || raw.fields.some((v) => typeof v !== 'string')
+            || JSON.stringify(safeRefusalFields(raw.fields)) !== JSON.stringify(raw.fields)
+            || !(raw.summaryLength === null || (Number.isSafeInteger(raw.summaryLength) && (raw.summaryLength as number) >= 0))
+            || (raw.deliveryId !== undefined && normalizeWorkerDeliveryId(raw.deliveryId) !== raw.deliveryId)
+            || (raw.reportedAtMs !== undefined && (!Number.isSafeInteger(raw.reportedAtMs) || typeof normalizeWorkerReportedAtMs(raw.reportedAtMs, Date.now()) !== 'number'))) {
+            return { success: false, error: 'invalid_refusal_envelope' };
+        }
+        const { resolveForwardedWorkerIdentity } = await import('../../mesh/worker-report-forwarded.js');
+        const resolved = resolveForwardedWorkerIdentity(decoded.claim, {
+            senderDaemonId: readMeshSender(args), nodeDaemonId: await ownerRosterNodeDaemonLookup(_ctx, decoded.claim.meshId),
+        }, Date.now(), selfDaemonPredicate(_ctx));
+        if ('refused' in resolved) return { success: false, error: 'unauthenticated', detail: resolved.refused };
+        const receipt = recordRefusedWorkerReportForIdentity('live' in resolved ? resolved.live : resolved.late,
+            { fields: raw.fields, summaryLength: raw.summaryLength as number | null },
+            { generation: raw.generation as number, deliveryId: raw.deliveryId as string | undefined, reportedAtMs: raw.reportedAtMs });
+        return receipt ? { success: false, error: 'invalid_report', receipt } : { success: false, error: 'stale_report' };
     },
 
     /**
@@ -544,7 +583,7 @@ export const workerReportHandlers: Record<string, LowFamilyHandler> = {
                 senderDaemonId,
                 nodeDaemonId: await ownerRosterNodeDaemonLookup(_ctx, claim.meshId),
             };
-            const result = acceptForwardedWorkerCompletionReport(claim, report, { sender, isSelfDaemon: selfDaemonPredicate(_ctx) });
+            const result = acceptForwardedWorkerCompletionReport(claim, report, { sender, isSelfDaemon: selfDaemonPredicate(_ctx), reportedAtMs: decoded.reportedAtMs });
             // ONE owner-side line per forwarded report (the refusal used to be silent).
             if (result.accepted) {
                 LOG.info('WorkerReport', `Forwarded ${report.outcome} report for ${claimLabel} → accepted as task ${result.taskId} attempt ${result.attemptId ?? '?'}${result.late ? ` (late, after ${result.late.terminalOutcome})` : ''}${result.duplicate ? ' (duplicate)' : ''}`);
@@ -632,6 +671,7 @@ export const workerReportSpecs = defineCommandSpecs('low', workerReportHandlers,
     // note (never a dashboard, the API, or a local worker MCP over IPC).
     // The router additionally requires the sender on the claimed mesh's roster;
     // the handler then requires it to own the node the task was assigned to.
+    [WORKER_REFUSAL_FORWARD_COMMAND]: { sources: ['mesh'], meshSender: 'roster' },
     [WORKER_REPORT_FORWARD_COMMAND]: { sources: ['mesh'], meshSender: 'roster' },
     [WORKER_PROGRESS_FORWARD_COMMAND]: { sources: ['mesh'], meshSender: 'roster' },
 }, { meshSender: 'authenticated_peer' });

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULT_TURN_POLICY, awaitDeliveryMs, weakConfirmMs, holdTtlMs, type TurnPolicy } from '../../src/mesh/turn-ledger/policy.js';
+import { DEFAULT_TURN_POLICY, awaitDeliveryMs, weakConfirmMs, endProbeGraceMs, holdTtlMs, type TurnPolicy } from '../../src/mesh/turn-ledger/policy.js';
 import {
     createLateBoundProbePort,
     createTurnScheduler,
@@ -101,6 +101,7 @@ describe('H-rule expiry → the effect the reducer table names (one tick)', () =
         await r.scheduler.tick();
         expect(r.ledger.getAttempt('a1')!.state).toBe('finalizing');
         r.advance(2);
+        r.ledger.observe(evd('liveness', { result: 'alive' }, { at: r.now }));
         await r.scheduler.tick();
         expect(r.ledger.getAttempt('a1')!.terminal).toMatchObject({ outcome: 'completed', strength: 'weak', reason: 'weak_end_confirmed' });
     });
@@ -347,6 +348,7 @@ describe('startTurnScheduler — nextHoldDeadline shortens the sleep', () => {
         ledger.observe(evd('delivered', { messageId: 'msg-1', outcome: 'delivered', via: 'local' }, { source: 'input_service' }));
         ledger.observe(evd('turn_started', { retro: false }));
         ledger.observe(evd('turn_end', { strength: 'weak' })); // weak_candidate hold: 12 s
+        ledger.observe(evd('liveness', { result: 'alive', probeStartedAtMs: T0 }, { at: T0 }));
         const policy = { ...DEFAULT_TURN_POLICY, tickMs: 60_000 };
         const scheduler = startTurnScheduler({ ledger, policy, now: () => Date.now() });
         try {
@@ -357,6 +359,73 @@ describe('startTurnScheduler — nextHoldDeadline shortens the sleep', () => {
         } finally {
             scheduler.stop();
         }
+    });
+});
+
+describe('weak expiry requires a fresh completed probe', () => {
+    it('a reader that never returns is bounded and supplies an inconclusive observation', async () => {
+        vi.useFakeTimers();
+        const read = vi.fn(() => new Promise<TurnProbeRead>(() => {}));
+        const r = rig({ probe: { locate: () => ({ kind: 'local' }), reader: { read } } });
+        toGenerating(r);
+        r.ledger.observe(evd('turn_end', { strength: 'genuine', reportExpected: true }));
+        r.advance(P.awaitReportMs + 1);
+        const tick = r.scheduler.tick();
+        r.advance(endProbeGraceMs(P));
+        await vi.advanceTimersByTimeAsync(endProbeGraceMs(P));
+        await tick;
+        expect(r.ledger.getAttempt('a1')!.lastLiveness).toBe('unknown');
+        expect(r.ledger.getAttempt('a1')!.terminal).toBeNull();
+        await r.scheduler.tick();
+        expect(r.ledger.getAttempt('a1')!.terminal).toMatchObject({ outcome: 'failed', reason: 'weak_end_liveness_unconfirmed' });
+    });
+
+    it('an overdue sweep re-probes stale alive first; a slow live read can then confirm inside grace', async () => {
+        let r: ReturnType<typeof rig>;
+        const read = vi.fn(async () => {
+            r.advance(20_000); // longer than the old 12 s grace
+            return { presence: 'present' as const, status: 'generating' };
+        });
+        r = rig({ probe: { locate: () => ({ kind: 'local' }), reader: { read } } });
+        toGenerating(r);
+        r.ledger.observe(evd('turn_end', { strength: 'genuine', reportExpected: true }));
+        r.ledger.observe(evd('liveness', { result: 'alive' }, { at: r.now }));
+        r.advance(P.awaitReportMs + 120_000);
+        await r.scheduler.tick();
+        expect(r.ledger.getAttempt('a1')!.terminal).toBeNull();
+        expect(r.ledger.getAttempt('a1')!.data.unconfirmedEndDeferral?.requestedAt).toBe(r.now - 20_000);
+        expect(read).toHaveBeenCalled();
+        r.advance(endProbeGraceMs(P) - 20_000);
+        await r.scheduler.tick();
+        expect(r.ledger.getAttempt('a1')!.terminal).toMatchObject({ outcome: 'completed', strength: 'weak' });
+    });
+
+    it('re-reading an old alive member snapshot never refreshes its sample time', async () => {
+        const read = vi.fn(async () => ({ presence: 'present' as const, status: 'generating', observedAtMs: T0 }));
+        const r = rig({ probe: { locate: () => ({ kind: 'local' }), reader: { read } } });
+        toGenerating(r);
+        r.ledger.observe(evd('turn_end', { strength: 'genuine', reportExpected: true }));
+        r.advance(P.awaitReportMs + 1);
+        await r.scheduler.tick();
+        expect(r.ledger.getAttempt('a1')!.terminal).toBeNull();
+        r.advance(endProbeGraceMs(P) + 1);
+        await r.scheduler.tick();
+        expect(r.ledger.getAttempt('a1')!.terminal).toMatchObject({ outcome: 'failed', reason: 'weak_end_probe_unobserved' });
+    });
+
+    it('a read begun for a generation that is reclaimed cannot be re-labelled for its replacement', async () => {
+        let r: ReturnType<typeof rig>;
+        const read = vi.fn(async () => {
+            r.ledger.observe(evd('process_exit', { exitCode: 1 }));
+            return { presence: 'absent' as const };
+        });
+        r = rig({ probe: { locate: () => ({ kind: 'local' }), reader: { read } } });
+        toGenerating(r);
+        r.scheduler.requestProbe('a1');
+        await r.scheduler.tick();
+        const attempt = r.ledger.getAttempt('a1')!;
+        expect(attempt).toMatchObject({ generation: 1, state: 'accepted', terminal: null });
+        expect(attempt.lastLiveness).not.toBe('dead');
     });
 });
 
@@ -395,6 +464,7 @@ describe('report gate — the rc.40 false-idle sequence commits once, on the rep
         toGenerating(r);
         r.ledger.observe(evd('turn_end', { strength: 'genuine', reportExpected: true }));
         r.advance(P.awaitReportMs + 1);
+        r.ledger.observe(evd('liveness', { result: 'alive' }, { at: r.now }));
         await r.scheduler.tick();
         expect(r.ledger.getAttempt('a1')!.terminal).toMatchObject({ outcome: 'completed', strength: 'weak', reason: 'weak_end_confirmed' });
         expect(r.host.calls).toContain('terminal:t1:completed');
@@ -450,6 +520,7 @@ describe('liveness probe backoff during await_report (rc.43 run 10)', () => {
         // The R13r commit path is unaffected: it still fires off the
         // await_report hold's own deadline, not the liveness hold.
         r.advance(P.awaitReportMs);
+        r.ledger.observe(evd('liveness', { result: 'alive' }, { at: r.now }));
         await r.scheduler.tick();
         expect(r.ledger.getAttempt('a1')!.terminal).toMatchObject({ outcome: 'completed', strength: 'weak', reason: 'weak_end_confirmed' });
     });

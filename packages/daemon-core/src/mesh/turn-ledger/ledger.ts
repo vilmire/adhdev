@@ -177,7 +177,7 @@ export interface TurnLedger {
     counters(): TurnLedgerCounters;
 }
 
-const REPORT_GATE_RULES: ReadonlySet<string> = new Set(['R9r', 'R15p', 'R12r', 'R13r', 'R13u', 'R13x', 'R17g', 'R9t', 'R13t']);
+const REPORT_GATE_RULES: ReadonlySet<string> = new Set(['R9r', 'R15p', 'R12r', 'R13r', 'R13u', 'R13x', 'R13z', 'R13c', 'R17c', 'R17g', 'R9t', 'R13t']);
 
 const DEFAULT_LOG: TurnLedgerLog = { info: () => {}, warn: () => {}, error: () => {} };
 const PUBLISH_BATCH = 256;
@@ -277,6 +277,9 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
         else if (rule === 'R9r') log.info(`turn-ledger: idle end of ${who} awaits the worker report (await_report hold ${Math.round(policy.awaitReportMs / 1000)}s)`);
         else if (rule === 'R15p') log.info(`turn-ledger: transcript of ${who} reads finished but the worker has not ended its turn — awaiting the worker report (await_report hold ${Math.round(policy.awaitReportMs / 1000)}s)`);
         else if (rule === 'R12r') log.info(`turn-ledger: false idle: worker resumed — ${who} back to generating (falseIdleCount=${attempt.data.falseIdleCount ?? 0})`);
+        else if (rule === 'R17c') log.info(`turn-ledger: invalid report for ${who} has a fixed correction deadline ${attempt.data.reportCorrection?.until ?? '?'}`);
+        else if (rule === 'R13c') log.info(`turn-ledger: correction deadline of ${who} expired — failed, no report recovery accepted`);
+        else if (rule === 'R13z') log.info(`turn-ledger: probe deadline of ${who} expired without a fresh observation — failed inconclusive, not completed`);
         else if (rule === 'R13u') log.info(`turn-ledger: weak/await_report window of ${who} expired with liveness ${attempt.lastLiveness ?? '?'} — re-probing instead of committing (deferral ${attempt.data.unconfirmedEndDeferral?.count ?? 0})`);
         else if (rule === 'R13x') log.info(`turn-ledger: weak/await_report window of ${who} expired and liveness stayed ${attempt.lastLiveness ?? '?'} — failed (weak_end_liveness_unconfirmed), not completed`);
         else log.info(`turn-ledger: no worker report within ${Math.round(policy.awaitReportMs / 1000)}s — ${who} committed weak`);

@@ -104,6 +104,7 @@ export function variantsFor(kind: TurnEvidenceKind): Array<{ label: string; evid
             v('completed', ev(kind, { outcome: 'completed', summary: REF, hasHandoffNotes: false }, { source: 'worker_tool' })),
             v('blocked', ev(kind, { outcome: 'blocked', summary: REF, hasHandoffNotes: false }, { source: 'worker_tool' })),
         ];
+        case 'worker_report_correction_requested': return [v('refused', ev(kind, { deliveryId: 'wr_review' }))];
         case 'worker_progress': return [v('progress', ev(kind, { note: REF }, { source: 'worker_tool' }))];
         case 'transcript_activity': return [
             v('new', ev(kind, { newestActivityAt: NOW })),
@@ -129,7 +130,7 @@ export function variantsFor(kind: TurnEvidenceKind): Array<{ label: string; evid
         case 'coordinator_ack': return [v('ack', ev(kind, { notify: 'completed', outcome: 'delivered' }))];
         case 'hold_expired': return ([
             'await_delivery', 'await_consume', 'await_turn', 'liveness', 'hard_ceiling',
-            'live_pending', 'transcript_quiet', 'weak_candidate', 'suspension_before_consumed', 'await_report', 'await_end',
+            'live_pending', 'transcript_quiet', 'weak_candidate', 'suspension_before_consumed', 'await_report', 'await_end', 'report_correction',
         ] as const).map((reason) => v(reason, expired(reason), [makeHold(reason)])).concat([v('missing', expired('liveness'), [])]);
     }
 }

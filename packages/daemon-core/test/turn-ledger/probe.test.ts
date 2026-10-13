@@ -50,7 +50,7 @@ describe('probeEvidence — read → evidence (pure, content-free)', () => {
     it('maps presence and read failures to liveness results', () => {
         expect(kinds({ presence: 'absent' })).toEqual(['liveness:dead']);
         expect(kinds({ presence: 'unknown' })).toEqual(['liveness:unknown']);
-        expect(kinds({ presence: 'unknown' }, attempt({ lastLiveness: 'unknown' }))).toEqual([]); // once per streak
+        expect(kinds({ presence: 'unknown' }, attempt({ lastLiveness: 'unknown' }))).toEqual(['liveness:unknown']); // fresh observation per completed probe
         expect(kinds({ presence: 'present', transcript: null })).toEqual(['liveness:read_failed']);
     });
 
@@ -64,7 +64,7 @@ describe('probeEvidence — read → evidence (pure, content-free)', () => {
 
     it('idle + a final bubble dated in THIS turn → transcript_final{coordinator_probe} carrying live state, never a commit', () => {
         const out = probeEvidence(attempt(), { presence: 'present', status: 'idle', transcript: obs({ finalAssistantAt: T0 + 40_000, newestActivityAt: T0 + 55_000, trailingActivity: 1 }) }, { ...ctx, summary: SUMMARY });
-        expect(out).toHaveLength(1);
+        expect(out).toHaveLength(2);
         expect(out[0]).toMatchObject({
             kind: 'transcript_final', source: 'coordinator_probe', selfAttributing: false, nativeRead: false,
             live: { modal: false, adapterPending: false, trailingTool: true, newestActivityAt: T0 + 55_000 },
@@ -77,13 +77,13 @@ describe('probeEvidence — read → evidence (pure, content-free)', () => {
     });
 
     it('a scoped native marker admits even with no dated bubble', () => {
-        expect(kinds({ presence: 'present', status: 'idle', transcript: obs({ nativeRead: true, nativeMarker: { outcome: 'completed' } }) })).toEqual(['transcript_final']);
+        expect(kinds({ presence: 'present', status: 'idle', transcript: obs({ nativeRead: true, nativeMarker: { outcome: 'completed' } }) })).toEqual(['transcript_final', 'liveness:alive']);
     });
 
     it('idle with no final assistant: no_progress only once stalled past stallNoticeMs (and never with a parked modal)', () => {
         expect(kinds({ presence: 'present', status: 'idle', transcript: obs() })).toEqual(['liveness:alive']);
         const late = { ...ctx, nowMs: T0 + 300 + P.stallNoticeMs + 1 };
-        expect(probeEvidence(attempt(), { presence: 'present', status: 'idle', transcript: obs() }, late).map((e) => e.kind)).toEqual(['no_progress']);
+        expect(probeEvidence(attempt(), { presence: 'present', status: 'idle', transcript: obs() }, late).map((e) => e.kind)).toEqual(['no_progress', 'liveness']);
         expect(probeEvidence(attempt(), { presence: 'present', status: 'idle', transcript: obs({ activeModal: true }) }, late).map((e) => e.kind)).toEqual(['liveness']);
     });
 
@@ -248,7 +248,7 @@ describe('remote presence from the coordinator-held runtime', () => {
         const { comps, dispatchMeshCommand } = components();
         const readHeldSessions = vi.fn(() => ({ sessions: [{ id: 's1', status: 'generating' }], observedAt: T0 + 50_000 }));
         const reader = createComponentsProbeReader(comps, { analyzer: () => obs(), readHeldSessions });
-        expect(await reader.read(attempt(), loc, ['liveness'])).toEqual({ presence: 'present', status: 'generating' });
+        expect(await reader.read(attempt(), loc, ['liveness'])).toEqual({ presence: 'present', status: 'generating', observedAtMs: T0 + 50_000 });
         expect(readHeldSessions).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 's1', meshId: 'm1', nodeId: 'n1' }), 'daemon_mach_remote');
         expect(statusCalls(dispatchMeshCommand)).toHaveLength(0);
     });
@@ -312,7 +312,7 @@ describe('remote presence from the coordinator-held runtime', () => {
         for (const e of probeEvidence(a, read, { ...ctx, nowMs: held.observedAt })) r.observe(e);
         expect(r.getAttempt('a1')).toMatchObject({ generation: 1, reclaimCount: 1, state: 'accepted' });
         held.sessions = [{ id: 's1', status: 'generating' }];
-        expect(await reader.read(attempt(), loc, [])).toEqual({ presence: 'present', status: 'generating' });
+        expect(await reader.read(attempt(), loc, [])).toEqual({ presence: 'present', status: 'generating', observedAtMs: held.observedAt });
         expect(dispatchMeshCommand).not.toHaveBeenCalled();
     });
 

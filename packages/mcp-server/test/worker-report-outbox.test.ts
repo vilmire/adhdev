@@ -219,7 +219,7 @@ test('an over-limit summary with the daemon unreachable is a local field error â
   const result = await reportCompletion(transport, { bind: 'wsb_over2' }, { outcome: 'completed', summary: `  ${'z'.repeat(8_001)}  `, touched_files: [] }, delivery);
   assert.equal(result.isError, true);
   assert.match(result.text, /summary is 8001 chars, over the 8000 limit/);
-  assert.match(result.text, /Nothing was recorded or queued/);
+  assert.match(result.text, /Not queued; owner recording unconfirmed/);
   assert.equal(delivery.pendingCount(), 0);
 });
 

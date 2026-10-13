@@ -65,7 +65,7 @@ export type GuardId =
     | 'hold_await_delivery' | 'hold_await_consume_redrive' | 'hold_await_consume_exhausted' | 'hold_await_turn'
     | 'hold_liveness' | 'hold_hard_ceiling' | 'hold_suspension_before_consumed' | 'hold_weak_candidate' | 'hold_admission'
     | 'hold_await_report'
-    | 'hold_end_unconfirmed_defer' | 'hold_end_unconfirmed_exhausted'
+    | 'hold_end_unconfirmed_defer' | 'hold_end_unconfirmed_exhausted' | 'hold_end_probe_missing' | 'hold_report_correction'
     | 'finished_after_report' | 'hold_await_end';
 
 /** Named attempt mutations (reducer.ts ACTIONS). */
@@ -77,7 +77,7 @@ export type ActionId =
     | 'activity' | 'liveness_unknown' | 'liveness_failure' | 'worker_absent'
     | 'rebind_to_holder' | 'rebind'
     | 'hollow' | 'mark_notified' | 'store_git' | 'redrive' | 'stamp_no_progress_notice'
-    | 'record_report' | 'defer_unconfirmed_end';
+    | 'record_report' | 'defer_unconfirmed_end' | 'open_report_correction';
 
 /** Hold deadline expressions, resolved against policy + ledger clock. */
 export type UntilExpr =
@@ -446,6 +446,10 @@ export const TRANSITIONS: readonly TransitionRule[] = [
         { e: 'commit', outcome: 'from_operator', strength: 'operator', reason: 'from_operator' },
     ] },
 
+    { id: 'R17c', lane: 'current', from: 'nonterminal', on: ['worker_report_correction_requested'], to: 'same', verdict: 'applied', effects: [
+        { e: 'act', act: 'open_report_correction' },
+    ] },
+
     // ── progress / liveness ─────────────────────────────────────────────
     { id: 'R29', lane: 'current', from: [C, G], on: ['no_progress'], guard: 'final_present', to: F, verdict: 'applied', effects: weakCandidate },
     { id: 'R30', lane: 'current', from: [C, G, S, F], on: ['no_progress'], guard: 'otherwise', to: 'same', verdict: 'applied', effects: [
@@ -499,17 +503,7 @@ export const TRANSITIONS: readonly TransitionRule[] = [
         { e: 'release', reasons: 'expired_hold' },
         { e: 'reevaluate' },
     ] },
-    // R13a/R13r commit weak only when the last liveness verdict does not leave the
-    // worker's survival in doubt (guards exclude lastLiveness unknown/read_failed/
-    // dead). A timer is not proof the worker finished: when the most recent probe
-    // could not confirm the session (2026-10-13, worker died after a refused
-    // over-limit report, probe answered `unknown`, await_report expired → the old
-    // R13r committed task_completed / weak_end_confirmed for a dead worker), the
-    // expiry instead re-probes and re-arms the SAME hold (text pointer kept) once
-    // for a short grace (R13u); a confirming `alive` probe (R32) lets the next
-    // expiry commit weak as before, a `dead` one reclaims (R31), and an expiry that
-    // still finds liveness unconfirmed fails the attempt with a typed reason
-    // (R13x) — never completed. Attempts never probed (lastLiveness null) keep R13a/R13r.
+    // Weak completion requires a fresh probe; missing probe results have a separate bounded timeout.
     { id: 'R13a', lane: 'current', from: [F], on: ['hold_expired'], guard: 'hold_weak_candidate', to: 'completed', verdict: 'applied', effects: [
         { e: 'commit', outcome: 'completed', strength: 'weak', reason: 'weak_end_confirmed' },
     ] },
@@ -522,6 +516,12 @@ export const TRANSITIONS: readonly TransitionRule[] = [
     ] },
     { id: 'R13x', lane: 'current', from: [F], on: ['hold_expired'], guard: 'hold_end_unconfirmed_exhausted', to: 'failed', verdict: 'applied', effects: [
         { e: 'commit', outcome: 'failed', strength: 'weak', reason: 'weak_end_liveness_unconfirmed' },
+    ] },
+    { id: 'R13z', lane: 'current', from: [F], on: ['hold_expired'], guard: 'hold_end_probe_missing', to: 'failed', verdict: 'applied', effects: [
+        { e: 'commit', outcome: 'failed', strength: 'weak', reason: 'weak_end_probe_unobserved' },
+    ] },
+    { id: 'R13c', lane: 'current', from: 'nonterminal', on: ['hold_expired'], guard: 'hold_report_correction', to: 'failed', verdict: 'applied', effects: [
+        { e: 'commit', outcome: 'failed', strength: 'weak', reason: 'report_correction_expired' },
     ] },
     { id: 'H0', lane: 'current', from: 'any', on: ['hold_expired'], guard: 'otherwise', to: 'same', verdict: 'recorded', effects: [
         { e: 'record', note: 'hold_stale' },

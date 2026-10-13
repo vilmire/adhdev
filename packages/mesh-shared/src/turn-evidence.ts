@@ -150,7 +150,7 @@ export const HOLD_REASONS = [
     // — a turn_end commits the report (R9t), expiry commits it anyway (R13t) so
     // a session whose FSM never shows the idle edge again does not wait for
     // liveness / hard_ceiling.
-    'await_end',
+    'await_end', 'report_correction',
 ] as const
 export type HoldReason = typeof HOLD_REASONS[number]
 
@@ -164,7 +164,7 @@ export type CommitStrength = typeof COMMIT_STRENGTHS[number]
 export const TURN_REASONS = [
     // commits
     'turn_end', 'weak_end_confirmed', 'transcript_final', 'worker_reported',
-    'finalization_timeout_no_response', 'weak_end_liveness_unconfirmed', 'session_error', 'provider_auth_failed', 'provider_billing_failed', 'provider_usage_limit_exceeded', 'provider_server_overloaded', 'provider_error',
+    'finalization_timeout_no_response', 'weak_end_liveness_unconfirmed', 'weak_end_probe_unobserved', 'report_correction_expired', 'session_error', 'provider_auth_failed', 'provider_billing_failed', 'provider_usage_limit_exceeded', 'provider_server_overloaded', 'provider_error',
     'operator_cancel', 'intentional_cleanup', 'task_removed', 'mission_abandoned', 'superseded',
     'operator_update', 'refine_terminal', 'validation_terminal',
     'hard_ceiling', 'reclaim_budget_exhausted', 'hollow_max_retries', 'migration_orphan',
@@ -273,7 +273,7 @@ export type TurnEvidenceBody =
         live: LiveTurnPending; summary?: SummaryRef; messageAt?: number }
     | { kind: 'transcript_activity'; newestActivityAt: number }
     | { kind: 'no_progress'; stalledMs: number; observedStatus: NoProgressObservedStatus; finalAssistantPresent: boolean }
-    | { kind: 'liveness'; result: LivenessResult }
+    | { kind: 'liveness'; result: LivenessResult; probeStartedAtMs?: number }
     | { kind: 'process_exit'; exitCode: number | null; providerFailure?: ProviderFailure }
     | { kind: 'session_error'; reason: SessionErrorReason }
     // ── worker MCP (F2) ──
@@ -284,6 +284,7 @@ export type TurnEvidenceBody =
      */
     | { kind: 'worker_report'; outcome: WorkerReportOutcome; summary?: SummaryRef; hasHandoffNotes: boolean
         branchState?: WorkerBranchState; touchedFileCount?: number }
+    | { kind: 'worker_report_correction_requested'; deliveryId?: string }
     | { kind: 'worker_progress'; note?: SummaryRef }
     // ── coordinator / operator ──
     | { kind: 'git_side_effect'; dirty: boolean; commitsSinceDispatch: number; attributable: boolean }
@@ -366,13 +367,14 @@ export const TURN_EVIDENCE_FIELD_SPECS: TurnEvidenceFieldSpecs = {
     },
     transcript_activity: { newestActivityAt: ms },
     no_progress: { stalledMs: ms, observedStatus: en(NO_PROGRESS_OBSERVED_STATUSES), finalAssistantPresent: bool },
-    liveness: { result: en(LIVENESS_RESULTS) },
+    liveness: { result: en(LIVENESS_RESULTS), probeStartedAtMs: msOpt },
     process_exit: { exitCode: { t: 'int', nullable: true }, providerFailure: enOpt(PROVIDER_FAILURES) },
     session_error: { reason: en(SESSION_ERROR_REASONS) },
     worker_report: {
         outcome: en(WORKER_REPORT_OUTCOMES), summary: { t: 'summary_ref', optional: true }, hasHandoffNotes: bool,
         branchState: enOpt(WORKER_BRANCH_STATES), touchedFileCount: intOpt,
     },
+    worker_report_correction_requested: { deliveryId: { t: 'id', optional: true } },
     worker_progress: { note: { t: 'summary_ref', optional: true } },
     git_side_effect: { dirty: bool, commitsSinceDispatch: { t: 'int' }, attributable: bool },
     cancel: { reason: en(CANCEL_REASONS) },

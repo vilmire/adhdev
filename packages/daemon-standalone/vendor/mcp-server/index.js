@@ -26952,7 +26952,8 @@ ${renderWorkerProtocolFooter2(input)}`;
           // — a turn_end commits the report (R9t), expiry commits it anyway (R13t) so
           // a session whose FSM never shows the idle edge again does not wait for
           // liveness / hard_ceiling.
-          "await_end"
+          "await_end",
+          "report_correction"
         ];
         TURN_OUTCOMES2 = ["completed", "failed", "cancelled"];
         COMMIT_STRENGTHS2 = ["genuine", "weak", "tool_report", "operator"];
@@ -26964,6 +26965,8 @@ ${renderWorkerProtocolFooter2(input)}`;
           "worker_reported",
           "finalization_timeout_no_response",
           "weak_end_liveness_unconfirmed",
+          "weak_end_probe_unobserved",
+          "report_correction_expired",
           "session_error",
           "provider_auth_failed",
           "provider_billing_failed",
@@ -27071,7 +27074,7 @@ ${renderWorkerProtocolFooter2(input)}`;
           },
           transcript_activity: { newestActivityAt: ms2 },
           no_progress: { stalledMs: ms2, observedStatus: en2(NO_PROGRESS_OBSERVED_STATUSES2), finalAssistantPresent: bool3 },
-          liveness: { result: en2(LIVENESS_RESULTS2) },
+          liveness: { result: en2(LIVENESS_RESULTS2), probeStartedAtMs: msOpt2 },
           process_exit: { exitCode: { t: "int", nullable: true }, providerFailure: enOpt2(PROVIDER_FAILURES2) },
           session_error: { reason: en2(SESSION_ERROR_REASONS2) },
           worker_report: {
@@ -27081,6 +27084,7 @@ ${renderWorkerProtocolFooter2(input)}`;
             branchState: enOpt2(WORKER_BRANCH_STATES2),
             touchedFileCount: intOpt2
           },
+          worker_report_correction_requested: { deliveryId: { t: "id", optional: true } },
           worker_progress: { note: { t: "summary_ref", optional: true } },
           git_side_effect: { dirty: bool3, commitsSinceDispatch: { t: "int" }, attributable: bool3 },
           cancel: { reason: en2(CANCEL_REASONS2) },
@@ -36842,6 +36846,12 @@ ${error.message || ""}`;
         };
       }
     });
+    function endProbeGraceMs(p) {
+      return Math.max(unknownLivenessGraceMs(p), p.awaitEndMs);
+    }
+    function reportCorrectionMs(p) {
+      return Math.max(p.awaitReportMs, endProbeGraceMs(p));
+    }
     function holdTtlMs(p) {
       return Math.round(1.5 * p.quietWindowMs);
     }
@@ -42652,6 +42662,9 @@ ${rendered.join("\n\n")}`,
           { id: "R23", lane: "current", from: "nonterminal", on: ["operator_status"], to: "outcome", verdict: "applied", effects: [
             { e: "commit", outcome: "from_operator", strength: "operator", reason: "from_operator" }
           ] },
+          { id: "R17c", lane: "current", from: "nonterminal", on: ["worker_report_correction_requested"], to: "same", verdict: "applied", effects: [
+            { e: "act", act: "open_report_correction" }
+          ] },
           // ── progress / liveness ─────────────────────────────────────────────
           { id: "R29", lane: "current", from: [C, G], on: ["no_progress"], guard: "final_present", to: F, verdict: "applied", effects: weakCandidate },
           { id: "R30", lane: "current", from: [C, G, S, F], on: ["no_progress"], guard: "otherwise", to: "same", verdict: "applied", effects: [
@@ -42704,17 +42717,7 @@ ${rendered.join("\n\n")}`,
             { e: "release", reasons: "expired_hold" },
             { e: "reevaluate" }
           ] },
-          // R13a/R13r commit weak only when the last liveness verdict does not leave the
-          // worker's survival in doubt (guards exclude lastLiveness unknown/read_failed/
-          // dead). A timer is not proof the worker finished: when the most recent probe
-          // could not confirm the session (2026-10-13, worker died after a refused
-          // over-limit report, probe answered `unknown`, await_report expired → the old
-          // R13r committed task_completed / weak_end_confirmed for a dead worker), the
-          // expiry instead re-probes and re-arms the SAME hold (text pointer kept) once
-          // for a short grace (R13u); a confirming `alive` probe (R32) lets the next
-          // expiry commit weak as before, a `dead` one reclaims (R31), and an expiry that
-          // still finds liveness unconfirmed fails the attempt with a typed reason
-          // (R13x) — never completed. Attempts never probed (lastLiveness null) keep R13a/R13r.
+          // Weak completion requires a fresh probe; missing probe results have a separate bounded timeout.
           { id: "R13a", lane: "current", from: [F], on: ["hold_expired"], guard: "hold_weak_candidate", to: "completed", verdict: "applied", effects: [
             { e: "commit", outcome: "completed", strength: "weak", reason: "weak_end_confirmed" }
           ] },
@@ -42727,6 +42730,12 @@ ${rendered.join("\n\n")}`,
           ] },
           { id: "R13x", lane: "current", from: [F], on: ["hold_expired"], guard: "hold_end_unconfirmed_exhausted", to: "failed", verdict: "applied", effects: [
             { e: "commit", outcome: "failed", strength: "weak", reason: "weak_end_liveness_unconfirmed" }
+          ] },
+          { id: "R13z", lane: "current", from: [F], on: ["hold_expired"], guard: "hold_end_probe_missing", to: "failed", verdict: "applied", effects: [
+            { e: "commit", outcome: "failed", strength: "weak", reason: "weak_end_probe_unobserved" }
+          ] },
+          { id: "R13c", lane: "current", from: "nonterminal", on: ["hold_expired"], guard: "hold_report_correction", to: "failed", verdict: "applied", effects: [
+            { e: "commit", outcome: "failed", strength: "weak", reason: "report_correction_expired" }
           ] },
           { id: "H0", lane: "current", from: "any", on: ["hold_expired"], guard: "otherwise", to: "same", verdict: "recorded", effects: [
             { e: "record", note: "hold_stale" }
@@ -42831,13 +42840,26 @@ ${rendered.join("\n\n")}`,
       const attempt = ctx.attempt;
       return !!attempt && ctx.holds.some((h) => h.reason === "await_report" && h.attemptId === attempt.attemptId);
     }
-    function livenessUnconfirmed(ctx) {
-      const last = ctx.attempt?.lastLiveness;
-      return last === "unknown" || last === "read_failed" || last === "dead";
+    function freshEndProbe(ctx) {
+      const a = ctx.attempt;
+      const o = a?.data.livenessObservation;
+      const request = a?.data.unconfirmedEndDeferral;
+      const boundary = request?.generation === a?.generation && request?.requestedAt !== void 0 ? request.requestedAt : expiredHold(ctx)?.createdAt;
+      return !!a && !!o && o.generation === a.generation && boundary !== void 0 && o.probeStartedAt >= boundary && o.at >= boundary && o.at <= ctx.nowMs && ctx.nowMs - o.at <= endProbeGraceMs(ctx.policy);
+    }
+    function correctionPending(ctx) {
+      const r = ctx.attempt?.data.reportCorrection;
+      return r?.generation === ctx.attempt?.generation && !reportedThisGeneration(ctx);
+    }
+    function endTimer(ctx) {
+      return holdIs(ctx, "weak_candidate", "await_report") && !correctionPending(ctx);
+    }
+    function freshAlive(ctx) {
+      return freshEndProbe(ctx) && ctx.attempt?.lastLiveness === "alive";
     }
     function unconfirmedEndDeferrals(ctx) {
       const d = ctx.attempt?.data.unconfirmedEndDeferral;
-      return d && d.generation === ctx.attempt.generation ? d.count : 0;
+      return d && d.generation === ctx.attempt.generation && d.requestedAt !== void 0 ? d.count : 0;
     }
     function laneCandidates(lane, state2, kind) {
       return TRANSITIONS.filter((rule) => rule.lane === lane && ruleAdmitsState(rule.from, state2) && rule.on.includes(kind));
@@ -43439,11 +43461,13 @@ ${rendered.join("\n\n")}`,
           hold_liveness: (ctx) => holdIs(ctx, "liveness"),
           hold_hard_ceiling: (ctx) => holdIs(ctx, "hard_ceiling"),
           hold_suspension_before_consumed: (ctx) => holdIs(ctx, "suspension_before_consumed"),
-          hold_weak_candidate: (ctx) => holdIs(ctx, "weak_candidate") && !livenessUnconfirmed(ctx),
+          hold_weak_candidate: (ctx) => holdIs(ctx, "weak_candidate") && !correctionPending(ctx) && freshAlive(ctx),
           hold_admission: (ctx) => holdIs(ctx, "live_pending", "transcript_quiet"),
-          hold_await_report: (ctx) => holdIs(ctx, "await_report") && !livenessUnconfirmed(ctx),
-          hold_end_unconfirmed_defer: (ctx) => holdIs(ctx, "weak_candidate", "await_report") && livenessUnconfirmed(ctx) && unconfirmedEndDeferrals(ctx) < MAX_UNCONFIRMED_END_DEFERRALS,
-          hold_end_unconfirmed_exhausted: (ctx) => holdIs(ctx, "weak_candidate", "await_report") && livenessUnconfirmed(ctx) && unconfirmedEndDeferrals(ctx) >= MAX_UNCONFIRMED_END_DEFERRALS,
+          hold_await_report: (ctx) => holdIs(ctx, "await_report") && !correctionPending(ctx) && freshAlive(ctx),
+          hold_end_unconfirmed_defer: (ctx) => endTimer(ctx) && !freshAlive(ctx) && unconfirmedEndDeferrals(ctx) < MAX_UNCONFIRMED_END_DEFERRALS,
+          hold_end_unconfirmed_exhausted: (ctx) => endTimer(ctx) && !freshAlive(ctx) && unconfirmedEndDeferrals(ctx) >= MAX_UNCONFIRMED_END_DEFERRALS && freshEndProbe(ctx),
+          hold_end_probe_missing: (ctx) => endTimer(ctx) && !freshEndProbe(ctx) && unconfirmedEndDeferrals(ctx) >= MAX_UNCONFIRMED_END_DEFERRALS,
+          hold_report_correction: (ctx) => holdIs(ctx, "report_correction") && !reportedThisGeneration(ctx),
           hold_await_end: (ctx) => holdIs(ctx, "await_end") && reportedThisGeneration(ctx)
         };
         TEXT_CARRYING_HOLDS = ["weak_candidate", "await_report", "await_end"];
@@ -43529,12 +43553,14 @@ ${rendered.join("\n\n")}`,
           },
           weak_candidate: (draft) => {
             const attempt = draft.attempt;
+            attempt.data.unconfirmedEndDeferral = void 0;
             attempt.weakSince = draft.ctx.evidence.at;
           },
           clear_weak: (draft) => {
             draft.attempt.weakSince = null;
           },
           await_report: (draft) => {
+            draft.attempt.data.unconfirmedEndDeferral = void 0;
             draft.attempt.weakSince = draft.ctx.evidence.at;
           },
           false_idle: (draft) => {
@@ -43542,31 +43568,45 @@ ${rendered.join("\n\n")}`,
             attempt.weakSince = null;
             attempt.lastActivityAt = Math.max(attempt.lastActivityAt ?? 0, activityAt(draft.ctx.evidence));
             attempt.livenessFailStreak = 0;
-            attempt.data = { ...attempt.data, falseIdleCount: (attempt.data.falseIdleCount ?? 0) + 1 };
+            attempt.data = { ...attempt.data, unconfirmedEndDeferral: void 0, falseIdleCount: (attempt.data.falseIdleCount ?? 0) + 1 };
           },
           activity: (draft) => {
             const attempt = draft.attempt;
             const ev = draft.ctx.evidence;
             attempt.lastActivityAt = Math.max(attempt.lastActivityAt ?? 0, activityAt(ev));
             attempt.livenessFailStreak = 0;
-            if (ev.kind === "liveness") attempt.lastLiveness = ev.result;
+            if (ev.kind === "liveness") {
+              attempt.lastLiveness = ev.result;
+              attempt.data.livenessObservation = { generation: attempt.generation, at: ev.at, probeStartedAt: ev.probeStartedAtMs ?? ev.at };
+            }
           },
           liveness_unknown: (draft) => {
             draft.attempt.lastLiveness = "unknown";
+            const ev = draft.ctx.evidence;
+            draft.attempt.data.livenessObservation = { generation: draft.attempt.generation, at: ev.at, probeStartedAt: ev.probeStartedAtMs ?? ev.at };
           },
           liveness_failure: (draft) => {
             const attempt = draft.attempt;
             attempt.livenessFailStreak += 1;
-            attempt.lastLiveness = draft.ctx.evidence.result;
+            const ev = draft.ctx.evidence;
+            attempt.lastLiveness = ev.result;
+            attempt.data.livenessObservation = { generation: attempt.generation, at: ev.at, probeStartedAt: ev.probeStartedAtMs ?? ev.at };
           },
           defer_unconfirmed_end: (draft) => {
             const attempt = draft.attempt;
             const hold = expiredHold(draft.ctx);
             if (!hold) return;
             const prior = attempt.data.unconfirmedEndDeferral;
-            const count = prior && prior.generation === attempt.generation ? prior.count : 0;
-            attempt.data = { ...attempt.data, unconfirmedEndDeferral: { generation: attempt.generation, count: count + 1 } };
-            addHold(draft, { ...hold, until: draft.ctx.nowMs + unknownLivenessGraceMs(draft.ctx.policy), createdAt: draft.ctx.nowMs });
+            const count = prior && prior.generation === attempt.generation && prior.requestedAt !== void 0 ? prior.count : 0;
+            attempt.data = { ...attempt.data, unconfirmedEndDeferral: { generation: attempt.generation, count: count + 1, requestedAt: draft.ctx.nowMs } };
+            addHold(draft, { ...hold, until: draft.ctx.nowMs + endProbeGraceMs(draft.ctx.policy), createdAt: draft.ctx.nowMs });
+          },
+          open_report_correction: (draft) => {
+            const a = draft.attempt;
+            if (a.data.reportCorrection?.generation === a.generation || reportedThisGeneration(draft.ctx)) return;
+            const until = draft.ctx.nowMs + reportCorrectionMs(draft.ctx.policy);
+            a.data.reportCorrection = { generation: a.generation, until };
+            addHold(draft, { holdId: holdId(a.attemptId, "report_correction"), attemptId: a.attemptId, generation: a.generation, reason: "report_correction", until, onExpire: "commit", data: {}, createdAt: draft.ctx.nowMs });
           },
           worker_absent: (draft) => {
             if (draft.ctx.evidence.workerAbsent) draft.attempt.livenessFailStreak += 1;
@@ -63965,6 +64005,10 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       return parts.join("\n");
     }
     function acceptLateWorkerCompletionReport(identity, report, nowMs2) {
+      const attempt = MeshRuntimeStore.getInstance().turnStore().getAttempt(identity.attemptId);
+      if (attempt?.terminal && ["report_correction_expired", "weak_end_liveness_unconfirmed", "weak_end_probe_unobserved"].includes(attempt.terminal.reason)) {
+        return { accepted: false, refusal: "correction_too_late", detail: "The bounded report/probe recovery window ended; this attempt remains failed. The report was not accepted as a recovery." };
+      }
       const taskModeError = checkReportAgainstTaskMode(identity, report);
       if (taskModeError) return { accepted: false, refusal: "invalid_for_task_mode", detail: taskModeError };
       const nowIso = new Date(nowMs2).toISOString();
@@ -64112,6 +64156,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       normalizeWorkerReportedAtMs: () => normalizeWorkerReportedAtMs,
       recordHandoffNote: () => recordHandoffNote,
       recordRefusedWorkerReport: () => recordRefusedWorkerReport,
+      recordRefusedWorkerReportForIdentity: () => recordRefusedWorkerReportForIdentity,
       resolveWorkerIdentity: () => resolveWorkerIdentity,
       safeRefusalFields: () => safeRefusalFields,
       summaryKey: () => summaryKey,
@@ -64287,6 +64332,12 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       const liveIsNewer = !!live && reportedAt !== void 0 && workerIdentityPostdates(live, reportedAt);
       const identity = live && !liveIsNewer ? live : resolveLateWorkerIdentity(credential, nowMs2, opts.isSelfDaemon, reportedAt);
       if (!identity) return null;
+      return recordRefusedWorkerReportForIdentity(identity, refusal, { ...opts, nowMs: nowMs2 });
+    }
+    function recordRefusedWorkerReportForIdentity(identity, refusal, opts = {}) {
+      const nowMs2 = opts.nowMs ?? Date.now();
+      const reportedAt = normalizeWorkerReportedAtMs(opts.reportedAtMs, nowMs2);
+      if (reportedAt === "too_old" || typeof reportedAt === "number" && workerIdentityPostdates(identity, reportedAt)) return null;
       let attemptId;
       let generation = null;
       try {
@@ -64294,7 +64345,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
         attemptId = identity.attemptId ?? turns.findLatestAttemptForTask(identity.meshId, identity.taskId)?.attemptId;
         if (!attemptId) return null;
         const attempt = turns.getAttempt(attemptId);
-        if (!attempt || attempt.meshId !== identity.meshId || attempt.taskId !== identity.taskId) return null;
+        if (!attempt || attempt.meshId !== identity.meshId || attempt.taskId !== identity.taskId || attempt.sessionId !== identity.sessionId || opts.generation !== void 0 && opts.generation !== attempt.generation || turns.findLatestAttemptForTask(identity.meshId, identity.taskId)?.attemptId !== attemptId) return null;
         generation = attempt.generation;
       } catch {
         return null;
@@ -64322,6 +64373,20 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
           },
           atMs: nowMs2
         });
+        const ledger = getActiveTurnLedger();
+        const attempt = ledger?.getAttempt(attemptId);
+        if (attempt && !attempt.terminal && ledger?.selfDaemonId === attempt.ownerDaemonId) {
+          ledger.observe({
+            eventId: `report_refusal:${attemptId}:g${generation}:${opts.deliveryId ?? nowMs2}`,
+            at: nowMs2,
+            source: "worker_tool",
+            observedBy: ledger.selfDaemonId,
+            sessionId: identity.sessionId,
+            attemptRef: { attemptId, generation },
+            kind: "worker_report_correction_requested",
+            ...opts.deliveryId ? { deliveryId: opts.deliveryId } : {}
+          });
+        }
         recorded = true;
       } catch (e) {
         LOG.error("WorkerReport", `Failed to record the invalid-report refusal for task ${identity.taskId} attempt ${attemptId}: ${e?.message || e}`);
@@ -64332,7 +64397,8 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
         attemptId,
         generation,
         ...opts.deliveryId ? { deliveryId: opts.deliveryId } : {},
-        recorded
+        recorded,
+        ...getActiveTurnLedger()?.getAttempt(attemptId)?.data.reportCorrection?.generation === generation ? { correctionUntilMs: getActiveTurnLedger().getAttempt(attemptId).data.reportCorrection.until } : {}
       };
     }
     function normalizeWorkerReportedAtMs(raw, nowMs2) {
@@ -64363,6 +64429,11 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       const nowMs2 = opts.nowMs ?? Date.now();
       const nowIso = new Date(nowMs2).toISOString();
       const store2 = MeshRuntimeStore.getInstance();
+      const recoveryAttempt = identity.attemptId ? store2.turnStore().getAttempt(identity.attemptId) : void 0;
+      const correction = recoveryAttempt?.data.reportCorrection;
+      if (correction && recoveryAttempt?.data.report?.generation !== recoveryAttempt?.generation && correction.generation === recoveryAttempt?.generation && nowMs2 >= correction.until) {
+        return { accepted: false, refusal: "correction_too_late", detail: "The bounded correction deadline expired; no recovery was accepted." };
+      }
       REPORTED_SUMMARY_STORE.set(summaryKey(identity.meshId, identity.taskId), {
         summary: report.summary,
         recordedAtMs: nowMs2
@@ -64608,6 +64679,8 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
         WORKER_REPORT_REFUSED_EVENT_KIND = "worker_report_refused";
         REFUSAL_FIELD_ALLOWLIST = /* @__PURE__ */ new Set([
           "",
+          "(root)",
+          "(unknown_field)",
           "outcome",
           "summary",
           "touchedFiles",
@@ -74482,9 +74555,9 @@ ${continuationNotice}` } : task,
         observedBy: ctx.observedBy
       };
       const eventId = (kind) => `probe:${attempt.attemptId}:g${attempt.generation}:${kind}:${ctx.nowMs}`;
-      const liveness = (result) => ({ ...base, eventId: eventId(`liveness_${result}`), kind: "liveness", result });
+      const liveness = (result) => ({ ...base, eventId: eventId(`liveness_${result}`), kind: "liveness", result, at: read.observedAtMs ?? ctx.nowMs, ...ctx.probeStartedAtMs !== void 0 ? { probeStartedAtMs: ctx.probeStartedAtMs } : {} });
       if (read.presence === "absent") return [liveness("dead")];
-      if (read.presence === "unknown") return attempt.lastLiveness === "unknown" ? [] : [liveness("unknown")];
+      if (read.presence === "unknown") return [liveness("unknown")];
       if (read.transcript === null) return [liveness("read_failed")];
       const t = read.transcript;
       const boundary = turnStartBoundary(attempt);
@@ -74530,7 +74603,7 @@ ${continuationNotice}` } : task,
             },
             ...finalThisTurn ? { messageAt: t.finalAssistantAt } : {},
             ...ctx.summary ? { summary: ctx.summary } : {}
-          }];
+          }, liveness("alive")];
         }
         const quietSince = Math.max(attempt.lastActivityAt ?? 0, boundary, t.newestActivityAt ?? 0);
         const stalledMs = Math.max(0, ctx.nowMs - quietSince);
@@ -74542,7 +74615,7 @@ ${continuationNotice}` } : task,
             stalledMs,
             observedStatus: "idle",
             finalAssistantPresent: false
-          }];
+          }, liveness("alive")];
         }
       }
       return [liveness("alive")];
@@ -74614,7 +74687,7 @@ ${continuationNotice}` } : task,
           return !held.truncated && held.observedAt > turnStartBoundary(attempt) + margin ? { presence: "absent" } : { presence: "unknown" };
         }
         const status = str5(row.status).toLowerCase() || void 0;
-        if (!wantsTranscript(attempt, holds, status)) return { presence: "present", ...status ? { status } : {} };
+        if (!wantsTranscript(attempt, holds, status)) return { presence: "present", observedAtMs: held.observedAt, ...status ? { status } : {} };
         const replica = readTranscriptForDaemonConsumer({
           consumerId: "daemon_terminal_evidence",
           ownerDaemonId: daemonId,
@@ -74623,7 +74696,7 @@ ${continuationNotice}` } : task,
           store: components.transcriptReplicaStore
         });
         if (replica.view) {
-          return { presence: "present", ...status ? { status } : {}, transcript: analyze(replicaPayload(replica.view), attempt) };
+          return { presence: "present", observedAtMs: held.observedAt, ...status ? { status } : {}, transcript: analyze(replicaPayload(replica.view), attempt) };
         }
         try {
           const result = await dispatch2(daemonId, "read_chat", readArgsFor(attempt, workspace));
@@ -84785,6 +84858,7 @@ ${detail.join("\n")}` : stripped;
         ownerDaemonId,
         ...taskId ? { taskId } : {},
         ...attemptId ? { attemptId } : {},
+        ...Number.isInteger(stamp2.generation) ? { generation: stamp2.generation } : {},
         ...nodeId ? { nodeId } : {}
       };
     }
@@ -84830,6 +84904,9 @@ ${detail.join("\n")}` : stripped;
         if (claim.attemptId && claim.attemptId !== attemptId) {
           return refuse2("attempt_mismatch", `task ${row.id}'s attempt on the owner is ${attemptId ?? "(none)"}, not ${claim.attemptId}`);
         }
+        const attempt2 = attemptId ? store2.turnStore().getAttempt(attemptId) : null;
+        if (claim.generation !== void 0 && claim.generation !== attempt2?.generation) return refuse2("generation_mismatch", "the claimed generation is no longer current");
+        if (attempt2 && (attempt2.sessionId !== claim.sessionId || isSelfDaemon && !isSelfDaemon(attempt2.ownerDaemonId))) return refuse2("attempt_mismatch", "the attempt is not owned here for this session");
         const token = findWorkerTaskTokenForSession(claim.meshId, row.id, claim.sessionId);
         return {
           live: {
@@ -84852,6 +84929,7 @@ ${detail.join("\n")}` : stripped;
       if (claim.attemptId && claim.attemptId !== attempt.attemptId) {
         return refuse2("attempt_mismatch", `task ${attempt.taskId}'s attempt on the owner is ${attempt.attemptId}, not ${claim.attemptId}`);
       }
+      if (claim.generation !== void 0 && claim.generation !== store2.turnStore().getAttempt(attempt.attemptId)?.generation) return refuse2("generation_mismatch", "the terminal generation does not match");
       const nodeRefusal = senderOwnsNode(attempt.nodeId);
       if (nodeRefusal) return nodeRefusal;
       return {
@@ -84879,9 +84957,12 @@ ${detail.join("\n")}` : stripped;
     }
     function acceptForwardedWorkerCompletionReport(claim, report, opts) {
       const nowMs2 = opts.nowMs ?? Date.now();
+      const reportedAt = normalizeWorkerReportedAtMs(opts.reportedAtMs, nowMs2);
+      if (reportedAt === "too_old") return { accepted: false, refusal: "stale_report" };
       const resolved = resolveForwardedWorkerIdentity(claim, opts.sender, nowMs2, opts.isSelfDaemon);
       if ("refused" in resolved) return { accepted: false, refusal: "unauthenticated", detail: `${resolved.refused}: ${resolved.detail}` };
       if ("late" in resolved) return acceptLateWorkerCompletionReport(resolved.late, report, nowMs2);
+      if (typeof reportedAt === "number" && workerIdentityPostdates(resolved.live, reportedAt)) return { accepted: false, refusal: "stale_report" };
       return acceptWorkerCompletionReportForIdentity(resolved.live, report, { nowMs: nowMs2 });
     }
     var init_worker_report_forwarded = __esm2({
@@ -128262,6 +128343,7 @@ ${marker}`,
       }
     }
     var WORKER_REPORT_FORWARD_COMMAND = "worker_report_forwarded";
+    var WORKER_REFUSAL_FORWARD_COMMAND = "worker_report_refusal_forwarded";
     var WORKER_PROGRESS_FORWARD_COMMAND = "worker_progress_forwarded";
     function readNonEmpty3(value) {
       return typeof value === "string" ? value.trim() : "";
@@ -128286,7 +128368,7 @@ ${marker}`,
           meshId,
           ownerDaemonId,
           ...taskId ? { taskId } : {},
-          ...attemptRef ? { attemptId: attemptRef.attemptId } : {},
+          ...attemptRef ? { attemptId: attemptRef.attemptId, generation: attemptRef.generation } : {},
           ...nodeId ? { nodeId } : {}
         };
       };
@@ -128375,12 +128457,25 @@ ${marker}`,
     async function refuseInvalidReport(ctx, args, errors) {
       const answer = { success: false, error: "invalid_report", validationErrors: errors };
       try {
-        const { recordRefusedWorkerReport: recordRefusedWorkerReport2, safeRefusalFields: safeRefusalFields2 } = await Promise.resolve().then(() => (init_worker_report(), worker_report_exports));
+        const { recordRefusedWorkerReport: recordRefusedWorkerReport2, safeRefusalFields: safeRefusalFields2, hasLocalWorkerIdentity: hasLocalWorkerIdentity2 } = await Promise.resolve().then(() => (init_worker_report(), worker_report_exports));
         const credential = { token: args?.token, bind: args?.bind };
         const raw = args?.report && typeof args.report === "object" ? args.report : {};
         const summaryLength = typeof raw.summary === "string" ? raw.summary.trim().length : null;
         const deliveryId = normalizeWorkerDeliveryId(args?.deliveryId);
         const fields = errors.map((e) => e.field);
+        if (!hasLocalWorkerIdentity2(credential, { isSelfDaemon: selfDaemonPredicate(ctx), reportedAtMs: args?.reportedAtMs })) {
+          const remote = await resolveRemoteWorker(ctx, args);
+          if (remote && remote.taskId && remote.attemptId && Number.isInteger(remote.generation)) {
+            const owner = await forwardToOwner(ctx, remote, WORKER_REFUSAL_FORWARD_COMMAND, {
+              generation: remote.generation,
+              fields: safeRefusalFields2(fields),
+              summaryLength,
+              ...deliveryId ? { deliveryId } : {},
+              ...typeof args?.reportedAtMs === "number" ? { reportedAtMs: args.reportedAtMs } : {}
+            }, "report refusal");
+            return { ...answer, ...owner.receipt ? { receipt: owner.receipt } : {} };
+          }
+        }
         const receipt = recordRefusedWorkerReport2(
           credential,
           { fields, summaryLength, outcome: raw.outcome },
@@ -128415,8 +128510,8 @@ ${marker}`,
         surfacedToCoordinator: result.surfacedToCoordinator === true
       };
     }
-    async function forwardReportToOwner(ctx, remote, report) {
-      return forwardToOwner(ctx, remote, WORKER_REPORT_FORWARD_COMMAND, { report }, `${report.outcome} report`);
+    async function forwardReportToOwner(ctx, remote, report, delivery = {}) {
+      return forwardToOwner(ctx, remote, WORKER_REPORT_FORWARD_COMMAND, { report, ...delivery.deliveryId ? { deliveryId: delivery.deliveryId } : {}, ...typeof delivery.reportedAtMs === "number" ? { reportedAtMs: delivery.reportedAtMs } : {} }, `${report.outcome} report`);
     }
     async function forwardToOwner(ctx, remote, command, payload, what) {
       const dispatch2 = ctx?.deps?.dispatchMeshCommand;
@@ -128432,7 +128527,8 @@ ${marker}`,
         meshId: remote.meshId,
         sessionId: remote.sessionId,
         ...remote.taskId ? { taskId: remote.taskId } : {},
-        ...remote.attemptId ? { attemptId: remote.attemptId } : {}
+        ...remote.attemptId ? { attemptId: remote.attemptId } : {},
+        ...remote.generation !== void 0 ? { generation: remote.generation } : {}
       };
       let raw;
       try {
@@ -128459,8 +128555,8 @@ ${marker}`,
       else LOG.warn("WorkerReport", line);
       return answer;
     }
-    var CLAIM_KEYS = ["meshId", "taskId", "attemptId", "sessionId", "nodeId"];
-    var FORWARD_KEYS = /* @__PURE__ */ new Set([...CLAIM_KEYS, "report"]);
+    var CLAIM_KEYS = ["meshId", "taskId", "attemptId", "sessionId", "nodeId", "generation"];
+    var FORWARD_KEYS = /* @__PURE__ */ new Set([...CLAIM_KEYS, "report", "deliveryId", "reportedAtMs"]);
     var PROGRESS_FORWARD_KEYS = /* @__PURE__ */ new Set([...CLAIM_KEYS, "note"]);
     function decodeForwardedClaim(args, allowedKeys) {
       const input = stripRouterInternalArgs(args);
@@ -128473,10 +128569,11 @@ ${marker}`,
       for (const key2 of ["taskId", "attemptId", "nodeId"]) {
         if (record3[key2] !== void 0 && !readNonEmpty3(record3[key2])) return null;
       }
+      if (record3.generation !== void 0 && (!Number.isSafeInteger(record3.generation) || record3.generation < 0)) return null;
       const taskId = readNonEmpty3(record3.taskId);
       const attemptId = readNonEmpty3(record3.attemptId);
       return {
-        claim: { meshId, sessionId, ...taskId ? { taskId } : {}, ...attemptId ? { attemptId } : {} },
+        claim: { meshId, sessionId, ...taskId ? { taskId } : {}, ...attemptId ? { attemptId } : {}, ...record3.generation !== void 0 ? { generation: record3.generation } : {} },
         record: record3
       };
     }
@@ -128485,7 +128582,7 @@ ${marker}`,
       if (!decoded) return null;
       const { report } = decoded.record;
       if (!report || typeof report !== "object" || Array.isArray(report)) return null;
-      return { claim: decoded.claim, report };
+      return { claim: decoded.claim, report, ...decoded.record.reportedAtMs !== void 0 ? { reportedAtMs: decoded.record.reportedAtMs } : {} };
     }
     function decodeForwardedWorkerProgress(args) {
       const decoded = decodeForwardedClaim(args, PROGRESS_FORWARD_KEYS);
@@ -128569,7 +128666,7 @@ ${marker}`,
           if (!hasLocalWorkerIdentity2(credential, { isSelfDaemon, reportedAtMs })) {
             const remote = await resolveRemoteWorker(_ctx, args);
             if (remote) {
-              response = await forwardReportToOwner(_ctx, remote, report);
+              response = await forwardReportToOwner(_ctx, remote, report, { deliveryId, reportedAtMs });
               rememberWorkerDelivery("report", credential, deliveryId, response);
               return response;
             }
@@ -128582,6 +128679,27 @@ ${marker}`,
         } catch (e) {
           return { success: false, error: e?.message || String(e) };
         }
+      },
+      [WORKER_REFUSAL_FORWARD_COMMAND]: async (_ctx, args) => {
+        const decoded = decodeForwardedClaim(args, /* @__PURE__ */ new Set([...CLAIM_KEYS, "generation", "fields", "summaryLength", "deliveryId", "reportedAtMs"]));
+        if (!decoded || !decoded.claim.taskId || !decoded.claim.attemptId) return { success: false, error: "invalid_refusal_envelope" };
+        const raw = decoded.record;
+        const { safeRefusalFields: safeRefusalFields2, recordRefusedWorkerReportForIdentity: recordRefusedWorkerReportForIdentity2, normalizeWorkerReportedAtMs: normalizeWorkerReportedAtMs2 } = await Promise.resolve().then(() => (init_worker_report(), worker_report_exports));
+        if (!Number.isSafeInteger(raw.generation) || raw.generation < 0 || !Array.isArray(raw.fields) || raw.fields.length > 16 || raw.fields.some((v) => typeof v !== "string") || JSON.stringify(safeRefusalFields2(raw.fields)) !== JSON.stringify(raw.fields) || !(raw.summaryLength === null || Number.isSafeInteger(raw.summaryLength) && raw.summaryLength >= 0) || raw.deliveryId !== void 0 && normalizeWorkerDeliveryId(raw.deliveryId) !== raw.deliveryId || raw.reportedAtMs !== void 0 && (!Number.isSafeInteger(raw.reportedAtMs) || typeof normalizeWorkerReportedAtMs2(raw.reportedAtMs, Date.now()) !== "number")) {
+          return { success: false, error: "invalid_refusal_envelope" };
+        }
+        const { resolveForwardedWorkerIdentity: resolveForwardedWorkerIdentity2 } = await Promise.resolve().then(() => (init_worker_report_forwarded(), worker_report_forwarded_exports));
+        const resolved = resolveForwardedWorkerIdentity2(decoded.claim, {
+          senderDaemonId: readMeshSender(args),
+          nodeDaemonId: await ownerRosterNodeDaemonLookup(_ctx, decoded.claim.meshId)
+        }, Date.now(), selfDaemonPredicate(_ctx));
+        if ("refused" in resolved) return { success: false, error: "unauthenticated", detail: resolved.refused };
+        const receipt = recordRefusedWorkerReportForIdentity2(
+          "live" in resolved ? resolved.live : resolved.late,
+          { fields: raw.fields, summaryLength: raw.summaryLength },
+          { generation: raw.generation, deliveryId: raw.deliveryId, reportedAtMs: raw.reportedAtMs }
+        );
+        return receipt ? { success: false, error: "invalid_report", receipt } : { success: false, error: "stale_report" };
       },
       /**
        * F7, OWNER side: a report a remote worker daemon relayed here (it has no
@@ -128608,7 +128726,7 @@ ${marker}`,
             senderDaemonId,
             nodeDaemonId: await ownerRosterNodeDaemonLookup(_ctx, claim.meshId)
           };
-          const result = acceptForwardedWorkerCompletionReport2(claim, report, { sender, isSelfDaemon: selfDaemonPredicate(_ctx) });
+          const result = acceptForwardedWorkerCompletionReport2(claim, report, { sender, isSelfDaemon: selfDaemonPredicate(_ctx), reportedAtMs: decoded.reportedAtMs });
           if (result.accepted) {
             LOG.info("WorkerReport", `Forwarded ${report.outcome} report for ${claimLabel} \u2192 accepted as task ${result.taskId} attempt ${result.attemptId ?? "?"}${result.late ? ` (late, after ${result.late.terminalOutcome})` : ""}${result.duplicate ? " (duplicate)" : ""}`);
           } else {
@@ -128686,6 +128804,7 @@ ${marker}`,
       // note (never a dashboard, the API, or a local worker MCP over IPC).
       // The router additionally requires the sender on the claimed mesh's roster;
       // the handler then requires it to own the node the task was assigned to.
+      [WORKER_REFUSAL_FORWARD_COMMAND]: { sources: ["mesh"], meshSender: "roster" },
       [WORKER_REPORT_FORWARD_COMMAND]: { sources: ["mesh"], meshSender: "roster" },
       [WORKER_PROGRESS_FORWARD_COMMAND]: { sources: ["mesh"], meshSender: "roster" }
     }, { meshSender: "authenticated_peer" });
@@ -162122,7 +162241,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       }
       return counters4;
     }
-    var REPORT_GATE_RULES = /* @__PURE__ */ new Set(["R9r", "R15p", "R12r", "R13r", "R13u", "R13x", "R17g", "R9t", "R13t"]);
+    var REPORT_GATE_RULES = /* @__PURE__ */ new Set(["R9r", "R15p", "R12r", "R13r", "R13u", "R13x", "R13z", "R13c", "R17c", "R17g", "R9t", "R13t"]);
     var DEFAULT_LOG = { info: () => {
     }, warn: () => {
     }, error: () => {
@@ -162215,6 +162334,9 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         else if (rule === "R9r") log.info(`turn-ledger: idle end of ${who} awaits the worker report (await_report hold ${Math.round(policy.awaitReportMs / 1e3)}s)`);
         else if (rule === "R15p") log.info(`turn-ledger: transcript of ${who} reads finished but the worker has not ended its turn \u2014 awaiting the worker report (await_report hold ${Math.round(policy.awaitReportMs / 1e3)}s)`);
         else if (rule === "R12r") log.info(`turn-ledger: false idle: worker resumed \u2014 ${who} back to generating (falseIdleCount=${attempt.data.falseIdleCount ?? 0})`);
+        else if (rule === "R17c") log.info(`turn-ledger: invalid report for ${who} has a fixed correction deadline ${attempt.data.reportCorrection?.until ?? "?"}`);
+        else if (rule === "R13c") log.info(`turn-ledger: correction deadline of ${who} expired \u2014 failed, no report recovery accepted`);
+        else if (rule === "R13z") log.info(`turn-ledger: probe deadline of ${who} expired without a fresh observation \u2014 failed inconclusive, not completed`);
         else if (rule === "R13u") log.info(`turn-ledger: weak/await_report window of ${who} expired with liveness ${attempt.lastLiveness ?? "?"} \u2014 re-probing instead of committing (deferral ${attempt.data.unconfirmedEndDeferral?.count ?? 0})`);
         else if (rule === "R13x") log.info(`turn-ledger: weak/await_report window of ${who} expired and liveness stayed ${attempt.lastLiveness ?? "?"} \u2014 failed (weak_end_liveness_unconfirmed), not completed`);
         else log.info(`turn-ledger: no worker report within ${Math.round(policy.awaitReportMs / 1e3)}s \u2014 ${who} committed weak`);
@@ -162741,22 +162863,31 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           log.warn(`turn-scheduler: locate ${attempt.attemptId} failed: ${describe2(error)}`);
           location = { kind: "unknown" };
         }
+        const probeStartedAtMs = now();
         let read;
+        let deadline;
         try {
-          read = await probe.reader.read(attempt, location, target.holds);
+          read = await Promise.race([
+            probe.reader.read(attempt, location, target.holds),
+            new Promise((resolve39) => {
+              deadline = setTimeout(() => resolve39({ presence: "unknown" }), endProbeGraceMs(policy));
+            })
+          ]);
         } catch (error) {
           log.warn(`turn-scheduler: probe read ${attempt.attemptId} failed: ${describe2(error)}`);
           read = { presence: "present", transcript: null };
+        } finally {
+          if (deadline) clearTimeout(deadline);
         }
         const at = now();
         const current4 = store2.getAttempt(attempt.attemptId);
-        if (!current4 || current4.terminal) return;
+        if (!current4 || current4.terminal || current4.generation !== attempt.generation || !sessionIdsEquivalent(current4.sessionId, attempt.sessionId)) return;
         try {
           sessionHealth.observe(current4, read, at, policy.stallNoticeMs);
         } catch (error) {
           log.warn(`turn-scheduler: session health notice failed: ${describe2(error)}`);
         }
-        let evidence = probeEvidence(current4, read, { nowMs: at, observedBy: selfDaemonId, policy });
+        let evidence = probeEvidence(current4, read, { nowMs: at, observedBy: selfDaemonId, policy, probeStartedAtMs });
         const t = read.transcript;
         if (t && t.finalSummary && probe.handoff && current4.meshId && evidence.some((e) => e.kind === "transcript_final")) {
           const key2 = `${current4.attemptId}:g${current4.generation}:${t.finalAssistantAt ?? "marker"}`;
@@ -162772,7 +162903,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
               log.warn(`turn-scheduler: handoff append for ${current4.attemptId} failed: ${describe2(error)} \u2014 transcript_final carries no summary ref`);
             }
           }
-          if (summary) evidence = probeEvidence(current4, read, { nowMs: at, observedBy: selfDaemonId, policy, summary });
+          if (summary) evidence = probeEvidence(current4, read, { nowMs: at, observedBy: selfDaemonId, policy, probeStartedAtMs, summary });
         }
         observeAll(evidence);
         try {
@@ -168337,7 +168468,8 @@ var HOLD_REASONS = [
   // — a turn_end commits the report (R9t), expiry commits it anyway (R13t) so
   // a session whose FSM never shows the idle edge again does not wait for
   // liveness / hard_ceiling.
-  "await_end"
+  "await_end",
+  "report_correction"
 ];
 var TURN_OUTCOMES = ["completed", "failed", "cancelled"];
 var COMMIT_STRENGTHS = ["genuine", "weak", "tool_report", "operator"];
@@ -168349,6 +168481,8 @@ var TURN_REASONS = [
   "worker_reported",
   "finalization_timeout_no_response",
   "weak_end_liveness_unconfirmed",
+  "weak_end_probe_unobserved",
+  "report_correction_expired",
   "session_error",
   "provider_auth_failed",
   "provider_billing_failed",
@@ -168456,7 +168590,7 @@ var TURN_EVIDENCE_FIELD_SPECS = {
   },
   transcript_activity: { newestActivityAt: ms },
   no_progress: { stalledMs: ms, observedStatus: en(NO_PROGRESS_OBSERVED_STATUSES), finalAssistantPresent: bool2 },
-  liveness: { result: en(LIVENESS_RESULTS) },
+  liveness: { result: en(LIVENESS_RESULTS), probeStartedAtMs: msOpt },
   process_exit: { exitCode: { t: "int", nullable: true }, providerFailure: enOpt(PROVIDER_FAILURES) },
   session_error: { reason: en(SESSION_ERROR_REASONS) },
   worker_report: {
@@ -168466,6 +168600,7 @@ var TURN_EVIDENCE_FIELD_SPECS = {
     branchState: enOpt(WORKER_BRANCH_STATES),
     touchedFileCount: intOpt
   },
+  worker_report_correction_requested: { deliveryId: { t: "id", optional: true } },
   worker_progress: { note: { t: "summary_ref", optional: true } },
   git_side_effect: { dirty: bool2, commitsSinceDispatch: { t: "int" }, attributable: bool2 },
   cancel: { reason: en(CANCEL_REASONS) },
@@ -180338,7 +180473,7 @@ async function refuseOverLimitReport(transport, credentials, report, length) {
   const lines = [
     "report_completion rejected \u2014 fix these and call again:",
     `  - summary: summary is ${length} chars, over the ${WORKER_REPORT_SUMMARY_MAX_CHARS} limit \u2014 shorten it rather than relying on truncation`,
-    "Nothing was recorded or queued for delivery. Shorten the summary (put long detail in handoff_notes or your final message) and call report_completion again."
+    "Not queued; owner recording unconfirmed. Shorten the summary (put long detail in handoff_notes or your final message) and call report_completion again."
   ];
   return { text: lines.join("\n"), isError: true };
 }
@@ -180388,7 +180523,7 @@ function renderReportResult(result, ignoredHandoffKeys = []) {
     const details = result.validationErrors.map((e) => `  - ${e.field || "(root)"}: ${e.message}`).join("\n");
     const receipt = result.receipt && typeof result.receipt === "object" ? result.receipt : null;
     const receiptLine = receipt && typeof receipt.taskId === "string" && typeof receipt.attemptId === "string" ? `
-This refusal was ${receipt.recorded === false ? "attributed (but its audit row could not be written)" : "recorded"} against task ${receipt.taskId} (attempt ${receipt.attemptId}${typeof receipt.generation === "number" ? `, generation ${receipt.generation}` : ""}). Nothing was committed by this call \u2014 correct the field(s) and call report_completion again; the corrected report is filed against this same attempt.` : "";
+This refusal was ${receipt.recorded === false ? "attributed (but its audit row could not be written)" : "recorded"} against task ${receipt.taskId} (attempt ${receipt.attemptId}${typeof receipt.generation === "number" ? `, generation ${receipt.generation}` : ""}). ${typeof receipt.deliveryId === "string" ? `Delivery ${receipt.deliveryId}. ` : ""}Nothing was committed by this call. ` + (typeof receipt.correctionUntilMs === "number" ? `Correct the field(s) and call report_completion again before ${new Date(receipt.correctionUntilMs).toISOString()}; a valid correction is filed against this same attempt. After expiry it is refused as too late.` : "No open correction window was confirmed; the owner will revalidate a corrected call.") : "";
     return {
       text: `report_completion rejected \u2014 fix these and call again:
 ${details}${receiptLine}`,

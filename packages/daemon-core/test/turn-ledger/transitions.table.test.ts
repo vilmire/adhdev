@@ -22,7 +22,7 @@ const PRE_TURN_ILLEGAL: TurnEvidenceKind[] = ['dispatch_accepted', 'turn_end', '
 const IN_TURN_ILLEGAL: TurnEvidenceKind[] = [...DISPATCH_ONLY, 'suspension_resolved'];
 const TERMINAL_ILLEGAL: TurnEvidenceKind[] = [
     'dispatch_accepted', 'delivered', 'delivery_refused', 'dispatch_failed', 'duplicate_dispatch_refusal', 'session_rebound',
-    'turn_started', 'suspension', 'suspension_resolved', 'worker_progress', 'transcript_activity', 'liveness', 'git_side_effect',
+    'turn_started', 'suspension', 'suspension_resolved', 'worker_progress', 'worker_report_correction_requested', 'transcript_activity', 'liveness', 'git_side_effect',
 ];
 
 /** Explicitly enumerated illegal (state, kind) pairs in the current lane. */
@@ -92,10 +92,13 @@ const FIRES: Record<string, Fixture> = {
     R9d: { attempt: makeAttempt('finalizing'), holds: [makeHold('await_report')], evidence: ev('turn_end', { strength: 'genuine', reportExpected: true }), state: 'finalizing', effects: ['record'] },
     R11d: { attempt: makeAttempt('finalizing'), holds: [makeHold('await_report')], evidence: ev('transcript_final', { selfAttributing: false, nativeRead: true, nativeMarker: { outcome: 'completed' }, live: LIVE_IDLE }), state: 'finalizing', effects: ['record'] },
     R12r: { attempt: makeAttempt('finalizing'), holds: [makeHold('await_report')], evidence: ev('turn_started', { retro: false }), state: 'generating', effects: ['release_hold', 'hold', 'bus', 'record'] },
-    R13r: { attempt: makeAttempt('finalizing'), holds: [makeHold('await_report')], evidence: expired('await_report'), state: 'completed', effects: ['commit', 'notify_coordinator'] },
-    R13a: { attempt: makeAttempt('finalizing'), holds: [makeHold('weak_candidate')], evidence: expired('weak_candidate'), state: 'completed', effects: ['commit'] },
+    R13r: { attempt: makeAttempt('finalizing', { lastLiveness: 'alive', data: { livenessObservation: { generation: 1, at: NOW, probeStartedAt: NOW } } }), holds: [makeHold('await_report')], evidence: expired('await_report'), state: 'completed', effects: ['commit', 'notify_coordinator'] },
+    R13a: { attempt: makeAttempt('finalizing', { lastLiveness: 'alive', data: { livenessObservation: { generation: 1, at: NOW, probeStartedAt: NOW } } }), holds: [makeHold('weak_candidate')], evidence: expired('weak_candidate'), state: 'completed', effects: ['commit'] },
     R13u: { attempt: makeAttempt('finalizing', { lastLiveness: 'unknown' }), holds: [makeHold('await_report')], evidence: expired('await_report'), state: 'finalizing', effects: ['hold', 'probe'] },
-    R13x: { attempt: makeAttempt('finalizing', { lastLiveness: 'unknown', data: { unconfirmedEndDeferral: { generation: 1, count: 1 } } }), holds: [makeHold('weak_candidate')], evidence: expired('weak_candidate'), state: 'failed', effects: ['commit', 'notify_coordinator'] },
+    R13x: { attempt: makeAttempt('finalizing', { lastLiveness: 'unknown', data: { unconfirmedEndDeferral: { generation: 1, count: 1, requestedAt: NOW }, livenessObservation: { generation: 1, at: NOW, probeStartedAt: NOW } } }), holds: [makeHold('weak_candidate')], evidence: expired('weak_candidate'), state: 'failed', effects: ['commit', 'notify_coordinator'] },
+    R17c: { attempt: G(), evidence: ev('worker_report_correction_requested', { deliveryId: 'wr_review' }), state: 'generating', effects: ['hold'] },
+    R13c: { attempt: makeAttempt('finalizing', { data: { reportCorrection: { generation: 1, until: NOW } } }), holds: [makeHold('report_correction')], evidence: expired('report_correction'), state: 'failed', effects: ['commit'] },
+    R13z: { attempt: makeAttempt('finalizing', { data: { unconfirmedEndDeferral: { generation: 1, count: 1, requestedAt: NOW } } }), holds: [makeHold('weak_candidate')], evidence: expired('weak_candidate'), state: 'failed', effects: ['commit'] },
     R13b: { attempt: G(), evidence: ev('turn_end', { strength: 'weak', afterFinalizationTimeout: true }), state: 'failed', effects: ['commit'] },
     R14: { attempt: G(), evidence: ev('transcript_final', { selfAttributing: false, nativeRead: true, nativeMarker: { outcome: 'completed' }, live: LIVE_IDLE }), state: 'completed', effects: ['commit'] },
     R15: { attempt: G(), evidence: ev('transcript_final', { selfAttributing: false, nativeRead: false, live: LIVE_IDLE, summary: REF }), state: 'finalizing', effects: ['hold', 'notify_coordinator'] },
@@ -204,12 +207,12 @@ describe('rule matching is unambiguous', () => {
             }
         }
         expect(ambiguous).toEqual([]);
-        // 63 evidence variants (all 23 kinds; +6 report-gate variants 2026-09-24, +1 await_end expiry 2026-09-25,
+        // 65 evidence variants (all 24 kinds; +correction request/expiry, +6 report-gate variants 2026-09-24, +1 await_end expiry 2026-09-25,
         // +3 auth-failed turn_end variants 2026-10-06 — R9f, +2 owner-scraped transcript_final 2026-10-08 — R15p)
         // × (1 no-attempt + 52 attempt variants (+6 reported, 2026-09-25; +18 liveness-gated, 2026-10-13) × 2 lanes).
         const variantCount = TURN_EVIDENCE_KINDS.reduce((n, kind) => n + variantsFor(kind).length, 0);
-        expect(variantCount).toBe(63);
-        expect(visited).toBe(63 * (1 + 52 * 2));
+        expect(variantCount).toBe(65);
+        expect(visited).toBe(65 * (1 + 52 * 2));
     });
 });
 

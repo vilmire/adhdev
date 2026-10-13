@@ -164,6 +164,8 @@ export interface TurnProbeRead {
     presence: 'present' | 'absent' | 'unknown';
     /** Provider-observed status, when a status source answered. */
     status?: string;
+    /** Presence sample time when a cached member push supplied the read. */
+    observedAtMs?: number;
     /** undefined = not read (not needed); null = a read was attempted and failed. */
     transcript?: TranscriptObservation | null;
 }
@@ -171,6 +173,7 @@ export interface TurnProbeRead {
 // ─── the pure mapping: read → evidence ────────────────────────────────────
 
 interface ProbeEvidenceContext {
+    probeStartedAtMs?: number;
     nowMs: number;
     observedBy: string;
     policy: TurnPolicy;
@@ -189,7 +192,7 @@ export function turnStartBoundary(attempt: TurnAttempt): number {
  * Map one read to the evidence the reducer should see. PURE.
  *
  *   absent                          → liveness{dead}          (R31 reclaim)
- *   unknown presence                → liveness{unknown}       (R32u grace hold; once per streak)
+ *   unknown presence                → liveness{unknown}       (R32u; a fresh observation on every read)
  *   present, transcript read failed → liveness{read_failed}   (R31a / R31 on the 3rd)
  *   accepted/delivered + post-delivery agent bubble → turn_started{retro} (R4)
  *   busy status                     → liveness{alive} (+ transcript_activity when newer)
@@ -210,12 +213,11 @@ export function probeEvidence(attempt: TurnAttempt, read: TurnProbeRead, ctx: Pr
         observedBy: ctx.observedBy,
     };
     const eventId = (kind: string): string => `probe:${attempt.attemptId}:g${attempt.generation}:${kind}:${ctx.nowMs}`;
-    const liveness = (result: LivenessResult): TurnEvidence => ({ ...base, eventId: eventId(`liveness_${result}`), kind: 'liveness', result });
+    const liveness = (result: LivenessResult): TurnEvidence => ({ ...base, eventId: eventId(`liveness_${result}`), kind: 'liveness', result, at: read.observedAtMs ?? ctx.nowMs, ...(ctx.probeStartedAtMs !== undefined ? { probeStartedAtMs: ctx.probeStartedAtMs } : {}) });
 
     if (read.presence === 'absent') return [liveness('dead')];
-    // A peer that stays unreachable would otherwise re-record `unknown` on
-    // every probe; the first one already armed the grace hold (R32u).
-    if (read.presence === 'unknown') return attempt.lastLiveness === 'unknown' ? [] : [liveness('unknown')];
+    // Every read records its observation time, including repeated unknown results.
+    if (read.presence === 'unknown') return [liveness('unknown')];
     if (read.transcript === null) return [liveness('read_failed')];
 
     const t = read.transcript;
@@ -261,7 +263,7 @@ export function probeEvidence(attempt: TurnAttempt, read: TurnProbeRead, ctx: Pr
                 },
                 ...(finalThisTurn ? { messageAt: t.finalAssistantAt! } : {}),
                 ...(ctx.summary ? { summary: ctx.summary } : {}),
-            }];
+            }, liveness('alive')];
         }
         const quietSince = Math.max(attempt.lastActivityAt ?? 0, boundary, t.newestActivityAt ?? 0);
         const stalledMs = Math.max(0, ctx.nowMs - quietSince);
@@ -273,7 +275,7 @@ export function probeEvidence(attempt: TurnAttempt, read: TurnProbeRead, ctx: Pr
                 stalledMs,
                 observedStatus: 'idle',
                 finalAssistantPresent: false,
-            }];
+            }, liveness('alive')];
         }
     }
     return [liveness('alive')];
@@ -427,7 +429,7 @@ export function createComponentsProbeReader(components: ProbeComponents, options
                 : { presence: 'unknown' };
         }
         const status = str(row.status).toLowerCase() || undefined;
-        if (!wantsTranscript(attempt, holds, status)) return { presence: 'present', ...(status ? { status } : {}) };
+        if (!wantsTranscript(attempt, holds, status)) return { presence: 'present', observedAtMs: held.observedAt, ...(status ? { status } : {}) };
         const replica = readTranscriptForDaemonConsumer({
             consumerId: 'daemon_terminal_evidence',
             ownerDaemonId: daemonId,
@@ -436,7 +438,7 @@ export function createComponentsProbeReader(components: ProbeComponents, options
             store: components.transcriptReplicaStore,
         });
         if (replica.view) {
-            return { presence: 'present', ...(status ? { status } : {}), transcript: analyze(replicaPayload(replica.view), attempt) };
+            return { presence: 'present', observedAtMs: held.observedAt, ...(status ? { status } : {}), transcript: analyze(replicaPayload(replica.view), attempt) };
         }
         try {
             const result = await dispatch(daemonId, 'read_chat', readArgsFor(attempt, workspace));

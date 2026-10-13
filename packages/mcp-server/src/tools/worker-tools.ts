@@ -373,7 +373,7 @@ async function refuseOverLimitReport(
   const lines = [
     'report_completion rejected — fix these and call again:',
     `  - summary: summary is ${length} chars, over the ${WORKER_REPORT_SUMMARY_MAX_CHARS} limit — shorten it rather than relying on truncation`,
-    'Nothing was recorded or queued for delivery. Shorten the summary (put long detail in handoff_notes or your final message) and call report_completion again.',
+    'Not queued; owner recording unconfirmed. Shorten the summary (put long detail in handoff_notes or your final message) and call report_completion again.',
   ];
   return { text: lines.join('\n'), isError: true };
 }
@@ -461,7 +461,11 @@ export function renderReportResult(result: any, ignoredHandoffKeys: string[] = [
     const receiptLine = receipt && typeof receipt.taskId === 'string' && typeof receipt.attemptId === 'string'
       ? `\nThis refusal was ${receipt.recorded === false ? 'attributed (but its audit row could not be written)' : 'recorded'} against task ${receipt.taskId} `
         + `(attempt ${receipt.attemptId}${typeof receipt.generation === 'number' ? `, generation ${receipt.generation}` : ''}). `
-        + 'Nothing was committed by this call — correct the field(s) and call report_completion again; the corrected report is filed against this same attempt.'
+        + `${typeof receipt.deliveryId === 'string' ? `Delivery ${receipt.deliveryId}. ` : ''}`
+        + 'Nothing was committed by this call. '
+        + (typeof receipt.correctionUntilMs === 'number'
+          ? `Correct the field(s) and call report_completion again before ${new Date(receipt.correctionUntilMs).toISOString()}; a valid correction is filed against this same attempt. After expiry it is refused as too late.`
+          : 'No open correction window was confirmed; the owner will revalidate a corrected call.')
       : '';
     return {
       text: `report_completion rejected — fix these and call again:\n${details}${receiptLine}`,

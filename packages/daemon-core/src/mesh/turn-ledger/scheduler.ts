@@ -36,11 +36,11 @@
 // ---------------------------------------------------------------------------
 
 import type { SummaryRef, TurnEvidence } from '@adhdev/mesh-shared';
-import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
+import { daemonIdsEquivalent, sessionIdsEquivalent } from '@adhdev/mesh-shared';
 import type { SessionLifecycleBus, Unsubscribe } from '../../sessions/lifecycle-bus.js';
 import type { ObserveResult, TurnLedger, TurnLedgerLog } from './ledger.js';
-import { DEFAULT_TURN_POLICY, type TurnPolicy } from './policy.js';
-import { probeEvidence, type ProbeLocation, type TranscriptObservation, type TurnProbeReader } from './probe.js';
+import { DEFAULT_TURN_POLICY, endProbeGraceMs, type TurnPolicy } from './policy.js';
+import { probeEvidence, type ProbeLocation, type TranscriptObservation, type TurnProbeRead, type TurnProbeReader } from './probe.js';
 import type { TurnStore } from './store.js';
 import { selectProbeTargets, type ProbeTarget } from './targets.js';
 import type { TurnAttempt } from './types.js';
@@ -187,22 +187,34 @@ export function createTurnScheduler(deps: TurnSchedulerDeps): TurnScheduler & { 
             log.warn(`turn-scheduler: locate ${attempt.attemptId} failed: ${describe(error)}`);
             location = { kind: 'unknown' };
         }
+        const probeStartedAtMs = now();
         let read;
+        let deadline: ReturnType<typeof setTimeout> | undefined;
         try {
-            read = await probe.reader.read(attempt, location, target.holds);
+            // A hung reader must not stall the single-flight scheduler forever.
+            // Timing out observes an inconclusive read; it never proves death.
+            read = await Promise.race([
+                probe.reader.read(attempt, location, target.holds),
+                new Promise<TurnProbeRead>((resolve) => {
+                    deadline = setTimeout(() => resolve({ presence: 'unknown' }), endProbeGraceMs(policy));
+                }),
+            ]);
         } catch (error) {
             log.warn(`turn-scheduler: probe read ${attempt.attemptId} failed: ${describe(error)}`);
             read = { presence: 'present' as const, transcript: null };
+        } finally {
+            if (deadline) clearTimeout(deadline);
         }
         const at = now();
         // The attempt may have moved while the read was in flight (a provider
-        // turn_end landed): map against the CURRENT row so the evidence carries
-        // the current generation and the stale-generation lane stays honest.
+        // turn_end landed). A read begun for a cut generation/session cannot be
+        // re-labelled as fresh evidence for its replacement.
         const current = store.getAttempt(attempt.attemptId);
-        if (!current || current.terminal) return;
+        if (!current || current.terminal || current.generation !== attempt.generation
+            || !sessionIdsEquivalent(current.sessionId, attempt.sessionId)) return;
         try { sessionHealth.observe(current, read, at, policy.stallNoticeMs); }
         catch (error) { log.warn(`turn-scheduler: session health notice failed: ${describe(error)}`); }
-        let evidence = probeEvidence(current, read, { nowMs: at, observedBy: selfDaemonId, policy });
+        let evidence = probeEvidence(current, read, { nowMs: at, observedBy: selfDaemonId, policy, probeStartedAtMs });
         const t = read.transcript;
         if (t && t.finalSummary && probe.handoff && current.meshId && evidence.some((e) => e.kind === 'transcript_final')) {
             // One handoff entry per (attempt, generation, final bubble): a weak
@@ -220,7 +232,7 @@ export function createTurnScheduler(deps: TurnSchedulerDeps): TurnScheduler & { 
                     log.warn(`turn-scheduler: handoff append for ${current.attemptId} failed: ${describe(error)} — transcript_final carries no summary ref`);
                 }
             }
-            if (summary) evidence = probeEvidence(current, read, { nowMs: at, observedBy: selfDaemonId, policy, summary });
+            if (summary) evidence = probeEvidence(current, read, { nowMs: at, observedBy: selfDaemonId, policy, probeStartedAtMs, summary });
         }
         observeAll(evidence);
         try {

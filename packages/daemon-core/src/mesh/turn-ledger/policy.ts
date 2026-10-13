@@ -95,9 +95,14 @@ export const DEFAULT_MAX_TASK_RETRIES = 1;       // mesh policy maxTaskRetries d
 /**
  * R13u: how many times a weak_candidate / await_report expiry that finds the last
  * liveness verdict unconfirmed re-probes and re-arms (for `unknownLivenessGraceMs`)
- * before R13x fails the attempt. One re-probe absorbs a single transient `unknown`.
+ * before R13x fails the attempt. One re-probe absorbs a transient `unknown`; a missing observation has a separate timeout.
  */
 export const MAX_UNCONFIRMED_END_DEFERRALS = 1;
+
+/** Allow a full remote read budget, independently of a short scheduler tick. */
+export function endProbeGraceMs(p: TurnPolicy): number { return Math.max(unknownLivenessGraceMs(p), p.awaitEndMs); }
+/** One fixed correction window per generation; invalid retries do not renew it. */
+export function reportCorrectionMs(p: TurnPolicy): number { return Math.max(p.awaitReportMs, endProbeGraceMs(p)); }
 
 // ─── derived values (never stored) ───────────────────────────────────────
 

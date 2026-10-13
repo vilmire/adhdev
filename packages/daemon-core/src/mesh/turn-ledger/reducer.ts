@@ -40,6 +40,8 @@ import {
     LIVENESS_FAIL_STREAK_LIMIT,
     MAX_REDRIVES_PER_GENERATION,
     MAX_UNCONFIRMED_END_DEFERRALS,
+    endProbeGraceMs,
+    reportCorrectionMs,
     RECLAIM_BUDGET,
     awaitDeliveryMs,
     consumeGraceFor,
@@ -252,21 +254,30 @@ function awaitReportHeld(ctx: GuardCtx): boolean {
     return !!attempt && ctx.holds.some((h) => h.reason === 'await_report' && h.attemptId === attempt.attemptId);
 }
 
-/**
- * The most recent liveness verdict leaves the worker's survival in doubt. Only a
- * probe sets `lastLiveness` (R32 alive, R32u unknown, R31a read_failed; a dead
- * verdict reclaims at once), so `null` = never probed, which keeps the old
- * timer behaviour; `alive` confirms it.
- */
-function livenessUnconfirmed(ctx: GuardCtx): boolean {
-    const last = ctx.attempt?.lastLiveness;
-    return last === 'unknown' || last === 'read_failed' || last === 'dead';
+/** A timer may use only a recent observation from a probe begun after its hold/request. */
+function freshEndProbe(ctx: GuardCtx): boolean {
+    const a = ctx.attempt;
+    const o = a?.data.livenessObservation;
+    const request = a?.data.unconfirmedEndDeferral;
+    const boundary = request?.generation === a?.generation && request?.requestedAt !== undefined
+        ? request.requestedAt : expiredHold(ctx)?.createdAt;
+    return !!a && !!o && o.generation === a.generation && boundary !== undefined
+        && o.probeStartedAt >= boundary && o.at >= boundary && o.at <= ctx.nowMs
+        && ctx.nowMs - o.at <= endProbeGraceMs(ctx.policy);
 }
+function correctionPending(ctx: GuardCtx): boolean {
+    const r = ctx.attempt?.data.reportCorrection;
+    return r?.generation === ctx.attempt?.generation && !reportedThisGeneration(ctx);
+}
+function endTimer(ctx: GuardCtx): boolean {
+    return holdIs(ctx, 'weak_candidate', 'await_report') && !correctionPending(ctx);
+}
+function freshAlive(ctx: GuardCtx): boolean { return freshEndProbe(ctx) && ctx.attempt?.lastLiveness === 'alive'; }
 
 /** How many times R13u already deferred a weak/await_report expiry in this generation. */
 function unconfirmedEndDeferrals(ctx: GuardCtx): number {
     const d = ctx.attempt?.data.unconfirmedEndDeferral;
-    return d && d.generation === ctx.attempt!.generation ? d.count : 0;
+    return d && d.generation === ctx.attempt!.generation && d.requestedAt !== undefined ? d.count : 0;
 }
 
 const GUARDS: Record<Exclude<GuardId, 'otherwise'>, (ctx: GuardCtx) => boolean> = {
@@ -341,13 +352,15 @@ const GUARDS: Record<Exclude<GuardId, 'otherwise'>, (ctx: GuardCtx) => boolean> 
     hold_liveness: (ctx) => holdIs(ctx, 'liveness'),
     hold_hard_ceiling: (ctx) => holdIs(ctx, 'hard_ceiling'),
     hold_suspension_before_consumed: (ctx) => holdIs(ctx, 'suspension_before_consumed'),
-    hold_weak_candidate: (ctx) => holdIs(ctx, 'weak_candidate') && !livenessUnconfirmed(ctx),
+    hold_weak_candidate: (ctx) => holdIs(ctx, 'weak_candidate') && !correctionPending(ctx) && freshAlive(ctx),
     hold_admission: (ctx) => holdIs(ctx, 'live_pending', 'transcript_quiet'),
-    hold_await_report: (ctx) => holdIs(ctx, 'await_report') && !livenessUnconfirmed(ctx),
-    hold_end_unconfirmed_defer: (ctx) => holdIs(ctx, 'weak_candidate', 'await_report') && livenessUnconfirmed(ctx)
+    hold_await_report: (ctx) => holdIs(ctx, 'await_report') && !correctionPending(ctx) && freshAlive(ctx),
+    hold_end_unconfirmed_defer: (ctx) => endTimer(ctx) && !freshAlive(ctx)
         && unconfirmedEndDeferrals(ctx) < MAX_UNCONFIRMED_END_DEFERRALS,
-    hold_end_unconfirmed_exhausted: (ctx) => holdIs(ctx, 'weak_candidate', 'await_report') && livenessUnconfirmed(ctx)
-        && unconfirmedEndDeferrals(ctx) >= MAX_UNCONFIRMED_END_DEFERRALS,
+    hold_end_unconfirmed_exhausted: (ctx) => endTimer(ctx) && !freshAlive(ctx)
+        && unconfirmedEndDeferrals(ctx) >= MAX_UNCONFIRMED_END_DEFERRALS && freshEndProbe(ctx),
+    hold_end_probe_missing: (ctx) => endTimer(ctx) && !freshEndProbe(ctx) && unconfirmedEndDeferrals(ctx) >= MAX_UNCONFIRMED_END_DEFERRALS,
+    hold_report_correction: (ctx) => holdIs(ctx, 'report_correction') && !reportedThisGeneration(ctx),
     hold_await_end: (ctx) => holdIs(ctx, 'await_end') && reportedThisGeneration(ctx),
 };
 
@@ -733,12 +746,14 @@ const ACTIONS: Record<ActionId, (draft: Draft) => void> = {
     },
     weak_candidate: (draft) => {
         const attempt = draft.attempt!;
+        attempt.data.unconfirmedEndDeferral = undefined;
         attempt.weakSince = draft.ctx.evidence.at;
     },
     clear_weak: (draft) => {
         draft.attempt!.weakSince = null;
     },
     await_report: (draft) => {
+        draft.attempt!.data.unconfirmedEndDeferral = undefined;
         draft.attempt!.weakSince = draft.ctx.evidence.at;
     },
     false_idle: (draft) => {
@@ -746,22 +761,29 @@ const ACTIONS: Record<ActionId, (draft: Draft) => void> = {
         attempt.weakSince = null;
         attempt.lastActivityAt = Math.max(attempt.lastActivityAt ?? 0, activityAt(draft.ctx.evidence));
         attempt.livenessFailStreak = 0;
-        attempt.data = { ...attempt.data, falseIdleCount: (attempt.data.falseIdleCount ?? 0) + 1 };
+        attempt.data = { ...attempt.data, unconfirmedEndDeferral: undefined, falseIdleCount: (attempt.data.falseIdleCount ?? 0) + 1 };
     },
     activity: (draft) => {
         const attempt = draft.attempt!;
         const ev = draft.ctx.evidence;
         attempt.lastActivityAt = Math.max(attempt.lastActivityAt ?? 0, activityAt(ev));
         attempt.livenessFailStreak = 0;
-        if (ev.kind === 'liveness') attempt.lastLiveness = ev.result;
+        if (ev.kind === 'liveness') {
+            attempt.lastLiveness = ev.result;
+            attempt.data.livenessObservation = { generation: attempt.generation, at: ev.at, probeStartedAt: ev.probeStartedAtMs ?? ev.at };
+        }
     },
     liveness_unknown: (draft) => {
         draft.attempt!.lastLiveness = 'unknown';
+        const ev = draft.ctx.evidence as TurnEvidenceOf<'liveness'>;
+        draft.attempt!.data.livenessObservation = { generation: draft.attempt!.generation, at: ev.at, probeStartedAt: ev.probeStartedAtMs ?? ev.at };
     },
     liveness_failure: (draft) => {
         const attempt = draft.attempt!;
         attempt.livenessFailStreak += 1;
-        attempt.lastLiveness = (draft.ctx.evidence as TurnEvidenceOf<'liveness'>).result;
+        const ev = draft.ctx.evidence as TurnEvidenceOf<'liveness'>;
+        attempt.lastLiveness = ev.result;
+        attempt.data.livenessObservation = { generation: attempt.generation, at: ev.at, probeStartedAt: ev.probeStartedAtMs ?? ev.at };
     },
     defer_unconfirmed_end: (draft) => {
         // R13u: the timer ran out while the last probe could not confirm the worker.
@@ -771,9 +793,16 @@ const ACTIONS: Record<ActionId, (draft: Draft) => void> = {
         const hold = expiredHold(draft.ctx);
         if (!hold) return;
         const prior = attempt.data.unconfirmedEndDeferral;
-        const count = prior && prior.generation === attempt.generation ? prior.count : 0;
-        attempt.data = { ...attempt.data, unconfirmedEndDeferral: { generation: attempt.generation, count: count + 1 } };
-        addHold(draft, { ...hold, until: draft.ctx.nowMs + unknownLivenessGraceMs(draft.ctx.policy), createdAt: draft.ctx.nowMs });
+        const count = prior && prior.generation === attempt.generation && prior.requestedAt !== undefined ? prior.count : 0;
+        attempt.data = { ...attempt.data, unconfirmedEndDeferral: { generation: attempt.generation, count: count + 1, requestedAt: draft.ctx.nowMs } };
+        addHold(draft, { ...hold, until: draft.ctx.nowMs + endProbeGraceMs(draft.ctx.policy), createdAt: draft.ctx.nowMs });
+    },
+    open_report_correction: (draft) => {
+        const a = draft.attempt!;
+        if (a.data.reportCorrection?.generation === a.generation || reportedThisGeneration(draft.ctx)) return;
+        const until = draft.ctx.nowMs + reportCorrectionMs(draft.ctx.policy);
+        a.data.reportCorrection = { generation: a.generation, until };
+        addHold(draft, { holdId: holdId(a.attemptId, 'report_correction'), attemptId: a.attemptId, generation: a.generation, reason: 'report_correction', until, onExpire: 'commit', data: {}, createdAt: draft.ctx.nowMs });
     },
     worker_absent: (draft) => {
         if ((draft.ctx.evidence as TurnEvidenceOf<'dispatch_failed'>).workerAbsent) draft.attempt!.livenessFailStreak += 1;

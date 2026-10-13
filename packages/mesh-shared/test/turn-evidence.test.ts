@@ -34,12 +34,12 @@ const ref = { topic: 'mesh.m1.handoff', writer: 'w1', seq: 7 }
 const envelope = { eventId: 'ev-1', at: 1_000, source: 'fsm_edge', sessionId: 'sess-1', observedBy: 'daemon-1' } as const
 
 describe('turn evidence — content-free by construction', () => {
-    it('declares 23 evidence kinds (the §5 C1 union)', () => {
+    it('declares 24 evidence kinds (the §5 C1 union)', () => {
         expect([...TURN_EVIDENCE_KINDS].sort()).toEqual([
             'cancel', 'coordinator_ack', 'delivered', 'delivery_refused', 'dispatch_accepted', 'dispatch_failed',
             'duplicate_dispatch_refusal', 'git_side_effect', 'hold_expired', 'liveness', 'no_progress', 'operator_status',
             'process_exit', 'session_error', 'session_rebound', 'suspension', 'suspension_resolved', 'transcript_activity',
-            'transcript_final', 'turn_end', 'turn_started', 'worker_progress', 'worker_report',
+            'transcript_final', 'turn_end', 'turn_started', 'worker_progress', 'worker_report', 'worker_report_correction_requested',
         ])
     })
 

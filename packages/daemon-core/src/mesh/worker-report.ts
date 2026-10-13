@@ -349,7 +349,8 @@ export type WorkerReportRefusal =
      * late-report window (or the report is older than the delivery window). Refused
      * rather than filed against the wrong task.
      */
-    | 'stale_report';
+    | 'stale_report'
+    | 'correction_too_late';
 
 export type WorkerReportResult =
     | {
@@ -572,6 +573,7 @@ export interface WorkerReportRefusalReceipt {
     deliveryId?: string;
     /** False = identity resolved, but the audit row could not be written. */
     recorded: boolean;
+    correctionUntilMs?: number;
 }
 
 /**
@@ -580,7 +582,7 @@ export interface WorkerReportRefusalReceipt {
  * recorded only as `(unknown_field)` — never verbatim.
  */
 const REFUSAL_FIELD_ALLOWLIST: ReadonlySet<string> = new Set([
-    '', 'outcome', 'summary', 'touchedFiles', 'branchState', 'blockers', 'handoffNotes',
+    '', '(root)', '(unknown_field)', 'outcome', 'summary', 'touchedFiles', 'branchState', 'blockers', 'handoffNotes',
     'handoffNotes.intent', 'handoffNotes.conflictGuidance', 'handoffNotes.touchedFiles', 'handoffNotes.followUps',
 ]);
 const REFUSAL_FIELDS_MAX = 16;
@@ -596,9 +598,10 @@ export function safeRefusalFields(fields: readonly string[]): string[] {
 
 /**
  * File a validator refusal against the EXACT attempt the worker's credential
- * names, content-free. Nothing is committed and no coordinator notice is sent:
- * the attempt stays open, so a corrected report re-called for the same attempt
- * is accepted exactly as a first report would be, and a worker that dies after
+ * names, content-free. Nothing is committed by the refusal. The active owner
+ * ledger opens one fixed correction hold per generation; invalid retries cannot
+ * extend it. A valid correction before its deadline follows normal acceptance,
+ * and expiry fails explicitly. A worker that dies after
  * the refusal leaves the attempt to the ledger's own death handling (it is not
  * completed by the refusal, and the refusal row survives a reclaim with the
  * generation it was filed under).
@@ -626,6 +629,18 @@ export function recordRefusedWorkerReport(
         : resolveLateWorkerIdentity(credential, nowMs, opts.isSelfDaemon, reportedAt);
     if (!identity) return null;
 
+    return recordRefusedWorkerReportForIdentity(identity, refusal, { ...opts, nowMs });
+}
+
+/** The caller must have authenticated this identity locally or against the owner's roster. */
+export function recordRefusedWorkerReportForIdentity(
+    identity: WorkerTokenExchangeResult,
+    refusal: { fields: readonly string[]; summaryLength: number | null; outcome?: unknown },
+    opts: { nowMs?: number; reportedAtMs?: unknown; deliveryId?: string; generation?: number } = {},
+): WorkerReportRefusalReceipt | null {
+    const nowMs = opts.nowMs ?? Date.now();
+    const reportedAt = normalizeWorkerReportedAtMs(opts.reportedAtMs, nowMs);
+    if (reportedAt === 'too_old' || (typeof reportedAt === 'number' && workerIdentityPostdates(identity, reportedAt))) return null;
     let attemptId: string | undefined;
     let generation: number | null = null;
     try {
@@ -633,7 +648,9 @@ export function recordRefusedWorkerReport(
         attemptId = identity.attemptId ?? turns.findLatestAttemptForTask(identity.meshId, identity.taskId)?.attemptId;
         if (!attemptId) return null;
         const attempt = turns.getAttempt(attemptId);
-        if (!attempt || attempt.meshId !== identity.meshId || attempt.taskId !== identity.taskId) return null;
+        if (!attempt || attempt.meshId !== identity.meshId || attempt.taskId !== identity.taskId
+            || attempt.sessionId !== identity.sessionId || (opts.generation !== undefined && opts.generation !== attempt.generation)
+            || turns.findLatestAttemptForTask(identity.meshId, identity.taskId)?.attemptId !== attemptId) return null;
         generation = attempt.generation;
     } catch {
         return null;
@@ -666,6 +683,15 @@ export function recordRefusedWorkerReport(
             },
             atMs: nowMs,
         });
+        const ledger = getActiveTurnLedger();
+        const attempt = ledger?.getAttempt(attemptId);
+        if (attempt && !attempt.terminal && ledger?.selfDaemonId === attempt.ownerDaemonId) {
+            ledger.observe({ eventId: `report_refusal:${attemptId}:g${generation}:${opts.deliveryId ?? nowMs}`,
+                at: nowMs, source: 'worker_tool', observedBy: ledger.selfDaemonId, sessionId: identity.sessionId,
+                attemptRef: { attemptId, generation: generation! }, kind: 'worker_report_correction_requested',
+                ...(opts.deliveryId ? { deliveryId: opts.deliveryId } : {}),
+            });
+        }
         recorded = true;
     } catch (e: any) {
         LOG.error('WorkerReport', `Failed to record the invalid-report refusal for task ${identity.taskId} attempt ${attemptId}: ${e?.message || e}`);
@@ -677,6 +703,8 @@ export function recordRefusedWorkerReport(
         generation,
         ...(opts.deliveryId ? { deliveryId: opts.deliveryId } : {}),
         recorded,
+        ...(getActiveTurnLedger()?.getAttempt(attemptId)?.data.reportCorrection?.generation === generation
+            ? { correctionUntilMs: getActiveTurnLedger()!.getAttempt(attemptId)!.data.reportCorrection!.until } : {}),
     };
 }
 
@@ -763,6 +791,11 @@ export function acceptWorkerCompletionReportForIdentity(
     const nowMs = opts.nowMs ?? Date.now();
     const nowIso = new Date(nowMs).toISOString();
     const store = MeshRuntimeStore.getInstance();
+    const recoveryAttempt = identity.attemptId ? store.turnStore().getAttempt(identity.attemptId) : undefined;
+    const correction = recoveryAttempt?.data.reportCorrection;
+    if (correction && recoveryAttempt?.data.report?.generation !== recoveryAttempt?.generation && correction.generation === recoveryAttempt?.generation && nowMs >= correction.until) {
+        return { accepted: false, refusal: 'correction_too_late', detail: 'The bounded correction deadline expired; no recovery was accepted.' };
+    }
 
     // ★Hold the verbatim summary for the shadowing guard (findPriorWorkerReport).
     // Written BEFORE the terminal commit: the commit can synchronously trigger
