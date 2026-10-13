@@ -29,6 +29,7 @@ import {
 import { useDashboardMobileChatEffects } from './useDashboardMobileChatEffects'
 import { useDashboardMobileMachineActions } from './useDashboardMobileMachineActions'
 import { useDashboardMobileNavigationController } from './useDashboardMobileNavigationController'
+import { deriveProviderApprovalInbox } from '../MeshGraph/providerApprovalInbox'
 import { isLaunchableMachineProvider } from '../../utils/provider-activation'
 import { getDaemonUpdateTargetVersion } from '../../utils/daemon-update-policy'
 import { isVersionMismatch } from '../../utils/version-update'
@@ -68,6 +69,7 @@ interface DashboardMobileChatModeProps {
     setCliViewModeOverrides: Dispatch<SetStateAction<Record<string, 'chat' | 'terminal'>>>
     /** The dashboard's one `useStartAssistant` state (shared with the desktop header). */
     startAssistant?: StartAssistantState | null
+    connectionStates?: Record<string, string>
 }
 
 function getAvatarText(primary: string) {
@@ -105,6 +107,7 @@ export default function DashboardMobileChatMode({
     liveSessionInboxState,
     setCliViewModeOverrides,
     startAssistant = null,
+    connectionStates = {},
 }: DashboardMobileChatModeProps) {
     const [selectedTabKey, setSelectedTabKey] = useState<string | null>(() => conversations[0]?.tabKey || null)
     const [screen, setScreen] = useState<'inbox' | 'chat' | 'machine'>(() => (conversations[0] ? 'chat' : 'inbox'))
@@ -114,6 +117,11 @@ export default function DashboardMobileChatMode({
     const liveWorkingOrderRef = useRef<string[]>([])
     const navigate = useNavigate()
     const appVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : null
+    const pendingProviderApprovalCount = useMemo(() => {
+        if (isStandalone) return 0
+        return deriveProviderApprovalInbox(ides, connectionStates).length
+    }, [connectionStates, ides, isStandalone])
+    const openApprovals = useCallback(() => navigate('/approvals'), [navigate])
 
     const selectedConversation = useMemo(
         () => conversations.find(conversation => conversation.tabKey === selectedTabKey) || conversations[0] || null,
@@ -382,6 +390,8 @@ export default function DashboardMobileChatMode({
                     isStandalone={isStandalone}
                     isConversationMuted={isConversationMuted}
                     onToggleMuteConversation={toggleMute}
+                    pendingProviderApprovalCount={pendingProviderApprovalCount}
+                    onOpenApprovals={isStandalone ? undefined : openApprovals}
                 />
             )}
         </div>

@@ -31,6 +31,7 @@ const EXPECTED_CLASSES: Record<string, string> = {
     change_model: 'session_coordinator',
     invoke_provider_script: 'session_coordinator',
     cancel_queued_chat: 'session_coordinator',
+    outgoing_receipts: 'session_coordinator',
     interactive_prompt_response: 'session_coordinator',
     deposit_worker_mailbox: 'session_coordinator',
     read_terminal: 'session_coordinator',

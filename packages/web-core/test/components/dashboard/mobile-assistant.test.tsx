@@ -268,6 +268,7 @@ describe('mobile chat room — assistant', () => {
         // tool-step default) — only its own copy of the pill is turned off.
         expect(paneGroupContentProps.at(-1)?.activeConv).toMatchObject({ tabKey: 'tab-assistant', assistant: true })
         expect(paneGroupContentProps.at(-1)?.showAssistantStagedWrites).toBe(false)
+        expect(paneGroupContentProps.at(-1)?.showAssistantExecutionControls).toBe(false)
         expect(container.querySelectorAll('[data-assistant-staged-count]')).toHaveLength(1)
     })
 

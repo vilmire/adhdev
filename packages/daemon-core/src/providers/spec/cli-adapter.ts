@@ -330,6 +330,10 @@ export class SpecCliAdapter implements CliAdapter {
      * data-loss path (oss 6cca365b); a busy session is reached only through
      * `sendMessageDuringGeneration` (split write) or `interruptTurn`.
      */
+    observeSendWrite(messageId: string, observer: (state: 'started' | 'submitted' | 'uncertain') => void): void {
+        this.driver.observeSendWrite?.(messageId, observer);
+    }
+
     async sendMessage(text: string, opts?: { force?: boolean; bracketedPaste?: boolean; messageId?: string }): Promise<{ status: 'queued'; position: number } | { status: 'delivered' } | void> {
         LOG.info('SpecAdapter', `[${this.cliType}] sendMessage(len=${text.length}${opts?.messageId ? ` id=${opts.messageId}` : ''})`);
         LOG.debug('SpecAdapter', `[${this.cliType}] sendMessage body=${JSON.stringify(text.slice(0, 80))}${text.length > 80 ? '…' : ''}`);

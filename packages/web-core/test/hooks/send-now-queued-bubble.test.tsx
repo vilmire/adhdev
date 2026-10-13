@@ -1,3 +1,6 @@
+import { receiptAwareTransport, resetOutgoingReceiptFixture } from '../helpers/outgoing-receipt-transport'
+import { beforeEach } from 'vitest'
+beforeEach(resetOutgoingReceiptFixture)
 // @vitest-environment jsdom
 /**
  * SEND-NOW at the hook level.
@@ -65,12 +68,14 @@ function renderHarness(sendDaemonCommand: ReturnType<typeof vi.fn>) {
         routeId: 'daemon-1:sess-1',
         daemonId: 'daemon-1',
         sessionId: 'sess-1',
+        transport: 'pty',
         status: 'generating',
     }
 
+    const receiptTransport = receiptAwareTransport(sendDaemonCommand)
     function Harness() {
         latest = useDashboardConversationCommands({
-            sendDaemonCommand,
+            sendDaemonCommand: receiptTransport,
             activeConv,
             setActionLogs: () => {},
             isStandalone: false,
@@ -117,7 +122,7 @@ describe('SEND-NOW — handleSendNowQueued', () => {
         h.unmount()
     })
 
-    it('★ clears the queued badge once the agent queue took the body', async () => {
+    it('agent-queue acceptance remains uncertain without a post-write receipt', async () => {
         const send = vi.fn()
             .mockResolvedValueOnce(DAEMON_QUEUED_RESULT)
             .mockResolvedValueOnce(DAEMON_AGENT_QUEUED)
@@ -129,7 +134,7 @@ describe('SEND-NOW — handleSendNowQueued', () => {
         expect(h.get().sendFeedbackMessage).toBeNull()
         // The bubble STAYS — it is retired by the daemon's echo, exactly like a
         // normal send. Only the queued marking is dropped.
-        expect(h.get().pendingLocalMessage).toMatchObject({ content: 'urgent: stop', queued: false })
+        expect(h.get().pendingLocalMessage).toMatchObject({ content: 'urgent: stop', queued: true, deliveryUncertain: true })
         h.unmount()
     })
 
@@ -224,7 +229,7 @@ describe('SEND-NOW — handleSendNowQueued', () => {
         const h = renderHarness(send)
         await act(async () => { await h.get().handleSendChat('already delivered') })
         expect(h.get().pendingLocalMessage).toMatchObject({ content: 'already delivered' })
-        expect(h.get().pendingLocalMessage.queued).toBeFalsy()
+        expect(h.get().pendingLocalMessage.queued).toBe(true)
 
         await act(async () => { await h.get().handleSendNowQueued() })
 

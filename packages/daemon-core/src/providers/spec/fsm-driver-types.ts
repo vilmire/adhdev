@@ -118,6 +118,7 @@ export interface ISpecDriver {
      * a body still sitting in memory use this instead. Optional so test doubles
      * implementing ISpecDriver need not provide it.
      */
+    observeSendWrite?(messageId: string, observer: (state: 'started' | 'submitted' | 'uncertain') => void): void;
     sendMessageWithDisposition?(text: string, bracketedPaste?: boolean, messageId?: string): SendDisposition;
     /**
      * Wiring-unification D2 — the FIFO is keyed by `OutboundMessage.messageId`

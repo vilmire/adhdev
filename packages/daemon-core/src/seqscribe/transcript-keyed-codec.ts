@@ -1,3 +1,5 @@
+import { readOutgoingReceipt, type OutgoingReceipt } from './outgoing-receipt.js';
+export { readOutgoingReceipt, sameOutgoingAttempt, outgoingInputDigest, type OutgoingReceipt } from './outgoing-receipt.js';
 /**
  * `session.<safeSessionId>.chat` keyed wire contract — design 2026-09-28
  * (message-keyed storage) §4.2–§4.6.
@@ -124,6 +126,9 @@ export interface ChatMsgV2 {
     readonly streaming: boolean | null;
     readonly senderName: string | null;
     readonly toolName: string | null;
+    readonly sourceMessageId?: string | null;
+    readonly runtimeInputAck?: boolean;
+    readonly outgoingReceipt?: OutgoingReceipt | null;
     readonly receivedAt: number | null;
     readonly timestamp: number | null;
     /** A truncated tool bubble the daemon can expand by `messageId` (§5.9). */
@@ -264,6 +269,9 @@ export interface ReplicatedTranscriptMessageV2 {
     readonly bubbleState: ChatBubbleState | null;
     readonly senderName: string | null;
     readonly toolName: string | null;
+    readonly sourceMessageId?: string | null;
+    readonly runtimeInputAck?: boolean;
+    readonly outgoingReceipt?: OutgoingReceipt | null;
     readonly streaming: boolean | null;
     readonly expandable: boolean;
     readonly srcId: string | null;
@@ -438,7 +446,7 @@ function boundedStringList(value: unknown): string[] {
  */
 export function encodeChatMessageHead(candidate: ChatMessageCandidate, stamp: ChatMessageStamp): ChatMsgV2 {
     const meta = recordField(candidate.meta);
-    return {
+    const head: { -readonly [K in keyof ChatMsgV2]: ChatMsgV2[K] } = {
         v: 2,
         id: stamp.id,
         rev: stamp.rev,
@@ -458,6 +466,11 @@ export function encodeChatMessageHead(candidate: ChatMessageCandidate, stamp: Ch
         srcId: stamp.srcId,
         body: stamp.body,
     };
+    if (typeof meta?.sourceMessageId === 'string') head.sourceMessageId = meta.sourceMessageId;
+    if (meta?.runtimeInputAck === true) head.runtimeInputAck = true;
+    const outgoingReceipt = readOutgoingReceipt(meta?.outgoingReceipt);
+    if (outgoingReceipt) head.outgoingReceipt = outgoingReceipt;
+    return head;
 }
 
 export function encodeChatPart(id: string, k: number, rev: number, epoch: string, frame: number, text: string): ChatPartV2 {
@@ -726,6 +739,9 @@ export function chatMessageFromWire(head: ChatMsgV2, content: string): Replicate
         bubbleState: head.bubbleState,
         senderName: head.senderName,
         toolName: head.toolName,
+        ...(typeof head.sourceMessageId === 'string' ? { sourceMessageId: head.sourceMessageId } : {}),
+        ...(head.runtimeInputAck === true ? { runtimeInputAck: true } : {}),
+        ...(readOutgoingReceipt(head.outgoingReceipt) ? { outgoingReceipt: readOutgoingReceipt(head.outgoingReceipt) } : {}),
         streaming: head.streaming,
         expandable: head.expandable === true,
         srcId: head.srcId,

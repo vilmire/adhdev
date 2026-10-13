@@ -52,9 +52,9 @@ export default function AssistantExecutionControls({ daemonId, sessionId, status
             await refresh()
         } catch (error) { setNotice(String(error)) } finally { setBusy(false) }
     }
-    return <div className="relative text-xs">
-        <button type="button" className="chat-activity-toggle" aria-expanded={open} onClick={() => { setOpen(!open); void refresh() }}>{t('assistantExecution.toggleLabel', { state: t(view ? view.executionEnabled ? 'assistantExecution.on' : 'assistantExecution.off' : 'assistantExecution.unavailable') })}</button>
-        {open && <div role="dialog" aria-label={t('assistantExecution.controlsLabel')} className="absolute right-0 z-20 w-80 max-w-[90vw] rounded border border-border-default bg-bg-card p-3 shadow-xl space-y-2">
+    return <div className="assistant-execution-controls relative text-xs">
+        <button type="button" className="chat-activity-toggle assistant-execution-toggle" aria-haspopup="dialog" aria-expanded={open} onClick={() => { setOpen(!open); void refresh() }}>{t('assistantExecution.toggleLabel', { state: t(view ? view.executionEnabled ? 'assistantExecution.on' : 'assistantExecution.off' : 'assistantExecution.unavailable') })}</button>
+        {open && <div role="dialog" aria-label={t('assistantExecution.controlsLabel')} className="assistant-execution-panel pointer-events-auto absolute right-0 z-20 w-80 max-w-[90vw] rounded border border-border-default bg-bg-card p-3 shadow-xl space-y-2">
             <p>{view ? t('assistantExecution.restrictionSummary', { restriction: view.restriction, availability: t(view.executionAvailable ? 'assistantExecution.available' : 'assistantExecution.closed') }) : t('assistantExecution.stateUnavailable')}</p>
             <p>{view?.limitations || t('assistantExecution.limitations')}</p>
             <button type="button" disabled={!view || busy} onClick={() => void toggle()}>{t(view?.executionEnabled ? 'assistantExecution.turnOff' : 'assistantExecution.turnOn')}</button>

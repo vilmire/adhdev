@@ -145,14 +145,14 @@ describe('pending queued messages — durable across an app restart', () => {
         expect(raw.byKey?.[KEY]).toBeUndefined()
     })
 
-    it('drops entries past the max age so a forgotten body cannot be pinned forever', () => {
+    it('retains old unresolved bodies because age cannot prove native delivery', () => {
         const now = 10_000_000
         writePendingQueuedMessages(KEY, [
             entry({ content: 'ancient', sentAt: now - PENDING_QUEUED_MESSAGE_MAX_AGE_MS - 1 }),
             entry({ content: 'fresh', sentAt: now - 1_000 }),
         ], now)
 
-        expect(readPendingQueuedMessages(KEY, now).map(e => e.content)).toEqual(['fresh'])
+        expect(readPendingQueuedMessages(KEY, now).map(e => e.content)).toEqual(['ancient', 'fresh'])
     })
 
     it('caps a runaway queue at MAX_PENDING_QUEUED_MESSAGES, keeping the newest', () => {
@@ -181,13 +181,13 @@ describe('pending queued messages — durable across an app restart', () => {
         expect(ids.size).toBe(50)
     })
 
-    it('prune clears buckets whose entries have all aged out', () => {
+    it('prune retains unresolved buckets after the old age threshold', () => {
         const now = 10_000_000
         writePendingQueuedMessages(KEY, [entry({ content: 'old', sentAt: now - 1_000 })], now)
         prunePendingQueuedMessages(now + PENDING_QUEUED_MESSAGE_MAX_AGE_MS + 5_000)
 
         const raw = JSON.parse(window.localStorage.getItem('adhdev-pending-queued-messages-v1') || '{}')
-        expect(raw.byKey?.[KEY]).toBeUndefined()
+        expect(raw.byKey?.[KEY]?.map((e: { content: string }) => e.content)).toEqual(['old'])
     })
 })
 

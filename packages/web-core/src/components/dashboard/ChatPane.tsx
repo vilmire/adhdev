@@ -97,6 +97,8 @@ export interface ChatPaneProps {
      * instead, where it stays reachable in terminal view too.
      */
     showAssistantStagedWrites?: boolean;
+    /** False when the mobile room header owns the session execution control. */
+    showAssistantExecutionControls?: boolean;
 }
 
 const LIVE_MESSAGE_PAGE_SIZE = 60;
@@ -184,6 +186,7 @@ export default function ChatPane({
     isInputActive = true,
     isVisible = true,
     showAssistantStagedWrites = true,
+    showAssistantExecutionControls = true,
 }: ChatPaneProps) {
     const { t } = useTranslation('common');
     const receivedAtCache = useRef<Map<string, number>>(new Map());
@@ -338,14 +341,14 @@ export default function ChatPane({
     const hasPendingEntries = (pendingLocalMessages?.length ?? 0) > 0;
     useEffect(() => {
         if (!retireEchoedPendingMessages) return;
-        retireEchoedPendingMessages(daemonLiveMessages);
+        retireEchoedPendingMessages([...historyMessages, ...daemonLiveMessages]);
         if (!hasPendingEntries) return;
         const timer = setInterval(
-            () => retireEchoedPendingMessages(daemonLiveMessages),
+            () => retireEchoedPendingMessages([...historyMessages, ...daemonLiveMessages]),
             PENDING_QUEUE_STALE_SWEEP_INTERVAL_MS,
         );
         return () => clearInterval(timer);
-    }, [retireEchoedPendingMessages, daemonLiveMessages, hasPendingEntries]);
+    }, [retireEchoedPendingMessages, daemonLiveMessages, historyMessages, hasPendingEntries]);
     // Only the COUNT is consumed (activity-toggle affordance), but the filter
     // classifies every live message. Memoized on `liveMessages` so it runs when
     // the tail actually changes rather than on every render of this pane.
@@ -693,7 +696,7 @@ export default function ChatPane({
                 became permanently hidden for everyone (O5). Restored by owner decision:
                 it flips the same global preference the Settings → Appearance toggle
                 writes, with the live activity-row count as the affordance. */}
-            <div className="chat-activity-toggle-bar">
+            <div className={`chat-activity-toggle-bar ${isAssistantPane ? 'assistant-chat-activity-bar' : ''}`}>
                 <button
                     type="button"
                     className={`chat-activity-toggle ${showActivityMessages ? 'chat-activity-toggle-active' : ''}`}
@@ -713,7 +716,7 @@ export default function ChatPane({
                 <div className="ml-auto flex items-center gap-1">
                     {/* Assistant pane only: writes held for the owner's approval
                         (hidden while none are held). */}
-                    {isAssistantPane && <AssistantExecutionControls daemonId={daemonId} sessionId={activeConv.sessionId} status={activeConv.status} sendCommand={sendCommand} />}
+                    {isAssistantPane && showAssistantExecutionControls && <AssistantExecutionControls daemonId={daemonId} sessionId={activeConv.sessionId} status={activeConv.status} sendCommand={sendCommand} />}
                     {isAssistantPane && showAssistantStagedWrites && (
                         <AssistantStagedWrites daemonId={daemonId} status={activeConv.status} sendCommand={sendCommand} />
                     )}

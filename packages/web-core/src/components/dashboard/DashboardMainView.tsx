@@ -188,6 +188,7 @@ interface DashboardMainViewProps {
     onMarkNotificationRead: (notificationId: string) => void
     onMarkNotificationUnread: (notificationId: string) => void
     onDeleteNotification: (notificationId: string) => void
+    connectionStates?: Record<string, string>
 }
 
 export default function DashboardMainView({
@@ -260,6 +261,7 @@ export default function DashboardMainView({
     onMarkNotificationRead,
     onMarkNotificationUnread,
     onDeleteNotification,
+    connectionStates = {},
 }: DashboardMainViewProps) {
     const { t } = useTranslation()
     const dockviewActionHandlersRef = React.useRef<{
@@ -737,6 +739,7 @@ export default function DashboardMainView({
                     onOpenNewSession={openNewSession}
                     liveSessionInboxState={liveSessionInboxState}
                     startAssistant={startAssistant}
+                    connectionStates={connectionStates}
                 />
             ) : isMobile ? (
                 <DashboardPaneWorkspace

@@ -1,3 +1,4 @@
+import { applyOutgoingReceipts, type ReceiptPending } from '../../utils/outgoingReceipts'
 import type { SessionChatSnapshot } from './session-chat-controller'
 import type { ActiveConversation, DashboardMessage } from './types'
 import { getMessageTimestamp } from './message-utils'
@@ -27,7 +28,7 @@ export function getConversationLiveMessages(
  * Until then the owner's own message was simply not on screen, which reads as
  * "my message was lost" and provokes a resend.
  */
-export interface PendingLocalMessage {
+export interface PendingLocalMessage extends ReceiptPending {
     /**
      * Stable per-entry identity (MULTI-QUEUE). Optional so a caller holding a
      * legacy single entry still type-checks; `withPendingLocalMessages` falls
@@ -155,6 +156,8 @@ export function hasEchoedPendingMessage(
     liveMessages: DashboardMessage[],
     pending: PendingLocalMessage,
 ): boolean {
+    if (pending.queued && !pending.requiresReceipt) return false
+    if (pending.requiresReceipt) return applyOutgoingReceipts([pending], liveMessages.map(m => (m.meta as Record<string, unknown> | undefined)?.outgoingReceipt)).length === 0
     const target = pending.content.trim()
     if (!target) return true
     for (let i = liveMessages.length - 1; i >= 0; i -= 1) {
@@ -293,6 +296,23 @@ export function retirePendingLocalMessages(
         : liveMessages
 
     for (const entry of pending) {
+        if (entry.queued && !entry.requiresReceipt) {
+            const stale = now - entry.sentAt > staleAfterMs;
+            if (stale && !entry.stale) { kept.push({ ...entry, stale: true, deliveryUncertain: true }); markedStale++; changed = true; }
+            else kept.push(entry);
+            continue;
+        }
+        if (entry.requiresReceipt) {
+            const reconciled = applyOutgoingReceipts([entry], liveMessages.map(m => (m.meta as Record<string, unknown> | undefined)?.outgoingReceipt));
+            if (!reconciled.length) { retiredByEcho++; changed = true; continue }
+            let updated = reconciled[0];
+            if (now - entry.sentAt > staleAfterMs && !updated.stale) {
+                updated = { ...updated, stale: true, deliveryUncertain: true }; markedStale++;
+            }
+            if (updated !== entry) changed = true;
+            kept.push(updated);
+            continue;
+        }
         const target = entry.content.trim()
         if (!target) {
             // An empty body can never be echoed and can never be cancelled by
@@ -403,6 +423,11 @@ export function withPendingLocalMessages(
     const bubbles: DashboardMessage[] = []
 
     for (const entry of pending) {
+        if (entry.requiresReceipt) {
+            if (entry.queued || entry.deliveryUncertain || applyOutgoingReceipts([entry], liveMessages.map(m => (m.meta as Record<string, unknown> | undefined)?.outgoingReceipt)).length === 0) continue;
+            bubbles.push(buildPendingBubble(entry));
+            continue;
+        }
         const target = entry.content.trim()
         if (!target) continue
         if (now - entry.sentAt > PENDING_LOCAL_MESSAGE_MAX_AGE_MS) continue

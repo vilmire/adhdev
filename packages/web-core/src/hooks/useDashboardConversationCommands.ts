@@ -1,3 +1,5 @@
+import { outgoingInputDigest, readOutgoingReceipt } from '@adhdev/daemon-core/seqscribe/transcript-keyed-codec'
+import { applyOutgoingReceipts } from '../utils/outgoingReceipts'
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import type { ActiveConversation } from '../components/dashboard/types'
 import type { ImageAttachment } from '../components/dashboard/ChatInputBar'
@@ -117,6 +119,7 @@ interface RecentSendAttempt {
     tabKey: string
     message: string
     timestamp: number
+    inputDigest?: string
 }
 
 export function shouldBlockConversationSend({
@@ -138,7 +141,7 @@ export function shouldSuppressRecentDuplicateSend(
 ): boolean {
     if (!lastSend) return false
     return lastSend.tabKey === attempt.tabKey
-        && lastSend.message === attempt.message
+        && lastSend.message === attempt.message && lastSend.inputDigest === attempt.inputDigest
         && (attempt.timestamp - lastSend.timestamp) < dedupeWindowMs
 }
 
@@ -150,6 +153,7 @@ export function clearRecentSendOnFailure(
     return lastSend.tabKey === failedAttempt.tabKey
         && lastSend.message === failedAttempt.message
         && lastSend.timestamp === failedAttempt.timestamp
+        && lastSend.inputDigest === failedAttempt.inputDigest
         ? null
         : lastSend
 }
@@ -427,31 +431,44 @@ export function useDashboardConversationCommands({
         })
     }, [])
 
-    /**
-     * ★ (QUEUED-SEND-STUCK-FOREVER) The echo retirement, at STATE level.
-     *
-     * Before this, echo matching existed ONLY inside `withPendingLocalMessages`,
-     * which runs while building the render: it skipped the bubble and returned,
-     * so state and localStorage still held the entry. The transcript therefore
-     * looked right while the STORE — which is what the pinned strip and the next
-     * page load both read — kept a body the agent had already answered. A parked
-     * row was never even considered by that path (it excludes queued entries by
-     * design, since the strip renders them), so for exactly the rows the owner
-     * complained about, no echo path existed at all.
-     *
-     * Running the same match as a state transition is the fix: the entry is
-     * really gone, everywhere, and stays gone across a reload.
-     *
-     * ★ Writes only on a real change. `updatePendingMessages` is a no-op when the
-     * updater returns the same reference, so a tail tick that retires nothing
-     * costs no write and no render — which matters because this runs on every
-     * transcript update, not just on send.
-     *
-     * ★ Not gated on `queued`. An entry whose send is still in its round trip can
-     * be echoed too (the daemon delivered it outright and the echo beat the ack),
-     * and leaving that one behind would re-introduce the duplicate bubble the
-     * render-time match was written to prevent.
-     */
+    const receiptConversationRef = useRef(activeConv)
+    receiptConversationRef.current = activeConv
+    const hasReceiptPending = pendingLocalMessages.some(entry => entry.requiresReceipt)
+    // Reconcile native sends from authoritative, correlated write receipts.
+    // Read-only replay survives missing transcript events and reconnects; it
+    // never resubmits a body. Text echoes remain a legacy non-PTY render aid.
+    useEffect(() => {
+        const conversation = receiptConversationRef.current
+        if (!conversation || !hasReceiptPending) return
+        const key = conversation.tabKey
+        let cancelled = false
+        let reading = false
+        const refresh = async () => {
+            if (reading) return
+            reading = true
+            try {
+                const target = getRouteTarget(conversation)
+                if (!target) return
+                const ids = pendingLocalMessagesRef.current.filter(e => e.requiresReceipt).map(e => e.id)
+                const raw = await sendDaemonCommand(target, 'outgoing_receipts', { ...getProviderArgs(conversation), messageIds: ids })
+                const result = unwrapCommandResult(raw)
+                if (cancelled || pendingStoreKeyRef.current !== key || !Array.isArray(result?.receipts)) return
+                updatePendingMessages(prev => applyOutgoingReceipts(prev, result.receipts, true))
+            } catch {
+                if (!cancelled && pendingStoreKeyRef.current === key) {
+                    updatePendingMessages(prev => prev.map(entry => entry.requiresReceipt
+                        ? { ...entry, queued: true, deliveryUncertain: true } : entry))
+                }
+            }
+            finally { reading = false }
+        }
+        void refresh()
+        const timer = setInterval(() => void refresh(), 1000)
+        const reconnect = () => { void refresh() }
+        window.addEventListener('online', reconnect)
+        return () => { cancelled = true; clearInterval(timer); window.removeEventListener('online', reconnect) }
+    }, [activeConv?.tabKey, activeConv?.sessionId, activeConv?.daemonId, activeConv?.connectionState, hasReceiptPending, sendDaemonCommand, updatePendingMessages])
+
     const retireEchoedPendingMessages = useCallback((liveMessages: DashboardMessage[]) => {
         updatePendingMessages(prev => {
             const result = retirePendingLocalMessages(prev, liveMessages)
@@ -470,8 +487,13 @@ export function useDashboardConversationCommands({
         // bodies are still parked in the daemon's FIFO, and this is what puts
         // them back on screen instead of leaving the owner staring at a
         // conversation with their message missing.
-        setPendingLocalMessages(pendingStoreKey ? readPendingQueuedMessages(pendingStoreKey) : [])
-    }, [activeConv?.tabKey, pendingStoreKey])
+        setPendingLocalMessages(pendingStoreKey ? readPendingQueuedMessages(pendingStoreKey).map(entry => {
+            if (entry.requiresReceipt || activeConv?.transport !== 'pty') return entry
+            return { ...entry, queued: true, requiresReceipt: true, targetSessionId: activeConv?.sessionId,
+                inputDigest: outgoingInputDigest(entry.input ?? { parts: [{ type: 'text', text: entry.content }], textFallback: entry.content }),
+                deliveryUncertain: true }
+        }) : [])
+    }, [activeConv?.tabKey, activeConv?.sessionId, activeConv?.transport, pendingStoreKey])
 
     // (QUEUED-SEND-STICKY) Release the parked-send notice when the agent stops
     // generating. Subscribes to the live status so BOTH surfaces that render
@@ -504,11 +526,23 @@ export function useDashboardConversationCommands({
             return false
         }
 
+        if (pendingLocalMessagesRef.current.length >= MAX_PENDING_QUEUED_MESSAGES && pendingLocalMessagesRef.current.some(e => e.requiresReceipt)) {
+            setSendFeedbackMessage('Resolve outstanding delivery before sending more messages.')
+            return false
+        }
+        const inputEnvelope = buildInputEnvelope(message, attachments)
+        const inputDigest = outgoingInputDigest(inputEnvelope ?? { parts: [{ type: 'text', text: message }], textFallback: message })
+        if (pendingLocalMessagesRef.current.some(entry => entry.requiresReceipt && entry.inputDigest === inputDigest
+            && entry.targetSessionId === activeConv.sessionId && entry.outgoingReceipt?.state !== 'failed' && (entry.deliveryUncertain || !entry.outgoingReceipt))) {
+            setSendFeedbackMessage('Delivery unconfirmed — do not resend.')
+            return false
+        }
         const now = Date.now()
         const attempt: RecentSendAttempt = {
             tabKey: activeConv.tabKey,
             message,
             timestamp: now,
+            inputDigest,
         }
         if (shouldSuppressRecentDuplicateSend(lastSendRef.current, attempt)) {
             setSendFeedbackMessage(null)
@@ -538,7 +572,6 @@ export function useDashboardConversationCommands({
         // `createPendingQueuedMessageId` doc for the correction to its old
         // "the daemon never sees it" claim.
         const pendingId = createPendingQueuedMessageId(now)
-        const inputEnvelope = buildInputEnvelope(message, attachments)
         // (CANCEL-INFLIGHT-LEAK) Publish this send's outcome BEFORE awaiting it,
         // so a cancel pressed during the round trip has something to await. It
         // is resolved exactly once, in the finally below.
@@ -549,7 +582,10 @@ export function useDashboardConversationCommands({
         let sendSettlement: SendSettlement = 'not-parked'
         updatePendingMessages(prev => [
             ...prev,
-            { id: pendingId, content: message, sentAt: now, ...(inputEnvelope ? { input: inputEnvelope } : {}) },
+            { id: pendingId, content: message, sentAt: now, requiresReceipt: activeConv.transport === 'pty',
+                targetSessionId: activeConv.sessionId,
+                inputDigest,
+                ...(inputEnvelope ? { input: inputEnvelope } : {}) },
         ].slice(-MAX_PENDING_QUEUED_MESSAGES))
 
         try {
@@ -566,6 +602,15 @@ export function useDashboardConversationCommands({
 
             const raw = await sendDaemonCommand(routeTarget, 'send_chat', buildSendChatPayload(pendingId, message, inputEnvelope, activeConv))
             const res = unwrapCommandResult(raw)
+            updatePendingMessages(prev => applyOutgoingReceipts(prev, [res?.outgoingReceipt], true))
+            const receipt = readOutgoingReceipt(res?.outgoingReceipt)
+            if (receipt?.state === 'failed' && receipt.messageId === pendingId
+                && receipt.sessionId === activeConv.sessionId && receipt.inputDigest === inputDigest) {
+                lastSendRef.current = clearRecentSendOnFailure(lastSendRef.current, attempt)
+                setLastSendQueued(false)
+                setSendFeedbackMessage('Not sent — rejected before writing.')
+                return false
+            }
 
             if (res?.deduplicated) {
                 setSendFeedbackMessage(null)
@@ -602,6 +647,8 @@ export function useDashboardConversationCommands({
                 throw new Error(res?.error || 'Send failed')
             }
 
+            updatePendingMessages(prev => prev.map(entry => entry.id === pendingId && entry.requiresReceipt
+                ? { ...entry, queued: true, deliveryUncertain: true } : entry))
             setLastSendQueued(false)
             setSendFeedbackMessage(null)
             return true
@@ -613,11 +660,11 @@ export function useDashboardConversationCommands({
                 console.warn('Send blocked/failed', e)
             }
             lastSendRef.current = clearRecentSendOnFailure(lastSendRef.current, attempt)
-            // The send failed, so the daemon will never echo this text back.
-            // Leaving the optimistic bubble would show a message that was never
-            // delivered as though it had been. Scoped to THIS entry so a
-            // concurrent failure cannot wipe bodies that are still queued.
-            updatePendingMessages(prev => prev.filter(entry => entry.id !== pendingId))
+            // A command timeout cannot prove whether a native write occurred.
+            // Retain the exact native input as uncertain; legacy non-PTY
+            // optimistic bubbles keep their previous failure behavior.
+            updatePendingMessages(prev => prev.flatMap(entry => entry.id !== pendingId ? [entry]
+                : entry.requiresReceipt ? [{ ...entry, queued: true, deliveryUncertain: true }] : []))
             setSendFeedbackMessage(getInlineSendFailureMessage(e))
             return false
         } finally {
@@ -679,7 +726,7 @@ export function useDashboardConversationCommands({
         const pending = pendingId
             ? queue.find(entry => entry.id === pendingId)
             : queue.find(entry => entry.queued === true)
-        if (!pending || !pending.queued) return false
+        if (!pending || !pending.queued || pending.deliveryUncertain || (pending.requiresReceipt && !pending.outgoingReceipt)) return false
 
         const message = pending.content.trim()
         if (!message) return false
@@ -718,6 +765,7 @@ export function useDashboardConversationCommands({
                 buildSendChatPayload(targetId, message, pending.input, activeConv, { mode: 'send_now' }),
             )
             const res = unwrapCommandResult(raw)
+            updatePendingMessages(prev => applyOutgoingReceipts(prev, [res?.outgoingReceipt], true))
 
             // The daemon refused — nothing was written. Reasons range from
             // "never possible here" (win32, or a driver without the split
@@ -737,7 +785,7 @@ export function useDashboardConversationCommands({
             if (res?.queuedWithAgent === true) {
                 setLastSendQueued(false)
                 updatePendingMessages(prev => prev.map(entry => (
-                    entry.id === targetId ? { ...entry, queued: false } : entry
+                    entry.id === targetId ? { ...entry, queued: true, deliveryUncertain: true } : entry
                 )))
                 setSendFeedbackMessage(null)
                 return true
@@ -756,10 +804,10 @@ export function useDashboardConversationCommands({
             }
 
             // Delivered as a real turn: drop the queued badge. The bubble stays
-            // until the daemon's echo retires it, exactly as a normal send.
+            // until matching write evidence retires it, exactly as a normal send.
             setLastSendQueued(false)
             updatePendingMessages(prev => prev.map(entry => (
-                entry.id === targetId ? { ...entry, queued: false } : entry
+                entry.id === targetId ? { ...entry, queued: true, deliveryUncertain: true } : entry
             )))
             setSendFeedbackMessage(null)
             return true
@@ -798,6 +846,11 @@ export function useDashboardConversationCommands({
     const handleCancelQueued = useCallback(async (pendingId: string): Promise<boolean> => {
         if (!activeConv || !pendingId) return false
         const pending = pendingLocalMessagesRef.current.find(entry => entry.id === pendingId)
+        if (pending?.outgoingReceipt?.state === 'failed' && pending.outgoingReceipt.proof === 'not_written') {
+            updatePendingMessages(prev => prev.filter(entry => entry.id !== pendingId))
+            return true
+        }
+        if (pending?.deliveryUncertain || (pending?.requiresReceipt && !pending.outgoingReceipt && pending.settled)) return false
         if (!pending) return false
 
         const message = pending.content.trim()
@@ -834,6 +887,7 @@ export function useDashboardConversationCommands({
             // Resolved without parking: delivered as a real turn, or refused.
             // The FIFO holds nothing, so a claim would be noise — drop locally.
             if (settlement === 'not-parked') {
+                if (pending.requiresReceipt) return false
                 updatePendingMessages(prev => prev.filter(entry => entry.id !== pendingId))
                 return true
             }
@@ -861,39 +915,24 @@ export function useDashboardConversationCommands({
             const res = unwrapCommandResult(raw)
 
             // `cancelled: 0` means the FIFO did not hold this body. That has TWO
-            // causes and they need opposite handling — the old code assumed only
-            // the first and so produced the report that motivated this change.
-            //
-            //  (a) It drained while the owner was deciding. The agent HAS the
-            //      message and will answer it, so the bubble must stay and the
-            //      owner must be told the cancel lost the race.
-            //
-            //  (b) The FIFO never held it — the session was torn down mid-queue
-            //      (`FsmDriver.shutdown()` logs `DISCARDING n queued send(s)` and
-            //      empties `pendingSends` without telling any surface) or the
-            //      daemon restarted. Nothing will ever echo this body and nothing
-            //      will ever cancel it, so treating it as (a) pinned the row above
-            //      the composer permanently: the owner pressed Cancel on a message
-            //      that no longer existed anywhere and it refused to go away.
-            //
-            // `stale` separates them. A body still inside the delivery window is
-            // plausibly (a) — queues really do drain at the moment the owner
-            // reaches for Cancel. One that has outlived the window with no echo is
-            // (b): the ONLY reason it is still here is that no one is holding it.
-            // The owner asked for it gone, and in (b) there is no remote state left
-            // for a local drop to contradict — which is the exact condition the
-            // "must reach the daemon" rule above is protecting, and it is satisfied.
+            // FIFO absence can mean either a drain or a lost parked body.
+            // Native receipts keep both cases uncertain; the legacy non-PTY
+            // local-dismiss behavior remains limited to its existing stale rows.
             const daemonHoldsNothing = typeof res?.cancelled === 'number' && res.cancelled === 0
-            if (daemonHoldsNothing && pending.stale === true) {
+            if (daemonHoldsNothing && pending.stale === true && !pending.requiresReceipt) {
                 updatePendingMessages(prev => prev.filter(entry => entry.id !== pendingId))
                 setSendFeedbackMessage(prev => (prev === QUEUED_SEND_MESSAGE ? null : prev))
                 return true
             }
             if (res?.success === false || daemonHoldsNothing) {
-                setSendFeedbackMessage(CANCEL_QUEUED_TOO_LATE_MESSAGE)
+                if (pending.requiresReceipt) updatePendingMessages(prev => prev.map(entry => entry.id === pendingId
+                    ? { ...entry, deliveryUncertain: true } : entry))
+                setSendFeedbackMessage(pending.requiresReceipt ? 'Delivery unconfirmed — do not resend.' : CANCEL_QUEUED_TOO_LATE_MESSAGE)
                 return false
             }
 
+            if (pending.requiresReceipt && !(res?.removed === true || res?.cancelled > 0)) return false
+            if (res?.messageId && res.messageId !== pendingId) return false
             updatePendingMessages(prev => prev.filter(entry => entry.id !== pendingId))
             // The parked-send notice describes a wait that no longer exists once
             // nothing is queued.

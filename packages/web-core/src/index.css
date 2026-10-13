@@ -4637,3 +4637,56 @@
         animation: none;
     }
 }
+
+/* Mobile Assistant policy lives in the room header. Reserve transcript
+   space for folding instead of floating its target over messages/history. */
+@media (max-width: 767px) {
+    .assistant-chat-activity-bar {
+        position: static;
+        flex-shrink: 0;
+        min-height: 56px;
+        padding: 6px 12px;
+        gap: 8px;
+    }
+
+    .assistant-chat-activity-bar .chat-activity-toggle,
+    .assistant-session-controls .chat-activity-toggle {
+        min-height: 44px;
+        padding: 8px 12px;
+    }
+
+    .assistant-session-controls .assistant-execution-toggle {
+        border-radius: 8px;
+        color: var(--text-secondary);
+    }
+
+    /* Open panels occupy header space too; they must not cover a message
+       or an input/approval target in the chat below. */
+    .assistant-session-controls > :has(> [role="dialog"]) {
+        flex-basis: 100%;
+        min-width: 0;
+    }
+
+    .assistant-session-controls .assistant-execution-panel,
+    .assistant-session-controls .assistant-staged-panel {
+        position: static;
+        width: 100%;
+        max-width: 100%;
+        max-height: min(40dvh, 320px);
+        overflow-y: auto;
+        margin-top: 6px;
+    }
+
+    .assistant-session-controls .assistant-execution-panel > button {
+        margin-right: 8px;
+        padding: 8px 12px;
+        border: 1px solid var(--border-default);
+        border-radius: 6px;
+    }
+
+    .assistant-session-controls [role="dialog"] button,
+    .assistant-session-controls [role="dialog"] select {
+        min-height: 44px;
+        min-width: 44px;
+    }
+}

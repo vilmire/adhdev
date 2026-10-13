@@ -561,6 +561,7 @@ export default function Dashboard({ suppressConnectionBanner = false }: Dashboar
                 onMarkNotificationRead={handleMarkDashboardNotificationRead}
                 onMarkNotificationUnread={handleMarkDashboardNotificationUnread}
                 onDeleteNotification={handleDeleteDashboardNotification}
+                connectionStates={connectionStates}
             />
 
             <style>{`

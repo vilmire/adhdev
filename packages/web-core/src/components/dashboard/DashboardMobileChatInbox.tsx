@@ -20,6 +20,7 @@ import { isAssistantConversation } from './assistant-session'
 import { getMobileInboxRowType, type MobileInboxRowType } from './dashboard-mobile-chat-mode-helpers'
 import StartAssistantButton from './StartAssistantButton'
 import type { StartAssistantState } from '../../hooks/useStartAssistant'
+import DashboardMobileApprovalsLink from './DashboardMobileApprovalsLink'
 
 type MobileInboxDebugBundleCollector = (conversation: ActiveConversation) => void | Promise<void>
 
@@ -82,6 +83,9 @@ interface DashboardMobileChatInboxProps {
     isConversationMuted?: (conversation: ActiveConversation) => boolean
     /** Optional: toggle mute state for a conversation (standalone only). */
     onToggleMuteConversation?: (conversation: ActiveConversation) => void
+    /** Cloud-only: roster-derived pending provider decisions (includes hidden workers). */
+    pendingProviderApprovalCount?: number
+    onOpenApprovals?: () => void
 }
 
 function InboxSectionHeader({
@@ -472,6 +476,8 @@ export default function DashboardMobileChatInbox({
     onCollectChatDebugBundle,
     isConversationMuted,
     onToggleMuteConversation,
+    pendingProviderApprovalCount = 0,
+    onOpenApprovals,
 }: DashboardMobileChatInboxProps) {
     const { t } = useTranslation()
     const isDisconnected = wsStatus === 'disconnected' || wsStatus === 'reconnecting' || wsStatus === 'offline' || wsStatus === 'auth_failed'
@@ -572,6 +578,14 @@ export default function DashboardMobileChatInbox({
                         </button>
                     </div>
                 </div>
+                {!isStandalone && onOpenApprovals ? (
+                    <div className="mt-3 px-1">
+                        <DashboardMobileApprovalsLink
+                            pendingCount={pendingProviderApprovalCount}
+                            onOpen={onOpenApprovals}
+                        />
+                    </div>
+                ) : null}
             </div>
 
             <div className={`flex min-h-0 w-full min-w-0 flex-1 flex-col gap-3 overflow-y-auto overflow-x-hidden [-webkit-overflow-scrolling:touch] ${contentPaddingClass}`}>

@@ -1,3 +1,4 @@
+import { readOutgoingReceipt, type OutgoingReceipt } from '@adhdev/daemon-core/seqscribe/transcript-keyed-codec'
 /**
  * (QUEUED-SEND-RESTART-LOSS) Durable store for the owner's PARKED chat bodies.
  *
@@ -150,6 +151,11 @@ export interface PendingQueuedMessage {
     sentAt: number
     /** True once the daemon answered `queued` (parked, not yet written to the PTY). */
     queued?: boolean
+    requiresReceipt?: boolean
+    targetSessionId?: string
+    inputDigest?: string
+    outgoingReceipt?: OutgoingReceipt
+    deliveryUncertain?: boolean
     /**
      * (QUEUED-SEND-STUCK-FOREVER) True once the body waited past
      * `PENDING_QUEUED_MESSAGE_STALE_AFTER_MS` without the daemon echoing it back.
@@ -316,7 +322,6 @@ function sanitizeEntries(raw: unknown, now: number): PendingQueuedMessage[] {
             : 0
         const id = typeof candidate.id === 'string' && candidate.id ? candidate.id : ''
         if (!content.trim() || !sentAt || !id) continue
-        if (now - sentAt > PENDING_QUEUED_MESSAGE_MAX_AGE_MS) continue
         if (seen.has(id)) continue
         seen.add(id)
         // `settled: true` on every restored row. The in-flight state it guards
@@ -345,6 +350,11 @@ function sanitizeEntries(raw: unknown, now: number): PendingQueuedMessage[] {
                 content,
                 sentAt,
                 queued: candidate.queued === true,
+                ...(candidate.requiresReceipt === true ? {
+                    requiresReceipt: true, targetSessionId: candidate.targetSessionId, inputDigest: candidate.inputDigest,
+                    outgoingReceipt: readOutgoingReceipt(candidate.outgoingReceipt) ?? undefined,
+                    deliveryUncertain: candidate.deliveryUncertain === true || !candidate.outgoingReceipt,
+                } : {}),
                 settled: true,
                 stale,
                 ...(input ? { input } : {}),
