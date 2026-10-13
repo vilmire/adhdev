@@ -8,13 +8,16 @@ import { projectAdapterStatus } from '../../../src/providers/spec/adapter-status
 
 const cliRoot = path.resolve(__dirname, '../../../../../../adhdev-providers/cli');
 const cases = [
-    { provider: 'cursor-cli', idle: ['  Auto · 27.2% Run Everything', '  /synthetic/workspace'], busy: ['   ⠋ Working…', '  /synthetic/workspace'], markers: ['⠋ Working…', 'Working tree is clean', 'esc to cancel'] },
-    { provider: 'grok-cli', idle: ['  Shift+Tab:mode │ Ctrl+x:shortcuts'], busy: ['  ⠦ Synthetic task… 2.5s [stop]', '  Shift+Tab:mode │ Esc:cancel │ Ctrl+x:shortcuts'], markers: ['⠦ Synthetic task… 2.5s', '[stop]', 'Esc:cancel'] },
-    { provider: 'opencode', idle: ['  ╹▀', '  /synthetic/workspace'], busy: ['  ■■⬝⬝', '  esc interrupt'], markers: ['■■⬝⬝', 'esc interrupt'] },
+    { provider: 'cursor-cli', spec: 'cursor-cli/specs/1.0.json', idle: ['  Auto · 27.2% Run Everything', '  /synthetic/workspace'], busy: ['   ⠋ Working…', '  /synthetic/workspace'], markers: ['⠋ Working…', 'Working tree is clean', 'esc to cancel'] },
+    { provider: 'grok-cli', spec: 'grok-cli/specs/1.0.json', idle: ['  Shift+Tab:mode │ Ctrl+x:shortcuts'], busy: ['  ⠦ Synthetic task… 2.5s [stop]', '  Shift+Tab:mode │ Esc:cancel │ Ctrl+x:shortcuts'], markers: ['⠦ Synthetic task… 2.5s', '[stop]', 'Esc:cancel'] },
+    { provider: 'opencode', spec: 'opencode/specs/1.0.json', idle: ['  ╹▀', '  /synthetic/workspace'], busy: ['  ■■⬝⬝', '  esc interrupt'], markers: ['■■⬝⬝', 'esc interrupt'] },
 ];
 
-function load(provider: string): CliSpecV4 {
-    return JSON.parse(fs.readFileSync(path.join(cliRoot, provider, 'specs/1.0.json'), 'utf8'));
+// Shape-guard trap (B) treats load() as a path helper whose LAST join segment is
+// the call argument. Keep the provider id out of the mid-path so the gate resolves
+// adhdev-providers/cli/<provider>/specs/1.0.json (not cli/specs/1.0.json/<provider>).
+function load(specRel: string): CliSpecV4 {
+    return JSON.parse(fs.readFileSync(path.join(cliRoot, specRel), 'utf8'));
 }
 
 // Model the driver's 200-line guard frame, with old activity above the tail.
@@ -30,15 +33,15 @@ function fire(spec: CliSpecV4, from: string, lines: string[], stableFor = 9000) 
     }).fired;
 }
 
-describe.each(cases)('$provider busy-entry scope', ({ provider, idle, busy, markers }) => {
+describe.each(cases)('$provider busy-entry scope', ({ provider, spec: specRel, idle, busy, markers }) => {
     it('loads without ignored composite-section warnings', () => {
-        const spec = load(provider);
+        const spec = load(specRel);
         expect(validateFsmSpec(spec)).toEqual([]);
         expect(collectFsmSpecWarnings(spec).filter(w => w.includes('ignored'))).toEqual([]);
     });
 
     it.each(markers)('ignores stale body marker %s and stays idle after busy→idle', marker => {
-        const spec = load(provider);
+        const spec = load(specRel);
         const lines = frame([marker], idle);
         expect(fire(spec, 'idle', lines)).toBeNull();
         expect(fire(spec, 'busy', lines)?.to).toBe('idle');
@@ -47,7 +50,7 @@ describe.each(cases)('$provider busy-entry scope', ({ provider, idle, busy, mark
     });
 
     it('enters busy for real tail activity and cannot exit while active', () => {
-        const spec = load(provider);
+        const spec = load(specRel);
         const lines = frame([], busy);
         expect(fire(spec, 'idle', lines)?.to).toBe('busy');
         if (provider !== 'grok-cli') expect(fire(spec, 'starting', lines)?.to).toBe('busy');
@@ -61,11 +64,11 @@ describe.each(cases)('$provider busy-entry scope', ({ provider, idle, busy, mark
     });
 
     it.each(markers.filter(marker => marker !== 'Working tree is clean'))('recognizes each live tail marker %s', marker => {
-        expect(fire(load(provider), 'idle', frame([], [marker]))?.to).toBe('busy');
+        expect(fire(load(specRel), 'idle', frame([], [marker]))?.to).toBe('busy');
     });
 
     it('projects the evaluated FSM state to dashboard status', () => {
-        const spec = load(provider);
+        const spec = load(specRel);
         const project = (id: string) => {
             const state = spec.states.find(s => s.id === id)!;
             return projectAdapterStatus({
@@ -84,18 +87,18 @@ describe.each(cases)('$provider busy-entry scope', ({ provider, idle, busy, mark
 
 describe('Cursor footer prose and settle boundary', () => {
     it('rejects Working tree prose even within status_tail', () => {
-        const spec = load('cursor-cli');
+        const spec = load(cases[0].spec);
         const lines = frame([], ['  Working tree is clean', ...cases[0].idle]);
         expect(fire(spec, 'idle', lines)).toBeNull();
         expect(fire(spec, 'busy', lines)?.to).toBe('idle');
     });
 
     it.each(['  Working', '  Working…', '  Working...', '  ⠋ Running tool', '  esc to cancel'])('preserves live tail marker %s', marker => {
-        expect(fire(load('cursor-cli'), 'idle', frame([], [marker, '  /synthetic/workspace']))?.to).toBe('busy');
+        expect(fire(load(cases[0].spec), 'idle', frame([], [marker, '  /synthetic/workspace']))?.to).toBe('busy');
     });
 
     it('keeps the 2500ms stable-tail requirement for busy→idle', () => {
-        const spec = load('cursor-cli');
+        const spec = load(cases[0].spec);
         const lines = frame(['⠋ Working…'], cases[0].idle);
         expect(fire(spec, 'busy', lines, 2499)).toBeNull();
         expect(fire(spec, 'busy', lines, 2500)?.to).toBe('idle');
@@ -103,7 +106,7 @@ describe('Cursor footer prose and settle boundary', () => {
 });
 
 it('Grok vanished→busy ignores stale scrollback but recognizes live tail activity', () => {
-    const spec = load('grok-cli');
+    const spec = load(cases[1].spec);
     const row = cases[1];
     const stale = fire(spec, 'approval_vanished', frame(row.markers, row.idle));
     expect(stale?.to).not.toBe('busy');
