@@ -1551,6 +1551,8 @@
         "toolExpandUnavailable": "无法获取该步骤的完整输出。",
         "toolExpandStale": "完整输出的位置已改变 —— 读取后记录已发生变化。重新加载对话即可获取。",
         "waitingToSend": "等待发送 —— 代理仍在处理中。",
+        "deliveryFailed": "未发送 —— 写入前被拒绝。",
+        "deliveryUncertain": "送达未确认 —— 请勿重发。",
         "waitingToSendAria": "等待发送",
         "notDelivered": "未送达 —— 代理从未收到这条消息。",
         "notDeliveredAria": "未送达",

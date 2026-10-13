@@ -1554,6 +1554,8 @@
         "toolExpandUnavailable": "No se pudo obtener la salida completa de este paso.",
         "toolExpandStale": "La salida completa cambió de lugar — la transcripción cambió desde que se leyó. Recarga la conversación para obtenerla.",
         "waitingToSend": "Esperando para enviar — el agente todavía está trabajando.",
+        "deliveryFailed": "No enviado — rechazado antes de escribir.",
+        "deliveryUncertain": "Entrega sin confirmar — no reenviar.",
         "waitingToSendAria": "Esperando para enviar",
         "notDelivered": "No entregado — el agente nunca recibió este mensaje.",
         "notDeliveredAria": "No entregado",
