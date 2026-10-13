@@ -23917,7 +23917,7 @@ var require_dist3 = __commonJS({
       return !!window && typeof window.usedPercent === "number" && Number.isFinite(window.usedPercent);
     }
     function hasReading(quota) {
-      if (hasUsableWindow(quota.session) || hasUsableWindow(quota.weekly)) return true;
+      if (hasUsableWindow(quota.session) || hasUsableWindow(quota.weekly) || hasUsableWindow(quota.monthly)) return true;
       return Array.isArray(quota.buckets) && quota.buckets.some((b) => !!b && typeof b.usedPercent === "number" && Number.isFinite(b.usedPercent));
     }
     function finiteMs(value) {
@@ -32124,7 +32124,7 @@ child.on('exit', () => process.exit(0));
         case "missing-credentials":
           return `Not signed in to Codex (${text2}) \u2014 run codex on this machine to sign in, then retry`;
         case "unauthorized":
-          return `Codex declined the rate-limit lookup for this account (${text2}) \u2014 the sign-in itself is fine; usage numbers are read from local Codex logs instead`;
+          return `Codex usage lookup by the background quota collector was refused (${text2}) \u2014 this is the daemon's own probe, not a running Codex session, so it says nothing about that session's sign-in; usage is unknown until Codex writes a local usage reading`;
         case "rate-limited":
           return `Codex rate-limit lookup was rate limited: ${text2}`;
         case "network":
@@ -32168,6 +32168,7 @@ child.on('exit', () => process.exit(0));
       const planTypeRaw = snapshot.planType;
       const metadata = {
         source: "app-server",
+        collectorScope: "background-collector",
         ...typeof planTypeRaw === "string" ? { planType: planTypeRaw } : {}
       };
       if (!session && !weekly) {
@@ -32216,6 +32217,7 @@ child.on('exit', () => process.exit(0));
           resolve39(
             quotaFailure("codex-cli", "unavailable", `Codex CLI could not be started: ${message}`, {
               source: "app-server",
+              collectorScope: "background-collector",
               failureKind: "cli-unavailable"
             })
           );
@@ -32264,7 +32266,7 @@ child.on('exit', () => process.exit(0));
                   "codex-cli",
                   "error",
                   `Codex app-server handshake failed: ${message.error.message ?? "unknown error"}`,
-                  { source: "app-server", failureKind: "unsupported" }
+                  { source: "app-server", collectorScope: "background-collector", failureKind: "unsupported" }
                 )
               );
               return;
@@ -32283,6 +32285,7 @@ child.on('exit', () => process.exit(0));
               finish(
                 quotaFailure("codex-cli", "error", `Codex rate-limit request failed: ${detail}`, {
                   source: "app-server",
+                  collectorScope: "background-collector",
                   failureKind: "cli-unavailable"
                 })
               );
@@ -32298,7 +32301,7 @@ child.on('exit', () => process.exit(0));
                   "codex-cli",
                   failureKind === "missing-credentials" ? "unavailable" : "error",
                   describeCodexRateLimitFailure(failureKind, text2),
-                  { source: "app-server", failureKind }
+                  { source: "app-server", collectorScope: "background-collector", failureKind }
                 )
               );
               return;
@@ -32341,6 +32344,7 @@ child.on('exit', () => process.exit(0));
           finish(
             quotaFailure("codex-cli", "unavailable", `Codex CLI is unavailable: ${err.message}`, {
               source: "app-server",
+              collectorScope: "background-collector",
               failureKind: "cli-unavailable"
             })
           );
@@ -32352,7 +32356,7 @@ child.on('exit', () => process.exit(0));
               "codex-cli",
               "error",
               `Codex app-server exited (code ${code ?? "null"}) before reporting rate limits${detail ? `: ${detail}` : ""}`,
-              { source: "app-server", failureKind: "cli-unavailable" }
+              { source: "app-server", collectorScope: "background-collector", failureKind: "cli-unavailable" }
             )
           );
         });
@@ -32360,6 +32364,7 @@ child.on('exit', () => process.exit(0));
           finish(
             quotaFailure("codex-cli", "error", "Codex rate-limit request timed out", {
               source: "app-server",
+              collectorScope: "background-collector",
               failureKind: "network"
             })
           );
@@ -32379,6 +32384,7 @@ child.on('exit', () => process.exit(0));
           finish(
             quotaFailure("codex-cli", "error", `Codex app-server handshake failed: ${detail}`, {
               source: "app-server",
+              collectorScope: "background-collector",
               failureKind: "cli-unavailable"
             })
           );
@@ -33409,11 +33415,23 @@ child.on('exit', () => process.exit(0));
     function quotaCachePath(env2 = process.env) {
       return path12.join(quotaCacheDir(env2), "cache.json");
     }
-    function holdsReading(entry) {
+    function quotaEntryHoldsReading(entry) {
       if (!entry) return false;
       if (entry.session !== null && entry.session !== void 0) return true;
       if (entry.weekly !== null && entry.weekly !== void 0) return true;
+      if (entry.monthly !== null && entry.monthly !== void 0) return true;
       return Array.isArray(entry.buckets) && entry.buckets.length > 0;
+    }
+    function lastGoodProvenanceOf(prior) {
+      const meta = prior.metadata;
+      const chained = meta?.lastGoodWindows === true ? meta.lastGood : void 0;
+      if (chained && typeof chained.measuredAt === "number") return chained;
+      return {
+        measuredAt: prior.updatedAt,
+        ...typeof meta?.source === "string" ? { source: meta.source } : {},
+        ...meta?.planType !== void 0 ? { planType: meta.planType } : {},
+        ...typeof meta?.collectorScope === "string" ? { collectorScope: meta.collectorScope } : {}
+      };
     }
     function mergeLastGoodForPersist(fresh, stored) {
       if (!stored) return fresh;
@@ -33433,7 +33451,7 @@ child.on('exit', () => process.exit(0));
           // The numbers keep the age of the observation that produced them,
           // never the age of the failure that could not replace them.
           updatedAt: prior.updatedAt,
-          metadata: { ...entry.metadata, lastGoodWindows: true }
+          metadata: { ...entry.metadata, lastGoodWindows: true, lastGood: lastGoodProvenanceOf(prior) }
         };
       }
       return merged;
@@ -33490,6 +33508,7 @@ child.on('exit', () => process.exit(0));
     var fs10;
     var path12;
     var QUOTA_CACHE_VERSION;
+    var holdsReading;
     var init_persist = __esm2({
       "src/quota/persist.ts"() {
         "use strict";
@@ -33498,6 +33517,7 @@ child.on('exit', () => process.exit(0));
         init_logger();
         init_paths();
         QUOTA_CACHE_VERSION = 1;
+        holdsReading = quotaEntryHoldsReading;
       }
     });
     function refreshQuotaCacheOnBoot(isEnabled) {
@@ -33648,8 +33668,7 @@ child.on('exit', () => process.exit(0));
       if (!transient) return fresh;
       const prevIsFreshOk = !!prev && prev.status === "ok";
       const prevIsCarriedForward = !!prev && prev.metadata?.lastGoodWindows === true;
-      const prevHasBuckets = !!prev && Array.isArray(prev.buckets) && prev.buckets.length > 0;
-      const prevHasWindows = (prevIsFreshOk || prevIsCarriedForward) && (prev.session !== null || prev.weekly !== null || prevHasBuckets);
+      const prevHasWindows = (prevIsFreshOk || prevIsCarriedForward) && quotaEntryHoldsReading(prev);
       if (!prevHasWindows) return fresh;
       return {
         ...fresh,
@@ -33667,7 +33686,10 @@ child.on('exit', () => process.exit(0));
           // Mark the windows as a retained last-good reading so a reader can
           // label them (e.g. "· refreshing") instead of treating them as
           // freshly measured.
-          lastGoodWindows: true
+          lastGoodWindows: true,
+          // The top-level source/planType now describe the FAILED attempt;
+          // record where the retained numbers actually came from.
+          lastGood: lastGoodProvenanceOf(prev)
         }
       };
     }
@@ -145412,11 +145434,64 @@ ${text2}` : text2;
     function createLiveAuthState() {
       return { suspect: null, advisoryNotifiedAtMs: 0, coordinatorMarkerLogged: false, stopRequested: false };
     }
+    var PROVIDER_MARKERS = {
+      "codex-cli": /chatgpt\.com|backend-api\/|wham\/usage|\bcodex(?:-cli)?\b|\bopenai\b/i,
+      "claude-cli": /\banthropic\b|\bclaude(?:-cli)?\b|claude\.ai/i,
+      "antigravity-cli": /\bantigravity(?:-cli)?\b|\bagy\b|cloudcode-pa\.googleapis/i,
+      "kimi": /\bkimi(?:-cli)?\b|\bmoonshot\b/i,
+      "cursor-cli": /\bcursor-(?:agent|cli)\b|cursor\.(?:com|sh)\b/i,
+      "grok-cli": /\bgrok(?:-cli)?\b|\bx\.ai\b/i,
+      "opencode": /\bopencode\b/i
+    };
+    var FOREIGN_CONTEXT_LINES = 2;
+    var FOREIGN_CONTEXT_CHARS = 240;
+    var LONG_LINE_CHARS = 2 * FOREIGN_CONTEXT_CHARS;
+    function foreignMarkerFor(cliType) {
+      if (!(cliType in PROVIDER_MARKERS)) return null;
+      const sources = Object.entries(PROVIDER_MARKERS).filter(([provider]) => provider !== cliType).map(([, re]) => `(?:${re.source})`);
+      return new RegExp(sources.join("|"), "gi");
+    }
+    function maskForeignProviderText(cliType, text2) {
+      const marker = foreignMarkerFor(cliType);
+      if (!marker || !text2) return text2;
+      const lines = text2.split("\n");
+      const masked = new Array(lines.length).fill(false);
+      const out = lines.slice();
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        marker.lastIndex = 0;
+        if (!marker.test(line)) continue;
+        if (line.length > LONG_LINE_CHARS) {
+          let result = "";
+          let cursor = 0;
+          marker.lastIndex = 0;
+          for (let m = marker.exec(line); m; m = marker.exec(line)) {
+            const start = Math.max(cursor, m.index - FOREIGN_CONTEXT_CHARS);
+            const end = Math.min(line.length, m.index + m[0].length + FOREIGN_CONTEXT_CHARS);
+            result += line.slice(cursor, start) + "\n";
+            cursor = Math.max(cursor, end);
+            if (m[0].length === 0) marker.lastIndex++;
+          }
+          out[i] = result + line.slice(cursor);
+          continue;
+        }
+        masked[i] = true;
+        for (let d = 1; d <= FOREIGN_CONTEXT_LINES && i - d >= 0 && lines[i - d].trim() !== ""; d++) masked[i - d] = true;
+        for (let d = 1; d <= FOREIGN_CONTEXT_LINES && i + d < lines.length && lines[i + d].trim() !== ""; d++) masked[i + d] = true;
+      }
+      for (let i = 0; i < out.length; i++) if (masked[i]) out[i] = "";
+      return out.join("\n");
+    }
     function classifyAuthBillingOutput(cliType, text2, exitCode) {
       const failure6 = detectProviderFailure(text2, exitCode);
       if (!failure6) return null;
       if (cliType !== "kimi" && failure6.failureKind !== "auth") return null;
-      return failure6;
+      const own = maskForeignProviderText(cliType, text2);
+      if (own === text2) return failure6;
+      const ownFailure = detectProviderFailure(own, exitCode);
+      if (!ownFailure) return null;
+      if (cliType !== "kimi" && ownFailure.failureKind !== "auth") return null;
+      return ownFailure;
     }
     function exitClassificationAllowed(exitCode, termination, state2) {
       if (termination?.requestedStop || state2?.stopRequested) return false;
@@ -160251,6 +160326,9 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       if (!window) {
         return `  ${label2.padEnd(8)} ${import_chalk2.default.gray("not reported")}`;
       }
+      if (typeof window.usedPercent !== "number" || !Number.isFinite(window.usedPercent)) {
+        return `  ${label2.padEnd(8)} ${import_chalk2.default.gray("unknown")}`;
+      }
       const percent = `${window.usedPercent.toFixed(1)}%`;
       const bar = renderBar(window.usedPercent);
       const reset = window.resetsAt === null ? "" : import_chalk2.default.gray(`  resets ${formatRelative(window.resetsAt)}`);
@@ -160294,10 +160372,16 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       console.log();
       const account = formatQuotaAccount(quota);
       console.log(account ? `${import_chalk2.default.bold(name)}  ${import_chalk2.default.gray(account)}` : import_chalk2.default.bold(name));
-      if (quota.status === "ok" || quota.session || quota.weekly) {
+      if (quota.status === "ok" || quota.session || quota.weekly || quota.monthly) {
         const cue = windowCue(quota);
         console.log(formatWindow("5 hour", quota.session, cue));
         console.log(formatWindow("7 day", quota.weekly, cue));
+        if (quota.monthly) console.log(formatWindow("30 day", quota.monthly, cue));
+      }
+      const lastGood = quota.metadata?.lastGoodWindows === true ? quota.metadata.lastGood : void 0;
+      if (lastGood && typeof lastGood.measuredAt === "number") {
+        const from = [lastGood.source, lastGood.planType].filter((v) => typeof v === "string" && v.length > 0).join(", ");
+        console.log(`  ${import_chalk2.default.gray(`retained reading${from ? ` from ${from}` : ""}, measured ${formatAgo(lastGood.measuredAt)}`)}`);
       }
       if (quota.error) {
         const tone = quota.status === "unavailable" ? import_chalk2.default.gray : import_chalk2.default.yellow;
@@ -172461,7 +172545,8 @@ function summarizeNodeQuota(quota, now = Date.now()) {
     const session = pct(snapshot.session);
     const buckets = Array.isArray(snapshot.buckets) ? snapshot.buckets.filter((b) => b && Number.isFinite(b.usedPercent)) : [];
     const worstBucket = buckets.length > 0 ? `${Math.round(Math.max(...buckets.map((b) => b.usedPercent)))}%` : void 0;
-    if (weekly === void 0 && session === void 0 && worstBucket === void 0) {
+    const monthly = pct(snapshot.monthly);
+    if (weekly === void 0 && session === void 0 && worstBucket === void 0 && monthly === void 0) {
       out[provider] = failureKind ? `${status}:${failureKind}` : status;
       continue;
     }
@@ -172470,6 +172555,8 @@ function summarizeNodeQuota(quota, now = Date.now()) {
     let line = `7d ${weekly ?? "\u2014"} \xB7 5h ${session ?? "\u2014"} \xB7 ${age}${stale ? " stale" : ""}`;
     if (weekly === void 0 && session === void 0 && worstBucket !== void 0) {
       line = `pool ${worstBucket} (${buckets.length}) \xB7 ${age}${stale ? " stale" : ""}`;
+    } else if (weekly === void 0 && session === void 0 && monthly !== void 0) {
+      line = `30d ${monthly} \xB7 ${age}${stale ? " stale" : ""}`;
     }
     const { cue, nextCheckAt } = (0, import_daemon_core9.assessQuotaFreshness)(snapshot, now);
     if (cue === "stale") {

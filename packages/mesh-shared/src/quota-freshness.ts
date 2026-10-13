@@ -50,9 +50,14 @@ function hasUsableWindow(window: { usedPercent?: unknown } | null | undefined): 
     return !!window && typeof window.usedPercent === 'number' && Number.isFinite(window.usedPercent)
 }
 
-/** Does the snapshot carry any renderable number — windows OR per-pool buckets? */
+/**
+ * Does the snapshot carry any renderable number — session/weekly/monthly
+ * windows OR per-pool buckets? `monthly` counts on its own: cursor-cli reports
+ * ONLY that axis, and leaving it out made a retained cursor reading look
+ * numberless. A window without a finite `usedPercent` is unknown, not 0%.
+ */
 function hasReading(quota: MeshNodeFactsProviderQuota): boolean {
-    if (hasUsableWindow(quota.session) || hasUsableWindow(quota.weekly)) return true
+    if (hasUsableWindow(quota.session) || hasUsableWindow(quota.weekly) || hasUsableWindow(quota.monthly)) return true
     return Array.isArray(quota.buckets) && quota.buckets.some((b) => !!b && typeof b.usedPercent === 'number' && Number.isFinite(b.usedPercent))
 }
 

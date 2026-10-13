@@ -126,6 +126,25 @@ export interface MeshNodeFactsProviderQuota {
          * predating the field.
          */
         fetchedAt?: number
+        /**
+         * Provenance of the RETAINED reading when `lastGoodWindows` is true —
+         * the source/plan/measurement time of the snapshot that produced the
+         * carried numbers, as opposed to the top-level `source`/`planType`,
+         * which describe the fresh failed attempt. See daemon-core
+         * `QuotaMetadata.lastGood`.
+         */
+        lastGood?: {
+            measuredAt: number
+            source?: string
+            planType?: string | null
+            collectorScope?: string
+        }
+        /**
+         * `'background-collector'` when the snapshot came from a daemon-spawned
+         * probe rather than an executing CLI session; a failure with this scope
+         * is not evidence about a running session's sign-in.
+         */
+        collectorScope?: string
         [extra: string]: unknown
     }
     [extra: string]: unknown

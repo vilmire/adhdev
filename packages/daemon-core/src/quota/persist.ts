@@ -53,18 +53,42 @@ export interface QuotaCacheFile {
 /**
  * Does this snapshot carry a reading worth surviving a restart?
  *
- * "A reading" is any measured axis: the rolling session/weekly windows, or the
+ * "A reading" is any measured axis: the rolling session/weekly windows, the
+ * 30-day `monthly` window (cursor-cli reports ONLY that axis — leaving it out
+ * let a numberless failure erase a perfectly good cursor reading), or the
  * per-pool `buckets` a provider like antigravity reports (whose session/weekly
  * are only a worst-bucket collapse and can both be null while buckets hold the
  * real numbers). Deliberately shape-based rather than `status === 'ok'`: a
  * carried-forward entry (metadata.lastGoodWindows) is a non-ok snapshot that
  * still holds genuine numbers, and it is precisely the one we must keep.
  */
-function holdsReading(entry: MeshNodeFactsProviderQuota | undefined): boolean {
+export function quotaEntryHoldsReading(entry: MeshNodeFactsProviderQuota | undefined): boolean {
     if (!entry) return false;
     if (entry.session !== null && entry.session !== undefined) return true;
     if (entry.weekly !== null && entry.weekly !== undefined) return true;
+    if (entry.monthly !== null && entry.monthly !== undefined) return true;
     return Array.isArray(entry.buckets) && entry.buckets.length > 0;
+}
+
+const holdsReading = quotaEntryHoldsReading;
+
+/**
+ * Provenance of the reading `prior` holds, for `metadata.lastGood` on the
+ * snapshot that retains it. When `prior` is itself a retained entry its own
+ * `lastGood` is passed through unchanged, so the provenance always names the
+ * ORIGINAL measurement rather than an intermediate failed attempt. Only
+ * source/plan/scope/time travel — never account identity or tokens.
+ */
+export function lastGoodProvenanceOf(prior: MeshNodeFactsProviderQuota): NonNullable<NonNullable<MeshNodeFactsProviderQuota['metadata']>['lastGood']> {
+    const meta = prior.metadata;
+    const chained = meta?.lastGoodWindows === true ? meta.lastGood : undefined;
+    if (chained && typeof chained.measuredAt === 'number') return chained;
+    return {
+        measuredAt: prior.updatedAt,
+        ...(typeof meta?.source === 'string' ? { source: meta.source } : {}),
+        ...(meta?.planType !== undefined ? { planType: meta.planType } : {}),
+        ...(typeof meta?.collectorScope === 'string' ? { collectorScope: meta.collectorScope } : {}),
+    };
 }
 
 /**
@@ -116,7 +140,7 @@ export function mergeLastGoodForPersist(
             // The numbers keep the age of the observation that produced them,
             // never the age of the failure that could not replace them.
             updatedAt: prior.updatedAt,
-            metadata: { ...entry.metadata, lastGoodWindows: true },
+            metadata: { ...entry.metadata, lastGoodWindows: true, lastGood: lastGoodProvenanceOf(prior) },
         };
     }
     // A provider absent from `fresh` was pruned on purpose (the enable gate

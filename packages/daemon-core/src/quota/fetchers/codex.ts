@@ -172,9 +172,18 @@ function describeCodexRateLimitFailure(kind: QuotaFailureKind, text: string): st
             // rate limits this call was refused. So the rejection is about
             // access to the usage endpoint, not about who the user is, and
             // telling them to re-authenticate sends them to fix something that
-            // is not broken. Phrased to leave the entitlement question open
-            // rather than assert a cause we have not established.
-            return `Codex declined the rate-limit lookup for this account (${text}) — the sign-in itself is fine; usage numbers are read from local Codex logs instead`;
+            // is not broken.
+            //
+            // ★But do not overcorrect into the opposite claim either (rc12
+            // finding 2026-10-13). This lookup is a BACKGROUND probe the daemon
+            // spawns on its own (`codex app-server`), not the Codex session the
+            // user is running, so it cannot vouch for that session's sign-in.
+            // And this text only surfaces when NO local rollout reading exists
+            // (fetchCodexQuota returns the local reading whenever there is one),
+            // so "numbers are read from local logs instead" was false exactly
+            // when it was shown. State what was refused and by whom; leave the
+            // session's auth and the usage numbers explicitly unknown.
+            return `Codex usage lookup by the background quota collector was refused (${text}) — this is the daemon's own probe, not a running Codex session, so it says nothing about that session's sign-in; usage is unknown until Codex writes a local usage reading`;
         case 'rate-limited':
             return `Codex rate-limit lookup was rate limited: ${text}`;
         case 'network':
@@ -241,7 +250,7 @@ function mapRateLimits(result: unknown, nowMs: number): ProviderQuota {
 
     const planTypeRaw = snapshot.planType;
     const metadata: QuotaMetadata = {
-        source: 'app-server',
+        source: 'app-server', collectorScope: 'background-collector',
         ...(typeof planTypeRaw === 'string' ? { planType: planTypeRaw } : {}),
     };
 
@@ -305,7 +314,7 @@ export async function fetchCodexQuotaFromAppServer(overrides: QuotaFetchDeps = {
             const message = err instanceof Error ? err.message : String(err);
             resolve(
                 quotaFailure('codex-cli', 'unavailable', `Codex CLI could not be started: ${message}`, {
-                    source: 'app-server',
+                    source: 'app-server', collectorScope: 'background-collector',
                     failureKind: 'cli-unavailable',
                 }),
             );
@@ -377,7 +386,7 @@ export async function fetchCodexQuotaFromAppServer(overrides: QuotaFetchDeps = {
                             'codex-cli',
                             'error',
                             `Codex app-server handshake failed: ${message.error.message ?? 'unknown error'}`,
-                            { source: 'app-server', failureKind: 'unsupported' },
+                            { source: 'app-server', collectorScope: 'background-collector', failureKind: 'unsupported' },
                         ),
                     );
                     return;
@@ -394,7 +403,7 @@ export async function fetchCodexQuotaFromAppServer(overrides: QuotaFetchDeps = {
                     const detail = err instanceof Error ? err.message : String(err);
                     finish(
                         quotaFailure('codex-cli', 'error', `Codex rate-limit request failed: ${detail}`, {
-                            source: 'app-server',
+                            source: 'app-server', collectorScope: 'background-collector',
                             failureKind: 'cli-unavailable',
                         }),
                     );
@@ -411,7 +420,7 @@ export async function fetchCodexQuotaFromAppServer(overrides: QuotaFetchDeps = {
                             'codex-cli',
                             failureKind === 'missing-credentials' ? 'unavailable' : 'error',
                             describeCodexRateLimitFailure(failureKind, text),
-                            { source: 'app-server', failureKind },
+                            { source: 'app-server', collectorScope: 'background-collector', failureKind },
                         ),
                     );
                     return;
@@ -470,7 +479,7 @@ export async function fetchCodexQuotaFromAppServer(overrides: QuotaFetchDeps = {
             // ENOENT lands here: codex is not installed or not on PATH.
             finish(
                 quotaFailure('codex-cli', 'unavailable', `Codex CLI is unavailable: ${err.message}`, {
-                    source: 'app-server',
+                    source: 'app-server', collectorScope: 'background-collector',
                     failureKind: 'cli-unavailable',
                 }),
             );
@@ -486,7 +495,7 @@ export async function fetchCodexQuotaFromAppServer(overrides: QuotaFetchDeps = {
                     `Codex app-server exited (code ${code ?? 'null'}) before reporting rate limits${
                         detail ? `: ${detail}` : ''
                     }`,
-                    { source: 'app-server', failureKind: 'cli-unavailable' },
+                    { source: 'app-server', collectorScope: 'background-collector', failureKind: 'cli-unavailable' },
                 ),
             );
         });
@@ -494,7 +503,7 @@ export async function fetchCodexQuotaFromAppServer(overrides: QuotaFetchDeps = {
         timeoutHandle = deps.setTimeout(() => {
             finish(
                 quotaFailure('codex-cli', 'error', 'Codex rate-limit request timed out', {
-                    source: 'app-server',
+                    source: 'app-server', collectorScope: 'background-collector',
                     failureKind: 'network',
                 }),
             );
@@ -513,7 +522,7 @@ export async function fetchCodexQuotaFromAppServer(overrides: QuotaFetchDeps = {
             const detail = err instanceof Error ? err.message : String(err);
             finish(
                 quotaFailure('codex-cli', 'error', `Codex app-server handshake failed: ${detail}`, {
-                    source: 'app-server',
+                    source: 'app-server', collectorScope: 'background-collector',
                     failureKind: 'cli-unavailable',
                 }),
             );

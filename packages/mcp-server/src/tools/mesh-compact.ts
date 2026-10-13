@@ -140,6 +140,8 @@ export function annotateQuotaSnapshotFreshness(quota: any, now: number = Date.no
  *   "pool 62% (4) · 12m · stale"           — provider measured only on the per-pool
  *                                           bucket axis (antigravity): worst pool's
  *                                           used% and how many pools reported
+ *   "30d 41% · 3m"                         — provider measured only on the 30-day
+ *                                           axis (cursor-cli)
  *   "unavailable:cli-unavailable"          — no numbers at all: status[:failureKind]
  *
  * Rules encoded here (each one is a past misread):
@@ -186,9 +188,14 @@ export function summarizeNodeQuota(quota: any, now: number = Date.now()): Record
         const worstBucket = buckets.length > 0
             ? `${Math.round(Math.max(...buckets.map((b: any) => b.usedPercent)))}%`
             : undefined;
+        // A 30-day window is a real reading too: cursor-cli reports ONLY this
+        // axis, so a session/weekly/buckets-only test folded a healthy (or
+        // retained) cursor reading to a bare status word. A window without a
+        // finite usedPercent stays unknown (`pct` → undefined), never 0%.
+        const monthly = pct(snapshot.monthly);
         // Only a snapshot with NO usable numbers at all degrades to the bare
         // status[:failureKind] word — any retained reading stays visible.
-        if (weekly === undefined && session === undefined && worstBucket === undefined) {
+        if (weekly === undefined && session === undefined && worstBucket === undefined && monthly === undefined) {
             out[provider] = failureKind ? `${status}:${failureKind}` : status;
             continue;
         }
@@ -200,6 +207,10 @@ export function summarizeNodeQuota(quota: any, now: number = Date.now()): Record
         // `pool` is the worst pool's used%, the same headline routing gates on.
         if (weekly === undefined && session === undefined && worstBucket !== undefined) {
             line = `pool ${worstBucket} (${buckets.length}) · ${age}${stale ? ' stale' : ''}`;
+        } else if (weekly === undefined && session === undefined && monthly !== undefined) {
+            // Same reasoning for a monthly-only provider: label the axis the
+            // number belongs to instead of implying 7d/5h were measured.
+            line = `30d ${monthly} · ${age}${stale ? ' stale' : ''}`;
         }
         // The cue decision is shared with the dashboards and `adhdev quota`
         // (assessQuotaFreshness in mesh-shared) — do not re-derive it here.

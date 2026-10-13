@@ -480,8 +480,19 @@ describe('fetchCodexQuota — rate-limit error classification', () => {
         // something that is not broken. An earlier version of this test forbade
         // only the exact strings and let "please try signing in again" through.
         expect(quota.error).not.toMatch(/sign(ing)?[\s-]?in again|re-?authenticate|log ?in again/i);
-        // ...and it must say where the numbers actually come from instead.
-        expect(quota.error).toMatch(/local Codex logs/i);
+        // ★Nor the opposite overclaim (rc12 2026-10-13). This lookup is the
+        // daemon's own background probe, not the running Codex session, so it
+        // cannot vouch for that session's sign-in; and this text only appears
+        // when NO local rollout reading exists, so claiming numbers "are read
+        // from local Codex logs instead" was false exactly when shown.
+        expect(quota.error).not.toMatch(/sign-in itself is fine|signed in fine|sign-in is fine/i);
+        expect(quota.error).not.toMatch(/read from local Codex logs instead/i);
+        expect(quota.error).toMatch(/background quota collector/i);
+        expect(quota.error).toMatch(/usage is unknown/i);
+        expect(quota.metadata?.collectorScope).toBe('background-collector');
+        // Unknown is never inferred as a measurement either way.
+        expect(quota.session).toBeNull();
+        expect(quota.weekly).toBeNull();
     });
 
     it('classifies a token-refresh network error as network, not missing-credentials', async () => {

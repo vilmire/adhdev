@@ -155,6 +155,21 @@ export interface QuotaBucket extends QuotaWindow {
     name: string;
 }
 
+/** See `QuotaMetadata.collectorScope`. */
+export type QuotaCollectorScope = 'background-collector';
+
+/** See `QuotaMetadata.lastGood`. */
+export interface QuotaLastGoodProvenance {
+    /** Unix ms the retained numbers were measured (the original `updatedAt`). */
+    measuredAt: number;
+    /** `metadata.source` of the snapshot that measured them, when known. */
+    source?: string;
+    /** `metadata.planType` of the snapshot that measured them, when known. */
+    planType?: string | null;
+    /** `metadata.collectorScope` of the snapshot that measured them, when set. */
+    collectorScope?: QuotaCollectorScope;
+}
+
 /** Extra provenance/diagnostic detail; never required to render a snapshot. */
 export interface QuotaMetadata {
     /**
@@ -228,6 +243,25 @@ export interface QuotaMetadata {
      * a stale number as freshly measured.
      */
     lastGoodWindows?: boolean;
+    /**
+     * Provenance of the RETAINED reading when `lastGoodWindows` is true: the
+     * source, plan and measurement time of the snapshot that actually produced
+     * the carried numbers. `source`/`planType` at the top level of this
+     * metadata describe the fresh (failed) attempt, so without this a reader
+     * would attribute retained numbers to the failing collector. Set by
+     * `carryForwardLastGoodWindows` (./refresh.ts) and `mergeLastGoodForPersist`
+     * (./persist.ts); chained unchanged across consecutive failures so it
+     * always names the ORIGINAL measurement. Never set by a fetcher.
+     */
+    lastGood?: QuotaLastGoodProvenance;
+    /**
+     * Which process produced this snapshot. `'background-collector'` means a
+     * daemon-spawned probe (e.g. codex's app-server rate-limit lookup), NOT an
+     * executing CLI session: a failure here is evidence about the probe's own
+     * request only and says nothing about whether a running session of the same
+     * CLI is signed in, nor that any fallback reading exists.
+     */
+    collectorScope?: QuotaCollectorScope;
     /**
      * Set by `updateFailureRetry` (./refresh.ts) once the bounded transient
      * retry budget is spent: the daemon is no longer retrying this failure, so

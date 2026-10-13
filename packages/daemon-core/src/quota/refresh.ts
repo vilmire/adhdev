@@ -45,7 +45,7 @@ import { fetchCursorQuota } from './fetchers/cursor.js';
 import { fetchGrokQuota, readGrokCredentialMtimeMs } from './fetchers/grok.js';
 import { fetchKimiQuota, readKimiCredentialMtimeMs } from './fetchers/kimi.js';
 import { fetchOpencodeUsage } from './fetchers/opencode.js';
-import { loadQuotaCache, mergeLastGoodForPersist, saveQuotaCache } from './persist.js';
+import { lastGoodProvenanceOf, loadQuotaCache, mergeLastGoodForPersist, quotaEntryHoldsReading, saveQuotaCache } from './persist.js';
 import { revalidateInFlight } from './refresh-triggers.js';
 
 /**
@@ -298,10 +298,12 @@ export function carryForwardLastGoodWindows(
     // still holds a perfectly good reading. Judging "do we hold anything
     // worth keeping?" on session/weekly alone therefore declared that
     // reading absent and let the numberless error through — the chips the
-    // user actually reads went blank. Buckets count as a real reading here.
-    const prevHasBuckets = !!prev && Array.isArray(prev.buckets) && prev.buckets.length > 0;
-    const prevHasWindows = (prevIsFreshOk || prevIsCarriedForward)
-        && (prev!.session !== null || prev!.weekly !== null || prevHasBuckets);
+    // user actually reads went blank. Buckets count as a real reading here,
+    // and so does a monthly-only reading (cursor-cli reports nothing else, so
+    // a session/weekly/buckets-only test dropped it on every transient blip).
+    // The predicate is shared with the persist clobber barrier so memory and
+    // disk agree on what "a reading" is.
+    const prevHasWindows = (prevIsFreshOk || prevIsCarriedForward) && quotaEntryHoldsReading(prev);
     if (!prevHasWindows) return fresh;
     // Keep the last good numbers + their ORIGINAL age; carry the fresh
     // failure signal. prev.updatedAt is already the original observation
@@ -325,6 +327,9 @@ export function carryForwardLastGoodWindows(
             // label them (e.g. "· refreshing") instead of treating them as
             // freshly measured.
             lastGoodWindows: true,
+            // The top-level source/planType now describe the FAILED attempt;
+            // record where the retained numbers actually came from.
+            lastGood: lastGoodProvenanceOf(prev!),
         },
     };
 }

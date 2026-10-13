@@ -51,6 +51,11 @@ function formatWindow(
     if (!window) {
         return `  ${label.padEnd(8)} ${chalk.gray('not reported')}`;
     }
+    // A window whose percentage is missing is UNKNOWN — never drawn as an
+    // empty (0%) bar or a "NaN%" figure that reads as a measurement.
+    if (typeof window.usedPercent !== 'number' || !Number.isFinite(window.usedPercent)) {
+        return `  ${label.padEnd(8)} ${chalk.gray('unknown')}`;
+    }
     const percent = `${window.usedPercent.toFixed(1)}%`;
     const bar = renderBar(window.usedPercent);
     const reset = window.resetsAt === null ? '' : chalk.gray(`  resets ${formatRelative(window.resetsAt)}`);
@@ -107,10 +112,22 @@ export function printQuota(name: string, quota: ProviderQuota): void {
     // the email was never fetched), and then the heading renders alone.
     const account = formatQuotaAccount(quota as unknown as MeshNodeFactsProviderQuota);
     console.log(account ? `${chalk.bold(name)}  ${chalk.gray(account)}` : chalk.bold(name));
-    if (quota.status === 'ok' || quota.session || quota.weekly) {
+    // `monthly` is a reading on its own (cursor-cli reports ONLY that axis), so
+    // it both opens the window block and gets its own 30-day line. It is only
+    // printed when present: a provider without a 30-day axis should not grow a
+    // "not reported" row it never had.
+    if (quota.status === 'ok' || quota.session || quota.weekly || quota.monthly) {
         const cue = windowCue(quota);
         console.log(formatWindow('5 hour', quota.session, cue));
         console.log(formatWindow('7 day', quota.weekly, cue));
+        if (quota.monthly) console.log(formatWindow('30 day', quota.monthly, cue));
+    }
+    // Retained numbers are labelled with where they actually came from: the
+    // top-level source/plan describe the attempt that just FAILED.
+    const lastGood = quota.metadata?.lastGoodWindows === true ? quota.metadata.lastGood : undefined;
+    if (lastGood && typeof lastGood.measuredAt === 'number') {
+        const from = [lastGood.source, lastGood.planType].filter((v): v is string => typeof v === 'string' && v.length > 0).join(', ');
+        console.log(`  ${chalk.gray(`retained reading${from ? ` from ${from}` : ''}, measured ${formatAgo(lastGood.measuredAt)}`)}`);
     }
     if (quota.error) {
         const tone = quota.status === 'unavailable' ? chalk.gray : chalk.yellow;
