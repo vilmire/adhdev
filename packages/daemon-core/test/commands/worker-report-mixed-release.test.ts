@@ -342,6 +342,20 @@ describe.skipIf(!artifact)('strict B delivery and restart recovery', () => {
     expect(r.owner.turnStore().listWorkerEventsForTask(r.meshId, r.taskId, 'worker_tool_report')).toHaveLength(1)
     await r.ledger.flushPublish()
   })
+  it.each(['worker_report_refused','worker_report_correction_requested'])('local refusal %s storage failure rolls back and remains retryable', async (failedKind) => {
+    const r=rig('rc13','rc13',true)
+    const args={token:r.localToken,deliveryId:'refusal-event-failure',reportedAtMs:Date.now()}
+    const preparation=await r.localCommand('worker_bridge_prepare',args)
+    const request={...args,prepared:preparation.prepared,report:{...r.report,summary:'x'.repeat(8001)}}
+    r.owner.db.exec(`CREATE TRIGGER refusal_event_failure BEFORE INSERT ON turn_events WHEN NEW.kind='${failedKind}' BEGIN SELECT RAISE(ABORT, 'refusal evidence storage failure'); END`)
+    expect(await r.localCommand('worker_report_completion',request)).toMatchObject({success:false,error:'storage_failed'})
+    expect(r.owner.turnStore().listWorkerEventsForTask(r.meshId,r.taskId,'worker_report_refused')).toHaveLength(0)
+    expect(r.ledger.getAttempt(r.attemptId).data.reportCorrection).toBeUndefined()
+    r.owner.db.exec('DROP TRIGGER refusal_event_failure');r.reboot('owner')
+    expect(await r.localCommand('worker_report_completion',request)).toMatchObject({success:false,error:'invalid_report',receipt:{recorded:true}})
+    expect(r.owner.turnStore().listWorkerEventsForTask(r.meshId,r.taskId,'worker_report_refused')).toHaveLength(1)
+    expect(r.ledger.getAttempt(r.attemptId).terminal).toBeNull();await r.ledger.flushPublish()
+  })
   it('prepared local progress cannot first record against a terminal attempt', async () => {
     const r = rig('rc13','rc13',true)
     const progressArgs = { token:r.localToken,deliveryId:'prepared-before-terminal',reportedAtMs:Date.now() }

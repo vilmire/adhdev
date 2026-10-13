@@ -58190,15 +58190,15 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       return saved ? JSON.parse(saved.envelope_json) : null;
     }
     function commitLocalBridgeDelivery(db, e, apply) {
-      ensureBridgeSchema(db);
-      const prior = row(db, "local", e.senderDaemonId, e.deliveryId);
-      if (prior) {
-        const original = JSON.parse(prior.envelope_json);
-        if (stableBridgeJson({ ...e, senderCommit: original.senderCommit, senderVersion: original.senderVersion }) !== stableBridgeJson(original)) return { success: false, error: "worker_delivery_identity_conflict" };
-        e = original;
-      }
-      if (prior && prior.digest !== bridgeDigest(e)) return { success: false, error: "worker_delivery_identity_conflict" };
       try {
+        ensureBridgeSchema(db);
+        const prior = row(db, "local", e.senderDaemonId, e.deliveryId);
+        if (prior) {
+          const original = JSON.parse(prior.envelope_json);
+          if (stableBridgeJson({ ...e, senderCommit: original.senderCommit, senderVersion: original.senderVersion }) !== stableBridgeJson(original)) return { success: false, error: "worker_delivery_identity_conflict" };
+          e = original;
+        }
+        if (prior && prior.digest !== bridgeDigest(e)) return { success: false, error: "worker_delivery_identity_conflict" };
         return bridgeReceiptTransaction(db, () => {
           const saved = put(db, "local", e);
           if (saved.receipt_json) return JSON.parse(saved.receipt_json);
@@ -129109,7 +129109,7 @@ ${marker}`,
         );
         return receipt ? { ...answer, receipt } : answer;
       } catch {
-        return answer;
+        return args?.prepared ? { ...answer, receiptPending: true, provenanceError: "storage_failed" } : answer;
       }
     }
     function toProgressResponse(result) {

@@ -130,6 +130,7 @@ export function findBridgeMemberDelivery(db: Database, senderId: string, deliver
 /** Local IPC uses its authenticated prepared credential instead of a peer
  * challenge. The same transaction and receipt discipline covers local workers. */
 export function commitLocalBridgeDelivery(db: Database, e: BridgeEnvelope, apply: () => Reply): Reply {
+    try {
     ensureBridgeSchema(db);
     const prior = row(db, 'local', e.senderDaemonId, e.deliveryId);
     if (prior) {
@@ -138,7 +139,7 @@ export function commitLocalBridgeDelivery(db: Database, e: BridgeEnvelope, apply
         e = original;
     }
     if (prior && prior.digest !== bridgeDigest(e)) return { success: false, error: 'worker_delivery_identity_conflict' };
-    try { return bridgeReceiptTransaction(db, () => {
+    return bridgeReceiptTransaction(db, () => {
         const saved = put(db, 'local', e);
         if (saved.receipt_json) return JSON.parse(saved.receipt_json) as Reply;
         const reply = apply();
@@ -146,7 +147,8 @@ export function commitLocalBridgeDelivery(db: Database, e: BridgeEnvelope, apply
         if (reply.success !== true && !(reply.error === 'invalid_report' && (reply.receipt as { recorded?: boolean })?.recorded === true)) return reply;
         db.prepare("UPDATE worker_bridge_delivery SET state='receipted',receipt_json=? WHERE side='local' AND sender_id=? AND delivery_id=?").run(JSON.stringify(reply), e.senderDaemonId, e.deliveryId);
         return reply;
-    }); } catch { return { success: false, error: 'storage_failed' }; }
+    });
+    } catch { return { success: false, error: 'storage_failed' }; }
 }
 export async function queryBridgePeer(dispatch: BridgeDispatch, peerId: string, meshId: string, policy: BridgePolicy, deliveryClaim?: { deliveryId: string; digest: string }): Promise<Record<string, unknown> | null> {
     const nonce = randomUUID();

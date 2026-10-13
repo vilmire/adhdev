@@ -300,8 +300,9 @@ async function refuseInvalidReport(
             `${where}; fields=${safeRefusalFields(fields).join(',')}; summaryLength=${summaryLength ?? '-'}${deliveryId ? `; delivery=${deliveryId}` : ''}`);
         return receipt ? { ...answer, receipt } : answer;
     } catch {
-        // Provenance is additive: it must never change the refusal itself.
-        return answer;
+        // Retain a strict prepared refusal when storage/provenance lookup fails.
+        // Never turn an unconfirmed receipt into a definitive outbox answer.
+        return args?.prepared ? { ...answer, receiptPending: true, provenanceError: 'storage_failed' } : answer;
     }
 }
 
