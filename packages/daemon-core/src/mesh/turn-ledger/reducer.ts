@@ -254,6 +254,15 @@ function ownerScrapedMeshFinal(ctx: GuardCtx): boolean {
         && !!ctx.attempt && isMeshScope(ctx.attempt);
 }
 
+/** A native marker ends the provider turn, but an owner probe cannot use it as
+ * the task verdict for a report-owning queue worker. R15p waits for the report. */
+function ownerProbedQueueNativeCompletion(ctx: GuardCtx): boolean {
+    const ev = ctx.evidence;
+    return ev.kind === 'transcript_final' && ev.nativeRead && ev.nativeMarker?.outcome === 'completed'
+        && OWNER_SCRAPE_SOURCES.has(ev.source) && ctx.attempt?.scope === 'mesh_queue'
+        && admissionOf(ctx)?.kind === 'strong';
+}
+
 /** The attempt is inside an R9r window (an active `await_report` hold). */
 function awaitReportHeld(ctx: GuardCtx): boolean {
     const attempt = ctx.attempt;
@@ -279,7 +288,8 @@ function correctionPending(ctx: GuardCtx): boolean {
     return r?.generation === ctx.attempt?.generation && !reportedThisGeneration(ctx);
 }
 function endTimer(ctx: GuardCtx): boolean {
-    return holdIs(ctx, 'weak_candidate', 'await_report') && !correctionPending(ctx);
+    return holdIs(ctx, 'weak_candidate', 'await_report')
+        && expiredHold(ctx)?.data.nativeProbeReportOnly !== true && !correctionPending(ctx);
 }
 function freshAlive(ctx: GuardCtx): boolean { return freshEndProbe(ctx) && ctx.attempt?.lastLiveness === 'alive'; }
 
@@ -299,7 +309,8 @@ const GUARDS: Record<Exclude<GuardId, 'otherwise'>, (ctx: GuardCtx) => boolean> 
         const ev = ctx.evidence;
         if (ev.kind === 'worker_report') return true;
         if (ev.kind === 'turn_end') return ev.strength === 'genuine' && !ev.hollow && !ev.providerFailure && ev.nativeOutcome !== 'failed';
-        if (ev.kind === 'transcript_final') return admitTranscriptFinal(ev, ctx.policy).kind === 'strong';
+        if (ev.kind === 'transcript_final') return admitTranscriptFinal(ev, ctx.policy).kind === 'strong'
+            && !ownerProbedQueueNativeCompletion(ctx);
         return false;
     },
     stale_session_distinct: (ctx) => !!ctx.attempt && !sessionIdsEquivalent(ctx.evidence.sessionId, ctx.attempt.sessionId),
@@ -323,11 +334,14 @@ const GUARDS: Record<Exclude<GuardId, 'otherwise'>, (ctx: GuardCtx) => boolean> 
     end_weak_after_timeout: (ctx) => { const e = completionEnd(ctx); return !!e && e.strength === 'weak' && !!e.afterFinalizationTimeout && !e.hollow && notHeld(ctx) && !reportedThisGeneration(ctx); },
     hollow_retry: (ctx) => { const e = completionEnd(ctx); return !!e && !!e.hollow && notHeld(ctx) && !reportedThisGeneration(ctx) && ctx.attempt!.hollowCount < ctx.attempt!.maxTaskRetries; },
     hollow_exhausted: (ctx) => { const e = completionEnd(ctx); return !!e && !!e.hollow && notHeld(ctx) && !reportedThisGeneration(ctx) && ctx.attempt!.hollowCount >= ctx.attempt!.maxTaskRetries; },
-    final_strong: (ctx) => ctx.evidence.kind === 'transcript_final' && admissionOf(ctx)?.kind === 'strong' && !reportedThisGeneration(ctx),
+    final_strong: (ctx) => ctx.evidence.kind === 'transcript_final' && admissionOf(ctx)?.kind === 'strong'
+        && !ownerProbedQueueNativeCompletion(ctx) && !reportedThisGeneration(ctx),
     final_weak: (ctx) => finalWeak(ctx) && !ownerScrapedMeshFinal(ctx),
-    final_weak_probe: (ctx) => finalWeak(ctx) && ownerScrapedMeshFinal(ctx),
+    final_weak_probe: (ctx) => !reportedThisGeneration(ctx)
+        && ((finalWeak(ctx) && ownerScrapedMeshFinal(ctx)) || ownerProbedQueueNativeCompletion(ctx)),
     genuine_end_or_strong_final: (ctx) => GUARDS.end_genuine(ctx) || (GUARDS.final_strong(ctx) && !awaitReportHeld(ctx)),
-    weak_end_or_final: (ctx) => GUARDS.end_weak(ctx) || finalWeak(ctx),
+    weak_end_or_final: (ctx) => GUARDS.end_weak(ctx) || finalWeak(ctx)
+        || (ownerProbedQueueNativeCompletion(ctx) && !awaitReportHeld(ctx)),
     admission_hold: (ctx) => admissionOf(ctx)?.kind === 'hold',
     // A content decline (no native marker / no final assistant summary) yields
     // to R9t once a report is recorded for this generation: the report already
@@ -363,7 +377,11 @@ const GUARDS: Record<Exclude<GuardId, 'otherwise'>, (ctx: GuardCtx) => boolean> 
     hold_suspension_before_consumed: (ctx) => holdIs(ctx, 'suspension_before_consumed'),
     hold_weak_candidate: (ctx) => holdIs(ctx, 'weak_candidate') && !correctionPending(ctx) && freshAlive(ctx),
     hold_admission: (ctx) => holdIs(ctx, 'live_pending', 'transcript_quiet'),
-    hold_await_report: (ctx) => holdIs(ctx, 'await_report') && !correctionPending(ctx) && freshAlive(ctx),
+    hold_await_report: (ctx) => holdIs(ctx, 'await_report')
+        && expiredHold(ctx)?.data.nativeProbeReportOnly !== true && !correctionPending(ctx) && freshAlive(ctx),
+    hold_native_probe_report_only: (ctx) => holdIs(ctx, 'await_report')
+        && expiredHold(ctx)?.data.nativeProbeReportOnly === true && !correctionPending(ctx)
+        && !reportedThisGeneration(ctx),
     hold_end_unconfirmed_defer: (ctx) => endTimer(ctx) && !freshAlive(ctx)
         && unconfirmedEndDeferrals(ctx) < MAX_UNCONFIRMED_END_DEFERRALS,
     hold_end_unconfirmed_exhausted: (ctx) => endTimer(ctx) && !freshAlive(ctx)
@@ -920,6 +938,7 @@ function applyTemplate(template: EffectTemplate, draft: Draft): void {
                 reason = template.reason;
             }
             if (reason === 'suspension_before_consumed' && ev.kind === 'suspension') { data.modal = ev.modal; data.modalKey = ev.modalKey ?? null; data.suspendedAt = ev.clockUnknown ? null : ev.at; data.providerSetup = ev.providerSetup === true; }
+            if (reason === 'await_report' && ownerProbedQueueNativeCompletion(draft.ctx)) data.nativeProbeReportOnly = true;
             if (TEXT_CARRYING_HOLDS.includes(reason)) {
                 data.textEventId = ev.eventId;
                 const opener = summaryOf(ev);

@@ -22,7 +22,8 @@ import { readTurnTerminalViews } from '../../src/mesh/mesh-local-records.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 import { isTurnEvidence } from '@adhdev/mesh-shared';
 import { POLICY, REF, ev, makeAttempt } from './fixtures.js';
-import { dispatch, evd, ledgerOn, memDb } from './ledger-harness.js';
+import { dispatch, evd, ledgerOn, memDb, recordingHost, rowsOf } from './ledger-harness.js';
+import { observeAcceptedWorkerReport } from '../../src/mesh/turn-ledger/worker-report-evidence.js';
 import { readTerminalEvents, TerminalWatchStore, terminalRetryIdentity } from '../../src/assistant/terminal-watch.js';
 import { pendingTerminalEvents, TerminalWatchDelivery } from '../../src/assistant/terminal-watch-runtime.js';
 
@@ -57,6 +58,118 @@ function evidence(result: ReturnType<typeof readers>[number]) {
 }
 
 describe('Codex native producer terminal truth', () => {
+    it('owner probe native completion awaits a mesh_queue report across a resumed worker turn', async () => {
+        for (const native of readers([start(), complete()])) {
+            const db = memDb();
+            try {
+                let now = START;
+                const host = recordingHost();
+                const ledger = ledgerOn(db, { now: () => now, host });
+                expect(ledger.observe(dispatch({ scope: 'mesh_queue' })).rule).toBe('R1');
+                expect(ledger.observe(evd('delivered', { messageId: 'msg-1', outcome: 'delivered', via: 'local' }, { source: 'input_service' })).rule).toBe('R2');
+                expect(ledger.observe(evd('turn_started', { retro: false }, { at: START })).rule).toBe('R4');
+
+                now = START + 10_000;
+                const read = probeEvidence(ledger.getAttempt('a1')!,
+                    { presence: 'present', transcript: analyze(native) },
+                    { nowMs: now, observedBy: 'dc', policy: POLICY });
+                expect(read[0]).toMatchObject({ kind: 'transcript_final', source: 'coordinator_probe', nativeRead: true,
+                    nativeMarker: { outcome: 'completed' }, attemptRef: { attemptId: 'a1', generation: 0 } });
+                if (read[0]?.kind !== 'transcript_final') throw new Error('expected scoped native final');
+                expect(admitTranscriptFinal(read[0], POLICY).kind).toBe('strong');
+                expect(ledger.observe(read[0]!).rule).toBe('R15p');
+                for (const item of read.slice(1)) ledger.observe(item);
+                expect(ledger.getAttempt('a1')!.terminal).toBeNull();
+                expect(rowsOf(db, 'committed', 'a1')).toHaveLength(0);
+                expect(rowsOf(db, 'notify', 'a1')).toHaveLength(0);
+                expect(host.calls).not.toContain('terminal:t1:completed');
+
+                now += 1;
+                const repeated = probeEvidence(ledger.getAttempt('a1')!,
+                    { presence: 'present', transcript: analyze(native) },
+                    { nowMs: now, observedBy: 'dc', policy: POLICY })[0]!;
+                expect(ledger.observe(repeated).rule).toBe('R11d');
+                expect(ledger.getAttempt('a1')!.terminal).toBeNull();
+
+                now = START + 29_000; // 19 seconds after the misleading native marker.
+                expect(ledger.observe(evd('turn_started', { retro: false }, { at: now })).rule).toBe('R12r');
+                expect(ledger.getAttempt('a1')!.state).toBe('generating');
+                now = START + 300_000;
+                expect(ledger.observe(evd('turn_end', { strength: 'genuine', reportExpected: true },
+                    { source: 'completion_flush_genuine', at: now })).rule).toBe('R9r');
+                expect(ledger.getAttempt('a1')!.terminal).toBeNull();
+
+                now = START + 320_000;
+                const accepted = { meshId: 'm1', taskId: 't1', attemptId: 'a1', sessionId: 's1',
+                    outcome: 'completed' as const, summary: 'synthetic accepted report', hasHandoffNotes: false, atMs: now };
+                expect(observeAcceptedWorkerReport(ledger, accepted)?.rule).toBe('R17');
+                expect(ledger.getAttempt('a1')!.terminal).toMatchObject({ outcome: 'completed', strength: 'tool_report' });
+                expect(observeAcceptedWorkerReport(ledger, accepted)?.verdict).toBe('duplicate');
+                expect(rowsOf(db, 'committed', 'a1')).toHaveLength(1);
+                expect(rowsOf(db, 'notify', 'a1')).toHaveLength(1);
+                expect(host.calls.filter(c => c === 'terminal:t1:completed')).toHaveLength(1);
+            } finally { db.close(); }
+        }
+    });
+
+    it('a native probe marker alone cannot weak-complete the queue task when its report wait expires', () => {
+        const native = readers([start(), complete()])[0]!;
+        const db = memDb();
+        try {
+            let now = START;
+            const host = recordingHost();
+            const ledger = ledgerOn(db, { now: () => now, host });
+            ledger.observe(dispatch({ scope: 'mesh_queue' }));
+            ledger.observe(evd('delivered', { messageId: 'msg-1', outcome: 'delivered', via: 'local' }, { source: 'input_service' }));
+            ledger.observe(evd('turn_started', { retro: false }, { at: START }));
+            now = START + 10_000;
+            const marker = probeEvidence(ledger.getAttempt('a1')!,
+                { presence: 'present', transcript: analyze(native) },
+                { nowMs: now, observedBy: 'dc', policy: POLICY })[0]!;
+            expect(ledger.observe(marker).rule).toBe('R15p');
+            const hold = ledger.store.activeHolds('a1').find(h => h.reason === 'await_report')!;
+            expect(hold.data.nativeProbeReportOnly).toBe(true);
+            expect(hold.until).toBe(now + POLICY.awaitReportMs);
+            now = hold.until!;
+            const expiry = ledger.observe(evd('hold_expired', { holdId: hold.holdId, reason: 'await_report' },
+                { source: 'scheduler', observedBy: 'dc', at: now }));
+            expect(expiry.rule).toBe('R13n');
+            expect(ledger.getAttempt('a1')!.terminal).toBeNull();
+            expect(rowsOf(db, 'committed', 'a1')).toHaveLength(0);
+            expect(rowsOf(db, 'notify', 'a1')).toHaveLength(0);
+            expect(host.calls).not.toContain('terminal:t1:completed');
+            now += 1;
+            expect(observeAcceptedWorkerReport(ledger, { meshId: 'm1', taskId: 't1', attemptId: 'a1',
+                sessionId: 's1', outcome: 'completed', summary: 'synthetic late report',
+                hasHandoffNotes: false, atMs: now })?.rule).toBe('R17');
+            expect(rowsOf(db, 'committed', 'a1')).toHaveLength(1);
+            expect(rowsOf(db, 'notify', 'a1')).toHaveLength(1);
+        } finally { db.close(); }
+    });
+
+    it('a previous-generation owner probe marker cannot adopt completion into a replacement queue attempt', () => {
+        const replacement = makeAttempt('accepted', { generation: 1, sessionId: 's-new',
+            prevGeneration: { sessionId: 's-old', consumed: false }, consumedAt: null });
+        const marker = ev('transcript_final', { selfAttributing: false, nativeRead: true,
+            nativeMarker: { outcome: 'completed' }, live: { modal: false, adapterPending: false, trailingTool: false } },
+        { source: 'coordinator_probe', sessionId: 's-old', attemptRef: { attemptId: 'a1', generation: 0 } });
+        const result = reduce({ attempt: replacement, holds: [], evidence: marker, policy: POLICY, nowMs: START + 10_000 });
+        expect(result.rule).toBe('R28');
+        expect(result.attempt?.state).toBe('accepted');
+        expect(result.attempt?.terminal).toBeNull();
+        expect(result.effects.some(effect => effect.kind === 'commit')).toBe(false);
+    });
+
+    it('an owner-probed native completion still closes a direct attempt', () => {
+        const marker = ev('transcript_final', { selfAttributing: false, nativeRead: true,
+            nativeMarker: { outcome: 'completed' }, live: { modal: false, adapterPending: false, trailingTool: false } },
+        { source: 'coordinator_probe' });
+        const result = reduce({ attempt: makeAttempt('generating', { scope: 'mesh_direct' }),
+            holds: [], evidence: marker, policy: POLICY, nowMs: START + 10_000 });
+        expect(result.rule).toBe('R14');
+        expect(result.attempt?.terminal).toMatchObject({ outcome: 'completed', strength: 'genuine' });
+    });
+
     for (const [code, failure] of [['usage_limit_exceeded', 'usage_limit_exceeded'], ['server_overloaded', 'server_overloaded'], ['authentication_error', 'auth_failed']] as const) {
         it(`${code}: both real readers reject old final + failed null completion and commit truthful task_failed`, () => {
             for (const result of readers([message('old completed result', START - 1000), start(), event('error', START + 1000, { error: { type: code } }), complete()])) {
@@ -100,7 +213,7 @@ describe('Codex native producer terminal truth', () => {
         for (const records of [[start(), complete()], [start(), event('error', START + 1000, { error: { type: 'server_overloaded' } }), complete('new-turn', START + 2000, 'Recovered and done')], [start(), message('quote: usage_limit_exceeded server_overloaded authentication_error', START + 1000), complete()], [complete('legacy', START + 2000, 'Done')]]) {
             for (const result of readers(records)) {
                 expect(selectTurnTerminalMarker(result.turnTerminalMarkers, START)?.outcome).toBe('completed');
-                const r = reduce({ attempt: makeAttempt('generating', { consumedAt: START }), holds: [], evidence: evidence(result), policy: POLICY, nowMs: START + 10_000 });
+                const r = reduce({ attempt: makeAttempt('generating', { scope: 'plain', consumedAt: START }), holds: [], evidence: evidence(result), policy: POLICY, nowMs: START + 10_000 });
                 expect(r.attempt?.state).toBe('completed');
             }
         }

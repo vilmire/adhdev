@@ -65,6 +65,7 @@ export type GuardId =
     | 'hold_await_delivery' | 'hold_await_consume_redrive' | 'hold_await_consume_exhausted' | 'hold_await_turn'
     | 'hold_liveness' | 'hold_hard_ceiling' | 'hold_suspension_before_consumed' | 'hold_weak_candidate' | 'hold_admission'
     | 'hold_await_report'
+    | 'hold_native_probe_report_only'
     | 'hold_end_unconfirmed_defer' | 'hold_end_unconfirmed_exhausted' | 'hold_end_probe_missing' | 'hold_report_correction'
     | 'finished_after_report' | 'hold_await_end';
 
@@ -323,7 +324,11 @@ export const TRANSITIONS: readonly TransitionRule[] = [
     // A scrape alone therefore waits like an idle end that awaits the report:
     // the report commits it (R17), the worker's busy edge cancels it (R12r),
     // the worker's own end commits (R11) or keeps waiting (R9d), and expiry
-    // commits weak (R13r). Worker-side weak evidence keeps R15/R10.
+    // commits weak (R13r). A strong native completed marker scraped for a
+    // mesh_queue worker also waits here: it proves the provider turn ended,
+    // not that the task is complete. Its hold may expire without a success;
+    // the accepted report or a separate worker verdict retains authority.
+    // Worker-side weak evidence keeps R15/R10.
     { id: 'R15p', lane: 'current', from: [C, G, S], on: ['transcript_final'], guard: 'final_weak_probe', to: F, verdict: 'applied', effects: awaitReport },
     // R16 stays live-pending-only even once a report is recorded (guard has no
     // `!reportedThisGeneration`): a hold admission (modal/adapter-pending/
@@ -506,6 +511,10 @@ export const TRANSITIONS: readonly TransitionRule[] = [
     // Weak completion requires a fresh probe; missing probe results have a separate bounded timeout.
     { id: 'R13a', lane: 'current', from: [F], on: ['hold_expired'], guard: 'hold_weak_candidate', to: 'completed', verdict: 'applied', effects: [
         { e: 'commit', outcome: 'completed', strength: 'weak', reason: 'weak_end_confirmed' },
+    ] },
+    { id: 'R13n', lane: 'current', from: [F], on: ['hold_expired'], guard: 'hold_native_probe_report_only', to: 'same', verdict: 'applied', effects: [
+        { e: 'release', reasons: 'expired_hold' },
+        { e: 'record', note: 'native_probe_await_report_expired' },
     ] },
     { id: 'R13r', lane: 'current', from: [F], on: ['hold_expired'], guard: 'hold_await_report', to: 'completed', verdict: 'applied', effects: [
         { e: 'commit', outcome: 'completed', strength: 'weak', reason: 'weak_end_confirmed' },
