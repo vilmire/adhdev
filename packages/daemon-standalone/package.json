@@ -24,7 +24,8 @@
     "dist",
     "public",
     "vendor",
-    "README.md"
+    "README.md",
+    "worker-native"
   ],
   "publishConfig": {
     "access": "public"

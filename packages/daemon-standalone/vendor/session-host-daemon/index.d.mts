@@ -6,6 +6,8 @@ interface HostUpgradeBinding {
     /** Trusted packaged helper; supplied hash must come from an immutable artifact pin. */
     helperPath: string;
     helperSha256: string;
+    helperProtocol?: 1;
+    helperFileIdentity?: string;
     stateDir: string;
 }
 
@@ -79,9 +81,24 @@ declare class SessionHostServer extends EventEmitter {
     private handleRuntimeExit;
 }
 
+interface GuardianArtifactPins {
+    packageRoot: string;
+    manifestPath: string;
+    manifestSha256: string;
+    version: string;
+    commit: string;
+    nodePath: string;
+    daemonEntryPath: string;
+    cliEntryPath: string;
+    hostEntryPath: string;
+    stateDir: string;
+}
+/** The manifest pin must come from the supervisor's immutable artifact plan. */
+declare function resolveGuardianArtifact(pins: GuardianArtifactPins): HostUpgradeBinding;
+
 declare function createUncaughtExceptionLimiter(windowMs?: number, limit?: number): (now: number) => {
     exit: boolean;
     countInWindow: number;
 };
 
-export { type HostUpgradeBinding, SessionHostServer, type SessionHostServerOptions, createUncaughtExceptionLimiter };
+export { type GuardianArtifactPins, type HostUpgradeBinding, SessionHostServer, type SessionHostServerOptions, createUncaughtExceptionLimiter, resolveGuardianArtifact };

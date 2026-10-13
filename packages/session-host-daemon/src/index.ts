@@ -14,10 +14,13 @@ import {
   type SessionHostEvent,
   type SessionHostRecord,
 } from '@adhdev/session-host-core';
+import { resolveGuardianArtifact, type GuardianArtifactPins } from './guardian-artifact.js';
 import { SessionHostServer } from './server.js';
 
 export { SessionHostServer } from './server.js';
 export type { SessionHostServerOptions } from './server.js';
+export { resolveGuardianArtifact } from './guardian-artifact.js';
+export type { GuardianArtifactPins } from './guardian-artifact.js';
 export type { HostUpgradeBinding } from './upgrade-lease.js';
 
 const SESSION_HOST_APP_NAME = process.env.ADHDEV_SESSION_HOST_NAME || 'adhdev';
@@ -74,13 +77,25 @@ function parseArgs(argv: string[]) {
 }
 
 async function runServer(): Promise<void> {
+  let upgradeBinding;
+  const pinFile = process.env.ADHDEV_WORKER_GUARDIAN_PINS_FILE;
+  if (pinFile) {
+    const stat = fs.lstatSync(pinFile);
+    if (process.platform !== 'darwin' || fs.realpathSync(pinFile) !== pinFile || !stat.isFile() || stat.uid !== process.getuid?.() || (stat.mode & 0o077)) throw new Error('guardian_launch_pins_untrusted');
+    const pins = JSON.parse(fs.readFileSync(pinFile, 'utf8')) as GuardianArtifactPins;
+    if (pins.nodePath !== fs.realpathSync(process.execPath) || pins.hostEntryPath !== fs.realpathSync(process.argv[1]) ||
+        pins.stateDir !== path.join(INSTANCE_CONFIG_DIR, 'session-host')) throw new Error('guardian_launch_executable_or_instance_mismatch');
+    upgradeBinding = resolveGuardianArtifact(pins);
+  }
   const server = new SessionHostServer({
     appName: SESSION_HOST_APP_NAME,
+    upgradeBinding,
     endpoint: getSessionHostEndpoint(),
     storageRootDir: getSessionHostStorageRoot(),
   });
-  writeSessionHostPid(SESSION_HOST_APP_NAME);
+  if (!upgradeBinding) writeSessionHostPid(SESSION_HOST_APP_NAME);
   await server.start();
+  if (upgradeBinding) writeSessionHostPid(SESSION_HOST_APP_NAME);
 
   process.on('SIGINT', async () => {
     await server.stop();

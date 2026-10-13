@@ -1,12 +1,14 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 
 export interface HostUpgradeBinding {
   /** Trusted packaged helper; supplied hash must come from an immutable artifact pin. */
   helperPath: string;
   helperSha256: string;
+  helperProtocol?: 1;
+  helperFileIdentity?: string;
   stateDir: string;
 }
 interface LeaseState {
@@ -45,10 +47,13 @@ export class HostUpgradeLease {
     if (!dir.isDirectory() || dir.isSymbolicLink() || dir.uid !== process.getuid?.() || (dir.mode & 0o077)) {
       throw new Error('native_host_state_directory_untrusted');
     }
+    if (this.binding.helperFileIdentity && this.fileIdentity() !== this.binding.helperFileIdentity) throw new Error('native_host_helper_file_identity_changed');
     if (fs.realpathSync(this.binding.helperPath) !== this.binding.helperPath ||
         digest(fs.readFileSync(this.binding.helperPath)) !== this.binding.helperSha256) {
       throw new Error('native_host_helper_pin_mismatch');
     }
+    if (this.binding.helperProtocol === 1 && String(execFileSync(this.binding.helperPath, ['--attest'], { stdio: 'pipe' })).trim() !== 'adhdev-host-guardian/1') throw new Error('native_host_helper_protocol_mismatch');
+    if (this.binding.helperFileIdentity && this.fileIdentity() !== this.binding.helperFileIdentity) throw new Error('native_host_helper_file_identity_changed');
     const lockPath = path.join(this.binding.stateDir, 'instance.lock');
     const priorLock = fs.existsSync(lockPath);
     const child = spawn(this.binding.helperPath, [lockPath], { stdio: 'pipe' });
@@ -66,6 +71,7 @@ export class HostUpgradeLease {
       });
     });
     try {
+      if (this.binding.helperFileIdentity && (this.fileIdentity() !== this.binding.helperFileIdentity || digest(fs.readFileSync(this.binding.helperPath)) !== this.binding.helperSha256)) throw new Error('native_host_helper_file_identity_changed');
       if (fs.existsSync(this.journal)) {
         const stat = fs.lstatSync(this.journal);
         if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== process.getuid?.() || (stat.mode & 0o077)) throw new Error('native_host_lease_untrusted');
@@ -78,6 +84,10 @@ export class HostUpgradeLease {
         this.persist(this.state);
       }
     } catch (error) { await this.close(); throw error; }
+  }
+  private fileIdentity(): string {
+    const s=fs.lstatSync(this.binding.helperPath);
+    return JSON.stringify([s.dev,s.ino,s.uid,s.mode,s.size]);
   }
   private persist(value: LeaseState): void {
     const tmp = `${this.journal}.${randomUUID()}.tmp`;
@@ -95,6 +105,7 @@ export class HostUpgradeLease {
     }
   }
   assertHealthy(): void {
+    if (this.binding.helperFileIdentity && this.fileIdentity() !== this.binding.helperFileIdentity) throw new Error('native_host_helper_file_identity_changed');
     if (!this.healthy || this.child?.exitCode !== null || this.child?.signalCode !== null || this.poisoned) throw new Error('native_host_lock_or_storage_unavailable');
   }
   assertMutable(): void {

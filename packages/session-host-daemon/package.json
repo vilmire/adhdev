@@ -20,11 +20,14 @@
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
     "test": "node --import tsx --test test/*.test.ts",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "package:native:guardian": "node scripts/package-native-guardian.mjs"
   },
   "files": [
     "dist",
-    "src"
+    "src",
+    "native",
+    "scripts"
   ],
   "keywords": [
     "adhdev",
