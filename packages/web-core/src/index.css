@@ -4162,6 +4162,25 @@
    Machine / Machines Overview Pages
    ══════════════════════════════════════════════════ */
 
+    /*
+     * MachineQuotaChip Tooltip trigger — mobile/touch hit target ≥44px
+     * (Apple HIG) while the inner pill keeps compact min-h-5 chrome.
+     * No negative-margin expansion: sibling chips in Fleet/Overview/
+     * provider-row flex-wrap rows must not overlap hit areas.
+     */
+    .machine-quota-chip-trigger {
+        box-sizing: border-box;
+    }
+
+    @media (max-width: 640px), (pointer: coarse) {
+        .machine-quota-chip-trigger {
+            min-height: 44px;
+            min-width: 44px;
+            justify-content: center;
+            align-items: center;
+        }
+    }
+
     /* Machine card in Machines grid */
     .machine-card {
         background: var(--bg-secondary);

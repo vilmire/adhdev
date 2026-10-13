@@ -5,6 +5,11 @@
  * bare HTML `title=` is never the only reset-time access path. Tooltip body is
  * assembled by describeQuotaChipTooltip (kind hint + absolute local reset +
  * relative remaining, or explicit unknown).
+ *
+ * Hit target: the Tooltip trigger owns `.machine-quota-chip-trigger`. On
+ * narrow / coarse-pointer viewports CSS raises it to ≥44px (Apple HIG) while
+ * the inner pill keeps compact `min-h-5` chrome for desktop density — no
+ * negative-margin expansion into sibling chips (avoids overlapping targets).
  */
 import { Tooltip } from '../../components/ui/InfoTip'
 import {
@@ -52,7 +57,7 @@ export function MachineQuotaChip({
     const visible = label ?? chip.label
     const tone = TONE_CLASS[chip.tone] ?? TONE_CLASS.default
     return (
-        <Tooltip content={tooltip}>
+        <Tooltip content={tooltip} className="machine-quota-chip-trigger">
             <span
                 data-machine-quota-chip={chip.key}
                 data-quota-hint={chip.hint}
