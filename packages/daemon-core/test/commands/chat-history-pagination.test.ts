@@ -182,3 +182,27 @@ describe('handleChatHistory', () => {
     }))
   })
 })
+
+
+describe('chat_history native source eligibility', () => {
+  it('does not return or pin an exact mapped UUID from an unavailable source', async () => {
+    const { handleChatHistory, __resetProviderSessionPinsForTest, __getProviderSessionPinForTest } = await import('../../src/commands/chat-commands.js')
+    __resetProviderSessionPinsForTest()
+    const writes = vi.fn()
+    mocks.readProviderChatHistory.mockReturnValue({
+      messages: [{ role: 'assistant', content: 'SYNTHETIC_INELIGIBLE_SOURCE', workspace: '/tmp/synthetic-source', historySessionId: 'synthetic-uuid' }],
+      providerSessionId: 'synthetic-uuid', source: 'native-unavailable', hasMore: true,
+    })
+    const result = await handleChatHistory({
+      getProvider: () => ({ type: 'codex-cli', category: 'cli', nativeHistory: { mode: 'canonical' } }),
+      getCliAdapter: () => null,
+      ctx: { sessionRegistry: { get: () => undefined, setProviderSessionId: writes } },
+    } as any, {
+      agentType: 'codex-cli', targetSessionId: 'synthetic-runtime', providerSessionId: 'synthetic-uuid',
+      workspace: '/tmp/synthetic-source', excludeRecentCount: 0,
+    })
+    expect(result).toMatchObject({ messages: [], hasMore: false, source: 'native-unavailable' })
+    expect(__getProviderSessionPinForTest('synthetic-runtime')).toBeUndefined()
+    expect(writes).not.toHaveBeenCalled()
+  })
+})

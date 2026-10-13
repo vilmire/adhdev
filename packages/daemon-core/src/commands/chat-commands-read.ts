@@ -228,7 +228,7 @@ async function readChatHistoryPage(h: CommandHelpers, args: any): Promise<Comman
             const historyProviderSessionId = typeof (result as any)?.providerSessionId === 'string'
                 ? (result as any).providerSessionId
                 : readHistorySessionIdFromMessages(messages) || effectiveHistorySessionId;
-            // Mirror of the subscribe path (see handleReadChat): an antigravity
+            // Mirror of the subscribe path (see handleReadChat): a Codex or antigravity
             // workspace-latest read still surfaces the on-disk uuid, but that uuid is
             // only safe to persist / trust when it was OWNER-token-confirmed as this
             // session's own — a bare recency pick could be a co-located replica's
@@ -241,16 +241,21 @@ async function readChatHistoryPage(h: CommandHelpers, args: any): Promise<Comman
             const ownerConfirmedUuid = resultOwnerConfirmed && typeof historyProviderSessionId === 'string' && historyProviderSessionId.trim()
                 ? historyProviderSessionId.trim()
                 : '';
-            if (resolvedProviderSessionId && (!resultLookupIsWorkspace || resultOwnerConfirmed)) {
-                recordBoundProviderSessionId(h, effectiveReadSessionId(h, args?.targetSessionId), resolvedProviderSessionId);
-            }
-            const safeMapping = hasSafeNativeHistoryMapping({
+            const workspaceLatestUnconfirmed = (agentStr === 'codex-cli' || agentStr === 'antigravity-cli')
+                && resultLookupIsWorkspace && !ownerConfirmedUuid;
+            const safeMapping = !workspaceLatestUnconfirmed && hasSafeNativeHistoryMapping({
                 historySessionId: ownerConfirmedUuid || (lookup === 'workspace' ? undefined : effectiveHistorySessionId),
                 providerSessionId: ownerConfirmedUuid || (lookup === 'workspace' ? undefined : historyProviderSessionId),
                 workspace,
                 nativeMessages: messages,
             });
-            const nativeUnsafeMapping = (result as any).source === 'provider-native' && messages.length > 0 && !safeMapping;
+            const nativeSelected = (result as any).source === 'provider-native' && safeMapping;
+            // Persist only after ownership, workspace mapping and source eligibility
+            // are proven. An unsafe page must not poison a later read_chat.
+            if (nativeSelected && resolvedProviderSessionId && (!resultLookupIsWorkspace || resultOwnerConfirmed)) {
+                recordBoundProviderSessionId(h, effectiveReadSessionId(h, args?.targetSessionId), resolvedProviderSessionId);
+            }
+            const nativeUnsafeMapping = !nativeSelected;
             // LOAD-OLDER PTY FALLBACK (zero-bubble fix): an exact session-scoped
             // native read that is empty (the same transient gap that blanks the
             // live tail) or unsafe must not leave "Load older" returning []

@@ -204,3 +204,20 @@ describe('read_chat runtime-fallback historySessionId poison (historySessionId =
     }))
   })
 })
+
+
+it('chat_history preserves Antigravity owner-confirmed workspace paging and pinning', async () => {
+  const { handleChatHistory } = await import('../../src/commands/chat-commands.js')
+  __resetProviderSessionPinsForTest()
+  mocks.readProviderChatHistory.mockReturnValue(ownerConversationRead())
+  const helpers = createHelpers((id: string) => id === COORDINATOR_SESSION
+    ? { sessionId: COORDINATOR_SESSION, providerType: 'antigravity-cli', transport: 'pty', workspace: WORKSPACE }
+    : undefined)
+  const result = await handleChatHistory(helpers as any, {
+    agentType: 'antigravity-cli', targetSessionId: COORDINATOR_SESSION,
+    historySessionId: COORDINATOR_SESSION, workspace: WORKSPACE, excludeRecentCount: 0,
+  })
+  expect(result.source).toBe('provider-native')
+  expect((result.messages as any[]).map(m => m.content)).toContain('coordinator answer: dispatched 3 tasks')
+  expect(__getProviderSessionPinForTest(COORDINATOR_SESSION)).toBe(OWNER_UUID)
+})

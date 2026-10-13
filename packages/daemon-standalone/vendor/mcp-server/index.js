@@ -121972,16 +121972,18 @@ ${marker}`,
           const resultLookupIsWorkspace = lookup === "workspace";
           const resultOwnerConfirmed = result?.ownerConfirmed === true;
           const ownerConfirmedUuid = resultOwnerConfirmed && typeof historyProviderSessionId === "string" && historyProviderSessionId.trim() ? historyProviderSessionId.trim() : "";
-          if (resolvedProviderSessionId && (!resultLookupIsWorkspace || resultOwnerConfirmed)) {
-            recordBoundProviderSessionId(h, effectiveReadSessionId(h, args?.targetSessionId), resolvedProviderSessionId);
-          }
-          const safeMapping = hasSafeNativeHistoryMapping({
+          const workspaceLatestUnconfirmed = (agentStr === "codex-cli" || agentStr === "antigravity-cli") && resultLookupIsWorkspace && !ownerConfirmedUuid;
+          const safeMapping = !workspaceLatestUnconfirmed && hasSafeNativeHistoryMapping({
             historySessionId: ownerConfirmedUuid || (lookup === "workspace" ? void 0 : effectiveHistorySessionId),
             providerSessionId: ownerConfirmedUuid || (lookup === "workspace" ? void 0 : historyProviderSessionId),
             workspace,
             nativeMessages: messages
           });
-          const nativeUnsafeMapping = result.source === "provider-native" && messages.length > 0 && !safeMapping;
+          const nativeSelected = result.source === "provider-native" && safeMapping;
+          if (nativeSelected && resolvedProviderSessionId && (!resultLookupIsWorkspace || resultOwnerConfirmed)) {
+            recordBoundProviderSessionId(h, effectiveReadSessionId(h, args?.targetSessionId), resolvedProviderSessionId);
+          }
+          const nativeUnsafeMapping = !nativeSelected;
           if ((nativeUnsafeMapping || messages.length === 0) && exactNativeHistoryScope) {
             const ptyPage = readSafeSessionPtyHistoryPage({
               h,

@@ -4,7 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { executeNativeHistory } from '../../src/providers/spec/native-history-executor.js';
 import { readCliProviderNativeHistory } from '../../src/commands/chat-commands-read-native.js';
-import { handleReadChat, __getProviderSessionPinForTest, __resetProviderSessionPinsForTest } from '../../src/commands/chat-commands.js';
+import { handleChatHistory, handleReadChat, __getProviderSessionPinForTest, __resetProviderSessionPinsForTest } from '../../src/commands/chat-commands.js';
 const RUNTIME = 'synthetic-runtime-codex-identity';
 const UUID = '019ea15f-dddd-7133-8347-920def0c7906';
 let root: string, workspace: string, source: any, provider: any, spawn: number;
@@ -39,6 +39,10 @@ function rollout(cwd = workspace) {
 function read(h: any, args: any = {}) {
   return handleReadChat(h, { agentType: 'codex-cli', targetSessionId: RUNTIME, workspace, tailLimit: 20, ...args });
 }
+function page(h: any, args: any = {}) {
+  return handleChatHistory(h, { agentType: 'codex-cli', targetSessionId: RUNTIME, workspace,
+    offset: 0, limit: 20, excludeRecentCount: 0, ...args });
+}
 beforeEach(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'synthetic-codex-identity-'));
   workspace = path.join(root, 'workspace'); fs.mkdirSync(workspace);
@@ -52,6 +56,51 @@ beforeEach(() => {
 });
 afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
 describe('targeted Codex native identity through real JSONL read consumer', () => {
+  it('rejects unconfirmed workspace mtime/timestamp pages and keeps subsequent read_chat unpinned', async () => {
+    for (const floor of [spawn, spawn - 3600_000, 0]) {
+      spawn = floor;
+      const h = helpers();
+      expect((await read(h)).pending).toBe(true);
+      const result = await page(h);
+      expect(result.messages).toEqual([]); expect(result.source).toBe('native-unavailable');
+      expect(result.providerSessionId).toBeUndefined();
+      expect(__getProviderSessionPinForTest(RUNTIME)).toBeUndefined(); expect(writes).not.toHaveBeenCalled();
+      expect((await read(h)).pending).toBe(true);
+    }
+  });
+  it('rejects an explicit cross-workspace page before any pin and keeps subsequent read_chat safe', async () => {
+    rollout(path.join(root, 'other-workspace'));
+    const result = await page(helpers(), { providerSessionId: UUID });
+    expect(result.messages).toEqual([]); expect(result.source).toBe('native-unavailable');
+    expect(__getProviderSessionPinForTest(RUNTIME)).toBeUndefined(); expect(writes).not.toHaveBeenCalled();
+    const next = await read(helpers());
+    expect(next.pending).toBe(true); expect(next.messages).toEqual([]);
+    expect(next.providerSessionId).toBeUndefined(); expect(writes).not.toHaveBeenCalled();
+  });
+  it('pages owned PTY rows after unsafe native selection without poisoning the next read', async () => {
+    const rows = ['SYNTHETIC_OWNED_OLD', 'SYNTHETIC_OWNED_RECENT'].map((content, index) => ({
+      role: 'assistant', content, receivedAt: Date.now() + index,
+    }));
+    const h = helpers(true, rows);
+    const result = await page(h, { excludeRecentCount: 1, limit: 1 });
+    expect(result.source).toBe('pty-parser');
+    expect((result.messages as any[]).map(m => m.content)).toEqual(['SYNTHETIC_OWNED_OLD']);
+    expect(result.hasMore).toBe(false);
+    const next = await read(h);
+    expect((next.messages as any[]).map(m => m.content)).not.toContain('SYNTHETIC_FOREIGN_ANSWER');
+    expect(next.providerSessionId).not.toBe(UUID);
+    expect(__getProviderSessionPinForTest(RUNTIME)).toBeUndefined(); expect(writes).not.toHaveBeenCalled();
+  });
+  it('preserves exact UUID paging and subsequent native read reuse', async () => {
+    const result = await page(helpers(), { providerSessionId: UUID, limit: 1 });
+    expect(result.source).toBe('provider-native');
+    expect((result.messages as any[]).map(m => m.content)).toEqual(['SYNTHETIC_FOREIGN_ANSWER']);
+    expect(result.hasMore).toBe(true); expect(__getProviderSessionPinForTest(RUNTIME)).toBe(UUID);
+    expect(writes).toHaveBeenCalled();
+    const next = await read(helpers());
+    expect(next.providerSessionId).toBe(UUID);
+    expect((next.messages as any[]).map(m => m.content)).toContain('SYNTHETIC_FOREIGN_ANSWER');
+  });
   it('keeps old-born/new-mtime same-workspace candidate unconfirmed and workspace-scoped', () => {
     const result = readCliProviderNativeHistory('codex-cli', { canonicalHistory: provider.nativeHistory, scripts: provider.scripts,
       workspace, sessionStartedAtMs: spawn, instanceId: RUNTIME, offset: 0, limit: 20, excludeRecentCount: 0 });
