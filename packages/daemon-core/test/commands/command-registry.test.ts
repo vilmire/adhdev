@@ -32,6 +32,7 @@ const LEGACY_MESH_FORWARDABLE_SESSION_COMMANDS = [
     'invoke_provider_script',
     'resolve_action',
     'cancel_queued_chat',
+    'outgoing_receipts',
     'set_mode',
     'change_model',
     'set_conversation_prefs',
@@ -52,6 +53,7 @@ const LEGACY_MANDATORY_UPDATE_BLOCKED_COMMANDS = [
 const LEGACY_SESSION_TARGET_COMMANDS = [
     'send_chat',
     'cancel_queued_chat',
+    'outgoing_receipts',
     'read_chat',
     'expand_tool_block',
     'get_chat_debug_bundle',
@@ -69,6 +71,7 @@ const LEGACY_SESSION_SCOPED_COMMANDS = [
     'expand_tool_block',
     'send_chat',
     'cancel_queued_chat',
+    'outgoing_receipts',
     'list_chats',
     'new_chat',
     'switch_chat',
@@ -160,7 +163,7 @@ function legacyCommandInvalidations(command: string): ReadonlySet<string> {
 
 /** handler.ts dispatch switch cases. */
 const LEGACY_HANDLER_COMMANDS = [
-    'read_chat', 'expand_tool_block', 'get_chat_debug_bundle', 'chat_history', 'send_chat', 'cancel_queued_chat',
+    'read_chat', 'expand_tool_block', 'get_chat_debug_bundle', 'chat_history', 'outgoing_receipts', 'send_chat', 'cancel_queued_chat',
     'list_chats', 'new_chat', 'switch_chat', 'set_mode', 'change_model', 'resolve_action',
     'cdp_eval', 'cdp_screenshot', 'screenshot', 'cdp_command_exec', 'cdp_batch', 'cdp_remote_action',
     'cdp_discover_agents', 'cdp_dom_dump', 'cdp_dom_query', 'cdp_dom_debug', 'file_read', 'file_write', 'file_list',
@@ -409,6 +412,25 @@ describe('daemon command registry — golden diff against the legacy tables', ()
         ]) {
             expect(sorted(registry.invalidationsFor(name)), name || '(empty)').toEqual(sorted(legacyCommandInvalidations(name)));
         }
+    });
+});
+
+describe('outgoing_receipts command contract', () => {
+    it('is read-only session-owner receipt replay — not postChat, not requireRoute, not inactive-history', () => {
+        const spec = getDaemonCommandRegistry().get('outgoing_receipts');
+        expect(spec).toMatchObject({
+            family: 'handler',
+            forwardToOwner: true,
+            meshSender: 'session_coordinator',
+            session: { scope: 'required', aliasSessionId: true },
+        });
+        expect(spec?.postChat).not.toBe(true);
+        expect(spec?.session?.requireRoute).not.toBe(true);
+        expect(spec?.session?.allowInactiveHistory).not.toBe(true);
+        expect(spec?.invalidates ?? []).toEqual([]);
+        // Must not silently join mutation/chat-affecting tables.
+        expect(namesWhere((s) => s.postChat === true)).not.toContain('outgoing_receipts');
+        expect(namesWhere((s) => s.session?.requireRoute === true)).not.toContain('outgoing_receipts');
     });
 });
 

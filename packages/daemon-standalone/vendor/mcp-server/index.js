@@ -125723,7 +125723,15 @@ ${marker}`,
       // instead would expand the wrong transcript.
       expand_tool_block: { session: { scope: "required", aliasSessionId: true } },
       chat_history: { session: { scope: "optional", aliasSessionId: true } },
-      outgoing_receipts: { session: { scope: "required", aliasSessionId: true }, forwardToOwner: true },
+      // Read-only content-free receipt replay. Receipts live on the daemon that
+      // accepted the write, so mesh must forward to that owner — never invent a
+      // local empty journal. Same session-coordinator mesh gate as send_chat /
+      // cancel_queued_chat; not a mutation and not postChat / requireRoute.
+      outgoing_receipts: {
+        session: { scope: "required", aliasSessionId: true },
+        forwardToOwner: true,
+        meshSender: "session_coordinator"
+      },
       send_chat: {
         session: { ...REQUIRED_ROUTED, aliasSessionId: true },
         // The session row (status, approval modal) moves: push it now.

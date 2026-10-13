@@ -146,3 +146,17 @@ it('real send_chat carries exact original text/image acceptance through keyed co
     expect(await f.submitHandler(message)).toMatchObject({ deduplicated: true, outgoingReceipt: receipt });
     expect(f.writes).toHaveLength(0);
 });
+
+it('outgoing_receipts command replays exact correlated receipts without writing or reseeding consent', async () => {
+    const f = outgoingContractFixture(message.sessionId); fixtures.push(f);
+    await f.submit(message);
+    const accepted = f.receipts([message.messageId])[0];
+    const beforeWrites = f.writes.length;
+    const result = await f.receiptsHandler([message.messageId, 'foreign-id']);
+    expect(result).toMatchObject({ success: true });
+    expect(result.receipts).toEqual([accepted]);
+    expect(f.writes).toHaveLength(beforeWrites);
+    expect(await f.submit(message)).toMatchObject({ kind: 'duplicate' });
+    expect(f.writes).toHaveLength(beforeWrites);
+    expect(await f.receiptsHandler([])).toMatchObject({ success: true, receipts: [] });
+});

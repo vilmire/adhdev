@@ -1,4 +1,4 @@
-import { handleSendChat } from '../../src/commands/chat-commands-write.js';
+import { handleOutgoingReceipts, handleSendChat } from '../../src/commands/chat-commands-write.js';
 import { AssistantRegistry, setAssistantRegistryForTests } from '../../src/assistant/assistant-registry.js';
 import { createAssistantServices, setAssistantServicesForTests } from '../../src/assistant/assistant-services.js';
 import { assistantExecution } from '../../src/assistant/assistant-execution.js';
@@ -66,6 +66,11 @@ export function outgoingContractFixture(sessionId: string, confirmed = true) {
             setAssistantRegistryForTests(registry); setAssistantServicesForTests(services);
             helper.ctx.sessionInput = service;
             return handleSendChat(helper, { ...message, targetSessionId: sessionId, _commandSource: 'standalone' });
+        },
+        /** Read-only command path — never writes or renews owner consent. */
+        receiptsHandler(messageIds: string[]) {
+            helper.ctx.sessionInput = service;
+            return handleOutgoingReceipts(helper, { targetSessionId: sessionId, messageIds, _commandSource: 'standalone' });
         },
         receipts: (ids: string[]) => service.getReceipts(sessionId, ids),
         drain() { status = 'idle'; engine.drainPendingSends(); },
