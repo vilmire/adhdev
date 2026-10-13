@@ -82,6 +82,7 @@ export function AssistantStagedWritesView({ state }: { state: AssistantStagedWri
                 aria-expanded={open}
                 aria-haspopup="dialog"
                 title={t('assistantStaged.badgeTitle')}
+                aria-label={`${t('assistantStaged.badge', { count })} — ${t('assistantStaged.badgeTitle')}`}
             >
                 <span className="chat-activity-toggle-dot" />
                 {t('assistantStaged.badge', { count })}

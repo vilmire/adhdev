@@ -74,7 +74,7 @@ export default function DashboardMobileChatRoom({
 
     return (
         <>
-            <div className={`relative z-20 flex flex-col gap-2 ${headerPaddingClass} border-b border-border-subtle/70 bg-bg-primary`}>
+            <div className={`relative z-20 shrink-0 flex flex-col gap-2 ${headerPaddingClass} border-b border-border-subtle/70 bg-bg-primary`}>
                 <div className="flex items-center justify-between gap-3">
                     <div className="flex items-center gap-2.5 min-w-0 flex-1">
                         <button
@@ -131,13 +131,10 @@ export default function DashboardMobileChatRoom({
                         />
                     </div>
                 </div>
-                {/* Assistant only: writes held for the owner's approval, on their
-                    own right-aligned header line so the title keeps its width and
-                    the right-anchored list fits the phone. In the header (not the
-                    chat pane) so they stay reachable in terminal view too. The line
-                    collapses while none are held (the pill renders nothing). */}
+                {/* Session policy and staged-write approvals belong to the room,
+                    including terminal view. Transcript folding stays in ChatPane. */}
                 {isAssistant && (
-                    <div className="flex justify-end empty:hidden" data-testid="mobile-room-assistant-staged">
+                    <div className="assistant-session-controls flex flex-wrap items-center justify-end gap-2" data-testid="mobile-room-assistant-staged">
                         <AssistantExecutionControls daemonId={getConversationDaemonRouteId(selectedConversation)} sessionId={selectedConversation.sessionId} status={selectedConversation.status} sendCommand={sendCommand} />
                         <AssistantStagedWrites
                             daemonId={getConversationDaemonRouteId(selectedConversation)}
@@ -158,6 +155,7 @@ export default function DashboardMobileChatRoom({
                     actionLogs={actionLogs}
                     userName={userName}
                     showAssistantStagedWrites={false}
+                    showAssistantExecutionControls={false}
                 />
             </div>
             <InteractivePromptModal
