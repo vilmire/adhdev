@@ -64396,7 +64396,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
         });
         const ledger = getActiveTurnLedger();
         const attempt = ledger?.getAttempt(attemptId);
-        if (attempt && !attempt.terminal && ledger?.selfDaemonId === attempt.ownerDaemonId) {
+        if (ledger && attempt && !attempt.terminal && daemonIdsEquivalent4(ledger.selfDaemonId, attempt.ownerDaemonId)) {
           ledger.observe({
             eventId: `report_refusal:${attemptId}:g${generation}:${opts.deliveryId ?? nowMs2}`,
             at: nowMs2,

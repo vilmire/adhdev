@@ -565,7 +565,7 @@ describe('backlog + MCP inbox', () => {
 });
 
 describe('report gate — a hold-expiry commit renders the text of the end that opened the hold (R13r)', () => {
-    it('await_report expires with no report: the notice carries the idle end\'s local summary, committed weak', async () => {
+    it('await_report expires after a fresh session probe: the notice carries the idle end\'s local summary, committed weak', async () => {
         const f = fixture();
         f.ledger.observe(dispatch());
         f.ledger.observe(evd('delivered', { messageId: 'msg-1', outcome: 'delivered', via: 'local' }, { source: 'input_service' }));
@@ -576,6 +576,13 @@ describe('report gate — a hold-expiry commit renders the text of the end that 
         expect(f.entries().some((e) => e.kind === 'turn.notify')).toBe(false);
         const hold = f.ledger.store.activeHolds('a1').find((h) => h.reason === 'await_report')!;
         f.clock.now = hold.until!;
+        const probe = f.ledger.observe(evd('liveness', { result: 'alive', probeStartedAtMs: f.clock.now }, {
+            eventId: 'fresh-await-report-probe', at: f.clock.now, source: 'coordinator_probe',
+        }));
+        expect(probe.verdict).toBe('applied');
+        expect(f.ledger.getAttempt('a1')!.data.livenessObservation).toMatchObject({
+            sessionId: 's1', generation: 0, at: f.clock.now, probeStartedAt: f.clock.now,
+        });
         const expired = f.ledger.observe({
             eventId: `hold_expired:${hold.holdId}:${hold.until}`, at: hold.until!, source: 'scheduler', sessionId: 's1',
             attemptRef: { attemptId: 'a1', generation: 0 }, observedBy: 'dc', kind: 'hold_expired', holdId: hold.holdId, reason: 'await_report',

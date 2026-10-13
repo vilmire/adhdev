@@ -84,7 +84,7 @@ const MESH_NODE_LOGS_CMDS = ['get_mesh_node_logs']
 // WORKER-MCP Phase B: the worker's own reporting surface (design §4/§5).
 // + worker_report_forwarded (F7, 2026-09-25): a remote worker daemon relays its report to the attempt owner.
 // + worker_progress_forwarded (F7 progress axis, 2026-09-25): same relay for progress notes.
-const WORKER_REPORT_CMDS = ['worker_resolve_task', 'worker_report_completion', 'worker_report_forwarded', 'worker_progress_update', 'worker_progress_forwarded']
+const WORKER_REPORT_CMDS = ['worker_resolve_task', 'worker_report_completion', 'worker_report_refusal_forwarded', 'worker_report_forwarded', 'worker_progress_update', 'worker_progress_forwarded']
 // WORKER-MCP E-T0: the mailbox piggyback (design §7.1) — coordinator-side deposit
 // (routed cross-daemon via mesh_notify_worker) and the worker-side drain.
 const WORKER_MAILBOX_CMDS = ['deposit_worker_mailbox', 'worker_drain_mailbox']
@@ -110,7 +110,7 @@ const TURN_LEDGER_IPC_CMDS = [
 ]
 
 describe('low-family registry', () => {
-  it('registers all 84 LOW family commands once, no overlap', () => {
+  it('registers all 85 LOW family commands once, no overlap', () => {
     const all = [
       ...SESSION_HOST_CMDS, ...SPEC_CMDS, ...REFINE_CMDS,
       ...DIAGNOSTICS_CMDS, ...STATUS_META_CMDS, ...COORDINATOR_PROMPT_CMDS,
@@ -127,8 +127,8 @@ describe('low-family registry', () => {
     // (graph_audit_record + graph_gate_claim/release/abandon + graph_node_patch
     // + graph_view_query, retired with graph orchestration 2026-09-30)
     // − list_coordinator_prompts − write_coordinator_prompt (coordinator-prompts/
-    // file layer removed 2026-10-08) = 84.
-    expect(all).toHaveLength(84)
+    // file layer removed 2026-10-08) + content-free worker_report_refusal_forwarded = 85.
+    expect(all).toHaveLength(85)
     // no duplicate command names across families
     expect(new Set(all).size).toBe(all.length)
     expect(lowFamilyNames()).toHaveLength(all.length)

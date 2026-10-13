@@ -21,7 +21,7 @@ afterEach(() => {
 
 // Separate real SQLite runtimes model the member and owner. Only the transport
 // switches which daemon's runtime singleton the production handler can see.
-function rig() {
+function rig(ownerDaemonId = 'owner') {
   const owner: MeshRuntimeStore = new (MeshRuntimeStore as any)(':memory:')
   const member: MeshRuntimeStore = new (MeshRuntimeStore as any)(':memory:')
   stores.push(owner, member)
@@ -29,7 +29,7 @@ function rig() {
   vi.spyOn(MeshRuntimeStore, 'getInstance').mockImplementation(() => current)
   const meshId = 'refusal_remote_mesh', taskId = 'refusal_remote_task', sessionId = 'refusal_remote_session', nodeId = 'refusal_remote_node'
   const attemptId = `mesh_direct:${taskId}`
-  const ledger = createMeshRuntimeTurnLedger({ selfDaemonId: 'owner', publisher: fakePublisher() })
+  const ledger = createMeshRuntimeTurnLedger({ selfDaemonId: ownerDaemonId, publisher: fakePublisher() })
   setActiveTurnLedger(ledger)
   __setHandoffNoteSinkForTests(() => {})
   const iso = new Date().toISOString()
@@ -43,9 +43,9 @@ function rig() {
   mintWorkerTaskToken({ meshId, taskId, sessionId, attemptId, nodeId })
   current = member
   const bind = mintWorkerSessionBind({ meshId, sessionId, nodeId }).bind
-  const ownerCtx: any = { deps: { statusInstanceId: 'owner', instanceManager: { getInstance: () => undefined } }, getMeshForCommand: async () => ({ mesh: { id: meshId, nodes: [{ id: nodeId, daemonId: 'member' }] } }) }
+  const ownerCtx: any = { deps: { statusInstanceId: ownerDaemonId, instanceManager: { getInstance: () => undefined } }, getMeshForCommand: async () => ({ mesh: { id: meshId, nodes: [{ id: nodeId, daemonId: 'member' }] } }) }
   const packets: Array<{ command: string; args: any }> = []
-  const memberCtx: any = { deps: { statusInstanceId: 'member', instanceManager: { getInstance: () => ({ getState: () => ({ settings: { meshNodeFor: meshId, meshNodeId: nodeId, meshActiveTaskId: taskId, meshActiveAttemptId: attemptId, meshActiveAttemptGeneration: 0, meshCoordinatorDaemonId: 'owner' } }) }) }, dispatchMeshCommand: async (_id: string, command: string, args: any) => {
+  const memberCtx: any = { deps: { statusInstanceId: 'member', instanceManager: { getInstance: () => ({ getState: () => ({ settings: { meshNodeFor: meshId, meshNodeId: nodeId, meshActiveTaskId: taskId, meshActiveAttemptId: attemptId, meshActiveAttemptGeneration: 0, meshCoordinatorDaemonId: ownerDaemonId } }) }) }, dispatchMeshCommand: async (_id: string, command: string, args: any) => {
     packets.push({ command, args })
     current = owner
     try { return await workerReportHandlers[command](ownerCtx, { ...args, _meshSenderDaemonId: 'member' }) }
@@ -63,6 +63,22 @@ function rig() {
 }
 
 describe('remote refusal: real member → authenticated owner → exact ledger', () => {
+  it.each([
+    ['mach_refusal_owner', true],
+    ['daemon_mach_refusal_owner', true],
+    ['daemon_mach_other_owner', false],
+  ] as const)('applies correction only on the canonical attempt owner: %s', async (selfDaemonId, ownsAttempt) => {
+    const r = rig('daemon_mach_refusal_owner')
+    // Model a persisted owner's daemon ID read through another host ID form.
+    // Keep the real ledger/store and its exact attempt, generation and session.
+    setActiveTurnLedger({ ...r.ledger, selfDaemonId })
+    await r.report('x'.repeat(8001))
+    expect(r.owner.turnStore().listWorkerEventsForTask(r.meshId, r.taskId, WORKER_REPORT_REFUSED_EVENT_KIND)).toHaveLength(1)
+    expect(r.ledger.getAttempt(r.attemptId)!.data.reportCorrection !== undefined).toBe(ownsAttempt)
+    expect(r.ledger.getAttempt(r.attemptId)!.terminal).toBeNull()
+    await r.ledger.flushPublish()
+  })
+
   it('forwards only safe metadata, records the owner receipt once, and accepts a valid correction', async () => {
     const r = rig()
     const marker = 'DO-NOT-FORWARD-REJECTED-CONTENT'

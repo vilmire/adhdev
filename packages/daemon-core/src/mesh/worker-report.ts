@@ -48,6 +48,7 @@
 import { randomUUID } from 'crypto';
 import {
     WORKER_BRANCH_STATES,
+    daemonIdsEquivalent,
     sessionIdsEquivalent,
     touchedFilesOutsideOwnership,
     type WorkerBranchState,
@@ -685,7 +686,7 @@ export function recordRefusedWorkerReportForIdentity(
         });
         const ledger = getActiveTurnLedger();
         const attempt = ledger?.getAttempt(attemptId);
-        if (attempt && !attempt.terminal && ledger?.selfDaemonId === attempt.ownerDaemonId) {
+        if (ledger && attempt && !attempt.terminal && daemonIdsEquivalent(ledger.selfDaemonId, attempt.ownerDaemonId)) {
             ledger.observe({ eventId: `report_refusal:${attemptId}:g${generation}:${opts.deliveryId ?? nowMs}`,
                 at: nowMs, source: 'worker_tool', observedBy: ledger.selfDaemonId, sessionId: identity.sessionId,
                 attemptRef: { attemptId, generation: generation! }, kind: 'worker_report_correction_requested',

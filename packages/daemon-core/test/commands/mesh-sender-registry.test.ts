@@ -21,6 +21,7 @@ const EXPECTED_CLASSES: Record<string, string> = {
     // member → coordinator: its own node's git state (coordinator-held node state)
     mesh_node_git_report: 'node_owner',
     worker_report_forwarded: 'roster',
+    worker_report_refusal_forwarded: 'roster',
     worker_progress_forwarded: 'roster',
     // owner → worker, session-scoped
     agent_command: 'session_coordinator',
@@ -82,5 +83,11 @@ describe('mesh sender policy — registry', () => {
     it('a command that does not accept mesh needs no class (turn IPC is ipc|standalone only)', () => {
         const turnQuery = getDaemonCommandRegistry().get('turn_query');
         expect(turnQuery && specAcceptsMeshSource(turnQuery)).toBe(false);
+    });
+
+    it('the content-free refusal relay is mesh-only and roster-gated', () => {
+        expect(getDaemonCommandRegistry().get('worker_report_refusal_forwarded')).toMatchObject({
+            sources: ['mesh'], meshSender: 'roster', family: 'low',
+        });
     });
 });

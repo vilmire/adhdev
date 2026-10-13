@@ -65,7 +65,7 @@ describe('auth-failed turn — never task_completed (reducer)', () => {
         expect(r.attempt?.state).toBe('delivered');
     });
 
-    it('control: the same turn_end WITHOUT the stamp still opens await_report and commits completed on expiry (the incident path)', () => {
+    it('control: an unstamped turn_end awaits a fresh session probe before weak completion', () => {
         const end = reduce({
             attempt: makeAttempt('generating'), holds: [],
             evidence: ev('turn_end', { strength: 'genuine', summary: REF, reportExpected: true }),
@@ -73,7 +73,15 @@ describe('auth-failed turn — never task_completed (reducer)', () => {
         });
         expect(end.rule).toBe('R9r');
         const exp = reduce({ attempt: end.attempt, holds: [makeHold('await_report')], evidence: expired('await_report'), policy: POLICY, nowMs: NOW });
-        expect(exp.attempt?.terminal).toMatchObject({ outcome: 'completed', reason: 'weak_end_confirmed' });
+        expect(exp.rule).toBe('R13u');
+        expect(exp.attempt?.terminal).toBeNull();
+        expect(exp.effects.some((e) => e.kind === 'probe')).toBe(true);
+        const alive = reduce({ attempt: end.attempt, holds: [makeHold('await_report')],
+            evidence: ev('liveness', { result: 'alive', probeStartedAtMs: NOW }, { source: 'coordinator_probe' }), policy: POLICY, nowMs: NOW });
+        const confirmed = reduce({ attempt: alive.attempt, holds: [makeHold('await_report')],
+            evidence: expired('await_report'), policy: POLICY, nowMs: NOW });
+        expect(confirmed.rule).toBe('R13r');
+        expect(confirmed.attempt?.terminal).toMatchObject({ outcome: 'completed', reason: 'weak_end_confirmed' });
     });
 });
 
