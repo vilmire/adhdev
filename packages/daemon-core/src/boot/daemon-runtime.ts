@@ -1,3 +1,4 @@
+import { readCooperativeMaintenance } from '../maintenance/cooperative-gate.js';
 /**
  * bootDaemonRuntime — the staged daemon boot (wiring-unification B4, plan §4).
  *
@@ -106,6 +107,7 @@ export async function bootDaemonRuntime(
     cfg: DaemonBootConfig,
     stages: DaemonBootStages = DEFAULT_DAEMON_BOOT_STAGES,
 ): Promise<DaemonRuntime> {
+    readCooperativeMaintenance(); // Validate enrollment before ANY boot stage.
     const s1 = await stages.bootPlatform(cfg);
     const s2 = await stages.bootProviders(s1);
     const s3 = await stages.bootSessionCore(s2);

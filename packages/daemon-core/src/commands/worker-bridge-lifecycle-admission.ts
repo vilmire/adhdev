@@ -1,3 +1,4 @@
+import { assertMaintenanceLifecycle } from '../maintenance/cooperative-gate.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type Database from 'better-sqlite3';
@@ -85,4 +86,6 @@ export function assertWorkerBridgeLifecycleAdmission(
             refuse('bridge_state_unreadable');
         }
     }
+    // Independent cooperative gate; never authorizes or modifies strict state.
+    for (const candidate of new Set([current, requestedConfigDir ?? current])) assertMaintenanceLifecycle(operation, candidate);
 }

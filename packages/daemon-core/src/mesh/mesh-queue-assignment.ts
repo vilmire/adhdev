@@ -1,3 +1,4 @@
+import { assertMaintenanceAdmission, assertMaintenanceNode, withMaintenanceEffect } from '../maintenance/cooperative-gate.js';
 import type { DaemonComponents } from '../boot/daemon-components.js';
 import { LOG } from '../logging/logger.js';
 import { meshRecord } from './mesh-record.js';
@@ -481,11 +482,13 @@ export function tryAssignQueueTask(
     quotaClaimTrace?: QuotaClaimDrainTrace,
     trigger: string = 'queue_claim',
 ): boolean {
+    try { return withMaintenanceEffect(() => {
     // TURN-LEDGER FAIL-CLOSED (rc.39): a queue claim dispatches the task body
     // into an attempt the ledger opens below. With no ledger there is no
     // attempt — the worker's stamp reads `attempt=?`, nothing can ever close
     // the row, and it stays `assigned` forever, blocking the node. Refuse BEFORE
     // the atomic claim so the row is untouched (still pending), loudly.
+    try { assertMaintenanceAdmission([meshId]); } catch { return false; }
     const turnLedger = turnLedgerOf(components);
     if (!turnLedger) {
         LOG.warn('TurnLedger', `refusing queue claim for node ${nodeId} (${sessionId}) in mesh ${meshId}: no turn ledger on this daemon (claim path ${trigger}) — task left pending`);
@@ -528,6 +531,7 @@ export function tryAssignQueueTask(
         return false;
     }
     if (isClaimGatedByWorktreeBootstrap(components, meshId, nodeId, sessionId, node)) return false;
+    assertMaintenanceNode(meshId, nodeId, readMeshNodeDaemonId(node ?? {}));
     const claiming = resolveClaimingSessionState(components, nodeId, sessionId, node);
     if (!claiming) return false;
 
@@ -674,6 +678,11 @@ export function tryAssignQueueTask(
     );
 
     return true;
+    }); } catch (e) {
+        const message = (e as Error).message;
+        if (message.startsWith('maintenance_') || message.startsWith('cooperative_maintenance_')) return false;
+        throw e;
+    }
 }
 
 // The auto-launch subsystem (launch locks, cooldown clock, target resolution,

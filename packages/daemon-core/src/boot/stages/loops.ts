@@ -1,3 +1,4 @@
+import { maintenanceHeld } from '../../maintenance/cooperative-gate.js';
 /**
  * S8 startLoops — start everything that ticks, now that every subscriber is
  * attached (wiring-unification B4). Returns the loop-stage disposer; the
@@ -224,6 +225,20 @@ export function stopTurnLoops(components: TurnWiredComponents): void {
 
 export async function startLoops(s7: MeshRuntimeStage): Promise<Disposer> {
     const { cfg, components } = s7;
+    if (maintenanceHeld()) {
+        // Verification transports boot, work producers do not. Restart re-enters
+        // closed until a fresh boot-bound whole-fleet release certificate arrives.
+        let stopped = false, starting = false, dispose: Disposer | undefined;
+        const timer = setInterval(() => {
+            try {
+                if (stopped || starting || maintenanceHeld()) return;
+                starting = true;
+                void startLoops(s7).then(d => { if (stopped) d(); else dispose = d; }).catch(e => LOG.error('Maintenance', String(e)));
+            } catch { /* Corrupt/missing enrollment stays closed. */ }
+        }, 250);
+        timer.unref?.();
+        return () => { stopped = true; clearInterval(timer); dispose?.(); };
+    }
 
     // Plain attempts a restart interrupted (assistant-layer design 2026-10-07,
     // appendix B item 2): close every open plain attempt the previous

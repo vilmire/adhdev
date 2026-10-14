@@ -1,3 +1,4 @@
+import { assertMaintenanceAdmission, withMaintenanceAdmission } from '../maintenance/cooperative-gate.js';
 /**
  * DaemonCliManager — session launch: `startSession` (CLI/PTY) and the
  * `launch_cli` command (delegated-worker launch preparation + launch ledger).
@@ -43,7 +44,7 @@ export type CliLaunchHost = Pick<DaemonCliManager, 'adapters' | 'createAdapter' 
  // ─── Session start/management ──────────────────────────────
 export async function startSession(host: CliLaunchHost, cliType: string, workingDir: string, cliArgs?: string[], initialModel?: string, options?: CliStartOptions): Promise<{ runtimeSessionId: string; providerSessionId?: string }> {
     const plan = planSessionStart(host, cliType, workingDir, options);
-    return startCliPtySession(host, plan, cliType, cliArgs, initialModel);
+    return withMaintenanceAdmission(() => startCliPtySession(host, plan, cliType, cliArgs, initialModel));
 }
 
 /** What every start path shares: the resolved target and the finalized options. */
@@ -268,6 +269,7 @@ async function startCliPtySession(
     }
     if (launchProvider && instanceManager) {
         const resolvedProvider = launchProvider;
+        assertMaintenanceAdmission();
         await host.registerCliInstance(
             key,
             normalizedType,
@@ -317,6 +319,7 @@ async function startCliPtySession(
             options?.resolvedTrustPlan,
         );
         try {
+            assertMaintenanceAdmission();
             await adapter.spawn();
         } catch (spawnErr: any) {
             LOG.error('CLI', `[${cliType}] Spawn failed: ${spawnErr?.message}`);

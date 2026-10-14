@@ -1,3 +1,4 @@
+import { readCooperativeMaintenance, assertMaintenanceLifecycle, verifyRetainedMaintenanceHost } from '../maintenance/cooperative-gate.js';
 import { assertWorkerBridgeLifecycleAdmission } from '../commands/worker-bridge-lifecycle-admission.js';
 import { spawn, type StdioOptions } from 'child_process';
 import { hiddenExecFileSync } from '../process/hidden-spawn.js';
@@ -176,6 +177,7 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
     }
 
     function killPid(pid: number): boolean {
+        assertMaintenanceLifecycle('session_host_kill', instance().configDir);
         try {
             if (process.platform === 'win32') {
                 hiddenExecFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' });
@@ -279,6 +281,7 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
     }
 
     function spawnHost(): void {
+        assertMaintenanceLifecycle('session_host_spawn', instance().configDir);
         assertWorkerBridgeLifecycleAdmission('session_host_spawn', instance().configDir);
         const entry = resolveEntry();
         verifyConptyPrebuildBeforeSpawn(entry);
@@ -474,6 +477,29 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
     }
 
     async function ensureReady(): Promise<SessionHostEndpoint> {
+        const maintenance = readCooperativeMaintenance(instance().configDir);
+        if (maintenance) {
+            if (process.platform === 'win32') throw new Error('maintenance_windows_retained_host_unsupported');
+            // Before quarantine, stale-prefix logic, retry or any native mutation.
+            const h = maintenance.retainedHost, endpoint = getEndpoint();
+            const nodePath = process.platform === 'linux' ? fs.realpathSync(`/proc/${h.pid}/exe`)
+                : String(hiddenExecFileSync('/bin/ps', ['-o','comm=','-p',String(h.pid)], { encoding: 'utf8', timeout: 5000 })).trim();
+            const birth = String(hiddenExecFileSync('/bin/ps', ['-o','lstart=','-p',String(h.pid)], { encoding: 'utf8', timeout: 5000 })).trim();
+            const ownerText = String(hiddenExecFileSync(process.platform === 'darwin' ? '/usr/sbin/lsof' : '/usr/bin/lsof', ['-t', endpoint.path], { encoding: 'utf8', timeout: 5000 })).trim();
+            if (!/^\d+$/.test(ownerText)) throw new Error('maintenance_retained_socket_owner_unknown');
+            const client = new SessionHostClient({ endpoint });
+            try {
+                await client.connect();
+                const reply = await client.request<SessionHostDiagnostics>({ type: 'get_host_diagnostics', payload: { includeSessions: false } });
+                if (!reply.success || !reply.result) throw new Error('maintenance_retained_host_unreachable');
+                verifyRetainedMaintenanceHost(maintenance, { pid: getPid(), birth, nodePath, socketOwnerPid: Number(ownerText),
+                    entryPath: getRunningSessionHostScriptPath(h.pid), endpoint: endpoint.path,
+                    hostEntryPath: reply.result.hostEntryPath, hostStartedAt: reply.result.hostStartedAt });
+                const supported = reply.result.supportedRequestTypes ?? [];
+                if (options.requiredRequestTypes.some(t => !supported.includes(t))) throw new Error('maintenance_retained_host_incompatible');
+                return endpoint;
+            } finally { await client.close().catch(() => {}); }
+        }
         options.beforeEnsureReady?.();
 
         // Defensive guard: on Windows the daemon may have been restarted from a

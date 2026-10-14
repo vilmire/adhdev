@@ -1,3 +1,5 @@
+import { cooperativeMaintenanceSpecs } from './low-family/cooperative-maintenance.js';
+import { captureMaintenanceAdmission, withMaintenanceAdmission, assertMaintenanceDaemon, assertMaintenanceCommandNode } from '../maintenance/cooperative-gate.js';
 /**
  * DaemonCommandRouter — the single command entry point of the daemon.
  *
@@ -317,6 +319,7 @@ export function getDaemonCommandRegistry(): CommandRegistry {
             ...meshNodeLogsSpecs,
             ...workerReportSpecs,
             ...workerBridgeSpecs,
+            ...cooperativeMaintenanceSpecs,
             ...workerMailboxSpecs,
             ...workerPeerContextSpecs,
             ...transcriptReplicaSpecs,
@@ -857,6 +860,15 @@ export class DaemonCommandRouter {
         // both per-mesh topics as soon as that existing identifier arrives; the
         // seqscribe activation hook re-advertises grants on live peer sessions.
         const revealedMeshIds = meshIdsRevealedByCommandArgs(normalizedArgs);
+        const maintenanceExempt = ['get_status_metadata', 'cooperative_maintenance_status', 'worker_report_completion', 'worker_progress_update', 'worker_bridge_delivery', 'worker_bridge_capabilities', 'worker_bridge_status'].includes(cmd);
+        let maintenanceCheck = () => {};
+        try {
+            if (!maintenanceExempt) {
+                maintenanceCheck = captureMaintenanceAdmission(revealedMeshIds);
+                assertMaintenanceCommandNode(revealedMeshIds, readStringValue(normalizedArgs.nodeId, readObjectRecord(normalizedArgs.meshContext).nodeId));
+                if (meshRelayed && typeof normalizedArgs[MESH_SENDER_DAEMON_ID_ARG] === 'string') assertMaintenanceDaemon(normalizedArgs[MESH_SENDER_DAEMON_ID_ARG]);
+            }
+        } catch (e) { return { success: false, error: (e as Error).message }; }
         const newMeshDispatch = ['launch_cli','launch_mesh_coordinator'].includes(cmd) || (['agent_command','send_chat'].includes(cmd) && (!normalizedArgs.action || normalizedArgs.action === 'send_chat'));
         if (newMeshDispatch && revealedMeshIds.some((meshId) => bridgeDispatchFrozen(MeshRuntimeStore.getInstance().db, meshId))) return { success: false, error: 'worker_bridge_dispatch_frozen' };
         if (revealedMeshIds.length > 0) {
@@ -894,11 +906,16 @@ export class DaemonCommandRouter {
             } else if (meshRefusal) {
                 result = meshRefusal;
             } else {
-                const forwarded = spec.forwardToOwner ? await this.forwardToOwningDaemon(cmd, normalizedArgs) : null;
+                maintenanceCheck();
+                const forwarded = spec.forwardToOwner ? await (maintenanceExempt
+                    ? this.forwardToOwningDaemon(cmd, normalizedArgs)
+                    : withMaintenanceAdmission(() => this.forwardToOwningDaemon(cmd, normalizedArgs))) : null;
                 if (forwarded) {
                     result = forwarded;
                 } else {
-                    result = await this.runSpec(spec, normalizedArgs);
+                    maintenanceCheck();
+                    result = maintenanceExempt ? await this.runSpec(spec, normalizedArgs)
+                        : await withMaintenanceAdmission(() => this.runSpec(spec, normalizedArgs));
                     ranLocally = true;
                 }
             }
@@ -1178,6 +1195,7 @@ export class DaemonCommandRouter {
         const ownerNodeIdHint = readStringValue(meshContext.nodeId);
         const ownerDaemonId = this.resolveRemoteMeshSessionOwnerDaemonId(targetSessionId, ownerNodeIdHint);
         if (!ownerDaemonId) return null;
+        assertMaintenanceDaemon(ownerDaemonId);
         if (cmd === 'interactive_prompt_response' && ((args.response ?? args) as { binding?: unknown })?.binding) {
             return { success: false, code: 'native_question_remote_unsupported',
                 error: 'Remote native question authorization is unsupported; use the authenticated owner dashboard on the session host.' };

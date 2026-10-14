@@ -1,3 +1,4 @@
+import { assertMaintenanceAdmission, withMaintenanceAdmission } from '../maintenance/cooperative-gate.js';
 import { OutgoingReceiptStore } from './outgoing-receipt-store.js';
 import type { OutgoingReceipt } from '../seqscribe/outgoing-receipt.js';
 /**
@@ -326,6 +327,7 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
             }
             catch { /* Native write is never retried when receipt persistence is uncertain. */ }
         });
+        assertMaintenanceAdmission();
         const result = await target.sendMessage(body.text, {
             ...(body.bracketedPaste ? { bracketedPaste: true } : {}),
             messageId: msg.messageId,
@@ -362,6 +364,7 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
         }
         let outcome: { accepted: boolean; reason?: string };
         try {
+            assertMaintenanceAdmission();
             outcome = target.sendMessageDuringGeneration(body.text, body.bracketedPaste);
         } catch (e) {
             outcome = { accepted: false, reason: `threw:${(e as Error)?.message ?? e}` };
@@ -406,6 +409,7 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
             if ('kind' in built) return built;
             fresh = built;
         }
+        assertMaintenanceAdmission();
         const interrupted = await target.interruptTurn();
         if (!interrupted.ok) {
             log('warn', `submit(${msg.messageId}) interrupt refused: ${interrupted.reason}`);
@@ -542,7 +546,7 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
                 catch { return refuse('internal_error', { message: 'Outgoing message identity conflict' }); }
                 return { kind: 'duplicate', of: msg.messageId };
             }
-            const promise = run(msg, prepareInput).catch((e): SubmitOutcome => {
+            const promise = withMaintenanceAdmission(() => run(msg, prepareInput)).catch((e): SubmitOutcome => {
                 log('error', `submit(${msg.messageId}) threw: ${(e as Error)?.message ?? e}`);
                 return refuse('internal_error', { message: (e as Error)?.message || String(e) });
             });

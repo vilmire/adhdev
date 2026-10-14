@@ -1,3 +1,4 @@
+import { assertMaintenanceAdmission, captureMaintenanceAdmission, withMaintenanceAdmission } from '../maintenance/cooperative-gate.js';
 import {
     SessionHostClient,
     type SessionHostEndpoint,
@@ -56,7 +57,7 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
             endpoint: options.endpoint,
             appName: options.appName,
         });
-        this.ready = this.boot();
+        this.ready = withMaintenanceAdmission(() => this.boot());
         // A runtime that never started must END, not sit there. Nothing awaits
         // `ready` except the write queue, so a failed create_session (2026-10-01:
         // a stale session-host whose install was deleted answered every spawn with
@@ -114,7 +115,9 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
     }
 
     write(data: string): Promise<void> {
-        return this.enqueue(async () => {
+        const check = captureMaintenanceAdmission();
+        return withMaintenanceAdmission(() => this.enqueue(async () => {
+            check();
             let response = await this.client.request({
                 type: 'send_input',
                 payload: {
@@ -124,6 +127,7 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
                 },
             });
             if (!response.success && response.error?.startsWith('Write owned by ')) {
+                check();
                 const ownerResponse = await this.client.request<SessionHostRecord>({
                     type: 'acquire_write',
                     payload: {
@@ -135,6 +139,7 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
                 });
                 if (ownerResponse.success && ownerResponse.result) {
                     this.updateMetadata(ownerResponse.result);
+                    check();
                     response = await this.client.request({
                         type: 'send_input',
                         payload: {
@@ -149,7 +154,7 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
                 if (isLostRuntimeError(response.error)) this.reportLostRuntime(response.error!);
                 throw new Error(response.error || `Failed to write to runtime ${this.options.runtimeId}`);
             }
-        });
+        }));
     }
 
     /**
@@ -193,6 +198,7 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
 
     kill(): void {
         this.enqueue(async () => {
+            assertMaintenanceAdmission();
             await this.client.request({
                 type: 'stop_session',
                 payload: { sessionId: this.options.runtimeId },
@@ -282,6 +288,7 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
                 ? existingRecords.result.find((item) => item.sessionId === this.options.runtimeId) || null
                 : null;
             if (shouldResumeAttachedSession(existingRecord)) {
+                assertMaintenanceAdmission();
                 const resumeResponse = await this.client.request<SessionHostRecord>({
                     type: 'resume_session',
                     payload: {
@@ -306,6 +313,7 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
             }
             record = attachResponse.result;
         } else {
+            assertMaintenanceAdmission();
             const createResponse = await this.client.request<SessionHostRecord>({
                 type: 'create_session',
                 payload: {

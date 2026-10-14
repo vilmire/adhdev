@@ -1,3 +1,4 @@
+import { assertMaintenanceAdmission, withMaintenanceEffect } from '../maintenance/cooperative-gate.js';
 import * as os from 'os';
 import type { SessionTermination } from '@adhdev/session-host-core';
 import { ensureNodePtySpawnHelperPermissions } from './spawn-env.js';
@@ -123,7 +124,8 @@ class NodePtyRuntimeTransport implements PtyRuntimeTransport {
   }
 
   write(data: string): void {
-    this.handle.write(data);
+    assertMaintenanceAdmission();
+    withMaintenanceEffect(() => this.handle.write(data));
   }
 
   resize(cols: number, rows: number): void {
@@ -163,13 +165,14 @@ export class NodePtyTransportFactory implements PtyTransportFactory {
         cwd = os.homedir();
       }
     }
-    const handle = pty.spawn(resolveWin32Executable(command), args, {
+    assertMaintenanceAdmission();
+    const handle = withMaintenanceEffect(() => pty.spawn(resolveWin32Executable(command), args, {
       name: 'xterm-256color',
       cols: options.cols,
       rows: options.rows,
       cwd,
       env: options.env,
-    });
+    }));
     return new NodePtyRuntimeTransport(handle);
   }
 }

@@ -1,3 +1,4 @@
+import { assertMaintenanceAdmission, assertMaintenanceNode, withMaintenanceAdmission } from '../maintenance/cooperative-gate.js';
 /**
  * Queue auto-launch subsystem — extracted from mesh-queue-assignment.ts (pure move,
  * no behavior change) to keep that file under the repo file-size gate, following the
@@ -813,6 +814,8 @@ async function launchQueueTaskOnRemoteNode(
         // the 25s cooldown (autoLaunchCooldownUntil) that already gates retries, so
         // the loop moves on. The marker only affects the connect wait and is
         // stripped before launch_cli executes, so a live node spawns identically.
+        assertMaintenanceAdmission([meshId]);
+        assertMaintenanceNode(meshId, nodeId, launchTarget.daemonId);
         launchResult = await components.dispatchMeshCommand!(launchTarget.daemonId!, 'launch_cli', withStatusProbeMarker({
             cliType: effectiveProviderType,
             dir: node.workspace,
@@ -903,6 +906,8 @@ async function launchQueueTaskOnLocalNode(
     // SPAWN-CAP-TRANSPORT-AWARE: pre-dispatch intent — spends no budget (above).
     markAutoLaunch(meshId, task.id, { status: 'started', nodeId, providerType: effectiveProviderType, ...(effectiveModel ? { model: effectiveModel } : {}), ...(effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {}) });
     // B4: through the router (src:mesh) — command log, invalidation, launch annotations.
+    assertMaintenanceAdmission([meshId]);
+    assertMaintenanceNode(meshId, nodeId);
     const launchResult: any = await components.router.execute('launch_cli', {
         cliType: effectiveProviderType,
         dir: node.workspace,
@@ -951,6 +956,10 @@ async function launchQueueTaskOnLocalNode(
 }
 
 export async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, meshId: string, mesh: any): Promise<boolean> {
+    try { return await withMaintenanceAdmission(() => autoLaunchUnderMaintenanceGate(components, meshId, mesh)); } catch { return false; }
+}
+async function autoLaunchUnderMaintenanceGate(components: DaemonComponents, meshId: string, mesh: any): Promise<boolean> {
+    try { assertMaintenanceAdmission([meshId]); } catch { return false; }
     const queue = getQueue(meshId);
     // DEPENDSON-GATE-SYMMETRY: status index over the FULL queue (incl. completed)
     // so the dependency gate below sees the terminal state of every referenced

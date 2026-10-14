@@ -1,3 +1,4 @@
+import { assertMaintenanceAdmission } from '../maintenance/cooperative-gate.js';
 import { OutgoingReceiptStore } from '../sessions/outgoing-receipt-store.js';
 import { resolveConfigDir } from '../config/config-dir.js';
 /**
@@ -424,6 +425,7 @@ export class DaemonCliManager {
         );
         const cliInstance = new CliProviderInstance(provider, resolvedDir, cliArgs, key, transportFactory, { ...options, structuredCodex });
         try {
+            if (!attachExisting) assertMaintenanceAdmission();
             await instanceManager.addInstance(key, cliInstance, {
                 settings,
                 onPtyData: (data: string) => {
