@@ -138,7 +138,7 @@ export function assertMaintenanceLifecycle(operation: string, configDir = getCon
     const state = readCooperativeMaintenance(configDir);
     if (!state) return;
     if (process.platform === 'win32') throw new Error('maintenance_windows_retained_host_unsupported');
-    if (['daemon_start','daemon_stop','cli_stop'].includes(operation)) return;
+    if (['daemon_start','cli_start','daemon_stop','cli_stop'].includes(operation)) return;
     // Retained dependencies stay protected after reopen, until a separately
     // supported host migration exists. A gate release is never host-kill authority.
     if (operation.startsWith('session_host')) throw new Error('maintenance_retained_host_mutation_refused');

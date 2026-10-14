@@ -59,6 +59,10 @@ it('expected target maintenance plan refuses missing enrollment before boot, wit
 });
 it('held boot arms no work loops, discovery, hosted restore or deferred producers', async () => {
     writeCooperativeMaintenance(root,state); vi.useFakeTimers();
+    // The actual cloud CLI labels its foreground daemon entry cli_start.
+    // It may enter held boot; updater/restart launchers remain refused.
+    expect(()=>assertMaintenanceLifecycle('cli_start')).not.toThrow();
+    expect(()=>assertMaintenanceLifecycle('cli_spawn')).toThrow('maintenance_external_driver_owns_lifecycle');
     const touched=vi.fn(); const dispose=await startLoops({cfg:{restoreHostedSessions:true},components:{},cdpInitializer:{startDiscovery:touched},cliManager:{restoreHostedSessions:touched}} as any);
     await vi.advanceTimersByTimeAsync(1000); expect(touched).not.toHaveBeenCalled(); dispose();
 });

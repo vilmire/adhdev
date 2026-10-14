@@ -66736,7 +66736,7 @@ ${upstream}`;
       const state2 = readCooperativeMaintenance(configDir);
       if (!state2) return;
       if (process.platform === "win32") throw new Error("maintenance_windows_retained_host_unsupported");
-      if (["daemon_start", "daemon_stop", "cli_stop"].includes(operation)) return;
+      if (["daemon_start", "cli_start", "daemon_stop", "cli_stop"].includes(operation)) return;
       if (operation.startsWith("session_host")) throw new Error("maintenance_retained_host_mutation_refused");
       throw new Error("maintenance_external_driver_owns_lifecycle");
     }
