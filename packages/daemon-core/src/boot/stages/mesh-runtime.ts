@@ -119,6 +119,7 @@ export function assembleDaemonComponents(s6: ProjectionsStage): DaemonComponents
 
 /** The late-bound probe port: the ledger is built here, the scheduler that services probes in S8. */
 export interface TurnProbePort {
+    maintenanceInventory?(): {early:string[];bound:boolean};
     bind(scheduler: { requestProbe(attemptId: string): void } | null): void;
 }
 
@@ -204,7 +205,7 @@ export function wireTurnLedger(components: DaemonComponents, opts: { runMigratio
     // late-bound (the S8 scheduler binds it) and REMEMBERS a request made
     // before the bind (a boot-time republish / hold sweep can ask for one).
     const lateProbe = createLateBoundProbePort();
-    const probePort: TurnProbePort = { bind: (scheduler) => lateProbe.bind(scheduler) };
+    const probePort: TurnProbePort = { maintenanceInventory:lateProbe.maintenanceInventory, bind: (scheduler) => lateProbe.bind(scheduler) };
     const ports: TurnLedgerPorts = {
         bus: (event, at) => { components.bus.emit({ ...event, at }); },
         cancelDispatch: (request) => {

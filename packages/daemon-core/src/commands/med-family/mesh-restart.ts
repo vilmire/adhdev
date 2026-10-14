@@ -191,6 +191,8 @@ type PendingDeferredRestart = {
 // cancelling) the first; every entry is mirrored to state.json so a daemon
 // restart does not silently drop the schedule.
 const pendingDeferredRestarts = new Map<string, PendingDeferredRestart>();
+/** Observe live timers without loading a forgiving/defaulted persisted state. */
+export function maintenanceDeferredRestarts() { return [...pendingDeferredRestarts.keys()].sort(); }
 
 function deferredRestartInfo(key: string): Record<string, unknown> | null {
     const record = pendingDeferredRestarts.get(key);

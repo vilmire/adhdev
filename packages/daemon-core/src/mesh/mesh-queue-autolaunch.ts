@@ -66,6 +66,9 @@ const autoLaunchTaskInProgress = new Set<string>();
 const autoLaunchCooldownUntil = new Map<string, number>();
 const AUTO_LAUNCH_COOLDOWN_MS = 5_000;
 
+/** Metadata-only actual node/task launch owners; no mutation or timeout pruning. */
+export function maintenanceAutoLaunches() { return {nodes:[...autoLaunchInProgress].sort(),tasks:[...autoLaunchTaskInProgress].sort()}; }
+
 // Test hooks: reset / seed the await-claim backoff state between cases.
 export function __resetAutoLaunchAwaitClaimBackoffForTests(): void {
     __clearAwaitClaimBackoffForTests();

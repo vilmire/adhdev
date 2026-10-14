@@ -107,6 +107,7 @@ export interface TurnTickReport {
 }
 
 export interface TurnScheduler {
+    maintenanceInventory(): {inFlight:boolean;forced:string[];stopped:boolean;wakeQueued?:boolean};
     /** Run one tick now (single-flight: a call during a tick joins it and schedules one more). */
     tick(): Promise<TurnTickReport>;
     /** Probe this attempt on the next tick regardless of its due rule (the ledger's H4 `probe` port). */
@@ -381,6 +382,7 @@ export function createTurnScheduler(deps: TurnSchedulerDeps): TurnScheduler & { 
     }
 
     return {
+        maintenanceInventory:()=>({inFlight:inFlight!==null,forced:[...forced].sort(),stopped}),
         tick,
         requestProbe(attemptId: string) {
             forced.add(attemptId);
@@ -446,6 +448,7 @@ export function startTurnScheduler(deps: TurnSchedulerDeps): TurnScheduler {
     setImmediate(run);
 
     return {
+        maintenanceInventory:()=>({...scheduler.maintenanceInventory(),wakeQueued}),
         tick: scheduler.tick,
         requestProbe: scheduler.requestProbe,
         stop() {
@@ -468,10 +471,12 @@ export function startTurnScheduler(deps: TurnSchedulerDeps): TurnScheduler {
 export function createLateBoundProbePort(): {
     port: (e: { attemptId: string }) => void;
     bind(scheduler: Pick<TurnScheduler, 'requestProbe'> | null): void;
+    maintenanceInventory(): {early:string[];bound:boolean};
 } {
     let target: Pick<TurnScheduler, 'requestProbe'> | null = null;
     const early = new Set<string>();
     return {
+        maintenanceInventory:()=>({early:[...early].sort(),bound:target!==null}),
         port(e) {
             if (target) target.requestProbe(e.attemptId);
             else early.add(e.attemptId);

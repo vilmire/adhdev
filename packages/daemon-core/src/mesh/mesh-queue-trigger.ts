@@ -72,6 +72,11 @@ function getQueueStatusById(meshId: string): Map<string, string> {
 // deterministically instead of sleeping.
 const inFlightAutoLaunches = new Map<string, Set<Promise<boolean>>>();
 
+/** Metadata-only view of the real detached launch promises, not a wait/cleanup. */
+export function maintenanceQueueLaunches() {
+    return [...inFlightAutoLaunches].map(([meshId,set])=>({meshId,count:set.size})).sort((a,b)=>a.meshId.localeCompare(b.meshId));
+}
+
 function trackInFlightAutoLaunch(meshId: string, promise: Promise<boolean>): void {
     let set = inFlightAutoLaunches.get(meshId);
     if (!set) { set = new Set(); inFlightAutoLaunches.set(meshId, set); }

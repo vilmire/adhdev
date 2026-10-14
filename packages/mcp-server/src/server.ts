@@ -1,3 +1,4 @@
+import { startMaintenanceInventoryExporter } from './tools/maintenance-inventory-exporter.js';
 /**
  * ADHDev MCP Server
  *
@@ -210,10 +211,13 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
     // answer in time is kept and re-sent instead of being lost. Entries a previous MCP
     // process for this same worker left behind are flushed right away.
     const delivery = new WorkerReportDelivery({ transport, credentials, strictProtocol: true, describeAnswer: describeWorkerDeliveryAnswer });
+    // Failure cannot block authoritative reports. The native membership census
+    // and preserved marker make an absent exporter UNKNOWN, never drained.
+    const maintenanceExporter=await startMaintenanceInventoryExporter(transport,delivery).catch(()=>null);
     delivery.kick();
     server.onclose = () => {
       // Best-effort final attempt; anything still undelivered stays on disk for a successor.
-      void delivery.flush().finally(() => delivery.dispose());
+      void delivery.flush().finally(() => {maintenanceExporter?.stop();delivery.dispose();});
     };
 
     server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: workerTools }));

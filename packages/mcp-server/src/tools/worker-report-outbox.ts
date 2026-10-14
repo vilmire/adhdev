@@ -130,17 +130,28 @@ export class WorkerOutboxStore {
   private readonly entries = new Map<string, WorkerOutboxEntry>();
   private diskOk: boolean;
   private corruptFiles = 0;
+  private acknowledgments = new Map<string, Record<string, unknown>>();
+  private acknowledgmentsDurable = true;
+  private fileDigests = new Map<string,string>();
+  private ackTemporaryFiles: string[] = [];
+  private ackUnknownFiles: string[] = [];
+
 
   constructor(private readonly dir: string | null, private readonly log: (line: string) => void = () => {}) {
     this.diskOk = !!dir;
     if (!dir) return;
     try {
       fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      dir=fs.realpathSync(dir);this.dir=dir;
+      this.readAcknowledgments();
       for (const name of fs.readdirSync(dir)) {
         if (!name.endsWith('.json')) continue;
         const file = path.join(dir, name);
         try {
-          const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as WorkerOutboxEntry;
+          const stat=fs.lstatSync(file);if(!stat.isFile()||stat.isSymbolicLink())throw new Error('untrusted outbox file');
+          const raw=fs.readFileSync(file,'utf8');
+          const parsed = JSON.parse(raw) as WorkerOutboxEntry;
+          this.fileDigests.set(name,createHash('sha256').update(raw).digest('hex'));
           if (parsed?.v === 1 && typeof parsed.id === 'string' && (parsed.kind === 'report' || parsed.kind === 'progress')
             && typeof parsed.createdAtMs === 'number' && parsed.payload && typeof parsed.payload === 'object') {
             this.entries.set(parsed.id, parsed);
@@ -160,9 +171,33 @@ export class WorkerOutboxStore {
     }
   }
 
+  private readAcknowledgments(): void {
+    this.ackTemporaryFiles=[];this.ackUnknownFiles=[];
+    if(!this.dir)return;
+    const dir=path.join(this.dir,'.maintenance-acks');
+    const seen=new Set<string>();let directoryObserved=false;
+    try {
+      const stat=fs.lstatSync(dir);if(!stat.isDirectory()||stat.isSymbolicLink()||fs.realpathSync(dir)!==dir||stat.uid!==process.getuid?.())throw new Error('unknown acknowledgment directory');directoryObserved=true;
+      for(const name of fs.readdirSync(dir).sort()){
+        if(name.endsWith('.tmp')){this.ackTemporaryFiles.push(name);continue;}
+        if(!/^(report|progress)-[A-Za-z0-9_.:-]{8,128}\.json$/.test(name)){this.ackUnknownFiles.push(name);continue;}
+        const file=path.join(dir,name),s=fs.lstatSync(file);if(!s.isFile()||s.isSymbolicLink()||s.size>4096||(s.mode&0o077))throw new Error('unknown acknowledgment');
+        const row=JSON.parse(fs.readFileSync(file,'utf8'));
+        if(!row||typeof row.id!=='string'||!['report','progress'].includes(row.kind)||!['receipt','unproven'].includes(row.proof)||name!==`${row.kind}-${row.id}.json`)throw new Error('unknown acknowledgment');
+        if(row.proof==='receipt'&&(!/^[a-f0-9]{64}$/.test(row.digest??'')||!['ownerDaemonId','senderDaemonId','taskId','attemptId','sessionId'].every(k=>typeof row[k]==='string'&&/^[A-Za-z0-9_.:-]{1,256}$/.test(row[k]))||!Number.isSafeInteger(row.generation)||row.generation<0))throw new Error('invalid receipt metadata');
+        const selected=row.proof==='receipt'?{id:row.id,kind:row.kind,proof:row.proof,digest:row.digest,ownerDaemonId:row.ownerDaemonId,senderDaemonId:row.senderDaemonId,taskId:row.taskId,attemptId:row.attemptId,generation:row.generation,sessionId:row.sessionId}:{id:row.id,kind:row.kind,proof:row.proof};
+        const prior=this.acknowledgments.get(`${row.kind}:${row.id}`);
+        if(prior&&JSON.stringify(prior)!==JSON.stringify(selected))throw new Error('conflicting receipt');
+        this.acknowledgments.set(`${row.kind}:${row.id}`,selected);seen.add(`${row.kind}:${row.id}`);
+      }
+      if([...this.acknowledgments.keys()].some(k=>!seen.has(k)))this.acknowledgmentsDurable=false;
+    }catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT'||directoryObserved||this.acknowledgments.size)this.acknowledgmentsDurable=false;}
+  }
+
   /** Actual process-local metadata only. An empty directory cannot prove that
    * a different/old MCP process has no memory fallback or unacknowledged send. */
   maintenanceInventory() {
+    this.readAcknowledgments();
     const entries = this.list().map(e => ({id:e.id,kind:e.kind,payloadHash:e.payloadHash,createdAtMs:e.createdAtMs,attempts:e.attempts,quarantined:!!e.quarantined}));
     let files: string[] = [], readable = false;
     try {
@@ -175,13 +210,44 @@ export class WorkerOutboxStore {
         }
       }
     } catch { /* unknown remains closed */ }
+    let changedFiles=0;
+    if(readable&&this.dir)for(const name of files){
+      if(name==='.maintenance-acks')continue;
+      const expected=this.fileDigests.get(name);
+      if(!expected)continue;
+      try{const file=path.join(this.dir,name),s=fs.lstatSync(file);if(!s.isFile()||s.isSymbolicLink()||createHash('sha256').update(fs.readFileSync(file)).digest('hex')!==expected)changedFiles++;}catch{changedFiles++;}
+    }
     const expected=entries.map(e=>`${e.id}.json`).sort();
-    const temporaryFiles=files.filter(name=>name.endsWith('.tmp'));
-    const unknownFiles=files.filter(name=>!expected.includes(name));
+    const temporaryFiles=[...files.filter(name=>name.endsWith('.tmp')),...this.ackTemporaryFiles.map(name=>`.maintenance-acks/${name}`)];
+    const unknownFiles=[...files.filter(name=>name!=='.maintenance-acks'&&!expected.includes(name)),...this.ackUnknownFiles.map(name=>`.maintenance-acks/${name}`)];
     return {schema:1,pid:process.pid,durable:this.diskOk,directoryReadable:readable,
-      diskSetMatchesMemory:readable && JSON.stringify(files)===JSON.stringify(expected),
-      quarantinedFileCount:this.corruptFiles,temporaryFiles,unknownFiles,
-      memoryFallback:!this.diskOk,entries};
+      diskSetMatchesMemory:readable && changedFiles===0 && JSON.stringify(files.filter(n=>n!=='.maintenance-acks'))===JSON.stringify(expected),
+      quarantinedFileCount:this.corruptFiles+changedFiles,temporaryFiles,unknownFiles,
+      memoryFallback:!this.diskOk,entries,acknowledgments:[...this.acknowledgments.values()].sort((a,b)=>`${a.kind}:${a.id}`.localeCompare(`${b.kind}:${b.id}`)),acknowledgmentsDurable:this.acknowledgmentsDurable&&this.diskOk};
+  }
+
+  /** Persist only actual definitive ACK metadata before forgetting the outbox
+   * entry. Legacy/non-receipted answers stay explicitly unproven. */
+  acknowledge(entry: WorkerOutboxEntry, result: any): void {
+    const r=result?.deliveryReceipt;
+    const exact=result?.success===true && r?.protocol===1 && r.deliveryId===entry.id && /^[a-f0-9]{64}$/.test(r.digest??'')
+      && ['ownerDaemonId','senderDaemonId','taskId','attemptId','sessionId'].every(k=>typeof r[k]==='string'&&r[k].length>0)
+      && Number.isSafeInteger(r.generation)&&r.generation>=0;
+    const row={id:entry.id,kind:entry.kind,proof:exact?'receipt':'unproven',...(exact?{digest:r.digest,ownerDaemonId:r.ownerDaemonId,senderDaemonId:r.senderDaemonId,taskId:r.taskId,attemptId:r.attemptId,generation:r.generation,sessionId:r.sessionId}:{})};
+    this.acknowledgments.set(`${entry.kind}:${entry.id}`,row);
+    if(!this.dir||!this.diskOk){this.acknowledgmentsDurable=false;return;}
+    const dir=path.join(this.dir,'.maintenance-acks'),bytes=JSON.stringify(row);
+    const target=path.join(dir,`${entry.kind}-${entry.id}.json`),tmp=`${target}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+    try {
+      fs.mkdirSync(dir,{recursive:true,mode:0o700});
+      const s=fs.lstatSync(dir);if(!s.isDirectory()||s.isSymbolicLink()||fs.realpathSync(dir)!==dir||s.uid!==process.getuid?.())throw new Error('untrusted acknowledgment directory');
+      const fd=fs.openSync(tmp,'wx',0o600);try{fs.writeFileSync(fd,bytes);fs.fsyncSync(fd);}finally{fs.closeSync(fd);}
+      // Immutable per-delivery files prevent concurrent MCP writers from losing
+      // each other's ACKs. Never replace a conflicting receipt or prune history.
+      try{fs.linkSync(tmp,target);}catch(e){if((e as NodeJS.ErrnoException).code!=='EEXIST'||fs.readFileSync(target,'utf8')!==bytes)throw e;}
+      fs.unlinkSync(tmp);
+      if(process.platform!=='win32'){for(const directory of [dir,this.dir]){const d=fs.openSync(directory,'r');try{fs.fsyncSync(d);}finally{fs.closeSync(d);}}}
+    }catch{this.acknowledgmentsDurable=false;}
   }
 
   private fileFor(id: string): string {
@@ -198,8 +264,9 @@ export class WorkerOutboxStore {
       const file = this.fileFor(entry.id);
       const tmp = `${file}.${process.pid}.tmp`;
       const fd = fs.openSync(tmp, 'w', 0o600);
-      try { fs.writeFileSync(fd, JSON.stringify(entry)); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-      fs.renameSync(tmp, file);
+      const bytes=JSON.stringify(entry);
+      try { fs.writeFileSync(fd, bytes); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+      fs.renameSync(tmp, file);this.fileDigests.set(path.basename(file),createHash('sha256').update(bytes).digest('hex'));
       // Persist the rename before claiming write-ahead durability. Windows
       // cannot fsync directories; file fsync + atomic rename covers process death.
       if (process.platform !== 'win32') {
@@ -362,7 +429,7 @@ export class WorkerReportDelivery {
     for (let i = 0; i < this.inlineAttempts; i += 1) {
       const attempt = await this.sendOnce(entry);
       if (attempt.kind === 'answered') {
-        if (!attempt.result?.receiptPending) this.store.remove(entry.id);
+        if (!attempt.result?.receiptPending) { this.store.acknowledge(entry,attempt.result); this.store.remove(entry.id); }
         else this.schedule();
         return { status: 'answered', result: attempt.result, attempts: entry.attempts };
       }
@@ -412,6 +479,7 @@ export class WorkerReportDelivery {
           const attempt = await this.sendOnce(entry);
           if (attempt.kind === 'answered') {
             if (attempt.result?.receiptPending) { this.store.put(entry); continue; }
+            this.store.acknowledge(entry,attempt.result);
             this.store.remove(entry.id);
             const rendered = this.opts.describeAnswer?.(entry.kind, attempt.result)
               ?? (attempt.result?.success === true ? 'delivered' : `refused (${attempt.result?.error || 'unknown_error'})`);

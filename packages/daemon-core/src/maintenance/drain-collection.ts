@@ -1,0 +1,161 @@
+/** Target process metadata census. No forgiving status defaults, bodies, timers
+ * drained by the collector, lifecycle controls, or strict bridge state writes. */
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import {createHash} from 'node:crypto';
+import type {DaemonComponents} from '../boot/daemon-components.js';
+import {maintenanceQueueLaunches} from '../mesh/mesh-queue-trigger.js';
+import {maintenanceAutoLaunches} from '../mesh/mesh-queue-autolaunch.js';
+import {maintenanceDeferredRestarts} from '../commands/med-family/mesh-restart.js';
+import {authorizeMaintenanceCollection,type ActorObservationChallenge} from './actor-observation.js';
+import {collectMcpInventories} from './mcp-collection.js';
+import {withMaintenanceObservation,MAINTENANCE_BOOT_NONCE,type CooperativeMaintenance} from './cooperative-gate.js';
+export const MAINTENANCE_DRAIN_CHANNELS=['runnableQueue','claims','launches','submits','attempts','corrections','livenessHolds','reportOutboxes','progressOutboxes','unreadableOutboxes','temporaryOutboxes','memoryOnlyOutboxes','coordinatorNotices','pendingNotifications','adapterOutbound','adapterSubmit','turnEvents','deferredLifecycle','refineJobs'] as const;
+export const MAINTENANCE_BLACKOUT_SOURCES=['queue','autoLaunch','direct','sessionInput','nativeOwnerInput','deferredLifecycle','reconnect','newMembership'] as const;
+const digest=(v:unknown)=>createHash('sha256').update(JSON.stringify(v)).digest('hex');
+interface Channel {observed:boolean;source:string;inventoryDigest:string;pending:unknown[];reason?:string;identity:Record<string,unknown>}
+function census(components:DaemonComponents,state:CooperativeMaintenance,root:string,nonce:string) {
+    const identity={daemonId:state.daemonId,pid:process.pid,bootNonce:MAINTENANCE_BOOT_NONCE,planDigest:state.planDigest,epoch:state.epoch,nonce};
+    const channels={} as Record<string,Channel>;
+    const set=(name:string,source:string,inventory:unknown,pending:unknown[],reason?:string)=>channels[name]={observed:!reason,source,inventoryDigest:digest(inventory),pending,...(reason?{reason}:{}),identity};
+    const read=(names:string[],source:string,fn:()=>void)=>{try{fn();}catch{for(const name of names)set(name,source,{unavailable:true},[],'source_inventory_unavailable');}};
+    let db=components.turnLedger?.store.db;
+    try{if(components.turnLedger?.selfDaemonId!==state.daemonId || !fs.realpathSync((db as any)?.name).startsWith(root+path.sep))db=undefined;}catch{db=undefined;}
+    let revision:unknown=null,receipts:any[]=[];
+    const sql=(query:string):any[]=>{
+        if(!db||db.inTransaction)throw new Error('live_ledger_handle_required');
+        const rows=db.prepare(`${query} LIMIT 100001`).all() as any[];
+        if(rows.length>100000)throw new Error('metadata_inventory_truncated');return rows;
+    };
+    const scoped=(rows:any[])=>rows.some(r=>r.mesh_id&&!state.meshIds.includes(r.mesh_id))?'unenrolled_mesh_work':undefined;
+    read(['runnableQueue','claims'],'MeshRuntimeStore.db/mesh_queue',()=>{
+        const rows=sql('SELECT id,mesh_id,status,assigned_node_id,assigned_session_id,updated_at FROM mesh_queue ORDER BY id');
+        const pending=rows.filter(r=>!['done','failed','cancelled'].includes(r.status));
+        set('runnableQueue','mesh_queue',rows,pending,scoped(pending));set('claims','mesh_queue/assigned',rows,rows.filter(r=>r.status==='assigned'),scoped(pending));
+    });
+    read(['attempts','corrections','livenessHolds','turnEvents','coordinatorNotices','pendingNotifications'],'TurnLedger.store.db',()=>{
+        revision=db!.prepare('SELECT total_changes() AS revision').get();
+        const attempts=sql('SELECT attempt_id,mesh_id,owner_daemon_id,generation,state,terminal_outcome,updated_at FROM turn_attempts ORDER BY attempt_id');
+        const open=attempts.filter(r=>r.terminal_outcome===null);set('attempts','turn_attempts',attempts,open,scoped(open));
+        const corrections=sql("SELECT attempt_id,mesh_id,generation,json_extract(data_json,'$.reportCorrection.generation') AS correction_generation,json_extract(data_json,'$.reportCorrection.until') AS correction_until FROM turn_attempts WHERE json_extract(data_json,'$.reportCorrection.generation')=generation AND terminal_outcome IS NULL ORDER BY attempt_id");
+        set('corrections','turn_attempts/data.reportCorrection',corrections,corrections);
+        const holds=sql("SELECT hold_id,attempt_id,generation,reason,status,until_ms FROM turn_holds WHERE status='active' ORDER BY hold_id");
+        set('livenessHolds','turn_holds (all active holds, no expiry/prune)',holds,holds);
+        const events=sql('SELECT event_id,mesh_id,attempt_id,generation,kind,publish_state,src_writer,src_seq,published_seq,recorded_at FROM turn_events ORDER BY event_id');
+        set('turnEvents','turn_events/publish_state',events,events.filter(r=>r.publish_state==='pending'));
+        const notices=sql("SELECT n.event_id,n.mesh_id,n.publish_state,n.src_writer,n.published_seq FROM turn_events n WHERE n.kind='notify' AND (n.publish_state!='published' OR NOT EXISTS(SELECT 1 FROM turn_events d WHERE d.kind='delivered' AND (d.event_id='delivered:'||n.mesh_id||':'||n.src_writer||':'||n.published_seq OR (d.event_id='delivered:'||n.src_writer||':'||n.published_seq AND d.mesh_id=n.mesh_id)))) ORDER BY n.event_id");
+        const progress=sql("SELECT event_id,mesh_id,state FROM worker_bridge_progress_notice WHERE state!='delivered' ORDER BY event_id");
+        set('coordinatorNotices','turn_events + worker_bridge_progress_notice', [notices,progress],[...notices,...progress]);
+        // A delivered claim is a consumption intent, not the native submit ACK.
+        // Preserve exact metadata and identify the missing owning interface.
+        set('pendingNotifications','turn-ledger/deliver.ts native submit ACK',notices,notices,'notice_delivery_ACK_inventory_not_exported');
+    });
+    read(['livenessHolds','turnEvents'],'actual scheduler/late-probe/publisher promises',()=>{
+        const scheduler=components.turnScheduler?.maintenanceInventory();
+        const probe=components.turnProbePort?.maintenanceInventory?.();
+        const publisher=components.turnLedger?.maintenanceInventory();
+        const old=channels.livenessHolds;
+        const pending=[...old.pending,...(scheduler?.forced??[]),...(probe?.early??[]),...(scheduler?.inFlight||scheduler?.wakeQueued?[{schedulerInFlight:true}]:[])];
+        const reason=old.reason||(!scheduler?'scheduler_inventory_missing':!probe?'late_probe_inventory_missing':undefined);
+        channels.livenessHolds={...old,pending,inventoryDigest:digest([old.inventoryDigest,scheduler,probe]),...(reason?{observed:false,reason}:{})};
+        const events=channels.turnEvents;
+        channels.turnEvents={...events,pending:[...events.pending,...(publisher?.flushing||publisher?.flushAgain?[{publisherInFlight:true}]:[])],inventoryDigest:digest([events.inventoryDigest,publisher]),...(!publisher?{observed:false,reason:'publisher_inventory_missing'}:{})};
+    });
+    read(['launches'],'mesh-queue-trigger + mesh-queue-autolaunch',()=>{
+        const background=maintenanceQueueLaunches(),locks=maintenanceAutoLaunches();
+        set('launches','inFlightAutoLaunches/autoLaunchInProgress/autoLaunchTaskInProgress',{background,locks},[...background.filter(x=>x.count>0),...locks.nodes,...locks.tasks]);
+    });
+    read(['submits','adapterSubmit','adapterOutbound'],'DaemonCliManager.adapters/getStatus(allowParse:false)',()=>{
+        const submits:any[]=[],outbound:any[]=[],unknown:string[]=[];
+        for(const [sessionId,adapter]of components.cliManager.adapters){
+            if(typeof adapter.hasInFlightSubmit!=='function'){unknown.push(sessionId);continue;}
+            const pending=adapter.hasInFlightSubmit();if(typeof pending!=='boolean'){unknown.push(sessionId);continue;}
+            submits.push({sessionId,pending});
+            const status=adapter.getStatus({allowParse:false});const count=(status as any)?.pendingOutboundCount;
+            if(!Number.isSafeInteger(count)||count<0){unknown.push(sessionId);continue;}outbound.push({sessionId,count});
+        }
+        for(const name of ['submits','adapterSubmit'])set(name,'actual adapter.hasInFlightSubmit',submits,submits.filter(x=>x.pending),unknown.length?'adapter_metadata_port_missing':undefined);
+        set('adapterOutbound','actual adapter.getStatus({allowParse:false}).pendingOutboundCount',outbound,outbound.filter(x=>x.count>0),unknown.length?'adapter_metadata_port_missing':undefined);
+    });
+    read(['deferredLifecycle'],'state.json + live mesh restart timers',()=>{
+        let persisted:any={deferredRestartSchedules:{}};
+        try{const file=path.join(root,'state.json'),s=fs.lstatSync(file);if(!s.isFile()||s.isSymbolicLink()||s.size>8*1024*1024)throw new Error('unknown');persisted=JSON.parse(fs.readFileSync(file,'utf8'));}
+        catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')throw e;}
+        if(!persisted.deferredRestartSchedules||typeof persisted.deferredRestartSchedules!=='object'||Array.isArray(persisted.deferredRestartSchedules))throw new Error('unknown');
+        const timers=maintenanceDeferredRestarts(),schedules=Object.keys(persisted.deferredRestartSchedules).sort();
+        set('deferredLifecycle','mesh-restart timers/state.json; outer DaemonUpdateController', {timers,schedules},[...timers,...schedules],'outer_update_controller_helper_inventory_not_exported');
+    });
+    read(['refineJobs'],'router refine maps + mesh_local_records',()=>{
+        const router=components.router;
+        const live=[...router.runningRefineJobs.values(),...router.runningRefineBatchJobs.values()].map(v=>({jobId:v.jobId,status:v.status}));
+        const leases=[...router.refineBaseLeases.values()];
+        const rows=sql("SELECT event_id,mesh_id,node_id,kind,json_extract(payload_json,'$.source') AS source,json_extract(payload_json,'$.refineJob.jobId') AS job_id FROM mesh_local_records WHERE kind IN ('task_dispatched','task_completed','task_failed') ORDER BY event_id");
+        const terminal=new Set(rows.filter(r=>r.kind!=='task_dispatched').map(r=>`${r.mesh_id}:${r.node_id}:${r.job_id}`));
+        const open=rows.filter(r=>r.kind==='task_dispatched'&&r.source==='refine_mesh_node_async_job'&&(!r.job_id||!terminal.has(`${r.mesh_id}:${r.node_id}:${r.job_id}`)));
+        set('refineJobs','runningRefineJobs/runningRefineBatchJobs/refineBaseLeases/mesh_local_records',{live,leases,rows},[...live,...leases,...open]);
+    });
+    let receiptsObserved=true;
+    try{receipts=sql(`SELECT side,sender_id,delivery_id,mesh_id,digest,state,
+        json_extract(envelope_json,'$.kind') AS kind,
+        json_extract(receipt_json,'$.deliveryReceipt.digest') AS receipt_digest,
+        json_extract(receipt_json,'$.deliveryReceipt.protocol') AS receipt_protocol,
+        json_extract(receipt_json,'$.deliveryReceipt.deliveryId') AS receipt_delivery_id,
+        json_extract(envelope_json,'$.ownerDaemonId') AS envelope_owner,
+        json_extract(envelope_json,'$.senderDaemonId') AS envelope_sender,
+        json_extract(envelope_json,'$.taskId') AS envelope_task,
+        json_extract(envelope_json,'$.attemptId') AS envelope_attempt,
+        json_extract(envelope_json,'$.generation') AS envelope_generation,
+        json_extract(envelope_json,'$.sessionId') AS envelope_session,
+        json_extract(receipt_json,'$.deliveryReceipt.ownerDaemonId') AS ownerDaemonId,
+        json_extract(receipt_json,'$.deliveryReceipt.senderDaemonId') AS senderDaemonId,
+        json_extract(receipt_json,'$.deliveryReceipt.taskId') AS taskId,
+        json_extract(receipt_json,'$.deliveryReceipt.attemptId') AS attemptId,
+        json_extract(receipt_json,'$.deliveryReceipt.generation') AS generation,
+        json_extract(receipt_json,'$.deliveryReceipt.sessionId') AS sessionId
+        FROM worker_bridge_delivery ORDER BY side,sender_id,delivery_id`);}catch{receiptsObserved=false;}
+    const stableChannels=Object.fromEntries(Object.entries(channels).map(([name,{identity:_identity,...value}])=>[name,value]));
+    return {identity,channels,revision,receipts,receiptsObserved,digest:digest({channels:stableChannels,receipts,receiptsObserved})};
+}
+export async function collectTargetDrain(components:DaemonComponents,state:CooperativeMaintenance,root:string,nonce:string,deadlineMs=2000) {
+    const before=census(components,state,root,nonce);
+    let mcp:Awaited<ReturnType<typeof collectMcpInventories>>;
+    try{mcp=await collectMcpInventories(root,state,deadlineMs);}catch{mcp={observed:false,reason:'mcp_registry_unknown_or_changed',members:[],nativeCensusRequired:true};}
+    // A second challenged read detects MCP entry/ACK/flush and roster changes
+    // while other participants are being collected. This is not producer exclusion.
+    let confirmed:typeof mcp;
+    try{confirmed=await collectMcpInventories(root,state,deadlineMs);}catch{confirmed={observed:false,reason:'mcp_registry_unknown_or_changed',members:[],nativeCensusRequired:true};}
+    const select=(v:typeof mcp)=>v.members.map(m=>({identity:m.identity,observed:m.observed,inventory:m.inventory}));
+    const mcpStable=digest(select(mcp))===digest(select(confirmed));
+    if(!mcpStable)mcp={...confirmed,observed:false,reason:'mcp_inventory_changed_during_collection'};
+    const after=census(components,state,root,nonce),channels=after.channels;
+    const members=mcp.members.filter(m=>m.observed),incomplete=!mcp.observed||members.length!==mcp.members.length;
+    const mcpChannel=(name:string,pending:unknown[],reason?:string)=>channels[name]={observed:!reason&&!incomplete,source:'fresh challenged target MCP adapters + worker_bridge_delivery',pending,inventoryDigest:digest({members,receipts:after.receipts}),identity:after.identity,...(reason||incomplete?{reason:reason||mcp.reason||'mcp_inventory_unknown'}:{})};
+    const invalidAck:any[]=[];
+    for(const m of members)for(const ack of m.inventory.acknowledgments){
+        const match=after.receipts.some(r=>r.kind===ack.kind&&r.receipt_protocol===1&&r.receipt_delivery_id===r.delivery_id&&r.sender_id===ack.senderDaemonId&&r.envelope_sender===ack.senderDaemonId&&r.envelope_owner===ack.ownerDaemonId&&r.envelope_task===ack.taskId&&r.envelope_attempt===ack.attemptId&&r.envelope_generation===ack.generation&&r.envelope_session===ack.sessionId&&r.state==='receipted'&&r.delivery_id===ack.id&&r.digest===ack.digest&&r.receipt_digest===r.digest
+            && ['ownerDaemonId','senderDaemonId','taskId','attemptId','generation','sessionId'].every(k=>r[k]===ack[k]));
+        if(ack.proof!=='receipt'||!match)invalidAck.push({pid:m.identity.pid,id:ack.id,kind:ack.kind});
+    }
+    for(const r of after.receipts)if(r.sender_id===state.daemonId&&r.state==='receipted'&&!members.some(m=>m.inventory.acknowledgments.some((a:any)=>a.proof==='receipt'&&a.id===r.delivery_id&&a.digest===r.digest&&a.kind===r.kind)))invalidAck.push({id:r.delivery_id,kind:r.kind,reason:'source_ACK_or_external_old_entry_evidence_required'});
+    const pendingBridge=after.receipts.filter(r=>r.state!=='receipted'||r.receipt_protocol!==1||r.receipt_delivery_id!==r.delivery_id||r.receipt_digest!==r.digest||r.sender_id!==r.senderDaemonId||r.envelope_sender!==r.senderDaemonId||r.envelope_owner!==r.ownerDaemonId||r.envelope_task!==r.taskId||r.envelope_attempt!==r.attemptId||r.envelope_generation!==r.generation||r.envelope_session!==r.sessionId);
+    for(const [channel,kind] of [['reportOutboxes','report'],['progressOutboxes','progress']]as const){
+        const entries=members.flatMap(m=>m.inventory.entries.filter((e:any)=>e.kind===kind).map((e:any)=>({pid:m.identity.pid,...e})));
+        mcpChannel(channel,[...entries,...pendingBridge.filter(r=>r.kind===kind||!['report','progress'].includes(r.kind)),...invalidAck.filter(a=>a.kind===kind)],!after.receiptsObserved?'receipt_store_unavailable':invalidAck.length?'exact_delivery_ACK_unconfirmed':undefined);
+    }
+    const statuses=(fn:(v:any)=>boolean)=>members.filter(m=>fn(m.inventory)).map(m=>({pid:m.identity.pid,bootNonce:m.identity.bootNonce}));
+    mcpChannel('unreadableOutboxes',statuses(v=>!v.directoryReadable||!v.diskSetMatchesMemory||v.quarantinedFileCount>0||v.unknownFileCount>0||!v.acknowledgmentsDurable));
+    mcpChannel('temporaryOutboxes',statuses(v=>v.temporaryCount>0));mcpChannel('memoryOnlyOutboxes',statuses(v=>v.memoryFallback||!v.durable));
+    const active=statuses(v=>v.activeSubmits>0||v.flushing||v.pendingNoticeCount>0);
+    if(active.length)channels.submits={...channels.submits,pending:[...channels.submits.pending,...active]};
+    if(before.digest!==after.digest||JSON.stringify(before.revision)!==JSON.stringify(after.revision))for(const ch of Object.values(channels)){ch.observed=false;ch.reason='producer_changed_during_collection';}
+    const blackout=Object.fromEntries(MAINTENANCE_BLACKOUT_SOURCES.map(source=>[source,{source:source==='nativeOwnerInput'?'external old-entry/native owner ingress witness':source==='deferredLifecycle'?'mesh-restart guarded scheduling; outer update controller unavailable':'cooperative-gate held admission writer',excluded:['nativeOwnerInput','deferredLifecycle'].includes(source)?null:true,identity:after.identity,...(source==='nativeOwnerInput'?{reason:'external_blackout_or_already_cold_prerequisite'}:source==='deferredLifecycle'?{reason:'outer_update_controller_helper_inventory_not_exported'}:{})}]));
+    const unknown=MAINTENANCE_DRAIN_CHANNELS.filter(k=>!channels[k]?.observed);
+    return {schema:1,...after.identity,observedAt:Date.now(),scope:'current-target-instance',oldEntryEvidenceRequired:true,
+        channels,blackout,mcp,receiptsDigest:digest(after.receipts),ledgerDigest:after.digest,deliverySetDigest:digest(members.map(m=>({identity:m.identity,acks:m.inventory.acknowledgments}))),
+        unknown,drained:false,nativeMcpCensusRequired:true};
+}
+export async function authenticatedDrainCollection(components:DaemonComponents,request:ActorObservationChallenge) {
+    const auth=authorizeMaintenanceCollection(request,'drain');
+    const drain=await withMaintenanceObservation(state=>collectTargetDrain(components,state,auth.root,request.nonce));
+    return auth.reply({drain});
+}

@@ -146,6 +146,8 @@ export interface MeshEventNotice {
 
 export interface TurnLedger {
     readonly store: TurnStore;
+    /** Read-only metadata of the actual publisher promise. */
+    maintenanceInventory(): {flushing:boolean;flushAgain:boolean};
     readonly selfDaemonId: string;
     /**
      * Ledger-clock time this ledger instance was created — one per daemon
@@ -594,6 +596,7 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
     }
 
     return {
+        maintenanceInventory:()=>({flushing:flushing!==null,flushAgain}),
         store,
         selfDaemonId: deps.selfDaemonId,
         incarnationStartedAt,
