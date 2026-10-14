@@ -112,8 +112,36 @@ function census(components:DaemonComponents,state:CooperativeMaintenance,root:st
         const leases=[...router.refineBaseLeases.values()];
         const rows=sql("SELECT event_id,mesh_id,node_id,kind,json_extract(payload_json,'$.source') AS source,json_extract(payload_json,'$.refineJob.jobId') AS job_id FROM mesh_local_records WHERE kind IN ('task_dispatched','task_completed','task_failed') ORDER BY event_id");
         const terminal=new Set(rows.filter(r=>r.kind!=='task_dispatched').map(r=>`${r.mesh_id}:${r.node_id}:${r.job_id}`));
-        const open=rows.filter(r=>r.kind==='task_dispatched'&&r.source==='refine_mesh_node_async_job'&&(!r.job_id||!terminal.has(`${r.mesh_id}:${r.node_id}:${r.job_id}`)));
-        set('refineJobs','runningRefineJobs/runningRefineBatchJobs/refineBaseLeases/mesh_local_records',{live,leases,rows},[...live,...leases,...open]);
+        // Dispatch-source vocabulary, stated explicitly and fail-closed. A bare equality
+        // test on the refine source silently EXCLUDES any dispatch row whose source this
+        // census does not know, and an excluded row reads as settled — the same
+        // silent-exclusion shape the external rc12 witness driver already refuses.
+        // Measured on the real live ledger (readonly snapshot, 2026-10-15), `task_dispatched`
+        // sources are {null: 380, direct: 135, refine_mesh_node_async_job: 20, queue: 2};
+        // every one of the 380 null-source rows is an ordinary dispatch (routingDecision
+        // .source autoLaunch 253 / queue 127) and the number of rows bearing a
+        // `refineJob.jobId` under a null/non-refine source is ZERO. So widening or dropping
+        // the filter would fabricate ~517 phantom jobs, while leaving it bare hides unknown
+        // work. Neither is acceptable: an unrecognised source refuses the channel.
+        const REFINE_JOB_SOURCE='refine_mesh_node_async_job';
+        // Non-refine dispatch sources, from the writer's own declared union
+        // (mesh-routing-decision.ts `source: 'queue' | 'autoLaunch' | 'direct'`, plus the
+        // top-level `source:'direct'` buildDirectTaskPayload stamps), and `null` for rows
+        // that carry no source field at all. These are KNOWN to be jobless.
+        const JOBLESS_SOURCES:Array<string|null>=[null,'direct','queue','autoLaunch'];
+        // The vocabulary governs DISPATCHED rows only: those are the rows classified by
+        // source to decide what is an open job. Terminal rows are matched by
+        // mesh+node+job identity, never by source — and on the real ledger a terminal row
+        // legitimately carries no source at all (measured: 20 `task_completed` rows with
+        // source=null), so gating them would refuse that normal shape.
+        const dispatched=rows.filter(r=>r.kind==='task_dispatched');
+        // An UNKNOWN source is uncertainty, not a settled row. A dispatch row carrying a
+        // refine job under a source declared jobless contradicts the vocabulary itself
+        // (measured: ZERO such rows) — this census does not guess which half is right.
+        const unknownSource=dispatched.some(r=>r.source!==REFINE_JOB_SOURCE&&!JOBLESS_SOURCES.includes(r.source??null))
+            ||dispatched.some(r=>r.job_id&&r.source!==REFINE_JOB_SOURCE);
+        const open=dispatched.filter(r=>r.source===REFINE_JOB_SOURCE&&(!r.job_id||!terminal.has(`${r.mesh_id}:${r.node_id}:${r.job_id}`)));
+        set('refineJobs',`runningRefineJobs/runningRefineBatchJobs/refineBaseLeases/mesh_local_records (dispatch source vocabulary: ${REFINE_JOB_SOURCE} bears jobs; direct|queue|autoLaunch|none are jobless; anything else refuses)`,{live,leases,rows},[...live,...leases,...open],unknownSource?'dispatch_source_vocabulary_unknown':undefined);
     });
     let receiptsObserved=true;
     try{receipts=sql(`SELECT side,sender_id,delivery_id,mesh_id,digest,state,

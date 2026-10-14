@@ -106969,8 +106969,12 @@ ${marker2}`,
         const leases = [...router.refineBaseLeases.values()];
         const rows = sql("SELECT event_id,mesh_id,node_id,kind,json_extract(payload_json,'$.source') AS source,json_extract(payload_json,'$.refineJob.jobId') AS job_id FROM mesh_local_records WHERE kind IN ('task_dispatched','task_completed','task_failed') ORDER BY event_id");
         const terminal = new Set(rows.filter((r) => r.kind !== "task_dispatched").map((r) => `${r.mesh_id}:${r.node_id}:${r.job_id}`));
-        const open = rows.filter((r) => r.kind === "task_dispatched" && r.source === "refine_mesh_node_async_job" && (!r.job_id || !terminal.has(`${r.mesh_id}:${r.node_id}:${r.job_id}`)));
-        set2("refineJobs", "runningRefineJobs/runningRefineBatchJobs/refineBaseLeases/mesh_local_records", { live, leases, rows }, [...live, ...leases, ...open]);
+        const REFINE_JOB_SOURCE = "refine_mesh_node_async_job";
+        const JOBLESS_SOURCES = [null, "direct", "queue", "autoLaunch"];
+        const dispatched = rows.filter((r) => r.kind === "task_dispatched");
+        const unknownSource = dispatched.some((r) => r.source !== REFINE_JOB_SOURCE && !JOBLESS_SOURCES.includes(r.source ?? null)) || dispatched.some((r) => r.job_id && r.source !== REFINE_JOB_SOURCE);
+        const open = dispatched.filter((r) => r.source === REFINE_JOB_SOURCE && (!r.job_id || !terminal.has(`${r.mesh_id}:${r.node_id}:${r.job_id}`)));
+        set2("refineJobs", `runningRefineJobs/runningRefineBatchJobs/refineBaseLeases/mesh_local_records (dispatch source vocabulary: ${REFINE_JOB_SOURCE} bears jobs; direct|queue|autoLaunch|none are jobless; anything else refuses)`, { live, leases, rows }, [...live, ...leases, ...open], unknownSource ? "dispatch_source_vocabulary_unknown" : void 0);
       });
       let receiptsObserved = true;
       try {

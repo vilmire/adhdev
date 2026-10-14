@@ -81,6 +81,55 @@ it('real queue, correction/hold, refine and adapter producers are counted; absen
  components.cliManager.adapters.set('session',{});expect((await collect()).channels.adapterSubmit.observed).toBe(false);
  components.cliManager.adapters.set('session',{hasInFlightSubmit:()=>undefined,getStatus:()=>({pendingOutboundCount:0})});const unknown=await collect();expect(unknown.channels.adapterSubmit.observed).toBe(false);expect(unknown.channels.livenessHolds.observed).toBe(false);
 });
+// The refineJobs dispatch-source vocabulary is FAIL-CLOSED: an unrecognised source is
+// uncertainty, never a row silently dropped from the open set (which reads as drained).
+// Measured on the real live ledger, `task_dispatched` sources are
+// {null:380, direct:135, refine_mesh_node_async_job:20, queue:2} and NO null/non-refine
+// dispatch row carries a refineJob.jobId — so the ordinary rows must stay jobless
+// (widening would fabricate ~517 phantom jobs) while an unknown source refuses.
+const localRecord=(id:string,kind:string,payload:unknown,nodeId='node',meshId='mesh')=>
+ store.db.prepare('INSERT INTO mesh_local_records(event_id,mesh_id,kind,node_id,at_ms,payload_json) VALUES(?,?,?,?,?,?)').run(id,meshId,kind,nodeId,Date.now(),JSON.stringify(payload));
+const refineJobs=async()=>(await collect()).channels.refineJobs;
+it('ordinary dispatch sources stay jobless and a settled refine job closes, while an unknown dispatch source refuses the channel',async()=>{
+ // Positive 1: the four KNOWN-jobless ordinary shapes contribute no open job. These are
+ // exactly the real-ledger shapes: no source at all, plus the writer's declared union.
+ localRecord('d-none','task_dispatched',{taskId:'t0',routingDecision:{source:'autoLaunch'},privateBody:'PRIVATE-NONE'});
+ localRecord('d-direct','task_dispatched',{source:'direct',taskId:'t1',privateBody:'PRIVATE-DIRECT'});
+ localRecord('d-queue','task_dispatched',{source:'queue',taskId:'t2'});
+ localRecord('d-auto','task_dispatched',{source:'autoLaunch',taskId:'t3'});
+ let ch=await refineJobs();expect(ch.observed).toBe(true);expect(ch.pending).toEqual([]);
+ // Positive 2: a refine job with a matching terminal row on the SAME mesh+node+job key is
+ // settled and closes; the terminal row legitimately carries NO source (20 such rows
+ // measured on the real ledger), which must not refuse.
+ localRecord('d-settled','task_dispatched',{source:'refine_mesh_node_async_job',refineJob:{jobId:'job-settled'}});
+ localRecord('t-settled','task_completed',{refineJob:{jobId:'job-settled'}});
+ ch=await refineJobs();expect(ch.observed).toBe(true);expect(ch.pending).toEqual([]);
+ // Positive 3: an unterminated refine job is open work.
+ localRecord('d-open','task_dispatched',{source:'refine_mesh_node_async_job',refineJob:{jobId:'job-open'}});
+ ch=await refineJobs();expect(ch.observed).toBe(true);expect(ch.pending.length).toBe(1);
+ // Negative 1: a terminal row for the same job on a DIFFERENT mesh must not settle it —
+ // the key is mesh+node+job, and reducing it to jobId alone would create a cross-mesh join.
+ localRecord('t-cross','task_completed',{refineJob:{jobId:'job-open'}},'node','other-mesh');
+ ch=await refineJobs();expect(ch.observed).toBe(true);expect(ch.pending.length).toBe(1);
+ // Negative 2: an UNRECOGNISED dispatch source refuses the whole channel rather than
+ // being silently excluded from the open set.
+ localRecord('d-unknown','task_dispatched',{source:'some_future_dispatch_source',taskId:'t4'});
+ ch=await refineJobs();expect(ch.observed).toBe(false);expect(ch.reason).toBe('dispatch_source_vocabulary_unknown');
+ expect(JSON.stringify(await collect())).not.toContain('PRIVATE-');
+});
+it('a refine job carried under a source declared jobless refuses instead of being guessed, and terminal rows are never source-gated',async()=>{
+ // A dispatch row bearing a refine job under a jobless source contradicts the vocabulary
+ // itself (measured: ZERO such rows). The census must not guess which half is right.
+ localRecord('d-contradiction','task_dispatched',{source:'direct',refineJob:{jobId:'job-x'}});
+ const ch=await refineJobs();expect(ch.observed).toBe(false);expect(ch.reason).toBe('dispatch_source_vocabulary_unknown');
+ // And the gate is scoped to DISPATCHED rows only: an unknown source on a TERMINAL row is
+ // not gated, because terminal rows are matched by identity, never by source. Gating them
+ // would refuse the normal source=null terminal shape the real ledger carries.
+ store.db.prepare("DELETE FROM mesh_local_records WHERE event_id='d-contradiction'").run();
+ localRecord('t-weird','task_completed',{source:'some_future_terminal_source',refineJob:{jobId:'job-y'}});
+ localRecord('t-null','task_failed',{refineJob:{jobId:'job-z'}});
+ const after=await refineJobs();expect(after.observed).toBe(true);expect(after.pending).toEqual([]);
+});
 it('ledger changes across collection invalidate the sample; bad epoch refuses before collection',async()=>{
  const {delivery}=await worker();const p=collect();setTimeout(()=>{store.insertQueueEntry({id:'race',meshId:'mesh',status:'pending',createdAt:'now',updatedAt:'now'} as any);},100);
  const d=await p;expect(d.channels.runnableQueue.observed).toBe(false);expect(d.channels.runnableQueue.reason).toBe('producer_changed_during_collection');expect(delivery.maintenanceInventory().activeSubmits).toBe(0);
