@@ -267,3 +267,10 @@ it('a family managedBy tag alone cannot assign an unbound runtime to this daemon
     records.push({...structuredClone(records[0]),sessionId:'unbound-owner',osPid:1001,meta:{managedBy:'test',providerSessionId:'unbound-native'}});
     await expect(observeHeldHostedSessions(manager,'unknown-owner')).rejects.toThrow('unknown_runtime_owner');expect(registry.get('coord')).toBe(before);expect(registry.has('unbound-owner')).toBe(false);
 });
+
+for(const fault of ['unreadable','changed'])it(`fresh ${fault} coordinator metadata cannot be replaced by startup cache`,async()=>{
+    await observeHeldHostedSessions(manager,'known');const before=registry.get('coord');
+    const file=path.join(fixture.root,'daemon','mesh-coordinators.json');
+    fs.writeFileSync(file,fault==='unreadable'?'{incomplete':JSON.stringify([{meshId:'mesh',sessionId:'coord',cliType:'synthetic-cli',workspace:'/unknown',startedAt:100}]));
+    await expect(observeHeldHostedSessions(manager,'fresh')).rejects.toThrow('coordinator_inventory');expect(registry.get('coord')).toBe(before);expect(events).toEqual([]);
+});

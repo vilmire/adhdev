@@ -1,23 +1,51 @@
 /** Held metadata restoration. No ordinary adapter/instance or lifecycle bus is
  * constructed here. A local continuity receipt is not fleet release authority. */
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { getConfigDir } from '../config/config.js';
 import { createHash } from 'node:crypto';
 import { SessionHostClient, type SessionHostRecord } from '@adhdev/session-host-core';
 import { MAINTENANCE_BOOT_NONCE, withMaintenanceObservation, readCooperativeMaintenance, assertMaintenanceAdmission, type CooperativeMaintenance } from './cooperative-gate.js';
-import { getCoordinatorForSession, listCoordinatorsForMesh } from '../mesh/coordinator-registry.js';
+import { listCoordinatorsForMesh } from '../mesh/coordinator-registry.js';
 import type { CliRestoreHost } from '../commands/cli-manager-restore.js';
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const text = (v: unknown): string => typeof v === 'string' ? v.trim() : '';
 
+/** Fresh metadata, never a missing/unreadable file silently served from the
+ * startup registry cache. An observed absence is not coordinator readiness. */
+function freshCoordinators(state: CooperativeMaintenance) {
+    const select = (e: any) => ({sessionId:e.sessionId,meshId:e.meshId,workspace:e.workspace,cliType:e.cliType,startedAt:e.startedAt});
+    const cached = state.meshIds.flatMap(meshId=>listCoordinatorsForMesh(meshId)).map(select).sort((a,b)=>a.sessionId.localeCompare(b.sessionId));
+    const file = path.join(getConfigDir(),'daemon','mesh-coordinators.json');
+    let entries: any[];
+    try {
+        const stat=fs.lstatSync(file);
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 4*1024*1024) throw new Error('maintenance_coordinator_inventory_unavailable');
+        const raw:unknown=JSON.parse(fs.readFileSync(file,'utf8'));
+        if (!Array.isArray(raw)) throw new Error('maintenance_coordinator_inventory_unavailable');
+        entries=raw;
+    } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== 'ENOENT' || cached.length) throw new Error('maintenance_coordinator_inventory_unavailable',{cause:e});
+        entries=[];
+    }
+    if (entries.some(e=>!e || !text(e.sessionId) || !state.meshIds.includes(e.meshId) || !text(e.workspace) || !text(e.cliType) || !Number.isSafeInteger(e.startedAt) || e.startedAt <= 0)
+        || new Set(entries.map(e=>e.sessionId)).size !== entries.length) throw new Error('maintenance_coordinator_inventory_unavailable');
+    const selected=entries.map(select).sort((a,b)=>a.sessionId.localeCompare(b.sessionId));
+    if (JSON.stringify(selected) !== JSON.stringify(cached)) throw new Error('maintenance_coordinator_inventory_changed');
+    return selected;
+}
+
 export function retainedRuntimeInventory(records: SessionHostRecord[], state: CooperativeMaintenance) {
     if (!Array.isArray(records) || new Set(records.map(r => r.sessionId)).size !== records.length) throw new Error('maintenance_complete_inventory_required');
     if (new Set(records.map(r=>r.osPid)).size !== records.length || new Set(records.map(r=>JSON.stringify([r.providerType,r.workspace,text(r.meta?.providerSessionId)]))).size !== records.length) throw new Error('maintenance_ambiguous_runtime_binding');
+    const coordinatorInventory = freshCoordinators(state);
     return records.map(r => {
         if (!text(r.sessionId) || !text(r.providerType) || !text(r.workspace) || !r.meta || !Number.isSafeInteger(r.startedAt) || !r.startedAt || r.startedAt > Date.now() || !Number.isSafeInteger(r.osPid) || r.osPid! <= 0
             || r.category !== 'cli' || r.lifecycle !== 'running' || !text(r.meta.providerSessionId)) throw new Error('maintenance_runtime_inventory_incomplete');
         const meshId = text(r.meta.meshNodeFor), nodeId = text(r.meta.meshNodeId);
         if (text(r.meta.daemonId) && r.meta.daemonId !== state.daemonId) throw new Error('maintenance_unknown_runtime_owner');
         if ((meshId || nodeId) && !state.nodeRoster.some(n => n.meshId === meshId && n.nodeId === nodeId && n.daemonId === state.daemonId)) throw new Error('maintenance_unknown_runtime_owner');
-        const entry = getCoordinatorForSession(r.sessionId);
+        const entry = coordinatorInventory.find(e=>e.sessionId===r.sessionId);
         const coordinatorMeshId = text(entry?.meshId);
         if (!text(r.meta.daemonId) && !meshId && !coordinatorMeshId) throw new Error('maintenance_unknown_runtime_owner');
         if (entry && (!Number.isFinite(entry.startedAt) || entry.startedAt <= 0 || !state.meshIds.includes(coordinatorMeshId) || entry.workspace !== r.workspace || entry.cliType !== r.providerType)) throw new Error('maintenance_coordinator_binding_drift');
