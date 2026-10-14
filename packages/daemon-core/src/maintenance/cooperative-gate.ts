@@ -29,6 +29,7 @@ export interface CooperativeMaintenance {
     schema: 1; rolloutId: string; daemonId: string; planDigest: string; epoch: number;
     roster: string[]; meshIds: string[]; phase: 'held' | 'ready' | 'open';
     nodeRoster: Array<{ meshId: string; nodeId: string; daemonId: string }>;
+    actorConfigSha256?: string;
     targetSha256: string; retainedHost: RetainedMaintenanceHost;
     release?: { ready: MaintenanceReady[]; committed: MaintenanceReady[]; decisionDigest: string };
 }
@@ -44,6 +45,7 @@ export function validateCooperativeMaintenance(value: unknown): CooperativeMaint
         || !Array.isArray(s.meshIds) || !s.meshIds.length || s.meshIds.some(v => !id(v)) || new Set(s.meshIds).size !== s.meshIds.length) throw new Error('maintenance_state_invalid');
     if (!Array.isArray(s.nodeRoster) || !s.nodeRoster.length || s.nodeRoster.some(n => !id(n.nodeId) || !s.meshIds.includes(n.meshId) || !s.roster.includes(n.daemonId))
         || new Set(s.nodeRoster.map(n => `${n.meshId}:${n.nodeId}`)).size !== s.nodeRoster.length) throw new Error('maintenance_roster_invalid');
+    if (s.actorConfigSha256 !== undefined && !hash(s.actorConfigSha256)) throw new Error('maintenance_actor_config_pin_invalid');
     const h = s.retainedHost;
     if (!h || !Number.isSafeInteger(h.pid) || h.pid <= 0 || !id(h.birth) || !id(h.endpoint) || !hash(h.sessionSetDigest)
         || !path.isAbsolute(h.entryPath) || !path.isAbsolute(h.nodePath) || !path.isAbsolute(h.prefix) || !h.entryPath.startsWith(h.prefix + path.sep)
@@ -81,7 +83,7 @@ export function readCooperativeMaintenance(configDir = getConfigDir()): Cooperat
     catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT' && !enrolled && !requiredPlan) return null; throw new Error('maintenance_state_unavailable', { cause: e }); }
     const state = validateCooperativeMaintenance(raw);
     if (requiredPlan && state.planDigest !== requiredPlan) throw new Error('maintenance_expected_plan_mismatch');
-    if (!enrollment || enrollment.rolloutId !== state.rolloutId || enrollment.planDigest !== state.planDigest || enrollment.daemonId !== state.daemonId
+    if (!enrollment || enrollment.rolloutId !== state.rolloutId || enrollment.planDigest !== state.planDigest || enrollment.daemonId !== state.daemonId || enrollment.actorConfigSha256 !== state.actorConfigSha256
         || JSON.stringify(enrollment.roster) !== JSON.stringify(state.roster) || JSON.stringify(enrollment.meshIds) !== JSON.stringify(state.meshIds)
         || JSON.stringify(enrollment.nodeRoster) !== JSON.stringify(state.nodeRoster)) throw new Error('maintenance_enrollment_conflict');
     return state;
@@ -211,7 +213,7 @@ export function writeCooperativeMaintenance(configDir: string, state: Cooperativ
             || initial.daemonId !== state.daemonId || initial.targetSha256 !== state.targetSha256) throw e;
         prior = initial;
     }
-    if (prior && (prior.rolloutId !== state.rolloutId || prior.planDigest !== state.planDigest || prior.daemonId !== state.daemonId || state.epoch < prior.epoch)) throw new Error('maintenance_plan_conflict');
+    if (prior && (prior.rolloutId !== state.rolloutId || prior.planDigest !== state.planDigest || prior.daemonId !== state.daemonId || prior.actorConfigSha256 !== state.actorConfigSha256 || state.epoch < prior.epoch)) throw new Error('maintenance_plan_conflict');
     if (prior?.phase === 'open' && state.phase !== 'open' && state.epoch <= prior.epoch) throw new Error('maintenance_new_epoch_required');
     const syncDir = () => { const d = fs.openSync(configDir, 'r'); try { fs.fsyncSync(d); } finally { fs.closeSync(d); } };
     try {

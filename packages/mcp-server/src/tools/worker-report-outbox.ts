@@ -160,6 +160,30 @@ export class WorkerOutboxStore {
     }
   }
 
+  /** Actual process-local metadata only. An empty directory cannot prove that
+   * a different/old MCP process has no memory fallback or unacknowledged send. */
+  maintenanceInventory() {
+    const entries = this.list().map(e => ({id:e.id,kind:e.kind,payloadHash:e.payloadHash,createdAtMs:e.createdAtMs,attempts:e.attempts,quarantined:!!e.quarantined}));
+    let files: string[] = [], readable = false;
+    try {
+      if (this.dir) {
+        const s=fs.lstatSync(this.dir);
+        if (s.isDirectory() && !s.isSymbolicLink() && fs.realpathSync(this.dir)===path.resolve(this.dir)
+          && (!process.getuid || s.uid===process.getuid())) {
+          files=fs.readdirSync(this.dir).sort();
+          readable=true;
+        }
+      }
+    } catch { /* unknown remains closed */ }
+    const expected=entries.map(e=>`${e.id}.json`).sort();
+    const temporaryFiles=files.filter(name=>name.endsWith('.tmp'));
+    const unknownFiles=files.filter(name=>!expected.includes(name));
+    return {schema:1,pid:process.pid,durable:this.diskOk,directoryReadable:readable,
+      diskSetMatchesMemory:readable && JSON.stringify(files)===JSON.stringify(expected),
+      quarantinedFileCount:this.corruptFiles,temporaryFiles,unknownFiles,
+      memoryFallback:!this.diskOk,entries};
+  }
+
   private fileFor(id: string): string {
     return path.join(this.dir!, `${id}.json`);
   }
@@ -252,6 +276,7 @@ export class WorkerReportDelivery {
   private consecutiveFailures = 0;
   private lastTransportFailureAt = 0;
   private disposed = false;
+  private activeSubmits = 0;
 
   constructor(private readonly opts: WorkerReportDeliveryOptions) {
     this.log = opts.log ?? ((line) => { process.stderr.write(`[adhdev-mcp] worker-outbox: ${line}\n`); });
@@ -274,6 +299,13 @@ export class WorkerReportDelivery {
     return this.store.list().length + this.store.quarantinedFileCount;
   }
 
+  /** No payloads, credentials, notices text or fabricated receipt proof. The
+   * caller must join BOTH kinds with daemon ACKs and all other live MCPs. */
+  maintenanceInventory() {
+    return {...this.store.maintenanceInventory(),activeSubmits:this.activeSubmits,flushing:this.flushing!==null,
+      pendingNoticeCount:this.notices.length,disposed:this.disposed,receiptsProven:false};
+  }
+
   /** True shortly after a send failed at the transport — callers skip optional round trips. */
   daemonRecentlyUnreachable(): boolean {
     return this.lastTransportFailureAt > 0 && this.now() - this.lastTransportFailureAt < UNREACHABLE_HOLD_MS;
@@ -289,6 +321,12 @@ export class WorkerReportDelivery {
    * for a transport failure — that is what `queued` is for.
    */
   async submit(kind: WorkerDeliveryKind, payload: Record<string, unknown>): Promise<WorkerSubmitOutcome> {
+    this.activeSubmits++;
+    try { return await this.submitInternal(kind,payload); }
+    finally { this.activeSubmits--; }
+  }
+
+  private async submitInternal(kind: WorkerDeliveryKind, payload: Record<string, unknown>): Promise<WorkerSubmitOutcome> {
     const payloadHash = createHash('sha256').update(`${kind}\u0000${stableStringify(payload)}`).digest('hex');
     // An identical report already queued (the worker re-called after "queued") reuses the
     // SAME delivery id, so the daemon sees one delivery, not two.

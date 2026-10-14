@@ -10,7 +10,7 @@ vi.mock('../../src/providers/cli-provider-instance.js',()=>({CliProviderInstance
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as net from 'node:net';
-import {createHash} from 'node:crypto';
+import {createHash,createHmac,randomUUID} from 'node:crypto';
 import {SessionHostClient,type SessionHostRecord} from '@adhdev/session-host-core';
 import {DaemonCliManager} from '../../src/commands/cli-manager.js';
 import {SessionRegistry} from '../../src/sessions/registry.js';
@@ -340,4 +340,45 @@ it('released manager promotion captures native identity across observation ACK a
     const pending=manager.registerCliInstance('coord','synthetic-cli','synthetic-cli',fixture.root,[],{}, {meshCoordinatorFor:'mesh'},true,options);
     await entering;options.providerSessionId='changed-during-ACK';acknowledge({success:true,result:structuredClone(records)});
     await pending;expect(writable.construct).toHaveBeenCalledWith(expect.objectContaining({providerSessionId:'provider-1'}));expect(add).toHaveBeenCalledOnce();
+});
+
+async function actorEnrollment(){
+    // Fresh plan scope for actor pin enrollment; never rewrite strict state.
+    const root=path.join(fixture.root,`actor-${randomUUID()}`);fs.mkdirSync(root,{recursive:true});
+    // The real manager's coordinator cache remains bound to the same selected metadata.
+    fs.mkdirSync(path.join(root,'daemon'),{recursive:true});fs.copyFileSync(path.join(fixture.root,'daemon','mesh-coordinators.json'),path.join(root,'daemon','mesh-coordinators.json'));
+    const key=Buffer.alloc(32,7),keyPath=path.join(root,'observation.key');fs.writeFileSync(keyPath,key,{mode:0o600});
+    const config=JSON.stringify({schema:1,rolloutId:state.rolloutId,daemonId:'self',configDir:root,observationKey:{path:keyPath,sha256:hash(key.toString('binary'))}});
+    // Hash binary bytes, rather than an encoded string.
+    const parsed=JSON.parse(config);parsed.observationKey.sha256=createHash('sha256').update(key).digest('hex');
+    const bytes=JSON.stringify(parsed),configSha256=hash(bytes);fs.writeFileSync(path.join(root,'cooperative-maintenance-actor.json'),bytes,{mode:0o600});
+    state={...state,actorConfigSha256:configSha256};process.env.ADHDEV_CONFIG_DIR=root;resetProcessInstanceContextForTests();writeCooperativeMaintenance(root,state);
+    const unsigned={schema:1 as const,operation:'observe' as const,daemonId:'self',planDigest:state.planDigest,epoch:state.epoch,nonce:randomUUID(),sentAt:Date.now(),configSha256};
+    const {actorObservationChallengeBytes}=await import('../../src/maintenance/actor-observation.js');
+    return {key,root,challenge:{...unsigned,mac:createHmac('sha256',key).update(actorObservationChallengeBytes(unsigned)).digest('hex')}};
+}
+it('actor authenticated actual router collection returns signed native/registry proof and rejects nonce replay',async()=>{
+    const {key,challenge}=await actorEnrollment();const {DaemonCommandRouter}=await import('../../src/commands/router.js');
+    const router=new DaemonCommandRouter({commandHandler:{handle:vi.fn()} as any});router.attachComponents({router,cliManager:manager,sessionRegistry:registry} as any);
+    try{
+        const result=await router.execute('cooperative_maintenance_actor_observe',challenge,'ipc') as any;
+        expect(result.success).toBe(true);expect(result.reply.observation.sessions[0].providerSessionId).toBe('provider-1');
+        expect(result.mac).toBe(createHmac('sha256',key).update(JSON.stringify(result.reply)).digest('hex'));
+        expect(result.reply.observation.challenge).toBe(challenge.nonce);expect(writable.construct).not.toHaveBeenCalled();expect(events).toEqual([]);
+        const requests=rpc.request.mock.calls.length;await expect(router.execute('cooperative_maintenance_actor_observe',challenge,'ipc')).rejects.toThrow('maintenance_actor_challenge_replayed');expect(rpc.request.mock.calls.length).toBe(requests);
+    }finally{router.meshNodeStatePusher.stop();router.localMeshNodeGitWatch.stop();process.env.ADHDEV_CONFIG_DIR=fixture.root;resetProcessInstanceContextForTests();}
+});
+for(const fault of ['mac','epoch','scope','stale'])it(`actor authentication refuses ${fault} before native observation effects`,async()=>{
+    const {challenge}=await actorEnrollment();
+    try{
+        const {authenticatedActorObservation}=await import('../../src/maintenance/actor-observation.js');
+        if(fault==='mac')challenge.mac='0'.repeat(64);if(fault==='epoch')challenge.epoch++;if(fault==='scope')challenge.configSha256='0'.repeat(64);if(fault==='stale')challenge.sentAt=1;
+        await expect(authenticatedActorObservation(manager,challenge)).rejects.toThrow();expect(rpc.request).not.toHaveBeenCalled();expect(writable.construct).not.toHaveBeenCalled();expect(events).toEqual([]);
+    }finally{process.env.ADHDEV_CONFIG_DIR=fixture.root;resetProcessInstanceContextForTests();}
+});
+
+it('actor configuration identity cannot change inside an enrolled maintenance plan',async()=>{
+    const {root}=await actorEnrollment();
+    try{expect(()=>writeCooperativeMaintenance(root,{...state,actorConfigSha256:'0'.repeat(64)})).toThrow('maintenance_plan_conflict');expect(writable.construct).not.toHaveBeenCalled();}
+    finally{process.env.ADHDEV_CONFIG_DIR=fixture.root;resetProcessInstanceContextForTests();}
 });
