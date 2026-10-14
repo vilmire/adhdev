@@ -24,7 +24,15 @@ vi.mock('../../src/logging/logger.js', () => ({
   },
 }))
 
-vi.mock('fs', () => ({
+// PARTIAL mock, not a replacement: only the two functions the get_logs file
+// fallback calls are spied. A whole-module replacement broke once the router's
+// import graph grew (it reaches src/assistant/* which calls fs.lstatSync on this
+// same bare-'fs' specifier), and the missing export surfaced as the handler's
+// catch returning `{success:false, error:'[vitest] No "lstatSync" export …'}` —
+// i.e. the mock, not the code under test, decided the result. Spreading the real
+// module keeps every other fs call real while these two stay asserted on.
+vi.mock('fs', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('fs')>()),
   existsSync: mocks.existsSync,
   readFileSync: mocks.readFileSync,
 }))

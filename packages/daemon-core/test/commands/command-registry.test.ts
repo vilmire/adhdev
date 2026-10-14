@@ -235,6 +235,14 @@ const LEGACY_LOW_FAMILY_COMMANDS = [
     // mcp-server in-process daemon-core paths: task/mission stats, one prune
     // audit, orphaned-pin notify. IPC-only too.
     'task_stats_query', 'prune_stale_direct', 'orphaned_pin_notify',
+    // NOT a legacy-table migration: the cooperative-maintenance actor/collection
+    // surface (low-family/cooperative-maintenance.ts, rc13 cooperative old-entry
+    // drain, 2026-10-14). The actor/observe/status routes are IPC + mesh with
+    // meshSender 'authenticated_peer'; the two mcp_* routes are IPC + standalone.
+    'cooperative_maintenance_actor_control', 'cooperative_maintenance_actor_drain',
+    'cooperative_maintenance_mcp_poll', 'cooperative_maintenance_mcp_reply',
+    'cooperative_maintenance_actor_observe', 'cooperative_maintenance_observe',
+    'cooperative_maintenance_status',
 ];
 
 /** The turn-ledger IPC commands: reachable ONLY over the local IPC source. */

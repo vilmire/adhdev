@@ -88,8 +88,17 @@ function simulateNpmInstall(prefix: string, version: string): void {
  * throw — used to break the reinstall-previous fallback.
  */
 function mockNpm(options: { failVersions?: string[] } = {}): void {
-  mocks.execFileSync.mockImplementation((_file: string, args: readonly string[]) => {
+  mocks.execFileSync.mockImplementation((file: string, args: readonly string[]) => {
     const argv = [...args]
+    // `/bin/ps -o lstart= -p <pid>`: the helper records its own lifecycle-source
+    // incarnation via lifecycleProcessIdentity() (maintenance/lifecycle-source-
+    // inventory.ts) before doing anything, and that reads the process birth time
+    // from ps. The catch-all `return ''` below used to answer it with an empty
+    // string, so the helper aborted with `lifecycle_birth_unknown` before the
+    // first spawn — which is why every expectation here saw 0 spawns. Answer with
+    // a real ps-shaped LC_ALL=C lstart line; this fakes an edge the file already
+    // fakes (npm, spawn) and asserts nothing about the value.
+    if (file === '/bin/ps' && argv.includes('lstart=')) return 'Tue Oct 14 12:00:00 2026\n'
     if (argv.includes('--version')) return '2.0.0\n'
     if (argv.includes('install')) {
       const spec = argv.find((a) => a.startsWith('adhdev@')) ?? 'adhdev@2.0.0'

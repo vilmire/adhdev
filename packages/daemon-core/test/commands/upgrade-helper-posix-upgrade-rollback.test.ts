@@ -101,9 +101,25 @@ type FakePackage = 'broken' | 'working'
  * the injected package quality. Anything else (`npm root -g`, …) succeeds
  * quietly.
  */
+/**
+ * `/bin/ps -o lstart= -p <pid>`: the helper records its own lifecycle-source
+ * incarnation via lifecycleProcessIdentity() (maintenance/lifecycle-source-
+ * inventory.ts) before doing anything, reading its process birth time from ps.
+ * The `return ''` catch-alls below used to answer it with an empty string, so
+ * the helper aborted with `lifecycle_birth_unknown` before the first spawn and
+ * every expectation in this file saw zero activity. Returns a real ps-shaped
+ * LC_ALL=C lstart line; this fakes an edge the file already fakes (npm, spawn)
+ * and no assertion depends on the value.
+ */
+function psBirthLine(file: string, argv: readonly string[]): string | undefined {
+  return file === '/bin/ps' && argv.includes('lstart=') ? 'Tue Oct 14 12:00:00 2026\n' : undefined
+}
+
 function mockNpmWithPackage(quality: FakePackage): void {
   mocks.execFileSync.mockImplementation((_file: string, args: readonly string[]) => {
     const argv = [...args]
+    const birth = psBirthLine(_file, argv)
+    if (birth !== undefined) return birth
     if (argv.includes('--version')) {
       if (quality === 'broken') {
         throw Object.assign(new Error('rc.17 clone: CLI dies instantly'), { status: 1 })
@@ -123,6 +139,8 @@ function mockNpmWithPackage(quality: FakePackage): void {
 function mockNpmInstallCrash(prefixToCorrupt: string): void {
   mocks.execFileSync.mockImplementation((_file: string, args: readonly string[]) => {
     const argv = [...args]
+    const birth = psBirthLine(_file, argv)
+    if (birth !== undefined) return birth
     if (argv.includes('--version')) return '2.0.0\n'
     if (argv.includes('install')) {
       const prefix = argv[argv.indexOf('--prefix') + 1]
@@ -253,6 +271,8 @@ describe('POSIX in-place upgrade — pre-flight gate + rollback', () => {
     // post-install smoke test — only the live prefix's shim is broken.
     mocks.execFileSync.mockImplementation((_file: string, args: readonly string[]) => {
       const argv = [...args]
+      const birth = psBirthLine(_file, argv)
+      if (birth !== undefined) return birth
       if (argv.includes('--version')) {
         const shim = String(_file)
         if (shim.startsWith(live.prefixRoot)) {
@@ -365,6 +385,8 @@ describe('POSIX in-place upgrade — node ABI and symlinked shims', () => {
     const live = stageLiveInstall(homeDir)
     mocks.execFileSync.mockImplementation((file: string, args: readonly string[]) => {
       const argv = [...args]
+      const birth = psBirthLine(file, argv)
+      if (birth !== undefined) return birth
       if (file === process.execPath && argv[0] === '-e') {
         throw Object.assign(new Error('Command failed'), {
           status: 1,
@@ -435,6 +457,8 @@ describe('POSIX in-place upgrade — node ABI and symlinked shims', () => {
     fs.symlinkSync('../node_modules/adhdev/cli.js', live.binShim)
     mocks.execFileSync.mockImplementation((_file: string, args: readonly string[]) => {
       const argv = [...args]
+      const birth = psBirthLine(_file, argv)
+      if (birth !== undefined) return birth
       if (argv.includes('--version')) return '2.0.0\n'
       if (argv.includes('install')) {
         const prefix = argv[argv.indexOf('--prefix') + 1]
