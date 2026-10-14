@@ -120,3 +120,22 @@ it('actual late probe and publisher promises remain pending metadata until their
 it('actual signed exporter route also supports the standalone local command consumer',async()=>{
  await worker(undefined,false,'standalone');const d=await collect();expect(d.mcp.observed).toBe(true);expect(d.mcp.members).toHaveLength(1);expect(d.drained).toBe(false);
 });
+
+it('a disappearing empty registry in the fresh second round cannot preserve observed emptiness',async()=>{
+ const dir=path.join(root,'cooperative-maintenance-mcp');fs.mkdirSync(dir);
+ const request=await signed('drain');const pending=router.execute('cooperative_maintenance_actor_drain',request,'ipc');
+ queueMicrotask(()=>fs.renameSync(dir,dir+'-unreachable'));
+ const d=(await pending as any).reply.drain;expect(d.mcp.observed).toBe(false);expect(d.channels.reportOutboxes.observed).toBe(false);
+});
+it('reverse ACK proof cannot borrow a matching ID/digest from another persisted tuple',async()=>{
+ const {delivery}=await worker(async(_name,args)=>{
+  const receipt={protocol:1,deliveryId:args.deliveryId,digest:hash(args.deliveryId),ownerDaemonId:'self',senderDaemonId:'self',taskId:'task',attemptId:'attempt',generation:1,sessionId:'session'};
+  for(const side of ['owner','sender']){
+   const r={...receipt,...(side==='sender'?{generation:2,sessionId:'different-session'}:{})};
+   store.db.prepare("INSERT INTO worker_bridge_delivery(side,sender_id,delivery_id,mesh_id,envelope_json,digest,state,receipt_json) VALUES(?,'self',?,'mesh',?,?,'receipted',?)").run(side,args.deliveryId,JSON.stringify({kind:'report',...r}),r.digest,JSON.stringify({deliveryReceipt:r}));
+  }
+  return {success:true,deliveryReceipt:receipt};
+ });await delivery.submit('report',{privateBody:'PRIVATE-REVERSE'});
+ const d=await collect();expect(d.channels.reportOutboxes.observed).toBe(false);expect(d.channels.reportOutboxes.pending.some((p:any)=>p.reason==='source_ACK_or_external_old_entry_evidence_required')).toBe(true);
+});
+

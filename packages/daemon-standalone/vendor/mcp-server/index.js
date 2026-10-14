@@ -106771,16 +106771,17 @@ ${marker2}`,
       }
       const select = (v) => v.members.map((m) => ({ identity: m.identity, observed: m.observed, inventory: m.inventory }));
       const mcpStable = digest2(select(mcp)) === digest2(select(confirmed));
-      if (!mcpStable) mcp = { ...confirmed, observed: false, reason: "mcp_inventory_changed_during_collection" };
+      if (!mcp.observed || !mcpStable || !confirmed.observed || mcp.membershipDigest !== confirmed.membershipDigest) mcp = { ...confirmed, observed: false, reason: confirmed.reason || mcp.reason || "mcp_inventory_changed_during_collection" };
+      else mcp = confirmed;
       const after = census(components, state2, root, nonce), channels = after.channels;
       const members = mcp.members.filter((m) => m.observed), incomplete = !mcp.observed || members.length !== mcp.members.length;
       const mcpChannel = (name, pending, reason) => channels[name] = { observed: !reason && !incomplete, source: "fresh challenged target MCP adapters + worker_bridge_delivery", pending, inventoryDigest: digest2({ members, receipts: after.receipts }), identity: after.identity, ...reason || incomplete ? { reason: reason || mcp.reason || "mcp_inventory_unknown" } : {} };
+      const matchesAck = (r, ack) => ack.proof === "receipt" && r.kind === ack.kind && r.receipt_protocol === 1 && r.receipt_delivery_id === r.delivery_id && r.sender_id === ack.senderDaemonId && r.envelope_sender === ack.senderDaemonId && r.envelope_owner === ack.ownerDaemonId && r.envelope_task === ack.taskId && r.envelope_attempt === ack.attemptId && r.envelope_generation === ack.generation && r.envelope_session === ack.sessionId && r.state === "receipted" && r.delivery_id === ack.id && r.digest === ack.digest && r.receipt_digest === r.digest && ["ownerDaemonId", "senderDaemonId", "taskId", "attemptId", "generation", "sessionId"].every((k) => r[k] === ack[k]);
       const invalidAck = [];
       for (const m of members) for (const ack of m.inventory.acknowledgments) {
-        const match = after.receipts.some((r) => r.kind === ack.kind && r.receipt_protocol === 1 && r.receipt_delivery_id === r.delivery_id && r.sender_id === ack.senderDaemonId && r.envelope_sender === ack.senderDaemonId && r.envelope_owner === ack.ownerDaemonId && r.envelope_task === ack.taskId && r.envelope_attempt === ack.attemptId && r.envelope_generation === ack.generation && r.envelope_session === ack.sessionId && r.state === "receipted" && r.delivery_id === ack.id && r.digest === ack.digest && r.receipt_digest === r.digest && ["ownerDaemonId", "senderDaemonId", "taskId", "attemptId", "generation", "sessionId"].every((k) => r[k] === ack[k]));
-        if (ack.proof !== "receipt" || !match) invalidAck.push({ pid: m.identity.pid, id: ack.id, kind: ack.kind });
+        if (!after.receipts.some((r) => matchesAck(r, ack))) invalidAck.push({ pid: m.identity.pid, id: ack.id, kind: ack.kind });
       }
-      for (const r of after.receipts) if (r.sender_id === state2.daemonId && r.state === "receipted" && !members.some((m) => m.inventory.acknowledgments.some((a) => a.proof === "receipt" && a.id === r.delivery_id && a.digest === r.digest && a.kind === r.kind))) invalidAck.push({ id: r.delivery_id, kind: r.kind, reason: "source_ACK_or_external_old_entry_evidence_required" });
+      for (const r of after.receipts) if (r.sender_id === state2.daemonId && r.state === "receipted" && !members.some((m) => m.inventory.acknowledgments.some((ack) => matchesAck(r, ack)))) invalidAck.push({ id: r.delivery_id, kind: r.kind, reason: "source_ACK_or_external_old_entry_evidence_required" });
       const pendingBridge = after.receipts.filter((r) => r.state !== "receipted" || r.receipt_protocol !== 1 || r.receipt_delivery_id !== r.delivery_id || r.receipt_digest !== r.digest || r.sender_id !== r.senderDaemonId || r.envelope_sender !== r.senderDaemonId || r.envelope_owner !== r.ownerDaemonId || r.envelope_task !== r.taskId || r.envelope_attempt !== r.attemptId || r.envelope_generation !== r.generation || r.envelope_session !== r.sessionId);
       for (const [channel, kind] of [["reportOutboxes", "report"], ["progressOutboxes", "progress"]]) {
         const entries = members.flatMap((m) => m.inventory.entries.filter((e) => e.kind === kind).map((e) => ({ pid: m.identity.pid, ...e })));
