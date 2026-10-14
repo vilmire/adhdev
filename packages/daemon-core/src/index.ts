@@ -1012,3 +1012,5 @@ export { readCooperativeMaintenance, maintenanceHeld, assertMaintenanceAdmission
 export type { CooperativeMaintenance, MaintenanceReady, RetainedMaintenanceHost } from './maintenance/cooperative-gate.js';
 
 export { observeHeldHostedSessions, retainedRuntimeInventoryDigest, verifyHeldObservationFleet } from './maintenance/held-observation.js';
+
+export {beginLifecycleSource,advanceLifecycleSource,collectLifecycleSource,lifecycleProcessIdentity} from './maintenance/lifecycle-source-inventory.js';

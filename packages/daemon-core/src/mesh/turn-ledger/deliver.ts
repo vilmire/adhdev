@@ -44,6 +44,7 @@
 // ---------------------------------------------------------------------------
 
 import { createHash } from 'crypto';
+import type {NoticeSubmitInventory,NoticeWriteState} from './notice-submit-inventory.js';
 import {
     daemonIdsEquivalent,
     isNotifyKind,
@@ -88,6 +89,7 @@ const NOOP_LOG: DeliverLog = { info: () => {}, warn: () => {} };
 
 /** Minimal session-input surface (`SessionInputPort`, sessions/session-input-service.ts). */
 interface NoticeInputPort {
+    submitNotice?(msg:OutboundMessage,observe:(state:NoticeWriteState)=>void):Promise<SubmitOutcome>;
     submit(msg: OutboundMessage): Promise<SubmitOutcome>;
 }
 
@@ -543,6 +545,7 @@ export function createDeliverEdgeWaiter(opts: { now: () => number; timers?: Deli
 }
 
 export interface TurnDeliverDeps extends RenderContext {
+    submitInventory?:NoticeSubmitInventory;
     ledger: Pick<TurnLedger, 'getAttempt' | 'store' | 'claimDelivery' | 'selfDaemonId'>;
     selfDaemonIds: () => readonly string[];
     port: NoticeInputPort;
@@ -599,7 +602,7 @@ export function createTurnDeliverHandler(deps: TurnDeliverDeps, handlerOpts: Tur
     const counters = deps.counters ?? createTurnDeliverCounters();
     const log = deps.log ?? NOOP_LOG;
 
-    return async (entry, signal) => {
+    const run = async (entry:DeliverCursorEntry, signal:AbortSignal):Promise<DeliverResult> => {
         if (entry.kind !== 'turn.notify' || !isRecord(entry.payload)) return { outcome: 'skipped', why: 'not_notify' };
         if (!entry.own) return { outcome: 'skipped', why: 'foreign' };
         const p = entry.payload;
@@ -665,8 +668,10 @@ export function createTurnDeliverHandler(deps: TurnDeliverDeps, handlerOpts: Tur
             }
             const messageId = `notify:${entry.meshId}:${entry.writer}:${entry.seq}`;
             let outcome: SubmitOutcome;
+            const submitMetadata=deps.submitInventory?.begin(entry,route.sessionId);
             try {
-                outcome = await deps.port.submit({
+                const submit=submitMetadata&&deps.port.submitNotice?(msg:OutboundMessage)=>deps.port.submitNotice!(msg,submitMetadata.observe):(msg:OutboundMessage)=>deps.port.submit(msg);
+                outcome = await submit({
                     messageId,
                     sessionId: route.sessionId,
                     origin: 'mesh',
@@ -674,7 +679,9 @@ export function createTurnDeliverHandler(deps: TurnDeliverDeps, handlerOpts: Tur
                     input: { parts: [{ type: 'text', text: rendered.text }], textFallback: rendered.text },
                     createdAt: now(),
                 });
+                submitMetadata?.outcome(outcome.kind);
             } catch (error) {
+                submitMetadata?.failed();
                 counters.submitFailures++;
                 // A throw backs the cursor off (100 ms·2ⁿ ≤ 30 s) and redelivers the entry.
                 throw error;
@@ -705,6 +712,7 @@ export function createTurnDeliverHandler(deps: TurnDeliverDeps, handlerOpts: Tur
             return { outcome: outcome.kind, sessionId: route.sessionId, escalated: route.escalated, waitedMs };
         }
     };
+    return (entry,signal)=>deps.submitInventory?deps.submitInventory.handling(()=>run(entry,signal)):run(entry,signal);
 }
 
 // ─── 5. MCP-only coordinator read + ack; backlog; control notices ─────────

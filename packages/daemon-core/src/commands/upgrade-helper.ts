@@ -1,3 +1,4 @@
+import {beginLifecycleSource,advanceLifecycleSource,lifecycleProcessIdentity} from '../maintenance/lifecycle-source-inventory.js';
 import { assertWorkerBridgeLifecycleAdmission } from './worker-bridge-lifecycle-admission.js';
 import { execFileSync as nativeExecFileSync } from 'child_process';
 import { spawn as nativeSpawn, type ChildProcess } from 'child_process';
@@ -52,6 +53,8 @@ const spawn: typeof nativeSpawn = ((...args: any[]) => {
 }) as typeof nativeSpawn;
 
 export interface DaemonUpgradeHelperPayload {
+  /** Metadata-only durable source operation, never lifecycle authority. */
+  maintenanceOperationId?:string;
   packageName: string;
   targetVersion: string;
   parentPid: number;
@@ -781,7 +784,9 @@ async function runPosixInPlaceUpgrade(options: {
 
 export function spawnDetachedDaemonUpgradeHelper(payload: DaemonUpgradeHelperPayload): void {
   assertWorkerBridgeLifecycleAdmission('helper_schedule', payload.configDir);
-  const env = buildUpgradeHelperChildEnv(payload);
+  const root=payload.configDir||getConfigDir();
+  const operationId=process.platform==='win32'?undefined:beginLifecycleSource('helper',{targetVersion:payload.targetVersion,packageName:payload.packageName,parentPid:payload.parentPid},root);
+  const env = buildUpgradeHelperChildEnv({...payload,...(operationId?{maintenanceOperationId:operationId}:{})});
   const child = spawn(process.execPath, process.argv.slice(1), {
     detached: true,
     stdio: 'ignore',
@@ -789,6 +794,10 @@ export function spawnDetachedDaemonUpgradeHelper(payload: DaemonUpgradeHelperPay
     cwd: payload.cwd || process.cwd(),
     env,
   });
+  if(operationId){
+    advanceLifecycleSource(operationId,'scheduled',{childPid:child.pid},root);
+    child.once('error',()=>{try{advanceLifecycleSource(operationId,'failed',{},root);}catch{/* intent remains unknown */}});
+  }
   child.unref();
 }
 
@@ -1130,6 +1139,8 @@ export async function maybeRunDaemonUpgradeHelperFromEnv(): Promise<boolean> {
   delete process.env[UPGRADE_HELPER_ENV];
 
   let targetVersion: string | null = null;
+  let metadataOperation:string|undefined;
+  let metadataRoot=requestedConfigDir||getConfigDir();
   try {
     const payload = JSON.parse(raw) as DaemonUpgradeHelperPayload;
     targetVersion = typeof payload?.targetVersion === 'string' ? payload.targetVersion : null;
@@ -1145,9 +1156,16 @@ export async function maybeRunDaemonUpgradeHelperFromEnv(): Promise<boolean> {
       );
     }
     assertWorkerBridgeLifecycleAdmission('helper_env_payload', payload.configDir);
+    metadataRoot=payload.configDir||getConfigDir();
+    if(process.platform!=='win32'){
+      metadataOperation=payload.maintenanceOperationId||beginLifecycleSource('helper',{targetVersion:payload.targetVersion,packageName:payload.packageName,parentPid:payload.parentPid},metadataRoot);
+      advanceLifecycleSource(metadataOperation,'executing',{helper:lifecycleProcessIdentity()},metadataRoot);
+    }
     await runDaemonUpgradeHelper(payload);
+    if(metadataOperation)advanceLifecycleSource(metadataOperation,'completed',{},metadataRoot);
     process.exit(0);
   } catch (error: any) {
+    if(metadataOperation)try{advanceLifecycleSource(metadataOperation,'failed',{},metadataRoot);}catch{/* preserve unresolved intent */}
     if(error?.code==='strict_bridge_lifecycle_authority_unavailable')throw error;
     const detail = error?.stack || error?.message || String(error);
     appendUpgradeLog(`Upgrade helper failed: ${detail}`);

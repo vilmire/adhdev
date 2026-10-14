@@ -8,12 +8,13 @@ import {maintenanceQueueLaunches} from '../mesh/mesh-queue-trigger.js';
 import {maintenanceAutoLaunches} from '../mesh/mesh-queue-autolaunch.js';
 import {maintenanceDeferredRestarts} from '../commands/med-family/mesh-restart.js';
 import {authorizeMaintenanceCollection,type ActorObservationChallenge} from './actor-observation.js';
+import {collectLifecycleSource} from './lifecycle-source-inventory.js';
 import {collectMcpInventories} from './mcp-collection.js';
 import {withMaintenanceObservation,MAINTENANCE_BOOT_NONCE,type CooperativeMaintenance} from './cooperative-gate.js';
 export const MAINTENANCE_DRAIN_CHANNELS=['runnableQueue','claims','launches','submits','attempts','corrections','livenessHolds','reportOutboxes','progressOutboxes','unreadableOutboxes','temporaryOutboxes','memoryOnlyOutboxes','coordinatorNotices','pendingNotifications','adapterOutbound','adapterSubmit','turnEvents','deferredLifecycle','refineJobs'] as const;
 export const MAINTENANCE_BLACKOUT_SOURCES=['queue','autoLaunch','direct','sessionInput','nativeOwnerInput','deferredLifecycle','reconnect','newMembership'] as const;
 const digest=(v:unknown)=>createHash('sha256').update(JSON.stringify(v)).digest('hex');
-interface Channel {observed:boolean;source:string;inventoryDigest:string;pending:unknown[];reason?:string;identity:Record<string,unknown>}
+interface Channel {evidence?:unknown;observed:boolean;source:string;inventoryDigest:string;pending:unknown[];reason?:string;identity:Record<string,unknown>}
 function census(components:DaemonComponents,state:CooperativeMaintenance,root:string,nonce:string) {
     const identity={daemonId:state.daemonId,pid:process.pid,bootNonce:MAINTENANCE_BOOT_NONCE,planDigest:state.planDigest,epoch:state.epoch,nonce};
     const channels={} as Record<string,Channel>;
@@ -61,6 +62,15 @@ function census(components:DaemonComponents,state:CooperativeMaintenance,root:st
         const events=channels.turnEvents;
         channels.turnEvents={...events,pending:[...events.pending,...(publisher?.flushing||publisher?.flushAgain?[{publisherInFlight:true}]:[])],inventoryDigest:digest([events.inventoryDigest,publisher]),...(!publisher?{observed:false,reason:'publisher_inventory_missing'}:{})};
     });
+    read(['pendingNotifications'],'turn.deliver/native observer ACK inventory',()=>{
+        const native=components.meshTurn?.noticeSubmitInventory();
+        if(!native||native.daemonId!==state.daemonId||native.pid!==process.pid||native.bootNonce!==MAINTENANCE_BOOT_NONCE)throw Error('notice_owner_unavailable');
+        const claims=sql("SELECT event_id,mesh_id,src_writer,src_seq,session_id,json_extract(payload_json,'$.outcome') AS outcome FROM turn_events WHERE kind='delivered' ORDER BY event_id");
+        const missing=claims.filter(r=>['delivered','queued','duplicate'].includes(r.outcome)||!r.outcome).filter(r=>!native.rows.some((n:any)=>n.mesh_id===r.mesh_id&&n.writer===r.src_writer&&n.seq===r.src_seq&&n.session_id===r.session_id&&n.daemon_id===state.daemonId&&n.state==='submitted'));
+        const previous=channels.pendingNotifications;
+        set('pendingNotifications','turn.deliver durable intent + actual SessionInputService/native write ACK',{native,claims},[...previous.pending,...native.active.map(id=>({handling:id})),...native.pending,...missing.map(r=>({...r,reason:'native_ACK_or_external_old_entry_evidence_required'}))],missing.length?'native_notice_ACK_unconfirmed':undefined);
+        channels.pendingNotifications.evidence={native,claims};
+    });
     read(['launches'],'mesh-queue-trigger + mesh-queue-autolaunch',()=>{
         const background=maintenanceQueueLaunches(),locks=maintenanceAutoLaunches();
         set('launches','inFlightAutoLaunches/autoLaunchInProgress/autoLaunchTaskInProgress',{background,locks},[...background.filter(x=>x.count>0),...locks.nodes,...locks.tasks]);
@@ -83,7 +93,14 @@ function census(components:DaemonComponents,state:CooperativeMaintenance,root:st
         catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')throw e;}
         if(!persisted.deferredRestartSchedules||typeof persisted.deferredRestartSchedules!=='object'||Array.isArray(persisted.deferredRestartSchedules))throw new Error('unknown');
         const timers=maintenanceDeferredRestarts(),schedules=Object.keys(persisted.deferredRestartSchedules).sort();
-        set('deferredLifecycle','mesh-restart timers/state.json; outer DaemonUpdateController', {timers,schedules},[...timers,...schedules],'outer_update_controller_helper_inventory_not_exported');
+        const helpers=collectLifecycleSource(root);
+        const outer=components.maintenanceLifecycleInventory?.() as (ReturnType<typeof collectLifecycleSource>&{currentOperationId?:string})|undefined;
+        const current=outer?.rows.find((r:any)=>r.operationId===outer.currentOperationId);
+        const complete=helpers.observed&&outer?.observed===true&&current?.owner.pid===process.pid&&current?.owner.bootNonce===MAINTENANCE_BOOT_NONCE&&digest(helpers.rows)===digest(outer.rows);
+        set('deferredLifecycle','mesh-restart timers/state.json + live DaemonUpdateController + durable detached helper/native incarnation',
+            {timers,schedules,helpers,outer},[...timers,...schedules,...helpers.pending,...(outer?.pending??[])],complete?undefined:outer?'lifecycle_owner_or_orphan_unknown':'outer_lifecycle_owner_unavailable');
+        channels.deferredLifecycle.evidence={timers,schedules,helpers,...(outer?{outer}:{})};
+        channels.deferredLifecycle.inventoryDigest=digest(channels.deferredLifecycle.evidence);
     });
     read(['refineJobs'],'router refine maps + mesh_local_records',()=>{
         const router=components.router;
@@ -149,7 +166,7 @@ export async function collectTargetDrain(components:DaemonComponents,state:Coope
     const active=statuses(v=>v.activeSubmits>0||v.flushing||v.pendingNoticeCount>0);
     if(active.length)channels.submits={...channels.submits,pending:[...channels.submits.pending,...active]};
     if(before.digest!==after.digest||JSON.stringify(before.revision)!==JSON.stringify(after.revision))for(const ch of Object.values(channels)){ch.observed=false;ch.reason='producer_changed_during_collection';}
-    const blackout=Object.fromEntries(MAINTENANCE_BLACKOUT_SOURCES.map(source=>[source,{source:source==='nativeOwnerInput'?'external old-entry/native owner ingress witness':source==='deferredLifecycle'?'mesh-restart guarded scheduling; outer update controller unavailable':'cooperative-gate held admission writer',excluded:['nativeOwnerInput','deferredLifecycle'].includes(source)?null:true,identity:after.identity,...(source==='nativeOwnerInput'?{reason:'external_blackout_or_already_cold_prerequisite'}:source==='deferredLifecycle'?{reason:'outer_update_controller_helper_inventory_not_exported'}:{})}]));
+    const blackout=Object.fromEntries(MAINTENANCE_BLACKOUT_SOURCES.map(source=>[source,{source:source==='nativeOwnerInput'?'external old-entry/native owner ingress witness':source==='deferredLifecycle'?'current target lifecycle source inventory; native old-entry exclusion still external':'cooperative-gate held admission writer',excluded:['nativeOwnerInput','deferredLifecycle'].includes(source)?null:true,identity:after.identity,...(source==='nativeOwnerInput'?{reason:'external_blackout_or_already_cold_prerequisite'}:source==='deferredLifecycle'?{reason:'native_helper_census_or_external_old_entry_prerequisite'}:{})}]));
     const unknown=MAINTENANCE_DRAIN_CHANNELS.filter(k=>!channels[k]?.observed);
     return {schema:1,...after.identity,observedAt:Date.now(),scope:'current-target-instance',oldEntryEvidenceRequired:true,
         channels,blackout,mcp,receiptsDigest:digest(after.receipts),ledgerDigest:after.digest,deliverySetDigest:digest(members.map(m=>({identity:m.identity,acks:m.inventory.acknowledgments}))),

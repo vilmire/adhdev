@@ -128,6 +128,8 @@ export interface SessionInputServiceDeps {
 export type PrepareSessionInput = () => OutboundMessage['input'] | { refusal: string };
 
 export interface SessionInputService {
+    /** turn.deliver metadata only; native ACK survives a queued submit return. */
+    submitNotice(msg: OutboundMessage, observe: (state: 'started'|'submitted'|'uncertain') => void): Promise<SubmitOutcome>;
     getReceipts(sessionId: string, ids: readonly string[]): OutgoingReceipt[];
     submit(msg: OutboundMessage, prepareInput?: PrepareSessionInput): Promise<SubmitOutcome>;
     /**
@@ -236,6 +238,7 @@ function hasNonTextParts(input: OutboundMessage['input']): boolean {
 
 export function createSessionInputService(deps: SessionInputServiceDeps): SessionInputService {
     const receiptStore = deps.receiptStore ?? new OutgoingReceiptStore();
+    const noticeObservers=new Map<string,(state:'started'|'submitted'|'uncertain')=>void>();
     const freshOutgoing = new Set<string>();
     const outgoingAttempts = new Map<string, OutgoingReceipt>();
     const now = deps.clock ?? Date.now;
@@ -319,7 +322,10 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
         opts: { fresh: boolean; route: SubmitRoute; interrupt?: { keyName: string; confidence: 'proven' | 'declared' } },
     ): Promise<SubmitOutcome> {
         const receipt = outgoingAttempts.get(msg.messageId);
-        if (receipt) target.observeSendWrite?.(msg.messageId, state => {
+        const noticeObserver=noticeObservers.get(msg.messageId);
+        if (receipt||noticeObserver) target.observeSendWrite?.(msg.messageId, state => {
+            if(noticeObserver){try{noticeObserver(state);}catch{/* Persisted intent remains unknown; never retry native input. */}if(state==='submitted'&&noticeObservers.get(msg.messageId)===noticeObserver)noticeObservers.delete(msg.messageId);}
+            if(!receipt)return;
             try {
                 const updated = receiptStore.advance(receipt, state === 'submitted' ? 'submitted' : 'uncertain');
                 if (updated) target.recordAcknowledgedUserInput?.(msg.input, msg.messageId, updated);
@@ -528,7 +534,12 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
         return writeAndReport(target, msg, body, { fresh: true, route: 'pty' });
     }
 
-    return {
+    const service:SessionInputService = {
+        async submitNotice(msg,observe){
+            noticeObservers.set(msg.messageId,observe);
+            // Observe only, without changing receipt/dedupe or native submit behavior.
+            return service.submit(msg);
+        },
         getReceipts: (sessionId, ids) => receiptStore.list(sessionId, ids).map(receipt => {
             // A restored write-ahead acceptance has no surviving FIFO/observer
             // authority. Replay explicit uncertainty, never infer delivery or retry.
@@ -608,4 +619,5 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
             return target?.hasQueuedSend?.(messageId) === true;
         },
     };
+    return service;
 }

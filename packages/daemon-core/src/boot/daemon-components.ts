@@ -45,6 +45,8 @@ export interface SessionHostBoot {
 }
 
 export interface DaemonBootConfig {
+    /** Actual outer lifecycle owner metadata, never an admission boolean. */
+    maintenanceLifecycleInventory?:()=>unknown;
     /** Canonical status identity (`standalone_<machineId>` / `daemon_<machineId>`). */
     statusInstanceId?: string;
     statusVersion?: string;
@@ -101,6 +103,7 @@ export interface DaemonBootConfig {
 }
 
 export interface DaemonComponents {
+    maintenanceLifecycleInventory?:()=>unknown;
     providerLoader: ProviderLoader;
     instanceManager: ProviderInstanceManager;
     cliManager: DaemonCliManager;

@@ -1,5 +1,6 @@
 import {beforeEach,afterEach,afterAll,it,expect,vi} from 'vitest';
 const isolation=await vi.hoisted(async()=>{const {createSessionHostIsolation}=await import('../helpers/session-host-isolation.js');return createSessionHostIsolation();});
+vi.mock('@adhdev/daemon-core',async original=>({...await original<any>(),...await import('../../src/maintenance/lifecycle-source-inventory.js'),getConfigDir:(await import('../../src/config/config.js')).getConfigDir}));
 vi.mock('@adhdev/session-host-core',async original=>({...await original<any>(),getDefaultSessionHostEndpoint:vi.fn(()=>{throw Error('default_endpoint_forbidden');}),SessionHostClient:vi.fn(function(){throw Error('native_client_not_used_by_collector');})}));
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -13,6 +14,9 @@ import {DaemonCommandRouter} from '../../src/commands/router.js';
 import {writeCooperativeMaintenance,type CooperativeMaintenance} from '../../src/maintenance/cooperative-gate.js';
 import {actorObservationChallengeBytes} from '../../src/maintenance/actor-observation.js';
 import {MAINTENANCE_DRAIN_CHANNELS,MAINTENANCE_BLACKOUT_SOURCES} from '../../src/maintenance/drain-collection.js';
+import {createNoticeSubmitInventory} from '../../src/mesh/turn-ledger/notice-submit-inventory.js';
+import {beginLifecycleSource} from '../../src/maintenance/lifecycle-source-inventory.js';
+import {DaemonUpdateController} from '../../../../../packages/daemon-cloud/src/daemon-update-controller.js';
 import {resetProcessInstanceContextForTests} from '../../src/config/instance-context.js';
 const hash=(v:any)=>createHash('sha256').update(v).digest('hex');
 let root:string,state:CooperativeMaintenance,router:DaemonCommandRouter,store:MeshRuntimeStore,key:Buffer,configSha:string,components:any;
@@ -44,7 +48,7 @@ async function worker(command?:(name:string,args:any)=>Promise<any>,memory=false
 it('actual router exports all 19 channels and 8 sources; absent MCP evidence and missing ACK ports are explicit unknown',async()=>{
  const d=await collect();expect(Object.keys(d.channels).sort()).toEqual([...MAINTENANCE_DRAIN_CHANNELS].sort());expect(Object.keys(d.blackout).sort()).toEqual([...MAINTENANCE_BLACKOUT_SOURCES].sort());
  expect(d.channels.runnableQueue).toMatchObject({observed:true,pending:[],identity:{epoch:1,pid:process.pid,daemonId:'self'}});
- expect(d.channels.reportOutboxes.observed).toBe(false);expect(d.channels.pendingNotifications.reason).toBe('notice_delivery_ACK_inventory_not_exported');expect(d.channels.deferredLifecycle.reason).toBe('outer_update_controller_helper_inventory_not_exported');expect(d.blackout.nativeOwnerInput.excluded).toBeNull();expect(d.drained).toBe(false);
+ expect(d.channels.reportOutboxes.observed).toBe(false);expect(d.channels.pendingNotifications.reason).toBe('source_inventory_unavailable');expect(d.channels.deferredLifecycle.reason).toBe('outer_lifecycle_owner_unavailable');expect(d.blackout.nativeOwnerInput.excluded).toBeNull();expect(d.drained).toBe(false);
 });
 it('real MCP producer route returns current report/progress and ACK-backed receipt joined to actual daemon rows without bodies',async()=>{
  const command=async(_name:string,args:any)=>{
@@ -120,7 +124,6 @@ it('actual late probe and publisher promises remain pending metadata until their
 it('actual signed exporter route also supports the standalone local command consumer',async()=>{
  await worker(undefined,false,'standalone');const d=await collect();expect(d.mcp.observed).toBe(true);expect(d.mcp.members).toHaveLength(1);expect(d.drained).toBe(false);
 });
-
 it('a disappearing empty registry in the fresh second round cannot preserve observed emptiness',async()=>{
  const dir=path.join(root,'cooperative-maintenance-mcp');fs.mkdirSync(dir);
  const request=await signed('drain');const pending=router.execute('cooperative_maintenance_actor_drain',request,'ipc');
@@ -139,3 +142,14 @@ it('reverse ACK proof cannot borrow a matching ID/digest from another persisted 
  const d=await collect();expect(d.channels.reportOutboxes.observed).toBe(false);expect(d.channels.reportOutboxes.pending.some((p:any)=>p.reason==='source_ACK_or_external_old_entry_evidence_required')).toBe(true);
 });
 
+it('authenticated collection exports actual notice ACK and controller/helper ports with current challenge identity',async()=>{
+ const notices=createNoticeSubmitInventory(components.turnLedger);components.meshTurn={noticeSubmitInventory:notices.inventory};
+ const controller=new DaemonUpdateController({collectAllStates:()=>[{status:'generating'}],getUpgradePackageName:()=> 'adhdev',pkgVersion:'1.0.80'});components.maintenanceLifecycleInventory=()=>controller.maintenanceInventory();
+ await collect();const empty=await collect();expect(empty.channels.pendingNotifications.observed).toBe(true);expect(empty.channels.deferredLifecycle.observed).toBe(true);
+ const intent=notices.begin({meshId:'mesh',writer:'writer',seq:8},'coordinator');intent.outcome('queued');
+ const queued=await collect();expect(queued.channels.pendingNotifications.pending).toHaveLength(1);expect(queued.channels.pendingNotifications.evidence.native.rows[0].state).toBe('queued');intent.observe('submitted');
+ expect((await collect()).channels.pendingNotifications.pending).toHaveLength(0);
+ controller.onForceUpdateRequired({targetVersion:'1.0.81',reason:'force_update_below'});const helper=beginLifecycleSource('helper',{targetVersion:'1.0.81'},root);
+ const pending=await collect();expect(pending.channels.deferredLifecycle.pending.length).toBeGreaterThan(0);expect(pending.channels.deferredLifecycle.evidence.helpers.rows.some((r:any)=>r.operationId===helper)).toBe(true);expect(pending.channels.deferredLifecycle.identity.epoch).toBe(state.epoch);
+ components.maintenanceLifecycleInventory=()=>{throw Error('unreachable owner');};expect((await collect()).channels.deferredLifecycle.observed).toBe(false);
+});

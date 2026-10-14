@@ -1,3 +1,4 @@
+import {createNoticeSubmitInventory} from '../../mesh/turn-ledger/notice-submit-inventory.js';
 import { maintenanceHeld, withMaintenanceAdmission } from '../../maintenance/cooperative-gate.js';
 /**
  * S7 bootMeshRuntime — assemble `DaemonComponents`, attach the mesh bus
@@ -92,6 +93,7 @@ export function assembleDaemonComponents(s6: ProjectionsStage): DaemonComponents
         });
     }
     const components: DaemonComponents = {
+        maintenanceLifecycleInventory:cfg.maintenanceLifecycleInventory,
         providerLoader: s6.providerLoader,
         instanceManager: s6.instanceManager,
         cliManager: s6.cliManager,
@@ -125,6 +127,7 @@ export interface TurnProbePort {
 
 /** What S7 wires beyond the legacy components (read by S8 / hosts / tests). */
 export interface MeshTurnWiring {
+    noticeSubmitInventory():ReturnType<ReturnType<typeof createNoticeSubmitInventory>['inventory']>;
     ledger: TurnLedger;
     probePort: TurnProbePort;
     consumer: MeshTurnConsumer | null;
@@ -249,7 +252,9 @@ export function wireTurnLedger(components: DaemonComponents, opts: { runMigratio
     // `queue` mode (deliver.ts builds them), so a busy coordinator parks them.
     const inputPort = components.cliManager.input;
     const deliverLog = { info: (m: string) => LOG.info('MeshNotice', m), warn: (m: string) => LOG.warn('MeshNotice', m) };
+    const noticeSubmitMetadata=createNoticeSubmitInventory(ledger);
     const deliverDeps: TurnDeliverDeps = {
+        submitInventory:noticeSubmitMetadata,
         ledger,
         selfDaemonIds,
         port: inputPort,
@@ -368,6 +373,7 @@ export function wireTurnLedger(components: DaemonComponents, opts: { runMigratio
         index,
         notices,
         republished,
+        noticeSubmitInventory:noticeSubmitMetadata.inventory,
         deliverBacklog,
         dispose() {
             if (disposed) return;
