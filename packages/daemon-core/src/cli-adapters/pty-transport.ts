@@ -129,11 +129,11 @@ class NodePtyRuntimeTransport implements PtyRuntimeTransport {
   }
 
   resize(cols: number, rows: number): void {
-    this.handle.resize(cols, rows);
+    withMaintenanceEffect(() => this.handle.resize(cols, rows));
   }
 
   kill(): void {
-    this.handle.kill();
+    withMaintenanceEffect(() => this.handle.kill());
   }
 
   getMetadata(): PtyRuntimeMetadata | null {

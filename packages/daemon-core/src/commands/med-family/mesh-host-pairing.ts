@@ -1,3 +1,4 @@
+import { assertMaintenanceJoin, captureMaintenanceAdmission } from '../../maintenance/cooperative-gate.js';
 /**
  * RF-ROUTER MED family — Mesh Host manual-pairing commands.
  *
@@ -309,7 +310,9 @@ export const meshHostPairingHandlers: Record<string, MedFamilyHandler> = {
         const token = typeof args?.token === 'string' ? args.token.trim() : '';
         if (!meshId) return { success: false, error: 'meshId required' };
         if (!token) return { success: false, error: 'token required because raw pairing tokens are not persisted' };
+        const maintenanceCheck = captureMaintenanceAdmission([meshId]);
         const meshRecord = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
+        maintenanceCheck();
         const mesh = meshRecord?.mesh;
         if (!mesh) return { success: false, error: 'Mesh not found' };
         const meshHost = resolveMeshHostStatus(mesh);
@@ -324,6 +327,7 @@ export const meshHostPairingHandlers: Record<string, MedFamilyHandler> = {
             }
             const memberNode = buildMemberJoinNode(mesh, args, ctx.deps.statusInstanceId);
             if (!memberNode) return { success: false, error: 'member node metadata unavailable' };
+            assertMaintenanceJoin(mesh.id, readTrimmed(memberNode.id), readTrimmed(memberNode.daemonId));
             const hostMeshId = typeof args?.hostMeshId === 'string' && args.hostMeshId.trim() ? args.hostMeshId.trim() : meshId;
             const explicitHostDaemonId = typeof args?.hostDaemonId === 'string' && args.hostDaemonId.trim()
                 ? args.hostDaemonId.trim()

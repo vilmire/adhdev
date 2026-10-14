@@ -100,9 +100,30 @@ export function assertMaintenanceDaemon(daemonId: string): void {
     const s = readCooperativeMaintenance();
     if (s && !s.roster.includes(daemonId)) throw new Error('maintenance_unknown_daemon');
 }
-export function assertMaintenanceCommandNode(meshIds: readonly string[], nodeId: string | undefined): void {
+export function assertMaintenanceCommandNode(meshIds: readonly string[], nodeId: string | undefined, daemonId?: string): void {
     const s = readCooperativeMaintenance();
-    if (s && nodeId && !s.nodeRoster.some(n => meshIds.includes(n.meshId) && n.nodeId === nodeId)) throw new Error('maintenance_unknown_node_or_owner');
+    if (s && nodeId && !s.nodeRoster.some(n => meshIds.includes(n.meshId) && n.nodeId === nodeId && n.daemonId === (daemonId || s.daemonId))) throw new Error('maintenance_unknown_node_or_owner');
+}
+/** Validate only identity fields consumed by launch/join, never authored payloads. */
+export function assertMaintenanceCommandIdentity(args: any): void {
+    const text = (v: unknown): string | undefined => typeof v === 'string' && v.trim() ? v.trim() : undefined;
+    const settings = args?.settings || {}, member = args?.memberNode || {}, context = args?.meshContext || {};
+    const meshes = [args?.meshId, args?.meshNodeFor, args?.meshCoordinatorFor, context.meshId, settings.meshNodeFor, settings.meshCoordinatorFor].map(text).filter((v): v is string => !!v);
+    assertMaintenanceAdmission(meshes);
+    const rootMesh = text(args?.meshId) || text(args?.meshNodeFor);
+    for (const [node, owner, mesh] of [[args?.nodeId, args?.daemonId, rootMesh], [args?.meshNodeId, args?.daemonId, rootMesh], [context.nodeId, context.daemonId, text(context.meshId) || rootMesh],
+        [settings.meshNodeId, settings.daemonId, text(settings.meshNodeFor) || text(settings.meshCoordinatorFor) || rootMesh],
+        [text(settings.meshCoordinatorFor) ? settings.meshNodeId : undefined, settings.daemonId, text(settings.meshCoordinatorFor)],
+        [args?.memberNodeId, member.daemonId, rootMesh], [member.id, member.daemonId, rootMesh]]) {
+        assertMaintenanceCommandNode(text(mesh) ? [text(mesh)!] : [], text(node), text(owner));
+    }
+}
+/** Pairing rewrites membership and consumes a token. Enrollment has no roster
+ * transition protocol yet, including aliases resolved by workspace/token. */
+export function assertMaintenanceJoin(meshId: string, nodeId?: string, daemonId?: string): void {
+    assertMaintenanceAdmission([meshId]);
+    assertMaintenanceCommandNode([meshId], nodeId, daemonId);
+    if (readCooperativeMaintenance()) throw new Error('maintenance_roster_transition_required');
 }
 export function assertMaintenanceNode(meshId: string, nodeId: string, daemonId?: string): void {
     const s = readCooperativeMaintenance();

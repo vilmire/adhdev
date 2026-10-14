@@ -1,3 +1,4 @@
+import { assertMaintenanceJoin } from '../maintenance/cooperative-gate.js';
 /**
  * Mesh host pairing in meshes.json: manual host addresses, pairing tokens and their
  * expiry, applying a member's join request, the host pin (with its downgrade /
@@ -201,7 +202,7 @@ function applyMeshHostJoinRequestUnlocked(
     meshId: string,
     opts: ApplyMeshHostJoinOptions,
 ): { accepted: true; mesh: LocalMeshEntry; meshHost: RepoMeshHostMetadata; node: LocalMeshNodeEntry; tokenId: string } | { accepted: false; mesh?: LocalMeshEntry; meshHost?: RepoMeshHostMetadata; tokenId?: string; reason: string } | undefined {
-    const config = loadMeshConfig();
+    const config = loadMeshConfig({ persistMigrations: false });
     // The member types only "address + code" (design §4.6): it does not know
     // the host's mesh id and names its own. A mesh id this host does not know
     // falls back to the one host-role mesh whose live pairing token matches —
@@ -209,6 +210,7 @@ function applyMeshHostJoinRequestUnlocked(
     const mesh = config.meshes.find(m => m.id === meshId)
         ?? findHostMeshByPairingToken(config.meshes, opts.token);
     if (!mesh) return undefined;
+    assertMaintenanceJoin(mesh.id, opts.memberNode.id?.trim(), opts.memberNode.daemonId);
     const now = opts.now || new Date().toISOString();
     const previous = mesh.meshHost || createDefaultMeshHostMetadata();
     if (previous.role === 'member') {

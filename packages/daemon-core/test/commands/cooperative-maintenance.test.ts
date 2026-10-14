@@ -141,3 +141,106 @@ it('enrollment refuses host kill/spawn before any native effect, including after
     open(); expect(()=>host.stopManagedSessionHostProcess()).toThrow('maintenance_retained_host_mutation_refused');
     expect(kill).not.toHaveBeenCalled();
 });
+
+it('router rejects nested launch/join identities, including reassignment to an enrolled daemon', async () => {
+    open(); const router=new DaemonCommandRouter({commandHandler:{handle:vi.fn()} as any});
+    cleanup.push(()=>{router.meshNodeStatePusher.stop();router.localMeshNodeGitWatch.stop();});
+    const effect=vi.spyOn(router as any,'runSpec').mockResolvedValue({success:true});
+    for(const args of [
+        {settings:{meshNodeFor:'mesh',meshNodeId:'unknown'}},
+        {settings:{meshCoordinatorFor:'mesh',meshNodeId:'unknown'}},
+        {meshId:'mesh',memberNode:{id:'unknown',daemonId:'daemon-self'}},
+        {meshId:'mesh',memberNode:{id:'node',daemonId:'daemon-peer'}},
+        {meshId:'mesh',memberNodeId:'unknown'},
+        {meshId:'mesh',settings:{meshNodeFor:'other',meshNodeId:'node'}},
+    ]) {
+        const result=await router.execute('memberNode' in args || 'memberNodeId' in args ? 'apply_mesh_host_join':'launch_cli',args,'ipc');
+        expect(result.success).toBe(false);
+    }
+    expect(effect).not.toHaveBeenCalled();
+});
+it('final launch consumer refuses nested unknown node or changed owner before spawn', async () => {
+    open(); const {startSession}=await import('../../src/commands/cli-manager-launch.js');
+    const spawn=vi.fn(); const host={createAdapter:spawn} as any;
+    for(const settings of [
+        {meshNodeFor:'mesh',meshNodeId:'unknown'},
+        {meshNodeFor:'mesh',meshNodeId:'node',daemonId:'daemon-peer'},
+    ]) await expect(startSession(host,'synthetic',root,[],undefined,{settingsOverride:settings})).rejects.toThrow('maintenance_unknown_node_or_owner');
+    expect(spawn).not.toHaveBeenCalled();
+});
+it('final pairing consumer refuses roster mutation with resolved mesh identity before token consumption', async () => {
+    open(); const {applyMeshHostJoinRequest}=await import('../../src/config/mesh-config-host-pairing.js');
+    const config=JSON.stringify({meshes:[{id:'mesh',name:'synthetic',nodes:[{id:'node',workspace:root,daemonId:'daemon-self'}]}]});
+    fs.writeFileSync(path.join(root,'meshes.json'),config);
+    for(const [id,daemonId,error] of [['unknown','daemon-self','maintenance_unknown_node_or_owner'],['node','daemon-peer','maintenance_unknown_node_or_owner'],['node','daemon-self','maintenance_roster_transition_required']]) {
+        expect(()=>applyMeshHostJoinRequest('mesh',{token:'synthetic',memberNode:{id,daemonId,workspace:root} as any})).toThrow(error);
+        expect(fs.readFileSync(path.join(root,'meshes.json'),'utf8')).toBe(config);
+    }
+});
+it('hosted void stop owns admission until ACK; queued stale-epoch stop/resize/clear have no effects', async () => {
+    open(); const {SessionHostClient}=await import('@adhdev/session-host-core');
+    const {SessionHostPtyTransportFactory}=await import('../../src/cli-adapters/session-host-transport.js');
+    vi.spyOn(SessionHostClient.prototype,'connect').mockResolvedValue(undefined);
+    vi.spyOn(SessionHostClient.prototype,'onEvent').mockReturnValue(()=>{});
+    vi.spyOn(SessionHostClient.prototype,'close').mockResolvedValue(undefined);
+    let ack!:()=>void;
+    const request=vi.spyOn(SessionHostClient.prototype,'request').mockImplementation(async (r:any)=>{
+        if(r.type==='stop_session')await new Promise<void>(resolve=>{ack=resolve;});
+        return {success:true,result:{sessionId:'runtime',attachedClients:[],meta:{}}} as any;
+    });
+    const factory=new SessionHostPtyTransportFactory({clientId:'synthetic',runtimeId:'runtime',providerType:'synthetic',workspace:root});
+    const transport=factory.spawn('synthetic',[],{cwd:root,env:{},cols:80,rows:24}) as any;
+    await transport.ready; transport.kill();
+    await vi.waitFor(()=>expect(ack).toBeTypeOf('function'));
+    const closed={...state,epoch:1,phase:'held' as const,release:undefined};
+    expect(()=>writeCooperativeMaintenance(root,closed)).toThrow('maintenance_operation_in_flight');
+    ack(); await transport.operationChain;
+    let release!:()=>void; transport.operationChain=new Promise<void>(resolve=>{release=resolve;});
+    request.mockClear(); transport.kill(); transport.resize(120,40); transport.clearBuffer();
+    writeCooperativeMaintenance(root,closed); state=closed; open(); release(); await transport.operationChain;
+    expect(request).not.toHaveBeenCalled();
+    // Detach and metadata remain safe without producer admission, even held.
+    state={...state,epoch:2,phase:'held',release:undefined};writeCooperativeMaintenance(root,state);
+    transport.detach();transport.updateMeta({label:'metadata'});await transport.operationChain;
+    expect(request.mock.calls.map(c=>(c[0] as any).type)).toEqual(['release_write','detach_session','update_session_meta']);
+});
+
+it('resolved provider settings and actual local launch owner are checked after detection await', async () => {
+    state.nodeRoster.push({meshId:'mesh',nodeId:'peer-node',daemonId:'daemon-peer'}); open();
+    const detector=await import('../../src/detection/cli-detector.js');
+    const {startSession}=await import('../../src/commands/cli-manager-launch.js');
+    let finish!:(v:any)=>void;
+    vi.spyOn(detector,'detectCLI').mockImplementation(()=>new Promise(resolve=>{finish=resolve;}));
+    const spawn=vi.fn(); let settings:any={meshNodeFor:'mesh',meshNodeId:'node'};
+    const host={createAdapter:spawn,providerLoader:{resolveAlias:()=> 'synthetic',getByAlias:()=>undefined,getSettings:()=>settings}} as any;
+    const result=startSession(host,'synthetic',root);
+    // Provider resolution changes during await: an enrolled remote owner is
+    // still not the actual owner of a local PTY launch.
+    settings={meshNodeFor:'mesh',meshNodeId:'peer-node',daemonId:'daemon-peer'};
+    finish({version:'synthetic'});
+    await expect(result).rejects.toThrow('maintenance_unknown_node_or_owner');expect(spawn).not.toHaveBeenCalled();
+});
+it('local PTY kill and resize refuse held state before harmless mocked native effects', async () => {
+    open(); const {NodePtyTransportFactory,__setNodePtyLoaderForTests}=await import('../../src/cli-adapters/pty-transport.js');
+    const handle={pid:1,kill:vi.fn(),resize:vi.fn()};
+    __setNodePtyLoaderForTests(()=>({spawn:()=>handle})); cleanup.push(()=>__setNodePtyLoaderForTests(null));
+    const transport=new NodePtyTransportFactory().spawn('synthetic',[],{cwd:root,env:{},cols:80,rows:24});
+    transport.resize(90,30);expect(handle.resize).toHaveBeenCalledTimes(1);handle.resize.mockClear();
+    state={...state,epoch:1,phase:'held',release:undefined};writeCooperativeMaintenance(root,state);
+    expect(()=>transport.kill()).toThrow('cooperative_maintenance_held');expect(()=>transport.resize(90,30)).toThrow('cooperative_maintenance_held');
+    expect(handle.kill).not.toHaveBeenCalled();expect(handle.resize).not.toHaveBeenCalled();
+});
+
+it('outbound final join checks resolved owner after awaited membership and never sends a join', async () => {
+    open(); const {meshHostPairingHandlers}=await import('../../src/commands/med-family/mesh-host-pairing.js');
+    const send=vi.fn(); const ctx={deps:{statusInstanceId:'daemon-self',dispatchMeshCommand:send},getMeshForCommand:vi.fn()} as any;
+    for(const [id,daemonId,error] of [['unknown','daemon-self','maintenance_unknown_node_or_owner'],['node','daemon-peer','maintenance_unknown_node_or_owner'],['node','daemon-self','maintenance_roster_transition_required']]) {
+        ctx.getMeshForCommand.mockResolvedValue({mesh:{id:'mesh',nodes:[{id,daemonId,workspace:root}],meshHost:{role:'member',hostDaemonId:'daemon-peer'}}});
+        const result=await meshHostPairingHandlers.join_mesh_host_pairing(ctx,{meshId:'mesh',token:'synthetic'});
+        expect(result).toMatchObject({success:false,error});
+    }
+    let finish!:(v:any)=>void;ctx.getMeshForCommand.mockImplementation(()=>new Promise(resolve=>{finish=resolve;}));
+    const result=meshHostPairingHandlers.join_mesh_host_pairing(ctx,{meshId:'mesh',token:'synthetic'});
+    state={...state,epoch:1,phase:'held',release:undefined};writeCooperativeMaintenance(root,state);open();finish({mesh:{id:'mesh'}});
+    await expect(result).rejects.toThrow('maintenance_epoch_changed');expect(send).not.toHaveBeenCalled();
+});

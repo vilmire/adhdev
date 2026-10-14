@@ -1,5 +1,5 @@
 import { cooperativeMaintenanceSpecs } from './low-family/cooperative-maintenance.js';
-import { captureMaintenanceAdmission, withMaintenanceAdmission, assertMaintenanceDaemon, assertMaintenanceCommandNode } from '../maintenance/cooperative-gate.js';
+import { captureMaintenanceAdmission, withMaintenanceAdmission, assertMaintenanceDaemon, assertMaintenanceCommandIdentity } from '../maintenance/cooperative-gate.js';
 /**
  * DaemonCommandRouter — the single command entry point of the daemon.
  *
@@ -384,6 +384,8 @@ function meshIdsRevealedByCommandArgs(args: unknown): string[] {
         readStringValue(meshContext.meshId),
         readStringValue(inlineMesh.id),
         readStringValue(settings.meshNodeFor),
+        readStringValue(settings.meshCoordinatorFor),
+        readStringValue(root.meshCoordinatorFor),
     ].filter((value): value is string => value !== undefined);
     return [...new Set(ids)];
 }
@@ -865,7 +867,7 @@ export class DaemonCommandRouter {
         try {
             if (!maintenanceExempt) {
                 maintenanceCheck = captureMaintenanceAdmission(revealedMeshIds);
-                assertMaintenanceCommandNode(revealedMeshIds, readStringValue(normalizedArgs.nodeId, readObjectRecord(normalizedArgs.meshContext).nodeId));
+                assertMaintenanceCommandIdentity(normalizedArgs);
                 if (meshRelayed && typeof normalizedArgs[MESH_SENDER_DAEMON_ID_ARG] === 'string') assertMaintenanceDaemon(normalizedArgs[MESH_SENDER_DAEMON_ID_ARG]);
             }
         } catch (e) { return { success: false, error: (e as Error).message }; }

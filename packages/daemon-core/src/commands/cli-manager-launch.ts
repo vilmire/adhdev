@@ -1,4 +1,4 @@
-import { assertMaintenanceAdmission, withMaintenanceAdmission } from '../maintenance/cooperative-gate.js';
+import { assertMaintenanceAdmission, assertMaintenanceCommandIdentity, assertMaintenanceNode, withMaintenanceAdmission } from '../maintenance/cooperative-gate.js';
 /**
  * DaemonCliManager — session launch: `startSession` (CLI/PTY) and the
  * `launch_cli` command (delegated-worker launch preparation + launch ledger).
@@ -43,6 +43,7 @@ export type CliLaunchHost = Pick<DaemonCliManager, 'adapters' | 'createAdapter' 
 
  // ─── Session start/management ──────────────────────────────
 export async function startSession(host: CliLaunchHost, cliType: string, workingDir: string, cliArgs?: string[], initialModel?: string, options?: CliStartOptions): Promise<{ runtimeSessionId: string; providerSessionId?: string }> {
+    assertMaintenanceCommandIdentity({ settings: options?.settingsOverride });
     const plan = planSessionStart(host, cliType, workingDir, options);
     return withMaintenanceAdmission(() => startCliPtySession(host, plan, cliType, cliArgs, initialModel));
 }
@@ -183,6 +184,12 @@ async function startCliPtySession(
         ...host.providerLoader.getSettings(normalizedType),
         ...(options?.settingsOverride || {}),
     };
+    assertMaintenanceCommandIdentity({ settings: launchSettings });
+    if (launchSettings.meshNodeId) {
+        for (const meshId of [launchSettings.meshNodeFor, launchSettings.meshCoordinatorFor].filter(Boolean)) {
+            assertMaintenanceNode(meshId, launchSettings.meshNodeId); // actual local launch owner
+        }
+    }
     const versionResolvedProvider = provider
         ? (host.providerLoader.resolve(cliType, { version: cliInfo.version }) || provider)
         : undefined;
@@ -269,6 +276,7 @@ async function startCliPtySession(
     }
     if (launchProvider && instanceManager) {
         const resolvedProvider = launchProvider;
+        assertMaintenanceCommandIdentity({ settings: launchSettings });
         assertMaintenanceAdmission();
         await host.registerCliInstance(
             key,
@@ -319,6 +327,7 @@ async function startCliPtySession(
             options?.resolvedTrustPlan,
         );
         try {
+            assertMaintenanceCommandIdentity({ settings: launchSettings });
             assertMaintenanceAdmission();
             await adapter.spawn();
         } catch (spawnErr: any) {

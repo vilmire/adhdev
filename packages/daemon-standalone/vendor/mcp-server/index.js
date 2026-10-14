@@ -66678,9 +66678,32 @@ ${upstream}`;
       const s2 = readCooperativeMaintenance();
       if (s2 && !s2.roster.includes(daemonId)) throw new Error("maintenance_unknown_daemon");
     }
-    function assertMaintenanceCommandNode(meshIds, nodeId) {
+    function assertMaintenanceCommandNode(meshIds, nodeId, daemonId) {
       const s2 = readCooperativeMaintenance();
-      if (s2 && nodeId && !s2.nodeRoster.some((n) => meshIds.includes(n.meshId) && n.nodeId === nodeId)) throw new Error("maintenance_unknown_node_or_owner");
+      if (s2 && nodeId && !s2.nodeRoster.some((n) => meshIds.includes(n.meshId) && n.nodeId === nodeId && n.daemonId === (daemonId || s2.daemonId))) throw new Error("maintenance_unknown_node_or_owner");
+    }
+    function assertMaintenanceCommandIdentity(args) {
+      const text2 = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
+      const settings2 = args?.settings || {}, member = args?.memberNode || {}, context2 = args?.meshContext || {};
+      const meshes = [args?.meshId, args?.meshNodeFor, args?.meshCoordinatorFor, context2.meshId, settings2.meshNodeFor, settings2.meshCoordinatorFor].map(text2).filter((v) => !!v);
+      assertMaintenanceAdmission(meshes);
+      const rootMesh = text2(args?.meshId) || text2(args?.meshNodeFor);
+      for (const [node, owner, mesh] of [
+        [args?.nodeId, args?.daemonId, rootMesh],
+        [args?.meshNodeId, args?.daemonId, rootMesh],
+        [context2.nodeId, context2.daemonId, text2(context2.meshId) || rootMesh],
+        [settings2.meshNodeId, settings2.daemonId, text2(settings2.meshNodeFor) || text2(settings2.meshCoordinatorFor) || rootMesh],
+        [text2(settings2.meshCoordinatorFor) ? settings2.meshNodeId : void 0, settings2.daemonId, text2(settings2.meshCoordinatorFor)],
+        [args?.memberNodeId, member.daemonId, rootMesh],
+        [member.id, member.daemonId, rootMesh]
+      ]) {
+        assertMaintenanceCommandNode(text2(mesh) ? [text2(mesh)] : [], text2(node), text2(owner));
+      }
+    }
+    function assertMaintenanceJoin(meshId, nodeId, daemonId) {
+      assertMaintenanceAdmission([meshId]);
+      assertMaintenanceCommandNode([meshId], nodeId, daemonId);
+      if (readCooperativeMaintenance()) throw new Error("maintenance_roster_transition_required");
     }
     function assertMaintenanceNode(meshId, nodeId, daemonId) {
       const s2 = readCooperativeMaintenance();
@@ -86164,9 +86187,10 @@ ${detail.join("\n")}` : stripped;
       return withMeshConfigWriteLock(() => applyMeshHostJoinRequestUnlocked(...args));
     }
     function applyMeshHostJoinRequestUnlocked(meshId, opts) {
-      const config = loadMeshConfig();
+      const config = loadMeshConfig({ persistMigrations: false });
       const mesh = config.meshes.find((m) => m.id === meshId) ?? findHostMeshByPairingToken(config.meshes, opts.token);
       if (!mesh) return void 0;
+      assertMaintenanceJoin(mesh.id, opts.memberNode.id?.trim(), opts.memberNode.daemonId);
       const now = opts.now || (/* @__PURE__ */ new Date()).toISOString();
       const previous = mesh.meshHost || createDefaultMeshHostMetadata();
       if (previous.role === "member") {
@@ -86348,6 +86372,7 @@ ${detail.join("\n")}` : stripped;
     var init_mesh_config_host_pairing = __esm2({
       "src/config/mesh-config-host-pairing.ts"() {
         "use strict";
+        init_cooperative_gate();
         init_mesh_host_endpoints();
         init_hash();
         init_mesh_config_store();
@@ -97235,10 +97260,10 @@ ${tail}` : ""
             withMaintenanceEffect(() => this.handle.write(data));
           }
           resize(cols, rows) {
-            this.handle.resize(cols, rows);
+            withMaintenanceEffect(() => this.handle.resize(cols, rows));
           }
           kill() {
-            this.handle.kill();
+            withMaintenanceEffect(() => this.handle.kill());
           }
           getMetadata() {
             return null;
@@ -102438,6 +102463,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     };
     init_mesh_peer_secrets();
     init_mesh_host_endpoints();
+    init_cooperative_gate();
     init_dist();
     init_mesh_host_ownership();
     init_command_registry();
@@ -138005,7 +138031,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         readStringValue(root.meshNodeFor),
         readStringValue(meshContext.meshId),
         readStringValue(inlineMesh.id),
-        readStringValue(settings2.meshNodeFor)
+        readStringValue(settings2.meshNodeFor),
+        readStringValue(settings2.meshCoordinatorFor),
+        readStringValue(root.meshCoordinatorFor)
       ].filter((value) => value !== void 0);
       return [...new Set(ids)];
     }
@@ -138416,7 +138444,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         try {
           if (!maintenanceExempt) {
             maintenanceCheck = captureMaintenanceAdmission(revealedMeshIds);
-            assertMaintenanceCommandNode(revealedMeshIds, readStringValue(normalizedArgs.nodeId, readObjectRecord(normalizedArgs.meshContext).nodeId));
+            assertMaintenanceCommandIdentity(normalizedArgs);
             if (meshRelayed && typeof normalizedArgs[MESH_SENDER_DAEMON_ID_ARG] === "string") assertMaintenanceDaemon(normalizedArgs[MESH_SENDER_DAEMON_ID_ARG]);
           }
         } catch (e) {
@@ -139000,7 +139028,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         const token = typeof args?.token === "string" ? args.token.trim() : "";
         if (!meshId) return { success: false, error: "meshId required" };
         if (!token) return { success: false, error: "token required because raw pairing tokens are not persisted" };
+        const maintenanceCheck = captureMaintenanceAdmission([meshId]);
         const meshRecord2 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
+        maintenanceCheck();
         const mesh = meshRecord2?.mesh;
         if (!mesh) return { success: false, error: "Mesh not found" };
         const meshHost = resolveMeshHostStatus(mesh);
@@ -139015,6 +139045,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           }
           const memberNode = buildMemberJoinNode(mesh, args, ctx.deps.statusInstanceId);
           if (!memberNode) return { success: false, error: "member node metadata unavailable" };
+          assertMaintenanceJoin(mesh.id, readTrimmed(memberNode.id), readTrimmed(memberNode.daemonId));
           const hostMeshId = typeof args?.hostMeshId === "string" && args.hostMeshId.trim() ? args.hostMeshId.trim() : meshId;
           const explicitHostDaemonId = typeof args?.hostDaemonId === "string" && args.hostDaemonId.trim() ? args.hostDaemonId.trim() : "";
           const hostDaemonId = explicitHostDaemonId || meshHost.hostDaemonId;
@@ -154039,6 +154070,7 @@ ${buttons.join("\n")}`;
     }
     init_track_identity();
     async function startSession(host, cliType, workingDir, cliArgs, initialModel, options) {
+      assertMaintenanceCommandIdentity({ settings: options?.settingsOverride });
       const plan = planSessionStart(host, cliType, workingDir, options);
       return withMaintenanceAdmission(() => startCliPtySession(host, plan, cliType, cliArgs, initialModel));
     }
@@ -154117,6 +154149,12 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         ...host.providerLoader.getSettings(normalizedType),
         ...options?.settingsOverride || {}
       };
+      assertMaintenanceCommandIdentity({ settings: launchSettings });
+      if (launchSettings.meshNodeId) {
+        for (const meshId of [launchSettings.meshNodeFor, launchSettings.meshCoordinatorFor].filter(Boolean)) {
+          assertMaintenanceNode(meshId, launchSettings.meshNodeId);
+        }
+      }
       const versionResolvedProvider = provider ? host.providerLoader.resolve(cliType, { version: cliInfo.version }) || provider : void 0;
       const autoApproveLaunch = applyAutoApproveModeLaunchArgs(versionResolvedProvider, cliArgs, launchSettings);
       const launchProvider = autoApproveLaunch.provider || provider;
@@ -154169,6 +154207,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
       }
       if (launchProvider && instanceManager) {
         const resolvedProvider = launchProvider;
+        assertMaintenanceCommandIdentity({ settings: launchSettings });
         assertMaintenanceAdmission();
         await host.registerCliInstance(
           key3,
@@ -154218,6 +154257,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
           options?.resolvedTrustPlan
         );
         try {
+          assertMaintenanceCommandIdentity({ settings: launchSettings });
           assertMaintenanceAdmission();
           await adapter.spawn();
         } catch (spawnErr) {
@@ -160737,7 +160777,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         for (const callback of this.exitCallbacks) callback(info);
       }
       resize(cols, rows) {
-        this.enqueue(async () => {
+        this.enqueueMutation(async () => {
           await this.client.request({
             type: "resize_session",
             payload: {
@@ -160749,7 +160789,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         });
       }
       kill() {
-        this.enqueue(async () => {
+        this.enqueueMutation(async () => {
           assertMaintenanceAdmission();
           await this.client.request({
             type: "stop_session",
@@ -160759,7 +160799,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         });
       }
       clearBuffer() {
-        this.enqueue(async () => {
+        this.enqueueMutation(async () => {
           const response = await this.client.request({
             type: "clear_session_buffer",
             payload: {
@@ -160774,6 +160814,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           }
         });
       }
+      // Safe detach only releases ownership/observation; it sends no runtime input.
       detach() {
         this.enqueue(async () => {
           await this.client.request({
@@ -160793,6 +160834,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           await this.closeClient(false);
         });
       }
+      // Metadata does not resume, resize or signal the retained runtime.
       updateMeta(meta, replace = false) {
         this.enqueue(async () => {
           const response = await this.client.request({
@@ -161006,6 +161048,14 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           recoveryState: typeof record3.meta?.runtimeRecoveryState === "string" ? String(record3.meta.runtimeRecoveryState) : null,
           recoveryError: typeof record3.meta?.runtimeRecoveryError === "string" ? String(record3.meta.runtimeRecoveryError) : null
         };
+      }
+      enqueueMutation(action2) {
+        const check = captureMaintenanceAdmission();
+        void this.enqueue(() => withMaintenanceAdmission(async () => {
+          check();
+          await action2();
+        })).catch(() => {
+        });
       }
       enqueue(action2) {
         const operation = this.operationChain.then(() => this.ready).then(action2);

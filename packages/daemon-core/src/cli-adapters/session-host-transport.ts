@@ -184,7 +184,7 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
     }
 
     resize(cols: number, rows: number): void {
-        this.enqueue(async () => {
+        this.enqueueMutation(async () => {
             await this.client.request({
                 type: 'resize_session',
                 payload: {
@@ -197,7 +197,7 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
     }
 
     kill(): void {
-        this.enqueue(async () => {
+        this.enqueueMutation(async () => {
             assertMaintenanceAdmission();
             await this.client.request({
                 type: 'stop_session',
@@ -208,7 +208,7 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
     }
 
     clearBuffer(): void {
-        this.enqueue(async () => {
+        this.enqueueMutation(async () => {
             const response = await this.client.request<SessionHostRecord>({
                 type: 'clear_session_buffer',
                 payload: {
@@ -224,6 +224,7 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
         });
     }
 
+    // Safe detach only releases ownership/observation; it sends no runtime input.
     detach(): void {
         this.enqueue(async () => {
             await this.client.request({
@@ -244,6 +245,7 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
         });
     }
 
+    // Metadata does not resume, resize or signal the retained runtime.
     updateMeta(meta: Record<string, unknown>, replace = false): void {
         this.enqueue(async () => {
             const response = await this.client.request<SessionHostRecord>({
@@ -479,6 +481,12 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
                 ? String(record.meta.runtimeRecoveryError)
                 : null,
         };
+    }
+
+    private enqueueMutation(action: () => Promise<void>): void {
+        const check = captureMaintenanceAdmission();
+        // Void callers still own admission until the queued native ACK settles.
+        void this.enqueue(() => withMaintenanceAdmission(async () => { check(); await action(); })).catch(() => {});
     }
 
     private enqueue(action: () => Promise<void>): Promise<void> {
