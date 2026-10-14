@@ -66688,7 +66688,7 @@ ${upstream}`;
     }
     function assertMaintenanceCommandNode(meshIds, nodeId, daemonId) {
       const s2 = readCooperativeMaintenance2();
-      if (s2 && nodeId && !s2.nodeRoster.some((n) => meshIds.includes(n.meshId) && n.nodeId === nodeId && n.daemonId === (daemonId || s2.daemonId))) throw new Error("maintenance_unknown_node_or_owner");
+      if (s2 && nodeId && !s2.nodeRoster.some((n) => meshIds.includes(n.meshId) && meshNodeIdMatches7(n, nodeId) && daemonIdsEquivalent4(n.daemonId, daemonId || s2.daemonId))) throw new Error("maintenance_unknown_node_or_owner");
     }
     function assertMaintenanceCommandIdentity(args) {
       const text3 = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
@@ -66715,7 +66715,7 @@ ${upstream}`;
     }
     function assertMaintenanceNode(meshId, nodeId, daemonId) {
       const s2 = readCooperativeMaintenance2();
-      if (s2 && !s2.nodeRoster.some((n) => n.meshId === meshId && n.nodeId === nodeId && n.daemonId === (daemonId || s2.daemonId))) throw new Error("maintenance_unknown_node_or_owner");
+      if (s2 && !s2.nodeRoster.some((n) => n.meshId === meshId && meshNodeIdMatches7(n, nodeId) && daemonIdsEquivalent4(n.daemonId, daemonId || s2.daemonId))) throw new Error("maintenance_unknown_node_or_owner");
     }
     async function withMaintenanceObservation(run3) {
       const state2 = readCooperativeMaintenance2();

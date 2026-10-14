@@ -4,7 +4,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { expandDaemonIdForms } from '@adhdev/mesh-shared';
+import { expandDaemonIdForms, daemonIdsEquivalent, meshNodeIdMatches } from '@adhdev/mesh-shared';
 import { getConfigDir } from '../config/config.js';
 import { loadBetterSqlite3 } from '../system/load-better-sqlite3.js';
 
@@ -88,14 +88,16 @@ export function readCooperativeMaintenance(configDir = getConfigDir()): Cooperat
     catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT' && !enrolled && !requiredPlan) return null; throw new Error('maintenance_state_unavailable', { cause: e }); }
     const state = validateCooperativeMaintenance(raw);
     if (requiredPlan && state.planDigest !== requiredPlan) throw new Error('maintenance_expected_plan_mismatch');
-    if (!enrollment || enrollment.rolloutId !== state.rolloutId || enrollment.planDigest !== state.planDigest || enrollment.daemonId !== state.daemonId || enrollment.actorConfigSha256 !== state.actorConfigSha256 // canon-ok: sealed-record scope join — the enrollment marker and the state must agree byte-for-byte, as the adjacent JSON.stringify(roster)/meshIds/nodeRoster comparisons already require; canonicalizing this one field would let a re-spelled enrollment pass while those exact comparisons still fail
+    // eslint-disable-next-line no-restricted-syntax -- canon-ok: sealed-record scope join — the enrollment marker and the state must agree byte-for-byte, as the adjacent JSON.stringify(roster)/meshIds/nodeRoster comparisons already require; canonicalizing this one field would let a re-spelled enrollment pass while those exact comparisons still fail
+    if (!enrollment || enrollment.rolloutId !== state.rolloutId || enrollment.planDigest !== state.planDigest || enrollment.daemonId !== state.daemonId || enrollment.actorConfigSha256 !== state.actorConfigSha256 // canon-ok: see eslint-disable reason on the preceding line
         || JSON.stringify(enrollment.roster) !== JSON.stringify(state.roster) || JSON.stringify(enrollment.meshIds) !== JSON.stringify(state.meshIds)
         || JSON.stringify(enrollment.nodeRoster) !== JSON.stringify(state.nodeRoster)) throw new Error('maintenance_enrollment_conflict');
     return state;
 }
 export function maintenanceHeld(configDir = getConfigDir()): boolean {
     const s = readCooperativeMaintenance(configDir);
-    return !!s && (s.phase !== 'open' || !s.release?.ready.some(r => r.daemonId === s.daemonId && r.bootNonce === MAINTENANCE_BOOT_NONCE)); // canon-ok: locates this state's OWN row inside its own validated release set, where validateCooperativeMaintenance already proved one unique row per raw roster entry — the held/open decision must read that exact row, paired with this boot's nonce
+    // eslint-disable-next-line no-restricted-syntax -- canon-ok: locates this state's OWN row inside its own validated release set, where validateCooperativeMaintenance already proved one unique row per raw roster entry — the held/open decision must read that exact row, paired with this boot's nonce
+    return !!s && (s.phase !== 'open' || !s.release?.ready.some(r => r.daemonId === s.daemonId && r.bootNonce === MAINTENANCE_BOOT_NONCE)); // canon-ok: see eslint-disable reason on the preceding line
 }
 export function assertMaintenanceAdmission(meshIds: readonly string[] = [], configDir = getConfigDir()): void {
     const s = readCooperativeMaintenance(configDir);
@@ -115,7 +117,13 @@ export function assertMaintenanceDaemon(daemonId: string): void {
 }
 export function assertMaintenanceCommandNode(meshIds: readonly string[], nodeId: string | undefined, daemonId?: string): void {
     const s = readCooperativeMaintenance();
-    if (s && nodeId && !s.nodeRoster.some(n => meshIds.includes(n.meshId) && n.nodeId === nodeId && n.daemonId === (daemonId || s.daemonId))) throw new Error('maintenance_unknown_node_or_owner');
+    // Both ids arrive from outside this record: the node id from a launch/join
+    // argument or mesh ledger row (id/nodeId/node_id forms), the owner id via
+    // readMeshNodeDaemonId(), which itself reads six different spellings. Match
+    // them through the shared normalizers so an enrolled node is not refused for
+    // spelling. This only widens across forms of the SAME node/machine — an id
+    // whose core is absent from the roster still throws.
+    if (s && nodeId && !s.nodeRoster.some(n => meshIds.includes(n.meshId) && meshNodeIdMatches(n, nodeId) && daemonIdsEquivalent(n.daemonId, daemonId || s.daemonId))) throw new Error('maintenance_unknown_node_or_owner');
 }
 /** Validate only identity fields consumed by launch/join, never authored payloads. */
 export function assertMaintenanceCommandIdentity(args: any): void {
@@ -140,7 +148,10 @@ export function assertMaintenanceJoin(meshId: string, nodeId?: string, daemonId?
 }
 export function assertMaintenanceNode(meshId: string, nodeId: string, daemonId?: string): void {
     const s = readCooperativeMaintenance();
-    if (s && !s.nodeRoster.some(n => n.meshId === meshId && n.nodeId === nodeId && n.daemonId === (daemonId || s.daemonId))) throw new Error('maintenance_unknown_node_or_owner');
+    // Same externally supplied pair as assertMaintenanceCommandNode above — the
+    // callers pass a ledger/launch-settings node id and an owner id read across
+    // several field spellings, so compare forms of the same node/machine.
+    if (s && !s.nodeRoster.some(n => n.meshId === meshId && meshNodeIdMatches(n, nodeId) && daemonIdsEquivalent(n.daemonId, daemonId || s.daemonId))) throw new Error('maintenance_unknown_node_or_owner');
 }
 /** Metadata observation is allowed while held, under the same epoch writer
  * exclusion. This grants no producer, lifecycle or runtime-write admission. */
@@ -224,10 +235,12 @@ export function writeCooperativeMaintenance(configDir: string, state: Cooperativ
         const missing = (e as Error & { cause?: NodeJS.ErrnoException }).cause?.code === 'ENOENT';
         const initial = privateJson(path.join(configDir, marker)) as CooperativeMaintenance;
         if (!missing || state.phase !== 'held' || initial.rolloutId !== state.rolloutId || initial.planDigest !== state.planDigest
-            || initial.daemonId !== state.daemonId || initial.targetSha256 !== state.targetSha256) throw e; // canon-ok: marker-first enrollment recovery, admissible only for the byte-identical pinned plan — a re-spelled id is NOT the same marker record, and accepting one here would restore a closed record the plan never wrote
+            // eslint-disable-next-line no-restricted-syntax -- canon-ok: marker-first enrollment recovery, admissible only for the byte-identical pinned plan — a re-spelled id is NOT the same marker record, and accepting one here would restore a closed record the plan never wrote
+            || initial.daemonId !== state.daemonId || initial.targetSha256 !== state.targetSha256) throw e; // canon-ok: see eslint-disable reason on the preceding line
         prior = initial;
     }
-    if (prior && (prior.rolloutId !== state.rolloutId || prior.planDigest !== state.planDigest || prior.daemonId !== state.daemonId || prior.actorConfigSha256 !== state.actorConfigSha256 || state.epoch < prior.epoch)) throw new Error('maintenance_plan_conflict'); // canon-ok: same-plan continuity between the prior persisted record and the incoming state; the id is part of the pinned plan tuple, so a differently spelled id is a DIFFERENT plan and must conflict rather than silently continue
+    // eslint-disable-next-line no-restricted-syntax -- canon-ok: same-plan continuity between the prior persisted record and the incoming state; the id is part of the pinned plan tuple, so a differently spelled id is a DIFFERENT plan and must conflict rather than silently continue
+    if (prior && (prior.rolloutId !== state.rolloutId || prior.planDigest !== state.planDigest || prior.daemonId !== state.daemonId || prior.actorConfigSha256 !== state.actorConfigSha256 || state.epoch < prior.epoch)) throw new Error('maintenance_plan_conflict'); // canon-ok: see eslint-disable reason on the preceding line
     if (prior?.phase === 'open' && state.phase !== 'open' && state.epoch <= prior.epoch) throw new Error('maintenance_new_epoch_required');
     const syncDir = () => { const d = fs.openSync(configDir, 'r'); try { fs.fsyncSync(d); } finally { fs.closeSync(d); } };
     try {

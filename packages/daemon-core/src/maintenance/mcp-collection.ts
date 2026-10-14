@@ -25,7 +25,8 @@ export function mcpCollectionPoll(request:ActorObservationChallenge) {
     const file=path.join(dir,`${key(identity)}.json`),s=fs.lstatSync(file);
     if(!s.isFile()||s.isSymbolicLink()||(s.mode&0o077)||s.uid!==process.getuid?.())throw new Error('maintenance_mcp_marker_untrusted');
     const marker=JSON.parse(fs.readFileSync(file,'utf8'));
-    if(marker.planDigest!==auth.state.planDigest||marker.daemonId!==auth.state.daemonId||sha(validateMcpIdentity(marker.identity))!==sha(identity))throw new Error('maintenance_mcp_marker_changed'); // canon-ok: scope join against the exporter's own ownership/permission-verified private marker file, where daemonId is sealed content paired with planDigest — it must match the exact bytes this plan wrote, not any equivalent form of the machine
+    // eslint-disable-next-line no-restricted-syntax -- canon-ok: scope join against the exporter's own ownership/permission-verified private marker file, where daemonId is sealed content paired with planDigest — it must match the exact bytes this plan wrote, not any equivalent form of the machine
+    if(marker.planDigest!==auth.state.planDigest||marker.daemonId!==auth.state.daemonId||sha(validateMcpIdentity(marker.identity))!==sha(identity))throw new Error('maintenance_mcp_marker_changed'); // canon-ok: see eslint-disable reason on the preceding line
     const w=waiting.get(`${auth.root}:${key(identity)}`);
     return auth.reply({challenge:w&&w.epoch===auth.state.epoch?{nonce:w.nonce,epoch:w.epoch}:null});
 }
@@ -63,7 +64,8 @@ export async function collectMcpInventories(root:string,state:CooperativeMainten
         if(!/^\d+-[a-f0-9-]{36}\.json$/.test(name))throw new Error('maintenance_mcp_registry_unknown_entry');
         const file=path.join(dir,name),s=fs.lstatSync(file);if(!s.isFile()||s.isSymbolicLink()||(s.mode&0o077)||s.size>16384||s.uid!==process.getuid?.())throw new Error('maintenance_mcp_registry_untrusted');
         const r=JSON.parse(fs.readFileSync(file,'utf8'));const identity=validateMcpIdentity(r.identity);
-        if(name!==`${key(identity)}.json`||r.planDigest!==state.planDigest||r.daemonId!==state.daemonId)throw new Error('maintenance_mcp_registry_scope_changed');return identity; // canon-ok: same sealed-record scope join as the marker above, on a permission/ownership-verified private registry entry — the filename, planDigest and daemonId must all be the exact bytes this plan wrote
+        // eslint-disable-next-line no-restricted-syntax -- canon-ok: same sealed-record scope join as the marker above, on a permission/ownership-verified private registry entry — the filename, planDigest and daemonId must all be the exact bytes this plan wrote
+        if(name!==`${key(identity)}.json`||r.planDigest!==state.planDigest||r.daemonId!==state.daemonId)throw new Error('maintenance_mcp_registry_scope_changed');return identity; // canon-ok: see eslint-disable reason on the preceding line
     });
     const records=readRecords();
     if(new Set(records.map(r=>r.pid)).size!==records.length)throw new Error('maintenance_mcp_pid_incarnation_ambiguous');

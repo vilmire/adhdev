@@ -48,7 +48,8 @@ export function retainedRuntimeInventory(records: SessionHostRecord[], state: Co
         // machine's own runtime, which may name it in any equivalent id form.
         const runtimeOwner = text(r.meta.daemonId);
         if (runtimeOwner && !daemonIdsEquivalent(runtimeOwner, state.daemonId)) throw new Error('maintenance_unknown_runtime_owner');
-        if ((meshId || nodeId) && !state.nodeRoster.some(n => n.meshId === meshId && n.nodeId === nodeId && n.daemonId === state.daemonId)) throw new Error('maintenance_unknown_runtime_owner'); // canon-ok: the nodeRoster side is the pinned raw roster that maintenanceDecisionDigest() hashes, so this entry must be the exact digested one; the record's own owner id is normalized on the line above
+        // eslint-disable-next-line no-restricted-syntax -- canon-ok: the nodeRoster side is the pinned raw roster that maintenanceDecisionDigest() hashes, so this entry must be the exact digested one; the record's own owner id is normalized on the line above
+        if ((meshId || nodeId) && !state.nodeRoster.some(n => n.meshId === meshId && n.nodeId === nodeId && n.daemonId === state.daemonId)) throw new Error('maintenance_unknown_runtime_owner'); // canon-ok: see eslint-disable reason on the preceding line
         const entry = coordinatorInventory.find(e=>e.sessionId===r.sessionId);
         const coordinatorMeshId = text(entry?.meshId);
         if (!text(r.meta.daemonId) && !meshId && !coordinatorMeshId) throw new Error('maintenance_unknown_runtime_owner');
@@ -138,21 +139,26 @@ export function verifyHeldObservationFleet(observations: Awaited<ReturnType<type
     if (observations.length !== state.roster.length || new Set(observations.map(p=>p.daemonId)).size !== state.roster.length) throw new Error('maintenance_observation_fleet_incomplete');
     for (const p of observations) {
         const {receipt,...proof} = p;
-        if (!state.roster.includes(p.daemonId) || p.challenge !== challenge || p.epoch !== state.epoch || p.planDigest !== state.planDigest || p.artifactSha256 !== state.targetSha256 || !text(p.bootNonce) || !Number.isFinite(p.observedAt) || p.observedAt <= 0 || p.observedAt > Date.now() || Date.now()-p.observedAt > 10_000 || digest(proof) !== receipt) throw new Error('maintenance_observation_fleet_stale'); // canon-ok: p.daemonId is inside `proof`, whose digest must equal the receipt on this same line, and line 136 already requires one UNIQUE observation per raw roster entry — expanding forms would collapse that per-entry cardinality and void the receipt binding
+        // eslint-disable-next-line no-restricted-syntax -- canon-ok: p.daemonId is inside `proof`, whose digest must equal the receipt on this same line, and the unique-observation-per-raw-roster-entry check above already requires one UNIQUE observation per roster entry — expanding forms would collapse that per-entry cardinality and void the receipt binding
+        if (!state.roster.includes(p.daemonId) || p.challenge !== challenge || p.epoch !== state.epoch || p.planDigest !== state.planDigest || p.artifactSha256 !== state.targetSha256 || !text(p.bootNonce) || !Number.isFinite(p.observedAt) || p.observedAt <= 0 || p.observedAt > Date.now() || Date.now()-p.observedAt > 10_000 || digest(proof) !== receipt) throw new Error('maintenance_observation_fleet_stale'); // canon-ok: see eslint-disable reason on the preceding line
         if (p.bindings.length !== p.sessions.length || new Set(p.bindings.map(b=>b.sessionId)).size !== p.sessions.length) throw new Error('maintenance_observation_binding_missing');
         for (const r of p.sessions) {
             const binding = p.bindings.find(b=>b?.sessionId===r.runtimeId);
-            if (r.daemonId !== p.daemonId || binding?.maintenanceObservation?.daemonId !== p.daemonId || binding.maintenanceObservation.bootNonce !== p.bootNonce || binding.maintenanceObservation.epoch !== p.epoch) throw new Error('maintenance_observation_binding_missing'); // canon-ok: both sides live inside the one receipt-digested observation verified above, so the session row and its binding must carry that proof's exact id — a normalized match would let a binding from a different stamping pass as this proof's
+            // eslint-disable-next-line no-restricted-syntax -- canon-ok: both sides live inside the one receipt-digested observation verified above, so the session row and its binding must carry that proof's exact id — a normalized match would let a binding from a different stamping pass as this proof's
+            if (r.daemonId !== p.daemonId || binding?.maintenanceObservation?.daemonId !== p.daemonId || binding.maintenanceObservation.bootNonce !== p.bootNonce || binding.maintenanceObservation.epoch !== p.epoch) throw new Error('maintenance_observation_binding_missing'); // canon-ok: see eslint-disable reason on the preceding line
             if (binding.providerType !== r.providerType || binding.providerSessionId !== r.providerSessionId || binding.workspace !== r.workspace || binding.spawnedAtMs !== r.startedAt
+                // eslint-disable-next-line no-restricted-syntax -- canon-ok: compares the binding's stamped nodeId against the session row inside the SAME receipt-digested observation verified above, so the two must carry that proof's exact bytes — a normalized match would let a binding stamped in a different pass satisfy this proof
                 || binding.maintenanceObservation.meshId !== (r.coordinatorMeshId || r.meshId || undefined) || binding.maintenanceObservation.nodeId !== (r.nodeId || undefined) || binding.maintenanceObservation.coordinator !== !!r.coordinatorMeshId) throw new Error('maintenance_observation_binding_missing');
             if (r.coordinatorMeshId && !state.meshIds.includes(r.coordinatorMeshId)) throw new Error('maintenance_unknown_runtime_owner');
-            if ((r.meshId || r.nodeId) && !state.nodeRoster.some(n=>n.meshId===r.meshId && n.nodeId===r.nodeId && n.daemonId===p.daemonId)) throw new Error('maintenance_unknown_runtime_owner'); // canon-ok: joins the receipt-digested observation's id to the pinned raw nodeRoster that the decision digest hashes, so the entry must be the exact digested one
+            // eslint-disable-next-line no-restricted-syntax -- canon-ok: joins the receipt-digested observation's id to the pinned raw nodeRoster that the decision digest hashes, so the entry must be the exact digested one
+            if ((r.meshId || r.nodeId) && !state.nodeRoster.some(n=>n.meshId===r.meshId && n.nodeId===r.nodeId && n.daemonId===p.daemonId)) throw new Error('maintenance_unknown_runtime_owner'); // canon-ok: see eslint-disable reason on the preceding line
         }
     }
     const coordinators = observations.flatMap(p=>p.coordinators);
     for (const meshId of state.meshIds) {
         const found=coordinators.filter(r=>r.coordinatorMeshId===meshId);
-        if (found.length !== 1 || !observations.some(p=>p.daemonId===found[0].daemonId && p.sessions.some(r=>JSON.stringify(r)===JSON.stringify(found[0])))) throw new Error('maintenance_coordinator_binding_missing_or_ambiguous'); // canon-ok: requires the sole coordinator row to appear verbatim (JSON-identical) inside the receipt-digested observation that declares that exact id — the whole point is an unambiguous exact-bytes attribution, which normalization would blur
+        // eslint-disable-next-line no-restricted-syntax -- canon-ok: requires the sole coordinator row to appear verbatim (JSON-identical) inside the receipt-digested observation that declares that exact id — the whole point is an unambiguous exact-bytes attribution, which normalization would blur
+        if (found.length !== 1 || !observations.some(p=>p.daemonId===found[0].daemonId && p.sessions.some(r=>JSON.stringify(r)===JSON.stringify(found[0])))) throw new Error('maintenance_coordinator_binding_missing_or_ambiguous'); // canon-ok: see eslint-disable reason on the preceding line
     }
     for (const p of observations) for (const r of p.sessions) {
         if (r.meshId && r.workOwner !== coordinators.find(c=>c.coordinatorMeshId===r.meshId)?.daemonId) throw new Error('maintenance_coordinator_route_drift');
@@ -167,7 +173,8 @@ export async function verifyHeldObservationPromotion(host: CliRestoreHost, sessi
     if (!state) return;
     assertMaintenanceAdmission();
     const proof = observed.get(host);
-    if (!proof || proof.epoch !== state.epoch || proof.bootNonce !== MAINTENANCE_BOOT_NONCE || state.release?.ready.find(r=>r.daemonId===state.daemonId)?.receipt !== proof.receipt) throw new Error('maintenance_fresh_observation_required'); // canon-ok: fetches this state's OWN validated release row to compare its frozen receipt against the in-memory proof; validateCooperativeMaintenance already proved one unique row per raw roster entry, so the lookup must use that exact key
+    // eslint-disable-next-line no-restricted-syntax -- canon-ok: fetches this state's OWN validated release row to compare its frozen receipt against the in-memory proof; validateCooperativeMaintenance already proved one unique row per raw roster entry, so the lookup must use that exact key
+    if (!proof || proof.epoch !== state.epoch || proof.bootNonce !== MAINTENANCE_BOOT_NONCE || state.release?.ready.find(r=>r.daemonId===state.daemonId)?.receipt !== proof.receipt) throw new Error('maintenance_fresh_observation_required'); // canon-ok: see eslint-disable reason on the preceding line
     if (!host.deps.verifiedRetainedEndpoint) throw new Error('maintenance_verified_endpoint_required');
     const endpoint = await host.deps.verifiedRetainedEndpoint();
     if (endpoint.path !== state.retainedHost.endpoint) throw new Error('maintenance_retained_endpoint_drift');
