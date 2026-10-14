@@ -4,6 +4,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { expandDaemonIdForms } from '@adhdev/mesh-shared';
 import { getConfigDir } from '../config/config.js';
 import { loadBetterSqlite3 } from '../system/load-better-sqlite3.js';
 
@@ -43,9 +44,9 @@ export function validateCooperativeMaintenance(value: unknown): CooperativeMaint
     const s = value as CooperativeMaintenance;
     if (s?.schema !== 1 || !id(s.rolloutId) || !id(s.daemonId) || !hash(s.planDigest) || !hash(s.targetSha256)
         || !Number.isSafeInteger(s.epoch) || s.epoch < 0 || !['held','ready','open'].includes(s.phase)
-        || !Array.isArray(s.roster) || !s.roster.length || s.roster.some(v => !id(v)) || new Set(s.roster).size !== s.roster.length || !s.roster.includes(s.daemonId)
+        || !Array.isArray(s.roster) || !s.roster.length || s.roster.some(v => !id(v)) || new Set(s.roster).size !== s.roster.length || !s.roster.includes(s.daemonId) // canon-ok: structural self-consistency of the persisted state — the roster is a raw-string set whose uniqueness is asserted on this same line and which maintenanceDecisionDigest() hashes sorted, so membership must be exact; expanding forms here would defeat that uniqueness check
         || !Array.isArray(s.meshIds) || !s.meshIds.length || s.meshIds.some(v => !id(v)) || new Set(s.meshIds).size !== s.meshIds.length) throw new Error('maintenance_state_invalid');
-    if (!Array.isArray(s.nodeRoster) || !s.nodeRoster.length || s.nodeRoster.some(n => !id(n.nodeId) || !s.meshIds.includes(n.meshId) || !s.roster.includes(n.daemonId))
+    if (!Array.isArray(s.nodeRoster) || !s.nodeRoster.length || s.nodeRoster.some(n => !id(n.nodeId) || !s.meshIds.includes(n.meshId) || !s.roster.includes(n.daemonId)) // canon-ok: same structural validation — every nodeRoster entry must name a daemon that is literally one of the digested roster strings, so an equivalent-form id is a different (absent) entry and must be rejected
         || new Set(s.nodeRoster.map(n => `${n.meshId}:${n.nodeId}`)).size !== s.nodeRoster.length) throw new Error('maintenance_roster_invalid');
     if (s.actorConfigSha256 !== undefined && !hash(s.actorConfigSha256)) throw new Error('maintenance_actor_config_pin_invalid');
     const h = s.retainedHost;
@@ -60,7 +61,7 @@ export function validateCooperativeMaintenance(value: unknown): CooperativeMaint
         const r = s.release;
         if (!r || !Array.isArray(r.ready) || !Array.isArray(r.committed)) throw new Error('maintenance_release_invalid');
         const valid = (rows: MaintenanceReady[]) => rows.length === s.roster.length && new Set(rows.map(v => v.daemonId)).size === rows.length
-            && rows.every(v => s.roster.includes(v.daemonId) && id(v.bootNonce) && v.artifactSha256 === s.targetSha256 && hash(v.receipt));
+            && rows.every(v => s.roster.includes(v.daemonId) && id(v.bootNonce) && v.artifactSha256 === s.targetSha256 && hash(v.receipt)); // canon-ok: validates the persisted release rows against the raw digested roster, with per-row uniqueness asserted on the line above and decisionDigest recomputed below from these same raw rows — expanding forms would break that one-row-per-roster-entry correspondence
         if (!valid(r.ready) || !valid(r.committed) || r.ready.some(v => !r.committed.some(c => JSON.stringify(c) === JSON.stringify(v)))
             || r.decisionDigest !== maintenanceDecisionDigest(s, r.ready)) throw new Error('maintenance_release_invalid');
     }
@@ -87,14 +88,14 @@ export function readCooperativeMaintenance(configDir = getConfigDir()): Cooperat
     catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT' && !enrolled && !requiredPlan) return null; throw new Error('maintenance_state_unavailable', { cause: e }); }
     const state = validateCooperativeMaintenance(raw);
     if (requiredPlan && state.planDigest !== requiredPlan) throw new Error('maintenance_expected_plan_mismatch');
-    if (!enrollment || enrollment.rolloutId !== state.rolloutId || enrollment.planDigest !== state.planDigest || enrollment.daemonId !== state.daemonId || enrollment.actorConfigSha256 !== state.actorConfigSha256
+    if (!enrollment || enrollment.rolloutId !== state.rolloutId || enrollment.planDigest !== state.planDigest || enrollment.daemonId !== state.daemonId || enrollment.actorConfigSha256 !== state.actorConfigSha256 // canon-ok: sealed-record scope join — the enrollment marker and the state must agree byte-for-byte, as the adjacent JSON.stringify(roster)/meshIds/nodeRoster comparisons already require; canonicalizing this one field would let a re-spelled enrollment pass while those exact comparisons still fail
         || JSON.stringify(enrollment.roster) !== JSON.stringify(state.roster) || JSON.stringify(enrollment.meshIds) !== JSON.stringify(state.meshIds)
         || JSON.stringify(enrollment.nodeRoster) !== JSON.stringify(state.nodeRoster)) throw new Error('maintenance_enrollment_conflict');
     return state;
 }
 export function maintenanceHeld(configDir = getConfigDir()): boolean {
     const s = readCooperativeMaintenance(configDir);
-    return !!s && (s.phase !== 'open' || !s.release?.ready.some(r => r.daemonId === s.daemonId && r.bootNonce === MAINTENANCE_BOOT_NONCE));
+    return !!s && (s.phase !== 'open' || !s.release?.ready.some(r => r.daemonId === s.daemonId && r.bootNonce === MAINTENANCE_BOOT_NONCE)); // canon-ok: locates this state's OWN row inside its own validated release set, where validateCooperativeMaintenance already proved one unique row per raw roster entry — the held/open decision must read that exact row, paired with this boot's nonce
 }
 export function assertMaintenanceAdmission(meshIds: readonly string[] = [], configDir = getConfigDir()): void {
     const s = readCooperativeMaintenance(configDir);
@@ -104,7 +105,13 @@ export function assertMaintenanceAdmission(meshIds: readonly string[] = [], conf
 }
 export function assertMaintenanceDaemon(daemonId: string): void {
     const s = readCooperativeMaintenance();
-    if (s && !s.roster.includes(daemonId)) throw new Error('maintenance_unknown_daemon');
+    // The callers pass an externally supplied id — a mesh-relayed sender id or an
+    // owner id — which may legitimately name an enrolled machine in any of its
+    // equivalent forms. Compare the incoming id's forms against the roster rather
+    // than the raw string, so an enrolled daemon is not refused for spelling. This
+    // only widens acceptance across forms of the SAME machine: an id whose core is
+    // absent from the roster still throws.
+    if (s && !expandDaemonIdForms(daemonId).some(form => s.roster.includes(form))) throw new Error('maintenance_unknown_daemon');
 }
 export function assertMaintenanceCommandNode(meshIds: readonly string[], nodeId: string | undefined, daemonId?: string): void {
     const s = readCooperativeMaintenance();
@@ -217,10 +224,10 @@ export function writeCooperativeMaintenance(configDir: string, state: Cooperativ
         const missing = (e as Error & { cause?: NodeJS.ErrnoException }).cause?.code === 'ENOENT';
         const initial = privateJson(path.join(configDir, marker)) as CooperativeMaintenance;
         if (!missing || state.phase !== 'held' || initial.rolloutId !== state.rolloutId || initial.planDigest !== state.planDigest
-            || initial.daemonId !== state.daemonId || initial.targetSha256 !== state.targetSha256) throw e;
+            || initial.daemonId !== state.daemonId || initial.targetSha256 !== state.targetSha256) throw e; // canon-ok: marker-first enrollment recovery, admissible only for the byte-identical pinned plan — a re-spelled id is NOT the same marker record, and accepting one here would restore a closed record the plan never wrote
         prior = initial;
     }
-    if (prior && (prior.rolloutId !== state.rolloutId || prior.planDigest !== state.planDigest || prior.daemonId !== state.daemonId || prior.actorConfigSha256 !== state.actorConfigSha256 || state.epoch < prior.epoch)) throw new Error('maintenance_plan_conflict');
+    if (prior && (prior.rolloutId !== state.rolloutId || prior.planDigest !== state.planDigest || prior.daemonId !== state.daemonId || prior.actorConfigSha256 !== state.actorConfigSha256 || state.epoch < prior.epoch)) throw new Error('maintenance_plan_conflict'); // canon-ok: same-plan continuity between the prior persisted record and the incoming state; the id is part of the pinned plan tuple, so a differently spelled id is a DIFFERENT plan and must conflict rather than silently continue
     if (prior?.phase === 'open' && state.phase !== 'open' && state.epoch <= prior.epoch) throw new Error('maintenance_new_epoch_required');
     const syncDir = () => { const d = fs.openSync(configDir, 'r'); try { fs.fsyncSync(d); } finally { fs.closeSync(d); } };
     try {

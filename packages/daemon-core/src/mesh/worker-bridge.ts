@@ -79,7 +79,7 @@ export function setBridgePolicy(db: Database, policy: BridgePolicy): void {
         || !policy.builds.length || policy.builds.some((b) => !sha.test(b.commit) || !version.test(b.version))) throw new Error('invalid_bridge_policy');
     if (policy.roster && (!id(policy.ownerDaemonId) || !policy.roster.length || policy.roster.some((node) => !id(node.nodeId) || !id(node.daemonId)) || new Set(policy.roster.map((node) => node.nodeId)).size !== policy.roster.length)) throw new Error('invalid_bridge_roster');
     const previous = readBridgePolicy(db, policy.meshId);
-    if (previous?.roster && (stableBridgeJson(previous.roster) !== stableBridgeJson(policy.roster) || previous.ownerDaemonId !== policy.ownerDaemonId)) throw new Error('bridge_roster_identity_conflict');
+    if (previous?.roster && (stableBridgeJson(previous.roster) !== stableBridgeJson(policy.roster) || previous.ownerDaemonId !== policy.ownerDaemonId)) throw new Error('bridge_roster_identity_conflict'); // canon-ok: immutability check on the persisted policy — the stored owner id must be byte-identical, exactly like the stableBridgeJson(roster) comparison it is paired with; this file uses daemonIdsEquivalent() where it really matches identity (see the peer-reply and envelope checks below)
     if (previous && previous.rolloutId !== policy.rolloutId) throw new Error('bridge_rollout_identity_conflict');
     if (previous && previous.builds.some((b) => !policy.builds.some((next) => next.commit === b.commit && next.version === b.version))) throw new Error('bridge_rollback_floor_cannot_be_removed');
     db.prepare('INSERT INTO worker_bridge_policy VALUES (?,?) ON CONFLICT(mesh_id) DO UPDATE SET policy_json=excluded.policy_json').run(policy.meshId, JSON.stringify(policy));
@@ -190,8 +190,8 @@ export async function sendBridgeDelivery(db: Database, e: BridgeEnvelope, dispat
         const reply = unwrapMeshRelayResult(await dispatch(e.ownerDaemonId, BRIDGE_DELIVERY_COMMAND, { meshId: e.meshId, envelope: e }), { command: BRIDGE_DELIVERY_COMMAND, peerDaemonId: e.ownerDaemonId });
         const receipt = reply.deliveryReceipt as Record<string, unknown> | undefined;
         if (!receipt || receipt.digest !== saved.digest || receipt.deliveryId !== e.deliveryId || receipt.protocol !== BRIDGE_PROTOCOL
-            || receipt.ownerDaemonId !== e.ownerDaemonId || receipt.taskId !== e.taskId || receipt.attemptId !== e.attemptId
-            || receipt.generation !== e.generation || receipt.sessionId !== e.sessionId || receipt.senderDaemonId !== e.senderDaemonId) return quarantine(db, e, 'owner_receipt_unconfirmed');
+            || receipt.ownerDaemonId !== e.ownerDaemonId || receipt.taskId !== e.taskId || receipt.attemptId !== e.attemptId // canon-ok: receipt-echo proof — the owner must return the envelope's fields verbatim alongside the matching digest, so a normalized compare would accept a receipt that does not reproduce what was actually sent
+            || receipt.generation !== e.generation || receipt.sessionId !== e.sessionId || receipt.senderDaemonId !== e.senderDaemonId) return quarantine(db, e, 'owner_receipt_unconfirmed'); // canon-ok: same receipt-echo proof, continued — exact sender id echo is what makes the receipt attributable
         db.prepare("UPDATE worker_bridge_delivery SET state='receipted',receipt_json=?,reason=NULL WHERE side='member' AND sender_id=? AND delivery_id=?").run(JSON.stringify(reply), e.senderDaemonId, e.deliveryId);
         return reply as Reply;
     } catch {

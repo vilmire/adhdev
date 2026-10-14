@@ -3,6 +3,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {createHash} from 'node:crypto';
+import {daemonIdsEquivalent} from '@adhdev/mesh-shared';
 import type {DaemonComponents} from '../boot/daemon-components.js';
 import {maintenanceQueueLaunches} from '../mesh/mesh-queue-trigger.js';
 import {maintenanceAutoLaunches} from '../mesh/mesh-queue-autolaunch.js';
@@ -21,7 +22,9 @@ function census(components:DaemonComponents,state:CooperativeMaintenance,root:st
     const set=(name:string,source:string,inventory:unknown,pending:unknown[],reason?:string)=>channels[name]={observed:!reason,source,inventoryDigest:digest(inventory),pending,...(reason?{reason}:{}),identity};
     const read=(names:string[],source:string,fn:()=>void)=>{try{fn();}catch{for(const name of names)set(name,source,{unavailable:true},[],'source_inventory_unavailable');}};
     let db=components.turnLedger?.store.db;
-    try{if(components.turnLedger?.selfDaemonId!==state.daemonId || !fs.realpathSync((db as any)?.name).startsWith(root+path.sep))db=undefined;}catch{db=undefined;}
+    // Local runtime ownership: this daemon's own ledger answering for the pinned
+    // state's machine, which it may legitimately name in any equivalent id form.
+    try{if(!daemonIdsEquivalent(components.turnLedger?.selfDaemonId,state.daemonId) || !fs.realpathSync((db as any)?.name).startsWith(root+path.sep))db=undefined;}catch{db=undefined;}
     let revision:unknown=null,receipts:any[]=[];
     const sql=(query:string):any[]=>{
         if(!db||db.inTransaction)throw new Error('live_ledger_handle_required');
@@ -64,9 +67,9 @@ function census(components:DaemonComponents,state:CooperativeMaintenance,root:st
     });
     read(['pendingNotifications'],'turn.deliver/native observer ACK inventory',()=>{
         const native=components.meshTurn?.noticeSubmitInventory();
-        if(!native||native.daemonId!==state.daemonId||native.pid!==process.pid||native.bootNonce!==MAINTENANCE_BOOT_NONCE)throw Error('notice_owner_unavailable');
+        if(!native||!daemonIdsEquivalent(native.daemonId,state.daemonId)||native.pid!==process.pid||native.bootNonce!==MAINTENANCE_BOOT_NONCE)throw Error('notice_owner_unavailable');
         const claims=sql("SELECT event_id,mesh_id,src_writer,src_seq,session_id,json_extract(payload_json,'$.outcome') AS outcome FROM turn_events WHERE kind='delivered' ORDER BY event_id");
-        const missing=claims.filter(r=>['delivered','queued','duplicate'].includes(r.outcome)||!r.outcome).filter(r=>!native.rows.some((n:any)=>n.mesh_id===r.mesh_id&&n.writer===r.src_writer&&n.seq===r.src_seq&&n.session_id===r.session_id&&n.daemon_id===state.daemonId&&n.state==='submitted'));
+        const missing=claims.filter(r=>['delivered','queued','duplicate'].includes(r.outcome)||!r.outcome).filter(r=>!native.rows.some((n:any)=>n.mesh_id===r.mesh_id&&n.writer===r.src_writer&&n.seq===r.src_seq&&n.session_id===r.session_id&&n.daemon_id===state.daemonId&&n.state==='submitted')); // canon-ok: joins a durable turn_events claim row to the native submit row on the exact stored column tuple (mesh/writer/seq/session/daemon_id) — the daemon_id is persisted provenance, so a canonicalizing match could pair a claim with another incarnation's submit and hide a missing ACK
         const previous=channels.pendingNotifications;
         set('pendingNotifications','turn.deliver durable intent + actual SessionInputService/native write ACK',{native,claims},[...previous.pending,...native.active.map(id=>({handling:id})),...native.pending,...missing.map(r=>({...r,reason:'native_ACK_or_external_old_entry_evidence_required'}))],missing.length?'native_notice_ACK_unconfirmed':undefined);
         channels.pendingNotifications.evidence={native,claims};
@@ -148,14 +151,14 @@ export async function collectTargetDrain(components:DaemonComponents,state:Coope
     const after=census(components,state,root,nonce),channels=after.channels;
     const members=mcp.members.filter(m=>m.observed),incomplete=!mcp.observed||members.length!==mcp.members.length;
     const mcpChannel=(name:string,pending:unknown[],reason?:string)=>channels[name]={observed:!reason&&!incomplete,source:'fresh challenged target MCP adapters + worker_bridge_delivery',pending,inventoryDigest:digest({members,receipts:after.receipts}),identity:after.identity,...(reason||incomplete?{reason:reason||mcp.reason||'mcp_inventory_unknown'}:{})};
-    const matchesAck=(r:any,ack:any)=>ack.proof==='receipt'&&r.kind===ack.kind&&r.receipt_protocol===1&&r.receipt_delivery_id===r.delivery_id&&r.sender_id===ack.senderDaemonId&&r.envelope_sender===ack.senderDaemonId&&r.envelope_owner===ack.ownerDaemonId&&r.envelope_task===ack.taskId&&r.envelope_attempt===ack.attemptId&&r.envelope_generation===ack.generation&&r.envelope_session===ack.sessionId&&r.state==='receipted'&&r.delivery_id===ack.id&&r.digest===ack.digest&&r.receipt_digest===r.digest
+    const matchesAck=(r:any,ack:any)=>ack.proof==='receipt'&&r.kind===ack.kind&&r.receipt_protocol===1&&r.receipt_delivery_id===r.delivery_id&&r.sender_id===ack.senderDaemonId&&r.envelope_sender===ack.senderDaemonId&&r.envelope_owner===ack.ownerDaemonId&&r.envelope_task===ack.taskId&&r.envelope_attempt===ack.attemptId&&r.envelope_generation===ack.generation&&r.envelope_session===ack.sessionId&&r.state==='receipted'&&r.delivery_id===ack.id&&r.digest===ack.digest&&r.receipt_digest===r.digest // canon-ok: receipt-proof predicate matching a stored delivery row against the peer's ACK envelope field-for-field; sender/owner ids are part of the signed envelope tuple the digest covers, so they must compare byte-exactly or a forged/mismatched ACK would satisfy the proof
         && ['ownerDaemonId','senderDaemonId','taskId','attemptId','generation','sessionId'].every(k=>r[k]===ack[k]);
     const invalidAck:any[]=[];
     for(const m of members)for(const ack of m.inventory.acknowledgments){
         if(!after.receipts.some(r=>matchesAck(r,ack)))invalidAck.push({pid:m.identity.pid,id:ack.id,kind:ack.kind});
     }
-    for(const r of after.receipts)if(r.sender_id===state.daemonId&&r.state==='receipted'&&!members.some(m=>m.inventory.acknowledgments.some((ack:any)=>matchesAck(r,ack))))invalidAck.push({id:r.delivery_id,kind:r.kind,reason:'source_ACK_or_external_old_entry_evidence_required'});
-    const pendingBridge=after.receipts.filter(r=>r.state!=='receipted'||r.receipt_protocol!==1||r.receipt_delivery_id!==r.delivery_id||r.receipt_digest!==r.digest||r.sender_id!==r.senderDaemonId||r.envelope_sender!==r.senderDaemonId||r.envelope_owner!==r.ownerDaemonId||r.envelope_task!==r.taskId||r.envelope_attempt!==r.attemptId||r.envelope_generation!==r.generation||r.envelope_session!==r.sessionId);
+    for(const r of after.receipts)if(r.sender_id===state.daemonId&&r.state==='receipted'&&!members.some(m=>m.inventory.acknowledgments.some((ack:any)=>matchesAck(r,ack))))invalidAck.push({id:r.delivery_id,kind:r.kind,reason:'source_ACK_or_external_old_entry_evidence_required'}); // canon-ok: selects stored receipts whose persisted sender_id column is this plan's own exact id, then demands a matching member ACK — canonicalizing would pull in rows written under a different stored form and wrongly treat them as needing (or having) our ACK evidence
+    const pendingBridge=after.receipts.filter(r=>r.state!=='receipted'||r.receipt_protocol!==1||r.receipt_delivery_id!==r.delivery_id||r.receipt_digest!==r.digest||r.sender_id!==r.senderDaemonId||r.envelope_sender!==r.senderDaemonId||r.envelope_owner!==r.ownerDaemonId||r.envelope_task!==r.taskId||r.envelope_attempt!==r.attemptId||r.envelope_generation!==r.generation||r.envelope_session!==r.sessionId); // canon-ok: self-consistency check that each stored receipt's envelope_* columns equal the row's own signed fields — a within-row byte comparison of persisted provenance, not a machine match, so any normalization would mask exactly the envelope tampering this detects
     for(const [channel,kind] of [['reportOutboxes','report'],['progressOutboxes','progress']]as const){
         const entries=members.flatMap(m=>m.inventory.entries.filter((e:any)=>e.kind===kind).map((e:any)=>({pid:m.identity.pid,...e})));
         mcpChannel(channel,[...entries,...pendingBridge.filter(r=>r.kind===kind||!['report','progress'].includes(r.kind)),...invalidAck.filter(a=>a.kind===kind)],!after.receiptsObserved?'receipt_store_unavailable':invalidAck.length?'exact_delivery_ACK_unconfirmed':undefined);

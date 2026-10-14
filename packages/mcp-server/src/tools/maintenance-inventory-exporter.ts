@@ -34,7 +34,7 @@ export async function startMaintenanceInventoryExporter(transport:{command(name:
         const answer=await transport.command(operation==='mcp_poll'?'cooperative_maintenance_mcp_poll':'cooperative_maintenance_mcp_reply',{...r,mac});
         if(!answer?.success||!answer.reply||!/^[a-f0-9]{64}$/.test(answer.mac??''))throw new Error('maintenance_exporter_reply_invalid');
         const expected=createHmac('sha256',key).update(JSON.stringify(answer.reply)).digest();
-        if(!timingSafeEqual(expected,Buffer.from(answer.mac,'hex'))||answer.reply.nonce!==r.nonce||answer.reply.epoch!==r.epoch||answer.reply.planDigest!==r.planDigest||answer.reply.daemonId!==r.daemonId||answer.reply.observedAt<r.sentAt||answer.reply.observedAt>Date.now()||Date.now()-answer.reply.observedAt>10000)throw new Error('maintenance_exporter_reply_invalid');
+        if(!timingSafeEqual(expected,Buffer.from(answer.mac,'hex'))||answer.reply.nonce!==r.nonce||answer.reply.epoch!==r.epoch||answer.reply.planDigest!==r.planDigest||answer.reply.daemonId!==r.daemonId||answer.reply.observedAt<r.sentAt||answer.reply.observedAt>Date.now()||Date.now()-answer.reply.observedAt>10000)throw new Error('maintenance_exporter_reply_invalid'); // canon-ok: `expected` on the previous line is the HMAC over JSON.stringify(answer.reply) and is timingSafeEqual-verified here, so reply.daemonId must equal the exact raw id MAC'd into the challenge above — canonicalizing would accept a reply whose authenticated bytes differ from what was sent
         return answer.reply;
     }
     async function poll(){

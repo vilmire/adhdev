@@ -66684,7 +66684,7 @@ ${upstream}`;
     }
     function assertMaintenanceDaemon(daemonId) {
       const s2 = readCooperativeMaintenance2();
-      if (s2 && !s2.roster.includes(daemonId)) throw new Error("maintenance_unknown_daemon");
+      if (s2 && !expandDaemonIdForms(daemonId).some((form) => s2.roster.includes(form))) throw new Error("maintenance_unknown_daemon");
     }
     function assertMaintenanceCommandNode(meshIds, nodeId, daemonId) {
       const s2 = readCooperativeMaintenance2();
@@ -66876,6 +66876,7 @@ ${upstream}`;
         path27 = __toESM2(require("path"));
         import_node_crypto42 = require("crypto");
         import_node_async_hooks = require("async_hooks");
+        init_dist();
         init_config();
         init_load_better_sqlite3();
         MAINTENANCE_BOOT_NONCE = (0, import_node_crypto42.randomUUID)();
@@ -102509,6 +102510,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     var fs39 = __toESM2(require("fs"));
     var path44 = __toESM2(require("path"));
     var import_node_crypto10 = require("crypto");
+    init_dist();
     init_mesh_queue_trigger();
     init_mesh_queue_autolaunch();
     init_cooperative_gate();
@@ -106466,6 +106468,7 @@ ${marker2}`,
     init_config();
     var import_node_crypto7 = require("crypto");
     var import_session_host_core7 = require_dist();
+    init_dist();
     init_cooperative_gate();
     init_coordinator_registry();
     var digest = (value) => (0, import_node_crypto7.createHash)("sha256").update(JSON.stringify(value)).digest("hex");
@@ -106497,7 +106500,8 @@ ${marker2}`,
       return records.map((r) => {
         if (!text(r.sessionId) || !text(r.providerType) || !text(r.workspace) || !r.meta || !Number.isSafeInteger(r.startedAt) || !r.startedAt || r.startedAt > Date.now() || !Number.isSafeInteger(r.osPid) || r.osPid <= 0 || r.category !== "cli" || r.lifecycle !== "running" || !text(r.meta.providerSessionId)) throw new Error("maintenance_runtime_inventory_incomplete");
         const meshId = text(r.meta.meshNodeFor), nodeId = text(r.meta.meshNodeId);
-        if (text(r.meta.daemonId) && r.meta.daemonId !== state2.daemonId) throw new Error("maintenance_unknown_runtime_owner");
+        const runtimeOwner = text(r.meta.daemonId);
+        if (runtimeOwner && !daemonIdsEquivalent4(runtimeOwner, state2.daemonId)) throw new Error("maintenance_unknown_runtime_owner");
         if ((meshId || nodeId) && !state2.nodeRoster.some((n) => n.meshId === meshId && n.nodeId === nodeId && n.daemonId === state2.daemonId)) throw new Error("maintenance_unknown_runtime_owner");
         const entry = coordinatorInventory.find((e) => e.sessionId === r.sessionId);
         const coordinatorMeshId = text(entry?.meshId);
@@ -106841,7 +106845,7 @@ ${marker2}`,
       };
       let db = components.turnLedger?.store.db;
       try {
-        if (components.turnLedger?.selfDaemonId !== state2.daemonId || !fs39.realpathSync(db?.name).startsWith(root + path44.sep)) db = void 0;
+        if (!daemonIdsEquivalent4(components.turnLedger?.selfDaemonId, state2.daemonId) || !fs39.realpathSync(db?.name).startsWith(root + path44.sep)) db = void 0;
       } catch {
         db = void 0;
       }
@@ -106888,7 +106892,7 @@ ${marker2}`,
       });
       read2(["pendingNotifications"], "turn.deliver/native observer ACK inventory", () => {
         const native = components.meshTurn?.noticeSubmitInventory();
-        if (!native || native.daemonId !== state2.daemonId || native.pid !== process.pid || native.bootNonce !== MAINTENANCE_BOOT_NONCE) throw Error("notice_owner_unavailable");
+        if (!native || !daemonIdsEquivalent4(native.daemonId, state2.daemonId) || native.pid !== process.pid || native.bootNonce !== MAINTENANCE_BOOT_NONCE) throw Error("notice_owner_unavailable");
         const claims = sql("SELECT event_id,mesh_id,src_writer,src_seq,session_id,json_extract(payload_json,'$.outcome') AS outcome FROM turn_events WHERE kind='delivered' ORDER BY event_id");
         const missing = claims.filter((r) => ["delivered", "queued", "duplicate"].includes(r.outcome) || !r.outcome).filter((r) => !native.rows.some((n) => n.mesh_id === r.mesh_id && n.writer === r.src_writer && n.seq === r.src_seq && n.session_id === r.session_id && n.daemon_id === state2.daemonId && n.state === "submitted"));
         const previous = channels.pendingNotifications;
@@ -131086,7 +131090,7 @@ ${result.stderr}`, result.code);
         if (args.peerBuilds.some((peer) => !peer || typeof peer.daemonId !== "string" || typeof peer.bootId !== "string" || !peer.bootId)) return { success: false, error: "bridge_peer_manifest_mismatch" };
         if (args.peerBuilds.some((peer, index) => args.peerBuilds.some((prior, other) => other < index && daemonIdsEquivalent4(peer.daemonId, prior.daemonId)))) return { success: false, error: "bridge_peer_manifest_mismatch" };
         const native = (await ctx.getMeshForCommand?.(args.meshId, void 0, { preferInline: true }))?.mesh;
-        if (native?.meshHost?.hostDaemonId && native.meshHost.hostDaemonId !== policy.ownerDaemonId) return { success: false, error: "bridge_coordinator_identity_mismatch" };
+        if (native?.meshHost?.hostDaemonId && !daemonIdsEquivalent4(native.meshHost.hostDaemonId, policy.ownerDaemonId)) return { success: false, error: "bridge_coordinator_identity_mismatch" };
         for (const expected of args.peerBuilds) {
           if (typeof expected.bootId !== "string" || !expected.bootId || !policy.roster.some((node) => daemonIdsEquivalent4(node.daemonId, expected.daemonId)) || !policy.builds.some((build2) => build2.commit === expected.commit && build2.version === expected.version)) return { success: false, error: "bridge_peer_manifest_mismatch" };
           const capability = await queryBridgePeer(ctx.deps.dispatchMeshCommand, expected.daemonId, policy.meshId, policy);

@@ -85,7 +85,11 @@ export const workerBridgeHandlers: Record<string, LowFamilyHandler> = {
         if (args.peerBuilds.some((peer: Record<string, unknown> | null) => !peer || typeof peer.daemonId !== 'string' || typeof peer.bootId !== 'string' || !peer.bootId)) return { success: false, error: 'bridge_peer_manifest_mismatch' };
         if (args.peerBuilds.some((peer: { daemonId: string }, index: number) => args.peerBuilds.some((prior: { daemonId: string }, other: number) => other < index && daemonIdsEquivalent(peer.daemonId, prior.daemonId)))) return { success: false, error: 'bridge_peer_manifest_mismatch' };
         const native = (await ctx.getMeshForCommand?.(args.meshId, undefined, { preferInline: true }))?.mesh;
-        if (native?.meshHost?.hostDaemonId && native.meshHost.hostDaemonId !== policy.ownerDaemonId) return { success: false, error: 'bridge_coordinator_identity_mismatch' };
+        // The live mesh host reports its own id, which may name the same machine in a
+        // different form than the stored policy owner. Match on identity, as the
+        // roster/peer checks above and below already do, so an equivalent form of the
+        // genuine coordinator is not reported as a mismatch.
+        if (native?.meshHost?.hostDaemonId && !daemonIdsEquivalent(native.meshHost.hostDaemonId, policy.ownerDaemonId)) return { success: false, error: 'bridge_coordinator_identity_mismatch' };
         for (const expected of args.peerBuilds) {
             if (typeof expected.bootId !== 'string' || !expected.bootId || !policy.roster.some((node) => daemonIdsEquivalent(node.daemonId, expected.daemonId)) || !policy.builds.some((build) => build.commit === expected.commit && build.version === expected.version)) return { success: false, error: 'bridge_peer_manifest_mismatch' };
             const capability = await queryBridgePeer(ctx.deps.dispatchMeshCommand, expected.daemonId, policy.meshId, policy);
