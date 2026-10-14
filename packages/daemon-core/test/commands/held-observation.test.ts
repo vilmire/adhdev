@@ -382,3 +382,69 @@ it('actor configuration identity cannot change inside an enrolled maintenance pl
     try{expect(()=>writeCooperativeMaintenance(root,{...state,actorConfigSha256:'0'.repeat(64)})).toThrow('maintenance_plan_conflict');expect(writable.construct).not.toHaveBeenCalled();}
     finally{process.env.ADHDEV_CONFIG_DIR=fixture.root;resetProcessInstanceContextForTests();}
 });
+
+async function activationControlFixture(){
+ const root=path.join(fixture.root,'control-'+randomUUID());fs.mkdirSync(path.join(root,'daemon'),{recursive:true});
+ fs.copyFileSync(path.join(fixture.root,'daemon','mesh-coordinators.json'),path.join(root,'daemon','mesh-coordinators.json'));
+ process.env.ADHDEV_CONFIG_DIR=root;resetProcessInstanceContextForTests();loadMeshCoordinatorRegistry();
+ const prefix=path.join(root,'target');fs.mkdirSync(path.join(prefix,'dist/cli'),{recursive:true});fs.writeFileSync(path.join(prefix,'dist/index.js'),'test-owned daemon');fs.writeFileSync(path.join(prefix,'dist/cli/index.js'),'test-owned cli');
+ const priorEntry=process.argv[1];process.argv[1]=path.join(prefix,'dist/cli/index.js');
+ const key=Buffer.alloc(32,8),keyPath=path.join(root,'actor.key');fs.writeFileSync(keyPath,key,{mode:0o600});
+ const tool=path.join(root,'owned-ps.cjs');fs.writeFileSync(tool,`#!${process.execPath}\nconst cp=require('node:child_process');process.stdout.write(cp.execFileSync('/bin/ps',['-ww','-o','pid=,uid=,lstart=,command=','-p',String(${process.pid})],{encoding:'utf8',env:{LC_ALL:'C'}}));`,{mode:0o700});
+ const archive=path.join(root,'archive.tar');fs.writeFileSync(archive,'exact-test-owned-archive');const target=hash('exact-test-owned-archive'),config={schema:1,rolloutId:state.rolloutId,daemonId:'self',configDir:root,retainedNode:{path:process.execPath,sha256:hash(fs.readFileSync(process.execPath) as any)},observationKey:{path:keyPath,sha256:hash(key as any)},tools:{ps:{path:tool,sha256:hash(fs.readFileSync(tool) as any)}},mcpEntrypoints:[{path:path.join(root,'never-launched-mcp.mjs'),nodePath:process.execPath}],activation:{protocol:1,prefix,artifact:{path:archive,sha256:target,executableSha256:hash('test-owned daemon'),cliSha256:hash('test-owned cli'),version:'1.0.82-rc.13',commit:'a'.repeat(40)},peerConfigs:[]}};
+ const a=config.activation.artifact as any,manifestPath=path.join(root,'manifest.json');
+ const manifest={archiveSha256:a.sha256,version:a.version,commit:a.commit,nodeSha256:config.retainedNode.sha256,nodeAbi:process.versions.modules,files:['dist/index.js','dist/cli/index.js'].map(p=>{fs.chmodSync(path.join(prefix,p),0o444);return {path:p,mode:0o444,sha256:hash(fs.readFileSync(path.join(prefix,p)) as any)};})};fs.writeFileSync(manifestPath,JSON.stringify(manifest));a.manifest={path:manifestPath,sha256:hash(fs.readFileSync(manifestPath) as any)};
+ const bytes=JSON.stringify(config),configSha256=hash(bytes);fs.writeFileSync(path.join(root,'cooperative-maintenance-actor.json'),bytes,{mode:0o600});
+ state={...state,epoch:state.epoch+1,actorConfigSha256:configSha256,targetSha256:target,phase:'held',release:undefined};writeCooperativeMaintenance(root,state);
+ const {MeshRuntimeStore}=await import('../../src/mesh/mesh-runtime-store.js'),{ensureBridgeSchema}=await import('../../src/mesh/worker-bridge.js'),{createTurnLedger}=await import('../../src/mesh/turn-ledger/ledger.js'),{DaemonCommandRouter}=await import('../../src/commands/router.js');
+ MeshRuntimeStore.resetForTests();const store=MeshRuntimeStore.getInstance();ensureBridgeSchema(store.db as any);const ledger=createTurnLedger({db:store.db,selfDaemonId:'self',autoFlush:false}),router=new DaemonCommandRouter({commandHandler:{handle:vi.fn()} as any});const {createTurnScheduler,createLateBoundProbePort}=await import('../../src/mesh/turn-ledger/scheduler.js'),{createNoticeSubmitInventory}=await import('../../src/mesh/turn-ledger/notice-submit-inventory.js'),{beginLifecycleSource,advanceLifecycleSource,collectLifecycleSource}=await import('../../src/maintenance/lifecycle-source-inventory.js');
+ const scheduler=createTurnScheduler({ledger}),notice=createNoticeSubmitInventory(ledger),operationId=beginLifecycleSource('controller',{});advanceLifecycleSource(operationId,'idle',{inFlight:false,retryScheduled:false,exitScheduled:false});fs.mkdirSync(path.join(root,'cooperative-maintenance-mcp'));fs.writeFileSync(path.join(root,'never-launched-mcp.mjs'),'not executed');
+ router.attachComponents({router,cliManager:manager,turnLedger:ledger,turnScheduler:scheduler,turnProbePort:createLateBoundProbePort(),meshTurn:{noticeSubmitInventory:()=>notice.inventory()},maintenanceLifecycleInventory:()=>({...collectLifecycleSource(),currentOperationId:operationId})} as any);
+ const call=async(action:string,extra:any={})=>{const body={action,roster:state.roster,nodeRoster:state.nodeRoster,peerPins:[],fleetChallenge:'actual-shared-fleet-challenge',...extra};const q={schema:1 as const,operation:'control' as const,daemonId:'self',planDigest:state.planDigest,epoch:state.epoch,nonce:randomUUID(),sentAt:Date.now(),configSha256,body,bodyDigest:hash(JSON.stringify(body))};const {actorObservationChallengeBytes}=await import('../../src/maintenance/actor-observation.js');return router.execute('cooperative_maintenance_actor_control',{...q,mac:createHmac('sha256',key).update(actorObservationChallengeBytes(q)).digest('hex')},'ipc') as Promise<any>;};
+ return {call,cleanup(){router.meshNodeStatePusher.stop();router.localMeshNodeGitWatch.stop();MeshRuntimeStore.resetForTests();process.argv[1]=priorEntry;process.env.ADHDEV_CONFIG_DIR=fixture.root;resetProcessInstanceContextForTests();},root};
+}
+it('ACTIVATION actual router persists exact observation prepare/commit/open and admission-lease native-ID promotion',async()=>{
+ const c=await activationControlFixture();try{const prepared=await c.call('prepare'),p=prepared.reply;expect(p.readyReceipt).toBe(p.observation.receipt);
+ const ready=[{daemonId:'self',bootNonce:p.bootNonce,artifactSha256:state.targetSha256,receipt:p.readyReceipt}],decisionDigest=maintenanceDecisionDigest(state,ready),body={ready,decisionDigest,observations:[p.observation],expectedBoot:p.bootNonce};
+ expect((await c.call('commit',body)).reply.committedObservation).toEqual({...ready[0],epoch:state.epoch,decisionDigest});
+ expect((await c.call('verify-committed',body)).reply.committedReceipt).toBe(p.readyReceipt);
+ expect((await c.call('open',{...body,committed:ready})).reply.openAck).toBe(decisionDigest);
+ expect((await c.call('verify-open',{...body,committed:ready})).reply.gateHeld).toBe(false);
+ await expect(withMaintenanceAdmission(()=>verifyHeldObservationPromotion(manager,{runtimeId:'coord',providerType:'synthetic-cli',providerSessionId:'provider-1',workspace:fixture.root,startedAt:100}))).resolves.toBeDefined();
+ expect(events).toEqual([]);expect(writable.construct).not.toHaveBeenCalled();
+ }finally{c.cleanup();}
+});
+it('ACTIVATION boot drift, missing commit ACK and native session-ID drift refuse without releasing the gate',async()=>{
+ const c=await activationControlFixture();try{const p=(await c.call('prepare')).reply,ready=[{daemonId:'self',bootNonce:p.bootNonce,artifactSha256:state.targetSha256,receipt:p.readyReceipt}],decisionDigest=maintenanceDecisionDigest(state,ready),body={ready,decisionDigest,observations:[p.observation],expectedBoot:p.bootNonce};
+ await expect(c.call('commit',{...body,expectedBoot:'wrong-boot'})).rejects.toThrow('boot_changed');
+ await c.call('commit',body);await expect(c.call('open',{...body,committed:[]})).rejects.toThrow('commit_ack_missing');
+ records[0].meta.providerSessionId='changed-native-id';await expect(c.call('open',{...body,committed:ready})).rejects.toThrow('inventory_drift');
+ const persisted=JSON.parse(fs.readFileSync(path.join(c.root,'cooperative-maintenance.json'),'utf8'));expect(persisted.phase).toBe('ready');expect(persisted.release).toBeUndefined();
+ }finally{c.cleanup();}
+});
+it('ACTIVATION missing runtime/ledger port refuses before prepare state mutation',async()=>{
+ const c=await activationControlFixture();try{const {authenticatedActivationControl}=await import('../../src/maintenance/activation-control.js');expect(authenticatedActivationControl).toBeTypeOf('function');
+ // Broken receipt table is an actual source failure, not a caller readiness flag.
+ const {MeshRuntimeStore}=await import('../../src/mesh/mesh-runtime-store.js');MeshRuntimeStore.getInstance().db.exec('DROP TABLE worker_bridge_delivery');await expect(c.call('prepare')).rejects.toThrow();expect(JSON.parse(fs.readFileSync(path.join(c.root,'cooperative-maintenance.json'),'utf8')).phase).toBe('held');
+ }finally{c.cleanup();}
+});
+
+it('ACTIVATION held S8 exposes an actual dormant scheduler inventory while preserving producer refusal',async()=>{
+ const {MeshRuntimeStore}=await import('../../src/mesh/mesh-runtime-store.js'),{createTurnLedger}=await import('../../src/mesh/turn-ledger/ledger.js'),{startLoops}=await import('../../src/boot/stages/loops.js');
+ const store=MeshRuntimeStore.getInstance(),components:any={turnLedger:createTurnLedger({db:store.db,selfDaemonId:'self',autoFlush:false})},start=vi.fn();
+ const dispose=await startLoops({cfg:{restoreHostedSessions:true},components,cliManager:manager,poller:{start},instanceManager:{startTicking:start},cdpInitializer:{startPeriodicScan:start}} as any);
+ expect(components.turnScheduler.maintenanceInventory()).toMatchObject({inFlight:false,forced:[]});expect(start).not.toHaveBeenCalled();dispose();components.turnScheduler.stop();MeshRuntimeStore.resetForTests();
+});
+
+it('ACTIVATION enrolled old-entry inspection remains read-only and its effect guard stays refused',async()=>{
+ const {assertMaintenanceLifecycle}=await import('../../src/maintenance/cooperative-gate.js');
+ expect(()=>assertMaintenanceLifecycle('maintenance_old_entry_service',fixture.root)).not.toThrow();expect(()=>assertMaintenanceLifecycle('maintenance_old_entry_service_effect',fixture.root)).toThrow('external_driver_owns_lifecycle');
+});
+
+it('ACTIVATION wrong roster and post-prepare artifact substitution refuse before gate release',async()=>{
+ const c=await activationControlFixture();try{
+  await expect(c.call('prepare',{nodeRoster:[...state.nodeRoster,{meshId:'mesh',nodeId:'unknown',daemonId:'other'}]})).rejects.toThrow('membership_changed');
+  const p=(await c.call('prepare')).reply,ready=[{daemonId:'self',bootNonce:p.bootNonce,artifactSha256:state.targetSha256,receipt:p.readyReceipt}],body={ready,decisionDigest:maintenanceDecisionDigest(state,ready),observations:[p.observation],expectedBoot:p.bootNonce};
+  const file=path.join(c.root,'target/dist/index.js');fs.chmodSync(file,0o644);fs.appendFileSync(file,'substituted');await expect(c.call('commit',body)).rejects.toThrow('build_changed');expect(JSON.parse(fs.readFileSync(path.join(c.root,'cooperative-maintenance.json'),'utf8')).phase).toBe('ready');
+ }finally{c.cleanup();}
+});

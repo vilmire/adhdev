@@ -58,7 +58,7 @@ export function retainedRuntimeInventory(records: SessionHostRecord[], state: Co
 }
 export const retainedRuntimeInventoryDigest = (records: SessionHostRecord[], state: CooperativeMaintenance) => digest(retainedRuntimeInventory(records, state));
 
-const observed = new WeakMap<CliRestoreHost, {epoch:number;bootNonce:string;inventoryDigest:string;receipt:string;sessions:ReturnType<typeof retainedRuntimeInventory>}>();
+const observed = new WeakMap<CliRestoreHost, {epoch:number;bootNonce:string;inventoryDigest:string;receipt:string;observation?:unknown;sessions:ReturnType<typeof retainedRuntimeInventory>}>();
 
 export async function observeHeldHostedSessions(host: CliRestoreHost, challenge: string) {
     if (!text(challenge) || challenge.length > 256) throw new Error('maintenance_observation_challenge_required');
@@ -117,7 +117,7 @@ export async function observeHeldHostedSessions(host: CliRestoreHost, challenge:
             const proof = {challenge,epoch:state.epoch,bootNonce:MAINTENANCE_BOOT_NONCE,planDigest:state.planDigest,artifactSha256:state.targetSha256,daemonId:state.daemonId,
                 endpoint:endpoint.path,hostPid:state.retainedHost.pid,hostBirth:state.retainedHost.birth,observedAt:Date.now(),sessions:inventory,coordinators,bindings};
             const receipt = digest(proof);
-            observed.set(host,{epoch:state.epoch,bootNonce:MAINTENANCE_BOOT_NONCE,inventoryDigest:digest(inventory),receipt,sessions:inventory});
+            observed.set(host,{epoch:state.epoch,bootNonce:MAINTENANCE_BOOT_NONCE,inventoryDigest:digest(inventory),receipt,observation:{...proof,receipt},sessions:inventory});
             return {...proof,receipt};
         } finally { await client.close().catch(()=>{}); }
     });
@@ -180,4 +180,19 @@ export async function verifyHeldObservationPromotion(host: CliRestoreHost, sessi
         assertMaintenanceAdmission();
         return proof.sessions;
     } finally { await client.close().catch(()=>{}); }
+}
+
+/** Rechallenge native inventory without replacing the prepared observation used
+ * by writable promotion. An inspect after prepare must not launder its receipt. */
+export async function verifyPreparedObservation(host: CliRestoreHost, receipt:string) {
+    const state=readCooperativeMaintenance(),p=observed.get(host);
+    if(!state||!p||p.epoch!==state.epoch||p.bootNonce!==MAINTENANCE_BOOT_NONCE||p.receipt!==receipt||!p.observation||!host.deps.verifiedRetainedEndpoint)throw Error('maintenance_prepared_observation_lost');
+    const endpoint=await host.deps.verifiedRetainedEndpoint();
+    if(endpoint.path!==state.retainedHost.endpoint)throw Error('maintenance_retained_endpoint_drift');
+    const client=new SessionHostClient({endpoint});
+    try{await client.connect();const reply=await client.request<SessionHostRecord[]>({type:'list_sessions',payload:{}});
+        if(!reply.success||!Array.isArray(reply.result)||digest(retainedRuntimeInventory(reply.result,state))!==p.inventoryDigest)throw Error('maintenance_retained_inventory_drift');
+        const after=await host.deps.verifiedRetainedEndpoint();if(after.path!==endpoint.path||JSON.stringify(readCooperativeMaintenance())!==JSON.stringify(state))throw Error('maintenance_epoch_changed');
+        return p.observation as Awaited<ReturnType<typeof observeHeldHostedSessions>>;
+    }finally{await client.close().catch(()=>{});}
 }

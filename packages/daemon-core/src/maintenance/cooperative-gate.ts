@@ -31,6 +31,8 @@ export interface CooperativeMaintenance {
     nodeRoster: Array<{ meshId: string; nodeId: string; daemonId: string }>;
     actorConfigSha256?: string;
     targetSha256: string; retainedHost: RetainedMaintenanceHost;
+    preparation?: {bootNonce:string;receipt:string;observation:unknown};
+    commitment?: {epoch:number;bootNonce:string;decisionDigest:string;ready:MaintenanceReady[]};
     release?: { ready: MaintenanceReady[]; committed: MaintenanceReady[]; decisionDigest: string };
 }
 export function maintenanceDecisionDigest(state: Pick<CooperativeMaintenance, 'rolloutId' | 'planDigest' | 'epoch' | 'roster' | 'targetSha256'>, ready: MaintenanceReady[]): string {
@@ -52,6 +54,8 @@ export function validateCooperativeMaintenance(value: unknown): CooperativeMaint
         || !Number.isFinite(h.hostStartedAt) || h.hostStartedAt <= 0 || !Array.isArray(h.files) || !h.files.some(f => f.path.endsWith('.node'))
         || h.files.some(f => !path.isAbsolute(f.path) || !hash(f.sha256)) || new Set(h.files.map(f => f.path)).size !== h.files.length
         || !h.files.some(f => f.path === h.entryPath) || !h.files.some(f => f.path === h.nodePath)) throw new Error('maintenance_retained_host_invalid');
+    if(s.preparation && (!id(s.preparation.bootNonce)||!hash(s.preparation.receipt)||!s.preparation.observation))throw Error('maintenance_preparation_invalid');
+    if(s.commitment && (s.commitment.epoch!==s.epoch||s.commitment.bootNonce!==s.preparation?.bootNonce||s.commitment.decisionDigest!==maintenanceDecisionDigest(s,s.commitment.ready)))throw Error('maintenance_commitment_invalid');
     if (s.phase === 'open') {
         const r = s.release;
         if (!r || !Array.isArray(r.ready) || !Array.isArray(r.committed)) throw new Error('maintenance_release_invalid');
@@ -175,6 +179,9 @@ export function assertMaintenanceLifecycle(operation: string, configDir = getCon
     const state = readCooperativeMaintenance(configDir);
     if (!state) return;
     if (process.platform === 'win32') throw new Error('maintenance_windows_retained_host_unsupported');
+    // The approved service inspector calls this read-only guard while target
+    // enrollment is held; its distinct *_effect guard remains refused.
+    if(operation==='maintenance_old_entry_service')return;
     if (['daemon_start','cli_start','daemon_stop','cli_stop'].includes(operation)) return;
     // Retained dependencies stay protected after reopen, until a separately
     // supported host migration exists. A gate release is never host-kill authority.

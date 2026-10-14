@@ -862,7 +862,7 @@ export class DaemonCommandRouter {
         // both per-mesh topics as soon as that existing identifier arrives; the
         // seqscribe activation hook re-advertises grants on live peer sessions.
         const revealedMeshIds = meshIdsRevealedByCommandArgs(normalizedArgs);
-        const maintenanceExempt = ['get_status_metadata', 'cooperative_maintenance_actor_drain','cooperative_maintenance_mcp_poll','cooperative_maintenance_mcp_reply', 'cooperative_maintenance_actor_observe', 'cooperative_maintenance_observe', 'cooperative_maintenance_status', 'worker_report_completion', 'worker_progress_update', 'worker_bridge_delivery', 'worker_bridge_capabilities', 'worker_bridge_status'].includes(cmd);
+        const maintenanceExempt = ['get_status_metadata', 'cooperative_maintenance_actor_control', 'cooperative_maintenance_actor_drain','cooperative_maintenance_mcp_poll','cooperative_maintenance_mcp_reply', 'cooperative_maintenance_actor_observe', 'cooperative_maintenance_observe', 'cooperative_maintenance_status', 'worker_report_completion', 'worker_progress_update', 'worker_bridge_delivery', 'worker_bridge_capabilities', 'worker_bridge_status'].includes(cmd);
         let maintenanceCheck = () => {};
         try {
             if (!maintenanceExempt) {

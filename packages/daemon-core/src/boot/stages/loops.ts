@@ -40,7 +40,7 @@ import { createComponentsProbeReader, type TranscriptAnalyzer, type TranscriptOb
 import { resolveProbeLocation } from '../../mesh/turn-ledger/targets.js';
 import { readLiveHeldRuntime } from '../../mesh/mesh-node-git-refresher.js';
 import { workerSessionHealthFor } from '../../mesh/turn-ledger/worker-session-health.js';
-import { startTurnScheduler } from '../../mesh/turn-ledger/scheduler.js';
+import { createTurnScheduler, startTurnScheduler } from '../../mesh/turn-ledger/scheduler.js';
 import { closeInterruptedPlainAttemptsOnBoot, reconcileOrphanedPlainAttemptsOnBoot } from './mesh-runtime.js';
 
 /**
@@ -226,6 +226,7 @@ export function stopTurnLoops(components: TurnWiredComponents): void {
 export async function startLoops(s7: MeshRuntimeStage): Promise<Disposer> {
     const { cfg, components } = s7;
     if (maintenanceHeld()) {
+        if(s7.components?.turnLedger&&!s7.components.turnScheduler)s7.components.turnScheduler=createTurnScheduler({ledger:s7.components.turnLedger});
         if (cfg.restoreHostedSessions) {
             try { await s7.cliManager.observeHeldHostedSessions('held-boot-observation'); }
             catch (e) { LOG.warn('Maintenance', `Held observation unavailable: ${String(e)}`); }

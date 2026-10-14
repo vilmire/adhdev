@@ -17,7 +17,7 @@ function privateFile(file: string): Buffer {
     return fs.readFileSync(file);
 }
 export interface ActorObservationChallenge {
-    schema: 1; operation: 'observe' | 'drain' | 'mcp_poll' | 'mcp_reply'; daemonId: string; planDigest: string; epoch: number;
+    schema: 1; operation: 'observe' | 'drain' | 'mcp_poll' | 'mcp_reply' | 'control'; daemonId: string; planDigest: string; epoch: number;
     nonce: string; sentAt: number; configSha256: string; mac: string; body?: unknown; bodyDigest?: string;
 }
 export function actorObservationChallengeBytes(r: Omit<ActorObservationChallenge, 'mac'>): string {
@@ -25,9 +25,9 @@ export function actorObservationChallengeBytes(r: Omit<ActorObservationChallenge
 }
 /** Secret provisioned separately for this maintenance plan. Never derived from
  * owner credentials, peer tokens or any strict bridge journal. */
-export function authorizeMaintenanceCollection(request: ActorObservationChallenge, operation: ActorObservationChallenge['operation']) {
+export function authorizeMaintenanceCollection(request: ActorObservationChallenge, operation: ActorObservationChallenge['operation'], {allowOpen=false}: {allowOpen?:boolean}={}) {
     const state = readCooperativeMaintenance(), root = fs.realpathSync(getConfigDir());
-    if (!state?.actorConfigSha256 || !maintenanceHeld()) throw new Error('maintenance_actor_enrollment_required');
+    if (!state?.actorConfigSha256 || (!allowOpen && !maintenanceHeld())) throw new Error('maintenance_actor_enrollment_required');
     const bytes = privateFile(path.join(root,ACTOR_CONFIG_FILE));
     if (hash(bytes) !== state.actorConfigSha256 || request?.configSha256 !== state.actorConfigSha256) throw new Error('maintenance_actor_config_changed');
     const config = JSON.parse(bytes.toString('utf8'));
@@ -44,9 +44,9 @@ export function authorizeMaintenanceCollection(request: ActorObservationChalleng
     const replayKey = `${root}:${request.nonce}`;
     if (used.has(replayKey) || used.size >= 4096) throw new Error('maintenance_actor_challenge_replayed');
     used.set(replayKey,Date.now());
-    return {state,config,root,reply(fields: Record<string,unknown>) {
-        if (hash(privateFile(config.observationKey.path)) !== config.observationKey.sha256 || hash(privateFile(path.join(root,ACTOR_CONFIG_FILE))) !== request.configSha256 || JSON.stringify(readCooperativeMaintenance()) !== JSON.stringify(state)) throw new Error('maintenance_actor_scope_changed');
-        const reply = {...fields,schema:1,nonce:request.nonce,planDigest:state.planDigest,epoch:state.epoch,daemonId:state.daemonId,bootNonce:MAINTENANCE_BOOT_NONCE,
+    return {state,config,root,reply(fields: Record<string,unknown>, expectedState=state) {
+        if (hash(privateFile(config.observationKey.path)) !== config.observationKey.sha256 || hash(privateFile(path.join(root,ACTOR_CONFIG_FILE))) !== request.configSha256 || JSON.stringify(readCooperativeMaintenance()) !== JSON.stringify(expectedState)) throw new Error('maintenance_actor_scope_changed');
+        const reply = {...fields,schema:1,nonce:request.nonce,planDigest:expectedState.planDigest,epoch:expectedState.epoch,daemonId:expectedState.daemonId,bootNonce:MAINTENANCE_BOOT_NONCE,
             pid:process.pid,nodePath:process.execPath,entryPath:process.argv[1],observedAt:Date.now()};
         return {success:true,reply,mac:createHmac('sha256',key).update(JSON.stringify(reply)).digest('hex')};
     }};
