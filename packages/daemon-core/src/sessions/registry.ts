@@ -1,3 +1,4 @@
+import { MAINTENANCE_BOOT_NONCE, maintenanceHeld, readCooperativeMaintenance } from '../maintenance/cooperative-gate.js';
 import type { SessionTermination } from '@adhdev/session-host-core';
 import type { SessionTransport } from '../shared-types.js';
 import type { SessionLifecycleBus } from './lifecycle-bus.js';
@@ -39,6 +40,8 @@ export interface SessionRuntimeTarget {
      * Absent for sessions that have no launch axis (IDE / extension).
      */
     launch?: SessionLaunchRecord;
+    /** Metadata-only held routing; never a writable provider instance. */
+    maintenanceObservation?: { observedAt: number; epoch: number; bootNonce: string; meshId?: string; nodeId?: string; daemonId: string; coordinator: boolean };
 }
 
 export interface TerminateDetail {
@@ -91,14 +94,14 @@ export class SessionRegistry {
      * re-register of a live id is an upsert, not a termination, so it emits no
      * `terminated`.
      */
-    register(target: SessionRuntimeTarget, origin: RegisterOrigin = inferLegacyOrigin(target)): void {
+    register(target: SessionRuntimeTarget, origin: RegisterOrigin = inferLegacyOrigin(target), observationOnly = false): void {
         // Preserve an already-resolved conversation binding across a
         // re-register (attach-restore, meta refresh): the caller rarely knows
         // the antigravity conv uuid at register time, so a plain replace would
         // drop the SSOT binding and force a fresh (crosswire-prone) re-resolve.
         const prior = this.bySessionId.get(target.sessionId);
         const priorProviderSessionId = prior?.providerSessionId;
-        this.detach(target.sessionId);
+        this.detach(target.sessionId, !observationOnly);
         if (priorProviderSessionId && !target.providerSessionId) {
             target = { ...target, providerSessionId: priorProviderSessionId };
         }
@@ -112,7 +115,7 @@ export class SessionRegistry {
         if (target.instanceKey) this.addIndex(this.byInstanceKey, target.instanceKey, target.sessionId);
         if (target.parentSessionId) this.addIndex(this.byParentSessionId, target.parentSessionId, target.sessionId);
         if (target.providerSessionId) this.byProviderSessionId.set(target.providerSessionId, target.sessionId);
-        this.bus?.emit({
+        if (!observationOnly) this.bus?.emit({
             kind: 'registered',
             sessionId: target.sessionId,
             at: this.now(),
@@ -121,17 +124,30 @@ export class SessionRegistry {
         });
     }
 
+    /** No lifecycle bus edge: held inventory must not trigger restore producers. */
+    registerObservation(target: SessionRuntimeTarget): void {
+        if (!target.maintenanceObservation) throw new Error('maintenance_observation_binding_required');
+        this.register(target, 'restore', true);
+    }
+
     get(sessionId: string | undefined | null): SessionRuntimeTarget | undefined {
         if (!sessionId) return undefined;
-        return this.bySessionId.get(sessionId);
+        const target = this.bySessionId.get(sessionId);
+        if (target?.maintenanceObservation) {
+            try {
+                const s = readCooperativeMaintenance();
+                if (!s || !maintenanceHeld() || target.maintenanceObservation.epoch !== s.epoch || target.maintenanceObservation.bootNonce !== MAINTENANCE_BOOT_NONCE || Date.now() - target.maintenanceObservation.observedAt > 10_000 || target.maintenanceObservation.observedAt > Date.now()) return undefined;
+            } catch { return undefined; }
+        }
+        return target;
     }
 
     has(sessionId: string | undefined | null): boolean {
-        return !!sessionId && this.bySessionId.has(sessionId);
+        return !!this.get(sessionId);
     }
 
     list(): SessionRuntimeTarget[] {
-        return [...this.bySessionId.values()];
+        return [...this.bySessionId.keys()].map(id=>this.get(id)).filter((s): s is SessionRuntimeTarget => !!s);
     }
 
     /**
@@ -141,8 +157,9 @@ export class SessionRegistry {
     resolveAlias(idOrProviderSessionId: string | undefined | null): string | null {
         const id = typeof idOrProviderSessionId === 'string' ? idOrProviderSessionId.trim() : '';
         if (!id) return null;
-        if (this.bySessionId.has(id)) return id;
-        return this.byProviderSessionId.get(id) ?? null;
+        if (this.has(id)) return id;
+        const sessionId = this.byProviderSessionId.get(id);
+        return sessionId && this.has(sessionId) ? sessionId : null;
     }
 
     /**
@@ -249,6 +266,7 @@ export class SessionRegistry {
         if (!sessionId) return false;
         const target = this.detach(sessionId);
         if (!target) return false;
+        if (target.maintenanceObservation) return true;
         this.bus?.emit({
             kind: 'terminated',
             sessionId,
@@ -287,11 +305,11 @@ export class SessionRegistry {
     }
 
     /** Drop a session from every index without emitting. Returns the removed entry. */
-    private detach(sessionId: string): SessionRuntimeTarget | undefined {
+    private detach(sessionId: string, releaseClaim = true): SessionRuntimeTarget | undefined {
         const target = this.bySessionId.get(sessionId);
         if (!target) return undefined;
         this.bySessionId.delete(sessionId);
-        try { this.transcriptTopicRelease?.(sessionId); } catch { /* claim release is best-effort */ }
+        try { if (releaseClaim && !target.maintenanceObservation) this.transcriptTopicRelease?.(sessionId); } catch { /* claim release is best-effort */ }
         if (target.cdpManagerKey) this.removeIndex(this.byManagerKey, target.cdpManagerKey, sessionId);
         if (target.instanceKey) this.removeIndex(this.byInstanceKey, target.instanceKey, sessionId);
         if (target.parentSessionId) this.removeIndex(this.byParentSessionId, target.parentSessionId, sessionId);

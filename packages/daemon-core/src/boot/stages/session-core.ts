@@ -1,3 +1,4 @@
+import { maintenanceHeld, withMaintenanceAdmission } from '../../maintenance/cooperative-gate.js';
 /**
  * S3 bootSessionCore — the lifecycle bus, the session registry, provider
  * instances, CLI/CDP managers and the agent-stream poller (wiring-unification B4).
@@ -75,6 +76,7 @@ export async function bootSessionCore(s2: ProvidersStage): Promise<SessionCoreSt
     const outputFanout = new SessionOutputFanout();
     const cliManager = new DaemonCliManager({
         getP2p: () => outputFanout,
+        verifiedRetainedEndpoint: cfg.sessionHost.verifiedRetainedEndpoint,
         getInstanceManager: () => instanceManager,
         getSessionRegistry: () => sessionRegistry,
         ...(cfg.sessionHost.createPtyTransportFactory ? { createPtyTransportFactory: cfg.sessionHost.createPtyTransportFactory } : {}),
@@ -104,9 +106,11 @@ export async function bootSessionCore(s2: ProvidersStage): Promise<SessionCoreSt
         cdpManagers,
         enabledIdes: cfg.enabledIdes || loadConfig().enabledIdes || undefined,
         onConnected: async (ideType, manager, managerKey) => {
-            await setupIdeInstance(cdpSetupContext, { ideType, manager, managerKey });
+            if (maintenanceHeld()) return;
+            await withMaintenanceAdmission(() => setupIdeInstance(cdpSetupContext, { ideType, manager, managerKey }));
         },
         onDisconnected: async (_ideType, _manager, managerKey) => {
+            if (maintenanceHeld()) return;
             sessionRegistry.terminateByManagerKey(managerKey, 'ide_detached');
             const instanceKey = `ide:${managerKey}`;
             const ideInstance = instanceManager.getInstance(instanceKey) as IdeProviderInstance | undefined;
@@ -118,7 +122,7 @@ export async function bootSessionCore(s2: ProvidersStage): Promise<SessionCoreSt
             emitFacts('ide_detached');
         },
     });
-    await cdpInitializer.connectAll(s2.detectedIdes.value);
+    if (!maintenanceHeld()) await cdpInitializer.connectAll(s2.detectedIdes.value);
 
     /** Today's shutdown steps 2–6, in order. */
     const disposeSessionCore = async (): Promise<void> => {

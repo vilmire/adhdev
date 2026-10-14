@@ -188,7 +188,12 @@ it('hosted void stop owns admission until ACK; queued stale-epoch stop/resize/cl
         if(r.type==='stop_session')await new Promise<void>(resolve=>{ack=resolve;});
         return {success:true,result:{sessionId:'runtime',attachedClients:[],meta:{}}} as any;
     });
-    const factory=new SessionHostPtyTransportFactory({clientId:'synthetic',runtimeId:'runtime',providerType:'synthetic',workspace:root});
+    const net=await import('node:net');
+    vi.spyOn(net.Socket.prototype,'connect').mockImplementation(function(){throw new Error('test_native_socket_forbidden');} as any);
+    expect(vi.isMockFunction(SessionHostClient.prototype.request)).toBe(true);
+    const endpoint={kind:'unix' as const,path:path.join(root,'nonexistent-test-host.sock')};
+    expect(fs.existsSync(endpoint.path)).toBe(false);
+    const factory=new SessionHostPtyTransportFactory({endpoint,clientId:'synthetic',runtimeId:'runtime',providerType:'synthetic',workspace:root});
     const transport=factory.spawn('synthetic',[],{cwd:root,env:{},cols:80,rows:24}) as any;
     await transport.ready; transport.kill();
     await vi.waitFor(()=>expect(ack).toBeTypeOf('function'));

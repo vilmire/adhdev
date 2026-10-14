@@ -1,3 +1,4 @@
+import { maintenanceHeld } from '../maintenance/cooperative-gate.js';
 /**
  * bootSessionHost — one session-host bring-up for both hosts
  * (wiring-unification B5, design §B3 "session-host bring-up + PTY factory").
@@ -75,7 +76,7 @@ export async function bootSessionHost(opts: SessionHostBootOptions): Promise<Ses
             .finally(() => { inFlight = null; });
         return inFlight;
     };
-    const onEvent = (event: SessionHostEvent) => opts.onHostEvent?.(event);
+    const onEvent = (event: SessionHostEvent) => { if (!maintenanceHeld()) opts.onHostEvent?.(event); };
     const control = opts.createController
         ? opts.createController(current, onEvent, ensure)
         : new SessionHostController(current, onEvent, ensure);
@@ -111,6 +112,7 @@ export async function bootSessionHost(opts: SessionHostBootOptions): Promise<Ses
         bootConfig: () => ({
             createPtyTransportFactory: ptyFactory,
             listHostedRuntimes,
+            verifiedRetainedEndpoint: ensure,
             managedByTag: opts.managedBy,
             control,
         }),

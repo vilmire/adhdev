@@ -1,3 +1,4 @@
+import { maintenanceHeld, withMaintenanceAdmission } from '../../maintenance/cooperative-gate.js';
 /**
  * S2 bootProviders — provider loading, verified-channel boot sync, staleness
  * probe, version archive, IDE/CLI detection (wiring-unification B4).
@@ -109,7 +110,7 @@ export async function bootProviders(s1: PlatformStage): Promise<ProvidersStage> 
     }
 
     const detectedIdes: { value: IDEInfo[] } = { value: [] };
-    const refreshProviderAvailability = async (providerType?: string): Promise<void> => {
+    const refreshProviderAvailability = async (providerType?: string): Promise<void> => withMaintenanceAdmission(async () => {
         const targetProvider = providerType ? providerLoader.getMeta(providerLoader.resolveAlias(providerType)) : null;
         const targetCategory = targetProvider?.category;
         if (!providerType || targetCategory === 'cli') {
@@ -128,12 +129,13 @@ export async function bootProviders(s1: PlatformStage): Promise<ProvidersStage> 
             detectedIdes.value = await detectIDEs(providerLoader);
             providerLoader.setIdeDetectionResults(detectedIdes.value, true);
         }
-    };
+    });
 
     // Verified-channel first sync + daemon-update sync. Fire-and-forget so a
     // slow/unreachable registry never delays boot; fail-closed (errors keep
     // the previous store and retry next boot).
-    const channelBootSync = runChannelBootSync(providerLoader, () => refreshProviderAvailability());
+    const channelBootSync = maintenanceHeld() ? Promise.resolve({ activated: 0 })
+        : withMaintenanceAdmission(() => runChannelBootSync(providerLoader, () => refreshProviderAvailability()));
 
     // Periodic provider auto-update (owner decision 2026-10-10; replaces the
     // 08-10 option-A 24h read-only probe in the same slot). Every run refreshes
@@ -144,8 +146,9 @@ export async function bootProviders(s1: PlatformStage): Promise<ProvidersStage> 
     const staleListeners: Array<() => void> = [];
     const activatedListeners: Array<() => void> = [];
     const autoUpdateLoop = startProviderAutoUpdateLoop({
-        runAutoUpdate: (options) => providerLoader.runAutoUpdate(options),
+        runAutoUpdate: (options) => withMaintenanceAdmission(() => providerLoader.runAutoUpdate(options)),
         isEnabled: () => {
+            if (maintenanceHeld()) return false;
             let configured: boolean | undefined;
             try { configured = loadConfig().providerAutoUpdate; } catch { configured = appConfig.providerAutoUpdate; }
             return resolveProviderAutoUpdate(configured);
@@ -186,8 +189,9 @@ export async function bootProviders(s1: PlatformStage): Promise<ProvidersStage> 
     // Version detection runs OFF the boot path (the probing is expensive).
     const versionArchive = new VersionArchive();
     providerLoader.setVersionArchive(versionArchive);
-    setTimeout(() => {
-        void detectAllVersions(providerLoader, versionArchive)
+    if (!maintenanceHeld()) setTimeout(() => {
+        if (maintenanceHeld()) return;
+        void withMaintenanceAdmission(() => detectAllVersions(providerLoader, versionArchive))
             .then((versionResults) => {
                 const installedProviders = versionResults.filter(v => v.installed);
                 const withVersion = installedProviders.filter(v => v.version);
@@ -204,7 +208,7 @@ export async function bootProviders(s1: PlatformStage): Promise<ProvidersStage> 
     }, 0);
 
     LOG.info('Init', 'Detecting IDEs...');
-    await refreshProviderAvailability();
+    if (!maintenanceHeld()) await refreshProviderAvailability();
     const installed = detectedIdes.value.filter((i) => i.installed);
     LOG.info('Init', `Found ${installed.length} IDE(s): ${installed.map((i) => i.id).join(', ') || 'none'}`);
 

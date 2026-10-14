@@ -1010,3 +1010,5 @@ export { assertWorkerBridgeLifecycleAdmission } from './commands/worker-bridge-l
 
 export { readCooperativeMaintenance, maintenanceHeld, assertMaintenanceAdmission, assertMaintenanceDaemon, assertMaintenanceNode, captureMaintenanceAdmission, withMaintenanceAdmission, writeCooperativeMaintenance, maintenanceDecisionDigest, cooperativeMaintenanceStatus, verifyRetainedMaintenanceHost } from './maintenance/cooperative-gate.js';
 export type { CooperativeMaintenance, MaintenanceReady, RetainedMaintenanceHost } from './maintenance/cooperative-gate.js';
+
+export { observeHeldHostedSessions, retainedRuntimeInventoryDigest, verifyHeldObservationFleet } from './maintenance/held-observation.js';

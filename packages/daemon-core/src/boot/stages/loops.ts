@@ -1,4 +1,4 @@
-import { maintenanceHeld } from '../../maintenance/cooperative-gate.js';
+import { maintenanceHeld, readCooperativeMaintenance, withMaintenanceAdmission } from '../../maintenance/cooperative-gate.js';
 /**
  * S8 startLoops — start everything that ticks, now that every subscriber is
  * attached (wiring-unification B4). Returns the loop-stage disposer; the
@@ -226,18 +226,32 @@ export function stopTurnLoops(components: TurnWiredComponents): void {
 export async function startLoops(s7: MeshRuntimeStage): Promise<Disposer> {
     const { cfg, components } = s7;
     if (maintenanceHeld()) {
+        if (cfg.restoreHostedSessions) {
+            try { await s7.cliManager.observeHeldHostedSessions('held-boot-observation'); }
+            catch (e) { LOG.warn('Maintenance', `Held observation unavailable: ${String(e)}`); }
+        }
         // Verification transports boot, work producers do not. Restart re-enters
         // closed until a fresh boot-bound whole-fleet release certificate arrives.
-        let stopped = false, starting = false, dispose: Disposer | undefined;
+        let stopped = false, starting = false, dispose: Disposer | undefined, failedEpoch: number | undefined;
         const timer = setInterval(() => {
             try {
-                if (stopped || starting || maintenanceHeld()) return;
+                if (dispose && maintenanceHeld()) { dispose(); dispose = undefined; starting = false; }
+                if (stopped || starting || maintenanceHeld() || failedEpoch === readCooperativeMaintenance()?.epoch) return;
                 starting = true;
-                void startLoops(s7).then(d => { if (stopped) d(); else dispose = d; }).catch(e => LOG.error('Maintenance', String(e)));
+                void startLoops(s7).then(d => { if (stopped) d(); else dispose = d; }).catch(e => { try { failedEpoch = readCooperativeMaintenance()?.epoch; } catch { failedEpoch = Number.NaN; } starting = false; LOG.error('Maintenance', String(e)); });
             } catch { /* Corrupt/missing enrollment stays closed. */ }
         }, 250);
         timer.unref?.();
         return () => { stopped = true; clearInterval(timer); dispose?.(); };
+    }
+
+    return withMaintenanceAdmission(async () => {
+    const enrolled = readCooperativeMaintenance();
+    if (enrolled) {
+        if (!cfg.restoreHostedSessions) throw new Error('maintenance_restore_required');
+        // Promotion failure must precede every producer and orphan/binding
+        // cleanup. An incomplete inventory is never an empty successful restore.
+        await s7.cliManager.restoreHostedSessions();
     }
 
     // Plain attempts a restart interrupted (assistant-layer design 2026-10-07,
@@ -263,7 +277,7 @@ export async function startLoops(s7: MeshRuntimeStage): Promise<Disposer> {
     // subscriber is attached by now (S7), so each restored session's
     // `registered{origin:'restore'}` reaches the mesh / liveness consumers; the
     // composer-residue sweep is scheduled only after the restore batch settled.
-    if (cfg.restoreHostedSessions) {
+    if (cfg.restoreHostedSessions && !enrolled) {
         try {
             await s7.cliManager.restoreHostedSessions();
         } catch (e: any) {
@@ -300,6 +314,7 @@ export async function startLoops(s7: MeshRuntimeStage): Promise<Disposer> {
         if (disposed) return;
         disposed = true;
         s7.poller.stop();
+        try { s7.instanceManager.stopTicking(); } catch { /* noop */ }
         s7.cdpInitializer.stop();
         stopTurnLoops(components as TurnWiredComponents);
         try { s7.router.meshNodeStatePusher.stop(); } catch { /* noop */ }
@@ -307,4 +322,5 @@ export async function startLoops(s7: MeshRuntimeStage): Promise<Disposer> {
         try { components.composerResidueSweep?.stop(); } catch { /* noop */ }
         try { components.eventLoopMonitor?.stop(); } catch { /* noop */ }
     };
+    });
 }

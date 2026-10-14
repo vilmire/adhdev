@@ -1,3 +1,4 @@
+import { maintenanceHeld, withMaintenanceAdmission } from '../maintenance/cooperative-gate.js';
 /**
  * SessionHostController — a persistent session-host control-plane client with
  * reconnect and host-event forwarding (wiring-unification B5, D7).
@@ -163,12 +164,16 @@ export class SessionHostController implements SessionHostControlPlane {
         type: SessionHostRequestType;
         payload: unknown;
     }): Promise<T> {
+        const readOnly = ['list_sessions', 'get_host_diagnostics'].includes(request.type);
+        const execute = async () => {
         await this.ensureConnected();
         const response = await this.client.request<T>(request as any);
         if (!response.success) {
             throw new Error(response.error || `Session host request failed: ${request.type}`);
         }
         return (response.result ?? null) as T;
+        };
+        return readOnly ? execute() : withMaintenanceAdmission(execute);
     }
 
     private async ensureConnected(): Promise<void> {
@@ -210,7 +215,7 @@ export class SessionHostController implements SessionHostControlPlane {
     }
 
     private maybeRespawn(failures: number): void {
-        if (!this.respawn || this.respawnInFlight) return;
+        if (maintenanceHeld() || !this.respawn || this.respawnInFlight) return;
         const first = SessionHostController.RESPAWN_AFTER_FAILURES;
         if (failures < first || (failures - first) % SessionHostController.RESPAWN_RETRY_EVERY !== 0) return;
         this.respawnInFlight = true;
@@ -225,6 +230,7 @@ export class SessionHostController implements SessionHostControlPlane {
     }
 
     private handleEvent(event: SessionHostEvent): void {
+        if (maintenanceHeld()) return;
         if (event.type === 'host_log') {
             const line = event.entry.sessionId
                 ? `${event.entry.message} (session=${event.entry.sessionId})`

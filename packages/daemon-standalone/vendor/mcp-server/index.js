@@ -24048,19 +24048,19 @@ var require_dist3 = __commonJS({
         submodules
       };
     }
-    function truncateDiffText2(text2, maxLines) {
-      const lines = text2.split("\n");
+    function truncateDiffText2(text3, maxLines) {
+      const lines = text3.split("\n");
       const truncated = lines.length > maxLines;
       return {
-        diff: truncated ? lines.slice(0, maxLines).join("\n") + "\n... (truncated)" : text2,
+        diff: truncated ? lines.slice(0, maxLines).join("\n") + "\n... (truncated)" : text3,
         truncated
       };
     }
     function projectFileDiffRow2(file, rawResult, maxLines) {
       const raw = readRecord2(rawResult);
       const d = readRecord2(raw.diff ?? rawResult);
-      const text2 = typeof d.diff === "string" ? d.diff : "";
-      const { diff, truncated } = truncateDiffText2(text2, maxLines);
+      const text3 = typeof d.diff === "string" ? d.diff : "";
+      const { diff, truncated } = truncateDiffText2(text3, maxLines);
       return {
         path: file.path,
         old_path: file.oldPath ?? null,
@@ -24988,7 +24988,7 @@ ${renderWorkerProtocolFooter2(input)}`;
       const launchValue = readString2(record3.launchValue);
       const resolvedDefault = readString2(record3.resolvedDefault);
       const current4 = readString2(record3.current);
-      const observed = readString2(record3.observed);
+      const observed2 = readString2(record3.observed);
       const observedAt = readFiniteNumber(record3.observedAt);
       return {
         source: isModelAxisSource(record3.source) ? record3.source : "unspecified",
@@ -24996,7 +24996,7 @@ ${renderWorkerProtocolFooter2(input)}`;
         ...launchValue ? { launchValue } : {},
         ...resolvedDefault ? { resolvedDefault } : {},
         ...current4 ? { current: current4 } : {},
-        ...observed ? { observed } : {},
+        ...observed2 ? { observed: observed2 } : {},
         ...observedAt !== void 0 ? { observedAt } : {},
         history: history.slice(-MODEL_SELECTION_HISTORY_LIMIT)
       };
@@ -25817,16 +25817,16 @@ ${renderWorkerProtocolFooter2(input)}`;
       }
       return out;
     }
-    function fieldSigsOf(digest) {
-      if (!digest.fieldSigs) {
+    function fieldSigsOf(digest2) {
+      if (!digest2.fieldSigs) {
         const sigs = /* @__PURE__ */ new Map();
-        for (const [key3, value] of Object.entries(digest.stable)) {
+        for (const [key3, value] of Object.entries(digest2.stable)) {
           const s2 = sig(value);
           if (s2 !== void 0) sigs.set(key3, s2);
         }
-        digest.fieldSigs = sigs;
+        digest2.fieldSigs = sigs;
       }
-      return digest.fieldSigs;
+      return digest2.fieldSigs;
     }
     function digestKeyedDoc(doc, spec) {
       const top = /* @__PURE__ */ new Map();
@@ -27759,9 +27759,9 @@ ${renderWorkerProtocolFooter2(input)}`;
         init_repo_mesh_status_types();
       }
     });
-    function parseConfigText(path93, text2) {
-      if (/\.json$/i.test(path93)) return JSON.parse(text2);
-      return yaml.load(text2);
+    function parseConfigText(path93, text3) {
+      if (/\.json$/i.test(path93)) return JSON.parse(text3);
+      return yaml.load(text3);
     }
     var yaml;
     var init_config_text = __esm2({
@@ -27789,11 +27789,11 @@ ${renderWorkerProtocolFooter2(input)}`;
     }
     function normalizeOperatingNote(value) {
       if (!isRecord4(value)) return null;
-      const text2 = typeof value.text === "string" ? value.text.trim() : "";
-      if (!text2) return null;
+      const text3 = typeof value.text === "string" ? value.text.trim() : "";
+      if (!text3) return null;
       const category = value.category === "provider_quirk" || value.category === "pattern_to_avoid" || value.category === "recovery_lesson" ? value.category : void 0;
       return {
-        text: text2,
+        text: text3,
         ...category ? { category } : {},
         ...typeof value.createdAt === "string" ? { createdAt: value.createdAt } : {},
         ...typeof value.sourceCoordinator === "string" ? { sourceCoordinator: value.sourceCoordinator } : {},
@@ -28370,14 +28370,14 @@ ${renderWorkerProtocolFooter2(input)}`;
         const configPath = (0, import_path2.join)(repoRoot, relative13);
         if (!(0, import_fs2.existsSync)(configPath)) continue;
         try {
-          const text2 = (0, import_fs2.readFileSync)(configPath, "utf-8");
+          const text3 = (0, import_fs2.readFileSync)(configPath, "utf-8");
           let mtimeMs = 0;
           try {
             mtimeMs = (0, import_fs2.statSync)(configPath).mtimeMs;
           } catch {
-            mtimeMs = text2.length;
+            mtimeMs = text3.length;
           }
-          const parsed = parseConfigText(configPath, text2);
+          const parsed = parseConfigText(configPath, text3);
           const validation = validateChangeImpactConfig(parsed, relative13);
           if (!validation.valid) {
             return {
@@ -29009,9 +29009,9 @@ ${renderWorkerProtocolFooter2(input)}`;
     async function readHead(repo, options) {
       try {
         const result = await runGit(repo, ["log", "-1", "--pretty=%h%x00%s"], options);
-        const text2 = result.stdout.trimEnd();
-        if (!text2) return { commit: null, message: null };
-        const [commit2, ...messageParts] = text2.split("\0");
+        const text3 = result.stdout.trimEnd();
+        if (!text3) return { commit: null, message: null };
+        const [commit2, ...messageParts] = text3.split("\0");
         return {
           commit: commit2 || null,
           message: messageParts.join("\0") || null
@@ -29447,12 +29447,12 @@ ${renderWorkerProtocolFooter2(input)}`;
         plusLines
       ].filter((line) => line.length > 0).join("\n");
     }
-    function truncateText(text2, maxBytes) {
-      if (byteLength(text2) <= maxBytes) return { text: text2, truncated: false };
-      return { text: Buffer.from(text2, "utf8").subarray(0, maxBytes).toString("utf8"), truncated: true };
+    function truncateText(text3, maxBytes) {
+      if (byteLength(text3) <= maxBytes) return { text: text3, truncated: false };
+      return { text: Buffer.from(text3, "utf8").subarray(0, maxBytes).toString("utf8"), truncated: true };
     }
-    function byteLength(text2) {
-      return Buffer.byteLength(text2, "utf8");
+    function byteLength(text3) {
+      return Buffer.byteLength(text3, "utf8");
     }
     function normalizePositiveInteger(value, fallback) {
       if (!Number.isFinite(value) || value == null || value <= 0) return fallback;
@@ -31932,8 +31932,8 @@ child.on('exit', () => process.exit(0));
           consumed += length;
           const buffer = Buffer.alloc(length);
           fs6.readSync(fd, buffer, 0, length, position);
-          const text2 = buffer.toString("utf-8") + carry;
-          const lines = text2.split("\n");
+          const text3 = buffer.toString("utf-8") + carry;
+          const lines = text3.split("\n");
           carry = position > 0 ? lines.shift() ?? "" : "";
           for (let i = lines.length - 1; i >= 0; i -= 1) {
             const parsed = parseRolloutLine(lines[i]);
@@ -32089,8 +32089,8 @@ child.on('exit', () => process.exit(0));
       if (status >= 500 && status <= 599) return "server";
       return null;
     }
-    function extractEmbeddedHttpStatus(text2) {
-      const bodyEq = text2.match(/\bbody\s*=\s*(\{[\s\S]*\})\s*;?/);
+    function extractEmbeddedHttpStatus(text3) {
+      const bodyEq = text3.match(/\bbody\s*=\s*(\{[\s\S]*\})\s*;?/);
       if (bodyEq?.[1]) {
         try {
           const parsed = JSON.parse(bodyEq[1]);
@@ -32100,48 +32100,48 @@ child.on('exit', () => process.exit(0));
         } catch {
         }
       }
-      const jsonStatus = text2.match(/"status"\s*:\s*(\d{3})/);
+      const jsonStatus = text3.match(/"status"\s*:\s*(\d{3})/);
       if (jsonStatus) {
         const n = Number(jsonStatus[1]);
         if (kindFromHttpStatus(n)) return n;
       }
-      const labelled = text2.match(/\b(?:HTTP\s+|failed:\s*)(401|403|429|5\d{2})\b/i);
+      const labelled = text3.match(/\b(?:HTTP\s+|failed:\s*)(401|403|429|5\d{2})\b/i);
       if (labelled) return Number(labelled[1]);
-      const phrase = text2.match(/\b(401|403)\s+Unauthorized\b/i) ?? text2.match(/\b(429)\s+Too Many Requests\b/i);
+      const phrase = text3.match(/\b(401|403)\s+Unauthorized\b/i) ?? text3.match(/\b(429)\s+Too Many Requests\b/i);
       if (phrase) return Number(phrase[1]);
       return null;
     }
-    function extractEmbeddedErrorCode(text2) {
-      const match = text2.match(/"code"\s*:\s*"([^"]+)"/);
+    function extractEmbeddedErrorCode(text3) {
+      const match = text3.match(/"code"\s*:\s*"([^"]+)"/);
       return match?.[1] ?? null;
     }
     function classifyCodexAppServerError(message) {
-      const text2 = message.trim();
-      const http4 = extractEmbeddedHttpStatus(text2);
+      const text3 = message.trim();
+      const http4 = extractEmbeddedHttpStatus(text3);
       if (http4 !== null) {
         const kind = kindFromHttpStatus(http4);
         if (kind) return kind;
       }
-      const code = extractEmbeddedErrorCode(text2);
+      const code = extractEmbeddedErrorCode(text3);
       if (code && UNAUTHORIZED_ERROR_CODES.has(code)) return "unauthorized";
-      if (/\bunauthorized\b/i.test(text2)) return "unauthorized";
-      if (NETWORK_PATTERN.test(text2)) return "network";
-      if (RATE_LIMIT_TEXT_PATTERN.test(text2)) return "rate-limited";
-      if (MISSING_CREDENTIALS_PATTERN.test(text2)) return "missing-credentials";
+      if (/\bunauthorized\b/i.test(text3)) return "unauthorized";
+      if (NETWORK_PATTERN.test(text3)) return "network";
+      if (RATE_LIMIT_TEXT_PATTERN.test(text3)) return "rate-limited";
+      if (MISSING_CREDENTIALS_PATTERN.test(text3)) return "missing-credentials";
       return "server";
     }
-    function describeCodexRateLimitFailure(kind, text2) {
+    function describeCodexRateLimitFailure(kind, text3) {
       switch (kind) {
         case "missing-credentials":
-          return `Not signed in to Codex (${text2}) \u2014 run codex on this machine to sign in, then retry`;
+          return `Not signed in to Codex (${text3}) \u2014 run codex on this machine to sign in, then retry`;
         case "unauthorized":
-          return `Codex usage lookup by the background quota collector was refused (${text2}) \u2014 this is the daemon's own probe, not a running Codex session, so it says nothing about that session's sign-in; usage is unknown until Codex writes a local usage reading`;
+          return `Codex usage lookup by the background quota collector was refused (${text3}) \u2014 this is the daemon's own probe, not a running Codex session, so it says nothing about that session's sign-in; usage is unknown until Codex writes a local usage reading`;
         case "rate-limited":
-          return `Codex rate-limit lookup was rate limited: ${text2}`;
+          return `Codex rate-limit lookup was rate limited: ${text3}`;
         case "network":
-          return `Codex rate-limit lookup failed: ${text2}`;
+          return `Codex rate-limit lookup failed: ${text3}`;
         default:
-          return `Codex rate-limit request failed: ${text2}`;
+          return `Codex rate-limit request failed: ${text3}`;
       }
     }
     function codexCommand(env2) {
@@ -32305,13 +32305,13 @@ child.on('exit', () => process.exit(0));
           }
           if (message.id === RATE_LIMITS_ID) {
             if (message.error) {
-              const text2 = message.error.message ?? "unknown error";
-              const failureKind = classifyCodexAppServerError(text2);
+              const text3 = message.error.message ?? "unknown error";
+              const failureKind = classifyCodexAppServerError(text3);
               finish(
                 quotaFailure(
                   "codex-cli",
                   failureKind === "missing-credentials" ? "unavailable" : "error",
-                  describeCodexRateLimitFailure(failureKind, text2),
+                  describeCodexRateLimitFailure(failureKind, text3),
                   { source: "app-server", collectorScope: "background-collector", failureKind }
                 )
               );
@@ -34050,12 +34050,12 @@ child.on('exit', () => process.exit(0));
       let textBytes = 0;
       for (const item of items) {
         if (item && typeof item.text === "string") {
-          const text2 = item.text;
-          textBytes += Buffer.byteLength(text2, "utf8");
+          const text3 = item.text;
+          textBytes += Buffer.byteLength(text3, "utf8");
           if (textBytes > MESH_SEND_KEYS_MAX_TEXT_BYTES) {
             throw new Error(`send_keys: total literal text exceeds ${MESH_SEND_KEYS_MAX_TEXT_BYTES} bytes`);
           }
-          parts.push(text2);
+          parts.push(text3);
           submits = false;
           continue;
         }
@@ -34071,8 +34071,8 @@ child.on('exit', () => process.exit(0));
       }
       return { sequence: parts.join(""), keys, hasDestructive, submits };
     }
-    function truncateToByteTailByLine(text2, maxBytes) {
-      const input = String(text2 ?? "");
+    function truncateToByteTailByLine(text3, maxBytes) {
+      const input = String(text3 ?? "");
       const originalBytes = Buffer.byteLength(input, "utf8");
       if (originalBytes <= maxBytes) {
         return { text: input, truncated: false, originalBytes, returnedBytes: originalBytes };
@@ -36131,24 +36131,24 @@ ${error.message || ""}`;
       if (!workspace) return bundled;
       const rulesPath = path21.join(workspace, ".adhdev", "coordinator-rules.md");
       try {
-        const text2 = fs12.readFileSync(rulesPath, "utf8");
-        if (text2.trim().length < MIN_MEANINGFUL_RULES_CHARS) return bundled;
+        const text3 = fs12.readFileSync(rulesPath, "utf8");
+        if (text3.trim().length < MIN_MEANINGFUL_RULES_CHARS) return bundled;
         return {
-          text: text2,
+          text: text3,
           source: "repo",
           path: rulesPath,
-          differsFromBundled: text2 !== DEFAULT_COORDINATOR_RULES
+          differsFromBundled: text3 !== DEFAULT_COORDINATOR_RULES
         };
       } catch {
         return bundled;
       }
     }
-    function splitRulesLayer(text2) {
-      const match = /^## Rules\b/m.exec(text2);
-      if (!match || match.index === void 0) return { workflow: "", rules: text2.trim() };
+    function splitRulesLayer(text3) {
+      const match = /^## Rules\b/m.exec(text3);
+      if (!match || match.index === void 0) return { workflow: "", rules: text3.trim() };
       return {
-        workflow: text2.slice(0, match.index).trim(),
-        rules: text2.slice(match.index).trim()
+        workflow: text3.slice(0, match.index).trim(),
+        rules: text3.slice(match.index).trim()
       };
     }
     var fs12;
@@ -36313,18 +36313,18 @@ ${error.message || ""}`;
         ];
       }
     });
-    function parseJsonObject(text2) {
-      if (!text2) return {};
+    function parseJsonObject(text3) {
+      if (!text3) return {};
       try {
-        const parsed = JSON.parse(text2);
+        const parsed = JSON.parse(text3);
         return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
       } catch {
         return {};
       }
     }
-    function parseSummary(text2) {
-      if (!text2) return void 0;
-      const parsed = parseJsonObject(text2);
+    function parseSummary(text3) {
+      if (!text3) return void 0;
+      const parsed = parseJsonObject(text3);
       return typeof parsed.topic === "string" && typeof parsed.writer === "string" && typeof parsed.seq === "number" ? { topic: parsed.topic, writer: parsed.writer, seq: parsed.seq } : void 0;
     }
     function attemptFromRow(row2) {
@@ -37347,18 +37347,18 @@ ${error.message || ""}`;
             result.linesSkipped++;
             continue;
           }
-          const text2 = (v) => typeof v === "string" && v ? v : null;
+          const text3 = (v) => typeof v === "string" && v ? v : null;
           try {
             insert.run(
               (0, import_crypto4.randomUUID)(),
               meshId,
-              text2(event.targetCoordinatorDaemonId),
+              text3(event.targetCoordinatorDaemonId),
               eventName,
               JSON.stringify(event),
               typeof event.queuedAt === "number" ? event.queuedAt : Date.now(),
-              text2(event.protocolVersion),
-              text2(event.eventId),
-              text2(event.scope),
+              text3(event.protocolVersion),
+              text3(event.eventId),
+              text3(event.scope),
               event.dispatchedBy ? JSON.stringify(event.dispatchedBy) : null,
               event.intendedFor ? JSON.stringify(event.intendedFor) : null
             );
@@ -37386,10 +37386,10 @@ ${error.message || ""}`;
     function turnLedgerExportPath(ledgerDir, nowMs2) {
       return `${ledgerDir.replace(/[\\/]+$/, "")}/turn-ledger-premigrate-${nowMs2}.jsonl`;
     }
-    function parseObject(text2) {
-      if (typeof text2 !== "string" || !text2) return {};
+    function parseObject(text3) {
+      if (typeof text3 !== "string" || !text3) return {};
       try {
-        const parsed = JSON.parse(text2);
+        const parsed = JSON.parse(text3);
         return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
       } catch {
         return {};
@@ -37703,11 +37703,11 @@ ${error.message || ""}`;
           const payload = parseObject(row2.payload);
           const at = ms22(row2.timestamp) ?? nowMs2;
           if (row2.kind === OPERATOR_CANCEL_KIND) {
-            const text2 = typeof payload.text === "string" ? payload.text.trim() : "";
-            if (!text2) continue;
-            if (store2.insertOperatingNote({ noteId: row2.id, meshId, text: text2, category: typeof payload.category === "string" ? payload.category : null, callerSessionId: row2.session_id, createdAt: at })) {
+            const text3 = typeof payload.text === "string" ? payload.text.trim() : "";
+            if (!text3) continue;
+            if (store2.insertOperatingNote({ noteId: row2.id, meshId, text: text3, category: typeof payload.category === "string" ? payload.category : null, callerSessionId: row2.session_id, createdAt: at })) {
               report.operatingNotes++;
-              byText.set(text2, [...byText.get(text2) ?? [], row2.id]);
+              byText.set(text3, [...byText.get(text3) ?? [], row2.id]);
             }
           } else {
             report.operatingNoteTombstones++;
@@ -37783,10 +37783,10 @@ ${error.message || ""}`;
         PENDING_EVENTS_JSONL_SUFFIX = ".pending-events.jsonl";
       }
     });
-    function parseObject2(text2) {
-      if (typeof text2 !== "string" || !text2) return {};
+    function parseObject2(text3) {
+      if (typeof text3 !== "string" || !text3) return {};
       try {
-        const v = JSON.parse(text2);
+        const v = JSON.parse(text3);
         return v && typeof v === "object" && !Array.isArray(v) ? v : {};
       } catch {
         return {};
@@ -37829,8 +37829,8 @@ ${error.message || ""}`;
         const at = Date.parse(row2.timestamp);
         const atMs = Number.isFinite(at) ? at : Date.now();
         if (row2.kind === NOTE_KIND) {
-          const text2 = str2(payload.text);
-          if (!text2) continue;
+          const text3 = str2(payload.text);
+          if (!text3) continue;
           const meta = {
             ...payload.pinned === true ? { pinned: true } : {},
             ...str2(payload.expiresAt) ? { expiresAt: str2(payload.expiresAt) } : {},
@@ -37842,14 +37842,14 @@ ${error.message || ""}`;
           if (store2.insertOperatingNote({
             noteId: row2.id,
             meshId: row2.mesh_id,
-            text: text2,
+            text: text3,
             category: str2(payload.category) ?? null,
             callerSessionId: row2.session_id,
             createdAt: Number.isFinite(created) ? created : atMs,
             meta
           })) {
             report.notesFolded++;
-            const key3 = `${row2.mesh_id}\0${text2}`;
+            const key3 = `${row2.mesh_id}\0${text3}`;
             idsByText.set(key3, [...idsByText.get(key3) ?? [], row2.id]);
           }
         } else {
@@ -37931,10 +37931,10 @@ ${error.message || ""}`;
         NOTE_TOMBSTONE_KIND = "coordinator_operating_note_tombstone";
       }
     });
-    function parsePayload(text2) {
-      if (!text2) return {};
+    function parsePayload(text3) {
+      if (!text3) return {};
       try {
-        const value = JSON.parse(text2);
+        const value = JSON.parse(text3);
         return value && typeof value === "object" && !Array.isArray(value) ? value : {};
       } catch {
         return {};
@@ -38109,10 +38109,10 @@ ${error.message || ""}`;
         };
       }
     });
-    function parseObject3(text2) {
-      if (typeof text2 !== "string" || !text2) return {};
+    function parseObject3(text3) {
+      if (typeof text3 !== "string" || !text3) return {};
       try {
-        const v = JSON.parse(text2);
+        const v = JSON.parse(text3);
         return v && typeof v === "object" && !Array.isArray(v) ? v : {};
       } catch {
         return {};
@@ -38136,13 +38136,13 @@ ${error.message || ""}`;
           continue;
         }
         report.jsonlFilesScanned++;
-        let text2 = "";
+        let text3 = "";
         try {
-          text2 = (0, import_fs9.readFileSync)(path93, "utf8");
+          text3 = (0, import_fs9.readFileSync)(path93, "utf8");
         } catch {
           continue;
         }
-        for (const line of text2.split("\n")) {
+        for (const line of text3.split("\n")) {
           if (!line.trim()) continue;
           let entry;
           try {
@@ -40169,9 +40169,9 @@ ${block2.text}`,
       if (format === "opencode_json") return "mcp";
       return "mcpServers";
     }
-    function parseMeshCoordinatorMcpConfig(text2, _format) {
-      if (!text2.trim()) return {};
-      return JSON.parse(text2);
+    function parseMeshCoordinatorMcpConfig(text3, _format) {
+      if (!text3.trim()) return {};
+      return JSON.parse(text3);
     }
     function serializeMeshCoordinatorMcpConfig(config, _format) {
       return JSON.stringify(config, null, 2);
@@ -41916,15 +41916,15 @@ ${pattern}
     function depositWorkerMailboxMessage(input) {
       const meshId = String(input.meshId || "").trim();
       const taskId = String(input.taskId || "").trim();
-      const text2 = String(input.text || "").trim();
-      if (!meshId || !taskId || !text2) {
+      const text3 = String(input.text || "").trim();
+      if (!meshId || !taskId || !text3) {
         return { ok: false, error: "invalid_input", detail: "meshId, taskId and text are all required" };
       }
-      if (text2.length > MAILBOX_TEXT_MAX_CHARS) {
+      if (text3.length > MAILBOX_TEXT_MAX_CHARS) {
         return {
           ok: false,
           error: "text_too_long",
-          detail: `message is ${text2.length} chars, over the ${MAILBOX_TEXT_MAX_CHARS} limit \u2014 shorten it`
+          detail: `message is ${text3.length} chars, over the ${MAILBOX_TEXT_MAX_CHARS} limit \u2014 shorten it`
         };
       }
       const key3 = mailboxKey(meshId, taskId);
@@ -41936,7 +41936,7 @@ ${pattern}
           detail: `task ${taskId} already holds ${list.length} undelivered message(s) \u2014 it is not reading its tool responses`
         };
       }
-      const message = { id: (0, import_crypto6.randomUUID)(), meshId, taskId, text: text2, mintedAtMs: Date.now() };
+      const message = { id: (0, import_crypto6.randomUUID)(), meshId, taskId, text: text3, mintedAtMs: Date.now() };
       list.push(message);
       PENDING.set(key3, list);
       return { ok: true, id: message.id, pending: list.length };
@@ -42084,8 +42084,8 @@ ${lines.join("\n")}
       const keys = Object.keys(obj).filter((k) => obj[k] !== void 0).sort();
       return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJson(obj[k])}`).join(",")}}`;
     }
-    function stripControlCharacters(text2) {
-      return text2.replace(/\r\n?/g, "\n").replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "");
+    function stripControlCharacters(text3) {
+      return text3.replace(/\r\n?/g, "\n").replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "");
     }
     function escapeAttribute(value) {
       return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -42239,19 +42239,19 @@ ${rendered.join("\n\n")}`,
     function buildMeshTaskModeViolationError2(result) {
       return `live_debug_readonly_guardrail_violation: forbidden operations (${result.violations.join(", ")}) \u2014 ${formatMeshTaskModeViolations(result)}`;
     }
-    function locateOffset(text2, index) {
-      const before = text2.slice(0, index);
+    function locateOffset(text3, index) {
+      const before = text3.slice(0, index);
       const line = before.split("\n").length;
       const lastNl = before.lastIndexOf("\n");
       return { line, column: index - lastNl };
     }
-    function buildViolationDetail(label2, text2, start, end) {
-      const raw = text2.slice(start, end);
+    function buildViolationDetail(label2, text3, start, end) {
+      const raw = text3.slice(start, end);
       const match = raw.length > MAX_REPORTED_MATCH_LEN ? `${raw.slice(0, MAX_REPORTED_MATCH_LEN)}\u2026` : raw;
-      return { label: label2, match, ...locateOffset(text2, start) };
+      return { label: label2, match, ...locateOffset(text3, start) };
     }
-    function hasNegationBefore(text2, matchIndex) {
-      const before = text2.slice(0, matchIndex);
+    function hasNegationBefore(text3, matchIndex) {
+      const before = text3.slice(0, matchIndex);
       const clauseStart = Math.max(
         before.lastIndexOf("\n"),
         before.lastIndexOf(". "),
@@ -42274,8 +42274,8 @@ ${rendered.join("\n\n")}`,
       }
       return false;
     }
-    function hasTrailingNegation(text2, matchEnd) {
-      const after = text2.slice(matchEnd);
+    function hasTrailingNegation(text3, matchEnd) {
+      const after = text3.slice(matchEnd);
       const clauseEnd = (() => {
         const stops = [after.indexOf("\n"), after.indexOf(". "), after.indexOf("; ")].filter((i) => i >= 0);
         return stops.length ? Math.min(...stops) : after.length;
@@ -42321,11 +42321,11 @@ ${rendered.join("\n\n")}`,
       if (sawEvidenceOnlyWrapper && !sawEvidence) return null;
       return head + rest;
     }
-    function isMutationKeywordInCommandContext(text2, matchStart, matchEnd) {
-      if (isInsideBackticksOrFence(text2, matchStart, matchEnd)) return true;
-      const lineStart = text2.lastIndexOf("\n", matchStart - 1) + 1;
-      const linePrefix = text2.slice(lineStart, matchStart);
-      if (/^\s*[$>]\s/.test(text2.slice(lineStart))) return true;
+    function isMutationKeywordInCommandContext(text3, matchStart, matchEnd) {
+      if (isInsideBackticksOrFence(text3, matchStart, matchEnd)) return true;
+      const lineStart = text3.lastIndexOf("\n", matchStart - 1) + 1;
+      const linePrefix = text3.slice(lineStart, matchStart);
+      if (/^\s*[$>]\s/.test(text3.slice(lineStart))) return true;
       if (/^\s*$/.test(linePrefix)) return true;
       const unwrapped = stripCommandWrappers(linePrefix);
       if (unwrapped !== null) {
@@ -42333,28 +42333,28 @@ ${rendered.join("\n\n")}`,
         if (/(?:&&|\|\||\||;)\s*$/.test(unwrapped)) return true;
       }
       let tokStart = matchStart;
-      while (tokStart > lineStart && !/\s/.test(text2[tokStart - 1])) tokStart--;
-      const beforeToken = text2.slice(lineStart, tokStart);
-      const tokenLead = text2.slice(tokStart, matchStart);
+      while (tokStart > lineStart && !/\s/.test(text3[tokStart - 1])) tokStart--;
+      const beforeToken = text3.slice(lineStart, tokStart);
+      const tokenLead = text3.slice(tokStart, matchStart);
       const atCmdPos = /^\s*$/.test(beforeToken) || /(?:&&|\|\||\||;)\s*$/.test(beforeToken);
       if (atCmdPos && /^(?:\.\/|\.\.\/|~\/|\/)/.test(tokenLead)) return true;
       if (/(?:&&|\|\||\||;)\s*$/.test(linePrefix)) return true;
       if (/(?:^|[\s,])(?:then|run|first)\s+$/i.test(linePrefix)) return true;
       return false;
     }
-    function isInsideBackticksOrFence(text2, matchStart, matchEnd) {
+    function isInsideBackticksOrFence(text3, matchStart, matchEnd) {
       const fenceRe = /```/g;
       let fenceCount = 0;
       let m;
-      while ((m = fenceRe.exec(text2)) !== null) {
+      while ((m = fenceRe.exec(text3)) !== null) {
         if (m.index >= matchStart) break;
         fenceCount++;
       }
       if (fenceCount % 2 === 1) return true;
       let inlineCount = 0;
       for (let i = 0; i < matchStart; i++) {
-        if (text2[i] === "`") {
-          if (text2[i + 1] === "`" && text2[i + 2] === "`") {
+        if (text3[i] === "`") {
+          if (text3[i + 1] === "`" && text3[i + 2] === "`") {
             i += 2;
             continue;
           }
@@ -42363,25 +42363,25 @@ ${rendered.join("\n\n")}`,
       }
       return inlineCount % 2 === 1;
     }
-    function isInsidePathSegment(text2, matchStart, matchEnd) {
-      const prev = matchStart > 0 ? text2[matchStart - 1] : "";
-      const next = matchEnd < text2.length ? text2[matchEnd] : "";
+    function isInsidePathSegment(text3, matchStart, matchEnd) {
+      const prev = matchStart > 0 ? text3[matchStart - 1] : "";
+      const next = matchEnd < text3.length ? text3[matchEnd] : "";
       const isSep = (c) => c === "/" || c === "\\";
       const segChar = (c) => /[A-Za-z0-9._~-]/.test(c);
       const inPath = isSep(prev) && (next === "" || isSep(next) || segChar(next) || /\s/.test(next)) || isSep(next) && (prev === "" || isSep(prev) || segChar(prev) || /\s/.test(prev));
       if (!inPath) return false;
-      const lineStart = text2.lastIndexOf("\n", matchStart - 1) + 1;
+      const lineStart = text3.lastIndexOf("\n", matchStart - 1) + 1;
       let tokStart = matchStart;
-      while (tokStart > lineStart && !/\s/.test(text2[tokStart - 1])) tokStart--;
-      const linePrefixBeforeToken = text2.slice(lineStart, tokStart);
-      const tokenPrefix = text2.slice(tokStart, matchStart);
+      while (tokStart > lineStart && !/\s/.test(text3[tokStart - 1])) tokStart--;
+      const linePrefixBeforeToken = text3.slice(lineStart, tokStart);
+      const tokenPrefix = text3.slice(tokStart, matchStart);
       const atLineStart = /^\s*$/.test(linePrefixBeforeToken);
       const afterConnective = /(?:&&|\|\||\||;)\s*$/.test(linePrefixBeforeToken);
       const isRunPrefixPath = /^(?:\.\/|\.\.\/|~\/|\/)/.test(tokenPrefix);
       if ((atLineStart || afterConnective) && isRunPrefixPath) return false;
       return true;
     }
-    function isInsideQuotedSpan(text2, matchStart, matchEnd) {
+    function isInsideQuotedSpan(text3, matchStart, matchEnd) {
       const pairs2 = [
         ["\u201C", "\u201D"],
         ["\u2018", "\u2019"],
@@ -42390,54 +42390,54 @@ ${rendered.join("\n\n")}`,
         ["\u300A", "\u300B"]
       ];
       for (const [open, close] of pairs2) {
-        const openIdx = text2.lastIndexOf(open, matchStart - 1);
+        const openIdx = text3.lastIndexOf(open, matchStart - 1);
         if (openIdx < 0) continue;
-        if (text2.indexOf(close, openIdx + open.length) >= matchEnd) return true;
+        if (text3.indexOf(close, openIdx + open.length) >= matchEnd) return true;
       }
-      const lineStart = text2.lastIndexOf("\n", matchStart - 1) + 1;
+      const lineStart = text3.lastIndexOf("\n", matchStart - 1) + 1;
       const lineEnd = (() => {
-        const i = text2.indexOf("\n", matchEnd);
-        return i < 0 ? text2.length : i;
+        const i = text3.indexOf("\n", matchEnd);
+        return i < 0 ? text3.length : i;
       })();
       for (const q of ['"', "'"]) {
         let count = 0;
-        for (let i = lineStart; i < matchStart; i++) if (text2[i] === q) count++;
-        if (count % 2 === 1 && text2.indexOf(q, matchEnd) >= 0 && text2.indexOf(q, matchEnd) < lineEnd) {
+        for (let i = lineStart; i < matchStart; i++) if (text3[i] === q) count++;
+        if (count % 2 === 1 && text3.indexOf(q, matchEnd) >= 0 && text3.indexOf(q, matchEnd) < lineEnd) {
           if (q === '"') return true;
           let openPos = -1, c = 0;
           for (let i = lineStart; i < matchStart; i++) {
-            if (text2[i] === q) {
+            if (text3[i] === q) {
               c++;
               if (c % 2 === 1) openPos = i;
             }
           }
-          const beforeOpen = openPos > lineStart ? text2[openPos - 1] : " ";
+          const beforeOpen = openPos > lineStart ? text3[openPos - 1] : " ";
           if (/[\s(\[{>]/.test(beforeOpen) || openPos === lineStart) return true;
         }
       }
       return false;
     }
-    function isGluedToLetterSuffix(text2, matchStart, matchEnd) {
+    function isGluedToLetterSuffix(text3, matchStart, matchEnd) {
       const letterOrMark = /[\p{L}\p{M}]/u;
-      const next = matchEnd < text2.length ? text2[matchEnd] : "";
-      const prev = matchStart > 0 ? text2[matchStart - 1] : "";
+      const next = matchEnd < text3.length ? text3[matchEnd] : "";
+      const prev = matchStart > 0 ? text3[matchStart - 1] : "";
       return letterOrMark.test(next) || letterOrMark.test(prev);
     }
-    function isRealMutationMatch(text2, matchStart, matchEnd) {
-      if (hasNegationBefore(text2, matchStart)) return false;
-      if (hasTrailingNegation(text2, matchEnd)) return false;
-      if (isGluedToLetterSuffix(text2, matchStart, matchEnd)) return false;
-      if (isInsidePathSegment(text2, matchStart, matchEnd)) return false;
-      if (isInsideQuotedSpan(text2, matchStart, matchEnd)) return false;
-      return isMutationKeywordInCommandContext(text2, matchStart, matchEnd);
+    function isRealMutationMatch(text3, matchStart, matchEnd) {
+      if (hasNegationBefore(text3, matchStart)) return false;
+      if (hasTrailingNegation(text3, matchEnd)) return false;
+      if (isGluedToLetterSuffix(text3, matchStart, matchEnd)) return false;
+      if (isInsidePathSegment(text3, matchStart, matchEnd)) return false;
+      if (isInsideQuotedSpan(text3, matchStart, matchEnd)) return false;
+      return isMutationKeywordInCommandContext(text3, matchStart, matchEnd);
     }
-    function findRealMutation(pattern, text2) {
+    function findRealMutation(pattern, text3) {
       const re = new RegExp(pattern.source, pattern.flags.includes("g") ? pattern.flags : pattern.flags + "g");
       let match;
-      while ((match = re.exec(text2)) !== null) {
+      while ((match = re.exec(text3)) !== null) {
         const start = match.index;
         const end = match.index + match[0].length;
-        if (isRealMutationMatch(text2, start, end)) return { start, end };
+        if (isRealMutationMatch(text3, start, end)) return { start, end };
         if (match.index === re.lastIndex) re.lastIndex++;
       }
       return null;
@@ -42486,15 +42486,15 @@ ${rendered.join("\n\n")}`,
       if (!isReadonly) {
         return taskMode ? { valid: true, taskMode, violations: [] } : { valid: true, violations: [] };
       }
-      const text2 = message || "";
+      const text3 = message || "";
       const violationDetails = [];
       for (const rule of LIVE_DEBUG_READONLY_FORBIDDEN) {
-        const hit = findRealMutation(rule.pattern, text2);
-        if (hit) violationDetails.push(buildViolationDetail(rule.label, text2, hit.start, hit.end));
+        const hit = findRealMutation(rule.pattern, text3);
+        if (hit) violationDetails.push(buildViolationDetail(rule.label, text3, hit.start, hit.end));
       }
-      const gitHit = detectGitMutation(text2);
+      const gitHit = detectGitMutation(text3);
       if (gitHit) {
-        violationDetails.push(buildViolationDetail("git_mutation", text2, gitHit.start, gitHit.end));
+        violationDetails.push(buildViolationDetail("git_mutation", text3, gitHit.start, gitHit.end));
       }
       const violations = violationDetails.map((d) => d.label);
       return {
@@ -43322,11 +43322,11 @@ ${rendered.join("\n\n")}`,
       if (!report) return {};
       return { ...report.summary ? { summary: report.summary } : {}, textEventId: report.eventId };
     }
-    function commit(draft, outcome, strength, reason, text2) {
+    function commit(draft, outcome, strength, reason, text3) {
       const attempt = draft.attempt;
       const ev = draft.ctx.evidence;
-      const held = text2 ?? heldText(draft);
-      const summary = text2 ? text2.summary : summaryOf(ev) ?? held.summary;
+      const held = text3 ?? heldText(draft);
+      const summary = text3 ? text3.summary : summaryOf(ev) ?? held.summary;
       attempt.state = outcome;
       attempt.suspension = null;
       attempt.terminal = { outcome, reason, source: ev.source, strength, at: ev.at, ...summary ? { summary } : {} };
@@ -44018,15 +44018,15 @@ ${rendered.join("\n\n")}`,
     }
     function resolve14(ref, resolveRef, missing) {
       if (!ref) return null;
-      const text2 = resolveRef(ref);
-      if (text2 === null) missing.push(ref);
-      return text2;
+      const text3 = resolveRef(ref);
+      if (text3 === null) missing.push(ref);
+      return text3;
     }
-    function truncate(text2, maxChars, suffix) {
-      return text2.length > maxChars ? `${text2.slice(0, maxChars - suffix.length)}${suffix}` : text2;
+    function truncate(text3, maxChars, suffix) {
+      return text3.length > maxChars ? `${text3.slice(0, maxChars - suffix.length)}${suffix}` : text3;
     }
-    function truncateAppend(text2, maxChars, suffix) {
-      return text2.length > maxChars ? `${text2.slice(0, maxChars)}${suffix}` : text2;
+    function truncateAppend(text3, maxChars, suffix) {
+      return text3.length > maxChars ? `${text3.slice(0, maxChars)}${suffix}` : text3;
     }
     function formatMetadataSuffix(s2) {
       const m = s2.completionMetadata;
@@ -44041,9 +44041,9 @@ ${rendered.join("\n\n")}`,
       ].filter(Boolean);
       return parts.length > 0 ? ` (${parts.join("; ")})` : "";
     }
-    function appendStatusLine(text2, statusLine) {
-      return statusLine ? `${text2}
-${statusLine}` : text2;
+    function appendStatusLine(text3, statusLine) {
+      return statusLine ? `${text3}
+${statusLine}` : text3;
     }
     function renderCompleted(input, missing) {
       const s2 = input.scalars;
@@ -44284,8 +44284,8 @@ ${summary}`;
       const missing = [];
       const renderer = RENDERERS[input.notify];
       const rendered = renderer(input, missing);
-      const text2 = input.notify === "approval_resolved" ? rendered : appendStatusLine(rendered, input.statusLine);
-      return { text: text2, kind: input.notify, contentRefsMissing: missing };
+      const text3 = input.notify === "approval_resolved" ? rendered : appendStatusLine(rendered, input.statusLine);
+      return { text: text3, kind: input.notify, contentRefsMissing: missing };
     }
     var MESH_COMPLETION_SURFACE_MAX_CHARS;
     var RECOVERY_PROMPT_TRUNCATE_CHARS;
@@ -44426,9 +44426,9 @@ ${summary}`;
       const resultRecord = readOptionalRecord2(metadataEvent.result);
       return readText(metadataEvent.finalSummary) || readText(workerResult?.summary) || readText(workerResult?.finalSummary) || readText(resultRecord?.summary) || readText(resultRecord?.finalSummary);
     }
-    function truncateSurfacedPreview(text2) {
+    function truncateSurfacedPreview(text3) {
       const truncationSuffix = "...[truncated]";
-      return text2.length > MESH_SURFACED_PREVIEW_MAX_CHARS ? `${text2.slice(0, MESH_SURFACED_PREVIEW_MAX_CHARS - truncationSuffix.length)}${truncationSuffix}` : text2;
+      return text3.length > MESH_SURFACED_PREVIEW_MAX_CHARS ? `${text3.slice(0, MESH_SURFACED_PREVIEW_MAX_CHARS - truncationSuffix.length)}${truncationSuffix}` : text3;
     }
     function resolveMeshSurfacedSessionPreview2(metadataEvent) {
       const summaryText = readMeshCompletionSummary(metadataEvent);
@@ -44969,25 +44969,25 @@ Next step: ${nextStep}`;
         const source2 = localPayload2 && !str3(localPayload2.relayedFrom) ? localPayload2 : handoff;
         const eventName = str3(source2?.event) ?? (event && event !== "relayed" ? event : null);
         const nodeLabel = str3(source2?.nodeLabel) ?? "Mesh";
-        let text2 = str3(source2?.coordinatorMessage) ?? null;
-        if (!text2 && source2 && eventName) {
-          text2 = buildMeshSystemMessage({
+        let text3 = str3(source2?.coordinatorMessage) ?? null;
+        if (!text3 && source2 && eventName) {
+          text3 = buildMeshSystemMessage({
             event: eventName,
             nodeLabel,
             metadataEvent: isRecord6(source2.metadataEvent) ? source2.metadataEvent : {},
             worktreeHasQueuedTask: source2.worktreeHasQueuedTask === true
           }) || null;
         }
-        if (!text2) {
-          text2 = missing ? `[System] A mesh notice${str3(entry.taskId) ? ` for task ${str3(entry.taskId)}` : ""} is not yet available on this daemon \u2014 call mesh_task_report once it replicates; do not poll repeatedly.` : `[System] ${nodeLabel} reported a mesh event${str3(entry.taskId) ? ` for task ${str3(entry.taskId)}` : ""}. Use mesh_status or mesh_read_chat once if you need details.`;
+        if (!text3) {
+          text3 = missing ? `[System] A mesh notice${str3(entry.taskId) ? ` for task ${str3(entry.taskId)}` : ""} is not yet available on this daemon \u2014 call mesh_task_report once it replicates; do not poll repeatedly.` : `[System] ${nodeLabel} reported a mesh event${str3(entry.taskId) ? ` for task ${str3(entry.taskId)}` : ""}. Use mesh_status or mesh_read_chat once if you need details.`;
         }
         if (eventName && shouldForceInjectMeshEvent(eventName)) {
           const line = ctx.statusLine?.(meshId);
-          if (line) text2 = `${text2}
+          if (line) text3 = `${text3}
 
 ${line}`;
         }
-        return { text: text2, notify: notify2, event: eventName, missing };
+        return { text: text3, notify: notify2, event: eventName, missing };
       }
       const attemptId = str3(entry.attemptId);
       const attempt = attemptId ? ctx.ledger.getAttempt(attemptId) : null;
@@ -58226,12 +58226,12 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     }
     function put(db, side, envelope) {
       ensureBridgeSchema(db);
-      const digest = bridgeDigest(envelope), existing = row(db, side, envelope.senderDaemonId, envelope.deliveryId);
+      const digest2 = bridgeDigest(envelope), existing = row(db, side, envelope.senderDaemonId, envelope.deliveryId);
       if (existing) {
-        if (existing.digest !== digest) throw new Error("worker_delivery_identity_conflict");
+        if (existing.digest !== digest2) throw new Error("worker_delivery_identity_conflict");
         return existing;
       }
-      db.prepare("INSERT INTO worker_bridge_delivery(side,sender_id,delivery_id,mesh_id,envelope_json,digest,state) VALUES (?,?,?,?,?,?,'pending')").run(side, envelope.senderDaemonId, envelope.deliveryId, envelope.meshId, stableBridgeJson(envelope), digest);
+      db.prepare("INSERT INTO worker_bridge_delivery(side,sender_id,delivery_id,mesh_id,envelope_json,digest,state) VALUES (?,?,?,?,?,?,'pending')").run(side, envelope.senderDaemonId, envelope.deliveryId, envelope.meshId, stableBridgeJson(envelope), digest2);
       return row(db, side, envelope.senderDaemonId, envelope.deliveryId);
     }
     function quarantine(db, e, reason) {
@@ -59122,11 +59122,11 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       const baseRefs = (options?.baseRefs || []).filter((ref) => typeof ref === "string" && ref.trim().length > 0);
       for (const ref of baseRefs) {
         for (const relative13 of MESH_REFINE_CONFIG_LOCATIONS) {
-          const text2 = readConfigFromBaseRef(options?.gitCwd || workspace, ref.trim(), relative13);
-          if (text2 === void 0) continue;
+          const text3 = readConfigFromBaseRef(options?.gitCwd || workspace, ref.trim(), relative13);
+          if (text3 === void 0) continue;
           const source2 = `${ref.trim()}:${relative13}`;
           try {
-            const parsed = parseConfigText(relative13, text2);
+            const parsed = parseConfigText(relative13, text3);
             const validation = validateMeshRefineConfig(parsed, source2);
             if (!validation.valid) return { source: source2, sourceType: "invalid", baseRef: ref.trim(), error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
             return { config: parsed, source: source2, sourceType: "repo_file", baseRef: ref.trim() };
@@ -59517,10 +59517,10 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       return !(isWorktreeBootstrapStaleRunning(node, nowMs2) || isRemoteWorktreeBootstrapStaleRunning(node, nowMs2));
     }
     function truncateOutput(value) {
-      const text2 = typeof value === "string" ? value : value == null ? "" : String(value);
-      if (text2.length <= OUTPUT_SUMMARY_CHARS) return text2;
-      return `${text2.slice(0, OUTPUT_SUMMARY_CHARS)}
-[truncated ${text2.length - OUTPUT_SUMMARY_CHARS} chars]`;
+      const text3 = typeof value === "string" ? value : value == null ? "" : String(value);
+      if (text3.length <= OUTPUT_SUMMARY_CHARS) return text3;
+      return `${text3.slice(0, OUTPUT_SUMMARY_CHARS)}
+[truncated ${text3.length - OUTPUT_SUMMARY_CHARS} chars]`;
     }
     function validateMeshWorktreeBootstrapConfig(config, source2 = "inline") {
       const errors = [];
@@ -59568,16 +59568,16 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       return { source: "unavailable", sourceType: "unavailable", error: `No worktree bootstrap config found. Checked: ${MESH_WORKTREE_BOOTSTRAP_CONFIG_LOCATIONS.join(", ")}` };
     }
     function computeStaleInputsDigest(workspace, staleInputs) {
-      const digest = {};
+      const digest2 = {};
       for (const relative13 of staleInputs ?? []) {
         const filePath2 = (0, import_path11.join)(workspace, relative13);
         try {
-          digest[relative13] = (0, import_node_crypto32.createHash)("sha256").update((0, import_fs17.readFileSync)(filePath2)).digest("hex");
+          digest2[relative13] = (0, import_node_crypto32.createHash)("sha256").update((0, import_fs17.readFileSync)(filePath2)).digest("hex");
         } catch {
-          digest[relative13] = "absent";
+          digest2[relative13] = "absent";
         }
       }
-      return digest;
+      return digest2;
     }
     function evaluateWorktreeBootstrapState(mesh, workspace, persisted) {
       const loaded = loadMeshWorktreeBootstrapConfig(mesh, workspace);
@@ -62811,11 +62811,11 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       return rows.map(toEntry);
     }
     function recordOperatingNote(meshId, input) {
-      const text2 = input.text.trim();
-      if (!text2) throw new Error("recordOperatingNote requires non-empty text");
+      const text3 = input.text.trim();
+      if (!text3) throw new Error("recordOperatingNote requires non-empty text");
       const store2 = turnStore();
       const live = store2.listOperatingNotes(meshId).filter((r) => !r.meta.textTombstone);
-      const existing = live.slice(-OPERATING_NOTE_DEDUPE_WINDOW).find((r) => r.text.trim() === text2);
+      const existing = live.slice(-OPERATING_NOTE_DEDUPE_WINDOW).find((r) => r.text.trim() === text3);
       if (existing) return toEntry(existing);
       const nowMs2 = input.createdAtMs ?? Date.now();
       const meta = {
@@ -62828,14 +62828,14 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       const row2 = {
         noteId: (0, import_crypto15.randomUUID)(),
         meshId,
-        text: text2,
+        text: text3,
         category: input.category ?? null,
         callerSessionId: input.callerSessionId ?? null,
         createdAt: nowMs2,
         meta
       };
       store2.insertOperatingNote(row2);
-      const retracted = store2.listOperatingNotes(meshId, { includeTombstoned: true }).some((r) => r.meta.textTombstone && r.text.trim() === text2);
+      const retracted = store2.listOperatingNotes(meshId, { includeTombstoned: true }).some((r) => r.meta.textTombstone && r.text.trim() === text3);
       if (retracted) store2.tombstoneOperatingNote(meshId, row2.noteId, nowMs2);
       try {
         pruneOperatingNotes(meshId);
@@ -62845,23 +62845,23 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     }
     function forgetOperatingNote(meshId, target) {
       const noteId = typeof target.noteId === "string" ? target.noteId.trim() : "";
-      const text2 = typeof target.text === "string" ? target.text.trim() : "";
-      if (!noteId && !text2) throw new Error("forgetOperatingNote requires a noteId or text target");
+      const text3 = typeof target.text === "string" ? target.text.trim() : "";
+      if (!noteId && !text3) throw new Error("forgetOperatingNote requires a noteId or text target");
       const store2 = turnStore();
       const nowMs2 = Date.now();
       let matched = 0;
       for (const note2 of store2.listOperatingNotes(meshId)) {
         if (note2.meta.textTombstone) continue;
-        if (noteId && note2.noteId === noteId || text2 && note2.text.trim() === text2) {
+        if (noteId && note2.noteId === noteId || text3 && note2.text.trim() === text3) {
           if (store2.tombstoneOperatingNote(meshId, note2.noteId, nowMs2)) matched += 1;
         }
       }
       const tombstoneId = (0, import_crypto15.randomUUID)();
-      if (text2) {
+      if (text3) {
         store2.insertOperatingNote({
           noteId: tombstoneId,
           meshId,
-          text: text2,
+          text: text3,
           category: null,
           callerSessionId: null,
           createdAt: nowMs2,
@@ -63139,8 +63139,8 @@ ${buildSafetyTailSection(coordinatorCliType)}`,
       lines.push("", "_Use `mesh_status` for node health and capacity before delegating work \u2014 never to check on a running worker's progress; completion, progress and blocked reports arrive as events (see Workers)._");
       return lines.join("\n");
     }
-    function indentFollowing(text2, pad) {
-      const lines = text2.split("\n");
+    function indentFollowing(text3, pad) {
+      const lines = text3.split("\n");
       if (lines.length === 1) return lines[0];
       return [lines[0], ...lines.slice(1).map((l) => pad + l)].join("\n");
     }
@@ -63186,8 +63186,8 @@ ${buildSafetyTailSection(coordinatorCliType)}`,
     function deriveSubjectKey(note2) {
       const explicit = typeof note2.subjectKey === "string" ? note2.subjectKey.trim().toLowerCase() : "";
       if (explicit) return explicit;
-      const text2 = typeof note2.text === "string" ? note2.text.trimStart() : "";
-      const m = /^\[([^\]]{1,80})\]/.exec(text2);
+      const text3 = typeof note2.text === "string" ? note2.text.trimStart() : "";
+      const m = /^\[([^\]]{1,80})\]/.exec(text3);
       const tag = m ? m[1].trim().toLowerCase() : "";
       return tag || void 0;
     }
@@ -63293,9 +63293,9 @@ ${buildSafetyTailSection(coordinatorCliType)}`,
       }
       return lines.join("\n");
     }
-    function truncateNote(text2) {
-      if (text2.length <= OPERATING_NOTE_MAX_CHARS) return text2;
-      return `${text2.slice(0, OPERATING_NOTE_MAX_CHARS).trimEnd()}\u2026 [truncated]`;
+    function truncateNote(text3) {
+      if (text3.length <= OPERATING_NOTE_MAX_CHARS) return text3;
+      return `${text3.slice(0, OPERATING_NOTE_MAX_CHARS).trimEnd()}\u2026 [truncated]`;
     }
     function buildBrainPresetsSection() {
       let brains;
@@ -64794,16 +64794,16 @@ ${rendered}`, "utf-8");
       const [before, after] = w.split("{prompt}");
       return { open: (before ?? "").trim(), close: (after ?? "").trim() };
     }
-    function escapeRegExp(text2) {
-      return text2.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    function escapeRegExp(text3) {
+      return text3.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     }
     function wrapperBlockPattern(sentinels) {
       const open = escapeRegExp(sentinels.open);
       return sentinels.close ? new RegExp(`${open}[\\s\\S]*?${escapeRegExp(sentinels.close)}`, "g") : new RegExp(`${open}[\\s\\S]*$`, "g");
     }
-    function removeWrapperBlock(text2, sentinels) {
-      if (!sentinels.open) return text2;
-      return text2.replace(wrapperBlockPattern(sentinels), "");
+    function removeWrapperBlock(text3, sentinels) {
+      if (!sentinels.open) return text3;
+      return text3.replace(wrapperBlockPattern(sentinels), "");
     }
     function stripCoordinatorWrapperFile(filePath2, owned = false, sentinels = LEGACY_COORDINATOR_WRAPPER_SENTINELS) {
       try {
@@ -65071,10 +65071,10 @@ ${rendered}`, "utf-8");
       }
     });
     function extractJsonObjectFromSummary(summary) {
-      const text2 = readString2(summary);
-      if (!text2) return void 0;
-      const fenced = text2.match(/```(?:json)?\s*([\s\S]*?)```/i);
-      const candidates = [fenced?.[1], text2].filter(Boolean);
+      const text3 = readString2(summary);
+      if (!text3) return void 0;
+      const fenced = text3.match(/```(?:json)?\s*([\s\S]*?)```/i);
+      const candidates = [fenced?.[1], text3].filter(Boolean);
       for (const candidate of candidates) {
         const trimmed2 = candidate.trim();
         if (!trimmed2.startsWith("{") || !trimmed2.endsWith("}")) continue;
@@ -65204,10 +65204,10 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       };
     }
     function summaryHasParseableJsonAnswer(summary) {
-      const text2 = readString2(summary);
-      if (!text2) return false;
-      const fenced = text2.match(/```(?:json)?\s*([\s\S]*?)```/i);
-      const candidates = [fenced?.[1], text2].filter(Boolean);
+      const text3 = readString2(summary);
+      if (!text3) return false;
+      const fenced = text3.match(/```(?:json)?\s*([\s\S]*?)```/i);
+      const candidates = [fenced?.[1], text3].filter(Boolean);
       for (const candidate of candidates) {
         const trimmed2 = candidate.trim();
         if (!trimmed2.startsWith("{") || !trimmed2.endsWith("}")) continue;
@@ -65707,9 +65707,9 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       }
       return { taskId, atMs };
     }
-    function truncateChars(text2, max) {
-      const chars = Array.from(text2);
-      if (chars.length <= max) return { text: text2, truncated: false };
+    function truncateChars(text3, max) {
+      const chars = Array.from(text3);
+      if (chars.length <= max) return { text: text3, truncated: false };
       return { text: `${chars.slice(0, max - 1).join("")}\u2026`, truncated: true };
     }
     function render(taskId, items, omitted) {
@@ -65718,7 +65718,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       const segmentKinds = [];
       for (const item of items) {
         if (item.summary) {
-          const { text: text2, truncated } = truncateChars(item.summary, UPSTREAM_RESULT_MAX_CHARS);
+          const { text: text3, truncated } = truncateChars(item.summary, UPSTREAM_RESULT_MAX_CHARS);
           blocks.push({
             attributes: {
               kind: "upstream_result",
@@ -65728,7 +65728,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
               sha256: sha256Hex(item.summary),
               ...truncated ? { truncated: true } : {}
             },
-            text: text2
+            text: text3
           });
           segmentKinds.push("block");
         } else {
@@ -65758,8 +65758,8 @@ ${preamble ? `${preamble}
       const all = predecessorIds.map((id4) => loadPredecessor(meshId, id4)).sort((a, b) => a.atMs - b.atMs || a.taskId.localeCompare(b.taskId));
       for (let drop = 0; drop < all.length; drop += 1) {
         const kept = all.slice(drop);
-        const text2 = render(task.id, kept, drop);
-        if (Buffer.byteLength(text2, "utf8") <= UPSTREAM_RESULTS_MAX_BYTES || kept.length === 1) return text2;
+        const text3 = render(task.id, kept, drop);
+        if (Buffer.byteLength(text3, "utf8") <= UPSTREAM_RESULTS_MAX_BYTES || kept.length === 1) return text3;
       }
       return null;
     }
@@ -66683,21 +66683,21 @@ ${upstream}`;
       if (s2 && nodeId && !s2.nodeRoster.some((n) => meshIds.includes(n.meshId) && n.nodeId === nodeId && n.daemonId === (daemonId || s2.daemonId))) throw new Error("maintenance_unknown_node_or_owner");
     }
     function assertMaintenanceCommandIdentity(args) {
-      const text2 = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
+      const text3 = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
       const settings2 = args?.settings || {}, member = args?.memberNode || {}, context2 = args?.meshContext || {};
-      const meshes = [args?.meshId, args?.meshNodeFor, args?.meshCoordinatorFor, context2.meshId, settings2.meshNodeFor, settings2.meshCoordinatorFor].map(text2).filter((v) => !!v);
+      const meshes = [args?.meshId, args?.meshNodeFor, args?.meshCoordinatorFor, context2.meshId, settings2.meshNodeFor, settings2.meshCoordinatorFor].map(text3).filter((v) => !!v);
       assertMaintenanceAdmission(meshes);
-      const rootMesh = text2(args?.meshId) || text2(args?.meshNodeFor);
+      const rootMesh = text3(args?.meshId) || text3(args?.meshNodeFor);
       for (const [node, owner, mesh] of [
         [args?.nodeId, args?.daemonId, rootMesh],
         [args?.meshNodeId, args?.daemonId, rootMesh],
-        [context2.nodeId, context2.daemonId, text2(context2.meshId) || rootMesh],
-        [settings2.meshNodeId, settings2.daemonId, text2(settings2.meshNodeFor) || text2(settings2.meshCoordinatorFor) || rootMesh],
-        [text2(settings2.meshCoordinatorFor) ? settings2.meshNodeId : void 0, settings2.daemonId, text2(settings2.meshCoordinatorFor)],
+        [context2.nodeId, context2.daemonId, text3(context2.meshId) || rootMesh],
+        [settings2.meshNodeId, settings2.daemonId, text3(settings2.meshNodeFor) || text3(settings2.meshCoordinatorFor) || rootMesh],
+        [text3(settings2.meshCoordinatorFor) ? settings2.meshNodeId : void 0, settings2.daemonId, text3(settings2.meshCoordinatorFor)],
         [args?.memberNodeId, member.daemonId, rootMesh],
         [member.id, member.daemonId, rootMesh]
       ]) {
-        assertMaintenanceCommandNode(text2(mesh) ? [text2(mesh)] : [], text2(node), text2(owner));
+        assertMaintenanceCommandNode(text3(mesh) ? [text3(mesh)] : [], text3(node), text3(owner));
       }
     }
     function assertMaintenanceJoin(meshId, nodeId, daemonId) {
@@ -66708,6 +66708,20 @@ ${upstream}`;
     function assertMaintenanceNode(meshId, nodeId, daemonId) {
       const s2 = readCooperativeMaintenance();
       if (s2 && !s2.nodeRoster.some((n) => n.meshId === meshId && n.nodeId === nodeId && n.daemonId === (daemonId || s2.daemonId))) throw new Error("maintenance_unknown_node_or_owner");
+    }
+    async function withMaintenanceObservation(run3) {
+      const state2 = readCooperativeMaintenance();
+      if (!state2 || !maintenanceHeld() || process.platform === "win32") throw new Error("maintenance_held_observation_required");
+      const release2 = maintenanceLock(path27.resolve(getConfigDir()));
+      const snapshot = JSON.stringify(state2);
+      try {
+        if (JSON.stringify(readCooperativeMaintenance()) !== snapshot) throw new Error("maintenance_epoch_changed");
+        const result = await run3(state2);
+        if (JSON.stringify(readCooperativeMaintenance()) !== snapshot) throw new Error("maintenance_epoch_changed");
+        return result;
+      } finally {
+        release2();
+      }
     }
     async function withMaintenanceAdmission(run3) {
       assertMaintenanceAdmission();
@@ -67132,8 +67146,8 @@ ${upstream}`;
         if (!msg) continue;
         const classification = classifyChatMessageVisibility(msg);
         if (classification.isUserFacing && (msg.role === "assistant" || msg.role === "model")) {
-          const text2 = flattenContent(msg.content).trim();
-          if (text2) return text2.slice(0, maxChars);
+          const text3 = flattenContent(msg.content).trim();
+          if (text3) return text3.slice(0, maxChars);
         }
       }
       return "";
@@ -67168,8 +67182,8 @@ ${upstream}`;
         }
         const classification = classifyChatMessageVisibility(msg);
         if (classification.isUserFacing && (msg.role === "assistant" || msg.role === "model")) {
-          const text2 = flattenContent(msg.content).trim();
-          if (text2) return text2.slice(0, maxChars);
+          const text3 = flattenContent(msg.content).trim();
+          if (text3) return text3.slice(0, maxChars);
         }
       }
       return "";
@@ -67191,9 +67205,9 @@ ${upstream}`;
         const classification = classifyChatMessageVisibility(msg);
         if (!classification.isUserFacing) continue;
         if (msg.role === "assistant" || msg.role === "model") {
-          const text2 = flattenContent(msg.content).trim();
-          if (!text2) return null;
-          if (chromeFallbacks < FINAL_SUMMARY_CHROME_FALLBACK_MAX_DEPTH && isTranscriptChromeOnlyText(text2)) {
+          const text3 = flattenContent(msg.content).trim();
+          if (!text3) return null;
+          if (chromeFallbacks < FINAL_SUMMARY_CHROME_FALLBACK_MAX_DEPTH && isTranscriptChromeOnlyText(text3)) {
             chromeFallbacks++;
             continue;
           }
@@ -67210,8 +67224,8 @@ ${upstream}`;
       }
       return null;
     }
-    function isTranscriptChromeOnlyText(text2) {
-      const lines = (typeof text2 === "string" ? text2 : "").split("\n").map((line) => line.trim()).filter((line) => line.length > 0);
+    function isTranscriptChromeOnlyText(text3) {
+      const lines = (typeof text3 === "string" ? text3 : "").split("\n").map((line) => line.trim()).filter((line) => line.length > 0);
       if (lines.length === 0) return false;
       let sawHardChrome = false;
       let previousWasPanelLine = false;
@@ -68321,8 +68335,8 @@ ${upstream}`;
         savedHistoryRollupInFlight = /* @__PURE__ */ new Set();
       }
     });
-    function normalizeHistoryComparable(text2) {
-      return String(text2 || "").replace(/\s+/g, " ").trim();
+    function normalizeHistoryComparable(text3) {
+      return String(text3 || "").replace(/\s+/g, " ").trim();
     }
     function cleanupHistoryContent(agentType, role, content, historyBehavior) {
       let value = String(content || "").replace(/\r\n/g, "\n").trim();
@@ -69167,8 +69181,8 @@ ${upstream}`;
     }
     function normalizeNativeIdToken(raw) {
       if (typeof raw !== "string" && typeof raw !== "number") return "";
-      const text2 = String(raw).trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "_");
-      return text2.slice(0, NATIVE_ID_TOKEN_MAX_BYTES);
+      const text3 = String(raw).trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "_");
+      return text3.slice(0, NATIVE_ID_TOKEN_MAX_BYTES);
     }
     function nativeSourceAddress(historySessionId, addr) {
       const session = typeof historySessionId === "string" ? historySessionId.trim() : "";
@@ -80284,8 +80298,8 @@ ${cleanBody}`;
       const skipped = [];
       for (const entry of entries) {
         const algorithm = typeof entry.digestAlgorithm === "string" ? entry.digestAlgorithm : null;
-        const digest = typeof entry.bundleDigest === "string" ? entry.bundleDigest : null;
-        if (!digest || !algorithm || algorithm === LEGACY_UNVERIFIED_ALGORITHM) {
+        const digest2 = typeof entry.bundleDigest === "string" ? entry.bundleDigest : null;
+        if (!digest2 || !algorithm || algorithm === LEGACY_UNVERIFIED_ALGORITHM) {
           skipped.push({
             entry,
             code: "ENTRY_NON_ACTIVATABLE",
@@ -80301,15 +80315,15 @@ ${cleanBody}`;
           });
           continue;
         }
-        if (!BUNDLE_DIGEST_RE.test(digest)) {
+        if (!BUNDLE_DIGEST_RE.test(digest2)) {
           skipped.push({
             entry,
             code: "ENTRY_DIGEST_INVALID",
-            reason: `provider "${entry.providerType}" has malformed bundleDigest "${digest}" \u2014 not activated`
+            reason: `provider "${entry.providerType}" has malformed bundleDigest "${digest2}" \u2014 not activated`
           });
           continue;
         }
-        activatable.push({ ...entry, bundleDigest: digest, digestAlgorithm: algorithm });
+        activatable.push({ ...entry, bundleDigest: digest2, digestAlgorithm: algorithm });
       }
       return { activatable, skipped };
     }
@@ -82417,36 +82431,36 @@ ${cleanBody}`;
       if (!/[0-9]/.test(run3) || !/[A-Za-z]/.test(run3)) return false;
       return /[A-Za-z0-9]{20,}/.test(run3);
     }
-    function detectCredential(text2) {
+    function detectCredential(text3) {
       for (const p of CREDENTIAL_PATTERNS) {
-        if (p.re.test(text2)) return p.id;
+        if (p.re.test(text3)) return p.id;
       }
-      for (const m of text2.matchAll(BASE64_RUN)) {
+      for (const m of text3.matchAll(BASE64_RUN)) {
         if (looksLikeBase64Secret(m[0])) return "long_base64";
       }
       return null;
     }
-    function detectHiddenChars(text2) {
-      if (BIDI_CONTROL.test(text2)) return "bidi_control";
-      if (TAG_CHAR.test(text2)) return "tag_char";
-      if (ZERO_WIDTH.test(text2.replace(EMOJI_ZWJ, ""))) return "zero_width";
+    function detectHiddenChars(text3) {
+      if (BIDI_CONTROL.test(text3)) return "bidi_control";
+      if (TAG_CHAR.test(text3)) return "tag_char";
+      if (ZERO_WIDTH.test(text3.replace(EMOJI_ZWJ, ""))) return "zero_width";
       return null;
     }
-    function detectInjection(text2) {
-      for (const p of INJECTION_PATTERNS) if (p.re.test(text2)) return p.id;
+    function detectInjection(text3) {
+      for (const p of INJECTION_PATTERNS) if (p.re.test(text3)) return p.id;
       return null;
     }
-    function scanWriteContent(text2) {
-      const hidden = detectHiddenChars(text2);
+    function scanWriteContent(text3) {
+      const hidden = detectHiddenChars(text3);
       if (hidden) return { kind: "hidden_chars", pattern: hidden };
-      const inj = detectInjection(text2);
+      const inj = detectInjection(text3);
       if (inj) return { kind: "injection", pattern: inj };
       return null;
     }
-    function scanStoredContent(text2) {
-      const w = scanWriteContent(text2);
+    function scanStoredContent(text3) {
+      const w = scanWriteContent(text3);
       if (w) return w;
-      const cred = detectCredential(text2);
+      const cred = detectCredential(text3);
       return cred ? { kind: "credential", pattern: cred } : null;
     }
     function classifyWriteOrigin(delivered, opts = {}) {
@@ -82569,7 +82583,7 @@ ${cleanBody}`;
       const finding = scanStoredContent(entry);
       return finding ? finding.kind : null;
     }
-    function parseMemoryEntries(text2) {
+    function parseMemoryEntries(text3) {
       const entries = [];
       let current4 = [];
       const flush = () => {
@@ -82577,7 +82591,7 @@ ${cleanBody}`;
         if (e) entries.push(e);
         current4 = [];
       };
-      for (const line of text2.replace(/\r\n?/g, "\n").split("\n")) {
+      for (const line of text3.replace(/\r\n?/g, "\n").split("\n")) {
         if (line.trim() === "\xA7") flush();
         else current4.push(line);
       }
@@ -82688,16 +82702,16 @@ ${cleanBody}`;
             const empty = { target, entries: [], invalid: [], used: 0, budget };
             const path93 = this.filePath(target);
             if (!(0, import_fs27.existsSync)(path93)) return empty;
-            let text2;
+            let text3;
             try {
               const bytes = (0, import_fs27.readFileSync)(path93);
-              text2 = bytes.toString("utf8");
-              if (!Buffer.from(text2, "utf8").equals(bytes)) return { ...empty, unreadable: "invalid utf-8" };
-              if (text2.startsWith("\uFEFF")) text2 = text2.slice(1);
+              text3 = bytes.toString("utf8");
+              if (!Buffer.from(text3, "utf8").equals(bytes)) return { ...empty, unreadable: "invalid utf-8" };
+              if (text3.startsWith("\uFEFF")) text3 = text3.slice(1);
             } catch (err) {
               return { ...empty, unreadable: err instanceof Error ? err.message : String(err) };
             }
-            const entries = parseMemoryEntries(text2);
+            const entries = parseMemoryEntries(text3);
             const invalid = [];
             entries.forEach((e, index) => {
               const problem = entryProblem(e);
@@ -83197,8 +83211,8 @@ ${cleanBody}`;
       const lower = fileName.toLowerCase();
       return SKILL_ALLOWED_EXTENSIONS.some((ext) => lower.endsWith(ext));
     }
-    function splitSkillMd(text2) {
-      const t = text2.replace(/\r\n?/g, "\n");
+    function splitSkillMd(text3) {
+      const t = text3.replace(/\r\n?/g, "\n");
       if (!t.startsWith("---\n")) return null;
       const end = t.indexOf("\n---", 3);
       if (end < 0) return null;
@@ -83206,8 +83220,8 @@ ${cleanBody}`;
       if (after !== "" && !after.startsWith("\n")) return null;
       return { frontmatterRaw: t.slice(4, end), body: after.replace(/^\n/, "") };
     }
-    function parseSkillMd(text2) {
-      const split = splitSkillMd(text2);
+    function parseSkillMd(text3) {
+      const split = splitSkillMd(text3);
       if (!split) return { problem: "no_frontmatter" };
       let meta;
       try {
@@ -83282,7 +83296,7 @@ ${body}`;
       } catch {
         return null;
       }
-      const text2 = (0, import_fs29.readFileSync)(mdPath, "utf-8");
+      const text3 = (0, import_fs29.readFileSync)(mdPath, "utf-8");
       const files = [];
       const ignoredFiles = [];
       for (const sub of SKILL_SUBDIRS) {
@@ -83291,11 +83305,11 @@ ${body}`;
       for (const n of (0, import_fs29.readdirSync)(dir)) {
         if (n !== SKILL_FILE && !SKILL_SUBDIRS.includes(n)) ignoredFiles.push(n);
       }
-      const parsed = parseSkillMd(text2);
+      const parsed = parseSkillMd(text3);
       const base = { name: expectedName, files, ignoredFiles };
       let out;
       if ("problem" in parsed) {
-        const body = splitSkillMd(text2)?.body ?? text2;
+        const body = splitSkillMd(text3)?.body ?? text3;
         out = { ...base, problem: parsed.problem, frontmatterRaw: "", meta: {}, description: "", body, bodyChars: charCount(body), overLimit: [] };
       } else {
         let problem = parsed.meta.name !== expectedName ? "name_mismatch" : !validateDescription(parsed.meta.description) ? "bad_description" : void 0;
@@ -83503,12 +83517,12 @@ ${body}`;
         };
       }
       if (!isStr2(op.new)) return bad2;
-      const replace = (text2) => {
+      const replace = (text3) => {
         if (!isStr2(op.old) || !op.old) return bad2;
-        const count = text2.split(op.old).length - 1;
+        const count = text3.split(op.old).length - 1;
         if (count === 0) return { result: "skill_no_match" };
         if (count > 1) return { result: "skill_ambiguous", count };
-        return text2.replace(op.old, () => op.new);
+        return text3.replace(op.old, () => op.new);
       };
       if (op.file === void 0) {
         const body = replace(d.body);
@@ -84084,13 +84098,13 @@ ${body}`;
     function scanMemory(hermesHome) {
       const out = [];
       for (const [source2, file] of [["memory", "MEMORY.md"], ["user", "USER.md"]]) {
-        let text2;
+        let text3;
         try {
-          text2 = (0, import_fs34.readFileSync)((0, import_path26.join)(hermesHome, "memories", file), "utf-8");
+          text3 = (0, import_fs34.readFileSync)((0, import_path26.join)(hermesHome, "memories", file), "utf-8");
         } catch {
           continue;
         }
-        parseMemoryEntries(text2).forEach((entry, i) => {
+        parseMemoryEntries(text3).forEach((entry, i) => {
           out.push({ id: `${source2}:${i}`, source: source2, text: entry, forcedDiscard: detectCredential(entry) !== null });
         });
       }
@@ -85268,8 +85282,8 @@ ${body}`;
           }
         }
         if (toLine < fromLine) toLine = fromLine;
-        const text2 = lines.slice(fromLine, toLine).join("\n");
-        resolved.push({ id: id4, fromLine, toLine, text: text2 });
+        const text3 = lines.slice(fromLine, toLine).join("\n");
+        resolved.push({ id: id4, fromLine, toLine, text: text3 });
       }
       return resolved;
     }
@@ -85517,9 +85531,9 @@ ${detail.join("\n")}` : stripped;
       }
       return entries.slice(start);
     }
-    function hasCursorMarker(text2, markerClass) {
+    function hasCursorMarker(text3, markerClass) {
       const cls = markerClass ?? DEFAULT_CURSOR_MARKER_CLASS;
-      return new RegExp("^\\s*[" + cls + "]").test(text2);
+      return new RegExp("^\\s*[" + cls + "]").test(text3);
     }
     var TITLE_DETAIL_MAX_LINES;
     var SIDE_PANEL_COLUMN_RE;
@@ -86384,11 +86398,11 @@ ${detail.join("\n")}` : stripped;
       }
     });
     function truncateValidationOutput(value) {
-      const text2 = typeof value === "string" ? value : value == null ? "" : String(value);
-      if (text2.length <= REFINE_VALIDATION_SUMMARY_CHARS) return text2;
-      const head = text2.slice(0, REFINE_VALIDATION_SUMMARY_HEAD_CHARS);
-      const tail = text2.slice(text2.length - REFINE_VALIDATION_SUMMARY_TAIL_CHARS);
-      const omitted = text2.length - REFINE_VALIDATION_SUMMARY_HEAD_CHARS - REFINE_VALIDATION_SUMMARY_TAIL_CHARS;
+      const text3 = typeof value === "string" ? value : value == null ? "" : String(value);
+      if (text3.length <= REFINE_VALIDATION_SUMMARY_CHARS) return text3;
+      const head = text3.slice(0, REFINE_VALIDATION_SUMMARY_HEAD_CHARS);
+      const tail = text3.slice(text3.length - REFINE_VALIDATION_SUMMARY_TAIL_CHARS);
+      const omitted = text3.length - REFINE_VALIDATION_SUMMARY_HEAD_CHARS - REFINE_VALIDATION_SUMMARY_TAIL_CHARS;
       return `${head}
 [... ${omitted} chars omitted ...]
 ${tail}`;
@@ -90512,10 +90526,10 @@ ${asText(streams.stderr)}
         }
       });
     }
-    function noteTextRefusal(text2) {
-      if (!text2) return null;
-      if (detectCredential(text2)) return { result: "note_secret_rejected" };
-      const f = scanWriteContent(text2);
+    function noteTextRefusal(text3) {
+      if (!text3) return null;
+      if (detectCredential(text3)) return { result: "note_secret_rejected" };
+      const f = scanWriteContent(text3);
       if (!f) return null;
       return { result: f.kind === "hidden_chars" ? "note_hidden_chars_rejected" : "note_injection_rejected", pattern: f.pattern };
     }
@@ -90590,19 +90604,19 @@ ${asText(streams.stderr)}
     }
     function parseNoteOp(args) {
       const action2 = str8(args?.action);
-      const text2 = str8(args?.text);
+      const text3 = str8(args?.text);
       if (action2 === "record") {
-        if (!text2) return "text required for record";
+        if (!text3) return "text required for record";
         const category = str8(args?.category);
         if (category && !PROJECT_NOTE_CATEGORIES.includes(category)) {
           return `category must be one of ${PROJECT_NOTE_CATEGORIES.join(", ")}`;
         }
-        return { action: action2, text: text2, ...category ? { category } : {} };
+        return { action: action2, text: text3, ...category ? { category } : {} };
       }
       if (action2 === "forget") {
         const noteId = str8(args?.note_id) || str8(args?.noteId);
-        if (!noteId && !text2) return "note_id or text required for forget";
-        return { action: action2, ...noteId ? { noteId } : {}, ...text2 ? { text: text2 } : {} };
+        if (!noteId && !text3) return "note_id or text required for forget";
+        return { action: action2, ...noteId ? { noteId } : {}, ...text3 ? { text: text3 } : {} };
       }
       return "action must be record or forget";
     }
@@ -90623,10 +90637,10 @@ ${asText(streams.stderr)}
       const action2 = str8(args?.action);
       const target = str8(args?.target);
       if (target !== "memory" && target !== "user") return "target must be memory or user";
-      const text2 = rawStr(args?.text);
+      const text3 = rawStr(args?.text);
       const match = rawStr(args?.match);
-      if (action2 === "add") return { action: action2, target, content: text2 ?? "" };
-      if (action2 === "replace") return { action: action2, target, match: match ?? "", content: text2 ?? "" };
+      if (action2 === "add") return { action: action2, target, content: text3 ?? "" };
+      if (action2 === "replace") return { action: action2, target, match: match ?? "", content: text3 ?? "" };
       if (action2 === "remove") return { action: action2, target, match: match ?? "" };
       return "action must be add, replace or remove";
     }
@@ -91293,16 +91307,16 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       const messages = Array.isArray(readChat2.messages) ? readChat2.messages : [];
       const visible = messages.filter(isVisible);
       const picked = visible.slice(-tail).map((m) => {
-        const text2 = messageText(m);
-        const truncated = text2.length > maxChars;
+        const text3 = messageText(m);
+        const truncated = text3.length > maxChars;
         const at = typeof m.timestamp === "number" ? new Date(m.timestamp).toISOString() : readText3(m.timestamp) || readText3(m.createdAt) || void 0;
         return {
           messageId: reportMessageId(m),
-          totalChars: text2.length,
+          totalChars: text3.length,
           complete: !truncated,
           nextOffset: truncated ? maxChars : null,
           role: readText3(m.role).toLowerCase() === "user" ? "user" : "assistant",
-          text: truncated ? `${text2.slice(0, maxChars)}\u2026` : text2,
+          text: truncated ? `${text3.slice(0, maxChars)}\u2026` : text3,
           ...truncated ? { truncated: true } : {},
           ...at ? { at } : {}
         };
@@ -91422,16 +91436,16 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
                 } catch {
                   continue;
                 }
-                await deliverTerminalEvents(events, watch5, async (id4, text2) => {
+                await deliverTerminalEvents(events, watch5, async (id4, text3) => {
                   if (!this.ready(sid) || this.recipient() !== sid) return false;
-                  return this.submit(sid, id4, text2);
+                  return this.submit(sid, id4, text3);
                 }, this.store, { recipient: sid, confirm: (intent) => confirmTerminalDelivery(ports, intent), uncertain: async (intent) => {
                   const key3 = JSON.stringify([intent.watch_id, intent.event_id, sid, intent.token]);
                   for (const [stamp2, at] of this.uncertaintyNotices) if (Date.now() - at >= 24 * 60 * 6e4) this.uncertaintyNotices.delete(stamp2);
                   if (this.uncertaintyNotices.has(key3) || this.recipient() !== sid || !this.ready(sid)) return;
                   if (this.uncertaintyNotices.size >= 256) this.uncertaintyNotices.delete(this.uncertaintyNotices.keys().next().value);
-                  const text2 = `[ADHDev terminal delivery uncertainty] ${JSON.stringify({ project: watch5.mesh_id, watchId: intent.watch_id, eventId: intent.event_id, originalRecipient: intent.recipient_session_id, startedAt: intent.started_at, deliveryState: "unconfirmed_original_recipient", retryAction: "project_watch retry_delivery", retryIdentity: terminalRetryIdentity(intent), warning: "Original delivery could not be confirmed. Read pending metadata and explicitly retry this exact watch/event only if needed; retry may repeat the notice. Later notices remain ordered behind this event." })}`;
-                  if (await this.submit(sid, `assistant-terminal-uncertain:${intent.watch_id}:${intent.event_id}:${sid}`, text2)) this.uncertaintyNotices.set(key3, Date.now());
+                  const text3 = `[ADHDev terminal delivery uncertainty] ${JSON.stringify({ project: watch5.mesh_id, watchId: intent.watch_id, eventId: intent.event_id, originalRecipient: intent.recipient_session_id, startedAt: intent.started_at, deliveryState: "unconfirmed_original_recipient", retryAction: "project_watch retry_delivery", retryIdentity: terminalRetryIdentity(intent), warning: "Original delivery could not be confirmed. Read pending metadata and explicitly retry this exact watch/event only if needed; retry may repeat the notice. Later notices remain ordered behind this event." })}`;
+                  if (await this.submit(sid, `assistant-terminal-uncertain:${intent.watch_id}:${intent.event_id}:${sid}`, text3)) this.uncertaintyNotices.set(key3, Date.now());
                 } });
               }
             } finally {
@@ -91810,11 +91824,11 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       const s2 = String(slug ?? "").toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64);
       return s2 || "project";
     }
-    function defangRelayBody(text2) {
-      return text2.replace(/\[\s*\/\s*relay\s*\]/gi, "[/relay (quoted)]").replace(/\[(\s*)(ADHDev)\b/gi, "[$1quoted $2").replace(/^\[(\s*)project\b/gim, "[$1quoted project");
+    function defangRelayBody(text3) {
+      return text3.replace(/\[\s*\/\s*relay\s*\]/gi, "[/relay (quoted)]").replace(/\[(\s*)(ADHDev)\b/gi, "[$1quoted $2").replace(/^\[(\s*)project\b/gim, "[$1quoted project");
     }
-    function compactRelayBody(text2, max = RELAY_BODY_MAX_CHARS) {
-      const body = String(text2 ?? "").replace(/\r\n?/g, "\n").trim();
+    function compactRelayBody(text3, max = RELAY_BODY_MAX_CHARS) {
+      const body = String(text3 ?? "").replace(/\r\n?/g, "\n").trim();
       if (!body) return "(no coordinator message found \u2014 use project_read)";
       const points = Array.from(body);
       if (points.length <= max) return body;
@@ -92006,9 +92020,9 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         return { ok: false, code: "skill_attach_too_large", error: "skill_attach_too_large", chars, limit: PROJECT_SEND_ATTACH_MAX_CHARS };
       }
       const supplement = input.supplement?.trim();
-      const text2 = [input.message, ...supplement ? [`${SUPPLEMENT_LABEL}
+      const text3 = [input.message, ...supplement ? [`${SUPPLEMENT_LABEL}
 ${supplement}`] : [], ...blocks].join("\n\n");
-      return { ok: true, text: text2, attached: names };
+      return { ok: true, text: text3, attached: names };
     }
     var PROJECT_SEND_MAX_SKILLS;
     var PROJECT_SEND_ATTACH_MAX_CHARS;
@@ -92071,15 +92085,15 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       }
     }
     function readRepoIdentity(commonDir) {
-      let text2;
+      let text3;
       try {
-        text2 = (0, import_fs41.readFileSync)((0, import_path41.join)(commonDir, "config"), "utf-8");
+        text3 = (0, import_fs41.readFileSync)((0, import_path41.join)(commonDir, "config"), "utf-8");
       } catch {
         return null;
       }
       let section2 = "";
       const urls = [];
-      for (const line of text2.split(/\r?\n/)) {
+      for (const line of text3.split(/\r?\n/)) {
         const head = /^\s*\[\s*remote\s+"([^"]+)"\s*\]/.exec(line);
         if (head) {
           section2 = head[1];
@@ -92313,7 +92327,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       const sessions = ports.liveSessionStates ? sessionRows(ports.liveSessionStates(), { meshId }) : [];
       return { name: mesh.name, repo: mesh.repoIdentity, ...status, routing, sessions, ...view.success ? {} : { statusError: str9(view.error) || "mesh_status_view failed" } };
     }
-    async function localProjectSend(ports, mesh, text2, clientId) {
+    async function localProjectSend(ports, mesh, text3, clientId) {
       const meshId = mesh.id;
       const coord = await ensureCoordinator(meshId, coordinatorPorts(ports));
       if (!coord.ok) return { ok: false, code: coord.code, error: coord.error, detail: coord.detail };
@@ -92321,7 +92335,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       const messageId = `assistant:${meshId}:${clientId}`;
       const sent = await ports.execute("send_chat", {
         targetSessionId: coord.sessionId,
-        text: text2,
+        text: text3,
         origin: "assistant",
         policy: { mode: "queue" },
         messageId
@@ -92436,12 +92450,12 @@ ${supplement}`] : [], ...blocks].join("\n\n");
                 errors.push({ meshId: p.mesh.id, daemonId: p.remote.hostDaemonId, reason: out.kind === "unreachable" ? out.reason : out.code });
                 continue;
               }
-              const observed = remoteBody(out).machines;
-              if (!Array.isArray(observed)) {
+              const observed2 = remoteBody(out).machines;
+              if (!Array.isArray(observed2)) {
                 errors.push({ meshId: p.mesh.id, daemonId: p.remote.hostDaemonId, reason: "inventory_unavailable" });
                 continue;
               }
-              for (const raw of observed.slice(0, 64)) {
+              for (const raw of observed2.slice(0, 64)) {
                 const machine = observedInventoryMachine(raw);
                 if (!machine || !(p.mesh.nodes ?? []).some((n) => daemonIdsEquivalent4(n.daemonId, machine.daemonId)) && !daemonIdsEquivalent4(p.remote.hostDaemonId, machine.daemonId)) continue;
                 const row2 = result.machines.find((m) => daemonIdsEquivalent4(m.daemonId, machine.daemonId));
@@ -92982,10 +92996,10 @@ ${supplement}`] : [], ...blocks].join("\n\n");
            * Human input into the assistant under `busyInputMode` (§4.3 table).
            * Refusals are returned as is — never retried under another mode.
            */
-          async submitHuman(text2, opts) {
+          async submitHuman(text3, opts) {
             const sid = this.ports.assistantSessionId();
             if (!sid) return { kind: "refused", reason: "no_target" };
-            const outcome = await this.ports.submit(sid, { text: text2, messageId: opts.messageId, policy: busyInputModeToSendPolicy(opts.busyInputMode) });
+            const outcome = await this.ports.submit(sid, { text: text3, messageId: opts.messageId, policy: busyInputModeToSendPolicy(opts.busyInputMode) });
             this.recordHumanSubmit([sid], opts.messageId, outcome);
             return outcome;
           }
@@ -93303,8 +93317,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             this.kick();
           }
           // ── delivery ────────────────────────────────────────────────────────────
-          pushLine(source2, text2, meshId) {
-            this.queue.push({ kind: "line", source: source2, text: text2, messageId: `signal:${source2}:${meshId ?? "-"}:${this.clock.now()}:${++this.seq}`, ...meshId ? { meshId } : {} });
+          pushLine(source2, text3, meshId) {
+            this.queue.push({ kind: "line", source: source2, text: text3, messageId: `signal:${source2}:${meshId ?? "-"}:${this.clock.now()}:${++this.seq}`, ...meshId ? { meshId } : {} });
             this.kick();
           }
           kick() {
@@ -93332,8 +93346,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             const messageId = parts.length === 1 ? parts[0].messageId : `${parts[0].messageId}+${parts.length - 1}`;
             const missed = this.missedReportsIncluding(taken, parts);
             const gap = parts.some((p) => p.source === "review") ? "" : this.newGapLine(sid, missed, taken, parts);
-            const text2 = [...parts.map((p) => p.text), ...gap ? [gap] : []].join("\n\n");
-            const outcome = await this.ports.submit(sid, { text: text2, messageId, policy: { mode: "queue" } });
+            const text3 = [...parts.map((p) => p.text), ...gap ? [gap] : []].join("\n\n");
+            const outcome = await this.ports.submit(sid, { text: text3, messageId, policy: { mode: "queue" } });
             if (outcome.kind === "refused") return;
             const submitted = outcome.kind === "delivered" || outcome.kind === "duplicate" && !!this.ports.isParked && !await this.ports.isParked(sid, messageId);
             this.commitTaken(taken, parts, sid, submitted);
@@ -93384,8 +93398,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
               size += cost;
             }
             for (const [meshId, count] of folded) {
-              const text2 = buildFoldedBacklogLine(this.ports.projectSlug(meshId) ?? meshId, count);
-              parts.push({ text: text2, source: "relay", messageId: `fold:${meshId}:${now}`, meshId });
+              const text3 = buildFoldedBacklogLine(this.ports.projectSlug(meshId) ?? meshId, count);
+              parts.push({ text: text3, source: "relay", messageId: `fold:${meshId}:${now}`, meshId });
             }
             return { taken, parts };
           }
@@ -93525,8 +93539,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             const headerEnd = envelope.indexOf("\n") + 1;
             const missing = unavailable2.length ? `[ADHDev original report unavailable] Exact authorized attempt evidence could not rehydrate: ${unavailable2.join(", ")}. A new report would be regeneration.
 ` : "";
-            const text2 = envelope.slice(0, headerEnd) + references + missing + envelope.slice(headerEnd);
-            return { text: text2, source: "relay", messageId: relayMessageId(item.meshId, lastAttempt), meshId: item.meshId };
+            const text3 = envelope.slice(0, headerEnd) + references + missing + envelope.slice(headerEnd);
+            return { text: text3, source: "relay", messageId: relayMessageId(item.meshId, lastAttempt), meshId: item.meshId };
           }
         };
       }
@@ -94019,8 +94033,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           loadProjectPorts,
           liveSessionId,
           (sid) => instanceReady(instanceOf(components, sid)) && !relay.hasPendingInput(),
-          async (sid, messageId, text2) => {
-            if (!relay.isQueued(messageId)) relay.enqueueInput({ source: "relay", text: text2, messageId, forSessionId: sid });
+          async (sid, messageId, text3) => {
+            if (!relay.isQueued(messageId)) relay.enqueueInput({ source: "relay", text: text3, messageId, forSessionId: sid });
             if (messageId.startsWith("assistant-terminal-uncertain:")) return true;
             return false;
           }
@@ -97965,6 +97979,7 @@ ${tail}` : ""
       notifyCoordinatorOfOrphanedPins: () => notifyCoordinatorOfOrphanedPins,
       notifyCoordinatorOfParkedTaskDropped: () => notifyCoordinatorOfParkedTaskDropped,
       notifyMeshCoordinator: () => notifyMeshCoordinator,
+      observeHeldHostedSessions: () => observeHeldHostedSessions,
       observeP2PStatusSummary: () => observeP2PStatusSummary,
       onPeerSecretsChanged: () => onPeerSecretsChanged,
       onTopicActivated: () => onTopicActivated,
@@ -98102,6 +98117,7 @@ ${tail}` : ""
       resolveWorktreeBaseDir: () => resolveWorktreeBaseDir,
       resolveWorktreePath: () => resolveWorktreePath,
       resultTimeoutForCommand: () => resultTimeoutForCommand,
+      retainedRuntimeInventoryDigest: () => retainedRuntimeInventoryDigest,
       retiredMeshToolError: () => retiredMeshToolError2,
       retractCoordinatorNotices: () => retractCoordinatorNotices,
       retractDispatchBlockedNotices: () => retractDispatchBlockedNotices,
@@ -98189,6 +98205,7 @@ ${tail}` : ""
       validateMeshRefineConfig: () => validateMeshRefineConfig,
       validateMeshTaskModeRequest: () => validateMeshTaskModeRequest2,
       validateMeshWorktreeBootstrapConfig: () => validateMeshWorktreeBootstrapConfig,
+      verifyHeldObservationFleet: () => verifyHeldObservationFleet,
       verifyRetainedMaintenanceHost: () => verifyRetainedMaintenanceHost,
       withMaintenanceAdmission: () => withMaintenanceAdmission,
       withMeshDirectDispatch: () => withMeshDirectDispatch,
@@ -98348,9 +98365,9 @@ ${tail}` : ""
     }
     function interactivePromptContentFingerprint(questions) {
       let hash2 = 2166136261;
-      const mix = (text2) => {
-        for (let i = 0; i < text2.length; i += 1) {
-          hash2 ^= text2.charCodeAt(i);
+      const mix = (text3) => {
+        for (let i = 0; i < text3.length; i += 1) {
+          hash2 ^= text3.charCodeAt(i);
           hash2 = Math.imul(hash2, 16777619) >>> 0;
         }
       };
@@ -98447,9 +98464,9 @@ ${tail}` : ""
       }
       return headers;
     }
-    function isClaudeTuiSelectFooter(text2) {
-      if (/Enter to select/i.test(text2)) return true;
-      return claudeTuiChecklistOptionPattern().test(text2);
+    function isClaudeTuiSelectFooter(text3) {
+      if (/Enter to select/i.test(text3)) return true;
+      return claudeTuiChecklistOptionPattern().test(text3);
     }
     function claudeTuiChecklistOptionPattern() {
       const optionCheckbox = "(?:\\[[ xX]\\]|[\u2610\u2612\u25FB\u25FC])";
@@ -100661,8 +100678,8 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           };
         }
       }
-      const text2 = typeof err === "string" ? err : typeof err.message === "string" ? err.message : typeof err.error === "string" ? err.error : "";
-      const match = TOKEN_RE.exec(text2);
+      const text3 = typeof err === "string" ? err : typeof err.message === "string" ? err.message : typeof err.error === "string" ? err.error : "";
+      const match = TOKEN_RE.exec(text3);
       if (!match) return null;
       return {
         currentTaskId: match[1],
@@ -101620,12 +101637,12 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           machine.start?.();
         };
         const onMessage = (data) => {
-          const text2 = rawDataToString(data);
-          if (text2 === null) {
+          const text3 = rawDataToString(data);
+          if (text3 === null) {
             applyStep(machine.onFrame({}));
             return;
           }
-          applyStep(machine.onFrame(text2));
+          applyStep(machine.onFrame(text3));
         };
         const onClose = () => {
           settleFail("socket_closed");
@@ -102469,8 +102486,9 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     init_command_registry();
     init_cooperative_gate();
     var cooperativeMaintenanceSpecs = defineCommandSpecs("low", {
+      cooperative_maintenance_observe: async (ctx, args) => ({ success: true, observation: await ctx.components().cliManager.observeHeldHostedSessions(args?.nonce) }),
       cooperative_maintenance_status: async (_ctx, args) => ({ ...cooperativeMaintenanceStatus(), nonce: args?.nonce })
-    }, { cooperative_maintenance_status: { sources: ["ipc", "mesh"], meshSender: "authenticated_peer" } });
+    }, { cooperative_maintenance_observe: { sources: ["ipc", "mesh"], meshSender: "authenticated_peer" }, cooperative_maintenance_status: { sources: ["ipc", "mesh"], meshSender: "authenticated_peer" } });
     init_cooperative_gate();
     var import_ws3 = __toESM2(require_ws());
     var http = __toESM2(require("http"));
@@ -102937,7 +102955,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       * 2. Insert text via Input.insertText
       * 3. Send Enter via Input.dispatchKeyEvent
       */
-      async typeAndSend(selector, text2) {
+      async typeAndSend(selector, text3) {
         if (!this.isConnected) return false;
         const focusResult = await this.evaluate(`(() => {
             const e = document.querySelector(${JSON.stringify(selector)});
@@ -102966,7 +102984,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           clickCount: 1
         });
         await new Promise((r) => setTimeout(r, 150));
-        const lines = text2.split("\n");
+        const lines = text3.split("\n");
         for (let i = 0; i < lines.length; i++) {
           if (lines[i].length > 0) {
             await this.sendInternal("Input.insertText", { text: lines[i] });
@@ -103002,14 +103020,14 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           code: "Enter",
           windowsVirtualKeyCode: 13
         });
-        this.log(`[CDP] typeAndSend: sent "${text2.substring(0, 50)}..."`);
+        this.log(`[CDP] typeAndSend: sent "${text3.substring(0, 50)}..."`);
         return true;
       }
       /**
       * Coordinate-based typeAndSend — for input fields inside webview iframe
       * Receives coordinates directly instead of selector for click+input+Enter
       */
-      async typeAndSendAt(x, y, text2) {
+      async typeAndSendAt(x, y, text3) {
         if (!this.isConnected) return false;
         await this.sendInternal("Input.dispatchMouseEvent", {
           type: "mousePressed",
@@ -103054,7 +103072,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           windowsVirtualKeyCode: 8
         });
         await new Promise((r) => setTimeout(r, 150));
-        const lines = text2.split("\n");
+        const lines = text3.split("\n");
         for (let i = 0; i < lines.length; i++) {
           if (lines[i].length > 0) {
             await this.sendInternal("Input.insertText", { text: lines[i] });
@@ -103090,7 +103108,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           code: "Enter",
           windowsVirtualKeyCode: 13
         });
-        this.log(`[CDP] typeAndSendAt(${Math.round(x)},${Math.round(y)}): sent "${text2.substring(0, 50)}..."`);
+        this.log(`[CDP] typeAndSendAt(${Math.round(x)},${Math.round(y)}): sent "${text3.substring(0, 50)}..."`);
         return true;
       }
       /**
@@ -103849,12 +103867,12 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           const owner = isRemoteOwner ? resolvedOwner : void 0;
           const envelope = callerOpts?.envelope;
           const opts = owner || envelope ? { ...owner ? { owner } : {}, ...envelope ? { envelope } : {} } : void 0;
-          const text2 = isRemoteOwner && SUMMARY_REF_KINDS.has(withAttempt.kind) ? handoffTextOf(envelope) : void 0;
-          if (!text2 || !deps.appendHandoff) {
+          const text3 = isRemoteOwner && SUMMARY_REF_KINDS.has(withAttempt.kind) ? handoffTextOf(envelope) : void 0;
+          if (!text3 || !deps.appendHandoff) {
             runObserve(withAttempt, opts);
             return;
           }
-          deps.appendHandoff(owner.meshId, TURN_EVIDENCE_HANDOFF_KIND, { text: text2, notice: envelope?.notice ?? {} }).then(
+          deps.appendHandoff(owner.meshId, TURN_EVIDENCE_HANDOFF_KIND, { text: text3, notice: envelope?.notice ?? {} }).then(
             (ref) => runObserve({ ...withAttempt, summary: ref }, opts),
             () => runObserve(withAttempt, opts)
           );
@@ -104582,16 +104600,16 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       return lines.join("\n");
     }
     function looksLikeActiveApprovalPromptText(content) {
-      const text2 = content.trim();
-      if (!text2 || text2.length > 2e3) return false;
-      const hasApprovalQuestion = /do you want to (?:proceed|allow|run|make this edit|create)/i.test(text2) || /this command requires approval/i.test(text2) || /quick safety check/i.test(text2) || /is this a project you trust/i.test(text2);
-      const hasNumberedChoices = /^\s*[❯›>]?\s*1[.)]\s+(?:yes|allow|proceed|run)/im.test(text2) || /^\s*1[.)]\s+yes\b/im.test(text2);
+      const text3 = content.trim();
+      if (!text3 || text3.length > 2e3) return false;
+      const hasApprovalQuestion = /do you want to (?:proceed|allow|run|make this edit|create)/i.test(text3) || /this command requires approval/i.test(text3) || /quick safety check/i.test(text3) || /is this a project you trust/i.test(text3);
+      const hasNumberedChoices = /^\s*[❯›>]?\s*1[.)]\s+(?:yes|allow|proceed|run)/im.test(text3) || /^\s*1[.)]\s+yes\b/im.test(text3);
       if (hasApprovalQuestion && hasNumberedChoices) return true;
-      const lastLines = text2.split(/\r?\n/).slice(-12).join("\n");
+      const lastLines = text3.split(/\r?\n/).slice(-12).join("\n");
       const hasDontAskAgain = /yes.*don'?t ask again/i.test(lastLines) || /yes.*always allow/i.test(lastLines);
       const hasNoOption = /^\s*[❯›>]?\s*\d+[.)]\s+no\b/im.test(lastLines);
       if (hasDontAskAgain && hasNoOption) return true;
-      if (/what do you want to do\?/i.test(text2) && /^\s*\d+[.)]\s+\S/m.test(text2)) return true;
+      if (/what do you want to do\?/i.test(text3) && /^\s*\d+[.)]\s+\S/m.test(text3)) return true;
       return false;
     }
     init_provider_patch_state();
@@ -105386,18 +105404,18 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         }
       }
       // ─── Objects ─────────────────────────────────────────────
-      static objectName(digest) {
-        if (!BUNDLE_DIGEST_RE.test(digest)) {
-          throw new ProviderChannelError("ENTRY_DIGEST_INVALID", `malformed digest "${digest}" \u2014 refusing store operation`);
+      static objectName(digest2) {
+        if (!BUNDLE_DIGEST_RE.test(digest2)) {
+          throw new ProviderChannelError("ENTRY_DIGEST_INVALID", `malformed digest "${digest2}" \u2014 refusing store operation`);
         }
-        return digest.slice("sha256:".length);
+        return digest2.slice("sha256:".length);
       }
-      getObjectDir(digest) {
-        return path34.join(this.objectsDir, _ProviderChannelStore.objectName(digest));
+      getObjectDir(digest2) {
+        return path34.join(this.objectsDir, _ProviderChannelStore.objectName(digest2));
       }
-      hasObject(digest) {
+      hasObject(digest2) {
         try {
-          return fs26.statSync(this.getObjectDir(digest)).isDirectory();
+          return fs26.statSync(this.getObjectDir(digest2)).isDirectory();
         } catch {
           return false;
         }
@@ -105409,9 +105427,9 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
        *
        * Returns the final object dir.
        */
-      putObject(stagedObjectDir, digest) {
-        const objectDir = this.getObjectDir(digest);
-        if (this.hasObject(digest)) {
+      putObject(stagedObjectDir, digest2) {
+        const objectDir = this.getObjectDir(digest2);
+        if (this.hasObject(digest2)) {
           this.removeStagingDir(stagedObjectDir);
           return objectDir;
         }
@@ -105641,11 +105659,11 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           objectNames = [];
         }
         for (const name of objectNames) {
-          const digest = `sha256:${name}`;
-          if (referenced.has(digest)) continue;
+          const digest2 = `sha256:${name}`;
+          if (referenced.has(digest2)) continue;
           try {
             fs26.rmSync(path34.join(this.objectsDir, name), { recursive: true, force: true });
-            removedObjects.push(digest);
+            removedObjects.push(digest2);
           } catch {
           }
         }
@@ -106773,10 +106791,10 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       if (stat2.size < cached5.committedBytes) return false;
       return true;
     }
-    function parseJsonlInto(out, text2) {
-      const lastNewline = text2.lastIndexOf("\n");
-      const settled = lastNewline >= 0 ? text2.slice(0, lastNewline + 1) : "";
-      const fragment = lastNewline >= 0 ? text2.slice(lastNewline + 1) : text2;
+    function parseJsonlInto(out, text3) {
+      const lastNewline = text3.lastIndexOf("\n");
+      const settled = lastNewline >= 0 ? text3.slice(0, lastNewline + 1) : "";
+      const fragment = lastNewline >= 0 ? text3.slice(lastNewline + 1) : text3;
       for (const line of settled.split("\n")) {
         const trimmed2 = line.trim();
         if (!trimmed2) continue;
@@ -106852,16 +106870,16 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
           return lines;
         }
       }
-      let text2;
+      let text3;
       try {
-        text2 = fs29.readFileSync(p, "utf8");
+        text3 = fs29.readFileSync(p, "utf8");
         parsedJsonlCacheStats.fileReads++;
       } catch {
         return [];
       }
       parsedJsonlCacheStats.parsePasses++;
       const out = [];
-      const parsed = parseJsonlInto(out, text2);
+      const parsed = parseJsonlInto(out, text3);
       storeParsedJsonlCache(p, {
         signature,
         sourceBytes: stat2.size,
@@ -107298,9 +107316,9 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
           const buf = Buffer.alloc(8192);
           const bytes = fs30.readSync(fd, buf, 0, buf.length, 0);
           if (bytes <= 0) return null;
-          const text2 = buf.subarray(0, bytes).toString("utf8");
-          const nl = text2.indexOf("\n");
-          const firstLine = (nl >= 0 ? text2.slice(0, nl) : text2).trim();
+          const text3 = buf.subarray(0, bytes).toString("utf8");
+          const nl = text3.indexOf("\n");
+          const firstLine = (nl >= 0 ? text3.slice(0, nl) : text3).trim();
           if (!firstLine) return null;
           const parsed = JSON.parse(firstLine);
           if (String(parsed.type ?? "") !== "session_meta") return null;
@@ -107395,13 +107413,13 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
     var MIN_SNIPPET_CHARS = 8;
     var MAX_SNIPPET_CHARS = 80;
     var promptsByInstance = /* @__PURE__ */ new Map();
-    function promptSnippet(text2) {
-      const line = String(text2 || "").split("\n").map((l) => l.replace(/\s+/g, " ").trim()).find(Boolean) || "";
+    function promptSnippet(text3) {
+      const line = String(text3 || "").split("\n").map((l) => l.replace(/\s+/g, " ").trim()).find(Boolean) || "";
       return line.length >= MIN_SNIPPET_CHARS ? line.slice(0, MAX_SNIPPET_CHARS) : "";
     }
-    function recordSentPrompt(instanceId, text2) {
+    function recordSentPrompt(instanceId, text3) {
       const id4 = typeof instanceId === "string" ? instanceId.trim() : "";
-      const snippet2 = promptSnippet(text2);
+      const snippet2 = promptSnippet(text3);
       if (!id4 || !snippet2) return;
       const list = promptsByInstance.get(id4) ?? [];
       if (list[list.length - 1] !== snippet2) list.push(snippet2);
@@ -108460,8 +108478,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         if (!block2 || typeof block2 !== "object") continue;
         const type2 = String(block2.type || "").trim();
         if (type2 === "text") {
-          const text2 = String(block2.text || "").trim();
-          if (text2) parts.push({ content: text2, kind: "standard", blockIndex, truncated: false });
+          const text3 = String(block2.text || "").trim();
+          if (text3) parts.push({ content: text3, kind: "standard", blockIndex, truncated: false });
         } else if (type2 === "tool_use") {
           const name = String(block2.name || "").trim() || "Tool";
           const { text: args, truncated } = summarizeToolUseInput(block2);
@@ -108489,18 +108507,18 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         if (!block2 || typeof block2 !== "object") continue;
         const type2 = String(block2.type || "").trim();
         if (type2 === "text") {
-          const text2 = String(block2.text || "").trim();
-          if (text2) {
-            parts.push({ role: "user", content: text2, kind: "standard", blockIndex, truncated: false });
+          const text3 = String(block2.text || "").trim();
+          if (text3) {
+            parts.push({ role: "user", content: text3, kind: "standard", blockIndex, truncated: false });
           }
         } else if (type2 === "tool_result") {
           const raw = flattenToolResultContent(block2.content);
           if (!raw) continue;
-          const { text: text2, truncated } = oneLine(raw, TOOL_RESULT_SUMMARY_MAX);
-          if (!text2) continue;
+          const { text: text3, truncated } = oneLine(raw, TOOL_RESULT_SUMMARY_MAX);
+          if (!text3) continue;
           parts.push({
             role: "assistant",
-            content: text2,
+            content: text3,
             kind: "tool",
             senderName: "Tool",
             blockIndex,
@@ -108769,8 +108787,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       const name = String(payload.name ?? payload.type ?? "tool").trim() || "tool";
       const argumentValue = codexToolCallArguments(payload);
       if (!argumentValue) return { content: name, truncated: false, toolName: name };
-      const { text: text2, truncated } = oneLine(argumentValue, TOOL_CALL_SUMMARY_MAX);
-      return { content: text2 ? `${name}: ${text2}` : name, truncated, toolName: name };
+      const { text: text3, truncated } = oneLine(argumentValue, TOOL_CALL_SUMMARY_MAX);
+      return { content: text3 ? `${name}: ${text3}` : name, truncated, toolName: name };
     }
     function codexToolCallArguments(payload) {
       const rawArguments = payload.arguments ?? payload.input;
@@ -108787,13 +108805,13 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
     function extractToolOutputContent(payload) {
       const raw = codexToolOutputText(payload);
       if (!raw) return { content: "", truncated: false };
-      const { text: text2, truncated } = oneLine(raw, TOOL_RESULT_SUMMARY_MAX);
-      return { content: text2, truncated };
+      const { text: text3, truncated } = oneLine(raw, TOOL_RESULT_SUMMARY_MAX);
+      return { content: text3, truncated };
     }
     function codexToolOutputText(payload) {
       const output = payload.output ?? payload.result ?? payload.content;
-      const text2 = flattenCodexContent(output);
-      if (text2) return text2;
+      const text3 = flattenCodexContent(output);
+      if (text3) return text3;
       if (output && typeof output === "object") {
         try {
           return JSON.stringify(output, null, 2).trim();
@@ -108847,14 +108865,14 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       return false;
     }
     function pushAssistantStandardMessage(records, sessionId, receivedAt, content, workspace, recordIndex = -1) {
-      const text2 = content.trim();
-      if (!text2) return;
-      if (hasAssistantStandardMessageSinceLastUser(records, text2)) return;
+      const text3 = content.trim();
+      if (!text3) return;
+      if (hasAssistantStandardMessageSinceLastUser(records, text3)) return;
       const msg = {
         ts: new Date(receivedAt).toISOString(),
         receivedAt,
         role: "assistant",
-        content: text2,
+        content: text3,
         kind: "standard",
         agent: "codex-cli",
         historySessionId: sessionId
@@ -108890,8 +108908,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         const buffer = Buffer.alloc(SESSION_META_PREFIX_BYTES);
         const bytes = fs36.readSync(fd, buffer, 0, buffer.length, 0);
         if (bytes <= 0) return null;
-        const text2 = buffer.subarray(0, bytes).toString("utf8");
-        const lines = text2.split("\n");
+        const text3 = buffer.subarray(0, bytes).toString("utf8");
+        const lines = text3.split("\n");
         const idx = lines.findIndex(Boolean);
         if (idx >= 0 && idx < lines.length - 1) return lines[idx];
         if (bytes < buffer.length) return idx >= 0 ? lines[idx] : null;
@@ -109225,8 +109243,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       }
       return printable / buf.length >= 0.9;
     }
-    function stripAnswerMarker(text2) {
-      return text2.replace(/^\s*MARKER_V1\s*/, "");
+    function stripAnswerMarker(text3) {
+      return text3.replace(/^\s*MARKER_V1\s*/, "");
     }
     function extractModelAnswer(payload) {
       const inner = firstLenField(payload, 20);
@@ -109240,9 +109258,9 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       if (!inner) return "";
       const raw = firstLenField(inner, 2) ?? firstLenField(inner, 3);
       if (!raw || !looksLikeText(raw)) return "";
-      const text2 = raw.toString("utf-8").trim();
-      if (!text2) return "";
-      return extractUserRequestContent(text2);
+      const text3 = raw.toString("utf-8").trim();
+      if (!text3) return "";
+      return extractUserRequestContent(text3);
     }
     function extractModelReasoning(payload) {
       const inner = firstLenField(payload, 20);
@@ -109352,8 +109370,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       }
       return fields.length > 0 ? fields : null;
     }
-    function isBareUri(text2) {
-      return /^file:\/\/\S*$/.test(text2);
+    function isBareUri(text3) {
+      return /^file:\/\/\S*$/.test(text3);
     }
     function isBetterLeaf(candidate, best) {
       if (!candidate) return false;
@@ -109366,8 +109384,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       const fields = depth < 8 ? decodeProtoStrict(buf) : null;
       if (!fields) {
         if (!looksLikeText(buf)) return "";
-        const text2 = buf.toString("utf-8").trim();
-        return exclude.has(text2) ? "" : text2;
+        const text3 = buf.toString("utf-8").trim();
+        return exclude.has(text3) ? "" : text3;
       }
       let best = "";
       for (const f of fields) {
@@ -109446,8 +109464,8 @@ ${output}` : "";
       const body = firstLenField(note2, 2);
       const title = (textField(body, 1) ?? "").trim();
       const detail = body ? longestTextLeaf(body, new Set(title ? [title] : [])) : "";
-      const text2 = [title, detail].filter(Boolean).join("\n") || (textField(note2, 1) ?? "").trim();
-      return text2 ? { name, text: text2 } : null;
+      const text3 = [title, detail].filter(Boolean).join("\n") || (textField(note2, 1) ?? "").trim();
+      return text3 ? { name, text: text3 } : null;
     }
     function isSettledToolStatus(status, errorDetails) {
       if (status === null) return true;
@@ -109801,8 +109819,8 @@ ${output}` : "";
           continue;
         }
         if (row2.step_type === AGY_STEP_TYPE_TASK_MESSAGE) {
-          const text2 = row2.step_payload ? row2.step_payload.toString("utf8") : "";
-          for (const match of text2.matchAll(/Task id "([0-9a-f-]{36}\/task-\d+)"[^:]{0,80}?\bwith result\b/gi)) {
+          const text3 = row2.step_payload ? row2.step_payload.toString("utf8") : "";
+          for (const match of text3.matchAll(/Task id "([0-9a-f-]{36}\/task-\d+)"[^:]{0,80}?\bwith result\b/gi)) {
             out.push({ idx: row2.idx, kind: "notification", taskId: match[1], terminal: true });
           }
           continue;
@@ -110133,10 +110151,10 @@ ${output}` : "";
       return null;
     }
     var USER_QUERY_RE = /<user_query>\s*([\s\S]*?)\s*<\/user_query>/;
-    function unwrapUserQuery(text2) {
-      const match = USER_QUERY_RE.exec(text2);
+    function unwrapUserQuery(text3) {
+      const match = USER_QUERY_RE.exec(text3);
       if (match) return match[1].trim();
-      return text2.trim();
+      return text3.trim();
     }
     function blocksToText(content) {
       if (typeof content === "string") return content;
@@ -110198,14 +110216,14 @@ ${output}` : "";
         if (typeof record3.synthetic_reason === "string" && record3.synthetic_reason) return null;
         const rawText = blocksToText(record3.content);
         if (/^\s*<user_info>/.test(rawText) && !USER_QUERY_RE.test(rawText)) return null;
-        const text2 = unwrapUserQuery(rawText);
-        if (!text2) return null;
-        return { role: "user", content: text2, kind: "standard" };
+        const text3 = unwrapUserQuery(rawText);
+        if (!text3) return null;
+        return { role: "user", content: text3, kind: "standard" };
       }
       if (type2 === "assistant") {
-        const text2 = blocksToText(record3.content).trim();
+        const text3 = blocksToText(record3.content).trim();
         const toolCalls = Array.isArray(record3.tool_calls) ? record3.tool_calls : [];
-        if (!text2) {
+        if (!text3) {
           if (toolCalls.length === 0) return null;
           const names = toolCalls.map((call) => call && typeof call === "object" ? call.name : null).filter((name) => typeof name === "string" && name.length > 0);
           const label2 = names.length > 0 ? names.join(", ") : "tool";
@@ -110214,14 +110232,14 @@ ${output}` : "";
           const { text: summary, truncated } = oneLine(args, TOOL_CALL_SUMMARY_MAX);
           return { role: "assistant", content: `[tool: ${label2}] ${summary}`, kind: "tool", truncated, toolName: label2 };
         }
-        return { role: "assistant", content: text2, kind: "standard" };
+        return { role: "assistant", content: text3, kind: "standard" };
       }
       if (type2 === "tool_result") {
         const raw2 = blocksToText(record3.content).trim();
         if (!raw2) return null;
-        const { text: text2, truncated } = oneLine(raw2, TOOL_RESULT_SUMMARY_MAX);
-        if (!text2) return null;
-        return { role: "assistant", content: text2, kind: "tool", truncated };
+        const { text: text3, truncated } = oneLine(raw2, TOOL_RESULT_SUMMARY_MAX);
+        if (!text3) return null;
+        return { role: "assistant", content: text3, kind: "tool", truncated };
       }
       return null;
     }
@@ -110260,9 +110278,9 @@ ${output}` : "";
       return out;
     }
     function readSession4(sourcePath, sessionId, workspace) {
-      let text2;
+      let text3;
       try {
-        text2 = fs39.readFileSync(sourcePath, "utf8");
+        text3 = fs39.readFileSync(sourcePath, "utf8");
       } catch {
         return null;
       }
@@ -110271,7 +110289,7 @@ ${output}` : "";
       const sourceMtimeMs = statMtimeMs(sourcePath);
       const parsed = [];
       let recordIndex = -1;
-      for (const line of text2.split("\n")) {
+      for (const line of text3.split("\n")) {
         const trimmed2 = line.trim();
         if (!trimmed2) continue;
         let record3;
@@ -110618,8 +110636,8 @@ ${output}` : "";
           const buffer = Buffer.alloc(8192);
           const bytes = fs40.readSync(fd, buffer, 0, buffer.length, 0);
           if (bytes <= 0) return null;
-          const text2 = buffer.subarray(0, bytes).toString("utf8");
-          const firstLine = text2.slice(0, text2.indexOf("\n") >= 0 ? text2.indexOf("\n") : text2.length).trim();
+          const text3 = buffer.subarray(0, bytes).toString("utf8");
+          const firstLine = text3.slice(0, text3.indexOf("\n") >= 0 ? text3.indexOf("\n") : text3.length).trim();
           if (!firstLine) return null;
           const record3 = JSON.parse(firstLine);
           if (record3.type !== "session_meta" || !record3.payload || typeof record3.payload !== "object") return null;
@@ -111119,7 +111137,7 @@ ${output}` : "";
           const rendered2 = parts.length > 0 ? parts.join(" ") : sub?.message || String(sub);
           counts.set(rendered2, (counts.get(rendered2) ?? 0) + 1);
         }
-        const rendered = [...counts.entries()].map(([text2, n]) => n > 1 ? `${text2} (x${n})` : text2).join("; ");
+        const rendered = [...counts.entries()].map(([text3, n]) => n > 1 ? `${text3} (x${n})` : text3).join("; ");
         const name = e?.name || "AggregateError";
         return `${name}: ${rendered}`;
       }
@@ -111361,18 +111379,18 @@ ${output}` : "";
           this.store.removeStagingDir(objStaging);
           return { code: "TRANSPORT_FAILED", message: `failed to stage artifact tree: ${e?.message || e}`, providerType: entry.providerType };
         }
-        let digest;
+        let digest2;
         try {
-          digest = computeProviderTreeDigest(objStaging, entry.providerType);
+          digest2 = computeProviderTreeDigest(objStaging, entry.providerType);
         } catch (e) {
           this.store.removeStagingDir(objStaging);
           return toSyncError(e, "ENTRY_TREE_INVALID", entry.providerType);
         }
-        if (digest !== entry.bundleDigest) {
+        if (digest2 !== entry.bundleDigest) {
           this.store.removeStagingDir(objStaging);
           return {
             code: "DIGEST_MISMATCH",
-            message: `tree digest mismatch for "${entry.providerType}": channel=${entry.bundleDigest} recomputed=${digest} \u2014 refusing activation`,
+            message: `tree digest mismatch for "${entry.providerType}": channel=${entry.bundleDigest} recomputed=${digest2} \u2014 refusing activation`,
             providerType: entry.providerType
           };
         }
@@ -112359,14 +112377,14 @@ ${output}` : "";
       return filePath2;
     }
     function classifyFailure(output, exitCode) {
-      const text2 = output.toLowerCase();
-      if (/\b(not logged in|log ?in|sign ?in|unauthenticated|unauthorized|authentication|auth token|expired)\b/.test(text2)) {
+      const text3 = output.toLowerCase();
+      if (/\b(not logged in|log ?in|sign ?in|unauthenticated|unauthorized|authentication|auth token|expired)\b/.test(text3)) {
         return "unauthenticated";
       }
-      if (/\b(enotfound|econnrefused|etimedout|network|offline|dns|socket hang up|fetch failed)\b/.test(text2)) {
+      if (/\b(enotfound|econnrefused|etimedout|network|offline|dns|socket hang up|fetch failed)\b/.test(text3)) {
         return "network";
       }
-      if (exitCode === 127 || /\b(command not found|no such file or directory)\b/.test(text2)) {
+      if (exitCode === 127 || /\b(command not found|no such file or directory)\b/.test(text3)) {
         return "cli-unavailable";
       }
       return "unknown";
@@ -115563,8 +115581,8 @@ ${result.stderr}`, result.code);
           "-Command",
           `(Get-CimInstance Win32_Process -Filter "${pidFilter}").CommandLine`
         ], { encoding: "utf8", timeout: 5e3, stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
-        const text2 = String(psOut).trim();
-        if (text2) return text2;
+        const text3 = String(psOut).trim();
+        if (text3) return text3;
         failures.push("powershell Get-CimInstance returned no CommandLine");
       } catch (error) {
         failures.push(`powershell Get-CimInstance failed: ${errorText(error)}`);
@@ -115577,8 +115595,8 @@ ${result.stderr}`, result.code);
           "get",
           "CommandLine"
         ], { encoding: "utf8", timeout: 3e3, stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
-        const text2 = String(wmicOut).trim();
-        if (text2) return text2;
+        const text3 = String(wmicOut).trim();
+        if (text3) return text3;
         failures.push("wmic returned no CommandLine");
       } catch (error) {
         failures.push(`wmic failed: ${errorText(error)}`);
@@ -115603,12 +115621,12 @@ ${result.stderr}`, result.code);
         return getWindowsProcessCommandLine(pid, exec6);
       }
       try {
-        const text2 = String(exec6("ps", ["-o", "command=", "-p", String(pid)], {
+        const text3 = String(exec6("ps", ["-o", "command=", "-p", String(pid)], {
           encoding: "utf8",
           timeout: 3e3,
           stdio: ["ignore", "pipe", "ignore"]
         })).trim();
-        return text2 || null;
+        return text3 || null;
       } catch (error) {
         LOG.debug("ProcessLifecycle", `ps lookup failed for pid ${pid}: ${errorText(error)}`);
         return null;
@@ -116999,8 +117017,8 @@ ${marker2}`,
     function isRetriableInstallLockError(error) {
       const code = error?.code;
       if (code === "EBUSY" || code === "EPERM") return true;
-      const text2 = `${error?.message || ""} ${error?.stderr || ""}`;
-      return /\bEBUSY\b|\bEPERM\b|resource busy or locked/i.test(text2);
+      const text3 = `${error?.message || ""} ${error?.stderr || ""}`;
+      return /\bEBUSY\b|\bEPERM\b|resource busy or locked/i.test(text3);
     }
     function removeDaemonPidFile(configDir = getConfigDir()) {
       assertWorkerBridgeLifecycleAdmission("helper_pid_cleanup", configDir);
@@ -118395,9 +118413,9 @@ ${marker2}`,
     function hashSignatureParts(parts) {
       let hash2 = 2166136261;
       for (const part of parts) {
-        const text2 = String(part || "");
-        for (let i = 0; i < text2.length; i += 1) {
-          hash2 ^= text2.charCodeAt(i);
+        const text3 = String(part || "");
+        for (let i = 0; i < text3.length; i += 1) {
+          hash2 ^= text3.charCodeAt(i);
           hash2 = Math.imul(hash2, 16777619) >>> 0;
         }
         hash2 ^= 255;
@@ -118515,9 +118533,9 @@ ${marker2}`,
     init_provider_native_history();
     var HOT_TAIL_MIN_LIMIT = 60;
     function normalizeComparableWorkspace(value) {
-      const text2 = typeof value === "string" ? value.trim() : "";
-      if (!text2) return "";
-      const lexical = path64.resolve(text2);
+      const text3 = typeof value === "string" ? value.trim() : "";
+      if (!text3) return "";
+      const lexical = path64.resolve(text3);
       try {
         return fs59.realpathSync.native(lexical);
       } catch {
@@ -118553,8 +118571,8 @@ ${marker2}`,
     }
     function hasSafeNativeHistoryMapping(args) {
       const isCoordinatorTranscript = args.nativeMessages.some((m) => {
-        const text2 = typeof m?.content === "string" ? m.content : JSON.stringify(m?.content || "");
-        return text2.includes("mesh_send_task") || text2.includes("mesh_status") || text2.includes("mesh_read_chat") || text2.includes("mesh_launch_session");
+        const text3 = typeof m?.content === "string" ? m.content : JSON.stringify(m?.content || "");
+        return text3.includes("mesh_send_task") || text3.includes("mesh_status") || text3.includes("mesh_read_chat") || text3.includes("mesh_launch_session");
       });
       const explicitSessionId = String(args.historySessionId || args.providerSessionId || "").trim();
       if (explicitSessionId) {
@@ -118569,8 +118587,8 @@ ${marker2}`,
         }
         if (isCoordinatorTranscript && args.ptyMessages && args.ptyMessages.length > 0) {
           const ptyHasCoordinator = args.ptyMessages.some((m) => {
-            const text2 = typeof m?.content === "string" ? m.content : JSON.stringify(m?.content || "");
-            return text2.includes("mesh_send_task") || text2.includes("mesh_status") || text2.includes("mesh_read_chat");
+            const text3 = typeof m?.content === "string" ? m.content : JSON.stringify(m?.content || "");
+            return text3.includes("mesh_send_task") || text3.includes("mesh_status") || text3.includes("mesh_read_chat");
           });
           return ptyHasCoordinator;
         }
@@ -118582,8 +118600,8 @@ ${marker2}`,
       if (!workspaceMatches) return false;
       if (isCoordinatorTranscript && args.ptyMessages && args.ptyMessages.length > 0) {
         const ptyHasCoordinator = args.ptyMessages.some((m) => {
-          const text2 = typeof m?.content === "string" ? m.content : JSON.stringify(m?.content || "");
-          return text2.includes("mesh_send_task") || text2.includes("mesh_status") || text2.includes("mesh_read_chat");
+          const text3 = typeof m?.content === "string" ? m.content : JSON.stringify(m?.content || "");
+          return text3.includes("mesh_send_task") || text3.includes("mesh_status") || text3.includes("mesh_read_chat");
         });
         if (!ptyHasCoordinator) {
           return false;
@@ -119636,8 +119654,8 @@ ${marker2}`,
     function newEpochToken() {
       return (0, import_crypto22.randomBytes)(4).readUInt32BE(0).toString(36).padStart(6, "0").slice(-6);
     }
-    function contentKey(role, kind, text2) {
-      return `${role}\0${kind}\0${text2}`;
+    function contentKey(role, kind, text3) {
+      return `${role}\0${kind}\0${text3}`;
     }
     function sameContent(a, b) {
       return a.role === b.role && a.kind === b.kind && a.text === b.text;
@@ -120315,8 +120333,8 @@ ${marker2}`,
       if (outgoingReceipt) head.outgoingReceipt = outgoingReceipt;
       return head;
     }
-    function encodeChatPart(id4, k, rev, epoch, frame2, text2) {
-      return { v: 2, id: id4, k, rev, epoch, frame: frame2, text: text2 };
+    function encodeChatPart(id4, k, rev, epoch, frame2, text3) {
+      return { v: 2, id: id4, k, rev, epoch, frame: frame2, text: text3 };
     }
     function encodeChatDel(id4, k, rev, epoch, frame2) {
       return { v: 2, id: id4, k, rev, epoch, frame: frame2 };
@@ -120423,12 +120441,12 @@ ${marker2}`,
       if (cp < 65536) return 3;
       return 4;
     }
-    function chatJcsTextBytes(text2) {
+    function chatJcsTextBytes(text3) {
       let bytes = 0;
-      for (let i = 0; i < text2.length; i += 1) {
-        const c = text2.charCodeAt(i);
-        if (c >= 55296 && c <= 56319 && i + 1 < text2.length) {
-          const d = text2.charCodeAt(i + 1);
+      for (let i = 0; i < text3.length; i += 1) {
+        const c = text3.charCodeAt(i);
+        if (c >= 55296 && c <= 56319 && i + 1 < text3.length) {
+          const d = text3.charCodeAt(i + 1);
           if (d >= 56320 && d <= 57343) {
             bytes += 4;
             i += 1;
@@ -120439,16 +120457,16 @@ ${marker2}`,
       }
       return bytes;
     }
-    function splitChatBody(text2, maxBytes = CHAT_PART_MAX_JCS_BYTES) {
+    function splitChatBody(text3, maxBytes = CHAT_PART_MAX_JCS_BYTES) {
       const parts = [];
       let start = 0;
       let bytes = 0;
-      for (let i = 0; i < text2.length; ) {
-        const c = text2.charCodeAt(i);
+      for (let i = 0; i < text3.length; ) {
+        const c = text3.charCodeAt(i);
         let width = 1;
         let cpBytes;
-        if (c >= 55296 && c <= 56319 && i + 1 < text2.length) {
-          const d = text2.charCodeAt(i + 1);
+        if (c >= 55296 && c <= 56319 && i + 1 < text3.length) {
+          const d = text3.charCodeAt(i + 1);
           if (d >= 56320 && d <= 57343) {
             width = 2;
             cpBytes = 4;
@@ -120459,14 +120477,14 @@ ${marker2}`,
           cpBytes = jcsCodePointBytes(c);
         }
         if (bytes + cpBytes > maxBytes && i > start) {
-          parts.push(text2.slice(start, i));
+          parts.push(text3.slice(start, i));
           start = i;
           bytes = 0;
         }
         bytes += cpBytes;
         i += width;
       }
-      parts.push(text2.slice(start));
+      parts.push(text3.slice(start));
       return parts;
     }
     function isRev(value) {
@@ -120540,10 +120558,10 @@ ${marker2}`,
     }
     var import_node_crypto6 = require("crypto");
     init_dist2();
-    function sha1(text2) {
-      return (0, import_node_crypto6.createHash)("sha1").update(text2).digest("base64");
+    function sha1(text3) {
+      return (0, import_node_crypto6.createHash)("sha1").update(text3).digest("base64");
     }
-    function headChangeKey(head, text2) {
+    function headChangeKey(head, text3) {
       const fields = {
         ord: head.ord,
         role: head.role,
@@ -120558,13 +120576,13 @@ ${marker2}`,
         expandable: head.expandable,
         srcId: head.srcId
       };
-      return sha1(`${jcs(fields)}\0${text2}`);
+      return sha1(`${jcs(fields)}\0${text3}`);
     }
     function metaChangeKey(meta) {
       return sha1(jcs({ ...meta, rev: 0, epoch: "", frame: 0 }));
     }
-    function utf8Bytes(text2) {
-      return Buffer.byteLength(text2, "utf8");
+    function utf8Bytes(text3) {
+      return Buffer.byteLength(text3, "utf8");
     }
     var HEAD_OVERHEAD_BYTES = 256;
     var TRIPWIRE_REWRITE_SHARE = 0.5;
@@ -120648,11 +120666,11 @@ ${marker2}`,
         }
         for (const { head, writer } of heads.values()) {
           if (writer !== writerId) this.otherWriterRows = true;
-          let text2;
+          let text3;
           let partHashes = [];
           let partRevs = [];
           if ("text" in head.body) {
-            text2 = head.body.text;
+            text3 = head.body.text;
           } else {
             const map2 = parts.get(head.id);
             const pieces = [];
@@ -120662,18 +120680,18 @@ ${marker2}`,
               if (!piece || piece.rev !== head.body.partRevs[k]) complete = false;
               pieces.push(piece?.text ?? "");
             }
-            text2 = pieces.join("");
+            text3 = pieces.join("");
             partHashes = pieces.map((piece) => sha1(piece));
             partRevs = [...head.body.partRevs];
             if (!complete) this.markTorn(head.id, head.rev, map2 ? Array.from(map2.keys()) : []);
           }
           this.bubbles.set(head.id, {
             rev: head.rev,
-            hash: headChangeKey(head, text2),
+            hash: headChangeKey(head, text3),
             ord: head.ord,
             partHashes,
             partRevs,
-            bytes: utf8Bytes(text2) + HEAD_OVERHEAD_BYTES,
+            bytes: utf8Bytes(text3) + HEAD_OVERHEAD_BYTES,
             final: head.bubbleState === "final"
           });
         }
@@ -120719,7 +120737,7 @@ ${marker2}`,
        */
       build(observation, ctx) {
         if (ctx.retainMessages && (this.pendingBase === "writer_change" || this.pendingBase === "resync_request")) return { status: "unchanged" };
-        const observed = [];
+        const observed2 = [];
         const seen2 = /* @__PURE__ */ new Set();
         for (const message of observation.messages) {
           const id4 = typeof message.messageId === "string" ? message.messageId : "";
@@ -120727,8 +120745,8 @@ ${marker2}`,
           if (!id4 || !ord) return { status: "unidentified" };
           if (seen2.has(id4)) continue;
           seen2.add(id4);
-          const text2 = typeof message.content === "string" ? message.content : "";
-          observed.push({ message, id: id4, ord, text: text2, bytes: utf8Bytes(text2) + HEAD_OVERHEAD_BYTES });
+          const text3 = typeof message.content === "string" ? message.content : "";
+          observed2.push({ message, id: id4, ord, text: text3, bytes: utf8Bytes(text3) + HEAD_OVERHEAD_BYTES });
         }
         const retained = /* @__PURE__ */ new Set();
         if (ctx.retainMessages) for (const id4 of this.bubbles.keys()) retained.add(id4);
@@ -120737,7 +120755,7 @@ ${marker2}`,
         }
         if (ctx.verifiedClear || this.isLineageSwitch(observation)) retained.clear();
         const byOrd = [
-          ...observed.map((b) => ({ id: b.id, ord: b.ord, bytes: b.bytes })),
+          ...observed2.map((b) => ({ id: b.id, ord: b.ord, bytes: b.bytes })),
           ...Array.from(retained, (id4) => {
             const b = this.bubbles.get(id4);
             return { id: id4, ord: b.ord, bytes: b.bytes };
@@ -120770,7 +120788,7 @@ ${marker2}`,
         let rewritten = 0;
         let finalized = false;
         const nextRev = (id4, prior) => Math.max(prior?.rev ?? 0, this.tornIds.get(id4) ?? 0, this.deletedRevs.get(id4) ?? 0) + 1;
-        for (const bubble of observed) {
+        for (const bubble of observed2) {
           if (capped.has(bubble.id)) continue;
           const prior = this.bubbles.get(bubble.id);
           const probe = encodeChatMessageHead(bubble.message, {
@@ -121686,12 +121704,12 @@ ${marker2}`,
         return "";
       }
     }
-    function messageIdentityRevisionKey(message, text2 = flattenedText(message)) {
+    function messageIdentityRevisionKey(message, text3 = flattenedText(message)) {
       const meta = message.meta && typeof message.meta === "object" ? message.meta : void 0;
       return JSON.stringify([
         normalizedRole(message),
         normalizedKind(message),
-        text2,
+        text3,
         message.bubbleState ?? null,
         message._turnKey ?? null,
         message.senderName ?? null,
@@ -121702,14 +121720,14 @@ ${marker2}`,
       ]);
     }
     function toMessageIdentityInput(message) {
-      const text2 = flattenedText(message);
+      const text3 = flattenedText(message);
       const src = readMessageSourceAddress(message._src);
       return {
         role: normalizedRole(message),
         kind: normalizedKind(message),
-        text: text2,
+        text: text3,
         ...src ? { src } : {},
-        revisionKey: messageIdentityRevisionKey(message, text2),
+        revisionKey: messageIdentityRevisionKey(message, text3),
         // The tool-block ref an expand request resolves by `messageId` (design
         // §5.9). Kept on the ledger entry, refreshed every read, never emitted.
         ...message.toolBlockRef ? { locator: message.toolBlockRef } : {}
@@ -123831,19 +123849,19 @@ ${marker2}`,
       }
       return choices;
     }
-    function prepareOwnerActionChat(components, source2, sessionId, text2, selection, expectedModal) {
+    function prepareOwnerActionChat(components, source2, sessionId, text3, selection, expectedModal) {
       const state2 = assistantExecutionState(components);
-      if (sessionId !== state2.sessionId || !["p2p", "ws", "standalone"].includes(String(source2))) return { success: true, text: text2 };
+      if (sessionId !== state2.sessionId || !["p2p", "ws", "standalone"].includes(String(source2))) return { success: true, text: text3 };
       let raw = selection;
-      if (selection === void 0 && text2.startsWith("/assistant-action ")) {
+      if (selection === void 0 && text3.startsWith("/assistant-action ")) {
         try {
-          raw = JSON.parse(text2.slice("/assistant-action ".length));
+          raw = JSON.parse(text3.slice("/assistant-action ".length));
         } catch {
           return { success: false, code: "invalid_assistant_action" };
         }
       } else if (selection === void 0) {
-        const direction = /^(?:please\s+)?(approve|reject)(?:\s+(?:the request for\s+)?(.+?))?[.!]?$/i.exec(text2.trim());
-        if (!direction) return { success: true, text: text2 };
+        const direction = /^(?:please\s+)?(approve|reject)(?:\s+(?:the request for\s+)?(.+?))?[.!]?$/i.exec(text3.trim());
+        if (!direction) return { success: true, text: text3 };
         const requested = direction[1].toLowerCase();
         const targetName = direction[2]?.replace(/[.!]$/, "").trim();
         const choices = ownerActionChoices(components).filter((c2) => c2.action === requested && (!targetName || ["this", "selected permission"].includes(targetName.toLowerCase()) || c2.label === targetName || c2.targetSessionId === targetName));
@@ -123865,7 +123883,7 @@ ${marker2}`,
       if (expectedModal !== void 0 && expectedModal !== modalIdentity(target.modal)) return { success: false, code: "owner_modal_selection_changed" };
       const issued = assistantExecution.issue(source2, state2, action2, target.modal);
       if (!issued.success) return issued;
-      return { success: true, expiresAt: issued.expiresAt, text: `${text2}
+      return { success: true, expiresAt: issued.expiresAt, text: `${text3}
 [ADHDev owner action] ${JSON.stringify({ ...action2, authorization: issued.authorization, expiresAt: issued.expiresAt })}` };
     }
     init_contracts2();
@@ -124036,9 +124054,9 @@ ${marker2}`,
           if (hasNonTextParts(input)) {
             return refuse3("unsupported_input", { message: `${target.label || "This session"} only supports text input.` });
           }
-          const text2 = input.textFallback;
-          if (!text2 || !text2.trim()) return refuse3("unsupported_input", { message: "No input to send." });
-          return { text: text2 };
+          const text3 = input.textFallback;
+          if (!text3 || !text3.trim()) return refuse3("unsupported_input", { message: "No input to send." });
+          return { text: text3 };
         } catch (e) {
           return refuse3("unsupported_input", { message: e?.message || String(e) });
         }
@@ -124282,8 +124300,8 @@ ${marker2}`,
           log("info", `withdraw(${messageId}) session ${sessionId} \u2192 ${claimed ? "removed" : "not parked"}`);
           return { removed: !!claimed };
         },
-        async findParkedMessageIdByText(sessionId, text2) {
-          const wanted = text2.trim();
+        async findParkedMessageIdByText(sessionId, text3) {
+          const wanted = text3.trim();
           if (!wanted) return void 0;
           const candidates = [];
           for (const [messageId, entry] of parkedText) {
@@ -124417,13 +124435,13 @@ ${marker2}`,
     }
     function buildCliStructuredInputPrompt(input, options = {}) {
       const materializeDir = options.materializeDir || path67.join(os28.tmpdir(), "adhdev-input-media");
-      const { text: text2, imageRefs, resourceRefs } = buildStructuredInputText(input, (part, index) => {
+      const { text: text3, imageRefs, resourceRefs } = buildStructuredInputText(input, (part, index) => {
         const localPath = typeof part.uri === "string" ? filePathFromUri(part.uri) : null;
         const materializedPath = !localPath && part.data ? materializeImageDataPart(part, index, materializeDir) : null;
         return localPath || materializedPath || part.uri || "";
       });
       LOG.debug("CLI", `buildCliStructuredInputPrompt parts=${input.parts.length} images=${imageRefs.length} resources=${resourceRefs.length}`);
-      return text2;
+      return text3;
     }
     function buildCliInputAckText(input) {
       return buildStructuredInputText(input, (part) => {
@@ -124454,9 +124472,9 @@ ${marker2}`,
         return envelope.textFallback ? { text: envelope.textFallback } : null;
       }
       assertProviderSupportsDeclaredInput(provider, envelope);
-      const text2 = buildCliStructuredInputPrompt(envelope);
-      if (!text2) return null;
-      return { text: text2, ...shouldUseBracketedPasteForEnvelope(envelope) ? { bracketedPaste: true } : {} };
+      const text3 = buildCliStructuredInputPrompt(envelope);
+      if (!text3) return null;
+      return { text: text3, ...shouldUseBracketedPasteForEnvelope(envelope) ? { bracketedPaste: true } : {} };
     }
     function buildSessionInputTarget(args) {
       const { adapter, instance, provider } = args;
@@ -124465,7 +124483,7 @@ ${marker2}`,
         label: adapter.cliType,
         getStatus: (o) => adapter.getStatus?.(o),
         buildBody: (input) => buildCliInputBody(provider, input),
-        sendMessage: (text2, options) => adapter.sendMessage(text2, options)
+        sendMessage: (text3, options) => adapter.sendMessage(text3, options)
       };
       if (typeof adapter.sendMessageDuringGeneration === "function") target.sendMessageDuringGeneration = (t, b) => adapter.sendMessageDuringGeneration(t, b);
       if (typeof adapter.interruptTurn === "function") target.interruptTurn = () => adapter.interruptTurn();
@@ -124483,9 +124501,9 @@ ${marker2}`,
     function getSendChatInputEnvelope(args) {
       return normalizeInputEnvelope(args?.input ? { input: args.input } : args);
     }
-    function callLegacyTextScript(script, text2) {
+    function callLegacyTextScript(script, text3) {
       if (typeof script !== "function") return null;
-      return script(text2);
+      return script(text3);
     }
     function didProviderConfirmSend(result) {
       const parsed = parseMaybeJson(result);
@@ -124674,8 +124692,8 @@ ${marker2}`,
     }
     async function handleSendChat(h, args) {
       const input = getSendChatInputEnvelope(args);
-      const text2 = input.textFallback;
-      const hasInput = input.parts.length > 0 || typeof text2 === "string" && text2.trim().length > 0;
+      const text3 = input.textFallback;
+      const hasInput = input.parts.length > 0 || typeof text3 === "string" && text3.trim().length > 0;
       if (!hasInput) return { success: false, error: "input required" };
       const _log = (msg) => LOG.debug("Command", `[send_chat] ${msg}`);
       const provider = h.getProvider(args?.agentType);
@@ -124687,17 +124705,17 @@ ${marker2}`,
         return submitCliChat(h, args, input, provider, transport);
       }
       assertTextOnlyInput(provider, input);
-      if (!text2) return { success: false, error: "text required" };
+      if (!text3) return { success: false, error: "text required" };
       if (isExtensionTransport(transport)) {
         _log(`Extension: ${provider?.type || "unknown_extension"}`);
         try {
           const beforeState = await getStableExtensionBaseline(h);
-          const evalResult = await h.evaluateProviderScript("sendMessage", { message: text2 }, 3e4);
+          const evalResult = await h.evaluateProviderScript("sendMessage", { message: text3 }, 3e4);
           if (evalResult?.result) {
             const parsed = parseMaybeJson(evalResult.result);
             if (didProviderConfirmSend(parsed)) {
-              const observed = await verifyExtensionSendObserved(h, beforeState);
-              if (observed) {
+              const observed2 = await verifyExtensionSendObserved(h, beforeState);
+              if (observed2) {
                 _log(`Extension script sent OK`);
                 return _logSendSuccess("extension-script");
               }
@@ -124712,7 +124730,7 @@ ${marker2}`,
         }
         const extensionSessionId = h.currentSession?.sessionId;
         if (h.agentStream && h.getCdp() && extensionSessionId) {
-          const ok = await h.agentStream.sendToSession(h.getCdp(), extensionSessionId, text2);
+          const ok = await h.agentStream.sendToSession(h.getCdp(), extensionSessionId, text3);
           if (ok) {
             _log(`AgentStreamManager sent OK`);
             return _logSendSuccess("agent-stream");
@@ -124727,7 +124745,7 @@ ${marker2}`,
         return { success: false, error: `CDP for ${managerKey || "unknown"} not connected` };
       }
       _log(`Targeting IDE: ${getCurrentManagerKey(h)}`);
-      const sendScript = h.getProviderScript("sendMessage", { message: text2 });
+      const sendScript = h.getProviderScript("sendMessage", { message: text3 });
       if (sendScript) {
         try {
           const result = await targetCdp.evaluate(sendScript, 3e4);
@@ -124738,7 +124756,7 @@ ${marker2}`,
           }
           if (parsed?.needsTypeAndSend && parsed?.selector) {
             try {
-              const sent = await targetCdp.typeAndSend(parsed.selector, text2);
+              const sent = await targetCdp.typeAndSend(parsed.selector, text3);
               if (sent) {
                 _log(`typeAndSend(script.selector=${parsed.selector}) success`);
                 return _logSendSuccess("typeAndSend-script");
@@ -124750,7 +124768,7 @@ ${marker2}`,
           if (parsed?.needsTypeAndSend && parsed?.clickCoords) {
             try {
               const { x, y } = parsed.clickCoords;
-              const sent = await targetCdp.typeAndSendAt(x, y, text2);
+              const sent = await targetCdp.typeAndSendAt(x, y, text3);
               if (sent) {
                 _log(`typeAndSendAt(${x},${y}) success`);
                 return _logSendSuccess("typeAndSendAt-script");
@@ -124761,7 +124779,7 @@ ${marker2}`,
           }
           if (parsed?.needsTypeAndSend && provider?.inputMethod === "cdp-type-and-send" && provider.inputSelector) {
             try {
-              const sent = await targetCdp.typeAndSend(provider.inputSelector, text2);
+              const sent = await targetCdp.typeAndSend(provider.inputSelector, text3);
               if (sent) {
                 _log(`typeAndSend(provider.inputSelector=${provider.inputSelector}) success`);
                 return _logSendSuccess("typeAndSend-provider");
@@ -124772,7 +124790,7 @@ ${marker2}`,
           }
           if (parsed?.needsTypeAndSend && provider?.webviewMatchText && provider?.scripts?.webviewSendMessage) {
             try {
-              const webviewScript = callLegacyTextScript(provider.scripts.webviewSendMessage, text2);
+              const webviewScript = callLegacyTextScript(provider.scripts.webviewSendMessage, text3);
               if (webviewScript && targetCdp.evaluateInWebviewFrame) {
                 const matchText = provider.webviewMatchText;
                 const matchFn = matchText ? (body) => body.includes(matchText) : void 0;
@@ -124795,7 +124813,7 @@ ${marker2}`,
       }
       if (provider?.webviewMatchText && provider?.scripts?.webviewSendMessage) {
         try {
-          const webviewScript = callLegacyTextScript(provider.scripts.webviewSendMessage, text2);
+          const webviewScript = callLegacyTextScript(provider.scripts.webviewSendMessage, text3);
           if (webviewScript && targetCdp.evaluateInWebviewFrame) {
             const matchText = provider.webviewMatchText;
             const matchFn = matchText ? (body) => body.includes(matchText) : void 0;
@@ -124812,7 +124830,7 @@ ${marker2}`,
       }
       if (provider?.inputMethod === "cdp-type-and-send" && provider.inputSelector) {
         try {
-          const sent = await targetCdp.typeAndSend(provider.inputSelector, text2);
+          const sent = await targetCdp.typeAndSend(provider.inputSelector, text3);
           if (sent) {
             _log(`typeAndSend(provider.inputSelector=${provider.inputSelector}) success`);
             return _logSendSuccess("typeAndSend-provider");
@@ -124825,9 +124843,9 @@ ${marker2}`,
       return { success: false, error: "No provider method could send the message" };
     }
     async function handleCancelQueuedChat(h, args) {
-      const text2 = typeof args?.message === "string" ? args.message : "";
+      const text3 = typeof args?.message === "string" ? args.message : "";
       let messageId = readMessageId(args);
-      if (!messageId && !text2.trim()) return { success: false, error: "messageId required" };
+      if (!messageId && !text3.trim()) return { success: false, error: "messageId required" };
       const _log = (msg) => LOG.debug("Command", `[cancel_queued_chat] ${msg}`);
       const provider = h.getProvider(args?.agentType);
       const transport = getTargetTransport(h, provider);
@@ -124840,7 +124858,7 @@ ${marker2}`,
       }
       const service = sessionInputFor(h);
       if (!messageId) {
-        messageId = await service.findParkedMessageIdByText(sessionKey2, text2);
+        messageId = await service.findParkedMessageIdByText(sessionKey2, text3);
         _log(`legacy text-keyed cancel resolved to ${messageId || "nothing parked"}`);
         if (!messageId) return { success: true, cancelled: 0, removed: false };
       }
@@ -125572,7 +125590,7 @@ ${marker2}`,
       try {
         switch (action2) {
           case "input_key": {
-            const { type: evType, key: key3, code, text: text2, unmodifiedText, modifiers } = params;
+            const { type: evType, key: key3, code, text: text3, unmodifiedText, modifiers } = params;
             const mod = typeof modifiers === "number" ? modifiers : 0;
             const vk = KEY_TO_VK[key3] || (key3.length === 1 ? key3.charCodeAt(0) : 0);
             if (evType === "char") {
@@ -125580,8 +125598,8 @@ ${marker2}`,
                 type: "char",
                 key: key3,
                 code,
-                text: text2 || key3,
-                unmodifiedText: unmodifiedText || text2 || key3,
+                text: text3 || key3,
+                unmodifiedText: unmodifiedText || text3 || key3,
                 ...vk ? { windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk } : {},
                 ...mod ? { modifiers: mod } : {}
               });
@@ -125590,7 +125608,7 @@ ${marker2}`,
                 type: "rawKeyDown",
                 key: key3,
                 code,
-                ...text2 ? { text: text2 } : {},
+                ...text3 ? { text: text3 } : {},
                 ...vk ? { windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk } : {},
                 ...mod ? { modifiers: mod } : {}
               });
@@ -125635,8 +125653,8 @@ ${marker2}`,
             return { success: true, x, y };
           }
           case "input_type": {
-            const { text: text2 } = params;
-            for (const char of text2 || "") {
+            const { text: text3 } = params;
+            for (const char of text3 || "") {
               await h.getCdp().send("Input.dispatchKeyEvent", {
                 type: "char",
                 text: char,
@@ -125896,10 +125914,10 @@ ${marker2}`,
       const command = payload.command;
       if (!command || typeof command !== "object") return null;
       if (command.type !== "send_message" && command.type !== "pty_write") return null;
-      const text2 = typeof command.text === "string" ? command.text.trim() : typeof command.message === "string" ? command.message.trim() : "";
-      if (!text2) return null;
+      const text3 = typeof command.text === "string" ? command.text.trim() : typeof command.message === "string" ? command.message.trim() : "";
+      if (!text3) return null;
       const enterCount = Number.isInteger(command.enterCount) && command.enterCount > 0 && command.enterCount <= 5 ? command.enterCount : void 0;
-      return { type: command.type, text: text2, ...enterCount ? { enterCount } : {} };
+      return { type: command.type, text: text3, ...enterCount ? { enterCount } : {} };
     }
     init_control_effects();
     init_logger();
@@ -127978,13 +127996,13 @@ ${marker2}`,
       record_mesh_note: async (_ctx, args) => {
         const meshId = typeof args?.meshId === "string" ? args.meshId.trim() : "";
         if (!meshId) return { success: false, error: "meshId required" };
-        const text2 = typeof args?.text === "string" ? args.text.trim() : "";
-        if (!text2) return { success: false, error: "text required" };
+        const text3 = typeof args?.text === "string" ? args.text.trim() : "";
+        if (!text3) return { success: false, error: "text required" };
         try {
           const { recordOperatingNote: recordOperatingNote2 } = await Promise.resolve().then(() => (init_mesh_operating_notes(), mesh_operating_notes_exports));
           const category = typeof args?.category === "string" ? args.category : void 0;
           const entry = recordOperatingNote2(meshId, {
-            text: text2,
+            text: text3,
             ...category ? { category } : {},
             sourceCoordinator: "dashboard"
           });
@@ -127997,14 +128015,14 @@ ${marker2}`,
         const meshId = typeof args?.meshId === "string" ? args.meshId.trim() : "";
         if (!meshId) return { success: false, error: "meshId required" };
         const noteId = typeof args?.noteId === "string" ? args.noteId.trim() : "";
-        const text2 = typeof args?.text === "string" ? args.text.trim() : "";
-        if (!noteId && !text2) return { success: false, error: "noteId or text required" };
+        const text3 = typeof args?.text === "string" ? args.text.trim() : "";
+        if (!noteId && !text3) return { success: false, error: "noteId or text required" };
         try {
           const { forgetOperatingNote: forgetOperatingNote2 } = await Promise.resolve().then(() => (init_mesh_operating_notes(), mesh_operating_notes_exports));
           const reason = typeof args?.reason === "string" && args.reason.trim() ? args.reason.trim() : "dashboard_manual";
           const result = forgetOperatingNote2(meshId, {
             ...noteId ? { noteId } : {},
-            ...text2 ? { text: text2 } : {},
+            ...text3 ? { text: text3 } : {},
             reason
           });
           return { success: true, matched: result.matched };
@@ -128966,8 +128984,8 @@ ${marker2}`,
         fs69.closeSync(fd);
       }
     }
-    function splitLogLines(text2) {
-      const lines = text2.split("\n");
+    function splitLogLines(text3) {
+      const lines = text3.split("\n");
       if (lines.length && lines[lines.length - 1] === "") lines.pop();
       return lines;
     }
@@ -130174,8 +130192,8 @@ ${marker2}`,
           }
           const meshId = typeof args?.meshId === "string" ? args.meshId.trim() : "";
           const taskId = typeof args?.taskId === "string" ? args.taskId.trim() : "";
-          const text2 = typeof args?.text === "string" ? args.text.trim() : "";
-          if (!meshId || !taskId || !text2) {
+          const text3 = typeof args?.text === "string" ? args.text.trim() : "";
+          if (!meshId || !taskId || !text3) {
             return { success: false, error: "invalid_input", detail: "meshId, taskId and text are all required" };
           }
           const { MeshRuntimeStore: MeshRuntimeStore2 } = await Promise.resolve().then(() => (init_mesh_runtime_store(), mesh_runtime_store_exports));
@@ -130195,7 +130213,7 @@ ${marker2}`,
             if (dropped > 0) LOG.info("WorkerMailbox", `Dropped ${dropped} undelivered memo(s) for remote-owned task(s) no local worker holds any more`);
             LOG.info("WorkerMailbox", `Memo for remote-owned task ${taskId} (owner ${worker.ownerDaemonId.slice(0, 16)}) held for its local worker session ${worker.sessionId}`);
           }
-          const result = depositWorkerMailboxMessage2({ meshId, taskId, text: text2 });
+          const result = depositWorkerMailboxMessage2({ meshId, taskId, text: text3 });
           if (!result.ok) {
             return { success: false, error: result.error, detail: result.detail };
           }
@@ -132198,8 +132216,8 @@ ${marker2}`,
             const candidate = join113(workspace, relative13);
             if (!existsSync115(candidate)) continue;
             try {
-              const text2 = readFileSync93(candidate, "utf-8");
-              const parsed = /\.json$/i.test(candidate) ? JSON.parse(text2) : yaml3.load(text2);
+              const text3 = readFileSync93(candidate, "utf-8");
+              const parsed = /\.json$/i.test(candidate) ? JSON.parse(text3) : yaml3.load(text3);
               if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
                 baseDoc = parsed;
                 existingPath = candidate;
@@ -133435,11 +133453,11 @@ ${marker2}`,
               const noteEntries = readOperatingNotes2(id4, { tail: 100 });
               const notes = noteEntries.map((e) => {
                 const p = e.payload || {};
-                const text2 = typeof p.text === "string" ? p.text.trim() : "";
-                if (!text2) return null;
+                const text3 = typeof p.text === "string" ? p.text.trim() : "";
+                if (!text3) return null;
                 const category = p.category === "provider_quirk" || p.category === "pattern_to_avoid" || p.category === "recovery_lesson" ? p.category : void 0;
                 return {
-                  text: text2,
+                  text: text3,
                   category,
                   createdAt: typeof p.createdAt === "string" ? p.createdAt : e.timestamp,
                   sourceCoordinator: typeof p.sourceCoordinator === "string" ? p.sourceCoordinator : void 0,
@@ -135092,12 +135110,12 @@ ${ptyResult.output.slice(-2e3)}`);
         case "status":
           return { success: true, result: await localProjectStatus(ports, mesh) };
         case "send": {
-          const text2 = typeof args.text === "string" ? args.text : "";
-          if (!text2.trim()) return fail2("invalid_args", "text required");
-          if (text2.length > REMOTE_SEND_MAX_CHARS) return fail2("invalid_args", `text over ${REMOTE_SEND_MAX_CHARS} characters`);
+          const text3 = typeof args.text === "string" ? args.text : "";
+          if (!text3.trim()) return fail2("invalid_args", "text required");
+          if (text3.length > REMOTE_SEND_MAX_CHARS) return fail2("invalid_args", `text over ${REMOTE_SEND_MAX_CHARS} characters`);
           const clientId = str10(args.clientId);
           if (!clientId || clientId.length > 200) return fail2("invalid_args", "clientId required (at most 200 characters)");
-          const sent = await localProjectSend(ports, mesh, text2, clientId);
+          const sent = await localProjectSend(ports, mesh, text3, clientId);
           if (!sent.ok) return fail2(sent.code, sent.error, sent.detail);
           const { ok: _ok, ...result } = sent;
           return { success: true, result };
@@ -135245,8 +135263,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         skills: renderSkillIndex(input.skills, SKILL_INDEX_BUDGET_CHARS),
         safetyTail: ASSISTANT_SAFETY_TAIL
       };
-      const text2 = [sections.rules, sections.projects, sections.memory, sections.skills].join(SECTION_JOIN) + SECTION_JOIN + sections.safetyTail;
-      return { text: text2, length: text2.length, withinLimit: text2.length <= ASSISTANT_PROMPT_MAX_LENGTH, sections };
+      const text3 = [sections.rules, sections.projects, sections.memory, sections.skills].join(SECTION_JOIN) + SECTION_JOIN + sections.safetyTail;
+      return { text: text3, length: text3.length, withinLimit: text3.length <= ASSISTANT_PROMPT_MAX_LENGTH, sections };
     }
     var HOSTING_RANK = { here: 0, remote: 1, unmanaged: 2 };
     function field2(value, max = PROJECT_FIELD_MAX_CHARS) {
@@ -138438,7 +138456,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         if (spec?.session?.aliasSessionId) applySessionIdAlias(normalizedArgs);
         const interactionId = this.interactionContext.record(normalizedArgs);
         const revealedMeshIds = meshIdsRevealedByCommandArgs(normalizedArgs);
-        const maintenanceExempt = ["get_status_metadata", "cooperative_maintenance_status", "worker_report_completion", "worker_progress_update", "worker_bridge_delivery", "worker_bridge_capabilities", "worker_bridge_status"].includes(cmd);
+        const maintenanceExempt = ["get_status_metadata", "cooperative_maintenance_observe", "cooperative_maintenance_status", "worker_report_completion", "worker_progress_update", "worker_bridge_delivery", "worker_bridge_capabilities", "worker_bridge_status"].includes(cmd);
         let maintenanceCheck = () => {
         };
         try {
@@ -140459,15 +140477,15 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     async function handleRollbackProviderUpdate(host, args) {
       const providerType = typeof args?.providerType === "string" ? args.providerType.trim() : "";
       if (!providerType) return { success: false, error: "providerType required" };
-      const digest = host._ctx.providerLoader?.rollbackVerifiedChannel?.(providerType) ?? null;
-      if (!digest) {
+      const digest2 = host._ctx.providerLoader?.rollbackVerifiedChannel?.(providerType) ?? null;
+      if (!digest2) {
         return { success: false, error: `no rollback target for ${providerType}` };
       }
       const pin = host._ctx.providerLoader?.listVerifiedChannelPins?.()?.get(providerType);
       return {
         success: true,
         providerType,
-        digest,
+        digest: digest2,
         activeVersion: pin?.active?.providerVersion ?? null,
         previousVersion: pin?.previous?.providerVersion ?? null
       };
@@ -141661,8 +141679,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         };
         for (const entry of entries) {
           const scope = this.opts.metadataScope?.(entry.connectionId) ?? null;
-          const { body, digest } = cohortFor(entry.params?.includeSessions === true, scope);
-          this.deliverKeyed(entry, "daemon.metadata", digest, DAEMON_METADATA_DOC_SPEC, {
+          const { body, digest: digest2 } = cohortFor(entry.params?.includeSessions === true, scope);
+          this.deliverKeyed(entry, "daemon.metadata", digest2, DAEMON_METADATA_DOC_SPEC, {
             snapshot: (seq2, timestamp2) => ({ topic: "daemon.metadata", key: entry.key, mode: "snapshot", wireVersion: DASHBOARD_WIRE_VERSION, ...body, seq: seq2, timestamp: timestamp2 }),
             delta: (delta, seq2, timestamp2) => ({ topic: "daemon.metadata", key: entry.key, mode: "delta", daemonId: body.daemonId, delta, seq: seq2, timestamp: timestamp2 })
           });
@@ -141676,21 +141694,21 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
        * A failed send clears the baseline, so a gap is never papered over by a
        * later delta.
        */
-      deliverKeyed(entry, topic, digest, spec, frame2) {
+      deliverKeyed(entry, topic, digest2, spec, frame2) {
         const now = this.now();
         entry.lastFlushedAt = now;
         let update;
         if (!entry.keyedBaseline) {
           update = frame2.snapshot(entry.seq + 1, now);
         } else {
-          const delta = diffKeyedDoc(entry.keyedBaseline, digest, spec);
+          const delta = diffKeyedDoc(entry.keyedBaseline, digest2, spec);
           if (!delta) return;
           update = frame2.delta(delta, entry.seq + 1, now);
         }
         entry.seq += 1;
         entry.lastSentAt = now;
         const delivered = this.sink.send(entry.connectionId, topic, update);
-        entry.keyedBaseline = delivered === false ? null : digest;
+        entry.keyedBaseline = delivered === false ? null : digest2;
       }
       /**
        * mesh.status: flush every subscriber of `meshId` (or of every mesh). The
@@ -141735,9 +141753,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
               this.opts.onFlushError?.("mesh.status", error, { connectionId: "", key: "", detail: meshId });
             }
             if (!status) return;
-            const digest = digestKeyedDoc(status, MESH_STATUS_DOC_SPEC);
+            const digest2 = digestKeyedDoc(status, MESH_STATUS_DOC_SPEC);
             for (const entry of this.collectPushEntries("mesh.status")) {
-              if (entry.params.meshId === meshId) this.deliverMeshStatus(entry, meshId, status, digest);
+              if (entry.params.meshId === meshId) this.deliverMeshStatus(entry, meshId, status, digest2);
             }
           } while (this.meshFlushAgain.has(meshId));
         })().finally(() => {
@@ -141746,8 +141764,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         this.meshFlushInflight.set(meshId, run3);
         return run3;
       }
-      deliverMeshStatus(entry, meshId, status, digest) {
-        this.deliverKeyed(entry, "mesh.status", digest, MESH_STATUS_DOC_SPEC, {
+      deliverMeshStatus(entry, meshId, status, digest2) {
+        this.deliverKeyed(entry, "mesh.status", digest2, MESH_STATUS_DOC_SPEC, {
           snapshot: (seq2, timestamp2) => ({ topic: "mesh.status", key: entry.key, mode: "snapshot", wireVersion: DASHBOARD_WIRE_VERSION, meshId, status, seq: seq2, timestamp: timestamp2 }),
           delta: (delta, seq2, timestamp2) => ({ topic: "mesh.status", key: entry.key, mode: "delta", meshId, delta, seq: seq2, timestamp: timestamp2 })
         });
@@ -142117,12 +142135,186 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     };
     init_debug_config();
     init_debug_trace();
+    var import_node_crypto11 = require("crypto");
+    var import_session_host_core8 = require_dist();
+    init_cooperative_gate();
+    init_coordinator_registry();
+    var digest = (value) => (0, import_node_crypto11.createHash)("sha256").update(JSON.stringify(value)).digest("hex");
+    var text = (v) => typeof v === "string" ? v.trim() : "";
+    function retainedRuntimeInventory(records, state2) {
+      if (!Array.isArray(records) || new Set(records.map((r) => r.sessionId)).size !== records.length) throw new Error("maintenance_complete_inventory_required");
+      if (new Set(records.map((r) => r.osPid)).size !== records.length || new Set(records.map((r) => JSON.stringify([r.providerType, r.workspace, text(r.meta?.providerSessionId)]))).size !== records.length) throw new Error("maintenance_ambiguous_runtime_binding");
+      return records.map((r) => {
+        if (!text(r.sessionId) || !text(r.providerType) || !text(r.workspace) || !r.meta || !Number.isSafeInteger(r.startedAt) || !r.startedAt || r.startedAt > Date.now() || !Number.isSafeInteger(r.osPid) || r.osPid <= 0 || r.category !== "cli" || r.lifecycle !== "running" || !text(r.meta.providerSessionId)) throw new Error("maintenance_runtime_inventory_incomplete");
+        const meshId = text(r.meta.meshNodeFor), nodeId = text(r.meta.meshNodeId);
+        if (text(r.meta.daemonId) && r.meta.daemonId !== state2.daemonId) throw new Error("maintenance_unknown_runtime_owner");
+        if ((meshId || nodeId) && !state2.nodeRoster.some((n) => n.meshId === meshId && n.nodeId === nodeId && n.daemonId === state2.daemonId)) throw new Error("maintenance_unknown_runtime_owner");
+        const entry = getCoordinatorForSession(r.sessionId);
+        const coordinatorMeshId = text(entry?.meshId);
+        if (entry && (!Number.isFinite(entry.startedAt) || entry.startedAt <= 0 || !state2.meshIds.includes(coordinatorMeshId) || entry.workspace !== r.workspace || entry.cliType !== r.providerType)) throw new Error("maintenance_coordinator_binding_drift");
+        if (text(r.meta.meshCoordinatorFor) && r.meta.meshCoordinatorFor !== coordinatorMeshId) throw new Error("maintenance_coordinator_binding_missing");
+        const workOwner = text(r.meta.meshCoordinatorDaemonId);
+        if (workOwner && !state2.roster.includes(workOwner)) throw new Error("maintenance_unknown_runtime_owner");
+        return {
+          runtimeId: r.sessionId,
+          providerType: r.providerType,
+          providerSessionId: text(r.meta.providerSessionId),
+          workspace: r.workspace,
+          startedAt: r.startedAt,
+          pid: r.osPid,
+          daemonId: state2.daemonId,
+          meshId,
+          nodeId,
+          coordinatorMeshId,
+          coordinatorRegisteredAt: entry?.startedAt ?? null,
+          workOwner
+        };
+      }).sort((a, b) => a.runtimeId.localeCompare(b.runtimeId));
+    }
+    var retainedRuntimeInventoryDigest = (records, state2) => digest(retainedRuntimeInventory(records, state2));
+    var observed = /* @__PURE__ */ new WeakMap();
+    async function observeHeldHostedSessions(host, challenge) {
+      if (!text(challenge) || challenge.length > 256) throw new Error("maintenance_observation_challenge_required");
+      return withMaintenanceObservation(async (state2) => {
+        const registry = host.deps.getSessionRegistry?.();
+        if (!registry || !host.deps.verifiedRetainedEndpoint) throw new Error("maintenance_verified_endpoint_required");
+        const endpoint = await host.deps.verifiedRetainedEndpoint();
+        if (endpoint.path !== state2.retainedHost.endpoint) throw new Error("maintenance_retained_endpoint_drift");
+        const client = new import_session_host_core8.SessionHostClient({ endpoint });
+        try {
+          await client.connect();
+          const list = async () => {
+            const reply = await client.request({ type: "list_sessions", payload: {} });
+            if (!reply.success || !Array.isArray(reply.result)) throw new Error("maintenance_complete_inventory_required");
+            return reply.result;
+          };
+          const records = await list(), inventory = retainedRuntimeInventory(records, state2);
+          if (digest(inventory) !== state2.retainedHost.sessionSetDigest) throw new Error("maintenance_retained_inventory_drift");
+          for (const record3 of records) {
+            if (record3.meta.managedBy !== host.deps.hostedRuntimeManagerTag || host.providerLoader.getMeta(record3.providerType)?.category !== "cli") throw new Error("maintenance_unknown_runtime_provider");
+          }
+          const coordinators = state2.meshIds.flatMap((meshId) => {
+            const expected = listCoordinatorsForMesh(meshId);
+            if (expected.length > 1) throw new Error("maintenance_coordinator_binding_missing_or_ambiguous");
+            if (!expected.length) return [];
+            const actual = inventory.filter((r) => r.coordinatorMeshId === meshId && r.runtimeId === expected[0].sessionId);
+            if (actual.length !== 1) throw new Error("maintenance_coordinator_binding_missing_or_ambiguous");
+            return actual;
+          });
+          for (const r of records) {
+            const clientId = `maintenance-observer:${state2.daemonId}:${MAINTENANCE_BOOT_NONCE}`;
+            const reply = await client.request({ type: "attach_session", payload: { sessionId: r.sessionId, clientId, clientType: "daemon", readOnly: true } });
+            if (!reply.result?.attachedClients?.some((c) => c.clientId === clientId && c.readOnly === true) || JSON.stringify(reply.result.writeOwner) !== JSON.stringify(r.writeOwner)) throw new Error("maintenance_readonly_attach_required");
+            if (!reply.success || !reply.result || digest(retainedRuntimeInventory([reply.result], state2)[0]) !== digest(inventory.find((x) => x.runtimeId === r.sessionId))) throw new Error("maintenance_observation_attach_drift");
+          }
+          if (digest(retainedRuntimeInventory(await list(), state2)) !== digest(inventory)) throw new Error("maintenance_retained_inventory_drift");
+          const finalEndpoint = await host.deps.verifiedRetainedEndpoint();
+          if (finalEndpoint.path !== endpoint.path) throw new Error("maintenance_retained_endpoint_drift");
+          if (digest(retainedRuntimeInventory(records, state2)) !== digest(inventory)) throw new Error("maintenance_coordinator_binding_drift");
+          for (const r of inventory) registry.registerObservation({
+            sessionId: r.runtimeId,
+            parentSessionId: null,
+            providerType: r.providerType,
+            transport: "pty",
+            workspace: r.workspace,
+            spawnedAtMs: r.startedAt,
+            providerSessionId: r.providerSessionId || void 0,
+            maintenanceObservation: { observedAt: Date.now(), epoch: state2.epoch, bootNonce: MAINTENANCE_BOOT_NONCE, meshId: r.coordinatorMeshId || r.meshId || void 0, nodeId: r.nodeId || void 0, daemonId: state2.daemonId, coordinator: !!r.coordinatorMeshId }
+          });
+          const bindings = inventory.map((r) => {
+            const binding = registry.get(r.runtimeId);
+            if (!binding?.maintenanceObservation) throw new Error("maintenance_observation_binding_missing");
+            return {
+              sessionId: binding.sessionId,
+              providerType: binding.providerType,
+              providerSessionId: binding.providerSessionId,
+              workspace: binding.workspace,
+              spawnedAtMs: binding.spawnedAtMs,
+              maintenanceObservation: binding.maintenanceObservation
+            };
+          });
+          const proof = {
+            challenge,
+            epoch: state2.epoch,
+            bootNonce: MAINTENANCE_BOOT_NONCE,
+            planDigest: state2.planDigest,
+            artifactSha256: state2.targetSha256,
+            daemonId: state2.daemonId,
+            endpoint: endpoint.path,
+            hostPid: state2.retainedHost.pid,
+            hostBirth: state2.retainedHost.birth,
+            observedAt: Date.now(),
+            sessions: inventory,
+            coordinators,
+            bindings
+          };
+          const receipt = digest(proof);
+          observed.set(host, { epoch: state2.epoch, bootNonce: MAINTENANCE_BOOT_NONCE, inventoryDigest: digest(inventory), receipt, sessions: inventory });
+          return { ...proof, receipt };
+        } finally {
+          await client.close().catch(() => {
+          });
+        }
+      });
+    }
+    function verifyHeldObservationFleet(observations, state2, challenge) {
+      if (!text(challenge)) throw new Error("maintenance_observation_challenge_required");
+      if (state2.phase === "open") throw new Error("maintenance_held_observation_required");
+      const sessions = observations.flatMap((p) => p.sessions);
+      if (new Set(sessions.map((r) => r.runtimeId)).size !== sessions.length) throw new Error("maintenance_ambiguous_runtime_binding");
+      if (observations.length !== state2.roster.length || new Set(observations.map((p) => p.daemonId)).size !== state2.roster.length) throw new Error("maintenance_observation_fleet_incomplete");
+      for (const p of observations) {
+        const { receipt, ...proof } = p;
+        if (!state2.roster.includes(p.daemonId) || p.challenge !== challenge || p.epoch !== state2.epoch || p.planDigest !== state2.planDigest || p.artifactSha256 !== state2.targetSha256 || !text(p.bootNonce) || !Number.isFinite(p.observedAt) || p.observedAt <= 0 || p.observedAt > Date.now() || Date.now() - p.observedAt > 1e4 || digest(proof) !== receipt) throw new Error("maintenance_observation_fleet_stale");
+        if (p.bindings.length !== p.sessions.length || new Set(p.bindings.map((b) => b.sessionId)).size !== p.sessions.length) throw new Error("maintenance_observation_binding_missing");
+        for (const r of p.sessions) {
+          const binding = p.bindings.find((b) => b?.sessionId === r.runtimeId);
+          if (r.daemonId !== p.daemonId || binding?.maintenanceObservation?.daemonId !== p.daemonId || binding.maintenanceObservation.bootNonce !== p.bootNonce || binding.maintenanceObservation.epoch !== p.epoch) throw new Error("maintenance_observation_binding_missing");
+          if (binding.providerType !== r.providerType || binding.providerSessionId !== r.providerSessionId || binding.workspace !== r.workspace || binding.spawnedAtMs !== r.startedAt || binding.maintenanceObservation.meshId !== (r.coordinatorMeshId || r.meshId || void 0) || binding.maintenanceObservation.nodeId !== (r.nodeId || void 0) || binding.maintenanceObservation.coordinator !== !!r.coordinatorMeshId) throw new Error("maintenance_observation_binding_missing");
+          if (r.coordinatorMeshId && !state2.meshIds.includes(r.coordinatorMeshId)) throw new Error("maintenance_unknown_runtime_owner");
+          if ((r.meshId || r.nodeId) && !state2.nodeRoster.some((n) => n.meshId === r.meshId && n.nodeId === r.nodeId && n.daemonId === p.daemonId)) throw new Error("maintenance_unknown_runtime_owner");
+        }
+      }
+      const coordinators = observations.flatMap((p) => p.coordinators);
+      for (const meshId of state2.meshIds) {
+        const found = coordinators.filter((r) => r.coordinatorMeshId === meshId);
+        if (found.length !== 1 || !observations.some((p) => p.daemonId === found[0].daemonId && p.sessions.some((r) => JSON.stringify(r) === JSON.stringify(found[0])))) throw new Error("maintenance_coordinator_binding_missing_or_ambiguous");
+      }
+      for (const p of observations) for (const r of p.sessions) {
+        if (r.meshId && r.workOwner !== coordinators.find((c) => c.coordinatorMeshId === r.meshId)?.daemonId) throw new Error("maintenance_coordinator_route_drift");
+      }
+      return { challenge, epoch: state2.epoch, planDigest: state2.planDigest, boots: observations.map((p) => ({ daemonId: p.daemonId, bootNonce: p.bootNonce, receipt: p.receipt })), coordinators };
+    }
+    async function verifyHeldObservationPromotion(host, session) {
+      const state2 = readCooperativeMaintenance();
+      if (!state2) return;
+      assertMaintenanceAdmission();
+      const proof = observed.get(host);
+      if (!proof || proof.epoch !== state2.epoch || proof.bootNonce !== MAINTENANCE_BOOT_NONCE || state2.release?.ready.find((r) => r.daemonId === state2.daemonId)?.receipt !== proof.receipt) throw new Error("maintenance_fresh_observation_required");
+      if (!host.deps.verifiedRetainedEndpoint) throw new Error("maintenance_verified_endpoint_required");
+      const endpoint = await host.deps.verifiedRetainedEndpoint();
+      if (endpoint.path !== state2.retainedHost.endpoint) throw new Error("maintenance_retained_endpoint_drift");
+      const client = new import_session_host_core8.SessionHostClient({ endpoint });
+      try {
+        await client.connect();
+        const reply = await client.request({ type: "list_sessions", payload: {} });
+        if (!reply.success || !Array.isArray(reply.result) || digest(retainedRuntimeInventory(reply.result, state2)) !== proof.inventoryDigest) throw new Error("maintenance_retained_inventory_drift");
+        const actual = session && proof.sessions.find((r) => r.runtimeId === session.runtimeId);
+        if (session && (!actual || actual.providerType !== session.providerType || actual.workspace !== session.workspace || actual.startedAt !== session.startedAt)) throw new Error("maintenance_promotion_binding_drift");
+        if (session?.binding && actual && Object.entries(session.binding).some(([key3, value]) => actual[key3] !== value)) throw new Error("maintenance_promotion_binding_drift");
+        assertMaintenanceAdmission();
+        return proof.sessions;
+      } finally {
+        await client.close().catch(() => {
+        });
+      }
+    }
     init_cooperative_gate();
     init_config_dir();
     var fs92 = __toESM2(require("fs"));
     var path81 = __toESM2(require("path"));
     init_dist();
-    var import_node_crypto11 = require("crypto");
+    var import_node_crypto12 = require("crypto");
     var ProviderApprovalLifecycle = class {
       current = null;
       signature = null;
@@ -142163,7 +142355,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
             type: setup ? "provider_setup" : "tool_permission",
             evidence: "live",
             lifecycle: "pending",
-            modalKey: `modal:${(0, import_node_crypto11.randomUUID)()}`,
+            modalKey: `modal:${(0, import_node_crypto12.randomUUID)()}`,
             createdAt: at,
             resolvedAt: null,
             // Extracted titles can be button lines or private prompt text. The Inbox
@@ -142211,12 +142403,12 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     var os37 = __toESM2(require("os"));
     var path80 = __toESM2(require("path"));
     init_terminal_screen();
-    var import_session_host_core8 = require_dist();
+    var import_session_host_core9 = require_dist();
     init_logger();
     var MAX_PTY_EVENTS = 300;
     var EVENT_CONTENT_CAP = 240;
-    function escapeControl(text2) {
-      return String(text2).replace(/[\x00-\x1f\x7f]/g, (ch) => {
+    function escapeControl(text3) {
+      return String(text3).replace(/[\x00-\x1f\x7f]/g, (ch) => {
         const code = ch.charCodeAt(0);
         if (ch === "\r") return "\\r";
         if (ch === "\n") return "\\n";
@@ -142225,15 +142417,15 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         return "\\x" + code.toString(16).padStart(2, "0");
       });
     }
-    function capPreview(text2) {
-      return text2.length > EVENT_CONTENT_CAP ? text2.slice(0, EVENT_CONTENT_CAP) + `\u2026(+${text2.length - EVENT_CONTENT_CAP})` : text2;
+    function capPreview(text3) {
+      return text3.length > EVENT_CONTENT_CAP ? text3.slice(0, EVENT_CONTENT_CAP) + `\u2026(+${text3.length - EVENT_CONTENT_CAP})` : text3;
     }
     var TerminalAdapter = class {
       constructor(opts, handlers) {
         this.opts = opts;
         this.handlers = handlers;
-        this.cols = opts.cols ?? import_session_host_core8.DEFAULT_SESSION_HOST_COLS;
-        this.rows = opts.rows ?? import_session_host_core8.DEFAULT_SESSION_HOST_ROWS;
+        this.cols = opts.cols ?? import_session_host_core9.DEFAULT_SESSION_HOST_COLS;
+        this.rows = opts.rows ?? import_session_host_core9.DEFAULT_SESSION_HOST_ROWS;
         this.screenDebounceMs = opts.screenChangeDebounceMs ?? 80;
         this.tickIntervalMs = opts.tickIntervalMs ?? 0;
         if (opts.transportFactory) this.factory = opts.transportFactory;
@@ -142322,15 +142514,15 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       hasActivePty() {
         return this.pty !== null;
       }
-      send_keys(text2, primeContext) {
-        this.recordEvent("input", capPreview(escapeControl(text2)), text2.length);
+      send_keys(text3, primeContext) {
+        this.recordEvent("input", capPreview(escapeControl(text3)), text3.length);
         if (!primeContext) {
-          return this.pty?.write(text2);
+          return this.pty?.write(text3);
         }
-        return this.writeInput(text2, primeContext);
+        return this.writeInput(text3, primeContext);
       }
-      async writeInput(text2, primeContext) {
-        const bytes = Buffer.byteLength(text2, "utf8");
+      async writeInput(text3, primeContext) {
+        const bytes = Buffer.byteLength(text3, "utf8");
         const source2 = primeContext.source;
         const prefix = `[${primeContext.specTag}] `;
         const afterSpawnMs = Math.max(0, Date.now() - this.spawnedAtMs);
@@ -142341,7 +142533,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         }
         LOG.debug("FsmDriver", `${prefix}PTY write before source=${source2} bytes=${bytes} afterSpawnMs=${afterSpawnMs}`);
         try {
-          const result = await pty.write(text2);
+          const result = await pty.write(text3);
           const completedAfterSpawnMs = Math.max(0, Date.now() - this.spawnedAtMs);
           if (result === false) {
             LOG.warn("FsmDriver", `${prefix}PTY write after source=${source2} bytes=${bytes} afterSpawnMs=${completedAfterSpawnMs} outcome=false`);
@@ -142526,8 +142718,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       }
       return compiled;
     }
-    function matchSignalRule(rule, text2) {
-      const candidates = rule.multiline ? [text2] : text2.split("\n");
+    function matchSignalRule(rule, text3) {
+      const candidates = rule.multiline ? [text3] : text3.split("\n");
       for (const candidate of candidates) {
         const m = rule.regex.exec(candidate);
         if (!m) continue;
@@ -142564,10 +142756,10 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       if (rules.length === 0) return [];
       const out = [];
       for (const rule of rules) {
-        let text2 = fullScreen;
-        if (rule.section) text2 = sectionText2(rule.section);
-        if (!text2) continue;
-        const params = matchSignalRule(rule, text2);
+        let text3 = fullScreen;
+        if (rule.section) text3 = sectionText2(rule.section);
+        if (!text3) continue;
+        const params = matchSignalRule(rule, text3);
         if (!params) continue;
         if (!gate.shouldEmit(rule, params, now)) continue;
         out.push({ ruleId: rule.id, kind: rule.kind, params, detectedAt: now });
@@ -142579,17 +142771,17 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     init_logger();
     var WIN32_PTY_WRITE_CHUNK_CHARS = 1024;
     var WIN32_PTY_WRITE_CHUNK_GAP_MS = 8;
-    function chunkPreservingSurrogates(text2, size) {
+    function chunkPreservingSurrogates(text3, size) {
       const chunks = [];
       let offset = 0;
-      while (offset < text2.length) {
-        let end = Math.min(text2.length, offset + size);
-        if (end < text2.length) {
-          const code = text2.charCodeAt(end - 1);
+      while (offset < text3.length) {
+        let end = Math.min(text3.length, offset + size);
+        if (end < text3.length) {
+          const code = text3.charCodeAt(end - 1);
           if (code >= 55296 && code <= 56319) end -= 1;
         }
-        if (end <= offset) end = Math.min(text2.length, offset + size);
-        chunks.push(text2.slice(offset, end));
+        if (end <= offset) end = Math.min(text3.length, offset + size);
+        chunks.push(text3.slice(offset, end));
         offset = end;
       }
       return chunks;
@@ -142602,9 +142794,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     var SUBMIT_DELAY_FLOOR_MS = 200;
     var SUBMIT_DRAIN_SHUTDOWN_MAX_WAIT_MS = 3e4;
     var VERIFIED_SUBMIT_MIN_CHARS = 512;
-    function shouldUseVerifiedSubmit(text2, platform10 = process.platform) {
+    function shouldUseVerifiedSubmit(text3, platform10 = process.platform) {
       if (platform10 === "win32") return true;
-      return text2.length >= VERIFIED_SUBMIT_MIN_CHARS;
+      return text3.length >= VERIFIED_SUBMIT_MIN_CHARS;
     }
     var WIN32_BRACKETED_PASTE_OPEN = "\x1B[200~";
     var WIN32_BRACKETED_PASTE_CLOSE = "\x1B[201~";
@@ -142617,10 +142809,10 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     function normalizeForEcho(s2) {
       return s2.replace(/\s+/g, "");
     }
-    function resolveSubmitDelayMs(specBeforeSubmit, text2, manifestSendDelayMs) {
-      const lines = countNewlines(text2);
+    function resolveSubmitDelayMs(specBeforeSubmit, text3, manifestSendDelayMs) {
+      const lines = countNewlines(text3);
       const linesBonus = Math.min(800, lines * 80);
-      const lengthBonus = Math.min(800, Math.floor(text2.length / 1e3) * 200);
+      const lengthBonus = Math.min(800, Math.floor(text3.length / 1e3) * 200);
       const spec = typeof specBeforeSubmit === "number" && specBeforeSubmit > 0 ? specBeforeSubmit : 0;
       const manifest = typeof manifestSendDelayMs === "number" && Number.isFinite(manifestSendDelayMs) && manifestSendDelayMs > 0 ? manifestSendDelayMs : 0;
       return Math.max(spec, manifest, SUBMIT_DELAY_FLOOR_MS + linesBonus + lengthBonus);
@@ -142660,7 +142852,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       for (let i = 0; i < char.length; i += 1) units.push(char.charCodeAt(i));
       return units.map((u) => keyRecord(u, true)).join("") + units.slice().reverse().map((u) => keyRecord(u, false)).join("");
     }
-    function win32InputModeTokens(text2) {
+    function win32InputModeTokens(text3) {
       const tokens = [];
       let ascii = "";
       const pushAscii = () => {
@@ -142674,7 +142866,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         if (last < ascii.length) tokens.push({ text: ascii.slice(last), atomic: false });
         ascii = "";
       };
-      for (const ch of text2) {
+      for (const ch of text3) {
         if (ch.charCodeAt(0) < 128) {
           ascii += ch;
           continue;
@@ -142685,8 +142877,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       pushAscii();
       return tokens;
     }
-    function chunkWin32InputMode(text2, maxChars) {
-      return chunkWin32Tokens(win32InputModeTokens(text2), maxChars);
+    function chunkWin32InputMode(text3, maxChars) {
+      return chunkWin32Tokens(win32InputModeTokens(text3), maxChars);
     }
     function chunkWin32Tokens(tokens, maxChars) {
       const size = Math.max(1, Math.floor(maxChars));
@@ -142749,10 +142941,10 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         attempt.observer?.(state2);
         if (state2 === "submitted" && this.writeObservers.get(attempt.messageId) === attempt.observer) this.writeObservers.delete(attempt.messageId);
       }
-      writeKeys(text2, submit = false, attempt = this.writeAttempt) {
+      writeKeys(text3, submit = false, attempt = this.writeAttempt) {
         let result;
         try {
-          result = this.host.adapter.send_keys(text2);
+          result = this.host.adapter.send_keys(text3);
         } catch (error) {
           if (attempt) this.notifyWrite(attempt, "uncertain");
           throw error;
@@ -142839,7 +143031,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         }
       }
       /** SEND-NOW-AGENT-QUEUE: see ISpecDriver.sendMessageDuringGeneration. */
-      sendMessageDuringGeneration(text2, bracketedPaste) {
+      sendMessageDuringGeneration(text3, bracketedPaste) {
         if (process.platform === "win32") {
           LOG.info("FsmDriver", `[${this.host.specTag()}] mid-generation send refused \u2014 win32 split write unverified`);
           return { accepted: false, reason: "platform_unsupported" };
@@ -142849,9 +143041,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         if (this.isSendInFlight()) return { accepted: false, reason: "send_in_flight" };
         LOG.info(
           "FsmDriver",
-          `[${this.host.specTag()}] mid-generation split write \u2014 agent input queue (len=${text2.length})`
+          `[${this.host.specTag()}] mid-generation split write \u2014 agent input queue (len=${text3.length})`
         );
-        this.actuallySendMessage(text2, bracketedPaste, { midGeneration: true });
+        this.actuallySendMessage(text3, bracketedPaste, { midGeneration: true });
         return { accepted: true };
       }
       /** SEND-NOW-WRONG-ITEM: see ISpecDriver.reserveDrain. */
@@ -142932,18 +143124,18 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
        * on top of a still-generating turn, braiding the two bodies in the composer
        * (see the SEND-OVERLAP note above the constants).
        */
-      handleSendMessage(text2, bracketedPaste, messageId) {
+      handleSendMessage(text3, bracketedPaste, messageId) {
         if (!this.canSendNow()) {
           const id4 = messageId || `anon:${++this.anonymousSendCounter}`;
-          this.pendingSends.push({ messageId: id4, text: text2, bracketedPaste });
+          this.pendingSends.push({ messageId: id4, text: text3, bracketedPaste });
           const reason = this.sendBlockedReason();
           LOG.info(
             "FsmDriver",
-            `[${this.host.specTag()}] send queued \u2014 ${reason} (len=${text2.length}, queued=${this.pendingSends.length})`
+            `[${this.host.specTag()}] send queued \u2014 ${reason} (len=${text3.length}, queued=${this.pendingSends.length})`
           );
           return { status: "queued", queueDepth: this.pendingSends.length, reason };
         }
-        this.beginSend(text2, bracketedPaste, messageId);
+        this.beginSend(text3, bracketedPaste, messageId);
         return { status: "delivered" };
       }
       /** True when a send can be written to the PTY right now. */
@@ -142970,13 +143162,13 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         return true;
       }
       /** Mark a send as in flight and write it. */
-      beginSend(text2, bracketedPaste, messageId) {
+      beginSend(text3, bracketedPaste, messageId) {
         this.writeAttempt = messageId ? { messageId, bodyWrites: [], bodyFinished: false, observer: this.writeObservers.get(messageId) } : void 0;
         if (this.writeAttempt) this.notifyWrite(this.writeAttempt, "started");
         this.sendInFlight = true;
         this.sendInFlightAt = Date.now();
         this.armLatchWatchdog(SEND_IN_FLIGHT_MAX_MS + LATCH_WATCHDOG_SLACK_MS);
-        this.actuallySendMessage(text2, bracketedPaste);
+        this.actuallySendMessage(text3, bracketedPaste);
       }
       /**
        * QUEUE-WEDGE (live 2026-10-10, claude-cli/win32). The in-flight latch
@@ -143096,40 +143288,40 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           setTimeout(poll2, 100);
         });
       }
-      actuallySendMessage(text2, bracketedPaste, opts) {
+      actuallySendMessage(text3, bracketedPaste, opts) {
         const attempt = opts?.midGeneration ? null : this.writeAttempt;
         const sm = this.host.spec.send_message;
         this.submitUnconfirmed = false;
         const perChar = sm.delay_ms_per_char ?? 0;
-        const beforeSubmit = resolveSubmitDelayMs(sm.delay_ms_before_submit, text2, this.host.opts.manifestSendDelayMs);
+        const beforeSubmit = resolveSubmitDelayMs(sm.delay_ms_before_submit, text3, this.host.opts.manifestSendDelayMs);
         const wrapInPaste = process.platform !== "win32" && (bracketedPaste === true && sm.posix_bracketed_paste_for_images === true || sm.posix_bracketed_paste_text === true);
         if (opts?.midGeneration) {
-          const body = wrapInPaste ? `${BRACKETED_PASTE_OPEN}${text2}${BRACKETED_PASTE_CLOSE}` : text2;
+          const body = wrapInPaste ? `${BRACKETED_PASTE_OPEN}${text3}${BRACKETED_PASTE_CLOSE}` : text3;
           this.writeKeys(body, false, attempt);
           this.schedulePlainSubmit(sm.submit_key, Math.max(beforeSubmit, MID_GENERATION_SUBMIT_MIN_GAP_MS), null);
           return;
         }
         if (wrapInPaste) {
-          this.writeKeys(`${BRACKETED_PASTE_OPEN}${text2}${BRACKETED_PASTE_CLOSE}`, false, attempt);
+          this.writeKeys(`${BRACKETED_PASTE_OPEN}${text3}${BRACKETED_PASTE_CLOSE}`, false, attempt);
           if (attempt) attempt.bodyFinished = true;
           this.markBodyWrite();
-          this.scheduleVerifiedSubmit(sm.submit_key, beforeSubmit, text2, { skipEchoGate: true });
+          this.scheduleVerifiedSubmit(sm.submit_key, beforeSubmit, text3, { skipEchoGate: true });
           return;
         }
         if (process.platform === "win32") {
-          this.writeWin32Body(text2);
-          this.scheduleVerifiedSubmit(sm.submit_key, beforeSubmit, text2);
+          this.writeWin32Body(text3);
+          this.scheduleVerifiedSubmit(sm.submit_key, beforeSubmit, text3);
           return;
         }
-        if (perChar === 0 && shouldUseVerifiedSubmit(text2)) {
-          this.writeKeys(text2, false, attempt);
+        if (perChar === 0 && shouldUseVerifiedSubmit(text3)) {
+          this.writeKeys(text3, false, attempt);
           if (attempt) attempt.bodyFinished = true;
           this.markBodyWrite();
-          this.scheduleVerifiedSubmit(sm.submit_key, beforeSubmit, text2);
+          this.scheduleVerifiedSubmit(sm.submit_key, beforeSubmit, text3);
           return;
         }
         if (perChar === 0) {
-          this.writeKeys(text2, false, attempt);
+          this.writeKeys(text3, false, attempt);
           if (attempt) attempt.bodyFinished = true;
           if (beforeSubmit > 0) this.schedulePlainSubmit(sm.submit_key, beforeSubmit);
           else this.writeKeys(sm.submit_key, true, attempt);
@@ -143137,13 +143329,13 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         }
         let i = 0;
         const iv = setInterval(() => {
-          if (i >= text2.length) {
+          if (i >= text3.length) {
             clearInterval(iv);
             if (attempt) attempt.bodyFinished = true;
             this.schedulePlainSubmit(sm.submit_key, beforeSubmit, attempt);
             return;
           }
-          this.writeKeys(text2[i], false, attempt);
+          this.writeKeys(text3[i], false, attempt);
           i += 1;
         }, perChar);
       }
@@ -143178,31 +143370,31 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
        * written as their own atomic segments (never chunked), so chunking can never
        * split ESC[200~ / ESC[201~ mid-sequence regardless of body length.
        */
-      writeWin32Body(text2) {
+      writeWin32Body(text3) {
         const attempt = this.writeAttempt;
         if (this.win32WriteTimer) {
           clearTimeout(this.win32WriteTimer);
           this.win32WriteTimer = null;
         }
-        const hasNewline = /\r?\n/.test(text2);
+        const hasNewline = /\r?\n/.test(text3);
         const mode = resolveWin32SubmitMode();
         const chunkBody = this.host.spec.send_message.win32_input_mode_non_ascii === true ? chunkWin32InputMode : chunkPreservingSurrogates2;
         let segments;
         if (!hasNewline) {
-          segments = chunkBody(text2, WIN32_PTY_WRITE_CHUNK_CHARS);
+          segments = chunkBody(text3, WIN32_PTY_WRITE_CHUNK_CHARS);
         } else if (mode === "soft_newline") {
-          const rewritten = text2.split(/\r?\n/).join(WIN32_SOFT_NEWLINE);
+          const rewritten = text3.split(/\r?\n/).join(WIN32_SOFT_NEWLINE);
           segments = chunkBody(rewritten, WIN32_PTY_WRITE_CHUNK_CHARS);
         } else {
           segments = [
             WIN32_BRACKETED_PASTE_OPEN,
-            ...chunkBody(text2, WIN32_PTY_WRITE_CHUNK_CHARS),
+            ...chunkBody(text3, WIN32_PTY_WRITE_CHUNK_CHARS),
             WIN32_BRACKETED_PASTE_CLOSE
           ];
         }
         if (segments.length <= 1) {
           this.markBodyWrite();
-          this.writeKeys(segments[0] ?? text2, false, attempt);
+          this.writeKeys(segments[0] ?? text3, false, attempt);
           if (attempt) attempt.bodyFinished = true;
           return;
         }
@@ -143489,7 +143681,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       state2.lastDismissedSnapshot = screenSnapshot;
     }
     init_logger();
-    var import_session_host_core9 = require_dist();
+    var import_session_host_core10 = require_dist();
     var fs88 = __toESM2(require("fs"));
     var path79 = __toESM2(require("path"));
     var fs84 = __toESM2(require("fs"));
@@ -143692,9 +143884,9 @@ trust_level = "trusted"
     }
     function readJsonObject(storePath) {
       try {
-        const text2 = fs87.readFileSync(storePath, "utf8");
-        if (!text2.trim()) return {};
-        const parsed = JSON.parse(text2);
+        const text3 = fs87.readFileSync(storePath, "utf8");
+        if (!text3.trim()) return {};
+        const parsed = JSON.parse(text3);
         if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
           return parsed;
         }
@@ -143805,9 +143997,9 @@ trust_level = "trusted"
           if (trust.scheme === "claude_json_projects") {
             let root = {};
             try {
-              const text2 = fs88.readFileSync(settingsPath, "utf8");
-              if (text2.trim().length > 0) {
-                const parsed2 = JSON.parse(text2);
+              const text3 = fs88.readFileSync(settingsPath, "utf8");
+              if (text3.trim().length > 0) {
+                const parsed2 = JSON.parse(text3);
                 if (parsed2 && typeof parsed2 === "object" && !Array.isArray(parsed2)) {
                   root = parsed2;
                 }
@@ -143839,9 +144031,9 @@ trust_level = "trusted"
         const key3 = trust.key;
         let parsed = {};
         if (fs88.existsSync(settingsPath)) {
-          const text2 = fs88.readFileSync(settingsPath, "utf8");
-          if (text2.trim().length > 0) {
-            const json2 = JSON.parse(text2);
+          const text3 = fs88.readFileSync(settingsPath, "utf8");
+          if (text3.trim().length > 0) {
+            const json2 = JSON.parse(text3);
             if (json2 && typeof json2 === "object" && !Array.isArray(json2)) {
               parsed = json2;
             }
@@ -143897,8 +144089,8 @@ trust_level = "trusted"
       }
     }
     function buildSpecAdapterOpts(spec, opts) {
-      const cols = opts.cols ?? import_session_host_core9.DEFAULT_SESSION_HOST_COLS;
-      const rows = opts.rows ?? import_session_host_core9.DEFAULT_SESSION_HOST_ROWS;
+      const cols = opts.cols ?? import_session_host_core10.DEFAULT_SESSION_HOST_COLS;
+      const rows = opts.rows ?? import_session_host_core10.DEFAULT_SESSION_HOST_ROWS;
       const specSpawnArgs = stripRemovedSpawnArgs(
         spec.spawn_args ?? [],
         opts.removeSpawnArgs ?? []
@@ -144593,12 +144785,12 @@ trust_level = "trusted"
       observeSendWrite(messageId, observer) {
         this.sends.observeSendWrite(messageId, observer);
       }
-      sendMessageWithDisposition(text2, bracketedPaste, messageId) {
-        return this.sends.handleSendMessage(text2, bracketedPaste, messageId);
+      sendMessageWithDisposition(text3, bracketedPaste, messageId) {
+        return this.sends.handleSendMessage(text3, bracketedPaste, messageId);
       }
       /** SEND-NOW-AGENT-QUEUE: see ISpecDriver.sendMessageDuringGeneration. */
-      sendMessageDuringGeneration(text2, bracketedPaste) {
-        return this.sends.sendMessageDuringGeneration(text2, bracketedPaste);
+      sendMessageDuringGeneration(text3, bracketedPaste) {
+        return this.sends.sendMessageDuringGeneration(text3, bracketedPaste);
       }
       /** NOTIF-IMMEDIACY: see ISpecDriver.supportsMidGenerationQueue. */
       supportsMidGenerationQueue() {
@@ -145475,9 +145667,9 @@ trust_level = "trusted"
     function extractPickerChoices(driver, action2) {
       const ec = action2.extract_choices;
       if (!ec?.pattern) return [];
-      const text2 = readScreenSectionText(driver, ec.section);
+      const text3 = readScreenSectionText(driver, ec.section);
       const all = [];
-      for (const rawLine of text2.split("\n")) {
+      for (const rawLine of text3.split("\n")) {
         const line = rawLine.replace(/\r$/, "");
         const m = new RegExp(ec.pattern, ec.flags ?? "").exec(line);
         if (!m) continue;
@@ -145856,8 +146048,8 @@ trust_level = "trusted"
           continue;
         }
         if (type2 === "turn.steer" || type2 === "context.append_message") {
-          for (const text2 of kimiRecordTextParts(record3)) {
-            for (const match of text2.matchAll(/<notification\b[^>]*>/g)) {
+          for (const text3 of kimiRecordTextParts(record3)) {
+            for (const match of text3.matchAll(/<notification\b[^>]*>/g)) {
               const attrs = parseNotificationAttrs(match[0]);
               if (attrs.get("category") !== "task") continue;
               const sourceId = attrs.get("source_id") ?? "";
@@ -145944,8 +146136,8 @@ trust_level = "trusted"
         if (!Array.isArray(parts)) return;
         for (const part of parts) {
           if (!part || typeof part !== "object") continue;
-          const text2 = part.text;
-          if (typeof text2 === "string" && text2) out.push(text2);
+          const text3 = part.text;
+          if (typeof text3 === "string" && text3) out.push(text3);
         }
       };
       collect(record3.input);
@@ -146007,18 +146199,18 @@ trust_level = "trusted"
         storeTailJsonlCache(filePath2, { signature, maxBytes, sourceBytes: size, lines: out2 });
         return out2;
       }
-      let text2;
+      let text3;
       const fd = fs90.openSync(filePath2, "r");
       try {
         const buf = Buffer.alloc(length);
         const bytes = fs90.readSync(fd, buf, 0, length, start);
-        text2 = buf.subarray(0, bytes).toString("utf8");
+        text3 = buf.subarray(0, bytes).toString("utf8");
         tailJsonlCacheStats.fileReads++;
       } finally {
         fs90.closeSync(fd);
       }
       tailJsonlCacheStats.parsePasses++;
-      const rawLines = text2.split("\n");
+      const rawLines = text3.split("\n");
       if (start > 0 && rawLines.length > 0) rawLines.shift();
       const out = [];
       for (const line of rawLines) {
@@ -146080,13 +146272,13 @@ trust_level = "trusted"
       let inUser = false;
       let inThought = false;
       let seenRole = false;
-      const pushOrAppendAssistant = (text2) => {
+      const pushOrAppendAssistant = (text3) => {
         const last = messages[messages.length - 1];
         if (last && last.role === "assistant" && typeof last.content === "string") {
           last.content = last.content ? `${last.content}
-${text2}` : text2;
+${text3}` : text3;
         } else {
-          messages.push(assistantMessage(text2));
+          messages.push(assistantMessage(text3));
         }
       };
       for (const line of lines) {
@@ -146116,9 +146308,9 @@ ${text2}` : text2;
         if (inUser && isIndented(line)) continue;
         if (inThought && isIndented(line) && !JSON_START_RE.test(line) && !afterTool) continue;
         if (afterTool || inThought && JSON_START_RE.test(line)) {
-          const text2 = line.replace(/^\s+/, "");
-          if (text2) {
-            pushOrAppendAssistant(text2);
+          const text3 = line.replace(/^\s+/, "");
+          if (text3) {
+            pushOrAppendAssistant(text3);
             inThought = false;
             inUser = false;
           }
@@ -146128,23 +146320,23 @@ ${text2}` : text2;
     }
     var ANSI_OSC_DCS_RE = /\x1B\][^\x07]*(?:\x07|\x1B\\)|\x1B[P^_X][\s\S]*?(?:\x07|\x1B\\)/g;
     var ANSI_CSI_RE = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
-    function stripAnsi(text2) {
-      const s2 = String(text2 || "");
+    function stripAnsi(text3) {
+      const s2 = String(text3 || "");
       if (s2.indexOf("\x1B") === -1) return s2;
       return s2.replace(ANSI_OSC_DCS_RE, "").replace(ANSI_CSI_RE, "");
     }
     var AUTH_FAILURE_MESSAGE = "Provider credential was rejected by the CLI. Re-authenticate this CLI in this environment before retrying.";
-    function hasProviderFailureEnvelope(text2) {
-      return /\bprovider\.[a-z_]*error\b/.test(text2) || /\b(?:http\s*)?(?:40[23])\b\s*(?:[-:—]|\bforbidden\b|\bpayment\b|you\b|your\b)/.test(text2) || /\bstatus(?:\s+code)?\s*[:=]?\s*40[23]\b/.test(text2);
+    function hasProviderFailureEnvelope(text3) {
+      return /\bprovider\.[a-z_]*error\b/.test(text3) || /\b(?:http\s*)?(?:40[23])\b\s*(?:[-:—]|\bforbidden\b|\bpayment\b|you\b|your\b)/.test(text3) || /\bstatus(?:\s+code)?\s*[:=]?\s*40[23]\b/.test(text3);
     }
     function detectProviderFailure(output, _exitCode) {
-      const text2 = stripAnsi(output).replace(/\s+/g, " ").trim().toLowerCase();
-      if (!text2) return null;
-      const quota = hasProviderFailureEnvelope(text2) && [
+      const text3 = stripAnsi(output).replace(/\s+/g, " ").trim().toLowerCase();
+      if (!text3) return null;
+      const quota = hasProviderFailureEnvelope(text3) && [
         /\b(?:usage|quota|credit)\s+limit\b/,
         /\bquota\s*(?:exhausted|refresh)/,
         /\bbilling\s+cycle\b/
-      ].some((pattern) => pattern.test(text2));
+      ].some((pattern) => pattern.test(text3));
       if (quota) {
         return {
           errorReason: "quota_exceeded",
@@ -146157,7 +146349,7 @@ ${text2}` : text2;
         /\b(?:payment|billing)\s+(?:is\s+)?(?:required|failed|overdue)\b/,
         /\bpayment_required\b/,
         /\binsufficient\s+(?:balance|credits?)\b/
-      ].some((pattern) => pattern.test(text2));
+      ].some((pattern) => pattern.test(text3));
       if (billing) {
         return {
           errorReason: "billing_failed",
@@ -146193,7 +146385,7 @@ ${text2}` : text2;
         // adapted to wording that carries no HTTP status.
         /(?:^|[.!?·:;]\s*|\breason:\s*)(?:your\s+|the\s+)?(?:login|session|credential)s?\s+(?:has\s+|have\s+|is\s+|are\s+)?expired\b/,
         /(?:^|[.!?·:;]\s*)(?:please\s+)?(?:run|use)\s+\/login\b/
-      ].some((pattern) => pattern.test(text2));
+      ].some((pattern) => pattern.test(text3));
       if (auth) {
         return {
           errorReason: "auth_failed",
@@ -146231,11 +146423,11 @@ ${text2}` : text2;
     ].join("|") + ")$");
     var AUTH_ONLY_REPLY_MAX_CHARS = 600;
     function detectAuthFailureOnlyReply(reply) {
-      const text2 = stripAnsi(reply).replace(/\s+/g, " ").trim().toLowerCase();
-      if (!text2 || text2.length > AUTH_ONLY_REPLY_MAX_CHARS) return null;
-      const segments = (/^api\s+error:\s*401\b/.test(text2) ? text2.split(/\s*·\s*/) : text2.split(/\s*[.!?·;\n]\s*/)).map((segment) => segment.replace(/^[\s:,-]+|[\s:,.!-]+$/g, "")).filter(Boolean);
+      const text3 = stripAnsi(reply).replace(/\s+/g, " ").trim().toLowerCase();
+      if (!text3 || text3.length > AUTH_ONLY_REPLY_MAX_CHARS) return null;
+      const segments = (/^api\s+error:\s*401\b/.test(text3) ? text3.split(/\s*·\s*/) : text3.split(/\s*[.!?·;\n]\s*/)).map((segment) => segment.replace(/^[\s:,-]+|[\s:,.!-]+$/g, "")).filter(Boolean);
       if (segments.length === 0 || !segments.every((segment) => AUTH_ONLY_SEGMENT_RE.test(segment))) return null;
-      const failure6 = detectProviderFailure(text2);
+      const failure6 = detectProviderFailure(text3);
       return failure6?.failureKind === "auth" ? failure6 : { errorReason: "auth_failed", failureKind: "auth", message: AUTH_FAILURE_MESSAGE };
     }
     function buildSpecDebugSnapshot(v, driver) {
@@ -146320,7 +146512,7 @@ ${text2}` : text2;
       return messages;
     }
     var fs91 = __toESM2(require("fs"));
-    var import_node_crypto12 = require("crypto");
+    var import_node_crypto13 = require("crypto");
     init_provider_cli_shared();
     init_logger();
     var TERMINAL_SNAPSHOT_DEFAULT_MAX_BYTES = 32 * 1024;
@@ -146347,7 +146539,7 @@ ${text2}` : text2;
       } catch {
       }
       const truncation = truncateToByteTailByLine(rawViewport, cap);
-      const hash2 = (0, import_node_crypto12.createHash)("sha256").update(rawViewport, "utf8").digest("hex").slice(0, 16);
+      const hash2 = (0, import_node_crypto13.createHash)("sha256").update(rawViewport, "utf8").digest("hex").slice(0, 16);
       return {
         text: truncation.text,
         cursor: { col: cursor.col, row: cursor.row },
@@ -146654,8 +146846,8 @@ ${text2}` : text2;
       }
       return { ...base, status: "idle", fsmReadySeen: readySeen === true };
     }
-    function normalizeClaudeTuiIdentity(text2) {
-      return text2.replace(/\s+/g, " ").trim();
+    function normalizeClaudeTuiIdentity(text3) {
+      return text3.replace(/\s+/g, " ").trim();
     }
     function claudeTuiQuestionMatches(expected, focused) {
       const expectedQuestion = normalizeClaudeTuiIdentity(expected.question);
@@ -146690,10 +146882,10 @@ ${text2}` : text2;
       }
       return headers;
     }
-    function claudeAskUserQuestionPromptsMatch(expected, observed) {
-      if (expected.questions.length !== observed.questions.length) return false;
+    function claudeAskUserQuestionPromptsMatch(expected, observed2) {
+      if (expected.questions.length !== observed2.questions.length) return false;
       return expected.questions.every((expectedQuestion, index) => {
-        const observedQuestion = observed.questions[index];
+        const observedQuestion = observed2.questions[index];
         if (!observedQuestion || normalizeClaudeTuiIdentity(expectedQuestion.question) !== normalizeClaudeTuiIdentity(observedQuestion.question)) return false;
         const observedHeader = normalizeClaudeTuiIdentity(observedQuestion.header || "");
         if (observedHeader && normalizeClaudeTuiIdentity(expectedQuestion.header || "") !== observedHeader) return false;
@@ -147014,7 +147206,7 @@ ${text2}` : text2;
       if (screenText === null) return;
       const focused = readFocusedClaudeTuiQuestion(screenText);
       if (focused || !isClaudeTuiReviewScreen(screenText)) {
-        const observed = focused?.question ? `; focused question is "${focused.question}"` : "";
+        const observed2 = focused?.question ? `; focused question is "${focused.question}"` : "";
         const boundQuestionStillFocused = !!focused && prompt.questions.some((question) => claudeTuiQuestionMatches(question, focused));
         if (boundQuestionStillFocused) {
           if (host.hasBoundToolResult(prompt)) {
@@ -147025,11 +147217,11 @@ ${text2}` : text2;
             host.notifyChange("prompt_cleared");
             throw new ClaudeTuiAnswerDeliveredSignal();
           }
-          LOG.warn("SpecAdapter", `[${host.cliType}] picker still shows our bound question after the settle budget \u2014 answer keys were written but submission is unconfirmed and may not have happened (widenSettleBudget=${widenSettleBudget})${observed}`);
-          throw new Error(`${CLAUDE_TUI_REVIEW_UNCONFIRMED_PREFIX} \u2014 the answer keys were written to the terminal, but the question is still on screen, so the answer may not have been submitted; check the terminal before answering again${observed}`);
+          LOG.warn("SpecAdapter", `[${host.cliType}] picker still shows our bound question after the settle budget \u2014 answer keys were written but submission is unconfirmed and may not have happened (widenSettleBudget=${widenSettleBudget})${observed2}`);
+          throw new Error(`${CLAUDE_TUI_REVIEW_UNCONFIRMED_PREFIX} \u2014 the answer keys were written to the terminal, but the question is still on screen, so the answer may not have been submitted; check the terminal before answering again${observed2}`);
         }
-        LOG.warn("SpecAdapter", `[${host.cliType}] assertFocusedClaudeTuiReview failed closed (widenSettleBudget=${widenSettleBudget})${observed}`);
-        throw new Error(`${CLAUDE_TUI_REVIEW_PAGE_NOT_FOCUSED_PREFIX} for the active interactive prompt${observed}`);
+        LOG.warn("SpecAdapter", `[${host.cliType}] assertFocusedClaudeTuiReview failed closed (widenSettleBudget=${widenSettleBudget})${observed2}`);
+        throw new Error(`${CLAUDE_TUI_REVIEW_PAGE_NOT_FOCUSED_PREFIX} for the active interactive prompt${observed2}`);
       }
       const expectedHeaders = prompt.questions.map((q) => q.header && normalizeClaudeTuiIdentity(q.header)).filter((header) => !!header);
       if (expectedHeaders.length === 0) return;
@@ -147161,7 +147353,7 @@ ${text2}` : text2;
       "opencode": /\bopencode\b/i
     };
     var PROVIDER_LABEL = /\b(?:codex(?:-cli)?|openai|claude(?:-cli)?|anthropic|antigravity(?:-cli)?|agy|kimi(?:-cli)?|moonshot|cursor-(?:agent|cli)|grok(?:-cli)?|opencode)\b/gi;
-    function logicalBlocks(text2) {
+    function logicalBlocks(text3) {
       const blocks = [];
       let pending = [];
       let fence;
@@ -147174,7 +147366,7 @@ ${text2}` : text2;
         const prior = blocks[blocks.length - 1];
         if (!pending.length && prior?.trimEnd().endsWith(":") && Object.values(PROVIDER_MARKERS).some((marker2) => marker2.test(prior))) pending.push(blocks.pop());
       };
-      for (const line of text2.split("\n")) {
+      for (const line of text3.split("\n")) {
         const delimiter5 = line.match(/^\s*(`{3,}|~{3,})/);
         if (fence) {
           pending.push(line);
@@ -147262,11 +147454,11 @@ ${text2}` : text2;
       }
       return boundaries.map((start, i) => block2.slice(start, boundaries[i + 1] ?? block2.length));
     }
-    function maskForeignProviderText(cliType, text2) {
-      if (!(cliType in PROVIDER_MARKERS) || !text2) return text2;
-      const clean2 = stripAnsi(text2);
+    function maskForeignProviderText(cliType, text3) {
+      if (!(cliType in PROVIDER_MARKERS) || !text3) return text3;
+      const clean2 = stripAnsi(text3);
       const foreign = Object.entries(PROVIDER_MARKERS).filter(([provider]) => provider !== cliType);
-      if (!foreign.some(([, marker2]) => marker2.test(clean2))) return text2;
+      if (!foreign.some(([, marker2]) => marker2.test(clean2))) return text3;
       return logicalBlocks(clean2).flatMap((block2) => labelledStatements(cliType, block2)).map((statement) => foreign.some(([, marker2]) => marker2.test(statement)) ? "" : statement).join("\n");
     }
     function classifyOwnAuthFailureOnlyReply(cliType, reply) {
@@ -147281,8 +147473,8 @@ ${text2}` : text2;
     function createLiveAuthState() {
       return { suspect: null, advisoryNotifiedAtMs: 0, coordinatorMarkerLogged: false, stopRequested: false };
     }
-    function classifyAuthBillingOutput(cliType, text2, exitCode) {
-      const ownFailure = detectProviderFailure(maskForeignProviderText(cliType, text2), exitCode);
+    function classifyAuthBillingOutput(cliType, text3, exitCode) {
+      const ownFailure = detectProviderFailure(maskForeignProviderText(cliType, text3), exitCode);
       if (!ownFailure) return null;
       if (cliType !== "kimi" && ownFailure.failureKind !== "auth") return null;
       return ownFailure;
@@ -147682,17 +147874,17 @@ ${text2}` : text2;
       observeSendWrite(messageId, observer) {
         this.driver.observeSendWrite?.(messageId, observer);
       }
-      async sendMessage(text2, opts) {
-        LOG.info("SpecAdapter", `[${this.cliType}] sendMessage(len=${text2.length}${opts?.messageId ? ` id=${opts.messageId}` : ""})`);
-        LOG.debug("SpecAdapter", `[${this.cliType}] sendMessage body=${JSON.stringify(text2.slice(0, 80))}${text2.length > 80 ? "\u2026" : ""}`);
-        recordSentPrompt(this.owningSessionId, text2);
+      async sendMessage(text3, opts) {
+        LOG.info("SpecAdapter", `[${this.cliType}] sendMessage(len=${text3.length}${opts?.messageId ? ` id=${opts.messageId}` : ""})`);
+        LOG.debug("SpecAdapter", `[${this.cliType}] sendMessage body=${JSON.stringify(text3.slice(0, 80))}${text3.length > 80 ? "\u2026" : ""}`);
+        recordSentPrompt(this.owningSessionId, text3);
         if (typeof this.driver.sendMessageWithDisposition !== "function") {
-          this.driver.dispatch({ kind: "send_message", text: text2, bracketedPaste: opts?.bracketedPaste });
+          this.driver.dispatch({ kind: "send_message", text: text3, bracketedPaste: opts?.bracketedPaste });
           return;
         }
-        const disposition = this.driver.sendMessageWithDisposition(text2, opts?.bracketedPaste, opts?.messageId);
+        const disposition = this.driver.sendMessageWithDisposition(text3, opts?.bracketedPaste, opts?.messageId);
         if (disposition.status === "queued") {
-          LOG.info("SpecAdapter", `[${this.cliType}] send QUEUED not submitted \u2014 ${disposition.reason} (len=${text2.length}, queueDepth=${disposition.queueDepth})`);
+          LOG.info("SpecAdapter", `[${this.cliType}] send QUEUED not submitted \u2014 ${disposition.reason} (len=${text3.length}, queueDepth=${disposition.queueDepth})`);
           return { status: "queued", position: disposition.queueDepth };
         }
         return { status: "delivered" };
@@ -147709,14 +147901,14 @@ ${text2}` : text2;
        * the caller's whole contract here is that `accepted: false` means nothing
        * was written and its previous fallback is safe to take.
        */
-      sendMessageDuringGeneration(text2, bracketedPaste) {
+      sendMessageDuringGeneration(text3, bracketedPaste) {
         if (typeof this.driver.sendMessageDuringGeneration !== "function") {
           return { accepted: false, reason: "not_supported" };
         }
-        LOG.info("SpecAdapter", `[${this.cliType}] sendMessageDuringGeneration(len=${text2.length})`);
-        const outcome = this.driver.sendMessageDuringGeneration(text2, bracketedPaste);
+        LOG.info("SpecAdapter", `[${this.cliType}] sendMessageDuringGeneration(len=${text3.length})`);
+        const outcome = this.driver.sendMessageDuringGeneration(text3, bracketedPaste);
         if (!outcome.accepted) {
-          LOG.info("SpecAdapter", `[${this.cliType}] mid-generation send refused \u2014 ${outcome.reason} (len=${text2.length})`);
+          LOG.info("SpecAdapter", `[${this.cliType}] mid-generation send refused \u2014 ${outcome.reason} (len=${text3.length})`);
         }
         return outcome;
       }
@@ -148475,7 +148667,7 @@ ${text2}` : text2;
     init_logger();
     init_track_identity();
     var import_node_child_process13 = require("child_process");
-    var import_node_crypto13 = require("crypto");
+    var import_node_crypto14 = require("crypto");
     init_resolve_executable();
     var CodexStdioTransport = class {
       constructor(options) {
@@ -148485,7 +148677,7 @@ ${text2}` : text2;
       pending = /* @__PURE__ */ new Map();
       buffer = "";
       closed = true;
-      generation = (0, import_node_crypto13.randomUUID)();
+      generation = (0, import_node_crypto14.randomUUID)();
       start() {
         if (this.child) throw new Error("Codex runtime already started");
         this.closed = false;
@@ -148546,7 +148738,7 @@ ${text2}` : text2;
         this.child.stdin.write(JSON.stringify(message) + "\n");
       }
       request(method, params) {
-        const id4 = `adhdev:${this.generation}:${(0, import_node_crypto13.randomUUID)()}`;
+        const id4 = `adhdev:${this.generation}:${(0, import_node_crypto14.randomUUID)()}`;
         return new Promise((resolve41, reject) => {
           const timer = setTimeout(() => {
             this.pending.delete(id4);
@@ -148582,12 +148774,12 @@ ${text2}` : text2;
         this.options.onExit(error, reason);
       }
     };
-    var import_node_crypto14 = require("crypto");
+    var import_node_crypto15 = require("crypto");
     init_dist();
     function record2(value) {
       return value && typeof value === "object" && !Array.isArray(value) ? value : null;
     }
-    var text = (value) => typeof value === "string" && !!value.trim() && value.length <= 64e3;
+    var text2 = (value) => typeof value === "string" && !!value.trim() && value.length <= 64e3;
     var rpcKey = (id4) => `${typeof id4}:${id4}`;
     function parseAsyncQuestionReply(input) {
       if (!Array.isArray(input)) return null;
@@ -148613,7 +148805,7 @@ ${text2}` : text2;
       const values = Array.isArray(replies) ? replies : [replies];
       if (!values.length || values.some((value) => {
         const r = record2(value);
-        return !r || !text(r.questionItemId) || typeof r.question !== "string" || typeof r.answer !== "string";
+        return !r || !text2(r.questionItemId) || typeof r.question !== "string" || typeof r.answer !== "string";
       })) return null;
       return values;
     }
@@ -148640,17 +148832,17 @@ ${text2}` : text2;
       capture(requestId, raw) {
         if (this.entries.size >= 32 || this.seen.size >= 4096) return false;
         const p = record2(raw);
-        if (!p || p.threadId !== this.threadId || p.turnId !== this.turnId || !text(p.itemId) || typeof p.isBlocking !== "boolean" || !Array.isArray(p.questions) || !p.questions.length || p.questions.length > 32) return false;
+        if (!p || p.threadId !== this.threadId || p.turnId !== this.turnId || !text2(p.itemId) || typeof p.isBlocking !== "boolean" || !Array.isArray(p.questions) || !p.questions.length || p.questions.length > 32) return false;
         const key3 = `rpc:${rpcKey(requestId)}`;
         if (this.seen.has(key3)) return false;
         const questions = [];
         for (const value of p.questions) {
           const q = record2(value);
-          if (!q || !text(q.id) || !text(q.question) || typeof q.header !== "string" || typeof q.isOther !== "boolean" || typeof q.isSecret !== "boolean" || !(q.options === null || Array.isArray(q.options))) return false;
+          if (!q || !text2(q.id) || !text2(q.question) || typeof q.header !== "string" || typeof q.isOther !== "boolean" || typeof q.isSecret !== "boolean" || !(q.options === null || Array.isArray(q.options))) return false;
           const options = [];
           for (const value2 of q.options ?? []) {
             const option = record2(value2);
-            if (!option || !text(option.label) || typeof option.description !== "string") return false;
+            if (!option || !text2(option.label) || typeof option.description !== "string") return false;
             options.push({ label: option.label, description: option.description });
           }
           if (options.length > 32 || new Set(options.map((o) => o.label)).size !== options.length) return false;
@@ -148686,9 +148878,9 @@ ${text2}` : text2;
         const questions = [];
         for (const [index, value] of raw.entries()) {
           const q = record2(value);
-          if (!q || !text(q.title) || !(q.options === null || Array.isArray(q.options))) return false;
+          if (!q || !text2(q.title) || !(q.options === null || Array.isArray(q.options))) return false;
           const labels = q.options ?? [];
-          if (labels.length > 32 || labels.some((label2) => !text(label2)) || new Set(labels).size !== labels.length) return false;
+          if (labels.length > 32 || labels.some((label2) => !text2(label2)) || new Set(labels).size !== labels.length) return false;
           const questionId = JSON.stringify(["request_user_input_async", itemId, index]);
           if (Buffer.byteLength(questionId) > 512) return false;
           questions.push({
@@ -148713,7 +148905,7 @@ ${text2}` : text2;
       }
       prompt(binding, questions, blocking = binding.transport === "codex_rpc") {
         return {
-          promptId: (0, import_node_crypto14.randomUUID)(),
+          promptId: (0, import_node_crypto15.randomUUID)(),
           origin: "cli",
           providerType: "codex-cli",
           createdAt: Date.now(),
@@ -149022,12 +149214,12 @@ ${reply.answer}`).join("\n\n");
         }
         this.notify("fsm_state");
       }
-      async sendMessage(text2) {
+      async sendMessage(text3) {
         if (!this.isReady()) throw new Error("Codex managed runtime unavailable");
         const prompt = this.questions.active();
         if (prompt?.binding?.transport === "codex_rpc" && prompt.blocking !== false) throw new Error("Resolve the current native question before sending another input");
         const priorAsync = this.questions.asyncKeys();
-        const input = [{ type: "text", text: text2, textElements: [] }];
+        const input = [{ type: "text", text: text3, textElements: [] }];
         if (this.questions.turnId) await this.transport.request("turn/steer", { threadId: this.questions.threadId, expectedTurnId: this.questions.turnId, input });
         else {
           const result = record2(await this.transport.request("turn/start", { threadId: this.questions.threadId, input }));
@@ -149061,17 +149253,17 @@ ${reply.answer}`).join("\n\n");
             question: boundedTitle(q.question),
             answer: prepared.answers[q.questionId].answers[0]
           }));
-          const text2 = `<send_user_message_question_reply>
+          const text3 = `<send_user_message_question_reply>
 ${JSON.stringify(replies)}
 </send_user_message_question_reply>`;
           try {
-            await this.transport.request("turn/steer", { threadId: binding.threadId, expectedTurnId: binding.turnId, input: [{ type: "text", text: text2, textElements: [] }] });
+            await this.transport.request("turn/steer", { threadId: binding.threadId, expectedTurnId: binding.turnId, input: [{ type: "text", text: text3, textElements: [] }] });
           } catch (error) {
             this.questions.uncertain(prepared.key);
             this.notify("prompt_updated");
             throw error;
           }
-          this.questions.observeReply([{ type: "text", text: text2 }]);
+          this.questions.observeReply([{ type: "text", text: text3 }]);
         }
         this.notify("prompt_updated");
       }
@@ -150329,7 +150521,7 @@ ${buttons.join("\n")}`;
       const fromSnapshot = extractFinalSummaryFromMessagesAfter(pending.resolvedFinalMessages, pending.turnStartedAt);
       return fromSnapshot || void 0;
     }
-    var import_node_crypto15 = require("crypto");
+    var import_node_crypto16 = require("crypto");
     init_logger();
     function normalizeProviderSessionId(provider, providerSessionId) {
       const normalizedId = typeof providerSessionId === "string" ? providerSessionId.trim() : "";
@@ -150527,7 +150719,7 @@ ${buttons.join("\n")}`;
                 modal: "approval",
                 // Legacy adapters have no modal identity; persist only a digest of
                 // their live fingerprint, never prompt text or button labels.
-                modalKey: adapterStatus?.providerApproval?.modalKey ?? `modal-digest:${(0, import_node_crypto15.createHash)("sha256").update(approvalFingerprint).digest("hex")}`,
+                modalKey: adapterStatus?.providerApproval?.modalKey ?? `modal-digest:${(0, import_node_crypto16.createHash)("sha256").update(approvalFingerprint).digest("hex")}`,
                 clockUnknown: adapterStatus?.providerApproval?.createdAt === null,
                 providerSetup: adapterStatus?.providerApproval?.type === "provider_setup" && adapterStatus.providerApproval.evidence === "live"
               });
@@ -150920,13 +151112,13 @@ ${buttons.join("\n")}`;
       keyFor(message) {
         const role = typeof message.role === "string" ? message.role.trim().toLowerCase() : "";
         const kind = typeof message.kind === "string" ? message.kind.trim().toLowerCase() : "";
-        let text2 = "";
+        let text3 = "";
         try {
-          text2 = flattenContent(message.content);
+          text3 = flattenContent(message.content);
         } catch {
-          text2 = String(message.content ?? "");
+          text3 = String(message.content ?? "");
         }
-        return `${role}|${kind}|${text2.replace(/\s+/g, " ").trim()}`;
+        return `${role}|${kind}|${text3.replace(/\s+/g, " ").trim()}`;
       }
       remember(key3, firstSeenAt) {
         this.firstSeenAtByKey.set(key3, firstSeenAt);
@@ -152590,8 +152782,8 @@ ${buttons.join("\n")}`;
     }
     function nativeTurnTerminalSummary(host, turnStartedAt) {
       const marker2 = host.nativeTurnTerminalMarker(turnStartedAt);
-      const text2 = typeof marker2?.summary === "string" ? marker2.summary.trim() : "";
-      return text2 || void 0;
+      const text3 = typeof marker2?.summary === "string" ? marker2.summary.trim() : "";
+      return text3 || void 0;
     }
     function hasEmittedGenuineCompletionForCurrentEpoch(host) {
       const latch = host.lastEmittedCompletion;
@@ -154392,9 +154584,9 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
     }
     var chalkModule = import_chalk.default;
     var chalkApi = typeof chalkModule.yellow === "function" ? chalkModule : chalkModule.default || null;
-    function colorize(color, text2) {
+    function colorize(color, text3) {
       const fn = chalkApi?.[color];
-      return typeof fn === "function" ? fn(text2) : text2;
+      return typeof fn === "function" ? fn(text3) : text3;
     }
     function resolveLaunchProvenance(args, settings2) {
       const declared = readLaunchProvenanceArgs(args);
@@ -154520,6 +154712,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
       }
       return false;
     }
+    init_cooperative_gate();
     init_coordinator_registry();
     init_logger();
     init_runtime_defaults();
@@ -154532,9 +154725,21 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
       return managedBy === managerTag;
     }
     async function restoreHostedSessions(host, records) {
+      if (maintenanceHeld()) {
+        if (records) throw new Error("maintenance_complete_inventory_required");
+        return (await observeHeldHostedSessions(host, "held-boot-restore")).sessions.length;
+      }
+      return withMaintenanceAdmission(() => restoreWritableHostedSessions(host, records));
+    }
+    async function restoreWritableHostedSessions(host, records) {
       const instanceManager = host.deps.getInstanceManager();
-      if (!instanceManager) return 0;
+      if (!instanceManager) {
+        if (readCooperativeMaintenance()) throw new Error("maintenance_instance_manager_required");
+        return 0;
+      }
+      const promoted = await verifyHeldObservationPromotion(host);
       const sessions = records || await host.deps.listHostedCliRuntimes?.() || [];
+      if (promoted && (!records && sessions.length !== promoted.length || sessions.some((r) => !promoted.some((p) => p.runtimeId === r.runtimeId && p.providerType === r.cliType && p.workspace === r.workspace && p.startedAt === r.startedAtMs)))) throw new Error("maintenance_complete_promotion_inventory_required");
       let restored = 0;
       const restoredBindings = /* @__PURE__ */ new Set();
       const managerTag = host.deps.hostedRuntimeManagerTag;
@@ -154556,7 +154761,10 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
           );
           continue;
         }
-        if (host.adapters.has(record3.runtimeId) || instanceManager.getInstance(record3.runtimeId)) continue;
+        if (host.adapters.has(record3.runtimeId) || instanceManager.getInstance(record3.runtimeId)) {
+          if (promoted) throw new Error("maintenance_existing_writable_binding_requires_reconciliation");
+          continue;
+        }
         const normalizedType = host.providerLoader.resolveAlias(record3.cliType);
         const providerMeta = host.providerLoader.getMeta(normalizedType);
         if (!providerMeta || providerMeta.category !== "cli") continue;
@@ -154614,8 +154822,10 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
           LOG.info("CLI", `\u267B Restored hosted runtime: ${record3.runtimeKey || record3.runtimeId} (${record3.displayName || record3.workspace})`);
         } catch (error) {
           LOG.warn("CLI", `Failed to restore hosted runtime ${record3.runtimeId}: ${error?.message || error}`);
+          if (promoted) throw error;
         }
       }
+      if (promoted && restored !== sessions.length) throw new Error("maintenance_incomplete_writable_promotion");
       if (!records && typeof host.deps.listHostedCliRuntimes === "function") {
         pruneStaleCoordinatorEntries(sessions, restoredRuntimeIds, rebindAdoptedSessionIds);
         pruneStaleAssistantBinding(sessions, restoredRuntimeIds);
@@ -155062,6 +155272,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
        */
       scheduleAutoClean(key3, adapter, terminalStatus) {
         setTimeout(() => {
+          if (maintenanceHeld()) return;
           if (this.adapters.get(key3) !== adapter) return;
           const instanceManager = this.deps.getInstanceManager();
           this.adapters.delete(key3);
@@ -155088,108 +155299,111 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         }, 3e3);
       }
       async registerCliInstance(key3, normalizedType, cliType, resolvedDir, cliArgs, provider, settings2, attachExisting = false, options) {
-        const instanceManager = this.deps.getInstanceManager();
-        const sessionRegistry = this.deps.getSessionRegistry?.() || null;
-        if (!instanceManager) throw new Error("InstanceManager not available");
-        const launchMeshNodeId = typeof settings2?.meshNodeId === "string" ? settings2.meshNodeId.trim() : "";
-        const launchMeshNodeFor = typeof settings2?.meshNodeFor === "string" ? settings2.meshNodeFor.trim() : "";
-        const launchMeshCoordinatorDaemonId = typeof settings2?.meshCoordinatorDaemonId === "string" ? settings2.meshCoordinatorDaemonId.trim() : "";
-        const launchAutoLaunchedForQueueTaskId = typeof settings2?.autoLaunchedForQueueTaskId === "string" ? settings2.autoLaunchedForQueueTaskId.trim() : "";
-        const launchRecordMeta = {
-          ...launchMeshNodeId ? { meshNodeId: launchMeshNodeId } : {},
-          ...launchMeshNodeFor ? { meshNodeFor: launchMeshNodeFor } : {},
-          // The daemon that owns this worker's mesh work (see the descriptor field).
-          ...launchMeshNodeFor && launchMeshCoordinatorDaemonId ? { meshCoordinatorDaemonId: launchMeshCoordinatorDaemonId } : {},
-          ...settings2?.launchedByCoordinator === true ? { launchedByCoordinator: true } : {},
-          ...launchAutoLaunchedForQueueTaskId ? { autoLaunchedForQueueTaskId: launchAutoLaunchedForQueueTaskId } : {},
-          // The session's own approval mode (launch dialog / mesh policy). Restore
-          // rebuilt settings from provider defaults only, so a restarted
-          // coordinator came back with auto-approve off and asked for every
-          // command (2026-10-02).
-          ...typeof settings2?.autoApproveMode === "string" && settings2.autoApproveMode.trim() ? { autoApproveMode: settings2.autoApproveMode.trim() } : {},
-          // Phase E: persisted so a hosted runtime re-attached after a daemon
-          // restart keeps its model provenance (read back by listHostedCliRuntimes).
-          ...!attachExisting && options?.launchRecord ? { launchRecord: options.launchRecord } : {}
-        };
-        const structuredCodex = settings2?.codexTransport === "app-server";
-        if (structuredCodex && (normalizedType !== "codex-cli" || attachExisting || options?.providerSessionId || options?.launchMode === "resume")) {
-          throw new Error("Managed Codex transport requires a new Codex session");
-        }
-        const transportFactory = structuredCodex ? void 0 : this.getTransportFactory(
-          key3,
-          normalizedType,
-          resolvedDir,
-          cliArgs,
-          options?.providerSessionId,
-          attachExisting,
-          // Only seed at create time for fresh launches — an attach restores an
-          // existing record whose meta is already stamped; re-seeding could clobber.
-          attachExisting ? void 0 : launchRecordMeta
-        );
-        const cliInstance = new CliProviderInstance(provider, resolvedDir, cliArgs, key3, transportFactory, { ...options, structuredCodex });
-        try {
-          if (!attachExisting) assertMaintenanceAdmission();
-          await instanceManager.addInstance(key3, cliInstance, {
-            settings: settings2,
-            onPtyData: (data) => {
-              this.deps.getP2p()?.broadcastSessionOutput(cliInstance.instanceId, data);
-            }
-          });
-          sessionRegistry?.register({
-            sessionId: cliInstance.instanceId,
-            parentSessionId: null,
-            providerType: normalizedType,
-            transport: "pty",
-            adapterKey: key3,
-            instanceKey: key3,
-            workspace: resolvedDir,
-            // attachExisting === true means we're restoring an already-spawned
-            // hosted runtime after a daemon restart, not starting a fresh PTY.
-            //
-            // NEVER use Date.now() for the attach case: the real spawn time is in
-            // the PAST, and pinning the floor to now would push the native-history
-            // session-floor cutoff past every existing transcript file, so the
-            // agy/hermes/claude reader would return null even though the transcript
-            // on disk is fresh (the ANTIGRAVITY-FINAL-MESSAGE-TAIL-GAP regression).
-            //
-            // But collapsing to 0 for EVERY attach is also wrong: with the mesh
-            // coordinator + workers all running as hosted runtimes sharing one
-            // workspace and attached with attachExisting=true, spawnedAtMs=0 disables
-            // the per-session native-history birth-floor for all of them. Without a
-            // floor, resolveAntigravityPath takes the floor-less newest-by-mtime
-            // branch (ownerConfirmed:false) and a replica's read can claim the
-            // coordinator's OWN conversation, which then reads as claimedByOther —
-            // regressing the coordinator chat to the pty-parser (user-only) path.
-            //
-            // So when the session-host record's REAL startedAt (a PAST timestamp) is
-            // recoverable, use it: the floor lands at the runtime's actual birth, the
-            // transcript is still found, AND each session's floor isolates its own
-            // conversation. Fall back to 0 ONLY when startedAt is unrecoverable (the
-            // genuine post-restart-unknown case) — that preserves the tail-gap
-            // protection. Fresh launches still get Date.now() so prior-session leak
-            // protection holds.
-            spawnedAtMs: resolveHostedSpawnedAtMs(attachExisting, options?.attachStartedAtMs, Date.now())
-          }, attachExisting ? "restore" : "launch");
-        } catch (spawnErr) {
-          LOG.error("CLI", `[${cliType}] Spawn failed: ${spawnErr?.message}`);
-          instanceManager.removeInstance(key3);
-          throw new Error(`Failed to start ${provider.displayName || provider.name || cliType}: ${spawnErr?.message}`);
-        }
-        this.adapters.set(key3, cliInstance.getAdapter());
-        if (options?.launchRecord) {
-          sessionRegistry?.setLaunchRecord?.(
-            cliInstance.instanceId,
-            { ...options.launchRecord, sessionId: cliInstance.instanceId },
-            attachExisting ? "restore" : "launch"
-          );
-        }
-        if (Object.keys(launchRecordMeta).length) {
-          try {
-            cliInstance.getAdapter().updateRuntimeMeta?.({ ...launchRecordMeta });
-          } catch {
+        return withMaintenanceAdmission(async () => {
+          if (attachExisting) await verifyHeldObservationPromotion(this, { runtimeId: key3, providerType: normalizedType, workspace: resolvedDir, startedAt: options?.attachStartedAtMs, binding: { meshId: settings2.meshNodeFor || "", nodeId: settings2.meshNodeId || "", coordinatorMeshId: settings2.meshCoordinatorFor || "", workOwner: settings2.meshCoordinatorDaemonId || "" } });
+          const instanceManager = this.deps.getInstanceManager();
+          const sessionRegistry = this.deps.getSessionRegistry?.() || null;
+          if (!instanceManager) throw new Error("InstanceManager not available");
+          const launchMeshNodeId = typeof settings2?.meshNodeId === "string" ? settings2.meshNodeId.trim() : "";
+          const launchMeshNodeFor = typeof settings2?.meshNodeFor === "string" ? settings2.meshNodeFor.trim() : "";
+          const launchMeshCoordinatorDaemonId = typeof settings2?.meshCoordinatorDaemonId === "string" ? settings2.meshCoordinatorDaemonId.trim() : "";
+          const launchAutoLaunchedForQueueTaskId = typeof settings2?.autoLaunchedForQueueTaskId === "string" ? settings2.autoLaunchedForQueueTaskId.trim() : "";
+          const launchRecordMeta = {
+            ...launchMeshNodeId ? { meshNodeId: launchMeshNodeId } : {},
+            ...launchMeshNodeFor ? { meshNodeFor: launchMeshNodeFor } : {},
+            // The daemon that owns this worker's mesh work (see the descriptor field).
+            ...launchMeshNodeFor && launchMeshCoordinatorDaemonId ? { meshCoordinatorDaemonId: launchMeshCoordinatorDaemonId } : {},
+            ...settings2?.launchedByCoordinator === true ? { launchedByCoordinator: true } : {},
+            ...launchAutoLaunchedForQueueTaskId ? { autoLaunchedForQueueTaskId: launchAutoLaunchedForQueueTaskId } : {},
+            // The session's own approval mode (launch dialog / mesh policy). Restore
+            // rebuilt settings from provider defaults only, so a restarted
+            // coordinator came back with auto-approve off and asked for every
+            // command (2026-10-02).
+            ...typeof settings2?.autoApproveMode === "string" && settings2.autoApproveMode.trim() ? { autoApproveMode: settings2.autoApproveMode.trim() } : {},
+            // Phase E: persisted so a hosted runtime re-attached after a daemon
+            // restart keeps its model provenance (read back by listHostedCliRuntimes).
+            ...!attachExisting && options?.launchRecord ? { launchRecord: options.launchRecord } : {}
+          };
+          const structuredCodex = settings2?.codexTransport === "app-server";
+          if (structuredCodex && (normalizedType !== "codex-cli" || attachExisting || options?.providerSessionId || options?.launchMode === "resume")) {
+            throw new Error("Managed Codex transport requires a new Codex session");
           }
-        }
-        this.startCliExitMonitor(key3);
+          const transportFactory = structuredCodex ? void 0 : this.getTransportFactory(
+            key3,
+            normalizedType,
+            resolvedDir,
+            cliArgs,
+            options?.providerSessionId,
+            attachExisting,
+            // Only seed at create time for fresh launches — an attach restores an
+            // existing record whose meta is already stamped; re-seeding could clobber.
+            attachExisting ? void 0 : launchRecordMeta
+          );
+          const cliInstance = new CliProviderInstance(provider, resolvedDir, cliArgs, key3, transportFactory, { ...options, structuredCodex });
+          try {
+            if (!attachExisting) assertMaintenanceAdmission();
+            await instanceManager.addInstance(key3, cliInstance, {
+              settings: settings2,
+              onPtyData: (data) => {
+                this.deps.getP2p()?.broadcastSessionOutput(cliInstance.instanceId, data);
+              }
+            });
+            sessionRegistry?.register({
+              sessionId: cliInstance.instanceId,
+              parentSessionId: null,
+              providerType: normalizedType,
+              transport: "pty",
+              adapterKey: key3,
+              instanceKey: key3,
+              workspace: resolvedDir,
+              // attachExisting === true means we're restoring an already-spawned
+              // hosted runtime after a daemon restart, not starting a fresh PTY.
+              //
+              // NEVER use Date.now() for the attach case: the real spawn time is in
+              // the PAST, and pinning the floor to now would push the native-history
+              // session-floor cutoff past every existing transcript file, so the
+              // agy/hermes/claude reader would return null even though the transcript
+              // on disk is fresh (the ANTIGRAVITY-FINAL-MESSAGE-TAIL-GAP regression).
+              //
+              // But collapsing to 0 for EVERY attach is also wrong: with the mesh
+              // coordinator + workers all running as hosted runtimes sharing one
+              // workspace and attached with attachExisting=true, spawnedAtMs=0 disables
+              // the per-session native-history birth-floor for all of them. Without a
+              // floor, resolveAntigravityPath takes the floor-less newest-by-mtime
+              // branch (ownerConfirmed:false) and a replica's read can claim the
+              // coordinator's OWN conversation, which then reads as claimedByOther —
+              // regressing the coordinator chat to the pty-parser (user-only) path.
+              //
+              // So when the session-host record's REAL startedAt (a PAST timestamp) is
+              // recoverable, use it: the floor lands at the runtime's actual birth, the
+              // transcript is still found, AND each session's floor isolates its own
+              // conversation. Fall back to 0 ONLY when startedAt is unrecoverable (the
+              // genuine post-restart-unknown case) — that preserves the tail-gap
+              // protection. Fresh launches still get Date.now() so prior-session leak
+              // protection holds.
+              spawnedAtMs: resolveHostedSpawnedAtMs(attachExisting, options?.attachStartedAtMs, Date.now())
+            }, attachExisting ? "restore" : "launch");
+          } catch (spawnErr) {
+            LOG.error("CLI", `[${cliType}] Spawn failed: ${spawnErr?.message}`);
+            instanceManager.removeInstance(key3);
+            throw new Error(`Failed to start ${provider.displayName || provider.name || cliType}: ${spawnErr?.message}`);
+          }
+          this.adapters.set(key3, cliInstance.getAdapter());
+          if (options?.launchRecord) {
+            sessionRegistry?.setLaunchRecord?.(
+              cliInstance.instanceId,
+              { ...options.launchRecord, sessionId: cliInstance.instanceId },
+              attachExisting ? "restore" : "launch"
+            );
+          }
+          if (Object.keys(launchRecordMeta).length) {
+            try {
+              cliInstance.getAdapter().updateRuntimeMeta?.({ ...launchRecordMeta });
+            } catch {
+            }
+          }
+          this.startCliExitMonitor(key3);
+        });
       }
       startSession(cliType, workingDir, cliArgs, initialModel, options) {
         return startSession(this, cliType, workingDir, cliArgs, initialModel, options);
@@ -155235,6 +155449,9 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
           else adapter.shutdown();
         }
         this.adapters.clear();
+      }
+      observeHeldHostedSessions(challenge) {
+        return observeHeldHostedSessions(this, challenge);
       }
       restoreHostedSessions(records) {
         return restoreHostedSessions(this, records);
@@ -155654,15 +155871,15 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
           return state2;
         }
       }
-      async sendMessage(evaluate, text2) {
+      async sendMessage(evaluate, text3) {
         let beforeState = null;
         try {
           beforeState = await this.readStableBaselineState(evaluate);
         } catch {
           beforeState = null;
         }
-        const params = { message: text2 };
-        const script = this.callScript("sendMessage", params) || this.callScript("sendMessage", text2);
+        const params = { message: text3 };
+        const script = this.callScript("sendMessage", params) || this.callScript("sendMessage", text3);
         if (!script) throw new Error(`[${this.agentName}] sendMessage script not available`);
         const result = await evaluate(script);
         if (result && typeof result === "string" && result.startsWith("error:")) {
@@ -155973,7 +156190,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
           };
         }
       }
-      async sendToSession(cdp, sessionId, text2) {
+      async sendToSession(cdp, sessionId, text3) {
         await this.ensureSessionPanelOpen(sessionId);
         const target = this.getSessionTarget(sessionId);
         if (!target?.parentSessionId) return false;
@@ -155983,7 +156200,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         if (!agent) return false;
         try {
           const evaluate = (expr, timeout) => cdp.evaluateInSessionFrame(agent.cdpSessionId, expr, timeout);
-          await agent.adapter.sendMessage(evaluate, text2);
+          await agent.adapter.sendMessage(evaluate, text3);
           return true;
         } catch (e) {
           this.logFn(`[AgentStream] sendToSession(${sessionId}) error: ${e.message}`);
@@ -156923,6 +157140,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         }
       };
     }
+    init_cooperative_gate();
     init_launch_record();
     function inferLegacyOrigin(target) {
       if (target.transport === "cdp-page") return "attach";
@@ -156951,10 +157169,10 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
        * re-register of a live id is an upsert, not a termination, so it emits no
        * `terminated`.
        */
-      register(target, origin = inferLegacyOrigin(target)) {
+      register(target, origin = inferLegacyOrigin(target), observationOnly = false) {
         const prior = this.bySessionId.get(target.sessionId);
         const priorProviderSessionId = prior?.providerSessionId;
-        this.detach(target.sessionId);
+        this.detach(target.sessionId, !observationOnly);
         if (priorProviderSessionId && !target.providerSessionId) {
           target = { ...target, providerSessionId: priorProviderSessionId };
         }
@@ -156966,7 +157184,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         if (target.instanceKey) this.addIndex(this.byInstanceKey, target.instanceKey, target.sessionId);
         if (target.parentSessionId) this.addIndex(this.byParentSessionId, target.parentSessionId, target.sessionId);
         if (target.providerSessionId) this.byProviderSessionId.set(target.providerSessionId, target.sessionId);
-        this.bus?.emit({
+        if (!observationOnly) this.bus?.emit({
           kind: "registered",
           sessionId: target.sessionId,
           at: this.now(),
@@ -156974,15 +157192,29 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
           session: { ...target }
         });
       }
+      /** No lifecycle bus edge: held inventory must not trigger restore producers. */
+      registerObservation(target) {
+        if (!target.maintenanceObservation) throw new Error("maintenance_observation_binding_required");
+        this.register(target, "restore", true);
+      }
       get(sessionId) {
         if (!sessionId) return void 0;
-        return this.bySessionId.get(sessionId);
+        const target = this.bySessionId.get(sessionId);
+        if (target?.maintenanceObservation) {
+          try {
+            const s2 = readCooperativeMaintenance();
+            if (!s2 || !maintenanceHeld() || target.maintenanceObservation.epoch !== s2.epoch || target.maintenanceObservation.bootNonce !== MAINTENANCE_BOOT_NONCE || Date.now() - target.maintenanceObservation.observedAt > 1e4 || target.maintenanceObservation.observedAt > Date.now()) return void 0;
+          } catch {
+            return void 0;
+          }
+        }
+        return target;
       }
       has(sessionId) {
-        return !!sessionId && this.bySessionId.has(sessionId);
+        return !!this.get(sessionId);
       }
       list() {
-        return [...this.bySessionId.values()];
+        return [...this.bySessionId.keys()].map((id4) => this.get(id4)).filter((s2) => !!s2);
       }
       /**
        * Resolve a daemon session id OR a provider-native conversation id to the
@@ -156991,8 +157223,9 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
       resolveAlias(idOrProviderSessionId) {
         const id4 = typeof idOrProviderSessionId === "string" ? idOrProviderSessionId.trim() : "";
         if (!id4) return null;
-        if (this.bySessionId.has(id4)) return id4;
-        return this.byProviderSessionId.get(id4) ?? null;
+        if (this.has(id4)) return id4;
+        const sessionId = this.byProviderSessionId.get(id4);
+        return sessionId && this.has(sessionId) ? sessionId : null;
       }
       /**
        * Record the authoritative provider-native conversation id for a session
@@ -157090,6 +157323,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         if (!sessionId) return false;
         const target = this.detach(sessionId);
         if (!target) return false;
+        if (target.maintenanceObservation) return true;
         this.bus?.emit({
           kind: "terminated",
           sessionId,
@@ -157124,12 +157358,12 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         return [...ids].map((id4) => this.bySessionId.get(id4)).filter(Boolean);
       }
       /** Drop a session from every index without emitting. Returns the removed entry. */
-      detach(sessionId) {
+      detach(sessionId, releaseClaim = true) {
         const target = this.bySessionId.get(sessionId);
         if (!target) return void 0;
         this.bySessionId.delete(sessionId);
         try {
-          this.transcriptTopicRelease?.(sessionId);
+          if (releaseClaim && !target.maintenanceObservation) this.transcriptTopicRelease?.(sessionId);
         } catch {
         }
         if (target.cdpManagerKey) this.removeIndex(this.byManagerKey, target.cdpManagerKey, sessionId);
@@ -158015,8 +158249,8 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     }
     async function handleTypeAndSend(ctx, type2, req, res) {
       const body = await ctx.readBody(req);
-      const { selector, text: text2 } = body;
-      if (!selector || typeof selector !== "string" || !text2 || typeof text2 !== "string") {
+      const { selector, text: text3 } = body;
+      if (!selector || typeof selector !== "string" || !text3 || typeof text3 !== "string") {
         ctx.json(res, 400, { error: "selector and text strings required" });
         return;
       }
@@ -158026,7 +158260,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         return;
       }
       try {
-        const sent = await cdp.typeAndSend(selector, text2);
+        const sent = await cdp.typeAndSend(selector, text3);
         ctx.json(res, 200, { sent });
       } catch (e) {
         ctx.json(res, 500, { error: e.message });
@@ -158034,8 +158268,8 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     }
     async function handleTypeAndSendAt(ctx, type2, req, res) {
       const body = await ctx.readBody(req);
-      const { x, y, text: text2 } = body;
-      if (typeof x !== "number" || typeof y !== "number" || !text2 || typeof text2 !== "string") {
+      const { x, y, text: text3 } = body;
+      if (typeof x !== "number" || typeof y !== "number" || !text3 || typeof text3 !== "string") {
         ctx.json(res, 400, { error: "x, y numbers and text string required" });
         return;
       }
@@ -158045,7 +158279,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         return;
       }
       try {
-        const sent = await cdp.typeAndSendAt(x, y, text2);
+        const sent = await cdp.typeAndSendAt(x, y, text3);
         ctx.json(res, 200, { sent });
       } catch (e) {
         ctx.json(res, 500, { error: e.message });
@@ -158632,8 +158866,8 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     }
     async function handleFindByText(ctx, req, res) {
       const body = await ctx.readBody(req);
-      const { text: text2, ideType, containerSelector } = body;
-      if (!text2 || typeof text2 !== "string") {
+      const { text: text3, ideType, containerSelector } = body;
+      if (!text3 || typeof text3 !== "string") {
         ctx.json(res, 400, { error: "text is required" });
         return;
       }
@@ -158668,7 +158902,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       return parts.join(' < ');
     }
 
-    const searchText = ${JSON.stringify(text2)}.toLowerCase();
+    const searchText = ${JSON.stringify(text3)}.toLowerCase();
     const container = ${containerArg} ? document.querySelector(${containerArg}) : document.body;
     if (!container) return JSON.stringify({ error: 'Container not found' });
 
@@ -158740,7 +158974,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       return (bMax - aMax) || (a.depth - b.depth);
     });
 
-    return JSON.stringify({ query: ${JSON.stringify(text2)}, matches, total: matches.length });
+    return JSON.stringify({ query: ${JSON.stringify(text3)}, matches, total: matches.length });
   })()`;
       try {
         const raw = await cdp.evaluate(script, 1e4);
@@ -159106,7 +159340,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       }
       const {
         type: type2,
-        text: text2,
+        text: text3,
         instanceId: requestedInstanceId,
         workingDir,
         args,
@@ -159123,7 +159357,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       if (!type2) {
         throw new Error("type required (e.g. claude-cli, codex-cli)");
       }
-      if (!text2 || typeof text2 !== "string") {
+      if (!text3 || typeof text3 !== "string") {
         throw new Error("text required (prompt to send to the CLI)");
       }
       let resolvedInstanceId = requestedInstanceId;
@@ -159218,7 +159452,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         if (status === "idle") break;
         await sleep2(150);
       }
-      ctx.instanceManager.sendEvent(bundle.target.instanceId, "send_message", { text: text2 });
+      ctx.instanceManager.sendEvent(bundle.target.instanceId, "send_message", { text: text3 });
       while (Date.now() - startAt < Math.max(1e3, timeoutMs)) {
         await sleep2(150);
         bundle = getCliTargetBundle(ctx, type2, bundle.target.instanceId);
@@ -159380,8 +159614,8 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         return;
       }
       const body = await ctx.readBody(req);
-      const { type: type2, text: text2, instanceId } = body;
-      if (!text2) {
+      const { type: type2, text: text3, instanceId } = body;
+      if (!text3) {
         ctx.json(res, 400, { error: "text required" });
         return;
       }
@@ -159397,9 +159631,9 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
             ctx.json(res, 404, { error: `No running CLI adapter found for: ${type2 || instanceId}` });
             return;
           }
-          await bundle.adapter.sendMessage(text2);
+          await bundle.adapter.sendMessage(text3);
         } else {
-          ctx.instanceManager.sendEvent(target.instanceId, "send_message", { text: text2 });
+          ctx.instanceManager.sendEvent(target.instanceId, "send_message", { text: text3 });
         }
         ctx.json(res, 200, { sent: true, type: target.type, instanceId: target.instanceId });
       } catch (e) {
@@ -160637,7 +160871,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     };
     init_pty_transport();
     init_cooperative_gate();
-    var import_session_host_core10 = require_dist();
+    var import_session_host_core11 = require_dist();
     init_logger();
     init_resolve_executable();
     function shouldResumeAttachedSession(record3) {
@@ -160650,7 +160884,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     var SessionHostRuntimeTransport = class {
       constructor(options) {
         this.options = options;
-        this.client = new import_session_host_core10.SessionHostClient({
+        this.client = new import_session_host_core11.SessionHostClient({
           endpoint: options.endpoint,
           appName: options.appName
         });
@@ -160955,9 +161189,9 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           if (!snapshotResponse.success) {
             throw new Error(snapshotResponse.error || `Failed to load snapshot for ${this.options.runtimeId}`);
           }
-          const text2 = snapshotResponse.result?.text || "";
-          if (text2) {
-            this.emitData(text2);
+          const text3 = snapshotResponse.result?.text || "";
+          if (text3) {
+            this.emitData(text3);
           }
         }
       }
@@ -161099,7 +161333,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       return typeof error === "string" && /^(?:Runtime not found for session|Unknown session):/.test(error);
     }
     var import_crypto35 = require("crypto");
-    var import_session_host_core11 = require_dist();
+    var import_session_host_core12 = require_dist();
     var BASE_KEY_SEQUENCES = {
       enter: "\r",
       escape: "\x1B",
@@ -161197,7 +161431,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         if (!sessionId) throw new Error("sessionId is required");
         const mode = options.mode || "read";
         const clientId = options.clientId || `raw-terminal-${process.pid}-${(0, import_crypto35.randomUUID)().slice(0, 8)}`;
-        const client = options.client || new import_session_host_core11.SessionHostClient({ endpoint: options.endpoint });
+        const client = options.client || new import_session_host_core12.SessionHostClient({ endpoint: options.endpoint });
         await client.connect();
         const attachResponse = await client.request({
           type: "attach_session",
@@ -161251,14 +161485,14 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       async readState() {
         return (await this.readSnapshot()).state;
       }
-      async writeInput(text2) {
+      async writeInput(text3) {
         if (this.mode !== "write") throw new Error("Raw terminal attachment is read-only");
         const response = await this.client.request({
           type: "send_input",
           payload: {
             sessionId: this.sessionId,
             clientId: this.clientId,
-            data: text2
+            data: text3
           }
         });
         if (!response.success) throw new Error(response.error || `Failed to write terminal input to ${this.sessionId}`);
@@ -161291,7 +161525,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         await attachment.close();
       }
     }
-    var import_session_host_core12 = require_dist();
+    var import_session_host_core13 = require_dist();
     init_runtime_defaults();
     var STARTUP_TIMEOUT_MS = DEFAULT_SESSION_HOST_READY_TIMEOUT_MS;
     var STARTUP_POLL_MS = 200;
@@ -161329,7 +161563,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       }
     }
     async function canConnect(endpoint, requiredRequestTypes = []) {
-      const client = new import_session_host_core12.SessionHostClient({ endpoint });
+      const client = new import_session_host_core13.SessionHostClient({ endpoint });
       try {
         await client.connect();
         await assertRequiredRequestTypes(client, requiredRequestTypes);
@@ -161351,7 +161585,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       throw new Error(`Session host did not become ready within ${timeoutMs}ms`);
     }
     async function ensureSessionHostReady(options) {
-      const endpoint = options.endpoint || (0, import_session_host_core12.getDefaultSessionHostEndpoint)(options.appName || resolveSessionHostAppName());
+      const endpoint = options.endpoint || (0, import_session_host_core13.getDefaultSessionHostEndpoint)(options.appName || resolveSessionHostAppName());
       const requiredRequestTypes = options.requiredRequestTypes || [];
       if (await canConnect(endpoint, requiredRequestTypes)) return endpoint;
       options.spawnHost();
@@ -161359,7 +161593,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       return endpoint;
     }
     async function listHostedCliRuntimes(endpoint) {
-      const client = new import_session_host_core12.SessionHostClient({ endpoint });
+      const client = new import_session_host_core13.SessionHostClient({ endpoint });
       try {
         const response = await client.request({
           type: "list_sessions",
@@ -161404,7 +161638,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     var fs102 = __toESM2(require("fs"));
     var os422 = __toESM2(require("os"));
     var path92 = __toESM2(require("path"));
-    var import_session_host_core13 = require_dist();
+    var import_session_host_core14 = require_dist();
     init_logger();
     init_disk_space_preflight();
     init_runtime_defaults();
@@ -161414,9 +161648,9 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       const isManagedPid = options.isManagedPid ?? (() => true);
       let unverifiedStopPid = null;
       const instance = () => getProcessInstanceContext();
-      const getEndpoint = () => (0, import_session_host_core13.getDefaultSessionHostEndpoint)(appName, { ipcKey: instance().ipcKey });
+      const getEndpoint = () => (0, import_session_host_core14.getDefaultSessionHostEndpoint)(appName, { ipcKey: instance().ipcKey });
       function buildEnv(baseEnv) {
-        const env2 = (0, import_session_host_core13.sanitizeSpawnEnv)(baseEnv);
+        const env2 = (0, import_session_host_core14.sanitizeSpawnEnv)(baseEnv);
         env2.ADHDEV_SESSION_HOST_NAME = appName;
         env2.ADHDEV_CONFIG_DIR = instance().configDir;
         return env2;
@@ -161592,7 +161826,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         } catch {
           return;
         }
-        const client = new import_session_host_core13.SessionHostClient({ endpoint: getEndpoint() });
+        const client = new import_session_host_core14.SessionHostClient({ endpoint: getEndpoint() });
         let reported;
         try {
           await client.connect();
@@ -161628,7 +161862,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           const birth = String(hiddenExecFileSync("/bin/ps", ["-o", "lstart=", "-p", String(h.pid)], { encoding: "utf8", timeout: 5e3 })).trim();
           const ownerText = String(hiddenExecFileSync(process.platform === "darwin" ? "/usr/sbin/lsof" : "/usr/bin/lsof", ["-t", endpoint.path], { encoding: "utf8", timeout: 5e3 })).trim();
           if (!/^\d+$/.test(ownerText)) throw new Error("maintenance_retained_socket_owner_unknown");
-          const client = new import_session_host_core13.SessionHostClient({ endpoint });
+          const client = new import_session_host_core14.SessionHostClient({ endpoint });
           try {
             await client.connect();
             const reply = await client.request({ type: "get_host_diagnostics", payload: { includeSessions: false } });
@@ -164934,13 +165168,13 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       if (!epoch && heads.length === 0) return null;
       const entries = heads.map((h) => {
         const body = h.body;
-        let text2 = typeof body.text === "string" ? body.text : "";
+        let text3 = typeof body.text === "string" ? body.text : "";
         if (typeof body.parts === "number") {
           const map2 = parts.get(h.id);
-          text2 = "";
-          for (let k = 0; k < body.parts; k += 1) text2 += map2?.get(k) ?? "";
+          text3 = "";
+          for (let k = 0; k < body.parts; k += 1) text3 += map2?.get(k) ?? "";
         }
-        return { messageId: h.id, ord: h.ord, rev: h.rev, role: h.role, kind: h.kind, text: text2, srcId: h.srcId };
+        return { messageId: h.id, ord: h.ord, rev: h.rev, role: h.role, kind: h.kind, text: text3, srcId: h.srcId };
       });
       return { epoch, entries };
     }
@@ -165101,6 +165335,7 @@ ${notice.notice}${supersededHint}`;
       const appConfig = loadConfig();
       return { cfg, appConfig, envOverridesApplied, upgradeFailure };
     }
+    init_cooperative_gate();
     init_logger();
     init_config();
     init_config_dir();
@@ -165215,7 +165450,7 @@ ${notice.notice}${supersededHint}`;
         LOG.warn("Init", `Config dir looks like the ${channelMismatch.impliedTrack} track (${resolvedConfigDir}) but the resolved provider channel is '${channelMismatch.channel}'. This usually means the build-track stamp (__ADHDEV_BUILD_CHANNEL__) was absent for this process \u2014 e.g. running via tsx/ts-node instead of a built bundle \u2014 so provider-channel resolution fell through to its 'stable' default instead of following ADHDEV_CONFIG_DIR. Impact: providers installed under the OTHER channel's store will not be visible (can present as 0 providers loaded). Fix: set ADHDEV_PROVIDER_CHANNEL=${channelMismatch.impliedTrack} (or config.providerChannel) explicitly for this process, or run the built bundle instead of source.`);
       }
       const detectedIdes = { value: [] };
-      const refreshProviderAvailability = async (providerType) => {
+      const refreshProviderAvailability = async (providerType) => withMaintenanceAdmission(async () => {
         const targetProvider = providerType ? providerLoader.getMeta(providerLoader.resolveAlias(providerType)) : null;
         const targetCategory = targetProvider?.category;
         if (!providerType || targetCategory === "cli") {
@@ -165234,13 +165469,14 @@ ${notice.notice}${supersededHint}`;
           detectedIdes.value = await detectIDEs(providerLoader);
           providerLoader.setIdeDetectionResults(detectedIdes.value, true);
         }
-      };
-      const channelBootSync = runChannelBootSync(providerLoader, () => refreshProviderAvailability());
+      });
+      const channelBootSync = maintenanceHeld() ? Promise.resolve({ activated: 0 }) : withMaintenanceAdmission(() => runChannelBootSync(providerLoader, () => refreshProviderAvailability()));
       const staleListeners = [];
       const activatedListeners = [];
       const autoUpdateLoop = startProviderAutoUpdateLoop({
-        runAutoUpdate: (options) => providerLoader.runAutoUpdate(options),
+        runAutoUpdate: (options) => withMaintenanceAdmission(() => providerLoader.runAutoUpdate(options)),
         isEnabled: () => {
+          if (maintenanceHeld()) return false;
           let configured;
           try {
             configured = loadConfig().providerAutoUpdate;
@@ -165289,8 +165525,9 @@ ${notice.notice}${supersededHint}`;
       setDefaultProviderLoader(providerLoader);
       const versionArchive = new VersionArchive();
       providerLoader.setVersionArchive(versionArchive);
-      setTimeout(() => {
-        void detectAllVersions(providerLoader, versionArchive).then((versionResults) => {
+      if (!maintenanceHeld()) setTimeout(() => {
+        if (maintenanceHeld()) return;
+        void withMaintenanceAdmission(() => detectAllVersions(providerLoader, versionArchive)).then((versionResults) => {
           const installedProviders = versionResults.filter((v) => v.installed);
           const withVersion = installedProviders.filter((v) => v.version);
           LOG.info("Init", `Provider versions: ${installedProviders.length} installed, ${withVersion.length} versioned`);
@@ -165305,7 +165542,7 @@ ${notice.notice}${supersededHint}`;
         });
       }, 0);
       LOG.info("Init", "Detecting IDEs...");
-      await refreshProviderAvailability();
+      if (!maintenanceHeld()) await refreshProviderAvailability();
       const installed = detectedIdes.value.filter((i) => i.installed);
       LOG.info("Init", `Found ${installed.length} IDE(s): ${installed.map((i) => i.id).join(", ") || "none"}`);
       return {
@@ -165318,6 +165555,7 @@ ${notice.notice}${supersededHint}`;
         stalenessProbe
       };
     }
+    init_cooperative_gate();
     init_logger();
     init_config();
     var SESSION_ID_LEN = 8;
@@ -165437,6 +165675,7 @@ ${notice.notice}${supersededHint}`;
       const outputFanout = new SessionOutputFanout();
       const cliManager = new DaemonCliManager({
         getP2p: () => outputFanout,
+        verifiedRetainedEndpoint: cfg.sessionHost.verifiedRetainedEndpoint,
         getInstanceManager: () => instanceManager,
         getSessionRegistry: () => sessionRegistry,
         ...cfg.sessionHost.createPtyTransportFactory ? { createPtyTransportFactory: cfg.sessionHost.createPtyTransportFactory } : {},
@@ -165464,9 +165703,11 @@ ${notice.notice}${supersededHint}`;
         cdpManagers,
         enabledIdes: cfg.enabledIdes || loadConfig().enabledIdes || void 0,
         onConnected: async (ideType, manager, managerKey) => {
-          await setupIdeInstance(cdpSetupContext, { ideType, manager, managerKey });
+          if (maintenanceHeld()) return;
+          await withMaintenanceAdmission(() => setupIdeInstance(cdpSetupContext, { ideType, manager, managerKey }));
         },
         onDisconnected: async (_ideType, _manager, managerKey) => {
+          if (maintenanceHeld()) return;
           sessionRegistry.terminateByManagerKey(managerKey, "ide_detached");
           const instanceKey = `ide:${managerKey}`;
           const ideInstance = instanceManager.getInstance(instanceKey);
@@ -165478,7 +165719,7 @@ ${notice.notice}${supersededHint}`;
           emitFacts("ide_detached");
         }
       });
-      await cdpInitializer.connectAll(s2.detectedIdes.value);
+      if (!maintenanceHeld()) await cdpInitializer.connectAll(s2.detectedIdes.value);
       const disposeSessionCore = async () => {
         try {
           await agentStreamManager.dispose(cdpManagers);
@@ -166034,11 +166275,11 @@ ${notice.notice}${supersededHint}`;
         }
         const metaRev = state2.meta?.rev ?? 0;
         if (state2.heads.size !== commit2.liveCount || metaRev !== commit2.metaRev) return "digest_mismatch";
-        const digest = computeChatCommitDigest(
+        const digest2 = computeChatCommitDigest(
           Array.from(state2.heads.values(), (h) => [h.id, h.rev]),
           metaRev
         );
-        return digest === commit2.digest ? null : "digest_mismatch";
+        return digest2 === commit2.digest ? null : "digest_mismatch";
       }
       reject(reason, needsResync) {
         this.counters.rejectedRows++;
@@ -166048,9 +166289,9 @@ ${notice.notice}${supersededHint}`;
       bodyOf(head) {
         if ("text" in head.body) return head.body.text;
         const map2 = this.state.parts.get(head.id);
-        let text2 = "";
-        for (let k = 0; k < head.body.parts; k += 1) text2 += map2?.get(k)?.text ?? "";
-        return text2;
+        let text3 = "";
+        for (let k = 0; k < head.body.parts; k += 1) text3 += map2?.get(k)?.text ?? "";
+        return text3;
       }
       materializeMessage(id4) {
         const head = this.state.heads.get(id4);
@@ -166433,6 +166674,7 @@ ${notice.notice}${supersededHint}`;
       });
       return { ...s3, seqscribe };
     }
+    init_cooperative_gate();
     init_logger();
     init_build_info();
     init_cli_detector();
@@ -166588,7 +166830,9 @@ ${notice.notice}${supersededHint}`;
         onCdpManagerCreated: async (ideType, manager) => {
           await setupIdeInstance(s4.cdpSetupContext, { ideType, manager });
         },
-        onIdeConnected: () => s4.poller.start(),
+        onIdeConnected: () => {
+          if (!maintenanceHeld()) s4.poller.start();
+        },
         // Command handlers that change daemon facts publish them on the bus;
         // hosts subscribe (no host callback reaches into the command plane).
         onStatusChange: () => s4.emitFacts("command"),
@@ -166775,6 +167019,7 @@ ${notice.notice}${supersededHint}`;
         }
       };
     }
+    init_cooperative_gate();
     init_logger();
     var SIGNAL_NAMES = {
       1: "SIGHUP",
@@ -167269,20 +167514,23 @@ ${notice.notice}${supersededHint}`;
       }
       let backlogTimer = null;
       const deliverBacklog = async () => {
-        let delivered = 0;
-        const meshIds = consumer?.meshIds() ?? [];
-        for (const meshId of meshIds) {
-          if (!notices.hasUndelivered(meshId) || listLocalCoordinatorSessions(components, meshId).length === 0) continue;
-          try {
-            delivered += await deliverNoticeBacklog(deliverDeps, meshId, abort.signal);
-          } catch (error) {
-            LOG.warn("MeshNotice", `backlog delivery failed (mesh ${meshId}): ${error instanceof Error ? error.message : String(error)}`);
+        if (maintenanceHeld()) return 0;
+        return withMaintenanceAdmission(async () => {
+          let delivered = 0;
+          const meshIds = consumer?.meshIds() ?? [];
+          for (const meshId of meshIds) {
+            if (!notices.hasUndelivered(meshId) || listLocalCoordinatorSessions(components, meshId).length === 0) continue;
+            try {
+              delivered += await deliverNoticeBacklog(deliverDeps, meshId, abort.signal);
+            } catch (error) {
+              LOG.warn("MeshNotice", `backlog delivery failed (mesh ${meshId}): ${error instanceof Error ? error.message : String(error)}`);
+            }
           }
-        }
-        return delivered;
+          return delivered;
+        });
       };
       const scheduleBacklog = () => {
-        if (backlogTimer) return;
+        if (maintenanceHeld() || backlogTimer) return;
         backlogTimer = setTimeout(() => {
           backlogTimer = null;
           void deliverBacklog();
@@ -167293,7 +167541,7 @@ ${notice.notice}${supersededHint}`;
         waiter.wake();
         if (event.kind === "registered" || event.kind === "status") scheduleBacklog();
       }, { name: "mesh.turn-deliver-edges" });
-      const republished = ledger.republishPending().then(
+      const republished = maintenanceHeld() ? Promise.resolve() : withMaintenanceAdmission(() => ledger.republishPending()).then(
         (report) => {
           if (report.published + report.failed + report.pending > 0) {
             LOG.info("TurnLedger", `boot republish: ${report.published} published, ${report.failed} failed, ${report.pending} still pending`);
@@ -167947,9 +168195,9 @@ ${notice.notice}${supersededHint}`;
       const finalThisTurn = Number.isFinite(finalAssistantAt) && typeof turnStartedAtMs === "number" && finalAssistantAt >= turnStartedAtMs;
       const finalSummary = finalThisTurn ? evidence.finalSummary || "" : "";
       const selfAttributing = !!finalSummary && !!extractJsonObjectFromSummary(finalSummary);
-      const observed = typeof payload.providerObservedStatus === "string" && payload.providerObservedStatus.trim() ? payload.providerObservedStatus : payload.status;
+      const observed2 = typeof payload.providerObservedStatus === "string" && payload.providerObservedStatus.trim() ? payload.providerObservedStatus : payload.status;
       const out = {
-        providerObservedStatus: typeof observed === "string" ? observed.trim().toLowerCase() : "",
+        providerObservedStatus: typeof observed2 === "string" ? observed2.trim().toLowerCase() : "",
         activeModal: hasNonEmptyModalButtons(payload.activeModal),
         selfAttributing,
         trailingActivity: countTrailingToolActivityAfterFinalAssistant(messages),
@@ -168044,15 +168292,35 @@ ${notice.notice}${supersededHint}`;
     async function startLoops(s7) {
       const { cfg, components } = s7;
       if (maintenanceHeld()) {
-        let stopped = false, starting = false, dispose2;
+        if (cfg.restoreHostedSessions) {
+          try {
+            await s7.cliManager.observeHeldHostedSessions("held-boot-observation");
+          } catch (e) {
+            LOG.warn("Maintenance", `Held observation unavailable: ${String(e)}`);
+          }
+        }
+        let stopped = false, starting = false, dispose2, failedEpoch;
         const timer = setInterval(() => {
           try {
-            if (stopped || starting || maintenanceHeld()) return;
+            if (dispose2 && maintenanceHeld()) {
+              dispose2();
+              dispose2 = void 0;
+              starting = false;
+            }
+            if (stopped || starting || maintenanceHeld() || failedEpoch === readCooperativeMaintenance()?.epoch) return;
             starting = true;
             void startLoops(s7).then((d) => {
               if (stopped) d();
               else dispose2 = d;
-            }).catch((e) => LOG.error("Maintenance", String(e)));
+            }).catch((e) => {
+              try {
+                failedEpoch = readCooperativeMaintenance()?.epoch;
+              } catch {
+                failedEpoch = Number.NaN;
+              }
+              starting = false;
+              LOG.error("Maintenance", String(e));
+            });
           } catch {
           }
         }, 250);
@@ -168063,61 +168331,72 @@ ${notice.notice}${supersededHint}`;
           dispose2?.();
         };
       }
-      try {
-        closeInterruptedPlainAttemptsOnBoot(components);
-      } catch (e) {
-        LOG.warn("TurnLedger", `Interrupted-plain-attempt reconciliation failed: ${e?.message || e}`);
-      }
-      s7.cdpInitializer.startPeriodicScan(cfg.cdpScanIntervalMs ?? DEFAULT_CDP_SCAN_INTERVAL_MS);
-      s7.cdpInitializer.startDiscovery(DEFAULT_CDP_DISCOVERY_INTERVAL_MS);
-      s7.poller.start();
-      s7.instanceManager.startTicking(cfg.tickIntervalMs ?? 5e3);
-      startTurnLoops(components);
-      if (cfg.restoreHostedSessions) {
-        try {
+      return withMaintenanceAdmission(async () => {
+        const enrolled = readCooperativeMaintenance();
+        if (enrolled) {
+          if (!cfg.restoreHostedSessions) throw new Error("maintenance_restore_required");
           await s7.cliManager.restoreHostedSessions();
+        }
+        try {
+          closeInterruptedPlainAttemptsOnBoot(components);
         } catch (e) {
-          LOG.warn("Init", `Hosted session restore failed: ${e?.message || e}`);
+          LOG.warn("TurnLedger", `Interrupted-plain-attempt reconciliation failed: ${e?.message || e}`);
         }
-      }
-      try {
-        reconcileOrphanedPlainAttemptsOnBoot(components);
-      } catch (e) {
-        LOG.warn("TurnLedger", `Orphaned-plain-attempt reconciliation failed: ${e?.message || e}`);
-      }
-      scheduleQuotaBootRefresh(components);
-      scheduleModelDiscovery(components);
-      setImmediate(() => void s7.router.resumePendingRefineJobsOnStartup());
-      components.eventLoopMonitor = startEventLoopMonitor();
-      setImmediate(() => s7.router.resumeDeferredRestartsOnStartup());
-      setImmediate(() => {
-        void s7.router.resumeMeshNodeStatePushOnStartup();
+        s7.cdpInitializer.startPeriodicScan(cfg.cdpScanIntervalMs ?? DEFAULT_CDP_SCAN_INTERVAL_MS);
+        s7.cdpInitializer.startDiscovery(DEFAULT_CDP_DISCOVERY_INTERVAL_MS);
+        s7.poller.start();
+        s7.instanceManager.startTicking(cfg.tickIntervalMs ?? 5e3);
+        startTurnLoops(components);
+        if (cfg.restoreHostedSessions && !enrolled) {
+          try {
+            await s7.cliManager.restoreHostedSessions();
+          } catch (e) {
+            LOG.warn("Init", `Hosted session restore failed: ${e?.message || e}`);
+          }
+        }
+        try {
+          reconcileOrphanedPlainAttemptsOnBoot(components);
+        } catch (e) {
+          LOG.warn("TurnLedger", `Orphaned-plain-attempt reconciliation failed: ${e?.message || e}`);
+        }
+        scheduleQuotaBootRefresh(components);
+        scheduleModelDiscovery(components);
+        setImmediate(() => void s7.router.resumePendingRefineJobsOnStartup());
+        components.eventLoopMonitor = startEventLoopMonitor();
+        setImmediate(() => s7.router.resumeDeferredRestartsOnStartup());
+        setImmediate(() => {
+          void s7.router.resumeMeshNodeStatePushOnStartup();
+        });
+        components.composerResidueSweep = scheduleComposerResidueSweep(components);
+        let disposed = false;
+        return () => {
+          if (disposed) return;
+          disposed = true;
+          s7.poller.stop();
+          try {
+            s7.instanceManager.stopTicking();
+          } catch {
+          }
+          s7.cdpInitializer.stop();
+          stopTurnLoops(components);
+          try {
+            s7.router.meshNodeStatePusher.stop();
+          } catch {
+          }
+          try {
+            s7.router.localMeshNodeGitWatch.stop();
+          } catch {
+          }
+          try {
+            components.composerResidueSweep?.stop();
+          } catch {
+          }
+          try {
+            components.eventLoopMonitor?.stop();
+          } catch {
+          }
+        };
       });
-      components.composerResidueSweep = scheduleComposerResidueSweep(components);
-      let disposed = false;
-      return () => {
-        if (disposed) return;
-        disposed = true;
-        s7.poller.stop();
-        s7.cdpInitializer.stop();
-        stopTurnLoops(components);
-        try {
-          s7.router.meshNodeStatePusher.stop();
-        } catch {
-        }
-        try {
-          s7.router.localMeshNodeGitWatch.stop();
-        } catch {
-        }
-        try {
-          components.composerResidueSweep?.stop();
-        } catch {
-        }
-        try {
-          components.eventLoopMonitor?.stop();
-        } catch {
-        }
-      };
     }
     var DEFAULT_DAEMON_BOOT_STAGES = {
       bootPlatform,
@@ -168936,14 +169215,16 @@ ${notice.notice}${supersededHint}`;
         }
       };
     }
+    init_cooperative_gate();
+    init_cooperative_gate();
     init_logger();
-    var import_session_host_core14 = require_dist();
+    var import_session_host_core15 = require_dist();
     var SessionHostController = class _SessionHostController {
       constructor(endpoint, onEvent, respawn) {
         this.onEvent = onEvent;
         this.respawn = respawn;
-        this.client = new import_session_host_core14.SessionHostClient({ endpoint });
-        this.plane = (0, import_session_host_core14.createSessionHostControlPlane)({
+        this.client = new import_session_host_core15.SessionHostClient({ endpoint });
+        this.plane = (0, import_session_host_core15.createSessionHostControlPlane)({
           request: (type2, payload) => this.request({ type: type2, payload })
         });
       }
@@ -169035,12 +169316,16 @@ ${notice.notice}${supersededHint}`;
         return this.plane.getSnapshot(sessionId, sinceSeq);
       }
       async request(request) {
-        await this.ensureConnected();
-        const response = await this.client.request(request);
-        if (!response.success) {
-          throw new Error(response.error || `Session host request failed: ${request.type}`);
-        }
-        return response.result ?? null;
+        const readOnly = ["list_sessions", "get_host_diagnostics"].includes(request.type);
+        const execute = async () => {
+          await this.ensureConnected();
+          const response = await this.client.request(request);
+          if (!response.success) {
+            throw new Error(response.error || `Session host request failed: ${request.type}`);
+          }
+          return response.result ?? null;
+        };
+        return readOnly ? execute() : withMaintenanceAdmission(execute);
       }
       async ensureConnected() {
         try {
@@ -169072,7 +169357,7 @@ ${notice.notice}${supersededHint}`;
         }
       }
       maybeRespawn(failures) {
-        if (!this.respawn || this.respawnInFlight) return;
+        if (maintenanceHeld() || !this.respawn || this.respawnInFlight) return;
         const first = _SessionHostController.RESPAWN_AFTER_FAILURES;
         if (failures < first || (failures - first) % _SessionHostController.RESPAWN_RETRY_EVERY !== 0) return;
         this.respawnInFlight = true;
@@ -169084,6 +169369,7 @@ ${notice.notice}${supersededHint}`;
         });
       }
       handleEvent(event) {
+        if (maintenanceHeld()) return;
         if (event.type === "host_log") {
           const line = event.entry.sessionId ? `${event.entry.message} (session=${event.entry.sessionId})` : event.entry.message;
           switch (event.entry.level) {
@@ -169128,7 +169414,9 @@ ${notice.notice}${supersededHint}`;
         });
         return inFlight3;
       };
-      const onEvent = (event) => opts.onHostEvent?.(event);
+      const onEvent = (event) => {
+        if (!maintenanceHeld()) opts.onHostEvent?.(event);
+      };
       const control = opts.createController ? opts.createController(current4, onEvent, ensure) : new SessionHostController(current4, onEvent, ensure);
       await control.start();
       const listHostedRuntimes = () => (opts.listHostedRuntimes ?? listHostedCliRuntimes)(current4);
@@ -169162,6 +169450,7 @@ ${notice.notice}${supersededHint}`;
         bootConfig: () => ({
           createPtyTransportFactory: ptyFactory,
           listHostedRuntimes,
+          verifiedRetainedEndpoint: ensure,
           managedByTag: opts.managedBy,
           control
         }),

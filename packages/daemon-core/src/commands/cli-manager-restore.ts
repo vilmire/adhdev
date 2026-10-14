@@ -1,3 +1,5 @@
+import { maintenanceHeld, readCooperativeMaintenance, withMaintenanceAdmission } from '../maintenance/cooperative-gate.js';
+import { observeHeldHostedSessions, verifyHeldObservationPromotion } from '../maintenance/held-observation.js';
 /**
  * DaemonCliManager — boot-time re-attach of hosted CLI runtimes
  * (`restoreHostedSessions`): rebuild each instance's launch-time settings
@@ -21,9 +23,22 @@ import type { DaemonCliManager, HostedCliRuntimeDescriptor } from './cli-manager
 export type CliRestoreHost = Pick<DaemonCliManager, 'adapters' | 'deps' | 'providerLoader' | 'registerCliInstance'>;
 
 export async function restoreHostedSessions(host: CliRestoreHost, records?: HostedCliRuntimeDescriptor[]): Promise<number> {
+    if (maintenanceHeld()) {
+        if (records) throw new Error('maintenance_complete_inventory_required');
+        return (await observeHeldHostedSessions(host, 'held-boot-restore')).sessions.length;
+    }
+    return withMaintenanceAdmission(() => restoreWritableHostedSessions(host, records));
+}
+
+async function restoreWritableHostedSessions(host: CliRestoreHost, records?: HostedCliRuntimeDescriptor[]): Promise<number> {
     const instanceManager = host.deps.getInstanceManager();
-    if (!instanceManager) return 0;
+    if (!instanceManager) {
+        if (readCooperativeMaintenance()) throw new Error('maintenance_instance_manager_required');
+        return 0;
+    }
+    const promoted = await verifyHeldObservationPromotion(host);
     const sessions = records || await host.deps.listHostedCliRuntimes?.() || [];
+    if (promoted && ((!records && sessions.length !== promoted.length) || sessions.some(r=>!promoted.some(p=>p.runtimeId===r.runtimeId && p.providerType===r.cliType && p.workspace===r.workspace && p.startedAt===r.startedAtMs)))) throw new Error('maintenance_complete_promotion_inventory_required');
     let restored = 0;
     const restoredBindings = new Set<string>();
     const managerTag = host.deps.hostedRuntimeManagerTag;
@@ -67,7 +82,10 @@ export async function restoreHostedSessions(host: CliRestoreHost, records?: Host
             );
             continue;
         }
-        if (host.adapters.has(record.runtimeId) || instanceManager.getInstance(record.runtimeId)) continue;
+        if (host.adapters.has(record.runtimeId) || instanceManager.getInstance(record.runtimeId)) {
+            if (promoted) throw new Error('maintenance_existing_writable_binding_requires_reconciliation');
+            continue;
+        }
         const normalizedType = host.providerLoader.resolveAlias(record.cliType);
         const providerMeta = host.providerLoader.getMeta(normalizedType);
         if (!providerMeta || providerMeta.category !== 'cli') continue;
@@ -126,9 +144,11 @@ export async function restoreHostedSessions(host: CliRestoreHost, records?: Host
             LOG.info('CLI', `♻ Restored hosted runtime: ${record.runtimeKey || record.runtimeId} (${record.displayName || record.workspace})`);
         } catch (error: any) {
             LOG.warn('CLI', `Failed to restore hosted runtime ${record.runtimeId}: ${error?.message || error}`);
+            if (promoted) throw error;
         }
     }
 
+    if (promoted && restored !== sessions.length) throw new Error('maintenance_incomplete_writable_promotion');
     if (!records && typeof host.deps.listHostedCliRuntimes === 'function') {
         pruneStaleCoordinatorEntries(sessions, restoredRuntimeIds, rebindAdoptedSessionIds);
         pruneStaleAssistantBinding(sessions, restoredRuntimeIds);

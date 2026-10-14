@@ -129,6 +129,20 @@ export function assertMaintenanceNode(meshId: string, nodeId: string, daemonId?:
     const s = readCooperativeMaintenance();
     if (s && !s.nodeRoster.some(n => n.meshId === meshId && n.nodeId === nodeId && n.daemonId === (daemonId || s.daemonId))) throw new Error('maintenance_unknown_node_or_owner');
 }
+/** Metadata observation is allowed while held, under the same epoch writer
+ * exclusion. This grants no producer, lifecycle or runtime-write admission. */
+export async function withMaintenanceObservation<T>(run: (state: CooperativeMaintenance) => Promise<T>): Promise<T> {
+    const state = readCooperativeMaintenance();
+    if (!state || !maintenanceHeld() || process.platform === 'win32') throw new Error('maintenance_held_observation_required');
+    const release = maintenanceLock(path.resolve(getConfigDir()));
+    const snapshot = JSON.stringify(state);
+    try {
+        if (JSON.stringify(readCooperativeMaintenance()) !== snapshot) throw new Error('maintenance_epoch_changed');
+        const result = await run(state);
+        if (JSON.stringify(readCooperativeMaintenance()) !== snapshot) throw new Error('maintenance_epoch_changed');
+        return result;
+    } finally { release(); }
+}
 export async function withMaintenanceAdmission<T>(run: () => Promise<T>): Promise<T> {
     assertMaintenanceAdmission();
     const root = path.resolve(getConfigDir()), nested = context.getStore();

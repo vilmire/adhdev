@@ -1,4 +1,5 @@
-import { assertMaintenanceAdmission } from '../maintenance/cooperative-gate.js';
+import { observeHeldHostedSessions, verifyHeldObservationPromotion } from '../maintenance/held-observation.js';
+import { maintenanceHeld, withMaintenanceAdmission, assertMaintenanceAdmission } from '../maintenance/cooperative-gate.js';
 import { OutgoingReceiptStore } from '../sessions/outgoing-receipt-store.js';
 import { resolveConfigDir } from '../config/config-dir.js';
 /**
@@ -58,6 +59,7 @@ export interface CliManagerDeps {
     createPtyTransportFactory?: (params: CliTransportFactoryParams) => PtyTransportFactory | null;
     listHostedCliRuntimes?: () => Promise<HostedCliRuntimeDescriptor[]>;
     hostedRuntimeManagerTag?: string;
+    verifiedRetainedEndpoint?: () => Promise<import('@adhdev/session-host-core').SessionHostEndpoint>;
 }
 
 export interface CliTransportFactoryParams {
@@ -307,6 +309,7 @@ export class DaemonCliManager {
      */
     scheduleAutoClean(key: string, adapter: CliAdapter, terminalStatus: string): void {
         setTimeout(() => {
+            if (maintenanceHeld()) return;
             if (this.adapters.get(key) !== adapter) return;
             const instanceManager = this.deps.getInstanceManager();
             this.adapters.delete(key);
@@ -375,6 +378,8 @@ export class DaemonCliManager {
             }) => void;
         },
     ): Promise<void> {
+        return withMaintenanceAdmission(async () => {
+        if (attachExisting) await verifyHeldObservationPromotion(this,{runtimeId:key,providerType:normalizedType,workspace:resolvedDir,startedAt:options?.attachStartedAtMs,binding:{meshId:settings.meshNodeFor || '',nodeId:settings.meshNodeId || '',coordinatorMeshId:settings.meshCoordinatorFor || '',workOwner:settings.meshCoordinatorDaemonId || ''}});
         const instanceManager = this.deps.getInstanceManager();
         const sessionRegistry = this.deps.getSessionRegistry?.() || null;
         if (!instanceManager) throw new Error('InstanceManager not available');
@@ -508,6 +513,7 @@ export class DaemonCliManager {
         }
 
         this.startCliExitMonitor(key);
+        });
     }
     startSession(cliType: string, workingDir: string, cliArgs?: string[], initialModel?: string, options?: CliStartOptions): Promise<{ runtimeSessionId: string; providerSessionId?: string }> { return startSession(this, cliType, workingDir, cliArgs, initialModel, options); }
 
@@ -558,6 +564,7 @@ export class DaemonCliManager {
         }
         this.adapters.clear();
     }
+    observeHeldHostedSessions(challenge: string) { return observeHeldHostedSessions(this, challenge); }
     restoreHostedSessions(records?: HostedCliRuntimeDescriptor[]): Promise<number> { return restoreHostedSessions(this, records); }
 
  // ─── Adapter search ─────────────────────────────

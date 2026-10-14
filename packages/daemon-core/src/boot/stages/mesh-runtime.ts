@@ -1,3 +1,4 @@
+import { maintenanceHeld, withMaintenanceAdmission } from '../../maintenance/cooperative-gate.js';
 /**
  * S7 bootMeshRuntime — assemble `DaemonComponents`, attach the mesh bus
  * subscribers, cut the mesh event path over to the turn ledger (wiring-
@@ -323,6 +324,8 @@ export function wireTurnLedger(components: DaemonComponents, opts: { runMigratio
     // backlog when a coordinator session appears / goes idle.
     let backlogTimer: ReturnType<typeof setTimeout> | null = null;
     const deliverBacklog = async (): Promise<number> => {
+        if (maintenanceHeld()) return 0;
+        return withMaintenanceAdmission(async () => {
         let delivered = 0;
         const meshIds = consumer?.meshIds() ?? [];
         for (const meshId of meshIds) {
@@ -334,9 +337,10 @@ export function wireTurnLedger(components: DaemonComponents, opts: { runMigratio
             }
         }
         return delivered;
+        });
     };
     const scheduleBacklog = () => {
-        if (backlogTimer) return;
+        if (maintenanceHeld() || backlogTimer) return;
         backlogTimer = setTimeout(() => { backlogTimer = null; void deliverBacklog(); }, 1_000);
         (backlogTimer as { unref?: () => void }).unref?.();
     };
@@ -346,7 +350,7 @@ export function wireTurnLedger(components: DaemonComponents, opts: { runMigratio
     }, { name: 'mesh.turn-deliver-edges' });
 
     // 5. Republish rows committed but not appended before the last shutdown.
-    const republished = ledger.republishPending().then(
+    const republished = maintenanceHeld() ? Promise.resolve() : withMaintenanceAdmission(() => ledger.republishPending()).then(
         (report) => {
             if (report.published + report.failed + report.pending > 0) {
                 LOG.info('TurnLedger', `boot republish: ${report.published} published, ${report.failed} failed, ${report.pending} still pending`);

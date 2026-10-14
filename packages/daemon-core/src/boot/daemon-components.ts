@@ -39,6 +39,7 @@ export type Disposer = () => void;
 export interface SessionHostBoot {
     createPtyTransportFactory?: (params: CliTransportFactoryParams) => PtyTransportFactory | null;
     listHostedRuntimes?: () => Promise<HostedCliRuntimeDescriptor[]>;
+    verifiedRetainedEndpoint?: () => Promise<import('@adhdev/session-host-core').SessionHostEndpoint>;
     managedByTag?: string;
     control?: SessionHostControlPlane | null;
 }

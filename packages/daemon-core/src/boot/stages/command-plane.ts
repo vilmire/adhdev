@@ -1,3 +1,4 @@
+import { maintenanceHeld } from '../../maintenance/cooperative-gate.js';
 /**
  * S5 bootCommandPlane — command handler + router (wiring-unification B4).
  *
@@ -96,7 +97,7 @@ export function bootCommandPlane(s4: SeqscribeNodeStage): CommandPlaneStage {
             // launch_ide: register instance + extension providers.
             await setupIdeInstance(s4.cdpSetupContext, { ideType, manager });
         },
-        onIdeConnected: () => s4.poller.start(),
+        onIdeConnected: () => { if (!maintenanceHeld()) s4.poller.start(); },
         // Command handlers that change daemon facts publish them on the bus;
         // hosts subscribe (no host callback reaches into the command plane).
         onStatusChange: () => s4.emitFacts('command'),
