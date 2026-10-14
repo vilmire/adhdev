@@ -124771,7 +124771,6 @@ ${result.stderr}`, result.code);
     }
     function createSessionInputService(deps) {
       const receiptStore = deps.receiptStore ?? new OutgoingReceiptStore();
-      const noticeObservers = /* @__PURE__ */ new Map();
       const freshOutgoing = /* @__PURE__ */ new Set();
       const outgoingAttempts = /* @__PURE__ */ new Map();
       const now = deps.clock ?? Date.now;
@@ -124839,16 +124838,14 @@ ${result.stderr}`, result.code);
           return refuse3("unsupported_input", { message: e?.message || String(e) });
         }
       }
-      async function writeAndReport(target, msg, body, opts) {
+      async function writeAndReport(target, msg, body, opts, noticeObserver) {
         const receipt = outgoingAttempts.get(msg.messageId);
-        const noticeObserver = noticeObservers.get(msg.messageId);
         if (receipt || noticeObserver) target.observeSendWrite?.(msg.messageId, (state2) => {
           if (noticeObserver) {
             try {
               noticeObserver(state2);
             } catch {
             }
-            if (state2 === "submitted" && noticeObservers.get(msg.messageId) === noticeObserver) noticeObservers.delete(msg.messageId);
           }
           if (!receipt) return;
           try {
@@ -124916,7 +124913,7 @@ ${result.stderr}`, result.code);
         log("info", `submit(${msg.messageId}) send_now refused ${outcome.reason} (session ${msg.sessionId}, promoted=${parked}, restored=${restored})`);
         return refuse3(reason, { restored });
       }
-      async function interruptThenWrite(target, msg, parked, input = msg.input) {
+      async function interruptThenWrite(target, msg, parked, input = msg.input, noticeObserver) {
         if (typeof target.interruptTurn !== "function") return refuse3("interrupt_not_implemented");
         let fresh = null;
         if (!parked) {
@@ -124971,12 +124968,12 @@ ${result.stderr}`, result.code);
             fresh: !parked,
             route: "interrupt",
             interrupt: { keyName: interrupted.keyName, confidence: interrupted.confidence }
-          });
+          }, noticeObserver);
         } finally {
           target.releaseDrain?.();
         }
       }
-      async function run3(msg, prepareInput) {
+      async function run3(msg, prepareInput, noticeObserver) {
         if (prepareInput || msg.origin === "dashboard" || receiptStore.get(msg.messageId)) {
           const { receipt, fresh } = receiptStore.accept(msg.messageId, msg.sessionId, msg.input);
           if (fresh) freshOutgoing.add(msg.messageId);
@@ -125016,63 +125013,63 @@ ${result.stderr}`, result.code);
           input = prepared;
         }
         if (strategy === "split_write") return splitWrite(target, msg, parked, input);
-        if (strategy === "interrupt") return interruptThenWrite(target, msg, parked, input);
+        if (strategy === "interrupt") return interruptThenWrite(target, msg, parked, input, noticeObserver);
         if (parked) {
           const claimed = target.claimQueuedSend?.(msg.messageId) ?? null;
           if (!claimed) return { kind: "duplicate", of: msg.messageId };
           return writeAndReport(target, msg, {
             text: claimed.entry.text,
             ...claimed.entry.bracketedPaste ? { bracketedPaste: true } : {}
-          }, { fresh: false, route: "pty" });
+          }, { fresh: false, route: "pty" }, noticeObserver);
         }
         const body = freshBody(target, msg, input);
         if ("kind" in body) return body;
-        return writeAndReport(target, msg, body, { fresh: true, route: "pty" });
+        return writeAndReport(target, msg, body, { fresh: true, route: "pty" }, noticeObserver);
+      }
+      async function submitOwned(msg, prepareInput, noticeObserver) {
+        if (!msg || typeof msg.messageId !== "string" || !msg.messageId.trim()) return refuse3("internal_error", { message: "messageId required" });
+        if (typeof msg.sessionId !== "string" || !msg.sessionId.trim()) return refuse3("no_target");
+        const pending = inFlight3.get(msg.messageId);
+        if (pending) {
+          await pending.catch(() => void 0);
+          try {
+            if (receiptStore.get(msg.messageId)) receiptStore.accept(msg.messageId, msg.sessionId, msg.input);
+          } catch {
+            return refuse3("internal_error", { message: "Outgoing message identity conflict" });
+          }
+          return { kind: "duplicate", of: msg.messageId };
+        }
+        const promise = withMaintenanceAdmission(() => run3(msg, prepareInput, noticeObserver)).catch((e) => {
+          log("error", `submit(${msg.messageId}) threw: ${e?.message ?? e}`);
+          return refuse3("internal_error", { message: e?.message || String(e) });
+        });
+        inFlight3.set(msg.messageId, promise);
+        try {
+          const outcome = await promise;
+          const receipt = outgoingAttempts.get(msg.messageId);
+          if (receipt && outcome.kind === "refused") {
+            const notWritten = freshOutgoing.has(msg.messageId) && receiptStore.get(msg.messageId)?.state === "accepted" && ["no_target", "unsupported_input", "session_exited", "paused", "waiting_external"].includes(outcome.reason);
+            receiptStore.advance(receipt, notWritten ? "failed" : "uncertain");
+          }
+          if (receipt && outcome.kind === "delivered" && receiptStore.get(msg.messageId)?.state === "accepted") {
+            receiptStore.advance(receipt, "uncertain");
+          }
+          if (outcome.kind === "delivered" || outcome.kind === "queued") remember(msg.messageId, outcome.kind);
+          if (outcome.kind === "delivered") parkedText.delete(msg.messageId);
+          return outcome;
+        } finally {
+          inFlight3.delete(msg.messageId);
+          freshOutgoing.delete(msg.messageId);
+        }
       }
       const service = {
         async submitNotice(msg, observe) {
-          noticeObservers.set(msg.messageId, observe);
-          return service.submit(msg);
+          return submitOwned({ ...msg }, void 0, observe);
         },
         getReceipts: (sessionId, ids) => receiptStore.list(sessionId, ids).map((receipt) => {
           return receipt.state === "accepted" && !outgoingAttempts.has(receipt.messageId) ? { ...receipt, state: "uncertain", proof: "none", revision: receipt.revision + 1 } : receipt;
         }),
-        async submit(msg, prepareInput) {
-          if (!msg || typeof msg.messageId !== "string" || !msg.messageId.trim()) return refuse3("internal_error", { message: "messageId required" });
-          if (typeof msg.sessionId !== "string" || !msg.sessionId.trim()) return refuse3("no_target");
-          const pending = inFlight3.get(msg.messageId);
-          if (pending) {
-            await pending.catch(() => void 0);
-            try {
-              if (receiptStore.get(msg.messageId)) receiptStore.accept(msg.messageId, msg.sessionId, msg.input);
-            } catch {
-              return refuse3("internal_error", { message: "Outgoing message identity conflict" });
-            }
-            return { kind: "duplicate", of: msg.messageId };
-          }
-          const promise = withMaintenanceAdmission(() => run3(msg, prepareInput)).catch((e) => {
-            log("error", `submit(${msg.messageId}) threw: ${e?.message ?? e}`);
-            return refuse3("internal_error", { message: e?.message || String(e) });
-          });
-          inFlight3.set(msg.messageId, promise);
-          try {
-            const outcome = await promise;
-            const receipt = outgoingAttempts.get(msg.messageId);
-            if (receipt && outcome.kind === "refused") {
-              const notWritten = freshOutgoing.has(msg.messageId) && receiptStore.get(msg.messageId)?.state === "accepted" && ["no_target", "unsupported_input", "session_exited", "paused", "waiting_external"].includes(outcome.reason);
-              receiptStore.advance(receipt, notWritten ? "failed" : "uncertain");
-            }
-            if (receipt && outcome.kind === "delivered" && receiptStore.get(msg.messageId)?.state === "accepted") {
-              receiptStore.advance(receipt, "uncertain");
-            }
-            if (outcome.kind === "delivered" || outcome.kind === "queued") remember(msg.messageId, outcome.kind);
-            if (outcome.kind === "delivered") parkedText.delete(msg.messageId);
-            return outcome;
-          } finally {
-            inFlight3.delete(msg.messageId);
-            freshOutgoing.delete(msg.messageId);
-          }
-        },
+        submit: submitOwned,
         async withdraw(sessionId, messageId) {
           let target;
           try {

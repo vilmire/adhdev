@@ -238,7 +238,6 @@ function hasNonTextParts(input: OutboundMessage['input']): boolean {
 
 export function createSessionInputService(deps: SessionInputServiceDeps): SessionInputService {
     const receiptStore = deps.receiptStore ?? new OutgoingReceiptStore();
-    const noticeObservers=new Map<string,(state:'started'|'submitted'|'uncertain')=>void>();
     const freshOutgoing = new Set<string>();
     const outgoingAttempts = new Map<string, OutgoingReceipt>();
     const now = deps.clock ?? Date.now;
@@ -320,11 +319,11 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
         msg: OutboundMessage,
         body: SessionInputBody,
         opts: { fresh: boolean; route: SubmitRoute; interrupt?: { keyName: string; confidence: 'proven' | 'declared' } },
+        noticeObserver?: (state: 'started'|'submitted'|'uncertain') => void,
     ): Promise<SubmitOutcome> {
         const receipt = outgoingAttempts.get(msg.messageId);
-        const noticeObserver=noticeObservers.get(msg.messageId);
         if (receipt||noticeObserver) target.observeSendWrite?.(msg.messageId, state => {
-            if(noticeObserver){try{noticeObserver(state);}catch{/* Persisted intent remains unknown; never retry native input. */}if(state==='submitted'&&noticeObservers.get(msg.messageId)===noticeObserver)noticeObservers.delete(msg.messageId);}
+            if(noticeObserver){try{noticeObserver(state);}catch{/* Persisted intent remains unknown; never retry native input. */}}
             if(!receipt)return;
             try {
                 const updated = receiptStore.advance(receipt, state === 'submitted' ? 'submitted' : 'uncertain');
@@ -407,7 +406,7 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
      * parked copy keeps its place and its ordinary drain. Only once the stop key
      * HAS been written does this call own the delivery.
      */
-    async function interruptThenWrite(target: SessionInputTarget, msg: OutboundMessage, parked: boolean, input = msg.input): Promise<SubmitOutcome> {
+    async function interruptThenWrite(target: SessionInputTarget, msg: OutboundMessage, parked: boolean, input = msg.input, noticeObserver?: (state:'started'|'submitted'|'uncertain')=>void): Promise<SubmitOutcome> {
         if (typeof target.interruptTurn !== 'function') return refuse('interrupt_not_implemented');
         let fresh: SessionInputBody | null = null;
         if (!parked) {
@@ -464,14 +463,14 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
                 fresh: !parked,
                 route: 'interrupt',
                 interrupt: { keyName: interrupted.keyName, confidence: interrupted.confidence },
-            });
+            }, noticeObserver);
         } finally {
             // Release on EVERY exit — the rest of the owner's queue is not this call's to hold.
             target.releaseDrain?.();
         }
     }
 
-    async function run(msg: OutboundMessage, prepareInput?: PrepareSessionInput): Promise<SubmitOutcome> {
+    async function run(msg: OutboundMessage, prepareInput?: PrepareSessionInput, noticeObserver?: (state:'started'|'submitted'|'uncertain')=>void): Promise<SubmitOutcome> {
         if (prepareInput || msg.origin === 'dashboard' || receiptStore.get(msg.messageId)) {
             const { receipt, fresh } = receiptStore.accept(msg.messageId, msg.sessionId, msg.input);
             if (fresh) freshOutgoing.add(msg.messageId);
@@ -516,7 +515,7 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
             input = prepared;
         }
         if (strategy === 'split_write') return splitWrite(target, msg, parked, input);
-        if (strategy === 'interrupt') return interruptThenWrite(target, msg, parked, input);
+        if (strategy === 'interrupt') return interruptThenWrite(target, msg, parked, input, noticeObserver);
 
         // write
         if (parked) {
@@ -527,18 +526,55 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
             return writeAndReport(target, msg, {
                 text: claimed.entry.text,
                 ...(claimed.entry.bracketedPaste ? { bracketedPaste: true } : {}),
-            }, { fresh: false, route: 'pty' });
+            }, { fresh: false, route: 'pty' }, noticeObserver);
         }
         const body = freshBody(target, msg, input);
         if ('kind' in body) return body;
-        return writeAndReport(target, msg, body, { fresh: true, route: 'pty' });
+        return writeAndReport(target, msg, body, { fresh: true, route: 'pty' }, noticeObserver);
+    }
+
+    async function submitOwned(msg: OutboundMessage, prepareInput?: PrepareSessionInput, noticeObserver?: (state:'started'|'submitted'|'uncertain')=>void):Promise<SubmitOutcome> {
+        if (!msg || typeof msg.messageId !== 'string' || !msg.messageId.trim()) return refuse('internal_error', { message: 'messageId required' });
+        if (typeof msg.sessionId !== 'string' || !msg.sessionId.trim()) return refuse('no_target');
+        const pending = inFlight.get(msg.messageId);
+        if (pending) {
+            await pending.catch(() => undefined);
+            // Concurrent replay must still match the full original identity.
+            try { if (receiptStore.get(msg.messageId)) receiptStore.accept(msg.messageId, msg.sessionId, msg.input); }
+            catch { return refuse('internal_error', { message: 'Outgoing message identity conflict' }); }
+            return { kind: 'duplicate', of: msg.messageId };
+        }
+        const promise = withMaintenanceAdmission(() => run(msg, prepareInput, noticeObserver)).catch((e): SubmitOutcome => {
+            log('error', `submit(${msg.messageId}) threw: ${(e as Error)?.message ?? e}`);
+            return refuse('internal_error', { message: (e as Error)?.message || String(e) });
+        });
+        inFlight.set(msg.messageId, promise);
+        try {
+            const outcome = await promise;
+            const receipt = outgoingAttempts.get(msg.messageId);
+            if (receipt && outcome.kind === 'refused') {
+                const notWritten = freshOutgoing.has(msg.messageId) && receiptStore.get(msg.messageId)?.state === 'accepted'
+                    && ['no_target', 'unsupported_input', 'session_exited', 'paused', 'waiting_external'].includes(outcome.reason);
+                receiptStore.advance(receipt, notWritten ? 'failed' : 'uncertain');
+            }
+            if (receipt && outcome.kind === 'delivered' && receiptStore.get(msg.messageId)?.state === 'accepted') {
+                receiptStore.advance(receipt, 'uncertain');
+            }
+            if (outcome.kind === 'delivered' || outcome.kind === 'queued') remember(msg.messageId, outcome.kind);
+            if (outcome.kind === 'delivered') parkedText.delete(msg.messageId);
+            return outcome;
+        } finally {
+            inFlight.delete(msg.messageId);
+            freshOutgoing.delete(msg.messageId);
+        }
     }
 
     const service:SessionInputService = {
         async submitNotice(msg,observe){
-            noticeObservers.set(msg.messageId,observe);
-            // Observe only, without changing receipt/dedupe or native submit behavior.
-            return service.submit(msg);
+            // Capture the original attempt and session before admission, dedupe
+            // or resolveSession can await. A duplicate never supplies an observer
+            // to the original write, and late ACKs retain this exact callback.
+            return submitOwned({...msg},undefined,observe);
         },
         getReceipts: (sessionId, ids) => receiptStore.list(sessionId, ids).map(receipt => {
             // A restored write-ahead acceptance has no surviving FIFO/observer
@@ -546,41 +582,7 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
             return receipt.state === 'accepted' && !outgoingAttempts.has(receipt.messageId)
                 ? { ...receipt, state: 'uncertain', proof: 'none', revision: receipt.revision + 1 } : receipt;
         }),
-        async submit(msg: OutboundMessage, prepareInput?: PrepareSessionInput): Promise<SubmitOutcome> {
-            if (!msg || typeof msg.messageId !== 'string' || !msg.messageId.trim()) return refuse('internal_error', { message: 'messageId required' });
-            if (typeof msg.sessionId !== 'string' || !msg.sessionId.trim()) return refuse('no_target');
-            const pending = inFlight.get(msg.messageId);
-            if (pending) {
-                await pending.catch(() => undefined);
-                // Concurrent replay must still match the full original identity.
-                try { if (receiptStore.get(msg.messageId)) receiptStore.accept(msg.messageId, msg.sessionId, msg.input); }
-                catch { return refuse('internal_error', { message: 'Outgoing message identity conflict' }); }
-                return { kind: 'duplicate', of: msg.messageId };
-            }
-            const promise = withMaintenanceAdmission(() => run(msg, prepareInput)).catch((e): SubmitOutcome => {
-                log('error', `submit(${msg.messageId}) threw: ${(e as Error)?.message ?? e}`);
-                return refuse('internal_error', { message: (e as Error)?.message || String(e) });
-            });
-            inFlight.set(msg.messageId, promise);
-            try {
-                const outcome = await promise;
-                const receipt = outgoingAttempts.get(msg.messageId);
-                if (receipt && outcome.kind === 'refused') {
-                    const notWritten = freshOutgoing.has(msg.messageId) && receiptStore.get(msg.messageId)?.state === 'accepted'
-                        && ['no_target', 'unsupported_input', 'session_exited', 'paused', 'waiting_external'].includes(outcome.reason);
-                    receiptStore.advance(receipt, notWritten ? 'failed' : 'uncertain');
-                }
-                if (receipt && outcome.kind === 'delivered' && receiptStore.get(msg.messageId)?.state === 'accepted') {
-                    receiptStore.advance(receipt, 'uncertain');
-                }
-                if (outcome.kind === 'delivered' || outcome.kind === 'queued') remember(msg.messageId, outcome.kind);
-                if (outcome.kind === 'delivered') parkedText.delete(msg.messageId);
-                return outcome;
-            } finally {
-                inFlight.delete(msg.messageId);
-                freshOutgoing.delete(msg.messageId);
-            }
-        },
+        submit: submitOwned,
 
         async withdraw(sessionId: string, messageId: string): Promise<{ removed: boolean; unsupported?: true }> {
             let target: SessionInputTarget | null | undefined;
