@@ -16,7 +16,7 @@ export async function startMaintenanceInventoryExporter(transport:{command(name:
     let stopped=false,timer:ReturnType<typeof setTimeout>|undefined;
     const root=fs.realpathSync(getConfigDir()),initial=readCooperativeMaintenance(root);
     if(process.platform==='win32'||!initial?.actorConfigSha256)return {stop(){},async poll(){return false;}};
-    const birth=execFileSync('/bin/ps',['-o','lstart=','-p',String(process.pid)],{encoding:'utf8',timeout:5000,env:{...process.env,LC_ALL:'C'}}).trim().replace(/\s+/g,' ');
+    const birth=execFileSync('/bin/ps',['-o','lstart=','-p',String(process.pid)],{encoding:'utf8',timeout:5000,windowsHide:true,env:{...process.env,LC_ALL:'C'}}).trim().replace(/\s+/g,' ');
     const identity={pid:process.pid,bootNonce:randomUUID(),birth,startedAt:Date.now(),entryPath:fs.realpathSync(process.argv[1]),entrySha256:hash(fs.readFileSync(process.argv[1])),nodePath:fs.realpathSync(process.execPath),nodeSha256:hash(fs.readFileSync(process.execPath))};
     const dir=path.join(root,'cooperative-maintenance-mcp');fs.mkdirSync(dir,{recursive:true,mode:0o700});
     const dirStat=fs.lstatSync(dir);if(!dirStat.isDirectory()||dirStat.isSymbolicLink()||fs.realpathSync(dir)!==dir||dirStat.uid!==process.getuid?.())throw new Error('maintenance_exporter_registry_untrusted');

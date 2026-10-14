@@ -103469,7 +103469,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     var sha3 = (v) => (0, import_node_crypto6.createHash)("sha256").update(v).digest("hex");
     function lifecycleProcessIdentity() {
       const nodePath = fs28.realpathSync(process.execPath), entryPath = fs28.realpathSync(process.argv[1]);
-      const birth = (0, import_node_child_process6.execFileSync)("/bin/ps", ["-o", "lstart=", "-p", String(process.pid)], { encoding: "utf8", timeout: 3e3, env: { LC_ALL: "C" } }).trim().replace(/\s+/g, " ");
+      const birth = (0, import_node_child_process6.execFileSync)("/bin/ps", ["-o", "lstart=", "-p", String(process.pid)], { encoding: "utf8", timeout: 3e3, windowsHide: true, env: { LC_ALL: "C" } }).trim().replace(/\s+/g, " ");
       if (!birth) throw Error("lifecycle_birth_unknown");
       return { pid: process.pid, birth, bootNonce: MAINTENANCE_BOOT_NONCE, nodePath, nodeSha256: sha3(fs28.readFileSync(nodePath)), entryPath, entrySha256: sha3(fs28.readFileSync(entryPath)) };
     }
@@ -103589,7 +103589,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         let native = "unknown";
         const identity2 = r.helper ?? claims.get(claimName)?.helper ?? r.owner;
         try {
-          const birth = (0, import_node_child_process6.execFileSync)("/bin/ps", ["-o", "lstart=", "-p", String(identity2.pid)], { encoding: "utf8", timeout: 3e3, env: { LC_ALL: "C" } }).trim().replace(/\s+/g, " ");
+          const birth = (0, import_node_child_process6.execFileSync)("/bin/ps", ["-o", "lstart=", "-p", String(identity2.pid)], { encoding: "utf8", timeout: 3e3, windowsHide: true, env: { LC_ALL: "C" } }).trim().replace(/\s+/g, " ");
           native = birth === identity2.birth ? "same_incarnation" : birth ? "identity_drift" : "unknown";
         } catch (e) {
           if (e.status === 1 && String(e.stdout ?? "").trim() === "" && String(e.stderr ?? "").trim() === "") native = "absent";
@@ -107051,6 +107051,7 @@ ${marker2}`,
     }
     var import_node_crypto11 = require("crypto");
     init_cooperative_gate();
+    init_dist();
     var sha5 = (b) => (0, import_node_crypto11.createHash)("sha256").update(b).digest("hex");
     var equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
     var fail = (s2) => {
@@ -107061,7 +107062,7 @@ ${marker2}`,
       if (!b || !["inspect", "prepare", "commit", "verify-committed", "open", "verify-open", "peer"].includes(b.action)) fail("maintenance_control_operation_invalid");
       const c = auth.config, a = c.activation?.artifact, prefix = c.activation?.prefix;
       if (c.activation?.protocol !== 1 || !a || !path45.isAbsolute(prefix ?? "") || a.sha256 !== s2.targetSha256 || process.execPath !== c.retainedNode?.path || sha5(fs40.readFileSync(process.execPath)) !== c.retainedNode?.sha256 || fs40.realpathSync(process.argv[1]) !== path45.join(prefix, "dist/cli/index.js") || sha5(fs40.readFileSync(process.argv[1])) !== a.cliSha256 || sha5(fs40.readFileSync(path45.join(prefix, "dist/index.js"))) !== a.executableSha256) fail("maintenance_control_build_changed");
-      if (!components.turnLedger || components.turnLedger.selfDaemonId !== s2.daemonId || !components.cliManager?.deps.verifiedRetainedEndpoint || !components.cliManager.deps.getSessionRegistry?.()) fail("maintenance_control_runtime_ports_required");
+      if (!components.turnLedger || !daemonIdsEquivalent4(components.turnLedger.selfDaemonId, s2.daemonId) || !components.cliManager?.deps.verifiedRetainedEndpoint || !components.cliManager.deps.getSessionRegistry?.()) fail("maintenance_control_runtime_ports_required");
       if (b.expectedBoot !== void 0 && b.expectedBoot !== MAINTENANCE_BOOT_NONCE) fail("maintenance_control_boot_changed");
       if (!equal(b.roster, s2.roster) || !equal(b.nodeRoster, s2.nodeRoster)) fail("maintenance_control_membership_changed");
       if (["commit", "verify-committed", "open", "verify-open"].includes(b.action) && (!Array.isArray(b.peerPins) || b.peerPins.length !== s2.roster.length - 1 || new Set(b.peerPins.map((p) => p.daemonId)).size !== s2.roster.length - 1 || b.peerPins.some((p) => !b.ready?.some((r) => r.daemonId === p.daemonId && r.bootNonce === p.bootNonce && r.artifactSha256 === p.artifactSha256)))) fail("maintenance_control_fleet_peer_set_required");
@@ -107137,7 +107138,7 @@ ${marker2}`,
         if (!drain.mcp.observed || MAINTENANCE_DRAIN_CHANNELS.some((k) => !drain.channels[k]?.observed || drain.channels[k].pending.length)) fail("maintenance_control_complete_drain_required");
         const tool = c.tools?.ps;
         if (!tool || sha5(fs40.readFileSync(tool.path)) !== tool.sha256 || !Array.isArray(c.mcpEntrypoints) || !c.mcpEntrypoints.length) fail("maintenance_control_native_mcp_port_required");
-        const census2 = (0, import_node_child_process8.execFileSync)(tool.path, ["-A", "-ww", "-o", "pid=,uid=,lstart=,command="], { encoding: "utf8", timeout: 5e3, env: { ...process.env, LC_ALL: "C" } }).split("\n").filter(Boolean).map((line) => {
+        const census2 = (0, import_node_child_process8.execFileSync)(tool.path, ["-A", "-ww", "-o", "pid=,uid=,lstart=,command="], { encoding: "utf8", timeout: 5e3, windowsHide: true, env: { ...process.env, LC_ALL: "C" } }).split("\n").filter(Boolean).map((line) => {
           const m = line.trim().match(/^(\d+)\s+(\d+)\s+(\w+\s+\w+\s+\d+\s+\d+:\d+:\d+\s+\d+)\s+(.+)$/);
           if (!m) fail("maintenance_control_native_census_unknown");
           return { pid: Number(m[1]), birth: m[3].replace(/\s+/g, " "), uid: Number(m[2]), command: m[4] };
@@ -181490,7 +181491,7 @@ async function startMaintenanceInventoryExporter(transport, delivery) {
   }, async poll() {
     return false;
   } };
-  const birth = (0, import_node_child_process.execFileSync)("/bin/ps", ["-o", "lstart=", "-p", String(process.pid)], { encoding: "utf8", timeout: 5e3, env: { ...process.env, LC_ALL: "C" } }).trim().replace(/\s+/g, " ");
+  const birth = (0, import_node_child_process.execFileSync)("/bin/ps", ["-o", "lstart=", "-p", String(process.pid)], { encoding: "utf8", timeout: 5e3, windowsHide: true, env: { ...process.env, LC_ALL: "C" } }).trim().replace(/\s+/g, " ");
   const identity = { pid: process.pid, bootNonce: (0, import_node_crypto2.randomUUID)(), birth, startedAt: Date.now(), entryPath: fs.realpathSync(process.argv[1]), entrySha256: hash(fs.readFileSync(process.argv[1])), nodePath: fs.realpathSync(process.execPath), nodeSha256: hash(fs.readFileSync(process.execPath)) };
   const dir = path.join(root, "cooperative-maintenance-mcp");
   fs.mkdirSync(dir, { recursive: true, mode: 448 });

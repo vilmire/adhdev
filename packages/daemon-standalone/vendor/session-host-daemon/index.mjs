@@ -501,11 +501,11 @@ var HostUpgradeLease = class {
     if (fs3.realpathSync(this.binding.helperPath) !== this.binding.helperPath || digest(fs3.readFileSync(this.binding.helperPath)) !== this.binding.helperSha256) {
       throw new Error("native_host_helper_pin_mismatch");
     }
-    if (this.binding.helperProtocol === 1 && String(execFileSync(this.binding.helperPath, ["--attest"], { stdio: "pipe" })).trim() !== "adhdev-host-guardian/1") throw new Error("native_host_helper_protocol_mismatch");
+    if (this.binding.helperProtocol === 1 && String(execFileSync(this.binding.helperPath, ["--attest"], { stdio: "pipe", windowsHide: true })).trim() !== "adhdev-host-guardian/1") throw new Error("native_host_helper_protocol_mismatch");
     if (this.binding.helperFileIdentity && this.fileIdentity() !== this.binding.helperFileIdentity) throw new Error("native_host_helper_file_identity_changed");
     const lockPath = path2.join(this.binding.stateDir, "instance.lock");
     const priorLock = fs3.existsSync(lockPath);
-    const child = spawn2(this.binding.helperPath, [lockPath], { stdio: "pipe" });
+    const child = spawn2(this.binding.helperPath, [lockPath], { stdio: "pipe", windowsHide: true });
     this.child = child;
     child.on("exit", () => {
       this.healthy = false;

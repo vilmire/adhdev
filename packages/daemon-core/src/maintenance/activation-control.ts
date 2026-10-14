@@ -8,6 +8,7 @@ import {createHash,createHmac,timingSafeEqual,randomUUID} from 'node:crypto';
 import {actorObservationChallengeBytes,authorizeMaintenanceCollection,type ActorObservationChallenge} from './actor-observation.js';
 import {MAINTENANCE_BOOT_NONCE,maintenanceHeld,maintenanceDecisionDigest,writeCooperativeMaintenance,withMaintenanceObservation,type MaintenanceReady} from './cooperative-gate.js';
 import {observeHeldHostedSessions,verifyPreparedObservation,verifyHeldObservationFleet} from './held-observation.js';
+import {daemonIdsEquivalent} from '@adhdev/mesh-shared';
 import type {DaemonComponents} from '../boot/daemon-components.js';
 const sha=(b:Buffer|string)=>createHash('sha256').update(b).digest('hex');
 const equal=(a:unknown,b:unknown)=>JSON.stringify(a)===JSON.stringify(b);
@@ -18,17 +19,19 @@ export async function authenticatedActivationControl(components:DaemonComponents
  const c=auth.config,a=c.activation?.artifact,prefix=c.activation?.prefix;
  if(c.activation?.protocol!==1||!a||!path.isAbsolute(prefix??'')||a.sha256!==s.targetSha256||process.execPath!==c.retainedNode?.path||sha(fs.readFileSync(process.execPath))!==c.retainedNode?.sha256
     ||fs.realpathSync(process.argv[1])!==path.join(prefix,'dist/cli/index.js')||sha(fs.readFileSync(process.argv[1]))!==a.cliSha256||sha(fs.readFileSync(path.join(prefix,'dist/index.js')))!==a.executableSha256)fail('maintenance_control_build_changed');
- if(!components.turnLedger||components.turnLedger.selfDaemonId!==s.daemonId||!components.cliManager?.deps.verifiedRetainedEndpoint||!components.cliManager.deps.getSessionRegistry?.())fail('maintenance_control_runtime_ports_required');
+ // Local runtime ownership: this daemon's own ledger must answer for the pinned
+ // state's machine, which it may legitimately name in any equivalent id form.
+ if(!components.turnLedger||!daemonIdsEquivalent(components.turnLedger.selfDaemonId,s.daemonId)||!components.cliManager?.deps.verifiedRetainedEndpoint||!components.cliManager.deps.getSessionRegistry?.())fail('maintenance_control_runtime_ports_required');
  if(b.expectedBoot!==undefined&&b.expectedBoot!==MAINTENANCE_BOOT_NONCE)fail('maintenance_control_boot_changed');
  if(!equal(b.roster,s.roster)||!equal(b.nodeRoster,s.nodeRoster))fail('maintenance_control_membership_changed');
  // Every required peer is contacted by this target's actual transport. The
  // authenticated response binds its own PID/boot/build; a connection boolean or
  // an actor echo of a peer pin cannot satisfy this route.
- if(['commit','verify-committed','open','verify-open'].includes(b.action)&&(!Array.isArray(b.peerPins)||b.peerPins.length!==s.roster.length-1||new Set(b.peerPins.map((p:any)=>p.daemonId)).size!==s.roster.length-1||b.peerPins.some((p:any)=>!b.ready?.some((r:MaintenanceReady)=>r.daemonId===p.daemonId&&r.bootNonce===p.bootNonce&&r.artifactSha256===p.artifactSha256))))fail('maintenance_control_fleet_peer_set_required');
+ if(['commit','verify-committed','open','verify-open'].includes(b.action)&&(!Array.isArray(b.peerPins)||b.peerPins.length!==s.roster.length-1||new Set(b.peerPins.map((p:any)=>p.daemonId)).size!==s.roster.length-1||b.peerPins.some((p:any)=>!b.ready?.some((r:MaintenanceReady)=>r.daemonId===p.daemonId&&r.bootNonce===p.bootNonce&&r.artifactSha256===p.artifactSha256))))fail('maintenance_control_fleet_peer_set_required'); // canon-ok: exact-cardinality pinned-roster set proof, not an identity match — the roster is a uniqueness-validated raw-string set and maintenanceDecisionDigest() hashes those same raw strings sorted, so canonicalizing here would collapse two legitimately distinct roster entries into one and fail a valid peer set
  const peerProofs:Array<Record<string,unknown>>=[],peerObservations:Array<Awaited<ReturnType<typeof observeHeldHostedSessions>>>=[];
  for(const peer of b.peerPins??[]){
-  if(peer.daemonId===s.daemonId||!s.roster.includes(peer.daemonId)||!components.dispatchMeshCommand)fail('maintenance_control_peer_port_required');
-  const pin=c.activation.peerConfigs?.find((p:any)=>p.daemonId===peer.daemonId);
+  if(peer.daemonId===s.daemonId||!s.roster.includes(peer.daemonId)||!components.dispatchMeshCommand)fail('maintenance_control_peer_port_required'); // canon-ok: self-exclusion plus exact pinned-roster membership of the same raw set the decision digest hashes — an equivalent-form id is a DIFFERENT roster entry here, so canonicalizing would admit a pin that is absent from the digested roster
+  const pin=c.activation.peerConfigs?.find((p:any)=>p.daemonId===peer.daemonId); // canon-ok: lookup key into the pinned peerConfigs map, which the approved planner (scripts/cooperative-maintenance-activation.mjs) keys by this same raw daemonId — canonicalizing one side only would desynchronize the two and could select another peer's config/key
   if(!pin||sha(fs.readFileSync(pin.path))!==pin.sha256)fail('maintenance_control_peer_config_changed');
   const cfg=JSON.parse(fs.readFileSync(pin.path,'utf8')),peerConfigSha=sha(fs.readFileSync(cfg.actorConfigPath)),key=fs.readFileSync(cfg.observationKey.path);
   if(key.length!==32||sha(key)!==cfg.observationKey.sha256)fail('maintenance_control_peer_key_changed');
@@ -38,7 +41,7 @@ export async function authenticatedActivationControl(components:DaemonComponents
   const answer=await components.dispatchMeshCommand!(peer.daemonId,'cooperative_maintenance_actor_control',{...challenge,mac:createHmac('sha256',key).update(actorObservationChallengeBytes(challenge)).digest('hex')});
   if(sha(fs.readFileSync(pin.path))!==pin.sha256||sha(fs.readFileSync(cfg.observationKey.path))!==cfg.observationKey.sha256||sha(fs.readFileSync(cfg.actorConfigPath))!==peerConfigSha)fail('maintenance_control_peer_config_changed');
   const r=answer?.reply;
-  if(!answer?.success||!r||r.nonce!==q.nonce||r.daemonId!==peer.daemonId||r.planDigest!==s.planDigest||r.epoch!==s.epoch||r.bootNonce!==peer.bootNonce||r.build?.artifactSha256!==peer.artifactSha256||!Number.isFinite(r.observedAt)||r.observedAt<q.sentAt||Date.now()-r.observedAt>10000||!equal(r.roster,s.roster)||!equal(r.nodeRoster,s.nodeRoster)||!/^[a-f0-9]{64}$/.test(answer.mac??'')||!timingSafeEqual(createHmac('sha256',key).update(JSON.stringify(r)).digest(),Buffer.from(answer.mac,'hex')))fail('maintenance_control_peer_continuity_changed');
+  if(!answer?.success||!r||r.nonce!==q.nonce||r.daemonId!==peer.daemonId||r.planDigest!==s.planDigest||r.epoch!==s.epoch||r.bootNonce!==peer.bootNonce||r.build?.artifactSha256!==peer.artifactSha256||!Number.isFinite(r.observedAt)||r.observedAt<q.sentAt||Date.now()-r.observedAt>10000||!equal(r.roster,s.roster)||!equal(r.nodeRoster,s.nodeRoster)||!/^[a-f0-9]{64}$/.test(answer.mac??'')||!timingSafeEqual(createHmac('sha256',key).update(JSON.stringify(r)).digest(),Buffer.from(answer.mac,'hex')))fail('maintenance_control_peer_continuity_changed'); // canon-ok: the reply is bound by timingSafeEqual over HMAC(JSON.stringify(r)) covering this exact raw daemonId, so the field must equal the byte-identical challenged value — canonicalizing would accept a reply whose authenticated bytes differ from the pin that was challenged
   if(['verify-committed','open','verify-open'].includes(b.action)&&(!r.commitment||r.commitment.epoch!==s.epoch||r.commitment.bootNonce!==peer.bootNonce||r.commitment.decisionDigest!==b.decisionDigest||!equal(r.commitment.ready,b.ready)))fail('maintenance_control_peer_commitment_missing');
   if(!r.observation)fail('maintenance_control_peer_observation_missing');peerObservations.push(r.observation);
   peerProofs.push({...peer,nonce:b.engineNonce});
@@ -72,7 +75,7 @@ export async function authenticatedActivationControl(components:DaemonComponents
   const drain=await withMaintenanceObservation(state=>collectTargetDrain(components,state,auth.root,request.nonce));
   if(!drain.mcp.observed||MAINTENANCE_DRAIN_CHANNELS.some(k=>!drain.channels[k]?.observed||drain.channels[k].pending.length))fail('maintenance_control_complete_drain_required');
   const tool=c.tools?.ps;if(!tool||sha(fs.readFileSync(tool.path))!==tool.sha256||!Array.isArray(c.mcpEntrypoints)||!c.mcpEntrypoints.length)fail('maintenance_control_native_mcp_port_required');
-  const census=execFileSync(tool.path,['-A','-ww','-o','pid=,uid=,lstart=,command='],{encoding:'utf8',timeout:5000,env:{...process.env,LC_ALL:'C'}}).split('\n').filter(Boolean).map(line=>{const m=line.trim().match(/^(\d+)\s+(\d+)\s+(\w+\s+\w+\s+\d+\s+\d+:\d+:\d+\s+\d+)\s+(.+)$/);if(!m)fail('maintenance_control_native_census_unknown');return {pid:Number(m![1]),birth:m![3].replace(/\s+/g,' '),uid:Number(m![2]),command:m![4]};});
+  const census=execFileSync(tool.path,['-A','-ww','-o','pid=,uid=,lstart=,command='],{encoding:'utf8',timeout:5000,windowsHide:true,env:{...process.env,LC_ALL:'C'}}).split('\n').filter(Boolean).map(line=>{const m=line.trim().match(/^(\d+)\s+(\d+)\s+(\w+\s+\w+\s+\d+\s+\d+:\d+:\d+\s+\d+)\s+(.+)$/);if(!m)fail('maintenance_control_native_census_unknown');return {pid:Number(m![1]),birth:m![3].replace(/\s+/g,' '),uid:Number(m![2]),command:m![4]};});
   const native=census.filter(p=>c.mcpEntrypoints.some((e:any)=>p.command.split(/\s+/).includes(e.path))||p.command.includes('mcp-server')&&p.command.includes(auth.root));
   if(native.length!==drain.mcp.members.length||native.some(p=>!drain.mcp.members.some(m=>m.observed&&m.identity.pid===p.pid&&m.identity.birth===p.birth&&c.mcpEntrypoints.some((e:any)=>e.path===m.identity.entryPath&&p.command.startsWith(e.nodePath+' '+e.path)))))fail('maintenance_control_native_mcp_membership_changed');
   pinBuild();auth.reply({preflight:true},state);
@@ -84,11 +87,11 @@ export async function authenticatedActivationControl(components:DaemonComponents
  }
  auth.reply({preflight:true},state);
  const validReady=(rows:MaintenanceReady[])=>Array.isArray(rows)&&rows.length===s.roster.length&&new Set(rows.map(r=>r.daemonId)).size===rows.length&&rows.every(r=>s.roster.includes(r.daemonId)&&r.artifactSha256===s.targetSha256&&/^[a-f0-9]{64}$/.test(r.receipt)&&typeof r.bootNonce==='string'&&r.bootNonce.length>0);
- const local=()=>{const row=b.ready?.find((r:MaintenanceReady)=>r.daemonId===s.daemonId);if(!validReady(b.ready)||!row||row.bootNonce!==MAINTENANCE_BOOT_NONCE||row.receipt!==state.preparation?.receipt||b.decisionDigest!==maintenanceDecisionDigest(s,b.ready))fail('maintenance_control_certificate_changed');return row as MaintenanceReady;};
+ const local=()=>{const row=b.ready?.find((r:MaintenanceReady)=>r.daemonId===s.daemonId);if(!validReady(b.ready)||!row||row.bootNonce!==MAINTENANCE_BOOT_NONCE||row.receipt!==state.preparation?.receipt||b.decisionDigest!==maintenanceDecisionDigest(s,b.ready))fail('maintenance_control_certificate_changed');return row as MaintenanceReady;}; // canon-ok: selects this target's own row out of the certificate whose decisionDigest is recomputed on the next clause from the same raw ready rows (maintenanceDecisionDigest sorts by raw daemonId), so the row must be the byte-identical one the digest covers
  if(b.action==='commit'){
   local();if(!maintenanceHeld()||!Array.isArray(b.observations))fail('maintenance_control_fleet_observations_required');
   if(actualObservations.length!==s.roster.length||b.observations.some((p:any)=>!actualObservations.some(a=>equal(a,p))))fail('maintenance_control_fleet_observations_changed');
-  if(b.observations.some((p:any)=>!b.ready.some((r:MaintenanceReady)=>r.daemonId===p.daemonId&&r.bootNonce===p.bootNonce&&r.receipt===p.receipt)))fail('maintenance_control_observation_certificate_changed');
+  if(b.observations.some((p:any)=>!b.ready.some((r:MaintenanceReady)=>r.daemonId===p.daemonId&&r.bootNonce===p.bootNonce&&r.receipt===p.receipt)))fail('maintenance_control_observation_certificate_changed'); // canon-ok: pairs each observation to the ready row carrying the same raw daemonId inside the digested certificate — the receipt/bootNonce tuple is only meaningful against the byte-identical row, so canonicalizing could pair an observation with another entry's receipt
   state={...state,commitment:{epoch:s.epoch,bootNonce:MAINTENANCE_BOOT_NONCE,decisionDigest:b.decisionDigest,ready:b.ready}};writeCooperativeMaintenance(auth.root,state);
  }
  let committedObservation:(MaintenanceReady&{epoch:number;decisionDigest:string})|undefined;
