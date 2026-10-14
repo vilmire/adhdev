@@ -43,8 +43,26 @@ async function startDaemon(): Promise<{ port: number; http: InstanceType<typeof 
   const http = new mod.StandaloneHttpApi({
     isReady: () => true,
     getStatus: () => ({ sessions: [], daemons: [] }) as any,
-    executeCommand: async (type) => {
+    executeCommand: async (type, payload) => {
       calls.push(type);
+      // The real worker outbox runs strictProtocol, so every report/progress
+      // send is preceded by `worker_bridge_prepare` and is QUARANTINED (never
+      // sent) unless that call returns a protocol-1 provenance claim. A bare
+      // `{ success: true }` would silently stop the send before the verb under
+      // test, so the stub answers this one command the way a daemon does.
+      if (type === 'worker_bridge_prepare') {
+        return {
+          success: true,
+          protocol: 1,
+          prepared: {
+            meshId: 'e2e_mesh', taskId: 'e2e_task', attemptId: 'mesh_direct:e2e_task',
+            generation: 0, sessionId: 'e2e_session', nodeId: 'e2e_node',
+            ownerDaemonId: 'daemon_mach_e2e_owner',
+            deliveryId: (payload as any)?.deliveryId,
+            reportedAtMs: (payload as any)?.reportedAtMs,
+          },
+        };
+      }
       return { success: true };
     },
     rawTerminalService: () => ({}) as any,
@@ -139,8 +157,14 @@ describe('daemon-launched MCP servers against a token-gated standalone daemon', 
     await mcp.initialize();
     const res = await mcp.request('tools/call', { name: 'progress_update', arguments: { note: 'halfway' } });
     expect(res.error, mcp.stderr).toBeUndefined();
+    // Both verbs must clear the worker-scope gate, in this order: the prepare
+    // mints the delivery provenance, then the note is actually sent. A worker
+    // credential refused on either one gets its note quarantined instead.
+    expect(calls).toContain('worker_bridge_prepare');
     expect(calls).toContain('worker_progress_update');
+    expect(calls.indexOf('worker_bridge_prepare')).toBeLessThan(calls.indexOf('worker_progress_update'));
     expect(mcp.stderr).not.toMatch(/Cannot reach/);
+    expect(mcp.stderr).not.toMatch(/worker_scope_forbidden/);
   }, 60_000);
 
   it('coordinator-scope MCP boots from the auth file and survives a token rotation', async () => {

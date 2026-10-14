@@ -63,6 +63,17 @@ export const ADHDEV_COORDINATOR_MCP_AUTH_FILE_ENV = 'ADHDEV_COORDINATOR_MCP_AUTH
  * the list in step with the toolset's sources.
  */
 export const WORKER_MCP_DAEMON_VERBS: readonly string[] = Object.freeze([
+    // Mints the delivery provenance a strict-protocol report is sent under. It
+    // carries no new authority: it resolves the caller through the SAME
+    // credential primitive as `worker_report_completion`
+    // (`resolveWorkerIdentity` — a verified task token or a live session bind),
+    // refuses with `worker_protocol_provenance_required` unless that resolves to
+    // a complete mesh/task/attempt/session/node identity, and stores the claim
+    // under a SHA-256 of the caller's own credential, so a worker can neither
+    // read nor overwrite another worker's row. Omitting it 403'd the prepare and
+    // quarantined the report as `provenance_unavailable_at_creation` — the
+    // worker's completion was silently never delivered.
+    'worker_bridge_prepare',
     'worker_report_completion',
     'worker_progress_update',
     'worker_peer_context_pull',
