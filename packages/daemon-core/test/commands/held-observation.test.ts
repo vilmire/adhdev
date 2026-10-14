@@ -4,7 +4,7 @@ const fixture = await vi.hoisted(async()=>{
     return createSessionHostIsolation();
 });
 const rpc=vi.hoisted(()=>({connect:vi.fn(),request:vi.fn(),close:vi.fn()}));
-vi.mock('@adhdev/session-host-core',async original=>({...(await original<any>()),SessionHostClient:vi.fn(function(options:any){fixture.assertEndpoint(options?.endpoint);return rpc;})}));
+vi.mock('@adhdev/session-host-core',async original=>({...(await original<any>()),getDefaultSessionHostEndpoint:vi.fn(()=>{throw new Error('test_default_session_host_resolution_forbidden');}),SessionHostClient:vi.fn(function(options:any){fixture.assertEndpoint(options?.endpoint);return rpc;})}));
 const writable = vi.hoisted(()=>({adapter:{updateRuntimeMeta:vi.fn()},construct:vi.fn()}));
 vi.mock('../../src/providers/cli-provider-instance.js',()=>({CliProviderInstance:vi.fn(function(_p:any,_w:any,_a:any,id:string){writable.construct();return {instanceId:id,getAdapter:()=>writable.adapter};})}));
 import * as fs from 'node:fs';
@@ -273,4 +273,15 @@ for(const fault of ['unreadable','changed'])it(`fresh ${fault} coordinator metad
     const file=path.join(fixture.root,'daemon','mesh-coordinators.json');
     fs.writeFileSync(file,fault==='unreadable'?'{incomplete':JSON.stringify([{meshId:'mesh',sessionId:'coord',cliType:'synthetic-cli',workspace:'/unknown',startedAt:100}]));
     await expect(observeHeldHostedSessions(manager,'fresh')).rejects.toThrow('coordinator_inventory');expect(registry.get('coord')).toBe(before);expect(events).toEqual([]);
+});
+
+it('the harness refuses actual managed-host default endpoint derivation before native lookup or connection',async()=>{
+    const {getDefaultSessionHostEndpoint}=await import('@adhdev/session-host-core');
+    expect(vi.isMockFunction(getDefaultSessionHostEndpoint)).toBe(true);
+    expect(()=>getDefaultSessionHostEndpoint('adhdev')).toThrow('default_session_host_resolution_forbidden');
+    const {createManagedSessionHost}=await import('../../src/session-host/managed-host.js');
+    const host=createManagedSessionHost({appName:'adhdev',requiredRequestTypes:[]});
+    expect(()=>host.endpoint).toThrow('default_session_host_resolution_forbidden');
+    await expect(host.ensureReady()).rejects.toThrow('default_session_host_resolution_forbidden');
+    expect(rpc.connect).not.toHaveBeenCalled();expect(rpc.request).not.toHaveBeenCalled();
 });
