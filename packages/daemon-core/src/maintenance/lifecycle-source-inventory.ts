@@ -63,8 +63,8 @@ export function collectLifecycleSource(root=getConfigDir()){
   // by a persisted empty snapshot. A detached helper needs exact native birth.
   const claimName=name.replace('.json','.claim.json');if(names.includes(claimName)){const claim=read(path.join(dir,claimName));if(claim.operationId!==r.operationId||claim.kind!=='helper'||!claim.helper||['owner','targetVersion','packageName','parentPid'].some(k=>JSON.stringify(claim[k])!==JSON.stringify(r[k])))throw Error('lifecycle_claim_scope_changed');claims.set(claimName,claim);}
   let native='unknown';const identity=r.helper??claims.get(claimName)?.helper??r.owner;
-  try{const birth=execFileSync('/bin/ps',['-o','lstart=','-p',String(identity.pid)],{encoding:'utf8',timeout:3000,env:{LC_ALL:'C'}}).trim().replace(/\s+/g,' ');native=birth===identity.birth?'same_incarnation':birth?'identity_drift':'absent';}
-  catch(e){if((e as any).status===1&&String((e as any).stdout??'').trim()==='')native='absent';}
+  try{const birth=execFileSync('/bin/ps',['-o','lstart=','-p',String(identity.pid)],{encoding:'utf8',timeout:3000,env:{LC_ALL:'C'}}).trim().replace(/\s+/g,' ');native=birth===identity.birth?'same_incarnation':birth?'identity_drift':'unknown';}
+  catch(e){if((e as any).status===1&&String((e as any).stdout??'').trim()===''&&String((e as any).stderr??'').trim()==='')native='absent';}
   try{for(const [file,expected]of [[identity.nodePath,identity.nodeSha256],[identity.entryPath,identity.entrySha256]]){if(!pins.has(file))pins.set(file,sha(fs.readFileSync(fs.realpathSync(file))));if(pins.get(file)!==expected)native='identity_drift';}}catch{native='unknown';}
   if(r.helper&&(!claims.has(claimName)||JSON.stringify(claims.get(claimName).helper)!==JSON.stringify(r.helper)))native='unknown';
   return {...r,claim:claims.get(claimName)?.helper??null,native};});

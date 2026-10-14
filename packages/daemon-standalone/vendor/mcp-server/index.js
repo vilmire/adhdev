@@ -103584,9 +103584,9 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         const identity2 = r.helper ?? claims.get(claimName)?.helper ?? r.owner;
         try {
           const birth = (0, import_node_child_process6.execFileSync)("/bin/ps", ["-o", "lstart=", "-p", String(identity2.pid)], { encoding: "utf8", timeout: 3e3, env: { LC_ALL: "C" } }).trim().replace(/\s+/g, " ");
-          native = birth === identity2.birth ? "same_incarnation" : birth ? "identity_drift" : "absent";
+          native = birth === identity2.birth ? "same_incarnation" : birth ? "identity_drift" : "unknown";
         } catch (e) {
-          if (e.status === 1 && String(e.stdout ?? "").trim() === "") native = "absent";
+          if (e.status === 1 && String(e.stdout ?? "").trim() === "" && String(e.stderr ?? "").trim() === "") native = "absent";
         }
         try {
           for (const [file, expected] of [[identity2.nodePath, identity2.nodeSha256], [identity2.entryPath, identity2.entrySha256]]) {

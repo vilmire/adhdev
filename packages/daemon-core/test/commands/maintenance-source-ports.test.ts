@@ -1,8 +1,8 @@
 import {beforeEach,afterEach,afterAll,it,expect,vi} from 'vitest';
 const isolated=await vi.hoisted(async()=>{const {createSessionHostIsolation}=await import('../helpers/session-host-isolation.js');return createSessionHostIsolation();});
 vi.mock('@adhdev/session-host-core',async original=>({...await original<any>(),getDefaultSessionHostEndpoint:vi.fn(()=>{throw Error('default_endpoint_forbidden');}),SessionHostClient:vi.fn(function(){throw Error('native_client_forbidden');})}));
-const spawnState=vi.hoisted(()=>({calls:0}));
-vi.mock('child_process',async original=>({...await original<any>(),spawn:vi.fn(()=>{spawnState.calls++;return {pid:999999,once:vi.fn(),unref:vi.fn()};})}));
+const spawnState=vi.hoisted(()=>({calls:0,psFailure:false}));
+vi.mock('child_process',async original=>{const actual=await original<any>();return {...actual,execFileSync:(...args:any[])=>{if(spawnState.psFailure&&args[0]==='/bin/ps')throw Object.assign(Error('unreachable native observer'),{status:1,stdout:'',stderr:'permission denied'});return actual.execFileSync(...args);},spawn:vi.fn(()=>{spawnState.calls++;return {pid:999999,once:vi.fn(),unref:vi.fn()};})};});
 vi.mock('@adhdev/daemon-core',async original=>({...await original<any>(),...await import('../../src/maintenance/lifecycle-source-inventory.js'),getConfigDir:(await import('../../src/config/config.js')).getConfigDir}));
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -18,7 +18,7 @@ import {spawnDetachedDaemonUpgradeHelper} from '../../src/commands/upgrade-helpe
 import {resetProcessInstanceContextForTests} from '../../src/config/instance-context.js';
 import {DaemonUpdateController} from '../../../../../packages/daemon-cloud/src/daemon-update-controller.js';
 let root:string,store:MeshRuntimeStore;
-beforeEach(()=>{expect(vi.isMockFunction(SessionHostClient)).toBe(true);isolated.assertEndpoint(isolated.endpoint);root=path.join(isolated.root,randomUUID());fs.mkdirSync(root);process.env.ADHDEV_CONFIG_DIR=root;resetProcessInstanceContextForTests();MeshRuntimeStore.resetForTests();store=MeshRuntimeStore.getInstance();spawnState.calls=0;});
+beforeEach(()=>{expect(vi.isMockFunction(SessionHostClient)).toBe(true);isolated.assertEndpoint(isolated.endpoint);root=path.join(isolated.root,randomUUID());fs.mkdirSync(root);process.env.ADHDEV_CONFIG_DIR=root;resetProcessInstanceContextForTests();MeshRuntimeStore.resetForTests();store=MeshRuntimeStore.getInstance();spawnState.calls=0;spawnState.psFailure=false;});
 afterEach(()=>{MeshRuntimeStore.resetForTests();resetProcessInstanceContextForTests();});afterAll(()=>isolated.cleanup());
 const tick=()=>new Promise<void>(r=>setImmediate(r));
 function noticeHarness(mode:'queued'|'delayed'|'missing'='queued',seq=1){
@@ -91,4 +91,9 @@ it('unverified Windows inventory refuses without imposing POSIX journal probes o
   const c=new DaemonUpdateController({collectAllStates:()=>[],getUpgradePackageName:()=> 'adhdev',pkgVersion:'1.0.80'});c.onAuthOk();expect(c.maintenanceInventory()).toMatchObject({observed:false,reason:'windows_lifecycle_inventory_unverified'});
   spawnDetachedDaemonUpgradeHelper({packageName:'adhdev',targetVersion:'1.0.81',parentPid:process.pid,restartArgv:['fixture.js'],configDir:root});expect(spawnState.calls).toBe(1);expect(fs.existsSync(path.join(root,'cooperative-lifecycle-source'))).toBe(false);
  }finally{Object.defineProperty(process,'platform',prior);}
+});
+
+it('unreachable native process facts cannot turn a completed helper receipt into absence',()=>{
+ const expected={targetVersion:'1.0.81',packageName:'adhdev',parentPid:process.pid};const id=beginLifecycleSource('helper',expected,root);claimLifecycleHelper(id,expected,root);advanceLifecycleSource(id,'completed',{},root);
+ spawnState.psFailure=true;try{const d=collectLifecycleSource(root);expect(d.observed).toBe(false);expect(d.pending[0]).toMatchObject({operationId:id,state:'completed',native:'unknown'});}finally{spawnState.psFailure=false;}
 });
