@@ -142326,7 +142326,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         const reply = await client.request({ type: "list_sessions", payload: {} });
         if (!reply.success || !Array.isArray(reply.result) || digest(retainedRuntimeInventory(reply.result, state2)) !== proof.inventoryDigest) throw new Error("maintenance_retained_inventory_drift");
         const actual = session && proof.sessions.find((r) => r.runtimeId === session.runtimeId);
-        if (session && (!actual || actual.providerType !== session.providerType || actual.workspace !== session.workspace || actual.startedAt !== session.startedAt)) throw new Error("maintenance_promotion_binding_drift");
+        if (session && (!actual || actual.providerSessionId !== session.providerSessionId || actual.providerType !== session.providerType || actual.workspace !== session.workspace || actual.startedAt !== session.startedAt)) throw new Error("maintenance_promotion_binding_drift");
         if (session?.binding && actual && Object.entries(session.binding).some(([key3, value]) => actual[key3] !== value)) throw new Error("maintenance_promotion_binding_drift");
         assertMaintenanceAdmission();
         return proof.sessions;
@@ -154765,7 +154765,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
       }
       const promoted = await verifyHeldObservationPromotion(host);
       const sessions = records || await host.deps.listHostedCliRuntimes?.() || [];
-      if (promoted && (!records && sessions.length !== promoted.length || sessions.some((r) => !promoted.some((p) => p.runtimeId === r.runtimeId && p.providerType === r.cliType && p.workspace === r.workspace && p.startedAt === r.startedAtMs)))) throw new Error("maintenance_complete_promotion_inventory_required");
+      if (promoted && (!records && sessions.length !== promoted.length || sessions.some((r) => !promoted.some((p) => p.runtimeId === r.runtimeId && p.providerType === r.cliType && p.providerSessionId === r.providerSessionId && p.workspace === r.workspace && p.startedAt === r.startedAtMs)))) throw new Error("maintenance_complete_promotion_inventory_required");
       let restored = 0;
       const restoredBindings = /* @__PURE__ */ new Set();
       const managerTag = host.deps.hostedRuntimeManagerTag;
@@ -155326,7 +155326,8 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
       }
       async registerCliInstance(key3, normalizedType, cliType, resolvedDir, cliArgs, provider, settings2, attachExisting = false, options) {
         return withMaintenanceAdmission(async () => {
-          if (attachExisting) await verifyHeldObservationPromotion(this, { runtimeId: key3, providerType: normalizedType, workspace: resolvedDir, startedAt: options?.attachStartedAtMs, binding: { meshId: settings2.meshNodeFor || "", nodeId: settings2.meshNodeId || "", coordinatorMeshId: settings2.meshCoordinatorFor || "", workOwner: settings2.meshCoordinatorDaemonId || "" } });
+          options = options ? { ...options } : void 0;
+          if (attachExisting) await verifyHeldObservationPromotion(this, { runtimeId: key3, providerType: normalizedType, workspace: resolvedDir, providerSessionId: options?.providerSessionId, startedAt: options?.attachStartedAtMs, binding: { meshId: settings2.meshNodeFor || "", nodeId: settings2.meshNodeId || "", coordinatorMeshId: settings2.meshCoordinatorFor || "", workOwner: settings2.meshCoordinatorDaemonId || "" } });
           const instanceManager = this.deps.getInstanceManager();
           const sessionRegistry = this.deps.getSessionRegistry?.() || null;
           if (!instanceManager) throw new Error("InstanceManager not available");

@@ -158,7 +158,7 @@ export function verifyHeldObservationFleet(observations: Awaited<ReturnType<type
 
 /** Called inside the released admission lease immediately before ordinary
  * writable attach. No observation can itself authorize promotion. */
-export async function verifyHeldObservationPromotion(host: CliRestoreHost, session?: {runtimeId:string;providerType:string;workspace:string;startedAt?:number;binding?:{meshId:string;nodeId:string;coordinatorMeshId:string;workOwner:string}}) {
+export async function verifyHeldObservationPromotion(host: CliRestoreHost, session?: {runtimeId:string;providerType:string;workspace:string;providerSessionId?:string;startedAt?:number;binding?:{meshId:string;nodeId:string;coordinatorMeshId:string;workOwner:string}}) {
     const state = readCooperativeMaintenance();
     if (!state) return;
     assertMaintenanceAdmission();
@@ -173,7 +173,9 @@ export async function verifyHeldObservationPromotion(host: CliRestoreHost, sessi
         const reply = await client.request<SessionHostRecord[]>({type:'list_sessions',payload:{}});
         if (!reply.success || !Array.isArray(reply.result) || digest(retainedRuntimeInventory(reply.result,state)) !== proof.inventoryDigest) throw new Error('maintenance_retained_inventory_drift');
         const actual = session && proof.sessions.find(r=>r.runtimeId===session.runtimeId);
-        if (session && (!actual || actual.providerType !== session.providerType || actual.workspace !== session.workspace || actual.startedAt !== session.startedAt)) throw new Error('maintenance_promotion_binding_drift');
+        // The writable constructor stamps this ID into native runtime metadata.
+        // Bind it before construction; held inventory already requires a known ID.
+        if (session && (!actual || actual.providerSessionId !== session.providerSessionId || actual.providerType !== session.providerType || actual.workspace !== session.workspace || actual.startedAt !== session.startedAt)) throw new Error('maintenance_promotion_binding_drift');
         if (session?.binding && actual && Object.entries(session.binding).some(([key,value])=>actual[key as keyof typeof actual] !== value)) throw new Error('maintenance_promotion_binding_drift');
         assertMaintenanceAdmission();
         return proof.sessions;

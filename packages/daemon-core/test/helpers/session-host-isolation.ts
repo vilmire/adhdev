@@ -7,6 +7,11 @@ export function createSessionHostIsolation() {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'held-observer-isolation-')));
     const priorConnect = net.Socket.prototype.connect;
     net.Socket.prototype.connect = function(){throw new Error('test_native_session_host_connect_forbidden');} as typeof net.Socket.prototype.connect;
+    // Any Node subprocess inherits the same fatal native-connect fence before imports.
+    const preload = path.join(root,'deny-native-connect.cjs');
+    fs.writeFileSync(preload,"require('node:net').Socket.prototype.connect = function(){throw new Error('test_native_session_host_connect_forbidden');}; require('node:module').syncBuiltinESMExports();\n");
+    const priorNodeOptions = process.env.NODE_OPTIONS;
+    process.env.NODE_OPTIONS = `${priorNodeOptions || ''} --require=${JSON.stringify(preload)}`;
     const prior = {config:process.env.ADHDEV_CONFIG_DIR,name:process.env.ADHDEV_SESSION_HOST_NAME};
     process.env.ADHDEV_CONFIG_DIR = root;
     process.env.ADHDEV_SESSION_HOST_NAME = `test-held-${path.basename(root)}`;
@@ -20,6 +25,7 @@ export function createSessionHostIsolation() {
         if (!actual || !endpoints.has(actual.path) || fs.existsSync(actual.path) || /(?:^|\/)adhdev(?:-preview)?-session-host\.sock$/.test(actual.path)) throw new Error('test_live_session_host_endpoint_refused');
     },cleanup() {
         net.Socket.prototype.connect = priorConnect;
+        if (priorNodeOptions === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS=priorNodeOptions;
         if (prior.config === undefined) delete process.env.ADHDEV_CONFIG_DIR; else process.env.ADHDEV_CONFIG_DIR=prior.config;
         if (prior.name === undefined) delete process.env.ADHDEV_SESSION_HOST_NAME; else process.env.ADHDEV_SESSION_HOST_NAME=prior.name;
         fs.rmSync(root,{recursive:true,force:true});

@@ -38,7 +38,7 @@ async function restoreWritableHostedSessions(host: CliRestoreHost, records?: Hos
     }
     const promoted = await verifyHeldObservationPromotion(host);
     const sessions = records || await host.deps.listHostedCliRuntimes?.() || [];
-    if (promoted && ((!records && sessions.length !== promoted.length) || sessions.some(r=>!promoted.some(p=>p.runtimeId===r.runtimeId && p.providerType===r.cliType && p.workspace===r.workspace && p.startedAt===r.startedAtMs)))) throw new Error('maintenance_complete_promotion_inventory_required');
+    if (promoted && ((!records && sessions.length !== promoted.length) || sessions.some(r=>!promoted.some(p=>p.runtimeId===r.runtimeId && p.providerType===r.cliType && p.providerSessionId===r.providerSessionId && p.workspace===r.workspace && p.startedAt===r.startedAtMs)))) throw new Error('maintenance_complete_promotion_inventory_required');
     let restored = 0;
     const restoredBindings = new Set<string>();
     const managerTag = host.deps.hostedRuntimeManagerTag;

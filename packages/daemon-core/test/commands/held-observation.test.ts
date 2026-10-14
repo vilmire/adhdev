@@ -6,7 +6,7 @@ const fixture = await vi.hoisted(async()=>{
 const rpc=vi.hoisted(()=>({connect:vi.fn(),request:vi.fn(),close:vi.fn()}));
 vi.mock('@adhdev/session-host-core',async original=>({...(await original<any>()),getDefaultSessionHostEndpoint:vi.fn(()=>{throw new Error('test_default_session_host_resolution_forbidden');}),SessionHostClient:vi.fn(function(options:any){fixture.assertEndpoint(options?.endpoint);return rpc;})}));
 const writable = vi.hoisted(()=>({adapter:{updateRuntimeMeta:vi.fn()},construct:vi.fn()}));
-vi.mock('../../src/providers/cli-provider-instance.js',()=>({CliProviderInstance:vi.fn(function(_p:any,_w:any,_a:any,id:string){writable.construct();return {instanceId:id,getAdapter:()=>writable.adapter};})}));
+vi.mock('../../src/providers/cli-provider-instance.js',()=>({CliProviderInstance:vi.fn(function(_p:any,_w:any,_a:any,id:string,_transport:any,options:any){writable.construct(options);return {instanceId:id,getAdapter:()=>writable.adapter};})}));
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as net from 'node:net';
@@ -78,19 +78,19 @@ it('missing coordinator cannot yield fleet readiness even with complete valid ru
 it('restart/reclose hides stale routing metadata and rejects old promotion/proof',async()=>{
     const proof=await observeHeldHostedSessions(manager,'old');
     await open();expect(registry.get('coord')).toBeUndefined();
-    await withMaintenanceAdmission(()=>verifyHeldObservationPromotion(manager,{runtimeId:'coord',providerType:'synthetic-cli',workspace:fixture.root,startedAt:100}));
+    await withMaintenanceAdmission(()=>verifyHeldObservationPromotion(manager,{runtimeId:'coord',providerType:'synthetic-cli',workspace:fixture.root,providerSessionId:'provider-1',startedAt:100}));
     state={...state,epoch:state.epoch+1,phase:'held',release:undefined};writeCooperativeMaintenance(fixture.root,state);
     expect(registry.get('coord')).toBeUndefined();expect(()=>verifyHeldObservationFleet([proof],state,'old')).toThrow('stale');
     await expect(manager.registerCliInstance('coord','synthetic-cli','synthetic-cli',fixture.root,[],{}, {},true,{attachStartedAtMs:100})).rejects.toThrow('cooperative_maintenance_held');
     await observeHeldHostedSessions(manager,'new');await open();
     const restarted=new DaemonCliManager(manager.deps,manager.providerLoader);
-    await expect(withMaintenanceAdmission(()=>verifyHeldObservationPromotion(restarted,{runtimeId:'coord',providerType:'synthetic-cli',workspace:fixture.root,startedAt:100}))).rejects.toThrow('maintenance_fresh_observation_required');
+    await expect(withMaintenanceAdmission(()=>verifyHeldObservationPromotion(restarted,{runtimeId:'coord',providerType:'synthetic-cli',workspace:fixture.root,providerSessionId:'provider-1',startedAt:100}))).rejects.toThrow('maintenance_fresh_observation_required');
 });
 it('release promotion checks live inventory and exact original binding inside admission lease',async()=>{
     await observeHeldHostedSessions(manager,'ready');await open();
-    await expect(withMaintenanceAdmission(()=>verifyHeldObservationPromotion(manager,{runtimeId:'coord',providerType:'synthetic-cli',workspace:fixture.root,startedAt:101}))).rejects.toThrow('binding_drift');
+    await expect(withMaintenanceAdmission(()=>verifyHeldObservationPromotion(manager,{runtimeId:'coord',providerType:'synthetic-cli',workspace:fixture.root,providerSessionId:'provider-1',startedAt:101}))).rejects.toThrow('binding_drift');
     records[0].osPid=1000;
-    await expect(withMaintenanceAdmission(()=>verifyHeldObservationPromotion(manager,{runtimeId:'coord',providerType:'synthetic-cli',workspace:fixture.root,startedAt:100}))).rejects.toThrow('inventory_drift');
+    await expect(withMaintenanceAdmission(()=>verifyHeldObservationPromotion(manager,{runtimeId:'coord',providerType:'synthetic-cli',workspace:fixture.root,providerSessionId:'provider-1',startedAt:100}))).rejects.toThrow('inventory_drift');
 });
 it('held partial restore callbacks and direct writable attach cannot bypass complete observation',async()=>{
     await expect(manager.restoreHostedSessions([])).rejects.toThrow('complete_inventory');
@@ -122,7 +122,7 @@ it('release certificate must commit the actual held observation receipt',async()
     await observeHeldHostedSessions(manager,'ready');await open();
     const ready=state.release!.ready.map(r=>({...r,receipt:hash('unrelated-ready')}));state={...state,release:{ready,committed:ready,decisionDigest:maintenanceDecisionDigest(state,ready)}};
     writeCooperativeMaintenance(fixture.root,state);
-    await expect(withMaintenanceAdmission(()=>verifyHeldObservationPromotion(manager,{runtimeId:'coord',providerType:'synthetic-cli',workspace:fixture.root,startedAt:100}))).rejects.toThrow('fresh_observation');
+    await expect(withMaintenanceAdmission(()=>verifyHeldObservationPromotion(manager,{runtimeId:'coord',providerType:'synthetic-cli',workspace:fixture.root,providerSessionId:'provider-1',startedAt:100}))).rejects.toThrow('fresh_observation');
 });
 it('S3 IDE callbacks and outer control cannot attach producers or fetch snapshots while held',async()=>{
     const {bootSessionCore}=await import('../../src/boot/stages/session-core.js');
@@ -149,7 +149,7 @@ it('actual released manager promotion registers routing only under ACK-spanning 
     manager.deps.getInstanceManager=()=>({addInstance:add,removeInstance:vi.fn()}) as any;
     const pending=manager.registerCliInstance('coord','synthetic-cli','synthetic-cli',fixture.root,[],{}, {meshCoordinatorFor:'mesh'},true,{attachStartedAtMs:100,providerSessionId:'provider-1'});
     await entering;expect(()=>writeCooperativeMaintenance(fixture.root,{...state,phase:'held',epoch:state.epoch+1,release:undefined})).toThrow('maintenance_operation_in_flight');
-    acknowledge();await pending;expect(add).toHaveBeenCalledTimes(1);expect(registry.get('coord')?.maintenanceObservation).toBeUndefined();expect(events.some(e=>e.kind==='registered')).toBe(true);
+    acknowledge();await pending;expect(writable.construct).toHaveBeenCalledWith(expect.objectContaining({providerSessionId:'provider-1'}));expect(add).toHaveBeenCalledTimes(1);expect(registry.get('coord')?.maintenanceObservation).toBeUndefined();expect(events.some(e=>e.kind==='registered')).toBe(true);
     state={...state,epoch:state.epoch+1,phase:'held',release:undefined};writeCooperativeMaintenance(fixture.root,state);
     await expect(manager.registerCliInstance('coord','synthetic-cli','synthetic-cli',fixture.root,[],{}, {meshCoordinatorFor:'mesh'},true,{attachStartedAtMs:100})).rejects.toThrow('cooperative_maintenance_held');expect(add).toHaveBeenCalledTimes(1);
 });
@@ -284,4 +284,60 @@ it('the harness refuses actual managed-host default endpoint derivation before n
     expect(()=>host.endpoint).toThrow('default_session_host_resolution_forbidden');
     await expect(host.ensureReady()).rejects.toThrow('default_session_host_resolution_forbidden');
     expect(rpc.connect).not.toHaveBeenCalled();expect(rpc.request).not.toHaveBeenCalled();
+});
+
+for (const nativeId of ['WRONG-NATIVE-SESSION', undefined, '']) {
+    it(`released actual manager promotion rejects native identity ${String(nativeId)} before writable effects`, async()=>{
+        await open();
+        const add=vi.fn();manager.deps.getInstanceManager=()=>({addInstance:add}) as any;
+        const before=fs.readFileSync(path.join(fixture.root,'daemon','mesh-coordinators.json'),'utf8');
+        await expect(manager.registerCliInstance('coord','synthetic-cli','synthetic-cli',fixture.root,[],{}, {meshCoordinatorFor:'mesh'},true,{attachStartedAtMs:100,providerSessionId:nativeId})).rejects.toThrow('maintenance_promotion_binding_drift');
+        expect(writable.construct).not.toHaveBeenCalled();expect(writable.adapter.updateRuntimeMeta).not.toHaveBeenCalled();expect(add).not.toHaveBeenCalled();
+        expect(manager.adapters.size).toBe(0);expect(events).toEqual([]);
+        expect(fs.readFileSync(path.join(fixture.root,'daemon','mesh-coordinators.json'),'utf8')).toBe(before);
+    });
+    it(`released ordinary restore rejects descriptor native identity ${String(nativeId)} without pruning inventory`,async()=>{
+        await open();
+        const add=vi.fn();manager.deps.getInstanceManager=()=>({addInstance:add,getInstance:()=>undefined}) as any;
+        manager.deps.listHostedCliRuntimes=async()=>[{runtimeId:'coord',cliType:'synthetic-cli',workspace:fixture.root,startedAtMs:100,providerSessionId:nativeId,managedBy:'test',lifecycle:'running'}];
+        Object.assign(manager.providerLoader,{resolveAlias:(v:string)=>v,resolve:()=>({type:'synthetic-cli',category:'cli'}),getSettings:()=>({})});
+        const register=vi.spyOn(manager,'registerCliInstance');const prune=vi.spyOn(registry,'terminate');
+        const before=fs.readFileSync(path.join(fixture.root,'daemon','mesh-coordinators.json'),'utf8');
+        await expect(manager.restoreHostedSessions()).rejects.toThrow('maintenance_complete_promotion_inventory_required');
+        expect(register).not.toHaveBeenCalled();expect(writable.construct).not.toHaveBeenCalled();expect(writable.adapter.updateRuntimeMeta).not.toHaveBeenCalled();expect(add).not.toHaveBeenCalled();expect(prune).not.toHaveBeenCalled();expect(events).toEqual([]);
+        expect(fs.readFileSync(path.join(fixture.root,'daemon','mesh-coordinators.json'),'utf8')).toBe(before);
+    });
+}
+it('released promotion rejects native inventory identity drift despite exact caller identity',async()=>{
+    await open();records[0].meta.providerSessionId='changed-native';
+    await expect(manager.registerCliInstance('coord','synthetic-cli','synthetic-cli',fixture.root,[],{}, {meshCoordinatorFor:'mesh'},true,{attachStartedAtMs:100,providerSessionId:'provider-1'})).rejects.toThrow('maintenance_retained_inventory_drift');
+    expect(writable.construct).not.toHaveBeenCalled();expect(writable.adapter.updateRuntimeMeta).not.toHaveBeenCalled();expect(events).toEqual([]);
+});
+
+it('promotion harness inherits fatal native-connect fence into Node subprocesses',async()=>{
+    const {execFileSync}=await import('node:child_process');
+    const result=execFileSync(process.execPath,['-e',`try { require('node:net').connect(${JSON.stringify(fixture.endpoint.path)}); process.exit(91); } catch(e) { if(e.message!=='test_native_session_host_connect_forbidden') throw e; process.stdout.write('fenced'); }`],{encoding:'utf8'});
+    expect(result).toBe('fenced');
+});
+
+it('ordinary absent-gate manager attach preserves providers without native session identity',async()=>{
+    const ordinary=path.join(fixture.root,'ordinary-no-gate');fs.mkdirSync(ordinary,{recursive:true});
+    process.env.ADHDEV_CONFIG_DIR=ordinary;resetProcessInstanceContextForTests();vi.useFakeTimers();
+    try {
+        const add=vi.fn().mockResolvedValue(undefined);manager.deps.getInstanceManager=()=>({addInstance:add}) as any;
+        await manager.registerCliInstance('ordinary','synthetic-cli','synthetic-cli',fixture.root,[],{}, {},true,{attachStartedAtMs:100});
+        expect(writable.construct).toHaveBeenCalledOnce();expect(add).toHaveBeenCalledOnce();
+    } finally {process.env.ADHDEV_CONFIG_DIR=fixture.root;resetProcessInstanceContextForTests();}
+});
+
+it('released manager promotion captures native identity across observation ACK awaits',async()=>{
+    await open();vi.useFakeTimers();
+    let acknowledge!:(value:any)=>void,entered!:()=>void;
+    const entering=new Promise<void>(resolve=>{entered=resolve;});
+    rpc.request.mockImplementationOnce(async()=>{entered();return new Promise(resolve=>{acknowledge=resolve;});});
+    const add=vi.fn().mockResolvedValue(undefined);manager.deps.getInstanceManager=()=>({addInstance:add}) as any;
+    const options={attachStartedAtMs:100,providerSessionId:'provider-1'};
+    const pending=manager.registerCliInstance('coord','synthetic-cli','synthetic-cli',fixture.root,[],{}, {meshCoordinatorFor:'mesh'},true,options);
+    await entering;options.providerSessionId='changed-during-ACK';acknowledge({success:true,result:structuredClone(records)});
+    await pending;expect(writable.construct).toHaveBeenCalledWith(expect.objectContaining({providerSessionId:'provider-1'}));expect(add).toHaveBeenCalledOnce();
 });

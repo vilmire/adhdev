@@ -379,7 +379,9 @@ export class DaemonCliManager {
         },
     ): Promise<void> {
         return withMaintenanceAdmission(async () => {
-        if (attachExisting) await verifyHeldObservationPromotion(this,{runtimeId:key,providerType:normalizedType,workspace:resolvedDir,startedAt:options?.attachStartedAtMs,binding:{meshId:settings.meshNodeFor || '',nodeId:settings.meshNodeId || '',coordinatorMeshId:settings.meshCoordinatorFor || '',workOwner:settings.meshCoordinatorDaemonId || ''}});
+        // Capture scalar constructor identity before asynchronous observation checks.
+        options = options ? { ...options } : undefined;
+        if (attachExisting) await verifyHeldObservationPromotion(this,{runtimeId:key,providerType:normalizedType,workspace:resolvedDir,providerSessionId:options?.providerSessionId,startedAt:options?.attachStartedAtMs,binding:{meshId:settings.meshNodeFor || '',nodeId:settings.meshNodeId || '',coordinatorMeshId:settings.meshCoordinatorFor || '',workOwner:settings.meshCoordinatorDaemonId || ''}});
         const instanceManager = this.deps.getInstanceManager();
         const sessionRegistry = this.deps.getSessionRegistry?.() || null;
         if (!instanceManager) throw new Error('InstanceManager not available');
