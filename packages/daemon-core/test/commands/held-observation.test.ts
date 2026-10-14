@@ -70,6 +70,7 @@ for(const fault of ['missing','unknownOwner','incomplete','unreachable','drift',
 it('missing coordinator cannot yield fleet readiness even with complete valid runtime observations',async()=>{
     fs.mkdirSync(path.join(fixture.root,'daemon'),{recursive:true});
     fs.writeFileSync(path.join(fixture.root,'daemon','mesh-coordinators.json'),'[]');loadMeshCoordinatorRegistry();
+    records[0].meta.daemonId='self';
     state={...state,epoch:state.epoch+1,retainedHost:{...state.retainedHost,sessionSetDigest:retainedRuntimeInventoryDigest(records,state)}};writeCooperativeMaintenance(fixture.root,state);
     const proof=await observeHeldHostedSessions(manager,'missing');expect(proof.coordinators).toEqual([]);
     expect(()=>verifyHeldObservationFleet([proof],state,'missing')).toThrow('maintenance_coordinator_binding_missing_or_ambiguous');
@@ -259,4 +260,10 @@ it('held observation routing expires without deleting metadata and requires a ne
     vi.advanceTimersByTime(10_001);expect(registry.has('coord')).toBe(false);expect(registry.resolveAlias('provider-1')).toBeNull();
     expect((registry as any).bySessionId.has('coord')).toBe(true);
     await observeHeldHostedSessions(manager,'fresh');expect(registry.has('coord')).toBe(true);expect(events).toEqual([]);
+});
+
+it('a family managedBy tag alone cannot assign an unbound runtime to this daemon',async()=>{
+    await observeHeldHostedSessions(manager,'known');const before=registry.get('coord');
+    records.push({...structuredClone(records[0]),sessionId:'unbound-owner',osPid:1001,meta:{managedBy:'test',providerSessionId:'unbound-native'}});
+    await expect(observeHeldHostedSessions(manager,'unknown-owner')).rejects.toThrow('unknown_runtime_owner');expect(registry.get('coord')).toBe(before);expect(registry.has('unbound-owner')).toBe(false);
 });

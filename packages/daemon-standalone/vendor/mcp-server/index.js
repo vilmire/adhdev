@@ -142151,6 +142151,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         if ((meshId || nodeId) && !state2.nodeRoster.some((n) => n.meshId === meshId && n.nodeId === nodeId && n.daemonId === state2.daemonId)) throw new Error("maintenance_unknown_runtime_owner");
         const entry = getCoordinatorForSession(r.sessionId);
         const coordinatorMeshId = text(entry?.meshId);
+        if (!text(r.meta.daemonId) && !meshId && !coordinatorMeshId) throw new Error("maintenance_unknown_runtime_owner");
         if (entry && (!Number.isFinite(entry.startedAt) || entry.startedAt <= 0 || !state2.meshIds.includes(coordinatorMeshId) || entry.workspace !== r.workspace || entry.cliType !== r.providerType)) throw new Error("maintenance_coordinator_binding_drift");
         if (text(r.meta.meshCoordinatorFor) && r.meta.meshCoordinatorFor !== coordinatorMeshId) throw new Error("maintenance_coordinator_binding_missing");
         const workOwner = text(r.meta.meshCoordinatorDaemonId);
@@ -142167,7 +142168,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           nodeId,
           coordinatorMeshId,
           coordinatorRegisteredAt: entry?.startedAt ?? null,
-          workOwner
+          workOwner,
+          ownerSource: text(r.meta.daemonId) ? "native_record" : meshId ? "enrolled_node" : "coordinator_registry"
         };
       }).sort((a, b) => a.runtimeId.localeCompare(b.runtimeId));
     }
