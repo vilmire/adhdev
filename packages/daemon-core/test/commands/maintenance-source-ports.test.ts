@@ -13,7 +13,7 @@ import {createTurnLedger} from '../../src/mesh/turn-ledger/ledger.js';
 import {createTurnDeliverHandler,createDeliverEdgeWaiter} from '../../src/mesh/turn-ledger/deliver.js';
 import {createNoticeSubmitInventory} from '../../src/mesh/turn-ledger/notice-submit-inventory.js';
 import {createSessionInputService} from '../../src/sessions/session-input-service.js';
-import {beginLifecycleSource,advanceLifecycleSource,collectLifecycleSource,lifecycleProcessIdentity} from '../../src/maintenance/lifecycle-source-inventory.js';
+import {beginLifecycleSource,advanceLifecycleSource,claimLifecycleHelper,collectLifecycleSource,lifecycleProcessIdentity} from '../../src/maintenance/lifecycle-source-inventory.js';
 import {spawnDetachedDaemonUpgradeHelper} from '../../src/commands/upgrade-helper.js';
 import {resetProcessInstanceContextForTests} from '../../src/config/instance-context.js';
 import {DaemonUpdateController} from '../../../../../packages/daemon-cloud/src/daemon-update-controller.js';
@@ -50,8 +50,8 @@ it('actual detached spawn persists intent/PID before returning; controller death
  expect(collectLifecycleSource(root).pending[0].operationId).toBe(first.pending[0].operationId);expect(JSON.stringify(first)).not.toContain('ADHDEV_DAEMON_UPGRADE_HELPER');
 });
 it('helper completion is bound to native incarnation; scheduled result/failed/orphan are not ACKs',()=>{
- const id=beginLifecycleSource('helper',{targetVersion:'1.0.81-rc13'},root);advanceLifecycleSource(id,'scheduled',{childPid:999999},root);expect(collectLifecycleSource(root).pending).toHaveLength(1);
- expect(()=>advanceLifecycleSource(id,'completed',{},root)).toThrow('completion_owner');const identity=lifecycleProcessIdentity();advanceLifecycleSource(id,'executing',{helper:identity},root);
+ const expected={targetVersion:'1.0.81-rc13',packageName:'adhdev',parentPid:process.pid};const id=beginLifecycleSource('helper',expected,root);advanceLifecycleSource(id,'scheduled',{childPid:999999},root);expect(collectLifecycleSource(root).pending).toHaveLength(1);
+ expect(()=>advanceLifecycleSource(id,'completed',{},root)).toThrow('completion_owner');const identity=lifecycleProcessIdentity();expect(()=>claimLifecycleHelper(id,{...expected,targetVersion:'wrong'},root)).toThrow('target_changed');claimLifecycleHelper(id,expected,root);expect(()=>claimLifecycleHelper(id,expected,root)).toThrow();
  expect(()=>advanceLifecycleSource(id,'executing',{helper:{...identity,bootNonce:randomUUID()}},root)).toThrow('incarnation_conflict');advanceLifecycleSource(id,'completed',{},root);
  // ACK persisted, but this exact helper incarnation is still alive: not absent.
  expect(collectLifecycleSource(root).pending).toHaveLength(1);advanceLifecycleSource(id,'failed',{},root);expect(collectLifecycleSource(root).pending).toHaveLength(1);
@@ -77,8 +77,8 @@ it('disposable guarded helper completion needs independently observed native exi
  expect(process.env.NODE_OPTIONS).toContain('--require');
  const script=path.join(root,'disposable-helper.ts');
  const source=path.resolve('src/maintenance/lifecycle-source-inventory.ts');
- fs.writeFileSync(script,`import {beginLifecycleSource,advanceLifecycleSource,lifecycleProcessIdentity} from ${JSON.stringify(source)};
- const id=beginLifecycleSource('helper',{});advanceLifecycleSource(id,'executing',{helper:lifecycleProcessIdentity()});
+ fs.writeFileSync(script,`import {beginLifecycleSource,advanceLifecycleSource,claimLifecycleHelper} from ${JSON.stringify(source)};
+ const expected={targetVersion:'1.0.81',packageName:'adhdev',parentPid:process.pid};const id=beginLifecycleSource('helper',expected);claimLifecycleHelper(id,expected);
  if(process.argv[2]==='completed')advanceLifecycleSource(id,'completed');process.stdout.write(id);`);
  const run=(phase:string)=>new Promise<string>((resolve,reject)=>execFile(process.execPath,['--import','tsx',script,phase],{env:{...process.env},timeout:10000},(error,stdout)=>error?reject(error):resolve(stdout.trim())));
  const completed=await run('completed');let inventory=collectLifecycleSource(root);expect(inventory.rows.find((r:any)=>r.operationId===completed)).toMatchObject({state:'completed',native:'absent'});expect(inventory.pending).toHaveLength(0);

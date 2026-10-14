@@ -1013,4 +1013,4 @@ export type { CooperativeMaintenance, MaintenanceReady, RetainedMaintenanceHost 
 
 export { observeHeldHostedSessions, retainedRuntimeInventoryDigest, verifyHeldObservationFleet } from './maintenance/held-observation.js';
 
-export {beginLifecycleSource,advanceLifecycleSource,collectLifecycleSource,lifecycleProcessIdentity} from './maintenance/lifecycle-source-inventory.js';
+export {beginLifecycleSource,advanceLifecycleSource,claimLifecycleHelper,collectLifecycleSource,lifecycleProcessIdentity} from './maintenance/lifecycle-source-inventory.js';

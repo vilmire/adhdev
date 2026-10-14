@@ -97664,6 +97664,7 @@ ${tail}` : ""
       canonicalDaemonId: () => canonicalDaemonId2,
       captureMaintenanceAdmission: () => captureMaintenanceAdmission,
       checkDiskSpace: () => checkDiskSpace,
+      claimLifecycleHelper: () => claimLifecycleHelper,
       claimNextTask: () => claimNextTask,
       classifyChatMessageVisibility: () => classifyChatMessageVisibility,
       classifyDiskSpace: () => classifyDiskSpace,
@@ -103530,7 +103531,30 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       if (fields.helper && r.helper && JSON.stringify(fields.helper) !== JSON.stringify(r.helper)) throw Error("lifecycle_helper_incarnation_conflict");
       if (r.kind === "controller" && (r.owner.pid !== process.pid || r.owner.bootNonce !== MAINTENANCE_BOOT_NONCE)) throw Error("lifecycle_controller_owner_changed");
       if (state2 === "completed" && (!r.helper || r.helper.pid !== process.pid || r.helper.bootNonce !== MAINTENANCE_BOOT_NONCE)) throw Error("lifecycle_helper_completion_owner_changed");
+      if (state2 === "completed" && JSON.stringify(read(path33.join(directory(root), operationId + ".claim.json")).helper) !== JSON.stringify(r.helper)) throw Error("lifecycle_helper_claim_changed");
       durable(file, { ...r, ...fields, state: state2, revision: r.revision + 1, updatedAt: Date.now() });
+    }
+    function claimLifecycleHelper(operationId, expected, root = getConfigDir2()) {
+      if (!/^[-a-f0-9]{36}$/.test(operationId)) throw Error("lifecycle_operation_invalid");
+      const r = read(path33.join(directory(root), operationId + ".json"));
+      if (r.kind !== "helper" || Object.entries(expected).some(([k, v]) => r[k] !== v)) throw Error("lifecycle_helper_target_changed");
+      const helper = lifecycleProcessIdentity();
+      if (["entryPath", "entrySha256", "nodePath", "nodeSha256"].some((k) => r.owner[k] !== helper[k])) throw Error("lifecycle_helper_executable_changed");
+      const dir = directory(root), claim = path33.join(dir, operationId + ".claim.json");
+      const fd = fs28.openSync(claim, "wx", 384);
+      try {
+        fs28.writeFileSync(fd, JSON.stringify({ ...r, state: "executing", helper }));
+        fs28.fsyncSync(fd);
+      } finally {
+        fs28.closeSync(fd);
+      }
+      const parent = fs28.openSync(dir, "r");
+      try {
+        fs28.fsyncSync(parent);
+      } finally {
+        fs28.closeSync(parent);
+      }
+      advanceLifecycleSource(operationId, "executing", { helper }, root);
     }
     function collectLifecycleSource(root = getConfigDir2()) {
       let dir;
@@ -103543,12 +103567,21 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       const names = fs28.readdirSync(dir).sort();
       if (names.length > 1e4) throw Error("lifecycle_source_inventory_oversized");
       const pins = /* @__PURE__ */ new Map();
-      if (names.some((n) => !/^[-a-f0-9]{36}\.json$/.test(n))) throw Error("lifecycle_source_temporary_or_unknown_record");
-      const rows = names.map((name) => {
+      if (names.some((n) => !/^[-a-f0-9]{36}(?:\.claim)?\.json$/.test(n))) throw Error("lifecycle_source_temporary_or_unknown_record");
+      const recordNames = names.filter((n) => !n.endsWith(".claim.json"));
+      if (names.some((n) => n.endsWith(".claim.json") && !recordNames.includes(n.replace(".claim.json", ".json")))) throw Error("lifecycle_orphan_claim_unknown");
+      const claims = /* @__PURE__ */ new Map();
+      const rows = recordNames.map((name) => {
         const r = read(path33.join(dir, name));
         if (name !== r.operationId + ".json") throw Error("lifecycle_source_record_changed");
+        const claimName = name.replace(".json", ".claim.json");
+        if (names.includes(claimName)) {
+          const claim = read(path33.join(dir, claimName));
+          if (claim.operationId !== r.operationId || claim.kind !== "helper" || !claim.helper || ["owner", "targetVersion", "packageName", "parentPid"].some((k) => JSON.stringify(claim[k]) !== JSON.stringify(r[k]))) throw Error("lifecycle_claim_scope_changed");
+          claims.set(claimName, claim);
+        }
         let native = "unknown";
-        const identity2 = r.helper ?? r.owner;
+        const identity2 = r.helper ?? claims.get(claimName)?.helper ?? r.owner;
         try {
           const birth = (0, import_node_child_process6.execFileSync)("/bin/ps", ["-o", "lstart=", "-p", String(identity2.pid)], { encoding: "utf8", timeout: 3e3, env: { LC_ALL: "C" } }).trim().replace(/\s+/g, " ");
           native = birth === identity2.birth ? "same_incarnation" : birth ? "identity_drift" : "absent";
@@ -103563,9 +103596,12 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         } catch {
           native = "unknown";
         }
-        return { ...r, native };
+        if (r.helper && (!claims.has(claimName) || JSON.stringify(claims.get(claimName).helper) !== JSON.stringify(r.helper))) native = "unknown";
+        return { ...r, claim: claims.get(claimName)?.helper ?? null, native };
       });
-      if (JSON.stringify(fs28.readdirSync(dir).sort()) !== JSON.stringify(names) || rows.some((r, i) => JSON.stringify(read(path33.join(dir, names[i]))) !== JSON.stringify(Object.fromEntries(Object.entries(r).filter(([k]) => k !== "native"))))) throw Error("lifecycle_source_membership_changed");
+      const recordsChanged = rows.some((r, i) => JSON.stringify(read(path33.join(dir, recordNames[i]))) !== JSON.stringify(Object.fromEntries(Object.entries(r).filter(([k]) => !["native", "claim"].includes(k)))));
+      const claimsChanged = [...claims].some(([name, r]) => JSON.stringify(read(path33.join(dir, name))) !== JSON.stringify(r));
+      if (JSON.stringify(fs28.readdirSync(dir).sort()) !== JSON.stringify(names) || recordsChanged || claimsChanged) throw Error("lifecycle_source_membership_changed");
       return { schema: 1, observed: rows.every((r) => r.native === "same_incarnation" || r.native === "absent"), reason: rows.some((r) => r.native === "unknown" || r.native === "identity_drift") ? "lifecycle_native_incarnation_unknown" : void 0, rows, pending: rows.filter((r) => r.kind === "helper" && (r.state !== "completed" || r.native !== "absent")), nativeCensusRequired: true };
     }
     var import_child_process11 = require("child_process");
@@ -105797,7 +105833,7 @@ ${marker2}`,
         metadataRoot = payload.configDir || getConfigDir2();
         if (process.platform !== "win32") {
           metadataOperation = payload.maintenanceOperationId || beginLifecycleSource("helper", { targetVersion: payload.targetVersion, packageName: payload.packageName, parentPid: payload.parentPid }, metadataRoot);
-          advanceLifecycleSource(metadataOperation, "executing", { helper: lifecycleProcessIdentity() }, metadataRoot);
+          claimLifecycleHelper(metadataOperation, { targetVersion: payload.targetVersion, packageName: payload.packageName, parentPid: payload.parentPid }, metadataRoot);
         }
         await runDaemonUpgradeHelper(payload);
         if (metadataOperation) advanceLifecycleSource(metadataOperation, "completed", {}, metadataRoot);

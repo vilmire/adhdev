@@ -35,19 +35,41 @@ export function advanceLifecycleSource(operationId:string,state:'scheduled'|'exe
  if(fields.helper&&r.helper&&JSON.stringify(fields.helper)!==JSON.stringify(r.helper))throw Error('lifecycle_helper_incarnation_conflict');
  if(r.kind==='controller'&&(r.owner.pid!==process.pid||r.owner.bootNonce!==MAINTENANCE_BOOT_NONCE))throw Error('lifecycle_controller_owner_changed');
  if(state==='completed'&&(!r.helper||r.helper.pid!==process.pid||r.helper.bootNonce!==MAINTENANCE_BOOT_NONCE))throw Error('lifecycle_helper_completion_owner_changed');
+ if(state==='completed'&&JSON.stringify(read(path.join(directory(root),operationId+'.claim.json')).helper)!==JSON.stringify(r.helper))throw Error('lifecycle_helper_claim_changed');
  durable(file,{...r,...fields,state,revision:r.revision+1,updatedAt:Date.now()});
+}
+/** The helper must consume its exact scheduled source intent before effects. */
+export function claimLifecycleHelper(operationId:string,expected:{targetVersion:string;packageName:string;parentPid:number},root=getConfigDir()){
+ if(!/^[-a-f0-9]{36}$/.test(operationId))throw Error('lifecycle_operation_invalid');
+ const r=read(path.join(directory(root),operationId+'.json'));
+ if(r.kind!=='helper'||Object.entries(expected).some(([k,v])=>r[k]!==v))throw Error('lifecycle_helper_target_changed');
+ const helper=lifecycleProcessIdentity();
+ if(['entryPath','entrySha256','nodePath','nodeSha256'].some(k=>r.owner[k]!==helper[k as keyof typeof helper]))throw Error('lifecycle_helper_executable_changed');
+ const dir=directory(root),claim=path.join(dir,operationId+'.claim.json');
+ // One immutable cooperative claim per scheduled operation. A second helper
+ // must never overwrite the first incarnation and disappear from inventory.
+ const fd=fs.openSync(claim,'wx',0o600);try{fs.writeFileSync(fd,JSON.stringify({...r,state:'executing',helper}));fs.fsyncSync(fd);}finally{fs.closeSync(fd);}
+ const parent=fs.openSync(dir,'r');try{fs.fsyncSync(parent);}finally{fs.closeSync(parent);}
+ advanceLifecycleSource(operationId,'executing',{helper},root);
 }
 export function collectLifecycleSource(root=getConfigDir()){
  let dir:string;try{dir=directory(root);}catch(e){if((e as NodeJS.ErrnoException).code==='ENOENT')return {schema:1,observed:false,reason:'lifecycle_source_not_enrolled',rows:[],pending:[],nativeCensusRequired:true};throw e;}
- const names=fs.readdirSync(dir).sort();if(names.length>10000)throw Error('lifecycle_source_inventory_oversized');const pins=new Map<string,string>();if(names.some(n=>!/^[-a-f0-9]{36}\.json$/.test(n)))throw Error('lifecycle_source_temporary_or_unknown_record');
- const rows=names.map(name=>{const r=read(path.join(dir,name));if(name!==r.operationId+'.json')throw Error('lifecycle_source_record_changed');
+ const names=fs.readdirSync(dir).sort();if(names.length>10000)throw Error('lifecycle_source_inventory_oversized');const pins=new Map<string,string>();if(names.some(n=>!/^[-a-f0-9]{36}(?:\.claim)?\.json$/.test(n)))throw Error('lifecycle_source_temporary_or_unknown_record');
+ const recordNames=names.filter(n=>!n.endsWith('.claim.json'));
+ if(names.some(n=>n.endsWith('.claim.json')&&!recordNames.includes(n.replace('.claim.json','.json'))))throw Error('lifecycle_orphan_claim_unknown');
+ const claims=new Map<string,any>();
+ const rows=recordNames.map(name=>{const r=read(path.join(dir,name));if(name!==r.operationId+'.json')throw Error('lifecycle_source_record_changed');
   // Current controller state is reconciled by its actual live callback, never
   // by a persisted empty snapshot. A detached helper needs exact native birth.
-  let native='unknown';const identity=r.helper??r.owner;
+  const claimName=name.replace('.json','.claim.json');if(names.includes(claimName)){const claim=read(path.join(dir,claimName));if(claim.operationId!==r.operationId||claim.kind!=='helper'||!claim.helper||['owner','targetVersion','packageName','parentPid'].some(k=>JSON.stringify(claim[k])!==JSON.stringify(r[k])))throw Error('lifecycle_claim_scope_changed');claims.set(claimName,claim);}
+  let native='unknown';const identity=r.helper??claims.get(claimName)?.helper??r.owner;
   try{const birth=execFileSync('/bin/ps',['-o','lstart=','-p',String(identity.pid)],{encoding:'utf8',timeout:3000,env:{LC_ALL:'C'}}).trim().replace(/\s+/g,' ');native=birth===identity.birth?'same_incarnation':birth?'identity_drift':'absent';}
   catch(e){if((e as any).status===1&&String((e as any).stdout??'').trim()==='')native='absent';}
   try{for(const [file,expected]of [[identity.nodePath,identity.nodeSha256],[identity.entryPath,identity.entrySha256]]){if(!pins.has(file))pins.set(file,sha(fs.readFileSync(fs.realpathSync(file))));if(pins.get(file)!==expected)native='identity_drift';}}catch{native='unknown';}
-  return {...r,native};});
- if(JSON.stringify(fs.readdirSync(dir).sort())!==JSON.stringify(names)||rows.some((r,i)=>JSON.stringify(read(path.join(dir,names[i])))!==JSON.stringify(Object.fromEntries(Object.entries(r).filter(([k])=>k!=='native')))))throw Error('lifecycle_source_membership_changed');
+  if(r.helper&&(!claims.has(claimName)||JSON.stringify(claims.get(claimName).helper)!==JSON.stringify(r.helper)))native='unknown';
+  return {...r,claim:claims.get(claimName)?.helper??null,native};});
+ const recordsChanged=rows.some((r,i)=>JSON.stringify(read(path.join(dir,recordNames[i])))!==JSON.stringify(Object.fromEntries(Object.entries(r).filter(([k])=>!['native','claim'].includes(k)))));
+ const claimsChanged=[...claims].some(([name,r])=>JSON.stringify(read(path.join(dir,name)))!==JSON.stringify(r));
+ if(JSON.stringify(fs.readdirSync(dir).sort())!==JSON.stringify(names)||recordsChanged||claimsChanged)throw Error('lifecycle_source_membership_changed');
  return {schema:1,observed:rows.every(r=>r.native==='same_incarnation'||r.native==='absent'),reason:rows.some(r=>r.native==='unknown'||r.native==='identity_drift')?'lifecycle_native_incarnation_unknown':undefined,rows,pending:rows.filter(r=>r.kind==='helper'&&(r.state!=='completed'||r.native!=='absent')),nativeCensusRequired:true};
 }

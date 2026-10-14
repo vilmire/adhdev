@@ -1,4 +1,4 @@
-import {beginLifecycleSource,advanceLifecycleSource,lifecycleProcessIdentity} from '../maintenance/lifecycle-source-inventory.js';
+import {beginLifecycleSource,advanceLifecycleSource,claimLifecycleHelper} from '../maintenance/lifecycle-source-inventory.js';
 import { assertWorkerBridgeLifecycleAdmission } from './worker-bridge-lifecycle-admission.js';
 import { execFileSync as nativeExecFileSync } from 'child_process';
 import { spawn as nativeSpawn, type ChildProcess } from 'child_process';
@@ -1159,7 +1159,7 @@ export async function maybeRunDaemonUpgradeHelperFromEnv(): Promise<boolean> {
     metadataRoot=payload.configDir||getConfigDir();
     if(process.platform!=='win32'){
       metadataOperation=payload.maintenanceOperationId||beginLifecycleSource('helper',{targetVersion:payload.targetVersion,packageName:payload.packageName,parentPid:payload.parentPid},metadataRoot);
-      advanceLifecycleSource(metadataOperation,'executing',{helper:lifecycleProcessIdentity()},metadataRoot);
+      claimLifecycleHelper(metadataOperation,{targetVersion:payload.targetVersion,packageName:payload.packageName,parentPid:payload.parentPid},metadataRoot);
     }
     await runDaemonUpgradeHelper(payload);
     if(metadataOperation)advanceLifecycleSource(metadataOperation,'completed',{},metadataRoot);
