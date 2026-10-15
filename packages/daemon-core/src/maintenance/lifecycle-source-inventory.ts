@@ -26,8 +26,22 @@ function read(file:string){const s=fs.lstatSync(file);if(!s.isFile()||s.isSymbol
  if(['targetVersion','packageName','pendingMandatory','pendingOptional'].some(k=>r[k]!=null&&(typeof r[k]!=='string'||!/^[@A-Za-z0-9_./+-]{1,256}$/.test(r[k])))||['inFlight','retryScheduled','exitScheduled'].some(k=>r[k]!==undefined&&typeof r[k]!=='boolean')||['parentPid','childPid','retryAttempt'].some(k=>r[k]!==undefined&&(!Number.isSafeInteger(r[k])||r[k]<0)))throw Error('lifecycle_source_metadata_invalid');
  if(r.schema!==1||!/^[-a-f0-9]{36}$/.test(r.operationId)||!['controller','helper'].includes(r.kind)||!['intent','scheduled','executing','completed','failed','idle','pending'].includes(r.state)||!Number.isSafeInteger(r.revision)||!r.owner?.birth)throw Error('lifecycle_source_record_unknown');return r;}
 function durable(file:string,r:unknown){const temp=file+'.'+randomUUID()+'.tmp',fd=fs.openSync(temp,'wx',0o600);try{fs.writeFileSync(fd,JSON.stringify(r));fs.fsyncSync(fd);}finally{fs.closeSync(fd);}fs.renameSync(temp,file);const parent=fs.openSync(path.dirname(file),'r');try{fs.fsyncSync(parent);}finally{fs.closeSync(parent);}}
+/** WRITE/READ ASYMMETRY: read() rejects a non-null targetVersion/packageName that
+ * fails /^[@A-Za-z0-9_./+-]{1,256}$/, so an EMPTY STRING — non-null but
+ * zero-length — is written happily and then fails validation forever, making
+ * every later restart/upgrade refuse with lifecycle_source_metadata_invalid.
+ * Observed 2026-10-16: a helper record persisted targetVersion:"" and bricked
+ * daemon restart entirely. Normalize blank to absent at the WRITER so what we
+ * persist is always readable by our own validator; the validator stays strict. */
+function omitBlankLifecycleFields<T extends Record<string, unknown>>(fields: T): T {
+ const out = { ...fields };
+ for (const k of ['targetVersion', 'packageName'] as const) {
+  if (typeof out[k] === 'string' && !(out[k] as string).trim()) delete out[k];
+ }
+ return out;
+}
 export function beginLifecycleSource(kind:'controller'|'helper',fields:{targetVersion?:string;packageName?:string;parentPid?:number},root=getConfigDir()){
- const dir=ensureDirectory(root),operationId=randomUUID();const r={schema:1,operationId,kind,owner:lifecycleProcessIdentity(),state:'intent',revision:1,updatedAt:Date.now(),...fields};durable(path.join(dir,operationId+'.json'),r);return operationId;
+ const dir=ensureDirectory(root),operationId=randomUUID();const r={schema:1,operationId,kind,owner:lifecycleProcessIdentity(),state:'intent',revision:1,updatedAt:Date.now(),...omitBlankLifecycleFields(fields)};durable(path.join(dir,operationId+'.json'),r);return operationId;
 }
 export function advanceLifecycleSource(operationId:string,state:'scheduled'|'executing'|'completed'|'failed'|'idle'|'pending',fields:{childPid?:number;helper?:ReturnType<typeof lifecycleProcessIdentity>;pendingMandatory?:string|null;pendingOptional?:string|null;inFlight?:boolean;retryScheduled?:boolean;exitScheduled?:boolean;retryAttempt?:number}={},root=getConfigDir()){
  if(!/^[-a-f0-9]{36}$/.test(operationId))throw Error('lifecycle_operation_invalid');const file=path.join(directory(root),operationId+'.json'),r=read(file);

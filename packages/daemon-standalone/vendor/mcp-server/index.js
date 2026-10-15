@@ -103537,9 +103537,16 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         fs28.closeSync(parent);
       }
     }
+    function omitBlankLifecycleFields(fields) {
+      const out = { ...fields };
+      for (const k of ["targetVersion", "packageName"]) {
+        if (typeof out[k] === "string" && !out[k].trim()) delete out[k];
+      }
+      return out;
+    }
     function beginLifecycleSource(kind, fields, root = getConfigDir2()) {
       const dir = ensureDirectory(root), operationId = (0, import_node_crypto6.randomUUID)();
-      const r = { schema: 1, operationId, kind, owner: lifecycleProcessIdentity(), state: "intent", revision: 1, updatedAt: Date.now(), ...fields };
+      const r = { schema: 1, operationId, kind, owner: lifecycleProcessIdentity(), state: "intent", revision: 1, updatedAt: Date.now(), ...omitBlankLifecycleFields(fields) };
       durable(path33.join(dir, operationId + ".json"), r);
       return operationId;
     }
