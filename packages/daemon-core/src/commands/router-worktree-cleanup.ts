@@ -17,6 +17,7 @@ import { LOG } from '../logging/logger.js';
 import { gitChildEnv } from '../git/git-locale.js';
 import { meshNodeIdMatches, daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { readStringValue } from '../mesh/mesh-node-identity.js';
+import { reconcileWorktreeBranch } from '../mesh/mesh-worktree-branch-reconcile.js';
 import { checkWorktreeChangesPatchEquivalentInRef, MeshWorktreePatchContainmentSummary } from '../mesh/mesh-refine-gates.js';
 import { getSessionHostSurfaceKind } from '../session-host/runtime-surface.js';
 import type { RepoMeshSessionCleanupMode } from '../repo-mesh-types.js';
@@ -353,6 +354,14 @@ export async function precheckLocalWorktreeRemovable(self: DaemonCommandRouter, 
         // branch-mismatch nor the dirty check applies, so let the removal proceed.
         if (!managedEntry) return { ok: true };
 
+        // Same reconciliation as the real cleanup path (see the comment there), so
+        // the read-only preflight does not predict a refusal the actual removal
+        // would not hit. Mutates only the in-memory node copy for this check.
+        const preflightReconcile = reconcileWorktreeBranch({
+            node: args.node,
+            observedBranch: managedEntry.branch,
+        });
+        if (preflightReconcile.patch) Object.assign(args.node, preflightReconcile.patch);
         if (managedEntry.branch && managedEntry.branch !== args.node.worktreeBranch) {
             return {
                 ok: false,
@@ -539,6 +548,33 @@ export async function cleanupLocalWorktreeNode(self: DaemonCommandRouter, args: 
                     residueError: rm.error,
                 } : {}),
             };
+        }
+        // STALE-WORKTREE-BRANCH: `worktreeBranch` is stamped once at clone time and
+        // was never updated afterwards, so a worktree switched (or reused) onto a
+        // later branch keeps naming the original one and this guard refused forever
+        // — which pinned the mesh at its node cap and blocked unrelated work.
+        // Reconcile the RECORD to observed git truth first; the guard still refuses
+        // anything the reconciler cannot explain. Work-loss safety does not rest on
+        // this comparison: `mergeConvergence` below independently verifies merged-ness
+        // and preserves the branch ref when it is not merged.
+        const branchReconcile = reconcileWorktreeBranch({
+            node: args.node,
+            observedBranch: managedEntry.branch,
+        });
+        if (branchReconcile.patch) {
+            Object.assign(args.node, branchReconcile.patch);
+            try {
+                const { meshRecord } = await import('../mesh/mesh-record.js');
+                meshRecord(String(args.mesh?.id || ''), 'worktree_branch_reconciled', {
+                    nodeId: args.nodeId,
+                    payload: {
+                        workspace,
+                        recordedBranch: branchReconcile.recordedBranch,
+                        observedBranch: branchReconcile.observedBranch,
+                        at: 'cleanup_preflight',
+                    },
+                }, { local: true });
+            } catch { /* ledger append is best-effort */ }
         }
         if (managedEntry.branch && managedEntry.branch !== args.node.worktreeBranch) {
             return {

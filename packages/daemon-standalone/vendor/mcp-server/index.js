@@ -137623,6 +137623,49 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     init_git_locale();
     init_dist();
     init_mesh_node_identity();
+    var WORKTREE_TAG_PREFIX = "worktree=";
+    function readTrimmed(value) {
+      return typeof value === "string" && value.trim() ? value.trim() : "";
+    }
+    function refreshWorktreeCapabilityTag(tags, branch) {
+      if (!Array.isArray(tags)) return void 0;
+      const existing = tags.filter((t) => typeof t === "string");
+      const wanted = `${WORKTREE_TAG_PREFIX}${branch}`;
+      const idx = existing.findIndex((t) => t.startsWith(WORKTREE_TAG_PREFIX));
+      if (idx === -1) return [...existing, wanted];
+      if (existing[idx] === wanted) return void 0;
+      const next = [...existing];
+      next[idx] = wanted;
+      return next;
+    }
+    function reconcileWorktreeBranch(input) {
+      const node = input.node;
+      const recordedBranch = readTrimmed(node?.worktreeBranch) || readTrimmed(node?.worktree_branch);
+      const observedBranch = readTrimmed(input.observedBranch);
+      const base = { recordedBranch, observedBranch };
+      if (node?.isLocalWorktree !== true) {
+        return { ...base, stale: false, patch: null, reason: "not_a_worktree_node" };
+      }
+      if (!observedBranch) {
+        return { ...base, stale: false, patch: null, reason: "branch_unobservable" };
+      }
+      if (!recordedBranch) {
+        return { ...base, stale: false, patch: null, reason: "no_recorded_branch" };
+      }
+      if (recordedBranch === observedBranch) {
+        return { ...base, stale: false, patch: null, reason: "in_sync" };
+      }
+      const capabilityTags = refreshWorktreeCapabilityTag(node?.capabilityTags, observedBranch);
+      return {
+        ...base,
+        stale: true,
+        reason: "reconciled",
+        patch: {
+          worktreeBranch: observedBranch,
+          ...capabilityTags ? { capabilityTags } : {}
+        }
+      };
+    }
     init_mesh_refine_gates();
     init_runtime_surface();
     var LEGACY_WORKTREE_DIR_NAME = ".adhdev-worktrees";
@@ -137795,6 +137838,11 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const entries = await listWorktrees2(repoRoot);
       const managedEntry = entries.find((entry) => normalizePath2(entry.path) === actualPath);
       if (!managedEntry) return { ok: true };
+      const preflightReconcile = reconcileWorktreeBranch({
+        node: args.node,
+        observedBranch: managedEntry.branch
+      });
+      if (preflightReconcile.patch) Object.assign(args.node, preflightReconcile.patch);
       if (managedEntry.branch && managedEntry.branch !== args.node.worktreeBranch) {
         return {
           ok: false,
@@ -137949,6 +137997,26 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
             residueError: rm.error
           } : {}
         };
+      }
+      const branchReconcile = reconcileWorktreeBranch({
+        node: args.node,
+        observedBranch: managedEntry.branch
+      });
+      if (branchReconcile.patch) {
+        Object.assign(args.node, branchReconcile.patch);
+        try {
+          const { meshRecord: meshRecord2 } = await Promise.resolve().then(() => (init_mesh_record(), mesh_record_exports));
+          meshRecord2(String(args.mesh?.id || ""), "worktree_branch_reconciled", {
+            nodeId: args.nodeId,
+            payload: {
+              workspace,
+              recordedBranch: branchReconcile.recordedBranch,
+              observedBranch: branchReconcile.observedBranch,
+              at: "cleanup_preflight"
+            }
+          }, { local: true });
+        } catch {
+        }
       }
       if (managedEntry.branch && managedEntry.branch !== args.node.worktreeBranch) {
         return {
@@ -139823,12 +139891,12 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       if (!Object.prototype.hasOwnProperty.call(record3, "peerSecret")) return hostResult;
       return { ...record3, peerSecret: REDACTED_PEER_SECRET };
     }
-    function readTrimmed(value) {
+    function readTrimmed2(value) {
       return typeof value === "string" ? value.trim() : "";
     }
     function issueHostPeerSecret(meshId, memberDaemonIdRaw, hostDaemonIdRaw) {
-      const memberDaemonId = canonicalDaemonId2(readTrimmed(memberDaemonIdRaw));
-      const hostDaemonId = canonicalDaemonId2(readTrimmed(hostDaemonIdRaw));
+      const memberDaemonId = canonicalDaemonId2(readTrimmed2(memberDaemonIdRaw));
+      const hostDaemonId = canonicalDaemonId2(readTrimmed2(hostDaemonIdRaw));
       if (!memberDaemonId) return { skipped: "member_daemon_id_missing" };
       if (!hostDaemonId) return { skipped: "host_daemon_id_unknown" };
       if (daemonIdsEquivalent4(memberDaemonId, hostDaemonId)) return { skipped: "member_is_host" };
@@ -140030,11 +140098,11 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           }
           const memberNode = buildMemberJoinNode(mesh, args, ctx.deps.statusInstanceId);
           if (!memberNode) return { success: false, error: "member node metadata unavailable" };
-          assertMaintenanceJoin(mesh.id, readTrimmed(memberNode.id), readTrimmed(memberNode.daemonId));
+          assertMaintenanceJoin(mesh.id, readTrimmed2(memberNode.id), readTrimmed2(memberNode.daemonId));
           const hostMeshId = typeof args?.hostMeshId === "string" && args.hostMeshId.trim() ? args.hostMeshId.trim() : meshId;
           const explicitHostDaemonId = typeof args?.hostDaemonId === "string" && args.hostDaemonId.trim() ? args.hostDaemonId.trim() : "";
           const hostDaemonId = explicitHostDaemonId || meshHost.hostDaemonId;
-          const dispatchTarget = hostDaemonId && !daemonIdsEquivalent4(hostDaemonId, readTrimmed(ctx.deps.statusInstanceId)) ? hostDaemonId : "";
+          const dispatchTarget = hostDaemonId && !daemonIdsEquivalent4(hostDaemonId, readTrimmed2(ctx.deps.statusInstanceId)) ? hostDaemonId : "";
           const useDispatch = !!ctx.deps.dispatchMeshCommand && !!dispatchTarget && (!!explicitHostDaemonId || !meshHost.hostAddress);
           let hostResult;
           let transport;
@@ -140068,9 +140136,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           if (!hostResult?.success) {
             return { success: false, code: hostResult?.code || "mesh_host_join_rejected", meshId, meshHost, transport, error: hostResult?.error || "Mesh Host rejected join request", hostResult: redactHostJoinResult(hostResult) };
           }
-          const pairedHostDaemonIdForSecret = readTrimmed(hostResult.hostDaemonId) || readTrimmed(hostResult.meshHost?.hostDaemonId) || readTrimmed(hostDaemonId);
-          const peerSecret = readTrimmed(hostResult.peerSecret);
-          const secretMeshId = readTrimmed(hostResult.meshId) || hostMeshId;
+          const pairedHostDaemonIdForSecret = readTrimmed2(hostResult.hostDaemonId) || readTrimmed2(hostResult.meshHost?.hostDaemonId) || readTrimmed2(hostDaemonId);
+          const peerSecret = readTrimmed2(hostResult.peerSecret);
+          const secretMeshId = readTrimmed2(hostResult.meshId) || hostMeshId;
           let peerSecretStored = false;
           if (peerSecret && pairedHostDaemonIdForSecret) {
             try {
@@ -140150,8 +140218,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
        * only edits the store. Absent record → success with removed=false.
        */
       revoke_mesh_peer: async (_ctx, args) => {
-        const meshId = readTrimmed(args?.meshId);
-        const rawPeer = readTrimmed(args?.peerDaemonId);
+        const meshId = readTrimmed2(args?.meshId);
+        const rawPeer = readTrimmed2(args?.peerDaemonId);
         if (!meshId) return { success: false, error: "meshId required" };
         if (!rawPeer) return { success: false, error: "peerDaemonId required" };
         const peerDaemonId = canonicalDaemonId2(rawPeer) || rawPeer;
