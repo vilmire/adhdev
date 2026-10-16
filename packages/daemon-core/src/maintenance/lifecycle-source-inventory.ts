@@ -56,7 +56,11 @@ export function advanceLifecycleSource(operationId:string,state:'scheduled'|'exe
 export function claimLifecycleHelper(operationId:string,expected:{targetVersion:string;packageName:string;parentPid:number},root=getConfigDir()){
  if(!/^[-a-f0-9]{36}$/.test(operationId))throw Error('lifecycle_operation_invalid');
  const r=read(path.join(directory(root),operationId+'.json'));
- if(r.kind!=='helper'||Object.entries(expected).some(([k,v])=>r[k]!==v))throw Error('lifecycle_helper_target_changed');
+ // Compare against the SAME normalization the writer applied, else a blank
+ // targetVersion/packageName (stored as absent) can never match an expected ''
+ // and the claim fails with lifecycle_helper_target_changed.
+ const want=omitBlankLifecycleFields(expected as Record<string,unknown>);
+ if(r.kind!=='helper'||(['targetVersion','packageName','parentPid'] as const).some(k=>r[k]!==want[k]))throw Error('lifecycle_helper_target_changed');
  const helper=lifecycleProcessIdentity();
  if(['entryPath','entrySha256','nodePath','nodeSha256'].some(k=>r.owner[k]!==helper[k as keyof typeof helper]))throw Error('lifecycle_helper_executable_changed');
  const dir=directory(root),claim=path.join(dir,operationId+'.claim.json');

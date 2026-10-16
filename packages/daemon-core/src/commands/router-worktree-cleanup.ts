@@ -18,6 +18,7 @@ import { gitChildEnv } from '../git/git-locale.js';
 import { meshNodeIdMatches, daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { readStringValue } from '../mesh/mesh-node-identity.js';
 import { reconcileWorktreeBranch } from '../mesh/mesh-worktree-branch-reconcile.js';
+import { workingDirBasename } from '../providers/working-dir.js';
 import { checkWorktreeChangesPatchEquivalentInRef, MeshWorktreePatchContainmentSummary } from '../mesh/mesh-refine-gates.js';
 import { getSessionHostSurfaceKind } from '../session-host/runtime-surface.js';
 import type { RepoMeshSessionCleanupMode } from '../repo-mesh-types.js';
@@ -47,13 +48,29 @@ function acceptableManagedWorktreePaths(
     meshName: string,
     branch: string,
     worktreeBaseDir?: string,
+    // BRANCH-REUSE TOLERANCE: a worktree DIRECTORY is named for the branch it was
+    // created with and is deliberately never renamed when the branch is later
+    // switched or reused. Once the stale worktreeBranch record is reconciled to
+    // git truth, the derived expected path names the NEW branch while the directory
+    // still names the ORIGINAL one — so this guard would refuse a genuinely managed
+    // worktree it had previously accepted. Accepting the path derived from the
+    // pre-reconcile branch keeps the guard's real purpose (refuse paths we never
+    // created) while tolerating the rename-free reuse the design intends. Same
+    // shape as the legacy-layout tolerance above.
+    originalBranch?: string,
 ): string[] {
     const safeBranch = branch.replace(/[/\\:*?"<>|]/g, '-').replace(/^\.+|\.+$/g, '');
     const safeMeshName = meshName.replace(/[/\\:*?"<>|]/g, '-').replace(/^\.+|\.+$/g, '');
     const legacyPath = pathJoin(pathDirname(repoRoot), LEGACY_WORKTREE_DIR_NAME, safeMeshName, safeBranch);
+    const reuseBranch = typeof originalBranch === 'string' ? originalBranch.trim() : '';
     const candidates = [
         resolveWorktreePath(repoRoot, meshName, branch, worktreeBaseDir),
         legacyPath,
+        ...(reuseBranch && reuseBranch !== branch ? [
+            resolveWorktreePath(repoRoot, meshName, reuseBranch, worktreeBaseDir),
+            pathJoin(pathDirname(repoRoot), LEGACY_WORKTREE_DIR_NAME, safeMeshName,
+                reuseBranch.replace(/[/\\:*?"<>|]/g, '-').replace(/^\.+|\.+$/g, '')),
+        ] : []),
     ];
     const seen = new Set<string>();
     const out: string[] = [];
@@ -336,6 +353,11 @@ export async function precheckLocalWorktreeRemovable(self: DaemonCommandRouter, 
         // before the base migration is not stranded by an 'unexpected_path' refusal.
         const expectedPaths = acceptableManagedWorktreePaths(
             resolveWorktreePath, normalizePath, repoRoot, meshName, args.node.worktreeBranch, meshWorktreeBaseDir(args.mesh),
+            // The directory's own trailing segment, so a reused worktree (directory
+            // named for the branch it was CREATED with) is still recognised after the
+            // worktreeBranch record is reconciled to a later branch. Only ever ADDS a
+            // candidate under the managed base; a path we never created still refuses.
+            workingDirBasename(workspace),
         );
         const actualPath = normalizePath(workspace);
         if (!expectedPaths.includes(actualPath)) {
@@ -504,6 +526,11 @@ export async function cleanupLocalWorktreeNode(self: DaemonCommandRouter, args: 
         // legacy-located worktree is still removable rather than stranded.
         const expectedPaths = acceptableManagedWorktreePaths(
             resolveWorktreePath, normalizePath, repoRoot, meshName, args.node.worktreeBranch, meshWorktreeBaseDir(args.mesh),
+            // The directory's own trailing segment, so a reused worktree (directory
+            // named for the branch it was CREATED with) is still recognised after the
+            // worktreeBranch record is reconciled to a later branch. Only ever ADDS a
+            // candidate under the managed base; a path we never created still refuses.
+            workingDirBasename(workspace),
         );
         const actualPath = normalizePath(workspace);
         if (!expectedPaths.includes(actualPath)) {

@@ -103563,7 +103563,8 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     function claimLifecycleHelper(operationId, expected, root = getConfigDir2()) {
       if (!/^[-a-f0-9]{36}$/.test(operationId)) throw Error("lifecycle_operation_invalid");
       const r = read(path33.join(directory(root), operationId + ".json"));
-      if (r.kind !== "helper" || Object.entries(expected).some(([k, v]) => r[k] !== v)) throw Error("lifecycle_helper_target_changed");
+      const want = omitBlankLifecycleFields(expected);
+      if (r.kind !== "helper" || ["targetVersion", "packageName", "parentPid"].some((k) => r[k] !== want[k])) throw Error("lifecycle_helper_target_changed");
       const helper = lifecycleProcessIdentity();
       if (["entryPath", "entrySha256", "nodePath", "nodeSha256"].some((k) => r.owner[k] !== helper[k])) throw Error("lifecycle_helper_executable_changed");
       const dir = directory(root), claim = path33.join(dir, operationId + ".claim.json");
@@ -137673,16 +137674,27 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         }
       };
     }
+    init_working_dir();
     init_mesh_refine_gates();
     init_runtime_surface();
     var LEGACY_WORKTREE_DIR_NAME = ".adhdev-worktrees";
-    function acceptableManagedWorktreePaths(resolveWorktreePath2, normalizePath2, repoRoot, meshName, branch, worktreeBaseDir) {
+    function acceptableManagedWorktreePaths(resolveWorktreePath2, normalizePath2, repoRoot, meshName, branch, worktreeBaseDir, originalBranch) {
       const safeBranch = branch.replace(/[/\\:*?"<>|]/g, "-").replace(/^\.+|\.+$/g, "");
       const safeMeshName = meshName.replace(/[/\\:*?"<>|]/g, "-").replace(/^\.+|\.+$/g, "");
       const legacyPath = (0, import_path44.join)((0, import_path44.dirname)(repoRoot), LEGACY_WORKTREE_DIR_NAME, safeMeshName, safeBranch);
+      const reuseBranch = typeof originalBranch === "string" ? originalBranch.trim() : "";
       const candidates = [
         resolveWorktreePath2(repoRoot, meshName, branch, worktreeBaseDir),
-        legacyPath
+        legacyPath,
+        ...reuseBranch && reuseBranch !== branch ? [
+          resolveWorktreePath2(repoRoot, meshName, reuseBranch, worktreeBaseDir),
+          (0, import_path44.join)(
+            (0, import_path44.dirname)(repoRoot),
+            LEGACY_WORKTREE_DIR_NAME,
+            safeMeshName,
+            reuseBranch.replace(/[/\\:*?"<>|]/g, "-").replace(/^\.+|\.+$/g, "")
+          )
+        ] : []
       ];
       const seen2 = /* @__PURE__ */ new Set();
       const out = [];
@@ -137831,7 +137843,12 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         repoRoot,
         meshName,
         args.node.worktreeBranch,
-        meshWorktreeBaseDir(args.mesh)
+        meshWorktreeBaseDir(args.mesh),
+        // The directory's own trailing segment, so a reused worktree (directory
+        // named for the branch it was CREATED with) is still recognised after the
+        // worktreeBranch record is reconciled to a later branch. Only ever ADDS a
+        // candidate under the managed base; a path we never created still refuses.
+        workingDirBasename(workspace)
       );
       const actualPath = normalizePath2(workspace);
       if (!expectedPaths.includes(actualPath)) {
@@ -137963,7 +137980,12 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         repoRoot,
         meshName,
         args.node.worktreeBranch,
-        meshWorktreeBaseDir(args.mesh)
+        meshWorktreeBaseDir(args.mesh),
+        // The directory's own trailing segment, so a reused worktree (directory
+        // named for the branch it was CREATED with) is still recognised after the
+        // worktreeBranch record is reconciled to a later branch. Only ever ADDS a
+        // candidate under the managed base; a path we never created still refuses.
+        workingDirBasename(workspace)
       );
       const actualPath = normalizePath2(workspace);
       if (!expectedPaths.includes(actualPath)) {
