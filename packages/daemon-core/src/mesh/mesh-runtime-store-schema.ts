@@ -205,6 +205,7 @@ export function ensureAssistantRelaySchema(db: MeshRuntimeStore['db']): void {
             mesh_id TEXT NOT NULL,
             coordinator_session_id TEXT NOT NULL,
             captured_at INTEGER NOT NULL,
+            evidence_ref TEXT,
             body TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_assistant_attempt_bodies_age ON assistant_attempt_bodies(captured_at);
@@ -266,6 +267,8 @@ export function ensureAssistantRelaySchema(db: MeshRuntimeStore['db']): void {
             credited_at INTEGER NOT NULL
         );
     `);
+    const bodyCols = new Set((db.prepare('PRAGMA table_info(assistant_attempt_bodies)').all() as Array<{ name: string }>).map(r => r.name));
+    if (!bodyCols.has('evidence_ref')) db.exec('ALTER TABLE assistant_attempt_bodies ADD COLUMN evidence_ref TEXT');
     // Additive columns for tables created before 2026-10-08 (research Q7 / M7).
     const cols = new Set((db.prepare('PRAGMA table_info(assistant_metric_daily)').all() as Array<{ name: string }>).map((r) => r.name));
     for (const c of ['review_writes_applied', 'review_writes_approved']) {

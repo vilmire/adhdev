@@ -163,8 +163,16 @@ export function buildAssistantRelayPorts(
             if (!target.reachable) return null;
             const out = await ports.callHost(target, 'report', { coordinatorSessionId: sessionId, attemptId });
             if (!out.ok) return null;
-            const result = out.result.result as { body?: unknown } | undefined;
-            return typeof result?.body === 'string' ? result.body : null;
+            const result = out.result.result as { body?: unknown; provenance?: {
+                version?: unknown; attemptId?: unknown; coordinatorSessionId?: unknown; generation?: unknown; evidenceRef?: unknown;
+            } } | undefined;
+            const proof = result?.provenance;
+            // Old hosts may return a session-tail capture with no provenance.
+            // Only the host's exact terminal/native reader can supply this reference.
+            return typeof result?.body === 'string' && proof?.version === 1 && proof.attemptId === attemptId
+                && proof.coordinatorSessionId === sessionId && Number.isSafeInteger(proof.generation) && Number(proof.generation) >= 0
+                && typeof proof.evidenceRef === 'string' && proof.evidenceRef.length > 0 && proof.evidenceRef.length <= 2048
+                ? result.body : null;
         },
         readCoordinatorTail: async (sessionId) => {
             const chat = await components.router.execute('read_chat', { targetSessionId: sessionId, limit: 40 }, 'ipc', { inProcess: true });

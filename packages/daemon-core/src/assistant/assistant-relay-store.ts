@@ -61,9 +61,9 @@ export interface AssistantRelayStore {
     listUndelivered(): AssistantRelayRow[];
     /** Rows that settled without their own body being sent (silent loss). */
     countUnrendered(): UnrenderedRelayCounts;
-    /** Capture only for the exact recorded mesh/session/attempt; first capture wins. */
-    captureAttemptBody(attemptId: string, meshId: string, sessionId: string, body: string, at: number): void;
-    readAttemptBody(attemptId: string, meshId: string, sessionId: string, now: number): string | null;
+    /** Caller must validate terminal/generation/native provenance before storing or reading. */
+    captureAttemptBody(attemptId: string, meshId: string, sessionId: string, body: string, at: number, evidenceRef: string): void;
+    readAttemptBody(attemptId: string, meshId: string, sessionId: string, now: number, evidenceRef: string): string | null;
     /** Retention: bodies after 24 h, delivered rows after 7 d, closed threads after 30 d. */
     prune(now: number): void;
 }
@@ -85,7 +85,7 @@ export function toUnrenderedCounts(byMesh: ReadonlyMap<string, number>): Unrende
 }
 
 export class InMemoryAssistantRelayStore implements AssistantRelayStore {
-    private readonly bodies = new Map<string, { meshId: string; sessionId: string; body: string; at: number }>();
+    private readonly bodies = new Map<string, { meshId: string; sessionId: string; body: string; at: number; evidenceRef: string }>();
     private readonly threads = new Map<string, AssistantThreadRow>();
     private readonly relays = new Map<string, AssistantRelayRow>();
 
@@ -140,15 +140,15 @@ export class InMemoryAssistantRelayStore implements AssistantRelayStore {
         return toUnrenderedCounts(byMesh);
     }
 
-    captureAttemptBody(attemptId: string, meshId: string, sessionId: string, body: string, at: number): void {
+    captureAttemptBody(attemptId: string, meshId: string, sessionId: string, body: string, at: number, evidenceRef: string): void {
         const row = this.relays.get(attemptId);
-        if (!row || row.meshId !== meshId || row.coordinatorSessionId !== sessionId || !body || body.length > ATTEMPT_BODY_MAX_CHARS) return;
-        if (!this.bodies.has(attemptId)) this.bodies.set(attemptId, { meshId, sessionId, body, at });
+        if (!row || row.meshId !== meshId || row.coordinatorSessionId !== sessionId || !evidenceRef || !body || body.length > ATTEMPT_BODY_MAX_CHARS) return;
+        if (!this.bodies.has(attemptId)) this.bodies.set(attemptId, { meshId, sessionId, body, at, evidenceRef });
         this.pruneBodies(at);
     }
-    readAttemptBody(attemptId: string, meshId: string, sessionId: string, now: number): string | null {
+    readAttemptBody(attemptId: string, meshId: string, sessionId: string, now: number, evidenceRef: string): string | null {
         const b = this.bodies.get(attemptId);
-        return b && b.meshId === meshId && b.sessionId === sessionId && now - b.at <= ATTEMPT_BODY_TTL_MS ? b.body : null;
+        return b && b.evidenceRef === evidenceRef && !!evidenceRef && b.meshId === meshId && b.sessionId === sessionId && now - b.at <= ATTEMPT_BODY_TTL_MS ? b.body : null;
     }
     private pruneBodies(now: number): void {
         let total = 0, count = 0;

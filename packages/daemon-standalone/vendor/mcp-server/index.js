@@ -39685,6 +39685,16 @@ ${error.message || ""}`;
     }
     function ensureAssistantRelaySchema(db) {
       db.exec(`
+        -- Local report captures survive delivery/restart; never projected to cloud status.
+        CREATE TABLE IF NOT EXISTS assistant_attempt_bodies (
+            attempt_id TEXT PRIMARY KEY,
+            mesh_id TEXT NOT NULL,
+            coordinator_session_id TEXT NOT NULL,
+            captured_at INTEGER NOT NULL,
+            evidence_ref TEXT,
+            body TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_assistant_attempt_bodies_age ON assistant_attempt_bodies(captured_at);
         CREATE TABLE IF NOT EXISTS assistant_threads (
             mesh_id TEXT PRIMARY KEY,
             opened_at INTEGER NOT NULL,
@@ -39743,6 +39753,8 @@ ${error.message || ""}`;
             credited_at INTEGER NOT NULL
         );
     `);
+      const bodyCols = new Set(db.prepare("PRAGMA table_info(assistant_attempt_bodies)").all().map((r) => r.name));
+      if (!bodyCols.has("evidence_ref")) db.exec("ALTER TABLE assistant_attempt_bodies ADD COLUMN evidence_ref TEXT");
       const cols = new Set(db.prepare("PRAGMA table_info(assistant_metric_daily)").all().map((r) => r.name));
       for (const c of ["review_writes_applied", "review_writes_approved"]) {
         if (!cols.has(c)) db.exec(`ALTER TABLE assistant_metric_daily ADD COLUMN ${c} INTEGER NOT NULL DEFAULT 0`);
@@ -91608,13 +91620,278 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         init_report_continuation();
       }
     });
+    function toUnrenderedCounts(byMesh) {
+      const rows = [...byMesh.entries()].map(([meshId, count]) => ({ meshId, count })).sort((a, b) => b.count - a.count || a.meshId.localeCompare(b.meshId));
+      return { total: rows.reduce((n, r) => n + r.count, 0), byMesh: rows };
+    }
+    var ATTEMPT_BODY_TTL_MS;
+    var ATTEMPT_BODY_MAX_CHARS;
+    var ATTEMPT_BODY_MAX_ROWS;
+    var ATTEMPT_BODY_TOTAL_BYTES;
+    var RELAY_DELIVERED_RETENTION_MS;
+    var THREAD_CLOSED_RETENTION_MS;
+    var InMemoryAssistantRelayStore;
+    var init_assistant_relay_store = __esm2({
+      "src/assistant/assistant-relay-store.ts"() {
+        "use strict";
+        ATTEMPT_BODY_TTL_MS = 24 * 60 * 6e4;
+        ATTEMPT_BODY_MAX_CHARS = 1048576;
+        ATTEMPT_BODY_MAX_ROWS = 128;
+        ATTEMPT_BODY_TOTAL_BYTES = 8 * ATTEMPT_BODY_MAX_CHARS;
+        RELAY_DELIVERED_RETENTION_MS = 7 * 24 * 60 * 6e4;
+        THREAD_CLOSED_RETENTION_MS = 30 * 24 * 60 * 6e4;
+        InMemoryAssistantRelayStore = class {
+          bodies = /* @__PURE__ */ new Map();
+          threads = /* @__PURE__ */ new Map();
+          relays = /* @__PURE__ */ new Map();
+          openThread(meshId, at) {
+            const t = this.threads.get(meshId);
+            if (t && t.closedAt === null) t.lastSendAt = at;
+            else this.threads.set(meshId, { meshId, openedAt: at, lastSendAt: at, closedAt: null });
+          }
+          closeThread(meshId, at) {
+            const t = this.threads.get(meshId);
+            if (t && t.closedAt === null) t.closedAt = at;
+          }
+          isThreadOpen(meshId) {
+            return this.threads.get(meshId)?.closedAt === null;
+          }
+          openThreads() {
+            return [...this.threads.values()].filter((t) => t.closedAt === null).map((t) => ({ ...t }));
+          }
+          recordCommitted(row2) {
+            if (this.relays.has(row2.attemptId)) return false;
+            this.relays.set(row2.attemptId, { ...row2, deliveredAt: null, relayedAt: null });
+            return true;
+          }
+          markDelivered(attemptIds, at, rendered) {
+            const sent = new Set(rendered ?? attemptIds);
+            for (const id4 of attemptIds) {
+              const r = this.relays.get(id4);
+              if (!r || r.deliveredAt !== null) continue;
+              r.deliveredAt = at;
+              if (sent.has(id4)) r.relayedAt = at;
+            }
+          }
+          listUndelivered() {
+            return [...this.relays.values()].filter((r) => r.deliveredAt === null).sort((a, b) => a.committedAt - b.committedAt || a.attemptId.localeCompare(b.attemptId)).map((r) => ({ ...r }));
+          }
+          countUnrendered() {
+            const byMesh = /* @__PURE__ */ new Map();
+            for (const r of this.relays.values()) {
+              if (r.deliveredAt === null || r.relayedAt !== null) continue;
+              byMesh.set(r.meshId, (byMesh.get(r.meshId) ?? 0) + 1);
+            }
+            return toUnrenderedCounts(byMesh);
+          }
+          captureAttemptBody(attemptId, meshId, sessionId, body, at, evidenceRef) {
+            const row2 = this.relays.get(attemptId);
+            if (!row2 || row2.meshId !== meshId || row2.coordinatorSessionId !== sessionId || !evidenceRef || !body || body.length > ATTEMPT_BODY_MAX_CHARS) return;
+            if (!this.bodies.has(attemptId)) this.bodies.set(attemptId, { meshId, sessionId, body, at, evidenceRef });
+            this.pruneBodies(at);
+          }
+          readAttemptBody(attemptId, meshId, sessionId, now, evidenceRef) {
+            const b = this.bodies.get(attemptId);
+            return b && b.evidenceRef === evidenceRef && !!evidenceRef && b.meshId === meshId && b.sessionId === sessionId && now - b.at <= ATTEMPT_BODY_TTL_MS ? b.body : null;
+          }
+          pruneBodies(now) {
+            let total = 0, count = 0;
+            for (const [id4, b] of [...this.bodies].sort((a, b2) => b2[1].at - a[1].at || b2[0].localeCompare(a[0]))) {
+              if (now - b.at > ATTEMPT_BODY_TTL_MS || ++count > ATTEMPT_BODY_MAX_ROWS || total + Buffer.byteLength(b.body, "utf8") > ATTEMPT_BODY_TOTAL_BYTES) this.bodies.delete(id4);
+              else total += Buffer.byteLength(b.body, "utf8");
+            }
+          }
+          prune(now) {
+            this.pruneBodies(now);
+            for (const [id4, r] of this.relays) {
+              if (r.deliveredAt !== null && now - r.deliveredAt > RELAY_DELIVERED_RETENTION_MS) this.relays.delete(id4);
+            }
+            for (const [id4, t] of this.threads) {
+              if (t.closedAt !== null && now - t.closedAt > THREAD_CLOSED_RETENTION_MS) this.threads.delete(id4);
+            }
+          }
+        };
+      }
+    });
+    function toThread(r) {
+      return { meshId: r.mesh_id, openedAt: r.opened_at, lastSendAt: r.last_send_at, closedAt: r.closed_at ?? null };
+    }
+    function toRelay(r) {
+      return {
+        attemptId: r.attempt_id,
+        meshId: r.mesh_id,
+        coordinatorSessionId: r.coordinator_session_id,
+        committedAt: r.committed_at,
+        deliveredAt: r.delivered_at ?? null,
+        relayedAt: r.relayed_at ?? null,
+        kind: "relay",
+        outcome: r.outcome
+      };
+    }
+    function metricDay(at) {
+      const d = new Date(at);
+      const p = (n) => String(n).padStart(2, "0");
+      return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+    }
+    var SqliteAssistantRelayStore;
+    var ASSISTANT_METRIC_COLUMNS;
+    var ASSISTANT_METRIC_RETENTION_DAYS;
+    var AssistantMetricsStore;
+    var init_assistant_relay_sqlite_store = __esm2({
+      "src/assistant/assistant-relay-sqlite-store.ts"() {
+        "use strict";
+        init_assistant_relay_store();
+        SqliteAssistantRelayStore = class {
+          constructor(db) {
+            this.db = db;
+          }
+          openThread(meshId, at) {
+            this.db.prepare(`
+            INSERT INTO assistant_threads (mesh_id, opened_at, last_send_at, closed_at) VALUES (?, ?, ?, NULL)
+            ON CONFLICT(mesh_id) DO UPDATE SET
+                opened_at = CASE WHEN assistant_threads.closed_at IS NULL THEN assistant_threads.opened_at ELSE excluded.opened_at END,
+                last_send_at = excluded.last_send_at,
+                closed_at = NULL
+        `).run(meshId, at, at);
+          }
+          closeThread(meshId, at) {
+            this.db.prepare("UPDATE assistant_threads SET closed_at = ? WHERE mesh_id = ? AND closed_at IS NULL").run(at, meshId);
+          }
+          isThreadOpen(meshId) {
+            return !!this.db.prepare("SELECT 1 FROM assistant_threads WHERE mesh_id = ? AND closed_at IS NULL").get(meshId);
+          }
+          openThreads() {
+            return this.db.prepare("SELECT * FROM assistant_threads WHERE closed_at IS NULL ORDER BY mesh_id").all().map(toThread);
+          }
+          recordCommitted(row2) {
+            const r = this.db.prepare(`
+            INSERT OR IGNORE INTO assistant_relays (attempt_id, mesh_id, coordinator_session_id, committed_at, delivered_at, relayed_at, kind, outcome)
+            VALUES (?, ?, ?, ?, NULL, NULL, ?, ?)
+        `).run(row2.attemptId, row2.meshId, row2.coordinatorSessionId, row2.committedAt, row2.kind, row2.outcome);
+            return r.changes > 0;
+          }
+          markDelivered(attemptIds, at, rendered) {
+            if (!attemptIds.length) return;
+            const sent = new Set(rendered ?? attemptIds);
+            const stmt = this.db.prepare("UPDATE assistant_relays SET delivered_at = ?, relayed_at = ? WHERE attempt_id = ? AND delivered_at IS NULL");
+            this.db.transaction((ids) => {
+              for (const id4 of ids) stmt.run(at, sent.has(id4) ? at : null, id4);
+            })(attemptIds);
+          }
+          listUndelivered() {
+            return this.db.prepare("SELECT * FROM assistant_relays WHERE delivered_at IS NULL ORDER BY committed_at, attempt_id").all().map(toRelay);
+          }
+          countUnrendered() {
+            const rows = this.db.prepare(
+              "SELECT mesh_id, COUNT(*) AS n FROM assistant_relays WHERE delivered_at IS NOT NULL AND relayed_at IS NULL GROUP BY mesh_id"
+            ).all();
+            return toUnrenderedCounts(new Map(rows.map((r) => [r.mesh_id, Number(r.n)])));
+          }
+          captureAttemptBody(attemptId, meshId, sessionId, body, at, evidenceRef) {
+            if (!evidenceRef || !body || body.length > ATTEMPT_BODY_MAX_CHARS) return;
+            this.db.transaction(() => {
+              this.db.prepare(`INSERT INTO assistant_attempt_bodies
+                (attempt_id, mesh_id, coordinator_session_id, captured_at, body, evidence_ref)
+                SELECT attempt_id, mesh_id, coordinator_session_id, ?, ?, ? FROM assistant_relays
+                WHERE attempt_id = ? AND mesh_id = ? AND coordinator_session_id = ?
+                ON CONFLICT(attempt_id) DO UPDATE SET body=excluded.body, captured_at=excluded.captured_at, evidence_ref=excluded.evidence_ref
+                WHERE assistant_attempt_bodies.evidence_ref IS NULL
+                  AND assistant_attempt_bodies.mesh_id=excluded.mesh_id
+                  AND assistant_attempt_bodies.coordinator_session_id=excluded.coordinator_session_id`).run(at, body, evidenceRef, attemptId, meshId, sessionId);
+              this.pruneBodies(at);
+            })();
+          }
+          readAttemptBody(attemptId, meshId, sessionId, now, evidenceRef) {
+            const row2 = this.db.prepare(`SELECT body FROM assistant_attempt_bodies
+            WHERE attempt_id = ? AND mesh_id = ? AND coordinator_session_id = ? AND captured_at >= ? AND evidence_ref = ?`).get(attemptId, meshId, sessionId, now - ATTEMPT_BODY_TTL_MS, evidenceRef);
+            return row2?.body ?? null;
+          }
+          pruneBodies(now) {
+            this.db.prepare("DELETE FROM assistant_attempt_bodies WHERE captured_at < ?").run(now - ATTEMPT_BODY_TTL_MS);
+            const rows = this.db.prepare("SELECT attempt_id, length(CAST(body AS BLOB)) AS bytes FROM assistant_attempt_bodies ORDER BY captured_at DESC, attempt_id DESC").all();
+            let total = 0, count = 0;
+            const drop = this.db.prepare("DELETE FROM assistant_attempt_bodies WHERE attempt_id = ?");
+            for (const row2 of rows) {
+              if (++count > ATTEMPT_BODY_MAX_ROWS || total + row2.bytes > ATTEMPT_BODY_TOTAL_BYTES) drop.run(row2.attempt_id);
+              else total += row2.bytes;
+            }
+          }
+          prune(now) {
+            this.pruneBodies(now);
+            this.db.prepare("DELETE FROM assistant_relays WHERE delivered_at IS NOT NULL AND ? - delivered_at > ?").run(now, RELAY_DELIVERED_RETENTION_MS);
+            this.db.prepare("DELETE FROM assistant_threads WHERE closed_at IS NOT NULL AND ? - closed_at > ?").run(now, THREAD_CLOSED_RETENTION_MS);
+          }
+        };
+        ASSISTANT_METRIC_COLUMNS = [
+          "assistant_sends",
+          "human_sends",
+          "relays",
+          "project_reads",
+          "memory_writes",
+          "memory_discards",
+          "skill_views",
+          "skill_attaches",
+          "skill_writes",
+          "review_turns",
+          "review_turns_with_writes",
+          "review_writes_applied",
+          "review_writes_approved"
+        ];
+        ASSISTANT_METRIC_RETENTION_DAYS = 90;
+        AssistantMetricsStore = class {
+          constructor(db) {
+            this.db = db;
+          }
+          /** Add `n` to one counter of (day of `at`, mesh). Global counters use meshId ''. */
+          bump(column, meshId, at, n = 1) {
+            if (!ASSISTANT_METRIC_COLUMNS.includes(column)) throw new Error(`unknown metric column: ${column}`);
+            if (!Number.isFinite(n) || n === 0) return;
+            this.db.prepare(`
+            INSERT INTO assistant_metric_daily (day, mesh_id, ${column}) VALUES (?, ?, ?)
+            ON CONFLICT(day, mesh_id) DO UPDATE SET ${column} = ${column} + excluded.${column}
+        `).run(metricDay(at), meshId, n);
+          }
+          rows(sinceDay) {
+            const raw = sinceDay ? this.db.prepare("SELECT * FROM assistant_metric_daily WHERE day >= ? ORDER BY day, mesh_id").all(sinceDay) : this.db.prepare("SELECT * FROM assistant_metric_daily ORDER BY day, mesh_id").all();
+            return raw.map((r) => {
+              const row2 = { day: String(r.day), meshId: String(r.mesh_id ?? "") };
+              for (const c of ASSISTANT_METRIC_COLUMNS) row2[c] = Number(r[c] ?? 0);
+              return row2;
+            });
+          }
+          /**
+           * M7 (research 2026-10-08 Q7): one review-turn write landed — `applied`
+           * directly (clean review window) or `approved` by the owner after staging.
+           * Bumps the per-kind counter, and `review_turns_with_writes` only the first
+           * time this review turn is credited. Global counters (mesh_id '').
+           * A staged write that is discarded or expires never reaches here.
+           */
+          creditReviewWrite(reviewTurnId, kind, at) {
+            if (!reviewTurnId) return;
+            this.db.transaction(() => {
+              this.bump(kind === "applied" ? "review_writes_applied" : "review_writes_approved", "", at);
+              const first = this.db.prepare("INSERT OR IGNORE INTO assistant_review_credit (review_turn_id, credited_at) VALUES (?, ?)").run(reviewTurnId, at).changes > 0;
+              if (first) this.bump("review_turns_with_writes", "", at);
+            })();
+          }
+          /** Drop rows older than the retention window (90 days). */
+          prune(now) {
+            const cutoffMs = now - ASSISTANT_METRIC_RETENTION_DAYS * 24 * 60 * 6e4;
+            this.db.prepare("DELETE FROM assistant_review_credit WHERE credited_at < ?").run(cutoffMs);
+            return this.db.prepare("DELETE FROM assistant_metric_daily WHERE day < ?").run(metricDay(cutoffMs)).changes;
+          }
+        };
+      }
+    });
     async function recoverAttemptReport(db, attempt, meshId, sessionId, execute) {
       if (!attempt || attempt.scope !== "plain" || attempt.sessionId !== sessionId || !attempt.terminal) return { body: null, source: "unavailable", reason: "exact_committed_attempt_not_found" };
       if (attempt.meshId && attempt.meshId !== meshId) return { body: null, source: "unavailable", reason: "attempt_mesh_mismatch" };
       const rows = db.prepare("SELECT event_id,session_id,generation,to_state,payload_json FROM turn_events WHERE attempt_id=? ORDER BY recorded_at DESC,event_id DESC LIMIT 128").all(attempt.attemptId);
       const own = rows.filter((row2) => row2.session_id === sessionId && row2.generation === attempt.generation);
-      const terminal = own.find((row2) => row2.to_state === attempt.terminal.outcome);
-      if (!terminal) return { body: null, source: "unavailable", reason: "original_terminal_evidence_unavailable" };
+      const terminals = own.filter((row2) => row2.to_state === attempt.terminal.outcome);
+      if (terminals.length !== 1) return { body: null, source: "unavailable", reason: "original_terminal_evidence_unavailable" };
+      const terminal = terminals[0];
+      let sourceEvent = terminal;
       const payloadOf = (row2) => {
         try {
           return row2 ? rec3(JSON.parse(row2.payload_json)) : null;
@@ -91624,46 +91901,83 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       };
       let payload = payloadOf(terminal);
       let evidence = rec3(payload?.evidence);
-      if (evidence?.kind !== "turn_end") {
-        const notify2 = own.find((row2) => row2.event_id.startsWith(terminal.event_id + "#notify:"));
+      const isNativeReference = (e) => e?.kind === "turn_end" || e?.kind === "transcript_final";
+      const directEnvelope = rec3(rec3(payload?.local)?.envelope);
+      if (!isNativeReference(evidence) && !(typeof directEnvelope?.finalSummary === "string" && directEnvelope.finalSummary)) {
+        const notifications = own.filter((row2) => row2.event_id.startsWith(terminal.event_id + "#notify:"));
+        if (notifications.length !== 1) return { body: null, source: "unavailable", reason: "no_unique_original_native_bubble_reference" };
+        const notify2 = notifications[0];
         const textEventId = payloadOf(notify2)?.textEventId;
-        const original = typeof textEventId === "string" ? own.find((row2) => row2.event_id === textEventId) : void 0;
-        payload = payloadOf(original);
+        const originals = typeof textEventId === "string" ? own.filter((row2) => row2.event_id === textEventId) : [];
+        if (originals.length !== 1) return { body: null, source: "unavailable", reason: "no_unique_original_native_bubble_reference" };
+        sourceEvent = originals[0];
+        payload = payloadOf(sourceEvent);
         evidence = rec3(payload?.evidence);
       }
+      const hash3 = (text3) => (0, import_node_crypto17.createHash)("sha256").update(text3).digest("hex");
+      const evidenceRef = JSON.stringify([
+        1,
+        attempt.generation,
+        attempt.terminal.at,
+        terminal.event_id,
+        hash3(terminal.payload_json),
+        sourceEvent.event_id,
+        hash3(sourceEvent.payload_json)
+      ]);
+      const provenance = {
+        version: 1,
+        attemptId: attempt.attemptId,
+        coordinatorSessionId: sessionId,
+        generation: attempt.generation,
+        evidenceRef
+      };
+      const store2 = new SqliteAssistantRelayStore(db);
+      const capture = (body, source2) => {
+        store2.captureAttemptBody(attempt.attemptId, meshId, sessionId, body, Date.now(), evidenceRef);
+        return { body, source: source2, provenance };
+      };
       const envelope = rec3(rec3(payload?.local)?.envelope);
-      if (typeof envelope?.finalSummary === "string" && envelope.finalSummary) return { body: envelope.finalSummary, source: "existing_attempt_envelope" };
+      if (typeof envelope?.finalSummary === "string" && envelope.finalSummary) return capture(envelope.finalSummary, "existing_attempt_envelope");
       const anchors = /* @__PURE__ */ new Set();
-      if (evidence?.kind === "turn_end" && typeof evidence.messageAt === "number") anchors.add(evidence.messageAt);
+      if (isNativeReference(evidence) && typeof evidence?.messageAt === "number") anchors.add(evidence.messageAt);
       if (anchors.size !== 1) return { body: null, source: "unavailable", reason: "no_unique_original_native_bubble_reference" };
       const at = [...anchors][0];
       if (at < attempt.acceptedAt || at > attempt.terminal.at) return { body: null, source: "unavailable", reason: "native_reference_outside_attempt" };
+      const captured = store2.readAttemptBody(attempt.attemptId, meshId, sessionId, Date.now(), evidenceRef);
+      if (captured) return { body: captured, source: "durable_attempt_capture", provenance };
+      let ambiguous = false;
       const match = (chat2) => {
         const matches = (Array.isArray(chat2.messages) ? chat2.messages : []).filter((m) => {
           const r = rec3(m);
           const timestamp2 = typeof r?.timestamp === "number" ? r.timestamp : Date.parse(String(r?.timestamp ?? ""));
-          return isVisible(m) && r?.role !== "user" && timestamp2 === at;
+          return isVisible(m) && ["assistant", "agent"].includes(String(r?.role).toLowerCase()) && timestamp2 === at;
         });
+        if (matches.length > 1) ambiguous = true;
         return matches.length === 1 ? messageText(matches[0]) || null : null;
       };
       const chat = await execute("read_chat", { targetSessionId: sessionId, limit: 200 });
       if (chat.success) {
         const body = match(chat);
-        if (body) return { body, source: "exact_native_bubble" };
+        if (ambiguous) return { body: null, source: "unavailable", reason: "ambiguous_original_native_bubble" };
+        if (body) return capture(body, "exact_native_bubble");
       }
       for (let offset = 0; offset < 400; offset += 100) {
         const history = await execute("chat_history", { targetSessionId: sessionId, offset, limit: 100, excludeRecentCount: 0 });
         if (!history.success) break;
         const body = match(history);
-        if (body) return { body, source: "exact_native_history_bubble" };
+        if (ambiguous) return { body: null, source: "unavailable", reason: "ambiguous_original_native_bubble" };
+        if (body) return capture(body, "exact_native_history_bubble");
         if (history.hasMore !== true) break;
       }
       return { body: null, source: "unavailable", reason: "original_native_bubble_unavailable" };
     }
+    var import_node_crypto17;
     var rec3;
     var init_attempt_report_recovery = __esm2({
       "src/assistant/attempt-report-recovery.ts"() {
         "use strict";
+        import_node_crypto17 = require("crypto");
+        init_assistant_relay_sqlite_store();
         init_project_views();
         rec3 = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : null;
       }
@@ -91867,7 +92181,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       const points = Array.from(body);
       if (points.length <= max) return body;
       return `${points.slice(0, max).join("")}
-\u2026 (cut at ${max} characters \u2014 use project_read for the rest)`;
+\u2026 (cut at ${max} characters \u2014 use project_read with the exact attempt reference, offset 4000 for the rest)`;
     }
     function relayMessageId(meshId, attemptId) {
       return `${RELAY_MESSAGE_ID_PREFIX}${meshId}:${attemptId}`;
@@ -92672,212 +92986,6 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         });
       }
     });
-    function toUnrenderedCounts(byMesh) {
-      const rows = [...byMesh.entries()].map(([meshId, count]) => ({ meshId, count })).sort((a, b) => b.count - a.count || a.meshId.localeCompare(b.meshId));
-      return { total: rows.reduce((n, r) => n + r.count, 0), byMesh: rows };
-    }
-    var RELAY_DELIVERED_RETENTION_MS;
-    var THREAD_CLOSED_RETENTION_MS;
-    var InMemoryAssistantRelayStore;
-    var init_assistant_relay_store = __esm2({
-      "src/assistant/assistant-relay-store.ts"() {
-        "use strict";
-        RELAY_DELIVERED_RETENTION_MS = 7 * 24 * 60 * 6e4;
-        THREAD_CLOSED_RETENTION_MS = 30 * 24 * 60 * 6e4;
-        InMemoryAssistantRelayStore = class {
-          threads = /* @__PURE__ */ new Map();
-          relays = /* @__PURE__ */ new Map();
-          openThread(meshId, at) {
-            const t = this.threads.get(meshId);
-            if (t && t.closedAt === null) t.lastSendAt = at;
-            else this.threads.set(meshId, { meshId, openedAt: at, lastSendAt: at, closedAt: null });
-          }
-          closeThread(meshId, at) {
-            const t = this.threads.get(meshId);
-            if (t && t.closedAt === null) t.closedAt = at;
-          }
-          isThreadOpen(meshId) {
-            return this.threads.get(meshId)?.closedAt === null;
-          }
-          openThreads() {
-            return [...this.threads.values()].filter((t) => t.closedAt === null).map((t) => ({ ...t }));
-          }
-          recordCommitted(row2) {
-            if (this.relays.has(row2.attemptId)) return false;
-            this.relays.set(row2.attemptId, { ...row2, deliveredAt: null, relayedAt: null });
-            return true;
-          }
-          markDelivered(attemptIds, at, rendered) {
-            const sent = new Set(rendered ?? attemptIds);
-            for (const id4 of attemptIds) {
-              const r = this.relays.get(id4);
-              if (!r || r.deliveredAt !== null) continue;
-              r.deliveredAt = at;
-              if (sent.has(id4)) r.relayedAt = at;
-            }
-          }
-          listUndelivered() {
-            return [...this.relays.values()].filter((r) => r.deliveredAt === null).sort((a, b) => a.committedAt - b.committedAt || a.attemptId.localeCompare(b.attemptId)).map((r) => ({ ...r }));
-          }
-          countUnrendered() {
-            const byMesh = /* @__PURE__ */ new Map();
-            for (const r of this.relays.values()) {
-              if (r.deliveredAt === null || r.relayedAt !== null) continue;
-              byMesh.set(r.meshId, (byMesh.get(r.meshId) ?? 0) + 1);
-            }
-            return toUnrenderedCounts(byMesh);
-          }
-          prune(now) {
-            for (const [id4, r] of this.relays) {
-              if (r.deliveredAt !== null && now - r.deliveredAt > RELAY_DELIVERED_RETENTION_MS) this.relays.delete(id4);
-            }
-            for (const [id4, t] of this.threads) {
-              if (t.closedAt !== null && now - t.closedAt > THREAD_CLOSED_RETENTION_MS) this.threads.delete(id4);
-            }
-          }
-        };
-      }
-    });
-    function toThread(r) {
-      return { meshId: r.mesh_id, openedAt: r.opened_at, lastSendAt: r.last_send_at, closedAt: r.closed_at ?? null };
-    }
-    function toRelay(r) {
-      return {
-        attemptId: r.attempt_id,
-        meshId: r.mesh_id,
-        coordinatorSessionId: r.coordinator_session_id,
-        committedAt: r.committed_at,
-        deliveredAt: r.delivered_at ?? null,
-        relayedAt: r.relayed_at ?? null,
-        kind: "relay",
-        outcome: r.outcome
-      };
-    }
-    function metricDay(at) {
-      const d = new Date(at);
-      const p = (n) => String(n).padStart(2, "0");
-      return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-    }
-    var SqliteAssistantRelayStore;
-    var ASSISTANT_METRIC_COLUMNS;
-    var ASSISTANT_METRIC_RETENTION_DAYS;
-    var AssistantMetricsStore;
-    var init_assistant_relay_sqlite_store = __esm2({
-      "src/assistant/assistant-relay-sqlite-store.ts"() {
-        "use strict";
-        init_assistant_relay_store();
-        SqliteAssistantRelayStore = class {
-          constructor(db) {
-            this.db = db;
-          }
-          openThread(meshId, at) {
-            this.db.prepare(`
-            INSERT INTO assistant_threads (mesh_id, opened_at, last_send_at, closed_at) VALUES (?, ?, ?, NULL)
-            ON CONFLICT(mesh_id) DO UPDATE SET
-                opened_at = CASE WHEN assistant_threads.closed_at IS NULL THEN assistant_threads.opened_at ELSE excluded.opened_at END,
-                last_send_at = excluded.last_send_at,
-                closed_at = NULL
-        `).run(meshId, at, at);
-          }
-          closeThread(meshId, at) {
-            this.db.prepare("UPDATE assistant_threads SET closed_at = ? WHERE mesh_id = ? AND closed_at IS NULL").run(at, meshId);
-          }
-          isThreadOpen(meshId) {
-            return !!this.db.prepare("SELECT 1 FROM assistant_threads WHERE mesh_id = ? AND closed_at IS NULL").get(meshId);
-          }
-          openThreads() {
-            return this.db.prepare("SELECT * FROM assistant_threads WHERE closed_at IS NULL ORDER BY mesh_id").all().map(toThread);
-          }
-          recordCommitted(row2) {
-            const r = this.db.prepare(`
-            INSERT OR IGNORE INTO assistant_relays (attempt_id, mesh_id, coordinator_session_id, committed_at, delivered_at, relayed_at, kind, outcome)
-            VALUES (?, ?, ?, ?, NULL, NULL, ?, ?)
-        `).run(row2.attemptId, row2.meshId, row2.coordinatorSessionId, row2.committedAt, row2.kind, row2.outcome);
-            return r.changes > 0;
-          }
-          markDelivered(attemptIds, at, rendered) {
-            if (!attemptIds.length) return;
-            const sent = new Set(rendered ?? attemptIds);
-            const stmt = this.db.prepare("UPDATE assistant_relays SET delivered_at = ?, relayed_at = ? WHERE attempt_id = ? AND delivered_at IS NULL");
-            this.db.transaction((ids) => {
-              for (const id4 of ids) stmt.run(at, sent.has(id4) ? at : null, id4);
-            })(attemptIds);
-          }
-          listUndelivered() {
-            return this.db.prepare("SELECT * FROM assistant_relays WHERE delivered_at IS NULL ORDER BY committed_at, attempt_id").all().map(toRelay);
-          }
-          countUnrendered() {
-            const rows = this.db.prepare(
-              "SELECT mesh_id, COUNT(*) AS n FROM assistant_relays WHERE delivered_at IS NOT NULL AND relayed_at IS NULL GROUP BY mesh_id"
-            ).all();
-            return toUnrenderedCounts(new Map(rows.map((r) => [r.mesh_id, Number(r.n)])));
-          }
-          prune(now) {
-            this.db.prepare("DELETE FROM assistant_relays WHERE delivered_at IS NOT NULL AND ? - delivered_at > ?").run(now, RELAY_DELIVERED_RETENTION_MS);
-            this.db.prepare("DELETE FROM assistant_threads WHERE closed_at IS NOT NULL AND ? - closed_at > ?").run(now, THREAD_CLOSED_RETENTION_MS);
-          }
-        };
-        ASSISTANT_METRIC_COLUMNS = [
-          "assistant_sends",
-          "human_sends",
-          "relays",
-          "project_reads",
-          "memory_writes",
-          "memory_discards",
-          "skill_views",
-          "skill_attaches",
-          "skill_writes",
-          "review_turns",
-          "review_turns_with_writes",
-          "review_writes_applied",
-          "review_writes_approved"
-        ];
-        ASSISTANT_METRIC_RETENTION_DAYS = 90;
-        AssistantMetricsStore = class {
-          constructor(db) {
-            this.db = db;
-          }
-          /** Add `n` to one counter of (day of `at`, mesh). Global counters use meshId ''. */
-          bump(column, meshId, at, n = 1) {
-            if (!ASSISTANT_METRIC_COLUMNS.includes(column)) throw new Error(`unknown metric column: ${column}`);
-            if (!Number.isFinite(n) || n === 0) return;
-            this.db.prepare(`
-            INSERT INTO assistant_metric_daily (day, mesh_id, ${column}) VALUES (?, ?, ?)
-            ON CONFLICT(day, mesh_id) DO UPDATE SET ${column} = ${column} + excluded.${column}
-        `).run(metricDay(at), meshId, n);
-          }
-          rows(sinceDay) {
-            const raw = sinceDay ? this.db.prepare("SELECT * FROM assistant_metric_daily WHERE day >= ? ORDER BY day, mesh_id").all(sinceDay) : this.db.prepare("SELECT * FROM assistant_metric_daily ORDER BY day, mesh_id").all();
-            return raw.map((r) => {
-              const row2 = { day: String(r.day), meshId: String(r.mesh_id ?? "") };
-              for (const c of ASSISTANT_METRIC_COLUMNS) row2[c] = Number(r[c] ?? 0);
-              return row2;
-            });
-          }
-          /**
-           * M7 (research 2026-10-08 Q7): one review-turn write landed — `applied`
-           * directly (clean review window) or `approved` by the owner after staging.
-           * Bumps the per-kind counter, and `review_turns_with_writes` only the first
-           * time this review turn is credited. Global counters (mesh_id '').
-           * A staged write that is discarded or expires never reaches here.
-           */
-          creditReviewWrite(reviewTurnId, kind, at) {
-            if (!reviewTurnId) return;
-            this.db.transaction(() => {
-              this.bump(kind === "applied" ? "review_writes_applied" : "review_writes_approved", "", at);
-              const first = this.db.prepare("INSERT OR IGNORE INTO assistant_review_credit (review_turn_id, credited_at) VALUES (?, ?)").run(reviewTurnId, at).changes > 0;
-              if (first) this.bump("review_turns_with_writes", "", at);
-            })();
-          }
-          /** Drop rows older than the retention window (90 days). */
-          prune(now) {
-            const cutoffMs = now - ASSISTANT_METRIC_RETENTION_DAYS * 24 * 60 * 6e4;
-            this.db.prepare("DELETE FROM assistant_review_credit WHERE credited_at < ?").run(cutoffMs);
-            return this.db.prepare("DELETE FROM assistant_metric_daily WHERE day < ?").run(metricDay(cutoffMs)).changes;
-          }
-        };
-      }
-    });
     var ASSISTANT_RELAY_BUS_KINDS;
     var PENDING_HUMAN_MAX_AGE_MS;
     var realClock;
@@ -92922,15 +93030,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           modalOpen = /* @__PURE__ */ new Set();
           /** Remote-hosted projects: the host's last poll answer (work counts, status line). */
           remote = /* @__PURE__ */ new Map();
-          /**
-           * Coordinator tail captured AT COMMIT TIME, keyed by attemptId — local
-           * commits read it here (fire-and-forget, right as the turn lands) and
-           * remote commits get it handed in by the host's poll. Read at commit time,
-           * not at send time: a batch can wait up to RELAY_MAX_WAIT_MS before it
-           * fires, and by then a later turn may have already overwritten the
-           * coordinator's latest bubble — re-reading then silently drops every
-           * attempt but the last. Cleared per attemptId once delivered (`commitTaken`).
-           */
+          /** Exact attempt reports returned by the authorized evidence reader. The
+           * memory cache clears on delivery; the reader retains bounded durable captures. */
           attemptBodies = /* @__PURE__ */ new Map();
           /** In-flight local captures (attemptId → settle promise); `renderRelay` awaits these instead of racing them. */
           attemptBodyCapture = /* @__PURE__ */ new Map();
@@ -92970,6 +93071,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             this.unsubscribe = null;
             for (const b of this.batches.values()) this.clearBatchTimers(b);
             this.batches.clear();
+            this.attemptBodyCapture.clear();
+            this.attemptBodies.clear();
           }
           /** `project_send` accepted: open/refresh the project's thread. */
           openThread(meshId) {
@@ -93227,11 +93330,10 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           /**
            * A coordinator turn the HOST's ledger committed. Same batching, dedupe and
            * delivery as a local commit; the commit time is this daemon's receive time
-           * (the host clock may be skewed), and the body is the tail the host read.
+           * (the host clock may be skewed), while the host poll body has no exact identity and is ignored.
            */
           onRemoteCommitted(meshId, c) {
             if (!c.attemptId.startsWith("plain:")) return;
-            this.attemptBodies.set(c.attemptId, c.body);
             this.commit(meshId, { attemptId: c.attemptId, sessionId: c.coordinatorSessionId, at: this.clock.now(), outcome: c.outcome });
           }
           /** The host of an open remote thread stopped answering: one `unreachable` relay card (never a silent drop). */
@@ -93265,7 +93367,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
               outcome
             });
             if (!fresh) return;
-            if (!this.attemptBodies.has(e.attemptId)) this.captureAttemptBody(e.attemptId, e.sessionId);
+            this.captureAttemptBody(e.attemptId, meshId, e.sessionId);
             let b = this.batches.get(meshId);
             if (!b) {
               b = { coordinatorSessionId: e.sessionId, attemptIds: [], outcome, firstCommitAt: e.at, lastCommitAt: e.at, quietTimer: null, maxTimer: null };
@@ -93279,23 +93381,17 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             if (b.quietTimer !== null) this.clock.clearTimeout(b.quietTimer);
             b.quietTimer = this.clock.setTimeout(() => this.fire(meshId), RELAY_QUIET_MS);
           }
-          /**
-           * Read the coordinator's tail NOW, right as this attempt committed — fired
-           * once per attemptId, fire-and-forget. This is the only correct time to
-           * read it: `renderRelay` used to do this lazily at send time (up to 120 s
-           * later), by which point a chained turn had already overwritten the same
-           * bubble, so every attempt but the batch's last rendered nothing (the
-           * 2026-10-10 loss). A read that fails or returns after the item is already
-           * delivered leaves the row with no captured body; `renderRelay` falls back
-           * to the no-body placeholder for it rather than blocking delivery on it.
-           */
-          captureAttemptBody(attemptId, coordinatorSessionId) {
-            const p = this.ports.readCoordinatorTail(coordinatorSessionId).then((body) => {
-              this.attemptBodies.set(attemptId, body);
+          /** Resolve only through the authorized exact-attempt reader. That reader
+           * persists validated terminal/envelope/native evidence, never a session tail.
+           * Delivery/folding or stop invalidates this cache token without cancelling
+           * a safe durable capture still completing in the reader. */
+          captureAttemptBody(attemptId, meshId, coordinatorSessionId) {
+            const p = (this.ports.rehydrateAttemptReport?.(meshId, coordinatorSessionId, attemptId) ?? Promise.resolve(null)).then((body) => {
+              if (this.attemptBodyCapture.get(attemptId) === p) this.attemptBodies.set(attemptId, body);
             }).catch(() => {
-              this.attemptBodies.set(attemptId, null);
+              if (this.attemptBodyCapture.get(attemptId) === p) this.attemptBodies.set(attemptId, null);
             }).finally(() => {
-              this.attemptBodyCapture.delete(attemptId);
+              if (this.attemptBodyCapture.get(attemptId) === p) this.attemptBodyCapture.delete(attemptId);
             });
             this.attemptBodyCapture.set(attemptId, p);
           }
@@ -93453,6 +93549,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             });
             this.ports.store.markDelivered(relayItems.flatMap((i) => i.attemptIds), at, rendered);
             for (const id4 of relayItems.flatMap((i) => i.attemptIds)) {
+              this.attemptBodyCapture.delete(id4);
               this.attemptBodies.delete(id4);
               this.restoredAttempts.delete(id4);
             }
@@ -93936,7 +94033,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           const out = await ports.callHost(target, "report", { coordinatorSessionId: sessionId, attemptId });
           if (!out.ok) return null;
           const result = out.result.result;
-          return typeof result?.body === "string" ? result.body : null;
+          const proof = result?.provenance;
+          return typeof result?.body === "string" && proof?.version === 1 && proof.attemptId === attemptId && proof.coordinatorSessionId === sessionId && Number.isSafeInteger(proof.generation) && Number(proof.generation) >= 0 && typeof proof.evidenceRef === "string" && proof.evidenceRef.length > 0 && proof.evidenceRef.length <= 2048 ? result.body : null;
         },
         readCoordinatorTail: async (sessionId) => {
           const chat = await components.router.execute("read_chat", { targetSessionId: sessionId, limit: 40 }, "ipc", { inProcess: true });
@@ -108380,6 +108478,34 @@ ${marker2}`,
       }
     };
     init_control_effects();
+    init_dist2();
+    function readOutgoingReceipt(value) {
+      if (!value || typeof value !== "object") return null;
+      const r = value;
+      if (r.version !== 1 || !["accepted", "submitted", "uncertain", "failed"].includes(String(r.state)) || !["acceptance", "native_write_ack", "none", "not_written"].includes(String(r.proof)) || !Number.isSafeInteger(r.revision) || Number(r.revision) < 1) return null;
+      for (const k of ["messageId", "sessionId", "attemptId", "generation", "inputDigest"]) {
+        if (typeof r[k] !== "string" || !r[k] || r[k].length > 256) return null;
+      }
+      if (r.state === "submitted" && r.proof !== "native_write_ack") return null;
+      if (r.state === "failed" && r.proof !== "not_written") return null;
+      return {
+        version: 1,
+        messageId: r.messageId,
+        sessionId: r.sessionId,
+        attemptId: r.attemptId,
+        generation: r.generation,
+        inputDigest: r.inputDigest,
+        state: r.state,
+        revision: r.revision,
+        proof: r.proof
+      };
+    }
+    function sameOutgoingAttempt(a, b) {
+      return a.messageId === b.messageId && a.sessionId === b.sessionId && a.attemptId === b.attemptId && a.generation === b.generation && a.inputDigest === b.inputDigest;
+    }
+    function outgoingInputDigest(input) {
+      return sha256HexUtf8(jcs(JSON.parse(JSON.stringify(input))));
+    }
     init_contracts2();
     init_chat_message_normalization();
     function mergeConversationMessages(runtimeMessages, parsedMessages) {
@@ -108390,6 +108516,7 @@ ${marker2}`,
         source: "parsed"
       }));
       const getRole = (message) => typeof message.role === "string" ? message.role.trim().toLowerCase() : "";
+      const metadata = (message) => message.meta && typeof message.meta === "object" && !Array.isArray(message.meta) ? message.meta : {};
       const runtimeEntries = runtimeMessages.map((entry, index) => ({
         message: entry.message,
         index: parsedMessages.length + index,
@@ -108399,13 +108526,33 @@ ${marker2}`,
         const meta = entry.message.meta && typeof entry.message.meta === "object" && !Array.isArray(entry.message.meta) ? entry.message.meta : {};
         if (meta.runtimeInputAck !== true) return true;
         const runtimeText = flattenContent(entry.message.content).replace(/\s+/g, " ").trim();
-        if (!runtimeText) return false;
-        return !parsedEntries.some((parsedEntry) => {
+        if (!runtimeText) return !!(meta.sourceMessageId || meta.outgoingReceipt);
+        const matches = parsedEntries.filter((parsedEntry) => {
           const parsedRole = getRole(parsedEntry.message);
-          if (parsedRole !== "user" && parsedRole !== "human") return false;
-          const parsedText = flattenContent(parsedEntry.message.content).replace(/\s+/g, " ").trim();
-          return parsedText === runtimeText;
+          return (parsedRole === "user" || parsedRole === "human") && flattenContent(parsedEntry.message.content).replace(/\s+/g, " ").trim() === runtimeText;
         });
+        const sourceId = typeof meta.sourceMessageId === "string" ? meta.sourceMessageId : null;
+        const receipt = readOutgoingReceipt(meta.outgoingReceipt);
+        const identified = sourceId ? matches.filter((p) => metadata(p.message).sourceMessageId === sourceId) : [];
+        const sameTextAcks = runtimeMessages.filter((r) => metadata(r.message).runtimeInputAck === true && flattenContent(r.message.content).replace(/\s+/g, " ").trim() === runtimeText);
+        const candidate = identified.length === 1 ? identified[0] : matches.length === 1 && sameTextAcks.length === 1 ? matches[0] : null;
+        if (!candidate) return true;
+        const nativeAt = candidate.message.receivedAt || candidate.message.timestamp || 0;
+        const runtimeAt = entry.message.receivedAt || entry.message.timestamp || 0;
+        if (!identified.length && nativeAt && runtimeAt && nativeAt < runtimeAt - 1e3) return true;
+        const nativeMeta = metadata(candidate.message);
+        const nativeReceipt = readOutgoingReceipt(nativeMeta.outgoingReceipt);
+        if (nativeMeta.sourceMessageId && nativeMeta.sourceMessageId !== sourceId) return true;
+        if (meta.outgoingReceipt && !receipt) return true;
+        if (receipt && (!sourceId || receipt.messageId !== sourceId)) return true;
+        if (nativeMeta.outgoingReceipt && (!nativeReceipt || !receipt || !sameOutgoingAttempt(nativeReceipt, receipt))) return true;
+        if (nativeReceipt && receipt && nativeReceipt.revision === receipt.revision && (nativeReceipt.state !== receipt.state || nativeReceipt.proof !== receipt.proof)) return true;
+        candidate.message = { ...candidate.message, meta: {
+          ...nativeMeta,
+          ...sourceId ? { sourceMessageId: sourceId } : {},
+          ...receipt ? { outgoingReceipt: nativeReceipt && nativeReceipt.revision > receipt.revision ? nativeReceipt : receipt } : {}
+        } };
+        return false;
       });
       const getTime = (message) => {
         const value = typeof message.receivedAt === "number" ? message.receivedAt : typeof message.timestamp === "number" ? message.timestamp : 0;
@@ -113384,9 +113531,19 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
             usageRecords.push(usageRecord);
           }
         }
-        if (type2 === "user" && record3.isMeta === true) continue;
+        let userParts = type2 === "user" ? extractUserContentParts(message.content) : [];
+        let hadSourceNote = false;
+        userParts = userParts.filter((part) => {
+          if (part.role !== "user" || part.kind !== "standard" || typeof part.content !== "string") return true;
+          const cleaned = part.content.replace(/(?:^|\n)(?:\[Image: source: .*\](?:\n|$))+$/, "");
+          if (cleaned === part.content) return true;
+          hadSourceNote = true;
+          part.content = cleaned.trimEnd();
+          return !!part.content;
+        });
+        if (type2 === "user" && record3.isMeta === true && !hadSourceNote) continue;
         if (type2 === "user") {
-          for (const part of extractUserContentParts(message.content)) {
+          for (const part of userParts) {
             const msg = {
               ts: new Date(receivedAt).toISOString(),
               receivedAt,
@@ -121177,34 +121334,6 @@ ${result.stderr}`, result.code);
     }
     function dropMessageIdentityLedger(sessionKey2) {
       ledgers.delete(sessionKey2);
-    }
-    init_dist2();
-    function readOutgoingReceipt(value) {
-      if (!value || typeof value !== "object") return null;
-      const r = value;
-      if (r.version !== 1 || !["accepted", "submitted", "uncertain", "failed"].includes(String(r.state)) || !["acceptance", "native_write_ack", "none", "not_written"].includes(String(r.proof)) || !Number.isSafeInteger(r.revision) || Number(r.revision) < 1) return null;
-      for (const k of ["messageId", "sessionId", "attemptId", "generation", "inputDigest"]) {
-        if (typeof r[k] !== "string" || !r[k] || r[k].length > 256) return null;
-      }
-      if (r.state === "submitted" && r.proof !== "native_write_ack") return null;
-      if (r.state === "failed" && r.proof !== "not_written") return null;
-      return {
-        version: 1,
-        messageId: r.messageId,
-        sessionId: r.sessionId,
-        attemptId: r.attemptId,
-        generation: r.generation,
-        inputDigest: r.inputDigest,
-        state: r.state,
-        revision: r.revision,
-        proof: r.proof
-      };
-    }
-    function sameOutgoingAttempt(a, b) {
-      return a.messageId === b.messageId && a.sessionId === b.sessionId && a.attemptId === b.attemptId && a.generation === b.generation && a.inputDigest === b.inputDigest;
-    }
-    function outgoingInputDigest(input) {
-      return sha256HexUtf8(jcs(JSON.parse(JSON.stringify(input))));
     }
     init_dist2();
     var CHAT_MSG_KIND = "chat.msg.v2";
@@ -143214,7 +143343,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     var fs98 = __toESM2(require("fs"));
     var path87 = __toESM2(require("path"));
     init_dist();
-    var import_node_crypto17 = require("crypto");
+    var import_node_crypto18 = require("crypto");
     var ProviderApprovalLifecycle = class {
       current = null;
       signature = null;
@@ -143255,7 +143384,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
             type: setup ? "provider_setup" : "tool_permission",
             evidence: "live",
             lifecycle: "pending",
-            modalKey: `modal:${(0, import_node_crypto17.randomUUID)()}`,
+            modalKey: `modal:${(0, import_node_crypto18.randomUUID)()}`,
             createdAt: at,
             resolvedAt: null,
             // Extracted titles can be button lines or private prompt text. The Inbox
@@ -147412,7 +147541,7 @@ ${text3}` : text3;
       return messages;
     }
     var fs97 = __toESM2(require("fs"));
-    var import_node_crypto18 = require("crypto");
+    var import_node_crypto19 = require("crypto");
     init_provider_cli_shared();
     init_logger();
     var TERMINAL_SNAPSHOT_DEFAULT_MAX_BYTES = 32 * 1024;
@@ -147439,7 +147568,7 @@ ${text3}` : text3;
       } catch {
       }
       const truncation = truncateToByteTailByLine(rawViewport, cap);
-      const hash3 = (0, import_node_crypto18.createHash)("sha256").update(rawViewport, "utf8").digest("hex").slice(0, 16);
+      const hash3 = (0, import_node_crypto19.createHash)("sha256").update(rawViewport, "utf8").digest("hex").slice(0, 16);
       return {
         text: truncation.text,
         cursor: { col: cursor.col, row: cursor.row },
@@ -149567,7 +149696,7 @@ ${text3}` : text3;
     init_logger();
     init_track_identity();
     var import_node_child_process15 = require("child_process");
-    var import_node_crypto19 = require("crypto");
+    var import_node_crypto20 = require("crypto");
     init_resolve_executable();
     var CodexStdioTransport = class {
       constructor(options) {
@@ -149577,7 +149706,7 @@ ${text3}` : text3;
       pending = /* @__PURE__ */ new Map();
       buffer = "";
       closed = true;
-      generation = (0, import_node_crypto19.randomUUID)();
+      generation = (0, import_node_crypto20.randomUUID)();
       start() {
         if (this.child) throw new Error("Codex runtime already started");
         this.closed = false;
@@ -149638,7 +149767,7 @@ ${text3}` : text3;
         this.child.stdin.write(JSON.stringify(message) + "\n");
       }
       request(method, params) {
-        const id4 = `adhdev:${this.generation}:${(0, import_node_crypto19.randomUUID)()}`;
+        const id4 = `adhdev:${this.generation}:${(0, import_node_crypto20.randomUUID)()}`;
         return new Promise((resolve41, reject) => {
           const timer = setTimeout(() => {
             this.pending.delete(id4);
@@ -149674,7 +149803,7 @@ ${text3}` : text3;
         this.options.onExit(error, reason);
       }
     };
-    var import_node_crypto20 = require("crypto");
+    var import_node_crypto21 = require("crypto");
     init_dist();
     function record2(value) {
       return value && typeof value === "object" && !Array.isArray(value) ? value : null;
@@ -149805,7 +149934,7 @@ ${text3}` : text3;
       }
       prompt(binding, questions, blocking = binding.transport === "codex_rpc") {
         return {
-          promptId: (0, import_node_crypto20.randomUUID)(),
+          promptId: (0, import_node_crypto21.randomUUID)(),
           origin: "cli",
           providerType: "codex-cli",
           createdAt: Date.now(),
@@ -151421,7 +151550,7 @@ ${buttons.join("\n")}`;
       const fromSnapshot = extractFinalSummaryFromMessagesAfter(pending.resolvedFinalMessages, pending.turnStartedAt);
       return fromSnapshot || void 0;
     }
-    var import_node_crypto21 = require("crypto");
+    var import_node_crypto222 = require("crypto");
     init_logger();
     function normalizeProviderSessionId(provider, providerSessionId) {
       const normalizedId = typeof providerSessionId === "string" ? providerSessionId.trim() : "";
@@ -151619,7 +151748,7 @@ ${buttons.join("\n")}`;
                 modal: "approval",
                 // Legacy adapters have no modal identity; persist only a digest of
                 // their live fingerprint, never prompt text or button labels.
-                modalKey: adapterStatus?.providerApproval?.modalKey ?? `modal-digest:${(0, import_node_crypto21.createHash)("sha256").update(approvalFingerprint).digest("hex")}`,
+                modalKey: adapterStatus?.providerApproval?.modalKey ?? `modal-digest:${(0, import_node_crypto222.createHash)("sha256").update(approvalFingerprint).digest("hex")}`,
                 clockUnknown: adapterStatus?.providerApproval?.createdAt === null,
                 providerSetup: adapterStatus?.providerApproval?.type === "provider_setup" && adapterStatus.providerApproval.evidence === "live"
               });
@@ -167924,7 +168053,7 @@ ${notice.notice}${supersededHint}`;
         }
       };
     }
-    var import_node_crypto222 = require("crypto");
+    var import_node_crypto23 = require("crypto");
     init_cooperative_gate();
     function createNoticeSubmitInventory(ledger) {
       const db = ledger.store.db, active = /* @__PURE__ */ new Set();
@@ -167933,7 +168062,7 @@ ${notice.notice}${supersededHint}`;
   session_id TEXT NOT NULL,daemon_id TEXT NOT NULL,pid INTEGER NOT NULL,boot_nonce TEXT NOT NULL,
   state TEXT NOT NULL,outcome TEXT,revision INTEGER NOT NULL,updated_at INTEGER NOT NULL)`);
       function begin(entry, sessionId) {
-        const operationId = (0, import_node_crypto222.randomUUID)(), messageId = `notify:${entry.meshId}:${entry.writer}:${entry.seq}`;
+        const operationId = (0, import_node_crypto23.randomUUID)(), messageId = `notify:${entry.meshId}:${entry.writer}:${entry.seq}`;
         db.prepare("INSERT INTO turn_notice_submit_metadata VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)").run(operationId, messageId, entry.meshId, entry.writer, entry.seq, sessionId, ledger.selfDaemonId, process.pid, MAINTENANCE_BOOT_NONCE, "intent", null, 1, Date.now());
         const update = (state2, outcome) => {
           db.prepare("UPDATE turn_notice_submit_metadata SET state=?,outcome=COALESCE(?,outcome),revision=revision+1,updated_at=? WHERE operation_id=? AND state!='submitted'").run(state2, outcome ?? null, Date.now(), operationId);
@@ -167943,7 +168072,7 @@ ${notice.notice}${supersededHint}`;
       return {
         begin,
         async handling(run3) {
-          const id4 = (0, import_node_crypto222.randomUUID)();
+          const id4 = (0, import_node_crypto23.randomUUID)();
           active.add(id4);
           try {
             return await run3();

@@ -473,8 +473,8 @@ function parseTranscriptFile(
     let userParts = type === 'user' ? extractUserContentParts(message.content) : [];
     let hadSourceNote = false;
     userParts = userParts.filter(part => {
-      if (typeof part.content !== 'string') return true;
-      const cleaned = part.content.replace(/(?:^|\n)\[Image: source: .*\]$/, '');
+      if (part.role !== 'user' || part.kind !== 'standard' || typeof part.content !== 'string') return true;
+      const cleaned = part.content.replace(/(?:^|\n)(?:\[Image: source: .*\](?:\n|$))+$/, '');
       if (cleaned === part.content) return true;
       hadSourceNote = true;
       part.content = cleaned.trimEnd();

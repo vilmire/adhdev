@@ -11,9 +11,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Database from 'better-sqlite3';
+import { recoverAttemptReport } from '../../src/assistant/attempt-report-recovery.js';
 import { AssistantRegistry } from '../../src/assistant/assistant-registry.js';
 import { InMemoryAssistantRelayStore } from '../../src/assistant/assistant-relay-store.js';
-import { AssistantMetricsStore } from '../../src/assistant/assistant-relay-sqlite-store.js';
+import { AssistantMetricsStore, SqliteAssistantRelayStore } from '../../src/assistant/assistant-relay-sqlite-store.js';
 import { ensureAssistantRelaySchema } from '../../src/mesh/mesh-runtime-store-schema.js';
 import { buildAssistantRelayPorts, getAssistantRuntime, wireAssistantRuntime, type AssistantRuntime } from '../../src/assistant/assistant-runtime.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
@@ -281,4 +282,39 @@ it('real runtime relay delivers recreation uncertainty once and resumes ordered 
     } finally {
         runtime?.dispose(); runtime = null; setAssistantProjectPortsForTests(null); vi.restoreAllMocks(); vi.useRealTimers(); db.close();
     }
+});
+
+it('actual runtime exact-reader port validates terminal/generation before durable capture and enforces session authorization', async () => {
+    const db = new Database(':memory:'); ensureAssistantRelaySchema(db);
+    db.exec('CREATE TABLE turn_events(event_id TEXT,attempt_id TEXT,session_id TEXT,generation INTEGER,to_state TEXT,payload_json TEXT,recorded_at INTEGER)');
+    const attempt: any = { attemptId: 'plain:coord:1', sessionId: 'coord', scope: 'plain', generation: 1, acceptedAt: 100, terminal: { outcome: 'completed', at: 200 } };
+    db.prepare('INSERT INTO turn_events VALUES(?,?,?,?,?,?,?)').run('end', attempt.attemptId, 'coord', 1, 'completed', JSON.stringify({ evidence: { kind: 'transcript_final', messageAt: 190 } }), 200);
+    const store = new SqliteAssistantRelayStore(db);
+    store.recordCommitted({ attemptId: attempt.attemptId, meshId: 'mesh_a', coordinatorSessionId: 'coord', committedAt: Date.now(), kind: 'relay', outcome: 'completed' });
+    const spy = vi.spyOn(MeshRuntimeStore, 'getInstance').mockReturnValue({ db, turnStore: () => ({ getAttempt: (id: string) => id === attempt.attemptId ? attempt : null }) } as any);
+    routerExecute.mockResolvedValue({ success: true, messages: [{ role: 'assistant', timestamp: 190, content: 'exact report' }, { role: 'assistant', timestamp: 199, content: 'newer tail' }] });
+    let hostedHere = true; let remoteReply: any = { body: 'unproven old-host tail', source: 'durable_attempt_capture' };
+    setAssistantProjectPortsForTests(() => ({ listMeshes: () => [{ id: 'mesh_a' }], isHostedHere: () => hostedHere,
+        remoteHost: () => ({ reachable: true }), callHost: async () => ({ ok: true, result: { result: remoteReply } }),
+        coordinatorSessionAuthorized: (mesh: string, sid: string) => mesh === 'mesh_a' && sid === 'coord',
+        execute: routerExecute }) as any);
+    try {
+        const port = buildAssistantRelayPorts(components(), { registry, store, metrics: null, sawCaller: () => false });
+        expect(await port.rehydrateAttemptReport!('mesh_a', 'coord', attempt.attemptId)).toBe('exact report');
+        routerExecute.mockClear(); routerExecute.mockResolvedValue({ success: true, messages: [{ role: 'assistant', timestamp: 199, content: 'newest tail' }] });
+        expect(await port.rehydrateAttemptReport!('mesh_a', 'coord', attempt.attemptId)).toBe('exact report');
+        expect(await port.rehydrateAttemptReport!('mesh_a', 'foreign', attempt.attemptId)).toBeNull();
+        expect(await port.rehydrateAttemptReport!('mesh_a', 'coord', 'missing')).toBeNull();
+        attempt.generation = 2;
+        expect(await port.rehydrateAttemptReport!('mesh_a', 'coord', attempt.attemptId)).toBeNull();
+        expect(routerExecute).not.toHaveBeenCalled();
+        attempt.generation = 1; hostedHere = false;
+        expect(await port.rehydrateAttemptReport!('mesh_a', 'coord', attempt.attemptId)).toBeNull();
+        remoteReply = await recoverAttemptReport(db, attempt, 'mesh_a', 'coord', routerExecute);
+        expect(await port.rehydrateAttemptReport!('mesh_a', 'coord', attempt.attemptId)).toBe('exact report');
+        remoteReply = { ...remoteReply, provenance: { ...remoteReply.provenance, attemptId: 'foreign' } };
+        expect(await port.rehydrateAttemptReport!('mesh_a', 'coord', attempt.attemptId)).toBeNull();
+        remoteReply.provenance = { ...remoteReply.provenance, attemptId: attempt.attemptId, coordinatorSessionId: 'foreign' };
+        expect(await port.rehydrateAttemptReport!('mesh_a', 'coord', attempt.attemptId)).toBeNull();
+    } finally { setAssistantProjectPortsForTests(null); spy.mockRestore(); db.close(); }
 });

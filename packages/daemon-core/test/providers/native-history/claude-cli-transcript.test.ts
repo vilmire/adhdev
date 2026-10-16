@@ -301,7 +301,7 @@ describe('claude-cli-transcript — isMeta records (IMAGE-TRIPLE-BUBBLE ③)', (
     const file = writeTranscript(sid, [
       userLine('Please inspect the image', sid, 1_800_000_001_000),
       marked([{ type: 'text', text: IMAGE_SOURCE_META }], 1_800_000_002_000),
-      marked('Combined real prompt\n' + IMAGE_SOURCE_META, 1_800_000_003_000),
+      marked('Combined real prompt\n' + IMAGE_SOURCE_META + '\n[Image: source: /synthetic/two.png]', 1_800_000_003_000),
       marked([{ type: 'text', text: 'Same record text' }, { type: 'text', text: IMAGE_SOURCE_META }], 1_800_000_004_000),
       assistantLine([{ type: 'tool_use', name: 'Bash', input: { command: longCommand } }], sid, 1_800_000_005_000),
       userLine('Explain ' + IMAGE_SOURCE_META + ' as an example', sid, 1_800_000_006_000),
@@ -320,6 +320,31 @@ describe('claude-cli-transcript — isMeta records (IMAGE-TRIPLE-BUBBLE ③)', (
     const tool = result.messages.find(m => m.toolBlockRef)!;
     const { readJsonlRecords } = await import('../../../src/providers/native-history/transcript-common.js');
     expect(mod.readClaudeToolBlockAt(readJsonlRecords(file)[tool.toolBlockRef!.recordIndex], tool.toolBlockRef!.blockIndex)?.callArgs).toContain(longCommand);
+  });
+
+  it.each([undefined, false, true])('keeps tool-result source-note lookalikes while stripping user text only (isMeta=%s)', async isMeta => {
+    const sid = 'a1b2c3d4-0000-0000-0000-000000000034';
+    const toolText = '[Image: source: /synthetic/tool-output.png]';
+    const longTool = toolText + 'x'.repeat(2000);
+    const file = writeTranscript(sid, [
+      userLine([{ type: 'tool_result', tool_use_id: 'tool-1', content: toolText }], sid, 1_800_000_001_000),
+      { ...userLine([
+        { type: 'text', text: 'Keep caption\n[Image: source: /synthetic/one.png]\n[Image: source: /synthetic/two.png]' },
+        { type: 'tool_result', tool_use_id: 'tool-2', content: longTool },
+        { type: 'text', text: '[Image: source: /synthetic/three.png]' },
+      ], sid, 1_800_000_002_000), ...(isMeta === undefined ? {} : { isMeta }) },
+      userLine('Later genuine text', sid, 1_800_000_003_000),
+    ]);
+    const mod = await import('../../../src/providers/native-history/claude-cli-transcript.js');
+    const messages = mod.readSession(file)!.messages;
+    expect(messages.some(m => m.role === 'assistant' && m.kind === 'tool' && m.content === toolText)).toBe(true);
+    expect(messages.some(m => m.role === 'user' && m.content === 'Keep caption')).toBe(true);
+    expect(messages.filter(m => m.role === 'user').some(m => m.content.includes('[Image: source:'))).toBe(false);
+    const tool = messages.find(m => m.toolBlockRef && m.content.startsWith(toolText))!;
+    expect(tool.toolBlockRef!.blockIndex).toBe(1);
+    const { readJsonlRecords } = await import('../../../src/providers/native-history/transcript-common.js');
+    expect(mod.readClaudeToolBlockAt(readJsonlRecords(file)[tool.toolBlockRef!.recordIndex], tool.toolBlockRef!.blockIndex)?.result).toBe(longTool);
+    expect(messages.some(m => m.content === 'Later genuine text')).toBe(true);
   });
 
   it('★ keeps tool-block expand refs addressable across a skipped isMeta record', async () => {

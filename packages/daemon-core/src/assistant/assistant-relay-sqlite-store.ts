@@ -101,21 +101,25 @@ export class SqliteAssistantRelayStore implements AssistantRelayStore {
         return toUnrenderedCounts(new Map(rows.map((r) => [r.mesh_id, Number(r.n)])));
     }
 
-    captureAttemptBody(attemptId: string, meshId: string, sessionId: string, body: string, at: number): void {
-        if (!body || body.length > ATTEMPT_BODY_MAX_CHARS) return; // never truncate an exact report
+    captureAttemptBody(attemptId: string, meshId: string, sessionId: string, body: string, at: number, evidenceRef: string): void {
+        if (!evidenceRef || !body || body.length > ATTEMPT_BODY_MAX_CHARS) return; // never truncate an exact report
         this.db.transaction(() => {
-            this.db.prepare(`INSERT OR IGNORE INTO assistant_attempt_bodies
-                (attempt_id, mesh_id, coordinator_session_id, captured_at, body)
-                SELECT attempt_id, mesh_id, coordinator_session_id, ?, ? FROM assistant_relays
-                WHERE attempt_id = ? AND mesh_id = ? AND coordinator_session_id = ?`).run(at, body, attemptId, meshId, sessionId);
+            this.db.prepare(`INSERT INTO assistant_attempt_bodies
+                (attempt_id, mesh_id, coordinator_session_id, captured_at, body, evidence_ref)
+                SELECT attempt_id, mesh_id, coordinator_session_id, ?, ?, ? FROM assistant_relays
+                WHERE attempt_id = ? AND mesh_id = ? AND coordinator_session_id = ?
+                ON CONFLICT(attempt_id) DO UPDATE SET body=excluded.body, captured_at=excluded.captured_at, evidence_ref=excluded.evidence_ref
+                WHERE assistant_attempt_bodies.evidence_ref IS NULL
+                  AND assistant_attempt_bodies.mesh_id=excluded.mesh_id
+                  AND assistant_attempt_bodies.coordinator_session_id=excluded.coordinator_session_id`).run(at, body, evidenceRef, attemptId, meshId, sessionId);
             this.pruneBodies(at);
         })();
     }
 
-    readAttemptBody(attemptId: string, meshId: string, sessionId: string, now: number): string | null {
+    readAttemptBody(attemptId: string, meshId: string, sessionId: string, now: number, evidenceRef: string): string | null {
         const row = this.db.prepare(`SELECT body FROM assistant_attempt_bodies
-            WHERE attempt_id = ? AND mesh_id = ? AND coordinator_session_id = ? AND captured_at >= ?`)
-            .get(attemptId, meshId, sessionId, now - ATTEMPT_BODY_TTL_MS) as { body: string } | undefined;
+            WHERE attempt_id = ? AND mesh_id = ? AND coordinator_session_id = ? AND captured_at >= ? AND evidence_ref = ?`)
+            .get(attemptId, meshId, sessionId, now - ATTEMPT_BODY_TTL_MS, evidenceRef) as { body: string } | undefined;
         return row?.body ?? null;
     }
 

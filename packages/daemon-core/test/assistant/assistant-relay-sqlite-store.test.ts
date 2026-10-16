@@ -200,18 +200,18 @@ it('retains exact reports across delivery and database reopen; refuses foreign c
     let store = new SqliteAssistantRelayStore(db);
     const body = 'Public report '.repeat(1000) + 'original tail';
     store.recordCommitted({ attemptId: 'a', meshId: 'm', coordinatorSessionId: 's', committedAt: T0, kind: 'relay', outcome: 'completed' });
-    store.captureAttemptBody('a', 'foreign', 's', 'wrong', T0);
-    store.captureAttemptBody('missing', 'm', 's', 'wrong', T0);
-    expect(store.readAttemptBody('a', 'm', 's', T0)).toBeNull();
-    store.captureAttemptBody('a', 'm', 's', body, T0);
-    store.captureAttemptBody('a', 'm', 's', 'replacement', T0 + 1);
+    store.captureAttemptBody('a', 'foreign', 's', 'wrong', T0, 'validated-terminal-reference');
+    store.captureAttemptBody('missing', 'm', 's', 'wrong', T0, 'validated-terminal-reference');
+    expect(store.readAttemptBody('a', 'm', 's', T0, 'validated-terminal-reference')).toBeNull();
+    store.captureAttemptBody('a', 'm', 's', body, T0, 'validated-terminal-reference');
+    store.captureAttemptBody('a', 'm', 's', 'replacement', T0 + 1, 'validated-terminal-reference');
     store.markDelivered(['a'], T0 + 2); db.close();
     db = openDb(file); store = new SqliteAssistantRelayStore(db);
-    expect(store.readAttemptBody('a', 'm', 's', T0 + 3)).toBe(body);
-    expect(store.readAttemptBody('a', 'm', 'foreign', T0 + 3)).toBeNull();
-    expect(store.readAttemptBody('a', 'foreign', 's', T0 + 3)).toBeNull();
-    expect(store.readAttemptBody('missing', 'm', 's', T0 + 3)).toBeNull();
-    expect(store.readAttemptBody('a', 'm', 's', T0 + ATTEMPT_BODY_TTL_MS + 1)).toBeNull();
+    expect(store.readAttemptBody('a', 'm', 's', T0 + 3, 'validated-terminal-reference')).toBe(body);
+    expect(store.readAttemptBody('a', 'm', 'foreign', T0 + 3, 'validated-terminal-reference')).toBeNull();
+    expect(store.readAttemptBody('a', 'foreign', 's', T0 + 3, 'validated-terminal-reference')).toBeNull();
+    expect(store.readAttemptBody('missing', 'm', 's', T0 + 3, 'validated-terminal-reference')).toBeNull();
+    expect(store.readAttemptBody('a', 'm', 's', T0 + ATTEMPT_BODY_TTL_MS + 1, 'validated-terminal-reference')).toBeNull();
     store.prune(T0 + ATTEMPT_BODY_TTL_MS + 1);
     expect(db.prepare('SELECT count(*) AS n FROM assistant_attempt_bodies').get()).toEqual({ n: 0 });
     db.close();
@@ -220,21 +220,35 @@ it('enforces row, per-body and aggregate size caps without truncating reports', 
     for (const store of [new InMemoryAssistantRelayStore(), new SqliteAssistantRelayStore(openDb())]) {
         const capture = (id: string, body: string, at: number) => {
             store.recordCommitted({ attemptId: id, meshId: 'm', coordinatorSessionId: 's', committedAt: at, kind: 'relay', outcome: 'completed' });
-            store.captureAttemptBody(id, 'm', 's', body, at);
+            store.captureAttemptBody(id, 'm', 's', body, at, 'validated-terminal-reference');
         };
         capture('oversized', 'x'.repeat(ATTEMPT_BODY_MAX_CHARS + 1), T0);
-        expect(store.readAttemptBody('oversized', 'm', 's', T0)).toBeNull();
+        expect(store.readAttemptBody('oversized', 'm', 's', T0, 'validated-terminal-reference')).toBeNull();
         for (let i = 0; i <= ATTEMPT_BODY_MAX_ROWS; i++) capture('small' + i, 'small report', T0 + i);
-        expect(store.readAttemptBody('small0', 'm', 's', T0 + 200)).toBeNull();
-        expect(store.readAttemptBody('small' + ATTEMPT_BODY_MAX_ROWS, 'm', 's', T0 + 200)).toBe('small report');
+        expect(store.readAttemptBody('small0', 'm', 's', T0 + 200, 'validated-terminal-reference')).toBeNull();
+        expect(store.readAttemptBody('small' + ATTEMPT_BODY_MAX_ROWS, 'm', 's', T0 + 200, 'validated-terminal-reference')).toBe('small report');
         const n = ATTEMPT_BODY_TOTAL_BYTES / ATTEMPT_BODY_MAX_CHARS;
         for (let i = 0; i <= n; i++) capture('big' + i, 'x'.repeat(ATTEMPT_BODY_MAX_CHARS), T0 + 1000 + i);
-        expect(store.readAttemptBody('big0', 'm', 's', T0 + 2000)).toBeNull();
-        expect(store.readAttemptBody('big' + n, 'm', 's', T0 + 2000)?.length).toBe(ATTEMPT_BODY_MAX_CHARS);
+        expect(store.readAttemptBody('big0', 'm', 's', T0 + 2000, 'validated-terminal-reference')).toBeNull();
+        expect(store.readAttemptBody('big' + n, 'm', 's', T0 + 2000, 'validated-terminal-reference')?.length).toBe(ATTEMPT_BODY_MAX_CHARS);
         // SQLite length(TEXT) stops at NUL; use the full UTF-8 blob size.
         const multibyte = '\0' + '界'.repeat(ATTEMPT_BODY_MAX_CHARS - 1);
         for (let i = 0; i < 3; i++) capture('unicode' + i, multibyte, T0 + 3000 + i);
-        expect(store.readAttemptBody('unicode0', 'm', 's', T0 + 4000)).toBeNull();
-        expect(store.readAttemptBody('unicode2', 'm', 's', T0 + 4000)).toBe(multibyte);
+        expect(store.readAttemptBody('unicode0', 'm', 's', T0 + 4000, 'validated-terminal-reference')).toBeNull();
+        expect(store.readAttemptBody('unicode2', 'm', 's', T0 + 4000, 'validated-terminal-reference')).toBe(multibyte);
     }
+});
+
+it('migrates legacy unproven captures without trusting or deleting their bodies', () => {
+    const db = new Database(':memory:');
+    db.exec('CREATE TABLE assistant_attempt_bodies(attempt_id TEXT PRIMARY KEY, mesh_id TEXT, coordinator_session_id TEXT, captured_at INTEGER, body TEXT)');
+    db.prepare('INSERT INTO assistant_attempt_bodies VALUES(?,?,?,?,?)').run('a', 'm', 's', T0, 'unproven tail');
+    ensureAssistantRelaySchema(db); ensureAssistantRelaySchema(db);
+    const store = new SqliteAssistantRelayStore(db);
+    expect(store.readAttemptBody('a', 'm', 's', T0, 'proven terminal')).toBeNull();
+    expect(db.prepare('SELECT body,evidence_ref FROM assistant_attempt_bodies').get()).toEqual({ body: 'unproven tail', evidence_ref: null });
+    store.recordCommitted({ attemptId: 'a', meshId: 'm', coordinatorSessionId: 's', committedAt: T0, kind: 'relay', outcome: 'completed' });
+    store.captureAttemptBody('a', 'm', 's', 'independently proven body', T0, 'proven terminal');
+    expect(store.readAttemptBody('a', 'm', 's', T0, 'proven terminal')).toBe('independently proven body');
+    expect(store.readAttemptBody('a', 'm', 's', T0, 'foreign terminal')).toBeNull(); db.close();
 });

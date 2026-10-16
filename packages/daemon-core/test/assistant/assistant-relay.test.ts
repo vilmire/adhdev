@@ -56,7 +56,7 @@ interface Harness {
     log: AssistantInputLog;
     submits: Array<{ sessionId: string; text: string; messageId: string; policy: SendPolicy }>;
     emit(e: AssistantRelayBusEvent): void;
-    state: { ready: boolean; assistant: string | null; hasAssistant: boolean; work: MeshWorkCounts | null; tail: string | null; outcome: SubmitOutcome; slugs: Record<string, string | null> };
+    state: { ready: boolean; assistant: string | null; hasAssistant: boolean; work: MeshWorkCounts | null; report: string | null; outcome: SubmitOutcome; slugs: Record<string, string | null> };
     delivered: string[][];
 }
 
@@ -69,14 +69,15 @@ function harness(): Harness {
     let handler: (e: AssistantRelayBusEvent) => void = () => {};
     const state: Harness['state'] = {
         ready: true, assistant: ASSISTANT, hasAssistant: true,
-        work: { activeMissions: 1, pending: 0, assigned: 1 }, tail: 'Fixed the RSS link.', outcome: { kind: 'delivered' },
+        work: { activeMissions: 1, pending: 0, assigned: 1 }, report: 'Fixed the RSS link.', outcome: { kind: 'delivered' },
         slugs: { [MESH]: 'blog', mesh_a: 'adhdev' },
     };
     const relay = new AssistantRelay({
         subscribe: (h) => { handler = h; return () => { handler = () => {}; }; },
         coordinatorMeshOf: (sid) => (sid === COORD ? MESH : sid === 'coord_a' ? 'mesh_a' : null),
         projectSlug: (m) => (m in state.slugs ? state.slugs[m]! : null),
-        readCoordinatorTail: async () => state.tail,
+        readCoordinatorTail: async () => { throw new Error('session tail is not attempt evidence'); },
+        rehydrateAttemptReport: async () => state.report,
         meshStatusLine: () => '[Mesh] 1 assigned',
         meshWork: () => state.work,
         hasAssistant: () => state.hasAssistant,
@@ -164,33 +165,24 @@ describe('relay trigger and batching', () => {
         expect(h.submits).toHaveLength(2);
     });
 
-    /**
-     * The 2026-10-10 loss, fixed (owner-approved option (a), body retention in
-     * memory — docs/design, no DB schema change): a batch used to settle every
-     * attempt but send only the last turn's body, so earlier reports vanished
-     * silently (`delivered_at` stamped for all of them with no record of the
-     * drop). The relay now captures each attempt's body AT ITS OWN COMMIT TIME
-     * (`captureAttemptBody`), not lazily when the batch finally sends — so a
-     * later turn overwriting the coordinator's tail can no longer erase an
-     * earlier one's body before it ships. Reverting the fix (going back to a
-     * single send-time `readCoordinatorTail` call keyed to the last attempt)
-     * turns this red: REPORT ONE disappears and `text.match(/\[turn /g)` is null.
-     */
+    // Unit seam: each exact-reader call resolves that attempt's synthetic report.
+    // Delayed raw/native attribution is tested through the real evidence reader
+    // in attempt-report-recovery.test.ts, including stale and newer snapshots.
     it('retains every attempt\'s own body when N commits fold into one batch', async () => {
         const h = harness();
         h.relay.openThread(MESH);
         // Each committed turn replaces the coordinator's tail (a fresh assistant
         // bubble per turn) — the send-time re-read used to no longer see the
         // earlier ones by the time the batch actually went out.
-        h.state.tail = 'REPORT ONE: the auth status table';
+        h.state.report = 'REPORT ONE: the auth status table';
         h.emit(turn('committed', COORD, 1, h.clock.now()));
         h.clock.advance(5_000);
         h.emit(turn('started', COORD, 2, h.clock.now()));
-        h.state.tail = 'REPORT TWO: the pending decisions';
+        h.state.report = 'REPORT TWO: the pending decisions';
         h.emit(turn('committed', COORD, 2, h.clock.now()));
         h.clock.advance(5_000);
         h.emit(turn('started', COORD, 3, h.clock.now()));
-        h.state.tail = 'REPORT THREE: the deploy status';
+        h.state.report = 'REPORT THREE: the deploy status';
         h.emit(turn('committed', COORD, 3, h.clock.now()));
         h.clock.advance(RELAY_QUIET_MS);
         await settle(h);
@@ -222,12 +214,12 @@ describe('relay trigger and batching', () => {
     it('ships the body captured at commit time even if the coordinator bubble changed again before send', async () => {
         const h = harness();
         h.relay.openThread(MESH);
-        h.state.tail = 'REPORT ONE: captured at commit time';
+        h.state.report = 'REPORT ONE: captured at commit time';
         h.emit(turn('committed', COORD, 1, h.clock.now()));
         // The coordinator's tail keeps moving on while this batch's quiet timer
         // is still running — a send-time re-read would see this, not the report.
         h.clock.advance(1_000);
-        h.state.tail = 'unrelated later chatter, not part of any committed turn';
+        h.state.report = 'unrelated later chatter, not part of any committed turn';
         h.clock.advance(RELAY_QUIET_MS);
         await settle(h);
 
@@ -298,18 +290,18 @@ describe('relay trigger and batching', () => {
     it('counts a missing captured body as a gap and only announces increases', async () => {
         const h = harness();
         h.relay.openThread(MESH);
-        h.state.tail = null;
+        h.state.report = null;
         h.emit(turn('committed', COORD, 1, h.clock.now()));
         h.clock.advance(RELAY_QUIET_MS);
         await settle(h);
         expect(h.submits[0]!.text).toContain('blog: 1');
         expect(h.relay.missedReportsFor(MESH)).toBe(1);
-        h.state.tail = 'Complete report';
+        h.state.report = 'Complete report';
         h.emit(turn('committed', COORD, 2, h.clock.now()));
         h.clock.advance(RELAY_QUIET_MS);
         await settle(h);
         expect(h.submits[1]!.text).not.toContain('[ADHDev relay gap]');
-        h.state.tail = null;
+        h.state.report = null;
         h.emit(turn('committed', COORD, 3, h.clock.now()));
         h.clock.advance(RELAY_QUIET_MS);
         await settle(h);
@@ -320,7 +312,7 @@ describe('relay trigger and batching', () => {
     it('does not consume a gap notice when submission is refused', async () => {
         const h = harness();
         h.relay.openThread(MESH);
-        h.state.tail = null;
+        h.state.report = null;
         h.state.outcome = { kind: 'refused', reason: 'session_busy' } as SubmitOutcome;
         h.emit(turn('committed', COORD, 1, h.clock.now()));
         h.clock.advance(RELAY_QUIET_MS);
@@ -337,7 +329,7 @@ describe('relay trigger and batching', () => {
     it('announces a new loss even when retention removes the previous loss', async () => {
         const h = harness();
         h.relay.openThread(MESH);
-        h.state.tail = null;
+        h.state.report = null;
         h.emit(turn('committed', COORD, 1, h.clock.now()));
         h.clock.advance(RELAY_QUIET_MS);
         await settle(h);
@@ -352,13 +344,13 @@ describe('relay trigger and batching', () => {
         const h = harness();
         h.state.assistant = null;
         h.relay.openThread(MESH);
-        h.state.tail = null;
+        h.state.report = null;
         h.emit(turn('committed', COORD, 1, h.clock.now()));
         h.clock.advance(RELAY_QUIET_MS);
         await settle(h);
         const first = await h.relay.pullPending('mcp_client');
         expect(first.map((e) => e.text).join('\n')).toContain('blog: 1');
-        h.state.tail = 'Complete report';
+        h.state.report = 'Complete report';
         h.emit(turn('committed', COORD, 2, h.clock.now()));
         h.clock.advance(RELAY_QUIET_MS);
         await settle(h);
@@ -619,4 +611,30 @@ describe('format', () => {
         expect(shouldAddRestartNote({ previous: { state: 'working', at: now - 6 * 60 * MIN - 1 } }, now)).toBe(false);
         expect(shouldAddRestartNote({ previous: null }, now)).toBe(false);
     });
+});
+
+it.each(['folded', 'stopped'])('does not repopulate memory when an exact capture completes after %s', async lifecycle => {
+    const h = harness(); h.relay.openThread(MESH);
+    let resolve!: (value: string) => void;
+    (h.relay as any).ports.rehydrateAttemptReport = () => new Promise<string>(r => { resolve = r });
+    const id = `plain:${COORD}:e1`;
+    h.emit(turn('committed', COORD, 1, h.clock.now() - (lifecycle === 'folded' ? 25 * 60 * 60_000 : 0)));
+    const pending = (h.relay as any).attemptBodyCapture.get(id);
+    if (lifecycle === 'folded') {
+        h.clock.advance(RELAY_QUIET_MS); await settle(h);
+        expect(h.store.listUndelivered()).toEqual([]);
+        expect(h.submits[0].text).toContain('older than 24 h');
+    } else h.relay.stop();
+    resolve('exact body completed late'); await pending;
+    expect((h.relay as any).attemptBodies.has(id)).toBe(false);
+    expect((h.relay as any).attemptBodyCapture.has(id)).toBe(false);
+    h.relay.stop();
+});
+it('refuses session-only tails when no exact reader is available', async () => {
+    const h = harness(); h.relay.openThread(MESH);
+    (h.relay as any).ports.rehydrateAttemptReport = undefined;
+    h.state.report = 'newest session tail';
+    h.emit(turn('committed', COORD, 1, h.clock.now())); h.clock.advance(RELAY_QUIET_MS); await settle(h);
+    expect(h.submits[0].text).not.toContain('newest session tail');
+    expect(h.submits[0].text).toContain('no coordinator message found'); h.relay.stop();
 });

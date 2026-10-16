@@ -85,7 +85,7 @@ export interface AssistantRelayPorts {
     coordinatorMeshOf(sessionId: string): string | null;
     /** Project slug; null when the mesh no longer exists. */
     projectSlug(meshId: string): string | null;
-    /** The coordinator's latest assistant-role bubble, via the read_chat projection, at send time. */
+    /** Session-only diagnostic projection. Never evidence for an exact attempt capture. */
     readCoordinatorTail(sessionId: string): Promise<string | null>;
     /** Existing evidence only; exact attempt/session/mesh, never the newest tail. */
     rehydrateAttemptReport?(meshId: string, sessionId: string, attemptId: string): Promise<string | null>;
@@ -156,16 +156,8 @@ export class AssistantRelay {
     private readonly modalOpen = new Set<string>();
     /** Remote-hosted projects: the host's last poll answer (work counts, status line). */
     private readonly remote = new Map<string, RemoteProjectSnapshot>();
-    /**
-     * Coordinator tail captured AT COMMIT TIME, keyed by attemptId — local
-     * commits read it here (fire-and-forget, right as the turn lands) and
-     * remote commits get it handed in by the host's poll. Read at commit time,
-     * not at send time: a batch can wait up to RELAY_MAX_WAIT_MS before it
-     * fires, and by then a later turn may have already overwritten the
-     * coordinator's latest bubble — re-reading then silently drops every
-     * attempt but the last. The memory cache clears on delivery; bounded SQLite
-     * captures remain available to exact authorized continuation reads.
-     */
+    /** Exact attempt reports returned by the authorized evidence reader. The
+     * memory cache clears on delivery; the reader retains bounded durable captures. */
     private readonly attemptBodies = new Map<string, string | null>();
     /** In-flight local captures (attemptId → settle promise); `renderRelay` awaits these instead of racing them. */
     private readonly attemptBodyCapture = new Map<string, Promise<void>>();
@@ -212,6 +204,8 @@ export class AssistantRelay {
         this.unsubscribe = null;
         for (const b of this.batches.values()) this.clearBatchTimers(b);
         this.batches.clear();
+        this.attemptBodyCapture.clear();
+        this.attemptBodies.clear();
     }
 
     /** `project_send` accepted: open/refresh the project's thread. */
@@ -486,11 +480,10 @@ export class AssistantRelay {
     /**
      * A coordinator turn the HOST's ledger committed. Same batching, dedupe and
      * delivery as a local commit; the commit time is this daemon's receive time
-     * (the host clock may be skewed), and the body is the tail the host read.
+     * (the host clock may be skewed), while the host poll body has no exact identity and is ignored.
      */
     onRemoteCommitted(meshId: string, c: { attemptId: string; coordinatorSessionId: string; outcome: TurnOutcome; body: string | null }): void {
         if (!c.attemptId.startsWith('plain:')) return;
-        this.attemptBodies.set(c.attemptId, c.body);
         this.commit(meshId, { attemptId: c.attemptId, sessionId: c.coordinatorSessionId, at: this.clock.now(), outcome: c.outcome });
     }
 
@@ -523,11 +516,7 @@ export class AssistantRelay {
             attemptId: e.attemptId, meshId, coordinatorSessionId: e.sessionId, committedAt: e.at, kind: 'relay', outcome,
         });
         if (!fresh) return;
-        if (!this.attemptBodies.has(e.attemptId)) this.captureAttemptBody(e.attemptId, meshId, e.sessionId);
-        else {
-            const body = this.attemptBodies.get(e.attemptId);
-            if (body) this.ports.store.captureAttemptBody(e.attemptId, meshId, e.sessionId, body, this.clock.now());
-        }
+        this.captureAttemptBody(e.attemptId, meshId, e.sessionId);
         let b = this.batches.get(meshId);
         if (!b) {
             b = { coordinatorSessionId: e.sessionId, attemptIds: [], outcome, firstCommitAt: e.at, lastCommitAt: e.at, quietTimer: null, maxTimer: null };
@@ -542,24 +531,21 @@ export class AssistantRelay {
         b.quietTimer = this.clock.setTimeout(() => this.fire(meshId), RELAY_QUIET_MS);
     }
 
-    /**
-     * Read the coordinator's tail NOW, right as this attempt committed — fired
-     * once per attemptId, fire-and-forget. This is the only correct time to
-     * read it: `renderRelay` used to do this lazily at send time (up to 120 s
-     * later), by which point a chained turn had already overwritten the same
-     * bubble, so every attempt but the batch's last rendered nothing (the
-     * 2026-10-10 loss). Persist the full bounded body as soon as this read settles,
-     * before it can be lost with the memory cache. Missing/oversized captures
-     * leave exact evidence recovery available; they never substitute a later tail.
-     */
+    /** Resolve only through the authorized exact-attempt reader. That reader
+     * persists validated terminal/envelope/native evidence, never a session tail.
+     * Delivery/folding or stop invalidates this cache token without cancelling
+     * a safe durable capture still completing in the reader. */
     private captureAttemptBody(attemptId: string, meshId: string, coordinatorSessionId: string): void {
-        const p = this.ports.readCoordinatorTail(coordinatorSessionId)
+        const p = (this.ports.rehydrateAttemptReport?.(meshId, coordinatorSessionId, attemptId) ?? Promise.resolve(null))
             .then((body) => {
-                if (body) this.ports.store.captureAttemptBody(attemptId, meshId, coordinatorSessionId, body, this.clock.now());
-                this.attemptBodies.set(attemptId, body);
+                if (this.attemptBodyCapture.get(attemptId) === p) this.attemptBodies.set(attemptId, body);
             })
-            .catch(() => { this.attemptBodies.set(attemptId, null); })
-            .finally(() => { this.attemptBodyCapture.delete(attemptId); });
+            .catch(() => {
+                if (this.attemptBodyCapture.get(attemptId) === p) this.attemptBodies.set(attemptId, null);
+            })
+            .finally(() => {
+                if (this.attemptBodyCapture.get(attemptId) === p) this.attemptBodyCapture.delete(attemptId);
+            });
         this.attemptBodyCapture.set(attemptId, p);
     }
 
@@ -733,7 +719,7 @@ export class AssistantRelay {
                 ? i.attemptIds.filter((id) => this.hasCapturedBody(id)) : [];
         });
         this.ports.store.markDelivered(relayItems.flatMap((i) => i.attemptIds), at, rendered);
-        for (const id of relayItems.flatMap((i) => i.attemptIds)) { this.attemptBodies.delete(id); this.restoredAttempts.delete(id); }
+        for (const id of relayItems.flatMap((i) => i.attemptIds)) { this.attemptBodyCapture.delete(id); this.attemptBodies.delete(id); this.restoredAttempts.delete(id); }
         const meshes = [...new Set(relayItems.map((i) => i.meshId))];
         for (const m of meshes) {
             this.lastRelayAt.set(m, at);
