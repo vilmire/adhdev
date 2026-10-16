@@ -1,4 +1,5 @@
-/** Rehydrate from existing attempt evidence; never persist bodies or select the session's latest tail. */
+/** Recover an exact durable capture or existing attempt evidence; never select the latest tail. */
+import { SqliteAssistantRelayStore } from './assistant-relay-sqlite-store.js';
 import type { Database } from 'better-sqlite3';
 import type { TurnAttempt } from '../mesh/turn-ledger/types.js';
 import type { Execute } from './assistant-project-ports.js';
@@ -10,6 +11,8 @@ export async function recoverAttemptReport(db: Database, attempt: TurnAttempt | 
     if (!attempt || attempt.scope !== 'plain' || attempt.sessionId !== sessionId || !attempt.terminal) return { body: null, source: 'unavailable', reason: 'exact_committed_attempt_not_found' };
     // Plain coordinator attempts legitimately have no meshId; caller must authorize the registry session/mesh.
     if (attempt.meshId && attempt.meshId !== meshId) return { body: null, source: 'unavailable', reason: 'attempt_mesh_mismatch' };
+    const captured = new SqliteAssistantRelayStore(db).readAttemptBody(attempt.attemptId, meshId, sessionId, Date.now());
+    if (captured) return { body: captured, source: 'durable_attempt_capture' };
     const rows = db.prepare('SELECT event_id,session_id,generation,to_state,payload_json FROM turn_events WHERE attempt_id=? ORDER BY recorded_at DESC,event_id DESC LIMIT 128').all(attempt.attemptId) as Array<{ event_id: string; session_id: string; generation: number | null; to_state: string | null; payload_json: string }>;
     const own = rows.filter(row => row.session_id === sessionId && row.generation === attempt.generation);
     const terminal = own.find(row => row.to_state === attempt.terminal!.outcome);

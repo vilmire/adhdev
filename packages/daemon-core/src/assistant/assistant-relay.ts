@@ -163,7 +163,8 @@ export class AssistantRelay {
      * not at send time: a batch can wait up to RELAY_MAX_WAIT_MS before it
      * fires, and by then a later turn may have already overwritten the
      * coordinator's latest bubble — re-reading then silently drops every
-     * attempt but the last. Cleared per attemptId once delivered (`commitTaken`).
+     * attempt but the last. The memory cache clears on delivery; bounded SQLite
+     * captures remain available to exact authorized continuation reads.
      */
     private readonly attemptBodies = new Map<string, string | null>();
     /** In-flight local captures (attemptId → settle promise); `renderRelay` awaits these instead of racing them. */
@@ -522,7 +523,11 @@ export class AssistantRelay {
             attemptId: e.attemptId, meshId, coordinatorSessionId: e.sessionId, committedAt: e.at, kind: 'relay', outcome,
         });
         if (!fresh) return;
-        if (!this.attemptBodies.has(e.attemptId)) this.captureAttemptBody(e.attemptId, e.sessionId);
+        if (!this.attemptBodies.has(e.attemptId)) this.captureAttemptBody(e.attemptId, meshId, e.sessionId);
+        else {
+            const body = this.attemptBodies.get(e.attemptId);
+            if (body) this.ports.store.captureAttemptBody(e.attemptId, meshId, e.sessionId, body, this.clock.now());
+        }
         let b = this.batches.get(meshId);
         if (!b) {
             b = { coordinatorSessionId: e.sessionId, attemptIds: [], outcome, firstCommitAt: e.at, lastCommitAt: e.at, quietTimer: null, maxTimer: null };
@@ -543,13 +548,16 @@ export class AssistantRelay {
      * read it: `renderRelay` used to do this lazily at send time (up to 120 s
      * later), by which point a chained turn had already overwritten the same
      * bubble, so every attempt but the batch's last rendered nothing (the
-     * 2026-10-10 loss). A read that fails or returns after the item is already
-     * delivered leaves the row with no captured body; `renderRelay` falls back
-     * to the no-body placeholder for it rather than blocking delivery on it.
+     * 2026-10-10 loss). Persist the full bounded body as soon as this read settles,
+     * before it can be lost with the memory cache. Missing/oversized captures
+     * leave exact evidence recovery available; they never substitute a later tail.
      */
-    private captureAttemptBody(attemptId: string, coordinatorSessionId: string): void {
+    private captureAttemptBody(attemptId: string, meshId: string, coordinatorSessionId: string): void {
         const p = this.ports.readCoordinatorTail(coordinatorSessionId)
-            .then((body) => { this.attemptBodies.set(attemptId, body); })
+            .then((body) => {
+                if (body) this.ports.store.captureAttemptBody(attemptId, meshId, coordinatorSessionId, body, this.clock.now());
+                this.attemptBodies.set(attemptId, body);
+            })
             .catch(() => { this.attemptBodies.set(attemptId, null); })
             .finally(() => { this.attemptBodyCapture.delete(attemptId); });
         this.attemptBodyCapture.set(attemptId, p);
@@ -825,7 +833,7 @@ export class AssistantRelay {
         for (const id of item.attemptIds) {
             const ref = this.restoredAttempts.get(id);
             if (!ref || this.attemptBodies.has(id)) continue;
-            // Authorization is checked by the runtime reader for every attempt. Bodies remain memory-only.
+            // Authorization is checked by the runtime reader for every attempt. The authorized reader prefers the durable exact capture.
             let body: string | null = null;
             try { body = await this.ports.rehydrateAttemptReport?.(ref.meshId, ref.sessionId, id) ?? null; } catch { /* exact evidence unavailable */ }
             if (body) this.attemptBodies.set(id, body);

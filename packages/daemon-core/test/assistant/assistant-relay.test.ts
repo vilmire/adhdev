@@ -608,7 +608,7 @@ describe('format', () => {
 
     it('caps the body at 4 KB with a project_read pointer', () => {
         const out = compactRelayBody('a'.repeat(5000));
-        expect(out).toMatch(/use project_read for the rest\)$/);
+        expect(out).toMatch(/use project_read with the exact attempt reference, offset 4000 for the rest\)$/);
         expect(Array.from(out.split('\n')[0]!).length).toBe(4096);
         expect(compactRelayBody('   ')).toMatch(/no coordinator message/);
     });

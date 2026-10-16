@@ -5,8 +5,7 @@
  *
  * Same port as `InMemoryAssistantRelayStore`; the tables are created by
  * `ensureAssistantRelaySchema` (mesh/mesh-runtime-store-schema.ts, run by
- * `MeshRuntimeStore.migrate`). Ids, times, enums and counters only — never a
- * body.
+ * `MeshRuntimeStore.migrate`). Report bodies stay local with bounded retention.
  *
  * `AssistantMetricsStore` is the local `assistant_metric_daily` counter table
  * (§1 M1–M7). Nothing here is sent anywhere.
@@ -14,6 +13,7 @@
 
 import type { Database as DatabaseHandle } from 'better-sqlite3';
 import {
+    ATTEMPT_BODY_TTL_MS, ATTEMPT_BODY_MAX_CHARS, ATTEMPT_BODY_MAX_ROWS, ATTEMPT_BODY_TOTAL_BYTES,
     RELAY_DELIVERED_RETENTION_MS,
     THREAD_CLOSED_RETENTION_MS,
     toUnrenderedCounts,
@@ -101,7 +101,38 @@ export class SqliteAssistantRelayStore implements AssistantRelayStore {
         return toUnrenderedCounts(new Map(rows.map((r) => [r.mesh_id, Number(r.n)])));
     }
 
+    captureAttemptBody(attemptId: string, meshId: string, sessionId: string, body: string, at: number): void {
+        if (!body || body.length > ATTEMPT_BODY_MAX_CHARS) return; // never truncate an exact report
+        this.db.transaction(() => {
+            this.db.prepare(`INSERT OR IGNORE INTO assistant_attempt_bodies
+                (attempt_id, mesh_id, coordinator_session_id, captured_at, body)
+                SELECT attempt_id, mesh_id, coordinator_session_id, ?, ? FROM assistant_relays
+                WHERE attempt_id = ? AND mesh_id = ? AND coordinator_session_id = ?`).run(at, body, attemptId, meshId, sessionId);
+            this.pruneBodies(at);
+        })();
+    }
+
+    readAttemptBody(attemptId: string, meshId: string, sessionId: string, now: number): string | null {
+        const row = this.db.prepare(`SELECT body FROM assistant_attempt_bodies
+            WHERE attempt_id = ? AND mesh_id = ? AND coordinator_session_id = ? AND captured_at >= ?`)
+            .get(attemptId, meshId, sessionId, now - ATTEMPT_BODY_TTL_MS) as { body: string } | undefined;
+        return row?.body ?? null;
+    }
+
+    private pruneBodies(now: number): void {
+        this.db.prepare('DELETE FROM assistant_attempt_bodies WHERE captured_at < ?').run(now - ATTEMPT_BODY_TTL_MS);
+        const rows = this.db.prepare('SELECT attempt_id, length(CAST(body AS BLOB)) AS bytes FROM assistant_attempt_bodies ORDER BY captured_at DESC, attempt_id DESC')
+            .all() as Array<{ attempt_id: string; bytes: number }>;
+        let total = 0, count = 0;
+        const drop = this.db.prepare('DELETE FROM assistant_attempt_bodies WHERE attempt_id = ?');
+        for (const row of rows) {
+            if (++count > ATTEMPT_BODY_MAX_ROWS || total + row.bytes > ATTEMPT_BODY_TOTAL_BYTES) drop.run(row.attempt_id);
+            else total += row.bytes;
+        }
+    }
+
     prune(now: number): void {
+        this.pruneBodies(now);
         this.db.prepare('DELETE FROM assistant_relays WHERE delivered_at IS NOT NULL AND ? - delivered_at > ?').run(now, RELAY_DELIVERED_RETENTION_MS);
         this.db.prepare('DELETE FROM assistant_threads WHERE closed_at IS NOT NULL AND ? - closed_at > ?').run(now, THREAD_CLOSED_RETENTION_MS);
     }

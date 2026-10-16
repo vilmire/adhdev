@@ -194,12 +194,20 @@ export function migrate(self: MeshRuntimeStore): void {
 
 /**
  * Assistant layer tables (docs/design/2026-10-07-assistant-layer.md §4.6, D8):
- * ids, times, enums and counters only — never a relay body (re-read at send
- * time) or any other text. Local-only: no seqscribe topic, never projected to
+ * Relay metadata and bounded local report captures. Local-only: no seqscribe topic, never projected to
  * the cloud status path. Read/written by assistant/assistant-relay-sqlite-store.ts.
  */
 export function ensureAssistantRelaySchema(db: MeshRuntimeStore['db']): void {
     db.exec(`
+        -- Local report captures survive delivery/restart; never projected to cloud status.
+        CREATE TABLE IF NOT EXISTS assistant_attempt_bodies (
+            attempt_id TEXT PRIMARY KEY,
+            mesh_id TEXT NOT NULL,
+            coordinator_session_id TEXT NOT NULL,
+            captured_at INTEGER NOT NULL,
+            body TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_assistant_attempt_bodies_age ON assistant_attempt_bodies(captured_at);
         CREATE TABLE IF NOT EXISTS assistant_threads (
             mesh_id TEXT PRIMARY KEY,
             opened_at INTEGER NOT NULL,
