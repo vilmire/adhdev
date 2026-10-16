@@ -75,10 +75,10 @@ export default function DashboardMobileChatRoom({
     return (
         <>
             <div className={`relative z-20 shrink-0 flex flex-col gap-2 ${headerPaddingClass} border-b border-border-subtle/70 bg-bg-primary`}>
-                <div className="flex items-center justify-between gap-3">
+                <div className="mobile-room-header-row flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2.5 min-w-0 flex-1">
                         <button
-                            className="w-[34px] h-[34px] rounded-full border border-border-default bg-surface-primary/70 text-text-secondary shrink-0 inline-flex items-center justify-center hover:bg-surface-primary transition-colors"
+                            className="w-[34px] h-[34px] box-content p-[5px] -m-[5px] rounded-full border border-border-default bg-surface-primary/70 text-text-secondary shrink-0 inline-flex items-center justify-center hover:bg-surface-primary transition-colors"
                             onClick={onBack}
                             type="button"
                             aria-label={t('common.back')}
@@ -101,7 +101,17 @@ export default function DashboardMobileChatRoom({
                             </div>
                         </div>
                     </div>
-                    <div className="flex items-center gap-2 shrink-0">
+                    <div className={`mobile-room-header-actions flex items-center justify-end gap-1 shrink-0 ${isAssistant ? 'assistant-session-controls flex-wrap w-[184px]' : ''}`}>
+                        {isAssistant && (
+                            <div className="contents" data-testid="mobile-room-assistant-staged">
+                                <AssistantExecutionControls daemonId={getConversationDaemonRouteId(selectedConversation)} sessionId={selectedConversation.sessionId} status={selectedConversation.status} sendCommand={sendCommand} />
+                                <AssistantStagedWrites
+                                    daemonId={getConversationDaemonRouteId(selectedConversation)}
+                                    status={selectedConversation.status}
+                                    sendCommand={sendCommand}
+                                />
+                            </div>
+                        )}
                         {isCli && cliViewMode && (
                             <CliViewModeToggle mode={cliViewMode} onChange={onSetCliViewMode} compact />
                         )}
@@ -131,18 +141,6 @@ export default function DashboardMobileChatRoom({
                         />
                     </div>
                 </div>
-                {/* Session policy and staged-write approvals belong to the room,
-                    including terminal view. Transcript folding stays in ChatPane. */}
-                {isAssistant && (
-                    <div className="assistant-session-controls flex flex-wrap items-center justify-end gap-2" data-testid="mobile-room-assistant-staged">
-                        <AssistantExecutionControls daemonId={getConversationDaemonRouteId(selectedConversation)} sessionId={selectedConversation.sessionId} status={selectedConversation.status} sendCommand={sendCommand} />
-                        <AssistantStagedWrites
-                            daemonId={getConversationDaemonRouteId(selectedConversation)}
-                            status={selectedConversation.status}
-                            sendCommand={sendCommand}
-                        />
-                    </div>
-                )}
             </div>
             <div className="flex-1 min-h-0 flex flex-col bg-bg-primary relative">
                 <PaneGroupContent
