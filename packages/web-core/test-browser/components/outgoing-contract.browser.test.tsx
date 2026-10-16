@@ -94,6 +94,7 @@ it('settles only exact acknowledged image-inclusive writes through producer/adap
                 expect(lastPayload.messageId).not.toBe(id); id = lastPayload.messageId
                 state = await remote({ action: 'peek', sessionId, ids: [id] })
             }
+            expect(latest.sendFeedbackMessage).toBeNull()
             if (mode !== 'immediate') { expect(state.writes).toBe(0);expect(state.receipts[0].state).toBe('accepted') }
             else expect(state.receipts[0].state).not.toBe('submitted')
             expect(state.messages[0].sourceMessageId).toBe(id)
@@ -118,13 +119,19 @@ it('settles only exact acknowledged image-inclusive writes through producer/adap
                 expect(button.width).toBeGreaterThan(0); expect(button.height).toBeGreaterThan(0)
                 expect(button.right).toBeLessThanOrEqual(width); expect(button.bottom).toBeLessThanOrEqual(input.y)
             }
-            expect(buttons[0].right).toBeLessThanOrEqual(buttons[1].x)
+            expect(buttons).toHaveLength(1) // UI-only dismiss.
             const header = host.querySelector('header')?.getBoundingClientRect()
             if (header) expect(header.bottom).toBeLessThanOrEqual(bounds.y)
             console.log(JSON.stringify({ width, mode, queueBounds: bounds.toJSON(), inputBounds: input.toJSON(),
                 controlBounds: buttons.map(b => b.toJSON()), headerBounds: header?.toJSON() }))
-            expect(card.textContent).toContain('Delivery unconfirmed')
-            expect([...card.querySelectorAll('button')].every(b => b.disabled)).toBe(true)
+            expect(card.querySelector('[role="img"]')?.getAttribute('aria-label')).toContain('Delivery unconfirmed')
+            const pendingBeforeDismiss = latest.pendingLocalMessages[0]
+            const callsBeforeDismiss = send.mock.calls.length
+            await act(async () => (card.querySelector('button') as HTMLButtonElement).click())
+            expect(host.querySelector('[data-testid="pending-queue-strip"]')).toBeNull()
+            expect(latest.pendingLocalMessages[0]).toBe(pendingBeforeDismiss)
+            expect(readPendingQueuedMessages(tabKey)[0].outgoingReceipt).toEqual(pendingBeforeDismiss.outgoingReceipt)
+            expect(send.mock.calls.length).toBe(callsBeforeDismiss)
             await act(async () => { await page.screenshot({ path: `/tmp/assistant-queue-contract-uncertain-${width}-${mode}.png` }) })
             // Foreign attempt/generation cannot settle or change the active binding.
             await publish([{ ...state.messages[0], rev: state.messages[0].rev + 1,

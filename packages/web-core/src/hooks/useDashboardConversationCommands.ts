@@ -608,7 +608,7 @@ export function useDashboardConversationCommands({
                 && receipt.sessionId === activeConv.sessionId && receipt.inputDigest === inputDigest) {
                 lastSendRef.current = clearRecentSendOnFailure(lastSendRef.current, attempt)
                 setLastSendQueued(false)
-                setSendFeedbackMessage('Not sent — rejected before writing.')
+                setSendFeedbackMessage(getInlineSendFailureMessage(new Error(res?.error || res?.reason || 'Rejected before writing.')))
                 return false
             }
 
@@ -635,7 +635,7 @@ export function useDashboardConversationCommands({
                 updatePendingMessages(prev => prev.map(entry => (
                     entry.id === pendingId ? { ...entry, queued: true } : entry
                 )))
-                setSendFeedbackMessage(QUEUED_SEND_MESSAGE)
+                setSendFeedbackMessage(null)
                 return true
             }
 
@@ -799,7 +799,7 @@ export function useDashboardConversationCommands({
                 updatePendingMessages(prev => prev.map(entry => (
                     entry.id === targetId ? { ...entry, queued: true } : entry
                 )))
-                setSendFeedbackMessage(QUEUED_SEND_MESSAGE)
+                setSendFeedbackMessage(null)
                 return true
             }
 

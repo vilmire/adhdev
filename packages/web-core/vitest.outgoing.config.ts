@@ -29,7 +29,7 @@ export default defineConfig({
                     if (request.action === 'ack') { f.acknowledge(); await new Promise(r => setTimeout(r, 0)) }
                     if (request.action === 'restart') f.restartService()
                     if (request.action === 'close') { f.close(); fixtures.delete(request.sessionId); return {} }
-                    return { receipts: f.receipts(request.ids || []), messages: f.wire(), writes: f.writes.length }
+                    return { receipts: f.receipts(request.ids || []), messages: f.wire(true), writes: f.writes.length }
                 },
             },
         },
