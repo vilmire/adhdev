@@ -48,7 +48,7 @@ vi.mock('../../src/config/mesh-config.js', () => ({
 const detectCliMocks = vi.hoisted(() => ({ detectCLI: vi.fn(async () => ({ path: '/usr/local/bin/claude' })) }))
 vi.mock('../../src/detection/cli-detector.js', () => ({ detectCLI: detectCliMocks.detectCLI }))
 
-import { triggerMeshQueue } from '../../src/mesh/mesh-queue-assignment.js'
+import { __resolveUsableProviderForTests, triggerMeshQueue } from '../../src/mesh/mesh-queue-assignment.js'
 import { __replaceMeshQueueForTests, __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask, getQueue, recordTaskAutoLaunch } from '../../src/mesh/mesh-work-queue.js'
 import { handleClaimPathDifficultyFloorRefusal, resetDifficultyFloorReportsForTests } from '../../src/mesh/mesh-difficulty-floor.js'
 import { AUTO_LAUNCH_AWAIT_CLAIM_MS } from '../../src/mesh/mesh-autolaunch-integrity.js'
@@ -251,11 +251,22 @@ describe('fallback launch axes', () => {
           { provider: 'codex-cli', model: 'gpt-6.1-sol', thinkingLevel: 'xhigh', difficulty: ['easy'], maxParallel: 1 },
           { provider: 'claude-cli', model: 'sonnet', thinkingLevel: 'high', difficulty: ['easy'], maxParallel: 1 },
         ]
+        // Measured quota ranking must choose the saturated provider before fallback.
+        // With unknown quota the available sibling wins directly, hiding this defect.
+        const quota = (provider: string, usedPercent: number) => ({ provider, status: 'ok', updatedAt: Date.now(), error: null,
+          weekly: { usedPercent, windowMinutes: 10080, resetsAt: Date.now() + 86400000 },
+          session: { usedPercent: 10, windowMinutes: 300, resetsAt: Date.now() + 3600000 } })
+        mesh.nodes[0].nodeFacts = { schemaVersion: 1, reportedAt: Date.now(), quota: {
+          'codex-cli': quota('codex-cli', 10), 'claude-cli': quota('claude-cli', 80),
+        } }
         const now = new Date().toISOString()
         __replaceMeshQueueForTests(meshId, [{ id: 'busy-winner', meshId, message: 'busy', status: 'assigned', readonly: true,
           assignedNodeId: NODE_ID, assignedProviderType: 'codex-cli', assignedModel: 'gpt-6.1-sol', assignedSessionId: 'busy', createdAt: now, updatedAt: now }] as any)
         const components = createComponents()
-        enqueueTask(meshId, 'fallback axes', { taskMode: 'live_debug_readonly', difficulty: 'easy', ...(explicitThinking ? { thinkingLevel: explicitThinking } : {}) })
+        const winner = await __resolveUsableProviderForTests(components, NODE_ID, mesh.nodes[0], meshId, undefined, { difficulty: 'freeform' }, mesh.policy.quotaRouting)
+        expect(winner.providerType).toBe('codex-cli')
+        expect(winner.thinkingLevel).toBe('xhigh')
+        enqueueTask(meshId, 'fallback axes', { taskMode: 'live_debug_readonly', difficulty: 'freeform', ...(explicitThinking ? { thinkingLevel: explicitThinking } : {}) })
         await triggerMeshQueue(components, meshId)
         const launch = components.cliManager.handleCliCommand.mock.calls.find((c: any[]) => c[0] === 'launch_cli')
         expect(launch).toBeDefined()
