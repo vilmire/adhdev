@@ -158,7 +158,7 @@ export const MESH_REFINE_CONFIG_LOCATIONS = [
 // hand-written validator that does NOT run this schema through a JSON-schema engine.
 // It enforces: version === 1, validation.bootstrap in ('inherit'|'skip'), each command's
 // `command` (non-empty after tokenizing), args (string[]), cwd (string), timeoutMs
-// (1000-600000), outputLimitBytes (1024-1048576), env (string map), scopes (enum set).
+// (1000-1800000 for validation, 1000-600000 for bootstrap), outputLimitBytes (1024-1048576), env (string map), scopes (enum set).
 // It does NOT enforce: array length bounds (commands/bootstrapCommands accept any count,
 // including zero), additionalProperties:false (unknown keys pass through silently), or
 // the `category` enum (an unrecognized value is coerced to 'custom' rather than rejected).
@@ -199,7 +199,7 @@ export const MESH_REFINE_CONFIG_SCHEMA = {
                             args: { type: 'array', items: { type: 'string' } },
                             category: { enum: [...MESH_REFINE_VALIDATION_CATEGORIES, 'custom'] },
                             cwd: { type: 'string' },
-                            timeoutMs: { type: 'number', minimum: 1000, maximum: 600000 },
+                            timeoutMs: { type: 'number', minimum: 1000, maximum: 1800000 },
                             outputLimitBytes: { type: 'number', minimum: 1024, maximum: 1048576 },
                             env: { type: 'object', additionalProperties: { type: 'string' } },
                             scopes: {
@@ -279,7 +279,7 @@ function validateCategory(value: unknown): MeshRefineValidationCategory | 'custo
         : 'custom';
 }
 
-export function normalizeMeshCommandConfig(entry: unknown, source: string): { command?: MeshRefineValidationCommandPlan; rejected?: Record<string, unknown> } {
+export function normalizeMeshCommandConfig(entry: unknown, source: string, context: 'validation' | 'bootstrap' = 'bootstrap'): { command?: MeshRefineValidationCommandPlan; rejected?: Record<string, unknown> } {
     if (!isMeshConfigRecord(entry) || typeof entry.command !== 'string') {
         return { rejected: { source, reason: 'validation command must be an object with a command string' } };
     }
@@ -307,8 +307,10 @@ export function normalizeMeshCommandConfig(entry: unknown, source: string): { co
     if (entry.cwd !== undefined && typeof entry.cwd !== 'string') {
         return { rejected: { source, command: commandText, reason: 'cwd must be a string when provided' } };
     }
-    if (entry.timeoutMs !== undefined && (typeof entry.timeoutMs !== 'number' || !Number.isFinite(entry.timeoutMs) || entry.timeoutMs < 1000 || entry.timeoutMs > 600000)) {
-        return { rejected: { source, command: commandText, reason: 'timeoutMs must be between 1000 and 600000' } };
+    // Shared with worktree bootstrap: only validation commands get the larger suite budget.
+    const maxTimeoutMs = context === 'validation' ? 1800000 : 600000;
+    if (entry.timeoutMs !== undefined && (typeof entry.timeoutMs !== 'number' || !Number.isFinite(entry.timeoutMs) || entry.timeoutMs < 1000 || entry.timeoutMs > maxTimeoutMs)) {
+        return { rejected: { source, command: commandText, reason: `timeoutMs must be between 1000 and ${maxTimeoutMs}` } };
     }
     if (entry.outputLimitBytes !== undefined && (typeof entry.outputLimitBytes !== 'number' || !Number.isFinite(entry.outputLimitBytes) || entry.outputLimitBytes < 1024 || entry.outputLimitBytes > 1048576)) {
         return { rejected: { source, command: commandText, reason: 'outputLimitBytes must be between 1024 and 1048576' } };
@@ -384,7 +386,7 @@ export function validateMeshRefineConfig(config: unknown, source = 'inline'): { 
     }
     if (Array.isArray(rawCommands)) {
         rawCommands.forEach((entry, index) => {
-            const normalized = normalizeMeshCommandConfig(entry, `${source}:validation.commands[${index}]`);
+            const normalized = normalizeMeshCommandConfig(entry, `${source}:validation.commands[${index}]`, 'validation');
             if (normalized.command) commands.push(normalized.command);
             if (normalized.rejected) rejectedCommands.push(normalized.rejected);
         });
