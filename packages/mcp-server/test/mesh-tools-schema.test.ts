@@ -41,7 +41,8 @@ test('mesh_enqueue_task schema exposes optional capability tag requirements', ()
   // stays accepted by the validator (mesh-enqueue-schema-diet.test.ts).
   assert.equal(MESH_ENQUEUE_TASK_TOOL.inputSchema.properties.required_tags.type, 'array');
   assert.equal('requiredTags' in MESH_ENQUEUE_TASK_TOOL.inputSchema.properties, false);
-  assert.match(MESH_ENQUEUE_TASK_TOOL.inputSchema.properties.required_tags.description, /provider=codex-cli/);
+  assert.match(MESH_ENQUEUE_TASK_TOOL.inputSchema.properties.required_tags.description, /os=darwin/);
+  assert.match(MESH_ENQUEUE_TASK_TOOL.inputSchema.properties.required_tags.description, /Omit provider= unless intentionally restricting routing/);
 });
 
 test('mesh_launch_session schema maps providers, keeps type optional, and has no claude default', () => {

@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 /**
- * (QUEUED-SEND-STICKY) The parked-send notice must be released when the agent
- * stops generating.
+ * (QUEUED-SEND-STICKY) Legacy queued feedback must still release on idle.
+ * Approved rc15 behavior keeps new queued sends on their pending bubble,
+ * without duplicating success prose in the input placeholder or status line.
  *
  * Before this fix `sendFeedbackMessage` was cleared by exactly two things — the
  * next send attempt and a tab switch — so an owner who sent into a busy session
@@ -98,12 +99,14 @@ function renderQueuedSendScenario() {
 }
 
 describe('useDashboardConversationCommands queued-send release (render site)', () => {
-    it('clears the queued notice when the conversation transitions to idle', async () => {
+    it('keeps queued success on the bubble and clears the busy flag on idle', async () => {
         const scenario = renderQueuedSendScenario()
         scenario.render('generating')
 
         await act(async () => { await scenario.current.handleSendChat('deploy the branch') })
-        expect(scenario.current.sendFeedbackMessage).toBe(QUEUED_SEND_MESSAGE)
+        expect(scenario.current.sendFeedbackMessage).toBeNull()
+        expect(scenario.current.lastSendQueued).toBe(true)
+        expect(scenario.current.pendingLocalMessage).toMatchObject({ content: 'deploy the branch', queued: true })
 
         scenario.render('idle')
         expect(scenario.current.sendFeedbackMessage).toBeNull()
@@ -111,18 +114,20 @@ describe('useDashboardConversationCommands queued-send release (render site)', (
         scenario.unmount()
     })
 
-    it('keeps the notice across a finalizing turn — finalizing still counts as working', async () => {
+    it('keeps the queued bubble across a finalizing turn without duplicate prose', async () => {
         const scenario = renderQueuedSendScenario()
         scenario.render('generating')
 
         await act(async () => { await scenario.current.handleSendChat('deploy the branch') })
         scenario.render('finalizing')
 
-        expect(scenario.current.sendFeedbackMessage).toBe(QUEUED_SEND_MESSAGE)
+        expect(scenario.current.sendFeedbackMessage).toBeNull()
+        expect(scenario.current.lastSendQueued).toBe(true)
+        expect(scenario.current.pendingLocalMessage).toMatchObject({ content: 'deploy the branch', queued: true })
         scenario.unmount()
     })
 
-    it('clears BOTH visible surfaces — placeholder and status line — on idle', async () => {
+    it('shows ordinary busy placeholder and no queued status prose, then clears on idle', async () => {
         const scenario = renderQueuedSendScenario()
         scenario.render('generating')
         await act(async () => { await scenario.current.handleSendChat('deploy the branch') })
@@ -137,8 +142,8 @@ describe('useDashboardConversationCommands queued-send release (render site)', (
         const statusLine = (feedback: string | null) => feedback || null
 
         const busyFeedback = scenario.current.sendFeedbackMessage
-        expect(placeholder('generating', busyFeedback)).toBe(QUEUED_SEND_MESSAGE)
-        expect(statusLine(busyFeedback)).toBe(QUEUED_SEND_MESSAGE)
+        expect(placeholder('generating', busyFeedback)).toBe('chatPane.busyGenerating')
+        expect(statusLine(busyFeedback)).toBeNull()
 
         scenario.render('idle')
         const idleFeedback = scenario.current.sendFeedbackMessage

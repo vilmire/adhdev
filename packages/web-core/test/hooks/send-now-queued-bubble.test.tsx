@@ -35,7 +35,6 @@ import { act } from 'react-dom/test-utils'
 import { createRoot } from 'react-dom/client'
 import {
     useDashboardConversationCommands,
-    QUEUED_SEND_MESSAGE,
 } from '../../src/hooks/useDashboardConversationCommands'
 
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
@@ -152,7 +151,7 @@ describe('SEND-NOW — handleSendNowQueued', () => {
 
         expect(accepted).toBe(true)
         expect(h.get().lastSendQueued).toBe(true)
-        expect(h.get().sendFeedbackMessage).toBe(QUEUED_SEND_MESSAGE)
+        expect(h.get().sendFeedbackMessage).toBeNull()
         expect(h.get().pendingLocalMessage).toMatchObject({ queued: true })
         h.unmount()
     })

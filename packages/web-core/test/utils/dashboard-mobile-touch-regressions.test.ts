@@ -12,7 +12,7 @@ describe('dashboard mobile/touch regressions', () => {
     expect(source).not.toContain('window.scrollTo(0, 0)')
   })
 
-  it('keeps mobile chat header metadata on one non-truncated scroll row', () => {
+  it('keeps mobile chat header metadata scrollable with bounded chip text', () => {
     const css = readSource('index.css')
     const roomSource = readSource('components/dashboard/DashboardMobileChatRoom.tsx')
 
@@ -23,8 +23,10 @@ describe('dashboard mobile/touch regressions', () => {
     expect(css).toContain('-webkit-overflow-scrolling: touch;')
     expect(css).toContain('.conversation-meta-chips.is-mobile-header::-webkit-scrollbar')
     expect(css).toContain('.conversation-meta-chips.is-mobile-header .conversation-meta-chip span {')
-    expect(css).toContain('overflow: visible;')
-    expect(css).toContain('text-overflow: clip;')
+    const chipText = css.match(/\.conversation-meta-chips\.is-mobile-header \.conversation-meta-chip span \{([^}]+)\}/)?.[1]
+    expect(chipText).toContain('min-width: 0;')
+    expect(chipText).toContain('overflow: hidden;')
+    expect(chipText).toContain('text-overflow: ellipsis;')
   })
 
   it('keeps mobile inbox reconnect empty-state copy compact and single-owned', () => {
