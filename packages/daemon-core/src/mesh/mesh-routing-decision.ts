@@ -614,7 +614,7 @@ export function buildAutoLaunchRoutingDecision(args: {
         ...(boundedSkipped.length ? { skippedCandidates: boundedSkipped } : {}),
         ...(args.skippedCandidates.length > boundedSkipped.length ? { skippedCandidatesOmitted: args.skippedCandidates.length - boundedSkipped.length } : {}),
         requiredTagsResult: args.requiredTagsResult,
-        resolvedProviderType: args.resolved.providerType,
+        resolvedProviderType: executedProvider,
         ...(args.effectiveModel ? { resolvedModel: args.effectiveModel } : {}),
         ...(args.effectiveThinkingLevel ? { resolvedThinkingLevel: args.effectiveThinkingLevel } : {}),
         ...(args.task.difficulty ? { resolvedDifficulty: String(args.task.difficulty) } : {}),

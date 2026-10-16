@@ -93,6 +93,7 @@ test('explicit type is honored when the node has a slot for it', async () => {
   assert.ok(launch, 'launch_cli was issued');
   // The launched provider must be the requested cursor-cli, NOT providerPriority[0] (claude-cli).
   assert.equal(launch!.args.cliType, 'cursor-cli');
+  assert.deepEqual(result.providerPinWarnings[0].requestedProviders, ['cursor-cli']);
 });
 
 test('explicit type omitted resolves from providerPriority order', async () => {
@@ -105,6 +106,7 @@ test('explicit type omitted resolves from providerPriority order', async () => {
   const launch = launchCalls.find(c => c.command === 'launch_cli');
   assert.ok(launch, 'launch_cli was issued');
   assert.equal(launch!.args.cliType, 'claude-cli');
+  assert.equal(result.providerPinWarnings, undefined);
 });
 
 // PROVIDER-PRIORITY-FROM-SLOTS: a node with capability slots but no explicit

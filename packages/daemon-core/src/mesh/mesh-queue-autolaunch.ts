@@ -662,13 +662,19 @@ async function resolveAutoLaunchPlan(
     // own value; otherwise the slot fills what the task left blank.
     const slotCoversDifficulty = slotCoversTaskDifficulty(resolved.slot, (task as any).difficulty);
     const requestedModel = resolveLaunchAxis(task.model, (task as any).modelSource, resolved.model, slotCoversDifficulty);
-    const effectiveThinkingLevel = resolveLaunchAxis(task.thinkingLevel, (task as any).thinkingLevelSource, resolved.thinkingLevel, slotCoversDifficulty);
 
     const slotChoice = decideAutoLaunchSlot(meshId, mesh, task, node, nodeId, isReadonly, resolved as typeof resolved & { providerType: string }, requestedModel, markSkip);
     if (!slotChoice) return null;
     const { effectiveProviderType } = slotChoice;
     const rawEffectiveModel = slotChoice.model;
     const demotionReason = slotChoice.demotionReason;
+    // Resolve against the final slot, including quota-busy provider fallback.
+    // Explicit task effort retains precedence; slot/preset effort follows that slot.
+    const effectiveThinkingLevel = resolveLaunchAxis(
+        task.thinkingLevel, (task as any).thinkingLevelSource,
+        slotChoice.slot?.thinkingLevel,
+        slotCoversTaskDifficulty(slotChoice.slot, (task as any).difficulty),
+    );
 
     // CODEX-400 GUARD: the difficulty→brain presets carry
     // provider-agnostic Anthropic model aliases (opus/sonnet/haiku). Now that

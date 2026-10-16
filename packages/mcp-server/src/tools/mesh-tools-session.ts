@@ -1,3 +1,4 @@
+import { withProviderPinWarning } from './mesh-provider-pin-advisory.js';
 import type { ProviderApprovalTarget } from '@adhdev/mesh-shared';
 // Mesh tool implementations — session domain.
 // Pure move out of mesh-tools.ts (no behavior change). Helpers are imported from the
@@ -872,7 +873,7 @@ export async function meshLaunchSession(
         throw e;
     }
     await recordMeshLaunchAudit(ctx, args, audit.outcome ?? null, responseText);
-    return responseText;
+    return JSON.stringify(withProviderPinWarning(JSON.parse(responseText), typeof args.type === 'string' && args.type.trim() ? [args.type.trim()] : []));
 }
 
 type MeshLaunchOutcome = 'launched' | 'reused' | 'refused' | 'failed';

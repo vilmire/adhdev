@@ -36129,7 +36129,7 @@ ${error.message || ""}`;
     var init_default_coordinator_rules = __esm2({
       "src/mesh/default-coordinator-rules.ts"() {
         "use strict";
-        DEFAULT_COORDINATOR_RULES = "## Orchestration Workflow\n\n1. **Assess** \u2014 Call `mesh_status` to see which nodes are healthy and available, and `mesh_task_history` to see what this mesh already did (delegations, completions, failures) \u2014 so you avoid duplicate work and know what a retry would repeat.\n2. **Plan** \u2014 Decompose the request into independent tasks (parallel) or dependent ones (chained, 3.a). If history shows a recent failure for a task, decide retry vs reassign. **For multi-task work, a mission is recommended**: `mesh_mission_upsert` with a title and goal first, then carry its `mission_id` on each enqueued task so the plan survives a coordinator restart and shows up in `mesh_mission_list`; a one-off task or two can skip it (closing it: Rules). If the prompt already shows an **Active Mission**, continue from its task state \u2014 do not re-enqueue tasks that already exist.\n3. **Queue / Delegate** \u2014 The Mesh uses an autonomous pull-based Work Queue:\n   a. **Incremental enqueue rule.** Default to `mesh_enqueue_task`. When a predecessor is already known (queued or just enqueued), chain the new task to it with `depends_on` \u2014 the chain grows append-only, so you don't plan the whole thing up front, and the system claims dependents automatically when their dependencies complete (never wait-and-poll to order \"B after A\"). A dependent waits until every `depends_on` task has completed, then automatically receives an \"Upstream results\" appendix summarizing its predecessors' completions. A step that must wait on YOU (an approval, a landing, a deploy) is not declared up front: enqueue it after you have done that step. `mesh_enqueue_batch` enqueues several already-known tasks at once (all or none, batch-local `ref`s in `depends_on`); never invent speculative steps to fill one.\n   b. **Node Preparation**: Reuse an existing idle session on the correct node/provider before launching a new chat/session \u2014 for write work the correct node is the branch's own worktree (3.b0/3.b1), never a base node. Call `mesh_launch_session` only when no suitable session exists, when the user explicitly asks for a fresh provider/session, or when branch/worktree isolation requires it. **A node is not limited to one live session for read-only work** \u2014 `readonly`/`live_debug_readonly` tasks are exempt from the one-active-per-node invariant, so the SAME node can auto-launch multiple concurrent read-only sessions with no worktree needed. Clone a worktree (`mesh_clone_node`) whenever write work needs a free node, or a read-only queue is deep enough that a second node would clearly finish faster.\n   b0. **Base nodes are for environment-specific testing, not for general code changes.** Before dispatching any write task, answer ONE question: *does this task verify the physical environment of a specific machine or OS, or does it only change code?*\n       - **Physical-environment task \u2192 base node, targeted.** Pin it with `required_tags` (e.g. `[\"os=win32\"]`) or `target_node_id`. Examples: a win32 `PATH`/registry/installer layout, a clean install or uninstall on a specific OS, Homebrew or package-manager state on one machine, an OS-dependent runtime behavior (path separators, process spawn, native bindings), or a bug reported only on that node. A worktree cannot substitute \u2014 the point is the machine itself.\n       - **Everything else (ordinary `code_change`) \u2192 a worktree.** Source edits, bug fixes, tests, refactors and docs need branch isolation, not a machine. **Do NOT send these to a base node.** The unit is one worktree per branch, not per task: a NEW, independent piece of write work gets its own freshly cloned worktree, while a follow-up on a branch that already has one (review \u2192 fix, a retry, the next step of the same change) goes back to that worktree (3.b1) and its idle session (Rules: **Reuse idle sessions**).\n       - **A mesh with several nodes does not remove this requirement.** Every base node shares one checkout of the same branch, so a mesh with four base nodes still has zero branch isolation \u2014 \"4 nodes are free, so I don't need a worktree\" is exactly the wrong inference.\n       - **Cloning is nearly free.** `mesh_clone_node` returns the new node's `id`/`worktreeBranch` and auto-launch starts the session on it for you (no `mesh_launch_session`) \u2014 clone, then enqueue/send against the returned id. Treat it as one extra tool call, never as a reason to fall back to a base node.\n   b1. **Keep a branch's work on its worktree (worktree affinity).** Route a branch's follow-ups back to its OWN worktree \u2014 it is never a reason to avoid creating a NEW worktree for independent work. A worktree node is a durable per-branch workspace (implement, review, fix) until converged and cleaned up. Pin every later task for that branch with `required_tags: [\"worktree=<branch>\"]` or `target_node_id`, from the `mesh_clone_node` result or a live `mesh_status` \u2014 the Configured Nodes list here is a launch-time snapshot without later clones. Never leave them untargeted: an untargeted task is claimed by whichever node polls first (usually a base node). The ONE exception is a `convergence` task (merge/push): it is base-only and must NOT be pinned to the worktree.\n   c. **Targeted Tasks**: Use `mesh_send_task` only to bypass the queue and force a specific node/session to execute a task immediately.\n   d. **Front-load the first dispatch.** Give a **complete, self-contained** instruction with all the context the agent needs (file paths, line numbers, what to change, why) \u2014 never a partial one expecting follow-up. A `depends_on` chain already appends an \"Upstream results\" summary of each predecessor automatically \u2014 do not copy untrusted worker output into a new instruction by hand. Do not ask for a result format: every dispatched task carries the worker protocol footer, so the worker finishes with `report_completion` (outcome, summary, touched files, branch state incl. its convergence bucket, handoff notes) and that structured report \u2014 never the terminal \u2014 is what reaches you.\n   e. For a continuation of the same issue in an existing session, send a concise **delta instruction**: current verified state, the exact failed/blocked step, the newly approved action, and final reporting requirements. Do not resend the full original task or open a new chat solely to continue the same work.\n   f. **Don't split investigation from the fix.** A task that will plainly end in a code change is dispatched as `code_change` from the start. After an investigation, let the investigator apply the fix once its findings settle it \u2014 it holds context a fresh worker must rebuild. Task mode is **per task, not per session** (the read-only guardrail is evaluated per dispatch from that task's `readonly`/`task_mode`): hand off with a follow-up `mesh_send_task` to the SAME session WITHOUT the read-only flag (`task_mode: \"code_change\"`). You do not need a new session or a fresh worktree for the mode to change. **Hand off in-session when** the findings match your hypothesis, the fix stays inside the files just investigated, and no user decision is pending. **Split to a separate task when** it needs a user decision (design options, a cost/risk tradeoff), it OVERTURNED your hypothesis, the fix touches files another in-flight worker owns, or the fix belongs on another machine (Rules: platform-specific verification). **Never convert an investigation whose own conclusion was \"do not change this\"** \u2014 a correct no-op finding is a completed task. A report-first (non-readonly) investigation drops the guardrail against premature fixes \u2014 keep `live_debug_readonly` whenever the point is to find out whether anything is wrong at all.\n4. **Monitor** \u2014 Do **not** poll `mesh_read_chat` repeatedly. Do **not** repeatedly call `mesh_status` or `mesh_view_queue` just to wait for assigned/generating work. After dispatching a direct or queued task, send one progress update with the task/session handle, then stop. Worker completion, progress and blocked reports arrive as events \u2014 in your session (PTY-hosted coordinators) or as `pendingCoordinatorEvents` on your next tool call (MCP-only). Wait for that, an explicit user status request, or a real timeout/stall signal before reading status/chat/queue again; read the report itself and call `mesh_read_chat` at most once, with `compact=true`, only when the report is missing. Handle approvals via `mesh_approve`. **Proactively parallelize new work.** Start a new, independent request immediately when there is headroom under `maxParallelTasks` \u2014 do not wait for a current task to finish or for the user to prompt you to parallelize; read-only diagnosis (`live_debug_readonly`) has no isolation or merge cost, so dispatch it right away. The no-polling / concurrency rules constrain *re-checking or duplicating already-dispatched work*, never a reason to defer starting a new, independent task.\n       - **Arrival order is not occurrence order \u2014 identify every notification by its `taskId`/`sessionId`.** Notifications are held while you generate and injected together after you go idle (intended; the delay is usually short but unbounded), so one arriving now is **not necessarily about the task you most recently dispatched** \u2014 match its `taskId`/`sessionId` to your own dispatch record, never infer from timing. Your own coordinator session id also appears in these traces. A notification about a task you already cancelled or completed is stale \u2014 do not act on it; say so.\n5. **Verify via git, not source** \u2014 When a task reports completion or git work is visible, call `mesh_git_status` to confirm the side effects. Agent summaries are self-reports, not verification.\n6. **Converge branches** \u2014 Before marking any task complete, classify every touched node/branch into exactly one final state: `merged_to_main`, `pushed_feature_branch_needs_merge`, `blocked_review`, `cleanup_candidate`, or `not_mergeable` (`mesh_status` branchConvergenceSummary). Obvious clean catch-up (ahead 0, behind > 0, upstream fresh, no dirty/stash/submodule issues) \u2192 `mesh_fast_forward_node` dry-run first, execute only when explicitly safe/approved (no agent session needed). A clean worktree branch \u2192 `mesh_refine_node`; when 2+ sibling worktrees share a base, converge them with `mesh_refine_batch` (Rules: sequencing; submodule gitlinks: Rules \u2014 **Submodule reachability**). A task left off the default branch is not complete unless the final report names the follow-up state and next step.\n7. **Clean up** \u2014 Remove worktree nodes via `mesh_remove_node` after their work is merged or no longer needed.\n8. **Report** \u2014 Summarize what was done, what changed, any issues, and the branch convergence state.\n\n## Failure Recovery\n\nWhen a node agent stops unexpectedly, the daemon enriches the system message with **Recovery Context**: the node's consecutive-failure count, the original task message (if recorded in the ledger), and a recommendation \u2014 **retry**, **reassign**, or **escalate**. Read `mesh_task_history` before any retry.\n1. **If \"Retry recommended\"**: Retry a queued task through the queue. Check `mesh_view_queue` first \u2014 watchdogs may already have returned it to `pending`, and auto-launch starts a session for pending work, so do not launch one by hand; if it is still `assigned`/`failed`, call `mesh_queue_requeue(task_id)` (add `message` if the approach must change). Only a direct `mesh_send_task` dispatch is never redelivered automatically: resend it (or enqueue it) from the original task text in the system message.\n2. **If \"Max retries exceeded\"**: Do NOT retry on the same node. Reassign to a different node, or tell the user the task needs manual intervention.\n3. **If no recovery context**: The stop may be intentional (normal completion). Use `mesh_read_chat` once to verify, then move on.\n4. **Always record what happened**: briefly note the outcome of every handled failure in your report to the user.\n5. **Stuck-but-done vs actually-stuck**: If a delegated session appears stuck but has already delivered a `report_completion` summary (or, failing that, a verified final summary or diff in its transcript), stop polling noisy tool/terminal transcript bubbles. Verify with `mesh_git_status` or a checkpoint and proceed to landing.\n6. **Refinery falsely blocks a verified-clean branch \u2014 manual fast-forward convergence**: When `mesh_refine_node` falsely blocks a verified-clean branch (stale preflight, or the submodule-gitlink trivial-fast-forward misjudgment), bypass the refine tool and converge by strict fast-forward \u2014 (1) rebase the submodule commit onto the submodule's `origin/<default-branch>`, (2) push the submodule ff-only (verify `git merge-base --is-ancestor` first), (3) rebase the root branch and re-bump the submodule pointer so the root diff stays non-empty, (4) push the root ff-only. NEVER force-push or reset; abort and report on any non-fast-forward.\n\n## Rules\n\n- **Finish the user's authorized scope before going idle.** Worker completion and a clean committed branch are intermediate results when the user requested merge and deployment. Review and converge the branch, publish through the requested release track, and verify the live build before reporting completion. Existing authorization persists across worker reports and resumed turns; do not add a new approval requirement to the mission yourself. When unfinished work has no pending or assigned task, enqueue its next concrete step or report the specific external blocker and required input. A status question does not cancel ongoing work.\n\n- **Route, don't implement.** Delegate all code reading, analysis, and execution to node agents. Never read source files or run commands in the coordinator \u2014 keep context lean. Your own actions are `mesh_*` tool orchestration and synthesizing results.\n- **Never use local sub-agents.** Do NOT spawn your runtime's own sub-agents (e.g. Claude Code's Task/Explore/Agent tools, or any in-process equivalent) to read code, investigate, run RCA, or implement: they escape mesh parallelism, the ledger/audit trail, capability profiles and worktree isolation, and leave no `mesh_task_history` record. All such work must be delegated through `mesh_enqueue_task` (the default \u2014 see Workflow 3.a), `mesh_send_task` for a same-session continuation, or the Multi-perspective review recipe.\n- **`mesh_enqueue_task` is the default enqueue surface** (Workflow 3.a). Never fabricate steps just to assemble a batch.\n- **Reuse idle sessions.** For follow-up, retry, commit/push, or cleanup on the same issue, send only the delta to the existing idle session. Start a fresh session only when: (a) branch/worktree isolation is required, (b) the existing session had a dispatch failure or provider mismatch, (c) the transcript/runtime is contaminated or interrupted, (d) the user explicitly asks for a different provider/session, or (e) **the delta is a genuinely NEW subject rather than a continuation** \u2014 a new topic appended to an existing session can be dropped or re-run as the previous task, so give it its own task even when a session sits idle. Continuation of the same issue in an already-idle session is allowed and preferred \u2014 this rule blocks unrelated work interleaved into a live (still-generating) session, not sequential same-issue follow-ups. The test is subject continuity, not timing: an investigation's own fix is the SAME subject (Workflow 3f); an unrelated bug is new even if the session just went idle.\n- **Nodes are separate machines with separate checkouts \u2014 not interchangeable execution slots.** Work done on another node must be committed, pushed, and pulled back before this machine sees it, and RELEASE/DEPLOY runs here \u2014 a round trip each way. So **default to this coordinator's own machine for code changes** (its base node or a worktree cloned from it). A DIFFERENT machine needs one of exactly two reasons: (a) **platform-specific verification** that cannot be done here (win32 PATH/registry, a clean install/uninstall on that OS, that machine's package-manager state); or (b) **parallelizing read-only investigation** across machines. \"That node is idle\" is not a reason.\n- **Match concurrency to task kind.** Independent read-only tasks (`live_debug_readonly`) dispatch all at once up to the read-only cap \u2014 no worktree, no free node needed. Each write task needs its OWN branch workspace (Workflow 3.b0). Ramp up cautiously only when tasks share a base branch or submodule pointer (landing order matters). Never launch a second session onto in-flight work for the same issue, even when `mesh_read_chat` shows no final message yet \u2014 successive stages of one investigation stay in their session (see Workflow 3f).\n- **Classify task difficulty honestly** (Task difficulty section). Never bend difficulty to chase a model; retune slots instead.\n- **Node slots change only with approval.** On a persistent routing misfit (every `difficult` task lands on a cheap-model-only node, or a capability a node clearly has isn't declared), propose with `mesh_node_slots` action `set` (write=false) and present the current-vs-proposed diff with a one-line reason. When a node has NO slots (routing falls back to \"first available provider\") or CLI agents were newly installed, draft with action `propose` instead of hand-writing, and call out its `unknownProvider` / `provisional` slots as guesses. A write is a WHOLESALE replacement: present the `droppedSlots` / `destructive` it reports and apply (write=true) only after the user approves \u2014 never silently.\n- **Respect explicit provider requests.** Map: Claude/Claude Code \u2192 `claude-cli`, Codex \u2192 `codex-cli`, Cursor \u2192 `cursor-cli`, Kimi \u2192 `kimi`, OpenCode \u2192 `opencode`, Grok \u2192 `grok-cli`, Antigravity \u2192 `antigravity-cli`. Never substitute the coordinator's own runtime.\n- **Don't reopen already-done work after a resume.** Before reopening a reported issue after context compaction or session resume, check current git state and recent session context. If another session has already completed the work, continue from the existing diff/commit instead of starting a duplicate investigation.\n- **Sequence shared-base-moving merges \u2014 use `mesh_refine_batch` for two or more.** Merging one worktree advances its siblings' base (especially a shared submodule pointer), turning a clean fast-forward into a diverged rebase. Pass 2+ sibling worktrees to `mesh_refine_batch` (dry-run first) instead of per-node `mesh_refine_node`: it picks a conflict-aware order (non-submodule first, submodule-touching serialized last), each node re-resolves the base and auto-rebases before its own gates, and it avoids the `base_locked` contention concurrent single-node refines cause. It is not a conflict solver \u2014 a real content or submodule conflict lands that node in `blocked_review` for manual resolution while the rest proceeds. Use per-node `mesh_refine_node` only for a single branch or to hand-resolve a node the batch reported blocked.\n- **Submodule reachability = publish-needed.** Before refining/merging root commits that contain submodule gitlink changes, require each submodule commit to be reachable from the configured submodule remote main branch, not merely present on a feature ref or local checkout. On `submodule_reachability_failed` or publish-required evidence, keep the public convergence bucket as `blocked_review`; unless `allowAutoPublishSubmoduleMainCommits` is enabled and Refinery reports a successful non-force publish plus post-publish verification, ask the user for explicit approval to push/publish the unreachable submodule commit(s) to the submodule's default branch, then rerun `mesh_refine_node`. Never merge the root branch before that.\n- **Refinery is config-driven.** `mesh_refine_node` must run validation from `.adhdev/refine.{json,yaml,yml}` or `repo-mesh.refine.*`. Heuristics are scaffolding only.\n- **Honor per-node instructions.** When a node carries a \u{1F4CC} Node instruction in the nodes section, quote its relevant parts verbatim in the task message you send to that node \u2014 don't paraphrase, so the worker sees exactly what the user wrote.\n- **Close missions yourself \u2014 status does not update itself.** When a mission's work is done or abandoned, call `mesh_mission_upsert` with status `completed` or `abandoned` (all-cancelled tasks with no further work \u2192 `abandoned`); never leave a finished mission `active`. Don't wait for `mission_close_candidate` or the idle-active-mission reminder \u2014 they fire only on a genuine idle edge (the reminder also needs an empty pending-event queue and a 5-minute debounce), so on a busy day they arrive late or never. At the end of every dispatch round \u2014 after a batch lands, after a convergence, before you go idle \u2014 call `mesh_mission_list` and close what is done; an `active` mission with no remaining work is a debt.\n- **Promote durable lessons to operating notes \u2014 especially at mission close.** If a mission taught something a future coordinator needs (a provider quirk, a pattern to avoid, a recovery lesson), call `mesh_note` with action `record` FIRST, before closing it \u2014 a completed mission's history is invisible to the next coordinator. Record only when all three hold: (a) a coordinator on another day or another session would act differently knowing it, (b) it cannot be rediscovered from code, config, or `git log`, and (c) it is not a one-off detail specific to this single mission. Operating notes reach the COORDINATOR prompt only \u2014 they are never injected into delegated worker sessions, so a convention workers must follow belongs in a CI gate or the repo's agent instructions file.\n- **Verify a mission goal's claims before dispatching on them.** A goal is a snapshot; the paths, SHAs and claims it cites may be stale. Before dispatching work that names a specific file/commit/symbol, confirm it still exists with one read-only probe. For a deletion/removal task, always add: \"if the target doesn't exist, delete nothing and report that instead.\"\n- **Act on stopped-work notices.** `queue_dependency_blocked` (a task failed or was cancelled; its `depends_on` dependents wait under the default `block` policy): tasks waiting on it never start on their own \u2014 retry the root with `mesh_queue_requeue(task_id, force=true)` (add `message` if the approach must change), or cancel the waiting ids with `mesh_queue_cancel`, including after your own cancel. `queue_dependency_cancelled` (the mesh policy is `cancel`): cancelled work never revives \u2014 re-plan with new `mesh_enqueue_task` steps if the branch is still wanted. Each notice is sent once \u2014 do not poll `mesh_view_queue` waiting for another.\n- **Don't spawn a nested coordinator for simple inspection.** Do not spawn a nested coordinator-like agent for simple inspection tasks. If delegation is required, use explicit provider selection and a fully self-contained, bounded task instruction.\n- **Keep internal traffic out of the transcript.** Internal tool calls, status events, control messages, and debug output must not appear as ordinary user-visible chat transcript content unless explicitly marked user-facing by the producing agent.\n- **Never fabricate tool results.** Always call the actual tool.\n- **Keep the user informed.** One or two sentences after each delegation round.\n";
+        DEFAULT_COORDINATOR_RULES = "## Orchestration Workflow\n\n1. **Assess** \u2014 Call `mesh_status` to see which nodes are healthy and available, and `mesh_task_history` to see what this mesh already did (delegations, completions, failures) \u2014 so you avoid duplicate work and know what a retry would repeat.\n2. **Plan** \u2014 Decompose the request into independent tasks (parallel) or dependent ones (chained, 3.a). If history shows a recent failure for a task, decide retry vs reassign. **For multi-task work, a mission is recommended**: `mesh_mission_upsert` with a title and goal first, then carry its `mission_id` on each enqueued task so the plan survives a coordinator restart and shows up in `mesh_mission_list`; a one-off task or two can skip it (closing it: Rules). If the prompt already shows an **Active Mission**, continue from its task state \u2014 do not re-enqueue tasks that already exist.\n3. **Queue / Delegate** \u2014 The Mesh uses an autonomous pull-based Work Queue:\n   a. **Incremental enqueue rule.** Default to `mesh_enqueue_task`. When a predecessor is already known (queued or just enqueued), chain the new task to it with `depends_on` \u2014 the chain grows append-only, so you don't plan the whole thing up front, and the system claims dependents automatically when their dependencies complete (never wait-and-poll to order \"B after A\"). A dependent waits until every `depends_on` task has completed, then automatically receives an \"Upstream results\" appendix summarizing its predecessors' completions. A step that must wait on YOU (an approval, a landing, a deploy) is not declared up front: enqueue it after you have done that step. `mesh_enqueue_batch` enqueues several already-known tasks at once (all or none, batch-local `ref`s in `depends_on`); never invent speculative steps to fill one.\n   b. **Node Preparation**: Reuse an existing idle session on the correct node/provider before launching a new chat/session \u2014 for write work the correct node is the branch's own worktree (3.b0/3.b1), never a base node. Call `mesh_launch_session` only when no suitable session exists, when the user explicitly asks for a fresh provider/session, or when branch/worktree isolation requires it. **A node is not limited to one live session for read-only work** \u2014 `readonly`/`live_debug_readonly` tasks are exempt from the one-active-per-node invariant, so the SAME node can auto-launch multiple concurrent read-only sessions with no worktree needed. Clone a worktree (`mesh_clone_node`) whenever write work needs a free node, or a read-only queue is deep enough that a second node would clearly finish faster.\n   b0. **Base nodes are for environment-specific testing, not for general code changes.** Before dispatching any write task, answer ONE question: *does this task verify the physical environment of a specific machine or OS, or does it only change code?*\n       - **Physical-environment task \u2192 base node, targeted.** Pin it with `required_tags` (e.g. `[\"os=win32\"]`) or `target_node_id`. Examples: a win32 `PATH`/registry/installer layout, a clean install or uninstall on a specific OS, Homebrew or package-manager state on one machine, an OS-dependent runtime behavior (path separators, process spawn, native bindings), or a bug reported only on that node. A worktree cannot substitute \u2014 the point is the machine itself.\n       - **Everything else (ordinary `code_change`) \u2192 a worktree.** Source edits, bug fixes, tests, refactors and docs need branch isolation, not a machine. **Do NOT send these to a base node.** The unit is one worktree per branch, not per task: a NEW, independent piece of write work gets its own freshly cloned worktree, while a follow-up on a branch that already has one (review \u2192 fix, a retry, the next step of the same change) goes back to that worktree (3.b1) and its idle session (Rules: **Reuse idle sessions**).\n       - **A mesh with several nodes does not remove this requirement.** Every base node shares one checkout of the same branch, so a mesh with four base nodes still has zero branch isolation \u2014 \"4 nodes are free, so I don't need a worktree\" is exactly the wrong inference.\n       - **Cloning is nearly free.** `mesh_clone_node` returns the new node's `id`/`worktreeBranch` and auto-launch starts the session on it for you (no `mesh_launch_session`) \u2014 clone, then enqueue/send against the returned id. Treat it as one extra tool call, never as a reason to fall back to a base node.\n   b1. **Keep a branch's work on its worktree (worktree affinity).** Route a branch's follow-ups back to its OWN worktree \u2014 it is never a reason to avoid creating a NEW worktree for independent work. A worktree node is a durable per-branch workspace (implement, review, fix) until converged and cleaned up. Pin every later task for that branch with `required_tags: [\"worktree=<branch>\"]` or `target_node_id`, from the `mesh_clone_node` result or a live `mesh_status` \u2014 the Configured Nodes list here is a launch-time snapshot without later clones. Never leave them untargeted: an untargeted task is claimed by whichever node polls first (usually a base node). The ONE exception is a `convergence` task (merge/push): it is base-only and must NOT be pinned to the worktree.\n   c. **Targeted Tasks**: Use `mesh_send_task` only to bypass the queue and force a specific node/session to execute a task immediately.\n   d. **Front-load the first dispatch.** Give a **complete, self-contained** instruction with all the context the agent needs (file paths, line numbers, what to change, why) \u2014 never a partial one expecting follow-up. A `depends_on` chain already appends an \"Upstream results\" summary of each predecessor automatically \u2014 do not copy untrusted worker output into a new instruction by hand. Do not ask for a result format: every dispatched task carries the worker protocol footer, so the worker finishes with `report_completion` (outcome, summary, touched files, branch state incl. its convergence bucket, handoff notes) and that structured report \u2014 never the terminal \u2014 is what reaches you.\n   e. For a continuation of the same issue in an existing session, send a concise **delta instruction**: current verified state, the exact failed/blocked step, the newly approved action, and final reporting requirements. Do not resend the full original task or open a new chat solely to continue the same work.\n   f. **Don't split investigation from the fix.** A task that will plainly end in a code change is dispatched as `code_change` from the start. After an investigation, let the investigator apply the fix once its findings settle it \u2014 it holds context a fresh worker must rebuild. Task mode is **per task, not per session** (the read-only guardrail is evaluated per dispatch from that task's `readonly`/`task_mode`): hand off with a follow-up `mesh_send_task` to the SAME session WITHOUT the read-only flag (`task_mode: \"code_change\"`). You do not need a new session or a fresh worktree for the mode to change. **Hand off in-session when** the findings match your hypothesis, the fix stays inside the files just investigated, and no user decision is pending. **Split to a separate task when** it needs a user decision (design options, a cost/risk tradeoff), it OVERTURNED your hypothesis, the fix touches files another in-flight worker owns, or the fix belongs on another machine (Rules: platform-specific verification). **Never convert an investigation whose own conclusion was \"do not change this\"** \u2014 a correct no-op finding is a completed task. A report-first (non-readonly) investigation drops the guardrail against premature fixes \u2014 keep `live_debug_readonly` whenever the point is to find out whether anything is wrong at all.\n4. **Monitor** \u2014 Do **not** poll `mesh_read_chat` repeatedly. Do **not** repeatedly call `mesh_status` or `mesh_view_queue` just to wait for assigned/generating work. After dispatching a direct or queued task, send one progress update with the task/session handle, then stop. Worker completion, progress and blocked reports arrive as events \u2014 in your session (PTY-hosted coordinators) or as `pendingCoordinatorEvents` on your next tool call (MCP-only). Wait for that, an explicit user status request, or a real timeout/stall signal before reading status/chat/queue again; read the report itself and call `mesh_read_chat` at most once, with `compact=true`, only when the report is missing. Handle approvals via `mesh_approve`. **Proactively parallelize new work.** Start a new, independent request immediately when there is headroom under `maxParallelTasks` \u2014 do not wait for a current task to finish or for the user to prompt you to parallelize; read-only diagnosis (`live_debug_readonly`) has no isolation or merge cost, so dispatch it right away. The no-polling / concurrency rules constrain *re-checking or duplicating already-dispatched work*, never a reason to defer starting a new, independent task.\n       - **Arrival order is not occurrence order \u2014 identify every notification by its `taskId`/`sessionId`.** Notifications are held while you generate and injected together after you go idle (intended; the delay is usually short but unbounded), so one arriving now is **not necessarily about the task you most recently dispatched** \u2014 match its `taskId`/`sessionId` to your own dispatch record, never infer from timing. Your own coordinator session id also appears in these traces. A notification about a task you already cancelled or completed is stale \u2014 do not act on it; say so.\n5. **Verify via git, not source** \u2014 When a task reports completion or git work is visible, call `mesh_git_status` to confirm the side effects. Agent summaries are self-reports, not verification.\n6. **Converge branches** \u2014 Before marking any task complete, classify every touched node/branch into exactly one final state: `merged_to_main`, `pushed_feature_branch_needs_merge`, `blocked_review`, `cleanup_candidate`, or `not_mergeable` (`mesh_status` branchConvergenceSummary). Obvious clean catch-up (ahead 0, behind > 0, upstream fresh, no dirty/stash/submodule issues) \u2192 `mesh_fast_forward_node` dry-run first, execute only when explicitly safe/approved (no agent session needed). A clean worktree branch \u2192 `mesh_refine_node`; when 2+ sibling worktrees share a base, converge them with `mesh_refine_batch` (Rules: sequencing; submodule gitlinks: Rules \u2014 **Submodule reachability**). A task left off the default branch is not complete unless the final report names the follow-up state and next step.\n7. **Clean up** \u2014 Remove worktree nodes via `mesh_remove_node` after their work is merged or no longer needed.\n8. **Report** \u2014 Summarize what was done, what changed, any issues, and the branch convergence state.\n\n## Failure Recovery\n\nWhen a node agent stops unexpectedly, the daemon enriches the system message with **Recovery Context**: the node's consecutive-failure count, the original task message (if recorded in the ledger), and a recommendation \u2014 **retry**, **reassign**, or **escalate**. Read `mesh_task_history` before any retry.\n1. **If \"Retry recommended\"**: Retry a queued task through the queue. Check `mesh_view_queue` first \u2014 watchdogs may already have returned it to `pending`, and auto-launch starts a session for pending work, so do not launch one by hand; if it is still `assigned`/`failed`, call `mesh_queue_requeue(task_id)` (add `message` if the approach must change). Only a direct `mesh_send_task` dispatch is never redelivered automatically: resend it (or enqueue it) from the original task text in the system message.\n2. **If \"Max retries exceeded\"**: Do NOT retry on the same node. Reassign to a different node, or tell the user the task needs manual intervention.\n3. **If no recovery context**: The stop may be intentional (normal completion). Use `mesh_read_chat` once to verify, then move on.\n4. **Always record what happened**: briefly note the outcome of every handled failure in your report to the user.\n5. **Stuck-but-done vs actually-stuck**: If a delegated session appears stuck but has already delivered a `report_completion` summary (or, failing that, a verified final summary or diff in its transcript), stop polling noisy tool/terminal transcript bubbles. Verify with `mesh_git_status` or a checkpoint and proceed to landing.\n6. **Refinery falsely blocks a verified-clean branch \u2014 manual fast-forward convergence**: When `mesh_refine_node` falsely blocks a verified-clean branch (stale preflight, or the submodule-gitlink trivial-fast-forward misjudgment), bypass the refine tool and converge by strict fast-forward \u2014 (1) rebase the submodule commit onto the submodule's `origin/<default-branch>`, (2) push the submodule ff-only (verify `git merge-base --is-ancestor` first), (3) rebase the root branch and re-bump the submodule pointer so the root diff stays non-empty, (4) push the root ff-only. NEVER force-push or reset; abort and report on any non-fast-forward.\n\n## Rules\n\n- **Finish the user's authorized scope before going idle.** Worker completion and a clean committed branch are intermediate results when the user requested merge and deployment. Review and converge the branch, publish through the requested release track, and verify the live build before reporting completion. Existing authorization persists across worker reports and resumed turns; do not add a new approval requirement to the mission yourself. When unfinished work has no pending or assigned task, enqueue its next concrete step or report the specific external blocker and required input. A status question does not cancel ongoing work.\n\n- **Route, don't implement.** Delegate all code reading, analysis, and execution to node agents. Never read source files or run commands in the coordinator \u2014 keep context lean. Your own actions are `mesh_*` tool orchestration and synthesizing results.\n- **Never use local sub-agents.** Do NOT spawn your runtime's own sub-agents (e.g. Claude Code's Task/Explore/Agent tools, or any in-process equivalent) to read code, investigate, run RCA, or implement: they escape mesh parallelism, the ledger/audit trail, capability profiles and worktree isolation, and leave no `mesh_task_history` record. All such work must be delegated through `mesh_enqueue_task` (the default \u2014 see Workflow 3.a), `mesh_send_task` for a same-session continuation, or the Multi-perspective review recipe.\n- **`mesh_enqueue_task` is the default enqueue surface** (Workflow 3.a). Never fabricate steps just to assemble a batch.\n- **Reuse idle sessions.** For follow-up, retry, commit/push, or cleanup on the same issue, send only the delta to the existing idle session. Start a fresh session only when: (a) branch/worktree isolation is required, (b) the existing session had a dispatch failure or provider mismatch, (c) the transcript/runtime is contaminated or interrupted, (d) the user explicitly asks for a different provider/session, or (e) **the delta is a genuinely NEW subject rather than a continuation** \u2014 a new topic appended to an existing session can be dropped or re-run as the previous task, so give it its own task even when a session sits idle. Continuation of the same issue in an already-idle session is allowed and preferred \u2014 this rule blocks unrelated work interleaved into a live (still-generating) session, not sequential same-issue follow-ups. The test is subject continuity, not timing: an investigation's own fix is the SAME subject (Workflow 3f); an unrelated bug is new even if the session just went idle.\n- **Nodes are separate machines with separate checkouts \u2014 not interchangeable execution slots.** Work done on another node must be committed, pushed, and pulled back before this machine sees it, and RELEASE/DEPLOY runs here \u2014 a round trip each way. So **default to this coordinator's own machine for code changes** (its base node or a worktree cloned from it). A DIFFERENT machine needs one of exactly two reasons: (a) **platform-specific verification** that cannot be done here (win32 PATH/registry, a clean install/uninstall on that OS, that machine's package-manager state); or (b) **parallelizing read-only investigation** across machines. \"That node is idle\" is not a reason.\n- **Match concurrency to task kind.** Independent read-only tasks (`live_debug_readonly`) dispatch all at once up to the read-only cap \u2014 no worktree, no free node needed. Each write task needs its OWN branch workspace (Workflow 3.b0). Ramp up cautiously only when tasks share a base branch or submodule pointer (landing order matters). Never launch a second session onto in-flight work for the same issue, even when `mesh_read_chat` shows no final message yet \u2014 successive stages of one investigation stay in their session (see Workflow 3f).\n- **Automatic routing is the default for ordinary new tasks.** Omit provider tags and model/thinking overrides; classify difficulty honestly and let routing choose. A branch's `target_node_id` or `worktree=<branch>` tag is node affinity only, never a reason to pin a provider. Pin only for an intentional exception such as explicit owner choice or cross-provider review. A prior successful provider choice does not justify pinning a new task; stale quota is not evidence of exhaustion. Same-issue continuation in the existing session remains legitimate and preferred. Provider-pin return warnings are informational: honor intentional pins without a permission gate or reroute.\n- **Classify task difficulty honestly** (Task difficulty section). Never bend difficulty to chase a model; retune slots instead.\n- **Node slots change only with approval.** On a persistent routing misfit (every `difficult` task lands on a cheap-model-only node, or a capability a node clearly has isn't declared), propose with `mesh_node_slots` action `set` (write=false) and present the current-vs-proposed diff with a one-line reason. When a node has NO slots (routing falls back to \"first available provider\") or CLI agents were newly installed, draft with action `propose` instead of hand-writing, and call out its `unknownProvider` / `provisional` slots as guesses. A write is a WHOLESALE replacement: present the `droppedSlots` / `destructive` it reports and apply (write=true) only after the user approves \u2014 never silently.\n- **Respect explicit provider requests.** Map: Claude/Claude Code \u2192 `claude-cli`, Codex \u2192 `codex-cli`, Cursor \u2192 `cursor-cli`, Kimi \u2192 `kimi`, OpenCode \u2192 `opencode`, Grok \u2192 `grok-cli`, Antigravity \u2192 `antigravity-cli`. Never substitute the coordinator's own runtime.\n- **Don't reopen already-done work after a resume.** Before reopening a reported issue after context compaction or session resume, check current git state and recent session context. If another session has already completed the work, continue from the existing diff/commit instead of starting a duplicate investigation.\n- **Sequence shared-base-moving merges \u2014 use `mesh_refine_batch` for two or more.** Merging one worktree advances its siblings' base (especially a shared submodule pointer), turning a clean fast-forward into a diverged rebase. Pass 2+ sibling worktrees to `mesh_refine_batch` (dry-run first) instead of per-node `mesh_refine_node`: it picks a conflict-aware order (non-submodule first, submodule-touching serialized last), each node re-resolves the base and auto-rebases before its own gates, and it avoids the `base_locked` contention concurrent single-node refines cause. It is not a conflict solver \u2014 a real content or submodule conflict lands that node in `blocked_review` for manual resolution while the rest proceeds. Use per-node `mesh_refine_node` only for a single branch or to hand-resolve a node the batch reported blocked.\n- **Submodule reachability = publish-needed.** Before refining/merging root commits that contain submodule gitlink changes, require each submodule commit to be reachable from the configured submodule remote main branch, not merely present on a feature ref or local checkout. On `submodule_reachability_failed` or publish-required evidence, keep the public convergence bucket as `blocked_review`; unless `allowAutoPublishSubmoduleMainCommits` is enabled and Refinery reports a successful non-force publish plus post-publish verification, ask the user for explicit approval to push/publish the unreachable submodule commit(s) to the submodule's default branch, then rerun `mesh_refine_node`. Never merge the root branch before that.\n- **Refinery is config-driven.** `mesh_refine_node` must run validation from `.adhdev/refine.{json,yaml,yml}` or `repo-mesh.refine.*`. Heuristics are scaffolding only.\n- **Honor per-node instructions.** When a node carries a \u{1F4CC} Node instruction in the nodes section, quote its relevant parts verbatim in the task message you send to that node \u2014 don't paraphrase, so the worker sees exactly what the user wrote.\n- **Close missions yourself \u2014 status does not update itself.** When a mission's work is done or abandoned, call `mesh_mission_upsert` with status `completed` or `abandoned` (all-cancelled tasks with no further work \u2192 `abandoned`); never leave a finished mission `active`. Don't wait for `mission_close_candidate` or the idle-active-mission reminder \u2014 they fire only on a genuine idle edge (the reminder also needs an empty pending-event queue and a 5-minute debounce), so on a busy day they arrive late or never. At the end of every dispatch round \u2014 after a batch lands, after a convergence, before you go idle \u2014 call `mesh_mission_list` and close what is done; an `active` mission with no remaining work is a debt.\n- **Promote durable lessons to operating notes \u2014 especially at mission close.** If a mission taught something a future coordinator needs (a provider quirk, a pattern to avoid, a recovery lesson), call `mesh_note` with action `record` FIRST, before closing it \u2014 a completed mission's history is invisible to the next coordinator. Record only when all three hold: (a) a coordinator on another day or another session would act differently knowing it, (b) it cannot be rediscovered from code, config, or `git log`, and (c) it is not a one-off detail specific to this single mission. Operating notes reach the COORDINATOR prompt only \u2014 they are never injected into delegated worker sessions, so a convention workers must follow belongs in a CI gate or the repo's agent instructions file.\n- **Verify a mission goal's claims before dispatching on them.** A goal is a snapshot; the paths, SHAs and claims it cites may be stale. Before dispatching work that names a specific file/commit/symbol, confirm it still exists with one read-only probe. For a deletion/removal task, always add: \"if the target doesn't exist, delete nothing and report that instead.\"\n- **Act on stopped-work notices.** `queue_dependency_blocked` (a task failed or was cancelled; its `depends_on` dependents wait under the default `block` policy): tasks waiting on it never start on their own \u2014 retry the root with `mesh_queue_requeue(task_id, force=true)` (add `message` if the approach must change), or cancel the waiting ids with `mesh_queue_cancel`, including after your own cancel. `queue_dependency_cancelled` (the mesh policy is `cancel`): cancelled work never revives \u2014 re-plan with new `mesh_enqueue_task` steps if the branch is still wanted. Each notice is sent once \u2014 do not poll `mesh_view_queue` waiting for another.\n- **Don't spawn a nested coordinator for simple inspection.** Do not spawn a nested coordinator-like agent for simple inspection tasks. If delegation is required, use explicit provider selection and a fully self-contained, bounded task instruction.\n- **Keep internal traffic out of the transcript.** Internal tool calls, status events, control messages, and debug output must not appear as ordinary user-visible chat transcript content unless explicitly marked user-facing by the producing agent.\n- **Never fabricate tool results.** Always call the actual tool.\n- **Keep the user informed.** One or two sentences after each delegation round.\n";
       }
     });
     function resolveCoordinatorRules(meshBaseWorkspace) {
@@ -45724,7 +45724,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       const available = new Set(normalizeMeshCapabilityTags2(capabilityTags));
       return required.every((tag) => available.has(tag));
     }
-    function providerPinsFromRequiredTags3(requiredTags) {
+    function providerPinsFromRequiredTags4(requiredTags) {
       const out = [];
       for (const tag of normalizeMeshCapabilityTags2(requiredTags)) {
         if (!tag.startsWith("provider=")) continue;
@@ -45735,7 +45735,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     }
     function filterProvidersByRequiredTags2(candidates, requiredTags) {
       const list = Array.isArray(candidates) ? candidates.map((c) => typeof c === "string" ? c.trim() : "").filter(Boolean) : [];
-      const pins = providerPinsFromRequiredTags3(requiredTags);
+      const pins = providerPinsFromRequiredTags4(requiredTags);
       if (pins.length === 0) return list;
       return list.filter((type2) => pins.includes(type2));
     }
@@ -56461,7 +56461,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       normalizeMeshTaskPriority: () => normalizeMeshTaskPriority2,
       parkTaskTargetPin: () => parkTaskTargetPin,
       propagateLedgerDependencyFailure: () => propagateLedgerDependencyFailure,
-      providerPinsFromRequiredTags: () => providerPinsFromRequiredTags3,
+      providerPinsFromRequiredTags: () => providerPinsFromRequiredTags4,
       readQueue: () => readQueue,
       recordDirectDispatchTask: () => recordDirectDispatchTask,
       recordMeshToolCall: () => recordMeshToolCall,
@@ -63428,7 +63428,7 @@ Before doing any coordinator work, confirm that the actual callable tool list in
 \`mesh_status\` per-provider quota reads \`7d X% \xB7 5h Y% \xB7 <age>\` \u2014 used% on the weekly (7d) and session (5h) axes; \`\u2014\` = axis not measured.
 - **Pick providers by the 7d (weekly) axis** \u2014 it is the slow budget and the selection criterion. The 5h (session) axis is a short-term block that recovers at its \`resetsAt\`; a near-full 5h window with an imminent reset is not a reason to avoid the provider.
 - **A \`stale\` or \`refreshing\` number is NOT a current value.** \`stale\` = reading older than the routing staleness threshold; \`refreshing\` = a retained last-good reading while the refetch is failing. Never judge routing from one, and never declare a provider exhausted \u2014 or available \u2014 on its basis; re-check \`mesh_status\` first.
-- **To pin a provider, use \`required_tags: ["provider=<type>"]\`.** The \`model\` parameter does NOT fix the provider.`;
+- **Automatic routing is the default for ordinary new tasks:** omit provider/model/thinking overrides and classify difficulty honestly. Node/worktree targeting is branch affinity only. Prior success does not justify a new provider pin; stale quota is not exhaustion. Intentional owner choice and cross-provider review may pin; same-issue session continuation remains valid. Provider-pin warnings are informational. **To intentionally pin a provider, use \`required_tags: ["provider=<type>"]\`.** The \`model\` parameter does NOT fix the provider.`;
         ONBOARDING_SECTION = `## Onboarding / Reinit
 
 When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, follow the guided flow in the \`mesh_init\` description: you draft, the user approves, the daemon writes \u2014 label every draft repo-file (commit target) vs machine-local, show a current-vs-suggested diff, and never write without an explicit approval turn (\`mesh_init\` with \`mode="reinit"\` needs per-section approval; \`.adhdev/mesh.json\` goes through \`mesh_config\` with \`kind="mesh_json"\`).`;
@@ -73580,7 +73580,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         ...boundedSkipped.length ? { skippedCandidates: boundedSkipped } : {},
         ...args.skippedCandidates.length > boundedSkipped.length ? { skippedCandidatesOmitted: args.skippedCandidates.length - boundedSkipped.length } : {},
         requiredTagsResult: args.requiredTagsResult,
-        resolvedProviderType: args.resolved.providerType,
+        resolvedProviderType: executedProvider,
         ...args.effectiveModel ? { resolvedModel: args.effectiveModel } : {},
         ...args.effectiveThinkingLevel ? { resolvedThinkingLevel: args.effectiveThinkingLevel } : {},
         ...args.task.difficulty ? { resolvedDifficulty: String(args.task.difficulty) } : {},
@@ -74056,12 +74056,17 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       }
       const slotCoversDifficulty = slotCoversTaskDifficulty(resolved.slot, task.difficulty);
       const requestedModel = resolveLaunchAxis(task.model, task.modelSource, resolved.model, slotCoversDifficulty);
-      const effectiveThinkingLevel = resolveLaunchAxis(task.thinkingLevel, task.thinkingLevelSource, resolved.thinkingLevel, slotCoversDifficulty);
       const slotChoice = decideAutoLaunchSlot(meshId, mesh, task, node, nodeId, isReadonly, resolved, requestedModel, markSkip);
       if (!slotChoice) return null;
       const { effectiveProviderType } = slotChoice;
       const rawEffectiveModel = slotChoice.model;
       const demotionReason = slotChoice.demotionReason;
+      const effectiveThinkingLevel = resolveLaunchAxis(
+        task.thinkingLevel,
+        task.thinkingLevelSource,
+        slotChoice.slot?.thinkingLevel,
+        slotCoversTaskDifficulty(slotChoice.slot, task.difficulty)
+      );
       const effectiveModel = isModelCompatibleWithProvider(rawEffectiveModel, effectiveProviderType) ? rawEffectiveModel : void 0;
       const launchModelSource = classifyMeshLaunchAxisSource({
         taskValue: task.model,
@@ -98055,7 +98060,7 @@ ${tail}` : ""
       projectServerStatusEvent: () => projectServerStatusEvent,
       projectTurnTopicEntry: () => projectTurnTopicEntry,
       projectTurnWireEvent: () => projectTurnWireEvent,
-      providerPinsFromRequiredTags: () => providerPinsFromRequiredTags3,
+      providerPinsFromRequiredTags: () => providerPinsFromRequiredTags4,
       pruneDeadMeshCoordinators: () => pruneDeadMeshCoordinators,
       pruneOperatingNotes: () => pruneOperatingNotes,
       pruneRetiredMeshConsumers: () => pruneRetiredMeshConsumers,
@@ -170494,7 +170499,7 @@ __export(index_exports, {
 module.exports = __toCommonJS(index_exports);
 
 // src/cli-args.ts
-var import_daemon_core29 = __toESM(require_dist3());
+var import_daemon_core30 = __toESM(require_dist3());
 
 // ../mesh-shared/dist/index.mjs
 function readRecord(value) {
@@ -174100,7 +174105,7 @@ var ENQUEUE_TASK_DISCOVERY_META = {
 };
 var MESH_ENQUEUE_TASK_TOOL = {
   name: "mesh_enqueue_task",
-  description: "Enqueue ONE worker task; an idle node claims it. The default way to delegate: when a step needs queued work to finish first, pass depends_on with those task ids \u2014 grow the plan as results arrive. mesh_enqueue_batch enqueues several such tasks at once. Same-session continuation belongs in mesh_send_task. Warns when an in-flight task has the same message+target.",
+  description: "Enqueue ONE worker task; an idle node claims it. The default way to delegate: when a step needs queued work to finish first, pass depends_on with those task ids \u2014 grow the plan as results arrive. Omit provider/model/thinking for ordinary new tasks; classify difficulty honestly. Node targeting is branch affinity only. Intentional provider pins are honored with informational return warnings. mesh_enqueue_batch enqueues several such tasks at once. Same-session continuation belongs in mesh_send_task. Warns when an in-flight task has the same message+target.",
   _meta: ENQUEUE_TASK_DISCOVERY_META,
   inputSchema: {
     type: "object",
@@ -174109,7 +174114,7 @@ var MESH_ENQUEUE_TASK_TOOL = {
       input: MESH_TASK_INPUT_SCHEMA,
       task_mode: { ...enumOf(MESH_TASK_MODES), description: "live_debug_readonly lints the instruction TEXT and rejects write/push/deploy wording before dispatch, and may run in parallel on a busy node (cheap for investigation). It does NOT remove the worker's Edit/Write/Bash tools \u2014 the worker stays read-only only if it follows the instruction; verify with mesh_git_status afterward." },
       readonly: { type: "boolean", description: "Read-only axis, composable with task_mode: separate parallel cap, no write isolation, exempt from the per-node write limit and the dirty/stale gates. Instruction text is linted; the worker's own tools are NOT restricted." },
-      required_tags: { type: "array", items: { type: "string" }, description: "Capability tags every eligible node must have, e.g. os=darwin, provider=codex-cli." },
+      required_tags: { type: "array", items: { type: "string" }, description: "Capability constraints, e.g. os=darwin. Omit provider= unless intentionally restricting routing." },
       owned_paths: { type: "array", items: { type: "string" }, description: "code_change only: repo-relative files/dirs this task will touch (dir/** = subtree). A claim overlapping another in-flight code_change task's paths is refused (owned_paths_conflict)." },
       target_node_id: { type: "string", description: "HARD pin: only this node may claim. Beats prefer_worktree; unresolvable id rejected." },
       prefer_worktree: { type: "boolean", description: "Route to the most recently cloned idle worktree node (no-op if none)." },
@@ -174129,7 +174134,7 @@ var MESH_ENQUEUE_TASK_TOOL = {
 };
 var MESH_ENQUEUE_BATCH_TOOL = {
   name: "mesh_enqueue_batch",
-  description: "Enqueue several mesh_enqueue_task tasks at once, atomically: all insert or none do (any invalid entry rolls back the batch). Entries name each other by batch-local `ref` in depends_on (forward refs OK; a non-ref value must be an existing task id). Never invent steps to fill a batch \u2014 when later steps are not known yet, chain mesh_enqueue_task with depends_on as results arrive.",
+  description: "Enqueue several mesh_enqueue_task tasks at once, atomically: all insert or none do (any invalid entry rolls back the batch). Entries name each other by batch-local `ref` in depends_on (forward refs OK; a non-ref value must be an existing task id). Default to automatic routing: omit provider/model/thinking overrides unless intentional. Node targeting is affinity only; explicit provider pins return per-task informational warnings. Never invent steps to fill a batch \u2014 when later steps are not known yet, chain mesh_enqueue_task with depends_on as results arrive.",
   _meta: ENQUEUE_BATCH_DISCOVERY_META,
   inputSchema: {
     type: "object",
@@ -174145,7 +174150,7 @@ var MESH_ENQUEUE_BATCH_TOOL = {
             input: { type: "object" },
             task_mode: enumOf(MESH_TASK_MODES),
             readonly: { type: "boolean" },
-            required_tags: { type: "array", items: { type: "string" } },
+            required_tags: { type: "array", items: { type: "string" }, description: "Omit provider= for automatic routing; node/worktree affinity does not pin a provider." },
             owned_paths: { type: "array", items: { type: "string" }, description: "code_change path ownership, as in mesh_enqueue_task." },
             target_node_id: { type: "string", description: "HARD pin; an unresolvable id rejects the batch." },
             prefer_worktree: { type: "boolean" },
@@ -174324,7 +174329,7 @@ var MESH_LAUNCH_SESSION_TOOL = {
     type: "object",
     properties: {
       node_id: { type: "string", description: "Target node ID." },
-      type: { type: "string", description: "Optional provider type to launch. Use claude-cli for Claude Code, codex-cli for Codex, cursor-cli for Cursor, kimi for Kimi, opencode for OpenCode, grok-cli for Grok, antigravity-cli for Antigravity. When omitted, node.policy.providerPriority is probed in order." },
+      type: { type: "string", description: "Optional intentional provider restriction (returns an informational pin warning). Omit for automatic routing. Use claude-cli for Claude Code, codex-cli for Codex, cursor-cli for Cursor, kimi for Kimi, opencode for OpenCode, grok-cli for Grok, antigravity-cli for Antigravity. When omitted, node.policy.providerPriority is probed in order." },
       force: { type: "boolean", description: "Set true to launch an ADDITIONAL session even when this node already has a live mesh-owned worker session. Default false: a live mesh-owned worker session for this mesh+node is returned idempotently (reused:true) when its provider matches the resolved type or is unknown; a session with a definitely different provider does NOT trigger reuse \u2014 a fresh session of the requested provider is launched. Only pass force when you intentionally want a second concurrent session on the node regardless of what already exists." }
     },
     required: ["node_id"]
@@ -176620,8 +176625,29 @@ async function meshRoutePreview(ctx, args) {
   }), null, 2);
 }
 
-// src/tools/mesh-tools-queue.ts
+// src/tools/mesh-provider-pin-advisory.ts
 var import_daemon_core14 = __toESM(require_dist3());
+function withProviderPinWarning(response, requestedProviders) {
+  const pins = [...new Set(requestedProviders.map((p) => p.trim()).filter(Boolean))];
+  if (!pins.length) return response;
+  const recommendation = pins.map((provider) => `You explicitly pinned provider ${provider}. Unless there is a specific reason, omit the provider pin and let automatic routing choose.`).join(" ");
+  return {
+    ...response,
+    providerPinWarnings: [
+      ...Array.isArray(response.providerPinWarnings) ? response.providerPinWarnings : [],
+      { code: "explicit_provider_pin", requestedProviders: pins, recommendation }
+    ]
+  };
+}
+function requestedProviderPins(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return [];
+  const args = input;
+  const tags = Object.prototype.hasOwnProperty.call(args, "required_tags") ? args.required_tags : args.requiredTags;
+  return (0, import_daemon_core14.providerPinsFromRequiredTags)(Array.isArray(tags) ? tags.filter((tag) => typeof tag === "string") : []);
+}
+
+// src/tools/mesh-tools-queue.ts
+var import_daemon_core15 = __toESM(require_dist3());
 
 // src/tools/validate-tool-args.ts
 function isEnumProperty(value) {
@@ -177064,7 +177090,7 @@ function validateMeshToolArgs(name, rawArgs) {
 }
 
 // src/tools/mesh-tools-queue.ts
-var import_daemon_core15 = __toESM(require_dist3());
+var import_daemon_core16 = __toESM(require_dist3());
 function normalizeDedupMessage(message) {
   return (message || "").trim().replace(/\s+/g, " ").toLowerCase();
 }
@@ -177076,7 +177102,7 @@ async function findInFlightDuplicate(ctx, message, targetNodeId) {
     if (normalizeDedupMessage(task.message) !== fingerprint) continue;
     if (targetNodeId) {
       const existingTarget = task.targetNodeId || task.assignedNodeId;
-      if (!existingTarget || !(0, import_daemon_core14.meshNodeIdMatches)({ id: existingTarget }, targetNodeId)) continue;
+      if (!existingTarget || !(0, import_daemon_core15.meshNodeIdMatches)({ id: existingTarget }, targetNodeId)) continue;
     }
     return { id: task.id, status: task.status, assignedNodeId: task.assignedNodeId, targetNodeId: task.targetNodeId };
   }
@@ -177114,7 +177140,7 @@ async function normalizeEnqueueTaskArgs(ctx, rawArgs, callerLabel) {
   }
   const taskMode = readString(args.task_mode) || readString(args.taskMode);
   const readonly = args.readonly === true || args.read_only === true;
-  const requiredTags = (0, import_daemon_core14.normalizeMeshCapabilityTags)(Array.isArray(args.requiredTags) ? args.requiredTags : args.required_tags);
+  const requiredTags = (0, import_daemon_core15.normalizeMeshCapabilityTags)(Array.isArray(args.requiredTags) ? args.requiredTags : args.required_tags);
   const dependsOn = Array.isArray(args.dependsOn) ? args.dependsOn : Array.isArray(args.depends_on) ? args.depends_on : void 0;
   const missionId = readString(args.missionId) || readString(args.mission_id) || void 0;
   if (missionId && !(await missionQuery(ctx.transport, { meshId: ctx.mesh.id, id: missionId })).missions[0]) {
@@ -177125,19 +177151,19 @@ async function normalizeEnqueueTaskArgs(ctx, rawArgs, callerLabel) {
       extra: { missionId }
     };
   }
-  const priority = (0, import_daemon_core14.normalizeMeshTaskPriority)(readString(args.priority)) || void 0;
+  const priority = (0, import_daemon_core15.normalizeMeshTaskPriority)(readString(args.priority)) || void 0;
   const model = readString(args.model) || void 0;
   const thinkingLevel = readString(args.thinkingLevel) || readString(args.thinking_level) || void 0;
   const difficulty = readString(args.difficulty) || void 0;
   const notBeforeRaw = args.notBefore !== void 0 ? args.notBefore : args.not_before;
-  const notBefore = (0, import_daemon_core14.resolveNotBefore)(notBeforeRaw);
+  const notBefore = (0, import_daemon_core15.resolveNotBefore)(notBeforeRaw);
   const maxRetriesRaw = typeof args.maxRetries === "number" ? args.maxRetries : typeof args.max_retries === "number" ? args.max_retries : void 0;
   const maxRetries = typeof maxRetriesRaw === "number" && Number.isFinite(maxRetriesRaw) && maxRetriesRaw >= 0 ? Math.floor(maxRetriesRaw) : void 0;
   const explicitTargetRaw = readString(args.targetNodeId) || readString(args.target_node_id) || readString(args.targetNode) || readString(args.target_node) || void 0;
   const preferWorktree = args.preferWorktree === true || args.prefer_worktree === true;
   let targetNodeId;
   if (explicitTargetRaw) {
-    const matched = ctx.mesh.nodes.find((n) => (0, import_daemon_core14.meshNodeIdMatches)(n, explicitTargetRaw));
+    const matched = ctx.mesh.nodes.find((n) => (0, import_daemon_core15.meshNodeIdMatches)(n, explicitTargetRaw));
     if (!matched) {
       return {
         ok: false,
@@ -177179,7 +177205,7 @@ async function normalizeEnqueueTaskArgs(ctx, rawArgs, callerLabel) {
   };
 }
 function buildProviderPinAdvisory(requiredTags) {
-  const pins = (0, import_daemon_core14.providerPinsFromRequiredTags)(requiredTags);
+  const pins = (0, import_daemon_core15.providerPinsFromRequiredTags)(requiredTags);
   if (!pins.length) return {};
   return {
     providerPin: pins,
@@ -177187,11 +177213,12 @@ function buildProviderPinAdvisory(requiredTags) {
   };
 }
 async function meshEnqueueTask(ctx, args) {
+  const respond = (response) => JSON.stringify(withProviderPinWarning(response, requestedProviderPins(args)));
   args = canonicalizeMeshTopLevelArgs("mesh_enqueue_task", args);
   await refreshMeshFromDaemon(ctx);
   const normalized = await normalizeEnqueueTaskArgs(ctx, args, "mesh_enqueue_task");
   if (!normalized.ok) {
-    return JSON.stringify({ success: false, code: normalized.code, error: normalized.error, ...normalized.extra ?? {} });
+    return respond({ success: false, code: normalized.code, error: normalized.error, ...normalized.extra ?? {} });
   }
   const {
     message,
@@ -177216,7 +177243,7 @@ async function meshEnqueueTask(ctx, args) {
   const blockDuplicate = args.blockDuplicate === true || args.block_duplicate === true;
   const duplicateSuspect = allowDuplicate ? null : await findInFlightDuplicate(ctx, message, targetNodeId);
   if (duplicateSuspect && blockDuplicate) {
-    return JSON.stringify({
+    return respond({
       success: false,
       code: "duplicate_suspect",
       error: `an in-flight task with the same message${targetNodeId ? " and target node" : ""} already exists (task '${duplicateSuspect.id}', status '${duplicateSuspect.status}'). Refusing because block_duplicate=true. Cancel it, wait for it, or re-enqueue with allow_duplicate=true.`,
@@ -177260,7 +177287,7 @@ async function meshEnqueueTask(ctx, args) {
       ...task.maxRetries !== void 0 ? { maxRetries: task.maxRetries } : {}
     };
     const queueTrigger = await triggerMeshQueueAndReport(ctx);
-    return JSON.stringify({
+    return respond({
       success: true,
       source: "queue",
       taskId: task.id,
@@ -177280,34 +177307,48 @@ async function meshEnqueueTask(ctx, args) {
   } catch (e) {
     const message2 = e?.message || String(e);
     if (message2.includes("live_debug_readonly_guardrail_violation")) {
-      return JSON.stringify({ success: false, code: "live_debug_readonly_guardrail_violation", taskMode, error: message2 });
+      return respond({ success: false, code: "live_debug_readonly_guardrail_violation", taskMode, error: message2 });
     }
     if (message2.includes("dependency_cycle_detected")) {
-      return JSON.stringify({ success: false, code: "dependency_cycle_detected", dependsOn, error: message2 });
+      return respond({ success: false, code: "dependency_cycle_detected", dependsOn, error: message2 });
     }
-    return JSON.stringify({ success: false, error: message2 });
+    return respond({ success: false, error: message2 });
   }
 }
 async function meshEnqueueBatch(ctx, args) {
+  const respond = (response) => {
+    const entries = Array.isArray(args.tasks) ? args.tasks : [];
+    if (response.success === true && Array.isArray(response.tasks)) {
+      return JSON.stringify({ ...response, tasks: response.tasks.map((task, i) => withProviderPinWarning(task, requestedProviderPins(entries[i] ?? {}))) });
+    }
+    const providerPinWarnings = entries.flatMap((entry, taskIndex) => {
+      const advice = withProviderPinWarning({}, requestedProviderPins(entry));
+      return (advice.providerPinWarnings ?? []).map((warning) => ({ ...warning, taskIndex }));
+    });
+    return JSON.stringify(providerPinWarnings.length ? {
+      ...response,
+      providerPinWarnings: [...Array.isArray(response.providerPinWarnings) ? response.providerPinWarnings : [], ...providerPinWarnings]
+    } : response);
+  };
   args = canonicalizeMeshTopLevelArgs("mesh_enqueue_batch", args);
   const rawTasks = Array.isArray(args.tasks) ? args.tasks : void 0;
   if (!rawTasks || rawTasks.length === 0) {
-    return JSON.stringify({
+    return respond({
       success: false,
       code: "empty_task_batch",
       error: "mesh_enqueue_batch requires a non-empty `tasks` array."
     });
   }
-  if (rawTasks.length > import_daemon_core15.MESH_TASK_BATCH_MAX_TASKS) {
-    return JSON.stringify({
+  if (rawTasks.length > import_daemon_core16.MESH_TASK_BATCH_MAX_TASKS) {
+    return respond({
       success: false,
       code: "task_batch_too_large",
-      error: `mesh_enqueue_batch accepts at most ${import_daemon_core15.MESH_TASK_BATCH_MAX_TASKS} tasks per call (got ${rawTasks.length}). Split the batch, or reconsider whether one batch really needs this many tasks.`
+      error: `mesh_enqueue_batch accepts at most ${import_daemon_core16.MESH_TASK_BATCH_MAX_TASKS} tasks per call (got ${rawTasks.length}). Split the batch, or reconsider whether one batch really needs this many tasks.`
     });
   }
   const batchMissionId = readString(args.missionId) || readString(args.mission_id) || void 0;
   if (batchMissionId && !(await missionQuery(ctx.transport, { meshId: ctx.mesh.id, id: batchMissionId })).missions[0]) {
-    return JSON.stringify({
+    return respond({
       success: false,
       code: "mission_not_found",
       error: `mission '${batchMissionId}' does not exist on this mesh \u2014 refusing to enqueue a batch with an unresolvable mission_id. Omit mission_id, or use mesh_mission_list to get a valid full id.`,
@@ -177326,7 +177367,7 @@ async function meshEnqueueBatch(ctx, args) {
     const label = ref ? `task '${ref}'` : `task #${i}`;
     const normalized = await normalizeEnqueueTaskArgs(ctx, entry, `mesh_enqueue_batch ${label}`);
     if (!normalized.ok) {
-      return JSON.stringify({
+      return respond({
         success: false,
         code: normalized.code,
         error: normalized.error,
@@ -177372,7 +177413,7 @@ async function meshEnqueueBatch(ctx, args) {
     });
   }
   if (duplicateSuspects.length > 0 && blockDuplicate) {
-    return JSON.stringify({
+    return respond({
       success: false,
       code: "duplicate_suspect",
       error: `${duplicateSuspects.length} task(s) in this batch match an in-flight task with the same message (and target node when pinned). Refusing the WHOLE batch because block_duplicate=true and the batch is atomic. Cancel the in-flight duplicates, wait for them, or re-send with allow_duplicate=true.`,
@@ -177386,7 +177427,7 @@ async function meshEnqueueBatch(ctx, args) {
     specs
   });
   if (!committed.ok) {
-    return JSON.stringify({
+    return respond({
       success: false,
       ...committed.refusalCode ? { code: committed.refusalCode } : {},
       error: committed.message,
@@ -177415,7 +177456,7 @@ async function meshEnqueueBatch(ctx, args) {
     worktreeRoutingAdvisoryTasks: advisoryTasks
   } : {};
   const queueTrigger = await triggerMeshQueueAndReport(ctx);
-  return JSON.stringify({
+  return respond({
     success: true,
     source: "queue",
     atomic: true,
@@ -177425,6 +177466,7 @@ async function meshEnqueueBatch(ctx, args) {
       taskId: task.id,
       status: task.status,
       taskMode: task.taskMode,
+      ...buildProviderPinAdvisory(normalizedEntries[i].requiredTags),
       ...Array.isArray(task.dependsOn) && task.dependsOn.length > 0 ? { dependsOn: task.dependsOn } : {},
       ...task.targetNodeId ? { targetNodeId: task.targetNodeId } : {},
       ...task.priority ? { priority: task.priority } : {},
@@ -177442,13 +177484,13 @@ async function meshEnqueueBatch(ctx, args) {
 }
 
 // src/tools/mesh-tools-queue-manage.ts
-var import_daemon_core18 = __toESM(require_dist3());
+var import_daemon_core19 = __toESM(require_dist3());
 
 // src/tools/mesh-direct-dispatch-reconcile.ts
-var import_daemon_core17 = __toESM(require_dist3());
+var import_daemon_core18 = __toESM(require_dist3());
 
 // src/tools/mesh-transcript-semantic-read.ts
-var import_daemon_core16 = __toESM(require_dist3());
+var import_daemon_core17 = __toESM(require_dist3());
 var import_transcript_read_model_consumers = __toESM(require_transcript_read_model_consumers());
 var SEMANTIC_TRANSCRIPT_FRESHNESS_BUDGET_MS = 3e4;
 function unwrap2(result) {
@@ -177535,7 +177577,7 @@ async function readTranscriptReplicaForSemanticConsumer(transport, request) {
     }
   }
   return {
-    payload: (0, import_daemon_core16.mapTranscriptViewToReadChatPayload)(snapshot, {
+    payload: (0, import_daemon_core17.mapTranscriptViewToReadChatPayload)(snapshot, {
       omittedBefore: snapshot.coverage.omittedBefore,
       stale: read.stale === true
     }),
@@ -177608,9 +177650,9 @@ async function reconcileDirectDispatchesFromTranscriptEvidence(ctx, liveNodes, d
       }
       if (payload?.success === false) continue;
       const messages = Array.isArray(payload?.messages) ? payload.messages : [];
-      const trailingToolActivity = (0, import_daemon_core17.hasTrailingToolActivityAfterFinalAssistant)(messages);
+      const trailingToolActivity = (0, import_daemon_core18.hasTrailingToolActivityAfterFinalAssistant)(messages);
       if (trailingToolActivity) continue;
-      const evidence = (0, import_daemon_core17.extractFinalAssistantSummaryEvidence)(messages);
+      const evidence = (0, import_daemon_core18.extractFinalAssistantSummaryEvidence)(messages);
       if (!evidence.finalSummary) continue;
       const messageAtMs = evidence.transcriptMessageAt ? Date.parse(evidence.transcriptMessageAt) : NaN;
       const turnEvidence = {
@@ -177675,7 +177717,7 @@ async function meshViewQueue(ctx, args) {
     const depMetaById = new Map(dependencyRows.map((task) => [task.id, task]));
     const withDependencies = rawQueue.map((task) => {
       if (!Array.isArray(task.dependsOn) || task.dependsOn.length === 0) return task;
-      const depState = (0, import_daemon_core18.describeTaskDependencyState)(task, statusById, depMetaById);
+      const depState = (0, import_daemon_core19.describeTaskDependencyState)(task, statusById, depMetaById);
       return { ...task, ...depState };
     });
     const liveNodes = await collectMeshNodesWithRuntime(ctx, probeOpts);
@@ -177716,11 +177758,11 @@ async function meshViewQueue(ctx, args) {
     const pollingGuidance = buildActiveWorkPollingGuidance(activeWorkEvidence.summary);
     const activeOnlyQueue = queue.filter((task) => !HISTORICAL_QUEUE_STATUSES.has(String(task?.status || "")));
     const compactQueueResult = compact ? compactQueueRows(activeOnlyQueue) : { rows: activeOnlyQueue, omitted: 0 };
-    const visibleQueue = (compact ? compactQueueResult.rows : queue).map((task) => (0, import_daemon_core18.summarizeQueueEntryInputForView)(task));
+    const visibleQueue = (compact ? compactQueueResult.rows : queue).map((task) => (0, import_daemon_core19.summarizeQueueEntryInputForView)(task));
     const wantActiveQueueArray = view === "active" || statusFilter?.some((status) => ACTIVE_QUEUE_STATUSES.has(status));
     const wantHistoricalQueueArray = !compact && (view === "historical" || requestedHistoricalRows);
     const activeWorkResult = compact ? compactActiveWorkRecords(activeWorkEvidence.activeWork) : { records: activeWorkEvidence.activeWork, omitted: 0 };
-    const staleDirectWorkSummary = (0, import_daemon_core18.buildCompactStaleDirectWorkSummary)(activeWorkEvidence.staleDirectWork, {
+    const staleDirectWorkSummary = (0, import_daemon_core19.buildCompactStaleDirectWorkSummary)(activeWorkEvidence.staleDirectWork, {
       note: activeWorkEvidence.staleDirectWorkNote,
       detailHint: "Full stale direct entries are omitted from mesh_view_queue in compact mode. Call mesh_view_queue with verbose=true, or inspect mesh_task_history for ledger detail."
     });
@@ -177877,7 +177919,7 @@ async function meshQueueCancel(ctx, args) {
       // can act without waiting for the event round-trip.
       ...orphanedPinnedTasks.length > 0 ? {
         orphanedPinnedTasks,
-        orphanedPinnedTasksWarning: (0, import_daemon_core18.buildOrphanedPinNotice)(
+        orphanedPinnedTasksWarning: (0, import_daemon_core19.buildOrphanedPinNotice)(
           orphanedPinnedTasks,
           assignedSessionId,
           `Cancelling task ${taskId}`
@@ -177970,7 +178012,7 @@ async function meshQueueRequeue(ctx, args) {
 }
 
 // src/tools/mesh-tools-mission.ts
-var import_daemon_core19 = __toESM(require_dist3());
+var import_daemon_core20 = __toESM(require_dist3());
 
 // src/tools/mesh-record-reconcile-evidence.ts
 function lastTimestamp(slice) {
@@ -178297,7 +178339,7 @@ async function meshReconcileLedger(ctx, args) {
   }, null, 2);
 }
 function isMeshMissionStatusValue2(value) {
-  return value !== void 0 && import_daemon_core19.MESH_MISSION_STATUSES.includes(value);
+  return value !== void 0 && import_daemon_core20.MESH_MISSION_STATUSES.includes(value);
 }
 function missionIpcErrorResult(e) {
   const message = e?.message || String(e);
@@ -178325,7 +178367,7 @@ async function meshMissionUpsert(ctx, args) {
       return JSON.stringify({
         success: false,
         code: "invalid_mission_status",
-        error: `invalid_mission_status: '${statusArg}' (valid: ${import_daemon_core19.MESH_MISSION_STATUSES.join(", ")})`
+        error: `invalid_mission_status: '${statusArg}' (valid: ${import_daemon_core20.MESH_MISSION_STATUSES.join(", ")})`
       });
     }
     const { brief, briefIgnored } = coerceBriefArg(args.brief);
@@ -178365,7 +178407,7 @@ async function meshMissionUpsertBulk(ctx, missionIds, status) {
     });
   }
   if (!isMeshMissionStatusValue2(status)) {
-    const error = `invalid_mission_status: '${status}' (valid: ${import_daemon_core19.MESH_MISSION_STATUSES.join(", ")})`;
+    const error = `invalid_mission_status: '${status}' (valid: ${import_daemon_core20.MESH_MISSION_STATUSES.join(", ")})`;
     const results2 = missionIds.map((id2) => ({ id: id2, ok: false, code: "invalid_mission_status", error }));
     return JSON.stringify({
       success: false,
@@ -178414,12 +178456,12 @@ async function meshMissionUpsertBulk(ctx, missionIds, status) {
 async function meshMissionList(ctx, args = {}) {
   try {
     const rawStatuses = Array.isArray(args.status) ? args.status : typeof args.status === "string" && args.status.trim() ? [args.status] : [];
-    const invalid = rawStatuses.filter((s) => !import_daemon_core19.MESH_MISSION_STATUSES.includes(s));
+    const invalid = rawStatuses.filter((s) => !import_daemon_core20.MESH_MISSION_STATUSES.includes(s));
     if (invalid.length > 0) {
       return JSON.stringify({
         success: false,
         code: "invalid_mission_status",
-        error: `invalid status filter: ${invalid.join(", ")} (valid: ${import_daemon_core19.MESH_MISSION_STATUSES.join(", ")})`
+        error: `invalid status filter: ${invalid.join(", ")} (valid: ${import_daemon_core20.MESH_MISSION_STATUSES.join(", ")})`
       });
     }
     const statuses = rawStatuses.length > 0 ? rawStatuses : void 0;
@@ -178623,7 +178665,7 @@ async function meshNodeSlotsPropose(ctx, args = {}) {
 }
 
 // src/tools/mesh-direct-dispatch-attempt.ts
-var import_daemon_core20 = __toESM(require_dist3());
+var import_daemon_core21 = __toESM(require_dist3());
 function computeIdleDispatchAckRisk(sessionWasIdle, dispatchPreRecorded, sessionId) {
   if (!sessionWasIdle || dispatchPreRecorded) return {};
   return {
@@ -178653,7 +178695,7 @@ async function openDirectDispatchAttempt(ctx, opts) {
     return { kind: "opened", attemptRef: accepted.attemptRef };
   } catch (e) {
     if (e instanceof TurnIpcCommandError && e.code === "session_busy_with_task") {
-      const busy = (0, import_daemon_core20.classifySessionBusyWithTask)(e.message);
+      const busy = (0, import_daemon_core21.classifySessionBusyWithTask)(e.message);
       const currentTaskId = busy && busy.currentTaskId !== "unknown" ? busy.currentTaskId : void 0;
       const currentAttemptId = busy?.currentAttemptId;
       return {
@@ -178727,11 +178769,11 @@ function LOG_DIRECT_DISPATCH_TURN_OBSERVE_FAILURE(e, stage) {
 }
 
 // src/tools/mesh-tools-send-task.ts
-var import_daemon_core22 = __toESM(require_dist3());
+var import_daemon_core23 = __toESM(require_dist3());
 var import_node_crypto = require("crypto");
 
 // src/tools/mesh-remote-dispatch.ts
-var import_daemon_core21 = __toESM(require_dist3());
+var import_daemon_core22 = __toESM(require_dist3());
 function buildRelayUnsafeRemoteSessionFailure(ctx, node, sessionId, providerType) {
   return {
     success: false,
@@ -178777,7 +178819,7 @@ function buildMissingCoordinatorDaemonIdFailure(ctx, node, providerType) {
   };
 }
 function buildCoordinatorP2pRelayFailure(error, context) {
-  const payload = (0, import_daemon_core21.buildP2pRelayFailurePayload)(error, {
+  const payload = (0, import_daemon_core22.buildP2pRelayFailurePayload)(error, {
     command: context.command,
     targetDaemonId: context.targetDaemonId
   });
@@ -178805,7 +178847,7 @@ function buildProviderPinUnsatisfiableFailure(node, providerPins, nodeProviders,
 }
 function checkDirectDispatchQuotaGate(node, providerType, quotaRoutingPolicy) {
   if (!providerType) return null;
-  const block = (0, import_daemon_core21.evaluateProviderQuotaGate)(node, providerType, quotaRoutingPolicy ?? null);
+  const block = (0, import_daemon_core22.evaluateProviderQuotaGate)(node, providerType, quotaRoutingPolicy ?? null);
   if (!block) return null;
   const quota = node?.nodeFacts?.quota?.[providerType];
   const window = block.window === "session" ? quota?.session : block.window === "weekly" ? quota?.weekly : null;
@@ -178834,8 +178876,8 @@ function buildQuotaExhaustedDispatchFailure(node, providerType, sessionId, gate)
   };
 }
 function resolveRemoteDispatchProvider(node, args) {
-  const providerPins = (0, import_daemon_core21.providerPinsFromRequiredTags)(args.requiredTags);
-  const providerPriorityList = (0, import_daemon_core21.filterProvidersByRequiredTags)(
+  const providerPins = (0, import_daemon_core22.providerPinsFromRequiredTags)(args.requiredTags);
+  const providerPriorityList = (0, import_daemon_core22.filterProvidersByRequiredTags)(
     readNodeProviderPriority(node),
     args.requiredTags
   );
@@ -179012,11 +179054,11 @@ async function sendDirectAgentTask(ctx, node, route, target, send) {
   }
 }
 function sessionBusyRefusalFields(error, sessionId) {
-  const busy = (0, import_daemon_core21.classifySessionBusyWithTask)(error);
+  const busy = (0, import_daemon_core22.classifySessionBusyWithTask)(error);
   if (!busy) return null;
   return {
-    code: import_daemon_core21.SESSION_BUSY_WITH_TASK_CODE,
-    reason: import_daemon_core21.SESSION_BUSY_WITH_TASK_CODE,
+    code: import_daemon_core22.SESSION_BUSY_WITH_TASK_CODE,
+    reason: import_daemon_core22.SESSION_BUSY_WITH_TASK_CODE,
     recoverable: true,
     retryRecommended: false,
     ...sessionId ? { sessionId } : {},
@@ -179027,7 +179069,7 @@ function sessionBusyRefusalFields(error, sessionId) {
 }
 
 // src/tools/mesh-tools-send-task.ts
-var import_daemon_core23 = __toESM(require_dist3());
+var import_daemon_core24 = __toESM(require_dist3());
 async function parseSendTaskRequest(ctx, args) {
   const message = readString(args.message);
   if (!message) {
@@ -179072,7 +179114,7 @@ async function parseSendTaskRequest(ctx, args) {
   const { normalizeDeliveryMode } = await Promise.resolve().then(() => __toESM(require_dist3()));
   const delivery = normalizeDeliveryMode(args.delivery_mode ?? args.deliveryMode);
   const deliveryModeWarning = delivery.unrecognized ? { deliveryModeWarning: `Unrecognized delivery_mode '${delivery.unrecognized}' was ignored (treated as when_idle). Valid values are 'when_idle' and 'interrupt'.` } : {};
-  const modeValidation = (0, import_daemon_core22.validateMeshTaskModeRequest)(requestedTaskMode, message, readonly);
+  const modeValidation = (0, import_daemon_core23.validateMeshTaskModeRequest)(requestedTaskMode, message, readonly);
   if (!modeValidation.valid) {
     return JSON.stringify({
       success: false,
@@ -179083,7 +179125,7 @@ async function parseSendTaskRequest(ctx, args) {
       // can see what tripped the guard instead of rewording blind.
       ...modeValidation.violationDetails ? { violationDetails: modeValidation.violationDetails } : {},
       allowedOperations: modeValidation.allowedOperations,
-      error: (0, import_daemon_core22.buildMeshTaskModeViolationError)(modeValidation)
+      error: (0, import_daemon_core23.buildMeshTaskModeViolationError)(modeValidation)
     });
   }
   return {
@@ -179120,11 +179162,11 @@ function checkSendTaskNodeGates(ctx, node, args, req) {
       nextAction: `Dispatch the convergence task to the base node for this mesh, or run the deterministic fast-forward convergence path (mesh_fast_forward_node / mesh_refine_node) instead of mesh_send_task.`
     });
   }
-  if (req.allowStaleNode || (0, import_daemon_core23.isTaskReadonly)({ readonly: req.readonly, taskMode })) return null;
-  const dirtyGate = (0, import_daemon_core23.readDirtyWriteGate)(node);
-  const dirty = (0, import_daemon_core23.dirtyWriteVerdict)(dirtyGate, directDispatchTaskFacts(args, req)) === "refuse";
-  const maxBehind = (0, import_daemon_core23.resolveAutoFastForwardPolicy)(ctx.mesh).maxBehind;
-  const staleBehind = !(0, import_daemon_core23.isMeshNodeFreshEnoughToLaunch)(node, { maxBehind });
+  if (req.allowStaleNode || (0, import_daemon_core24.isTaskReadonly)({ readonly: req.readonly, taskMode })) return null;
+  const dirtyGate = (0, import_daemon_core24.readDirtyWriteGate)(node);
+  const dirty = (0, import_daemon_core24.dirtyWriteVerdict)(dirtyGate, directDispatchTaskFacts(args, req)) === "refuse";
+  const maxBehind = (0, import_daemon_core24.resolveAutoFastForwardPolicy)(ctx.mesh).maxBehind;
+  const staleBehind = !(0, import_daemon_core24.isMeshNodeFreshEnoughToLaunch)(node, { maxBehind });
   if (!dirty && !staleBehind) return null;
   const behind = typeof node?.git?.behind === "number" ? node.git.behind : void 0;
   return JSON.stringify({
@@ -179135,7 +179177,7 @@ function checkSendTaskNodeGates(ctx, node, args, req) {
     nodeId: args.node_id,
     sessionId: args.session_id,
     taskMode: taskMode || "unspecified",
-    error: dirty ? `Refusing a non-readonly direct dispatch: ${(0, import_daemon_core23.describeDirtyWriteRefusal)(dirtyGate, `'${args.node_id}'`)} \u2014 the uncommitted changes are the user's, not a task's.` : `Node '${args.node_id}' is behind its upstream${behind !== void 0 ? ` (${behind} commit(s), max ${maxBehind ?? 0})` : ""} \u2014 refusing a non-readonly direct dispatch against stale code.`,
+    error: dirty ? `Refusing a non-readonly direct dispatch: ${(0, import_daemon_core24.describeDirtyWriteRefusal)(dirtyGate, `'${args.node_id}'`)} \u2014 the uncommitted changes are the user's, not a task's.` : `Node '${args.node_id}' is behind its upstream${behind !== void 0 ? ` (${behind} commit(s), max ${maxBehind ?? 0})` : ""} \u2014 refusing a non-readonly direct dispatch against stale code.`,
     nextAction: `Let the node's auto fast-forward / clean-up run first, retry with a readonly task_mode, or pass allow_stale_node: true to dispatch anyway (e.g. a task whose job IS to fix the dirty/stale tree).`
   });
 }
@@ -179330,7 +179372,7 @@ function buildWorkerDispatchBody(ctx, node, taskId, args, req) {
   const message = dirtyWorkspaceNotice ? `${req.message}
 
 ${dirtyWorkspaceNotice}` : req.message;
-  const body = (0, import_daemon_core23.resolveDispatchMessage)(
+  const body = (0, import_daemon_core24.resolveDispatchMessage)(
     {
       id: taskId,
       message,
@@ -179354,9 +179396,9 @@ function directDispatchTaskFacts(args, req) {
   return { readonly: req.readonly, ...req.taskMode ? { taskMode: req.taskMode } : {}, targetNodeId: args.node_id };
 }
 function resolveDirectBranchContinuationNotice(node, args, req) {
-  if ((0, import_daemon_core23.dirtyWriteVerdict)((0, import_daemon_core23.readDirtyWriteGate)(node), directDispatchTaskFacts(args, req)) !== "branch_continuation") return void 0;
+  if ((0, import_daemon_core24.dirtyWriteVerdict)((0, import_daemon_core24.readDirtyWriteGate)(node), directDispatchTaskFacts(args, req)) !== "branch_continuation") return void 0;
   const git = node?.git ?? node?.cachedStatus?.git;
-  return (0, import_daemon_core23.buildBranchContinuationNotice)((0, import_daemon_core23.readWorktreeNodeBranch)(node) || "", (0, import_daemon_core23.countGitWorktreeChanges)(git));
+  return (0, import_daemon_core24.buildBranchContinuationNotice)((0, import_daemon_core24.readWorktreeNodeBranch)(node) || "", (0, import_daemon_core24.countGitWorktreeChanges)(git));
 }
 function buildDispatchMeshContext(ctx, nodeId, taskId, coordinatorDaemonId, attemptRef) {
   return {
@@ -179540,7 +179582,7 @@ async function dispatchSendTaskDirect(ctx, node, route, args, req, explicitTarge
         kind: "dirty_workspace_dispatch",
         nodeId: args.node_id,
         ...target.sessionId ? { sessionId: target.sessionId } : {},
-        payload: { taskId, verdict: "branch_continuation", branch: (0, import_daemon_core23.readWorktreeNodeBranch)(node), via: "direct" }
+        payload: { taskId, verdict: "branch_continuation", branch: (0, import_daemon_core24.readWorktreeNodeBranch)(node), via: "direct" }
       });
     } catch {
     }
@@ -179743,10 +179785,10 @@ function annotateRapidReadChatAdvisory(payload, options) {
 }
 
 // src/tools/mesh-tools-session.ts
-var import_daemon_core26 = __toESM(require_dist3());
+var import_daemon_core27 = __toESM(require_dist3());
 
 // src/tools/mesh-read-chat-fallback.ts
-var import_daemon_core24 = __toESM(require_dist3());
+var import_daemon_core25 = __toESM(require_dist3());
 async function buildMissingNodeReadChatRecovery(ctx, args) {
   const { entries } = await ledgerQuery(ctx.transport, { meshId: ctx.mesh.id, tail: 300 });
   const relatedEntries = entries.filter((entry) => entry.nodeId === args.node_id || entry.sessionId === args.session_id);
@@ -179850,7 +179892,7 @@ async function resolveCachedMeshSessionPreviewFromLedger(ctx, nodeId, sessionId)
     const entrySessionId = readString(entry.sessionId) || readString(payload.targetSessionId) || readString(payload.sessionId) || readString(payload.instanceId);
     if (entrySessionId !== sessionId) continue;
     const metadataEvent = payload.metadataEvent && typeof payload.metadataEvent === "object" && !Array.isArray(payload.metadataEvent) ? payload.metadataEvent : payload;
-    const preview = (0, import_daemon_core24.resolveMeshSurfacedSessionPreview)(metadataEvent);
+    const preview = (0, import_daemon_core25.resolveMeshSurfacedSessionPreview)(metadataEvent);
     if (preview) {
       return { ...preview, ledgerKind: entry.kind, timestamp: entry.timestamp };
     }
@@ -179858,7 +179900,7 @@ async function resolveCachedMeshSessionPreviewFromLedger(ctx, nodeId, sessionId)
   return void 0;
 }
 async function buildMeshReadChatCacheFallback(ctx, args, node, error) {
-  const classification = (0, import_daemon_core24.classifyP2pRelayFailure)(error, { command: "read_chat", targetDaemonId: node.daemonId });
+  const classification = (0, import_daemon_core25.classifyP2pRelayFailure)(error, { command: "read_chat", targetDaemonId: node.daemonId });
   const cause = classifyReadChatTransportCause(error);
   const errorMessage = error instanceof Error ? error.message : String(error ?? "");
   const causeNote = cause === "not_connected" ? "the worker daemon is not currently connected over P2P (no live channel)" : "the worker daemon is connected but saturated \u2014 it acknowledged the request but did not return the transcript within the deadline";
@@ -179910,7 +179952,7 @@ async function buildMeshReadChatCacheFallback(ctx, args, node, error) {
 }
 
 // src/tools/mesh-transcript-replica-read.ts
-var import_daemon_core25 = __toESM(require_dist3());
+var import_daemon_core26 = __toESM(require_dist3());
 function unwrap3(result) {
   return unwrapOneLevel(result);
 }
@@ -179956,7 +179998,7 @@ async function readTranscriptReplicaForDisplay(transport, key) {
   }
   const snapshot = read.view;
   return {
-    payload: (0, import_daemon_core25.mapTranscriptViewToReadChatPayload)(snapshot, {
+    payload: (0, import_daemon_core26.mapTranscriptViewToReadChatPayload)(snapshot, {
       omittedBefore: snapshot.coverage.omittedBefore,
       stale: read.stale === true
     }),
@@ -179965,7 +180007,7 @@ async function readTranscriptReplicaForDisplay(transport, key) {
 }
 
 // src/tools/mesh-tools-session.ts
-var import_daemon_core27 = __toESM(require_dist3());
+var import_daemon_core28 = __toESM(require_dist3());
 async function meshPruneStaleDirect(ctx, args = {}) {
   await refreshMeshFromDaemon(ctx);
   if (args.dry_run === false && args.execute !== true) {
@@ -180098,7 +180140,7 @@ async function meshReadChat(ctx, args) {
       tailLimit: args.tail ?? 10
     });
   } catch (e) {
-    if (isLocalNode || !(0, import_daemon_core26.isP2pRelayTransportFailure)(e)) throw e;
+    if (isLocalNode || !(0, import_daemon_core27.isP2pRelayTransportFailure)(e)) throw e;
     if (staleReplicaPayload) return withPending(renderMeshReadChatPayload(staleReplicaPayload, args));
     return withPending(await buildMeshReadChatCacheFallback(ctx, args, node, e));
   }
@@ -180232,7 +180274,7 @@ async function meshSendKeys(ctx, args) {
     }
   };
   if (hasDestructive) {
-    const policyAllows = (0, import_daemon_core26.resolveAllowSendKeysDestructive)(ctx.mesh.policy, node.policy);
+    const policyAllows = (0, import_daemon_core27.resolveAllowSendKeysDestructive)(ctx.mesh.policy, node.policy);
     if (args.confirm_destructive !== true || !policyAllows) {
       await recordAudit("refused", { refused: "destructive_gate", policyAllows });
       return JSON.stringify({
@@ -180274,7 +180316,7 @@ function checkRequestedLaunchType(ctx, node, nodeId, requestedType) {
       supportedProviders: slotProviders
     }, null, 2);
   }
-  const explicitBlock = (0, import_daemon_core27.evaluateProviderQuotaGate)(node, requestedType, ctx.mesh.policy?.quotaRouting ?? null);
+  const explicitBlock = (0, import_daemon_core28.evaluateProviderQuotaGate)(node, requestedType, ctx.mesh.policy?.quotaRouting ?? null);
   if (!explicitBlock) return { quotaWarning: null };
   return {
     quotaWarning: {
@@ -180313,7 +180355,7 @@ async function detectLaunchProviderType(ctx, node, nodeId) {
     failed.push(`${providerType}: ${detectedPayload?.error || "not detected"}`);
   }
   if (detectedCandidates.length) {
-    const ranked = (0, import_daemon_core27.rankProvidersByQuotaGate)(node, detectedCandidates, ctx.mesh.policy?.quotaRouting ?? null);
+    const ranked = (0, import_daemon_core28.rankProvidersByQuotaGate)(node, detectedCandidates, ctx.mesh.policy?.quotaRouting ?? null);
     if (ranked.clear.length) return { providerType: ranked.clear[0] };
     const detail = ranked.gated.map((g) => `${g.providerType}: ${g.block.reason}`).join("; ");
     return JSON.stringify({
@@ -180337,14 +180379,14 @@ async function detectLaunchProviderType(ctx, node, nodeId) {
   return JSON.stringify({ success: false, error: `No usable provider detected for node '${nodeId}' from providerPriority: ${failed.join("; ")}` });
 }
 function resolveLaunchAutoApprove(ctx, node, providerType) {
-  const autoApprove = (0, import_daemon_core26.resolveDelegatedWorkerAutoApprove)(ctx.mesh.policy, node.policy);
-  const dangerousModeAllow = (0, import_daemon_core26.resolveDelegatedWorkerDangerousModeAllow)(ctx.mesh.policy, node.policy);
+  const autoApprove = (0, import_daemon_core27.resolveDelegatedWorkerAutoApprove)(ctx.mesh.policy, node.policy);
+  const dangerousModeAllow = (0, import_daemon_core27.resolveDelegatedWorkerDangerousModeAllow)(ctx.mesh.policy, node.policy);
   let autoApproveMode;
   if (autoApprove !== false) {
     try {
       const ws = typeof node.workspace === "string" && node.workspace.trim() ? node.workspace.trim() : "";
       if (ws) {
-        const repo = (0, import_daemon_core26.loadRepoMeshJsonConfig)(ws);
+        const repo = (0, import_daemon_core27.loadRepoMeshJsonConfig)(ws);
         const repoMode = repo.sourceType === "repo_file" ? repo.config?.providerDefaults?.autoApproveModes?.[providerType] : void 0;
         if (typeof repoMode === "string" && repoMode.trim()) autoApproveMode = repoMode.trim();
       }
@@ -180423,7 +180465,7 @@ async function meshLaunchSession(ctx, args) {
     throw e;
   }
   await recordMeshLaunchAudit(ctx, args, audit.outcome ?? null, responseText);
-  return responseText;
+  return JSON.stringify(withProviderPinWarning(JSON.parse(responseText), typeof args.type === "string" && args.type.trim() ? [args.type.trim()] : []));
 }
 function classifyMeshLaunchOutcome(payload) {
   if (!payload || typeof payload !== "object") return "failed";
@@ -180593,8 +180635,8 @@ async function meshListPendingApprovals(ctx, _args = {}) {
   const activeWorkView = await readActiveWorkFromDaemon(ctx, { nodes: liveNodes, recordTail: 200, includeInputs: true });
   scheduleBackgroundDirectReconcile(ctx, liveNodes, activeWorkView.directDispatches, activeWorkView.records);
   const activeWorkEvidence = activeWorkView.activeWork;
-  const approvals = (0, import_daemon_core26.collectPendingApprovals)(activeWorkEvidence.activeWork);
-  const needsAttention = (0, import_daemon_core26.collectProviderDecisionAttention)(liveNodes);
+  const approvals = (0, import_daemon_core27.collectPendingApprovals)(activeWorkEvidence.activeWork);
+  const needsAttention = (0, import_daemon_core27.collectProviderDecisionAttention)(liveNodes);
   const actionableCount = approvals.filter((item) => item.actionable).length;
   const waitingKeys = /* @__PURE__ */ new Set([...approvals.map((item) => `${item.nodeId}:${item.sessionId}`), ...needsAttention.map((item) => `${item.nodeId}:${item.sessionId}`)]);
   return JSON.stringify({
@@ -180623,7 +180665,7 @@ async function meshCleanupSessions(ctx, args) {
 }
 
 // src/tools/mesh-tools-git.ts
-var import_daemon_core28 = __toESM(require_dist3());
+var import_daemon_core29 = __toESM(require_dist3());
 async function meshGitStatus(ctx, args) {
   const node = await findNodeWithRefresh(ctx, args.node_id);
   const autoDiscoverSubmodules = node.policy?.autoDiscoverSubmodules !== false;
@@ -180777,7 +180819,7 @@ async function meshRestartDaemon(ctx, args) {
     const targetDaemonId = typeof rawTarget.daemonId === "string" && rawTarget.daemonId.trim() ? rawTarget.daemonId.trim() : "unknown";
     const targetNpmTag = typeof rawTarget.npmTag === "string" && rawTarget.npmTag.trim() ? rawTarget.npmTag.trim() : typeof payload?.npmTag === "string" && payload.npmTag.trim() ? payload.npmTag.trim() : "unknown";
     const trackMismatch = meshAttachedTrack === "unknown" || targetTrack === "unknown" ? null : meshAttachedTrack !== targetTrack;
-    const daemonMismatch = meshAttachedDaemonId === "unknown" || targetDaemonId === "unknown" ? null : !(0, import_daemon_core28.daemonIdsEquivalent)(meshAttachedDaemonId, targetDaemonId);
+    const daemonMismatch = meshAttachedDaemonId === "unknown" || targetDaemonId === "unknown" ? null : !(0, import_daemon_core29.daemonIdsEquivalent)(meshAttachedDaemonId, targetDaemonId);
     const routingMismatch = trackMismatch === true || daemonMismatch === true;
     return JSON.stringify({
       ...payload,
@@ -180876,12 +180918,12 @@ async function buildSharedBaseWorktreeAdvisoryForClone(ctx, clonedNode) {
   const worktrees = ctx.mesh.nodes.filter((node) => readNodeString(node, "clonedFromNodeId", "cloned_from_node_id"));
   if (worktrees.length < 2) return null;
   const clonedNodeId = readNodeString(clonedNode, "id", "nodeId", "node_id");
-  if (!clonedNodeId || !worktrees.some((node) => (0, import_daemon_core28.meshNodeIdMatches)(node, clonedNodeId))) return null;
+  if (!clonedNodeId || !worktrees.some((node) => (0, import_daemon_core29.meshNodeIdMatches)(node, clonedNodeId))) return null;
   const sources = /* @__PURE__ */ new Map();
   for (const worktree of worktrees) {
     const sourceId = readNodeString(worktree, "clonedFromNodeId", "cloned_from_node_id");
     if (!sourceId) continue;
-    const source = ctx.mesh.nodes.find((node) => (0, import_daemon_core28.meshNodeIdMatches)(node, sourceId));
+    const source = ctx.mesh.nodes.find((node) => (0, import_daemon_core29.meshNodeIdMatches)(node, sourceId));
     const sourceRepoRoot2 = source && readNodeString(source, "repoRoot", "repo_root", "workspace");
     if (source && sourceRepoRoot2) sources.set(sourceId, source);
   }
@@ -181558,10 +181600,10 @@ function parseArgs(argv, env2 = process.env) {
       port = Number(arg.slice("--port=".length));
     } else if (arg === "--password" && args[i + 1]) {
       password = args[++i];
-    } else if (arg === import_daemon_core29.ADHDEV_DAEMON_AUTH_FILE_FLAG && args[i + 1]) {
+    } else if (arg === import_daemon_core30.ADHDEV_DAEMON_AUTH_FILE_FLAG && args[i + 1]) {
       daemonAuthFile = args[++i];
-    } else if (arg?.startsWith(`${import_daemon_core29.ADHDEV_DAEMON_AUTH_FILE_FLAG}=`)) {
-      daemonAuthFile = arg.slice(import_daemon_core29.ADHDEV_DAEMON_AUTH_FILE_FLAG.length + 1);
+    } else if (arg?.startsWith(`${import_daemon_core30.ADHDEV_DAEMON_AUTH_FILE_FLAG}=`)) {
+      daemonAuthFile = arg.slice(import_daemon_core30.ADHDEV_DAEMON_AUTH_FILE_FLAG.length + 1);
     } else if ((arg === "--repo-mesh" || arg === "--mesh") && args[i + 1]) {
       meshId = args[++i];
       meshFromFlag = true;
@@ -181578,7 +181620,7 @@ function parseArgs(argv, env2 = process.env) {
     }
   }
   if (!password && env2.ADHDEV_PASSWORD) password = env2.ADHDEV_PASSWORD;
-  if (!daemonAuthFile && env2[import_daemon_core29.ADHDEV_DAEMON_AUTH_FILE_ENV]?.trim()) daemonAuthFile = env2[import_daemon_core29.ADHDEV_DAEMON_AUTH_FILE_ENV].trim();
+  if (!daemonAuthFile && env2[import_daemon_core30.ADHDEV_DAEMON_AUTH_FILE_ENV]?.trim()) daemonAuthFile = env2[import_daemon_core30.ADHDEV_DAEMON_AUTH_FILE_ENV].trim();
   if (!meshId && env2.ADHDEV_MESH_ID) meshId = env2.ADHDEV_MESH_ID;
   if (!explicitMode && env2.ADHDEV_MCP_TRANSPORT) {
     const value = env2.ADHDEV_MCP_TRANSPORT.trim();
@@ -181603,7 +181645,7 @@ var fs = __toESM(require("fs"));
 var path = __toESM(require("path"));
 var import_node_child_process = require("child_process");
 var import_node_crypto2 = require("crypto");
-var import_daemon_core30 = __toESM(require_dist3());
+var import_daemon_core31 = __toESM(require_dist3());
 var hash = (b) => (0, import_node_crypto2.createHash)("sha256").update(b).digest("hex");
 function privateBytes(file) {
   const s = fs.lstatSync(file);
@@ -181612,7 +181654,7 @@ function privateBytes(file) {
 }
 async function startMaintenanceInventoryExporter(transport, delivery) {
   let stopped = false, timer;
-  const root = fs.realpathSync((0, import_daemon_core30.getConfigDir)()), initial = (0, import_daemon_core30.readCooperativeMaintenance)(root);
+  const root = fs.realpathSync((0, import_daemon_core31.getConfigDir)()), initial = (0, import_daemon_core31.readCooperativeMaintenance)(root);
   if (process.platform === "win32" || !initial?.actorConfigSha256) return { stop() {
   }, async poll() {
     return false;
@@ -181637,7 +181679,7 @@ async function startMaintenanceInventoryExporter(transport, delivery) {
     fs.closeSync(parent);
   }
   async function call(operation, body) {
-    const state = (0, import_daemon_core30.readCooperativeMaintenance)(root);
+    const state = (0, import_daemon_core31.readCooperativeMaintenance)(root);
     if (!state || state.planDigest !== initial.planDigest || state.actorConfigSha256 !== initial.actorConfigSha256) throw new Error("maintenance_exporter_scope_changed");
     const configBytes = privateBytes(path.join(root, "cooperative-maintenance-actor.json"));
     if (hash(configBytes) !== state.actorConfigSha256) throw new Error("maintenance_exporter_config_changed");
@@ -181685,8 +181727,8 @@ var import_types2 = require("@modelcontextprotocol/sdk/types.js");
 
 // src/transports/local.ts
 var import_node_fs = require("fs");
-var import_daemon_core31 = __toESM(require_dist3());
-var DEFAULT_PORT = import_daemon_core31.DEFAULT_STANDALONE_PORT;
+var import_daemon_core32 = __toESM(require_dist3());
+var DEFAULT_PORT = import_daemon_core32.DEFAULT_STANDALONE_PORT;
 var STATUS_TIMEOUT_MS = 1e4;
 var LocalDaemonAuthError = class extends Error {
   constructor(status, what) {
@@ -181727,8 +181769,8 @@ var LocalTransport = class {
     const h = { "Content-Type": "application/json" };
     if (this.authHeader) h["Authorization"] = this.authHeader;
     const internalToken = this.readInternalToken();
-    if (internalToken) h[import_daemon_core31.ADHDEV_INTERNAL_AUTH_HEADER] = internalToken;
-    if (this.workerCredential) h[import_daemon_core31.ADHDEV_WORKER_CREDENTIAL_HEADER] = this.workerCredential;
+    if (internalToken) h[import_daemon_core32.ADHDEV_INTERNAL_AUTH_HEADER] = internalToken;
+    if (this.workerCredential) h[import_daemon_core32.ADHDEV_WORKER_CREDENTIAL_HEADER] = this.workerCredential;
     return h;
   }
   async getStatus() {

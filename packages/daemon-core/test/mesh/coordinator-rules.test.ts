@@ -58,6 +58,10 @@ describe('resolveCoordinatorRules', () => {
         expect(r.text).toBe(DEFAULT_COORDINATOR_RULES);
         expect(DEFAULT_COORDINATOR_RULES).toContain('## Orchestration Workflow');
         expect(DEFAULT_COORDINATOR_RULES).toContain('## Rules');
+        expect(r.text).toContain('Automatic routing is the default for ordinary new tasks');
+        expect(r.text).toContain('Omit provider tags and model/thinking overrides');
+        expect(r.text).toContain('Same-issue continuation');
+        expect(r.text).toContain('stale quota is not evidence of exhaustion');
     });
 
     it('reads the repo file when present and meaningful', () => {

@@ -124,7 +124,7 @@ export const MESH_LAUNCH_SESSION_TOOL = {
         type: 'object' as const,
         properties: {
             node_id: { type: 'string', description: 'Target node ID.' },
-            type: { type: 'string', description: 'Optional provider type to launch. Use claude-cli for Claude Code, codex-cli for Codex, cursor-cli for Cursor, kimi for Kimi, opencode for OpenCode, grok-cli for Grok, antigravity-cli for Antigravity. When omitted, node.policy.providerPriority is probed in order.' },
+            type: { type: 'string', description: 'Optional intentional provider restriction (returns an informational pin warning). Omit for automatic routing. Use claude-cli for Claude Code, codex-cli for Codex, cursor-cli for Cursor, kimi for Kimi, opencode for OpenCode, grok-cli for Grok, antigravity-cli for Antigravity. When omitted, node.policy.providerPriority is probed in order.' },
             force: { type: 'boolean', description: 'Set true to launch an ADDITIONAL session even when this node already has a live mesh-owned worker session. Default false: a live mesh-owned worker session for this mesh+node is returned idempotently (reused:true) when its provider matches the resolved type or is unknown; a session with a definitely different provider does NOT trigger reuse — a fresh session of the requested provider is launched. Only pass force when you intentionally want a second concurrent session on the node regardless of what already exists.' },
         },
         required: ['node_id'],

@@ -365,3 +365,20 @@ describe('SLOT MODEL GUARD — provider pairing', () => {
         });
     });
 });
+
+
+it('fallback telemetry names the actual provider/model while retaining the original winner', () => {
+    const decision = buildAutoLaunchRoutingDecision({
+        node: { policy: { slots: [] } }, meshId: 'fallback-telemetry', task: { difficulty: 'difficult' },
+        resolved: { providerType: 'codex-cli', slot: slot({ provider: 'codex-cli', model: 'gpt-6.1-sol' }),
+            selectionTrajectory: { candidates: [], quotaOrder: [], providerWinner: { providerType: 'codex-cli', model: 'gpt-6.1-sol', fitnessScore: 1 } } } as any,
+        skippedCandidates: [], requiredTagsResult: { required: [], satisfied: true, missing: [] },
+        executedSlot: slot({ provider: 'claude-cli', model: 'opus' }),
+        effectiveModel: 'opus', effectiveThinkingLevel: 'high',
+    });
+    expect(decision.resolvedProviderType).toBe('claude-cli');
+    expect(decision.selectedSlot).toEqual({ providerType: 'claude-cli', model: 'opus' });
+    expect(decision.resolvedModel).toBe('opus');
+    expect(decision.resolvedThinkingLevel).toBe('high');
+    expect(decision.selectionTrajectory?.providerWinner.providerType).toBe('codex-cli');
+});

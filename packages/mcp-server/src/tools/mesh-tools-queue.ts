@@ -1,3 +1,4 @@
+import { withProviderPinWarning, requestedProviderPins } from './mesh-provider-pin-advisory.js';
 // Mesh tool implementations — queue domain.
 // Pure move out of mesh-tools.ts (no behavior change). Helpers are imported from the
 // modules that define them; mesh-tools.ts is the tool barrel.
@@ -360,6 +361,7 @@ export async function meshEnqueueTask(
         blockDuplicate?: boolean; block_duplicate?: boolean;
     },
 ): Promise<string> {
+    const respond = (response: Record<string, unknown>) => JSON.stringify(withProviderPinWarning(response, requestedProviderPins(args)));
     // ★CANONICAL-FIRST (2026-09-25): mesh_enqueue_task's own top-level scope
     // (allow_duplicate/block_duplicate — the fields
     // normalizeEnqueueTaskArgs does NOT own) — same rationale as
@@ -380,7 +382,7 @@ export async function meshEnqueueTask(
     await refreshMeshFromDaemon(ctx);
     const normalized = await normalizeEnqueueTaskArgs(ctx, args, 'mesh_enqueue_task');
     if (!normalized.ok) {
-        return JSON.stringify({ success: false, code: normalized.code, error: normalized.error, ...(normalized.extra ?? {}) });
+        return respond({ success: false, code: normalized.code, error: normalized.error, ...(normalized.extra ?? {}) });
     }
     const {
         message, taskMode, input, readonly, requiredTags, dependsOn, missionId, priority,
@@ -403,7 +405,7 @@ export async function meshEnqueueTask(
     // warning for an intentional re-enqueue.
     const duplicateSuspect = allowDuplicate ? null : await findInFlightDuplicate(ctx, message, targetNodeId);
     if (duplicateSuspect && blockDuplicate) {
-        return JSON.stringify({
+        return respond({
             success: false,
             code: 'duplicate_suspect',
             error: `an in-flight task with the same message${targetNodeId ? ' and target node' : ''} already exists (task '${duplicateSuspect.id}', status '${duplicateSuspect.status}'). Refusing because block_duplicate=true. Cancel it, wait for it, or re-enqueue with allow_duplicate=true.`,
@@ -458,7 +460,7 @@ export async function meshEnqueueTask(
         //    and ran the body while the queue row stayed `pending`. A task the claim
         //    gates leave pending must never reach a session.
         const queueTrigger = await triggerMeshQueueAndReport(ctx);
-        return JSON.stringify({
+        return respond({
             success: true,
             source: 'queue',
             taskId: task.id,
@@ -478,12 +480,12 @@ export async function meshEnqueueTask(
     } catch (e: any) {
         const message = e?.message || String(e);
         if (message.includes('live_debug_readonly_guardrail_violation')) {
-            return JSON.stringify({ success: false, code: 'live_debug_readonly_guardrail_violation', taskMode, error: message });
+            return respond({ success: false, code: 'live_debug_readonly_guardrail_violation', taskMode, error: message });
         }
         if (message.includes('dependency_cycle_detected')) {
-            return JSON.stringify({ success: false, code: 'dependency_cycle_detected', dependsOn, error: message });
+            return respond({ success: false, code: 'dependency_cycle_detected', dependsOn, error: message });
         }
-        return JSON.stringify({ success: false, error: message });
+        return respond({ success: false, error: message });
     }
 }
 
@@ -507,6 +509,21 @@ export async function meshEnqueueBatch(
         blockDuplicate?: boolean; block_duplicate?: boolean;
     },
 ): Promise<string> {
+    const respond = (response: Record<string, unknown>) => {
+        const entries = Array.isArray(args.tasks) ? args.tasks : [];
+        if (response.success === true && Array.isArray(response.tasks)) {
+            return JSON.stringify({ ...response, tasks: response.tasks.map((task, i) =>
+                withProviderPinWarning(task, requestedProviderPins(entries[i] ?? {}))) });
+        }
+        const providerPinWarnings = entries.flatMap((entry, taskIndex) => {
+            const advice = withProviderPinWarning({}, requestedProviderPins(entry));
+            return (advice.providerPinWarnings ?? []).map(warning => ({ ...(warning as Record<string, unknown>), taskIndex }));
+        });
+        return JSON.stringify(providerPinWarnings.length ? {
+            ...response, providerPinWarnings: [...(Array.isArray(response.providerPinWarnings) ? response.providerPinWarnings : []), ...providerPinWarnings],
+        } : response);
+    };
+
     // ★CANONICAL-FIRST (2026-09-25): mesh_enqueue_batch's own top-level scope
     // (mission_id/allow_duplicate/block_duplicate). `tasks[]` entries are NOT
     // touched here — each entry gets canonicalized against the `tasks` scope
@@ -517,14 +534,14 @@ export async function meshEnqueueBatch(
     args = canonicalizeMeshTopLevelArgs('mesh_enqueue_batch', args) as typeof args;
     const rawTasks = Array.isArray(args.tasks) ? args.tasks : undefined;
     if (!rawTasks || rawTasks.length === 0) {
-        return JSON.stringify({
+        return respond({
             success: false,
             code: 'empty_task_batch',
             error: 'mesh_enqueue_batch requires a non-empty `tasks` array.',
         });
     }
     if (rawTasks.length > MESH_TASK_BATCH_MAX_TASKS) {
-        return JSON.stringify({
+        return respond({
             success: false,
             code: 'task_batch_too_large',
             error: `mesh_enqueue_batch accepts at most ${MESH_TASK_BATCH_MAX_TASKS} tasks per call (got ${rawTasks.length}). Split the batch, or reconsider whether one batch really needs this many tasks.`,
@@ -538,7 +555,7 @@ export async function meshEnqueueBatch(
     // value. Validate it here up front — same reject-loudly convention, applied once for
     // the whole batch rather than once per entry.
     if (batchMissionId && !(await missionQuery(ctx.transport, { meshId: ctx.mesh.id, id: batchMissionId })).missions[0]) {
-        return JSON.stringify({
+        return respond({
             success: false,
             code: 'mission_not_found',
             error: `mission '${batchMissionId}' does not exist on this mesh — refusing to enqueue a batch with an unresolvable mission_id. Omit mission_id, or use mesh_mission_list to get a valid full id.`,
@@ -569,7 +586,7 @@ export async function meshEnqueueBatch(
         const label = ref ? `task '${ref}'` : `task #${i}`;
         const normalized = await normalizeEnqueueTaskArgs(ctx, entry, `mesh_enqueue_batch ${label}`);
         if (!normalized.ok) {
-            return JSON.stringify({
+            return respond({
                 success: false,
                 code: normalized.code,
                 error: normalized.error,
@@ -618,7 +635,7 @@ export async function meshEnqueueBatch(
         });
     }
     if (duplicateSuspects.length > 0 && blockDuplicate) {
-        return JSON.stringify({
+        return respond({
             success: false,
             code: 'duplicate_suspect',
             error: `${duplicateSuspects.length} task(s) in this batch match an in-flight task with the same message (and target node when pinned). Refusing the WHOLE batch because block_duplicate=true and the batch is atomic. Cancel the in-flight duplicates, wait for them, or re-send with allow_duplicate=true.`,
@@ -635,7 +652,7 @@ export async function meshEnqueueBatch(
         specs: specs as unknown as Record<string, unknown>[],
     });
     if (!committed.ok) {
-        return JSON.stringify({
+        return respond({
             success: false,
             ...(committed.refusalCode ? { code: committed.refusalCode } : {}),
             error: committed.message,
@@ -673,7 +690,7 @@ export async function meshEnqueueBatch(
 
     // Delivery is only through a claim — see the note in meshEnqueueTask (rc.37 Finding B).
 
-    return JSON.stringify({
+    return respond({
         success: true,
         source: 'queue',
         atomic: true,
@@ -683,6 +700,7 @@ export async function meshEnqueueBatch(
             taskId: task.id,
             status: task.status,
             taskMode: task.taskMode,
+            ...buildProviderPinAdvisory(normalizedEntries[i].requiredTags),
             ...(Array.isArray(task.dependsOn) && task.dependsOn.length > 0 ? { dependsOn: task.dependsOn } : {}),
             ...(task.targetNodeId ? { targetNodeId: task.targetNodeId } : {}),
             ...(task.priority ? { priority: task.priority } : {}),

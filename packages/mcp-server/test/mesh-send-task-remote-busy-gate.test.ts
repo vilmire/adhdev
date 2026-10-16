@@ -191,6 +191,7 @@ test('remote IDLE session still dispatches directly (gate is a no-op), and an un
             assert.equal(h.sendChats().length, 1);
             assert.equal(h.dispatchAccepted().length, 1, 'the idle direct dispatch opens its attempt (proves the probe sees dispatch_accepted)');
             assert.match(String(res.deliveryModeWarning || ''), /Unrecognized delivery_mode 'imediate'/);
+            assert.equal(res.providerPinWarnings, undefined, 'named-session continuation is affinity, not a requested provider restriction');
         });
     } finally {
         cleanupMesh(meshId);

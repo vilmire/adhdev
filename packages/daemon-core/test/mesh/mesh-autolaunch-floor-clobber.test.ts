@@ -49,7 +49,7 @@ const detectCliMocks = vi.hoisted(() => ({ detectCLI: vi.fn(async () => ({ path:
 vi.mock('../../src/detection/cli-detector.js', () => ({ detectCLI: detectCliMocks.detectCLI }))
 
 import { triggerMeshQueue } from '../../src/mesh/mesh-queue-assignment.js'
-import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask, getQueue, recordTaskAutoLaunch } from '../../src/mesh/mesh-work-queue.js'
+import { __replaceMeshQueueForTests, __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask, getQueue, recordTaskAutoLaunch } from '../../src/mesh/mesh-work-queue.js'
 import { handleClaimPathDifficultyFloorRefusal, resetDifficultyFloorReportsForTests } from '../../src/mesh/mesh-difficulty-floor.js'
 import { AUTO_LAUNCH_AWAIT_CLAIM_MS } from '../../src/mesh/mesh-autolaunch-integrity.js'
 import { withMeshRouter } from './helpers/mesh-router-stub.js'
@@ -235,4 +235,34 @@ describe('P2 — launch side re-checks the resolved model against the claim-side
       cleanup(meshId)
     }
   })
+})
+
+
+describe('fallback launch axes', () => {
+  afterEach(() => { vi.clearAllMocks() })
+  for (const explicitThinking of [undefined, 'medium']) {
+    it(`uses final provider slot thinking while preserving explicit effort ${explicitThinking}`, async () => {
+      const meshId = `mesh_fallback_axes_${randomUUID().slice(0, 8)}`
+      try {
+        setMesh(meshId)
+        const mesh = meshConfigMocks.getMesh()
+        mesh.policy.quotaRouting = { quotaBusyFallback: true }
+        mesh.nodes[0].policy.slots = [
+          { provider: 'codex-cli', model: 'gpt-6.1-sol', thinkingLevel: 'xhigh', difficulty: ['easy'], maxParallel: 1 },
+          { provider: 'claude-cli', model: 'sonnet', thinkingLevel: 'high', difficulty: ['easy'], maxParallel: 1 },
+        ]
+        const now = new Date().toISOString()
+        __replaceMeshQueueForTests(meshId, [{ id: 'busy-winner', meshId, message: 'busy', status: 'assigned', readonly: true,
+          assignedNodeId: NODE_ID, assignedProviderType: 'codex-cli', assignedModel: 'gpt-6.1-sol', assignedSessionId: 'busy', createdAt: now, updatedAt: now }] as any)
+        const components = createComponents()
+        enqueueTask(meshId, 'fallback axes', { taskMode: 'live_debug_readonly', difficulty: 'easy', ...(explicitThinking ? { thinkingLevel: explicitThinking } : {}) })
+        await triggerMeshQueue(components, meshId)
+        const launch = components.cliManager.handleCliCommand.mock.calls.find((c: any[]) => c[0] === 'launch_cli')
+        expect(launch).toBeDefined()
+        expect(launch[1].cliType).toBe('claude-cli')
+        expect(launch[1].initialModel).toBe('sonnet')
+        expect(launch[1].initialThinkingLevel).toBe(explicitThinking ?? 'high')
+      } finally { cleanup(meshId) }
+    })
+  }
 })

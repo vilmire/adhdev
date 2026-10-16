@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
 
-import { meshEnqueueBatch } from '../src/tools/mesh-tools.js';
+import { meshEnqueueBatch, meshEnqueueTask } from '../src/tools/mesh-tools.js';
 import { IpcTransport } from '../src/transports/ipc.js';
 import { getQueue, upsertMeshMission } from '@adhdev/daemon-core';
 
@@ -231,4 +231,55 @@ test('empty and over-shaped input fail loudly without touching the queue', async
   assert.match(missingMessage.error, /mesh_enqueue_batch task 'x'/);
 
   assert.equal(getQueue(meshId).length, 0);
+});
+
+
+test('automatic routing and explicit pins share additive single/batch return advice', async () => {
+  const meshId = nextMeshId();
+  const ctx = makeCtx(meshId, recordingLocalTransport());
+  const inputs = [
+    { message: 'ordinary automatic', difficulty: 'easy' },
+    { message: 'branch affinity', difficulty: 'easy', target_node_id: NODE_MAC, required_tags: ['worktree=fix/example'] },
+    { message: 'intentional pin', difficulty: 'easy', required_tags: ['provider=codex-cli'] },
+    { message: 'intentional second choice', difficulty: 'easy', required_tags: ['provider=claude-cli'] },
+  ];
+  const batch = JSON.parse(await meshEnqueueBatch(ctx, { tasks: inputs } as any));
+  assert.equal(batch.success, true);
+  assert.equal(batch.enqueued, 4);
+  for (const i of [0, 1]) assert.equal(batch.tasks[i].providerPinWarnings, undefined);
+  for (const i of [2, 3]) {
+    const provider = i === 2 ? 'codex-cli' : 'claude-cli';
+    const single = JSON.parse(await meshEnqueueTask(ctx, inputs[i] as any));
+    assert.equal(single.success, true);
+    assert.ok(single.duplicateSuspect, 'existing duplicate warning survives');
+    assert.equal(single.status, 'pending', 'return does not claim execution');
+    assert.deepEqual(single.requiredTags, [`provider=${provider}`]);
+    assert.deepEqual(single.providerPinWarnings, batch.tasks[i].providerPinWarnings);
+    assert.deepEqual(single.providerPin, [provider], 'legacy observability fields survive');
+    assert.equal(single.providerPinWarnings[0].code, 'explicit_provider_pin');
+    assert.deepEqual(single.providerPinWarnings[0].requestedProviders, [provider]);
+    assert.equal(single.providerPinWarnings[0].recommendation, `You explicitly pinned provider ${provider}. Unless there is a specific reason, omit the provider pin and let automatic routing choose.`);
+  }
+  for (const i of [0, 1]) {
+    const single = JSON.parse(await meshEnqueueTask(ctx, inputs[i] as any));
+    assert.equal(single.providerPinWarnings, undefined);
+  }
+  assert.deepEqual(getQueue(meshId).filter(t => t.message === 'ordinary automatic').map(t => t.requiredTags), [[], []]);
+  assert.deepEqual(getQueue(meshId).find(t => t.id === batch.tasks[2].taskId)?.requiredTags, ['provider=codex-cli']);
+});
+
+test('pin warning accompanies a refusal without changing its failure/dedup semantics', async () => {
+  const meshId = nextMeshId();
+  const ctx = makeCtx(meshId, recordingLocalTransport());
+  const task = { message: 'intentional request', difficulty: 'easy', required_tags: ['provider=codex-cli'] };
+  await meshEnqueueTask(ctx, task as any);
+  const result = JSON.parse(await meshEnqueueTask(ctx, { ...task, block_duplicate: true } as any));
+  assert.equal(result.success, false);
+  assert.equal(result.code, 'duplicate_suspect');
+  assert.equal(result.providerPinWarnings[0].code, 'explicit_provider_pin');
+  const batch = JSON.parse(await meshEnqueueBatch(ctx, { tasks: [task], block_duplicate: true } as any));
+  assert.equal(batch.success, false);
+  assert.equal(batch.enqueued, 0);
+  assert.equal(batch.providerPinWarnings[0].taskIndex, 0);
+  assert.equal(getQueue(meshId).length, 1);
 });

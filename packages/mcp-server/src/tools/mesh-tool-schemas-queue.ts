@@ -71,7 +71,7 @@ const ENQUEUE_TASK_DISCOVERY_META = {
 export const MESH_ENQUEUE_TASK_TOOL = {
     name: 'mesh_enqueue_task',
     description: 'Enqueue ONE worker task; an idle node claims it. The default way to delegate: when a step needs queued work to finish first, pass depends_on with those task ids — '
-        + 'grow the plan as results arrive. '
+        + 'grow the plan as results arrive. Omit provider/model/thinking for ordinary new tasks; classify difficulty honestly. Node targeting is branch affinity only. Intentional provider pins are honored with informational return warnings. '
         + 'mesh_enqueue_batch enqueues several such tasks at once. Same-session continuation belongs in mesh_send_task. '
         + 'Warns when an in-flight task has the same message+target.',
     _meta: ENQUEUE_TASK_DISCOVERY_META,
@@ -84,7 +84,7 @@ export const MESH_ENQUEUE_TASK_TOOL = {
                 + 'It does NOT remove the worker\'s Edit/Write/Bash tools — the worker stays read-only only if it follows the instruction; verify with mesh_git_status afterward.' },
             readonly: { type: 'boolean', description: 'Read-only axis, composable with task_mode: separate parallel cap, no write isolation, exempt from the per-node write limit and the dirty/stale gates. '
                 + 'Instruction text is linted; the worker\'s own tools are NOT restricted.' },
-            required_tags: { type: 'array', items: { type: 'string' }, description: 'Capability tags every eligible node must have, e.g. os=darwin, provider=codex-cli.' },
+            required_tags: { type: 'array', items: { type: 'string' }, description: 'Capability constraints, e.g. os=darwin. Omit provider= unless intentionally restricting routing.' },
             owned_paths: { type: 'array', items: { type: 'string' }, description: 'code_change only: repo-relative files/dirs this task will touch (dir/** = subtree). A claim overlapping another in-flight code_change task\'s paths is refused (owned_paths_conflict).' },
             target_node_id: { type: 'string', description: 'HARD pin: only this node may claim. Beats prefer_worktree; unresolvable id rejected.' },
             prefer_worktree: { type: 'boolean', description: 'Route to the most recently cloned idle worktree node (no-op if none).' },
@@ -107,7 +107,7 @@ export const MESH_ENQUEUE_BATCH_TOOL = {
     name: 'mesh_enqueue_batch',
     description: 'Enqueue several mesh_enqueue_task tasks at once, atomically: all insert or none do (any invalid entry rolls back the batch). '
         + 'Entries name each other by batch-local `ref` in depends_on (forward refs OK; a non-ref value must be an existing task id). '
-        + 'Never invent steps to fill a batch — when later steps are not known yet, chain mesh_enqueue_task with depends_on as results arrive.',
+        + 'Default to automatic routing: omit provider/model/thinking overrides unless intentional. Node targeting is affinity only; explicit provider pins return per-task informational warnings. Never invent steps to fill a batch — when later steps are not known yet, chain mesh_enqueue_task with depends_on as results arrive.',
     _meta: ENQUEUE_BATCH_DISCOVERY_META,
     inputSchema: {
         type: 'object' as const,
@@ -123,7 +123,7 @@ export const MESH_ENQUEUE_BATCH_TOOL = {
                         input: { type: 'object' },
                         task_mode: enumOf(MESH_TASK_MODES),
                         readonly: { type: 'boolean' },
-                        required_tags: { type: 'array', items: { type: 'string' } },
+                        required_tags: { type: 'array', items: { type: 'string' }, description: 'Omit provider= for automatic routing; node/worktree affinity does not pin a provider.' },
                         owned_paths: { type: 'array', items: { type: 'string' }, description: 'code_change path ownership, as in mesh_enqueue_task.' },
                         target_node_id: { type: 'string', description: 'HARD pin; an unresolvable id rejects the batch.' },
                         prefer_worktree: { type: 'boolean' },
