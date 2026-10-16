@@ -470,10 +470,21 @@ function parseTranscriptFile(
     // (read_chat, mesh_read_chat). Mirror Claude Code's own UI and skip them.
     // The skip sits AFTER recordIndex++ so tool-block refs minted for later
     // records stay aligned with readJsonlRecords, which keeps every record.
-    if (type === 'user' && record.isMeta === true) continue;
+    let userParts = type === 'user' ? extractUserContentParts(message.content) : [];
+    let hadSourceNote = false;
+    userParts = userParts.filter(part => {
+      if (typeof part.content !== 'string') return true;
+      const cleaned = part.content.replace(/(?:^|\n)\[Image: source: .*\]$/, '');
+      if (cleaned === part.content) return true;
+      hadSourceNote = true;
+      part.content = cleaned.trimEnd();
+      return !!part.content;
+    });
+    if (type === 'user' && record.isMeta === true && !hadSourceNote) continue;
 
     if (type === 'user') {
-      for (const part of extractUserContentParts(message.content)) {
+      // Keep original block/record indexes when a source-note part disappears.
+      for (const part of userParts) {
         const msg: NativeHistoryMessage = {
           ts: new Date(receivedAt).toISOString(),
           receivedAt,

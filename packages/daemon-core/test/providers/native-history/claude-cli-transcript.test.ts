@@ -294,6 +294,34 @@ describe('claude-cli-transcript — isMeta records (IMAGE-TRIPLE-BUBBLE ③)', (
     expect(result!.messages.some((m) => m.content.includes('adhdev-input-media'))).toBe(false);
   });
 
+  it.each([undefined, false, true])('strips split and trailing source notes preserving real text and record references (isMeta=%s)', async isMeta => {
+    const sid = 'a1b2c3d4-0000-0000-0000-000000000033';
+    const marked = (content: any, at: number) => ({ ...userLine(content, sid, at), ...(isMeta === undefined ? {} : { isMeta }) });
+    const longCommand = 'echo ' + 'x'.repeat(600);
+    const file = writeTranscript(sid, [
+      userLine('Please inspect the image', sid, 1_800_000_001_000),
+      marked([{ type: 'text', text: IMAGE_SOURCE_META }], 1_800_000_002_000),
+      marked('Combined real prompt\n' + IMAGE_SOURCE_META, 1_800_000_003_000),
+      marked([{ type: 'text', text: 'Same record text' }, { type: 'text', text: IMAGE_SOURCE_META }], 1_800_000_004_000),
+      assistantLine([{ type: 'tool_use', name: 'Bash', input: { command: longCommand } }], sid, 1_800_000_005_000),
+      userLine('Explain ' + IMAGE_SOURCE_META + ' as an example', sid, 1_800_000_006_000),
+      userLine('[Image: source: example]\nReal following text', sid, 1_800_000_007_000),
+      userLine('[Image #1] real caption', sid, 1_800_000_008_000),
+    ]);
+    const mod = await import('../../../src/providers/native-history/claude-cli-transcript.js');
+    const result = mod.readSession(file)!;
+    const contents = result.messages.map(m => m.content);
+    expect(contents).toContain('Please inspect the image');
+    expect(contents).toContain('Combined real prompt'); expect(contents).toContain('Same record text');
+    expect(contents).not.toContain(IMAGE_SOURCE_META);
+    expect(contents).toContain('Explain ' + IMAGE_SOURCE_META + ' as an example');
+    expect(contents).toContain('[Image: source: example]\nReal following text');
+    expect(contents).toContain('[Image #1] real caption');
+    const tool = result.messages.find(m => m.toolBlockRef)!;
+    const { readJsonlRecords } = await import('../../../src/providers/native-history/transcript-common.js');
+    expect(mod.readClaudeToolBlockAt(readJsonlRecords(file)[tool.toolBlockRef!.recordIndex], tool.toolBlockRef!.blockIndex)?.callArgs).toContain(longCommand);
+  });
+
   it('★ keeps tool-block expand refs addressable across a skipped isMeta record', async () => {
     const sessionId = 'a1b2c3d4-0000-0000-0000-000000000031';
     const longCommand = 'echo ' + 'x'.repeat(600); // > TOOL_CALL_SUMMARY_MAX → truncated → ref stamped
