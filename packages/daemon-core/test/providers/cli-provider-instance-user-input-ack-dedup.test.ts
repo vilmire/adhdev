@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { mergeConversationMessages } from '../../src/providers/cli-provider-transcript-merge.js'
 import { CliProviderInstance } from '../../src/providers/cli-provider-instance.js'
 
 // TASKBUBBLE-DUP regression: a single mesh_send_task can reach a worker session
@@ -107,3 +108,28 @@ describe('CliProviderInstance recordAcknowledgedUserInput dedup', () => {
     expect(userBubbles(instance)).toHaveLength(1)
   })
 })
+
+describe('native transcript receipt deduplication', () => {
+  const receipt = { version: 1, messageId: 'message', sessionId: 'session', attemptId: 'attempt', generation: 'generation',
+    inputDigest: 'image-inclusive-digest', state: 'submitted', revision: 3, proof: 'native_write_ack' };
+  const ack = (extra = {}) => ({ key: 'ack', message: { role: 'user', content: 'public   prompt',
+    meta: { runtimeInputAck: true, sourceMessageId: 'message', outgoingReceipt: receipt, ...extra } } }) as any;
+  it('transfers correlated metadata onto a unique native turn without mutating inputs', () => {
+    const native = { role: 'user', content: 'public prompt', meta: { native: true } };
+    const rows = mergeConversationMessages([ack()], [native]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].meta).toEqual({ native: true, sourceMessageId: 'message', outgoingReceipt: receipt });
+    expect(native.meta).toEqual({ native: true });
+  });
+  it('refuses repeated text and conflicting identities; explicit identity resolves repetitions', () => {
+    const native = { role: 'user', content: 'public prompt' };
+    expect(mergeConversationMessages([{ ...ack(), message: { ...ack().message, receivedAt: 5000 } }], [{ ...native, receivedAt: 1000 }])).toHaveLength(2);
+    expect(mergeConversationMessages([ack()], [native, native])).toHaveLength(3);
+    expect(mergeConversationMessages([ack(), { ...ack(), key: 'second' }], [native])).toHaveLength(3);
+    expect(mergeConversationMessages([ack()], [{ ...native, meta: { sourceMessageId: 'foreign' } }])).toHaveLength(2);
+    expect(mergeConversationMessages([ack()], [{ ...native, meta: { outgoingReceipt: { ...receipt, generation: 'foreign' } } }])).toHaveLength(2);
+    expect(mergeConversationMessages([ack({ outgoingReceipt: { ...receipt, messageId: 'foreign' } })], [native])).toHaveLength(2);
+    const rows = mergeConversationMessages([ack()], [native, { ...native, meta: { sourceMessageId: 'message', outgoingReceipt: { ...receipt, revision: 4 } } }]);
+    expect(rows).toHaveLength(2); expect(rows[1].meta?.outgoingReceipt).toMatchObject({ revision: 4 });
+  });
+});

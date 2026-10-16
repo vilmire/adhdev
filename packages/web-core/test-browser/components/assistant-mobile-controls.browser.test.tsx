@@ -50,7 +50,7 @@ it('keeps assistant policy, staged approval and transcript folding distinct at i
     const conversation = { routeId: 'synthetic-machine', daemonId: 'synthetic-machine',
         sessionId: 'synthetic-assistant', tabKey: 'synthetic-tab', assistant: true, transport: 'pty',
         mode: 'chat', agentName: 'Codex', agentType: 'codex-cli', status: 'idle', title: 'Assistant',
-        displayPrimary: 'Assistant', displaySecondary: 'Codex', workspaceName: 'Public example',
+        displayPrimary: 'Assistant', displaySecondary: 'Codex', workspaceName: 'Public example', machineName: 'Synthetic machine with an exceptionally long public neutral label',
         connectionState: 'connected', messages: [
             ...Array.from({ length: 124 }, (_, i) => ({ id: `step-${i}`, role: 'tool', kind: 'tool',
                 content: `Synthetic tool step ${i}`, timestamp: 1000 + i, toolName: 'Read' })),
@@ -66,7 +66,7 @@ it('keeps assistant policy, staged approval and transcript folding distinct at i
     async function render(mobile: boolean, terminal = false) {
         const activeConv = { ...conversation }
         await act(async () => root.render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}><TransportProvider value={{ sendCommand }}>
-            {mobile ? <DashboardMobileChatRoom selectedConversation={activeConv} isStandalone actionLogs={[]}
+            {mobile ? <DashboardMobileChatRoom selectedConversation={activeConv} isStandalone={false} onStopCli={vi.fn()} actionLogs={[]}
                 commands={commands} onBack={() => {}} onOpenNativeConversation={() => {}}
                 onOpenMachine={() => {}} onOpenHistory={() => {}} onOpenRemote={() => {}}
                 cliViewMode={terminal ? "terminal" : "chat"} onSetCliViewMode={() => {}} />
@@ -92,7 +92,23 @@ it('keeps assistant policy, staged approval and transcript folding distinct at i
                 expect(header.contains(execution[0])).toBe(true)
                 expect(header.contains(pending)).toBe(true)
                 expect(header.contains(fold)).toBe(false)
+                const cluster = header.querySelector('.mobile-room-header-actions')!
+                expect(cluster.contains(execution[0])).toBe(true)
+                expect(cluster.contains(pending)).toBe(true)
+                expect(header.children).toHaveLength(1)
+                for (const chip of header.querySelectorAll('.conversation-meta-chip span')) {
+                    expect(getComputedStyle(chip).textOverflow).toBe('ellipsis')
+                    expect(chip.getBoundingClientRect().right).toBeLessThanOrEqual(width)
+                }
+                const stop = header.querySelector('button[title="Stop CLI process"]')!
+                expect(stop).not.toBeNull()
+                expect(rect(stop).height).toBeGreaterThanOrEqual(44)
+                expect(rect(header.querySelector('button[aria-label="Back"]')!).height).toBeGreaterThanOrEqual(44)
+                const machine = header.querySelector('[title="Synthetic machine with an exceptionally long public neutral label"] span:last-child') as HTMLElement
+                expect(machine).not.toBeNull()
+                expect(machine.scrollWidth).toBeGreaterThan(machine.clientWidth)
                 const title = header.querySelector('.truncate')!
+                expect(title.scrollWidth).toBeLessThanOrEqual(title.clientWidth)
                 expect(overlaps(title, execution[0])).toBe(false)
                 expect(overlaps(title, pending)).toBe(false)
             }

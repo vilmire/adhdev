@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { compactTranscriptTail, reportMessageId } from '../../src/assistant/project-views.js';
 import { continueReport, parseReportContinuation } from '../../src/assistant/report-continuation.js';
-import { localProjectRead } from '../../src/commands/high-family/assistant.js';
+import { localProjectRead, localAttemptReport } from '../../src/commands/high-family/assistant.js';
 
 describe('exact long-report continuation', () => {
     it('recovers a 4229 character original suffix with stable identity and exact completeness', async () => {
@@ -41,4 +41,11 @@ it('attempt cursor rejects a changed recovered report and gives exact suffix com
     const body = 'a'.repeat(4229); const cursor = { attemptId: 'attempt', coordinatorSessionId: 'coord', offset: 4000, reportId: reportBodyId(body) };
     expect(pageAttemptReport(body, cursor, 'native')).toMatchObject({ text: 'a'.repeat(229), complete: true, nextOffset: null, totalChars: 4229 });
     expect(pageAttemptReport('changed body', cursor, 'native')).toMatchObject({ success: false, reason: 'original_report_identity_mismatch' });
+});
+
+it('refuses unauthorized exact attempt reads before opening any durable body or evidence store', async () => {
+    const execute = vi.fn();
+    const ports: any = { execute, coordinatorSessionAuthorized: () => false };
+    expect(await localAttemptReport(ports, 'mesh', 'foreign', 'plain:coord:1')).toMatchObject({ body: null, reason: 'coordinator_session_no_longer_authorized' });
+    expect(execute).not.toHaveBeenCalled();
 });

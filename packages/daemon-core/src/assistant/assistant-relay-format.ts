@@ -62,7 +62,7 @@ export function compactRelayBody(text: string | null | undefined, max: number = 
     if (!body) return '(no coordinator message found — use project_read)';
     const points = Array.from(body);
     if (points.length <= max) return body;
-    return `${points.slice(0, max).join('')}\n… (cut at ${max} characters — use project_read for the rest)`;
+    return `${points.slice(0, max).join('')}\n… (cut at ${max} characters — use project_read with the exact attempt reference, offset 4000 for the rest)`;
 }
 
 export function relayMessageId(meshId: string, attemptId: string): string {

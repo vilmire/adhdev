@@ -51,7 +51,7 @@
  * interrupt-and-discard behaviour is unchanged; only its permanent-sentence
  * presentation was ever the objection.
  */
-import { memo } from 'react';
+import { memo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { PendingLocalMessage } from './conversation-message-snapshot';
 
@@ -79,6 +79,7 @@ function PendingQueueStripImpl({
     isSendingNow,
 }: PendingQueueStripProps) {
     const { t } = useTranslation();
+    const [dismissed, setDismissed] = useState<Set<string>>(() => new Set());
 
     // Show parked bodies and unresolved native submissions. Explicit uncertainty
     // prevents this placement from claiming the body is still in the FIFO.
@@ -88,7 +89,7 @@ function PendingQueueStripImpl({
     // destructive, so a row that cannot name its target would be a button that
     // acts on "whatever is current". Only the legacy single-entry prop can
     // produce one, and that path keeps its in-transcript bubble.
-    const waiting = entries.filter(entry => (entry.queued === true || entry.deliveryUncertain === true) && !!entry.id);
+    const waiting = entries.filter(entry => (entry.queued === true || entry.deliveryUncertain === true) && !!entry.id && !(entry.deliveryUncertain && entry.outgoingReceipt?.state !== 'failed' && dismissed.has(entry.id)));
     if (waiting.length === 0) return null;
 
     // The region's own label must not out-live the claim its rows are making: a
@@ -97,7 +98,7 @@ function PendingQueueStripImpl({
     // saying. Any still-waiting row keeps the waiting label, since that is then
     // true of the region as a whole.
     const hasLiveWait = waiting.some(entry => entry.stale !== true && !entry.deliveryUncertain);
-    const regionLabel = hasLiveWait ? t('chat.waitingToSendAria') : t('chat.notDeliveredAria');
+    const regionLabel = hasLiveWait ? t('chat.waitingToSendAria') : waiting.some(entry => entry.deliveryUncertain && entry.outgoingReceipt?.state !== 'failed') ? t('chat.deliveryUncertain') : t('chat.notDeliveredAria');
 
     return (
         <div
@@ -127,38 +128,26 @@ function PendingQueueStripImpl({
                         title={entry.content}
                     >
                         <div className="chat-pending-queue-body">{entry.content}</div>
-                        {entry.deliveryUncertain && <div className="text-2xs" role="status">{t(entry.outgoingReceipt?.state === 'failed' ? 'chat.deliveryFailed' : 'chat.deliveryUncertain')}</div>}
-                        {/* The undelivered marker. A glyph rather than a sentence:
-                            it has to sit on EVERY waiting line, and a sentence
-                            repeated down the strip is what made the queue read as a
-                            form. `aria-label` carries the meaning the glyph cannot,
-                            so nothing is lost to a screen reader.
-                          *
-                          * ★ (QUEUED-SEND-STUCK-FOREVER) The glyph is what states the
-                          * claim, so it is also where the claim has to STOP being made.
-                          * ⏱ is a PROMISE — it says the agent will get this. That
-                          * promise is false once the session was torn down mid-queue:
-                          * `FsmDriver.shutdown()` discards `pendingSends` and notifies
-                          * nobody, so no echo and no cancel confirmation will ever
-                          * arrive, and the row previously sat here repeating the
-                          * promise indefinitely. The owner reported exactly this. Past
-                          * the threshold it becomes ⚠ and the label says undelivered.
-                          *
-                          * The row is KEPT rather than removed: the text is the owner's,
-                          * a discarded body is one they most likely want to resend, and
-                          * Cancel still works to dismiss it. Only the claim changes. */}
+                        {entry.outgoingReceipt?.state === 'failed' && <div className="text-2xs" role="status">{t('chat.deliveryFailed')}</div>}
+                        {/* Accepted queues and unconfirmed native writes stay neutral.
+                            Only a proven rejection or expired queue gets a warning;
+                            the localized accessible label carries the exact state. */}
                         <span
-                            className={entry.stale === true
+                            className={entry.stale === true && !entry.deliveryUncertain
                                 ? 'chat-pending-queue-clock chat-pending-queue-stale'
                                 : 'chat-pending-queue-clock'}
                             role="img"
-                            aria-label={entry.deliveryUncertain ? t('chat.deliveryUncertain') : entry.stale === true ? t('chat.notDeliveredAria') : t('chat.waitingToSendAria')}
-                            title={entry.deliveryUncertain ? t('chat.deliveryUncertain') : entry.stale === true ? t('chat.notDelivered') : t('chat.waitingToSendAria')}
+                            aria-label={entry.outgoingReceipt?.state === 'failed' ? t('chat.deliveryFailed') : entry.deliveryUncertain ? t('chat.deliveryUncertain') : entry.stale === true ? t('chat.notDeliveredAria') : t('chat.waitingToSendAria')}
+                            title={entry.outgoingReceipt?.state === 'failed' ? t('chat.deliveryFailed') : entry.deliveryUncertain ? t('chat.deliveryUncertain') : entry.stale === true ? t('chat.notDelivered') : t('chat.waitingToSendAria')}
                         >
-                            {entry.deliveryUncertain || entry.stale === true ? '⚠' : '⏱'}
+                            {entry.outgoingReceipt?.state === 'failed' || (entry.stale === true && !entry.deliveryUncertain) ? '⚠' : '⏱'}
                         </span>
                     </div>
-                    {onSendNow && (
+                    {entry.deliveryUncertain && entry.outgoingReceipt?.state !== 'failed' && <button
+                        type="button" className="chat-pending-queue-cancel"
+                        aria-label={t('common.close')} title={t('chat.deliveryUncertain')}
+                        onClick={() => setDismissed(previous => new Set(previous).add(entry.id!))}>✕</button>}
+                    {onSendNow && !entry.deliveryUncertain && (
                         // ★ (QUEUE-SEND-NOW-RESTORED) Same always-in-DOM,
                         // hover-dimmed treatment as cancel below — a phone has no
                         // hover, so touch must not lose the affordance either.
@@ -177,7 +166,7 @@ function PendingQueueStripImpl({
                             ↑
                         </button>
                     )}
-                    {onCancelQueued && (
+                    {onCancelQueued && (!entry.deliveryUncertain || entry.outgoingReceipt?.state === 'failed') && (
                         // ★ Always in the DOM, never hover-gated in markup.
                         //
                         // Hover-only would make cancelling unreachable on a phone,

@@ -133,7 +133,9 @@ function harness() {
     const store = new InMemoryAssistantRelayStore();
     const submits: Array<{ sessionId: string; text: string; messageId: string; policy: SendPolicy }> = [];
     const localTail = vi.fn(async () => 'LOCAL TAIL — must not be used for a remote project');
+    const exactReader = vi.fn(async (_mesh: string, _sid: string, _attempt: string): Promise<string | null> => null);
     const relay = new AssistantRelay({
+        rehydrateAttemptReport: exactReader,
         subscribe: () => () => {},
         coordinatorMeshOf: () => null,
         projectSlug: (m) => (m === MESH ? 'blog' : null),
@@ -160,7 +162,7 @@ function harness() {
         now: () => clock.now(),
     });
     return {
-        clock, store, submits, relay, poller, poll, localTail,
+        clock, store, submits, relay, poller, poll, localTail, exactReader,
         setAnswer: (fn: typeof answer) => { answer = fn; },
         setTarget: (t: RemoteHostView | null) => { target = t; },
     };
@@ -173,12 +175,13 @@ describe('remote relay poller → AssistantRelay', () => {
         const h = harness();
         h.relay.openThread(MESH);
         h.poller.noteSent(MESH, 'plain:coord:old');
+        h.exactReader.mockResolvedValue('Done: RSS feed fixed and merged.');
         h.setAnswer((args) => {
             expect(args).toEqual({ afterAttemptId: 'plain:coord:old' });
             return ok({
                 coordinatorSessionId: 'coord', open: false, modal: false, cursor: 'plain:coord:new', cursorFound: true,
                 commits: [{ attemptId: 'plain:coord:new', outcome: 'completed', ageMs: 2_000 }],
-                body: 'Done: RSS feed fixed and merged.', work: { activeMissions: 0, pending: 0, assigned: 0 }, statusLine: '[Mesh] idle',
+                body: 'WRONG unbound polled tail', work: { activeMissions: 0, pending: 0, assigned: 0 }, statusLine: '[Mesh] idle',
             });
         });
         await h.poller.tick();
@@ -192,6 +195,8 @@ describe('remote relay poller → AssistantRelay', () => {
         expect(text).toContain('[idle]');
         expect(text.trim().endsWith('[/relay]')).toBe(true);
         expect(h.localTail).not.toHaveBeenCalled();
+        expect(h.exactReader).toHaveBeenCalledWith(MESH, 'coord', 'plain:coord:new');
+        expect(text).not.toContain('WRONG unbound polled tail');
         expect(h.submits[0]!.messageId).toBe(`relay:${MESH}:plain:coord:new`);
 
         // Next poll starts from the new cursor; the same commit is never relayed twice.
@@ -242,6 +247,7 @@ describe('remote relay poller → AssistantRelay', () => {
         expect(card.trim().endsWith('[/relay]')).toBe(true);
 
         h.clock.advance(POLL_BACKOFF_MS + 1);
+        h.exactReader.mockResolvedValue('back');
         h.setAnswer(() => ok({ coordinatorSessionId: 'coord', cursor: 'plain:coord:1', cursorFound: false, commits: [{ attemptId: 'plain:coord:1', outcome: 'completed', ageMs: 1_000 }], body: 'back' }));
         await h.poller.tick();
         h.clock.advance(RELAY_QUIET_MS + 1);

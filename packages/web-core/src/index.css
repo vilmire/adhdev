@@ -2734,13 +2734,15 @@
     }
 
     .conversation-meta-chips.is-mobile-header .conversation-meta-chip {
-        flex: 0 0 auto;
-        max-width: none;
+        flex: 0 1 auto;
+        min-width: 0;
+        max-width: 100%;
     }
 
     .conversation-meta-chips.is-mobile-header .conversation-meta-chip span {
-        overflow: visible;
-        text-overflow: clip;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
     }
 
     button.conversation-meta-chip {
@@ -4652,7 +4654,7 @@
     .assistant-chat-activity-bar .chat-activity-toggle,
     .assistant-session-controls .chat-activity-toggle {
         min-height: 44px;
-        padding: 8px 12px;
+        padding: 8px 10px;
     }
 
     .assistant-session-controls .assistant-execution-toggle {
@@ -4662,7 +4664,12 @@
 
     /* Open panels occupy header space too; they must not cover a message
        or an input/approval target in the chat below. */
-    .assistant-session-controls > :has(> [role="dialog"]) {
+    .mobile-room-header-row:has([role="dialog"]) { flex-wrap: wrap; }
+    .mobile-room-header-actions:has([role="dialog"]) { width: 100%; }
+    .mobile-room-header-actions > .contents { display: contents; }
+    .mobile-room-header-actions button { min-width: 44px; min-height: 44px; }
+
+    .assistant-session-controls :has(> [role="dialog"]) {
         flex-basis: 100%;
         min-width: 0;
     }

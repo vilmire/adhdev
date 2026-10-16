@@ -1,3 +1,4 @@
+import { mergeConversationMessages } from '../../src/providers/cli-provider-transcript-merge.js';
 import { handleOutgoingReceipts, handleSendChat } from '../../src/commands/chat-commands-write.js';
 import { AssistantRegistry, setAssistantRegistryForTests } from '../../src/assistant/assistant-registry.js';
 import { createAssistantServices, setAssistantServicesForTests } from '../../src/assistant/assistant-services.js';
@@ -79,8 +80,12 @@ export function outgoingContractFixture(sessionId: string, confirmed = true) {
         acknowledge() { for (const resolve of acknowledgments.splice(0)) resolve(); status = 'generating'; engine.drainPendingSends(); },
         restartService() { service = createSessionInputService({ resolveSession: () => target,
             receiptStore: new OutgoingReceiptStore(path.join(directory, 'receipts')) }); },
-        wire() {
-            return host.runtimeMessages.map((row: any, i: number) => {
+        wire(native = false) {
+            // Exercise native dedup before encoding and real browser consumption.
+            const messages = native ? mergeConversationMessages(host.runtimeMessages,
+                host.runtimeMessages.map((row: any) => ({ role: row.message.role, content: row.message.content })))
+                : host.runtimeMessages.map((row: any) => row.message);
+            return messages.map((message: any) => ({ message })).map((row: any, i: number) => {
                 const head = encodeChatMessageHead(row.message, { id: `synthetic-bubble-${i}`, ord: String(i).padStart(5, '0'), rev: ++frame,
                     epoch: 'synthetic-wire-epoch', frame, srcId: null, body: { text: row.message.content } } as any);
                 return chatMessageFromWire(head, row.message.content);

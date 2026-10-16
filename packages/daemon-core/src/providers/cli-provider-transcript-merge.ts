@@ -1,8 +1,6 @@
 // Transcript assembly helpers extracted from cli-provider-instance.ts.
-// Pure move — no behavior change. `mergeConversationMessages` was a private
-// method reading only `this.runtimeMessages`; it now takes that array as a
-// parameter. `buildExternalTranscriptProbe` used no instance state.
 
+import { readOutgoingReceipt, sameOutgoingAttempt } from '../seqscribe/outgoing-receipt.js';
 import { flattenContent } from './contracts.js';
 import { buildChatMessage, normalizeChatMessages, resolveChatMessageKind, isUserFacingChatMessage } from './chat-message-normalization.js';
 import type { ChatMessage } from '../types.js';
@@ -23,6 +21,7 @@ export function mergeConversationMessages(
     const getRole = (message: ChatMessage): string => typeof message.role === 'string'
         ? message.role.trim().toLowerCase()
         : '';
+    const metadata = (message: ChatMessage): Record<string, unknown> => message.meta && typeof message.meta === 'object' && !Array.isArray(message.meta) ? message.meta as Record<string, unknown> : {};
     const runtimeEntries: MergeEntry[] = runtimeMessages.map((entry, index) => ({
         message: entry.message,
         index: parsedMessages.length + index,
@@ -34,13 +33,40 @@ export function mergeConversationMessages(
             : {};
         if (meta.runtimeInputAck !== true) return true;
         const runtimeText = flattenContent(entry.message.content).replace(/\s+/g, ' ').trim();
-        if (!runtimeText) return false;
-        return !parsedEntries.some((parsedEntry) => {
+        if (!runtimeText) return !!(meta.sourceMessageId || meta.outgoingReceipt);
+        const matches = parsedEntries.filter((parsedEntry) => {
             const parsedRole = getRole(parsedEntry.message);
-            if (parsedRole !== 'user' && parsedRole !== 'human') return false;
-            const parsedText = flattenContent(parsedEntry.message.content).replace(/\s+/g, ' ').trim();
-            return parsedText === runtimeText;
+            return (parsedRole === 'user' || parsedRole === 'human')
+                && flattenContent(parsedEntry.message.content).replace(/\s+/g, ' ').trim() === runtimeText;
         });
+        const sourceId = typeof meta.sourceMessageId === 'string' ? meta.sourceMessageId : null;
+        const receipt = readOutgoingReceipt(meta.outgoingReceipt);
+        // Text alone cannot distinguish repeated sends. An explicit native identity
+        // can; otherwise both sides of the content match must be unique.
+        const identified = sourceId ? matches.filter(p => metadata(p.message).sourceMessageId === sourceId) : [];
+        const sameTextAcks = runtimeMessages.filter(r => metadata(r.message).runtimeInputAck === true
+            && flattenContent(r.message.content).replace(/\s+/g, ' ').trim() === runtimeText);
+        const candidate = identified.length === 1 ? identified[0]
+            : matches.length === 1 && sameTextAcks.length === 1 ? matches[0] : null;
+        if (!candidate) return true;
+        // A historical native turn cannot receive a later send's identity. A small
+        // allowance covers native timestamps sampled just before the runtime ack.
+        const nativeAt = candidate.message.receivedAt || candidate.message.timestamp || 0;
+        const runtimeAt = entry.message.receivedAt || entry.message.timestamp || 0;
+        if (!identified.length && nativeAt && runtimeAt && nativeAt < runtimeAt - 1000) return true;
+        const nativeMeta = metadata(candidate.message);
+        const nativeReceipt = readOutgoingReceipt(nativeMeta.outgoingReceipt);
+        if (nativeMeta.sourceMessageId && nativeMeta.sourceMessageId !== sourceId) return true;
+        if (meta.outgoingReceipt && !receipt) return true;
+        if (receipt && (!sourceId || receipt.messageId !== sourceId)) return true;
+        if (nativeMeta.outgoingReceipt && (!nativeReceipt || !receipt || !sameOutgoingAttempt(nativeReceipt, receipt))) return true;
+        if (nativeReceipt && receipt && nativeReceipt.revision === receipt.revision
+            && (nativeReceipt.state !== receipt.state || nativeReceipt.proof !== receipt.proof)) return true;
+        candidate.message = { ...candidate.message, meta: { ...nativeMeta,
+            ...(sourceId ? { sourceMessageId: sourceId } : {}),
+            ...(receipt ? { outgoingReceipt: nativeReceipt && nativeReceipt.revision > receipt.revision ? nativeReceipt : receipt } : {}),
+        } };
+        return false;
     });
     const getTime = (message: ChatMessage): number => {
         const value = typeof message.receivedAt === 'number'

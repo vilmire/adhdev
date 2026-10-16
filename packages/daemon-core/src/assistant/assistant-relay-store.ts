@@ -1,7 +1,6 @@
 /**
  * Relay thread/row store port (design 2026-10-07-assistant-layer.md §4.6:
- * `assistant_threads`, `assistant_relays` — ids, times and enums only, never a
- * body; the body is re-read at send time).
+ * `assistant_threads`, `assistant_relays`, and bounded local attempt bodies).
  *
  * The durable implementation is `SqliteAssistantRelayStore`
  * (assistant-relay-sqlite-store.ts, tables in `mesh-runtime.db`).
@@ -62,9 +61,17 @@ export interface AssistantRelayStore {
     listUndelivered(): AssistantRelayRow[];
     /** Rows that settled without their own body being sent (silent loss). */
     countUnrendered(): UnrenderedRelayCounts;
-    /** Retention: delivered rows after 7 d, closed threads after 30 d. */
+    /** Caller must validate terminal/generation/native provenance before storing or reading. */
+    captureAttemptBody(attemptId: string, meshId: string, sessionId: string, body: string, at: number, evidenceRef: string): void;
+    readAttemptBody(attemptId: string, meshId: string, sessionId: string, now: number, evidenceRef: string): string | null;
+    /** Retention: bodies after 24 h, delivered rows after 7 d, closed threads after 30 d. */
     prune(now: number): void;
 }
+
+export const ATTEMPT_BODY_TTL_MS = 24 * 60 * 60_000;
+export const ATTEMPT_BODY_MAX_CHARS = 1_048_576;
+export const ATTEMPT_BODY_MAX_ROWS = 128;
+export const ATTEMPT_BODY_TOTAL_BYTES = 8 * ATTEMPT_BODY_MAX_CHARS;
 
 export const RELAY_DELIVERED_RETENTION_MS = 7 * 24 * 60 * 60_000;
 export const THREAD_CLOSED_RETENTION_MS = 30 * 24 * 60 * 60_000;
@@ -78,6 +85,7 @@ export function toUnrenderedCounts(byMesh: ReadonlyMap<string, number>): Unrende
 }
 
 export class InMemoryAssistantRelayStore implements AssistantRelayStore {
+    private readonly bodies = new Map<string, { meshId: string; sessionId: string; body: string; at: number; evidenceRef: string }>();
     private readonly threads = new Map<string, AssistantThreadRow>();
     private readonly relays = new Map<string, AssistantRelayRow>();
 
@@ -132,7 +140,26 @@ export class InMemoryAssistantRelayStore implements AssistantRelayStore {
         return toUnrenderedCounts(byMesh);
     }
 
+    captureAttemptBody(attemptId: string, meshId: string, sessionId: string, body: string, at: number, evidenceRef: string): void {
+        const row = this.relays.get(attemptId);
+        if (!row || row.meshId !== meshId || row.coordinatorSessionId !== sessionId || !evidenceRef || !body || body.length > ATTEMPT_BODY_MAX_CHARS) return;
+        if (!this.bodies.has(attemptId)) this.bodies.set(attemptId, { meshId, sessionId, body, at, evidenceRef });
+        this.pruneBodies(at);
+    }
+    readAttemptBody(attemptId: string, meshId: string, sessionId: string, now: number, evidenceRef: string): string | null {
+        const b = this.bodies.get(attemptId);
+        return b && b.evidenceRef === evidenceRef && !!evidenceRef && b.meshId === meshId && b.sessionId === sessionId && now - b.at <= ATTEMPT_BODY_TTL_MS ? b.body : null;
+    }
+    private pruneBodies(now: number): void {
+        let total = 0, count = 0;
+        for (const [id, b] of [...this.bodies].sort((a, b) => b[1].at - a[1].at || b[0].localeCompare(a[0]))) {
+            if (now - b.at > ATTEMPT_BODY_TTL_MS || ++count > ATTEMPT_BODY_MAX_ROWS || total + Buffer.byteLength(b.body, 'utf8') > ATTEMPT_BODY_TOTAL_BYTES) this.bodies.delete(id);
+            else total += Buffer.byteLength(b.body, 'utf8');
+        }
+    }
+
     prune(now: number): void {
+        this.pruneBodies(now);
         for (const [id, r] of this.relays) {
             if (r.deliveredAt !== null && now - r.deliveredAt > RELAY_DELIVERED_RETENTION_MS) this.relays.delete(id);
         }

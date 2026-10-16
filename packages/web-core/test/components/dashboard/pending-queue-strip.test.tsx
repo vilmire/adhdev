@@ -388,3 +388,19 @@ describe('PendingQueueStrip — a body that waited too long stops claiming deliv
         expect(markerLabel()).toMatch(/not delivered/i)
     })
 })
+
+it('dismisses uncertainty only in local UI, then resurfaces an actual failed receipt', () => {
+    const onCancelQueued = vi.fn(), onSendNow = vi.fn();
+    const entry: PendingLocalMessage = { ...parked('uncertain', 'public prompt'), deliveryUncertain: true, stale: true,
+        outgoingReceipt: { version: 1, messageId: 'uncertain', sessionId: 's', attemptId: 'a', generation: 'g', inputDigest: 'digest',
+            revision: 2, state: 'uncertain', proof: 'none' } };
+    const before = JSON.stringify(entry);
+    render({ entries: [entry], onCancelQueued, onSendNow });
+    expect(container.querySelector('[role="img"]')?.textContent).toBe('⏱');
+    const buttons = container.querySelectorAll('button'); expect(buttons).toHaveLength(1);
+    act(() => buttons[0].click()); expect(strip()).toBeNull();
+    expect(JSON.stringify(entry)).toBe(before); expect(onCancelQueued).not.toHaveBeenCalled(); expect(onSendNow).not.toHaveBeenCalled();
+    render({ entries: [{ ...entry, outgoingReceipt: { ...entry.outgoingReceipt!, revision: 3, state: 'failed', proof: 'not_written' } }], onCancelQueued, onSendNow });
+    expect(strip()).not.toBeNull(); expect(container.querySelector('[role="status"]')).not.toBeNull();
+    expect(container.querySelector('[role="img"]')?.textContent).toBe('⚠');
+});
