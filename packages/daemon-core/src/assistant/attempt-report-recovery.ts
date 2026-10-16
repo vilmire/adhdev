@@ -15,31 +15,66 @@ export async function recoverAttemptReport(db: Database, attempt: TurnAttempt | 
     if (!attempt || attempt.scope !== 'plain' || attempt.sessionId !== sessionId || !attempt.terminal) return { body: null, source: 'unavailable', reason: 'exact_committed_attempt_not_found' };
     // Plain coordinator attempts legitimately have no meshId; caller must authorize the registry session/mesh.
     if (attempt.meshId && attempt.meshId !== meshId) return { body: null, source: 'unavailable', reason: 'attempt_mesh_mismatch' };
-    const rows = db.prepare('SELECT event_id,session_id,generation,to_state,payload_json FROM turn_events WHERE attempt_id=? ORDER BY recorded_at DESC,event_id DESC LIMIT 128').all(attempt.attemptId) as Array<{ event_id: string; session_id: string; generation: number | null; to_state: string | null; payload_json: string }>;
-    const own = rows.filter(row => row.session_id === sessionId && row.generation === attempt.generation);
-    const terminals = own.filter(row => row.to_state === attempt.terminal!.outcome);
-    if (terminals.length !== 1) return { body: null, source: 'unavailable', reason: 'original_terminal_evidence_unavailable' };
-    const terminal = terminals[0]!;
-    let sourceEvent = terminal;
-    const payloadOf = (row: typeof terminal | undefined) => {
+    type EventRow = { event_id: string; session_id: string; generation: number | null; kind: string; source: string;
+        verdict: string; from_state: string | null; to_state: string | null; at_ms: number; payload_json: string };
+    const payloadOf = (row: EventRow | undefined) => {
         try { return row ? rec(JSON.parse(row.payload_json)) : null; } catch { return null; }
     };
+    // Recorded/rejected observations after completion also retain to_state. Only
+    // an applied transition into a terminal state is a cause; the commit effect
+    // is a separate row with the producer's deterministic cause#committed id.
+    // Query transitions directly so later observations cannot hide the cause.
+    // Three rows already prove ambiguity; bound the read without selecting a
+    // preferred cause from competing transitions.
+    const rows = db.prepare(`SELECT * FROM turn_events WHERE attempt_id=? AND
+        (kind='committed' OR (verdict='applied' AND to_state IN ('completed','failed','cancelled')
+        AND from_state NOT IN ('completed','failed','cancelled'))) LIMIT 3`)
+        .all(attempt.attemptId) as EventRow[];
+    const causes = rows.filter(row => row.kind !== 'committed');
+    const commits = rows.filter(row => row.kind === 'committed');
+    if (causes.length !== 1 || commits.length !== 1) return { body: null, source: 'unavailable', reason: 'original_terminal_evidence_unavailable' };
+    const terminal = causes[0]!, committed = commits[0]!;
+    const owns = (row: EventRow) => row.session_id === sessionId && row.generation === attempt.generation;
+    const commitPayload = payloadOf(committed);
     let payload = payloadOf(terminal);
     let evidence = rec(payload?.evidence);
+    const matchesEvidence = (row: EventRow, e: Record<string, unknown> | null) => {
+        const ref = rec(e?.attemptRef);
+        return owns(row) && e?.eventId === row.event_id && e?.kind === row.kind && e?.sessionId === sessionId
+            && e?.at === row.at_ms && (!ref || (ref.attemptId === attempt.attemptId && ref.generation === attempt.generation));
+    };
+    if (!matchesEvidence(terminal, evidence) || !owns(committed)
+        || terminal.to_state !== attempt.terminal.outcome || terminal.at_ms !== attempt.terminal.at
+        || committed.event_id !== terminal.event_id + '#committed' || committed.verdict !== 'applied'
+        || committed.from_state !== null || committed.source !== terminal.source
+        || committed.to_state !== attempt.terminal.outcome || committed.at_ms !== terminal.at_ms
+        || commitPayload?.outcome !== attempt.terminal.outcome || commitPayload?.reason !== attempt.terminal.reason
+        || commitPayload?.strength !== attempt.terminal.strength || evidence?.source !== attempt.terminal.source) {
+        return { body: null, source: 'unavailable', reason: 'original_terminal_evidence_unavailable' };
+    }
+    let sourceEvent = terminal;
     const isNativeReference = (e: Record<string, unknown> | null) => e?.kind === 'turn_end' || e?.kind === 'transcript_final';
-    // Actual native producers emit transcript_final; hold-expiry terminals may
-    // instead reference that event through their exact notify textEventId.
-    // A direct committed envelope is already attached to this exact terminal.
     const directEnvelope = rec(rec(payload?.local)?.envelope);
     if (!isNativeReference(evidence) && !(typeof directEnvelope?.finalSummary === 'string' && directEnvelope.finalSummary)) {
-        const notifications = own.filter(row => row.event_id.startsWith(terminal.event_id + '#notify:'));
-        if (notifications.length !== 1) return { body: null, source: 'unavailable', reason: 'no_unique_original_native_bubble_reference' };
-        const notify = notifications[0];
-        const textEventId = payloadOf(notify)?.textEventId;
-        const originals = typeof textEventId === 'string' ? own.filter(row => row.event_id === textEventId) : [];
-        if (originals.length !== 1) return { body: null, source: 'unavailable', reason: 'no_unique_original_native_bubble_reference' };
-        sourceEvent = originals[0]!;
-        payload = payloadOf(sourceEvent); evidence = rec(payload?.evidence);
+        // Plain scope never emits notify rows. The resolved hold retains the
+        // exact opener pointer used by the reducer, bound to this generation.
+        const hold = evidence?.kind === 'hold_expired' && typeof evidence.holdId === 'string'
+            && ['weak_candidate', 'await_report', 'await_end'].includes(String(evidence.reason))
+            ? db.prepare(`SELECT * FROM turn_holds WHERE hold_id=? AND attempt_id=? AND generation=?
+                AND reason=? AND status='resolved' AND until_ms<=?`)
+                .get(evidence.holdId, attempt.attemptId, attempt.generation, evidence.reason, terminal.at_ms) as { data_json: string } | undefined
+            : undefined;
+        let textEventId: unknown;
+        try { textEventId = hold ? rec(JSON.parse(hold.data_json))?.textEventId : undefined; } catch { /* unavailable */ }
+        const original = typeof textEventId === 'string'
+            ? db.prepare('SELECT * FROM turn_events WHERE event_id=? AND attempt_id=?').get(textEventId, attempt.attemptId) as EventRow | undefined
+            : undefined;
+        const originalPayload = payloadOf(original), originalEvidence = rec(originalPayload?.evidence);
+        if (!original || !matchesEvidence(original, originalEvidence) || original.verdict !== 'applied'
+            || !isNativeReference(originalEvidence) || original.at_ms > terminal.at_ms) {
+            return { body: null, source: 'unavailable', reason: 'no_unique_original_native_bubble_reference' };
+        }
+        sourceEvent = original; payload = originalPayload; evidence = originalEvidence;
     }
     // The key binds an independently verified terminal/generation and its exact
     // referenced source evidence. Old session-tail captures have no such provenance.

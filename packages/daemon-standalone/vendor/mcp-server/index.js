@@ -91886,12 +91886,6 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
     async function recoverAttemptReport(db, attempt, meshId, sessionId, execute) {
       if (!attempt || attempt.scope !== "plain" || attempt.sessionId !== sessionId || !attempt.terminal) return { body: null, source: "unavailable", reason: "exact_committed_attempt_not_found" };
       if (attempt.meshId && attempt.meshId !== meshId) return { body: null, source: "unavailable", reason: "attempt_mesh_mismatch" };
-      const rows = db.prepare("SELECT event_id,session_id,generation,to_state,payload_json FROM turn_events WHERE attempt_id=? ORDER BY recorded_at DESC,event_id DESC LIMIT 128").all(attempt.attemptId);
-      const own = rows.filter((row2) => row2.session_id === sessionId && row2.generation === attempt.generation);
-      const terminals = own.filter((row2) => row2.to_state === attempt.terminal.outcome);
-      if (terminals.length !== 1) return { body: null, source: "unavailable", reason: "original_terminal_evidence_unavailable" };
-      const terminal = terminals[0];
-      let sourceEvent = terminal;
       const payloadOf = (row2) => {
         try {
           return row2 ? rec3(JSON.parse(row2.payload_json)) : null;
@@ -91899,20 +91893,43 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
           return null;
         }
       };
+      const rows = db.prepare(`SELECT * FROM turn_events WHERE attempt_id=? AND
+        (kind='committed' OR (verdict='applied' AND to_state IN ('completed','failed','cancelled')
+        AND from_state NOT IN ('completed','failed','cancelled'))) LIMIT 3`).all(attempt.attemptId);
+      const causes = rows.filter((row2) => row2.kind !== "committed");
+      const commits = rows.filter((row2) => row2.kind === "committed");
+      if (causes.length !== 1 || commits.length !== 1) return { body: null, source: "unavailable", reason: "original_terminal_evidence_unavailable" };
+      const terminal = causes[0], committed = commits[0];
+      const owns = (row2) => row2.session_id === sessionId && row2.generation === attempt.generation;
+      const commitPayload = payloadOf(committed);
       let payload = payloadOf(terminal);
       let evidence = rec3(payload?.evidence);
+      const matchesEvidence = (row2, e) => {
+        const ref = rec3(e?.attemptRef);
+        return owns(row2) && e?.eventId === row2.event_id && e?.kind === row2.kind && e?.sessionId === sessionId && e?.at === row2.at_ms && (!ref || ref.attemptId === attempt.attemptId && ref.generation === attempt.generation);
+      };
+      if (!matchesEvidence(terminal, evidence) || !owns(committed) || terminal.to_state !== attempt.terminal.outcome || terminal.at_ms !== attempt.terminal.at || committed.event_id !== terminal.event_id + "#committed" || committed.verdict !== "applied" || committed.from_state !== null || committed.source !== terminal.source || committed.to_state !== attempt.terminal.outcome || committed.at_ms !== terminal.at_ms || commitPayload?.outcome !== attempt.terminal.outcome || commitPayload?.reason !== attempt.terminal.reason || commitPayload?.strength !== attempt.terminal.strength || evidence?.source !== attempt.terminal.source) {
+        return { body: null, source: "unavailable", reason: "original_terminal_evidence_unavailable" };
+      }
+      let sourceEvent = terminal;
       const isNativeReference = (e) => e?.kind === "turn_end" || e?.kind === "transcript_final";
       const directEnvelope = rec3(rec3(payload?.local)?.envelope);
       if (!isNativeReference(evidence) && !(typeof directEnvelope?.finalSummary === "string" && directEnvelope.finalSummary)) {
-        const notifications = own.filter((row2) => row2.event_id.startsWith(terminal.event_id + "#notify:"));
-        if (notifications.length !== 1) return { body: null, source: "unavailable", reason: "no_unique_original_native_bubble_reference" };
-        const notify2 = notifications[0];
-        const textEventId = payloadOf(notify2)?.textEventId;
-        const originals = typeof textEventId === "string" ? own.filter((row2) => row2.event_id === textEventId) : [];
-        if (originals.length !== 1) return { body: null, source: "unavailable", reason: "no_unique_original_native_bubble_reference" };
-        sourceEvent = originals[0];
-        payload = payloadOf(sourceEvent);
-        evidence = rec3(payload?.evidence);
+        const hold = evidence?.kind === "hold_expired" && typeof evidence.holdId === "string" && ["weak_candidate", "await_report", "await_end"].includes(String(evidence.reason)) ? db.prepare(`SELECT * FROM turn_holds WHERE hold_id=? AND attempt_id=? AND generation=?
+                AND reason=? AND status='resolved' AND until_ms<=?`).get(evidence.holdId, attempt.attemptId, attempt.generation, evidence.reason, terminal.at_ms) : void 0;
+        let textEventId;
+        try {
+          textEventId = hold ? rec3(JSON.parse(hold.data_json))?.textEventId : void 0;
+        } catch {
+        }
+        const original = typeof textEventId === "string" ? db.prepare("SELECT * FROM turn_events WHERE event_id=? AND attempt_id=?").get(textEventId, attempt.attemptId) : void 0;
+        const originalPayload = payloadOf(original), originalEvidence = rec3(originalPayload?.evidence);
+        if (!original || !matchesEvidence(original, originalEvidence) || original.verdict !== "applied" || !isNativeReference(originalEvidence) || original.at_ms > terminal.at_ms) {
+          return { body: null, source: "unavailable", reason: "no_unique_original_native_bubble_reference" };
+        }
+        sourceEvent = original;
+        payload = originalPayload;
+        evidence = originalEvidence;
       }
       const hash3 = (text3) => (0, import_node_crypto17.createHash)("sha256").update(text3).digest("hex");
       const evidenceRef = JSON.stringify([
