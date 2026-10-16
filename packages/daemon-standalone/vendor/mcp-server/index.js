@@ -58985,7 +58985,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     function validateCategory(value) {
       return typeof value === "string" && [...MESH_REFINE_VALIDATION_CATEGORIES, "custom"].includes(value) ? value : "custom";
     }
-    function normalizeMeshCommandConfig(entry, source2) {
+    function normalizeMeshCommandConfig(entry, source2, context2 = "bootstrap") {
       if (!isMeshConfigRecord(entry) || typeof entry.command !== "string") {
         return { rejected: { source: source2, reason: "validation command must be an object with a command string" } };
       }
@@ -59010,8 +59010,9 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       if (entry.cwd !== void 0 && typeof entry.cwd !== "string") {
         return { rejected: { source: source2, command: commandText, reason: "cwd must be a string when provided" } };
       }
-      if (entry.timeoutMs !== void 0 && (typeof entry.timeoutMs !== "number" || !Number.isFinite(entry.timeoutMs) || entry.timeoutMs < 1e3 || entry.timeoutMs > 6e5)) {
-        return { rejected: { source: source2, command: commandText, reason: "timeoutMs must be between 1000 and 600000" } };
+      const maxTimeoutMs = context2 === "validation" ? 18e5 : 6e5;
+      if (entry.timeoutMs !== void 0 && (typeof entry.timeoutMs !== "number" || !Number.isFinite(entry.timeoutMs) || entry.timeoutMs < 1e3 || entry.timeoutMs > maxTimeoutMs)) {
+        return { rejected: { source: source2, command: commandText, reason: `timeoutMs must be between 1000 and ${maxTimeoutMs}` } };
       }
       if (entry.outputLimitBytes !== void 0 && (typeof entry.outputLimitBytes !== "number" || !Number.isFinite(entry.outputLimitBytes) || entry.outputLimitBytes < 1024 || entry.outputLimitBytes > 1048576)) {
         return { rejected: { source: source2, command: commandText, reason: "outputLimitBytes must be between 1024 and 1048576" } };
@@ -59080,7 +59081,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       }
       if (Array.isArray(rawCommands)) {
         rawCommands.forEach((entry, index) => {
-          const normalized = normalizeMeshCommandConfig(entry, `${source2}:validation.commands[${index}]`);
+          const normalized = normalizeMeshCommandConfig(entry, `${source2}:validation.commands[${index}]`, "validation");
           if (normalized.command) commands.push(normalized.command);
           if (normalized.rejected) rejectedCommands.push(normalized.rejected);
         });
@@ -59310,7 +59311,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
                       args: { type: "array", items: { type: "string" } },
                       category: { enum: [...MESH_REFINE_VALIDATION_CATEGORIES, "custom"] },
                       cwd: { type: "string" },
-                      timeoutMs: { type: "number", minimum: 1e3, maximum: 6e5 },
+                      timeoutMs: { type: "number", minimum: 1e3, maximum: 18e5 },
                       outputLimitBytes: { type: "number", minimum: 1024, maximum: 1048576 },
                       env: { type: "object", additionalProperties: { type: "string" } },
                       scopes: {
