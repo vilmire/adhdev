@@ -135,25 +135,21 @@ describe('channel activation stamp — cross-track clobber guard', () => {
     });
   }
 
-  it('G1/G2: fallback-stable loader refuses to clobber an existing preview stamp, loudly', async () => {
+  it('G1/G2: a fallback loader in the preview dir now resolves preview and keeps the stamp on its track', async () => {
+    // Since 2026-10-16 (track-identity.ts step 3) an unstamped process whose
+    // ADHDEV_CONFIG_DIR is named `.adhdev-preview` resolves the PREVIEW track by
+    // itself, so the incident's fallback-to-stable never happens here: no
+    // cross-track flip, no refusal needed. The refusal path itself stays in
+    // provider-channel-sync.ts for any other fallback/dir-name mismatch.
     writeExistingStamp('1.0.57', 'preview');
     const logs: string[] = [];
     const loader = newLoader({ daemonVersion: '1.0.99', logs });
-
-    // Sanity: this reproduces the incident's resolution — fallback to 'stable'
-    // even though the config dir is the preview track's.
-    expect(loader.channel).toBe('stable');
+    expect(loader.channel).toBe('preview');
 
     await loader.syncVerifiedChannel();
 
-    // G1 — the live stamp survives untouched.
-    expect(readStamp()).toMatchObject({ daemonVersion: '1.0.57', channel: 'preview' });
-
-    // G2 — refusal names both sides and the cause.
-    const refusal = logs.find((l) => l.includes('Refusing to overwrite channel activation stamp'));
-    expect(refusal).toBeTruthy();
-    expect(refusal).toContain('1.0.57@preview');
-    expect(refusal).toContain('FALLBACK');
+    expect(readStamp()).toMatchObject({ daemonVersion: '1.0.99', channel: 'preview' });
+    expect(logs.find((l) => l.includes('Refusing to overwrite'))).toBeFalsy();
   });
 
   it('G3 (over-correction guard): an explicit-channel daemon still writes the stamp', async () => {
@@ -176,17 +172,17 @@ describe('channel activation stamp — cross-track clobber guard', () => {
 
     await loader.syncVerifiedChannel();
 
-    expect(readStamp()).toMatchObject({ daemonVersion: '1.0.99', channel: 'stable' });
+    expect(readStamp()).toMatchObject({ daemonVersion: '1.0.99', channel: 'preview' });
   });
 
   it('G5: fallback loader still refreshes a stamp on its OWN channel', async () => {
-    writeExistingStamp('1.0.50', 'stable');
+    writeExistingStamp('1.0.50', 'preview');
     const loader = newLoader({ daemonVersion: '1.0.99' });
 
     await loader.syncVerifiedChannel();
 
     // Same channel → not a cross-track flip → normal advance.
-    expect(readStamp()).toMatchObject({ daemonVersion: '1.0.99', channel: 'stable' });
+    expect(readStamp()).toMatchObject({ daemonVersion: '1.0.99', channel: 'preview' });
   });
 
   it('guard never consults the real home dir', () => {

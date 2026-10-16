@@ -109,6 +109,25 @@ describe('track identity', () => {
     expect((await importIdentity()).TRACK).toBe('stable');
   });
 
+  it('unstamped build with no channel env infers preview from an ADHDEV_CONFIG_DIR named .adhdev-preview', async () => {
+    // rc.14: a hand-started preview daemon (`ADHDEV_CONFIG_DIR=~/.adhdev-preview adhdev daemon`)
+    // resolved to STABLE — second session host in the stable namespace, assistant MCP on 19222.
+    process.env.ADHDEV_CONFIG_DIR = join(fakeHome, '.adhdev-preview');
+    let id = await importIdentity();
+    expect(id.TRACK).toBe('preview');
+    expect(id.IDENTITY).toMatchObject({ defaultPort: 19_223, sessionHostName: 'adhdev-preview', binaryName: 'adhdev-preview' });
+    process.env.ADHDEV_CONFIG_DIR = join(fakeHome, '.adhdev-preview') + '/';
+    expect((await importIdentity()).TRACK).toBe('preview');
+    // An explicit channel still wins over the dir name, and other dir names stay stable.
+    process.env.ADHDEV_BUILD_CHANNEL = 'stable';
+    expect((await importIdentity()).TRACK).toBe('stable');
+    delete process.env.ADHDEV_BUILD_CHANNEL;
+    process.env.ADHDEV_CONFIG_DIR = join(fakeHome, '.adhdev-preview-copy');
+    expect((await importIdentity()).TRACK).toBe('stable');
+    id = await importIdentity();
+    expect(id.configDirNamesPreviewInstance('C:\\Users\\x\\.adhdev-preview')).toBe(true);
+  });
+
   it('install origin: stable keeps the historical adhf.dev host (behavior-neutral)', async () => {
     const { getInstallOrigin } = await importIdentity();
     // The exact host every pre-track-axis reinstall guidance hardcoded.

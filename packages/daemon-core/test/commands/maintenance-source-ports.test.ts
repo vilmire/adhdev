@@ -67,6 +67,12 @@ it('corrupt/temp lifecycle inventory refuses instead of replacing unknown with z
  expect(collectLifecycleSource(root).observed).toBe(false);beginLifecycleSource('helper',{},root);const dir=path.join(root,'cooperative-lifecycle-source');fs.writeFileSync(path.join(dir,'unfinished.tmp'),'PRIVATE-UNKNOWN');expect(()=>collectLifecycleSource(root)).toThrow('temporary_or_unknown');
 });
 
+it('a legacy record persisted with targetVersion:"" no longer fails the whole inventory',()=>{
+ const id=beginLifecycleSource('helper',{targetVersion:'1.0.82',packageName:'adhdev',parentPid:999999},root);const file=path.join(root,'cooperative-lifecycle-source',id+'.json');
+ const legacy={...JSON.parse(fs.readFileSync(file,'utf8')),targetVersion:''};fs.writeFileSync(file,JSON.stringify(legacy),{mode:0o600});
+ const inventory=collectLifecycleSource(root);expect(inventory.rows.find((r:any)=>r.operationId===id)).not.toHaveProperty('targetVersion');
+});
+
 it('native receipt callback cannot settle another notice attempt sharing its coordinator',async()=>{
  const first=noticeHarness('queued',1),second=noticeHarness('queued',2);await first.run();await second.run();
  first.ack('submitted');expect(first.metadata.inventory().pending).toHaveLength(1);expect(first.metadata.inventory().pending[0].seq).toBe(2);

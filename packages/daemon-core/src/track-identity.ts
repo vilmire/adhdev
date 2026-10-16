@@ -11,7 +11,16 @@
  *   2. `ADHDEV_BUILD_CHANNEL` env var — the same axis the web build already
  *      uses (packages/web-cloud/vite.config.ts); also the dev/test escape
  *      hatch when running from source where no define exists.
- *   3. 'stable' — absent or unrecognized values fail closed to stable.
+ *   3. `ADHDEV_CONFIG_DIR` whose last path segment is the preview instance
+ *      dir name ('.adhdev-preview'). The published preview npm package is
+ *      NOT stamped (a stamped bundle drifts from the committed vendor copy),
+ *      so without this a preview daemon started by hand — the shim and the
+ *      launchd service export the env, a bare `ADHDEV_CONFIG_DIR=… adhdev
+ *      daemon` does not — resolved to STABLE: it spawned a second session
+ *      host in the stable namespace (orphaning every live preview session)
+ *      and pointed assistant/coordinator MCP launches at the stable binary
+ *      and port 19222 (2026-10-16, rc.14).
+ *   4. 'stable' — absent or unrecognized values fail closed to stable.
  *
  * The axis name intentionally matches the web build's `ADHDEV_BUILD_CHANNEL`
  * (ci.yml stamps `stable`, deploy-preview-local.mjs stamps `preview`); this
@@ -46,8 +55,17 @@ export function resolveBuildTrack(env: NodeJS.ProcessEnv = process.env): BuildTr
     const injected = typeof __ADHDEV_BUILD_CHANNEL__ !== 'undefined' ? __ADHDEV_BUILD_CHANNEL__ : undefined;
     const stamped = typeof injected === 'string' ? injected.trim() : '';
     const raw = (stamped || (env[BUILD_CHANNEL_ENV_VAR] ?? '').trim()).toLowerCase();
-    return raw === 'preview' || raw === 'next' ? 'preview' : 'stable';
+    if (raw) return raw === 'preview' || raw === 'next' ? 'preview' : 'stable';
+    return configDirNamesPreviewInstance(env.ADHDEV_CONFIG_DIR) ? 'preview' : 'stable';
 }
+
+/** Last path segment of `ADHDEV_CONFIG_DIR` === '.adhdev-preview' (either separator, trailing ones ignored). */
+export function configDirNamesPreviewInstance(configDir: string | undefined): boolean {
+    const segments = (configDir ?? '').trim().split(/[\\/]+/).filter(Boolean);
+    return segments[segments.length - 1] === PREVIEW_CONFIG_DIR_NAME;
+}
+
+const PREVIEW_CONFIG_DIR_NAME = '.adhdev-preview';
 
 /** Process-wide build track, snapshotted at module load (env is fixed pre-launch). */
 export const TRACK: BuildTrack = resolveBuildTrack();

@@ -29600,7 +29600,12 @@ ${renderWorkerProtocolFooter2(input)}`;
       const injected = true ? "" : void 0;
       const stamped = typeof injected === "string" ? injected.trim() : "";
       const raw = (stamped || (env2[BUILD_CHANNEL_ENV_VAR] ?? "").trim()).toLowerCase();
-      return raw === "preview" || raw === "next" ? "preview" : "stable";
+      if (raw) return raw === "preview" || raw === "next" ? "preview" : "stable";
+      return configDirNamesPreviewInstance(env2.ADHDEV_CONFIG_DIR) ? "preview" : "stable";
+    }
+    function configDirNamesPreviewInstance(configDir) {
+      const segments = (configDir ?? "").trim().split(/[\\/]+/).filter(Boolean);
+      return segments[segments.length - 1] === PREVIEW_CONFIG_DIR_NAME;
     }
     function getTrackIdentity(track2 = TRACK) {
       return track2 === "preview" ? PREVIEW_IDENTITY : STABLE_IDENTITY;
@@ -29609,6 +29614,7 @@ ${renderWorkerProtocolFooter2(input)}`;
       return track2 === "preview" ? "https://dev.adhf.dev" : "https://adhf.dev";
     }
     var BUILD_CHANNEL_ENV_VAR;
+    var PREVIEW_CONFIG_DIR_NAME;
     var TRACK;
     var STABLE_IDENTITY;
     var PREVIEW_IDENTITY;
@@ -29617,6 +29623,7 @@ ${renderWorkerProtocolFooter2(input)}`;
       "src/track-identity.ts"() {
         "use strict";
         BUILD_CHANNEL_ENV_VAR = "ADHDEV_BUILD_CHANNEL";
+        PREVIEW_CONFIG_DIR_NAME = ".adhdev-preview";
         TRACK = resolveBuildTrack();
         STABLE_IDENTITY = {
           binaryName: "adhdev",
@@ -103514,6 +103521,9 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       const s2 = fs28.lstatSync(file);
       if (!s2.isFile() || s2.isSymbolicLink() || s2.mode & 63 || s2.uid !== process.getuid?.() || s2.size > 32768) throw Error("lifecycle_source_record_untrusted");
       const r = JSON.parse(fs28.readFileSync(file, "utf8"));
+      if (r && typeof r === "object") {
+        for (const k of ["targetVersion", "packageName"]) if (typeof r[k] === "string" && !r[k].trim()) delete r[k];
+      }
       const allowed = /* @__PURE__ */ new Set(["schema", "operationId", "kind", "owner", "state", "revision", "updatedAt", "targetVersion", "packageName", "parentPid", "childPid", "helper", "pendingMandatory", "pendingOptional", "inFlight", "retryScheduled", "exitScheduled", "retryAttempt"]);
       if (Object.keys(r).some((k) => !allowed.has(k))) throw Error("lifecycle_source_unknown_fields");
       for (const native of [r.owner, ...r.helper ? [r.helper] : []]) if (!native || Object.keys(native).some((k) => !["pid", "birth", "bootNonce", "nodePath", "nodeSha256", "entryPath", "entrySha256"].includes(k)) || !Number.isSafeInteger(native.pid) || native.pid <= 0 || typeof native.birth !== "string" || !/^[-a-f0-9]{36}$/.test(native.bootNonce) || !path33.isAbsolute(native.nodePath ?? "") || !path33.isAbsolute(native.entryPath ?? "") || ![native.nodeSha256, native.entrySha256].every((v) => /^[a-f0-9]{64}$/.test(v))) throw Error("lifecycle_source_incarnation_unknown");

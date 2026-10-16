@@ -300,7 +300,14 @@ describe('isCrossTrackConfigDirOverride (cross-track uninstall-guard predicate)'
 
   it('flags stable binary + ADHDEV_CONFIG_DIR pointed at the preview track\'s own dir', () => {
     const siblingPreview = win32.join(homeWin, '.adhdev-preview');
-    expect(isCrossTrackConfigDirOverride({ ADHDEV_CONFIG_DIR: siblingPreview }, homeWin, 'win32')).toBe(true);
+    expect(isCrossTrackConfigDirOverride({ ADHDEV_CONFIG_DIR: siblingPreview, ADHDEV_BUILD_CHANNEL: 'stable' }, homeWin, 'win32')).toBe(true);
+  });
+
+  it('an UNSTAMPED binary in the preview dir is the preview instance, not a cross-track override', () => {
+    // Stable releases are stamped 'stable' (modelled above via ADHDEV_BUILD_CHANNEL);
+    // the published preview package is unstamped and infers its track from the dir.
+    const siblingPreview = win32.join(homeWin, '.adhdev-preview');
+    expect(isCrossTrackConfigDirOverride({ ADHDEV_CONFIG_DIR: siblingPreview }, homeWin, 'win32')).toBe(false);
   });
 
   it('flags preview binary + ADHDEV_CONFIG_DIR pointed at the stable track\'s own dir (reverse direction)', () => {
@@ -314,18 +321,18 @@ describe('isCrossTrackConfigDirOverride (cross-track uninstall-guard predicate)'
 
   it('is case-insensitive on win32 (NTFS semantics)', () => {
     const siblingPreview = win32.join(homeWin, '.adhdev-preview');
-    expect(isCrossTrackConfigDirOverride({ ADHDEV_CONFIG_DIR: siblingPreview.toUpperCase() }, homeWin, 'win32')).toBe(true);
+    expect(isCrossTrackConfigDirOverride({ ADHDEV_CONFIG_DIR: siblingPreview.toUpperCase(), ADHDEV_BUILD_CHANNEL: 'stable' }, homeWin, 'win32')).toBe(true);
   });
 
   it('is case-SENSITIVE on posix (so the win32 lowering above is a real behavior change, not a no-op)', () => {
     const siblingPreview = posix.join(homePosix, '.adhdev-preview');
-    expect(isCrossTrackConfigDirOverride({ ADHDEV_CONFIG_DIR: siblingPreview.toUpperCase() }, homePosix, 'linux')).toBe(false);
-    expect(isCrossTrackConfigDirOverride({ ADHDEV_CONFIG_DIR: siblingPreview }, homePosix, 'linux')).toBe(true);
+    expect(isCrossTrackConfigDirOverride({ ADHDEV_CONFIG_DIR: siblingPreview.toUpperCase(), ADHDEV_BUILD_CHANNEL: 'stable' }, homePosix, 'linux')).toBe(false);
+    expect(isCrossTrackConfigDirOverride({ ADHDEV_CONFIG_DIR: siblingPreview, ADHDEV_BUILD_CHANNEL: 'stable' }, homePosix, 'linux')).toBe(true);
   });
 
   it('normalizes a trailing slash and mixed forward-slash override against a native win32 join', () => {
     const withTrailingSlashAndForwardSlashes = 'C:/Users/vilmi/.adhdev-preview/';
-    expect(isCrossTrackConfigDirOverride({ ADHDEV_CONFIG_DIR: withTrailingSlashAndForwardSlashes }, homeWin, 'win32')).toBe(true);
+    expect(isCrossTrackConfigDirOverride({ ADHDEV_CONFIG_DIR: withTrailingSlashAndForwardSlashes, ADHDEV_BUILD_CHANNEL: 'stable' }, homeWin, 'win32')).toBe(true);
   });
 });
 

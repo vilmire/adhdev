@@ -20,6 +20,10 @@ function directory(root:string,create=false){
 }
 function ensureDirectory(root:string){try{return directory(root);}catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')throw e;return directory(root,true);}}
 function read(file:string){const s=fs.lstatSync(file);if(!s.isFile()||s.isSymbolicLink()||(s.mode&0o077)||s.uid!==process.getuid?.()||s.size>32768)throw Error('lifecycle_source_record_untrusted');const r=JSON.parse(fs.readFileSync(file,'utf8'));
+ // Records persisted BEFORE the writer fix below still hold targetVersion/packageName:"".
+ // Read them as absent (the writer's own normalization), else one dead helper's record
+ // fails the whole inventory and blocks every later restart/upgrade (2026-10-16, rc.14).
+ if(r&&typeof r==='object')for(const k of ['targetVersion','packageName'])if(typeof r[k]==='string'&&!r[k].trim())delete r[k];
  const allowed=new Set(['schema','operationId','kind','owner','state','revision','updatedAt','targetVersion','packageName','parentPid','childPid','helper','pendingMandatory','pendingOptional','inFlight','retryScheduled','exitScheduled','retryAttempt']);
  if(Object.keys(r).some(k=>!allowed.has(k)))throw Error('lifecycle_source_unknown_fields');
  for(const native of [r.owner,...(r.helper?[r.helper]:[])])if(!native||Object.keys(native).some(k=>!['pid','birth','bootNonce','nodePath','nodeSha256','entryPath','entrySha256'].includes(k))||!Number.isSafeInteger(native.pid)||native.pid<=0||typeof native.birth!=='string'||!/^[-a-f0-9]{36}$/.test(native.bootNonce)||!path.isAbsolute(native.nodePath??'')||!path.isAbsolute(native.entryPath??'')||![native.nodeSha256,native.entrySha256].every(v=>/^[a-f0-9]{64}$/.test(v)))throw Error('lifecycle_source_incarnation_unknown');
