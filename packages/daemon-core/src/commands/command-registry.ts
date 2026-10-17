@@ -114,6 +114,9 @@ export interface CommandSpec<F extends CommandFamily = CommandFamily> {
     postChat?: boolean;
     /** Sources allowed to run this command. Default: all. */
     sources?: readonly CommandSource[];
+    /** Strip only reserved router metadata, after source and sender authorization,
+     * before passing domain args to an explicitly strict request decoder. */
+    stripTransportMetadata?: boolean;
     /**
      * Who may send this command over the daemon↔daemon mesh relay (source
      * `mesh`), evaluated by the router against the transport-stamped sender

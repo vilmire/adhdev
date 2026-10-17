@@ -4,9 +4,10 @@
  * provider roles → capability slots, repo identity normalization) that bring an
  * older file up to the current shape. The CRUD modules build on this.
  */
-import { join } from 'path';
+import { dirname, join } from 'path';
 import { getConfigDir } from './config.js';
-import { mkdirSync, rmSync, statSync, existsSync, readFileSync, writeFileSync, renameSync, copyFileSync } from 'fs';
+import { mkdirSync, rmSync, rmdirSync, statSync, existsSync, readFileSync, writeFileSync, renameSync, copyFileSync, openSync, closeSync, fsyncSync, unlinkSync } from 'fs';
+import { randomUUID } from 'crypto';
 import type { LocalMeshConfig, LocalMeshEntry } from '../repo-mesh-types.js';
 import { migratePolicyToSparseOverrides, MESH_POLICY_STORAGE_VERSION } from '../repo-mesh-policy-resolve.js';
 import { stripRemovedCoordinatorPromptFields } from './mesh-json-config.js';
@@ -99,6 +100,57 @@ export function withMeshConfigWriteLock<T>(fn: () => T): T {
         meshConfigLockHeldInProcess = false;
         release();
     }
+}
+
+export class MeshConfigStrictLockError extends Error {
+    constructor(readonly code: 'store_busy' | 'project_storage_unavailable') {
+        super(code === 'store_busy' ? 'meshes.json write lock is held' : 'meshes.json write lock is unavailable');
+    }
+}
+let strictMeshWriteDepth = 0;
+/** Same lock as other mesh mutations, but contention fails closed. Never steal
+ * stale locks or take the legacy unlocked path. Synchronous transactions only. */
+export function withStrictMeshConfigWriteLock<T>(operation: () => T): T {
+    const nested = meshConfigLockHeldInProcess;
+    const lock = `${getMeshConfigPath()}.lock`;
+    if (!nested) {
+        try { mkdirSync(lock, { mode: 0o700 }); }
+        catch (error) {
+            throw new MeshConfigStrictLockError((error as NodeJS.ErrnoException).code === 'EEXIST' ? 'store_busy' : 'project_storage_unavailable');
+        }
+        meshConfigLockHeldInProcess = true;
+    }
+    strictMeshWriteDepth++;
+    try { return operation(); }
+    finally {
+        strictMeshWriteDepth--;
+        if (!nested) {
+            meshConfigLockHeldInProcess = false;
+            try { rmdirSync(lock); } catch { /* refuse the next write */ }
+        }
+    }
+}
+
+/** Durable replace for strict transactions; unrelated saveMeshConfig callers
+ * keep their existing behavior. A post-rename failure never claims success. */
+export function saveMeshConfigDurable(config: LocalMeshConfig):
+    { ok: true; durable: true } | { ok: false; reason: string; committed: boolean } {
+    if (!strictMeshWriteDepth) return { ok: false, reason: 'strict_write_lock_required', committed: false };
+    const path = getMeshConfigPath();
+    const temp = `${path}.tmp-${process.pid}-${randomUUID()}`;
+    let committed = false;
+    try {
+        const fd = openSync(temp, 'wx', 0o600);
+        try { writeFileSync(fd, `${JSON.stringify(config, null, 2)}\n`, 'utf8'); fsyncSync(fd); }
+        finally { closeSync(fd); }
+        renameSync(temp, path);
+        committed = true;
+        const parent = openSync(dirname(path), 'r');
+        try { fsyncSync(parent); } finally { closeSync(parent); }
+        return { ok: true, durable: true };
+    } catch {
+        return { ok: false, reason: committed ? 'durability_unconfirmed' : 'atomic_replace_failed', committed };
+    } finally { try { unlinkSync(temp); } catch { /* renamed or never created */ } }
 }
 
 /**

@@ -69,6 +69,7 @@ import { assistantActionSpecs } from './high-family/assistant-action.js';
 import { assistantProjectSpecs } from './high-family/assistant.js';
 import { assistantRemoteSpecs } from './high-family/assistant-remote.js';
 import { assistantLaunchSpecs } from './high-family/assistant-launch.js';
+import { launchDefaultsSpecs } from './high-family/launch-defaults.js';
 import { MeshNodeGitStateStore } from '../mesh/mesh-node-git-state.js';
 import { MeshNodeGitRefresher } from '../mesh/mesh-node-git-refresher.js';
 import { MeshNodeStatePusher } from '../mesh/mesh-node-state-pusher.js';
@@ -344,6 +345,7 @@ export function getDaemonCommandRegistry(): CommandRegistry {
             ...assistantWatchSpecs,
             ...assistantRemoteSpecs,
             ...assistantLaunchSpecs,
+            ...launchDefaultsSpecs,
             ...handlerSpecs,
             ...gitSpecs,
         ], COMMAND_PREFIX_DEFAULTS);
@@ -1041,6 +1043,12 @@ export class DaemonCommandRouter {
 
     /** Run a spec in the context its family needs. */
     private async runSpec(spec: CommandSpec, args: Record<string, unknown>): Promise<CommandRouterResult> {
+        if (spec.stripTransportMetadata) {
+            args = { ...args };
+            delete args._interactionId;
+            delete args[MESH_SENDER_DAEMON_ID_ARG];
+            delete args[COMMAND_SOURCE_ARG];
+        }
         switch (spec.family) {
             case 'low': {
                 const ctx: LowFamilyContext = {

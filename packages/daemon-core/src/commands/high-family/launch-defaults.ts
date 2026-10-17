@@ -1,14 +1,18 @@
 import { mustStage, type StoreWriteOrigin } from '../../assistant/store-guards.js';
+import type { LaunchDefaultsReadResponse, LaunchDefaultsSetResponse, LaunchDefaultsProposal } from '@adhdev/mesh-shared';
+import { COMMAND_SOURCES, defineCommandSpecs } from '../command-registry.js';
+import type { HighFamilyHandler } from './types.js';
+import { MeshConfigStrictLockError } from '../../config/mesh-config-store.js';
+import { getLaunchDefaultsCommandPorts, LaunchDefaultsCatalogError } from '../../launch-defaults/ports.js';
 import { hasOnlyKeys, isLaunchDefaultsDocument, isLaunchRole, isRecord, resolveLaunchSelection,
     selectionSchemaIssue, validateLaunchDefault, type LaunchDefaultEntry, type LaunchDefaultsRead,
     type LaunchDefaultsStore, type LaunchDefaultsWriteResult, type LaunchRole, type LaunchSelection,
     type LaunchValidationPorts, type LaunchValidationWarning, type ResolveLaunchResult,
     type ToolRestriction } from '../../launch-defaults/index.js';
 
-/** Unregistered high-family factory. Source enforcement belongs to the existing
- * registry; these declarations must be used when registration is authorized. */
+/** Source enforcement is performed by the existing command registry/router. */
 export const launchDefaultsCommandSources = {
-    launch_defaults_get: ['ipc', 'standalone', 'p2p', 'ws', 'internal', 'mesh'],
+    launch_defaults_get: COMMAND_SOURCES,
     launch_defaults_set: ['p2p', 'ws', 'standalone'],
     assistant_launch_defaults: ['ipc', 'standalone'],
     assistant_launch_defaults_set: ['ipc', 'standalone'],
@@ -35,25 +39,15 @@ type ProjectRead = { ok: true; state: HostProjectLaunchState }
 export interface LaunchDefaultsProjectPort {
     /** Read HOST getMesh data only. Refuse remote hosts; never use inline/repo data. */
     read(project: string): ProjectRead;
-    /** Must serialize with existing meshes.json writers; read/CAS/replace stay inside.
-     * Refuse lock failure: withMeshConfigWriteLock's existing unlocked timeout
-     * path is insufficient. Its config-owned adapter needs integration first. */
+    /** Serialize read/CAS/revalidation/replace with meshes.json writers and
+     * refuse acquisition failure. Production uses the dedicated strict helper. */
     withWriteLock<T>(operation: () => T): T;
     /** Persist sibling coordinatorLaunch (including clear token) in host meshes.json.
      * Preserve all coordinator/worker policy fields. No separate project store. */
     replace(state: HostProjectLaunchState): { ok: true; durable: true }
         | { ok: false; reason: string; committed: boolean };
 }
-export interface LaunchDefaultsStagingProposal {
-    kind: 'launch_defaults';
-    role: LaunchRole;
-    project?: string;
-    selection: LaunchSelection | null;
-    previous: LaunchDefaultEntry | null;
-    expectedRevision: number;
-    origin: StoreWriteOrigin;
-    callerSessionId?: string;
-}
+export type LaunchDefaultsStagingProposal = LaunchDefaultsProposal;
 export interface LaunchDefaultsCommandPorts {
     /** Same store and facts as launch resolution, never a second authority. */
     store: Pick<LaunchDefaultsStore, 'read' | 'write'>;
@@ -130,9 +124,8 @@ function persistenceFailure(result: StoreFailure) {
         ...(result.validation ? result.validation.issue : {}) });
 }
 
-/** Structurally matches HighFamilyHandler: (context,args) -> router result.
- * Uses core-derived types until the authorized shared barrel export exists;
- * command tests enforce conformance to the new shared wire contract. */
+/** Shared public wire responses, existing core authority and injectable ports.
+ * The production high-family specs below bind this factory to daemon services. */
 export function createLaunchDefaultsHandlers(ports: LaunchDefaultsCommandPorts) {
     const run = async (args: unknown, write: boolean, assistant: boolean) => {
         const input = parse(args, write, assistant);
@@ -235,14 +228,18 @@ export function createLaunchDefaultsHandlers(ports: LaunchDefaultsCommandPorts) 
     };
     const guarded = async (args: unknown, write: boolean, assistant: boolean) => {
         try { return await run(args, write, assistant); }
-        catch { return fail('persistence_failed', 'Launch defaults operation outcome is unconfirmed.', { reason: 'operation_outcome_unconfirmed' }); }
+        catch (error) {
+            if (error instanceof MeshConfigStrictLockError) return fail(error.code, error.message, { committed: false });
+            if (error instanceof LaunchDefaultsCatalogError) return fail('launch_default_unavailable', error.message, { reason: 'catalog_unavailable' });
+            return fail('persistence_failed', 'Launch defaults operation outcome is unconfirmed.', { reason: 'operation_outcome_unconfirmed' });
+        }
     };
     type Result = Awaited<ReturnType<typeof guarded>>;
     type ReadResult = Exclude<Result, { result: 'applied' | 'staged' }>;
     type WriteResult = Exclude<Result, { result: 'get' | 'check' }>;
     // parse() enforces the disjoint read/write action sets at runtime.
-    const read = (args: unknown, assistant: boolean) => guarded(args, false, assistant) as Promise<ReadResult>;
-    const write = (args: unknown, assistant: boolean) => guarded(args, true, assistant) as Promise<WriteResult>;
+    const read = (args: unknown, assistant: boolean): Promise<LaunchDefaultsReadResponse> => guarded(args, false, assistant) as Promise<ReadResult>;
+    const write = (args: unknown, assistant: boolean): Promise<LaunchDefaultsSetResponse> => guarded(args, true, assistant) as Promise<WriteResult>;
     return {
         launch_defaults_get: (_context: unknown, args: unknown) => read(args, false),
         launch_defaults_set: (_context: unknown, args: unknown) => write(args, false),
@@ -254,3 +251,18 @@ function pickSelection(entry: LaunchDefaultEntry): LaunchSelection {
     return { provider: entry.provider, ...(entry.model !== undefined ? { model: entry.model } : {}),
         ...(entry.thinkingLevel !== undefined ? { thinkingLevel: entry.thinkingLevel } : {}) };
 }
+
+function productionHandler(name: keyof ReturnType<typeof createLaunchDefaultsHandlers>): HighFamilyHandler {
+    return async (ctx, args) => ({ ...await createLaunchDefaultsHandlers(getLaunchDefaultsCommandPorts(ctx))[name](ctx, args) });
+}
+export const launchDefaultsSpecs = defineCommandSpecs('high', {
+    launch_defaults_get: productionHandler('launch_defaults_get'),
+    launch_defaults_set: productionHandler('launch_defaults_set'),
+    assistant_launch_defaults: productionHandler('assistant_launch_defaults'),
+    assistant_launch_defaults_set: productionHandler('assistant_launch_defaults_set'),
+}, {
+    launch_defaults_get: { sources: launchDefaultsCommandSources.launch_defaults_get, meshSender: 'authenticated_peer' },
+    launch_defaults_set: { sources: launchDefaultsCommandSources.launch_defaults_set, invalidates: ['daemon.metadata'] },
+    assistant_launch_defaults: { sources: launchDefaultsCommandSources.assistant_launch_defaults },
+    assistant_launch_defaults_set: { sources: launchDefaultsCommandSources.assistant_launch_defaults_set, invalidates: ['daemon.metadata'] },
+}, { stripTransportMetadata: true });
