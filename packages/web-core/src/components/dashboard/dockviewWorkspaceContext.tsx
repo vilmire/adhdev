@@ -216,7 +216,7 @@ export function DashboardDockviewTab(props: IDockviewPanelHeaderProps<DashboardD
                 data-tab-key={props.params.tabKey || ''}
                 data-pending-hydration="true"
                 aria-busy="true"
-                aria-label="Loading"
+                aria-label={t('chatControls.loading')}
                 hidden
             />
         )

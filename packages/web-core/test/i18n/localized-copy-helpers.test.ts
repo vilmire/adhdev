@@ -56,12 +56,15 @@ describe('quota text formatter', () => {
 
     it('renders chips, the reset state, failures and freshness in Korean', () => {
         const fmt = createQuotaTextFormatter(ko)
-        const live = buildQuotaDisplayModel({ status: 'ok', session: { usedPercent: 40, windowMinutes: 300, resetsAt: NOW + 2 * 3600_000 } } as any, NOW, fmt)
+        // A live reading carries its measurement time (every fetcher sets updatedAt);
+        // without one the shared freshness rule correctly marks it stale.
+        const live = buildQuotaDisplayModel({ status: 'ok', updatedAt: NOW, session: { usedPercent: 40, windowMinutes: 300, resetsAt: NOW + 2 * 3600_000 } } as any, NOW, fmt)
         expect(live.compactChip?.label).toBe('5h 40.0% 사용 · 2시간 0분 후 초기화')
         const reset = buildQuotaDisplayModel({ status: 'error', session: { usedPercent: 100, windowMinutes: 300, resetsAt: NOW - 60_000 }, metadata: { failureKind: 'no-data' } } as any, NOW, fmt)
         expect(reset.chips[0].label).toBe('5h 초기화됨 · 새 값 대기 중')
         const failed = buildQuotaDisplayModel({ status: 'error', metadata: { failureKind: 'expired-token' } } as any, NOW, fmt)
-        expect(failed.message).toBe('로그인 만료')
+        // Access-token expiry is worded apart from "not signed in" (quota phase A).
+        expect(failed.message).toBe('액세스 토큰 만료')
         expect(formatQuotaFreshness(NOW - 5 * 60_000, NOW, fmt)).toBe('5분 전')
     })
 })
