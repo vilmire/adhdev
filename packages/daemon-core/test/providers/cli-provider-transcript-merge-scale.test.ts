@@ -67,3 +67,16 @@ describe('readInstanceIdentity', () => {
     expect(readInstanceIdentity(undefined)).toBeUndefined()
   })
 })
+
+describe('findLocalCliInstance', () => {
+  it('builds state for no instance other than the match', async () => {
+    const { findLocalCliInstance } = await import('../../src/mesh/cli-instance-lookup.js')
+    const mk = (id: string) => ({ category: 'cli', instanceId: id, getState: vi.fn(() => ({ instanceId: id })) })
+    const others = Array.from({ length: 12 }, (_, i) => mk(`sess-${i}`))
+    const target = mk('sess-target')
+    const components = { instanceManager: { getInstance: () => undefined, getByCategory: () => [...others, target] } }
+    expect(findLocalCliInstance(components, 'sess-target')).toBe(target)
+    for (const o of others) expect(o.getState).not.toHaveBeenCalled()
+    expect(findLocalCliInstance(components, 'missing')).toBeUndefined()
+  })
+})

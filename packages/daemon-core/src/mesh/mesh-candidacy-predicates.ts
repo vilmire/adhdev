@@ -35,6 +35,7 @@ import { daemonIdsEquivalent, sessionIdsEquivalent, isBusyStatus, isIdleSessionS
 import { isMeshNodeHealthLaunchable, resolveEffectiveMeshNodeHealth } from './mesh-node-identity.js';
 import { shouldDeferDispatchForBootstrap } from './worktree-bootstrap-config.js';
 import { inWindowAutoLaunchSessionIdsForNode } from './mesh-autolaunch-integrity.js';
+import { findLocalCliInstance } from './cli-instance-lookup.js';
 import { sessionClaimRefusalReleasesSpawnGate } from './mesh-claim-refusal.js';
 import { nodeHasActiveAssignment } from './mesh-scheduling-fitness.js';
 import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
@@ -222,11 +223,7 @@ export type SessionBusyVerdict = 'GENERATING' | 'IDLE_CONFIRMED' | 'UNKNOWN';
 export function resolveSessionBusyVerdict(components: DaemonComponents, sessionId: string): SessionBusyVerdict {
     if (!sessionId) return 'UNKNOWN';
     try {
-        const instances = components.instanceManager?.getByCategory?.('cli') || [];
-        const inst = instances.find((i: any) => {
-            const sid = readText(i?.getState?.().instanceId);
-            return sid && sessionIdsEquivalent(sid, sessionId);
-        });
+        const inst = findLocalCliInstance(components, sessionId);
         if (!inst) return 'UNKNOWN'; // remote / gone / id-form skew not present locally
         const state = inst.getState?.();
         if (!state) return 'UNKNOWN';

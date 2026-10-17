@@ -1,4 +1,6 @@
 import { assertMaintenanceAdmission, assertMaintenanceNode, withMaintenanceEffect } from '../maintenance/cooperative-gate.js';
+import { findLocalCliInstance } from './cli-instance-lookup.js';
+export { readInstanceIdentity } from './cli-instance-lookup.js';
 import type { DaemonComponents } from '../boot/daemon-components.js';
 import { LOG } from '../logging/logger.js';
 import { meshRecord } from './mesh-record.js';
@@ -8,7 +10,7 @@ import { resolveTranscriptAuthorityProfile } from '../providers/transcript-evide
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { clearClaimDeferralForNode, noteClaimDeferredForNode, noteSessionClaimRefusal, type MeshClaimRefusal } from './mesh-claim-refusal.js';
 import { resolveProviderMaxParallel, resolveSlotMaxParallel, resolveCoordinatorIdlePushPolicy, resolveMeshPolicy } from '../repo-mesh-types.js';
-import { meshNodeIdMatches, normalizeMeshWorkspaceForCompare, meshWorkspacesEquivalent, sessionIdsEquivalent, type MeshNodeIdentified, readText } from '@adhdev/mesh-shared';
+import { meshNodeIdMatches, normalizeMeshWorkspaceForCompare, meshWorkspacesEquivalent, type MeshNodeIdentified, readText } from '@adhdev/mesh-shared';
 import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
 import { resolveDaemonSiblingNodeIds } from './mesh-daemon-slot-axis.js';
 import { recordLastQuotaRanking, recordLastQuotaRankingOutcome } from './mesh-quota-ranking-records.js';
@@ -95,16 +97,6 @@ export type { SessionBusyVerdict };
 // the mesh_status per-node session filter, and the read_chat node scope guard all
 // share one comparison rule instead of drifting module-private copies.
 
-/**
- * A provider instance's id without building its state. CLI instances carry a
- * plain `instanceId` field; anything else falls back to getState().
- */
-export function readInstanceIdentity(inst: unknown): string | undefined {
-    const field = (inst as { instanceId?: unknown } | null | undefined)?.instanceId;
-    if (typeof field === 'string' && field) return field;
-    const sid = (inst as { getState?: () => { instanceId?: unknown } } | null | undefined)?.getState?.().instanceId;
-    return typeof sid === 'string' ? sid : undefined;
-}
 
 /**
  * Resolve the transcript-authority profile of the LIVE claiming session's
@@ -125,12 +117,7 @@ function resolveClaimingSessionTranscriptProfile(
         // preview daemon's event loop at 100% CPU (2026-10-17). The instance
         // map is keyed by instance id, so try the direct lookup first, then the
         // equivalence scan over the plain `instanceId` field.
-        const direct = components.instanceManager?.getInstance?.(sessionId) as { category?: string; provider?: unknown } | undefined;
-        const instances = direct?.category === 'cli' ? [] : (components.instanceManager?.getByCategory?.('cli') || []);
-        const inst = (direct?.category === 'cli' ? direct : instances.find((i: any) => {
-            const sid = readInstanceIdentity(i);
-            return typeof sid === 'string' && sid && sessionIdsEquivalent(sid, sessionId);
-        })) as { provider?: unknown } | undefined;
+        const inst = findLocalCliInstance<{ provider?: unknown }>(components, sessionId);
         const provider = inst?.provider;
         if (!provider || typeof provider !== 'object') return undefined;
         const profile = resolveTranscriptAuthorityProfile(provider as Parameters<typeof resolveTranscriptAuthorityProfile>[0]);

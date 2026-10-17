@@ -32,6 +32,7 @@
 // Split out of mesh-queue-assignment (a frozen file-size baseline entry) rather than grown
 // inside it. It must NOT import back from mesh-queue-assignment — that module calls into this
 // one, so the pair would cycle. Its idle predicate is mesh-shared's (the same one the drain uses).
+import { findLocalCliInstance } from './cli-instance-lookup.js';
 import type { DaemonComponents } from '../boot/daemon-components.js';
 import { getMachineId } from '../config/config.js';
 import { LOG } from '../logging/logger.js';
@@ -423,8 +424,9 @@ export function remoteSessionAppearsLive(meshId: string, sessionId: string): boo
 export function localSessionAppearsLive(components: DaemonComponents, meshId: string, sessionId: string): boolean {
     if (!sessionId) return false;
     try {
-        const sessions = components.instanceManager?.getByCategory?.('cli') || [];
-        return sessions.some((inst: any) => {
+        const inst = findLocalCliInstance(components, sessionId);
+        if (!inst) return false;
+        return [inst].some((inst: any) => {
             try {
                 const state = inst.getState?.();
                 const sid = readText(state?.instanceId);
@@ -447,21 +449,10 @@ export function localSessionAppearsLive(components: DaemonComponents, meshId: st
 export function localSessionIsProtected(components: DaemonComponents, sessionId: string): boolean {
     if (!sessionId) return false;
     try {
-        const sessions = components.instanceManager?.getByCategory?.('cli') || [];
-        return sessions.some((inst: any) => {
-            try {
-                // Match on the plain id field before building state (getState() rebuilds
-                // the whole transcript); only the matching instance pays for it.
-                const fieldId = readText(inst?.instanceId);
-                if (fieldId && !sessionIdsEquivalent(fieldId, sessionId)) return false;
-                const state = inst.getState?.();
-                const sid = readText(state?.instanceId);
-                if (!sid || !sessionIdsEquivalent(sid, sessionId)) return false;
-                return isProtectedNonAutoLaunchSession(state, (state?.settings as Record<string, unknown>) || {});
-            } catch {
-                return false;
-            }
-        });
+        const inst = findLocalCliInstance(components, sessionId);
+        const state = inst?.getState?.();
+        if (!state) return false;
+        return isProtectedNonAutoLaunchSession(state, (state.settings as Record<string, unknown>) || {});
     } catch {
         return false;
     }
