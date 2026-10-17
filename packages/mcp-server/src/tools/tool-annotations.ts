@@ -237,7 +237,7 @@ export const TOOL_ANNOTATIONS: Record<string, ToolBehaviorAnnotations> = {
   // (mode="plan" is the read-only onboarding planner — see the merged-tool rule above.)
   mesh_create: WRITE_LOCAL_ACCUMULATING,
   mesh_add_node: WRITE_LOCAL_ACCUMULATING,
-  mesh_attach_remote: WRITE_LOCAL_ACCUMULATING,
+  mesh_attach_remote: CONTROL_REMOTE_IDEMPOTENT,
   // Creates a git WORKTREE on disk for a (possibly remote) node.
   mesh_clone_node: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   // Deregisters a node.
@@ -304,7 +304,7 @@ export const TOOL_ANNOTATIONS: Record<string, ToolBehaviorAnnotations> = {
   project_send: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   project_read: READ_LOCAL,
   project_add: WRITE_LOCAL_SAFE,
-  project_attach_remote: WRITE_LOCAL_ACCUMULATING,
+  project_attach_remote: CONTROL_REMOTE_IDEMPOTENT,
   // Filesystem scan of this machine; returns paths and git metadata only.
   discover_repos: READ_LOCAL,
   // Updates view counters / un-archives on open, but returns content only.

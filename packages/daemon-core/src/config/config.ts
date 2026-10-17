@@ -64,6 +64,20 @@ export interface ADHDevConfig {
     allowServerApiProxy?: boolean;
 
     /**
+     * Allow the dedicated machine-authenticated remote project attachment
+     * setup flow (`source: 'project_attach'`) without opening the general
+     * server API relay (`allowServerApiProxy`).
+     */
+    allowRemoteProjectAttach?: boolean;
+
+    /**
+     * Optional target-side allow-list of canonical `daemon_mach_*` host IDs
+     * permitted to attach remote projects onto this daemon when a server-signed
+     * grant is not used.
+     */
+    allowedRemoteProjectHosts?: string[];
+
+    /**
      * Label provider quota with the signed-in account's email address.
      *
      * OFF by default (owner decision, 2026-08-11 — reverses the 2026-08-05 ON
@@ -381,6 +395,8 @@ function normalizeConfig(raw: unknown): ADHDevConfig & { activeWorkspaceId?: str
             ? parsed.serverUrl
             : DEFAULT_CONFIG.serverUrl,
         allowServerApiProxy: asBoolean(parsed.allowServerApiProxy, DEFAULT_CONFIG.allowServerApiProxy ?? false),
+        ...(typeof parsed.allowRemoteProjectAttach === 'boolean' ? { allowRemoteProjectAttach: parsed.allowRemoteProjectAttach } : {}),
+        ...(Array.isArray(parsed.allowedRemoteProjectHosts) ? { allowedRemoteProjectHosts: asStringArray(parsed.allowedRemoteProjectHosts) } : {}),
         quotaShowAccountEmail: resolveQuotaShowAccountEmail(parsed),
         ...(parsed.quotaShowAccountEmailSetByUser === true ? { quotaShowAccountEmailSetByUser: true } : {}),
         selectedIde: asNullableString(parsed.selectedIde),

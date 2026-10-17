@@ -1,5 +1,7 @@
 /** Authenticated setup commands. These are never mesh-forwardable. */
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
+import { loadConfig } from '../../config/config.js';
 import { getMesh } from '../../config/mesh-config.js';
 import { setMeshHostPin } from '../../config/mesh-config-host-pairing.js';
 import { readMeshHostRecord, writeMeshHostRecord } from '../../mesh/mesh-host-memory.js';
@@ -7,9 +9,32 @@ import { resolveMeshHostStatus } from '../../mesh/mesh-host-ownership.js';
 import { githubRemote, git, checkoutRemote, managedCheckoutPath, verifyCheckout, pythonResourcePreflight, refusal, AttachFailure } from '../../assistant/remote-project-checkout.js';
 import type { HighFamilyContext, HighFamilyHandler } from './types.js';
 const str = (v: unknown) => typeof v === 'string' ? v : '';
-const fail = (code: string, stage: string, action: string) => ({ success: false, code, stage, action, attached: false });
+const fail = (code: string, stage: string, action: string, subcode?: string) => ({ success: false, code, ...(subcode ? { subcode } : {}), stage, action, attached: false });
 function selected(ctx: HighFamilyContext, args: any) {
     if (!/^daemon_mach_[a-zA-Z0-9]+$/.test(str(args?.targetDaemonId)) || !daemonIdsEquivalent(args.targetDaemonId, ctx.deps.statusInstanceId)) throw new AttachFailure('WRONG_MACHINE', 'target_access', 'Address the exact owner-selected canonical daemon.');
+}
+function validGrant(grant: any, selfId: string, hostId: string, meshId: string, identity: string, secret: string | null | undefined): boolean {
+    if (!grant || typeof grant !== 'object' || typeof secret !== 'string' || !secret.trim()) return false;
+    if (!daemonIdsEquivalent(str(grant.target), selfId) || !daemonIdsEquivalent(str(grant.host), hostId) || grant.meshId !== meshId || grant.identity !== identity) return false;
+    const now = Date.now();
+    if (typeof grant.exp !== 'number' || !Number.isFinite(grant.exp) || grant.exp <= now || grant.exp > now + 600_000 || !/^[0-9a-f]{64}$/.test(str(grant.sig))) return false;
+    const key = createHash('sha256').update(secret).digest('hex');
+    const expected = createHmac('sha256', key).update(`${grant.target}\n${grant.host}\n${grant.meshId}\n${grant.identity}\n${grant.exp}`).digest('hex');
+    return timingSafeEqual(Buffer.from(grant.sig, 'hex'), Buffer.from(expected, 'hex'));
+}
+function authorizeHost(ctx: HighFamilyContext, args: any, identity: string) {
+    const hostId = str(args?.hostDaemonId);
+    if (!/^daemon_mach_[a-zA-Z0-9]+$/.test(hostId) || daemonIdsEquivalent(hostId, ctx.deps.statusInstanceId)) throw new AttachFailure('HOST_NOT_AUTHORIZED', 'target_access', 'Authorize the project host on the selected daemon before attaching.');
+    const old = readMeshHostRecord(args.meshId);
+    if (old && !daemonIdsEquivalent(old.hostDaemonId, hostId)) throw new AttachFailure('PROJECT_HOST_CONFLICT', 'registration', 'Preserve existing membership; resolve the project host conflict locally.');
+    const cfg = loadConfig();
+    if (args?.grant !== undefined) {
+        if (!validGrant(args.grant, str(ctx.deps.statusInstanceId), hostId, args.meshId, identity, cfg.machineSecret)) throw new AttachFailure('HOST_NOT_AUTHORIZED', 'target_access', 'Authorize the project host on the selected daemon before attaching.');
+        return old;
+    }
+    const allowed = (cfg.allowedRemoteProjectHosts ?? []).some(h => daemonIdsEquivalent(h, hostId)) || Boolean(old && daemonIdsEquivalent(old.hostDaemonId, hostId));
+    if (!allowed) throw new AttachFailure('HOST_NOT_AUTHORIZED', 'target_access', 'Authorize the project host on the selected daemon before attaching.');
+    return old;
 }
 async function prepare(ctx: HighFamilyContext, args: any) {
     const mesh = getMesh(str(args?.meshId));
@@ -40,6 +65,7 @@ export const remoteProjectHandlers: Record<string, HighFamilyHandler> = {
             selected(ctx, args);
             const remote = githubRemote(args?.url);
             if (!remote || remote.identity !== args?.identity || !/^mesh_[a-zA-Z0-9_-]+$/.test(str(args?.meshId))) throw new AttachFailure('REMOTE_IDENTITY_MISMATCH', 'repository_access', 'Only canonical verified GitHub projects are supported.');
+            authorizeHost(ctx, args, remote.identity);
             const checkout = await checkoutRemote(args.meshId, remote);
             return { success: true, ...checkout, meshId: args.meshId, identity: remote.identity, targetDaemonId: ctx.deps.statusInstanceId, stage: 'checkout', attached: false };
         } catch (e) { return refusal(e); }
@@ -56,10 +82,10 @@ export const remoteProjectHandlers: Record<string, HighFamilyHandler> = {
             // coordinator launch uses; it never re-homes an existing pin.
             if (hostSynthesized) {
                 const pin = setMeshHostPin(mesh.id, { hostDaemonId: ctx.deps.statusInstanceId, hostNodeId: self.id });
-                if (!pin || (!pin.applied && pin.reason !== 'already_pinned_same')) return fail('REGISTRATION_FAILED', 'registration', 'Checkout was preserved. Establish this project host before retrying.');
+                if (!pin || (!pin.applied && pin.reason !== 'already_pinned_same')) return fail('REGISTRATION_FAILED', 'registration', 'Checkout was preserved. Establish this project host before retrying.', 'HOST_PIN_FAILED');
             }
             const result = await ctx.execute('add_mesh_node', { meshId: mesh.id, workspace: args.workspace, repoRoot: args.workspace, daemonId: args.targetDaemonId }, 'internal', { inProcess: true });
-            return result.success ? { success: true, nodeId: (result.node as any)?.id, attached: true } : fail('REGISTRATION_FAILED', 'registration', 'Checkout was preserved. Retry after resolving host registration access.');
+            return result.success ? { success: true, nodeId: (result.node as any)?.id, attached: true } : fail('REGISTRATION_FAILED', 'registration', 'Checkout was preserved. Retry after resolving host registration access.', 'NODE_ADD_FAILED');
         } catch (e) { return refusal(e); }
     },
     remote_project_accept: async (ctx, args) => {
@@ -69,10 +95,9 @@ export const remoteProjectHandlers: Record<string, HighFamilyHandler> = {
             if (!remote || remote.identity !== args.identity || !/^mesh_[a-zA-Z0-9_-]+$/.test(str(args.meshId)) || !/^daemon_mach_[a-zA-Z0-9]+$/.test(str(args.hostDaemonId))) throw new AttachFailure('ATTACH_SCOPE_MISMATCH', 'registration', 'Use the authenticated project attachment flow.');
             const workspace = await managedCheckoutPath(args.meshId, remote.identity);
             if (workspace !== args.workspace) throw new AttachFailure('PATH_CONFLICT', 'registration', 'Attachment must use its verified managed checkout.');
+            const old = authorizeHost(ctx, args, remote.identity);
             await verifyCheckout(workspace, remote.identity);
-            const old = readMeshHostRecord(args.meshId);
-            if (old && !daemonIdsEquivalent(old.hostDaemonId, args.hostDaemonId)) throw new AttachFailure('PROJECT_HOST_CONFLICT', 'registration', 'Preserve existing membership; resolve the project host conflict locally.');
-            if (!old && !writeMeshHostRecord(args.meshId, args.hostDaemonId, 'pairing')) throw new AttachFailure('REGISTRATION_FAILED', 'registration', 'Checkout is preserved; restore writable daemon configuration before retrying.');
+            if (!old && !writeMeshHostRecord(args.meshId, args.hostDaemonId, 'pairing')) return fail('REGISTRATION_FAILED', 'registration', 'Checkout is preserved; restore writable daemon configuration before retrying.', 'HOST_RECORD_WRITE_FAILED');
             const resources = await pythonResourcePreflight();
             return { success: true, attached: true, ready: resources.ready, resources, workspace, targetDaemonId: ctx.deps.statusInstanceId, stage: resources.ready ? 'ready' : 'resource_preflight' };
         } catch (e) { return refusal(e); }
@@ -80,8 +105,8 @@ export const remoteProjectHandlers: Record<string, HighFamilyHandler> = {
 };
 export const remoteProjectSpecs = {
     attach_remote_project: { sources: ['ipc', 'standalone'] as const },
-    remote_project_prepare: { sources: ['api'] as const },
-    remote_project_checkout: { sources: ['api'] as const },
-    remote_project_register: { sources: ['api'] as const },
-    remote_project_accept: { sources: ['api'] as const },
+    remote_project_prepare: { sources: ['project_attach'] as const },
+    remote_project_checkout: { sources: ['project_attach'] as const },
+    remote_project_register: { sources: ['project_attach'] as const },
+    remote_project_accept: { sources: ['project_attach'] as const },
 };

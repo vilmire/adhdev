@@ -26,9 +26,9 @@ import type { GitCommandServices } from '../git/git-commands.js';
 import type { MeshSenderClass } from './mesh-sender.js';
 
 /** Where a command entered the daemon. Recorded verbatim in the command log. */
-export type CommandSource = 'ws' | 'p2p' | 'ext' | 'api' | 'standalone' | 'ipc' | 'mesh' | 'internal';
+export type CommandSource = 'ws' | 'p2p' | 'ext' | 'api' | 'project_attach' | 'standalone' | 'ipc' | 'mesh' | 'internal';
 
-export const COMMAND_SOURCES: readonly CommandSource[] = ['ws', 'p2p', 'ext', 'api', 'standalone', 'ipc', 'mesh', 'internal'];
+export const COMMAND_SOURCES: readonly CommandSource[] = ['ws', 'p2p', 'ext', 'api', 'project_attach', 'standalone', 'ipc', 'mesh', 'internal'];
 
 export function isCommandSource(source: unknown): source is CommandSource {
     return typeof source === 'string' && (COMMAND_SOURCES as readonly string[]).includes(source);

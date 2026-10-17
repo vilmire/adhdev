@@ -237,3 +237,15 @@ test('a merged tool is classified by its most capable action (2026-09-26 consoli
   // node_slots action=propose probes a (possibly remote) node's installed CLIs.
   assert.equal(TOOL_ANNOTATIONS.mesh_node_slots.openWorldHint, true);
 });
+
+test('remote project attach tools are open-world, idempotent, and non-destructive', () => {
+  for (const name of ['mesh_attach_remote', 'project_attach_remote']) {
+    const annotations = TOOL_ANNOTATIONS[name];
+    assert.ok(annotations, `${name} missing from TOOL_ANNOTATIONS`);
+    assert.equal(annotations.readOnlyHint, false);
+    assert.equal(annotations.destructiveHint, false);
+    assert.equal(annotations.idempotentHint, true);
+    assert.equal(annotations.openWorldHint, true);
+  }
+});
+

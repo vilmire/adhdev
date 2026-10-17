@@ -6,7 +6,8 @@
  * path-validated, idempotent on retry and truthful about failures — with no child
  * stderr (which may carry helper credentials) ever leaving the process.
  */
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, existsSync } from 'node:fs';
+import { createHash, createHmac } from 'node:crypto';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -17,33 +18,71 @@ const state = vi.hoisted(() => ({
     hostRecords: {} as Record<string, { hostDaemonId: string }>,
     git: (_args: string[], _cwd: string): { stdout?: string; error?: any; defer?: Promise<void> } => ({ stdout: '' }),
     python: true,
-    gitCalls: [] as { args: string[]; cwd: string }[],
+    gitCalls: [] as { args: string[]; cwd: string; targetDir?: string; timeout?: number; windowsHide?: boolean; fullArgs?: string[] }[],
+    pythonCalls: [] as { cmd: string; args: string[]; opts: any }[],
+    taskkillCalls: [] as { args: string[]; opts: any }[],
     pins: [] as any[],
+    allowedHosts: [] as string[],
+    machineSecret: null as string | null,
+    renameFailures: 0,
+    pinFail: false,
+    writeHostRecordFail: false,
 }));
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+    const real = await importOriginal<typeof import('node:fs/promises')>();
+    return {
+        ...real,
+        rename: async (oldPath: any, newPath: any) => {
+            if (state.renameFailures > 0) {
+                state.renameFailures--;
+                throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' });
+            }
+            return real.rename(oldPath, newPath);
+        },
+    };
+});
 
 vi.mock('node:child_process', async (importOriginal) => {
     const real = await importOriginal<typeof import('node:child_process')>();
     return {
         ...real,
         execFile: (cmd: string, args: string[], opts: any, cb: (e: any, out?: any) => void) => {
+            if (cmd === 'taskkill') {
+                state.taskkillCalls.push({ args, opts });
+                cb?.(null, { stdout: '', stderr: '' });
+                return { pid: 9999 } as any;
+            }
             if (cmd === 'git') {
-                const gitArgs = args.slice(6);
-                state.gitCalls.push({ args: gitArgs, cwd: opts?.cwd });
-                const r = state.git(gitArgs, opts?.cwd);
+                const cIdx = args.indexOf('-C');
+                const targetDir = cIdx !== -1 ? args[cIdx + 1] : opts?.cwd;
+                const gitArgs = cIdx !== -1 ? args.slice(cIdx + 2) : args.slice(6);
+                state.gitCalls.push({ args: gitArgs, cwd: opts?.cwd, targetDir, timeout: opts?.timeout, windowsHide: opts?.windowsHide, fullArgs: args });
+                const r = state.git(gitArgs, targetDir);
                 const reply = () => (r.error ? cb(r.error) : cb(null, { stdout: r.stdout ?? '', stderr: '' }));
                 if (r.defer) void r.defer.then(reply);
-                else reply();
-                return;
+                else queueMicrotask(reply);
+                return { pid: 4242, kill: () => {}, stdout: { on: () => {} }, stderr: { on: () => {} } } as any;
             }
+            state.pythonCalls.push({ cmd, args, opts });
             if (state.python) cb(null, { stdout: 'gitpython-ready\n', stderr: '' });
             else cb(Object.assign(new Error('missing'), { code: 1 }));
+            return { pid: 4243 } as any;
         },
     };
 });
-vi.mock('../../src/config/config.js', async (importOriginal) => ({
-    ...(await importOriginal<typeof import('../../src/config/config.js')>()),
-    getConfigDir: () => state.configDir,
-}));
+vi.mock('../../src/config/config.js', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../../src/config/config.js')>();
+    return {
+        ...actual,
+        getConfigDir: () => state.configDir,
+        loadConfig: () => ({
+            ...actual.loadConfig(),
+            allowedRemoteProjectHosts: state.allowedHosts,
+            machineSecret: state.machineSecret,
+        }),
+    };
+});
 vi.mock('../../src/config/mesh-config.js', async (importOriginal) => ({
     ...(await importOriginal<typeof import('../../src/config/mesh-config.js')>()),
     getMesh: (id: string) => state.meshes.find(m => m.id === id),
@@ -51,6 +90,7 @@ vi.mock('../../src/config/mesh-config.js', async (importOriginal) => ({
 vi.mock('../../src/config/mesh-config-host-pairing.js', async (importOriginal) => ({
     ...(await importOriginal<typeof import('../../src/config/mesh-config-host-pairing.js')>()),
     setMeshHostPin: (id: string, opts: { hostDaemonId: string; hostNodeId: string }) => {
+        if (state.pinFail) return undefined;
         const mesh = state.meshes.find(m => m.id === id);
         if (!mesh) return undefined;
         state.pins.push({ id, ...opts });
@@ -61,7 +101,11 @@ vi.mock('../../src/config/mesh-config-host-pairing.js', async (importOriginal) =
 vi.mock('../../src/mesh/mesh-host-memory.js', async (importOriginal) => ({
     ...(await importOriginal<typeof import('../../src/mesh/mesh-host-memory.js')>()),
     readMeshHostRecord: (id: string) => state.hostRecords[id] ?? null,
-    writeMeshHostRecord: (id: string, host: string) => { state.hostRecords[id] = { hostDaemonId: host }; return true; },
+    writeMeshHostRecord: (id: string, host: string) => {
+        if (state.writeHostRecordFail) return false;
+        state.hostRecords[id] = { hostDaemonId: host };
+        return true;
+    },
 }));
 
 import { DaemonCommandRouter, getDaemonCommandRegistry } from '../../src/commands/router.js';
@@ -112,6 +156,10 @@ beforeEach(() => {
     state.python = true;
     state.gitCalls = [];
     state.pins = [];
+    state.allowedHosts = [SOURCE];
+    state.machineSecret = null;
+    state.pinFail = false;
+    state.writeHostRecordFail = false;
     workingGit();
 });
 afterEach(() => {
@@ -139,19 +187,21 @@ describe('wiring: boot config → router deps → command', () => {
         expect(r).toMatchObject({ success: false, code: 'CAPABILITY_NOT_AVAILABLE', stage: 'authentication', attached: false });
     });
 
-    it('setup verbs are source-scoped: owner surfaces for the entry, server api for the steps, never mesh', async () => {
+    it('setup verbs are source-scoped: owner surfaces for the entry, dedicated project_attach for the steps, never api or mesh', async () => {
         const registry = getDaemonCommandRegistry();
         expect(registry.get('attach_remote_project')?.sources).toEqual(['ipc', 'standalone']);
         for (const step of ['remote_project_prepare', 'remote_project_checkout', 'remote_project_register', 'remote_project_accept']) {
-            expect(registry.get(step)?.sources).toEqual(['api']);
+            expect(registry.get(step)?.sources).toEqual(['project_attach']);
         }
         expect(registry.get('assistant_project_attach_remote')?.sources).not.toContain('mesh');
         const bridge = vi.fn();
         const router = routerWith(SOURCE, bridge as any);
         const viaMesh: any = await router.execute('attach_remote_project', { meshId: 'mesh_batrp', targetDaemonId: TARGET }, 'mesh');
         const stepViaIpc: any = await router.execute('remote_project_checkout', { meshId: 'mesh_batrp', targetDaemonId: SOURCE, identity: REPO, url: URL }, 'ipc');
+        const stepViaApi: any = await router.execute('remote_project_checkout', { meshId: 'mesh_batrp', targetDaemonId: SOURCE, identity: REPO, url: URL }, 'api');
         expect(viaMesh.success).toBe(false);
         expect(stepViaIpc.success).toBe(false);
+        expect(stepViaApi.success).toBe(false);
         expect(bridge).not.toHaveBeenCalled();
         expect(state.gitCalls.some(c => c.args[0] === 'clone')).toBe(false);
     });
@@ -190,7 +240,7 @@ describe('attach_remote_project (source host)', () => {
 });
 
 describe('remote_project_checkout (target)', () => {
-    const checkout = (args: any, self = TARGET) => remoteProjectHandlers.remote_project_checkout(ctxFor(self), { meshId: 'mesh_batrp', targetDaemonId: TARGET, identity: REPO, url: URL, ...args });
+    const checkout = (args: any, self = TARGET) => remoteProjectHandlers.remote_project_checkout(ctxFor(self), { meshId: 'mesh_batrp', targetDaemonId: TARGET, hostDaemonId: SOURCE, identity: REPO, url: URL, ...args });
 
     it('only the exact selected daemon checks out', async () => {
         expect(await checkout({}, 'daemon_mach_wrong1')).toMatchObject({ success: false, code: 'WRONG_MACHINE', stage: 'target_access' });
@@ -204,6 +254,25 @@ describe('remote_project_checkout (target)', () => {
         expect(await checkout({ identity: 'github.com/vilmire/other' })).toMatchObject({ code: 'REMOTE_IDENTITY_MISMATCH' });
         expect(await checkout({ meshId: '../mesh' })).toMatchObject({ code: 'REMOTE_IDENTITY_MISMATCH' });
         expect(state.gitCalls).toHaveLength(0);
+    });
+
+    it('never spawns git with cwd inside the untrusted clone (uses cwd=configDir + git -C) and gives python preflight a neutral cwd', async () => {
+        state.pythonCalls = [];
+        const first: any = await checkout({});
+        expect(first.success).toBe(true);
+        expect(state.gitCalls.length).toBeGreaterThan(0);
+        for (const call of state.gitCalls) {
+            expect(call.cwd).toBe(state.configDir);
+            expect(call.fullArgs?.slice(6, 8)).toEqual(['-C', call.targetDir]);
+        }
+        const args = { meshId: 'mesh_batrp', targetDaemonId: TARGET, identity: REPO, url: URL, hostDaemonId: SOURCE, workspace: first.workspace };
+        const accepted: any = await remoteProjectHandlers.remote_project_accept(ctxFor(TARGET), args);
+        expect(accepted.success).toBe(true);
+        expect(state.pythonCalls.length).toBeGreaterThan(0);
+        for (const py of state.pythonCalls) {
+            expect(py.opts?.cwd).toBe(state.configDir);
+            expect(py.opts?.windowsHide).toBe(true);
+        }
     });
 
     it('clones into the managed path, then reuses it on retry without fetch/reset', async () => {
@@ -241,11 +310,68 @@ describe('remote_project_checkout (target)', () => {
         expect(await checkout({})).toMatchObject({ success: true, reused: false, workspace });
     });
 
-    it('a crash-left .pending directory is preserved and reported, not overwritten', async () => {
+    it('gives clone a 15-20 min timeout with watchdog while keeping 120s for other git calls, kills the process tree on win32, and reports ENOBUFS truthfully', async () => {
+        expect(await checkout({})).toMatchObject({ success: true, reused: false });
+        const lsRemoteCall = state.gitCalls.find(c => c.args[0] === 'ls-remote')!;
+        const cloneCall = state.gitCalls.find(c => c.args[0] === 'clone')!;
+        expect(lsRemoteCall.timeout).toBe(120_000);
+        expect(cloneCall.timeout).toBeGreaterThanOrEqual(15 * 60_000);
+        expect(cloneCall.timeout).toBeLessThanOrEqual(20 * 60_000);
+
+        // ENOBUFS sets killed: true when maxBuffer overflows; must be reported as ENOBUFS, not GIT_TIMEOUT
+        state.git = () => ({ error: Object.assign(new Error('maxBuffer exceeded'), { code: 'ENOBUFS', killed: true, signal: 'SIGTERM' }) });
+        expect(await checkout({})).toMatchObject({ success: false, code: 'ENOBUFS', stage: 'repository_access' });
+
+        // On win32, a timed-out git process kills the process tree via taskkill /PID <pid> /T /F with windowsHide: true
+        state.taskkillCalls = [];
+        const origPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+        Object.defineProperty(process, 'platform', { value: 'win32' });
+        try {
+            state.git = () => ({ error: Object.assign(new Error('timed out'), { killed: true, signal: 'SIGTERM' }) });
+            expect(await checkout({})).toMatchObject({ success: false, code: 'GIT_TIMEOUT' });
+            expect(state.taskkillCalls).toEqual([
+                { args: ['/PID', '4242', '/T', '/F'], opts: expect.objectContaining({ shell: false, windowsHide: true }) },
+            ]);
+        } finally {
+            Object.defineProperty(process, 'platform', origPlatform);
+        }
+    });
+
+    it('an incomplete crash-left .pending directory is preserved and reported, while a verified crash-left .pending is adopted', async () => {
         const workspace = await managedCheckoutPath('mesh_batrp', REPO);
         mkdirSync(`${workspace}.pending`);
+        // Incomplete .pending (fails rev-parse / verifyCheckout): preserved, not deleted or overwritten
+        state.git = (args) => {
+            if (args[0] === 'ls-remote') return { stdout: 'abc\tHEAD' };
+            if (args[0] === 'rev-parse') return { error: Object.assign(new Error('not a git repo'), { code: 128 }) };
+            return { stdout: '' };
+        };
         expect(await checkout({})).toMatchObject({ success: false, code: 'CHECKOUT_RECOVERY_REQUIRED', stage: 'checkout' });
         expect(existsSync(`${workspace}.pending`)).toBe(true);
+
+        // Verified crash-left .pending (passes verifyCheckout): adopted without re-cloning
+        workingGit();
+        state.gitCalls = [];
+        const adopted: any = await checkout({});
+        expect(adopted).toMatchObject({ success: true, reused: true, workspace });
+        expect(existsSync(`${workspace}.pending`)).toBe(false);
+        expect(existsSync(workspace)).toBe(true);
+        expect(state.gitCalls.map(c => c.args[0])).not.toContain('clone');
+    });
+
+    it('uses a cross-process pid lockfile and retries rename on transient win32 EBUSY/EPERM', async () => {
+        const workspace = await managedCheckoutPath('mesh_batrp', REPO);
+        // Live PID lockfile from another process blocks checkout with ATTACH_IN_PROGRESS
+        writeFileSync(`${workspace}.lock`, JSON.stringify({ pid: process.pid }));
+        expect(await checkout({})).toMatchObject({ success: false, code: 'ATTACH_IN_PROGRESS', stage: 'checkout' });
+        expect(state.gitCalls).toHaveLength(0);
+
+        // Stale dead-PID lockfile is reclaimed, and transient EBUSY on rename retries 5x200ms and succeeds
+        writeFileSync(`${workspace}.lock`, JSON.stringify({ pid: 99999999 }));
+        state.renameFailures = 2;
+        expect(await checkout({})).toMatchObject({ success: true, reused: false, workspace });
+        expect(state.renameFailures).toBe(0);
+        expect(existsSync(`${workspace}.lock`)).toBe(false);
     });
 
     it('an existing checkout with a different origin is preserved and refused', async () => {
@@ -324,4 +450,76 @@ describe('remote_project_register / remote_project_accept', () => {
         expect(await remoteProjectHandlers.remote_project_accept(ctxFor(TARGET), args)).toMatchObject({ code: 'PROJECT_HOST_CONFLICT' });
         expect(state.hostRecords.mesh_batrp).toEqual({ hostDaemonId: 'daemon_mach_other1' });
     });
+
+    it('checkout and accept refuse an unauthorized hostDaemonId unless authorized by a server-signed grant or allow-list', async () => {
+        state.allowedHosts = [];
+        const args = await scoped();
+        mkdirSync(args.workspace);
+
+        // Without grant or allow-list entry, spoofed or ungranted host is refused before writing hostRecords
+        const spoofed = 'daemon_mach_evil999999999999999999999999';
+        expect(await remoteProjectHandlers.remote_project_checkout(ctxFor(TARGET), { ...args, hostDaemonId: spoofed })).toMatchObject({
+            success: false,
+            code: 'HOST_NOT_AUTHORIZED',
+            stage: 'target_access',
+        });
+        expect(await remoteProjectHandlers.remote_project_accept(ctxFor(TARGET), { ...args, hostDaemonId: spoofed })).toMatchObject({
+            success: false,
+            code: 'HOST_NOT_AUTHORIZED',
+            stage: 'target_access',
+        });
+        expect(state.hostRecords.mesh_batrp).toBeUndefined();
+
+        // With target machineSecret configured, a server-signed short-lived grant authorizes the exact {target, host, meshId, identity, exp}
+        state.machineSecret = 'adm_targetsecret123';
+        const secretHash = createHash('sha256').update(state.machineSecret).digest('hex');
+        const exp = Date.now() + 60_000;
+        const sign = (g: { target: string; host: string; meshId: string; identity: string; exp: number }) =>
+            createHmac('sha256', secretHash).update(`${g.target}\n${g.host}\n${g.meshId}\n${g.identity}\n${g.exp}`).digest('hex');
+        const validGrant = { target: TARGET, host: SOURCE, meshId: 'mesh_batrp', identity: REPO, exp, sig: '' };
+        validGrant.sig = sign(validGrant);
+
+        // Tampered or expired grants are rejected
+        expect(await remoteProjectHandlers.remote_project_accept(ctxFor(TARGET), {
+            ...args,
+            grant: { ...validGrant, exp: Date.now() - 1000, sig: sign({ ...validGrant, exp: Date.now() - 1000 }) },
+        })).toMatchObject({ success: false, code: 'HOST_NOT_AUTHORIZED' });
+        expect(await remoteProjectHandlers.remote_project_accept(ctxFor(TARGET), {
+            ...args,
+            hostDaemonId: spoofed,
+            grant: validGrant,
+        })).toMatchObject({ success: false, code: 'HOST_NOT_AUTHORIZED' });
+        expect(state.hostRecords.mesh_batrp).toBeUndefined();
+
+        // Valid grant succeeds and pins SOURCE
+        expect(await remoteProjectHandlers.remote_project_accept(ctxFor(TARGET), {
+            ...args,
+            grant: validGrant,
+        })).toMatchObject({ success: true, attached: true });
+        expect(state.hostRecords.mesh_batrp).toEqual({ hostDaemonId: SOURCE });
+    });
+
+    it('reports truthful REGISTRATION_FAILED subcodes for host-pin, node-add, and host-record-write failures', async () => {
+        const regArgs = { meshId: 'mesh_batrp', targetDaemonId: TARGET, identity: REPO, workspace: '/remote/ws' };
+        state.pinFail = true;
+        expect(await remoteProjectHandlers.remote_project_register(
+            { ...ctxFor(SOURCE), execute: async () => ({ success: true, node: { id: 'n2' } }) } as any,
+            regArgs,
+        )).toMatchObject({ success: false, code: 'REGISTRATION_FAILED', subcode: 'HOST_PIN_FAILED', stage: 'registration' });
+
+        state.pinFail = false;
+        expect(await remoteProjectHandlers.remote_project_register(
+            { ...ctxFor(SOURCE), execute: async () => ({ success: false }) } as any,
+            regArgs,
+        )).toMatchObject({ success: false, code: 'REGISTRATION_FAILED', subcode: 'NODE_ADD_FAILED', stage: 'registration' });
+
+        const checked = await remoteProjectHandlers.remote_project_checkout(ctxFor(TARGET), {
+            meshId: 'mesh_batrp', targetDaemonId: TARGET, identity: REPO, url: URL, hostDaemonId: SOURCE,
+        });
+        state.writeHostRecordFail = true;
+        expect(await remoteProjectHandlers.remote_project_accept(ctxFor(TARGET), {
+            meshId: 'mesh_batrp', targetDaemonId: TARGET, identity: REPO, url: URL, hostDaemonId: SOURCE, workspace: (checked as any).workspace,
+        })).toMatchObject({ success: false, code: 'REGISTRATION_FAILED', subcode: 'HOST_RECORD_WRITE_FAILED', stage: 'registration' });
+    });
 });
+
