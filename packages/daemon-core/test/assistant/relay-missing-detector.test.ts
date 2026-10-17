@@ -15,6 +15,12 @@ import { ensureAssistantRelaySchema } from '../../src/mesh/mesh-runtime-store-sc
 import { ensureTurnLedgerSchema } from '../../src/mesh/turn-ledger/schema.js';
 import { LOG } from '../../src/logging/logger.js';
 
+vi.mock('../../src/config/mesh-config.js', () => ({ listMeshesReadOnly: () => [{ id: 'mesh' }] }));
+vi.mock('../../src/mesh/coordinator-registry.js', () => ({
+    listCoordinatorsForMesh: () => ['coord-none', 'coord-in', 'coord-boot', 'coord-open'].map(sessionId => ({ sessionId, meshId: 'mesh', cliType: 'codex-cli' })),
+    getCoordinatorForSession: () => ({ cliType: 'codex-cli' }),
+}));
+
 class FakeClock implements RelayClock {
     t = Date.parse('2026-10-17T05:00:00Z');
     private timers: Array<{ at: number; fn: () => void; id: number }> = [];
@@ -127,7 +133,7 @@ describe('relay missing detector', () => {
             { sessionId: 'coord', messageAt: midAt, chars: mid.length, text: mid, attemptId: 'plain:coord:e1' },
             { sessionId: 'coord', messageAt: lastAt, chars: last.length, text: last, attemptId: 'plain:coord:e1' },
         ] satisfies AuditedCoordinatorReply[]);
-        const body = `[reply 1/2]\n${mid}\n\n[reply 2/2]\n${last}`;
+        const body = `[reply 1/2 · 05:15:06]\n${mid}\n\n[reply 2/2 · 05:15:26]\n${last}`;
         const h = makeRelay({
             audit,
             report: { body, completeness: 'final_native', parts: [{ at: midAt, chars: mid.length }, { at: lastAt, chars: last.length }] },
@@ -179,8 +185,9 @@ describe('collectCoordinatorReplies', () => {
             'coord-open': [{ role: 'assistant', timestamp: AT, content: 'still open' }],
         };
         const replies = await collectCoordinatorReplies({
-            db, sinceMs: AT - 1000, now: AT + 10_000,
-            execute: async (_cmd, args) => ({ success: true, messages: messages[String(args.targetSessionId)] ?? [] }),
+            db, sinceMs: AT - 1000, now: AT + 60_000,
+            execute: async (_cmd, args) => ({ success: true, coverage: 'full', messageSource: { selected: 'native-history' }, debugReadChat: { provider: 'codex-cli' },
+                messages: (messages[String(args.targetSessionId)] ?? []).map(m => ({ bubbleState: 'final', ...(m as object) })) }),
         });
         const bySession = Object.fromEntries(replies.map((r) => [r.sessionId, r]));
         expect(bySession['coord-none']).toMatchObject({ attemptId: null, text: TEXT });

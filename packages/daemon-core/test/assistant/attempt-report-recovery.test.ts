@@ -61,8 +61,11 @@ function producer(file = ':memory:') {
     };
     return { db, ledger, start, finish };
 }
-const nativeReader = (body = 'original report', at = 190) => vi.fn(async () => ({ success: true,
-    messages: [{ role: 'assistant', timestamp: at, content: body }, { role: 'assistant', timestamp: at + 1e12, content: 'unrelated latest tail' }], hasMore: false }));
+const nativeRead = (messages: any[]) => ({ success: true, coverage: 'full', hasMore: false,
+    messageSource: { selected: 'native-history' }, debugReadChat: { provider: 'codex-cli' }, providerObservedStatus: 'idle',
+    messages: messages.map(m => ({ bubbleState: 'final', ...m })) });
+const nativeReader = (body = 'original report', at = 190) => vi.fn(async () => nativeRead(
+    [{ role: 'assistant', timestamp: at, content: body }, { role: 'assistant', timestamp: at + 1e12, content: 'unrelated latest tail' }]));
 it.each(['envelope', 'native', 'hold'] as const)('recovers the real plain %s cause plus derived commit', async mode => {
     const { db, finish, ledger } = producer(); const attempt = finish(undefined, mode);
     const rows = ledger.store.listEvents(attempt.attemptId);
@@ -149,20 +152,20 @@ it('refuses ambiguous native bubbles and never trusts a legacy session tail', as
         .run(attempt.attemptId, 'mesh', 'coord', Date.now(), 'unproven latest tail');
     const absent = vi.fn(async () => ({ success: true, messages: [{ role: 'assistant', timestamp: 10_000, content: 'unrelated latest' }], hasMore: false }));
     expect((await recoverAttemptReport(db, attempt, 'mesh', 'coord', absent)).body).toBeNull();
-    const execute = vi.fn(async () => ({ success: true, messages: [
+    const execute = vi.fn(async () => nativeRead([
         { role: 'assistant', timestamp: 190, content: 'one' }, { role: 'assistant', timestamp: 190, content: 'two' },
-    ] }));
+    ]));
     expect((await recoverAttemptReport(db, attempt, 'mesh', 'coord', execute)).body).toBeNull(); expect(execute).toHaveBeenCalledTimes(1);
 });
 it.each([false, true])('delayed relay commits retain exact real-attempt attribution (remote=%s)', async remote => {
     const { db, start, finish } = producer(); const store = new SqliteAssistantRelayStore(db);
     const attempts = [finish(), finish(start('second', 300), 'native', '', 400)];
     let release!: () => void; const delayed = new Promise<void>(r => { release = r });
-    const execute = vi.fn(async () => { await delayed; return { success: true, messages: [
+    const execute = vi.fn(async () => { await delayed; return nativeRead([
         { role: 'assistant', timestamp: -5000, content: 'stale tail' },
         { role: 'assistant', timestamp: 390, content: 'second turn body' },
         { role: 'assistant', timestamp: 500, content: 'newer tail' },
-    ], hasMore: false }; });
+    ]); });
     let handler: (e: any) => void = () => {};
     const tail = vi.fn(async () => 'second turn body');
     const timers: Array<{ at: number; fn: () => void; id: number }> = [];
@@ -193,7 +196,7 @@ it.each([false, true])('delayed relay commits retain exact real-attempt attribut
         else handler({ kind: 'turn', phase: 'committed', sessionId: 'coord', attemptId: a.attemptId, generation: a.generation, at: Date.now(), outcome: 'completed' });
     }
     await Promise.resolve(); release();
-    for (let i = 0; i < 6; i++) await Promise.resolve();
+    for (let i = 0; i < 32; i++) await Promise.resolve();
     const pending = [...(relay as any).attemptBodyCapture.values()];
     relay.stop(); clock.advance(1000);
     await Promise.all(pending);
@@ -244,14 +247,14 @@ it('relays every native reply in one attempt, oldest first', async () => {
     const attempt = finish();
     const store = new SqliteAssistantRelayStore(db);
     store.recordCommitted({ attemptId: attempt.attemptId, meshId: 'mesh', coordinatorSessionId: 'coord', committedAt: Date.now(), kind: 'relay', outcome: 'completed' });
-    const execute = vi.fn(async () => ({ success: true, messages: [
-        { role: 'assistant', timestamp: 180, content: 'Second native reply.' },
+    const execute = vi.fn(async () => nativeRead([
+        { role: 'assistant', timestamp: 190, content: 'Second native reply.' },
         { role: 'assistant', kind: 'thinking', timestamp: 160, content: 'hidden thinking' },
         { role: 'assistant', timestamp: 150, content: 'First native reply.' },
-    ], hasMore: false }));
+    ]));
     const result = await recoverAttemptReport(db, attempt, 'mesh', 'coord', execute);
     expect(result.completeness).toBe('final_native');
-    expect(result.parts).toEqual([{ at: 150, chars: 'First native reply.'.length }, { at: 180, chars: 'Second native reply.'.length }]);
+    expect(result.parts).toEqual([{ at: 150, chars: 'First native reply.'.length }, { at: 190, chars: 'Second native reply.'.length }]);
     expect(result.body).toContain('[reply 1/2 ·');
     expect(result.body).toContain('First native reply.');
     expect(result.body).toContain('[reply 2/2 ·');

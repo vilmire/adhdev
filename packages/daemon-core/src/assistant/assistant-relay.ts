@@ -1,6 +1,7 @@
 import { reportBodyId } from './report-continuation.js';
+import { createHash } from 'node:crypto';
 import { LOG } from '../logging/logger.js';
-import type { AttemptReportSnapshot, AuditedCoordinatorReply } from './assistant-native-window.js';
+import { formatReplyClock, type AttemptReportSnapshot, type AuditedCoordinatorReply } from './assistant-native-window.js';
 /**
  * Assistant relay (design 2026-10-07-assistant-layer.md §4.3 "수신", §4.8;
  * appendix B). Pure core with injected ports; boot wiring is a later unit.
@@ -30,11 +31,11 @@ import type { EventOf } from '../sessions/lifecycle-events.js';
 import type { Unsubscribe } from '../sessions/lifecycle-bus.js';
 import type { AssistantInputLog } from './assistant-input-log.js';
 import type { AssistantInputSource } from './store-guards.js';
-import type { AssistantRelayStore } from './assistant-relay-store.js';
+import { ATTEMPT_BODY_MAX_CHARS, ATTEMPT_BODY_MAX_ROWS, ATTEMPT_BODY_TOTAL_BYTES, type AssistantRelayStore } from './assistant-relay-store.js';
 import { busyInputModeToSendPolicy, type BusyInputMode } from './assistant-registry.js';
 import { countTerminalSubmits, TERMINAL_SUBMITS_PER_WRITE_CAP } from './assistant-human-input.js';
 import {
-    RELAY_BACKLOG_FOLD_AFTER_MS, RELAY_DELIVERY_MAX_CHARS, RELAY_IDLE_CLOSE_GRACE_MS, RELAY_MAX_WAIT_MS, RELAY_NATIVE_RETRY_MS, RELAY_NATIVE_WAIT_MS, RELAY_PROGRESS_AFTER_MS, RELAY_QUIET_MS,
+    RELAY_BACKLOG_FOLD_AFTER_MS, RELAY_BODY_MAX_CHARS, RELAY_DELIVERY_MAX_CHARS, RELAY_IDLE_CLOSE_GRACE_MS, RELAY_MAX_WAIT_MS, RELAY_NATIVE_RETRY_MS, RELAY_NATIVE_WAIT_MS, RELAY_PROGRESS_AFTER_MS, RELAY_QUIET_MS,
     RELAY_STALL_AFTER_MS, buildApprovalSignal, buildCoordinatorEndedSignal, buildFoldedBacklogLine, buildProgressSignal,
     buildMissedReportsLine, buildRelayEnvelope, buildRestartNote, buildStallSignal, buildUncoveredReplyGap, buildUnreachableRelay, codePoints, relayMessageId,
     shouldAddRestartNote,
@@ -46,6 +47,10 @@ export type AssistantRelayBusEvent = EventOf<typeof ASSISTANT_RELAY_BUS_KINDS[nu
 
 /** A human input parked in the driver FIFO is attributed when the next turn starts; give up after this. */
 export const PENDING_HUMAN_MAX_AGE_MS = 5 * 60_000;
+const COVERAGE_TTL_MS = 24 * 60 * 60_000;
+const COVERAGE_MAX_ENTRIES = 4_096;
+const coverageKey = (sessionId: string, attemptId: string | null, at: number, text: string) =>
+    JSON.stringify([sessionId, attemptId, at, createHash('sha256').update(text.replace(/\r\n?/g, '\n').trim()).digest('hex')]);
 
 export interface MeshWorkCounts { activeMissions: number; pending: number; assigned: number }
 
@@ -97,7 +102,7 @@ export interface AssistantRelayPorts {
      */
     rehydrateAttemptReport?(meshId: string, sessionId: string, attemptId: string): Promise<AttemptReportSnapshot | string | null>;
     /** Native finals since `sinceMs` for the missing-relay detector. */
-    auditCoordinatorReplies?(sinceMs: number): Promise<readonly AuditedCoordinatorReply[]>;
+    auditCoordinatorReplies?(sinceMs: number): Promise<readonly AuditedCoordinatorReply[] & { complete?: boolean }>;
     /** Local metric bump for one uncovered native final. */
     onRelayGap?(klass: 'no_attempt' | 'inside_attempt' | 'restart_closed', at: number): void;
     /** Content-free `[Mesh]` line (`buildMeshStatusLineForNotification`). */
@@ -171,9 +176,12 @@ export class AssistantRelay {
      * memory cache clears on delivery; the reader retains bounded durable captures. */
     private readonly attemptBodies = new Map<string, string | null>();
     private readonly attemptMeta = new Map<string, AttemptReportSnapshot>();
-    /** Exact bodies whose own relay was sent. The detector treats these as coverage. */
-    private readonly renderedCoverage: Array<{ sessionId: string; body: string; parts: Array<{ at: number; chars: number }> }> = [];
-    private readonly flaggedReplies = new Set<string>();
+    private readonly attemptBodyAt = new Map<string, number>();
+    /** Only complete native parts inside the rendered cap; never retain bodies. */
+    private readonly renderedCoverage = new Map<string, number>();
+    private readonly flaggedReplies = new Map<string, number>();
+    private readonly pendingTimers = new Map<unknown, () => void>();
+    private lifecycle = 0;
     private lastAuditAt = 0;
     private auditing = false;
     /** In-flight local captures (attemptId → settle promise); `renderRelay` awaits these instead of racing them. */
@@ -213,11 +221,13 @@ export class AssistantRelay {
             }
         }
         this.queue.push(...byMesh.values());
-        this.lastAuditAt = this.clock.now();
+        this.lifecycle += 1;
+        this.lastAuditAt = this.clock.now() - COVERAGE_TTL_MS;
         this.unsubscribe = this.ports.subscribe((e) => this.onEvent(e));
     }
 
     stop(): void {
+        this.lifecycle += 1;
         this.unsubscribe?.();
         this.unsubscribe = null;
         for (const b of this.batches.values()) this.clearBatchTimers(b);
@@ -225,6 +235,12 @@ export class AssistantRelay {
         this.attemptBodyCapture.clear();
         this.attemptBodies.clear();
         this.attemptMeta.clear();
+        this.attemptBodyAt.clear();
+        for (const [timer, resolve] of this.pendingTimers) { this.clock.clearTimeout(timer); resolve(); }
+        this.pendingTimers.clear();
+        this.renderedCoverage.clear();
+        this.flaggedReplies.clear();
+        this.auditing = false;
     }
 
     /** `project_send` accepted: open/refresh the project's thread. */
@@ -380,6 +396,8 @@ export class AssistantRelay {
             }
         }
         this.ports.store.prune(now);
+        this.pruneCoverage(now);
+        this.pruneBodyCache(now);
         this.auditReplies(now);
         this.kick();
     }
@@ -584,7 +602,9 @@ export class AssistantRelay {
             await Promise.resolve();
             if (!live()) return;
             try {
-                last = this.normalizeReport(await read);
+                const raw = await this.bounded(read, Math.max(0, RELAY_NATIVE_WAIT_MS - (this.clock.now() - started)), null);
+                const next = this.normalizeReport(raw);
+                if (next.body || !last.body) last = next;
             } catch {
                 last = this.normalizeReport(null);
             }
@@ -599,25 +619,58 @@ export class AssistantRelay {
                 return;
             }
             const wait = Math.min(RELAY_NATIVE_RETRY_MS, RELAY_NATIVE_WAIT_MS - elapsed);
-            await new Promise<void>((resolve) => { this.clock.setTimeout(resolve, wait); });
+            await this.bounded(new Promise<void>(() => {}), wait, undefined);
+            if (!live()) return;
+            if (this.clock.now() - started >= RELAY_NATIVE_WAIT_MS) { this.rememberReport(attemptId, last); return; }
         }
     }
 
+    /** A stopped relay resolves its waits too; late I/O cannot repopulate caches. */
+    private async bounded<T>(read: Promise<T>, ms: number, fallback: T): Promise<T> {
+        let timer: unknown;
+        const timeout = new Promise<T>(resolve => {
+            const finish = () => resolve(fallback);
+            timer = this.clock.setTimeout(finish, ms);
+            this.pendingTimers.set(timer, finish);
+        });
+        try { return await Promise.race([read, timeout]); }
+        finally { this.clock.clearTimeout(timer); this.pendingTimers.delete(timer); }
+    }
+
     private normalizeReport(raw: AttemptReportSnapshot | string | null | undefined): AttemptReportSnapshot {
-        if (typeof raw === 'string') return { body: raw, completeness: 'final_native' };
+        if (typeof raw === 'string') return raw.length <= ATTEMPT_BODY_MAX_CHARS
+            ? { body: raw, completeness: 'final_native' } : { body: null, completeness: 'envelope_unverified' };
         if (!raw || typeof raw !== 'object') return { body: null, completeness: 'envelope_unverified' };
-        const completeness = raw.completeness === 'final_native' ? 'final_native' : 'envelope_unverified';
+        if (typeof raw.body === 'string' && raw.body.length > ATTEMPT_BODY_MAX_CHARS) return { body: null, completeness: 'envelope_unverified' };
+        const validParts = raw.parts === undefined || (Array.isArray(raw.parts) && raw.parts.length <= 600
+            && raw.parts.every(p => p && Number.isFinite(p.at) && Number.isFinite(new Date(p.at).getTime())
+                && Number.isSafeInteger(p.chars) && p.chars > 0));
+        const completeness = raw.completeness === 'final_native' && validParts ? 'final_native' : 'envelope_unverified';
         return {
             body: typeof raw.body === 'string' ? raw.body : null,
             completeness,
-            ...(raw.source ? { source: raw.source } : {}),
-            ...(raw.parts ? { parts: raw.parts } : {}),
+            ...(typeof raw.source === 'string' && raw.source.length <= 128 ? { source: raw.source } : {}),
+            ...(raw.parts && validParts ? { parts: raw.parts.map(p => ({ at: p.at, chars: p.chars })) } : {}),
         };
     }
 
     private rememberReport(attemptId: string, report: AttemptReportSnapshot): void {
         this.attemptBodies.set(attemptId, report.body);
         this.attemptMeta.set(attemptId, report);
+        this.attemptBodyAt.delete(attemptId);
+        this.attemptBodyAt.set(attemptId, this.clock.now());
+        this.pruneBodyCache(this.clock.now());
+    }
+
+    private pruneBodyCache(now: number): void {
+        let bytes = 0;
+        let count = 0;
+        for (const [id, at] of [...this.attemptBodyAt].reverse()) {
+            bytes += Buffer.byteLength(this.attemptBodies.get(id) ?? '', 'utf8');
+            count += 1;
+            if (now - at < COVERAGE_TTL_MS && count <= ATTEMPT_BODY_MAX_ROWS && bytes <= ATTEMPT_BODY_TOTAL_BYTES) continue;
+            this.attemptBodies.delete(id); this.attemptMeta.delete(id); this.attemptBodyAt.delete(id);
+        }
     }
 
     /** Native finals not covered by a delivered exact relay. One warn and one pointer per bubble. */
@@ -625,35 +678,72 @@ export class AssistantRelay {
         const port = this.ports.auditCoordinatorReplies;
         if (!port || this.auditing) return;
         const since = this.lastAuditAt;
-        this.lastAuditAt = now;
+        const lifecycle = this.lifecycle;
         this.auditing = true;
         void Promise.resolve()
-            .then(() => port(since))
+            .then(() => this.bounded(port(since), 2_000, null))
             .then((replies) => {
+                if (this.lifecycle !== lifecycle || !replies) return;
                 for (const reply of replies ?? []) this.noteUncoveredReply(reply, now);
+                if (replies.complete !== false) this.lastAuditAt = now;
             })
             .catch((e) => LOG.warn('Assistant', `relay gap audit failed: ${(e as Error)?.message ?? e}`))
-            .finally(() => { this.auditing = false; });
+            .finally(() => { if (this.lifecycle === lifecycle) this.auditing = false; });
     }
 
     private noteUncoveredReply(reply: AuditedCoordinatorReply, now: number): void {
         const text = reply.text?.trim() ?? '';
         if (!text || !reply.chars || reply.attemptOpen) return;
-        const key = `${reply.sessionId}:${reply.messageAt}`;
+        // A closed attempt can still be waiting for quiet-window/busy delivery.
+        if (reply.attemptId && (this.attemptBodyCapture.has(reply.attemptId)
+            || [...this.batches.values()].some(b => b.attemptIds.includes(reply.attemptId!))
+            || this.queue.some(i => i.kind === 'relay' && i.attemptIds.includes(reply.attemptId!)))) return;
+        const key = coverageKey(reply.sessionId, reply.attemptId, reply.messageAt, text);
         if (this.flaggedReplies.has(key) || this.replyCovered(reply, text)) return;
         const klass = !reply.attemptId ? 'no_attempt' : reply.restartClosed ? 'restart_closed' : 'inside_attempt';
-        this.flaggedReplies.add(key);
+        this.flaggedReplies.set(key, now);
+        this.pruneCoverage(now);
         LOG.warn('Assistant', `relay gap class=${klass} session=${reply.sessionId} at=${reply.messageAt} chars=${reply.chars}`);
         this.ports.onRelayGap?.(klass, now);
         this.pushLine('relay', buildUncoveredReplyGap(klass, reply.messageAt));
     }
 
     private replyCovered(reply: AuditedCoordinatorReply, text: string): boolean {
-        return this.renderedCoverage.some((c) => {
-            if (c.sessionId !== reply.sessionId) return false;
-            if (c.parts.some((p) => p.at === reply.messageAt)) return true;
-            return c.body.includes(text);
-        });
+        return this.renderedCoverage.has(coverageKey(reply.sessionId, reply.attemptId, reply.messageAt, text));
+    }
+
+    private pruneCoverage(now: number): void {
+        for (const map of [this.renderedCoverage, this.flaggedReplies]) {
+            for (const [key, at] of map) if (now - at >= COVERAGE_TTL_MS) map.delete(key);
+            while (map.size > COVERAGE_MAX_ENTRIES) map.delete(map.keys().next().value!);
+        }
+    }
+
+    private rememberRenderedParts(attemptId: string, sessionId: string, body: string, meta: AttemptReportSnapshot, at: number): void {
+        const parts = meta.parts;
+        if (!parts?.length) return; // no native identity: do not infer it from substring containment
+        const points = Array.from(body);
+        let offset = 0;
+        let renderedOffset = 0;
+        const keys: string[] = [];
+        for (let i = 0; i < parts.length; i++) {
+            const part = parts[i]!;
+            if (!Number.isFinite(part.at) || !Number.isSafeInteger(part.chars) || part.chars <= 0) return;
+            if (parts.length > 1) {
+                const label = Array.from(`${i ? '\n\n' : ''}[reply ${i + 1}/${parts.length} · ${formatReplyClock(part.at)}]\n`);
+                if (points.slice(offset, offset + label.length).join('') !== label.join('')) return;
+                offset += label.length;
+                renderedOffset += label.length;
+            }
+            const text = points.slice(offset, offset + part.chars).join('');
+            offset += part.chars;
+            renderedOffset += Array.from(text.replace(/\r\n?/g, '\n')).length;
+            if (Array.from(text).length !== part.chars) return;
+            if (renderedOffset <= RELAY_BODY_MAX_CHARS) keys.push(coverageKey(sessionId, attemptId, part.at, text));
+        }
+        if (offset !== points.length) return; // reject malformed/legacy part metadata
+        for (const key of keys) this.renderedCoverage.set(key, at);
+        this.pruneCoverage(at);
     }
 
     private onCoordinatorAttention(meshId: string, sessionId: string, value: unknown): void {
@@ -832,12 +922,12 @@ export class AssistantRelay {
                 const meta = this.attemptMeta.get(id);
                 const body = this.attemptBodies.get(id);
                 if (meta?.completeness === 'final_native' && body?.trim()) {
-                    this.renderedCoverage.push({ sessionId: item.coordinatorSessionId, body, parts: meta.parts ?? [] });
+                    this.rememberRenderedParts(id, this.restoredAttempts.get(id)?.sessionId ?? item.coordinatorSessionId, body, meta, at);
                 }
             }
         }
         for (const id of relayItems.flatMap((i) => i.attemptIds)) {
-            this.attemptBodyCapture.delete(id); this.attemptBodies.delete(id); this.attemptMeta.delete(id); this.restoredAttempts.delete(id);
+            this.attemptBodyCapture.delete(id); this.attemptBodies.delete(id); this.attemptMeta.delete(id); this.attemptBodyAt.delete(id); this.restoredAttempts.delete(id);
         }
         const meshes = [...new Set(relayItems.map((i) => i.meshId))];
         for (const m of meshes) {
@@ -940,8 +1030,9 @@ export class AssistantRelay {
             if (!ref || this.attemptBodies.has(id)) continue;
             // Authorization is checked by the runtime reader for every attempt. The authorized reader prefers the durable exact capture.
             let report: AttemptReportSnapshot | null = null;
-            try { report = this.normalizeReport(await this.ports.rehydrateAttemptReport?.(ref.meshId, ref.sessionId, id) ?? null); } catch { /* exact evidence unavailable */ }
-            if (report?.body) this.rememberReport(id, report);
+            const lifecycle = this.lifecycle;
+            try { report = this.normalizeReport(await this.bounded(this.ports.rehydrateAttemptReport?.(ref.meshId, ref.sessionId, id) ?? Promise.resolve(null), RELAY_NATIVE_WAIT_MS, null)); } catch { /* exact evidence unavailable */ }
+            if (report?.body && this.lifecycle === lifecycle) this.rememberReport(id, report);
         }
         return item.attemptIds.map((id) => this.attemptBodies.get(id) ?? null);
     }

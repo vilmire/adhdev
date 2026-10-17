@@ -5,7 +5,10 @@
  */
 import type { Database } from 'better-sqlite3';
 import type { AuditedCoordinatorReply } from './assistant-native-window.js';
-import { standardAssistantBubble } from './assistant-native-window.js';
+import { readNativeWindow } from './attempt-report-recovery.js';
+import { listMeshesReadOnly } from '../config/mesh-config.js';
+import { listCoordinatorsForMesh } from '../mesh/coordinator-registry.js';
+import { RELAY_QUIET_MS } from './assistant-relay-format.js';
 
 type Execute = (command: string, args: Record<string, unknown>) => Promise<Record<string, unknown>>;
 
@@ -20,7 +23,7 @@ interface AttemptSpan {
 
 const TERMINAL = new Set(['completed', 'failed', 'cancelled']);
 const SESSION_CAP = 20;
-const LOOKBACK_MS = 120_000;
+export const RELAY_AUDIT_RETENTION_MS = 24 * 60 * 60_000;
 
 function restartClosed(row: AttemptSpan): boolean {
     return row.terminal_reason === 'session_error' && row.terminal_source === 'session_registry';
@@ -31,45 +34,45 @@ export async function collectCoordinatorReplies(opts: {
     execute: Execute;
     sinceMs: number;
     now: number;
-}): Promise<AuditedCoordinatorReply[]> {
-    const since = opts.sinceMs - LOOKBACK_MS;
-    let sessions: Array<{ session_id: string }>;
-    try {
-        sessions = opts.db.prepare(`
-        SELECT session_id FROM (
-            SELECT session_id, MAX(COALESCE(terminal_at, last_activity_at, accepted_at)) AS seen
-            FROM turn_attempts
-            WHERE scope='plain' AND COALESCE(terminal_at, last_activity_at, accepted_at) >= ?
-            GROUP BY session_id
-            UNION
-            SELECT coordinator_session_id AS session_id, MAX(committed_at) AS seen
-            FROM assistant_relays WHERE committed_at >= ? GROUP BY coordinator_session_id
-        ) ORDER BY seen DESC LIMIT ?
-    `).all(since, since, SESSION_CAP) as Array<{ session_id: string }>;
-    } catch {
-        return [];
-    }
+    coordinatorSessions?: readonly { sessionId: string; cliType?: string }[];
+}): Promise<AuditedCoordinatorReply[] & { complete?: boolean }> {
+    // Replay bounded history, rather than discarding a bubble first observed
+    // while open or before this process started. Delivery hashes deduplicate it.
+    const since = opts.now - RELAY_AUDIT_RETENTION_MS;
+    // Plain attempts are daemon-wide, including private owner chats. Only the
+    // persisted coordinator registry authorizes a read; it also finds sessions
+    // whose missing turn-start produced no attempt/relay row at all.
+    const inventory = [...new Map((opts.coordinatorSessions ?? listMeshesReadOnly().flatMap(mesh => listCoordinatorsForMesh(mesh.id)))
+        .map(entry => [entry.sessionId, entry] as const)).values()].sort((a, b) => a.sessionId.localeCompare(b.sessionId));
+    // Rotate capped inventories so busy projects cannot starve another session.
+    const first = inventory.length ? (Math.floor(opts.now / 60_000) * SESSION_CAP) % inventory.length : 0;
+    const sessions = [...inventory.slice(first), ...inventory.slice(0, first)].slice(0, SESSION_CAP);
     const out: AuditedCoordinatorReply[] = [];
-    for (const { session_id: sessionId } of sessions) {
-        if (!sessionId) continue;
+    const scans = await Promise.all(sessions.map(async ({ sessionId, cliType }) => {
+        if (!sessionId) return { sessionId, skipped: true } as const;
+        // These timestamps cannot classify attempt membership. Until Grok has a
+        // native record boundary contract, no exact missing-attempt claim is made.
+        if (cliType === 'grok-cli') return { sessionId, skipped: true } as const;
         const attempts = opts.db.prepare(`
             SELECT attempt_id, accepted_at, terminal_at, terminal_reason, terminal_source, state
             FROM turn_attempts WHERE session_id=? AND scope='plain'
         `).all(sessionId) as AttemptSpan[];
-        let chat: Record<string, unknown>;
-        try {
-            chat = await opts.execute('read_chat', { targetSessionId: sessionId, limit: 200 });
-        } catch {
-            continue;
-        }
-        if (!chat?.success || !Array.isArray(chat.messages)) continue;
-        for (const m of chat.messages) {
-            const bubble = standardAssistantBubble(m);
-            if (!bubble || bubble.at < opts.sinceMs) continue;
-            const containing = attempts.filter((a) => bubble.at >= a.accepted_at - 1000 && bubble.at <= (a.terminal_at ?? opts.now));
+        const window = await readNativeWindow(opts.execute, sessionId, since, opts.now);
+        return { sessionId, attempts, window };
+    }));
+    let complete = true;
+    let successful = 0;
+    for (const scan of scans) {
+        if ('skipped' in scan) continue;
+        const { sessionId, attempts, window } = scan;
+        if (!window.complete || window.ambiguous) { complete = false; continue; }
+        successful += 1;
+        for (const bubble of window.bubbles) {
+            const containing = attempts.filter((a) => bubble.at >= a.accepted_at && bubble.at <= (a.terminal_at ?? opts.now));
             containing.sort((a, b) => b.accepted_at - a.accepted_at);
             const attempt = containing[0];
-            const open = !!attempt && !TERMINAL.has(attempt.state);
+            const open = !!attempt && (!TERMINAL.has(attempt.state)
+                || attempt.terminal_at === null || opts.now < attempt.terminal_at + RELAY_QUIET_MS);
             out.push({
                 sessionId,
                 messageAt: bubble.at,
@@ -81,5 +84,6 @@ export async function collectCoordinatorReplies(opts: {
             });
         }
     }
-    return out;
+    if (!complete && !successful) throw new Error('coordinator native audit unavailable');
+    return complete ? out : Object.assign(out, { complete: false });
 }
