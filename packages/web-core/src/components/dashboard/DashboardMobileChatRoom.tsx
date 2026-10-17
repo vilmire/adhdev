@@ -10,7 +10,7 @@ import ConversationMetaChips from './ConversationMetaChips'
 import type { ActiveConversation, CliConversationViewMode } from './types'
 import { isCliConv } from './types'
 import type { DashboardConversationCommands } from '../../hooks/useDashboardConversationCommands'
-import { useRef } from 'react'
+import { useCallback, useRef } from 'react'
 import type { CliTerminalHandle } from '../CliTerminal'
 import CliViewModeToggle from './CliViewModeToggle'
 import { getConversationTitle } from './conversation-presenters'
@@ -66,6 +66,8 @@ export default function DashboardMobileChatRoom({
     const interactivePrompt = useInteractivePrompt(getInteractivePromptScopeId(selectedConversation))
     const isCli = isCliConv(selectedConversation)
     const isCliTerminal = isCli && cliViewMode === 'terminal'
+    // Owner-attention notice: the only affordance is opening the terminal view.
+    const handleOpenTerminal = useCallback(() => onSetCliViewMode('terminal'), [onSetCliViewMode])
     const isAssistant = isAssistantConversation(selectedConversation)
     const { sendCommand } = useTransport()
     const headerPaddingClass = isStandalone
@@ -154,6 +156,7 @@ export default function DashboardMobileChatRoom({
                     userName={userName}
                     showAssistantStagedWrites={false}
                     showAssistantExecutionControls={false}
+                    onOpenTerminal={isCli ? handleOpenTerminal : undefined}
                 />
             </div>
             <InteractivePromptModal

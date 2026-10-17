@@ -365,7 +365,10 @@
         "actionRequired": "対応が必要です",
         "alwaysAllowWarning": "この権限を永続的に許可します — 以降の実行では再確認されません",
         "questionPending": "質問の回答待ち",
-        "answerQuestion": "質問に回答する"
+        "answerQuestion": "質問に回答する",
+        "ownerAttentionTitle": "確認が必要です",
+        "ownerAttentionBody": "このセッションは、あなたにしか答えられないプロンプトで待機しています。自動では回答されません — ターミナルで応答してください。",
+        "ownerAttentionOpenTerminal": "ターミナルを開く"
     },
     "chatControls": {
         "loading": "読み込み中…",

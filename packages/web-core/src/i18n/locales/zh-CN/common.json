@@ -365,7 +365,10 @@
         "actionRequired": "需要操作",
         "alwaysAllowWarning": "永久授予此权限 — 后续运行将不再询问",
         "questionPending": "等待回答问题",
-        "answerQuestion": "回答问题"
+        "answerQuestion": "回答问题",
+        "ownerAttentionTitle": "需要你处理",
+        "ownerAttentionBody": "此会话正在等待只有你能回答的提示。它不会被自动回答——请在终端中响应。",
+        "ownerAttentionOpenTerminal": "打开终端"
     },
     "chatControls": {
         "loading": "加载中…",

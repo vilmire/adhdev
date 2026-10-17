@@ -8,6 +8,7 @@ import type { DaemonData } from '../../types';
 import type { GitCompactSummary, MessageInputSupport, RecentSessionBucket } from '@adhdev/daemon-core';
 import { deriveNativeConversationStatus, deriveStreamConversationStatus, formatIdeType, getAgentDisplayName, getMachineDisplayName, isGenericAgentTitle } from '../../utils/daemon-utils';
 import { isCliConv } from './types';
+import { readSessionOwnerAttention } from '../../utils/owner-attention';
 import type { ActiveConversation, DashboardMessage } from './types';
 import { getConversationTabKey, resolveOwnerMachineName } from './conversation-identity';
 import { ASSISTANT_DISPLAY_LABEL, isAssistantSession } from './assistant-session';
@@ -320,6 +321,9 @@ export function buildIdeConversations(
             completionMarker: ide.completionMarker,
             modalButtons: hasRealModal ? modal.buttons : undefined,
             modalMessage: hasRealModal ? modal.message : undefined,
+            // Owner-attention park (CLI only): a notice, never buttons — and only
+            // while the surfaced status is still the waiting_choice it implies.
+            ownerAttention: isCliConv(ide) && agentStatus === 'waiting_choice' ? readSessionOwnerAttention(ide) : null,
             streamSource: 'native',
             tabKey: getConversationTabKey(nativeSessionId, ide.id),
             machineName,

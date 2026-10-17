@@ -797,6 +797,7 @@ export default function DashboardMainView({
                     onOpenNewSession={openNewSession}
                     liveSessionInboxState={liveSessionInboxState}
                     layoutProfile={layoutProfile}
+                    setCliViewModeOverrides={setCliViewModeOverrides}
                 />
             )}
             {newSessionOpen && (

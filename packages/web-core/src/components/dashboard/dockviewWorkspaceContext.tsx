@@ -11,7 +11,7 @@ import {
     type SetStateAction,
 } from 'react'
 import type { IDockviewPanelHeaderProps, IDockviewPanelProps } from 'dockview'
-import type { ActiveConversation } from './types'
+import type { ActiveConversation, CliConversationViewMode } from './types'
 import type { DaemonData } from '../../types'
 import RemoteView from '../RemoteView'
 import { useIdeRemoteStream } from '../../hooks/useIdeRemoteStream'
@@ -51,6 +51,8 @@ export interface DashboardDockviewContextValue {
     isTabInPopout: (tabKey: string) => boolean
     floatTab: (tabKey: string) => void
     isTabFloating: (tabKey: string) => boolean
+    /** Optimistic CLI view-mode overrides (owner-attention "Open terminal"); absent where the host does not own them. */
+    setCliViewModeOverrides?: Dispatch<SetStateAction<Record<string, CliConversationViewMode>>>
 }
 
 export const DashboardDockviewContext = createContext<DashboardDockviewContextValue | null>(null)

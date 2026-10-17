@@ -5,6 +5,7 @@ import type { ActiveConversation } from './types'
 import type { DaemonData } from '../../types'
 import type { CliTerminalHandle } from '../CliTerminal'
 import ApprovalBanner from './ApprovalBanner'
+import OwnerAttentionNotice from './OwnerAttentionNotice'
 import CliTerminalPane from './CliTerminalPane'
 import ChatPane from './ChatPane'
 import { IconWarning } from '../Icons'
@@ -37,6 +38,13 @@ interface PaneGroupContentProps {
     showAssistantStagedWrites?: boolean
     /** False where the room header hosts the execution control. */
     showAssistantExecutionControls?: boolean
+    /**
+     * Switches this CLI conversation to its terminal view — the owner-attention
+     * notice's only affordance. Omitted where the surface cannot switch views
+     * (the notice then shows its copy without the button). Must be stable
+     * (useCallback): it is part of this component's memo comparison.
+     */
+    onOpenTerminal?: () => void
 }
 
 export function getPaneGroupContentChildVisibility(parentIsVisible: boolean | undefined, localIsVisible = true): boolean {
@@ -57,6 +65,7 @@ const PaneGroupContent = memo(function PaneGroupContent({
     isVisible = true,
     showAssistantStagedWrites,
     showAssistantExecutionControls,
+    onOpenTerminal,
 }: PaneGroupContentProps) {
     const {
         handleModalButton,
@@ -120,6 +129,8 @@ const PaneGroupContent = memo(function PaneGroupContent({
     return (
         <>
             <ApprovalBanner activeConv={activeConv} onModalButton={handleModalButton} />
+            {/* Owner-attention park: a buttonless notice (never approve/reject). */}
+            <OwnerAttentionNotice activeConv={activeConv} onOpenTerminal={onOpenTerminal} isTerminalView={isCliTerminal} />
 
             {(activeConv.transport !== 'pty' && activeConv.cdpConnected === false) ? (
                 <div className="desktop-only px-3 pt-1 pb-2">
@@ -197,6 +208,7 @@ const PaneGroupContent = memo(function PaneGroupContent({
     && prev.scrollToBottomRequestNonce === next.scrollToBottomRequestNonce
     && prev.isInputActive === next.isInputActive
     && prev.isVisible === next.isVisible
+    && prev.onOpenTerminal === next.onOpenTerminal
 ));
 
 export default PaneGroupContent

@@ -365,7 +365,10 @@
         "actionRequired": "ACTION REQUIRED",
         "alwaysAllowWarning": "Grants this permission permanently — future runs will not ask again",
         "questionPending": "QUESTION WAITING",
-        "answerQuestion": "Answer the question"
+        "answerQuestion": "Answer the question",
+        "ownerAttentionTitle": "NEEDS YOUR ATTENTION",
+        "ownerAttentionBody": "This session is waiting on a prompt only you can answer. It will not be answered automatically — respond in the terminal.",
+        "ownerAttentionOpenTerminal": "Open terminal"
     },
     "chatControls": {
         "loading": "Loading…",

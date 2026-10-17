@@ -3,7 +3,7 @@
  */
 
 import type { GitCompactSummary, MessageInputSupport, RecentSessionBucket, SessionTransport } from '@adhdev/daemon-core';
-import type { ChatMessage } from '../../types';
+import type { ChatMessage, SessionOwnerAttention } from '../../types';
 
 export type CliConversationViewMode = 'terminal' | 'chat';
 export type DashboardMessage = ChatMessage & {
@@ -55,6 +55,11 @@ export interface ActiveConversation {
     completionMarker?: string;
     modalButtons?: string[];
     modalMessage?: string;
+    /**
+     * CLI only: the session is parked on a prompt only the owner may answer in
+     * the terminal (OwnerAttentionNotice). Never carries buttons.
+     */
+    ownerAttention?: SessionOwnerAttention | null;
     streamSource: 'native' | 'agent-stream';
     tabKey: string;
     /** Parent machine name (hostname or nickname) */

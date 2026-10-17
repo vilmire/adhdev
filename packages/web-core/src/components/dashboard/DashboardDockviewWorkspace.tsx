@@ -35,7 +35,8 @@ import {
 } from '../../utils/dashboardLayoutStorage'
 import type { LiveSessionInboxState } from './DashboardMobileChatShared'
 import { getPreferredConversationForIde } from './conversation-sort'
-import { getCliConversationViewMode } from './types'
+import { getCliConversationViewMode, isCliConv, type CliConversationViewMode } from './types'
+import { switchCliConversationViewModeOptimistically } from './cliViewModeOverrides'
 import { useTransport } from '../../context/TransportContext'
 import { useTheme } from '../../hooks/useTheme'
 import { useTabShortcuts } from '../../hooks/useTabShortcuts';
@@ -125,6 +126,8 @@ interface DashboardDockviewWorkspaceProps {
     scrollToBottomRequest?: { tabKey: string; nonce: number } | null
     liveSessionInboxState: Map<string, LiveSessionInboxState>
     layoutProfile: DashboardLayoutProfile
+    /** Lets a panel switch its CLI conversation to the terminal view (owner-attention notice). */
+    setCliViewModeOverrides?: Dispatch<SetStateAction<Record<string, CliConversationViewMode>>>
 }
 
 type DashboardDockviewPanelActivityApi = Pick<IDockviewPanelProps<DashboardDockviewPanelParams>['api'], 'isActive' | 'isVisible'>
@@ -179,6 +182,25 @@ export function DashboardDockviewPanel({ params, api }: IDockviewPanelProps<Dash
     // tick, so keying on it recomputed the filter and produced a fresh array each
     // tick, invalidating `PaneGroupContent`'s memo (via the `actionLogs` prop) on
     // ticks where neither the logs nor the active tab actually changed.
+    // Owner-attention notice: its only affordance opens this conversation's
+    // terminal view. Latest-value refs keep the callback stable across status
+    // ticks (it is part of PaneGroupContent's memo comparison).
+    const latestActiveConvRef = useRef(activeConv)
+    latestActiveConvRef.current = activeConv
+    const latestIdesRef = useRef(ctx.ides)
+    latestIdesRef.current = ctx.ides
+    const setCliViewModeOverrides = ctx.setCliViewModeOverrides
+    const sendDaemonCommand = ctx.sendDaemonCommand
+    const handleOpenTerminal = useCallback(() => {
+        if (!setCliViewModeOverrides) return
+        void switchCliConversationViewModeOptimistically({
+            conversation: latestActiveConvRef.current,
+            mode: 'terminal',
+            ides: latestIdesRef.current,
+            sendDaemonCommand,
+            setCliViewModeOverrides,
+        })
+    }, [setCliViewModeOverrides, sendDaemonCommand])
     const activeConvTabKey = activeConv?.tabKey
     const activeActionLogs = useMemo(() => {
         if (!activeConvTabKey) return EMPTY_ACTION_LOGS
@@ -217,6 +239,7 @@ export function DashboardDockviewPanel({ params, api }: IDockviewPanelProps<Dash
                 scrollToBottomRequestNonce={ctx.scrollToBottomRequest?.tabKey === activeConv.tabKey ? ctx.scrollToBottomRequest.nonce : undefined}
                 isInputActive={isPanelInputActive}
                 isVisible={isPanelVisible}
+                onOpenTerminal={setCliViewModeOverrides && isCliConv(activeConv) ? handleOpenTerminal : undefined}
             />
         </div>
     )
@@ -245,6 +268,7 @@ export default function DashboardDockviewWorkspace({
     scrollToBottomRequest,
     liveSessionInboxState,
     layoutProfile,
+    setCliViewModeOverrides,
 }: DashboardDockviewWorkspaceProps) {
     const { t } = useTranslation('common')
     const { theme } = useTheme()
@@ -682,6 +706,7 @@ export default function DashboardDockviewWorkspace({
         isTabInPopout,
         floatTab,
         isTabFloating,
+        setCliViewModeOverrides,
     }), [
         actionLogs,
         clearedTabs,
@@ -704,6 +729,7 @@ export default function DashboardDockviewWorkspace({
         isTabInPopout,
         floatTab,
         isTabFloating,
+        setCliViewModeOverrides,
     ])
 
     const ctxMenuItems = ctxMenu ? buildDashboardDockviewContextMenuItems({

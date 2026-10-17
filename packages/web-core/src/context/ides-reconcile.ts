@@ -275,6 +275,7 @@ function buildWeakMetadataUpdate(
         'providerControls',
         'summaryMetadata',
         'activeInteractivePrompt',
+        'ownerAttention',
         'lastMessagePreview',
         'lastMessageRole',
         'lastMessageAt',

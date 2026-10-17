@@ -365,7 +365,10 @@
         "actionRequired": "ACCIÓN REQUERIDA",
         "alwaysAllowWarning": "Concede este permiso de forma permanente — las próximas ejecuciones no volverán a preguntar",
         "questionPending": "PREGUNTA PENDIENTE",
-        "answerQuestion": "Responder la pregunta"
+        "answerQuestion": "Responder la pregunta",
+        "ownerAttentionTitle": "REQUIERE TU ATENCIÓN",
+        "ownerAttentionBody": "Esta sesión espera una respuesta que solo tú puedes dar. No se responderá automáticamente: responde en la terminal.",
+        "ownerAttentionOpenTerminal": "Abrir terminal"
     },
     "chatControls": {
         "loading": "Cargando…",

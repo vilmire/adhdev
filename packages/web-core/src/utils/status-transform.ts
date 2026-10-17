@@ -10,6 +10,7 @@
 import type { StatusReportPayload, SessionEntry } from '@adhdev/daemon-core'
 import type { DaemonData } from '../types'
 import { normalizeIncomingSessionStatus } from './session-status-ingest'
+import { readSessionOwnerAttention } from './owner-attention'
 import {
     mergeSessionEntrySummary,
     type ExistingSessionLike,
@@ -282,6 +283,10 @@ export function statusPayloadToEntries(
             ...ownerAttribution(session),
             activeChat: mergedSession.activeChat,
             ...(mergedSession.activeInteractivePrompt !== undefined && { activeInteractivePrompt: mergedSession.activeInteractivePrompt }),
+            // Owner-attention park: always written (null when absent) so the weak
+            // metadata merge, which only copies defined fields, clears a stale park.
+            // Read off THIS row only — never inherited from the existing entry.
+            ownerAttention: readSessionOwnerAttention(session),
             ...(mergedSession.resume !== undefined && { resume: mergedSession.resume }),
             ...pickDefined(mergedSession, RUNTIME_KEYS),
             ...pickDefined(mergedSession, LAST_MESSAGE_KEYS),

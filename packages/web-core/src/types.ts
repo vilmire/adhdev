@@ -28,6 +28,19 @@ import type { InteractivePrompt } from '@adhdev/daemon-core';
 // a plain `import type { LaunchableProviderCategory } from '@adhdev/daemon-core'`.
 type LaunchableProviderCategory = Exclude<ProviderCategory, 'extension'>;
 
+/**
+ * A CLI session parked on a prompt only the OWNER may answer in the terminal
+ * (daemon-core OwnerAttentionMarker — e.g. grok's "Help improve Grok" consent
+ * banner or a persistent workspace-trust prompt). Non-actionable: the dashboard
+ * shows a notice, never approve/reject buttons. `message` is the provider spec's
+ * state label. Mirrored locally (same shape) because the daemon-core dist web-core
+ * resolves types from may predate the export.
+ */
+export interface SessionOwnerAttention {
+    stateId: string;
+    message: string;
+}
+
 // The one session status vocabulary (wiring-unification A1) — from the
 // dependency-free mesh-shared leaf, never from the daemon-core barrel.
 export type { SessionStatus, RecentSessionBucket } from '@adhdev/mesh-shared';
@@ -148,6 +161,8 @@ export interface BaseDaemonData {
     chats?: WebChatInfo[];
     activeChat?: SessionEntry['activeChat'];
     activeInteractivePrompt?: InteractivePrompt | null;
+    /** CLI only: owner-attention park (P2P / standalone); null once it clears. */
+    ownerAttention?: SessionOwnerAttention | null;
     workspace?: string | null;
     git?: GitCompactSummary;
     runtimeKey?: string;
