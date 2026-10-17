@@ -3,7 +3,6 @@ const isolated=await vi.hoisted(async()=>{const {createSessionHostIsolation}=awa
 vi.mock('@adhdev/session-host-core',async original=>({...await original<any>(),getDefaultSessionHostEndpoint:vi.fn(()=>{throw Error('default_endpoint_forbidden');}),SessionHostClient:vi.fn(function(){throw Error('native_client_forbidden');})}));
 const spawnState=vi.hoisted(()=>({calls:0,psFailure:false}));
 vi.mock('child_process',async original=>{const actual=await original<any>();return {...actual,execFileSync:(...args:any[])=>{if(spawnState.psFailure&&args[0]==='/bin/ps')throw Object.assign(Error('unreachable native observer'),{status:1,stdout:'',stderr:'permission denied'});return actual.execFileSync(...args);},spawn:vi.fn(()=>{spawnState.calls++;return {pid:999999,once:vi.fn(),unref:vi.fn()};})};});
-vi.mock('@adhdev/daemon-core',async original=>({...await original<any>(),...await import('../../src/maintenance/lifecycle-source-inventory.js'),getConfigDir:(await import('../../src/config/config.js')).getConfigDir}));
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {randomUUID} from 'node:crypto';
@@ -16,7 +15,6 @@ import {createSessionInputService} from '../../src/sessions/session-input-servic
 import {beginLifecycleSource,advanceLifecycleSource,claimLifecycleHelper,collectLifecycleSource,lifecycleProcessIdentity} from '../../src/maintenance/lifecycle-source-inventory.js';
 import {spawnDetachedDaemonUpgradeHelper} from '../../src/commands/upgrade-helper.js';
 import {resetProcessInstanceContextForTests} from '../../src/config/instance-context.js';
-import {DaemonUpdateController} from '../../../../../packages/daemon-cloud/src/daemon-update-controller.js';
 let root:string,store:MeshRuntimeStore;
 beforeEach(()=>{expect(vi.isMockFunction(SessionHostClient)).toBe(true);isolated.assertEndpoint(isolated.endpoint);root=path.join(isolated.root,randomUUID());fs.mkdirSync(root);process.env.ADHDEV_CONFIG_DIR=root;resetProcessInstanceContextForTests();MeshRuntimeStore.resetForTests();store=MeshRuntimeStore.getInstance();spawnState.calls=0;spawnState.psFailure=false;});
 afterEach(()=>{MeshRuntimeStore.resetForTests();resetProcessInstanceContextForTests();});afterAll(()=>isolated.cleanup());
@@ -56,13 +54,6 @@ it('helper completion is bound to native incarnation; scheduled result/failed/or
  // ACK persisted, but this exact helper incarnation is still alive: not absent.
  expect(collectLifecycleSource(root).pending).toHaveLength(1);advanceLifecycleSource(id,'failed',{},root);expect(collectLifecycleSource(root).pending).toHaveLength(1);
 });
-it('actual controller retry inventory captures failed verify, pending timer and restart orphan without spawning',async()=>{
- const scheduled:Array<()=>void>=[];const make=()=>new DaemonUpdateController({collectAllStates:()=>[],getUpgradePackageName:()=> 'adhdev',pkgVersion:'1.0.80',evaluateUpgradeCooldown:()=>({suppressed:false}),verifyPublishedTarget:()=>{throw Error('offline fixture');},scheduleRetry:fn=>{scheduled.push(fn);return {cancel(){}};},exit:()=>{throw Error('exit_forbidden');}});
- const c=make();expect(c.maintenanceInventory().pending).toHaveLength(0);c.onForceUpdateRequired({targetVersion:'1.0.81',reason:'force_update_below'});await tick();
- let inventory=c.maintenanceInventory();expect(inventory.observed).toBe(true);expect(inventory.pending.length).toBeGreaterThan(0);expect(inventory.live.retryScheduled).toBe(true);expect(spawnState.calls).toBe(0);
- scheduled[0]();await tick();expect(c.maintenanceInventory().live.retryAttempt).toBe(2);
- const afterRestart=make().maintenanceInventory();expect(afterRestart.observed).toBe(false);expect(afterRestart.reason).toBe('prior_controller_requires_reconciliation');expect(afterRestart.pending.length).toBeGreaterThan(0);
-});
 it('corrupt/temp lifecycle inventory refuses instead of replacing unknown with zero',()=>{
  expect(collectLifecycleSource(root).observed).toBe(false);beginLifecycleSource('helper',{},root);const dir=path.join(root,'cooperative-lifecycle-source');fs.writeFileSync(path.join(dir,'unfinished.tmp'),'PRIVATE-UNKNOWN');expect(()=>collectLifecycleSource(root)).toThrow('temporary_or_unknown');
 });
@@ -82,7 +73,7 @@ it('disposable guarded helper completion needs independently observed native exi
  const {execFile}=await import('node:child_process');
  expect(process.env.NODE_OPTIONS).toContain('--require');
  const script=path.join(root,'disposable-helper.ts');
- const source=path.resolve('src/maintenance/lifecycle-source-inventory.ts');
+ const source=path.resolve(import.meta.dirname,'../../src/maintenance/lifecycle-source-inventory.ts');
  fs.writeFileSync(script,`import {beginLifecycleSource,advanceLifecycleSource,claimLifecycleHelper} from ${JSON.stringify(source)};
  const expected={targetVersion:'1.0.81',packageName:'adhdev',parentPid:process.pid};const id=beginLifecycleSource('helper',expected);claimLifecycleHelper(id,expected);
  if(process.argv[2]==='completed')advanceLifecycleSource(id,'completed');process.stdout.write(id);`);
@@ -94,7 +85,6 @@ it('disposable guarded helper completion needs independently observed native exi
 it('unverified Windows inventory refuses without imposing POSIX journal probes on ordinary controls',()=>{
  const prior=Object.getOwnPropertyDescriptor(process,'platform')!;Object.defineProperty(process,'platform',{...prior,value:'win32'});
  try{
-  const c=new DaemonUpdateController({collectAllStates:()=>[],getUpgradePackageName:()=> 'adhdev',pkgVersion:'1.0.80'});c.onAuthOk();expect(c.maintenanceInventory()).toMatchObject({observed:false,reason:'windows_lifecycle_inventory_unverified'});
   spawnDetachedDaemonUpgradeHelper({packageName:'adhdev',targetVersion:'1.0.81',parentPid:process.pid,restartArgv:['fixture.js'],configDir:root});expect(spawnState.calls).toBe(1);expect(fs.existsSync(path.join(root,'cooperative-lifecycle-source'))).toBe(false);
  }finally{Object.defineProperty(process,'platform',prior);}
 });

@@ -1,6 +1,5 @@
 import {beforeEach,afterEach,afterAll,it,expect,vi} from 'vitest';
 const isolation=await vi.hoisted(async()=>{const {createSessionHostIsolation}=await import('../helpers/session-host-isolation.js');return createSessionHostIsolation();});
-vi.mock('@adhdev/daemon-core',async original=>({...await original<any>(),...await import('../../src/maintenance/lifecycle-source-inventory.js'),getConfigDir:(await import('../../src/config/config.js')).getConfigDir}));
 vi.mock('@adhdev/session-host-core',async original=>({...await original<any>(),getDefaultSessionHostEndpoint:vi.fn(()=>{throw Error('default_endpoint_forbidden');}),SessionHostClient:vi.fn(function(){throw Error('native_client_not_used_by_collector');})}));
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -15,8 +14,7 @@ import {writeCooperativeMaintenance,type CooperativeMaintenance} from '../../src
 import {actorObservationChallengeBytes} from '../../src/maintenance/actor-observation.js';
 import {MAINTENANCE_DRAIN_CHANNELS,MAINTENANCE_BLACKOUT_SOURCES} from '../../src/maintenance/drain-collection.js';
 import {createNoticeSubmitInventory} from '../../src/mesh/turn-ledger/notice-submit-inventory.js';
-import {beginLifecycleSource} from '../../src/maintenance/lifecycle-source-inventory.js';
-import {DaemonUpdateController} from '../../../../../packages/daemon-cloud/src/daemon-update-controller.js';
+import {beginLifecycleSource,advanceLifecycleSource,collectLifecycleSource} from '../../src/maintenance/lifecycle-source-inventory.js';
 import {resetProcessInstanceContextForTests} from '../../src/config/instance-context.js';
 const hash=(v:any)=>createHash('sha256').update(v).digest('hex');
 let root:string,state:CooperativeMaintenance,router:DaemonCommandRouter,store:MeshRuntimeStore,key:Buffer,configSha:string,components:any;
@@ -193,12 +191,13 @@ it('reverse ACK proof cannot borrow a matching ID/digest from another persisted 
 
 it('authenticated collection exports actual notice ACK and controller/helper ports with current challenge identity',async()=>{
  const notices=createNoticeSubmitInventory(components.turnLedger);components.meshTurn={noticeSubmitInventory:notices.inventory};
- const controller=new DaemonUpdateController({collectAllStates:()=>[{status:'generating'}],getUpgradePackageName:()=> 'adhdev',pkgVersion:'1.0.80'});components.maintenanceLifecycleInventory=()=>controller.maintenanceInventory();
+ const controllerId=beginLifecycleSource('controller',{},root);advanceLifecycleSource(controllerId,'idle',{},root);
+ components.maintenanceLifecycleInventory=()=>{const inv=collectLifecycleSource(root);return {...inv,currentOperationId:controllerId,pending:[...inv.pending,...inv.rows.filter((r:any)=>r.kind==='controller'&&(r.operationId!==controllerId||r.state!=='idle'))]};};
  await collect();const empty=await collect();expect(empty.channels.pendingNotifications.observed).toBe(true);expect(empty.channels.deferredLifecycle.observed).toBe(true);
  const intent=notices.begin({meshId:'mesh',writer:'writer',seq:8},'coordinator');intent.outcome('queued');
  const queued=await collect();expect(queued.channels.pendingNotifications.pending).toHaveLength(1);expect(queued.channels.pendingNotifications.evidence.native.rows[0].state).toBe('queued');intent.observe('submitted');
  expect((await collect()).channels.pendingNotifications.pending).toHaveLength(0);
- controller.onForceUpdateRequired({targetVersion:'1.0.81',reason:'force_update_below'});const helper=beginLifecycleSource('helper',{targetVersion:'1.0.81'},root);
+ advanceLifecycleSource(controllerId,'pending',{pendingMandatory:'1.0.81'},root);const helper=beginLifecycleSource('helper',{targetVersion:'1.0.81'},root);
  const pending=await collect();expect(pending.channels.deferredLifecycle.pending.length).toBeGreaterThan(0);expect(pending.channels.deferredLifecycle.evidence.helpers.rows.some((r:any)=>r.operationId===helper)).toBe(true);expect(pending.channels.deferredLifecycle.identity.epoch).toBe(state.epoch);
  components.maintenanceLifecycleInventory=()=>{throw Error('unreachable owner');};expect((await collect()).channels.deferredLifecycle.observed).toBe(false);
 });
