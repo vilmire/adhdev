@@ -36,7 +36,7 @@
 
 import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared';
 import { LOG } from '../logging/logger.js';
-import { canTransferQuotaReading, quotaAccountLineage, sameQuotaAccount, unconfirmedQuotaReading, UNKNOWN_ACCOUNT_LINEAGE, type QuotaAccountLineage } from './account-lineage.js';
+import { canTransferQuotaReading, quotaAccountLineage, sameQuotaAccount, unconfirmedQuotaReading, UNKNOWN_ACCOUNT_LINEAGE, type QuotaAccountLineage, withQuotaAccountLineage } from './account-lineage.js';
 import type { ProviderQuota, QuotaProvider } from './types.js';
 import { QUOTA_TRANSIENT_RETRY_DELAY_MS, TRANSIENT_QUOTA_FAILURE_KINDS } from './types.js';
 import { fetchAntigravityQuota, readAntigravityKeychainMtimeMs } from './fetchers/antigravity.js';
@@ -45,7 +45,7 @@ import { fetchCodexQuota } from './fetchers/codex.js';
 import { fetchCursorQuota } from './fetchers/cursor.js';
 import { fetchGrokQuota, readGrokCredentialMtimeMs, readGrokQuotaAccountLineage } from './fetchers/grok.js';
 import { fetchKimiQuota, readKimiCredentialMtimeMs, readKimiQuotaAccountLineage } from './fetchers/kimi.js';
-import { fetchOpencodeUsage } from './fetchers/opencode.js';
+import { fetchOpencodeUsage, readOpencodeQuotaAccountLineage } from './fetchers/opencode.js';
 import { lastGoodProvenanceOf, loadQuotaCache, mergeLastGoodForPersist, quotaEntryHoldsReading, saveQuotaCache } from './persist.js';
 import { revalidateInFlight } from './refresh-triggers.js';
 import { readCurrentQuotaAccountLineage } from './account-lineage-readers.js';
@@ -194,7 +194,8 @@ export const REFRESHERS: ReadonlyArray<{ provider: QuotaProvider; fetch: () => P
     { provider: 'cursor-cli', fetch: () => fetchCursorQuota() },
     { provider: 'grok-cli', fetch: () => fetchGrokQuota() },
     { provider: 'kimi', fetch: () => fetchKimiQuota() },
-    { provider: 'opencode', fetch: () => fetchOpencodeUsage() },
+    // opencode has no account; its readings are keyed to the local usage store.
+    { provider: 'opencode', fetch: async () => withQuotaAccountLineage(await fetchOpencodeUsage(), readOpencodeQuotaAccountLineage()) },
 ];
 
 /**

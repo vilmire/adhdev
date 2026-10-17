@@ -356,7 +356,9 @@ describe('shared settlement and dispatch', () => {
             expect(settled.metadata?.lineageUncertain).toBe(true);
         }
     });
-    it('opencode has no owning account and stays unknown', () => {
-        expect(readCurrentQuotaAccountLineage('opencode', {})).toEqual(UNKNOWN_ACCOUNT_LINEAGE);
+    it('opencode has no owning account, so its readings are keyed to the local usage store', () => {
+        // Policy (rc.19): usage-only readings from opencode's own store carry over a restart
+        // for the same store instead of staying UNKNOWN (see opencode-quota-lineage.test.ts).
+        expect(readCurrentQuotaAccountLineage('opencode', { HOME: '/home/u' })).not.toEqual(UNKNOWN_ACCOUNT_LINEAGE);
     });
 });

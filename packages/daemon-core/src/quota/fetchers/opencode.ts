@@ -19,12 +19,31 @@
  */
 'use strict';
 
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { accountLineageFromStableIdentity, type QuotaAccountLineage } from '../account-lineage.js';
 import {
     quotaFailure,
     type ProviderQuota,
 } from '../types.js';
 import type { QuotaChildProcess, QuotaFetchDeps } from './deps.js';
 import { resolveDeps } from './deps.js';
+
+/**
+ * Stable lineage for opencode readings. opencode has no owning account — it
+ * routes to whatever upstream providers it is configured with — and its usage
+ * comes from its own local session store. So a reading is keyed to THAT store
+ * (its data directory): the same store after a restart carries the reading
+ * forward; a different store (another XDG_DATA_HOME / user) is isolated. No
+ * account claim is made and nothing leaves the machine.
+ */
+export function readOpencodeQuotaAccountLineage(deps: { env?: NodeJS.ProcessEnv } = {}): QuotaAccountLineage {
+    const env = deps.env ?? process.env;
+    const dataHome = typeof env.XDG_DATA_HOME === 'string' && env.XDG_DATA_HOME.trim()
+        ? env.XDG_DATA_HOME.trim()
+        : path.join(env.HOME || os.homedir(), '.local', 'share');
+    return accountLineageFromStableIdentity('opencode', 'local-usage-store', 'opencode-local-store', path.resolve(dataHome, 'opencode'));
+}
 
 /** Trailing window the usage summary covers. */
 export const OPENCODE_USAGE_DAYS = 7;

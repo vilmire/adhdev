@@ -4,9 +4,9 @@
  * or the platform credential store) — no request, no token exchange — and
  * resolves to UNKNOWN when the CLI records no stable account identity.
  *
- * opencode stays UNKNOWN by design: it routes to whichever upstream accounts
- * its providers configure and its usage summary comes from the local session
- * store, so there is no single owning account to key a reading to.
+ * opencode has no owning account (it routes to whichever upstream accounts its
+ * providers configure); its usage comes from the local session store, so its
+ * readings are keyed to that store instead (see readOpencodeQuotaAccountLineage).
  */
 import { UNKNOWN_ACCOUNT_LINEAGE, type QuotaAccountLineage } from './account-lineage.js';
 import { readAntigravityQuotaAccountLineage } from './fetchers/antigravity.js';
@@ -15,6 +15,7 @@ import { readCodexQuotaAccountLineage } from './fetchers/codex.js';
 import { readCursorQuotaAccountLineage } from './fetchers/cursor.js';
 import { readGrokQuotaAccountLineage } from './fetchers/grok.js';
 import { readKimiQuotaAccountLineage } from './fetchers/kimi.js';
+import { readOpencodeQuotaAccountLineage } from './fetchers/opencode.js';
 
 export function readCurrentQuotaAccountLineage(
     provider: string,
@@ -28,6 +29,7 @@ export function readCurrentQuotaAccountLineage(
         case 'cursor-cli': return readCursorQuotaAccountLineage({ env });
         // darwin/win32 credential stores are read through a child process.
         case 'antigravity-cli': return readAntigravityQuotaAccountLineage({ env });
+        case 'opencode': return readOpencodeQuotaAccountLineage({ env });
         default: return UNKNOWN_ACCOUNT_LINEAGE;
     }
 }
