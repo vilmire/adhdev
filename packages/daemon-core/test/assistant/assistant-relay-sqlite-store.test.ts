@@ -252,3 +252,21 @@ it('migrates legacy unproven captures without trusting or deleting their bodies'
     expect(store.readAttemptBody('a', 'm', 's', T0, 'proven terminal')).toBe('independently proven body');
     expect(store.readAttemptBody('a', 'm', 's', T0, 'foreign terminal')).toBeNull(); db.close();
 });
+
+it('replaces a v1 evidence ref and refuses to store an unverified body as exact', () => {
+    const db = openDb();
+    const store = new SqliteAssistantRelayStore(db);
+    store.recordCommitted({ attemptId: 'a', meshId: 'm', coordinatorSessionId: 's', committedAt: T0, kind: 'relay', outcome: 'completed' });
+    const v1 = JSON.stringify([1, 0, 1, 'cause', 'h', 'source', 'h']);
+    const v2 = JSON.stringify([2, 0, 1, 'cause', 'h', 'source', 'h', 'parts']);
+    store.captureAttemptBody('a', 'm', 's', 'truncated screen row', T0, v1, { completeness: 'final_native' });
+    store.captureAttemptBody('a', 'm', 's', 'should not replace the same ref', T0 + 1, v1, { completeness: 'final_native' });
+    expect(store.readAttemptBody('a', 'm', 's', T0, v1)).toBe('truncated screen row');
+    store.captureAttemptBody('a', 'm', 's', 'native window', T0 + 2, v2, { completeness: 'final_native', parts: [{ at: 10, chars: 13 }] });
+    expect(store.readAttemptBody('a', 'm', 's', T0, v2)).toBe('native window');
+    expect(store.readVerifiedAttemptBody('a', 'm', 's', T0, JSON.stringify([2, 0, 1, 'cause', 'h', 'source', 'h']))?.body).toBe('native window');
+    expect(store.readVerifiedAttemptBody('a', 'm', 's', T0, JSON.stringify([1, 0, 1, 'cause', 'h', 'source', 'h']))).toBeNull();
+    store.captureAttemptBody('a', 'm', 's', 'envelope only', T0 + 3, JSON.stringify([2, 0, 1, 'cause', 'h', 'source', 'other']), { completeness: 'envelope_unverified' });
+    expect(store.readAttemptBody('a', 'm', 's', T0, v2)).toBe('native window');
+    db.close();
+});

@@ -382,7 +382,7 @@ export async function localProjectRead(ports: AssistantProjectPorts, meshId: str
         if (continuation.coordinatorSessionId !== sessionId && !ports.coordinatorSessionAuthorized?.(meshId, continuation.coordinatorSessionId)) return { ok: true, result: { success: false, code: 'original_report_unavailable', reason: 'coordinator_session_no_longer_authorized' } };
         if ('attemptId' in continuation) {
             const original = await localAttemptReport(ports, meshId, continuation.coordinatorSessionId, continuation.attemptId);
-            return { ok: true, result: original.body ? pageAttemptReport(original.body, continuation, original.source) : { success: false, code: 'original_report_unavailable', reason: original.reason } };
+            return { ok: true, result: original.body ? pageAttemptReport(original.body, continuation, original.source, original.completeness === 'envelope_unverified' ? 'envelope_unverified' : 'final_native') : { success: false, code: 'original_report_unavailable', reason: original.reason } };
         }
         return { ok: true, result: await continueReport(ports.execute, continuation) };
     }

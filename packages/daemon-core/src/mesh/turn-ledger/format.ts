@@ -194,6 +194,8 @@ export interface TurnNotifyScalars {
         finalAssistantPresent?: boolean;
         evidenceLevel?: string;
         summaryMayBeTruncated?: boolean;
+        /** Where the producer took `finalSummary` (`native_transcript`, `parsed_screen_fallback`, …). */
+        finalSummarySource?: string;
     };
 }
 

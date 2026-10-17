@@ -1,15 +1,28 @@
-/** Recover an exact durable capture or existing attempt evidence; never select the latest tail. */
+/** Recover an exact native window or, failing that, an unverified envelope. Never select the latest tail. */
 import { createHash } from 'node:crypto';
 import { SqliteAssistantRelayStore } from './assistant-relay-sqlite-store.js';
 import type { Database } from 'better-sqlite3';
 import type { TurnAttempt } from '../mesh/turn-ledger/types.js';
 import type { Execute } from './assistant-project-ports.js';
-import { isVisible, messageText } from './project-views.js';
+import { LOG } from '../logging/logger.js';
+import {
+    envelopeIsNativePrefix, partsOf, renderNativeReplies, selectNativeWindow,
+    type NativeReplyPart, type ReportCompleteness,
+} from './assistant-native-window.js';
 const rec = (v: unknown): Record<string, unknown> | null => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : null;
+/** v2: rc16 rows pinned a truncated body under a v1 ref that the upsert would not replace. */
+export const ATTEMPT_EVIDENCE_VERSION = 2;
 export interface ExactAttemptReportReference {
-    version: 1; attemptId: string; coordinatorSessionId: string; generation: number; evidenceRef: string;
+    version: 2; attemptId: string; coordinatorSessionId: string; generation: number; evidenceRef: string;
 }
-export interface RecoveredAttemptReport { body: string | null; source: string; reason?: string; provenance?: ExactAttemptReportReference }
+export interface RecoveredAttemptReport {
+    body: string | null;
+    source: string;
+    reason?: string;
+    completeness?: ReportCompleteness;
+    parts?: Array<{ at: number; chars: number }>;
+    provenance?: ExactAttemptReportReference;
+}
 
 export async function recoverAttemptReport(db: Database, attempt: TurnAttempt | null, meshId: string, sessionId: string, execute: Execute): Promise<RecoveredAttemptReport> {
     if (!attempt || attempt.scope !== 'plain' || attempt.sessionId !== sessionId || !attempt.terminal) return { body: null, source: 'unavailable', reason: 'exact_committed_attempt_not_found' };
@@ -77,48 +90,77 @@ export async function recoverAttemptReport(db: Database, attempt: TurnAttempt | 
         sourceEvent = original; payload = originalPayload; evidence = originalEvidence;
     }
     // The key binds an independently verified terminal/generation and its exact
-    // referenced source evidence. Old session-tail captures have no such provenance.
+    // referenced source evidence. A parts hash makes a corrected native window
+    // a different ref from the rc16 v1 row, so the upsert may replace it.
+    // Old session-tail captures have no such provenance and are not read.
     const hash = (text: string) => createHash('sha256').update(text).digest('hex');
-    const evidenceRef = JSON.stringify([1, attempt.generation, attempt.terminal.at, terminal.event_id,
-        hash(terminal.payload_json), sourceEvent.event_id, hash(sourceEvent.payload_json)]);
-    const provenance: ExactAttemptReportReference = { version: 1, attemptId: attempt.attemptId,
-        coordinatorSessionId: sessionId, generation: attempt.generation, evidenceRef };
+    const stable = [ATTEMPT_EVIDENCE_VERSION, attempt.generation, attempt.terminal.at, terminal.event_id,
+        hash(terminal.payload_json), sourceEvent.event_id, hash(sourceEvent.payload_json)];
     const store = new SqliteAssistantRelayStore(db);
-    const capture = (body: string, source: string): RecoveredAttemptReport => {
-        store.captureAttemptBody(attempt.attemptId, meshId, sessionId, body, Date.now(), evidenceRef);
-        return { body, source, provenance };
+    const provenanceFor = (evidenceRef: string): ExactAttemptReportReference => ({
+        version: ATTEMPT_EVIDENCE_VERSION, attemptId: attempt.attemptId,
+        coordinatorSessionId: sessionId, generation: attempt.generation, evidenceRef,
+    });
+    const envelopeText = (() => {
+        const envelope = rec(rec(payload?.local)?.envelope);
+        return typeof envelope?.finalSummary === 'string' && envelope.finalSummary.trim() ? envelope.finalSummary : null;
+    })();
+    const windowStart = attempt.acceptedAt - 1000;
+    const windowEnd = attempt.terminal.at;
+    const pooled: unknown[] = [];
+    const take = (messages: unknown): { ambiguous: boolean; bubbles: NativeReplyPart[] } => {
+        if (Array.isArray(messages)) pooled.push(...messages);
+        return selectNativeWindow(pooled, windowStart, windowEnd);
     };
-    const envelope = rec(rec(payload?.local)?.envelope);
-    if (typeof envelope?.finalSummary === 'string' && envelope.finalSummary) return capture(envelope.finalSummary, 'existing_attempt_envelope');
-    const anchors = new Set<number>();
-    if (isNativeReference(evidence) && typeof evidence?.messageAt === 'number') anchors.add(evidence.messageAt);
-    if (anchors.size !== 1) return { body: null, source: 'unavailable', reason: 'no_unique_original_native_bubble_reference' };
-    const at = [...anchors][0];
-    if (at < attempt.acceptedAt || at > attempt.terminal.at) return { body: null, source: 'unavailable', reason: 'native_reference_outside_attempt' };
-    const captured = store.readAttemptBody(attempt.attemptId, meshId, sessionId, Date.now(), evidenceRef);
-    if (captured) return { body: captured, source: 'durable_attempt_capture', provenance };
-    let ambiguous = false;
-    const match = (chat: Record<string, unknown>): string | null => {
-        const matches = (Array.isArray(chat.messages) ? chat.messages : []).filter(m => {
-            const r = rec(m); const timestamp = typeof r?.timestamp === 'number' ? r.timestamp : Date.parse(String(r?.timestamp ?? ''));
-            return isVisible(m) && ['assistant', 'agent'].includes(String(r?.role).toLowerCase()) && timestamp === at;
-        });
-        if (matches.length > 1) ambiguous = true;
-        return matches.length === 1 ? messageText(matches[0]) || null : null;
-    };
+    let selected: { ambiguous: boolean; bubbles: NativeReplyPart[] } = { ambiguous: false, bubbles: [] };
+    let sawChat = false;
     const chat = await execute('read_chat', { targetSessionId: sessionId, limit: 200 });
     if (chat.success) {
-        const body = match(chat);
-        if (ambiguous) return { body: null, source: 'unavailable', reason: 'ambiguous_original_native_bubble' };
-        if (body) return capture(body, 'exact_native_bubble');
+        sawChat = true;
+        selected = take(chat.messages);
+        if (selected.ambiguous) return { body: null, source: 'unavailable', reason: 'ambiguous_original_native_bubble' };
     }
-    for (let offset = 0; offset < 400; offset += 100) {
-        const history = await execute('chat_history', { targetSessionId: sessionId, offset, limit: 100, excludeRecentCount: 0 });
-        if (!history.success) break;
-        const body = match(history);
-        if (ambiguous) return { body: null, source: 'unavailable', reason: 'ambiguous_original_native_bubble' };
-        if (body) return capture(body, 'exact_native_history_bubble');
-        if (history.hasMore !== true) break;
+    if (!selected.bubbles.length && (!sawChat || chat.hasMore === true)) {
+        for (let offset = 0; offset < 400; offset += 100) {
+            const history = await execute('chat_history', { targetSessionId: sessionId, offset, limit: 100, excludeRecentCount: 0 });
+            if (!history.success) break;
+            sawChat = true;
+            selected = take(history.messages);
+            if (selected.ambiguous) return { body: null, source: 'unavailable', reason: 'ambiguous_original_native_bubble' };
+            if (history.hasMore !== true) break;
+        }
     }
+    // messageAt anchor, kept beside the window: one bubble whose timestamp is
+    // the evidence anchor. It does not override a non-empty window.
+    let anchorOutside = false;
+    let viaAnchor = false;
+    if (!selected.bubbles.length && isNativeReference(evidence) && typeof evidence?.messageAt === 'number') {
+        const at = evidence.messageAt;
+        if (at < attempt.acceptedAt || at > attempt.terminal.at) anchorOutside = true;
+        else {
+            const anchored = selectNativeWindow(pooled, at, at);
+            if (anchored.ambiguous) return { body: null, source: 'unavailable', reason: 'ambiguous_original_native_bubble' };
+            if (anchored.bubbles.length === 1) { selected = anchored; viaAnchor = true; }
+        }
+    }
+    const finishNative = (bubbles: NativeReplyPart[], source: string): RecoveredAttemptReport => {
+        if (envelopeText && !envelopeIsNativePrefix(envelopeText, bubbles)) {
+            LOG.warn('Assistant', `envelope_native_mismatch attempt=${attempt.attemptId} envelopeChars=${envelopeText.length} nativeChars=${bubbles.reduce((n, b) => n + b.chars, 0)}`);
+        }
+        const parts = partsOf(bubbles);
+        const evidenceRef = JSON.stringify([...stable, hash(parts.map((p) => `${p.at}:${p.chars}`).join('|'))]);
+        const body = renderNativeReplies(bubbles);
+        store.captureAttemptBody(attempt.attemptId, meshId, sessionId, body, Date.now(), evidenceRef, { completeness: 'final_native', parts });
+        return { body, source, completeness: 'final_native', parts, provenance: provenanceFor(evidenceRef) };
+    };
+    if (selected.bubbles.length) return finishNative(selected.bubbles, viaAnchor ? 'exact_native_bubble' : 'native_window');
+    const durable = store.readVerifiedAttemptBody(attempt.attemptId, meshId, sessionId, Date.now(), JSON.stringify(stable));
+    if (durable) return {
+        body: durable.body, source: 'durable_attempt_capture', completeness: 'final_native',
+        parts: durable.parts, provenance: provenanceFor(durable.evidenceRef),
+    };
+    // Unverified envelope is delivered flagged and is NOT stored as exact.
+    if (envelopeText) return { body: envelopeText, source: 'existing_attempt_envelope', completeness: 'envelope_unverified', provenance: provenanceFor(JSON.stringify(stable)) };
+    if (anchorOutside) return { body: null, source: 'unavailable', reason: 'native_reference_outside_attempt' };
     return { body: null, source: 'unavailable', reason: 'original_native_bubble_unavailable' };
 }

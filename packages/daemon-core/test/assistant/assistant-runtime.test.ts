@@ -295,7 +295,7 @@ it('actual runtime exact-reader port validates terminal/generation before durabl
     const store = new SqliteAssistantRelayStore(db);
     store.recordCommitted({ attemptId: attempt.attemptId, meshId: 'mesh_a', coordinatorSessionId: 'coord', committedAt: Date.now(), kind: 'relay', outcome: 'completed' });
     const spy = vi.spyOn(MeshRuntimeStore, 'getInstance').mockReturnValue({ db, turnStore: () => ({ getAttempt: (id: string) => id === attempt.attemptId ? attempt : null }) } as any);
-    routerExecute.mockResolvedValue({ success: true, messages: [{ role: 'assistant', timestamp: 190, content: 'exact report' }, { role: 'assistant', timestamp: 199, content: 'newer tail' }] });
+    routerExecute.mockResolvedValue({ success: true, messages: [{ role: 'assistant', timestamp: 190, content: 'exact report' }, { role: 'assistant', timestamp: 10_000, content: 'newer tail' }] });
     let hostedHere = true; let remoteReply: any = { body: 'unproven old-host tail', source: 'durable_attempt_capture' };
     setAssistantProjectPortsForTests(() => ({ listMeshes: () => [{ id: 'mesh_a' }], isHostedHere: () => hostedHere,
         remoteHost: () => ({ reachable: true }), callHost: async () => ({ ok: true, result: { result: remoteReply } }),
@@ -303,18 +303,22 @@ it('actual runtime exact-reader port validates terminal/generation before durabl
         execute: routerExecute }) as any);
     try {
         const port = buildAssistantRelayPorts(components(), { registry, store, metrics: null, sawCaller: () => false });
-        expect(await port.rehydrateAttemptReport!('mesh_a', 'coord', attempt.attemptId)).toBe('exact report');
-        routerExecute.mockClear(); routerExecute.mockResolvedValue({ success: true, messages: [{ role: 'assistant', timestamp: 199, content: 'newest tail' }] });
-        expect(await port.rehydrateAttemptReport!('mesh_a', 'coord', attempt.attemptId)).toBe('exact report');
+        expect(await port.rehydrateAttemptReport!('mesh_a', 'coord', attempt.attemptId)).toMatchObject({ body: 'exact report', completeness: 'final_native' });
+        routerExecute.mockClear(); routerExecute.mockResolvedValue({ success: true, messages: [{ role: 'assistant', timestamp: 10_000, content: 'newest tail' }] });
+        expect(await port.rehydrateAttemptReport!('mesh_a', 'coord', attempt.attemptId)).toMatchObject({ body: 'exact report', completeness: 'final_native', source: 'durable_attempt_capture' });
         expect(await port.rehydrateAttemptReport!('mesh_a', 'foreign', attempt.attemptId)).toBeNull();
         expect(await port.rehydrateAttemptReport!('mesh_a', 'coord', 'missing')).toBeNull();
+        routerExecute.mockClear();
         attempt.generation = generation + 1;
         expect(await port.rehydrateAttemptReport!('mesh_a', 'coord', attempt.attemptId)).toBeNull();
         expect(routerExecute).not.toHaveBeenCalled();
         attempt.generation = generation; hostedHere = false;
         expect(await port.rehydrateAttemptReport!('mesh_a', 'coord', attempt.attemptId)).toBeNull();
         remoteReply = await recoverAttemptReport(db, attempt, 'mesh_a', 'coord', routerExecute);
-        expect(await port.rehydrateAttemptReport!('mesh_a', 'coord', attempt.attemptId)).toBe('exact report');
+        expect(await port.rehydrateAttemptReport!('mesh_a', 'coord', attempt.attemptId)).toMatchObject({ body: 'exact report', completeness: 'final_native' });
+        remoteReply = { ...remoteReply, provenance: { ...remoteReply.provenance, version: 1 } };
+        expect(await port.rehydrateAttemptReport!('mesh_a', 'coord', attempt.attemptId)).toMatchObject({ body: 'exact report', completeness: 'envelope_unverified' });
+        remoteReply = { ...remoteReply, provenance: { ...remoteReply.provenance, version: 2 } };
         remoteReply = { ...remoteReply, provenance: { ...remoteReply.provenance, attemptId: 'foreign' } };
         expect(await port.rehydrateAttemptReport!('mesh_a', 'coord', attempt.attemptId)).toBeNull();
         remoteReply.provenance = { ...remoteReply.provenance, attemptId: attempt.attemptId, coordinatorSessionId: 'foreign' };

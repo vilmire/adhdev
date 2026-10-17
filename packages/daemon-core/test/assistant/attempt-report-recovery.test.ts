@@ -62,7 +62,7 @@ function producer(file = ':memory:') {
     return { db, ledger, start, finish };
 }
 const nativeReader = (body = 'original report', at = 190) => vi.fn(async () => ({ success: true,
-    messages: [{ role: 'assistant', timestamp: at, content: body }, { role: 'assistant', timestamp: at + 9, content: 'unrelated latest tail' }], hasMore: false }));
+    messages: [{ role: 'assistant', timestamp: at, content: body }, { role: 'assistant', timestamp: at + 1e12, content: 'unrelated latest tail' }], hasMore: false }));
 it.each(['envelope', 'native', 'hold'] as const)('recovers the real plain %s cause plus derived commit', async mode => {
     const { db, finish, ledger } = producer(); const attempt = finish(undefined, mode);
     const rows = ledger.store.listEvents(attempt.attemptId);
@@ -70,8 +70,8 @@ it.each(['envelope', 'native', 'hold'] as const)('recovers the real plain %s cau
     if (mode === 'hold') expect(rows.some(r => r.kind === 'notify')).toBe(false);
     const execute = nativeReader();
     expect(await recoverAttemptReport(db, attempt, 'mesh', 'coord', execute)).toMatchObject({ body: 'original report',
-        source: mode === 'envelope' ? 'existing_attempt_envelope' : 'exact_native_bubble' });
-    if (mode === 'envelope') expect(execute).not.toHaveBeenCalled();
+        source: 'native_window', completeness: 'final_native' });
+    expect(execute).toHaveBeenCalled();
 });
 it('validates real producer evidence before durable lookup after reopen, with complete >4000 pages and later observations', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'exact-attempt-restart-')); dirs.push(dir); const file = join(dir, 'runtime.db');
@@ -89,7 +89,8 @@ it('validates real producer evidence before durable lookup after reopen, with co
     const reopened = new Database(file); dbs.push(reopened);
     const execute = vi.fn(async () => ({ success: false }));
     const result = await recoverAttemptReport(reopened, attempt, 'mesh', 'coord', execute);
-    expect(result).toMatchObject({ body, source: 'durable_attempt_capture', provenance: { version: 1, attemptId: attempt.attemptId, generation: attempt.generation } });
+    expect(result).toMatchObject({ body, source: 'durable_attempt_capture', completeness: 'final_native', provenance: { version: 2, attemptId: attempt.attemptId, generation: attempt.generation } });
+    execute.mockClear();
     const pages: string[] = []; let offset = 0;
     for (;;) {
         const page = pageAttemptReport(result.body!, { attemptId: attempt.attemptId, coordinatorSessionId: 'coord', offset }, result.source);
@@ -146,7 +147,7 @@ it('refuses ambiguous native bubbles and never trusts a legacy session tail', as
     const { db, finish } = producer(); const attempt = finish();
     db.prepare('INSERT INTO assistant_attempt_bodies(attempt_id,mesh_id,coordinator_session_id,captured_at,body) VALUES(?,?,?,?,?)')
         .run(attempt.attemptId, 'mesh', 'coord', Date.now(), 'unproven latest tail');
-    const absent = vi.fn(async () => ({ success: true, messages: [{ role: 'assistant', timestamp: 199, content: 'unrelated latest' }], hasMore: false }));
+    const absent = vi.fn(async () => ({ success: true, messages: [{ role: 'assistant', timestamp: 10_000, content: 'unrelated latest' }], hasMore: false }));
     expect((await recoverAttemptReport(db, attempt, 'mesh', 'coord', absent)).body).toBeNull();
     const execute = vi.fn(async () => ({ success: true, messages: [
         { role: 'assistant', timestamp: 190, content: 'one' }, { role: 'assistant', timestamp: 190, content: 'two' },
@@ -158,26 +159,139 @@ it.each([false, true])('delayed relay commits retain exact real-attempt attribut
     const attempts = [finish(), finish(start('second', 300), 'native', '', 400)];
     let release!: () => void; const delayed = new Promise<void>(r => { release = r });
     const execute = vi.fn(async () => { await delayed; return { success: true, messages: [
-        { role: 'assistant', timestamp: 50, content: 'stale tail' },
+        { role: 'assistant', timestamp: -5000, content: 'stale tail' },
         { role: 'assistant', timestamp: 390, content: 'second turn body' },
-        { role: 'assistant', timestamp: 399, content: 'newer tail' },
+        { role: 'assistant', timestamp: 500, content: 'newer tail' },
     ], hasMore: false }; });
     let handler: (e: any) => void = () => {};
     const tail = vi.fn(async () => 'second turn body');
+    const timers: Array<{ at: number; fn: () => void; id: number }> = [];
+    let now = 0; let nextTimer = 1;
+    const clock = {
+        now: () => now,
+        setTimeout: (fn: () => void, ms: number) => { const id = nextTimer++; timers.push({ at: now + ms, fn, id }); return id; },
+        clearTimeout: (h: unknown) => { const i = timers.findIndex((x) => x.id === h); if (i >= 0) timers.splice(i, 1); },
+        advance(ms: number) {
+            const end = now + ms;
+            for (;;) {
+                const due = timers.filter((x) => x.at <= end).sort((a, b) => a.at - b.at)[0];
+                if (!due) break;
+                timers.splice(timers.indexOf(due), 1);
+                now = due.at; due.fn();
+            }
+            now = end;
+        },
+    };
     const ports = { subscribe: (h: typeof handler) => { handler = h; return () => {} }, coordinatorMeshOf: () => 'mesh', projectSlug: () => 'p',
         readCoordinatorTail: tail, rehydrateAttemptReport: (mesh: string, sid: string, id: string) =>
             recoverAttemptReport(db, attempts.find(a => a.attemptId === id) ?? null, mesh, sid, execute).then(r => r.body),
         meshWork: () => null, hasAssistant: () => true, assistantSessionId: () => null, isAssistantReady: () => false,
-        submit: async () => ({ kind: 'delivered' as const }), inputLog: new AssistantInputLog(), store };
+        submit: async () => ({ kind: 'delivered' as const }), inputLog: new AssistantInputLog(), store, clock };
     const relay = new AssistantRelay(ports); relay.start(); relay.openThread('mesh');
     for (const a of attempts) {
         if (remote) relay.onRemoteCommitted('mesh', { attemptId: a.attemptId, coordinatorSessionId: 'coord', outcome: 'completed', body: 'second turn body' });
         else handler({ kind: 'turn', phase: 'committed', sessionId: 'coord', attemptId: a.attemptId, generation: a.generation, at: Date.now(), outcome: 'completed' });
     }
-    await Promise.resolve(); release(); await Promise.all([...(relay as any).attemptBodyCapture.values()]); relay.stop();
+    await Promise.resolve(); release();
+    for (let i = 0; i < 6; i++) await Promise.resolve();
+    const pending = [...(relay as any).attemptBodyCapture.values()];
+    relay.stop(); clock.advance(1000);
+    await Promise.all(pending);
     expect(tail).not.toHaveBeenCalled();
     expect(db.prepare('SELECT attempt_id FROM assistant_attempt_bodies').all()).toEqual([{ attempt_id: attempts[1].attemptId }]);
     const restarted = new AssistantRelay({ ...ports, store: new SqliteAssistantRelayStore(db) }); restarted.start();
     const text = (await restarted.pullPending(null)).map(e => e.text).join('\n'); restarted.stop();
     expect(text).toContain('original report unavailable'); expect(text.match(/second turn body/g)).toHaveLength(1);
+});
+
+it('relays a short multi-sentence reply whole when it wraps past one screen row', async () => {
+    const { db, finish } = producer();
+    const full = 'Sentence one is already past eighty columns on a wrapped screen. Sentence two stays in the same bubble. Sentence three finishes the reply.';
+    expect(full.length).toBeGreaterThan(80);
+    const attempt = finish(undefined, 'envelope', full.slice(0, 80));
+    const store = new SqliteAssistantRelayStore(db);
+    store.recordCommitted({ attemptId: attempt.attemptId, meshId: 'mesh', coordinatorSessionId: 'coord', committedAt: Date.now(), kind: 'relay', outcome: 'completed' });
+    const result = await recoverAttemptReport(db, attempt, 'mesh', 'coord', nativeReader(full));
+    expect(result).toMatchObject({ body: full, source: 'native_window', completeness: 'final_native' });
+    expect(result.body).not.toBe(full.slice(0, 80));
+    const page = pageAttemptReport(result.body!, { attemptId: attempt.attemptId, coordinatorSessionId: 'coord', offset: 0 }, result.source, result.completeness);
+    expect(page.complete).toBe(true);
+});
+
+it('relays a long native reply whole, in 4000-character pages with a stable report id', async () => {
+    const { db, finish } = producer();
+    const body = `${'n'.repeat(5190)}EXACT-TAIL`;
+    expect(body.length).toBe(5200);
+    const attempt = finish(undefined, 'native', '', 200);
+    const store = new SqliteAssistantRelayStore(db);
+    store.recordCommitted({ attemptId: attempt.attemptId, meshId: 'mesh', coordinatorSessionId: 'coord', committedAt: Date.now(), kind: 'relay', outcome: 'completed' });
+    const result = await recoverAttemptReport(db, attempt, 'mesh', 'coord', nativeReader(body));
+    expect(result.body).toBe(body);
+    expect(result.completeness).toBe('final_native');
+    const cursor = { attemptId: attempt.attemptId, coordinatorSessionId: 'coord', offset: 0 };
+    const first = pageAttemptReport(result.body!, cursor, result.source, result.completeness);
+    const second = pageAttemptReport(result.body!, { ...cursor, offset: first.nextOffset!, reportId: first.reportId }, result.source, result.completeness);
+    expect(first.text).toHaveLength(4000);
+    expect(second.text).toHaveLength(1200);
+    expect(second.complete).toBe(true);
+    expect(second.reportId).toBe(first.reportId);
+    expect(first.text + second.text).toBe(body);
+    expect(second.totalChars).toBe(5200);
+});
+
+it('relays every native reply in one attempt, oldest first', async () => {
+    const { db, finish } = producer();
+    const attempt = finish();
+    const store = new SqliteAssistantRelayStore(db);
+    store.recordCommitted({ attemptId: attempt.attemptId, meshId: 'mesh', coordinatorSessionId: 'coord', committedAt: Date.now(), kind: 'relay', outcome: 'completed' });
+    const execute = vi.fn(async () => ({ success: true, messages: [
+        { role: 'assistant', timestamp: 180, content: 'Second native reply.' },
+        { role: 'assistant', kind: 'thinking', timestamp: 160, content: 'hidden thinking' },
+        { role: 'assistant', timestamp: 150, content: 'First native reply.' },
+    ], hasMore: false }));
+    const result = await recoverAttemptReport(db, attempt, 'mesh', 'coord', execute);
+    expect(result.completeness).toBe('final_native');
+    expect(result.parts).toEqual([{ at: 150, chars: 'First native reply.'.length }, { at: 180, chars: 'Second native reply.'.length }]);
+    expect(result.body).toContain('[reply 1/2 ·');
+    expect(result.body).toContain('First native reply.');
+    expect(result.body).toContain('[reply 2/2 ·');
+    expect(result.body).toContain('Second native reply.');
+    expect(result.body).not.toContain('hidden thinking');
+    expect(result.body!.indexOf('First native reply.')).toBeLessThan(result.body!.indexOf('Second native reply.'));
+});
+
+it('flags an envelope-only report incomplete and does not store it as exact', async () => {
+    const { db, finish } = producer();
+    const row = 'only the first wrapped screen row';
+    const attempt = finish(undefined, 'envelope', row);
+    const store = new SqliteAssistantRelayStore(db);
+    store.recordCommitted({ attemptId: attempt.attemptId, meshId: 'mesh', coordinatorSessionId: 'coord', committedAt: Date.now(), kind: 'relay', outcome: 'completed' });
+    db.prepare(`INSERT INTO assistant_attempt_bodies(attempt_id,mesh_id,coordinator_session_id,captured_at,body,evidence_ref,completeness)
+        VALUES(?,?,?,?,?,?,?)`).run(attempt.attemptId, 'mesh', 'coord', Date.now(), 'pinned v1 row', JSON.stringify([1, 0]), 'final_native');
+    const execute = vi.fn(async () => ({ success: true, messages: [
+        { role: 'assistant', timestamp: attempt.acceptedAt - 1001, content: 'before the window' },
+        { role: 'assistant', timestamp: attempt.terminal!.at + 1, content: 'after the window' },
+    ], hasMore: false }));
+    const result = await recoverAttemptReport(db, attempt, 'mesh', 'coord', execute);
+    expect(result).toMatchObject({ body: row, source: 'existing_attempt_envelope', completeness: 'envelope_unverified' });
+    expect(result.provenance?.version).toBe(2);
+    const page = pageAttemptReport(result.body!, { attemptId: attempt.attemptId, coordinatorSessionId: 'coord', offset: 0 }, result.source, 'envelope_unverified');
+    expect(page.complete).toBe(false);
+    expect(page.sourceComplete).toBe(false);
+    expect(db.prepare('SELECT body, evidence_ref FROM assistant_attempt_bodies').get()).toEqual({ body: 'pinned v1 row', evidence_ref: JSON.stringify([1, 0]) });
+});
+
+it('replaces a pinned v1 body when the native window is a different evidence ref', async () => {
+    const { db, finish } = producer();
+    const attempt = finish(undefined, 'envelope', 'truncated row');
+    const store = new SqliteAssistantRelayStore(db);
+    store.recordCommitted({ attemptId: attempt.attemptId, meshId: 'mesh', coordinatorSessionId: 'coord', committedAt: Date.now(), kind: 'relay', outcome: 'completed' });
+    db.prepare(`INSERT INTO assistant_attempt_bodies(attempt_id,mesh_id,coordinator_session_id,captured_at,body,evidence_ref)
+        VALUES(?,?,?,?,?,?)`).run(attempt.attemptId, 'mesh', 'coord', Date.now(), 'truncated row', JSON.stringify([1, attempt.generation]));
+    const full = 'truncated row plus the rest of the native reply that the screen scrape dropped.';
+    const result = await recoverAttemptReport(db, attempt, 'mesh', 'coord', nativeReader(full));
+    expect(result.body).toBe(full);
+    expect(result.provenance?.version).toBe(2);
+    expect(JSON.parse(result.provenance!.evidenceRef)[0]).toBe(2);
+    expect(store.readAttemptBody(attempt.attemptId, 'mesh', 'coord', Date.now(), result.provenance!.evidenceRef)).toBe(full);
 });

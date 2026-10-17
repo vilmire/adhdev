@@ -16,11 +16,14 @@ import {
     ATTEMPT_BODY_TTL_MS, ATTEMPT_BODY_MAX_CHARS, ATTEMPT_BODY_MAX_ROWS, ATTEMPT_BODY_TOTAL_BYTES,
     RELAY_DELIVERED_RETENTION_MS,
     THREAD_CLOSED_RETENTION_MS,
+    evidencePrefixMatches,
     toUnrenderedCounts,
+    type AttemptBodyMeta,
     type AssistantRelayRow,
     type AssistantRelayStore,
     type AssistantThreadRow,
     type UnrenderedRelayCounts,
+    type VerifiedAttemptBody,
 } from './assistant-relay-store.js';
 
 interface ThreadDbRow { mesh_id: string; opened_at: number; last_send_at: number; closed_at: number | null }
@@ -101,17 +104,24 @@ export class SqliteAssistantRelayStore implements AssistantRelayStore {
         return toUnrenderedCounts(new Map(rows.map((r) => [r.mesh_id, Number(r.n)])));
     }
 
-    captureAttemptBody(attemptId: string, meshId: string, sessionId: string, body: string, at: number, evidenceRef: string): void {
+    captureAttemptBody(attemptId: string, meshId: string, sessionId: string, body: string, at: number, evidenceRef: string, meta?: AttemptBodyMeta): void {
         if (!evidenceRef || !body || body.length > ATTEMPT_BODY_MAX_CHARS) return; // never truncate an exact report
+        if (meta?.completeness === 'envelope_unverified') return; // never persist an unverified body as exact
+        const partsJson = JSON.stringify(meta?.parts ?? []);
+        const completeness = meta?.completeness ?? null;
         this.db.transaction(() => {
+            // Same evidence ref keeps the first exact body. A changed ref (v1 truncated
+            // row, or a new parts hash) is replaced. A NULL ref is the legacy unproven row.
             this.db.prepare(`INSERT INTO assistant_attempt_bodies
-                (attempt_id, mesh_id, coordinator_session_id, captured_at, body, evidence_ref)
-                SELECT attempt_id, mesh_id, coordinator_session_id, ?, ?, ? FROM assistant_relays
+                (attempt_id, mesh_id, coordinator_session_id, captured_at, body, evidence_ref, parts_json, completeness)
+                SELECT attempt_id, mesh_id, coordinator_session_id, ?, ?, ?, ?, ? FROM assistant_relays
                 WHERE attempt_id = ? AND mesh_id = ? AND coordinator_session_id = ?
-                ON CONFLICT(attempt_id) DO UPDATE SET body=excluded.body, captured_at=excluded.captured_at, evidence_ref=excluded.evidence_ref
-                WHERE assistant_attempt_bodies.evidence_ref IS NULL
-                  AND assistant_attempt_bodies.mesh_id=excluded.mesh_id
-                  AND assistant_attempt_bodies.coordinator_session_id=excluded.coordinator_session_id`).run(at, body, evidenceRef, attemptId, meshId, sessionId);
+                ON CONFLICT(attempt_id) DO UPDATE SET
+                    body=excluded.body, captured_at=excluded.captured_at, evidence_ref=excluded.evidence_ref,
+                    parts_json=excluded.parts_json, completeness=excluded.completeness
+                WHERE assistant_attempt_bodies.mesh_id=excluded.mesh_id
+                  AND assistant_attempt_bodies.coordinator_session_id=excluded.coordinator_session_id
+                  AND (assistant_attempt_bodies.evidence_ref IS NULL OR assistant_attempt_bodies.evidence_ref != excluded.evidence_ref)`).run(at, body, evidenceRef, partsJson, completeness, attemptId, meshId, sessionId);
             this.pruneBodies(at);
         })();
     }
@@ -121,6 +131,20 @@ export class SqliteAssistantRelayStore implements AssistantRelayStore {
             WHERE attempt_id = ? AND mesh_id = ? AND coordinator_session_id = ? AND captured_at >= ? AND evidence_ref = ?`)
             .get(attemptId, meshId, sessionId, now - ATTEMPT_BODY_TTL_MS, evidenceRef) as { body: string } | undefined;
         return row?.body ?? null;
+    }
+
+    readVerifiedAttemptBody(attemptId: string, meshId: string, sessionId: string, now: number, stablePrefix: string): VerifiedAttemptBody | null {
+        const row = this.db.prepare(`SELECT body, evidence_ref, parts_json, completeness FROM assistant_attempt_bodies
+            WHERE attempt_id = ? AND mesh_id = ? AND coordinator_session_id = ? AND captured_at >= ?`)
+            .get(attemptId, meshId, sessionId, now - ATTEMPT_BODY_TTL_MS) as { body: string; evidence_ref: string | null; parts_json: string | null; completeness: string | null } | undefined;
+        if (!row?.evidence_ref || !evidencePrefixMatches(row.evidence_ref, stablePrefix)) return null;
+        if (row.completeness && row.completeness !== 'final_native') return null;
+        let parts: Array<{ at: number; chars: number }> = [];
+        try {
+            const parsed = JSON.parse(row.parts_json || '[]') as unknown;
+            if (Array.isArray(parsed)) parts = parsed.filter((p): p is { at: number; chars: number } => !!p && typeof p === 'object' && typeof (p as { at?: unknown }).at === 'number');
+        } catch { /* parts are optional for coverage */ }
+        return { body: row.body, evidenceRef: row.evidence_ref, parts };
     }
 
     private pruneBodies(now: number): void {
@@ -147,7 +171,7 @@ export class SqliteAssistantRelayStore implements AssistantRelayStore {
 export const ASSISTANT_METRIC_COLUMNS = [
     'assistant_sends', 'human_sends', 'relays', 'project_reads', 'memory_writes', 'memory_discards',
     'skill_views', 'skill_attaches', 'skill_writes', 'review_turns', 'review_turns_with_writes',
-    'review_writes_applied', 'review_writes_approved',
+    'review_writes_applied', 'review_writes_approved', 'relay_gaps',
 ] as const;
 export type AssistantMetricColumn = typeof ASSISTANT_METRIC_COLUMNS[number];
 

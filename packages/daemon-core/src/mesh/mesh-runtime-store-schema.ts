@@ -206,6 +206,8 @@ export function ensureAssistantRelaySchema(db: MeshRuntimeStore['db']): void {
             coordinator_session_id TEXT NOT NULL,
             captured_at INTEGER NOT NULL,
             evidence_ref TEXT,
+            parts_json TEXT,
+            completeness TEXT,
             body TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_assistant_attempt_bodies_age ON assistant_attempt_bodies(captured_at);
@@ -256,6 +258,7 @@ export function ensureAssistantRelaySchema(db: MeshRuntimeStore['db']): void {
             review_turns_with_writes INTEGER NOT NULL DEFAULT 0,
             review_writes_applied INTEGER NOT NULL DEFAULT 0,
             review_writes_approved INTEGER NOT NULL DEFAULT 0,
+            relay_gaps INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (day, mesh_id)
         );
 
@@ -269,9 +272,11 @@ export function ensureAssistantRelaySchema(db: MeshRuntimeStore['db']): void {
     `);
     const bodyCols = new Set((db.prepare('PRAGMA table_info(assistant_attempt_bodies)').all() as Array<{ name: string }>).map(r => r.name));
     if (!bodyCols.has('evidence_ref')) db.exec('ALTER TABLE assistant_attempt_bodies ADD COLUMN evidence_ref TEXT');
+    if (!bodyCols.has('parts_json')) db.exec('ALTER TABLE assistant_attempt_bodies ADD COLUMN parts_json TEXT');
+    if (!bodyCols.has('completeness')) db.exec('ALTER TABLE assistant_attempt_bodies ADD COLUMN completeness TEXT');
     // Additive columns for tables created before 2026-10-08 (research Q7 / M7).
     const cols = new Set((db.prepare('PRAGMA table_info(assistant_metric_daily)').all() as Array<{ name: string }>).map((r) => r.name));
-    for (const c of ['review_writes_applied', 'review_writes_approved']) {
+    for (const c of ['review_writes_applied', 'review_writes_approved', 'relay_gaps']) {
         if (!cols.has(c)) db.exec(`ALTER TABLE assistant_metric_daily ADD COLUMN ${c} INTEGER NOT NULL DEFAULT 0`);
     }
     // Additive column for relay tables created before 2026-10-10. Existing rows

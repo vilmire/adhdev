@@ -62,10 +62,27 @@ export interface AssistantRelayStore {
     /** Rows that settled without their own body being sent (silent loss). */
     countUnrendered(): UnrenderedRelayCounts;
     /** Caller must validate terminal/generation/native provenance before storing or reading. */
-    captureAttemptBody(attemptId: string, meshId: string, sessionId: string, body: string, at: number, evidenceRef: string): void;
+    captureAttemptBody(attemptId: string, meshId: string, sessionId: string, body: string, at: number, evidenceRef: string, meta?: AttemptBodyMeta): void;
     readAttemptBody(attemptId: string, meshId: string, sessionId: string, now: number, evidenceRef: string): string | null;
+    /**
+     * A v2 exact capture whose evidence ref starts with `stablePrefix`
+     * (version, generation, terminal, source hashes — not the parts hash).
+     * v1 rows are not returned: they pinned a truncated screen row.
+     */
+    readVerifiedAttemptBody(attemptId: string, meshId: string, sessionId: string, now: number, stablePrefix: string): VerifiedAttemptBody | null;
     /** Retention: bodies after 24 h, delivered rows after 7 d, closed threads after 30 d. */
     prune(now: number): void;
+}
+
+export interface AttemptBodyMeta {
+    completeness: 'final_native' | 'envelope_unverified';
+    parts?: Array<{ at: number; chars: number }>;
+}
+
+export interface VerifiedAttemptBody {
+    body: string;
+    evidenceRef: string;
+    parts: Array<{ at: number; chars: number }>;
 }
 
 export const ATTEMPT_BODY_TTL_MS = 24 * 60 * 60_000;
@@ -76,6 +93,17 @@ export const ATTEMPT_BODY_TOTAL_BYTES = 8 * ATTEMPT_BODY_MAX_CHARS;
 export const RELAY_DELIVERED_RETENTION_MS = 7 * 24 * 60 * 60_000;
 export const THREAD_CLOSED_RETENTION_MS = 30 * 24 * 60 * 60_000;
 
+/** v2 evidence refs are a JSON array. `stablePrefix` is the array without the parts hash. */
+export function evidencePrefixMatches(evidenceRef: string, stablePrefix: string): boolean {
+    try {
+        const arr = JSON.parse(evidenceRef) as unknown;
+        if (!Array.isArray(arr) || arr[0] !== 2) return false;
+        return JSON.stringify(arr.slice(0, 7)) === stablePrefix;
+    } catch {
+        return false;
+    }
+}
+
 /** Shared shaping so both store implementations order the counts the same way. */
 export function toUnrenderedCounts(byMesh: ReadonlyMap<string, number>): UnrenderedRelayCounts {
     const rows = [...byMesh.entries()]
@@ -85,7 +113,7 @@ export function toUnrenderedCounts(byMesh: ReadonlyMap<string, number>): Unrende
 }
 
 export class InMemoryAssistantRelayStore implements AssistantRelayStore {
-    private readonly bodies = new Map<string, { meshId: string; sessionId: string; body: string; at: number; evidenceRef: string }>();
+    private readonly bodies = new Map<string, { meshId: string; sessionId: string; body: string; at: number; evidenceRef: string; parts: Array<{ at: number; chars: number }> }>();
     private readonly threads = new Map<string, AssistantThreadRow>();
     private readonly relays = new Map<string, AssistantRelayRow>();
 
@@ -140,15 +168,25 @@ export class InMemoryAssistantRelayStore implements AssistantRelayStore {
         return toUnrenderedCounts(byMesh);
     }
 
-    captureAttemptBody(attemptId: string, meshId: string, sessionId: string, body: string, at: number, evidenceRef: string): void {
+    captureAttemptBody(attemptId: string, meshId: string, sessionId: string, body: string, at: number, evidenceRef: string, meta?: AttemptBodyMeta): void {
         const row = this.relays.get(attemptId);
         if (!row || row.meshId !== meshId || row.coordinatorSessionId !== sessionId || !evidenceRef || !body || body.length > ATTEMPT_BODY_MAX_CHARS) return;
-        if (!this.bodies.has(attemptId)) this.bodies.set(attemptId, { meshId, sessionId, body, at, evidenceRef });
+        if (meta?.completeness === 'envelope_unverified') return; // never persist an unverified body as exact
+        const existing = this.bodies.get(attemptId);
+        // Same ref keeps the first exact body. A different ref (v1 → v2, or a new parts hash) replaces it.
+        if (existing && existing.evidenceRef === evidenceRef) { this.pruneBodies(at); return; }
+        this.bodies.set(attemptId, { meshId, sessionId, body, at, evidenceRef, parts: meta?.parts ?? [] });
         this.pruneBodies(at);
     }
     readAttemptBody(attemptId: string, meshId: string, sessionId: string, now: number, evidenceRef: string): string | null {
         const b = this.bodies.get(attemptId);
         return b && b.evidenceRef === evidenceRef && !!evidenceRef && b.meshId === meshId && b.sessionId === sessionId && now - b.at <= ATTEMPT_BODY_TTL_MS ? b.body : null;
+    }
+    readVerifiedAttemptBody(attemptId: string, meshId: string, sessionId: string, now: number, stablePrefix: string): VerifiedAttemptBody | null {
+        const b = this.bodies.get(attemptId);
+        if (!b || b.meshId !== meshId || b.sessionId !== sessionId || now - b.at > ATTEMPT_BODY_TTL_MS) return null;
+        if (!evidencePrefixMatches(b.evidenceRef, stablePrefix)) return null;
+        return { body: b.body, evidenceRef: b.evidenceRef, parts: b.parts };
     }
     private pruneBodies(now: number): void {
         let total = 0, count = 0;

@@ -441,7 +441,9 @@ export function emitGeneratingCompleted(host: CompletionEmitHost, opts: {
                     || opts.evidenceLevel
                     || typeof opts.completionDiagnostic?.source === 'string'
                     || typeof opts.completionDiagnostic?.wedgedObservedStatus === 'string'
-                    || typeof opts.completionDiagnostic?.nativeTurnId === 'string') ? {
+                    || typeof opts.completionDiagnostic?.nativeTurnId === 'string'
+                    || opts.completionDiagnostic?.finalSummaryMayBeTruncated === true
+                    || typeof opts.completionDiagnostic?.finalSummarySource === 'string') ? {
                     notice: {
                         completionMetadata: {
                             ...(typeof opts.completionDiagnostic?.reason === 'string' ? { diagnosticReason: opts.completionDiagnostic.reason } : {}),
@@ -463,6 +465,8 @@ export function emitGeneratingCompleted(host: CompletionEmitHost, opts: {
                             ...(typeof opts.completionDiagnostic?.source === 'string' ? { source: opts.completionDiagnostic.source } : {}),
                             ...(typeof opts.completionDiagnostic?.wedgedObservedStatus === 'string' ? { wedgedObservedStatus: opts.completionDiagnostic.wedgedObservedStatus } : {}),
                             ...(typeof opts.completionDiagnostic?.nativeTurnId === 'string' ? { nativeTurnId: opts.completionDiagnostic.nativeTurnId } : {}),
+                            ...(opts.completionDiagnostic?.finalSummaryMayBeTruncated === true ? { summaryMayBeTruncated: true } : {}),
+                            ...(typeof opts.completionDiagnostic?.finalSummarySource === 'string' ? { finalSummarySource: opts.completionDiagnostic.finalSummarySource } : {}),
                         },
                     },
                 } : {}),

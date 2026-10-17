@@ -1,4 +1,6 @@
 import { reportBodyId } from './report-continuation.js';
+import { LOG } from '../logging/logger.js';
+import type { AttemptReportSnapshot, AuditedCoordinatorReply } from './assistant-native-window.js';
 /**
  * Assistant relay (design 2026-10-07-assistant-layer.md §4.3 "수신", §4.8;
  * appendix B). Pure core with injected ports; boot wiring is a later unit.
@@ -32,9 +34,9 @@ import type { AssistantRelayStore } from './assistant-relay-store.js';
 import { busyInputModeToSendPolicy, type BusyInputMode } from './assistant-registry.js';
 import { countTerminalSubmits, TERMINAL_SUBMITS_PER_WRITE_CAP } from './assistant-human-input.js';
 import {
-    RELAY_BACKLOG_FOLD_AFTER_MS, RELAY_DELIVERY_MAX_CHARS, RELAY_IDLE_CLOSE_GRACE_MS, RELAY_MAX_WAIT_MS, RELAY_PROGRESS_AFTER_MS, RELAY_QUIET_MS,
+    RELAY_BACKLOG_FOLD_AFTER_MS, RELAY_DELIVERY_MAX_CHARS, RELAY_IDLE_CLOSE_GRACE_MS, RELAY_MAX_WAIT_MS, RELAY_NATIVE_RETRY_MS, RELAY_NATIVE_WAIT_MS, RELAY_PROGRESS_AFTER_MS, RELAY_QUIET_MS,
     RELAY_STALL_AFTER_MS, buildApprovalSignal, buildCoordinatorEndedSignal, buildFoldedBacklogLine, buildProgressSignal,
-    buildMissedReportsLine, buildRelayEnvelope, buildRestartNote, buildStallSignal, buildUnreachableRelay, codePoints, relayMessageId,
+    buildMissedReportsLine, buildRelayEnvelope, buildRestartNote, buildStallSignal, buildUncoveredReplyGap, buildUnreachableRelay, codePoints, relayMessageId,
     shouldAddRestartNote,
     type RestartContext,
 } from './assistant-relay-format.js';
@@ -87,8 +89,17 @@ export interface AssistantRelayPorts {
     projectSlug(meshId: string): string | null;
     /** Session-only diagnostic projection. Never evidence for an exact attempt capture. */
     readCoordinatorTail(sessionId: string): Promise<string | null>;
-    /** Existing evidence only; exact attempt/session/mesh, never the newest tail. */
-    rehydrateAttemptReport?(meshId: string, sessionId: string, attemptId: string): Promise<string | null>;
+    /**
+     * Existing evidence only; exact attempt/session/mesh, never the newest tail
+     * and never `readCoordinatorTail`. A string is a legacy exact body
+     * (`final_native`). A snapshot without `completeness: 'final_native'`
+     * (old remote hosts) is unverified.
+     */
+    rehydrateAttemptReport?(meshId: string, sessionId: string, attemptId: string): Promise<AttemptReportSnapshot | string | null>;
+    /** Native finals since `sinceMs` for the missing-relay detector. */
+    auditCoordinatorReplies?(sinceMs: number): Promise<readonly AuditedCoordinatorReply[]>;
+    /** Local metric bump for one uncovered native final. */
+    onRelayGap?(klass: 'no_attempt' | 'inside_attempt' | 'restart_closed', at: number): void;
     /** Content-free `[Mesh]` line (`buildMeshStatusLineForNotification`). */
     meshStatusLine?(meshId: string): string | null;
     meshWork(meshId: string): MeshWorkCounts | null;
@@ -159,6 +170,12 @@ export class AssistantRelay {
     /** Exact attempt reports returned by the authorized evidence reader. The
      * memory cache clears on delivery; the reader retains bounded durable captures. */
     private readonly attemptBodies = new Map<string, string | null>();
+    private readonly attemptMeta = new Map<string, AttemptReportSnapshot>();
+    /** Exact bodies whose own relay was sent. The detector treats these as coverage. */
+    private readonly renderedCoverage: Array<{ sessionId: string; body: string; parts: Array<{ at: number; chars: number }> }> = [];
+    private readonly flaggedReplies = new Set<string>();
+    private lastAuditAt = 0;
+    private auditing = false;
     /** In-flight local captures (attemptId → settle promise); `renderRelay` awaits these instead of racing them. */
     private readonly attemptBodyCapture = new Map<string, Promise<void>>();
     private queue: Item[] = [];
@@ -196,6 +213,7 @@ export class AssistantRelay {
             }
         }
         this.queue.push(...byMesh.values());
+        this.lastAuditAt = this.clock.now();
         this.unsubscribe = this.ports.subscribe((e) => this.onEvent(e));
     }
 
@@ -206,6 +224,7 @@ export class AssistantRelay {
         this.batches.clear();
         this.attemptBodyCapture.clear();
         this.attemptBodies.clear();
+        this.attemptMeta.clear();
     }
 
     /** `project_send` accepted: open/refresh the project's thread. */
@@ -361,6 +380,7 @@ export class AssistantRelay {
             }
         }
         this.ports.store.prune(now);
+        this.auditReplies(now);
         this.kick();
     }
 
@@ -532,21 +552,108 @@ export class AssistantRelay {
     }
 
     /** Resolve only through the authorized exact-attempt reader. That reader
-     * persists validated terminal/envelope/native evidence, never a session tail.
-     * Delivery/folding or stop invalidates this cache token without cancelling
-     * a safe durable capture still completing in the reader. */
+     * persists a native window, never a session tail and never an unverified
+     * envelope. While the native text is absent, retry on the injected clock
+     * for RELAY_NATIVE_WAIT_MS (inside the quiet window). Delivery/folding or
+     * stop drops the cache token so a late read cannot repopulate it. */
     private captureAttemptBody(attemptId: string, meshId: string, coordinatorSessionId: string): void {
-        const p = (this.ports.rehydrateAttemptReport?.(meshId, coordinatorSessionId, attemptId) ?? Promise.resolve(null))
-            .then((body) => {
-                if (this.attemptBodyCapture.get(attemptId) === p) this.attemptBodies.set(attemptId, body);
-            })
-            .catch(() => {
-                if (this.attemptBodyCapture.get(attemptId) === p) this.attemptBodies.set(attemptId, null);
-            })
-            .finally(() => {
-                if (this.attemptBodyCapture.get(attemptId) === p) this.attemptBodyCapture.delete(attemptId);
-            });
+        const started = this.clock.now();
+        let p!: Promise<void>;
+        const live = () => this.attemptBodyCapture.get(attemptId) === p;
+        p = this.settleCapture(attemptId, meshId, coordinatorSessionId, started, live);
         this.attemptBodyCapture.set(attemptId, p);
+        void p.finally(() => {
+            if (this.attemptBodyCapture.get(attemptId) === p) this.attemptBodyCapture.delete(attemptId);
+        });
+    }
+
+    private async settleCapture(attemptId: string, meshId: string, coordinatorSessionId: string, started: number, live: () => boolean): Promise<void> {
+        let last = this.normalizeReport(null);
+        for (;;) {
+            // Call the reader synchronously so a commit-time snapshot is taken
+            // before later turns replace it. Then yield so `captureAttemptBody`
+            // can publish this promise as the live token.
+            let read: Promise<AttemptReportSnapshot | string | null>;
+            try {
+                read = this.ports.rehydrateAttemptReport
+                    ? this.ports.rehydrateAttemptReport(meshId, coordinatorSessionId, attemptId)
+                    : Promise.resolve(null);
+            } catch {
+                read = Promise.resolve(null);
+            }
+            await Promise.resolve();
+            if (!live()) return;
+            try {
+                last = this.normalizeReport(await read);
+            } catch {
+                last = this.normalizeReport(null);
+            }
+            if (!live()) return;
+            if (last.completeness === 'final_native' && last.body?.trim()) {
+                this.rememberReport(attemptId, last);
+                return;
+            }
+            const elapsed = this.clock.now() - started;
+            if (elapsed >= RELAY_NATIVE_WAIT_MS) {
+                this.rememberReport(attemptId, last);
+                return;
+            }
+            const wait = Math.min(RELAY_NATIVE_RETRY_MS, RELAY_NATIVE_WAIT_MS - elapsed);
+            await new Promise<void>((resolve) => { this.clock.setTimeout(resolve, wait); });
+        }
+    }
+
+    private normalizeReport(raw: AttemptReportSnapshot | string | null | undefined): AttemptReportSnapshot {
+        if (typeof raw === 'string') return { body: raw, completeness: 'final_native' };
+        if (!raw || typeof raw !== 'object') return { body: null, completeness: 'envelope_unverified' };
+        const completeness = raw.completeness === 'final_native' ? 'final_native' : 'envelope_unverified';
+        return {
+            body: typeof raw.body === 'string' ? raw.body : null,
+            completeness,
+            ...(raw.source ? { source: raw.source } : {}),
+            ...(raw.parts ? { parts: raw.parts } : {}),
+        };
+    }
+
+    private rememberReport(attemptId: string, report: AttemptReportSnapshot): void {
+        this.attemptBodies.set(attemptId, report.body);
+        this.attemptMeta.set(attemptId, report);
+    }
+
+    /** Native finals not covered by a delivered exact relay. One warn and one pointer per bubble. */
+    private auditReplies(now: number): void {
+        const port = this.ports.auditCoordinatorReplies;
+        if (!port || this.auditing) return;
+        const since = this.lastAuditAt;
+        this.lastAuditAt = now;
+        this.auditing = true;
+        void Promise.resolve()
+            .then(() => port(since))
+            .then((replies) => {
+                for (const reply of replies ?? []) this.noteUncoveredReply(reply, now);
+            })
+            .catch((e) => LOG.warn('Assistant', `relay gap audit failed: ${(e as Error)?.message ?? e}`))
+            .finally(() => { this.auditing = false; });
+    }
+
+    private noteUncoveredReply(reply: AuditedCoordinatorReply, now: number): void {
+        const text = reply.text?.trim() ?? '';
+        if (!text || !reply.chars || reply.attemptOpen) return;
+        const key = `${reply.sessionId}:${reply.messageAt}`;
+        if (this.flaggedReplies.has(key) || this.replyCovered(reply, text)) return;
+        const klass = !reply.attemptId ? 'no_attempt' : reply.restartClosed ? 'restart_closed' : 'inside_attempt';
+        this.flaggedReplies.add(key);
+        LOG.warn('Assistant', `relay gap class=${klass} session=${reply.sessionId} at=${reply.messageAt} chars=${reply.chars}`);
+        this.ports.onRelayGap?.(klass, now);
+        this.pushLine('relay', buildUncoveredReplyGap(klass, reply.messageAt));
+    }
+
+    private replyCovered(reply: AuditedCoordinatorReply, text: string): boolean {
+        return this.renderedCoverage.some((c) => {
+            if (c.sessionId !== reply.sessionId) return false;
+            if (c.parts.some((p) => p.at === reply.messageAt)) return true;
+            return c.body.includes(text);
+        });
     }
 
     private onCoordinatorAttention(meshId: string, sessionId: string, value: unknown): void {
@@ -719,7 +826,19 @@ export class AssistantRelay {
                 ? i.attemptIds.filter((id) => this.hasCapturedBody(id)) : [];
         });
         this.ports.store.markDelivered(relayItems.flatMap((i) => i.attemptIds), at, rendered);
-        for (const id of relayItems.flatMap((i) => i.attemptIds)) { this.attemptBodyCapture.delete(id); this.attemptBodies.delete(id); this.restoredAttempts.delete(id); }
+        for (const item of relayItems) {
+            for (const id of item.attemptIds) {
+                if (!rendered.includes(id)) continue;
+                const meta = this.attemptMeta.get(id);
+                const body = this.attemptBodies.get(id);
+                if (meta?.completeness === 'final_native' && body?.trim()) {
+                    this.renderedCoverage.push({ sessionId: item.coordinatorSessionId, body, parts: meta.parts ?? [] });
+                }
+            }
+        }
+        for (const id of relayItems.flatMap((i) => i.attemptIds)) {
+            this.attemptBodyCapture.delete(id); this.attemptBodies.delete(id); this.attemptMeta.delete(id); this.restoredAttempts.delete(id);
+        }
         const meshes = [...new Set(relayItems.map((i) => i.meshId))];
         for (const m of meshes) {
             this.lastRelayAt.set(m, at);
@@ -795,7 +914,7 @@ export class AssistantRelay {
     }
 
     private hasCapturedBody(attemptId: string): boolean {
-        return !!this.attemptBodies.get(attemptId)?.trim();
+        return this.attemptMeta.get(attemptId)?.completeness === 'final_native' && !!this.attemptBodies.get(attemptId)?.trim();
     }
 
     private slugCounts(counts: ReadonlyMap<string, number>): Array<{ slug: string; count: number }> {
@@ -820,9 +939,9 @@ export class AssistantRelay {
             const ref = this.restoredAttempts.get(id);
             if (!ref || this.attemptBodies.has(id)) continue;
             // Authorization is checked by the runtime reader for every attempt. The authorized reader prefers the durable exact capture.
-            let body: string | null = null;
-            try { body = await this.ports.rehydrateAttemptReport?.(ref.meshId, ref.sessionId, id) ?? null; } catch { /* exact evidence unavailable */ }
-            if (body) this.attemptBodies.set(id, body);
+            let report: AttemptReportSnapshot | null = null;
+            try { report = this.normalizeReport(await this.ports.rehydrateAttemptReport?.(ref.meshId, ref.sessionId, id) ?? null); } catch { /* exact evidence unavailable */ }
+            if (report?.body) this.rememberReport(id, report);
         }
         return item.attemptIds.map((id) => this.attemptBodies.get(id) ?? null);
     }
@@ -834,8 +953,11 @@ export class AssistantRelay {
         const unavailable = item.attemptIds.filter((id, index) => this.restoredAttempts.has(id) && !bodies[index]);
         const refs = item.attemptIds.slice(-12).map(attemptId => {
             const index = item.attemptIds.indexOf(attemptId); const body = bodies[index];
+            const meta = this.attemptMeta.get(attemptId);
+            const source = meta?.completeness ?? (body ? 'final_native' : null);
             return { attemptId, coordinatorSessionId: this.restoredAttempts.get(attemptId)?.sessionId ?? item.coordinatorSessionId,
-                reportId: body ? reportBodyId(body) : null, totalChars: body?.length ?? null };
+                reportId: body ? reportBodyId(body) : null, totalChars: body?.length ?? null,
+                complete: source === 'final_native', source };
         });
         const references = `[ADHDev report references] ${JSON.stringify({ meshId: item.meshId, reports: refs, omittedReferences: Math.max(0, item.attemptIds.length - refs.length) })}\n`;
         const envelope = buildRelayEnvelope({
@@ -847,7 +969,9 @@ export class AssistantRelay {
         });
         const headerEnd = envelope.indexOf('\n') + 1;
         const missing = unavailable.length ? `[ADHDev original report unavailable] Exact authorized attempt evidence could not rehydrate: ${unavailable.join(', ')}. A new report would be regeneration.\n` : '';
-        const text = envelope.slice(0, headerEnd) + references + missing + envelope.slice(headerEnd);
+        const unverified = item.attemptIds.some((id) => this.attemptMeta.get(id)?.completeness === 'envelope_unverified' && !!this.attemptBodies.get(id)?.trim());
+        const caution = unverified ? '[ADHDev relay] This report may be truncated — the native transcript was not captured. Use project_read with the report reference.\n' : '';
+        const text = envelope.slice(0, headerEnd) + references + missing + caution + envelope.slice(headerEnd);
         return { text, source: 'relay', messageId: relayMessageId(item.meshId, lastAttempt), meshId: item.meshId };
     }
 }

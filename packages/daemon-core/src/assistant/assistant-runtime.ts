@@ -29,6 +29,7 @@ import { TerminalWatchDelivery } from './terminal-watch-runtime.js';
 import { SESSION_STATUS_CLASS } from '@adhdev/mesh-shared';
 import type { DaemonComponents } from '../boot/daemon-components.js';
 import { LOG } from '../logging/logger.js';
+import { collectCoordinatorReplies } from './assistant-relay-audit.js';
 import { MeshRuntimeStore } from '../mesh/mesh-runtime-store.js';
 import { getMeshQueueStats } from '../mesh/mesh-work-queue.js';
 import { getMeshMissions } from '../mesh/mesh-missions.js';
@@ -158,22 +159,47 @@ export function buildAssistantRelayPorts(
                 transport: { dispatch: (components as any).dispatchMeshCommand, peerStatus: (components as any).getMeshPeerConnectionStatus } });
             const mesh = ports.listMeshes().find(m => m.id === meshId);
             if (!mesh) return null;
-            if (ports.isHostedHere(mesh)) return (await localAttemptReport(ports, meshId, sessionId, attemptId)).body;
+            if (ports.isHostedHere(mesh)) {
+                const report = await localAttemptReport(ports, meshId, sessionId, attemptId);
+                if (typeof report.body !== 'string' || !report.body) return null;
+                return {
+                    body: report.body,
+                    completeness: report.completeness === 'final_native' ? 'final_native' as const : 'envelope_unverified' as const,
+                    source: report.source,
+                    ...(report.parts ? { parts: report.parts } : {}),
+                };
+            }
             const target = ports.remoteHost(mesh);
             if (!target.reachable) return null;
             const out = await ports.callHost(target, 'report', { coordinatorSessionId: sessionId, attemptId });
             if (!out.ok) return null;
-            const result = out.result.result as { body?: unknown; provenance?: {
+            const result = out.result.result as { body?: unknown; completeness?: unknown; source?: unknown; parts?: unknown; provenance?: {
                 version?: unknown; attemptId?: unknown; coordinatorSessionId?: unknown; generation?: unknown; evidenceRef?: unknown;
             } } | undefined;
             const proof = result?.provenance;
-            // Old hosts may return a session-tail capture with no provenance.
-            // Only the host's exact terminal/native reader can supply this reference.
-            return typeof result?.body === 'string' && proof?.version === 1 && proof.attemptId === attemptId
-                && proof.coordinatorSessionId === sessionId && Number.isSafeInteger(proof.generation) && Number(proof.generation) >= 0
-                && typeof proof.evidenceRef === 'string' && proof.evidenceRef.length > 0 && proof.evidenceRef.length <= 2048
-                ? result.body : null;
+            // v1 rows are the rc16 truncated capture. A host that omits completeness
+            // is unverified too. Neither is treated as an exact native window.
+            const versionOk = proof?.version === 2 || proof?.version === 1;
+            if (typeof result?.body !== 'string' || !versionOk || proof?.attemptId !== attemptId
+                || proof?.coordinatorSessionId !== sessionId || !Number.isSafeInteger(proof?.generation) || Number(proof?.generation) < 0
+                || typeof proof?.evidenceRef !== 'string' || proof.evidenceRef.length === 0 || proof.evidenceRef.length > 2048) return null;
+            const completeness = proof?.version === 2 && result.completeness === 'final_native' ? 'final_native' as const : 'envelope_unverified' as const;
+            const parts = Array.isArray(result.parts) ? result.parts as Array<{ at: number; chars: number }> : undefined;
+            return { body: result.body, completeness, ...(typeof result.source === 'string' ? { source: result.source } : {}), ...(parts ? { parts } : {}) };
         },
+        auditCoordinatorReplies: async (sinceMs) => {
+            try {
+                const db = MeshRuntimeStore.getInstance().db;
+                return await collectCoordinatorReplies({
+                    db, sinceMs, now: Date.now(),
+                    execute: (cmd, args) => components.router.execute(cmd, args, 'ipc', { inProcess: true }),
+                });
+            } catch (e) {
+                LOG.warn('Assistant', `relay gap audit failed: ${(e as Error)?.message ?? e}`);
+                return [];
+            }
+        },
+        onRelayGap: (_klass, at) => metrics?.bump('relay_gaps', '', at),
         readCoordinatorTail: async (sessionId) => {
             const chat = await components.router.execute('read_chat', { targetSessionId: sessionId, limit: 40 }, 'ipc', { inProcess: true });
             if (!chat?.success) return null;

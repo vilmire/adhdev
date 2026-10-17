@@ -14,6 +14,13 @@ import type { TurnOutcome } from '@adhdev/mesh-shared';
 export const RELAY_BODY_MAX_CHARS = 4_096;
 /** Quiet window after a coordinator commit before the relay goes out. */
 export const RELAY_QUIET_MS = 15_000;
+/**
+ * Native text is written whole, but the thinking block can precede it by a few
+ * seconds. Retry the native read on this cadence, and stop well inside the
+ * quiet window so delivery still waits for the last attempt.
+ */
+export const RELAY_NATIVE_RETRY_MS = 1_000;
+export const RELAY_NATIVE_WAIT_MS = 8_000;
 /** Longest a batch waits for the coordinator to stop chaining turns. */
 export const RELAY_MAX_WAIT_MS = 120_000;
 /**
@@ -119,6 +126,17 @@ export function buildRelayEnvelope(input: RelayEnvelopeInput): string {
  * the envelope's own header fields. Counts and slugs only, never a body.
  * Returns '' when nothing was missed, so a healthy relay adds no noise.
  */
+/** One native final the delivered relay parts did not cover. No body text. */
+export function buildUncoveredReplyGap(klass: 'no_attempt' | 'inside_attempt' | 'restart_closed', messageAt: number): string {
+    const hhmmss = new Date(messageAt).toISOString().slice(11, 19);
+    const why = klass === 'no_attempt'
+        ? 'no attempt was opened for it'
+        : klass === 'restart_closed'
+            ? 'its attempt was closed by a restart'
+            : 'it was inside an attempt whose relay did not include it';
+    return `[ADHDev relay gap] A coordinator reply at ${hhmmss} UTC was not relayed (${klass}: ${why}). Use project_read before assuming nothing happened.`;
+}
+
 export function buildMissedReportsLine(missed: readonly { slug: string; count: number }[]): string {
     const rows = missed.filter((m) => m.count > 0);
     if (!rows.length) return '';

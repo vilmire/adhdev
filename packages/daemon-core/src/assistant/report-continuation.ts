@@ -8,13 +8,18 @@ export interface ReportContinuation { messageId: string; offset: number; coordin
 export interface ReportAttemptContinuation { attemptId: string; reportId?: string; offset: number; coordinatorSessionId: string }
 export type ReportCursor = ReportContinuation | ReportAttemptContinuation | TaskReportCursor;
 export const reportBodyId = (body: string): string => createHash('sha256').update(body).digest('hex');
-export function pageAttemptReport(body: string, cursor: ReportAttemptContinuation, source: string) {
+export function pageAttemptReport(body: string, cursor: ReportAttemptContinuation, source: string, completeness: 'final_native' | 'envelope_unverified' = 'final_native') {
     const reportId = reportBodyId(body);
     if (cursor.reportId && cursor.reportId !== reportId) return { success: false, code: 'original_report_unavailable', reason: 'original_report_identity_mismatch' };
     if (cursor.offset > body.length) return { success: false, code: 'invalid_report_offset' };
     const end = Math.min(body.length, cursor.offset + PROJECT_READ_MESSAGE_MAX_CHARS);
+    const pageComplete = end === body.length;
+    // Omitted completeness stays final_native so existing callers keep `complete: end === length`.
+    const sourceComplete = completeness === 'final_native';
     return { success: true, attemptId: cursor.attemptId, coordinatorSessionId: cursor.coordinatorSessionId, reportId, source,
-        text: body.slice(cursor.offset, end), offset: cursor.offset, totalChars: body.length, complete: end === body.length, truncated: end < body.length, nextOffset: end < body.length ? end : null };
+        text: body.slice(cursor.offset, end), offset: cursor.offset, totalChars: body.length,
+        sourceComplete, complete: pageComplete && sourceComplete, truncated: end < body.length, nextOffset: end < body.length ? end : null,
+        ...(sourceComplete ? {} : { originalCompleteness: completeness === 'envelope_unverified' ? 'envelope_unverified' : 'unknown' }) };
 }
 
 export function parseReportContinuation(args: Record<string, unknown>): ReportCursor | null | string {

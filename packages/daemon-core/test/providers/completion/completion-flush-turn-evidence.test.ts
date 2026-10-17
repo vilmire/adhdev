@@ -72,6 +72,24 @@ describe('completion-flush emitGeneratingCompleted -> turn_end evidence (chokepo
         expect(observedOpts[0]?.envelope?.workerResult).toEqual(report);
     });
 
+    it('copies finalSummaryMayBeTruncated and finalSummarySource onto the notice', () => {
+        const { host, observedOpts } = makeHost();
+        emitGeneratingCompleted(host, {
+            chatTitle: 'x', duration: 1, timestamp: 1000, finalSummary: 'first screen row',
+            completionDiagnostic: { finalSummaryMayBeTruncated: true, finalSummarySource: 'parsed_screen_fallback' },
+        });
+        expect(observedOpts[0]?.envelope?.notice?.completionMetadata).toMatchObject({
+            summaryMayBeTruncated: true, finalSummarySource: 'parsed_screen_fallback',
+        });
+        expect(observedOpts[0]?.envelope?.finalSummary).toBe('first screen row');
+    });
+
+    it('omits the truncation flag when the diagnostic does not set it', () => {
+        const { host, observedOpts } = makeHost();
+        emitGeneratingCompleted(host, { chatTitle: 'x', duration: 1, timestamp: 1000, finalSummary: 'whole reply' });
+        expect(observedOpts[0]?.envelope?.notice?.completionMetadata?.summaryMayBeTruncated).toBeUndefined();
+    });
+
     it('omits envelope.workerResult when the final summary carries no worker-report-shaped JSON (never invents a result)', () => {
         const { host, observedOpts } = makeHost();
         emitGeneratingCompleted(host, { chatTitle: 'x', duration: 1, timestamp: 1000, finalSummary: 'all done, nothing structured to report' });

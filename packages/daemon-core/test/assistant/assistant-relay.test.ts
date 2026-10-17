@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { SendPolicy, SubmitOutcome } from '@adhdev/mesh-shared';
 import { AssistantInputLog } from '../../src/assistant/assistant-input-log.js';
 import { InMemoryAssistantRelayStore } from '../../src/assistant/assistant-relay-store.js';
@@ -12,6 +12,7 @@ import {
     RELAY_CLOSE,
     RELAY_IDLE_CLOSE_GRACE_MS,
     RELAY_MAX_WAIT_MS,
+    RELAY_NATIVE_WAIT_MS,
     RELAY_QUIET_MS,
     buildRelayEnvelope,
     compactRelayBody,
@@ -630,6 +631,58 @@ it.each(['folded', 'stopped'])('does not repopulate memory when an exact capture
     expect((h.relay as any).attemptBodyCapture.has(id)).toBe(false);
     h.relay.stop();
 });
+async function micro(n = 6) { for (let i = 0; i < n; i++) await Promise.resolve(); }
+
+it('waits through thinking-only reads and relays the whole final, never a partial', async () => {
+    const h = harness();
+    h.relay.openThread(MESH);
+    const full = 'Sentence one wraps the eighty column screen. Sentence two is still this reply. Sentence three finishes it.';
+    let n = 0;
+    const capture = vi.spyOn(h.store, 'captureAttemptBody');
+    (h.relay as any).ports.rehydrateAttemptReport = async () => {
+        n += 1;
+        if (n < 3) return { body: null, completeness: 'envelope_unverified' };
+        return { body: full, completeness: 'final_native', source: 'native_window' };
+    };
+    h.emit(turn('committed', COORD, 1, h.clock.now()));
+    await micro();
+    expect(n).toBe(1);
+    expect(h.submits).toHaveLength(0);
+    h.clock.advance(1000);
+    await micro();
+    expect(n).toBe(2);
+    h.clock.advance(1000);
+    await micro();
+    expect(n).toBe(3);
+    h.clock.advance(RELAY_QUIET_MS);
+    await settle(h);
+    expect(h.submits).toHaveLength(1);
+    expect(h.submits[0]!.text).toContain(full);
+    expect(h.submits[0]!.text).not.toContain('may be truncated');
+    expect(capture).not.toHaveBeenCalled();
+    h.relay.stop();
+});
+
+it('delivers an unverified envelope flagged, with the gap line, and leaves relayed_at null', async () => {
+    const h = harness();
+    h.relay.openThread(MESH);
+    const row = 'Only the first screen row of a wrapped reply';
+    (h.relay as any).ports.rehydrateAttemptReport = async () => ({ body: row, completeness: 'envelope_unverified', source: 'existing_attempt_envelope' });
+    const capture = vi.spyOn(h.store, 'captureAttemptBody');
+    h.emit(turn('committed', COORD, 1, h.clock.now()));
+    h.clock.advance(RELAY_QUIET_MS);
+    await settle(h);
+    const text = h.submits[0]!.text;
+    expect(text).toContain(row);
+    expect(text).toContain('may be truncated');
+    expect(text).toContain('[ADHDev relay gap]');
+    expect(text).toContain('"complete":false');
+    expect(h.store.countUnrendered().total).toBe(1);
+    expect(capture).not.toHaveBeenCalled();
+    expect(h.clock.now()).toBeLessThan(Date.parse('2026-10-07T12:00:00Z') + RELAY_NATIVE_WAIT_MS + RELAY_QUIET_MS + 1);
+    h.relay.stop();
+});
+
 it('refuses session-only tails when no exact reader is available', async () => {
     const h = harness(); h.relay.openThread(MESH);
     (h.relay as any).ports.rehydrateAttemptReport = undefined;
