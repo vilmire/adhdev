@@ -35663,10 +35663,10 @@ ${error.message || ""}`;
       const roleCap = /* @__PURE__ */ new Map();
       for (const entry of rawRoles) {
         if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
-        const rec4 = entry;
-        const provider = typeof rec4.providerType === "string" ? rec4.providerType.trim() : "";
+        const rec5 = entry;
+        const provider = typeof rec5.providerType === "string" ? rec5.providerType.trim() : "";
         if (!provider) continue;
-        const cap = Number(rec4.maxParallel);
+        const cap = Number(rec5.maxParallel);
         if (!Number.isFinite(cap) || cap < 0) continue;
         roleCap.set(provider.toLowerCase(), { provider, cap: Math.floor(cap) });
       }
@@ -38007,20 +38007,20 @@ ${error.message || ""}`;
             return s2;
           }
           /** Insert one record. Idempotent on `event_id`: true only when a row was inserted. A blank kind is refused. */
-          insert(rec4) {
-            if (!rec4.kind || !String(rec4.kind).trim()) return false;
+          insert(rec5) {
+            if (!rec5.kind || !String(rec5.kind).trim()) return false;
             const info = this.stmt(`INSERT OR IGNORE INTO mesh_local_records
                 (event_id, mesh_id, kind, node_id, session_id, provider_type, task_id, at_ms, payload_json)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-              rec4.eventId,
-              rec4.meshId,
-              rec4.kind,
-              rec4.nodeId ?? null,
-              rec4.sessionId ?? null,
-              rec4.providerType ?? null,
-              rec4.taskId ?? null,
-              Math.floor(rec4.atMs),
-              JSON.stringify(rec4.payload ?? {})
+              rec5.eventId,
+              rec5.meshId,
+              rec5.kind,
+              rec5.nodeId ?? null,
+              rec5.sessionId ?? null,
+              rec5.providerType ?? null,
+              rec5.taskId ?? null,
+              Math.floor(rec5.atMs),
+              JSON.stringify(rec5.payload ?? {})
             );
             return info.changes > 0;
           }
@@ -39692,6 +39692,8 @@ ${error.message || ""}`;
             coordinator_session_id TEXT NOT NULL,
             captured_at INTEGER NOT NULL,
             evidence_ref TEXT,
+            parts_json TEXT,
+            completeness TEXT,
             body TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_assistant_attempt_bodies_age ON assistant_attempt_bodies(captured_at);
@@ -39742,6 +39744,7 @@ ${error.message || ""}`;
             review_turns_with_writes INTEGER NOT NULL DEFAULT 0,
             review_writes_applied INTEGER NOT NULL DEFAULT 0,
             review_writes_approved INTEGER NOT NULL DEFAULT 0,
+            relay_gaps INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (day, mesh_id)
         );
 
@@ -39755,8 +39758,10 @@ ${error.message || ""}`;
     `);
       const bodyCols = new Set(db.prepare("PRAGMA table_info(assistant_attempt_bodies)").all().map((r) => r.name));
       if (!bodyCols.has("evidence_ref")) db.exec("ALTER TABLE assistant_attempt_bodies ADD COLUMN evidence_ref TEXT");
+      if (!bodyCols.has("parts_json")) db.exec("ALTER TABLE assistant_attempt_bodies ADD COLUMN parts_json TEXT");
+      if (!bodyCols.has("completeness")) db.exec("ALTER TABLE assistant_attempt_bodies ADD COLUMN completeness TEXT");
       const cols = new Set(db.prepare("PRAGMA table_info(assistant_metric_daily)").all().map((r) => r.name));
-      for (const c of ["review_writes_applied", "review_writes_approved"]) {
+      for (const c of ["review_writes_applied", "review_writes_approved", "relay_gaps"]) {
         if (!cols.has(c)) db.exec(`ALTER TABLE assistant_metric_daily ADD COLUMN ${c} INTEGER NOT NULL DEFAULT 0`);
       }
       const relayCols = new Set(db.prepare("PRAGMA table_info(assistant_relays)").all().map((r) => r.name));
@@ -39922,15 +39927,15 @@ ${error.message || ""}`;
     function findMeshRelayAnswer(raw) {
       let cursor = raw;
       for (let depth = 0; depth <= MAX_RELAY_UNWRAP_DEPTH && cursor && typeof cursor === "object" && !Array.isArray(cursor); depth++) {
-        const rec4 = cursor;
-        if (typeof rec4.success === "boolean") return rec4;
+        const rec5 = cursor;
+        if (typeof rec5.success === "boolean") return rec5;
         if (depth === MAX_RELAY_UNWRAP_DEPTH) break;
-        if (rec4.result && typeof rec4.result === "object") {
-          cursor = rec4.result;
+        if (rec5.result && typeof rec5.result === "object") {
+          cursor = rec5.result;
           continue;
         }
-        if (rec4.payload && typeof rec4.payload === "object") {
-          cursor = rec4.payload;
+        if (rec5.payload && typeof rec5.payload === "object") {
+          cursor = rec5.payload;
           continue;
         }
         break;
@@ -47998,15 +48003,15 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       const included = [];
       const forget = [];
       for (const node of [...names].sort()) {
-        const rec4 = recorded.get(node);
-        let firstAt = rec4?.firstAt;
+        const rec5 = recorded.get(node);
+        let firstAt = rec5?.firstAt;
         if (firstAt === void 0 && o.members !== void 0) {
           if (!o.dryRun)
             store2.ackNodeName(topic, node, now);
           firstAt = now;
         }
         let evidence = null;
-        for (const t of [rec4?.seenAt ?? null, firstAt ?? null, writerNewest.get(node) ?? null])
+        for (const t of [rec5?.seenAt ?? null, firstAt ?? null, writerNewest.get(node) ?? null])
           if (t !== null && (evidence === null || t > evidence))
             evidence = t;
         let why = null;
@@ -48014,10 +48019,10 @@ The instruction it carried was never delivered to anyone. If it still matters, r
           why = "excluded";
         else if (evidence === null || now - evidence > o.maxLagMs)
           why = "lagging";
-        members.push({ node, lastSeenAt: rec4?.seenAt ?? null, excluded: why });
+        members.push({ node, lastSeenAt: rec5?.seenAt ?? null, excluded: why });
         if (why === null)
           included.push(node);
-        if (rec4 !== void 0 && (why === "excluded" || evidence !== null && now - evidence > o.maxLagMs * ACK_FORGET_LAG_MULTIPLE))
+        if (rec5 !== void 0 && (why === "excluded" || evidence !== null && now - evidence > o.maxLagMs * ACK_FORGET_LAG_MULTIPLE))
           forget.push(node);
       }
       return { members, included, forget };
@@ -53371,9 +53376,9 @@ CREATE TABLE IF NOT EXISTS sq_archive (
                   appliedB += costs[i];
                   continue;
                 }
-                const rec4 = this.rejects.get(m.topic) ?? {};
-                rec4[r] = (rec4[r] ?? 0) + 1;
-                this.rejects.set(m.topic, rec4);
+                const rec5 = this.rejects.get(m.topic) ?? {};
+                rec5[r] = (rec5[r] ?? 0) + 1;
+                this.rejects.set(m.topic, rec5);
               }
               if (appliedN > 0)
                 this.noteThroughput(m.topic, ps.session.peerId, appliedN, appliedB, "applied");
@@ -61278,11 +61283,11 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       const byType = /* @__PURE__ */ new Map();
       for (const raw of value) {
         if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
-        const rec4 = raw;
-        const providerType = typeof rec4.providerType === "string" ? rec4.providerType.trim() : "";
+        const rec5 = raw;
+        const providerType = typeof rec5.providerType === "string" ? rec5.providerType.trim() : "";
         if (!providerType) continue;
         const entry = { providerType };
-        const maxParallel = Number(rec4.maxParallel);
+        const maxParallel = Number(rec5.maxParallel);
         if (Number.isFinite(maxParallel) && maxParallel >= 0) entry.maxParallel = Math.floor(maxParallel);
         byType.set(providerType.toLowerCase(), entry);
       }
@@ -79937,25 +79942,25 @@ ${cleanBody}`;
     }
     function isValidRecord(value) {
       if (value === null || typeof value !== "object") return false;
-      const rec4 = value;
-      if (typeof rec4.meshId !== "string" || rec4.meshId.trim() === "") return false;
-      if (typeof rec4.peerDaemonId !== "string" || !canonicalDaemonId2(rec4.peerDaemonId)) return false;
-      if (rec4.role !== "host" && rec4.role !== "member") return false;
-      if (typeof rec4.secret !== "string" || rec4.secret.length === 0) return false;
-      if (rec4.hostAddress !== void 0 && typeof rec4.hostAddress !== "string") return false;
-      if (typeof rec4.createdAt !== "string" || rec4.createdAt.trim() === "") return false;
+      const rec5 = value;
+      if (typeof rec5.meshId !== "string" || rec5.meshId.trim() === "") return false;
+      if (typeof rec5.peerDaemonId !== "string" || !canonicalDaemonId2(rec5.peerDaemonId)) return false;
+      if (rec5.role !== "host" && rec5.role !== "member") return false;
+      if (typeof rec5.secret !== "string" || rec5.secret.length === 0) return false;
+      if (rec5.hostAddress !== void 0 && typeof rec5.hostAddress !== "string") return false;
+      if (typeof rec5.createdAt !== "string" || rec5.createdAt.trim() === "") return false;
       return true;
     }
-    function normalizeRecord(rec4) {
+    function normalizeRecord(rec5) {
       const out = {
-        meshId: rec4.meshId.trim(),
-        peerDaemonId: canonicalOrThrow(rec4.peerDaemonId, "peer secret record"),
-        role: rec4.role,
-        secret: rec4.secret,
-        createdAt: rec4.createdAt
+        meshId: rec5.meshId.trim(),
+        peerDaemonId: canonicalOrThrow(rec5.peerDaemonId, "peer secret record"),
+        role: rec5.role,
+        secret: rec5.secret,
+        createdAt: rec5.createdAt
       };
-      if (rec4.hostAddress !== void 0 && rec4.hostAddress.trim() !== "") {
-        out.hostAddress = rec4.hostAddress.trim();
+      if (rec5.hostAddress !== void 0 && rec5.hostAddress.trim() !== "") {
+        out.hostAddress = rec5.hostAddress.trim();
       }
       return out;
     }
@@ -80031,13 +80036,13 @@ ${cleanBody}`;
       }
     }
     function listPeerSecrets(opts = {}) {
-      return readRecords(resolvePeerSecretsPath(opts)).map((rec4) => ({ ...rec4 }));
+      return readRecords(resolvePeerSecretsPath(opts)).map((rec5) => ({ ...rec5 }));
     }
     function getPeerSecret(meshId, peerDaemonId, opts = {}) {
       const canonical = canonicalDaemonId2(peerDaemonId);
       const mesh = typeof meshId === "string" ? meshId.trim() : "";
       if (!canonical || !mesh) return null;
-      const found = readRecords(resolvePeerSecretsPath(opts)).find((rec4) => rec4.meshId === mesh && daemonIdsEquivalent4(rec4.peerDaemonId, canonical));
+      const found = readRecords(resolvePeerSecretsPath(opts)).find((rec5) => rec5.meshId === mesh && daemonIdsEquivalent4(rec5.peerDaemonId, canonical));
       return found ? { ...found } : null;
     }
     function putPeerSecret(record3, opts = {}) {
@@ -80046,7 +80051,7 @@ ${cleanBody}`;
       }
       const normalized = normalizeRecord(record3);
       const path99 = resolvePeerSecretsPath(opts);
-      const others = readRecords(path99).filter((rec4) => !(rec4.meshId === normalized.meshId && daemonIdsEquivalent4(rec4.peerDaemonId, normalized.peerDaemonId)));
+      const others = readRecords(path99).filter((rec5) => !(rec5.meshId === normalized.meshId && daemonIdsEquivalent4(rec5.peerDaemonId, normalized.peerDaemonId)));
       writeRecords(path99, [...others, normalized]);
       emit({
         kind: "put",
@@ -80062,9 +80067,9 @@ ${cleanBody}`;
       if (!canonical || !mesh) return false;
       const path99 = resolvePeerSecretsPath(opts);
       const all = readRecords(path99);
-      const removed = all.find((rec4) => rec4.meshId === mesh && daemonIdsEquivalent4(rec4.peerDaemonId, canonical));
+      const removed = all.find((rec5) => rec5.meshId === mesh && daemonIdsEquivalent4(rec5.peerDaemonId, canonical));
       if (!removed) return false;
-      const kept = all.filter((rec4) => !(rec4.meshId === mesh && daemonIdsEquivalent4(rec4.peerDaemonId, canonical)));
+      const kept = all.filter((rec5) => !(rec5.meshId === mesh && daemonIdsEquivalent4(rec5.peerDaemonId, canonical)));
       writeRecords(path99, kept);
       emit({ kind: "remove", meshId: mesh, peerDaemonId: canonical, role: removed.role, filePath: path99 });
       return true;
@@ -82801,8 +82806,8 @@ ${cleanBody}`;
             const out = [];
             for (const name of (0, import_fs27.readdirSync)(this.stagedDir)) {
               if (!name.endsWith(".json")) continue;
-              const rec4 = this.readStaged(name.slice(0, -".json".length));
-              if (rec4) out.push(rec4);
+              const rec5 = this.readStaged(name.slice(0, -".json".length));
+              if (rec5) out.push(rec5);
             }
             return out.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
           }
@@ -82813,25 +82818,25 @@ ${cleanBody}`;
            * free budget and retry. `discard` removes it.
            */
           resolveStaged(id4, decision) {
-            const rec4 = this.readStaged(id4);
-            if (!rec4) return { result: "staged_not_found", usage: this.usage() };
+            const rec5 = this.readStaged(id4);
+            if (!rec5) return { result: "staged_not_found", usage: this.usage() };
             if (decision === "discard") {
-              this.dropStaged(rec4, "owner");
+              this.dropStaged(rec5, "owner");
               return { result: "discarded", usage: this.usage() };
             }
-            const outcome = this.applyInner(rec4.op, rec4.origin, { stagedId: rec4.id, resolvedBy: "owner" }, rec4.reviewTurnId);
-            if (outcome.result === "applied" || outcome.result === "memory_duplicate") this.unlinkStaged(rec4.id);
+            const outcome = this.applyInner(rec5.op, rec5.origin, { stagedId: rec5.id, resolvedBy: "owner" }, rec5.reviewTurnId);
+            if (outcome.result === "applied" || outcome.result === "memory_duplicate") this.unlinkStaged(rec5.id);
             return { ...outcome, usage: this.usage() };
           }
           /** Discard staged writes older than maxAgeMs (curator housekeeping). Returns ids dropped. */
           expireStaged(maxAgeMs = STAGED_WRITE_MAX_AGE_MS) {
             const cutoff = this.now().getTime() - maxAgeMs;
             const dropped = [];
-            for (const rec4 of this.listStaged()) {
-              const t = Date.parse(rec4.createdAt);
+            for (const rec5 of this.listStaged()) {
+              const t = Date.parse(rec5.createdAt);
               if (Number.isFinite(t) && t < cutoff) {
-                this.dropStaged(rec4, "expiry");
-                dropped.push(rec4.id);
+                this.dropStaged(rec5, "expiry");
+                dropped.push(rec5.id);
               }
             }
             return dropped;
@@ -82900,7 +82905,7 @@ ${cleanBody}`;
             journal("applied");
             return { result: "applied" };
           }
-          journal(rec4) {
+          journal(rec5) {
             const redacted = [];
             const scrub = (field3, v) => {
               if (v !== null && detectCredential(v)) {
@@ -82911,11 +82916,11 @@ ${cleanBody}`;
             };
             const full = {
               ts: this.now().toISOString(),
-              ...rec4,
-              before: scrub("before", rec4.before),
-              after: scrub("after", rec4.after)
+              ...rec5,
+              before: scrub("before", rec5.before),
+              after: scrub("after", rec5.after)
             };
-            if (REDACT_AFTER_RESULTS.has(rec4.result) && !redacted.includes("after")) {
+            if (REDACT_AFTER_RESULTS.has(rec5.result) && !redacted.includes("after")) {
               full.after = null;
               redacted.push("after");
             }
@@ -82930,8 +82935,8 @@ ${cleanBody}`;
           }
           stage(op, origin, reviewTurnId) {
             const id4 = `mem-${this.now().getTime()}-${(0, import_crypto24.randomBytes)(4).toString("hex")}`;
-            const rec4 = { kind: "memory", id: id4, createdAt: this.now().toISOString(), origin, op, ...reviewTurnId ? { reviewTurnId } : {} };
-            writeFileAtomic600(this.stagedPath(id4), JSON.stringify(rec4, null, 2));
+            const rec5 = { kind: "memory", id: id4, createdAt: this.now().toISOString(), origin, op, ...reviewTurnId ? { reviewTurnId } : {} };
+            writeFileAtomic600(this.stagedPath(id4), JSON.stringify(rec5, null, 2));
             return id4;
           }
           readStaged(id4) {
@@ -82951,20 +82956,20 @@ ${cleanBody}`;
             } catch {
             }
           }
-          dropStaged(rec4, by) {
-            const op = rec4.op;
+          dropStaged(rec5, by) {
+            const op = rec5.op;
             this.journal({
               action: op.action,
               target: op.target,
               before: op.action === "add" ? null : op.match,
               after: op.action === "remove" ? null : op.content,
-              origin: rec4.origin,
+              origin: rec5.origin,
               result: "discarded",
-              stagedId: rec4.id,
+              stagedId: rec5.id,
               resolvedBy: by,
-              reviewTurnId: rec4.reviewTurnId
+              reviewTurnId: rec5.reviewTurnId
             });
-            this.unlinkStaged(rec4.id);
+            this.unlinkStaged(rec5.id);
           }
         };
         pad2 = (n) => String(n).padStart(2, "0");
@@ -83644,12 +83649,12 @@ ${body}`;
             this.path = path99;
             this.now = now;
           }
-          append(rec4) {
-            const full = { ts: this.now().toISOString(), ...rec4 };
+          append(rec5) {
+            const full = { ts: this.now().toISOString(), ...rec5 };
             const redacted = [];
             for (const f of ["before", "after"]) {
               const v = full[f];
-              if (typeof v === "string" && (detectCredential(v) || REDACT_RESULTS.has(rec4.result))) {
+              if (typeof v === "string" && (detectCredential(v) || REDACT_RESULTS.has(rec5.result))) {
                 full[f] = null;
                 redacted.push(f);
               }
@@ -83681,9 +83686,9 @@ ${body}`;
           path(id4) {
             return (0, import_path24.join)(this.dir, `${id4}.json`);
           }
-          write(rec4) {
+          write(rec5) {
             const id4 = `skl-${this.now().getTime()}-${(0, import_crypto25.randomBytes)(4).toString("hex")}`;
-            const full = { kind: "skill", id: id4, createdAt: this.now().toISOString(), ...rec4 };
+            const full = { kind: "skill", id: id4, createdAt: this.now().toISOString(), ...rec5 };
             writeFileAtomic600(this.path(id4), JSON.stringify(full, null, 2));
             return id4;
           }
@@ -83701,8 +83706,8 @@ ${body}`;
             const out = [];
             for (const n of (0, import_fs32.readdirSync)(this.dir)) {
               if (!n.startsWith("skl-") || !n.endsWith(".json")) continue;
-              const rec4 = this.read(n.slice(0, -".json".length));
-              if (rec4) out.push(rec4);
+              const rec5 = this.read(n.slice(0, -".json".length));
+              if (rec5) out.push(rec5);
             }
             return out.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
           }
@@ -83946,31 +83951,31 @@ ${body}`;
           }
           /** Apply re-runs every check except caps/staging against the current files; a failure keeps the staged write. */
           resolveStaged(id4, decision) {
-            const rec4 = this.staging.read(id4);
-            if (!rec4) return { result: "staged_not_found" };
+            const rec5 = this.staging.read(id4);
+            if (!rec5) return { result: "staged_not_found" };
             if (decision === "discard") {
-              this.dropStaged(rec4, "owner");
+              this.dropStaged(rec5, "owner");
               return { result: "discarded" };
             }
-            const out = this.manageInner(rec4.op, rec4.origin, rec4.ctx, rec4.id);
-            if (out.result === "applied") this.staging.remove(rec4.id);
-            else this.journal.append({ action: rec4.op.action, name: rec4.op.name, origin: rec4.origin, result: out.result, stagedId: rec4.id, resolvedBy: "owner" });
+            const out = this.manageInner(rec5.op, rec5.origin, rec5.ctx, rec5.id);
+            if (out.result === "applied") this.staging.remove(rec5.id);
+            else this.journal.append({ action: rec5.op.action, name: rec5.op.name, origin: rec5.origin, result: out.result, stagedId: rec5.id, resolvedBy: "owner" });
             return out;
           }
           expireStaged(maxAgeMs) {
             const cutoff = this.now().getTime() - maxAgeMs;
             const dropped = [];
-            for (const rec4 of this.staging.list()) {
-              if (Date.parse(rec4.createdAt) < cutoff) {
-                this.dropStaged(rec4, "expiry");
-                dropped.push(rec4.id);
+            for (const rec5 of this.staging.list()) {
+              if (Date.parse(rec5.createdAt) < cutoff) {
+                this.dropStaged(rec5, "expiry");
+                dropped.push(rec5.id);
               }
             }
             return dropped;
           }
-          dropStaged(rec4, by) {
-            this.journal.append({ action: rec4.op.action, name: rec4.op.name, origin: rec4.origin, result: "discarded", stagedId: rec4.id, resolvedBy: by });
-            this.staging.remove(rec4.id);
+          dropStaged(rec5, by) {
+            this.journal.append({ action: rec5.op.action, name: rec5.op.name, origin: rec5.origin, result: "discarded", stagedId: rec5.id, resolvedBy: by });
+            this.staging.remove(rec5.id);
           }
           // ── owner admin ─────────────────────────────────────────────────────────
           pin(name) {
@@ -84339,9 +84344,9 @@ ${body}`;
           path(id4) {
             return (0, import_path27.join)(this.dir, `${id4}.json`);
           }
-          write(rec4) {
+          write(rec5) {
             const id4 = `note-${this.now().getTime()}-${(0, import_crypto26.randomBytes)(4).toString("hex")}`;
-            const full = { kind: "note", id: id4, createdAt: this.now().toISOString(), ...rec4 };
+            const full = { kind: "note", id: id4, createdAt: this.now().toISOString(), ...rec5 };
             writeFileAtomic600(this.path(id4), JSON.stringify(full, null, 2));
             return id4;
           }
@@ -84359,8 +84364,8 @@ ${body}`;
             const out = [];
             for (const n of (0, import_fs35.readdirSync)(this.dir)) {
               if (!n.startsWith("note-") || !n.endsWith(".json")) continue;
-              const rec4 = this.read(n.slice(0, -".json".length));
-              if (rec4) out.push(rec4);
+              const rec5 = this.read(n.slice(0, -".json".length));
+              if (rec5) out.push(rec5);
             }
             return out.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
           }
@@ -84375,10 +84380,10 @@ ${body}`;
           expire(maxAgeMs) {
             const cutoff = this.now().getTime() - maxAgeMs;
             const dropped = [];
-            for (const rec4 of this.list()) {
-              if (Date.parse(rec4.createdAt) < cutoff) {
-                this.remove(rec4.id);
-                dropped.push(rec4.id);
+            for (const rec5 of this.list()) {
+              if (Date.parse(rec5.createdAt) < cutoff) {
+                this.remove(rec5.id);
+                dropped.push(rec5.id);
               }
             }
             return dropped;
@@ -85029,13 +85034,13 @@ ${body}`;
             errs.push("startup_dismiss.patterns must be a non-empty array");
           } else {
             d.patterns.forEach((p, i) => {
-              const rec4 = p && typeof p === "object" ? p : {};
-              if (typeof rec4.regex !== "string" || !rec4.regex) {
+              const rec5 = p && typeof p === "object" ? p : {};
+              if (typeof rec5.regex !== "string" || !rec5.regex) {
                 errs.push(`startup_dismiss.patterns[${i}].regex is required`);
                 return;
               }
               try {
-                new RegExp(rec4.regex, typeof rec4.flags === "string" ? rec4.flags : void 0);
+                new RegExp(rec5.regex, typeof rec5.flags === "string" ? rec5.flags : void 0);
               } catch {
                 errs.push(`startup_dismiss.patterns[${i}].regex does not compile`);
               }
@@ -89694,8 +89699,8 @@ ${asText(streams.stderr)}
           let record3 = null;
           try {
             const parsed = JSON.parse((0, import_fs40.readFileSync)(f.path, "utf-8"));
-            const rec4 = parsed && typeof parsed === "object" ? parsed.record : null;
-            record3 = rec4 && typeof rec4 === "object" ? rec4 : null;
+            const rec5 = parsed && typeof parsed === "object" ? parsed.record : null;
+            record3 = rec5 && typeof rec5 === "object" ? rec5 : null;
           } catch {
             record3 = null;
           }
@@ -90763,27 +90768,27 @@ ${asText(streams.stderr)}
       };
     }
     async function resolveStagedNote(ctx, svc, id4, decision) {
-      const rec4 = svc.notes.read(id4);
-      if (!rec4) return respond({ result: "staged_not_found" });
+      const rec5 = svc.notes.read(id4);
+      if (!rec5) return respond({ result: "staged_not_found" });
       if (decision === "discard") {
         svc.notes.remove(id4);
         return respond({ result: "discarded" });
       }
-      const project = await resolveNoteProject(ctx, svc, rec4.meshId);
+      const project = await resolveNoteProject(ctx, svc, rec5.meshId);
       if (!project.ok) return project.result;
       const wrap2 = { project: project.slug, meshId: project.mesh.id };
-      const refusal = noteTextRefusal(rec4.op.text);
+      const refusal = noteTextRefusal(rec5.op.text);
       if (refusal) return respond(refusal, wrap2);
       if (project.remote) {
-        const remote = await applyRemoteNote(project, rec4.op, "owner", rec4.callerSessionId);
+        const remote = await applyRemoteNote(project, rec5.op, "owner", rec5.callerSessionId);
         if (remote.result !== "applied") return respond(remote, wrap2);
         svc.notes.remove(id4);
-        creditReview(svc, rec4.reviewTurnId, remote.result, "approved");
+        creditReview(svc, rec5.reviewTurnId, remote.result, "approved");
         return respond(remote, wrap2);
       }
-      const applied = await applyNote(svc, rec4.meshId, rec4.op, "owner", rec4.callerSessionId);
+      const applied = await applyNote(svc, rec5.meshId, rec5.op, "owner", rec5.callerSessionId);
       svc.notes.remove(id4);
-      creditReview(svc, rec4.reviewTurnId, applied.result, "approved");
+      creditReview(svc, rec5.reviewTurnId, applied.result, "approved");
       return respond(applied, wrap2);
     }
     var ASSISTANT_TOOL_SOURCES;
@@ -91516,12 +91521,14 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         };
       }
     });
-    function pageAttemptReport(body, cursor, source2) {
+    function pageAttemptReport(body, cursor, source2, completeness = "final_native") {
       const reportId = reportBodyId(body);
       if (cursor.reportId && cursor.reportId !== reportId) return { success: false, code: "original_report_unavailable", reason: "original_report_identity_mismatch" };
       if (cursor.offset > body.length) return { success: false, code: "invalid_report_offset" };
       const end = Math.min(body.length, cursor.offset + PROJECT_READ_MESSAGE_MAX_CHARS);
-      return {
+      const pageComplete = end === body.length;
+      const sourceComplete = completeness === "final_native";
+      const page = {
         success: true,
         attemptId: cursor.attemptId,
         coordinatorSessionId: cursor.coordinatorSessionId,
@@ -91530,10 +91537,13 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         text: body.slice(cursor.offset, end),
         offset: cursor.offset,
         totalChars: body.length,
-        complete: end === body.length,
+        sourceComplete,
+        complete: pageComplete && sourceComplete,
         truncated: end < body.length,
         nextOffset: end < body.length ? end : null
       };
+      if (sourceComplete) return page;
+      return { ...page, originalCompleteness: completeness === "envelope_unverified" ? "envelope_unverified" : "unknown" };
     }
     function parseReportContinuation(args) {
       if (args.taskId !== void 0) {
@@ -91635,6 +91645,15 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         init_report_continuation();
       }
     });
+    function evidencePrefixMatches(evidenceRef, stablePrefix) {
+      try {
+        const arr = JSON.parse(evidenceRef);
+        if (!Array.isArray(arr) || arr[0] !== 2) return false;
+        return JSON.stringify(arr.slice(0, 7)) === stablePrefix;
+      } catch {
+        return false;
+      }
+    }
     function toUnrenderedCounts(byMesh) {
       const rows = [...byMesh.entries()].map(([meshId, count]) => ({ meshId, count })).sort((a, b) => b.count - a.count || a.meshId.localeCompare(b.meshId));
       return { total: rows.reduce((n, r) => n + r.count, 0), byMesh: rows };
@@ -91699,15 +91718,27 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
             }
             return toUnrenderedCounts(byMesh);
           }
-          captureAttemptBody(attemptId, meshId, sessionId, body, at, evidenceRef) {
+          captureAttemptBody(attemptId, meshId, sessionId, body, at, evidenceRef, meta) {
             const row2 = this.relays.get(attemptId);
             if (!row2 || row2.meshId !== meshId || row2.coordinatorSessionId !== sessionId || !evidenceRef || !body || body.length > ATTEMPT_BODY_MAX_CHARS) return;
-            if (!this.bodies.has(attemptId)) this.bodies.set(attemptId, { meshId, sessionId, body, at, evidenceRef });
+            if (meta?.completeness === "envelope_unverified") return;
+            const existing = this.bodies.get(attemptId);
+            if (existing && existing.evidenceRef === evidenceRef) {
+              this.pruneBodies(at);
+              return;
+            }
+            this.bodies.set(attemptId, { meshId, sessionId, body, at, evidenceRef, parts: meta?.parts ?? [] });
             this.pruneBodies(at);
           }
           readAttemptBody(attemptId, meshId, sessionId, now, evidenceRef) {
             const b = this.bodies.get(attemptId);
             return b && b.evidenceRef === evidenceRef && !!evidenceRef && b.meshId === meshId && b.sessionId === sessionId && now - b.at <= ATTEMPT_BODY_TTL_MS ? b.body : null;
+          }
+          readVerifiedAttemptBody(attemptId, meshId, sessionId, now, stablePrefix) {
+            const b = this.bodies.get(attemptId);
+            if (!b || b.meshId !== meshId || b.sessionId !== sessionId || now - b.at > ATTEMPT_BODY_TTL_MS) return null;
+            if (!evidencePrefixMatches(b.evidenceRef, stablePrefix)) return null;
+            return { body: b.body, evidenceRef: b.evidenceRef, parts: b.parts };
           }
           pruneBodies(now) {
             let total = 0, count = 0;
@@ -91802,17 +91833,22 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
             ).all();
             return toUnrenderedCounts(new Map(rows.map((r) => [r.mesh_id, Number(r.n)])));
           }
-          captureAttemptBody(attemptId, meshId, sessionId, body, at, evidenceRef) {
+          captureAttemptBody(attemptId, meshId, sessionId, body, at, evidenceRef, meta) {
             if (!evidenceRef || !body || body.length > ATTEMPT_BODY_MAX_CHARS) return;
+            if (meta?.completeness === "envelope_unverified") return;
+            const partsJson = JSON.stringify(meta?.parts ?? []);
+            const completeness = meta?.completeness ?? null;
             this.db.transaction(() => {
               this.db.prepare(`INSERT INTO assistant_attempt_bodies
-                (attempt_id, mesh_id, coordinator_session_id, captured_at, body, evidence_ref)
-                SELECT attempt_id, mesh_id, coordinator_session_id, ?, ?, ? FROM assistant_relays
+                (attempt_id, mesh_id, coordinator_session_id, captured_at, body, evidence_ref, parts_json, completeness)
+                SELECT attempt_id, mesh_id, coordinator_session_id, ?, ?, ?, ?, ? FROM assistant_relays
                 WHERE attempt_id = ? AND mesh_id = ? AND coordinator_session_id = ?
-                ON CONFLICT(attempt_id) DO UPDATE SET body=excluded.body, captured_at=excluded.captured_at, evidence_ref=excluded.evidence_ref
-                WHERE assistant_attempt_bodies.evidence_ref IS NULL
-                  AND assistant_attempt_bodies.mesh_id=excluded.mesh_id
-                  AND assistant_attempt_bodies.coordinator_session_id=excluded.coordinator_session_id`).run(at, body, evidenceRef, attemptId, meshId, sessionId);
+                ON CONFLICT(attempt_id) DO UPDATE SET
+                    body=excluded.body, captured_at=excluded.captured_at, evidence_ref=excluded.evidence_ref,
+                    parts_json=excluded.parts_json, completeness=excluded.completeness
+                WHERE assistant_attempt_bodies.mesh_id=excluded.mesh_id
+                  AND assistant_attempt_bodies.coordinator_session_id=excluded.coordinator_session_id
+                  AND (assistant_attempt_bodies.evidence_ref IS NULL OR assistant_attempt_bodies.evidence_ref != excluded.evidence_ref)`).run(at, body, evidenceRef, partsJson, completeness, attemptId, meshId, sessionId);
               this.pruneBodies(at);
             })();
           }
@@ -91820,6 +91856,19 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
             const row2 = this.db.prepare(`SELECT body FROM assistant_attempt_bodies
             WHERE attempt_id = ? AND mesh_id = ? AND coordinator_session_id = ? AND captured_at >= ? AND evidence_ref = ?`).get(attemptId, meshId, sessionId, now - ATTEMPT_BODY_TTL_MS, evidenceRef);
             return row2?.body ?? null;
+          }
+          readVerifiedAttemptBody(attemptId, meshId, sessionId, now, stablePrefix) {
+            const row2 = this.db.prepare(`SELECT body, evidence_ref, parts_json, completeness FROM assistant_attempt_bodies
+            WHERE attempt_id = ? AND mesh_id = ? AND coordinator_session_id = ? AND captured_at >= ?`).get(attemptId, meshId, sessionId, now - ATTEMPT_BODY_TTL_MS);
+            if (!row2?.evidence_ref || !evidencePrefixMatches(row2.evidence_ref, stablePrefix)) return null;
+            if (row2.completeness && row2.completeness !== "final_native") return null;
+            let parts = [];
+            try {
+              const parsed = JSON.parse(row2.parts_json || "[]");
+              if (Array.isArray(parsed)) parts = parsed.filter((p) => !!p && typeof p === "object" && typeof p.at === "number");
+            } catch {
+            }
+            return { body: row2.body, evidenceRef: row2.evidence_ref, parts };
           }
           pruneBodies(now) {
             this.db.prepare("DELETE FROM assistant_attempt_bodies WHERE captured_at < ?").run(now - ATTEMPT_BODY_TTL_MS);
@@ -91850,7 +91899,8 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
           "review_turns",
           "review_turns_with_writes",
           "review_writes_applied",
-          "review_writes_approved"
+          "review_writes_approved",
+          "relay_gaps"
         ];
         ASSISTANT_METRIC_RETENTION_DAYS = 90;
         AssistantMetricsStore = class {
@@ -91898,12 +91948,75 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         };
       }
     });
+    function bubbleTimestamp(m) {
+      const r = rec3(m);
+      if (!r) return null;
+      const timestamp2 = typeof r.timestamp === "number" ? r.timestamp : Date.parse(String(r.timestamp ?? r.createdAt ?? ""));
+      return Number.isFinite(timestamp2) ? timestamp2 : null;
+    }
+    function standardAssistantBubble(m) {
+      if (!isVisible(m)) return null;
+      const r = rec3(m);
+      if (!r) return null;
+      const role = String(r.role ?? "").toLowerCase();
+      if (role !== "assistant" && role !== "agent") return null;
+      const kind = String(r.kind ?? r.messageKind ?? "").toLowerCase();
+      if (kind && kind !== "standard") return null;
+      const text3 = messageText(r).trim();
+      if (!text3) return null;
+      const at = bubbleTimestamp(r);
+      if (at === null) return null;
+      return { at, text: text3 };
+    }
+    function selectNativeWindow(messages, start, end) {
+      const seen2 = /* @__PURE__ */ new Set();
+      const bubbles = [];
+      for (const m of messages) {
+        const b = standardAssistantBubble(m);
+        if (!b || b.at < start || b.at > end) continue;
+        const key4 = `${b.at}
+${b.text}`;
+        if (seen2.has(key4)) continue;
+        seen2.add(key4);
+        bubbles.push({ at: b.at, chars: Array.from(b.text).length, text: b.text });
+      }
+      bubbles.sort((a, b) => a.at - b.at || a.text.localeCompare(b.text));
+      const atCount = /* @__PURE__ */ new Map();
+      for (const b of bubbles) atCount.set(b.at, (atCount.get(b.at) ?? 0) + 1);
+      if ([...atCount.values()].some((n) => n > 1)) return { ambiguous: true, bubbles: [] };
+      return { ambiguous: false, bubbles };
+    }
+    function formatReplyClock(ms3) {
+      return new Date(ms3).toISOString().slice(11, 19);
+    }
+    function renderNativeReplies(bubbles) {
+      if (bubbles.length === 1) return bubbles[0].text;
+      return bubbles.map((b, i) => `[reply ${i + 1}/${bubbles.length} \xB7 ${formatReplyClock(b.at)}]
+${b.text}`).join("\n\n");
+    }
+    function envelopeIsNativePrefix(envelope, bubbles) {
+      const needle = envelope.trim();
+      if (!needle) return true;
+      if (bubbles.some((b) => b.text.trim().startsWith(needle))) return true;
+      return bubbles.map((b) => b.text.trim()).join("\n").startsWith(needle);
+    }
+    function partsOf(bubbles) {
+      return bubbles.map((b) => ({ at: b.at, chars: b.chars }));
+    }
+    var rec3;
+    var init_assistant_native_window = __esm2({
+      "src/assistant/assistant-native-window.ts"() {
+        "use strict";
+        init_project_views();
+        rec3 = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : null;
+      }
+    });
     async function recoverAttemptReport(db, attempt, meshId, sessionId, execute) {
       if (!attempt || attempt.scope !== "plain" || attempt.sessionId !== sessionId || !attempt.terminal) return { body: null, source: "unavailable", reason: "exact_committed_attempt_not_found" };
       if (attempt.meshId && attempt.meshId !== meshId) return { body: null, source: "unavailable", reason: "attempt_mesh_mismatch" };
       const payloadOf = (row2) => {
         try {
-          return row2 ? rec3(JSON.parse(row2.payload_json)) : null;
+          return row2 ? rec4(JSON.parse(row2.payload_json)) : null;
         } catch {
           return null;
         }
@@ -91918,9 +92031,9 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       const owns = (row2) => row2.session_id === sessionId && row2.generation === attempt.generation;
       const commitPayload = payloadOf(committed);
       let payload = payloadOf(terminal);
-      let evidence = rec3(payload?.evidence);
+      let evidence = rec4(payload?.evidence);
       const matchesEvidence = (row2, e) => {
-        const ref = rec3(e?.attemptRef);
+        const ref = rec4(e?.attemptRef);
         return owns(row2) && e?.eventId === row2.event_id && e?.kind === row2.kind && e?.sessionId === sessionId && e?.at === row2.at_ms && (!ref || ref.attemptId === attempt.attemptId && ref.generation === attempt.generation);
       };
       if (!matchesEvidence(terminal, evidence) || !owns(committed) || terminal.to_state !== attempt.terminal.outcome || terminal.at_ms !== attempt.terminal.at || committed.event_id !== terminal.event_id + "#committed" || committed.verdict !== "applied" || committed.from_state !== null || committed.source !== terminal.source || committed.to_state !== attempt.terminal.outcome || committed.at_ms !== terminal.at_ms || commitPayload?.outcome !== attempt.terminal.outcome || commitPayload?.reason !== attempt.terminal.reason || commitPayload?.strength !== attempt.terminal.strength || evidence?.source !== attempt.terminal.source) {
@@ -91928,17 +92041,17 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       }
       let sourceEvent = terminal;
       const isNativeReference = (e) => e?.kind === "turn_end" || e?.kind === "transcript_final";
-      const directEnvelope = rec3(rec3(payload?.local)?.envelope);
+      const directEnvelope = rec4(rec4(payload?.local)?.envelope);
       if (!isNativeReference(evidence) && !(typeof directEnvelope?.finalSummary === "string" && directEnvelope.finalSummary)) {
         const hold = evidence?.kind === "hold_expired" && typeof evidence.holdId === "string" && ["weak_candidate", "await_report", "await_end"].includes(String(evidence.reason)) ? db.prepare(`SELECT * FROM turn_holds WHERE hold_id=? AND attempt_id=? AND generation=?
                 AND reason=? AND status='resolved' AND until_ms<=?`).get(evidence.holdId, attempt.attemptId, attempt.generation, evidence.reason, terminal.at_ms) : void 0;
         let textEventId;
         try {
-          textEventId = hold ? rec3(JSON.parse(hold.data_json))?.textEventId : void 0;
+          textEventId = hold ? rec4(JSON.parse(hold.data_json))?.textEventId : void 0;
         } catch {
         }
         const original = typeof textEventId === "string" ? db.prepare("SELECT * FROM turn_events WHERE event_id=? AND attempt_id=?").get(textEventId, attempt.attemptId) : void 0;
-        const originalPayload = payloadOf(original), originalEvidence = rec3(originalPayload?.evidence);
+        const originalPayload = payloadOf(original), originalEvidence = rec4(originalPayload?.evidence);
         if (!original || !matchesEvidence(original, originalEvidence) || original.verdict !== "applied" || !isNativeReference(originalEvidence) || original.at_ms > terminal.at_ms) {
           return { body: null, source: "unavailable", reason: "no_unique_original_native_bubble_reference" };
         }
@@ -91947,71 +92060,101 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         evidence = originalEvidence;
       }
       const hash3 = (text3) => (0, import_node_crypto17.createHash)("sha256").update(text3).digest("hex");
-      const evidenceRef = JSON.stringify([
-        1,
+      const stable = [
+        ATTEMPT_EVIDENCE_VERSION,
         attempt.generation,
         attempt.terminal.at,
         terminal.event_id,
         hash3(terminal.payload_json),
         sourceEvent.event_id,
         hash3(sourceEvent.payload_json)
-      ]);
-      const provenance = {
-        version: 1,
+      ];
+      const store2 = new SqliteAssistantRelayStore(db);
+      const provenanceFor = (evidenceRef) => ({
+        version: ATTEMPT_EVIDENCE_VERSION,
         attemptId: attempt.attemptId,
         coordinatorSessionId: sessionId,
         generation: attempt.generation,
         evidenceRef
+      });
+      const envelopeText = (() => {
+        const envelope = rec4(rec4(payload?.local)?.envelope);
+        return typeof envelope?.finalSummary === "string" && envelope.finalSummary.trim() ? envelope.finalSummary : null;
+      })();
+      const windowStart = attempt.acceptedAt - 1e3;
+      const windowEnd = attempt.terminal.at;
+      const pooled = [];
+      const take = (messages) => {
+        if (Array.isArray(messages)) pooled.push(...messages);
+        return selectNativeWindow(pooled, windowStart, windowEnd);
       };
-      const store2 = new SqliteAssistantRelayStore(db);
-      const capture = (body, source2) => {
-        store2.captureAttemptBody(attempt.attemptId, meshId, sessionId, body, Date.now(), evidenceRef);
-        return { body, source: source2, provenance };
-      };
-      const envelope = rec3(rec3(payload?.local)?.envelope);
-      if (typeof envelope?.finalSummary === "string" && envelope.finalSummary) return capture(envelope.finalSummary, "existing_attempt_envelope");
-      const anchors = /* @__PURE__ */ new Set();
-      if (isNativeReference(evidence) && typeof evidence?.messageAt === "number") anchors.add(evidence.messageAt);
-      if (anchors.size !== 1) return { body: null, source: "unavailable", reason: "no_unique_original_native_bubble_reference" };
-      const at = [...anchors][0];
-      if (at < attempt.acceptedAt || at > attempt.terminal.at) return { body: null, source: "unavailable", reason: "native_reference_outside_attempt" };
-      const captured = store2.readAttemptBody(attempt.attemptId, meshId, sessionId, Date.now(), evidenceRef);
-      if (captured) return { body: captured, source: "durable_attempt_capture", provenance };
-      let ambiguous = false;
-      const match = (chat2) => {
-        const matches = (Array.isArray(chat2.messages) ? chat2.messages : []).filter((m) => {
-          const r = rec3(m);
-          const timestamp2 = typeof r?.timestamp === "number" ? r.timestamp : Date.parse(String(r?.timestamp ?? ""));
-          return isVisible(m) && ["assistant", "agent"].includes(String(r?.role).toLowerCase()) && timestamp2 === at;
-        });
-        if (matches.length > 1) ambiguous = true;
-        return matches.length === 1 ? messageText(matches[0]) || null : null;
-      };
+      let selected = { ambiguous: false, bubbles: [] };
+      let sawChat = false;
       const chat = await execute("read_chat", { targetSessionId: sessionId, limit: 200 });
       if (chat.success) {
-        const body = match(chat);
-        if (ambiguous) return { body: null, source: "unavailable", reason: "ambiguous_original_native_bubble" };
-        if (body) return capture(body, "exact_native_bubble");
+        sawChat = true;
+        selected = take(chat.messages);
+        if (selected.ambiguous) return { body: null, source: "unavailable", reason: "ambiguous_original_native_bubble" };
       }
-      for (let offset = 0; offset < 400; offset += 100) {
-        const history = await execute("chat_history", { targetSessionId: sessionId, offset, limit: 100, excludeRecentCount: 0 });
-        if (!history.success) break;
-        const body = match(history);
-        if (ambiguous) return { body: null, source: "unavailable", reason: "ambiguous_original_native_bubble" };
-        if (body) return capture(body, "exact_native_history_bubble");
-        if (history.hasMore !== true) break;
+      if (!selected.bubbles.length && (!sawChat || chat.hasMore === true)) {
+        for (let offset = 0; offset < 400; offset += 100) {
+          const history = await execute("chat_history", { targetSessionId: sessionId, offset, limit: 100, excludeRecentCount: 0 });
+          if (!history.success) break;
+          sawChat = true;
+          selected = take(history.messages);
+          if (selected.ambiguous) return { body: null, source: "unavailable", reason: "ambiguous_original_native_bubble" };
+          if (history.hasMore !== true) break;
+        }
       }
+      let anchorOutside = false;
+      let viaAnchor = false;
+      if (!selected.bubbles.length && isNativeReference(evidence) && typeof evidence?.messageAt === "number") {
+        const at = evidence.messageAt;
+        if (at < attempt.acceptedAt || at > attempt.terminal.at) anchorOutside = true;
+        else {
+          const anchored = selectNativeWindow(pooled, at, at);
+          if (anchored.ambiguous) return { body: null, source: "unavailable", reason: "ambiguous_original_native_bubble" };
+          if (anchored.bubbles.length === 1) {
+            selected = anchored;
+            viaAnchor = true;
+          }
+        }
+      }
+      const finishNative = (bubbles, source2) => {
+        if (envelopeText && !envelopeIsNativePrefix(envelopeText, bubbles)) {
+          LOG.warn("Assistant", `envelope_native_mismatch attempt=${attempt.attemptId} envelopeChars=${envelopeText.length} nativeChars=${bubbles.reduce((n, b) => n + b.chars, 0)}`);
+        }
+        const parts = partsOf(bubbles);
+        const evidenceRef = JSON.stringify([...stable, hash3(parts.map((p) => `${p.at}:${p.chars}`).join("|"))]);
+        const body = renderNativeReplies(bubbles);
+        store2.captureAttemptBody(attempt.attemptId, meshId, sessionId, body, Date.now(), evidenceRef, { completeness: "final_native", parts });
+        return { body, source: source2, completeness: "final_native", parts, provenance: provenanceFor(evidenceRef) };
+      };
+      if (selected.bubbles.length) return finishNative(selected.bubbles, viaAnchor ? "exact_native_bubble" : "native_window");
+      const durable2 = store2.readVerifiedAttemptBody(attempt.attemptId, meshId, sessionId, Date.now(), JSON.stringify(stable));
+      if (durable2) return {
+        body: durable2.body,
+        source: "durable_attempt_capture",
+        completeness: "final_native",
+        parts: durable2.parts,
+        provenance: provenanceFor(durable2.evidenceRef)
+      };
+      if (envelopeText) return { body: envelopeText, source: "existing_attempt_envelope", completeness: "envelope_unverified", provenance: provenanceFor(JSON.stringify(stable)) };
+      if (anchorOutside) return { body: null, source: "unavailable", reason: "native_reference_outside_attempt" };
       return { body: null, source: "unavailable", reason: "original_native_bubble_unavailable" };
     }
     var import_node_crypto17;
-    var rec3;
+    var rec4;
+    var ATTEMPT_EVIDENCE_VERSION;
     var init_attempt_report_recovery = __esm2({
       "src/assistant/attempt-report-recovery.ts"() {
         "use strict";
         import_node_crypto17 = require("crypto");
         init_assistant_relay_sqlite_store();
-        init_project_views();
-        rec3 = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : null;
+        init_logger();
+        init_assistant_native_window();
+        rec4 = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : null;
+        ATTEMPT_EVIDENCE_VERSION = 2;
       }
     });
     function environmentInventory(meshes, now = Date.now(), local) {
@@ -92237,6 +92380,11 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       lines.push(RELAY_CLOSE);
       return lines.join("\n");
     }
+    function buildUncoveredReplyGap(klass, messageAt) {
+      const hhmmss = new Date(messageAt).toISOString().slice(11, 19);
+      const why = klass === "no_attempt" ? "no attempt was opened for it" : klass === "restart_closed" ? "its attempt was closed by a restart" : "it was inside an attempt whose relay did not include it";
+      return `[ADHDev relay gap] A coordinator reply at ${hhmmss} UTC was not relayed (${klass}: ${why}). Use project_read before assuming nothing happened.`;
+    }
     function buildMissedReportsLine(missed) {
       const rows = missed.filter((m) => m.count > 0);
       if (!rows.length) return "";
@@ -92288,6 +92436,8 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
     }
     var RELAY_BODY_MAX_CHARS;
     var RELAY_QUIET_MS;
+    var RELAY_NATIVE_RETRY_MS;
+    var RELAY_NATIVE_WAIT_MS;
     var RELAY_MAX_WAIT_MS;
     var RELAY_IDLE_CLOSE_GRACE_MS;
     var RELAY_PROGRESS_AFTER_MS;
@@ -92304,6 +92454,8 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         "use strict";
         RELAY_BODY_MAX_CHARS = 4096;
         RELAY_QUIET_MS = 15e3;
+        RELAY_NATIVE_RETRY_MS = 1e3;
+        RELAY_NATIVE_WAIT_MS = 8e3;
         RELAY_MAX_WAIT_MS = 12e4;
         RELAY_IDLE_CLOSE_GRACE_MS = 10 * 6e4;
         RELAY_PROGRESS_AFTER_MS = 30 * 6e4;
@@ -92743,7 +92895,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         if (continuation.coordinatorSessionId !== sessionId && !ports.coordinatorSessionAuthorized?.(meshId, continuation.coordinatorSessionId)) return { ok: true, result: { success: false, code: "original_report_unavailable", reason: "coordinator_session_no_longer_authorized" } };
         if ("attemptId" in continuation) {
           const original = await localAttemptReport(ports, meshId, continuation.coordinatorSessionId, continuation.attemptId);
-          return { ok: true, result: original.body ? pageAttemptReport(original.body, continuation, original.source) : { success: false, code: "original_report_unavailable", reason: original.reason } };
+          return { ok: true, result: original.body ? pageAttemptReport(original.body, continuation, original.source, original.completeness === "envelope_unverified" ? "envelope_unverified" : "final_native") : { success: false, code: "original_report_unavailable", reason: original.reason } };
         }
         return { ok: true, result: await continueReport(ports.execute, continuation) };
       }
@@ -93018,6 +93170,73 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         });
       }
     });
+    function restartClosed(row2) {
+      return row2.terminal_reason === "session_error" && row2.terminal_source === "session_registry";
+    }
+    async function collectCoordinatorReplies(opts) {
+      const since = opts.sinceMs - LOOKBACK_MS;
+      let sessions;
+      try {
+        sessions = opts.db.prepare(`
+        SELECT session_id FROM (
+            SELECT session_id, MAX(COALESCE(terminal_at, last_activity_at, accepted_at)) AS seen
+            FROM turn_attempts
+            WHERE scope='plain' AND COALESCE(terminal_at, last_activity_at, accepted_at) >= ?
+            GROUP BY session_id
+            UNION
+            SELECT coordinator_session_id AS session_id, MAX(committed_at) AS seen
+            FROM assistant_relays WHERE committed_at >= ? GROUP BY coordinator_session_id
+        ) ORDER BY seen DESC LIMIT ?
+    `).all(since, since, SESSION_CAP);
+      } catch {
+        return [];
+      }
+      const out = [];
+      for (const { session_id: sessionId } of sessions) {
+        if (!sessionId) continue;
+        const attempts = opts.db.prepare(`
+            SELECT attempt_id, accepted_at, terminal_at, terminal_reason, terminal_source, state
+            FROM turn_attempts WHERE session_id=? AND scope='plain'
+        `).all(sessionId);
+        let chat;
+        try {
+          chat = await opts.execute("read_chat", { targetSessionId: sessionId, limit: 200 });
+        } catch {
+          continue;
+        }
+        if (!chat?.success || !Array.isArray(chat.messages)) continue;
+        for (const m of chat.messages) {
+          const bubble = standardAssistantBubble(m);
+          if (!bubble || bubble.at < opts.sinceMs) continue;
+          const containing = attempts.filter((a) => bubble.at >= a.accepted_at - 1e3 && bubble.at <= (a.terminal_at ?? opts.now));
+          containing.sort((a, b) => b.accepted_at - a.accepted_at);
+          const attempt = containing[0];
+          const open = !!attempt && !TERMINAL2.has(attempt.state);
+          out.push({
+            sessionId,
+            messageAt: bubble.at,
+            chars: Array.from(bubble.text).length,
+            text: bubble.text,
+            attemptId: attempt?.attempt_id ?? null,
+            ...open ? { attemptOpen: true } : {},
+            ...attempt && restartClosed(attempt) ? { restartClosed: true } : {}
+          });
+        }
+      }
+      return out;
+    }
+    var TERMINAL2;
+    var SESSION_CAP;
+    var LOOKBACK_MS;
+    var init_assistant_relay_audit = __esm2({
+      "src/assistant/assistant-relay-audit.ts"() {
+        "use strict";
+        init_assistant_native_window();
+        TERMINAL2 = /* @__PURE__ */ new Set(["completed", "failed", "cancelled"]);
+        SESSION_CAP = 20;
+        LOOKBACK_MS = 12e4;
+      }
+    });
     var ASSISTANT_RELAY_BUS_KINDS;
     var PENDING_HUMAN_MAX_AGE_MS;
     var realClock;
@@ -93026,6 +93245,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       "src/assistant/assistant-relay.ts"() {
         "use strict";
         init_report_continuation();
+        init_logger();
         init_dist();
         init_assistant_registry();
         init_assistant_human_input();
@@ -93065,6 +93285,12 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           /** Exact attempt reports returned by the authorized evidence reader. The
            * memory cache clears on delivery; the reader retains bounded durable captures. */
           attemptBodies = /* @__PURE__ */ new Map();
+          attemptMeta = /* @__PURE__ */ new Map();
+          /** Exact bodies whose own relay was sent. The detector treats these as coverage. */
+          renderedCoverage = [];
+          flaggedReplies = /* @__PURE__ */ new Set();
+          lastAuditAt = 0;
+          auditing = false;
           /** In-flight local captures (attemptId → settle promise); `renderRelay` awaits these instead of racing them. */
           attemptBodyCapture = /* @__PURE__ */ new Map();
           queue = [];
@@ -93096,6 +93322,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
               }
             }
             this.queue.push(...byMesh.values());
+            this.lastAuditAt = this.clock.now();
             this.unsubscribe = this.ports.subscribe((e) => this.onEvent(e));
           }
           stop() {
@@ -93105,6 +93332,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             this.batches.clear();
             this.attemptBodyCapture.clear();
             this.attemptBodies.clear();
+            this.attemptMeta.clear();
           }
           /** `project_send` accepted: open/refresh the project's thread. */
           openThread(meshId) {
@@ -93249,6 +93477,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
               }
             }
             this.ports.store.prune(now);
+            this.auditReplies(now);
             this.kick();
           }
           /**
@@ -93414,18 +93643,97 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             b.quietTimer = this.clock.setTimeout(() => this.fire(meshId), RELAY_QUIET_MS);
           }
           /** Resolve only through the authorized exact-attempt reader. That reader
-           * persists validated terminal/envelope/native evidence, never a session tail.
-           * Delivery/folding or stop invalidates this cache token without cancelling
-           * a safe durable capture still completing in the reader. */
+           * persists a native window, never a session tail and never an unverified
+           * envelope. While the native text is absent, retry on the injected clock
+           * for RELAY_NATIVE_WAIT_MS (inside the quiet window). Delivery/folding or
+           * stop drops the cache token so a late read cannot repopulate it. */
           captureAttemptBody(attemptId, meshId, coordinatorSessionId) {
-            const p = (this.ports.rehydrateAttemptReport?.(meshId, coordinatorSessionId, attemptId) ?? Promise.resolve(null)).then((body) => {
-              if (this.attemptBodyCapture.get(attemptId) === p) this.attemptBodies.set(attemptId, body);
-            }).catch(() => {
-              if (this.attemptBodyCapture.get(attemptId) === p) this.attemptBodies.set(attemptId, null);
-            }).finally(() => {
+            const started = this.clock.now();
+            let p;
+            const live = () => this.attemptBodyCapture.get(attemptId) === p;
+            p = this.settleCapture(attemptId, meshId, coordinatorSessionId, started, live);
+            this.attemptBodyCapture.set(attemptId, p);
+            void p.finally(() => {
               if (this.attemptBodyCapture.get(attemptId) === p) this.attemptBodyCapture.delete(attemptId);
             });
-            this.attemptBodyCapture.set(attemptId, p);
+          }
+          async settleCapture(attemptId, meshId, coordinatorSessionId, started, live) {
+            let last = this.normalizeReport(null);
+            for (; ; ) {
+              let read2;
+              try {
+                read2 = this.ports.rehydrateAttemptReport ? this.ports.rehydrateAttemptReport(meshId, coordinatorSessionId, attemptId) : Promise.resolve(null);
+              } catch {
+                read2 = Promise.resolve(null);
+              }
+              await Promise.resolve();
+              if (!live()) return;
+              try {
+                last = this.normalizeReport(await read2);
+              } catch {
+                last = this.normalizeReport(null);
+              }
+              if (!live()) return;
+              if (last.completeness === "final_native" && last.body?.trim()) {
+                this.rememberReport(attemptId, last);
+                return;
+              }
+              const elapsed = this.clock.now() - started;
+              if (elapsed >= RELAY_NATIVE_WAIT_MS) {
+                this.rememberReport(attemptId, last);
+                return;
+              }
+              const wait = Math.min(RELAY_NATIVE_RETRY_MS, RELAY_NATIVE_WAIT_MS - elapsed);
+              await new Promise((resolve41) => {
+                this.clock.setTimeout(resolve41, wait);
+              });
+            }
+          }
+          normalizeReport(raw) {
+            if (typeof raw === "string") return { body: raw, completeness: "final_native" };
+            if (!raw || typeof raw !== "object") return { body: null, completeness: "envelope_unverified" };
+            const completeness = raw.completeness === "final_native" ? "final_native" : "envelope_unverified";
+            return {
+              body: typeof raw.body === "string" ? raw.body : null,
+              completeness,
+              ...raw.source ? { source: raw.source } : {},
+              ...raw.parts ? { parts: raw.parts } : {}
+            };
+          }
+          rememberReport(attemptId, report) {
+            this.attemptBodies.set(attemptId, report.body);
+            this.attemptMeta.set(attemptId, report);
+          }
+          /** Native finals not covered by a delivered exact relay. One warn and one pointer per bubble. */
+          auditReplies(now) {
+            const port = this.ports.auditCoordinatorReplies;
+            if (!port || this.auditing) return;
+            const since = this.lastAuditAt;
+            this.lastAuditAt = now;
+            this.auditing = true;
+            void Promise.resolve().then(() => port(since)).then((replies) => {
+              for (const reply of replies ?? []) this.noteUncoveredReply(reply, now);
+            }).catch((e) => LOG.warn("Assistant", `relay gap audit failed: ${e?.message ?? e}`)).finally(() => {
+              this.auditing = false;
+            });
+          }
+          noteUncoveredReply(reply, now) {
+            const text3 = reply.text?.trim() ?? "";
+            if (!text3 || !reply.chars || reply.attemptOpen) return;
+            const key4 = `${reply.sessionId}:${reply.messageAt}`;
+            if (this.flaggedReplies.has(key4) || this.replyCovered(reply, text3)) return;
+            const klass = !reply.attemptId ? "no_attempt" : reply.restartClosed ? "restart_closed" : "inside_attempt";
+            this.flaggedReplies.add(key4);
+            LOG.warn("Assistant", `relay gap class=${klass} session=${reply.sessionId} at=${reply.messageAt} chars=${reply.chars}`);
+            this.ports.onRelayGap?.(klass, now);
+            this.pushLine("relay", buildUncoveredReplyGap(klass, reply.messageAt));
+          }
+          replyCovered(reply, text3) {
+            return this.renderedCoverage.some((c) => {
+              if (c.sessionId !== reply.sessionId) return false;
+              if (c.parts.some((p) => p.at === reply.messageAt)) return true;
+              return c.body.includes(text3);
+            });
           }
           onCoordinatorAttention(meshId, sessionId, value) {
             if (value === null || value === void 0) {
@@ -93580,9 +93888,20 @@ ${supplement}`] : [], ...blocks].join("\n\n");
               return sentIds.has(relayMessageId(i.meshId, last)) ? i.attemptIds.filter((id4) => this.hasCapturedBody(id4)) : [];
             });
             this.ports.store.markDelivered(relayItems.flatMap((i) => i.attemptIds), at, rendered);
+            for (const item of relayItems) {
+              for (const id4 of item.attemptIds) {
+                if (!rendered.includes(id4)) continue;
+                const meta = this.attemptMeta.get(id4);
+                const body = this.attemptBodies.get(id4);
+                if (meta?.completeness === "final_native" && body?.trim()) {
+                  this.renderedCoverage.push({ sessionId: item.coordinatorSessionId, body, parts: meta.parts ?? [] });
+                }
+              }
+            }
             for (const id4 of relayItems.flatMap((i) => i.attemptIds)) {
               this.attemptBodyCapture.delete(id4);
               this.attemptBodies.delete(id4);
+              this.attemptMeta.delete(id4);
               this.restoredAttempts.delete(id4);
             }
             const meshes = [...new Set(relayItems.map((i) => i.meshId))];
@@ -93647,7 +93966,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             return this.slugCounts(counts);
           }
           hasCapturedBody(attemptId) {
-            return !!this.attemptBodies.get(attemptId)?.trim();
+            return this.attemptMeta.get(attemptId)?.completeness === "final_native" && !!this.attemptBodies.get(attemptId)?.trim();
           }
           slugCounts(counts) {
             return [...counts.entries()].filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([meshId, count]) => ({ slug: this.ports.projectSlug(meshId) ?? meshId, count }));
@@ -93666,12 +93985,12 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             for (const id4 of item.attemptIds) {
               const ref = this.restoredAttempts.get(id4);
               if (!ref || this.attemptBodies.has(id4)) continue;
-              let body = null;
+              let report = null;
               try {
-                body = await this.ports.rehydrateAttemptReport?.(ref.meshId, ref.sessionId, id4) ?? null;
+                report = this.normalizeReport(await this.ports.rehydrateAttemptReport?.(ref.meshId, ref.sessionId, id4) ?? null);
               } catch {
               }
-              if (body) this.attemptBodies.set(id4, body);
+              if (report?.body) this.rememberReport(id4, report);
             }
             return item.attemptIds.map((id4) => this.attemptBodies.get(id4) ?? null);
           }
@@ -93683,11 +94002,15 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             const refs = item.attemptIds.slice(-12).map((attemptId) => {
               const index = item.attemptIds.indexOf(attemptId);
               const body = bodies[index];
+              const meta = this.attemptMeta.get(attemptId);
+              const source2 = meta?.completeness ?? (body ? "final_native" : null);
               return {
                 attemptId,
                 coordinatorSessionId: this.restoredAttempts.get(attemptId)?.sessionId ?? item.coordinatorSessionId,
                 reportId: body ? reportBodyId(body) : null,
-                totalChars: body?.length ?? null
+                totalChars: body?.length ?? null,
+                complete: source2 === "final_native",
+                source: source2
               };
             });
             const references = `[ADHDev report references] ${JSON.stringify({ meshId: item.meshId, reports: refs, omittedReferences: Math.max(0, item.attemptIds.length - refs.length) })}
@@ -93702,7 +94025,9 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             const headerEnd = envelope.indexOf("\n") + 1;
             const missing = unavailable2.length ? `[ADHDev original report unavailable] Exact authorized attempt evidence could not rehydrate: ${unavailable2.join(", ")}. A new report would be regeneration.
 ` : "";
-            const text3 = envelope.slice(0, headerEnd) + references + missing + envelope.slice(headerEnd);
+            const unverified = item.attemptIds.some((id4) => this.attemptMeta.get(id4)?.completeness === "envelope_unverified" && !!this.attemptBodies.get(id4)?.trim());
+            const caution = unverified ? "[ADHDev relay] This report may be truncated \u2014 the native transcript was not captured. Use project_read with the report reference.\n" : "";
+            const text3 = envelope.slice(0, headerEnd) + references + missing + caution + envelope.slice(headerEnd);
             return { text: text3, source: "relay", messageId: relayMessageId(item.meshId, lastAttempt), meshId: item.meshId };
           }
         };
@@ -94059,15 +94384,43 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           });
           const mesh = ports.listMeshes().find((m) => m.id === meshId);
           if (!mesh) return null;
-          if (ports.isHostedHere(mesh)) return (await localAttemptReport(ports, meshId, sessionId, attemptId)).body;
+          if (ports.isHostedHere(mesh)) {
+            const report = await localAttemptReport(ports, meshId, sessionId, attemptId);
+            if (typeof report.body !== "string" || !report.body) return null;
+            return {
+              body: report.body,
+              completeness: report.completeness === "final_native" ? "final_native" : "envelope_unverified",
+              source: report.source,
+              ...report.parts ? { parts: report.parts } : {}
+            };
+          }
           const target = ports.remoteHost(mesh);
           if (!target.reachable) return null;
           const out = await ports.callHost(target, "report", { coordinatorSessionId: sessionId, attemptId });
           if (!out.ok) return null;
           const result = out.result.result;
           const proof = result?.provenance;
-          return typeof result?.body === "string" && proof?.version === 1 && proof.attemptId === attemptId && proof.coordinatorSessionId === sessionId && Number.isSafeInteger(proof.generation) && Number(proof.generation) >= 0 && typeof proof.evidenceRef === "string" && proof.evidenceRef.length > 0 && proof.evidenceRef.length <= 2048 ? result.body : null;
+          const versionOk = proof?.version === 2 || proof?.version === 1;
+          if (typeof result?.body !== "string" || !versionOk || proof?.attemptId !== attemptId || proof?.coordinatorSessionId !== sessionId || !Number.isSafeInteger(proof?.generation) || Number(proof?.generation) < 0 || typeof proof?.evidenceRef !== "string" || proof.evidenceRef.length === 0 || proof.evidenceRef.length > 2048) return null;
+          const completeness = proof?.version === 2 && result.completeness === "final_native" ? "final_native" : "envelope_unverified";
+          const parts = Array.isArray(result.parts) ? result.parts : void 0;
+          return { body: result.body, completeness, ...typeof result.source === "string" ? { source: result.source } : {}, ...parts ? { parts } : {} };
         },
+        auditCoordinatorReplies: async (sinceMs) => {
+          try {
+            const db = MeshRuntimeStore.getInstance().db;
+            return await collectCoordinatorReplies({
+              db,
+              sinceMs,
+              now: Date.now(),
+              execute: (cmd, args) => components.router.execute(cmd, args, "ipc", { inProcess: true })
+            });
+          } catch (e) {
+            LOG.warn("Assistant", `relay gap audit failed: ${e?.message ?? e}`);
+            return [];
+          }
+        },
+        onRelayGap: (_klass, at) => metrics2?.bump("relay_gaps", "", at),
         readCoordinatorTail: async (sessionId) => {
           const chat = await components.router.execute("read_chat", { targetSessionId: sessionId, limit: 40 }, "ipc", { inProcess: true });
           if (!chat?.success) return null;
@@ -94327,6 +94680,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         init_terminal_watch_runtime();
         init_dist();
         init_logger();
+        init_assistant_relay_audit();
         init_mesh_runtime_store();
         init_mesh_work_queue();
         init_mesh_missions();
@@ -103083,8 +103437,8 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       "mesh_sender_not_join_member"
     ]);
     function isMeshSenderRefusalResult(result) {
-      const rec4 = record(result);
-      return !!rec4 && rec4.success === false && typeof rec4.code === "string" && MESH_SENDER_REFUSALS.has(rec4.code);
+      const rec5 = record(result);
+      return !!rec5 && rec5.success === false && typeof rec5.code === "string" && MESH_SENDER_REFUSALS.has(rec5.code);
     }
     init_mesh_relay_result();
     init_p2p_relay_failure();
@@ -112347,12 +112701,39 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
     var MIN_SNIPPET_CHARS = 8;
     var MAX_SNIPPET_CHARS = 80;
     var promptsByInstance = /* @__PURE__ */ new Map();
+    var inputsByInstance = /* @__PURE__ */ new Map();
+    function normalizeInput(text3) {
+      return text3.replace(/\s+/g, " ").trim();
+    }
+    function hasExclusiveSentInput(instanceId, userMessages) {
+      const id4 = instanceId.trim();
+      if (!inputsByInstance.has(id4)) return false;
+      const users = userMessages.map(normalizeInput);
+      let matchedOwner = "";
+      for (const [sender, inputs] of inputsByInstance) {
+        for (const input of inputs) {
+          if (!users.some((user) => user.includes(input))) continue;
+          const shared = [...inputsByInstance].some(([otherId, otherInputs]) => otherId !== sender && otherInputs.some((other) => other.includes(input)));
+          if (shared) continue;
+          if (matchedOwner && matchedOwner !== sender) return false;
+          matchedOwner = sender;
+        }
+      }
+      return matchedOwner === id4;
+    }
     function promptSnippet(text3) {
       const line = String(text3 || "").split("\n").map((l) => l.replace(/\s+/g, " ").trim()).find(Boolean) || "";
       return line.length >= MIN_SNIPPET_CHARS ? line.slice(0, MAX_SNIPPET_CHARS) : "";
     }
     function recordSentPrompt(instanceId, text3) {
       const id4 = typeof instanceId === "string" ? instanceId.trim() : "";
+      const input = normalizeInput(String(text3 || ""));
+      if (id4 && input.length >= MIN_SNIPPET_CHARS) {
+        const inputs = inputsByInstance.get(id4) ?? [];
+        if (inputs[inputs.length - 1] !== input) inputs.push(input);
+        if (inputs.length > MAX_PROMPTS_PER_SESSION) inputs.splice(0, inputs.length - MAX_PROMPTS_PER_SESSION);
+        inputsByInstance.set(id4, inputs);
+      }
       const snippet2 = promptSnippet(text3);
       if (!id4 || !snippet2) return;
       const list = promptsByInstance.get(id4) ?? [];
@@ -112371,7 +112752,10 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
     }
     function releaseSentPrompts(instanceId) {
       const id4 = typeof instanceId === "string" ? instanceId.trim() : "";
-      if (id4) promptsByInstance.delete(id4);
+      if (id4) {
+        promptsByInstance.delete(id4);
+        inputsByInstance.delete(id4);
+      }
     }
     var fs47 = __toESM2(require("fs"));
     init_load_better_sqlite3();
@@ -112925,10 +113309,10 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       let last = null;
       let lastNonTool = null;
       for (let i = 0; i < lines.length; i += 1) {
-        const rec4 = lines[i];
-        const shape = shapes.pick(rec4);
+        const rec5 = lines[i];
+        const shape = shapes.pick(rec5);
         if (!shape) continue;
-        for (const msg of projectMessages(rec4, shape.map, i, lines.length, mtime)) {
+        for (const msg of projectMessages(rec5, shape.map, i, lines.length, mtime)) {
           messageCount += 1;
           if (!first) first = msg;
           last = msg;
@@ -112999,17 +113383,17 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       const messages = [];
       const usageRecords = [];
       for (let i = 0; i < lines.length; i += 1) {
-        const rec4 = lines[i];
+        const rec5 = lines[i];
         if (pickUsage) {
-          const usageMap = pickUsage(rec4);
+          const usageMap = pickUsage(rec5);
           if (usageMap) {
-            const usageRecord = projectUsageRecord(rec4, usageMap, mtime);
+            const usageRecord = projectUsageRecord(rec5, usageMap, mtime);
             if (usageRecord) usageRecords.push(usageRecord);
           }
         }
-        const shape = shapes.pick(rec4);
+        const shape = shapes.pick(rec5);
         if (!shape) continue;
-        for (const msg of projectMessages(rec4, shape.map, i, lines.length, mtime, providerSessionId || requested || sourcePath)) {
+        for (const msg of projectMessages(rec5, shape.map, i, lines.length, mtime, providerSessionId || requested || sourcePath)) {
           if (transcriptWorkspace) msg.workspace = transcriptWorkspace;
           messages.push(msg);
         }
@@ -113040,14 +113424,14 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       if (agentType !== "codex-cli") return [];
       const markers = [];
       const provenance = createCodexTurnProvenance();
-      for (const rec4 of lines) {
-        if (String(rec4?.type ?? "") !== "event_msg") continue;
-        const payload = rec4?.payload;
+      for (const rec5 of lines) {
+        if (String(rec5?.type ?? "") !== "event_msg") continue;
+        const payload = rec5?.payload;
         if (!payload || typeof payload !== "object") continue;
         const payloadType = String(payload.type ?? "").trim();
         const isComplete = payloadType === "task_complete";
         const isAbort = payloadType === "turn_aborted";
-        const receivedAt = parseTimestamp(rec4?.timestamp) ?? 0;
+        const receivedAt = parseTimestamp(rec5?.timestamp) ?? 0;
         if (!isComplete && !isAbort) {
           provenance(payload, receivedAt);
           continue;
@@ -113067,11 +113451,11 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
     }
     function extractKimiTurnTerminalMarkers(lines) {
       const markers = [];
-      for (const rec4 of lines) {
-        if (String(rec4?.type ?? "") !== "turn.ended") continue;
-        const receivedAt = parseTimestamp(rec4?.time) ?? Date.now();
-        const reason = String(rec4?.reason ?? "").trim();
-        const rawTurnId = rec4?.turnId;
+      for (const rec5 of lines) {
+        if (String(rec5?.type ?? "") !== "turn.ended") continue;
+        const receivedAt = parseTimestamp(rec5?.time) ?? Date.now();
+        const reason = String(rec5?.reason ?? "").trim();
+        const rawTurnId = rec5?.turnId;
         const turnId = typeof rawTurnId === "number" && Number.isFinite(rawTurnId) ? String(rawTurnId) : typeof rawTurnId === "string" && rawTurnId.trim() ? rawTurnId.trim() : "";
         markers.push({
           receivedAt,
@@ -115422,7 +115806,7 @@ ${output}` : "";
         const requestedProviderSid = input.providerSessionId || "";
         const sessionStartedAtMs = typeof input.sessionStartedAtMs === "number" ? input.sessionStartedAtMs : typeof input.args?.sessionStartedAtMs === "number" ? input.args.sessionStartedAtMs : 0;
         const instanceId = typeof input.instanceId === "string" ? input.instanceId : typeof input.args?.instanceId === "string" ? input.args.instanceId : "";
-        const resolved = resolveSourcePath(reader, workspace, sessionId, sessionStartedAtMs, instanceId);
+        const resolved = resolveSourcePath(reader, workspace, sessionId, sessionStartedAtMs, instanceId, requestedProviderSid);
         const sourcePath = resolved?.path || null;
         if (!sourcePath) return null;
         const ownerConfirmed = reader === "antigravity-cli" ? resolved?.ownerConfirmed === true : void 0;
@@ -115432,7 +115816,8 @@ ${output}` : "";
           } catch {
           }
         }
-        const session = readByReader(reader, sourcePath, sessionId, workspace);
+        const readSessionId = reader === "antigravity-cli" ? extractAntigravityConversationUuid(sourcePath) || sessionId : sessionId;
+        const session = readByReader(reader, sourcePath, readSessionId, workspace);
         if (!session) return null;
         if (requestedProviderSid && session.providerSessionId && session.providerSessionId !== requestedProviderSid) {
           return null;
@@ -115457,7 +115842,7 @@ ${output}` : "";
         };
       };
     }
-    function resolveSourcePath(reader, workspace, sessionId, sessionStartedAtMs, instanceId) {
+    function resolveSourcePath(reader, workspace, sessionId, sessionStartedAtMs, instanceId, providerSessionId) {
       switch (reader) {
         case "claude-cli": {
           const p = resolveClaudePath(workspace, sessionId);
@@ -115468,7 +115853,7 @@ ${output}` : "";
           return p ? { path: p } : null;
         }
         case "antigravity-cli":
-          return resolveAntigravityPath(workspace, sessionId, sessionStartedAtMs, instanceId);
+          return resolveAntigravityPath(workspace, providerSessionId || sessionId, sessionStartedAtMs, instanceId, !providerSessionId);
         // grok stores per-cwd like claude, but keyed by the url-encoded cwd and
         // with the uuid as a DIRECTORY (…/<uuid>/chat_history.jsonl) rather than
         // the filename, so resolution lives in the reader module.
@@ -115618,87 +116003,63 @@ ${output}` : "";
       return "";
     }
     var AGY_SPAWN_CLAIM_GRACE_MS = 2e3;
-    function resolveAntigravityPath(workspace, sessionId, sessionStartedAtMs, instanceId) {
+    function resolveAntigravityPath(workspace, sessionId, sessionStartedAtMs, instanceId, allowDiscovery = true) {
       const agyRoot = path60.join(os25.homedir(), ".gemini", "antigravity-cli");
       const owner = antigravityOwnerToken(workspace, sessionStartedAtMs, instanceId);
+      const brainPath = (uuid) => path60.join(agyRoot, "brain", uuid, ".system_generated", "logs", "transcript.jsonl");
+      const accept = (uuid, sourcePath) => {
+        if (isAntigravityConversationClaimedByOther(uuid, owner)) return null;
+        if (owner && !claimAntigravityConversation(uuid, owner)) return null;
+        return { path: sourcePath, ownerConfirmed: true };
+      };
       if (sessionId && isUuidLike(sessionId)) {
-        const dbPath = path60.join(agyRoot, "conversations", `${sessionId}.db`);
-        if (fs56.existsSync(dbPath)) {
-          if (owner) claimAntigravityConversation(sessionId, owner);
-          return { path: dbPath, ownerConfirmed: true };
+        const db = path60.join(agyRoot, "conversations", `${sessionId}.db`);
+        if (fs56.existsSync(db)) return accept(sessionId, db);
+        const brain = brainPath(sessionId);
+        if (safeSize(brain) > 0) return accept(sessionId, brain);
+      }
+      if (!allowDiscovery || !owner) return null;
+      const candidates = /* @__PURE__ */ new Map();
+      const add = (uuid, sourcePath, birthPath) => {
+        if (sessionStartedAtMs > 0) {
+          if (safeBirthtime(birthPath) < sessionStartedAtMs - AGY_SPAWN_CLAIM_GRACE_MS) return;
+        } else if (safeMtime(sourcePath) < Date.now() - RECENT_WINDOW_MS) return;
+        const paths = candidates.get(uuid) ?? [];
+        paths.push(sourcePath);
+        candidates.set(uuid, paths);
+      };
+      const entries = (root) => {
+        try {
+          return fs56.readdirSync(root, { withFileTypes: true });
+        } catch {
+          return [];
         }
+      };
+      const convRoot = path60.join(agyRoot, "conversations");
+      for (const entry of entries(convRoot)) {
+        const match = /^([0-9a-f-]+)\.db$/i.exec(entry.name);
+        if (!entry.isFile() || !match || !isUuidLike(match[1])) continue;
+        const db = path60.join(convRoot, entry.name);
+        add(match[1].toLowerCase(), db, db);
       }
       const brainRoot2 = path60.join(agyRoot, "brain");
-      if (fs56.existsSync(brainRoot2)) {
-        const cutoff = spawnAwareCutoff(sessionStartedAtMs);
-        const nonEmptyBrain = (p) => {
-          const t = path60.join(p, ".system_generated", "logs", "transcript.jsonl");
-          return fs56.existsSync(t) && safeSize(t) > 0 ? t : null;
-        };
-        const all = fs56.readdirSync(brainRoot2, { withFileTypes: true }).filter((e) => e.isDirectory() && isUuidLike(e.name)).filter((e) => !isAntigravityConversationClaimedByOther(e.name, owner)).map((e) => {
-          const p = path60.join(brainRoot2, e.name);
-          return { uuid: e.name, p, mtime: safeMtime(p), birth: safeBirthtime(p) };
-        }).filter((e) => e.mtime >= cutoff);
-        let ordered = [];
-        const brainOwnerConfirmed = sessionStartedAtMs > 0;
-        if (sessionStartedAtMs > 0) {
-          const floor = sessionStartedAtMs - AGY_SPAWN_CLAIM_GRACE_MS;
-          ordered = all.filter((e) => (e.birth > 0 ? e.birth : e.mtime) >= floor).sort((a, b) => (a.birth || a.mtime) - (b.birth || b.mtime));
-        } else {
-          ordered = [...all].sort((a, b) => b.mtime - a.mtime);
-        }
-        for (const e of ordered) {
-          const t = nonEmptyBrain(e.p);
-          if (t) {
-            if (owner) claimAntigravityConversation(e.uuid, owner);
-            return { path: t, ownerConfirmed: brainOwnerConfirmed };
-          }
+      for (const entry of entries(brainRoot2)) {
+        if (!entry.isDirectory() || !isUuidLike(entry.name)) continue;
+        const brain = brainPath(entry.name);
+        if (safeSize(brain) > 0) add(entry.name.toLowerCase(), brain, path60.join(brainRoot2, entry.name));
+      }
+      const matches = [];
+      for (const [uuid, paths] of candidates) {
+        for (const sourcePath of paths) {
+          const session = readSession3(sourcePath, uuid, workspace || void 0);
+          const users = session?.messages.filter((m) => m.role === "user").map((m) => m.content) ?? [];
+          if (!hasExclusiveSentInput(instanceId, users)) continue;
+          matches.push({ uuid, sourcePath });
+          break;
         }
       }
-      const convRoot = path60.join(agyRoot, "conversations");
-      const picked = pickUnboundConversationDb(convRoot, sessionStartedAtMs, owner);
-      if (picked) {
-        if (owner) claimAntigravityConversation(picked.uuid, owner);
-        return { path: picked.path, ownerConfirmed: picked.ownerConfirmed };
-      }
-      return null;
-    }
-    function pickUnboundConversationDb(convRoot, sessionFloorMs, owner) {
-      let entries = [];
-      try {
-        entries = fs56.readdirSync(convRoot, { withFileTypes: true });
-      } catch {
-        return null;
-      }
-      const applyRecencyCutoff = !(sessionFloorMs > 0);
-      const recencyCutoff = Date.now() - RECENT_WINDOW_MS;
-      const candidates = [];
-      for (const entry of entries) {
-        if (!entry.isFile()) continue;
-        const match = /^([0-9a-f-]+)\.db$/i.exec(entry.name);
-        if (!match || !isUuidLike(match[1])) continue;
-        const uuid = match[1];
-        if (isAntigravityConversationClaimedByOther(uuid, owner)) continue;
-        const p = path60.join(convRoot, entry.name);
-        const mtime = safeMtime(p);
-        if (applyRecencyCutoff && mtime < recencyCutoff) continue;
-        candidates.push({ path: p, uuid, mtime, birth: safeBirthtime(p) });
-      }
-      if (candidates.length === 0) return null;
-      if (sessionFloorMs > 0) {
-        const floor = sessionFloorMs - AGY_SPAWN_CLAIM_GRACE_MS;
-        const own = candidates.filter((c) => (c.birth > 0 ? c.birth : c.mtime) >= floor);
-        if (own.length === 0) return null;
-        own.sort((a, b) => (a.birth || a.mtime) - (b.birth || b.mtime));
-        return { path: own[0].path, uuid: own[0].uuid, ownerConfirmed: true };
-      }
-      candidates.sort((a, b) => b.mtime - a.mtime);
-      return { path: candidates[0].path, uuid: candidates[0].uuid, ownerConfirmed: false };
-    }
-    function spawnAwareCutoff(sessionStartedAtMs) {
-      const recency = Date.now() - RECENT_WINDOW_MS;
-      if (sessionStartedAtMs > 0) return Math.max(recency, sessionStartedAtMs - AGY_SPAWN_CLAIM_GRACE_MS);
-      return recency;
+      if (matches.length !== 1) return null;
+      return accept(matches[0].uuid, matches[0].sourcePath);
     }
     function readByReader(reader, sourcePath, sessionId, workspace) {
       switch (reader) {
@@ -116994,8 +117355,8 @@ ${output}` : "";
           return { probe, report: null };
         }
         this.autoUpdateLastError = void 0;
-        for (const [type2, rec4] of this.autoUpdateRecords) {
-          if (rec4.state === "blocked" && !probe.staleTypes.includes(type2)) this.autoUpdateRecords.delete(type2);
+        for (const [type2, rec5] of this.autoUpdateRecords) {
+          if (rec5.state === "blocked" && !probe.staleTypes.includes(type2)) this.autoUpdateRecords.delete(type2);
         }
         if (!options.enabled || probe.staleTypes.length === 0) return { probe, report: null };
         const report = await this.syncVerifiedChannel({ onlyTargetTypes: probe.staleTypes, mode: "auto" });
@@ -117007,8 +117368,8 @@ ${output}` : "";
       /** Auto-update status for the dashboard (check_provider_updates). Pure read. */
       getAutoUpdateStatus() {
         const types2 = {};
-        for (const [type2, rec4] of this.autoUpdateRecords) {
-          const { digest: _digest, inputsKey: _inputsKey, ...pub } = rec4;
+        for (const [type2, rec5] of this.autoUpdateRecords) {
+          const { digest: _digest, inputsKey: _inputsKey, ...pub } = rec5;
           types2[type2] = pub;
         }
         return {
@@ -120146,9 +120507,9 @@ ${result.stderr}`, result.code);
        * mutate it.
        */
       snapshotRecord(key4) {
-        const rec4 = this.records.get(key4);
-        if (!rec4) return void 0;
-        return { state: rec4.state, lockedSince: rec4.lockedSince, transitions: [...rec4.transitions] };
+        const rec5 = this.records.get(key4);
+        if (!rec5) return void 0;
+        return { state: rec5.state, lockedSince: rec5.lockedSince, transitions: [...rec5.transitions] };
       }
       /** Restore a previously snapshotted record, undoing a speculative observe.
        *  Passing undefined clears the key (it had no record when snapshotted). */
@@ -147006,21 +147367,21 @@ trust_level = "trusted"
     function detectAntigravityFromRecords(records) {
       const launches = /* @__PURE__ */ new Map();
       let lastUserIdx = -1;
-      for (const rec4 of records) {
-        if (!rec4 || typeof rec4 !== "object") continue;
-        if (rec4.kind === "user") {
-          lastUserIdx = rec4.idx;
+      for (const rec5 of records) {
+        if (!rec5 || typeof rec5 !== "object") continue;
+        if (rec5.kind === "user") {
+          lastUserIdx = rec5.idx;
           continue;
         }
-        const taskId = typeof rec4.taskId === "string" ? rec4.taskId.trim() : "";
+        const taskId = typeof rec5.taskId === "string" ? rec5.taskId.trim() : "";
         if (!taskId) continue;
-        if (rec4.kind === "launch") {
-          if (!launches.has(taskId)) launches.set(taskId, { launchIdx: rec4.idx, resolvedIdx: -1 });
+        if (rec5.kind === "launch") {
+          if (!launches.has(taskId)) launches.set(taskId, { launchIdx: rec5.idx, resolvedIdx: -1 });
           continue;
         }
-        if ((rec4.kind === "status" || rec4.kind === "notification") && rec4.terminal === true) {
+        if ((rec5.kind === "status" || rec5.kind === "notification") && rec5.terminal === true) {
           const entry = launches.get(taskId);
-          if (entry && entry.resolvedIdx < 0) entry.resolvedIdx = rec4.idx;
+          if (entry && entry.resolvedIdx < 0) entry.resolvedIdx = rec5.idx;
         }
       }
       const inScope = [...launches.entries()].filter(([, v]) => v.launchIdx > lastUserIdx);
@@ -147031,9 +147392,9 @@ trust_level = "trusted"
     }
     function detectClaudeFromRecords(records) {
       const launched = /* @__PURE__ */ new Map();
-      for (const rec4 of records) {
-        if (!rec4 || typeof rec4 !== "object") continue;
-        const record3 = rec4;
+      for (const rec5 of records) {
+        if (!rec5 || typeof rec5 !== "object") continue;
+        const record3 = rec5;
         const type2 = String(record3.type ?? "").trim();
         const message = record3.message && typeof record3.message === "object" ? record3.message : null;
         if (!message) continue;
@@ -147074,9 +147435,9 @@ trust_level = "trusted"
       const textParts = [];
       const stepFinishReason = /* @__PURE__ */ new Map();
       for (let i = 0; i < records.length; i++) {
-        const rec4 = records[i];
-        if (!rec4 || typeof rec4 !== "object") continue;
-        const record3 = rec4;
+        const rec5 = records[i];
+        if (!rec5 || typeof rec5 !== "object") continue;
+        const record3 = rec5;
         const type2 = String(record3.type ?? "").trim();
         if (type2 === "turn.prompt") {
           lastPromptIdx = i;
@@ -153199,7 +153560,7 @@ ${buttons.join("\n")}`;
               const workerResult = opts.finalSummary ? extractJsonObjectFromSummary(opts.finalSummary) : void 0;
               return workerResult ? { workerResult } : {};
             })(),
-            ...typeof opts.completionDiagnostic?.reason === "string" || typeof opts.completionDiagnostic?.blockReason === "string" || typeof opts.completionDiagnostic?.finalAssistantPresent === "boolean" || opts.evidenceLevel || typeof opts.completionDiagnostic?.source === "string" || typeof opts.completionDiagnostic?.wedgedObservedStatus === "string" || typeof opts.completionDiagnostic?.nativeTurnId === "string" ? {
+            ...typeof opts.completionDiagnostic?.reason === "string" || typeof opts.completionDiagnostic?.blockReason === "string" || typeof opts.completionDiagnostic?.finalAssistantPresent === "boolean" || opts.evidenceLevel || typeof opts.completionDiagnostic?.source === "string" || typeof opts.completionDiagnostic?.wedgedObservedStatus === "string" || typeof opts.completionDiagnostic?.nativeTurnId === "string" || opts.completionDiagnostic?.finalSummaryMayBeTruncated === true || typeof opts.completionDiagnostic?.finalSummarySource === "string" ? {
               notice: {
                 completionMetadata: {
                   ...typeof opts.completionDiagnostic?.reason === "string" ? { diagnosticReason: opts.completionDiagnostic.reason } : {},
@@ -153218,7 +153579,9 @@ ${buttons.join("\n")}`;
                   // treatment the deleted wire literal gave them.
                   ...typeof opts.completionDiagnostic?.source === "string" ? { source: opts.completionDiagnostic.source } : {},
                   ...typeof opts.completionDiagnostic?.wedgedObservedStatus === "string" ? { wedgedObservedStatus: opts.completionDiagnostic.wedgedObservedStatus } : {},
-                  ...typeof opts.completionDiagnostic?.nativeTurnId === "string" ? { nativeTurnId: opts.completionDiagnostic.nativeTurnId } : {}
+                  ...typeof opts.completionDiagnostic?.nativeTurnId === "string" ? { nativeTurnId: opts.completionDiagnostic.nativeTurnId } : {},
+                  ...opts.completionDiagnostic?.finalSummaryMayBeTruncated === true ? { summaryMayBeTruncated: true } : {},
+                  ...typeof opts.completionDiagnostic?.finalSummarySource === "string" ? { finalSummarySource: opts.completionDiagnostic.finalSummarySource } : {}
                 }
               }
             } : {}
@@ -155422,7 +155785,9 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         }
       }
       const versionResolvedProvider = provider ? host.providerLoader.resolve(cliType, { version: cliInfo.version }) || provider : void 0;
-      const autoApproveLaunch = applyAutoApproveModeLaunchArgs(versionResolvedProvider, cliArgs, launchSettings);
+      const modelSnapshot = readModelCache(normalizedType);
+      const modelResolvedProvider = versionResolvedProvider ? { ...versionResolvedProvider, ...buildModelOverlayPatch(modelSnapshot, versionResolvedProvider) } : void 0;
+      const autoApproveLaunch = applyAutoApproveModeLaunchArgs(modelResolvedProvider, cliArgs, launchSettings);
       const launchProvider = autoApproveLaunch.provider || provider;
       const cliArgsWithAutoApprove = autoApproveLaunch.cliArgs;
       const modelLaunchArgs = expandModelLaunchArgs(
@@ -155455,7 +155820,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
           declaredSource: options?.launchProvenance?.modelSource,
           launchValue: modelLaunchArgs ? resolveModelLaunchValue(initialModel, launchProvider?.modelLaunchValueMap) : void 0,
           providerDefault: resolveProviderDefaultModel(
-            readModelCache(normalizedType),
+            modelSnapshot,
             launchProvider?.modelOptions,
             launchProvider?.modelLaunchValueMap
           )

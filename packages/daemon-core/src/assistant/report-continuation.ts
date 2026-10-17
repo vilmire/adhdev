@@ -10,16 +10,18 @@ export type ReportCursor = ReportContinuation | ReportAttemptContinuation | Task
 export const reportBodyId = (body: string): string => createHash('sha256').update(body).digest('hex');
 export function pageAttemptReport(body: string, cursor: ReportAttemptContinuation, source: string, completeness: 'final_native' | 'envelope_unverified' = 'final_native') {
     const reportId = reportBodyId(body);
-    if (cursor.reportId && cursor.reportId !== reportId) return { success: false, code: 'original_report_unavailable', reason: 'original_report_identity_mismatch' };
-    if (cursor.offset > body.length) return { success: false, code: 'invalid_report_offset' };
+    if (cursor.reportId && cursor.reportId !== reportId) return { success: false as const, code: 'original_report_unavailable', reason: 'original_report_identity_mismatch' };
+    if (cursor.offset > body.length) return { success: false as const, code: 'invalid_report_offset' };
     const end = Math.min(body.length, cursor.offset + PROJECT_READ_MESSAGE_MAX_CHARS);
     const pageComplete = end === body.length;
     // Omitted completeness stays final_native so existing callers keep `complete: end === length`.
+    // `success` stays a literal so callers can narrow. A conditional spread widens it to boolean.
     const sourceComplete = completeness === 'final_native';
-    return { success: true, attemptId: cursor.attemptId, coordinatorSessionId: cursor.coordinatorSessionId, reportId, source,
+    const page = { success: true as const, attemptId: cursor.attemptId, coordinatorSessionId: cursor.coordinatorSessionId, reportId, source,
         text: body.slice(cursor.offset, end), offset: cursor.offset, totalChars: body.length,
-        sourceComplete, complete: pageComplete && sourceComplete, truncated: end < body.length, nextOffset: end < body.length ? end : null,
-        ...(sourceComplete ? {} : { originalCompleteness: completeness === 'envelope_unverified' ? 'envelope_unverified' : 'unknown' }) };
+        sourceComplete, complete: pageComplete && sourceComplete, truncated: end < body.length, nextOffset: end < body.length ? end : null };
+    if (sourceComplete) return page;
+    return { ...page, originalCompleteness: completeness === 'envelope_unverified' ? 'envelope_unverified' as const : 'unknown' as const };
 }
 
 export function parseReportContinuation(args: Record<string, unknown>): ReportCursor | null | string {
