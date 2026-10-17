@@ -774,7 +774,10 @@
             "runtimeDirectory": "运行目录",
             "displayedDirectory": "请求信任的目录",
             "directoryUnknown": "实时弹窗未提供",
-            "openSession": "打开对应会话"
+            "openSession": "打开对应会话",
+            "providerOptions": "提供方选项",
+            "standingGrantWarning": "持续授权 — 此请求之后仍然有效",
+            "declineOption": "拒绝"
         },
         "difficulty": {
             "easy": "简单",

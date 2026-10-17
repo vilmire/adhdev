@@ -774,7 +774,10 @@
             "runtimeDirectory": "Directorio de ejecución",
             "displayedDirectory": "Directorio solicitado para confianza",
             "directoryUnknown": "No indicado en el diálogo",
-            "openSession": "Abrir sesión exacta"
+            "openSession": "Abrir sesión exacta",
+            "providerOptions": "Opciones del proveedor",
+            "standingGrantWarning": "Permiso permanente: sigue aplicándose después de esta solicitud",
+            "declineOption": "Rechazar"
         },
         "difficulty": {
             "easy": "Fácil",

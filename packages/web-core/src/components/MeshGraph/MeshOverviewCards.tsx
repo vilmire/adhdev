@@ -15,7 +15,7 @@ import type {
 import { useTheme } from '../../hooks/useTheme'
 import { getMeshGraphTheme, type MeshGraphTheme } from './meshGraphTheme';
 import type { MeshGraphSessionDetail } from '../../utils/mesh-visualization'
-import PendingApprovalsInbox, { type PendingApprovalAction } from './PendingApprovalsInbox'
+import PendingApprovalsInbox, { type PendingApprovalAction, type PendingApprovalExactButton } from './PendingApprovalsInbox'
 import { nodeDisplayName, nodeHealthText, sessionElapsedLabel, sessionRoleText, sessionStatusLabel, sessionStatusText } from './MeshObservabilitySurface/meshSurfaceHelpers'
 import {
     RECENT_QUEUE_MAX,
@@ -122,21 +122,26 @@ export default function MeshOverviewCards({
 
     const { detail, canGoBack, open: setDetail, back: backDetail, close: closeDetail } = useDetailStack()
 
-    // Resolve a mesh-wide pending approval through the daemon command seam. Routes to the
-    // coordinator's mesh_approve, which forwards resolve_action to the target node+session.
+    // Resolve a mesh-wide pending approval through the daemon command seam. The daemon has
+    // no `mesh_approve` command (that name is the coordinator MCP tool, which itself sends
+    // resolve_action), so the Inbox sends the same exact-target resolve_action here; the
+    // daemon forwards it to the session's owning daemon (resolve_action.forwardToOwner),
+    // which re-checks the episode identity — and, for a tapped provider button, that the
+    // label is offered and matches the action — before pressing anything.
     // Null seam (no daemon connection) → no-op; the inbox stays read-only in that case.
     const resolveApproval = useCallback(
-        async (nodeId: string, sessionId: string, action: PendingApprovalAction, approvalTarget?: ProviderApprovalTarget) => {
+        async (nodeId: string, sessionId: string, action: PendingApprovalAction, approvalTarget?: ProviderApprovalTarget, exact?: PendingApprovalExactButton) => {
             if (!daemonId || !sendDaemonCommand || !approvalTarget) return
-            await sendDaemonCommand(daemonId, 'mesh_approve', {
-                meshId: meshId ?? undefined,
-                node_id: nodeId,
-                session_id: sessionId,
+            await sendDaemonCommand(daemonId, 'resolve_action', {
+                sessionId,
+                targetSessionId: sessionId,
+                meshContext: { nodeId },
                 action,
-                approval_target: approvalTarget,
+                approvalTarget,
+                ...(exact ? { button: exact.button, buttonIndex: exact.buttonIndex } : {}),
             })
         },
-        [daemonId, meshId, sendDaemonCommand],
+        [daemonId, sendDaemonCommand],
     )
 
     // nodeId → friendly machine label (nickname → workspace·host·provider), so

@@ -27,6 +27,9 @@ export function deriveProviderApprovalInbox(ides: DaemonData[], connections: Rec
             machineLabel: ide.ownerMachineName || ide.hostname || daemonId,
             runtimeDirectory: approval.runtimeDirectory, displayedDirectory: approval.displayedDirectory,
             waitingSince: approval.createdAt, actionable, approvalTarget: target,
+            // Exact provider buttons only for a live tool-permission request; labels go
+            // back verbatim through the guarded exact-button resolve_action.
+            ...(actionable && approval.type === 'tool_permission' && approval.buttons.length > 0 ? { options: [...approval.buttons] } : {}),
             compatibility: approval.compatibility || (approval.source === 'provider_modal' ? ide.transport === 'pty' ? 'exact' : 'session_only' : 'unknown'),
             approvalType: approval.type, evidence: !connected || approval.evidence === 'cached' ? 'cached' : !waiting || !completeModal ? 'unavailable' : approval.evidence,
             // Full provider text belongs to the exact session modal, never this lane.

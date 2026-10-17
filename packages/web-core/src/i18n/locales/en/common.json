@@ -774,7 +774,10 @@
             "runtimeDirectory": "Runtime directory",
             "displayedDirectory": "Directory requested for trust",
             "directoryUnknown": "Not provided by the live modal",
-            "openSession": "Open exact session"
+            "openSession": "Open exact session",
+            "providerOptions": "Provider options",
+            "standingGrantWarning": "Standing grant — keeps applying after this request",
+            "declineOption": "Decline"
         },
         "difficulty": {
             "easy": "Easy",

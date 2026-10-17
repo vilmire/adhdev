@@ -9,8 +9,24 @@ import type { RepoMeshNodeStatus, RepoMeshSessionStatus } from '@adhdev/daemon-c
 import { IconWarning } from '../Icons'
 import { IconSpinner } from '../Icons'
 import { nodeDisplayName } from './MeshObservabilitySurface/meshSurfaceHelpers'
+import { inboxButtonDisplayText, orderInboxProviderButtons } from './providerApprovalButtons'
 
 export type PendingApprovalAction = 'approve' | 'reject'
+
+/** The exact provider button an owner tapped: sent as the exact-button form of resolve_action. */
+export interface PendingApprovalExactButton {
+    /** Exact provider label, verbatim from the live request's buttons. */
+    button: string
+    /** Index of that label in the provider's original button list. */
+    buttonIndex: number
+}
+
+/** Provider buttons are offered only for an exact, live tool-permission request. */
+function exactOptions(actionable: boolean, approval: Pick<ProviderApproval, 'type' | 'buttons'>): string[] | undefined {
+    return actionable && approval.type === 'tool_permission' && Array.isArray(approval.buttons) && approval.buttons.length > 0
+        ? [...approval.buttons]
+        : undefined
+}
 
 /** One session awaiting an approval decision — the self-contained shape this inbox renders. */
 export interface PendingApprovalItem {
@@ -35,9 +51,10 @@ export interface PendingApprovalItem {
      */
     waitingSince?: number | null
     /**
-     * The provider's own button labels for this modal, when the modal detail has been
-     * hydrated. Presentation-only here; resolution still goes through `onResolve`, which
-     * owns the approve/reject mapping.
+     * The provider's own button labels for this live tool-permission request (exact,
+     * actionable rows only). Each is offered as a one-tap button that resolves through
+     * `onResolve` with the exact label + index; the owning daemon re-checks the episode,
+     * that the label is offered and its approve/reject polarity before pressing it.
      */
     options?: string[]
 }
@@ -79,6 +96,7 @@ export function derivePendingApprovals(nodes: RepoMeshNodeStatus[] | undefined |
                 compatibility: approval.compatibility, actionable, approvalType: approval.type, evidence: session.isCached ? 'cached' : approval.evidence,
                 runtimeDirectory: approval.runtimeDirectory, displayedDirectory: approval.displayedDirectory,
                 approvalTarget: actionable ? { modalKey: approval.modalKey!, attemptId: approval.attemptId ?? null, generation: approval.generation ?? null } : undefined,
+                options: exactOptions(actionable, approval),
                 waitingSince: approval.createdAt,
                 nodeId: node.nodeId,
                 sessionId: session.sessionId,
@@ -136,6 +154,7 @@ export function deriveApprovalsFromConversations(
             sessionId,
             compatibility: approval.compatibility, actionable, approvalType: approval.type, evidence: !['connected', 'ready'].includes(conv.connectionState || '') ? 'cached' : approval.evidence,
             approvalTarget: actionable ? { modalKey: approval.modalKey!, attemptId: approval.attemptId ?? null, generation: approval.generation ?? null } : undefined,
+            options: exactOptions(actionable, approval),
             providerType: conv.agentType,
             machineLabel: conv.machineName || conv.workspaceName || nodeId,
             detail: null,
@@ -155,8 +174,12 @@ interface Props {
     approvals?: PendingApprovalItem[]
     /** Alternative to `approvals`: the raw mesh node snapshot; the component derives the list. */
     nodes?: RepoMeshNodeStatus[] | null
-    /** Resolve a single pending approval. Returns a promise so the row can show a pending state. */
-    onResolve: (nodeId: string, sessionId: string, action: PendingApprovalAction, target?: ProviderApprovalTarget) => void | Promise<unknown>
+    /**
+     * Resolve a single pending approval. Returns a promise so the row can show a pending state.
+     * `exact` is set when the owner tapped one of the provider's own buttons; callers must
+     * forward it together with `target` (never without it).
+     */
+    onResolve: (nodeId: string, sessionId: string, action: PendingApprovalAction, target?: ProviderApprovalTarget, exact?: PendingApprovalExactButton) => void | Promise<unknown>
     /** Hide the whole component when there is nothing pending (default true). */
     hideWhenEmpty?: boolean
     /**
@@ -175,15 +198,18 @@ export default function PendingApprovalsInbox({ approvals, nodes, onResolve, hid
         [approvals, nodes],
     )
     // Track which (sessionId) is mid-resolve so its buttons disable — mirrors ApprovalBanner.
-    const [pending, setPending] = useState<Record<string, PendingApprovalAction>>({})
+    // The value names the tapped control: an action, or `button:<index>` for a provider button.
+    const [pending, setPending] = useState<Record<string, string>>({})
 
     if (hideWhenEmpty && items.length === 0) return null
 
-    const handle = (item: PendingApprovalItem, action: PendingApprovalAction) => {
+    const handle = (item: PendingApprovalItem, action: PendingApprovalAction, exact?: PendingApprovalExactButton) => {
         if (!item.actionable || !item.approvalTarget || pending[`${item.nodeId}:${item.sessionId}:${item.approvalTarget.modalKey}`]) return
         const key = `${item.nodeId}:${item.sessionId}:${item.approvalTarget.modalKey}`
-        setPending(prev => ({ ...prev, [key]: action }))
-        void Promise.resolve(onResolve(item.nodeId, item.sessionId, action, item.approvalTarget)).finally(() => {
+        setPending(prev => ({ ...prev, [key]: exact ? `button:${exact.buttonIndex}` : action }))
+        void Promise.resolve(exact
+            ? onResolve(item.nodeId, item.sessionId, action, item.approvalTarget, exact)
+            : onResolve(item.nodeId, item.sessionId, action, item.approvalTarget)).finally(() => {
             setPending(prev => {
                 const next = { ...prev }
                 delete next[key]
@@ -214,6 +240,7 @@ export default function PendingApprovalsInbox({ approvals, nodes, onResolve, hid
                         const active = pending[`${item.nodeId}:${item.sessionId}:${item.approvalTarget?.modalKey}`] ?? null
                         const disabled = active !== null
                         const waitLabel = formatApprovalWait(item.waitingSince, resolvedNow)
+                        const providerButtons = item.actionable && item.approvalTarget ? orderInboxProviderButtons(item.options) : []
                         return (
                             <li
                                 key={`${item.nodeId}:${item.sessionId}`}
@@ -246,7 +273,7 @@ export default function PendingApprovalsInbox({ approvals, nodes, onResolve, hid
                                     {item.runtimeDirectory && <div className="text-3xs break-all">{t('mesh.approvals.runtimeDirectory')}: {item.runtimeDirectory}</div>}
                                     {item.approvalType === 'provider_setup' && <div className="text-3xs break-all">{t('mesh.approvals.displayedDirectory')}: {item.displayedDirectory || t('mesh.approvals.directoryUnknown')}</div>}
                                     <a className="text-3xs underline" href={`/dashboard?activeTab=${encodeURIComponent(`session:${item.sessionId}`)}`}>{t('mesh.approvals.openSession')}</a>
-                                    {item.options && item.options.length > 0 && (
+                                    {providerButtons.length === 0 && item.options && item.options.length > 0 && (
                                         <div className="mt-1 flex flex-wrap gap-1">
                                             {item.options.slice(0, 4).map((option, i) => (
                                                 <span
@@ -260,7 +287,39 @@ export default function PendingApprovalsInbox({ approvals, nodes, onResolve, hid
                                         </div>
                                     )}
                                 </div>
-                                {item.actionable && item.approvalTarget ? <div className="flex gap-2 shrink-0">
+                                {providerButtons.length > 0 ? <div className="flex flex-col items-end gap-1 shrink-0 max-w-[55%]" role="group" aria-label={t('mesh.approvals.providerOptions')}>
+                                    {providerButtons.map(option => {
+                                        const tapped = active === `button:${option.index}`
+                                        const text = inboxButtonDisplayText(option.label)
+                                        const tone = option.kind === 'decline'
+                                            ? 'font-semibold text-white bg-red-500/30'
+                                            : option.kind === 'standing' ? 'font-semibold' : 'font-extrabold'
+                                        return (
+                                            <div key={`${option.index}:${option.label}`} className="flex flex-col items-end">
+                                                <button
+                                                    type="button"
+                                                    data-approval-kind={option.kind}
+                                                    data-button-index={option.index}
+                                                    onClick={() => handle(item, option.action, { button: option.label, buttonIndex: option.index })}
+                                                    disabled={disabled}
+                                                    title={option.kind === 'decline' ? t('mesh.approvals.declineOption') : option.kind === 'standing' ? t('mesh.approvals.standingGrantWarning') : undefined}
+                                                    className={`btn btn-sm border-none rounded-md text-xs px-3 py-1 text-right break-words ${tone} ${disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
+                                                    style={option.kind === 'decline' ? undefined : option.kind === 'standing'
+                                                        ? { color: 'var(--text-secondary)', background: 'var(--surface-primary)', border: '1px dashed var(--status-warning)' }
+                                                        : { color: 'var(--status-warning)', background: 'var(--surface-primary)' }}
+                                                >
+                                                    {tapped ? <IconSpinner size={12} /> : text}
+                                                </button>
+                                                {option.kind === 'standing' && (
+                                                    <span className="text-4xs mt-0.5 flex items-center gap-1" style={{ color: 'var(--status-warning)' }}>
+                                                        <IconWarning size={10} />
+                                                        {t('mesh.approvals.standingGrantWarning')}
+                                                    </span>
+                                                )}
+                                            </div>
+                                        )
+                                    })}
+                                </div> : item.actionable && item.approvalTarget ? <div className="flex gap-2 shrink-0">
                                     <button
                                         onClick={() => handle(item, 'approve')}
                                         disabled={disabled}

@@ -774,7 +774,10 @@
             "runtimeDirectory": "실행 디렉터리",
             "displayedDirectory": "신뢰를 요청한 디렉터리",
             "directoryUnknown": "실시간 모달에서 제공되지 않음",
-            "openSession": "해당 세션 열기"
+            "openSession": "해당 세션 열기",
+            "providerOptions": "프로바이더 선택지",
+            "standingGrantWarning": "지속 허용 — 이번 요청 이후에도 계속 적용됩니다",
+            "declineOption": "거절"
         },
         "difficulty": {
             "easy": "쉬움",

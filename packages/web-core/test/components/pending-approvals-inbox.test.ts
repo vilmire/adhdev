@@ -17,7 +17,9 @@ describe('approvals-only provider Inbox', () => {
     expect(items[0]).toMatchObject({ nodeId: 'd', sessionId: 's', actionable: true, waitingSince: 8000, approvalTarget: { modalKey: 'modal:one', attemptId: 'a', generation: 1 } })
     const html = renderToStaticMarkup(createElement(PendingApprovalsInbox, { approvals: items, onResolve: () => {} }))
     expect(html).toContain('Provider tool permission')
-    expect(html).toContain('Approve')
+    // A live tool permission offers the provider's own buttons (exact one-tap), not plain Approve.
+    expect(html).toContain('>Yes, proceed</button>')
+    expect(html).toContain('>No</button>')
     expect(html).not.toContain('always-approve')
     expect(html).toContain('/dashboard?activeTab=session%3As')
   })

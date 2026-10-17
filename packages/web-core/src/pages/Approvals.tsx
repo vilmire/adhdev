@@ -7,6 +7,7 @@ import { deriveProviderApprovalInbox } from '../components/MeshGraph/providerApp
 import type { ProviderApprovalTarget } from '@adhdev/mesh-shared'
 import PendingApprovalsInbox, {
     type PendingApprovalAction,
+    type PendingApprovalExactButton,
 } from '../components/MeshGraph/PendingApprovalsInbox'
 import AppPage from '../components/ui/AppPage'
 import { IconWarning } from '../components/Icons'
@@ -31,9 +32,15 @@ export default function Approvals() {
     }, [ides, connectionStates])
 
     const resolve = useCallback(
-        async (nodeId: string, sessionId: string, action: PendingApprovalAction, approvalTarget?: ProviderApprovalTarget) => {
+        async (nodeId: string, sessionId: string, action: PendingApprovalAction, approvalTarget?: ProviderApprovalTarget, exact?: PendingApprovalExactButton) => {
             if (!approvalTarget) return
-            await sendCommand(nodeId, 'resolve_action', { action, sessionId, approvalTarget })
+            // A tapped provider button travels as the exact-button form of resolve_action:
+            // the owning daemon presses it only if this episode is still live and the label
+            // is one of its offered buttons with matching polarity.
+            await sendCommand(nodeId, 'resolve_action', {
+                action, sessionId, approvalTarget,
+                ...(exact ? { button: exact.button, buttonIndex: exact.buttonIndex } : {}),
+            })
         },
         [sendCommand],
     )

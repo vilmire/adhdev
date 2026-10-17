@@ -774,7 +774,10 @@
             "runtimeDirectory": "実行ディレクトリ",
             "displayedDirectory": "信頼を求めるディレクトリ",
             "directoryUnknown": "ライブモーダルに表示なし",
-            "openSession": "対象セッションを開く"
+            "openSession": "対象セッションを開く",
+            "providerOptions": "プロバイダーの選択肢",
+            "standingGrantWarning": "継続的な許可 — このリクエスト以降も適用されます",
+            "declineOption": "拒否"
         },
         "difficulty": {
             "easy": "簡単",
