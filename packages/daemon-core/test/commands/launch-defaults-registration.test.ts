@@ -186,12 +186,31 @@ describe('actual assistant authority with no fake Inbox', () => {
             expectedRevision: 0, assistantSessionId: 'human-session' }, 'ipc')).toMatchObject({ result: 'applied', entry: { setBy: 'assistant' } });
         expect(JSON.parse(globalBytes().toString()).history[0]).toMatchObject({ by: 'assistant', origin: 'human' });
     });
-    it.each(['unlogged', 'relayed'])('refuses %s writes needing the unavailable Inbox instead of persisting', async mode => {
+    it.each(['unlogged', 'relayed'])('stages %s writes in the real Inbox until durable owner setup', async mode => {
         if (mode === 'relayed') services.inputLog.append('session', 'relay');
-        expect(await router.execute('assistant_launch_defaults_set', { action: 'set', role: 'coordinator', provider: 'codex-cli',
-            expectedRevision: 0, assistantSessionId: 'session' }, 'standalone')).toMatchObject({ success: false, code: 'staging_unavailable' });
+        const staged = await router.execute('assistant_launch_defaults_set', { action: 'set', role: 'coordinator', provider: 'codex-cli',
+            expectedRevision: 0, assistantSessionId: 'session' }, 'standalone');
+        expect(staged).toMatchObject({ success: true, result: 'staged', role: 'coordinator', expectedRevision: 0,
+            previous: null, selection: { provider: 'codex-cli' } });
+        const id = staged.stagedId as string;
+        const proposal = services.launchDefaults!.read(id);
+        expect(proposal).toEqual({ version: 1, id, generation: expect.any(String), createdAt: expect.any(String),
+            kind: 'launch_defaults', role: 'coordinator', selection: { provider: 'codex-cli' }, previous: null,
+            expectedRevision: 0, documentRevision: 0, origin: 'relay', callerSessionId: 'session' });
+        expect(JSON.parse(fs.readFileSync(join(dir, 'assistant', 'staged', `${id}.json`), 'utf8'))).toEqual(proposal);
+        expect(await router.execute('assistant_staged_resolve', { action: 'list' }, 'p2p'))
+            .toMatchObject({ success: true, launchDefaults: [proposal] });
         expect(fs.existsSync(globalPath())).toBe(false);
-        expect(fs.existsSync(join(dir, 'assistant', 'staged'))).toBe(false);
+        expect(await router.execute('assistant_staged_resolve', { id, decision: 'apply' }, 'p2p'))
+            .toMatchObject({ success: true, result: 'applied', durable: true, revision: 1,
+                entry: { provider: 'codex-cli', revision: 1, setBy: 'owner' } });
+        expect(services.launchDefaults!.read(id)).toBeNull();
+        expect(JSON.parse(globalBytes().toString()).history[0]).toMatchObject({ by: 'owner', origin: 'owner', role: 'coordinator' });
+        expect(await router.execute('launch_defaults_get', { role: 'coordinator' }, 'p2p'))
+            .toMatchObject({ success: true, documentRevision: 1, roles: { coordinator: { effective: {
+                selection: { provider: 'codex-cli' }, documentRevision: 1,
+                applied: { provider: { source: 'stored_default', defaultRef: { role: 'coordinator', scope: 'global', revision: 1 } } },
+            } } } });
     });
     it('denies actual review turns for both assistant verbs', async () => {
         services.inputLog.append('review-session', 'review');
@@ -205,10 +224,24 @@ describe('actual assistant authority with no fake Inbox', () => {
         assistant.bindSession({ sessionId: 'active', cliType: 'codex-cli', workspace: dir, at: 1 });
         live.set('active', { type: 'claude-cli' });
         services.inputLog.append('human-session', 'human');
-        expect(await router.execute('assistant_launch_defaults_set', { action: 'set', role: 'assistant', provider: 'codex-cli',
-            expectedRevision: 0, assistantSessionId: 'human-session' }, 'ipc')).toMatchObject({ code: 'staging_unavailable' });
+        const staged = await router.execute('assistant_launch_defaults_set', { action: 'set', role: 'assistant', provider: 'codex-cli',
+            expectedRevision: 0, assistantSessionId: 'human-session' }, 'ipc');
+        expect(staged).toMatchObject({ success: true, result: 'staged', role: 'assistant', expectedRevision: 0,
+            previous: null, selection: { provider: 'codex-cli' } });
+        const id = staged.stagedId as string;
+        const proposal = services.launchDefaults!.read(id);
+        expect(proposal).toMatchObject({ id, kind: 'launch_defaults', role: 'assistant', origin: 'human', callerSessionId: 'human-session',
+            selection: { provider: 'codex-cli' }, previous: null, expectedRevision: 0, documentRevision: 0 });
+        expect(await router.execute('assistant_staged_resolve', { action: 'list' }, 'p2p'))
+            .toMatchObject({ success: true, launchDefaults: [proposal] });
         expect(fs.existsSync(globalPath())).toBe(false);
         expect(await ownerSet({ provider: 'codex-cli' })).toMatchObject({ result: 'applied' });
+        const before = globalBytes();
+        expect(await router.execute('assistant_staged_resolve', { id, decision: 'apply' }, 'p2p'))
+            .toMatchObject({ success: false, code: 'revision_conflict', actualRevision: 1, committed: false });
+        expect(services.launchDefaults!.read(id)).toEqual(proposal);
+        expect(globalBytes()).toEqual(before);
+        expect(live.get('active')).toEqual({ type: 'claude-cli' });
     });
     it('fails loudly if the active assistant restriction cannot be verified', async () => {
         assistant.bindSession({ sessionId: 'active', cliType: 'claude-cli', workspace: dir, at: 1 });
