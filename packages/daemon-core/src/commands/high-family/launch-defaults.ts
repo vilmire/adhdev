@@ -232,7 +232,8 @@ export function createLaunchDefaultsHandlers(ports: LaunchDefaultsCommandPorts) 
     const guarded = async (args: unknown, write: boolean, assistant: boolean) => {
         try { return await run(args, write, assistant); }
         catch (error) {
-            if (error instanceof MeshConfigStrictLockError) return fail(error.code, error.message, { committed: false });
+            if (error instanceof MeshConfigStrictLockError) return fail(error.code, error.message, { committed: false,
+                ...(error.lockPath ? { reason: `${error.code === 'store_busy' ? 'write_lock_held' : 'write_lock_unavailable'}: ${error.lockPath}` } : {}) });
             if (error instanceof LaunchDefaultsCatalogError) return fail('launch_default_unavailable', error.message, { reason: 'catalog_unavailable' });
             return fail('persistence_failed', 'Launch defaults operation outcome is unconfirmed.', { reason: 'operation_outcome_unconfirmed' });
         }

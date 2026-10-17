@@ -1,7 +1,8 @@
-import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { StoreWriteOrigin } from '../assistant/store-guards.js';
+import { acquireOwnedLock, type OwnedLockOptions } from './owned-lock.js';
 import { hasOnlyKeys, isLaunchRole, isRecord, selectionSchemaIssue, validateLaunchDefault,
     type LaunchRole, type LaunchSelection, type LaunchValidationPorts, type LaunchValidationResult,
     type LaunchValidationWarning, type ToolRestriction } from './validate.js';
@@ -76,12 +77,14 @@ export type LaunchDefaultsWriteResult =
         document?: LaunchDefaultsDocument };
 
 /** The only launch-defaults persistence authority. No launch API writes here.
- * Every read loads disk (no stale cache). A lock directory serializes all store
- * instances/processes; abandoned locks fail closed and require operator recovery.
+ * Every read loads disk (no stale cache). A lock directory with an owner record
+ * serializes all store instances/processes; a lock whose owner pid is dead is
+ * reclaimed (owned-lock.ts), a live owner's lock is never taken.
  * Unlike writeFileAtomic600, this writer fsyncs the file AND parent directory. */
 export class LaunchDefaultsStore {
     readonly path: string;
-    constructor(configDir: string, private readonly ports: LaunchValidationPorts) {
+    constructor(configDir: string, private readonly ports: LaunchValidationPorts,
+        private readonly lockOptions: OwnedLockOptions = {}) {
         this.path = join(resolve(configDir), 'launch-defaults.json');
     }
     read(): LaunchDefaultsRead {
@@ -110,10 +113,8 @@ export class LaunchDefaultsStore {
         const lock = `${this.path}.lock`;
         try { mkdirSync(dir, { recursive: true, mode: 0o700 }); }
         catch { return fail('persistence_failed', 'config_directory_unavailable'); }
-        try { mkdirSync(lock, { mode: 0o700 }); }
-        catch (error) {
-            return fail((error as NodeJS.ErrnoException).code === 'EEXIST' ? 'store_busy' : 'persistence_failed', 'write_lock_unavailable');
-        }
+        const acquired = acquireOwnedLock(lock, this.lockOptions);
+        if (!acquired.ok) return fail(acquired.busy ? 'store_busy' : 'persistence_failed', acquired.reason);
         try {
             const current = this.read();
             if (current.status === 'invalid' || current.status === 'unreadable') return fail('store_unavailable', current.reason);
@@ -140,8 +141,8 @@ export class LaunchDefaultsStore {
             document.history = [...document.history, { at, role: request.role, by: request.by, origin: request.origin, from: previous, to: entry }].slice(-20);
             return this.persist(document, previous, warnings, lowersToolLock);
         } finally {
-            // A failed release leaves a visible busy lock, never an unguarded writer.
-            try { rmdirSync(lock); } catch { /* operator recovery required */ }
+            // A failed release leaves a busy lock, reclaimable once this pid is gone.
+            acquired.release();
         }
     }
     private persist(document: LaunchDefaultsDocument, previous: LaunchDefaultEntry | null,

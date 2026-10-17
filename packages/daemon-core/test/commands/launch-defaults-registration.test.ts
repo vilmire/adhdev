@@ -298,11 +298,25 @@ describe('real host project persistence and strict CAS', () => {
         fs.mkdirSync(lock);
         if (kind === 'abandoned') fs.utimesSync(lock, new Date(0), new Date(0));
         const before = meshBytes();
-        expect(await router.execute('launch_defaults_set', projectArgs(), 'p2p')).toMatchObject({ code: 'store_busy', committed: false });
+        expect(await router.execute('launch_defaults_set', projectArgs(), 'p2p')).toMatchObject({ code: 'store_busy', committed: false,
+            reason: `write_lock_held: ${lock}` });
         expect(meshBytes()).toEqual(before);
         expect(fs.existsSync(lock)).toBe(true);
         fs.rmdirSync(lock);
         expect(await router.execute('launch_defaults_set', projectArgs(), 'p2p')).toMatchObject({ result: 'applied' });
+    });
+    it('waits briefly for a shared lock that another mesh writer releases', async () => {
+        let contended = 0;
+        vi.mocked(meshFs.mkdirSync).mockImplementation((...args) => {
+            if (String(args[0]) === `${meshPath()}.lock` && contended < 2) {
+                contended++;
+                throw Object.assign(new Error('EEXIST: lock held'), { code: 'EEXIST' });
+            }
+            return native.mkdirSync(...args);
+        });
+        expect(await router.execute('launch_defaults_set', projectArgs(), 'p2p')).toMatchObject({ result: 'applied', revision: 1 });
+        expect(contended).toBe(2);
+        expect(fs.existsSync(`${meshPath()}.lock`)).toBe(false);
     });
     it('rereads the CAS token after acquiring the actual host lock', async () => {
         let advanced = false;

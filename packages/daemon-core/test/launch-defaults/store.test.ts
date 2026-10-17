@@ -170,17 +170,56 @@ describe('document CAS and history', () => {
         expect(d.history.at(-1)).toMatchObject({ from: { revision: 23 }, to: null });
         expect(store.write(request({ expectedRevision: 1 }))).toMatchObject({ code: 'revision_conflict', actualRevision: 24 });
     });
-    it('does not silently break an abandoned lock; explicit recovery permits CAS', () => {
+    it('refuses a fresh ownerless lock (mid-acquire) and names the lock path; explicit recovery permits CAS', () => {
         saved();
         const bytes = fs.readFileSync(store.path);
         fs.mkdirSync(`${store.path}.lock`);
-        const old = new Date(0);
-        fs.utimesSync(`${store.path}.lock`, old, old);
-        expect(store.write(request({ expectedRevision: 1 }))).toMatchObject({ code: 'store_busy', committed: false });
+        expect(store.write(request({ expectedRevision: 1 }))).toMatchObject({ code: 'store_busy', committed: false,
+            reason: `write_lock_held: ${store.path}.lock` });
         expect(fs.readFileSync(store.path)).toEqual(bytes);
         expect(store.read().status).toBe('ok');
         fs.rmdirSync(`${store.path}.lock`);
         expect(saved({ expectedRevision: 1 }).document.revision).toBe(2);
+    });
+    it('never takes a lock whose recorded owner pid is alive, however old', () => {
+        saved();
+        const bytes = fs.readFileSync(store.path);
+        const lock = `${store.path}.lock`;
+        fs.mkdirSync(lock);
+        fs.writeFileSync(join(lock, 'owner.json'), JSON.stringify({ pid: 4242, nonce: 'live', acquiredAt: 0 }));
+        fs.utimesSync(lock, new Date(0), new Date(0));
+        const live = new LaunchDefaultsStore(join(dir, 'config'), ports, { isPidAlive: pid => pid === 4242 });
+        expect(live.write(request({ expectedRevision: 1 }))).toMatchObject({ code: 'store_busy', committed: false, reason: `write_lock_held: ${lock}` });
+        expect(fs.readFileSync(store.path)).toEqual(bytes);
+        expect(JSON.parse(fs.readFileSync(join(lock, 'owner.json'), 'utf8'))).toMatchObject({ nonce: 'live' });
+    });
+    it('reclaims a lock whose recorded owner pid is dead and leaves no lock behind', () => {
+        saved();
+        const lock = `${store.path}.lock`;
+        fs.mkdirSync(lock);
+        fs.writeFileSync(join(lock, 'owner.json'), JSON.stringify({ pid: 4242, nonce: 'killed', acquiredAt: 1 }));
+        const reclaiming = new LaunchDefaultsStore(join(dir, 'config'), ports, { isPidAlive: pid => pid !== 4242 });
+        expect(reclaiming.write(request({ expectedRevision: 1 }))).toMatchObject({ ok: true, durable: true, document: { revision: 2 } });
+        expect(fs.readdirSync(join(dir, 'config'))).toEqual(['launch-defaults.json']);
+    });
+    it('reclaims an ownerless lock only once it is older than the ownerless grace', () => {
+        saved();
+        const lock = `${store.path}.lock`;
+        fs.mkdirSync(lock);
+        fs.utimesSync(lock, new Date(0), new Date(0));
+        expect(saved({ expectedRevision: 1 }).document.revision).toBe(2);
+        expect(fs.existsSync(lock)).toBe(false);
+    });
+    it('refuses while another reclaim holds the guard, naming the guard path', () => {
+        saved();
+        const lock = `${store.path}.lock`;
+        fs.mkdirSync(lock);
+        fs.writeFileSync(join(lock, 'owner.json'), JSON.stringify({ pid: 4242, nonce: 'killed', acquiredAt: 1 }));
+        fs.mkdirSync(`${lock}.reclaim`);
+        const reclaiming = new LaunchDefaultsStore(join(dir, 'config'), ports, { isPidAlive: pid => pid !== 4242 });
+        expect(reclaiming.write(request({ expectedRevision: 1 }))).toMatchObject({ code: 'store_busy',
+            reason: `write_lock_reclaim_in_progress: ${lock}.reclaim` });
+        expect(fs.existsSync(join(lock, 'owner.json'))).toBe(true);
     });
     it('allows exactly one replacement from concurrent processes sharing a CAS token', async () => {
         const tsx = createRequire(import.meta.url).resolve('tsx/cli');

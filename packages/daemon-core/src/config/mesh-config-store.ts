@@ -108,20 +108,29 @@ export function withMeshConfigWriteLock<T>(fn: () => T): T {
 }
 
 export class MeshConfigStrictLockError extends Error {
-    constructor(readonly code: 'store_busy' | 'project_storage_unavailable') {
-        super(code === 'store_busy' ? 'meshes.json write lock is held' : 'meshes.json write lock is unavailable');
+    constructor(readonly code: 'store_busy' | 'project_storage_unavailable', readonly lockPath?: string) {
+        super(`${code === 'store_busy' ? 'meshes.json write lock is held' : 'meshes.json write lock is unavailable'}${lockPath ? `: ${lockPath}` : ''}`);
     }
 }
+/** Other mesh writers hold this lock only for one synchronous load→save span,
+ * so a short bounded wait clears ordinary contention without wedging the caller. */
+export const STRICT_MESH_CONFIG_LOCK_WAIT_MS = 300;
 let strictMeshWriteDepth = 0;
-/** Same lock as other mesh mutations, but contention fails closed. Never steal
- * stale locks or take the legacy unlocked path. Synchronous transactions only. */
+/** Same lock as other mesh mutations, but contention that outlasts a short
+ * bounded wait fails closed. Never steal stale locks or take the legacy
+ * unlocked path. Synchronous transactions only. */
 export function withStrictMeshConfigWriteLock<T>(operation: () => T): T {
     const nested = meshConfigLockHeldInProcess;
     const lock = `${getMeshConfigPath()}.lock`;
     if (!nested) {
-        try { mkdirSync(lock, { mode: 0o700 }); }
-        catch (error) {
-            throw new MeshConfigStrictLockError((error as NodeJS.ErrnoException).code === 'EEXIST' ? 'store_busy' : 'project_storage_unavailable');
+        const deadline = Date.now() + STRICT_MESH_CONFIG_LOCK_WAIT_MS;
+        for (;;) {
+            try { mkdirSync(lock, { mode: 0o700 }); break; }
+            catch (error) {
+                if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw new MeshConfigStrictLockError('project_storage_unavailable', lock);
+                if (Date.now() >= deadline) throw new MeshConfigStrictLockError('store_busy', lock);
+                sleepBlockingMs(MESH_CONFIG_LOCK_POLL_MS);
+            }
         }
         meshConfigLockHeldInProcess = true;
     }

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { spawnSync } from 'node:child_process';
 import type { LaunchDefaultsProposal } from '@adhdev/mesh-shared';
 import { DaemonCommandRouter, type CommandRouterDeps } from '../../src/commands/router.js';
 import { ProviderRegistry } from '../../src/providers/provider-registry.js';
@@ -379,11 +380,31 @@ describe('proposal evidence, generations and persistence failures', () => {
         expect(await resolve(id)).toMatchObject({ code: 'revision_conflict', actualRevision: 2 });
         expect(inbox().read(id)).not.toBeNull();
     });
-    it('fails closed for an abandoned proposal lock until operator recovery', async () => {
+    it('fails closed for a fresh ownerless proposal lock and names it', async () => {
         const id = inbox().write(proposal()); const before = bytes();
-        fs.mkdirSync(join(inbox().dir, `${id}.lock`));
+        const lock = join(inbox().dir, `${id}.lock`);
+        fs.mkdirSync(lock);
+        expect(await resolve(id)).toMatchObject({ code: 'staged_busy', reason: `write_lock_held: ${lock}` });
+        expect(bytes()).toEqual(before); expect(inbox().read(id)).not.toBeNull();
+    });
+    it('never preempts a proposal lock held by a live process', async () => {
+        const id = inbox().write(proposal()); const before = bytes();
+        const lock = join(inbox().dir, `${id}.lock`);
+        fs.mkdirSync(lock);
+        fs.writeFileSync(join(lock, 'owner.json'), JSON.stringify({ pid: process.ppid, nonce: 'live', acquiredAt: 0 }));
+        fs.utimesSync(lock, new Date(0), new Date(0));
         expect(await resolve(id)).toMatchObject({ code: 'staged_busy' });
         expect(bytes()).toEqual(before); expect(inbox().read(id)).not.toBeNull();
+    });
+    it('reclaims a proposal lock left by a killed resolver and applies once', async () => {
+        const id = inbox().write(proposal());
+        const lock = join(inbox().dir, `${id}.lock`);
+        // A real process that has exited: its pid is provably gone.
+        const dead = spawnSync(process.execPath, ['-e', ''], { windowsHide: true }).pid!;
+        fs.mkdirSync(lock);
+        fs.writeFileSync(join(lock, 'owner.json'), JSON.stringify({ pid: dead, nonce: 'killed', acquiredAt: 1 }));
+        expect(await resolve(id)).toMatchObject({ result: 'applied', revision: 2, durable: true });
+        expect(fs.existsSync(lock)).toBe(false); expect(inbox().read(id)).toBeNull();
     });
     it('does not confuse other Inbox kinds with launch defaults', () => {
         fs.mkdirSync(inbox().dir, { recursive: true });

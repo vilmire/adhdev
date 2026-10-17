@@ -3,12 +3,13 @@
  * Owner resolution reuses the registered command's authority and persistence ports.
  */
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync,
-    renameSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
+    renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import type { LaunchDefaultsProposal, LaunchDefaultsSetResponse } from '@adhdev/mesh-shared';
 import { getConfigDir } from '../config/config.js';
 import { hasOnlyKeys, isLaunchDefaultsDocument, isLaunchRole, isRecord, selectionSchemaIssue } from '../launch-defaults/index.js';
+import { acquireOwnedLock, type OwnedLockOptions } from '../launch-defaults/owned-lock.js';
 
 export interface StagedLaunchDefaultWrite extends LaunchDefaultsProposal {
     version: 1;
@@ -48,10 +49,12 @@ export class AssistantLaunchDefaultStaging {
     readonly dir: string;
     private readonly configDir: string;
     private readonly now: () => Date;
-    constructor(opts: { configDir?: string; now?: () => Date } = {}) {
+    private readonly lockOptions: OwnedLockOptions;
+    constructor(opts: { configDir?: string; now?: () => Date; lock?: OwnedLockOptions } = {}) {
         this.configDir = opts.configDir ?? getConfigDir();
         this.dir = join(this.configDir, 'assistant', 'staged');
         this.now = opts.now ?? (() => new Date());
+        this.lockOptions = opts.lock ?? {};
     }
     private path(id: string): string { return join(this.dir, `${id}.json`); }
 
@@ -118,12 +121,13 @@ export class AssistantLaunchDefaultStaging {
         apply: (proposal: LaunchDefaultsProposal, documentRevision: number) => Promise<LaunchDefaultsSetResponse>) {
         if (decision !== 'apply' && decision !== 'discard') return failure('invalid_args', 'Invalid proposal decision.');
         if (!ID.test(id)) return failure('staged_not_found', 'Launch-default proposal not found.');
-        const lock = join(this.dir, `${id}.lock`);
-        try { mkdirSync(lock, { mode: 0o700 }); }
-        catch (error) {
-            return (error as NodeJS.ErrnoException).code === 'ENOENT'
+        // Owner-recorded lock: a resolver killed mid-apply leaves a lock that the
+        // next resolve reclaims once that pid is gone; a live resolver is never preempted.
+        const lock = acquireOwnedLock(join(this.dir, `${id}.lock`), this.lockOptions);
+        if (!lock.ok) {
+            return lock.errno === 'ENOENT'
                 ? failure('staged_not_found', 'Launch-default proposal not found.')
-                : failure('staged_busy', 'Proposal resolution lock unavailable.');
+                : failure('staged_busy', 'Proposal resolution lock unavailable.', { reason: lock.reason });
         }
         try {
             const rec = this.read(id);
@@ -144,6 +148,6 @@ export class AssistantLaunchDefaultStaging {
                 { committed: decision === 'apply', defaultApplied: decision === 'apply' }); }
             return applied ? { ...applied } : { success: true as const, result: 'discarded' as const };
         } catch { return failure('persistence_failed', 'Proposal application outcome is unconfirmed.'); }
-        finally { try { rmdirSync(lock); } catch { /* Fail closed if recovery is needed. */ } }
+        finally { lock.release(); }
     }
 }
