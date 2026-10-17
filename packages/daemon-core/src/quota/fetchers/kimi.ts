@@ -31,7 +31,6 @@ import {
 import type { QuotaFetchDeps } from './deps.js';
 import { assertInjectedNetworkFetchInTest, credentialFileMtimeMs, resolveDeps } from './deps.js';
 import { retryAfterMs, toIsoResetMs as toResetMs, toNumber } from './coerce.js';
-import { quotaReadNowClause } from '../refresh-command-hint.js';
 
 const DEFAULT_BASE_URL = 'https://api.kimi.com/coding/v1';
 const REQUEST_TIMEOUT_MS = 10_000;
@@ -332,7 +331,7 @@ export async function fetchKimiQuota(overrides: QuotaFetchDeps = {}): Promise<Pr
         return quotaFailure(
             'kimi',
             'error',
-            `Kimi access token expired normally (~15 min lifespan) — it auto-recovers on your next kimi CLI use, so no action is needed. Quota will report again after that (within ~60 min on its own, ${quotaReadNowClause('kimi')}).`,
+            'Kimi access token expired normally (~15 min lifespan) — the kimi CLI renews it on next use. Quota is unavailable until then; an idle CLI does not renew it in the background.',
             { source: 'oauth', failureKind: 'expired-token' },
         );
     }

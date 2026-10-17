@@ -102,7 +102,7 @@ describe('formatQuotaWindow — no-data stale marker', () => {
       expect(source, rel).not.toContain('lastGoodWindows === true')
     }
     const model = fs.readFileSync(path.join(import.meta.dirname, '../../src/utils/quota-format.ts'), 'utf8')
-    expect(model).toMatch(/buildQuotaDisplayModel[\s\S]{0,200}quotaWindowCue\(quota\)/)
+    expect(model).toMatch(/buildQuotaDisplayModel[\s\S]{0,200}quotaWindowCue\(quota, now\)/)
   })
 })
 
@@ -167,12 +167,12 @@ describe('quotaWindowCue — antigravity expired token reads stale, not refreshi
     // Antigravity's session/weekly are a worst-bucket collapse and can both be
     // null while the buckets hold the real reading — judging "are there
     // numbers?" on the axes alone missed it and fell through to 'refreshing'.
-    expect(quotaWindowCue({ ...agyRetained, buckets: undefined } as never)).toBe('refreshing')
+    expect(quotaWindowCue({ ...agyRetained, buckets: undefined } as never)).toBeUndefined()
   })
 
-  it("does NOT restage kimi's expired token — its CLI really does refresh", () => {
+  it("marks an idle kimi access token stale while awaiting CLI use", () => {
     const kimi = { ...agyRetained, provider: 'kimi', buckets: undefined, session: { usedPercent: 28, windowMinutes: 300, resetsAt: null } }
-    expect(quotaWindowCue(kimi as never)).toBe('refreshing')
+    expect(quotaWindowCue(kimi as never)).toBe('stale')
   })
 
   it('renders CHIPS with a stale cue — never the bald "run agy" error wall', () => {
@@ -200,7 +200,7 @@ describe('quotaWindowCue — spent retry budget and daemon-rechecked no-data', (
     weekly: { usedPercent: 12, windowMinutes: 10080, resetsAt: null },
     updatedAt: NOW - 10 * MIN,
     error: 'boom',
-    metadata: { fetchedAt: NOW - 2 * MIN, lastGoodWindows: true, failureKind: 'expired-token', ...metadata },
+    metadata: { fetchedAt: NOW - 2 * MIN, lastGoodWindows: true, failureKind: 'network', ...metadata },
   })
 
   it('retry pending -> refreshing', () => {

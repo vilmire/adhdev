@@ -3438,7 +3438,7 @@
                     "rate-limited": "rate limited",
                     "quota-exhausted": "plan limit reached",
                     "unauthorized": "access denied",
-                    "expired-token": "sign-in expired",
+                    "expired-token": "access token expired",
                     "missing-credentials": "not signed in"
                 },
                 "agoDays": "{{days}}d {{hours}}h ago",

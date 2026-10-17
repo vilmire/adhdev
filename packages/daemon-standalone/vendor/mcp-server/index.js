@@ -23945,9 +23945,15 @@ var require_dist3 = __commonJS({
     function assessQuotaFreshness2(quota, now = Date.now()) {
       const meta = quota.metadata;
       const kind = meta?.failureKind;
-      const userMustAct = kind === "no-data" && quota.provider !== "codex-cli" || kind === "expired-token" && quota.provider === "antigravity-cli";
-      if (userMustAct && hasReading(quota)) return { cue: "stale", userMustAct: true };
-      if (meta?.lastGoodWindows !== true) return { userMustAct };
+      const userMustAct = kind === "no-data" && quota.provider !== "codex-cli" || kind === "expired-token" && ["grok-cli", "kimi", "antigravity-cli"].includes(quota.provider);
+      if (userMustAct) return hasReading(quota) ? { cue: "stale", userMustAct: true } : { userMustAct: true };
+      if (meta?.lastGoodWindows !== true) {
+        const measuredAt = finiteMs(quota.updatedAt);
+        if (hasReading(quota) && (measuredAt === void 0 || now - measuredAt >= QUOTA_BACKFILL_HORIZON_MS2)) {
+          return { cue: "stale", userMustAct };
+        }
+        return { userMustAct };
+      }
       const retryAtMs = finiteMs(meta?.retryAtMs);
       const retryStopped = meta?.retryExhausted === true || retryAtMs !== void 0 && retryAtMs + QUOTA_RETRY_INFLIGHT_GRACE_MS < now;
       if (kind !== "no-data" && !retryStopped) return { cue: "refreshing", userMustAct: false };
@@ -32938,7 +32944,7 @@ child.on('exit', () => process.exit(0));
     function hasBillingStructure(config) {
       return asRecord3(config.currentPeriod) !== null || typeof config.billingPeriodEnd === "string" || typeof config.billingPeriodStart === "string";
     }
-    function mapBillingResponse(data) {
+    function mapBillingResponse(data, measuredAt) {
       const root = asRecord3(data);
       const config = root ? asRecord3(root.config) : null;
       const period = config ? asRecord3(config.currentPeriod) : null;
@@ -32962,7 +32968,7 @@ child.on('exit', () => process.exit(0));
         // Grok has no short rolling plan window — see the header note.
         session: null,
         weekly,
-        updatedAt: Date.now(),
+        updatedAt: measuredAt,
         error: null,
         status: "ok",
         metadata: { source: "oauth", ...tier ? { planType: tier } : {} }
@@ -32989,7 +32995,7 @@ child.on('exit', () => process.exit(0));
         return quotaFailure(
           "grok-cli",
           "error",
-          "Grok access token expired \u2014 the grok CLI refreshes it on next use; quota will report again after that.",
+          "Grok access token expired \u2014 the grok CLI renews it on next use. Quota is unavailable until then; an idle CLI does not renew it in the background.",
           { source: "oauth", failureKind: "expired-token" }
         );
       }
@@ -33027,7 +33033,7 @@ child.on('exit', () => process.exit(0));
             { source: "oauth", failureKind: response.status >= 500 ? "server" : "unknown" }
           );
         }
-        return mapBillingResponse(await response.json());
+        return mapBillingResponse(await response.json(), deps.now());
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         return quotaFailure("grok-cli", "error", `Grok billing request failed: ${message}`, {
@@ -33253,7 +33259,7 @@ child.on('exit', () => process.exit(0));
         return quotaFailure(
           "kimi",
           "error",
-          `Kimi access token expired normally (~15 min lifespan) \u2014 it auto-recovers on your next kimi CLI use, so no action is needed. Quota will report again after that (within ~60 min on its own, ${quotaReadNowClause("kimi")}).`,
+          "Kimi access token expired normally (~15 min lifespan) \u2014 the kimi CLI renews it on next use. Quota is unavailable until then; an idle CLI does not renew it in the background.",
           { source: "oauth", failureKind: "expired-token" }
         );
       }
@@ -33330,7 +33336,6 @@ child.on('exit', () => process.exit(0));
         init_types();
         init_deps();
         init_coerce();
-        init_refresh_command_hint();
         DEFAULT_BASE_URL4 = "https://api.kimi.com/coding/v1";
         REQUEST_TIMEOUT_MS5 = 1e4;
         EXPIRY_SKEW_SECONDS = 5;
@@ -106068,6 +106073,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     init_mesh_node_identity();
     init_command_registry();
     var fs26 = __toESM2(require("fs"));
+    init_refresh();
     init_dist();
     init_mesh_node_git_refresher();
     init_mesh_node_link_presence();
@@ -106293,11 +106299,16 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     function overlayMeshNodeGitObservations(snapshot, args) {
       if (!snapshot || !Array.isArray(snapshot.nodes)) return;
       if (args.locality) snapshot.nodeRuntimeHeld = true;
+      const localQuota = args.locality ? readQuotaCache() : void 0;
       for (const status of snapshot.nodes) {
         if (!status || typeof status !== "object") continue;
         applyMeshNodeLinkPresence(status);
         const nodeId = readText(status.nodeId);
         const daemonId = readText(status.daemonId);
+        const ownsQuota = args.locality && (status.connection?.state === "self" || !!daemonId && !isForeignDaemonMeshNode(status, args.locality));
+        if (ownsQuota && localQuota) {
+          status.nodeFacts = { ...readRecord2(status.nodeFacts), quota: localQuota };
+        }
         if (args.locality && status.connection?.state !== "self" && isForeignDaemonMeshNode(status, args.locality)) {
           overlayHeldRuntime(
             status,
@@ -178063,363 +178074,9 @@ function latestActiveLaunchFailureFromEntries(entries, nodeId) {
   return null;
 }
 
-// src/tools/mesh-status-held-git.ts
-function nonEmptyString(value) {
-  return typeof value === "string" && value ? value : void 0;
-}
-function readHeldNodeGitObservation(held) {
-  const obs = readOptionalRecord(held?.gitObservation);
-  const source = obs?.source;
-  const numberOrNull = (value) => typeof value === "number" && Number.isFinite(value) ? value : null;
-  return {
-    source: source === "self" || source === "local" || source === "member_push" || source === "coordinator_probe" ? source : "none",
-    observedAt: numberOrNull(obs?.observedAt),
-    refreshing: obs?.refreshing === true,
-    unreachableSince: numberOrNull(obs?.unreachableSince),
-    ...typeof obs?.lastRefreshError === "string" ? { lastRefreshError: obs.lastRefreshError } : {}
-  };
-}
-var FRESH_MS = 3e4;
-var RECENT_MS = 3e5;
-function classifyStaleness(dataSource, ageMs) {
-  if (dataSource === "self" || dataSource === "live") return "fresh";
-  if (ageMs === null) return "unknown";
-  if (ageMs < FRESH_MS) return "fresh";
-  if (ageMs < RECENT_MS) return "recent";
-  return "stale";
-}
-function deriveDataFreshnessFromObservation(args) {
-  const { observation, hasGit, isSelfNode, daemonId } = args;
-  const daemon = readOptionalRecord(args.daemonFreshness);
-  const now = args.now ?? Date.now();
-  const unreachable = observation.unreachableSince !== null;
-  let dataSource;
-  let reachable;
-  if (observation.source === "self" || isSelfNode && observation.source === "none" && hasGit) {
-    dataSource = "self";
-    reachable = true;
-  } else if (observation.source === "local") {
-    dataSource = "live";
-    reachable = true;
-  } else if (hasGit && (observation.source === "member_push" || observation.source === "coordinator_probe" || observation.observedAt !== null)) {
-    dataSource = "cached";
-    reachable = unreachable ? false : typeof daemon?.reachable === "boolean" ? daemon.reachable : null;
-  } else if (!daemonId) {
-    dataSource = "unconfigured";
-    reachable = null;
-  } else if (unreachable) {
-    dataSource = "unreachable";
-    reachable = false;
-  } else {
-    dataSource = "pending";
-    reachable = typeof daemon?.reachable === "boolean" ? daemon.reachable : null;
-  }
-  const probeOk = dataSource === "self" || dataSource === "live";
-  const lastProbeAt = observation.observedAt !== null ? new Date(observation.observedAt).toISOString() : typeof daemon?.lastProbeAt === "string" ? daemon.lastProbeAt : null;
-  const lastProbeMs = lastProbeAt ? Date.parse(lastProbeAt) : NaN;
-  const ageMs = Number.isFinite(lastProbeMs) ? Math.max(0, now - lastProbeMs) : null;
-  return {
-    dataSource,
-    probeOk,
-    reachable,
-    directPeerTruthSatisfied: probeOk,
-    projection: dataSource === "cached" ? "cached" : "live_or_absent",
-    lastProbeAt,
-    ageMs,
-    staleness: classifyStaleness(dataSource, ageMs)
-  };
-}
-function applyHeldNodeGitToEntry(entry, args) {
-  const { node, held } = args;
-  const observation = readHeldNodeGitObservation(held);
-  const status = readOptionalRecord(held?.git);
-  const hasGit = !!status && (typeof status.isGitRepo === "boolean" || typeof status.branch === "string");
-  const daemonHealth = typeof held?.health === "string" ? held.health : void 0;
-  const daemonBranchConvergence = readOptionalRecord(held?.branchConvergence);
-  if (hasGit && status) {
-    const uncommittedChanges = countUncommittedChanges(status);
-    const dirty = isGitStatusDirty(status);
-    entry.health = daemonHealth ?? "unknown";
-    assignFullGitSnapshot(entry, status);
-    entry.branch = status.branch;
-    entry.isDirty = dirty;
-    entry.uncommittedChanges = uncommittedChanges;
-    if (daemonBranchConvergence) entry.branchConvergence = daemonBranchConvergence;
-    const buildBehind = readOptionalRecord(status.daemonBuildBehind) ?? readOptionalRecord(held?.staleDaemonBuild);
-    const runningCommit = nonEmptyString(readOptionalRecord(readOptionalRecord(held?.heldRuntime)?.daemonBuild)?.commit);
-    const verdictCommit = buildBehind ? nonEmptyString(buildBehind.buildCommit) : void 0;
-    const verdictIsForOtherProcess = !!(runningCommit && verdictCommit && runningCommit !== verdictCommit);
-    if (buildBehind && !verdictIsForOtherProcess) entry.staleDaemonBuild = buildBehind;
-    const policy = node.policy ?? {};
-    const submodules = policy.autoDiscoverSubmodules === false ? void 0 : extractSubmodules({ status }, policy.submoduleIgnorePaths || []);
-    if (submodules && submodules.some((s) => s?.outOfSync)) {
-      entry.submoduleWarning = "One or more submodules are out of sync with the parent repo. Run `git submodule update` or check deployment readiness.";
-      entry.outOfSyncSubmodules = submodules.filter((s) => s?.outOfSync).map((s) => s.path);
-    }
-  } else if (args.heldStateError) {
-    entry.health = "unknown";
-    entry.degradedReason = "coordinator_state_unavailable";
-    entry.error = `Coordinator daemon node state unavailable: ${args.heldStateError}`;
-  } else if (observation.unreachableSince !== null) {
-    entry.health = "degraded";
-    entry.degradedReason = "node_unreachable";
-    entry.error = `No git state held for this node; the coordinator's background refresh has failed since ${new Date(observation.unreachableSince).toISOString()}${observation.lastRefreshError ? ` (${observation.lastRefreshError})` : ""}.`;
-  } else {
-    entry.health = "unknown";
-    entry.gitProbePending = true;
-    if (typeof held?.error === "string" && held.error) entry.error = held.error;
-  }
-  const quota = readOptionalRecord(readOptionalRecord(held?.nodeFacts)?.quota);
-  if (quota && Object.keys(quota).length > 0) entry.quota = quota;
-  entry.gitObservation = observation;
-  entry.dataFreshness = deriveDataFreshnessFromObservation({
-    observation,
-    daemonFreshness: readOptionalRecord(held?.dataFreshness),
-    hasGit,
-    isSelfNode: entry.machine?.sameMachine === true,
-    daemonId: readNodeDaemonId(node),
-    now: args.now
-  });
-}
-function buildNodeGitStateSummary(entries, error, refreshRequested) {
-  const refreshingNodeIds = entries.filter((entry) => entry?.gitObservation?.refreshing === true).map((entry) => String(entry.nodeId));
-  return {
-    nodeGitState: {
-      source: "coordinator_held",
-      ...error ? { error } : {},
-      ...refreshRequested ? { refreshRequested: true } : {},
-      refreshing: refreshingNodeIds.length > 0,
-      ...refreshingNodeIds.length > 0 ? { refreshingNodeIds } : {}
-    }
-  };
-}
-
-// src/tools/mesh-held-node-state.ts
-var import_daemon_core8 = __toESM(require_dist3());
-async function readCoordinatorHeldNodeState(ctx, opts = {}) {
-  const byNodeId = /* @__PURE__ */ new Map();
-  let raw;
-  try {
-    raw = await ctx.transport.command("mesh_status", {
-      meshId: ctx.mesh.id,
-      // Only the node section: the whole dashboard payload is ~97% queue rows.
-      sections: ["nodes"],
-      ...opts.refresh === true ? { refresh: true } : {}
-    });
-  } catch (error) {
-    return { byNodeId, error: error?.message || "coordinator mesh_status read failed" };
-  }
-  return parseCoordinatorHeldNodeState(raw);
-}
-function parseCoordinatorHeldNodeState(raw) {
-  const byNodeId = /* @__PURE__ */ new Map();
-  const record = readOptionalRecord(unwrapCommandPayload(raw)) ?? readOptionalRecord(raw);
-  if (!record || record.success === false) {
-    return { byNodeId, error: typeof record?.error === "string" ? record.error : "coordinator mesh_status returned no node state" };
-  }
-  for (const node of Array.isArray(record.nodes) ? record.nodes : []) {
-    const status = readOptionalRecord(node);
-    const nodeId = typeof status?.nodeId === "string" ? status.nodeId : "";
-    if (status && nodeId) byNodeId.set(nodeId, status);
-  }
-  return { byNodeId };
-}
-function isCoordinatorServedNode(ctx, node) {
-  if (!isLocalControlPlaneNode(ctx, node)) return false;
-  return meshNodeRouteOf(ctx, node)?.reason !== "checkout_on_this_machine";
-}
-function localStatusProbe(localStatus) {
-  if (!readOptionalRecord(localStatus) || localStatus.success === false) return null;
-  const payload = unwrapCommandPayload(localStatus);
-  const daemonId = typeof payload?.status?.instanceId === "string" ? payload.status.instanceId.trim() : "";
-  const daemonBuild = extractDaemonBuildInfo(localStatus);
-  const upgradeFailure = extractUpgradeFailureSummary(localStatus);
-  const providers = payload?.status?.availableProviders ?? payload?.availableProviders;
-  const observedAt = payload?.status?.timestamp;
-  return {
-    sessions: extractStatusMetadataSessions(localStatus),
-    ...typeof observedAt === "number" && Number.isFinite(observedAt) ? { observedAt } : {},
-    ...daemonId ? { daemonId } : {},
-    ...daemonBuild ? { daemonBuild } : {},
-    ...upgradeFailure ? { upgradeFailure } : {},
-    ...Array.isArray(providers) ? { providers } : {}
-  };
-}
-function heldNodeStatusProbe(held) {
-  const runtime = readOptionalRecord(held?.heldRuntime);
-  const numberOrNull = (value) => typeof value === "number" && Number.isFinite(value) ? value : null;
-  const source = runtime?.source === "member_push" || runtime?.source === "coordinator_probe" ? runtime.source : "none";
-  const observation = {
-    source,
-    observedAt: source === "none" ? null : numberOrNull(runtime?.observedAt),
-    refreshing: runtime?.refreshing === true
-  };
-  if (!runtime || source === "none") return { probe: { sessions: [] }, observation };
-  const daemonBuild = extractDaemonBuildInfo({ daemonBuild: runtime.daemonBuild });
-  const failure = readOptionalRecord(runtime.upgradeFailure);
-  const targetVersion = typeof failure?.targetVersion === "string" ? failure.targetVersion : void 0;
-  const upgradeFailure = failure ? {
-    // The notice prose stays on the node (content-free push); the structured facts travel.
-    summary: `Daemon upgrade${targetVersion ? ` to ${targetVersion}` : ""} failed on this node (rolled back); the full notice is on that node.`,
-    ...typeof failure.recordedAt === "string" ? { recordedAt: failure.recordedAt } : {},
-    ...targetVersion ? { targetVersion } : {},
-    noticePath: typeof failure.noticePath === "string" ? failure.noticePath : "",
-    logPath: typeof failure.logPath === "string" ? failure.logPath : ""
-  } : void 0;
-  return {
-    probe: {
-      sessions: Array.isArray(runtime.sessions) ? runtime.sessions : [],
-      ...typeof runtime.daemonId === "string" && runtime.daemonId ? { daemonId: runtime.daemonId } : {},
-      ...daemonBuild ? { daemonBuild } : {},
-      ...upgradeFailure ? { upgradeFailure } : {},
-      ...Array.isArray(runtime.providers) ? { providers: runtime.providers } : {}
-    },
-    observation
-  };
-}
-function findHeldNodeStatus(state, node) {
-  const exact = state.byNodeId.get(node.id);
-  if (exact) return exact;
-  for (const [nodeId, status] of state.byNodeId) {
-    if ((0, import_daemon_core8.meshNodeIdMatches)(node, nodeId)) return status;
-  }
-  return void 0;
-}
-function resolveNodeRuntime(ctx, node, answers) {
-  if (isCoordinatorServedNode(ctx, node)) {
-    return {
-      probe: answers.local ?? { sessions: [] },
-      observation: { source: "local_read", observedAt: answers.local?.observedAt ?? null, refreshing: false },
-      source: "local",
-      known: !!answers.local
-    };
-  }
-  const held = heldNodeStatusProbe(answers.held ? findHeldNodeStatus(answers.held, node) : void 0);
-  return { probe: held.probe, observation: held.observation, source: "held", known: held.observation.source !== "none" };
-}
-var heldStateForCall = /* @__PURE__ */ new WeakMap();
-var localStatusForCall = /* @__PURE__ */ new WeakMap();
-function sharedForCall(cache, ctx, read) {
-  const cached = cache.get(ctx);
-  if (cached) return cached;
-  const promise = read();
-  cache.set(ctx, promise);
-  promise.finally(() => {
-    if (cache.get(ctx) === promise) cache.delete(ctx);
-  }).catch(() => {
-  });
-  return promise;
-}
-function cachedHeldNodeState(ctx, opts = {}) {
-  return sharedForCall(heldStateForCall, ctx, () => readCoordinatorHeldNodeState(ctx, opts));
-}
-function cachedLocalStatus(ctx) {
-  return sharedForCall(localStatusForCall, ctx, async () => {
-    try {
-      return localStatusProbe(await ctx.transport.command("get_status_metadata", {}));
-    } catch {
-      return null;
-    }
-  });
-}
-async function readNodeRuntime(ctx, node, opts = {}) {
-  await ensureMeshNodeRoutes(ctx);
-  if (isCoordinatorServedNode(ctx, node)) {
-    return resolveNodeRuntime(ctx, node, { local: await cachedLocalStatus(ctx), held: null });
-  }
-  return resolveNodeRuntime(ctx, node, { local: null, held: await cachedHeldNodeState(ctx, opts) });
-}
-async function collectMeshNodesWithRuntime(ctx, opts) {
-  return Promise.all(ctx.mesh.nodes.map(async (node) => {
-    const result = await readNodeRuntime(ctx, node, opts);
-    return result.known ? { ...node, sessions: result.probe.sessions, __liveProbeVerified: true } : { ...node, __liveProbeVerified: false };
-  }));
-}
-
-// src/tools/mesh-status-view.ts
-async function readMeshStatusView(ctx, request) {
-  const raw = await ctx.transport.command("mesh_status_view", {
-    meshId: ctx.mesh.id,
-    ...request.refresh ? { refresh: true } : {},
-    compact: request.compact,
-    ...request.includeTerminalDirect ? { includeTerminalDirect: true } : {},
-    ...request.pendingEvents ? { pendingEvents: request.pendingEvents } : {},
-    ...request.toolCall ? { toolCall: request.toolCall } : {},
-    // The daemon refuses when it is not the one this process believes it talks to.
-    ...ctx.localDaemonId ? { callerDaemonId: ctx.localDaemonId } : {}
-  });
-  const view = readOptionalRecord(readOptionalRecord(raw)?.result) ?? readOptionalRecord(raw);
-  if (!view || view.success === false) {
-    throw new Error(typeof view?.error === "string" ? view.error : "coordinator mesh_status_view returned no view");
-  }
-  return view;
-}
-var MeshStatusViewMiss = class extends Error {
-  constructor(what) {
-    super(`mesh_status renders only the coordinator's view \u2014 ${what} is not part of it`);
-  }
-};
-function sealMeshStatusViewTransport(base) {
-  const sealed = Object.create(base);
-  Object.defineProperty(sealed, "command", {
-    value: async (command) => {
-      throw new MeshStatusViewMiss(command);
-    }
-  });
-  Object.defineProperty(sealed, "meshCommand", {
-    value: async (daemonId, command) => {
-      throw new MeshStatusViewMiss(`a remote ${command} to ${daemonId}`);
-    }
-  });
-  return sealed;
-}
-function applyMeshStatusViewRoutes(ctx, view) {
-  holdMeshNodeRoutes(ctx, view.routes);
-}
-function readViewToolCall(view) {
-  try {
-    if (view.toolCall) return decodeTurnIpcAnswer("tool_call_record", view.toolCall, decodeToolCallRecordResponse);
-  } catch {
-  }
-  return { rateLimitExceeded: false, callsInWindow: 0, advisory: null };
-}
-function readViewRecovery(view, nodeIds) {
-  const out = /* @__PURE__ */ new Map();
-  if (!nodeIds.some(Boolean)) return out;
-  try {
-    const res = decodeTurnIpcAnswer("recovery_context_query", view.recovery ?? { success: true, contexts: {} }, decodeRecoveryContextQueryResponse);
-    for (const [nodeId, context] of Object.entries(res.contexts ?? {})) out.set(nodeId, context);
-  } catch {
-    return /* @__PURE__ */ new Map();
-  }
-  return out;
-}
-function readViewActiveWork(view) {
-  return toActiveWorkRead(decodeTurnIpcAnswer("active_work_query", view.activeWork, decodeActiveWorkQueryResponse));
-}
-function readViewMissionsCompact(view) {
-  return toStatusMissionsCompact(decodeTurnIpcAnswer("mission_list_query", readOptionalRecord(view.missions)?.list, decodeMissionListQueryResponse));
-}
-function readViewMissionsVerbose(view) {
-  const missionsView = readOptionalRecord(view.missions) ?? {};
-  const res = decodeTurnIpcAnswer("mission_list_query", missionsView.list, decodeMissionListQueryResponse);
-  const missions = res.missions;
-  if (missionStatsIds(missions).length === 0) return missions;
-  return withMissionStats(missions, decodeTurnIpcAnswer("task_stats_query", missionsView.stats ?? { success: true, missions: {} }, decodeTaskStatsQueryResponse));
-}
-function readViewRelatedRepoGit(view, workspace) {
-  const hit = readOptionalRecord(view.relatedRepoGit)?.[workspace];
-  if (hit) return hit;
-  throw new MeshStatusViewMiss(`git_status(${workspace})`);
-}
-function drainViewPendingEvents(ctx, view) {
-  ctx.noticeDrainCount = (ctx.noticeDrainCount ?? 0) + 1;
-  return applyPendingMeshEvents(ctx, view.pendingEvents ?? { events: [] });
-}
-
 // src/tools/mesh-compact.ts
-var import_daemon_core9 = __toESM(require_dist3());
-var QUOTA_STALE_AFTER_MS = import_daemon_core9.DEFAULT_QUOTA_ROUTING_POLICY.staleAfterMs;
+var import_daemon_core8 = __toESM(require_dist3());
+var QUOTA_STALE_AFTER_MS = import_daemon_core8.DEFAULT_QUOTA_ROUTING_POLICY.staleAfterMs;
 function buildCompactGitSnapshot(status) {
   if (!status || typeof status !== "object" || Array.isArray(status)) return void 0;
   const slim = {};
@@ -178505,10 +178162,10 @@ function summarizeNodeQuota(quota, now = Date.now()) {
     } else if (weekly === void 0 && session === void 0 && monthly !== void 0) {
       line = `30d ${monthly} \xB7 ${age}${stale ? " stale" : ""}`;
     }
-    const { cue, nextCheckAt } = (0, import_daemon_core9.assessQuotaFreshness)(snapshot, now);
+    const { cue, nextCheckAt } = (0, import_daemon_core8.assessQuotaFreshness)(snapshot, now);
     if (cue === "stale") {
       if (!stale) line += " \xB7 stale";
-      if (nextCheckAt !== void 0) line += ` \xB7 next check \u2264${(0, import_daemon_core9.minutesUntilQuotaCheck)(nextCheckAt, now)}m`;
+      if (nextCheckAt !== void 0) line += ` \xB7 next check \u2264${(0, import_daemon_core8.minutesUntilQuotaCheck)(nextCheckAt, now)}m`;
     } else if (cue === "refreshing") line += " \xB7 refreshing";
     else if (status !== "ok") line += ` \xB7 ${status}`;
     out[provider] = line;
@@ -178715,6 +178372,360 @@ function dedupeCompactNodeGitFields(node) {
     delete bc.branch;
   }
   if (bc) node.branchConvergence = bc;
+}
+
+// src/tools/mesh-status-held-git.ts
+function nonEmptyString(value) {
+  return typeof value === "string" && value ? value : void 0;
+}
+function readHeldNodeGitObservation(held) {
+  const obs = readOptionalRecord(held?.gitObservation);
+  const source = obs?.source;
+  const numberOrNull = (value) => typeof value === "number" && Number.isFinite(value) ? value : null;
+  return {
+    source: source === "self" || source === "local" || source === "member_push" || source === "coordinator_probe" ? source : "none",
+    observedAt: numberOrNull(obs?.observedAt),
+    refreshing: obs?.refreshing === true,
+    unreachableSince: numberOrNull(obs?.unreachableSince),
+    ...typeof obs?.lastRefreshError === "string" ? { lastRefreshError: obs.lastRefreshError } : {}
+  };
+}
+var FRESH_MS = 3e4;
+var RECENT_MS = 3e5;
+function classifyStaleness(dataSource, ageMs) {
+  if (dataSource === "self" || dataSource === "live") return "fresh";
+  if (ageMs === null) return "unknown";
+  if (ageMs < FRESH_MS) return "fresh";
+  if (ageMs < RECENT_MS) return "recent";
+  return "stale";
+}
+function deriveDataFreshnessFromObservation(args) {
+  const { observation, hasGit, isSelfNode, daemonId } = args;
+  const daemon = readOptionalRecord(args.daemonFreshness);
+  const now = args.now ?? Date.now();
+  const unreachable = observation.unreachableSince !== null;
+  let dataSource;
+  let reachable;
+  if (observation.source === "self" || isSelfNode && observation.source === "none" && hasGit) {
+    dataSource = "self";
+    reachable = true;
+  } else if (observation.source === "local") {
+    dataSource = "live";
+    reachable = true;
+  } else if (hasGit && (observation.source === "member_push" || observation.source === "coordinator_probe" || observation.observedAt !== null)) {
+    dataSource = "cached";
+    reachable = unreachable ? false : typeof daemon?.reachable === "boolean" ? daemon.reachable : null;
+  } else if (!daemonId) {
+    dataSource = "unconfigured";
+    reachable = null;
+  } else if (unreachable) {
+    dataSource = "unreachable";
+    reachable = false;
+  } else {
+    dataSource = "pending";
+    reachable = typeof daemon?.reachable === "boolean" ? daemon.reachable : null;
+  }
+  const probeOk = dataSource === "self" || dataSource === "live";
+  const lastProbeAt = observation.observedAt !== null ? new Date(observation.observedAt).toISOString() : typeof daemon?.lastProbeAt === "string" ? daemon.lastProbeAt : null;
+  const lastProbeMs = lastProbeAt ? Date.parse(lastProbeAt) : NaN;
+  const ageMs = Number.isFinite(lastProbeMs) ? Math.max(0, now - lastProbeMs) : null;
+  return {
+    dataSource,
+    probeOk,
+    reachable,
+    directPeerTruthSatisfied: probeOk,
+    projection: dataSource === "cached" ? "cached" : "live_or_absent",
+    lastProbeAt,
+    ageMs,
+    staleness: classifyStaleness(dataSource, ageMs)
+  };
+}
+function applyHeldNodeGitToEntry(entry, args) {
+  const { node, held } = args;
+  const observation = readHeldNodeGitObservation(held);
+  const status = readOptionalRecord(held?.git);
+  const hasGit = !!status && (typeof status.isGitRepo === "boolean" || typeof status.branch === "string");
+  const daemonHealth = typeof held?.health === "string" ? held.health : void 0;
+  const daemonBranchConvergence = readOptionalRecord(held?.branchConvergence);
+  if (hasGit && status) {
+    const uncommittedChanges = countUncommittedChanges(status);
+    const dirty = isGitStatusDirty(status);
+    entry.health = daemonHealth ?? "unknown";
+    assignFullGitSnapshot(entry, status);
+    entry.branch = status.branch;
+    entry.isDirty = dirty;
+    entry.uncommittedChanges = uncommittedChanges;
+    if (daemonBranchConvergence) entry.branchConvergence = daemonBranchConvergence;
+    const buildBehind = readOptionalRecord(status.daemonBuildBehind) ?? readOptionalRecord(held?.staleDaemonBuild);
+    const runningCommit = nonEmptyString(readOptionalRecord(readOptionalRecord(held?.heldRuntime)?.daemonBuild)?.commit);
+    const verdictCommit = buildBehind ? nonEmptyString(buildBehind.buildCommit) : void 0;
+    const verdictIsForOtherProcess = !!(runningCommit && verdictCommit && runningCommit !== verdictCommit);
+    if (buildBehind && !verdictIsForOtherProcess) entry.staleDaemonBuild = buildBehind;
+    const policy = node.policy ?? {};
+    const submodules = policy.autoDiscoverSubmodules === false ? void 0 : extractSubmodules({ status }, policy.submoduleIgnorePaths || []);
+    if (submodules && submodules.some((s) => s?.outOfSync)) {
+      entry.submoduleWarning = "One or more submodules are out of sync with the parent repo. Run `git submodule update` or check deployment readiness.";
+      entry.outOfSyncSubmodules = submodules.filter((s) => s?.outOfSync).map((s) => s.path);
+    }
+  } else if (args.heldStateError) {
+    entry.health = "unknown";
+    entry.degradedReason = "coordinator_state_unavailable";
+    entry.error = `Coordinator daemon node state unavailable: ${args.heldStateError}`;
+  } else if (observation.unreachableSince !== null) {
+    entry.health = "degraded";
+    entry.degradedReason = "node_unreachable";
+    entry.error = `No git state held for this node; the coordinator's background refresh has failed since ${new Date(observation.unreachableSince).toISOString()}${observation.lastRefreshError ? ` (${observation.lastRefreshError})` : ""}.`;
+  } else {
+    entry.health = "unknown";
+    entry.gitProbePending = true;
+    if (typeof held?.error === "string" && held.error) entry.error = held.error;
+  }
+  const quota = readOptionalRecord(readOptionalRecord(held?.nodeFacts)?.quota);
+  if (quota && Object.keys(quota).length > 0) entry.quota = annotateQuotaSnapshotFreshness(quota, args.now);
+  entry.gitObservation = observation;
+  entry.dataFreshness = deriveDataFreshnessFromObservation({
+    observation,
+    daemonFreshness: readOptionalRecord(held?.dataFreshness),
+    hasGit,
+    isSelfNode: entry.machine?.sameMachine === true,
+    daemonId: readNodeDaemonId(node),
+    now: args.now
+  });
+}
+function buildNodeGitStateSummary(entries, error, refreshRequested) {
+  const refreshingNodeIds = entries.filter((entry) => entry?.gitObservation?.refreshing === true).map((entry) => String(entry.nodeId));
+  return {
+    nodeGitState: {
+      source: "coordinator_held",
+      ...error ? { error } : {},
+      ...refreshRequested ? { refreshRequested: true } : {},
+      refreshing: refreshingNodeIds.length > 0,
+      ...refreshingNodeIds.length > 0 ? { refreshingNodeIds } : {}
+    }
+  };
+}
+
+// src/tools/mesh-held-node-state.ts
+var import_daemon_core9 = __toESM(require_dist3());
+async function readCoordinatorHeldNodeState(ctx, opts = {}) {
+  const byNodeId = /* @__PURE__ */ new Map();
+  let raw;
+  try {
+    raw = await ctx.transport.command("mesh_status", {
+      meshId: ctx.mesh.id,
+      // Only the node section: the whole dashboard payload is ~97% queue rows.
+      sections: ["nodes"],
+      ...opts.refresh === true ? { refresh: true } : {}
+    });
+  } catch (error) {
+    return { byNodeId, error: error?.message || "coordinator mesh_status read failed" };
+  }
+  return parseCoordinatorHeldNodeState(raw);
+}
+function parseCoordinatorHeldNodeState(raw) {
+  const byNodeId = /* @__PURE__ */ new Map();
+  const record = readOptionalRecord(unwrapCommandPayload(raw)) ?? readOptionalRecord(raw);
+  if (!record || record.success === false) {
+    return { byNodeId, error: typeof record?.error === "string" ? record.error : "coordinator mesh_status returned no node state" };
+  }
+  for (const node of Array.isArray(record.nodes) ? record.nodes : []) {
+    const status = readOptionalRecord(node);
+    const nodeId = typeof status?.nodeId === "string" ? status.nodeId : "";
+    if (status && nodeId) byNodeId.set(nodeId, status);
+  }
+  return { byNodeId };
+}
+function isCoordinatorServedNode(ctx, node) {
+  if (!isLocalControlPlaneNode(ctx, node)) return false;
+  return meshNodeRouteOf(ctx, node)?.reason !== "checkout_on_this_machine";
+}
+function localStatusProbe(localStatus) {
+  if (!readOptionalRecord(localStatus) || localStatus.success === false) return null;
+  const payload = unwrapCommandPayload(localStatus);
+  const daemonId = typeof payload?.status?.instanceId === "string" ? payload.status.instanceId.trim() : "";
+  const daemonBuild = extractDaemonBuildInfo(localStatus);
+  const upgradeFailure = extractUpgradeFailureSummary(localStatus);
+  const providers = payload?.status?.availableProviders ?? payload?.availableProviders;
+  const observedAt = payload?.status?.timestamp;
+  return {
+    sessions: extractStatusMetadataSessions(localStatus),
+    ...typeof observedAt === "number" && Number.isFinite(observedAt) ? { observedAt } : {},
+    ...daemonId ? { daemonId } : {},
+    ...daemonBuild ? { daemonBuild } : {},
+    ...upgradeFailure ? { upgradeFailure } : {},
+    ...Array.isArray(providers) ? { providers } : {}
+  };
+}
+function heldNodeStatusProbe(held) {
+  const runtime = readOptionalRecord(held?.heldRuntime);
+  const numberOrNull = (value) => typeof value === "number" && Number.isFinite(value) ? value : null;
+  const source = runtime?.source === "member_push" || runtime?.source === "coordinator_probe" ? runtime.source : "none";
+  const observation = {
+    source,
+    observedAt: source === "none" ? null : numberOrNull(runtime?.observedAt),
+    refreshing: runtime?.refreshing === true
+  };
+  if (!runtime || source === "none") return { probe: { sessions: [] }, observation };
+  const daemonBuild = extractDaemonBuildInfo({ daemonBuild: runtime.daemonBuild });
+  const failure = readOptionalRecord(runtime.upgradeFailure);
+  const targetVersion = typeof failure?.targetVersion === "string" ? failure.targetVersion : void 0;
+  const upgradeFailure = failure ? {
+    // The notice prose stays on the node (content-free push); the structured facts travel.
+    summary: `Daemon upgrade${targetVersion ? ` to ${targetVersion}` : ""} failed on this node (rolled back); the full notice is on that node.`,
+    ...typeof failure.recordedAt === "string" ? { recordedAt: failure.recordedAt } : {},
+    ...targetVersion ? { targetVersion } : {},
+    noticePath: typeof failure.noticePath === "string" ? failure.noticePath : "",
+    logPath: typeof failure.logPath === "string" ? failure.logPath : ""
+  } : void 0;
+  return {
+    probe: {
+      sessions: Array.isArray(runtime.sessions) ? runtime.sessions : [],
+      ...typeof runtime.daemonId === "string" && runtime.daemonId ? { daemonId: runtime.daemonId } : {},
+      ...daemonBuild ? { daemonBuild } : {},
+      ...upgradeFailure ? { upgradeFailure } : {},
+      ...Array.isArray(runtime.providers) ? { providers: runtime.providers } : {}
+    },
+    observation
+  };
+}
+function findHeldNodeStatus(state, node) {
+  const exact = state.byNodeId.get(node.id);
+  if (exact) return exact;
+  for (const [nodeId, status] of state.byNodeId) {
+    if ((0, import_daemon_core9.meshNodeIdMatches)(node, nodeId)) return status;
+  }
+  return void 0;
+}
+function resolveNodeRuntime(ctx, node, answers) {
+  if (isCoordinatorServedNode(ctx, node)) {
+    return {
+      probe: answers.local ?? { sessions: [] },
+      observation: { source: "local_read", observedAt: answers.local?.observedAt ?? null, refreshing: false },
+      source: "local",
+      known: !!answers.local
+    };
+  }
+  const held = heldNodeStatusProbe(answers.held ? findHeldNodeStatus(answers.held, node) : void 0);
+  return { probe: held.probe, observation: held.observation, source: "held", known: held.observation.source !== "none" };
+}
+var heldStateForCall = /* @__PURE__ */ new WeakMap();
+var localStatusForCall = /* @__PURE__ */ new WeakMap();
+function sharedForCall(cache, ctx, read) {
+  const cached = cache.get(ctx);
+  if (cached) return cached;
+  const promise = read();
+  cache.set(ctx, promise);
+  promise.finally(() => {
+    if (cache.get(ctx) === promise) cache.delete(ctx);
+  }).catch(() => {
+  });
+  return promise;
+}
+function cachedHeldNodeState(ctx, opts = {}) {
+  return sharedForCall(heldStateForCall, ctx, () => readCoordinatorHeldNodeState(ctx, opts));
+}
+function cachedLocalStatus(ctx) {
+  return sharedForCall(localStatusForCall, ctx, async () => {
+    try {
+      return localStatusProbe(await ctx.transport.command("get_status_metadata", {}));
+    } catch {
+      return null;
+    }
+  });
+}
+async function readNodeRuntime(ctx, node, opts = {}) {
+  await ensureMeshNodeRoutes(ctx);
+  if (isCoordinatorServedNode(ctx, node)) {
+    return resolveNodeRuntime(ctx, node, { local: await cachedLocalStatus(ctx), held: null });
+  }
+  return resolveNodeRuntime(ctx, node, { local: null, held: await cachedHeldNodeState(ctx, opts) });
+}
+async function collectMeshNodesWithRuntime(ctx, opts) {
+  return Promise.all(ctx.mesh.nodes.map(async (node) => {
+    const result = await readNodeRuntime(ctx, node, opts);
+    return result.known ? { ...node, sessions: result.probe.sessions, __liveProbeVerified: true } : { ...node, __liveProbeVerified: false };
+  }));
+}
+
+// src/tools/mesh-status-view.ts
+async function readMeshStatusView(ctx, request) {
+  const raw = await ctx.transport.command("mesh_status_view", {
+    meshId: ctx.mesh.id,
+    ...request.refresh ? { refresh: true } : {},
+    compact: request.compact,
+    ...request.includeTerminalDirect ? { includeTerminalDirect: true } : {},
+    ...request.pendingEvents ? { pendingEvents: request.pendingEvents } : {},
+    ...request.toolCall ? { toolCall: request.toolCall } : {},
+    // The daemon refuses when it is not the one this process believes it talks to.
+    ...ctx.localDaemonId ? { callerDaemonId: ctx.localDaemonId } : {}
+  });
+  const view = readOptionalRecord(readOptionalRecord(raw)?.result) ?? readOptionalRecord(raw);
+  if (!view || view.success === false) {
+    throw new Error(typeof view?.error === "string" ? view.error : "coordinator mesh_status_view returned no view");
+  }
+  return view;
+}
+var MeshStatusViewMiss = class extends Error {
+  constructor(what) {
+    super(`mesh_status renders only the coordinator's view \u2014 ${what} is not part of it`);
+  }
+};
+function sealMeshStatusViewTransport(base) {
+  const sealed = Object.create(base);
+  Object.defineProperty(sealed, "command", {
+    value: async (command) => {
+      throw new MeshStatusViewMiss(command);
+    }
+  });
+  Object.defineProperty(sealed, "meshCommand", {
+    value: async (daemonId, command) => {
+      throw new MeshStatusViewMiss(`a remote ${command} to ${daemonId}`);
+    }
+  });
+  return sealed;
+}
+function applyMeshStatusViewRoutes(ctx, view) {
+  holdMeshNodeRoutes(ctx, view.routes);
+}
+function readViewToolCall(view) {
+  try {
+    if (view.toolCall) return decodeTurnIpcAnswer("tool_call_record", view.toolCall, decodeToolCallRecordResponse);
+  } catch {
+  }
+  return { rateLimitExceeded: false, callsInWindow: 0, advisory: null };
+}
+function readViewRecovery(view, nodeIds) {
+  const out = /* @__PURE__ */ new Map();
+  if (!nodeIds.some(Boolean)) return out;
+  try {
+    const res = decodeTurnIpcAnswer("recovery_context_query", view.recovery ?? { success: true, contexts: {} }, decodeRecoveryContextQueryResponse);
+    for (const [nodeId, context] of Object.entries(res.contexts ?? {})) out.set(nodeId, context);
+  } catch {
+    return /* @__PURE__ */ new Map();
+  }
+  return out;
+}
+function readViewActiveWork(view) {
+  return toActiveWorkRead(decodeTurnIpcAnswer("active_work_query", view.activeWork, decodeActiveWorkQueryResponse));
+}
+function readViewMissionsCompact(view) {
+  return toStatusMissionsCompact(decodeTurnIpcAnswer("mission_list_query", readOptionalRecord(view.missions)?.list, decodeMissionListQueryResponse));
+}
+function readViewMissionsVerbose(view) {
+  const missionsView = readOptionalRecord(view.missions) ?? {};
+  const res = decodeTurnIpcAnswer("mission_list_query", missionsView.list, decodeMissionListQueryResponse);
+  const missions = res.missions;
+  if (missionStatsIds(missions).length === 0) return missions;
+  return withMissionStats(missions, decodeTurnIpcAnswer("task_stats_query", missionsView.stats ?? { success: true, missions: {} }, decodeTaskStatsQueryResponse));
+}
+function readViewRelatedRepoGit(view, workspace) {
+  const hit = readOptionalRecord(view.relatedRepoGit)?.[workspace];
+  if (hit) return hit;
+  throw new MeshStatusViewMiss(`git_status(${workspace})`);
+}
+function drainViewPendingEvents(ctx, view) {
+  ctx.noticeDrainCount = (ctx.noticeDrainCount ?? 0) + 1;
+  return applyPendingMeshEvents(ctx, view.pendingEvents ?? { events: [] });
 }
 
 // src/tools/mesh-status-sections.ts

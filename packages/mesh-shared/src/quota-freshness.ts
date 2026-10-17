@@ -19,7 +19,7 @@ export interface QuotaFreshness {
     cue?: QuotaFreshnessCue
     /**
      * Only the USER can produce a new reading (aged-out Claude statusline;
-     * antigravity expired token — the daemon never redeems it). The surface
+     * expired CLI access token — the daemon never redeems it). The surface
      * should say what to run, not promise a self-heal.
      */
     userMustAct: boolean
@@ -88,9 +88,9 @@ function backfillCheckAt(quota: MeshNodeFactsProviderQuota, now: number): number
  *        a session must run). Codex's `no-data` is the daemon re-reading the
  *        rollout files itself (≈60s while a CLI is active, ≤60 min idle), so it
  *        is `stale` WITHOUT userMustAct;
- *      · antigravity `expired-token` — the daemon deliberately does not redeem
- *        the refresh token. Kimi's expired-token is NOT here: its CLI refreshes
- *        the token on its own cadence.
+ *      · `expired-token` on Grok/Kimi/antigravity — only the owning CLI
+ *        renews it on use. An idle CLI has no background renewal cadence.
+ *        A scheduled quota retry does not itself renew credentials.
  *  - `refreshing` — retained numbers after a transient failure with a retry
  *    actually pending. ★Honest about the end of the retry budget: once the
  *    daemon has stopped retrying (`metadata.retryExhausted`, or `retryAtMs`
@@ -103,12 +103,20 @@ export function assessQuotaFreshness(quota: MeshNodeFactsProviderQuota, now: num
     const meta = quota.metadata
     const kind = meta?.failureKind
     const userMustAct = (kind === 'no-data' && quota.provider !== 'codex-cli')
-        || (kind === 'expired-token' && quota.provider === 'antigravity-cli')
+        || (kind === 'expired-token' && ['grok-cli', 'kimi', 'antigravity-cli'].includes(quota.provider))
     // Order matters: the aged-out Claude shape and the retained antigravity
     // shape both ALSO mark lastGoodWindows (mesh routing trusts retained numbers
     // until their reset), so they must be classified before the generic branch.
-    if (userMustAct && hasReading(quota)) return { cue: 'stale', userMustAct: true }
-    if (meta?.lastGoodWindows !== true) return { userMustAct }
+    if (userMustAct) return hasReading(quota) ? { cue: 'stale', userMustAct: true } : { userMustAct: true }
+    if (meta?.lastGoodWindows !== true) {
+        // A successful fetch is not a perpetual live reading. Use the DATA
+        // clock; a recent failed attempt must never rejuvenate old numbers.
+        const measuredAt = finiteMs(quota.updatedAt)
+        if (hasReading(quota) && (measuredAt === undefined || now - measuredAt >= QUOTA_BACKFILL_HORIZON_MS)) {
+            return { cue: 'stale', userMustAct }
+        }
+        return { userMustAct }
+    }
 
     const retryAtMs = finiteMs(meta?.retryAtMs)
     const retryStopped = meta?.retryExhausted === true

@@ -194,7 +194,7 @@ describe('fetchKimiQuota', () => {
     // launch an interactive session to fix it; neither is true, and there is
     // nothing for the user to do here. Locks the message so that false
     // guidance cannot silently return.
-    it('does not claim the session/login expired or ask the user to take action, even with a valid refresh_token present', async () => {
+    it('describes idle access-token expiry without claiming a broken login or automatic background renewal', async () => {
         const home = makeKimiHome({
             access_token: 'tok', expires_at: Math.floor(NOW / 1000) - 1,
             refresh_token: 'still-valid-refresh-token', scope: 'usages', token_type: 'Bearer',
@@ -206,9 +206,9 @@ describe('fetchKimiQuota', () => {
         expect(quota.metadata?.failureKind).toBe('expired-token');
         expect(stub.calls).toEqual([]); // still never refreshes/calls out itself
         expect(quota.error).not.toMatch(/session expired|log ?in/i);
-        expect(quota.error).toMatch(/auto-recovers on your next kimi CLI use/);
-        expect(quota.error).toMatch(/so no action is needed/);
-        expect(quota.error).toMatch(/Quota will report again after that/);
+        expect(quota.error).toMatch(/renews it on next use/);
+        expect(quota.error).toMatch(/idle CLI does not renew it in the background/);
+        expect(quota.error).not.toMatch(/within ~60 min|on its own|no action is needed/);
     });
 
     it('classifies 401 as unauthorized', async () => {

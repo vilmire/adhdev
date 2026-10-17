@@ -230,7 +230,7 @@ function hasBillingStructure(config: Record<string, unknown>): boolean {
         || typeof config.billingPeriodStart === 'string';
 }
 
-function mapBillingResponse(data: unknown): ProviderQuota {
+function mapBillingResponse(data: unknown, measuredAt: number): ProviderQuota {
     const root = asRecord(data);
     const config = root ? asRecord(root.config) : null;
     const period = config ? asRecord(config.currentPeriod) : null;
@@ -280,7 +280,7 @@ function mapBillingResponse(data: unknown): ProviderQuota {
         // Grok has no short rolling plan window — see the header note.
         session: null,
         weekly,
-        updatedAt: Date.now(),
+        updatedAt: measuredAt,
         error: null,
         status: 'ok',
         metadata: { source: 'oauth', ...(tier ? { planType: tier } : {}) },
@@ -316,7 +316,7 @@ export async function fetchGrokQuota(overrides: QuotaFetchDeps = {}): Promise<Pr
         return quotaFailure(
             'grok-cli',
             'error',
-            'Grok access token expired — the grok CLI refreshes it on next use; quota will report again after that.',
+            'Grok access token expired — the grok CLI renews it on next use. Quota is unavailable until then; an idle CLI does not renew it in the background.',
             { source: 'oauth', failureKind: 'expired-token' },
         );
     }
@@ -360,7 +360,7 @@ export async function fetchGrokQuota(overrides: QuotaFetchDeps = {}): Promise<Pr
             );
         }
 
-        return mapBillingResponse(await response.json());
+        return mapBillingResponse(await response.json(), deps.now());
     } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         return quotaFailure('grok-cli', 'error', `Grok billing request failed: ${message}`, {

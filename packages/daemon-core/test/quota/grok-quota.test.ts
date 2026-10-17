@@ -128,6 +128,7 @@ describe('fetchGrokQuota', () => {
         expect(quota.status).toBe('ok');
         expect(quota.error).toBeNull();
         expect(quota.provider).toBe('grok-cli');
+        expect(quota.updatedAt).toBe(NOW);
         expect(quota.weekly).toEqual({
             usedPercent: 1,
             windowMinutes: WEEKLY_WINDOW_MINUTES,

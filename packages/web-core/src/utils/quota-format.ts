@@ -413,6 +413,8 @@ export interface QuotaDisplayChip {
     /** Finite for window/bucket chips; null for the usage chip (no percent axis). */
     usedPercent: number | null
     hint: QuotaChipHint
+    /** Localized cue retained by compact labels as well as full labels. */
+    freshnessLabel?: string
     /** Same 70/90 thresholds as the `adhdev quota` CLI ('info' for usage chips). */
     tone: QuotaTone
     /**
@@ -468,7 +470,7 @@ export function buildQuotaDisplayModel(
     now: number = Date.now(),
     fmt: QuotaTextFormatter = ENGLISH_QUOTA_TEXT,
 ): QuotaDisplayModel {
-    const cue = quotaWindowCue(quota)
+    const cue = quotaWindowCue(quota, now)
     const nextCheckAt = cue === 'stale' ? quotaNextCheckAt(quota, now) : undefined
     const axisChip = (window: MeshNodeFactsQuotaWindow | null | undefined, hint: 'session' | 'weekly' | 'monthly', prefix: string): QuotaDisplayChip | null => {
         const text = formatQuotaWindow(window, now, cue, fmt, nextCheckAt)
@@ -476,7 +478,7 @@ export function buildQuotaDisplayModel(
         const usedPercent = window!.usedPercent
         const reset = isQuotaWindowReset(window, now)
         const resetsAt = typeof window!.resetsAt === 'number' && Number.isFinite(window!.resetsAt) ? window!.resetsAt : null
-        return { key: hint, label: `${prefix} ${text}`, usedPercent: reset ? null : usedPercent, hint, tone: reset ? 'default' : quotaUsageTone(usedPercent), resetsAt }
+        return { key: hint, label: `${prefix} ${text}`, usedPercent: reset ? null : usedPercent, hint, ...(cue ? { freshnessLabel: fmt.cue(cue) } : {}), tone: reset ? 'default' : quotaUsageTone(usedPercent), resetsAt }
     }
     const session = axisChip(quota.session, 'session', '5h')
     const weekly = axisChip(quota.weekly, 'weekly', '7d')
@@ -490,6 +492,7 @@ export function buildQuotaDisplayModel(
         label: `${chip.label} ${formatQuotaWindow(chip.window, now, cue, fmt, nextCheckAt)}`,
         usedPercent: isQuotaWindowReset(chip.window, now) ? null : chip.usedPercent,
         hint: 'bucket' as const,
+        ...(cue ? { freshnessLabel: fmt.cue(cue) } : {}),
         tone: isQuotaWindowReset(chip.window, now) ? 'default' as const : quotaUsageTone(chip.usedPercent),
         resetsAt: typeof chip.window.resetsAt === 'number' && Number.isFinite(chip.window.resetsAt) ? chip.window.resetsAt : null,
     }))
@@ -573,7 +576,7 @@ export function shortQuotaChipLabel(chip: QuotaDisplayChip): string {
                 : chip.key
     if (chip.usedPercent === null) return chip.hint === 'usage' ? chip.label : `${axis} —`
     if (chip.hint === 'usage') return chip.label
-    return `${axis} ${Math.round(chip.usedPercent)}%`
+    return `${axis} ${Math.round(chip.usedPercent)}%${chip.freshnessLabel ? ` · ${chip.freshnessLabel}` : ''}`
 }
 
 export type ClaudeQuotaHint = 'setup' | 'refresh' | null

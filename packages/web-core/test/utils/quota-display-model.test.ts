@@ -2,7 +2,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-import { buildQuotaDisplayModel } from '../../src/utils/quota-format'
+import { buildQuotaDisplayModel, shortQuotaChipLabel } from '../../src/utils/quota-format'
 
 // THE shared quota view-model. Four dashboards render the same
 // MeshNodeFactsProviderQuota snapshot (mesh Status tab, machine Overview card,
@@ -19,7 +19,7 @@ import { buildQuotaDisplayModel } from '../../src/utils/quota-format'
 //     none has re-grown its own assembly out of the raw snapshot.
 
 const q = (overrides: Record<string, unknown>) => ({
-  provider: 'codex-cli', status: 'ok', updatedAt: 1, error: null,
+  provider: 'codex-cli', status: 'ok', updatedAt: Date.now(), error: null,
   session: null, weekly: null,
   ...overrides,
 }) as never
@@ -186,5 +186,25 @@ describe('drift guard — all quota surfaces consume the shared view-model', () 
     const source = fs.readFileSync(path.join(import.meta.dirname, '../../src/utils/quota-format.ts'), 'utf8')
     expect(source).toContain('export function buildQuotaDisplayModel')
     expect(source).not.toMatch(/^import\s+\{[^}]*\}\s+from\s+'@adhdev\/daemon-core'/m)
+  })
+})
+
+
+describe('Grok quota measurement age', () => {
+  it('labels the old 76% remaining stale and renders the fresh 3% remaining without that cue', () => {
+    const now = 1_800_000_000_000
+    const old = q({ provider: 'grok-cli', updatedAt: now - 3_663_172,
+      weekly: { usedPercent: 24, windowMinutes: 10080, resetsAt: now + 86_400_000 },
+      metadata: { fetchedAt: now - 3_663_172 } })
+    const stale = buildQuotaDisplayModel(old, now)
+    expect(stale.cue).toBe('stale')
+    expect(stale.compactChip?.label).toContain('24.0% used')
+    expect(stale.compactChip?.label).toContain('stale')
+    expect(shortQuotaChipLabel(stale.compactChip!)).toBe('7d 24% · stale')
+    const fresh = buildQuotaDisplayModel({ ...old, updatedAt: now,
+      weekly: { usedPercent: 97, windowMinutes: 10080, resetsAt: now + 86_400_000 } }, now)
+    expect(fresh.cue).toBeUndefined()
+    expect(fresh.compactChip?.label).toContain('97.0% used')
+    expect(fresh.compactChip?.label).not.toContain('stale')
   })
 })

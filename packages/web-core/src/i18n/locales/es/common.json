@@ -3441,7 +3441,7 @@
                     "rate-limited": "límite de peticiones",
                     "quota-exhausted": "límite del plan alcanzado",
                     "unauthorized": "acceso denegado",
-                    "expired-token": "sesión caducada",
+                    "expired-token": "token de acceso caducado",
                     "missing-credentials": "sin sesión iniciada"
                 },
                 "agoDays": "hace {{days}} d {{hours}} h",

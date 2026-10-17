@@ -25,7 +25,7 @@ describe('assessQuotaFreshness', () => {
     })
 
     it('refreshing while a transient retry is pending (retryAtMs ahead)', () => {
-        const q = retained('kimi', { failureKind: 'expired-token', retryAtMs: NOW + 4 * MIN })
+        const q = retained('kimi', { failureKind: 'network', retryAtMs: NOW + 4 * MIN })
         expect(assessQuotaFreshness(q, NOW)).toEqual({ cue: 'refreshing', userMustAct: false })
     })
 
@@ -35,12 +35,12 @@ describe('assessQuotaFreshness', () => {
     })
 
     it('legacy snapshot with no retry bookkeeping at all keeps the old "refreshing"', () => {
-        const q = retained('kimi', { failureKind: 'expired-token' })
+        const q = retained('kimi', { failureKind: 'network' })
         expect(assessQuotaFreshness(q, NOW).cue).toBe('refreshing')
     })
 
     it('★retry budget spent -> stale with the next scheduled check, not "refreshing" for an hour', () => {
-        const q = retained('kimi', { failureKind: 'expired-token', retryAtMs: NOW - 20 * MIN, retryExhausted: true })
+        const q = retained('kimi', { failureKind: 'network', retryAtMs: NOW - 20 * MIN, retryExhausted: true })
         const f = assessQuotaFreshness(q, NOW)
         expect(f.cue).toBe('stale')
         expect(f.userMustAct).toBe(false)
@@ -72,9 +72,20 @@ describe('assessQuotaFreshness', () => {
         expect(f.nextCheckAt).toBeGreaterThan(NOW)
     })
 
-    it('antigravity expired token needs the USER, even though the failure kind is transient', () => {
-        const q = retained('antigravity-cli', { failureKind: 'expired-token', retryAtMs: NOW + 2 * MIN })
+    it.each(['antigravity-cli', 'grok-cli', 'kimi'])('%s expired access token awaits CLI use even with a quota retry pending', (provider) => {
+        const q = retained(provider, { failureKind: 'expired-token', retryAtMs: NOW + 2 * MIN })
         expect(assessQuotaFreshness(q, NOW)).toEqual({ cue: 'stale', userMustAct: true })
+        expect(assessQuotaFreshness({ ...q, session: null, weekly: null }, NOW)).toEqual({ userMustAct: true })
+    })
+
+    it('stale successful Grok 76% remaining never reads as current, even after a recent attempt', () => {
+        const q = retained('grok-cli', { lastGoodWindows: false, fetchedAt: NOW }, {
+            status: 'ok', updatedAt: NOW - QUOTA_BACKFILL_HORIZON_MS - 1,
+            session: null, weekly: win(24), error: null,
+        })
+        expect(assessQuotaFreshness(q, NOW)).toEqual({ cue: 'stale', userMustAct: false })
+        expect(assessQuotaFreshness({ ...q, updatedAt: NOW, weekly: win(97) }, NOW)).toEqual({ userMustAct: false })
+        expect(assessQuotaFreshness({ ...q, updatedAt: 0 }, NOW).cue).toBe('stale')
     })
 
     it('a snapshot with no lastGoodWindows and no user action has no cue', () => {

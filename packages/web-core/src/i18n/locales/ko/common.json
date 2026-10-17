@@ -3438,7 +3438,7 @@
                     "rate-limited": "요청 제한됨",
                     "quota-exhausted": "플랜 한도 도달",
                     "unauthorized": "접근 거부",
-                    "expired-token": "로그인 만료",
+                    "expired-token": "액세스 토큰 만료",
                     "missing-credentials": "로그인 필요"
                 },
                 "agoDays": "{{days}}일 {{hours}}시간 전",

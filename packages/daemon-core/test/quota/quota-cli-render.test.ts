@@ -139,7 +139,7 @@ describe('printQuota — last-good carry-forward marker', () => {
         updatedAt: 1,
         error: 'kimi expired-token',
         status: 'error',
-        metadata: { source: 'oauth', failureKind: 'expired-token', lastGoodWindows: true } as any,
+        metadata: { source: 'oauth', failureKind: 'network', lastGoodWindows: true } as any,
     };
 
     it('appends "(refreshing)" to a carried-forward window', () => {
@@ -153,7 +153,7 @@ describe('printQuota — last-good carry-forward marker', () => {
             provider: 'kimi',
             session: { usedPercent: 28, windowMinutes: 300, resetsAt: null },
             weekly: null,
-            updatedAt: 1,
+            updatedAt: Date.now(),
             error: null,
             status: 'ok',
             metadata: { source: 'oauth' },
@@ -226,13 +226,13 @@ describe('printQuota — stale readings the daemon re-checks by itself', () => {
     });
 
     it('spent retry budget: "(stale, next check within ~58m)", not "(refreshing)"', () => {
-        const joined = captureLogs(() => printQuota('Kimi', base('kimi', { failureKind: 'expired-token', retryAtMs: Date.now() - 600_000, retryExhausted: true }))).join('\n');
+        const joined = captureLogs(() => printQuota('Kimi', base('kimi', { failureKind: 'network', retryAtMs: Date.now() - 600_000, retryExhausted: true }))).join('\n');
         expect(joined).toMatch(/31\.0%.*\(stale, next check within ~5[78]m\)/);
         expect(joined).not.toContain('(refreshing)');
     });
 
     it('retry still pending keeps "(refreshing)"', () => {
-        const joined = captureLogs(() => printQuota('Kimi', base('kimi', { failureKind: 'expired-token', retryAtMs: Date.now() + 240_000 }))).join('\n');
+        const joined = captureLogs(() => printQuota('Kimi', base('kimi', { failureKind: 'network', retryAtMs: Date.now() + 240_000 }))).join('\n');
         expect(joined).toMatch(/31\.0%.*\(refreshing\)/);
     });
 

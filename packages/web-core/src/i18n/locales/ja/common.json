@@ -3438,7 +3438,7 @@
                     "rate-limited": "レート制限中",
                     "quota-exhausted": "プランの上限に到達",
                     "unauthorized": "アクセス拒否",
-                    "expired-token": "ログインの期限切れ",
+                    "expired-token": "アクセストークンの期限切れ",
                     "missing-credentials": "未ログイン"
                 },
                 "agoDays": "{{days}}日{{hours}}時間前",

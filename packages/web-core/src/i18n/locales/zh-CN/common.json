@@ -3438,7 +3438,7 @@
                     "rate-limited": "请求受限",
                     "quota-exhausted": "已达套餐上限",
                     "unauthorized": "访问被拒绝",
-                    "expired-token": "登录已过期",
+                    "expired-token": "访问令牌已过期",
                     "missing-credentials": "未登录"
                 },
                 "agoDays": "{{days}} 天 {{hours}} 小时前",
