@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildBusyChatInputStatusMessage } from '../../../src/components/dashboard/ChatPane'
+import { buildBusyChatInputStatusMessage, buildOwnerAttentionSendBlock } from '../../../src/components/dashboard/ChatPane'
 
 // Identity translator: pins which i18n KEY each status maps to, not English
 // copy — the strings themselves now live in common.json (G8-15).
@@ -24,5 +24,17 @@ describe('ChatPane busy input status copy', () => {
   it('shows waiting context when approval buttons are not available yet', () => {
     expect(buildBusyChatInputStatusMessage({ status: 'waiting_approval', modalButtons: undefined } as any, t))
       .toBe('chatPane.busyWaitingApproval')
+  })
+})
+
+describe('ChatPane owner-attention send block', () => {
+  it('blocks the chat composer while the session is parked for owner attention', () => {
+    expect(buildOwnerAttentionSendBlock({ ownerAttention: { stateId: 'consent_banner', message: 'Help improve Grok?' } } as any, t))
+      .toBe('approval.ownerAttentionPlaceholder')
+  })
+
+  it('does not block once the park clears', () => {
+    expect(buildOwnerAttentionSendBlock({ ownerAttention: null } as any, t)).toBeNull()
+    expect(buildOwnerAttentionSendBlock(undefined, t)).toBeNull()
   })
 })

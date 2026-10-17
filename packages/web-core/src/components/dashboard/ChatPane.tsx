@@ -132,6 +132,18 @@ export function buildChatPaneControllerOptions(options: {
     return { enabled: !!options.sessionId };
 }
 
+/**
+ * Chat-composer block while a session is parked for owner attention (e.g. Grok's
+ * consent prompt). That prompt is answered in the terminal; a chat send would be
+ * typed into it and could answer it. Null when the session is not parked.
+ */
+export function buildOwnerAttentionSendBlock(
+    conv: Pick<ActiveConversation, 'ownerAttention'> | undefined | null,
+    t: (key: string) => string,
+): string | null {
+    return conv?.ownerAttention ? t('approval.ownerAttentionPlaceholder') : null
+}
+
 export function buildBusyChatInputStatusMessage(
     conversation: Pick<ActiveConversation, 'status' | 'modalButtons'>,
     t: (key: string) => string,
@@ -368,7 +380,11 @@ export default function ChatPane({
     const panelLabel = getConversationDisplayLabel(activeConv)
     const daemonId = getConversationDaemonRouteId(activeConv);
     const canOpenPanel = shouldShowOpenPanelAction(activeConv)
-    const sendBlockMessage = getConversationSendBlockMessage(activeConv)
+    // A session parked for owner attention (e.g. Grok's consent prompt) is answered
+    // in the terminal; a chat send would be typed into that prompt and could answer
+    // it, so the chat composer is blocked while the park lasts.
+    const ownerAttentionBlock = buildOwnerAttentionSendBlock(activeConv, t)
+    const sendBlockMessage = getConversationSendBlockMessage(activeConv) || ownerAttentionBlock
     const busyStatusMessage = buildBusyChatInputStatusMessage(activeConv, t)
     // The blocked state lives in the placeholder as a short one-liner — the
     // approval banner above already explains itself, and a long placeholder
@@ -377,6 +393,7 @@ export default function ChatPane({
     // reappears there via getInlineSendFailureMessage only when a send bounces.
     const inlineStatusMessage = sendFeedbackMessage || null
     const chatInputStatusMessage = getConversationSendBlockedPlaceholder(activeConv)
+        || ownerAttentionBlock
         || sendFeedbackMessage
         || busyStatusMessage
     const isChatInputBlocked = !!sendBlockMessage

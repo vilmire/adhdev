@@ -368,7 +368,8 @@
         "answerQuestion": "질문에 답하기",
         "ownerAttentionTitle": "확인 필요",
         "ownerAttentionBody": "이 세션은 직접 답해야 하는 프롬프트에서 대기 중입니다. 자동으로 응답하지 않으니 터미널에서 응답하세요.",
-        "ownerAttentionOpenTerminal": "터미널 열기"
+        "ownerAttentionOpenTerminal": "터미널 열기",
+        "ownerAttentionPlaceholder": "터미널에서 응답하세요…"
     },
     "chatControls": {
         "loading": "불러오는 중…",

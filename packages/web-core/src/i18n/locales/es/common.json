@@ -368,7 +368,8 @@
         "answerQuestion": "Responder la pregunta",
         "ownerAttentionTitle": "REQUIERE TU ATENCIÓN",
         "ownerAttentionBody": "Esta sesión espera una respuesta que solo tú puedes dar. No se responderá automáticamente: responde en la terminal.",
-        "ownerAttentionOpenTerminal": "Abrir terminal"
+        "ownerAttentionOpenTerminal": "Abrir terminal",
+        "ownerAttentionPlaceholder": "Responde en la terminal…"
     },
     "chatControls": {
         "loading": "Cargando…",

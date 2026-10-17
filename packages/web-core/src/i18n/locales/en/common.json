@@ -368,7 +368,8 @@
         "answerQuestion": "Answer the question",
         "ownerAttentionTitle": "NEEDS YOUR ATTENTION",
         "ownerAttentionBody": "This session is waiting on a prompt only you can answer. It will not be answered automatically — respond in the terminal.",
-        "ownerAttentionOpenTerminal": "Open terminal"
+        "ownerAttentionOpenTerminal": "Open terminal",
+        "ownerAttentionPlaceholder": "Respond in the terminal…"
     },
     "chatControls": {
         "loading": "Loading…",

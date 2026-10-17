@@ -368,7 +368,8 @@
         "answerQuestion": "回答问题",
         "ownerAttentionTitle": "需要你处理",
         "ownerAttentionBody": "此会话正在等待只有你能回答的提示。它不会被自动回答——请在终端中响应。",
-        "ownerAttentionOpenTerminal": "打开终端"
+        "ownerAttentionOpenTerminal": "打开终端",
+        "ownerAttentionPlaceholder": "请在终端中回应…"
     },
     "chatControls": {
         "loading": "加载中…",

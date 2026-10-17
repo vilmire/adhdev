@@ -368,7 +368,8 @@
         "answerQuestion": "質問に回答する",
         "ownerAttentionTitle": "確認が必要です",
         "ownerAttentionBody": "このセッションは、あなたにしか答えられないプロンプトで待機しています。自動では回答されません — ターミナルで応答してください。",
-        "ownerAttentionOpenTerminal": "ターミナルを開く"
+        "ownerAttentionOpenTerminal": "ターミナルを開く",
+        "ownerAttentionPlaceholder": "ターミナルで応答してください…"
     },
     "chatControls": {
         "loading": "読み込み中…",
