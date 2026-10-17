@@ -145,12 +145,84 @@ export function pickApprovalButton(
     );
 }
 
+/**
+ * True when a provider button grants MORE than this one request: a standing
+ * "always" rule, a session/project/workspace-wide grant, an allowlist entry, a
+ * "don't ask again", a trust grant, or a run-everything escape hatch.
+ *
+ * Owner policy (worker permission policy): when the daemon answers a
+ * tool-permission prompt by itself it must pick the least-privilege ONE-TIME
+ * option and never one of these. Only an explicit human/coordinator choice of
+ * the exact button may press one. Matched on the normalized label (lowercase,
+ * leading list number and punctuation stripped), so "2. Yes, and don't ask
+ * again for: codex --version" reads "yes and don t ask again for codex version".
+ */
+export function isPersistentApprovalGrantLabel(value: string): boolean {
+    const label = normalizeApprovalLabel(value);
+    if (!label) return false;
+    return /\balways\b/.test(label)
+        || /\b(?:don t|dont|do not|never) ask(?: me)? again\b/.test(label)
+        || /\b(?:this|the|current|whole|entire|rest of the|rest of this) (?:session|conversation|chat)\b/.test(label)
+        || /\b(?:for|per) (?:the )?session\b|\bsession wide\b/.test(label)
+        || /\b(?:this|the|current|whole|entire) (?:project|workspace|repo|repository|folder|directory)\b/.test(label)
+        || /\ballow ?list\b|\bwhite ?list\b/.test(label)
+        || /\beverything\b|\bremember\b|\bpermanent(?:ly)?\b|\bforever\b/.test(label)
+        || /\ball (?:edits|commands|tools|actions|files|changes|requests|permissions)\b/.test(label)
+        || /\bauto (?:accept|approve|allow|run)\b/.test(label)
+        || /\btrust\b/.test(label);
+}
+
+/**
+ * Daemon-side auto-approval choice for a tool-permission prompt: the
+ * least-privilege ONE-TIME affirmative. Persistent grants
+ * ({@link isPersistentApprovalGrantLabel}) and declines are never candidates;
+ * the remaining labels go through the same hint ranking as
+ * {@link pickApprovalButton} and the index maps back to the ORIGINAL button
+ * list. When no one-time affirmative exists the result is index -1 and the
+ * caller must leave the prompt for the coordinator/owner instead of answering.
+ */
+export function pickLeastPrivilegeApprovalButton(
+    buttons: string[] | null | undefined,
+    provider?: Pick<ProviderModule, 'approvalPositiveHints'> | null,
+): { index: number; label: string } {
+    const labels = (buttons || []).map((button) => String(button || '').trim());
+    const candidates: Array<{ label: string; index: number }> = [];
+    labels.forEach((label, index) => {
+        if (label && !isPersistentApprovalGrantLabel(label) && !isNegativeApprovalLabel(label)) candidates.push({ label, index });
+    });
+    if (candidates.length === 0) return { index: -1, label: '' };
+    const picked = pickApprovalButton(candidates.map((candidate) => candidate.label), provider);
+    if (picked.index < 0) return { index: -1, label: '' };
+    const original = candidates[picked.index]!;
+    return { index: original.index, label: original.label };
+}
+
+/**
+ * IDE/extension auto-approval: the first visible button that is not a
+ * persistent grant. The IDE scripts index buttons positionally, so the index
+ * is the ORIGINAL position. A modal that offers only persistent grants yields
+ * index -1 — the caller must then not auto-approve at all.
+ */
 export function pickAutoApprovalButton(
     buttons: string[] | null | undefined,
 ): { index: number; label: string } {
     const labels = (buttons || []).map((button) => String(button || '').trim());
-    const index = labels.findIndex(Boolean);
+    const index = labels.findIndex((label) => !!label && !isPersistentApprovalGrantLabel(label));
     return index >= 0 ? { index, label: labels[index] } : { index: -1, label: '' };
+}
+
+/**
+ * Whether an IDE/extension approval modal may be auto-answered at all: true
+ * when it offers no parsed buttons (the provider script applies its own
+ * default) or offers at least one one-time option. A modal whose every visible
+ * option is a persistent grant must stay visible for the person — it is
+ * neither masked as generating nor clicked.
+ */
+export function modalAllowsAutoApproval(modal: { buttons?: unknown } | null | undefined): boolean {
+    const buttons = Array.isArray(modal?.buttons)
+        ? modal!.buttons.filter((b): b is string => typeof b === 'string' && !!b.trim())
+        : [];
+    return buttons.length === 0 || pickAutoApprovalButton(buttons).index >= 0;
 }
 
 export function formatAutoApprovalMessage(modalMessage?: string, buttonLabel?: string): string {

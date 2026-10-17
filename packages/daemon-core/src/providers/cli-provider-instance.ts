@@ -86,7 +86,7 @@ import {
 } from './cli-provider-mesh-session.js';
 import {
     approvalRecentlyResolvedLocally, autoApproveEffectivelyActive, getDrainStatus, getHotChatSessionState, inApprovalResumeGrace,
-    isTransientToolConsent, recordApprovalSelection, recordAutoApproval, resolveModalParkStatus,
+    isTransientToolConsent, logAutoApproval, recordApprovalSelection, recordAutoApproval, resolveModalParkStatus,
 } from './cli-provider-modal-park.js';
 import {
     antigravityClaimOwner, applyInitialThinkingLevelViaControl, dispose, enforceFreshSessionLaunchIfNeeded, wireAdapterCallbacks,
@@ -1115,6 +1115,7 @@ export class CliProviderInstance implements ProviderInstance {
         return approvalGate.autoApproveMaskStalled(this, now);
     }
     recordAutoApproval(modalMessage?: string, buttonLabel?: string, now = Date.now()): void { recordAutoApproval(this, modalMessage, buttonLabel, now); }
+    logAutoApproval(modalMessage: unknown, buttonLabel: string, buttons: string[]): void { logAutoApproval(this, modalMessage, buttonLabel, buttons); }
     recordApprovalSelection(buttonText: string): void { recordApprovalSelection(this, buttonText); }
 
     maybeAppendRuntimeRecoveryMessage(runtime: PtyRuntimeMetadata | null): void {

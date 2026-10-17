@@ -19,7 +19,7 @@ import type { SessionRegistry } from '../sessions/registry.js';
 import { reconcileIdeRuntimeSessions } from '../sessions/reconcile.js';
 import { LOG } from '../logging/logger.js';
 import type { AgentStreamState } from './types.js';
-import { formatAutoApprovalMessage, pickAutoApprovalButton } from '../providers/approval-utils.js';
+import { formatAutoApprovalMessage, modalAllowsAutoApproval, pickAutoApprovalButton } from '../providers/approval-utils.js';
 import type { ProviderModule } from '../providers/contracts.js';
 import { buildRuntimeSystemChatMessage } from '../providers/chat-message-normalization.js';
 
@@ -209,8 +209,12 @@ export class AgentStreamPoller {
                 resolvedActiveSessionId = stream?.sessionId || agentStreamManager.getActiveSessionId(parentSessionId) || resolvedActiveSessionId;
                 if (stream?.status === 'waiting_approval') {
                     const autoApprove = providerLoader.getSettings(stream.agentType).autoApprove !== false;
-                    if (autoApprove && resolvedActiveSessionId) {
-                        const { label: buttonLabel } = pickAutoApprovalButton(stream.activeModal?.buttons);
+                    const offered = Array.isArray(stream.activeModal?.buttons) ? stream.activeModal.buttons : [];
+                    const { label: buttonLabel } = pickAutoApprovalButton(offered);
+                    // Worker permission policy: only a one-time option may be pressed
+                    // automatically; persistent-only modals wait for the person.
+                    const oneTimeAvailable = modalAllowsAutoApproval(stream.activeModal);
+                    if (autoApprove && resolvedActiveSessionId && oneTimeAvailable) {
                         const approved = await agentStreamManager.resolveSessionAction(cdp, resolvedActiveSessionId, 'approve', buttonLabel);
                         if (approved) {
                             const effectId = [

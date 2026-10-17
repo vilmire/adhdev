@@ -22,7 +22,7 @@ import { applyProviderEffects } from './control-effects.js';
 import { mergeRuntimeMessagesByTime, prepareRuntimeMessage } from './cli-provider-transcript-merge.js';
 import { validateReadChatResultPayload } from './read-chat-contract.js';
 import type { ChatMessage } from '../types.js';
-import { formatAutoApprovalMessage, pickAutoApprovalButton } from './approval-utils.js';
+import { formatAutoApprovalMessage, modalAllowsAutoApproval, pickAutoApprovalButton } from './approval-utils.js';
 import { mergeProviderPatchState, resolveProviderStateSurface } from './provider-patch-state.js';
 import { buildRuntimeSystemChatMessage, normalizeChatMessages, extractFinalSummaryFromMessages } from './chat-message-normalization.js';
 import { getProviderSessionCapabilities, IDE_PROVIDER_SESSION_CAPABILITIES_BASE } from './open-panel-support.js';
@@ -147,7 +147,7 @@ export class IdeProviderInstance implements ProviderInstance {
         const autoApproveActive = (
             this.currentStatus === 'waiting_approval'
             || this.cachedChat?.status === 'waiting_approval'
-        ) && this.canAutoApprove();
+        ) && this.canAutoApprove() && modalAllowsAutoApproval(this.cachedChat?.activeModal);
         const visibleStatus = (autoApproveActive ? 'generating' : this.currentStatus) as ProviderState['status'];
 
  // Collect extension status
@@ -441,7 +441,8 @@ export class IdeProviderInstance implements ProviderInstance {
         const rawAgentStatus = (chatStatus === 'streaming' || chatStatus === 'generating') ? 'generating'
             : chatStatus === 'waiting_approval' ? 'waiting_approval'
             : 'idle';
-        const autoApproveActive = rawAgentStatus === 'waiting_approval' && this.canAutoApprove();
+        const autoApproveActive = rawAgentStatus === 'waiting_approval' && this.canAutoApprove()
+            && modalAllowsAutoApproval(chatData?.activeModal);
         const agentStatus = autoApproveActive ? 'generating' : rawAgentStatus;
         const lastMsg = Array.isArray(chatData?.messages) && chatData.messages.length > 0
             ? chatData.messages[chatData.messages.length - 1]
@@ -636,7 +637,16 @@ export class IdeProviderInstance implements ProviderInstance {
 
         this.autoApproveBusy = true;
         try {
-            const { label: targetButton } = pickAutoApprovalButton(_chatData?.activeModal?.buttons);
+            const offered = Array.isArray(_chatData?.activeModal?.buttons) ? _chatData.activeModal.buttons : [];
+            const { label: targetButton } = pickAutoApprovalButton(offered);
+            // Worker permission policy: a modal whose only visible options are
+            // persistent grants ("Always allow", session/project scope) is never
+            // auto-answered — the person decides. An empty button list keeps the
+            // provider script's own default approve.
+            if (!modalAllowsAutoApproval(_chatData?.activeModal)) {
+                LOG.info('IdeInstance', `[IdeInstance:${this.type}] autoApprove: skipped — no one-time option among ${JSON.stringify(offered.slice(0, 8))}`);
+                return;
+            }
 
             const script = scriptFn({ action: 'approve', button: targetButton, buttonText: targetButton });
             if (!script) return;

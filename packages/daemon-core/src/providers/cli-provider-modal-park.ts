@@ -13,6 +13,7 @@ import { APPROVAL_LOCAL_RESOLUTION_COOLDOWN_MS, APPROVAL_RESUME_GRACE_MS } from 
 import type { CliProviderInstance } from './cli-provider-instance.js';
 import type { HotChatSessionState } from './provider-instance.js';
 import { formatAutoApprovalMessage } from './approval-utils.js';
+import { LOG } from '../logging/logger.js';
 
 /** The CliProviderInstance members these functions read or call (compiler-checked; no cast). */
 export type ModalParkHost = Pick<CliProviderInstance, 'activeInteractivePrompt' | 'adapter' | 'autoApproveEffectivelyActive' | 'autoApproveMaskStalled' | 'hasAdapterPendingResponse' | 'isAutonomousMeshSession' | 'isModalParked' | 'isTransientToolConsent' | 'lastAutoApproveFiredAt' | 'manualAttendance' | 'shouldUsePtyAutoApprove'>;
@@ -211,6 +212,31 @@ export function recordAutoApproval(host: ApprovalRecordHost, modalMessage?: stri
         `auto_approval:${now}:${buttonLabel || 'approve'}`,
         now,
     );
+}
+
+/** The fields the auto-approval audit line reads (compiler-checked). */
+export type AutoApprovalLogHost = Pick<CliProviderInstance, 'instanceId' | 'type' | 'settings'>;
+
+/**
+ * Worker permission policy audit: one local daemon-log line per prompt the
+ * daemon answered by itself — the asked text (bounded, single line), the exact
+ * button pressed, the full offered button list, and the session / mesh task it
+ * belongs to. Deliberately a LOG line only: no coordinator, assistant or owner
+ * notification is raised for an auto-approved prompt.
+ */
+export function formatAutoApprovalLogLine(host: AutoApprovalLogHost, modalMessage: unknown, buttonLabel: string, buttons: string[]): string {
+    const oneLine = (value: unknown, max: number) => String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
+    const settings = host.settings || {};
+    const task = typeof settings.meshActiveTaskId === 'string' && settings.meshActiveTaskId ? settings.meshActiveTaskId : '-';
+    const mesh = typeof settings.meshNodeFor === 'string' && settings.meshNodeFor ? settings.meshNodeFor : '-';
+    return `[${host.type}] auto-approved (one-time) session=${host.instanceId} mesh=${mesh} task=${task}`
+        + ` button=${JSON.stringify(oneLine(buttonLabel, 120))}`
+        + ` offered=${JSON.stringify(buttons.map((button) => oneLine(button, 120)))}`
+        + ` asked=${JSON.stringify(oneLine(modalMessage, 300))}`;
+}
+
+export function logAutoApproval(host: AutoApprovalLogHost, modalMessage: unknown, buttonLabel: string, buttons: string[]): void {
+    LOG.info('CLI', formatAutoApprovalLogLine(host, modalMessage, buttonLabel, buttons));
 }
 
 export function recordApprovalSelection(host: ApprovalRecordHost, buttonText: string): void {

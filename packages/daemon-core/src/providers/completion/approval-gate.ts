@@ -23,6 +23,7 @@ import { LOG } from '../../logging/logger.js';
 import type { ProviderModule } from '../contracts.js';
 import {
     pickApprovalButton,
+    pickLeastPrivilegeApprovalButton,
     hasNegativeApprovalOption,
     hasReliableApprovalAffirmative,
     looksLikeActiveApprovalPromptText,
@@ -87,6 +88,8 @@ export interface ApprovalGateHost {
     isAutonomousMeshSession(): boolean;
     isMeshWorkerSession(): boolean;
     recordAutoApproval(modalMessage?: string, buttonLabel?: string, now?: number): void;
+    /** Worker permission policy audit line (asked text / pressed button / session / task). */
+    logAutoApproval?(modalMessage: unknown, buttonLabel: string, buttons: string[]): void;
     appendRuntimeSystemMessage(content: string, dedupKey: string, receivedAt?: number): void;
     pushEvent(event: Record<string, unknown>): void;
     /** TERMINAL-STALE-APPROVAL: stays an instance method (reads the completion
@@ -107,19 +110,59 @@ export function autoApproveContinuityWindowMs(host: ApprovalGateHost): number {
         : APPROVAL_GATE_HYSTERESIS_MS;
 }
 
+/** Path identity for the trust-directory comparison (separators, trailing slash). */
+function comparableDirectory(value: string): string {
+    return value.trim().replace(/\\/g, '/').replace(/\/+$/, '');
+}
+
+/**
+ * Worker permission policy — which button the DAEMON may press on its own.
+ *
+ *  - A directory-trust/setup prompt whose DISPLAYED base directory differs from
+ *    the runtime worktree is never answered here (the grok case where a worker
+ *    in a worktree is asked to trust the base checkout): `null`.
+ *  - Any other setup prompt (`provider_setup`, e.g. claude/codex trusting their
+ *    own runtime worktree at boot) keeps the established affirmative pick.
+ *  - A tool-permission prompt gets the least-privilege ONE-TIME option only;
+ *    a modal offering nothing but persistent grants ("always", session/project
+ *    scope, allowlist, don't-ask-again) yields `null` and is left for the
+ *    coordinator (via the mask-stall nudge) instead of being answered.
+ */
+export function selectAutoApprovalButton(
+    host: Pick<ApprovalGateHost, 'provider'>,
+    buttons: string[],
+    providerApproval: unknown,
+): { index: number; label: string } | null {
+    const approval = providerApproval && typeof providerApproval === 'object'
+        ? providerApproval as { type?: unknown; runtimeDirectory?: unknown; displayedDirectory?: unknown }
+        : null;
+    if (approval?.type === 'provider_setup') {
+        if (typeof approval.displayedDirectory === 'string' && approval.displayedDirectory.trim()
+            && (typeof approval.runtimeDirectory !== 'string'
+                || comparableDirectory(approval.displayedDirectory) !== comparableDirectory(approval.runtimeDirectory))) {
+            return null;
+        }
+        const picked = pickApprovalButton(buttons, host.provider);
+        return picked.index >= 0 ? picked : null;
+    }
+    const picked = pickLeastPrivilegeApprovalButton(buttons, host.provider);
+    return picked.index >= 0 ? picked : null;
+}
+
 /**
  * The settle-gate identity for a raw activeModal, or null when it is NOT a
  * concrete auto-approvable consent prompt. Mirrors the fire path's gates so the
  * mask-stall nudge asks the SAME question the settle clock is accruing against.
  */
-export function approvableModalSignature(host: ApprovalGateHost, modal: any): string | null {
+export function approvableModalSignature(host: ApprovalGateHost, modal: any, providerApproval?: unknown): string | null {
     const buttons = Array.isArray(modal?.buttons)
         ? modal.buttons.map((b: any) => String(b || '').trim()).filter(Boolean)
         : [];
     if (!modal || buttons.length === 0) return null;
     const modalKind = typeof modal?.kind === 'string' ? modal.kind : 'approval';
     if (modalKind !== 'approval') return null;
-    const { index: buttonIndex, label: buttonLabel } = pickApprovalButton(buttons, host.provider);
+    const choice = selectAutoApprovalButton(host, buttons, providerApproval);
+    const { index: buttonIndex, label: buttonLabel } = choice ?? { index: -1, label: '' };
     const hasReliableConsentAnchor = hasNegativeApprovalOption(buttons)
         || hasReliableApprovalAffirmative(buttons);
     if (buttonIndex < 0 || !hasReliableConsentAnchor) return null;
@@ -185,7 +228,7 @@ export function maybeEmitStalledApprovalNudge(host: ApprovalGateHost, adapterSta
     // stable modal is about to fire on its own; a flapping modal (different or
     // non-concrete signature) never satisfies the settle gate and MUST page the
     // coordinator (the rc.466 regression silenced exactly this case).
-    const currentSignature = approvableModalSignature(host, adapterStatus.activeModal);
+    const currentSignature = approvableModalSignature(host, adapterStatus.activeModal, adapterStatus.providerApproval);
     const settleProgressing = !!currentSignature
         && host.pendingAutoApprovalSince > 0
         && currentSignature === host.pendingAutoApprovalSignature;
@@ -337,7 +380,17 @@ export function maybeAutoApproveStatus(host: ApprovalGateHost, adapterStatus: an
             return autoApproveActive;
         }
     }
-    const { index: buttonIndex, label: buttonLabel } = pickApprovalButton(buttons, host.provider);
+    const choice = selectAutoApprovalButton(host, buttons, adapterStatus?.providerApproval);
+    if (!choice) {
+        // Worker permission policy: no one-time option (or a trust prompt for a
+        // different directory) — never press a persistent grant. The episode's
+        // mask clock keeps running, so a mesh worker's coordinator is paged by
+        // the stall nudge; the prompt is not answered here.
+        host.pendingAutoApprovalSignature = '';
+        host.pendingAutoApprovalSince = 0;
+        return autoApproveActive;
+    }
+    const { index: buttonIndex, label: buttonLabel } = choice;
     // Structural decline anchor (#137): a tall diff can scroll "3. No" off-frame;
     // a scoped grant-affirmative only appears in genuine consent modals and
     // stands in as the second anchor.
@@ -390,6 +443,7 @@ export function maybeAutoApproveStatus(host: ApprovalGateHost, adapterStatus: an
         host.lastAutoApprovalSignature = '';
     }, APPROVAL_FIRE_BUSY_WINDOW_MS);
     host.recordAutoApproval(modal?.message, buttonLabel, now);
+    host.logAutoApproval?.(modal?.message, buttonLabel, buttons);
     // APPROVAL-INBOX-BLINDSPOT (Fix A) + BUTTON-INDEX-MISMAP (Fix C): stamp the
     // local-resolution clock ONLY when the click actually matched a button, so a
     // never-pressed modal is forwarded to the coordinator, not suppressed.
