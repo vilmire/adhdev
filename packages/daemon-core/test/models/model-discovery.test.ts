@@ -278,6 +278,17 @@ describe('P1 — antigravity label/slug handling', () => {
         expect(patch.modelLaunchValueMap?.['Gemini 3.8 Flash (High)']).toBe('gemini-3.8-flash-high');
     });
 
+    it('new Argon discovery supplies the exact launch slug over a stale version manifest', () => {
+        const models = parseModels('gemini-4-argon-high\tGemini 4 Argon (High)', AGY_PARSE);
+        const manifest = { modelOptions: MANIFEST_OPTIONS, modelLaunchValueMap: MANIFEST_MAP };
+        const original = JSON.stringify(manifest);
+        const patch = buildModelOverlayPatch({ ...snapshot, models }, manifest);
+        expect(patch.modelOptions).toEqual(['Gemini 4 Argon (High)']);
+        expect(patch.modelLaunchValueMap?.['Gemini 4 Argon (High)']).toBe('gemini-4-argon-high');
+        expect(patch.modelLaunchValueMap?.['Gemini 4 Argon']).toBeUndefined();
+        expect(JSON.stringify(manifest)).toBe(original);
+    });
+
     it('a REMEMBERED selection still resolves to the right slug — no migration needed', () => {
         const patch = buildModelOverlayPatch(snapshot, { modelOptions: MANIFEST_OPTIONS, modelLaunchValueMap: MANIFEST_MAP });
         // The user picked this label before the 3.8 generation existed.

@@ -5,6 +5,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { DaemonCliManager } from '../../src/commands/cli-manager.js';
 import { ProviderLoader } from '../../src/providers/provider-loader.js';
 import { SessionRegistry } from '../../src/sessions/registry.js';
+import * as modelRegistry from '../../src/models/registry.js';
 import { buildSessionLaunchRecord } from '../../src/sessions/launch-record.js';
 
 // Phase E (wiring-unification §7 E1, RC5): every launch path writes a
@@ -93,10 +94,42 @@ describe('Phase E — launch record on every cli-manager launch path', () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     if (prevConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR;
     else process.env.ADHDEV_CONFIG_DIR = prevConfigDir;
     for (const dir of [providerRoot, workingDir, configDir]) if (dir) rmSync(dir, { recursive: true, force: true });
   });
+
+  it.each(['Gemini 4 Argon (High)', 'gemini-4-argon-high'])('cached discovery maps argv and record after version resolution: %s', async (requested) => {
+    const loader = setupLoader();
+    const base = loader.resolve('sample-cli')!;
+    const versionProvider = { ...base, providerVersion: '1.2.20', modelOptions: ['Old Label'], modelLaunchValueMap: { 'Old Label': 'old-id' } };
+    const originalResolve = loader.resolve.bind(loader);
+    vi.spyOn(loader, 'resolve').mockImplementation((type, options) => options?.version ? versionProvider : originalResolve(type, options));
+    vi.spyOn(modelRegistry, 'readModelCache').mockReturnValue({
+      provider: 'sample-cli', status: 'ok', fetchedAt: 1, updatedAt: 1,
+      models: [{ slug: 'gemini-4-argon-high', label: 'Gemini 4 Argon (High)' }],
+    });
+    writeFileSync(join(providerRoot, 'bin', 'sample-cli'), '#!/bin/sh\necho 1.4.0\n');
+    const manager = createManager(loader);
+    const registration = vi.spyOn(manager, 'registerCliInstance');
+    const result = await manager.launchCli({ cliType: 'sample-cli', dir: workingDir, initialModel: requested });
+    expect(registration.mock.calls[0][4]).toEqual(['--model', 'gemini-4-argon-high']);
+    expect(registry.get(result.sessionId as string)?.launch).toMatchObject({ providerType: 'sample-cli', providerVersion: '1.2.20', model: { requested, launchValue: 'gemini-4-argon-high' } });
+    expect(base.modelLaunchValueMap).toEqual({ 'Opus Label': 'opus' });
+  }, 15000);
+
+  it.each(['absent', 'error', 'empty'])('without successful nonempty discovery the manifest stands: %s', async (status) => {
+    vi.spyOn(modelRegistry, 'readModelCache').mockReturnValue(status === 'absent' ? undefined : {
+      provider: 'sample-cli', status: status === 'empty' ? 'ok' : 'error', fetchedAt: 1, updatedAt: 1,
+      models: status === 'empty' ? [] : [{ slug: 'invented-id', label: 'Opus Label' }],
+    });
+    const manager = createManager(setupLoader());
+    const registration = vi.spyOn(manager, 'registerCliInstance');
+    const result = await manager.launchCli({ cliType: 'sample-cli', dir: workingDir, initialModel: 'Opus Label' });
+    expect(registration.mock.calls[0][4]).toEqual(['--model', 'opus']);
+    expect(registry.get(result.sessionId as string)?.launch?.model.launchValue).toBe('opus');
+  }, 15000);
 
   it('CLI, dashboard pick: source user, launchValue after modelLaunchValueMap', async () => {
     const result = await createManager(setupLoader()).launchCli({

@@ -20,6 +20,7 @@ import {
 } from '../mesh/delegated-worker-mode-delivery.js';
 import { type ProviderModule } from '../providers/contracts.js';
 import { LOG } from '../logging/logger.js';
+import { buildModelOverlayPatch } from '../models/overlay.js';
 import { readModelCache } from '../models/registry.js';
 import {
     buildSessionLaunchRecord, resolveProviderDefaultModel, readLaunchProvenanceArgs, inferLaunchedBy,
@@ -193,7 +194,13 @@ async function startCliPtySession(
     const versionResolvedProvider = provider
         ? (host.providerLoader.resolve(cliType, { version: cliInfo.version }) || provider)
         : undefined;
-    const autoApproveLaunch = applyAutoApproveModeLaunchArgs(versionResolvedProvider, cliArgs, launchSettings);
+    // Version resolution returns a manifest. Reapply successful cached discovery
+    // here so argv and the persisted launch record share the inventory mapping.
+    const modelSnapshot = readModelCache(normalizedType);
+    const modelResolvedProvider = versionResolvedProvider
+        ? { ...versionResolvedProvider, ...buildModelOverlayPatch(modelSnapshot, versionResolvedProvider) }
+        : undefined;
+    const autoApproveLaunch = applyAutoApproveModeLaunchArgs(modelResolvedProvider, cliArgs, launchSettings);
     const launchProvider = autoApproveLaunch.provider || provider;
     const cliArgsWithAutoApprove = autoApproveLaunch.cliArgs;
 
@@ -254,7 +261,7 @@ async function startCliPtySession(
                 ? resolveModelLaunchValue(initialModel, launchProvider?.modelLaunchValueMap)
                 : undefined,
             providerDefault: resolveProviderDefaultModel(
-                readModelCache(normalizedType),
+                modelSnapshot,
                 launchProvider?.modelOptions,
                 launchProvider?.modelLaunchValueMap,
             ),
