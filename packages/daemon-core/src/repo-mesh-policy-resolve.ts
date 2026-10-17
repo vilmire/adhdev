@@ -6,6 +6,9 @@
 import { MESH_SESSION_CLEANUP_MODES, type NodeCapabilitySlot } from '@adhdev/mesh-shared';
 import {
     DEFAULT_MESH_POLICY,
+    DEFAULT_MESH_MAX_NODES,
+    MESH_MAX_NODES_MIN,
+    MESH_MAX_NODES_MAX,
     type RepoMeshSpawnedSessionVisibility,
     type RepoMeshPolicy,
     DEFAULT_DELEGATED_SESSION_IDLE_TTL_MINUTES,
@@ -79,6 +82,25 @@ export function resolveMaxParallelTasks(value: unknown): number {
     const raw = value === undefined || value === null ? DEFAULT_MESH_POLICY.maxParallelTasks : Number(value);
     const n = Number.isFinite(raw) ? raw : DEFAULT_MESH_POLICY.maxParallelTasks;
     return Math.max(MESH_MAX_PARALLEL_TASKS_MIN, Math.min(MESH_MAX_PARALLEL_TASKS_MAX, Math.floor(n)));
+}
+
+/**
+ * Resolve the effective per-mesh node limit from a raw policy value, clamped to
+ * [MESH_MAX_NODES_MIN, MESH_MAX_NODES_MAX] and defaulting to DEFAULT_MESH_MAX_NODES for
+ * a missing/NaN value. The registration guard (assertMeshNodeCapacity) and every
+ * surface that shows the limit read it through here, so enforcement and display can
+ * never disagree. Never throws — a hand-edited meshes.json value resolves rather than
+ * wedging registration; invalid WRITES are rejected by the maxNodes spec below.
+ */
+export function resolveMaxNodes(value: unknown): number {
+    // Only a number or a numeric string is a limit. null, '', false and [] all coerce to 0
+    // through Number(), and the clamp would raise that to the floor (1) — silently turning
+    // a malformed or unset value into "refuse every new node".
+    const raw = typeof value === 'number'
+        ? value
+        : typeof value === 'string' && value.trim() ? Number(value) : Number.NaN;
+    const n = Number.isFinite(raw) ? raw : DEFAULT_MESH_MAX_NODES;
+    return Math.max(MESH_MAX_NODES_MIN, Math.min(MESH_MAX_NODES_MAX, Math.floor(n)));
 }
 
 /**
@@ -170,6 +192,20 @@ const POLICY_KEY_SPECS: Record<string, PolicyKeySpec> = {
     requireApprovalForPush: boolDefault(DEFAULT_MESH_POLICY.requireApprovalForPush),
     allowAutoPublishSubmoduleMainCommits: { effective: (v) => v === true },
     maxParallelTasks: { effective: (v) => resolveMaxParallelTasks(v) },
+    maxNodes: {
+        effective: (v) => resolveMaxNodes(v),
+        // A safety limit must not be silently re-interpreted: a write outside the range
+        // (or a non-integer) fails with the range instead of being clamped to something
+        // the owner never asked for. Reads of an already-stored odd value still clamp.
+        stored: (v) => {
+            const n = typeof v === 'number' || typeof v === 'string' ? Number(v) : Number.NaN;
+            if (Number.isInteger(n) && n >= MESH_MAX_NODES_MIN && n <= MESH_MAX_NODES_MAX) return n;
+            throw new Error(
+                `invalid_max_nodes: policy.maxNodes must be a whole number from ${MESH_MAX_NODES_MIN} to ${MESH_MAX_NODES_MAX} `
+                + `(got ${JSON.stringify(v)}). Send null to reset it to the default (${DEFAULT_MESH_MAX_NODES}).`,
+            );
+        },
+    },
     schedulingStrategy: { effective: (v) => normalizeMeshSchedulingStrategy(v) },
     spawnedSessionVisibility: {
         effective: (v) => (SPAWNED_SESSION_VISIBILITY_MODES.has(v as RepoMeshSpawnedSessionVisibility)
@@ -255,7 +291,7 @@ export function resolveMeshPolicy(overrides: unknown): RepoMeshPolicy {
  * keys and null/undefined values are dropped; unknown keys are kept verbatim.
  * Idempotent, and resolve-neutral: resolveMeshPolicy(normalizePolicyOverrides(p))
  * deep-equals resolveMeshPolicy(p) for every p. Throws only for a value a write must
- * reject (an invalid onDependencyFailure).
+ * reject (an invalid onDependencyFailure or maxNodes).
  */
 export function normalizePolicyOverrides(value: unknown): RepoMeshPolicyOverrides {
     const out: Record<string, unknown> = {};

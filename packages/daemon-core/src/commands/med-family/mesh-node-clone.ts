@@ -17,6 +17,8 @@ import { LOG } from '../../logging/logger.js';
 import { loadRepoSettings } from '../../config/repo-settings.js';
 import { handleMeshForwardEvent, notifyMeshCoordinator } from '../../mesh/mesh-events.js';
 import { noteRecentlyClonedNode } from '../../mesh/mesh-clone-grace.js';
+import { nodeLimitFailureFromError } from '../../mesh/mesh-node-limit-advice.js';
+import { isMeshNodeLimitError } from '../../config/mesh-node-limit.js';
 import { getMachineId } from '../../config/config.js';
 import { readMeshNodeMachineId, readMeshNodeDaemonId } from '../router.js';
 import type { CommandRouterResult } from '../router.js';
@@ -579,8 +581,8 @@ export const meshNodeCloneHandlers: Record<string, MedFamilyHandler> = {
                     console.log(`[mesh] clone_mesh_node base sync: ${result.baseSync.action} (startRef=${result.baseSync.startRef})`);
                 }
 
-                // Registration can refuse AFTER `git worktree add` (e.g. "Maximum 10 nodes
-                // per mesh"). Undo the worktree then, or every refused clone leaves an
+                // Registration can refuse AFTER `git worktree add` (e.g. the mesh is at its
+                // policy.maxNodes limit). Undo the worktree then, or every refused clone leaves an
                 // orphan directory + branch no mesh node points at (2026-10-05 provider
                 // matrix). The branch goes only via safe delete: a pre-existing branch
                 // with unmerged work is kept.
@@ -739,6 +741,18 @@ export const meshNodeCloneHandlers: Record<string, MedFamilyHandler> = {
                 worktreeBootstrap: bootstrapState,
             };
         } catch (e: any) {
+            // A mesh at its policy.maxNodes limit refuses AFTER `git worktree add` (the rollback
+            // above has already removed the worktree and branch): answer with the actionable
+            // refusal — count, limit, how to raise it, which worktrees to clean up. Every other
+            // error keeps the plain shape and touches nothing else.
+            if (isMeshNodeLimitError(e)) {
+                const limitFailure = await nodeLimitFailureFromError(e, {
+                    meshId,
+                    inlineNodes: ctx.getCachedInlineMesh(meshId)?.nodes,
+                    selfDaemonId: ctx.deps.statusInstanceId,
+                });
+                if (limitFailure) return limitFailure as CommandRouterResult;
+            }
             return { success: false, error: e.message };
         }
     },

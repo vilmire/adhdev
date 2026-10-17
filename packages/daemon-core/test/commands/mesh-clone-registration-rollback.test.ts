@@ -24,10 +24,11 @@ function createRouter() {
 
 /**
  * clone_mesh_node runs `git worktree add` BEFORE registering the node, and the
- * registration can still refuse ("Maximum 10 nodes per mesh"). The refused
- * clone used to leave the worktree directory and its branch behind with no mesh
- * node pointing at them (2026-10-05 provider matrix: grok coordinator on a full
- * mesh). The clone now rolls the worktree back.
+ * registration can still refuse (the mesh is at its policy.maxNodes limit — a
+ * literal 10 back when this test was written). The refused clone used to leave
+ * the worktree directory and its branch behind with no mesh node pointing at them
+ * (2026-10-05 provider matrix: grok coordinator on a full mesh). The clone now
+ * rolls the worktree back, and answers with the actionable refusal.
  */
 describe('clone_mesh_node rolls back the worktree when registration refuses', () => {
   it('leaves no worktree or branch behind on a full mesh', async () => {
@@ -45,9 +46,9 @@ describe('clone_mesh_node rolls back the worktree when registration refuses', ()
       execFileSync('git', ['commit', '-q', '-m', 'init'], { cwd: repo })
 
       const { createMesh, addNode } = await import('../../src/config/mesh-config.js')
-      const mesh = createMesh({ name: 'Full', repoIdentity: 'example/full', defaultBranch: 'main', policy: { worktreeBaseDir: worktrees } } as any)
+      const mesh = createMesh({ name: 'Full', repoIdentity: 'example/full', defaultBranch: 'main', policy: { worktreeBaseDir: worktrees, maxNodes: 3 } } as any)
       const source = addNode(mesh.id, { workspace: repo, repoRoot: repo } as any)!
-      for (let i = 0; i < 9; i += 1) addNode(mesh.id, { workspace: join(root, `other-${i}`), repoRoot: join(root, `other-${i}`) } as any)
+      for (let i = 0; i < 2; i += 1) addNode(mesh.id, { workspace: join(root, `other-${i}`), repoRoot: join(root, `other-${i}`) } as any)
 
       const router = createRouter()
       let result: any
@@ -57,7 +58,11 @@ describe('clone_mesh_node rolls back the worktree when registration refuses', ()
         result = { success: false, error: error?.message }
       }
       expect(result.success).toBe(false)
-      expect(String(result.error)).toContain('Maximum 10 nodes')
+      // The refusal is the actionable one: stable code, count/limit, and how to raise it.
+      expect(result.code).toBe('mesh_node_limit_exceeded')
+      expect(String(result.error)).toContain('already holds 3 of its 3 allowed nodes')
+      expect(String(result.error)).toContain('policy.maxNodes')
+      expect(result.nodeLimit).toMatchObject({ count: 3, limit: 3, limitIsOverride: true })
 
       const leftovers = existsSync(worktrees) ? readdirSync(worktrees, { recursive: true } as any) : []
       expect(leftovers.filter((p: any) => String(p).includes('rollback-check'))).toEqual([])

@@ -15,7 +15,12 @@ import { normalizeDifficultyBrainMap, DEFAULT_DIFFICULTY_BRAINS, normalizeNodeCa
 
 // ─── Persistence ────────────────────────────────
 
-function getMeshConfigPath(): string {
+/**
+ * Absolute path of THIS instance's meshes.json. The config dir differs per instance
+ * (~/.adhdev, ~/.adhdev-preview, ADHDEV_CONFIG_DIR), so a message that tells the owner to
+ * edit the file names it instead of leaving them to guess which one.
+ */
+export function getMeshConfigPath(): string {
     return join(getConfigDir(), 'meshes.json');
 }
 

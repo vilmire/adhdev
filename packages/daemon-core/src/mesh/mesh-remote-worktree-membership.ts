@@ -31,9 +31,17 @@
  * P2P only (daemon↔daemon mesh channel) — nothing here reaches the server.
  */
 import { daemonIdsEquivalent, meshNodeIdMatches, normalizeMeshNodeId, readOptionalRecord } from '@adhdev/mesh-shared';
+import { MESH_MAX_NODES_MAX } from '../repo-mesh-policy.js';
+import { isMeshNodeLimitError } from '../config/mesh-node-limit.js';
+import { LOG } from '../logging/logger.js';
 
-/** Upper bound on worktree nodes a member reports per push (meshes cap at 10 nodes). */
-export const MEMBER_WORKTREE_REPORT_MAX_NODES = 10;
+/**
+ * Upper bound on worktree nodes a member reports per push. A member cannot know the
+ * host's configured policy.maxNodes, and the host refuses anything past ITS limit when
+ * it adopts, so the report is bounded by the largest limit any mesh may be given — a
+ * lower bound here would silently stop reporting worktrees the host is willing to hold.
+ */
+export const MEMBER_WORKTREE_REPORT_MAX_NODES = MESH_MAX_NODES_MAX;
 const MAX_ID_CHARS = 200;
 const MAX_PATH_CHARS = 4096;
 
@@ -279,8 +287,14 @@ export async function persistRemoteWorktreeNodeToConfig(meshId: string, rawNode:
             worktreeBootstrap: node.worktreeBootstrap as any,
         });
         return added ? 'persisted' : 'no_config_mesh';
-    } catch {
-        // Mesh at its node cap, or the workspace path already registered.
+    } catch (error) {
+        // Mesh at its node limit, or the workspace path already registered. Persisting a
+        // remote node is best-effort by contract, but a full mesh must not be silent: the
+        // node lives only in the inline cache until the owner raises policy.maxNodes or
+        // frees a slot, and the log line carries both ways to do that.
+        if (isMeshNodeLimitError(error)) {
+            LOG.warn('Mesh', `[RemoteWorktree] node ${node.id} was not persisted to mesh=${meshId}: ${error.message}`);
+        }
         return 'failed';
     }
 }

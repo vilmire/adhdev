@@ -29,7 +29,12 @@ import { getConfigDir } from '../config/config.js';
 import type { MeshNodeStatePushPersistence, MeshNodeStatePushTarget } from './mesh-node-state-pusher.js';
 
 const FILE_NAME = 'mesh-node-push-subscriptions.json';
-/** Upper bound on persisted subscriptions (meshes cap at 10 nodes; a daemon serves a handful of meshes). */
+/**
+ * Upper bound on persisted subscriptions. A mesh holds at most policy.maxNodes nodes (default
+ * 32, ceiling 64), and a daemon hosts only its own share of them across a handful of meshes.
+ * A subscription past the bound is simply not persisted: after a restart it falls back to the
+ * memberships derived from the config (input 2 above) or to the coordinator's next re-probe.
+ */
 export const MESH_NODE_PUSH_PERSIST_MAX = 64;
 
 function readTarget(value: unknown): MeshNodeStatePushTarget | null {

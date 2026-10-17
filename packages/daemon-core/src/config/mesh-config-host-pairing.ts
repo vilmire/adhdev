@@ -9,6 +9,7 @@ import { parseMeshHostAddress } from '../shared/mesh-host-endpoints.js';
 import { shortHash } from '../system/hash.js';
 import type { RepoMeshHostMetadata, LocalMeshEntry, RepoMeshNodeCapabilities, RepoMeshNodePolicy, RepoMeshDaemonRole, LocalMeshNodeEntry } from '../repo-mesh-types.js';
 import { withMeshConfigWriteLock, loadMeshConfig, saveMeshConfig } from './mesh-config-store.js';
+import { assertMeshNodeCapacity } from './mesh-node-limit.js';
 import { createDefaultMeshHostMetadata } from '../mesh/mesh-host-ownership.js';
 import { randomBytes, randomUUID } from 'crypto';
 import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
@@ -250,7 +251,10 @@ function applyMeshHostJoinRequestUnlocked(
         node.policy = { ...(node.policy || {}), ...(opts.memberNode.policy || {}) };
         node.role = 'member';
     } else {
-        if (mesh.nodes.length >= 10) throw new Error('Maximum 10 nodes per mesh');
+        // Same limit and wording as addNode. Thrown before the pairing record is
+        // rewritten below, so a refused join leaves the token unconsumed and the
+        // member can retry once the host raises policy.maxNodes or frees a slot.
+        assertMeshNodeCapacity(mesh);
         node = {
             id: memberId || `node_${randomUUID().replace(/-/g, '')}`,
             workspace,

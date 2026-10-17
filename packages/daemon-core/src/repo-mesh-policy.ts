@@ -138,6 +138,16 @@ export interface RepoMeshPolicy {
      */
     allowAutoPublishSubmoduleMainCommits?: boolean;
     maxParallelTasks: number;
+    /**
+     * Maximum number of nodes this mesh may hold. Base nodes and worktree nodes count
+     * alike — every mesh_clone_node adds one. Registration past the limit (addNode, a
+     * member's host join) is refused with MeshNodeLimitError, which names the count, the
+     * limit, how to raise it and the worktree nodes that could free a slot. Unset
+     * resolves to DEFAULT_MESH_MAX_NODES; clamped to [MESH_MAX_NODES_MIN,
+     * MESH_MAX_NODES_MAX] by resolveMaxNodes. Lowering it below the current node count
+     * evicts nothing: it only blocks further registrations until nodes are removed.
+     */
+    maxNodes?: number;
     allowedProviders?: string[];
     /**
      * Mesh-wide tie-break strategy for distributing untargeted queue work across
@@ -546,6 +556,37 @@ export function resolveNodeMaxConcurrentSessions(value: unknown): number {
     return Math.floor(n);
 }
 
+/**
+ * Default per-mesh node limit (RepoMeshPolicy.maxNodes). It used to be a literal 10,
+ * written on 2026-05-04 (3ec3adf7a) when a node was a machine's attached checkout — two
+ * days BEFORE mesh_clone_node (404beef3e, 2026-05-06) made every parallel task a
+ * worktree node of its own. The number was never revisited, and it bit: the preview
+ * daemon log holds eight clone_mesh_node refusals ("Maximum 10 nodes per mesh") between
+ * 2026-10-12 and 2026-10-16 — every one a parallel-task worktree clone on
+ * adhdev-cloud-mesh — and on 2026-10-17 that mesh held 9 of the old 10 (4 base nodes +
+ * 5 worktree nodes). The 2026-10-05 provider-matrix run had already hit it mid-clone.
+ *
+ * Why 32: roughly 3x the old limit — room for every machine to carry several task
+ * branches at once (4 machines + 28 worktrees, or 8 machines x 3 branches) — at a modest
+ * price: a node entry in meshes.json is ~7.5 KB (adhdev-cloud-mesh, 2026-10-17: min 3.4
+ * KB, median 7.0 KB, max 12.2 KB; slots, policy and nodeFacts dominate) and every config
+ * write rewrites the whole file, so a full mesh costs ~240 KB per write instead of
+ * ~75 KB. Worktree nodes keep counting like any other node: they are what fills a mesh
+ * (all eight refusals above), each carries the same entry, probes and status rows, and
+ * exempting them would remove the runaway-registration guard from the exact path that
+ * proliferates nodes. Nor is "same daemon" a reliable exemption key — one of those five
+ * worktree nodes has no daemonId at all.
+ */
+export const DEFAULT_MESH_MAX_NODES = 32;
+/** Floor of policy.maxNodes: a mesh holds at least one node. */
+export const MESH_MAX_NODES_MIN = 1;
+/**
+ * Ceiling of policy.maxNodes. Same bound as MESH_MAX_PARALLEL_TASKS_MAX and the
+ * inventory's per-daemon row (environment-inventory.ts): a mesh runs at most 64
+ * parallel write tasks, so worktree nodes beyond that are idle leftovers, not capacity.
+ */
+export const MESH_MAX_NODES_MAX = 64;
+
 export const DEFAULT_MESH_POLICY: RepoMeshPolicy = {
     requireApprovalForPush: true,
     allowAutoPublishSubmoduleMainCommits: false,
@@ -555,6 +596,8 @@ export const DEFAULT_MESH_POLICY: RepoMeshPolicy = {
     // API only to impose a deliberate mesh-wide cap. Resolved through
     // resolveMaxParallelTasks, which clamps it to MESH_MAX_PARALLEL_TASKS_MAX (64).
     maxParallelTasks: 200,
+    // Per-mesh node limit (base + worktree nodes). See DEFAULT_MESH_MAX_NODES.
+    maxNodes: DEFAULT_MESH_MAX_NODES,
     // Coordinator-spawned worker sessions default to hidden so the dashboard is not
     // flooded with mesh noise tabs/notifications. Users can still surface or unmute
     // any specific session manually; that override is preserved per-device.

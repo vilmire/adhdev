@@ -23,6 +23,7 @@ import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { mergePolicyOverrides, normalizePolicyOverrides, MESH_POLICY_STORAGE_VERSION } from '../repo-mesh-types.js';
 import { createDefaultMeshHostMetadata } from '../mesh/mesh-host-ownership.js';
 import { withMeshConfigWriteLock, loadMeshConfig, normalizeCapabilityTags, saveMeshConfig, normalizeRepoIdentity } from './mesh-config-store.js';
+import { assertMeshNodeCapacity } from './mesh-node-limit.js';
 import { stripRemovedCoordinatorPromptFields } from './mesh-json-config.js';
 
 // ─── CRUD Operations ────────────────────────────
@@ -209,9 +210,10 @@ function addNodeUnlocked(meshId: string, opts: AddNodeOptions): LocalMeshNodeEnt
     const mesh = config.meshes.find(m => m.id === meshId);
     if (!mesh) return undefined;
 
-    if (mesh.nodes.length >= 10) {
-        throw new Error('Maximum 10 nodes per mesh');
-    }
+    // The mesh's policy.maxNodes (base + worktree nodes alike). Throws a MeshNodeLimitError
+    // carrying the count, the limit, how to raise it and the worktree nodes that could
+    // free a slot — see ./mesh-node-limit.ts.
+    assertMeshNodeCapacity(mesh);
 
     // Check duplicate workspace
     if (mesh.nodes.some(n => n.workspace === opts.workspace)) {

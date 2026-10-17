@@ -11,6 +11,9 @@ export { listMeshes, listMeshesReadOnly, getMesh, getMeshByRepo, createMesh, upd
 export { resolveScopedMeshId } from './config/mesh-config-routing.js';
 export { normalizeRepoIdentity } from './config/mesh-config-store.js';
 export type { CreateMeshOptions, UpdateMeshOptions, AddNodeOptions } from './config/mesh-config.js';
+// Node-limit refusal (policy.maxNodes): the thrown error, its stable code and the message writer.
+export { MeshNodeLimitError, MESH_NODE_LIMIT_CODE, isMeshNodeLimitError, formatMeshNodeLimitMessage } from './config/mesh-node-limit.js';
+export type { MeshNodeLimitDetails, MeshNodeLimitWorktree } from './config/mesh-node-limit.js';
 
 // ── Mesh shared daemon-id / node-id helpers (re-export so external tooling —
 //    e.g. the mcp-server, which depends only on @adhdev/daemon-core — can

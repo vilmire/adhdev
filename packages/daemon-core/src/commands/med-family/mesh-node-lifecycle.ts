@@ -7,6 +7,8 @@
  */
 import { daemonIdsEquivalent, meshNodeIdMatches, normalizeMeshNodeId, deriveProviderPriorityFromSlots, normalizeNodeCapabilitySlots } from '@adhdev/mesh-shared';
 import { normalizeMeshDaemonRole } from '../../mesh/mesh-host-ownership.js';
+import { nodeLimitFailureFromError } from '../../mesh/mesh-node-limit-advice.js';
+import { isMeshNodeLimitError } from '../../config/mesh-node-limit.js';
 import { getMachineId } from '../../config/config.js';
 import { normalizeProviderRoles, readMeshNodeMachineId } from '../router.js';
 import type { CommandRouterResult } from '../router.js';
@@ -449,6 +451,17 @@ export const meshNodeLifecycleHandlers: Record<string, MedFamilyHandler> = {
             ctx.invalidateAggregateMeshStatus(meshId);
             return { success: true, node };
         } catch (e: any) {
+            // A mesh at its policy.maxNodes limit gets the actionable refusal (count, limit,
+            // how to raise it, which worktrees to clean up); every other error keeps the plain
+            // shape and touches nothing else.
+            if (isMeshNodeLimitError(e)) {
+                const limitFailure = await nodeLimitFailureFromError(e, {
+                    meshId,
+                    inlineNodes: ctx.getCachedInlineMesh(meshId)?.nodes,
+                    selfDaemonId: ctx.deps.statusInstanceId,
+                });
+                if (limitFailure) return limitFailure as CommandRouterResult;
+            }
             return { success: false, error: e.message };
         }
     },

@@ -169,6 +169,10 @@ export {
   resolveMaxParallelTasks,
   MESH_MAX_PARALLEL_TASKS_MIN,
   MESH_MAX_PARALLEL_TASKS_MAX,
+  resolveMaxNodes,
+  DEFAULT_MESH_MAX_NODES,
+  MESH_MAX_NODES_MIN,
+  MESH_MAX_NODES_MAX,
 } from './repo-mesh-types.js';
 
 // ── Repo-shared declarative mesh config (.adhdev/mesh.json) ──
