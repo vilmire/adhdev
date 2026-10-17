@@ -3225,6 +3225,7 @@
             "clear": "Clear",
             "saved": "Saved — applies to the next launch.",
             "saveFailed": "Not saved: {{code}}",
+            "ownerRequired": "Only the owner can change launch defaults. Sign in to this dashboard (set a dashboard password) or use the cloud dashboard.",
             "loadFailed": "Couldn't read launch defaults: {{error}}"
         },
         "sourcesPanel": {

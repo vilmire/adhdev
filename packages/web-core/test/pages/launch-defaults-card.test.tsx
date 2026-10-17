@@ -131,6 +131,20 @@ describe('LaunchDefaultsCard', () => {
         expect(role('coordinator').querySelector('[data-launch-default-outcome="ok"]')).toBeTruthy()
     })
 
+    it('explains an owner-only refusal (password-less standalone) instead of showing the raw code', async () => {
+        const send = vi.fn(async (_id: string, type: string) =>
+            type === 'launch_defaults_get'
+                ? getAnswer()
+                : { success: false, code: 'COMMAND_SOURCE_REJECTED', error: "Command 'launch_defaults_set' is not accepted from source 'ipc'" })
+        await mount(send)
+        await choose(role('coordinator').querySelector('select'), 'codex-cli')
+        await click(role('coordinator').querySelector('[data-launch-default-action="save"]'))
+        const outcome = role('coordinator').querySelector('[data-launch-default-outcome="COMMAND_SOURCE_REJECTED"]')
+        expect(outcome).toBeTruthy()
+        expect(outcome!.textContent).not.toContain('COMMAND_SOURCE_REJECTED')
+        expect(outcome!.textContent).toMatch(/owner|ownerRequired/i)
+    })
+
     it('keeps a saved default that no longer works visible, with its reason, and can clear it', async () => {
         const answer = { success: true, result: 'get', documentRevision: 4, roles: {
             assistant: { stored: { provider: 'gone-cli', revision: 4, setBy: 'owner', setAt: 1 },

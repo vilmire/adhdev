@@ -3225,6 +3225,7 @@
             "clear": "清除",
             "saved": "已保存——从下次启动开始生效。",
             "saveFailed": "未保存：{{code}}",
+            "ownerRequired": "只有所有者可以更改启动默认值。请登录此仪表板(设置仪表板密码)或使用云端仪表板。",
             "loadFailed": "无法读取启动默认值：{{error}}"
         },
         "sourcesPanel": {

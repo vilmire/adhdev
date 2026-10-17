@@ -187,7 +187,11 @@ function LaunchDefaultRoleRow({ role, state, cliTypes, saving, outcome, onSave, 
             </div>
             {outcome && (
                 <div className={failedCode ? 'text-2xs text-status-error' : 'text-2xs text-text-muted'} data-launch-default-outcome={failedCode ?? 'ok'}>
-                    {failedCode ? t('machine.launchDefaults.saveFailed', { code: failedCode }) : t('machine.launchDefaults.saved')}
+                    {failedCode === 'COMMAND_SOURCE_REJECTED'
+                        // A password-less standalone dashboard is trusted only as a local client,
+                        // so owner-only writes are refused there by design; say what to do instead.
+                        ? t('machine.launchDefaults.ownerRequired')
+                        : failedCode ? t('machine.launchDefaults.saveFailed', { code: failedCode }) : t('machine.launchDefaults.saved')}
                 </div>
             )}
         </div>

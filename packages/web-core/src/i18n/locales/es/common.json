@@ -3228,6 +3228,7 @@
             "clear": "Borrar",
             "saved": "Guardado — se aplica al próximo inicio.",
             "saveFailed": "No se guardó: {{code}}",
+            "ownerRequired": "Solo el propietario puede cambiar los valores de inicio predeterminados. Inicia sesión en este panel (configura una contraseña) o usa el panel en la nube.",
             "loadFailed": "No se pudieron leer los valores de inicio: {{error}}"
         },
         "sourcesPanel": {
