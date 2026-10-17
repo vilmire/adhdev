@@ -80,7 +80,9 @@ describe('planAssistantMcp', () => {
     });
 
     it('ASSISTANT_TOOLS (the D5 MCP tool contract) includes the additive assistant surface, unaffected by the claude-cli built-in allowlist', () => {
-        expect(ASSISTANT_TOOLS).toHaveLength(14);
+        // 14 → 16 (rc.18): launch_defaults + launch_defaults_set.
+        expect(ASSISTANT_TOOLS).toHaveLength(16);
+        expect(ASSISTANT_TOOLS).toEqual(expect.arrayContaining(['launch_defaults', 'launch_defaults_set']));
         expect(ASSISTANT_TOOLS).toEqual(expect.arrayContaining(['environment', 'project_watch', 'assistant_action']));
         expect(ASSISTANT_TOOLS).not.toContain('WebSearch');
         expect(ASSISTANT_TOOLS).not.toContain('WebFetch');
