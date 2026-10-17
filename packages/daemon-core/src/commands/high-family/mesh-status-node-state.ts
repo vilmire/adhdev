@@ -26,6 +26,7 @@
  * daemons, so step 1 keeps the legacy inline view.
  */
 import * as fs from 'fs';
+import { readQuotaCache } from '../../quota/refresh.js';
 import { daemonIdsEquivalent, meshNodeIdMatches, normalizeMeshNodeId, readText, readRecord } from '@adhdev/mesh-shared';
 import type { MeshNodeGitStateEntry, MeshNodeGitStateStore } from '../../mesh/mesh-node-git-state.js';
 import { isHeldRuntimeLive, MESH_NODE_STATE_STALE_MS, type MeshNodeGitRefresher, type MeshNodeHandshakeTarget } from '../../mesh/mesh-node-git-refresher.js';
@@ -366,6 +367,10 @@ export function overlayMeshNodeGitObservations(snapshot: any, args: {
 }): void {
     if (!snapshot || !Array.isArray(snapshot.nodes)) return;
     if (args.locality) snapshot.nodeRuntimeHeld = true;
+    // The aggregate can outlive many quota refreshes. Local routing already
+    // reads this same live Map; update its presentation copy on every serve,
+    // including cache hits, without a fetch or a git probe.
+    const localQuota = args.locality ? readQuotaCache() : undefined;
     for (const status of snapshot.nodes) {
         if (!status || typeof status !== 'object') continue;
         // Every serve (cached, stale-while-revalidate, live): a node whose link is
@@ -376,6 +381,13 @@ export function overlayMeshNodeGitObservations(snapshot: any, args: {
         applyMeshNodeLinkPresence(status);
         const nodeId = readText(status.nodeId);
         const daemonId = readText(status.daemonId);
+        const ownsQuota = args.locality && (status.connection?.state === 'self'
+            || (!!daemonId && !isForeignDaemonMeshNode(status, args.locality)));
+        if (ownsQuota && localQuota) {
+            // Preserve the facts bundle's original report clock and all other
+            // fields; only the quota entries have just been read again.
+            status.nodeFacts = { ...readRecord(status.nodeFacts), quota: localQuota };
+        }
         if (args.locality && status.connection?.state !== 'self' && isForeignDaemonMeshNode(status, args.locality)) {
             overlayHeldRuntime(
                 status,

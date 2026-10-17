@@ -27,6 +27,7 @@ import {
     extractSubmodules,
     isGitStatusDirty,
 } from './mesh-tools-internal-core.js';
+import { annotateQuotaSnapshotFreshness } from './mesh-compact.js';
 import { readNodeDaemonId } from './mesh-node-identity.js';
 import type { MeshContext } from './mesh-tools-internal.js';
 import type { LocalMeshNodeEntry } from '@adhdev/daemon-core';
@@ -196,9 +197,11 @@ export function applyHeldNodeGitToEntry(entry: Record<string, any>, args: {
         if (typeof held?.error === 'string' && held.error) entry.error = held.error;
     }
     // Provider quota facts, as last reported by the node that owns the credentials
-    // (held on the coordinator's node record — the same bundle quota routing reads).
+    // (local nodes are overlaid from the daemon cache on every serve; remote
+    // nodes carry their last pushed facts). Annotate this copy as well as the
+    // daemonQuotas fold so verbose per-node readers cannot miss its age.
     const quota = readOptionalRecord(readOptionalRecord(held?.nodeFacts)?.quota);
-    if (quota && Object.keys(quota).length > 0) entry.quota = quota;
+    if (quota && Object.keys(quota).length > 0) entry.quota = annotateQuotaSnapshotFreshness(quota, args.now);
 
     entry.gitObservation = observation;
     entry.dataFreshness = deriveDataFreshnessFromObservation({
