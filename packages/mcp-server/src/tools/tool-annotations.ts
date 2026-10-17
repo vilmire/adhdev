@@ -213,6 +213,9 @@ export const TOOL_ANNOTATIONS: Record<string, ToolBehaviorAnnotations> = {
   mesh_notify_worker: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
 
   // ── Mesh: live session control ───────────────────────────────────────
+  // Also covers the exact-button form (button/button_index + approval_target):
+  // the owning daemon answers a given episode at most once and refuses a
+  // replaced/stale one, so a repeat call cannot press a second option.
   mesh_approve: CONTROL_REMOTE_IDEMPOTENT,
   mesh_answer_question: CONTROL_REMOTE_IDEMPOTENT,
   // Injects raw keystrokes into a live PTY. Not idempotent (keys repeat), and

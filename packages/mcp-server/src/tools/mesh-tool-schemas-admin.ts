@@ -73,7 +73,10 @@ export const MESH_MISSION_LIST_TOOL = {
 
 export const MESH_APPROVE_TOOL = {
     name: 'mesh_approve',
-    description: 'Approve or reject a pending action on a delegated agent session.',
+    description: 'Approve or reject a pending action on a delegated agent session. '
+        + 'With approval_target you may also pass `button` (and optionally `button_index`): the exact provider button label to press, taken verbatim from that live permission request\'s buttons. '
+        + 'The owning daemon presses it only when the episode still matches approval_target, the label is one of the offered buttons (button_index must point at the same label), and its polarity matches action (a decline label needs action=reject). Otherwise it refuses without answering. '
+        + 'Without `button`, approve on an exact target presses the least-privilege one-time option.',
     inputSchema: {
         type: 'object' as const,
         properties: {
@@ -81,6 +84,8 @@ export const MESH_APPROVE_TOOL = {
             node_id: { type: 'string', description: 'Target node ID.' },
             session_id: { type: 'string', description: 'Agent session ID with pending approval.' },
             action: { type: 'string', enum: ['approve', 'reject'], description: 'Action to take.' },
+            button: { type: 'string', description: 'Exact provider button label to press (requires approval_target). Must be one of the live request\'s buttons and match action\'s polarity; standing grants ("always", "don\'t ask again") are only pressed when named here explicitly.' },
+            button_index: { type: 'integer', description: 'Optional index of `button` within the live request\'s button list (requires button). A disagreeing index is refused.' },
         },
         required: ['node_id', 'session_id', 'action'],
     },

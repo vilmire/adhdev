@@ -1049,8 +1049,18 @@ async function meshLaunchSessionImpl(
 
 export async function meshApprove(
     ctx: MeshContext,
-    args: { node_id: string; session_id: string; action: string; approval_target?: ProviderApprovalTarget },
+    args: { node_id: string; session_id: string; action: string; approval_target?: ProviderApprovalTarget; button?: string; button_index?: number },
 ): Promise<string> {
+    // An exact provider button is only meaningful against an exact live episode:
+    // without approval_target the daemon would fall back to fuzzy label matching,
+    // which could press a standing grant the caller never saw. Refuse here.
+    const hasButton = args.button !== undefined || args.button_index !== undefined;
+    if (hasButton && !args.approval_target) {
+        return JSON.stringify({ success: false, code: 'approval_target_required', error: 'button/button_index require approval_target (the exact live permission request)' }, null, 2);
+    }
+    if (args.button_index !== undefined && args.button === undefined) {
+        return JSON.stringify({ success: false, code: 'approval_button_required', error: 'button_index requires the exact button label' }, null, 2);
+    }
     const node = await findNodeWithRefresh(ctx, args.node_id); // membership check
 
     const cached = getSessionMetadata(meshSessionCacheKey(args.node_id, args.session_id));
@@ -1063,6 +1073,10 @@ export async function meshApprove(
         ...(providerSessionId ? { providerSessionId } : {}),
         action: args.action === 'reject' ? 'reject' : 'approve',
         ...(args.approval_target ? { approvalTarget: args.approval_target } : {}),
+        // Exact-button form of resolve_action: the owning daemon re-checks the
+        // episode identity, that the label is offered, index agreement and polarity.
+        ...(args.approval_target && args.button !== undefined ? { button: args.button } : {}),
+        ...(args.approval_target && args.button_index !== undefined ? { buttonIndex: args.button_index } : {}),
     });
     return JSON.stringify(result, null, 2);
 }

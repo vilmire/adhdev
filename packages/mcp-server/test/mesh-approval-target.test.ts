@@ -49,6 +49,32 @@ describe('exact Inbox permission target protocol', () => {
         const result = JSON.parse(await meshApprove({} as any, { node_id: 'n', session_id: 's', action: 'reject', approval_target: target }));
         assert.deepEqual(result.forwarded, { sessionId: 's', targetSessionId: 's', workspace: '/tmp/worktree', action: 'reject', approvalTarget: target });
     });
+    it('schema declares the exact-button fields and the gate accepts them', () => {
+        const props = MESH_APPROVE_TOOL.inputSchema.properties as Record<string, any>;
+        assert.equal(props.button.type, 'string');
+        assert.equal(props.button_index.type, 'integer');
+        assert.deepEqual(MESH_APPROVE_TOOL.inputSchema.required, ['node_id', 'session_id', 'action']);
+        assert.equal(validateMeshToolArgs('mesh_approve', { node_id: 'n', session_id: 's', action: 'approve', approval_target: target, button: 'Yes', button_index: 0 }), null);
+        assert.notEqual(validateMeshToolArgs('mesh_approve', { node_id: 'n', session_id: 's', action: 'approve', approval_target: target, buttonText: 'Yes' }), null);
+    });
+    it('forwards the exact button with its episode target as the exact-button form of resolve_action', async () => {
+        const result = JSON.parse(await meshApprove({} as any, { node_id: 'n', session_id: 's', action: 'approve', approval_target: target, button: "Yes, and don't ask again", button_index: 1 }));
+        assert.deepEqual(result.forwarded, { sessionId: 's', targetSessionId: 's', workspace: '/tmp/worktree', action: 'approve', approvalTarget: target, button: "Yes, and don't ask again", buttonIndex: 1 });
+    });
+    it('refuses an exact button without an exact episode target instead of fuzzy-matching it', async () => {
+        const noTarget = JSON.parse(await meshApprove({} as any, { node_id: 'n', session_id: 's', action: 'approve', button: 'Yes' }));
+        assert.equal(noTarget.success, false);
+        assert.equal(noTarget.code, 'approval_target_required');
+        assert.equal(noTarget.forwarded, undefined);
+        const indexOnly = JSON.parse(await meshApprove({} as any, { node_id: 'n', session_id: 's', action: 'approve', approval_target: target, button_index: 0 }));
+        assert.equal(indexOnly.success, false);
+        assert.equal(indexOnly.code, 'approval_button_required');
+    });
+    it('without button the forwarded call is unchanged (no button fields)', async () => {
+        const result = JSON.parse(await meshApprove({} as any, { node_id: 'n', session_id: 's', action: 'approve', approval_target: target }));
+        assert.equal('button' in result.forwarded, false);
+        assert.equal('buttonIndex' in result.forwarded, false);
+    });
 });
 
 describe('pending approval compatibility protocol', () => {
