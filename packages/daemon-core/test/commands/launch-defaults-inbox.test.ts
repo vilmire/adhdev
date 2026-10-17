@@ -69,16 +69,6 @@ function host() {
         createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
     }] }));
 }
-/** Test-only connection of the real service to the real cached ports. Production
- * ports.ts is outside this lease and must keep staging_unavailable until wired. */
-function connectInbox() {
-    const ports = getLaunchDefaultsCommandPorts({ deps });
-    ports.stage = p => {
-        const stored = ports.store.read();
-        if (stored.status !== 'ok' && p.project) throw new Error('Missing global setup.');
-        return inbox().write(p, { documentRevision: stored.status === 'ok' ? stored.document.revision : 0 });
-    };
-}
 beforeEach(async () => {
     await resetMeshRuntimeStore();
     oldConfigDir = process.env.ADHDEV_CONFIG_DIR;
@@ -121,9 +111,14 @@ describe('actual persisted launch-default Inbox', () => {
             kind: 'launch_defaults', documentRevision: 1, expectedRevision: 1, selection: { model: 'opus' } }] });
         expect(bytes()).toEqual(before);
         if (process.platform !== 'win32') expect(fs.statSync(stagedPath(id)).mode & 0o777).toBe(0o600);
+        const write = vi.spyOn(recreated.launchDefaults!, 'write');
+        const next = await toolSet({ model: 'opus' });
+        expect(next).toMatchObject({ result: 'staged' });
+        expect(write).toHaveBeenCalledOnce();
+        expect(recreated.launchDefaults!.read(next.stagedId as string)).not.toBeNull();
     });
     it('applies the immutable triple as owner through real store/CAS, removes it durably and refuses replay', async () => {
-        const id = inbox().write(proposal({ selection: { provider: 'codex-cli', model: 'gpt', thinkingLevel: 'high' } }));
+        const id = (await toolSet({ provider: 'codex-cli', model: 'gpt', thinkingLevel: 'high' })).stagedId as string;
         expect(await resolve(id)).toMatchObject({ success: true, result: 'applied', durable: true, revision: 2,
             previous: { provider: 'claude-cli' }, entry: { provider: 'codex-cli', model: 'gpt', thinkingLevel: 'high', setBy: 'owner' } });
         expect(inbox().list()).toEqual([]);
@@ -132,7 +127,7 @@ describe('actual persisted launch-default Inbox', () => {
         expect(JSON.parse(bytes().toString()).history.at(-1)).toMatchObject({ by: 'owner', origin: 'owner' });
     });
     it.each(['discard', 'reject'])('rejects with %s without writing defaults', async decision => {
-        const id = inbox().write(proposal()); const before = bytes();
+        const id = (await toolSet({ model: 'opus' })).stagedId as string; const before = bytes();
         expect(await resolve(id, decision)).toEqual({ success: true, result: 'discarded' });
         expect(inbox().read(id)).toBeNull(); expect(bytes()).toEqual(before);
     });
@@ -143,19 +138,19 @@ describe('actual persisted launch-default Inbox', () => {
             .toMatchObject({ code: 'launch_default_required' });
     });
     it('retains the exact proposal on stale document revision including clear ABA', async () => {
-        const id = inbox().write(proposal());
+        const id = (await toolSet({ model: 'opus' })).stagedId as string;
         await router.execute('launch_defaults_set', { action: 'clear', role: 'coordinator', expectedRevision: 1 }, 'p2p');
         const before = bytes(); const pending = fs.readFileSync(stagedPath(id));
         expect(await resolve(id)).toMatchObject({ code: 'revision_conflict', actualRevision: 2, committed: false });
         expect(bytes()).toEqual(before); expect(fs.readFileSync(stagedPath(id))).toEqual(pending);
     });
     it('revalidates current machine availability and retains an unavailable proposal', async () => {
-        const id = inbox().write(proposal()); const before = bytes(); providers.detected = false;
+        const id = (await toolSet({ model: 'opus' })).stagedId as string; const before = bytes(); providers.detected = false;
         expect(await resolve(id)).toMatchObject({ success: false, code: 'launch_default_invalid', reason: 'provider_not_detected' });
         expect(inbox().read(id)).not.toBeNull(); expect(bytes()).toEqual(before);
     });
     it('preserves corrupt default evidence and the proposal', async () => {
-        const id = inbox().write(proposal()); fs.writeFileSync(join(dir, 'launch-defaults.json'), '{corrupt');
+        const id = (await toolSet({ model: 'opus' })).stagedId as string; fs.writeFileSync(join(dir, 'launch-defaults.json'), '{corrupt');
         expect(await resolve(id)).toMatchObject({ code: 'launch_default_unavailable' });
         expect(bytes().toString()).toBe('{corrupt'); expect(inbox().read(id)).not.toBeNull();
     });
@@ -171,20 +166,50 @@ describe('actual persisted launch-default Inbox', () => {
     });
     it.each(['authorization', 'consent', 'modal', 'expectedModalIdentity', 'generation', 'role', 'project', 'selection', 'origin'])
         ('refuses foreign approval/scope field %s instead of reusing it as Inbox consent', async key => {
-            const id = inbox().write(proposal()); const before = bytes();
+            const id = (await toolSet({ model: 'opus' })).stagedId as string; const before = bytes();
             expect(await resolve(id, 'apply', { [key]: 'different-scope-or-generation' })).toMatchObject({ code: 'invalid_args' });
             expect(bytes()).toEqual(before); expect(inbox().read(id)).not.toBeNull();
         });
 });
 
 describe('assistant staging authority through registered dispatch', () => {
-    it('keeps production staging_unavailable until its real adapter is wired', async () => {
+    it('fails closed when the current service loses Inbox authority after ports are cached', async () => {
+        getLaunchDefaultsCommandPorts({ deps });
+        delete services.launchDefaults;
         const before = bytes();
         expect(await toolSet()).toMatchObject({ code: 'staging_unavailable' });
+        expect(bytes()).toEqual(before);
+        expect(fs.existsSync(join(dir, 'assistant', 'staged'))).toBe(false);
+    });
+    it('stages explicit first setup without creating defaults until durable owner apply', async () => {
+        fs.unlinkSync(join(dir, 'launch-defaults.json'));
+        const staged = await toolSet({ expectedRevision: 0, model: 'opus' });
+        expect(staged).toMatchObject({ success: true, result: 'staged', expectedRevision: 0 });
+        expect(inbox().read(staged.stagedId as string)).toMatchObject({ documentRevision: 0, expectedRevision: 0 });
+        expect(fs.existsSync(join(dir, 'launch-defaults.json'))).toBe(false);
+        expect(await router.execute('launch_defaults_get', { role: 'assistant' }, 'p2p'))
+            .toMatchObject({ code: 'launch_default_required' });
+        expect(await resolve(staged.stagedId as string)).toMatchObject({ result: 'applied', revision: 1, durable: true });
+    });
+    it.each(['invalid', 'unreadable', 'missing'] as const)('refuses %s authority at the production staging snapshot', async status => {
+        const ports = getLaunchDefaultsCommandPorts({ deps });
+        const before = bytes(); const stored = ports.store.read();
+        vi.spyOn(ports.store, 'read').mockReturnValueOnce(stored).mockReturnValueOnce({ status, reason: 'snapshot unavailable' });
+        expect(await toolSet()).toMatchObject({ success: false, code: 'staging_failed' });
         expect(inbox().list()).toEqual([]); expect(bytes()).toEqual(before);
     });
+    it('refuses a global generation change between validation and staging without inventing revision zero', async () => {
+        const ports = getLaunchDefaultsCommandPorts({ deps }); const read = ports.store.read.bind(ports.store);
+        let reads = 0;
+        vi.spyOn(ports.store, 'read').mockImplementation(() => {
+            if (++reads === 2) expect(ports.store.write({ role: 'coordinator', selection: null, expectedRevision: 1,
+                by: 'owner', origin: 'owner' })).toMatchObject({ ok: true, durable: true });
+            return read();
+        });
+        expect(await toolSet()).toMatchObject({ success: false, code: 'staging_failed' });
+        expect(inbox().list()).toEqual([]); expect(JSON.parse(bytes().toString()).revision).toBe(2);
+    });
     it.each(['unlogged', 'relay'])('persists actual %s proposal before reporting staged and waits for owner', async origin => {
-        connectInbox();
         if (origin !== 'unlogged') {
             services.inputLog.begin('assistant-1');
             services.inputLog.append('assistant-1', 'human');
@@ -199,12 +224,12 @@ describe('assistant staging authority through registered dispatch', () => {
         expect(await resolve(id)).toMatchObject({ result: 'applied', durable: true });
     });
     it('applies a verified human write without staging', async () => {
-        connectInbox(); services.inputLog.begin('assistant-1'); services.inputLog.append('assistant-1', 'human');
+        services.inputLog.begin('assistant-1'); services.inputLog.append('assistant-1', 'human');
         expect(await toolSet({ model: 'opus' })).toMatchObject({ result: 'applied', durable: true, entry: { setBy: 'assistant' } });
         expect(inbox().list()).toEqual([]);
     });
     it('always stages a human assistant provider tool-lock downgrade, then owner applies it', async () => {
-        connectInbox(); services.inputLog.begin('assistant-1'); services.inputLog.append('assistant-1', 'human');
+        services.inputLog.begin('assistant-1'); services.inputLog.append('assistant-1', 'human');
         // The stored enforced provider is enough; no sticky assistant preference is used.
         const result = await toolSet({ provider: 'codex-cli', model: 'gpt' });
         expect(result).toMatchObject({ result: 'staged' });
@@ -212,14 +237,14 @@ describe('assistant staging authority through registered dispatch', () => {
         expect(await resolve(result.stagedId as string)).toMatchObject({ result: 'applied', durable: true });
     });
     it('denies review calls before staging or writes, even with a forged origin', async () => {
-        connectInbox(); services.inputLog.begin('assistant-1'); services.inputLog.append('assistant-1', 'review');
+        services.inputLog.begin('assistant-1'); services.inputLog.append('assistant-1', 'review');
         const before = bytes();
         expect(await toolSet()).toMatchObject({ code: 'review_turn_tool_denied' });
         expect(await toolSet({ origin: 'owner' })).toMatchObject({ code: 'invalid_args' });
         expect(inbox().list()).toEqual([]); expect(bytes()).toEqual(before);
     });
     it('denies an actual tainted review window instead of applying or staging through the tool', async () => {
-        connectInbox(); services.inputLog.begin('assistant-1');
+        services.inputLog.begin('assistant-1');
         services.inputLog.append('assistant-1', 'relay'); services.inputLog.closeTurn('assistant-1');
         services.inputLog.append('assistant-1', 'review');
         expect(services.inputLog.writeContext('assistant-1').origin).toBe('review_tainted');
@@ -232,8 +257,10 @@ describe('assistant staging authority through registered dispatch', () => {
 describe('host-only project proposal CAS', () => {
     it('applies the host sibling through strict ports and preserves coordinator and extension fields', async () => {
         host();
-        const id = inbox().write(proposal({ role: 'coordinator', project: 'host-project', expectedRevision: 0,
-            selection: { provider: 'codex-cli' } }), { documentRevision: 1 });
+        const staged = await toolSet({ role: 'coordinator', project: 'host-project', expectedRevision: 0, provider: 'codex-cli' });
+        expect(staged).toMatchObject({ result: 'staged' });
+        const id = staged.stagedId as string;
+        expect(inbox().read(id)).toMatchObject({ project: 'host-project', expectedRevision: 0, documentRevision: 1 });
         expect(await resolve(id)).toMatchObject({ result: 'applied', scope: 'project', projectId: 'host-project', revision: 1, durable: true });
         expect(JSON.parse(fs.readFileSync(join(dir, 'meshes.json'), 'utf8'))).toMatchObject({ preserved: true, meshes: [{
             coordinator: { providerType: 'claude-cli', systemPromptAppend: 'keep' },
@@ -242,7 +269,7 @@ describe('host-only project proposal CAS', () => {
     });
     it('retains stale project proposals after another owner project write', async () => {
         host();
-        const id = inbox().write(proposal({ role: 'coordinator', project: 'host-project', expectedRevision: 0 }), { documentRevision: 1 });
+        const id = (await toolSet({ role: 'coordinator', project: 'host-project', expectedRevision: 0 })).stagedId as string;
         await ownerSet({ role: 'coordinator', project: 'host-project', provider: 'codex-cli' });
         const before = fs.readFileSync(join(dir, 'meshes.json'));
         expect(await resolve(id)).toMatchObject({ code: 'revision_conflict', actualRevision: 1 });
@@ -250,7 +277,7 @@ describe('host-only project proposal CAS', () => {
     });
     it('rejects changed global setup generation for a project proposal', async () => {
         host();
-        const id = inbox().write(proposal({ role: 'coordinator', project: 'host-project', expectedRevision: 0 }), { documentRevision: 1 });
+        const id = (await toolSet({ role: 'coordinator', project: 'host-project', expectedRevision: 0 })).stagedId as string;
         await ownerSet({ expectedRevision: 1, model: 'opus' });
         const before = fs.readFileSync(join(dir, 'meshes.json'));
         expect(await resolve(id)).toMatchObject({ code: 'revision_conflict', actualRevision: 2 });
@@ -289,7 +316,7 @@ describe('host-only project proposal CAS', () => {
 
 describe('proposal evidence, generations and persistence failures', () => {
     it.each(['role', 'project', 'selection', 'expectedRevision', 'generation', 'origin'])('refuses altered %s in a persisted proposal', async key => {
-        const id = inbox().write(proposal()); const rec = JSON.parse(fs.readFileSync(stagedPath(id), 'utf8'));
+        const id = (await toolSet({ model: 'opus' })).stagedId as string; const rec = JSON.parse(fs.readFileSync(stagedPath(id), 'utf8'));
         rec[key] = key === 'selection' ? { provider: 'codex-cli' } : key === 'expectedRevision' ? 2 : 'changed';
         fs.writeFileSync(stagedPath(id), JSON.stringify(rec)); const evidence = fs.readFileSync(stagedPath(id)); const before = bytes();
         expect(inbox().read(id)).toBeNull();
@@ -297,7 +324,8 @@ describe('proposal evidence, generations and persistence failures', () => {
         expect(fs.readFileSync(stagedPath(id))).toEqual(evidence); expect(bytes()).toEqual(before);
     });
     it('does not reuse one proposal generation for identical later proposals or accept path traversal', async () => {
-        const first = inbox().write(proposal()); const second = inbox().write(proposal());
+        const first = (await toolSet({ model: 'opus' })).stagedId as string;
+        const second = (await toolSet({ model: 'opus' })).stagedId as string;
         expect(first).not.toBe(second); expect(inbox().read('../launch-defaults')).toBeNull();
         expect(await resolve(first)).toMatchObject({ result: 'applied' });
         expect(await resolve(second)).toMatchObject({ code: 'revision_conflict' });
@@ -317,13 +345,13 @@ describe('proposal evidence, generations and persistence failures', () => {
         expect(JSON.parse(bytes().toString()).revision).toBe(2);
     });
     it('does not report staged success when durable Inbox persistence fails', async () => {
-        connectInbox(); const before = bytes();
+        const before = bytes();
         vi.mocked(fs.renameSync).mockImplementation(() => { throw new Error('rename failed'); });
         expect(await toolSet()).toMatchObject({ success: false, code: 'staging_failed' });
         expect(inbox().list()).toEqual([]); expect(bytes()).toEqual(before);
     });
     it('does not claim staged success after an Inbox rename whose directory fsync fails', async () => {
-        connectInbox(); const before = bytes(); let renamed = false;
+        const before = bytes(); let renamed = false;
         vi.mocked(fs.renameSync).mockImplementation((...args) => { native.renameSync(...args); renamed = true; });
         vi.mocked(fs.fsyncSync).mockImplementation(fd => {
             if (renamed && native.fstatSync(fd).isDirectory()) throw new Error('directory sync failed');
@@ -334,13 +362,13 @@ describe('proposal evidence, generations and persistence failures', () => {
         expect(inbox().list()).toHaveLength(1); expect(bytes()).toEqual(before);
     });
     it('retains proposal and unchanged defaults when default rename fails before commit', async () => {
-        const id = inbox().write(proposal()); const before = bytes();
+        const id = (await toolSet({ model: 'opus' })).stagedId as string; const before = bytes();
         vi.mocked(fs.renameSync).mockImplementation(() => { throw new Error('rename failed'); });
         expect(await resolve(id)).toMatchObject({ code: 'persistence_failed', committed: false });
         expect(inbox().read(id)).not.toBeNull(); expect(bytes()).toEqual(before);
     });
     it('never reports applied or deletes a proposal for committed-but-unconfirmed defaults', async () => {
-        const id = inbox().write(proposal());
+        const id = (await toolSet({ model: 'opus' })).stagedId as string;
         vi.mocked(fs.fsyncSync).mockImplementation(fd => {
             if (native.fstatSync(fd).isDirectory()) throw Object.assign(new Error('directory fsync unsupported'), { code: 'EINVAL' });
             native.fsyncSync(fd);

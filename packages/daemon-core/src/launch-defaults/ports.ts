@@ -16,10 +16,9 @@ import type { HighFamilyContext } from '../commands/high-family/types.js';
 import type { HostProjectLaunchState, LaunchDefaultsCommandPorts, LaunchDefaultsProjectPort } from '../commands/high-family/launch-defaults.js';
 import type { LocalMeshEntry } from '../repo-mesh-types.js';
 
-// Host type integration in repo-mesh-types.ts is deferred outside this lease.
 // coordinatorLaunch is a sibling of coordinator; a clear retains the CAS token.
 function stateOf(mesh: LocalMeshEntry): HostProjectLaunchState | null {
-    const raw: unknown = (mesh as unknown as Record<string, unknown>).coordinatorLaunch;
+    const raw: unknown = mesh.coordinatorLaunch;
     if (raw === undefined) return { projectId: mesh.id, revision: 0, entry: null };
     if (!isRecord(raw) || !hasOnlyKeys(raw, ['version', 'revision', 'entry']) || raw.version !== 1
         || !Number.isSafeInteger(raw.revision) || (raw.revision as number) < 1) return null;
@@ -86,7 +85,7 @@ function createHostProjectPort(ctx: Pick<HighFamilyContext, 'deps'>): LaunchDefa
             if (!config || !mesh) return { ok: false, reason: 'project_storage_unavailable', committed: false };
             // Touch only this host's sibling override, retaining every other byte
             // of domain data (including unrelated/root extension properties).
-            (mesh as unknown as Record<string, unknown>).coordinatorLaunch = {
+            mesh.coordinatorLaunch = {
                 version: 1, revision: next.revision, entry: next.entry,
             };
             return saveMeshConfigDurable(config);
@@ -119,8 +118,24 @@ export function getLaunchDefaultsCommandPorts(ctx: Pick<HighFamilyContext, 'deps
             if (!eligibility.supported) throw new LaunchDefaultsCatalogError('Cannot verify the active assistant tool restriction.');
             return eligibility.toolRestriction;
         },
-        // Existing Inbox cannot yet store/list/apply ldf records. Do NOT invent
-        // success or parallel storage: staging-required writes refuse explicitly.
+        get stage() {
+            // Read the current service when used, including after a service
+            // replacement. Missing Inbox authority remains staging_unavailable.
+            const inbox = getAssistantServices().launchDefaults;
+            if (!inbox) return undefined;
+            return (proposal: Parameters<NonNullable<LaunchDefaultsCommandPorts['stage']>>[0]) => {
+                const stored = ports.store.read();
+                // Only an explicit global bootstrap may stage an absent file.
+                // Invalid/unreadable evidence must never become revision zero.
+                if (stored.status !== 'ok' && !(stored.status === 'missing'
+                    && !proposal.project && proposal.expectedRevision === 0)) {
+                    throw new Error('Launch-default setup cannot be read for staging.');
+                }
+                return inbox.write(proposal, {
+                    documentRevision: stored.status === 'ok' ? stored.document.revision : 0,
+                });
+            };
+        },
     };
     instances.set(ctx.deps, { configDir, ports });
     return ports;
